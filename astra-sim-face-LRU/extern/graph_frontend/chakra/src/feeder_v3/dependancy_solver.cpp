@@ -30,7 +30,10 @@ void _DependancyLayer::take_node(const NodeId& node) {
   }
   if (this->dependancy_free_nodes.find(node) ==
       this->dependancy_free_nodes.end()) {
-    const auto& parents = this->child_map_parent[node];
+    // No operator[] here on purpose: it would insert a phantom empty set
+    // into child_map_parent and later skew check_dependancy_acyclic's
+    // processed == child_map_parent.size() denominator (spurious cycle
+    // reports) after this throw is caught upstream.
     throw std::runtime_error(
         "Node " + std::to_string(node) +
         " is not dependancy free or already taken/released");

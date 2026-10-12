@@ -7,6 +7,8 @@ not serialize business Chakra ET files.
 """
 
 import csv
+import io
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,21 +64,32 @@ class RequestSpec:
     inter_request_interval_ns: Optional[int]
 
 
+def _require_ascii_digits(value: str, key: str) -> None:
+    """D3 lexical alignment (2026-09-28): the C++ WindowedTraceReader
+    (parse_u64_field) accepts a numeric field ONLY as non-empty ASCII digits
+    -- no sign, no whitespace, no underscore separators, no Unicode digits.
+    Python's int() is looser on every count (int('+1')/int(' 1')/int('1_0')/
+    int('١٢٣') all parse), so a queue the materializer/loader accepted could
+    fail-closed only at runtime on the C++ side. Both ends now share the
+    frozen strict lexicon; reject at parse time with the offending shape."""
+    if not value or any(not ("0" <= character <= "9") for character in value):
+        raise ValueError(
+            f"{key} must be a non-negative integer written as plain ASCII "
+            f"digits (the C++ reader's strict lexicon), got {value!r}"
+        )
+
+
 def parse_int(value: str, key: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"config key {key} must be an integer, got {value!r}") from exc
+    _require_ascii_digits(value, key)
+    parsed = int(value)
     if parsed <= 0:
         raise ValueError(f"config key {key} must be positive, got {parsed}")
     return parsed
 
 
 def parse_nonnegative_int(value: str, key: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"{key} must be an integer, got {value!r}") from exc
+    _require_ascii_digits(value, key)
+    parsed = int(value)
     if parsed < 0:
         raise ValueError(f"{key} must be non-negative, got {parsed}")
     return parsed
@@ -92,10 +105,8 @@ def parse_bool(value: str, key: str) -> bool:
 
 
 def parse_rank_id(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"rank id must be an integer, got {value!r}") from exc
+    _require_ascii_digits(value, "rank id")
+    parsed = int(value)
     if parsed < 0:
         raise ValueError(f"rank id must be non-negative, got {parsed}")
     return parsed
@@ -128,13 +139,44 @@ def clean_csv_row(row: dict[str, Optional[str]]) -> dict[str, str]:
     return {(key or "").strip(): (value or "").strip() for key, value in row.items()}
 
 
-def parse_request_length(row: dict[str, str], key: str, aliases: tuple[str, ...]) -> int:
-    for column in (key, *aliases):
-        value = row.get(column, "")
-        if value:
-            return parse_int(value, column)
-    allowed = ", ".join((key, *aliases))
-    raise ValueError(f"request queue row is missing one of: {allowed}")
+def reject_normalized_shapes(text: str, queue_csv: Path) -> None:
+    """Raw-form pre-pass (2026-09-30): the csv module unquotes fields and
+    clean_csv_row strips them, but the C++ WindowedTraceReader comma-splits
+    the RAW bytes and byte-compares the header -- a quoted field ("512"),
+    leading/trailing field whitespace, or a spaced header passes the csv
+    path HERE and only dies inside the simulator at run start. Same
+    three-port principle as the BOM gate: reject the shape at load time with
+    a message naming the mismatch. A single trailing CR on the line (CRLF
+    files are legal; the C++ side tolerates it on the description column) is
+    allowed."""
+    for line_number, raw in enumerate(text.split("\n")[1:], start=2):
+        line = raw[:-1] if raw.endswith("\r") else raw
+        if not line:
+            continue
+        if '"' in line:
+            raise ValueError(
+                f"request queue line {line_number}: quote character in "
+                f"{line!r} -- the C++ reader has no CSV quoting, quoted "
+                "fields cannot round-trip the 8-column contract"
+            )
+        for field in line.split(","):
+            if field != field.strip():
+                raise ValueError(
+                    f"request queue line {line_number}: field {field!r} has "
+                    "leading/trailing whitespace -- the C++ reader parses "
+                    "raw bytes and does not trim"
+                )
+
+
+def parse_request_length(row: dict[str, str], key: str) -> int:
+    # The historical alias columns (prompt_length/prefill/decode) were
+    # unreachable: the loader's exact-header gate only admits the canonical
+    # prefill_length/decode_length column names, so the alias branches were
+    # dead and were removed (2026-09-30).
+    value = row.get(key, "")
+    if not value:
+        raise ValueError(f"request queue row is missing: {key}")
+    return parse_int(value, key)
 
 
 def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
@@ -142,87 +184,201 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
         raise FileNotFoundError(f"request queue CSV not found: {queue_csv}")
 
     requests: list[RequestSpec] = []
-    with queue_csv.open(newline="", encoding="utf-8-sig") as queue_file:
-        reader = csv.DictReader(queue_file)
-        if reader.fieldnames is None:
-            raise ValueError(f"request queue CSV is empty: {queue_csv}")
-        columns = tuple((column or "").strip() for column in reader.fieldnames)
-        if columns != REQUEST_QUEUE_COLUMNS:
-            raise ValueError(
-                "request queue CSV columns must be exactly: "
-                + ",".join(REQUEST_QUEUE_COLUMNS)
-            )
+    seen_session_turns: set[tuple[str, int]] = set()
+    # D3 identity gate (2026-09-28): mirrors the C++ WindowedTraceReader's
+    # C3 gate (empty request_id and cross-row duplicate request_id are
+    # reader_fatal there). The loader previously SYNTHESIZED
+    # f"request_{len(requests)}" for an empty request_id field -- a
+    # two-end identity fork: the C++ side aborts on the same row, and the
+    # synthesized id exists nowhere in the CSV the metrics/ledger chain
+    # reconciles against.
+    seen_request_ids: set[str] = set()
+    with queue_csv.open(newline="", encoding="utf-8") as queue_file:
+        queue_text = queue_file.read()
+    reader = csv.DictReader(io.StringIO(queue_text, newline=""))
+    if reader.fieldnames is None:
+        raise ValueError(f"request queue CSV is empty: {queue_csv}")
+    if reader.fieldnames and reader.fieldnames[0].startswith("﻿"):
+        # BOM rejection (2026-09-30): the former utf-8-sig open silently
+        # swallowed the BOM here, but the C++ WindowedTraceReader matches
+        # the header against raw bytes and fail-closes on it -- loading
+        # must reject the same shape with a message naming the mismatch.
+        raise ValueError(
+            f"request queue CSV {queue_csv} starts with a UTF-8 BOM: "
+            "the C++ reader byte-compares the header and cannot read "
+            "this file; re-save without BOM"
+        )
+    reject_normalized_shapes(queue_text, queue_csv)
+    # Known structural asymmetry (registered 2026-09-30, safe direction):
+    # the C++ reader additionally requires in-block turn_index to step +1
+    # from a leading 0 and session blocks to be contiguous; this loader
+    # only enforces (session_id, turn_index) uniqueness, so a hand-made
+    # queue with shuffled turns loads here and fail-closes inside the
+    # simulator with a reader-side message. The authoritative materializer
+    # never emits that shape.
+    # Raw header compare (2026-09-30): the C++ gate byte-compares the
+    # header (single trailing CR tolerated); stripping here would admit
+    # a spaced header that only dies inside the simulator.
+    columns = tuple(column or "" for column in reader.fieldnames)
+    if columns != REQUEST_QUEUE_COLUMNS:
+        raise ValueError(
+            "request queue CSV columns must be exactly: "
+            + ",".join(REQUEST_QUEUE_COLUMNS)
+        )
 
-        for line_number, raw_row in enumerate(reader, start=2):
-            row = clean_csv_row(raw_row)
-            session_id = row.get("session_id", "")
-            request_id = row.get("request_id", "") or f"request_{len(requests)}"
-            if request_id.startswith("#"):
-                continue
-            if not session_id:
-                raise ValueError(f"request queue line {line_number} is missing session_id")
-            turn_index_text = row.get("turn_index", "")
-            if not turn_index_text:
-                raise ValueError(f"request queue line {line_number} is missing turn_index")
-            turn_index = parse_nonnegative_int(turn_index_text, "turn_index")
-            session_arrival_text = row.get("session_arrival_time_ns", "")
-            inter_request_interval_text = row.get("inter_request_interval_ns", "")
-            if turn_index == 0:
-                if not session_arrival_text:
-                    raise ValueError(
-                        f"request queue line {line_number} first request requires "
-                        "session_arrival_time_ns"
-                    )
-                if inter_request_interval_text:
-                    raise ValueError(
-                        f"request queue line {line_number} first request must leave "
-                        "inter_request_interval_ns empty"
-                    )
-                session_arrival_time_ns = parse_nonnegative_int(
-                    session_arrival_text, "session_arrival_time_ns"
-                )
-                inter_request_interval_ns = None
-            else:
-                if session_arrival_text:
-                    raise ValueError(
-                        f"request queue line {line_number} non-first request must leave "
-                        "session_arrival_time_ns empty"
-                    )
-                if not inter_request_interval_text:
-                    raise ValueError(
-                        f"request queue line {line_number} non-first request requires "
-                        "inter_request_interval_ns"
-                    )
-                session_arrival_time_ns = None
-                inter_request_interval_ns = parse_nonnegative_int(
-                    inter_request_interval_text, "inter_request_interval_ns"
-                )
-            timing_ns = (
-                session_arrival_time_ns
-                if session_arrival_time_ns is not None
-                else inter_request_interval_ns
+    for line_number, raw_row in enumerate(reader, start=2):
+        row = clean_csv_row(raw_row)
+        session_id = row.get("session_id", "")
+        request_id = row.get("request_id", "")
+        if not request_id:
+            raise ValueError(
+                f"request queue line {line_number} is missing request_id "
+                "(the C++ WindowedTraceReader fail-closes on an empty "
+                "request_id; the loader no longer synthesizes one"
             )
-            if timing_ns is None or timing_ns % 1000 != 0:
+        if request_id.startswith("#"):
+            # D3 (2026-09-28): the former `#` comment-line SKIP existed
+            # on this side only. The C++ reader has no comment syntax --
+            # a '#'-led line is a malformed data row there (its
+            # turn_index field fails the strict lexer), and skipping it
+            # here shifted every later request's queue_index against the
+            # C++ data-row numbering (metrics slot aliasing, future-alarm
+            # parent mislinks). Fail-closed, same shape rejection on both
+            # ends.
+            raise ValueError(
+                f"request queue line {line_number}: request_id "
+                f"{request_id!r} looks like a '#' comment line, but the "
+                "request-queue schema has no comment syntax (a "
+                "whole-line '#' row is a malformed data row in the C++ "
+                "reader; rejecting any '#'-prefixed request_id here is "
+                "this loader's stricter conservative choice)"
+            )
+        if request_id in seen_request_ids:
+            raise ValueError(
+                f"request queue line {line_number} duplicates "
+                f"request_id={request_id!r}: request_id must be unique "
+                "across data rows (mirrors the C++ identity gate)"
+            )
+        seen_request_ids.add(request_id)
+        # Reserved-token gate (4.2 fix, same as the C++ reader and the
+        # FIFO Submit port): "first_token" is the WP9 node-name anchor
+        # substring and the graph builder embeds the sanitized
+        # session_id / request_id in every regular node name, so an id
+        # carrying it hijacks every node of that request into the
+        # marker arm.
+        if "first_token" in session_id or "first_token" in request_id:
+            raise ValueError(
+                f"request queue line {line_number}: session_id/"
+                f"request_id must not contain the reserved marker token "
+                f"'first_token' (it is the WP9 node-name anchor "
+                f"substring): session_id={session_id!r} "
+                f"request_id={request_id!r}"
+            )
+        # (2026-10-01) Second reserved namespace, mirroring the C++ reader
+        # and ParsedGraphBatch ports: a request_id with the "batch_train_"
+        # prefix would be mistaken for the iteration-train sentinel
+        # namespace by the completion-routing code (train ledgers and the
+        # settle path strip that prefix), corrupting lifecycle accounting
+        # when a Python-side fixture feeds a queue that never passed the
+        # C++ gate. The C++ reader rejects this prefix at load; this is the
+        # Python-side twin.
+        if request_id.startswith("batch_train_"):
+            raise ValueError(
+                f"request queue line {line_number}: request_id must not "
+                f"use the reserved 'batch_train_' prefix (iteration-train "
+                f"sentinel namespace): request_id={request_id!r}"
+            )
+        if not session_id:
+            raise ValueError(f"request queue line {line_number} is missing session_id")
+        # ID lexicon gate (2026-09-30): the C++ reader positionally
+        # comma-splits each row with NO CSV quoting, so an id carrying
+        # comma/quote/CR/LF cannot round-trip the 8-column contract
+        # (the csv module would QUOTE_MINIMAL-escape it here, the C++
+        # splitter would then see extra columns and reader_fatal far
+        # from the root cause). Mirrors derive's _validate_session_id.
+        for _id_field, _id_value in (
+                ("session_id", session_id),
+                ("request_id", request_id)):
+            for _bad in (",", '"', "\r", "\n"):
+                if _bad in _id_value:
+                    raise ValueError(
+                        f"request queue line {line_number}: "
+                        f"{_id_field}={_id_value!r} contains "
+                        f"{_bad!r}: the 8-column queue is parsed by raw "
+                        "comma splitting on the C++ side (no CSV "
+                        "quoting), so comma, quote, CR and LF cannot "
+                        "round-trip the queue contract"
+                    )
+        turn_index_text = row.get("turn_index", "")
+        if not turn_index_text:
+            raise ValueError(f"request queue line {line_number} is missing turn_index")
+        turn_index = parse_nonnegative_int(turn_index_text, "turn_index")
+        session_arrival_text = row.get("session_arrival_time_ns", "")
+        inter_request_interval_text = row.get("inter_request_interval_ns", "")
+        if turn_index == 0:
+            if not session_arrival_text:
                 raise ValueError(
-                    f"request queue line {line_number} timing must be divisible by 1000 ns"
+                    f"request queue line {line_number} first request requires "
+                    "session_arrival_time_ns"
                 )
-            prefill_length = parse_request_length(
-                row,
-                "prefill_length",
-                ("prompt_length", "prefill"),
-            )
-            decode_length = parse_request_length(row, "decode_length", ("decode",))
-            requests.append(
-                RequestSpec(
-                    session_id=session_id,
-                    turn_index=turn_index,
-                    request_id=request_id,
-                    prefill_length=prefill_length,
-                    decode_length=decode_length,
-                    session_arrival_time_ns=session_arrival_time_ns,
-                    inter_request_interval_ns=inter_request_interval_ns,
+            if inter_request_interval_text:
+                raise ValueError(
+                    f"request queue line {line_number} first request must leave "
+                    "inter_request_interval_ns empty"
                 )
+            session_arrival_time_ns = parse_nonnegative_int(
+                session_arrival_text, "session_arrival_time_ns"
             )
+            inter_request_interval_ns = None
+        else:
+            if session_arrival_text:
+                raise ValueError(
+                    f"request queue line {line_number} non-first request must leave "
+                    "session_arrival_time_ns empty"
+                )
+            if not inter_request_interval_text:
+                raise ValueError(
+                    f"request queue line {line_number} non-first request requires "
+                    "inter_request_interval_ns"
+                )
+            session_arrival_time_ns = None
+            inter_request_interval_ns = parse_nonnegative_int(
+                inter_request_interval_text, "inter_request_interval_ns"
+            )
+        timing_ns = (
+            session_arrival_time_ns
+            if session_arrival_time_ns is not None
+            else inter_request_interval_ns
+        )
+        if timing_ns is None or timing_ns % 1000 != 0:
+            raise ValueError(
+                f"request queue line {line_number} timing must be divisible by 1000 ns"
+            )
+        prefill_length = parse_request_length(row, "prefill_length")
+        decode_length = parse_request_length(row, "decode_length")
+        # (session_id, turn_index) 必须唯一(2026-09-27 防御性 fail-closed):
+        # manifest history 链与在线 next_request 链都按该二元组精确查找,
+        # 重复行会静默接错父轮;C++ WindowedTraceReader 的 turn+1 门虽然
+        # 会在运行期兜底,但物化先于运行发生,装载期即拒绝。
+        session_turn_key = (session_id, turn_index)
+        if session_turn_key in seen_session_turns:
+            raise ValueError(
+                f"request queue line {line_number} duplicates "
+                f"session_id={session_id!r} turn_index={turn_index}: "
+                "(session_id, turn_index) must be unique"
+            )
+        seen_session_turns.add(session_turn_key)
+        requests.append(
+            RequestSpec(
+                session_id=session_id,
+                turn_index=turn_index,
+                request_id=request_id,
+                prefill_length=prefill_length,
+                decode_length=decode_length,
+                session_arrival_time_ns=session_arrival_time_ns,
+                inter_request_interval_ns=inter_request_interval_ns,
+            )
+        )
 
     if not requests:
         raise ValueError(f"request queue CSV must contain at least one request: {queue_csv}")
@@ -234,7 +390,7 @@ def shard_extent(value: int, shards: int, shard_index: int) -> int:
 
     The first ``value % shards`` ranks receive one additional element.  This
     permits LLaMA 2 7B's 4096 hidden channels and 32 attention heads to run on
-    the configured FACE instance TP degree without padding the model.
+    the configured WSC-LLM instance TP degree without padding the model.
     """
 
     if value <= 0 or shards <= 0 or not 0 <= shard_index < shards:
@@ -293,38 +449,16 @@ class TraceBuilder:
             self.nodes.append(node)
         self.node_count += 1
 
-    def arm_timer_gate(self, timer_node_id: Optional[int]) -> None:
-        if timer_node_id is not None:
-            self.pending_extra_dependencies.append(timer_node_id)
-
-    def timer_gate(
-        self,
-        name: str,
-        duration_ns: int,
-        *,
-        after_node_id: Optional[int] = None,
-    ) -> Optional[int]:
-        if duration_ns < 0 or duration_ns % 1000 != 0:
-            raise ValueError(
-                "timer duration must be a non-negative whole number of microseconds"
-            )
-        if duration_ns == 0:
-            return after_node_id
-
-        node = ChakraNode()
-        node.id = self.next_id
-        self.next_id += 1
-        node.name = name
-        node.type = COMP_NODE
-        node.attr.extend([
-            ChakraAttr(name="is_cpu_op", bool_val=True),
-            ChakraAttr(name="is_timer_op", bool_val=True),
-        ])
-        if after_node_id is not None:
-            node.data_deps.append(after_node_id)
-        node.duration_micros = duration_ns // 1000
-        self._commit_node(node)
-        return node.id
+    # D3 dead-code removal (2026-09-28): TraceBuilder.arm_timer_gate /
+    # TraceBuilder.timer_gate are gone. The offline static-ET pipeline that
+    # timed arrivals with timer nodes was deleted on 2026-08-18 (see main()
+    # below); since then NO caller references either method -- production
+    # emission drives the same-named methods on the online per-rank builder
+    # (online/graph_batch_builder.py OnlineTraceBuilder, arrival waits are
+    # C++ future alarms, gate nodes carry runtime_ns=0), and the test suite
+    # only drives comp/all_reduce/comm_send/comm_recv on this class.
+    # Verified by repo-wide grep (including tests/, sh_test_mesh/, docs)
+    # before deletion.
 
     def comp(
         self,
@@ -332,10 +466,25 @@ class TraceBuilder:
         num_ops: int,
         tensor_size: int,
         remote_read_size: int = 0,
+        *,
+        die_spec: Optional[dict] = None,
+        op_role: Optional[str] = None,
     ) -> None:
+        # die 后端(wscllm 推广):die_spec 存在 => runtime_ns 语义由在线侧
+        # OnlineTraceBuilder 保证为 0(ET 侧无 runtime 字段);op_role 缺省
+        # "compute"(契约 §2),仅 marker 显式写 "control_marker"。
         node = self._new_node(name, COMP_NODE)
         node.attr.append(self._uint64_attr("num_ops", num_ops))
         node.attr.append(self._uint64_attr("tensor_size", tensor_size))
+        if op_role is not None:
+            node.attr.append(ChakraAttr(name="op_role", string_val=op_role))
+        if die_spec is not None:
+            node.attr.append(
+                ChakraAttr(
+                    name="die_op_spec",
+                    string_val=json.dumps(die_spec, sort_keys=True),
+                )
+            )
         if self.remote_operand_loads and remote_read_size:
             node.attr.append(self._uint64_attr(REMOTE_WEIGHT_ATTR, remote_read_size))
         self._commit_node(node)
@@ -398,6 +547,9 @@ def matmul_ops(m: int, n: int, k: int) -> int:
     return 2 * int(m) * int(n) * int(k)
 
 
+# 测试专用（test-only）：生产发射只走 transformer_pass_aggregated；本函数
+# 保留作逐节点字节等价对照参考（test_aggregated_transformer_pass_preserves_
+# expanded_totals 用它核验聚合发射的总量守恒）。
 def transformer_pass(
     builder: TraceBuilder,
     *,
@@ -640,6 +792,7 @@ def transformer_pass_aggregated(
     tensor_parallel_rank: int = 0,
     mlp_variant: str = "gelu",
     weight_passes: Optional[int] = None,
+    die_ctx=None,
 ) -> int:
     """Fold repeated Transformer passes into 17 aggregate Chakra nodes.
 
@@ -659,6 +812,13 @@ def transformer_pass_aggregated(
     only k times (once per iteration, shared by all batch members; 权重只读
     一次 per iteration).  Activation / KV / AllReduce bytes stay per-span
     exact regardless of ``weight_passes``.
+
+    ``die_ctx``(wscllm die 推广):die 后端发射语境(online/
+    die_model_adapter.DieModelContext;调用方已按列车/阶段/TP/rank 调过
+    begin_emission)。None = legacy 路径,发射逐字节与历史一致;非 None
+    时每类 COMP 附 die_op_spec(spans 带绝对位置),可融合纯本地链经
+    compile_regions 编译成 attention_region / ffn_region(num_ops/
+    tensor_size 兼容统计 = 各成分之和,collective 位置/数量/bytes 不变)。
     """
 
     spans = tuple(pass_spans)
@@ -752,6 +912,14 @@ def transformer_pass_aggregated(
         activation_elems = tokens * hidden_size
         activation_shard_elems = tokens * attention_hidden_per_rank
         ffn_shard_elems = tokens * ffn_per_rank
+        # 建模口径登记（D3，2026-09-28，勿"修"）：score/QK/AV 按全
+        # (tokens x kv_length) 矩形计 FLOPs 与字节，未扣因果掩码三角。
+        # 这是与拆分前 transformer_pass 逐字节等价（测试钉死）、并进
+        # 冻结 30s 冒烟基线与五仓横向对齐的既知近似：自注意力三角只在
+        # 每 chunk 对角块内（p_chunk=512 的孤立 chunk 至多高估 2x，带
+        # 历史/前 chunk 上下文时 kv_length >> tokens，高估远低于此），
+        # 对 7B 总 FLOPs 影响 <=0.1%。改口径 = 全部黄金值/基线/跨仓
+        # 对拍作废，须走冻结基线重签，不属于缺陷修复。
         score_elems = tokens * kv_length * heads_per_rank
         kv_cache_elems = kv_length * attention_hidden_per_rank
 
@@ -884,6 +1052,31 @@ def transformer_pass_aggregated(
     logits[1] += logits_weight_bytes * weight_passes
     logits[2] += logits_weight_bytes * weight_passes
 
+    if die_ctx is not None:
+        # die 后端(契约 §2/§7.2):同一份 layer_totals / tail / collective
+        # 账本,经 die 语境做生成期 region 编译后发射(每类或融合组附
+        # die_op_spec,spans 带绝对位置)。legacy 分支(die_ctx is None)
+        # 保持逐字节不变。
+        _emit_die_aggregated(
+            builder,
+            die_ctx,
+            phase=phase,
+            spans=spans,
+            layers=layers,
+            weight_passes=weight_passes,
+            layer_totals=layer_totals,
+            attention_collective_bytes=attention_collective_bytes,
+            mlp_collective_bytes=mlp_collective_bytes,
+            final_layernorm=final_layernorm,
+            logits=logits,
+            category_names=category_names,
+            final_norm_name=final_norm_name,
+            pg_name=pg_name,
+            tensor_parallel=tensor_parallel,
+            tensor_parallel_rank=tensor_parallel_rank,
+        )
+        return len(spans)
+
     def aggregate_comp(category_name: str) -> None:
         ops, tensor_size, remote_read = layer_totals[category_name]
         builder.comp(
@@ -929,6 +1122,120 @@ def transformer_pass_aggregated(
         logits[2],
     )
     return len(spans)
+
+
+def _emit_die_aggregated(
+    builder: TraceBuilder,
+    die_ctx,
+    *,
+    phase: str,
+    spans: tuple[tuple[int, int], ...],
+    layers: int,
+    weight_passes: int,
+    layer_totals: dict[str, list[int]],
+    attention_collective_bytes: int,
+    mlp_collective_bytes: int,
+    final_layernorm: list[int],
+    logits: list[int],
+    category_names: tuple[str, ...],
+    final_norm_name: str,
+    pg_name: str,
+    tensor_parallel: int,
+    tensor_parallel_rank: int,
+) -> None:
+    """die 后端的聚合发射(transformer_pass_aggregated 的 die 分支)。
+
+    与 legacy 发射共用同一份 layer_totals / tail / collective 账本(字节
+    守恒);差异仅在:
+
+      - 每个发射组附 die_op_spec(契约 §2 schema;spans 带绝对位置,
+        layer_count/weight_passes 如实传递,num_ops/tensor_size 照旧发射
+        作兼容统计,die 后端不把它们当第二份收费来源);
+      - 13 类层类别先经 die_ctx.compile_regions 做 §7.2 纯本地链融合
+        (qk+scale_mask+softmax+av -> attention_region;mlp_up+
+        activation+down -> ffn_region);融合组的 num_ops/tensor_size/
+        remote_read = 各成分之和(×layers 口径与 legacy 一致);
+      - 两个 All-Reduce 的位置/bytes 与 legacy 完全一致(边界类别
+        attention_output_projection / mlp_down_projection 之后,融合
+        不移动 collective)。
+
+    阻断/同质事实(§7.2 融合条件,逐项来自本发射骨架的真实结构):
+    聚合列车体是严格线性链(previous_id 单前驱,无 pending 额外依赖),
+    链内无外部分支消费者(external_consumers=False);通信边界仅存在于
+    attention_output_projection 与 mlp_down_projection 之后(boundary_
+    after=True,二者分别是各自融合链之外/链尾,链内无边界);无 KV gate
+    与提交边界(gate 在 admission/列车边界,由调度器侧发射)。identity
+    携带 TP/rank/layers/span 集合供 compile_regions 做同质复核。
+    """
+    if len(die_ctx.span_records) != len(spans):
+        raise ValueError(
+            "die context span records ({} spans) disagree with the "
+            "aggregated pass spans ({}); call begin_emission with the "
+            "same pass_spans".format(len(die_ctx.span_records), len(spans)))
+    identity = {
+        "tp": tensor_parallel,
+        "rank": tensor_parallel_rank,
+        "layer": layers,
+        "span_set": spans,
+    }
+    records = []
+    for category in category_names:
+        ops, tensor_size, remote_read = layer_totals[category]
+        records.append({
+            "name": f"{phase}_all_layers_{category}",
+            "category": category,
+            "op_kind": die_ctx.op_kind_of(category),
+            "num_ops": ops * layers,
+            "tensor_size": tensor_size * layers,
+            "remote_read": remote_read * layers,
+            "layer_count": layers,
+            "weight_passes": weight_passes,
+            "external_consumers": False,
+            "boundary_after": category in (
+                "attention_output_projection", "mlp_down_projection"),
+            "identity": dict(identity),
+        })
+    for group in die_ctx.compile_regions(records):
+        builder.comp(
+            group["name"],
+            group["num_ops"],
+            group["tensor_size"],
+            group["remote_read"],
+            die_spec=die_ctx.build_spec(
+                group["op_kind"],
+                layer_count=group["layer_count"],
+                weight_passes=group["weight_passes"],
+                fusion_policy="auto" if group["fused"] else "none",
+            ),
+        )
+        if "attention_output_projection" in group["member_categories"]:
+            builder.all_reduce(
+                f"{phase}_all_layers_attention_all_reduce",
+                attention_collective_bytes * layers,
+                pg_name,
+            )
+        elif "mlp_down_projection" in group["member_categories"]:
+            builder.all_reduce(
+                f"{phase}_all_layers_mlp_all_reduce",
+                mlp_collective_bytes * layers,
+                pg_name,
+            )
+    for category, totals, layer_count in (
+        (final_norm_name, final_layernorm, 1),
+        ("logits_projection", logits, 1),
+    ):
+        builder.comp(
+            f"{phase}_all_passes_{category}",
+            totals[0],
+            totals[1],
+            totals[2],
+            die_spec=die_ctx.build_spec(
+                die_ctx.op_kind_of(category),
+                layer_count=layer_count,
+                weight_passes=weight_passes,
+                fusion_policy="none",
+            ),
+        )
 
 
 def sanitize_node_prefix(value: str) -> str:

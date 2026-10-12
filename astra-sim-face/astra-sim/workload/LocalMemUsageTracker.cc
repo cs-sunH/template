@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
@@ -73,29 +74,53 @@ void write_indented_event(std::ostream& output,
 
 }  // namespace
 
-uint64_t LocalMemUsageTracker::parseIOInfos(
+void LocalMemUsageTracker::parseIOInfos(
   const google::protobuf::RepeatedPtrField<std::string>& values,
   std::vector<std::tuple<TensorId, uint64_t>>& IOinfos) {
   if (values.size() % 2 != 0) {
     throw std::runtime_error("IO infos list size is not even.");
   }
-  uint64_t parsedCnt = 0;
   for (int i = 0; i < values.size(); i += 2) {
     const TensorId& tensorName = values.Get(i);
     const std::string& sizeStr = values.Get(i + 1);
-    uint64_t size = std::stoull(sizeStr);
-    IOinfos.emplace_back(tensorName, size);
-    ++parsedCnt;
+    // R8-W1 fix (2026-09-29): the bare std::stoull accepted strtoull's
+    // lexical family with silent poisoning: "-5" wrapped to ~1.8e19 and
+    // entered every memory statistic, leading whitespace/trailing garbage
+    // were silently ignored, and an empty/out-of-range string escaped as an
+    // uncaught exception with no field context. Same strict ASCII-digit
+    // lexicon as the repo's other fail-closed parses.
+    if (sizeStr.empty()) {
+      throw std::runtime_error(
+        "IO infos size field for tensor '" + tensorName + "' is empty");
+    }
+    for (const char c : sizeStr) {
+      if (c < '0' || c > '9') {
+        throw std::runtime_error(
+          "IO infos size field for tensor '" + tensorName +
+          "' is not a non-negative integer (ASCII digits only): " + sizeStr);
+      }
+    }
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed =
+      std::strtoull(sizeStr.c_str(), &end, 10);
+    if (errno == ERANGE || end != sizeStr.c_str() + sizeStr.size()) {
+      throw std::runtime_error(
+        "IO infos size field for tensor '" + tensorName +
+        "' exceeds the 64-bit unsigned range: " + sizeStr);
+    }
+    IOinfos.emplace_back(tensorName, static_cast<uint64_t>(parsed));
   }
-  return parsedCnt;
 }
 
 void LocalMemUsageTracker::recordReads(
   const std::shared_ptr<Chakra::ETFeederNode> node,
   Tick start,
   Tick end) {
-  static std::vector<std::tuple<TensorId, uint64_t>> IOinfos;
-  IOinfos.clear();
+  // Scratch buffer for this call only (was a function-local static shared
+  // across calls for reuse; the simulator drives this tracker from a single
+  // event thread, so a plain local is equivalent and stateless).
+  std::vector<std::tuple<TensorId, uint64_t>> IOinfos;
   uint64_t nodeId = node->id();
 
   if (!node->has_attr("inputs")) {
@@ -110,12 +135,12 @@ void LocalMemUsageTracker::recordReads(
       return;
   }
   const auto& values = attr.string_list().values();
-  uint64_t parsedCount = parseIOInfos(values, IOinfos);
+  parseIOInfos(values, IOinfos);
 
   for (const auto& iter : IOinfos) {
     TensorId tensorName = std::get<0>(iter);
     uint64_t tensorSize = std::get<1>(iter);
-    
+
     // Ignore tensors with size 0
     if (tensorSize == 0) {
       continue;
@@ -153,8 +178,10 @@ void LocalMemUsageTracker::recordWrites(
   const std::shared_ptr<Chakra::ETFeederNode> node,
   Tick start,
   Tick end) {
-  static std::vector<std::tuple<TensorId, uint64_t>> IOinfos;
-  IOinfos.clear();
+  // Scratch buffer for this call only (was a function-local static shared
+  // across calls for reuse; the simulator drives this tracker from a single
+  // event thread, so a plain local is equivalent and stateless).
+  std::vector<std::tuple<TensorId, uint64_t>> IOinfos;
   uint64_t nodeId = node->id();
 
   if (!node->has_attr("outputs")) {
@@ -168,12 +195,12 @@ void LocalMemUsageTracker::recordWrites(
   }
 
   const auto& values = attr.string_list().values();
-  uint64_t parsedCount = parseIOInfos(values, IOinfos);
+  parseIOInfos(values, IOinfos);
 
   for (const auto& iter : IOinfos) {
     TensorId tensorName = std::get<0>(iter);
     uint64_t tensorSize = std::get<1>(iter);
-    
+
     // Ignore tensors with size 0
     if (tensorSize == 0) {
       continue;
@@ -184,19 +211,35 @@ void LocalMemUsageTracker::recordWrites(
     writeActivity.end = end;
     writeActivity.nodeName = node->name();
     writeActivity.nodeId = node->id();
+    // S4 fix (2026-09-28): the per-write unconditional logger flush is gone
+    // (方案 §15: no per-node forced flush in official logging; the flush ran
+    // below the trace level gate, one sink refresh per tensor write on the
+    // --track-local-mem path). The logger keeps its own batching; the offline
+    // trace_spool_ fflush at dump time is unrelated and unchanged.
     AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
         ->trace("tracker record write node.id={} tensor.name={} start={} end={}",
                 node->id(), tensorName, start, end);
-    AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
-        ->flush();
     if (this->tensorSize.find(tensorName) == this->tensorSize.end()) {
       // first write
       this->tensorSize.insert({tensorName, tensorSize});
       this->memWrites.insert({tensorName, writeActivity});
     } else {
-      // each tensor should only be written once.
-      throw std::runtime_error("LocalMemUsageTracker: tensor '" +
-                               tensorName + "' written more than once");
+      // Each tensor should only be written once.  The sole legal exception
+      // is the synthetic "read before write" placeholder recordReads()
+      // seeds for a tensor whose read event was reported first: the real
+      // write supersedes that placeholder instead of tripping the guard
+      // (otherwise the tolerated read-before-write ordering would turn
+      // into a hard duplicate-write crash here).
+      const auto placeholder = this->memWrites.find(tensorName);
+      if (placeholder != this->memWrites.end() &&
+          placeholder->second.nodeName == "UNDEFINED" &&
+          placeholder->second.nodeId == UINT64_MAX) {
+        this->tensorSize[tensorName] = tensorSize;
+        placeholder->second = writeActivity;
+      } else {
+        throw std::runtime_error("LocalMemUsageTracker: tensor '" +
+                                 tensorName + "' written more than once");
+      }
     }
   }
 }
@@ -215,6 +258,15 @@ void LocalMemUsageTracker::recordEnd(
     Tick tick) {
   uint64_t nodeId = node->id();
   if (this->activityStartTime.find(nodeId) == this->activityStartTime.end()) {
+    // (2026-09-30) A node ending without a recorded start would silently
+    // drop its entire read/write tensor accounting. Every other malformed
+    // input in this file throws; this historical early-return at least
+    // leaves a forensic warn line now.
+    AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+        ->warn(
+            "recordEnd without recordStart: node.id={} -- its tensor "
+            "accounting is dropped",
+            nodeId);
     return;
   }
   Tick start = this->activityStartTime[nodeId];
@@ -400,11 +452,42 @@ void LocalMemUsageTracker::dumpMemoryTrace(const std::string& filename) {
 }
 
 void LocalMemUsageTracker::buildMemoryTimeline() {
+  // tensorMapId is normally populated by buildMemoryTrace(), which the sole
+  // production caller always runs first (Workload.cc).  Populate it the same
+  // way when the timeline is requested without a preceding trace build so
+  // the .at() lookups below cannot go out_of_range; with the production
+  // call order this is a no-op (map already filled over the same unchanged
+  // tensorSize container, so the ids stay byte-identical).
+  if (this->tensorMapId.empty()) {
+    uint64_t idCnt = 0ul;
+    for (const auto& item : this->tensorSize) {
+      this->tensorMapId.insert(std::make_pair(item.first, idCnt++));
+    }
+  }
   TimelineActionsByTick actions_by_tick;
+  // R1-C5 fix (2026-09-29): a read-before-write tensor (its last read ends
+  // strictly before its write starts -- a malformed input shape) used to
+  // stay in the live-byte sweep forever: the write inserted it into
+  // live_tensors, but its removal action (the last read) sat at an earlier
+  // tick where the erase had already been consumed as a no-op, so its bytes
+  // inflated the peak to the end of the trace. The heatmap clamps the same
+  // backwards-lifetime shape to a zero-duration row; mirror that here by
+  // excluding such tensors from the byte accounting (their B/E lifetime
+  // events are still emitted, unchanged).
+  std::unordered_set<TensorId> read_before_write_tensors;
+  for (const auto& item : this->memReads) {
+    const auto write_it = this->memWrites.find(item.first);
+    if (write_it != this->memWrites.end() && !item.second.empty() &&
+        item.second.back().end < write_it->second.start) {
+      read_before_write_tensors.insert(item.first);
+    }
+  }
   for (const auto& item : this->memWrites) {
     const TensorId& tensorName = item.first;
     const MemActivity& writeActivity = item.second;
-    actions_by_tick[writeActivity.start].writes.push_back(&tensorName);
+    if (read_before_write_tensors.count(tensorName) == 0) {
+      actions_by_tick[writeActivity.start].writes.push_back(&tensorName);
+    }
     json tensorWriteEvent = {
         {"name", tensorName},
         {"cat", "tensorLifetime"},
@@ -418,7 +501,10 @@ void LocalMemUsageTracker::buildMemoryTimeline() {
   for (const auto& item : this->memReads) {
     const TensorId& tensorName = item.first;
     const MemActivity& latestReadActivity = item.second.back();
-    actions_by_tick[latestReadActivity.end].last_reads.push_back(&tensorName);
+    if (read_before_write_tensors.count(tensorName) == 0) {
+      actions_by_tick[latestReadActivity.end].last_reads.push_back(
+          &tensorName);
+    }
     json tensorLastReadEvent = {
         {"name", tensorName},
         {"cat", "tensorLifetime"},
@@ -465,12 +551,13 @@ void LocalMemUsageTracker::buildMemoryTimeline() {
 void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
   // Calculate lifetime for each tensor
   std::vector<std::tuple<TensorId, Tick, Tick, uint64_t>> tensorLifetimes; // tensor, start, end, size
-  
+  bool warned_backwards_lifetime = false;
+
   for (const auto& item : this->memWrites) {
     const TensorId& tensorName = item.first;
     Tick start = item.second.start;
     Tick end;
-    
+
     // Find the last read time
     if (this->memReads.find(tensorName) != this->memReads.end() && !this->memReads.at(tensorName).empty()) {
       end = this->memReads.at(tensorName).back().end;
@@ -482,7 +569,23 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
           end = item.second.end;
       }
     }
-    
+
+    // Tolerated-order ETs may report reads completing before the real
+    // write begins; unsigned Tick would wrap the (end - start) lifetime
+    // around and poison the shared min/max scale of the whole heatmap.
+    // Clamp such a tensor to a zero-duration row instead.
+    if (end < start) {
+      if (!warned_backwards_lifetime) {
+        AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+            ->warn("tensor lifetime heatmap: last read end={} precedes "
+                   "write start={} for tensor '{}' (tolerated-order "
+                   "input); clamping such rows to zero duration",
+                   end, start, tensorName);
+        warned_backwards_lifetime = true;
+      }
+      end = start;
+    }
+
     uint64_t size = this->tensorSize.at(tensorName);
     tensorLifetimes.emplace_back(tensorName, start, end, size);
   }
@@ -517,7 +620,8 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
   };
   this->append_trace_event(threadNameEvent);
   
-  // Use all tensors instead of limiting to 100
+  // Every tensor contributes one heatmap row (the legend maps row index to
+  // lifetime rank); the count below is the full lifetime list.
   int count = static_cast<int>(tensorLifetimes.size());
   uint64_t minLifetime = std::numeric_limits<uint64_t>::max();
   uint64_t maxLifetime = 0;
@@ -616,15 +720,11 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
   this->append_trace_event(heatmapInfoEvent);
 }
 
-uint64_t LocalMemUsageTracker::getPeakMemUsage() const {
-  return this->peak_memory_usage_;
-}
-
 std::tuple<float, std::string> LocalMemUsageTracker::getPeakMemUsageFormatted() const {
-  uint64_t peakMemUsage = this->peak_memory_usage_;
+  const uint64_t peakMemUsage = this->peak_memory_usage_;
 
-  float value = static_cast<float>(peakMemUsage);
-  std::string unit = "B";
+  float value;
+  std::string unit;
 
   if (peakMemUsage < 1024ull) {
       value = static_cast<float>(peakMemUsage);

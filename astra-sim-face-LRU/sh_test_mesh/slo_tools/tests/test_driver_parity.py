@@ -28,6 +28,8 @@ import os
 import random
 import subprocess
 import sys
+import atexit
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +43,7 @@ sys.path.insert(0, str(SLO_TOOLS_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
+import slo_postprocess_driver  # noqa: E402
 from slo_common import (  # noqa: E402
     BoundedSorter, bounded_sort_chunk_size, nearest_rank_percentile,
     nearest_rank_percentile_many,
@@ -282,13 +285,22 @@ def build_sh10_run_dir() -> Path:
                 for record in decision_log), encoding="utf-8")
 
     # -- train_ledger（含 first_step 行以覆盖跳过打印）---------------------
+    # 2026-09-26 fixture 口径修复（先于本修复即红，与本次改动无关）：
+    # load_imbalance 自 2026-09-04 口径修正起读非 first_step 行的
+    # exits 终态数组（旧 drains 行是 WP9 拆分的准入发射边界，非终态），
+    # 缺 exits 键按 schema 不符 fail-closed。exits 按 decode 实例分列。
     (results / "train_ledger.jsonl").write_text(
         json.dumps({"tick": 1100, "instance_index": 0, "first_step": True,
                     "train_id": "t0", "drains": []}, sort_keys=True) + "\n"
         + json.dumps({"tick": 20_000_001_400, "instance_index": 0, "first_step": False,
                       "train_id": "t0",
-                      "drains": ["session_A_request_0",
-                                 "session_B_request_0"]},
+                      "drains": [],
+                      "exits": ["session_A_request_0"]},
+                     sort_keys=True) + "\n"
+        + json.dumps({"tick": 20_000_001_400, "instance_index": 1, "first_step": False,
+                      "train_id": "t1",
+                      "drains": [],
+                      "exits": ["session_B_request_0"]},
                      sort_keys=True) + "\n", encoding="utf-8")
 
     # -- trace_config（run_dir 本地优先；hardware 用仓内 validation 档）----
@@ -325,8 +337,14 @@ def _snapshot(run_dir: Path, target: Path) -> None:
 
 
 def _count_metric_lines(source: Path) -> int:
+    # (2026-10-01) gz 支持:归档形态(cpp.log.gz)直接文本读压缩流,
+    # "[METRIC] " 模式必然不可见,旧链复刻会误判"无 METRIC 行"整体
+    # 跳过(与 shell 链 zgrep 口径分叉)。按后缀分流,与
+    # resolve_cpp_metric_log 同款。
+    import gzip
     count = 0
-    with source.open(encoding="utf-8", errors="replace") as handle:
+    opener = gzip.open if source.name.endswith(".gz") else open
+    with opener(source, "rt", encoding="utf-8", errors="replace") as handle:
         for line in handle:
             if line.startswith("[METRIC] "):
                 count += 1
@@ -443,6 +461,36 @@ def run_new_chain(run_dir: Path) -> int:
     return proc.returncode
 
 
+class OverallExitTests(unittest.TestCase):
+    """F11（2026-09-26）：sink rc=3（EXIT_VIOLATION）透传为整体退出码。"""
+
+    def test_violation_rc_propagates(self):
+        # (2026-09-30 适配) _overall_exit 改为单参 step_rcs：run_step/
+        # sink 返回 int rc 后 any_fail 布尔被 rcs 自身蕴含；断言语义不变。
+        self.assertEqual(
+            slo_postprocess_driver._overall_exit(
+                [0, None, 3, 0]), 3)
+        self.assertEqual(
+            slo_postprocess_driver._overall_exit(
+                [None, None, None, 3]), 3)
+
+    def test_plain_failures_converge_to_1(self):
+        # SloToolError(2)/普通失败(1)仍收敛为 1（既有链语义不变；仅
+        # rc=3 判决码例外，见上）。旧 any_fail 布尔入参已随 rc 原样
+        # 上抛改造移除——"干净 rcs"由 test_all_ok_returns_0 覆盖。
+        self.assertEqual(
+            slo_postprocess_driver._overall_exit(
+                [0, 2, None, 1]), 1)
+        self.assertEqual(
+            slo_postprocess_driver._overall_exit(
+                [None, 1, None, None]), 1)
+
+    def test_all_ok_returns_0(self):
+        self.assertEqual(
+            slo_postprocess_driver._overall_exit(
+                [0, 0, None, 0]), 0)
+
+
 class DriverParityTests(unittest.TestCase):
     """合成 sh_1.0 fixture：旧链复刻 vs 当前链（单遍 driver）逐字节。"""
 
@@ -453,30 +501,29 @@ class DriverParityTests(unittest.TestCase):
         # 套件时，一方 _snapshot 的"先清空后写"会撕掉对方正在对比的字节，
         # 2026-09-25 门禁竞态修复；对比语义不变）。
         old_out = Path(tempfile.mkdtemp(prefix=f"slo_parity_{tag}_old_"))
+        atexit.register(shutil.rmtree, old_out, ignore_errors=True)
         new_out = Path(tempfile.mkdtemp(prefix=f"slo_parity_{tag}_new_"))
-        try:
-            if mutate is not None:
-                mutate(run_dir)
-            rc_old = run_old_chain_replica(run_dir)
-            self.assertEqual(rc_old, expect_rc)
-            _snapshot(run_dir, old_out)
-            _clear_slo_products(run_dir)
-            rc_new = run_new_chain(run_dir)
-            self.assertEqual(rc_new, expect_rc)
-            _snapshot(run_dir, new_out)
-            diffs = []
-            for name in sorted(set(os.listdir(old_out))
-                               | set(os.listdir(new_out))):
-                old_bytes = ((old_out / name).read_bytes()
-                             if (old_out / name).is_file() else None)
-                new_bytes = ((new_out / name).read_bytes()
-                             if (new_out / name).is_file() else None)
-                if old_bytes != new_bytes:
-                    diffs.append(name)
-            self.assertEqual(diffs, [], f"产物字节差: {diffs}")
-            return old_out, new_out
-        finally:
-            pass
+        atexit.register(shutil.rmtree, new_out, ignore_errors=True)
+        if mutate is not None:
+            mutate(run_dir)
+        rc_old = run_old_chain_replica(run_dir)
+        self.assertEqual(rc_old, expect_rc)
+        _snapshot(run_dir, old_out)
+        _clear_slo_products(run_dir)
+        rc_new = run_new_chain(run_dir)
+        self.assertEqual(rc_new, expect_rc)
+        _snapshot(run_dir, new_out)
+        diffs = []
+        for name in sorted(set(os.listdir(old_out))
+                           | set(os.listdir(new_out))):
+            old_bytes = ((old_out / name).read_bytes()
+                         if (old_out / name).is_file() else None)
+            new_bytes = ((new_out / name).read_bytes()
+                         if (new_out / name).is_file() else None)
+            if old_bytes != new_bytes:
+                diffs.append(name)
+        self.assertEqual(diffs, [], f"产物字节差: {diffs}")
+        return old_out, new_out
 
     def test_happy_path_byte_identical(self):
         old_out, _ = self._compare("happy")
@@ -488,7 +535,9 @@ class DriverParityTests(unittest.TestCase):
         self._compare("g3", lambda rd: (rd / "request_metrics.csv").unlink())
 
     def test_failure_token_manifest_missing(self):
-        # 仅 hbm_watermark 失败（exit=3 链语义：整链 rc=1 + FAIL 条目）。
+        # 仅 hbm_watermark 失败(exit=2 fail-closed 链语义:整链 rc=1 + FAIL
+        # 条目;rc=3 仅 certified 容量违规,本仓自产 run 不可达——
+        # 2026-10-01 注释纠偏,原"exit=3"与实现不符)。
         def mutate(rd):
             (rd / "manifest.json").unlink()
         self._compare("notoken", mutate, expect_rc=1)

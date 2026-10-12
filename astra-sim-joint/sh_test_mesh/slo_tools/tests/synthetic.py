@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import sys
+import atexit
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Sequence
@@ -19,6 +21,7 @@ from slo_common import REQUEST_METRICS_COLUMNS  # noqa: E402
 
 def make_run_dir(tag: str) -> Path:
     root = Path(tempfile.mkdtemp(prefix=f"slo_t_{tag}_"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
     return root
 
 

@@ -8,28 +8,20 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/BaseStream.hh"
 #include "astra-sim/system/BasicEventHandlerData.hh"
-#include "astra-sim/system/astraccl/custom_collectives/CustomAlgorithm.hh"
 
 namespace AstraSim {
 
+class Workload;
 class WorkloadLayerHandlerData;
 
 class RecvPacketEventHandlerData : public BasicEventHandlerData {
   public:
     RecvPacketEventHandlerData();
-    // The vnet/stream_id arguments are kept for the existing collective call
-    // sites; the members themselves were write-only and are removed.
-    RecvPacketEventHandlerData(BaseStream* owner,
-                               int sys_id,
-                               EventType event,
-                               int vnet,
-                               int stream_id);
+    RecvPacketEventHandlerData(BaseStream* owner, int sys_id, EventType event);
 
     Workload* workload;
     WorkloadLayerHandlerData* wlhd;
     BaseStream* owner;
-    CustomAlgorithm* custom_algorithm;
-    Tick ready_time;
 };
 
 }  // namespace AstraSim

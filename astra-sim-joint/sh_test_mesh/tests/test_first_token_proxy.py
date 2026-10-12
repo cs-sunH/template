@@ -68,7 +68,7 @@ class ModelBytesTests(unittest.TestCase):
         """trace_config.csv (llama2_7b) -> frozen face_scheduler numbers."""
 
         weight_bytes, kv_per_token = mp._load_model_bytes()
-        # test_face_scheduler.py:524 freezes estimate_model_weight_bytes at
+        # test_face_scheduler.py freezes estimate_model_weight_bytes at
         # 13,476,831,232; KV = 2*layers*tokens*hidden*bytes_per_elem.
         self.assertEqual(weight_bytes, 13_476_831_232)
         self.assertEqual(kv_per_token, 2 * 32 * 4096 * 2)
@@ -322,6 +322,20 @@ class EndToEndRowsTests(unittest.TestCase):
                          "NA")
         self.assertIn("proxy_unavailable:no_train_ledger",
                       rows["session_0_request_0"]["instructions"])
+
+    def test_stopped_window_distinguishes_future_and_in_flight_requests(self):
+        for index, record in enumerate(self.records[1:]):
+            record["completed"] = False
+            for name in ("prefill_start_ns", "prefill_end_ns", "decode_start_ns",
+                         "first_token_ns", "completion_ns", "e2e_ns", "queue_ns",
+                         "prefill_ns", "prefill_decode_gap_ns", "decode_ns"):
+                record[name] = None
+            if index == 0:
+                record["arrival_ns"] = None
+        self._write_log()
+        rows = self._rows()
+        self.assertEqual(rows["session_0_request_0"]["terminal_status"], "not_arrived")
+        self.assertEqual(rows["session_1_request_0"]["terminal_status"], "in_flight")
 
     def test_proxy_filled_from_ledger_and_tagged(self):
         self._write_log()

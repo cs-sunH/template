@@ -90,8 +90,10 @@ Exit code 0 on ALL PASS.
 
 #include <astra-network-analytical/common/EventQueue.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -108,6 +110,7 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WatchRegistry.hh"
+#include "pipeline_descriptor_test_support.hh"
 
 using namespace AstraSim::ExecutionDriven;
 using namespace NetworkAnalytical;
@@ -118,6 +121,49 @@ namespace ExecutionDriven {
 // Test-only access to the fixed, rank-bounded preflight scratch.  Production
 // code exposes no mutable diagnostics for these implementation details.
 struct GraphBatchCommitterTestAccess {
+    struct IdSpanSpec {
+        uint64_t first = 0;
+        uint64_t count = 0;
+        uint64_t stride = 1;
+    };
+
+    struct IdPreflightCounts {
+        uint64_t pair_envelope_candidates = 0;
+        uint64_t exact_pair_tests = 0;
+        uint64_t physical_points_examined = 0;
+    };
+
+    struct CandidatePreviewCounts {
+        uint64_t rank_rows_initialized = 0;
+        uint64_t collected_spans = 0;
+        uint64_t candidate_spans_examined = 0;
+        uint64_t lookups = 0;
+        uint64_t rank_row_probes = 0;
+    };
+
+    struct CandidatePreviewResult {
+        std::vector<std::optional<uint64_t>> mapped_ids;
+        CandidatePreviewCounts work;
+    };
+
+    struct ParentPublicationCounts {
+        uint64_t indexed_edges = 0;
+        uint64_t node_lookups = 0;
+        uint64_t resolved_parents = 0;
+    };
+
+    static void install_parent_publisher(
+        GraphBatchCommitter& committer,
+        LedgerNodeTransitionPublisher publisher) {
+        committer.ctx_.publish_node_transition = std::move(publisher);
+    }
+
+    static ParentPublicationCounts parent_publication_counts(
+        const GraphBatchCommitter& committer) {
+        const auto& work = committer.parent_publication_work_;
+        return {work.indexed_edges, work.node_lookups, work.resolved_parents};
+    }
+
     static void seed_json_id_stream_stamp(GraphBatchCommitter& committer,
                                           uint64_t stamp) {
         committer.json_id_stream_stamp_ = stamp;
@@ -130,6 +176,94 @@ struct GraphBatchCommitterTestAccess {
     static size_t discovered_capacity(const GraphBatchCommitter& committer) {
         return committer.json_id_discovered_touched_ranks_.capacity();
     }
+
+    // Pure Phase-A validate pass (4.5 fix): direct coverage entry.
+    static std::optional<std::string> validate(
+        const GraphBatchCommitter& committer, const StateDelta& delta,
+        const GraphBatch& batch) {
+        return committer.validate_impl(delta, batch, nullptr);
+    }
+
+    // Pure mandatory-liveness preflight pass (4.5 fix): the production
+    // commit runs it after validate_impl, so direct coverage of the
+    // preflight's own rules needs this standalone entry.
+    static std::optional<std::string> preflight(
+        const GraphBatchCommitter& committer, const StateDelta& delta,
+        const GraphBatch& batch) {
+        return committer.mandatory_liveness_preflight(delta, batch);
+    }
+
+    static std::optional<std::string> validate_id_stream(
+        const GraphBatchCommitter& committer, const GraphBatch& batch,
+        IdPreflightCounts* const output = nullptr) {
+        GraphBatchCommitter::IdPreflightWork work;
+        const auto error = committer.validate_json_id_stream(
+            batch, nullptr, nullptr, output == nullptr ? nullptr : &work);
+        if (output != nullptr) {
+            output->pair_envelope_candidates = work.pair_envelope_candidates;
+            output->exact_pair_tests = work.exact_pair_tests;
+            output->physical_points_examined = work.physical_points_examined;
+        }
+        return error;
+    }
+
+    static std::optional<std::string> validate_rank_id_spans(
+        const int rank, const std::vector<IdSpanSpec>& specs,
+        std::vector<uint64_t> physical_ids,
+        IdPreflightCounts* const output = nullptr) {
+        std::vector<GraphBatchLogicalIdSpan> spans;
+        spans.reserve(specs.size());
+        for (const auto& spec : specs) {
+            spans.push_back({rank, spec.first, spec.count, spec.stride, nullptr});
+        }
+        std::vector<const GraphBatchLogicalIdSpan*> progressions;
+        progressions.reserve(spans.size());
+        for (const auto& span : spans) {
+            progressions.push_back(&span);
+        }
+        std::sort(physical_ids.begin(), physical_ids.end());
+        GraphBatchCommitter::IdPreflightWork work;
+        const auto error = GraphBatchCommitter::validate_rank_id_intersections(
+            rank, progressions, physical_ids,
+            output == nullptr ? nullptr : &work);
+        if (output != nullptr) {
+            output->pair_envelope_candidates = work.pair_envelope_candidates;
+            output->exact_pair_tests = work.exact_pair_tests;
+            output->physical_points_examined = work.physical_points_examined;
+        }
+        return error;
+    }
+
+    static CandidatePreviewResult preview_candidate_ids(
+        const GraphBatchCommitter& committer, const GraphBatch& batch,
+        const std::vector<std::pair<int, uint64_t>>& queries) {
+        GraphBatchCommitter::CandidateIdPreview::Work work;
+        const auto preview = committer.candidate_id_preview_impl(batch, &work);
+        CandidatePreviewResult result;
+        result.mapped_ids.reserve(queries.size());
+        for (const auto& query : queries) {
+            result.mapped_ids.push_back(preview.resolve(query.first, query.second));
+        }
+        result.work = {work.rank_rows_initialized,
+                       work.collected_spans,
+                       work.candidate_spans_examined, work.lookups,
+                       work.rank_row_probes};
+        return result;
+    }
+
+    static void seed_affine_range(GraphBatchCommitter& committer,
+                                  const int rank,
+                                  const uint64_t json_first,
+                                  const uint64_t store_first,
+                                  const uint64_t count) {
+        committer.record_affine_range(rank, json_first, store_first, count);
+    }
+
+    static void set_graph_sources(
+        GraphBatchCommitter& committer,
+        std::vector<std::shared_ptr<NodeStoreGraphSource>>* graph_sources) {
+        committer.ctx_.graph_sources = graph_sources;
+    }
 };
 
 }  // namespace ExecutionDriven
@@ -138,6 +272,21 @@ struct GraphBatchCommitterTestAccess {
 namespace {
 
 bool g_ok = true;
+
+void add_v2_protocol_header(nlohmann::json& resp) {
+    resp["schema_version"] = 2;
+    resp["pipeline_descriptors"] = nlohmann::json::array();
+    resp["kernel_contract"] = {
+        {"projection_abi_version", 1},
+        {"descriptor_version", 1},
+        {"pipeline_protocol_version", 1},
+        {"model_version", "v6-compact-window-20261005"},
+        {"timer_whitelist_version", "timer-whitelist-v1-20261005"},
+        {"window_tile_limit", 1},
+        {"window_local_error_ppm", 10000},
+        {"window_refine_margin_ppm", 20000},
+        {"prediction_config_sha256", std::string(64, '0')}};
+}
 
 void expect(bool cond, const char* what) {
     if (!cond) {
@@ -306,6 +455,22 @@ nlohmann::json compute_node(int rank, uint64_t id, const std::string& req,
     };
 }
 
+nlohmann::json pipeline_anchor_node(const int rank, const uint64_t id,
+                                    const std::string& role,
+                                    const std::string& segment_id) {
+    return {
+        {"rank", rank}, {"id", id}, {"type", 4},
+        {"name", "pipeline_anchor_" + role},
+        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
+        {"request_id", "req-A"}, {"stage", "decode"}, {"generation", 1},
+        {"compute", {{"num_ops", 0}, {"tensor_size", 0}, {"runtime_ns", 0},
+                      {"exec_role", "remote_read_pipeline_anchor"},
+                      {"pipeline_anchor", {{"segment_id", segment_id},
+                                           {"role", role}}}}},
+        {"comm", comm_defaults()}, {"coll", coll_defaults()},
+    };
+}
+
 nlohmann::json comm_node(int rank, uint64_t id, int type, int src, int dst,
                          int tag) {
     return {
@@ -348,7 +513,7 @@ nlohmann::json prefill_watch(const std::string& request_id,
 // One batch node, parsed through the production path in isolation.
 ParsedNode parse_single_node(const nlohmann::json& node_json, int num_ranks) {
     nlohmann::json resp;
-    resp["schema_version"] = 1;
+    add_v2_protocol_header(resp);
     resp["source_delivery_sequence"] = 0;
     resp["nodes"] = nlohmann::json::array({node_json});
     return parse_graph_batch(resp, num_ranks).nodes.at(0);
@@ -356,6 +521,91 @@ ParsedNode parse_single_node(const nlohmann::json& node_json, int num_ranks) {
 
 GraphBatch parse_batch(const nlohmann::json& resp, int num_ranks = 3) {
     return parse_graph_batch(resp, num_ranks);
+}
+
+std::optional<uint64_t> legacy_candidate_preview_oracle(
+    const GraphBatchCommitter& committer,
+    const std::vector<std::shared_ptr<NodeStoreGraphSource>>* graph_sources,
+    const int num_ranks, const GraphBatch& batch, const int rank,
+    const uint64_t json_id) {
+    if (rank < 0 || static_cast<size_t>(rank) >= committer.rank_affine_count() ||
+        graph_sources == nullptr ||
+        static_cast<size_t>(rank) >= graph_sources->size() ||
+        !(*graph_sources)[static_cast<size_t>(rank)]) {
+        return std::nullopt;
+    }
+    if (const auto committed = committer.resolve_store_id(rank, json_id)) {
+        return committed;
+    }
+
+    struct Span {
+        int rank = -1;
+        uint64_t first = 0;
+        uint64_t count = 0;
+        uint64_t stride = 1;
+    };
+    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
+    const auto last_id = [max_id](const Span& span,
+                                  uint64_t* const last) {
+        if (last == nullptr || span.count == 0 || span.stride == 0) {
+            return false;
+        }
+        const uint64_t steps = span.count - 1;
+        if (steps != 0 && span.stride > (max_id - span.first) / steps) {
+            return false;
+        }
+        *last = span.first + steps * span.stride;
+        return *last < max_id;
+    };
+
+    std::vector<Span> spans;
+    spans.reserve(batch.nodes.size() + batch.pipeline_descriptors.size() * 2);
+    for (const ParsedNode& node : batch.nodes) {
+        if (node.node.rank < 0 || node.node.rank >= num_ranks ||
+            node.json_id == max_id) {
+            return std::nullopt;
+        }
+        spans.push_back({node.node.rank, node.json_id, 1, 1});
+    }
+    for (const auto& descriptor : batch.pipeline_descriptors) {
+        if (!descriptor || descriptor->endpoint_runs().empty() ||
+            descriptor->anchors().empty()) {
+            return std::nullopt;
+        }
+        const int identity_rank = descriptor->identity().rank;
+        if (identity_rank < 0 || identity_rank >= num_ranks) {
+            return std::nullopt;
+        }
+        for (const auto& range : descriptor->logical_id_ranges()) {
+            const Span span{range.rank, range.first_json_id,
+                            range.count, range.stride};
+            uint64_t last = 0;
+            if (range.rank < 0 || range.rank >= num_ranks ||
+                !last_id(span, &last)) {
+                return std::nullopt;
+            }
+            spans.push_back(span);
+        }
+    }
+
+    uint64_t next_store_id =
+        (*graph_sources)[static_cast<size_t>(rank)]->store().next_auto_id();
+    uint64_t domain_first = max_id;
+    uint64_t domain_end = 0;
+    for (const Span& span : spans) {
+        if (span.rank != rank) continue;
+        uint64_t last = 0;
+        if (!last_id(span, &last) || last == max_id) return std::nullopt;
+        domain_first = std::min(domain_first, span.first);
+        domain_end = std::max(domain_end, last + 1);
+    }
+    if (domain_first == max_id || json_id < domain_first ||
+        json_id >= domain_end) {
+        return std::nullopt;
+    }
+    const uint64_t offset = json_id - domain_first;
+    if (offset > max_id - next_store_id) return std::nullopt;
+    return next_store_id + offset;
 }
 
 // A typed prefill/decode watch over explicit (rank, json id) members.
@@ -377,7 +627,7 @@ ParsedWatch typed_watch(const std::string& request_id, const std::string& stage,
 // members, one assignment, one kv action and one future alarm for r2.
 nlohmann::json baseline_response() {
     nlohmann::json resp;
-    resp["schema_version"] = 1;
+    add_v2_protocol_header(resp);
     resp["batch_id"] = 0;
     resp["source_delivery_sequence"] = 0;
     resp["nodes"] = nlohmann::json::array({
@@ -420,14 +670,399 @@ GraphBatch baseline_batch() {
     return parse_batch(baseline_response());
 }
 
+nlohmann::json empty_response(uint64_t sequence);
+
+GraphBatch parent_index_scale_batch(const uint64_t node_count) {
+    nlohmann::json resp = empty_response(0);
+    nlohmann::json nodes = nlohmann::json::array();
+    nlohmann::json edges = nlohmann::json::array();
+    for (int rank = 0; rank < 2; ++rank) {
+        for (uint64_t id = 0; id < node_count; ++id) {
+            nodes.push_back(compute_node(
+                rank, id, "r1", "prefill",
+                "parent_index_" + std::to_string(rank) + "_" +
+                    std::to_string(id)));
+        }
+        for (uint64_t child = 1; child < node_count; ++child) {
+            const uint64_t nearest_parent = child - 1;
+            edges.push_back(data_edge(rank, nearest_parent, child));
+            if (child == 1) {
+                if (rank == 0) {
+                    edges.push_back(data_edge(rank, nearest_parent, child));
+                }
+            } else {
+                const uint64_t earlier_parent = child - 2;
+                edges.push_back(data_edge(rank, earlier_parent, child));
+                if (rank == 0) {
+                    // Deliberately unsorted with a duplicate: the publisher
+                    // must retain the exact source order and multiplicity.
+                    edges.push_back(data_edge(rank, nearest_parent, child));
+                } else {
+                    // Rank 1 uses a different ordered parent list for the
+                    // same child ids, exercising both halves of the key.
+                    edges.push_back(data_edge(rank, earlier_parent, child));
+                }
+            }
+        }
+    }
+    resp["nodes"] = std::move(nodes);
+    resp["parent_edges"] = std::move(edges);
+    resp["watches"] = nlohmann::json::array({prefill_watch(
+        "r1", {{"0", node_count - 1}, {"1", node_count - 1}})});
+    resp["touched_ranks"] = nlohmann::json::array({0, 1});
+    return parse_batch(resp);
+}
+
+std::vector<uint64_t> expected_parent_store_ids(const int rank,
+                                                const uint64_t child) {
+    if (child == 0) return {};
+    const uint64_t nearest_parent = child - 1;
+    if (child == 1) {
+        if (rank == 0) return {nearest_parent + 1, nearest_parent + 1};
+        return {nearest_parent + 1};
+    }
+    const uint64_t earlier_parent = child - 2;
+    if (rank == 0) {
+        return {nearest_parent + 1, earlier_parent + 1, nearest_parent + 1};
+    }
+    return {nearest_parent + 1, earlier_parent + 1,
+            earlier_parent + 1};
+}
+
 // A response skeleton with only the header (every array absent == empty).
 nlohmann::json empty_response(uint64_t sequence) {
     nlohmann::json resp;
-    resp["schema_version"] = 1;
+    add_v2_protocol_header(resp);
     resp["batch_id"] = sequence;
     resp["source_delivery_sequence"] = sequence;
     resp["touched_ranks"] = nlohmann::json::array();
     return resp;
+}
+
+void test_rank_id_intersection_sweep() {
+    using SpanSpec = GraphBatchCommitterTestAccess::IdSpanSpec;
+    using Counts = GraphBatchCommitterTestAccess::IdPreflightCounts;
+
+    Counts counts;
+    auto error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+        0, {{1, 3, 2}, {2, 2, 2}}, {}, &counts);
+    expect(!error.has_value() && counts.pair_envelope_candidates == 1 &&
+               counts.exact_pair_tests == 1,
+           "ID sweep: interleaved AP holes with overlapping envelopes remain legal");
+
+    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+        0, {{1, 3, 2}, {3, 2, 2}}, {}, &counts);
+    expect(error.has_value() &&
+               error->find("virtual endpoint progressions overlap") !=
+                   std::string::npos,
+           "ID sweep: an exact AP collision is rejected");
+
+    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+        0, {{1, 3, 2}}, {2, 3, 4, 7}, &counts);
+    expect(error.has_value() && error->find("JSON ID 3 overlaps") !=
+               std::string::npos && counts.physical_points_examined == 2,
+           "ID sweep: scans past physical 2 and rejects later overlapping 3");
+
+    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
+    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+        0, {{max_id - 4, 2, 2}, {max_id - 3, 2, 2}}, {}, &counts);
+    expect(!error.has_value() && counts.pair_envelope_candidates == 1 &&
+               counts.exact_pair_tests == 1,
+           "ID sweep boundary: disjoint interleaved APs may end at UINT64_MAX-1");
+
+    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+        0, {{max_id - 4, 2, 3}, {max_id - 1, 1, 1}}, {}, &counts);
+    expect(error.has_value() &&
+               error->find("virtual endpoint progressions overlap") !=
+                   std::string::npos &&
+               counts.pair_envelope_candidates == 1 &&
+               counts.exact_pair_tests == 1,
+           "ID sweep boundary: closed-envelope endpoint contact at UINT64_MAX-1 is checked");
+
+    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+        0, {{max_id - 4, 2, 3}, {max_id - 3, 2, 2}}, {}, &counts);
+    expect(error.has_value() &&
+               error->find("virtual endpoint progressions overlap") !=
+                   std::string::npos &&
+               counts.pair_envelope_candidates == 1 &&
+               counts.exact_pair_tests == 1,
+           "ID sweep boundary: mixed-stride APs intersect exactly at UINT64_MAX-1");
+
+    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+        0, {{max_id - 3, 2, 3}}, {}, &counts);
+    expect(error.has_value() &&
+               error->find("progression arithmetic failed") !=
+                   std::string::npos,
+           "ID sweep boundary: a progression whose terminal is UINT64_MAX is rejected");
+
+    for (const uint64_t span_count : {uint64_t{8}, uint64_t{32},
+                                      uint64_t{128}}) {
+        std::vector<SpanSpec> spans;
+        std::vector<uint64_t> physical_ids;
+        spans.reserve(static_cast<size_t>(span_count));
+        for (uint64_t i = 0; i < span_count; i += 2) {
+            const uint64_t base = 1 + (i / 2) * 8;
+            spans.push_back({base, 2, 4});
+            spans.push_back({base + 2, 2, 4});
+            physical_ids.push_back(base + 1);
+            physical_ids.push_back(base + 3);
+            physical_ids.push_back(base + 5);
+        }
+        error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+            0, spans, std::move(physical_ids), &counts);
+        expect(!error.has_value() &&
+                   counts.pair_envelope_candidates == span_count / 2 &&
+                   counts.exact_pair_tests == span_count / 2 &&
+                   counts.pair_envelope_candidates <
+                       span_count * (span_count - 1) / 2 &&
+                   counts.physical_points_examined == 2 * span_count,
+               "ID sweep: bounded pair and physical-point work at 8/32/128 spans");
+
+        spans.clear();
+        for (uint64_t i = 0; i < span_count; ++i) {
+            spans.push_back({1 + i, 2, span_count});
+        }
+        error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
+            0, spans, {}, &counts);
+        const uint64_t all_pairs = span_count * (span_count - 1) / 2;
+        expect(!error.has_value() &&
+                   counts.pair_envelope_candidates == all_pairs &&
+                   counts.exact_pair_tests == all_pairs,
+               "ID sweep: overlapping envelopes retain exact quadratic worst-case behavior");
+    }
+}
+
+void test_ordinary_id_overlap_preflight_atomicity() {
+    nlohmann::json response = empty_response(0);
+    auto descriptor = TestSupport::descriptor_wire();
+    const std::string segment_id =
+        descriptor.at("identity").at("segment_id").get<std::string>();
+    // The rank-0 endpoint run has a physical tile-1 anchor at 51 and virtual
+    // tile-2/tile-3 IDs {53, 55}. The real physical anchors at 51 and 54 are
+    // present so the production parser accepts the descriptor. The smallest
+    // point-scan reproducer then checks 54 before reaching colliding ID 55;
+    // ID 56 is missing from the otherwise cardinality-complete logical span
+    // [51, 57].
+    descriptor["logical_id_ranges"][0]["first_json_id"] = 53;
+    descriptor["logical_id_ranges"][0]["count"] = 2;
+    descriptor["logical_id_ranges"][0]["stride"] = 2;
+    descriptor["endpoint_runs"][0]["first_json_id"] = 51;
+    descriptor["endpoint_runs"][0]["tile_stride"] = 2;
+    response["pipeline_descriptors"] = nlohmann::json::array({descriptor});
+    response["nodes"] = nlohmann::json::array({
+        pipeline_anchor_node(0, 51, "start", segment_id),
+        compute_node(0, 52, "r1", "prefill", "id-hole-52"),
+        compute_node(0, 54, "r1", "prefill", "id-hole-54"),
+        compute_node(0, 55, "r1", "prefill", "id-collision-55"),
+        compute_node(0, 57, "r1", "prefill", "id-hole-57"),
+        pipeline_anchor_node(1, 54, "frontier", segment_id),
+    });
+    const GraphBatch batch = parse_batch(response);
+    Fixture fixture;
+    GraphBatchCommitterTestAccess::IdPreflightCounts work;
+    const auto preflight_error = GraphBatchCommitterTestAccess::validate_id_stream(
+        fixture.committer, batch, &work);
+    expect(preflight_error.has_value() &&
+               preflight_error->find("ordinary node JSON ID 55 overlaps") !=
+                   std::string::npos &&
+               work.physical_points_examined == 2,
+           "ID atomicity: the descriptor preflight detects its later physical AP collision");
+
+    StateDelta delta;
+    delta.delivery_sequence = 0;
+    delta.delivery_epoch = 0;
+    delta.tick = 1;
+    const Snapshot before = snapshot_of(fixture);
+    bool rejected = false;
+    try {
+        fixture.committer.commit(delta, batch);
+    } catch (const std::runtime_error& error) {
+        rejected = std::string(error.what()).find(
+                       "ordinary node JSON ID 55 overlaps") !=
+                   std::string::npos;
+    }
+    expect(rejected && snapshot_of(fixture) == before &&
+               fixture.sources[0]->store().next_auto_id() == 1 &&
+               fixture.sources[1]->store().next_auto_id() == 1 &&
+               fixture.sources[2]->store().next_auto_id() == 1,
+           "ID atomicity: duplicate/missing coverage fails before any store or commit state changes");
+}
+
+void test_candidate_id_preview_build_and_lookup_scaling() {
+    Fixture fixture;
+    // This is a pure preview-index test; parse the immutable descriptor itself
+    // and build typed rows directly. The parser's cross-batch physical-anchor
+    // linkage is exercised by the production-parsed overlap fixture.
+    const auto descriptor = PipelineDescriptor::parse(
+        TestSupport::descriptor_wire());
+
+    const std::vector<std::pair<uint64_t, uint64_t>> scales{
+        {8, 8}, {32, 8}, {128, 8}, {8, 32}, {8, 128}};
+    for (const auto& scale : scales) {
+        const uint64_t physical_rows = scale.first;
+        const uint64_t descriptor_rows = scale.second;
+        GraphBatch batch;
+        batch.pipeline_descriptors.assign(
+            static_cast<size_t>(descriptor_rows / 2), descriptor);
+        for (uint64_t i = 0; i < physical_rows; ++i) {
+            ParsedNode parsed;
+            parsed.json_id = 1000 + 4 * i;
+            parsed.node.rank = 0;
+            batch.nodes.push_back(std::move(parsed));
+        }
+
+        // Q stays fixed at four while physical V and compact descriptor P rows
+        // grow independently in the single batch-domain build.
+        const std::vector<std::pair<int, uint64_t>> queries{
+            {0, 1000}, {0, 1001}, {1, 55}, {1, 56}};
+        const auto result = GraphBatchCommitterTestAccess::preview_candidate_ids(
+            fixture.committer, batch, queries);
+        const auto production_preview =
+            fixture.committer.candidate_id_preview(batch);
+        expect(result.work.rank_rows_initialized == 3 &&
+                   result.work.collected_spans ==
+                       physical_rows + descriptor_rows &&
+                   result.work.candidate_spans_examined ==
+                       physical_rows + descriptor_rows &&
+                   result.work.collected_spans +
+                           result.work.candidate_spans_examined ==
+                       2 * (physical_rows + descriptor_rows) &&
+                   result.work.lookups == 4 && result.work.rank_row_probes == 4,
+               "candidate preview: collection+fold visit 2(V+P), with four fixed lookups");
+        expect(result.mapped_ids.size() == queries.size(),
+               "candidate preview: all fixed-scale queries return one result");
+        for (size_t i = 0; i < queries.size(); ++i) {
+            expect(result.mapped_ids[i] == legacy_candidate_preview_oracle(
+                       fixture.committer, &fixture.sources, 3, batch,
+                       queries[i].first, queries[i].second),
+                   "candidate preview: indexed mapping matches the legacy hull oracle");
+        }
+        expect(result.mapped_ids[1].has_value() &&
+                   production_preview.resolve(0, 1001) ==
+                       result.mapped_ids[1] &&
+                   std::none_of(batch.nodes.begin(), batch.nodes.end(),
+                                [](const ParsedNode& node) {
+                                    return node.node.rank == 0 &&
+                                           node.json_id == 1001;
+                                }),
+               "candidate preview: an in-hull physical-ID hole keeps its preview mapping");
+    }
+}
+
+void test_candidate_id_preview_fail_closed_and_boundaries() {
+    Fixture fixture;
+    GraphBatch valid_descriptor_batch;
+    valid_descriptor_batch.pipeline_descriptors.push_back(
+        PipelineDescriptor::parse(TestSupport::descriptor_wire()));
+    GraphBatch valid_batch;
+    valid_batch.nodes.push_back(parse_single_node(
+        compute_node(0, 100, "preview", "prefill", "preview-node"), 3));
+
+    const std::vector<std::pair<int, uint64_t>> bad_rank_queries{
+        {-1, 100}, {3, 100}, {0, 99}, {0, 100}};
+    const auto bad_rank_result =
+        GraphBatchCommitterTestAccess::preview_candidate_ids(
+            fixture.committer, valid_batch, bad_rank_queries);
+    for (size_t i = 0; i < bad_rank_queries.size(); ++i) {
+        expect(bad_rank_result.mapped_ids[i] == legacy_candidate_preview_oracle(
+                   fixture.committer, &fixture.sources, 3, valid_batch,
+                   bad_rank_queries[i].first, bad_rank_queries[i].second),
+               "candidate preview: bad ranks and out-of-hull IDs match the legacy oracle");
+    }
+
+    GraphBatch malformed_batch = valid_batch;
+    malformed_batch.pipeline_descriptors.push_back(nullptr);
+    const std::vector<std::pair<int, uint64_t>> malformed_queries{
+        {0, 100}, {0, 101}};
+    const auto malformed_result =
+        GraphBatchCommitterTestAccess::preview_candidate_ids(
+            fixture.committer, malformed_batch, malformed_queries);
+    for (size_t i = 0; i < malformed_queries.size(); ++i) {
+        expect(malformed_result.mapped_ids[i] == legacy_candidate_preview_oracle(
+                   fixture.committer, &fixture.sources, 3, malformed_batch,
+                   malformed_queries[i].first, malformed_queries[i].second),
+               "candidate preview: failed span collection rejects all new candidates");
+    }
+
+    GraphBatchCommitterTestAccess::seed_affine_range(
+        fixture.committer, 0, 100, 42, 1);
+    const auto committed_priority =
+        GraphBatchCommitterTestAccess::preview_candidate_ids(
+            fixture.committer, malformed_batch, malformed_queries);
+    expect(committed_priority.mapped_ids[0] == uint64_t{42} &&
+               !committed_priority.mapped_ids[1].has_value() &&
+               committed_priority.mapped_ids[0] == legacy_candidate_preview_oracle(
+                   fixture.committer, &fixture.sources, 3, malformed_batch,
+                   0, 100),
+           "candidate preview: committed affine IDs retain priority over malformed candidate spans");
+
+    const auto saved_rank_source = fixture.sources[1];
+    fixture.sources[1].reset();
+    const std::vector<std::pair<int, uint64_t>> null_rank_source_query{{1, 55}};
+    const auto null_rank_source =
+        GraphBatchCommitterTestAccess::preview_candidate_ids(
+            fixture.committer, valid_descriptor_batch, null_rank_source_query);
+    expect(!null_rank_source.mapped_ids.front().has_value() &&
+               null_rank_source.mapped_ids.front() ==
+                   legacy_candidate_preview_oracle(
+                       fixture.committer, &fixture.sources, 3,
+                       valid_descriptor_batch, 1, 55),
+           "candidate preview: a null rank graph source fails closed");
+    fixture.sources[1] = saved_rank_source;
+
+    GraphBatchCommitterTestAccess::set_graph_sources(fixture.committer, nullptr);
+    const auto null_graph_sources =
+        GraphBatchCommitterTestAccess::preview_candidate_ids(
+            fixture.committer, valid_batch,
+            std::vector<std::pair<int, uint64_t>>{{0, 100}});
+    GraphBatchCommitterTestAccess::set_graph_sources(
+        fixture.committer, &fixture.sources);
+    expect(!null_graph_sources.mapped_ids.front().has_value() &&
+               null_graph_sources.mapped_ids.front() ==
+                   legacy_candidate_preview_oracle(
+                       fixture.committer, nullptr, 3, valid_batch, 0, 100),
+           "candidate preview: a null graph-source vector fails closed");
+
+    Fixture boundary_fixture;
+    OnlineNode existing_node;
+    boundary_fixture.sources[0]->store().add_node(existing_node);
+    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
+    GraphBatch boundary_batch;
+    ParsedNode first;
+    first.json_id = 0;
+    first.node.rank = 0;
+    ParsedNode last;
+    last.json_id = max_id - 1;
+    last.node.rank = 0;
+    boundary_batch.nodes = {first, last};
+    const std::vector<std::pair<int, uint64_t>> boundary_queries{
+        {0, max_id - 1}, {0, max_id}};
+    const auto boundary_result =
+        GraphBatchCommitterTestAccess::preview_candidate_ids(
+            boundary_fixture.committer, boundary_batch, boundary_queries);
+    for (size_t i = 0; i < boundary_queries.size(); ++i) {
+        expect(boundary_result.mapped_ids[i] == legacy_candidate_preview_oracle(
+                   boundary_fixture.committer, &boundary_fixture.sources, 3,
+                   boundary_batch, boundary_queries[i].first,
+                   boundary_queries[i].second),
+               "candidate preview: UINT64 boundary mapping matches the legacy oracle");
+    }
+    expect(!boundary_result.mapped_ids[0].has_value() &&
+               !boundary_result.mapped_ids[1].has_value(),
+           "candidate preview: store-offset overflow and UINT64_MAX queries fail closed");
+
+    Fixture exact_limit_fixture;
+    const auto exact_limit_result =
+        GraphBatchCommitterTestAccess::preview_candidate_ids(
+            exact_limit_fixture.committer, boundary_batch,
+            std::vector<std::pair<int, uint64_t>>{{0, max_id - 1}});
+    expect(exact_limit_result.mapped_ids.front() == max_id &&
+               exact_limit_result.mapped_ids.front() ==
+                   legacy_candidate_preview_oracle(
+                       exact_limit_fixture.committer,
+                       &exact_limit_fixture.sources, 3, boundary_batch, 0,
+                       max_id - 1),
+           "candidate preview: the exactly representable UINT64 store bound matches the legacy formula");
 }
 
 // The legal baseline delta: r1 arrives at tick 100 (delivery 0).
@@ -743,6 +1378,67 @@ void test_json_id_stamp_wrap_and_recovery() {
            "C1: json-id recovery reuses fixed touched-rank scratch capacity");
 }
 
+// Parent-event publication used to rescan every batch edge for every
+// inserted node.  Exercise three scales and assert the actual commit work is
+// one index visit per edge plus one lookup per published node.
+void test_ordered_parent_publication_index_scales() {
+    for (const uint64_t node_count : {uint64_t{8}, uint64_t{32}, uint64_t{128}}) {
+        Fixture f;
+        struct Publication {
+            int rank = -1;
+            uint64_t node_id = 0;
+            std::vector<uint64_t> parents;
+        };
+        std::vector<Publication> publications;
+        GraphBatchCommitterTestAccess::install_parent_publisher(
+            f.committer,
+            [&publications](const std::string& kind, const int rank,
+                            const uint64_t node_id, const OnlineNode&,
+                            const std::vector<uint64_t>& parents) {
+                if (kind != "commit") {
+                    expect(false, "parent index: publisher kind remains commit");
+                }
+                publications.push_back(Publication{rank, node_id, parents});
+            });
+
+        const GraphBatch batch = parent_index_scale_batch(node_count);
+        const StateDelta delta = baseline_delta();
+        expect(!f.committer.validate(delta, batch).has_value(),
+               "parent index: generated scale batch validates");
+        f.committer.commit(delta, batch);
+
+        size_t publication_index = 0;
+        for (int rank = 0; rank < 2; ++rank) {
+            for (uint64_t child = 0; child < node_count; ++child) {
+                const bool found = publication_index < publications.size();
+                expect(found, "parent index: each physical node is published");
+                if (!found) break;
+                const Publication& publication = publications[publication_index++];
+                expect(publication.rank == rank && publication.node_id == child + 1,
+                       "parent index: rank and node publication order are unchanged");
+                expect(publication.parents ==
+                           expected_parent_store_ids(rank, child),
+                       "parent index: ordered parent IDs and duplicates are unchanged");
+            }
+        }
+        expect(publication_index == publications.size(),
+               "parent index: no extra node publications");
+
+        const uint64_t edge_count = 6 * node_count - 9;
+        const auto work =
+            GraphBatchCommitterTestAccess::parent_publication_counts(f.committer);
+        expect(work.indexed_edges == edge_count,
+               "parent index: every edge is indexed exactly once");
+        expect(work.node_lookups == 2 * node_count,
+               "parent index: one child lookup per published node");
+        expect(work.resolved_parents == edge_count,
+               "parent index: every ordered parent reference is resolved once");
+        expect(work.indexed_edges + work.node_lookups + work.resolved_parents <=
+                   2 * (2 * node_count) + 2 * edge_count,
+               "parent index: structural operation count is linear in V + E");
+    }
+}
+
 void test_positive_commit(Fixture& f) {
     const StateDelta delta = baseline_delta();
     const GraphBatch base = baseline_batch();
@@ -817,19 +1513,69 @@ void test_positive_commit(Fixture& f) {
 // alarm for a request that is in-flight NOW (legal before the commit) --
 // and still zero side effects on the committed state.
 void test_post_commit_negatives(Fixture& f) {
-    const StateDelta delta = baseline_delta();
-    const GraphBatch base = baseline_batch();
+    // 4.5 fix (2026-09-29, same as the wscllm fixture): the old cases
+    // mutated the BASELINE batch (re-sending already-committed node ids),
+    // so the json-id-stream rule rejected them before the intended rules
+    // could run. These cases use ZERO-NODE batches (the id-stream pass is
+    // vacuously clean over them), so the rejection comes from the
+    // intended rule -- and the mandatory liveness preflight is asserted
+    // directly (the production commit runs it after validate, so a batch
+    // validate rejects can never reach it through commit()).
     {
-        GraphBatch b = base;
-        b.future_alarms[0].envelope.request_id = "r1";  // in-flight NOW
-        expect_reject(f, delta, b,
-                      "D: alarm for a now in-flight request rejected");
+        // The post-commit alarm rule: r1 went in-flight at the Part C
+        // commit; an alarm for it is now illegal.
+        nlohmann::json resp = empty_response(1);
+        resp["future_alarms"] = nlohmann::json::array({
+            {{"arrival_world_ns", 200},
+             {"envelope", {{"request_id", "r1"}, {"session_id", "s1"},
+                           {"turn_index", 1}, {"prefill_length", 100},
+                           {"decode_length", 10},
+                           {"inter_request_interval_ns", 20000000}}}},
+        });
+        GraphBatch b = parse_batch(resp);
+        StateDelta delta;
+        delta.delivery_sequence = 1;
+        delta.delivery_epoch = 1;
+        delta.tick = 150;
+        const Snapshot before = snapshot_of(f);
+        const auto err = f.committer.validate(delta, b);
+        expect(err.has_value() &&
+                   err->find("already in-flight request") != std::string::npos,
+               "D: alarm for a now in-flight request rejected (validate)");
+        const auto preflight_err =
+            GraphBatchCommitterTestAccess::preflight(f.committer, delta, b);
+        expect(preflight_err.has_value() &&
+                   preflight_err->find("already in-flight request") !=
+                       std::string::npos,
+               "D: the liveness preflight rejects the in-flight alarm too");
+        expect(snapshot_of(f) == before,
+               "D: rejected alarm batch left zero side effects");
     }
     {
-        GraphBatch b = base;
-        b.nodes[1].json_id = 0;  // in-batch duplicate id on rank 0
-        expect_reject(f, delta, b,
-                      "D: in-batch duplicate node id rejected, state intact");
+        // Duplicate alarm request_ids within one batch (post-commit
+        // shaped, id-stream clean).
+        nlohmann::json resp = empty_response(2);
+        const nlohmann::json envelope = {
+            {"request_id", "r9"}, {"session_id", "s1"},
+            {"turn_index", 1}, {"prefill_length", 100},
+            {"decode_length", 10},
+            {"inter_request_interval_ns", 20000000}};
+        resp["future_alarms"] = nlohmann::json::array({
+            {{"arrival_world_ns", 200}, {"envelope", envelope}},
+            {{"arrival_world_ns", 300}, {"envelope", envelope}},
+        });
+        GraphBatch b = parse_batch(resp);
+        StateDelta delta;
+        delta.delivery_sequence = 2;
+        delta.delivery_epoch = 1;
+        delta.tick = 150;
+        const Snapshot before = snapshot_of(f);
+        const auto err = f.committer.validate(delta, b);
+        expect(err.has_value() &&
+                   err->find("duplicate request_id") != std::string::npos,
+               "D: duplicate alarm request_id in one batch rejected");
+        expect(snapshot_of(f) == before,
+               "D: rejected duplicate-alarm batch left zero side effects");
     }
     const auto& c = f.committer.counters();
     expect(c.graph_batch_count == 1 && c.total_nodes == 7,
@@ -1449,16 +2195,44 @@ void test_parse_failure_atomicity(Fixture& f) {
         expect(snapshot_of(f) == before,
                "P: rejection of the corrupted batch has zero side effects");
     }
-    // (3) A corrupted watch member is blocked by the MANDATORY preflight
-    //     (member-not-a-batch-node) BEFORE any Phase-B assembly can run --
-    //     the direct validate-off commit path stays atomic.
+    // (3) A corrupted watch member is blocked before any Phase-B assembly
+    //     can run -- the direct validate-off commit path stays atomic.
+    //     4.5 fix (2026-09-29, same as the wscllm fixture): the old case
+    //     re-sent the baseline node ids alongside the corrupted member, so
+    //     commit() threw from the json-id-stream rule long before any
+    //     watch-member rule -- the assertion was trivially true. A
+    //     ZERO-NODE batch keeps the id-stream pass vacuously clean, so the
+    //     block now comes from the watch-member identity rule itself
+    //     (validate AND the mandatory liveness preflight, each asserted
+    //     directly, plus the production commit entry).
     {
-        GraphBatch b = baseline_batch();
-        b.watches[0].members[0].json_id = 7777;
+        nlohmann::json resp = empty_response(3);
+        resp["watches"] = nlohmann::json::array({
+            prefill_watch("r1", {{"0", 7777}}),
+        });
+        GraphBatch b = parse_batch(resp);
+        StateDelta seq3_delta;
+        seq3_delta.delivery_sequence = 3;
+        seq3_delta.delivery_epoch = 1;
+        seq3_delta.tick = 150;
         const Snapshot before = snapshot_of(f);
+        const auto validate_err = f.committer.validate(seq3_delta, b);
+        expect(validate_err.has_value() &&
+                   validate_err->find("is not a node of this batch") !=
+                       std::string::npos,
+               "P: corrupted watch member rejected by the member identity "
+               "rule (validate)");
+        const auto preflight_err =
+            GraphBatchCommitterTestAccess::preflight(f.committer, seq3_delta,
+                                                     b);
+        expect(preflight_err.has_value() &&
+                   preflight_err->find("is not a node of this batch") !=
+                       std::string::npos,
+               "P: corrupted watch member rejected by the member identity "
+               "rule (mandatory liveness preflight)");
         bool threw = false;
         try {
-            f.committer.commit(delta, b);
+            f.committer.commit(seq3_delta, b);
         } catch (const std::runtime_error&) {
             threw = true;
         }
@@ -1882,10 +2656,15 @@ void test_affine_metadata_under_million_node_pressure() {
 }  // namespace
 int main() {
     Fixture f;
+    test_rank_id_intersection_sweep();
+    test_ordinary_id_overlap_preflight_atomicity();
+    test_candidate_id_preview_build_and_lookup_scaling();
+    test_candidate_id_preview_fail_closed_and_boundaries();
     test_static_checks(f);
     test_negative_cases(f);
     test_validate_and_commit_atomic();
     test_json_id_stamp_wrap_and_recovery();
+    test_ordered_parent_publication_index_scales();
     test_positive_commit(f);
     test_post_commit_negatives(f);
     test_zero_node_batch(f);

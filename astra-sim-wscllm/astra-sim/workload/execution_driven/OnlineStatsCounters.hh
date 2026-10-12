@@ -13,9 +13,13 @@ counters 结构,由在线 driver context 持有(main_online.cc),运行结束随
 字段(方案 §9.1 中 C++ 侧职责部分):
   - global_wakeup_count:主循环显式 T->T+1 决策边界唤醒次数(方案 step 1-11;
     仿真加速分析.md §9.4 要求与 engine-idle callback 区分、单独报告);
-  - graph_validate_count / graph_validate_ns:GraphBatch Phase A validate 调用
-    次数与累计墙钟 ns。计时在调用点(ed_commit_cb)进行——validate 本身保持
-    纯函数零副作用(阶段 5 fixture 断言),计数器不得进入 validate 内部;
+  - graph_validate_count / graph_validate_ns:GraphBatch validate 计数
+    与累计墙钟 ns。计时在 GraphBatchCommitter::validate_and_commit 内部
+    进行（包裹纯函数 validate_impl,结果经 ValidateAndCommitResult::
+    validation_ns 返回）——validate 本身保持纯函数零副作用(阶段 5
+    fixture 断言);2026-09-05 起 public Phase-A validate() 入口并入
+    GraphBatchCommitterTestAccess(fixture 专用),生产路径只有
+    validate_and_commit()/commit(),计数器随调用点累加;
   - snapshot_ns / snapshot_count:感知摘要(injected-unfinished 两层剩余负载
     查询)的累计墙钟 ns 与计算次数(每个有决策工作的 tick-end gate 一次,
     感知关闭时为空查询,耗时为 0 量级)。

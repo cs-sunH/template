@@ -11,12 +11,10 @@ LICENSE file in the root directory of this source tree.
 
 namespace AstraSim {
 
-class Workload;
-
-class WorkloadLayerHandlerData : public BasicEventHandlerData, public MetaData {
+class WorkloadLayerHandlerData : public BasicEventHandlerData {
   public:
-    int sys_id;
-    Workload* workload;
+    // sys_id is inherited from BasicEventHandlerData; redeclaring it here
+    // would shadow the base field and read back garbage via a base pointer.
     uint64_t node_id;
     WorkloadLayerHandlerData();
 };

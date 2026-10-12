@@ -24,6 +24,14 @@ CollectivePhase::CollectivePhase() {
     queue_id = -1;
     sys = nullptr;
     algorithm = nullptr;
+    // Default-initialize the data members the algorithm-taking constructor
+    // sets: the only current user (a lifecycle test) assigns them by hand,
+    // but an un-initialized read here would be UB (2026-10-01 audit, same
+    // reasoning as the Algorithm base-class zero-init).
+    initial_data_size = 0;
+    final_data_size = 0;
+    enabled = false;
+    comm_type = ComType::None;
 }
 
 void CollectivePhase::init(BaseStream* stream) {

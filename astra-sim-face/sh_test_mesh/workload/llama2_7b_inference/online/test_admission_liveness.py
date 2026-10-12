@@ -166,12 +166,25 @@ def _occupancy_tokens(manager):
 
 def _pressure_events(manager):
     return [
-        event for event in manager.events
+        event for event in manager.events_since(0)
         if event.event_type in ("admission_blocked", "admission_retry")
     ]
 
 
-class DecodeAdmissionLivenessTest(unittest.TestCase):
+class _PChunkHolderGuard:
+    """_make_scheduler() 会改写生产模块全局 _P_CHUNK_HOLDER[0](调度器
+    __init__ 同款机制,face_online_scheduler.py 的调度器 __init__);此处 setUp 保存、
+    tearDown 还原,防止跨测试模块的状态泄漏(生产全局不残留本测试的
+    P_CHUNK=128)。"""
+
+    def setUp(self):
+        self._p_chunk_before = face_online_scheduler._P_CHUNK_HOLDER[0]
+
+    def tearDown(self):
+        face_online_scheduler._P_CHUNK_HOLDER[0] = self._p_chunk_before
+
+
+class DecodeAdmissionLivenessTest(_PChunkHolderGuard, unittest.TestCase):
     """用例 A:decode 阻塞即重开重试门;blocker 完成的下一边界准入。"""
 
     def test_blocked_then_admitted_after_blocker_completes(self):
@@ -224,7 +237,7 @@ class DecodeAdmissionLivenessTest(unittest.TestCase):
             scheduler._batch["assignments"][-1]["decode_instance_index"], 1)
 
 
-class PrefillAdmissionLivenessTest(unittest.TestCase):
+class PrefillAdmissionLivenessTest(_PChunkHolderGuard, unittest.TestCase):
     """用例 C:prefill 阻塞即置 dirty;不变状态重试;释放后准入。"""
 
     def test_blocked_marks_dirty_and_retries_then_admits(self):
@@ -261,7 +274,7 @@ class PrefillAdmissionLivenessTest(unittest.TestCase):
         self.assertNotIn(1, scheduler.prefill_admission_dirty)
 
 
-class DecodeSelectionFilterTest(unittest.TestCase):
+class DecodeSelectionFilterTest(_PChunkHolderGuard, unittest.TestCase):
     """P1 decode 选择期过滤三态 + 决策确定性 + 零副作用。"""
 
     def _costs(self):
@@ -285,7 +298,7 @@ class DecodeSelectionFilterTest(unittest.TestCase):
 
         def frozen_state():
             return (manager.hbm_snapshots(),
-                    tuple(manager.events),
+                    tuple(manager.events_since(0)),
                     tuple(scheduler.capacity_epoch),
                     tuple(scheduler.online_log_rows),
                     manager.session_snapshot("sx"))
@@ -332,7 +345,7 @@ class DecodeSelectionFilterTest(unittest.TestCase):
         # (hbm/session 快照、capacity_epoch、KV 事件流逐项不变)。
         after = (
             manager.hbm_snapshots(),
-            tuple(manager.events),
+            tuple(manager.events_since(0)),
             tuple(scheduler.capacity_epoch),
             manager.session_snapshot("sx"),
         )
@@ -340,7 +353,7 @@ class DecodeSelectionFilterTest(unittest.TestCase):
         self.assertEqual(after[3], before[4])
 
 
-class PrefillSelectionFilterTest(unittest.TestCase):
+class PrefillSelectionFilterTest(_PChunkHolderGuard, unittest.TestCase):
     """P1 prefill 选择期过滤三态(全上下文保守口径)。"""
 
     def _snapshots(self):
@@ -391,7 +404,7 @@ class PrefillSelectionFilterTest(unittest.TestCase):
             "kept_all_infeasible")
 
 
-class ProbeSemanticsTest(unittest.TestCase):
+class ProbeSemanticsTest(_PChunkHolderGuard, unittest.TestCase):
     """预检口径:source==target 按增量、source!=target 按全量(镜像
     move_prefill_to_decode);RESIDENT 之外的会话状态不给增量信用。"""
 
@@ -425,7 +438,8 @@ class ProbeSemanticsTest(unittest.TestCase):
         self.assertFalse(scheduler._probe_instance_capacity(2, over_shards))
 
 
-class DecodeEvictionSerializationTest(unittest.TestCase):
+class DecodeEvictionSerializationTest(_PChunkHolderGuard,
+                                      unittest.TestCase):
     """问题 2A 顺带修复(2026-09-05,方案 §4/T-E1):decode 决策行新增
     decode_target_evictions 快照序列化(与 wscllm 同名同构;face 的 decode
     决策在 _try_admit_waiting_decodes 内发射,快照天然含跨 attempt 累积),
@@ -495,7 +509,8 @@ class DecodeEvictionSerializationTest(unittest.TestCase):
             serialized,
             [self._expected_dict(e4), self._expected_dict(e5)])
         # 发射后置空核销(镜像 completion 对 completion_evictions 的
-        # 先序列化后置空语义;:1171 M4 置空保留为幂等兜底)。
+        # 先序列化后置空语义;face_online_scheduler 的 _on_decode_complete
+        # 完成即置空保留为幂等兜底,2026-10-01 去行号锚防漂移)。
         self.assertEqual(runtime.decode_target_evictions, ())
 
     def test_completion_row_unaffected_by_decode_row_serialization(self):

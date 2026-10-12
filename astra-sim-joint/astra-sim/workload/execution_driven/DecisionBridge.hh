@@ -97,7 +97,7 @@ namespace ExecutionDriven {
 
 /// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1; this
 /// header and the Python validator are the authority).
-inline constexpr int kDecisionBridgeSchemaVersion = 1;
+inline constexpr int kDecisionBridgeSchemaVersion = kGraphBatchSchemaVersion;
 
 /// C6 (WP2 link telemetry, joint 遥测改造, --link-telemetry): optional
 /// per-delivery top-level link_telemetry[] payload provider, installed by
@@ -121,6 +121,109 @@ inline constexpr int kDecisionBridgeSchemaVersion = 1;
 /// occupies a snapshot reserved slot).
 using LinkTelemetryProvider =
     std::function<nlohmann::json(const StateDelta&)>;
+
+/// W1 (joint work ledger, 2026-09-29): per-delivery top-level `work_ledger`
+/// payload provider, installed by the online main. Same additive-sibling
+/// discipline as LinkTelemetryProvider ( rides beside ledger_summary, never
+/// occupies a snapshot reserved slot; absent = legacy peer, the Python side
+/// records the absence rather than fabricating zeros). The payload shape is
+/// frozen by the W1 schema contract (BRIDGE_PROTOCOL_VERSION
+/// "bridge-v1-20260929" / WORK_LEDGER_SCHEMA_VERSION "workledger-v1-20260929"
+/// on the Python side, joint/schema_registry.py):
+///
+///   { "schema_version": 1,
+///     "bridge_protocol": "bridge-v1-20260929",
+///     "work_ledger_schema": "workledger-v1-20260929",
+///     "snapshot_kind": "full" | "delta",
+///     "delivery_sequence": <epoch>, "tick": <tick>,
+///     "event_watermark": <monotonic events assigned so far>,
+///     "state": {...}            -- full mode: the whole ledger state
+///     "events": [...] }         -- delta mode: diff-derived lifecycle events
+///
+/// State-derived ledger (inventory §4.3 point 4): the provider emits the
+/// FULL state on the first delivery and, on every later one, the
+/// diff_work_ledger_states() event list derived from the previous frame --
+/// commit/issue/progress/completion/ack/release with monotonic local_seq.
+/// The provider runs inside deliver_and_receive on the simulation thread,
+/// exactly once per delivery epoch (1:1 backpressure).
+using WorkLedgerProvider = std::function<nlohmann::json(const StateDelta&)>;
+
+/// C4 protocol-2 lifecycle publication hook. The caller assigns the one
+/// run-global logical sequence at the instant this callback is made. The
+/// NodeView is the authoritative committed online record; node_id is its
+/// NodeStore ID (not the zero-based GraphBatch JSON ID).
+using LedgerNodeTransitionPublisher = std::function<void(
+    const std::string& kind, int rank, uint64_t node_id,
+    const OnlineNode& node, const std::vector<uint64_t>& parent_store_ids)>;
+
+/// W1: derive the incremental ledger delta between two work-ledger state
+/// frames (pure JSON -> JSON; no simulator state is touched).
+/// `next_local_seq` is the producer's monotonic counter: every emitted
+/// event consumes one value and the counter advances past the last used
+/// value, so consecutive calls never reuse a (producer, local_seq)
+/// identity.
+///
+/// Diff rules (state-derived six-kind lifecycle):
+///   - key only in cur        -> commit (+ issue/completion replay of the
+///                               current flags for a mid-life first sight);
+///   - issued false -> true   -> issue;
+///   - finished false -> true -> completion;
+///   - remaining_ops/bytes/latency_ns decreased -> progress (delta_served =
+///     the decrease, plus the corresponding current remaining_* field from
+///     the same tick-end frame; source is inferred on the Python side);
+///   - key only in prev       -> completion (if not already finished) then
+///     ack then release (NodeStore GC only collects finished nodes whose
+///     children all finished, so disappearance means the obligations
+///     settled).
+///
+/// Compact node lists: node-class lifecycle changes (the dominant volume --
+/// a busy decision epoch commits thousands of graph nodes) are emitted as
+/// four id/fact lists instead of per-event envelopes:
+///   compact.node_commits     -- full node entries (same shape as
+///                               state.nodes[].nodes[] elements);
+///   compact.node_issues      -- work ids whose issued flag flipped true;
+///   compact.node_completions -- work ids whose finished flag flipped true;
+///   compact.node_vanished    -- work ids absent from the current frame
+///                               (the Python side emits completion-if-needed
+///                               then release; no separate ack -- release
+///                               subsumes it for the state-derived ledger);
+///   compact.seq_base         -- the first local_seq the reconstructed
+///                               node events take (the COMPACT entries
+///                               consume seqs from seq_base FIRST, in list
+///                               order commits -> issues -> completions ->
+///                               vanished at 2 seqs each; the `events`
+///                               array carries the C++-assigned HIGHER
+///                               seqs after them -- mirroring the Python
+///                               application order in joint/work_ledger.py
+///                               and the seq_base arithmetic in
+///                               DecisionBridge.cc; 2026-10-01 审查订正：
+///                               旧注释把两序写反，按其"修复"公式即破坏
+///                               (producer, local_seq) 配对).
+///   Invariant (2026-10-01 R2 注记): the compact-first ordering holds only
+///   while node entries carry NO remaining_ops/remaining_bytes/
+///   remaining_latency_ns fields -- a node entry with any of them emits a
+///   progress event that consumes a seq BETWEEN the compact and events
+///   segments and silently breaks the pairing. Keep diff_one_section's
+///   node serializer free of remaining_* keys (or extend the seq layout
+///   deliberately).
+/// The Python ledger reconstructs the same six-kind LedgerEvents from these
+/// lists (deterministic order), so full-vs-incremental equivalence and the
+/// idempotency gate are unchanged.
+///
+/// Section order (nodes, hbm, pool, noc flows) and per-section key order
+/// are deterministic; the caller must build both frames with the same
+/// collector so the maps are comparable.
+struct WorkLedgerDiff {
+    nlohmann::json events;   // leg works + progress (full event form)
+    nlohmann::json compact;  // node-class lists (see above); object when
+                             // non-empty, null when nothing changed
+};
+
+WorkLedgerDiff diff_work_ledger_states(const nlohmann::json& prev_state,
+                                       const nlohmann::json& cur_state,
+                                       uint64_t delivery_sequence,
+                                       uint64_t tick,
+                                       uint64_t& next_local_seq);
 
 /// GraphBatch: the C++<-Python reply of one delivery epoch.
 /// C1 (2026-08-29): the batch is TYPED. The pre-C1 struct carried the six
@@ -217,6 +320,14 @@ class FileDecisionBridge : public DecisionBridge {
     /// between epochs of one run).
     void set_link_telemetry_provider(LinkTelemetryProvider provider);
 
+    /// W1 (joint work ledger): install the work-ledger provider. Once
+    /// installed, every request_<seq>.json gains the top-level `work_ledger`
+    /// object (see WorkLedgerProvider). Never installed = the field is
+    /// absent (legacy peer). Same startup-only contract as the telemetry
+    /// provider. The two channels are independent: the ledger never gates on
+    /// --link-telemetry and carries its own schema versions.
+    void set_work_ledger_provider(WorkLedgerProvider provider);
+
     /// Phase-6 (方案 §9.1) per-run channel stats. Cumulative across the run;
     /// zero for bridges that never deliver. Measured from the C++ side:
     ///   - roundtrip_count / roundtrip_ns: deliver_and_receive calls and the
@@ -271,6 +382,8 @@ class FileDecisionBridge : public DecisionBridge {
     mutable Stats stats_;
     // C6 (WP2, --link-telemetry): empty = telemetry off (field omitted).
     LinkTelemetryProvider link_telemetry_provider_;
+    // W1 (joint work ledger): empty = ledger off (field omitted).
+    WorkLedgerProvider work_ledger_provider_;
 };
 
 }  // namespace ExecutionDriven

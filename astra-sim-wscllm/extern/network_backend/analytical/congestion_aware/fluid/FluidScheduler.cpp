@@ -58,12 +58,19 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
     link_states.reserve(directed_links.size());
     for (size_t index = 0; index < directed_links.size(); ++index) {
         const auto& link = directed_links[index];
-        if (link == nullptr || link->get_id() != index || link->get_bandwidth_Bpns() <= 0) {
+        // isfinite closes the third bandwidth entry point at consumption
+        // time (2026-09-30 face parity): a NaN/+inf capacity would pass
+        // the "<= 0" comparison and then never constrain
+        // recalculate_dirty_rates' min-share computation (std::min with NaN
+        // always keeps the other operand).
+        if (link == nullptr || link->get_id() != index ||
+            !std::isfinite(link->get_bandwidth_Bpns()) ||
+            link->get_bandwidth_Bpns() <= 0) {
             std::cerr << "[Error] (network/analytical/congestion_aware) invalid directed LinkId table"
                       << std::endl;
             std::exit(-1);
         }
-        link_states.push_back({link->get_id(), link->get_bandwidth_Bpns(), {}});
+        link_states.push_back({link->get_bandwidth_Bpns(), {}});
     }
 }
 
@@ -76,8 +83,23 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
                                 std::shared_ptr<const FluidRoute> route,
                                 const Callback callback,
                                 const CallbackArg callback_arg) noexcept {
+    // Defense-in-depth only: this exit is unreachable from production --
+    // the GraphBatchCommitter commit boundary rejects bytes==0 and
+    // src==dst sends outright (GraphBatchCommitter.cc mandatory_liveness_
+    // preflight), empty routes never survive route resolution, and the
+    // liveness preflight validates the route before any emission. The
+    // frontend writer does NOT clamp the byte count (an earlier revision of
+    // this comment claimed it did); rejection, not clamping, is the
+    // contract. Kept as the last barrier against a malformed flow
+    // (2026-09-28 C1 re-verified: keep, do not change behavior).
     if (bytes == 0 || route == nullptr || route->link_ids.empty() || callback == nullptr) {
-        std::cerr << "[Error] (network/analytical/congestion_aware) invalid fluid flow" << std::endl;
+        std::cerr << "[Error] (network/analytical/congestion_aware) invalid fluid flow"
+                  << " (bytes=" << bytes
+                  << ", route=" << (route == nullptr ? "null" : "present")
+                  << ", link_ids="
+                  << (route == nullptr ? "n/a" : std::to_string(route->link_ids.size()))
+                  << ", callback=" << (callback == nullptr ? "null" : "present")
+                  << ")" << std::endl;
         std::exit(-1);
     }
     if (next_flow_id == std::numeric_limits<FlowId>::max()) {
@@ -91,15 +113,18 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
         flush_scheduled = true;
         if (deferred_flush_mode) {
             // Online/deferred mode: never insert a current_time event into the
-            // main queue from a tick-end/deferred context (EventQueue :33
-            // strict-increase assert). Post-commit comm emission lands here and
-            // is executed by the same-tick deferred drain.
+            // main queue from a tick-end/deferred context (this would trip the
+            // EventQueue proceed() strict-increase assert). Post-commit comm
+            // emission lands here and is executed by the same-tick deferred
+            // drain.
             event_queue->schedule_event_deferred(flush_callback, this);
         } else {
-            // Static mode (pre-extension behavior, byte-for-byte preserved):
-            // start_flow is only reachable from inside an invoke_events pass,
-            // where the current_time alarm merges into the EventList currently
-            // being invoked and executes within the same pass.
+            // Legacy mode (pre-extension behavior, byte-for-byte preserved;
+            // regression tests only -- the offline static entry was removed
+            // and the online main always enables deferred mode): start_flow is
+            // only reachable from inside an invoke_events pass, where the
+            // current_time alarm merges into the EventList currently being
+            // invoked and executes within the same pass.
             event_queue->schedule_event(event_queue->get_current_time(), flush_callback, this);
         }
     }
@@ -107,14 +132,6 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
 
 void FluidScheduler::set_deferred_flush_mode(const bool enabled) noexcept {
     deferred_flush_mode = enabled;
-}
-
-void FluidScheduler::flush_pending_starts_deferred() noexcept {
-    if (flush_scheduled) {
-        return;
-    }
-    flush_scheduled = true;
-    event_queue->schedule_event_deferred(flush_callback, this);
 }
 
 void FluidScheduler::flush_callback(void* const context) noexcept {
@@ -334,7 +351,6 @@ void FluidScheduler::flush_pending_starts() noexcept {
 
     for (const auto& pending : pending_starts) {
         FluidFlow flow{pending.flow_id,
-                       pending.bytes,
                        static_cast<long double>(pending.bytes),
                        0.0,
                        now,
@@ -418,6 +434,10 @@ void FluidScheduler::cancel_scheduled_wakeup() noexcept {
         static_cast<void>(event_queue->cancel_event(scheduled_wakeup_event));
     }
     scheduled_wakeup_event.reset();
+    // Keep the invariant "no live event => no scheduled time"; a stale
+    // timestamp without a live event would make schedule_next_wakeup()
+    // early-return forever and starve the remaining flows.
+    scheduled_wakeup_time.reset();
 }
 
 void FluidScheduler::schedule_next_wakeup() noexcept {
@@ -429,7 +449,8 @@ void FluidScheduler::schedule_next_wakeup() noexcept {
     }
 
     const auto next_time = completion_heap.top().predicted_finish_time;
-    if (scheduled_wakeup_time.has_value() && next_time >= scheduled_wakeup_time.value()) {
+    if (scheduled_wakeup_event.valid() && scheduled_wakeup_time.has_value()
+        && next_time >= scheduled_wakeup_time.value()) {
         return;
     }
 
@@ -478,6 +499,12 @@ void FluidScheduler::schedule_tail_arrival(FluidFlow& flow, const EventTime now)
 
 void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
     if (generation != wakeup_generation) {
+        if (!scheduled_wakeup_event.valid()) {
+            // Stale fire with no live wakeup left: without recovery the
+            // remaining flows would never be scheduled again.
+            scheduled_wakeup_time.reset();
+            schedule_next_wakeup();
+        }
         return;
     }
     // This wakeup was popped before its callback began; it cannot be

@@ -48,9 +48,11 @@ class FluidScheduler {
      * node emitted from a tick-end callback or the deferred drain would insert
      * a current_time EventList into the main queue and trip the EventQueue
      * strict-increase fail-closed guard on the next proceed(). Online drivers
-     * must enable
-     * deferred mode; the static path stays in the legacy mode (default), which
-     * is byte-for-byte the pre-extension behavior.
+     * must enable deferred mode; the legacy (default-off) branch is now
+     * reachable only from the focused test binaries -- every production
+     * driver in this repository (main_online.cc) enables deferred mode
+     * unconditionally (2026-10-01 wording; the static ET pipeline was
+     * removed with route 1).
      */
     void set_deferred_flush_mode(bool enabled) noexcept;
 
@@ -64,8 +66,10 @@ class FluidScheduler {
     [[nodiscard]] uint64_t get_total_completed_flows() const noexcept;
 
     /// -------------------------------------------------------------------
-    /// WP6 NoC link observer (SLO pipeline B2, /tmp/slo_wps/plans/
-    /// CPP_SPEC.md §D): read-only side-band integration of the fluid bytes
+    /// WP6 NoC link observer (SLO pipeline B2; contract documented in the
+    /// repository README §3 "SLO 观测层（B2 起，WP6/WP8/WP9-C++）" paragraph,
+    /// link_bucket/link_total records and the ASTRA_LINK_OBSERVER gate):
+    /// read-only side-band integration of the fluid bytes
     /// each directed link carried. The observer hooks the scheduler's
     /// existing rate/membership change points (advance_dirty_flows entry,
     /// BEFORE any mutation), integrates bytes_delta = rate x dt per link
@@ -76,7 +80,18 @@ class FluidScheduler {
     /// gates that on MetricCollector::enabled() (metrics != off) AND env
     /// ASTRA_LINK_OBSERVER != 0, passing the slo_sampling link bucket.
     /// Fractional byte accumulation keeps a per-link carry so the bucket
-    /// sums reconcile with the integer transfer byte counts.
+    /// sums reconcile with each other across bucket lengths.
+    /// (2026-10-01) Quantization bias disclosure: NoC-side completion
+    /// times are quantized UP to whole ticks (predicted_finish_time
+    /// ceils), so a dying flow lingers in the link denominators and in
+    /// this observer's rate-sum for up to one tick past its true fluid
+    /// finish. Absolute link-bytes therefore carry a systematic
+    /// over-attribution of at most share x 1 ns per flow completion, and
+    /// sub-tick flows can show large relative errors; competing flows'
+    /// completion times can be dragged late by the same bound. Do not
+    /// read absolute short-flow byte counts or tight latency deltas off
+    /// these records without that margin (the remote-memory port model
+    /// has continuous sub-steps and does not share this bias).
     struct LinkObserverTotals {
         uint64_t total_bytes;  ///< whole bytes integrated over the window
         uint64_t active_ns;    ///< time with at least one active flow

@@ -55,6 +55,11 @@ void expect_child_failure(const char* message, Fn&& child_body) {
     }
     int status = 0;
     expect(waitpid(child, &status, 0) == child, message);
+    // L23 (2026-09-29): a signal death (SIGSEGV/SIGABRT/...) is a crash,
+    // never the fail-closed rejection this fixture pins.  The old check
+    // only rejected a clean EXIT_SUCCESS, so a crashing child counted as
+    // a pass.
+    expect(!WIFSIGNALED(status), message);
     expect(!(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS),
            message);
 }
@@ -299,8 +304,8 @@ void test_history_preserving_legacy_post_processing_succeeds(
 
     expect(stats.get_wall_time() == 30,
            "history-preserving legacy post-processing keeps wall time");
-    expect(stats.get_type_time(
-               Statistics::OperatorStatistics::OperatorType::GPU) == 20,
+    expect(stats.calculate_type_time_in_window(
+               Statistics::OperatorStatistics::OperatorType::GPU, 0, 30) == 20,
            "history-preserving legacy post-processing keeps GPU union");
 }
 
@@ -383,12 +388,10 @@ void test_cpu_no_util_and_comm_state_stay_compact() {
     const NodeView comm = make_node(22, NodeKind::CommSend);
     OnlineStatisticsState comm_state;
     compact_start(stats, comm, comm_state, 20);
-    comm_state.comm_size = 4096;
     compact_end(stats, comm, comm_state, 30);
 
-    expect(comm_state.completed && comm_state.comm_size.has_value() &&
-               comm_state.comm_size.value() == 4096,
-           "compact NodeStore state retains terminal communication facts");
+    expect(comm_state.completed,
+           "compact NodeStore state completes terminal communication");
     expect(stats.retained_online_operator_count() == 0,
            "CPU, no-util GPU, and comm state never create map entries");
     expect(stats.calculate_type_time_in_window(

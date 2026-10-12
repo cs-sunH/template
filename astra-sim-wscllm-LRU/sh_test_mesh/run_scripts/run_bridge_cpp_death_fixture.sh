@@ -21,6 +21,24 @@ PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_ROOT=${1:-/tmp/wscllm_bridge_cpp_death}
 FIXTURE_REL=online/verify/bridge_cpp_death_fixture.py
 
+# infra-E3：RUN_ROOT 先规范化为绝对路径（R3 复核修复：原闸对原始 $1
+# 字符串做比较，"." / ".." / 相对路径不命中任何拒绝模式而直通 rm -rf）。
+RUN_ROOT=$(realpath -m "${RUN_ROOT}")
+# R2-5(2026-09-30)+R3 补强:infra-F1 危险路径闸(对齐 run_online_strategy.sh
+# 的完整形态)——顶级系统目录、$HOME、仓根及其祖先/后代一律拒绝;缺省
+# /tmp 落点与常规自定义路径正常放行。
+case ":/bin:/boot:/dev:/etc:/home:/lib:/lib32:/lib64:/media:/mnt:/opt:/proc:/root:/run:/sbin:/srv:/sys:/tmp:/usr:/var:" in
+  *:"${RUN_ROOT}":*)
+    echo "[bridge_cpp_death] refusing dangerous RUN_ROOT: ${RUN_ROOT}" >&2
+    exit 1
+    ;;
+esac
+if [[ -z "${RUN_ROOT}" || "${RUN_ROOT}" == / || "${RUN_ROOT}" == "${HOME}" \
+      || "${PROJECT}" == "${RUN_ROOT}" || "${PROJECT}" == "${RUN_ROOT}"/* \
+      || "${RUN_ROOT}" == "${PROJECT}"/* ]]; then
+  echo "[bridge_cpp_death] refusing dangerous RUN_ROOT: ${RUN_ROOT}" >&2
+  exit 1
+fi
 rm -rf "${RUN_ROOT}"
 mkdir -p "${RUN_ROOT}"
 

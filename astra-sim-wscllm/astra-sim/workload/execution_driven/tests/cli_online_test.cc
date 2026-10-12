@@ -14,18 +14,25 @@ token):
   R3  request-neutral default: without --request-queue-csv the service stays
        IDLE (option simply absent; nothing is loaded).
   R4  --request-queue-csv must name an existing, readable file.
-  R5  --close-input is a boolean flag (value form = error).
+  R5  --close-input boolean semantics (P2-5 fix, 2026-09-28): unified
+       forms -- bare flag = true, inline "=true|1"/"=false|0" and
+       separated "true|1"/"false|0" parse explicitly with one meaning;
+       any other value token is a hard error. (Pre-fix the inline form was
+       rejected while a separated value was silently IGNORED, so
+       "--close-input false" armed the close.)
   R6  --bridge-dir is parsed and stored (reserved for step 1-7).
   R7  unknown options in the online family (--request-* / --bridge-* /
        --close-* / --online-* / --command-*) are hard errors (the shared
-       CmdLineParser would silently swallow them).
+       CmdLineParser fails closed on anything strip_online_family_argv
+       leaves behind).
   R8  a missing value after --bridge-dir / --request-queue-csv /
        --command-fifo = error.
   R9  step 1-10: --command-fifo is parsed and stored (external-producer
        FIFO for the IDLE fixture; both inline and separate-value forms).
   R10 phase 3: --sensing-enabled is a boolean feature flag, default OFF
-       (感知开关必须经显式 feature flag 进入,阶段 6 前默认关); value form
-       rejected; typos in the --sensing- family are hard errors.
+       (感知开关必须经显式 feature flag 进入,阶段 6 前默认关); P2-5 unified
+       boolean semantics (same forms as R5); typos in the --sensing-
+       family are hard errors.
   R11 wedge watchdog (2026-08-22 wedge-diagnosis recommendation):
        --bridge-timeout-ms is a non-negative integer (0 = wait forever,
        the frozen default; both inline and separate value forms legal;
@@ -54,6 +61,22 @@ token):
        character (" +1", " -1", "\t-1"), nan/inf/garbage tails, ERANGE
        under/overflow, (0, 1e-9) "below clock resolution", and anything
        above 1e9; failed parses leave out untouched.
+  R15 P2-4 fix (2026-09-28): a value-taking online option never consumes a
+       "--"-prefixed token as its value ("--bridge-dir --close-input" is a
+       hard error, not a directory named "--close-input" plus a silently
+       inverted close flag). R15b P2-6 fix: an explicitly given but EMPTY
+       value ("--request-queue-csv=") is a hard error, distinct from the
+       option being absent (the pre-fix shape skipped the readability
+       check, ran expected_requests=0 and let every completion gate pass
+       on a zero-request green run). R15c P2-4 path legality: --bridge-dir
+       must be a directory when it exists (a missing path stays legal --
+       ensure_bridge_dir creates it); --command-fifo must name an existing
+       FIFO (the fixture mkfifs it before the binary starts).
+  R16 C3 fix (2026-09-28): --close-input and --command-fifo are mutually
+       exclusive (hard parse error): the startup close would kill the FIFO
+       producer channel before it injects anything and the no-CSV run
+       would exit green with zero requests. --close-input=false with a
+       FIFO stays legal.
 
 Build: registered in the CMake build (M20) as target
   AstraSim_Analytical_Congestion_Aware_CliOnlineTest in
@@ -69,6 +92,9 @@ AstraSim_Analytical_Congestion_Aware_CliOnlineTest
   (the binary is emitted to <build-tree>/bin/ via the targets'
   RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
 *******************************************************************************/
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <cassert>
 #include <cstdio>
@@ -164,12 +190,54 @@ int main() {
                         "--request-queue-csv=/no/such/file.csv"})
                .find("not readable") != std::string::npos);
 
-    // R5: --close-input flag
+    // R5 (P2-5, 2026-09-28): --close-input unified boolean semantics --
+    // bare flag = true; inline "=true|1"/"=false|0"; separated
+    // "true|1"/"false|0"; any other value token is a hard error.
     assert(parse_ok({"--online-mode", "strategy", "--close-input"}, out));
     assert(out.close_input);
-    // R5: value form rejected
-    assert(parse_error({"--online-mode", "strategy", "--close-input=true"})
-               .find("no value") != std::string::npos);
+    assert(parse_ok({"--online-mode", "strategy", "--close-input=true"},
+                    out));
+    assert(out.close_input);
+    assert(parse_ok({"--online-mode", "strategy", "--close-input=1"}, out));
+    assert(out.close_input);
+    assert(parse_ok({"--online-mode", "strategy", "--close-input=false"},
+                    out));
+    assert(!out.close_input);
+    assert(parse_ok({"--online-mode", "strategy", "--close-input=0"}, out));
+    assert(!out.close_input);
+    assert(parse_ok({"--online-mode", "strategy", "--close-input", "false"},
+                    out));
+    assert(!out.close_input);
+    assert(parse_ok({"--online-mode", "strategy", "--close-input", "0"},
+                    out));
+    assert(!out.close_input);
+    assert(parse_ok({"--online-mode", "strategy", "--close-input", "true"},
+                    out));
+    assert(out.close_input);
+    assert(parse_ok({"--online-mode", "strategy", "--close-input", "1"},
+                    out));
+    assert(out.close_input);
+    // a "--"-prefixed token after the bare flag is another option, not a
+    // value: the flag stands alone (true)
+    assert(parse_ok({"--online-mode", "strategy", "--close-input",
+                     "--sensing-enabled"},
+                    out));
+    assert(out.close_input);
+    // illegal values fail closed in both forms (pre-fix: the separated
+    // shape was silently ignored and the flag armed)
+    assert(parse_error({"--online-mode", "strategy", "--close-input=yes"})
+               .find("requires a boolean value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--close-input", "yes"})
+               .find("requires a boolean value") != std::string::npos);
+    {
+        // the separated "false" form must explicitly WRITE false (the
+        // pre-fix parser ignored the token and left the flag armed)
+        OnlineCliOptions probe;
+        probe.close_input = true;
+        assert(parse_ok(
+            {"--online-mode", "strategy", "--close-input", "false"}, probe));
+        assert(!probe.close_input);
+    }
 
     // R6: --bridge-dir parsed and stored
     assert(parse_ok({"--online-mode", "strategy", "--bridge-dir=/tmp/bridge"},
@@ -220,16 +288,56 @@ int main() {
     assert(parse_error({"--online-mode", "strategy", "--command-fifo"})
                .find("requires a value") != std::string::npos);
 
-    // R9: --command-fifo parsed and stored (inline and separate-value forms)
+    // R9 (amended by R15c, P2-4): --command-fifo parsed and stored (inline
+    // and separate-value forms). The value must name an EXISTING FIFO, so
+    // the fixture mkfifs one (per-process path).
+    const std::string fifo_path =
+        "/tmp/cli_online_fixture_" + std::to_string(::getpid()) + ".fifo";
+    // tests-F10 (2026-10-01): idempotent stale-FIFO guard -- pid reuse plus
+    // a leftover FIFO from a previous assert-aborted run (the remove at the
+    // end of main is skipped on abort) made mkfifo fail with EEXIST and
+    // turned the assert into a false red.
+    ::unlink(fifo_path.c_str());
+    assert(::mkfifo(fifo_path.c_str(), 0600) == 0);
     assert(parse_ok({"--online-mode", "strategy",
-                     "--command-fifo=/tmp/fixture_cmd.fifo"}, out));
-    assert(out.command_fifo == "/tmp/fixture_cmd.fifo");
+                     "--command-fifo=" + fifo_path},
+                    out));
+    assert(out.command_fifo == fifo_path);
     assert(parse_ok({"--online-mode", "strategy", "--command-fifo",
-                     "/tmp/fixture_cmd.fifo"}, out));
-    assert(out.command_fifo == "/tmp/fixture_cmd.fifo");
+                     fifo_path},
+                    out));
+    assert(out.command_fifo == fifo_path);
+    // R15c: a missing path and an existing non-FIFO file are hard errors
+    assert(parse_error({"--online-mode", "strategy",
+                        "--command-fifo=/no/such/fixture_cmd.fifo"})
+               .find("must name an existing FIFO") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--command-fifo=/proc/self/exe"})
+               .find("must name an existing FIFO") != std::string::npos);
     // R7: --command-* typos are hard errors
     assert(parse_error({"--online-mode", "strategy", "--command-fifoX=/x"})
                .find("unknown online-family") != std::string::npos);
+
+    // R16 (C3 fix, 2026-09-28): --close-input and --command-fifo are
+    // mutually exclusive -- the startup close would kill the FIFO producer
+    // channel before it injects anything and the no-CSV run would exit
+    // green with zero requests. Every boolean form that arms the close is
+    // a hard parse error with the FIFO present; an explicit
+    // --close-input=false with a FIFO stays legal.
+    assert(parse_error({"--online-mode", "strategy",
+                        "--command-fifo=" + fifo_path, "--close-input"})
+               .find("mutually exclusive") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--command-fifo",
+                        fifo_path, "--close-input=true"})
+               .find("mutually exclusive") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--command-fifo=" + fifo_path, "--close-input", "1"})
+               .find("mutually exclusive") != std::string::npos);
+    assert(parse_ok({"--online-mode", "strategy",
+                     "--command-fifo=" + fifo_path, "--close-input=false"},
+                    out));
+    assert(out.command_fifo == fifo_path);
+    assert(!out.close_input);
 
     // missing --online-mode even with other online flags
     assert(parse_error({"--request-queue-csv=/proc/self/exe", "--close-input"})
@@ -267,9 +375,26 @@ int main() {
     // R10: flag form enables
     assert(parse_ok({"--online-mode", "strategy", "--sensing-enabled"}, out));
     assert(out.sensing_enabled);
-    // R10: value form rejected
-    assert(parse_error({"--online-mode", "strategy", "--sensing-enabled=true"})
-               .find("takes no value") != std::string::npos);
+    // R10 (P2-5, 2026-09-28): unified boolean forms, same lexicon as R5
+    assert(parse_ok({"--online-mode", "strategy", "--sensing-enabled=true"},
+                    out));
+    assert(out.sensing_enabled);
+    assert(parse_ok({"--online-mode", "strategy", "--sensing-enabled=false"},
+                    out));
+    assert(!out.sensing_enabled);
+    assert(parse_ok({"--online-mode", "strategy", "--sensing-enabled", "0"},
+                    out));
+    assert(!out.sensing_enabled);
+    assert(parse_ok({"--online-mode", "strategy", "--sensing-enabled", "1"},
+                    out));
+    assert(out.sensing_enabled);
+    // R10: illegal value tokens fail closed in both forms
+    assert(parse_error({"--online-mode", "strategy",
+                        "--sensing-enabled=on"})
+               .find("requires a boolean value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--sensing-enabled", "on"})
+               .find("requires a boolean value") != std::string::npos);
     // R10: --sensing-* typos are hard errors
     assert(parse_error({"--online-mode", "strategy", "--sensing-enable=/x"})
                .find("unknown online-family") != std::string::npos);
@@ -389,21 +514,29 @@ int main() {
                          buf}, out));
         assert(out.idle_watchdog_s == kMaxIdleWatchdogSeconds);
     }
-    // rejected lexicon: whitespace / sign characters anywhere
+    // rejected lexicon: whitespace / signs outside an exponent / hex /
+    // hex-float / nan / inf tokens (2026-10-01: the lex stage now enforces
+    // the plain decimal grammar [0-9] '.' 'e'/'E' with one sign allowed
+    // only right after an exponent marker -- std::strtod would otherwise
+    // accept "0x10"/"0x1p4")
     for (const std::string& bad : {" +1", " -1", "\t-1", "+900", "-0.5",
-                                   "1 ", "9 00"}) {
+                                   "1 ", "9 00", "0x10", "0X1P4", "0x1p4",
+                                   "abc", "nan", "inf", "0.0e0x"}) {
         OnlineCliOptions probe;
         probe.idle_watchdog_s = -42.5;
         assert(parse_error({"--online-mode", "strategy",
                             "--idle-watchdog-s", bad})
-                   .find("whitespace or sign") != std::string::npos);
+                   .find("plain non-negative decimal") != std::string::npos);
         assert(!parse_ok({"--online-mode", "strategy",
                           "--idle-watchdog-s", bad}, probe));
         assert(probe.idle_watchdog_s == -42.5);
     }
     // rejected: garbage tails / non-finite / ERANGE both directions
-    for (const std::string& bad : {"abc", "1e", "nan", "inf", "1e309",
-                                   "1e-320", "0.0e0x"}) {
+    // (2026-10-01) "1e-320" is a legal subnormal literal at the lex
+    // stage now (exponent sign allowed); it and "1e309" die at the VALUE
+    // stage (ERANGE/non-finite). abc/nan/inf/0.0e0x moved to the lex group
+    // above (their letters leave the decimal grammar).
+    for (const std::string& bad : {"1e", "1e309", "1e-320"}) {
         assert(parse_error({"--online-mode", "strategy",
                             "--idle-watchdog-s", bad})
                    .find("finite number") != std::string::npos);
@@ -426,8 +559,98 @@ int main() {
     assert(parse_error({"--online-mode", "strategy", "--idle-watchdog=1"})
                .find("unknown online-family") != std::string::npos);
 
-    std::printf("[cli] ALL PASS: R1-R14 online CLI contract verified "
+    // R15 (P2-4, 2026-09-28): a value-taking online option never consumes
+    // a "--"-prefixed token as its value. The report shape
+    // "--bridge-dir --close-input" used to store the directory name
+    // "--close-input" AND silently arm the close flag (the token was
+    // swallowed, the flag never parsed) -- the Python bridge side then
+    // waited on the real directory while the C++ side parked in the wrong
+    // one: both sides blocked forever.
+    for (const char* opt : {"--bridge-dir", "--command-fifo",
+                            "--request-queue-csv"}) {
+        assert(parse_error({"--online-mode", "strategy", opt,
+                            "--close-input"})
+                   .find("looks like another option") != std::string::npos);
+        assert(parse_error({"--online-mode", "strategy", opt,
+                            "--online-mode"})
+                   .find("looks like another option") != std::string::npos);
+    }
+    // F1-CPP C1-6 (2026-09-29): the "--" value guard covers the INLINE
+    // form too. The guard originally sat inside the !has_inline_value
+    // branch, so "--bridge-dir=--close-input" was accepted, stored the
+    // literal directory name, and -- under the official runner, which
+    // cd's to the repo root first -- materialized a "--close-input"
+    // directory in the repo root (ensure_bridge_dir) while the runner's
+    // no-timeout FIFO wait loop wedged both sides. Same poison as the
+    // separated shape, so same diagnosis; the FIFO/CSV siblings are
+    // pinned as well even though their downstream existence checks
+    // happened to reject them before.
+    for (const char* inline_form : {"--bridge-dir=--close-input",
+                                    "--command-fifo=--close-input",
+                                    "--request-queue-csv=--close-input"}) {
+        assert(parse_error({"--online-mode", "strategy", inline_form})
+                   .find("looks like another option") != std::string::npos);
+    }
+    {
+        // the failed parse must not leave the inverted close semantics
+        // behind in the out struct (no partial write)
+        OnlineCliOptions probe;
+        probe.close_input = true;
+        assert(!parse_ok({"--online-mode", "strategy", "--bridge-dir",
+                          "--close-input"},
+                         probe));
+        assert(probe.close_input);  // untouched by the failed parse
+    }
+    // the safe separated form still parses
+    assert(parse_ok({"--online-mode", "strategy", "--bridge-dir",
+                     "/tmp/bridge"},
+                    out));
+    assert(out.bridge_dir == "/tmp/bridge");
+
+    // R15b (P2-6, 2026-09-28): an explicitly given but EMPTY value is a
+    // hard parse error, distinct from the option being absent (the pre-fix
+    // shape stored "" -> readability check skipped -> expected_requests 0
+    // -> every completion/delivery gate green on a zero-request run).
+    assert(parse_error({"--online-mode", "strategy",
+                        "--request-queue-csv="})
+               .find("non-empty value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--request-queue-csv",
+                        ""})
+               .find("non-empty value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--bridge-dir="})
+               .find("non-empty value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--bridge-dir", ""})
+               .find("non-empty value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--command-fifo="})
+               .find("non-empty value") != std::string::npos);
+
+    // R15c (P2-4): --bridge-dir must be a directory when it exists
+    // (non-existence stays legal: ensure_bridge_dir creates it);
+    // --command-fifo must name an existing FIFO (already exercised in R9).
+    assert(parse_error({"--online-mode", "strategy",
+                        "--bridge-dir=/proc/self/exe"})
+               .find("not a directory") != std::string::npos);
+    assert(parse_ok({"--online-mode", "strategy",
+                     "--bridge-dir=/tmp/cli_online_no_such_dir"},
+                    out));
+    assert(out.bridge_dir == "/tmp/cli_online_no_such_dir");
+
+    // R15d: the online entry's argv strip mirrors the parser's boolean
+    // value consumption (main_online.cc): the shared lexicon lives in
+    // online_boolean_literal, pinned here for both sides.
+    assert(online_boolean_literal("true") == 1 &&
+           online_boolean_literal("1") == 1 &&
+           online_boolean_literal("false") == 0 &&
+           online_boolean_literal("0") == 0 &&
+           online_boolean_literal("yes") == -1 &&
+           online_boolean_literal("") == -1 &&
+           online_boolean_literal("TRUE") == -1);
+
+    std::remove(fifo_path.c_str());
+    std::printf("[cli] ALL PASS: R1-R16 online CLI contract verified "
                 "(incl. B.3 node-gc arm removal, FP1 "
-                "hardened unsigned lexicon + watchdog bounds)\n");
+                "hardened unsigned lexicon + watchdog bounds, P2-4/5/6 "
+                "value-consumption + unified boolean forms + path "
+                "legality, C3 close-input/command-fifo mutual exclusion)\n");
     return 0;
 }

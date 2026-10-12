@@ -17,12 +17,11 @@ LICENSE file in the root directory of this source tree.
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
 #include <stdlib.h>
-#include <unistd.h>
 
 using namespace std;
 using namespace AstraSim;
-using namespace Chakra::FeederV3;
 using json = nlohmann::json;
 
 typedef ChakraProtoMsg::NodeType ChakraNodeType;
@@ -31,23 +30,46 @@ typedef ChakraProtoMsg::CollectiveCommType ChakraCollectiveCommType;
 namespace {
 
 // Step 1-5: node-terminal record with the already-resolved online NodeView.
-// Every terminal path that can run online has the view in hand for release /
-// stats, so passing it through avoids a second NodeStore hash lookup for every
-// terminal. Static mode stays nullptr/0 -- byte-for-byte the pre-phase-1
-// shape. The view is alive for the whole call, so its c_str() pointers remain
-// valid for the duration of the observer hook.
+// Every terminal path has the view in hand for release / stats, so passing it
+// through avoids a second NodeStore hash lookup for every terminal. The view
+// is alive for the whole call, so its c_str() pointers remain valid for the
+// duration of the observer hook.
 void record_node_terminal(
-    ExecutionDriven::ExecutionMode mode, int rank, uint64_t node_id,
-    ExecutionDriven::NodeTerminalStatus status,
+    int rank, uint64_t node_id, ExecutionDriven::NodeTerminalStatus status,
     const ExecutionDriven::NodeView* online_node) {
-    const ExecutionDriven::NodeView* const nv =
-        mode == ExecutionDriven::ExecutionMode::Online ? online_node : nullptr;
     ExecutionDriven::CompletionObserver::instance().record_node_terminal(
         rank, node_id,
-        (nv != nullptr && !nv->request_id.empty()) ? nv->request_id.c_str()
-                                                    : nullptr,
-        (nv != nullptr && !nv->stage.empty()) ? nv->stage.c_str() : nullptr,
-        nv != nullptr ? nv->generation : 0, Sys::boostedTick(), status);
+        (online_node != nullptr && !online_node->request_id.empty())
+            ? online_node->request_id.c_str()
+            : nullptr,
+        (online_node != nullptr && !online_node->stage.empty())
+            ? online_node->stage.c_str()
+            : nullptr,
+        online_node != nullptr ? online_node->generation : 0,
+        Sys::boostedTick(), status);
+}
+
+// Strict communicator-group id parse (same as astra-sim-face): a non-numeric
+// key or a key with trailing characters fails closed with a diagnosable
+// message instead of an uncaught std::invalid_argument / silent truncation.
+int parse_comm_group_id_strict(const std::string& comm_group_name) {
+    try {
+        size_t pos = 0;
+        const int comm_group_id = std::stoi(comm_group_name, &pos);
+        if (pos != comm_group_name.size()) {
+            LoggerFactory::get_logger("workload")
+                ->critical("invalid communicator group key '{}' (trailing "
+                           "characters)",
+                           comm_group_name);
+            exit(EXIT_FAILURE);
+        }
+        return comm_group_id;
+    } catch (const std::exception& e) {
+        LoggerFactory::get_logger("workload")
+            ->critical("invalid communicator group key '{}': {}",
+                       comm_group_name, e.what());
+        exit(EXIT_FAILURE);
+    }
 }
 
 }  // namespace
@@ -56,45 +78,30 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                    ExecutionDriven::ExecutionMode execution_mode,
                    std::shared_ptr<ExecutionDriven::GraphSource> graph_source) {
     this->workload_logger_ = LoggerFactory::get_logger("workload");
-    this->execution_mode_ = execution_mode;
     this->graph_source_ = std::move(graph_source);
-
-    string workload_filename = et_filename + "." + to_string(sys->id) + ".et";
-    if (execution_mode == ExecutionDriven::ExecutionMode::Online) {
-        // Online mode (step-1-2 execution-mode factory): no ETFeeder, no .et
-        // file requirement; the dynamic GraphSource was injected at Sys
-        // creation (NodeStore-backed implementation lands in step 1-4).
-        this->et_feeder = nullptr;
-    } else {
-        // Static path, byte-for-byte the pre-phase-1 behavior.
-        // Check if workload filename exists
-        if (access(workload_filename.c_str(), R_OK) < 0) {
-            string error_msg;
-            if (errno == ENOENT) {
-                error_msg =
-                    "workload file: " + workload_filename + " does not exist";
-            } else if (errno == EACCES) {
-                error_msg = "workload file: " + workload_filename +
-                            " exists but is not readable";
-            } else {
-                error_msg =
-                    "Unknown workload file: " + workload_filename +
-                    " access error";
-            }
-            workload_logger_->critical(error_msg);
-            exit(EXIT_FAILURE);
-        }
-        this->et_feeder = new ETFeeder(workload_filename);
+    // The offline static path is retired in this repository (the
+    // ETFeederGraphSource adapter was removed with it), so a Static-mode
+    // Workload would run every static arm on a null GraphSource. Fail closed
+    // with an explicit message instead of the bare segfault.
+    if (execution_mode != ExecutionDriven::ExecutionMode::Online) {
+        workload_logger_->critical(
+            "static ET workload mode is retired in this repository; "
+            "construct Workload with ExecutionMode::Online and an injected "
+            "GraphSource");
+        exit(EXIT_FAILURE);
     }
+
+    // Online mode (step-1-2 execution-mode factory): no ETFeeder, no .et
+    // file requirement; the dynamic GraphSource was injected at Sys
+    // creation (NodeStore-backed implementation lands in step 1-4).  The
+    // retired static path (which opened "<et_filename>.<sys_id>.et" through
+    // an ETFeeder) is deleted; et_filename stays in the signature only for
+    // upstream call-site compatibility.
     // Step 1-4: the GraphSource is the sole dependency-state owner and is
     // injected at Sys creation (NodeStore-backed source, online mode only);
-    // the static ETFeeder adapter (ETFeederGraphSource) was retired with the
-    // offline static path, so graph_source_ stays null in the static arm.
-    this->comm_groups.clear();
-    // TODO: parametrize the number of available hardware resources
-    this->hw_resource = new HardwareResource(sys->id, execution_mode);
-    this->local_mem_usage_tracker =
-        std::make_unique<LocalMemUsageTracker>(sys->id);
+    // the static ETFeeder adapter (ETFeederGraphSource) was retired with
+    // the offline static path.
+    this->hw_resource = new HardwareResource(sys->id);
     // Multi-user local-HBM bandwidth contention: one fluid model per rank
     // when the flag is on (Sys force-disables it for local_mem_bw <= 0).
     // The model only interacts with this rank's jobs; NoC multi-hop routes
@@ -104,34 +111,54 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
             std::make_unique<LocalHbmBandwidthModel>(sys, this);
     }
     this->sys = sys;
-    // Step 1-8: the local_mem tracker is ETFeederNode-bound (no online
-    // NodeView overloads); online mode with track_local_mem fails closed
-    // instead of dereferencing null handles at the record sites. Placed
-    // after this->sys = sys (the tracker is constructed above regardless;
-    // recordStart/recordEnd never run in online mode).
-    if (this->sys->track_local_mem &&
-        execution_mode == ExecutionDriven::ExecutionMode::Online) {
-        workload_logger_
-            ->critical("track_local_mem is not supported in online mode "
-                       "(step 1-8; the local_mem tracker is ETFeederNode-"
-                       "bound)");
-        exit(EXIT_FAILURE);
+    // Die backend: the per-rank adapter owns the live DieExecutions and
+    // the Sys-owned plan cache handle. Constructed only under
+    // compute-cost-model=die (the adapter fail-closes without the Sys die
+    // runtime, which initialize_sys guarantees when the backend is
+    // selected).
+    if (this->sys->compute_cost_model == ComputeCostModel::Die) {
+        this->die_adapter_ = std::make_unique<DieModelAdapter>(this);
     }
     initialize_comm_groups(comm_group_filename);
-    this->stats = new Statistics(this);
-    if (this->execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-        this->stats->configure_online_history_preservation(
-            MetricCollector::instance().preserve_online_operator_history());
-    }
-    this->is_finished = false;
+    this->stats = new Statistics();
+    this->stats->configure_online_history_preservation(
+        MetricCollector::instance().preserve_online_operator_history());
 }
 
 Workload::~Workload() {
+    // Die backend teardown FIRST of all: every live DieExecution cancels
+    // its pending event and drops its pending HBM die job while all
+    // collaborators (the fluid model, the graph source) are still alive
+    // (design doc §6.3: no leak, no double completion, no dangling
+    // callbacks). Must precede the fluid-model reset below -- the adapter
+    // unwind touches cancel_die_jobs_of on the model.
+    if (this->die_adapter_ != nullptr) {
+        this->die_adapter_->shutdown();
+    }
+
+    // Destroy the HBM fluid model FIRST, while every member it can touch is
+    // still alive: the model's destructor drains residual jobs through
+    // abandon_local_hbm_join_entry(), which erases from hbm_comm_join_.
+    // hbm_comm_join_ is declared after local_hbm_bandwidth_model in
+    // Workload.hh, so the implicit member destruction order would already
+    // have torn the map down before the model's own destructor ran -- that
+    // erase would hit a destroyed map (use-after-destruction UB on the
+    // abnormal teardown path: a test harness deleting Sys with comm jobs
+    // still in flight).
+    local_hbm_bandwidth_model.reset();
+
     comm_groups.clear();
 
-    if (this->et_feeder != nullptr) {
-        delete this->et_feeder;
+    // Abort-path ownership: DataSets of collectives still in flight are
+    // owned by this map (Workload::call deletes each entry on its normal
+    // completion). Without this loop, any Workload torn down mid-collective
+    // (construction failure upstream, fatal exit paths under test harnesses)
+    // leaks every in-flight DataSet.
+    for (auto& entry : collective_comm_wrapper_map) {
+        delete entry.second;
     }
+    collective_comm_wrapper_map.clear();
+
     if (this->hw_resource != nullptr) {
         delete this->hw_resource;
     }
@@ -172,9 +199,6 @@ void Workload::complete_online_statistics(
 }
 
 void Workload::mark_online_terminal_or_fail(uint64_t node_id) {
-    if (execution_mode_ != ExecutionDriven::ExecutionMode::Online) {
-        return;
-    }
     if (!graph_source_->mark_terminal_observed(node_id)) {
         workload_logger_->critical(
             "duplicate, unknown, or unissued online terminal callback for "
@@ -185,8 +209,13 @@ void Workload::mark_online_terminal_or_fail(uint64_t node_id) {
 }
 
 void Workload::initialize_comm_groups(string comm_group_filename) {
-    // communicator group input file is not given
-    if (comm_group_filename.find("empty") != std::string::npos) {
+    // communicator group input file is not given. Exact sentinel only (wl-F12
+    // fix, aligned with MetricCollector's manifest sentinel): the legacy
+    // substring match treated any path merely CONTAINING "empty" as "no
+    // input" and silently skipped the load -- a fail-open shape this
+    // repository's missing-input fail-closed contract forbids. Callers pass
+    // the literal "empty" (Sys fixtures) or a real path.
+    if (comm_group_filename == "empty") {
         comm_groups.clear();
         return;
     }
@@ -194,32 +223,79 @@ void Workload::initialize_comm_groups(string comm_group_filename) {
     ifstream inFile;
     json j;
     inFile.open(comm_group_filename);
-    inFile >> j;
+    if (!inFile) {
+        workload_logger_->critical("cannot open comm group file: {}",
+                                   comm_group_filename);
+        std::exit(EXIT_FAILURE);
+    }
+    try {
+        inFile >> j;
+    } catch (const json::exception& e) {
+        // Malformed/empty input throws parse_error (nlohmann
+        // allow_exceptions path); route it through the unified channel.
+        workload_logger_->critical("comm group file is not valid JSON: {} ({})",
+                                   comm_group_filename, e.what());
+        std::exit(EXIT_FAILURE);
+    }
+    if (j.is_null() || j.is_discarded()) {
+        workload_logger_->critical(
+            "comm group file is empty or not valid JSON: {}",
+            comm_group_filename);
+        std::exit(EXIT_FAILURE);
+    }
 
     for (json::iterator it = j.begin(); it != j.end(); ++it) {
         std::string comm_group_name = it.key();
-        int comm_group_id = std::stoi(comm_group_name);
-
-        std::vector<int> involved_NPUs;
-        std::vector<int> dimension_sizes;
-        if (it.value().is_array()) {
-            involved_NPUs = it.value().get<std::vector<int>>();
-        } else if (it.value().is_object()) {
-            involved_NPUs =
-                it.value().at("ranks").get<std::vector<int>>();
-            if (it.value().contains("dimensions")) {
-                dimension_sizes = it.value()
-                                      .at("dimensions")
-                                      .get<std::vector<int>>();
-            }
-        } else {
-            throw std::runtime_error(
-                "Communicator group must be a rank array or an object with "
-                "ranks and dimensions");
+        int comm_group_id = parse_comm_group_id_strict(comm_group_name);
+        // Group id 0 is the default (world) communicator on the graph side
+        // ("0" / "" both resolve to nullptr in extract_comm_group), and the
+        // CommunicatorGroup constructor rejects ids <= 0 with an exception
+        // that would escape this constructor. Fail closed here instead, with
+        // the asymmetry spelled out.
+        if (comm_group_id <= 0) {
+            workload_logger_->critical(
+                "communicator group file '{}' defines group '{}' with id {}; "
+                "ids must be >= 1 (0 is reserved for the default world "
+                "group, which needs no file entry)",
+                comm_group_filename, comm_group_name, comm_group_id);
+            std::exit(EXIT_FAILURE);
         }
 
-        comm_groups[comm_group_id] = std::make_shared<CommunicatorGroup>(
-            comm_group_id, involved_NPUs, sys, dimension_sizes);
+        // Shape and construction failures (wrong JSON type, missing "ranks",
+        // empty/duplicate ranks, dimension mismatch) must not escape as
+        // exceptions from inside the Workload constructor -- they would
+        // terminate the process with no diagnosis. Same fail-closed channel
+        // as parse_comm_group_id_strict above.
+        try {
+            std::vector<int> involved_NPUs;
+            std::vector<int> dimension_sizes;
+            if (it.value().is_array()) {
+                involved_NPUs = it.value().get<std::vector<int>>();
+            } else if (it.value().is_object()) {
+                involved_NPUs =
+                    it.value().at("ranks").get<std::vector<int>>();
+                if (it.value().contains("dimensions")) {
+                    dimension_sizes = it.value()
+                                          .at("dimensions")
+                                          .get<std::vector<int>>();
+                }
+            } else {
+                workload_logger_->critical(
+                    "communicator group '{}': a group must be a rank array "
+                    "or an object with ranks and dimensions",
+                    comm_group_name);
+                std::exit(EXIT_FAILURE);
+            }
+
+            comm_groups[comm_group_id] =
+                std::make_shared<CommunicatorGroup>(
+                    comm_group_id, involved_NPUs, sys, dimension_sizes);
+        } catch (const std::exception& e) {
+            workload_logger_->critical(
+                "malformed communicator group '{}' in {}: {}",
+                comm_group_name, comm_group_filename, e.what());
+            std::exit(EXIT_FAILURE);
+        }
     }
 }
 
@@ -230,9 +306,19 @@ void Workload::issue_pytorch_pg_metadata(
     if (pg_info.empty()) {
         return;
     }
-    pg_info = pg_info.substr(2, pg_info.size() - 4);
 
+    // pg metadata is an inner JSON array wrapped in two quote characters on
+    // each side; a shorter payload cannot hold one (substr would throw).
+    // Fail closed instead of silently skipping the process group.
+    if (pg_info.size() < 4) {
+        workload_logger_->critical(
+            "malformed pg metadata on node {}: inputs_values is {} bytes, "
+            "too short for the wrapped pg payload",
+            node.global_id, pg_info.size());
+        std::exit(EXIT_FAILURE);
+    }
     try {
+        pg_info = pg_info.substr(2, pg_info.size() - 4);
         json valuesRoot = json::parse(pg_info);
 
         for (const auto& item : valuesRoot) {
@@ -247,44 +333,104 @@ void Workload::issue_pytorch_pg_metadata(
             }
 
             int32_t pgNameInt = std::stoi(pgName);
+            // pgNameInt + 1 (below) is the group id; at INT32_MAX the
+            // increment would be signed-integer overflow (UB) instead of a
+            // catchable error.
+            if (pgNameInt ==
+                std::numeric_limits<int32_t>::max()) {
+                workload_logger_->critical(
+                    "malformed pg metadata on node {}: pg name '{}' overflows "
+                    "the group id space",
+                    node.global_id, pgName);
+                std::exit(EXIT_FAILURE);
+            }
             auto existing = this->comm_groups.find(pgNameInt);
             if (existing != this->comm_groups.end() && existing->second &&
                 existing->second->get_id() == pgNameInt + 1 &&
                 existing->second->matches_definition(involved_NPUs)) {
                 continue;
             }
+            // 4.1 fix (2026-09-29): a same-id replacement whose RANK
+            // MEMBERSHIP changed is not a supportable live operation. The
+            // stream-window base is a pure function of the group id, so
+            // after the C1-2 release-first order the new group silently
+            // recycles the old group's window while the old group's
+            // retained DataSets may still hold in-flight streams on it --
+            // the new group's tags alias the old streams (mismatched
+            // pairing / hangs). The producer never writes a replacement
+            // today (inputs_values is always ""), so the unsupported shape
+            // fails closed with a named message instead of silently
+            // corrupting the tag space. Same-ranks redefinitions (e.g. a
+            // dims-only metadata view difference) stay legal: the registry
+            // refcounts the identical lease.
+            if (existing != this->comm_groups.end() && existing->second &&
+                existing->second->get_id() == pgNameInt + 1 &&
+                existing->second->involved_NPUs != involved_NPUs) {
+                workload_logger_->critical(
+                    "malformed pg metadata on node {}: communicator group "
+                    "{} is being redefined with a different membership "
+                    "({} -> {} ranks); a live same-id membership change "
+                    "would recycle the group's stream window while the old "
+                    "group's streams may still be in flight",
+                    node.global_id, pgNameInt + 1,
+                    existing->second->involved_NPUs.size(),
+                    involved_NPUs.size());
+                std::exit(EXIT_FAILURE);
+            }
+            // F1-CPP C1-2 fix (2026-09-29): release the previous group's
+            // stream-window lease BEFORE constructing the replacement. The
+            // old order (construct first, replace the map entry second)
+            // leased the new group's window while the old group still held
+            // it, so a legal same-id redefinition whose membership changed
+            // hit the DB1 same-id-different-membership panic even though
+            // the terminal state has exactly one group. (Same-fingerprint
+            // redefinitions never panicked: the registry reference-counts
+            // identical leases.) The window above means any constructor
+            // failure below is process-fatal anyway (caught -> exit), so
+            // the erased-old-group state is never observable.
+            this->comm_groups.erase(pgNameInt);
             // To ensure pgName > 0
             auto cg = std::make_shared<CommunicatorGroup>(
                 pgNameInt + 1, involved_NPUs, sys);
             this->comm_groups[pgNameInt] = cg;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Error parsing or processing JSON: " << e.what()
-                  << std::endl;
+        workload_logger_->critical("malformed pg metadata on node {}: {}",
+                                   node.global_id, e.what());
+        std::exit(EXIT_FAILURE);
     }
 }
 
 void Workload::issue_dep_free_nodes() {
     // Step 1-4: iterate the GraphSource free views (ascending id, byte-exact
-    // order of the pre-phase-1 std::set copy). Static auto-advance only --
-    // call() gates this behind the execution mode; online mode issues only
-    // through the post-commit deferred path (steps 1-6/1-11), which calls
-    // this function directly per rank.
+    // order of the pre-phase-1 std::set copy). Post-commit deferred path
+    // only: the sole call sites are the online completion hook's per-rank
+    // deferred issue passes and the GraphBatchCommitter issue_rank callback
+    // (main_online.cc, steps 1-6/1-8/1-11). Workload::call never
+    // auto-advances (a bare General event fails closed) and static mode is
+    // fail-closed at construction.
     graph_source_->for_each_dep_free([&](const auto& nv) {
-        if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-            // Step 1-8: online availability check on the NodeView
-            // (et_node is nullptr in online mode). Strategy mode keeps the
-            // real serialized physics (path-2 removal 2026-08-18: the
-            // replay-only concurrent calibrated-COMP bypass was deleted with
-            // the replay route).
-            if (hw_resource->is_available(nv)) {
-                issue(nv);
-            }
-        } else {
-            auto node = graph_source_->et_node(nv.global_id);
-            if (hw_resource->is_available(node)) {
-                issue(nv);
-            }
+        // Availability check on the NodeView. Strategy mode keeps the real
+        // serialized physics (path-2 removal 2026-08-18: the replay-only
+        // concurrent calibrated-COMP bypass was deleted with the replay
+        // route).
+        if (!hw_resource->is_available(nv)) {
+            return;
+        }
+        // P2 (2026-09-28): a dispatch failure must name the failing node.
+        // The production fatal channels (the commit-period try/catch in
+        // main_online.cc and the deferred issue-pass barrier) print the
+        // propagated message; without the identity the log only says
+        // "MEM_LOAD/MEM_STORE ..." with no pointer at the offending node.
+        try {
+            issue(nv);
+        } catch (const std::exception& e) {
+            throw std::runtime_error(
+                "node issue failed (id=" +
+                std::to_string(nv.global_id) +
+                " type=" + std::to_string(
+                               static_cast<uint64_t>(nv.node_type)) +
+                " name=\"" + nv.name + "\"): " + e.what());
         }
     });
 }
@@ -299,42 +445,22 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
     }
 
     graph_source_->take_node(node.global_id);
-    // Static path: the ETFeederNode handle for the node-bound consumers
-    // (HardwareResource / Statistics / local_mem tracker) is fetched through
-    // the GraphSource. Step 1-8: the online path (et_node == nullptr) uses
-    // the NodeView overloads.
-    std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node = nullptr;
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-        this->hw_resource->occupy(node);
-        // stats->record_end will be called in Workload::call
-        start_online_statistics(node, Sys::boostedTick());
-    } else {
-        et_node = graph_source_->et_node(node.global_id);
-        this->hw_resource->occupy(et_node);
-        // stats->record_end will be called in Workload::call
-        stats->record_start(et_node, Sys::boostedTick());
-    }
+    this->hw_resource->occupy(node);
+    // stats->record_end will be called in Workload::call
+    start_online_statistics(node, Sys::boostedTick());
     // Side-band metrics observation only; does not touch the node, the
     // dependency resolver, or the event queue (doc sec.5.5).
-    // R2 (2026-08-29) anchor fast path: online mode consults the sparse
-    // NodeView flag set by the B-1.5 registration hook; unanchored nodes
-    // (the overwhelming majority) skip the two-level hash lookup entirely.
-    // The non-online arm keeps the unconditional call -- the retired static
-    // path had no anchor registration, and the static manifest anchor
-    // semantics are a red line.
-    if (MetricCollector::instance().enabled() &&
-        (execution_mode_ != ExecutionDriven::ExecutionMode::Online ||
-         node.metric_issue_anchor)) {
+    // R2 (2026-08-29) anchor fast path: consults the sparse NodeView flag
+    // set by the B-1.5 registration hook; unanchored nodes (the
+    // overwhelming majority) skip the two-level hash lookup entirely.
+    if (MetricCollector::instance().enabled() && node.metric_issue_anchor) {
         MetricCollector::instance().on_node_issue(sys->id, node.global_id,
                                                   Sys::boostedTick());
     }
-    if (this->sys->track_local_mem) {
-        this->local_mem_usage_tracker->recordStart(et_node,
-                                                   Sys::boostedTick());
-    }
     // Path-2 removal follow-up (2026-09-26): the sys->replay_only dispatch
-    // branch was deleted with the replay route; the node-type switch below
-    // is the sole dispatch.
+    // branch was deleted with the replay-only dispatch route (--online-mode
+    // replay; the issue_replay operator issue path below is not that
+    // route); the node-type switch below is the sole dispatch.
     if ((node.node_type == ChakraNodeType::MEM_LOAD_NODE) ||
         (node.node_type == ChakraNodeType::MEM_STORE_NODE)) {
         // 2026-09-24 (face A.2 alignment): the remote memory backend was
@@ -344,7 +470,12 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
             "MEM_LOAD/MEM_STORE nodes require the remote memory "
             "backend, which this repository removes (2026-09-24)");
     } else if (node.node_type == ChakraNodeType::COMP_NODE) {
-        if (!this->sys->roofline_enabled) {
+        if (sys->compute_cost_model == ComputeCostModel::Die) {
+            // Die backend: the frozen dispatch order lives in
+            // issue_die_comp; the legacy roofline/fluid path below is
+            // unreachable under this backend.
+            issue_die_comp(node);
+        } else if (!this->sys->roofline_enabled) {
             issue_replay(node);
         } else {
             if (node.is_cpu_op) {
@@ -372,7 +503,6 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
 }
 
 void Workload::issue_metadata(const ExecutionDriven::NodeView& node) {
-    // TODO: someway to identify this metadata node is a pytorch pg node
     issue_pytorch_pg_metadata(node);
     this->skip_invalid(node);  // for proper dependancy resolving
 }
@@ -382,17 +512,85 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
     wlhd->node_id = node.global_id;
     uint64_t runtime = 1ul;
     if (node.compute.runtime_ns != 0ul) {
-        // chakra runtimes are in microseconds and the GraphSource adapter
-        // already converted them into nanoseconds
+        // the online GraphBatch carries runtimes in ns directly (the
+        // retired static ET adapter's us->ns conversion no longer exists;
+        // the parser reads the value unconverted)
         runtime = node.compute.runtime_ns;
-    }
-    if (!node.is_cpu_op) {
-        hw_resource->tics_gpu_ops += runtime;
     }
     sys->register_event(this, EventType::General, wlhd, runtime);
 }
 
+void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
+    // Contract §7.3 dispatch order: is_timer_op -> old timer path;
+    // is_cpu_op -> issue_replay; op_role=control_marker -> the legacy
+    // micro-job semantics verbatim; die_spec -> DieModelAdapter
+    // (runtime_ns must be 0); anything else -> fail-closed. The legacy
+    // roofline closed form is NEVER reachable under the die backend.
+    if (node.is_timer_op) {
+        issue_replay(node);
+        return;
+    }
+    if (node.is_cpu_op) {
+        issue_replay(node);
+        return;
+    }
+    if (node.compute.die_spec != nullptr && node.compute.runtime_ns != 0) {
+        // The GraphBatch parser already rejects this combination (N12 /
+        // contract §2); reaching it here means a producer that bypassed
+        // the parser. Fail closed instead of letting a calibrated runtime
+        // silently bypass the die execution.
+        throw std::runtime_error(
+            "die backend requires runtime_ns == 0 on nodes carrying a "
+            "die_op_spec (node " +
+            std::to_string(node.global_id) + ")");
+    }
+    if (node.compute.op_role == ExecutionDriven::OpRole::ControlMarker) {
+        // Legacy micro-job semantics, byte-for-byte (contract §7.3): with
+        // the HBM fluid model the marker drains a (1 op, 1 byte) COMP job
+        // (the model's own latency phase included); without it a 1 ns
+        // event. No die macro-group launch, no plan, no PE/VEC stages.
+        WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
+        wlhd->node_id = node.global_id;
+        if (local_hbm_bandwidth_model != nullptr) {
+            local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+        } else {
+            // (wscllm note: the write-only tics_gpu_ops accumulator was
+            // removed repo-wide on 2026-09-27; the occupancy invariant is
+            // the live num_in_flight_gpu_comp_ops counter.)
+            sys->register_event(this, EventType::General, wlhd, 1);
+        }
+        return;
+    }
+    if (node.compute.die_spec == nullptr) {
+        // Contract §2/§7.3: a real COMP without a die_op_spec is a
+        // generator defect -- never a silent roofline/replay fallback.
+        throw std::runtime_error(
+            "die backend requires die_op_spec on real COMP node " +
+            std::to_string(node.global_id) +
+            " (op_role=compute without a spec; refusing to fall back to "
+            "roofline or replay)");
+    }
+    // Compatibility statistics only (contract §2): num_ops/tensor_size
+    // stay visible to the metric side-band; the die execution never
+    // charges them as a second cost source.
+    if (MetricCollector::instance().enabled()) {
+        MetricCollector::instance().on_compute_issue(
+            sys->id, node.compute.num_ops, node.compute.tensor_size);
+    }
+    die_adapter_->issue_die(node);
+}
+
 void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
+    if (sys->compute_cost_model == ComputeCostModel::Die) {
+        // Die-backend red line (design doc §6.4): the legacy closed-form
+        // roofline / fluid COMP path must never run under the die
+        // compute-cost-model backend -- reaching here means the COMP
+        // dispatch order regressed.
+        throw std::runtime_error(
+            "Workload::issue_comp (legacy roofline path) must never run "
+            "under the die compute-cost-model backend");
+    }
+
     if (!this->sys->roofline_enabled) {
         throw std::runtime_error(
             "Roofline model is not enabled for non-replay comp");
@@ -463,13 +661,18 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
             "repository (no remote memory backend)");
     }
 
-    uint64_t runtime = static_cast<uint64_t>(elapsed_time * 1e9);  // sec -> ns
+    // Same 1ns floor as issue_replay's default: a sub-nanosecond roofline
+    // time (e.g. a zero-FLOP node with no local-mem-latency term) must not
+    // schedule a zero-delta event.
+    uint64_t runtime =
+        std::max<uint64_t>(1ul, static_cast<uint64_t>(elapsed_time * 1e9));  // sec -> ns
     // Step 1-8: online execution-driven calibration. The online GraphBatch
     // (graph_batch_builder.py) carries planner-LUT-aligned durations so the
     // engine timeline is order-isomorphic to the Python decision sequence
     // (fail-closed order consumption). The static .et
-    // path never sets runtime_ns (duration_micros=0, parsed as 0) and keeps
-    // the roofline above -- byte-for-byte preserved. Same honor pattern as
+    // path (retired in this repo; kept as the historical comparison) never
+    // set runtime_ns (duration_micros=0, parsed as 0) and kept the roofline
+    // above -- byte-for-byte identical. Same honor pattern as
     // issue_replay's runtime_ns branch.
     if (node.compute.runtime_ns != 0ul) {
         runtime = node.compute.runtime_ns;
@@ -483,21 +686,14 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         // calibrated runtime_ns never enters the model and keeps its
         // calibrated duration (this repository's traces always take the
         // fluid path; the calibrated branch is the online-LUT honor path).
-        // tics_gpu_ops is accumulated by the model at completion.  Falls
-        // through to the shared operator-statistics tail below.
-        wlhd->sys_id = sys->id;
-        wlhd->workload = this;
+        // Falls through to the shared operator-statistics tail below.
         local_hbm_bandwidth_model->issue_compute(
             node_num_ops, node_tensor_size, wlhd);
     } else {
-        if (!node.is_cpu_op) {
-            hw_resource->tics_gpu_ops += runtime;
-        }
         sys->register_event(this, EventType::General, wlhd, runtime);
     }
 
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
+    if (!stats->online_history_preserved()) {
         auto& online_stat = online_statistics_state_or_fail(node.global_id);
         online_stat.compute_utilization = perf / sys->peak_perf;
         // Zero-intensity nodes have no memory utilization; leave the field
@@ -523,14 +719,12 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         // Static ET and history-preserving online microbenchmarks retain the
         // legacy complete per-node Statistics record.
         auto& op_stat = this->stats->get_operator_statistics(node.global_id);
-        op_stat.operation_intensity = operational_intensity;
         op_stat.compute_utilization = perf / sys->peak_perf;
         // Same zero-denominator skip as the compact online branch above.
         if (operational_intensity != 0.0) {
             op_stat.memory_utilization =
                 (perf / operational_intensity) / sys->local_mem_bw;
         }
-        op_stat.is_memory_bound = perf < sys->peak_perf;
         if (sys->trace_enabled) {
             workload_logger_
                 ->debug("operation_intensity={}, perf={}, elapsed_time={} "
@@ -565,9 +759,11 @@ void Workload::issue_comm(const ExecutionDriven::NodeView& node) {
 }
 
 void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
-    // involved_dim was parsed by the GraphSource adapter (step 1-4) with the
-    // legacy semantics: bool_list type check (cerr + exit on mismatch) or the
-    // 4x-true default when the attribute is absent.
+    // involved_dim arrives from the online GraphBatch parse: a bool_list
+    // attribute is type-checked at parse time, and an ABSENT attribute
+    // leaves the vector empty -- the commit preflight then fails closed
+    // (involved_dim must be non-empty and match the declared dimension
+    // count). The retired ET adapter's 4x-true default no longer exists.
     const std::vector<bool>& involved_dims = node.coll.involved_dim;
 
     auto comm_group_owner = extract_comm_group(node);
@@ -575,20 +771,44 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     const auto comm_type =
         static_cast<ChakraCollectiveCommType>(node.coll.comm_type);
     const auto comm_size = node.coll.bytes;
-    // Keep comm_size on the live NodeStore record in compact service mode:
-    // terminal bandwidth accounting still consumes it, but no global
-    // Statistics per-node hash-table entry is needed.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = comm_size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = comm_size;
-    }
-    // TODO: comm_tag? which is used to distinguish two different collective in
-    // same pg
     const auto comm_priority = node.coll.priority;  // default 0u
 
+    // P2 endpoint charge (4.2 symmetry fix, 2026-09-29): every collective
+    // endpoint moves its payload through the local HBM exactly like the
+    // p2p send/recv endpoints (read+write merged into one comm_size
+    // charge). The original P2 fix covered only ALL_REDUCE, so AG/A2A/RS
+    // paid only the byte-blind MemBus fixed delays -- the same systematic
+    // underestimate P2 closed, ~20.5us on a 32MiB collective on an
+    // exclusive rank. Shared pre-condition: the job is created BEFORE the
+    // collective so a synchronously-completing degenerate collective still
+    // finds its pending HbmCommJoin entry.
+    // Charging basis (2026-10-01 note): the charge uses the APPLICATION
+    // comm_size (the declared coll bytes), deliberately NOT the possibly
+    // uplifted per-chunk stream size from Sys::determine_chunk_size (which
+    // can raise a small collective's wire bytes to splits*total_nodes).
+    // The endpoint HBM model mirrors the p2p/COMP convention of charging
+    // the producer-declared payload; changing this basis is a timing-model
+    // decision, not a bug fix.
+    const bool charge_hbm_endpoint =
+        local_hbm_bandwidth_model != nullptr && comm_size > 0;
+    if (charge_hbm_endpoint) {
+        WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
+        hbm_wlhd->node_id = node.global_id;
+        hbm_comm_join_[node.global_id] = HbmCommJoin{false, false};
+        local_hbm_bandwidth_model->issue_comm_read(comm_size, hbm_wlhd);
+    }
     if (comm_type == ChakraCollectiveCommType::ALL_REDUCE) {
+        // The 2026-09-28 P2 note originally lived HERE, covering only the
+        // ALL_REDUCE branch; the 2026-09-29 4.2 symmetry fix moved the
+        // charge to the shared pre-dispatch block above (see
+        // charge_hbm_endpoint) and this branch-specific copy was left
+        // behind, describing the pre-symmetry world. It is folded into the
+        // shared block now: all four collective types charge their endpoint
+        // bytes identically, complete at the join of the collective and the
+        // HBM job (CollectiveCommunicationFinished consults the same
+        // HbmCommJoin table the p2p callbacks use), and the job is created
+        // BEFORE generate_* so a synchronously-completing degenerate
+        // collective still finds the pending join entry.
         DataSet* fp = sys->generate_all_reduce(comm_size, involved_dims,
                                                comm_group, comm_priority, node.global_id);
         fp->retain_communicator_group(comm_group_owner);
@@ -617,20 +837,24 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
         collective_comm_wrapper_map[fp->my_id] = fp;
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else if (comm_type == ChakraCollectiveCommType::BROADCAST) {
-        // TODO: implement broadcast, for now just replay
-        uint64_t runtime = 1ul;
-        if (node.compute.runtime_ns != 0ul) {
-            // chakra runtimes are in microseconds and the GraphSource adapter
-            // already converted them into nanoseconds
-            runtime = node.compute.runtime_ns;
-        }
-        DataSet* fp = new DataSet(1);
-        fp->retain_communicator_group(comm_group_owner);
-        fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
-        collective_comm_node_id_map[fp->my_id] = node.global_id;
-        collective_comm_wrapper_map[fp->my_id] = fp;
-        sys->register_event(fp, EventType::General, nullptr, runtime);
-        fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
+        // Broadcast has no collective implementation here.  The online commit
+        // boundary rejects BROADCAST graphs; reaching this branch means an
+        // unvalidated input slipped past it (static ET path or a bypassed
+        // preflight).  Fail closed with a direct critical + exit (rather
+        // than a throw): in online mode Sys::call_events also stops the run
+        // on any exception, but only with a generic "callback raised"
+        // diagnosis -- exiting here names the collective and the node at
+        // the source.  On the retired static arm call_events genuinely
+        // swallowed std::exception and continued, which would strand the
+        // already-occupied node in flight forever (wl-metrics-E2); the
+        // direct exit keeps both arms fail-closed.  Never replay the node
+        // as a local event: that would silently drop the communication,
+        // network cost, or collective semantics.
+        workload_logger_->critical(
+            "BROADCAST collective is not implemented; broadcast graphs must "
+            "be rejected at the commit boundary (sys.id={}, node={})",
+            sys->id, node.global_id);
+        exit(EXIT_FAILURE);
     } else {
         throw std::runtime_error("Unsupported collective comm type");
     }
@@ -643,13 +867,6 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     }
     const auto dst = node.comm.dst;
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
-    }
     const auto tag = node.comm.tag;
 
     if (local_hbm_bandwidth_model != nullptr && size > 0 &&
@@ -663,15 +880,12 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
         // HBM).  bytes == 0 and hbm-charge == false stay on the plain
         // network-only completion path.
         WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
-        hbm_wlhd->sys_id = sys->id;
-        hbm_wlhd->workload = this;
         hbm_wlhd->node_id = node.global_id;
-        hbm_comm_join_[node.global_id] =
-            HbmCommJoin{false, false, EventType::PacketSent};
+        hbm_comm_join_[node.global_id] = HbmCommJoin{false, false};
         local_hbm_bandwidth_model->issue_comm_read(size, hbm_wlhd);
     }
 
-    sim_request snd_req;
+    sim_request snd_req{};
     snd_req.srcRank = src;
     snd_req.dstRank = dst;
     snd_req.reqType = UINT8;
@@ -692,13 +906,6 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
         throw std::runtime_error("Recv node should be issued by the receiver");
     }
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
-    }
     const auto tag = node.comm.tag;
 
     if (local_hbm_bandwidth_model != nullptr && size > 0 &&
@@ -710,20 +917,26 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
         // callback inside front_end_sim_recv) still finds a pending join
         // entry instead of completing the node outright.
         WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
-        hbm_wlhd->sys_id = sys->id;
-        hbm_wlhd->workload = this;
         hbm_wlhd->node_id = node.global_id;
-        hbm_comm_join_[node.global_id] =
-            HbmCommJoin{false, false, EventType::PacketReceived};
+        hbm_comm_join_[node.global_id] = HbmCommJoin{false, false};
         local_hbm_bandwidth_model->issue_comm_write(size, hbm_wlhd);
     }
 
-    sim_request rcv_req;
+    // Value-initialize every field: the rendezvous path (and any backend)
+    // copies this request, so no field may stay indeterminate.
+    sim_request rcv_req{};
+    rcv_req.srcRank = (uint32_t)src;
+    rcv_req.dstRank = (uint32_t)dst;
+    rcv_req.reqType = UINT8;
     RecvPacketEventHandlerData* rcehd = new RecvPacketEventHandlerData;
     rcehd->wlhd = new WorkloadLayerHandlerData;
     rcehd->wlhd->node_id = node.global_id;
     rcehd->workload = this;
     rcehd->event = EventType::PacketReceived;
+    // The default ctor leaves sys_id 0; the fail-closed "armed with N
+    // consumers on sys X" diagnostic in Sys::handleEvent reads it, so a
+    // non-zero rank must not be misreported as sys 0 (2026-09-30).
+    rcehd->sys_id = sys->id;
     sys->front_end_sim_recv(0, Sys::dummy_data, size, UINT8, src, tag, &rcv_req,
                             Sys::FrontEndSendRecvType::NATIVE,
                             &Sys::handleEvent, rcehd);
@@ -732,15 +945,15 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
 void Workload::skip_invalid(const ExecutionDriven::NodeView& node) {
     const auto node_id = node.global_id;
     // Claim terminal delivery before any observer/statistics side effect.
-    // Static mode is intentionally a no-op; online duplicate callbacks are a
-    // mechanism error rather than an idempotent second aggregate.
+    // Duplicate callbacks are a mechanism error rather than an idempotent
+    // second aggregate.
     mark_online_terminal_or_fail(node_id);
     // Step 1-3: unconditional node-terminal record (独立于 metrics 开关).
-    // Step 1-5: the online path fills the reverse index from the GraphSource
-    // view; static stays nullptr/0. Skipped is explicit: the node never
-    // executed (INVALID_NODE / metadata / zero tensor_size); whether Skipped
-    // satisfies a watch is the watch's own policy, never a default.
-    record_node_terminal(execution_mode_, sys->id, node_id,
+    // Step 1-5: the reverse index is filled from the GraphSource view.
+    // Skipped is explicit: the node never executed (INVALID_NODE / metadata
+    // / zero tensor_size); whether Skipped satisfies a watch is the watch's
+    // own policy, never a default.
+    record_node_terminal(sys->id, node_id,
                          ExecutionDriven::NodeTerminalStatus::Skipped, &node);
     // Step 1-4: the GraphSource is the sole dependency-state owner.
     graph_source_->finish_node(node_id);
@@ -755,41 +968,19 @@ void Workload::skip_invalid(const ExecutionDriven::NodeView& node) {
                       sys->id, Sys::boostedTick(), node.global_id, node.name,
                       static_cast<uint64_t>(node.node_type));
     }
-    // Step 1-8: online path (et_node == nullptr) releases through the
-    // NodeView overloads. The track_local_mem block below keeps the static
-    // et_node handle (unreachable in online mode: the ctor fails closed on
-    // track_local_mem + Online).
-    std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node = nullptr;
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-        // `node` is the GraphSource view just taken by issue(); do not look
-        // it up again on this all-node terminal path.
-        hw_resource->release(node);
-        complete_online_statistics(node, Sys::boostedTick());
-    } else {
-        et_node = graph_source_->et_node(node_id);
-        hw_resource->release(et_node);
-        stats->record_end(et_node, Sys::boostedTick());
-    }
-    // R2 (2026-08-29) anchor fast path: online mode consults the sparse
-    // NodeView flag (set at B-1.5 registration); static/ET mode keeps the
-    // unconditional call (skip_invalid is shared by both modes, and the
-    // ETFeeder views' flags are always false).
-    if (MetricCollector::instance().enabled() &&
-        (execution_mode_ != ExecutionDriven::ExecutionMode::Online ||
-         node.metric_complete_anchor)) {
+    // issue() already occupied the node and started its statistics state;
+    // pair them here (release + compact-service completion).
+    hw_resource->release(node);
+    complete_online_statistics(node, Sys::boostedTick());
+    // R2 (2026-08-29) anchor fast path: consults the sparse NodeView flag
+    // (set at B-1.5 registration).
+    if (MetricCollector::instance().enabled() && node.metric_complete_anchor) {
         MetricCollector::instance().on_node_complete(sys->id, node_id,
                                                      Sys::boostedTick());
-    }
-    if (this->sys->track_local_mem) {
-        this->local_mem_usage_tracker->recordEnd(et_node, Sys::boostedTick());
     }
 }
 
 void Workload::call(EventType event, CallData* data) {
-    if (is_finished) {
-        return;
-    }
-
     if (event == EventType::CollectiveCommunicationFinished) {
         IntData* int_data = (IntData*)data;
         uint64_t coll_comm_id = int_data->data;
@@ -809,93 +1000,64 @@ void Workload::call(EventType event, CallData* data) {
         collective_comm_node_id_map.erase(node_id_it);
         collective_comm_wrapper_map.erase(wrapper_it);
 
-        // Step 1-8: online mode has no ETFeederNode handle (et_node ==
-        // nullptr); the online branch releases / records through the
-        // NodeView. The static branch below stays byte-identical.
-        const ExecutionDriven::NodeView* nv = nullptr;
-        shared_ptr<Chakra::FeederV3::ETFeederNode> node = nullptr;
-        if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-            nv = graph_source_->lookup_ptr(node_id);
-            if (nv == nullptr) {
-                workload_logger_
-                    ->critical("collective callback for unknown online node "
-                               "id={}", node_id);
-                exit(EXIT_FAILURE);
-            }
-            if (sys->trace_enabled) {
-                workload_logger_
-                    ->debug("callback,sys->id={}, tick={}, node->id={}, "
-                            "node->name={}, node->type={}",
-                            sys->id, Sys::boostedTick(), node_id,
-                            nv->name.c_str(), nv->node_type);
-            }
-            mark_online_terminal_or_fail(node_id);
-            hw_resource->release(*nv);
-        complete_online_statistics(*nv, Sys::boostedTick());
-            // R2 anchor fast path: online-only branch (the static else below
-            // is untouched and stays unconditional); nv points into the
-            // NodeStore record the registration hook set the flags on.
-            if (MetricCollector::instance().enabled() &&
-                nv->metric_complete_anchor) {
-                MetricCollector::instance().on_node_complete(
-                    sys->id, node_id, Sys::boostedTick());
-            }
-        } else {
-            // Step 1-4: the ETFeederNode handle (static mode) is fetched
-            // through the GraphSource.
-            node = graph_source_->et_node(node_id);
-
-            if (sys->trace_enabled) {
-                workload_logger_
-                    ->debug("callback,sys->id={}, tick={}, node->id={}, "
-                            "node->name={}, node->type={}",
-                            sys->id, Sys::boostedTick(), node->id(),
-                            node->name(),
-                            static_cast<uint64_t>(node->type()));
-            }
-
-            hw_resource->release(node);
-            stats->record_end(node, Sys::boostedTick());
-            if (MetricCollector::instance().enabled()) {
-                MetricCollector::instance().on_node_complete(
-                    sys->id, node->id(), Sys::boostedTick());
-            }
+        if (hbm_comm_join_.count(node_id) > 0) {
+            // P2 (2026-09-28): HBM-joined ALL_REDUCE endpoint (the job was
+            // created in issue_coll_comm), same two-event join as p2p: the
+            // dataset callback only records the collective's completion;
+            // the node completes when the endpoint HBM job has also
+            // finished (maybe_complete_hbm_joined_comm below).  The DataSet
+            // wrapper is retired here either way.
+            delete collective_wrapper;
+            hbm_comm_join_[node_id].network_done = true;
+            maybe_complete_hbm_joined_comm(node_id);
+            return;
         }
 
-        if (this->sys->track_local_mem) {
-            this->local_mem_usage_tracker->recordEnd(node, Sys::boostedTick());
+        const ExecutionDriven::NodeView* nv = graph_source_->lookup_ptr(node_id);
+        if (nv == nullptr) {
+            workload_logger_
+                ->critical("collective callback for unknown online node "
+                           "id={}", node_id);
+            exit(EXIT_FAILURE);
+        }
+        if (sys->trace_enabled) {
+            workload_logger_
+                ->debug("callback,sys->id={}, tick={}, node->id={}, "
+                        "node->name={}, node->type={}",
+                        sys->id, Sys::boostedTick(), node_id,
+                        nv->name.c_str(), nv->node_type);
+        }
+        mark_online_terminal_or_fail(node_id);
+        hw_resource->release(*nv);
+        complete_online_statistics(*nv, Sys::boostedTick());
+        // R2 anchor fast path: nv points into the NodeStore record the
+        // registration hook set the flags on.
+        if (MetricCollector::instance().enabled() &&
+            nv->metric_complete_anchor) {
+            MetricCollector::instance().on_node_complete(
+                sys->id, node_id, Sys::boostedTick());
         }
 
         // Step 1-3: unconditional node-terminal record (collective branch);
-        // step 1-5 reverse-index fill in online mode.
-        record_node_terminal(execution_mode_, sys->id, node_id,
+        // step 1-5 reverse-index fill.
+        record_node_terminal(sys->id, node_id,
                              ExecutionDriven::NodeTerminalStatus::Success, nv);
 
         graph_source_->finish_node(node_id);
-        // Static auto-advance only: in online mode the post-commit deferred
-        // path drains the store (steps 1-6/1-11); call() must never re-issue.
-        if (execution_mode_ == ExecutionDriven::ExecutionMode::Static) {
-            issue_dep_free_nodes();
-        }
 
         delete collective_wrapper;
 
     } else {
         if (data == nullptr) {
-            // Step 1-8: a bare General event (fire()) is the static
-            // auto-advance trigger; online mode never fires it -- the
-            // post-commit deferred path calls issue_dep_free_nodes()
-            // directly (steps 1-6/1-11). Reaching this in online mode is a
-            // mechanism violation: fail closed.
-            if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-                workload_logger_
-                    ->critical("bare General event (fire) reached "
-                               "Workload::call in online mode; the "
-                               "post-commit path issues dep-free nodes "
-                               "directly (step 1-8)");
-                exit(EXIT_FAILURE);
-            }
-            issue_dep_free_nodes();
+            // A bare General event used to be the static auto-advance
+            // trigger (fire()); the post-commit deferred path calls
+            // issue_dep_free_nodes() directly (steps 1-6/1-11). Reaching
+            // this is a mechanism violation: fail closed.
+            workload_logger_
+                ->critical("bare General event reached Workload::call; the "
+                           "post-commit path issues dep-free nodes "
+                           "directly (step 1-8)");
+            exit(EXIT_FAILURE);
         } else {
             WorkloadLayerHandlerData* wlhd = (WorkloadLayerHandlerData*)data;
             if ((event == EventType::PacketSent ||
@@ -911,113 +1073,51 @@ void Workload::call(EventType event, CallData* data) {
                 delete wlhd;
                 maybe_complete_hbm_joined_comm(joined_node_id);
             } else {
-                finish_generic_node(wlhd->node_id, event);
+                finish_generic_node(wlhd->node_id);
                 delete wlhd;
             }
         }
     }
 
-    // Final end authority (方案 §4 步骤 1-2 操作 3): in online mode this
-    // side effect is disabled -- a temporarily empty graph must never end the
-    // online simulation and drop later injections. The end authority belongs
-    // exclusively to the ServiceCoordinator (总体方案 §5.5). The static path
-    // keeps the pre-phase-1 behavior byte-for-byte.
-    if (execution_mode_ != ExecutionDriven::ExecutionMode::Online) {
-        // Step 1-4: static_all_done (free empty && ongoing empty) comes from
-        // the GraphSource -- the sole dependency-state owner.
-        if ((graph_source_->static_all_done()) &&
-            (hw_resource->num_in_flight_cpu_ops == 0) &&
-            (hw_resource->num_in_flight_gpu_comp_ops == 0) &&
-            (hw_resource->num_in_flight_gpu_comm_ops == 0) &&
-            // Local-HBM contention: a still-active local-HBM job always
-            // belongs to a node that has not completed, so the slot counters
-            // above already cover it; the explicit has_active_jobs() check
-            // is a belt-and-braces guard -- a drained resolver with pending
-            // endpoint jobs must keep waiting for the model's completion
-            // callbacks (they re-enter Workload::call and finish the nodes).
-            (local_hbm_bandwidth_model == nullptr ||
-             !local_hbm_bandwidth_model->has_active_jobs())) {
-            report();
-            sys->comm_NI->sim_notify_finished();
-            is_finished = true;
-        }
-    }
 }
 
-void Workload::fire() {
-    call(EventType::General, NULL);
-}
-
-void Workload::finish_generic_node(uint64_t node_id, EventType event) {
+void Workload::finish_generic_node(uint64_t node_id) {
     // Extracted verbatim from the former generic wlhd branch of
     // Workload::call: node release / stats / metrics / terminal record /
-    // dependency release / static-mode auto-advance.  Shared by the plain
-    // register_event completions, the LocalHbmBandwidthModel COMP
-    // completions, and the joined p2p comm completions.
-    const ExecutionDriven::NodeView* nv = nullptr;
-    shared_ptr<Chakra::FeederV3::ETFeederNode> node = nullptr;
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-        nv = graph_source_->lookup_ptr(node_id);
-        if (nv == nullptr) {
-            workload_logger_
-                ->critical("callback for unknown online node id={}",
-                           node_id);
-            exit(EXIT_FAILURE);
-        }
-        if (sys->trace_enabled) {
-            workload_logger_
-                ->debug("callback,sys->id={}, tick={}, node->id={}, "
-                        "node->name={}, node->type={}",
-                        sys->id, Sys::boostedTick(), node_id,
-                        nv->name.c_str(), nv->node_type);
-        }
-        mark_online_terminal_or_fail(node_id);
-        hw_resource->release(*nv);
-        complete_online_statistics(*nv, Sys::boostedTick());
-        // R2 anchor fast path: online-only branch (the static else below is
-        // untouched and stays unconditional); nv points into the NodeStore
-        // record the registration hook set the flags on.
-        if (MetricCollector::instance().enabled() &&
-            nv->metric_complete_anchor) {
-            MetricCollector::instance().on_node_complete(
-                sys->id, node_id, Sys::boostedTick());
-        }
-    } else {
-        node = graph_source_->et_node(node_id);
-
-        if (sys->trace_enabled) {
-            workload_logger_
-                ->debug("callback,sys->id={}, tick={}, node->id={}, "
-                        "node->name={}, node->type={}",
-                        sys->id, Sys::boostedTick(), node->id(),
-                        node->name(),
-                        static_cast<uint64_t>(node->type()));
-        }
-
-        hw_resource->release(node);
-        stats->record_end(node, Sys::boostedTick());
-        if (MetricCollector::instance().enabled()) {
-            MetricCollector::instance().on_node_complete(
-                sys->id, node->id(), Sys::boostedTick());
-        }
+    // dependency release.  Shared by the plain register_event completions,
+    // the LocalHbmBandwidthModel COMP completions, and the joined p2p comm
+    // completions.
+    const ExecutionDriven::NodeView* nv = graph_source_->lookup_ptr(node_id);
+    if (nv == nullptr) {
+        workload_logger_
+            ->critical("callback for unknown online node id={}",
+                       node_id);
+        exit(EXIT_FAILURE);
     }
-
-    if (this->sys->track_local_mem) {
-        this->local_mem_usage_tracker->recordEnd(node, Sys::boostedTick());
+    if (sys->trace_enabled) {
+        workload_logger_
+            ->debug("callback,sys->id={}, tick={}, node->id={}, "
+                    "node->name={}, node->type={}",
+                    sys->id, Sys::boostedTick(), node_id,
+                    nv->name.c_str(), nv->node_type);
+    }
+    mark_online_terminal_or_fail(node_id);
+    hw_resource->release(*nv);
+    complete_online_statistics(*nv, Sys::boostedTick());
+    // R2 anchor fast path: nv points into the NodeStore record the
+    // registration hook set the flags on.
+    if (MetricCollector::instance().enabled() && nv->metric_complete_anchor) {
+        MetricCollector::instance().on_node_complete(
+            sys->id, node_id, Sys::boostedTick());
     }
 
     // Step 1-3: unconditional node-terminal record (generic wlhd branch;
     // completion paths register_event back into Workload::call);
-    // step 1-5 reverse-index fill
-    // in online mode.
-    record_node_terminal(execution_mode_, sys->id, node_id,
+    // step 1-5 reverse-index fill.
+    record_node_terminal(sys->id, node_id,
                          ExecutionDriven::NodeTerminalStatus::Success, nv);
 
     graph_source_->finish_node(node_id);
-    // Static auto-advance only (see the collective branch in Workload::call).
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Static) {
-        issue_dep_free_nodes();
-    }
 }
 
 void Workload::maybe_complete_hbm_joined_comm(uint64_t node_id) {
@@ -1028,12 +1128,20 @@ void Workload::maybe_complete_hbm_joined_comm(uint64_t node_id) {
     if (!(it->second.network_done && it->second.hbm_done)) {
         return;  // still waiting for the other side
     }
-    const EventType completion_event = it->second.completion_event;
-    // Erase BEFORE completing: the completion re-enters the issue path
-    // (static auto-advance) and any re-entrant lookup for this node must
-    // observe an already-fired join.
+    // Erase BEFORE completing (defensive ordering): the online mode never
+    // re-enters the issue path from a completion (issue passes are driven
+    // by main_online), but ANY re-entrant lookup for this node must observe
+    // an already-fired join -- erase-first keeps that invariant without
+    // depending on the caller's discipline.
     hbm_comm_join_.erase(it);
-    finish_generic_node(node_id, completion_event);
+    finish_generic_node(node_id);
+}
+
+void Workload::abandon_local_hbm_join_entry(uint64_t node_id) {
+    // Teardown-only (see the header declaration): erase the pending join;
+    // no completion is delivered and no metric anchor fires -- the process
+    // is already on a fatal/teardown path.
+    hbm_comm_join_.erase(node_id);
 }
 
 void Workload::on_local_hbm_job_complete(
@@ -1057,32 +1165,30 @@ void Workload::on_local_hbm_job_complete(
     }
     // COMP job: single-event completion, same path as the closed-form
     // register_event route.
-    finish_generic_node(node_id, EventType::General);
+    finish_generic_node(node_id);
     delete wlhd;
 }
 
-void Workload::report() {
-    // Compact online service has no legacy per-node Statistics history. Check
-    // before emitting any report output so this path cannot report zeros.
-    stats->ensure_legacy_post_processing_supported();
-    Tick curr_tick = Sys::boostedTick();
-    workload_logger_
-        ->info("sys[{}] finished, {} cycles, exposed communication {} cycles.",
-               sys->id, curr_tick, curr_tick - hw_resource->tics_gpu_ops);
-    stats->post_processing();
-    stats->report();
-    if (this->sys->track_local_mem) {
-        this->local_mem_usage_tracker->buildMemoryTrace();
-        this->local_mem_usage_tracker->buildMemoryTimeline();
-        this->local_mem_usage_tracker->dumpMemoryTrace(
-            this->sys->local_mem_trace_filename);
-        auto [peak_mem_usage, unit] =
-            this->local_mem_usage_tracker->getPeakMemUsageFormatted();
-        auto logger = workload_logger_;
-        logger->info("sys[{}] peak memory usage: {:.2f} {}", sys->id,
-                     peak_mem_usage, unit);
-        this->local_mem_usage_tracker.reset();
+void Workload::record_die_utilizations(const uint64_t node_id,
+                                       const double compute_utilization,
+                                       const double memory_utilization,
+                                       const double vector_utilization) {
+    // Contract §7.6: the die-only vector_utilization lives on the compact
+    // OnlineStatisticsState; the legacy OperatorStatistics record
+    // (history-preserving microbenchmarks) has no vector field, so only
+    // compute/memory cross over there. This repository is online-only, so
+    // the compact branch is the production path.
+    if (!stats->online_history_preserved()) {
+        ExecutionDriven::OnlineStatisticsState& state =
+            online_statistics_state_or_fail(node_id);
+        state.compute_utilization = compute_utilization;
+        state.memory_utilization = memory_utilization;
+        state.vector_utilization = vector_utilization;
+        return;
     }
+    auto& op_stat = this->stats->get_operator_statistics(node_id);
+    op_stat.compute_utilization = compute_utilization;
+    op_stat.memory_utilization = memory_utilization;
 }
 
 std::shared_ptr<CommunicatorGroup> Workload::extract_comm_group(
@@ -1099,7 +1205,7 @@ std::shared_ptr<CommunicatorGroup> Workload::extract_comm_group(
         return nullptr;
     }
 
-    int comm_group_id = std::stoi(comm_group_name);
+    int comm_group_id = parse_comm_group_id_strict(comm_group_name);
     const auto comm_group_it = comm_groups.find(comm_group_id);
     if (comm_group_it == comm_groups.end() || !comm_group_it->second) {
         workload_logger_

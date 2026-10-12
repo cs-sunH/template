@@ -103,8 +103,10 @@ class MetricCollector {
     // rank, node, event) is a no-op, and re-registering a request updates
     // only missing fields (the online CSV data is authoritative for
     // arrival/session fields; rank sets merge). No registered anchor ever
-    // makes the static path observable: all three entry points no-op when
-    // metrics are disabled, and the static main never calls them.
+    // makes the legacy static arm observable: all three entry points no-op
+    // when metrics are disabled, and the only non-online drivers of the
+    // collector are the metric-enabled test fixtures (there is no static
+    // main anymore).
     // Phase-7 §10.3: the online driver runs the collector against the live
     // dynamic graph. The manifest's static node-event table is keyed by the
     // OFFLINE ET's global node-id space, which overlaps the online per-rank
@@ -112,7 +114,8 @@ class MetricCollector {
     // static events would fire on unrelated online nodes and corrupt every
     // request state. The online main therefore clears the static tables
     // right after initialize() and lets the dynamic anchors fully own the
-    // event tables. The offline static main never calls this; the static
+    // event tables. The legacy static arm never calls this (there is no
+    // static main anymore); the static
     // [METRIC] bytes are untouched.
     void clear_static_node_events();
 
@@ -260,7 +263,8 @@ class MetricCollector {
     };
 
     struct IterationMetricState {
-        int64_t benchmark_point_id = -1;
+        // (2026-10-01) the benchmark_point_id mirror of the map key was
+        // write-only and is removed.
         std::optional<Tick> iteration_start;
         std::optional<Tick> iteration_end;
         std::set<int> start_ranks_seen;
@@ -303,7 +307,6 @@ class MetricCollector {
     struct RankMetricState {
         unsigned __int128 total_num_ops = 0;
         unsigned __int128 total_local_bytes = 0;
-        uint64_t local_hbm_restore_bytes = 0;
     };
 
     // One planner memory ledger delta (manifest ``memory_actions``, doc
@@ -317,7 +320,6 @@ class MetricCollector {
         int64_t weight_delta_bytes = 0;
         int64_t resident_kv_delta_bytes = 0;
         int64_t reserved_kv_delta_bytes = 0;
-        std::string cause;
     };
 
     // Observed request stage boundaries, stored during the finalize request
@@ -362,9 +364,10 @@ class MetricCollector {
         unsigned __int128 resident_area = 0;
         unsigned __int128 committed_area = 0;
         // Same integral from the pre-existing direct delta loop, kept for
-        // the <=1% timeavg cross-check (A-class criterion).
+        // the <=1% timeavg cross-check (A-class criterion). Only the
+        // resident domain carries a direct counterpart: the cross-check is
+        // defined on resident_area alone.
         unsigned __int128 direct_resident_area = 0;
-        unsigned __int128 direct_committed_area = 0;
         uint64_t capacity_violations = 0;
         uint64_t sample_count = 0;
         bool capacity_known = false;

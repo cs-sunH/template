@@ -13,6 +13,8 @@ fully-drained ACTIVE returns to IDLE while the input stays open (合同②
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -27,7 +29,19 @@ void ServiceCoordinator::on_command_accepted() {
 
 void ServiceCoordinator::on_request_arrived() {
     std::lock_guard<std::mutex> lock(mtx_);
+    // E3 fix (2026-09-26): the invariant used to be assert-only, i.e. a
+    // no-op under NDEBUG. An arrival with no pending alarm would wrap the
+    // uint64_t counter below to ~0, and finished_locked() would then never
+    // observe the drained state (FINISHED unreachable). Fail closed with a
+    // diagnostic instead, matching the repo-wide coordinator/ingress abort
+    // contract. (Keep the assert for Debug builds' early break.)
     assert(pending_alarm_count_ > 0);
+    if (pending_alarm_count_ == 0) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/coordinator) arrival with "
+                     "no pending alarm (pending_alarm_count_ == 0)\n");
+        std::abort();
+    }
     --pending_alarm_count_;
     ++active_request_count_;
     if (state_ == ServiceState::IDLE) {
@@ -37,7 +51,16 @@ void ServiceCoordinator::on_request_arrived() {
 
 void ServiceCoordinator::on_request_completed() {
     std::lock_guard<std::mutex> lock(mtx_);
+    // E3 fix (2026-09-26): same NDEBUG-proofing as on_request_arrived -- a
+    // completion with no active request would wrap active_request_count_
+    // below to ~0 and wedge the lifecycle short of FINISHED.
     assert(active_request_count_ > 0);
+    if (active_request_count_ == 0) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/coordinator) completion with "
+                     "no active request (active_request_count_ == 0)\n");
+        std::abort();
+    }
     --active_request_count_;
     ++completed_request_count_;
     maybe_finish();
@@ -53,8 +76,12 @@ void ServiceCoordinator::mark_input_closed(const InputCloseReason reason) {
     // Phase-7 §10.7: record the close source BEFORE the state transitions
     // (the hook below may read it back on the same thread only via the
     // state queries; the audit queries input_close_reason()/input_closed()
-    // after the run).
-    input_close_reason_ = reason;
+    // after the run). (2026-10-01) Keep the FIRST reason on double close:
+    // an explicit --close-input followed by the CSV EOF command used to
+    // overwrite the audit attribution from "explicit" to "eof".
+    if (input_open_) {
+        input_close_reason_ = reason;
+    }
     input_open_ = false;
     if (state_ == ServiceState::IDLE) {
         // no request was ever accepted: close straight into draining
@@ -62,9 +89,27 @@ void ServiceCoordinator::mark_input_closed(const InputCloseReason reason) {
     } else if (state_ == ServiceState::ACTIVE) {
         set_state(ServiceState::DRAINING);
     }
-    maybe_finish();
+    // M4 fix (2026-09-29): do NOT evaluate maybe_finish() here. At a
+    // producer-linearized close the bounded ingress queue routinely holds
+    // every Submit (the --close-input startup path queues the whole turn-0
+    // calendar before the first drain), so all three counters are still
+    // zero and the old immediate evaluation stamped FINISHED for a service
+    // that had not even accepted its first request -- the state_ label then
+    // sat at FINISHED for the whole run and the lifecycle transition log
+    // went silent. The FINISHED evaluation moves to note_input_drained(),
+    // called by the ingress drain once the closed queue is empty.
+    finish_after_drain_ = true;
     wakeup_pending_ = true;
     work_cv_.notify_one();
+}
+
+void ServiceCoordinator::note_input_drained() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (input_open_ || !finish_after_drain_) {
+        return;  // input still open, or nothing deferred (already drained)
+    }
+    finish_after_drain_ = false;
+    maybe_finish();
 }
 
 InputCloseReason ServiceCoordinator::input_close_reason() const {

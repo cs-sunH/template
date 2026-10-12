@@ -5,7 +5,7 @@ LICENSE file in the root directory of this source tree.
 RequestIngress -- execution-driven mechanism layer (wscllm phase 1).
 
 Request-neutral ingress (方案 §4 步骤 1-2 操作 2). Thread contract: external
-producers (injection thread, later the step-1-7 bridge reader) only write the
+producers (the --command-fifo injection thread and fixtures) only write the
 thread-safe bounded command queue (submit/close/EOF/error); the simulation
 thread alone drains commands and schedules arrival alarms. External threads
 must never call EventQueue or schedule arrivals directly.
@@ -164,9 +164,13 @@ class RequestIngress {
     /// path. late_static_submit_ counts Submit-path clamps of
     /// RequestSource::StaticCsv envelopes (turn-0 rows read from the request
     /// queue CSV) EXCLUDING the t=0 boundary case (see t0_boundary_clamp_):
-    /// a static CSV is finite and fully indexed before the simulation starts,
-    /// so ANY such clamp means the reader discovered the row too late -- the
-    /// defect this fix eradicates -- and the run-end gate fail-closes on it.
+    /// the calendar reader tries every turn-0 Submit from tick 0 in
+    /// (arrival, queue_index) order, so ANY such clamp means the bounded
+    /// command queue parked the cursor past the declared arrival while the
+    /// clock advanced -- turn-0 (session) scale above the ingress queue
+    /// capacity (attribution corrected 2026-09-27: capacity backpressure,
+    /// not the eradicated late-discovery defect). The run-end gate still
+    /// fail-closes on a nonzero count.
     size_t late_static_submit_count() const { return late_static_submit_; }
     /// Submit-path clamps of RequestSource::ExternalStream envelopes (the
     /// command-FIFO producer / fixtures may legitimately run late; no gate).
@@ -207,19 +211,31 @@ class RequestIngress {
 
     /// Phase 7 §10.7: overflow audit -- how many enqueue attempts were
     /// rejected because the bounded command queue was full (capacity_).
-    /// Thread-safe (matching enqueue_command's lock). 0 on every official
-    /// run (the windowed reader tops up at most high_water=128 un-consumed
-    /// rows << capacity 4096); the counter exists so a producer that grows
-    /// without bound is caught by the run-end audit instead of silently
-    /// backpressuring forever.
+    /// Thread-safe (matching enqueue_command's lock). The windowed reader's
+    /// backpressure contract means a rejection is RECOVERABLE, not fatal:
+    /// submit_from_calendar parks the cursor on the head entry and the next
+    /// pump() retries -- and every park IS one of these counted rejections
+    /// (enqueue_command increments before returning false). "0 on official
+    /// runs" is therefore an expectation only while turn-0 scale fits under
+    /// capacity 4096, not a structural guarantee; a nonzero value is the
+    /// run's backpressure evidence (cross-read late_static_submit_count,
+    /// whose nonzero count the run-end gate fail-closes on), and the
+    /// counter exists so a producer that grows without bound is caught by
+    /// the run-end audit instead of silently backpressuring forever.
     size_t overflow_count() const;
     /// Phase 7 §10.7: peak command-queue occupancy (un-consumed commands)
     /// observed since construction. Thread-safe.
     size_t peak_command_occupancy() const;
 
-    /// One-shot future-arrival queue-index entries currently retained.  In
-    /// the windowed reader path this is bounded by the unconsumed row window,
-    /// rather than growing with all CSV rows seen during the run.
+    /// One-shot future-arrival queue-index entries currently retained.
+    /// Since the P0 index pass (2026-08-30) pre-registers EVERY turn>0 row
+    /// up front, this equals all registered turn>0 rows minus the entries
+    /// schedule_future_arrival has already consumed -- bounded by the
+    /// file's turn>0 row count, NOT by an unconsumed row window (the
+    /// pre-P0 wording here was stale; corrected 2026-09-27).
+    /// 测试专用 (test-only accessor; the production run-end audit never reads
+    /// it -- windowed_trace_reader_test.cc asserts the one-shot consumption
+    /// through it).
     size_t pending_queue_index_count() const;
 
   private:
@@ -251,6 +267,13 @@ class RequestIngress {
     // publishes ARRIVAL. This closes cross-batch duplicate alarms without
     // retaining historical request ids after arrival.
     std::unordered_set<std::string> scheduled_future_request_ids_;
+    // F1-CPP C1-8 fix (2026-09-29): process-level identity gate for every
+    // drained Submit, whatever the producer path (CSV turn-0 rows, command
+    // FIFO, fixtures). The CSV reader enforces per-row emptiness/uniqueness
+    // only on its own rows (C3 M5); the FIFO channel had no such gate, so a
+    // repeated id reached the metric identity maps last-wins. Guarded by
+    // mtx_; written only on the simulation thread at drain time.
+    std::unordered_set<std::string> seen_submit_request_ids_;
     // Fixtures that do not use a CSV reader retain the legacy unknown-index
     // behavior. A non-empty WindowedTraceReader enables strict mode before it
     // reads any rows; register_queue_index also enables it defensively.

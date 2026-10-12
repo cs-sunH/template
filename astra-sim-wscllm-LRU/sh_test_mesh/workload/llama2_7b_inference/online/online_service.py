@@ -23,6 +23,7 @@ strategy 模式(步骤 1-9 的 WscLlmOnlineScheduler):真实策略(关感知)在
 import argparse
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -111,8 +112,9 @@ class _JsonlSink:
             self._open()
 
     def _open(self) -> None:
-        # 覆盖旧文件(上一轮运行的残留)。
-        self._output = open(self.path, "w", encoding="utf-8")
+        # 覆盖旧文件(上一轮运行的残留)。newline="":逐行 JSON 审计流的
+        # 换行契约固定为单字节 LF(禁用 Windows 文本模式的 \n→\r\n 翻译)。
+        self._output = open(self.path, "w", encoding="utf-8", newline="")
 
     def __call__(self, row: dict) -> None:
         if self._output is None:
@@ -127,11 +129,6 @@ class _JsonlSink:
         if self._output is not None:
             self._output.close()
             self._output = None
-
-
-class _DigestSink(_JsonlSink):
-    """把每次 GraphBatch 产出的 digest 行顺带追加写入 bridge_dir
-    (B2 后为 _JsonlSink 的常驻 fd 形态;语义/输出字节不变)。"""
 
 
 class _NullSink:
@@ -182,8 +179,10 @@ def main(argv=None) -> int:
     # 根因 #5(主控裁决 2026-08-15 第三项):strategy 模式保持物理链。
     graph = GraphBatchBuilder(config)
     # C2/D2(2026-08-28):digest 默认关(SH_GRAPH_DIGESTS=1 恢复恒写)。
+    # 把每次 GraphBatch 产出的 digest 行顺带追加写入 bridge_dir(_JsonlSink
+    # 常驻 fd 形态;语义/输出字节不变)。
     digest_sink = (
-        _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
+        _JsonlSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
         if _graph_digests_enabled() else None)
     # M3 决策日志流式落盘(2026-08-23,批次B 移植自 sh_3.0 母本):
     # decision_log / train_ledger / profile 三类逐行 append+flush(行序与
@@ -206,7 +205,7 @@ def main(argv=None) -> int:
     # 进 .partial 暂存、结束期两遍合并)。
     sensing_query_sink = _JsonlSink(
         os.path.join(args.bridge_dir, SENSING_QUERY_LOG_NAME),
-        eager=args.sensing) if args.sensing else None
+        eager=True) if args.sensing else None
     online_stats_sink = _JsonlSink(
         os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME))
     # 步骤 1-9:真实策略(关感知,默认);决策日志逐批写 online_decision_log.jsonl。
@@ -263,6 +262,23 @@ def main(argv=None) -> int:
     # 完整 manifest。
     del manifest
 
+    # 退出信号监听(G6-7,2026-09-26):SIGTERM/SIGINT/SIGHUP 此前走默认
+    # 处置=立即终止,serve 循环的 finally(桥 fd/审计流关闭)与结束校验
+    # 全部被跳过,残留半写暂存(.partial)且无留痕。转成 SystemExit 后由
+    # serve_forever 的 finally 收尾,以非 0 退出保持 fail-closed(C++ 侧
+    # 对 Python 进程死亡本就 abort,语义不变,仅补收尾与留痕)。
+    def _request_exit(signum, _frame):
+        raise SystemExit(
+            "online_service: received signal {} -- exiting (bridge fds "
+            "and audit streams closed by serve cleanup)".format(signum))
+
+    # SIGHUP 在 Windows CPython 的 signal 模块不存在(硬引用会在 main()
+    # 启动即 AttributeError);getattr 缺省 None 跳过注册,生产 Linux 的
+    # 三信号注册行为零变化。
+    for _sig in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None)):
+        if _sig is not None:
+            signal.signal(_sig, _request_exit)
+
     # Official peer is FileDecisionBridge: request files are exactly
     # nlohmann::json::dump() bytes (compact, no trailing newline).
     server = BridgeServer(
@@ -307,12 +323,13 @@ def main(argv=None) -> int:
         "forced_flush_count": bridge_stats["forced_flush_count"],
         "handler_calls": bridge_stats["handler_calls"],
     }
-    # D4 (2026-09-05): passive 逐出深缺口计数(观测项)——主变体的
-    # kv_manager 提供(deep_gap_events;fail-closed 缺失即 0 的兜底取值)。
-    kv_manager = getattr(scheduler, "kv_manager", None)
-    if kv_manager is not None:
-        summary_row["kv_deep_gap_events"] = int(
-            getattr(kv_manager, "deep_gap_events", 0))
+    # D4 (2026-09-05): passive 逐出深缺口计数(观测项)——strategy 模式
+    # 的调度器恒持有 kv_manager(WscLlmOnlineScheduler 构造期创建)。
+    # fail-closed:接线缺失/改名直接 AttributeError 经顶层兜底非 0 退出,
+    # 绝不静默取 0 掩盖(2026-09-26 批:原 getattr(..., 0) fail-open 与
+    # 本段自称的 fail-closed 语义相悖,已按注释语义修正)。
+    summary_row["kv_deep_gap_events"] = int(
+        scheduler.kv_manager.deep_gap_events)
     stats_path = os.path.join(args.bridge_dir, ONLINE_STATS_LOG_NAME)
     partial_path = os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME)
 
@@ -350,7 +367,8 @@ def main(argv=None) -> int:
                     processing["seq"]))
 
     online_stats_sink.close()
-    with open(stats_path, "w", encoding="utf-8") as output:
+    # newline="":逐行 JSON 换行契约固定 LF(与 _JsonlSink 同口径)。
+    with open(stats_path, "w", encoding="utf-8", newline="") as output:
         for row in _merged_stat_rows():
             output.write(json.dumps(row, sort_keys=True) + "\n")
         output.write(json.dumps(summary_row, sort_keys=True) + "\n")

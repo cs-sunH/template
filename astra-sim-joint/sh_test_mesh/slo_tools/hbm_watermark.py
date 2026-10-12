@@ -44,6 +44,19 @@ log 一行说明判定依据，无需新 CLI 参数）：
     重放即权威（上界口径）。journal sha256 不匹配 / 行级链断裂 / 终态与
     证书矛盾 → fail-closed 退出码 2（账本损坏不得静默降级）。
 
+M17（2026-09-29，如实披露）：per-rank 权威 journal（results/
+kv_delta_journal.jsonl + kv_delta_journal_checksum.json）在本仓**没有
+任何生产者**——注意 online_service.dump_joint_kv_ledgers 落盘的第四键
+"kv_delta_journal" 是 C14 逐请求结算事实 sidecar（JSON 键内嵌列表、
+行结构 = seq/session_id/home_before/...），与本工具消费的 per-rank
+delta 权威账本（JSONL、schema_version=1、rank/delta/before/after 字段
+面）同名不同物，全仓对后者零写入方。故本仓自产 run 恒落
+upper_bound_only 层，certified 容量判决路径（exit 3）在自产 run 上
+不可达；上层文档描述的该判决路径需外部 journal 生产者落盘后才真实
+存在。四层判定逻辑本身不变（tier 由 run_dir 内容自动判定，外部
+journal 在场即按上表升级）；summary 以 ``certification_layer`` 字段
+显式披露当前层，静默降级就此变为显式披露。
+
 算法（重放，非策略复刻）：
   按 (文件顺序=seq) 重放每条决策记录（journal 路径按 sequence 流式重放），
   记录内固定次序「逐出 → 恢复/迁移 → 增长」。会话状态（当前所在实例、
@@ -176,23 +189,46 @@ INSTANCE_COLUMNS = (
 # ---------------------------------------------------------------------------
 
 def _sum_shard_bytes(entry: dict) -> Optional[int]:
-    """FACE/W 逐出条目：shard_bytes 列表 → 实例合计。"""
+    """FACE/W 逐出条目：shard_bytes 列表 → 实例合计。
+
+    bool 排除（2026-09-29，对齐姊妹文件 hopbytes.py D2 的 _byte_count
+    口径）：isinstance(True, int) 为真，bool shard 曾按 1 字节计入合计；
+    现 bool 一律 None → 调用方 _evict_action 走既定"缺可解析 bytes"
+    fail-closed 出口，不把布尔值当字节。
+    """
     shards = entry.get("shard_bytes")
     if not isinstance(shards, list) or not shards:
         return None
     total = 0
     for value in shards:
-        if not isinstance(value, int) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return None
         total += value
     return total
 
 
 def _scalar_bytes(entry: dict) -> Optional[int]:
+    # bool 排除（2026-09-29，对齐 hopbytes.py D2 口径）：
+    # isinstance(True, int) 为真，total_bytes=true 曾按 1 字节放行；
+    # bool → None → 调用方 _evict_action fail-closed，不静默当 1 字节。
     value = entry.get("total_bytes")
-    if isinstance(value, int) and value >= 0:
-        return value
-    return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _strict_present_int(value, what: str, where: str) -> int:
+    """标量 bytes 臂的在场值严格校验（R8-F1，2026-09-29 face 移植）。
+
+    "在场但非 int"（float/str/bool/list…）一律 fail-closed：静默按 0 处理
+    会把"在场非法"与"缺席=0"混为一谈、零 anomaly 直通幽灵占用出口；
+    bool 经 isinstance int 混入会按 1 计账。与 restore_list_field 严格臂
+    同强度（该臂缺/非法 total_bytes 即 fail），臂间校验强度对称。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        fail(f"{where}: {what} 在场但不是整数（实得 {value!r}）——"
+             f"float 截断/str 裸崩/bool 按 1 计均禁止，拒绝静默按 0 处理")
+    return value
 
 
 def _evict_action(tick: int, entry: dict, bytes_of, where: str) -> dict:
@@ -209,10 +245,23 @@ def _evict_action(tick: int, entry: dict, bytes_of, where: str) -> dict:
     victim_instance = entry.get("victim_instance_index")
     if victim_instance is None:
         victim_instance = entry.get("source_instance_index")
-    if victim_instance is not None and not isinstance(victim_instance, int):
-        victim_instance = None
+    if victim_instance is not None and (isinstance(victim_instance, bool)
+                                        or not isinstance(victim_instance,
+                                                          int)):
+        # 类型谎报不再静默降级 None（丢失实例归位信息会错扣别的实例，
+        # 幻影占用零异常）——fail-closed（批次 D 镜像，2026-09-30）。
+        fail(f"{where}: 逐出条目 victim_instance_index/"
+             f"source_instance_index 非整数（实得 {victim_instance!r}，"
+             f"类型 {type(victim_instance).__name__}）")
     time_ns = entry.get("time_ns")
-    eff_tick = time_ns if isinstance(time_ns, int) and time_ns >= 0 else tick
+    if time_ns is not None and (isinstance(time_ns, bool)
+                                or not isinstance(time_ns, int)
+                                or time_ns < 0):
+        # bool True 是合法 int 子类：旧行为当 tick=1 参与变点序——生效
+        # 时刻谎报，fail-closed；None/缺席才回落记录 tick。
+        fail(f"{where}: 逐出条目 time_ns 非非负整数（实得 {time_ns!r}，"
+             f"类型 {type(time_ns).__name__}）")
+    eff_tick = time_ns if time_ns is not None else tick
     # R17-4：层区间与新序列化键（resident_prefix_layers_before/after，
     # 仿真侧 R17-1d 新增；旧日志无此键 → None）透传给 apply_evict 的
     # 驻留前缀校验；非 joint 仓不消费这些键。
@@ -274,9 +323,10 @@ def _prefill_restore_actions(record: dict, mapping: dict, where: str) -> list:
         for row in holders:
             row_kind = row.get("kind")
             row_bytes = row.get("total_bytes")
-            if not isinstance(row_bytes, int) or row_bytes < 0:
+            if isinstance(row_bytes, bool) or not isinstance(row_bytes, int) \
+                    or row_bytes < 0:
                 fail(f"{where}: {restore_list_field} 成员缺非负整数 "
-                     f"total_bytes")
+                     f"total_bytes（实得 {row_bytes!r}）")
             if row_kind in ("local_hit", "LOCAL_HIT"):
                 row_bytes = 0
             row_source = row.get("source_instance_index")
@@ -296,21 +346,36 @@ def _prefill_restore_actions(record: dict, mapping: dict, where: str) -> list:
         else:
             holder = None
     if isinstance(holder, dict):
-        value = holder.get("total_bytes")
-        if isinstance(value, int):
-            nbytes = value
+        if "total_bytes" in holder:
+            # R8-F1（2026-09-29 face 移植）：在场值严格校验
+            # （缺席=0 与"在场非法"不得混同）。
+            nbytes = _strict_present_int(holder.get("total_bytes"),
+                                         "history 恢复 total_bytes", where)
         kind = holder.get("kind")
         source = holder.get("source_instance_index")
+        # F2_PY 修复（2026-09-29，RV5-F7 等价移植）：source 在场非整数
+        # （含 bool、浮点、字符串）此前静默降 None，下游
+        # restore_source_mismatch 诊断计数随之被静默抑制（异常漏报）、
+        # bool 冒充实例 1——与 bytes 臂的 _strict_present_int 同强度，
+        # 在场即严格；键缺席/None 保留 None（跟踪态归位）语义。
+        if source is not None and (isinstance(source, bool)
+                                   or not isinstance(source, int)):
+            fail(f"{where}: history 恢复 source_instance_index 非整数"
+                 f"（{source!r}）——类型谎报不静默降级")
         if isinstance(source, int):
             logged_source = source
-    elif isinstance(holder, int):
-        nbytes = holder
+    elif holder is not None:
+        nbytes = _strict_present_int(holder, "history 恢复 bytes", where)
     if spec.get("kind_field"):
         value = decision.get(spec["kind_field"])
         if isinstance(value, str):
             kind = value
     if spec.get("source_field"):
         value = decision.get(spec["source_field"])
+        if value is not None and (isinstance(value, bool)
+                                  or not isinstance(value, int)):
+            fail(f"{where}: history 恢复 {spec['source_field']} 非整数"
+                 f"（{value!r}）——类型谎报不静默降级")
         if isinstance(value, int):
             logged_source = value
     if spec.get("state_before_field"):
@@ -342,16 +407,29 @@ def _decode_move_actions(record: dict, mapping: dict, where: str) -> list:
         else:
             holder = None
     if isinstance(holder, dict):
-        value = holder.get("total_bytes")
-        if isinstance(value, int):
-            nbytes = value
+        if "total_bytes" in holder:
+            # R8-F1（2026-09-29 face 移植）：在场值严格校验
+            # （同 restore 标量臂，臂间对称）。
+            nbytes = _strict_present_int(holder.get("total_bytes"),
+                                         "decode 迁移 total_bytes", where)
         source = holder.get("source_instance_index")
+        # F2_PY 修复（2026-09-29，RV5-F7 等价移植）：同 restore 标量臂——
+        # source 在场非整数（含 bool、浮点、字符串）不再静默降 None/按 1
+        # 计，fail-closed；键缺席/None 保留 None（跟踪态归位）语义。
+        if source is not None and (isinstance(source, bool)
+                                   or not isinstance(source, int)):
+            fail(f"{where}: decode 迁移 source_instance_index 非整数"
+                 f"（{source!r}）——类型谎报不静默降级")
         if isinstance(source, int):
             logged_source = source
-    elif isinstance(holder, int):
-        nbytes = holder
+    elif holder is not None:
+        nbytes = _strict_present_int(holder, "decode 迁移 bytes", where)
     if spec.get("source_field"):
         value = decision.get(spec["source_field"])
+        if value is not None and (isinstance(value, bool)
+                                  or not isinstance(value, int)):
+            fail(f"{where}: decode 迁移 {spec['source_field']} 非整数"
+                 f"（{value!r}）——类型谎报不静默降级")
         if isinstance(value, int):
             logged_source = value
     if nbytes < 0:
@@ -484,6 +562,9 @@ REPO_VARIANTS: dict[str, dict] = {
         ),
         "restore": {"bytes_path": ["history_transfer_bytes"],
                     "source_field": "history_source_instance_index"},
+        # joint 行不走通用 _decode_move_actions：P→D 迁移由 _joint_decode
+        # 按决策行 prefill_decode_transfer 披露重放（源扣/目标加，W1
+        # 2026-09-27）；本键置 None 仅表示通用路径不消费。
         "decode_move": None,
         "completion_relocation_field": None,
         "eviction_count_fields": (),
@@ -501,6 +582,15 @@ REPO_VARIANTS: dict[str, dict] = {
         # 重放（_joint_completion_v2——零池写断言/方向交叉校验/home 迁移
         # 计数 joint_home_migration；remote-read PARTIAL 混合形态的准入
         # 池恢复后缀进期望工作副本基数）；无该字段的旧日志走 legacy。
+        # W2（2026-09-27，C4/D12 三位置形态）：decode 行
+        # prefill_decode_transfer 的无迁移边界披露（local_hit@新执行端、
+        # 字节 0、reason=boundary_rebuild_elsewhere/
+        # boundary_remote_no_migration）把 i_P 旧工作副本转来源侧记录
+        # （session 第三槽），completion 行按 winner/loser 位置集合做三位置
+        # 结算（_joint_completion_three_position——逐败者整份腿源扣/胜者加、
+        # 重建形态零载荷静默释放、胜者终态守恒 == f(final)、reverse ⟺
+        # 胜者=执行端的方向交叉校验）；两位置 forward/reverse/in_place
+        # 行为零改动（无来源槽时不进新分支）。
         #
         # C19（2026-09-22，C15 §25.7 登记的跨车道观察项裁置）：C8/C11/
         # C14 起决策日志新增的**非账本披露行**并入跳过词表——
@@ -515,6 +605,26 @@ REPO_VARIANTS: dict[str, dict] = {
         # 实证）。修法约束履行：仅本工具侧 kind 门扩容（C16 domain_
         # metrics 的非账本行静默跳过同款模式），C5 冻结 schema 与 SH
         # 零改动；词表仅挂 astra-sim-joint 映射，非 joint 仓零影响。
+        # M4（2026-09-26）：kv_eviction_done（逐出尾标记完成披露行，
+        # 与 kv_eviction 行按 decision.watch_id 配对得实际写回时长）同
+        # 款入表——账本侧逐出事件已在 kv_eviction 行重放，本行仅时间
+        # 线测量披露，跳过 = 零重放语义差。
+        # W3（2026-09-27，C6 纯度门拒收披露）：joint_sample_contended
+        # （ServiceFactors 争用样本拒收 + 观测窗口端口占用摘要）入表
+        # ——纯采样纯度披露，不载运任何 KV 账本事件；request_id 可为空
+        # （own_request_ids 空时发射面落 ""），跳过位于 request_id 门之
+        # 前故不需豁免。readplan_reconcile/readplan_settle 的占用语义
+        # 钉测见 test_hbm_watermark_staging_lease（同账本混插审计行逐
+        # 字节对拍 = 零占用差）。
+        # W4（2026-09-27，D 边界就地并基折叠）：decode 行 prefill_decode_
+        # transfer 的迁移腿落点 == base 槽实例 = workload 折叠形态
+        # （complete_copy_base_fold / remote_read_base_fold /
+        # increment_copy_home_u_only——base_* 转正/释放后清账，下一轮
+        # stash 是合法重建）——按迁移腿字节与 f(P) 的恒等式二分清账
+        # （完整型：重复基础副本释放；增量型：基础前缀就地转正并入、
+        # 增长基切完整上下文族），见 _apply_boundary_base_fold；折叠轮
+        # 的 completion 行 merge_direction=stay 与 base 槽在册互斥
+        # （未知形态 fail-closed）。钉测 test_hbm_watermark_base_fold。
         "joint": True,
         "joint_audit_kinds": (
             "joint_admission", "joint_admission_failed",
@@ -523,7 +633,51 @@ REPO_VARIANTS: dict[str, dict] = {
             "readplan_reconcile", "readplan_settle",
             "quota_oneshot_overflow", "merge_done",
             "link_telemetry_coverage", "joint_decision_metrics",
+            "kv_eviction_done",
+            "joint_sample_contended",
+            # G1（2026-09-27，sh30 D 边界决策行消费侧补词表）：
+            # boundary_duplicate_ignored / boundary_commit_fallback /
+            # boundary_terminal 是 sh30 生产端无条件落决策行的纯披露行
+            # （来源锚：sh30_online_scheduler._on_prefill_drain 落前两
+            # 行、_settle_terminal_at_boundary 落第三行）——duplicate 行
+            # 注释自证幂等忽略零账本副作用；terminal/fallback 的结算走
+            # 主账行（release/completion 等账本行重放），本行仅披露。
+            # 三行不载运任何 KV 账本事件，跳过 = 零重放语义差；缺词表时
+            # 消费端唯一顶层未知-kind 门会 fail-closed 误红。
+            "boundary_duplicate_ignored", "boundary_commit_fallback",
+            "boundary_terminal",
+            # W5（2026-09-29，§7.4 统一结算）：settle_done 是统一结算闭
+            # 合披露行（SETTLE_COMMITTED -> SETTLE_DONE；echo service_
+            # done_ns/merge_done_ns/载荷字节/策略）——纯审计行，KV 账
+            # 本走 completion 行 merge_direction v2 重放（与 merge_done
+            # 行同款），跳过 = 零重放语义差。
+            "settle_done",
+            # W9（2026-09-29，§7.4/§10）：distributed_directory_stats 是
+            # W9 目录开销 run 级披露行（条目峰值/逐会话逐轮来源面/目录
+            # 操作计数与累计墙时）——纯审计行，不载运 KV 账本事件，跳过
+            # = 零重放语义差。
+            "distributed_directory_stats",
+            # cfg1 补词表（2026-10-01 审查轮）：forecast_status 是预测引
+            # 擎收尾披露行（sh30_online_scheduler 的
+            # _joint_forecast_status_decision 在 run 末落行、request_id 恒
+            # 为空串）——背景预测引擎 disclosure 与 P/D 完成预测成熟账
+            # 的纯披露行，不载运 KV 账本事件，跳过 = 零重放语义差。缺
+            # 词表时消费端顶层"决策记录缺 request_id"门会 fail-closed
+            # 误红（任何正常 joint run 的水印重放必崩 exit 2）。
+            "forecast_status",
         ),
+        # W3（2026-09-27，C2/C3 KVStagingLease 生命周期行）：staging_
+        # lease_acquire / staging_lease_release 是**账本行**（非审计行）
+        # ——remote-read 双缓冲暂存的执行期 HBM 持有（D09/D20：准入/
+        # drain 两发射面，prefill_read 相与 decode 相各一 lease，身份 =
+        # "staging_lease:{request_id}#{boundary_epoch}"，字节 = 逐 rank
+        # staging_shard_bytes，持有实例 = exec_instance_index）。重放语
+        # 义见 WatermarkReplay.apply_staging_lease_acquire/release；
+        # run 末悬挂 lease fail-closed（WatermarkScan.finish）。不进
+        # joint_audit_kinds（那会静默丢字节），也不进下面的三 kind 主
+        # 门——consume() 在 kv_eviction 分支后按本词表分流。
+        "joint_lease_kinds": ("staging_lease_acquire",
+                              "staging_lease_release"),
     },
 }
 
@@ -699,6 +853,17 @@ def compute_capacity_calibers(model: SimpleNamespace, tp_degree: int,
     kv_shards_per_token = kv_cache_shard_bytes_for_tokens(model, 1, tp_degree)
     reserve_shards = kv_cache_shard_bytes_for_tokens(
         model, reserve_context_tokens, tp_degree)
+    # 负容量档门（2026-09-29，报告 4.3）：capacity < 任一 rank 的 weight
+    # shard 时 ⌊(capacity−weight)/kv⌋ 为负 → hard_tokens/limit 全为负值，
+    # journal 硬上限诊断随之全量误报。硬件容量装不下权重分片属配置矛盾，
+    # 走本函数既有的 ValueError 通道（调用方 warning + capacity_calibers=
+    # NA，绝不静默 clamp 出负上限）；journal 正式认证用行内 capacity_bytes，
+    # 不受本门影响。
+    if capacity_bytes_per_npu < max(weight_shards):
+        raise ValueError(
+            f"capacity_bytes_per_npu ({capacity_bytes_per_npu}) < 逐 rank "
+            f"weight shard 最大值 ({max(weight_shards)})——容量档装不下模型"
+            f"权重，拒绝产出负 hard_tokens/limit")
     # 0 头 shard（num_heads < tp_degree 的退化切分）不持有 KV，对 resident
     # 上限不构成约束——min 只在 kv>0 的 rank 上取。
     hard_tokens = min(
@@ -853,6 +1018,13 @@ def load_token_manifest(run_dir: Path, explicit: Optional[Path]) -> dict:
             for field in ("prefill_context_tokens", "final_context_tokens",
                           "history_tokens_before"):
                 value = entry.get(field)
+                # bool 冒充门（2026-09-29，报告 3.4）：isinstance(True, int)
+                # 为真，true 曾通过下方的 int 门按 1 token 放行——token 事实
+                # 被布尔值谎报。bool 显式拒绝，错误信息说明收到布尔值。
+                if isinstance(value, bool):
+                    fail(f"token manifest {request_id} {field} 收到布尔值"
+                         f"（{value!r}）——bool 是 int 子类但不是合法 "
+                         f"token 数，不放行（{candidate}）")
                 if not isinstance(value, int) or value < 0:
                     fail(f"token manifest {request_id} 缺非负整数 {field}"
                          f"（{candidate}）")
@@ -951,6 +1123,13 @@ def resolve_hardware_capacity(profile: str, explicit: Optional[Path]) -> dict:
         if not isinstance(entry, dict):
             fail(f"hardware 容量档 {profile!r} 结构错误：{candidate}")
         value = entry.get("bytes")
+        # bool 冒充门（2026-09-29，报告 3.4）：isinstance(True, int) 为真，
+        # capacity_bytes=true 曾按 1 字节容量放行 → journal 权威重放逐事件
+        # 判违规 → 正式物理违规判决（退出码 3）被布尔值错误触发。bool 显式
+        # 拒绝，错误信息说明收到布尔值。
+        if isinstance(value, bool):
+            fail(f"hardware 容量档 {profile!r}.bytes 收到布尔值（{value!r}）"
+                 f"——bool 是 int 子类但不是合法容量，不放行：{candidate}")
         if not isinstance(value, int) or value <= 0:
             fail(f"hardware 容量档 {profile!r}.bytes 非正整数：{candidate}")
         return {"path": str(candidate), "profile": profile, "bytes": value}
@@ -1077,6 +1256,20 @@ class _UnitLog:
             pair[0] += 1
             pair[1] += nbytes
 
+    def add_evict_row(self, tick: int, nbytes: int,
+                      new_event: bool) -> None:
+        """journal 逐出行记账（M-31 会话口径镜像，2026-09-30）：事件计数
+        仅在该行的会话是本事务内首次出现时 +1（同会话一次逐出跨 rank 落
+        多行，其余行只累加字节）；decision-log 路径的 add_evict（一次调用
+        =一个事件）不变。"""
+        pair = self.evicts.get(tick)
+        if pair is None:
+            self.evicts[tick] = [1 if new_event else 0, nbytes]
+        else:
+            if new_event:
+                pair[0] += 1
+            pair[1] += nbytes
+
     def stats(self) -> dict:
         duration = self.last_tick - self.first_tick
         evict_events = sum(pair[0] for pair in self.evicts.values())
@@ -1086,6 +1279,9 @@ class _UnitLog:
             "last_event_ns": self.last_tick,
             "duration_ns": duration,
             "peak_occupancy_bytes": self.peak,
+            # L18（2026-09-29）：单实例全部事件落在同一 tick（duration=0）
+            # 时面积分为 0，退化口径 mean := peak（该实例在唯一事件 tick
+            # 的占用即为峰；行为保留，仅补注记说明口径）。
             "mean_occupancy_bytes": (self.area / duration) if duration > 0
             else float(self.peak),
             "residual_occupancy_bytes": self.occupancy,
@@ -1158,6 +1354,10 @@ class ChangePointLog:
 
     def add_evict(self, tick: int, instance: int, nbytes: int) -> None:
         self._unit(instance).add_evict(tick, nbytes)
+
+    def add_evict_row(self, tick: int, instance: int, nbytes: int,
+                      new_event: bool) -> None:
+        self._unit(instance).add_evict_row(tick, nbytes, new_event)
 
     def has_events(self) -> bool:
         return any(unit.has_event for unit in self.units.values())
@@ -1264,10 +1464,24 @@ class SessionState:
     prefix_layers/base_prefix_layers = 驻留层前缀 [0, n) 的层数（None=
     未知）；prefill 行成功处理后建立，逐出条目逐条校验推进（连锁不变
     量，前缀未知而逐出到场 = fail-closed，宁爆不漏）。
+
+    W2（2026-09-27，joint C4/D12 三位置形态）：source_instance/source_
+    bytes = 边界第二来源槽（i_P 侧旧工作副本——decode 行
+    boundary_rebuild_elsewhere/boundary_remote_no_migration 无迁移披露建立，
+    三位置合并结算时清账）；boundary_kind = 该边界的执行面动作族
+    （"rebuild"=recompute 重建副本持完整并集 / "growth_only"=多源远读
+    仅 decode 增长），决定 decode 行增长口径与 completion 结算形态，
+    仅在来源槽建立至结算之间在册。
+
+    W4（2026-09-27，joint 边界折叠）：base 槽除合并结算（v2/three-
+    position）外另有折叠清账路径——D 边界迁移腿落 base 驻留实例的
+    就地并基（完整型释放重复副本 / 增量型前缀转正并入），清账后下一
+    轮跨实例 prefill 重新 stash 是合法重建（见 _apply_boundary_base_fold）。
     """
 
     __slots__ = ("instance", "bytes", "tokens", "base_instance",
-                 "base_bytes", "prefix_layers", "base_prefix_layers")
+                 "base_bytes", "prefix_layers", "base_prefix_layers",
+                 "source_instance", "source_bytes", "boundary_kind")
 
     def __init__(self) -> None:
         self.instance: Optional[int] = None
@@ -1277,6 +1491,9 @@ class SessionState:
         self.base_bytes: int = 0
         self.prefix_layers: Optional[int] = None
         self.base_prefix_layers: Optional[int] = None
+        self.source_instance: Optional[int] = None
+        self.source_bytes: int = 0
+        self.boundary_kind: Optional[str] = None
 
 
 class ReplayReport:
@@ -1292,6 +1509,10 @@ class ReplayReport:
             "silent_eviction_bytes": 0,
             "restore_prefix_reconciled": 0,
             "restore_prefix_reconcile_bytes": 0,
+            # R6-U4/R7-F4（2026-09-29 face 移植）：restore 改指目标实例时
+            # 占用随迁计数（LOCAL_HIT/0 字节臂）。
+            "restore_occupancy_relocated": 0,
+            "restore_occupancy_relocated_bytes": 0,
             # R17-2d 哨兵：kv_eviction 决策行逐条计数（reason 分桶键
             # evict_reason_kv_eviction:<reason> 动态写入）。
             "evict_entries_kv_eviction": 0,
@@ -1302,6 +1523,10 @@ class ReplayReport:
             "move_source_mismatch": 0, "local_hit_location_mismatch": 0,
             "evict_location_mismatch": 0,
             "evict_untracked_session": 0, "evict_exceeds_tracked": 0,
+            # R8-F3（2026-09-29 face 移植）：own_relocation 去向字段
+            # 缺席/枚举外值留痕计数。
+            "own_relocation_missing_location": 0,
+            "own_relocation_unknown_location": 0,
         }
         self.restore_ratio_hist: dict[str, int] = {}
 
@@ -1318,6 +1543,10 @@ class WatermarkReplay:
         self.coef = coef_bytes_per_token
         self.capacity = capacity_per_instance
         self.sessions: dict[str, SessionState] = {}
+        # W3（2026-09-27）：staging lease 在册表（request_id → 跟踪 lease
+        # 条目）——manager 同款"同请求同时至多一条在册"约束的镜像；
+        # run 末非空 = 悬挂 lease，fail-closed（finish）。
+        self.staging_leases: dict[str, dict] = {}
         # P1-②/④：事件/逐出标记直入变点日志（RLE），不再物化裸事件表；
         # stats 从变点归并时 O(动作数) 计算，与桶长解耦。
         self.cplog = ChangePointLog()
@@ -1363,6 +1592,13 @@ class WatermarkReplay:
         if session.base_instance is not None:
             fail(f"joint base stash on already-stashed session "
                  f"{session_id!r}——重复建立工作副本，账本与重放不一致")
+        if session.source_instance is not None:
+            # W2：来源槽在册（D 边界已把 i_P 旧副本转来源侧）而新 prefill
+            # 又要 stash base——两次边界之间无合并结算，合同违规（镜像
+            # face_scheduler 边界的第二来源守卫）。
+            fail(f"joint base stash on session {session_id!r} with a "
+                 f"pending boundary source ({session.source_instance})——"
+                 f"边界转记录后必须先经三位置合并结算，账本与重放不一致")
         session.base_instance = session.instance
         session.base_bytes = session.bytes
         session.base_prefix_layers = session.prefix_layers
@@ -1490,6 +1726,27 @@ class WatermarkReplay:
         self.report.actions["evictions"] += 1
         self.report.actions["evict_bytes"] += action["bytes"]
 
+    def _relocate_session_occupancy(self, tick: int, source: Optional[int],
+                                    target: int,
+                                    session: SessionState) -> bool:
+        """会话归属切实例时占用随迁（R6-U4/R7-F4，2026-09-29 face 移植）。
+
+        只改 session.instance 而不迁占用会让占用滞留 source、后续
+        grow/evict 记到 target——instances 占用与 instance 指向分裂
+        （source 侧幽灵占用 + target 侧账目错位）。无占用可迁时为空操作。
+        三态适配（joint）：随迁对象 = primary 槽跟踪 bytes（可为部分层
+        驻留），base/source 槽各有独立记账不受影响；prefix_layers 是会话
+        属性随 instance 指向自然跟随，不参与迁移。
+        """
+        if source is None or session.bytes <= 0:
+            return False
+        self._apply(tick, source, -session.bytes)
+        self._apply(tick, target, session.bytes)
+        self.report.actions["restore_occupancy_relocated"] += 1
+        self.report.actions["restore_occupancy_relocated_bytes"] += \
+            session.bytes
+        return True
+
     def apply_restore(self, action: dict, history_tokens: int) -> None:
         session = self._session(action["session"])
         target = action.get("target")
@@ -1537,6 +1794,11 @@ class WatermarkReplay:
                 self.report.anomalies["restore_bytes_mismatch"] += 1
             if source != target:
                 self.report.anomalies["local_hit_location_mismatch"] += 1
+                # R6-U4（2026-09-29 face 移植）：LOCAL_HIT 改指目标实例时
+                # 占用必须同步随迁，否则跟踪态分裂（占用滞留 source、
+                # 增长/逐出记到 target）。
+                self._relocate_session_occupancy(action["tick"], source,
+                                                 target, session)
             self.report.actions["restore_none"] += 1
             session.instance = target  # 会话归属目标实例（增长在目标发生）
             return
@@ -1554,6 +1816,11 @@ class WatermarkReplay:
             self.report.actions["restore_prefix_reconcile_bytes"] += excess
 
         if nbytes == 0:
+            if source != target:
+                # R7-F4（2026-09-29 face 移植）：0 字节 restore 与 LOCAL_HIT
+                # 同型——改指目标时占用必须随迁，否则幽灵占用滞留 source。
+                self._relocate_session_occupancy(action["tick"], source,
+                                                 target, session)
             self.report.actions["restore_none"] += 1
             session.instance = target  # 会话归属目标实例（增长在目标发生）
             return
@@ -1594,13 +1861,28 @@ class WatermarkReplay:
                  f"（tick={action['tick']}）——重放次序或账本缺失")
         source = session.instance
         nbytes = action["bytes"]
+        # mismatch 检查先于 stay 分支（R6-U3，2026-09-29 face 移植）：
+        # 0 字节跨实例（P≠D）交割此前在 stay 分支短路 return——占用滞留
+        # source + anomaly 零留痕（幽灵占用不可见）。检查前置后该情形留下
+        # move_bytes_mismatch 计数；stay 分支本身占用不变（同实例交割
+        # S1/S2 P==D 仍记 f(c)）。
+        if nbytes != self._expected_bytes(prefill_tokens):
+            self.report.anomalies["move_bytes_mismatch"] += 1
+        # D2（批次 D 镜像，2026-09-30）：跨实例零字节交割不再静默转移归属
+        # ——账本宣称没有迁移、但会话跟踪 bytes 仍挂在源实例且归属要切到
+        # 目标实例，源实例占用从此永不回收（R6-U3 的 anomaly 留痕不改变
+        # exit 0 的静默性，此处升为 fail-closed）；会话本无驻留
+        # （bytes==0）时仅实例归属切换，仍按 stay 计。
+        if nbytes == 0 and source != target and session.bytes > 0:
+            fail(f"decode 零字节交割但会话 {action['session']!r} 在源实例 "
+                 f"{source} 仍跟踪 {session.bytes} B（tick={action['tick']}，"
+                 f"目标实例 {target}）——账本宣称无迁移而驻留未清，源实例"
+                 f"占用将成幻影；拒绝重放")
         if source == target or nbytes == 0:
             # 同实例交割（S1/S2 P==D 时仍记 f(c)）：占用不变。
             self.report.actions["decode_stay"] += 1
             session.instance = target
             return
-        if nbytes != self._expected_bytes(prefill_tokens):
-            self.report.anomalies["move_bytes_mismatch"] += 1
         logged_source = action.get("logged_source")
         if logged_source is not None and logged_source != source:
             self.report.anomalies["move_source_mismatch"] += 1
@@ -1664,7 +1946,123 @@ class WatermarkReplay:
                          f"{per_layer} 余 {rem2}，tick={tick}）——fail-closed")
                 session.prefix_layers = layers_local
             self.report.actions["own_relocation_partial_unknown"] += 1
-        # local_hbm：保留，无事。
+        elif location == "local_hbm":
+            pass  # 驻留本地：保留，无事。
+        elif location is None:
+            # 字段缺席（生产方未序列化）：不得静默按驻留本地处理——补
+            # 计数留痕（与 R7-F8 修复面对齐：缺字段≠local_hbm）。
+            # R8-F3（2026-09-29 face 移植）。
+            self.report.anomalies["own_relocation_missing_location"] += 1
+        else:
+            # 枚举（local_hbm/partial_hbm_remote/remote_memory）外的值
+            # 拒绝静默按 local_hbm no-op——anomaly 留痕
+            # （R8-F3，2026-09-29 face 移植）。
+            self.report.anomalies["own_relocation_unknown_location"] += 1
+
+    # -- W3（2026-09-27）：KVStagingLease 执行期持有重放（joint） ----------
+
+    def apply_staging_lease_acquire(self, request_id: str, decision: dict,
+                                    tick: int, where: str) -> None:
+        """staging_lease_acquire 行重放——exec 实例逐 rank 暂存字节加持有。
+
+        符号锚（face_scheduler.acquire_staging_lease / KVStagingLease，
+        2026-09-27 在盘核对）：
+          * 身份 = ``"staging_lease:{request_id}#{boundary_epoch}"``
+            （D20 边界阶段 epoch）；lease_id 与请求头/epoch 的复合身份
+            失配 = 账本行破损，fail-closed。
+          * 字节 = 逐 rank ``staging_shard_bytes``（manager 侧要求每 rank
+            正整数、条数 == tp_degree；重放按实例合计入账——decision-log
+            路径本就实例粒度（coef 同口径），per-rank 值经元组整存以支撑
+            幂等重取的字节级比对）。``staging_tile_tokens`` 正整数（tile
+            协议参数，无占用语义，仅随 lease 记账）。可选 ``phase``
+            （"prefill_read"=准入相读流 lease）/``scans_per_window`` 为
+            发射面审计字段，重放不消费。
+          * 幂等镜像：同请求在册 lease 且 (lease_id, 实例, 逐 rank 字节,
+            tile) 完全一致 → manager 原样返回不重复入账，重放零 delta
+            （boundary 在途 ack 重放的二次发射面）；在册而 lease_id/条款
+            失配 → manager 侧即 double-hold/条款冲突 RuntimeError，重放
+            同判 fail-closed（宁爆不漏——日志面无法区分"真双持"与"静默
+            回滚后换条款再取"，后者按 fail-closed 拒收）。
+        """
+        lease_id = decision.get("lease_id")
+        if not isinstance(lease_id, str) or not lease_id:
+            fail(f"{where}: staging_lease_acquire 缺非空 lease_id")
+        epoch = decision.get("boundary_epoch")
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+            fail(f"{where}: staging_lease_acquire 缺非负整数 boundary_epoch"
+                 f"（实得 {epoch!r}）")
+        expected_id = f"staging_lease:{request_id}#{epoch}"
+        if lease_id != expected_id:
+            fail(f"{where}: lease_id {lease_id!r} != 复合身份 "
+                 f"{expected_id!r}——请求头与 lease 身份不一致，账本破损")
+        instance = decision.get("exec_instance_index")
+        if isinstance(instance, bool) or not isinstance(instance, int) \
+                or instance < 0:
+            fail(f"{where}: staging_lease_acquire 缺非负整数 "
+                 f"exec_instance_index（实得 {instance!r}）")
+        shards = decision.get("staging_shard_bytes")
+        if not isinstance(shards, list) or not shards:
+            fail(f"{where}: staging_lease_acquire 缺非空 "
+                 f"staging_shard_bytes 数组")
+        for value in shards:
+            if isinstance(value, bool) or not isinstance(value, int) \
+                    or value <= 0:
+                fail(f"{where}: staging_lease_acquire 逐 rank 字节必须为"
+                     f"正整数（实得 {value!r}）——manager 侧同判")
+        tile_tokens = decision.get("staging_tile_tokens")
+        if isinstance(tile_tokens, bool) or not isinstance(tile_tokens, int) \
+                or tile_tokens <= 0:
+            fail(f"{where}: staging_lease_acquire 缺正整数 "
+                 f"staging_tile_tokens（实得 {tile_tokens!r}）")
+        terms = (lease_id, instance, tuple(shards), tile_tokens)
+        live = self.staging_leases.get(request_id)
+        if live is not None:
+            if tuple(live["terms"]) == terms:
+                # 幂等重取（manager 返回同 lease 不再入账）——零 delta。
+                self.report.actions["staging_lease_acquire_idempotent"] = (
+                    self.report.actions.get(
+                        "staging_lease_acquire_idempotent", 0) + 1)
+                return
+            fail(f"{where}: 请求 {request_id!r} 已持 lease "
+                 f"{live['terms'][0]!r}（instance={live['terms'][1]}, "
+                 f"bytes={list(live['terms'][2])}）又取条款失配的 "
+                 f"{lease_id!r}（instance={instance}, bytes={shards}）——"
+                 f"同请求双持/条款冲突，manager 侧即 fail-closed，"
+                 f"账本与重放不一致")
+        total = sum(shards)
+        self.staging_leases[request_id] = {"terms": terms}
+        self._apply(tick, instance, total)
+        self.report.actions["staging_lease_acquire"] = (
+            self.report.actions.get("staging_lease_acquire", 0) + 1)
+        self.report.actions["staging_lease_acquire_bytes"] = (
+            self.report.actions.get("staging_lease_acquire_bytes", 0)
+            + total)
+
+    def apply_staging_lease_release(self, request_id: str, decision: dict,
+                                    tick: int, where: str) -> None:
+        """staging_lease_release 行重放——在册 lease 逐 rank 字节减持有。
+
+        发射面（sh30._release_staging_lease）只在 manager 真删（返回
+        True）且 tick 非 None 时落行；行内仅 ``reason``（注销路三束：
+        最后 credit tile 消费/完成结算/异常回滚——审计字段，不载运字节，
+        扣减量取 acquire 行跟踪态）。无在册 lease 的 release 行 = 发射面
+        不可产出的形态（manager 幂等空放不落行），fail-closed。"""
+        reason = decision.get("reason")
+        if not isinstance(reason, str) or not reason:
+            fail(f"{where}: staging_lease_release 缺非空 reason")
+        live = self.staging_leases.get(request_id)
+        if live is None:
+            fail(f"{where}: 请求 {request_id!r} 的 staging_lease_release "
+                 f"无在册 lease（reason={reason!r}）——发射面只对真删落行，"
+                 f"账本与重放不一致")
+        lease_id, instance, shards, _tile = live["terms"]
+        del self.staging_leases[request_id]
+        self._apply(tick, instance, -sum(shards))
+        self.report.actions["staging_lease_release"] = (
+            self.report.actions.get("staging_lease_release", 0) + 1)
+        self.report.actions["staging_lease_release_bytes"] = (
+            self.report.actions.get("staging_lease_release_bytes", 0)
+            + sum(shards))
 
 
 # ---------------------------------------------------------------------------
@@ -1739,6 +2137,30 @@ class WatermarkScan:
                 bucket = f"evict_reason_kv_eviction:{action.get('reason')}"
                 replay.report.actions[bucket] = (
                     replay.report.actions.get(bucket, 0) + 1)
+            return
+        if kind in mapping.get("joint_lease_kinds", ()) \
+                and mapping.get("joint"):
+            # W3（2026-09-27）：staging lease 账本行——执行期 HBM 持有，
+            # 必须在未知 kind 门之前分流（同 kv_eviction 模式：同请求可
+            # 多对 acquire/release（prefill_read 相与 decode 相各一），
+            # 不经 seen_kinds 去重；不查 token manifest——lease 先于准入
+            # 事务发射，触发请求在飞；分支自行承担 tick 单调检查，不绕
+            # 过次序纪律）。
+            decision = record.get("decision") or {}
+            tick = record.get("tick")
+            if not isinstance(tick, int) or tick < 0:
+                fail(f"{where}: 缺非负整数 tick")
+            if tick < self.last_tick:
+                fail(f"{where}: tick 回退（{tick} < {self.last_tick}，"
+                     f"kind={kind}）——文件顺序与时间顺序不一致，"
+                     f"无法安全重放")
+            self.last_tick = tick
+            if kind == "staging_lease_acquire":
+                replay.apply_staging_lease_acquire(
+                    request_id, decision, tick, where)
+            else:
+                replay.apply_staging_lease_release(
+                    request_id, decision, tick, where)
             return
         if kind not in ("prefill", "decode", "completion"):
             fail(f"{where}: 未知 kind={kind!r}")
@@ -1928,12 +2350,48 @@ class WatermarkScan:
 
     def _joint_decode(self, replay, decision, tick, session_id, token_row,
                       joint_action) -> None:
-        """R12：joint decode 行——remote-read 工作副本增长基 = input+decode
-        （= final − history）；其余动作 = final_context。P==D 恒同实例。"""
+        """joint decode 行——先 P→D 迁移、后 D 增长（manager 次序：先
+        move_prefill_to_decode 再 expand_decode）。
+
+        P→D 跨实例迁移：决策行 ``prefill_decode_transfer`` 披露搬移时
+        （noc_migrate 携 source_instance_index+total_bytes），把 P 阶段
+        工作副本从源实例扣、目标实例加——见
+        ``_apply_prefill_decode_move``。缺此步会把工作副本留在源实例成
+        幻影，完成结算在目标实例多扣 → 负占用 fail-closed。
+
+        增长口径：remote-read 工作副本增长基 = input+decode（= final −
+        history）；其余动作 = final_context。
+
+        W2（2026-09-27，C4 三位置边界后的增长基，按 D18 边界动作族）：
+        来源槽在册（本行边界刚建立）时按 boundary_kind 覆盖——重建
+        （rebuild）j 侧副本自 0 物化至完整终上下文；多源远读
+        （growth_only）j 侧仅承载 decode 增量（= final − prefill_context，
+        input 留 i_P 来源侧）。无来源槽的行为与 W1 逐位一致。
+
+        W4（2026-09-27，边界折叠后的增长基）：迁移腿落 base 驻留实例的
+        就地并基折叠把工作副本口径并回完整上下文族——增量型折叠
+        （工作副本 = S+U）并基后 session.bytes = f(prefill_context)，增长
+        基随之切 final_context；完整型折叠工作副本本就是 f(P)，增长基
+        不变。"""
         target = decision.get("decode_instance_index")
+        if not isinstance(target, int):
+            fail(f"joint decode 决策缺整数 decode_instance_index"
+                 f"（session={session_id!r}, got={target!r}）")
         session = replay._session(session_id)
-        session.instance = target
-        if joint_action == "remote-read":
+        self._apply_prefill_decode_move(
+            replay, decision, tick, session_id, target, session)
+        fold_kind = self._apply_boundary_base_fold(
+            replay, decision, tick, session_id, token_row, session)
+        if fold_kind == "increment":
+            # 折叠并基后工作副本 = f(P)（完整上下文族），增长基 = final。
+            grow_tokens = token_row["final_context_tokens"]
+        elif session.boundary_kind == "rebuild":
+            grow_tokens = token_row["final_context_tokens"]
+        elif session.boundary_kind == "growth_only":
+            grow_tokens = max(
+                0, token_row["final_context_tokens"]
+                - token_row["prefill_context_tokens"])
+        elif joint_action == "remote-read":
             grow_tokens = max(
                 0, token_row["final_context_tokens"]
                 - token_row["history_tokens_before"])
@@ -1941,6 +2399,236 @@ class WatermarkScan:
             grow_tokens = token_row["final_context_tokens"]
         replay.apply_grow(tick, session_id, target, grow_tokens,
                           "decode_grow")
+
+    @staticmethod
+    def _apply_prefill_decode_move(replay, decision, tick, session_id,
+                                   target, session) -> None:
+        """P→D 迁移重放（对齐 move_prefill_to_decode 的占用语义）。
+
+        * 跨实例（noc_migrate/prefill_decode_instance_migrate）：manager
+          搬走 session 全量本地 KV（字节按完整驻留上下文派生），故披露
+          bytes 必须与重放跟踪的工作副本逐字节相等——少搬即源实例幻影、
+          多搬即凭空字节，均 fail-closed；源端还须与跟踪实例一致。
+        * 同实例（local_hit/prefill_decode_local_reuse）：交割字节为信息
+          量（S1 同款口径），占用不变；跟踪实例与披露实例矛盾即账本
+          破损。
+        * 无披露：仅跟踪态无驻留或已在目标实例才允许无搬移；跨实例而
+          无披露 = 迁移字节未落盘，拒绝静默漏记。"""
+        transfer = decision.get("prefill_decode_transfer")
+        if transfer is None:
+            if session.instance is not None and session.instance != target:
+                fail(f"joint decode 跨实例（{session.instance}→{target}）"
+                     f"但决策行无 prefill_decode_transfer 披露"
+                     f"（session={session_id!r}, tick={tick}）——P→D 迁移"
+                     f"字节必须落盘，拒绝静默漏记")
+            return
+        if not isinstance(transfer, dict):
+            fail(f"joint decode prefill_decode_transfer 结构非法"
+                 f"（session={session_id!r}, "
+                 f"got {type(transfer).__name__}）")
+        source = transfer.get("source_instance_index")
+        kind = transfer.get("kind")
+        if source == target:
+            if kind != "local_hit":
+                fail(f"joint decode 同实例交割（instance={source!r}）携带 "
+                     f"kind={kind!r}（session={session_id!r}, "
+                     f"tick={tick}）——与交割语义矛盾")
+            if session.instance is not None and session.instance != source:
+                # W2（2026-09-27，C4/D19 三位置边界）：local_hit 披露的
+                # source 是**新执行端 j**（face_scheduler 边界事务先零化
+                # 会话再产 local_hit，字节恒 0），而跟踪主副本仍在 i_P——
+                # 无迁移边界形态：旧工作副本不搬、留 i_P 转来源侧记录，
+                # j 侧新副本零化起步（rebuild/growth_only 由增长钩子物化）。
+                # reason 词表 = face_scheduler 边界事务的两个 j≠i_P 无迁移
+                # kind；其他 reason 保持原 fail（宁爆不漏）。
+                reason = transfer.get("reason")
+                nbytes0 = transfer.get("total_bytes")
+                if (reason in ("boundary_rebuild_elsewhere",
+                               "boundary_remote_no_migration")
+                        and isinstance(nbytes0, int) and nbytes0 == 0):
+                    if session.source_instance is not None:
+                        fail(f"joint decode 边界重复建立来源侧（session="
+                             f"{session_id!r}，已有来源 {session.source_instance}"
+                             f"，tick={tick}）——两次边界之间无合并结算，"
+                             f"合同违规")
+                    if decision.get("joint_action") == "copy":
+                        # R9（修复轮三，2026-09-27）镜像：P=copy 交接轮的
+                        # D 边界无迁移——face_scheduler 在边界转记录点先
+                        # 闭合 C13 journal（home 侧物理留存已随逐块交接在
+                        # 轮内释放完，journal 闭合断言 H_home=0）再按
+                        # pool-only 基同科目把 base_* **重录到 i_P**：旧工
+                        # 作副本转 base 记账、不建来源槽，轮末 merge 退化
+                        # 常规两位置（base@i_P 对 exec 增量/重建）。W2 的
+                        # 来源侧三位置模型对本形态不成立（实测 combo_none
+                        # session_2：stale base@3 ＋ 误建 source@0 使
+                        # forward 胜者误裁到 stale base，败者 0 无 noc 腿
+                        # fail-closed）。stale base 槽释放 = journal home
+                        # 侧逐块释放的重放镜像（上界口径滞留至闭合点统一
+                        # 释放；去重释放非容量逐出，不记 evict 标记，审计
+                        # 量走 actions 计数器——W4 折叠点同科目）。
+                        stale_base = session.base_instance
+                        stale_bytes = session.base_bytes
+                        if stale_base is not None and stale_bytes:
+                            replay._apply(tick, stale_base, -stale_bytes)
+                            replay.report.actions[
+                                "joint_copy_handoff_base_release"] = (
+                                    replay.report.actions.get(
+                                        "joint_copy_handoff_base_release",
+                                        0) + 1)
+                            replay.report.actions[
+                                "joint_copy_handoff_base_release_bytes"] = (
+                                    replay.report.actions.get(
+                                        "joint_copy_handoff_base_release_"
+                                        "bytes", 0) + stale_bytes)
+                        session.base_instance = session.instance
+                        session.base_bytes = session.bytes
+                        session.base_prefix_layers = session.prefix_layers
+                        session.instance = None
+                        session.bytes = 0
+                        session.tokens = 0
+                        # 边界即设全层驻留前缀（同 W2：manager 零化同点置
+                        # resident_prefix_layers = model.layers）。
+                        session.prefix_layers = (
+                            replay.mapping.get("model_layers"))
+                        session.boundary_kind = (
+                            "rebuild" if reason == "boundary_rebuild_elsewhere"
+                            else "growth_only")
+                        replay.report.actions[
+                            "joint_boundary_base_rerecord"] = (
+                                replay.report.actions.get(
+                                    "joint_boundary_base_rerecord", 0) + 1)
+                        return
+                    session.source_instance = session.instance
+                    session.source_bytes = session.bytes
+                    replay.report.actions["joint_boundary_source_stash"] = (
+                        replay.report.actions.get(
+                            "joint_boundary_source_stash", 0) + 1)
+                    replay.report.actions[
+                        "joint_boundary_source_stash_bytes"] = (
+                            replay.report.actions.get(
+                                "joint_boundary_source_stash_bytes", 0)
+                            + session.bytes)
+                    session.instance = None
+                    session.bytes = 0
+                    session.tokens = 0
+                    # 边界即设全层驻留前缀（manager 在零化同点置
+                    # resident_prefix_layers = model.layers；重建/增量
+                    # 均为全层跨度增长）。
+                    session.prefix_layers = (
+                        replay.mapping.get("model_layers"))
+                    session.boundary_kind = (
+                        "rebuild" if reason == "boundary_rebuild_elsewhere"
+                        else "growth_only")
+                    return
+                fail(f"joint decode 同实例交割披露 instance={source} != 跟踪"
+                     f"实例 {session.instance}（session={session_id!r}, "
+                     f"tick={tick}）——账本与重放不一致")
+            return
+        if not isinstance(source, int):
+            fail(f"joint decode 跨实例迁移缺整数 source_instance_index"
+                 f"（session={session_id!r}, got {source!r}）")
+        if kind != "noc_migrate":
+            fail(f"joint decode 跨实例迁移（{source}→{target}）携带 "
+                 f"kind={kind!r}（session={session_id!r}, tick={tick}）"
+                 f"——与搬移语义矛盾")
+        nbytes = transfer.get("total_bytes")
+        if not isinstance(nbytes, int) or nbytes < 0:
+            fail(f"joint decode 迁移 total_bytes 必须为非负整数"
+                 f"（session={session_id!r}, got {nbytes!r}）")
+        if session.instance is None:
+            fail(f"joint decode 迁移时会话 {session_id!r} 无跟踪实例"
+                 f"（tick={tick}）——重放次序或账本缺失")
+        if session.instance != source:
+            fail(f"joint decode 迁移披露源端 {source} != 跟踪工作副本实例 "
+                 f"{session.instance}（session={session_id!r}, "
+                 f"tick={tick}）——账本与重放不一致")
+        if nbytes != session.bytes:
+            fail(f"joint decode 迁移 bytes {nbytes} != 会话跟踪工作副本 "
+                 f"{session.bytes}（session={session_id!r}, tick={tick}）"
+                 f"——move_prefill_to_decode 整份搬移全量本地 KV，"
+                 f"少搬/多搬均属账本与重放不一致")
+        replay._apply(tick, source, -nbytes)
+        replay._apply(tick, target, nbytes)
+        session.instance = target
+        replay.report.actions["joint_decode_move"] = (
+            replay.report.actions.get("joint_decode_move", 0) + 1)
+        replay.report.actions["joint_decode_move_bytes"] = (
+            replay.report.actions.get("joint_decode_move_bytes", 0) + nbytes)
+
+    def _apply_boundary_base_fold(self, replay, decision, tick, session_id,
+                                  token_row, session):
+        """W4（2026-09-27，D 边界就地并基折叠的词表补齐）：迁移腿落点
+        == base 驻留实例 → workload 侧三种折叠（complete_copy_base_fold /
+        remote_read_base_fold / increment_copy_home_u_only）都把 base_* 记
+        录清账（基础转正或重复副本释放），下一轮跨实例 prefill 重新
+        stash base 是合法重建——重放必须在折叠点同步清 base 槽。
+
+        占用语义按迁移腿字节 W 与 f(prefill_context) 的恒等式二分（镜像
+        face_scheduler 折叠分支的字节守恒；两式均不成立 = 未演练词表，
+        fail-closed）：
+          * W == f(P)（完整型工作副本并基）：home 侧基础副本已释放
+            （逐块交接轮内释放 / 折叠点就地释放），重放在折叠点扣减
+            base 槽字节；工作副本口径不变（本就 = f(P)）。
+          * W + base_bytes == f(P)（增量型工作副本并基）：基础前缀就地
+            转正并入工作副本（字节已在位，占用不动），session.bytes 并
+            至 f(P)；返回 "increment" 供调用方把 decode 增长基切到完整
+            上下文族（仍按增量域增长会把折叠后的全上下文当收缩）。
+
+        无迁移腿（local_hit/无披露）或落点 != base 槽实例：非折叠形态，
+        返回 None 零行为差。"""
+        transfer = decision.get("prefill_decode_transfer")
+        if (session.base_instance is None
+                or not isinstance(transfer, dict)
+                or transfer.get("kind") != "noc_migrate"):
+            return None
+        if decision.get("decode_instance_index") != session.base_instance:
+            return None
+        target = session.base_instance
+        moved = transfer.get("total_bytes")
+        if not isinstance(moved, int) or moved < 0:
+            # 迁移腿字节结构校验已由 _apply_prefill_decode_move 完成；
+            # 此处防御性复核（折叠恒等式不得建立在破损披露上）。
+            fail(f"joint 边界折叠迁移腿 total_bytes 必须为非负整数"
+                 f"（session={session_id!r}, got={moved!r}）")
+        full_context = replay._expected_bytes(
+            token_row["prefill_context_tokens"])
+        base_instance = session.base_instance
+        base_bytes = session.base_bytes
+        if moved == full_context:
+            # 完整型并基：重复基础副本释放——折叠点扣减、清槽（去重释
+            # 放非容量逐出，不记 evict 标记；审计量走 actions 计数器）。
+            if base_bytes:
+                replay._apply(tick, base_instance, -base_bytes)
+            replay.report.actions["joint_boundary_base_fold"] = (
+                replay.report.actions.get("joint_boundary_base_fold", 0) + 1)
+            replay.report.actions["joint_boundary_base_fold_release_bytes"] = (
+                replay.report.actions.get(
+                    "joint_boundary_base_fold_release_bytes", 0) + base_bytes)
+            self._clear_base_slot(session, replay)
+            return "complete"
+        if moved + base_bytes == full_context:
+            # 增量型并基：基础前缀就地转正——字节并入、占用不动、清槽。
+            session.bytes += base_bytes
+            replay.report.actions["joint_boundary_base_fold"] = (
+                replay.report.actions.get("joint_boundary_base_fold", 0) + 1)
+            replay.report.actions["joint_boundary_base_fold_absorb_bytes"] = (
+                replay.report.actions.get(
+                    "joint_boundary_base_fold_absorb_bytes", 0) + base_bytes)
+            self._clear_base_slot(session, replay)
+            return "increment"
+        fail(f"joint 边界迁移腿落 base 驻留实例但字节恒等式不成立"
+             f"（session={session_id!r}, moved={moved}, base={base_bytes},"
+             f" f(P)={full_context}）——未演练折叠词表，拒绝静默抹账")
+
+    @staticmethod
+    def _clear_base_slot(session, replay) -> None:
+        """折叠清 base 槽：base 三字段归零/None，primary 前缀转全层
+        （折叠产物恒为本地完整上下文，镜像 manager 折叠点的
+        resident_prefix_layers = model.layers）。"""
+        session.base_instance = None
+        session.base_bytes = 0
+        session.base_prefix_layers = None
+        session.prefix_layers = replay.mapping.get("model_layers")
 
     def _joint_completion(self, replay, decision, tick, session_id,
                           token_row, joint_action) -> None:
@@ -1965,13 +2653,53 @@ class WatermarkScan:
             self._joint_completion_v2(
                 replay, decision, tick, session_id, token_row, direction)
             return
+        if direction == "distributed":
+            # W9（§7.4，2026-09-29）：目录提交型结算——零物理归并，全部
+            # 位置字节原样保留（base/来源/旧 primary 转跨轮留存，下一轮
+            # 可换址新起）。**水印重放的会话状态机是单 primary + base +
+            # source 三槽模型**：distributed 跨轮留存的多位置布局（>3 位
+            # 置、换址新起 primary）超出该模型——本重放器对 distributed
+            # run 显式 fail-closed（不出 certified 水印；仿真正确性由
+            # KVCacheManager 侧目录守恒/rank 台账对账裁决），多位置重放
+            # 状态机登记为 W10/W11 遗留。拒收信息携带精确诊断（不静默
+            # 忽略分布式事件——§10.2"未知不得默认忽略后仍出 certified
+            # 结论"）。
+            fail(
+                f"joint completion merge_direction=distributed（session="
+                f"{session_id!r}）：水印重放器的三槽会话模型不支持目录"
+                "提交型结算的跨轮多位置布局（retained 位置 + 换址新起"
+                " primary）——distributed run 不出 certified 水印（W9 已"
+                "知边界，W10/W11 多位置重放状态机遗留）；仿真正确性由 "
+                "KVCacheManager 目录守恒与 rank 台账对账裁决")
         if direction == "stay":
             session = replay._session(session_id)
+            if session.source_instance is not None:
+                # W2：三位置来源槽只能由 merge v2 结算清账——stay 本地提交
+                # 与来源侧在册互斥（边界动作族必产工作副本）。
+                fail(f"joint completion merge_direction=stay 但来源侧在册"
+                     f"（session={session_id!r}, 来源 {session.source_instance}"
+                     f"）——三位置结算不得走 stay 本地提交，账本与重放不一致")
+            if session.base_instance is not None:
+                # W4：stay 本地提交 = 无工作副本的单驻留形态——base 槽在册
+                # 说明跨实例工作副本的折叠清账没有在 D 边界词表内表达，
+                # 未知形态显式拒收（下一轮 stash 会在册守卫处再爆，宁在此
+                # 早爆，账本定位更准）。
+                fail(f"joint completion merge_direction=stay 但 base 槽在册"
+                     f"（session={session_id!r}, base {session.base_instance}"
+                     f"）——折叠清账必须经 D 边界迁移腿词表表达，"
+                     f"账本与重放不一致")
             session.tokens = token_row["final_context_tokens"]
             replay.report.actions["joint_merge_stay"] = (
                 replay.report.actions.get("joint_merge_stay", 0) + 1)
             return
         session = replay._session(session_id)
+        if session.source_instance is not None:
+            # W2：来源槽在册（D 边界无迁移披露）而完成行无 merge_direction
+            # ——三位置结算必须有 v2 方向披露，legacy 增量归并口径不覆盖
+            # 三位置形态，显式拒收（拒绝 legacy 抹账）。
+            fail(f"joint completion 缺 merge_direction 但来源侧在册"
+                 f"（session={session_id!r}, 来源 {session.source_instance}"
+                 f"）——三位置合并必须走 merge v2 披露重放")
         merge_home = (
             session.base_instance
             if session.base_instance is not None
@@ -2115,8 +2843,17 @@ class WatermarkScan:
         I6 断言：merge 事务不得出现本会话 remote_store（合并零池写）；
         noc 方向按 source_instance_index 与胜者/败者实例交叉校验。
         终态恒全层 LOCAL@胜者（prefix = model_layers）。
+
+        W2（2026-09-27，C4/D12）：来源槽在册（D 边界无迁移披露）时本方
+        法分流到 ``_joint_completion_three_position``——三位置确定性合并
+        （base/source/exec 少并多）有独立的方向裁决与守恒断言；两位置
+        forward/reverse/in_place 路径零改动。
         """
         session = replay._session(session_id)
+        if session.source_instance is not None:
+            self._joint_completion_three_position(
+                replay, decision, tick, session_id, token_row, direction)
+            return
         exec_instance = session.instance
         base_instance = session.base_instance
         if direction == "forward" and base_instance is None:
@@ -2238,6 +2975,11 @@ class WatermarkScan:
         session.base_instance = None
         session.base_bytes = 0
         session.base_prefix_layers = None
+        # R9 镜像（2026-09-27）：P=copy 交接轮的 D 边界 base 重录把
+        # boundary_kind 设为增长基信号而不建来源槽（常规 v2 结算清账）
+        # ——此处同步清账，维持"boundary_kind 在每次合并结算点归零"的
+        # 生命周期不变量（残留会污染下一轮 decode 增长基裁决）。
+        session.boundary_kind = None
         session.tokens = token_row["final_context_tokens"]
         if direction == "forward":
             replay.report.actions["joint_merge_forward"] = (
@@ -2245,6 +2987,248 @@ class WatermarkScan:
             replay.report.actions["joint_merge_forward_bytes"] = (
                 replay.report.actions.get(
                     "joint_merge_forward_bytes", 0) + noc_bytes)
+        if decision.get("home_flipped_to") is not None:
+            replay.report.actions["joint_home_migration"] = (
+                replay.report.actions.get("joint_home_migration", 0) + 1)
+        replay.report.actions["joint_merge_settle"] = (
+            replay.report.actions.get("joint_merge_settle", 0) + 1)
+
+    def _joint_completion_three_position(
+            self, replay, decision, tick, session_id, token_row,
+            direction) -> None:
+        """W2（2026-09-27，C4/D12 三位置确定性合并重放）。
+
+        跟踪面 = {(base), source, exec} 三位置：source = i_P 侧旧工作副本
+        （decode 行 boundary_rebuild_elsewhere/boundary_remote_no_migration
+        无迁移披露建立）；base = 跨实例工作副本的 home 侧 stash（LOCAL/
+        PARTIAL 基；REMOTE 基不成位置，manager 侧不会产生来源槽）。
+        占用语义与 face_scheduler._merge_back_three_position 同构：
+
+        * 多源形态（growth_only）：逐败者一腿 noc 整份搬入胜者（腿字节 =
+          该位置跟踪全量——镜像 W1 整份搬移口径），胜者 = 腿字节合计的
+          接收端；方向 reverse ⟺ 胜者 = exec，否则 forward。
+        * 重建形态（rebuild，exec 持完整并集）：零传输（合并账
+          zero_byte_flip），败者重复副本直接释放；胜者恒 = exec（reverse）。
+          重合持有者唯一合法形态 = 重建×base 与 exec 同实例（recompute@
+          基础驻留端：重建副本持并集、覆盖 base 的 token 域，同实例
+          base 记录是重复副本，零载荷就地释放——镜像 manager 的
+          coincident-holders 豁免）；其余任何重合仍 fail-closed。
+
+        胜者裁决（决策行无显式 winner_instance 披露，home_flipped_to 仅在
+        home 迁移时落胜者）：reverse → exec；forward → home_flipped_to，
+        缺省 = base 记账位（= home；home 不迁且胜者非 exec 的唯一形态）。
+        守恒：胜者终态字节 == coef(final_context_tokens)（manager 结算守恒
+        断言的镜像：base_history + source_history + context == final）。
+        I6 同 v2：本会话 remote_store 即 fail；他人 victim 逐出归胜者侧。
+        """
+        session = replay._session(session_id)
+        exec_instance = session.instance
+        source_instance = session.source_instance
+        if exec_instance is None:
+            fail(f"three-position merge 无执行端工作副本记账"
+                 f"（session={session_id!r}）——账本与重放不一致")
+        if source_instance is None:  # 分派守卫的镜像（不可达，防御）
+            fail(f"three-position merge 无来源侧记账"
+                 f"（session={session_id!r}）——分派与跟踪态不一致")
+        if direction == "in_place":
+            fail(f"three-position merge 方向披露 in_place"
+                 f"（session={session_id!r}）——三位置结算必有胜者，与"
+                 f"无主就地语义矛盾")
+        rebuild = session.boundary_kind == "rebuild"
+        # 位置登记（base 可缺省——REMOTE 基形态；重合守卫镜像 manager 的
+        # coincident-holders 断言，唯一放行重合 = 重建×base 与 exec 同实
+        # 例：重建副本持完整并集、已覆盖 base 的 token 域，同实例 base
+        # 记录是重复副本——不占位置，结算时零载荷就地释放；其余任何
+        # 重合（含非重建的 base==exec、base==source、source==exec）仍
+        # fail-closed）。
+        positions: dict[int, int] = {}
+        duplicate_base_bytes = 0
+        if session.base_instance is not None:
+            if rebuild and session.base_instance == exec_instance:
+                duplicate_base_bytes = session.base_bytes
+            else:
+                positions[session.base_instance] = session.base_bytes
+        for side, nbytes in ((source_instance, session.source_bytes),
+                             (exec_instance, session.bytes)):
+            if side in positions:
+                fail(f"three-position merge 位置重合（instance={side}，"
+                     f"session={session_id!r}）——边界迁移合同违规，"
+                     f"账本与重放不一致")
+            positions[side] = nbytes
+        # ---- 胜者裁决 + 方向交叉校验。----
+        home_flipped_to = decision.get("home_flipped_to")
+        if home_flipped_to is not None \
+                and not isinstance(home_flipped_to, int):
+            fail(f"three-position merge home_flipped_to 非整数"
+                 f"（session={session_id!r}, got={home_flipped_to!r}）")
+        if direction == "reverse":
+            winner = exec_instance
+            if home_flipped_to is not None and home_flipped_to != winner:
+                fail(f"three-position merge reverse 的 home_flipped_to="
+                     f"{home_flipped_to} != 胜者（执行端）{winner}"
+                     f"（session={session_id!r}）——方向披露与胜者矛盾")
+        else:  # forward
+            if home_flipped_to is not None:
+                winner = home_flipped_to
+            elif session.base_instance is not None:
+                winner = session.base_instance
+            elif source_instance is not None:
+                # W3（2026-09-27，combo_none 实测形态）：REMOTE 基三位置
+                # forward——base 不成位置（池 backing 无本地驻留），跟踪面
+                # = {source, exec}；forward ⟺ 胜者≠执行端 ⟹ 胜者唯一 =
+                # source 位（manager 式(21) 保留量降序选出的整份持有者，
+                # home 未迁移即 home==source）。锚定 face_scheduler._
+                # merge_back_three_position：base_location==REMOTE 时
+                # base_shards=() 不进 positions，target 落 source/exec
+                # 之一；direction=forward 即 target!=exec。
+                winner = source_instance
+            else:
+                fail(f"three-position merge forward 无 home_flipped_to 且无"
+                     f" base/source 记账（session={session_id!r}）——胜者"
+                     f"不可裁决，账本与重放不一致")
+            if winner == exec_instance:
+                fail(f"three-position merge forward 的胜者 {winner} == 执行"
+                     f"端 {exec_instance}（session={session_id!r}）——"
+                     f"forward ⟺ 胜者≠执行端，方向披露矛盾")
+        if winner not in positions:
+            fail(f"three-position merge 胜者 {winner} 不在跟踪位置 "
+                 f"{sorted(positions)}（session={session_id!r}）——账本与"
+                 f"重放不一致")
+        if rebuild and direction != "reverse":
+            fail(f"three-position 重建合并方向披露 {direction!r}"
+                 f"（session={session_id!r}）——重建副本持完整并集，胜者"
+                 f"恒为执行端（reverse），方向披露矛盾")
+        # ---- 传输预分类（方向校验＋整份搬移对账＋I6 池写断言）。----
+        noc_total = 0
+        leg_sources: dict[int, int] = {}
+        third_party_evictions = []
+        for transfer in decision.get("merge_transfers") or ():
+            kind = transfer.get("kind")
+            nbytes = transfer.get("total_bytes")
+            if not isinstance(nbytes, int) or nbytes < 0:
+                fail(f"joint merge transfer total_bytes 必须为非负整数"
+                     f"（session={session_id!r}, kind={kind!r}, "
+                     f"got={nbytes!r}）")
+            if kind == "noc_migrate":
+                source = transfer.get("source_instance_index")
+                if rebuild:
+                    fail(f"three-position 重建合并不得携带 noc 传输"
+                         f"（session={session_id!r}, bytes={nbytes}）——"
+                         f"重复副本直接释放（零载荷），方向披露与传输矛盾")
+                if not isinstance(source, int):
+                    fail(f"three-position merge noc 腿缺整数 "
+                         f"source_instance_index（session={session_id!r}, "
+                         f"got={source!r}）")
+                if source == winner:
+                    fail(f"three-position merge noc 腿源端 {source} == 胜者 "
+                         f"{winner}（session={session_id!r}）——方向披露与"
+                         f"传输矛盾")
+                if source not in positions:
+                    fail(f"three-position merge noc 腿源端 {source} 不在跟"
+                         f"踪位置 {sorted(positions)}（session={session_id!r}）"
+                         f"——账本与重放不一致")
+                if source in leg_sources:
+                    fail(f"three-position merge 位置 {source} 出现第二根 "
+                         f"noc 腿（session={session_id!r}）——每败者恰一腿"
+                         f"（整份搬移），账本与重放不一致")
+                if nbytes != positions[source]:
+                    fail(f"three-position merge 腿字节 {nbytes} != 位置 "
+                         f"{source} 跟踪 {positions[source]}"
+                         f"（session={session_id!r}）——败者整份搬移，"
+                         f"少搬/多搬均属账本与重放不一致")
+                leg_sources[source] = nbytes
+                noc_total += nbytes
+            elif kind == "remote_store":
+                if transfer.get("session_id") == session_id:
+                    fail(f"merge v2 产生本会话池写（session={session_id!r}, "
+                         f"bytes={nbytes}）——合并零池写（I6）被违反")
+                if transfer.get("session_id") is None:
+                    fail(f"joint merge 逐出传输缺 victim session_id"
+                         f"（session={session_id!r}）")
+                third_party_evictions.append(transfer)
+            elif kind in ("local_hit", "remote_load"):
+                continue
+            else:
+                fail(f"joint merge transfer 出现未知 kind={kind!r}"
+                     f"（session={session_id!r}, bytes={nbytes}）——"
+                     f"joint 重放词表未覆盖，拒绝静默丢弃")
+        disclosed = decision.get("merge_transferred_bytes")
+        if isinstance(disclosed, int) and disclosed != noc_total:
+            fail(f"three-position merge 披露 transferred_bytes {disclosed} !="
+                 f" 腿合计 {noc_total}（session={session_id!r}）——两侧账本"
+                 f"不一致")
+        # ---- 胜者侧空间准备（统一 T+E victim 逐出，先于搬移）。----
+        for transfer in third_party_evictions:
+            if transfer["total_bytes"]:
+                replay.apply_evict(
+                    {"session": transfer.get("session_id"), "tick": tick,
+                     "bytes": transfer["total_bytes"], "instance": winner,
+                     "kind": transfer.get("kind"),
+                     "reason": transfer.get("reason"),
+                     "layer_start": transfer.get("layer_start"),
+                     "layer_end": transfer.get("layer_end"),
+                     "resident_prefix_layers_before":
+                         transfer.get("resident_prefix_layers_before"),
+                     "resident_prefix_layers_after":
+                         transfer.get("resident_prefix_layers_after")},
+                    f"joint_merge:{session_id}")
+        # ---- 结算：败者源扣 / 胜者加（多源逐腿；重建静默释放）。----
+        released_bytes = 0
+        for side in sorted(positions):
+            if side == winner:
+                continue
+            tracked = positions[side]
+            if side in leg_sources:
+                replay._apply(tick, side, -leg_sources[side])
+                replay._apply(tick, winner, leg_sources[side])
+            elif tracked:
+                if not rebuild:
+                    fail(f"three-position merge 败者 {side}（跟踪 {tracked} B）"
+                         f"无 noc 腿（session={session_id!r}）——多源形态每"
+                         f"败者恰一腿，拒绝静默漏记")
+                replay._apply(tick, side, -tracked)
+                released_bytes += tracked
+        if duplicate_base_bytes:
+            # 豁免重合（重建×base==exec）的重复 base 副本零载荷就地释放
+            # ——重建方向恒 reverse，胜者 = exec = base 驻留实例，其工作
+            # 副本已持该 token 域的权威内容，终态不含这份字节（去重释
+            # 放非容量逐出，审计量并入 zero_payload 计数器族）。
+            replay._apply(tick, winner, -duplicate_base_bytes)
+            released_bytes += duplicate_base_bytes
+        winner_bytes = positions[winner] + noc_total
+        final_expected = replay._expected_bytes(
+            token_row["final_context_tokens"])
+        if winner_bytes != final_expected:
+            fail(f"three-position merge 结算守恒失败：胜者 {winner} 终态 "
+                 f"{winner_bytes} != f(final)={final_expected}"
+                 f"（session={session_id!r}，positions={positions}，腿="
+                 f"{leg_sources}）——账本与重放不一致")
+        # ---- 会话终态：全层 LOCAL@胜者，三槽清账。----
+        session.instance = winner
+        session.bytes = winner_bytes
+        session.prefix_layers = replay.mapping.get("model_layers")
+        session.base_instance = None
+        session.base_bytes = 0
+        session.base_prefix_layers = None
+        session.source_instance = None
+        session.source_bytes = 0
+        session.boundary_kind = None
+        session.tokens = token_row["final_context_tokens"]
+        replay.report.actions["joint_merge_three_position"] = (
+            replay.report.actions.get("joint_merge_three_position", 0) + 1)
+        replay.report.actions["joint_merge_three_position_bytes"] = (
+            replay.report.actions.get(
+                "joint_merge_three_position_bytes", 0) + noc_total)
+        if rebuild:
+            replay.report.actions[
+                "joint_merge_three_position_zero_payload"] = (
+                    replay.report.actions.get(
+                        "joint_merge_three_position_zero_payload", 0) + 1)
+            replay.report.actions[
+                "joint_merge_three_position_release_bytes"] = (
+                    replay.report.actions.get(
+                        "joint_merge_three_position_release_bytes", 0)
+                    + released_bytes)
         if decision.get("home_flipped_to") is not None:
             replay.report.actions["joint_home_migration"] = (
                 replay.report.actions.get("joint_home_migration", 0) + 1)
@@ -2263,6 +3247,19 @@ class WatermarkScan:
                  f"{missing[:5]}，共 {len(missing)}）——两源请求集不一致")
         if not self.replay.cplog.has_events():
             fail(f"{self.log_path}: 没有任何可重放的 KV 动作")
+        # W3（2026-09-27）：run 末悬挂 staging lease fail-closed——
+        # acquire/release 必须配平（发射面对真删才落 release 行；tick=None
+        # 的静默回滚不落行，其残留即在册悬挂——重放拒绝以静默上界收尾，
+        # 与 workload verify_run_end 的 lease 泄漏审计（在册非空 =
+        # 生命周期断链）同构，宁爆不漏）。
+        if self.replay.staging_leases:
+            dangling = sorted(
+                entry["terms"][0]
+                for entry in self.replay.staging_leases.values())
+            fail(f"{self.log_path}: run 末仍有 {len(dangling)} 条悬挂 "
+                 f"staging lease（acquire/release 未配平，前 5 例："
+                 f"{dangling[:5]}）——执行期暂存持有的生命周期断链，"
+                 f"fail-closed")
         return self.replay
 
 
@@ -2328,16 +3325,31 @@ class JournalReplay:
         self.sha256 = hashlib.sha256()
         self._prev_sequence: Optional[int] = None
         self._prev_time: Optional[int] = None
+        # M-31 会话去重态（批次 D 镜像，2026-09-30）：journal 行是逐 rank
+        # 提交点，同一会话的一次逐出按 TP 数落多行——逐行计数 ×TP 虚增。
+        # writer 契约保证同一 mutation 的行连续且 transaction_id 单调——
+        # 事务切换即重置会话集；bytes 逐行求和（每 rank 只报自己分片的
+        # 字节，总和本就不虚增）。
+        self._evict_tx_current: Optional[int] = None
+        self._evict_sessions_tx: set[str] = set()
+        # 当前行定位（journal_path:行号）——_require 错误消息消费（旧行为
+        # 的 where 形参被丢弃、错误消息引用上一行的 sequence_last 指错行）。
+        self._current_where: Optional[str] = None
 
     # -- 行校验与施加 -----------------------------------------------------
 
     def _require(self, condition: bool, message: str) -> None:
         if not condition:
-            fail(f"{self.journal_path}:seq={self.sequence_last}: {message}"
+            # 定位前缀用当前行 where（journal_path:行号）——旧行为引用
+            # self.sequence_last，那是前行序号：首行字段检查失败时它还是
+            # None，任何"先行字段"失败都会指错行。
+            fail(f"{self._current_where or self.journal_path}: {message}"
                  f"——kv_delta_journal 行结构/链不自洽（账本损坏，"
                  f"fail-closed 不降级）")
 
     def consume(self, row: dict, where: str) -> None:
+        # 行号信息落地为错误定位（消费 where，不再留给死参数）。
+        self._current_where = where
         for field in JOURNAL_REQUIRED_FIELDS:
             self._require(field in row, f"缺字段 {field}")
         self._require(row.get("schema_version") == 1,
@@ -2432,8 +3444,11 @@ class JournalReplay:
                 self.violation_by_instance.get(instance, 0) + 1
             self.max_exceed_bytes = max(self.max_exceed_bytes,
                                         physical_after - capacity)
-        hard_limit = self.hard_limit_by_weight.get(parsed_after["w"]) \
-            if parsed_after["w"] else None
+        # R6-U9（2026-09-29 face 移植）：weight==0 的 rank 同样查绑定表
+        # ——退化切分可能为 weight 0 绑定硬上限，条件跳过会让该 rank 漏检
+        # （诊断口径必须覆盖全部 rank；无绑定时 .get 恒 None，与原行为
+        # 一致）。
+        hard_limit = self.hard_limit_by_weight.get(parsed_after["w"])
         if hard_limit is not None and parsed_after["r"] > hard_limit:
             self.hard_limit_exceed_events += 1
             self.hard_limit_exceed_ranks[rank] = \
@@ -2444,7 +3459,18 @@ class JournalReplay:
         if deltas["r"]:
             self.cplog.add(tick, instance, deltas["r"])
         if "evict" in cause_label.lower() and deltas["r"] < 0:
-            self.cplog.add_evict(tick, instance, -deltas["r"])
+            # M-31（批次 D 镜像，2026-09-30）：evict 计数以会话数为口径
+            # ——同一会话跨 rank 多行只计一次事件；bytes 逐行求和不虚增。
+            transaction = row["transaction_id"]
+            if transaction != self._evict_tx_current:
+                self._evict_tx_current = transaction
+                self._evict_sessions_tx = set()
+            # 会话键：session_id 可缺席（合成行）——repr 兜底保证可哈希。
+            session_key = repr(row.get("session_id"))
+            new_event = session_key not in self._evict_sessions_tx
+            if new_event:
+                self._evict_sessions_tx.add(session_key)
+            self.cplog.add_evict_row(tick, instance, -deltas["r"], new_event)
         self.rows += 1
 
     def final_rank_state(self) -> dict:
@@ -2523,17 +3549,47 @@ def replay_journal(journal_path: Path,
                          f"无该 rank 行——账本与证书矛盾")
                 if not isinstance(entry, dict):
                     fail(f"{checksum_path}: ranks[{rank}] 必须是对象")
+                # M-32（批次 D 镜像，2026-09-30）：终态分量全字段严格
+                # 类型校验。旧的 `isinstance(value, int) and ...` 形状对
+                # 缺失/None/str/float 静默空过、bool 冒充整数混过——证书
+                # 残缺也能 certified，第三道门形同虚设。分量字段缺失/类型
+                # 不符 = 证书无法证明终态，与终态不符同罪，fail-closed。
                 for field, key in (("weight", "w"), ("resident", "r"),
                                    ("reserved", "s")):
                     value = entry.get(field)
-                    if isinstance(value, int) and value != state[key]:
+                    if isinstance(value, bool) or not isinstance(value, int) \
+                            or value < 0:
+                        fail(
+                            f"{checksum_path}: rank {rank} 终态 {field} 缺失"
+                            f"或非非负整数（实得 {value!r}）——证书残缺，"
+                            f"fail-closed 不降级")
+                    if value != state[key]:
                         fail(
                             f"{checksum_path}: rank {rank} 终态 {field} 与"
                             f" journal 重放不符（证书 {value}，重放 "
                             f"{state[key]}）——账本与证书矛盾")
+                # M-32：physical 字段纳入校验（此前完全不查）。口径 =
+                # weight + resident（schema 的 physical 两分量口径）。
+                expected_physical = entry.get("physical")
+                if isinstance(expected_physical, bool) or \
+                        not isinstance(expected_physical, int):
+                    fail(
+                        f"{checksum_path}: rank {rank} 终态 physical 缺失"
+                        f"或非整数（实得 {expected_physical!r}）——证书"
+                        f"残缺，fail-closed 不降级")
+                replay_physical = state["w"] + state["r"]
+                if expected_physical != replay_physical:
+                    fail(
+                        f"{checksum_path}: rank {rank} 终态 physical 与 "
+                        f"journal 重放不符（证书 {expected_physical}，重放 "
+                        f"{replay_physical}）——账本与证书矛盾")
                 capacity = entry.get("capacity_bytes")
-                if isinstance(capacity, int) and \
-                        capacity != replay.rank_capacity.get(rank):
+                if isinstance(capacity, bool) or not isinstance(capacity, int) \
+                        or capacity <= 0:
+                    fail(f"{checksum_path}: rank {rank} capacity_bytes 缺失"
+                         f"或非正整数（实得 {capacity!r}）——证书残缺，"
+                         f"fail-closed 不降级")
+                if capacity != replay.rank_capacity.get(rank):
                     fail(f"{checksum_path}: rank {rank} capacity 与 journal"
                          f" 不符（证书 {capacity}，重放 "
                          f"{replay.rank_capacity.get(rank)}）")
@@ -2695,9 +3751,17 @@ def watermark_prepare(args: argparse.Namespace, repo_variant: str,
         violation_check = "per_rank_physical_gt_capacity"
     elif journal_present:
         violation_check = "per_rank_reported_no_formal_verdict"
+    elif checksum_present:
+        # M-33（批次 D 镜像，2026-09-30）：孤儿证书（journal 缺失、
+        # checksum 在场）诚实标注，不与"阶段2 前旧 run"混同。
+        violation_check = "orphan_checksum_upper_bound_only"
     else:
         violation_check = "diagnostic_upper_bound_only"
-    if capacity is None:
+    if capacity is None and not journal_present:
+        # M-32（批次 D 镜像，2026-09-30）：degraded 覆盖只适用于
+        # decision-log 上界层——journal 路径的逐 rank 认证用行内
+        # capacity_bytes（不依赖配置容量）。旧的无条件覆盖让 certified 层
+        # exit 3 正式判决与 "degraded_peak_recorded" 标注同框自相矛盾。
         violation_check = "degraded_peak_recorded"
 
     # P1-④：绘图 series 全局行预算（manifest 新键，fail-closed）。
@@ -2733,10 +3797,33 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
     prep = watermark_prepare(args, repo_variant)
     scan = WatermarkScan(args.run_dir, repo_variant, prep["mapping"],
                          prep["tokens"], prep["coef"], prep["capacity"])
-    for record in iter_jsonl(scan.log_path):
-        scan.consume(record)
-    replay = scan.finish()
-    return watermark_emit(args, repo_variant, prep, replay)
+    comparison_failure = None
+    if prep["journal_present"]:
+        # R6-U5（2026-09-29 face 移植）：journal 在场时 decision-log 重放
+        # 仅为对照列——重放失败隔离为对照列 FAIL，权威（journal）产物照常
+        # 产出，不连坐；journal 缺席时重放即权威，失败原样 fail-closed
+        # 不降级。
+        try:
+            for record in iter_jsonl(scan.log_path):
+                scan.consume(record)
+        except SloToolError as exc:
+            comparison_failure = str(exc)
+            print(f"[hbm-watermark] 警告：decision-log 对照重放失败——"
+                  f"对照列标记 FAIL，journal 权威产物照常产出（{exc}）",
+                  file=sys.stderr)
+    else:
+        for record in iter_jsonl(scan.log_path):
+            scan.consume(record)
+    try:
+        replay = scan.finish()
+    except SloToolError:
+        if comparison_failure is None:
+            raise
+        # 对照重放已失败：finish 的恰一次/非空断言对部分消费态不再适用，
+        # 以部分重放态支撑对照列（权威侧不受影响）。
+        replay = scan.replay
+    return watermark_emit(args, repo_variant, prep, replay,
+                          comparison_failure=comparison_failure)
 
 
 def _intervals_rows(cplog: ChangePointLog, repo_variant: str):
@@ -2771,7 +3858,8 @@ def _plot_series_rows(cplog: ChangePointLog, repo_variant: str, origin: int,
 
 
 def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
-                   replay: WatermarkReplay) -> int:
+                   replay: WatermarkReplay,
+                   comparison_failure: Optional[str] = None) -> int:
     bucket_ns = prep["bucket_ns"]
     bucket_provisional = prep["bucket_provisional"]
     row_budget = prep["row_budget"]
@@ -2815,10 +3903,22 @@ def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
         print(f"[hbm-watermark] trust_tier={trust_tier}：依据 {basis}",
               file=sys.stderr)
     else:
-        print(f"[hbm-watermark] trust_tier={trust_tier}：依据 run_dir 缺 "
-              f"results/kv_delta_journal.jsonl（阶段2 前旧 run）——decision-"
-              f"log 重放为上界口径，occupancy_valid=false、退出码 3 废除"
-              f"（超限只作诊断计数）", file=sys.stderr)
+        if prep["checksum_present"]:
+            # M-33（批次 D 镜像，2026-09-30）：孤儿证书诚实诊断——journal
+            # 丢失（归档/拷贝不完整）不是"阶段2 前旧 run"；判决面不变
+            # （无权威重放即无正式判决，退出码 3 废除），只修误导文案。
+            print(f"[hbm-watermark] trust_tier={trust_tier}：依据 results/"
+                  f"kv_delta_journal.jsonl 缺失而 kv_delta_journal_checksum."
+                  f"json 在场（孤儿证书）——journal 权威重放不可行（run "
+                  f"产物不完整：journal 丢失/未随归档拷贝？），decision-log"
+                  f" 重放为上界口径，occupancy_valid=false、退出码 3 废除"
+                  f"（超限只作诊断计数；正式判决必须完整 journal+证书）",
+                  file=sys.stderr)
+        else:
+            print(f"[hbm-watermark] trust_tier={trust_tier}：依据 run_dir 缺 "
+                  f"results/kv_delta_journal.jsonl（阶段2 前旧 run）——"
+                  f"decision-log 重放为上界口径，occupancy_valid=false、"
+                  f"退出码 3 废除（超限只作诊断计数）", file=sys.stderr)
 
     # 权威变点日志：journal 在场=journal 重放（journal 为权威）；否则=
     # decision-log 重放（上界口径，即权威可得的最好结果）。
@@ -2980,6 +4080,18 @@ def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
                       "order）-> RLE 变点区间 + 事件流 stats + 行预算绘"
                       "图 series（WP8 offline primary source）"),
         "trust_tier": trust_tier,
+        # M17（2026-09-29）：认证层显式披露。本仓自产 run 无 per-rank
+        # kv_delta_journal 生产者（results/kv_delta_journal.jsonl 全仓零
+        # 写入方——online_service 的 C14 kv_delta_journal 是逐请求结算
+        # sidecar 键，行结构/文件均非本工具消费的 per-rank delta 账本，
+        # 见模块 docstring M17 注记）——certified 判决路径在自产 run 上
+        # 不可达，恒落 upper_bound_only；该字段使静默降级变为显式披露
+        # （certified 时取 "certified"，journal 在场但无守恒证书的
+        # resident/lifecycle 层透传 tier 名）。
+        "certification_layer": (
+            "certified" if trust_tier == TRUST_TIER_CERTIFIED
+            else "upper_bound_only"
+            if trust_tier == TRUST_TIER_UPPER_BOUND else trust_tier),
         "trust_tier_semantics": {
             TRUST_TIER_CERTIFIED:
                 "journal+checksum 在场且 sha256/行级链/终态/守恒四项全过"
@@ -3039,9 +4151,20 @@ def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
         "violation_instances": {str(k): v for k, v in
                                 sorted(violation_instances.items())},
         "max_exceed_bytes": max_exceed_bytes,
-        "total_evict_events": replay.report.actions["evictions"],
-        "total_evict_bytes": replay.report.actions["evict_bytes"],
-        "partial_evictions": replay.report.actions["partial_evictions"],
+        # L18（2026-09-29）：顶层逐出计数恒为 decision-log 重放（对照列）
+        # 数字——journal 权威路径（tier>=resident_kv_exact）下亦然。加
+        # _upper_bound 后缀 + 来源标注字段，消除与 journal 认证值的混用；
+        # ``actions`` 仍为 decision-log 重放完整动作计数（对照列）。
+        "total_evict_events_upper_bound":
+            replay.report.actions["evictions"],
+        "total_evict_bytes_upper_bound":
+            replay.report.actions["evict_bytes"],
+        "partial_evictions_upper_bound":
+            replay.report.actions["partial_evictions"],
+        "eviction_counters_source": (
+            "decision-log KV action replay (upper bound; comparison column "
+            "when the kv_delta_journal authority path is active — not a "
+            "journal-certified value)"),
         "actions": replay.report.actions,
         "anomalies": replay.report.anomalies,
         "restore_bytes_ratio_histogram": replay.report.restore_ratio_hist,
@@ -3108,6 +4231,16 @@ def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
                         - auth.peak)
             comparison[str(instance)] = entry
         summary["decision_log_upper_bound_comparison"] = comparison
+        # R6-U5（2026-09-29 face 移植）：对照重放失败时对照列标记 FAIL
+        # （部分消费态 + 失败消息），权威产物照常产出——不因对照面问题
+        # 连坐丢 intervals/series/instances/summary。
+        summary["decision_log_comparison_status"] = \
+            "ok" if comparison_failure is None else "FAIL"
+        if comparison_failure is not None:
+            summary["decision_log_comparison_failure"] = comparison_failure
+            print(f"[hbm-watermark] 警告：decision-log 对照列 FAIL"
+                  f"（对照重放失败，上界对照值仅部分消费态）："
+                  f"{comparison_failure}", file=sys.stderr)
 
     print("", file=sys.stderr)
     emit_json(sys.stderr, summary)

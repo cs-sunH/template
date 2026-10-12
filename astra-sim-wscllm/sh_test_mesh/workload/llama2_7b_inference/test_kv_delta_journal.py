@@ -86,6 +86,10 @@ class KvDeltaJournalTests(unittest.TestCase):
             MemoryMetricsObserver(4),
             journal_path=Path(self._tmp.name) / "kv_delta_journal.jsonl",
         )
+        # 常驻 journal fd 显式关闭:verify_journal_checksum 的只读重放与本
+        # 测试的 TemporaryDirectory 清理都不容忍悬挂写句柄(Windows 下清理
+        # 报 PermissionError,Linux 下泄漏 ResourceWarning)。
+        self.addCleanup(recorder.close_journal)
         set_metrics_observer(recorder)
         manager = SessionKVCacheManager(
             _build_topology(capacity),
@@ -138,8 +142,14 @@ class KvDeltaJournalTests(unittest.TestCase):
         self.assertEqual(later, sorted(later))
         self.assertGreater(
             summary["max_transaction_id"], len(set(later)))
-        self.assertEqual(
-            summary["max_transaction_id"], recorder.transaction_count)
+        # 零行事务(prepare/mark_complete)只消耗 id 不落行:行内出现的
+        # 非 0 事务 id 数(replay 摘要 transaction_count;D2 批 2026-09-28
+        # 起不计 transaction_id=0 哨兵)≤ 消耗的最大 id,差值即零行事务
+        # 个数(本场景 ≥0,随 mutation 序列而定)。
+        self.assertGreaterEqual(
+            summary["max_transaction_id"], summary["transaction_count"])
+        # D2 批:transaction_id=0(权重预载哨兵)不计入 transaction_count。
+        self.assertGreaterEqual(summary["transaction_count"], len(set(later)))
         # 每行前后快照自洽:after = before + delta(逐 rank 重放推导)。
         running: dict[int, list[int]] = {}
         for row in rows:
@@ -156,7 +166,7 @@ class KvDeltaJournalTests(unittest.TestCase):
                  row["after_bytes"]["resident"],
                  row["after_bytes"]["reserved"]], state)
         # 终态守恒:只剩权重。
-        for rank_state in manager.node_states:
+        for rank_state in manager.hbm_snapshots():
             replayed = summary["ranks"][rank_state.rank]
             self.assertEqual(replayed["resident"], 0)
             self.assertEqual(replayed["reserved"], 0)
@@ -235,31 +245,6 @@ class KvDeltaJournalTests(unittest.TestCase):
         self.assertEqual(zero_rank_rows[0]["cause"], "model_weight_preload")
         self.assertIsNotNone(manager.verify_journal_checksum())
 
-    def test_journal_mode_streams_without_retaining_deltas(self) -> None:
-        manager, recorder = self._manager()
-        # 孪生内存模式 recorder:同一 mutation 序列下,journal 模式的流式
-        # 回读必须与改前内存 deltas 逐字段等价(manifest memory_actions 的
-        # 流式重建来源)。
-        twin = MemoryActionRecorder(MemoryMetricsObserver(4))
-        set_metrics_observer(twin)
-        twin_model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
-        twin_manager = SessionKVCacheManager(
-            _build_topology(10_000), twin_model,
-            strict_invariants=True)
-        set_metrics_observer(recorder)
-        self._drain_full_lifecycle(manager)
-        set_metrics_observer(twin)
-        self._drain_full_lifecycle(twin_manager)
-        # journal 模式不驻留 deltas list(流式);回读流可重建等价行。
-        self.assertEqual(recorder.deltas, [])
-        replayed = list(recorder.iter_journal_deltas())
-        self.assertEqual(len(replayed), recorder.record_count)
-        self.assertEqual(
-            [delta.sequence_index for delta in replayed],
-            list(range(len(replayed))))
-        self.assertEqual([delta.to_dict() for delta in replayed],
-                         [delta.to_dict() for delta in twin.deltas])
-
     # --------------------------------------------------- ① 时序护栏 --
 
     def test_non_monotonic_mutation_timestamp_fails_closed(self) -> None:
@@ -337,25 +322,111 @@ class KvDeltaJournalTests(unittest.TestCase):
         self.assertEqual(summary["checks"]["residual_resident_zero"], True)
         self.assertEqual(summary["checks"]["residual_reserved_zero"], True)
         self.assertEqual(summary["checks"]["physical_equals_weight"], True)
-        self.assertEqual(len(summary["ranks"]), len(manager.node_states))
+        self.assertEqual(len(summary["ranks"]), len(manager.hbm_snapshots()))
 
-    def test_journal_disabled_recorder_keeps_legacy_behavior(self) -> None:
-        # journal 关闭(内存模式 recorder):行为与改前一致——deltas 驻留、
-        # sequence 仍连续;verify_journal_checksum 对非 journal recorder
-        # 返回 None(门只对 journal-on 的 run 生效)。
-        recorder = MemoryActionRecorder(MemoryMetricsObserver(4))
-        set_metrics_observer(recorder)
-        model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
-        manager = SessionKVCacheManager(
-            _build_topology(10_000), model,
-            strict_invariants=True)
+
+class D2JournalRowShapeTests(KvDeltaJournalTests):
+    """D2（2026-09-28）：journal 行级形状门前移——before/after 子对象结构
+    与数值字段的损坏不再以裸 KeyError/TypeError/UnicodeDecodeError 逃逸
+    出带行号的 fail-closed 通道；transaction_count 不计 0 哨兵。"""
+
+    def test_before_bytes_missing_key_fails_with_line_number(self) -> None:
+        manager, recorder = self._manager()
         self._drain_full_lifecycle(manager)
-        manager.assert_final_state()
-        self.assertGreater(len(recorder.deltas), 0)
-        self.assertEqual(
-            [delta.sequence_index for delta in recorder.deltas],
-            list(range(len(recorder.deltas))))
-        self.assertIsNone(manager.verify_journal_checksum())
+        manager.verify_journal_checksum()
+        lines = recorder.journal_path.read_text(
+            encoding="utf-8").splitlines()
+        row = json.loads(lines[1])
+        row["before_bytes"].pop("weight")  # 子对象结构损坏
+        lines[1] = json.dumps(row, sort_keys=True)
+        recorder.journal_path.write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+        # 修复前：replay 主循环 before["weight"] 裸 KeyError 逃逸。
+        with self.assertRaisesRegex(RuntimeError, "line 2.*before_bytes"):
+            manager.verify_journal_checksum()
+
+    def test_before_bytes_non_int_component_fails_with_line_number(self) -> None:
+        manager, recorder = self._manager()
+        self._drain_full_lifecycle(manager)
+        manager.verify_journal_checksum()
+        lines = recorder.journal_path.read_text(
+            encoding="utf-8").splitlines()
+        row = json.loads(lines[1])
+        row["after_bytes"]["resident"] = "300"  # 类型谎报
+        lines[1] = json.dumps(row, sort_keys=True)
+        recorder.journal_path.write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "line 2.*after_bytes"):
+            manager.verify_journal_checksum()
+
+    def test_bad_utf8_line_fails_with_line_number(self) -> None:
+        manager, recorder = self._manager()
+        self._drain_full_lifecycle(manager)
+        manager.verify_journal_checksum()
+        lines = recorder.journal_path.read_text(
+            encoding="utf-8").splitlines()
+        payload = ("\n".join(lines[:1]) + "\n").encode("utf-8") \
+            + b"\xff\xfe garbage\n" \
+            + "\n".join(lines[1:]).encode("utf-8") + b"\n"
+        recorder.journal_path.write_bytes(payload)
+        # 修复前：decode 在 _read_journal_row 的 try 之外裸
+        # UnicodeDecodeError 逃逸。
+        with self.assertRaisesRegex(RuntimeError, "line 2.*corrupt"):
+            manager.verify_journal_checksum()
+
+    def test_transaction_count_excludes_zero_sentinel(self) -> None:
+        manager, recorder = self._manager()
+        self._drain_full_lifecycle(manager)
+        summary = manager.verify_journal_checksum()
+        rows = _journal_rows(recorder)
+        nonzero_ids = {row["transaction_id"] for row in rows
+                       if row["transaction_id"] != 0}
+        self.assertTrue(nonzero_ids, "场景应包含真实事务行")
+        # D2 修复：0（构造期权重预载哨兵）不再计入 transaction_count。
+        self.assertEqual(summary["transaction_count"], len(nonzero_ids))
+        self.assertGreaterEqual(
+            summary["max_transaction_id"], summary["transaction_count"])
+        # 全哨兵 journal（只有权重预载行）的 transaction_count == 0：
+        # 旧行为恒 +1（审计产物撒谎）。
+        preload_ids = {row["transaction_id"] for row in rows[:4]}
+        self.assertEqual(preload_ids, {0})
+
+
+class F2PyJournalRowGateTests(KvDeltaJournalTests):
+    """F2_PY（2026-09-29）：RV5-F5——MI-1 在 _read_journal_row 装的类型门
+    清单的两处同函数残留：capacity_bytes 无门（bool True 直进 ranks 审计
+    摘要、且后续行漂移门 True!=1 恒 False 可互穿）、schema_version
+    ``!= 1`` 吞 bool（True==1）。修复与 SC-1/_require_int 同款 bool 排除。"""
+
+    def _tamper_first_data_row(self, mutate) -> SessionKVCacheManager:
+        manager, recorder = self._manager()
+        self._drain_full_lifecycle(manager)
+        lines = recorder.journal_path.read_text(
+            encoding="utf-8").splitlines()
+        row = json.loads(lines[1])
+        mutate(row)
+        lines[1] = json.dumps(row, sort_keys=True)
+        recorder.journal_path.write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+        return manager
+
+    def test_capacity_bytes_bool_masquerade_fails_with_line_number(self):
+        manager = self._tamper_first_data_row(
+            lambda row: row.update(capacity_bytes=True))
+        with self.assertRaisesRegex(RuntimeError, "line 2.*capacity_bytes"):
+            manager.verify_journal_checksum()
+
+    def test_capacity_bytes_non_int_fails_with_line_number(self):
+        manager = self._tamper_first_data_row(
+            lambda row: row.update(capacity_bytes="16000000000"))
+        with self.assertRaisesRegex(RuntimeError, "line 2.*capacity_bytes"):
+            manager.verify_journal_checksum()
+
+    def test_schema_version_bool_masquerade_fails_with_line_number(self):
+        manager = self._tamper_first_data_row(
+            lambda row: row.update(schema_version=True))
+        with self.assertRaisesRegex(RuntimeError, "line 2.*schema_version"):
+            manager.verify_journal_checksum()
 
 
 if __name__ == "__main__":

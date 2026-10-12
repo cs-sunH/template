@@ -25,9 +25,10 @@ problem (总体方案 §5.4).
 #ifndef EXECUTION_DRIVEN_REQUESTINGRESS_HH
 #define EXECUTION_DRIVEN_REQUESTINGRESS_HH
 
-#include <cassert>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <map>
@@ -86,6 +87,9 @@ enum class IngressCommandKind { Submit, CloseInput, EndOfFile, Error };
 struct IngressCommand {
     IngressCommandKind kind = IngressCommandKind::Submit;
     RequestEnvelope envelope;
+    // M5: the calendar reader had to park this entry on ingress backpressure
+    // at least once before it drained; its clamp is a capacity artifact.
+    bool backpressure_deferred = false;
 };
 
 class RequestIngress {
@@ -157,7 +161,8 @@ class RequestIngress {
     /// report compatibility. Observation only -- the clamping itself is the
     /// frozen late-arrival policy, unchanged. Simulation-thread report point.
     size_t late_arrival_count() const {
-        return late_static_submit_ + late_external_stream_ +
+        return late_static_submit_ + late_static_submit_backpressure_ +
+               late_external_stream_ +
                late_future_alarm_rounding_ + t0_boundary_clamp_;
     }
     /// P0 fix (2026-08-30): late-arrival clamp counters SPLIT by producer
@@ -168,6 +173,13 @@ class RequestIngress {
     /// so ANY such clamp means the reader discovered the row too late -- the
     /// defect this fix eradicates -- and the run-end gate fail-closes on it.
     size_t late_static_submit_count() const { return late_static_submit_; }
+    /// M5 (face-LRU audit, 2026-09-29 mirrored to joint): Submit-path clamps
+    /// of StaticCsv envelopes whose entry was parked by ingress backpressure
+    /// at least once. Capacity artifact of the bounded queue, NOT reader
+    /// lateness: disclosed separately and exempt from the run-end gate.
+    size_t late_static_submit_backpressure_count() const {
+        return late_static_submit_backpressure_;
+    }
     /// Submit-path clamps of RequestSource::ExternalStream envelopes (the
     /// command-FIFO producer / fixtures may legitimately run late; no gate).
     size_t late_external_stream_count() const { return late_external_stream_; }
@@ -185,10 +197,15 @@ class RequestIngress {
     size_t t0_boundary_clamp_count() const { return t0_boundary_clamp_; }
 
     /// P0 fix (2026-08-30): simulation clock of the bound EventQueue
-    /// (asserts bind() happened). Lets the reader stamp each turn-0 Submit
-    /// with its discovery tick without reaching into the queue itself.
+    /// (fails closed if bind() never happened -- M-18 镜像: was an
+    /// NDEBUG-stripped assert).
     NetworkAnalytical::EventTime current_time() const {
-        assert(eq_ != nullptr);
+        if (eq_ == nullptr) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/ingress) current_time() "
+                         "before bind()\n");
+            std::abort();
+        }
         return eq_->get_current_time();
     }
 
@@ -251,6 +268,11 @@ class RequestIngress {
     // publishes ARRIVAL. This closes cross-batch duplicate alarms without
     // retaining historical request ids after arrival.
     std::unordered_set<std::string> scheduled_future_request_ids_;
+    // F1-CPP C1-8 同款镜像(2026-09-30):每个经 drain_commands 的 Submit
+    // 的进程级身份门集合(CSV turn-0、--command-fifo、夹具全生产路径)。
+    // 重复/空 id 在 drain 侧一律 fail-closed(见 drain_commands 的
+    // Submit 分支)。mtx_ 保护;仅仿真线程在 drain 时写入。
+    std::unordered_set<std::string> seen_submit_request_ids_;
     // Fixtures that do not use a CSV reader retain the legacy unknown-index
     // behavior. A non-empty WindowedTraceReader enables strict mode before it
     // reads any rows; register_queue_index also enables it defensively.
@@ -258,6 +280,7 @@ class RequestIngress {
     // P0 fix (2026-08-30): late-arrival clamp counters split by producer
     // path (see the public accessors above for the exact semantics).
     size_t late_static_submit_ = 0;
+    size_t late_static_submit_backpressure_ = 0;
     size_t late_external_stream_ = 0;
     size_t late_future_alarm_rounding_ = 0;
     size_t t0_boundary_clamp_ = 0;

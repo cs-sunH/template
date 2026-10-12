@@ -55,7 +55,8 @@ class _MemoryScheduler(OnlineSchedulerBase):
         self.graph = GraphBatchBuilder(self.config)
 
     def run_variant_policy(self, delta: dict) -> None:
-        marker = self.graph._mark()
+        # G6-F5(2026-09-27)后构图器无 _mark():发射调用与 _collect 一一
+        # 对应、builder 缓冲在发射点必为空,直接收集即可。
         builder = self.graph.builders[0]
         request_id = (delta["arrivals"][0]["request_id"]
                       if delta["arrivals"]
@@ -63,7 +64,7 @@ class _MemoryScheduler(OnlineSchedulerBase):
         builder.set_context(request_id,
                             "memory_fixture", 0)
         builder.comp("memory_fixture_node", 1, 1)
-        self.graph._collect(marker)
+        self.graph._collect()
 
 
 _RETIRED_CONTAINER_NAMES = (
@@ -123,9 +124,7 @@ def _assert_after_ack(scheduler, seq: int) -> None:
     if scheduler._batch is not None:
         raise RuntimeError("delivery {} retained its scheduler batch after ack".format(seq))
     if scheduler.graph.batch is not None:
-        raise RuntimeError("delivery {} retained its graph batch after ack".format(seq))
-    if getattr(scheduler.graph, "batch_first_step", False):
-        raise RuntimeError("delivery {} retained graph first-step state after ack".format(seq))
+        raise RuntimeError("delivery {} retained graph batch after ack".format(seq))
     for rank, builder in scheduler.graph.builders.items():
         if builder.nodes or builder.edges:
             raise RuntimeError(

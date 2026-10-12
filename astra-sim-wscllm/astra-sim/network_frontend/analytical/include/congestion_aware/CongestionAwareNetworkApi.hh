@@ -9,12 +9,18 @@ LICENSE file in the root directory of this source tree.
 #include <astra-network-analytical/congestion_aware/fluid/FluidScheduler.h>
 #include <astra-network-analytical/congestion_aware/Topology.h>
 
+// The using-directives live INSIDE this header's own namespace (network-F10
+// fix, former file-top globals): a header-scope `using namespace` leaked
+// four namespaces into every includer's global scope. Scoped here, the
+// names resolve for this header's own declarations exactly as before, but
+// the pollution no longer spreads; every .cc that includes this header
+// already declares its own file-scope using-directives.
+namespace AstraSimAnalyticalCongestionAware {
+
 using namespace AstraSim;
 using namespace AstraSimAnalytical;
 using namespace NetworkAnalytical;
 using namespace NetworkAnalyticalCongestionAware;
-
-namespace AstraSimAnalyticalCongestionAware {
 
 class CongestionAwareNetworkApi final : public CommonNetworkApi {
   public:

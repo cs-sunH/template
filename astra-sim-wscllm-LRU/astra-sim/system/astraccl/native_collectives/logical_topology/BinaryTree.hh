@@ -14,13 +14,20 @@ LICENSE file in the root directory of this source tree.
 
 namespace AstraSim {
 
+// A perfect binary tree over exactly total_tree_nodes nodes, which must be a
+// power of two >= 2 (enforced fail-closed in the constructor). Node ids are
+// assigned by an in-order walk starting at `start` and stepping by `stride`:
+// RootMin hangs the whole subtree off the root's right child, so the root
+// receives the smallest id of the walk, while RootMax hangs it off the left
+// child and the root receives the largest one. Root/Intermediate/Leaf roles
+// follow from the parent/child pointers, not from any additional balance
+// assumption.
 class BinaryTree : public BasicLogicalTopology {
   public:
     enum class TreeType { RootMax, RootMin };
     enum class Type { Leaf, Root, Intermediate };
 
-    BinaryTree(int id,
-               TreeType tree_type,
+    BinaryTree(TreeType tree_type,
                int total_tree_nodes,
                int start,
                int stride);
@@ -32,6 +39,7 @@ class BinaryTree : public BasicLogicalTopology {
 
     Node* initialize_tree(int depth, Node* parent);
     void build_tree(Node* node);
+    Node* checked_node(int id);
     int get_parent_id(int id);
     int get_left_child_id(int id);
     int get_right_child_id(int id);
@@ -41,7 +49,6 @@ class BinaryTree : public BasicLogicalTopology {
     int start;
     TreeType tree_type;
     int stride;
-    Node* tree;
     std::map<int, Node*> node_list;
 };
 

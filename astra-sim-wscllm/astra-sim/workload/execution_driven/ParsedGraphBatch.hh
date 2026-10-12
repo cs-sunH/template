@@ -25,8 +25,10 @@ kv_actions / future_alarms keep the ARRAY ORDER (the Python emission order).
 Store-id assignment order, issue order, Kahn inputs and anchor first/last
 selection all derive from it -- the parser NEVER sorts, dedups or filters
 these vectors. Watch members keep the JSON object key order (nlohmann
-objects iterate keys ascending, i.e. the decimal rank-string sort the
-producer emitted). Watch statuses are stored in raw array order with
+objects iterate keys in LEXICOGRAPHIC byte order, i.e. the decimal
+rank STRINGS sort: "10" precedes "2" once ranks reach double digits --
+NOT numeric rank order; consumers build std::set<int> and never rely on
+numeric ordering). Watch statuses are stored in raw array order with
 duplicates preserved (<= 2 distinct values exist; consumers build the same
 std::set they built from the DOM).
 
@@ -49,13 +51,17 @@ other bridge protocol violation):
   T7 a present array must be of array type;
   T8 touched_ranks optional; when present it must be an array of integers
      in [0, num_ranks) (sorted-unique and set-equality stay in validate).
-  N1..N15 node rules: exact 13-key set, rank/id/type/name/flag/string/
+  N1..N14 node rules: exact 13-key set, rank/id/type/name/flag/string/
      request/stage/generation typing and domains, compute/comm/coll
      sub-object key sets (required + allowed), integer-overflow rejection
      (a JSON integer literal > UINT64_MAX parses as a double and fails
      is_number_integer), negative-value rejection, tag/priority <=
-     UINT32_MAX. MEM-node liveness (tensor_size > 0 AND a configured
-     remote-memory port) stays in the preflight -- it needs Context.
+     UINT32_MAX. MEM-node liveness is gone with the remote memory backend
+     (removed 2026-09-24): MEM nodes are structurally legal here (types
+     1..7) and fail closed later, at issue time -- Workload::issue throws
+     for type 2/3 and the production barriers (commit-period catch and the
+     deferred issue-pass wrapper, main_online.cc) turn that into the
+     online fatal channel (P2-14).
   E1..E4 edge rules: exact key set {rank, from, to, kind}, rank domain,
      non-negative endpoints, kind == "data", from != to. Endpoint
      RESOLUTION (this batch vs committed history) stays in preflight.
@@ -113,8 +119,10 @@ class ParseError : public std::runtime_error {
 };
 
 /// NodeKind for a raw ChakraProtoMsg::NodeType value (1..7); Invalid outside.
-/// Shared by the parser and (pre-C1) the commit assembly; kept here so the
-/// typed parse and the committer can never disagree on the mapping.
+/// Parser-only since C1: the commit assembly deliberately compares the raw
+/// node_type numerically (GraphBatchCommitter), so this mapping has a single
+/// consumer (parse_graph_batch) plus the tests; kept next to NodeKind so the
+/// typed parse can never disagree with the enum's numeric spelling.
 inline NodeKind node_kind_from_type(uint64_t type) {
     switch (type) {
         case 1:
@@ -136,6 +144,64 @@ inline NodeKind node_kind_from_type(uint64_t type) {
     }
 }
 
+/// KV-cache route transfer leg (restore memory-anchor selection; P1 fix,
+/// 2026-09-28). The Python producer's paired KV transfers (graph_batch_
+/// builder -> _paired_transfer in generate_wsc_llm_trace.py) emit comm legs
+/// named exactly
+///   "<prefix>_history_kv_send_rank{S}_to_rank{T}"           (+ _recv_rank)
+///   "<prefix>_prefill_to_decode_kv_send_rank{S}_to_rank{T}" (+ _recv_rank)
+/// with S/T decimal ranks, and those are the ONLY nodes the restore memory
+/// anchor (event code 7) may bind to (doc sec.4.3). The former selection was
+/// a bare name.find("kv") substring match: the aggregated compute pass emits
+/// "..._all_layers_attention_qkv_projection" comp nodes that share the "kv"
+/// substring and, inside the same (request_id, rank) context, are emitted
+/// AFTER the transfer legs -- they stole the last_transfer slot, so every
+/// run registered the restore anchor on a compute node and transfer-free
+/// (turn-0 / RECOMPUTE / REUSE) requests got a fabricated anchor. Kept next
+/// to node_kind_from_type so the frontend selection and the tests can never
+/// disagree on what counts as a KV transfer leg.
+inline bool is_kv_route_transfer_leg(const OnlineNode& node) {
+    if (node.kind != NodeKind::CommSend && node.kind != NodeKind::CommRecv) {
+        return false;  // transfer legs are comm nodes; a "qkv" comp never is
+    }
+    static const char* const kKvRoutes[] = {"_history_kv",
+                                            "_prefill_to_decode_kv"};
+    static const char* const kLegs[] = {"_send_rank", "_recv_rank"};
+    for (const char* route : kKvRoutes) {
+        for (const char* leg : kLegs) {
+            const std::string marker = std::string(route) + leg;
+            const auto pos = node.name.find(marker);
+            if (pos == std::string::npos) {
+                continue;
+            }
+            // The leg must CLOSE the name: marker, source rank digits, the
+            // literal "_to_rank", target rank digits, end of string.
+            size_t i = pos + marker.size();
+            size_t source_digits = 0;
+            while (i < node.name.size() && node.name[i] >= '0' &&
+                   node.name[i] <= '9') {
+                ++i;
+                ++source_digits;
+            }
+            if (source_digits == 0 ||
+                node.name.compare(i, 8, "_to_rank") != 0) {
+                continue;
+            }
+            i += 8;
+            size_t target_digits = 0;
+            while (i < node.name.size() && node.name[i] >= '0' &&
+                   node.name[i] <= '9') {
+                ++i;
+                ++target_digits;
+            }
+            if (target_digits > 0 && i == node.name.size()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /// One parsed node: the response's per-rank json id (the affine-stream
 /// anchor) plus the fully assembled OnlineNode (global_id == 0; NodeStore
 /// assigns the store id at commit).
@@ -152,8 +218,9 @@ struct ParsedEdge {
     uint64_t to_json = 0;
 };
 
-/// One watch member, kept in the JSON object key order (rank-string
-/// ascending -- identical iteration order to the old DOM walk).
+/// One watch member, kept in the JSON object key order (LEXICOGRAPHIC
+/// rank-string order -- "10" before "2" at rank >= 10; identical iteration
+/// order to the old DOM walk, never assumed numeric).
 struct ParsedWatchMember {
     int rank = -1;
     uint64_t json_id = 0;

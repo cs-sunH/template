@@ -68,8 +68,15 @@ void LoggerFactory::init_default_components(const std::string& log_path) {
     std::filesystem::path folderPath(log_path);
 
     try {
+        // L9 fix (2026-09-30, mirrored from the joint repo):
+        // --logging-folder may name a NESTED path (a/b/c).
+        // create_directory() only creates the FINAL component and throws a
+        // bare filesystem_error when a parent is missing; create_directories
+        // builds the whole chain. A failure still lands in the catch below
+        // (fail loud: an unusable log folder must not silently degrade to
+        // console-only logging).
         if (!std::filesystem::exists(folderPath)) {
-            std::filesystem::create_directory(folderPath);
+            std::filesystem::create_directories(folderPath);
         }
 
         auto sink_rotate_out =

@@ -7,6 +7,9 @@ LICENSE file in the root directory of this source tree.
 #define __SYSTEM_HH__
 
 #include <chrono>
+#include <memory>
+#include <optional>
+#include <string>
 
 #include "astra-sim/common/AstraNetworkAPI.hh"
 #include "astra-sim/common/AstraRemoteMemoryAPI.hh"
@@ -19,6 +22,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/CollectiveImplLookup.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "DieTypes.hh"
 
 namespace AstraSim {
 
@@ -29,6 +33,13 @@ class QueueLevels;
 class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
+
+// Compute cost backend selector (die内仿真器 joint rollout stage 1; design
+// doc §8.2, contract §3.2). The system.json key "compute-cost-model" carries
+// the string spelling ("die" | "roofline" | "replay"); absent key keeps
+// LegacyDefault, which -- for backward compatibility -- still means the
+// historical dispatch (roofline only when roofline-enabled=1).
+enum class ComputeCostModel { LegacyDefault, Roofline, Replay, Die };
 
 namespace ExecutionDriven {
 class GraphSource;
@@ -88,7 +99,33 @@ class Sys : public Callable {
     // Intialization
     // ------------------------------------------------------------
     bool initialize_sys(std::string name);
-    //---------------------------------------------------------------------------
+    // Key-level body of initialize_sys; the fail-closed JSON exception
+    // guard lives in initialize_sys (same structure as the wscllm Sys).
+    void initialize_sys_fields(const json& j, const std::string& name);
+
+  private:
+    // Die backend (joint rollout stage 1; contract §3.2/§3.3): loads +
+    // validates the resolved die model config through
+    // DieModel::make_hardware, enforces the derived-scalar consistency of
+    // peak-perf/local-mem-bw, fills the missing ones from the library, and
+    // installs die_runtime. Every failure path exits (fail-closed). Called
+    // from initialize_sys after the whole key-walk, only for an explicit
+    // compute-cost-model=die.
+    void initialize_die_backend(const std::string& system_config_path,
+                                bool explicit_config_present,
+                                const std::string& explicit_config_path,
+                                bool profile_present,
+                                const std::string& profile,
+                                bool peak_perf_key_present,
+                                bool local_mem_bw_key_present,
+                                bool hbm_contention_key_present);
+    // Backend resolution (contract §3.2 conflict matrix): runs after the
+    // key-walk so it sees the fully parsed roofline-enabled / replay-only /
+    // peak-perf / local-mem-bw state; fail-closed on every branch.
+    void resolve_compute_cost_backend(const json& j,
+                                      const std::string& name);
+
+  public:
 
     // Helper Functions
     // ---------------------------------------------------------
@@ -131,8 +168,6 @@ class Sys : public Callable {
     // Communicator Group Support
     // -----------------------------------------------
     LogicalTopology* get_logical_topology(ComType comm_type);
-    std::vector<CollectiveImpl*> get_collective_implementation(
-        ComType comm_type);
     //---------------------------------------------------------------------------
 
     // Collective Communication Primitives
@@ -218,6 +253,19 @@ class Sys : public Callable {
                            void (*msg_handler)(void* fun_arg),
                            void* fun_arg);
 
+    int front_end_sim_send_correlated(
+        Tick delay,
+        void* buffer,
+        uint64_t count,
+        int type,
+        int dst,
+        int tag,
+        sim_request* request,
+        FrontEndSendRecvType send_type,
+        void (*msg_handler)(void* fun_arg),
+        void* fun_arg,
+        const AstraNetworkAPI::LogicalFlowKey& key);
+
     int front_end_sim_recv(Tick delay,
                            void* buffer,
                            uint64_t count,
@@ -237,7 +285,9 @@ class Sys : public Callable {
                             int tag,
                             sim_request* request,
                             void (*msg_handler)(void* fun_arg),
-                            void* fun_arg);
+                            void* fun_arg,
+                            std::optional<AstraNetworkAPI::LogicalFlowKey>
+                                logical_key = std::nullopt);
 
     int rendezvous_sim_recv(Tick delay,
                             void* buffer,
@@ -258,6 +308,18 @@ class Sys : public Callable {
                  sim_request* request,
                  void (*msg_handler)(void* fun_arg),
                  void* fun_arg);
+
+    int sim_send_correlated(
+        Tick delay,
+        void* buffer,
+        uint64_t count,
+        int type,
+        int dst,
+        int tag,
+        sim_request* request,
+        void (*msg_handler)(void* fun_arg),
+        void* fun_arg,
+        const AstraNetworkAPI::LogicalFlowKey& key);
 
     int sim_recv(Tick delay,
                  void* buffer,
@@ -282,12 +344,47 @@ class Sys : public Callable {
     ExecutionDriven::ExecutionMode execution_mode_ =
         ExecutionDriven::ExecutionMode::Static;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
-    // step-1-8 replay-clock scope (main ruling 2026-08-15): true only for
-    // --online-mode replay; strategy mode keeps real physics (false).
     // roofline model
     bool roofline_enabled;
     double peak_perf;
     Roofline* roofline;
+
+    // Compute cost backend (joint rollout stage 1; see the
+    // ComputeCostModel enum above). Parsed from the system.json
+    // "compute-cost-model" key with the contract §3.2 conflict matrix
+    // enforced fail-closed in Sys::resolve_compute_cost_backend.
+    ComputeCostModel compute_cost_model = ComputeCostModel::LegacyDefault;
+
+    // Die backend runtime aggregate (joint rollout stage 1): the validated
+    // die hardware (loaded from die-model-config, a resolved_die_model.json
+    // produced by the resolver through the cost library) plus the plan cache
+    // (LRU 4096; design doc §8.5 -- "执行句柄不入缓存", only immutable
+    // plans are cached). Null unless compute_cost_model == Die. Declared
+    // AFTER the workload pointer it feeds: the Workload (and its
+    // DieModelAdapter / live DieExecutions holding
+    // shared_ptr<const DiePlan>) is destroyed in ~Sys's body, before this
+    // member unwinds.
+    //
+    // The PlanCache is PROCESS-LEVEL SHARED across every Sys of the same
+    // resolved hardware (one registry entry per
+    // plan_cache_hardware_key). compile() is a pure function and a DiePlan
+    // is immutable, so ranks compiling the same (spec, hardware) pair --
+    // which always produces the same plan_cache_key -- can safely reuse
+    // each other's plans; per-Sys caches force every Sys to recompile
+    // identical keys. Sharing does not change hit semantics: the key
+    // already contains every distinguishing field. The simulation is
+    // single-threaded (one event loop drives all Sys), so the registry and
+    // the shared cache carry no lock; if a multi-threaded runtime is ever
+    // introduced, guard both with a mutex.
+    struct DieModelRuntime {
+        DieModel::Hardware hardware;
+        std::shared_ptr<DieModel::PlanCache> plan_cache;
+        explicit DieModelRuntime(DieModel::Hardware hw);
+    };
+    std::unique_ptr<DieModelRuntime> die_runtime;
+    // Resolved die-model-config path (diagnostics only; empty off the die
+    // backend).
+    std::string die_model_config_path;
 
     // memory
     bool track_local_mem;

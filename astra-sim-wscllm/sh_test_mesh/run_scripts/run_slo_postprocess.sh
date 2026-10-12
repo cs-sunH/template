@@ -97,8 +97,11 @@ warn() { echo "[slo-postprocess] $*" | tee -a "${LOG}" >&2; }
 # 进程内逐复刻（"run:/ok:/FAIL:" 行、.FAIL 条目、失败不拦后续步）。
 # 本层对 driver 退出码的处置：
 #   0 = 全部步骤成功；1 = 有步骤失败（driver 已按步写 FAIL 行与 .FAIL
-#       条目，此处只置 SLO_FAIL，不重复记条目）；其余 = driver 裸崩
-#       （argparse/解释器级），按原 run_step 语义兜底记一条。
+#       条目，此处只置 SLO_FAIL，不重复记条目）；
+#   3 = certified 层容量违规正式判决（A5-1 透传通道，见文尾专门分支）：
+#       driver 内部已记该步骤的 FAIL 条目，本层再追加一条汇总条目
+#       （与"不重复记条目"的 1 号语义不同，属有意双记以便归档检索）；
+#   其余 = driver 裸崩（argparse/解释器级），按原 run_step 语义兜底记一条。
 
 # [METRIC] 行来源探测（与 slo_common.resolve_cpp_metric_log 同序）。
 if [ -f "${RUN_DIR}/cpp.log" ]; then
@@ -206,6 +209,13 @@ elif [ -d "${GUARD_BASE}" ] && mkdir -p "${GUARD_CG}" 2>/dev/null \
     rmdir "${GUARD_CG}" 2>/dev/null
     GUARD_CG=""
   fi
+fi
+# E5(2026-09-27)残留回收：上面 elif 探测链在 mkdir 成功但 memory.max/
+# swap.max 写入失败时整体为假、GUARD_MODE 保持 none——已建的空 cgroup
+# 目录无人清理，逐次运行泄漏 slo-mem-guard.<pid>；在此对"护栏未启用但
+# 目录已建"补收（护栏启用路径的收尾 rmdir 见文件尾）。
+if [ "${GUARD_MODE}" = none ] && [ -d "${GUARD_CG}" ]; then
+  rmdir "${GUARD_CG}" 2>/dev/null || true
 fi
 if [ "${GUARD_MODE}" = none ]; then
   glog "WARN: cgroup guardrail unavailable — running WITHOUT memory cap"
@@ -373,6 +383,13 @@ fi
 
 if [ "${SLO_FAIL}" -ne 0 ]; then
   warn "done WITH FAILURES (default=warn; see slo_postprocess.FAIL)"
+  # A5-1/infra-4（2026-09-26）：certified 层逐 rank 容量违规正式判决的
+  # exit 3 原样透传（warn/strict 边界仍在调用方 runner——默认 warn 下
+  # runner 只 WARN 不拦截，但进程码不再被折叠为 1，判决可被上游区分）；
+  # 其余失败仍为 1。
+  if [ "${DRIVER_RC}" -eq 3 ]; then
+    exit 3
+  fi
   exit 1
 fi
 log "done: all steps passed"

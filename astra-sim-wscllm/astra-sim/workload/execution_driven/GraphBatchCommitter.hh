@@ -10,7 +10,10 @@ The tick-end commit is a two-phase protocol:
   Phase A -- validate(delta, batch): the FULL pre-commit checklist (方案 §8.1
   Phase A). PURE: no NodeStore node, no watch registration, no ingress
   alarm, no issue pass, no counter and no tracking-set mutation happens
-  while validating, and NONE happens on a validation failure. The official
+  while validating, and NONE happens on a validation failure. PURE is
+  logical constness only: validating does rewrite the class's fixed
+  json-id stamp scratch (deliberately mutable to avoid per-batch
+  allocation -- see the class note below). The official
   path (ed_commit_cb in main_online.cc) treats a validation failure as a
   fail-closed abort; the phase-5 fixture (tests/graph_batch_committer_test.cc)
   asserts the zero side-effect property directly.
@@ -37,10 +40,14 @@ violations):
             {prefill, decode}; generation == stage (prefill 0 / decode 1);
             compute/comm/coll well-typed; type-7 collective bytes > 0 (also a
             mandatory cheap commit preflight when full validation is off);
-            comm src/dst/tag range checks are
+            type-7 collective comm_type must have a real completion path --
+            BROADCAST (comm_type 5) is rejected outright at the commit
+            boundary (the execution-driven path implements no broadcast
+            collective); comm src/dst/tag range checks are
             scoped to the comm-typed nodes (5/6) -- send node rank ==
             comm.src, recv node rank == comm.dst (non-comm nodes carry the
-            comm defaults in real data and an empty comm in fixtures).
+            comm defaults in real data; the C1 parse-layer key-set rule
+            rejects an empty comm {}, so fixtures emit the defaults too).
   [edge]    kind == "data"; from != to; from resolves (this batch, an
             earlier batch's store id, or -- M2 node GC, 2026-08-23 -- an id
             in the rank's exact committed range; cross-batch
@@ -50,8 +57,12 @@ violations):
   [watch]   request_id non-empty; stage in {prefill, decode}; members
             non-empty and all in THIS batch; statuses subset of
             {Success, Skipped}; identity (request_id, stage, generation)
-            unique in batch; (request_id, stage) coverage: the node-stage
-            set EQUALS the watch-stage set; eligibility (delta facts first):
+            unique in batch; (request_id, stage) coverage is one-directional
+            (the 2026-08-22 拼 batch relaxation): every watch's
+            (request_id, stage) must be covered by this batch's nodes, but
+            a batch may carry nodes whose (request_id, stage) has no new
+            watch (the train namespace body/barrier nodes); eligibility
+            (delta facts first):
             prefill -> the request is in-flight (arrived at this or an
             earlier epoch, not yet completed), decode -> the request's
             prefill has drained at this or an earlier epoch.
@@ -136,7 +147,11 @@ class GraphBatchCommitter {
         // Returning nullopt means missing/inconsistent metadata and fails a
         // collective batch closed before any commit state changes. Batches
         // without collective nodes do not require the callback.
-        std::function<std::optional<std::vector<int>>(
+        // Returns (members, declared dimension count). The declared
+        // dimension count is the preflight's yardstick for coll.involved_dim
+        // (2026-09-27): a size mismatch would index Sys::generate_collective
+        // out of bounds at issue time.
+        std::function<std::optional<std::pair<std::vector<int>, size_t>>(
             const std::string& pg_name,
             const std::vector<int>& participant_ranks)>
             communicator_members_for_pg;
@@ -151,8 +166,7 @@ class GraphBatchCommitter {
         // the run-end diagnostics. Internal default OFF: the phase fixtures
         // construct their Context explicitly and keep the pre-M2 behavior
         // (including the memory profile) -- main_online passes true
-        // unconditionally (the B.3 cleanup (2026-09-05) removed the
-        // --online-node-gc CLI arm).
+        // unconditionally.
         bool node_gc = false;
     };
 
@@ -188,13 +202,6 @@ class GraphBatchCommitter {
             }
         }
     }
-
-    /// Phase A (pure). Returns an error description on ANY violation; the
-    /// committer state (stores, watches, counters, tracking) is untouched.
-    /// Throws only on a malformed batch entry (type errors are converted to
-    /// the returned error instead; the throw path is defensive only).
-    std::optional<std::string> validate(const StateDelta& delta,
-                                        const GraphBatch& batch) const;
 
     struct ValidateAndCommitResult {
         std::optional<std::string> error;
@@ -247,10 +254,6 @@ class GraphBatchCommitter {
     /// One-line run-end counter report ("[online] phase-5 commit counters:").
     std::string counters_report() const;
 
-    /// The sorted unique rank set owning the batch's nodes (pure).
-    static std::vector<int> compute_touched_ranks(const GraphBatch& batch,
-                                                  int num_ranks);
-
     /// A1 (2026-08-28): amortization threshold -- the commit tail drains the
     /// per-rank GC candidate FIFOs only once this many finished nodes have
     /// accumulated since the last collection. 4096 keeps the retained
@@ -272,8 +275,8 @@ class GraphBatchCommitter {
     /// prefill-drained; REQUEST_COMPLETE -> removed from both. The
     /// "batch_train_..." namespace ids (train sentinels) are never booked
     /// into prefill_drained -- they have no REQUEST_COMPLETE and no
-    /// eligibility consumer. Used on local copies by validate() and on the
-    /// real sets by commit().
+    /// eligibility consumer. Used on local copies by validate_impl() and on
+    /// the real sets by commit().
     static void apply_delta_facts(const StateDelta& delta,
                                   std::set<std::string>& in_flight,
                                   std::set<std::string>& prefill_drained);
@@ -305,10 +308,10 @@ class GraphBatchCommitter {
     std::optional<std::string> validate_json_id_stream(
         const GraphBatch& batch,
         std::vector<int>* touched_ranks = nullptr) const;
-    /// Production-safe subset of validation. Unlike validate(), this checks
-    /// only invariants whose violation can permanently strand a node, watch,
-    /// callback, collective, or request-accounting record. It is pure and
-    /// runs unconditionally at the start of commit().
+    /// Production-safe subset of validation. Unlike validate_impl(), this
+    /// checks only invariants whose violation can permanently strand a node,
+    /// watch, callback, collective, or request-accounting record. It is pure
+    /// and runs unconditionally at the start of commit().
     std::optional<std::string> mandatory_liveness_preflight(
         const StateDelta& delta, const GraphBatch& batch) const;
     void record_affine_node(int rank, uint64_t json_id, uint64_t store_id);
@@ -329,9 +332,10 @@ class GraphBatchCommitter {
     mutable uint64_t json_id_stream_stamp_ = 0;
     mutable std::vector<int> json_id_discovered_touched_ranks_;
     std::vector<int> commit_touched_ranks_;
-    // validate_and_commit() owns commit_touched_ranks_ across its whole
-    // validation/commit sequence.  Context callbacks attempting a nested
-    // mutating commit fail closed instead of corrupting that scratch.
+    // validate_and_commit() and commit() own commit_touched_ranks_ across
+    // their whole validation/commit sequences.  Context callbacks attempting
+    // a nested mutating commit fail closed instead of corrupting that
+    // scratch.
     bool validation_commit_in_progress_ = false;
 };
 

@@ -2,25 +2,35 @@
 """Deterministic WSC-LLM PD-disaggregated request-mapping model.
 
 WSC-LLM describes a live central scheduler.  This module provides the
-placement, queueing, and KV-allocation semantics reused by the online scheduler
-and its focused tests.  Whole configured instances are the placement unit:
-every instance keeps its existing six-rank TP communicator and is dedicated to
-either Prefill or Decode for the complete run.
+placement and queueing semantics reused by the online scheduler and its
+focused tests.  Whole configured instances are the placement unit: every
+instance keeps its existing six-rank TP communicator and is dedicated to
+either Prefill or Decode for the complete run.  (The historical offline
+``WscRelevantKvAllocator``/timing-LUT estimation family was dead code in the
+online-only pipeline and was removed 2026-09-27; per-session KV placement now
+lives exclusively in ``session_kv_manager``.)
 """
 
 from __future__ import annotations
 
-import csv
-import math
 from collections import deque
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 
 PREFILL_ROLE = "prefill"
 DECODE_ROLE = "decode"
 PHASE_ROLES = frozenset((PREFILL_ROLE, DECODE_ROLE))
+
+# Route-enumeration bounds (fail-closed): the shortest-path materialization
+# and the per-Prefill candidate Cartesian product are exponential in the
+# number of equivalent shortest paths, so grid/adversarial topologies must be
+# rejected instead of exploding CPU/memory at startup.  Both bounds are
+# orders of magnitude above every checked-in layout (the real 9-instance
+# layout has exactly one nearest-Decode candidate per Prefill instance), so
+# results are unchanged within the bounds.
+MAX_EQUIVALENT_SHORTEST_PATHS = 64
+MAX_ROUTE_CANDIDATE_COMBINATIONS = 4096
 
 
 @dataclass(frozen=True)
@@ -102,16 +112,8 @@ class WscLlmInstanceSpec:
 @dataclass(frozen=True)
 class WscLlmInstance:
     index: int
-    name: str
-    pg_name: str
     ranks: tuple[int, ...]
     phase_role: str
-    row_min: int
-    row_max: int
-    col_min: int
-    col_max: int
-    center_row: float
-    center_col: float
     wafer_center_manhattan_distance: float
 
     @property
@@ -147,8 +149,6 @@ def rank_coordinates(hardware: WscLlmHardware, rank: int) -> tuple[int, int]:
 def build_instances(
     hardware: WscLlmHardware,
     specs: Sequence[WscLlmInstanceSpec],
-    *,
-    require_equal_size: bool = True,
 ) -> WscLlmTopology:
     if not specs:
         raise ValueError("at least one WSC-LLM instance is required")
@@ -206,16 +206,8 @@ def build_instances(
         instances.append(
             WscLlmInstance(
                 index=index,
-                name=spec.name,
-                pg_name=spec.pg_name,
                 ranks=tuple(spec.ranks),
                 phase_role=spec.phase_role,
-                row_min=row_min,
-                row_max=row_max,
-                col_min=col_min,
-                col_max=col_max,
-                center_row=center_row,
-                center_col=center_col,
                 wafer_center_manhattan_distance=(
                     abs(center_row - wafer_center_row)
                     + abs(center_col - wafer_center_col)
@@ -225,7 +217,7 @@ def build_instances(
 
     if sorted(all_ranks) != list(range(hardware.npus_count)):
         raise ValueError("WSC-LLM instances must cover every configured NPU exactly once")
-    if require_equal_size and len({instance.size for instance in instances}) != 1:
+    if len({instance.size for instance in instances}) != 1:
         raise ValueError(
             "direct KV shard pairing requires equal-size instances"
         )
@@ -350,6 +342,13 @@ class InstanceGraph:
                     for prefix in rebuild(parent)
                 )
             )
+            if len(paths) > MAX_EQUIVALENT_SHORTEST_PATHS:
+                raise ValueError(
+                    f"topology has more than {MAX_EQUIVALENT_SHORTEST_PATHS} "
+                    f"equivalent shortest paths from {source} to {node} "
+                    "(route enumeration bound exceeded; refusing the "
+                    "combinatorial blow-up)"
+                )
             cache[node] = paths
             return paths
 
@@ -371,11 +370,11 @@ class StaticPdRoute:
 @dataclass(frozen=True)
 class StaticPdMapping:
     routes: tuple[StaticPdRoute, ...]
+    # 以下三个汇总字段为测试专用(仅 test_wsc_llm_scheduler.py 断言消费,
+    # 生产决策只读 routes);保留作映射构建不变量的独立校验口径。
     total_hops: int
     shared_edge_occurrences: int
     edge_use_counts: tuple[tuple[int, int, int], ...]
-    alpha: float
-    adjusted_transfer_cost: float
 
     def route_for_prefill(self, prefill_instance_index: int) -> StaticPdRoute:
         for route in self.routes:
@@ -383,29 +382,22 @@ class StaticPdMapping:
                 return route
         raise KeyError(f"no static Decode route for Prefill instance {prefill_instance_index}")
 
-    def routes_for_decode(self, decode_instance_index: int) -> tuple[StaticPdRoute, ...]:
-        routes = tuple(
-            route
-            for route in self.routes
-            if route.decode_instance_index == decode_instance_index
-        )
-        if not routes:
-            raise KeyError(f"no static Prefill routes target Decode instance {decode_instance_index}")
-        return routes
 
-
-def build_static_pd_mapping(
-    topology: WscLlmTopology,
-    *,
-    alpha: float = 1.0,
-) -> StaticPdMapping:
+def build_static_pd_mapping(topology: WscLlmTopology) -> StaticPdMapping:
     """Choose deterministic nearest-Decode shortest routes for all Prefill instances."""
 
-    if isinstance(alpha, bool) or not isinstance(alpha, (int, float)) or alpha < 1:
-        raise ValueError("alpha must be a number greater than or equal to one")
     graph = InstanceGraph(topology)
     prefill_indices = topology.indices_for_role(PREFILL_ROLE)
     decode_indices = topology.indices_for_role(DECODE_ROLE)
+    # SCHED-8(2026-09-28)边界加固:空 Prefill 拓扑此前静默返回空映射
+    # (routes=()),直到消费方 route_for_prefill 才 KeyError;现构造期
+    # fail-closed。生产拓扑唯一构造器 build_instances 已强制双角色齐备,
+    # 该守卫覆盖绕过它手工构造 WscLlmTopology 直接调本函数的调用方。
+    # 空 Decode 拓扑由下方 min(decode_distances.values()) 对空序列抛
+    # ValueError,同样不静默。
+    if not prefill_indices:
+        raise ValueError(
+            "static P-D mapping requires at least one Prefill instance")
     route_candidates: list[tuple[int, tuple[tuple[int, tuple[int, ...]], ...]]] = []
 
     for prefill_index in prefill_indices:
@@ -423,6 +415,17 @@ def build_static_pd_mapping(
             )
         )
         route_candidates.append((prefill_index, candidates))
+
+    combination_count = 1
+    for _, candidates in route_candidates:
+        combination_count *= len(candidates)
+    if combination_count > MAX_ROUTE_CANDIDATE_COMBINATIONS:
+        raise ValueError(
+            f"static P-D route enumeration would explore {combination_count} "
+            f"candidate combinations (bound "
+            f"{MAX_ROUTE_CANDIDATE_COMBINATIONS}); refusing the combinatorial "
+            "blow-up"
+        )
 
     best_objective: Optional[tuple[object, ...]] = None
     best_selection: Optional[tuple[tuple[int, int, tuple[int, ...]], ...]] = None
@@ -459,14 +462,46 @@ def build_static_pd_mapping(
             selection.pop()
 
     choose(0, [])
-    if best_selection is None:
-        raise RuntimeError("failed to construct WSC-LLM static P-to-D mapping")
+    # SCHED-8:best_selection 的 None 检查已删(不可达防御)。choose 的
+    # 基例(position == len(route_candidates))对每个 prefill 至少评估一次
+    # ——decode_indices 非空(空则上方 min 抛 ValueError)、
+    # all_shortest_paths 无路即抛,故 route_candidates 各条目候选非空,
+    # best_selection 恒被赋值。
 
     edge_counts: dict[tuple[int, int], int] = {}
     for _, _, path in best_selection:
         for source, target in zip(path, path[1:]):
             edge = graph.edge(source, target)
             edge_counts[edge] = edge_counts.get(edge, 0) + 1
+    # 3.17.3 fix (2026-09-29, doc §5.1 contract): 策略文档 §5.1 声明向心
+    # P/D 布局保证"每个 P 的最近 D 都在邻接位置，P→D 交接只需一跳链路；
+    # 离线规划同时最小化总跳数与共享链路数"。此前的选择器只做最小化
+    # (总跳数、共边次数进 objective),不校验保证本身——一份自绘布局若
+    # 实际只能给出多跳/共边路由,会静默带病运行,而文档口径与运行事实
+    # 漂移。这里把两条文档性质升格为构造期 fail-closed 不变量:被选中
+    # 的每条 P→D 路由必须一跳,且任一物理边不得被两条路由共享。在役
+    # 6P:3D 布局(六条互不相交一跳边)不受影响。
+    multi_hop = [
+        (prefill_index, decode_index, len(path) - 1)
+        for prefill_index, decode_index, path in best_selection
+        if len(path) - 1 != 1
+    ]
+    if multi_hop:
+        raise ValueError(
+            "centripetal P/D layout contract violated: selected P->D "
+            f"routes must be one hop, got multi-hop {multi_hop[:5]} -- the "
+            "layout does not place every Prefill next to its nearest "
+            "Decode instance (doc §5.1)"
+        )
+    shared_edges = sorted(
+        edge for edge, count in edge_counts.items() if count > 1
+    )
+    if shared_edges:
+        raise ValueError(
+            "centripetal P/D layout contract violated: P->D handoff edges "
+            f"must be pairwise disjoint, shared edges {shared_edges[:5]} -- "
+            "the layout forces routes to share physical links (doc §5.1)"
+        )
     routes = tuple(
         StaticPdRoute(
             prefill_instance_index=prefill_index,
@@ -491,281 +526,7 @@ def build_static_pd_mapping(
             (source, target, count)
             for (source, target), count in sorted(edge_counts.items())
         ),
-        alpha=float(alpha),
-        adjusted_transfer_cost=(
-            total_hops + (float(alpha) - 1.0) * shared_occurrences
-        ),
     )
-
-
-@dataclass(frozen=True)
-class WscLlmTimingEntry:
-    instance_size: int
-    phase_role: str
-    p_chunk: int
-    d_batch: int
-    d_token: int
-    iteration_time_ns: int
-    source: str = "analytical_roofline_phase_timing"
-
-    def __post_init__(self) -> None:
-        if self.phase_role == PREFILL_ROLE:
-            valid = self.p_chunk > 0 and self.d_batch == 0 and self.d_token == 0
-        elif self.phase_role == DECODE_ROLE:
-            valid = self.p_chunk == 0 and self.d_batch > 0 and self.d_token > 0
-        else:
-            valid = False
-        if not valid:
-            raise ValueError(
-                "timing entries must contain a phase-exclusive Prefill or Decode workload"
-            )
-
-
-def _power_of_two_token_bins(max_token: int) -> tuple[int, ...]:
-    if max_token <= 0:
-        raise ValueError("max_token must be positive")
-    bins: list[int] = []
-    value = 128
-    while value < max_token:
-        bins.append(value)
-        value *= 2
-    bins.append(value)
-    return tuple(bins)
-
-
-def estimate_iteration_time_ns(
-    hardware: WscLlmHardware,
-    model: WscLlmModel,
-    *,
-    instance_size: int,
-    p_chunk: int,
-    d_batch: int,
-    d_token: int,
-) -> int:
-    if instance_size <= 0 or p_chunk < 0 or d_batch < 0 or d_token < 0:
-        raise ValueError("invalid timing workload parameters")
-    if (p_chunk > 0) == (d_batch > 0):
-        raise ValueError("timing workload must contain exactly one of Prefill or Decode")
-    if d_batch > 0 and d_token <= 0:
-        raise ValueError("Decode timing requires a positive token/KV length")
-
-    h = model.hidden_size
-    ffn = model.ffn_size
-    layers = model.layers
-    bytes_per_elem = model.bytes_per_elem
-    aggregate_perf = instance_size * hardware.peak_perf_tflops * 1e12
-    aggregate_bw = instance_size * hardware.local_hbm_bandwidth_gbps * 1e9
-    local_hbm_latency_seconds = hardware.local_hbm_latency_ns / 1e9
-
-    linear_tokens = p_chunk + d_batch
-    mlp_ops_per_token = 6 * h * ffn if model.mlp_variant == "swiglu" else 4 * h * ffn
-    linear_ops_per_token = layers * (8 * h * h + mlp_ops_per_token)
-    linear_ops = linear_tokens * linear_ops_per_token
-    weight_bytes = estimate_model_weight_bytes(model)
-    activation_bytes = layers * linear_tokens * h * bytes_per_elem * 8
-    linear_seconds = max(
-        linear_ops / aggregate_perf,
-        local_hbm_latency_seconds +
-        (weight_bytes + activation_bytes) / aggregate_bw,
-    )
-
-    phase_seconds = 0.0
-    if p_chunk:
-        attention_ops = layers * 4 * p_chunk * p_chunk * h
-        attention_bytes = layers * p_chunk * p_chunk * bytes_per_elem * 4
-        phase_seconds = max(
-            attention_ops / aggregate_perf,
-            local_hbm_latency_seconds + attention_bytes / aggregate_bw,
-        )
-    else:
-        attention_ops = layers * 4 * d_batch * d_token * h
-        attention_bytes = layers * 2 * d_batch * d_token * h * bytes_per_elem
-        phase_seconds = max(
-            attention_ops / aggregate_perf,
-            local_hbm_latency_seconds + attention_bytes / aggregate_bw,
-        )
-
-    return max(
-        1,
-        math.ceil((linear_seconds + phase_seconds) * 1e9)
-        + hardware.d2d_latency_ns,
-    )
-
-
-class WscLlmTimingLut:
-    """Analytical phase timing only; it never participates in allocation."""
-
-    _LAZY_CACHE_MAX_ENTRIES = 8_192
-
-    def __init__(self, entries: Iterable[WscLlmTimingEntry]) -> None:
-        self._entries = tuple(entries)
-        if not self._entries:
-            raise ValueError("WSC-LLM timing LUT must contain at least one entry")
-        index: dict[tuple[str, int, int, int], list[WscLlmTimingEntry]] = {}
-        seen: set[tuple[str, int, int, int, int]] = set()
-        for entry in self._entries:
-            key5 = (
-                entry.phase_role,
-                entry.instance_size,
-                entry.p_chunk,
-                entry.d_batch,
-                entry.d_token,
-            )
-            if key5 in seen:
-                raise ValueError(f"duplicate WSC-LLM timing entry: {key5}")
-            seen.add(key5)
-            index.setdefault(key5[:4], []).append(entry)
-        self._index = {
-            key: tuple(sorted(rows, key=lambda row: row.d_token))
-            for key, rows in index.items()
-        }
-        # ``build`` enables a compact, analytical decode cache.  The prior
-        # implementation eagerly emitted one Python object for every possible
-        # batch-size/token-bin combination, which is prohibitive for 9,179
-        # requests even though the event loop touches only a small subset.
-        self._lazy_hardware: Optional[WscLlmHardware] = None
-        self._lazy_model: Optional[WscLlmModel] = None
-        self._lazy_instance_sizes: frozenset[int] = frozenset()
-        self._lazy_request_count: Optional[int] = None
-        self._lazy_token_bins: tuple[int, ...] = ()
-        self._lazy_entries: dict[tuple[int, int, int], WscLlmTimingEntry] = {}
-
-    @property
-    def entries(self) -> tuple[WscLlmTimingEntry, ...]:
-        """Materialized rows, including lazy entries used during planning."""
-
-        if not self._lazy_entries:
-            return self._entries
-        return tuple(
-            (*self._entries, *(
-                self._lazy_entries[key] for key in sorted(self._lazy_entries)
-            ))
-        )
-
-    @classmethod
-    def build(
-        cls,
-        hardware: WscLlmHardware,
-        model: WscLlmModel,
-        *,
-        instance_sizes: Iterable[int],
-        p_chunk: int,
-        request_count: int,
-        max_d_token: int,
-    ) -> "WscLlmTimingLut":
-        if p_chunk <= 0:
-            raise ValueError("p_chunk must be positive")
-        if request_count <= 0:
-            raise ValueError("request_count must be positive")
-        sizes = tuple(sorted(set(instance_sizes)))
-        if not sizes:
-            raise ValueError("instance_sizes must not be empty")
-        rows = [
-            WscLlmTimingEntry(
-                instance_size=instance_size,
-                phase_role=PREFILL_ROLE,
-                p_chunk=p_chunk,
-                d_batch=0,
-                d_token=0,
-                iteration_time_ns=estimate_iteration_time_ns(
-                    hardware,
-                    model,
-                    instance_size=instance_size,
-                    p_chunk=p_chunk,
-                    d_batch=0,
-                    d_token=0,
-                ),
-            )
-            for instance_size in sizes
-        ]
-        lut = cls(rows)
-        lut._lazy_hardware = hardware
-        lut._lazy_model = model
-        lut._lazy_instance_sizes = frozenset(sizes)
-        lut._lazy_request_count = request_count
-        lut._lazy_token_bins = _power_of_two_token_bins(max_d_token)
-        return lut
-
-    def lookup(
-        self,
-        *,
-        phase_role: str,
-        instance_size: int,
-        p_chunk: int,
-        d_batch: int,
-        d_token: int,
-    ) -> WscLlmTimingEntry:
-        rows = self._index.get((phase_role, instance_size, p_chunk, d_batch))
-        if rows:
-            return min(rows, key=lambda row: (abs(row.d_token - d_token), row.d_token))
-        if (
-            self._lazy_hardware is not None
-            and self._lazy_model is not None
-            and phase_role == DECODE_ROLE
-            and instance_size in self._lazy_instance_sizes
-            and p_chunk == 0
-            and self._lazy_request_count is not None
-            and 1 <= d_batch <= self._lazy_request_count
-            and d_token > 0
-        ):
-            token_bin = min(
-                self._lazy_token_bins,
-                key=lambda token: (abs(token - d_token), token),
-            )
-            key = (instance_size, d_batch, token_bin)
-            entry = self._lazy_entries.get(key)
-            if entry is None:
-                if len(self._lazy_entries) >= self._LAZY_CACHE_MAX_ENTRIES:
-                    self._lazy_entries.clear()
-                entry = WscLlmTimingEntry(
-                    instance_size=instance_size,
-                    phase_role=DECODE_ROLE,
-                    p_chunk=0,
-                    d_batch=d_batch,
-                    d_token=token_bin,
-                    iteration_time_ns=estimate_iteration_time_ns(
-                        self._lazy_hardware,
-                        self._lazy_model,
-                        instance_size=instance_size,
-                        p_chunk=0,
-                        d_batch=d_batch,
-                        d_token=token_bin,
-                    ),
-                )
-                self._lazy_entries[key] = entry
-            return entry
-        raise KeyError(
-            "WSC-LLM timing LUT has no exact phase/instance_size/p_chunk/"
-            f"d_batch match for ({phase_role}, {instance_size}, {p_chunk}, {d_batch})"
-        )
-
-    def export_csv(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="", encoding="utf-8") as output:
-            writer = csv.DictWriter(
-                output,
-                fieldnames=(
-                    "instance_size",
-                    "phase_role",
-                    "p_chunk",
-                    "d_batch",
-                    "d_token",
-                    "iteration_time_ns",
-                    "source",
-                ),
-            )
-            writer.writeheader()
-            for entry in sorted(
-                self.entries,
-                key=lambda row: (
-                    row.instance_size,
-                    row.phase_role,
-                    row.p_chunk,
-                    row.d_batch,
-                    row.d_token,
-                ),
-            ):
-                writer.writerow(entry.__dict__)
 
 
 @dataclass(frozen=True)
@@ -786,252 +547,3 @@ def select_prefill_instance(queues: Sequence[PrefillQueueSnapshot]) -> int:
     if not queues:
         raise ValueError("at least one Prefill queue is required")
     return min(queues, key=lambda queue: queue.ordering_key).instance_index
-
-
-@dataclass(frozen=True)
-class KVAllocationPiece:
-    instance_index: int
-    bytes: int
-    distance_to_decode: int
-    location_priority: str
-    path: tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class KVAllocation:
-    request_id: str
-    prefill_instance_index: int
-    decode_instance_index: int
-    relevant_instance_indices: tuple[int, ...]
-    static_route: tuple[int, ...]
-    total_bytes: int
-    pieces: tuple[KVAllocationPiece, ...]
-
-
-class WscRelevantKvAllocator:
-    """WSC Relevant(P,D) allocator at the user-required instance abstraction."""
-
-    def __init__(
-        self,
-        topology: WscLlmTopology,
-        static_mapping: StaticPdMapping,
-        *,
-        model_weight_bytes: int,
-    ) -> None:
-        self.topology = topology
-        self.static_mapping = static_mapping
-        self.model_weight_bytes = model_weight_bytes
-        self.initial_capacity: list[int] = []
-        for instance in topology.instances:
-            capacity = (
-                instance.size * topology.hardware.local_hbm_capacity_bytes
-                - model_weight_bytes
-            )
-            if capacity < 0:
-                raise ValueError(
-                    f"model does not fit in instance {instance.name}: "
-                    f"needs {model_weight_bytes}, has "
-                    f"{instance.size * topology.hardware.local_hbm_capacity_bytes}"
-                )
-            self.initial_capacity.append(capacity)
-        self.remaining_capacity = self.initial_capacity.copy()
-
-    def _validate_route(self, route: StaticPdRoute) -> None:
-        if not route.path or len(set(route.path)) != len(route.path):
-            raise ValueError("static P-to-D route must be a non-empty simple path")
-        if route.path[0] != route.prefill_instance_index:
-            raise ValueError("static route must start at its Prefill instance")
-        if route.path[-1] != route.decode_instance_index:
-            raise ValueError("static route must end at its Decode instance")
-        if self.topology.instance(route.prefill_instance_index).phase_role != PREFILL_ROLE:
-            raise ValueError("static route source is not a Prefill instance")
-        if self.topology.instance(route.decode_instance_index).phase_role != DECODE_ROLE:
-            raise ValueError("static route destination is not a Decode instance")
-        for source, target in zip(route.path, route.path[1:]):
-            if target not in self.topology.adjacency[source]:
-                raise ValueError(f"invalid static route edge: {source}->{target}")
-
-    def _ordered_locations(
-        self,
-        route: StaticPdRoute,
-    ) -> tuple[tuple[int, int, str, tuple[int, ...]], ...]:
-        self._validate_route(route)
-        last = len(route.path) - 1
-        ordered: list[tuple[int, int, str, tuple[int, ...]]] = [
-            (route.decode_instance_index, 0, "decode", (route.decode_instance_index,))
-        ]
-        seen = {route.decode_instance_index}
-
-        # The selected request's own static path has strict priority, walking
-        # from the Decode endpoint back to its source Prefill instance.
-        for position in range(last - 1, -1, -1):
-            instance_index = route.path[position]
-            distance = last - position
-            transfer_path = tuple(reversed(route.path[position:]))
-            label = (
-                "selected_prefill"
-                if position == 0
-                else "selected_path_intermediate"
-            )
-            ordered.append((instance_index, distance, label, transfer_path))
-            seen.add(instance_index)
-
-        # Relevant(P,D) then includes the rest of the same static Decode domain:
-        # sibling Prefill instances and their selected paths.  This is fixed by
-        # offline mapping and never widens to another Decode domain.
-        sibling_candidates: dict[
-            int, tuple[int, str, tuple[int, ...]]
-        ] = {}
-        for sibling_route in self.static_mapping.routes_for_decode(
-            route.decode_instance_index
-        ):
-            self._validate_route(sibling_route)
-            sibling_last = len(sibling_route.path) - 1
-            for position in range(sibling_last - 1, -1, -1):
-                instance_index = sibling_route.path[position]
-                if instance_index in seen:
-                    continue
-                distance = sibling_last - position
-                transfer_path = tuple(reversed(sibling_route.path[position:]))
-                label = (
-                    "sibling_prefill"
-                    if position == 0
-                    else "sibling_path_intermediate"
-                )
-                candidate = (distance, label, transfer_path)
-                previous = sibling_candidates.get(instance_index)
-                if previous is None or (distance, transfer_path) < (
-                    previous[0],
-                    previous[2],
-                ):
-                    sibling_candidates[instance_index] = candidate
-        ordered.extend(
-            (
-                instance_index,
-                distance,
-                label,
-                transfer_path,
-            )
-            for instance_index, (distance, label, transfer_path) in sorted(
-                sibling_candidates.items(),
-                key=lambda item: (
-                    item[1][0],
-                    -self.remaining_capacity[item[0]],
-                    item[0],
-                    item[1][2],
-                ),
-            )
-        )
-        return tuple(ordered)
-
-    def allocate(
-        self,
-        *,
-        request_id: str,
-        route: StaticPdRoute,
-        total_bytes: int,
-    ) -> KVAllocation:
-        if total_bytes < 0:
-            raise ValueError("KV allocation size must be non-negative")
-        ordered = self._ordered_locations(route)
-        available = sum(
-            self.remaining_capacity[index] for index, _, _, _ in ordered
-        )
-        if available < total_bytes:
-            raise ValueError(
-                "insufficient WSC static Decode-domain Relevant(P,D) HBM capacity "
-                f"for request {request_id} on static route {route.path}: need {total_bytes} "
-                f"bytes, available {available}; Decode remapping and unrelated-"
-                "instance widening are disabled"
-            )
-
-        remaining = total_bytes
-        pieces: list[KVAllocationPiece] = []
-        for instance_index, distance, priority, path in ordered:
-            if remaining == 0:
-                break
-            take = min(remaining, self.remaining_capacity[instance_index])
-            if take == 0:
-                continue
-            self.remaining_capacity[instance_index] -= take
-            remaining -= take
-            pieces.append(
-                KVAllocationPiece(
-                    instance_index=instance_index,
-                    bytes=take,
-                    distance_to_decode=distance,
-                    location_priority=priority,
-                    path=path,
-                )
-            )
-
-        return KVAllocation(
-            request_id=request_id,
-            prefill_instance_index=route.prefill_instance_index,
-            decode_instance_index=route.decode_instance_index,
-            relevant_instance_indices=tuple(index for index, _, _, _ in ordered),
-            static_route=route.path,
-            total_bytes=total_bytes,
-            pieces=tuple(pieces),
-        )
-
-    def available_bytes(self, route: StaticPdRoute) -> int:
-        """Return current free bytes in the request's fixed Relevant(P,D) set."""
-
-        return sum(
-            self.remaining_capacity[index]
-            for index, _, _, _ in self._ordered_locations(route)
-        )
-
-    def empty_domain_capacity_bytes(self, route: StaticPdRoute) -> int:
-        """Return usable bytes when the fixed Relevant(P,D) set is empty."""
-
-        return sum(
-            self.initial_capacity[index]
-            for index, _, _, _ in self._ordered_locations(route)
-        )
-
-    def try_allocate(
-        self,
-        *,
-        request_id: str,
-        route: StaticPdRoute,
-        total_bytes: int,
-    ) -> Optional[KVAllocation]:
-        """Apply Algorithm 2's capacity check without changing the static route.
-
-        A request that can never fit in its empty Relevant(P,D) domain is an
-        invalid configuration.  Temporary pressure returns ``None`` so the
-        central scheduler can stop this request and the following work in its
-        Prefill FCFS queue until a later scheduling opportunity.
-        """
-
-        if total_bytes < 0:
-            raise ValueError("KV allocation size must be non-negative")
-        maximum = self.empty_domain_capacity_bytes(route)
-        if maximum < total_bytes:
-            raise ValueError(
-                "WSC request exceeds empty static Decode-domain Relevant(P,D) "
-                f"HBM capacity for request {request_id} on static route "
-                f"{route.path}: need {total_bytes} bytes, empty-domain capacity "
-                f"{maximum}; the configured request cannot fit without changing "
-                "the WSC-LLM mapping or hardware configuration"
-            )
-        if self.available_bytes(route) < total_bytes:
-            return None
-        return self.allocate(
-            request_id=request_id,
-            route=route,
-            total_bytes=total_bytes,
-        )
-
-    def release(self, allocation: KVAllocation) -> None:
-        for piece in allocation.pieces:
-            index = piece.instance_index
-            self.remaining_capacity[index] += piece.bytes
-            if self.remaining_capacity[index] > self.initial_capacity[index]:
-                raise RuntimeError(
-                    f"KV release exceeds initial capacity for instance {index}"
-                )
-
-

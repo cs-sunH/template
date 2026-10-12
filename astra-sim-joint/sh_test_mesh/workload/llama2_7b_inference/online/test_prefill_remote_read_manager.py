@@ -58,6 +58,11 @@ HOME_INSTANCE = 0   # ranks (0, 1)
 EXEC_INSTANCE = 1   # ranks (2, 3)
 HISTORY_TOKENS = 100
 PREFIX_LAYERS = 12  # PARTIAL 基驻留前缀 p（> RESTORE_GROUP_LAYERS ⇒ 多组）
+# D09 逐窗×tile 模板（式 11 同源）：单窗单扫描形态（input < chunk ⇒ 1
+# 尾窗 1 扫描——与旧 scan_passes=1 的总量锚一致）。
+WINDOW_INPUT_TOKENS = 128
+WINDOW_CHUNK_TOKENS = 512
+WINDOW_QUERY_TILE_TOKENS = 128
 
 
 def _manager(*, layers: int = 16, capacity_bytes: int = 200_000):
@@ -130,6 +135,64 @@ def _layer_ranges(transfers):
     return tuple((t.layer_start, t.layer_end) for t in transfers)
 
 
+def _materialize_plan(manager, template):
+    """D16 有界模板的整轮物化（消费点入口 ``prefill_read_window_tiles``
+    逐窗现算，测试侧铺平全部窗——生产宿主只持有活跃消费窗）。"""
+    transfers = []
+    for window_index in range(1, template["window_count"] + 1):
+        transfers.extend(
+            manager.prefill_read_window_tiles(template, window_index))
+    return tuple(transfers)
+
+
+TEMPLATE_KEYS = (
+    "session_id", "trigger_request_id", "home_instance", "exec_instance",
+    "read_prefix_layers", "kv_token_bytes", "tile_tokens", "tile_bytes",
+    "base_scans_shards", "window_scans", "tiles_by_window", "window_count",
+    "scan_passes", "total_bytes", "tile_count", "source_ranks",
+    "target_ranks",
+)
+
+
+def _assert_template_shape(test, template, *, session_id, trigger_request_id,
+                           home_instance, exec_instance, prefix_layers,
+                           scan_passes):
+    """planner 返回值形状 = D16 模板 dict（O(窗数) 参数，非 KVTransfer
+    列表）：键集合精确、tile_bytes = 配置 tile（固定不放大）、
+    tiles_by_window 与逐窗物化一致、total_bytes 守恒。"""
+    test.assertIsInstance(template, dict)
+    test.assertEqual(set(template), set(TEMPLATE_KEYS))
+    test.assertEqual(template["session_id"], session_id)
+    test.assertEqual(template["trigger_request_id"], trigger_request_id)
+    test.assertEqual(template["home_instance"], home_instance)
+    test.assertEqual(template["exec_instance"], exec_instance)
+    test.assertEqual(template["read_prefix_layers"], prefix_layers)
+    test.assertEqual(template["scan_passes"], scan_passes)
+    # tile = 配置值固定（D09 修复轮二：不随基础区间放大）。
+    test.assertGreater(template["tile_tokens"], 0)
+    test.assertGreater(template["kv_token_bytes"], 0)
+    test.assertEqual(template["tile_bytes"],
+                     template["tile_tokens"] * template["kv_token_bytes"])
+    # 窗计数与逐窗 tile 计数一致。
+    test.assertEqual(template["window_count"], len(template["window_scans"]))
+    test.assertEqual(template["window_count"], len(template["tiles_by_window"]))
+    test.assertEqual(
+        template["tile_count"], sum(template["tiles_by_window"]))
+    # tiles_by_window 与消费点物化逐窗一致（模板参数 ⇒ 物化描述）。
+    for window_index in range(1, template["window_count"] + 1):
+        window_transfers = test.manager.prefill_read_window_tiles(
+            template, window_index)
+        read_tiles = [transfer.read_tile for transfer in window_transfers]
+        test.assertEqual(
+            read_tiles,
+            [(window_index, tile + 1)
+             for tile in range(template["tiles_by_window"][window_index - 1])])
+    # total_bytes 守恒 = Σ(逐 rank 基础字节) × 总扫描数。
+    test.assertEqual(
+        template["total_bytes"],
+        sum(template["base_scans_shards"]) * template["scan_passes"])
+
+
 def _assert_contiguous_cover(test, ranges, start: int, end: int) -> None:
     """层区间序列无空隙、无重叠、恰好铺满 [start, end)。"""
     test.assertTrue(ranges, f"expected a non-empty cover of [{start}, {end})")
@@ -180,9 +243,16 @@ class PartialRemoteReadManagerTests(unittest.TestCase):
         self.assertGreater(len(plan_layer_groups(0, PREFIX_LAYERS)), 1)
         self.session = self.manager._sessions["s"]
         self.base_snapshot = self.manager.session_snapshot("s")
-        # 前缀读流以基形态会话规划（prepare_prefill 之前）。
-        self.prefix_transfers = self.manager.plan_prefill_remote_read_transfers(
-            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r1")
+        # 前缀读流以基形态会话规划（prepare_prefill 之前）：D16 有界
+        # 模板 + 逐窗物化（铺平全部窗用于逐 tile 语义断言）。
+        self.prefix_template = (
+            self.manager.plan_prefill_remote_read_transfers(
+                self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r1",
+                scan_passes=1, input_tokens=WINDOW_INPUT_TOKENS,
+                chunk_tokens=WINDOW_CHUNK_TOKENS,
+                query_tile_tokens=WINDOW_QUERY_TILE_TOKENS))
+        self.prefix_transfers = _materialize_plan(
+            self.manager, self.prefix_template)
         self.prefix_bytes = kv_cache_shard_bytes_for_layer_range(
             self.model, HISTORY_TOKENS, 2,
             layer_start=0, layer_end=PREFIX_LAYERS)
@@ -209,13 +279,25 @@ class PartialRemoteReadManagerTests(unittest.TestCase):
                          sum(self.suffix_bytes))
 
     def test_prefix_read_stream_covers_resident_prefix(self):
+        # planner 返回值形状 = D16 模板 dict（非 KVTransfer 列表）：
+        # tile_bytes = 配置 tile（固定）、tiles_by_window 与消费点物化
+        # 一致、total_bytes = Σ(shard 基础字节 × 窗扫描) 守恒。
+        _assert_template_shape(
+            self, self.prefix_template,
+            session_id="s", trigger_request_id="r1",
+            home_instance=HOME_INSTANCE, exec_instance=EXEC_INSTANCE,
+            prefix_layers=PREFIX_LAYERS, scan_passes=1)
         transfers = self.prefix_transfers
-        # 逐组切分 = plan_layer_groups(0, p)（公共规划器消费顺序）。
-        self.assertEqual(
-            _layer_ranges(transfers),
-            plan_layer_groups(0, PREFIX_LAYERS))
+        # D09 逐窗×tile：每窗覆盖整个驻留前缀 [0, p)（层区间恒 [0, p)，
+        # 窗内按字节切 tile——层消费门由体块按 tile 解析，非层组切分）。
+        self.assertEqual(_layer_ranges(transfers), ((0, PREFIX_LAYERS),))
         _assert_contiguous_cover(
             self, _layer_ranges(transfers), 0, PREFIX_LAYERS)
+        # 逐窗物化内部与整轮物化一致（窗序 1、窗内 tile 序自 1 连续）。
+        self.assertEqual(
+            [transfer.read_tile for transfer in transfers],
+            [(1, index + 1)
+             for index in range(self.prefix_template["tile_count"])])
         for transfer in transfers:
             self.assertEqual(transfer.kind, "noc_migrate")
             self.assertEqual(transfer.phase, "prefill")
@@ -234,22 +316,26 @@ class PartialRemoteReadManagerTests(unittest.TestCase):
             # 非 C13 交接块 / 非 C15 恢复组腿（独立前缀读流科目）。
             self.assertIsNone(transfer.handoff_chunk)
             self.assertIsNone(transfer.restore_group)
-            # 逐组字节按层区间派生（与 _noc_transfer 同源）。
-            expected = kv_cache_shard_bytes_for_layer_range(
-                self.model, HISTORY_TOKENS, 2,
-                layer_start=transfer.layer_start, layer_end=transfer.layer_end)
-            self.assertEqual(transfer.total_bytes, sum(expected))
-        # 总字节 = 前缀 [0, p) 整段派生（读流恰好覆盖驻留前缀一遍）。
+            # tile 身份在场（窗序 1、窗内 tile 序自 1 连续）。
+            self.assertIsNotNone(transfer.read_tile)
+        # 总字节 = 前缀 [0, p) 整段派生 × 扫描数（单窗单扫描 ⇒ 恰好
+        # 覆盖驻留前缀一遍；逐 shard 字节恒正）。
+        for transfer in transfers:
+            for shard in transfer.shards:
+                self.assertGreater(shard.bytes, 0)
         self.assertEqual(
             sum(t.total_bytes for t in transfers), sum(self.prefix_bytes))
 
     def test_planner_accepts_positional_and_keyword_args(self):
-        positional = self.prefix_transfers
+        positional = self.prefix_template
         keyword = self.manager.plan_prefill_remote_read_transfers(
             session=self.session,
             target_instance_index=EXEC_INSTANCE,
             history_tokens=HISTORY_TOKENS,
-            trigger_request_id="r1")
+            trigger_request_id="r1",
+            scan_passes=1, input_tokens=WINDOW_INPUT_TOKENS,
+            chunk_tokens=WINDOW_CHUNK_TOKENS,
+            query_tile_tokens=WINDOW_QUERY_TILE_TOKENS)
         self.assertEqual(keyword, positional)
 
     def test_suffix_restore_leg_covers_pool_suffix(self):
@@ -292,10 +378,11 @@ class PartialRemoteReadManagerTests(unittest.TestCase):
         self.assertTrue(
             {t.trigger_request_id for t in self.prefix_transfers}
             == {t.trigger_request_id for t in transfers} == {"r1"})
-        # 不相交且并集恰好铺满 [0, L)：前缀读流 + 后缀池恢复全覆盖。
-        self.assertEqual(prefix_ranges + suffix_ranges,
-                         plan_layer_groups(0, PREFIX_LAYERS)
-                         + plan_suffix_restore_groups(
+        # 不相交且并集恰好铺满 [0, L)：前缀读流窗（恒 [0, p)）+ 后缀
+        # 池恢复组全覆盖（D09 逐窗×tile：前缀腿层区间恒整段 [0, p)）。
+        self.assertEqual(prefix_ranges, ((0, PREFIX_LAYERS),))
+        self.assertEqual(suffix_ranges,
+                         plan_suffix_restore_groups(
                              PREFIX_LAYERS, self.model.layers))
         _assert_contiguous_cover(
             self, prefix_ranges + suffix_ranges, 0, self.model.layers)
@@ -344,7 +431,10 @@ class PartialRemoteReadManagerTests(unittest.TestCase):
             _instance_used_bytes(self.manager, HOME_INSTANCE),
             _instance_used_bytes(self.manager, EXEC_INSTANCE))
         self.manager.plan_prefill_remote_read_transfers(
-            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r2")
+            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r2",
+            scan_passes=1, input_tokens=WINDOW_INPUT_TOKENS,
+            chunk_tokens=WINDOW_CHUNK_TOKENS,
+            query_tile_tokens=WINDOW_QUERY_TILE_TOKENS)
         # 会话快照与两侧容量账本零变化。
         self.assertEqual(self.manager.session_snapshot("s"), snapshot_before)
         self.assertEqual(
@@ -360,8 +450,11 @@ class PartialRemoteReadManagerTests(unittest.TestCase):
         self.assertEqual(self.session.context_tokens, HISTORY_TOKENS)
         # 纯度不改变后续 prepare 行为：同一 planner 结果可复现。
         again = self.manager.plan_prefill_remote_read_transfers(
-            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r1")
-        self.assertEqual(again, self.prefix_transfers)
+            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r1",
+            scan_passes=1, input_tokens=WINDOW_INPUT_TOKENS,
+            chunk_tokens=WINDOW_CHUNK_TOKENS,
+            query_tile_tokens=WINDOW_QUERY_TILE_TOKENS)
+        self.assertEqual(again, self.prefix_template)
 
     def test_planner_requires_base_form_session(self):
         # 工作副本形态（prepare 之后）不得再当基规划：home==exec 的
@@ -373,7 +466,10 @@ class PartialRemoteReadManagerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.manager.plan_prefill_remote_read_transfers(
                 self.manager._sessions["s"], EXEC_INSTANCE,
-                HISTORY_TOKENS, "r1")
+                HISTORY_TOKENS, "r1",
+                scan_passes=1, input_tokens=WINDOW_INPUT_TOKENS,
+                chunk_tokens=WINDOW_CHUNK_TOKENS,
+                query_tile_tokens=WINDOW_QUERY_TILE_TOKENS)
 
 
 class LocalBaseRemoteReadRegressionTests(unittest.TestCase):
@@ -393,10 +489,20 @@ class LocalBaseRemoteReadRegressionTests(unittest.TestCase):
         self.assertEqual(self.session.home_instance, HOME_INSTANCE)
 
     def test_prefill_read_stream_covers_all_layers(self):
-        transfers = self.manager.plan_prefill_remote_read_transfers(
-            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r1")
+        template = self.manager.plan_prefill_remote_read_transfers(
+            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r1",
+            scan_passes=1, input_tokens=WINDOW_INPUT_TOKENS,
+            chunk_tokens=WINDOW_CHUNK_TOKENS,
+            query_tile_tokens=WINDOW_QUERY_TILE_TOKENS)
+        # planner 返回模板 dict（D16 有界形态）。
+        _assert_template_shape(
+            self, template,
+            session_id="s", trigger_request_id="r1",
+            home_instance=HOME_INSTANCE, exec_instance=EXEC_INSTANCE,
+            prefix_layers=self.model.layers, scan_passes=1)
+        transfers = _materialize_plan(self.manager, template)
         self.assertEqual(_layer_ranges(transfers),
-                         plan_layer_groups(0, self.model.layers))
+                         ((0, self.model.layers),))
         _assert_contiguous_cover(self, _layer_ranges(transfers),
                                  0, self.model.layers)
         for transfer in transfers:
@@ -410,10 +516,11 @@ class LocalBaseRemoteReadRegressionTests(unittest.TestCase):
                 (transfer.resident_prefix_layers_before,
                  transfer.resident_prefix_layers_after),
                 (self.model.layers, self.model.layers))
-        # 字节回归锚：p == L ⇒ 读流总量逐字节等于整份历史 KV
-        # （全层派生 ≡ 旧全层口径）。
+        # 模板总量守恒 = 整轮物化总量（p == L ⇒ 逐字节等于整份历史 KV，
+        # 全层派生 ≡ 旧全层口径）。
         full_bytes = kv_cache_shard_bytes_for_tokens(
             self.model, HISTORY_TOKENS, 2)
+        self.assertEqual(template["total_bytes"], sum(full_bytes))
         self.assertEqual(sum(t.total_bytes for t in transfers),
                          sum(full_bytes))
 
@@ -440,7 +547,10 @@ class LocalBaseRemoteReadRegressionTests(unittest.TestCase):
 
     def test_decode_credit_still_covers_all_layers(self):
         self.manager.plan_prefill_remote_read_transfers(
-            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r1")
+            self.session, EXEC_INSTANCE, HISTORY_TOKENS, "r1",
+            scan_passes=1, input_tokens=WINDOW_INPUT_TOKENS,
+            chunk_tokens=WINDOW_CHUNK_TOKENS,
+            query_tile_tokens=WINDOW_QUERY_TILE_TOKENS)
         _before, _transfers, _evictions = self.manager.prepare_prefill(
             session_id="s", target_instance_index=EXEC_INSTANCE,
             history_tokens=HISTORY_TOKENS, trigger_request_id="r1",
@@ -453,9 +563,10 @@ class LocalBaseRemoteReadRegressionTests(unittest.TestCase):
         self.assertEqual(plan["home_instance"], HOME_INSTANCE)
         self.assertEqual(plan["exec_instance"], EXEC_INSTANCE)
         self.assertEqual(plan["steps"], 8)
-        context_per_step = HISTORY_TOKENS + 10 + 8
+        # D09 式(18a)：读量基数 = 远端基础区间（HISTORY_TOKENS）——
+        # 输入/decode 增量本地读不过 NoC（旧终态口径 118 遍历废除）。
         expected_per_step = kv_cache_shard_bytes_for_layer_range(
-            self.model, context_per_step, 2,
+            self.model, HISTORY_TOKENS, 2,
             layer_start=0, layer_end=self.model.layers)
         self.assertEqual(
             tuple(spec[2] for spec in plan["shard_specs"]),

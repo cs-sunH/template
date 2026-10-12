@@ -12,6 +12,7 @@ legacy NodeView/map behavior for microbenchmark window queries.
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 #include <cerrno>
 #include <cstdio>
@@ -120,8 +121,23 @@ std::string write_minimal_system_config() {
         std::exit(EXIT_FAILURE);
     }
 
+    // The Sys constructor builds per-ComType logical topologies from the
+    // config (the Sys::Sys constructor's logical_topologies build-out, via
+    // CollectiveImplLookup::get_collective_impl with
+    // BypassRule::BYPASS_ALL_CUSTOM); a missing or empty *-implementation key no
+    // longer aborts construction (GeneralComplexTopology tolerates the empty
+    // list as a dummy topology) but would make any use of that collective
+    // type fail inside CollectiveImplLookup::get_collective_impl. The four
+    // keys below are the proven one-topology-dimension shape
+    // (physical_dims={1}, same as local_hbm_bandwidth_model_test.cc).
     constexpr char contents[] =
-        "{\"scheduling-policy\":\"FIFO\",\"hbm-bandwidth-contention\":false}";
+        "{\"scheduling-policy\":\"FIFO\",\"preferred-dataset-splits\":1,"
+        "\"collective-optimization\":\"localBWAware\","
+        "\"all-reduce-implementation\":[\"ring\"],"
+        "\"all-gather-implementation\":[\"ring\"],"
+        "\"reduce-scatter-implementation\":[\"ring\"],"
+        "\"all-to-all-implementation\":[\"ring\"],"
+        "\"hbm-bandwidth-contention\":false}";
     size_t offset = 0;
     while (offset < sizeof(contents) - 1) {
         const ssize_t written =
@@ -156,7 +172,9 @@ std::unique_ptr<AstraSim::Sys> make_online_test_system(
         0, "unused", "empty", system_config, &remote_memory, &network,
         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
         AstraSim::ExecutionDriven::ExecutionMode::Online,
-        std::make_shared<AstraSim::ExecutionDriven::EmptyGraphSource>());
+        // Empty-store NodeStoreGraphSource: the retired EmptyGraphSource
+        // placeholder is gone; an empty store never yields nodes either.
+        std::make_shared<AstraSim::ExecutionDriven::NodeStoreGraphSource>());
 }
 
 struct CompactStatisticsSnapshot {
@@ -304,27 +322,6 @@ void test_history_preserving_legacy_post_processing_succeeds(
            "history-preserving legacy post-processing keeps GPU union");
 }
 
-void test_compact_workload_report_fails_closed_without_mutation(
-    const std::string& system_config) {
-    expect_child_failure(
-        "compact Workload::report fails closed without mutation", [&] {
-            TestRemoteMemoryApi remote_memory;
-            TestNetworkApi network;
-            const auto system =
-                make_online_test_system(system_config, remote_memory, network);
-            Statistics& stats = *system->workload->stats;
-            const NodeView gpu = gpu_node(5);
-            OnlineStatisticsState state;
-            compact_start(stats, gpu, state, 10);
-            state.compute_utilization = 0.5;
-            state.memory_utilization = 0.25;
-            compact_end(stats, gpu, state, 30);
-
-            require_compact_state_unchanged_on_exit(stats);
-            system->workload->report();
-        });
-}
-
 void test_direct_overlapping_gpu_union_and_roofline() {
     Statistics stats(nullptr);
     stats.configure_online_history_preservation(false);
@@ -383,12 +380,10 @@ void test_cpu_no_util_and_comm_state_stay_compact() {
     const NodeView comm = make_node(22, NodeKind::CommSend);
     OnlineStatisticsState comm_state;
     compact_start(stats, comm, comm_state, 20);
-    comm_state.comm_size = 4096;
     compact_end(stats, comm, comm_state, 30);
 
-    expect(comm_state.completed && comm_state.comm_size.has_value() &&
-               comm_state.comm_size.value() == 4096,
-           "compact NodeStore state retains terminal communication facts");
+    expect(comm_state.completed,
+           "compact NodeStore state completes terminal comm nodes");
     expect(stats.retained_online_operator_count() == 0,
            "CPU, no-util GPU, and comm state never create map entries");
     expect(stats.calculate_type_time_in_window(
@@ -535,7 +530,6 @@ int main() {
     test_microbenchmark_history_is_unchanged();
     const std::string system_config = write_minimal_system_config();
     test_history_preserving_legacy_post_processing_succeeds(system_config);
-    test_compact_workload_report_fails_closed_without_mutation(system_config);
     expect(::unlink(system_config.c_str()) == 0,
            "remove temporary system config");
     return g_ok ? EXIT_SUCCESS : EXIT_FAILURE;

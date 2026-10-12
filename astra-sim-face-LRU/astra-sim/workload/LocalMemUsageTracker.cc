@@ -1,5 +1,6 @@
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 
+#include <charconv>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -16,7 +17,7 @@
 #include <algorithm>
 #include <limits>
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/common/Logging.hh"
 
 // Using the new feeder v3 APIs.
@@ -83,7 +84,24 @@ uint64_t LocalMemUsageTracker::parseIOInfos(
   for (int i = 0; i < values.size(); i += 2) {
     const TensorId& tensorName = values.Get(i);
     const std::string& sizeStr = values.Get(i + 1);
-    uint64_t size = std::stoull(sizeStr);
+    // Full-consumption numeric validation. The former bare std::stoull
+    // accepted "-1" via unsigned wrap-around and silently truncated
+    // trailing garbage ("1e6" -> 1, "0x400" -> 0); from_chars rejects a
+    // leading '-' for unsigned targets by itself, parses no leading
+    // whitespace, and the ptr check rejects any non-digit tail. The throw
+    // joins the existing recordReads/recordWrites throw points (callers
+    // run under Sys::call_events, whose Workload-side recordEnd wrappers
+    // fail closed with a diagnosis).
+    uint64_t size = 0;
+    const char* const begin = sizeStr.data();
+    const char* const end = begin + sizeStr.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, size);
+    if (ec != std::errc() || ptr != end) {
+      throw std::runtime_error(
+          "LocalMemUsageTracker::parseIOInfos: invalid tensor size \"" +
+          sizeStr + "\" at IO pair index " + std::to_string(i / 2) +
+          " (expected a plain non-negative integer)");
+    }
     IOinfos.emplace_back(tensorName, size);
     ++parsedCnt;
   }
@@ -94,8 +112,11 @@ void LocalMemUsageTracker::recordReads(
   const std::shared_ptr<Chakra::ETFeederNode> node,
   Tick start,
   Tick end) {
-  static std::vector<std::tuple<TensorId, uint64_t>> IOinfos;
-  IOinfos.clear();
+  // (2026-10-01) Stack-local instead of function-level static: the
+  // static shared the buffer across ALL tracker instances (every
+  // rank), safe only under the unstated single-threaded/no-reentrancy
+  // assumption; a per-node scratch on the stack has identical cost.
+  std::vector<std::tuple<TensorId, uint64_t>> IOinfos;
   uint64_t nodeId = node->id();
 
   if (!node->has_attr("inputs")) {
@@ -110,12 +131,12 @@ void LocalMemUsageTracker::recordReads(
       return;
   }
   const auto& values = attr.string_list().values();
-  uint64_t parsedCount = parseIOInfos(values, IOinfos);
+  parseIOInfos(values, IOinfos);
 
   for (const auto& iter : IOinfos) {
     TensorId tensorName = std::get<0>(iter);
     uint64_t tensorSize = std::get<1>(iter);
-    
+
     // Ignore tensors with size 0
     if (tensorSize == 0) {
       continue;
@@ -131,9 +152,15 @@ void LocalMemUsageTracker::recordReads(
       AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
           ->trace("tracker record read before write node.id={} tensor.name={} start={} end={}",
                   node->id(), tensorName, start, end);
+      // Read-before-write tensor (e.g. weights resident before the first
+      // observed access): register a placeholder write so the tensor joins
+      // the size map and the lifetime ledger, but anchor it at the FIRST
+      // READ's start -- the earliest observed evidence of residency.  The
+      // old start=0 anchor counted the tensor from tick 0 and inflated
+      // getPeakMemUsage and the lifetime heatmap (P1-5).
       MemActivity writeActivity;
-      writeActivity.start = 0ul;
-      writeActivity.end = 10ul;
+      writeActivity.start = start;
+      writeActivity.end = start;
       writeActivity.nodeName = "UNDEFINED";
       writeActivity.nodeId = UINT64_MAX;
       this->tensorSize.insert({tensorName, tensorSize});
@@ -153,8 +180,11 @@ void LocalMemUsageTracker::recordWrites(
   const std::shared_ptr<Chakra::ETFeederNode> node,
   Tick start,
   Tick end) {
-  static std::vector<std::tuple<TensorId, uint64_t>> IOinfos;
-  IOinfos.clear();
+  // (2026-10-01) Stack-local instead of function-level static: the
+  // static shared the buffer across ALL tracker instances (every
+  // rank), safe only under the unstated single-threaded/no-reentrancy
+  // assumption; a per-node scratch on the stack has identical cost.
+  std::vector<std::tuple<TensorId, uint64_t>> IOinfos;
   uint64_t nodeId = node->id();
 
   if (!node->has_attr("outputs")) {
@@ -168,12 +198,12 @@ void LocalMemUsageTracker::recordWrites(
   }
 
   const auto& values = attr.string_list().values();
-  uint64_t parsedCount = parseIOInfos(values, IOinfos);
+  parseIOInfos(values, IOinfos);
 
   for (const auto& iter : IOinfos) {
     TensorId tensorName = std::get<0>(iter);
     uint64_t tensorSize = std::get<1>(iter);
-    
+
     // Ignore tensors with size 0
     if (tensorSize == 0) {
       continue;
@@ -363,18 +393,20 @@ void LocalMemUsageTracker::dumpMemoryTrace(const std::string& filename) {
     file.close();
     return;
   }
+  // wl-metrics-E2 (2026-09-30): the read-side failure paths below (fflush /
+  // fseek / fread) used to log-and-return after the JSON header had been
+  // written, leaving a truncated, unparsable '"traceEvents": [ {...' file on
+  // disk. Align them with the write side's fail-closed strategy
+  // (append_trace_event throws; Workload::report's catch turns the throw
+  // into critical + exit) instead of leaving a partial artifact.
   if (std::fflush(this->trace_spool_) != 0) {
-    AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
-        ->error("failed to flush trace spool: {}", std::strerror(errno));
     file.close();
-    return;
+    throw_trace_spool_error("flushing the trace spool before the dump");
   }
   std::clearerr(this->trace_spool_);
   if (std::fseek(this->trace_spool_, 0, SEEK_SET) != 0) {
-    AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
-        ->error("failed to rewind trace spool: {}", std::strerror(errno));
     file.close();
-    return;
+    throw_trace_spool_error("rewinding the trace spool for the dump");
   }
 
   file << "{\n  \"traceEvents\": [\n";
@@ -384,18 +416,22 @@ void LocalMemUsageTracker::dumpMemoryTrace(const std::string& filename) {
     uint64_t encoded_size = 0;
     if (std::fread(&encoded_size, 1, sizeof(encoded_size),
                    this->trace_spool_) != sizeof(encoded_size)) {
-      AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
-          ->error("failed to read trace spool event header");
       file.close();
-      return;
+      throw std::runtime_error(
+          "LocalMemUsageTracker trace spool failed while reading an event "
+          "header (event " + std::to_string(event_index) + " of " +
+          std::to_string(this->trace_spool_event_count_) +
+          "): the dump would be truncated");
     }
     std::string encoded_event(static_cast<size_t>(encoded_size), '\0');
     if (std::fread(encoded_event.data(), 1, encoded_event.size(),
                    this->trace_spool_) != encoded_event.size()) {
-      AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
-          ->error("failed to read trace spool event body");
       file.close();
-      return;
+      throw std::runtime_error(
+          "LocalMemUsageTracker trace spool failed while reading an event "
+          "body (event " + std::to_string(event_index) + " of " +
+          std::to_string(this->trace_spool_event_count_) +
+          "): the dump would be truncated");
     }
     if (event_index != 0) {
       file << ",\n";
@@ -408,10 +444,29 @@ void LocalMemUsageTracker::dumpMemoryTrace(const std::string& filename) {
 
 void LocalMemUsageTracker::buildMemoryTimeline() {
   TimelineActionsByTick actions_by_tick;
+  // sync-cpp-E7 (2026-09-30, ported from the face repo): a read-before-write
+  // tensor (its last read ends strictly before its write starts -- a
+  // malformed input shape) used to stay in the live-byte sweep forever: the
+  // write inserted it into live_tensors, but its removal action (the last
+  // read) sat at an earlier tick where the erase had already been consumed
+  // as a no-op, so its bytes inflated the peak to the end of the trace. The
+  // heatmap clamps the same backwards-lifetime shape to a zero-duration
+  // row; mirror that here by excluding such tensors from the byte
+  // accounting (their B/E lifetime events are still emitted, unchanged).
+  std::unordered_set<TensorId> read_before_write_tensors;
+  for (const auto& item : this->memReads) {
+    const auto write_it = this->memWrites.find(item.first);
+    if (write_it != this->memWrites.end() && !item.second.empty() &&
+        item.second.back().end < write_it->second.start) {
+      read_before_write_tensors.insert(item.first);
+    }
+  }
   for (const auto& item : this->memWrites) {
     const TensorId& tensorName = item.first;
     const MemActivity& writeActivity = item.second;
-    actions_by_tick[writeActivity.start].writes.push_back(&tensorName);
+    if (read_before_write_tensors.count(tensorName) == 0) {
+      actions_by_tick[writeActivity.start].writes.push_back(&tensorName);
+    }
     json tensorWriteEvent = {
         {"name", tensorName},
         {"cat", "tensorLifetime"},
@@ -425,7 +480,10 @@ void LocalMemUsageTracker::buildMemoryTimeline() {
   for (const auto& item : this->memReads) {
     const TensorId& tensorName = item.first;
     const MemActivity& latestReadActivity = item.second.back();
-    actions_by_tick[latestReadActivity.end].last_reads.push_back(&tensorName);
+    if (read_before_write_tensors.count(tensorName) == 0) {
+      actions_by_tick[latestReadActivity.end].last_reads.push_back(
+          &tensorName);
+    }
     json tensorLastReadEvent = {
         {"name", tensorName},
         {"cat", "tensorLifetime"},

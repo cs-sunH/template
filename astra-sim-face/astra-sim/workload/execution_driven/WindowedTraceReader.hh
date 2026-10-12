@@ -72,18 +72,23 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      algorithm as the Python materializer's sidecar writer), csv byte count,
      data-row count, session count, turn-0 count, turn-0 arrival min/max,
      turn-0 file-order adjacent inversion count, and session-block
-     contiguity. If a sidecar `<queue_csv>.provenance.json` exists, every
-     field is compared; any mismatch (or unparsable JSON, or schema != 1)
-     fails the run with [Error] + exit BEFORE any Submit. An absent sidecar
-     logs one "[online] provenance sidecar: absent (no gate)" line and
-     continues (smoke fixtures materialized by older scripts).
+     contiguity. The sidecar `<queue_csv>.provenance.json` is REQUIRED (P1
+     fix 2026-09-28, ported to this repo 2026-10-07): every field is
+     compared; any mismatch (or unparsable JSON, or schema != 1, or an
+     ABSENT sidecar) fails the run with [Error] + exit BEFORE any Submit.
+     The former "absent (no gate)" pass-through let a truncated half-written
+     queue (materializer dying mid-derivation, before its sidecar existed)
+     silently shrink the simulation input while every gate stayed green; the
+     materializer now publishes queue+sidecar atomically and the reader
+     refuses any queue that arrives without its provenance record.
   6. ARRIVAL TIME AUDIT + RUN-END GATE. Every turn-0 entry records its
      declared arrival and the simulation tick at which its Submit was
      enqueued (discovered; via RequestIngress::current_time()). The ingress
      records the effective alarm tick per static Submit. At run end the
      reader joins the two (audit_static_arrivals): per-entry
-     declared/discovered/effective/late_by_ns/late_source (static_late /
-     t0_boundary / on_time) plus summary counters and ingress-delay
+     declared/discovered/effective/late_by_ns/late_source
+     (static_submit_late / t0_boundary / on_time) plus summary counters and
+     ingress-delay
      percentiles (nearest-rank p50/p99/max). The GATE for a finite static
      CSV run: late_static_submit_count == 0 AND every turn-0 ingress_delay
      == 0 except t0-boundary rows (declared==0, discovered==0, effective==1
@@ -122,6 +127,15 @@ with producers.
 
 namespace AstraSim {
 namespace ExecutionDriven {
+/// Canonical 8-column request-queue CSV header (P2-9, shared with the
+/// reader unit tests so both pin the same schema; aligned with the wscllm
+/// reader). The index pass fail-closes on any first non-empty line that
+/// does not match (a single trailing '\r' is tolerated for CRLF inputs,
+/// matching the binary-mode line split).
+inline constexpr char kRequestQueueCsvHeader[] =
+    "session_id,turn_index,request_id,prefill_length,decode_length,"
+    "session_arrival_time_ns,inter_request_interval_ns,description";
+
 
 class WindowedTraceReader {
   public:
@@ -169,19 +183,14 @@ class WindowedTraceReader {
     /// The whole-file data-row count. Equals data_rows() after the index
     /// pass. The run-end completion audit denominator.
     uint64_t total_data_rows() const { return data_rows_; }
-    /// Number of pump calls that indexed rows or submitted at least one
-    /// calendar entry.
-    size_t read_pumps() const { return read_pumps_; }
-    /// Accumulated wall time spent reading/parsing the index pass.
-    uint64_t io_read_ns() const { return io_read_ns_; }
-    /// Peak outstanding (submitted-but-unfired turn-0) count.
-    size_t peak_window_occupancy() const { return peak_occupancy_; }
     /// Exact current count of submitted turn-0 rows whose alarm has not
     /// fired yet.
     size_t current_window_occupancy() const { return outstanding_rows_.size(); }
 
     /// Index-pass provenance statistics (all computed over the raw file
-    /// bytes; identical definitions on the Python materializer side).
+    /// bytes; identical definitions on the Python materializer side). The
+    /// sidecar gate compares these against `<queue_csv>.provenance.json`;
+    /// report() prints the session/turn-0 summary.
     struct ProvenanceStats {
         uint64_t fnv1a64 = 0;
         uint64_t csv_bytes = 0;
@@ -193,17 +202,20 @@ class WindowedTraceReader {
         uint64_t turn0_adjacent_inversions = 0;
         bool session_blocks_contiguous = true;
     };
-    const ProvenanceStats& provenance() const { return prov_; }
-    /// Sidecar comparison outcome ("matched" / "absent-no-gate").
-    const std::string& provenance_sidecar_status() const {
-        return provenance_status_;
-    }
+    // D2 (2026-09-28): the former provenance_sidecar_status() accessor (and
+    // the write-only provenance_status_ member it returned) was test-only --
+    // production has zero callers; the gate's decisions are visible through
+    // its [online] provenance sidecar log lines and fail-closed aborts.
 
     /// Per-turn-0 arrival audit record (joined from the reader's calendar
     /// and the ingress's effective-arrival records). late_source:
-    /// "on_time" / "t0_boundary" / "static_submit_late" / "no_effective_record"
-    /// (the last one is itself a gate failure: a submitted turn-0 whose
-    /// Submit never drained -- impossible on a completed run).
+    /// "on_time" / "t0_boundary" / "capacity_backpressure" (M5: the Submit
+    /// was parked by ingress backpressure at least once -- exempt from the
+    /// run-end gate, disclosed via the separate
+    /// late_static_submit_backpressure counter) / "static_submit_late" /
+    /// "no_effective_record" (the last one is itself a gate failure: a
+    /// submitted turn-0 whose Submit never drained -- impossible on a
+    /// completed run).
     struct ArrivalAuditEntry {
         int64_t queue_index = -1;
         uint64_t declared_arrival_ns = 0;
@@ -211,18 +223,27 @@ class WindowedTraceReader {
         uint64_t effective_arrival_ns = 0;
         uint64_t late_by_ns = 0;
         const char* late_source = "no_effective_record";
+        bool backpressure_deferred = false;
     };
 
     /// Summary of the arrival audit + the run-end static-arrival gate
     /// (finite static CSV runs; external stream / future alarms never
-    /// gated). delay percentiles are nearest-rank over ALL turn-0 entries
-    /// (t0-boundary rows contribute delay 1).
+    /// gated). delay percentiles are nearest-rank over all turn-0 entries
+    /// that reached the simulation (rejected rows are excluded by
+    /// arrival_audit; submitted-but-undrained rows are excluded by design
+    /// -- a completed run drains everything). t0-boundary rows contribute
+    /// delay 1.
     struct ArrivalAuditSummary {
         uint64_t turn0_submitted = 0;
         uint64_t late_static_submit = 0;
         uint64_t late_external_stream = 0;
         uint64_t late_future_alarm_rounding = 0;
         uint64_t t0_boundary_clamp = 0;
+        // M5: Submit-path clamps whose entry was parked by ingress
+        // backpressure at least once. Disclosed separately and EXEMPT from
+        // the run-end gate (a capacity artifact of the bounded queue, not
+        // reader lateness).
+        uint64_t late_static_submit_backpressure = 0;
         uint64_t delay_p50_ns = 0;
         uint64_t delay_p99_ns = 0;
         uint64_t delay_max_ns = 0;
@@ -249,6 +270,10 @@ class WindowedTraceReader {
         bool submitted = false;
         bool rejected = false;
         uint64_t discovered_tick = 0;  // eq time when its Submit was enqueued
+        // M5: the cursor offered this entry to the ingress and was parked
+        // by queue backpressure at least once. Its eventual clamp is a
+        // CAPACITY artifact, not reader lateness.
+        bool backpressure_deferred = false;
     };
 
     std::string csv_path_;
@@ -272,15 +297,29 @@ class WindowedTraceReader {
     // ---- index pass state ----
     std::ifstream file_;  // binary; chunked raw-byte reads
     ProvenanceStats prov_;
-    std::string provenance_status_ = "not-indexed";
     uint64_t fnv1a64_ = 14695981039346656037ULL;  // FNV-1a 64 offset basis
     // Session-block validation state.
     std::string current_session_;
+    // M1-2 companion: false until the first data row opened the initial
+    // session block. Distinguishes "no session seen yet" (an empty
+    // session_id there is an input defect and must be named as such) from
+    // the legitimate empty-string session a later row may open.
+    bool have_current_session_ = false;
     bool in_block_ = false;
     int64_t expected_next_turn_ = 0;
     uint64_t prev_turn0_arrival_ = 0;
     bool have_prev_turn0_ = false;
     std::unordered_set<std::string> seen_sessions_;
+    // M1-2 (2026-09-26; class-agnostic since the cross-class fix): request_id
+    // uniqueness validation over the index pass. A duplicated request_id --
+    // turn-0 vs turn-0, turn>0 vs turn>0, or ACROSS the turn classes --
+    // would otherwise double-book C++ counters while the DecisionMailbox
+    // same-epoch same-identity dedup cannot help (the duplicate turn>0
+    // ARRIVAL lands in a later dedup epoch than the turn-0 one), silently
+    // dropping the second ARRIVAL and diverging C++/Python counts until an
+    // unrelated dead-end abort. Cleared with the session tails at
+    // end-of-pass.
+    std::unordered_set<std::string> seen_request_ids_;
 
     // ---- turn-0 calendar ----
     std::vector<CalendarEntry> calendar_;

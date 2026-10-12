@@ -18,7 +18,7 @@ Request-neutral lifecycle state machine (方案 §4 步骤 1-2 操作 3):
 Final end authority belongs exclusively to the ServiceCoordinator
 (总体方案 §5.5): EventQueue empty != FINISHED, and in online mode the
 Workload::call sim_notify_finished()/is_finished side effect is disabled
-(Workload.cc:625-634), so a temporarily empty graph can never end the online
+(Workload.cc), so a temporarily empty graph can never end the online
 simulation and drop later injections.
 
 wait_for_work() blocks (no busy wait) until signal_work() is raised or the
@@ -55,7 +55,6 @@ class ServiceCoordinator {
     // Fixture-only in-memory prefix. Production observers must use the hook,
     // which still receives every transition. Keeping a fixed prefix prevents
     // a long-lived open-input service from retaining one entry per request.
-    static constexpr std::size_t kTransitionLogCapacity = 64;
 
     // Step 1-10: transition observer (fixture/status logging). Invoked from
     // set_state under the internal mutex; the hook MUST NOT call back into
@@ -81,8 +80,24 @@ class ServiceCoordinator {
     /// `reason` records HOW the input was closed (explicit close command /
     /// CLI / EOF terminal command / error command) for the run-end
     /// lifecycle audit (合同② EOF vs 显式 close vs 异常退出 三态区分).
+    /// M4 fix (2026-09-29): the FINISHED transition itself is DEFERRED to
+    /// note_input_drained() -- at a producer-linearized close the bounded
+    /// ingress queue may still hold every Submit (the startup --close-input
+    /// vacuum: all counters zero while nothing drained), and finishing here
+    /// wedged the state_ label at FINISHED for the whole run (lifecycle
+    /// transition log silently stopped). finished() remains the pure
+    /// counter query (the service_vacuum_test Part-1 repro depends on it).
     void mark_input_closed(
         InputCloseReason reason = InputCloseReason::ExplicitClose);
+    /// M4 fix (2026-09-29): simulation thread, called by
+    /// RequestIngress::drain_commands once the queue is empty AND the
+    /// producer gate is closed -- every command linearized before the close
+    /// has now been observed. Completes the deferred finish: clears the
+    /// mark_input_closed latch and re-evaluates maybe_finish() (a no-op
+    /// while requests are still active/pending; FINISHED lands at the last
+    /// completion as usual). No-op when the input is still open or no
+    /// deferred finish is pending.
+    void note_input_drained();
     /// Phase-7 §10.7: how the input was closed (valid once the input is
     /// closed; ExplicitClose is the default for the direct/CLI close path).
     [[nodiscard]] InputCloseReason input_close_reason() const;
@@ -132,9 +147,7 @@ class ServiceCoordinator {
     void signal_work();
 
     /// Bounded ordered prefix of state transitions (fixture assertion data).
-    [[nodiscard]] const std::vector<ServiceState>& transition_log() const;
     /// Number of transitions omitted after the bounded prefix filled.
-    [[nodiscard]] uint64_t transition_log_dropped() const;
     /// Step 1-10: install the transition observer (IDLE/ACTIVE/DRAINING/
     /// FINISHED 迁移日志与时间). Overwrites any previous hook.
     void set_transition_hook(StateTransitionHook hook);
@@ -162,8 +175,11 @@ class ServiceCoordinator {
     uint64_t completed_request_count_ = 0;
     uint64_t active_request_count_ = 0;
     uint64_t pending_alarm_count_ = 0;
-    std::vector<ServiceState> transition_log_;
-    uint64_t transition_log_dropped_ = 0;
+    // M4 fix (2026-09-29): set by mark_input_closed, consumed by
+    // note_input_drained -- the FINISHED evaluation is deferred to the
+    // ingress-drain boundary so a close with Submit commands still queued
+    // (all counters in the pre-drain vacuum) cannot stamp FINISHED.
+    bool finish_after_drain_ = false;
     StateTransitionHook transition_hook_;
 };
 

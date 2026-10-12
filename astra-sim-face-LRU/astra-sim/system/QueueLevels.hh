@@ -17,6 +17,11 @@ namespace AstraSim {
 class QueueLevels {
   public:
     std::vector<QueueLevelHandler> levels;
+
+    // Physical dimension count (one level per configured topology dimension).
+    // CommunicatorGroup fail-closes against this before building a shaped
+    // communicator whose logical dimension count exceeds it (H1).
+    int num_levels() const { return static_cast<int>(levels.size()); }
     std::pair<int, RingTopology::Direction> get_next_queue_at_level(int level);
     std::pair<int, RingTopology::Direction> get_next_queue_at_level_first(
         int level);

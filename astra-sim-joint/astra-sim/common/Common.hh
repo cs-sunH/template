@@ -14,7 +14,6 @@ namespace AstraSim {
 typedef unsigned long long Tick;
 
 constexpr uint64_t CLOCK_PERIOD = 1;           // 1ns
-constexpr uint64_t FREQ = 1000 * 1000 * 1000;  // 1GHz
 
 enum time_type_e { SE = 0, MS, US, NS, FS };
 
@@ -28,18 +27,23 @@ struct timespec_t {
 };
 
 struct sim_request {
-    uint32_t srcRank;
-    uint32_t dstRank;
-    uint32_t tag;
-    req_type_e reqType;
-    uint64_t reqCount;
-    uint32_t vnet;
-    uint32_t layerNum;
+    // Default member initializers (M1 port, 2026-09-30): the rendezvous
+    // path copies this struct by value and reads fields that several issue
+    // paths never fill -- the uninitialized copies were formal UB even
+    // though the current analytical backend never consumes the payload.
+    uint32_t srcRank = 0;
+    uint32_t dstRank = 0;
+    uint32_t tag = 0;
+    req_type_e reqType = UINT8;
+    uint64_t reqCount = 0;
+    uint32_t vnet = 0;
+    uint32_t layerNum = 0;
 };
 
+// MetaData survives as an empty marker base for handler-data classes;
+// its historic timestamp member had no reader anywhere.
 class MetaData {
   public:
-    timespec_t timestamp;
 };
 
 enum class ComType {
@@ -69,7 +73,6 @@ enum class BusType { Both = 0, Shared, Mem };
 
 enum class StreamState {
     Created = 0,
-    Transferring,
     Ready,
     Executing,
     Zombie,

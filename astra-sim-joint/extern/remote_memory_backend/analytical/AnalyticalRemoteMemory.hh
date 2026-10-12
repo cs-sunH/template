@@ -9,6 +9,8 @@ LICENSE file in the root directory of this source tree.
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -130,6 +132,51 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   // resolve_port_index).
   [[nodiscard]] PortStatsSnapshot port_stats(std::size_t port_index) const;
 
+  /// Per-port resource version for D1 invalidation. The version advances on
+  /// actual remote-port job insertion and bandwidth-stream membership flips;
+  /// callback delivery from the propagation/Workload path is not port service.
+  [[nodiscard]] uint64_t port_resource_version(std::size_t port_index) const;
+  using PortResourceMutationObserver = std::function<void(
+      bool before_change, std::size_t port_index, double time_ns,
+      uint64_t version)>;
+  [[nodiscard]] uint64_t add_port_resource_mutation_observer(
+      PortResourceMutationObserver observer);
+  void remove_port_resource_mutation_observer(uint64_t observer_id) noexcept;
+
+  // ---------------------------------------------------------------------
+  // W1 (joint work ledger, 2026-09-29): per-port job snapshot for the
+  // causal work ledger -- the pool-port arbitration facts StateDelta never
+  // carried (per §5.1a: pool live streams stayed out of the delta). The query
+  // advances to the current simulation tick before reading the static point;
+  // every PortJob uniquely owns its wlhd until the completion callback, so reading
+  // wlhd->sys_id / wlhd->node_id here is safe and gives the (rank, node_id)
+  // identity the Python ledger keys on. remaining_bytes are integrated up to
+  // the backend's continuous fluid clock (current_time_ns_, exported as
+  // as_of_ns) -- never further.
+  // ---------------------------------------------------------------------
+  struct PortJobSnapshot {
+    uint64_t issue_seq = 0;       // per-port monotonic; job identity
+    int sys_id = 0;               // issuing rank (from wlhd)
+    uint64_t node_id = 0;         // workload node id (from wlhd)
+    uint64_t bytes = 0;           // original tensor size
+    double remaining_bytes = 0.0; // Streaming only; latency phase = bytes
+    double latency_ready_ns = 0.0;
+    int state = 0;                // PortJobState raw (0 wait, 1 stream, 2 done)
+  };
+
+  struct PortLedgerSnapshot {
+    std::size_t port_index = 0;
+    double bandwidth_Bpns = 0.0;  // physical equal-share capacity
+    uint64_t latency_waiting_count = 0;
+    uint64_t streaming_count = 0;
+    uint64_t completion_waiting_count = 0;
+    double as_of_ns = 0.0;        // continuous fluid clock the remainders
+                                  // are integrated through
+    std::vector<PortJobSnapshot> jobs;  // ascending issue_seq
+  };
+
+  [[nodiscard]] std::vector<PortLedgerSnapshot> port_snapshot();
+
  private:
   // Continuous per-port job lifecycle (plan §3.1).  A transaction is
   // LatencyWaiting until its fixed latency expires (latency never consumes
@@ -208,6 +255,7 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
     std::vector<PortJob> jobs;  // live jobs in any non-delivered state
     PortStats stats;
     uint64_t next_issue_seq = 1;
+    uint64_t resource_version = 0;
   };
 
   // Result of one event-point sweep over a port's jobs.
@@ -270,11 +318,18 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   // exhausted streams leave the bandwidth denominator at their exact
   // completion instant (plan §3.1).
   static FlipSummary flip_due_jobs(PortState& port, double t);
-  static double advance_port(double bw_bytes_per_ns, PortState& port,
-                             double from_ns, double to_ns,
-                             bool stop_at_first_completion);
+  static bool has_due_stream_membership_flip(const PortState& port,
+                                             double time_ns);
+  double advance_port(double bw_bytes_per_ns, PortState& port,
+                      double from_ns, double to_ns,
+                      bool stop_at_first_completion, std::size_t port_index,
+                      bool publish_resource_mutations);
+  void notify_port_resource_mutation(
+      bool before_change, std::size_t port_index, double time_ns) noexcept;
+  void bump_port_resource_version(std::size_t port_index,
+                                  double time_ns) noexcept;
   void advance_all_ports_to(double t_ns);
-  AstraSim::Tick earliest_callback_tick() const;
+  AstraSim::Tick earliest_callback_tick();
   void replan_transition();
   void dispatch_transitions();
   void deliver_dual_zero(uint64_t timer_seq);
@@ -307,6 +362,9 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   std::unordered_map<int, std::size_t> per_npu_port_indices;
 
   std::vector<PortState> ports_;  // per mapped port (replaces the FIFO deque)
+  std::map<uint64_t, PortResourceMutationObserver>
+      port_resource_mutation_observers_;
+  uint64_t next_port_resource_observer_id_ = 1;
 
   // Global single transition event (§3.3): bound to the FIRST set_sys host;
   // ports and dual-zero timers never own a second Sys event queue.

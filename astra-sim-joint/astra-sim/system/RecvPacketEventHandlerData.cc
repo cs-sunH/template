@@ -11,19 +11,18 @@ using namespace AstraSim;
 
 RecvPacketEventHandlerData::RecvPacketEventHandlerData() {
     this->workload = nullptr;
+    this->callable = nullptr;
     this->wlhd = nullptr;
     this->owner = nullptr;
-    this->custom_algorithm = nullptr;
 }
 
 RecvPacketEventHandlerData::RecvPacketEventHandlerData(
     BaseStream* owner, int sys_id, EventType event, int vnet)
     : BasicEventHandlerData(sys_id, event) {
     this->workload = nullptr;
+    this->callable = nullptr;
     this->wlhd = nullptr;
     this->owner = owner;
-    this->custom_algorithm = nullptr;
     this->vnet = vnet;
     this->message_end = true;
-    ready_time = Sys::boostedTick();
 }

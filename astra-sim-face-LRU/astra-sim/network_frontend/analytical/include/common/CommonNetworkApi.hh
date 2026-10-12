@@ -13,7 +13,8 @@ LICENSE file in the root directory of this source tree.
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <vector>
+// <vector> removed (2026-09-30, face-LRU audit dead-code pass): no vector
+// appears in this header.
 
 using namespace AstraSim;
 using namespace AstraSimAnalytical;
@@ -62,6 +63,11 @@ class CommonNetworkApi : public AstraNetworkAPI {
      */
     [[nodiscard]] timespec_t sim_get_time() override;
 
+    /// The analytical backend merges same-tick events only inside its invoke
+    /// pass (EventQueue::in_invoke_context); see AstraNetworkAPI for the
+    /// contract and Sys::try_register_event for the consumer.
+    [[nodiscard]] bool backend_in_invoke_context() const override;
+
     /**
      * Implement sim_schedule of AstraNetworkAPI.
      */
@@ -104,12 +110,6 @@ class CommonNetworkApi : public AstraNetworkAPI {
 
     /// callback tracker
     static CallbackTracker callback_tracker;
-
-    /// bandwidth per each network dimension of the topology
-    static std::vector<Bandwidth> bandwidth_per_dim;
-
-    /// number of network dimensions of the topology
-    static int dims_count;
 
   private:
     struct CancellableScheduleContext {

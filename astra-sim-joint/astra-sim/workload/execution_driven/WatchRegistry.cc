@@ -13,6 +13,8 @@ Implementation (方案 §4 步骤 1-5).
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace AstraSim {
@@ -21,15 +23,51 @@ namespace ExecutionDriven {
 uint64_t WatchRegistry::register_stage_watch(
     const std::string& request_id, const std::string& stage,
     uint64_t generation, std::set<CompletionKey> expected_members,
-    std::set<NodeTerminalStatus> satisfying_statuses) {
+    std::set<NodeTerminalStatus> satisfying_statuses, bool* created) {
+    if (created != nullptr) {
+        *created = true;
+    }
     const Identity identity{request_id, stage, generation};
     const auto existing = identity_to_watch_.find(identity);
     if (existing != identity_to_watch_.end()) {
         // Register once, fire once: a duplicate registration (e.g. a double
         // commit of the same stage) must not create a second watch.
+        // Minor(2026-09-30,wscllm-LRU 批次C 同款镜像):跨批重复身份静默
+        // 吞掉新成员表——fire 语义有 lost-wakeup 兜底,故不 fail-closed,
+        // 但必须显式告警取证,不得无声吞掉。
+        if (created != nullptr) {
+            *created = false;
+        }
+        const StageWatch& existing_watch = watches_.at(existing->second);
+        if (existing_watch.expected_members != expected_members ||
+            existing_watch.satisfying_statuses != satisfying_statuses) {
+            std::fprintf(
+                stderr,
+                "[Error] (execution_driven/watch_registry) duplicate watch "
+                "identity carries different members/status policy: "
+                "request_id=%s stage=%s generation=%llu\n",
+                request_id.c_str(), stage.c_str(),
+                static_cast<unsigned long long>(generation));
+            std::abort();
+        }
+        std::fprintf(stderr,
+                     "[Warn] (execution_driven/watch_registry) duplicate "
+                     "watch identity swallowed (register once / fire once): "
+                     "request_id=%s stage=%s generation=%llu "
+                     "dropped_member_count=%zu\n",
+                     request_id.c_str(), stage.c_str(),
+                     static_cast<unsigned long long>(generation),
+                     expected_members.size());
         return existing->second;
     }
-    const uint64_t watch_id = next_watch_id_++;
+    if (next_watch_id_ == std::numeric_limits<uint64_t>::max()) {
+        std::fprintf(
+            stderr,
+            "[Error] (execution_driven/watch_registry) watch id space "
+            "exhausted (fail-closed)\n");
+        std::abort();
+    }
+    const uint64_t watch_id = next_watch_id_;
     StageWatch watch;
     watch.watch_id = watch_id;
     watch.request_id = request_id;
@@ -38,16 +76,60 @@ uint64_t WatchRegistry::register_stage_watch(
     watch.expected_members = std::move(expected_members);
     watch.satisfying_statuses = std::move(satisfying_statuses);
     const auto inserted = watches_.emplace(watch_id, std::move(watch));
-    for (const auto& member : inserted.first->second.expected_members) {
-        member_to_watch_ids_[member].push_back(watch_id);
+    if (!inserted.second) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/watch_registry) watch id "
+                     "collision (fail-closed)\n");
+        std::abort();
     }
-    identity_to_watch_.emplace(std::move(identity), watch_id);
-    // Phase 4: per-request watch-id index (REQUEST_COMPLETE-commit removal).
-    request_to_watch_ids_[request_id].push_back(watch_id);
-    // 拼 batch 适配(2026-08-22):列车哨兵入独立索引。
-    if (request_id.rfind("batch_train_", 0) == 0) {
-        sentinel_watch_ids_.push_back(watch_id);
+    try {
+        for (const auto& member : inserted.first->second.expected_members) {
+            member_to_watch_ids_[member].push_back(watch_id);
+        }
+        const auto identity_inserted =
+            identity_to_watch_.emplace(identity, watch_id);
+        if (!identity_inserted.second) {
+            throw std::logic_error("watch identity collision");
+        }
+        // Phase 4: per-request watch-id index (REQUEST_COMPLETE-commit
+        // removal).
+        request_to_watch_ids_[request_id].push_back(watch_id);
+        // 拼 batch 适配(2026-08-22):列车哨兵入独立索引。
+        if (request_id.rfind("batch_train_", 0) == 0) {
+            sentinel_watch_ids_.push_back(watch_id);
+        }
+    } catch (...) {
+        // Roll back every index touched above before exposing the failure;
+        // callers can retry without a half-registered watch.
+        identity_to_watch_.erase(identity);
+        auto request_it = request_to_watch_ids_.find(request_id);
+        if (request_it != request_to_watch_ids_.end()) {
+            auto& ids = request_it->second;
+            ids.erase(std::remove(ids.begin(), ids.end(), watch_id),
+                      ids.end());
+            if (ids.empty()) {
+                request_to_watch_ids_.erase(request_it);
+            }
+        }
+        sentinel_watch_ids_.erase(
+            std::remove(sentinel_watch_ids_.begin(), sentinel_watch_ids_.end(),
+                        watch_id), sentinel_watch_ids_.end());
+        for (const auto& member : inserted.first->second.expected_members) {
+            auto member_it = member_to_watch_ids_.find(member);
+            if (member_it == member_to_watch_ids_.end()) {
+                continue;
+            }
+            auto& ids = member_it->second;
+            ids.erase(std::remove(ids.begin(), ids.end(), watch_id),
+                      ids.end());
+            if (ids.empty()) {
+                member_to_watch_ids_.erase(member_it);
+            }
+        }
+        watches_.erase(inserted.first);
+        throw;
     }
+    ++next_watch_id_;
     return watch_id;
 }
 
@@ -188,6 +270,7 @@ void WatchRegistry::remove_all() {
     member_to_watch_ids_.clear();
     request_to_watch_ids_.clear();
     sentinel_watch_ids_.clear();
+    fired_.clear();
 }
 
 void WatchRegistry::set_fire_notifier(WatchFireNotifier notifier) {
@@ -204,15 +287,18 @@ void OnlineCompletionHookContext::configure_issue_passes(
                      "issue-pass configuration\n");
         std::abort();
     }
+    // Build the rank-indexed storage before publishing any new owner state;
+    // an allocation failure must leave an already configured context intact.
+    std::vector<uint8_t> pending(rank_count, 0);
+    std::vector<IssuePassArg> args(rank_count);
+    for (size_t rank = 0; rank < rank_count; ++rank) {
+        args[rank] = IssuePassArg{this, static_cast<int>(rank)};
+    }
     event_queue_ = event_queue;
     issue_pass_callback_ = callback;
     issue_pass_callback_context_ = callback_context;
-    issue_pass_pending_.assign(rank_count, 0);
-    issue_pass_args_.resize(rank_count);
-    for (size_t rank = 0; rank < rank_count; ++rank) {
-        issue_pass_args_[rank] =
-            IssuePassArg{this, static_cast<int>(rank)};
-    }
+    issue_pass_pending_.swap(pending);
+    issue_pass_args_.swap(args);
 }
 
 bool OnlineCompletionHookContext::schedule_issue_pass(const int rank) {
@@ -291,6 +377,55 @@ void online_completion_hook(void* ctx, int rank, uint64_t node_id,
     //     schedule_event_deferred -- this hook runs inside Workload::call
     //     (an event-handler context). Unwired (fixture mode) => facts only.
     context->schedule_issue_pass(rank);
+}
+
+uint64_t WatchRegistry::member_reference_count(
+    const std::vector<MemberProgression>& progressions) const {
+    for (const MemberProgression& progression : progressions) {
+        if (progression.rank < 0 || progression.first_node_id == 0 ||
+            progression.count == 0 || progression.stride == 0) {
+            throw std::invalid_argument(
+                "watch member progression must have positive rank/id/count/stride");
+        }
+        const unsigned __int128 last =
+            static_cast<unsigned __int128>(progression.first_node_id) +
+            static_cast<unsigned __int128>(progression.count - 1) *
+                progression.stride;
+        if (last > std::numeric_limits<uint64_t>::max()) {
+            throw std::overflow_error("watch member progression overflows uint64");
+        }
+    }
+    uint64_t count = 0;
+    for (const auto& member : member_to_watch_ids_) {
+        const CompletionKey& key = member.first;
+        const bool covered = std::any_of(
+            progressions.begin(), progressions.end(),
+            [&key](const MemberProgression& progression) {
+                if (key.rank != progression.rank ||
+                    key.node_id < progression.first_node_id) {
+                    return false;
+                }
+                const uint64_t delta =
+                    key.node_id - progression.first_node_id;
+                return delta % progression.stride == 0 &&
+                    delta / progression.stride < progression.count;
+        });
+        if (!covered) continue;
+        for (const uint64_t watch_id : member.second) {
+            const auto watch = watches_.find(watch_id);
+            if (watch == watches_.end() || watch->second.fired ||
+                watch->second.completed_members.find(key) !=
+                    watch->second.completed_members.end()) {
+                continue;
+            }
+            if (count == std::numeric_limits<uint64_t>::max()) {
+                throw std::overflow_error(
+                    "watch member reference count overflows");
+            }
+            ++count;
+        }
+    }
+    return count;
 }
 
 }  // namespace ExecutionDriven

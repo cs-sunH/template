@@ -19,7 +19,6 @@ from typing import Any, Iterable, Optional, Sequence
 RESIDENT = "RESIDENT"
 EVICTED = "EVICTED"
 NO_HISTORY = "NO_HISTORY"
-LOCAL_HIT = "LOCAL_HIT"
 NOC_MIGRATE = "NOC_MIGRATE"
 RECOMPUTE = "RECOMPUTE"
 
@@ -76,7 +75,11 @@ def _metrics_anchor_for_phase(phase: str) -> str:
         # admission/reservation actions at the request Prefill start.
         "prefill_admission": "prefill_start",
         "decode": "decode_start",
-        "prefill_decode": "decode_start",
+        # (2026-10-01) The former "prefill_decode" arm is removed: it was
+        # unreachable -- move_prefill_to_decode passes its metrics anchor
+        # kind directly ("transfer_complete") and never routes through this
+        # mapping; the reachable phase domain is {admission,
+        # prefill_admission, history, prefill, decode, completion}.
         "completion": "completion",
     }.get(phase, "stage_boundary")
 
@@ -289,12 +292,6 @@ class SessionKVSnapshot:
     last_completion_ns: Optional[int]
     active: bool
     last_request_id: Optional[str]
-    evicted_at_ns: Optional[int]
-    evicted_by_request_id: Optional[str]
-
-    @property
-    def total_bytes(self) -> int:
-        return sum(self.shard_bytes)
 
 
 @dataclass
@@ -307,8 +304,6 @@ class SessionKVState:
     last_completion_ns: Optional[int] = None
     active: bool = False
     last_request_id: Optional[str] = None
-    evicted_at_ns: Optional[int] = None
-    evicted_by_request_id: Optional[str] = None
 
     def snapshot(self) -> SessionKVSnapshot:
         return SessionKVSnapshot(
@@ -320,8 +315,6 @@ class SessionKVState:
             last_completion_ns=self.last_completion_ns,
             active=self.active,
             last_request_id=self.last_request_id,
-            evicted_at_ns=self.evicted_at_ns,
-            evicted_by_request_id=self.evicted_by_request_id,
         )
 
 
@@ -397,7 +390,8 @@ class MoveDecision:
     action: str
     source_instance_index: int
     target_instance_index: int
-    transfer: KVTransfer
+    # 仅成功迁移携带;admission_blocked 决策无 transfer(调用方不读)。
+    transfer: Optional[KVTransfer]
     evictions: tuple[EvictionRecord, ...]
     admission_blocked: bool = False
     insufficient_ranks: tuple[int, ...] = ()
@@ -453,7 +447,6 @@ class SessionKVCacheManager:
             model, self.tp_degree
         )
         self._rank_states: dict[int, NodeHBMState] = {}
-        self._rank_relative_indexes: dict[int, int] = {}
         for instance in instances:
             if len(instance.ranks) != self.tp_degree:
                 raise ValueError("inconsistent TP degree in topology")
@@ -465,7 +458,6 @@ class SessionKVCacheManager:
                     model_weight_bytes=self.model_weight_bytes_by_tp_rank[relative_rank],
                 )
                 self._rank_states[rank] = state
-                self._rank_relative_indexes[rank] = relative_rank
         self._sessions: dict[str, SessionKVState] = {}
         self._reservations: dict[str, RequestCapacityReservation] = {}
         self._events: list[KVCacheEvent] = []
@@ -525,6 +517,10 @@ class SessionKVCacheManager:
                     cause="model_weight_preload",
                 )
 
+    # (2026-10-01) Test/observability-only accessor (same annotation
+    # standard as hbm_snapshots above): the production consumer reads the
+    # incremental events_since(cursor) API; every call here is a full-tuple
+    # copy (the O(n^2) shape the B1 streaming work removed).
     @property
     def events(self) -> tuple[KVCacheEvent, ...]:
         return tuple(self._events)
@@ -541,7 +537,11 @@ class SessionKVCacheManager:
 
     def compact_events(self, consumed: int) -> int:
         """B1:已消费水位 ≥8192 且不小于现存一半时整段删除前缀,返回实际
-        删除条数(调用方游标同步减去该值;0 = 未压缩)。"""
+        删除条数(调用方游标同步减去该值;0 = 未压缩)。
+        (2026-10-01 注:现调用图下游标恒等于 len(self._events)——消费方
+        wsc_llm_online_scheduler 每次取全量增量,故第二条件在唯一调用图
+        下恒真,阈值实际由 ≥8192 单独决定;保留第二条件作为预留 API 的
+        部分消费前置,勿"简化"删除,否则部分消费的调用方会静默跳过压缩。)"""
         if (consumed >= _EVENTS_COMPACT_THRESHOLD
                 and consumed * 2 >= len(self._events)):
             del self._events[:consumed]
@@ -550,16 +550,18 @@ class SessionKVCacheManager:
 
     @property
     def session_ids(self) -> tuple[str, ...]:
+        """存活会话 id 有序视图(与 HEAD/LRU 公共口径一致;2026-09-27
+        恢复——前批随 node_states 误删,仍有测试消费)。"""
         return tuple(sorted(self._sessions))
-
-    @property
-    def node_states(self) -> tuple[NodeHBMState, ...]:
-        return tuple(self._rank_states[rank] for rank in sorted(self._rank_states))
 
     def session_snapshot(self, session_id: str) -> Optional[SessionKVSnapshot]:
         state = self._sessions.get(session_id)
         return None if state is None else state.snapshot()
 
+    # (2026-10-01) Test/observability-only accessor: no production
+    # consumer; consumed by the kv-journal and admission test suites
+    # (distinguished from the dead methods removed 2026-09-25, which
+    # had no consumer at all).
     def hbm_snapshots(self, instance_index: Optional[int] = None) -> tuple[NodeHBMSnapshot, ...]:
         if instance_index is None:
             ranks = tuple(sorted(self._rank_states))
@@ -1226,8 +1228,6 @@ class SessionKVCacheManager:
         self._remove_shards(source_instance, victim.shard_bytes)
         victim.state = EVICTED
         victim.instance_index = None
-        victim.evicted_at_ns = now_ns
-        victim.evicted_by_request_id = trigger_request_id
         self._check_invariants_after_mutation(session_ids=(victim.session_id,))
         self._metrics_remove_session_segments(
             victim.session_id,
@@ -1290,16 +1290,37 @@ class SessionKVCacheManager:
             if needed > available
         )
         if impossible:
+            # 3.17.2 fix (2026-09-29, doc §4.5 contract): 策略文档 §4.5
+            # 规定"任一 NPU 不满足即整体不可行——请求等待而非重映射"。
+            # 一个连空实例都放不下的请求属于"整体不可行"的极端形态:
+            # 它必须走与 D4 深缺口同款的等待路径(admission_blocked +
+            # admitted=False,capacity_epoch 重试机制保留),而不是抛
+            # ValueError 把整场仿真 abort 掉。等待中的请求在 run-end
+            # 完成审计处天然可见(未完成),summary 行的 reason 字符串
+            # 区分"空实例都放不下"与普通深缺口。
             details = ", ".join(
                 f"rank={rank}, required={needed}, empty_available={available}"
                 for rank, needed, available in zip(instance.ranks, required, maximum)
                 if rank in impossible
             )
-            raise ValueError(f"request cannot fit an empty instance: {details}")
+            before = self._remaining(instance_index)
+            self.deep_gap_events += 1
+            self._pressure_event(
+                now_ns=now_ns,
+                phase=phase,
+                event_type="admission_blocked",
+                reason=f"{reason}: request_infeasible_even_empty_instance",
+                trigger_request_id=trigger_request_id,
+                target_instance_index=instance_index,
+                before=before,
+                after=before,
+                insufficient_ranks=impossible,
+            )
+            return CapacityResult((), False, impossible)
         evictions: list[EvictionRecord] = []
         insufficient = self._insufficient(instance_index, required)
-        # See ensure_physical_fit(): eligibility and LRU order of unselected
-        # candidates are static inside this single reclamation stage.
+        # _candidate_sessions() fixes eligibility and LRU order up front;
+        # unselected candidates keep both throughout this reclamation stage.
         candidates = (
             self._candidate_sessions(instance_index, protected_sessions)
             if insufficient
@@ -1406,13 +1427,22 @@ class SessionKVCacheManager:
         self,
         request_id: str,
         now_ns: int,
+        *,
+        anchor_phase: str = "prefill_admission",
     ) -> RequestCapacityReservation:
         """Release one request's decode-capacity reservation.
 
         ``now_ns`` 是本 mutation 的真实 planner 时刻(P1 语义修改①:改前
         本 API 无时间戳参数,metrics 复用最近 KV 事件时间——journal 化后
         该近似会污染权威账本时序,故改为必传参数,全部调用方显式给值;
-        传入时刻若早于 journal 已有最后时刻,recorder 直接 raise)。"""
+        传入时刻若早于 journal 已有最后时刻,recorder 直接 raise)。
+
+        ``anchor_phase`` 决定 journal 行的 anchor_kind(经
+        _metrics_anchor_for_phase 映射,2026-09-30):release 发生在三个
+        不同边界——Prefill 准入阻塞回滚(prefill_start)、Decode 准入
+        放行先释放后迁移(decode_start)、终局 retire 兜底释放
+        (completion)——此前硬编码 prefill_start 会把 Decode 边界的
+        reserved 下降错记到 Prefill 起点。"""
 
         reservation = self._reservations.pop(request_id)
         for rank, value in zip(
@@ -1433,7 +1463,7 @@ class SessionKVCacheManager:
                     continue
                 self._metrics_recorder.record(
                     planner_time_ns=now_ns,
-                    anchor_kind="prefill_start",
+                    anchor_kind=_metrics_anchor_for_phase(anchor_phase),
                     request_id=request_id,
                     session_id=reservation.session_id,
                     rank=rank,
@@ -1543,8 +1573,6 @@ class SessionKVCacheManager:
         # build_instances 强制每实例单一 phase_role 且 P/D 集合不相交,
         # state.instance_index == target_instance_index 恒假。
         needed = self._history_shards(required_context_tokens)
-        if any(value < 0 for value in needed):
-            raise RuntimeError("session KV would shrink during history preparation")
         protected = (session_id,) if state is not None else ()
         fit = self.ensure_physical_fit(
             target_instance_index,
@@ -1557,7 +1585,12 @@ class SessionKVCacheManager:
         )
         evictions = fit.evictions
         if not fit.admitted:
-            action = NO_HISTORY if state is None else (RECOMPUTE if state.state == EVICTED else LOCAL_HIT)
+            # 阻塞分支的 action = 本请求尝试的历史动作(同实例 LOCAL_HIT 臂
+            # 已删,RESIDENT 恒为跨实例 NOC_MIGRATE);统一阻塞标记是
+            # admission_blocked=True,消费方仅以该旗标判定。
+            action = NO_HISTORY if state is None else (
+                RECOMPUTE if state.state == EVICTED else NOC_MIGRATE
+            )
             return HistoryDecision(
                 action=action,
                 source_instance_index=(None if state is None else state.instance_index),
@@ -1613,8 +1646,6 @@ class SessionKVCacheManager:
             state.shard_bytes = history_shards
             state.active = True
             state.last_request_id = trigger_request_id
-            state.evicted_at_ns = None
-            state.evicted_by_request_id = None
             self._check_invariants_after_mutation(session_ids=(session_id,))
             self._metrics_add_segment(
                 session_id,
@@ -1749,9 +1780,7 @@ class SessionKVCacheManager:
             instance_index,
             delta,
             now_ns=now_ns,
-            anchor_kind=(
-                "completion" if phase == "decode" else "prefill_start"
-            ),
+            anchor_kind=_metrics_anchor_for_phase(phase),
             request_id=trigger_request_id,
             cause=reason,
         )
@@ -1810,24 +1839,15 @@ class SessionKVCacheManager:
             reason="decode_target_capacity",
         )
         evictions = fit.evictions
-        empty_transfer = KVTransfer(
-            action=LOCAL_HIT,
-            phase="prefill_decode",
-            reason="prefill_decode_local_reuse",
-            session_id=session_id,
-            trigger_request_id=trigger_request_id,
-            source_instance_index=source_instance,
-            target_instance_index=target_instance_index,
-            history_tokens=state.logical_context_tokens,
-            total_bytes=0,
-            shards=(),
-        )
         if not fit.admitted:
+            # 阻塞即上抛(唯一调用方对 admission_blocked 立即 raise,不读
+            # transfer):不构造占位 transfer,免得与上层 NOC_MIGRATE 决策
+            # 的动作标签冲突。
             return MoveDecision(
                 action=NOC_MIGRATE,
                 source_instance_index=source_instance,
                 target_instance_index=target_instance_index,
-                transfer=empty_transfer,
+                transfer=None,
                 evictions=evictions,
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
@@ -1914,7 +1934,11 @@ class SessionKVCacheManager:
         session_id: str,
         completion_ns: int,
         request_id: str,
-    ) -> tuple[EvictionRecord, ...]:
+    ) -> None:
+        """SCHED-9(2026-09-28):恒空逐出返回管道已删——completion 恒零
+        逐出(retain_complete 语义:请求完成保留 KV 供下一 turn,从不产
+        生任何逐出),旧签名承诺的恒空元组返回值是诱导消费方把它当逐出
+        账本的死管道;调用方(在线调度器)已不再消费返回值,现无返回值。"""
         state = self._sessions[session_id]
         if state.state != RESIDENT or state.instance_index is None or not state.active:
             raise RuntimeError("only active resident sessions may complete")
@@ -1941,7 +1965,6 @@ class SessionKVCacheManager:
         # The request can never retry admission after completion.  Retire its
         # bounded-dedup state even when the session has a later turn.
         self._forget_pressure_event_keys(request_id)
-        return ()
 
     @_journal_transaction
     def retire_terminal_session(
@@ -1995,8 +2018,11 @@ class SessionKVCacheManager:
         )
         for reservation_id in reservation_ids:
             # ① 嵌套公开复用:retire 事务内以本 mutation 的 completion_ns
-            # 作为 release 的真实 planner 时刻(并入同一 journal 事务)。
-            self.release_request_capacity(reservation_id, completion_ns)
+            # 作为 release 的真实 planner 时刻(并入同一 journal 事务);
+            # 锚点按实际边界取 completion(2026-09-30)。
+            self.release_request_capacity(
+                reservation_id, completion_ns,
+                anchor_phase="completion")
 
         released_instance_index: Optional[int] = None
         if state.state == RESIDENT:

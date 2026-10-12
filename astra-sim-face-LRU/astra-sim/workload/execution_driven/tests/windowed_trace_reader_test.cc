@@ -25,6 +25,8 @@ simulation, no baseline artifacts touched:
           late_external_stream (never in late_static_submit).
   Part E  Request-neutral no-CSV path: an empty path constructs an
           already-EOF reader (no-op pumps, zero rows).
+  Part F  Retired (no active case carries the letter); the gap is kept
+          so the G+ backport labels below stay stable.
   Part G  Backport fix (2026-08-16, sh_2.0测试 §5.1) -- DEFAULT UNBOUNDED
           arrival window: synthetic envelopes at arbitrary (well beyond
           30 s) arrivals are ALL accepted under the 0 default (constructor
@@ -56,6 +58,13 @@ simulation, no baseline artifacts touched:
           late_static_submit and FAILS the run-end arrival gate; the
           normal path gate passes.
 
+  Fixture note (2026-09-30): every CSV timing in this file now sits on the
+  reader's 1000 ns grid (turn-0 session_arrival_time_ns and turn>0
+  inter_request_interval_ns divisible by 1000 -- the reader fail-closes
+  off-grid rows, mirroring generate_trace.py). The old bare-ns fixtures in
+  parts K/L/M/N/O/P were scaled up 1000x together with every coupled
+  assertion; semantics unchanged (per-part notes inline).
+
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WindowedReaderTest.
 Run (from template/astra-sim-face-LRU):
   build/astra_analytical/build_congestion_aware/bin/\
@@ -76,6 +85,7 @@ Run (from template/astra-sim-face-LRU):
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include "common/EventQueue.h"
 
 using namespace AstraSim::ExecutionDriven;
@@ -141,12 +151,11 @@ void expect_exit_code(Fn&& fn, const int code, const char* what) {
 
 void write_csv(const std::string& path,
                const std::vector<std::string>& rows) {
-    std::ofstream out(path);
-    out << "session_id,turn_index,request_id,prefill_length,decode_length,"
-           "session_arrival_time_ns,inter_request_interval_ns,description\n";
-    for (const auto& row : rows) {
-        out << row << "\n";
-    }
+    // M-16 同款修复(移植到本仓 2026-10-07):provenance 门对缺席 sidecar
+    // fail-closed,每个手写 queue-CSV 夹具必须随附匹配的 provenance 记录
+    // (按物化器/reader 索引趟同一套统计计算)。故意写坏的夹具在进门前
+    // 就按行 fail-closed,其 sidecar 值不会被读到。
+    FixtureProvenance::write_queue_fixture(path, rows);
 }
 
 // 10 sessions (turn-0 arrivals 1..10 s, monotonic) + session_0 turn-1;
@@ -202,8 +211,9 @@ void test_calendar_submission() {
            "monotonic sample has zero file-order inversions");
     expect(reader.provenance().session_blocks_contiguous,
            "sample blocks contiguous");
-    expect(reader.provenance_sidecar_status() == "absent-no-gate",
-           "no sidecar written for this fixture: absent, no gate");
+    expect(reader.provenance_sidecar_status() == "matched",
+           "write_csv ships a matching sidecar: gate -> matched (M-16 "
+           "port 2026-10-07)");
 
     // Later pumps are no-ops (nothing left to index or submit).
     expect(!reader.pump(), "later pump returns false at EOF");
@@ -220,6 +230,7 @@ void test_calendar_submission() {
            "out-of-order consumption retires exactly itself");
     expect(reader.rejected_out_of_range() == 0, "no rejections in part A");
     std::printf("[fixture] part A PASS: calendar submission\n");
+    std::remove(csv.c_str());  // X4: clean the /tmp fixture like later parts
 }
 
 void test_row_semantics() {
@@ -245,6 +256,7 @@ void test_row_semantics() {
            "only the one turn>0 row retains a future lookup");
     std::printf("[fixture] part B PASS: turn-0 Submit / turn>0 future-alarm "
                 "semantics (window 0 == 128)\n");
+    std::remove(csv.c_str());  // X4: clean the /tmp fixture like later parts
 }
 
 void test_out_of_range_rejection() {
@@ -273,6 +285,7 @@ void test_out_of_range_rejection() {
            "only the in-range row is submitted");
     expect(reader.eof(), "reader reached EOF despite the rejection");
     std::printf("[fixture] part C PASS: simulation-out-of-range rejection\n");
+    std::remove(csv.c_str());  // X4: clean the /tmp fixture like later parts
 }
 
 void test_late_counter_split() {
@@ -404,6 +417,7 @@ void test_default_unbounded_window() {
     }
     std::printf("[fixture] part G PASS: default unbounded arrival window "
                 "(constructor + CLI defaults)\n");
+    std::remove(csv.c_str());  // X4: clean the /tmp fixture like later parts
 }
 
 // Backport fix cont. (unified 2026-08-20, 中-3): explicit small window ->
@@ -454,11 +468,13 @@ void test_explicit_window_fail_closed() {
     // excludes them by design; the one in-range row (queue 0, 10 s) is the
     // only audited arrival.
     const auto audit = reader.arrival_audit();
-    expect(audit.size() == 1,
-           "arrival audit covers submitted turn-0 rows only");
-    expect(audit[0].queue_index == 0 && audit[0].declared_arrival_ns ==
-               10000000000ULL,
-           "the audited arrival is the in-range 10 s row");
+    if (audit.size() == 1) {
+        expect(audit[0].queue_index == 0 && audit[0].declared_arrival_ns ==
+                   10000000000ULL,
+               "the audited arrival is the in-range 10 s row");
+    } else {
+        expect(false, "arrival audit covers submitted turn-0 rows only");
+    }
     expect(reader.audit_static_arrivals().gate_ok,
            "rejections are covered by the completion audit, not the "
            "arrival gate");
@@ -494,15 +510,16 @@ void test_explicit_window_fail_closed() {
            "audit: this fixture's run-end shape is Dropped (drops first)");
     std::printf("[fixture] part H PASS: explicit window drops visible + "
                 "fail-closed completion audit\n");
+    std::remove(csv.c_str());  // X4: clean the /tmp fixture like later parts
 }
 
 void test_queue_index_lifetime_and_fail_closed() {
     const std::string csv = fixture_path("windowed_reader_test_queue_index");
     write_csv(csv, {
-        "session_0,0,session_0_request_0,100,50,10,,d",
-        "session_0,1,session_0_request_1,100,50,,90,d",
-        "session_1,0,session_1_request_0,100,50,110,,d",
-        "session_1,1,session_1_request_1,100,50,,90,d",
+        "session_0,0,session_0_request_0,100,50,10000,,d",
+        "session_0,1,session_0_request_1,100,50,,90000,d",
+        "session_1,0,session_1_request_0,100,50,110000,,d",
+        "session_1,1,session_1_request_1,100,50,,90000,d",
     });
 
     EventQueue eq;
@@ -542,6 +559,10 @@ void test_queue_index_lifetime_and_fail_closed() {
         eq.proceed();
     }
 
+    // L23 (2026-09-29) wording: schedule_future_arrival's fail-closed
+    // path THROWS std::runtime_error (the forked child dies of SIGABRT
+    // via uncaught-exception std::terminate, not an explicit abort());
+    // only register_queue_index carries the direct abort() contract.
     expect_sigabrt(
         [&]() {
             RequestEnvelope missing;
@@ -549,7 +570,7 @@ void test_queue_index_lifetime_and_fail_closed() {
             missing.arrival_world_ns = 300;
             ingress.schedule_future_arrival(missing);
         },
-        "queue-index: missing production lookup aborts");
+        "queue-index: missing production lookup throws (fail-closed)");
     expect_sigabrt(
         [&]() {
             RequestEnvelope injected;
@@ -558,7 +579,8 @@ void test_queue_index_lifetime_and_fail_closed() {
             injected.arrival_world_ns = 300;
             ingress.schedule_future_arrival(injected);
         },
-        "queue-index: supplied index cannot bypass missing lookup");
+        "queue-index: supplied index cannot bypass missing lookup "
+        "(throws, fail-closed)");
     expect_sigabrt(
         [&]() {
             ingress.register_queue_index("duplicate_request", 10);
@@ -578,7 +600,7 @@ void test_out_of_order_consumption_bound() {
     for (int i = 0; i < 8; ++i) {
         rows.push_back("session_" + std::to_string(i) + ",0,request_" +
                        std::to_string(i) + ",10,1," +
-                       std::to_string(i + 1) + ",,d");
+                       std::to_string((i + 1) * 1000) + ",,d");
     }
     write_csv(csv, rows);
 
@@ -632,16 +654,18 @@ std::vector<FireRecord> run_calendar_and_capture(const std::string& csv,
 }
 
 // Part K: the core P0 scenario -- turn-0 arrivals NON-monotonic in file
-// order (three session blocks: file order arrivals 500, 100, 300). The old
-// row-window reader submitted in file order; the calendar must submit in
-// arrival order with zero late static submits and all discovered at tick 0.
+// order (three session blocks: file order arrivals 500000, 100000, 300000;
+// 2026-09-30 grid scaling: 500/100/300 and the turn>0 interval 90 were
+// scaled x1000). The old row-window reader submitted in file order; the
+// calendar must submit in arrival order with zero late static submits and
+// all discovered at tick 0.
 void test_calendar_out_of_order_turn0() {
     const std::string csv = fixture_path("windowed_reader_test_calendar");
     write_csv(csv, {
-        "session_0,0,session_0_request_0,100,50,500,,d",
-        "session_0,1,session_0_request_1,100,50,,90,d",
-        "session_1,0,session_1_request_0,100,50,100,,d",
-        "session_2,0,session_2_request_0,100,50,300,,d",
+        "session_0,0,session_0_request_0,100,50,500000,,d",
+        "session_0,1,session_0_request_1,100,50,,90000,d",
+        "session_1,0,session_1_request_0,100,50,100000,,d",
+        "session_2,0,session_2_request_0,100,50,300000,,d",
     });
 
     EventQueue eq;
@@ -654,13 +678,13 @@ void test_calendar_out_of_order_turn0() {
         run_calendar_and_capture(csv, ingress, eq, reader);
 
     expect(seq.size() == 3, "calendar fires all three turn-0 arrivals");
-    // Calendar order: 100 (queue 2), 300 (queue 3), 500 (queue 1).
-    expect(seq[0].tick == 100 && seq[0].queue_index == 2,
+    // Calendar order: 100000 (queue 2), 300000 (queue 3), 500000 (queue 0).
+    expect(seq[0].tick == 100000 && seq[0].queue_index == 2,
            "earliest turn-0 (file position 3) fires first");
-    expect(seq[1].tick == 300 && seq[1].queue_index == 3,
+    expect(seq[1].tick == 300000 && seq[1].queue_index == 3,
            "middle turn-0 (file position 4) fires second");
-    expect(seq[2].tick == 500 && seq[2].queue_index == 0,
-           "late-file-first row (queue 0, arrival 500) fires last");
+    expect(seq[2].tick == 500000 && seq[2].queue_index == 0,
+           "late-file-first row (queue 0, arrival 500000) fires last");
     expect(ingress.late_static_submit_count() == 0,
            "no static-CSV Submit was clamped (late_static_submit == 0)");
     expect(reader.audit_static_arrivals().gate_ok,
@@ -669,10 +693,14 @@ void test_calendar_out_of_order_turn0() {
     expect(summary.turn0_submitted == 3, "audit covered all three rows");
     expect(summary.delay_max_ns == 0, "every ingress_delay == 0");
     const auto audit = reader.arrival_audit();
-    expect(audit.size() == 3 && audit[0].reader_discovered_tick == 0 &&
-               audit[1].reader_discovered_tick == 0 &&
-               audit[2].reader_discovered_tick == 0,
-           "every turn-0 discovered at tick 0");
+    if (audit.size() == 3) {
+        expect(audit[0].reader_discovered_tick == 0 &&
+                   audit[1].reader_discovered_tick == 0 &&
+                   audit[2].reader_discovered_tick == 0,
+               "every turn-0 discovered at tick 0");
+    } else {
+        expect(false, "arrival audit covers all three fired turn-0 rows");
+    }
     std::remove(csv.c_str());
     std::printf("[fixture] part K PASS: out-of-order turn-0 fires in "
                 "calendar order, zero late static submits\n");
@@ -684,15 +712,19 @@ void test_calendar_out_of_order_turn0() {
 void test_first_block_over_window() {
     const std::string csv = fixture_path("windowed_reader_test_longblock");
     std::vector<std::string> rows;
-    // session_0: turn-0 at 1000 ns + 149 turn>0 rows.
-    rows.push_back("session_0,0,session_0_request_0,100,50,1000,,d");
+    // session_0: turn-0 at 1000000 ns + 149 turn>0 rows. (2026-09-30 grid
+    // scaling: BOTH turn-0 arrivals scaled together -- 1000 -> 1000000 and
+    // session_1's 500 -> 500000 -- so the single adjacent inversion below
+    // and the "session_1 earlier than session_0's chain" relation survive
+    // x1000; the per-turn 1000 intervals are already on-grid and stay.)
+    rows.push_back("session_0,0,session_0_request_0,100,50,1000000,,d");
     for (int turn = 1; turn < 150; ++turn) {
         rows.push_back("session_0," + std::to_string(turn) + ",session_0_"
                        "request_" + std::to_string(turn) + ",100,50,,1000,d");
     }
     // A second early-arriving session AFTER the long block: file position
     // ~151, arrival earlier than session_0's turn>0 chain would produce.
-    rows.push_back("session_1,0,session_1_request_0,100,50,500,,d");
+    rows.push_back("session_1,0,session_1_request_0,100,50,500000,,d");
     write_csv(csv, rows);
 
     EventQueue eq;
@@ -709,7 +741,7 @@ void test_first_block_over_window() {
     expect(ingress.pending_command_count() == 2,
            "both turn-0 rows submitted (file position irrelevant)");
     expect(reader.provenance().turn0_adjacent_inversions == 1,
-           "file order 1000 -> 500 is one adjacent inversion");
+           "file order 1000000 -> 500000 is one adjacent inversion");
     std::remove(csv.c_str());
     std::printf("[fixture] part L PASS: first block > window fully "
                 "reachable in one pump\n");
@@ -720,9 +752,13 @@ void test_first_block_over_window() {
 // exempt from the gate.
 void test_arrival_zero_boundary() {
     const std::string csv = fixture_path("windowed_reader_test_t0");
+    // (2026-09-30 grid scaling: only the sibling 700 -> 700000; the
+    // arrival==0 row is untouched -- 0 is on-grid -- so its clamp
+    // arithmetic below (tick 1, effective=1, late_by=1) keeps the exact
+    // pre-scaling semantics.)
     write_csv(csv, {
         "session_0,0,session_0_request_0,100,50,0,,d",
-        "session_1,0,session_1_request_0,100,50,700,,d",
+        "session_1,0,session_1_request_0,100,50,700000,,d",
     });
 
     EventQueue eq;
@@ -736,7 +772,7 @@ void test_arrival_zero_boundary() {
     expect(seq.size() == 2, "both turn-0 rows fired");
     expect(seq[0].tick == 1 && seq[0].queue_index == 0,
            "arrival==0 row fires at tick 1 (t0 boundary clamp)");
-    expect(seq[1].tick == 700 && seq[1].queue_index == 1,
+    expect(seq[1].tick == 700000 && seq[1].queue_index == 1,
            "regular row fires at its declared tick");
     expect(ingress.t0_boundary_clamp_count() == 1,
            "the t=0 clamp is counted in t0_boundary_clamp");
@@ -746,14 +782,18 @@ void test_arrival_zero_boundary() {
     expect(summary.gate_ok, "gate passes with the t0 boundary exemption");
     expect(summary.t0_boundary_clamp == 1, "summary carries t0_boundary=1");
     const auto audit = reader.arrival_audit();
-    expect(std::string(audit[0].late_source) == "t0_boundary" &&
-               audit[0].declared_arrival_ns == 0 &&
-               audit[0].reader_discovered_tick == 0 &&
-               audit[0].effective_arrival_ns == 1 &&
-               audit[0].late_by_ns == 1,
-           "audit row classified t0_boundary with effective=1, late_by=1");
-    expect(std::string(audit[1].late_source) == "on_time",
-           "regular row classified on_time");
+    if (audit.size() == 2) {
+        expect(std::string(audit[0].late_source) == "t0_boundary" &&
+                   audit[0].declared_arrival_ns == 0 &&
+                   audit[0].reader_discovered_tick == 0 &&
+                   audit[0].effective_arrival_ns == 1 &&
+                   audit[0].late_by_ns == 1,
+               "audit row classified t0_boundary with effective=1, late_by=1");
+        expect(std::string(audit[1].late_source) == "on_time",
+               "regular row classified on_time");
+    } else {
+        expect(false, "arrival audit covers both fired turn-0 rows");
+    }
     std::remove(csv.c_str());
     std::printf("[fixture] part M PASS: arrival==0 t0 boundary "
                 "classification + gate exemption\n");
@@ -766,11 +806,13 @@ void test_arrival_zero_boundary() {
 // exactly like the old unbounded arm's row-order insertion).
 void test_same_tick_multi_session() {
     const std::string csv = fixture_path("windowed_reader_test_sametick");
+    // (2026-09-30 grid scaling: 500/200 -> x1000; the equal-arrival group
+    // stays equal and the 200000 row stays strictly earlier.)
     write_csv(csv, {
-        "session_0,0,session_0_request_0,100,50,500,,d",
-        "session_1,0,session_1_request_0,100,50,500,,d",
-        "session_2,0,session_2_request_0,100,50,500,,d",
-        "session_3,0,session_3_request_0,100,50,200,,d",
+        "session_0,0,session_0_request_0,100,50,500000,,d",
+        "session_1,0,session_1_request_0,100,50,500000,,d",
+        "session_2,0,session_2_request_0,100,50,500000,,d",
+        "session_3,0,session_3_request_0,100,50,200000,,d",
     });
 
     EventQueue eq;
@@ -782,11 +824,11 @@ void test_same_tick_multi_session() {
     const std::vector<FireRecord> seq =
         run_calendar_and_capture(csv, ingress, eq, reader);
     expect(seq.size() == 4, "four turn-0 rows fired");
-    expect(seq[0].tick == 200 && seq[0].queue_index == 3,
+    expect(seq[0].tick == 200000 && seq[0].queue_index == 3,
            "earlier tick group first");
-    expect(seq[1].tick == 500 && seq[1].queue_index == 0 &&
-               seq[2].tick == 500 && seq[2].queue_index == 1 &&
-               seq[3].tick == 500 && seq[3].queue_index == 2,
+    expect(seq[1].tick == 500000 && seq[1].queue_index == 0 &&
+               seq[2].tick == 500000 && seq[2].queue_index == 1 &&
+               seq[3].tick == 500000 && seq[3].queue_index == 2,
            "equal-arrival group fires in queue_index (row) order");
     std::remove(csv.c_str());
     std::printf("[fixture] part N PASS: same-tick group ordered by "
@@ -798,10 +840,15 @@ void test_same_tick_multi_session() {
 // non-zero and nothing was enqueued.
 void test_provenance_tampering() {
     const std::string csv = fixture_path("windowed_reader_test_prov");
+    // (2026-09-30 grid scaling: BOTH turn-0 arrivals scaled together --
+    // 1000 -> 1000000 and 500 -> 500000 -- so the tampered sidecar below
+    // still differs in the digest fields ONLY: min/max 500000/1000000 and
+    // the single adjacent inversion 1000000 -> 500000 remain the true
+    // provenance values. The turn>0 interval 1000 is already on-grid.)
     write_csv(csv, {
-        "session_0,0,session_0_request_0,100,50,1000,,d",
+        "session_0,0,session_0_request_0,100,50,1000000,,d",
         "session_0,1,session_0_request_1,100,50,,1000,d",
-        "session_1,0,session_1_request_0,100,50,500,,d",
+        "session_1,0,session_1_request_0,100,50,500000,,d",
     });
     const std::string sidecar = csv + ".provenance.json";
 
@@ -842,15 +889,17 @@ void test_provenance_tampering() {
                "provenance: matching sidecar submits both turn-0 rows");
     }
 
-    // Wrong on EVERY compared field: the child must exit(1) with zero
-    // submissions. (The reader prints [Error] to the child's stderr.)
+    // Wrong digest fields only (csv_fnv1a64/csv_bytes); every other
+    // compared field matches the true provenance: the child must exit(1)
+    // with zero submissions. (The reader prints [Error] to the child's
+    // stderr.)
     {
         std::ofstream out(sidecar);
         out << "{\"schema\":1,\"generator_version\":\"fixture\","
                "\"csv_sha256\":\"human-only\",\"csv_fnv1a64\":1,"
                "\"csv_bytes\":1,\"data_rows\":3,\"sessions\":2,"
-               "\"turn0_count\":2,\"turn0_arrival_min_ns\":500,"
-               "\"turn0_arrival_max_ns\":1000,"
+               "\"turn0_count\":2,\"turn0_arrival_min_ns\":500000,"
+               "\"turn0_arrival_max_ns\":1000000,"
                "\"turn0_adjacent_inversions\":1,"
                "\"session_blocks_contiguous\":true}\n";
     }
@@ -875,7 +924,8 @@ void test_provenance_tampering() {
                "index)");
     }
 
-    // Wrong data_rows only: still fail-closed.
+    // Wrong data_rows (999 vs 3) plus zeroed csv_fnv1a64/csv_bytes digest
+    // fields: still fail-closed.
     {
         std::ofstream out(sidecar);
         out << "{\"schema\":1,\"csv_fnv1a64\":0,\"csv_bytes\":0,"
@@ -897,8 +947,10 @@ void test_provenance_tampering() {
         EXIT_FAILURE,
         "provenance: wrong row count fail-closes the run");
 
-    // Absent sidecar: explicitly no gate (already covered in part A; here
-    // confirmed on this fixture too).
+    // Absent sidecar: FAIL-CLOSED(M-16 同款修复,移植到本仓 2026-10-07;
+    // 旧 "absent (no gate)" 直通正是截断物化掉进去的洞)。不带
+    // provenance 记录的队列无法与截断队列区分——run 必须非零退出且零
+    // Submit。
     std::remove(sidecar.c_str());
     {
         EventQueue eq;
@@ -906,14 +958,19 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress);
-        reader.pump();
-        expect(reader.provenance_sidecar_status() == "absent-no-gate",
-               "absent sidecar: no gate, run proceeds");
-        expect(ingress.pending_command_count() == 2,
-               "absent sidecar: both turn-0 rows submitted");
+        expect_exit_code(
+            [&]() {
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "provenance: absent sidecar fail-closes the run (M-16 "
+            "port 2026-10-07)");
+        expect(ingress.pending_command_count() == 0,
+               "provenance: zero Submits enqueued on absent sidecar");
     }
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part O PASS: provenance tampering fail-closes "
                 "with zero submissions\n");
 }
@@ -923,10 +980,14 @@ void test_provenance_tampering() {
 void test_structure_validation_fail_closed() {
     const std::string csv = fixture_path("windowed_reader_test_struct");
 
+    // (2026-09-30) every timing below is kept on the 1000 ns grid (the
+    // 500 -> 500000 and 1700 -> 1700000 edits) so each case fail-closes on
+    // the STRUCTURE rule under test, not on the reader's timing gate.
+
     // Non-contiguous: session_0 reappears after session_1's block.
     write_csv(csv, {
         "session_0,0,session_0_request_0,100,50,1000,,d",
-        "session_1,0,session_1_request_0,100,50,500,,d",
+        "session_1,0,session_1_request_0,100,50,500000,,d",
         "session_0,1,session_0_request_1,100,50,,1000,d",
     });
     expect_exit_code(
@@ -977,10 +1038,12 @@ void test_structure_validation_fail_closed() {
         EXIT_FAILURE,
         "structure: turn-0 row with empty arrival fail-closes");
 
-    // turn>0 row WITH an explicit arrival: fail-closed.
+    // turn>0 row WITH an explicit arrival: fail-closed. (The explicit
+    // 1700 -> 1700000 keeps the arrival on-grid so the structure rule --
+    // not the timing gate -- is what fires.)
     write_csv(csv, {
         "session_0,0,session_0_request_0,100,50,1000,,d",
-        "session_0,1,session_0_request_1,100,50,1700,1000,d",
+        "session_0,1,session_0_request_1,100,50,1700000,1000,d",
     });
     expect_exit_code(
         [&]() {
@@ -1000,10 +1063,12 @@ void test_structure_validation_fail_closed() {
                 "fail-closed\n");
 }
 
-// Part Q (V4 gate self-test): a deliberately DELAYED calendar submission
-// trips late_static_submit and FAILS the run-end arrival gate; the normal
-// path passes. The delay is produced by ingress backpressure (capacity 1)
-// plus the clock advancing past the parked entry's arrival.
+// Part Q (V4 gate self-test, M5 update 2026-09-29): a submission parked by
+// ingress BACKPRESSURE (capacity 1) and drained after the clock advanced is
+// a capacity artifact -- it counts into late_static_submit_backpressure and
+// the gate PASSES. A row the reader itself discovers late (no backpressure:
+// the first pump happens after the clock advanced) still trips
+// late_static_submit and FAILS the gate. The normal path passes.
 void noop_callback(void*) {}
 
 void test_gate_trips_on_delayed_submission() {
@@ -1032,27 +1097,58 @@ void test_gate_trips_on_delayed_submission() {
     expect(eq.get_current_time() == 5000, "clock advanced to 5000");
     reader.pump();  // submits the parked entry at discovered=5000
     ingress.drain_commands();
-    expect(ingress.late_static_submit_count() == 1,
-           "delayed static Submit counts in late_static_submit");
+    // M5: the parked entry's clamp is a capacity artifact -- the reader
+    // offered it at t=0 and the bounded queue deferred it.
+    expect(ingress.late_static_submit_count() == 0,
+           "backpressure-deferred Submit is NOT in late_static_submit");
+    expect(ingress.late_static_submit_backpressure_count() == 1,
+           "backpressure-deferred Submit counts in the M5 bucket");
     expect(ingress.t0_boundary_clamp_count() == 0,
            "not a t0 boundary (declared 2000)");
     const auto summary = reader.audit_static_arrivals();
-    expect(!summary.gate_ok,
-           "arrival gate FAILS on the delayed submission (V4 self-test)");
-    expect(summary.late_static_submit == 1, "summary late_static_submit=1");
+    expect(summary.gate_ok,
+           "arrival gate PASSES on the backpressure-deferred submission "
+           "(M5: capacity artifact, exempt)");
+    expect(summary.late_static_submit == 0, "summary late_static_submit=0");
+    expect(summary.late_static_submit_backpressure == 1,
+           "summary late_static_submit_backpressure=1");
     const auto audit = reader.arrival_audit();
-    bool found_late = false;
+    bool found_deferred = false;
     for (const auto& row : audit) {
-        if (std::string(row.late_source) == "static_submit_late") {
-            found_late = row.declared_arrival_ns == 2000 &&
-                         row.reader_discovered_tick == 5000 &&
-                         row.effective_arrival_ns == 5001 &&
-                         row.late_by_ns == 3001;
+        if (std::string(row.late_source) == "capacity_backpressure") {
+            found_deferred = row.declared_arrival_ns == 2000 &&
+                             row.reader_discovered_tick == 5000 &&
+                             row.effective_arrival_ns == 5001 &&
+                             row.late_by_ns == 3001 &&
+                             row.backpressure_deferred;
         }
     }
-    expect(found_late,
+    expect(found_deferred,
            "audit row records declared=2000 discovered=5000 "
-           "effective=5001 late_by=3001");
+           "effective=5001 late_by=3001 as capacity_backpressure");
+
+    // True late discovery (no backpressure: the first pump happens after the
+    // clock advanced past both arrivals) still trips the gate.
+    {
+        EventQueue eq_late;
+        DecisionMailbox mailbox_late;
+        ServiceCoordinator svc_late;
+        RequestIngress ingress_late;
+        ingress_late.bind(&eq_late, &mailbox_late, &svc_late);
+        WindowedTraceReader reader_late(csv, ingress_late);
+        eq_late.schedule_event(5000, noop_callback, nullptr);
+        while (!eq_late.finished()) {
+            eq_late.proceed();
+        }
+        reader_late.pump();  // first discovery at 5000: no park, pure lateness
+        ingress_late.drain_commands();
+        expect(ingress_late.late_static_submit_count() == 2,
+               "true late discovery counts in late_static_submit");
+        expect(ingress_late.late_static_submit_backpressure_count() == 0,
+               "true late discovery is not a backpressure artifact");
+        expect(!reader_late.audit_static_arrivals().gate_ok,
+               "arrival gate still FAILS on true late discovery");
+    }
 
     // Normal path (fresh ingress, no backpressure): gate passes.
     {

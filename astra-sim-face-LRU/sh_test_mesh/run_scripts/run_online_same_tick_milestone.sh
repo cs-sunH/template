@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # face phase-1 step-1-11(CORE)same-tick milestone fixture(方案 step 1-11
-# / 仿真加速分析.md §4.3 最高优先级专门 fixture)。
+# / 仿真加速分析.md §4.3 最高优先级专门 fixture;
+# "仿真加速分析.md"为工作区根文档,不在本仓内)。
 #
 # 场景:一个 request 的 prefill 阶段末尾含一个真实同步完成的控制节点
 # (METADATA_NODE,type=1,正常 issue 路径——不是零时长 compute 节点,
@@ -28,7 +29,9 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
-RUN_ROOT=${1:-/tmp/face_same_tick_milestone}
+# T5(face-LRU 审计,2026-09-29):run root 绝对化——start_online 内部两
+# 次 cd 后仍以相对路径解析日志重定向/mkdir/tail 会劈叉(set -e 必失败)。
+RUN_ROOT=$(realpath -m "${1:-/tmp/face_same_tick_milestone}")
 
 # ET 基线目录 = GEN_MATCH 动态解析(四仓统一口径)——恰好一个 llama2_7b_inference_54npus_* 目录(plan_materializer 产出,
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
@@ -39,7 +42,36 @@ if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
 fi
 ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_inference"
-RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
+# RC = runtime_config 目录动态解析（sync-py-E11，原为硬编码目录名）：目录名由
+# 配置装载器生成为 "<hardware slug>__<capacity_profile>__<remote-memory 标签>"
+# （本仓命名规则尾段恒为 edge_remote_memory_pool）。face 仓从 plan 目录
+# manifest.json 的 hardware.capacity_profile 取档位；本仓 manifest.json 不写
+# hardware 节（字段冻结），权威同源退路 = trace_config.csv 的
+# config,local_hbm_capacity_profile 行。按 profile 过滤并要求恰好一个，
+# 缺失/歧义 fail-closed（与 GEN_MATCH 口径一致）。
+RC_PROFILE=$(python3 -c '
+import csv, sys
+path = sys.argv[1]
+with open(path, newline="", encoding="utf-8-sig") as source:
+    rows = list(csv.reader(source))
+hits = [row[2].strip() for row in rows
+        if len(row) >= 3 and row[0].strip() == "config"
+        and row[1].strip() == "local_hbm_capacity_profile"]
+if len(hits) != 1 or not hits[0]:
+    sys.exit("expected exactly one config,local_hbm_capacity_profile row in %s" % path)
+print(hits[0])
+' "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv") || {
+  echo "[fixture] FAIL: cannot read local_hbm_capacity_profile from trace_config.csv (sync-py-E11)" >&2
+  exit 1
+}
+RC_MATCH=("${PROJECT}"/sh_test_mesh/generated/runtime_config/*__"${RC_PROFILE}"__edge_remote_memory_pool)
+if [[ ${#RC_MATCH[@]} -ne 1 || ! -f "${RC_MATCH[0]}/system.json" \
+      || ! -f "${RC_MATCH[0]}/network.yml" || ! -f "${RC_MATCH[0]}/comm_group.json" \
+      || ! -f "${RC_MATCH[0]}/remote_memory.json" ]]; then
+  echo "[fixture] FAIL: expected exactly one runtime_config dir for capacity_profile '${RC_PROFILE}' carrying system.json/network.yml/comm_group.json/remote_memory.json (re-run plan_materializer.py), found: ${RC_MATCH[*]}" >&2
+  exit 1
+fi
+RC=${RC_MATCH[0]}
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 
 # 指定世界 tick(纳秒,事件时钟从 0 起):注入在 wall ~1s,到达在事件 3.0s。
@@ -68,6 +100,19 @@ monotonic_ms() {
   python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
 }
 
+# M20(2026-09-29 审查修复):有界等待原语——$1=pid $2=timeout_s;0=已退出,
+# 1=超时仍在运行。计数式轮询(sleep 0.3，约 3⅓ 次/秒，实际等待上界≈名义值×1.2（方向保守）,与下方 ACTIVE->IDLE 等待同
+# idiom),不依赖 date/%3N 语义。
+wait_pid_bounded() {
+  local pid=$1 waited=0 max_waited=$(( $2 * 4 ))
+  while kill -0 "${pid}" 2>/dev/null; do
+    if (( waited >= max_waited )); then return 1; fi
+    sleep 0.3
+    waited=$((waited + 1))
+  done
+  return 0
+}
+
 start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
   local run_dir=$1
   rm -rf "${run_dir}"
@@ -76,11 +121,19 @@ start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
   cd "${PROJECT}"
   # --idle-watchdog-s 0 (2026-09-05): 看门狗默认已武装为 1s；本 fixture 的契约是刻意
   # IDLE 停车（request-neutral 无输入必须保持 IDLE 不退出），显式 0 恢复无界停车契约。
+  # M20(2026-09-29 审查修复):桥侧 response-poll 看门狗补武装(此前缺省
+  # 不传=0=永等)——Python 夹具服务单次决策交换停滞时 fail-closed abort 而
+  # 非无界挂死。120000ms 为宽松有界值(C++ 语义:毫秒,须大于最慢单决策
+  # 耗时;本夹具决策为毫秒级,正常路径永不触发,语义不变)。
+  # infra-E5(2026-09-30):env 名双兼容——README 文件化的 BRIDGE_TIMEOUT_MS
+  # 优先,既有 SH_BRIDGE_TIMEOUT_MS 作为旧别名保留(二者均未设时缺省
+  # 120000;显式 0=恢复永等逃生口)。
   "${BIN}" \
     --online-mode strategy \
     --bridge-dir "${run_dir}/bridge" \
     --online-validate 1 \
     --idle-watchdog-s 0 \
+    --bridge-timeout-ms "${BRIDGE_TIMEOUT_MS:-${SH_BRIDGE_TIMEOUT_MS:-120000}}" \
     --command-fifo "${run_dir}/cmd.fifo" \
     --workload-configuration="${ET_PREFIX}" \
     --comm-group-configuration="${RC}/comm_group.json" \
@@ -90,9 +143,18 @@ start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
     --logging-folder=off \
     > "${run_dir}/cpp.log" 2>&1 &
   CPP_PID=$!
+  # FIFO 就绪等待带墙钟预算（infra-F2，SH_FIFO_WAIT_S 可覆盖，缺省 60s；
+  # 同 run_online_strategy.sh 注）。infra-E10：截止时钟用本文件既有的
+  # monotonic_ms 原语（墙钟跳变不漂移，见上方 uutils date 语义裁定）。
+  local fifo_deadline=$(( $(monotonic_ms) + ${SH_FIFO_WAIT_S:-60} * 1000 ))
   until [ -p "${run_dir}/bridge/req_notify.fifo" ] && [ -p "${run_dir}/bridge/resp_notify.fifo" ]; do
     if ! kill -0 "${CPP_PID}" 2>/dev/null; then
       echo "[fixture] C++ exited before FIFO ready (see ${run_dir}/cpp.log)" >&2
+      tail -5 "${run_dir}/cpp.log" >&2
+      return 1
+    fi
+    if (( $(monotonic_ms) > fifo_deadline )); then
+      echo "[fixture] FIFOs not ready within ${SH_FIFO_WAIT_S:-60}s (see ${run_dir}/cpp.log tail)" >&2
       tail -5 "${run_dir}/cpp.log" >&2
       return 1
     fi
@@ -109,6 +171,20 @@ start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
 wait_for_exits() {  # $1=run_dir $2=name
   local run_dir=$1 name=$2
   local cpp_exit=0 py_exit=0
+  # M20(2026-09-29 审查修复):裸 wait 无界——CloseInput 丢失/夹具服务回归时
+  # 本 fixture 挂死而非失败。改为有界轮询(SH_EXIT_WAIT_S,缺省 120s)后再
+  # wait 收割退出码;超时 fail-closed(非零退出触发 EXIT trap 清场)。正常
+  # 路径进程自然退出,轮询立即返回,退出码语义不变。
+  if ! wait_pid_bounded "${CPP_PID}" "${SH_EXIT_WAIT_S:-120}"; then
+    echo "[fixture] FAIL: ${name} C++ did not exit within ${SH_EXIT_WAIT_S:-120}s (CloseInput lost?)" >&2
+    tail -8 "${run_dir}/cpp.log" >&2
+    exit 1
+  fi
+  if ! wait_pid_bounded "${PY_PID}" "${SH_EXIT_WAIT_S:-120}"; then
+    echo "[fixture] FAIL: ${name} Python did not exit within ${SH_EXIT_WAIT_S:-120}s" >&2
+    tail -8 "${run_dir}/python.log" >&2
+    exit 1
+  fi
   wait "${CPP_PID}" || cpp_exit=$?
   wait "${PY_PID}" || py_exit=$?
   CPP_PID=""
@@ -201,7 +277,9 @@ if ! grep -q 'seq=2 tick='"${T_PLUS2}"' deferred_from_tick=0 reasons=\["DECODE_C
   exit 1
 fi
 # 恰好 3 次 delivery(无额外 epoch、无事件丢失)。
-n_deliveries=$(grep -c "\[fixture\] delivery" "${log}")
+# L21 同族修复(2026-09-29 审查):grep -c 零命中时退出码 1,pipefail 使本
+# 赋值非零,set -e 先杀脚本,"got 0" 的 FAIL 诊断永远到不了——|| true 保住。
+n_deliveries=$(grep -c "\[fixture\] delivery" "${log}" || true)
 if [[ ${n_deliveries} -ne 3 ]]; then
   echo "[fixture] FAIL: expected exactly 3 deliveries, got ${n_deliveries}" >&2
   exit 1

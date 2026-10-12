@@ -22,7 +22,6 @@ class SimSendCaller : public Callable {
     sim_request request;
     void (*msg_handler)(void* fun_arg);
     void* fun_arg;
-    bool should_cleanup;
     void call(EventType type, CallData* data);
     Sys* sys;
     SimSendCaller(Sys* sys,
@@ -33,8 +32,7 @@ class SimSendCaller : public Callable {
                   int tag,
                   sim_request request,
                   void (*msg_handler)(void* fun_arg),
-                  void* fun_arg,
-                  bool should_cleanup);
+                  void* fun_arg);
 };
 
 }  // namespace AstraSim

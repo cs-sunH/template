@@ -49,7 +49,7 @@ REQUEST_QUEUE_COLUMNS = (
     "next_trigger_type",
     "description",
 )
-# Allowed values of the typed-eviction trigger column (see materialize_first_30s.py:
+# Allowed values of the typed-eviction trigger column (see traces/materialize_20_30s.py:
 # the type of the request that follows each row -- human reply vs tool call).
 NEXT_TRIGGER_TYPES = ("human", "tool")
 @dataclass(frozen=True)
@@ -148,6 +148,15 @@ def parse_rank_spec(rank_spec: str) -> tuple[int, ...]:
 
 
 def clean_csv_row(row: dict[str, Optional[str]]) -> dict[str, str]:
+    # (2026-10-01 审查修复) 多余列（行尾多逗号）经 csv.DictReader 落入
+    # row[None]（list）——裸 .strip() 抛 AttributeError 丢行号上下文；
+    # 显式拒绝并带行数提示（同文件其余校验的干净 ValueError 口径）。
+    if None in row:
+        raise ValueError(
+            "CSV data row carries more fields than the header (check for "
+            "a trailing comma): extra values = "
+            f"{row[None]!r}"
+        )
     return {(key or "").strip(): (value or "").strip() for key, value in row.items()}
 
 
@@ -294,6 +303,20 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
                 continue
             if not session_id:
                 raise ValueError(f"request queue line {line_number} is missing session_id")
+            # Reserved-token gate (4.2 fix, same as the C++ reader and the
+            # FIFO Submit port): "first_token" is the WP9 node-name anchor
+            # substring and the graph builder embeds the sanitized
+            # session_id / request_id in every regular node name, so an id
+            # carrying it hijacks every node of that request into the
+            # marker arm.
+            if "first_token" in session_id or "first_token" in request_id:
+                raise ValueError(
+                    f"request queue line {line_number}: session_id/"
+                    f"request_id must not contain the reserved marker token "
+                    f"'first_token' (it is the WP9 node-name anchor "
+                    f"substring): session_id={session_id!r} "
+                    f"request_id={request_id!r}"
+                )
             turn_index_text = row.get("turn_index", "")
             if not turn_index_text:
                 raise ValueError(f"request queue line {line_number} is missing turn_index")
@@ -429,10 +452,6 @@ def load_config_rows(
     return values, tuple(groups)
 
 
-def shard_size(value: int, shards: int) -> int:
-    return (value + shards - 1) // shards
-
-
 def shard_extent(value: int, shards: int, shard_index: int) -> int:
     """Return an exact, deterministic uneven TP slice size.
 
@@ -447,6 +466,10 @@ def shard_extent(value: int, shards: int, shard_index: int) -> int:
 
 
 class TraceBuilder:
+    """P3(face-LRU 审计同步,2026-09-29):保留——生产构造点已随离线静态
+    管线删除,现存构造仅 test_face_scheduler 的测试对拍基准;在线构图用
+    graph_batch_builder.OnlineTraceBuilder(独立实现,勿混淆)。"""
+
     def __init__(
         self,
         *,
@@ -589,10 +612,26 @@ class TraceBuilder:
         num_ops: int,
         tensor_size: int,
         remote_read_size: int = 0,
+        *,
+        die_spec: Optional[dict] = None,
+        op_role: Optional[str] = None,
     ) -> None:
+        # die 后端（第一期）：die_spec 存在 => 该 COMP 由 die 后端执行
+        # （ET 侧无 runtime 字段，runtime_ns 语义恒 0）；op_role 缺省
+        # "compute"（契约 §2），仅 marker 显式写 "control_marker"。两个
+        # 键都序列化为 ET 字符串属性（设计文档 §8.3 ET 静态兼容）。
         node = self._new_node(name, COMP_NODE)
         node.attr.append(self._uint64_attr("num_ops", num_ops))
         node.attr.append(self._uint64_attr("tensor_size", tensor_size))
+        if op_role is not None:
+            node.attr.append(ChakraAttr(name="op_role", string_val=op_role))
+        if die_spec is not None:
+            node.attr.append(
+                ChakraAttr(
+                    name="die_op_spec",
+                    string_val=json.dumps(die_spec, sort_keys=True),
+                )
+            )
         if self.remote_operand_loads and remote_read_size:
             node.attr.append(self._uint64_attr(REMOTE_WEIGHT_ATTR, remote_read_size))
         self._commit_node(node)
@@ -684,6 +723,9 @@ def transformer_pass(
     layer_end: Optional[int] = None,
     include_output: bool = True,
 ) -> None:
+    # P3(face-LRU 审计同步,2026-09-29):逐层展开版保留——全仓唯一调用 =
+    # test_face_scheduler 的测试对拍基准(与 transformer_pass_aggregated
+    # 的逐字节总额对拍;在线路径只用聚合版)。
     if mlp_variant not in {"gelu", "swiglu"}:
         raise ValueError("mlp_variant must be gelu or swiglu")
     if layer_end is None:
@@ -919,6 +961,9 @@ def transformer_pass_aggregated(
     layer_start: int = 0,
     layer_end: Optional[int] = None,
     include_output: bool = True,
+    suppress_output_span_indices: Optional[Iterable[int]] = None,
+    die_ctx=None,
+    die_kv_identity: str = "local",
 ) -> int:
     """Fold repeated Transformer passes into 17 aggregate Chakra nodes.
 
@@ -927,6 +972,14 @@ def transformer_pass_aggregated(
     ``num_ops``, ``tensor_size``, optional remote-read bytes, and All-Reduce
     payload bytes from those expanded calls.  What is intentionally compressed
     is the number of layer, chunk/token, and collective invocations.
+
+    ``suppress_output_span_indices`` (D10 静默重建, 2026-09-27): indices of
+    spans whose OUTPUT-SIDE contributions (final norm + logits projection
+    output positions) must not be aggregated -- the joint D-boundary
+    ``context_rebuild`` span replays H_B tokens silently: its attention/MLP/KV
+    compute is real and stays aggregated, but it produces no logits and no
+    sampled token.  Default ``None`` (= empty set) keeps the historical
+    byte-exact behavior for every other caller.
 
     ``weight_passes`` (拼 batch 口径, 2026-08-22): the number of physical
     forward passes that read the model weights.  The default ``None`` (=
@@ -938,6 +991,19 @@ def transformer_pass_aggregated(
     only k times (once per iteration, shared by all batch members; 权重只读
     一次 per iteration).  Activation / KV / AllReduce bytes stay per-span
     exact regardless of ``weight_passes``.
+
+    ``die_ctx``（die 后端第一期）：die 发射语境
+    （online/die_model_adapter.DieModelContext；调用方 graph_batch_builder
+    的 emit_pass 漏斗已按本次发射的 spans/TP/rank 调过 begin_emission）。
+    None = legacy 路径，发射逐字节与历史一致；非 None 时走
+    _emit_die_aggregated：同一份 layer_totals / tail / collective 账本，
+    每类（或融合组）COMP 附 die_op_spec（spans 带绝对位置、layer_count =
+    本次发射的活跃层区间宽度 active_layers——分段发射时如实小于全模层数；
+    tail 的 spans 集剔除被 D10 抑制的 span），可融合纯本地链经
+    compile_regions 编译成 attention_region / ffn_region（num_ops/
+    tensor_size 兼容统计 = 各成分之和，collective 位置/数量/bytes 不变）。
+    ``die_kv_identity``：spec 的 kv_access.identity 注记（本仓 remote-read
+    credit 门体块传 "staged"，其余 "local"；库内无成本语义）。
     """
 
     spans = tuple(pass_spans)
@@ -1026,6 +1092,14 @@ def transformer_pass_aggregated(
         "mlp_down_projection",
         "mlp_residual_add",
     )
+    # D10 静默重建：被抑制 span 的输出位（final norm/logits 的逐 span
+    # 激活分量）不进聚合；权重侧分量（weight_passes × 参数字节）照常
+    # ——重建 span 与其迭代共享同一次权重读取（批语义），权重真实读。
+    output_suppressed_spans = frozenset(suppress_output_span_indices or ())
+    for suppressed_index in output_suppressed_spans:
+        if not 0 <= suppressed_index < len(spans):
+            raise ValueError(
+                "suppress_output_span_indices entries must index pass_spans")
     layer_totals = {name: [0, 0, 0] for name in category_names}
     attention_collective_bytes = 0
     mlp_collective_bytes = 0
@@ -1037,7 +1111,7 @@ def transformer_pass_aggregated(
         category[1] += tensor_size
         category[2] += remote_read
 
-    for tokens, kv_length in spans:
+    for span_index, (tokens, kv_length) in enumerate(spans):
         activation_elems = tokens * hidden_size
         activation_shard_elems = tokens * attention_hidden_per_rank
         ffn_shard_elems = tokens * ffn_per_rank
@@ -1138,6 +1212,11 @@ def transformer_pass_aggregated(
             3 * activation_bytes,
             2 * activation_bytes,
         )
+        if span_index in output_suppressed_spans:
+            # D10 静默重建 span：无输出位（不产生 final norm/logits 的
+            # 逐 token 输出贡献），不采样、不推进 RNG（事件侧无采样
+            # 算子，抑制由标记/元数据侧承载）。
+            continue
         add(
             final_layernorm,
             norm_ops_factor * activation_elems,
@@ -1172,6 +1251,36 @@ def transformer_pass_aggregated(
     final_layernorm[2] += norm_param_bytes * weight_passes
     logits[1] += logits_weight_bytes * weight_passes
     logits[2] += logits_weight_bytes * weight_passes
+
+    if die_ctx is not None:
+        # die 后端（第一期；契约 §2/§7.2）：同一份 layer_totals / tail /
+        # collective 账本，经 die 语境做生成期 region 编译后发射（每类或
+        # 融合组附 die_op_spec，spans 带绝对位置，layer_count = 本次发射
+        # 的活跃层区间宽度）。legacy 分支（die_ctx is None）保持逐字节
+        # 不变。
+        _emit_die_aggregated(
+            builder,
+            die_ctx,
+            phase=phase,
+            spans=spans,
+            active_layers=active_layers,
+            layer_label=layer_label,
+            include_output=include_output,
+            suppress_output_span_indices=output_suppressed_spans,
+            weight_passes=weight_passes,
+            layer_totals=layer_totals,
+            attention_collective_bytes=attention_collective_bytes,
+            mlp_collective_bytes=mlp_collective_bytes,
+            final_layernorm=final_layernorm,
+            logits=logits,
+            category_names=category_names,
+            final_norm_name=final_norm_name,
+            pg_name=pg_name,
+            tensor_parallel=tensor_parallel,
+            tensor_parallel_rank=tensor_parallel_rank,
+            kv_identity=die_kv_identity,
+        )
+        return len(spans)
 
     def aggregate_comp(category_name: str) -> None:
         ops, tensor_size, remote_read = layer_totals[category_name]
@@ -1220,6 +1329,153 @@ def transformer_pass_aggregated(
         logits[2],
     )
     return len(spans)
+
+
+def _emit_die_aggregated(
+    builder: TraceBuilder,
+    die_ctx,
+    *,
+    phase: str,
+    spans: tuple[tuple[int, int], ...],
+    active_layers: int,
+    layer_label: str,
+    include_output: bool,
+    suppress_output_span_indices,
+    weight_passes: int,
+    layer_totals: dict[str, list[int]],
+    attention_collective_bytes: int,
+    mlp_collective_bytes: int,
+    final_layernorm: list[int],
+    logits: list[int],
+    category_names: tuple[str, ...],
+    final_norm_name: str,
+    pg_name: str,
+    tensor_parallel: int,
+    tensor_parallel_rank: int,
+    kv_identity: str,
+) -> None:
+    """die 后端的聚合发射（第一期；transformer_pass_aggregated 的 die 分支）。
+
+    与 legacy 发射共用同一份 layer_totals / tail / collective 账本（字节
+    守恒）；joint 特有语义如实进入 spec：
+
+      - layer_count = 本次发射的活跃层区间宽度 active_layers（C15 层段
+        发射时逐段 < 全模层数；跨段求和仍覆盖全部层）；
+      - weight_passes 照实传递（分段/分块发射时 = 该段所在物理批的权重
+        读取次数，与 legacy 的 ×active_layers 字节口径一致）；
+      - tail（final_norm/logits）只覆盖未被 D10 静默重建抑制的 span
+        （被抑制 span 无输出位；include_output=False 时不发 tail，与
+        legacy 一致）；
+      - 13 类层类别先经 die_ctx.compile_regions 做 §7.2 纯本地链融合
+        （qk+scale_mask+softmax+av -> attention_region；mlp_up+
+        activation+down -> ffn_region）；融合组的 num_ops/tensor_size/
+        remote_read = 各成分之和（×active_layers 口径与 legacy 一致）；
+      - 两个 All-Reduce 的位置/bytes 与 legacy 完全一致（边界类别
+        attention_output_projection / mlp_down_projection 之后，融合
+        不移动 collective）。
+
+    阻断/同质事实（§7.2 融合条件，逐项来自本发射骨架的真实结构）：
+    聚合列车体是严格线性链（previous_id 单前驱，无 pending 额外依赖），
+    链内无外部分支消费者（external_consumers=False）；通信边界仅存在于
+    attention_output_projection 与 mlp_down_projection 之后（boundary_
+    after=True，二者分别是各自融合链之外/链尾，链内无边界）；KV 就绪
+    gate / credit tile 门由发射骨架在体块/层段首节点 arm_dependency
+    挂接（门挂组首节点，链内成员经链序传递就绪）。identity 携带 TP/
+    rank/层区间/span 集合供 compile_regions 做同质复核。
+    """
+    from online.die_model_adapter import expanded_span_count
+    if expanded_span_count(die_ctx.span_records) != len(spans):
+        raise ValueError(
+            "die context span records ({} expanded spans) disagree with the "
+            "aggregated pass spans ({}); call begin_emission with the "
+            "same pass_spans".format(
+                expanded_span_count(die_ctx.span_records), len(spans)))
+    identity = {
+        "tp": tensor_parallel,
+        "rank": tensor_parallel_rank,
+        "layer": active_layers,
+        "span_set": spans,
+    }
+    records = []
+    for category in category_names:
+        ops, tensor_size, remote_read = layer_totals[category]
+        records.append({
+            "name": f"{phase}_{layer_label}_{category}",
+            "category": category,
+            "op_kind": die_ctx.op_kind_of(category),
+            "num_ops": ops * active_layers,
+            "tensor_size": tensor_size * active_layers,
+            "remote_read": remote_read * active_layers,
+            "layer_count": active_layers,
+            "weight_passes": weight_passes,
+            "external_consumers": False,
+            "boundary_after": category in (
+                "attention_output_projection", "mlp_down_projection"),
+            "identity": dict(identity),
+        })
+    for group in die_ctx.compile_regions(records):
+        builder.comp(
+            group["name"],
+            group["num_ops"],
+            group["tensor_size"],
+            group["remote_read"],
+            die_spec=die_ctx.build_spec(
+                group["op_kind"],
+                layer_count=group["layer_count"],
+                weight_passes=group["weight_passes"],
+                fusion_policy="auto" if group["fused"] else "none",
+                kv_identity=kv_identity,
+            ),
+        )
+        if "attention_output_projection" in group["member_categories"]:
+            builder.all_reduce(
+                f"{phase}_{layer_label}_attention_all_reduce",
+                attention_collective_bytes * active_layers,
+                pg_name,
+            )
+        elif "mlp_down_projection" in group["member_categories"]:
+            builder.all_reduce(
+                f"{phase}_{layer_label}_mlp_all_reduce",
+                mlp_collective_bytes * active_layers,
+                pg_name,
+            )
+    if not include_output:
+        return
+    # tail 的 span 集 = 未被 D10 抑制的 span（被抑制 span 无输出位；
+    # legacy 的 tail 账本 final_layernorm/logits 本就只累计它们）。
+    # v5 紧凑 run：按展开序号筛子集，被切割的 run 分裂（数值恒等）。
+    from online.die_model_adapter import slice_span_records
+    tail_spans = slice_span_records(
+        die_ctx.span_records,
+        (index for index in range(len(spans))
+         if index not in suppress_output_span_indices),
+    )
+    if not tail_spans:
+        # 结构性不可达（D10 重建 span 恒与其成员的 decode span 同块
+        # 发射，include_output=True 的 tail 至少含一个非抑制 span）；
+        # 到达即发射/切分 bug，fail-closed 而非发一个空 span spec。
+        raise ValueError(
+            "die tail emission for phase {!r} has no non-suppressed span; "
+            "D10 rebuild spans must coexist with their member decode "
+            "spans".format(phase))
+    for category, totals in (
+        (final_norm_name, final_layernorm),
+        ("logits_projection", logits),
+    ):
+        builder.comp(
+            f"{phase}_all_passes_{category}",
+            totals[0],
+            totals[1],
+            totals[2],
+            die_spec=die_ctx.build_spec(
+                die_ctx.op_kind_of(category),
+                layer_count=1,
+                weight_passes=weight_passes,
+                fusion_policy="none",
+                spans=tail_spans,
+                kv_identity=kv_identity,
+            ),
+        )
 
 
 def sanitize_node_prefix(value: str) -> str:

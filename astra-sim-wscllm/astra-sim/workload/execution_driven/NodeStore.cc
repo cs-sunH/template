@@ -9,7 +9,10 @@ Implementation (方案 §4 步骤 1-4).
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 #include <algorithm>
-#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <limits>
 #include <map>
 #include <utility>
 
@@ -24,11 +27,32 @@ uint64_t NodeStore::add_node(OnlineNode node) {
     if (node.global_id == 0) {
         node.global_id = next_id_++;
     } else {
+        // R1-A-L4 port (2026-09-30, joint 同步): next_id_ = global_id + 1
+        // wraps to 0 at global_id == UINT64_MAX, silently resetting the id
+        // space. Only a synthetic caller can reach the sentinel; fail
+        // closed instead of corrupting the id stream.
+        if (node.global_id == std::numeric_limits<uint64_t>::max()) {
+            std::cerr << "[Error] (execution_driven/node_store) add_node: "
+                         "global_id UINT64_MAX would overflow next_id_ "
+                         "(fail-closed)"
+                      << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
         next_id_ = std::max(next_id_, node.global_id + 1);
     }
     const auto [it, inserted] =
         nodes_.emplace(node.global_id, NodeRecord{std::move(node)});
-    assert(inserted);
+    // Unconditional fail-closed (not NDEBUG-stripped): a duplicate id must
+    // never silently drop the new node AND re-arm the existing record into
+    // free_ids_ (an issued node would re-enter the issue set). Same contract
+    // as RequestIngress::register_queue_index's duplicate handling.
+    if (!inserted) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/nodestore) duplicate node "
+                     "id: %llu\n",
+                     static_cast<unsigned long long>(it->first));
+        std::abort();
+    }
     if (it->second.unresolved_parents == 0) {
         free_ids_.insert(node.global_id);
     }
@@ -37,8 +61,8 @@ uint64_t NodeStore::add_node(OnlineNode node) {
 
 void NodeStore::add_dependency(uint64_t parent, uint64_t child,
                                DepKind /*kind*/) {
-    // First version: all kinds resolve identically (precedence). The kind is
-    // stored per edge for the later fence upgrade (步骤 1-5 note forbids
+    // First version: every kind resolves identically as plain precedence and
+    // the kind is deliberately NOT stored per edge (the 步骤 1-5 note forbids
     // building the general fence early). Dead-parent edges are tolerated:
     // a parent that already finished no longer blocks the child.
     auto child_it = nodes_.find(child);
@@ -49,6 +73,28 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
     if (parent_it == nodes_.end() || parent_it->second.finished) {
         return;  // already-finished parent does not block
     }
+    // S5 fix (2026-09-28 face parity, sunk here 2026-10-01): a late edge
+    // onto an already-issued/finished child (or a self-loop) used to desync
+    // the free set from the issue/finish bits: the edge bumped
+    // unresolved_parents while the child stayed outside the free set, and
+    // the parent's later finish re-inserted the issued child into
+    // free_ids_, so for_each_dep_free handed the node to Workload::issue a
+    // second time (double terminal -> fail-closed abort). The committer's
+    // mandatory preflight only ever edges fresh same-batch nodes (unissued
+    // by construction), so the official path never trips; a caller that
+    // does this is a defect -- name it and die (same fail-closed style as
+    // add_node's duplicate-id guard).
+    if (child_it->second.issued || child_it->second.finished ||
+        parent == child) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/nodestore) add_dependency: "
+                     "late edge onto issued/finished node %llu (parent "
+                     "%llu) -- free-set accounting would corrupt "
+                     "(fail-closed)\n",
+                     static_cast<unsigned long long>(child),
+                     static_cast<unsigned long long>(parent));
+        std::abort();
+    }
     // A child added with no parents is free; recording a real parent takes it
     // out of the free set again.
     child_it->second.unresolved_parents++;
@@ -58,12 +104,6 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
     // M2 node GC: count the live child on the parent (the child of a
     // validated edge is always a fresh, unfinished batch node).
     ++parent_it->second.unfinished_children;
-}
-
-std::vector<uint64_t> NodeStore::resolve_free_nodes() const {
-    std::vector<uint64_t> result;
-    fill_free_node_snapshot(result);
-    return result;
 }
 
 void NodeStore::fill_free_node_snapshot(std::vector<uint64_t>& out) const {
@@ -91,7 +131,43 @@ void NodeStore::finish_node(uint64_t node_id) {
         if (child_it == nodes_.end()) {
             continue;  // M2: child already collected (it finished earlier)
         }
-        assert(child_it->second.unresolved_parents > 0);
+        // Static-DAG contract: a child still blocked by this parent can
+        // never have been ISSUED from the free set (issue requires
+        // unresolved_parents == 0, i.e. every parent finished first), so
+        // issued == 1 here means the free-set discipline itself broke.
+        // F1-CPP C1-5 (2026-09-29): these were NDEBUG-stripped asserts; in
+        // a Release build a broken invariant wrapped the uint32 counters
+        // around instead of failing loudly (a child that never frees wedges
+        // the run into the generic watchdog, a parent that never GCs leaks
+        // RSS), with no diagnosis. Converted to the same unconditional
+        // fail-closed channel as add_node's duplicate-id gate (and
+        // ServiceCoordinator/HardwareResource), naming the node ids and the
+        // offending counts. finished == 1 with issued == 0 is a LEGAL
+        // shape here, not a violation: Workload::skip_invalid finishes
+        // never-executed (invalid/metadata/zero-tensor) nodes while their
+        // parents are still running, and the shipped Release behavior
+        // releases such a skipped child's parent edge exactly like any
+        // other -- preserved verbatim, only the stripped asserts became
+        // unconditional.
+        if (child_it->second.issued) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/nodestore) finish_node "
+                         "releases child %llu of node %llu while it is "
+                         "already issued=1 (finished=%d)\n",
+                         static_cast<unsigned long long>(child),
+                         static_cast<unsigned long long>(node_id),
+                         child_it->second.finished ? 1 : 0);
+            std::abort();
+        }
+        if (child_it->second.unresolved_parents == 0) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/nodestore) finish_node "
+                         "releases child %llu of node %llu with "
+                         "unresolved_parents == 0\n",
+                         static_cast<unsigned long long>(child),
+                         static_cast<unsigned long long>(node_id));
+            std::abort();
+        }
         if (--child_it->second.unresolved_parents == 0) {
             free_ids_.insert(child);
         }
@@ -114,20 +190,22 @@ void NodeStore::finish_node(uint64_t node_id) {
         if (parent_it == nodes_.end()) {
             continue;  // M2: parent already collected
         }
-        assert(parent_it->second.unfinished_children > 0);
+        // F1-CPP C1-5 (2026-09-29): was an NDEBUG-stripped assert (see the
+        // child-side note above); same unconditional fail-closed conversion.
+        if (parent_it->second.unfinished_children == 0) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/nodestore) finish_node "
+                         "decrements parent %llu of node %llu with "
+                         "unfinished_children == 0\n",
+                         static_cast<unsigned long long>(parent),
+                         static_cast<unsigned long long>(node_id));
+            std::abort();
+        }
         if (--parent_it->second.unfinished_children == 0 &&
             parent_it->second.finished && gc_enabled_) {
             gc_fifo_.push_back(parent);
         }
     }
-}
-
-std::optional<OnlineNode> NodeStore::node(uint64_t node_id) const {
-    const auto it = nodes_.find(node_id);
-    if (it == nodes_.end()) {
-        return std::nullopt;
-    }
-    return it->second.node;
 }
 
 const OnlineNode* NodeStore::node_ptr(uint64_t node_id) const {
@@ -163,24 +241,6 @@ bool NodeStore::mark_terminal_observed(uint64_t node_id) {
     it->second.terminal_observed = true;
     return true;
 }
-
-std::optional<NodeStoreMeta> NodeStore::meta_for(uint64_t node_id) const {
-    const auto it = nodes_.find(node_id);
-    if (it == nodes_.end()) {
-        return std::nullopt;
-    }
-    return NodeStoreMeta{it->second.node.request_id, it->second.node.stage,
-                         it->second.node.generation};
-}
-
-size_t NodeStore::pending_count() const {
-    return std::count_if(nodes_.begin(), nodes_.end(),
-                         [](const auto& entry) {
-                             return !entry.second.finished;
-                         });
-}
-
-bool NodeStore::empty() const { return nodes_.empty(); }
 
 void NodeStore::set_gc_enabled(bool enabled) {
     // M2 node GC: the switch is set once by the committer constructor from
@@ -244,8 +304,9 @@ void NodeStore::collect_garbage() {
 }
 
 bool NodeStore::erased(uint64_t node_id) const {
-    // M2: absent == collected for committed store ids (see header). Used by
-    // the committer's store_ids_ prune pass only.
+    // M2: absent == collected for committed store ids (see header). Consumed
+    // only by the committer's liveness preflight and its commit-tail affine /
+    // anchor resolution (GraphBatchCommitter.cc).
     return nodes_.find(node_id) == nodes_.end();
 }
 

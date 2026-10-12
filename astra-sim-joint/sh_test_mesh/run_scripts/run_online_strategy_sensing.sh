@@ -69,9 +69,21 @@ if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
 fi
 ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_inference"
-# 与主入口共用运行时硬件目录选择。受控硬件档在 materializer 后通过
-# SH_RUNTIME_RC_DIR 指向实际四件目录；快照中的源 JSON 与执行档才可核对。
-RC="${SH_RUNTIME_RC_DIR:-${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool}"
+# 与主入口共用运行时硬件目录选择（2026-10-04 die 交付修正：缺省动态解析
+# plan manifest 的 die-model-config 所在目录；legacy 档回退 validation-160gib
+# 硬编码）。受控硬件档在 materializer 后通过 SH_RUNTIME_RC_DIR 指向实际
+# 四件目录；快照中的源 JSON 与执行档才可核对。
+RC="${SH_RUNTIME_RC_DIR:-}"
+if [[ -z "${RC}" ]]; then
+    RC_DIE=$(python3 -c \
+        "import json;print(json.load(open('${ET_DIR}/manifest.json')).get('die-model-config',''))" \
+        2>/dev/null)
+    if [[ -n "${RC_DIE}" && -f "${RC_DIE}" ]]; then
+        RC=$(dirname "${RC_DIE}")
+    else
+        RC="${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool"
+    fi
+fi
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 
 # 桥侧看门狗（2026-08-22 引入；P0-2 2026-08-31 常态化+定位修正；收尾批
@@ -218,6 +230,28 @@ export PYTHONUNBUFFERED=1
   > "${RUN_DIR}/cpp.log" 2>&1 &
 CPP_PID=$!
 
+# M20(2026-09-29 审查修复):失败/打断路径 fail-closed 清场。此前无 trap:
+# "C++ exited before FIFO ready" 的 exit 1(及 INT/TERM 半途打断)会把已
+# 启动的 C++ 桥进程留在后台继续吃资源(对照三个 fixture runner 均已有
+# trap cleanup)。现统一在 EXIT/INT/TERM 清杀尚存活的 C++ 子进程:先
+# SIGTERM(取证窗口,见上方"监督纪律":终止长跑用 SIGTERM 勿用 SIGINT),
+# 宽限 ~3s 后 SIGKILL 兜底。正常路径 wait 已收割 C++ 或尚未启动时均为
+# no-op。单仿真锁 FD 由进程退出统一关闭,不受影响。
+cleanup_cpp() {
+  if [[ -n "${CPP_PID:-}" ]] && kill -0 "${CPP_PID}" 2>/dev/null; then
+    kill "${CPP_PID}" 2>/dev/null || true
+    local _i
+    for _i in $(seq 1 30); do
+      kill -0 "${CPP_PID}" 2>/dev/null || return 0
+      sleep 0.1
+    done
+    kill -9 "${CPP_PID}" 2>/dev/null || true
+  fi
+}
+trap cleanup_cpp EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 until [ -p "${RUN_DIR}/bridge/req_notify.fifo" ] && [ -p "${RUN_DIR}/bridge/resp_notify.fifo" ]; do
   if ! kill -0 "${CPP_PID}" 2>/dev/null; then
     echo "[run_online_strategy_sensing] C++ exited before FIFO ready (see cpp.log)" >&2
@@ -277,12 +311,20 @@ fi
 #    下次运行 rm -rf "${RUN_DIR}" 全量清理。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger remote_memory_transactions; do
+# (2026-10-01 审查修复) 与主 runner 同步 W5 两件侧车（"完全同构"自述
+# 此前与主 runner 的归档面不一致：work_ledger_events 与
+# request_journal_work_ledger.jsonl.gz 滞留 bridge/ 不进 results/）。
+for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger remote_memory_transactions work_ledger_events; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))
   fi
 done
+# W5：journal 剥离字段承载侧车（gzip）——与主 runner 同款归档。
+if [ -f "${RUN_DIR}/bridge/request_journal_work_ledger.jsonl.gz" ]; then
+  mv "${RUN_DIR}/bridge/request_journal_work_ledger.jsonl.gz"      "${RUN_DIR}/results/request_journal_work_ledger.jsonl.gz"
+  ARCHIVED=$((ARCHIVED + 1))
+fi
 echo "[run_online_strategy_sensing] artifacts: ${ARCHIVED} jsonl archived -> results/; request_journal=results/request_journal.jsonl"
 # P3(2026-08-28):仿真成功后自动 SLO 指标提取(postprocess 成功之后、
 # archive_run_outputs.sh 之前:cpp.log 未压缩、manifest 已拷入、results/

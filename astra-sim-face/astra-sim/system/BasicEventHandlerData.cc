@@ -9,6 +9,9 @@ using namespace AstraSim;
 
 BasicEventHandlerData::BasicEventHandlerData() {
     this->sys_id = 0;
+    // CallEvents is the zero enumerator: keep a default-constructed handler
+    // data from carrying an indeterminate event tag.
+    this->event = EventType::CallEvents;
 }
 
 BasicEventHandlerData::BasicEventHandlerData(int sys_id, EventType event) {

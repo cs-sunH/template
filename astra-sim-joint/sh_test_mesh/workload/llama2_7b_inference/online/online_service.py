@@ -14,7 +14,8 @@ CLI:
      零 polling;决策异常 => error response + exit 1(fail-closed);
   4. EOF(C++ 关闭写端)= 运行结束:verify_run_end + 日志消费完整性校验,
      并把 graph_batch_digests.jsonl / online_decision_log.jsonl 写入
-     bridge_dir(每次 GraphBatch 产出顺带写 digest 行;决策行同批追加)。
+     bridge_dir(每次 GraphBatch 产出顺带写 digest 行;决策行同批追加;
+     digest 缺省关:SH_GRAPH_DIGESTS=0,=1 恒写)。
 
 strategy 模式(步骤 1-9 的 Sh30OnlineScheduler):真实策略(关感知)在
 在线骨架中运行,决策日志逐批写 online_decision_log.jsonl(决策由策略实时产出)。
@@ -24,6 +25,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -50,6 +52,11 @@ TRAIN_LEDGER_LOG_NAME = "train_ledger.jsonl"
 PROFILE_LOG_NAME = "profile.jsonl"
 SENSING_QUERY_LOG_NAME = "sensing_query_log.jsonl"
 ONLINE_STATS_LOG_NAME = "online_stats.jsonl"
+# 墙时分段流(2026-10-05 埋点):每已应用交付一行——桥接三段
+# (read_parse/handler/write)+ 调度固定阶段五分段 + scheduler_self_ns;
+# 桥接层在 response 原子写后落行(eager=False,有行才建文件),逐行
+# flush,SIGTERM 存活。
+TIMING_LOG_NAME = "timing.jsonl"
 # B3(2026-08-28):online_stats 基础行(未合并 processing_ns)的流式暂存
 # 文件;结束期逐行读回、合并桥接层 processing_ns 后写出终文件并删除
 # (终文件字节与改前结束一次性写出一致,行不再驻留内存)。
@@ -69,7 +76,7 @@ class _JsonlSink:
     """jsonl 逐行落盘器（M3 流式落盘 + B2 常驻 fd，2026-08-23）。
 
     常驻 fd：构造（或首行）时打开一次，__call__ 只 write+flush，结束
-    close——不再每行 open/close。行格式与 _write_jsonl 完全一致
+    close——不再每行 open/close。行格式统一为
     （json.dumps(row, sort_keys=True) + "\\n"），行序不变 ⇒ 与改前结束
     一次性写出的文件逐字节相同。
 
@@ -125,10 +132,27 @@ class _NullSink:
         pass
 
 
-def _write_jsonl(path: str, rows: list) -> None:
-    with open(path, "w", encoding="utf-8") as output:
-        for row in rows:
-            output.write(json.dumps(row, sort_keys=True) + "\n")
+class _StatsFanoutSink:
+    """online_stats 基础行扇出(2026-10-05 埋点):写 .partial 暂存的
+    同时把末行副本留进 stash——桥接层在 response 原子写完后经
+    timing_row_source 取走,与桥三分段拼接成 timing.jsonl 行。
+
+    严格顺序协议(一轮至多一个在途 request)下每交付恰一行,单槽
+    stash 无歧义;重放/异常路径不入 stash(桥层对应 request 同样
+    不落 timing 行)。"""
+
+    def __init__(self, inner, stash: dict):
+        self._inner = inner
+        self._stash = stash
+        self.count = 0
+
+    def __call__(self, row: dict) -> None:
+        self._inner(row)
+        self._stash["last"] = dict(row)
+        self.count += 1
+
+    def close(self) -> None:
+        self._inner.close()
 
 
 def dump_joint_kv_ledgers(scheduler, path: str) -> None:
@@ -153,13 +177,20 @@ def dump_joint_kv_ledgers(scheduler, path: str) -> None:
     （C14 结算时刻逐请求事实——字段面 = _append_kv_delta_row 冻结口径）
     随本侧车第四键落盘；行源 = kv_delta_journal_rows()（C14 字段集/
     seq 链完整性 fail-closed 导出）。两文件同卡落地，无版本偏斜，
-    直接经访问器取行。
+    直接经访问器取行。消费方=测试与未来实验工具（生产主路径不读
+    侧车文件）。
 
     A12'（2026-09-22，§4.3 补遗）：逐键独立导出——单键失败写
     ``<key>_export_error`` 哨兵字符串（其余键不受连坐；kv_delta_
     journal 的 seq 断链 fail-closed 经哨兵显式落盘，消费端按最弱层
     + 明示注记处理），不再被兜底 except 吞成"四键尽失 + 消费端误判
     零结算"。
+
+    M4（2026-09-26，E/容量验证测量日志）：restore_events（C15 后缀
+    逐组恢复 issue/complete 审计——issue/complete 的 at_ns 配对得
+    恢复窗口下界）与 adaptive_decisions（C15 adaptive 决策披露侧车
+    ——决策 at_ns 支撑两阶段决策验证）随本侧车第五、六键落盘。
+    getattr 缺省空序列与 copy_handoff 同款（替身 kv_manager 兼容）。
     """
     # A12'：逐键生产隔离。
     producers = (
@@ -177,6 +208,14 @@ def dump_joint_kv_ledgers(scheduler, path: str) -> None:
         ("kv_delta_journal",
          lambda: [dict(row) for row in
                   scheduler.kv_manager.kv_delta_journal_rows()]),
+        ("restore_events",
+         lambda: [dict(event) for event in
+                  getattr(scheduler.kv_manager,
+                          "restore_events", ())]),
+        ("adaptive_decisions",
+         lambda: [dict(row) for row in
+                  getattr(scheduler.kv_manager,
+                          "adaptive_decisions", ())]),
     )
     payload: dict = {}
     for key, produce in producers:
@@ -210,6 +249,13 @@ def _update_joint_manifest_telemetry(scheduler, path: str) -> None:
         "telemetry_window_broken": scheduler._telemetry_window_broken,
         "collective_coverage": (
             scheduler._joint_flows.collective_coverage),
+        # W5（A3）：背景世界源终态（ledger = 账本权威投影；
+        # absent_legacy_peer = 旧对端缺 work_ledger 字段的显式降级——
+        # LoadsWorldSource 注册表计数背景，run 全程 sticky）。
+        "work_ledger_world_source": getattr(
+            scheduler, "_joint_world_source_status", None),
+        "work_ledger_field_absent_seen": getattr(
+            scheduler, "work_ledger_absent_seen", None),
     }
     tmp_path = path + ".tmp"
     try:
@@ -277,13 +323,25 @@ def main(argv=None) -> int:
     sensing_query_sink = _JsonlSink(
         os.path.join(args.bridge_dir, SENSING_QUERY_LOG_NAME),
         eager=args.sensing) if args.sensing else None
-    online_stats_sink = _JsonlSink(
-        os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME))
+    # 墙时分段流(2026-10-05 埋点):timing.jsonl 每交付一行(桥三段 +
+    # 调度五分段);online_stats 基础行经扇出 sink 暂存末行供桥层拼接。
+    _timing_stash: dict = {}
+    timing_sink = _JsonlSink(
+        os.path.join(args.bridge_dir, TIMING_LOG_NAME), eager=False)
+    online_stats_sink = _StatsFanoutSink(
+        _JsonlSink(
+            os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME)),
+        _timing_stash)
     # completed-unreconciled 行在 REQUEST_COMPLETE 边界立即写出；避免结束
     # 时由调度器聚合全量 completed ledger。
     ledger_sink = (
         _JsonlSink(os.path.join(args.bridge_dir, "ledger.jsonl"))
         if args.sensing else None)
+    # W1(2026-09-29)：因果运行账本侧车（每交付一行应用摘要，流式有界；
+    # 仿 dump_joint_kv_ledgers 的诊断通道定位——尽力而为，不阻断主路径）。
+    work_ledger_sink = _JsonlSink(
+        os.path.join(args.bridge_dir, "work_ledger_events.jsonl"),
+        eager=False)
     # 步骤 1-9:真实策略(关感知,默认);决策日志逐批写 online_decision_log.jsonl。
     # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
     # 输入,不进策略判据,决策序列与关感知逐字节一致)。
@@ -305,6 +363,9 @@ def main(argv=None) -> int:
         sensing_query_sink=sensing_query_sink,
         online_stats_sink=online_stats_sink,
         ledger_sink=ledger_sink,
+        # W5（2026-09-29）：构造期显式转发（W1 期间的构造后注入过渡行已
+        # 删——见 Sh30OnlineScheduler.__init__ 注释）。
+        work_ledger_sink=work_ledger_sink,
     )
     # joint 开关状态落 run 级 provenance（bridge 目录 manifest 侧车；
     # §7.1：manifest 记录每次运行的三机制开关状态及 off 替代模式）。
@@ -320,6 +381,11 @@ def main(argv=None) -> int:
     _manifest_payload = scheduler.joint_config.manifest_dict()
     _manifest_payload["link_telemetry_injected"] = (
         os.environ.get("SH_LINK_TELEMETRY", "0") == "1")
+    # W5（2026-09-29，W3 §7 manifest 接线 + W6 §5 装配点）：预测配置
+    # manifest（七正交轴 + params + cross_validate 披露）并入 run 级
+    # provenance 的 prediction 节——W3 交付的 joint_prediction_manifest
+    # 属性写点（本文件当时属冻结清单，归 W5 接线）。
+    _manifest_payload["prediction"] = scheduler.joint_prediction_manifest
     with open(joint_manifest_path, "w", encoding="utf-8") as sink:
         json.dump(_manifest_payload, sink, indent=1, sort_keys=True)
     # Scheduler 已提取构造期所需字段；不要让 main() 的局部变量再额外钉住
@@ -328,8 +394,31 @@ def main(argv=None) -> int:
 
     # Official peer is FileDecisionBridge: request files are exactly
     # nlohmann::json::dump() bytes (compact, no trailing newline).
+    def _timing_row_source():
+        # 扇出 stash 取走即弃(单槽;严格顺序协议下一 request 恰一行)。
+        return _timing_stash.pop("last", None)
+
+    def _work_ledger_bytes_source(sequence):
+        # BridgeServer writes the exact immutable work_ledger bytes retained
+        # by the scheduler's just-accepted response-cache entry (v4 N-line:
+        # the raw segment bytes of the accepted delivery). The strict
+        # one-in-flight protocol makes this a bounded single-delivery lookup.
+        # The journal note (snapshot_kind/event_watermark for the stripped
+        # marker) rides along from the apply receipt.
+        cached = scheduler._delivery_reply_cache
+        if cached is None or cached.get("seq") != sequence:
+            return None
+        note = getattr(scheduler, "_last_work_ledger_note", None)
+        if note is None:
+            raise RuntimeError(
+                "work_ledger journal note missing for delivery {}".format(
+                    sequence))
+        return cached.get("work_ledger_canonical"), note
+
     server = BridgeServer(
-        args.bridge_dir, canonical_request_producer=True)
+        args.bridge_dir, canonical_request_producer=True,
+        work_ledger_bytes_source=_work_ledger_bytes_source,
+        timing_sink=timing_sink, timing_row_source=_timing_row_source)
     # 终审-中4（kimi 三审）+ 四审-低3/低8：joint 台账侧车改 **try/finally
     # 全路径落盘**（K6 语义"deep_gap 落账 = run 终止"——RED run 经异常
     # 退出也须落终态缺口现场）；落盘函数为模块级（可单测固化）且
@@ -337,6 +426,9 @@ def main(argv=None) -> int:
     # 再消除触发面）。
     _ledgers_path = os.path.join(
         args.bridge_dir, "joint_kv_ledgers.json")
+    # 服务墙时锚点(2026-10-05 埋点):serve_forever 全程宿主墙时——
+    # 汇总行 service_wall_ns(run 净决策服务时长,不含 plan 加载/收尾)。
+    _service_wall_t0 = time.perf_counter_ns()
     try:
         result = server.serve_forever(
             scheduler.on_decision_batch,
@@ -349,6 +441,7 @@ def main(argv=None) -> int:
         scheduler.verify_run_end()
     finally:
         dump_joint_kv_ledgers(scheduler, _ledgers_path)
+    _service_wall_ns = time.perf_counter_ns() - _service_wall_t0
     # C11 rider：遥测完备性五键回填 manifest 侧车（verify 之后——
     # sticky 事实 run 全程判定；C8-BLOCKED① 收口）。
     _update_joint_manifest_telemetry(scheduler, joint_manifest_path)
@@ -362,6 +455,14 @@ def main(argv=None) -> int:
     # 此处逐行读回、合并、写终文件后删除暂存——行不再驻留内存,终文件
     # 字节与改前结束一次性写出一致。
     bridge_stats = server.stats()
+    # 墙时分段/计数埋点(2026-10-05):投影构建+前推粗相三段与按阶段
+    # 投影计数的 run 级聚合——与 joint_decision_metrics 收尾行同源。
+    _projection_cost_summary = scheduler._joint_projection_cost_summary()
+    # ACC（验收纪律第 3 类，v2.0 §19.3）：预测器自身开销 run 末快照
+    # 入 online_stats 汇总行——决策墙时 P50/P95/P99（P/D 分列）、总
+    # 占比（整数 ppm）、峰值 RSS、D11 摘要维护费、后端事件量；决策
+    # 日志大小在本文件落定后以字节回填（None = 日志未产出，不猜）。
+    _decision_log_path = os.path.join(args.bridge_dir, DECISION_LOG_NAME)
     summary_row = {
         "summary": True,
         "mode": args.mode,
@@ -381,18 +482,69 @@ def main(argv=None) -> int:
         "channel_bytes": bridge_stats["channel_bytes"],
         "forced_flush_count": bridge_stats["forced_flush_count"],
         "handler_calls": bridge_stats["handler_calls"],
+        # ---- 墙时分段与计数埋点(2026-10-05;干净 EOF 时与
+        # timing.jsonl / joint_decision_metrics 行同源同刻) ----
+        # 服务墙时锚:serve_forever 全程宿主墙时。
+        "service_wall_ns": _service_wall_ns,
+        # 桥接三段累计:request 读+解析 / handler 执行 / response
+        # dumps+原子写。
+        "bridge_segment_ns_total": {
+            "read_parse_ns": bridge_stats.get("read_parse_ns", 0),
+            "handler_ns": bridge_stats.get("handler_ns", 0),
+            "write_ns": bridge_stats.get("write_ns", 0),
+        },
+        "journal_segment_ns_total": {
+            "encode_ns": bridge_stats.get("journal_encode_ns", 0),
+            "compress_write_ns": bridge_stats.get(
+                "journal_compress_write_ns", 0),
+            "write_ns": bridge_stats.get("journal_write_ns", 0),
+            "inclusive_total_ns": bridge_stats.get("journal_total_ns", 0),
+        },
+        # 调度固定阶段五分段累计(每已应用交付之和)。
+        "scheduler_segment_ns_total": scheduler.delivery_segment_totals(),
+        # P 准入 / D 边界决策墙时按"视图+代价模型构建 / 候选枚举"分段。
+        "decision_wall_ns_total": (
+            scheduler.decision_wall_timing_totals()),
+        # 投影构建 + 前推粗相三段累计 + 背景参考运行计数 + 按阶段
+        # 投影计数。
+        "projection_timing_ns_total": {
+            "build_wall_ns_total": _projection_cost_summary.get(
+                "build_wall_ns_total", 0),
+            "closure_wall_ns_total": _projection_cost_summary.get(
+                "closure_wall_ns_total", 0),
+            "candidate_world_wall_ns_total": _projection_cost_summary.get(
+                "candidate_world_wall_ns_total", 0),
+            "reference_world_wall_ns_total": _projection_cost_summary.get(
+                "reference_world_wall_ns_total", 0),
+            "reference_world_runs": _projection_cost_summary.get(
+                "reference_world_runs", 0),
+            "projections_by_stage": dict(
+                _projection_cost_summary.get("projections_by_stage")
+                or {"P": 0, "D": 0}),
+        },
+        # die 估值计数/墙时:memo 命中/未命中 + ctypes 批量调用。
+        "die_estimate": scheduler._joint_die_estimate_stats(),
+        "predictor_cost": scheduler.predictor_cost_snapshot(
+            decision_log_bytes=(
+                os.path.getsize(_decision_log_path)
+                if os.path.exists(_decision_log_path) else None)),
     }
     stats_path = os.path.join(args.bridge_dir, ONLINE_STATS_LOG_NAME)
     partial_path = os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME)
 
     def _base_stat_rows():
-        if getattr(scheduler, "online_stats_sink", None) is not None:
-            with open(partial_path, "r", encoding="utf-8") as source:
-                for line in source:
-                    if line.strip():
-                        yield json.loads(line)
-        else:
-            yield from scheduler.online_stats_rows
+        # (2026-09-29 face 移植)原 else 分支(缓冲 scheduler.online_stats_
+        # rows)已删:本 CLI 恒传 _JsonlSink(基础行进 .partial 暂存),该
+        # 分支仓内不可达(缓冲形态仅供基类测试/夹具直读);缺 sink 即装配
+        # 损坏,fail-closed 而非静默空流。
+        if getattr(scheduler, "online_stats_sink", None) is None:
+            raise RuntimeError(
+                "online_stats sink is None; this CLI always streams base "
+                "rows to {}".format(ONLINE_STATS_PARTIAL_NAME))
+        with open(partial_path, "r", encoding="utf-8") as source:
+            for line in source:
+                if line.strip():
+                    yield json.loads(line)
 
     def _merged_stat_rows():
         # 两个输入都是严格 delivery_sequence 顺序流,用 merge join 保持 O(1)
@@ -441,9 +593,30 @@ def main(argv=None) -> int:
     # B2/M3/B3:常驻 fd 显式关闭(serve 期之外无写入;异常路径由进程退出
     # 兜底)。digest 关闭态为 None、profile 为 _NullSink,同样安全。
     for sink in (digest_sink, decision_log_sink, train_ledger_sink,
-                 profile_sink, sensing_query_sink, ledger_sink):
+                 profile_sink, sensing_query_sink, ledger_sink,
+                 work_ledger_sink, timing_sink):
         if sink is not None:
             sink.close()
+    # W1:账本侧车收尾行（run 级汇总；旧对端 zero-delivery 也如实记录）。
+    _wl_summary_path = os.path.join(
+        args.bridge_dir, "work_ledger_events.jsonl")
+    _wl = scheduler.joint_work_ledger
+    _wl_summary_row = {
+        "summary": True,
+        "full_load_count": _wl.full_load_count,
+        "delta_load_count": _wl.delta_load_count,
+        "applied_event_count": _wl.applied_event_count,
+        "replayed_event_count": _wl.replayed_event_count,
+        "ledger_version": _wl.version,
+        "event_watermark": _wl.event_watermark,
+        "field_absent_seen": scheduler.work_ledger_absent_seen,
+        "conservation": _wl.conservation_report(),
+    }
+    try:
+        with open(_wl_summary_path, "a", encoding="utf-8") as _wl_out:
+            _wl_out.write(json.dumps(_wl_summary_row, sort_keys=True) + "\n")
+    except OSError:
+        traceback.print_exc()  # 诊断通道尽力而为
     return 0
 
 

@@ -11,17 +11,18 @@
 基类负责 request-neutral 的簿记:
   - delivery sequence 门(阶段 4 §7.2):Python 记录 last_applied_sequence;
     重复 delivery(seq == last_applied_sequence)经深度比对后返回上次 batch
-    的 digest(幂等重放,不重新产生任何 assignment/KV action/图节点,状态
-    零变更);跳号/重复旧 seq(seq != last_applied_sequence + 1)即
+    的深拷贝副本(幂等重放,不重新产生任何 assignment/KV action/图节点,
+    状态零变更);跳号/重复旧 seq(seq != last_applied_sequence + 1)即
     fail-closed(C++ 单在途背压 + 原子文件发布下不可能出现,出现即协议
     违例);
   - 校验 C++ 请求 schema(delivery_sequence/tick/reasons/arrivals/completed_groups);
   - 核销 completion:completed_groups 里的每个 stage 从 in-flight 请求的
     待办 stage 集合中移除;REQUEST_COMPLETE(stage == "")把请求整体核销;
   - 处理 arrivals:到达的请求登记为 in-flight(prefill+decode 两段待办);
-  - 批次累加器:本批次所有决策产出的 nodes/parent_edges/watches/
-    assignments/kv_actions/future_alarms 汇集在 self._batch 里,
-    build_graph_batch() 组装成 GraphBatch dict 并写 digest 行。
+  - 批次累加器:本批次所有决策产出的 watches/assignments/kv_actions/
+    future_alarms 汇集在 self._batch 里,而 nodes/parent_edges 由各变体
+    持有的构图器(GraphBatchBuilder)累加;build_graph_batch() 组装成
+    GraphBatch dict 并写 digest 行。
 """
 
 import copy
@@ -44,7 +45,7 @@ _PROPAGATING_TAIL_SOURCE_DELIVERY = "delivery_start"  # _emitted_by_delivery(未
 _PROPAGATING_TAIL_SOURCE_KV = "kv_provisional"        # _provisional_kv_actions(未确认)
 
 # delivery 类来源(delivery_start / kv_provisional)默认上限推导:
-# FileDecisionBridge v0 背压 = 一轮至多 1 个在途 request(C++ 不收到
+# FileDecisionBridge v1 背压 = 一轮至多 1 个在途 request(C++ 不收到
 # response 不发下一个;见 decision_bridge.py 协议头),ack 序列严格 +1
 # 单调(_BoundedSequenceTracker),故最大合法未确认交付数 = 1。默认上限
 # 取 8 = 8x 合法窗口,余量覆盖:响应文件原子发布与 ack 文件写入之间的
@@ -72,20 +73,26 @@ class PropagatingTailTracker:
         if name in self._sources:
             raise ValueError(
                 "propagating tail source {!r} registered twice".format(name))
-        if int(limit) <= 0:
-            raise ValueError(
-                "propagating tail limit for {!r} must be positive, got {!r}"
-                .format(name, limit))
         self._sources[name] = {
             "getter": container_getter,
-            "limit": int(limit),
+            "limit": self._validated_limit(name, limit),
             "peak": 0,
             "grow_count": 0,
         }
 
     def configure_limit(self, name, limit) -> None:
         """显式覆盖某来源上限(测试/运维;必须为正整数)。"""
-        self._require(name)["limit"] = int(limit)
+        self._require(name)["limit"] = self._validated_limit(name, limit)
+
+    @staticmethod
+    def _validated_limit(name, limit) -> int:
+        """上限契约:正整数(bool 是 int 子类型,显式拒绝;0/负值/浮点/
+        字符串一律结构化拒绝,不得经 int() 截断混入)。"""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError(
+                "propagating tail limit for {!r} must be a positive integer, "
+                "got {!r}".format(name, limit))
+        return limit
 
     def _require(self, name) -> dict:
         source = self._sources.get(name)
@@ -137,16 +144,14 @@ STAGE_REQUEST = ""  # REQUEST_COMPLETE: 该 request 全部阶段完成(收尾/�
 
 
 class OnlineSchedulerBase:
-    """批次框架基类。run_variant_policy 由变体(replay/strategy)实现。"""
+    """批次框架基类。run_variant_policy 由变体(strategy)实现。"""
 
     def __init__(
         self,
         *,
         manifest: dict,
         config,
-        replay=None,
         digest_sink=None,
-        mode: str = "replay",
         sensing: bool = False,
         decision_log_sink=None,
         profile_sink=None,
@@ -155,7 +160,6 @@ class OnlineSchedulerBase:
         online_stats_sink=None,
         ledger_sink=None,
     ):
-        self.mode = mode
         self.config = config
         # 运行期不保留完整 manifest 或 request_id -> manifest record 副本。
         # 唯一需要跨 delivery 保存的输入身份状态是尚未到达的 request ID：
@@ -182,7 +186,12 @@ class OnlineSchedulerBase:
                 "manifest request_id values must not use the reserved "
                 "batch namespace prefix {!r} (colliding: {!r})".format(
                     BATCH_TRAIN_PREFIX, _colliding[:5]))
-        self.replay = replay
+        # die 后端发射语境(阶段 C;契约 §7 裁定 2/7):manifest 的
+        # compute-cost-model == "die" 时构造 DieModelContext(die-model-
+        # config 绝对路径 + 模型行),每批发射前注入构图器(_begin_graph_
+        # batch)。无键/roofline/replay = legacy,行为不变;未知值 fail-
+        # closed。online_service.py 不感知注入点。
+        self.die_model_context = self._build_die_model_context(manifest, config)
         self.digest_sink = digest_sink  # callable(dict) 或 None(不写 digest)
         # M3 流式落盘(2026-08-23,批次B 移植自 sh_3.0 母本):
         # decision_log_sink / profile_sink 提供时逐行 append+flush 写出,
@@ -213,7 +222,7 @@ class OnlineSchedulerBase:
         # 尚未应用任何交付(首个合法 seq 为 0)。
         self.last_applied_sequence = -1
         # 最近一次已应用交付的 (seq, delta, batch) 副本(幂等重放的凭据;
-        # 重复 delivery 深度比对 delta 后返回缓存 batch 的 digest)。
+        # 重复 delivery 深度比对 delta 后返回缓存 batch 的深拷贝副本)。
         # B3(2026-08-23,批次B 移植自 sh_3.0 母本):生产路径默认引用缓存
         # (不深拷)——C++ 单在途背压下无重复交付,重放返回路径
         # (_gate_delivery_sequence)仍逐次 deepcopy,幂等语义不变;仅幂等
@@ -227,7 +236,7 @@ class OnlineSchedulerBase:
         self._acked_through = -1
         self._acked_out_of_order = set()
         self._batch = None        # 本批次累加器(每次 on_decision_batch 重建)
-        # online_decision_log.jsonl 行(replay 模式)。M3 流式落盘起,
+        # online_decision_log.jsonl 行。M3 流式落盘起,
         # 生产路径(decision_log_sink 提供)行即写即弃,不驻留本列表;
         # online_log_count 恒维护(行号 seq 与结束计数用)。
         self.online_log_rows = []
@@ -241,8 +250,11 @@ class OnlineSchedulerBase:
         #   排队)是查询/审计输入,不进策略判据(红线 §0.4),故感知开关不改变
         #   决策序列。
         self.sensing_enabled = bool(sensing)
-        # 分层 remaining-load 账本(contract ⑥ + 阶段 7 §10.1;remote FIFO /
-        # local HBM 为显式"不适用"占位,见合同表,本仓不删除)。八层口径:
+        # 分层 remaining-load 账本(contract ⑥ + 阶段 7 §10.1;remote 池
+        # 传输与 local HBM 为显式占位——本仓远端共享 KV 池在案,
+        # remote_store/remote_load 经边缘流体端口,无逐请求 FIFO job 账本,
+        # 逐事务事实 = remote_memory_transactions.jsonl,见合同表,本仓不
+        # 删除)。八层口径:
         #   admitted: Python 排队账本成员(qp / waiting_decode_admissions /
         #             active_decode),request_id -> {admitted_tick, queue}
         #   committed: GraphBatch 已提交(commit ack 后转移),request_id ->
@@ -278,8 +290,8 @@ class OnlineSchedulerBase:
         self._emitted_by_delivery = {}
         # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数
         # 无关;单批只经索引/队列直接访问,不存在 O(总规模) 全量扫描)。
-        # 行: {delivery_sequence, tick, scanned_entries}。
-        self.profile_rows = []
+        # 行: {delivery_sequence, tick, scanned_entries}。profile 回退
+        # 缓冲已删(2026-09-26 死代码清理):sink 缺省 = 行即弃,无驻留。
         self._profile_batch = None
         # 阶段 5 §8.2:Python provisional KV 账本(commit ack 前不入账)。
         # kv_actions 在 build_graph_batch 时先入暂存区(每 delivery 一条,
@@ -345,14 +357,35 @@ class OnlineSchedulerBase:
 
     # ------------------------------------------------------------- 固定阶段 --
 
+    @staticmethod
+    def _build_die_model_context(manifest, config):
+        """manifest -> DieModelContext(backend 声明的唯一来源)。
+
+        compute-cost-model 缺失/roofline/replay -> None(legacy 回归保护:
+        旧 plan 目录的 manifest 无该键,行为不变);"die" -> 构造;其他值
+        fail-closed。惰性 import:legacy 路径不加载 die_model_adapter。"""
+        backend = manifest.get("compute-cost-model") if isinstance(
+            manifest, dict) else None
+        if backend is None or backend in ("roofline", "replay"):
+            return None
+        if backend != "die":
+            raise ValueError(
+                "manifest compute-cost-model {!r} is unsupported (expected "
+                "'die', 'roofline' or 'replay')".format(backend))
+        try:
+            from online.die_model_adapter import DieModelContext  # noqa: E402
+        except ImportError:  # pragma: no cover -- flat-import 调用方兜底
+            from die_model_adapter import DieModelContext  # noqa: E402
+        return DieModelContext.from_service(manifest, config)
+
     def on_decision_batch(self, delta: dict) -> dict:
         """固定阶段:delivery sequence 门 -> 校验 schema -> 核销 completion
         -> 处理 arrivals -> run_variant_policy() -> build_graph_batch() ->
         返回 GraphBatch dict。
 
         幂等重放(§7.2):seq == last_applied_sequence 的重复 delivery 在
-        sequence 门处直接返回上次 batch 的 digest,以下任何一步都不执行
-        (不重新产生 assignment/KV action/图节点,状态零变更)。
+        sequence 门处直接返回上次 batch 的深拷贝副本,以下任何一步都不
+        执行(不重新产生 assignment/KV action/图节点,状态零变更)。
 
         阶段 6 §9.1:scheduler_self_ns = 本函数 Python 墙钟耗时(两次返回
         路径都累计;官方路径无幂等重放,故累计 = 各已应用交付之和)。
@@ -460,7 +493,7 @@ class OnlineSchedulerBase:
         }
         # 阶段 5 §8.2:本批 kv_actions 先入 provisional 暂存区(非空才记账),
         # commit ack 到达后 finalize(见 on_commit_ack);幂等重放不经过这里
-        # (sequence 门直接返回缓存 digest),不会重复入账。
+        # (sequence 门直接返回缓存 batch 的深拷贝副本),不会重复入账。
         if self._batch["kv_actions"]:
             self._provisional_kv_actions[delivery_sequence] = copy.deepcopy(
                 self._batch["kv_actions"])
@@ -478,19 +511,19 @@ class OnlineSchedulerBase:
         }
         if self.profile_sink is not None:
             self.profile_sink(profile_row)
-        else:
-            self.profile_rows.append(profile_row)
+        # profile_sink 缺省 = 行即弃(回退缓冲已删,无读者)。
         return batch
 
     # ------------------------------------------------------------- 校验/簿记 --
 
     def _gate_delivery_sequence(self, delta: dict):
         """阶段 4 §7.2 delivery sequence 门。返回 None = 正常新交付,继续
-        走完整管线;返回 dict = 幂等重放(上次 batch 的 digest 副本)。
+        走完整管线;返回 dict = 幂等重放(上次 batch 的深拷贝副本)。
 
         - 幂等:seq == last_applied_sequence -> 深度比对 delta 与缓存(同
           seq 不同内容 = 协议违例 fail-closed),一致则返回缓存 batch 的
-          digest,不重新产生任何 assignment/KV action/图节点,状态零变更;
+          深拷贝副本,不重新产生任何 assignment/KV action/图节点,状态零
+          变更;
         - 单调:seq != last_applied_sequence + 1 -> fail-closed(C++ 单在途
           背压 + 原子文件发布下不可能跳号;重复旧 seq 亦属违例——本通道的
           重复只能是对同一交付的重试,即"上一次交付")。
@@ -540,17 +573,38 @@ class OnlineSchedulerBase:
                 raise ValueError("delta missing field {!r}".format(field))
         if not isinstance(delta["reasons"], list):
             raise ValueError("delta reasons must be a list")
+        if any(not isinstance(reason, str) for reason in delta["reasons"]):
+            raise ValueError("delta reasons entries must be strings")
         if not isinstance(delta["arrivals"], list):
             raise ValueError("delta arrivals must be a list")
         if not isinstance(delta["completed_groups"], list):
             raise ValueError("delta completed_groups must be a list")
+        # 标量类型/范围(v1:C++ 侧全部为 unsigned 整数序列化;bool 是 int
+        # 子类型,显式排除;坏包在任何状态变更前于此结构化拒绝)。
+        for field in ("delivery_sequence", "delivery_epoch", "tick",
+                      "deferred_from_tick"):
+            value = delta[field]
+            if isinstance(value, bool) or not isinstance(value, int) \
+                    or value < 0:
+                raise ValueError(
+                    "delta {} must be a non-negative int, got {!r}".format(
+                        field, value))
+        # step 1-11:deferred_from_tick 记录 T->T+1 延后(0 = 同 tick 交付),
+        # 不可能超过交付 tick 本身。
+        if delta["deferred_from_tick"] > delta["tick"]:
+            raise ValueError(
+                "delta deferred_from_tick {} exceeds tick {}".format(
+                    delta["deferred_from_tick"], delta["tick"]))
         # v1 新增字段类型 + 语义检查(原 §6 各条)。
         if not isinstance(delta["completed_nodes"], list):
             raise ValueError("delta completed_nodes must be a list")
         if not isinstance(delta["affected_ranks"], list):
             raise ValueError("delta affected_ranks must be a list")
         affected = delta["affected_ranks"]
-        if any(not isinstance(rank, int) or rank < 0 for rank in affected):
+        # bool 显式排除(isinstance(True, int) 为真,true 会伪装成 rank 1;
+        # 与 queue_index/ingress_seq 同款,对齐 plan_materializer 风格)。
+        if any(isinstance(rank, bool) or not isinstance(rank, int)
+               or rank < 0 for rank in affected):
             raise ValueError("delta affected_ranks must be non-negative ints")
         if affected != sorted(set(affected)):
             raise ValueError(
@@ -580,8 +634,14 @@ class OnlineSchedulerBase:
         for arrival in delta["arrivals"]:
             if not isinstance(arrival, dict):
                 raise ValueError("delta arrivals entries must be dicts")
+            if not isinstance(arrival.get("request_id"), str) \
+                    or not arrival["request_id"]:
+                raise ValueError(
+                    "arrival request_id must be a non-empty string, got {!r}"
+                    .format(arrival.get("request_id")))
             queue_index = arrival.get("queue_index", -1)
-            if not isinstance(queue_index, int) or queue_index < -1:
+            if isinstance(queue_index, bool) or not isinstance(queue_index, int) \
+                    or queue_index < -1:
                 raise ValueError(
                     "arrival {!r} queue_index {!r} invalid".format(
                         arrival.get("request_id"), queue_index))
@@ -591,15 +651,38 @@ class OnlineSchedulerBase:
                     "after {})".format(queue_index, previous_queue_index))
             if queue_index >= 0:
                 previous_queue_index = queue_index
-            if not isinstance(arrival.get("ingress_seq"), int):
+            ingress_seq = arrival.get("ingress_seq")
+            if isinstance(ingress_seq, bool) or not isinstance(ingress_seq, int) \
+                    or ingress_seq < 0:
                 raise ValueError(
-                    "arrival {!r} missing/odd ingress_seq".format(
-                        arrival.get("request_id")))
+                    "arrival {!r} missing/odd ingress_seq {!r}".format(
+                        arrival.get("request_id"), ingress_seq))
         for fact in delta["completed_nodes"]:
             if not isinstance(fact, dict):
                 raise ValueError("delta completed_nodes entries must be dicts")
-            if not isinstance(fact.get("rank"), int):
+            # bool 显式排除(true 会伪装成 rank 1,同 affected_ranks)。
+            if isinstance(fact.get("rank"), bool) \
+                    or not isinstance(fact.get("rank"), int):
                 raise ValueError("completed_node fact missing rank")
+        # completed_groups 条目:request_id/stage 标量 + stage 合法集合
+        # (C++ 只产 prefill/decode/REQUEST_COMPLETE(空 stage)三态;坏 stage
+        # 在任何核销发生前于此结构化拒绝,而非落进 _settle_completions 的
+        # pending 差错路径)。
+        for group in delta["completed_groups"]:
+            if not isinstance(group, dict):
+                raise ValueError("delta completed_groups entries must be dicts")
+            if not isinstance(group.get("request_id"), str) \
+                    or not group["request_id"]:
+                raise ValueError(
+                    "completed group request_id must be a non-empty string, "
+                    "got {!r}".format(group.get("request_id")))
+            stage = group.get("stage")
+            if not isinstance(stage, str) or stage not in (
+                    STAGE_PREFILL, STAGE_DECODE, STAGE_REQUEST):
+                raise ValueError(
+                    "completed group stage {!r} outside the legal set "
+                    "{{'prefill', 'decode', '' (REQUEST_COMPLETE)}}".format(
+                        stage))
         # 阶段 3 感知:ledger_summary 可选(C++ 总是序列化;缺省视为空)。
         if "ledger_summary" in delta and not isinstance(
                 delta["ledger_summary"], dict):
@@ -627,11 +710,9 @@ class OnlineSchedulerBase:
         {"type": "prefill_qp", "instance_index": 3}。"""
         if request_id in self.ledger_admitted:
             self.ledger_admitted[request_id]["queue"] = queue
-            self.ledger_admitted[request_id]["queue_tick"] = tick
             return
         self.ledger_admitted[request_id] = {
             "admitted_tick": tick,
-            "queue_tick": tick,
             "queue": queue,
         }
 
@@ -774,10 +855,21 @@ class OnlineSchedulerBase:
         row = {
             "delivery_sequence": delta["delivery_sequence"],
             "tick": delta["tick"],
+            # 采样时刻口径(审计消费者必读):行内两个层族不在同一逻辑时刻
+            # 采样。injected_unfinished = C++ 随本交付序列化的
+            # injected-unfinished 摘要(_record_ledger_summary 于本交付
+            # settle 后取得),issued 层与其同源同边界(发射经上一交付
+            # 策略 pass,完成核销至本交付 settle);admitted/ready 层读
+            # Python 排队账本,新准入只在策略 pass(run_variant_policy 内
+            # _ledger_admit)发生、本查询又先于本交付策略 pass——其排队
+            # 成员实为上一交付策略 pass 末的准入结果(再减本交付
+            # _settle_completions 已核销完成者)。两层族错位一个交付,
+            # 逐层对账时须按各自采样时刻解读。
             "injected_unfinished": self.last_injected_unfinished,
             "admitted_not_injected_queued": self.admitted_not_injected_queued(),
             # 阶段 7 §10.1:issued(已发射未完成)与 ready(就绪可服务)层
-            # 边界视图(与 C++ 摘要同一 delivery 同 tick,逐层对账输入)。
+            # 边界视图(issued 采样时刻同上列 C++ 摘要;ready 同 admitted
+            # 层口径,见上方采样时刻说明)。
             "issued": self._sensing_issued_view(),
             "ready": self._sensing_ready_view(),
         }
@@ -832,24 +924,30 @@ class OnlineSchedulerBase:
         self._begin_graph_batch()
 
     def _begin_graph_batch(self) -> None:
-        """变体若持有构图器(如 replay 的 GraphBatchBuilder),每批发射前
-        重建其批次累加器;没有则跳过(基类自身不构图)。"""
+        """变体若持有构图器,每批发射前重建其批次累加器;没有则跳过
+        (基类自身不构图)。
+
+        阶段 C:同时把 die 发射语境注入构图器(幂等 setter)。注入点在
+        run_variant_policy 之前(发射即消费);构图器由 online_service 构造
+        时不感知 backend,manifest 是唯一声明源。"""
         graph = getattr(self, "graph", None)
         if graph is not None and hasattr(graph, "begin_batch"):
             graph.begin_batch()
+        die_context = getattr(self, "die_model_context", None)
+        if die_context is not None and graph is not None and hasattr(
+                graph, "set_die_context"):
+            graph.set_die_context(die_context)
 
     def _graph_batch(self) -> dict:
-        """构图器累加器(节点/边);没有构图器时返回空批次模板。"""
+        """构图器累加器(节点/边);没有构图器时返回空批次模板。
+        (watch/assignment/kv_action/未来 alarm 由变体策略写入 self._batch,
+        不经构图器累加器。)"""
         graph = getattr(self, "graph", None)
         if graph is not None and graph.batch is not None:
             return graph.batch
         return {
             "nodes": [],
             "parent_edges": [],
-            "watches": [],
-            "assignments": [],
-            "kv_actions": [],
-            "future_alarms": [],
         }
 
     def _settle_completions(self, delta: dict) -> None:
@@ -874,7 +972,7 @@ class OnlineSchedulerBase:
             if stage == STAGE_REQUEST:
                 del self.in_flight[request_id]
                 self.completed_request_count += 1
-                # 阶段 3 感知:REQUSET_COMPLETE 边界核销 -> completed-unreconciled。
+                # 阶段 3 感知:REQUEST_COMPLETE 边界核销 -> completed-unreconciled。
                 self._ledger_complete(request_id, delta["tick"])
             else:
                 if stage not in pending:
@@ -914,8 +1012,8 @@ class OnlineSchedulerBase:
         """把一次实际执行的决策写入 online_decision_log(与离线
         decision_log.jsonl 同构: seq/tick/priority/kind/request_id/decision)。
 
-        replay 模式默认沿用离线记录的 decision 内容(重放的就是离线决策);
         变体可传入自产 decision。seq 用在线决策序(1 起),tick 用在线边界 tick。
+        （注：replay 模式已随离线静态链路于 2026-08-18 整体删除，本条为历史口径描述）
 
         M3 流式落盘:提供 decision_log_sink 时行即写即弃(online_log_count
         恒维护行号);缺省缓冲在 online_log_rows(兼容测试/夹具直读)。
@@ -972,13 +1070,16 @@ class OnlineSchedulerBase:
     # --------------------------------------------------------------- 收尾 --
 
     def on_commit_ack(self, ack: dict) -> None:
-        """commit ack 到达(provisional 账本 finalize 挂接点;replay 模式只
-        计数)。阶段 3:ack 的 batch_id == 请求批次 delivery_sequence;该批次
+        """commit ack 到达(provisional 账本 finalize 挂接点)。阶段 3:
+        ack 的 batch_id == 请求批次 delivery_sequence;该批次
         发射过的 request/stage 转移入 committed 层(分层账本最小子集;
         簿记免费,感知关闭时同样记账)。
 
         阶段 4 §7.2 ack 通道 fail-closed:
           - schema_version 必须为 v1;
+          - success 字段必须为 True(boundary-D1/py-online-C7:C++ 端恒序列化
+            该字段、失败提交走 abort 不发 ack,故生产恒 True;未来启用 False
+            通道时,失败提交不得被当成功 finalize);
           - batch_id == delivery_sequence(v1 恒等,禁发散);
           - delivery_sequence 必须是已应用过的交付(<= last_applied_sequence;
             C++ 在读完 response 后才发 ack,不可能领先,领先即违例);
@@ -987,12 +1088,18 @@ class OnlineSchedulerBase:
         """
         if not isinstance(ack, dict):
             raise ValueError("ack must be a dict, got {!r}".format(type(ack)))
+        if ack.get("success") is not True:
+            raise ValueError(
+                "ack success field must be True (failed commits never ack), "
+                "got {!r}".format(ack.get("success")))
         if ack.get("schema_version") != SCHEMA_VERSION:
             raise ValueError(
                 "ack schema_version {!r} != {}".format(
                     ack.get("schema_version"), SCHEMA_VERSION))
         seq = ack.get("delivery_sequence")
-        if not isinstance(seq, int) or seq < 0:
+        # bool 显式排除({"delivery_sequence": true} 与 seq=1 不可区分,
+        # 同 ingress_seq/queue_index 排 bool 风格)。
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
             raise ValueError(
                 "ack delivery_sequence must be a non-negative int, got {!r}"
                 .format(seq))
@@ -1133,5 +1240,3 @@ class OnlineSchedulerBase:
         graph = getattr(self, "graph", None)
         if graph is not None and hasattr(graph, "batch"):
             graph.batch = None
-            if hasattr(graph, "batch_first_step"):
-                graph.batch_first_step = False

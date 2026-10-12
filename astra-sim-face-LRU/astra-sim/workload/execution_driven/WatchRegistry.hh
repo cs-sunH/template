@@ -85,9 +85,9 @@ struct CompletionKey {
         return rank == other.rank && node_id == other.node_id &&
                generation == other.generation;
     }
-    bool operator!=(const CompletionKey& other) const {
-        return !(*this == other);
-    }
+    // operator!= removed (2026-09-30, face-LRU audit dead-code pass): zero
+    // references repo-wide (no consumer ever compares two CompletionKey
+    // values for inequality; the ordered containers use operator<).
     bool operator<(const CompletionKey& other) const {
         if (rank != other.rank) {
             return rank < other.rank;
@@ -148,10 +148,17 @@ class WatchRegistry {
     /// Duplicate identity (request_id, stage, generation) returns the
     /// existing watch_id (register once / fire once). Empty expected_members
     /// never fires (programming error caught by the end audit).
+    /// `created` (optional out-param, 2026-09-30 ported from the joint repo
+    /// WatchRegistry.hh): false = the identity was already registered, so
+    /// this call is a cross-batch duplicate whose new member set the
+    /// register-once / fire-once semantics swallow (there is a lost-wakeup
+    /// backstop, hence a [Warn] instead of fail-closed). Callers use it to
+    /// count only watches actually created.
     uint64_t register_stage_watch(
         const std::string& request_id, const std::string& stage,
         uint64_t generation, std::set<CompletionKey> expected_members,
-        std::set<NodeTerminalStatus> satisfying_statuses);
+        std::set<NodeTerminalStatus> satisfying_statuses,
+        bool* created = nullptr);
 
     /// Completion-fact recording, called by the online hook (read-only with
     /// respect to the graph; never releases dependencies). The direct member
@@ -167,6 +174,12 @@ class WatchRegistry {
     /// Registered-but-not-fired watches. Run-end audit must be 0 (aborted
     /// requests must remove_watch before finishing).
     size_t stale_count() const;
+
+    // DeadEnd-census diagnostic only (2026-10-11, ported from WL): one
+    // stderr line per registered-but-unfired watch (identity + member
+    // progress), prefixed with `prefix`. Purely read-only; normal paths
+    // never call this.
+    void dump_unfired_to_stderr(const char* prefix) const;
 
     /// Phase 4: total registered watches (fired or not). The phase-4 run-end
     /// audit requires the registry to be EMPTY (every watch of every
@@ -185,7 +198,9 @@ class WatchRegistry {
     void remove_watches_for_request(const std::string& request_id);
 
     /// 拼 batch 适配(2026-08-22):回收已 fire 的列车哨兵 watch
-    /// (request_id 前缀 "batch_train_")。O(存活哨兵数)。
+    /// (request_id 前缀 "batch_train_")。O(存活哨兵数)。F10/E6 fix
+    /// (2026-09-26):remove_watch 同步维护 sentinel_watch_ids_,已移除
+    /// 哨兵的 id 不会悬挂在本索引中,本回收恒为 O(存活哨兵数)。
     void drain_fired_sentinels();
 
     void remove_all();
@@ -209,7 +224,9 @@ class WatchRegistry {
     // scan).
     std::unordered_map<std::string, std::vector<uint64_t>>
         request_to_watch_ids_;
-    // 拼 batch 适配(2026-08-22):哨兵 watch id 索引。
+    // 拼 batch 适配(2026-08-22):哨兵 watch id 索引。F10/E6 fix
+    // (2026-09-26):注册与移除(含 remove_watches_for_request)双向维护,
+    // 索引中只存在仍注册中的哨兵 id,drain 保持 O(存活哨兵数)。
     std::vector<uint64_t> sentinel_watch_ids_;
     std::vector<WatchFire> fired_;
     WatchFireNotifier notifier_;

@@ -10,7 +10,7 @@
 #include <unordered_set>
 #include <vector>
 #include <tuple>
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
@@ -38,6 +38,9 @@ class LocalMemUsageTracker {
   void buildMemoryTimeline();
   void buildTensorLifetimeHeatmap();
   std::tuple<float, std::string> getPeakMemUsageFormatted() const;
+  // Test-only accessor, kept for the fixture/test consumers: the sole
+  // callers are local_mem_usage_tracker_test.cc assertions (production
+  // report() reads the formatted variant only).
   uint64_t getPeakMemUsage() const;
   
   uint64_t sysId;

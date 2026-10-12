@@ -26,8 +26,9 @@ BaseStream::BaseStream(int stream_id,
         }
     }
     state = StreamState::Created;
-    preferred_scheduling = SchedulingPolicy::None;
-    creation_time = Sys::boostedTick();
     current_queue_id = -1;
+    // Deterministic default: the RG intra-dimension comparator reads
+    // current_com_type even for streams that have not proceeded yet.
+    current_com_type = ComType::None;
     priority = 0;
 }

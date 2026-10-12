@@ -6,7 +6,6 @@ LICENSE file in the root directory of this source tree.
 #pragma once
 
 #include "common/CallbackTrackerEntry.hh"
-#include "common/ChunkIdGenerator.hh"
 #include <map>
 
 namespace AstraSimAnalytical {
@@ -70,6 +69,19 @@ class CallbackTracker {
                    int dest,
                    ChunkSize chunk_size,
                    int chunk_id) noexcept;
+
+    /// Diagnostic for the count-mismatch family: true when an OUTSTANDING
+    /// entry shares (tag, src, dest) with this sim_recv call but carries a
+    /// different chunk_size. Such a pair can never meet -- the send side
+    /// only completes its own count key -- so both halves wait forever.
+    bool has_entry_with_mismatched_count(int tag,
+                                         int src,
+                                         int dest,
+                                         ChunkSize chunk_size) noexcept;
+
+    /// Diagnostic/test accessor: entries still waiting for their send/recv
+    /// pair. A normally finished run leaves this empty.
+    [[nodiscard]] size_t size() const noexcept { return tracker.size(); }
 
   private:
     /// map from (tag, src, dest, chunk_size, chunk_id) tuple to

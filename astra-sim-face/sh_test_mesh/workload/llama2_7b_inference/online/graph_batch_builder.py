@@ -29,8 +29,9 @@ sh_1.0 定型版为母本,face 发射原语适配):层次 B 从"请求级大段�
     turn 的 interval gate after_node_id 来源。
 
 在线语义差异(刻意,注释标注):
-  - timer gate 始终发射节点(结构保留)但 runtime_ns=0:到达时间由 C++ 的
-    arrival alarm(future_alarms)替代,gate 不再等待——保持时长会双重等待;
+  - timer gate 在 duration_ns == 0 时不发射节点(timer_gate 直接返回
+    前驱):到达时间由 C++ 的 arrival alarm(future_alarms)替代,gate
+    不再等待——保持时长会双重等待;duration_ns > 0 时照常发射;
   - watch 锚点(拼 batch 改造起由列车标记承载):PREFILL_DRAIN = drain 标记
     节点(列车体后、end barrier 前),DECODE_COMPLETION/REQUEST_COMPLETE =
     exit 标记节点(同位置);C++ watch fire 自动同时推 DECODE_COMPLETION +
@@ -95,7 +96,7 @@ class OnlineTraceBuilder:
     """与共享 TraceBuilder API 同构的在线侧每-rank builder。
 
     同一接口面:timer_gate / arm_timer_gate / comp / all_reduce / comm_send /
-    comm_recv / next_id / previous_id / node_count——共享助手函数可直接驱动。
+    comm_recv / next_id / previous_id——共享助手函数可直接驱动。
     与 TraceBuilder 的差异:节点发射为 GraphBatch nodes[] dict(而非 ChakraNode
     对象),依赖记录为 parent_edges[](而非节点内联 data_deps);timer_gate
     忽略 duration(runtime_ns=0,alarm 替代等待)。
@@ -115,7 +116,6 @@ class OnlineTraceBuilder:
         # next_id 计数器,与位置无关)。
         self.nodes = []   # 本 rank 尚未交付的节点 dict(发射序)
         self.edges = []   # 本 rank 尚未交付的 parent edges
-        self.node_count = 0
         # 当前 request-stage 反向索引上下文(每次 per-request 发射前设置)。
         self.request_id = ""
         self.stage = ""
@@ -191,7 +191,6 @@ class OnlineTraceBuilder:
         self.previous_id = self.next_id
         self.next_id += 1
         self.nodes.append(node)
-        self.node_count += 1
         return node
 
     @staticmethod
@@ -248,14 +247,32 @@ class OnlineTraceBuilder:
             })
         self.next_id += 1
         self.nodes.append(node)
-        self.node_count += 1
         return node["id"]
 
     def comp(self, name: str, num_ops: int, tensor_size: int,
-             remote_read_size: int = 0) -> None:
+             remote_read_size: int = 0, *,
+             die_spec: dict = None, op_role: str = None) -> None:
+        """COMP 节点发射(阶段 C 扩展,契约 §2 compute 键集)。
+
+        die_spec 非 None 时附 compute.die_op_spec(dict;die 后端执行该
+        节点,runtime_ns 保持缺省 0——die_op_spec 存在 ⇒ runtime_ns 必为
+        0);op_role 缺省 "compute"(不写键,schema 缺省即 compute),仅
+        marker/哨兵显式写 "control_marker"(契约 §7 裁定 8)。"""
         node = self._new_node(name, COMP_NODE)
         node["compute"]["num_ops"] = self._uint64(num_ops)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
+        if op_role is not None:
+            if op_role not in ("compute", "control_marker"):
+                raise ValueError(
+                    "op_role must be 'compute' or 'control_marker', got "
+                    "{!r}".format(op_role))
+            node["compute"]["op_role"] = op_role
+        if die_spec is not None:
+            if node["compute"]["runtime_ns"] != 0:
+                raise ValueError(
+                    "die_op_spec requires runtime_ns == 0 (contract "
+                    "section 2)")
+            node["compute"]["die_op_spec"] = die_spec
         if self.remote_operand_loads and remote_read_size:
             node["compute"]["remote_weight_bytes"] = self._uint64(remote_read_size)
 
@@ -288,8 +305,14 @@ class GraphBatchBuilder:
     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界
     发射 prefill 整段 / decode 整段,并维护 completion_gates 账本。"""
 
-    def __init__(self, config, *, digest_sink=None):
+    def __init__(self, config):
         self.config = config
+        # die 后端发射语境(阶段 C;None = legacy)。online_service.py 构造
+        # 本构图器时不感知 backend——语境由 OnlineSchedulerBase 从 manifest
+        # 的 compute-cost-model/die-model-config 键构造后在每批发射前经
+        # set_die_context 注入(online_scheduler_base._begin_graph_batch;
+        # manifest 是 backend 的唯一声明源,契约 §7 裁定 2/7)。
+        self.die_context = None
         # strategy 模式保持物理跨 request 链。
         self.builders = {
             rank: OnlineTraceBuilder(
@@ -303,9 +326,17 @@ class GraphBatchBuilder:
         self.completion_gates = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
+    def set_die_context(self, die_context) -> None:
+        """注入 die 发射语境(幂等;None 恢复 legacy 发射)。"""
+        self.die_context = die_context
+
     # ------------------------------------------------------------- 批次 --
 
     def begin_batch(self) -> None:
+        # 构图器累加器只产 nodes/parent_edges(及其私有 rank 账本);
+        # watches/assignments/kv_actions/future_alarms 由变体策略写入
+        # 在线骨架的 self._batch,build_graph_batch 组装时两边合并,
+        # 发往 C++ 的 wire JSON 恒含四键(基类 _start_batch 模板)。
         self.batch = {
             "nodes": [],
             "parent_edges": [],
@@ -313,10 +344,6 @@ class GraphBatchBuilder:
             # every appended node, so downstream GraphBatch metadata need not
             # rescan the complete node payload.
             "_touched_ranks": set(),
-            "watches": [],
-            "assignments": [],
-            "kv_actions": [],
-            "future_alarms": [],
         }
 
     def _collect(self, marker: dict) -> None:
@@ -563,7 +590,13 @@ class GraphBatchBuilder:
         """折叠列车体(17 类聚合节点;weight_passes = 权重读取次数)。
 
         拆分时首步批传首步 span 组 + weight_passes=1,余量批传余量组 +
-        iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。"""
+        iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。
+
+        die 后端(阶段 C):die_context 非 None 时按 rank 写入发射语境
+        (phase = 列车 stage,TP = 实例 rank 数,span 记录带绝对位置——
+        derive_span_records 按 face span 恒等式还原),列车体经
+        transformer_pass_aggregated 的 die 分支附 die_op_spec 并做
+        §7.2 region 融合;legacy 时 die_ctx=None,发射逐字节不变。"""
         group = self.group_by_index[train_plan["instance_index"]]
         train_id = train_plan["train_id"]
         stage = train_plan["stage"]
@@ -572,6 +605,16 @@ class GraphBatchBuilder:
             builder.set_context(train_id, stage, generation)
         tensor_parallel = len(group.ranks)
         for relative_rank, rank in enumerate(group.ranks):
+            die_ctx = None
+            if self.die_context is not None:
+                self.die_context.begin_emission(
+                    phase=stage,
+                    tensor_parallel=tensor_parallel,
+                    tensor_parallel_rank=relative_rank,
+                    span_namespace=train_id,
+                    pass_spans=pass_spans,
+                )
+                die_ctx = self.die_context
             transformer_pass_aggregated(
                 self.builders[rank],
                 phase=train_id,
@@ -587,6 +630,7 @@ class GraphBatchBuilder:
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
                 weight_passes=weight_passes,
+                die_ctx=die_ctx,
             )
 
     def _emit_first_token_markers(self, train_plan: dict,
@@ -682,6 +726,15 @@ class GraphBatchBuilder:
             }
 
         # ---- 共享 end barrier(每列车一个,替代每请求一个) ----
+        # 注(2026-09-26 审查澄清,A2-2,待用户裁决):comm_size 传迭代数
+        # iterations 是自逐请求时代延续的既定口径,证据上不属笔误——旧
+        # per-request 发射的 prefill_chunks_aggregated_end_barrier 就以
+        # 聚合 pass 数(len(spans))作 collective bytes(commit e2516b8),
+        # 旧 decode_request_end_barrier 才是 1;列车化统一取 iterations,
+        # 与姊妹仓(wscllm / wscllm-LRU / face-LRU)同款。语义上它是列车
+        # 聚合规模的 collective 时序计量输入(直接进入 C++ collective
+        # 时延模型),不是协议字节数;改成 1 会改变仿真时序基线,未经
+        # 全仓族对拍裁决前不得擅动。
         for builder in self.builders.values():
             builder.set_context(train_id, stage, generation)
         for rank in group.ranks:
@@ -710,8 +763,13 @@ class GraphBatchBuilder:
         }
 
     def _emit_train_marker(self, rank: int, name: str) -> int:
-        """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。"""
-        self.builders[rank].comp(name, 1, 1)
+        """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。
+
+        契约 §7 裁定 8:一切 comp(name,1,1) 微节点(first_token/drain/
+        exit/sentinel/join/pstart/wakeup 等 marker)一律显式
+        op_role="control_marker"——不靠"数值很小"识别(设计文档 §7.3);
+        legacy 后端下该属性惰性(C++ 分发保持旧微作业语义,裁定 3)。"""
+        self.builders[rank].comp(name, 1, 1, op_role="control_marker")
         return self.builders[rank].previous_id
 
     def _set_context(self, request_plan: dict, stage: str,

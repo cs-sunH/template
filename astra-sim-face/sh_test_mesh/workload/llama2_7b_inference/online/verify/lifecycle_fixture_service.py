@@ -46,7 +46,6 @@ class LifecycleHandler:
     def __init__(self):
         self.next_ids = {}  # rank -> 下一个 json node id
         self.pending_decode = {}  # request_id -> bool(prefill 已发、decode 未发)
-        self.delivery_count = 0
 
     def _next_id(self, rank):
         nid = self.next_ids.get(rank, 1)
@@ -73,7 +72,6 @@ class LifecycleHandler:
         }
 
     def __call__(self, request):
-        self.delivery_count += 1
         seq = request.get("delivery_sequence", -1)
         tick = request.get("tick", -1)
         reasons = request.get("reasons", [])

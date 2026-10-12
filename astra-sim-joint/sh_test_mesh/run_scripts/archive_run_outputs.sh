@@ -28,6 +28,11 @@
 #   明细——shared_busy_ns/完成分布复算输入;strategy 跑与零远端事务跑
 #   无此件,保留集不受影响)
 #   campaign_provenance.json(存在时)
+#   results/work_ledger_events.jsonl(W5 因果账本侧车——run 级 summary 行
+#   与守恒报告的消费面) + results/request_journal_work_ledger.jsonl.gz
+#   (W5 重放源侧车——iter_request_records(attach_work_ledger=True) 的
+#   固定查找路径,进 results_extra.tar.gz 会破坏标准重放查找;gzip 已
+#   压缩,tar 再压无收益)
 #   SLO 自动提取产物(P3,2026-08-28,由 run_slo_postprocess.sh 写在 run_dir
 #   根,本脚本不触碰 run_dir 根级文件,此处显式登记为常驻):slo_*.csv、
 #   slo_*.json、cache_events.csv、kv_hit_states.csv、slo_postprocess.log、
@@ -99,6 +104,8 @@ if [ -d "${RUN_DIR}/results" ]; then
     ! -name 'sensing_query_log.jsonl' \
     ! -name 'remote_memory_transactions.jsonl' \
     ! -name 'campaign_provenance.json' \
+    ! -name 'work_ledger_events.jsonl' \
+    ! -name 'request_journal_work_ledger.jsonl.gz' \
     -printf '%f\n' > "${EXTRA_LIST}"
   if [ -s "${EXTRA_LIST}" ]; then
     tar -C "${RUN_DIR}/results" --null --files-from \

@@ -43,21 +43,18 @@ int ChunkIdGenerator::create_send_chunk_id(
     assert(dest >= 0);
     assert(chunk_size > 0);
 
-    // create key
     const auto key = std::make_tuple(tag, src, dest, chunk_size);
-
-    // search whether the key exists
     auto entry = chunk_id_map.find(key);
-
-    // if key doesn't exist, create new entry
     if (entry == chunk_id_map.end()) {
         entry = chunk_id_map.emplace(key, ChunkIdGeneratorEntry()).first;
     }
 
-    // increment id and return
+    // Chunk ids are 0-based (chunk_id_generator_test contract): hand out the
+    // current id, then advance the counter.
+    const int chunk_id = entry->second.get_send_id();
     entry->second.increment_send_id();
     entry->second.increment_outstanding();
-    return entry->second.get_send_id();
+    return chunk_id;
 }
 
 int ChunkIdGenerator::create_recv_chunk_id(
@@ -70,20 +67,15 @@ int ChunkIdGenerator::create_recv_chunk_id(
     assert(dest >= 0);
     assert(chunk_size > 0);
 
-    // create key
     const auto key = std::make_tuple(tag, src, dest, chunk_size);
-
-    // search whether the key exists
     auto entry = chunk_id_map.find(key);
-
-    // key doesn't exist, create new entry
     if (entry == chunk_id_map.end()) {
         entry = chunk_id_map.emplace(key, ChunkIdGeneratorEntry()).first;
     }
 
-    // increment recv id and return
+    const int chunk_id = entry->second.get_recv_id();
     entry->second.increment_recv_id();
-    return entry->second.get_recv_id();
+    return chunk_id;
 }
 
 void ChunkIdGenerator::complete(const int tag,

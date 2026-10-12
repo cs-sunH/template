@@ -48,6 +48,7 @@ from face_scheduler import (  # noqa: E402
     kv_cache_shard_bytes_for_layer_range,
 )
 from joint.hbm_port_flow_registry import HbmPortFlowRegistry  # noqa: E402
+from joint.pipeline_identity import PipelineIdentityAllocator  # noqa: E402
 from joint.joint_config import parse_joint_config  # noqa: E402
 from joint.joint_cost_model import (  # noqa: E402
     ActionCandidate,
@@ -123,6 +124,7 @@ class _GraphStub:
     def __init__(self):
         self.admission_plans = []
         self.synced = []
+        self.pipeline_identity_allocator = PipelineIdentityAllocator()
 
     def emit_admission_batch(self, plan):
         self.admission_plans.append(plan)
@@ -143,7 +145,7 @@ def _make_scheduler(model, hardware, topology, manager):
     scheduler.kv_manager = manager
     scheduler.p_chunk = 512
     scheduler._joint_horizon = CausalHorizonEstimator(
-        cold_start_default_tokens=1)
+        cold_start_default_forward_steps=1)
     scheduler._joint_flows = LinkFlowRegistry()
     scheduler._pool_ports = _PoolPortRegistry()
     scheduler._hbm_ports = HbmPortFlowRegistry()
@@ -158,7 +160,8 @@ def _make_scheduler(model, hardware, topology, manager):
         instance.index: tuple(sorted({
             manager.nearest_edge(rank) for rank in instance.ranks}))
         for instance in topology.instances}
-    scheduler.joint_config = parse_joint_config(env={})
+    scheduler.joint_config = parse_joint_config(
+        env={"JOINT_ALLOWED_ACTIONS": "remote-read"})
     scheduler._joint_mode = scheduler.joint_config.scheduler_mode
     scheduler._prefill_task_cache = {}
     scheduler._decode_task_load_cache = {}
@@ -167,6 +170,10 @@ def _make_scheduler(model, hardware, topology, manager):
     scheduler._quota_tracker = None  # off 档（配额面由 fix1 A10b 面覆盖）
     scheduler._link_telemetry_rates = {}
     scheduler._link_telemetry_flow_counts = {}
+    # ACC（验收纪律第 3 类，v2.0 §19.3）：预测器开销账本 __init__ 同款
+    # 初值（F6 销账口径：决策/摘要记账直访——替身漏设 = AttributeError）。
+    from joint.predictor_cost_accounting import PredictorCostAccounting
+    scheduler.predictor_cost = PredictorCostAccounting()
     scheduler._telemetry_last_tick_ns = 0
     scheduler._admission_decision_wall_ns_total = 0
     scheduler._admission_decision_wall_ns_max = 0
@@ -177,6 +184,7 @@ def _make_scheduler(model, hardware, topology, manager):
         "stay": 0, "copy": 0, "remote-read": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
+        "recompute_forced_action_mask": 0,
         "recompute_forced_quota_deferred": 0,
         "recompute_forced_evicted_permanent": 0,
     }
@@ -300,9 +308,20 @@ class PrefillRemoteReadAdmissionTest(unittest.TestCase):
         _assert_contiguous_cover(
             self, _layer_ranges(runtime.history_transfers),
             PREFIX_LAYERS, self.model.layers)
-        # 前缀腿：prefill_remote_read_* 只含前缀读流（[0, p)）。
-        self.assertTrue(runtime.prefill_remote_read_transfers)
-        for transfer in runtime.prefill_remote_read_transfers:
+        # 前缀腿（D16 有界模板，修复轮二）：runtime.prefill_remote_read_
+        # transfers 恒 ()（tile 数随 U 无界增长，物化移到消费点——列车
+        # 规划期经 kv_manager.prefill_read_window_tiles 现算），读流形状
+        # 由计划模板 + 逐窗物化承担。
+        self.assertIsNotNone(runtime.prefill_remote_read_plan)
+        self.assertEqual(runtime.prefill_remote_read_transfers, ())
+        plan = runtime.prefill_remote_read_plan
+        windows = {
+            window: self.manager.prefill_read_window_tiles(
+                plan["template"], window)
+            for window in range(1, plan["window_count"] + 1)}
+        flattened = [
+            transfer for window in windows.values() for transfer in window]
+        for transfer in flattened:
             self.assertEqual(transfer.kind, "noc_migrate")
             self.assertEqual(transfer.phase, "prefill")
             self.assertEqual(
@@ -313,29 +332,38 @@ class PrefillRemoteReadAdmissionTest(unittest.TestCase):
             self.assertEqual(
                 transfer.target_instance_index, EXEC_INSTANCE)
         _assert_contiguous_cover(
-            self, _layer_ranges(runtime.prefill_remote_read_transfers),
-            0, PREFIX_LAYERS)
+            self, _layer_ranges(flattened), 0, PREFIX_LAYERS)
         # 两腿层区间不相交、并集铺满 [0, L)（同 frontier 分叉语义）。
         self.assertEqual(
             _layer_ranges(runtime.history_transfers)[0][0], PREFIX_LAYERS)
         self.assertEqual(
-            _layer_ranges(runtime.prefill_remote_read_transfers)[-1][1],
-            PREFIX_LAYERS)
+            _layer_ranges(flattened)[-1][1], PREFIX_LAYERS)
         # 字节口径：前缀读流独立计量，不混入 history_transfer_bytes。
         self.assertEqual(
             runtime.prefill_remote_read_bytes, sum(self.prefix_bytes))
         self.assertEqual(
             runtime.history_transfer_bytes, sum(self.suffix_bytes))
-        # 计划摘要锚（home/exec/前缀层界/逐组层段）。
-        plan = runtime.prefill_remote_read_plan
+        # 计划摘要锚（home/exec/前缀层界/字节；D16 模板参数）。
         self.assertEqual(plan["home_instance"], HOME_INSTANCE)
         self.assertEqual(plan["exec_instance"], EXEC_INSTANCE)
         self.assertEqual(plan["read_prefix_layers"], PREFIX_LAYERS)
         self.assertEqual(plan["total_bytes"],
                          runtime.prefill_remote_read_bytes)
+        # tiles_by_window 与逐窗物化一致；tile_count = Σ逐窗 tile 数。
         self.assertEqual(
-            tuple((group[0], group[1]) for group in plan["groups"]),
-            _layer_ranges(runtime.prefill_remote_read_transfers))
+            tuple(plan["tiles_by_window"]),
+            tuple(len(windows[window])
+                  for window in range(1, plan["window_count"] + 1)))
+        self.assertEqual(
+            plan["tile_count"], len(flattened))
+        # D09 逐窗×tile：每窗 tile 恒携带 (窗序, 窗内 tile 序) 身份，
+        # 窗序连续 1..W、窗内自 1 连续；窗并集 = 全部传输。
+        self.assertEqual(
+            tuple(windows), tuple(range(1, plan["window_count"] + 1)))
+        for window_index, window in windows.items():
+            for position, transfer in enumerate(window, start=1):
+                self.assertEqual(
+                    transfer.read_tile, (window_index, position))
 
     def test_prefill_read_registered_and_decode_owner_absent(self):
         # §二.4/§二.5：准入登记 rid#prefill_read（noc_migrate 双端点
@@ -345,7 +373,13 @@ class PrefillRemoteReadAdmissionTest(unittest.TestCase):
         hbm_owners = self.scheduler._hbm_ports.leaked_owners()
         self.assertIn(RID + "#prefill_read", hbm_owners)
         self.assertNotIn(RID + "#readplan", hbm_owners)
-        self.assertNotIn(RID, hbm_owners)  # history_transfers 无 noc 腿
+        # history 的 remote_load 后缀恢复腿为零距离（edge == 目标
+        # rank、单 rank noc_path）：修复轮三（2026-09-27）执行侧端点
+        # 登记补全后，准入时点即登记目标 HBM 写端口（exec 2,3）——
+        # 与计价侧（_pool_transfer_ns_shards）无条件收端点腿同口径；
+        # 原断言 "RID 不在册" 钉的是修复前漏登行为，随之更新。
+        self.assertEqual(
+            sorted(set(hbm_owners[RID])), [2, 3])
         self.assertEqual(
             sorted(set(hbm_owners[RID + "#prefill_read"])),
             [0, 1, 2, 3])  # home 读端口 (0,1) + exec 写端口 (2,3)
@@ -359,6 +393,12 @@ class PrefillRemoteReadAdmissionTest(unittest.TestCase):
 
     def test_decision_row_and_plan_dict_disclose_new_fields(self):
         # §二.3：joint_admission 行 + plan_dict 三键独立披露。
+        # D16 配合项（修复轮二，2026-09-27）：决策行改有界聚合披露
+        # ``prefill_remote_read_summary``（物化 transfer 列表退役——tile
+        # 数无界；窗口/模板参数足以重建读流形状），plan_dict 快照同样
+        # 携带模板参数（tiles_by_window/window_count/tile_bytes/
+        # scan_passes/session_id/source_ranks/target_ranks/
+        # base_scans_shards——无 "tiles" 物化键）。
         row = _admission_rows(self.scheduler, "joint_admission")[0]
         decision = row["decision"]
         self.assertEqual(
@@ -366,29 +406,74 @@ class PrefillRemoteReadAdmissionTest(unittest.TestCase):
             self.runtime.prefill_remote_read_bytes)
         self.assertEqual(
             decision["prefill_remote_read_layers"], PREFIX_LAYERS)
+        summary = decision["prefill_remote_read_summary"]
         self.assertEqual(
-            len(decision["prefill_remote_read_transfers"]),
-            len(self.runtime.prefill_remote_read_transfers))
+            set(summary), {
+                "present", "home_instance", "exec_instance",
+                "read_prefix_layers", "total_bytes", "tile_count",
+                "window_count", "tiles_by_window", "tile_bytes",
+                "scan_passes"})
+        self.assertTrue(summary["present"])
+        self.assertNotIn("prefill_remote_read_transfers", decision)
+        plan = self.runtime.prefill_remote_read_plan
         self.assertEqual(
-            decision["prefill_remote_read_transfers"][0]["reason"],
-            "remote_read_prefill_prefix")
+            summary["tile_count"], plan["tile_count"])
+        self.assertEqual(
+            summary["tiles_by_window"], plan["tiles_by_window"])
+        self.assertEqual(
+            summary["total_bytes"],
+            self.runtime.prefill_remote_read_bytes)
+        self.assertEqual(
+            summary["read_prefix_layers"], PREFIX_LAYERS)
+        self.assertEqual(summary["home_instance"], HOME_INSTANCE)
+        self.assertEqual(summary["exec_instance"], EXEC_INSTANCE)
+        self.assertEqual(
+            summary["window_count"],
+            len(summary["tiles_by_window"]))
+        self.assertEqual(
+            sum(summary["tiles_by_window"]), summary["tile_count"])
+        self.assertEqual(summary["tile_bytes"], plan["tile_bytes"])
+        self.assertEqual(summary["scan_passes"], plan["scan_passes"])
         plan_dict = self.scheduler.graph.admission_plans[0]
         self.assertEqual(
             plan_dict["prefill_remote_read_bytes"],
             self.runtime.prefill_remote_read_bytes)
         self.assertEqual(
             plan_dict["prefill_remote_read_layers"], PREFIX_LAYERS)
+        # plan_dict 面：物化列表恒空（D16），快照为模板参数形态。
         self.assertEqual(
-            plan_dict["prefill_remote_read_transfers"],
-            self.runtime.prefill_remote_read_transfers)
-        # 分离判据在 plan_dict 面同样成立（图侧分叉铺腿的输入契约）。
+            plan_dict["prefill_remote_read_transfers"], ())
+        snapshot = plan_dict["prefill_remote_read_plan"]
+        self.assertEqual(
+            set(snapshot), {
+                "home_instance", "exec_instance", "read_prefix_layers",
+                "total_bytes", "tile_count", "window_count",
+                "tiles_by_window", "tile_bytes", "scan_passes",
+                "session_id", "source_ranks", "target_ranks",
+                "base_scans_shards"})
+        self.assertNotIn("tiles", snapshot)
+        self.assertEqual(
+            snapshot["tiles_by_window"], plan["tiles_by_window"])
+        self.assertEqual(snapshot["window_count"], plan["window_count"])
+        self.assertEqual(snapshot["tile_bytes"], plan["tile_bytes"])
+        self.assertEqual(snapshot["scan_passes"], plan["scan_passes"])
+        self.assertEqual(snapshot["session_id"], SID)
+        self.assertEqual(snapshot["source_ranks"], (0, 1))
+        self.assertEqual(snapshot["target_ranks"], (2, 3))
+        self.assertEqual(
+            len(snapshot["base_scans_shards"]),
+            len(snapshot["source_ranks"]))
+        # 分离判据在 plan_dict 面同样成立（图侧分叉铺腿的输入契约）：
+        # 前缀读流（noc_migrate）不混入 history_transfers。
         self.assertNotIn(
-            self.runtime.prefill_remote_read_transfers[0],
-            plan_dict["history_transfers"])
+            "noc_migrate",
+            {transfer.kind for transfer in plan_dict["history_transfers"]},
+            "prefix read stream must stay out of the history leg")
 
     def test_local_base_admission_reads_all_layers_without_suffix(self):
         # LOCAL 基回归：p = L——前缀读流覆盖全部层、history_transfers
-        # 恒空（无后缀腿）、decode credit 计划仍覆盖全部层。
+        # 恒空（无后缀腿）、decode credit 计划仍覆盖全部层。D16：读流
+        # 形状经计划模板逐窗物化断言（runtime 物化列表恒空）。
         model = _model()
         _hardware, topology, manager = _make_manager(model)
         _seed_resident(manager)
@@ -401,9 +486,16 @@ class PrefillRemoteReadAdmissionTest(unittest.TestCase):
             sh30.select_instance_and_action = original_select
         self.assertEqual(runtime.history_transfers, ())
         self.assertEqual(runtime.history_transfer_bytes, 0)
+        self.assertEqual(runtime.prefill_remote_read_transfers, ())
+        plan = runtime.prefill_remote_read_plan
+        self.assertIsNotNone(plan)
+        transfers = [
+            transfer
+            for window in range(1, plan["window_count"] + 1)
+            for transfer in manager.prefill_read_window_tiles(
+                plan["template"], window)]
         _assert_contiguous_cover(
-            self, _layer_ranges(runtime.prefill_remote_read_transfers),
-            0, model.layers)
+            self, _layer_ranges(transfers), 0, model.layers)
         self.assertEqual(
             runtime.prefill_remote_read_plan["read_prefix_layers"],
             model.layers)
@@ -467,8 +559,9 @@ class PrefillRemoteReadDrainLifecycleTest(unittest.TestCase):
     def test_credit_slices_are_transient_streams_over_prefix(self):
         self.scheduler._on_prefill_drain(RID, 1000)
         blocks = self.scheduler._joint_remote_read_slice(
-            self.runtime, 4, 2)
-        self.assertEqual(len(blocks), 2)
+            self.runtime, 4)
+        # auto tile（256 token ≥ 基础 100 token）→ 每 pass 1 tile。
+        self.assertEqual(len(blocks), 4)
         for block in blocks:
             # §一.7（前序 KV 管理器卡登记的偏差项，调度器侧补齐）：
             # decode credit 切片同为瞬时读流标记。

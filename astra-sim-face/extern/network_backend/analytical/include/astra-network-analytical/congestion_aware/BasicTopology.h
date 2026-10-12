@@ -14,7 +14,7 @@ namespace NetworkAnalyticalCongestionAware {
 
 /**
  * BasicTopology defines 1D topology
- * such as Ring, FullyConnected, and Switch topology,
+ * such as Ring, FullyConnected, Switch, and Mesh topology,
  * which can be used to construct multi-dimensional topology.
  */
 class BasicTopology : public Topology {
@@ -33,13 +33,6 @@ class BasicTopology : public Topology {
      * Destructor.
      */
     virtual ~BasicTopology() noexcept;
-
-  protected:
-    /// bandwidth of each link
-    Bandwidth bandwidth;
-
-    /// latency of each link
-    Latency latency;
 };
 
 }  // namespace NetworkAnalyticalCongestionAware

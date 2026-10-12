@@ -6,13 +6,13 @@ u_port 接线 + A4' 补价 rider + E4 去重的零后端单测（F4 口径锚点
   1. 登记/注销配对（含失败注入三态：双释放、漏释放、预登记泄漏各一）；
   2. u_port 数值：2 活跃 decode + 1 在册流 → u_port=3、计价除数（+1
      自身）= 4；闲置端口为 0（不假设恒 1）；
-  3. breakdown 物化：合成请求 estimate_action 返回的 ActionCostBreakdown
+  3. breakdown 物化：合成请求 estimate_P_with_continuation 返回的 ActionCostBreakdown
      全 11 字段非 None（允许数值为 0，字段不得缺省）；
   4. A4' 补价 rider（PROVENANCE §20.1）：remote-read 计价含执行端写腿
      ——u_exec=0 时腿值在场、u_exec>0 时按 (u_exec+1) 因子放大并成为
      max 腿；首 credit 腿按 credit_steps 倍乘、其余流送段按
      (read_passes − credit_steps) 倍乘各一例；
-  5. E4 去重（A1 勘误）：estimate_action 路径上 divisor_multi 调用次数
+  5. E4 去重（A1 勘误）：estimate_P_with_continuation 路径上 divisor_multi 调用次数
      不增——remote/copy 主计价腿族共享一次并集除数计算、breakdown
      contention_divisor 复用（C1 时代 remote=4 次/copy=2 次 → 本卡 1 次）；
   6. SH 接线（__new__ 范式）：_register_transfer_flows 对 noc_migrate
@@ -105,7 +105,7 @@ def _route(source, target):
 
 
 def _model(flow_registry=None, port_registry=None, *, rates=None,
-           route_paths_fn="disjoint", credit_iters="auto"):
+           route_paths_fn="disjoint", tile_bytes="auto"):
     return JointCostModel(
         rates=rates if rates is not None else _rates(),
         loads={0: _load(0), 1: _load(1)},
@@ -118,7 +118,7 @@ def _model(flow_registry=None, port_registry=None, *, rates=None,
             _disjoint_paths if route_paths_fn == "disjoint"
             else route_paths_fn),
         hbm_port_registry=port_registry,
-        remote_credit_iters=credit_iters)
+        remote_read_tile_bytes=tile_bytes)
 
 
 def _registry_with_exec_contention(exec_active, home_active=0):
@@ -237,12 +237,15 @@ class UPortDivisorTest(unittest.TestCase):
 
 
 class BreakdownMaterializationTest(unittest.TestCase):
-    """estimate_action 返回的全 11 字段非 None（值可为 0，不得缺省）。"""
+    """estimate_P_with_continuation 返回的全字段非 None（值可为 0，不得
+    缺省）——C5 全 11 字段 + D17 扩展 17 字段 + §5.1/§5.5/§5.6 交付面
+    3 字段（projection_stats / background_delays /
+    capacity_theta_prediction，2026-09-30 修复轮）= 31。"""
 
     FIELD_NAMES = tuple(field.name for field in fields(ActionCostBreakdown))
 
-    def test_all_eleven_fields_materialized_per_action(self):
-        self.assertEqual(len(self.FIELD_NAMES), 11)
+    def test_all_fields_materialized_per_action(self):
+        self.assertEqual(len(self.FIELD_NAMES), 31)
         port_registry = _registry_with_exec_contention(exec_active=2)
         model = _model(port_registry=port_registry)
         fixtures = [
@@ -252,7 +255,7 @@ class BreakdownMaterializationTest(unittest.TestCase):
             (ACTION_REMOTE, _session(resident=1), 0),
         ]
         for action, session, target in fixtures:
-            candidate = model.estimate_action(
+            candidate = model.estimate_P_with_continuation(
                 session=session, request=_request(),
                 instance_index=target, action=action, remote_enabled=True)
             self.assertTrue(candidate.applicable, action)
@@ -269,7 +272,7 @@ class BreakdownMaterializationTest(unittest.TestCase):
         # （rank 0/1）→ exec 写腿端口（活跃 decode = 2 披露在 exec 侧）。
         port_registry = _registry_with_exec_contention(exec_active=2)
         model = _model(port_registry=port_registry)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(resident=1), request=_request(),
             instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
         self.assertIn("u_port_home=r2:0act+0fl",
@@ -280,7 +283,7 @@ class BreakdownMaterializationTest(unittest.TestCase):
     def test_no_u_port_note_without_registry(self):
         # 离线/单测口径（未注入注册表）：不披露（与 C1 行为零差异）。
         model = _model()
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(resident=1), request=_request(),
             instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
         self.assertFalse([
@@ -301,7 +304,7 @@ class RemoteReadExecWriteLegTest(unittest.TestCase):
         model = _model(
             rates=_rates(noc=1000.0, hbm=10.0, lat=0),
             port_registry=port_registry)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(self.BYTES_PER_RANK,
                                             self.BYTES_PER_RANK)),
             request=_request(decode=3),  # passes = 1 prefill + 3 decode = 4
@@ -309,23 +312,27 @@ class RemoteReadExecWriteLegTest(unittest.TestCase):
         return candidate
 
     def test_exec_write_leg_value_in_place_at_zero_u_exec(self):
-        # u_exec=0：执行端写腿在场（与 home 读腿同率同值——无争用时两
-        # 端点腿并列 max）。B×passes/hbm = 1000×4/10 = 400。
+        # u_exec=0（无在册后台流）：执行端写腿在场；D06 阶段份额下分母
+        # = m+k = 0 + 2（候选计算读 + 暂存写）——B×passes/(hbm/2) =
+        # 1000×4×2/10 = 800 > home 读腿 400（写腿不再独占整端口，
+        # 与计算读共享；补价方向只高不低）。
         candidate = self._remote_read_ns(
             _registry_with_exec_contention(exec_active=0))
         self.assertEqual(
             candidate.breakdown.remote_read_ns,
-            self.BYTES_PER_RANK * 4 // 10)
+            self.BYTES_PER_RANK * 4 * 2 // 10)
 
     def test_exec_write_leg_amplifies_and_dominates(self):
-        # u_exec=3（执行端与 COMPUTE/增量写 N-way 均分）：写腿按
-        # (u_exec+1)=4 因子放大 = 1000×4×4/10 = 1600 > home 腿 400，
-        # 成为 max 腿（整腿 wall 随之抬升——补价方向：只高不低）。
+        # u_exec=3（在册活跃流）：D06 阶段份额下写腿分母 = m+k =
+        # 3（在册）+ 2（候选阶段并发流：计算读 + 暂存写）= 5，
+        # 放大 = 1000×4×5/10 = 2000 > home 腿 1000×4×1/10 = 400，
+        # 成为 max 腿（整腿 wall 随之抬升——补价方向：只高不低；
+        # 写腿与计算读同分母，不各自独占整端口）。
         quiet = self._remote_read_ns(
             _registry_with_exec_contention(exec_active=0))
         contended = self._remote_read_ns(
             _registry_with_exec_contention(exec_active=3))
-        self.assertEqual(contended.breakdown.remote_read_ns, 1600)
+        self.assertEqual(contended.breakdown.remote_read_ns, 2000)
         self.assertGreater(
             contended.breakdown.remote_read_ns,
             quiet.breakdown.remote_read_ns)
@@ -333,17 +340,18 @@ class RemoteReadExecWriteLegTest(unittest.TestCase):
             contended.cost_ns, quiet.cost_ns)
 
     def test_first_credit_and_stream_multiplier_split(self):
-        # 倍乘切法（与现有字节基数同切法）：passes=4、auto K=ceil(4/8)=1
-        # → 首 credit 腿按 credit_steps=1 倍乘 = 1000×1×4/10 = 400；
-        # 其余流送段按 (read_passes−credit_steps)=3 倍乘 = 1200；全流
-        # = 1600（remote_read_ns 恒为全流总时延口径）。
+        # D09 字节 tile 审计拆分：tile = 256 token × 100 B/token =
+        # 25600 B/shard ≥ 流字节（1000×4 = 4000）→ 单 tile 流：首 tile
+        # = 全流（u_exec=3 争用 + D06 阶段份额 m+k=5 下写腿
+        # 1000×4×5/10 = 2000 主导）、其余流送段 = 0；全流审计 = 2000
+        # （remote_read_ns 恒为全流口径）。
         candidate = self._remote_read_ns(
             _registry_with_exec_contention(exec_active=3))
         breakdown = candidate.breakdown
-        self.assertIn("remote_credit_k=1", breakdown.notes)
-        self.assertEqual(breakdown.remote_read_first_credit_ns, 400)
-        self.assertEqual(breakdown.remote_read_stream_ns, 1200)
-        self.assertEqual(breakdown.remote_read_ns, 1600)
+        self.assertIn("remote_read_tile_tokens=256", breakdown.notes)
+        self.assertEqual(breakdown.remote_read_first_credit_ns, 2000)
+        self.assertEqual(breakdown.remote_read_stream_ns, 0)
+        self.assertEqual(breakdown.remote_read_ns, 2000)
 
     def test_capacity_half_side_unchanged(self):
         # F14 容量半边不动：u_exec 争用只放大带宽腿，不改变空间足迹
@@ -373,43 +381,51 @@ class _CountingFlows(LinkFlowRegistry):
 
 
 class E4DivisorDedupTest(unittest.TestCase):
-    """estimate_action 路径上 divisor_multi 调用次数不增（remote/copy
-    严格下降）：主计价腿族共享一次并集除数、breakdown 复用之。"""
+    """estimate_P_with_continuation 路径上的除数去重纪律。D13（v2.0
+    C06）起计价走每路径服务视图（``CandidatePathNocShare``，视图内
+    链路/路径 memo）——并集聚合除数 ``divisor_multi`` 自主计价腿退役
+    （remote/copy 调用 1 → 0，严格下降纪律延续）；stay/recompute 无
+    计价腿，breakdown 的 contention_divisor 披露位仍须物化（函数尾单
+    次注册表调用，不得为 0）。"""
 
     def _flows_and_model(self):
         flows = _CountingFlows()
         return flows, _model(flow_registry=flows)
 
-    def test_remote_estimate_calls_divisor_multi_once(self):
+    def test_remote_estimate_pricing_leaves_divisor_multi_uncalled(self):
         # home==target（merge 跳过）+ LOCAL 基：读流族（全流/首 credit/
-        # 其余流送）共享一次并集除数、breakdown 零额外调用 → 1 次。
-        # C1 时代同夹具 = 4 次（3 腿 + breakdown 披露第二次）。
+        # 其余流送）共享每路径服务视图（D13 视图 memo 使同路径查询共
+        # 用结果）、breakdown 复用视图最坏路径除数 → divisor_multi 零
+        # 调用（C1 时代 4 次 → E4 后 1 次 → D13 起 0 次）。
         flows, model = self._flows_and_model()
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(home=0, resident=1), request=_request(),
             instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
         self.assertTrue(candidate.applicable)
-        self.assertEqual(flows.multi_calls, 1)
+        self.assertEqual(flows.multi_calls, 0)
+        # 披露位仍物化（视图最坏路径除数 ceil）。
+        self.assertGreaterEqual(candidate.breakdown.contention_divisor, 1)
 
-    def test_copy_estimate_calls_divisor_multi_once(self):
-        # C1 时代同夹具 = 2 次（copy 腿 + breakdown）→ 本卡 1 次。
+    def test_copy_estimate_pricing_leaves_divisor_multi_uncalled(self):
+        # C1 时代 2 次 → E4 后 1 次 → D13 起每路径视图 0 次。
         flows, model = self._flows_and_model()
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(home=0, resident=1), request=_request(),
             instance_index=0, action=ACTION_COPY, remote_enabled=True)
         self.assertTrue(candidate.applicable)
-        self.assertEqual(flows.multi_calls, 1)
+        self.assertEqual(flows.multi_calls, 0)
+        self.assertGreaterEqual(candidate.breakdown.contention_divisor, 1)
 
     def test_stay_recompute_keep_single_call(self):
         # 无 NoC 计价腿可复用 → 函数尾单次调用（C1 时代也恰一次——
         # "不增"断言的留守分支；不得为 0：contention_divisor 仍须物化）。
         flows, model = self._flows_and_model()
-        model.estimate_action(
+        model.estimate_P_with_continuation(
             session=_session(home=0, resident=1), request=_request(),
             instance_index=1, action=ACTION_STAY, remote_enabled=True)
         self.assertEqual(flows.multi_calls, 1)
         flows2, model2 = self._flows_and_model()
-        model2.estimate_action(
+        model2.estimate_P_with_continuation(
             session=_session(home=0, resident=1), request=_request(),
             instance_index=0, action=ACTION_RECOMPUTE, remote_enabled=True)
         self.assertEqual(flows2.multi_calls, 1)
@@ -421,7 +437,7 @@ class E4DivisorDedupTest(unittest.TestCase):
         flows = _CountingFlows()
         flows.register_path((2, 0), owner="bg#1")
         model = _model(flow_registry=flows)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(home=0, resident=1), request=_request(),
             instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
         self.assertEqual(candidate.breakdown.contention_divisor, 2)
@@ -478,16 +494,31 @@ class _ShPortWiringTest(unittest.TestCase):
             scheduler._hbm_ports.leaked_owners(),
             {"r1": (0, 2, 1, 3)})
 
-    def test_pool_transfers_do_not_enter_hbm_ports(self):
-        # F3 边界：remote_store/remote_load 走池端口口径，不进 HBM 端
-        # 口表（本地链路段也不登记——池路径 NoC 腿未计价的既定披露）。
+    def test_pool_transfers_register_real_hbm_endpoints(self):
+        # D04（2026-09-26，取代 F3 旧豁免）：remote_store/remote_load
+        # 登记真实 HBM 端点——写回 = noc_path 首端源读端点、恢复 =
+        # noc_path 末端目标写端点（edge 侧是池端口非 rank HBM，不入
+        # 表）；完成事件 release_owner 注销（泄漏表清空）。
         scheduler = self._scheduler()
         scheduler._register_transfer_flows(
-            [_transfer("remote_store", [_shard(0, None, edge_rank=4,
+            [_transfer("remote_store", [_shard(0, 4, edge_rank=4,
                                                path=(0, 4))])],
-            owner="r1#decode")
+            owner="r1#store")
+        scheduler._register_transfer_flows(
+            [_transfer("remote_load", [_shard(4, 2, edge_rank=4,
+                                              path=(4, 2))])],
+            owner="r1#load")
+        self.assertEqual(scheduler._hbm_ports.divisor(0), 1)
+        self.assertEqual(scheduler._hbm_ports.divisor(2), 1)
+        self.assertEqual(scheduler._hbm_ports.divisor(4), 0)
+        self.assertEqual(
+            scheduler._hbm_ports.leaked_owners(),
+            {"r1#store": (0,), "r1#load": (2,)})
+        # 完成事件注销：同 owner 释放后端点表清空（幂等空放合法）。
+        scheduler._release_transfer_flows("r1#store")
+        scheduler._release_transfer_flows("r1#load")
         self.assertEqual(scheduler._hbm_ports.snapshot(), {})
-        self.assertEqual(scheduler._hbm_ports.divisor(0), 0)
+        self.assertEqual(scheduler._hbm_ports.leaked_owners(), {})
 
     def test_release_clears_and_is_idempotent(self):
         scheduler = self._scheduler()

@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """diff_explainability.py -- 阶段 3 差异可解释性(方案 §6.2 操作 4)。
 
+登记(py-verify-D2 2026-09-27):手动 CLI 审计门工具——本仓无自动流水线
+入口消费其退出码,审计门判定依赖人工运行并核对退出 0/1/2(见文件尾
+"复核方式");不被 pytest 收集,属有意保留的手动对拍装置。
+
 strategy 感知开 vs 关感知 对比,逐决策归类:
 
   无差异            -- 决策行(seq/tick/kind/request_id/decision)逐字节一致
   真实完成事件时序   -- 同一 (request, stage) 的 C++ 完成事实 tick 不同
                        (物理完成事件时序差异),导致后续决策 tick/内容不同
   排队状态差异       -- 决策内容不同且不由完成事件时序解释(决策输入——
-                       排队深度/KV 状态——不同)
+                       排队深度/KV 状态——不同;感知泄漏红线,E1 修复
+                       2026-09-27 起独立判 DEFECT)
 
 每类差异必须给出解释;无法归类的差异 = 缺陷,报告并退出 1。
+排队状态差异(决策输入不同 = 感知数据泄漏进策略判据)即缺陷,
+同样退出 1——不得以"已归类"为由放行(E1 修复:恢复基线口径
+"任何真实差异都判验证失败";此前该类仅 DIFF 级恒 exit 0)。
 
 输入(两个 strategy 运行目录):
   --baseline-run <dir>   关感知运行(默认策略运行)
@@ -21,7 +29,8 @@ response_*.json 收集,phase-7 §10.3 起 response 消费即删,两侧恒读成
 空列表,空==空打出假绿 PASS(签名 sha256=4f53cda1…,即空数组 [] 的
 哈希)。数据源迁移到归档 jsonl,与 ledger_reconcile 054118e 同思路):
   - online_decision_log.jsonl(逐行,seq 对齐)
-  - graph_batch_digests.jsonl(逐行)
+  - graph_batch_digests.jsonl(逐行;生产缺省不产出,env SH_GRAPH_DIGESTS=1
+    开启——两侧同缺时本维度与下一维度标 SKIP,不阻断审计门)
   - online_decision_log.jsonl 的 KV 决策载荷流(每行 decision 字段;
     tick/seq 无关的 KV 策略内容投影——原 response kv_actions 维度的
     归档替代)
@@ -36,12 +45,20 @@ response_*.json 收集,phase-7 §10.3 起 response 消费即删,两侧恒读成
 jsonl 位置解析:bridge/ 优先,次选 results/(运行归档布局:官方 runner
 结束后把 jsonl 从 bridge/ 移入 results/;两种布局均支持,内容一致)。
 
-fail-closed 契约(空数据源禁止比较,禁止空==空真空通过):任一归档
-jsonl 缺失或 0 行、决策行缺 decision 载荷、bridge 无 request_*.json、
-cpp.log 缺失或未解析出任何门计数器——立即报错退出 2,不产出报告。
+graph_batch_digests.jsonl 生产缺省不产出(env SH_GRAPH_DIGESTS=1 开启,
+官方 runner 不开):两侧同缺时 digest 相关维度(批级摘要逐行对平/批级
+assignment 摘要流)标显式 SKIP、退出码非 2——对齐 ledger_reconcile 同
+数据源缺失的 SKIP 降级语义,审计门对默认 run 可用;单侧缺一侧有 = 运行
+配置不对齐(SH_GRAPH_DIGESTS 一侧开一侧关),批级维度不可比,判 DEFECT。
+decision log 为核心输入:缺失/为空照旧 fail-closed。
 
-退出码:0 = 全部差异已归类并解释(预期:全部无差异);1 = 存在无法归类
-的差异或行数对不上;2 = 数据源缺失/为空(fail-closed)。"""
+fail-closed 契约(空数据源禁止比较,禁止空==空真空通过):决策行缺
+decision 载荷、bridge 无 request_*.json、cpp.log 缺失或未解析出任何门
+计数器——立即报错退出 2,不产出报告。
+
+退出码:0 = 全部差异已归类并解释且无排队状态差异(预期:全部无差异);
+1 = 存在无法归类的差异、行数对不上或排队状态差异(感知泄漏红线);
+2 = 核心数据源缺失/为空(fail-closed)。"""
 
 import argparse
 import gzip
@@ -69,7 +86,9 @@ def _fail_closed(message):
 
 
 def _iter_jsonl(path):
-    with open(path, "r", encoding="utf-8") as source:
+    # errors="replace":非 UTF-8 字节裸崩 UnicodeDecodeError 会吞掉全部
+    # 后续记账/报告(M-34 同款,对齐本文件 cpp.log 通道的宽松读纪律)。
+    with open(path, "r", encoding="utf-8", errors="replace") as source:
         for line in source:
             line = line.strip()
             if line:
@@ -84,15 +103,26 @@ def _resolve_jsonl(run_dir, name):
     """归档 jsonl 位置解析:bridge/ 优先,次选 results/(runner 归档布局)。
     两者皆缺 = 数据源缺失,fail-closed(不回退 response_*.json——该文件
     phase-7 §10.3 起消费即删,按旧契约读只会得到空集,即缺陷 3 的假绿)。"""
+    path = _resolve_jsonl_or_none(run_dir, name)
+    if path is None:
+        _fail_closed("归档数据源缺失:{} 不存在于 {} 与 {}(空数据源禁止比较;"
+                     "response_*.json 消费即删,不可作为数据源)".format(
+                         name,
+                         os.path.join(run_dir, "bridge", name),
+                         os.path.join(run_dir, "results", name)))
+    return path
+
+
+def _resolve_jsonl_or_none(run_dir, name):
+    """同 _resolve_jsonl 的解析顺序,缺失返回 None(不 fail-closed)——
+    供生产缺省不产出的审计产物(graph_batch_digests.jsonl)走 SKIP 降级。"""
     bridge_path = os.path.join(run_dir, "bridge", name)
     results_path = os.path.join(run_dir, "results", name)
     if os.path.exists(bridge_path):
         return bridge_path
     if os.path.exists(results_path):
         return results_path
-    _fail_closed("归档数据源缺失:{} 不存在于 {} 与 {}(空数据源禁止比较;"
-                 "response_*.json 消费即删,不可作为数据源)".format(
-                     name, bridge_path, results_path))
+    return None
 
 
 
@@ -105,9 +135,14 @@ def _load_run(run_dir):
     if not decision_log:
         _fail_closed("online_decision_log.jsonl 为空(0 行):{}——空数据源"
                      "禁止比较".format(decision_log_path))
-    digests_path = _resolve_jsonl(run_dir, "graph_batch_digests.jsonl")
-    digests = _load_jsonl_list(digests_path)
-    if not digests:
+    # graph_batch_digests.jsonl 生产缺省不产出(SH_GRAPH_DIGESTS 缺省 0,
+    # 官方 runner 不开):文件缺失不再 fail-closed 退出 2(对任何默认 run
+    # 恒退 2 = 审计门不可用),对齐 ledger_reconcile 的 SKIP 降级——两侧
+    # 同缺由调用方对 digest 相关维度出显式 SKIP 行;文件在场但 0 行仍是
+    # 空数据源,照旧 fail-closed(禁止空==空真空通过)。
+    digests_path = _resolve_jsonl_or_none(run_dir, "graph_batch_digests.jsonl")
+    digests = _load_jsonl_list(digests_path) if digests_path else []
+    if digests_path and not digests:
         _fail_closed("graph_batch_digests.jsonl 为空(0 行):{}——空数据源"
                      "禁止比较".format(digests_path))
 
@@ -205,6 +240,16 @@ def _digest_request_excluding_summary(hasher, req):
 
 
 def _load_cpp_counters(cpp_log_path):
+    """cpp.log 门计数器解析。
+
+    S5 修复(2026-09-29):C++ 实际输出(main_online.cc)为单行
+    ``[online] gate counters: event_count=… delivery_count=…
+    coalescing_ratio=… tick_end_without_decision_count=…``;旧正则
+    ``\\[online\\] delivery_count=(\\d+)`` / ``\\[online\\] event_count=(\\d+)``
+    对该行永不匹配,event/delivery 两计数从不进入比较,感知开/关差异被
+    掩盖为假 PASS。现按行解析该行全部 key=value 对;gate counters 行缺失
+    或 event_count/delivery_count 缺失 = 门计数器未解析出,返回 None 由
+    调用方 fail-closed 退出 2(与既有空数据源契约一致)。"""
     if os.path.exists(cpp_log_path):
         opener = open
     elif os.path.exists(cpp_log_path + ".gz"):
@@ -215,12 +260,22 @@ def _load_cpp_counters(cpp_log_path):
     with opener(cpp_log_path, "rt", encoding="utf-8", errors="replace") as source:
         text = source.read()
     counters = {}
-    delivery = re.search(r"\[online\] delivery_count=(\d+)", text)
-    if delivery:
-        counters["delivery_count"] = int(delivery.group(1))
-    event = re.search(r"\[online\] event_count=(\d+)", text)
-    if event:
-        counters["event_count"] = int(event.group(1))
+    gate = re.search(r"^\[online\] gate counters:(.+)$", text, re.MULTILINE)
+    if gate:
+        for token in gate.group(1).split():
+            key, sep, value = token.partition("=")
+            if not sep or not value:
+                continue
+            try:
+                counters[key] = int(value)
+            except ValueError:
+                try:
+                    counters[key] = float(value)
+                except ValueError:
+                    continue
+    if "event_count" not in counters or "delivery_count" not in counters:
+        # fail-closed:门计数器行缺失/不完整,禁止空==空真空通过。
+        return None
     service = re.search(r"\[online\] service counters: accepted=(\d+) "
                         r"completed=(\d+) active=(\d+) pending_alarm=(\d+)",
                         text)
@@ -317,7 +372,9 @@ def _completion_tick_diffs(bl_completions, sn_completions, request_id):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="phase-3 sensing on/off difference explainability")
+        description="phase-3 sensing on/off difference explainability "
+                    "(graph_batch_digests 两侧同缺时 digest 维度 SKIP,"
+                    "核心数据源缺失 fail-closed 退出 2)")
     parser.add_argument("--baseline-run", required=True,
                         help="关感知 strategy 运行目录(含 bridge/ 与 cpp.log)")
     parser.add_argument("--sensing-run", required=True,
@@ -351,13 +408,54 @@ def main(argv=None) -> int:
         findings.append(("PASS", "决策行逐字节一致",
                          "{} 行 = 全部无差异".format(len(baseline["decision_log"]))))
 
-    # 载体差异归类口径(M31 修复):存在已归类决策行差异时,载体差异视作
-    # 其下游表现(设计内/事件时序类,DIFF);决策行全同而载体不一致 = 无
-    # 决策级分类可解释 = 无法归类 → DEFECT(退出 1,docstring 契约)。
-    carrier_level = "DIFF" if differences else "DEFECT"
+    # 排队状态差异 = 感知泄漏红线(E1 修复 2026-09-27):决策输入(排队
+    # 深度/KV 状态)不同即感知数据泄漏进策略判据,属不可归类解释的缺陷,
+    # 独立判 DEFECT 退出 1——恢复基线口径"任何真实差异都判验证失败"
+    # (此前该类仅 DIFF 级,机械归类后恒 exit 0)。
+    queue_leaks = [diff for diff in differences
+                   if diff["类别"] == "排队状态差异"]
+    if queue_leaks:
+        findings.append((
+            "DEFECT", "排队状态差异(感知泄漏红线)",
+            "{} 条决策输入不同且不由完成事件时序解释(首条 seq={} "
+            "request_id={};契约:排队状态差异 → 退出 1)".format(
+                len(queue_leaks), queue_leaks[0]["seq"],
+                queue_leaks[0]["request_id"])))
+
+    # 载体差异归类口径(M31 修复 + E1 倒置修正 2026-09-27):载体差异仅当
+    # 决策行差异全部归因于"真实完成事件时序"(物理完成事实 tick 不同,
+    # 载体差异为其下游表现)时降为 DIFF;决策行全同(载体差异无任何决策
+    # 级归因)或差异含"排队状态差异"(决策输入本身不同,不可归因于完成
+    # 时序)时,载体差异同样无法归类 → DEFECT(退出 1)。原
+    # `DIFF if differences else DEFECT` 把决策行真实分歧机械降级为 DIFF,
+    # 判定倒置:决策不同+载体不一致反而可能 exit 0,决策全同+载体不一致
+    # 却 exit 1。
+    timing_rows = [diff for diff in differences
+                   if diff["类别"] == "真实完成事件时序"]
+    carrier_level = "DIFF" if timing_rows and not queue_leaks else "DEFECT"
 
     # ---- 2. GraphBatch digest 逐行对平 ----
-    if baseline["digests"] == sensing["digests"]:
+    # 生产缺省不产出(SH_GRAPH_DIGESTS 缺省 0,官方 runner 不开):两侧同
+    # 缺 → digest 相关维度显式 SKIP(非 2 退出、不计失配,对齐
+    # ledger_reconcile 同数据源缺失的 SKIP 降级);单侧缺一侧有 → 运行配置
+    # 不对齐(SH_GRAPH_DIGESTS 一侧开一侧关),批级维度不可比,判 DEFECT。
+    digests_both_missing = not baseline["digests"] and not sensing["digests"]
+    digests_asymmetric = (not digests_both_missing
+                          and (not baseline["digests"]
+                               or not sensing["digests"]))
+    if digests_both_missing:
+        findings.append((
+            "SKIP", "graph_batch_digests 逐行对平(数据源两侧同缺)",
+            "graph_batch_digests.jsonl 默认不产出(env SH_GRAPH_DIGESTS=1 "
+            "开启);批级摘要逐行对平与批级 assignment 摘要对平本报告未核,"
+            "不计失配"))
+    elif digests_asymmetric:
+        findings.append((
+            "DEFECT", "graph_batch_digests 单侧缺失",
+            "baseline({} 行) sensing({} 行)——SH_GRAPH_DIGESTS 一侧开一侧"
+            "关,运行配置不对齐,批级维度不可比".format(
+                len(baseline["digests"]), len(sensing["digests"]))))
+    elif baseline["digests"] == sensing["digests"]:
         findings.append(("PASS", "graph_batch_digests 逐行一致",
                          "{} 行".format(len(baseline["digests"]))))
     else:
@@ -380,7 +478,18 @@ def main(argv=None) -> int:
                              baseline["kv_rows"], baseline["kv_digest"][:16],
                              sensing["kv_rows"],
                              sensing["kv_digest"][:16])))
-    if baseline["assignment_digest"] == sensing["assignment_digest"]:
+    if digests_both_missing:
+        findings.append((
+            "SKIP", "批级 assignment 摘要对平(graph_batch_digests 两侧同缺)",
+            "数据源默认不产出(env SH_GRAPH_DIGESTS=1 开启),同上 SKIP 行,"
+            "不计失配"))
+    elif digests_asymmetric:
+        findings.append((
+            "DEFECT", "批级 assignment 摘要对平不可比(graph_batch_digests "
+            "单侧缺失)",
+            "baseline({} 批) sensing({} 批)——见上方单侧缺失 DEFECT".format(
+                len(baseline["digests"]), len(sensing["digests"]))))
+    elif baseline["assignment_digest"] == sensing["assignment_digest"]:
         findings.append(("PASS", "批级 assignment 摘要一致(graph_batch_digests)",
                          "{} 批,sha256={}".format(
                              baseline["assignment_rows"],
@@ -402,8 +511,12 @@ def main(argv=None) -> int:
         diff_requests = sorted(
             set(baseline["completions"]) ^ set(sensing["completions"]))
         diff_ticks = [
-            (request_id, stage, baseline["completions"][request_id][stage],
-             sensing["completions"][request_id][stage])
+            # S6 修复(2026-09-29):元组取值曾用 [request_id][stage] 硬下标,
+            # 单侧缺失 stage(过滤用 .get(stage) 不拦)→ KeyError 裸崩;统一
+            # 照 _completion_tick_diffs 的 .get 写法,缺失侧计 None 进清单。
+            (request_id, stage,
+             baseline["completions"][request_id].get(stage),
+             sensing["completions"][request_id].get(stage))
             for request_id in sorted(set(baseline["completions"]) &
                                      set(sensing["completions"]))
             for stage in set(baseline["completions"][request_id]) |
@@ -482,7 +595,8 @@ def _render(report_path, baseline, sensing, findings, categories,
     lines.append("> 1177 requests / 112 sessions。")
     lines.append("> KV 决策载荷/批级 assignment 维度数据源 = 归档 jsonl")
     lines.append("> (缺陷 3 修复 2026-08-16:原 response_*.json 消费即删,")
-    lines.append("> 空==空假绿;空数据源现一律 fail-closed 退出 2)。")
+    lines.append("> 空==空假绿;核心数据源 fail-closed 退出 2,")
+    lines.append("> graph_batch_digests 两侧同缺时相关维度 SKIP 降级)。")
     lines.append("")
     lines.append("## 判定")
     lines.append("")
@@ -497,8 +611,9 @@ def _render(report_path, baseline, sensing, findings, categories,
     lines.append("| 真实完成事件时序 | {} | C++ 真实执行事实 tick 不同导致"
                  "后续决策 tick/内容不同(本报告预期 0:确定性运行) |".format(
                      categories.get("真实完成事件时序", 0)))
-    lines.append("| 排队状态差异 | {} | 决策输入(排队深度/KV 状态)在决策"
-                 "tick 不同(本报告预期 0) |".format(
+    lines.append("| 排队状态差异 | {} | 决策输入(排队深度/KV 状态)不同且不由"
+                 "完成事件时序解释——感知泄漏红线,判 DEFECT 退出 1(E1 修复;"
+                 "本报告预期 0) |".format(
                      categories.get("排队状态差异", 0)))
     lines.append("| 决策行数不一致 | {} | 决策序列长度不同(感知开/关决策"
                  "边界数不同)——契约:行数对不上 → 退出 1(DEFECT) |".format(
@@ -535,9 +650,13 @@ def _render(report_path, baseline, sensing, findings, categories,
     lines.append("")
     lines.append("`python3 online/verify/diff_explainability.py "
                  "--baseline-run <off_run> --sensing-run <on_run> "
-                 "--report <out>.md`;退出 0 = 全部差异已归类并解释;"
-                 "退出 1 = 存在无法归类的差异或行数不齐(DEFECT);"
-                 "退出 2 = 数据源缺失/为空(fail-closed)。")
+                 "--report <out>.md`;退出 0 = 全部差异已归类并解释且无排队"
+                 "状态差异;退出 1 = 存在无法归类的差异、行数不齐或排队状态"
+                 "差异(感知泄漏红线,DEFECT);"
+                 "退出 2 = 核心数据源缺失/为空(fail-closed);"
+                 "graph_batch_digests.jsonl 两侧同缺(默认不产出,env "
+                 "SH_GRAPH_DIGESTS=1 开启)时 digest 相关维度标 SKIP,不影响"
+                 "判定。")
     lines.append("")
     report_text = "\n".join(lines)
     if report_path:

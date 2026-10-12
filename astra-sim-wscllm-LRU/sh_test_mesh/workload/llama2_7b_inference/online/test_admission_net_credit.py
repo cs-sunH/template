@@ -54,7 +54,7 @@ from wsc_llm_scheduler import (  # noqa: E402
 )
 
 
-def _eviction(victim_instance_index, trigger_request_id, time_ns=1_000):
+def _eviction(victim_instance_index, trigger_request_id):
     """整体逐出:逐出对象 = remote_store KVTransfer(source_instance_index
     即受害实例,纪元唤醒/序列化消费同一字段;层域 [0, L) 全层)。"""
     from session_kv_manager import KVTransfer
@@ -148,7 +148,7 @@ def _runtime():
 
 def _scheduler(kv_manager):
     # __new__ 跳过 __init__,只补 _try_admit_prefill 触达的字段
-    # (test_train_machinery.py:71 同法)。
+    # (test_train_machinery.py 同法)。
     scheduler = WscLlmOnlineScheduler.__new__(WscLlmOnlineScheduler)
     scheduler.instances = [
         _OnlineInstanceState(index=0, phase_role=DECODE_ROLE),
@@ -158,8 +158,10 @@ def _scheduler(kv_manager):
     scheduler.capacity_epoch = [0, 0, 0, 0]
     scheduler.kv_manager = kv_manager
     # B3(2026-09-06):发射账本镜像 no-op 桩(见 _try_admit_prefill 接线)。
+    # C-2/M-25(2026-09-30):预占逐出决策时点就近发射入口——桩挂 no-op。
     scheduler.graph = SimpleNamespace(
-        sync_pending_history_after_evictions=lambda transfers: None)
+        sync_pending_history_after_evictions=lambda transfers: None,
+        emit_decode_eviction_actions=lambda *args, **kwargs: None)
     scheduler.config = SimpleNamespace(model=_STUB_MODEL)
     scheduler.topology = SimpleNamespace(instances=[SimpleNamespace(size=1)])
     return scheduler
@@ -181,8 +183,11 @@ class NetCreditStubTests(unittest.TestCase):
         prepare_history 迁移后以 credit 回补到全量,准入放行。"""
         from session_kv_manager import CapacityResult, HistoryDecision
 
-        e1 = _eviction(0, "session_0_request_1", time_ns=1_000)
-        e2 = _eviction(0, "session_0_request_1", time_ns=1_000)
+        # 口径注记(2026-09-30 审查):首行"失败带逐出"的伪造态在现
+        # 管理器下结构性不可达(blocked ⟹ evictions==()),此处用于驱动
+        # 净额重试的 credit 记账路径。
+        e1 = _eviction(0, "session_0_request_1")
+        e2 = _eviction(0, "session_0_request_1")
         credit = (200_000_000,)
         kv_manager = _StubKVManager(
             reservations=[
@@ -280,8 +285,8 @@ class NetCreditStubTests(unittest.TestCase):
         两次尝试的逐出(第一次的逐出是真实 mutation,不能丢)。"""
         from session_kv_manager import CapacityResult
 
-        e1 = _eviction(2, "session_0_request_1", time_ns=1_000)
-        e2 = _eviction(3, "session_0_request_1", time_ns=1_000)
+        e1 = _eviction(2, "session_0_request_1")
+        e2 = _eviction(3, "session_0_request_1")
         kv_manager = _StubKVManager(
             reservations=[
                 CapacityResult((e1,), False, (0,)),
@@ -543,7 +548,8 @@ class NetCreditRealManagerTests(unittest.TestCase):
         scheduler.capacity_epoch = [0, 0]
         scheduler.kv_manager = manager
         scheduler.graph = SimpleNamespace(
-            sync_pending_history_after_evictions=lambda transfers: None)
+            sync_pending_history_after_evictions=lambda transfers: None,
+            emit_decode_eviction_actions=lambda *args, **kwargs: None)
         scheduler.config = SimpleNamespace(model=manager.model)
         scheduler.topology = manager.topology
 

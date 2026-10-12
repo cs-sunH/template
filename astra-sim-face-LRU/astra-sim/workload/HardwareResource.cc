@@ -25,7 +25,8 @@ bool is_local_hbm_kv_restore(
 // 顺序即优先级：timer no-op -> local HBM KV restore -> HBM 专用槽；
 // 其余 MEM_LOAD/MEM_STORE -> remote MEM 槽（MEM 先于 CPU/COMP/COMM，与
 // Workload::issue 的节点分发一致，MEM 节点无论 is_cpu_op 都走远端/HBM
-// 发射腿）；再分类 CPU、COMP、COMM_RECV no-op、COMM。
+// 发射腿）；再分类 CPU、COMP、COMM_RECV no-op、COMM_COLL（③-lite 集合
+// 独立成类，不占 gpu_comm 单槽）、COMM。
 enum class ResourceClass {
     Timer,
     HbmRestore,
@@ -33,12 +34,29 @@ enum class ResourceClass {
     Cpu,
     Comp,
     CommRecv,
+    // 死锁真修 ③-lite（2026-10-11，自 WL 同构移植）：COMM_COLL（all_reduce
+    // /屏障）独立成类——集合通信不再占 gpu_comm 单槽等成员：等成员/交换
+    // 期间不阻塞同 rank 的 p2p（四方环闭合成分之三拆除）。计数观测、无
+    // 限额、available 恒真；同实例集合间仍由 per-rank 图 frontier 串行
+    // （体节点链位）。
+    CommColl,
     Comm,
+    // (2026-10-01) METADATA / INVALID nodes (and the zero-tensor COMP that
+    // skip_invalid finishes synchronously) used to fall through to Comm --
+    // inflating num_gpu_comms AND gating same-rank nodes behind the Comm
+    // single-slot availability during the transient occupancy (a timing
+    // side effect, not just a counting one). Give them a no-op class so
+    // the terminal counters stay per-semantic and the emit gate ignores
+    // them. (Zero-tensor COMP still classifies as Comp/Comm per shape:
+    // reading tensor_size here would duplicate Workload's skip decision on
+    // attribute surfaces that may be absent on metadata nodes.)
+    Other,
 };
 
 ResourceClass classify(const bool is_timer, const bool is_local_hbm_restore,
                        const bool is_cpu, const bool is_mem,
-                       const bool is_comp, const bool is_comm_recv) {
+                       const bool is_comp, const bool is_comm_recv,
+                       const bool is_comm_coll) {
     if (is_timer) {
         return ResourceClass::Timer;
     }
@@ -57,7 +75,28 @@ ResourceClass classify(const bool is_timer, const bool is_local_hbm_restore,
     if (is_comm_recv) {
         return ResourceClass::CommRecv;
     }
+    // ③-lite：COMM_COLL 独立成类、不占 gpu_comm 单槽（见 ResourceClass::
+    // CommColl 注记）。须在 Comm 兜底前。
+    if (is_comm_coll) {
+        return ResourceClass::CommColl;
+    }
     return ResourceClass::Comm;
+}
+
+// (2026-10-01) Terminal-status-aware classification wrapper: terminal
+// Skipped nodes (metadata / INVALID via Workload::skip_invalid; zero-tensor
+// COMP stays shape-classified, see the Other enum note) classify as Other.
+// All three public entries (occupy / release / is_available) must classify
+// the SAME node the SAME way -- the occupy/release pairing is symmetric.
+ResourceClass classify_with_status(
+    const bool is_timer, const bool is_local_hbm_restore,
+    const bool is_cpu, const bool is_mem, const bool is_comp,
+    const bool is_comm_recv, const bool is_comm_coll, const bool skipped) {
+    if (skipped) {
+        return ResourceClass::Other;
+    }
+    return classify(is_timer, is_local_hbm_restore, is_cpu, is_mem, is_comp,
+                    is_comm_recv, is_comm_coll);
 }
 
 // NDEBUG 无关的 fail-closed：Sys::call_events() 会吞 std::exception，
@@ -77,6 +116,7 @@ void occupy_class(HardwareResource& hr, const ResourceClass cls,
     switch (cls) {
         case ResourceClass::Timer:
         case ResourceClass::CommRecv:
+        case ResourceClass::Other:
             return;
         case ResourceClass::HbmRestore:
             if (hr.num_in_flight_hbm_dma_ops != 0) {
@@ -105,6 +145,12 @@ void occupy_class(HardwareResource& hr, const ResourceClass cls,
             // bypass，见 Workload::issue_dep_free_nodes 注释）。
             ++hr.num_in_flight_gpu_comp_ops;
             break;
+        case ResourceClass::CommColl:
+            // 死锁真修 ③-lite（2026-10-11，自 WL 同构移植）：集合不占
+            // gpu_comm 单槽等成员——计数观测（无单槽断言、无容量门），
+            // available 恒真；node-id 保留不适用（同 Timer/CommRecv）。
+            ++hr.num_in_flight_gpu_comm_coll_ops;
+            return;
         case ResourceClass::Comm:
             if (hr.num_in_flight_gpu_comm_ops != 0) {
                 resource_fatal("GPU comm single slot busy on occupy",
@@ -151,6 +197,7 @@ void release_class(HardwareResource& hr, const ResourceClass cls,
     switch (cls) {
         case ResourceClass::Timer:
         case ResourceClass::CommRecv:
+        case ResourceClass::Other:
             return;
         case ResourceClass::HbmRestore:
             if (hr.num_in_flight_hbm_dma_ops == 0) {
@@ -210,6 +257,13 @@ void release_class(HardwareResource& hr, const ResourceClass cls,
                 hr.gpu_ops_node.erase(node_id);
             }
             return;
+        case ResourceClass::CommColl:
+            if (hr.num_in_flight_gpu_comm_coll_ops == 0) {
+                resource_fatal("GPU comm-coll release underflow", hr.sys_id,
+                               node_id);
+            }
+            --hr.num_in_flight_gpu_comm_coll_ops;
+            return;
         case ResourceClass::Comm:
             if (hr.num_in_flight_gpu_comm_ops == 0) {
                 resource_fatal("GPU comm release underflow", hr.sys_id,
@@ -232,6 +286,7 @@ bool is_available_class(const HardwareResource& hr, const ResourceClass cls) {
     switch (cls) {
         case ResourceClass::Timer:
         case ResourceClass::CommRecv:
+        case ResourceClass::Other:
             return true;
         case ResourceClass::HbmRestore:
             return hr.num_in_flight_hbm_dma_ops == 0;
@@ -242,6 +297,10 @@ bool is_available_class(const HardwareResource& hr, const ResourceClass cls) {
             return hr.num_in_flight_cpu_ops == 0;
         case ResourceClass::Comp:
             return hr.num_in_flight_gpu_comp_ops == 0;
+        case ResourceClass::CommColl:
+            // ③-lite（2026-10-11，自 WL 同构移植）：集合永不因槽位阻塞
+            // issue（等成员不占槽）。
+            return true;
         case ResourceClass::Comm:
             return hr.num_in_flight_gpu_comm_ops == 0;
     }
@@ -257,6 +316,7 @@ HardwareResource::HardwareResource(
       num_in_flight_cpu_ops(0),
       num_in_flight_gpu_comp_ops(0),
       num_in_flight_gpu_comm_ops(0),
+      num_in_flight_gpu_comm_coll_ops(0),
       num_in_flight_hbm_dma_ops(0),
       num_in_flight_remote_mem_ops(0) {
 
@@ -269,24 +329,32 @@ HardwareResource::HardwareResource(
 void HardwareResource::occupy(
     const shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
     occupy_class(*this,
-                 classify(node->get_attr<bool>("is_timer_op", false),
-                          is_local_hbm_kv_restore(node), node->is_cpu_op(),
-                          node->type() == ChakraNodeType::MEM_LOAD_NODE ||
-                              node->type() == ChakraNodeType::MEM_STORE_NODE,
-                          node->type() == ChakraNodeType::COMP_NODE,
-                          node->type() == ChakraNodeType::COMM_RECV_NODE),
+                 classify_with_status(
+                     node->get_attr<bool>("is_timer_op", false),
+                     is_local_hbm_kv_restore(node), node->is_cpu_op(),
+                     node->type() == ChakraNodeType::MEM_LOAD_NODE ||
+                         node->type() == ChakraNodeType::MEM_STORE_NODE,
+                     node->type() == ChakraNodeType::COMP_NODE,
+                     node->type() == ChakraNodeType::COMM_RECV_NODE,
+                     node->type() == ChakraNodeType::COMM_COLL_NODE,
+                     node->type() == ChakraNodeType::INVALID_NODE ||
+                         node->type() == ChakraNodeType::METADATA_NODE),
                  node->id());
 }
 
 void HardwareResource::release(
     const shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
     release_class(*this,
-                  classify(node->get_attr<bool>("is_timer_op", false),
-                           is_local_hbm_kv_restore(node), node->is_cpu_op(),
-                           node->type() == ChakraNodeType::MEM_LOAD_NODE ||
-                               node->type() == ChakraNodeType::MEM_STORE_NODE,
-                           node->type() == ChakraNodeType::COMP_NODE,
-                           node->type() == ChakraNodeType::COMM_RECV_NODE),
+                  classify_with_status(
+                      node->get_attr<bool>("is_timer_op", false),
+                      is_local_hbm_kv_restore(node), node->is_cpu_op(),
+                      node->type() == ChakraNodeType::MEM_LOAD_NODE ||
+                          node->type() == ChakraNodeType::MEM_STORE_NODE,
+                      node->type() == ChakraNodeType::COMP_NODE,
+                      node->type() == ChakraNodeType::COMM_RECV_NODE,
+                      node->type() == ChakraNodeType::COMM_COLL_NODE,
+                      node->type() == ChakraNodeType::INVALID_NODE ||
+                          node->type() == ChakraNodeType::METADATA_NODE),
                   node->id());
 }
 
@@ -294,12 +362,16 @@ bool HardwareResource::is_available(
     const shared_ptr<Chakra::FeederV3::ETFeederNode> node) const {
     return is_available_class(
         *this,
-        classify(node->get_attr<bool>("is_timer_op", false),
-                 is_local_hbm_kv_restore(node), node->is_cpu_op(),
-                 node->type() == ChakraNodeType::MEM_LOAD_NODE ||
-                     node->type() == ChakraNodeType::MEM_STORE_NODE,
-                 node->type() == ChakraNodeType::COMP_NODE,
-                 node->type() == ChakraNodeType::COMM_RECV_NODE));
+        classify_with_status(
+            node->get_attr<bool>("is_timer_op", false),
+            is_local_hbm_kv_restore(node), node->is_cpu_op(),
+            node->type() == ChakraNodeType::MEM_LOAD_NODE ||
+                node->type() == ChakraNodeType::MEM_STORE_NODE,
+            node->type() == ChakraNodeType::COMP_NODE,
+            node->type() == ChakraNodeType::COMM_RECV_NODE,
+            node->type() == ChakraNodeType::COMM_COLL_NODE,
+            node->type() == ChakraNodeType::INVALID_NODE ||
+                node->type() == ChakraNodeType::METADATA_NODE));
 }
 
 
@@ -307,23 +379,31 @@ bool HardwareResource::is_available(
 
 void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
     occupy_class(*this,
-                 classify(node.is_timer_op, node.is_local_hbm_kv_restore,
-                          node.is_cpu_op,
-                          node.kind == ExecutionDriven::NodeKind::MemLoad ||
-                              node.kind == ExecutionDriven::NodeKind::MemStore,
-                          node.kind == ExecutionDriven::NodeKind::Compute,
-                          node.kind == ExecutionDriven::NodeKind::CommRecv),
+                 classify_with_status(
+                     node.is_timer_op, node.is_local_hbm_kv_restore,
+                     node.is_cpu_op,
+                     node.kind == ExecutionDriven::NodeKind::MemLoad ||
+                         node.kind == ExecutionDriven::NodeKind::MemStore,
+                     node.kind == ExecutionDriven::NodeKind::Compute,
+                     node.kind == ExecutionDriven::NodeKind::CommRecv,
+                     node.kind == ExecutionDriven::NodeKind::CommCollective,
+                     node.kind == ExecutionDriven::NodeKind::Invalid ||
+                         node.kind == ExecutionDriven::NodeKind::Metadata),
                  node.global_id);
 }
 
 void HardwareResource::release(const ExecutionDriven::NodeView& node) {
     release_class(*this,
-                  classify(node.is_timer_op, node.is_local_hbm_kv_restore,
-                           node.is_cpu_op,
-                           node.kind == ExecutionDriven::NodeKind::MemLoad ||
-                               node.kind == ExecutionDriven::NodeKind::MemStore,
-                           node.kind == ExecutionDriven::NodeKind::Compute,
-                           node.kind == ExecutionDriven::NodeKind::CommRecv),
+                  classify_with_status(
+                      node.is_timer_op, node.is_local_hbm_kv_restore,
+                      node.is_cpu_op,
+                      node.kind == ExecutionDriven::NodeKind::MemLoad ||
+                          node.kind == ExecutionDriven::NodeKind::MemStore,
+                      node.kind == ExecutionDriven::NodeKind::Compute,
+                      node.kind == ExecutionDriven::NodeKind::CommRecv,
+                      node.kind == ExecutionDriven::NodeKind::CommCollective,
+                      node.kind == ExecutionDriven::NodeKind::Invalid ||
+                          node.kind == ExecutionDriven::NodeKind::Metadata),
                   node.global_id);
 }
 
@@ -331,9 +411,13 @@ bool HardwareResource::is_available(
     const ExecutionDriven::NodeView& node) const {
     return is_available_class(
         *this,
-        classify(node.is_timer_op, node.is_local_hbm_kv_restore, node.is_cpu_op,
-                 node.kind == ExecutionDriven::NodeKind::MemLoad ||
-                     node.kind == ExecutionDriven::NodeKind::MemStore,
-                 node.kind == ExecutionDriven::NodeKind::Compute,
-                 node.kind == ExecutionDriven::NodeKind::CommRecv));
+        classify_with_status(
+            node.is_timer_op, node.is_local_hbm_kv_restore, node.is_cpu_op,
+            node.kind == ExecutionDriven::NodeKind::MemLoad ||
+                node.kind == ExecutionDriven::NodeKind::MemStore,
+            node.kind == ExecutionDriven::NodeKind::Compute,
+            node.kind == ExecutionDriven::NodeKind::CommRecv,
+            node.kind == ExecutionDriven::NodeKind::CommCollective,
+            node.kind == ExecutionDriven::NodeKind::Invalid ||
+                node.kind == ExecutionDriven::NodeKind::Metadata));
 }

@@ -13,8 +13,7 @@ namespace AstraSim {
 
 typedef unsigned long long Tick;
 
-constexpr uint64_t CLOCK_PERIOD = 1;           // 1ns
-constexpr uint64_t FREQ = 1000 * 1000 * 1000;  // 1GHz
+constexpr uint64_t CLOCK_PERIOD = 1;  // 1ns
 
 enum time_type_e { SE = 0, MS, US, NS, FS };
 
@@ -33,11 +32,6 @@ struct sim_request {
     uint64_t reqCount;
     uint32_t vnet;
     uint32_t layerNum;
-};
-
-class MetaData {
-  public:
-    timespec_t timestamp;
 };
 
 enum class ComType {
@@ -65,16 +59,14 @@ enum class InterDimensionScheduling {
     OfflineGreedy
 };
 
-enum class InjectionPolicy { Normal = 0 };
-
+// BusType was the discriminator of the removed SharedBusStat accounting
+// (2026-10-01); kept only as the historical enum site -- no live consumer.
 enum class BusType { Both = 0, Shared, Mem };
 
 enum class StreamState {
     Created = 0,
     Ready,
-    Executing,
-    Zombie,
-    Dead
+    Executing
 };
 
 enum class EventType {

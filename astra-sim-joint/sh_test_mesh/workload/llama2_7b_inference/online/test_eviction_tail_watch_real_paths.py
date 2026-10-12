@@ -8,37 +8,37 @@ test_joint_quota_integration.py（__new__ 替身骨架）互补：本文件用
 **真实 GraphBatchBuilder** + **真实 Sh30OnlineScheduler 方法**（被测方法
 零替身；骨架属性对齐 __init__ 初值，C11/F6 销账口径）驱动四条生产路径：
 
-  1. admission history/prefill 逐出旁支（graph_batch_builder.py :2190/:2353
-     watch_context；scheduler _emit_admission :5317 起、watch 注册段
-     :5322-5352，owner = rid#evict / rid#evict#prefill）；
-  2. decode joiner 旁支（graph_batch_builder.py :776-792
+  1. admission history/prefill 逐出旁支（graph_batch_builder.py 的
+     watch_context；scheduler _emit_admission 起、watch 注册段，
+     owner = rid#evict / rid#evict#prefill）；
+  2. decode joiner 旁支（graph_batch_builder.py
      decode_eviction_watch_id 透传；scheduler drain 时先登记
-     （_on_prefill_drain :1679-1697 内联块，本文件以同款真实原语镜像——
-     该块非独立方法）+ 构图时 _register_train_eviction_watches :2575
+     （_on_prefill_drain 内联块，本文件以同款真实原语镜像——
+     该块非独立方法）+ 构图时 _register_train_eviction_watches
      转正）；
   3. 失败准入旁支（graph_batch_builder.py emit_eviction_side_branch
-     :2003-2056；scheduler _emit_eviction_only_nodes :5128-5170，
+    ；scheduler _emit_eviction_only_nodes，
      watch_id = batch_train_evict_<rid>_side_<seq>）；
-  4. decode 增长旁支（scheduler :1675-1703 decode_evictions 段 +
+  4. decode 增长旁支（scheduler decode_evictions 段 +
      _emit_eviction_only_nodes）。
 
 判据（任务书 (a)-(e)）：
   (a) 主链 drain/service_done 释放边界之后旁支流/配额/watch 仍在场
       （主链释放不提前注销 #evict/#evict#prefill/#flow 旁支 owner）；
-  (b) 尾 watch 交付（_on_eviction_watch :2555-2573）仅释放本旁支的流与
+  (b) 尾 watch 交付（_on_eviction_watch）仅释放本旁支的流与
       配额——同场其他 owner 与未交付旁支不受扰动；
   (c) run 尾守恒：_pending_eviction_watches 空（:5938-5945）+
       _assert_quota_tracker_ledgers_clean（:3606，:5890 调用）+
       _assert_no_flow_registry_leaks（:3637，:5894 调用，三注册表）+
       _quota_enrolled 空（:5875）；
   (d) 空 shard 分支不造 watch（graph 只对确实发出节点的旁支返回 watch，
-      _register_eviction_watch docstring :2512-2513 声明的生产前提）；
-  (e) 重复/错阶段回调拒绝（_register_eviction_watch :2506 的
+      _register_eviction_watch docstring 声明的生产前提）；
+  (e) 重复/错阶段回调拒绝（_register_eviction_watch 的
       scheduled-twice / duplicate-owners / changed-owner / outside-batch /
       malformed / fired-before-scheduled / unknown / wrong-stage 分支）。
 
 表覆盖披露：生产现行逐出支链转移恒 remote_store（进链路表 + 池端口
-表）；HBM 端口表登记臂（_register_transfer_flows :2650-2655）只对
+表）；HBM 端口表登记臂（_register_transfer_flows）只对
 noc_migrate 生效——decode 增长用例以 API 合法的 noc_migrate 转移驱动
 该臂，钉住三注册表借还配对非空转（登记臂本身 = 生产代码原路径）。
 
@@ -224,6 +224,7 @@ def _make_scheduler(graph):
         "stay": 0, "copy": 0, "remote-read": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
+        "recompute_forced_action_mask": 0,
         "recompute_forced_quota_deferred": 0,
         "recompute_forced_evicted_permanent": 0,
     }
@@ -259,7 +260,7 @@ def _make_scheduler(graph):
 
 
 def _open_batch(scheduler, seq, tick):
-    """真实批次累加器（online_scheduler_base._start_batch :808-825 形态；
+    """真实批次累加器（online_scheduler_base._start_batch 形态；
     delta schema 门不是本测试被测面，故按生产形态直建）。"""
     scheduler._batch = {
         "delivery_sequence": seq,
@@ -280,7 +281,7 @@ def _open_batch(scheduler, seq, tick):
 def _remote_store_eviction(session_id, trigger_request_id, *,
                            source_instance_index, phase, reason):
     """生产同构的受害者整会话外迁：逐 TP rank 真实 XY 路由
-    （face_scheduler._remote_store_transfer :3503-3555 同构——
+    （face_scheduler._remote_store_transfer 同构——
     deterministic_xy_route 现算，路径长度 >= 2 ⇒ 链路表有真实条目）。"""
     source_ranks = (
         PREFILL_RANKS if source_instance_index == 0 else DECODE_RANKS)
@@ -315,8 +316,8 @@ def _remote_store_eviction(session_id, trigger_request_id, *,
 
 def _noc_migrate_eviction(session_id, trigger_request_id):
     """noc_migrate 转移（API 合法；仅用于驱动 _register_transfer_flows
-    的 HBM 端口登记臂 :2650-2655 与 _quota_transfer_footprint 的端点端口
-    判据 :2747-2753——生产现行逐出支链恒 remote_store，见模块头披露）。"""
+    的 HBM 端口登记臂 与 _quota_transfer_footprint 的端点端口
+    判据——生产现行逐出支链恒 remote_store，见模块头披露）。"""
     hardware = _hardware()
     shards = tuple(
         KVTransferShard(
@@ -427,11 +428,11 @@ def _decode_train_plan(joiner):
 
 
 def _drain_time_watch_entry(scheduler, runtime, evictions, tick):
-    """_on_prefill_drain :1679-1697 drain 时登记内联块的同款镜像
+    """_on_prefill_drain drain 时登记内联块的同款镜像
     （该块非独立方法，无法单独调用；逐行使用同一组真实原语——
     _next_eviction_watch_id / _register_transfer_flows /
     _quota_enroll_eviction_branch / pending dict 形态逐字段一致，
-    末行含 :1697 的 runtime 赋值）。
+    末行含 的 runtime 赋值）。
 
     2026-09-24 修复后全行可镜像：_OnlineRequestRuntime.__slots__ 已补
     ``decode_eviction_watch_id`` 并在 __init__ 置 None（修复前的
@@ -451,15 +452,16 @@ def _drain_time_watch_entry(scheduler, runtime, evictions, tick):
             (quota_owner,) if quota_owner is not None else ()),
         "scheduled": False,
     }
-    # sh30_online_scheduler.py:1697 的逐字生产语句（slots 修复后生效）。
+    # sh30_online_scheduler.py 的逐字生产语句（slots 修复后生效）。
     runtime.decode_eviction_watch_id = watch_id
     return watch_id
 
 
 def _assert_registry_owners(test, scheduler, expected):
     """三注册表 owner 在场断言（逐表显式——登记腿型决定归属：
-    remote_store → 链路+池端口（_register_transfer_flows :2646-2649）；
-    noc_migrate → 链路+HBM 端点（:2650-2655）；表内多余 owner 一并拒绝）。"""
+    remote_store → 链路+池端口+HBM 源读端点（D04 起，2026-09-26；
+    _register_transfer_flows）、noc_migrate → 链路+HBM 双端点；表内
+    多余 owner 一并拒绝）。"""
     actual = {
         "link": set(scheduler._joint_flows.leaked_owners()),
         "pool_port": set(scheduler._pool_ports.leaked_owners()),
@@ -471,13 +473,13 @@ def _assert_registry_owners(test, scheduler, expected):
 
 
 def _assert_run_tail_clean(test, scheduler):
-    """判据 (c)：run 尾守恒断言族（生产调用点 :5875/:5890/:5894/:5938）。"""
+    """判据 (c)：run 尾守恒断言族（生产调用点）。"""
     test.assertEqual(scheduler._pending_eviction_watches, {},
-                     "run tail :5938 condition violated")
+                     "run tail condition violated")
     test.assertEqual(scheduler._quota_enrolled, {},
-                     "run tail :5875 condition violated")
-    scheduler._assert_quota_tracker_ledgers_clean()   # :3606（:5890 调用）
-    scheduler._assert_no_flow_registry_leaks()        # :3637（:5894 调用）
+                     "run tail condition violated")
+    scheduler._assert_quota_tracker_ledgers_clean()   #（:5890 调用）
+    scheduler._assert_no_flow_registry_leaks()        #（:5894 调用）
 
 
 # ======================================================= 路径 1：准入旁支 ==
@@ -492,7 +494,7 @@ class AdmissionEvictionWatchRealPathTest(unittest.TestCase):
 
     def _setup_production_admission_state(self, runtime):
         """_try_admit_request 的发射前生产序列（:4892-4897 流登记 +
-        :4918 _quota_enroll_admission 入册——真实方法，非替身）。"""
+        _quota_enroll_admission 入册——真实方法，非替身）。"""
         self.scheduler._register_transfer_flows(
             tuple(runtime.history_transfers), owner=runtime.request_id)
         self.scheduler._register_transfer_flows(
@@ -523,7 +525,7 @@ class AdmissionEvictionWatchRealPathTest(unittest.TestCase):
             "r_other#evict", "r_other", flow_class=FLOW_ONESHOT,
             links=edges, now_ns=TICK_ADMIT))
 
-        # ---- 真实路径 1：_emit_admission（:5317；watch 注册 :5322-5352）。
+        # ---- 真实路径 1：_emit_admission（:5317；watch 注册）。
         self.scheduler._emit_admission(runtime, TICK_ADMIT)
 
         watches = self.scheduler._batch["watches"]
@@ -562,7 +564,7 @@ class AdmissionEvictionWatchRealPathTest(unittest.TestCase):
             pending[f"batch_train_evict_{RID}_admission_prefill"]
             ["quota_owners"], (RID + "#evict#prefill#quota",))
 
-        # ---- (a)：主链 drain 边界释放（_on_prefill_drain :1588/:1592 的
+        # ---- (a)：主链 drain 边界释放（_on_prefill_drain 的
         # 真实释放方法）后，旁支流/配额/watch 全部仍在场。
         self.scheduler._release_transfer_flows(RID)
         self.scheduler._quota_release_admission_phase(RID, TICK_DELIVER)
@@ -571,7 +573,8 @@ class AdmissionEvictionWatchRealPathTest(unittest.TestCase):
         _assert_registry_owners(self, self.scheduler, expected={
             "link": branch_owners,          # remote_store：链路腿在册
             "pool_port": branch_owners,     # remote_store：池端口腿在册
-            "hbm_port": (),                 # 非 noc_migrate：HBM 表不涉
+            # D04：remote_store 源 HBM 读端点同 owner 在册。
+            "hbm_port": branch_owners,
         })
         self.assertIn(RID + "#evict", self.scheduler._quota_enrolled)
         self.assertIn(RID + "#evict#prefill#quota",
@@ -588,7 +591,7 @@ class AdmissionEvictionWatchRealPathTest(unittest.TestCase):
         _assert_registry_owners(self, self.scheduler, expected={
             "link": (RID + "#evict#prefill", "r_other#evict"),
             "pool_port": (RID + "#evict#prefill", "r_other#evict"),
-            "hbm_port": (),
+            "hbm_port": (RID + "#evict#prefill", "r_other#evict"),
         })
         self.assertNotIn(RID + "#evict", self.scheduler._quota_enrolled)
         self.assertIn(RID + "#evict#prefill#quota",
@@ -602,7 +605,7 @@ class AdmissionEvictionWatchRealPathTest(unittest.TestCase):
         _assert_registry_owners(self, self.scheduler, expected={
             "link": ("r_other#evict",),
             "pool_port": ("r_other#evict",),
-            "hbm_port": (),
+            "hbm_port": ("r_other#evict",),
         })
         self.assertNotIn(RID + "#evict#prefill#quota",
                          self.scheduler._quota_enrolled)
@@ -680,7 +683,7 @@ class DecodeJoinerAndGrowthWatchRealPathTest(unittest.TestCase):
             self.scheduler._pending_eviction_watches[joiner_watch_id]
             ["scheduled"])
         # 边缘同 rank 逐出（路径长 1）配额足迹为空 ⇒ 生产语义 = 不入册
-        # （_quota_enroll_eviction_branch :2590-2592 空足迹早退）。
+        # （_quota_enroll_eviction_branch 空足迹早退）。
         self.assertEqual(
             self.scheduler._pending_eviction_watches[joiner_watch_id]
             ["quota_owners"], ())
@@ -695,9 +698,9 @@ class DecodeJoinerAndGrowthWatchRealPathTest(unittest.TestCase):
         self.assertEqual(growth_watch_id,
                          f"batch_train_evict_{RID}_side_0000")
         # branch 字段由图侧发射器统一标注（emit_eviction_side_branch
-        # :2054 的返回形态；调度器不改写——通道差异由 watch id 相位区分）。
+        # 的返回形态；调度器不改写——通道差异由 watch id 相位区分）。
         self.assertEqual(growth_watch["branch"], "failed_admission")
-        # kv_eviction 咽喉点行（R17-1b，:5152-5158）已落。
+        # kv_eviction 咽喉点行（R17-1b 段）已落。
         self.assertEqual(
             [row["kind"] for row in self.scheduler.online_log_rows
              if row["kind"] == "kv_eviction"],
@@ -707,8 +710,8 @@ class DecodeJoinerAndGrowthWatchRealPathTest(unittest.TestCase):
                       self.scheduler._hbm_ports.leaked_owners())
 
         # ---- 路径 2 后半：真实构图（joiner 计划透传 drain 时 watch id，
-        # graph_batch_builder :776-780）→ _register_train_eviction_watches
-        # 转正（:2575-2583）。watch id 经 :1236-1238 的生产消费面
+        # graph_batch_builder）→ _register_train_eviction_watches
+        # 转正（_register_train_eviction_watches）。watch id 的生产消费面
         # （getattr(runtime, "decode_eviction_watch_id", None)）取自
         # drain 登记写入的字段，非测试直填。
         self.assertEqual(runtime.decode_eviction_watch_id, joiner_watch_id)
@@ -733,15 +736,18 @@ class DecodeJoinerAndGrowthWatchRealPathTest(unittest.TestCase):
         self.assertEqual(len(self.scheduler._batch["watches"]), 2)
 
         # ---- (a)：decode 主链释放（service_done 边界 _release_transfer_
-        # flows(rid#decode) :1839 + _quota_release_decode_phase :3122）后
+        # flows(rid#decode) + _quota_release_decode_phase）后
         # 两个旁支 owner 与 watch 仍在场（joiner 逐出源=边缘同 rank，路径
-        # 长 1 不进链路表、只进池端口表；growth noc_migrate 进链路+HBM 表）。
+        # 长 1 不进链路表、只进池端口表 + HBM 源读端点——修复轮三
+        # 2026-09-27 执行侧零距离端点登记：remote_store 端点登记无条件；
+        # growth noc_migrate 进链路+HBM 表）。
         self.scheduler._release_transfer_flows(RID + "#decode")
         self.scheduler._quota_release_decode_phase(RID, TICK_DELIVER)
         _assert_registry_owners(self, self.scheduler, expected={
             "link": (growth_watch_id + "#flow",),
             "pool_port": (joiner_watch_id + "#flow",),
-            "hbm_port": (growth_watch_id + "#flow",),
+            "hbm_port": (growth_watch_id + "#flow",
+                         joiner_watch_id + "#flow",),
         })
         self.assertEqual(len(self.scheduler._pending_eviction_watches), 2)
 
@@ -750,7 +756,7 @@ class DecodeJoinerAndGrowthWatchRealPathTest(unittest.TestCase):
             growth_watch_id, STAGE_PREFILL, TICK_DELIVER)
         _assert_registry_owners(self, self.scheduler, expected={
             "link": (), "pool_port": (joiner_watch_id + "#flow",),
-            "hbm_port": ()})
+            "hbm_port": (joiner_watch_id + "#flow",)})
         self.assertNotIn(growth_watch_id + "#quota",
                          self.scheduler._quota_enrolled)
         # joiner 旁支无配额足迹（见上），其流半边仍在场由上方注册表断言
@@ -798,7 +804,7 @@ class FailedAdmissionWatchRealPathTest(unittest.TestCase):
 
     def test_failed_admission_branch_releases_on_tail_watch(self):
         """(a)(b)(c)+路径 3：失败准入旁支发射/披露/注册 → 主链回滚边界
-        （_rollback_admission_registrations :5110-5112 真实释放）不提前
+        （_rollback_admission_registrations 真实释放）不提前
         注销 → 尾 watch 交付释放 → run 尾守恒。"""
         evictions = (_remote_store_eviction(
             SESSION_VICTIM, RID, source_instance_index=0, phase="admission",
@@ -833,7 +839,7 @@ class FailedAdmissionWatchRealPathTest(unittest.TestCase):
         self.assertIn(watch_id + "#quota", self.scheduler._quota_enrolled)
 
         # ---- 图侧缺省 watch id（emit_eviction_side_branch watch_id=None
-        # 分支 :2021-2023）：failed_q 形态一并钉住。序号取该 trigger 的
+        # 分支）：failed_q 形态一并钉住。序号取该 trigger 的
         # per-transfer action state（:2019-2023）——上一分支已消费 seq 0，
         # 故缺省分支 = q001（同 trigger 发射序延续口径）。
         default_watch = self.builder.emit_eviction_side_branch(
@@ -851,7 +857,8 @@ class FailedAdmissionWatchRealPathTest(unittest.TestCase):
         _assert_registry_owners(self, self.scheduler, expected={
             "link": (watch_id + "#flow",),
             "pool_port": (watch_id + "#flow",),
-            "hbm_port": (),
+            # D04：remote_store 源 HBM 读端点同 owner 在册。
+            "hbm_port": (watch_id + "#flow",),
         })
         self.assertIn(watch_id, self.scheduler._pending_eviction_watches)
 
@@ -869,7 +876,7 @@ class FailedAdmissionWatchRealPathTest(unittest.TestCase):
     def test_emit_eviction_only_nodes_empty_cases_make_no_watch(self):
         """(d) 路径 3/4：空转移集与空 shard 转移都不造 watch/流/配额
         （:5146-5147 早退 + emit_eviction_side_branch members 空返 None，
-        flow/quota/watch 注册段 :5161-5169 不可达）。"""
+        flow/quota/watch 注册段 不可达）。"""
         self.assertIsNone(self.scheduler._emit_eviction_only_nodes(
             (), TICK_ADMIT, trigger_request_id=RID))
         victim = _remote_store_eviction(
@@ -1025,21 +1032,19 @@ class EvictionWatchGuardBranchesTest(unittest.TestCase):
 class DrainRegistrationSlotsFixPinTest(unittest.TestCase):
     """2026-09-24 修复行为的钉测：_OnlineRequestRuntime 此前 __slots__
     不含 ``decode_eviction_watch_id`` 且无 __dict__，_on_prefill_drain
-    :1697 的 drain 登记赋值一旦执行必 AttributeError（潜伏缺陷——
-    :1679 门在现行 joint 模式下结构性不可达，见下）。修复 = slots 补
+    的 drain 登记赋值一旦执行必 AttributeError（潜伏缺陷——
+    门在现行 joint 模式下结构性不可达，见下）。修复 = slots 补
     声明 + __init__ 置 None；本用例钉住修复后行为：
 
     - slot 在册、初值 None（:1236 消费面 getattr 容缺省的显式化）；
     - 生产语句逐字执行成功且值可读回。
 
     可达性刻画（维持登记，非缺陷移除理由）：:1679 门 = decode_
-    evictions 非空且含 shard；三个来源在现行 joint 模式下结构性恒空
-    ——move_request_capacity_reservation 同实例恒 ()（face_scheduler
-    :2359-2377，红线 #4）、move_prefill_to_decode 同实例恒 ()（:4630-
-    4645）、decode_growth_evictions 字面 ()（sh30:1675）——decode
-    joiner 逐出 watch 链路现行 run 不 engag；一旦任何来源产生
-    decode_evictions（P/D 拆分激活、红线松动、策略变更），链路即按
-    本文件路径 2 的钉测形态运转。"""
+    evictions 非空且含 shard；D18（2026-09-26）起 P→D 边界二次决策
+    允许 decode 实例切换——跨实例迁移与预约事务的逐出经本登记面进图
+    （D20 `commit_stage_reservation_transaction` / `move_prefill_to_
+    decode` 跨实例分支产生非空 decode_evictions），链路即按本文件路
+    径 2 的钉测形态运转；同实例继续（平局优先）恒 () 不 engag。"""
 
     def test_production_drain_assignment_succeeds_after_slot_fix(self):
         runtime = _OnlineRequestRuntime({
@@ -1056,7 +1061,7 @@ class DrainRegistrationSlotsFixPinTest(unittest.TestCase):
         self.assertIn("decode_eviction_watch_id",
                       type(runtime).__slots__)
         self.assertIsNone(runtime.decode_eviction_watch_id)
-        # sh30_online_scheduler.py:1697 的逐字生产语句。
+        # sh30_online_scheduler.py 的逐字生产语句。
         runtime.decode_eviction_watch_id = (
             f"batch_train_evict_{RID}_decode_joiner_0000")
         self.assertEqual(runtime.decode_eviction_watch_id,

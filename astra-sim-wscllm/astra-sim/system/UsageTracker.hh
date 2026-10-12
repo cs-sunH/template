@@ -19,6 +19,9 @@ class UsageTracker {
   public:
     // History is a diagnostic feature.  Online schedulers only need the
     // current level, while static/reporting paths retain the legacy default.
+    // Test-only diagnostics: neither current_level nor the usage history
+    // feeds any simulation decision; their only readers are the
+    // execution-driven regression tests.
     UsageTracker(int levels, bool retain_history = true);
     void increase_usage();
     void decrease_usage();

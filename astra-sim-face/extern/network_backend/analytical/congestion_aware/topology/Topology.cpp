@@ -19,11 +19,35 @@ Topology::Topology() noexcept : npus_count(-1), devices_count(-1), dims_count(-1
 
 std::shared_ptr<const FluidRoute> Topology::fluid_route(const DeviceId src,
                                                         const DeviceId dest) const noexcept {
+    // Fail closed on self-send (2026-09-30, mirrored from the joint repo).
+    // With src == dest every concrete topology degenerates differently:
+    // Mesh/Ring/MultiDimTopology return a single-device route (a size<2
+    // route), FullyConnected returns a link-less device pair (no src->src
+    // link exists), and Switch silently models a 2-hop self-loop that
+    // changes the send timing. None of these is a meaningful send, so
+    // funnel them all into one explicit error here, where every route
+    // request passes through.
+    if (src == dest) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "self-send is not supported: route requested with "
+                  << "src == dest (device " << src << ")" << std::endl;
+        std::exit(-1);
+    }
+
     const auto key = (static_cast<uint64_t>(static_cast<uint32_t>(src)) << 32U) |
                      static_cast<uint32_t>(dest);
     const auto cached = fluid_route_cache.find(key);
     if (cached != fluid_route_cache.end()) {
         return cached->second;
+    }
+    // Bound the cache (2026-09-30, mirrored from the joint repo): route()
+    // is a pure function of the immutable topology, so a wholesale clear
+    // can never change any computed route -- it only recomputes. Without
+    // this the cache grows to npus^2 entries for the whole simulation
+    // lifetime.
+    constexpr size_t kFluidRouteCacheCapacity = 1u << 20;
+    if (fluid_route_cache.size() >= kFluidRouteCacheCapacity) {
+        fluid_route_cache.clear();
     }
 
     const auto device_route = route(src, dest);

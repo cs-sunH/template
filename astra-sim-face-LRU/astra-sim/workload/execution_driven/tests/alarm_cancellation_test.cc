@@ -48,9 +48,10 @@ Exit code 0 on ALL PASS.
 #include <astra-network-analytical/congestion_aware/Helper.h>
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
-#include <cassert>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -68,11 +69,17 @@ using namespace NetworkAnalyticalCongestionAware;
 namespace {
 
 // ---- assertion helpers (same style as local_hbm_model_test.cc) ----
+// X5 (face-LRU audit, 2026-09-29): record failures and keep running --
+// std::exit(1) on the first failure skipped every later Case (B/C/D) and
+// its diagnostics, and triggered static destructors mid-run. The exit code
+// is decided once at the end of main.
+
+bool g_all_passed = true;
 
 void expect_true(const bool cond, const char* const what) {
     std::printf("%-62s -> %s\n", what, cond ? "PASS" : "FAIL");
     if (!cond) {
-        std::exit(1);
+        g_all_passed = false;
     }
 }
 
@@ -151,7 +158,15 @@ const char* kRemoteMemoryJson = R"({
 
 void write_text(const std::string& path, const std::string& content) {
     std::ofstream out(path);
-    assert(out.is_open());
+    // Fail-closed explicitly: assert() compiles to a no-op under the default
+    // Release/-DNDEBUG build, so a failed open must abort the run here with
+    // the offending path in the diagnostics.
+    if (!out.is_open()) {
+        const int open_errno = errno;
+        std::printf("write_text: cannot open '%s' (errno=%d: %s)\n",
+                    path.c_str(), open_errno, std::strerror(open_errno));
+        std::exit(1);
+    }
     out << content;
 }
 
@@ -472,7 +487,16 @@ int main() {
     std::vector<char> buffer(tmp_template.begin(), tmp_template.end());
     buffer.push_back('\0');
     const char* const made = mkdtemp(buffer.data());
-    assert(made != nullptr);
+    // Fail-closed explicitly: assert() is a no-op under Release/-DNDEBUG, and
+    // a null mkdtemp result would make the config_dir construction below a
+    // null-pointer dereference. Abort with diagnostics instead.
+    if (made == nullptr) {
+        const int mkdtemp_errno = errno;
+        std::printf("mkdtemp('%s') failed (errno=%d: %s)\n",
+                    tmp_template.c_str(), mkdtemp_errno,
+                    std::strerror(mkdtemp_errno));
+        std::exit(1);
+    }
     const std::string config_dir(made);
     write_text(config_dir + "/system.json", kSystemJson);
     write_text(config_dir + "/network.yml", kNetworkYaml);
@@ -496,8 +520,8 @@ int main() {
     fixture.sys = nullptr;
     test_legacy_backend_fallback(config_dir, memory_api);
 
-    std::printf("ALL PASS\n");
+    std::printf("%s\n", g_all_passed ? "ALL PASS" : "FAILURES PRESENT");
     std::error_code ec;
     std::filesystem::remove_all(config_dir, ec);
-    return 0;
+    return g_all_passed ? 0 : 1;
 }

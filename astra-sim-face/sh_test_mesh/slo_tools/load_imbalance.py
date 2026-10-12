@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""WP7 负载不均衡度（离线重建，五仓逐字节相同，标准库实现）。
+"""WP7 负载不均衡度（离线重建，同源变体族——各仓存在登记的预期差异，
+勿跨仓直接覆盖同步；标准库实现）。
 
 算法严格按主规格 §1.5-A：
 
@@ -21,6 +22,15 @@
     准入路径同步拼 P 侧行），admission→drain 区间 100% 零长度，wscllm
     全仓 time_avg_backlog 退化为 0；exits 终态行在五仓账本格式下均每请求
     恰一行，0902 批次实测 0 重复/0 缺失/0 零长度区间。）
+    口径限制（M12/R5-S2 登记）：drain 端点 = 列车台账行的发射 tick——
+    train_ledger 行只携带 {train_id, instance_index, tick, iterations,
+    member_count, member_iterations, joiners, drains, exits, prefill_
+    chunks, pass_spans, first_step}，无列车完成时刻字段（span_end_ns 或
+    同义字段，2026-09-29 全字段核对），故末列车发射后的执行时长不进
+    积压区间，time_avg_backlog 族系统性截掉末列车执行时长（系统性偏
+    低，偏 short-run 侧）；与 metrics_postprocess 的 completion_ns 口径
+    （请求级完成时刻）不可直接对数。待账本补充完成时刻字段后在此延展
+    drain 端点。
 
 统计口径：每实例时间平均积压 b̄_i = Σ(桶内积压×桶长)/总跨度；
 CV = stdev_population(b̄_i)/mean(b̄_i)；Max/Mean = max(b̄_i)/mean(b̄_i)。
@@ -32,7 +42,6 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -55,7 +64,7 @@ EXPLICIT_ADMISSION_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def li_prepare(repo_variant: str) -> dict:
+def li_prepare() -> dict:
     """decision-log 扫描态（A4：driver 单遍复用；CLI 路径同构）。"""
     return {"admissions": {}, "decode_instances": {}}
 
@@ -70,14 +79,16 @@ def li_consume_decision(record: dict, repo_variant: str, state: dict) -> None:
         return  # 原循环体的 continue（无 request_id 行不参与归集）
     decision = record.get("decision") or {}
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    # (2026-10-01) bool 亦拒(生产方恒发 int,纯防御,对齐族纪律)。
+    if not isinstance(tick, int) or isinstance(tick, bool):
         fail(f"decision log 行缺整数 tick（kind={kind!r}, "
              f"request={request_id!r}）")
     if kind == "prefill":
         admission = tick
         for field in EXPLICIT_ADMISSION_FIELDS.get(repo_variant, ()):
             value = decision.get(field)
-            if isinstance(value, int):
+            # (2026-10-01) bool 亦拒。
+            if isinstance(value, int) and not isinstance(value, bool):
                 admission = value
                 break
         if request_id in admissions:
@@ -85,15 +96,25 @@ def li_consume_decision(record: dict, repo_variant: str, state: dict) -> None:
         admissions[request_id] = admission
     elif kind == "decode":
         instance = decision.get("decode_instance_index")
-        if not isinstance(instance, int):
+        if not isinstance(instance, int) or isinstance(instance, bool):
             fail(f"请求 {request_id} 的 decode 决策缺整数 "
                  f"decode_instance_index（逐仓字段映射失效？repo="
                  f"{repo_variant}）")
+        # 2026-09-28 查重补齐（同文件 prefill 分支同型；与
+        # hbm_watermark.WatermarkScan.seen_kinds 对 (request_id, kind)
+        # 的恰一次不变量同口径）：decode 重复原先静默后者覆盖。
+        if request_id in decode_instances:
+            fail(f"请求 {request_id} 出现多次 decode 决策（应恰一次）")
         decode_instances[request_id] = instance
 
 
 def li_collect_drains(run_dir: Path) -> tuple[dict, int]:
-    """train_ledger 读（仅本工具使用，保留独立读；读数仍 1 次）。"""
+    """train_ledger 读（仅本工具使用，保留独立读；读数仍 1 次）。
+
+    drain 端点口径（M12/R5-S2）：取账本行发射 tick，非列车完成时刻——
+    账本行无完成时刻字段可取（见模块 docstring 口径限制登记），
+    time_avg_backlog 因此系统性截掉末列车执行时长。
+    """
     drains: dict[str, tuple[int, int]] = {}  # request_id -> (tick, instance)
     skipped_first_step_rows = 0
     for record in iter_jsonl(run_dir / TRAIN_LEDGER_RELPATH):
@@ -117,7 +138,9 @@ def li_collect_drains(run_dir: Path) -> tuple[dict, int]:
             fail("train_ledger 记录缺 exits 数组（schema 不符）")
         tick = record.get("tick")
         instance = record.get("instance_index")
-        if not isinstance(tick, int) or not isinstance(instance, int):
+        if (not isinstance(tick, int) or isinstance(tick, bool)
+                or not isinstance(instance, int)
+                or isinstance(instance, bool)):
             fail("train_ledger 记录缺整数 tick/instance_index（schema 不符）")
         for request_id in exited:
             if not isinstance(request_id, str):
@@ -134,7 +157,6 @@ def li_assemble_intervals(state: dict, drains: dict,
     admissions = state["admissions"]
     decode_instances = state["decode_instances"]
     intervals = []
-    skipped_no_admission = []
     skipped_no_decode = []
     skipped_no_drain = []
     skipped_bad_order = []
@@ -181,7 +203,7 @@ def li_assemble_intervals(state: dict, drains: dict,
 
 def collect_intervals(run_dir: Path, repo_variant: str) -> list[dict]:
     """逐请求 (instance, admission→drain) 区间重建（CLI/独立调用入口）。"""
-    state = li_prepare(repo_variant)
+    state = li_prepare()
     for record in iter_jsonl(run_dir / DECISION_LOG_RELPATH):
         li_consume_decision(record, repo_variant, state)
     drains, skipped_first_step_rows = li_collect_drains(run_dir)
@@ -210,7 +232,11 @@ def instance_timeavg_backlog(intervals: list[dict], bucket_ns: int,
     """各 instance 积压 → 时间平均积压（返回 instance -> (b̄, n_req)）。
 
     桶 j 覆盖 [span_start + j*bucket, +bucket)；请求区间对桶的覆盖按
-    时间重叠 >0 计入（区间端点闭开 [admission, drain)）。
+    时间重叠计入（区间端点闭开 [admission, drain)）。零长区间约定
+    （2026-09-26 M8-9 明示）：admission==drain 且落点在桶内（不落桶
+    右边界）时仍计 1 个桶（重叠为 0 亦计数）——与
+    _interval_covered_buckets 实现及 tests/run_golden_live.py 的独立
+    手算口径一致，属既定裁决而非疏漏。
 
     2026-08-30 爆内存根治：原实现为每实例预分配 ``[0] * n_buckets``
     稠密分桶序列并逐桶累加，稠密序列的唯一消费方式是
@@ -265,7 +291,7 @@ def cmd_load_imbalance(args: argparse.Namespace) -> int:
     manifest = load_slo_manifest(args.manifest or default_manifest_path())
     bucket_ns = load_imbalance_bucket_ns(manifest)
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
-    state = li_prepare(repo_variant)
+    state = li_prepare()
     for record in iter_jsonl(args.run_dir / DECISION_LOG_RELPATH):
         li_consume_decision(record, repo_variant, state)
     return load_imbalance_finish(args, repo_variant, bucket_ns, state)

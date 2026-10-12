@@ -62,7 +62,7 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
                       << std::endl;
             std::exit(-1);
         }
-        link_states.push_back({link->get_id(), link->get_bandwidth_Bpns(), {}});
+        link_states.push_back({link->get_bandwidth_Bpns(), {}});
     }
 }
 
@@ -90,9 +90,9 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
         flush_scheduled = true;
         if (deferred_flush_mode) {
             // Online/deferred mode: never insert a current_time event into the
-            // main queue from a tick-end/deferred context (EventQueue :33
-            // strict-increase assert). Post-commit comm emission lands here and
-            // is executed by the same-tick deferred drain.
+            // main queue from a tick-end/deferred context (EventQueue.cpp 的
+            // same-tick 严格递增守卫，fail-closed exit)。Post-commit 通信
+            // 发射落在这里、由同 tick 的 deferred drain 执行。
             event_queue->schedule_event_deferred(flush_callback, this);
         } else {
             // Static mode (pre-extension behavior, byte-for-byte preserved):
@@ -407,18 +407,34 @@ void FluidScheduler::cancel_scheduled_wakeup() noexcept {
         static_cast<void>(event_queue->cancel_event(scheduled_wakeup_event));
     }
     scheduled_wakeup_event.reset();
+    // Keep the invariant "no live event => no scheduled time"; a stale
+    // timestamp without a live event would make schedule_next_wakeup()
+    // early-return forever and starve the remaining flows.
+    scheduled_wakeup_time.reset();
 }
 
 void FluidScheduler::schedule_next_wakeup() noexcept {
     clean_completion_heap();
     if (completion_heap.empty()) {
+        if (active_flow_count > 0) {
+            std::cerr << "[FluidWakeupDiag] heap_empty_with_active_flows="
+                      << active_flow_count
+                      << " time_ns=" << event_queue->get_current_time()
+                      << " wakeup_event=" << (scheduled_wakeup_event.valid() ? 1 : 0)
+                      << " wakeup_time="
+                      << (scheduled_wakeup_time.has_value()
+                              ? static_cast<long long>(scheduled_wakeup_time.value())
+                              : -1)
+                      << std::endl;
+        }
         cancel_scheduled_wakeup();
         scheduled_wakeup_time.reset();
         return;
     }
 
     const auto next_time = completion_heap.top().predicted_finish_time;
-    if (scheduled_wakeup_time.has_value() && next_time >= scheduled_wakeup_time.value()) {
+    if (scheduled_wakeup_event.valid() && scheduled_wakeup_time.has_value()
+        && next_time >= scheduled_wakeup_time.value()) {
         return;
     }
 
@@ -467,6 +483,16 @@ void FluidScheduler::schedule_tail_arrival(FluidFlow& flow, const EventTime now)
 
 void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
     if (generation != wakeup_generation) {
+        std::cerr << "[FluidWakeupDiag] stale_fire generation=" << generation
+                  << " current_gen=" << wakeup_generation
+                  << " event_valid=" << (scheduled_wakeup_event.valid() ? 1 : 0)
+                  << " time_ns=" << event_queue->get_current_time() << std::endl;
+        if (!scheduled_wakeup_event.valid()) {
+            // Stale fire with no live wakeup left: without recovery the
+            // remaining flows would never be scheduled again.
+            scheduled_wakeup_time.reset();
+            schedule_next_wakeup();
+        }
         return;
     }
     // This wakeup was popped before its callback began; it cannot be
@@ -570,6 +596,9 @@ void FluidScheduler::report_progress() const noexcept {
               << " completed_flows=" << total_completed_flows
               << " route_memberships=" << active_route_memberships
               << " heap=" << completion_heap.size() << " peak_heap=" << peak_completion_heap_size
+              << " wakeup_time=" << (scheduled_wakeup_time.has_value() ? static_cast<long long>(scheduled_wakeup_time.value()) : -1)
+              << " wakeup_event=" << (scheduled_wakeup_event.valid() ? 1 : 0)
+              << " wakeup_gen=" << wakeup_generation
               << " dirty_average=" << dirty_average << " dirty_max=" << max_dirty_flows;
     for (size_t i = 0; i < std::min<size_t>(3, congestion.size()); ++i) {
         std::cerr << " congested_link_" << i << '=' << congestion[i].second << ':' << congestion[i].first;

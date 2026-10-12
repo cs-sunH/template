@@ -13,7 +13,10 @@ CLI:
      零 polling;决策异常 => error response + exit 1(fail-closed);
      EOF(C++ 关闭写端)= 运行结束:verify_run_end + 日志消费完整性校验,
      并把 graph_batch_digests.jsonl / online_decision_log.jsonl 写入
-     bridge_dir(每次 GraphBatch 产出顺带写 digest 行;决策行同批追加)。
+     bridge_dir(决策行同批追加;digest 行按 SH_GRAPH_DIGESTS 开关——
+     # (2026-09-30) py-online-C3 如实化:生产默认 SH_GRAPH_DIGESTS=0
+     不产出 digest 文件,仅显式 =1 时每次 GraphBatch 产出顺带写行,
+     旧"恒写"描述与 C2/D2 开关口径不符)。
 
 strategy 模式(步骤 1-9 的 FaceOnlineScheduler):真实策略(关感知)在
 在线骨架中运行(决策由策略实时产出)。
@@ -38,6 +41,11 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 
 from generate_face_trace import load_face_trace_config  # noqa: E402
 from online.decision_bridge import BridgeServer  # noqa: E402
+from online.die_model_oracle import (  # noqa: E402
+    MANIFEST_COMPUTE_COST_MODEL_KEY,
+    DieModelOracle,
+    resolve_die_model_config_path,
+)
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
 
 
@@ -66,9 +74,8 @@ class _JsonlSink:
     """jsonl 逐行落盘器(M3 流式落盘 + B2 常驻 fd,2026-08-23)。
 
     常驻 fd:构造(或首行)时打开一次,__call__ 只 write+flush,结束
-    close——不再每行 open/close。行格式与 _write_jsonl 完全一致
-    (json.dumps(row, sort_keys=True) + "\\n"),行序不变 ⇒ 与改前结束
-    一次性写出的文件逐字节相同。
+    close——不再每行 open/close。行格式 json.dumps(row, sort_keys=True)
+    + "\\n",行序不变 ⇒ 与改前结束一次性写出的文件逐字节相同。
 
     eager=True:构造即截断建文件(与改前"结束统一写出"对 0 行也建空
     文件的口径一致;digest/decision_log/profile 用);
@@ -122,12 +129,6 @@ class _NullSink:
         pass
 
 
-def _write_jsonl(path: str, rows: list) -> None:
-    with open(path, "w", encoding="utf-8") as output:
-        for row in rows:
-            output.write(json.dumps(row, sort_keys=True) + "\n")
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="face online decision service")
     parser.add_argument("--bridge-dir", required=True,
@@ -142,6 +143,16 @@ def main(argv=None) -> int:
                         help="阶段 3 感知开关(默认关,阶段 6 前默认关):分层"
                              "账本最小子集 + 两层剩余负载查询;感知数据是"
                              "查询/审计输入,不进策略判据,决策序列不变")
+    parser.add_argument(
+        "--die-model-lib", default=None,
+        help="阶段 D(face-LRU 随迁):libdie_model_cabi.so 路径(缺省 env "
+             "DIE_MODEL_CABI_PATH → 仓内 build 发现序,见 "
+             "online/die_model_oracle.py;fail-closed,不回退 roofline)")
+    parser.add_argument(
+        "--die-model-config", default=None,
+        help="阶段 D(face-LRU 随迁):resolved_die_model.json 路径(缺省 env "
+             "DIE_MODEL_CONFIG_PATH → 仓内发现 → manifest 的 "
+             "die-model-config 键)")
     args = parser.parse_args(argv)
 
     manifest_path = os.path.join(args.plan_dir, "manifest.json")
@@ -160,6 +171,48 @@ def main(argv=None) -> int:
 
     # 根因 #5(蓝本裁决 2026-08-15 第三项):strategy 模式保持物理跨 request 链。
     graph = GraphBatchBuilder(config)
+
+    # 阶段 D(2026-10-03,契约 §3.2/§7 裁定 2;face-LRU 随迁):计算成本
+    # 后端选择。backend=die(manifest compute-cost-model == "die",或显式
+    # --die-model-lib/--die-model-config 选通)时构造 DieModelOracle 注入
+    # 调度器——select_decode_instance 的本地计算成本换 die 孤立估值;
+    # backend 非 die 完全不走此路(缺 manifest 键 = 旧 roofline 兼容态,
+    # 回归保护)。die 后端下库/配置缺位一律 fail-closed,绝不静默回退。
+    compute_cost_model = manifest.get(MANIFEST_COMPUTE_COST_MODEL_KEY)
+    if compute_cost_model is not None and compute_cost_model not in (
+            "die", "roofline", "replay"):
+        raise ValueError(
+            "manifest {!r} must be one of die|roofline|replay, got {!r}"
+            .format(MANIFEST_COMPUTE_COST_MODEL_KEY, compute_cost_model))
+    if compute_cost_model in ("roofline", "replay") and (
+            args.die_model_lib is not None
+            or args.die_model_config is not None):
+        raise ValueError(
+            "manifest compute-cost-model={!r} conflicts with explicit "
+            "--die-model-lib/--die-model-config (die backend)".format(
+                compute_cost_model))
+    die_backend = (
+        compute_cost_model == "die"
+        or args.die_model_lib is not None
+        or args.die_model_config is not None
+    )
+    cost_oracle = None
+    if die_backend:
+        die_config_path = resolve_die_model_config_path(
+            explicit=args.die_model_config,
+            manifest=manifest,
+            plan_dir=args.plan_dir,
+        )
+        if die_config_path is None:
+            raise RuntimeError(
+                "die backend requires resolved_die_model.json: pass "
+                "--die-model-config, set DIE_MODEL_CONFIG_PATH, materialize "
+                "a discoverable copy, or set the manifest die-model-config "
+                "key (fail-closed; no roofline fallback)")
+        cost_oracle = DieModelOracle(
+            lib_path=args.die_model_lib,
+            config_json_path=str(die_config_path),
+        )
     # C2/D2(2026-08-28):digest 默认关(SH_GRAPH_DIGESTS=1 恢复恒写)。
     digest_sink = (
         _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
@@ -213,6 +266,7 @@ def main(argv=None) -> int:
             sensing_query_sink=sensing_query_sink,
             online_stats_sink=online_stats_sink,
             ledger_sink=ledger_sink,
+            cost_oracle=cost_oracle,
         )
     else:
         raise ValueError(
@@ -226,12 +280,12 @@ def main(argv=None) -> int:
     # nlohmann::json::dump() bytes (compact, no trailing newline).
     server = BridgeServer(
         args.bridge_dir, canonical_request_producer=True)
-    result = server.serve_forever(
+    server.serve_forever(
         scheduler.on_decision_batch,
         on_commit_ack=scheduler.on_commit_ack,
     )
-    if result != 0:
-        raise RuntimeError("serve_forever returned {}".format(result))
+    # (2026-10-01 死分支清理)serve_forever 仅在 EOF 时返回 0,错误路径
+    # 均经 _fail/sys.exit 非零退出——"非零返回值"分支不可达,已删。
 
     # 运行结束校验(fail-closed):
     scheduler.verify_run_end()
@@ -318,14 +372,9 @@ def main(argv=None) -> int:
     server.discard_per_request_stats()
 
     # online_decision_log / train_ledger 已由 _JsonlSink 逐行落盘(M3)。
-    if getattr(scheduler, "decision_log_sink", None) is None:
-        _write_jsonl(os.path.join(args.bridge_dir, DECISION_LOG_NAME),
-                     scheduler.online_log_rows)
-    # 拼 batch 列车台账(§7.3 不变量断言输入;每次列车发射一行)。
-    if (getattr(scheduler, "train_ledger_sink", None) is None
-            and getattr(scheduler, "train_ledger_rows", None)):
-        _write_jsonl(os.path.join(args.bridge_dir, "train_ledger.jsonl"),
-                     scheduler.train_ledger_rows)
+    # P3(face-LRU 审计,2026-09-29):原结束期 `_write_jsonl` 兜底两分支
+    # 删除——main 无条件构造 decision_log_sink / train_ledger_sink
+    # (_JsonlSink),两守卫恒 False,函数全仓零活调用。
     if args.sensing:
         # 阶段 3:分层账本导出(结束总账核对与差异报告输入;感知关闭的
         # 正式跑不经过这里)。B3:sensing_query_log 已流式落盘,不再结束
@@ -337,6 +386,10 @@ def main(argv=None) -> int:
                  profile_sink, sensing_query_sink, ledger_sink):
         if sink is not None:
             sink.close()
+    # 阶段 D(face-LRU 随迁):释放 die 成本库模型句柄(库内 LRU 计划缓存
+    # 随句柄销毁)。
+    if cost_oracle is not None:
+        cost_oracle.close()
     return 0
 
 

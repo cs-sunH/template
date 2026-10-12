@@ -38,7 +38,6 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
       next_flow_id(0),
       active_flow_count(0),
       active_route_memberships(0),
-      total_started_flows(0),
       total_completed_flows(0),
       max_active_flows(max_active_flows),
       max_route_memberships(max_route_memberships),
@@ -57,7 +56,14 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
     link_states.reserve(directed_links.size());
     for (size_t index = 0; index < directed_links.size(); ++index) {
         const auto& link = directed_links[index];
-        if (link == nullptr || link->get_id() != index || link->get_bandwidth_Bpns() <= 0) {
+        // isfinite closes the third bandwidth entry point at consumption
+        // time (2026-09-30, mirrored from the joint repo): a NaN/+inf
+        // capacity would pass the "<= 0" comparison and then never
+        // constrain recalculate_dirty_rates' min-share computation
+        // (std::min with NaN always keeps the other operand).
+        if (link == nullptr || link->get_id() != index ||
+            !std::isfinite(link->get_bandwidth_Bpns()) ||
+            link->get_bandwidth_Bpns() <= 0) {
             std::cerr << "[Error] (network/analytical/congestion_aware) invalid directed LinkId table"
                       << std::endl;
             std::exit(-1);
@@ -67,8 +73,32 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
 }
 
 FluidScheduler::~FluidScheduler() noexcept {
+    // Lifetime invariant: the destructor cancels only the cancellable wakeup
+    // alarm. The event queue can still hold two more borrows of this object
+    // that CANNOT be cancelled from here (QueuedEvent is not cancellable
+    // once popped, and the deferred entry has no handle at all):
+    //   1. tail-arrival events borrow &flow -- a raw pointer to an element
+    //      of flows_by_id (element pointers survive rehash; the element is
+    //      erased only by handle_tail_arrival, i.e. by the tail event
+    //      itself);
+    //   2. the deferred flush (deferred mode) borrows `this`
+    //      (start_flow -> schedule_event_deferred(flush_callback, this)).
+    // Both borrows clear themselves only when the queue and its deferred
+    // drain run to quiescence: every started flow completes, its tail event
+    // fires and erases the element, and every scheduled flush executes.
+    // Callers MUST therefore destroy the scheduler only after the event
+    // queue (and its deferred queue) are fully drained -- the online main
+    // (main_online.cc) exits only on exactly that quiescence and every
+    // test drains finished() first. Destroying earlier is a use-after-free,
+    // not a leak; the debug check below catches the scheduler-side residue.
     cancel_scheduled_wakeup();
     link_observer_release();
+    // Debug-only residue check (zero-cost under NDEBUG): at quiescence no
+    // flow element can remain (=> no tail event can still borrow one) and
+    // no flush can be outstanding (=> no flush_callback borrows this).
+    // With the loop never started nothing was ever scheduled.
+    assert(!event_loop_started ||
+           (flows_by_id.empty() && !flush_scheduled));
 }
 
 void FluidScheduler::start_flow(const ChunkSize bytes,
@@ -96,15 +126,18 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
         flush_scheduled = true;
         if (deferred_flush_mode) {
             // Online/deferred mode: never insert a current_time event into the
-            // main queue from a tick-end/deferred context (EventQueue :33
-            // strict-increase assert). Post-commit comm emission lands here and
+            // main queue from a tick-end/deferred context (the strict-increase
+            // assert at the top of EventQueue::proceed()). Post-commit comm
+            // emission lands here and
             // is executed by the same-tick deferred drain.
             event_queue->schedule_event_deferred(flush_callback, this);
         } else {
-            // Static mode (pre-extension behavior, byte-for-byte preserved):
-            // start_flow is only reachable from inside an invoke_events pass,
-            // where the current_time alarm merges into the EventList currently
-            // being invoked and executes within the same pass.
+            // Legacy flush arm (pre-extension behavior, byte-for-byte
+            // preserved; reachable only when the backend/ED tests drive the
+            // scheduler directly): start_flow is only reachable from inside
+            // an invoke_events pass, where the current_time alarm merges into
+            // the EventList currently being invoked and executes within the
+            // same pass.
             event_queue->schedule_event(event_queue->get_current_time(), flush_callback, this);
         }
     }
@@ -361,7 +394,6 @@ void FluidScheduler::flush_pending_starts() noexcept {
 
     active_flow_count += pending_starts.size();
     active_route_memberships += new_memberships;
-    total_started_flows += pending_starts.size();
     pending_starts.clear();
 
     recalculate_dirty_rates(now);
@@ -413,6 +445,10 @@ void FluidScheduler::cancel_scheduled_wakeup() noexcept {
         static_cast<void>(event_queue->cancel_event(scheduled_wakeup_event));
     }
     scheduled_wakeup_event.reset();
+    // Keep the invariant "no live event => no scheduled time"; a stale
+    // timestamp without a live event would make schedule_next_wakeup()
+    // early-return forever and starve the remaining flows.
+    scheduled_wakeup_time.reset();
 }
 
 void FluidScheduler::schedule_next_wakeup() noexcept {
@@ -424,7 +460,8 @@ void FluidScheduler::schedule_next_wakeup() noexcept {
     }
 
     const auto next_time = completion_heap.top().predicted_finish_time;
-    if (scheduled_wakeup_time.has_value() && next_time >= scheduled_wakeup_time.value()) {
+    if (scheduled_wakeup_event.valid() && scheduled_wakeup_time.has_value()
+        && next_time >= scheduled_wakeup_time.value()) {
         return;
     }
 
@@ -460,6 +497,13 @@ void FluidScheduler::remove_memberships(FluidFlow& flow) noexcept {
     }
 }
 
+// Schedules the one event in this class that can never be cancelled: the
+// tail arrival borrows &flow -- a raw pointer to the flows_by_id element
+// (stable across rehash; see tail_arrival_callback). The destructor does not
+// chase this event; the lifetime contract is that the scheduler is destroyed
+// only after the event queue ran to quiescence, by which point every tail
+// arrival has fired and erased its element (handle_tail_arrival). See the
+// destructor comment for the full invariant.
 void FluidScheduler::schedule_tail_arrival(FluidFlow& flow, const EventTime now) noexcept {
     const auto arrival_time = checked_add_time(now, flow.route->propagation_latency_ns);
     if (flow.tail_scheduler != nullptr) {
@@ -473,6 +517,12 @@ void FluidScheduler::schedule_tail_arrival(FluidFlow& flow, const EventTime now)
 
 void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
     if (generation != wakeup_generation) {
+        if (!scheduled_wakeup_event.valid()) {
+            // Stale fire with no live wakeup left: without recovery the
+            // remaining flows would never be scheduled again.
+            scheduled_wakeup_time.reset();
+            schedule_next_wakeup();
+        }
         return;
     }
     // This wakeup was popped before its callback began; it cannot be
@@ -581,14 +631,6 @@ void FluidScheduler::report_progress() const noexcept {
         std::cerr << " congested_link_" << i << '=' << congestion[i].second << ':' << congestion[i].first;
     }
     std::cerr << std::endl;
-}
-
-uint64_t FluidScheduler::get_active_flow_count() const noexcept {
-    return active_flow_count;
-}
-
-uint64_t FluidScheduler::get_active_route_memberships() const noexcept {
-    return active_route_memberships;
 }
 
 // ---------------------------------------------------------------------------
@@ -842,13 +884,6 @@ const std::vector<FluidScheduler::LinkObserverTotals>& FluidScheduler::link_obse
     return totals;
 }
 
-FluidScheduler::LinkObserverStorage FluidScheduler::link_observer_storage() const noexcept {
-    const auto& observer = link_observer_;
-    return {observer.current_bucket_links.size(), observer.current_bucket_links.capacity(),
-            observer.active_links.size(), observer.spool_record_count,
-            observer.spool != nullptr};
-}
-
 void FluidScheduler::link_observer_release() noexcept {
     auto& observer = link_observer_;
     if (observer.spool != nullptr) {
@@ -977,12 +1012,4 @@ void FluidScheduler::link_observer_integrate(const EventTime now) noexcept {
         segment_start = segment_end;
     }
     observer.last_tick = now;
-}
-
-uint64_t FluidScheduler::get_total_started_flows() const noexcept {
-    return total_started_flows;
-}
-
-uint64_t FluidScheduler::get_total_completed_flows() const noexcept {
-    return total_completed_flows;
 }

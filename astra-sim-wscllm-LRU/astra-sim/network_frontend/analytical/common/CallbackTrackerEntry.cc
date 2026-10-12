@@ -9,10 +9,11 @@ LICENSE file in the root directory of this source tree.
 using namespace NetworkAnalytical;
 using namespace AstraSimAnalytical;
 
+// The optional members default-construct empty, so their explicit
+// std::nullopt initializers were redundant; transmission_finished (a bare
+// bool) keeps its explicit false initializer.
 CallbackTrackerEntry::CallbackTrackerEntry() noexcept
-    : send_event(std::nullopt),
-      recv_event(std::nullopt),
-      transmission_finished(false) {}
+    : transmission_finished(false) {}
 
 void CallbackTrackerEntry::register_send_callback(
     const Callback callback, const CallbackArg arg) noexcept {

@@ -21,7 +21,6 @@
       python3 online/test_joint_k_batch.py   （或 pytest 同路径）
 """
 
-import math
 import os
 import sys
 import unittest
@@ -49,11 +48,14 @@ from joint.event_recursion_predictor import (  # noqa: E402
     ResourceSnapshot,
     ServiceFactorGroup,
 )
-from joint.joint_cost_model import _pool_transfer_ns  # noqa: E402
-from joint.layer_eviction_policy import (  # noqa: E402
-    LayerEvictionPolicy,
-    VictimView,
+from joint.joint_cost_model import (  # noqa: E402
+    InstanceLoadView,
 )
+from joint.capacity_summary import (  # noqa: E402
+    PHASE_DECODE,
+    PhaseFootprint,
+)
+from joint.layer_eviction_policy import LayerEvictionPolicy  # noqa: E402
 from joint.link_quota import (  # noqa: E402
     AIMD_ACTION_EXPAND,
     LinkQuotaTracker,
@@ -128,6 +130,17 @@ class FinalRoundMergeWatchTest(unittest.TestCase):
                 "following_request_id": None,
                 "next_arrival_world_ns": None,
             },
+        }
+        # W5（§7.4 重锚）：watch 交付前置 settlement 记录（同
+        # test_joint_remote_settlement 的登记形态）。
+        scheduler._joint_settlement_ledger()["r9"] = {
+            "stage": "SETTLE_COMMITTED",
+            "settlement_policy": "consolidate",
+            "service_done_ns": 4000,
+            "settle_committed_ns": 4000,
+            "merge_payload_bytes": 64,
+            "merge_done_ns": None,
+            "settle_done_ns": None,
         }
         scheduler._quota_merge_reserves["r9"] = {
             "state": "adjudicated",
@@ -285,7 +298,7 @@ class MergeDirectionMirrorTest(unittest.TestCase):
 
     def test_exact_tie_selects_forward(self):
         model = _model({0: _load(), 1: _load()})
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session_view(
                 home=0, resident=0, history_bytes=(3000, 3000),
                 missing=(500, 500), location="partial_hbm_remote",
@@ -318,7 +331,7 @@ class ReverseLegOwnPathTest(unittest.TestCase):
             # (1,0) 单跳）。register_path 逐 shard 完整链路序列登记。
             flows.register_path((1, 0), owner="f-bg")
         model = _model({0: _load(), 1: _load()}, flows=flows)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session_view(
                 home=0, resident=0, history_bytes=(3000, 3000),
                 missing=(1000, 1000), location="partial_hbm_remote",
@@ -339,7 +352,10 @@ class ReverseLegOwnPathTest(unittest.TestCase):
 
 
 class EmptyReclaimableDeepGapTest(unittest.TestCase):
-    """K5（P2-2）：缺省空 reclaimable = "零可回收"（保守深缺口升级）。"""
+    """K5（P2-2）：缺省空 reclaimable = "零可回收"（保守深缺口升级）；
+    D03：A = max(写回完成, 活跃排空时刻)；D11：零可回收 ⇒ 零预计写回
+    （无合法 victim 即无池写回流——旧"按缺口全量计写回"的幻影腿废
+    除），深缺口标记 capacity_wait_uncertain。"""
 
     def test_empty_reclaimable_treated_as_nothing_reclaimable(self):
         model = _model({0: _load(), 1: _load()})
@@ -351,20 +367,24 @@ class EmptyReclaimableDeepGapTest(unittest.TestCase):
             reclaimable_bytes_by_tp_rank=(),   # 缺省视图：无信息
         )
         notes = []
-        wait = model._eviction_wait_estimate(
-            load, (5000, 5000), notes, instance_index=1)
-        writeback = _pool_transfer_ns(
-            total_bytes=4900, divisor=model._pool_divisor(1),
-            rates=model.rates)
-        # 深缺口升级：max(写回, 活跃剩余) —— 修前 = 写回（静默关闭）。
-        self.assertEqual(wait, max(writeback, 10**7))
-        self.assertIn("execution_growth_deep_gap_unresolved", notes)
+        space_ready = model._space_ready_ns_estimate(
+            load, PhaseFootprint.single(PHASE_DECODE, (5000, 5000)),
+            notes, instance_index=1)
+        # 零桶摘要（零可回收）⇒ 无预计脏释放、无写回腿；A = 排空 1e7。
+        self.assertEqual(space_ready, 10**7)
+        self.assertIn("execution_growth_capacity_wait_uncertain", notes)
+        self.assertNotIn(
+            "execution_growth_eviction_writeback_est", notes)
 
 
-class DeepGapCoveredDecompositionTest(unittest.TestCase):
-    """K5（P2-3）：主调用侧深缺口分量被 target_wait 覆盖 ⇒ 不双计。"""
+class DeepGapAbsoluteDrainTest(unittest.TestCase):
+    """D03（v2.0 §22-D03，取代 K5 P2-3 covered_wait 抵扣）：空间可用
+    时刻 A = max(写回, 活跃排空 running+active) 为决策相对**绝对量**
+    ——深缺口排空时刻天然 ⊆ 计算门 Q 的排空视界，合成取 max 不双计
+    （旧"covered_wait_ns 抵扣 + 时长串行加法"机制随串行前置一同废
+    除；无串行加法即无被覆盖分量可抵扣）。"""
 
-    def test_covered_wait_collapses_deep_gap_component(self):
+    def test_deep_gap_returns_absolute_drain_time(self):
         model = _model({0: _load(), 1: _load()})
         load = SimpleNamespace(
             queued_task_load_ns=2 * 10**6,
@@ -374,22 +394,39 @@ class DeepGapCoveredDecompositionTest(unittest.TestCase):
             reclaimable_bytes_by_tp_rank=(0, 0),
         )
         notes = []
-        wait = model._eviction_wait_estimate(
-            load, (5000, 5000), notes, instance_index=1,
-            covered_wait_ns=12 * 10**6)   # = target_wait（含全部活跃）
-        writeback = _pool_transfer_ns(
-            total_bytes=4900, divisor=model._pool_divisor(1),
-            rates=model.rates)
-        # 深缺口分量 = max(0, 1e7 − 1.2e7) = 0 ⇒ 等待 = 写回。
-        self.assertEqual(wait, writeback)
-        # 注记语义 = 深缺口条件成立（"存在"与"额外等待"分列）。
-        self.assertIn("execution_growth_deep_gap_unresolved", notes)
-        # 零 covered（home/exec-merge 侧）：分量完整保留。
-        notes2 = []
-        wait2 = model._eviction_wait_estimate(
-            load, (5000, 5000), notes2, instance_index=1,
-            covered_wait_ns=0)
-        self.assertEqual(wait2, 10**7)
+        space_ready = model._space_ready_ns_estimate(
+            load, PhaseFootprint.single(PHASE_DECODE, (5000, 5000)),
+            notes, instance_index=1)
+        # A = max(写回, 排空 1e7) = 1e7（绝对时刻，非"写回 + 剩余"）。
+        # D11：reclaimable=(0,0) ⇒ 桶不可覆盖缺口（θ=0、零写回）。
+        self.assertEqual(space_ready, 10**7)
+        # 注记语义 = 深缺口条件成立（"存在"与"A 抬升"分列）。
+        self.assertIn("execution_growth_capacity_wait_uncertain", notes)
+
+    def test_drain_within_wait_horizon_does_not_lift_compute_gate(self):
+        # 合成侧不双计：原地 Q = queued+running+active = 1.2e7 ≥ A 分量
+        # （排空 1e7）⇒ 计算门 = max(Q, A) = Q（无重叠期外的额外等
+        # 待）。P 入口原地 stay：cost = Q + 整段计算（A 不抬升）。
+        model = _model({
+            0: _load(),
+            1: InstanceLoadView(
+                instance_index=1, queued_task_load_ns=2 * 10**6,
+                running_task_load_ns=10**7,
+                active_decode_task_load_ns=0,
+                hbm_remaining_bytes_by_tp_rank=(100, 100),
+                reclaimable_bytes_by_tp_rank=(0, 0))})
+        session = _session_view(home=1, resident=1)
+        request = _request_view()
+        candidate = model.estimate_P_with_continuation(
+            session=session, request=request, instance_index=1,
+            action="stay", remote_enabled=True)
+        self.assertTrue(candidate.applicable)
+        self.assertEqual(
+            candidate.breakdown.target_wait_ns, 12 * 10**6)
+        self.assertEqual(
+            candidate.breakdown.eviction_wait_ns, 10**7)
+        # A（= max(写回, 1e7) ⊆ Q）不抬升计算门：cost = Q + 5 + 20。
+        self.assertEqual(candidate.cost_ns, 12 * 10**6 + 5 + 20)
 
 
 class CopyAtHomeRemoteBaseSettleTest(unittest.TestCase):

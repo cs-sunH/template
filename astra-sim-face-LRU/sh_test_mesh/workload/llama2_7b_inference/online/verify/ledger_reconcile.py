@@ -9,11 +9,16 @@ strategy 感知运行目录):
                               response_*.json(committed 节点 + kv_actions
                               + assignments)
                               graph_batch_digests.jsonl(批级 committed
-                              摘要:watch_count / ranks / node_count)
+                              摘要:watch_count / ranks / node_count;
+                              可选——生产默认 SH_GRAPH_DIGESTS=0 不产出)
                               ledger.jsonl(Python 分层账本导出)
                               sensing_query_log.jsonl(决策边界两层剩余负载
                               查询快照)
   --manifest <ET_DIR>/manifest.json   全部请求事实(1177 requests)
+  --config <trace_config.csv> 确定性重建分支的调度器配置(可选;缺省用
+                              workload 默认 trace_config.csv;须与产生
+                              本 run 的配置一致,重建前按 manifest 持久
+                              字段 fail-closed 核对)
   --cpp-log <run>/cpp.log     C++ 门计数器(可选;存在则核对 completed)
   --expected-requests N       输入期望请求数(R0a;缺省 1177 = 20.csv
                               前 30s 验收值,跨输入复用时按物化实测改传)
@@ -37,14 +42,25 @@ strategy 感知运行目录):
      committed 节点 rank 集。watch 成员 = 每 rank 最后一个该阶段节点
      (非全部阶段节点;阶段图可横跨 prefill+decode 两实例 rank),故
      committed rank 数可以大于成员数,不构成失配。
-     R2b 加固(2026-08-16,wscllm 054118e 同款不变量):graph_batch_
-     digests.jsonl 批级摘要合法——每批 watch_count ∈ [0, len(ranks)] 且
-     watch_count==0 ⇔ ranks 为空(空性等价;watch_count 可为 2,
-     PREFILL_DRAIN 同批 prefill+decode 双 watch / DECODE_COMPLETION+
-     REQUEST_COMPLETE 可 3,禁 {0,1} 假设)、ranks ⊆ [0,--max-rank]
+     R2b 加固(2026-08-16,wscllm 054118e 同款不变量;2026-09-29 M19 空性
+     等价按列车化语义修正;# (2026-09-30, ported from the face repo) 上界
+     改列车化口径):graph_batch_digests.jsonl 批级摘要合法——
+     每批 watch_count ∈ [0, node_count](watch 按列车成员逐条注册,
+     len(ranks) 上界结构性不成立)且 ranks 为空 ⇒ watch_count==0
+     (单向空性约束;watch 锚点挂在本批节点上,零节点批不可能带 watch。
+     旧双向等价 watch_count==0 ⇔ ranks 为空停留单请求时代——列车化后
+     admission-only 批(graph_batch_builder.emit_admission_batch 只发
+     arrival gate+readiness 屏障节点、无请求级 watch,test_graph_batch_
+     builder.py::test_admission_emits_actions_without_body_or_watch 钉子)
+     与纯逐出 mem 段合法地"有节点、零 watch",双向式对健康 run 必误报。
+     watch_count 可为 2,PREFILL_DRAIN 同批 prefill+decode 双 watch /
+     DECODE_COMPLETION+REQUEST_COMPLETE 可 3,禁 {0,1} 假设)、
+     ranks ⊆ [0,--max-rank]
      (缺省 53 = 54-NPU 验收 mesh,跨硬件复用时改传)、
      sum(node_count) == C++ phase-5 total_nodes 且 sum(watch_count)
-     == phase-5 total_watches;R2c:phase-4 end audit 全零(watch 生命
+     == phase-5 total_watches;有 digest 才校验(2026-09-26 降级:
+     生产默认 SH_GRAPH_DIGESTS=0 不产出本文件,数据源缺失时本项
+     SKIP 而非 fail)。R2c:phase-4 end audit 全零(watch 生命
      周期干净收尾)。
   R3 KV 账本对平(Python KV 权威 vs C++ 完成事实):每 request 至少 1 条
      kv_action(trigger_request_id == R);"completion" phase 事件
@@ -175,7 +191,42 @@ def load_cpp_facts(bridge_dir):
     return completions, arrival_epochs
 
 
-def load_responses(bridge_dir, manifest_path=None):
+def _check_replay_config_against_manifest(config, manifest):
+    """确定性重建 config ↔ run manifest fail-closed 核对。
+
+    重建重放必须发生在与真实 run 相同的调度器配置下:manifest.json 顶部
+    持久字段由 plan_materializer 物化时按当次 config 写入,这里逐项与本次
+    载入 config 的派生值核对(kv_cache_policy / kv_reserve_context_tokens /
+    request_queue_csv / hardware label——全部实际进入重放)。不一致即拒绝
+    重建:静默重放会产生与 C++ 事实系统性失配的伪"不平"账本。manifest
+    缺某键(旧 schema)时跳过该对,不做反向误报。"""
+    pairs = [
+        ("kv_management.policy",
+         (manifest.get("kv_management") or {}).get("policy"),
+         config.kv_cache_policy),
+        ("kv_reserve_context_tokens",
+         manifest.get("kv_reserve_context_tokens"),
+         config.kv_reserve_context_tokens),
+        ("request_queue_csv",
+         manifest.get("request_queue_csv"),
+         str(config.request_queue_csv)),
+        ("hardware.label",
+         (manifest.get("hardware") or {}).get("label"),
+         config.hardware.label),
+    ]
+    mismatches = [
+        "manifest {} = {!r} != config {!r}".format(key, recorded, actual)
+        for key, recorded, actual in pairs
+        if recorded is not None and recorded != actual
+    ]
+    if mismatches:
+        raise SystemExit(
+            "[ledger_reconcile] FAIL: 确定性重建配置与 run manifest 不一致"
+            "(拒绝重建;用 --config 传入产生本 run 的 trace_config.csv):\n  "
+            + "\n  ".join(mismatches))
+
+
+def load_responses(bridge_dir, manifest_path=None, config_path=None):
     """从 response_*.json 收集:每 (request_id, stage) committed 节点的去重
     rank 集合与节点总数;全部 kv_actions;assignments 计数;注册过的 stage
     watch(members = {rank: node_id} 字典)。
@@ -184,16 +235,21 @@ def load_responses(bridge_dir, manifest_path=None):
     时,改用确定性 Python 侧重建——request_*.json(C++ 实际交付的 delta
     序列)逐一喂给 FaceOnlineScheduler,重建每个 GraphBatch 的
     watches/kv_actions/assignments/节点(调度器为确定性函数,与在线运行
-    交付一致;幂等 fixture 同机制验证)。需要 --manifest。"""
+    交付一致;幂等 fixture 同机制验证)。需要 --manifest;配置经 --config
+    传入(缺省 workload 默认 trace_config.csv),重建前与 manifest 持久
+    字段 fail-closed 核对(_check_replay_config_against_manifest)。"""
     committed_ranks = {}     # (request_id, stage) -> set(rank)
     committed_counts = {}    # (request_id, stage) -> 节点总数
     watches = {}             # (request_id, stage) -> [watch, ...]
     kv_actions = []
     assignment_count = 0
     if not _seq_files(bridge_dir, "response_"):
-        assert manifest_path, (
-            "bridge 无 response_*.json(消费即删);对账需要 --manifest 做"
-            "确定性 Python 侧重建")
+        # (2026-10-01)裸 assert 在 python -O 下被剥离后会更晚以 TypeError
+        # 崩溃——改显式 ValueError(fail-closed 通道不变)。
+        if not manifest_path:
+            raise ValueError(
+                "bridge 无 response_*.json(消费即删);对账需要 --manifest "
+                "做确定性 Python 侧重建")
         import sys as _sys
         _wl = os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))))
@@ -207,13 +263,27 @@ def load_responses(bridge_dir, manifest_path=None):
         from online.face_online_scheduler import FaceOnlineScheduler  # noqa
         with open(manifest_path, "r", encoding="utf-8") as _src:
             _manifest = json.load(_src)
-        _config = load_face_trace_config(
-            _Path(os.path.join(_wl, "trace_config.csv")))
+        if config_path:
+            _config = load_face_trace_config(_Path(config_path))
+        else:
+            _config = load_face_trace_config(
+                _Path(os.path.join(_wl, "trace_config.csv")))
+        _check_replay_config_against_manifest(_config, _manifest)
         _sched = FaceOnlineScheduler(
             manifest=_manifest, config=_config,
             graph=GraphBatchBuilder(_config), mode="strategy", sensing=True)
         for _seq, _delta in iter_request_records(bridge_dir):
             _batch = _sched.on_decision_batch(_delta)
+            # 健康运行中 C++ 消费 response 即回 commit ack；重建侧必须同步
+            # 回放合成 ack，否则 _emitted_by_delivery/_provisional_kv_actions
+            # 只增不减，第 9 个交付即触发 propagating-tail fail-closed
+            # （RuntimeError），对账在任何真实规模运行上必崩。ack 契约与
+            # C++ 侧一致：schema v1、batch_id == delivery_sequence。
+            _sched.on_commit_ack({
+                "schema_version": 1,
+                "batch_id": _delta["delivery_sequence"],
+                "delivery_sequence": _delta["delivery_sequence"],
+            })
             for node in _batch.get("nodes") or []:
                 key = (node.get("request_id", ""), node.get("stage", ""))
                 committed_ranks.setdefault(key, set()).add(int(node["rank"]))
@@ -310,9 +380,11 @@ def load_cpp_phase_counters(cpp_log_path):
 
 def load_digests(run_bridge_dir):
     """graph_batch_digests.jsonl(批级 committed 摘要,R2b 加固数据源;
-    2026-08-16 wscllm 054118e 同款)。官方 runner 产出必含本文件(每交付
-    批一行);bridge/ 直读。缺失/0 行 = 数据源缺失,返回 None 由对账项
-    fail-closed(不允许静默跳过)。"""
+    2026-08-16 wscllm 054118e 同款)。可选数据源:生产默认 SH_GRAPH_
+    DIGESTS=0 不产出本文件(C2/D2 2026-08-28 裁决,online_service 写出
+    受该开关门控)。缺失/0 行返回 None,R2b 据此跳过(有 digest 才校验;
+    2026-09-26 起,原"官方 runner 产出必含本文件"的 fail-closed 判据
+    与生产默认矛盾,已废弃)。"""
     path = _artifact_path(run_bridge_dir, "graph_batch_digests.jsonl")
     if not os.path.exists(path):
         return None
@@ -321,8 +393,17 @@ def load_digests(run_bridge_dir):
 
 
 def _seq_files(bridge_dir, prefix):
+    """列出 bridge 目录下 <prefix><seq>.json 的 seq(升序)。
+
+    (2026-10-01)探测目录先经 _artifact_path 解析(live 优先、归档
+    <run>/results/ 兜底)——与 ledger/sensing/digest 的口径一致,避免
+    失败 run 的残留 response 已被归档到 results/ 时静默放弃真实
+    committed 证据、转走确定性重建分支(重建会把包括未提交交付在内的
+    全部 journal 行合成 ack,对账对象悄悄变成"重放的理想 run")。"""
+    probe = _artifact_path(bridge_dir, "{}0.json".format(prefix))
+    directory = os.path.dirname(os.path.abspath(probe))
     seqs = []
-    for name in os.listdir(bridge_dir):
+    for name in os.listdir(directory):
         if name.startswith(prefix) and name.endswith(".json"):
             body = name[len(prefix):-len(".json")]
             if body.isdigit():
@@ -339,6 +420,11 @@ def main(argv=None) -> int:
         description="phase-3 ledger reconciliation (strategy sensing run)")
     parser.add_argument("--bridge-dir", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument(
+        "--config", default=None,
+        help="trace_config.csv 路径(缺省用 workload 默认;确定性重建"
+             "分支按它载入调度器配置,须与产生本 run 的配置一致,重建前"
+             "按 manifest 持久字段 fail-closed 核对)")
     parser.add_argument("--cpp-log", default=None)
     parser.add_argument(
         "--expected-requests", type=int, default=1177,
@@ -369,7 +455,8 @@ def main(argv=None) -> int:
     cpp_completions, arrival_epochs = load_cpp_facts(args.bridge_dir)
     committed_ranks, committed_counts, watches, kv_actions, \
         assignment_count = load_responses(
-            args.bridge_dir, manifest_path=args.manifest)
+            args.bridge_dir, manifest_path=args.manifest,
+            config_path=args.config)
     python_ledger = load_python_ledger(args.bridge_dir)
     query_log = load_sensing_query_log(args.bridge_dir)
     cpp_counters = load_cpp_counters(args.cpp_log)
@@ -398,13 +485,26 @@ def main(argv=None) -> int:
           "manifest requests missing from Python ledger: {!r}".format(
               sorted(missing)))
 
+    # (2026-10-01 口径修正)流式改造后 ledger.jsonl 每行 layers 恒只含
+    # "completed_unreconciled" 一个键(dump_ledger 在 ledger_sink 在场时
+    # early-return,admitted/committed 中间层不再落盘)——按"有该键即计"
+    # 的 dict 长度口径三值恒相等(数的是"有任何 fact 的请求数"),单项
+    # 存在性假阴。改为只计对应 stage 真有 fact 的请求:三映射保持
+    # rid->fact dict 形态(R1 逐请求生命周期对平要读 fact 载荷)但只收
+    # 非 None 项,故 len() 即"有该 stage fact 的请求数",与 R0c 计数
+    # 语义一致。
     prefill_facts = {
-        rid: entry.get("prefill") for rid, entry in cpp_completions.items()}
+        rid: entry.get("prefill")
+        for rid, entry in cpp_completions.items()
+        if entry.get("prefill") is not None}
     decode_facts = {
-        rid: entry.get("decode") for rid, entry in cpp_completions.items()}
+        rid: entry.get("decode")
+        for rid, entry in cpp_completions.items()
+        if entry.get("decode") is not None}
     req_facts = {
         rid: entry.get("request_complete")
-        for rid, entry in cpp_completions.items()}
+        for rid, entry in cpp_completions.items()
+        if entry.get("request_complete") is not None}
     check("R0c", len(req_facts) == manifest_count,
           "C++ REQUEST_COMPLETE facts = {} (expected {})".format(
               len(req_facts), manifest_count))
@@ -517,36 +617,50 @@ def main(argv=None) -> int:
           "watch ledger mismatches: member_count/成员超集 {} 条,"
           "注册次数异常 {} 条".format(len(member_bad), len(watch_reg_bad)))
 
-    # ---- R2b 批级摘要不变量(2026-08-16 加固,wscllm 054118e 同款) ----
-    # watch_count ∈ [0, len(ranks)] 且 watch_count==0 ⇔ ranks 为空(空性
-    # 等价;同批双 watch(PREFILL_DRAIN 的 prefill+decode)合法,禁 {0,1}
-    # 假设——30s 实测存在 wc=2 批);ranks ⊆ [0, --max-rank](缺省 53 =
-    # 54-NPU 验收 mesh,跨硬件复用时改传);digest 双和与 C++
-    # phase-5 权威计数对平(sum(node_count)==total_nodes、
-    # sum(watch_count)==total_watches)。
+    # ---- R2b 批级摘要不变量(2026-08-16 加固,wscllm 054118e 同款;
+    #      2026-09-29 M19 空性等价按列车化语义修正) ----
+    # # (2026-09-30, ported from the face repo) 上界修正(py-online-E2):
+    # watch_count ∈ [0, node_count] 且 ranks 为空 ⇒ watch_count==0(单向
+    # 空性约束)。旧上界 watch_count <= len(ranks) 在列车化后结构性不
+    # 成立:单实例批的 watch 按列车成员逐条注册(drain/exit 逐成员、
+    # 哨兵、wakeup),同实例 ≥7 个 joiner 即合法出现 7 个 watch > 6
+    # rank。结构正确的上界是 node_count——每个 watch 的标记节点真实
+    # 落在本批(graph_batch_builder 的 _emit_train_tail_markers:每成员
+    # 每 group rank 各 1 个标记节点),故 watch 数恒 ≤ 本批 committed
+    # 节点数。空性保持单向(M19 口径不变):admission-only 批与纯逐出
+    # mem 段合法地"有节点、零 watch",双向等价对健康 run 必误报;
+    # ranks ⊆ [0, --max-rank](缺省 53 = 54-NPU 验收
+    # mesh,跨硬件复用时改传);digest 双和与 C++ phase-5 权威计数对平
+    # (sum(node_count)==total_nodes、sum(watch_count)==total_watches)。
     digest_bad = []
     if digests is None:
-        check("R2b", False,
-              "graph_batch_digests.jsonl 缺失或 0 行(数据源缺失,fail-"
-              "closed;不允许静默跳过批级摘要不变量)")
+        # 2026-09-26 降级(R2 py-online-E1):生产默认 SH_GRAPH_DIGESTS=0
+        # 不产出本文件(C2/D2 2026-08-28 裁决),原 fail-closed 判据使
+        # 官方流程对账必然误报"不平"。改为"有 digest 才校验":数据源
+        # 缺失时跳过本项(汇总行标 SKIP),不再计入 failures。
+        pass
     else:
         node_sum = 0
         watch_sum = 0
         for row in digests:
             ranks = row.get("ranks") or []
             watch_count = row.get("watch_count", 0)
-            node_sum += row.get("node_count", 0)
+            node_count = row.get("node_count", 0)
+            node_sum += node_count
             watch_sum += watch_count
             seq = row.get("delivery_sequence")
-            if not 0 <= watch_count <= len(ranks):
+            if not 0 <= watch_count <= node_count:
                 digest_bad.append({
                     "delivery_sequence": seq,
-                    "violation": "watch_count 不在 [0, len(ranks)]",
-                    "watch_count": watch_count, "len_ranks": len(ranks)})
-            if (watch_count == 0) != (len(ranks) == 0):
+                    "violation": "watch_count 不在 [0, node_count]"
+                                 "(列车化上界)",
+                    "watch_count": watch_count, "node_count": node_count})
+            if len(ranks) == 0 and watch_count != 0:
                 digest_bad.append({
                     "delivery_sequence": seq,
-                    "violation": "空性等价失配(watch_count==0 ⇔ ranks 空)",
+                    "violation": "空批带 watch(ranks 空 ⇒ watch_count==0;"
+                                 "watch_count==0 而 ranks 非空属列车化"
+                                 " admission-only/纯逐出批,合法)",
                     "watch_count": watch_count, "ranks": ranks})
             if any(not 0 <= rank <= args.max_rank for rank in ranks):
                 digest_bad.append({
@@ -608,15 +722,30 @@ def main(argv=None) -> int:
         if not completion_events:
             completion_event_bad.append(request_id)
         else:
-            max_tick = max(event["planner_time_ns"]
-                           for event in completion_events)
-            if max_tick != completed_tick:
-                kv_tick_bad.append({
-                    "request_id": request_id,
-                    "completion_kv_tick": max_tick,
-                    "completed_tick": completed_tick})
-        if any(event["planner_time_ns"] > completed_tick
+            # (2026-10-01)裸下标改 .get + 显式失配:坏行(缺
+            # planner_time_ns)记入差异清单而非 KeyError traceback,
+            # 取证质量与同文件其余检查一致。
+            bad_ticks = [
+                request_id for event in completion_events
+                if not isinstance(event.get("planner_time_ns"), int)]
+            if bad_ticks:
+                completion_event_bad.append(request_id)
+            else:
+                max_tick = max(event["planner_time_ns"]
+                               for event in completion_events)
+                if max_tick != completed_tick:
+                    kv_tick_bad.append({
+                        "request_id": request_id,
+                        "completion_kv_tick": max_tick,
+                        "completed_tick": completed_tick})
+        # (2026-10-01 补全)本行对全部事件取值,坏行(缺 planner_time_ns)
+        # 也要落差异清单而非 KeyError;非整值按"晚于完成"无法判定处理,
+        # 与 completion 侧 bad_ticks 同款并入 completion_event_bad。
+        if any(not isinstance(event.get("planner_time_ns"), int)
                for event in events):
+            completion_event_bad.append(request_id)
+        elif any(event["planner_time_ns"] > completed_tick
+                 for event in events):
             kv_tick_bad.append({
                 "request_id": request_id,
                 "event_after_completion": True,
@@ -628,18 +757,30 @@ def main(argv=None) -> int:
               len(kv_tick_bad)))
 
     # ---- R4 排队账本对平 ----
-    admitted_left = {
-        rid: layers.get("admitted") for rid, layers in python_ledger.items()
-        if layers.get("admitted") is not None}
-    committed_left = {
-        rid: layers.get("committed") for rid, layers in python_ledger.items()
-        if layers.get("committed") is not None}
-    check("R4a", not admitted_left,
-          "run-end admitted layer not empty: {!r}".format(
-              sorted(admitted_left)))
-    check("R4b", not committed_left,
-          "run-end committed layer not empty: {!r}".format(
-              sorted(committed_left)))
+    # (2026-10-01 口径修正)流式改造后 ledger.jsonl 行的 layers 键集恒为
+    # {"completed_unreconciled"}——admitted/committed 中间层不再落盘
+    # (全仓唯一写方 _ledger_complete 只写 completed_unreconciled),
+    # 原来的"无 admitted/committed 条目"检查结构性恒真(空转)。改为
+    # 键集断言:任何额外层键(未来回归)立即失配;admitted/committed
+    # 的运行末清空语义由 online_service 进程内 verify_run_end 承载
+    # (失败即整 run 非零退出),本工具退化为形状守门。
+    unexpected_layers = {
+        rid: sorted(set(layers) - {"completed_unreconciled"})
+        for rid, layers in python_ledger.items()
+        if set(layers) - {"completed_unreconciled"}}
+    check("R4a", not unexpected_layers,
+          "ledger rows carry layers beyond completed_unreconciled: {!r}"
+          .format(sorted(unexpected_layers.items())))
+    # (2026-10-01 R2) R4b 独立化:原"admitted/committed 清空"检查在流式
+    # 改造后结构性恒真,上一轮替换时误写成与 R4a 同一表达式(零判别力)。
+    # 改为"每行都携带 completed_unreconciled 层"——缺层行是独立的形状
+    # 违例(下游 R1 生命周期对平依赖该层存在)。
+    missing_layer = sorted(
+        rid for rid, layers in python_ledger.items()
+        if "completed_unreconciled" not in layers)
+    check("R4b", not missing_layer,
+          "ledger rows missing the completed_unreconciled layer: {!r}"
+          .format(missing_layer))
     final_query = query_log[-1] if query_log else {}
     final_queued = (final_query.get("admitted_not_injected_queued") or {})
     check("R4c", final_queued.get("admitted_count") == 0,
@@ -742,14 +883,17 @@ def main(argv=None) -> int:
 
     # ---- R7 issued 层对平(阶段 7 §10.1,核心) ----
     # 每边界 Python issued 键集(已发射未完成)⊆ C++ injected-unfinished
-    # per_request 键集:Python 在 emit 时登记、completion 核销在策略完成
-    # 处理前(基类 _settle_completions);C++ 摘要拍于同 delivery 的 tick-end
-    # (watch 命中时已 finish 阶段节点、本批节点尚未 commit),两侧时刻对齐。
-    # 反向残差 only_cpp 允许为"end-barrier 控制尾节点"已知窗口:watch 命中
-    # 即报告阶段完成(Python 已核销 issued),但每 rank 的列车迭代数字节
-    # all_reduce 控制节点仍在途(阶段 3 R5 同源语义)——断言残差全部为
-    # barrier 签名
-    # (单节点、无 compute、无时长);末边界 issued 清空。
+    # per_request 键集。拼 batch 列车化(2026-08-22)后的现实口径:列车
+    # 共享体节点挂在批命名空间(train_id = "batch_train_*"),C++ 摘要的
+    # per_request 组不再携带请求级键——请求级键集对平(py ⊆ cc)只在
+    # 节点级请求归因存在的时代成立;本对账项随之同步为两层:
+    #   R7a1 覆盖性:Python issued 非空 ⇔ C++ injected 未完成节点总数 > 0
+    #     (Python 幽灵发射 = issued 非空而 C++ 全零,fail);
+    #   R7a2 only-C++ 组合法性:barrier 签名(单节点/零 compute/零时长,
+    #     watch 命中已报完成而控制尾节点在途的已知窗口)或批命名空间组
+    #     (batch_train_ 前缀 = 列车共享体/哨兵,与调度器 BATCH_TRAIN_
+    #     PREFIX 同源);非前缀且非 barrier 签名的请求级残差仍 fail;
+    #   R7b 末边界 issued 清空(不变)。
     issued_only_python = []
     issued_residual_bad = []
     residual_peak = 0
@@ -760,25 +904,27 @@ def main(argv=None) -> int:
         }
         cc_keys = set()
         cc_groups = []
+        cc_total_nodes = 0
         for rank_entry in row.get("injected_unfinished", []):
+            cc_total_nodes += rank_entry.get("node_count", 0)
             for group in rank_entry.get("per_request", []):
                 cc_keys.add(group["request_id"])
                 cc_groups.append(group)
-        only_python = py_issued - cc_keys
         only_cpp = cc_keys - py_issued
         residual_peak = max(residual_peak, len(only_cpp))
-        if only_python:
+        if py_issued and cc_total_nodes == 0:
             issued_only_python.append({
                 "delivery_sequence": row["delivery_sequence"],
-                "only_python": sorted(only_python)[:5]})
-        # 残差核对:only_cpp 的每个组必须是 barrier 签名(控制尾节点)。
+                "ghost_issued": sorted(py_issued)[:5]})
+        # 残差核对:only_cpp 的每组须为 barrier 签名或批命名空间组。
         for group in cc_groups:
             if group["request_id"] not in only_cpp:
                 continue
             signature_ok = (
-                group.get("node_count", 0) == 1
-                and group.get("compute_ops", 0) == 0
-                and group.get("estimated_remaining_ns", 0) == 0)
+                (group.get("node_count", 0) == 1
+                 and group.get("compute_ops", 0) == 0
+                 and group.get("estimated_remaining_ns", 0) == 0)
+                or group["request_id"].startswith(BATCH_TRAIN_PREFIX))
             if not signature_ok:
                 issued_residual_bad.append({
                     "delivery_sequence": row["delivery_sequence"],
@@ -791,11 +937,12 @@ def main(argv=None) -> int:
                         group.get("estimated_remaining_ns"),
                 })
     check("R7a1", not issued_only_python,
-          "{} boundaries with Python-issued outside C++ injected (Python "
-          "issued ⊆ C++ keys required)".format(len(issued_only_python)))
+          "{} boundaries with Python-issued but zero C++ unfinished nodes "
+          "(ghost issue; per-request key parity ended with the batched-"
+          "train namespace)".format(len(issued_only_python)))
     check("R7a2", not issued_residual_bad,
-          "{} non-barrier residual groups in the only-C++ window (end-"
-          "barrier control tails only)".format(len(issued_residual_bad)))
+          "{} residual groups neither barrier-signed nor batch-train-"
+          "namespaced in the only-C++ window".format(len(issued_residual_bad)))
     final_issued = ((query_log[-1] if query_log else {}).get("issued") or {})
     check("R7b", final_issued.get("issued_count", 0) == 0,
           "final decision boundary issued_count = {} (expected 0)".format(
@@ -865,7 +1012,7 @@ def main(argv=None) -> int:
                 kv_bad=kv_bad, kv_no_actions=kv_no_actions,
                 completion_event_bad=completion_event_bad,
                 kv_tick_bad=kv_tick_bad,
-                admitted_left=admitted_left, committed_left=committed_left,
+                unexpected_layers=unexpected_layers,
                 ready_bad=ready_bad, final_ready=final_ready,
                 issued_only_python=issued_only_python,
                 issued_residual_bad=issued_residual_bad,
@@ -888,7 +1035,7 @@ def _render_report(balanced, failures, manifest_count, expected_requests,
                    lifecycle_bad, member_bad, watch_reg_bad, digest_bad,
                    phase4_audit, kv_bad,
                    kv_no_actions, completion_event_bad, kv_tick_bad,
-                   admitted_left, committed_left, ready_bad, final_ready,
+                   unexpected_layers, ready_bad, final_ready,
                    issued_only_python, issued_residual_bad, residual_peak,
                    final_issued, cc_internal_bad, cc_cover_bad,
                    peak_node, peak_in_flight, peak_free):
@@ -920,11 +1067,14 @@ def _render_report(balanced, failures, manifest_count, expected_requests,
         "PASS" if not (member_bad or watch_reg_bad)
         else "FAIL: 成员 {} 条 / 注册 {} 条".format(
             len(member_bad), len(watch_reg_bad))))
-    lines.append("| R2b 批级摘要不变量(watch_count ∈ [0,len(ranks)];空性等价 watch_count==0 ⇔ ranks 空;ranks ⊆ [0,--max-rank](缺省 53);digest 双和 == cpp phase-5 total_nodes/total_watches;2026-08-16 加固,wscllm 054118e 同款) | {} |".format(
-        "PASS" if digest_bad is not None and not digest_bad and not any(
+    lines.append("| R2b 批级摘要不变量(watch_count ∈ [0,node_count] 列车化上界;ranks 空 ⇒ watch_count==0 单向空性;ranks ⊆ [0,--max-rank](缺省 53);digest 双和 == cpp phase-5 total_nodes/total_watches;2026-08-16 加固,wscllm 054118e 同款;有 digest 才校验) | {} |".format(
+        # digest_bad=None = 数据源缺失(main 传入),即 SKIP;此处不得引用
+        # main 的局部 digests(NameError,2026-09-26 R2b 降级批引入)。
+        "SKIP(graph_batch_digests.jsonl 缺失;生产默认 SH_GRAPH_DIGESTS=0 "
+        "不产出)" if digest_bad is None else
+        "PASS" if not digest_bad and not any(
             "R2b" in item for item, _ in failures)
-        else "FAIL: {} 条违例/失配".format(
-            len(digest_bad) if digest_bad is not None else "数据源缺失")))
+        else "FAIL: {} 条违例/失配".format(len(digest_bad))))
     lines.append("| R2c phase-4 end audit 全零(watch 生命周期干净收尾) | {} |".format(
         "PASS" if phase4_audit is not None and not any(
             value for value in phase4_audit.values())
@@ -935,10 +1085,12 @@ def _render_report(balanced, failures, manifest_count, expected_requests,
         else "FAIL: no_actions={} retain_complete={} tick={}".format(
             len(kv_no_actions), len(completion_event_bad),
             len(kv_tick_bad))))
-    lines.append("| R4 排队账本对平(运行结束 admitted/committed 清空;末边界 admitted_count=0) | {} |".format(
-        "PASS" if not (admitted_left or committed_left) else
-        "FAIL: admitted={} committed={}".format(
-            len(admitted_left), len(committed_left))))
+    lines.append("| R4 排队账本对平(流式 ledger 行键集恒 completed_unreconciled;admitted/committed 清空由 verify_run_end 承载;末边界 admitted_count=0) | {} |".format(
+        "PASS" if not unexpected_layers
+        and not any(item.startswith("R4") for item, _ in failures)
+        else "FAIL: unexpected_layers={} ({})".format(
+            len(unexpected_layers),
+            sorted(unexpected_layers)[:5])))
     lines.append("| R5 injected-unfinished 对平(末决策边界残差 = 终请求 decode end-barrier 控制节点;注入峰值 ≤ committed 节点数) | {} |".format(
         "PASS" if not any(item.startswith("R5") for item, _ in failures)
         else "FAIL"))
@@ -992,7 +1144,8 @@ def _render_report(balanced, failures, manifest_count, expected_requests,
     lines.append("")
     lines.append("`python3 online/verify/ledger_reconcile.py --bridge-dir "
                  "<run>/bridge --manifest <ET_DIR>/manifest.json --cpp-log "
-                 "<run>/cpp.log --expected-requests N "
+                 "<run>/cpp.log --config <trace_config.csv(与 run 同配置,"
+                 "缺省 workload 默认)> --expected-requests N "
                  "--expected-accepted-sessions N --report <out>.md`;"
                  "退出 0 = 对平;期望常量缺省 1177/112(30s 验收值)。")
     lines.append("")

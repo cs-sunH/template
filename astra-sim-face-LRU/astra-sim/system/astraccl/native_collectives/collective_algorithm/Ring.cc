@@ -3,8 +3,12 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
+#include <cstdio>
 #include "astra-sim/system/astraccl/native_collectives/collective_algorithm/Ring.hh"
 
+#include <cstdlib>
+
+#include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/PacketBundle.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 
@@ -43,10 +47,10 @@ Ring::Ring(ComType type,
         break;
     case ComType::All_to_All:
         this->stream_count = ((nodes_in_ring - 1) * nodes_in_ring) / 2;
+        // InjectionPolicy::Aggressive was unreachable (every construction
+        // site passes Normal) and has been removed; reconnect a case here
+        // when an injection-policy config actually exists.
         switch (injection_policy) {
-        case InjectionPolicy::Aggressive:
-            this->parallel_reduce = nodes_in_ring - 1;
-            break;
         case InjectionPolicy::Normal:
             this->parallel_reduce = 1;
             break;
@@ -58,13 +62,7 @@ Ring::Ring(ComType type,
     default:
         stream_count = nodes_in_ring - 1;
     }
-    if (type == ComType::All_to_All || type == ComType::All_Gather) {
-        max_count = 0;
-    } else {
-        max_count = nodes_in_ring - 1;
-    }
     remained_packets_per_message = 1;
-    remained_packets_per_max_count = 1;
     switch (type) {
     case ComType::All_Reduce:
         this->final_data_size = data_size;
@@ -82,7 +80,12 @@ Ring::Ring(ComType type,
         this->final_data_size = data_size;
         this->msg_size = data_size / nodes_in_ring;
         break;
-    default:;
+    default:
+        LoggerFactory::get_logger("system::collective::Ring")
+            ->critical(
+                "######### Exiting because of unknown communication type for "
+                "Ring collective algorithm #########");
+        std::exit(1);
     }
 }
 
@@ -91,6 +94,30 @@ int Ring::get_non_zero_latency_packets() {
 }
 
 void Ring::run(EventType event, CallData* data) {
+    // C3-style guard (mirrors wscllm 2026-09-28; face-LRU audit 2026-09-29):
+    // a StreamInit reaching THIS (base) run with comType == All_to_All means
+    // the dispatch selected plain Ring for an all-to-all stream
+    // ("ring"/"oneRing" in all-to-all-implementation). Plain Ring is doubly
+    // wrong for All_to_All: its neighbor pair is fixed at construction
+    // (process_max_count only releases packets, no rotation), so every
+    // exchange talks to the single ring neighbor instead of all n-1 peers,
+    // and its stream_count ((n-1)*n/2) counts rounds that never deliver the
+    // all-to-all data set. The AllToAll subclass (the "direct"
+    // implementation) is the correct all_to_all path and overrides run(), so
+    // this guard never fires for it -- even though its base-constructor
+    // pass-through legitimately constructs the Ring base with All_to_All.
+    // Dormant today (no workload emits all_to_all), so this converts a
+    // silent wrong-traffic simulation into a loud misconfiguration failure
+    // without touching any current run.
+    if (event == EventType::StreamInit && comType == ComType::All_to_All) {
+        LoggerFactory::get_logger("system::collective::Ring")
+            ->critical(
+                "######### Exiting because plain Ring must not drive "
+                "All_to_All (all-to-all-implementation must be direct; "
+                "ring neighbor is fixed and stream_count is wrong) "
+                "#########");
+        std::exit(1);
+    }
     if (event == EventType::General) {
         free_packets += 1;
         ready();
@@ -107,15 +134,14 @@ void Ring::run(EventType event, CallData* data) {
 
 void Ring::release_packets() {
     if (NPU_to_MA == true) {
-        (new PacketBundle(stream->owner, stream, locked_packets, processed,
-                          send_back, msg_size, transmition))
+        (new PacketBundle(stream->owner, stream, processed, send_back,
+                          msg_size, transmition))
             ->send_to_MA();
     } else {
-        (new PacketBundle(stream->owner, stream, locked_packets, processed,
-                          send_back, msg_size, transmition))
+        (new PacketBundle(stream->owner, stream, processed, send_back,
+                          msg_size, transmition))
             ->send_to_NPU();
     }
-    locked_packets.clear();
 }
 
 void Ring::process_stream_count() {
@@ -135,14 +161,10 @@ void Ring::process_stream_count() {
 }
 
 void Ring::process_max_count() {
-    if (remained_packets_per_max_count > 0) {
-        remained_packets_per_max_count--;
-    }
-    if (remained_packets_per_max_count == 0) {
-        max_count--;
-        release_packets();
-        remained_packets_per_max_count = 1;
-    }
+    // The old max_count / remained_packets_per_max_count two-level gate was
+    // always true (the remainder counter was hard-wired to 1 and max_count
+    // had no reader), so every inserted packet simply releases a bundle.
+    release_packets();
 }
 
 void Ring::reduce() {
@@ -152,8 +174,7 @@ void Ring::reduce() {
 }
 
 bool Ring::iteratable() {
-    if (stream_count == 0 &&
-        free_packets == (parallel_reduce * 1)) {  // && not_delivered==0
+    if (stream_count == 0 && free_packets == (parallel_reduce * 1)) {
         exit();
         return false;
     }
@@ -163,15 +184,12 @@ bool Ring::iteratable() {
 void Ring::insert_packet(Callable* sender) {
     if (zero_latency_packets == 0 && non_zero_latency_packets == 0) {
         zero_latency_packets = parallel_reduce * 1;
-        non_zero_latency_packets =
-            get_non_zero_latency_packets();  //(nodes_in_ring-1)*parallel_reduce*1;
+        non_zero_latency_packets = get_non_zero_latency_packets();
         toggle = !toggle;
     }
     if (zero_latency_packets > 0) {
-        packets.push_back(MyPacket(
-            stream->current_queue_id, curr_sender,
-            curr_receiver));  // vnet Must be changed for alltoall topology
-        locked_packets.push_back(&packets.back());
+        packets.push_back(
+            MyPacket(curr_sender, curr_receiver));
         processed = false;
         send_back = false;
         NPU_to_MA = true;
@@ -179,10 +197,8 @@ void Ring::insert_packet(Callable* sender) {
         zero_latency_packets--;
         return;
     } else if (non_zero_latency_packets > 0) {
-        packets.push_back(MyPacket(
-            stream->current_queue_id, curr_sender,
-            curr_receiver));  // vnet Must be changed for alltoall topology
-        locked_packets.push_back(&packets.back());
+        packets.push_back(
+            MyPacket(curr_sender, curr_receiver));
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
             processed = true;
@@ -220,18 +236,15 @@ bool Ring::ready() {
     stream->owner->front_end_sim_send(
         0, Sys::dummy_data, msg_size, UINT8, packet.preferred_dest,
         stream->stream_id, &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE,
-        &Sys::handleEvent,
-        nullptr);  // stream_id+(packet.preferred_dest*50)
+        &Sys::handleEvent, nullptr);
     sim_request rcv_req;
     rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-        stream, stream->owner->id, EventType::PacketReceived,
-        packet.preferred_vnet, stream->stream_id);
+        stream, stream->owner->id, EventType::PacketReceived);
     stream->owner->front_end_sim_recv(
         0, Sys::dummy_data, msg_size, UINT8, packet.preferred_src,
         stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,
-        &Sys::handleEvent,
-        ehd);  // stream_id+(owner->id*50)
+        &Sys::handleEvent, ehd);
     reduce();
     return true;
 }
@@ -239,9 +252,6 @@ bool Ring::ready() {
 void Ring::exit() {
     if (packets.size() != 0) {
         packets.clear();
-    }
-    if (locked_packets.size() != 0) {
-        locked_packets.clear();
     }
     stream->owner->proceed_to_next_vnet_baseline((StreamBaseline*)stream);
     return;

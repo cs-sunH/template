@@ -16,8 +16,8 @@ PROJECT_DIR="${SCRIPT_DIR:?}/.."
 echo "[ASTRA-sim] Building Docker Image..."
 echo ""
 
-# build docker image
-docker build -t astrasim/astra-sim:latest ${PROJECT_DIR:?}
+# build docker image (quoted: PROJECT_DIR may contain spaces)
+docker build -t astrasim/astra-sim:latest "${PROJECT_DIR:?}"
 
 # finalize
 echo ""

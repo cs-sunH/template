@@ -44,7 +44,9 @@ class _FixtureConfig:
     npus_count = 1
     remote_operand_loads = False
     inference_groups = ()
-    prefill_chunk_size = 1
+    # (2026-09-30) N 死代码清理:原 prefill_chunk_size = 1 已删——builder
+    # 构造契约只读 npus_count/remote_operand_loads/inference_groups,
+    # 该字段仅 face_online_scheduler 消费,本夹具不经过。
 
 
 class _MemoryScheduler(OnlineSchedulerBase):
@@ -191,7 +193,8 @@ def main() -> int:
     scheduler = _MemoryScheduler(
         manifest={"requests": _LazyRequests(request_count)},
         config=_FixtureConfig(),
-        mode="memory_fixture",
+        # 2026-09-26(R2 py-online-D2):基类 mode 死参数已移除,原
+        # mode="memory_fixture" 传参删除。
         profile_sink=_discard_row,
         online_stats_sink=_discard_row,
     )

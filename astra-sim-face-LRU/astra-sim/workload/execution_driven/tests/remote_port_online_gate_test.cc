@@ -14,7 +14,9 @@ This file is a NEW fixture built directly on NodeStoreGraphSource / NodeView.
 The former RemoteFifoLedgerTest this plan family once referenced was deleted
 from this repository (2026-09-24 worktree) and is NOT extended or referenced
 here. The gate semantics under test are the reworked HardwareResource
-classification (HardwareResource.hh:57-105): remote MEM nodes occupy an
+classification (the shared semantic-classification block on
+HardwareResource's online-mode NodeView overloads: occupy/release/
+is_available): remote MEM nodes occupy an
 independent, count-based, UNBOUNDED remote-MEM slot (is_available never
 blocks on it, and it is NOT a comm slot), while CPU/COMP/COMM keep their
 legacy slots.
@@ -637,12 +639,9 @@ int main() {
 
     // ---- event-interval integrals: the concurrent-sharing evidence -------
     {
-        // rank0: peak_streaming >= 2 (exactly 2) and shared_busy_ns > 0
+        // rank0: peak_streaming == 2 and shared_busy_ns > 0
         // (exactly the [100,300) window at N=2).
         const auto st = mem->get_port_stats(0);
-        expect(st.peak_streaming >= 2,
-               tag + ": rank0 peak_streaming >= 2, got " +
-                   std::to_string(st.peak_streaming));
         expect(st.peak_streaming == 2, tag + ": rank0 peak_streaming == 2");
         expect(st.shared_busy_ns > 0.0,
                tag + ": rank0 shared_busy_ns > 0");

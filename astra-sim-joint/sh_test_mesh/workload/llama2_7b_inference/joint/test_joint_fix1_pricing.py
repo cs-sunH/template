@@ -5,12 +5,14 @@ shard 契约）的零后端单测。
 
 覆盖（按补遗逐项）：
 
-1. **A7' PARTIAL 驻留 recompute 计价修正**（joint_cost_model.py
-   ``_recompute_missing_tokens`` 的 ``resident_here`` 双态判据）：
-   审计复现锚 L=32/prefix=16/H=1000 ⇒ 500；取整边界（ceil 在缺失侧）；
-   PARTIAL 异地仍整份；LOCAL 驻留 0；estimate_action 级 PARTIAL 驻留
-   vs 异地的 compute_ns 差（既有非 PARTIAL 金值不动——由既有
-   shard/credit/telemetry 金值测试族回归钉住）。
+1. **D10 recompute 语义重定义**（v2.0 §6.2，2026-09-26；
+   joint_cost_model.py ``rebuild_context_tokens`` 取代旧 R13
+   ``_recompute_missing_tokens``）：重建基数 = 整份已保存上下文 H、
+   缺失层比例折算 ceil(H×missing_layers/L) 取消（旧审计锚
+   L=32/prefix=16/H=1000 ⇒ 500 与取整边界 501 按新语义作废重写）；
+   LOCAL/PARTIAL/REMOTE × 驻留/异地四组 compute_ns 同值（空间复用不
+   免 FLOP）、rebuild 阶段字段（rebuild_context_tokens / stage=
+   prefill_replay / suppress_sampling=output=False）随 notes 披露。
 2. **A8' transfer_factor EWMA 接线**：SH 侧 ``_ingest_link_telemetry``
    逐窗口喂 ``observe_transfer_from_link_window``——updates>0、
    factor≥1.0（拥胀方向）、同 tick 多链路 Σactual/Σbase 单条更新、
@@ -38,11 +40,10 @@ shard 契约）的零后端单测。
 7. **_transfer_ns_shards 空 shard 契约**（F1 小项）：空 shard 序列 ⇒
    返回 0 且 startup_ns 不计入；在场 shard（含零字节）⇒ startup 计入
    ——docstring 钉字的行为锚。
-8. **O1 recompute span 基二分**（A19'(a)，2026-09-23）：
-   ``prefill_task_load_ns_fn`` 的 history 实参按 ``_resident_here``
-   二分——@驻留（LOCAL/PARTIAL）基=session.history_tokens（与执行侧
-   R13 双分支同判据对拍，prefix=L 时与 stay 逐位同值）、异地/REMOTE
-   副本基=0（回归锚）；修前恒 0 把 R13 异地腿误泛化到驻留腿。
+8. **D10 recompute span 基恒 0**（v2.0 §6.2，取代 O1/A19'(a) 驻留
+   二分）：``prefill_task_load_ns_fn`` 的 history 实参对 recompute 恒
+   0（完整 H+U 重放自 0 物化工作副本，四组同口径）；重算量 = input +
+   整份 H；prefix=L 时 recompute 不再 ≡ stay（作废锚正向钉）。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_joint_fix1_pricing.py   （或 pytest 同路径）
@@ -72,8 +73,9 @@ from face_scheduler import (  # noqa: E402
 )
 from joint.hbm_port_flow_registry import HbmPortFlowRegistry  # noqa: E402
 from joint.joint_config import JointMechanismConfig  # noqa: E402
+from joint.capacity_summary import CapacitySummary  # noqa: E402
+from joint.pipeline_identity import PipelineIdentityAllocator  # noqa: E402
 from joint.joint_cost_model import (  # noqa: E402
-    ACTION_REMOTE,
     InstanceLoadView,
     JointCostModel,
     JointHardwareRates,
@@ -230,6 +232,9 @@ def _scheduler(*, quota_mode="static"):
     scheduler.runtime_by_request_id = {}
     scheduler.kv_manager = SimpleNamespace(
         tp_degree=2,
+        # D04：JCM 构造注入 nearest_edge_fn——替身把池端口钉在每 rank
+        # 本地（pool 腿退化口径：无 NoC 段；本文件用例不依赖池腿）。
+        nearest_edge=lambda rank: rank,
         _sessions={
             "s1": SimpleNamespace(
                 working_kind=None, context_tokens=100,
@@ -244,8 +249,19 @@ def _scheduler(*, quota_mode="static"):
         release_request_capacity_reservation=lambda rid: None,
         request_hbm_eventually_feasible_instances=lambda **kw: (
             [True, True, True, True]),
+        # P 身份预演面（生产 _pipeline_identity_provider 的非突变
+        # next-ID peek 先查在册 lease）：中性替身恒无在册 lease、
+        # next-ID 固定 1（真 manager 从 1 起发号；本文件用例不消费
+        # 身份面数值语义）。
+        staging_lease_for_request=lambda rid: None,
+        peek_next_staging_allocation_id=lambda: 1,
         _effective_remaining_by_tp_rank=lambda index: (10**9, 10**9),
         _instance_reclaimable_capacity_by_tp_rank=lambda index: (0, 0),
+        # D11：容量驱逐摘要/容量账替身（零桶 = 快照时刻无合法 victim；
+        # 逐 rank 台账 (C, W, O, Z) 与 remaining=1e9 同源核对守恒）。
+        capacity_summary_snapshot=lambda: CapacitySummary(instances={}),
+        capacity_ledger_by_tp_rank=lambda index: (
+            (2 * 10**9, 0, 0, 10**9), (2 * 10**9, 0, 0, 10**9)),
     )
     scheduler.joint_config = JointMechanismConfig(
         category_mode="typed", scheduler_mode="joint",
@@ -281,6 +297,7 @@ def _scheduler(*, quota_mode="static"):
         "stay": 0, "copy": 0, "remote-read": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
+        "recompute_forced_action_mask": 0,
         "recompute_forced_quota_deferred": 0,
         "recompute_forced_evicted_permanent": 0,
     }
@@ -299,6 +316,10 @@ def _scheduler(*, quota_mode="static"):
     scheduler._link_telemetry_rates = {}
     # M1：C8 遥测状态 __init__ 同款（时间加权活跃流数）。
     scheduler._link_telemetry_flow_counts = {}
+    # ACC（验收纪律第 3 类，v2.0 §19.3）：预测器开销账本 __init__ 同款
+    # 初值（F6 销账口径：决策/摘要记账直访——替身漏设 = AttributeError）。
+    from joint.predictor_cost_accounting import PredictorCostAccounting
+    scheduler.predictor_cost = PredictorCostAccounting()
     scheduler.p_chunk = 512  # N4：_joint_prefill_total_load_ns 同形切分（F6 替身补设）
     scheduler._link_telemetry_epoch_count = 0
     scheduler._link_telemetry_sample_count = 0
@@ -334,126 +355,123 @@ def _telemetry_view(scheduler):
             scheduler._joint_rates.noc_link_bytes_per_ns))
 
 
-# ================================================ 1. A7' PARTIAL 计价 ==
+# ==================================== 1. D10 recompute 语义重定义 ==
 
 
-class A7PartialResidentRecomputeTest(unittest.TestCase):
-    """resident_here 双态判据：PARTIAL 驻留 recompute = history − 驻留量。
+class D10RebuildContextTokensTest(unittest.TestCase):
+    """D10（v2.0 §6.2，2026-09-26）：``rebuild_context_tokens`` 取代旧
+    R13 ``_recompute_missing_tokens``——重建基数 = 整份已保存上下文 H，
+    **缺失层比例折算 ceil(H×missing_layers/L) 取消**（KV 非任意层激活
+    检查点，v2.0 C05/A2）；LOCAL/PARTIAL/REMOTE × 驻留/异地四组同基数
+    （重放不依赖旧 KV）。"""
 
-    修正前（HEAD 既有笔误）：resident_here 只认 local_hbm ⇒ PARTIAL 分
-    支为死分支、恒返回整份 history（系统性高估约 2 倍）。
-    """
-
-    def test_audit_reproduction_l32_prefix16_h1000(self):
-        # 审计复现锚：L=32、prefix=16、H=1000 ⇒ missing = 1000 −
-        # floor(1000×16/32) = 500（等价实现 = ceil(H×(L−prefix)/L)，
-        # ceil 在缺失侧——H=1001 时两种取整读法差 1，见下一用例）。
+    def test_full_history_rebuild_in_all_four_groups(self):
+        # 旧折算回归值按新语义重写：旧锚 L=32/prefix=16/H=1000 的驻留
+        # 折算 500 与取整边界 501 全部作废——四组恒整份 1000。
         model = _jcm(model_layers=32)
-        session = _session(
-            home=0, resident=0, location="partial_hbm_remote", prefix=16,
-            history_tokens=1000,
-            history_bytes=(500, 500), missing=(500, 500))
-        self.assertEqual(
-            model._recompute_missing_tokens(session, 0), 500)
-        # 同会话异地目标（非驻留）＝整份（既有行为不动）。
-        self.assertEqual(
-            model._recompute_missing_tokens(session, 1), 1000)
+        history = 1000
+        groups = {
+            # (home, resident, location, prefix) × 驻留/异地
+            "local_resident": (0, 0, "local_hbm", 32),
+            "partial_resident": (0, 0, "partial_hbm_remote", 16),
+            "local_away": (1, 1, "local_hbm", 32),
+            "partial_away": (1, 1, "partial_hbm_remote", 16),
+            "remote_base": (0, 0, "remote_memory", 32),
+        }
+        for name, (home, resident, location, prefix) in groups.items():
+            session = _session(
+                home=home, resident=resident, location=location,
+                prefix=prefix, history_tokens=history,
+                history_bytes=(500, 500), missing=(500, 500))
+            # 重建基数与目标 instance 无关（旧接口的 instance_index
+            # 参数随驻留二分一并删除）。
+            self.assertEqual(
+                model.rebuild_context_tokens(session), history,
+                msg=f"rebuild base must be full H for {name}")
 
-    def test_rounding_ceils_on_missing_side(self):
-        # H=1001、L=32、p=16 ⇒ ceil(1001×16/32) = ceil(500.5) = 501。
+    def test_prefix_does_not_prorate(self):
+        # prefix ∈ {0, 16, 32}（L=32）同会话同基数——层驻留状态只影响
+        # 空间足迹（空间复用），不影响重建 FLOP。
         model = _jcm(model_layers=32)
-        session = _session(
-            home=0, resident=0, location="partial_hbm_remote", prefix=16,
-            history_tokens=1001,
-            history_bytes=(500, 501), missing=(501, 500))
-        self.assertEqual(
-            model._recompute_missing_tokens(session, 0), 501)
+        for prefix in (0, 16, 32):
+            session = _session(
+                location="partial_hbm_remote", prefix=prefix,
+                history_tokens=1000,
+                history_bytes=(500, 500), missing=(500, 500))
+            self.assertEqual(model.rebuild_context_tokens(session), 1000)
 
-    def test_local_prefix_partial_uses_ceil_formula(self):
-        # A14'（H8，2026-09-22 第三轮复审）：LOCAL 基且 prefix<L（生产
-        # 不变量"转 LOCAL 恒置 prefix=layers"排除、不可达的防御形态）
-        # 对齐执行侧——同样走 ceil 折算而非落穿整份 history（"与执行侧
-        # 逐字节一致"对全部 resident_here 形态成立；修正前该形态恒
-        # 整份 1001）。
-        model = _jcm(model_layers=32)
-        session = _session(
-            home=0, resident=0, location="local_hbm", prefix=16,
-            history_tokens=1001,
-            history_bytes=(500, 501), missing=(501, 500))
-        self.assertEqual(
-            model._recompute_missing_tokens(session, 0), 501)
-
-    def test_prefix_boundary_zero_and_full(self):
+    def test_zero_history_rebuilds_nothing(self):
         model = _jcm(model_layers=4)
-        # prefix = L（LOCAL 驻留全层）⇒ 0（既有行为）。
-        self.assertEqual(model._recompute_missing_tokens(
-            _session(location="local_hbm", prefix=4), 0), 0)
-        # prefix = 0 的 PARTIAL（防御边界）⇒ 整份。
-        self.assertEqual(model._recompute_missing_tokens(
-            _session(location="partial_hbm_remote", prefix=0), 0), 100)
-        # REMOTE 基（无主）⇒ 整份（既有行为）。
-        self.assertEqual(model._recompute_missing_tokens(
-            _session(location="remote_memory", resident=1), 0), 100)
+        session = _session(location="local_hbm", prefix=4,
+                           history_tokens=0)
+        self.assertEqual(model.rebuild_context_tokens(session), 0)
 
-    def test_estimate_action_partial_resident_cheaper_than_away(self):
-        # 决策级：PARTIAL 驻留 recompute 的 compute_ns 含缺失后缀折算
-        # （H=100、L=4、p=2 ⇒ 50 token），异地 = 整份 100——修正前两者
-        # 同值（死分支），修正后驻留侧便宜。prefill=1.0 ns/token、
-        # decode 10×2.0 ⇒ 70 < 120 < 170。
+    def test_estimate_p_with_continuation_compute_identical_across_four_groups(self):
+        # 决策级（验收）：四组 token 序列与算子工作解释一致——重算量 =
+        # input + 整份 H（50+100），span 基 0；compute_ns 同值（空间
+        # 复用不免 FLOP，驻留/异地差异只在空间/合并腿，不在计算段）。
+        # prefill=1.0 ns/token、decode 10×2.0 ⇒ compute = 150 + 20 = 170。
         model = _jcm(model_layers=4)
-        partial = _session(
-            home=0, resident=0, location="partial_hbm_remote", prefix=2,
-            history_bytes=(500, 500), missing=(500, 500))
-        away = _session(
-            home=1, resident=1, location="partial_hbm_remote", prefix=2,
-            history_bytes=(500, 500), missing=(500, 500))
-        local = _session(home=0, resident=0, location="local_hbm",
-                         prefix=4)
         request = _request(input_tokens=50, decode=10)
-        resident_cost = model.estimate_action(
-            session=partial, request=request, instance_index=0,
-            action="recompute", remote_enabled=True)
-        away_cost = model.estimate_action(
-            session=away, request=request, instance_index=0,
-            action="recompute", remote_enabled=True)
-        local_cost = model.estimate_action(
-            session=local, request=request, instance_index=0,
-            action="recompute", remote_enabled=True)
-        # compute = (input + missing_equiv)×1.0 + 10×2.0。
+        groups = {
+            "local_resident": _session(
+                home=0, resident=0, location="local_hbm", prefix=4),
+            "partial_resident": _session(
+                home=0, resident=0, location="partial_hbm_remote",
+                prefix=2, history_bytes=(500, 500), missing=(500, 500)),
+            "local_away": _session(
+                home=1, resident=1, location="local_hbm", prefix=4),
+            "partial_away": _session(
+                home=1, resident=1, location="partial_hbm_remote",
+                prefix=2, history_bytes=(500, 500), missing=(500, 500)),
+            "remote_base": _session(
+                home=0, resident=0, location="remote_memory", prefix=4),
+        }
+        seen_compute = {}
+        for name, session in groups.items():
+            candidate = model.estimate_P_with_continuation(
+                session=session, request=request, instance_index=0,
+                action="recompute", remote_enabled=True)
+            self.assertTrue(candidate.applicable, msg=name)
+            seen_compute[name] = candidate.breakdown.compute_ns
+            # token 序列守恒：重建（H=100）+ 本轮输入（U=50）各恰一次
+            # （不把旧 U 再算成新 prefill），阶段字段随 notes 披露。
+            self.assertIn("rebuild_context_tokens=100",
+                          candidate.breakdown.notes, msg=name)
+            self.assertIn("rebuild_stage=prefill_replay",
+                          candidate.breakdown.notes, msg=name)
+            self.assertIn("rebuild_suppress_sampling=False",
+                          candidate.breakdown.notes, msg=name)
+            self.assertIn("rebuild_suppress_output=False",
+                          candidate.breakdown.notes, msg=name)
         self.assertEqual(
-            resident_cost.breakdown.compute_ns, (50 + 50) + 20)
-        self.assertEqual(away_cost.breakdown.compute_ns, (50 + 100) + 20)
-        self.assertEqual(local_cost.breakdown.compute_ns, (50 + 0) + 20)
-        self.assertLess(local_cost.breakdown.compute_ns,
-                        resident_cost.breakdown.compute_ns)
-        self.assertLess(resident_cost.breakdown.compute_ns,
-                        away_cost.breakdown.compute_ns)
+            set(seen_compute.values()), {(50 + 100) + 20})
 
 
-# ====================================== O1 recompute span 基二分 ==
+class D10RecomputeSpanBaseZeroTest(unittest.TestCase):
+    """D10（v2.0 §6.2，取代 O1/A19'(a) 驻留二分）：recompute 的
+    ``prefill_task_load_ns_fn`` history 实参恒 0——重放自已保存 token
+    物化工作副本、不依赖旧 KV（LOCAL/PARTIAL/REMOTE × 驻留/异地四组
+    同口径）；重算量 = input + 整份 H（缺失层折算取消）。
 
-
-class O1RecomputeSpanBaseTest(unittest.TestCase):
-    """O1（A19'(a)，2026-09-23）：recompute 的 prefill_task_load_ns_fn
-    history 实参按 resident_here 二分——@驻留基=H（对拍执行侧 sh30
-    R13 双分支同判据），异地/REMOTE 副本基=0（回归锚）。
-
-    修前 history 恒 0（R13 异地腿"副本 0 基"误泛化）：@驻留重算仍对
-    驻留前缀 KV 做 attention（roofline attention 项 ∝ chunk×context），
-    基 0 丢掉整项、低估 1.12–3.7×；prefix=L 时生产 recompute@home ≡
-    stay 逐位相同而 JCM 压价 recompute ⇒ argmin 翻转（PROVENANCE
-    §41.6 观测的漂移部分系此 artifact）。
+    旧语义作废锚：@驻留基=H、prefix=L 时 recompute ≡ stay 逐位同值
+    （R13/O1 口径）——新语义下 recompute 恒付整份重放（空间复用不免
+    FLOP），与 stay 的 (input, H) 实参恒不同。
     """
 
     @staticmethod
     def _shaped_fn(p_chunk=16):
         """N4 生产同形简化：chunk 切分 + 累计 context 逐 chunk 求和
         （每 chunk load = chunk×(context+10)——固定项使线性外推可分辨），
-        同时记录 (tokens, history) 实参供对拍断言。"""
+        同时记录 (tokens, history) 实参供对拍断言。D06 契约：接受
+        ``hbm_share_divisor`` 关键字（本夹具值不随份额缩放；份额实参
+        逐次记录于 ``fn.shares`` 供份额钉测）。"""
         calls = []
+        shares = []
 
-        def fn(input_tokens, history_tokens):
+        def fn(input_tokens, history_tokens, hbm_share_divisor=1):
             calls.append((input_tokens, history_tokens))
+            shares.append(hbm_share_divisor)
             total = 0
             completed = 0
             while completed < input_tokens:
@@ -463,6 +481,7 @@ class O1RecomputeSpanBaseTest(unittest.TestCase):
             return total
 
         fn.calls = calls
+        fn.shares = shares
         return fn
 
     @staticmethod
@@ -471,69 +490,76 @@ class O1RecomputeSpanBaseTest(unittest.TestCase):
             _jcm(model_layers=model_layers),
             prefill_task_load_ns_fn=fn)
 
-    def test_resident_recompute_history_base_equals_session_history(self):
-        # LOCAL 全层驻留（prefix=L）：missing=0，fn 实参 = (input, H)——
-        # 修前为 (input, 0)。PARTIAL 驻留（prefix=2 < L=4）：missing=
-        # ceil(100×2/4)=50 计入 tokens，history 基仍 = H。
+    def test_all_four_groups_span_base_zero_full_replay(self):
+        # 四组统一：fn 实参 = (input + H, 0)——tokens 含整份 H（重放），
+        # history 基 0（工作副本自 0 物化，attention 随 chunk 累计）。
         request = _request(input_tokens=50, decode=10)
-        fn = self._shaped_fn()
-        model = self._model_with_fn(fn)
-        local = _session(location="local_hbm", prefix=4,
-                         history_tokens=100)
-        candidate = model.estimate_action(
-            session=local, request=request, instance_index=0,
-            action="recompute", remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        self.assertEqual(fn.calls, [(50, 100)])
-        fn2 = self._shaped_fn()
-        model2 = self._model_with_fn(fn2)
-        partial = _session(
-            location="partial_hbm_remote", prefix=2,
-            history_bytes=(500, 500), missing=(500, 500))
-        model2.estimate_action(
-            session=partial, request=request, instance_index=0,
-            action="recompute", remote_enabled=True)
-        self.assertEqual(fn2.calls, [(50 + 50, 100)])
+        groups = {
+            "local_resident": lambda: _session(
+                location="local_hbm", prefix=4, history_tokens=100),
+            "partial_resident": lambda: _session(
+                location="partial_hbm_remote", prefix=2,
+                history_bytes=(500, 500), missing=(500, 500),
+                history_tokens=100),
+            "local_away": lambda: _session(
+                home=1, resident=1, location="local_hbm", prefix=4,
+                history_tokens=100),
+            "remote_base": lambda: _session(
+                home=0, resident=0, location="remote_memory", prefix=4,
+                history_tokens=100),
+        }
+        for name, make_session in groups.items():
+            fn = self._shaped_fn()
+            model = self._model_with_fn(fn)
+            candidate = model.estimate_P_with_continuation(
+                session=make_session(), request=request, instance_index=0,
+                action="recompute", remote_enabled=True)
+            self.assertTrue(candidate.applicable, msg=name)
+            self.assertEqual(fn.calls, [(50 + 100, 0)], msg=name)
 
-    def test_prefix_full_layers_recompute_prefill_identical_to_stay(self):
-        # prefix=L 生产不变量：recompute@home 重算量为 0 ⇒ 生产
-        # recompute ≡ stay 逐位相同；JCM 侧 fn 实参与 compute 分量
-        # 必须同值（修前 recompute 基 0 ⇒ attention 项丢失、压价）。
+    def test_full_layer_resident_recompute_no_longer_equals_stay(self):
+        # 作废锚正向钉：prefix=L 驻留（旧语义 recompute ≡ stay）下，
+        # recompute 实参 (150, 0) ≠ stay 实参 (50, 100)，且 recompute
+        # 计算段更贵（整份重放 FLOP，空间复用不免）。
         fn = self._shaped_fn()
         model = self._model_with_fn(fn)
         session = _session(location="local_hbm", prefix=4,
                            history_tokens=100)
         request = _request(input_tokens=50, decode=10)
-        recompute = model.estimate_action(
+        recompute = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=0,
             action="recompute", remote_enabled=True)
         recompute_call = fn.calls[-1]
-        stay = model.estimate_action(
+        stay = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=0,
             action="stay", remote_enabled=True)
         stay_call = fn.calls[-1]
-        self.assertEqual(recompute_call, stay_call)
-        self.assertEqual(recompute_call, (50, 100))
-        self.assertEqual(
+        self.assertEqual(recompute_call, (50 + 100, 0))
+        self.assertEqual(stay_call, (50, 100))
+        # compute = fn(tokens, history)×1.0 + 10×2.0（因子冷启动 1.0）：
+        # recompute 付整份重放（基 0、tokens 150）> stay（基 H、50）。
+        expected_recompute = self._shaped_fn()(150, 0) + 20
+        expected_stay = self._shaped_fn()(50, 100) + 20
+        self.assertEqual(recompute.breakdown.compute_ns, expected_recompute)
+        self.assertEqual(stay.breakdown.compute_ns, expected_stay)
+        self.assertGreater(
             recompute.breakdown.compute_ns, stay.breakdown.compute_ns)
 
     def test_away_and_remote_recompute_history_base_zero(self):
-        # 回归锚：@异地（resident=1、目标 0）与 REMOTE 基（无主，
-        # location 腿否决——resident 即使==目标也非驻留）副本 0 基
-        # 不动；与既有 N4 组 4 对拍（online/test_joint_n_batch.py）
-        # 同口径的 JCM 层锚。
+        # 回归锚（旧 O1 异地/REMOTE 腿保留）：副本 0 基不动；重算量自
+        # 旧"整份"口径不变（改变的是驻留腿并入同口径）。
         fn = self._shaped_fn()
         model = self._model_with_fn(fn)
         request = _request(input_tokens=50, decode=10)
         away = _session(home=1, resident=1, location="local_hbm",
                         prefix=4, history_tokens=100)
-        model.estimate_action(
+        model.estimate_P_with_continuation(
             session=away, request=request, instance_index=0,
             action="recompute", remote_enabled=True)
         self.assertEqual(fn.calls[-1], (50 + 100, 0))
         remote = _session(home=0, resident=0, location="remote_memory",
                           prefix=4, history_tokens=100)
-        model.estimate_action(
+        model.estimate_P_with_continuation(
             session=remote, request=request, instance_index=0,
             action="recompute", remote_enabled=True)
         self.assertEqual(fn.calls[-1], (50 + 100, 0))
@@ -547,7 +573,9 @@ class A8TransferFactorWiringTest(unittest.TestCase):
 
     def test_congested_window_updates_factor_ge_1(self):
         # link 5 ⇒ (3,2)：served 1000 B / active 500 ns ⇒ rate 2 B/ns；
-        # 名义 200 B/ns ⇒ 样本比 = active/(served/nominal) = 500/5 = 100。
+        # 名义 200 B/ns ⇒ base = int(1000/200) = 5、actual = 500。
+        # D14 固定 1/16 EWMA 平滑效率 η（首样本同规则）：
+        # η_sample = 5/500 = 0.01，η = (15+0.01)/16，因子 = 16/15.01。
         scheduler = _scheduler()
         scheduler._ingest_link_telemetry({
             "tick": 1000, "link_telemetry": [
@@ -558,7 +586,7 @@ class A8TransferFactorWiringTest(unittest.TestCase):
         factors.flush()  # 决策时刻纪律（P3：读因子前 flush）
         self.assertEqual(factors.updates["transfer_factor"], 1)
         self.assertGreaterEqual(factors.transfer_factor, 1.0)
-        self.assertAlmostEqual(factors.transfer_factor, 100.0)
+        self.assertAlmostEqual(factors.transfer_factor, 16.0 / 15.01)
 
     def test_factor_reaches_cost_model_at_decision_time(self):
         # JCM 构造（__post_init__ flush）后 service_factors 同一对象、
@@ -573,18 +601,19 @@ class A8TransferFactorWiringTest(unittest.TestCase):
         scheduler._ingest_link_telemetry({
             "tick": 1000, "link_telemetry": [
                 _sample(5, 1000, 500, 0, 1000)]})
-        model = scheduler._joint_cost_model(
-            0, decode_context_tokens=150, decode_average_length=5)
+        model = scheduler._joint_cost_model(0)
         self.assertIs(model.service_factors, scheduler._joint_factors)
         self.assertGreaterEqual(model.service_factors.transfer_factor, 1.0)
         self.assertEqual(
             model.service_factors.updates["transfer_factor"], 1)
 
     def test_same_tick_links_merge_into_single_update(self):
-        # 同 tick 两链路经 _record 时刻汇总（Σactual/Σbase）为一条更新。
-        # base_ns 逐链路 int 截断（observe_transfer_from_link_window 契
-        # 约）：link 5 base = int(1000/200) = 5、link 7 = int(500/200)
-        # = 2 ⇒ ratio = 1000/7 ≈ 142.857。
+        # 同 tick 两链路经 _record 时刻汇总（η_sample = Σbase/Σactual）
+        # 为一条更新。base_ns 逐链路**向上取整**（D17 修复轮二：
+        # observe_transfer_from_link_window 的 int() 向下截断改 ceil）：
+        # link 5 base = ceil(1000/200) = 5、link 7 = ceil(500/200) = 3
+        # ⇒ η_sample = 8/1000；D14 固定 1/16 EWMA
+        # 平滑效率（首样本同规则）：η = (15+0.008)/16，因子 = 16/15.008。
         scheduler = _scheduler()
         scheduler._ingest_link_telemetry({
             "tick": 1000, "link_telemetry": [
@@ -594,7 +623,7 @@ class A8TransferFactorWiringTest(unittest.TestCase):
         factors.flush()
         self.assertEqual(factors.updates["transfer_factor"], 1)
         self.assertAlmostEqual(
-            factors.transfer_factor, 1000.0 / 7.0)
+            factors.transfer_factor, 16.0 / 15.008)
 
     def test_nominal_rate_window_gives_exactly_one(self):
         # 实测 = 名义（200 B/ns：served 1000 / active 5）⇒ 样本比 1.0。
@@ -618,12 +647,12 @@ class A8TransferFactorWiringTest(unittest.TestCase):
                     _sample(5, 1000, 500, 0, 1000)]})
         self.assertEqual(scheduler._link_telemetry_rates, {})
 
-    def test_subnominal_window_clamped_to_one(self):
-        # A12'：亚名义样本（实测快于名义：active < served/名义速率）
-        # 钳位 1.0 + clamped 计数披露——≥1 拥胀方向冻结落地（此前实现
-        # 无钳位、既有 assertGreaterEqual(1.0) 在 100/1 样本下恒真）。
+    def test_subnominal_window_anomalous_skipped(self):
+        # D14（v2.0 §9.2）：亚名义样本（实测快于名义：active < served/
+        # 名义速率，ratio<1 ⟺ η_sample>1 出 0<η≤1 有效窗口）记录异常并
+        # 跳过——不钳位、不更新（原 A12' 钳位 1.0 属"无声截断"，退役）。
         # link 5：served 1000 / active 4 ⇒ base=int(1000/200)=5、
-        # ratio=4/5=0.8 → 钳 1.0。
+        # ratio=4/5=0.8 → 异常跳过。
         scheduler = _scheduler()
         scheduler._ingest_link_telemetry({
             "tick": 1000, "link_telemetry": [
@@ -631,37 +660,45 @@ class A8TransferFactorWiringTest(unittest.TestCase):
         factors = scheduler._joint_factors
         factors.flush()
         self.assertEqual(factors.transfer_factor, 1.0)
-        self.assertEqual(factors.clamped.get("transfer_factor"), 1)
-        self.assertEqual(factors.updates["transfer_factor"], 1)
+        self.assertEqual(factors.anomalous.get("transfer_factor"), 1)
+        self.assertNotIn("transfer_factor", factors.updates)
         self.assertNotIn("transfer_factor", factors.rejected)
-        # 随后拥胀样本正常进入 EWMA（自 1.0 起、α≈1 收敛新样本）。
+        # 随后拥胀样本正常进入固定 1/16 EWMA 平滑效率（自 η=1 出发，
+        # 跳过的样本不留残迹）：η_sample = 5/500 = 0.01，
+        # η = (15+0.01)/16，因子 = 16/15.01。
         scheduler._ingest_link_telemetry({
             "tick": 2000, "link_telemetry": [
                 _sample(5, 1000, 500, 1000, 2000)]})
         factors.flush()
-        self.assertAlmostEqual(factors.transfer_factor, 100.0)
-        self.assertEqual(factors.clamped.get("transfer_factor"), 1)
-        self.assertEqual(factors.updates["transfer_factor"], 2)
-        self.assertEqual(factors.as_dict()["clamped"]["transfer_factor"], 1)
+        self.assertAlmostEqual(factors.transfer_factor, 16.0 / 15.01)
+        self.assertEqual(factors.anomalous.get("transfer_factor"), 1)
+        self.assertEqual(factors.updates["transfer_factor"], 1)
+        self.assertEqual(
+            factors.as_dict()["anomalous"]["transfer_factor"], 1)
 
 
 # ============================================ 3. A9' 遥测速率过期 ==
 
 
 class A9TelemetryRateExpiryTest(unittest.TestCase):
-    """tick 包在场核对：缺席即失效，退回注册表 divisor。"""
+    """tick 包在场核对：缺席即失效（速率条目过期删除）。D13：速率-
+    only 窗口 = 流数显式未知——不产生除数腿，除数退注册表在册流近
+    似（旧 capacity/速率冒充流数口径废除）。"""
 
     def test_busy_to_idle_falls_back_to_registered_divisor(self):
-        # 忙窗：rate 2 B/ns、容量 200 ⇒ 遥测除数 100 抬过注册表 1 流。
+        # 忙窗：rate 2 B/ns、容量 200 —— D13 起该速率样本不再换算成
+        # 除数 100：流数未知 ⇒ 在册流近似（背景 1 流 ⇒ 1）。
         scheduler = _scheduler()
         registry = scheduler._joint_flows
         registry.register(3, 2)  # 背景 1 流 ⇒ 注册表除数 1
         scheduler._ingest_link_telemetry({
             "tick": 1000, "link_telemetry": [
                 _sample(5, 1000, 500, 0, 1000)]})
-        self.assertEqual(
-            _telemetry_view(scheduler).divisor_effective((3, 2)), 100.0)
-        # 转闲：下一包省略该链路（C6 契约）⇒ 条目删除、除数回落注册值。
+        view = _telemetry_view(scheduler)
+        self.assertEqual(view.divisor_effective((3, 2)), 1.0)
+        self.assertIsNone(view.effective_divisor((3, 2)))
+        self.assertEqual(view.disclosure()["unknown_flow_count_links"], 1)
+        # 转闲：下一包省略该链路（C6 契约）⇒ 条目删除、除数维持注册值。
         scheduler._ingest_link_telemetry({
             "tick": 2000, "link_telemetry": [
                 _sample(14, 500, 500, 1000, 2000)]})
@@ -799,10 +836,12 @@ class A10aZeroRateSampleGuardTest(unittest.TestCase):
         self.assertNotIn(
             "transfer_factor", scheduler._joint_factors.rejected)
         # 下游视图构造不崩（写入 0.0 会让 JointCostError 崩在此处）；
-        # 正常样本键 (5,4) 照常参与合并（rate 1.0、容量 200 ⇒ 200），
-        # 零速率窗键 (3,2) 无测量（None——注册表除数即有效除数）。
+        # 正常样本键 (5,4) 有速率无流数——D13：显式未知（除数退注册
+        # 表在册流近似，不再 capacity/速率 换算 200）；零速率窗键
+        # (3,2) 无测量（None——注册表除数即有效除数）。
         view = _telemetry_view(scheduler)
-        self.assertEqual(view.divisor_effective((5, 4)), 200.0)
+        self.assertEqual(view.divisor_effective((5, 4)), 1.0)
+        self.assertIsNone(view.effective_divisor((5, 4)))
         self.assertIsNone(view.measured_effective_rate((3, 2)))
 
     def test_coverage_block_zero_when_no_artifacts(self):
@@ -868,7 +907,10 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
             history_bytes_by_tp_rank=(400, 400),
             missing_bytes_by_tp_rank=(0, 0))
         scheduler.graph = SimpleNamespace(
-            sync_pending_history_after_evictions=lambda evictions: None)
+            sync_pending_history_after_evictions=lambda evictions: None,
+            # P 身份预演面：替身挂真分配器（生产 _pipeline_identity_
+            # provider 直访；与 test_prefill_remote_read_scheduler 同款）。
+            pipeline_identity_allocator=PipelineIdentityAllocator())
         runtime = _make_runtime("rX")
         runtime.estimated_arrival_ns = 0
         eviction = self._admission_transfer("rX")
@@ -876,10 +918,11 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
             lambda **kw: (eviction,))
         scheduler.kv_manager.prepare_prefill = (
             lambda **kw: (None, (), ()))
-        # 规格书§二.2/§二.5（2026-09-25）：前缀读流规划桩返回单条
-        # noc_migrate prefill 读流（home 1 → exec 3 真实 mesh 路径
-        # (2,3,7)）——事务成功段以 rid#prefill_read 真实登记，入册失败
-        # 回滚路径覆盖新 owner。
+        # 规格书§二.2/§二.5（2026-09-25）：前缀读流规划桩（D16 有界模
+        # 板形态，修复轮二）：home 1 → exec 3 真实 mesh 路径 (2,3,7) 的
+        # 单窗单 tile 模板 + 逐窗物化桩返回单条 noc_migrate prefill 读流
+        # ——事务成功段以 rid#prefill_read 真实登记，入册失败回滚路径覆
+        # 盖新 owner。
         prefill_read = KVTransfer(
             kind="noc_migrate", phase="prefill",
             reason="remote_read_prefill_prefix",
@@ -891,9 +934,53 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
                 noc_path=(2, 3, 7), layer_start=0, layer_end=4),),
             model_layers=4, layer_start=0, layer_end=4,
             resident_prefix_layers_before=4,
-            resident_prefix_layers_after=4, stream_only=True)
+            resident_prefix_layers_after=4, stream_only=True,
+            read_tile=(1, 1))
         scheduler.kv_manager.plan_prefill_remote_read_transfers = (
-            lambda *args, **kwargs: (prefill_read,))
+            lambda *args, **kwargs: {
+                "session_id": "s1", "trigger_request_id": "rX",
+                "home_instance": 1, "exec_instance": 3,
+                "read_prefix_layers": 4, "kv_token_bytes": 8,
+                "tile_tokens": 1, "tile_bytes": 8,
+                "base_scans_shards": (8,), "window_scans": (1,),
+                "tiles_by_window": (1,), "window_count": 1,
+                "scan_passes": 1, "total_bytes": 8, "tile_count": 1,
+                "source_ranks": (2,), "target_ranks": (7,),
+            })
+        scheduler.kv_manager.prefill_read_window_tiles = (
+            lambda template, window_index: (prefill_read,))
+        # D09 prefill 侧 lease 覆盖（2026-09-27）：读流在册 ⇒ 准入事务
+        # 前段获取暂存 lease——替身补最小持有面（字节口径不进本用例
+        # 断言；回滚路径注销计数由 release 桩捕获）。获取后身份核验
+        # （生产防御分支：staging_lease_for_request 必须回带同一
+        # lease_id 与 allocation_id；release 后不再可见）由持有字典
+        # 模拟真 manager 的在册语义。
+        scheduler.kv_manager.prefill_read_window_staging_shards = (
+            lambda **kw: ((16, 16), 8))
+        _held_lease = {}
+
+        def _acquire_staging_lease(rid, **kw):
+            _held_lease["rid"] = rid
+            _held_lease["lease_id"] = "staging_lease:{}#{}".format(
+                rid, kw.get("boundary_epoch", 0))
+            return _held_lease["lease_id"]
+
+        def _staging_lease_for_request(rid):
+            if _held_lease.get("rid") == rid:
+                return SimpleNamespace(
+                    lease_id=_held_lease["lease_id"], allocation_id=1)
+            return None
+
+        def _release_staging_lease(rid, **kw):
+            if _held_lease.get("rid") == rid:
+                _held_lease.clear()
+                return True
+            return False
+
+        scheduler.kv_manager.acquire_staging_lease = _acquire_staging_lease
+        scheduler.kv_manager.staging_lease_for_request = (
+            _staging_lease_for_request)
+        scheduler.kv_manager.release_staging_lease = _release_staging_lease
         # 选中 remote-read@3：模块级 select_instance_and_action 打桩
         # （场景设定——被测机器 = 防御分支回滚，非 argmin）。路由 1→3
         # 每链需求恰 Q=2（读流 1 + 预留 fwd 1，quota 夹具同款事实）不
@@ -1071,7 +1158,10 @@ class QuotaDeferredSafetyNetPinTest(unittest.TestCase):
             history_bytes_by_tp_rank=(400, 400),
             missing_bytes_by_tp_rank=(0, 0))
         scheduler.graph = SimpleNamespace(
-            sync_pending_history_after_evictions=lambda evictions: None)
+            sync_pending_history_after_evictions=lambda evictions: None,
+            # P 身份预演面：替身挂真分配器（生产 _pipeline_identity_
+            # provider 直访；与 test_prefill_remote_read_scheduler 同款）。
+            pipeline_identity_allocator=PipelineIdentityAllocator())
         return scheduler
 
     def test_all_rejected_loop_requeue_gate_and_wakeup(self):

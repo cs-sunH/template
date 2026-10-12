@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 #include <cstdlib>
 #include <cxxopts/cxxopts.hpp>
 #include <iostream>
+#include <typeinfo>
 
 namespace AstraSimAnalytical {
 
@@ -45,6 +46,15 @@ class CmdLineParser {
             return parsed[name].as<T>();
         } catch (const cxxopts::OptionException& e) {
             // error occured
+            std::cerr << "[Error] (AstraSim/analytical/common) "
+                      << "Error parsing options: " << e.what() << std::endl;
+            exit(-1);
+        } catch (const std::bad_cast& e) {
+            // A type-mismatched get<T>() throws std::bad_cast (the base of
+            // cxxopts' std::bad_any_cast), which is NOT an OptionException:
+            // it used to escape this noexcept function and die as a bare
+            // std::terminate. Fail closed the same way parse() does (M5-03
+            // fix style, 2026-09-26; bad_cast arm added 2026-09-29).
             std::cerr << "[Error] (AstraSim/analytical/common) "
                       << "Error parsing options: " << e.what() << std::endl;
             exit(-1);

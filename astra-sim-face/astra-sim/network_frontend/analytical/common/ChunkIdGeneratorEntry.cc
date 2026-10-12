@@ -5,8 +5,25 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/ChunkIdGeneratorEntry.hh"
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
 
 using namespace AstraSimAnalytical;
+
+namespace {
+
+[[noreturn]] void fail_chunk_id_overflow(const char* stream,
+                                         const int id) noexcept {
+    std::fprintf(stderr,
+                 "[Error] (network/analytical) ChunkIdGeneratorEntry %s id "
+                 "exhausted: next id would overflow INT_MAX (current=%d); "
+                 "failing closed\n",
+                 stream, id);
+    std::abort();
+}
+
+}  // namespace
 
 ChunkIdGeneratorEntry::ChunkIdGeneratorEntry() noexcept
     : send_id(-1),
@@ -26,11 +43,17 @@ int ChunkIdGeneratorEntry::get_recv_id() const noexcept {
 }
 
 void ChunkIdGeneratorEntry::increment_send_id() noexcept {
-    send_id++;
+    if (send_id == std::numeric_limits<int>::max()) {
+        fail_chunk_id_overflow("send", send_id);
+    }
+    ++send_id;
 }
 
 void ChunkIdGeneratorEntry::increment_recv_id() noexcept {
-    recv_id++;
+    if (recv_id == std::numeric_limits<int>::max()) {
+        fail_chunk_id_overflow("recv", recv_id);
+    }
+    ++recv_id;
 }
 
 uint64_t ChunkIdGeneratorEntry::outstanding() const noexcept {
@@ -44,4 +67,12 @@ void ChunkIdGeneratorEntry::increment_outstanding() noexcept {
 void ChunkIdGeneratorEntry::decrement_outstanding() noexcept {
     assert(outstanding_ > 0);
     --outstanding_;
+}
+
+bool ChunkIdGeneratorEntry::mark_chunk_completed(const int chunk_id) noexcept {
+    return completed_ids_.insert(chunk_id).second;
+}
+
+size_t ChunkIdGeneratorEntry::completed_count() const noexcept {
+    return completed_ids_.size();
 }

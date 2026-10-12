@@ -23,6 +23,9 @@ class LoggerFactory {
   private:
     static void init_default_components(const std::string& log_path);
     static std::vector<spdlog::sink_ptr> default_sinks;
+    // Names of loggers the factory attached default sinks to (re-init
+    // detaches the retired generation from exactly these).
+    static std::vector<std::string> default_sink_attached_loggers;
 };
 
 }  // namespace AstraSim

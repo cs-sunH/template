@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import io
 import json
@@ -16,36 +17,30 @@ MODULE_DIR = Path(__file__).resolve().parent
 if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
-from session_kv_manager import SessionKVCacheManager  # noqa: E402
+from session_kv_manager import (  # noqa: E402
+    SessionKVCacheManager,
+    estimate_model_weight_bytes as manager_estimate_model_weight_bytes,
+)
 from wsc_llm_scheduler import (  # noqa: E402
     DECODE_ROLE,
     PREFILL_ROLE,
     InstanceGraph,
-    KVAllocation,
     PrefillQueueSnapshot,
     WscLlmHardware,
     WscLlmInstanceSpec,
     WscLlmModel,
-    WscLlmTimingEntry,
-    WscLlmTimingLut,
-    WscRelevantKvAllocator,
     build_instances,
     build_static_pd_mapping,
     estimate_model_weight_bytes,
     select_prefill_instance,
 )
 from generate_wsc_llm_trace import (  # noqa: E402
-    IDLE_SENTINEL_DURATION_NS,
-    _add_idle_rank_sentinels,
-    _validate_all_rank_dags,
-    _validate_rank_dag,
     load_wsc_llm_trace_config,
     select_first_session_requests,
 )
 from generate_trace import (  # noqa: E402
     COMM_COLL_NODE,
     COMP_NODE,
-    ChakraNode,
     REMOTE_WEIGHT_ATTR,
     RequestSpec,
     TraceBuilder,
@@ -127,7 +122,16 @@ SYNTHETIC_QUEUE_ROWS = (
     ("fixture_s1", "1", "fixture_s1_r1", "60", "5", "", "2000", "synthetic fixture"),
 )
 
-_FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="wscllm_test_fixture_")
+_FIXTURE_DIR = None
+
+
+def _fixture_dir() -> Path:
+    """惰性创建合成夹具临时目录（import 零副作用，atexit 统一清理）。"""
+    global _FIXTURE_DIR
+    if _FIXTURE_DIR is None:
+        _FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="wscllm_test_fixture_")
+        atexit.register(_FIXTURE_DIR.cleanup)
+    return Path(_FIXTURE_DIR.name)
 
 
 def _write_synthetic_queue(path: Path) -> None:
@@ -146,10 +150,10 @@ def load_checked_in_config() -> object:
     相对路径(hardware/、system/ 等)仍按 SH_TEST_DIR 解析,配置字段语义与
     checked-in 配置一致;仅输入队列槽位替换为合成数据。
     """
-    queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
+    queue_path = _fixture_dir() / "synthetic_request_queue.csv"
     if not queue_path.exists():
         _write_synthetic_queue(queue_path)
-    config_path = Path(_FIXTURE_DIR.name) / "trace_config.csv"
+    config_path = _fixture_dir() / "trace_config.csv"
     if not config_path.exists():
         lines = []
         for raw_line in (MODULE_DIR / "trace_config.csv").read_text(
@@ -174,7 +178,7 @@ def load_config_variant(tag: str, rewrite) -> object:
     rewrite(line) 返回改写后的行,或 None 表示删除该行;queue 行固定替换
     为合成 fixture 队列(与 load_checked_in_config 同款)。
     """
-    queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
+    queue_path = _fixture_dir() / "synthetic_request_queue.csv"
     if not queue_path.exists():
         _write_synthetic_queue(queue_path)
     lines = []
@@ -191,7 +195,7 @@ def load_config_variant(tag: str, rewrite) -> object:
         rewritten = rewrite(raw_line)
         if rewritten is not None:
             lines.append(rewritten)
-    config_path = Path(_FIXTURE_DIR.name) / f"trace_config_{tag}.csv"
+    config_path = _fixture_dir() / f"trace_config_{tag}.csv"
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return load_wsc_llm_trace_config(config_path)
 
@@ -210,40 +214,22 @@ def checked_in_topology() -> tuple[object, object]:
     return config, build_instances(config.hardware, specs)
 
 
-def small_model() -> WscLlmModel:
-    return WscLlmModel(
-        layers=2,
-        hidden_size=16,
-        ffn_size=32,
-        num_heads=4,
-        vocab_size=64,
-        bytes_per_elem=2,
-        mlp_variant="swiglu",
-    )
+def skip_without_die_cost_library(test_case: unittest.TestCase) -> None:
+    """die 推广后 checked-in 硬件带 die 节,配置装载需要 libdie_model_
+    cabi.so(发现序 env DIE_MODEL_CABI_PATH -> 仓内 build 路径,fail-
+    closed)。裸仓在集成构建出 .so 前是合法中间态,配置加载用例跳过
+    而非红;库在位时正常放行(真实发现序,不用 mock)。"""
+    sh_test_dir = MODULE_DIR.parent.parent
+    if str(sh_test_dir) not in sys.path:
+        sys.path.insert(0, str(sh_test_dir))
+    from config_resolver import discover_cabi_library
 
-
-def line_topology() -> tuple[WscLlmHardware, object]:
-    hardware = WscLlmHardware(
-        mesh_rows=5,
-        mesh_cols=2,
-        local_hbm_capacity_bytes=50,
-        local_hbm_bandwidth_gbps=1.0,
-        d2d_bandwidth_gbps=2.0,
-        peak_perf_tflops=1.0,
-        d2d_latency_ns=0,
-        local_hbm_latency_ns=0,
-    )
-    topology = build_instances(
-        hardware,
-        (
-            WscLlmInstanceSpec("p0", "1", (0, 1), PREFILL_ROLE),
-            WscLlmInstanceSpec("p1", "2", (2, 3), PREFILL_ROLE),
-            WscLlmInstanceSpec("d2", "3", (4, 5), DECODE_ROLE),
-            WscLlmInstanceSpec("p3", "4", (6, 7), PREFILL_ROLE),
-            WscLlmInstanceSpec("p4", "5", (8, 9), PREFILL_ROLE),
-        ),
-    )
-    return hardware, topology
+    try:
+        discover_cabi_library()
+    except RuntimeError:
+        test_case.skipTest("libdie_model_cabi.so not discoverable (checked-in "
+                           "hardware carries a die node; build die_model_cabi "
+                           "or set DIE_MODEL_CABI_PATH)")
 
 
 class WscLlmSchedulerTests(unittest.TestCase):
@@ -314,7 +300,13 @@ class WscLlmSchedulerTests(unittest.TestCase):
     def test_checked_in_config_is_request_neutral_and_fails_closed_without_input(self) -> None:
         """checked-in 配置 = request-neutral(占位队列路径,不绑定任何默认
         request 队列)+ 缺失输入 fail-closed + 配置字段语义(拓扑/角色/模型/
-        硬件;不依赖任何真实 trace 计数,见方案 §0.3 与 §3 步骤 0-1)。"""
+        硬件;不依赖任何真实 trace 计数,见方案 §0.3 与 §3 步骤 0-1)。
+
+        die 推广数值更新(2026-10-03):checked-in 硬件带 die 节后,容量/
+        profile/峰值算力随 die 点派生(64 GB / validation-die-64g /
+        1492.05 TFLOPS,契约 §3.4/§3.5 同 face 裁定);system.json 增三
+        die 键。"""
+        skip_without_die_cost_library(self)
         config, topology = checked_in_topology()
         self.assertEqual(config.model_name, "llama2_7b")
         self.assertEqual(config.mlp_variant, "swiglu")
@@ -322,17 +314,24 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual((config.hardware.mesh_rows, config.hardware.mesh_cols), (9, 6))
         self.assertEqual(config.hardware.d2d_latency_ns, 5)
         self.assertEqual(config.hardware.local_hbm_latency_ns, 100)
-        self.assertEqual(config.hardware.local_hbm_capacity_bytes, 160 * 1024**3)
+        # die 点派生容量(64 GB = 4 x 16 GB;原 validation-160gib 在 die
+        # 节下被容量对齐拒绝,config_resolver 硬校验)。
+        self.assertEqual(config.hardware.local_hbm_capacity_bytes, 64 * 10**9)
         self.assertEqual(config.hardware_config.name, "face_case5_config_c.json")
-        self.assertEqual(config.hardware_capacity_profile, "validation-160gib")
+        self.assertEqual(config.hardware_capacity_profile, "validation-die-64g")
         self.assertEqual(config.system_config.name, "system.json")
         self.assertEqual(config.network_config.name, "network.yml")
         self.assertEqual(config.comm_group_config.name, "comm_group.json")
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["local-mem-capacity-bytes"], 160 * 1024**3)
-        self.assertEqual(system_raw["peak-perf"], 261.12)
+        # die 后端:峰值算力为库派生 PE_peak_die(1225 核 x 1218 GFLOPS);
+        # 261.12 是 legacy compute 节口径,已随 die 节退役。
+        self.assertEqual(system_raw["peak-perf"], 1492.05)
+        # die 三键(契约 §3.2):backend 声明 + 派生配置绝对路径。
+        self.assertEqual(system_raw["compute-cost-model"], "die")
+        self.assertEqual(system_raw["die-model-profile"], "mesh_die_v1")
+        self.assertTrue(Path(system_raw["die-model-config"]).is_absolute())
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)
         self.assertEqual(tuple(group.ranks for group in config.inference_groups), EXPECTED_RANKS)
@@ -357,16 +356,9 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(config.trace_granularity, "request_aggregated")
         self.assertEqual(config.prefill_chunk_size, 512)
         self.assertEqual(config.kv_cache_policy, "session_lru_recompute")
-        self.assertEqual(config.kv_reserve_context_tokens, 1_000_000)
         # request-neutral:合成 fixture 队列的计数只反映 fixture 自身,不依赖
         # 任何真实 trace 数据(裸仓库不物化输入,见方案 §3 步骤 0-1)。
-        self.assertEqual(config.source_request_count, len(SYNTHETIC_QUEUE_ROWS))
-        self.assertEqual(config.source_session_count, 8)
         self.assertEqual(len(config.request_queue), len(SYNTHETIC_QUEUE_ROWS))
-        self.assertEqual(
-            config.selected_session_ids,
-            tuple(f"fixture_s{index}" for index in range(8)),
-        )
         # checked-in 配置本体 = request-neutral:request_queue_csv 是占位路径。
         checked_in_text = (MODULE_DIR / "trace_config.csv").read_text(encoding="utf-8")
         queue_line = next(
@@ -392,7 +384,11 @@ class WscLlmSchedulerTests(unittest.TestCase):
         """主动驱逐已物理清除(2026-09-05):loader 对 kv_eviction_mode 键
         恢复"未知键 fail-closed 拒绝"——残留该行的旧配置不得静默忽略,
         更不可能借此复活水位逐出路径。"""
-        with self.assertRaisesRegex(ValueError, "unsupported config key"):
+        # (2026-09-30) 断言收紧到键名本身：此前匹配通用报错文案，任何
+        # 其他未知键（如残留退役键）都会让本测试"绿着空转"。
+        with self.assertRaisesRegex(
+                ValueError,
+                r"unsupported config key 'kv_eviction_mode'"):
             load_config_variant(
                 "eviction_mode_key_rejected",
                 lambda line: (
@@ -404,9 +400,9 @@ class WscLlmSchedulerTests(unittest.TestCase):
             )
 
     def test_completion_retains_kv_without_watermark(self) -> None:
-        """完成路径零逐出(主动驱逐已物理清除):mark_complete 返回空元组、
-        retain_complete 事件保留(D3),会话保持 RESIDENT——逐出唯一路径 =
-        准入期 ensure_physical_fit 按需逐出。"""
+        """完成路径零逐出(主动驱逐已物理清除):mark_complete 无返回值
+        (SCHED-9 管道已删)、retain_complete 事件保留(D3),会话保持
+        RESIDENT——逐出唯一路径 = 准入期 ensure_physical_fit 按需逐出。"""
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
         hardware = WscLlmHardware(1, 2, 300, 1.0, 1.0, 1.0, 0, 0)
         topology = build_instances(
@@ -426,7 +422,9 @@ class WscLlmSchedulerTests(unittest.TestCase):
             ).admission_blocked
         )
         self.assertTrue(manager.grow_prefill("a", 10, 10, "a0").admitted)
-        self.assertEqual(manager.mark_complete("a", 10, "a0"), ())
+        # SCHED-9(2026-09-28):恒空逐出返回管道已删,mark_complete 返回
+        # None(完成边界零逐出,KV 原样驻留由下方 snapshot 断言钉住)。
+        self.assertIsNone(manager.mark_complete("a", 10, "a0"))
         snapshot = manager.session_snapshot("a")
         self.assertEqual(snapshot.state, "RESIDENT")
         self.assertFalse(snapshot.active)
@@ -466,9 +464,10 @@ class WscLlmSchedulerTests(unittest.TestCase):
                     session_id, 10, completion_ns, f"{session_id}0"
                 ).admitted
             )
-            self.assertEqual(
+            # SCHED-9(2026-09-28):恒空逐出返回管道已删,mark_complete 返回 None。
+            self.assertIsNone(
                 manager.mark_complete(session_id, completion_ns,
-                                      f"{session_id}0"), ())
+                                      f"{session_id}0"))
         decision = manager.prepare_history(
             "s", 0, 0, 40, "s0", required_context_tokens=30)
         self.assertFalse(decision.admission_blocked)
@@ -494,7 +493,8 @@ class WscLlmSchedulerTests(unittest.TestCase):
             ),
             (36,),
         )
-        self.assertEqual(manager.mark_complete("s", 41, "s0"), ())
+        # SCHED-9(2026-09-28):恒空逐出返回管道已删,mark_complete 返回 None。
+        self.assertIsNone(manager.mark_complete("s", 41, "s0"))
         # 剩余 36 B 的驻留终态合法(完成期零逐出,无第二个逐出阶段)。
         manager.assert_final_state()
         manager.retire_terminal_session("r", 42, "r0")
@@ -543,6 +543,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(manager.deep_gap_events, 2)
 
     def test_decode_instances_are_center_prioritized_and_validation_rejects_inverse(self) -> None:
+        skip_without_die_cost_library(self)
         _, topology = checked_in_topology()
         decode_distances = [
             topology.instance(index).wafer_center_manhattan_distance
@@ -566,8 +567,9 @@ class WscLlmSchedulerTests(unittest.TestCase):
             )
 
     def test_exact_static_routes_are_one_hop_and_edge_disjoint(self) -> None:
+        skip_without_die_cost_library(self)
         _, topology = checked_in_topology()
-        mapping = build_static_pd_mapping(topology, alpha=4.0)
+        mapping = build_static_pd_mapping(topology)
         actual = {
             route.prefill_instance_index: (
                 route.decode_instance_index,
@@ -578,32 +580,8 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(actual, EXPECTED_STATIC_ROUTES)
         self.assertEqual(mapping.total_hops, 6)
         self.assertEqual(mapping.shared_edge_occurrences, 0)
-        self.assertEqual(mapping.adjusted_transfer_cost, 6.0)
         self.assertEqual({count for _, _, count in mapping.edge_use_counts}, {1})
         self.assertTrue(all(not route.shared_edges for route in mapping.routes))
-        expected_domains = {
-            1: (0, 1, 4),
-            4: (0, 4, 1),
-            5: (2, 5, 7),
-            7: (2, 7, 5),
-            6: (3, 6, 8),
-            8: (3, 8, 6),
-        }
-        for prefill_index, expected_domain in expected_domains.items():
-            allocator = WscRelevantKvAllocator(
-                topology,
-                mapping,
-                model_weight_bytes=0,
-            )
-            allocation = allocator.allocate(
-                request_id=f"domain_{prefill_index}",
-                route=mapping.route_for_prefill(prefill_index),
-                total_bytes=1,
-            )
-            self.assertEqual(
-                allocation.relevant_instance_indices,
-                expected_domain,
-            )
 
     def test_real_layout_nearest_decode_is_unique(self) -> None:
         """钉住"真实布局无实例平局"（中-1 裁决 2026-08-20）。
@@ -665,89 +643,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
             PrefillQueueSnapshot(1, 0),
         )
         self.assertEqual(select_prefill_instance(tied_out_of_order), 1)
-
-    def test_timing_lut_is_phase_exclusive_and_not_a_mixed_pd_lut(self) -> None:
-        hardware, _ = line_topology()
-        lut = WscLlmTimingLut.build(
-            hardware,
-            small_model(),
-            instance_sizes=(2,),
-            p_chunk=64,
-            request_count=2,
-            max_d_token=500,
-        )
-        self.assertTrue(lut.entries)
-        for entry in lut.entries:
-            self.assertNotEqual(entry.p_chunk > 0, entry.d_batch > 0)
-            self.assertEqual(
-                entry.phase_role,
-                PREFILL_ROLE if entry.p_chunk > 0 else DECODE_ROLE,
-            )
-        nearest = lut.lookup(
-            phase_role=DECODE_ROLE,
-            instance_size=2,
-            p_chunk=0,
-            d_batch=1,
-            d_token=384,
-        )
-        self.assertEqual(nearest.d_token, 256)
-        with self.assertRaises(ValueError):
-            WscLlmTimingEntry(2, PREFILL_ROLE, 64, 1, 256, 10)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "wsc_llm_timing_lut.csv"
-            lut.export_csv(output)
-            contents = output.read_text(encoding="utf-8")
-            self.assertIn("phase_role", contents)
-            self.assertIn("iteration_time_ns", contents)
-
-    def test_wsc_relevant_kv_priority_release_and_capacity_error(self) -> None:
-        _, topology = line_topology()
-        mapping = build_static_pd_mapping(topology)
-        route = mapping.route_for_prefill(0)
-        self.assertEqual(route.path, (0, 1, 2))
-        allocator = WscRelevantKvAllocator(
-            topology,
-            mapping,
-            model_weight_bytes=0,
-        )
-        allocator.remaining_capacity[:] = [60, 80, 100, 100, 100]
-        allocation = allocator.allocate(
-            request_id="r0",
-            route=route,
-            total_bytes=220,
-        )
-        self.assertIsInstance(allocation, KVAllocation)
-        self.assertEqual(allocation.relevant_instance_indices, (2, 1, 0, 3, 4))
-        self.assertEqual(
-            [
-                (
-                    piece.instance_index,
-                    piece.bytes,
-                    piece.location_priority,
-                    piece.path,
-                )
-                for piece in allocation.pieces
-            ],
-            [
-                (2, 100, "decode", (2,)),
-                (1, 80, "selected_path_intermediate", (2, 1)),
-                (0, 40, "selected_prefill", (2, 1, 0)),
-            ],
-        )
-        self.assertEqual(allocator.remaining_capacity[3:], [100, 100])
-        allocator.release(allocation)
-        self.assertEqual(tuple(allocator.remaining_capacity), (60, 80, 100, 100, 100))
-
-        allocator2 = WscRelevantKvAllocator(
-            topology,
-            mapping,
-            model_weight_bytes=0,
-        )
-        with self.assertRaisesRegex(
-            ValueError,
-            r"Relevant\(P,D\).*Decode remapping.*disabled",
-        ):
-            allocator2.allocate(request_id="too_large", route=route, total_bytes=501)
 
     def test_manager_deletes_multiple_lru_victims_but_not_active_kv(self) -> None:
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
@@ -996,6 +891,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
 
 
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
+        skip_without_die_cost_library(self)
         config = load_checked_in_config()
         attention_heads = tuple(
             shard_extent(config.num_heads, 6, index) for index in range(6)
@@ -1012,74 +908,19 @@ class WscLlmSchedulerTests(unittest.TestCase):
             config.vocab_size,
         )
         self.assertEqual(estimate_model_weight_bytes(config.model), 13_476_831_232)
-
-    def test_idle_rank_sentinel_makes_every_builder_nonempty(self) -> None:
-        builders = {
-            0: TraceBuilder(remote_operand_loads=False),
-            1: TraceBuilder(remote_operand_loads=False),
-            2: TraceBuilder(remote_operand_loads=False),
-        }
-        builders[1].comp("rank_1_real_work", num_ops=1, tensor_size=1)
-        idle_ranks = _add_idle_rank_sentinels(builders)
-
-        self.assertEqual(idle_ranks, (0, 2))
-        self.assertEqual([len(builders[rank].nodes) for rank in builders], [1, 1, 1])
+        # (2026-10-01) Three intentionally-identical copies of the weight
+        # formula exist (wsc_llm_scheduler.py for the metrics_postprocess
+        # W_bytes basis, session_kv_manager.py for the journal weight rows /
+        # NodeHBMState.model_weight_bytes, and slo_tools/hbm_watermark.py's
+        # local copy for offline watermark replays). None imports the others
+        # (the strategy files are protected objects), so this pairwise
+        # assertion plus the frozen 13_476_831_232 absolute anchors (here
+        # and in test_hbm_watermark.py) are the drift tripwires: editing one
+        # copy without the others fails one of the anchored tests.
         self.assertEqual(
-            builders[0].nodes[0].name,
-            "wsc_llm_idle_rank_0000_sentinel",
+            manager_estimate_model_weight_bytes(config.model),
+            estimate_model_weight_bytes(config.model),
         )
-        self.assertEqual(builders[0].nodes[0].type, COMP_NODE)
-        self.assertEqual(
-            builders[0].nodes[0].duration_micros,
-            IDLE_SENTINEL_DURATION_NS // 1000,
-        )
-        self.assertEqual(tuple(builders[0].nodes[0].data_deps), ())
-        timer_attrs = {
-            attr.name: attr.bool_val for attr in builders[0].nodes[0].attr
-        }
-        self.assertTrue(timer_attrs["is_cpu_op"])
-        self.assertTrue(timer_attrs["is_timer_op"])
-        self.assertEqual(builders[1].nodes[0].name, "rank_1_real_work")
-        _validate_all_rank_dags(builders)
-        self.assertTrue(all(builder.nodes for builder in builders.values()))
-
-    def test_rank_dag_validation_accepts_a_legal_small_dag(self) -> None:
-        builder = TraceBuilder(remote_operand_loads=False)
-        builder.comp("root", num_ops=1, tensor_size=1)
-        builder.comp("child", num_ops=1, tensor_size=1)
-        _validate_rank_dag(7, builder)
-
-    def test_rank_dag_validation_rejects_missing_dependency_and_cycle(self) -> None:
-        missing = TraceBuilder(remote_operand_loads=False)
-        missing_node = ChakraNode()
-        missing_node.id = 1
-        missing_node.name = "missing_dep"
-        missing_node.type = COMP_NODE
-        missing_node.data_deps.append(99)
-        missing.nodes.append(missing_node)
-        with self.assertRaisesRegex(
-            RuntimeError,
-            r"rank 3: node 1 references missing dependency 99",
-        ):
-            _validate_rank_dag(3, missing)
-
-        cyclic = TraceBuilder(remote_operand_loads=False)
-        first = ChakraNode()
-        first.id = 1
-        first.name = "cycle_1"
-        first.type = COMP_NODE
-        first.data_deps.append(2)
-        second = ChakraNode()
-        second.id = 2
-        second.name = "cycle_2"
-        second.type = COMP_NODE
-        second.data_deps.append(1)
-        cyclic.nodes.extend((first, second))
-        with self.assertRaisesRegex(
-            RuntimeError,
-            r"rank 4: Chakra ET DAG contains a cycle",
-        ):
-            _validate_rank_dag(4, cyclic)
 
     def test_aggregated_transformer_pass_preserves_expanded_totals(self) -> None:
         spans = ((3, 7), (1, 11), (5, 19))

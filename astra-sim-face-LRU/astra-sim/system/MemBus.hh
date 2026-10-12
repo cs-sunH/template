@@ -19,8 +19,8 @@ class MemBus {
   public:
     enum class Transmition { Fast, Usual };
 
-    MemBus(std::string side1,
-           std::string side2,
+    MemBus(std::string /*side1*/,
+           std::string /*side2*/,
            Sys* sys,
            Tick L,
            Tick o,
@@ -32,12 +32,12 @@ class MemBus {
     ~MemBus();
 
     void send_from_NPU_to_MA(Transmition transmition,
-                             int bytes,
+                             uint64_t bytes,
                              bool processed,
                              bool send_back,
                              Callable* callable);
     void send_from_MA_to_NPU(Transmition transmition,
-                             int bytes,
+                             uint64_t bytes,
                              bool processed,
                              bool send_back,
                              Callable* callable);

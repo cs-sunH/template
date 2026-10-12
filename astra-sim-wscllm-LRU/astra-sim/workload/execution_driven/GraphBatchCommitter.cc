@@ -3,7 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 GraphBatchCommitter -- execution-driven mechanism layer (wscllm phase 5).
-Two-phase atomic GraphBatch commit (方案 §8.1/§8.2): Phase A validate()
+Two-phase atomic GraphBatch commit (方案 §8.1/§8.2): Phase A validate_impl()
 (run the full checklist, touch nothing) then Phase B commit() (add nodes,
 edges, watches, alarms, issue the touched ranks, update counters).
 
@@ -149,14 +149,17 @@ struct RequestFacts {
 };
 
 bool collective_comm_type_has_completion_path(const uint64_t comm_type) {
-    // Workload::issue_coll_comm() implements exactly these Chakra enum values.
-    // Any other value reaches its unsupported-collective throw after the node
-    // has already been taken from a NodeStore, so it is liveness-critical when
-    // full validation is off.
+    // Workload::issue_coll_comm() has a real collective implementation for
+    // exactly these Chakra enum values. BROADCAST (5) is deliberately
+    // absent: the execution-driven path implements no broadcast collective
+    // (the Workload arm is an unimplemented placeholder), so a broadcast
+    // batch must fail closed at this preflight instead of committing as a
+    // silent local no-op. Any other value reaches the unsupported-collective
+    // throw after the node has already been taken from a NodeStore, so it is
+    // liveness-critical when full validation is off.
     switch (comm_type) {
         case 0:  // ALL_REDUCE
         case 2:  // ALL_GATHER
-        case 5:  // BROADCAST
         case 6:  // ALL_TO_ALL
         case 7:  // REDUCE_SCATTER
             return true;
@@ -176,7 +179,16 @@ void GraphBatchCommitter::apply_delta_facts(
                 in_flight.insert(ev.request_id);
                 break;
             case DecisionReason::PREFILL_DRAIN:
-                prefill_drained.insert(ev.request_id);
+                // 拼 batch 列车适配 (2026-08-22): a truncated train's
+                // sentinel fires PREFILL_DRAIN under its "batch_train_..."
+                // namespace id, which never yields a REQUEST_COMPLETE --
+                // booking it would grow this set by one entry per train for
+                // the rest of the run. No consumer ever reads the fact for
+                // that namespace (both watch-eligibility checks bypass the
+                // batch_train_ prefix), so keep the set request-scoped.
+                if (ev.request_id.rfind("batch_train_", 0) != 0) {
+                    prefill_drained.insert(ev.request_id);
+                }
                 break;
             case DecisionReason::REQUEST_COMPLETE:
                 in_flight.erase(ev.request_id);
@@ -314,7 +326,7 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
 
 std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     const StateDelta& delta, const GraphBatch& batch) const {
-    // This is deliberately independent of validate(): production can skip
+    // This is deliberately independent of validate_impl(): production can skip
     // that exhaustive diagnostic pass, but it must never commit a batch
     // that can strand graph nodes, stage watches, p2p callbacks, collectives,
     // or request accounting.  Every container below is local; no fact set,
@@ -324,6 +336,23 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
         -> std::optional<std::string> {
         return std::string("mandatory liveness preflight: ") + reason;
     };
+
+    // Minor②(2026-09-30):batch_id==delivery_sequence 的 O(1) 廉价检查
+    // 纳入必检集。此前它只住在 validate_impl()(--online-validate=1 的
+    // 诊断路径),生产缺省的直接 commit() 快速路径不查——乱序/重放的
+    // 批可携带错误 epoch 提交(Python ack 侧有兜底,但 C++ 侧零防线)。
+    // validate_impl 路径在下方的完整校验里重复同一条,无行为差异。
+    if (batch.batch_id != delta.delivery_sequence) {
+        return fail("batch_id " + std::to_string(batch.batch_id) +
+                    " != delivery_sequence " +
+                    std::to_string(delta.delivery_sequence));
+    }
+    if (batch.source_delivery_sequence != delta.delivery_sequence) {
+        return fail("source_delivery_sequence " +
+                    std::to_string(batch.source_delivery_sequence) +
+                    " != delivery_sequence " +
+                    std::to_string(delta.delivery_sequence));
+    }
 
     try {
         // Apply this delta's facts in a compact overlay rather than copying the
@@ -349,7 +378,11 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                     facts_it->second.in_flight = true;
                     break;
                 case DecisionReason::PREFILL_DRAIN:
-                    facts_it->second.prefill_drained = true;
+                    // The overlay must mirror apply_delta_facts exactly,
+                    // batch_train_ namespace exclusion included.
+                    if (event.request_id.rfind("batch_train_", 0) != 0) {
+                        facts_it->second.prefill_drained = true;
+                    }
                     break;
                 case DecisionReason::REQUEST_COMPLETE:
                     facts_it->second.in_flight = false;
@@ -446,16 +479,56 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
             // key typings (compute.hbm_access_mode integer, comm.hbm_charge
             // boolean, node is_local_hbm_kv_restore boolean) and every
             // field's JSON typing were validated once by parse_graph_batch;
-            // this pass reads the typed attrs directly (the {0,1,2}
+            // this pass reads the typed attrs directly (the {0,1}
             // hbm_access_mode DOMAIN rule stays here, belt-and-suspenders
             // against a post-parse mutation: Workload::issue_remote_mem
-            // bills every mode != 1 as a local-HBM pool WRITE, so an
-            // out-of-domain value must fail closed instead of silently
-            // mis-billing).
-            if (node.hbm_access_mode < 0 || node.hbm_access_mode > 2) {
+            // bills every mode != 1 as a local-HBM pool WRITE. Tightened
+            // (2026-10-01) from the old {0,1,2}: no mode=2 emitter exists
+            // on the Python side, so mode 2 had no adjudicated semantics --
+            // admitting it would let a future emitter be silently billed as
+            // a pool WRITE instead of failing closed. If a mode=2 emitter
+            // ever appears it must come with its own doc-section ruling
+            // and re-widen this gate).
+            if (node.hbm_access_mode < 0 || node.hbm_access_mode > 1) {
                 return fail("node[" + std::to_string(node_index) +
-                            "] compute.hbm_access_mode must be 0, 1 or 2 "
-                            "(none/local HBM read/local HBM write)");
+                            "] compute.hbm_access_mode must be 0 or 1 "
+                            "(none/local HBM read)");
+            }
+            // M-19 fail-closed:三个 HBM 路由键的跨字段一致性。生产发射端
+            // (graph_batch_builder.py / generate_wsc_llm_trace.py)的合法
+            // 组合全集:is_local_hbm_kv_restore 仅由 local_hbm_kv_restore
+            // 原语发射(MEM_LOAD、mode 恒缺省 0);hbm_access_mode 仅由
+            // mem_store/mem_load 发射(MEM_LOAD/MEM_STORE);
+            // comm.hbm_charge=false 仅由 comm_send/comm_recv 发射(p2p)。
+            // 非法组合在 Workload 的发射分派里被静默忽略(如 restore 位把
+            // 节点改走 restore 通道后 mode 键死亡、池事务整条消失;COMP/
+            // comm 节点上的 mode 键无人读)——错计费/错占槽零诊断。提交
+            // 边界按本仓纪律 fail-closed,标准生成器组合全放行。
+            if (node.is_local_hbm_kv_restore &&
+                node.node_type != 2 /* MEM_LOAD */) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] is_local_hbm_kv_restore is only defined for "
+                            "MEM_LOAD nodes (type 2), got type " +
+                            std::to_string(type));
+            }
+            if (node.is_local_hbm_kv_restore && node.hbm_access_mode != 0) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] is_local_hbm_kv_restore routes the node to "
+                            "the restore-DMA channel; hbm_access_mode would "
+                            "be silently dropped");
+            }
+            if (!node.is_local_hbm_kv_restore && node.hbm_access_mode != 0 &&
+                type != 2 /* MEM_LOAD */ && type != 3 /* MEM_STORE */) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] compute.hbm_access_mode is only defined for "
+                            "MEM_LOAD/MEM_STORE nodes (types 2/3), got type " +
+                            std::to_string(type));
+            }
+            if (!node.comm.hbm_charge && type != 5 && type != 6) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] comm.hbm_charge=false is a p2p endpoint "
+                            "concept (types 5/6), got type " +
+                            std::to_string(type));
             }
             const uint64_t coll_comm_type = node.coll.comm_type;
             const uint64_t coll_bytes = node.coll.bytes;
@@ -473,13 +546,42 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 const uint64_t bytes = node.comm.bytes;
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
                     dst >= ctx_.num_ranks) {
+                    // tag is not re-checked here: parse_graph_batch already
+                    // fail-closes comm.tag > INT_MAX (ParsedGraphBatch.cc;
+                    // tightened from UINT32_MAX because Sys::
+                    // front_end_sim_send/recv take the tag as `int`, so
+                    // [2^31, 2^32) would truncate negative), so this
+                    // preflight's src/dst range check is the only endpoint
+                    // validity gate left.
                     return fail("node[" + std::to_string(node_index) +
-                                "] p2p src/dst/tag out of range");
+                                "] p2p src/dst out of range");
                 }
                 if ((type == 5 && src != rank) ||
                     (type == 6 && dst != rank)) {
                     return fail("node[" + std::to_string(node_index) +
                                 "] p2p endpoint rank does not match node rank");
+                }
+                // M-9 fail-closed: a self-loop send (src == dst) has no
+                // meaning in the P/D-separated producer contract (every
+                // emission site is structurally cross-rank or explicitly
+                // guarded). Topology::send would exit(-1) with a misleading
+                // topology-error message, and a pure Switch topology would
+                // silently bill it as a 2-hop transfer -- two topologies,
+                // two behaviors for one malformed batch. Reject it here so
+                // every topology sees the same commit-boundary verdict.
+                if (src == dst) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p self-loop (src == dst == " +
+                                std::to_string(src) + ")");
+                }
+                // Zero-byte p2p is rejected at the same commit boundary as
+                // the zero-byte collective: the analytical fluid backend
+                // classifies bytes == 0 as an invalid flow and exits, so a
+                // committed 0-byte send/recv pair would crash the run from
+                // inside the backend.
+                if (bytes == 0) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p comm bytes must be positive");
                 }
                 P2pCounts& counts =
                     p2p_counts[P2pKey{src, dst,
@@ -507,6 +609,17 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 if (coll_bytes == 0) {
                     return fail("node[" + std::to_string(node_index) +
                                 "] collective bytes must be positive");
+                }
+                // CPP-01 fail-closed ruling: BROADCAST (comm_type 5) is
+                // explicitly rejected at the commit boundary. The execution
+                // path implements no broadcast collective, so a broadcast
+                // batch must never commit as a silent local 1 ns no-op.
+                if (coll_comm_type == 5) {  // ChakraProtoMsg::BROADCAST
+                    return fail("node[" + std::to_string(node_index) +
+                                "] BROADCAST collectives (comm_type 5) are "
+                                "not implemented in the execution-driven "
+                                "path; the input graph must not use "
+                                "broadcast");
                 }
                 if (!collective_comm_type_has_completion_path(coll_comm_type)) {
                     return fail("node[" + std::to_string(node_index) +
@@ -667,16 +780,35 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                             " cannot verify declared membership: resolver "
                             "is unavailable");
             }
-            const auto declared_members = ctx_.communicator_members_for_pg(
+            const auto declared = ctx_.communicator_members_for_pg(
                 key.pg_name, participant_ranks);
-            if (!declared_members.has_value()) {
+            if (!declared.has_value()) {
                 return fail("collective operation " + key.name +
                             " of pg_name " + key.pg_name +
                             " has missing or inconsistent declared membership");
             }
+            const std::vector<int>& declared_members = declared->first;
+            // involved_dim must be non-empty and exactly as long as the
+            // declared dimension count (2026-09-27; corrected 2026-09-29):
+            // generate_collective pads a SHORT involved_dim with true up to
+            // the topology's dimension count (N14 parser contract), so the
+            // mismatch itself cannot read out of bounds -- but it would
+            // silently execute on padded "all dimensions involved"
+            // semantics instead of the declared ones, and an empty vector
+            // carries no dimension selection at all. Either way the
+            // preflight fails the batch closed.
+            if (participants.involved_dims.empty() ||
+                participants.involved_dims.size() != declared->second) {
+                return fail("collective operation " + key.name +
+                            " of pg_name " + key.pg_name +
+                            " involved_dim must be non-empty and match the "
+                            "declared dimension count (" +
+                            std::to_string(participants.involved_dims.size()) +
+                            " vs " + std::to_string(declared->second) + ")");
+            }
             std::unordered_set<int> declared_rank_set;
-            declared_rank_set.reserve(declared_members->size());
-            for (const int declared_rank : *declared_members) {
+            declared_rank_set.reserve(declared_members.size());
+            for (const int declared_rank : declared_members) {
                 if (declared_rank < 0 || declared_rank >= ctx_.num_ranks) {
                     return fail("collective pg_name " + key.pg_name +
                                 " declares an out-of-range rank " +
@@ -792,6 +924,22 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                                 "] for request " + request_id +
                                 " whose prefill has not drained at this epoch");
                 }
+            } else if (stage != "prefill") {
+                // M-10 fail-closed:批命名空间哨兵的资格旁路只对 prefill
+                // 通道开放。生产发射端的三处哨兵 watch(列车 T_max 截断
+                // 哨兵 ×2 + WP9 首步唤醒)全部固定 STAGE_PREFILL——decode
+                // 通道会双事件 + ServiceCoordinator 计账下溢,注释自认
+                // 刻意规避。旁路若不看 stage,一个 decode 通道的伪哨兵
+                // watch 能绕过全部资格检查直达 fire notifier,把
+                // REQUEST_COMPLETE 送给 ServiceCoordinator 静默错减 active
+                // 计数。注意:这只收紧 watch 侧——列车体/共享 barrier 的
+                // 批命名空间"节点"合法携带 decode stage,节点侧旁路必须
+                // 保持 stage 无关(见 validate_impl 的 node-only 段)。
+                return fail("batch_train_ watch[" +
+                            std::to_string(watch_index) +
+                            "] uses the sentinel eligibility bypass with "
+                            "stage " + stage +
+                            " (the bypass is prefill-channel only)");
             }
             ++watch_index;
         }
@@ -853,6 +1001,38 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                             *ingress_error);
             }
         }
+
+        // touched_ranks 一致性（2026-10-01 补齐，自 validate_impl 下沉）：
+        // 生产快速路径（--online-validate=0 只跑本 preflight）不再接受
+        // 错误"声明"的 rank 集——issue pass 自身用自算集，但声明值喂
+        // Python 侧台账，错误声明必须 fail-closed 而不是作为信息字段
+        // 放行。O(#ranks) 廉价：rank_graphs 已恰持有带节点的 rank 集。
+        // （R2 复核补强）先查 sorted-unique：仅靠 size+子集无法拦"带
+        // 重复的声明恰凑数"形状（如 [0,0] 对实际 {0,1}）——validate_impl
+        // 的同款检查先查 is_sorted+adjacent_find，此处同规。
+        if (batch.has_touched_ranks) {
+            if (!std::is_sorted(batch.touched_ranks.begin(),
+                                batch.touched_ranks.end()) ||
+                std::adjacent_find(batch.touched_ranks.begin(),
+                                   batch.touched_ranks.end()) !=
+                    batch.touched_ranks.end()) {
+                return fail("touched_ranks not sorted unique");
+            }
+            if (batch.touched_ranks.size() != rank_graphs.size()) {
+                return fail("touched_ranks declares " +
+                            std::to_string(batch.touched_ranks.size()) +
+                            " ranks but the batch carries nodes on " +
+                            std::to_string(rank_graphs.size()) + " ranks");
+            }
+            for (const int declared_rank : batch.touched_ranks) {
+                if (rank_graphs.find(declared_rank) == rank_graphs.end()) {
+                    return fail(
+                        "touched_ranks declares rank " +
+                        std::to_string(declared_rank) +
+                        " which carries no node in this batch");
+                }
+            }
+        }
     } catch (const std::exception& exc) {
         return fail(std::string("malformed batch entry: ") + exc.what());
     }
@@ -910,7 +1090,7 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
     try {
         // A committed rank owns an exact affine mapping onto the NodeStore's
         // automatic id stream. Check it before every semantic rule; this is a
-        // read-only fail-closed diagnostic and validate() remains pure.
+        // read-only fail-closed diagnostic and validate_impl() remains pure.
         if (auto drift_error = validate_affine_drift()) {
             return drift_error;
         }
@@ -918,7 +1098,7 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
         // ---- delta facts first: the batch is validated against the state
         //      AFTER this epoch's arrivals/completions (the commit applies
         //      the same facts before adding anything). Local copies only --
-        //      validate() touches no committer state. ----
+        //      validate_impl() touches no committer state. ----
         std::set<std::string> in_flight = in_flight_;
         std::set<std::string> prefill_drained = prefill_drained_;
         apply_delta_facts(delta, in_flight, prefill_drained);
@@ -949,7 +1129,6 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
         std::unordered_map<int, std::set<uint64_t>> batch_ids;
         std::set<std::pair<std::string, std::string>> node_stages;
         std::set<int> touched;
-        uint64_t node_count = 0;
         uint64_t node_index = 0;
         for (const auto& parsed : batch.nodes) {
             const int rank = parsed.node.rank;
@@ -999,15 +1178,45 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             // C1 (2026-08-29): the compute/comm/coll sub-object shape and
             // every field's JSON typing (incl. the sh_2.0 HBM keys) were
             // validated once by parse_graph_batch; this pass reads the typed
-            // attrs directly (the {0,1,2} hbm_access_mode DOMAIN rule
+            // attrs directly (the {0,1} hbm_access_mode DOMAIN rule
             // stays, belt-and-suspenders against a post-parse mutation:
             // Workload::issue_remote_mem bills every mode != 1 as a
-            // local-HBM pool WRITE, so an out-of-domain value must fail
-            // closed instead of silently mis-billing).
-            if (node.hbm_access_mode < 0 || node.hbm_access_mode > 2) {
+            // local-HBM pool WRITE. Tightened (2026-10-01) from the old
+            // {0,1,2}: no mode=2 emitter exists on the Python side, so
+            // mode 2 had no adjudicated semantics -- an out-of-domain value
+            // must fail closed instead of silently mis-billing).
+            if (node.hbm_access_mode < 0 || node.hbm_access_mode > 1) {
                 return "node[" + std::to_string(node_index) +
-                       "] compute.hbm_access_mode must be 0, 1 or 2 "
-                       "(none/local HBM read/local HBM write)";
+                       "] compute.hbm_access_mode must be 0 or 1 "
+                       "(none/local HBM read)";
+            }
+            // M-19 fail-closed:三个 HBM 路由键的跨字段一致性(合法组合
+            // 全集与逐条理由见 mandatory_liveness_preflight 同名注释)。
+            if (node.is_local_hbm_kv_restore &&
+                node.node_type != 2 /* MEM_LOAD */) {
+                return "node[" + std::to_string(node_index) +
+                       "] is_local_hbm_kv_restore is only defined for "
+                       "MEM_LOAD nodes (type 2), got type " +
+                       std::to_string(type);
+            }
+            if (node.is_local_hbm_kv_restore && node.hbm_access_mode != 0) {
+                return "node[" + std::to_string(node_index) +
+                       "] is_local_hbm_kv_restore routes the node to the "
+                       "restore-DMA channel; hbm_access_mode would be "
+                       "silently dropped";
+            }
+            if (!node.is_local_hbm_kv_restore && node.hbm_access_mode != 0 &&
+                type != 2 /* MEM_LOAD */ && type != 3 /* MEM_STORE */) {
+                return "node[" + std::to_string(node_index) +
+                       "] compute.hbm_access_mode is only defined for "
+                       "MEM_LOAD/MEM_STORE nodes (types 2/3), got type " +
+                       std::to_string(type);
+            }
+            if (!node.comm.hbm_charge && type != 5 && type != 6) {
+                return "node[" + std::to_string(node_index) +
+                       "] comm.hbm_charge=false is a p2p endpoint concept "
+                       "(types 5/6), got type " +
+                       std::to_string(type);
             }
             // The src/dst/tag range checks are scoped to the comm-typed
             // nodes (types 5/6) -- the ONLY nodes whose comm fields are
@@ -1036,6 +1245,21 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                            "] recv node rank " + std::to_string(rank) +
                            " != comm.dst " + std::to_string(dst);
                 }
+                // M-9 fail-closed:自环 send/recv(见 mandatory_liveness_
+                // preflight 同名注释)——Topology exit(-1) 报错误导、纯
+                // Switch 拓扑静默按 2 跳计费,跨拓扑行为分叉。
+                if (src == dst) {
+                    return "node[" + std::to_string(node_index) +
+                           "] p2p self-loop (src == dst == " +
+                           std::to_string(src) + ")";
+                }
+                // Same commit-boundary rule as the zero-byte collective: a
+                // committed 0-byte p2p pair would exit the analytical fluid
+                // backend as an invalid flow.
+                if (node.comm.bytes == 0) {
+                    return "node[" + std::to_string(node_index) +
+                           "] p2p comm bytes must be positive";
+                }
             }
             // A zero-byte collective has no completion path in the
             // analytical backend: AllGather reaches 0/0 chunking, while
@@ -1051,7 +1275,6 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             }
             node_stages.insert({request_id, stage});
             touched.insert(rank);
-            ++node_count;
             ++node_index;
         }
 
@@ -1220,7 +1443,9 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                        "in the batch";
             }
             watch_stages.insert({request_id, stage});
-            // C1: typed members keep the JSON key order (rank ascending).
+            // C1: typed members keep the JSON key order (rank-string
+            // lexicographic; nlohmann object keys iterate in string order,
+            // so "10" precedes "2" -- numeric rank order is NOT implied).
             if (watch.members.empty()) {
                 return "watch[" + std::to_string(watch_index) +
                        "] empty/absent members";
@@ -1248,7 +1473,19 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             // 拼 batch 适配(2026-08-22):列车哨兵 watch(request_id =
             // "batch_train_..." 批命名空间,T_max 截断列车的完成信号)不
             // 对应任何单请求,绕过 in-flight/prefill-drained 资格检查。
+            // M-10 收紧:旁路只对 prefill 通道开放(生产哨兵 watch 三处
+            // 全 STAGE_PREFILL;decode 通道会双事件 + ServiceCoordinator
+            // 计账下溢,伪哨兵可静默错减 active 计数)。列车体/共享
+            // barrier 的批命名空间"节点"合法携带 decode stage,节点侧
+            // 旁路保持 stage 无关。
             if (request_id.rfind("batch_train_", 0) == 0) {
+                if (stage != "prefill") {
+                    return "batch_train_ watch[" +
+                           std::to_string(watch_index) +
+                           "] uses the sentinel eligibility bypass with "
+                           "stage " + stage +
+                           " (the bypass is prefill-channel only)";
+                }
                 // batch sentinel: train-scoped, no request eligibility.
             } else if (stage == "prefill") {
                 if (in_flight.count(request_id) == 0) {
@@ -1435,15 +1672,11 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
 
         return std::nullopt;
     } catch (const std::exception& exc) {
-        // Malformed entry types surface as nlohmann type errors; convert to
-        // a validation error (fail-closed, zero state mutation).
+        // C1: batch entries are typed by parse_graph_batch, so this catch is
+        // defensive only; convert any surviving internal error to a
+        // validation error (fail-closed, zero state mutation).
         return std::string("malformed batch entry: ") + exc.what();
     }
-}
-
-std::optional<std::string> GraphBatchCommitter::validate(
-    const StateDelta& delta, const GraphBatch& batch) const {
-    return validate_impl(delta, batch, nullptr);
 }
 
 GraphBatchCommitter::ValidateAndCommitResult
@@ -1489,29 +1722,64 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
         throw std::runtime_error(
             "commit reentered while validate_and_commit owns preflight scratch");
     }
-    // Production may skip the expensive semantic validator. The producer's
-    // bounded contiguous-id contract, the zero-byte collective safety rule,
-    // and the NodeStore affine stream are still mandatory. They are checked
-    // before any delta, NodeStore or affine state change, so a failure has
-    // zero commit side effects.
-    if (auto drift_error = validate_affine_drift()) {
-        throw std::runtime_error("commit preflight: " + *drift_error);
-    }
-    if (auto id_error = validate_json_id_stream(batch, &commit_touched_ranks_)) {
-        throw std::runtime_error("commit preflight: " + *id_error);
-    }
-    if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
-        throw std::runtime_error("commit preflight: " + *liveness_error);
-    }
+    // The direct commit owns the same preflight scratch: set the in-progress
+    // flag so a Context callback cannot nest a mutating commit (or
+    // validate_and_commit) mid-Phase-B -- it used to clear and refill
+    // commit_touched_ranks_ while the outer phase iterates it.
+    validation_commit_in_progress_ = true;
+    try {
+        // Production may skip the expensive semantic validator. The producer's
+        // bounded contiguous-id contract, the zero-byte collective safety rule,
+        // and the NodeStore affine stream are still mandatory. They are checked
+        // before any delta, NodeStore or affine state change, so a failure has
+        // zero commit side effects.
+        if (auto drift_error = validate_affine_drift()) {
+            throw std::runtime_error("commit preflight: " + *drift_error);
+        }
+        if (auto id_error =
+                validate_json_id_stream(batch, &commit_touched_ranks_)) {
+            throw std::runtime_error("commit preflight: " + *id_error);
+        }
+        if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
+            throw std::runtime_error("commit preflight: " + *liveness_error);
+        }
 
-    commit_after_preflight(delta, batch, commit_touched_ranks_);
+        commit_after_preflight(delta, batch, commit_touched_ranks_);
+        validation_commit_in_progress_ = false;
+    } catch (...) {
+        validation_commit_in_progress_ = false;
+        throw;
+    }
 }
 
 void GraphBatchCommitter::commit_after_preflight(
     const StateDelta& delta, const GraphBatch& batch,
     const std::vector<int>& touched_ranks) {
 
-    // ---- delta facts first (the same facts validate() used) ----
+    // ---- M3 fail-closed Context guard: Phase B dereferences the three
+    //      services below (watch registration, future-arrival scheduling,
+    //      the touched-rank issue pass). The preflight does not cover them
+    //      for every batch shape (e.g. watch_registry is only read once a
+    //      watch exists), so a miswired Context used to SIGSEGV mid-commit;
+    //      checked here BEFORE any state mutation, a misconfiguration
+    //      throws with zero commit side effects. ----
+    if (ctx_.watch_registry == nullptr) {
+        throw std::runtime_error(
+            "commit: Context has no WatchRegistry (stage watches could not "
+            "be registered)");
+    }
+    if (ctx_.ingress == nullptr) {
+        throw std::runtime_error(
+            "commit: Context has no RequestIngress (future arrivals could "
+            "not be scheduled)");
+    }
+    if (!ctx_.issue_rank) {
+        throw std::runtime_error(
+            "commit: Context has no issue_rank callback (the touched-rank "
+            "issue pass could not run)");
+    }
+
+    // ---- delta facts first (the same facts Phase A validated against) ----
     apply_delta_facts(delta, in_flight_, prefill_drained_);
 
     // ---- Phase B-1: nodes (per-rank affine json id -> store id).
@@ -1607,6 +1875,7 @@ void GraphBatchCommitter::commit_after_preflight(
     //      ids; C1: typed members in JSON key order, statuses from the
     //      parse-layer enum -- the "unknown status" throw is structurally
     //      gone). ----
+    uint64_t created_watch_count = 0;
     for (const auto& watch : batch.watches) {
         const std::string& request_id = watch.request_id;
         const std::string& stage = watch.stage;
@@ -1634,9 +1903,16 @@ void GraphBatchCommitter::commit_after_preflight(
         for (const auto status : watch.statuses) {
             statuses.insert(status);
         }
+        bool created = false;
         ctx_.watch_registry->register_stage_watch(
             request_id, stage, generation, std::move(members),
-            std::move(statuses));
+            std::move(statuses), &created);
+        // Minor③(2026-09-30):total_watches 只统计真正创建的 watch——
+        // 被吞的跨批重复身份(见 WatchRegistry::register_stage_watch)
+        // 不再计入,计数语义与注册语义对齐。
+        if (created) {
+            ++created_watch_count;
+        }
     }
 
     // ---- Phase B-4: schedule future arrival alarms ----
@@ -1664,7 +1940,7 @@ void GraphBatchCommitter::commit_after_preflight(
     counters_.total_nodes += node_count;
     counters_.max_nodes_per_batch =
         std::max(counters_.max_nodes_per_batch, node_count);
-    counters_.total_watches += batch.watches.size();
+    counters_.total_watches += created_watch_count;
     counters_.total_assignments += batch.assignments.size();
     counters_.total_kv_actions += batch.kv_actions.size();
     counters_.total_future_alarms += batch.future_alarms.size();

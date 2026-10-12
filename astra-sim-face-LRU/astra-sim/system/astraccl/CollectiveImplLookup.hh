@@ -3,7 +3,7 @@
 
 #include <json/json.hpp>
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/system/astraccl/CollectiveImpl.hh"
 
 using json = nlohmann::json;
@@ -59,8 +59,6 @@ class CollectiveImplLookup {
         // To be applied only if no custom algorithm is specified.
         // The algorithm for each dimension is specified in the system input with the key "all-reduce-implementation".
         std::map<ComType, std::vector<CollectiveImpl*>> native_impl_per_coll_dim;
-
-        int rank;
 };
 
 } // namespace AstraSim

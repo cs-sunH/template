@@ -10,6 +10,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/SimSendCaller.hh"
 #include "astra-sim/system/Sys.hh"
+#include <optional>
 
 namespace AstraSim {
 
@@ -24,7 +25,9 @@ class RendezvousSendData : public BasicEventHandlerData, public MetaData {
                        int tag,
                        sim_request request,
                        void (*msg_handler)(void* fun_arg),
-                       void* fun_arg);
+                       void* fun_arg,
+                       std::optional<AstraNetworkAPI::LogicalFlowKey>
+                           logical_key = std::nullopt);
     SimSendCaller send;
 };
 

@@ -5,7 +5,7 @@ LICENSE file in the root directory of this source tree.
 OnlineCli -- execution-driven mechanism layer (wscllm phase 1).
 
 Online entry CLI contract (方案 §4 步骤 1-2 操作 5). The shared CmdLineParser
-uses cxxopts with allow_unrecognised_options() (CmdLineParser.cc:18-21):
+uses cxxopts with allow_unrecognised_options() (CmdLineParser::define_options):
 unknown options are silently ignored with no strong-typed values, so the
 online entry must parse its own family explicitly:
 
@@ -18,8 +18,9 @@ online entry must parse its own family explicitly:
   --request-queue-csv   optional path of the 8-column request queue CSV.
                         Request-neutral default: when absent the service
                         stays IDLE and reads no pre-loaded queue (the static
-                        baseline config, trace_config.csv:12, stays separate
-                        from the online defaults).
+                        baseline config, the request_queue_csv key in
+                        trace_config.csv, stays separate from the online
+                        defaults).
   --request-max-arrival-ns
                         simulation turn-0 arrival window upper bound (ns);
                         rows beyond it are rejected (never submitted,
@@ -83,17 +84,25 @@ online entry must parse its own family explicitly:
                         FP1 (2026-09-01, sync-A16 batch P; E26): parse-time
                         bounds -- 0 accepted (off); (0, 1e-9) rejected
                         ("below clock resolution"); > 1e9 rejected
-                        (kMaxIdleWatchdogSeconds); no whitespace and no
-                        sign character anywhere in the token (strtod would
-                        otherwise accept " +1"/" -1" shapes and an
-                        underflowing subnormal could degenerate to a
-                        zero duration misread as "off"). Covers every
+                        (kMaxIdleWatchdogSeconds); no whitespace in the
+                        token and no sign character as the first character
+                        (ed-bridge-C4 fix, 2026-09-26: the lexer rejects
+                        whitespace anywhere but a sign only at position 0,
+                        so an inner sign like the exponent in "1e+3" is
+                        accepted and parses fine; the old "no sign
+                        anywhere" wording overclaimed). This keeps strtod
+                        from accepting " +1"/" -1" shapes and rejects an
+                        underflowing subnormal that would degenerate to a
+                        zero duration misread as "off". Covers every
                         silent-stall family the semantic dead-end
                         predicate cannot name, complementing it; the
                         practical lower bound is the largest LEGAL idle
                         gap (real-time campaigns: >= 600 s, overridable
                         per campaign).
-  --close-input         mark the input closed after the CSV is fully drained
+  --close-input         mark the input closed once the reader's calendar
+                        is fully submitted (windowed.eof(); queued commands
+                        may still be pending -- FINISHED is deferred to the
+                        ingress-drain boundary, see the M4 note)
                         (otherwise the service stays ACTIVE waiting for the
                         step-1-7 bridge).
   --sensing-enabled     phase-3 perception feature flag (方案 §6.1/§6.2:
@@ -121,10 +130,14 @@ online entry must parse its own family explicitly:
                         token is a hard parse error, so a stale script can
                         never silently change validation frequency.
 
-Hard-error rules: unknown flags in the online family (prefixes --request-,
---bridge-, --close-, --online-) are rejected, because the shared parser would
-otherwise swallow typos silently. --request-queue-csv must name an existing,
-readable file.
+Hard-error rules: unknown flags in the online family (the seven prefixes
+matched by is_online_family: --request-, --bridge-, --close-, --online-,
+--command-, --sensing-, --idle-) are rejected, because the shared parser
+would otherwise swallow typos silently. --request-queue-csv must name an
+existing, readable file. The three path options (--bridge-dir,
+--request-queue-csv, --command-fifo) reject an explicitly empty inline
+value ("--bridge-dir=" etc., 2026-09-30) -- an empty path would downgrade
+to "absent" and silently start a zero-request IDLE run.
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_ONLINECLI_HH

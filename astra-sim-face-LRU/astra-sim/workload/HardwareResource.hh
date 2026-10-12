@@ -28,6 +28,7 @@ class HardwareResource {
         if (this->num_in_flight_cpu_ops != 0 ||
             this->num_in_flight_gpu_comp_ops != 0 ||
             this->num_in_flight_gpu_comm_ops != 0 ||
+            this->num_in_flight_gpu_comm_coll_ops != 0 ||
             this->num_in_flight_hbm_dma_ops != 0 ||
             this->num_in_flight_remote_mem_ops != 0) {
             logger->critical(
@@ -100,7 +101,21 @@ class HardwareResource {
     //                                        alike -- the counter is what
     //                                        that gate reads, not a
     //                                        concurrency switch; COMM_RECV
-    //                                        is a no-op).
+    //                                        is a no-op). COMM_COLL is its
+    //                                        own CommColl class since the
+    //                                        2026-10-11 ③-lite deadlock
+    //                                        fix (ported from WL): counted
+    //                                        for observation, never holds
+    //                                        the gpu_comm single slot,
+    //                                        is_available always true.
+    //   anything else (METADATA /         -> classify_with_status() routes
+    //   INVALID)                             terminal Skipped kinds to the
+    //                                        no-op Other class (2026-10-01;
+    //                                        they used to fall through to
+    //                                        Comm and both inflate
+    //                                        num_gpu_comms and transiently
+    //                                        gate same-rank nodes behind
+    //                                        the comm single slot).
     //
     // Failure policy: release() pre-decrements checks (counter non-zero;
     // when node-id retention is enabled the node must be in its set) and
@@ -132,6 +147,9 @@ class HardwareResource {
     uint32_t num_in_flight_cpu_ops;
     uint32_t num_in_flight_gpu_comp_ops;
     uint32_t num_in_flight_gpu_comm_ops;
+    // 死锁真修 ③-lite（2026-10-11，自 WL 同构移植）：集合通信在役计数
+    // （不占 gpu_comm 单槽；观测/审计用，无容量语义）。
+    uint32_t num_in_flight_gpu_comm_coll_ops;
     uint32_t num_in_flight_hbm_dma_ops;
     uint32_t num_in_flight_remote_mem_ops;
 

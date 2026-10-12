@@ -1,7 +1,7 @@
 #ifndef ASTRASIM_WORKLOAD_STATISTICS_HH
 #define ASTRASIM_WORKLOAD_STATISTICS_HH
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/common/Logging.hh"
 #include <array>
 #include <cstddef>
@@ -38,26 +38,19 @@ class Statistics {
         // is_cpu_op, CommSend/CommRecv/CommCollective -> COMM, else INVALID.
         static OperatorType get_operator_type(
             const ExecutionDriven::NodeView& node);
-        OperatorStatistics(NodeId node_id,
-                           Tick start_time,
-                           Tick end_time,
-                           OperatorType type)
-            : node_id(node_id),
-              start_time(start_time),
-              end_time(end_time),
-              type(type) {}
-        OperatorStatistics(NodeId node_id, Tick start_time, OperatorType type)
-            : node_id(node_id),
-              start_time(start_time),
+        // R1-DC7 (2026-09-29): the four-argument constructor had zero
+        // callers repo-wide and was removed. R1-DC8: the node_id member was
+        // a dead store (the id only ever lives in the operator_statistics
+        // map key); removed together with the constructor parameter.
+        OperatorStatistics(Tick start_time, OperatorType type)
+            : start_time(start_time),
               end_time(INVALID_TICK),
               type(type) {}
         OperatorStatistics()
-            : node_id(UINT64_MAX),
-              start_time(INVALID_TICK),
+            : start_time(INVALID_TICK),
               end_time(INVALID_TICK),
               type(OperatorType::INVALID) {}
 
-        NodeId node_id;
         Tick start_time;
         Tick end_time;
         OperatorType type;
@@ -77,8 +70,6 @@ class Statistics {
     Statistics(Workload* workload);
 
     OperatorStatistics& get_operator_statistics(NodeId node_id);
-
-    const OperatorStatistics& get_operator_statistics(NodeId node_id) const;
 
     void record_start(std::shared_ptr<Chakra::ETFeederNode> node,
                       Tick start_time);
@@ -105,14 +96,13 @@ class Statistics {
         Tick end_time);
 
     // Read-only accessors for side-band metric computation (doc sec.5.7).
-    // Valid after post_processing() has run. They only scan existing
-    // operator statistics and never influence simulation execution.
+    // Valid for the whole run (wall_time is maintained as a running max at
+    // record_end / online completion, so MetricCollector::finalize may read
+    // it before post_processing). They only scan existing operator
+    // statistics and never influence simulation execution.
 
     // Wall time of this rank: max operator end_time.
     Tick get_wall_time() const;
-
-    // Merged union of all intervals of the given operator type.
-    Tick get_type_time(OperatorStatistics::OperatorType type) const;
 
     // Merged union of the intervals of the given operator type, clipped to
     // [window_start, window_end].
@@ -129,6 +119,11 @@ class Statistics {
     struct WindowedRooflineUtilization {
         double compute_utilization_weighted_sum = 0;
         double memory_utilization_weighted_sum = 0;
+        // Die-backend-only field (stage B, contract §7.6): eq-ops / (vector
+        // peak * elapsed), aggregated with the same duration weighting and
+        // the same exact accumulator as the two sums above. Zero for every
+        // legacy backend (no producer ever set the field).
+        double vector_utilization_weighted_sum = 0;
         // Includes the same 1ns guard as extract_utilizations().
         Tick total_comp_time = 1ul;
     };
@@ -155,9 +150,6 @@ class Statistics {
         return operator_statistics.size();
     }
 
-    ~Statistics() {
-        operator_statistics.clear();
-    }
 
     // Legacy finalization scans operator_statistics. Compact online service
     // intentionally does not retain that per-node history, so fail closed
@@ -206,7 +198,9 @@ class Statistics {
         Tick start_time,
         Tick end_time,
         const std::optional<double>& compute_utilization,
-        const std::optional<double>& memory_utilization);
+        const std::optional<double>& memory_utilization,
+        const std::optional<double>& vector_utilization =
+            std::nullopt);
     void add_online_total_comp_time(Tick duration);
     void require_online_compacted_full_window(Tick window_start,
                                               Tick window_end,
@@ -250,6 +244,9 @@ class Statistics {
     bool online_history_preserved_ = false;
     OnlineExactDoubleSum online_compute_utilization_weighted_sum_;
     OnlineExactDoubleSum online_memory_utilization_weighted_sum_;
+    // Stage B (die backend, contract §7.6): vector (eq-op) utilization
+    // aggregate, same exact-accumulator discipline as the two above.
+    OnlineExactDoubleSum online_vector_utilization_weighted_sum_;
     Tick online_total_comp_time_ = 1ul;
     Tick online_roofline_newest_retired_end_ = 0;
 

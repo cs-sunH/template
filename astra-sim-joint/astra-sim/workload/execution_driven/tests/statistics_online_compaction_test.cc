@@ -55,6 +55,11 @@ void expect_child_failure(const char* message, Fn&& child_body) {
     }
     int status = 0;
     expect(waitpid(child, &status, 0) == child, message);
+    // L23 (2026-09-29): a signal death (SIGSEGV/SIGABRT/...) is a crash,
+    // never the fail-closed rejection this fixture pins.  The old check
+    // only rejected a clean EXIT_SUCCESS, so a crashing child counted as
+    // a pass.
+    expect(!WIFSIGNALED(status), message);
     expect(!(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS),
            message);
 }

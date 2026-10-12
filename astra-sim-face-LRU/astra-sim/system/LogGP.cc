@@ -9,8 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
-LogGP::LogGP(std::string /*name*/,
-             Sys* sys,
+LogGP::LogGP(Sys* sys,
              Tick L,
              Tick o,
              Tick g,
@@ -29,7 +28,6 @@ LogGP::LogGP(std::string /*name*/,
     this->subsequent_reads = 0;
     this->THRESHOLD = 8;
     this->NPU_MEM = nullptr;
-    request_num = 0;
     this->local_reduction_delay = sys->local_reduction_delay;
 }
 
@@ -37,6 +35,27 @@ LogGP::~LogGP() {
     if (NPU_MEM != nullptr) {
         delete NPU_MEM;
     }
+}
+
+Tick LogGP::reduction_processing_delay(Tick size) const {
+    // Multiply before dividing: the old (size / 100) * delay form
+    // truncated the size to whole 100-byte units first (fix (2026-10-01),
+    // ported from the face repo). The multiply itself is bounded
+    // fail-closed first -- an extreme (size, delay) pair would otherwise
+    // wrap the Tick-domain product into a silently too-small delay.
+    // Cross-repo timing note (2026-10-01): upstream master computes
+    // ((size / 100) * delay) + 50; this order differs by at most
+    // (delay - 1) ns per 100-byte block when size % 100 != 0 -- a
+    // deliberate carry, documented for cross-repo A/B comparability
+    // (same discipline as the endpoint-delay truncation kept unchanged
+    // in Sys.cc).
+    if (local_reduction_delay > 0 &&
+        size > (Tick)(-1) / (Tick)local_reduction_delay) {
+        Sys::sys_panic(
+            "LogGP: MemMovRequest size times local-reduction-delay "
+            "overflows the tick domain");
+    }
+    return (size * (Tick)local_reduction_delay) / 100 + 50;
 }
 
 void LogGP::attach_mem_bus(Sys* sys,
@@ -69,12 +88,11 @@ void LogGP::process_next_read() {
     sys->register_event(this, EventType::Send_Finished, nullptr,
                         offset + (G * (tmp.size - 1)));
 }
-void LogGP::request_read(int bytes,
+void LogGP::request_read(uint64_t bytes,
                          bool processed,
                          bool send_back,
                          Callable* callable) {
-    MemMovRequest mr(request_num++, this, bytes, callable, processed,
-                     send_back);
+    MemMovRequest mr(this, bytes, callable, processed, send_back);
     if (NPU_MEM != nullptr) {
         mr.callEvent = EventType::Consider_Send_Back;
         pre_send.push_back(mr);
@@ -97,7 +115,6 @@ void LogGP::request_read(int bytes,
 }
 
 void LogGP::switch_to_receiver(MemMovRequest mr, Tick offset) {
-    mr.start_time = Sys::boostedTick();
     receives.push_back(mr);
     prevState = curState;
     curState = State::Receiving;
@@ -114,7 +131,6 @@ void LogGP::call(EventType event, CallData* data) {
         subsequent_reads++;
     } else if (event == EventType::Rec_Finished) {
         assert(receives.size() > 0);
-        receives.front().start_time = Sys::boostedTick();
         last_trans = Sys::boostedTick();
         prevState = curState;
         if (receives.size() < 2) {
@@ -137,11 +153,9 @@ void LogGP::call(EventType event, CallData* data) {
                 receives.pop_front();
             }
             if (processing_state == ProcState::Free && processing.size() > 0) {
-                processing.front().start_time = Sys::boostedTick();
                 sys->register_event(
                     this, EventType::Processing_Finished, nullptr,
-                    ((processing.front().size / 100) * local_reduction_delay) +
-                        50);
+                    reduction_processing_delay(processing.front().size));
                 processing_state = ProcState::Processing;
             }
         } else if (receives.front().send_back == true) {
@@ -178,7 +192,6 @@ void LogGP::call(EventType event, CallData* data) {
         }
     } else if (event == EventType::Processing_Finished) {
         assert(processing.size() > 0);
-        processing.front().start_time = Sys::boostedTick();
         processing_state = ProcState::Free;
         if (processing.front().send_back == true) {
             if (NPU_MEM != nullptr) {
@@ -213,27 +226,28 @@ void LogGP::call(EventType event, CallData* data) {
             }
         }
         if (processing.size() > 0) {
-            processing.front().start_time = Sys::boostedTick();
             processing_state = ProcState::Processing;
             sys->register_event(
                 this, EventType::Processing_Finished, nullptr,
-                ((processing.front().size / 100) * local_reduction_delay) + 50);
+                reduction_processing_delay(processing.front().size));
         }
     } else if (event == EventType::Consider_Retire) {
         SharedBusStat* tmp = new SharedBusStat();
         MemMovRequest movRequest = *talking_it;
-        movRequest.callable->call(trigger_event, tmp);
+        // Erase before the callback: talking_it is a shared member that
+        // MemMovRequest::call overwrites, so a synchronous re-entry from the
+        // callback would otherwise make this erase hit the wrong element.
         retirements.erase(talking_it);
+        movRequest.callable->call(trigger_event, tmp);
         delete data;
     } else if (event == EventType::Consider_Process) {
         MemMovRequest movRequest = *talking_it;
         processing.push_back(movRequest);
         pre_process.erase(talking_it);
         if (processing_state == ProcState::Free && processing.size() > 0) {
-            processing.front().start_time = Sys::boostedTick();
             sys->register_event(
                 this, EventType::Processing_Finished, nullptr,
-                ((processing.front().size / 100) * local_reduction_delay) + 50);
+                reduction_processing_delay(processing.front().size));
             processing_state = ProcState::Processing;
         }
         delete data;

@@ -5,9 +5,10 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
 #include "astra-sim/common/Logging.hh"
+#include "astra-sim/system/Sys.hh"
 
 #include <cassert>
-#include <iostream>
+#include <cstdlib>
 
 using namespace std;
 using namespace AstraSim;
@@ -23,9 +24,23 @@ RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs)
     this->id = id;
     this->total_nodes_in_ring = NPUs.size();
     this->dimension = dimension;
-    this->offset = -1;
     this->index_in_ring = -1;
     for (int i = 0; i < total_nodes_in_ring; i++) {
+        // R6-T3/R7-D fix (2026-09-29): a duplicated rank used to silently
+        // overwrite the first occurrence in id_to_index (two ring positions
+        // collapsing onto one node -> self-ring / hang), and this constructor
+        // is the one place a non-member rank surfaces -- the assert below is
+        // compiled out of release builds, so the non-member rank proceeded
+        // with index_in_ring == -1 and mis-routed every message. Both are
+        // always configuration errors: fail loud in every build type.
+        if (id_to_index.find(NPUs[i]) != id_to_index.end()) {
+            LoggerFactory::get_logger("system::topology::RingTopology")
+                ->critical("custom ring, id: {}: rank {} appears more than "
+                           "once in the ring membership",
+                           id, NPUs[i]);
+            Sys::sys_panic("RingTopology: duplicated rank " +
+                           std::to_string(NPUs[i]) + " in ring membership");
+        }
         id_to_index[NPUs[i]] = i;
         index_to_id[i] = NPUs[i];
         if (id == NPUs[i]) {
@@ -39,6 +54,12 @@ RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs)
                id, name, total_nodes_in_ring, index_in_ring,
                total_nodes_in_ring);
 
+    if (index_in_ring < 0) {
+        Sys::sys_panic("RingTopology: issuing rank " + std::to_string(id) +
+                       " is not a member of the ring (membership does not "
+                       "contain it); a non-member rank cannot route in this "
+                       "ring");
+    }
     assert(index_in_ring >= 0);
 }
 RingTopology::RingTopology(Dimension dimension,
@@ -64,7 +85,6 @@ RingTopology::RingTopology(Dimension dimension,
     this->total_nodes_in_ring = total_nodes_in_ring;
     this->index_in_ring = index_in_ring;
     this->dimension = dimension;
-    this->offset = offset;
 
     id_to_index[id] = index_in_ring;
     index_to_id[index_in_ring] = id;
@@ -80,8 +100,16 @@ int RingTopology::get_receiver_homogeneous(int node_id,
                                            int offset) {
     // The only caller (the RingTopology constructor) always walks the ring
     // clockwise, so the former Anticlockwise branch was dead code and was
-    // removed. The direction parameter is kept for signature compatibility.
-    (void)direction;
+    // removed. The direction parameter is kept for signature compatibility
+    // but a non-Clockwise value now fails loud (2026-09-30, mirroring the
+    // joint repo) instead of being silently treated as Clockwise.
+    if (direction != Direction::Clockwise) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical(
+                "get_receiver_homogeneous: non-Clockwise direction is not "
+                "supported (node {})", node_id);
+        std::exit(EXIT_FAILURE);
+    }
     assert(id_to_index.find(node_id) != id_to_index.end());
     int index = id_to_index[node_id];
     int receiver = node_id + offset;
@@ -92,13 +120,18 @@ int RingTopology::get_receiver_homogeneous(int node_id,
         index++;
     }
     if (receiver < 0) {
+        // (2026-10-01) Release-active fail-closed, matching the 2026-09-30
+        // batch's upgrade of the sibling topology guards: the old assert
+        // compiled out of Release and the negative receiver was inserted
+        // into both index maps. Unreachable via the constructor's in-bounds
+        // stepping; this is the belt for future callers.
         LoggerFactory::get_logger("system::topology::RingTopology")
             ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
                        "id: {}, offset: {}, index_in_ring {} receiver {}",
                        name, id, name, index, node_id, offset,
                        index_in_ring, receiver);
+        std::exit(EXIT_FAILURE);
     }
-    assert(receiver >= 0);
     id_to_index[receiver] = index;
     index_to_id[index] = receiver;
     return receiver;

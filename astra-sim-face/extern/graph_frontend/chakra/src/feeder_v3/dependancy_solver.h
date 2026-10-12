@@ -12,6 +12,13 @@ namespace Chakra {
 namespace FeederV3 {
 
 class _DependancyLayer {
+  // Single-thread contract: this class is NOT thread-safe despite the
+  // internal shared_mutex. The mutex only serializes individual mutations;
+  // the getters below return internal container references without holding
+  // any lock, so a concurrent mutation could invalidate them. In this repo
+  // an ETFeeder is constructed and driven from a single thread (Workload.cc,
+  // NodeStore.cc), which is the only supported usage; ETFeeder's static
+  // _feeder_id_cnt counter likewise assumes single-threaded construction.
  public:
   _DependancyLayer() = default;
   ~_DependancyLayer() {
@@ -30,7 +37,6 @@ class _DependancyLayer {
    *  3. Finished(Not in Graph), which means this node is finished.
    *     The child of it may be released if all its parents is finished.
    *  Finished --add--> Pending --take--> Taken --finish--> Finished
-   *  Taken --push_back--> Pending
    */
   void add_node(const NodeId& node, const std::unordered_set<NodeId>& parents);
   void add_node_children(
@@ -38,13 +44,10 @@ class _DependancyLayer {
       const std::unordered_set<NodeId>& children);
   void take_node(const NodeId& node);
   void finish_node(const NodeId& node);
-  void push_back_node(const NodeId& node);
   void resolve_dependancy_free_nodes();
 
   const std::unordered_set<NodeId>& get_dependancy_free_nodes() const;
   const std::unordered_set<NodeId>& get_ongoing_nodes() const;
-  const std::unordered_set<NodeId>& get_children(NodeId node) const;
-  const std::unordered_set<NodeId>& get_parents(NodeId node) const;
 
  private:
   std::unordered_map<NodeId, std::unordered_set<NodeId>> child_map_parent;
@@ -67,7 +70,6 @@ class DependancyResolver {
   }
   void add_node(const ChakraNode& node);
   void take_node(const NodeId& node);
-  void push_back_node(const NodeId& node);
   void finish_node(const NodeId& node);
   void resolve_dependancy_free_nodes();
 
@@ -76,12 +78,6 @@ class DependancyResolver {
   const _DependancyLayer& get_data_dependancy() const;
   const _DependancyLayer& get_ctrl_dependancy() const;
   const _DependancyLayer& get_enabled_dependancy() const;
-
-  // Warning: It is user's responsibility to make sure different layer's
-  // dependancy are consistent.
-  _DependancyLayer& get_data_dependancy_mut();
-  _DependancyLayer& get_ctrl_dependancy_mut();
-  _DependancyLayer& get_enabled_dependancy_mut();
 
  private:
   bool enable_data_deps;

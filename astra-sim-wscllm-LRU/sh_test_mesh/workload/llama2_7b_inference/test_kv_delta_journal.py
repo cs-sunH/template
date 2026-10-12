@@ -2,7 +2,7 @@
 """test_kv_delta_journal.py -- P1 权威 HBM delta journal 单元测试。
 
 覆盖(doc §6-P1 验收要点):
-  - 守恒矩阵:reserve/grow/move/evict/recompute/terminal retire 逐事务对账
+  - 守恒矩阵:reserve/grow/move/evict/remote restore/terminal retire 逐事务对账
     manager 快照(③/④ 路径:每事务 commit 点 _journal_reconcile_
     transaction 不抛 = 对账通过;run 末 verify_journal_checksum 全量重放
     通过且终态 resident=0/reserved=0/physical=weight);
@@ -34,6 +34,7 @@ from metrics_integration import MemoryActionRecorder  # noqa: E402
 from metrics_schema import MemoryMetricsObserver  # noqa: E402
 from session_kv_manager import (  # noqa: E402
     SessionKVCacheManager,
+    _metrics_anchor_for_phase,
     kv_cache_shard_bytes_for_tokens,
     set_metrics_observer,
 )
@@ -86,6 +87,8 @@ class KvDeltaJournalTests(unittest.TestCase):
             MemoryMetricsObserver(4),
             journal_path=Path(self._tmp.name) / "kv_delta_journal.jsonl",
         )
+        # journal fd 随测试收口(常驻句柄不关会漏 ResourceWarning)。
+        self.addCleanup(recorder.close_journal)
         set_metrics_observer(recorder)
         manager = SessionKVCacheManager(
             _build_topology(capacity),
@@ -319,6 +322,101 @@ class KvDeltaJournalTests(unittest.TestCase):
             RuntimeError, "reconciliation failed for transaction"
         ):
             manager.reserve_request_capacity("rB0", "sB", 0, shards, 13)
+
+    # ------------------------------------- ③ 失败事务 manager 回滚 --
+
+    def test_failed_transaction_rolls_back_manager_state(self) -> None:
+        """MEM-01:journal 行写入失败(① 时序护栏)时,装饰器把 manager
+        整体回滚到事务入口快照——驻留/会话/事件/增量账本无半更新残留,
+        同一 mutation 换合法时刻重试可正常完成并收口 checksum。"""
+        manager, recorder = self._manager()
+        manager.prepare_history(
+            "sA", 0, 0, 10, "rA0", required_context_tokens=4)
+        manager.grow_prefill("sA", 4, 11, "rA0")  # journal 首批行:t=11
+        snapshots_before = manager.hbm_snapshots()
+        events_before = len(manager.events)
+        with self.assertRaisesRegex(
+                RuntimeError, "planner_time_ns went backwards"):
+            # t=10 早于 journal 已写出的 t=11:状态更新后 journal 行写入
+            # 失败(改前此处会留下 +4 token 的半更新状态)。
+            manager.grow_prefill("sA", 8, 10, "rA0")
+        self.assertEqual(manager.hbm_snapshots(), snapshots_before)
+        self.assertEqual(
+            manager.session_snapshot("sA").logical_context_tokens, 4)
+        self.assertEqual(len(manager.events), events_before)
+        manager._check_invariants()
+        # 重试:单调合法时刻正常完成;run 末 checksum 门收口。
+        self.assertTrue(manager.grow_prefill("sA", 8, 12, "rA0").admitted)
+        self.assertEqual(
+            manager.session_snapshot("sA").logical_context_tokens, 8)
+        manager.mark_complete("sA", 13, "rA0")
+        manager.retire_terminal_session("sA", 14, "rA0")
+        manager.assert_final_state()
+        self.assertIsNotNone(manager.verify_journal_checksum())
+
+    def test_reconcile_failure_rolls_back_reservation(self) -> None:
+        """MEM-01(commit 对账分支):④ 对账失败时 manager 同样回滚——
+        预约注销、rank 预约字节复位,失败重试不会叠加在半更新上。"""
+        manager, _ = self._manager()
+        manager.prepare_history(
+            "sA", 0, 0, 10, "rA0", required_context_tokens=4)
+        manager.grow_prefill("sA", 4, 11, "rA0")
+        # 破坏 manager 侧权重记账(对账在 commit 点才查,状态更新在前)。
+        rank = manager.topology.instance(0).ranks[0]
+        manager._rank_states[rank].model_weight_bytes += 1
+        snapshots_before = manager.hbm_snapshots()
+        shards = kv_cache_shard_bytes_for_tokens(
+            manager.model, 4, manager.tp_degree)
+        with self.assertRaisesRegex(
+                RuntimeError, "reconciliation failed for transaction"):
+            manager.reserve_request_capacity("rB0", "sB", 0, shards, 12)
+        self.assertNotIn("rB0", manager._reservations)
+        self.assertEqual(manager.hbm_snapshots(), snapshots_before)
+        manager._check_invariants()
+
+    # ------------------------------------------ journal 口径一致性 --
+
+    def test_grow_anchor_follows_central_phase_mapping(self) -> None:
+        """M1-02:grow 的 journal anchor 与逐出/预约同走中心映射——
+        decode 增长行 = decode_start(而非曾硬编码的 completion)。"""
+        manager, recorder = self._manager()
+        manager.prepare_history(
+            "sA", 0, 0, 10, "rA0", required_context_tokens=4)
+        manager.grow_prefill("sA", 4, 11, "rA0")
+        manager.move_prefill_to_decode("sA", 0, 12, "rA0")
+        manager.grow_decode("sA", 8, 13, "rA0")
+        rows = _journal_rows(recorder)
+        self.assertEqual(
+            {row["anchor_kind"] for row in rows
+             if row["cause"] == "prefill_growth_capacity"},
+            {_metrics_anchor_for_phase("prefill")})
+        self.assertEqual(
+            {row["anchor_kind"] for row in rows
+             if row["cause"] == "decode_growth_capacity"},
+            {_metrics_anchor_for_phase("decode")})
+        self.assertEqual(_metrics_anchor_for_phase("decode"), "decode_start")
+
+    def test_terminal_retire_reservation_rows_attribute_terminal_request(self) -> None:
+        """M1-06:终态退休事务内的预约释放行 request_id 与本地/远端核销行
+        同归属 terminal_request_id(allocation_key 仍精确到具体预约)。"""
+        manager, recorder = self._manager()
+        shards = kv_cache_shard_bytes_for_tokens(
+            manager.model, 4, manager.tp_degree)
+        manager.prepare_history(
+            "sA", 0, 0, 10, "rA0", required_context_tokens=4)
+        manager.grow_prefill("sA", 4, 11, "rA0")
+        # 预约不显式释放,留给终态退休事务在事务内核销。
+        manager.reserve_request_capacity("rA0", "sA", 0, shards, 12)
+        manager.mark_complete("sA", 13, "rA0")
+        manager.retire_terminal_session("sA", 14, "rA0")
+        manager.assert_final_state()
+        release_rows = [row for row in _journal_rows(recorder)
+                        if row["cause"] == "terminal_session_retire_reservation"]
+        self.assertTrue(release_rows)
+        for row in release_rows:
+            self.assertEqual(row["request_id"], "rA0")
+            self.assertEqual(row["allocation_key"], "reservation:rA0")
+            self.assertLess(row["reserved_kv_delta_bytes"], 0)
 
     # --------------------------------------------- checksum 门(破坏) --
 

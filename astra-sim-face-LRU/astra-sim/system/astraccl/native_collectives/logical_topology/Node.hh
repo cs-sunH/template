@@ -7,11 +7,11 @@ LICENSE file in the root directory of this source tree.
 #define __NODE_HH__
 
 #include "astra-sim/system/Common.hh"
-#include "astra-sim/system/astraccl/native_collectives/logical_topology/ComputeNode.hh"
 
 namespace AstraSim {
 
-class Node : public ComputeNode {
+// The empty ComputeNode base class (zero members, single heir) was removed.
+class Node {
   public:
     int id;
     Node* parent;

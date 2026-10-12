@@ -27,8 +27,9 @@ matrix of the frozen rule families:
           statuses preserved in raw order);
   O3      unicode passthrough (no validation, byte-exact std::string);
   O4      the frozen error skeleton parses cleanly and carries the error;
-  O5/O6   no size cap; >UINT64 integer literals fail closed (nlohmann
-          stores them as double -> not is_number_integer).
+  O5      no size cap; >UINT64 integer literals fail closed (nlohmann
+          stores them as double -> not is_number_integer) -- pinned by
+          the N16 case below.
 
 Positive controls: a max-shape response (all 7 node types, every optional
 field, a cross-batch parent edge, a full watch, an alarm with queue_index,
@@ -46,6 +47,7 @@ Exit code 0 on ALL PASS.
 
 #include <json/json.hpp>
 
+#include "DieTypes.hh"
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 using namespace AstraSim::ExecutionDriven;
@@ -121,6 +123,45 @@ nlohmann::json compute_full() {
             {"tensor_size", 6000000000ULL},  // (the int-default truncation
             {"runtime_ns", 12345},           //  NOTE of the old DOM path)
             {"remote_weight_bytes", 777}};  // no hbm_access_mode: face schema
+}
+
+// Stage B (die backend, contract §2): a legal die_op_spec object. Unsigned
+// literals on purpose (the strict spec parser requires is_number_unsigned,
+// which nlohmann text parsing always provides; in-test construction with
+// plain ints would store signed and be rejected).
+nlohmann::json valid_die_op_spec() {
+    nlohmann::json span;
+    span["request_id"] = "r1";
+    span["q_tokens"] = 8u;
+    span["kv_tokens"] = 128u;
+    span["q_start_pos"] = 0u;
+    span["kv_start_pos"] = 0u;
+    nlohmann::json spec;
+    spec["schema_version"] = 1u;
+    spec["op_kind"] = "norm";
+    spec["phase"] = "prefill";
+    spec["dtype"] = "bf16";
+    spec["model_dims"] = {{"hidden", 4096u},
+                          {"ffn", 14336u},
+                          {"vocab", 152064u},
+                          {"mlp_variant", "swiglu"},
+                          {"norm_type", "rmsnorm"},
+                          {"position_encoding", "rope"},
+                          {"num_q_heads", 32u},
+                          {"num_kv_heads", 8u},
+                          {"head_dim", 128u}};
+    spec["tp_slice"] = {{"tensor_parallel", 1u},
+                        {"tensor_parallel_rank", 0u},
+                        {"q_heads_local", 32u},
+                        {"kv_heads_local", 8u},
+                        {"ffn_local", 14336u},
+                        {"vocab_local", 152064u}};
+    spec["spans"] = nlohmann::json::array({span});
+    spec["layer_count"] = 1u;
+    spec["weight_passes"] = 1u;
+    spec["kv_access"] = {{"identity", "local"}};
+    spec["fusion_policy"] = "auto";
+    return spec;
 }
 
 nlohmann::json node_json(int rank, uint64_t id, int type,
@@ -344,11 +385,13 @@ void test_node_rules() {
         resp["nodes"][0]["id"] = -1;
         expect_parse_error(resp, "N4: negative id", "negative");
         // uint64 max is a legal PARSE value (the committer treats it as the
-        // missing/invalid sentinel downstream -- unchanged semantics).
-        resp["nodes"][0]["id"] = 18446744073709551515ULL;
+        // missing/invalid sentinel downstream -- unchanged semantics). Pin
+        // the exact boundary: the parse layer admits it verbatim; only the
+        // committer's equality checks give it sentinel meaning.
+        resp["nodes"][0]["id"] = 18446744073709551615ULL;
         const ParsedGraphBatch parsed =
             parse_ok(resp, "N4: uint64 max id parses");
-        expect(parsed.nodes[0].json_id == 18446744073709551515ULL,
+        expect(parsed.nodes[0].json_id == 18446744073709551615ULL,
                "N4: uint64 max id round-trips");
     }
     {  // N5: type domain
@@ -413,6 +456,116 @@ void test_node_rules() {
         expect_parse_error(resp, "N12: hbm_access_mode unknown key",
                            "hbm_access_mode");
     }
+    {  // N12/die (stage B, contract §2): op_role + die_op_spec extensions.
+        using OpRole = AstraSim::ExecutionDriven::OpRole;
+        // Accept: op_role=control_marker parses to the enum.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "control_marker";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role control_marker accepted");
+            expect(parsed.nodes[0].node.compute.op_role ==
+                       OpRole::ControlMarker,
+                   "N12: op_role control_marker -> enum");
+            expect(parsed.nodes[0].node.compute.die_spec == nullptr,
+                   "N12: op_role alone leaves die_spec null");
+        }
+        // Accept: op_role=compute is the explicit default spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "compute";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role compute accepted");
+            expect(parsed.nodes[0].node.compute.op_role == OpRole::Compute,
+                   "N12: op_role compute -> enum");
+        }
+        // Accept: die_op_spec with runtime_ns == 0 parses the immutable
+        // spec (DieModel::parse_die_op_spec ran without error).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: die_op_spec accepted");
+            expect(parsed.nodes[0].node.compute.die_spec != nullptr,
+                   "N12: die_op_spec -> shared spec");
+            expect(parsed.nodes[0].node.compute.die_spec->op_kind ==
+                       DieModel::OpKind::Norm,
+                   "N12: parsed spec carries op_kind norm");
+        }
+        // Reject: unknown op_role spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "marker";
+            expect_parse_error(resp, "N12: op_role unknown spelling",
+                               "op_role");
+        }
+        // Reject: op_role must be a string.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = 1;
+            expect_parse_error(resp, "N12: op_role int", "not a string");
+        }
+        // Reject: die_op_spec + runtime_ns != 0 (contract §2 conflict rule:
+        // a calibrated runtime must never silently bypass the die plan).
+        {
+            nlohmann::json resp = base;  // compute_full carries runtime_ns
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            expect_parse_error(resp, "N12: die_op_spec with runtime_ns",
+                               "runtime_ns == 0");
+        }
+        // Reject: die_op_spec must be an object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = "norm";
+            expect_parse_error(resp, "N12: die_op_spec string",
+                               "die_op_spec is not an object");
+        }
+        // Reject: an inner spec violation surfaces as a ParseError carrying
+        // the original library message (here: an unknown key inside the
+        // spec object).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["surprise"] = 1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec unknown inner key",
+                               "die_op_spec rejected");
+        }
+        // Reject: a missing required key inside the spec object (spans).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec.erase("spans");
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec missing spans",
+                               "die_op_spec rejected");
+        }
+        // Reject: an enum misspelling inside the spec object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["op_kind"] = "normalize";
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec bad op_kind",
+                               "die_op_spec rejected");
+        }
+        // Reject: a signed integer inside the spec object (the strict
+        // spec parser requires unsigned storage).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["layer_count"] = -1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec negative layer_count",
+                               "die_op_spec rejected");
+        }
+    }
     {  // N13: comm key set / domains
         nlohmann::json resp = base;
         resp["nodes"][0]["comm"].erase("tag");
@@ -456,11 +609,11 @@ void test_node_rules() {
         expect(parsed.nodes[0].node.coll.involved_dim.empty(),
                "N14: absent involved_dim -> empty vector");
     }
-    {  // O6: >UINT64 integer literal becomes a double -> fail closed
+    {  // N16: >UINT64 integer literal becomes a double -> fail closed
         nlohmann::json resp = base;
         resp["nodes"][0]["compute"]["num_ops"] =
             nlohmann::json::parse("18446744073709551616");  // 2^64
-        expect_parse_error(resp, "O6: num_ops > UINT64_MAX",
+        expect_parse_error(resp, "N16: num_ops > UINT64_MAX",
                            "not an integer");
     }
 }
@@ -538,6 +691,13 @@ void test_watch_rules() {
         resp = base;
         resp["watches"][0]["members"] = {{"1x", 6}};
         expect_parse_error(resp, "W3: trailing garbage in member key",
+                           "unparsable member rank");
+        resp = base;
+        // (2026-10-01 pin) multi-character leading-zero keys used to pass
+        // the pure-digit check as rank 5 ("05"), contradicting the R1-A-L3
+        // comment; rejected since the same-day completion.
+        resp["watches"][0]["members"] = {{"05", 6}};
+        expect_parse_error(resp, "W3: leading-zero member key",
                            "unparsable member rank");
         resp = base;
         resp["watches"][0]["members"] = {{"9", 6}};

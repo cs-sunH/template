@@ -13,7 +13,7 @@ LICENSE file in the root directory of this source tree.
 
 namespace AstraSim {
 
-class RendezvousRecvData : public BasicEventHandlerData, public MetaData {
+class RendezvousRecvData : public BasicEventHandlerData {
   public:
     RendezvousRecvData(int sys_id,
                        Sys* sys,

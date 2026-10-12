@@ -18,8 +18,8 @@ Covers, in order:
      online spool precision, and the A2 request-level release coexisting
      with the one-shot erase (already-erased keys are harmless no-ops,
      unfired residue is freed, the reverse ledger drains).
-  D. OnlineNode anchor flags: sizeof unchanged (padding reuse, locked by
-     two static_asserts against a pre-R2 mirror struct), default-false on
+  D. OnlineNode anchor flags: sizeof unchanged (padding reuse, locked by a
+     static_assert against a pre-R2 mirror struct), default-false on
      every NodeStore view, OR semantics of set_metric_anchor_flags, and
      flag visibility through the NodeStoreGraphSource views (the exact data
      path Workload::issue consumes).  The ETFeederGraphSource builds its
@@ -50,11 +50,20 @@ using json = nlohmann::json;
 // ---------------------------------------------------------------------------
 // D (part 1): pre-R2 mirror of OnlineNode (field list identical to the
 // struct BEFORE the two metric flags were added).  The mirror assert is the
-// ABI-agnostic proof that the flags landed in the former bool tail padding;
-// the numeric assert anchors the current toolchain value (GCC 15 / libstdc++
-// x86-64, std::vector = 40).  If a different toolchain changes the numeric
-// value while the mirror assert still holds, update the number and re-prove
-// -- that failure mode is protective, not an equivalence break.
+// ABI-agnostic proof that the flags landed in the former bool tail padding.
+// (Review 2026-09-26 cpp-ed-tests-b-9: the former numeric
+// sizeof(OnlineNode)==384 static_assert hard-coded a toolchain-specific
+// value -- GCC 15 / libstdc++ x86-64, std::vector = 40 -- and would fail on
+// any other conforming toolchain without indicating a defect; it was
+// removed. The mirror assert below keeps the actual layout contract.)
+// (2026-10-03, die backend stage B) ComputeAttrs grew by OpRole (enum) +
+// the shared_ptr<const DieModel::DieOpSpec> die_spec, and
+// OnlineStatisticsState grew the die-only vector_utilization optional; the
+// mirror embeds those REAL types (not hand-copied fields), so the
+// sizeof(OnlineNode) == sizeof(mirror) contract automatically carries the
+// new layout and keeps proving exactly one thing: the two metric anchor
+// flags still ride in the bool tail padding (no growth beyond the
+// underlying members).
 // ---------------------------------------------------------------------------
 struct OnlineNodePreR2Mirror {
     uint64_t global_id = 0;
@@ -78,17 +87,6 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodePreR2Mirror),
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 384,
-              "OnlineNode layout anchor for this toolchain (see the mirror "
-              "assert above for the ABI-agnostic bound; 384 in this repo: "
-              "424 minus the removed write-only OnlineStatisticsState "
-              "optionals operation_intensity (-16) / is_memory_bound (-2, "
-              "including its 6-byte align pad) / comm_size (-16), the OSS "
-              "tail shrinking 96 -> 56 = -40 total; 424 itself was 440 minus "
-              "the earlier write-only network_bandwidth optional (-16), on "
-              "top of the blueprint ComputeAttrs carrying no sh_1.0 "
-              "hbm_access_mode int (8 bytes smaller than sh_1.0's 448) -- "
-              "number re-proved per the R2 report's update-the-number rule)");
 
 namespace AstraSim {
 
@@ -697,10 +695,6 @@ void test_online_node_flag_plumbing() {
     expect(ptr != nullptr && !ptr->metric_issue_anchor &&
                !ptr->metric_complete_anchor,
            "node_ptr view of an unanchored node is flag-false");
-    const auto opt = store.node(plain_id);
-    expect(opt.has_value() && !opt->metric_issue_anchor &&
-               !opt->metric_complete_anchor,
-           "by-value lookup view of an unanchored node is flag-false");
 
     // ETFeederGraphSource::view_of constructs its views exactly this way
     // (default-constructed NodeView, per-field assignment, never touching

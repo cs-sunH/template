@@ -213,7 +213,28 @@ def _validate_rank_set(ranks: Any, name: str) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class RequestMetadata:
-    """One request record of the manifest ``requests`` array."""
+    """One request record of the manifest ``requests`` array.
+
+    Report 3.15 fix (2026-09-29, frozen-contract sync; sister-repo sync from
+    astra-sim-wscllm): the unknown-field gate used to reject fields this
+    repository's plan_materializer.py actually writes into the manifests'
+    ``requests[]`` records, which made every real artifact of this
+    repository fail the frozen schema.  The known-field set is now the
+    producer output union (``_derive_metrics_requests`` for
+    metrics_manifest.json plus ``_derive_manifest_requests`` for
+    manifest.json):
+
+    - ``decode_length`` (B2/WP9, C++ optional reader field),
+    - ``human_time_ns`` / ``tool_time_ns`` (B1/B4/WP2; H5-2 initiator
+      caliber; ``None`` when the gap is not derivable),
+    - ``request_type`` (arrival-side trigger type),
+    - ``prefill_length`` / ``history_tokens_before`` /
+      ``prefill_context_tokens`` / ``final_context_tokens`` (queue-derived
+      token bookkeeping).
+
+    All of them stay optional (``absent = not declared``, matching the C++
+    reader) and are validated/serialized only when declared.
+    """
 
     queue_index: int
     request_id: str
@@ -224,6 +245,14 @@ class RequestMetadata:
     prefill_ranks: tuple[int, ...]
     decode_instance: int
     decode_ranks: tuple[int, ...]
+    decode_length: Optional[int] = None
+    human_time_ns: Optional[int] = None
+    tool_time_ns: Optional[int] = None
+    request_type: Optional[str] = None
+    prefill_length: Optional[int] = None
+    history_tokens_before: Optional[int] = None
+    prefill_context_tokens: Optional[int] = None
+    final_context_tokens: Optional[int] = None
 
     def __post_init__(self) -> None:
         _require_int(self.queue_index, "queue_index", 0)
@@ -240,9 +269,23 @@ class RequestMetadata:
         object.__setattr__(
             self, "decode_ranks", _validate_rank_set(self.decode_ranks, "decode_ranks")
         )
+        for name in (
+            "decode_length",
+            "human_time_ns",
+            "tool_time_ns",
+            "prefill_length",
+            "history_tokens_before",
+            "prefill_context_tokens",
+            "final_context_tokens",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                _require_int(value, name, 0)
+        if self.request_type is not None:
+            _require_str(self.request_type, "request_type")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "queue_index": self.queue_index,
             "request_id": self.request_id,
             "session_id": self.session_id,
@@ -253,10 +296,37 @@ class RequestMetadata:
             "decode_instance": self.decode_instance,
             "decode_ranks": list(self.decode_ranks),
         }
+        # Optional fields: serialized only when declared, matching the C++
+        # reader's "absent = not declared" semantics.
+        for name in (
+            "decode_length",
+            "human_time_ns",
+            "tool_time_ns",
+            "prefill_length",
+            "history_tokens_before",
+            "prefill_context_tokens",
+            "final_context_tokens",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                result[name] = value
+        if self.request_type is not None:
+            result["request_type"] = self.request_type
+        return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "RequestMetadata":
         data = _require_mapping(data, "request")
+        optional = {
+            "decode_length",
+            "human_time_ns",
+            "tool_time_ns",
+            "request_type",
+            "prefill_length",
+            "history_tokens_before",
+            "prefill_context_tokens",
+            "final_context_tokens",
+        }
         expected = {
             "queue_index",
             "request_id",
@@ -267,11 +337,11 @@ class RequestMetadata:
             "prefill_ranks",
             "decode_instance",
             "decode_ranks",
-        }
+        } | optional
         unknown = set(data) - expected
         if unknown:
             raise MetricsSchemaError(f"request has unknown fields {sorted(unknown)}")
-        missing = expected - set(data)
+        missing = expected - set(data) - optional
         if missing:
             raise MetricsSchemaError(f"request is missing fields {sorted(missing)}")
         return cls(
@@ -284,6 +354,14 @@ class RequestMetadata:
             prefill_ranks=tuple(data["prefill_ranks"]),
             decode_instance=data["decode_instance"],
             decode_ranks=tuple(data["decode_ranks"]),
+            decode_length=data.get("decode_length"),
+            human_time_ns=data.get("human_time_ns"),
+            tool_time_ns=data.get("tool_time_ns"),
+            request_type=data.get("request_type"),
+            prefill_length=data.get("prefill_length"),
+            history_tokens_before=data.get("history_tokens_before"),
+            prefill_context_tokens=data.get("prefill_context_tokens"),
+            final_context_tokens=data.get("final_context_tokens"),
         )
 
 
@@ -300,7 +378,7 @@ class NodeMetricEvent:
         _require_int(self.event_code, "event_code")
         if self.event_code not in EVENT_EDGE_BY_CODE:
             raise MetricsSchemaError(
-                f"event_code {self.event_code} is not in the protocol encoding 1-7"
+                f"event_code {self.event_code} is not in the protocol encoding 1-8"
             )
         _require_int(self.subject_id, "subject_id", 0)
 

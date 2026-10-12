@@ -37,6 +37,14 @@ void DataSet::set_notifier(Callable* callable, EventType event) {
     // Broadcast used to set the notifier twice, leaking the first pair.
     delete notifier;
     notifier = new std::pair<Callable*, EventType>(callable, event);
+    // (2026-10-01 R2 审查修复) 零相 collective（全部维度为单点/未涉）
+    // 在 generate_collective 内就已 notify 完成——彼时 notifier 尚未
+    // 安装，完成事件丢失、发起节点永不完成。此处对已完成数据集**就地
+    // 补发**一次（正常路径 streams 后续才完成，finished 恒 false，零行
+    // 为变化）。
+    if (finished) {
+        fire_notifier_once();
+    }
 }
 
 void DataSet::retain_communicator_group(
@@ -45,31 +53,35 @@ void DataSet::retain_communicator_group(
 }
 
 void DataSet::notify_stream_finished(StreamStat* data) {
+    // The StreamStat payload is identity-only for the removed write-only
+    // statistic chain (face-LRU audit 2026-09-29 mirrored to joint); the
+    // bus-stat accounting lives on the SharedBusStat payloads themselves.
+    (void)data;
     finished_streams++;
-    if (data != nullptr) {
-        update_stream_stats(data);
-    }
-    if (finished_streams == total_streams) {
+    // >= (not ==): a zero-phase collective completes the dataset with
+    // total_streams == 0 via an explicit notify; in normal flow each
+    // stream notifies exactly once so == and >= coincide.
+    if (finished_streams >= total_streams) {
         finished = true;
         finish_tick = Sys::boostedTick();
-        if (notifier != nullptr) {
-            take_stream_stats_average();
-            Callable* c = notifier->first;
-            EventType ev = notifier->second;
-            delete notifier;
-            notifier = nullptr;
-            IntData* int_data = new IntData(my_id);
-            int_data->execution_time = finish_tick - creation_tick;
-            c->call(ev, int_data);
-            delete int_data;
-        }
+        fire_notifier_once();
+    }
+}
+
+void DataSet::fire_notifier_once() {
+    // Single delivery point for the completion notification; consumes the
+    // notifier (one-shot) exactly like the historic inline body did.
+    if (notifier != nullptr) {
+        Callable* c = notifier->first;
+        EventType ev = notifier->second;
+        delete notifier;
+        notifier = nullptr;
+        IntData* int_data = new IntData(my_id);
+        c->call(ev, int_data);
+        delete int_data;
     }
 }
 
 void DataSet::call(EventType event, CallData* data) {
     notify_stream_finished(((StreamStat*)data));
-}
-
-bool DataSet::is_finished() {
-    return finished;
 }

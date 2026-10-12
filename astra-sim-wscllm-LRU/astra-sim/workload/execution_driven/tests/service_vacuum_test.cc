@@ -54,11 +54,13 @@ is green).
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include <astra-network-analytical/common/EventQueue.h>
 
 using namespace AstraSim::ExecutionDriven;
@@ -81,19 +83,22 @@ void expect(bool cond, const std::string& what) {
 // the whole file and queues every turn-0
 // Submit during the FIRST pump, so the vacuum window is "queued but not
 // yet drained", not "read window boundary".
-const char* kCsvHeader =
-    "session_id,turn_index,request_id,prefill_length,decode_length,"
-    "session_arrival_time_ns,inter_request_interval_ns";
+// (kCsvHeader 已并入共享 helper 的冻结表头,M-16 2026-09-30。)
 
 std::string make_csv(const std::string& path) {
-    std::ofstream out(path);
-    out << kCsvHeader << "\n";
+    // M-16(2026-09-30):provenance 门 REQUIRED——经共享 helper 写出,
+    // CSV 与 sidecar 同一次落盘(字节布局与原逐行写一致:header + 每
+    // 行 + 换行)。
+    std::vector<std::string> rows;
     for (int row = 0; row < 30; ++row) {
         const uint64_t arrival =
             1000 + static_cast<uint64_t>(row / 10) * 1000;  // 3 batches
-        out << "s" << row << ",0,req_" << row << ",100,10," << arrival
-            << ",0\n";
+        // turn-0 rows: no interval, empty description (8-column contract).
+        rows.push_back("s" + std::to_string(row) + ",0,req_" +
+                       std::to_string(row) + ",100,10," +
+                       std::to_string(arrival) + ",,d");
     }
+    FixtureProvenance::write_queue_fixture(path, rows);
     return path;
 }
 
@@ -127,9 +132,9 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
     });
     if (!fixed_order) {
         // Historical behavior: the service could be closed while producers
-        // still queued work. Do not use mark_input_closed() here: its new
-        // linearized producer gate is precisely what this regression fixture
-        // must bypass in order to model the old defect.
+        // still queued work. Do not use `ingress.mark_input_closed()` here:
+        // its new linearized producer gate is precisely what this regression
+        // fixture must bypass in order to model the old defect.
         svc.mark_input_closed();
     }
     reader.pump();  // initial pump before the loop (main_online.cc): the

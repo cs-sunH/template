@@ -13,12 +13,13 @@ namespace AstraSim {
 
 class DoubleBinaryTreeTopology : public ComplexLogicalTopology {
   public:
-    DoubleBinaryTreeTopology(int id,
-                             int total_tree_nodes,
+    DoubleBinaryTreeTopology(int total_tree_nodes,
                              int start,
                              int stride);
     ~DoubleBinaryTreeTopology();
-    LogicalTopology* get_topology() override;
+    // Alternates between the two trees on every call (no base-class virtual
+    // backs this method; it is local to this class).
+    LogicalTopology* get_topology();
     BasicLogicalTopology* get_basic_topology_at_dimension(
         int dimension, ComType type) override;
     int get_num_of_dimensions() override;

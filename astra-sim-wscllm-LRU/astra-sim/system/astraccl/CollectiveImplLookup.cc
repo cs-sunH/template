@@ -5,6 +5,7 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/astraccl/CollectiveImplLookup.hh"
 
+#include <charconv>
 #include <cstdlib>
 #include <stdexcept>
 #include <yaml-cpp/yaml.h>
@@ -15,8 +16,6 @@ using namespace std;
 using json = nlohmann::json;
 
 namespace AstraSim {
-
-    CollectiveImplLookup::CollectiveImplLookup(int rank_) : rank(rank_) {}
 
     CollectiveImplLookup::~CollectiveImplLookup() {
         for (auto& node_and_impl : per_node_custom_impl) {
@@ -41,17 +40,24 @@ namespace AstraSim {
         } else if (collective_impl_str == "doubleBinaryTree") {
             return new CollectiveImpl(CollectiveImplType::DoubleBinaryTree);
         } else if (collective_impl_str.rfind("direct", 0) == 0) {
+            // The window (if any) must be one decimal number spanning the
+            // entire remainder of the token, and at least 1: a truncated or
+            // trailing-garbage value would silently misconfigure the
+            // injection window, and a window of 0 drives AllToAll to zero
+            // injections and stalls the simulation.
             int window = -1;
             if (collective_impl_str != "direct") {
-                try {
-                    window = stoi(collective_impl_str.substr(6, 5));
-                } catch (const std::exception&) {
+                string suffix = collective_impl_str.substr(6);
+                auto [parsed, ec] = from_chars(
+                    suffix.data(), suffix.data() + suffix.size(), window);
+                if (ec != errc() || parsed != suffix.data() + suffix.size() ||
+                    window < 1) {
                     auto logger = LoggerFactory::get_logger("astraccl");
                     logger->critical(
                         "Cannot interpret collective implementation '" +
                         collective_impl_str +
-                        "'. An integer window must follow the 'direct' "
-                        "prefix.");
+                        "'. A positive integer window (>= 1) must follow the "
+                        "'direct' prefix.");
                     exit(1);
                 }
             }
@@ -59,15 +65,17 @@ namespace AstraSim {
         } else if (collective_impl_str.rfind("oneDirect", 0) == 0) {
             int window = -1;
             if (collective_impl_str != "oneDirect") {
-                try {
-                    window = stoi(collective_impl_str.substr(9, 5));
-                } catch (const std::exception&) {
+                string suffix = collective_impl_str.substr(9);
+                auto [parsed, ec] = from_chars(
+                    suffix.data(), suffix.data() + suffix.size(), window);
+                if (ec != errc() || parsed != suffix.data() + suffix.size() ||
+                    window < 1) {
                     auto logger = LoggerFactory::get_logger("astraccl");
                     logger->critical(
                         "Cannot interpret collective implementation '" +
                         collective_impl_str +
-                        "'. An integer window must follow the 'oneDirect' "
-                        "prefix.");
+                        "'. A positive integer window (>= 1) must follow the "
+                        "'oneDirect' prefix.");
                     exit(1);
                 }
             }

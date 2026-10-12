@@ -83,6 +83,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -370,6 +371,11 @@ def _int_or_none(value: Any) -> Optional[int]:
     return value
 
 
+def _tick_or_none(value: Any) -> Optional[int]:
+    value = _int_or_none(value)
+    return value if value is not None and value >= 0 else None
+
+
 class DomainScan:
     """decision log 单遍消费者（prepare/consume/finish 三段中的扫描段）。
 
@@ -383,15 +389,26 @@ class DomainScan:
     def __init__(self) -> None:
         self.joint_rows = 0
         self.decisions: list[dict] = []
+        # cfg1（2026-09-30，§10.3 完成预测成熟报告）：kind="decode" 行的
+        # D 边界决策投影（boundary_decision.candidates + 执行候选身份）
+        # ——P/D 分列误差报告的第二样本源（P 样本 = joint_admission 行）。
+        self.d_decisions: list[dict] = []
         self.completions: dict[str, dict] = {}
         # M3：kind="merge_done" 披露行索引（request_id → merge_done
         # tick）——σ̂ 同终点配对用（C3b 分报行）。
         self.merge_done: dict[str, int] = {}
+        # W5（2026-09-29，§7.4/§9.3 settle_done 统一语义）：kind=
+        # "settle_done" 披露行索引（request_id → settle_done tick）
+        # ——settle 终点的**主**配对源；旧日志的 merge_done 行仅在
+        # consolidate 已核实等价（settle_done_ns == merge_done_ns，
+        # 同一 watch 交付事件）时映射（兼容层见 _settle_tick_of）。
+        self.settle_done: dict[str, int] = {}
+        self.invalid_settle: set[str] = set()
         self.last_tick: Optional[int] = None
 
     def consume(self, record: dict) -> None:
         kind = record.get("kind")
-        tick = _int_or_none(record.get("tick"))
+        tick = _tick_or_none(record.get("tick"))
         if tick is not None:
             self.last_tick = tick if self.last_tick is None \
                 else max(self.last_tick, tick)
@@ -403,6 +420,12 @@ class DomainScan:
             self.joint_rows += 1
             self.decisions.append(self._scan_decision(
                 record, request_id, decision))
+        elif kind == "decode":
+            # cfg1：D 边界决策行投影（无 boundary_decision 的旧日志/一次
+            # 映射臂行照读、投影为 None——样本计数如实披露，不造样本）。
+            scanned = self._scan_d_decision(record, request_id, decision)
+            if scanned is not None:
+                self.d_decisions.append(scanned)
         elif kind == "completion":
             self.completions[str(request_id)] = {
                 "tick": tick,
@@ -414,12 +437,61 @@ class DomainScan:
                     decision.get("kv_instance_after_completion"),
                 "joint_action": decision.get("joint_action"),
             }
+        elif kind == "settle_done":
+            settle_tick = (_tick_or_none(decision["settle_done_ns"])
+                           if "settle_done_ns" in decision else tick)
+            service_tick = (_tick_or_none(decision["service_done_ns"])
+                            if "service_done_ns" in decision else None)
+            key = str(request_id)
+            if (settle_tick is None
+                    or ("service_done_ns" in decision and service_tick is None)
+                    or (service_tick is not None and settle_tick < service_tick)
+                    or (key in self.settle_done
+                        and self.settle_done[key] != settle_tick)):
+                self.invalid_settle.add(key)
+            else:
+                self.settle_done[key] = settle_tick
         elif kind == "merge_done":
-            merge_tick = _int_or_none(decision.get("merge_done_ns"))
-            if merge_tick is None:
-                merge_tick = tick
+            merge_tick = (_tick_or_none(decision["merge_done_ns"])
+                          if "merge_done_ns" in decision else tick)
             if merge_tick is not None:
                 self.merge_done[str(request_id)] = merge_tick
+
+    @staticmethod
+    def _candidate_slot(cand: dict) -> dict:
+        """逐候选披露槽（P/D 两扫描器共用；cfg1 扩完成预测里程碑与
+        归因面——approximations/notes 原样保留供七分归因映射）。"""
+        breakdown = cand.get("breakdown")
+        segments: dict[str, Optional[int]] = {
+            name: None for name in BREAKDOWN_SEGMENTS}
+        predicted: dict[str, Optional[int]] = {
+            "predicted_service_done": None,
+            "predicted_merge_done": None,
+            "predicted_next_token_done": None,
+        }
+        approximations: list = []
+        notes: list = []
+        if isinstance(breakdown, dict):
+            for name in BREAKDOWN_SEGMENTS:
+                segments[name] = _int_or_none(breakdown.get(name))
+            for name in predicted:
+                predicted[name] = _int_or_none(breakdown.get(name))
+            if isinstance(breakdown.get("approximations"), list):
+                approximations = [
+                    str(item) for item in breakdown["approximations"]]
+            if isinstance(breakdown.get("notes"), list):
+                notes = [str(item) for item in breakdown["notes"]]
+        slot = {
+            "applicable": bool(cand.get("applicable")),
+            "cost_ns": _int_or_none(cand.get("cost_ns")),
+            "hops": _int_or_none(cand.get("hops")),
+            "reason": cand.get("inapplicable_reason"),
+            "segments": segments,
+        }
+        slot.update(predicted)
+        slot["approximations"] = approximations
+        slot["notes"] = notes
+        return slot
 
     @staticmethod
     def _scan_decision(record: dict, request_id: Any,
@@ -436,21 +508,8 @@ class DomainScan:
             if instance is None or action not in FOUR_ACTIONS:
                 fail(f"joint_admission 候选 instance_index/action 非法："
                      f"{request_id}（{action!r}@{instance!r}）")
-            breakdown = cand.get("breakdown")
-            segments: dict[str, Optional[int]] = {name: None
-                                                  for name in
-                                                  BREAKDOWN_SEGMENTS}
-            if isinstance(breakdown, dict):
-                for name in BREAKDOWN_SEGMENTS:
-                    segments[name] = _int_or_none(breakdown.get(name))
-            slot = candidates.setdefault(instance, {})
-            slot[str(action)] = {
-                "applicable": bool(cand.get("applicable")),
-                "cost_ns": _int_or_none(cand.get("cost_ns")),
-                "hops": _int_or_none(cand.get("hops")),
-                "reason": cand.get("inapplicable_reason"),
-                "segments": segments,
-            }
+            slot = DomainScan._candidate_slot(cand)
+            candidates.setdefault(instance, {})[str(action)] = slot
         load_view: dict[int, dict] = {}
         raw_load = decision.get("load_view")
         if isinstance(raw_load, list):
@@ -466,6 +525,13 @@ class DomainScan:
                         min((r for r in remaining
                              if isinstance(r, int) and r >= 0), default=None)
                         if isinstance(remaining, list) else None,
+                    # cfg1 负载阶段分组输入（决策行 load_view 的队/在跑
+                    # 量字段；缺席 = None → 阶段 NA，不造）。
+                    "queued_task_load_ns":
+                        _int_or_none(entry.get("queued_task_load_ns")),
+                    "active_decode_task_load_ns":
+                        _int_or_none(
+                            entry.get("active_decode_task_load_ns")),
                 }
         port_rows: dict[int, dict] = {}
         raw_port = decision.get("port_snapshot")
@@ -507,7 +573,7 @@ class DomainScan:
             forced_reason = recompute_selection.get("forced_reason")
         return {
             "request_id": str(request_id),
-            "tick": _int_or_none(record.get("tick")),
+            "tick": _tick_or_none(record.get("tick")),
             "candidates": candidates,
             "selected_action": selected_action,
             "selected_instance": _int_or_none(
@@ -521,6 +587,65 @@ class DomainScan:
             "origin_home_instance": _int_or_none(
                 decision.get("origin_home_instance")),
             "cost_ns": _int_or_none(decision.get("joint_cost_ns")),
+        }
+
+    @staticmethod
+    def _scan_d_decision(record: dict, request_id: Any,
+                         decision: dict) -> Optional[dict]:
+        """cfg1：kind="decode" 行的 D 边界决策投影（completion_error_
+        report 的 D 样本源）。无 boundary_decision（旧日志/一次映射臂
+        boundary 键为 None）→ None（不造样本）。
+
+        执行候选身份解析（回退/混合形态与 sh30 登记侧同判据）：非回退
+        = (chosen_instance_index, selected_action_face)；混合候选按
+        hybrid_copy_sources 匹配子集身份；回退行 chosen_* 已是执行继续
+        形态（sh30 侧 boundary["chosen_action"] = 执行面动作）。"""
+        boundary = decision.get("boundary_decision")
+        if not isinstance(boundary, dict):
+            return None
+        candidates_raw = boundary.get("candidates")
+        candidates: dict[int, dict[str, dict]] = {}
+        executed_slot: Optional[dict] = None
+        if isinstance(candidates_raw, list):
+            chosen_instance = _int_or_none(
+                boundary.get("chosen_instance_index"))
+            face = boundary.get("selected_action_face") or \
+                boundary.get("chosen_action")
+            subset = boundary.get("hybrid_copy_sources")
+            for cand in candidates_raw:
+                if not isinstance(cand, dict):
+                    continue
+                instance = _int_or_none(cand.get("instance_index"))
+                action = cand.get("action")
+                if instance is None or not isinstance(action, str):
+                    continue
+                slot = DomainScan._candidate_slot(cand)
+                if action == "hybrid":
+                    slot["copy_subset"] = list(cand.get("copy_subset") or [])
+                candidates.setdefault(instance, {})[action] = slot
+                if (executed_slot is None and chosen_instance is not None
+                        and instance == chosen_instance
+                        and isinstance(face, str) and action == face):
+                    if action == "hybrid" and isinstance(subset, list):
+                        if sorted(cand.get("copy_subset") or []) != \
+                                sorted(subset):
+                            continue
+                    executed_slot = slot
+        inherited = boundary.get("inherited_obligations")
+        return {
+            "request_id": str(request_id),
+            "tick": _tick_or_none(record.get("tick")),
+            "candidates": candidates,
+            "selected_instance": _int_or_none(
+                boundary.get("chosen_instance_index")),
+            "selected_action": boundary.get("chosen_action"),
+            "selected_action_face": boundary.get("selected_action_face"),
+            "is_continuation": bool(boundary.get("is_continuation")),
+            "fallback": bool(boundary.get("fallback")),
+            "inherited_obligation_count": (
+                len(inherited) if isinstance(inherited, list) else 0),
+            "executed_slot": executed_slot,
+            "has_boundary_candidates": isinstance(candidates_raw, list),
         }
 
 
@@ -786,7 +911,7 @@ def _instances_csv_rows(entry: dict, topology: dict, sigma_tiers: dict):
         # N6（2026-09-23 复核审计6）：配额前成本单列——被配额拒（quota_
         # 前缀）的候选保留配额前预测成本（M2 修复后决策行携带），实例
         # CSV 此前列 applicable-only 置 NA ⇒ quota-on run 画不出配额前
-        # 成本等值线（计划 :574"双域同图"的 D_econ 侧输入）。
+        # 成本等值线（计划文档 §5.4"双域同图"的 D_econ 侧输入）。
         remote_pre_quota_cost = (
             remote["cost_ns"]
             if remote and remote["cost_ns"] is not None
@@ -905,7 +1030,7 @@ def estimate_sigma_hat(entries: list[dict],
             "[domain-metrics] 警告：无 pred/measured 配对样本（无 "
             "completion 行）——σ̂ 走 C 级冷启动锚点")
     # C 级：冷启动锚点（C10 指定被否决来源量级 I_merge_leg/B_eff 的替身，
-    # JCM:903-911 前向合并腿传输时间量级族）。
+    # joint_cost_model.py 前向合并腿传输时间量级族）。
     merge_ns_values = sorted(
         cand["segments"]["merge_ns"]
         for entry in entries
@@ -934,6 +1059,412 @@ def estimate_sigma_hat(entries: list[dict],
             "样本）——δ 敏感性重定价降级 NA")
     result["checked_schema_keys"] = list(checked_keys)
     return result
+
+
+# ---------------------------------------------------------------------------
+# cfg1（2026-09-30，§10.3 误差成熟与归因）：P/D 完成预测分组误差报告
+# ---------------------------------------------------------------------------
+
+#: 实际预测距离档（§10.3"按实际预测距离"分组的冻结界；与预测参数
+#: Δ=100 ms 预设族同源推导的工程档位：near < 1×Δs、mid < 4×Δs、
+#: far < 16×Δs、其余 beyond——离线报告预注册，非在线机制）。
+#: 对账钉测：前两档与在线 prediction_config.params.
+#: forecast_distance_buckets_ns 锁等（slo_tools/tests/test_domain_metrics.
+#: py::OnlineOfflineLedgerReconciliationTests，ast 提在线源字面值比对、
+#: 不 import joint——任一侧单改即报错）。
+PREDICTION_DISTANCE_BANDS_NS = (100_000_000, 400_000_000, 1_600_000_000)
+PREDICTION_DISTANCE_BAND_LABELS = ("near", "mid", "far", "beyond")
+
+#: 归一化分母规则（与在线成熟账本 joint/forecast_validation.
+#: CompletionMaturityLedger.DENOMINATOR_RULE 同源同字串——离线侧
+#: 独立常量登记，slo_tools 不 import joint 模块）。对账钉测：
+#: test_domain_metrics.OnlineOfflineLedgerReconciliationTests（ast 提
+#: 在线源字面值比对，任一侧单改即报错）。
+ERROR_DENOMINATOR_RULE = "(actual-predicted)/max(1,|predicted|) ns"
+
+#: 七分归因的关键词规则（§10.3"误差来源拆为快照陈旧/缺账、物理服务近
+#: 似、容量摘要偏差、未知长度、新到达、布局/协议、取整"）。映射对象 =
+#: 执行候选 breakdown 的 approximations + notes 词面（小写包含匹配）；
+#: 诊断性启发映射——非精确单因归因，一样本可多标签；无命中单列
+#: unattributed，不强行归入"历史预测误差"。
+ERROR_SOURCE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("snapshot_stale_or_missing", (
+        "ledger_source", "inferred_unknown_eta", "snapshot",
+        "summary_maintenance", "absent", "registry", "stale")),
+    ("physical_service_approx", (
+        "next_token_single_step_service", "decode_aggregate",
+        "no_backpressure", "single_step")),
+    ("capacity_summary_deviation", (
+        "capacity_wait_uncertain", "capacity_summary", "reclaimable",
+        "theta")),
+    ("unknown_length", (
+        "cold_start", "preset", "decode_steps_source",
+        "estimated_decode", "length")),
+    ("new_arrivals", ("forecast_",)),
+    ("layout_protocol", (
+        "frozen_diagnostic", "pool_port_rank_proxy", "kv_location_unknown",
+        "placement", "layout", "double_buffer", "staging")),
+    ("rounding", ("ceil", "round", "tile_align")),
+)
+
+
+def _distance_band(realized_ns: Optional[int]) -> str:
+    """实际预测距离档（realized = 决策→settle 实际跨度；None = NA）。"""
+    if realized_ns is None:
+        return "NA"
+    band = 0
+    for bound in PREDICTION_DISTANCE_BANDS_NS:
+        if realized_ns >= bound:
+            band += 1
+    return PREDICTION_DISTANCE_BAND_LABELS[band]
+
+
+def _load_phase_of(decision: dict) -> str:
+    """负载阶段（决策行 load_view 的全系统冻结规则；P 行承载，D 行无
+    负载快照恒 NA）：任一实例 decode 在跑量 > 0 = decode_active；否则
+    任一实例 prefill 队列量 > 0 = prefill_queued；否则 idle；量缺席
+    （旧日志）= NA。"""
+    phases = [
+        entry for entry in decision.get("load_view", {}).values()
+        if isinstance(entry, dict)]
+    if not phases:
+        return "NA"
+    if any((entry.get("active_decode_task_load_ns") or 0) > 0
+           for entry in phases):
+        return "decode_active"
+    if any((entry.get("queued_task_load_ns") or 0) > 0
+           for entry in phases):
+        return "prefill_queued"
+    if all(entry.get("active_decode_task_load_ns") is None
+           and entry.get("queued_task_load_ns") is None
+           for entry in phases):
+        return "NA"
+    return "idle"
+
+
+def _settle_tick_for(scan: DomainScan, request_id: str, policy: str,
+                     completion: Optional[dict],
+                     require_explicit_settle: bool = False) -> Optional[int]:
+    """settle 终点解析（与 derive_entries 的 M3/W5 配对规则同判据）：
+    现代 run 只消费有效 settle_done；仅旧 consolidate 日志允许等价的
+    merge_done/零载荷 service 映射。损坏或先于 service 的结算证据拒绝
+    配对，不能靠兼容回退重新变成样本。"""
+    if request_id in scan.invalid_settle:
+        return None
+    settle_tick = scan.settle_done.get(request_id)
+    if settle_tick is None and policy != "distributed" and not require_explicit_settle:
+        settle_tick = scan.merge_done.get(request_id)
+    if (settle_tick is None and policy != "distributed"
+            and not require_explicit_settle
+            and completion is not None
+            and not (completion.get("merge_transferred_bytes") or 0)):
+        settle_tick = completion.get("tick")
+    if (settle_tick is not None and completion is not None
+            and completion.get("tick") is not None
+            and settle_tick < completion["tick"]):
+        return None
+    return settle_tick
+
+
+def _error_block(samples: list[dict], endpoint: str) -> dict:
+    """单组误差聚合（绝对/带方向/分位/归一化分母——§10.3 报告口径；
+    空组 = {} 如实空形态）。"""
+    errs: list[int] = []
+    normalized_signed: list[float] = []
+    normalized_abs: list[float] = []
+    unpaired = 0
+    for sample in samples:
+        error = sample["errors"].get(endpoint)
+        predicted = sample["predicted"].get(endpoint)
+        if error is None:
+            unpaired += 1
+            continue
+        errs.append(int(error))
+        denominator = max(1, abs(int(predicted))) if predicted is not None \
+            else 1
+        normalized_signed.append(error / denominator)
+        normalized_abs.append(abs(error) / denominator)
+    if not errs and not unpaired:
+        return {}
+    block: dict = {}
+    if errs:
+        signed = sorted(errs)
+        abs_sorted = sorted(abs(err) for err in errs)
+        block["n"] = len(errs)
+        block["signed"] = {
+            "min": signed[0],
+            "p50": nearest_rank_percentile(signed, 0.50),
+            "p90": nearest_rank_percentile(signed, 0.90),
+            "max": signed[-1],
+        }
+        block["abs"] = {
+            "p50": nearest_rank_percentile(abs_sorted, 0.50),
+            "p90": nearest_rank_percentile(abs_sorted, 0.90),
+        }
+        block["normalized_mean_signed"] = (
+            sum(normalized_signed) / len(normalized_signed))
+        block["normalized_mean_abs"] = (
+            sum(normalized_abs) / len(normalized_abs))
+    if unpaired:
+        block["unpaired"] = unpaired
+    return block
+
+
+def _grouped_blocks(samples: list[dict], keyfn, endpoint: str) -> dict:
+    """按预注册分组键输出误差块（组键排序确定性；NA 组照落——缺输入
+    如实披露）。"""
+    groups: dict[str, list[dict]] = {}
+    for sample in samples:
+        groups.setdefault(str(keyfn(sample)), []).append(sample)
+    return {key: _error_block(members, endpoint)
+            for key, members in sorted(groups.items())}
+
+
+def _attribution_tags(slot: dict) -> list[str]:
+    """七分归因标签（关键词规则映射；一样本多标签；无命中 = 空 →
+    上层单列 unattributed）。"""
+    tokens = [str(item).lower()
+              for item in (slot.get("approximations", [])
+                           + slot.get("notes", []))]
+    tags = []
+    for category, keywords in ERROR_SOURCE_RULES:
+        if any(keyword in token for token in tokens
+               for keyword in keywords):
+            tags.append(category)
+    return tags
+
+
+def completion_error_report(scan: DomainScan, entries: list[dict],
+                            settlement_policy: str,
+                            future_demand_mode: str,
+                            warnings: list[str],
+                            require_explicit_settle: bool = False) -> dict:
+    """§10.3 完成时间预测的 P/D 分列分组误差报告（cfg1 离线半面）。
+
+    样本 = 实际执行候选的决策（§10.3"在线只有实际执行候选能产生该次
+    预测的直接真值"；未执行候选不进样本——missing 不造）：
+
+    * P 样本 = joint_admission 行选中候选，配对 derive_entries 已算的
+      measured_ns（settle 终点）/ measured_service_ns（service 终点）；
+    * D 样本 = decode 行 boundary_decision 的执行候选（回退/混合身份
+      与 sh30 登记侧同判据），配对同款 settle 终点解析。
+
+    分组（settle 终点为主轴；service 终点在 stage_endpoint 主块分列）：
+    阶段×终点、实际预测距离档、动作、瓶颈段、负载阶段（P 行承载，D
+    行 NA）、已知承诺代理（P=在册已提交通信在途/D=继承义务在册——
+    代理口径如实登记）、历史模式（run 级 manifest）。七分归因按
+    breakdown approximations/notes 关键词规则（启发式映射，规则随
+    披露；无命中单列 unattributed）。
+    """
+    p_samples: list[dict] = []
+    service_unpaired_p = 0
+    for entry in entries:
+        decision = entry["decision"]
+        instance = decision.get("selected_instance")
+        action = decision.get("selected_action")
+        slot = (decision.get("candidates", {}).get(instance, {})
+                .get(action or ""))
+        if slot is None:
+            continue
+        predicted_settle = slot.get("predicted_merge_done")
+        predicted_service = slot.get("predicted_service_done")
+        measured_settle = entry.get("measured_ns")
+        measured_service = entry.get("measured_service_ns")
+        if measured_service is None:
+            service_unpaired_p += 1
+        p_samples.append({
+            "request_id": decision["request_id"],
+            "errors": {
+                "settle": (measured_settle - predicted_settle
+                           if measured_settle is not None
+                           and predicted_settle is not None else None),
+                "service": (measured_service - predicted_service
+                            if measured_service is not None
+                            and predicted_service is not None else None),
+            },
+            "predicted": {"settle": predicted_settle,
+                          "service": predicted_service},
+            "realized_distance_ns": measured_settle,
+            "action": action,
+            "bottleneck": _bottleneck_component(slot["segments"]),
+            "load_phase": _load_phase_of(decision),
+            "known_commit": (
+                "with_submitted_comms"
+                if decision.get("active_links") else "without"),
+            "approximations": slot.get("approximations", []),
+            "notes": slot.get("notes", []),
+        })
+    d_samples: list[dict] = []
+    skipped_d = 0
+    for ddec in scan.d_decisions:
+        slot = ddec.get("executed_slot")
+        if slot is None:
+            # 一次映射臂（无 D 计价）/身份未匹配：单列不造样本。
+            skipped_d += 1
+            continue
+        completion = scan.completions.get(ddec["request_id"])
+        tick = ddec.get("tick")
+        measured_service = (
+            completion["tick"] - tick
+            if completion is not None and completion.get("tick") is not None
+            and tick is not None and completion["tick"] >= tick else None)
+        settle_tick = _settle_tick_for(
+            scan, ddec["request_id"], settlement_policy, completion,
+            require_explicit_settle)
+        if settle_tick is None and completion is not None and (
+                completion.get("merge_transferred_bytes") or 0) > 0:
+            message = (
+                "settle endpoint row missing for D decision of request {} "
+                "(endpoint pairing unreliable; D settle error -> NA)"
+                .format(ddec["request_id"]))
+            if message not in warnings:
+                warnings.append(message)
+        measured_settle = (
+            settle_tick - tick if settle_tick is not None
+            and tick is not None and settle_tick >= tick else None)
+        predicted_settle = slot.get("predicted_merge_done")
+        predicted_service = slot.get("predicted_service_done")
+        face = ddec.get("selected_action_face") or ddec.get(
+            "selected_action")
+        d_samples.append({
+            "request_id": ddec["request_id"],
+            "errors": {
+                "settle": (measured_settle - predicted_settle
+                           if measured_settle is not None
+                           and predicted_settle is not None else None),
+                "service": (measured_service - predicted_service
+                            if measured_service is not None
+                            and predicted_service is not None else None),
+            },
+            "predicted": {"settle": predicted_settle,
+                          "service": predicted_service},
+            "realized_distance_ns": measured_settle,
+            "action": face,
+            "bottleneck": _bottleneck_component(slot["segments"]),
+            "load_phase": "NA",
+            "known_commit": (
+                "with_inherited_obligations"
+                if ddec.get("inherited_obligation_count") else "without"),
+            "approximations": slot.get("approximations", []),
+            "notes": slot.get("notes", []),
+        })
+
+    def _attribution(samples: list[dict]) -> dict:
+        counts: dict[str, int] = {}
+        attributed = 0
+        for sample in samples:
+            tags = _attribution_tags(sample)
+            if tags:
+                attributed += 1
+            for tag in tags:
+                counts[tag] = counts.get(tag, 0) + 1
+        counts["unattributed"] = len(samples) - attributed
+        return dict(sorted(counts.items()))
+
+    by_stage_endpoint: dict[str, dict] = {}
+    for stage, samples in (("P", p_samples), ("D", d_samples)):
+        by_stage_endpoint[stage] = {
+            "registered": len(samples),
+            "settle": _error_block(samples, "settle"),
+            "service": _error_block(samples, "service"),
+        }
+    by_stage_endpoint["P"]["service_unpaired"] = service_unpaired_p
+    return {
+        "caliber": {
+            "denominator_rule": ERROR_DENOMINATOR_RULE,
+            "sample_rule": "仅实际执行候选进样本（未执行候选保持 "
+                           "missing）；误差 = 实际 − 预测（决策相对轴）",
+            "settle_endpoint_source": (
+                "settle_done 行主源；consolidate 旧日志 merge_done 等价"
+                "映射；零载荷 consolidate 与 service 同刻；distributed "
+                "缺 settle_done 行恒 NA（§9.3）"),
+            "distance_bands_ns": list(PREDICTION_DISTANCE_BANDS_NS),
+            "distance_band_note": "实际预测距离 = 决策→settle 实际跨度"
+                                  "（realized），档界为离线预注册工程"
+                                  "档（Δ=100ms 预设族同源）",
+            "load_phase_rule": "任一实例 decode 在跑量>0 = decode_active"
+                               "；否则任一 prefill 队列量>0 = "
+                               "prefill_queued；否则 idle；P 行承载，"
+                               "D 行无负载快照恒 NA",
+            "known_commit_proxy": "已知承诺占比的代理口径：P = 决策时刻"
+                                  "在册已提交通信在途（flow_snapshot）；"
+                                  "D = 继承义务在册（inherited_"
+                                  "obligations）——二值代理，非连续占比"
+                                  "（行内无连续承诺占比披露，如实登记）",
+            "grouping_endpoint_note": "分组维度以 settle 终点误差为主轴；"
+                                      "service 终点在 stage_endpoint "
+                                      "主块 P/D 分列",
+        },
+        "future_demand_mode": future_demand_mode,
+        "samples": {
+            "P": len(p_samples),
+            "D": len(d_samples),
+            "D_skipped_no_executed_breakdown": skipped_d,
+        },
+        "stage_endpoint": by_stage_endpoint,
+        "by_realized_distance_band": {
+            "P": _grouped_blocks(
+                p_samples, lambda s: _distance_band(
+                    s["realized_distance_ns"]), "settle"),
+            "D": _grouped_blocks(
+                d_samples, lambda s: _distance_band(
+                    s["realized_distance_ns"]), "settle"),
+        },
+        "by_action": {
+            "P": _grouped_blocks(p_samples, lambda s: s["action"],
+                                 "settle"),
+            "D": _grouped_blocks(d_samples, lambda s: s["action"],
+                                 "settle"),
+        },
+        "by_bottleneck_segment": {
+            "P": _grouped_blocks(p_samples, lambda s: s["bottleneck"],
+                                 "settle"),
+            "D": _grouped_blocks(d_samples, lambda s: s["bottleneck"],
+                                 "settle"),
+        },
+        "by_load_phase": {
+            "P": _grouped_blocks(p_samples, lambda s: s["load_phase"],
+                                 "settle"),
+            "D": _grouped_blocks(d_samples, lambda s: s["load_phase"],
+                                 "settle"),
+        },
+        "by_known_commitment": {
+            "P": _grouped_blocks(p_samples, lambda s: s["known_commit"],
+                                 "settle"),
+            "D": _grouped_blocks(d_samples, lambda s: s["known_commit"],
+                                 "settle"),
+        },
+        "by_history_mode": {
+            str(future_demand_mode): {
+                "P": _error_block(p_samples, "settle"),
+                "D": _error_block(d_samples, "settle"),
+            },
+        },
+        "error_source_attribution": {
+            "rules": {
+                category: list(keywords)
+                for category, keywords in ERROR_SOURCE_RULES},
+            "rule_note": "诊断性关键词启发映射（breakdown "
+                         "approximations/notes 词面）——非精确单因归因，"
+                         "一样本可多标签；unattributed = 无命中样本数，"
+                         "不强行归入历史预测误差",
+            "P": _attribution(p_samples),
+            "D": _attribution(d_samples),
+        },
+    }
+
+
+def _resolve_future_demand_mode(run_dir, warnings: list[str]) -> str:
+    """cfg1：run 级 joint_mechanism_manifest.json prediction 节的
+    future_demand_mode（历史模式分组输入；缺失/不可读 = 缺省 none，
+    与 _resolve_settlement_policy 同款读取面与降级姿态）。"""
+    prediction = _read_prediction_manifest(run_dir)
+    if prediction is None:
+        return "none"
+    mode = prediction.get("future_demand_mode", "none")
+    if mode not in ("none", "recent", "reverting"):
+        fail("joint prediction manifest has an invalid future_demand_mode")
+    return mode
 
 
 # ---------------------------------------------------------------------------
@@ -1183,9 +1714,52 @@ def _completion_trajectory(scan: DomainScan, entries: list[dict]) -> dict:
 # 主派生：三口径 + 全部派生指标（一次遍历 entries）
 # ---------------------------------------------------------------------------
 
+def _read_prediction_manifest(run_dir) -> Optional[dict]:
+    """读取生产 bridge 侧车；仅旧归档位置允许回落到 run 根。"""
+    if not run_dir:
+        return None
+    root = Path(run_dir)
+    path = root / "bridge" / "joint_mechanism_manifest.json"
+    if not path.is_file():
+        path = root / "joint_mechanism_manifest.json"
+    if not path.is_file():
+        return None
+    try:
+        with path.open(encoding="utf-8") as source:
+            payload = json.load(source)
+    except (OSError, ValueError) as exc:
+        fail(f"cannot read joint prediction manifest {path}: {exc}")
+    if not isinstance(payload, dict):
+        fail(f"joint manifest must be an object: {path}")
+    prediction = payload.get("prediction")
+    if prediction is not None and not isinstance(prediction, dict):
+        fail(f"joint prediction manifest must be an object: {path}")
+    return prediction
+
+
+def _resolve_settlement_policy(run_dir, warnings) -> str:
+    """W5：run 级 joint_mechanism_manifest.json 的 prediction.settlement_
+    policy（W5 起随 manifest 落盘）；缺失 = 旧 run（consolidate 缺省）。
+    """
+    prediction = _read_prediction_manifest(run_dir)
+    if prediction is None:
+        return "consolidate"
+    policy = prediction.get("settlement_policy", "consolidate")
+    if policy not in ("consolidate", "distributed"):
+        fail("joint prediction manifest has an invalid settlement_policy")
+    return policy
+
+
 def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
                    multipliers: list,
-                   warnings: Optional[list[str]] = None) -> list[dict]:
+                   warnings: Optional[list[str]] = None,
+                   settlement_policy: str = "consolidate",
+                   require_explicit_settle: bool = False,
+                   ) -> list[dict]:
+    """W5（§7.4/§9.3）：``settlement_policy`` 来自 run 级 manifest
+    （joint_mechanism_manifest.json prediction.settlement_policy；缺省
+    consolidate = 旧 run 兼容）。distributed 下 settle 终点只认
+    settle_done 行——禁止 completion=settle 回退。"""
     entries: list[dict] = []
     for decision in scan.decisions:
         candidates = decision["candidates"]
@@ -1287,31 +1861,50 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
         # 披露行的请求以 merge 终点配对（同终点），否则 service 终点
         # （无 merge 流时两者同刻）——异终点配对会产生系统性 −M 偏差
         # （M = merge 尾段时长）污染 σ̂ 与 δ 敏感性。
+        # W5（§7.4/§9.3 settle_done 统一语义）：settle 终点主源 =
+        # settle_done 行；consolidate 旧日志缺该行时按已核实等价映射
+        # merge_done（同一 watch 交付事件，settle_done_ns ==
+        # merge_done_ns）；distributed 策略**不得**回退 completion 行
+        # （§9.3"distributed 可以没有 merge 事件而仍有 settle"——缺
+        # settle_done 行即 NA + 告警，不把 service 终点冒充 settle 终点）。
+        request_settle_policy = settlement_policy
+        settle_tick = _settle_tick_for(
+            scan, decision["request_id"], request_settle_policy, completion,
+            require_explicit_settle)
         merge_done_tick = scan.merge_done.get(decision["request_id"])
         measured_service_ns = measured_ns = err_ns = None
         if completion and completion["tick"] is not None \
-                and decision["tick"] is not None:
+                and decision["tick"] is not None \
+                and completion["tick"] >= decision["tick"]:
             measured_service_ns = completion["tick"] - decision["tick"]
         # N9（2026-09-23 复核审计·M3 缺行分支）：completion 行显示 merge
-        # 字节（merge_transferred_bytes > 0 ⇒ 有 merge 义务）而 merge_done
-        # 行缺失（丢行/被过滤的日志）——service 终点早于 merge 完成，配
-        # 对会引入系统性 −M 偏差：该请求 measured_ns 置 NA + 告警，不静
-        # 默退 service 终点。
-        merge_row_missing = bool(
+        # 字节（merge_transferred_bytes > 0 ⇒ 有 merge 义务）而 settle/
+        # merge 行缺失（丢行/被过滤的日志）——service 终点早于 settle
+        # 完成，配对会引入系统性 −M 偏差：该请求 measured_ns 置 NA +
+        # 告警，不静默退 service 终点。W5 起判据键改 settle 终点行族
+        # （settle_done 主源 + 旧 merge_done 兼容映射）。
+        settle_row_missing = bool(
             completion and (completion.get("merge_transferred_bytes") or 0) > 0
-            and merge_done_tick is None)
-        if merge_row_missing and warnings is not None:
+            and settle_tick is None and merge_done_tick is None)
+        if settle_row_missing and warnings is not None:
             message = (
-                "merge_done row missing for request {} with merge bytes "
+                "settle endpoint row missing for request {} with merge bytes "
                 "(endpoint pairing unreliable; measured_ns -> NA)".format(
                     decision["request_id"]))
             if message not in warnings:
                 warnings.append(message)
         if decision["tick"] is not None and decision["cost_ns"] is not None:
-            if merge_done_tick is not None:
-                measured_ns = merge_done_tick - decision["tick"]
-            elif measured_service_ns is not None and not merge_row_missing:
-                measured_ns = measured_service_ns
+            if settle_tick is not None and settle_tick >= decision["tick"]:
+                measured_ns = settle_tick - decision["tick"]
+            elif ((request_settle_policy == "distributed" or require_explicit_settle)
+                    and settle_tick is None and warnings is not None):
+                message = (
+                    "{} settlement without settle_done row for "
+                    "request {}: no completion=settle fallback (sec.9.3); "
+                    "measured_ns -> NA".format(
+                        request_settle_policy, decision["request_id"]))
+                if message not in warnings:
+                    warnings.append(message)
             if measured_ns is not None:
                 err_ns = measured_ns - decision["cost_ns"]
         entries.append({
@@ -1391,7 +1984,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
         anchor = anchors.get(reference) if reference is not None else None
         for member, hops in entry["derived"]["d_feed"]:
             # O8②：hops=None → -1 哨兵（derive_entries 存储形态）不进
-            # 聚合——与边界计算（内边界 :1267 / feed 边界 :1271 同
+            # 聚合——与边界计算（内边界 / feed 边界 同
             # hops>=0 口径），修前 -1 直接进 hop_quantiles/direction_
             # distribution（及 econ 侧同名聚合）。
             if hops < 0:
@@ -1481,7 +2074,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
     # N6（2026-09-23 复核审计6）：重放集改**实际可行集**（applicable-only
     # 的 remote_min_actual/alt_star_actual——与在线选择同约束，纯谓词
     # 一致性）；配额前集重放与在线选择的差单列 quota_counterfactual_
-    # flips（配额作用量 run 级，计划 :574"两域之差"落地）——修前被拒
+    # flips（配额作用量 run 级，计划文档 §5.4"两域之差"落地）——修前被拒
     # 远读更便宜时配额效应被计入 replay_mismatch。
     replay_mismatch = 0
     quota_counterfactual_flips = 0
@@ -1679,7 +2272,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                         "N6 双口径：replay_mismatch 重放集=实际可行集"
                         "（applicable-only，与在线选择同约束——纯谓词一"
                         "致性）；quota_counterfactual_flips=配额前集重放"
-                        "与在线选择的差（配额作用量 run 级，计划 :574 两"
+                        "与在线选择的差（配额作用量 run 级，计划 两"
                         "域之差）"),
                     "interpretation": "翻转计数=0 的读法：σ̂（观测口径，含"
                                       "排队/状态演化共同项、上偏）量级超"
@@ -1813,15 +2406,33 @@ def domain_emit(args: argparse.Namespace, repo_variant: str,
                 "[domain-metrics] 警告：per-request manifest 不可得——"
                 "V_copy/V_remote 静态参考组件 H/I = NA")
 
-    entries = derive_entries(scan, topology, None, multipliers, warnings)
+    # W5（§7.4/§9.3）：结算策略从 run 级 manifest 读（prediction 节；
+    # 缺失/不可读 = 旧 run 兼容缺省 consolidate，告警登记）。
+    settlement_policy = _resolve_settlement_policy(args.run_dir, warnings)
+    require_explicit_settle = _read_prediction_manifest(args.run_dir) is not None
+    # cfg1（§10.3）：历史模式（future_demand_mode）同面读取——分组
+    # 报告的 run 级维度输入。
+    future_demand_mode = _resolve_future_demand_mode(
+        args.run_dir, warnings)
+    entries = derive_entries(scan, topology, None, multipliers, warnings,
+                             settlement_policy=settlement_policy,
+                             require_explicit_settle=require_explicit_settle)
     sigma = estimate_sigma_hat(entries, warnings)
     entries = derive_entries(scan, topology, sigma["sigma_hat_ns"],
-                             multipliers, warnings)
+                             multipliers, warnings,
+                             settlement_policy=settlement_policy,
+                             require_explicit_settle=require_explicit_settle)
 
     summary = build_summary(scan, entries, topology, repo_variant,
                             delta_adm, multipliers, sigma, warnings)
     summary["home_migration"] = home_migration_block(scan, entries,
                                                     args.run_dir)
+    # cfg1（2026-09-30，§10.3 误差成熟与归因）：P/D 完成预测分组误差
+    # 报告（距离/动作/瓶颈/负载阶段/承诺代理/历史模式分组 + 七分归因
+    # ——此前离线侧仅有 estimate_sigma_hat 单一聚合）。
+    summary["derived"]["completion_error_report"] = completion_error_report(
+        scan, entries, settlement_policy, future_demand_mode, warnings,
+        require_explicit_settle=require_explicit_settle)
 
     requests_rows = [
         _requests_csv_row(entry, topology,

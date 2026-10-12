@@ -13,14 +13,13 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CollectivePhase.hh"
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/DataSet.hh"
-#include "astra-sim/system/StreamStat.hh"
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/LogicalTopology.hh"
 
 namespace AstraSim {
 
 class RecvPacketEventHandlerData;
-class BaseStream : public Callable, public StreamStat {
+class BaseStream : public Callable {
   public:
     BaseStream(int stream_id,
                Sys* owner,
@@ -35,17 +34,12 @@ class BaseStream : public Callable, public StreamStat {
     std::list<CollectivePhase> phases_to_go;
     int current_queue_id;
     CollectivePhase my_current_phase;
-    ComType current_com_type;
-    Tick creation_time;
-    Tick last_init;
     Sys* owner;
     DataSet* dataset;
     int steps_finished;
     int priority;
     StreamState state;
     bool initialized;
-
-    Tick last_phase_change;
 };
 
 }  // namespace AstraSim

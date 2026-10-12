@@ -3,7 +3,10 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
-// TODO: HardwareResource.cc should be moved to the system layer.
+// Status note (2026-09-26 review, replaces the bare upstream TODO): this
+// file conceptually belongs to the system layer, but it stays in
+// workload/ on purpose so the five sibling repositories remain
+// diff-comparable; move it only as a coordinated cross-repo change.
 
 #include "astra-sim/workload/HardwareResource.hh"
 
@@ -16,10 +19,8 @@ using namespace Chakra;
 typedef ChakraProtoMsg::NodeType ChakraNodeType;
 
 HardwareResource::HardwareResource(
-    uint32_t num_npus, int sys_id,
-    const ExecutionDriven::ExecutionMode execution_mode)
+    int sys_id, const ExecutionDriven::ExecutionMode execution_mode)
     : sys_id(sys_id),
-      num_npus(num_npus),
       retain_node_ids_(execution_mode ==
                        ExecutionDriven::ExecutionMode::Static),
       num_in_flight_cpu_ops(0),
@@ -33,20 +34,40 @@ void HardwareResource::occupy(
     if (node->get_attr<bool>("is_timer_op", false)) {
         return;
     }
+    // (2026-10-01) the occupy-side single-slot asserts are Release-
+    // compiled-out, asymmetric with the R1-C4 release-side guards below: a
+    // regression that defeats the is_available() gate would silently stack
+    // two nodes into one slot under NDEBUG. Mirror the same critical+abort
+    // shape (zero reachability today -- both call sites are gated).
     if (node->is_cpu_op()) {
-        assert(num_in_flight_cpu_ops == 0);
+        if (num_in_flight_cpu_ops != 0) {
+            LoggerFactory::get_logger("HardwareResource")
+                ->critical("static CPU occupy double-occupancy: sys.id={} "
+                           "node={}", sys_id, node->id());
+            std::abort();
+        }
         ++num_in_flight_cpu_ops;
         cpu_ops_node.emplace(node->id());
     } else {
         if (node->type() == ChakraNodeType::COMP_NODE) {
-            assert(num_in_flight_gpu_comp_ops == 0);
+            if (num_in_flight_gpu_comp_ops != 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical("static GPU-comp occupy double-occupancy: "
+                               "sys.id={} node={}", sys_id, node->id());
+                std::abort();
+            }
             ++num_in_flight_gpu_comp_ops;
             gpu_ops_node.emplace(node->id());
         } else {
             if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
                 return;
             }
-            assert(num_in_flight_gpu_comm_ops == 0);
+            if (num_in_flight_gpu_comm_ops != 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical("static GPU-comm occupy double-occupancy: "
+                               "sys.id={} node={}", sys_id, node->id());
+                std::abort();
+            }
             ++num_in_flight_gpu_comm_ops;
             gpu_comms_node.emplace(node->id());
         }
@@ -58,18 +79,44 @@ void HardwareResource::release(
     if (node->get_attr<bool>("is_timer_op", false)) {
         return;
     }
+    // R1-C4 fix (2026-09-29): the single-slot asserts below are compiled
+    // out under NDEBUG, so a release without a matching occupy wrapped the
+    // counters to ~1.8e19. Mirror the online NodeView overload's explicit
+    // underflow guards.
     if (node->is_cpu_op()) {
+        if (num_in_flight_cpu_ops == 0) {
+            LoggerFactory::get_logger("HardwareResource")
+                ->critical("static CPU release underflow: sys.id={} node={}",
+                           sys_id, node->id());
+            std::abort();
+        }
         --num_in_flight_cpu_ops;
         assert(num_in_flight_cpu_ops == 0);
         this->cpu_ops_node.erase(node->id());
     } else {
         if (node->type() == ChakraNodeType::COMP_NODE) {
+            if (num_in_flight_gpu_comp_ops == 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical(
+                        "static GPU-comp release underflow: sys.id={} "
+                        "node={}",
+                        sys_id, node->id());
+                std::abort();
+            }
             --num_in_flight_gpu_comp_ops;
             assert(num_in_flight_gpu_comp_ops == 0);
             this->gpu_ops_node.erase(node->id());
         } else {
             if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
                 return;
+            }
+            if (num_in_flight_gpu_comm_ops == 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical(
+                        "static GPU-comm release underflow: sys.id={} "
+                        "node={}",
+                        sys_id, node->id());
+                std::abort();
             }
             --num_in_flight_gpu_comm_ops;
             assert(num_in_flight_gpu_comm_ops == 0);
@@ -123,11 +170,15 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
         }
     } else {
         if (node.kind == ExecutionDriven::NodeKind::Compute) {
-        // Step 1-8 (root-cause #3): calibrated COMP chains run concurrently
-        // in online mode (self-timed LUT-clock chains, gate bypassed in
-        // Workload::issue_dep_free_nodes) -- the in-flight counter is a
-        // count, not a single slot. The static ETFeederNode path above keeps
-        // its single-slot assert (static mode never runs concurrent COMPs).
+        // Step 1-8 (root-cause #3): unlike the single-slot asserts on the
+        // other resource classes, the COMP in-flight tracker is kept as a
+        // count without an assert. Historically the online replay route ran
+        // calibrated COMP chains concurrently with this gate bypassed
+        // ("path-2"); that bypass was deleted on 2026-08-18 and every
+        // online issue is now serialized through Workload::issue_dep_free_nodes'
+        // is_available() check (Compute requires an empty COMP slot), so the
+        // count cannot exceed 1 on any live path today. The counter form
+        // remains as defensive bookkeeping only.
         ++num_in_flight_gpu_comp_ops;
         if (retain_node_ids_) {
             gpu_ops_node.emplace(node.global_id);

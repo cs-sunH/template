@@ -218,6 +218,139 @@ class TieredEvictionSequenceTests(unittest.TestCase):
         self.assertEqual(
             set(manager.remote_bytes_by_rank().values()), {0})
 
+    def test_protected_residency_counts_into_fit_feasibility(self):
+        """M1-10:净额需求 + protected 会话自身驻留超过空实例余量时,任何
+        逐出都无济于事——直接优雅 deep-gap,不再空转逐出无关冷会话
+        (改前会先整体逐出 z、远端账面 +320 后仍 blocked)。"""
+        # 容量 = 权重 480 + 640:a、z 各 10 token(320 B)驻留后余 0;
+        # 空实例 KV 余量 = 640。
+        manager = SessionKVCacheManager(
+            _topology(480 + 640), _tiered_model(), strict_invariants=True)
+        _seed_session(manager, "a", 10)
+        _seed_session(manager, "z", 20)
+        self.assertEqual(manager.hbm_snapshots(0)[0].remaining_bytes, 0)
+
+        # a 下一 turn 需 21 token:净额增量 = 11 token = 352 B;352 + 自身
+        # 驻留 320 > 640 → 候选池里唯一的 z 被逐后仍差 32 B(结构性不足)。
+        decision = manager.prepare_history(
+            "a", 0, 10, 30, "a1", required_context_tokens=21)
+        self.assertTrue(decision.admission_blocked)
+        self.assertEqual(decision.evictions, ())
+        self.assertEqual(manager.deep_gap_events, 1)
+        # z 不被无谓外迁:仍 LOCAL,远端账面为零。
+        self.assertEqual(manager.session_snapshot("z").location, LOCAL_HBM)
+        self.assertEqual(set(manager.remote_bytes_by_rank().values()), {0})
+        # 被阻塞的 turn 未消费任何状态:a 仍完成态驻留,重放同一请求
+        # 仍优雅 blocked(逐出循环跳过不改变失败语义)。
+        self.assertFalse(manager.session_snapshot("a").active)
+        decision_retry = manager.prepare_history(
+            "a", 0, 10, 31, "a1", required_context_tokens=21)
+        self.assertTrue(decision_retry.admission_blocked)
+        self.assertEqual(decision_retry.evictions, ())
+        self.assertEqual(manager.deep_gap_events, 2)
+
+        # 对照:净额 + 自身驻留恰不超容(320 ≤ 640 − 320)时逐出循环
+        # 照常运行并准入(守卫不误伤可行请求,z 被正常整体逐出)。
+        decision_fit = manager.prepare_history(
+            "a", 0, 10, 32, "a1", required_context_tokens=20)
+        self.assertFalse(decision_fit.admission_blocked)
+        self.assertEqual(
+            [t.session_id for t in decision_fit.evictions], ["z"])
+
+    def test_active_residency_counts_into_fit_feasibility(self):
+        """M1-10 补遗(S2-4):active 会话驻留同样计入 fit 可行性门控——
+        active 会话永不入候选池,其驻留不可被逐出循环释放;需求叠加
+        active 驻留超过空实例余量时,任何逐出都无济于事——直接优雅
+        deep-gap,不再"先清空冷池再阻塞"(改前会先整体逐出 z、远端账面
+        +320 后仍 blocked)。"""
+        # 容量 = 权重 480 + 960:活跃会话 act(10 token = 320 B,不做
+        # mark_complete 故保持 active)+ 冷会话 z(320 B)驻留后余 320;
+        # 空实例 KV 余量 = 960。
+        manager = SessionKVCacheManager(
+            _topology(480 + 960), _tiered_model(), strict_invariants=True)
+        act_admission = manager.prepare_history(
+            "act", 0, 0, 10, "act0", required_context_tokens=10)
+        self.assertFalse(act_admission.admission_blocked)
+        self.assertTrue(
+            manager.grow_prefill("act", 10, 10, "act0").admitted)
+        _seed_session(manager, "z", 20)
+        self.assertTrue(manager.session_snapshot("act").active)
+        self.assertEqual(manager.hbm_snapshots(0)[0].remaining_bytes, 320)
+
+        # 第三方预约需 700 B:700 > 960 − active 驻留 320 → 候选池里唯一
+        # 的 z(冷会话,可释放 320)被逐后最多 640 B,仍差 60 B(结构性
+        # 不足)→ 门控直接判不可行,零逐出优雅 blocked。
+        decision = manager.reserve_request_capacity(
+            "r0", "new_session", 0, (700,), 30,
+            phase="prefill_admission",
+            reason="static_decode_final_kv_reservation")
+        self.assertFalse(decision.admitted)
+        self.assertEqual(decision.evictions, ())
+        self.assertEqual(manager.deep_gap_events, 1)
+        # z 不被无谓外迁:仍 LOCAL,远端账面为零;act 驻留原样。
+        self.assertEqual(manager.session_snapshot("z").location, LOCAL_HBM)
+        self.assertEqual(set(manager.remote_bytes_by_rank().values()), {0})
+        self.assertEqual(
+            manager.hbm_snapshots(0)[0].resident_kv_bytes, 640)
+
+        # 对照:需求 = 960 − active 驻留 320 = 640 时逐出循环照常运行并
+        # 准入(守卫不误伤可行请求,z 被正常整体逐出)。
+        decision_fit = manager.reserve_request_capacity(
+            "r1", "new_session", 0, (640,), 40,
+            phase="prefill_admission",
+            reason="static_decode_final_kv_reservation")
+        self.assertTrue(decision_fit.admitted)
+        self.assertEqual(
+            [t.session_id for t in decision_fit.evictions], ["z"])
+
+    def test_reserved_request_bytes_count_into_fit_feasibility(self):
+        """M1-10 补遗二(F-1/2026-09-28 确认批):未落位的预约字节
+        (reserved_request_bytes)不可被逐出回收,同样计入 fit 可行性门控——
+        预约共存 + 结构性不足时零逐出优雅 blocked(改前会先整体逐出 p、q、
+        远端账面 +640 后仍差 30 B 当量,空转外迁)。"""
+        # 容量 = 权重 480 + 1080:冷会话 p、q 各 10 token(320 B)、活跃会话
+        # act(5 token = 160 B)驻留,剩余 280;预约 rA 100 B 后剩 180。
+        manager = SessionKVCacheManager(
+            _topology(480 + 1080), _tiered_model(), strict_invariants=True)
+        _seed_session(manager, "p", 5)
+        _seed_session(manager, "q", 10)
+        act_admission = manager.prepare_history(
+            "act", 0, 0, 10, "act0", required_context_tokens=5)
+        self.assertFalse(act_admission.admission_blocked)
+        self.assertTrue(
+            manager.grow_prefill("act", 5, 5, "act0").admitted)
+        reserve_a = manager.reserve_request_capacity(
+            "rA", "res_a", 0, (100,), 20,
+            phase="prefill_admission",
+            reason="static_decode_final_kv_reservation")
+        self.assertTrue(reserve_a.admitted)
+        self.assertEqual(manager.hbm_snapshots(0)[0].remaining_bytes, 180)
+
+        # 预约共存下的结构性不足:需 850 > 1080 − act 驻留 160 − 预约 100
+        # = 820 → 门控直接判不可行,零逐出优雅 blocked(p、q 不被无谓外迁,
+        # 远端账面为零;改前门控 850 ≤ 1080−160 = 920 会放行并空转逐出)。
+        decision = manager.reserve_request_capacity(
+            "rB", "res_b", 0, (850,), 30,
+            phase="prefill_admission",
+            reason="static_decode_final_kv_reservation")
+        self.assertFalse(decision.admitted)
+        self.assertEqual(decision.evictions, ())
+        self.assertEqual(manager.deep_gap_events, 1)
+        self.assertEqual(manager.session_snapshot("p").location, LOCAL_HBM)
+        self.assertEqual(manager.session_snapshot("q").location, LOCAL_HBM)
+        self.assertEqual(set(manager.remote_bytes_by_rank().values()), {0})
+
+        # 对照:需求 = 1080 − act 驻留 160 − 预约 100 = 820 内(800)时
+        # 逐出循环照常运行并准入(守卫不误伤可行请求,p、q 被正常整体
+        # 逐出——LRU 序 p 最老在前)。
+        decision_fit = manager.reserve_request_capacity(
+            "rC", "res_c", 0, (800,), 40,
+            phase="prefill_admission",
+            reason="static_decode_final_kv_reservation")
+        self.assertTrue(decision_fit.admitted)
+        self.assertEqual(
+            [t.session_id for t in decision_fit.evictions], ["p", "q"])
+
 
 class TieredJournalConsistencyTests(unittest.TestCase):
     def setUp(self):
@@ -238,7 +371,7 @@ class TieredJournalConsistencyTests(unittest.TestCase):
             _topology(480 + 700), _tiered_model(), strict_invariants=True)
         _seed_session(manager, "a", 10)
         _seed_session(manager, "b", 20)
-        # 预约属于第三方请求(被保护会话为空):整体 a、整体 b,LURU 序。
+        # 预约属于第三方请求(被保护会话为空):整体 a、整体 b,LRU 序。
         reservation = manager.reserve_request_capacity(
             "r0", "new_session", 0, (540,), 30,
             phase="prefill_admission",
@@ -271,8 +404,8 @@ class TieredJournalConsistencyTests(unittest.TestCase):
         manager.retire_terminal_session("b", 64, "b0")
         manager.assert_final_state()
 
-        rows = [json.loads(line) for line in
-                recorder.journal_path.open(encoding="utf-8") if line.strip()]
+        with recorder.journal_path.open(encoding="utf-8") as journal:
+            rows = [json.loads(line) for line in journal if line.strip()]
         causes = [row["cause"] for row in rows]
         # 新 mutation 的 cause 全部落账(契约 §5 逐字):整体逐出 +
         # 全量恢复 + 终态核销。

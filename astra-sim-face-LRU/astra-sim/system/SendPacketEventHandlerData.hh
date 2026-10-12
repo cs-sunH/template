@@ -15,7 +15,10 @@ namespace AstraSim {
 
 class SendPacketEventHandlerData : public BasicEventHandlerData {
   public:
-    int tag;
+    // tag was removed (dead code cleanup 2026-09-30): the member was only
+    // ever zero-initialized by the constructor and had zero readers (the
+    // consumers in Sys::handleEvent / CustomAlgorithm / Workload read
+    // callable / wlhd / event only).
     Callable* callable;
     WorkloadLayerHandlerData* wlhd;
     SendPacketEventHandlerData();

@@ -16,27 +16,18 @@ namespace AstraSim {
 class LogGP;
 class MemMovRequest : public Callable, public SharedBusStat {
   public:
-    MemMovRequest(int request_num,
-                  Sys* sys,
-                  LogGP* loggp,
-                  int size,
+    MemMovRequest(LogGP* loggp,
+                  uint64_t size,
                   Callable* callable,
                   bool processed,
                   bool send_back);
     void wait_wait_for_mem_bus(std::list<MemMovRequest>::iterator pointer);
-    void set_iterator(std::list<MemMovRequest>::iterator pointer) {
-        this->pointer = pointer;
-    }
     void call(EventType event, CallData* data);
 
-    static int id;
-    int my_id;
-    int size;
+    uint64_t size;
     Callable* callable;
     bool processed;
     bool send_back;
-    bool mem_bus_finished;
-    Sys* sys;
     EventType callEvent = EventType::General;
     LogGP* loggp;
     std::list<MemMovRequest>::iterator pointer;
@@ -46,7 +37,6 @@ class MemMovRequest : public Callable, public SharedBusStat {
     Tick total_processing_queue_time;
     Tick total_processing_time;
     Tick start_time;
-    int request_num;
 };
 
 }  // namespace AstraSim

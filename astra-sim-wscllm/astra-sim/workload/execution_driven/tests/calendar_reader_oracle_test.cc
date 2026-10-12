@@ -15,10 +15,17 @@ argument (WindowedTraceReader.hh item 4): EventQueue fires a shared tick's
 EventList in insertion order; the old unbounded arm inserts turn-0 alarms
 in ROW order, the calendar arm in (arrival, queue_index) order, and within
 an equal-alarm group those orders coincide (queue_index ascending), so the
-sequences must match on ANY well-formed input -- including inputs whose
+sequences must match on any well-formed input -- including inputs whose
 turn-0 arrivals are non-monotonic in file order (the full TraceLab queue),
 where the old BOUNDED arm was defective (491 clamped Submits on the real
 run) while the old UNBOUNDED arm was merely wasteful.
+
+Scope correction (2026-09-27): "ANY" had exactly one counter-example
+family -- a tick-1 alarm group mixing clamped arrival==0 rows with genuine
+arrival==1 rows whose file order interleaves them: the two arms order that
+one group's members differently (WindowedTraceReader.hh item 4). The
+fixtures here avoid that family: the synthetic input has no arrival==1
+rows, and real queue arrivals sit far above tick 1.
 
 Additionally asserts on the NEW arm only: late_static_submit == 0 and every
 turn-0 reader_discovered_tick == 0 (the fix's own gates).
@@ -48,6 +55,7 @@ AstraSim_Analytical_Congestion_Aware_CalendarOracleTest.
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
 #include "astra-sim/workload/execution_driven/tests/LegacyOracleWindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include "common/EventQueue.h"
 
 using namespace AstraSim::ExecutionDriven;
@@ -167,19 +175,23 @@ void compare_arms(const std::string& csv, const char* label) {
 // Synthetic hermetic fixture: out-of-order turn-0 across session blocks,
 // a same-tick group, an arrival==0 row, multi-turn blocks.
 void write_synthetic(const std::string& csv) {
-    std::ofstream out(csv);
-    out << "session_id,turn_index,request_id,prefill_length,decode_length,"
-           "session_arrival_time_ns,inter_request_interval_ns,description\n";
-    // File-order turn-0 arrivals: 500, 100, 300, 300, 0, 700  (blocks
-    // contiguous, arrivals wildly non-monotonic).
-    out << "s0,0,s0_r0,100,50,500,,d\n";
-    out << "s0,1,s0_r1,100,50,,90,d\n";
-    out << "s1,0,s1_r0,100,50,100,,d\n";
-    out << "s2,0,s2_r0,100,50,300,,d\n";
-    out << "s2,1,s2_r1,100,50,,50,d\n";
-    out << "s3,0,s3_r0,100,50,300,,d\n";
-    out << "s4,0,s4_r0,100,50,0,,d\n";
-    out << "s5,0,s5_r0,100,50,700,,d\n";
+    // P1 fix (2026-09-28): the provenance gate is fail-closed on an absent
+    // sidecar, so the synthetic fixture ships its matching record too
+    // (written by the shared helper; raw rows identical to before).
+    FixtureProvenance::write_queue_fixture(
+        csv,
+        {
+            // File-order turn-0 arrivals: 500, 100, 300, 300, 0, 700
+            // (blocks contiguous, arrivals wildly non-monotonic).
+            "s0,0,s0_r0,100,50,500,,d",
+            "s0,1,s0_r1,100,50,,90,d",
+            "s1,0,s1_r0,100,50,100,,d",
+            "s2,0,s2_r0,100,50,300,,d",
+            "s2,1,s2_r1,100,50,,50,d",
+            "s3,0,s3_r0,100,50,300,,d",
+            "s4,0,s4_r0,100,50,0,,d",
+            "s5,0,s5_r0,100,50,700,,d",
+        });
 }
 
 }  // namespace
@@ -195,6 +207,7 @@ int main(int argc, char* argv[]) {
         write_synthetic(csv);
         compare_arms(csv, "synthetic");
         std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
     }
     if (!g_ok) {
         std::fprintf(stderr,

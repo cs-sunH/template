@@ -19,8 +19,7 @@ class Ring : public Algorithm {
          int id,
          RingTopology* ring_topology,
          uint64_t data_size,
-         RingTopology::Direction direction,
-         InjectionPolicy injection_policy);
+         RingTopology::Direction direction);
     virtual void run(EventType event, CallData* data);
     void process_stream_count();
     void release_packets();
@@ -28,7 +27,7 @@ class Ring : public Algorithm {
     void reduce();
     bool iteratable();
     virtual int get_non_zero_latency_packets();
-    void insert_packet(Callable* sender);
+    void insert_packet();
     bool ready();
     void exit();
 
@@ -41,11 +40,7 @@ class Ring : public Algorithm {
     int curr_sender;
     int nodes_in_ring;
     int stream_count;
-    int max_count;
-    int remained_packets_per_max_count;
-    int remained_packets_per_message;
     int parallel_reduce;
-    InjectionPolicy injection_policy;
     std::list<MyPacket> packets;
     bool toggle;
     long free_packets;

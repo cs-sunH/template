@@ -5,11 +5,34 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/LogGP.hh"
 
+#include <cstdlib>
+
+#include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/Sys.hh"
 
 using namespace AstraSim;
 
-LogGP::LogGP(std::string name,
+namespace {
+
+// Fail-closed queue guards (2026-10-01): every Consider_*/Finished callback
+// is paired one-to-one with the request that enqueued into these lists, and
+// the repository's other bounds checks (QueueLevels, the logical topologies)
+// are named runtime failures, so an event mismatch must not survive as a
+// bare assert (compiled out in release builds) followed by an
+// out-of-bounds dereference of the list head or the talking_it cursor.
+void require_non_empty(std::size_t size, const char* queue) {
+    if (size == 0) {
+        LoggerFactory::get_logger("system::LogGP")
+            ->critical("######### {} is empty where the LogGP protocol "
+                       "requires a pending request #########",
+                       queue);
+        std::exit(1);
+    }
+}
+
+}  // namespace
+
+LogGP::LogGP(std::string /*name*/,
              Sys* sys,
              Tick L,
              Tick o,
@@ -25,12 +48,10 @@ LogGP::LogGP(std::string name,
     this->prevState = State::Free;
     this->sys = sys;
     this->processing_state = ProcState::Free;
-    this->name = name;
     this->trigger_event = trigger_event;
     this->subsequent_reads = 0;
     this->THRESHOLD = 8;
     this->NPU_MEM = nullptr;
-    request_num = 0;
     this->local_reduction_delay = sys->local_reduction_delay;
 }
 
@@ -68,19 +89,20 @@ void LogGP::process_next_read() {
     partner->switch_to_receiver(tmp, offset);
     sends.pop_front();
     curState = State::Sending;
+    // size is uint64_t: keep the (size - 1) term in the double domain so a
+    // >2GiB transfer cannot wrap the byte count negative.
     Tick transfer_delay = 0;
     if (tmp.size > 0) {
-        transfer_delay = G * (tmp.size - 1);
+        transfer_delay = G * (static_cast<double>(tmp.size) - 1);
     }
     sys->register_event(this, EventType::Send_Finished, nullptr,
                         offset + transfer_delay);
 }
-void LogGP::request_read(int bytes,
+void LogGP::request_read(uint64_t bytes,
                          bool processed,
                          bool send_back,
                          Callable* callable) {
-    MemMovRequest mr(request_num++, sys, this, bytes, callable, processed,
-                     send_back);
+    MemMovRequest mr(this, bytes, callable, processed, send_back);
     if (NPU_MEM != nullptr) {
         mr.callEvent = EventType::Consider_Send_Back;
         pre_send.push_back(mr);
@@ -107,9 +129,10 @@ void LogGP::switch_to_receiver(MemMovRequest mr, Tick offset) {
     receives.push_back(mr);
     prevState = curState;
     curState = State::Receiving;
+    // See process_next_read: keep the (size - 1) term in the double domain.
     Tick transfer_delay = 0;
     if (mr.size > 0) {
-        transfer_delay = (mr.size - 1) * G;
+        transfer_delay = (static_cast<double>(mr.size) - 1) * G;
     }
     sys->register_event(this, EventType::Rec_Finished, nullptr,
                         offset + transfer_delay + L + o);
@@ -123,7 +146,7 @@ void LogGP::call(EventType event, CallData* data) {
         curState = State::Free;
         subsequent_reads++;
     } else if (event == EventType::Rec_Finished) {
-        assert(receives.size() > 0);
+        require_non_empty(receives.size(), "receives");
         receives.front().total_transfer_time +=
             Sys::boostedTick() - receives.front().start_time;
         receives.front().start_time = Sys::boostedTick();
@@ -185,18 +208,17 @@ void LogGP::call(EventType event, CallData* data) {
                                              false, &retirements.back());
                 receives.pop_front();
             } else {
-                SharedBusStat* tmp = new SharedBusStat(
-                    BusType::Shared, receives.front().total_transfer_queue_time,
-                    receives.front().total_transfer_time,
-                    receives.front().total_processing_queue_time,
-                    receives.front().total_processing_time);
-                tmp->update_bus_stats(BusType::Mem, receives.front());
-                receives.front().callable->call(trigger_event, tmp);
+                // The retirement used to hand the stream a heap SharedBusStat
+                // carrying this request's bus stats (the stream deleted it);
+                // the stats were dead end to end and are gone (2026-10-01,
+                // face parity), so retirements now complete with no payload
+                // (nullptr).
+                receives.front().callable->call(trigger_event, nullptr);
                 receives.pop_front();
             }
         }
     } else if (event == EventType::Processing_Finished) {
-        assert(processing.size() > 0);
+        require_non_empty(processing.size(), "processing");
         processing.front().total_processing_time +=
             Sys::boostedTick() - processing.front().start_time;
         processing.front().start_time = Sys::boostedTick();
@@ -228,14 +250,8 @@ void LogGP::call(EventType event, CallData* data) {
                                              false, &retirements.back());
                 processing.pop_front();
             } else {
-                SharedBusStat* tmp = new SharedBusStat(
-                    BusType::Shared,
-                    processing.front().total_transfer_queue_time,
-                    processing.front().total_transfer_time,
-                    processing.front().total_processing_queue_time,
-                    processing.front().total_processing_time);
-                tmp->update_bus_stats(BusType::Mem, processing.front());
-                processing.front().callable->call(trigger_event, tmp);
+                // Same nullptr-payload retirement as the Rec_Finished path.
+                processing.front().callable->call(trigger_event, nullptr);
                 processing.pop_front();
             }
         }
@@ -249,17 +265,23 @@ void LogGP::call(EventType event, CallData* data) {
                 ((processing.front().size / 100) * local_reduction_delay) + 50);
         }
     } else if (event == EventType::Consider_Retire) {
-        SharedBusStat* tmp = new SharedBusStat(
-            BusType::Shared, retirements.front().total_transfer_queue_time,
-            retirements.front().total_transfer_time,
-            retirements.front().total_processing_queue_time,
-            retirements.front().total_processing_time);
+        require_non_empty(retirements.size(), "retirements");
+        // Extract and remove the same element: the finished request is the
+        // one talking_it points at, which is not necessarily the front of
+        // the retirements list when several transfers are in flight.
         MemMovRequest movRequest = *talking_it;
-        tmp->update_bus_stats(BusType::Mem, movRequest);
-        movRequest.callable->call(trigger_event, tmp);
+        // Attribute the completion to the same request that is being retired
+        // (talking_it, not necessarily retirements.front() when several
+        // retirements are in flight). The retired request's stats used to be
+        // handed to its stream as a heap SharedBusStat; the stats were dead
+        // and are gone (nullptr payload, 2026-10-01 face parity).
+        // Erase before the callback: talking_it is a shared member that
+        // MemMovRequest::call overwrites, so a synchronous re-entry from the
+        // callback would otherwise make this erase hit the wrong element.
         retirements.erase(talking_it);
-        delete data;
+        movRequest.callable->call(trigger_event, nullptr);
     } else if (event == EventType::Consider_Process) {
+        require_non_empty(pre_process.size(), "pre_process");
         MemMovRequest movRequest = *talking_it;
         processing.push_back(movRequest);
         pre_process.erase(talking_it);
@@ -272,13 +294,11 @@ void LogGP::call(EventType event, CallData* data) {
                 ((processing.front().size / 100) * local_reduction_delay) + 50);
             processing_state = ProcState::Processing;
         }
-        delete data;
     } else if (event == EventType::Consider_Send_Back) {
-        assert(pre_send.size() > 0);
+        require_non_empty(pre_send.size(), "pre_send");
         MemMovRequest movRequest = *talking_it;
         sends.push_back(movRequest);
         pre_send.erase(talking_it);
-        delete data;
     }
     if (curState == State::Free) {
         if (sends.size() > 0) {

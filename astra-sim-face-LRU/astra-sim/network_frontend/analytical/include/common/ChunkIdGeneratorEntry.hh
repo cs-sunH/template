@@ -5,7 +5,9 @@ LICENSE file in the root directory of this source tree.
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <unordered_set>
 
 namespace AstraSimAnalytical {
 
@@ -13,11 +15,15 @@ namespace AstraSimAnalytical {
  * ChunkIdGeneratorEntry tracks the chunk id generated
  * for sim_send() and sim_recv() calls
  * per each (tag, src, dest, chunk_size) tuple.
+ *
+ * The entry lives exactly one generation: it is created with the key and
+ * erased when ChunkIdGenerator reclaims the key, so the completed-id set
+ * below never spans two generations of the same key.
  */
 class ChunkIdGeneratorEntry {
   public:
     /**
-     * Constructur.
+     * Constructor.
      */
     ChunkIdGeneratorEntry() noexcept;
 
@@ -55,6 +61,14 @@ class ChunkIdGeneratorEntry {
     /// Account for one fully paired callback completion.
     void decrement_outstanding() noexcept;
 
+    /// Record one completed chunk id. Returns false when the id was already
+    /// completed in this generation (duplicate completion), so the caller
+    /// can fail closed instead of silently accepting it.
+    bool mark_chunk_completed(int chunk_id) noexcept;
+
+    /// Number of distinct chunk ids completed in the current generation.
+    [[nodiscard]] size_t completed_count() const noexcept;
+
   private:
     /// current available chunk id for sim_send() call
     int send_id;
@@ -64,6 +78,11 @@ class ChunkIdGeneratorEntry {
 
     /// Logical sends that have not reached CallbackTracker::pop_entry().
     uint64_t outstanding_;
+
+    /// Distinct chunk ids already completed in this generation (dedup set:
+    /// a repeated completion is a callback-lifecycle bug and must never
+    /// double-decrement `outstanding_`).
+    std::unordered_set<int> completed_ids_;
 };
 
 }  // namespace AstraSimAnalytical

@@ -56,11 +56,17 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      (arrival, queue_index) order: within an equal-arrival group the
      insertion order is again queue_index ascending. Equal alarm groups are
      equal arrival groups (all turn-0 Submits drain at t=0 before any event
-     fires, so no Submit is ever clamped except arrival==0 -> 1, and those
-     rows form one group whose internal order is row order == queue_index
-     order in both arms). Hence the (alarm_time, queue_index) fire sequence
-     is ELEMENTWISE IDENTICAL to the old unbounded arm -- for ANY input, not
-     just monotonic ones. For inputs that were already arrival-monotonic in
+     fires, so no Submit is ever clamped except arrival==0 -> 1). Scope
+     correction (2026-09-27): the earlier "ELEMENTWISE IDENTICAL for ANY
+     input" claim had exactly one counter-example family -- a tick-1 alarm
+     group that MIXES those clamped arrival==0 rows with genuine arrival==1
+     rows whose file order interleaves them: the old arm inserts that group
+     in row order (queue_index ascending), the calendar arm in (arrival,
+     queue_index) order, so the two arms can order that one group's members
+     differently (same member set, same tick 1). Outside that family the
+     (alarm_time, queue_index) fire sequence is ELEMENTWISE IDENTICAL to
+     the old unbounded arm -- for any monotonic OR non-monotonic input.
+     For inputs that were already arrival-monotonic in
      file order (the 20.csv smoke input) the calendar order IS the row order,
      so the old bounded-window arm is byte-identical too (V3 three-way
      comparison anchors on this). What changes is only that a
@@ -72,11 +78,11 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      algorithm as the Python materializer's sidecar writer), csv byte count,
      data-row count, session count, turn-0 count, turn-0 arrival min/max,
      turn-0 file-order adjacent inversion count, and session-block
-     contiguity. If a sidecar `<queue_csv>.provenance.json` exists, every
-     field is compared; any mismatch (or unparsable JSON, or schema != 1)
-     fails the run with [Error] + exit BEFORE any Submit. An absent sidecar
-     logs one "[online] provenance sidecar: absent (no gate)" line and
-     continues (smoke fixtures materialized by older scripts).
+     contiguity. A sidecar `<queue_csv>.provenance.json` is REQUIRED
+     (M-16, 2026-09-30,姊妹仓 P1 同款移植): every field is compared; any
+     mismatch (or unparsable JSON, or schema != 1, or an ABSENT sidecar)
+     fails the run with [Error] + exit BEFORE any Submit -- a queue without
+     its provenance record cannot be told apart from a truncated one.
   6. ARRIVAL TIME AUDIT + RUN-END GATE. Every turn-0 entry records its
      declared arrival and the simulation tick at which its Submit was
      enqueued (discovered; via RequestIngress::current_time()). The ingress
@@ -150,9 +156,13 @@ class WindowedTraceReader {
     /// harmless no-ops for the set.
     void notify_consumed(int64_t queue_index);
 
-    /// Total data rows read (including rejected ones). Equals the whole-file
-    /// count after the index pass.
-    size_t rows_read() const { return rows_read_; }
+    /// Total data rows read (including rejected ones). Test/legacy
+    /// convenience accessor: the same counter as data_rows() (the two
+    /// counters were merged on 2026-09-29; production reads it in
+    /// main_online.cc's parking diagnostics).
+    size_t rows_read() const {
+        return static_cast<size_t>(data_rows_);
+    }
     /// Data-row counter (queue indices are 0..data_rows()-1). After the
     /// index pass this equals the file's total data-row count (the run-end
     /// completion assertion target).
@@ -166,14 +176,10 @@ class WindowedTraceReader {
     bool eof() const { return eof_; }
     /// Turn-0 rows rejected because arrival > max_arrival_ns.
     size_t rejected_out_of_range() const { return rejected_out_of_range_; }
-    /// The whole-file data-row count. Equals data_rows() after the index
-    /// pass. The run-end completion audit denominator.
+    /// Test convenience accessor: alias of data_rows() (the two names were
+    /// merged on 2026-09-29; production reads both spellings --
+    /// main_online.cc's run-end completion audit uses this one).
     uint64_t total_data_rows() const { return data_rows_; }
-    /// Number of pump calls that indexed rows or submitted at least one
-    /// calendar entry.
-    size_t read_pumps() const { return read_pumps_; }
-    /// Accumulated wall time spent reading/parsing the index pass.
-    uint64_t io_read_ns() const { return io_read_ns_; }
     /// Peak outstanding (submitted-but-unfired turn-0) count.
     size_t peak_window_occupancy() const { return peak_occupancy_; }
     /// Exact current count of submitted turn-0 rows whose alarm has not
@@ -191,10 +197,10 @@ class WindowedTraceReader {
         uint64_t turn0_arrival_min_ns = 0;
         uint64_t turn0_arrival_max_ns = 0;
         uint64_t turn0_adjacent_inversions = 0;
-        bool session_blocks_contiguous = true;
     };
     const ProvenanceStats& provenance() const { return prov_; }
-    /// Sidecar comparison outcome ("matched" / "absent-no-gate").
+    /// Sidecar comparison outcome ("matched"; "not-indexed" before/during
+    /// the index pass. M-16 起缺席即 fail-closed,不再有 absent 状态).
     const std::string& provenance_sidecar_status() const {
         return provenance_status_;
     }
@@ -260,7 +266,6 @@ class WindowedTraceReader {
     uint64_t data_rows_ = 0;
     // Submitted-but-unfired turn-0 rows (occupancy).
     std::unordered_set<int64_t> outstanding_rows_;
-    size_t rows_read_ = 0;
     size_t rejected_out_of_range_ = 0;
     size_t read_pumps_ = 0;
     size_t peak_occupancy_ = 0;
@@ -274,6 +279,11 @@ class WindowedTraceReader {
     ProvenanceStats prov_;
     std::string provenance_status_ = "not-indexed";
     uint64_t fnv1a64_ = 14695981039346656037ULL;  // FNV-1a 64 offset basis
+    // Column count defined by the CSV header line (normally 8). Every data
+    // row's comma-separated field count must equal it (M8, 2026-09-29: a
+    // torn row used to be silently re-positioned by the positional getline
+    // parser -- a 5-column turn>0 row kept interval forged to 0).
+    size_t expected_columns_ = 0;
     // Session-block validation state.
     std::string current_session_;
     bool in_block_ = false;
@@ -281,14 +291,22 @@ class WindowedTraceReader {
     uint64_t prev_turn0_arrival_ = 0;
     bool have_prev_turn0_ = false;
     std::unordered_set<std::string> seen_sessions_;
+    // request_id 全局查重（C3 口径，2026-10-01 补齐跨通道）：集合覆盖
+    // 全部数据行（turn-0 与 turn>0 一并入库）。此前 turn>0 侧由
+    // RequestIngress::register_queue_index 各自 fail-closed、turn-0 侧由
+    // 本读取器的专用集合拦截，但"同一 id 一行出现在 turn-0、另一行出现
+    // 在 turn>0"的跨通道复用两侧都放行——该形状给请求开双生命周期
+    // （active_request_count 两次 +1 只对一次 -1 / M-12 重复
+    // REQUEST_COMPLETE），报错远离根因。在读取边界统一拦截。
+    std::unordered_set<std::string> seen_request_ids_;
 
     // ---- turn-0 calendar ----
     std::vector<CalendarEntry> calendar_;
     size_t calendar_cursor_ = 0;
 
     size_t occupancy() const;
-    void run_index_pass();          // whole file, fail-closed, no Submits
-    void process_indexed_row(const std::string& line);
+    void run_index_pass();                   // whole file, fail-closed, no Submits
+    void process_indexed_row(std::string line);  // by value: CRLF '\r' strip
     void check_provenance_sidecar();
     void submit_from_calendar();
 
@@ -323,7 +341,7 @@ class WindowedTraceReader {
 /// requests arrive via the future-alarm path and never increment it, so the
 /// accepted invariant is against turn-0 rows, never against total rows.
 struct CompletionAuditCounts {
-    uint64_t total_rows;   // reader.total_data_rows()
+    uint64_t total_rows;   // reader.data_rows()
     uint64_t turn0_rows;   // reader.turn0_data_rows()
     uint64_t accepted;     // service accepted_request_count()
     uint64_t completed;    // service completed_request_count()

@@ -12,6 +12,14 @@ those components may emit.
 
 from __future__ import annotations
 
+# (2026-10-01 R2 契约库面注记)本文件中内存观测家族(MemoryMetricsObserver/
+# MemoryDelta/Memory*Snapshot/ChipletMemoryResult/RankMemoryResult/
+# MemoryMetricsResult/stripe_bytes_evenly)与 RequestTimingTracker/RequestTiming
+# 的生产消费者仅 tests/test_metrics_contract.py(round-trip 契约钉子);
+# metrics_postprocess 只 import 归一化四个符号,capacity_timeavg/planner_peaks
+# 行直接消费 C++ raw dict。该家族作为跨端契约库面保留(与 C++ 字段
+# 逐键对齐的读侧校验),非死代码——删除前须先删契约测试。
+
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -60,6 +68,13 @@ ARRIVAL_AFTER_REQUEST = "after_request"
 RUN_MODE_SERVICE = "service"
 RUN_MODE_MICROBENCHMARK = "microbenchmark"
 RUN_MODES = frozenset({RUN_MODE_SERVICE, RUN_MODE_MICROBENCHMARK})
+
+# manifest_source value of the synthetic-prerun metrics_manifest.json
+# written by plan_materializer (path ③④; the C++ collector only requires
+# schema_version==1 + requests[] there).  Manifests carrying this
+# declaration are parsed with the synthetic field set; every other
+# manifest keeps the strict ET-generation contract.
+MANIFEST_SOURCE_SYNTHETIC_PRERUN = "synthetic-prerun"
 
 NORMALIZATION_GROUP_MAX = "group_max"
 NORMALIZATION_RATIO_TO_BASELINE = "ratio_to_baseline"
@@ -212,7 +227,12 @@ def _validate_rank_set(ranks: Any, name: str) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class RequestMetadata:
-    """One request record of the manifest ``requests`` array."""
+    """One request record of the manifest ``requests`` array.
+
+    ``decode_length`` is the optional synthetic-prerun passthrough
+    (plan_materializer writes it for the C++ first-token skew field); ET
+    generation-time manifests omit it and it stays ``None`` there.
+    """
 
     queue_index: int
     request_id: str
@@ -223,6 +243,7 @@ class RequestMetadata:
     prefill_ranks: tuple[int, ...]
     decode_instance: int
     decode_ranks: tuple[int, ...]
+    decode_length: Optional[int] = None
 
     def __post_init__(self) -> None:
         _require_int(self.queue_index, "queue_index", 0)
@@ -239,9 +260,11 @@ class RequestMetadata:
         object.__setattr__(
             self, "decode_ranks", _validate_rank_set(self.decode_ranks, "decode_ranks")
         )
+        if self.decode_length is not None:
+            _require_int(self.decode_length, "decode_length", 0)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "queue_index": self.queue_index,
             "request_id": self.request_id,
             "session_id": self.session_id,
@@ -252,6 +275,9 @@ class RequestMetadata:
             "decode_instance": self.decode_instance,
             "decode_ranks": list(self.decode_ranks),
         }
+        if self.decode_length is not None:
+            payload["decode_length"] = self.decode_length
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "RequestMetadata":
@@ -267,7 +293,8 @@ class RequestMetadata:
             "decode_instance",
             "decode_ranks",
         }
-        unknown = set(data) - expected
+        optional = {"decode_length"}
+        unknown = set(data) - expected - optional
         if unknown:
             raise MetricsSchemaError(f"request has unknown fields {sorted(unknown)}")
         missing = expected - set(data)
@@ -283,6 +310,7 @@ class RequestMetadata:
             prefill_ranks=tuple(data["prefill_ranks"]),
             decode_instance=data["decode_instance"],
             decode_ranks=tuple(data["decode_ranks"]),
+            decode_length=data.get("decode_length"),
         )
 
 
@@ -370,19 +398,38 @@ class MetricsManifest:
     memory_projection: MemoryProjection = field(default_factory=MemoryProjection)
     memory_actions: tuple[Any, ...] = ()
     planner_memory_peaks: tuple[Any, ...] = ()
+    manifest_source: str = ""
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         check_schema_version(self.schema_version)
         _require_str(self.repo_variant, "repo_variant")
-        if self.run_mode not in RUN_MODES:
-            raise MetricsSchemaError(f"run_mode must be one of {sorted(RUN_MODES)}")
-        _require_int(self.npus_count, "npus_count", 1)
-        _require_int(self.mesh_rows, "mesh.rows", 1)
-        _require_int(self.mesh_columns, "mesh.columns", 1)
-        _require_str(self.trace_digest, "trace_digest")
-        _require_str(self.request_mapping_digest, "request_mapping_digest")
-        _require_str(self.kv_event_digest, "kv_event_digest")
+        _require_str(self.manifest_source, "manifest_source", allow_empty=True)
+        # The synthetic-prerun manifest (plan_materializer path ③④) carries
+        # schema_version/repo_variant/manifest_source/requests(+ optional
+        # decode_length)/slo_sampling only -- the ET-generation provenance
+        # fields (digests/mesh/run_mode/npus_count) are declared on the ET
+        # generation path alone.  Manifests without the synthetic
+        # declaration keep the strict frozen ET contract below.
+        synthetic = self.manifest_source == MANIFEST_SOURCE_SYNTHETIC_PRERUN
+        if synthetic:
+            if self.run_mode and self.run_mode not in RUN_MODES:
+                raise MetricsSchemaError(f"run_mode must be one of {sorted(RUN_MODES)}")
+            _require_int(self.npus_count, "npus_count", 0)
+            _require_int(self.mesh_rows, "mesh.rows", 0)
+            _require_int(self.mesh_columns, "mesh.columns", 0)
+            _require_str(self.trace_digest, "trace_digest", allow_empty=True)
+            _require_str(self.request_mapping_digest, "request_mapping_digest", allow_empty=True)
+            _require_str(self.kv_event_digest, "kv_event_digest", allow_empty=True)
+        else:
+            if self.run_mode not in RUN_MODES:
+                raise MetricsSchemaError(f"run_mode must be one of {sorted(RUN_MODES)}")
+            _require_int(self.npus_count, "npus_count", 1)
+            _require_int(self.mesh_rows, "mesh.rows", 1)
+            _require_int(self.mesh_columns, "mesh.columns", 1)
+            _require_str(self.trace_digest, "trace_digest")
+            _require_str(self.request_mapping_digest, "request_mapping_digest")
+            _require_str(self.kv_event_digest, "kv_event_digest")
         if not isinstance(self.memory_projection, MemoryProjection):
             raise MetricsSchemaError("memory_projection must be a MemoryProjection")
         _validate_request_collection(self.requests)
@@ -401,7 +448,7 @@ class MetricsManifest:
         object.__setattr__(self, "requests", tuple(self.requests))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "repo_variant": self.repo_variant,
             "run_mode": self.run_mode,
@@ -419,14 +466,27 @@ class MetricsManifest:
             "memory_actions": list(self.memory_actions),
             "planner_memory_peaks": list(self.planner_memory_peaks),
         }
+        if self.manifest_source:
+            payload["manifest_source"] = self.manifest_source
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "MetricsManifest":
         data = _require_mapping(data, "manifest")
         check_schema_version(data.get("schema_version"))
-        for digest_field in ("trace_digest", "request_mapping_digest", "kv_event_digest"):
-            _require_str(data.get(digest_field), digest_field)
-        mesh = _require_mapping(data.get("mesh"), "mesh")
+        manifest_source = data.get("manifest_source")
+        synthetic = manifest_source == MANIFEST_SOURCE_SYNTHETIC_PRERUN
+        if manifest_source is not None and not isinstance(manifest_source, str):
+            raise MetricsSchemaError("manifest_source must be a string")
+        digest_fields = ("trace_digest", "request_mapping_digest", "kv_event_digest")
+        if synthetic:
+            digests = {name: data.get(name, "") for name in digest_fields}
+        else:
+            for digest_field in digest_fields:
+                _require_str(data.get(digest_field), digest_field)
+            digests = {name: data[name] for name in digest_fields}
+        raw_mesh = data.get("mesh")
+        mesh = _require_mapping(raw_mesh, "mesh") if raw_mesh is not None else {}
         raw_events = _require_mapping(data.get("node_events_by_rank", {}), "node_events_by_rank")
         events_by_rank: dict[int, tuple[NodeMetricEvent, ...]] = {}
         for rank_key, triples in raw_events.items():
@@ -444,13 +504,13 @@ class MetricsManifest:
             raise MetricsSchemaError("requests must be a list")
         return cls(
             repo_variant=data.get("repo_variant"),
-            run_mode=data.get("run_mode"),
-            npus_count=data.get("npus_count"),
-            mesh_rows=mesh.get("rows"),
-            mesh_columns=mesh.get("columns"),
-            trace_digest=data["trace_digest"],
-            request_mapping_digest=data["request_mapping_digest"],
-            kv_event_digest=data["kv_event_digest"],
+            run_mode=data.get("run_mode", "" if synthetic else None),
+            npus_count=data.get("npus_count", 0 if synthetic else None),
+            mesh_rows=mesh.get("rows", 0 if synthetic else None),
+            mesh_columns=mesh.get("columns", 0 if synthetic else None),
+            trace_digest=digests["trace_digest"],
+            request_mapping_digest=digests["request_mapping_digest"],
+            kv_event_digest=digests["kv_event_digest"],
             requests=tuple(RequestMetadata.from_dict(r) for r in raw_requests),
             node_events_by_rank=events_by_rank,
             memory_projection=MemoryProjection.from_dict(
@@ -458,6 +518,7 @@ class MetricsManifest:
             ),
             memory_actions=tuple(data.get("memory_actions", [])),
             planner_memory_peaks=tuple(data.get("planner_memory_peaks", [])),
+            manifest_source=manifest_source or "",
         )
 
 
@@ -587,11 +648,12 @@ class MetricManifestBuilder:
         events.add(event)
         return True
 
-    def add_memory_action(self, action: Any) -> None:
-        self._memory_actions.append(action)
-
-    def add_planner_memory_peak(self, peak: Any) -> None:
-        self._planner_memory_peaks.append(peak)
+    # DEAD-cleanup (face-LRU audit, 2026-09-29): the former
+    # add_memory_action()/add_planner_memory_peak() builder methods had zero
+    # callers repo-wide (AST+grep verified), so the buckets below are
+    # permanently empty and the manifest fields serialize as [].  The fields
+    # themselves stay: they are part of the manifest-JSON schema contract
+    # (to_dict/from_dict round-trip).
 
     def build(self) -> MetricsManifest:
         for digest_field in ("trace_digest", "request_mapping_digest", "kv_event_digest"):

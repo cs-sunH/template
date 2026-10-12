@@ -28,9 +28,19 @@ using namespace Analytical;
 using json = nlohmann::json;
 
 namespace {
-// plan sec.3.2 explicit numerical boundaries.
+// plan sec.3.2 explicit numerical boundaries. Both act as the t~0 FLOORS of
+// the completion tolerances: the actual slack grows with
+// 4 * double_epsilon * instant because fl(clock + remaining/rate) carries a
+// rounding error of order ulp(instant) ~ instant * 2^-52, which no fixed
+// absolute tolerance can absorb at large clocks (fix 2026-09-28; see
+// serve_interval / process_transitions_at).
 constexpr double kTimeEpsNs = 1e-9;  // sub-nanosecond service-time tolerance
 constexpr double kByteEps = 1e-6;    // residual byte tolerance on completion
+// Floating-point slack factor: the worst-case rounding chain
+// (divide -> add -> subtract -> multiply) contributes at most
+// 4 * u * rate * t (u = eps/2) of spurious service, so 4 * eps * t gives a
+// 2x margin over the derived bound.
+constexpr double kFpSlackFactor = 4.0;
 // 2^53: doubles stay integer-exact at or below this many ns/units; anything
 // larger would silently lose nanosecond (or byte) granularity and is
 // rejected fail-closed instead.
@@ -57,7 +67,19 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
   }
 
   json j;
-  conf_file >> j;
+  // remote-fluid-E1 (2026-09-30): nlohmann throws parse_error for a
+  // malformed file and type_error for a field of the wrong JSON type.
+  // Neither may escape this constructor as an uncaught exception (bare
+  // std::terminate, no diagnostic) -- same fail-closed shape as
+  // NetworkParser.cpp's YAML::Exception handling in the network backend.
+  try {
+    conf_file >> j;
+  } catch (const json::exception& e) {
+    cerr << "[Error] (remote_memory/analytical) failed to parse memory "
+         << "configuration file '" << memory_configuration << "': " << e.what()
+         << endl;
+    exit(1);
+  }
 
   if (j.contains("memory-type")) {
     string mem_type_str = j["memory-type"];
@@ -73,15 +95,40 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
       cerr << "Unsupported memory type: " << mem_type_str << endl;
       exit(1);
     }
+  } else {
+    // remote-fluid-E1 (2026-09-30): a missing "memory-type" key used to
+    // fall through silently on the NO_MEMORY_EXPANSION default, so a
+    // misspelled or forgotten key silently built the no-port backend (any
+    // later issue() then exits far away from the config line). Fail closed
+    // at the boundary, naming the file.
+    cerr << "[Error] (remote_memory/analytical) memory configuration file '"
+         << memory_configuration << "' is missing the required "
+         << "\"memory-type\" key" << endl;
+    exit(1);
   }
 
   if (mem_type == PER_NODE_MEMORY_EXPANSION) {
     num_nodes = 0;
     if (j.contains("num-nodes")) {
+      // remote-fluid-E1 (2026-09-30): check the JSON type before taking the
+      // value -- the implicit int conversion throws json::type_error for a
+      // string/bool value, and a fractional value truncated silently.
+      if (!j["num-nodes"].is_number_integer() &&
+          !j["num-nodes"].is_number_unsigned()) {
+        cerr << "num-nodes must be an integer for PER_NODE_MEMORY_EXPANSION"
+             << endl;
+        exit(1);
+      }
       num_nodes = j["num-nodes"];
     }
     num_npus_per_node = 0;
     if (j.contains("num-npus-per-node")) {
+      if (!j["num-npus-per-node"].is_number_integer() &&
+          !j["num-npus-per-node"].is_number_unsigned()) {
+        cerr << "num-npus-per-node must be an integer for "
+             << "PER_NODE_MEMORY_EXPANSION" << endl;
+        exit(1);
+      }
       num_npus_per_node = j["num-npus-per-node"];
     }
     if (num_nodes <= 0 || num_npus_per_node <= 0) {
@@ -191,6 +238,18 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
   }
 
   if (mem_type == PER_NODE_MEMORY_EXPANSION) {
+    // (2026-10-01) Named allocation guard: num_nodes is a legal positive
+    // int up to INT_MAX; a pathological value here resized into a bare
+    // bad_alloc/length_error terminate with no key or value in the
+    // diagnostic -- unlike every other malformed-config path in this
+    // constructor, which names the key and exits 1.
+    if (static_cast<unsigned long long>(num_nodes) > (1ull << 24)) {
+      cerr << "num-nodes " << num_nodes
+           << " exceeds the plausible port-count bound (1<<24); refusing "
+              "to allocate"
+           << endl;
+      exit(1);
+    }
     ports.resize(static_cast<size_t>(num_nodes));
   } else if (mem_type == MEMORY_POOL) {
     ports.emplace_back();
@@ -217,7 +276,16 @@ void AnalyticalRemoteMemory::set_sys(const int /*id*/, Sys* sys) {
   if (host_sys == nullptr) {
     // plan sec.3.3: the single global transition event binds to the FIRST
     // set_sys Sys; construction precedes set_sys, so nothing was cached
-    // earlier.
+    // earlier. By design that host is the analytical frontend's rank-0 Sys
+    // (set_sys runs per rank in ascending id order) -- and it is NOT a
+    // billing or latency path: no per-rank charge flows through it because
+    // latency/bandwidth are single configuration members and completion
+    // callbacks return to each issuing rank via wlhd->workload below. Its
+    // sole role is dispatch context: the one global transition event is
+    // registered into this Sys's event_queue and fires only when that
+    // Sys's call_events() drains it (all_sys[0] in the analytical
+    // frontend), exactly as the design note in AnalyticalRemoteMemory.hh
+    // (plan sec.3.3) states.
     host_sys = sys;
   }
   // PER_NPU port membership is fixed at construction from the mandatory
@@ -298,6 +366,14 @@ void AnalyticalRemoteMemory::issue(
   job->fluid_finish_ns = -1.0;
   job->callback_tick = 0;
   job->remaining_bytes = 0.0;
+  // Single backend timeline (review-correction note): the deadline of a
+  // job issued from ANY rank -- rank0 or not -- is evaluated here against
+  // the one continuous clock_ns and the shared configuration
+  // remote_mem_latency; there is no per-rank clock. Its event later fires
+  // only inside host_sys's rank-0 dispatch context (arm_transition_event),
+  // and the analytical frontend's teardown order (memory_api.reset()
+  // before the Sys vector is deleted in main_online.cc) is what guarantees
+  // the host Sys outlives every armed event.
   job->ready_ns = clock_ns + remote_mem_latency;
   if (!isfinite(job->ready_ns) || job->ready_ns > kMaxTimeNs) {
     Sys::sys_panic(
@@ -406,6 +482,17 @@ void AnalyticalRemoteMemory::call(
     PortState& port = ports[job->port_index];
     port.completed_count += 1;
     add_bytes_fail_closed(port.completed_bytes, job->tensor_size);
+    // Accumulate this job's completion residue into the fail-closed audit
+    // budget: kByteEps + bw * (kTimeEpsNs + 4*eps*finish), the bw-based
+    // upper bound of the scaled residue the completion clamps may leave
+    // (rate <= bw). A fixed kByteEps-only budget false-positives at large
+    // clocks (fix 2026-09-28).
+    port.served_residue_budget +=
+        kByteEps +
+        remote_mem_bw * (kTimeEpsNs +
+                         kFpSlackFactor *
+                             numeric_limits<double>::epsilon() *
+                             max(job->fluid_finish_ns, 1.0));
     settle_transaction_row(*job);
   }
   for (PortJob* job : batch) {
@@ -479,7 +566,13 @@ AnalyticalRemoteMemory::get_port_jobs(const std::size_t port_index) const {
     if (job->state == PortJobState::ActiveStream) {
       // The continuous clock advances lazily (only at issues and event
       // dispatches), and between transitions the active-stream count is
-      // constant, so this linear projection to the query Tick is exact.
+      // constant, so this linear projection to the query Tick is exact
+      // (2026-10-01 wording: ONLY when no same-port migration instant --
+      // another stream exhausting or a latency expiry joining -- falls in
+      // (clock_ns, query Tick]; across such an instant the single-rate
+      // projection is an approximation. Test probes query inside
+      // migration-free windows; advance the clock first if a future probe
+      // needs cross-instant exactness).
       // It keeps the read-only surface truthful for queries landing
       // between two transitions.
       const double now_ns = static_cast<double>(Sys::boostedTick());
@@ -587,17 +680,15 @@ void AnalyticalRemoteMemory::verify_drained() const {
     // Observation-layer conservation (plan sec.5.1): the served-bytes
     // integral must account for every completed byte except the
     // per-transaction completion residue. A completion fires either on
-    // the bytes path (at most kByteEps left) or on the time path (at most
-    // rate * kTimeEpsNs <= remote_mem_bw * kTimeEpsNs bytes left), so the
-    // aggregate gap is bounded by completed_count * (kByteEps + bw *
-    // kTimeEpsNs).
-    const double residue_bound_per_job =
-        kByteEps + remote_mem_bw * kTimeEpsNs;
+    // the bytes path or on the time path; both may leave behind the
+    // scaled residue (kByteEps + rate * (kTimeEpsNs + 4*eps*finish)
+    // bounded from above by the bw-based budget accumulated per
+    // completion in call()). A fixed kByteEps-only bound would
+    // false-positive at large clocks where the floating-point residue
+    // grows with ulp(fluid_finish_ns) (fix 2026-09-28).
     const double served_gap =
         static_cast<double>(port.completed_bytes) - port.bytes_served;
-    if (std::abs(served_gap) >
-        residue_bound_per_job *
-            static_cast<double>(port.completed_count)) {
+    if (std::abs(served_gap) > port.served_residue_budget) {
       report += " port[" + to_string(index) + "] bytes_served=" +
                 to_string(port.bytes_served) + " completed_bytes=" +
                 to_string(port.completed_bytes);
@@ -634,6 +725,7 @@ void AnalyticalRemoteMemory::shutdown() {
     port.port_busy_ns = 0.0;
     port.shared_busy_ns = 0.0;
     port.bytes_served = 0.0;
+    port.served_residue_budget = 0.0;
   }
   clock_ns = 0.0;
 }
@@ -806,12 +898,13 @@ AstraSim::Tick AnalyticalRemoteMemory::ceil_to_tick(const double time_ns) {
   // Tick down to floor -- but at that floor Tick the job has not finished
   // serving, so the transition event re-armed the same Tick with zero
   // progress and re-fired inside the Sys bucket being dispatched forever
-  // (simulation hang). The kByteEps / kTimeEpsNs completion tolerances in
-  // process_transitions_at() already absorb sub-ns floating-point residue
-  // once the true ceil Tick is reached, so no one-tick-early arming is
-  // needed; advance_all_ports()' up-snap of t_star lands the continuous
-  // clock on that same integer boundary, keeping callback ==
-  // ceil(fluid_finish).
+  // (simulation hang). The scaled completion tolerances in
+  // process_transitions_at() (kByteEps/kTimeEpsNs floors plus the
+  // 4*epsilon*instant slack, fix 2026-09-28) already absorb the
+  // floating-point residue once the true ceil Tick is reached, so no
+  // one-tick-early arming is needed; advance_all_ports()' up-snap of
+  // t_star lands the continuous clock on that same integer boundary,
+  // keeping callback == ceil(fluid_finish).
   return static_cast<Tick>(ceil(time_ns));
 }
 
@@ -858,6 +951,11 @@ AstraSim::Tick AnalyticalRemoteMemory::earliest_deadline_tick() const {
         case PortJobState::ActiveStream: {
           const double rate =
               remote_mem_bw / static_cast<double>(stream_count);
+          // Same inexact addition as earliest_transition_ns(); the +-half-
+          // ulp wobble this can induce in the armed Tick is harmless today
+          // because a Tick-early fire advances zero measurable time and the
+          // completion clamps own the residue (fix 2026-09-28 keeps the
+          // scaled clamps); no slack is added to the Tick domain itself.
           deadline_ns = clock_ns + job->remaining_bytes / rate;
           break;
         }
@@ -883,7 +981,8 @@ AstraSim::Tick AnalyticalRemoteMemory::earliest_deadline_tick() const {
   return earliest;
 }
 
-void AnalyticalRemoteMemory::serve_interval(const double dt_ns) {
+void AnalyticalRemoteMemory::serve_interval(const double dt_ns,
+                                            const double interval_end_ns) {
   if (dt_ns <= 0) {
     return;
   }
@@ -909,10 +1008,17 @@ void AnalyticalRemoteMemory::serve_interval(const double dt_ns) {
       port.peak_streaming = static_cast<uint64_t>(stream_count);
     }
     // Explicit clamp boundary (plan sec.3.2): a surviving stream may be
-    // overserved by at most rate * kTimeEpsNs of time, plus the byte
-    // tolerance; anything beyond that is an invariant failure, not a
-    // silent absorption.
-    const double overservice_tolerance = rate * kTimeEpsNs + kByteEps;
+    // overserved by at most rate * (kTimeEpsNs + fp_slack) of time plus
+    // the byte tolerance, where fp_slack scales with ulp(interval_end) --
+    // the rounding residue of fl(clock + remaining/rate) grows with the
+    // instant's magnitude, so a fixed absolute tolerance would fire this
+    // guard spuriously at large clocks (fix 2026-09-28). Anything beyond
+    // the scaled bound is an invariant failure, not a silent absorption.
+    const double fp_slack_ns =
+        kFpSlackFactor * numeric_limits<double>::epsilon() *
+        max(interval_end_ns, 1.0);
+    const double overservice_tolerance =
+        rate * (kTimeEpsNs + fp_slack_ns) + kByteEps;
     for (PortJob* job : port.jobs) {
       if (job->state != PortJobState::ActiveStream) {
         continue;
@@ -936,22 +1042,54 @@ void AnalyticalRemoteMemory::serve_interval(const double dt_ns) {
 }
 
 void AnalyticalRemoteMemory::process_transitions_at(const double t_ns) {
+  // Completion tolerances (fix 2026-09-28): kByteEps/kTimeEpsNs are the
+  // t~0 floors; the floating-point residue of computing the exhaustion
+  // instant scales with ulp(t_ns), so the slack grows with
+  // kFpSlackFactor * epsilon * t_ns (2x margin over the worst-case
+  // rounding chain). A fixed absolute bound would leave sub-milliByte
+  // residues at large clocks, dead-locking the advance loop into the
+  // zero-step guard.
+  const double fp_slack_ns =
+      kFpSlackFactor * numeric_limits<double>::epsilon() * max(t_ns, 1.0);
   for (PortState& port : ports) {
     // Order at one continuous instant (plan sec.3.1): exhausted streams
-    // leave the bandwidth denominator as one batch before ready jobs are
-    // admitted, so an arrival never shares bandwidth with a dying stream.
+    // leave the bandwidth denominator before ready jobs are admitted, so
+    // an arrival never shares bandwidth with a dying stream. Denominator
+    // granularity (review correction): within THIS loop the stream count
+    // shrinks one job at a time as same-instant finishers complete, rather
+    // than strictly "as one batch" -- serve_interval, by contrast, holds
+    // the whole-interval denominator fixed across its jobs. The two
+    // classifications can differ only at one shared continuous instant,
+    // and that residual is bounded by the scaled completion tolerances
+    // below.
+    //
+    // O(1) denominator maintenance (fix 2026-09-29): the ActiveStream
+    // population only changes inside this loop when a job below flips to
+    // FluidCompleteAwaitingCallback, so (count at loop entry -
+    // streams_completed_here) equals active_stream_count(port) at every
+    // iteration EXACTLY (integer identity; the rate division is
+    // bit-identical). The former per-job active_stream_count rescan cost
+    // O(jobs) per active job -- O(jobs^2) per port per transition instant
+    // and O(jobs^3) per advance pass under one congested port.
+    const std::size_t stream_count_at_instant_start =
+        active_stream_count(port);
     uint64_t streams_completed_here = 0;
     for (PortJob* job : port.jobs) {
       if (job->state != PortJobState::ActiveStream) {
         continue;
       }
-      const size_t stream_count = active_stream_count(port);
+      const size_t stream_count =
+          stream_count_at_instant_start -
+          static_cast<std::size_t>(streams_completed_here);
       const double rate =
           remote_mem_bw / static_cast<double>(stream_count);
-      const bool bytes_done = job->remaining_bytes <= kByteEps;
-      // The time-bounded clamp may absorb at most rate * kTimeEpsNs
-      // bytes of residual service (explicit boundary, plan sec.3.2).
-      const bool time_done = job->remaining_bytes / rate <= kTimeEpsNs;
+      const bool bytes_done =
+          job->remaining_bytes <= kByteEps + rate * fp_slack_ns;
+      // The time-bounded clamp may absorb at most rate * (kTimeEpsNs +
+      // fp_slack_ns) bytes of residual service (explicit boundary, plan
+      // sec.3.2).
+      const bool time_done =
+          job->remaining_bytes / rate <= kTimeEpsNs + fp_slack_ns;
       if (!bytes_done && !time_done) {
         continue;
       }
@@ -1032,7 +1170,8 @@ void AnalyticalRemoteMemory::advance_all_ports(const double target_ns) {
     if (++steps > step_guard) {
       Sys::sys_panic(
           "AnalyticalRemoteMemory: fluid advance exceeded its transition "
-          "guard (zero-step loop suspected)");
+          "guard (zero-step loop suspected; if this follows an overservice "
+          "panic, suspect a completion-tolerance / rounding mismatch)");
     }
     double t_star = earliest_transition_ns();
     if (!isfinite(t_star)) {
@@ -1048,7 +1187,7 @@ void AnalyticalRemoteMemory::advance_all_ports(const double target_ns) {
     if (t_star >= target_ns - kTimeEpsNs) {
       break;  // next transition lies at (or beyond) the target boundary
     }
-    serve_interval(t_star - clock_ns);
+    serve_interval(t_star - clock_ns, t_star);
     // Snap the transition instant into the explicit time tolerance so the
     // stored fluid_finish_ns and the callback Tick stay mutually consistent
     // (a finish landing within kTimeEpsNs of an integer ns is FP residue,
@@ -1066,7 +1205,7 @@ void AnalyticalRemoteMemory::advance_all_ports(const double target_ns) {
     process_transitions_at(clock_ns);
   }
   if (target_ns > clock_ns) {
-    serve_interval(target_ns - clock_ns);
+    serve_interval(target_ns - clock_ns, target_ns);
     clock_ns = target_ns;
   }
   process_transitions_at(clock_ns);
@@ -1088,24 +1227,21 @@ void AnalyticalRemoteMemory::arm_transition_event(
   Tick effective_deadline = deadline_tick;
   Tick delay = effective_deadline - now;
   if (delay == 0) {
-    // Same-Tick arming is legal only while Sys is draining the bucket of
-    // this very Tick: register_event_cancellable appends to that bucket
-    // and call_events() pops it later in the same pass, so a survivor
-    // finishing at, e.g., ns 300.9 is still delivered at Tick 301 (plan
-    // sec.3.1/sec.3.3: no callback later than its completion Tick).
-    // Outside that exact context a zero-delay event would outlive the
-    // already-erased bucket (stranded handle, drain-audit failure) or
-    // re-fire a deadline with zero progress -- e.g. an issue bound to a
-    // non-host Sys whose own dispatch does not touch host_sys. Fail
-    // closed by deferring to the next Tick instead of panicking. With
-    // ceil_to_tick pinned at the true ceil, the Tick a deadline names
-    // always harvests that deadline's job, so a same-Tick re-arm with
-    // zero progress is impossible and the deferral cannot loop.
-    if (!host_sys->dispatching_events ||
-        host_sys->dispatching_event_time != now) {
-      effective_deadline += 1;
-      delay = 1;
-    }
+    // Same-Tick arming is normalized to a one-tick deferral (fix
+    // (2026-10-01), contract unification with Sys::register_event_cancellable,
+    // which fail-closed rejects a zero delay). The former in-dispatch
+    // exception -- append to the bucket of this very Tick for delivery
+    // later in the same pass -- contradicted that guard: an in-pass
+    // same-Tick arm died in the named panic instead of delivering. A zero
+    // delay can only arise from a transfer whose finish instant is absorbed
+    // into the current Tick (floating-point residue of a sub-ns service),
+    // so the deferral cannot loop: the Tick a deadline names always
+    // harvests that deadline's job (ceil_to_tick is the true ceil) and the
+    // deferred event fires strictly after the arming Tick. The cost is a
+    // delivery one Tick past the completion ceil for that absorbed-residue
+    // case only -- fail closed by deferring rather than panicking.
+    effective_deadline += 1;
+    delay = 1;
   }
   ++event_generation;
   transition_event = host_sys->register_event_cancellable(

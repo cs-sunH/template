@@ -8,14 +8,18 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
   A. Round-trip (main process): two StateDeltas covering all four phase-1
      reasons (ARRIVAL / PREFILL_DRAIN / DECODE_COMPLETION /
      REQUEST_COMPLETE) are delivered through a real FileDecisionBridge to
-     online/verify/bridge_echo.py; the echo reflects the full request back
-     into response["echo_of_request"], so the fixture asserts field-level
-     round-trip fidelity (echo == build_request_json(delta)) plus the
-     fixed nodes/parent_edges/watches/assignments/kv_actions arrays and
-     batch_id/source_delivery_sequence. Then commit acks are sent twice for
-     the same seq (idempotency: Python must ignore the duplicate) and the
-     echo's receipt file must contain exactly one line per seq. At scope
-     end the bridge closes req_notify -> Python sees EOF -> exits 0.
+     online/verify/bridge_echo.py. The fixture asserts the published
+     request_0.json equals build_request_json(delta1) (atomic publish)
+     plus its schema-v1 facts (arrivals[] envelope/ingress_seq/queue_index,
+     completed_groups[], snapshot_handle), and the response comes back as
+     the C1 typed GraphBatch whose nodes/parent_edges/assignments/
+     kv_actions fields round-trip intact with batch_id/
+     source_delivery_sequence echoed (the response file itself is consumed
+     and deleted after parsing; request_0.json is retained). Then commit
+     acks are sent twice for the same seq (idempotency: Python must ignore
+     the duplicate) and the echo's receipt file must contain exactly one
+     line per seq. At scope end the bridge closes req_notify -> Python
+     sees EOF -> exits 0.
   B. Python crash detection (forked child): the child delivers through a
      bridge whose Python side reads the request and exits WITHOUT writing a
      response; the resp_notify read gets EOF and the child must abort
@@ -31,6 +35,13 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
   E. 1:1 response-byte invariant (defect-B fix guard): a Python writing
      two bytes for one delivery must trip "more than one response byte in
      flight" (backpressure contract) instead of shifting the exchanges.
+  F. Malformed-response fail-closed, three variants (C1, 2026-08-29):
+     corrupt response JSON / missing schema_version / an unknown
+     top-level key. Each forked child must abort through the SAME
+     bridge_fatal channel -- one "[Error] (execution_driven/bridge)" line
+     with the variant-specific reason + SIGABRT -- and the response file
+     must survive for post-mortem (the success path is the only one that
+     unlinks it).
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).

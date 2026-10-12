@@ -3,7 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 GraphBatchCommitter -- execution-driven mechanism layer (wscllm phase 5).
-Two-phase atomic GraphBatch commit (方案 §8.1/§8.2): Phase A validate()
+Two-phase atomic GraphBatch commit (方案 §8.1/§8.2): Phase A validate_impl()
 (run the full checklist, touch nothing) then Phase B commit() (add nodes,
 edges, watches, alarms, issue the touched ranks, update counters).
 
@@ -34,9 +34,11 @@ namespace ExecutionDriven {
 
 namespace {
 
-// C1 (2026-08-29): node_kind_from_type moved to ParsedGraphBatch.hh (the
-// parser and the committer must share ONE mapping); stage_generation stays
-// (a validate_impl diagnostic formatter). The S1 shared empty-object
+// C1 (2026-08-29): node_kind_from_type lives in ParsedGraphBatch.hh and has
+// exactly one consumer -- the parser (parse_graph_batch). The committer does
+// NOT use it: every node-type decision here deliberately compares the raw
+// numeric node_type (1..7) from the OnlineNode, so a stage_generation-style
+// diagnostic formatter is all that stayed behind. The S1 shared empty-object
 // stand-ins are gone with the DOM walks -- every consumer reads typed
 // fields now.
 
@@ -149,14 +151,17 @@ struct RequestFacts {
 };
 
 bool collective_comm_type_has_completion_path(const uint64_t comm_type) {
-    // Workload::issue_coll_comm() implements exactly these Chakra enum values.
-    // Any other value reaches its unsupported-collective throw after the node
-    // has already been taken from a NodeStore, so it is liveness-critical when
-    // full validation is off.
+    // Workload::issue_coll_comm() has a real collective implementation for
+    // exactly these Chakra enum values. BROADCAST (5) is deliberately
+    // absent: the execution-driven path implements no broadcast collective
+    // (the Workload arm is an unimplemented placeholder), so a broadcast
+    // batch must fail closed at this preflight instead of committing as a
+    // silent local no-op. Any other value reaches the unsupported-collective
+    // throw after the node has already been taken from a NodeStore, so it is
+    // liveness-critical when full validation is off.
     switch (comm_type) {
         case 0:  // ALL_REDUCE
         case 2:  // ALL_GATHER
-        case 5:  // BROADCAST
         case 6:  // ALL_TO_ALL
         case 7:  // REDUCE_SCATTER
             return true;
@@ -323,7 +328,7 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
 
 std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     const StateDelta& delta, const GraphBatch& batch) const {
-    // This is deliberately independent of validate(): production can skip
+    // This is deliberately independent of validate_impl(): production can skip
     // that exhaustive diagnostic pass, but it must never commit a batch
     // that can strand graph nodes, stage watches, p2p callbacks, collectives,
     // or request accounting.  Every container below is local; no fact set,
@@ -335,6 +340,18 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     };
 
     try {
+        // [epoch] M2-2 (2026-09-26 face parity, sunk here 2026-10-01 from
+        // validate_impl): the commit ack echoes batch_id verbatim back to
+        // Python's ledger, so a production commit (--online-validate=0,
+        // which runs ONLY this preflight) must not skip the
+        // batch_id == delivery_sequence identity rule. validate_impl checks
+        // it earlier in its richer rule order and keeps its own copy; this
+        // copy arms the production path.
+        if (batch.batch_id != delta.delivery_sequence) {
+            return fail("batch_id " + std::to_string(batch.batch_id) +
+                        " != delivery_sequence " +
+                        std::to_string(delta.delivery_sequence));
+        }
         // Apply this delta's facts in a compact overlay rather than copying the
         // whole live-request sets.  The result is exactly apply_delta_facts()
         // for every request mentioned by the delta, while untouched requests
@@ -478,6 +495,27 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                     return fail("node[" + std::to_string(node_index) +
                                 "] p2p endpoint rank does not match node rank");
                 }
+                // Self-send rejection (2026-09-30 deep-review round): a
+                // src==dst pair passes every range/ownership rule but the
+                // analytical backend's route() then yields a single-device
+                // path and fluid_route() fail-closes the WHOLE process
+                // ("fluid route must contain at least one link"), far from
+                // the root cause. Reject it at this boundary instead.
+                if (src == dst) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p src == dst (" + std::to_string(src) +
+                                "); a self-send has no link route in the "
+                                "analytical backend");
+                }
+                // Zero-byte p2p is rejected at the same commit boundary as
+                // the zero-byte collective: the analytical fluid backend
+                // classifies bytes == 0 as an invalid flow and exits, so a
+                // committed 0-byte send/recv pair would crash the run from
+                // inside the backend.
+                if (bytes == 0) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p comm bytes must be positive");
+                }
                 P2pCounts& counts =
                     p2p_counts[P2pKey{src, dst,
                                       static_cast<int64_t>(tag), bytes}];
@@ -504,6 +542,17 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 if (coll_bytes == 0) {
                     return fail("node[" + std::to_string(node_index) +
                                 "] collective bytes must be positive");
+                }
+                // CPP-01 fail-closed ruling: BROADCAST (comm_type 5) is
+                // explicitly rejected at the commit boundary. The execution
+                // path implements no broadcast collective, so a broadcast
+                // batch must never commit as a silent local 1 ns no-op.
+                if (coll_comm_type == 5) {  // ChakraProtoMsg::BROADCAST
+                    return fail("node[" + std::to_string(node_index) +
+                                "] BROADCAST collectives (comm_type 5) are "
+                                "not implemented in the execution-driven "
+                                "path; the input graph must not use "
+                                "broadcast");
                 }
                 if (!collective_comm_type_has_completion_path(coll_comm_type)) {
                     return fail("node[" + std::to_string(node_index) +
@@ -664,16 +713,31 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                             " cannot verify declared membership: resolver "
                             "is unavailable");
             }
-            const auto declared_members = ctx_.communicator_members_for_pg(
+            const auto declared = ctx_.communicator_members_for_pg(
                 key.pg_name, participant_ranks);
-            if (!declared_members.has_value()) {
+            if (!declared.has_value()) {
                 return fail("collective operation " + key.name +
                             " of pg_name " + key.pg_name +
                             " has missing or inconsistent declared membership");
             }
+            const std::vector<int>& declared_members = declared->first;
+            // involved_dim must be non-empty and exactly as long as the
+            // declared dimension count (2026-09-27): generate_collective
+            // indexes per-dimension vectors by these flags, so a short
+            // vector would read out of bounds and an empty one carries no
+            // dimension selection at all.
+            if (participants.involved_dims.empty() ||
+                participants.involved_dims.size() != declared->second) {
+                return fail("collective operation " + key.name +
+                            " of pg_name " + key.pg_name +
+                            " involved_dim must be non-empty and match the "
+                            "declared dimension count (" +
+                            std::to_string(participants.involved_dims.size()) +
+                            " vs " + std::to_string(declared->second) + ")");
+            }
             std::unordered_set<int> declared_rank_set;
-            declared_rank_set.reserve(declared_members->size());
-            for (const int declared_rank : *declared_members) {
+            declared_rank_set.reserve(declared_members.size());
+            for (const int declared_rank : declared_members) {
                 if (declared_rank < 0 || declared_rank >= ctx_.num_ranks) {
                     return fail("collective pg_name " + key.pg_name +
                                 " declares an out-of-range rank " +
@@ -777,7 +841,29 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 return fail("watch[" + std::to_string(watch_index) +
                             "] empty/absent statuses");
             }
-            if (request_id.rfind("batch_train_", 0) != 0) {
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // M3 defense (2026-09-29, joint 仓同步): the cross-layer
+                // contract fixes every batch_train_ watch to the PREFILL
+                // stage (all Python sentinel/wakeup emission points
+                // hardcode stage=prefill). A decode-stage sentinel fire
+                // maps to REQUEST_COMPLETE in main_online's stage->reason
+                // boundary and would underflow the ServiceCoordinator
+                // completion accounting (abort with a misleading
+                // "completion with no active request" message). Reject the
+                // batch here so the contract violation surfaces as a
+                // GraphBatch validation failure instead.
+                if (stage != "prefill") {
+                    return fail("sentinel watch[" +
+                                std::to_string(watch_index) +
+                                "] for train " + request_id +
+                                " carries stage \"" + stage +
+                                "\"; batch_train_ watches are fixed to the "
+                                "prefill stage by the cross-layer contract "
+                                "(a decode-stage sentinel fire would push "
+                                "REQUEST_COMPLETE and corrupt the service "
+                                "completion accounting)");
+                }
+            } else {
                 const RequestFacts facts = request_facts(request_id);
                 if (stage == "prefill" && !facts.in_flight) {
                     return fail("prefill watch[" + std::to_string(watch_index) +
@@ -850,6 +936,30 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                             *ingress_error);
             }
         }
+
+        // (2026-09-30 face parity, sunk here 2026-10-01) touched_ranks
+        // consistency, sunk here from validate_impl so the production fast
+        // path (--online-validate=0, which runs ONLY this preflight) no
+        // longer accepts a wrong DECLARED rank set: the issue pass itself
+        // uses the self-computed set, but the declared value feeds
+        // Python-side ledgers -- a wrong declaration must fail closed, not
+        // pass as an informational field. Cheap O(#ranks): rank_graphs
+        // already holds exactly the ranks that carry nodes.
+        if (batch.has_touched_ranks &&
+            batch.touched_ranks.size() != rank_graphs.size()) {
+            return fail("touched_ranks declares " +
+                        std::to_string(batch.touched_ranks.size()) +
+                        " ranks but the batch carries nodes on " +
+                        std::to_string(rank_graphs.size()) + " ranks");
+        }
+        for (const int declared_rank : batch.touched_ranks) {
+            if (rank_graphs.find(declared_rank) == rank_graphs.end()) {
+                return fail(
+                    "touched_ranks declares rank " +
+                    std::to_string(declared_rank) +
+                    " which carries no node in this batch");
+            }
+        }
     } catch (const std::exception& exc) {
         return fail(std::string("malformed batch entry: ") + exc.what());
     }
@@ -901,25 +1011,13 @@ void GraphBatchCommitter::record_affine_node(const int rank,
     ++affine.store_next;
 }
 
-std::vector<int> GraphBatchCommitter::compute_touched_ranks(
-    const GraphBatch& batch, const int num_ranks) {
-    std::set<int> ranks;
-    for (const auto& parsed : batch.nodes) {
-        const int rank = parsed.node.rank;
-        if (rank >= 0 && rank < num_ranks) {
-            ranks.insert(rank);
-        }
-    }
-    return std::vector<int>(ranks.begin(), ranks.end());
-}
-
 std::optional<std::string> GraphBatchCommitter::validate_impl(
     const StateDelta& delta, const GraphBatch& batch,
     std::vector<int>* const json_id_touched_ranks) const {
     try {
         // A committed rank owns an exact affine mapping onto the NodeStore's
         // automatic id stream. Check it before every semantic rule; this is a
-        // read-only fail-closed diagnostic and validate() remains pure.
+        // read-only fail-closed diagnostic and validate_impl() remains pure.
         if (auto drift_error = validate_affine_drift()) {
             return drift_error;
         }
@@ -927,7 +1025,7 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
         // ---- delta facts first: the batch is validated against the state
         //      AFTER this epoch's arrivals/completions (the commit applies
         //      the same facts before adding anything). Local copies only --
-        //      validate() touches no committer state. ----
+        //      validate_impl() touches no committer state. ----
         std::set<std::string> in_flight = in_flight_;
         std::set<std::string> prefill_drained = prefill_drained_;
         apply_delta_facts(delta, in_flight, prefill_drained);
@@ -1034,6 +1132,24 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                     return "node[" + std::to_string(node_index) +
                            "] recv node rank " + std::to_string(rank) +
                            " != comm.dst " + std::to_string(dst);
+                }
+                // Self-send rejection (validate_impl twin, 2026-09-30): a
+                // src==dst pair has no link route in the analytical
+                // backend and would kill the process from inside
+                // fluid_route(); reject it here so the violation surfaces
+                // as a batch validation failure naming the node.
+                if (src == dst) {
+                    return "node[" + std::to_string(node_index) +
+                           "] p2p src == dst (" + std::to_string(src) +
+                           "); a self-send has no link route in the "
+                           "analytical backend";
+                }
+                // Same commit-boundary rule as the zero-byte collective: a
+                // committed 0-byte p2p pair would exit the analytical fluid
+                // backend as an invalid flow.
+                if (node.comm.bytes == 0) {
+                    return "node[" + std::to_string(node_index) +
+                           "] p2p comm bytes must be positive";
                 }
             }
             // A zero-byte collective has no completion path in the
@@ -1248,6 +1364,19 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             // "batch_train_..." 批命名空间,T_max 截断列车的完成信号)不
             // 对应任何单请求,绕过 in-flight/prefill-drained 资格检查。
             if (request_id.rfind("batch_train_", 0) == 0) {
+                // M3 defense (2026-09-29, joint 仓同步): mandatory-preflight
+                // twin of the full-validation rule above -- the batch_train_
+                // namespace is fixed to the prefill stage (a decode-stage
+                // sentinel fire would push REQUEST_COMPLETE and corrupt the
+                // service completion accounting). Runs on EVERY commit path,
+                // including --online-validate=0.
+                if (stage != "prefill") {
+                    return "watch[" + std::to_string(watch_index) +
+                           "] sentinel/train watch " + request_id +
+                           " carries stage \"" + stage +
+                           "\"; batch_train_ watches are fixed to the "
+                           "prefill stage by the cross-layer contract";
+                }
                 // batch sentinel: train-scoped, no request eligibility.
             } else if (stage == "prefill") {
                 if (in_flight.count(request_id) == 0) {
@@ -1368,10 +1497,9 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                 return "touched_ranks not sorted unique";
             }
             // S1 (2026-08-23): reuse this validate pass's own touched set
-            // instead of re-walking batch.nodes through
-            // compute_touched_ranks(): by this point every node has an
-            // in-range rank (fail-closed in the node pass above), so the
-            // sorted-unique rank sets are identical by construction.
+            // instead of re-walking batch.nodes: by this point every node
+            // has an in-range rank (fail-closed in the node pass above), so
+            // the sorted-unique rank sets are identical by construction.
             const std::vector<int> computed(touched.begin(), touched.end());
             if (declared != computed) {
                 std::ostringstream os;
@@ -1401,15 +1529,11 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
 
         return std::nullopt;
     } catch (const std::exception& exc) {
-        // Malformed entry types surface as nlohmann type errors; convert to
-        // a validation error (fail-closed, zero state mutation).
+        // C1: batch entries are typed by parse_graph_batch, so this catch is
+        // defensive only; convert any surviving internal error to a
+        // validation error (fail-closed, zero state mutation).
         return std::string("malformed batch entry: ") + exc.what();
     }
-}
-
-std::optional<std::string> GraphBatchCommitter::validate(
-    const StateDelta& delta, const GraphBatch& batch) const {
-    return validate_impl(delta, batch, nullptr);
 }
 
 GraphBatchCommitter::ValidateAndCommitResult
@@ -1455,29 +1579,64 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
         throw std::runtime_error(
             "commit reentered while validate_and_commit owns preflight scratch");
     }
-    // Production may skip the expensive semantic validator. The producer's
-    // bounded contiguous-id contract, the zero-byte collective safety rule,
-    // and the NodeStore affine stream are still mandatory. They are checked
-    // before any delta, NodeStore or affine state change, so a failure has
-    // zero commit side effects.
-    if (auto drift_error = validate_affine_drift()) {
-        throw std::runtime_error("commit preflight: " + *drift_error);
-    }
-    if (auto id_error = validate_json_id_stream(batch, &commit_touched_ranks_)) {
-        throw std::runtime_error("commit preflight: " + *id_error);
-    }
-    if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
-        throw std::runtime_error("commit preflight: " + *liveness_error);
-    }
+    // The direct commit owns the same preflight scratch: set the in-progress
+    // flag so a Context callback cannot nest a mutating commit (or
+    // validate_and_commit) mid-Phase-B -- it used to clear and refill
+    // commit_touched_ranks_ while the outer phase iterates it.
+    validation_commit_in_progress_ = true;
+    try {
+        // Production may skip the expensive semantic validator. The producer's
+        // bounded contiguous-id contract, the zero-byte collective safety rule,
+        // and the NodeStore affine stream are still mandatory. They are checked
+        // before any delta, NodeStore or affine state change, so a failure has
+        // zero commit side effects.
+        if (auto drift_error = validate_affine_drift()) {
+            throw std::runtime_error("commit preflight: " + *drift_error);
+        }
+        if (auto id_error =
+                validate_json_id_stream(batch, &commit_touched_ranks_)) {
+            throw std::runtime_error("commit preflight: " + *id_error);
+        }
+        if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
+            throw std::runtime_error("commit preflight: " + *liveness_error);
+        }
 
-    commit_after_preflight(delta, batch, commit_touched_ranks_);
+        commit_after_preflight(delta, batch, commit_touched_ranks_);
+        validation_commit_in_progress_ = false;
+    } catch (...) {
+        validation_commit_in_progress_ = false;
+        throw;
+    }
 }
 
 void GraphBatchCommitter::commit_after_preflight(
     const StateDelta& delta, const GraphBatch& batch,
     const std::vector<int>& touched_ranks) {
 
-    // ---- delta facts first (the same facts validate() used) ----
+    // ---- M3 fail-closed Context guard: Phase B dereferences the three
+    //      services below (watch registration, future-arrival scheduling,
+    //      the touched-rank issue pass). The preflight does not cover them
+    //      for every batch shape (e.g. watch_registry is only read once a
+    //      watch exists), so a miswired Context used to SIGSEGV mid-commit;
+    //      checked here BEFORE any state mutation, a misconfiguration
+    //      throws with zero commit side effects. ----
+    if (ctx_.watch_registry == nullptr) {
+        throw std::runtime_error(
+            "commit: Context has no WatchRegistry (stage watches could not "
+            "be registered)");
+    }
+    if (ctx_.ingress == nullptr) {
+        throw std::runtime_error(
+            "commit: Context has no RequestIngress (future arrivals could "
+            "not be scheduled)");
+    }
+    if (!ctx_.issue_rank) {
+        throw std::runtime_error(
+            "commit: Context has no issue_rank callback (the touched-rank "
+            "issue pass could not run)");
+    }
+
+    // ---- delta facts first (the same facts Phase A validated against) ----
     apply_delta_facts(delta, in_flight_, prefill_drained_);
 
     // ---- Phase B-1: nodes (per-rank affine json id -> store id).
@@ -1506,13 +1665,11 @@ void GraphBatchCommitter::commit_after_preflight(
     }
 
     // ---- Phase B-1.5: side-band metrics anchor hook (phase-7 §10.3). The
-    //      anchors must bind to the STORE ids (what on_node_issue /
-    //      on_node_complete observe) -- NodeStore hands out store ids
-    //      starting at 1 while the online graph's json ids start at 0, so
-    //      registering with the json ids off-by-ones every anchor (the id-0
-    //      start anchors would never fire at all). The caller's hook resolves
-    //      only the ids it needs through this committer's affine mapping and
-    //      must register BEFORE the issue pass below lets any nodes run.
+    //      anchors must bind to the STORE ids -- see the off-by-one
+    //      rationale on Context::metrics_anchor_hook (GraphBatchCommitter.hh).
+    //      The caller's hook resolves only the ids it needs through this
+    //      committer's affine mapping and must register BEFORE the issue
+    //      pass below lets any nodes run.
     if (ctx_.metrics_anchor_hook) {
         ctx_.metrics_anchor_hook(batch, *this);
     }
@@ -1597,9 +1754,28 @@ void GraphBatchCommitter::commit_after_preflight(
         for (const auto status : watch.statuses) {
             statuses.insert(status);
         }
+        bool watch_created = false;
         ctx_.watch_registry->register_stage_watch(
             request_id, stage, generation, std::move(members),
-            std::move(statuses));
+            std::move(statuses), &watch_created);
+        if (!watch_created) {
+            // (2026-10-01 face parity) A re-registered (request_id, stage,
+            // generation) identity used to be accepted silently when the
+            // member set matched (and hard-exited deep inside the registry
+            // when it did not): the registry kept the OLD member set, so
+            // any new members' completions could never advance the watch,
+            // and the run died much later at the run-end stale audit with
+            // no pointer to the cause. The protocol emits each watch
+            // identity exactly once (batch ids are strictly monotonic), so
+            // a duplicate is a producer bug -- name it here, through the
+            // standard commit -> online_fatal channel (with the delivery
+            // sequence context) instead of a bare registry-side exit.
+            throw std::runtime_error(
+                "commit: duplicate watch identity (request_id=" + request_id +
+                " stage=" + stage +
+                " generation=" + std::to_string(generation) +
+                ") -- each watch identity must be registered exactly once");
+        }
     }
 
     // ---- Phase B-4: schedule future arrival alarms ----

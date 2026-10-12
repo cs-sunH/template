@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "common/CommonNetworkApi.hh"
 #include <cassert>
 #include <cstdio>
+#include <limits>
 #include <cstdlib>
 
 using namespace AstraSim;
@@ -116,13 +117,59 @@ void CommonNetworkApi::sim_schedule(const timespec_t delta,
     assert(delta.time_res == NS);
     assert(fun_ptr != nullptr);
 
+    // P2-10 fix (2026-09-28): same-tick dual-route, aligned with sim_recv
+    // below. From a tick-end/deferred context (online post-commit issue
+    // pass, tick-end observer) a delta==0 schedule_event would insert a
+    // current_time EventList into the main map and trip the
+    // strict-increase abort on the next proceed() (EventQueue hard rule;
+    // Release-always fail-closed there), so the callback goes through the
+    // same-tick deferred drain instead. In the invoke context (static path)
+    // the current_time schedule merges into the EventList currently being
+    // invoked and executes within the same pass -- pre-extension behavior,
+    // byte-for-byte preserved.
+    if (delta.time_val == 0 && !event_queue->in_invoke_context()) {
+        event_queue->schedule_event_deferred(fun_ptr, fun_arg);
+        return;
+    }
+
     // calculate absolute event time
     const auto current_time = sim_get_time();
     const auto event_time = current_time.time_val + delta.time_val;
-    const auto event_time_ns = static_cast<EventTime>(event_time);
+
+    // (2026-10-01, D1 review / face parity) Range guard before the long
+    // double -> uint64 conversion: a sum past UINT64_MAX (or a NaN delta)
+    // is UB in the conversion itself. NaN also hides from every ordered
+    // comparison below, so it is caught here via the negated form.
+    if (!(event_time >= 0.0L) ||
+        event_time > static_cast<long double>(
+                         std::numeric_limits<EventTime>::max())) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule overflow: "
+                     "event_time is outside the uint64 ns range\n");
+        std::abort();
+    }
 
     // schedule the event to the event queue
-    assert(event_time_ns >= event_queue->get_current_time());
+    // Release-always guard (2026-09-30 face parity): the old assert-only
+    // check vanished under NDEBUG, and a negative delta then landed in a
+    // PAST map bucket -- the failure surfaced only at the next proceed()
+    // as the EventQueue's "same-tick events must go through
+    // schedule_event_deferred" abort, misattributing the root cause.
+    // (2026-10-01 refinement, B1 review) The comparison happens in the
+    // long double domain BEFORE the EventTime cast: a strongly negative
+    // delta makes the float->unsigned conversion itself UB (wrapping to a
+    // huge value on typical targets) and would slip past a post-cast
+    // comparison.
+    if (event_time < static_cast<long double>(event_queue->get_current_time())) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule regression: "
+                     "event_time=%Lf < current_time=%llu (negative delta?)\n",
+                     static_cast<long double>(event_time),
+                     static_cast<unsigned long long>(
+                         event_queue->get_current_time()));
+        std::abort();
+    }
+    const auto event_time_ns = static_cast<EventTime>(event_time);
     event_queue->schedule_event(event_time_ns, fun_ptr, fun_arg);
 }
 
@@ -142,9 +189,44 @@ CommonNetworkApi::sim_schedule_cancellable(
     // explicitly ask for cancellation pay for a wrapper, registry entry, and
     // EventQueue control block.
     const auto current_time = sim_get_time();
-    const auto event_time = current_time.time_val + delta.time_val;
+    auto event_time = current_time.time_val + delta.time_val;
+    // P2-10 fix (2026-09-28): same-tick companion of the sim_schedule
+    // dual-route above. A cancellable event cannot take the deferred drain
+    // (its handle must stay resident in -- and cancellable from -- the main
+    // map), so from a tick-end/deferred context a delta==0 request takes
+    // the +1 ns strict-future lower bound instead (the EventQueue
+    // strict-increase rule; the same clamp family as the ingress
+    // late-arrival rule). The invoke-context arm keeps the exact
+    // current_time merge semantics.
+    if (delta.time_val == 0 && !event_queue->in_invoke_context()) {
+        event_time = current_time.time_val + 1;
+    }
+    // (2026-10-01, D1 review / face parity) Same pre-cast range guard as
+    // sim_schedule above (NaN / > UINT64_MAX are UB in the conversion).
+    if (!(event_time >= 0.0L) ||
+        event_time > static_cast<long double>(
+                         std::numeric_limits<EventTime>::max())) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule_cancellable "
+                     "overflow: event_time is outside the uint64 ns "
+                     "range\n");
+        std::abort();
+    }
+    // Release-always guard, same refined form as sim_schedule above
+    // (2026-10-01): compare in the long double domain BEFORE the
+    // EventTime cast, so a strongly negative delta cannot wrap through
+    // the UB float->unsigned conversion and slip past.
+    if (event_time < static_cast<long double>(event_queue->get_current_time())) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule_cancellable "
+                     "regression: event_time=%Lf < current_time=%llu "
+                     "(negative delta?)\n",
+                     static_cast<long double>(event_time),
+                     static_cast<unsigned long long>(
+                         event_queue->get_current_time()));
+        std::abort();
+    }
     const auto event_time_ns = static_cast<EventTime>(event_time);
-    assert(event_time_ns >= event_queue->get_current_time());
 
     const uint64_t token = next_cancellable_schedule_token_++;
     auto* const context = new CancellableScheduleContext{
@@ -226,6 +308,17 @@ int CommonNetworkApi::sim_recv(void* const buffer,
                                sim_request* const request,
                                void (*msg_handler)(void*),
                                void* const fun_arg) {
+    // Fail closed before any bookkeeping (2026-09-30 face parity): a null
+    // handler would otherwise be registered in the CallbackTracker and
+    // later invoked (or scheduled) as a call through nullptr. No chunk id
+    // is consumed on this path.
+    if (msg_handler == nullptr) {
+        std::fprintf(stderr,
+                     "[Error] (network/analytical) sim_recv requires a "
+                     "non-null msg_handler (tag=%d src=%d count=%llu)\n",
+                     tag, src, static_cast<unsigned long long>(count));
+        std::abort();
+    }
     // query chunk id
     const auto dst = sim_comm_get_rank();
     const auto chunk_id =
@@ -267,6 +360,30 @@ int CommonNetworkApi::sim_recv(void* const buffer,
     } else {
         // send() not yet called
         // create new entry and insert callback
+        // C3 fix (2026-09-28): the review's "zero diagnostics" hang. If a
+        // same-(tag,src,dst) entry with a DIFFERENT count is outstanding,
+        // this registration is the wrong half of a count-mismatched pair:
+        // both entries now wait on each other forever (the send's chunk
+        // arrival only completes its own count key) and the run used to
+        // hang silently. Collective tags are per-stream (stream_id), so a
+        // same-key different-count entry cannot belong to a legitimate
+        // concurrent transfer. Diagnostic only: warn once per logical
+        // transfer (chunk 0), then register normally -- the run's outcome
+        // is unchanged, the mismatch is just visible.
+        if (chunk_id == 0 && CommonNetworkApi::callback_tracker
+                                 .has_entry_with_mismatched_count(tag, src,
+                                                                  dst,
+                                                                  count)) {
+            std::fprintf(stderr,
+                         "[Warning] (network/analytical) send/recv count "
+                         "mismatch suspected: sim_recv(tag=%d src=%d "
+                         "dst=%d count=%llu) does not match an "
+                         "outstanding entry with the same key but a "
+                         "different count -- the pair will wait on each "
+                         "other forever (silent-hang signature)\n",
+                         tag, src, dst,
+                         static_cast<unsigned long long>(count));
+        }
         auto* const new_entry =
             callback_tracker.create_new_entry(tag, src, dst, count, chunk_id);
         new_entry->register_recv_callback(msg_handler, fun_arg);

@@ -8,7 +8,6 @@ LICENSE file in the root directory of this source tree.
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -75,14 +74,6 @@ void OfflineGreedyScheduleJournal::publish(
                                         expected_consumers});
 }
 
-size_t OfflineGreedyScheduleJournal::pending_entry_count() {
-    return entries.size();
-}
-
-void OfflineGreedyScheduleJournal::reset() {
-    entries.clear();
-}
-
 DimElapsedTime::DimElapsedTime(int dim_num) {
     this->dim_num = dim_num;
     this->elapsed_time = 0;
@@ -94,6 +85,19 @@ OfflineGreedy::OfflineGreedy(Sys* sys) {
     for (uint64_t i = 0; i < this->dim_size.size(); i++) {
         this->dim_BW[i] = sys->comm_NI->get_BW_at_dimension(i);
         this->dim_elapsed_time.push_back(DimElapsedTime(i));
+    }
+    // dim_BW[0] is the normalization divisor of every chunk-size/load
+    // formula below and the other entries are its numerators; a backend that
+    // reports no bandwidth (the AstraNetworkAPI default is -1) would
+    // otherwise silently poison every scheduled chunk. Fail closed instead.
+    for (uint64_t i = 0; i < this->dim_BW.size(); i++) {
+        if (this->dim_BW[i] <= 0) {
+            Sys::sys_panic("OfflineGreedy requires a positive bandwidth for "
+                           "every dimension (dim_BW[0] normalizes the chunk "
+                           "sizes), but the network backend reported " +
+                           std::to_string(this->dim_BW[i]) + " for dimension " +
+                           std::to_string(i));
+        }
     }
     if (sys->id == 0) {
         auto logger = LoggerFactory::get_logger("themis");
@@ -145,6 +149,19 @@ std::vector<int> OfflineGreedy::get_chunk_scheduling(
     std::vector<bool>& dimensions_involved,
     InterDimensionScheduling inter_dim_scheduling,
     ComType comm_type) {
+    // Every dimensions_involved access below is indexed by a physical
+    // dimension (dim.dim_num over dim_elapsed_time, which is sized from
+    // sys->physical_dims). An involved_dim attribute present but shorter
+    // than the physical dimension count (the producer only pads four true
+    // entries when the attribute is absent) would read the vector<bool> out
+    // of bounds; fail loud with the actual length instead.
+    if (dimensions_involved.size() < dim_elapsed_time.size()) {
+        Sys::sys_panic("dimensions_involved has " +
+                       std::to_string(dimensions_involved.size()) +
+                       " entries but OfflineGreedy schedules " +
+                       std::to_string(dim_elapsed_time.size()) +
+                       " physical dimensions");
+    }
     const OfflineGreedyScheduleKey schedule_key{communicator_namespace,
                                                  chunk_id};
     std::vector<int> cached_schedule;
@@ -160,6 +177,19 @@ std::vector<int> OfflineGreedy::get_chunk_scheduling(
         return cached_schedule;
     }
     if (sys->id != 0) {
+        // (2026-10-01, mirrored from the wscllm sister repo) the cross-rank
+        // delegation below used to be a bare dereference; a null rank-0 slot
+        // (teardown ordering, inconsistent per-rank construction) crashed
+        // with no diagnosis. Same fail-closed guard as Sys.cc's
+        // ask_for_schedule null handling.
+        if (sys->all_sys.empty() || sys->all_sys[0] == nullptr ||
+            sys->all_sys[0]->offline_greedy == nullptr) {
+            Sys::sys_panic(
+                "rank " + std::to_string(sys->id) +
+                " has inter-dimension-scheduling=OfflineGreedy but rank 0 "
+                "does not; the cross-rank schedule delegation requires the "
+                "same inter-dimension-scheduling on every rank");
+        }
         return sys->all_sys[0]->offline_greedy->get_chunk_scheduling(
             communicator_namespace, chunk_id, expected_consumers,
             remaining_data_size, recommended_chunk_size, dimensions_involved,
@@ -180,6 +210,14 @@ std::vector<int> OfflineGreedy::get_chunk_scheduling(
             scheduled_chunk_size =
                 std::min(remaining_data_size, chunk_size);
             remaining_data_size -= scheduled_chunk_size;
+            // The clamped value is what this chunk actually carries, so every
+            // load accumulation below (both the balanced-dimension branch and
+            // the tail loop) must use it; accounting with the unclamped
+            // recommended size overestimated the last, partially-filled
+            // chunk and skewed the greedy ordering. Only the load bookkeeping
+            // is affected -- data volume and communication timing use
+            // remaining_data_size/scheduled_chunk_size, not chunk_size.
+            chunk_size = scheduled_chunk_size;
         }
         int dim_elapsed_time_pointer = -1;
         for (auto& dim : dim_elapsed_time) {
@@ -257,7 +295,6 @@ std::vector<int> OfflineGreedy::get_chunk_scheduling(
                         const uint64_t phys = dim_elapsed_time[myDim].dim_num;
                         if (!dimensions_involved[phys] ||
                             dim_size[phys] == 1) {
-                            // result.push_back(myDim);
                             continue;
                         }
                         if (comm_type == ComType::Reduce_Scatter) {

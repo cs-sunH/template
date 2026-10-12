@@ -139,7 +139,6 @@ ReadyStream make_ready_stream(AstraSim::Sys& sys, int stream_id) {
     phase.algorithm = nullptr;
     phase.final_data_size = 0;
     phase.enabled = false;
-    phase.comm_type = AstraSim::ComType::None;
     auto dataset = std::make_unique<AstraSim::DataSet>(1, 0);
     auto stream = std::make_unique<AstraSim::StreamBaseline>(
         &sys, dataset.get(), stream_id, std::list<AstraSim::CollectivePhase>{

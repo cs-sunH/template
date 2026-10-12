@@ -27,8 +27,14 @@ matrix of the frozen rule families:
           statuses preserved in raw order);
   O3      unicode passthrough (no validation, byte-exact std::string);
   O4      the frozen error skeleton parses cleanly and carries the error;
-  O5/O6   no size cap; >UINT64 integer literals fail closed (nlohmann
-          stores them as double -> not is_number_integer).
+  O5      no size cap; >UINT64 integer literals fail closed via the
+          typed getters (nlohmann stores them as double -> not
+          is_number_integer);
+  K       is_kv_route_transfer_leg (P1 fix 2026-09-28): the restore memory
+          anchor selection matches ONLY the paired KV transfer comm legs
+          (history_kv / prefill_to_decode_kv, "<route><send|recv>_rank{S}_
+          to_rank{T}" tail), never the "..._attention_qkv_projection"
+          compute nodes or control legs.
 
 Positive controls: a max-shape response (all 7 node types, every optional
 field, a cross-batch parent edge, a full watch, an alarm with queue_index,
@@ -46,6 +52,7 @@ Exit code 0 on ALL PASS.
 
 #include <json/json.hpp>
 
+#include "DieTypes.hh"
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 using namespace AstraSim::ExecutionDriven;
@@ -117,13 +124,56 @@ nlohmann::json coll_full() {
 }
 
 nlohmann::json compute_full() {
+    // 3.2 fix (2026-09-29): remote_weight_bytes moved from "optional, parsed"
+    // to "parse-rejected" (this repo has no remote weight pool; the key used
+    // to abort at first issue), so the shared fixture no longer carries it
+    // -- the dedicated rejection nail lives in the P section below.
     return {{"num_ops", 5000000000ULL},      // > 2^32: uint64 must survive
             {"tensor_size", 6000000000ULL},  // (the int-default truncation
-            {"runtime_ns", 12345},           //  NOTE of the old DOM path)
-            {"remote_weight_bytes", 777}};
+            {"runtime_ns", 12345}};          //  NOTE of the old DOM path)
     // (wscllm repo note vs the sh_1.0 original: no hbm_access_mode key --
     // this repo's ComputeAttrs carries no such field and the parser's
     // allowed compute key set rejects the key as unknown.)
+}
+
+// Die backend (contract §2): a legal die_op_spec object. Unsigned
+// literals on purpose (the strict spec parser requires is_number_unsigned,
+// which nlohmann text parsing always provides; in-test construction with
+// plain ints would store signed and be rejected). LLaMA-2-7B shape (MHA:
+// num_q_heads == num_kv_heads).
+nlohmann::json valid_die_op_spec() {
+    nlohmann::json span;
+    span["request_id"] = "r1";
+    span["q_tokens"] = 8u;
+    span["kv_tokens"] = 128u;
+    span["q_start_pos"] = 0u;
+    span["kv_start_pos"] = 0u;
+    nlohmann::json spec;
+    spec["schema_version"] = 1u;
+    spec["op_kind"] = "norm";
+    spec["phase"] = "prefill";
+    spec["dtype"] = "bf16";
+    spec["model_dims"] = {{"hidden", 4096u},
+                          {"ffn", 11008u},
+                          {"vocab", 32000u},
+                          {"mlp_variant", "swiglu"},
+                          {"norm_type", "rmsnorm"},
+                          {"position_encoding", "rope"},
+                          {"num_q_heads", 32u},
+                          {"num_kv_heads", 32u},
+                          {"head_dim", 128u}};
+    spec["tp_slice"] = {{"tensor_parallel", 1u},
+                        {"tensor_parallel_rank", 0u},
+                        {"q_heads_local", 32u},
+                        {"kv_heads_local", 32u},
+                        {"ffn_local", 11008u},
+                        {"vocab_local", 32000u}};
+    spec["spans"] = nlohmann::json::array({span});
+    spec["layer_count"] = 1u;
+    spec["weight_passes"] = 1u;
+    spec["kv_access"] = {{"identity", "local"}};
+    spec["fusion_policy"] = "auto";
+    return spec;
 }
 
 nlohmann::json node_json(int rank, uint64_t id, int type,
@@ -417,6 +467,116 @@ void test_node_rules() {
         expect_parse_error(resp, "N12: hbm_access_mode unknown key",
                            "hbm_access_mode");
     }
+    {  // N12/die (die backend, contract §2): op_role + die_op_spec keys.
+        using OpRole = AstraSim::ExecutionDriven::OpRole;
+        // Accept: op_role=control_marker parses to the enum.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "control_marker";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role control_marker accepted");
+            expect(parsed.nodes[0].node.compute.op_role ==
+                       OpRole::ControlMarker,
+                   "N12: op_role control_marker -> enum");
+            expect(parsed.nodes[0].node.compute.die_spec == nullptr,
+                   "N12: op_role alone leaves die_spec null");
+        }
+        // Accept: op_role=compute is the explicit default spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "compute";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role compute accepted");
+            expect(parsed.nodes[0].node.compute.op_role == OpRole::Compute,
+                   "N12: op_role compute -> enum");
+        }
+        // Accept: die_op_spec with runtime_ns == 0 parses the immutable
+        // spec (DieModel::parse_die_op_spec ran without error).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: die_op_spec accepted");
+            expect(parsed.nodes[0].node.compute.die_spec != nullptr,
+                   "N12: die_op_spec -> shared spec");
+            expect(parsed.nodes[0].node.compute.die_spec->op_kind ==
+                       DieModel::OpKind::Norm,
+                   "N12: parsed spec carries op_kind norm");
+        }
+        // Reject: unknown op_role spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "marker";
+            expect_parse_error(resp, "N12: op_role unknown spelling",
+                               "op_role");
+        }
+        // Reject: op_role must be a string.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = 1;
+            expect_parse_error(resp, "N12: op_role int", "not a string");
+        }
+        // Reject: die_op_spec + runtime_ns != 0 (contract §2 conflict rule:
+        // a calibrated runtime must never silently bypass the die plan).
+        {
+            nlohmann::json resp = base;  // compute_full carries runtime_ns
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            expect_parse_error(resp, "N12: die_op_spec with runtime_ns",
+                               "runtime_ns == 0");
+        }
+        // Reject: die_op_spec must be an object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = "norm";
+            expect_parse_error(resp, "N12: die_op_spec string",
+                               "die_op_spec is not an object");
+        }
+        // Reject: an inner spec violation surfaces as a ParseError carrying
+        // the original library message (here: an unknown key inside the
+        // spec object).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["surprise"] = 1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec unknown inner key",
+                               "die_op_spec rejected");
+        }
+        // Reject: a missing required key inside the spec object (spans).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec.erase("spans");
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec missing spans",
+                               "die_op_spec rejected");
+        }
+        // Reject: an enum misspelling inside the spec object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["op_kind"] = "normalize";
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec bad op_kind",
+                               "die_op_spec rejected");
+        }
+        // Reject: a signed integer inside the spec object (the strict
+        // spec parser requires unsigned storage).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["layer_count"] = -1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec negative layer_count",
+                               "die_op_spec rejected");
+        }
+    }
     {  // N13: comm key set / domains
         nlohmann::json resp = base;
         resp["nodes"][0]["comm"].erase("tag");
@@ -460,11 +620,11 @@ void test_node_rules() {
         expect(parsed.nodes[0].node.coll.involved_dim.empty(),
                "N14: absent involved_dim -> empty vector");
     }
-    {  // O6: >UINT64 integer literal becomes a double -> fail closed
+    {  // O5: >UINT64 integer literal becomes a double -> fail closed
         nlohmann::json resp = base;
         resp["nodes"][0]["compute"]["num_ops"] =
             nlohmann::json::parse("18446744073709551616");  // 2^64
-        expect_parse_error(resp, "O6: num_ops > UINT64_MAX",
+        expect_parse_error(resp, "O5: num_ops > UINT64_MAX",
                            "not an integer");
     }
 }
@@ -606,6 +766,13 @@ void test_alarm_rules() {
         resp = base;
         resp["future_alarms"][0]["arrival_world_ns"] = -1;
         expect_parse_error(resp, "A3: negative arrival", "negative");
+        // Reserved train-sentinel namespace on the envelope request_id
+        // (same gate family as the CSV reader's reserved-prefix arm).
+        resp = base;
+        resp["future_alarms"][0]["envelope"]["request_id"] =
+            "batch_train_0_request";
+        expect_parse_error(resp, "A3: reserved batch_train_ request_id",
+                           "batch_train_");
     }
 }
 
@@ -700,6 +867,70 @@ void test_opaque_and_order_rules() {
     }
 }
 
+// ----------------------------------- Part K (KV transfer-leg predicate) ----
+// P1 fix (2026-09-28): the restore memory-anchor selection must bind ONLY to
+// the paired KV transfer legs, never to the "kv"-substring compute nodes.
+void test_kv_route_transfer_leg_predicate() {
+    OnlineNode leg;
+    leg.kind = NodeKind::CommRecv;
+    leg.name = "q0000_sess_turn1_req_history_kv_recv_rank2_to_rank0";
+    expect(is_kv_route_transfer_leg(leg), "K: history_kv recv leg matches");
+    leg.kind = NodeKind::CommSend;
+    leg.name = "q0000_sess_turn1_req_history_kv_send_rank2_to_rank1";
+    expect(is_kv_route_transfer_leg(leg), "K: history_kv send leg matches");
+    leg.kind = NodeKind::CommRecv;
+    leg.name = "q0007_sess_turn1_req_prefill_to_decode_kv_recv_rank1_to_rank3";
+    expect(is_kv_route_transfer_leg(leg),
+           "K: prefill_to_decode_kv recv leg matches");
+    leg.kind = NodeKind::CommSend;
+    leg.name = "q0007_sess_turn1_req_prefill_to_decode_kv_send_rank1_to_rank3";
+    expect(is_kv_route_transfer_leg(leg),
+           "K: prefill_to_decode_kv send leg matches");
+
+    // The pollutant this predicate exists to reject: the aggregated compute
+    // pass node shares the "kv" substring (old name.find("kv") matched it)
+    // and is emitted AFTER the transfer legs in the same request context.
+    OnlineNode qkv;
+    qkv.kind = NodeKind::Compute;
+    qkv.name = "q0000_sess_turn1_req_current_prefill_request_aggregated_"
+               "all_layers_attention_qkv_projection";
+    expect(!is_kv_route_transfer_leg(qkv),
+           "K: attention_qkv_projection compute node rejected");
+    // Same name on a comm kind still fails the leg-shape check (no
+    // "<route><leg>_rank<S>_to_rank<T>" tail).
+    qkv.kind = NodeKind::CommRecv;
+    expect(!is_kv_route_transfer_leg(qkv),
+           "K: qkv name rejected even on a comm kind");
+
+    OnlineNode other;
+    other.kind = NodeKind::CommSend;
+    other.name = "q0000_sess_turn1_req_interval_control_send_rank2_to_rank0";
+    expect(!is_kv_route_transfer_leg(other),
+           "K: control comm leg rejected");
+    other.name = "q0000_sess_turn1_req_history_source_control_send_rank2_to_rank0";
+    expect(!is_kv_route_transfer_leg(other),
+           "K: history_source_control leg rejected");
+    other.name = "q0000_sess_turn1_req_history_kv_recv_rank2_to_rank0_extra";
+    expect(!is_kv_route_transfer_leg(other),
+           "K: leg tail must close the name");
+    other.name = "q0000_sess_turn1_req_history_kv_recv_rankXX_to_rank0";
+    expect(!is_kv_route_transfer_leg(other),
+           "K: non-decimal source rank rejected");
+    other.name = "q0000_sess_turn1_req_history_kv_recv_rank2_to_rank";
+    expect(!is_kv_route_transfer_leg(other),
+           "K: missing target rank digits rejected");
+    other.kind = NodeKind::CommCollective;
+    other.name = "q0000_sess_turn1_req_history_kv_recv_rank2_to_rank0";
+    expect(!is_kv_route_transfer_leg(other),
+           "K: non-send/recv kinds rejected");
+    other.kind = NodeKind::Compute;
+    other.name = "q0000_sess_turn0_req_current_prefill_request_aggregated_"
+                 "all_layers_attention_qkv_projection";
+    expect(!is_kv_route_transfer_leg(other),
+           "K: turn-0 compute node yields no transfer leg (no fabricated "
+           "restore anchor for transfer-free requests)");
+}
+
 // -------------------------------------------------------- Part P (shape) ----
 void test_max_shape_round_trip() {
     const nlohmann::json resp = max_shape_response();
@@ -724,8 +955,28 @@ void test_max_shape_round_trip() {
                compute.tensor_size == 6000000000ULL &&
                compute.runtime_ns == 12345,
            "P: uint64 compute fields survive > 2^32 values");
-    expect(compute.has_remote_weight_bytes && compute.remote_weight_bytes == 777,
-           "P: optional remote_weight_bytes present");
+    expect(!compute.has_remote_weight_bytes,
+           "P: remote_weight_bytes absent from the shared fixture");
+    {
+        // 3.2 rejection nail (2026-09-29): a compute block carrying
+        // remote_weight_bytes is parse-rejected with the dedicated
+        // unsupported-key message (the key used to parse legally and abort
+        // at first issue instead).
+        nlohmann::json resp = max_shape_response();
+        resp["nodes"][0]["compute"]["remote_weight_bytes"] = 777;
+        bool threw = false;
+        std::string message;
+        try {
+            (void)parse_graph_batch(resp, 3);
+        } catch (const std::exception& exc) {
+            threw = true;
+            message = exc.what();
+        }
+        expect(threw &&
+                   message.find("remote_weight_bytes is not supported") !=
+                       std::string::npos,
+               "P: remote_weight_bytes in compute is parse-rejected");
+    }
     // (wscllm: no hbm_access_mode field to assert -- see compute_full note)
     const CommAttrs& comm = parsed.nodes[0].node.comm;
     expect(comm.bytes == 128 && comm.src == 0 && comm.dst == 1 &&
@@ -783,6 +1034,7 @@ int main() {
     test_watch_rules();
     test_alarm_rules();
     test_opaque_and_order_rules();
+    test_kv_route_transfer_leg_predicate();
     test_max_shape_round_trip();
     if (g_ok) {
         std::printf("[parsed_graph_batch_test] ALL PASS\n");

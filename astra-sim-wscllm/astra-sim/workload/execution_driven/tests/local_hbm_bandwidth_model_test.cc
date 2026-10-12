@@ -36,6 +36,11 @@ full_rate = 3000 B/ns unless stated otherwise):
       30000/3000 = 10ns; SEND completes at the network tick only (7ns).
   S5  Single-user COMP parity with roofline max(): peak-perf 1000 TFLOPS
       (1e6 ops/ns), ops 6e6 (6ns) vs bytes 3000 (1ns) -> completes t=6.
+  S6  ALL_REDUCE endpoint job (P2, 2026-09-28): the coll node charges
+      comm_size through the model (comm_read) and completes at the join
+      of the collective callback and the endpoint HBM leg, the same
+      two-event join as p2p: coll degenerate self-event t=1, HBM leg
+      100 + 3000/3000 = 101 -> node completes t=101.
 
 Build: cmake --build build/astra_analytical/build_congestion_aware -j
        (target AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest)
@@ -60,6 +65,8 @@ Exit code 0 on ALL PASS.
 #include <map>
 #include <string>
 #include <vector>
+
+#include <unistd.h>  // getpid (tests-F6 pid-namespaced temp dir)
 
 using namespace AstraSim;
 using AstraSim::ExecutionDriven::NodeKind;
@@ -123,10 +130,24 @@ class FakeNetworkApi : public AstraNetworkAPI {
 
     void sim_schedule(timespec_t delta, void (*fun_ptr)(void*),
                       void* fun_arg) override {
-        // Sys always passes NS resolution here.
-        const long double ns =
-            delta.time_res == NS ? delta.time_val
-                                 : static_cast<long double>(delta.time_val);
+        // Sys always passes NS resolution here; the other scales are
+        // converted explicitly (tests-F4, 2026-10-01: the old conditional
+        // had two semantically identical arms -- time_val is already long
+        // double -- so a non-NS scale would have been silently consumed
+        // as ns).
+        long double ns = delta.time_val;
+        switch (delta.time_res) {
+            case NS: break;
+            case US: ns *= 1e3L; break;
+            case MS: ns *= 1e6L; break;
+            case SE: ns *= 1e9L; break;
+            default:
+                std::fprintf(stderr,
+                             "[FakeNetworkApi] sim_schedule: unsupported time "
+                             "resolution %d (Sys always passes NS)\n",
+                             static_cast<int>(delta.time_res));
+                std::abort();
+        }
         this->schedule(static_cast<uint64_t>(ns), fun_ptr, fun_arg);
     }
 
@@ -136,6 +157,11 @@ class FakeNetworkApi : public AstraNetworkAPI {
         now.time_val = static_cast<long double>(this->now_ns_);
         return now;
     }
+
+    // AstraNetworkAPI grew this pure virtual in the working-tree interface
+    // cleanup; the HBM-model fixture has no link model, so any finite
+    // bandwidth answer will do (the model under test reads its own config).
+    double get_BW_at_dimension(int /*dim*/) override { return 1.0; }
 
     // Deterministic pump: earliest (time, seq) first.
     void run_until_empty() {
@@ -206,12 +232,20 @@ struct TerminalLedger {
 // Fixture: one scenario = one online Sys (rank 0) + NodeStore graph source
 // ---------------------------------------------------------------------------
 
-const char* const kTempDir = "/tmp/wscllm_hbm_contention_test";
+// tests-F6 (2026-10-01): pid-namespaced temp dir, the same convention as the
+// sibling fixtures (bridge_loopback / calendar_reader_oracle / cli_online /
+// service_vacuum / windowed_trace_reader all suffix getpid()). The single
+// fixed directory let two concurrent instances delete each other's
+// system.json once the suite runs under ctest.
+std::string temp_dir() {
+    return "/tmp/wscllm_hbm_contention_test_" +
+           std::to_string(static_cast<long>(::getpid()));
+}
 
 std::string write_system_json(const std::string& name,
                               bool contention,
                               uint64_t local_mem_latency_ns) {
-    const std::string path = std::string(kTempDir) + "/" + name;
+    const std::string path = temp_dir() + "/" + name;
     std::ofstream out(path);
     out << "{\n"
         << "  \"roofline-enabled\": 1,\n"
@@ -220,7 +254,14 @@ std::string write_system_json(const std::string& name,
         << "  \"local-mem-latency\": "
         << static_cast<unsigned long long>(local_mem_latency_ns) << ",\n"
         << "  \"hbm-bandwidth-contention\": "
-        << (contention ? "1" : "0") << "\n"
+        << (contention ? "1" : "0") << ",\n"
+        // The four *-implementation keys are mandatory: Sys fails closed
+        // (GeneralComplexTopology, empty implementation table) without
+        // them; a single "ring" matches this fixture's {1} shape.
+        << "  \"all-reduce-implementation\": [\"ring\"],\n"
+        << "  \"all-gather-implementation\": [\"ring\"],\n"
+        << "  \"reduce-scatter-implementation\": [\"ring\"],\n"
+        << "  \"all-to-all-implementation\": [\"ring\"]\n"
         << "}\n";
     out.close();
     return path;
@@ -245,6 +286,17 @@ struct Fixture {
             1.0 /*injection*/, 1.0 /*comm scale*/,
             false /*rendezvous*/, ExecutionDriven::ExecutionMode::Online,
             this->source);
+    }
+
+    ~Fixture() {
+        // Uninstall the hook (fix 2026-09-27): the ctx points at this stack
+        // Fixture's ledger while CompletionObserver::instance() is a
+        // process-wide singleton; leaving it installed would leave a
+        // dangling pointer behind (any late terminal record would be a
+        // use-after-free). A null hook is the documented zero-overhead
+        // default, and every scenario reinstalls its own hook on entry.
+        ExecutionDriven::CompletionObserver::instance().set_hook(nullptr,
+                                                                 nullptr);
     }
 
     Workload* workload() const {
@@ -296,6 +348,22 @@ struct Fixture {
         return node;
     }
 
+    // Four-type collective node builder (2026-10-01): the endpoint HBM
+    // charge lives BEFORE the comm_type dispatch in Workload::issue_coll_comm,
+    // so AG/A2A/RS symmetry is structural -- this builder pins it per type
+    // (proto values: ALL_REDUCE=0, ALL_GATHER=2, ALL_TO_ALL=6,
+    // REDUCE_SCATTER=7).
+    static OnlineNode coll_node(uint64_t bytes, int comm_type) {
+        OnlineNode node;
+        node.kind = NodeKind::CommCollective;
+        node.node_type = 7;  // ChakraProtoMsg::COMM_COLL_NODE
+        node.name = "comm_coll";
+        node.coll.comm_type = comm_type;
+        node.coll.bytes = bytes;
+        node.coll.pg_name = "";  // default communicator (all ranks)
+        return node;
+    }
+
     void expect_success(uint64_t node_id, uint64_t tick,
                         const char* what) {
         const auto it = this->ledger.success.find(node_id);
@@ -312,9 +380,10 @@ struct Fixture {
 
 void remove_temp_dir() {
     const std::string cmd =
-        std::string("rm -rf ") + kTempDir;
+        std::string("rm -rf ") + temp_dir();
     if (std::system(cmd.c_str()) != 0) {
-        std::fprintf(stderr, "[warn] failed to remove %s\n", kTempDir);
+        std::fprintf(stderr, "[warn] failed to remove %s\n",
+                     temp_dir().c_str());
     }
 }
 
@@ -363,8 +432,8 @@ void scenario_fair_sharing_and_reallocation() {
                "S1 redistribution events (2 arrivals + 2 departures)");
     CHECK(!fx.workload()->local_hbm_bandwidth_model->has_active_jobs(),
           "S1 no active jobs at the end");
-    CHECK_EQ_T(fx.source->store().pending_count(), 0ull,
-               "S1 all nodes terminal (store pending 0)");
+    CHECK_EQ_T(fx.source->store().injected_unfinished_summary(0).node_count,
+               0ull, "S1 all nodes terminal (0 unfinished in the store)");
 }
 
 // S2: join HBM-first order -- the HBM leg finishes long before the network
@@ -433,14 +502,66 @@ void scenario_single_comp_roofline_parity() {
     fx.expect_success(comp, 6, "S5 COMP t=6 (compute-bound max())");
 }
 
+// S6: EVERY collective type's endpoint charges its bytes through the shared
+// HBM model, exactly like the COMP and p2p endpoints (the 2026-09-29 4.2
+// symmetry fix).  On this {1}-shaped fixture the collective degenerates to a
+// self event at t=1; the endpoint HBM job (100ns latency + 3000/3000 =
+// 101ns) must HOLD the node open to t=101 via the same two-event join the
+// p2p callbacks use.  Pre-fix the node completed at the collective tick
+// alone (t=1) and the endpoint bytes never entered the model.
+// 2026-10-01: parametrized over all four charged types (ALL_REDUCE /
+// ALL_GATHER / ALL_TO_ALL / REDUCE_SCATTER) -- the charge sits before the
+// comm_type dispatch, and this loop pins that no future refactor moves it
+// back into a single type's branch.
+void scenario_all_reduce_endpoint_job() {
+    struct CollTypeCase {
+        const char* name;
+        int comm_type;
+    };
+    const CollTypeCase cases[] = {
+        {"ALL_REDUCE", 0}, {"ALL_GATHER", 2}, {"ALL_TO_ALL", 6},
+        {"REDUCE_SCATTER", 7}};
+    for (const CollTypeCase& c : cases) {
+        std::printf("[S6] %s endpoint HBM job / coll-join\n", c.name);
+        Fixture fx(write_system_json("system_s6.json", true, 100));
+
+        LocalHbmBandwidthModel* const model =
+            fx.workload()->local_hbm_bandwidth_model.get();
+        CHECK(fx.workload()->local_hbm_bandwidth_model != nullptr,
+              "S6: model must exist with contention on");
+
+        const uint64_t coll =
+            fx.issue_node(Fixture::coll_node(3000, c.comm_type));
+
+        fx.net.run_until_empty();
+
+        std::string what = std::string("S6 ") + c.name +
+                           " t=101 (coll done t=1, HBM leg t=101)";
+        fx.expect_success(coll, 101, what.c_str());
+        CHECK_EQ_T(static_cast<uint64_t>(model->comm_read_bytes_served() + 0.5),
+                   3000ull, (std::string("S6 ") + c.name +
+                            " endpoint bytes charged through the model")
+                       .c_str());
+        CHECK(!fx.workload()->local_hbm_bandwidth_model->has_active_jobs(),
+              "S6 no active jobs at the end");
+        CHECK_EQ_T(
+            fx.source->store().injected_unfinished_summary(0).node_count,
+            0ull, (std::string("S6 ") + c.name +
+                   " node terminal exactly once (0 unfinished)")
+                      .c_str());
+    }
+}
+
 }  // namespace
 
 int main() {
     LoggerFactory::init("empty", "off");
-    remove_temp_dir();
-    if (std::system(std::string("mkdir -p " + std::string(kTempDir))
+    // tests-F6 (2026-10-01): no remove-at-entry -- the pid-suffixed
+    // directory cannot pre-exist from a same-pid stale run in practice, and
+    // mkdir -p tolerates a leftover; only the exit path cleans up.
+    if (std::system(std::string("mkdir -p " + temp_dir())
                         .c_str()) != 0) {
-        std::fprintf(stderr, "[FAIL] cannot create %s\n", kTempDir);
+        std::fprintf(stderr, "[FAIL] cannot create %s\n", temp_dir().c_str());
         return 1;
     }
 
@@ -449,6 +570,7 @@ int main() {
     scenario_latency_once_per_job();
     scenario_flag_off_fallback();
     scenario_single_comp_roofline_parity();
+    scenario_all_reduce_endpoint_job();
 
     remove_temp_dir();
 

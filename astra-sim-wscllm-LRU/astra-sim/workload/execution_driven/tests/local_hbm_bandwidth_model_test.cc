@@ -60,6 +60,7 @@ Exit code 0 on ALL PASS.
 #include <fstream>
 #include <map>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 using namespace AstraSim;
@@ -215,21 +216,27 @@ struct TerminalLedger {
 // Fixture: one scenario = one online Sys (rank 0) + NodeStore graph source
 // ---------------------------------------------------------------------------
 
-const char* const kTempDir = "/tmp/wscllm_hbm_contention_test";
+// Per-process temp directory (mkdtemp): a fixed /tmp path made concurrent or
+// back-to-back runs of this test pollute each other's system.json -- the
+// same failure the sibling fixtures avoid with mkdtemp isolation.
+std::string g_temp_dir;
+std::vector<std::string> g_written_paths;
 
 std::string write_system_json(const std::string& name,
                               bool contention,
                               uint64_t local_mem_latency_ns) {
-    const std::string path = std::string(kTempDir) + "/" + name;
+    const std::string path = g_temp_dir + "/" + name;
     std::ofstream out(path);
     // Official-template fixture shape (阶段5夹具避雷): scheduling-policy /
     // preferred-dataset-splits / collective-optimization present, all four
     // *-implementation keys non-empty. The fixture is ONE topology dimension
     // (physical_dims = {1}), so each implementation array carries exactly one
-    // entry. With a *-implementation key missing, Sys's CONSTRUCTOR builds its
-    // per-ComType logical topologies (Sys.cc:266-272) from an empty
-    // native-impl list and GeneralComplexTopology throws "requires at least
-    // one collective implementation" before any scenario can run.
+    // entry. The Sys constructor's logical_topologies build-out tolerates a
+    // missing key
+    // (GeneralComplexTopology accepts an empty native-impl list as a dummy
+    // topology), but the first use of that collective type would then fail
+    // inside CollectiveImplLookup::get_collective_impl; the scenarios here
+    // issue all four collective types, so every key stays populated.
     out << "{\n"
         << "  \"scheduling-policy\": \"LIFO\",\n"
         << "  \"preferred-dataset-splits\": 1,\n"
@@ -247,6 +254,7 @@ std::string write_system_json(const std::string& name,
         << (contention ? "1" : "0") << "\n"
         << "}\n";
     out.close();
+    g_written_paths.push_back(path);
     return path;
 }
 
@@ -282,8 +290,8 @@ struct Fixture {
         node.global_id = 0;  // store assigns a fresh id
         const uint64_t id =
             this->source->store().add_node(std::move(node));
-        const auto view = this->source->lookup(id);
-        this->workload()->issue(view.value());
+        const auto* view = this->source->lookup_ptr(id);
+        this->workload()->issue(*view);
         return id;
     }
 
@@ -336,10 +344,12 @@ struct Fixture {
 };
 
 void remove_temp_dir() {
-    const std::string cmd =
-        std::string("rm -rf ") + kTempDir;
-    if (std::system(cmd.c_str()) != 0) {
-        std::fprintf(stderr, "[warn] failed to remove %s\n", kTempDir);
+    for (const std::string& path : g_written_paths) {
+        std::remove(path.c_str());
+    }
+    g_written_paths.clear();
+    if (!g_temp_dir.empty()) {
+        ::rmdir(g_temp_dir.c_str());
     }
 }
 
@@ -388,8 +398,8 @@ void scenario_fair_sharing_and_reallocation() {
                "S1 redistribution events (2 arrivals + 2 departures)");
     CHECK(!fx.workload()->local_hbm_bandwidth_model->has_active_jobs(),
           "S1 no active jobs at the end");
-    CHECK_EQ_T(fx.source->store().pending_count(), 0ull,
-               "S1 all nodes terminal (store pending 0)");
+    CHECK_EQ_T(fx.source->store().injected_unfinished_summary(0).node_count,
+               0ull, "S1 all nodes terminal (0 unfinished in the store)");
 }
 
 // S2: join HBM-first order -- the HBM leg finishes long before the network
@@ -462,12 +472,13 @@ void scenario_single_comp_roofline_parity() {
 
 int main() {
     LoggerFactory::init("empty", "off");
-    remove_temp_dir();
-    if (std::system(std::string("mkdir -p " + std::string(kTempDir))
-                        .c_str()) != 0) {
-        std::fprintf(stderr, "[FAIL] cannot create %s\n", kTempDir);
+    char dir_template[] = "/tmp/wscllm_hbm_contention_test_XXXXXX";
+    const char* dir_name = mkdtemp(dir_template);
+    if (dir_name == nullptr) {
+        std::perror("mkdtemp");
         return 1;
     }
+    g_temp_dir = dir_name;
 
     scenario_fair_sharing_and_reallocation();
     scenario_join_hbm_first();

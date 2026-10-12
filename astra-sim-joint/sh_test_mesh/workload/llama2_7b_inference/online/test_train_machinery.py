@@ -38,6 +38,8 @@ from face_scheduler import (  # noqa: E402
     estimate_model_weight_bytes,
 )
 from online.sh30_online_scheduler import (  # noqa: E402
+    JOINT_STAGE_D_RUNNING,
+    JOINT_STAGE_P_RUNNING,
     Sh30OnlineScheduler,
     _OnlineInstanceState,
     _OnlineRequestRuntime,
@@ -70,6 +72,14 @@ def _runtime(request_id, *, ctx=100, decode=4, remaining_chunks=0,
     rt.remaining_chunks = remaining_chunks
     rt.prefill_instance_index = instance
     rt.decode_instance_index = instance
+    # D20（v2.0 §16.4）状态机口径：合成场景按角色落阶段——仍有
+    # prefill 工作 = P_RUNNING（队列头）；无 = 边界提交后的 decode
+    # 成员（D_RUNNING + 完成归属锁定，完成信号按归属实例核销）。
+    if remaining_chunks > 0:
+        rt.joint_stage = JOINT_STAGE_P_RUNNING
+    else:
+        rt.joint_stage = JOINT_STAGE_D_RUNNING
+        rt.completion_instance_index = instance
     return rt
 
 
@@ -301,7 +311,7 @@ class LayerABCrossCheckTest(unittest.TestCase):
 
     def test_linear_stage_consistency_and_weight_once_per_iteration(self):
         """同一批组成(p_chunk=512, B=2)下:
-        - 层次 A linear_tokens = p_chunk + d_batch(:568 同构口径);
+        - 层次 A linear_tokens = p_chunk + d_batch（同构口径）;
         - 层次 B 列车体线性类 num_ops/tensor 的 per-iteration 分量与
           层次 A 公式一致(线性于 (chunk+B));
         - 权重每迭代恰读一次(A0 已证 B 无关性,此处对齐 A 的
@@ -367,9 +377,50 @@ class LayerABCrossCheckTest(unittest.TestCase):
             if any(name.endswith(n) for n in linear_names))
         linear_weight_total = layers * (
             4 * h * h + 2 * h * ffn) * bpe
-        self.assertGreater(weight_b, linear_weight_total)
-        # 权重分量 == 常量(与 span 数/批成员数无关,A0 已证,这里锚
-        # 定"每迭代恰一次"的量级:weight_passes=1 ⇒ 权重只计一份)。
+
+        def _linear_tensor_bytes(pass_spans):
+            """同口径探针:四类线性投影节点 tensor_size 的全 rank 求和。"""
+            probe_rank_nodes = []
+            for rank in range(tp):
+                rec = _Rec()
+                transformer_pass_aggregated(
+                    rec, phase="x", pass_spans=pass_spans, layers=layers,
+                    hidden_size=h, ffn_size=ffn, tensor_parallel=tp,
+                    pg_name="pg", vocab_size=MODEL.vocab_size,
+                    bytes_per_elem=bpe, num_heads=MODEL.num_heads,
+                    mlp_variant=MODEL.mlp_variant, weight_passes=1,
+                    tensor_parallel_rank=rank)
+                probe_rank_nodes.append(rec.nodes)
+            return sum(
+                ts for nodes in probe_rank_nodes
+                for name, _ops, ts in nodes
+                if any(name.endswith(n) for n in linear_names))
+
+        # 判别 oracle(L22,2026-09-29;取代弱 assertGreater——weight_b
+        # 含激活分量(本组成下 ~25 MB ≫ 8 MB 权重),原断言连权重归零
+        # 都放行,翻倍更不设防)。四类线性节点的 tensor_size = 激活分量
+        # (线性于 token 总数,与 span 切分/kv_length 无关)+ 权重常量
+        # (weight_passes=1 ⇒ 每迭代恰一份,与 span 数/批成员数无关,
+        # A0 已证)。三探针交叉锁定:
+        #   P1|P2:token 总数同 514、span 切分与 kv_length 不同 ⇒ 逐字
+        #     节相等(权重若按 span 注入或随 kv 缩放即破坏);
+        #   P3:激活严格线性 ⇒ W = 2*ts(1tok) - ts(2tok) 精确消去激活
+        #     解出权重常量,必须逐字节 == linear_weight_total(归零/翻
+        #     倍/口径漂移即破坏)。
+        self.assertEqual(
+            _linear_tensor_bytes([(514, 1)]), weight_b,
+            "linear-node tensor_size must not change with span split or "
+            "kv_length at a fixed token total (weight constant is "
+            "span-count invariant)")
+        ts_one_token = _linear_tensor_bytes([(1, 1)])
+        ts_two_tokens = _linear_tensor_bytes([(2, 1)])
+        self.assertEqual(
+            2 * ts_one_token - ts_two_tokens, linear_weight_total,
+            "weight component must equal exactly one weight_passes copy "
+            "of the closed-form per-iteration weight constant "
+            "(layers*(4h^2+2*h*ffn)*bpe, all ranks)")
+        # 权重分量 == 常量(与 span 数/批成员数无关,A0 已证,上面 P1|
+        # P2|P3 三探针已锚定"每迭代恰一次"的精确量级)。
         # 时间域镜像(容差记录:层次 A attention 取 max,层次 B 逐类
         # max 求和;镜像按单 rank 链 × tp 并行取 max 口径,容差 3×)。
         perf = 6 * HARDWARE.peak_perf_tflops * 1e12

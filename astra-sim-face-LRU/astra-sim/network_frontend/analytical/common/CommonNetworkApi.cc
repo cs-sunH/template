@@ -18,10 +18,6 @@ ChunkIdGenerator CommonNetworkApi::chunk_id_generator = {};
 
 CallbackTracker CommonNetworkApi::callback_tracker = {};
 
-int CommonNetworkApi::dims_count = -1;
-
-std::vector<Bandwidth> CommonNetworkApi::bandwidth_per_dim = {};
-
 void CommonNetworkApi::set_event_queue(
     std::shared_ptr<EventQueue> event_queue_ptr) noexcept {
     assert(event_queue_ptr != nullptr);
@@ -110,10 +106,19 @@ timespec_t CommonNetworkApi::sim_get_time() {
     return {NS, astra_sim_time};
 }
 
+bool CommonNetworkApi::backend_in_invoke_context() const {
+    return event_queue == nullptr || event_queue->in_invoke_context();
+}
+
 void CommonNetworkApi::sim_schedule(const timespec_t delta,
                                     void (*fun_ptr)(void*),
                                     void* const fun_arg) {
-    assert(delta.time_res == NS);
+    // (fix (2026-10-01), ported from the face repo) The time_res == NS assert
+    // is gone: time_type_e has a single enumerator, so the branch could never
+    // fire. The time-regression check below was assert-only and compiled out
+    // of Release builds -- a negative delta would then insert into a past
+    // EventQueue bucket that never fires (a silent hang instead of a named
+    // error), so it is now a hard abort (fail-closed in every build type).
     assert(fun_ptr != nullptr);
 
     // calculate absolute event time
@@ -122,7 +127,15 @@ void CommonNetworkApi::sim_schedule(const timespec_t delta,
     const auto event_time_ns = static_cast<EventTime>(event_time);
 
     // schedule the event to the event queue
-    assert(event_time_ns >= event_queue->get_current_time());
+    if (event_time_ns < event_queue->get_current_time()) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule regression: "
+                     "event_time=%llu < current_time=%llu (negative delta?)\n",
+                     static_cast<unsigned long long>(event_time_ns),
+                     static_cast<unsigned long long>(
+                         event_queue->get_current_time()));
+        std::abort();
+    }
     event_queue->schedule_event(event_time_ns, fun_ptr, fun_arg);
 }
 
@@ -132,7 +145,6 @@ CommonNetworkApi::sim_schedule_cancellable(
     void (*fun_ptr)(void*),
     void* const fun_arg,
     const AstraNetworkAPI::ScheduleCancellationCallback cancellation_cleanup) {
-    assert(delta.time_res == NS);
     assert(fun_ptr != nullptr);
     if (next_cancellable_schedule_token_ == 0) {
         std::abort();
@@ -144,7 +156,16 @@ CommonNetworkApi::sim_schedule_cancellable(
     const auto current_time = sim_get_time();
     const auto event_time = current_time.time_val + delta.time_val;
     const auto event_time_ns = static_cast<EventTime>(event_time);
-    assert(event_time_ns >= event_queue->get_current_time());
+    // Release-active regression guard, same rationale as sim_schedule.
+    if (event_time_ns < event_queue->get_current_time()) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule_cancellable "
+                     "regression: event_time=%llu < current_time=%llu\n",
+                     static_cast<unsigned long long>(event_time_ns),
+                     static_cast<unsigned long long>(
+                         event_queue->get_current_time()));
+        std::abort();
+    }
 
     const uint64_t token = next_cancellable_schedule_token_++;
     auto* const context = new CancellableScheduleContext{
@@ -226,6 +247,18 @@ int CommonNetworkApi::sim_recv(void* const buffer,
                                sim_request* const request,
                                void (*msg_handler)(void*),
                                void* const fun_arg) {
+    // Fail closed before any bookkeeping (fix (2026-10-01), ported from the
+    // face repo): a null handler would otherwise be registered in the
+    // CallbackTracker and later invoked (or scheduled) as a null call. No
+    // chunk id is consumed on this path.
+    if (msg_handler == nullptr) {
+        std::fprintf(stderr,
+                     "[Error] (network/analytical) sim_recv requires a "
+                     "non-null msg_handler (tag=%d src=%d count=%llu)\n",
+                     tag, src, static_cast<unsigned long long>(count));
+        std::abort();
+    }
+
     // query chunk id
     const auto dst = sim_comm_get_rank();
     const auto chunk_id =
@@ -267,6 +300,30 @@ int CommonNetworkApi::sim_recv(void* const buffer,
     } else {
         // send() not yet called
         // create new entry and insert callback
+        // Count-mismatch diagnostic (2026-09-30, ported from the joint repo
+        // CommonNetworkApi.cc sim_recv): if a same-(tag,src,dst) entry with
+        // a DIFFERENT count is outstanding, this registration is the wrong
+        // half of a count-mismatched pair: both entries now wait on each
+        // other forever (the send's chunk arrival only completes its own
+        // count key) and the run used to hang silently. Collective tags are
+        // per-stream (stream_id), so a same-key different-count entry cannot
+        // belong to a legitimate concurrent transfer. Diagnostic only: warn
+        // once per logical transfer (chunk 0), then register normally --
+        // the run's outcome is unchanged, the mismatch is just visible.
+        if (chunk_id == 0 && CommonNetworkApi::callback_tracker
+                                 .has_entry_with_mismatched_count(tag, src,
+                                                                  dst,
+                                                                  count)) {
+            std::fprintf(stderr,
+                         "[Warning] (network/analytical) send/recv count "
+                         "mismatch suspected: sim_recv(tag=%d src=%d "
+                         "dst=%d count=%llu) does not match an "
+                         "outstanding entry with the same key but a "
+                         "different count -- the pair will wait on each "
+                         "other forever (silent-hang signature)\n",
+                         tag, src, dst,
+                         static_cast<unsigned long long>(count));
+        }
         auto* const new_entry =
             callback_tracker.create_new_entry(tag, src, dst, count, chunk_id);
         new_entry->register_recv_callback(msg_handler, fun_arg);

@@ -33,9 +33,34 @@ from online.online_scheduler_base import (  # noqa: E402
 
 
 def _delta(seq, tick, arrivals=(), completed=()):
-    """最小合法 StateDelta v1(通过 _validate_schema 的全部强制项)。"""
+    """Outer v2 test delta carrying an empty, valid inner v4 ledger frame."""
+    snapshot_kind = "full" if seq == 0 else "delta"
+    work_ledger = {
+        "producer": "cpp_online",
+        "schema_version": 4,
+        "protocol_version": 4,
+        "bridge_protocol": "bridge-v4-20261011",
+        "work_ledger_schema": "workledger-v4-20261011",
+        "epoch": "propagating-tail-test",
+        "delivery_sequence": seq,
+        "base_watermark": 0,
+        "logical_seq_start": 1,
+        "logical_seq_end": 0,
+        "logical_event_count": 0,
+        "replay_token": f"cpp_online/propagating-tail-test/{seq}",
+        "descriptor_version": 1,
+        "base_state_version": 0,
+        "result_state_version": 0,
+        "snapshot_kind": snapshot_kind,
+        "tick": tick,
+        "descriptor_commits": [],
+        "node_transitions": [],
+        "pipeline_transition_runs": [],
+        "cursor_patches": [],
+        "active_resources": [],
+    }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "delivery_sequence": seq,
         "delivery_epoch": seq,
         "tick": tick,
@@ -51,22 +76,33 @@ def _delta(seq, tick, arrivals=(), completed=()):
         ],
         "completed_nodes": [],
         "affected_ranks": [],
-        "snapshot_handle": {"epoch": seq, "tick": tick},
+        "snapshot_handle": {
+            "epoch": seq, "tick": tick, "kind": "work_ledger_v4"},
+        "ledger_summary": {"injected_unfinished": []},
+        "work_ledger": work_ledger,
     }
 
 
 def _ack(seq):
-    return {"schema_version": 1, "delivery_sequence": seq, "batch_id": seq}
+    return {"schema_version": 2, "delivery_sequence": seq, "batch_id": seq}
 
 
 class _TailScheduler(OnlineSchedulerBase):
     """最小变体:策略无动作(纯基类簿记路径)。"""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # schema-2 批组装面：基类 build_graph_batch 生成 kernel_contract
+        # 需预测配置（生产由 joint 变体 __init__ 注入 load_prediction_
+        # config()；纯基类变体夹具补缺省轴同款配置）。
+        from joint.prediction_config import load_prediction_config
+        self._joint_prediction_config = load_prediction_config()
+
     def run_variant_policy(self, delta):
         pass
 
 
-class _KvTailScheduler(OnlineSchedulerBase):
+class _KvTailScheduler(_TailScheduler):
     """带 kv_actions 的变体:每个含 arrivals 的交付产生一笔 provisional
     KV 动作(驱动 kv_provisional 增长点)。"""
 
@@ -243,11 +279,18 @@ def test_fail_closed_kv_provisional_over_limit():
 
 
 def test_env_limit_override_applies_to_delivery_sources():
-    os.environ["SH_PROPAGATING_TAIL_LIMIT"] = "3"
+    # R5-S5（2026-09-29 face 移植）：外部预置的 SH_PROPAGATING_TAIL_LIMIT
+    # 先保存、结束后原样恢复——旧写法无脑覆盖 + 无条件 del，吞掉运维
+    # 预置的逃生门值并向外泄漏测试污染。
+    saved_limit = os.environ.pop("SH_PROPAGATING_TAIL_LIMIT", None)
     try:
+        os.environ["SH_PROPAGATING_TAIL_LIMIT"] = "3"
         s = _scheduler()
     finally:
-        del os.environ["SH_PROPAGATING_TAIL_LIMIT"]
+        if saved_limit is None:
+            os.environ.pop("SH_PROPAGATING_TAIL_LIMIT", None)
+        else:
+            os.environ["SH_PROPAGATING_TAIL_LIMIT"] = saved_limit
     snapshot = s.propagating_tail.snapshot()
     assert snapshot[_PROPAGATING_TAIL_SOURCE_DELIVERY]["limit"] == 3
     assert snapshot[_PROPAGATING_TAIL_SOURCE_KV]["limit"] == 3

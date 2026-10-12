@@ -3,7 +3,10 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
-// TODO: HardwareResource.hh should be moved to the system layer.
+// Status note (2026-09-26 review, replaces the bare upstream TODO): this
+// header conceptually belongs to the system layer, but it stays in
+// workload/ on purpose so the five sibling repositories remain
+// diff-comparable; move it only as a coordinated cross-repo change.
 
 #ifndef __HARDWARE_RESOURCE_HH__
 #define __HARDWARE_RESOURCE_HH__
@@ -20,7 +23,7 @@ namespace AstraSim {
 class HardwareResource {
   public:
     HardwareResource(
-        uint32_t num_npus, int sys_id = -1,
+        int sys_id = -1,
         ExecutionDriven::ExecutionMode execution_mode =
             ExecutionDriven::ExecutionMode::Static);
     ~HardwareResource() {
@@ -54,9 +57,6 @@ class HardwareResource {
     void occupy(const ExecutionDriven::NodeView& node);
     void release(const ExecutionDriven::NodeView& node);
     bool is_available(const ExecutionDriven::NodeView& node) const;
-    [[nodiscard]] bool tracks_node_ids() const {
-        return retain_node_ids_;
-    }
 
     std::unordered_set<uint64_t> cpu_ops_node;
     std::unordered_set<uint64_t> gpu_ops_node;
@@ -64,7 +64,6 @@ class HardwareResource {
 
     const int sys_id;
 
-    const uint32_t num_npus;
     // Static mode retains exact IDs for legacy destructor diagnostics. Online
     // mode already has NodeStore's fail-closed lifecycle and keeps only exact
     // in-flight counters here, avoiding three hash insert/erase operations per

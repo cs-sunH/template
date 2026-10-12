@@ -1,6 +1,7 @@
 #ifndef CHAKRA_FEEDER_V3_ET_FEEDER_NODE_H
 #define CHAKRA_FEEDER_V3_ET_FEEDER_NODE_H
 
+#include <exception>
 #include <functional>
 #include <memory>
 #include "common.h"
@@ -18,10 +19,6 @@ class ETFeederNode {
   bool has_attr(const std::string& attr_name) const;
 
   const ChakraAttr get_attr_msg(const std::string& attr_name) const;
-  bool get_attr_msg(const std::string& attr_name, const ChakraAttr** attr)
-      const;
-
-  ChakraAttr::ValueCase get_attr_type(const ChakraAttr& attr) const;
 
   template <typename T>
   T get_attr(
@@ -64,22 +61,12 @@ class ETFeederNode {
 
   // old interface
   bool is_cpu_op() const;
-  uint64_t num_ops() const;
-  uint32_t tensor_loc() const;
-  uint64_t tensor_size() const;
-  ChakraProtoMsg::CollectiveCommType comm_type() const;
-  uint32_t comm_priority() const;
   uint64_t comm_size() const;
   uint32_t comm_src() const;
   uint32_t comm_dst() const;
   uint32_t comm_tag() const;
 
   std::string get_inputs_values(const std::string& default_ = "") const;
-  std::string get_inputs_shapes(const std::string& default_ = "") const;
-  std::string get_inputs_types(const std::string& default_ = "") const;
-  std::string get_outputs_values(const std::string& default_ = "") const;
-  std::string get_outputs_shapes(const std::string& default_ = "") const;
-  std::string get_outputs_types(const std::string& default_ = "") const;
 
  private:
   template <typename T>
@@ -136,6 +123,13 @@ class ETFeederNode {
   // have to use this to help later template function access feeder field,
   // without knowing whole def of etfeeder
   [[noreturn]] void complain_attr_not_found(const std::string& attr_name) const;
+
+  // translates conversion failures (std::bad_cast, std::invalid_argument,
+  // ...) into std::runtime_error carrying node id and attribute name, so
+  // callers that only catch runtime_error stay covered
+  [[noreturn]] void complain_attr_type_mismatch(
+      const std::string& attr_name,
+      const std::exception& cause) const;
 
   // ETFeederNode only store minimal thing to reduce memory usage.
   ETFeeder& feeder;
@@ -203,7 +197,13 @@ T ETFeederNode::get_attr(const std::string& attr_name, const T& default_value)
   // option 1 or 3: user provide default value or systemwise default value
   if (this->has_attr(attr_name)) {
     const auto attr = this->get_attr_msg(attr_name);
-    return this->get_attr<T>(attr, DEFAULT_STRICT_TYPING);
+    try {
+      return this->get_attr<T>(attr, DEFAULT_STRICT_TYPING);
+    } catch (const std::exception& e) {
+      // a present-but-mistyped attribute must surface as runtime_error
+      // (the type callers gate on), not escape as a bare bad_cast
+      this->complain_attr_type_mismatch(attr_name, e);
+    }
   }
   return default_value;
 }
@@ -213,7 +213,11 @@ T ETFeederNode::get_attr(const std::string& attr_name) const {
   // option 2: throw complaints
   if (this->has_attr(attr_name)) {
     const auto attr = this->get_attr_msg(attr_name);
-    return this->get_attr<T>(attr, DEFAULT_STRICT_TYPING);
+    try {
+      return this->get_attr<T>(attr, DEFAULT_STRICT_TYPING);
+    } catch (const std::exception& e) {
+      this->complain_attr_type_mismatch(attr_name, e);
+    }
   }
   this->complain_attr_not_found(attr_name);
 }

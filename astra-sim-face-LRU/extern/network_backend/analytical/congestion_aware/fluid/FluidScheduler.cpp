@@ -79,7 +79,13 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
     link_states.reserve(directed_links.size());
     for (size_t index = 0; index < directed_links.size(); ++index) {
         const auto& link = directed_links[index];
-        if (link == nullptr || link->get_id() != index || link->get_bandwidth_Bpns() <= 0) {
+        // isfinite closes the second bandwidth entry point at consumption
+        // time: a NaN/+inf capacity would pass the `<= 0` comparison and
+        // then never constrain recalculate_dirty_rates' min-share
+        // computation (std::min with NaN always keeps the other operand).
+        if (link == nullptr || link->get_id() != index ||
+            !std::isfinite(link->get_bandwidth_Bpns()) ||
+            link->get_bandwidth_Bpns() <= 0) {
             std::cerr << "[Error] (network/analytical/congestion_aware) invalid directed LinkId table"
                       << std::endl;
             std::exit(-1);
@@ -89,6 +95,23 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
 }
 
 FluidScheduler::~FluidScheduler() noexcept {
+    // A PropagatingTail flow owns a pending non-cancellable tail event whose
+    // callback context is the raw &flow borrowed from flows_by_id
+    // (schedule_tail_arrival / tail_arrival_callback). This destructor does
+    // not drain it, so destroying the scheduler with a tail in flight arms a
+    // UAF: a later proceed() would dereference freed memory. Normal shutdown
+    // never gets here (a pending tail event keeps finished() false), so any
+    // PropagatingTail remaining now is a teardown-order bug -- fail closed
+    // instead of leaving the latent UAF behind (fix 2026-09-28).
+    for (const auto& entry : flows_by_id) {
+        if (entry.second.state == FluidFlowState::PropagatingTail) {
+            std::cerr << "[Error] (network/analytical/congestion_aware) "
+                      << "FluidScheduler destroyed with an in-flight "
+                      << "propagating tail (flow id " << entry.first << ")"
+                      << std::endl;
+            std::exit(-1);
+        }
+    }
     cancel_scheduled_wakeup();
     link_observer_release();
 }
@@ -190,7 +213,8 @@ void FluidScheduler::mark_dirty(const FlowId flow_id) noexcept {
 }
 
 void FluidScheduler::advance_dirty_flows(const EventTime now) noexcept {
-    // WP6 link observer (CPP_SPEC §D): integrate the just-ended constant
+    // WP6 link observer (contract: repo README §3 "SLO 观测层" paragraph):
+    // integrate the just-ended constant
     // interval with the pre-change rates/memberships. advance_dirty_flows
     // is the single choke point both mutation paths pass through before
     // touching any rate or membership, so the observer always sees the
@@ -430,6 +454,10 @@ void FluidScheduler::cancel_scheduled_wakeup() noexcept {
         static_cast<void>(event_queue->cancel_event(scheduled_wakeup_event));
     }
     scheduled_wakeup_event.reset();
+    // Keep the invariant "no live event => no scheduled time"; a stale
+    // timestamp without a live event would make schedule_next_wakeup()
+    // early-return forever and starve the remaining flows.
+    scheduled_wakeup_time.reset();
 }
 
 void FluidScheduler::schedule_next_wakeup() noexcept {
@@ -441,7 +469,8 @@ void FluidScheduler::schedule_next_wakeup() noexcept {
     }
 
     const auto next_time = completion_heap.top().predicted_finish_time;
-    if (scheduled_wakeup_time.has_value() && next_time >= scheduled_wakeup_time.value()) {
+    if (scheduled_wakeup_event.valid() && scheduled_wakeup_time.has_value()
+        && next_time >= scheduled_wakeup_time.value()) {
         return;
     }
 
@@ -490,6 +519,12 @@ void FluidScheduler::schedule_tail_arrival(FluidFlow& flow, const EventTime now)
 
 void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
     if (generation != wakeup_generation) {
+        if (!scheduled_wakeup_event.valid()) {
+            // Stale fire with no live wakeup left: without recovery the
+            // remaining flows would never be scheduled again.
+            scheduled_wakeup_time.reset();
+            schedule_next_wakeup();
+        }
         return;
     }
     // This wakeup was popped before its callback began; it cannot be
@@ -609,7 +644,8 @@ uint64_t FluidScheduler::get_active_route_memberships() const noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// WP6 NoC link observer (read-only side-band; CPP_SPEC §D).
+// WP6 NoC link observer (read-only side-band; contract: repo README §3
+// "SLO 观测层（B2 起，WP6/WP8/WP9-C++）" paragraph, link_bucket/link_total).
 // ---------------------------------------------------------------------------
 
 void FluidScheduler::enable_link_observer(const uint64_t link_bucket_ns) noexcept {

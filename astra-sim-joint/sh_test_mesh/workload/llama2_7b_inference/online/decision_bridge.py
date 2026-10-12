@@ -25,14 +25,19 @@ request,C++ 不回 response 不连续发);
 超时与崩溃检测在 C++ 侧(C++ poll 超时/EOF/EPIPE 即 abort)。
 """
 
+import gzip
 import json
 import os
 import sys
 import time
+import traceback
 
-from bridge_request_journal import REQUEST_JOURNAL_NAME
+from bridge_request_journal import (
+    REQUEST_JOURNAL_NAME,
+    WORK_LEDGER_REPLAY_SIDECAR_NAME,
+)
 
-SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除)
+SCHEMA_VERSION = 2  # GraphBatch / bridge wire schema v2 (2026-10-05)
 
 _REQUEST_PREFIX = "request_"
 _RESPONSE_PREFIX = "response_"
@@ -40,6 +45,11 @@ _ACK_PREFIX = "commit_ack_"
 _JSON_SUFFIX = ".json"
 _PROCESSING_STATS_PARTIAL_NAME = ".bridge_processing_stats.partial.jsonl"
 _JOURNAL_FLUSH_BATCH = 256
+# W5(2026-09-29, journal 重放保真)：work_ledger 字段从 journal 记录剥离
+# 后由本侧车承载重放源（gzip level=1——节点 churn 使逐交付 payload 达
+# MB 级（W11 已知体量项），重复结构压缩比 ~10-20x；重放端 gzip 流式逐
+# 行读回，语义与未压缩逐行等价）。
+_WORK_LEDGER_SIDECAR_GZIP_LEVEL = 1
 
 _RESPONSE_FIELDS = (
     "nodes",
@@ -49,6 +59,7 @@ _RESPONSE_FIELDS = (
     "kv_actions",
     # 阶段 5 §8.2:touched ranks 集合(缺省 [];online scheduler 总是显式给出)。
     "touched_ranks",
+    "pipeline_descriptors",
 )
 
 
@@ -132,12 +143,20 @@ class BridgeServer:
     时被调用(provisional 账本 finalize 的挂接点,阶段 3/4 使用)。
     """
 
-    def __init__(self, bridge_dir, *, canonical_request_producer=False):
+    def __init__(self, bridge_dir, *, canonical_request_producer=False,
+                 work_ledger_bytes_source=None, timing_sink=None,
+                 timing_row_source=None):
         self.bridge_dir = bridge_dir
         # The official C++ producer writes payload.dump() with neither
         # surrounding whitespace nor a trailing newline.  Only that trusted
         # path may bypass the fallback's whole-body normalization scan.
         self._canonical_request_producer = canonical_request_producer
+        self._work_ledger_bytes_source = work_ledger_bytes_source
+        if (self._canonical_request_producer
+                and not callable(self._work_ledger_bytes_source)):
+            raise ValueError(
+                "canonical request producer requires the accepted "
+                "work-ledger canonical-bytes source")
         self.req_notify = os.path.join(bridge_dir, "req_notify.fifo")
         self.resp_notify = os.path.join(bridge_dir, "resp_notify.fifo")
         # 协议严格单调,每条流只保留下一个序号,不保留全历史 seq 集。
@@ -155,11 +174,29 @@ class BridgeServer:
         # 原子 JSON 写次数(历史上与 os.fsync 1:1;B4 2026-08-23 去除 fsync
         # 后计数面保留为原子写次数,与 C++ 侧 write_file_atomic 的计数口径
         # 一致,计数等价对拍要求)。
+        # 墙时分段账本(2026-10-05 埋点):_handle_request 三段
+        # (读+解析 / handler 执行 / response dumps+原子写)的累计墙时——
+        # 逐 request 行字段见 _processing_stats_stream;累计值入本账本,
+        # run 末由 online_service 汇总行消费。perf_counter_ns 与
+        # processing_ns 的 monotonic_ns 同基数(CLOCK_MONOTONIC),分段和
+        # 与 processing_ns 可比但不必相等(journal 等审计段不入分段)。
+        self._timing_sink = timing_sink
+        # 可选 callable:返回本 request 对应交付的调度侧分段行(由
+        # online_service 的扇出 sink 暂存),桥接层在 response 写完后
+        # 取走与桥三分段拼接成 timing.jsonl 行;None = 不拼接。
+        self._timing_row_source = timing_row_source
         self._stats = {
             "gil_wait_ns": 0,
             "channel_bytes": 0,
             "forced_flush_count": 0,
             "handler_calls": 0,
+            "read_parse_ns": 0,
+            "handler_ns": 0,
+            "write_ns": 0,
+            "journal_encode_ns": 0,
+            "journal_compress_write_ns": 0,
+            "journal_write_ns": 0,
+            "journal_total_ns": 0,
         }
         # 两条全程顺序流均不驻留 per-delivery 容器。request journal 复用
         # C++ 已写出的紧凑 JSON 字节;每 256 行 flush 后批量删除散装 request,
@@ -167,6 +204,18 @@ class BridgeServer:
         self._request_journal = open(
             os.path.join(bridge_dir, REQUEST_JOURNAL_NAME),
             "w", encoding="utf-8", buffering=1024 * 1024)
+        # W5(2026-09-29)：work_ledger 重放源侧车——canonical 生产路径
+        # （官方 C++ 对端）恒开；fixture 宽容路径（外部 producer，请求
+        # 可能已带原生 work_ledger 或根本无该字段）不开（journal 不剥
+        # 离，无重放缺口）。gzip 文本流：重放端按行读回（与 jsonl 同
+        # 语义），inner envelope 直接写 accepted canonical bytes，崩溃截断
+        # 在行边界被 json.loads 拒绝（fail-closed）。
+        self._work_ledger_sidecar = None
+        if self._canonical_request_producer:
+            self._work_ledger_sidecar = gzip.open(
+                os.path.join(bridge_dir, WORK_LEDGER_REPLAY_SIDECAR_NAME),
+                "wb",
+                compresslevel=_WORK_LEDGER_SIDECAR_GZIP_LEVEL)
         self._pending_request_paths = []
         self._processing_stats_path = os.path.join(
             bridge_dir, _PROCESSING_STATS_PARTIAL_NAME)
@@ -177,8 +226,8 @@ class BridgeServer:
     # ------------------------------------------------------------- helpers --
 
     def stats(self):
-        """阶段 6 §9.1:桥接通道分项汇总(Python 视角)。含每 request 服务
-        时间行列表(per_request),供 online_stats.jsonl 合并。"""
+        """阶段 6 §9.1:桥接通道分项汇总(Python 视角)。每 request 服务
+        时间行经 ``per_request_stats()`` 流式读取。"""
         return dict(self._stats)
 
     def per_request_stats(self):
@@ -218,6 +267,9 @@ class BridgeServer:
         if not self._request_journal.closed:
             self._flush_request_journal()
             self._request_journal.close()
+        if self._work_ledger_sidecar is not None and (
+                not self._work_ledger_sidecar.closed):
+            self._work_ledger_sidecar.close()
         if not self._processing_stats_stream.closed:
             self._processing_stats_stream.close()
 
@@ -238,6 +290,10 @@ class BridgeServer:
         """
         reqs = []
         acks = []
+        # (2026-09-29 face 移植)原逐项 `if not sequences.contains(probe)`
+        # 过滤已删:probe 自 next_seq 起,contains(p) == (p < next_seq) 恒
+        # 假,过滤恒真(no-op 防御)。listdir 回退路径的 contains 过滤保留
+        # (那里扫的是全目录,已处理未回收的旧 seq 须被剔除)。
         req_probe = self._request_sequences.next_seq
         while True:
             probe = os.path.join(
@@ -245,8 +301,7 @@ class BridgeServer:
                 _REQUEST_PREFIX + str(req_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if not self._request_sequences.contains(req_probe):
-                reqs.append(req_probe)
+            reqs.append(req_probe)
             req_probe += 1
         ack_probe = self._ack_sequences.next_seq
         while True:
@@ -255,8 +310,7 @@ class BridgeServer:
                 _ACK_PREFIX + str(ack_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if not self._ack_sequences.contains(ack_probe):
-                acks.append(ack_probe)
+            acks.append(ack_probe)
             ack_probe += 1
         if reqs or acks:
             return sorted(reqs), sorted(acks)
@@ -301,21 +355,90 @@ class BridgeServer:
         t0 = time.monotonic_ns()
         path = os.path.join(self.bridge_dir, _REQUEST_PREFIX + str(seq) + _JSON_SUFFIX)
         self._request_sequences.validate_new(seq)
+        # 墙时分段(2026-10-05 埋点,perf_counter_ns):读文件 + JSON 解析。
+        # v4 N 主线(官方生产路径):原始字节一次读入,原生结构扫描定位
+        # 顶层 work_ledger 成员——outer 拼接字节交给 json.loads(小),巨
+        # 大子对象原始字节直通原生接收器与 journal 侧车;Python 不再解
+        # 析/重建 work_ledger DTO。fixture 宽容路径(外部 producer)保持
+        # 整帧 json.loads(输入不带该形态契约)。
+        _read_parse_t0 = time.perf_counter_ns()
         try:
-            with open(path, "r", encoding="utf-8") as source:
+            with open(path, "rb") as source:
                 raw_request = source.read()
-            request = json.loads(raw_request)
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
             raise BridgeError("bad request file {}: {}".format(path, exc)) from exc
+        work_ledger_segment = None
+        journal_ledger_note = None
+        if self._canonical_request_producer:
+            from joint.native_ledger import scan_request
+            try:
+                outer_bytes, work_ledger_segment = scan_request(raw_request)
+                request = json.loads(outer_bytes)
+            except Exception as exc:  # noqa: BLE001 -- native scan fail-closed
+                raise BridgeError(
+                    "request {} structural scan failed: {}".format(
+                        seq, exc)) from exc
+        else:
+            try:
+                request = json.loads(raw_request)
+            except ValueError as exc:
+                raise BridgeError(
+                    "bad request file {}: {}".format(path, exc)) from exc
+        _read_parse_ns = time.perf_counter_ns() - _read_parse_t0
         if request.get("schema_version") != SCHEMA_VERSION:
             raise BridgeError(
                 "request {} schema_version {!r} != {}".format(
                     seq, request.get("schema_version"), SCHEMA_VERSION))
         self._stats["channel_bytes"] += os.path.getsize(path)
-        response = handler(request)
+        # 墙时分段:handler 执行(= 调度侧 on_decision_batch 全程)。
+        _handler_t0 = time.perf_counter_ns()
+        if work_ledger_segment is not None:
+            response = handler(request, work_ledger_segment)
+        else:
+            response = handler(request)
+        _handler_ns = time.perf_counter_ns() - _handler_t0
         self._stats["handler_calls"] += 1
+        work_ledger_canonical = None
+        work_ledger_note = None
+        if self._canonical_request_producer:
+            # v4 N 主线:官方路径的 work_ledger 以原始 segment 到达(或
+            # dict 形态的历史 canonical 消费面)。在场断言按交付形态取
+            # 相应证据;accepted 字节 + journal 摘要注记(snapshot_kind/
+            # event_watermark)由调度侧回读源一并给出。
+            has_segment = work_ledger_segment is not None
+            has_dict_child = isinstance(request, dict) and isinstance(
+                request.get("work_ledger"), dict)
+            if not has_segment and not has_dict_child:
+                raise BridgeError(
+                    "canonical request {} lacks an object work_ledger"
+                    .format(seq))
+            try:
+                sourced = self._work_ledger_bytes_source(seq)
+            except Exception as exc:
+                raise BridgeError(
+                    "cannot obtain accepted canonical work_ledger bytes for "
+                    "request {}: {}".format(seq, exc)) from exc
+            if isinstance(sourced, tuple):
+                work_ledger_canonical, work_ledger_note = sourced
+            else:
+                work_ledger_canonical = sourced
+                work_ledger_note = None
+            if (not isinstance(work_ledger_canonical, bytes)
+                    or not work_ledger_canonical.startswith(b"{")
+                    or not work_ledger_canonical.endswith(b"}")):
+                raise BridgeError(
+                    "request {} has no accepted canonical "
+                    "work_ledger bytes".format(seq))
         if not isinstance(response, dict):
             raise BridgeError("handler returned non-dict for seq {}".format(seq))
+        if "pipeline_descriptors" not in response or "kernel_contract" not in response:
+            raise BridgeError(
+                "handler response for seq {} lacks required schema-v2 "
+                "pipeline_descriptors/kernel_contract".format(seq))
+        if not isinstance(response["pipeline_descriptors"], list):
+            raise BridgeError("pipeline_descriptors must be a list")
+        if not isinstance(response["kernel_contract"], dict):
+            raise BridgeError("kernel_contract must be an object")
         response.setdefault("schema_version", SCHEMA_VERSION)
         response.setdefault("batch_id", 0)
         response.setdefault("source_delivery_sequence", seq)
@@ -327,30 +450,134 @@ class BridgeServer:
             response.setdefault(field, [])
         response_path = os.path.join(
             self.bridge_dir, _RESPONSE_PREFIX + str(seq) + _JSON_SUFFIX)
+        # 墙时分段:response json.dumps + 原子写(tmp + os.replace)。
+        _write_t0 = time.perf_counter_ns()
         _write_json_atomic(response_path, response)
+        _write_ns = time.perf_counter_ns() - _write_t0
         self._stats["forced_flush_count"] += 1
         self._stats["channel_bytes"] += os.path.getsize(response_path)
+        self._stats["read_parse_ns"] += _read_parse_ns
+        self._stats["handler_ns"] += _handler_ns
+        self._stats["write_ns"] += _write_ns
         # processing_ns 保持原口径:读 request 到 response 原子发布;journal
         # 与内部统计流的审计开销不混入桥服务时间。
         processing_row = {
             "seq": seq,
             "processing_ns": time.monotonic_ns() - t0,
+            "read_parse_ns": _read_parse_ns,
+            "handler_ns": _handler_ns,
+            "write_ns": _write_ns,
         }
         self._processing_stats_stream.write(json.dumps(
             processing_row, separators=(",", ":")) + "\n")
+        # 逐行 flush(§10.3 治理):被杀/SIGTERM 时段落行不丢。
+        self._processing_stats_stream.flush()
+        _journal_t0 = time.perf_counter_ns()
+        _journal_encode_t0 = _journal_t0
         if self._canonical_request_producer:
-            # Reuse the exact C++ request bytes and append the JSONL delimiter
-            # separately: no O(request-bytes) strip/newline scan and no
-            # raw_record + "\\n" full-size temporary string.
-            self._request_journal.write(raw_request)
-            self._request_journal.write("\n")
+            # W1(2026-09-29)：journal 有界化——work_ledger 顶层字段从
+            # journal 记录中剥离（替换为仅含 snapshot_kind/event_watermark
+            # 的一行摘要），决不对在飞通道动手（Python 决策应用的是完整
+            # request dict，账本照常入账）。原因：状态派生式账本的逐交付
+            # 增量使请求字节膨胀数个量级（2s 冒烟即 ~24GB journal）。
+            # W5(2026-09-29, 重放保真红线)：账本已接入正式计价
+            # （LedgerWorldSource），剥离的字段改由
+            # request_journal_work_ledger.jsonl.gz 侧车承载重放源——
+            # probe 前缀重放经 iter_request_records(
+            # attach_work_ledger=True) 逐交付还原 work_ledger，得到与
+            # 原跑相同的账本状态（等价性测试 = test_journal_replay_
+            # fidelity.py）。
+            journal_record = request
+            has_ledger_payload = (
+                work_ledger_segment is not None
+                or (isinstance(request, dict)
+                    and "work_ledger" in request))
+            if isinstance(request, dict) and "work_ledger" in request:
+                journal_record = dict(request)
+                ledger = journal_record.pop("work_ledger")
+                if isinstance(ledger, dict):
+                    journal_record["work_ledger_journal_stripped"] = {
+                        "snapshot_kind": ledger.get("snapshot_kind"),
+                        "event_watermark": ledger.get("event_watermark"),
+                        "sidecar": WORK_LEDGER_REPLAY_SIDECAR_NAME,
+                    }
+            elif work_ledger_segment is not None:
+                # segment 路径:outer 已不含子对象;摘要注记来自调度侧
+                # 接收回执(注记缺席 = 协议装配缺失,fail-closed)。
+                if not isinstance(work_ledger_note, dict):
+                    raise BridgeError(
+                        "canonical request {} has no work_ledger journal "
+                        "note".format(seq))
+                journal_record = dict(request)
+                journal_record["work_ledger_journal_stripped"] = {
+                    "snapshot_kind": work_ledger_note.get("snapshot_kind"),
+                    "event_watermark": work_ledger_note.get("event_watermark"),
+                    "sidecar": WORK_LEDGER_REPLAY_SIDECAR_NAME,
+                }
+            journal_line = json.dumps(
+                journal_record, separators=(",", ":")) + "\n"
+            _journal_encode_ns = time.perf_counter_ns() - _journal_encode_t0
+            if has_ledger_payload:
+                if self._work_ledger_sidecar is None:
+                    raise BridgeError(
+                        "canonical work_ledger replay sidecar is unavailable")
+                _wrapper_encode_t0 = time.perf_counter_ns()
+                prefix = json.dumps({
+                    "delivery_sequence": seq,
+                    "tick": request.get("tick"),
+                }, separators=(",", ":")).encode("utf-8")[:-1]
+                _journal_encode_ns += (
+                    time.perf_counter_ns() - _wrapper_encode_t0)
+            _journal_write_t0 = time.perf_counter_ns()
+            if has_ledger_payload:
+                _journal_compress_t0 = time.perf_counter_ns()
+                self._work_ledger_sidecar.write(prefix + b',"work_ledger":')
+                self._work_ledger_sidecar.write(work_ledger_canonical)
+                self._work_ledger_sidecar.write(b"}\n")
+                _journal_compress_write_ns = (
+                    time.perf_counter_ns() - _journal_compress_t0)
+            else:
+                _journal_compress_write_ns = 0
+            self._request_journal.write(journal_line)
+            _journal_write_ns = time.perf_counter_ns() - _journal_write_t0
         else:
             # Fixtures and external producers retain the original tolerant
             # normalization contract, including pretty/multiline JSON.
-            raw_record = raw_request.strip()
+            raw_record = raw_request.strip().decode("utf-8")
             if "\n" in raw_record or "\r" in raw_record:
                 raw_record = json.dumps(request, separators=(",", ":"))
-            self._request_journal.write(raw_record + "\n")
+            journal_line = raw_record + "\n"
+            _journal_encode_ns = time.perf_counter_ns() - _journal_encode_t0
+            _journal_write_t0 = time.perf_counter_ns()
+            self._request_journal.write(journal_line)
+            _journal_compress_write_ns = 0
+            _journal_write_ns = time.perf_counter_ns() - _journal_write_t0
+        _journal_total_ns = time.perf_counter_ns() - _journal_t0
+        self._stats["journal_encode_ns"] += _journal_encode_ns
+        self._stats["journal_compress_write_ns"] += _journal_compress_write_ns
+        self._stats["journal_write_ns"] += _journal_write_ns
+        self._stats["journal_total_ns"] += _journal_total_ns
+        if self._timing_sink is not None:
+            # Journal total is inclusive of row encoding and both journal
+            # streams; gzip compression is included in compress/write time.
+            timing_row = {
+                "delivery_sequence": seq,
+                "seq": seq,
+                "read_parse_ns": _read_parse_ns,
+                "handler_ns": _handler_ns,
+                "write_ns": _write_ns,
+                "journal_encode_ns": _journal_encode_ns,
+                "journal_compress_write_ns": _journal_compress_write_ns,
+                "journal_write_ns": _journal_write_ns,
+                "journal_total_ns": _journal_total_ns,
+            }
+            scheduler_row = (self._timing_row_source()
+                             if self._timing_row_source is not None else None)
+            if scheduler_row:
+                merged = dict(scheduler_row)
+                merged.update(timing_row)
+                timing_row = merged
+            self._timing_sink(timing_row)
         self._pending_request_paths.append(path)
         if len(self._pending_request_paths) >= _JOURNAL_FLUSH_BATCH:
             self._flush_request_journal()
@@ -395,6 +622,7 @@ class BridgeServer:
             "kv_actions": [],
             "future_alarms": [],
             "touched_ranks": [],
+            "pipeline_descriptors": [],
             "error": message,
         }
         try:
@@ -443,6 +671,17 @@ class BridgeServer:
                         self._handle_ack(ack_seq, on_commit_ack)
                     except BridgeError as exc:
                         self._fail(ack_seq, "ack {}: {}".format(ack_seq, exc))
+                    except Exception:
+                        # (2026-10-01 R2 审查修复) 与 request 通道对称的
+                        # 兜底：on_commit_ack 的协议校验可抛 ValueError/
+                        # RuntimeError 等（非 BridgeError），旧实现让异常
+                        # 裸穿 serve_forever——无留痕、无 error response，
+                        # C++ 侧只能等 poll 超时/EOF 才中止。此处留
+                        # traceback 后走 _fail（fail-closed 退出 + EOF 触
+                        # 发 C++ abort，与 BridgeError 臂同通道）。
+                        traceback.print_exc()
+                        self._fail(ack_seq, "ack {}: unhandled "
+                                            "exception".format(ack_seq))
                 for req_seq in reqs:
                     try:
                         self._handle_request(req_seq, handler)

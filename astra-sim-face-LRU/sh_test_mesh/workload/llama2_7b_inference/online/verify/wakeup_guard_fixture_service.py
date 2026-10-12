@@ -173,9 +173,9 @@ def main(argv=None) -> int:
 
     server = BridgeServer(args.bridge_dir)
     handler = WakeupGuardHandler(args.scenario)
-    result = server.serve_forever(handler)
-    if result != 0:
-        raise RuntimeError("serve_forever returned {}".format(result))
+    server.serve_forever(handler)
+    # (2026-10-01 死分支清理)serve_forever 仅在 EOF 时返回 0,错误路径
+    # 均经 _fail/sys.exit 非零退出——"非零返回值"分支不可达,已删。
     print("[fixture] run end: EOF from C++ (deliveries={})".format(
         handler.delivery_count), flush=True)
     return 0

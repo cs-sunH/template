@@ -20,7 +20,6 @@ class CommunicatorGroup;
 class DataSet : public Callable, public StreamStat {
   public:
     DataSet(int total_streams);
-    DataSet(int total_streams, Tick creation_tick);
     ~DataSet();
     void set_notifier(Callable* layer, EventType event);
     /// Keep the communicator definition used to build this collective alive
@@ -30,16 +29,12 @@ class DataSet : public Callable, public StreamStat {
         std::shared_ptr<CommunicatorGroup> communicator_group);
     void notify_stream_finished(StreamStat* data);
     void call(EventType event, CallData* data);
-    bool is_finished();
 
     static int id_auto_increment;
     int my_id;
     int total_streams;
     int finished_streams;
-    bool finished;
     bool active;
-    Tick finish_tick;
-    Tick creation_tick;
     std::pair<Callable*, EventType>* notifier;
 
   private:

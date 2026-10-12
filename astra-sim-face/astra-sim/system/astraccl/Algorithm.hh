@@ -15,22 +15,20 @@ namespace AstraSim {
 
 class Algorithm : public Callable {
   public:
-    enum class Name { Ring = 0, DoubleBinaryTree, AllToAll, HalvingDoubling };
-
-    Algorithm();
     virtual ~Algorithm() = default;
     virtual void run(EventType event, CallData* data) = 0;
     virtual void init(BaseStream* stream);
     virtual void call(EventType event, CallData* data);
     virtual void exit();
 
-    int id;
-    BaseStream* stream;
-    LogicalTopology* logical_topo;
-    uint64_t data_size;
-    uint64_t final_data_size;
-    ComType comType;
-    bool enabled;
+    // Default-initialized (2026-09-30): subclasses that never use a member
+    // (e.g. custom algorithms never touch logical_topo) used to leave it as
+    // an uninitialized wild pointer; nullptr/0/None is the honest value.
+    BaseStream* stream = nullptr;
+    LogicalTopology* logical_topo = nullptr;
+    uint64_t data_size = 0;
+    uint64_t final_data_size = 0;
+    ComType comType = ComType::None;
 };
 
 }  // namespace AstraSim

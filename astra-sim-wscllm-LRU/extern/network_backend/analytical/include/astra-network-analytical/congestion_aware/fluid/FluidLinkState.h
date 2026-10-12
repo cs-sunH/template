@@ -17,7 +17,8 @@ struct ActiveFlowRef {
 };
 
 struct FluidLinkState {
-    LinkId link_id;
+    // （2026-10-01 清除）原 `LinkId link_id` 字段写后不读——
+    // FluidScheduler::link_states 的 vector 下标就是全处的链路身份。
     NetworkAnalytical::Bandwidth capacity_Bpns;
     std::vector<ActiveFlowRef> active_flows;
 };

@@ -66,10 +66,20 @@ cat > "${WORK}/old_py.py" <<'EOF'
 import os, sys, time
 F = sys.argv[1]
 deadline = time.time() + float(sys.argv[2])
+MARKER = sys.argv[3]
+ready = False
 epipes = 0
 while time.time() < deadline:
     try:
         fd = os.open(F, os.O_WRONLY)
+        if not ready:
+            # L21(2026-09-29 审查修复):阻塞式 O_WRONLY open 返回即代表读端
+            # 已与本写端配对;就绪标记只能在这之后落盘。读端侧据此轮询就绪
+            # 再开跑,消除固定 sleep 0.2 的握手竞态(写端尚未起跑时读端首轮
+            # POLLHUP+read==0 会被误判成变体 1 签名 => 假阳性 PASS)。
+            with open(MARKER, "w") as m:
+                m.write("ready\n")
+            ready = True
         try:
             os.write(fd, b"\n")
         finally:
@@ -82,11 +92,30 @@ EOF
 gcc -O2 -o "${WORK}/old_cpp" "${WORK}/old_cpp.c" || { echo "gcc failed" >&2; exit 2; }
 mkfifo "${WORK}/resp.fifo"
 
-# 读端就绪后再启动写端(第一个交换的配对);写端按预算秒数运行。
+# L21(2026-09-29 审查修复):读端改为轮询写端就绪标记(带超时)后再开跑,
+# 替代固定 sleep 0.2——慢机上写端尚未完成首个 O_WRONLY open 时就启动
+# 读端,首轮 poll 即得 POLLHUP+read==0(写端缺席,并非"写端 1->0 关闭
+# 转移"),会被误判成变体 1 签名 => 假阳性 PASS。写端在阻塞 open 配对成功
+# 后落就绪标记(见上方 old_py.py),轮询超时上限 = min(BUDGET, 30)s。
+READY="${WORK}/py_ready"
+rm -f "${READY}"
 timeout "${BUDGET}" python3 "${WORK}/old_py.py" "${WORK}/resp.fifo" "${BUDGET}" \
+    "${READY}" \
     > "${WORK}/py.out" 2>&1 &
 PY_PID=$!
-sleep 0.2
+READY_DEADLINE=$(( $(date +%s) + ( BUDGET < 30 ? BUDGET : 30 ) ))
+until [ -e "${READY}" ]; do
+  if ! kill -0 "${PY_PID}" 2>/dev/null; then
+    echo "[bridge_race_stress_repro] writer exited before ready (see ${WORK}/py.out)" >&2
+    cat "${WORK}/py.out" >&2 || true
+    exit 2
+  fi
+  if (( $(date +%s) > READY_DEADLINE )); then
+    echo "[bridge_race_stress_repro] writer not ready within $(( BUDGET < 30 ? BUDGET : 30 ))s (see ${WORK}/py.out)" >&2
+    exit 2
+  fi
+  sleep 0.05
+done
 
 timeout "${BUDGET}" "${WORK}/old_cpp" "${WORK}/resp.fifo" 100000000 \
     > "${WORK}/cpp.out" 2>&1

@@ -12,7 +12,6 @@ namespace AstraSim {
 
 class AstraNetworkAPI {
   public:
-    enum class BackendType { NotSpecified = 0, Garnet, NS3, Analytical };
 
     /**
      * Opaque identity for one opt-in cancellable backend alarm.
@@ -80,6 +79,11 @@ class AstraNetworkAPI {
      * normally and report an invalid handle.  The cancellation cleanup cannot
      * run on that path because the legacy backend still owns the alarm payload
      * until it invokes fun_ptr.
+     *
+     * Test-only fallback: the base body is unreachable in production (the
+     * only production backend, CommonNetworkApi, overrides this); it exists
+     * for legacy fakes such as FakeLegacyNetworkApi in
+     * alarm_cancellation_test.cc.
      */
     [[nodiscard]] virtual CancellableScheduleHandle
     sim_schedule_cancellable(timespec_t delta,
@@ -92,15 +96,19 @@ class AstraNetworkAPI {
     }
 
     /// Consume an opt-in alarm handle.  Legacy backends have nothing to cancel.
+    /// Test-only fallback: production always goes through the CommonNetworkApi
+    /// override; the base body only serves legacy fakes (see
+    /// alarm_cancellation_test.cc Case D).
     [[nodiscard]] virtual bool sim_cancel_event(
         CancellableScheduleHandle& handle) {
         handle.reset();
         return false;
     }
 
-    virtual BackendType get_backend_type() {
-        return BackendType::NotSpecified;
-    };
+    // (2026-09-28 C1: get_backend_type()/BackendType were removed -- the
+    // only conceivable production value, upstream's Garnet backend, is
+    // unreachable in this repository and the only consumer was a
+    // always-true comparison in QueueLevelHandler.)
 
     virtual int sim_comm_get_rank() {
         return rank;
@@ -108,17 +116,12 @@ class AstraNetworkAPI {
 
     virtual timespec_t sim_get_time() = 0;
 
-    virtual double get_BW_at_dimension(int dim) {
-        return -1;
-    };
+    virtual double get_BW_at_dimension(int dim) = 0;
 
-    // Notifies that the workload for this rank has finished. 
-    // Note that we have one network handler per rank. 
-    // Therefore, when implementing this function, the network handler must 
-    // find a way to concur that all ranks have finished their workloads.
-    virtual void sim_notify_finished(){
-        return;
-    }
+    // Removed (2026-09-27): upstream's sim_notify_finished() had its only
+    // caller in the retired Workload end-of-run side effect; in this
+    // repository final-end authority is the ServiceCoordinator and no
+    // backend overrides it.
 
     int rank;
 

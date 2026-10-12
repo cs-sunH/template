@@ -10,6 +10,7 @@ Implementation (方案 §4 步骤 1-6).
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -28,8 +29,21 @@ bool completed_nodes_exact_from_env() {
     if (std::strcmp(mode, "exact") == 0) {
         return true;
     }
-    throw std::runtime_error(
-        "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) or 'exact'");
+    // Unified error channel (2026-09-30, ported from the joint repo
+    // DecisionMailbox.cc completed_nodes_exact_from_env): this runs from
+    // the CompletedFactAccumulator constructor deep inside main's stack; a
+    // thrown runtime_error had no catcher and terminated the process
+    // through std::terminate, bypassing the binary's uniform [Error]
+    // channel. Fail through the channel instead. (2026-10-01: the older
+    // L9 diagnostic line was removed -- the unified channel line carries
+    // the same value and remedy, and the stale "stays off only if unset"
+    // wording contradicted the exit that immediately follows.)
+    std::fprintf(stderr,
+                 "[Error] (execution_driven/online) "
+                 "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) "
+                 "or 'exact', got: %s\n",
+                 mode);
+    std::exit(EXIT_FAILURE);
 }
 
 }  // namespace

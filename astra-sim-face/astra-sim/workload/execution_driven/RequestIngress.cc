@@ -72,8 +72,10 @@ void RequestIngress::drain_commands() {
     for (auto& cmd : batch) {
         switch (cmd.kind) {
             case IngressCommandKind::Submit: {
-                // arrival alarms must be strictly future (EventQueue :33);
-                // a late request is clamped to the next tick (arrives now)
+                // arrival alarms must be strictly future (the EventQueue
+                // contract: schedule_event asserts event_time >= current
+                // time, debug builds only); a late request is clamped to the
+                // next tick (arrives now)
                 const auto current = eq_->get_current_time();
                 const auto arrival = cmd.envelope.arrival_world_ns;
                 const EventTime alarm_time =
@@ -92,15 +94,27 @@ void RequestIngress::drain_commands() {
                     if (cmd.envelope.source == RequestSource::StaticCsv) {
                         if (arrival == 0 && current == 0) {
                             ++t0_boundary_clamp_;
+                        } else if (cmd.backpressure_deferred) {
+                            // M5: the reader offered this entry while the
+                            // clock was still at/below its arrival; the
+                            // bounded queue parked it. Capacity artifact,
+                            // exempt from the run-end gate.
+                            ++late_static_submit_backpressure_;
                         } else {
                             ++late_static_submit_;
                         }
-                    } else if (cmd.envelope.source ==
-                               RequestSource::ExternalStream) {
+                    } else {  // ExternalStream: the only remaining source
                         ++late_external_stream_;
-                    } else {
-                        ++late_future_alarm_rounding_;
                     }
+                    // S3 fix (2026-09-28): the former
+                    // late_future_alarm_rounding_ else-arm here was
+                    // unreachable dead defense -- FutureAlarm envelopes are
+                    // scheduled directly by schedule_future_arrival and never
+                    // enter the command queue (enqueue_command is the only
+                    // producer, and it never carries a FutureAlarm source),
+                    // so their clamps are counted only at that function's own
+                    // increment. A third branch here contradicted the
+                    // RequestIngress.hh thread contract.
                 }
                 if (cmd.envelope.source == RequestSource::StaticCsv) {
                     // Run-end arrival audit record (bounded by turn-0 rows).
@@ -112,10 +126,20 @@ void RequestIngress::drain_commands() {
                 }
                 svc_->on_command_accepted();
                 svc_->on_alarm_scheduled();
-                auto* arg = new ArrivalAlarmArg{
-                    this, std::move(cmd.envelope), false};
+                // M1-5 (2026-09-26): the same bad_alloc hygiene as
+                // schedule_future_arrival -- hold the callback payload in a
+                // unique_ptr and release it only AFTER schedule_event
+                // succeeded. schedule_event itself is noexcept; the release
+                // is what hands ownership to the EventQueue callback, so a
+                // bad_alloc while building the payload can never leak a
+                // half-registered callback. (The envelope is moved out of
+                // the swapped-out batch exactly as before; simulation
+                // semantics unchanged.)
+                std::unique_ptr<ArrivalAlarmArg> arg(
+                    new ArrivalAlarmArg{this, std::move(cmd.envelope), false});
                 eq_->schedule_event(alarm_time, RequestIngress::arrival_cb,
-                                    arg);
+                                    arg.get());
+                (void)arg.release();  // EventQueue callback now owns it.
                 break;
             }
             case IngressCommandKind::CloseInput:
@@ -144,6 +168,22 @@ void RequestIngress::drain_commands() {
                 std::abort();
                 break;
         }
+    }
+    // M4 fix (2026-09-30, mirrored from the joint repo): the producer gate
+    // is closed and the queue just drained to empty -- every command
+    // linearized before the close has been observed. Complete the
+    // coordinator's deferred FINISHED evaluation here (see
+    // ServiceCoordinator::note_input_drained); it is a no-op while requests
+    // are still active/pending. Commands enqueued after the close are
+    // rejected by enqueue_command, so an empty queue under a closed gate is
+    // stable.
+    bool closed_and_drained = false;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        closed_and_drained = closed_ && queue_.empty();
+    }
+    if (closed_and_drained && svc_ != nullptr) {
+        svc_->note_input_drained();
     }
 }
 
@@ -256,8 +296,9 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
         throw std::runtime_error("future-arrival scheduling rejected: " +
                                  *validation_error);
     }
-    // arrival alarms must be strictly future (EventQueue :33); a late
-    // arrival is clamped to the next tick (arrives now)
+    // arrival alarms must be strictly future (the EventQueue contract:
+    // schedule_event asserts event_time >= current time, debug builds
+    // only); a late arrival is clamped to the next tick (arrives now)
     const auto current = eq_->get_current_time();
     const auto arrival = envelope.arrival_world_ns;
     // P0 fix (2026-08-30): this path only ever schedules FutureAlarm
@@ -350,16 +391,6 @@ size_t RequestIngress::overflow_count() const {
 size_t RequestIngress::peak_command_occupancy() const {
     std::lock_guard<std::mutex> lock(mtx_);
     return peak_command_occupancy_;
-}
-
-size_t RequestIngress::pending_queue_index_count() const {
-    std::lock_guard<std::mutex> lock(mtx_);
-    return queue_index_map_.size();
-}
-
-size_t RequestIngress::scheduled_future_arrival_count() const {
-    std::lock_guard<std::mutex> lock(mtx_);
-    return scheduled_future_request_ids_.size();
 }
 
 std::map<int64_t, RequestIngress::StaticCsvArrivalRecord>

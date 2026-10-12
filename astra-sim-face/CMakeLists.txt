@@ -43,14 +43,20 @@ set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/yaml-cpp")
 
+# die-internal cost model library (die内仿真器设计文档 §8.1; stage A1 wiring).
+# Builds the die_model static library and its unit tests; the target is linked
+# into AstraSim below so the runtime stages can adopt it incrementally.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/die_model")
+
 
 # Find Protobuf
-# TODO: We want to use the advanced semantics 'protobuf CONFIG REQUIRED'.
-# However, this requires protobuf to be compiled from source,
-# which is enabled only in Docker containers. (Our documentation makes users install protobuc from apt-get)
-# Therefore, enable 'protobuf CONFIG REQUIRED' only when we are building in Docker.
-# TODO: Find a better way to detect if protobuf has been compiled by source, OR
-# find a way to enable 'protobuf CONFIG REQUIRED' regardless of how protubuf was installed.
+# Status note (2026-09-26 review, replaces the two bare upstream TODOs):
+# the advanced 'protobuf CONFIG REQUIRED' semantics require protobuf to be
+# compiled from source, which is only enabled in Docker containers (the
+# documented setup installs protobuf from apt-get), so CONFIG is selected
+# only when PROTOBUF_FROM_SOURCE=True is set in the environment -- the
+# env-var check below IS the source-built detection; no better detection is
+# currently planned.
 if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")
     find_package(protobuf CONFIG REQUIRED)
 else()
@@ -58,18 +64,22 @@ else()
 endif()
 
 # Files to compile
-file(GLOB srcs
+file(GLOB srcs CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/*.cc"
+    # (2026-09-30) Removed the native_collectives/*.cc glob entry: that
+    # directory only holds the two subdirectories globbed right below and
+    # the pattern matched zero files.
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/logical_topology/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/collective_algorithm/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/custom_collectives/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/scheduling/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/common/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/third_party/utils/*.cc"
+    # third_party/utils/*.cc glob removed 2026-09-26: protoio.cc/.hh were
+    # deleted (unused protobuf-io helper) and the directory holds no
+    # sources, so the glob matched an empty set.
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/feeder_v3/*.cpp")
 
@@ -80,6 +90,9 @@ add_library(AstraSim STATIC ${srcs})
 target_link_libraries(AstraSim PUBLIC fmt::fmt)
 target_link_libraries(AstraSim PUBLIC spdlog::spdlog)
 target_link_libraries(AstraSim PUBLIC yaml-cpp)
+# PUBLIC: AstraSim consumers see extern/die_model/include (DieModel.hh) and
+# the shared extern/helper nlohmann/json include via die_model's interface.
+target_link_libraries(AstraSim PUBLIC die_model)
 
 # Same as above.
 if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")
@@ -98,10 +111,10 @@ target_include_directories(AstraSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/extern/gr
 target_include_directories(AstraSim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/)
 target_include_directories(AstraSim PUBLIC ${Protobuf_INCLUDE_DIR})
 
-# Same as above.
-if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")
-    target_include_directories(AstraSim PUBLIC ${Protobuf_INCLUDE_DIRS})
-endif()
+# (2026-09-30) Removed the empty PROTOBUF_FROM_SOURCE branch: its only
+# content was a ${Protobuf_INCLUDE_DIRS} line that is a FindProtobuf-module
+# variable and EMPTY under the CONFIG package mode used here; the include
+# paths arrive via the protobuf::libprotobuf target linkage.
 
 # Properties
 set_target_properties(AstraSim PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
@@ -112,8 +125,12 @@ set_target_properties(AstraSim
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
 )
 
+# ON by default (review 2026-09-26 infra-1/global-1): the journal test was
+# previously opt-in and never enabled by any script, so it never ran. The
+# fixture's checks are runtime expect() calls (no NDEBUG dependence), and the
+# target registers into CTest whenever it is built.
 option(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST
-       "Build the communicator-scoped OfflineGreedy schedule journal test" OFF)
+       "Build the communicator-scoped OfflineGreedy schedule journal test" ON)
 if(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST)
     enable_testing()
     add_executable(AstraSim_OfflineGreedyScheduleJournalTest
@@ -122,6 +139,8 @@ if(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST)
         PRIVATE AstraSim)
     target_include_directories(AstraSim_OfflineGreedyScheduleJournalTest
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern/helper)
+    set_target_properties(AstraSim_OfflineGreedyScheduleJournalTest
+        PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     add_test(NAME AstraSim_OfflineGreedyScheduleJournalTest
         COMMAND AstraSim_OfflineGreedyScheduleJournalTest)
 endif()

@@ -26,7 +26,8 @@ The tick-end commit is a two-phase protocol:
 
 Validation rules (every rule empirically verified against the real 20.csv
 first-30s runs: strategy 3531 batches + replay 3491 batches, zero
-violations):
+violations; the replay route was removed on 2026-08-18 -- the figure is
+retained as historical provenance only):
   [epoch]   batch.batch_id == batch.source_delivery_sequence ==
             delta.delivery_sequence; batch.error empty.
   [node]    rank in [0, num_ranks); per-rank ids form one strictly contiguous
@@ -39,8 +40,11 @@ violations):
             mandatory cheap commit preflight when full validation is off);
             comm src/dst/tag range checks are
             scoped to the comm-typed nodes (5/6) -- send node rank ==
-            comm.src, recv node rank == comm.dst (non-comm nodes carry the
-            comm defaults in real data and an empty comm in fixtures).
+            comm.src, recv node rank == comm.dst. (Comment fix 2026-09-30:
+            EVERY node carries a COMPLETE comm object {bytes, src, dst, tag}
+            -- the current parse contract (ParsedGraphBatch.cc rule N13)
+            fail-closes on a missing/empty comm; non-comm nodes simply carry
+            the default values in both real data and fixtures.)
   [edge]    kind == "data"; from != to; from resolves (this batch, an
             earlier batch's store id, or -- M2 node GC, 2026-08-23 -- an id
             in the rank's exact committed range; cross-batch
@@ -247,10 +251,6 @@ class GraphBatchCommitter {
     /// One-line run-end counter report ("[online] phase-5 commit counters:").
     std::string counters_report() const;
 
-    /// The sorted unique rank set owning the batch's nodes (pure).
-    static std::vector<int> compute_touched_ranks(const GraphBatch& batch,
-                                                  int num_ranks);
-
     /// A1 (2026-08-28): amortization threshold -- the commit tail drains the
     /// per-rank GC candidate FIFOs only once this many finished nodes have
     /// accumulated since the last collection. 4096 keeps the retained
@@ -326,9 +326,10 @@ class GraphBatchCommitter {
     mutable uint64_t json_id_stream_stamp_ = 0;
     mutable std::vector<int> json_id_discovered_touched_ranks_;
     std::vector<int> commit_touched_ranks_;
-    // validate_and_commit() owns commit_touched_ranks_ across its whole
-    // validation/commit sequence.  Context callbacks attempting a nested
-    // mutating commit fail closed instead of corrupting that scratch.
+    // validate_and_commit() and commit() each own commit_touched_ranks_
+    // across their whole validation/commit sequence.  Context callbacks
+    // attempting a nested mutating commit fail closed instead of corrupting
+    // that scratch.
     bool validation_commit_in_progress_ = false;
 };
 

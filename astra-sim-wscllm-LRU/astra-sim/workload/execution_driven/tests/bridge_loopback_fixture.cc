@@ -19,7 +19,7 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
   B. Python crash detection (forked child): the child delivers through a
      bridge whose Python side reads the request and exits WITHOUT writing a
      response; the resp_notify read gets EOF and the child must abort
-     (SIGABRT) with the "Python side crashed" message.
+     (SIGABRT) with the "Python side died (...)" message.
   C. Timeout (forked child): the child uses timeout_ms=1000 against a
      Python side that never opens resp_notify; the poll must time out and
      the child must abort (SIGABRT) with the timeout message.
@@ -285,16 +285,19 @@ void round_trip(const std::string& echo_script) {
         expect(batch1.future_alarms.empty() && !batch1.has_touched_ranks,
                "A: future_alarms/touched_ranks defaults intact");
 
-        // Phase-7 §10.3 中间产物生命周期: read_response CONSUMES AND DELETES
-        // the response file right after parsing (fail-closed path retains
-        // it). The field-level round-trip fidelity that response_N.json used
+        // Phase-7 §10.3 中间产物生命周期(Minor④ 2026-09-30 修订):
+        // deliver_and_receive 解析后只登记待删,response 文件保留到
+        // send_commit_ack(提交成功)才 unlink——fail-closed 路径(解析
+        // 失败、Phase-A/B 校验失败、桥协议违规)发生在 deliver 返回之后、
+        // ack 之前,response 文件因此全程留在盘上作 post-mortem 取证。
+        // The field-level round-trip fidelity that response_N.json used
         // to carry is now verified upstream -- the echoed nodes/parent_edges/
         // assignments/kv_actions arrived intact in batch1 above, and the
         // Python decision content is covered by the decision_log byte-gate
         // of the full runs. request_N.json is retained (fixture input +
         // audit evidence) and asserted below.
-        expect(!file_exists(bridge_dir + "/response_0.json"),
-               "A: response_0.json consumed and deleted (phase-7 §10.3)");
+        expect(file_exists(bridge_dir + "/response_0.json"),
+               "A: response_0.json retained until its commit ack (Minor④)");
         expect(file_exists(bridge_dir + "/request_0.json"),
                "A: request_0.json retained (replay input + audit evidence)");
 
@@ -316,13 +319,20 @@ void round_trip(const std::string& echo_script) {
 
         const GraphBatch batch2 = bridge.deliver_and_receive(delta2);
         expect(batch2.source_delivery_sequence == 1 && batch2.batch_id == 1,
-               "B: batch echoes seq 1");
-        // Phase-7 §10.3: response consumed and deleted (see part A).
-        expect(!file_exists(bridge_dir + "/response_1.json"),
-               "B: response_1.json consumed and deleted (phase-7 §10.3)");
+               "A: batch echoes seq 1");
+        // Minor④:进入第二次交付时,防御性清账回收了上一批(seq 0)的
+        // response;本批(seq 1)的 response 仍保留待其 ack。
+        expect(!file_exists(bridge_dir + "/response_0.json"),
+               "A: stale response_0.json flushed at the next delivery");
+        expect(file_exists(bridge_dir + "/response_1.json"),
+               "A: response_1.json retained until its commit ack (Minor④)");
 
         // --- commit acks: seq 0, seq 1, then a DUPLICATE seq 0 ---
+        // Minor④:首个 ack 把在途的 seq 1 response 回收(锁步协议下 ack 0
+        // 先到,在途待删即 seq 1);后续 ack 无待删项,幂等。
         bridge.send_commit_ack(/*batch_id=*/0, /*delivery_seq=*/0, true);
+        expect(!file_exists(bridge_dir + "/response_1.json"),
+               "A: response_1.json consumed at its commit ack (Minor④)");
         bridge.send_commit_ack(/*batch_id=*/1, /*delivery_seq=*/1, true);
         bridge.send_commit_ack(/*batch_id=*/0, /*delivery_seq=*/0, true);
     }  // destructor closes req_notify -> Python EOF -> exit 0

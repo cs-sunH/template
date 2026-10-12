@@ -117,8 +117,11 @@ class LegacyOracleWindowedTraceReader {
     // Previous CSV row per session, for the AFTER_REQUEST metrics
     // registration of turn>0 rows (mirrors the phase-1 loader).
     std::map<std::string, int64_t> last_queue_index_by_session_;
-    // Byte position of the next un-read row (sampled after each successful
-    // checkpoint's file_pos). -1 = never read / stream not open.
+    // Byte position of the next un-read row. Write-only legacy: the
+    // checkpoint/restore mechanism this once fed does not exist in this
+    // repository (no reader anywhere; retained verbatim for oracle
+    // fidelity -- do not consume or extend). -1 = never read / stream not
+    // open.
     int64_t last_file_pos_ = -1;
 
     size_t occupancy() const;

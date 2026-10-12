@@ -10,156 +10,16 @@ LICENSE file in the root directory of this source tree.
 
 namespace AstraSim {
 
+// The shared/mem bus-stat accounting (8 delay fields, 2 request counters,
+// both update_bus_stats overloads and take_bus_stats_average) was write-only
+// end to end -- every value written, accumulated and averaged here had no
+// reader anywhere in the repo (2026-10-01 removal). The class survives as an
+// empty BasicEventHandlerData shell because StreamStat (the BaseStream/
+// DataSet mixin) and MemMovRequest still inherit it; event payloads that
+// used to be heap-allocated carriers of these stats now pass nullptr.
 class SharedBusStat : public BasicEventHandlerData {
   public:
-    SharedBusStat(BusType busType,
-                  double total_bus_transfer_queue_delay,
-                  double total_bus_transfer_delay,
-                  double total_bus_processing_queue_delay,
-                  double total_bus_processing_delay) {
-        if (busType == BusType::Shared) {
-            this->total_shared_bus_transfer_queue_delay =
-                total_bus_transfer_queue_delay;
-            this->total_shared_bus_transfer_delay = total_bus_transfer_delay;
-            this->total_shared_bus_processing_queue_delay =
-                total_bus_processing_queue_delay;
-            this->total_shared_bus_processing_delay =
-                total_bus_processing_delay;
-
-            this->total_mem_bus_transfer_queue_delay = 0;
-            this->total_mem_bus_transfer_delay = 0;
-            this->total_mem_bus_processing_queue_delay = 0;
-            this->total_mem_bus_processing_delay = 0;
-        } else {
-            this->total_shared_bus_transfer_queue_delay = 0;
-            this->total_shared_bus_transfer_delay = 0;
-            this->total_shared_bus_processing_queue_delay = 0;
-            this->total_shared_bus_processing_delay = 0;
-
-            this->total_mem_bus_transfer_queue_delay =
-                total_bus_transfer_queue_delay;
-            this->total_mem_bus_transfer_delay = total_bus_transfer_delay;
-            this->total_mem_bus_processing_queue_delay =
-                total_bus_processing_queue_delay;
-            this->total_mem_bus_processing_delay = total_bus_processing_delay;
-        }
-        shared_request_counter = 0;
-        mem_request_counter = 0;
-    }
-
-    void update_bus_stats(BusType busType, SharedBusStat* sharedBusStat) {
-        if (busType == BusType::Shared) {
-            total_shared_bus_transfer_queue_delay +=
-                sharedBusStat->total_shared_bus_transfer_queue_delay;
-            total_shared_bus_transfer_delay +=
-                sharedBusStat->total_shared_bus_transfer_delay;
-            total_shared_bus_processing_queue_delay +=
-                sharedBusStat->total_shared_bus_processing_queue_delay;
-            total_shared_bus_processing_delay +=
-                sharedBusStat->total_shared_bus_processing_delay;
-            shared_request_counter++;
-        } else if (busType == BusType::Mem) {
-            total_mem_bus_transfer_queue_delay +=
-                sharedBusStat->total_mem_bus_transfer_queue_delay;
-            total_mem_bus_transfer_delay +=
-                sharedBusStat->total_mem_bus_transfer_delay;
-            total_mem_bus_processing_queue_delay +=
-                sharedBusStat->total_mem_bus_processing_queue_delay;
-            total_mem_bus_processing_delay +=
-                sharedBusStat->total_mem_bus_processing_delay;
-            mem_request_counter++;
-        } else {
-            total_shared_bus_transfer_queue_delay +=
-                sharedBusStat->total_shared_bus_transfer_queue_delay;
-            total_shared_bus_transfer_delay +=
-                sharedBusStat->total_shared_bus_transfer_delay;
-            total_shared_bus_processing_queue_delay +=
-                sharedBusStat->total_shared_bus_processing_queue_delay;
-            total_shared_bus_processing_delay +=
-                sharedBusStat->total_shared_bus_processing_delay;
-            total_mem_bus_transfer_queue_delay +=
-                sharedBusStat->total_mem_bus_transfer_queue_delay;
-            total_mem_bus_transfer_delay +=
-                sharedBusStat->total_mem_bus_transfer_delay;
-            total_mem_bus_processing_queue_delay +=
-                sharedBusStat->total_mem_bus_processing_queue_delay;
-            total_mem_bus_processing_delay +=
-                sharedBusStat->total_mem_bus_processing_delay;
-            shared_request_counter++;
-            mem_request_counter++;
-        }
-    }
-
-    void update_bus_stats(BusType busType, SharedBusStat sharedBusStat) {
-        if (busType == BusType::Shared) {
-            total_shared_bus_transfer_queue_delay +=
-                sharedBusStat.total_shared_bus_transfer_queue_delay;
-            total_shared_bus_transfer_delay +=
-                sharedBusStat.total_shared_bus_transfer_delay;
-            total_shared_bus_processing_queue_delay +=
-                sharedBusStat.total_shared_bus_processing_queue_delay;
-            total_shared_bus_processing_delay +=
-                sharedBusStat.total_shared_bus_processing_delay;
-            shared_request_counter++;
-        } else if (busType == BusType::Mem) {
-            total_mem_bus_transfer_queue_delay +=
-                sharedBusStat.total_mem_bus_transfer_queue_delay;
-            total_mem_bus_transfer_delay +=
-                sharedBusStat.total_mem_bus_transfer_delay;
-            total_mem_bus_processing_queue_delay +=
-                sharedBusStat.total_mem_bus_processing_queue_delay;
-            total_mem_bus_processing_delay +=
-                sharedBusStat.total_mem_bus_processing_delay;
-            mem_request_counter++;
-        } else {
-            total_shared_bus_transfer_queue_delay +=
-                sharedBusStat.total_shared_bus_transfer_queue_delay;
-            total_shared_bus_transfer_delay +=
-                sharedBusStat.total_shared_bus_transfer_delay;
-            total_shared_bus_processing_queue_delay +=
-                sharedBusStat.total_shared_bus_processing_queue_delay;
-            total_shared_bus_processing_delay +=
-                sharedBusStat.total_shared_bus_processing_delay;
-            total_mem_bus_transfer_queue_delay +=
-                sharedBusStat.total_mem_bus_transfer_queue_delay;
-            total_mem_bus_transfer_delay +=
-                sharedBusStat.total_mem_bus_transfer_delay;
-            total_mem_bus_processing_queue_delay +=
-                sharedBusStat.total_mem_bus_processing_queue_delay;
-            total_mem_bus_processing_delay +=
-                sharedBusStat.total_mem_bus_processing_delay;
-            shared_request_counter++;
-            mem_request_counter++;
-        }
-    }
-
-    void take_bus_stats_average() {
-        if (shared_request_counter != 0) {
-            total_shared_bus_transfer_queue_delay /= shared_request_counter;
-            total_shared_bus_transfer_delay /= shared_request_counter;
-            total_shared_bus_processing_queue_delay /= shared_request_counter;
-            total_shared_bus_processing_delay /= shared_request_counter;
-        }
-
-        if (mem_request_counter != 0) {
-            total_mem_bus_transfer_queue_delay /= mem_request_counter;
-            total_mem_bus_transfer_delay /= mem_request_counter;
-            total_mem_bus_processing_queue_delay /= mem_request_counter;
-            total_mem_bus_processing_delay /= mem_request_counter;
-        }
-    }
-
-    double total_shared_bus_transfer_queue_delay;
-    double total_shared_bus_transfer_delay;
-    double total_shared_bus_processing_queue_delay;
-    double total_shared_bus_processing_delay;
-
-    double total_mem_bus_transfer_queue_delay;
-    double total_mem_bus_transfer_delay;
-    double total_mem_bus_processing_queue_delay;
-    double total_mem_bus_processing_delay;
-    int mem_request_counter;
-    int shared_request_counter;
+    SharedBusStat() = default;
 };
 
 }  // namespace AstraSim

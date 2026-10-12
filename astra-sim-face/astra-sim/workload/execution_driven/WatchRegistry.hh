@@ -33,19 +33,22 @@ Semantics (all explicit, none implied):
     regardless of which path produced the terminal fact (real traces
     contain INVALID_NODE / metadata nodes that are always skipped).
   - A watch fires ONCE, synchronously inside on_node_terminal, when every
-    expected member has a satisfying terminal; the fire is queued for
-    fired_and_drain() and reported to the fire notifier (step 1-6 wires the
-    notifier to the DecisionMailbox push).
+    expected member has a satisfying terminal; the fire is reported
+    synchronously to the fire notifier (step 1-6 wires the notifier to the
+    DecisionMailbox push). An unset notifier drops the fire (facts-only
+    fixture mode).
   - Lifecycle: register once, fire once, remove_watch on request end / batch
-    abort, remove_all on run finish; the run-end audit is
+    abort; the run-end audit is
     stale_count() == 0 (every registered watch either fired or was removed).
 
 The online CompletionObserver hook (online_completion_hook below) does
-EXACTLY two things (步骤 1-5 操作 3): (1) record the completion fact via
-WatchRegistry::on_node_terminal and (2) write the DecisionMailbox when a
-watch fires -- the notifier wiring lands in step 1-6. It NEVER calls
-NodeStore::finish_node. The static binary never installs a hook (zero
-overhead contract, CompletionObserver.hh).
+THREE things: (1) record the completion fact via
+WatchRegistry::on_node_terminal, (1b) record the completed-facts entry for
+run-end audits, and (2) write the DecisionMailbox when a watch fires, plus
+(3) schedule the deferred issue pass (步骤 1-8 wiring; Phase 4). It NEVER
+calls NodeStore::finish_node. The legacy arm (backend/ED tests driving the
+workload layer directly) installs no hook (zero overhead contract,
+CompletionObserver.hh).
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_WATCHREGISTRY_HH
@@ -62,7 +65,6 @@ overhead contract, CompletionObserver.hh).
 
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
-#include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 namespace NetworkAnalytical {
 class EventQueue;
@@ -82,9 +84,8 @@ struct CompletionKey {
         return rank == other.rank && node_id == other.node_id &&
                generation == other.generation;
     }
-    bool operator!=(const CompletionKey& other) const {
-        return !(*this == other);
-    }
+    // (2026-10-01) operator!= removed: zero call sites repo-wide (every
+    // comparison path uses operator< for the set key or operator==).
     bool operator<(const CompletionKey& other) const {
         if (rank != other.rank) {
             return rank < other.rank;
@@ -110,6 +111,9 @@ struct CompletionKeyHash {
 /// A fired stage-completion watch (步骤 1-5 操作 2). The reason mapping
 /// (stage -> PREFILL_DRAIN / DECODE_COMPLETION) is the step-1-6 mailbox
 /// wiring concern, not the registry's.
+/// watch_id is a test-only diagnostic: production consumers (main_online)
+/// read only request_id/stage/generation/member_count/member_ranks; the
+/// watch registry test asserts fire identity through it.
 struct WatchFire {
     uint64_t watch_id = 0;
     std::string request_id;
@@ -143,12 +147,16 @@ class WatchRegistry {
 
     /// Register a stage-completion watch over an exact member set (frozen).
     /// Duplicate identity (request_id, stage, generation) returns the
-    /// existing watch_id (register once / fire once). Empty expected_members
-    /// never fires (programming error caught by the end audit).
+    /// existing watch_id (register once / fire once) and, when `created` is
+    /// provided, reports created=false so the committer can reject the
+    /// protocol violation (a re-registered identity's new member set is
+    /// silently dropped otherwise). Empty expected_members never fires
+    /// (programming error caught by the end audit).
     uint64_t register_stage_watch(
         const std::string& request_id, const std::string& stage,
         uint64_t generation, std::set<CompletionKey> expected_members,
-        std::set<NodeTerminalStatus> satisfying_statuses);
+        std::set<NodeTerminalStatus> satisfying_statuses,
+        bool* created = nullptr);
 
     /// Completion-fact recording, called by the online hook (read-only with
     /// respect to the graph; never releases dependencies). The direct member
@@ -156,10 +164,6 @@ class WatchRegistry {
     /// request_id/stage metadata. A key may belong to multiple watches; each
     /// retains its own duplicate/status/fire semantics.
     void on_node_terminal(const CompletionKey& key, NodeTerminalStatus status);
-
-    /// Fired watches since the last call in no-notifier fixture/polling mode;
-    /// production notifier mode retains no polling queue.
-    std::vector<WatchFire> fired_and_drain();
 
     /// Registered-but-not-fired watches. Run-end audit must be 0 (aborted
     /// requests must remove_watch before finishing).
@@ -185,8 +189,6 @@ class WatchRegistry {
     /// (request_id 前缀 "batch_train_")。O(存活哨兵数)。
     void drain_fired_sentinels();
 
-    void remove_all();
-
     /// Fire notification (step 1-6 wires this to the DecisionMailbox push).
     void set_fire_notifier(WatchFireNotifier notifier);
 
@@ -206,9 +208,11 @@ class WatchRegistry {
     // scan).
     std::unordered_map<std::string, std::vector<uint64_t>>
         request_to_watch_ids_;
-    // 拼 batch 适配(2026-08-22):哨兵 watch id 索引。
+    // 拼 batch 适配(2026-08-22):哨兵 watch id 索引。cpp-ed-core-7
+    // (2026-09-26): maintained on removal too -- remove_watch erases the
+    // id of a batch_train_* watch here, so removed sentinels can never
+    // linger in the index.
     std::vector<uint64_t> sentinel_watch_ids_;
-    std::vector<WatchFire> fired_;
     WatchFireNotifier notifier_;
 };
 
@@ -275,8 +279,9 @@ struct OnlineCompletionHookContext {
 ///   (3) (step 1-8) schedule the per-rank post-commit deferred issue pass
 ///       (ready-set drain; runs after finish_node in the same tick).
 /// NEVER calls GraphSource::finish_node: dependency release belongs
-/// exclusively to Workload::call. The static binary never installs this
-/// hook (static hook stays null, byte-exact).
+/// exclusively to Workload::call. The legacy arm (backend/ED tests driving
+/// the workload layer directly) never installs this hook (the hook stays
+/// null there, byte-exact).
 void online_completion_hook(void* ctx, int rank, uint64_t node_id,
                             const char* request_id, const char* stage,
                             uint64_t generation, uint64_t tick,

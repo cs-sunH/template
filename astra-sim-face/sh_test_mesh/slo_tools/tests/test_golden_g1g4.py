@@ -211,13 +211,10 @@ class G2TwoRequestsQueued(unittest.TestCase):
             synthetic.manifest_request("r1", "s1", 0, 1),
         ])
 
-    def test_backlog_series_hand(self):
-        out = self.run_dir / "bl.csv"
-        args = slo_argv(["backlog", str(self.run_dir), "-o", str(out)])
-        self.assertEqual(slo_stats.cmd_backlog(args), 0)
-        _, rows = synthetic.read_csv(out)
-        self.assertEqual([(r["time_ns"], r["in_flight"]) for r in rows],
-                         [("100", "2"), ("500", "1"), ("900", "0")])
+    # py-slo-tests-8（2026-09-26 合并去重）：backlog 重建的手算断言与
+    # tests/test_slo_contract.py BacklogTests 逐字重复（本类 fixture 的
+    # arrival/completion 值与之相同）；backlog 非本文件 G1-G4 场景语义，
+    # 合并后只在 T0 契约层固化（含 CSV 表头冻结断言）。
 
     def test_e2e_ordering_and_percentiles(self):
         out = self.run_dir / "e2e.csv"
@@ -274,6 +271,17 @@ class G3SessionTwoTurns(unittest.TestCase):
         # turn0: arrival 0 → completion 1000；turn1: arrival 5000 →
         # completion 7000；human 1000 + tool 500。
         # T_session = 7000 − 0 − 1500 = 5500。
+        # 口径登记（2026-10-01 S-4，两读如实并记）：本用例手值钉住的是
+        # cmd_session 现行的 wait-before 口径（末轮 tool=500 也参减 Σ）；
+        # traces/derive_20_first_30_seconds.py 模块 docstring 冻结的权威
+        # 口径是 wait-after（末轮的 human/tool 是指向窗外后继的尾随 gap，
+        # 不应参减）——两读在窗内末轮尾随 gap 上不一致。本类合成到达时间
+        # （0→5000）本就不与任一读法的算术吻合（手值冻结，不分辨两读），
+        # 真实窗内末轮尾随 gap 非零场景才会分叉；因生产链
+        # metrics_manifest.json 恒不携带 human/tool（见
+        # slo_common.load_request_manifest 口径登记：真实 ③④ run 恒全
+        # NA），该不一致当前无可观测影响。不改数值：golden 冻结的是现行
+        # 公式行为；公式如按冻结口径修正，须同步重钉本用例。
         synthetic.write_request_metrics(self.run_dir, [
             synthetic.request_row(
                 request_id="s0_r0", session_id="s0", turn_index="0",
@@ -308,6 +316,9 @@ class G3SessionTwoTurns(unittest.TestCase):
 
     def test_missing_transparent_fields_na_and_counted(self):
         # manifest 缺 human/tool 透传字段（WP2 之前的状态）→ NA 行+计数。
+        # （生产链 metrics_manifest.json 恒处此态——见
+        # slo_common.load_request_manifest 口径登记，真实 ③④ run 的
+        # session 步即按本用例语义恒全 NA、步骤返 0。）
         synthetic.write_metrics_manifest(self.run_dir, [
             synthetic.manifest_request("s0_r0", "s0", 0, 0),
             synthetic.manifest_request("s0_r1", "s0", 1, 1),
@@ -421,8 +432,10 @@ class ScanExportSkeletonTests(unittest.TestCase):
             synthetic.request_row(request_id="r0", queue_index="0",
                                   arrival_ns="0", completion_ns="10",
                                   e2e_ns="10"),
+            # A4-9（2026-09-26）：原 dropped 行改 failed（词表收紧后同
+            # 角色非 completed 终态），drain 断言语义不变。
             synthetic.request_row(request_id="r1", queue_index="1",
-                                  terminal_status="dropped"),
+                                  terminal_status="failed"),
         ])
         args = slo_argv(["scan-export", "--point", f"{run_dir}=1.0",
                          "-o", "-"])

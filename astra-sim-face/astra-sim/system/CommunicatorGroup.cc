@@ -6,6 +6,8 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CommunicatorGroup.hh"
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 #include "astra-sim/system/CollectivePlan.hh"
@@ -63,7 +65,47 @@ CommunicatorGroup::CommunicatorGroup(int comm_group_id,
     this->generator = generator;
     this->dimension_sizes = dimension_sizes;
 
+    // R7-D fix (2026-09-29): the rank list is trusted input from
+    // comm_group.json / pg metadata. An out-of-range rank used to escape to
+    // the backend's fluid route (remote crash) or, for a non-member rank, to
+    // a RingTopology id_to_index operator[] that silently inserted a wrong
+    // position; a duplicated rank silently collapsed two ring positions onto
+    // one node (self-ring / deadlock). Both are always configuration errors.
+    if (involved_NPUs.empty()) {
+        throw std::invalid_argument(
+            "Communicator group must list at least one rank");
+    }
+    {
+        std::vector<int> seen = involved_NPUs;
+        std::sort(seen.begin(), seen.end());
+        if (std::adjacent_find(seen.begin(), seen.end()) != seen.end()) {
+            throw std::invalid_argument(
+                "Communicator group ranks contain duplicates");
+        }
+        for (int rank : involved_NPUs) {
+            if (rank < 0 || rank >= generator->total_nodes) {
+                throw std::invalid_argument(
+                    "Communicator group rank " + std::to_string(rank) +
+                    " is outside the cluster range [0, " +
+                    std::to_string(generator->total_nodes) + ")");
+            }
+        }
+    }
+
     if (!dimension_sizes.empty()) {
+        // H4 (R7-A) fix (2026-09-29): the collective issue path walks one
+        // queue level per group dimension, but the queue levels are built
+        // from the PHYSICAL dimension count. A shaped group with more
+        // dimensions than the physical topology read vLevels out of bounds
+        // (QueueLevels::levels[level]) with no fail-loud interception
+        // anywhere on the chain. Reject the shape at group construction.
+        if (dimension_sizes.size() > generator->physical_dims.size()) {
+            throw std::invalid_argument(
+                "Communicator group declares " +
+                std::to_string(dimension_sizes.size()) +
+                " dimensions but the physical topology has only " +
+                std::to_string(generator->physical_dims.size()));
+        }
         int expected_group_size = 1;
         for (int size : dimension_sizes) {
             if (size <= 0) {
@@ -95,9 +137,49 @@ CommunicatorGroup::~CommunicatorGroup() {
 void CommunicatorGroup::set_id(int id) {
     // id 0 is reserved for the default comm group, which is all ranks.
     // CTRL+F "default communication group"
-    assert(id > 0);
+    // (2026-10-01) the last bare assert in this module, upgraded to a
+    // Release-active guard: the existing protection lives in the callers
+    // (parse_comm_group_id_strict at both construction points); a third
+    // future construction site would otherwise be unprotected, and id<=0
+    // here collides this group's stream-id band with the global counter.
+    if (id <= 0) {
+        Sys::sys_panic("CommunicatorGroup id must be positive, got " +
+                       std::to_string(id));
+    }
+    // Every stream of this group draws its stream_id from the per-group band
+    // starting at id * kStreamsPerIdBand, disjoint from the global Sys
+    // counter for any realistic run. Two fail-loud bounds cap the id, and
+    // the first is by far the tighter one:
+    // 1. Sys::front_end_sim_send folds every COLLECTIVE tag with
+    //    `tag % (RENDEZVOUS - COLLECTIVE) + COLLECTIVE` into the 5e8-wide
+    //    window [COLLECTIVE, RENDEZVOUS). A group's stream ids span
+    //    [id * kStreamsPerIdBand, (id + 1) * kStreamsPerIdBand); once the
+    //    band crosses that window it wraps onto a lower band, so group id g
+    //    and group id g + 500 (and, at id >= 500, the global stream counter)
+    //    would emit identical folded tags on the same (src, dst) pair and
+    //    their in-flight messages could not be told apart. This caps group
+    //    ids at 499.
+    // 2. The int narrowing below silently overflows at id >= 2148.
+    constexpr int64_t kStreamsPerIdBand = 1000000;
+    const int64_t band_base = static_cast<int64_t>(id) * kStreamsPerIdBand;
+    if (band_base + kStreamsPerIdBand >
+        static_cast<int64_t>(Sys::FrontEndSendRecvType::RENDEZVOUS -
+                             Sys::FrontEndSendRecvType::COLLECTIVE)) {
+        Sys::sys_panic(
+            "communicator group id " + std::to_string(id) +
+            " is too large: its stream-id band would wrap in the COLLECTIVE "
+            "tag-folding window and collide with another group's tags "
+            "(folding bound: group id <= 499, tighter than the int-overflow "
+            "bound: group id <= 2147)");
+    }
+    if (band_base + (kStreamsPerIdBand - 1) >
+        static_cast<int64_t>(std::numeric_limits<int>::max())) {
+        Sys::sys_panic("communicator group id " + std::to_string(id) +
+                       " is too large: its stream-id band would overflow the "
+                       "int stream-id range");
+    }
     this->id = id;
-    this->num_streams = id * 1000000;
+    this->num_streams = static_cast<int>(band_base);
 }
 
 bool CommunicatorGroup::matches_definition(
@@ -108,6 +190,14 @@ bool CommunicatorGroup::matches_definition(
 }
 
 CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64_t workload_node_id) {
+    // Upstream design boundary (kept as-is, identical in the sibling repos):
+    // plans are cached per ComType only. workload_node_id participates in the
+    // per-node custom-implementation lookup on the cache-miss paths below;
+    // later calls for the same ComType reuse the first node's plan/impl, so
+    // per-node custom implementations inside one communicator are decided by
+    // its first collective of that ComType. See the known-limitation note
+    // in CollectiveImplLookup.hh about custom algorithms x communicator
+    // groups.
     if (comm_plans.find(comm_type) != comm_plans.end()) {
         return comm_plans[comm_type];
     }
@@ -147,7 +237,11 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
                 "No collective implementation registered for a whole-cluster "
                 "communicator");
         }
-        std::vector<bool> dimensions_involved(10, true);
+        // Whole-cluster plan: involve every dimension, sized from the actual
+        // topology (the old hardcoded 10 under-sized topologies with more
+        // than ten dimensions and over-sized all the rest).
+        std::vector<bool> dimensions_involved(
+            logical_topology->get_num_of_dimensions(), true);
         bool should_be_removed = false;
         comm_plans[comm_type] =
             new CollectivePlan(logical_topology, collective_implementation,
@@ -166,8 +260,11 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             // (Custom collective always assumes 1 dimension).
             // The current logic requires that, for a comm group that is smaller than the whole cluster,
             // we reduce everything to one dimension since the logical dimension no longer matches/matters.
-            // TODO: Revisit whether the choice to override with Ring (instead of e.g. first dimension in list)
-            // was a good choice.
+            // Status note (2026-09-26 review, replaces the bare upstream
+            // TODO): overriding with Ring here is the current, intentional
+            // behavior for multi-dimensional native collectives on a
+            // sub-cluster group; alternative policies (e.g. first dimension
+            // in list) remain unexplored by design.
             collective_implementation = std::vector<CollectiveImpl*>{
                 new CollectiveImpl(CollectiveImplType::Ring)};
         } else if (collective_implementation.size() == 1) {

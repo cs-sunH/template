@@ -16,6 +16,10 @@ standalone test -- no network simulation, no baseline artifacts touched:
           later epoch.
   Part C  Counters: event_count / delivery_count / coalescing_ratio /
           tick_end_without_decision_count / has_decision_work.
+  Part D  Completed-node accounting: the CompletedFactAccumulator in compact
+          production mode (O(1) success/skipped/other counters, empty
+          drains) versus exact audit mode (full legacy terminal fields,
+          run-lifetime counters); the mode locks after the first terminal.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).

@@ -1,41 +1,42 @@
 #!/usr/bin/env python3
 """face_online_scheduler.py -- 关感知策略调度器(strategy 模式,步骤 1-9,face 版)。
 
-蓝本锚点声明(2026-09-26 更正):本文件迁移自离线管线
+蓝本锚点声明(2026-09-26 更新):本文件迁移自离线管线
 _plan_face_session_lru_recompute(face_scheduler.py),但该离线管线已于
 2026-08-18 整体删除(generate_face_trace.py main() 的 fail-closed 桩可证),
-当前 face_scheduler.py 仅剩策略原语(643 行,无事件循环/规划函数)。因此
-全文 `# offline: face_scheduler.py:XXXX`、`离线 :XXXX` 与 session_kv_manager.py
-行号锚点均为迁移时代的历史引用——蓝本函数已不存在,行号与现文件错位,
-不能据此复核在线迁移等价性;下文映射表仅保留作迁移来源的结构性存档。
-历史迁移映射(行号已失效,仅存档):
+当前 face_scheduler.py 仅剩策略原语(无事件循环/规划函数)。迁移期散布的
+`# offline: face_scheduler.py:NNNN` / `离线 :NNNN` / `蓝图 :NNNN` 行号锚点
+已整体清理——蓝本函数已不存在,行号早已与现文件错位,不能据此复核在线
+迁移等价性;蓝本引用一律以符号名表示(start_ready_iterations /
+try_admit_prefill / try_admit_waiting_decodes / queue_snapshot /
+note_capacity_change 等)。历史迁移映射(结构性存档):
 
   离线事件循环                                    在线边界
   ----------------                                ----------------
-  预置 arrival 堆(:1341-1346)                     ingress ARRIVAL 事件喂入同一
+  预置 arrival 堆                                  ingress ARRIVAL 事件喂入同一
                                                   arrival heap(字段保持
                                                   (time_ns, priority, sequence,
                                                   kind, payload) 形状)
-  completion 批(:1598-1682)                        PREFILL_DRAIN / DECODE_COMPLETION
+  completion 批                                    PREFILL_DRAIN / DECODE_COMPLETION
                                                     / REQUEST_COMPLETE 事件处理:
-    prefill 完成(:1613-1648)                        _on_prefill_drain:
+    prefill 完成                                    _on_prefill_drain:
       qp.popleft + select_decode_instance             qp 出队 + select_decode_
-      (:1627-1637,加权图候选 + Roofline per-die 代价,  instance + 等待 decode 准入
-      全局 9 实例快照 :1622-1627)                      登记 + try_admit_waiting_decodes
+      (加权图候选 + Roofline per-die 代价,            instance + 等待 decode 准入
+      全局 9 实例快照)                               登记 + try_admit_waiting_decodes
       + waiting_decode_admissions 登记 +
-      try_admit_waiting_decodes(:1648)
-    decode 完成(:1650-1681)                         _on_decode_complete:
+      try_admit_waiting_decodes
+    decode 完成                                     _on_decode_complete:
       active_decode 出队 + mark_complete +             mark_complete + 完成快照
       note_capacity_change + 快照                      (active_decode 出队移至列车
-      + 下一次 arrival 排程(:1676-1681)                核销;下一次 arrival 排程在
+      + 下一次 arrival 排程                           核销;下一次 arrival 排程在
                                                        REQUEST_COMPLETE 边界做)
-  arrival 批(:1683-1695)                            _on_arrival(经 arrival heap):
+  arrival 批                                        _on_arrival(经 arrival heap):
     queue_snapshot -> select_prefill_instance          快照 -> 选择 -> qp.append +
     + qp.append + last_arrival_ns                      last_arrival_ns 更新
-  start_ready_iterations(:1517-1590)                _admit_pass(同 tick 末尾):
-    try_admit_waiting_decodes(:1519)                   decode 准入(容量 epoch/dirty
+  start_ready_iterations                            _admit_pass(同 tick 末尾):
+    try_admit_waiting_decodes                        decode 准入(容量 epoch/dirty
                                                        门控,原样保留)
-    逐实例 serve(:1520-1588)                           per-instance 列车发射:
+    逐实例 serve                                     per-instance 列车发射:
       prefill: try_admit_prefill(qp[0])                 try_admit_prefill + 准入动作
       decode:  active_decode 整批                       + 冻结/发射迭代列车(qp 头部
                                                        chunk × 迭代 + active_decode
@@ -48,9 +49,10 @@ prefill chunk 混拼、chunk 之间不拼、批成员只在迭代(列车)边界�
 状态机(§3.2):qp(FCFS prefill 队列)/active_decode(批成员表)/
 pending_decode_ready(KV 就绪待加入)/in_flight_train(唯一在飞列车,
 冻结成员快照 + membership_digest;busy 门 = 一个列车在飞)。列车终点 =
-下一个不可预测事件(队列头 prefill drain / 全部工作耗尽),默认不设
-T_max(§3.2.8:加入延迟 ≤1 列车,由 §7.4 保真对拍量化治理;SH_TRAIN_MAX_ITER
-正整数 = 每列车至多 N 个迭代)。边界原子提交顺序:核验 digest → 推进冻结
+下一个不可预测事件(队列头 prefill drain / 全部工作耗尽),交付默认
+T_max = 8(§3.2.8:加入延迟 ≤1 列车,由 §7.4 保真对拍量化治理;
+SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代;0 = 不设限,
+oracle/灵敏度复跑用)。边界原子提交顺序:核验 digest → 推进冻结
 成员 token(current_decode_token 闭式)→ 退出成员移出 active_decode →
 推进 prefill chunk → 处理 drain/完成 → 合入 arrival → KV 就绪成员入批 →
 冻结下一列车成员 → 发射。决策边界仍是四类 reason(ARRIVAL/PREFILL_DRAIN/
@@ -66,11 +68,11 @@ face 独有(与 wscllm 蓝图的差异,逐项保留不抹平):
     本体不动,红线);
   - decode 选择的顺序敏感全局快照:has_prefill_work(各实例 qp 非空)/
     decode_token_lengths(各实例 active_decode 的 current_decode_token)
-    按离线 :1622-1627 同一构造,prefill 完成边界才读取(时机不变);
+    按离线全局实例快照同一构造,prefill 完成边界才读取(时机不变);
   - try_admit_waiting_decodes 的阻塞重排队语义(move.admission_blocked ->
     queue.append + continue,face_scheduler.py)原样保留;
   - prefill 准入时点:qp 头部服务时逐请求尝试(容量纪元门防重试风暴),
-    与离线 try_admit_prefill(:1382-1453)逐行对应(时机不变)。
+    与离线 try_admit_prefill 逐行对应(时机不变)。
 
 real-online 刻意差异(合同⑦ Tier B real-online 验收;不变量 = 同一快照输入
 -> 同一输出,不逐值强等):
@@ -79,19 +81,18 @@ real-online 刻意差异(合同⑦ Tier B real-online 验收;不变量 = 同一�
   - 实例 busy 语义:离线 busy 覆盖一次混合迭代(1 prefill chunk + 全部
     active decode 各 1 token);在线 busy = "一个列车在飞"(in_flight_
     train,§3.2);
-  - current_decode_token 快照口径:离线逐迭代递增(:1652);在线在列车
+  - current_decode_token 快照口径:离线逐迭代递增;在线在列车
     核销边界闭式推进(决策边界上与逐 token 精确值逐点一致);
-  - remaining_chunks 快照口径:离线逐 chunk 递减(:1610);在线在列车
-    核销边界按本列车 chunk 数递减(初始值含 history chunks,:1442-1445)。
+  - remaining_chunks 快照口径:离线逐 chunk 递减;在线在列车
+    核销边界按本列车 chunk 数递减(准入前=ceil(prefill/p),准入时重算计入 history recompute chunks)。
 """
 
-import hashlib
 import heapq
-import json
 import math
 import os
 import sys
 from collections import deque
+from pathlib import Path
 
 # --------------------------------------------------------------------------
 # import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置、
@@ -110,6 +111,7 @@ from generate_face_trace import (  # noqa: E402
     _transfer_dict,
     _xy_route,
 )
+from online.die_model_oracle import DieModelOracle  # noqa: E402
 from online.graph_batch_builder import first_token_split_enabled  # noqa: E402
 from online.online_scheduler_base import (  # noqa: E402
     BATCH_TRAIN_PREFIX,
@@ -124,12 +126,12 @@ from session_kv_manager import (  # noqa: E402
     kv_cache_shard_bytes_for_tokens,
 )
 from face_scheduler import (  # noqa: E402
-    NOC_MIGRATE,
     DecodeTieCounter,
     FaceInstanceSpec,
     PrefillQueueSnapshot,
     WeightedInstanceGraph,
     build_instances,
+    die_derived_face_hardware,
     select_decode_instance,
     select_prefill_instance,
 )
@@ -139,12 +141,11 @@ class _OnlineInstanceState:
     """在线实例账本(离线 _InstanceRuntime,face_scheduler.py 的在线子集)
     + 拼 batch 列车状态机(§3.2):qp = prefill FCFS 队列(deque),
     active_decode = decode 批成员表,last_arrival_ns = 选择键素材;
-    busy 门语义 = "一个列车在飞"(in_flight_train),iteration_count 为
-    已完成迭代数(列车核销时闭式推进)。"""
+    busy 门语义 = "一个列车在飞"(in_flight_train)。"""
 
     __slots__ = ("index", "qp", "active_decode", "active_decode_lookup",
                  "last_arrival_ns", "pending_decode_ready", "in_flight_train",
-                 "finalized_trains", "iteration_count", "train_seq",
+                 "finalized_trains", "train_seq",
                  "first_step_remainder", "prefill_remaining_chunks")
 
     def __init__(self, *, index: int) -> None:
@@ -158,7 +159,6 @@ class _OnlineInstanceState:
         self.pending_decode_ready = []   # KV 就绪待加入下一列车的成员
         self.in_flight_train = None      # 唯一在飞列车(冻结成员快照)
         self.finalized_trains = []       # 已核销列车(待收后续跨交付信号)
-        self.iteration_count = 0         # 已完成迭代数(列车核销时闭式推进)
         self.train_seq = 0               # 列车序号(命名/审计用)
         # ---- WP9 首 token 首步批拆分(2026-08-26) ----
         self.first_step_remainder = None  # 首步批已发、余量批待发射的 train_plan
@@ -184,12 +184,11 @@ class _OnlineRequestRuntime:
         "history_cache_state_before", "hbm_before_request",
         "history_action", "history_source_instance_index",
         "history_transfer_bytes", "history_recompute_tokens",
-        "history_transfer",
         "admission_evictions", "decode_target_evictions",
         "waiting_decode_admission", "prefill_decode_transfer",
         "completion_evictions", "kv_state_after_completion",
-        "kv_instance_after_completion", "hbm_after_completion",
-        "remaining_chunks", "current_decode_token", "completion_ns",
+        "kv_instance_after_completion",
+        "remaining_chunks", "current_decode_token",
         "decode_tokens_consumed", "prefill_tokens_completed",
     )
 
@@ -200,6 +199,26 @@ class _OnlineRequestRuntime:
         self.queue_index = record["queue_index"]
         self.prefill_length = record["prefill_length"]
         self.decode_length = record["decode_length"]
+        # R4-P2(2026-09-29):prefill_length=0 的请求无 chunk 工作
+        # (remaining_chunks 恒 0),qp 头选择(_plan_and_emit_trains 的
+        # remaining_chunks > 0 门)永远跳过它 → 请求零报错滞留 qp 直到
+        # run-end(与 decode 侧 _plan_train 的 no-remaining-tokens 快速
+        # 失败不对称;官方路径不可达,manifest 信任边界外拒绝)。
+        if self.prefill_length <= 0:
+            raise ValueError(
+                "request {!r} has non-positive prefill_length {!r}: a "
+                "zero-work request would stall in the prefill queue"
+                .format(self.request_id, self.prefill_length))
+        # (2026-10-01) R4-P2 的对称守卫:decode_length<=0 的请求会完整走
+        # prefill → drain → decode 准入,加入 active_decode 后才在 _plan_train
+        # 崩出误导性的"no remaining tokens"状态机错误——同一 manifest 信任
+        # 边界,同一时点拒绝(官方路径不可达)。
+        if self.decode_length <= 0:
+            raise ValueError(
+                "request {!r} has non-positive decode_length {!r}: the "
+                "decode side would fail late in train planning with a "
+                "misleading state-machine error"
+                .format(self.request_id, self.decode_length))
         self.history_tokens_before = record["history_tokens_before"]
         self.prefill_context_tokens = record["prefill_context_tokens"]
         self.final_context_tokens = record["final_context_tokens"]
@@ -216,7 +235,6 @@ class _OnlineRequestRuntime:
         self.history_source_instance_index = None
         self.history_transfer_bytes = None
         self.history_recompute_tokens = None
-        self.history_transfer = None
         self.admission_evictions = ()
         self.decode_target_evictions = ()
         self.waiting_decode_admission = False
@@ -224,13 +242,11 @@ class _OnlineRequestRuntime:
         self.completion_evictions = ()
         self.kv_state_after_completion = None
         self.kv_instance_after_completion = None
-        self.hbm_after_completion = None
-        # offline: face_scheduler.py(初始值;准入时 :1442-1445 重算)
+        # 初始值;准入时(_try_admit_prefill)重算
         self.remaining_chunks = math.ceil(self.prefill_length / _P_CHUNK_HOLDER[0]) \
             if _P_CHUNK_HOLDER[0] else 0
-        # offline: face_scheduler.py(current_decode_token = prefill_context)
+        # current_decode_token 初始 = prefill_context
         self.current_decode_token = self.prefill_context_tokens
-        self.completion_ns = None
         # ---- 拼 batch 列车推进字段(2026-08-22;决策边界上闭式推进,余额
         # 与逐 token 精确值逐点一致,供 select_decode_instance 的
         # active_tokens / queue_snapshot 输入) ----
@@ -239,8 +255,14 @@ class _OnlineRequestRuntime:
         # (recompute 段 + 当前段两段式 chunk 序列的合并进度)
 
 
-# _OnlineRequestRuntime 构造需要 p_chunk(初始 remaining_chunks);调度器
-# __init__ 先设置该模块级占位再构造 runtimes(单进程单调度器,无并发)。
+# 运行期构造依赖契约(A2-10,2026-09-26 固化):_OnlineRequestRuntime.
+# __init__ 在构造期读取本模块级占位计算初始 remaining_chunks(占位为 0
+# 时 remaining_chunks 恒 0)。唯一写入点 = FaceOnlineScheduler.__init__
+# (下方 `_P_CHUNK_HOLDER[0] = self.p_chunk`),且必须先于任何
+# _OnlineRequestRuntime 构造——生产路径即如此(先建调度器,runtimes 由
+# 调度器构造);进程内单调度器、无并发,占位不做同步。风险:绕过调度器
+# 直接构造 _OnlineRequestRuntime 会得到 p_chunk=0 的 runtime;测试若改写
+# 本全局须自行还原,否则污染同进程的后续构造。
 _P_CHUNK_HOLDER = [0]
 
 
@@ -284,13 +306,11 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                  sensing: bool = False,
                  defensive_reply_cache: bool = False,
                  sensing_query_sink=None, online_stats_sink=None,
-                 ledger_sink=None):
+                 ledger_sink=None, cost_oracle=None):
         super().__init__(
             manifest=manifest,
             config=config,
-            replay=None,  # strategy 无决策日志回放源
             digest_sink=digest_sink,
-            mode=mode,
             sensing=sensing,
             decision_log_sink=decision_log_sink,
             profile_sink=profile_sink,
@@ -308,8 +328,42 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     config.kv_cache_policy))
         self.graph = graph  # GraphBatchBuilder(与 replay 路径共用;基类经 self.graph 调 begin_batch)
 
-        # 蓝图 :1314:拓扑(统一实例,require_equal_size)。
-        # offline: face_scheduler.py
+        # 阶段 D(2026-10-03,设计文档 §8.4):cost_oracle 非 None =
+        # backend=die,select_decode_instance 的本地计算成本换 die 孤立
+        # 估值源;FaceHardware 的 peak_perf_tflops/local_hbm_bandwidth_gbps
+        # 改由 oracle.hardware_summary() 派生注入(die_derived_face_hardware,
+        # face_scheduler.py)。None = backend=legacy,一切保持 hardware JSON
+        # 读数(回归保护)。策略逻辑(候选/评分/tie-break/KV)不变。
+        #
+        # 直连构造路径的一致性兜底:基类已按 manifest 的 compute-cost-model
+        # == "die" 构造 DieModelContext(阶段 C 的发射语境载体,本调度器
+        # 只读引用),但预测 oracle 由本阶段(D)提供——manifest 声明 die 而
+        # 调用方未注入 oracle 时,此处从同一份 resolved_die_model.json 构造,
+        # 保证"发射走 die、预测也走 die",不允许一半新模型一半旧 roofline
+        # 成本(设计文档 §8.4);库/配置缺位沿用 DieModelOracle 的
+        # fail-closed(不回退 roofline)。
+        die_context = getattr(self, "die_model_context", None)
+        self._owns_cost_oracle = False
+        if cost_oracle is None and die_context is not None:
+            cost_oracle = DieModelOracle(
+                config_json_path=str(die_context.die_config_path))
+            self._owns_cost_oracle = True
+        elif cost_oracle is not None and die_context is not None \
+                and Path(str(cost_oracle.config_json_path)).resolve() \
+                != Path(str(die_context.die_config_path)).resolve():
+            raise ValueError(
+                "cost_oracle config {!r} does not match the manifest "
+                "die-model-config {!r} (one die model per run)".format(
+                    str(cost_oracle.config_json_path),
+                    str(die_context.die_config_path)))
+        self.cost_oracle = cost_oracle
+        estimate_hardware = config.hardware
+        if cost_oracle is not None:
+            estimate_hardware = die_derived_face_hardware(
+                config.hardware, cost_oracle)
+        self.estimate_hardware = estimate_hardware
+
+        # 蓝图:拓扑(统一实例,require_equal_size)。
         specs = tuple(
             FaceInstanceSpec(
                 name=group.name,
@@ -319,12 +373,18 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             for group in config.inference_groups
         )
         self.topology = build_instances(
-            config.hardware, specs, require_equal_size=True)
+            estimate_hardware, specs, require_equal_size=True)
         self.p_chunk = int(config.prefill_chunk_size)
+        # 启动即校验:非正 chunk 会让请求滞留 qp 直到 run-end 审计才
+        # fail-closed(诊断迟到数小时级),与 SH_TRAIN_MAX_ITER 的 R3-I2
+        # 启动校验对称。
+        if self.p_chunk <= 0:
+            raise ValueError(
+                "prefill_chunk_size must be a positive integer, got {!r}"
+                .format(config.prefill_chunk_size))
 
-        # 蓝图 :1175-1180:加权实例图 + KV 账本。Roofline 估计在候选选择
+        # 蓝图:加权实例图 + KV 账本。Roofline 估计在候选选择
         # 时直接使用精确 d_token 计算，不持久化工作负载表。
-        # offline: face_scheduler.py
         self.instance_graph = WeightedInstanceGraph(self.topology)
         self.kv_manager = SessionKVCacheManager(
             self.topology,
@@ -334,26 +394,22 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         # 在线调度器与离线 plan 各持一个计数器，前进条件相同（仅真实平局）。
         self._decode_tie_counter = DecodeTieCounter()
 
-        # 蓝图 :1331:实例账本(统一实例,无 phase_role)。
-        # offline: face_scheduler.py
+        # 蓝图:实例账本(统一实例,无 phase_role)。
         self.instances = [
             _OnlineInstanceState(index=instance.index)
             for instance in self.topology.instances
         ]
 
-        # 蓝图 :1333-1334:future arrival min-heap(在线由 ingress ARRIVAL
+        # 蓝图:future arrival min-heap(在线由 ingress ARRIVAL
         # 事件喂入)。键含 queue_index,同 tick 到期项按冻结队列序稳定弹出。
-        # offline: face_scheduler.py
         self.arrival_heap = []
         self._sequence = 0
 
-        # 蓝图 :1353-1355:等待 decode 准入登记(按实例)。
-        # offline: face_scheduler.py
+        # 蓝图:等待 decode 准入登记(按实例)。
         self.waiting_decode_admissions = {
             instance.index: deque() for instance in self.topology.instances
         }
-        # 蓝图 :1359-1362:容量 epoch / 准入门控。
-        # offline: face_scheduler.py
+        # 蓝图:容量 epoch / 准入门控。
         self.capacity_epoch = [0 for _ in self.topology.instances]
         # Last failed admission epoch lives on the request runtime itself.
         # Keeping a second request_id->epoch dictionary retained one entry for
@@ -362,24 +418,31 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         self.decode_admission_dirty = set()
         # P0-1(2026-08-31):prefill 侧阻塞重排队门(镜像 decode 侧
         # decode_admission_dirty)。原语义下"无逐出的 prepare_history 阻塞"
-        # 不推进 capacity_epoch,纪元门(:1262 一带)对本实例永久关闭;
+        # 不推进 capacity_epoch,纪元门对本实例永久关闭;
         # 隔离时间线没有邻居完成事件重开它 => 40 个 prefill 卡死形态
         # (总文档 §4 P0-1)。阻塞即置 dirty,下一个决策边界重试。
         self.prefill_admission_dirty = set()
         # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
         # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代(截断列车无自然
-        # drain/exit 标记时发射哨兵标记);缺省/0 = 不设限(交付默认)。
-        # 交付默认 = 8(2026-08-22 §7.4 A2 对拍裁决,与 sh_1.0 母本统一:
-        # 无上限 TTFT -67.3%,16 仍 -19.1%,8 全指标 ≤1.3%;原则 1 优先
-        # 于节点数)。0 = 不设限(oracle/灵敏度复跑用)。
-        self._train_max_iter = int(
-            os.environ.get("SH_TRAIN_MAX_ITER", "8") or 0)
+        # drain/exit 标记时发射哨兵标记)。交付默认 = 8(2026-08-22 §7.4
+        # A2 对拍裁决,与 sh_1.0 母本统一:无上限 TTFT -67.3%,16 仍
+        # -19.1%,8 全指标 ≤1.3%;原则 1 优先于节点数);0 = 不设限
+        # (oracle/灵敏度复跑用)。
+        # R3-I2(2026-09-29):启动即校验(旧写法 int(raw or 0) 让负值静默
+        # 穿透、空串静默当 0 不设限,到发射点才崩):显式设置必须为非负
+        # 十进制整数(0 = 不设限),否则构造期立即 fail-closed。
+        _train_max_iter_raw = os.environ.get("SH_TRAIN_MAX_ITER", "8")
+        if not (_train_max_iter_raw.isascii() and _train_max_iter_raw.isdigit()):
+            raise ValueError(
+                "SH_TRAIN_MAX_ITER must be a non-negative decimal integer "
+                "(0 = unlimited), got {!r}".format(_train_max_iter_raw))
+        self._train_max_iter = int(_train_max_iter_raw)
         # train_id -> instance_index(哨兵事件路由)。
         self._train_instance_index = {}
         # WP9 首 token 首步批拆分(2026-08-26):batch_train_<id>_first_step
         # 唤醒 watch 的 id -> instance_index(首步批交付回声识别;fire 后
-        # 从哨兵核销通道剥离,余量批在 _plan_and_emit_trains 的 busy 分支
-        # 发射)。
+        # 从哨兵核销通道剥离,余量批在 _plan_and_emit_trains 开头的
+        # frontier 循环前实例遍历中发射)。
         self._pending_first_steps = {}
         # 拼 batch 列车台账(§7.3 不变量断言输入):每次列车发射一行,
         # 由 online_service 落 bridge 目录 train_ledger.jsonl(审计产物)。
@@ -387,14 +450,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         # 弃,不驻留本列表;缺省 None = 兼容旧路径(行仍缓冲)。
         self.train_ledger_sink = train_ledger_sink
         self.train_ledger_rows = []
-        # O(1) queue-depth snapshots.  SH_QUEUE_AGG_VERIFY=1 retains the old
-        # full sum as a shadow oracle without putting it on production runs.
-        self._queue_aggregate_verify = (
-            os.environ.get("SH_QUEUE_AGG_VERIFY") == "1")
 
         # §7.3 ready frontier:非忙且有排队工作的实例集合(发射时清除,
         # 完成/到达时设置;结束审计必须为空;sorted 保持实例 index 序 =
-        # 离线 :1520 的循环序,决策确定性不受影响)。
+        # 离线逐实例 serve 的循环序,决策确定性不受影响)。
         self._ready_frontier = set()
 
         # 请求运行账本(queue_index 序;manifest 事实 policy-independent)。
@@ -424,19 +483,27 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         # kv 事件水位:kv_actions 流(阶段 2 对照 kv_cache_events.csv 基线)。
         self._kv_events_emitted = 0
 
+    def close(self) -> None:
+        """阶段 D:释放调度器**自有**的 die oracle(直连构造路径从基类
+        DieModelContext 自动构造的那只);外部注入的 oracle 归调用方
+        (online_service 构造/释放),不在此重复释放。幂等。"""
+        oracle = getattr(self, "cost_oracle", None)
+        if getattr(self, "_owns_cost_oracle", False) and oracle is not None:
+            oracle.close()
+        self._owns_cost_oracle = False
+
     # ------------------------------------------------------------- 策略 --
 
     def run_variant_policy(self, delta) -> None:
-        """决策顺序逐行对应离线事件循环:completion 批(:1598-1682,先
-        prefill 完成后 decode 完成)先于 arrival 批(:1683-1695),最后
-        start_ready_iterations(:1697)。拼 batch 改造:completion 批先经
+        """决策顺序逐行对应离线事件循环:completion 批(先 prefill 完成后
+        decode 完成)先于 arrival 批,最后 start_ready_iterations。拼 batch
+        改造:completion 批先经
         _finalize_completed_trains 核销列车(账本推进恰一次),再处理 drain/
         完成,最后 _admit_pass 冻结并发射各空闲实例的下一列车。
         """
         tick = delta["tick"]
 
         # ---- completion 批(离线 priority 0;同 tick 先于 arrival)----
-        # offline: face_scheduler.py
         drained = []
         completed_now = []
         sentinel_trains = []
@@ -461,15 +528,16 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         # WP9 首 token 拆分(2026-08-26):batch_train_*_first_step 唤醒
         # 信号是"自己发射的首步批"的交付回声——无操作(不决策/不记账/
         # 不写 decision_log),从哨兵核销通道剥离;余量批在
-        # _plan_and_emit_trains 的 busy 分支发射(本交付或任一后续交付,
-        # 余量节点经依赖边排在首步节点之后,早发不改物理序)。首步批的
-        # commit ack 走基类协议记账(ack_count/幂等门),变体侧零动作。
+        # _plan_and_emit_trains 开头的 frontier 循环前实例遍历中发射
+        # (本交付或任一后续交付,余量节点经依赖边排在首步节点之后,
+        # 早发不改物理序)。首步批的 commit ack 走基类协议记账
+        # (ack_count/幂等门),变体侧零动作。
         sentinel_trains = [
             train_id for train_id in sentinel_trains
             if not self._consume_first_step_wakeup(train_id)
         ]
         # 拼 batch 列车账本(§3.2 边界原子提交顺序):先核销已完成列车
-        # (核验 train_id + membership_digest → 冻结成员推进 token → 退出
+        # (按 train 实例路由 + 信号集核销 → 冻结成员推进 token → 退出
         # 成员移出 active_decode → 推进 prefill chunk),再处理 drain/
         # 完成/到达,最后冻结并发射各空闲实例的下一列车。
         self._finalize_completed_trains(drained, completed_now,
@@ -478,19 +546,17 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             self._on_prefill_drain(request_id, tick)
         for request_id in completed_now:
             self._on_decode_complete(request_id, tick)
-            # 离线 :1676-1681 的下一次 arrival 排程(REQUEST_COMPLETE 边界,
+            # 离线下一次 arrival 排程(REQUEST_COMPLETE 边界,
             # 与 decode 完成同 tick 配对)。
             self._on_request_complete(request_id, tick)
 
         # ---- arrival 批(离线 priority 1)----
-        # offline: face_scheduler.py
         for arrival in delta["arrivals"]:
             self._push_arrival(arrival, tick)
         self._drain_arrival_heap(tick)
 
         # ---- 准入/发射 pass(离线 start_ready_iterations,计时部分由
         #      迭代列车承载)----
-        # offline: face_scheduler.py -> 1517-1590
         self._admit_pass(tick)
 
         # ---- kv 动作流:本批次 kv_manager 新产出的账本事件 ----
@@ -556,7 +622,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 if inflight_hits:
                     # 该列车首个信号到达:核销(账本推进恰一次),残余
                     # 信号(drain/exit 标记跨 tick fire)登记待收。
-                    iterations = train["iterations"]
+                    # (2026-10-01) the local `iterations` binding was dead.
                     for request_id, participation in train["members"]:
                         runtime = self.runtime_by_request_id[request_id]
                         runtime.decode_tokens_consumed += participation
@@ -575,7 +641,6 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                         runtime.prefill_tokens_completed += chunk_tokens
                         runtime.remaining_chunks -= 1
                         state.prefill_remaining_chunks -= 1
-                    state.iteration_count += iterations
                     state.in_flight_train = None
                     # M4 核销即删(2026-08-23):列车核销后其 train_id→
                     # 实例索引条目即死重(哨兵条目已在信号路由处弹出,
@@ -602,8 +667,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     "in-flight or recently finalized train (stale "
                     "completion mismatch)".format(
                         sorted(unresolved), instance_index))
-            # §7.3 ready frontier:列车核销 = 实例空闲(离线 :1603 的 busy
-            # 复位列车化);仍有排队工作(qp/active_decode/pending)即就绪。
+            # §7.3 ready frontier:列车核销 = 实例空闲(离线 busy 复位的
+            # 列车化);仍有排队工作(qp/active_decode/pending)即就绪。
             if state.qp or state.active_decode or state.pending_decode_ready:
                 self._ready_frontier.add(instance_index)
             else:
@@ -614,7 +679,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
 
         列车终点 = 下一个不可预测事件之前的最后一个完整迭代:队列头
         prefill 的 drain 迭代(剩余 chunk 数,先验)或全部 decode 工作
-        耗尽(无 prefill 工作时 = max 剩余 token;默认不设 T_max,§3.2.8)。
+        耗尽(无 prefill 工作时 = max 剩余 token;交付默认 T_max = 8,
+        §3.2.8)。
         成员退出不是列车边界(先验):退出成员在列车内挂 exit 标记。
         每迭代至多 1 个 prefill chunk(FCFS 队列头);chunk 之间不互拼。
         返回 None = 实例无工作。"""
@@ -674,18 +740,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         signal_set = set(exit_members) | set(drain_members)
         if capped and not drain_members and not exit_members:
             signal_set.add(train_id)  # 哨兵:列车自身 id 即完成信号
-        snapshot = json.dumps(
-            {
-                "train_id": train_id,
-                "iterations": iterations,
-                "members": member_parts,
-                "exits": exit_members,
-                "drains": drain_members,
-                "chunks": [(rid, tokens) for rid, tokens, _ in chunk_records],
-                "capped": capped,
-            },
-            sort_keys=True,
-        )
+        # (2026-10-01) the former `snapshot = json.dumps({...})` here was
+        # write-only (zero readers, same shape as the membership_digest
+        # removed in the 2026-09-30 R2 audit); dropped -- one full member
+        # table serialization per train was pure waste.
         return {
             "train_id": train_id,
             "iterations": iterations,
@@ -702,15 +760,17 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                              and not exit_members),
             "pass_spans": pass_spans,
             "signal_set": signal_set,
-            "membership_digest": hashlib.sha256(
-                snapshot.encode()).hexdigest(),
+            # (2026-09-30, R2 audit) membership_digest removed: it was
+            # computed per train but never verified at settlement (the
+            # settlement routes by train instance + signal set) and never
+            # entered the train ledger rows -- a write-only sha256.
         }
 
     def _plan_head_chunks(self, qp_head, count: int):
         """face 两段式 chunk 工作(recompute 段 + 当前 prefill 段)的接下来
         count 个 chunk:与 face 的 remaining_chunks = ceil(R/p) + ceil(P/p)
         口径逐 chunk 对齐(先 recompute 段后当前段,段边界处不足 p_chunk
-        的尾 chunk 分段计算——离线 :1526-1547 的 chunk 序同构;recompute
+        的尾 chunk 分段计算——离线 chunk 序同构;recompute
         段 context 自 0 增长,当前段在 history_tokens_before 上追加)。
         返回 [(request_id, chunk_tokens, (tokens, kv) span), ...]。"""
         recompute_tokens = qp_head.history_recompute_tokens or 0
@@ -742,9 +802,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
 
         face 策略保留(§8.2):qp 头部的 prefill 准入在服务时点逐请求尝试
         (try_admit_prefill,容量纪元门防重试风暴);准入失败时本列车退化
-        为纯 decode(离线 :1524-1526"准入失败时服务 decode 队首"的同构
+        为纯 decode(离线"准入失败时服务 decode 队首"的同构
         映射)。§7.3:逐实例 serve 只访问 ready frontier(sorted 保持实例
-        index 序 = 离线 :1520 的循环序,决策确定性不受影响)。
+        index 序 = 离线逐实例 serve 的循环序,决策确定性不受影响)。
 
         WP9 拆分列车的余量批在 frontier 循环前的实例遍历中发射(首步
         唤醒到达后的首个决策边界,或其后任一交付;余量节点经依赖边排
@@ -772,7 +832,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     qp_head = runtime
                     break
             if qp_head is not None and not qp_head.admitted_prefill:
-                if self._try_admit_prefill(qp_head, tick):  # :1524-1525
+                if self._try_admit_prefill(qp_head, tick):
                     self._emit_admission(qp_head, tick)
                 else:
                     qp_head = None  # 准入失败:纯 decode 列车(face 回退)
@@ -978,7 +1038,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         self._train_instance_index[plan["train_id"]] = state.index
         state.in_flight_train = plan
         state.first_step_remainder = train_plan
-        self._pending_first_steps[first_token["wakeup_id"]] = state.index
+        self._pending_first_steps[first_token["wakeup_id"]] = None
         self._ready_frontier.discard(state.index)  # §7.3:发射即忙
         self._emit_train_ledger_row(
             state, plan, train_plan["joiner_ids_of_record"],
@@ -1023,27 +1083,26 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 边界 --
 
     def _on_arrival(self, runtime, tick: int) -> None:
-        """离线 arrival 批单条(:1683-1695):快照 -> select_prefill_instance
+        """离线 arrival 批单条:快照 -> select_prefill_instance
         -> qp 入队 -> last_arrival_ns 更新。快照在 append 之前取(ordering_key
         反映选择时刻的排队深度/最近到达)。
 
-        offline: face_scheduler.py
         """
-        runtime.estimated_arrival_ns = tick  # :1688
-        snapshots = self._queue_snapshots()  # :1689
-        selected = select_prefill_instance(snapshots)  # :1690
+        runtime.estimated_arrival_ns = tick
+        snapshots = self._queue_snapshots()
+        selected = select_prefill_instance(snapshots)
         # P1(2026-08-31)选择期容量可行性过滤:select_prefill_instance 的
         # 只读预检包装(全上下文保守口径,详见 _filter_prefill_selection)。
         # 原选可行时选择与原实现逐字节一致(决策零扰动)。
         selected = self._filter_prefill_selection(
             runtime, snapshots, selected, tick)
-        selected_snapshot = snapshots[selected]  # :1691
-        runtime.prefill_instance_index = selected  # :1692
-        runtime.prefill_assignment_key = selected_snapshot.ordering_key  # :1693
-        self.instances[selected].qp.append(runtime)  # :1694
+        selected_snapshot = snapshots[selected]
+        runtime.prefill_instance_index = selected
+        runtime.prefill_assignment_key = selected_snapshot.ordering_key
+        self.instances[selected].qp.append(runtime)
         self.instances[selected].prefill_remaining_chunks += (
             runtime.remaining_chunks)
-        self.instances[selected].last_arrival_ns = tick  # :1695
+        self.instances[selected].last_arrival_ns = tick
         self._note_instance_ready(selected)  # §7.3 ready frontier
         # 阶段 3 感知账本:进入 admitted 层(prefill_qp 排队账本成员;
         # contract ⑥)。查询/审计数据,不进策略判据。
@@ -1051,11 +1110,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                            {"type": "prefill_qp", "instance_index": selected})
 
     def _on_prefill_drain(self, request_id: str, tick: int) -> None:
-        """离线 prefill 完成分支(:1476-1512):qp 出队 + 全局快照 ->
+        """离线 prefill 完成分支:qp 出队 + 全局快照 ->
         select_decode_instance(加权图候选 + Roofline per-die 代价) ->
         等待 decode 准入登记 + dirty + 立即 try_admit_waiting_decodes。
 
-        offline: face_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.prefill_instance_index]
@@ -1065,26 +1123,26 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         # 乱序到达——从 qp 移除该已完成成员(排队深度口径 remaining_chunks
         # 求和不变,策略输入语义等价;FCFS 物理序由列车 chunk 串行化
         # 保证)。busy 复位移至 _finalize_completed_trains(列车核销)。
-        if runtime not in state.qp:  # :1614-1615 的成员化等价
+        if runtime not in state.qp:  # 离线 qp 成员检查的等价改写
             raise RuntimeError("draining request is not in its prefill queue")
         state.prefill_remaining_chunks -= runtime.remaining_chunks
         runtime.remaining_chunks = 0
-        state.qp.remove(runtime)  # :1620
+        state.qp.remove(runtime)
         if state.qp or state.active_decode or state.pending_decode_ready:
             self._ready_frontier.add(state.index)  # §7.3:仍有排队工作
         else:
             self._ready_frontier.discard(state.index)
-        # 全局 9 实例快照(顺序敏感决策点,离线 :1622-1627 同一构造)。
-        # offline: face_scheduler.py
+        # 全局 9 实例快照(顺序敏感决策点,与离线同一构造)。
         has_prefill = [bool(instance.qp) for instance in self.instances]
         active_tokens = [
             [member.current_decode_token for member in instance.active_decode]
             for instance in self.instances
         ]
-        selected, costs = select_decode_instance(  # :1627-1637
+        selected, costs = select_decode_instance(
             topology=self.topology,
             graph=self.instance_graph,
-            hardware=self.config.hardware,
+            hardware=getattr(
+                self, "estimate_hardware", self.config.hardware),
             model=self.config.model,
             fixed_p_chunk=self.p_chunk,
             prefill_instance_index=state.index,
@@ -1092,59 +1150,64 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             decode_token_lengths=active_tokens,
             new_request_token_length=runtime.prefill_context_tokens,
             tie_counter=self._decode_tie_counter,
+            # 阶段 D:backend=die 时估值源换 die 孤立估值(构造期注入的
+            # oracle;__new__ 装配的测试夹具无该属性,getattr 零扰动回
+            # legacy)。逻辑不变,仅换本地计算成本来源。
+            cost_oracle=getattr(self, "cost_oracle", None),
         )
         # P1(2026-08-31)选择期容量可行性过滤:decode 实例"选定之时"
-        # (选择只发生一次,下方 :1637 落定前)对候选做只读预检,内存盲
+        # (选择只发生一次,下方落定前)对候选做只读预检,内存盲
         # 选择的阻塞几乎不再发生;准入一经落定仍遵守"绝不 remap"不变量
-        # (:1086-1087,本过滤不违反)。详见 _filter_decode_selection。
+        # (本过滤不违反)。详见 _filter_decode_selection。
         selected = self._filter_decode_selection(
             runtime, selected, costs, tick)
-        runtime.decode_instance_index = selected  # :1637
-        runtime.decode_candidates = costs  # :1638
-        runtime.waiting_decode_admission = True  # :1639
-        self.waiting_decode_admissions[selected].append(runtime)  # :1640
-        self.decode_admission_dirty.add(selected)  # :1641
-        # :1642-1647:同 tick 的后续 prefill 完成必须看到本 handoff 的排队
-        # (离线事件序保留);容量仍可 defer,但绝不 remap。
-        self._try_admit_waiting_decodes(tick)  # :1647
-        # 阶段 3 感知账本:admitted 层排队类型更新(waiting_decode)。
+        runtime.decode_instance_index = selected
+        runtime.decode_candidates = costs
+        runtime.waiting_decode_admission = True
+        self.waiting_decode_admissions[selected].append(runtime)
+        self.decode_admission_dirty.add(selected)
+        # 阶段 3 感知账本:admitted 层排队类型登记(waiting_decode)。
+        # (2026-10-01)登记必须先于同 tick 的准入尝试:立即准入成功时
+        # _try_admit_waiting_decodes 会把账本类型升级为 active_decode,
+        # 登记后置会把已准入成员的账本类型倒退回排队态,错误标签跨决策
+        # 边界混入 sensing 查询日志的 by_queue 桶(waiting_decode 多计、
+        # active_decode 少计)。
         self._ledger_admit(
             runtime.request_id, tick,
             {"type": "waiting_decode", "instance_index": selected})
+        # 离线同款:同 tick 的后续 prefill 完成必须看到本 handoff 的排队
+        # (离线事件序保留);容量仍可 defer,但绝不 remap。
+        self._try_admit_waiting_decodes(tick)
 
     def _on_decode_complete(self, request_id: str, tick: int) -> None:
-        """离线 decode 完成分支(:1650-1675,decode_steps_remaining==0 路径):
+        """离线 decode 完成分支(decode_steps_remaining==0 路径):
         mark_complete + note_capacity_change + 快照。active_decode 出队与
         busy 复位移至 _finalize_completed_trains(拼 batch 改造:退出迭代
         在列车内先验已知,物理完成时刻 = exit 标记节点完成时刻)。下一次
         arrival 排程在 REQUEST_COMPLETE 边界(同 tick,run_variant_policy
         中紧随本方法)。
 
-        offline: face_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
-        runtime.completion_ns = tick  # :1659
-        self.completed_requests += 1  # :1660
-        runtime.completion_evictions = self.kv_manager.mark_complete(  # :1661-1665
+        self.completed_requests += 1
+        runtime.completion_evictions = self.kv_manager.mark_complete(
             runtime.session_id,
             tick,
             runtime.request_id,
         )
-        self._note_capacity_change(  # :1666-1669
+        self._note_capacity_change(
             state.index,
             *(record.victim_instance_index
               for record in runtime.completion_evictions),
         )
         completed_snapshot = self.kv_manager.session_snapshot(
-            runtime.session_id)  # :1670
-        if completed_snapshot is None:  # :1671-1672
+            runtime.session_id)
+        if completed_snapshot is None:
             raise RuntimeError("completed session disappeared from KV manager")
-        runtime.kv_state_after_completion = completed_snapshot.state  # :1673
-        runtime.kv_instance_after_completion = (  # :1674
+        runtime.kv_state_after_completion = completed_snapshot.state
+        runtime.kv_instance_after_completion = (
             completed_snapshot.instance_index)
-        runtime.hbm_after_completion = self.kv_manager.hbm_snapshots(
-            state.index)  # :1675
         self.log_decision(
             {"kind": "completion", "request_id": runtime.request_id,
              "priority": 0},
@@ -1159,38 +1222,36 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 ],
             },
         )
-        # M4 核销即删(2026-08-23):请求完成后其 KV 迁移/逐出对象、decode
-        # 候选代价与准入 HBM 快照等胖字段再无读者(全仓 grep 证实:
-        # admission_evictions 最后读者=准入决策行、completion_evictions=
-        # 上方完成决策行、decode_candidates/prefill_decode_transfer/
-        # decode_target_evictions=decode 准入链;history_transfer/
-        # hbm_before_request/hbm_after_completion 零读者;_on_request_
-        # complete 只读 next_request/interval)——置空即删,防随完成
-        # 请求数线性常驻。face 差异点:字段集与 sh_3.0 母本不同(face
-        # 无三分 evictions/prefill_instance_loads/drain_block_ends,
-        # 另有 decode_candidates 候选代价全记录与 hbm 快照)。
+        # 完成即置空(2026-08-23 引入;2026-09-26 复核修订):请求完成后,
+        # 下列胖字段在其决策行写出后即无读者——admission_evictions 最后
+        # 读者=prefill 决策行、completion_evictions=上方完成决策行、
+        # decode_candidates/prefill_decode_transfer=decode 决策行——置空
+        # 防随完成请求数线性常驻(decode_target_evictions 已在 decode
+        # 决策核销处先置空,此处为幂等兜底)。hbm_before_request(准入时
+        # _try_admit_prefill 快照)有测试读者(online/
+        # test_admission_liveness.py 以对象身份变化断言逐请求刷新),但
+        # 完成后同样无读者,故一并置空;history_transfer/
+        # hbm_after_completion/completion_ns 三个零读者死存储已于
+        # 2026-09-26 整体删除(A2-4/A2-5)。
         runtime.decode_candidates = ()
         runtime.admission_evictions = ()
         runtime.decode_target_evictions = ()
         runtime.completion_evictions = ()
-        runtime.history_transfer = None
         runtime.prefill_decode_transfer = None
         runtime.hbm_before_request = None
-        runtime.hbm_after_completion = None
 
     def _on_request_complete(self, request_id: str, tick: int) -> None:
-        """离线 decode 完成分支的下一次 arrival 排程(:1676-1681):
+        """离线 decode 完成分支的下一次 arrival 排程:
         now + 该 turn 的 inter_request_interval_ns 注册未来 alarm(向
         ingress,不再 push 到事件堆)。
 
-        offline: face_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         # §7.3:_runtime_index O(1) 定位。
         following = self.next_request[self._runtime_index[runtime.request_id]]
         if following is not None:
-            interval = self._interval_ns(following)  # :1678-1680
-            # :1681 push_event(now + interval, 1, "arrival", following) ->
+            interval = self._interval_ns(following)
+            # 离线 push_event(now + interval, 1, "arrival", following) ->
             # 在线等价:future alarm。
             self._batch["future_alarms"].append({
                 "arrival_world_ns": tick + interval,
@@ -1229,7 +1290,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------- arrival heap --
 
     def _push_arrival(self, arrival: dict, tick: int) -> None:
-        """离线 :1336-1339 push_event(time_ns, priority=1, kind="arrival")。
+        """离线 push_event(time_ns, priority=1, kind="arrival")。
         字段形状与离线一致;键含 queue_index——同 tick 到期项按冻结队列序
         稳定弹出,与 C++ 序列化的 arrivals 冻结队列序一致。
         """
@@ -1241,7 +1302,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         self._sequence += 1
 
     def _drain_arrival_heap(self, tick: int) -> None:
-        """离线 :1592-1596 同 tick 批 + 按 (priority, sequence) 排序。只消费
+        """离线同 tick 批 + 按 (priority, sequence) 排序。只消费
         tick <= current_tick 的到期项(在线单 tick 单次交付下堆内全部为当前
         批 push 的项;未来 alarm 的到期事件由 C++ 在到期 tick 交付)。
         """
@@ -1255,51 +1316,49 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 准入 --
 
     def _admit_pass(self, tick: int) -> None:
-        """离线 start_ready_iterations(:1517-1590)的排队/准入部分(拼
+        """离线 start_ready_iterations 的排队/准入部分(拼
         batch 改造,2026-08-22:计时部分由实例迭代列车承载,列车体即
         离线"一次混合迭代(1 prefill chunk + 全部 active decode 各 1
-        token)"的连续序列折叠)。先 try_admit_waiting_decodes(:1519),
+        token)"的连续序列折叠)。先 try_admit_waiting_decodes,
         再逐就绪实例冻结并发射下一列车(_plan_and_emit_trains:统一实例
         qp 头部 chunk 与 active_decode 成员混拼,每迭代 ≤1 chunk,批成员
         只在列车边界变化;prefill 队首优先,准入失败时本列车退化为纯
-        decode——离线 :1520-1588 serve 序的同构映射)。
+        decode——离线逐实例 serve 序的同构映射)。
 
-        offline: face_scheduler.py
         """
-        self._try_admit_waiting_decodes(tick)  # :1519
+        self._try_admit_waiting_decodes(tick)
         self._plan_and_emit_trains(tick)
 
     def _try_admit_prefill(self, runtime, now_ns: int) -> bool:
-        """离线 try_admit_prefill(:1382-1453),逐行对应;无逐 chunk 计时
+        """离线 try_admit_prefill,逐行对应;无逐 chunk 计时
         账本(聚合粒度)。KV 准入链不参与 Roofline 候选成本计算。
 
-        offline: face_scheduler.py
         """
-        if runtime.admitted_prefill:  # :1384-1385
+        if runtime.admitted_prefill:
             return True
-        if runtime.prefill_instance_index is None:  # :1386-1387
+        if runtime.prefill_instance_index is None:
             raise RuntimeError("prefill admission lost its fixed mapping")
-        target_instance = runtime.prefill_instance_index  # :1388
+        target_instance = runtime.prefill_instance_index
         # P0-1(2026-08-31):dirty 例外放行——阻塞曾把本实例标记为
         # prefill_admission_dirty 时,即使纪元未推进也在本决策边界重试
         # (镜像 decode 侧 decode_admission_dirty 的重试门语义)。
-        if (runtime.prefill_attempt_epoch  # :1389
+        if (runtime.prefill_attempt_epoch
                 == self.capacity_epoch[target_instance]
                 and target_instance not in self.prefill_admission_dirty):
             return False
-        runtime.prefill_attempt_epoch = (  # :1390-1391
+        runtime.prefill_attempt_epoch = (
             self.capacity_epoch[target_instance])
         # P0-1:尝试开始即清本实例 dirty 门(阻塞分支会重新置位;
-        # 与 decode 侧 ready_targets 扫描头清 dirty :1356-1358 同构)。
+        # 与 decode 侧 ready_targets 扫描头清 dirty 同构)。
         self.prefill_admission_dirty.discard(target_instance)
-        before_snapshot = self.kv_manager.session_snapshot(  # :1392
+        before_snapshot = self.kv_manager.session_snapshot(
             runtime.session_id)
-        runtime.history_cache_state_before = (  # :1393-1395
+        runtime.history_cache_state_before = (
             "ABSENT" if before_snapshot is None else before_snapshot.state
         )
-        runtime.hbm_before_request = self.kv_manager.hbm_snapshots(  # :1396
+        runtime.hbm_before_request = self.kv_manager.hbm_snapshots(
             runtime.prefill_instance_index)
-        decision = self.kv_manager.prepare_history(  # :1397-1404
+        decision = self.kv_manager.prepare_history(
             runtime.session_id,
             runtime.prefill_instance_index,
             runtime.history_tokens_before,
@@ -1307,8 +1366,13 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             runtime.request_id,
             required_context_tokens=runtime.prefill_context_tokens,
         )
-        runtime.admission_evictions = decision.evictions  # :1405
-        if decision.admission_blocked:  # :1406-1412
+        # 跨阻塞 attempt 累积(与 decode 侧 decode_target_evictions 同口径):
+        # "先逐后竭仍不足"的阻塞 attempt 已物理生效其逐出(账本扣减+kv事件),
+        # 重试成功时不得被整体赋值抹去,否则决策行 admission_evictions 缺失
+        # 该批 victim,hbm_watermark 的"逐出全量落盘、重放闭合"契约被打破。
+        runtime.admission_evictions = tuple(
+            (*runtime.admission_evictions, *decision.evictions))
+        if decision.admission_blocked:
             if decision.evictions:
                 self._note_capacity_change(
                     target_instance,
@@ -1322,45 +1386,31 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             # _admit_pass -> _plan_and_emit_trains -> 本方法)必然重试。
             self.prefill_admission_dirty.add(target_instance)
             return False
-        runtime.history_action = decision.action  # :1413
-        runtime.history_source_instance_index = decision.source_instance_index  # :1414
-        runtime.history_transfer_bytes = decision.transfer_bytes  # :1415
-        runtime.history_recompute_tokens = decision.recompute_tokens  # :1416
-        if decision.action == NOC_MIGRATE:  # :1417-1429(history_transfer)
-            from session_kv_manager import KVTransfer  # noqa: E402
-            runtime.history_transfer = KVTransfer(
-                action="NOC_MIGRATE",
-                phase="history",
-                reason="history_other_instance",
-                session_id=runtime.session_id,
-                trigger_request_id=runtime.request_id,
-                source_instance_index=decision.source_instance_index,
-                target_instance_index=runtime.prefill_instance_index,
-                history_tokens=runtime.history_tokens_before,
-                total_bytes=decision.transfer_bytes,
-                shards=decision.transfer_shards,
-            )
-        growth = self.kv_manager.grow_prefill(  # :1430-1435
+        runtime.history_action = decision.action
+        runtime.history_source_instance_index = decision.source_instance_index
+        runtime.history_transfer_bytes = decision.transfer_bytes
+        runtime.history_recompute_tokens = decision.recompute_tokens
+        growth = self.kv_manager.grow_prefill(
             runtime.session_id,
             runtime.prefill_context_tokens,
             now_ns,
             runtime.request_id,
         )
-        if not growth.admitted:  # :1436-1439
+        if not growth.admitted:
             raise RuntimeError(
                 "prefill growth lost its successful admission reservation")
-        runtime.admission_evictions = tuple(  # :1440
+        runtime.admission_evictions = tuple(
             (*runtime.admission_evictions, *growth.evictions))
         old_remaining_chunks = runtime.remaining_chunks
-        runtime.remaining_chunks = (  # :1442-1445(快照素材;在线保持该值
+        runtime.remaining_chunks = (  # 快照素材;在线保持该值
             # 直到 drain,见类 docstring 的刻意差异清单)
             math.ceil(runtime.history_recompute_tokens / self.p_chunk)
             + math.ceil(runtime.prefill_length / self.p_chunk)
         )
         self.instances[target_instance].prefill_remaining_chunks += (
             runtime.remaining_chunks - old_remaining_chunks)
-        runtime.admitted_prefill = True  # :1446
-        self._note_capacity_change(  # :1447-1452
+        runtime.admitted_prefill = True
+        self._note_capacity_change(
             target_instance,
             decision.source_instance_index,
             *(record.victim_instance_index
@@ -1370,12 +1420,11 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         return True
 
     def _try_admit_waiting_decodes(self, now_ns: int) -> None:
-        """离线 try_admit_waiting_decodes(:1455-1515),逐行对应(含 face 的
+        """离线 try_admit_waiting_decodes,逐行对应(含 face 的
         阻塞重排队语义:admission_blocked -> queue.append + continue)。
 
-        offline: face_scheduler.py
         """
-        ready_targets = tuple(  # :1456-1465
+        ready_targets = tuple(
             instance_index
             for instance_index, queue in sorted(
                 self.waiting_decode_admissions.items())
@@ -1386,30 +1435,30 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 != self.capacity_epoch[instance_index]
             )
         )
-        for target_instance in ready_targets:  # :1466
-            self.decode_admission_epoch[target_instance] = (  # :1467
+        for target_instance in ready_targets:
+            self.decode_admission_epoch[target_instance] = (
                 self.capacity_epoch[target_instance])
-            self.decode_admission_dirty.discard(target_instance)  # :1468
-            queue = self.waiting_decode_admissions[target_instance]  # :1469
-            pending_count = len(queue)  # :1470
-            for _ in range(pending_count):  # :1471
-                runtime = queue.popleft()  # :1472
-                if not runtime.waiting_decode_admission:  # :1474-1475
+            self.decode_admission_dirty.discard(target_instance)
+            queue = self.waiting_decode_admissions[target_instance]
+            pending_count = len(queue)
+            for _ in range(pending_count):
+                runtime = queue.popleft()
+                if not runtime.waiting_decode_admission:
                     continue
-                if runtime.decode_instance_index != target_instance:  # :1476-1477
+                if runtime.decode_instance_index != target_instance:
                     raise RuntimeError(
                         "decode admission target queue was corrupted")
-                move = self.kv_manager.move_prefill_to_decode(  # :1478-1484
+                move = self.kv_manager.move_prefill_to_decode(
                     runtime.session_id,
                     target_instance,
                     now_ns,
                     runtime.request_id,
                     final_context_tokens=runtime.final_context_tokens,
                 )
-                runtime.decode_target_evictions = tuple(  # :1485-1487
+                runtime.decode_target_evictions = tuple(
                     (*runtime.decode_target_evictions, *move.evictions)
                 )
-                if move.admission_blocked:  # :1488-1495
+                if move.admission_blocked:
                     if move.evictions:
                         self._note_capacity_change(
                             target_instance,
@@ -1423,34 +1472,34 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     # 它,被阻塞会话保持 ACTIVE 钉住 KV,阻塞固化成舰队级
                     # 循环等待。有逐出的阻塞本就经 _note_capacity_change
                     # 重开(幂等,双通道无害)。效果:ready_targets 扫描开始
-                    # 时同步纪元+清 dirty(:1356-1358),扫描内再次置 dirty
+                    # 时同步纪元+清 dirty,扫描内再次置 dirty
                     # => 下一个决策边界(任一交付的 _admit_pass)必然重试
                     # 本实例队列;残余环由 P0-2 fail-loud 兜底(总文档 §4)。
                     self.decode_admission_dirty.add(target_instance)
-                    queue.append(runtime)  # :1494(阻塞重排队,face 语义)
-                    continue  # :1495
-                runtime.prefill_decode_transfer = move.transfer  # :1496
-                growth = self.kv_manager.grow_decode(  # :1497-1502
+                    queue.append(runtime)  # 离线同款(阻塞重排队,face 语义)
+                    continue
+                runtime.prefill_decode_transfer = move.transfer
+                growth = self.kv_manager.grow_decode(
                     runtime.session_id,
                     runtime.final_context_tokens,
                     now_ns,
                     runtime.request_id,
                 )
-                if not growth.admitted:  # :1503-1504
+                if not growth.admitted:
                     raise RuntimeError(
                         "decode growth lost its successful target admission")
-                runtime.decode_target_evictions = tuple(  # :1505-1507
+                runtime.decode_target_evictions = tuple(
                     (*runtime.decode_target_evictions, *growth.evictions)
                 )
                 # 拼 batch 改造(§3.2 KV 就绪栅栏):decode 准入(KV 迁移
                 # 决策 + 容量增长)在此完成,成员进入 pending_decode_ready,
                 # 待加入 decode 实例的下一列车(3000 迁移随加入列车发射,
                 # 物理先于列车体;迁移列车中途完成的也只能等下列车边界)。
-                decode_state = self.instances[target_instance]  # :1508
+                decode_state = self.instances[target_instance]
                 decode_state.pending_decode_ready.append(runtime)
                 if decode_state.in_flight_train is None:
                     self._ready_frontier.add(target_instance)  # §7.3
-                runtime.waiting_decode_admission = False  # :1509
+                runtime.waiting_decode_admission = False
                 # decode 决策记录 + assignment(拼 batch 改造:decode 段发射
                 # 移至加入列车,即 _plan_and_emit_trains → emit_iteration_
                 # train;DECODE_COMPLETION watch 由列车 exit 标记承载)。
@@ -1481,7 +1530,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                             runtime.decode_instance_index),
                         # 问题 2A 顺带修复(2026-09-05,与 wscllm 同名同构):
                         # decode 准入逐出快照序列化——发射时点必在本请求
-                        # 全部 append(:1406-1408/:1439-1441,含跨阻塞
+                        # 全部 append(准入/增长两段逐出,含跨阻塞
                         # attempt 累积)之后,快照即全集;发射后立即置空
                         # 核销(见下方),防未来工具重读 decode 行时与
                         # prefill 行的准入预占快照双计。A/B 剥离清单字段。
@@ -1492,8 +1541,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     },
                 )
                 # 问题 2A 顺带修复:decode 决策核销——先序列化后置空,
-                # 镜像 completion 对 completion_evictions 的语义(:1171
-                # 的 M4 置空保留为幂等兜底);每请求恰一条 decode 行,
+                # 镜像 completion 对 completion_evictions 的语义(completion
+                # 处的置空保留为幂等兜底);每请求恰一条 decode 行,
                 # 置空无双计风险。
                 runtime.decode_target_evictions = ()
                 # 阶段 3 感知账本:admitted 层排队类型更新(active_decode;
@@ -1501,7 +1550,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 self._ledger_admit(
                     runtime.request_id, now_ns,
                     {"type": "active_decode", "instance_index": target_instance})
-                self._note_capacity_change(  # :1510-1515
+                self._note_capacity_change(
                     target_instance,
                     move.source_instance_index,
                     *(record.victim_instance_index
@@ -1519,7 +1568,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         PREFILL_DRAIN watch 不再在此注册——移至覆盖其最后 chunk 的列车
         drain 标记)。
 
-        offline: face_scheduler.py(发射对象为整段而非 chunk → 列车)
+        蓝图差异:发射对象为整段而非 chunk → 列车
         """
         plan = self._plan_dict(runtime)
         self.graph.emit_admission_batch(plan)
@@ -1617,21 +1666,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         }
 
     def _queue_snapshots(self):
-        """离线 queue_snapshot(:1371-1376):全部 9 统一实例(无角色过滤),
+        """离线 queue_snapshot:全部 9 统一实例(无角色过滤),
         remaining_chunks = qp 成员之和,last_arrival_ns = 实例最近到达。
 
-        offline: face_scheduler.py / 1689
         """
-        if self._queue_aggregate_verify:
-            for state in self.instances:
-                recomputed = sum(
-                    member.remaining_chunks for member in state.qp)
-                if recomputed != state.prefill_remaining_chunks:
-                    raise RuntimeError(
-                        "prefill queue aggregate drift on instance {}: "
-                        "ledger={} recomputed={}".format(
-                            state.index, state.prefill_remaining_chunks,
-                            recomputed))
         return tuple(
             PrefillQueueSnapshot(
                 instance_index=state.index,
@@ -1666,12 +1704,12 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
     def _filter_decode_selection(self, runtime, selected, costs,
                                  tick: int) -> int:
         """P1(2026-08-31)decode 选择期容量可行性过滤:在 decode 实例
-        选定之时(select 只发生一次,调用点 :1081 尚未落定)对全部候选
+        选定之时(select 只发生一次,调用点尚未落定)对全部候选
         做只读预检——这不是"准入后改实例",不违反"绝不 remap"不变量
-        (:1086-1087:容量仍可 defer,但绝不 remap)。
+        (容量仍可 defer,但绝不 remap)。
 
-        需求口径严格镜像 move_prefill_to_decode(session_kv_manager.py
-        :1606-1640,只读版):final_shards = kv_cache_shard_bytes_for_
+        需求口径严格镜像 move_prefill_to_decode(只读版):final_shards =
+        kv_cache_shard_bytes_for_
         tokens(model, final_context_tokens, tp);候选 c 的需求 =
         final_shards −(会话 RESIDENT 且已在 c 上的 shard_bytes),即
         source==target 按增量、否则全量(双驻留:源副本仍占源)。
@@ -1680,8 +1718,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
           - 原 selected 可行 -> 原样返回:决策日志与原实现零差异,
             tie_counter 语义零扰动(select_decode_instance 本体不动);
           - 原 selected 不可行 -> 可行集内按 per_die_delta_ns 最小重选
-            (并列取最小 instance_index,与 select_decode_instance 的
-            最小 delta 口径一致);
+            (并列取最小 instance_index 的旧确定性口径;过滤重选绕过
+            tie_counter,不计入 select_decode_instance 的平局轮转);
           - 全部不可行 -> 保持原 selected(进入 P0-1 的阻塞-重试路径,
             探测不 remap、不产生任何容量副作用)。
         仅在过滤实际介入(原选不可行)时记一条决策日志辅助字段
@@ -1698,10 +1736,17 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             if (session_shards is not None
                     and session_shards.state == RESIDENT
                     and session_shards.instance_index == cost.instance_index):
-                # source==target 增量口径(镜像 :1622-1625)。
+                # source==target 增量口径(镜像离线全局实例快照同款)。
                 required = tuple(
                     want - have for want, have in zip(
                         final_shards, session_shards.shard_bytes))
+            if any(part < 0 for part in required):
+                # R3-I4(2026-09-29):增量需求为负 = 会话已驻留分片超过
+                # final 需求(manifest 自相矛盾才可达)。真实路径
+                # ensure_physical_fit 对负 required 直接 raise -> abort;
+                # probe 若放行会先判"可行"再到真实臂崩——双臂对称
+                # fail-closed:probe 侧同样拒绝(候选按不可行剔除)。
+                continue
             if self._probe_instance_capacity(cost.instance_index, required):
                 feasible_costs.append(cost)
         if any(cost.instance_index == selected for cost in feasible_costs):
@@ -1738,7 +1783,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
     def _filter_prefill_selection(self, runtime, snapshots, selected,
                                   tick: int) -> int:
         """P1(2026-08-31)prefill 选择期容量可行性过滤:包装
-        select_prefill_instance(:1690)——到达时刻对每个实例快照对应的
+        select_prefill_instance——到达时刻对每个实例快照对应的
         实例做只读预检。
 
         需求 = kv_cache_shard_bytes_for_tokens(model,
@@ -1791,7 +1836,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         return selected  # 幸存集空:保持原选,阻塞交给 P0-1 重试
 
     def _note_capacity_change(self, *instance_indexes) -> None:
-        """离线 note_capacity_change(:1364-1369)。"""
+        """离线 note_capacity_change。"""
         for instance_index in set(instance_indexes):
             if instance_index is not None:
                 self.capacity_epoch[instance_index] += 1
@@ -1841,7 +1886,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
     # --------------------------------------------------------------- 收尾 --
 
     def verify_run_end(self) -> None:
-        """基类协议校验之上,叠加离线 :1699-1705 的收尾断言与 §7.3 结束
+        """基类协议校验之上,叠加离线收尾断言与 §7.3 结束
         审计(arrival heap / ready frontier 全空)。"""
         super().verify_run_end()
         if self.completed_requests != self.expected_request_count:
@@ -1877,10 +1922,20 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         if any(queue for queue in self.waiting_decode_admissions.values()):
             raise RuntimeError(
                 "strategy run ended with pending decode admissions")
+        # (2026-09-30, R2 audit note) The arrival_heap check below is
+        # structurally tautological at run end: every push happens at the
+        # current delivery tick and _drain_arrival_heap(tick) runs later in
+        # the SAME run_variant_policy pass, so the heap is empty whenever
+        # this method is reached. Kept as a belt-and-braces tripwire; the
+        # real ordering guarantee lives in run_variant_policy.
         if self.arrival_heap:
             raise RuntimeError(
                 "run ended with {} unconsumed arrival events".format(
                     len(self.arrival_heap)))
+        # (2026-09-30, R2 audit note) Similarly, _ready_frontier and the
+        # qp-side prefill_remaining_chunks checks are implied by the
+        # "no instance has work" audit above on every reachable path; they
+        # are kept as independent tripwires, not as primary gates.
         if self._ready_frontier:
             raise RuntimeError(
                 "run ended with non-empty ready frontier: {!r}".format(

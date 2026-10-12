@@ -90,7 +90,9 @@ class EventQueue {
      * callback or a deferred handler, same-tick events MUST go through
      * schedule_event_deferred(); schedule_event(current_time, ...) would
      * try_emplace a current_time EventList into the main map and trip the
-     * strict-increase assert (EventQueue.cpp :31) on the next proceed().
+     * strict-increase assert at the top of EventQueue::proceed() on the
+     * next proceed(). (2026-10-01: line-number anchor removed -- cite the
+     * function instead; line numbers drift.)
      */
     void set_tick_end_callback(Callback callback, CallbackArg arg) noexcept;
 
@@ -114,8 +116,8 @@ class EventQueue {
      * work still pends. The online main loop queries this so it can force
      * the next decision boundary (schedule_event(T+1, wakeup)) and let a
      * proceed() drain it, instead of blocking on a wait that would never
-     * be woken. Informational for the static binary (nothing schedules
-     * deferred there).
+     * be woken. Informational for the legacy flush arm exercised by the
+     * backend/ED tests (nothing schedules deferred events there).
      *
      * @return true if deferred_queue_ is non-empty
      */

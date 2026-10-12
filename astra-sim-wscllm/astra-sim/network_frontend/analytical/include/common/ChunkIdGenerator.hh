@@ -66,7 +66,8 @@ class ChunkIdGenerator {
                   ChunkSize chunk_size,
                   int chunk_id) noexcept;
 
-    /// Diagnostic/test accessor: keys still needed for outstanding traffic.
+    /// 测试专用 (test-only): 生产侧零调用，仅 chunk_id_generator_test.cc
+    /// 断言内部 map 规模；保留作生成器不变量的独立校验口径。
     [[nodiscard]] size_t size() const noexcept;
 
   private:

@@ -7,10 +7,11 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
-QueueLevelHandler::QueueLevelHandler(int level,
-                                     int start,
-                                     int end,
-                                     AstraNetworkAPI::BackendType backend) {
+// (2026-09-28 C1: the BackendType parameter is gone with the unreachable
+// upstream Garnet backend -- the only thing it ever selected was the former
+// `backend != Garnet` clause below, which was always true for the only
+// constructible value.)
+QueueLevelHandler::QueueLevelHandler(int level, int start, int end) {
     for (int i = start; i <= end; i++) {
         queues.push_back(i);
     }
@@ -18,13 +19,13 @@ QueueLevelHandler::QueueLevelHandler(int level,
     first_allocator = 0;
     last_allocator = queues.size() / 2;
     this->level = level;
-    this->backend = backend;
 }
 
 std::pair<int, RingTopology::Direction> QueueLevelHandler::get_next_queue_id() {
     RingTopology::Direction dir;
-    if ((backend != AstraNetworkAPI::BackendType::Garnet || level > 0) &&
-        queues.size() > 1 && allocator >= (queues.size() / 2)) {
+    // (The former `backend != Garnet || level > 0` disjunct was always true
+    // -- the Garnet backend is unreachable in this repository.)
+    if (queues.size() > 1 && allocator >= (queues.size() / 2)) {
         dir = RingTopology::Direction::Anticlockwise;
     } else {
         dir = RingTopology::Direction::Clockwise;

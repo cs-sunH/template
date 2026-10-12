@@ -68,14 +68,18 @@ def _run(spans, **overrides):
                                 **{**KWARGS, **overrides})
     totals = {}
     for node in builder.comp_nodes:
-        category = node["name"].rsplit("_", 1)[-1]
         # name 形如 "test_all_layers_attention_qkv_projection":取
-        # "all_layers_"/"all_passes_" 后缀段做类别键。
+        # "all_layers_"/"all_passes_" 后缀段做类别键;无段名节点显式
+        # fail(不静默混入伪造桶)。
         name = node["name"]
         if "_all_layers_" in name:
             category = name.split("_all_layers_", 1)[1]
         elif "_all_passes_" in name:
             category = "pass_" + name.split("_all_passes_", 1)[1]
+        else:
+            raise AssertionError(
+                "comp node without _all_layers_/_all_passes_ segment: "
+                f"{name}")
         totals.setdefault(category, [0, 0, 0])
         totals[category][0] += node["num_ops"]
         totals[category][1] += node["tensor_size"]

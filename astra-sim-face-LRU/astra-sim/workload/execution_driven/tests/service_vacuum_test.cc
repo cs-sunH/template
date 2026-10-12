@@ -54,11 +54,13 @@ is green).
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include <astra-network-analytical/common/EventQueue.h>
 
 using namespace AstraSim::ExecutionDriven;
@@ -77,23 +79,32 @@ void expect(bool cond, const std::string& what) {
 
 // 30 single-turn sessions (P0 fix: one turn-0 row per session, blocks
 // contiguous -- the structure validation fail-closes otherwise); arrivals
-// in 3 batches of 10 (tick 1000/2000/3000). high_water=10 is advisory
-// now: the calendar reader indexes the whole file and queues every turn-0
-// Submit during the FIRST pump, so the vacuum window is "queued but not
-// yet drained", not "read window boundary".
+// in 3 batches of 10 (tick 1000/2000/3000). The ingress below uses the
+// default command-queue capacity (4096; the constructor takes no
+// high_water argument any more): the calendar reader indexes the whole
+// file and queues every turn-0 Submit during the FIRST pump, so the
+// vacuum window is "queued but not yet drained", not "read window
+// boundary".
 const char* kCsvHeader =
     "session_id,turn_index,request_id,prefill_length,decode_length,"
     "session_arrival_time_ns,inter_request_interval_ns";
 
 std::string make_csv(const std::string& path) {
-    std::ofstream out(path);
-    out << kCsvHeader << "\n";
+    // M-16 同款修复(移植到本仓 2026-10-07):provenance 门 REQUIRED——
+    // 经共享 helper 写出,CSV 与 sidecar 同一次落盘;显式传入本夹具的
+    // 7 列 legacy 表头(helper 统计只依赖数据行字段位次,与表头列数无关,
+    // sidecar 仍然逐字节匹配)。字节布局与原逐行写一致:header + 每行 +
+    // 换行。
+    std::vector<std::string> rows;
+    rows.reserve(30);
     for (int row = 0; row < 30; ++row) {
         const uint64_t arrival =
             1000 + static_cast<uint64_t>(row / 10) * 1000;  // 3 batches
-        out << "s" << row << ",0,req_" << row << ",100,10," << arrival
-            << ",0\n";
+        rows.push_back("s" + std::to_string(row) + ",0,req_" +
+                       std::to_string(row) + ",100,10," +
+                       std::to_string(arrival) + ",");
     }
+    FixtureProvenance::write_queue_fixture(path, rows, kCsvHeader);
     return path;
 }
 

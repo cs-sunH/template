@@ -4,8 +4,10 @@ LICENSE file in the root directory of this source tree.
 
 main_online.cc -- online (execution-driven) entry point (wscllm phase 1).
 
-Step-1-2 implementation (方案 §4 步骤 1-2): initialization mirrors the static
-main.cc (MetricCollector init, topology, FluidScheduler, Sys) but
+Step-1-2 implementation (方案 §4 步骤 1-2): initialization mirrored the
+offline static main.cc (MetricCollector init, topology, FluidScheduler,
+Sys; the static entry was deleted with the offline pipeline on
+2026-08-18) but
 
   - parses the online CLI family explicitly (OnlineCli; defaults/mutex/missing
     rules unit-tested in tests/cli_online_test.cc). Step 1-8/1-9: --online-mode
@@ -62,8 +64,8 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
     (expected: 1177 for the 20.csv first-30-seconds input).
   - run end: svc.finished() marks logical completion; process exit additionally
     requires the EventQueue, deferred issue pass, and DecisionMailbox to be
-    drained.  Assertions completed == CSV data rows and
-    no_decision_python_callback_count == 0 (acceptance: 1177/1177).
+    drained.  Assertion: completed == CSV data rows (acceptance:
+    1177/1177).
 
 Step 1-10 (runners + IDLE fixture):
   - --request-queue-csv is optional (合同② request-neutral default): absent
@@ -109,7 +111,12 @@ Step 1-10 (runners + IDLE fixture):
 #include <astra-network-analytical/congestion_aware/Helper.h>
 #include <json/json.hpp>
 
+// The retired LocalMemUsageTracker.hh used to leak this alias into every
+// TU including Workload.hh; declare it explicitly here instead.
+using json = nlohmann::json;
+
 #include <sys/resource.h>
+#include <unistd.h>
 
 #include <cerrno>
 #include <cstdint>
@@ -158,11 +165,6 @@ struct OnlineDriverContext {
     // map, the in-flight request tracking and the phase-5 counters.
     GraphBatchCommitter* committer = nullptr;
     uint64_t delivery_seq = 0;
-    // Step 1-11: pending T->T+1 deferral record. Set by the main loop when
-    // it schedules the explicit next-decision-boundary wakeup; consumed (and
-    // reset) by the next ed_driver_tick_end delivery, which serializes it as
-    // StateDelta.deferred_from_tick. 0 = no pending deferral.
-    uint64_t deferred_from_tick = 0;
     // Phase-3 perception feature flag (方案 §6.2 操作 1; default off until
     // phase 6): when set, the tick-end gate computes the per-rank
     // injected-unfinished ledger summary into StateDelta.injected_unfinished.
@@ -222,12 +224,19 @@ struct CommitArg {
 // anchors). The batch's nodes carry request_id/stage (graph_batch_builder
 // contract); per (rank, request_id, stage) the FIRST node of the group is
 // the start anchor (issue event) and the LAST is the end anchor (complete
-// event). Transfer nodes of the KV routes (node names contain "kv" --
-// history_kv / prefill_to_decode_kv) register the memory anchor (code 7)
-// on the last transfer node of each (request_id, rank): the offline
-// doc-sec.4.3 semantics (transfer-arrival memory anchor = last transfer
-// node on each target rank). Watch members supply the prefill/decode rank
-// sets.
+// event). Transfer nodes of the KV routes register the memory anchor
+// (code 7) on the last KV transfer leg of each (request_id, rank): the
+// offline doc-sec.4.3 semantics (transfer-arrival memory anchor = last
+// transfer node on each target rank). The legs are identified EXACTLY via
+// is_kv_route_transfer_leg (ParsedGraphBatch.hh) -- comm legs whose name
+// closes with "<route><send|recv>_rank{S}_to_rank{T}" for route
+// _history_kv / _prefill_to_decode_kv. A bare "kv" substring match is
+// WRONG here: the aggregated compute pass emits
+// "..._all_layers_attention_qkv_projection" comp nodes (same "kv"
+// substring, emitted after the transfer legs in the same request
+// context) that would steal the anchor and fabricate one for
+// transfer-free requests (P1 fix, 2026-09-28). Watch members supply the
+// prefill/decode rank sets.
 //
 // Installed as GraphBatchCommitter::Context::metrics_anchor_hook and
 // invoked from inside commit() (Phase B-1.5) -- see the "PHASE-7 §10.3
@@ -306,7 +315,11 @@ static void register_online_metrics_anchors(
         if (first.rank < 0) {
             first = {rank, *store_id};
         }
-        if (name.find("kv") != std::string::npos) {
+        // P1 fix (2026-09-28): exact KV-transfer-leg identification
+        // (see is_kv_route_transfer_leg); the old name.find("kv") match
+        // also captured the aggregated "..._attention_qkv_projection"
+        // comp node emitted later in the same request context.
+        if (is_kv_route_transfer_leg(parsed.node)) {
             last_transfer[{request_id, rank}] = {rank, *store_id};
         }
     }
@@ -400,7 +413,9 @@ void ed_commit_cb(void* arg) {
     // Full-validation batches use one atomic validate_and_commit()
     // call; validation-off batches retain commit()'s mandatory preflight.
     // Phase 6 (方案 §9.1): graph_validate_ns is the API's validate_impl-only
-    // duration; the public validate() itself remains pure for fixtures.
+    // duration; the former public Phase-A validate() entry has been folded
+    // into GraphBatchCommitterTestAccess (fixture-only; production runs go
+    // through validate_and_commit()/commit()).
     const bool should_validate = driver->online_validate == 1;
     if (should_validate) {
         GraphBatchCommitter::ValidateAndCommitResult validation_result;
@@ -487,8 +502,8 @@ void ed_commit_cb(void* arg) {
 // delivered (仿真加速分析.md §4.3 / 方案 step 1-11). The main loop schedules
 // this event at T+1 whenever the mailbox holds work and the queue is empty;
 // the event body is a no-op -- the delivery itself happens at the T+1
-// tick-end gate, which records the T -> T+1 deferral in
-// StateDelta.deferred_from_tick (explicit, never silent).
+// tick-end gate, which derives StateDelta.deferred_from_tick from the
+// events' recorded formation ticks (T -> T+1, explicit, never silent).
 void ed_delivery_wakeup(void*) {}
 
 // ---------------------------------------------------------------------------
@@ -503,21 +518,25 @@ void ed_delivery_wakeup(void*) {}
 void ed_driver_tick_end(void* ctx) {
     auto* driver = static_cast<OnlineDriverContext*>(ctx);
     if (!driver->mailbox->has_decision_work()) {
-        // Step 1-11: defensive reset -- a pending deferral must never leak
-        // into a later, unrelated delivery (there is no code path that
-        // clears the mailbox without delivering, so this is unreachable;
-        // belt and suspenders).
-        driver->deferred_from_tick = 0;
         driver->mailbox->count_tick_end_without_decision();
         return;  // no Python
     }
-    // Step 1-11: consume the pending deferral record. The wakeup event fired
-    // this tick (main loop scheduled it at T+1 with the mailbox non-empty),
-    // so this epoch's events were formed at deferred_from_tick < tick -- the
-    // delivery is explicitly recorded as the T->T+1 deferral (the plan's
-    // "必须显式记录,不得静默改变顺序"; ordinary epochs carry 0).
-    const uint64_t deferred_from = driver->deferred_from_tick;
-    driver->deferred_from_tick = 0;
+    // Step 1-11: deferred_from_tick = the earliest tick this epoch's pending
+    // events were formed at (stamped by the push sites off the simulation
+    // clock). Events formed in a tick's deferred drain and delivered by a
+    // LATER tick's gate (the ordinary multi-rank shape, and the explicit
+    // T->T+1 wakeup alike) carry that earlier formation tick here; 0
+    // semantics = every event formed at this delivery tick (the ordinary
+    // same-tick case). The deferral is explicit, never silent (the plan's
+    // "必须显式记录,不得静默改变顺序").
+    uint64_t deferred_from = 0;
+    if (driver->mailbox->has_pending_formation_tick()) {
+        const uint64_t formed_at =
+            driver->mailbox->min_pending_formation_tick();
+        if (formed_at < driver->event_queue->get_current_time()) {
+            deferred_from = formed_at;
+        }
+    }
     // Phase-3 sensing (方案 §6.2 操作 1): per-rank injected-unfinished ledger
     // summary at this epoch. Pure query over the committed graphs -- no state
     // is touched and no simulation semantics change, so the phase-2 decision
@@ -603,18 +622,67 @@ const char* service_state_name(const ServiceState state) {
 //   {"kind":"Submit", "session_id":..., "turn_index":..., "request_id":...,
 //    "prefill_length":..., "decode_length":..., "arrival_world_ns":...,
 //    "inter_request_interval_ns":...}
-//   {"kind":"CloseInput"}
-// The FIFO open blocks until a writer opens the read end (the fixture script
-// holds one writer open for the whole injection session). EOF (writer
-// closed) exits the thread; the input stays open. The thread is detached:
-// it may be parked in the blocking FIFO open/read at run end and dies with
-// the process.
+//   {"kind":"CloseInput"} (explicit close),
+//   {"kind":"EndOfFile"} (EOF terminal command) or
+//   {"kind":"Error"} (fail-closed abort; phase-7 §10.7 三态区分).
+// The FIFO open blocks until a writer opens the write end (the fixture
+// script holds one writer open for the whole injection session). EOF
+// (writer closed) exits the thread; the input stays open. The thread is
+// detached: at run end it may be parked in the blocking FIFO open/read OR
+// still spinning in the bounded-queue enqueue retry loop below -- main
+// hands the svc/ingress owners to the process at the run-end gate (E1 fix)
+// so the thread can outlive main's scope without a use-after-free.
+// Raw-channel diagnostics for the FIFO reader thread (4.4 fix, 2026-09-29):
+// the thread is detached BY DESIGN (it may be parked in the blocking FIFO
+// open/read at run end and dies with the process), so it outlives main and
+// must not touch iostreams -- std::cout/std::cerr are destroyed during
+// static destruction after main returns, and a post-main diagnostics write
+// from this thread was undefined behavior. write(2) on the process-level
+// stderr descriptor has no such lifetime exposure.
+void fifo_reader_log(const std::string& message) {
+    const char* bytes = message.c_str();
+    size_t remaining = message.size();
+    while (remaining > 0) {
+        const ssize_t written =
+            ::write(STDERR_FILENO, bytes, remaining);
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        if (written <= 0) {
+            return;  // diagnostics are best-effort; never wedge the thread
+        }
+        bytes += written;
+        remaining -= static_cast<size_t>(written);
+    }
+}
+
 void command_fifo_reader(const std::string& path, RequestIngress& ingress,
                          ServiceCoordinator& svc) {
     std::ifstream fifo(path);
     if (!fifo.is_open()) {
-        std::cerr << "[online] command-fifo: cannot open " << path << ": "
-                  << std::strerror(errno) << std::endl;
+        // C3 fix (2026-09-28): fail closed instead of fail open. The old
+        // path logged to stderr and returned, leaving the input gate open
+        // with zero producers: with the idle watchdog explicitly disabled
+        // (--idle-watchdog-s 0) the run then parked in wait_for_work()
+        // forever with no diagnostic beyond the one lost stderr line.
+        // Enqueueing the Error command reuses the established fail-closed
+        // terminal (RequestIngress drain -> abort, phase-7 §10.7): the
+        // enqueue signals work, the main loop's pending-command round trip
+        // drains it and the process aborts non-zero. The parse-time FIFO
+        // gate (OnlineCli P2-4: path must exist and be a FIFO) makes this
+        // arm a narrow race defense, not the common failure mode.
+        fifo_reader_log("[online] command-fifo: cannot open " + path + ": " +
+                        std::strerror(errno) +
+                        " -- enqueueing the fail-closed Error terminal\n");
+        IngressCommand ic;
+        ic.kind = IngressCommandKind::Error;
+        while (!ingress.enqueue_command(ic)) {
+            if (svc.finished()) {
+                // The run already ended; nothing left to abort.
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         return;
     }
     std::string line;
@@ -623,44 +691,177 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
             continue;
         }
         nlohmann::json cmd;
+        IngressCommand ic;
+        // Parse AND field extraction share one guard (M6-B1 fix, 2026-09-27):
+        // a field-type mismatch (e.g. {"kind":5} or a string turn_index)
+        // throws json::type_error from cmd.value() -- the extraction used to
+        // run outside the try, so such a line terminated the whole process
+        // from this detached thread instead of being skipped as malformed.
         try {
             cmd = nlohmann::json::parse(line);
+            const std::string kind = cmd.value("kind", std::string());
+            if (kind == "CloseInput") {
+                // Phase-7 §10.7: explicit close (合同② close 命令). The
+                // lifecycle audit records close_source=explicit.
+                ic.kind = IngressCommandKind::CloseInput;
+            } else if (kind == "EndOfFile") {
+                // Phase-7 §10.7: EOF terminal command (合同② EOF 命令) --
+                // the producer declares the input naturally exhausted;
+                // distinct from an explicit close in the run-end lifecycle
+                // audit.
+                ic.kind = IngressCommandKind::EndOfFile;
+            } else if (kind == "Error") {
+                // Phase-7 §10.7: error terminal command (合同② error 命令)
+                // -- fail-closed abort (进程退出非 0,不做静默降级); the
+                // drain path aborts on it.
+                ic.kind = IngressCommandKind::Error;
+            } else if (kind == "Submit") {
+                // C3 fix (2026-09-28): the Submit fields are REQUIRED, not
+                // defaulted. The old cmd.value(field, default) extraction
+                // silently turned a missing field into the default --
+                // arrival_world_ns -> 0 (a turn-N request teleporting to
+                // t=0, bypassing the arrival-order invariants) and
+                // request_id -> "" (an unidentifiable request colliding
+                // with every other defaulted id downstream). A Submit line
+                // missing any contract field is malformed like a line that
+                // fails to parse: loud stderr + skip, never a silent
+                // default (the JSON contract above lists all 8 fields).
+                static const char* const kSubmitFields[] = {
+                    "session_id", "turn_index", "request_id",
+                    "prefill_length", "decode_length", "arrival_world_ns",
+                    "inter_request_interval_ns"};
+                std::string missing;
+                for (const char* field : kSubmitFields) {
+                    if (!cmd.contains(field)) {
+                        if (!missing.empty()) {
+                            missing += ", ";
+                        }
+                        missing += field;
+                    }
+                }
+                if (!missing.empty()) {
+                    fifo_reader_log("[online] command-fifo: Submit line is "
+                                    "missing required field(s): " + missing +
+                                    ": " + line + "\n");
+                    continue;
+                }
+                // F1-CPP C1-8 fix (2026-09-29): the CSV side rejects an
+                // empty request_id at the reader (C3 M5 semantics); the
+                // FIFO Submit channel is the same producer trust boundary
+                // and gets the same empty-id gate, in this arm's own
+                // malformed-line channel (loud stderr + skip -- a line
+                // that never enters the queue cannot wedge the identity
+                // gates downstream). Duplicates fail closed one step
+                // later, at the drain (RequestIngress), against the whole
+                // process-level id set.
+                if (cmd.value("request_id", std::string()).empty()) {
+                    fifo_reader_log("[online] command-fifo: Submit line has "
+                                    "an empty request_id (every request must "
+                                    "be identifiable): " + line + "\n");
+                    continue;
+                }
+                // Reserved-token gate (4.2 fix, same as the CSV reader):
+                // "first_token" is the WP9 node-name anchor substring and
+                // the graph builder embeds the sanitized ids in every
+                // regular node name -- an id carrying it hijacked every
+                // node of that request into the marker arm. The
+                // "batch_train_" prefix is reserved the same way (the
+                // train-sentinel namespace: watches pinned to prefill,
+                // eligibility checks skipped); a real request id in it
+                // would bypass those fail-closed gates, so every input
+                // port rejects the prefix (CSV reader, alarm-envelope
+                // parser, this FIFO Submit arm).
+                {
+                    const std::string fifo_session =
+                        cmd.value("session_id", std::string());
+                    const std::string fifo_request =
+                        cmd.value("request_id", std::string());
+                    if (fifo_session.find("first_token") != std::string::npos ||
+                        fifo_request.find("first_token") != std::string::npos) {
+                        fifo_reader_log("[online] command-fifo: Submit "
+                                        "session_id/request_id must not "
+                                        "contain the reserved marker token "
+                                        "\"first_token\": " + line + "\n");
+                        continue;
+                    }
+                    if (fifo_request.rfind("batch_train_", 0) == 0) {
+                        fifo_reader_log("[online] command-fifo: Submit "
+                                        "request_id must not use the "
+                                        "reserved \"batch_train_\" prefix "
+                                        "(train-sentinel namespace): " +
+                                        line + "\n");
+                        continue;
+                    }
+                }
+                RequestEnvelope env;
+                env.session_id = cmd.value("session_id", std::string());
+                // D3 symmetric port gates (3.13 fix, 2026-09-29): the CSV
+                // side (WindowedTraceReader) and the Python loader both
+                // reject a turn_index outside int32 and non-positive
+                // lengths; this FIFO port silently accepted them -- a
+                // >= 2^31 turn_index wrapped negative in the envelope and
+                // a zero length entered the queue the other two ports
+                // refuse. Same malformed-line channel as above: loud
+                // stderr + skip.
+                const auto& turn_val = cmd.at("turn_index");
+                int64_t turn_parsed = -1;
+                if (turn_val.is_number_integer() ||
+                    turn_val.is_number_unsigned()) {
+                    turn_parsed = turn_val.get<int64_t>();
+                }
+                if (turn_parsed < 0 || turn_parsed > 2147483647LL) {
+                    fifo_reader_log("[online] command-fifo: Submit turn_index "
+                                    "must be an integer in [0, 2^31-1]: " +
+                                    line + "\n");
+                    continue;
+                }
+                env.turn_index = static_cast<int>(turn_parsed);
+                env.request_id = cmd.value("request_id", std::string());
+                env.prefill_length =
+                    cmd.value("prefill_length", uint64_t{0});
+                env.decode_length = cmd.value("decode_length", uint64_t{0});
+                const auto nonneg_u64 = [&](const char* field,
+                                            uint64_t& out) -> bool {
+                    const auto& v = cmd.at(field);
+                    if (v.is_number_unsigned()) {
+                        out = v.get<uint64_t>();
+                        return true;
+                    }
+                    if (v.is_number_integer() && v.get<int64_t>() >= 0) {
+                        out = static_cast<uint64_t>(v.get<int64_t>());
+                        return true;
+                    }
+                    return false;
+                };
+                if (!nonneg_u64("prefill_length", env.prefill_length) ||
+                    !nonneg_u64("decode_length", env.decode_length) ||
+                    !nonneg_u64("arrival_world_ns", env.arrival_world_ns) ||
+                    !nonneg_u64("inter_request_interval_ns",
+                                env.inter_request_interval_ns)) {
+                    fifo_reader_log("[online] command-fifo: Submit length/"
+                                    "arrival fields must be non-negative "
+                                    "integers: " + line + "\n");
+                    continue;
+                }
+                if (env.prefill_length == 0 || env.decode_length == 0) {
+                    fifo_reader_log("[online] command-fifo: Submit "
+                                    "prefill_length/decode_length must be "
+                                    "positive (zero-length requests are "
+                                    "rejected by the materializer, the Python "
+                                    "loader, and the CSV reader alike): " +
+                                    line + "\n");
+                    continue;
+                }
+                ic.kind = IngressCommandKind::Submit;
+                ic.envelope = std::move(env);
+            } else {
+                fifo_reader_log("[online] command-fifo: unknown command kind: " +
+                                kind + "\n");
+                continue;
+            }
         } catch (const std::exception&) {
-            std::cerr << "[online] command-fifo: skipping malformed line: "
-                      << line << std::endl;
-            continue;
-        }
-        const std::string kind = cmd.value("kind", std::string());
-        IngressCommand ic;
-        if (kind == "CloseInput") {
-            // Phase-7 §10.7: explicit close (合同② close 命令). The
-            // lifecycle audit records close_source=explicit.
-            ic.kind = IngressCommandKind::CloseInput;
-        } else if (kind == "EndOfFile") {
-            // Phase-7 §10.7: EOF terminal command (合同② EOF 命令) -- the
-            // producer declares the input naturally exhausted; distinct
-            // from an explicit close in the run-end lifecycle audit.
-            ic.kind = IngressCommandKind::EndOfFile;
-        } else if (kind == "Error") {
-            // Phase-7 §10.7: error terminal command (合同② error 命令) --
-            // fail-closed abort (进程退出非 0,不做静默降级); the drain
-            // path aborts on it.
-            ic.kind = IngressCommandKind::Error;
-        } else if (kind == "Submit") {
-            RequestEnvelope env;
-            env.session_id = cmd.value("session_id", std::string());
-            env.turn_index = cmd.value("turn_index", 0);
-            env.request_id = cmd.value("request_id", std::string());
-            env.prefill_length = cmd.value("prefill_length", uint64_t{0});
-            env.decode_length = cmd.value("decode_length", uint64_t{0});
-            env.arrival_world_ns = cmd.value("arrival_world_ns", uint64_t{0});
-            env.inter_request_interval_ns =
-                cmd.value("inter_request_interval_ns", uint64_t{0});
-            ic.kind = IngressCommandKind::Submit;
-            ic.envelope = std::move(env);
-        } else {
-            std::cerr << "[online] command-fifo: unknown command kind: "
-                      << kind << std::endl;
+            fifo_reader_log("[online] command-fifo: skipping malformed line: " +
+                            line + "\n");
             continue;
         }
         // Bounded queue with backpressure: retry until accepted or the run
@@ -668,17 +869,15 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
         // close is dropped once the run ends.
         while (!ingress.enqueue_command(ic)) {
             if (svc.finished()) {
-                std::cerr << "[online] command-fifo: dropping command after "
-                             "input closed: "
-                          << line << std::endl;
+                fifo_reader_log("[online] command-fifo: dropping command after "
+                                "input closed: " + line + "\n");
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
-    std::cout << "[online] command-fifo: EOF (writer closed); producer "
-                 "thread exits, input stays open"
-              << std::endl;
+    fifo_reader_log("[online] command-fifo: EOF (writer closed); producer "
+                    "thread exits, input stays open\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -695,7 +894,8 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
 /// qualify). This backend has no remote-memory port topology inside the
 /// fluid link table (remote memory is a separate API), so the mesh
 /// boundary IS the edge set; when a dimension block is unsupported the
-/// set is marked not derived and the records fall back to -1 + note.
+/// set is marked not derived and the records carry a null edge aggregate
+/// plus note.
 struct EdgeLinkSet {
     std::set<LinkId> links;
     bool derived = false;
@@ -754,6 +954,12 @@ static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
             // (MultiDimTopology::connect_ring_dimension), connecting only
             // the npus/2 address-0 srcs -- npus link ids, not 2*npus.
             saw_non_mesh_dim = true;
+            if (sizes[d] == 1) {
+                // Degenerate size-1 Ring dimension: MultiDimTopology's
+                // self-connect guard builds zero links here, so the mirror
+                // consumes zero link ids.
+                break;
+            }
             if (sizes[d] == 2) {
                 next_id += static_cast<LinkId>(npus);
             } else {
@@ -834,8 +1040,15 @@ static void emit_link_observer_records(
                 record["edge_max_bytes"] = values.edge_max_bytes;
                 record["edge_note"] = edge_links.note;
             } else {
-                record["edge_max_link"] = -1;
-                record["edge_max_bytes"] = -1;
+                // Type-stable degradation (network-F3 fix): the derived
+                // arm serializes these two keys as unsigned numbers, so
+                // the degraded arm must not write a signed -1 under the
+                // same keys -- a schema consumer that typed the field
+                // unsigned would throw on the -1 records. JSON null marks
+                // "no edge aggregate for this record" without changing
+                // the key's type space; edge_note carries the reason.
+                record["edge_max_link"] = nullptr;
+                record["edge_max_bytes"] = nullptr;
                 record["edge_note"] =
                     "edge link set unavailable: " + edge_links.note;
             }
@@ -858,8 +1071,21 @@ static void emit_link_observer_records(
         }
 
         bool consume(const uint64_t bucket, const LinkId link_id, const uint64_t bytes) {
+            // Network-F2 fix: the backend's visitor contract treats a
+            // `false` return as a fail-closed OUTPUT FAILURE (FluidScheduler
+            // aborts the run with "bucket visitor rejected a record"), so
+            // this visitor may only return false for a condition that must
+            // kill the run. Both guarded shapes are already rejected by the
+            // backend's own spool guards (bytes == 0 -> "spool record is
+            // corrupt"; a (bucket, link) pair out of strict ascending order
+            // -> "spool record order is corrupt"), so neither arm is
+            // reachable today -- and if a backend relaxation ever let one
+            // through, the intended local behavior is to SKIP the record,
+            // never to convert a skip into a whole-run abort. Returning
+            // true here means "record not aggregated" (the visitor-side
+            // skip), which is the semantics these guards always meant.
             if (bytes == 0) {
-                return false;
+                return true;  // skip: nothing to aggregate
             }
             if (!have_current) {
                 if (bucket != 0) {
@@ -868,7 +1094,8 @@ static void emit_link_observer_records(
                 begin(bucket);
             } else if (bucket != current_bucket) {
                 if (bucket < current_bucket) {
-                    return false;
+                    return true;  // skip: stale record, order already
+                                  // fail-closed upstream
                 }
                 flush();
                 begin(bucket);
@@ -931,6 +1158,63 @@ static void emit_link_observer_records(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Online-family argv strip for the shared static parser (E2 fix, 2026-09-27)
+// ---------------------------------------------------------------------------
+
+// CmdLineParser no longer allows unrecognised options (fail-closed on a
+// misspelled shared option -- e.g. --injection-scle 2.0 used to silently run
+// at injection scale 1). The online family was already validated and
+// consumed by parse_online_cli above, so it must be stripped from argv
+// before the shared parser re-parses only the static family -- without the
+// strip the shared parser would abort on the first online token. The token
+// prefixes, the value-taking option names and the boolean flag names are
+// the SINGLE metadata table in OnlineCli.hh (network-F7 fix: the three
+// file-local mirrors this strip used to keep were deleted -- a new option
+// now lands in that one table and both passes see it), so the two passes
+// can never disagree about token ownership. (wscllm-LRU M5-03 keeps the
+// helper in OnlineCli; here it stays file-local to the frontend entry.)
+std::vector<char*> strip_online_family_argv(int argc, char* argv[]) {
+    std::vector<char*> out;
+    if (argc <= 0) {
+        return out;
+    }
+    out.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i) {
+        const std::string token(argv[i]);
+        if (!is_online_family_token(token)) {
+            out.push_back(argv[i]);
+            continue;
+        }
+        std::string name;
+        bool has_inline_value = false;
+        const auto eq = token.find('=');
+        if (eq == std::string::npos) {
+            name = token;
+        } else {
+            name = token.substr(0, eq);
+            has_inline_value = true;
+        }
+        // A separate-value online option consumes the NEXT token exactly the
+        // way parse_online_cli does (whatever it is -- by the time this
+        // strip runs that parser has already fail-closed rejected the
+        // malformed shapes, including the P2-4 "--"-prefixed value and the
+        // P2-6 empty value, so the bounds guard below is purely defensive);
+        // a boolean flag consumes the next token only when it is a boolean
+        // literal (the P2-5 separated form); an inline "=" value travels
+        // inside the token.
+        if (!has_inline_value && i + 1 < argc) {
+            if (online_family_option_takes_value(name)) {
+                ++i;
+            } else if (online_family_boolean_flag(name) &&
+                       online_boolean_literal(argv[i + 1]) >= 0) {
+                ++i;
+            }
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -938,14 +1222,17 @@ int main(int argc, char* argv[]) {
     // unbuffered so every log line lands in cpp.log immediately -- a crash
     // or kill never loses the buffered tail, and std::cout lines interleave
     // with the [METRIC] lines (which already write via ::write) in true
-    // order. Online binary only: the offline static ET binary is untouched.
+    // order.
     ::setvbuf(stdout, nullptr, _IONBF, 0);
 
     // Total wall-clock timer from main() entry; logged at run end on both
     // exit paths (gate failure and normal return) so every ended run
     // reports how long the simulation took. Logged through the "main"
     // logger: the console sink prints it and the logging-folder file sink
-    // persists it to log.log (console-only when --logging-folder=off).
+    // persists it to log.log (console-only when --logging-folder names one
+    // of the three disable tokens off|none|empty; note the "empty" default
+    // of --logging-configuration is a DIFFERENT sense of the word -- a
+    // config-file name, not a folder token).
     const auto sim_wall_start = std::chrono::steady_clock::now();
     const auto print_total_wall_time = [&sim_wall_start]() {
         const auto total_ms =
@@ -978,9 +1265,15 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Shared static options (same parser and extraction as the static main).
+    // Shared static options: strip the online family that parse_online_cli
+    // just validated, then hand the static family to the shared parser (E2
+    // fix: with allow_unrecognised_options() gone the shared parser fails
+    // closed on a misspelled shared option instead of silently running on
+    // defaults; without the strip it would abort on the first online token).
+    auto static_argv = strip_online_family_argv(argc, argv);
     auto cmd_line_parser = CmdLineParser(argv[0]);
-    cmd_line_parser.parse(argc, argv);
+    cmd_line_parser.parse(static_cast<int>(static_argv.size()),
+                          static_argv.data());
 
     const auto workload_configuration =
         cmd_line_parser.get<std::string>("workload-configuration");
@@ -1007,7 +1300,8 @@ int main(int argc, char* argv[]) {
 
     AstraSim::LoggerFactory::init(logging_configuration, logging_folder);
 
-    // Side-band metrics collection, same as the static main.
+    // Side-band metrics collection, mirroring the offline static main that
+    // was deleted on 2026-08-18.
     MetricCollector::instance().initialize(metrics_configuration,
                                            metrics_detail);
     // Phase-7 §10.3: the manifest's static node-event table is keyed by the
@@ -1043,10 +1337,9 @@ int main(int argc, char* argv[]) {
     // Step 1-8: the online loop commits/emits comm from tick-end and deferred
     // contexts (post-commit issue pass). A start_flow flush scheduled at
     // current_time via schedule_event would insert a current_time EventList
-    // into the main queue and trip the strict-increase assert on the next
-    // proceed() (EventQueue.cpp:33). Deferred mode routes the flush through
-    // schedule_event_deferred (same-tick drain). The static main never
-    // enables it -- pre-extension behavior is byte-for-byte preserved.
+    // into the main queue and trip EventQueue::proceed()'s release-always
+    // strict-increase fail-closed check. Deferred mode routes the
+    // flush through schedule_event_deferred (same-tick drain).
     fluid_scheduler->set_deferred_flush_mode(true);
 
     // WP6 NoC link observer gating (CPP_SPEC §D): metrics != off AND env
@@ -1115,12 +1408,22 @@ int main(int argc, char* argv[]) {
         systems.push_back(system);
     }
 
-    // Online service: lifecycle authority + request-neutral ingress. No
-    // systems[i]->workload->fire(): in online mode the graph is fed by the
-    // dynamic source, not by the ETFeeder.
-    ServiceCoordinator svc;
+    // Online service: lifecycle authority + request-neutral ingress. The
+    // graph is fed by the dynamic source, not by an ETFeeder (the static
+    // auto-advance entry Workload::fire() was retired with it).
+    // svc/ingress live on the heap behind scope-lifetime owners (E1 fix,
+    // 2026-09-27): the detached command-FIFO producer thread (step 1-10,
+    // below) holds references to these two objects and may still be parked
+    // inside enqueue_command()/finished() when main returns -- destroying
+    // stack objects there would be a narrow exit-time use-after-free. On
+    // the FIFO path the owners are released at run end (process-lifetime
+    // objects, reclaimed at exit); without a FIFO the unique_ptrs destroy
+    // them exactly at the old scope-exit point.
+    auto svc_owner = std::make_unique<ServiceCoordinator>();
     DecisionMailbox mailbox;
-    RequestIngress ingress;
+    auto ingress_owner = std::make_unique<RequestIngress>();
+    ServiceCoordinator& svc = *svc_owner;
+    RequestIngress& ingress = *ingress_owner;
     ingress.bind(event_queue.get(), &mailbox, &svc);
     // Step 1-10: --request-queue-csv is optional (request-neutral default).
     // Absent -> expected_requests = 0 and the service stays IDLE; the CSV
@@ -1239,8 +1542,8 @@ int main(int argc, char* argv[]) {
     // the ONLY thing the hook does in phase 1 besides the step-1-6 mailbox
     // write (the registry fire notifier is the wiring point). It never calls
     // GraphSource::finish_node: dependency release stays exclusively in
-    // Workload::call. The static binary never installs a hook (zero
-    // overhead contract).
+    // Workload::call. (The offline static binary that never installed a
+    // hook was deleted on 2026-08-18.)
     WatchRegistry watch_registry;
     // Step 1-8: the hook additionally schedules the per-rank post-commit
     // deferred issue pass (ready-set drain) into the same tick's deferred
@@ -1259,7 +1562,22 @@ int main(int argc, char* argv[]) {
         [](void* opaque, const int rank) {
             auto* const online_workloads =
                 static_cast<std::vector<Workload*>*>(opaque);
-            (*online_workloads)[rank]->issue_dep_free_nodes();
+            // P2 (2026-09-28): production issue-path exception barrier,
+            // symmetric with the commit period (ed_commit_cb catches the
+            // commit's own issue pass and routes it through the same
+            // channel).  Without this catch a dispatch failure (e.g. a
+            // MEM_LOAD/MEM_STORE node, or the COMP remote-weight
+            // fail-closed) escaped through the EventQueue drain as an
+            // uncaught exception -> std::terminate with no node context.
+            // Route it through online_fatal instead; the propagated message
+            // already carries the failing node's id/type/name (see
+            // Workload::issue_dep_free_nodes).
+            try {
+                (*online_workloads)[rank]->issue_dep_free_nodes();
+            } catch (const std::exception& exc) {
+                online_fatal("deferred issue pass threw (rank=" +
+                             std::to_string(rank) + "): " + exc.what());
+            }
         },
         &workloads);
     CompletionObserver::instance().set_hook(online_completion_hook,
@@ -1276,9 +1594,17 @@ int main(int argc, char* argv[]) {
     // Phase 4 (schema v1): the fire's member ranks accumulate into the
     // per-epoch affected-rank set (StateDelta.affected_ranks). Watch fires
     // happen on the simulation thread only (Workload::call), so no locking.
+    // Step 1-11: every push stamps the simulation tick the event was formed
+    // at; the tick-end delivery gate derives StateDelta.deferred_from_tick
+    // from the pending set's minimum (a milestone formed in tick T's
+    // deferred drain but delivered by a later tick's gate must record T,
+    // never silently collapse to same-tick).
     std::vector<int> epoch_affected_ranks;
+    NetworkAnalytical::EventQueue* const mailbox_clock = event_queue.get();
     watch_registry.set_fire_notifier(
-        [&mailbox, &epoch_affected_ranks](const WatchFire& fire) {
+        [&mailbox, &epoch_affected_ranks,
+         mailbox_clock](const WatchFire& fire) {
+            const uint64_t formed_at = mailbox_clock->get_current_time();
             epoch_affected_ranks.insert(epoch_affected_ranks.end(),
                                         fire.member_ranks.begin(),
                                         fire.member_ranks.end());
@@ -1289,7 +1615,7 @@ int main(int argc, char* argv[]) {
             ev.stage = fire.stage;
             ev.generation = fire.generation;
             ev.payload.watch_member_count = fire.member_count;
-            mailbox.push(std::move(ev));
+            mailbox.push(std::move(ev), formed_at);
         } else if (fire.stage == "decode") {
             DecisionEvent decode_ev;
             decode_ev.reason = DecisionReason::DECODE_COMPLETION;
@@ -1297,14 +1623,14 @@ int main(int argc, char* argv[]) {
             decode_ev.stage = fire.stage;
             decode_ev.generation = fire.generation;
             decode_ev.payload.watch_member_count = fire.member_count;
-            mailbox.push(std::move(decode_ev));
+            mailbox.push(std::move(decode_ev), formed_at);
             DecisionEvent complete_ev;
             complete_ev.reason = DecisionReason::REQUEST_COMPLETE;
             complete_ev.request_id = fire.request_id;
             complete_ev.stage.clear();  // request-level, not stage-level
             complete_ev.generation = fire.generation;
             complete_ev.payload.watch_member_count = fire.member_count;
-            mailbox.push(std::move(complete_ev));
+            mailbox.push(std::move(complete_ev), formed_at);
         } else {
             std::cerr << "[Error] (execution_driven/online) watch fired with "
                          "unmapped stage: "
@@ -1361,7 +1687,7 @@ int main(int argc, char* argv[]) {
     committer_ctx.communicator_members_for_pg =
         [&systems](const std::string& pg_name,
                    const std::vector<int>& participant_ranks)
-        -> std::optional<std::vector<int>> {
+        -> std::optional<std::pair<std::vector<int>, size_t>> {
         int pg_id = 0;
         size_t parsed = 0;
         try {
@@ -1397,7 +1723,8 @@ int main(int argc, char* argv[]) {
                 return std::nullopt;
             }
         }
-        return declared_members;
+        return std::make_pair(*declared_members,
+                              declared_dimension_sizes->size());
     };
     // Phase-7 §10.3: metrics anchors register from inside commit() so they
     // bind to the STORE ids (B-1 establishes the affine translation just
@@ -1484,6 +1811,15 @@ int main(int argc, char* argv[]) {
             // Linearize the producer close only at this exact finite-input
             // boundary so no later CSV Submit is rejected.
             ingress.mark_input_closed();
+            // M4 (2026-10-01, mirrored from the joint repo) defers the
+            // coordinator's FINISHED evaluation to note_input_drained().
+            // Drain unconditionally right after the close (idempotent,
+            // near-zero cost on an empty queue) instead of relying on "eof
+            // implies queued work" to make the loop's next drain the trigger
+            // -- a same-iteration break would otherwise leave state_ parked
+            // at DRAINING with the lifecycle log missing its final
+            // transition.
+            ingress.drain_commands();
         }
         // Defect fix A (2026-08-16, face主动测试错误分析.md 缺陷 A): pump()
         // QUEUES Submit commands into the bounded ingress queue; they only
@@ -1585,16 +1921,15 @@ int main(int argc, char* argv[]) {
                 // main queue is empty. wait_for_work() would block forever
                 // and the milestone would never be delivered -- schedule the
                 // explicit next decision boundary at T+1 (方案 step 1-11:
-                // "schedule_event(T+1, delivery_cb) 或等价机制") and record
-                // the T -> T+1 deferral; the T+1 tick-end gate delivers the
-                // epoch with tick=T+1, deferred_from_tick=T. Each wakeup
+                // "schedule_event(T+1, delivery_cb) 或等价机制"). The T+1
+                // tick-end gate reads the epoch's recorded formation ticks
+                // and delivers with tick=T+1, deferred_from_tick=T (the
+                // T -> T+1 deferral is explicit, never silent). Each wakeup
                 // strictly advances the clock and each commit strictly
                 // advances the graphs, so this cannot loop forever.
-                driver_ctx.deferred_from_tick =
-                    event_queue->get_current_time();
                 // Phase 6 (方案 §9.1): global_wakeup_count -- the explicit
-                // T->T+1 wakeups only; reported separately, never merged into
-                // the callback total (仿真加速分析.md §9.4/§15).
+                // T->T+1 wakeups only; reported separately, never merged
+                // into the callback total (仿真加速分析.md §9.4/§15).
                 driver_ctx.stats.global_wakeup_count += 1;
                 event_queue->schedule_event(
                     event_queue->get_current_time() + 1,
@@ -1609,7 +1944,9 @@ int main(int argc, char* argv[]) {
                 // next decision boundary (same mechanism as the milestone
                 // branch above) so a proceed() executes and drains the
                 // deferred queue. NOT a delivery deferral (no mailbox work):
-                // deferred_from_tick stays 0.
+                // StateDelta.deferred_from_tick is derived solely from the
+                // pending events' formation ticks, which this arm never
+                // touches.
                 driver_ctx.stats.global_wakeup_count += 1;
                 event_queue->schedule_event(
                     event_queue->get_current_time() + 1,
@@ -1724,17 +2061,13 @@ int main(int argc, char* argv[]) {
 
     // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
     // completed_request_count == CSV data rows (1177 for the 20.csv
-    // first-30-seconds input) and the never-incremented
-    // no_decision_python_callback_count -- no delivery epoch was ever
-    // dropped. tick_end_without_decision_count is a normal
-    // allowed-nonzero counter, reported separately.
+    // first-30-seconds input). tick_end_without_decision_count is a
+    // normal allowed-nonzero counter, reported separately.
     std::cout << "[online] gate counters: event_count=" << mailbox.event_count()
               << " delivery_count=" << mailbox.delivery_count()
               << " coalescing_ratio=" << mailbox.coalescing_ratio()
               << " tick_end_without_decision_count="
-              << mailbox.tick_end_without_decision_count()
-              << " no_decision_python_callback_count="
-              << mailbox.no_decision_python_callback_count() << std::endl;
+              << mailbox.tick_end_without_decision_count() << std::endl;
     std::cout << "[online] service counters: accepted="
               << svc.accepted_request_count()
               << " completed=" << svc.completed_request_count()
@@ -1931,13 +2264,6 @@ int main(int argc, char* argv[]) {
             gate_ok = false;
         }
     }
-    if (mailbox.no_decision_python_callback_count() != 0) {
-        std::cerr << "[Error] (execution_driven/online) "
-                     "no_decision_python_callback_count="
-                  << mailbox.no_decision_python_callback_count()
-                  << " != 0" << std::endl;
-        gate_ok = false;
-    }
     if (mailbox.delivery_count() == 0 && expected_requests > 0) {
         std::cerr << "[Error] (execution_driven/online) delivery_count == 0: "
                      "the decision bridge never served an epoch"
@@ -1995,8 +2321,28 @@ int main(int argc, char* argv[]) {
                   << std::endl;
         gate_ok = false;
     }
+    // FIFO producer lifetime (see the svc/ingress owners above): the
+    // detached reader thread may still touch the two objects -- hand the
+    // owners over to the process so the unique_ptrs' destruction at scope
+    // exit can never race the thread (E1 fix, 2026-09-27).
+    if (!online_cli.command_fifo.empty()) {
+        svc_owner.release();
+        ingress_owner.release();
+    }
     if (!gate_ok) {
         print_total_wall_time();
+        // C3 fix (2026-09-28): symmetric teardown with the success path
+        // below. The asymmetry was harmless (process exit reclaims), but the
+        // systems' own diagnostics (destructors/counter echoes) and the
+        // destroy order were silently skipped on every gate failure, making
+        // a failing run's tail differ from a healthy one's for reasons
+        // unrelated to the failure. Same order as the success path: the
+        // systems go before the logger shutdown so any destructor-side log
+        // line still lands.
+        for (auto it : systems) {
+            delete it;
+        }
+        systems.clear();
         // The "main" logger is async: shutdown drains its queue so the
         // wall-time line lands before this failure exit terminates the
         // process (the normal path relies on the shutdown below).

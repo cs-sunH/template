@@ -133,8 +133,38 @@ def parse_rank_spec(rank_spec: str) -> tuple[int, ...]:
     return tuple(ranks)
 
 
-def clean_csv_row(row: dict[str, Optional[str]]) -> dict[str, str]:
-    return {(key or "").strip(): (value or "").strip() for key, value in row.items()}
+def clean_csv_row(
+    row: dict[str, Optional[str]], context: str = ""
+) -> dict[str, str]:
+    """Strip row keys/values; fail closed on restkey (overlong) rows.
+
+    (py-sched-E5, 2026-09-30) A data row carrying more fields than the
+    header lands its surplus in csv.DictReader's restkey (``row[None]``);
+    both that residue and any non-str non-None cell value used to vanish
+    silently under the old ``(key or "")`` / ``(value or "")`` strip --
+    the surplus fields were dropped without a diagnostic while the C++
+    windowed reader's strict column-count gate fail-closes on the same
+    overlong row.  Raise ValueError with the caller's line context
+    instead of silently mis-shaping the row.
+    """
+    if None in row:
+        extras = row[None]
+        extra_count = len(extras) if isinstance(extras, list) else 1
+        raise ValueError(
+            f"{context}row carries {extra_count} more field(s) than the "
+            f"CSV header (unparsed restkey residue {extras!r}); refusing "
+            "to silently drop the surplus (the C++ windowed reader's "
+            "column-count gate rejects overlong rows too)"
+        )
+    cleaned: dict[str, str] = {}
+    for key, value in row.items():
+        if value is not None and not isinstance(value, str):
+            raise ValueError(
+                f"{context}field {key!r} is not a CSV string cell "
+                f"(got {type(value).__name__} {value!r})"
+            )
+        cleaned[(key or "").strip()] = (value or "").strip()
+    return cleaned
 
 
 def parse_request_length(row: dict[str, str], key: str, aliases: tuple[str, ...]) -> int:
@@ -151,6 +181,14 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
         raise FileNotFoundError(f"request queue CSV not found: {queue_csv}")
 
     requests: list[RequestSpec] = []
+    # py-sched-E4 (2026-09-30): request identity fail-closed at the loader
+    # -- a duplicate request_id silently collides in every request_id-keyed
+    # consumer (canonical sidecar join, metrics registration), and a
+    # duplicate (session_id, turn_index) silently shadows the previous
+    # turn in the session-turn keyed derivations (plan_materializer's
+    # queue_by_session_turn map).  '#' comment rows never register.
+    seen_request_ids: set[str] = set()
+    seen_session_turns: set[tuple[str, int]] = set()
     with queue_csv.open(newline="", encoding="utf-8-sig") as queue_file:
         reader = csv.DictReader(queue_file)
         if reader.fieldnames is None:
@@ -163,7 +201,8 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
             )
 
         for line_number, raw_row in enumerate(reader, start=2):
-            row = clean_csv_row(raw_row)
+            row = clean_csv_row(
+                raw_row, context=f"request queue line {line_number}: ")
             session_id = row.get("session_id", "")
             request_id = row.get("request_id", "") or f"request_{len(requests)}"
             if request_id.startswith("#"):
@@ -174,6 +213,21 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
             if not turn_index_text:
                 raise ValueError(f"request queue line {line_number} is missing turn_index")
             turn_index = parse_nonnegative_int(turn_index_text, "turn_index")
+            if request_id in seen_request_ids:
+                raise ValueError(
+                    f"request queue line {line_number}: duplicate "
+                    f"request_id {request_id!r} (already used by an "
+                    "earlier row)"
+                )
+            if (session_id, turn_index) in seen_session_turns:
+                raise ValueError(
+                    f"request queue line {line_number}: duplicate "
+                    f"(session_id, turn_index) ({session_id!r}, "
+                    f"{turn_index}); each session may carry each turn "
+                    "index at most once"
+                )
+            seen_request_ids.add(request_id)
+            seen_session_turns.add((session_id, turn_index))
             session_arrival_text = row.get("session_arrival_time_ns", "")
             inter_request_interval_text = row.get("inter_request_interval_ns", "")
             if turn_index == 0:
@@ -252,6 +306,11 @@ def shard_extent(value: int, shards: int, shard_index: int) -> int:
 
 
 class TraceBuilder:
+    """P3(face-LRU 审计,2026-09-29):保留——生产构造点已随离线静态管线
+    删除(2026-08-18),现存构造仅 test_face_scheduler 的测试对拍基准;
+    generate_face_trace 的 builders 形参注解仍引用本类。在线构图用
+    graph_batch_builder.OnlineTraceBuilder(独立实现,勿混淆)。"""
+
     def __init__(
         self,
         *,
@@ -351,10 +410,26 @@ class TraceBuilder:
         num_ops: int,
         tensor_size: int,
         remote_read_size: int = 0,
+        *,
+        die_spec: Optional[dict] = None,
+        op_role: Optional[str] = None,
     ) -> None:
+        # die 后端(阶段 C;face-LRU 随迁 2026-10-03):die_spec 存在 =>
+        # runtime_ns 语义由在线侧 OnlineTraceBuilder 保证为 0(ET 侧无
+        # runtime 字段);op_role 缺省 "compute"(契约 §2),仅 marker 显式
+        # 写 "control_marker"。
         node = self._new_node(name, COMP_NODE)
         node.attr.append(self._uint64_attr("num_ops", num_ops))
         node.attr.append(self._uint64_attr("tensor_size", tensor_size))
+        if op_role is not None:
+            node.attr.append(ChakraAttr(name="op_role", string_val=op_role))
+        if die_spec is not None:
+            node.attr.append(
+                ChakraAttr(
+                    name="die_op_spec",
+                    string_val=json.dumps(die_spec, sort_keys=True),
+                )
+            )
         if self.remote_operand_loads and remote_read_size:
             node.attr.append(self._uint64_attr(REMOTE_WEIGHT_ATTR, remote_read_size))
         self._commit_node(node)
@@ -434,6 +509,9 @@ def transformer_pass(
     tensor_parallel_rank: int = 0,
     mlp_variant: str = "gelu",
 ) -> None:
+    # P3(face-LRU 审计,2026-09-29):逐层展开版保留——全仓唯一调用 =
+    # test_face_scheduler 的测试对拍基准(与 transformer_pass_aggregated
+    # 的逐字节总额对拍;在线路径只用聚合版)。
     if mlp_variant not in {"gelu", "swiglu"}:
         raise ValueError("mlp_variant must be gelu or swiglu")
     if num_heads is None:
@@ -662,6 +740,7 @@ def transformer_pass_aggregated(
     layer_end: Optional[int] = None,
     include_output: bool = True,
     weight_passes: Optional[int] = None,
+    die_ctx=None,
 ) -> int:
     """Fold repeated Transformer passes into 17 aggregate Chakra nodes.
 
@@ -683,6 +762,14 @@ def transformer_pass_aggregated(
     exact regardless of ``weight_passes``.  Layer-range calls (partial
     prefix-restore pipelines) keep the default: one span over a layer slice
     is exactly one weight-reading pass of that slice.
+
+    ``die_ctx``(阶段 C;face-LRU 随迁 2026-10-03):die 后端发射语境
+    (online/die_model_adapter.DieModelContext;调用方 graph_batch_builder
+    已按列车/TP/rank 调过 begin_emission)。None = legacy 路径,发射逐字节
+    与历史一致;非 None 时每类 COMP 附 die_op_spec(spans 带绝对位置),
+    可融合纯本地链经 compile_regions 编译成 attention_region /
+    ffn_region(num_ops/tensor_size 兼容统计 = 各成分之和,collective
+    位置/数量/bytes 不变)。
     """
 
     spans = tuple(pass_spans)
@@ -918,6 +1005,36 @@ def transformer_pass_aggregated(
     logits[1] += logits_weight_bytes * weight_passes
     logits[2] += logits_weight_bytes * weight_passes
 
+    if die_ctx is not None:
+        # die 后端(阶段 C,契约 §2/§7.2):同一份 layer_totals / tail /
+        # collective 账本,经 die 语境做生成期 region 编译后发射(每类或
+        # 融合组附 die_op_spec,spans 带绝对位置)。legacy 分支
+        # (die_ctx is None)保持逐字节不变。
+        _emit_die_aggregated(
+            builder,
+            die_ctx,
+            phase=phase,
+            spans=spans,
+            active_layers=active_layers,
+            layer_label=layer_label,
+            weight_passes=weight_passes,
+            layer_totals=layer_totals,
+            attention_collective_bytes=attention_collective_bytes,
+            mlp_collective_bytes=mlp_collective_bytes,
+            final_layernorm=final_layernorm,
+            logits=logits,
+            attention_norm_name=attention_norm_name,
+            mlp_norm_name=mlp_norm_name,
+            mlp_projection_name=mlp_projection_name,
+            mlp_activation_name=mlp_activation_name,
+            final_norm_name=final_norm_name,
+            include_output=include_output,
+            pg_name=pg_name,
+            tensor_parallel=tensor_parallel,
+            tensor_parallel_rank=tensor_parallel_rank,
+        )
+        return len(spans)
+
     def aggregate_comp(category_name: str) -> None:
         ops, tensor_size, remote_read = layer_totals[category_name]
         builder.comp(
@@ -965,6 +1082,143 @@ def transformer_pass_aggregated(
         logits[2],
     )
     return len(spans)
+
+
+def _emit_die_aggregated(
+    builder: TraceBuilder,
+    die_ctx,
+    *,
+    phase: str,
+    spans: tuple[tuple[int, int], ...],
+    active_layers: int,
+    layer_label: str,
+    weight_passes: int,
+    layer_totals: dict[str, list[int]],
+    attention_collective_bytes: int,
+    mlp_collective_bytes: int,
+    final_layernorm: list[int],
+    logits: list[int],
+    attention_norm_name: str,
+    mlp_norm_name: str,
+    mlp_projection_name: str,
+    mlp_activation_name: str,
+    final_norm_name: str,
+    include_output: bool,
+    pg_name: str,
+    tensor_parallel: int,
+    tensor_parallel_rank: int,
+) -> None:
+    """die 后端的聚合发射(阶段 C;transformer_pass_aggregated 的 die 分支;
+    face-LRU 随迁 2026-10-03,命名随本仓 layer_label/变体类别名适配)。
+
+    与 legacy 发射共用同一份 layer_totals / tail / collective 账本(字节
+    守恒);差异仅在:
+
+      - 每个发射组附 die_op_spec(契约 §2 schema;spans 带绝对位置,
+        layer_count/weight_passes 如实传递,num_ops/tensor_size 照旧发射
+        作兼容统计,die 后端不把它们当第二份收费来源);
+      - 13 类层类别先经 die_ctx.compile_regions 做 §7.2 纯本地链融合
+        (qk+scale_mask+softmax+av -> attention_region;mlp_up+
+        activation+down -> ffn_region);融合组的 num_ops/tensor_size/
+        remote_read = 各成分之和(×active_layers 口径与 legacy 一致);
+      - 两个 All-Reduce 的位置/bytes 与 legacy 完全一致(边界类别
+        attention_output_projection / mlp_down_projection 之后,融合
+        不移动 collective)。
+
+    阻断/同质事实(§7.2 融合条件,逐项来自本发射骨架的真实结构):
+    聚合列车体是严格线性链(previous_id 单前驱,无 pending 额外依赖),
+    链内无外部分支消费者(external_consumers=False);通信边界仅存在于
+    attention_output_projection 与 mlp_down_projection 之后(boundary_
+    after=True,二者分别是各自融合链之外/链尾,链内无边界);无 KV gate
+    与提交边界(gate 在 admission/列车边界,由调度器侧发射)。identity
+    携带 TP/rank/层段/span 集合供 compile_regions 做同质复核。
+    """
+    if len(die_ctx.span_records) != len(spans):
+        raise ValueError(
+            "die context span records ({} spans) disagree with the "
+            "aggregated pass spans ({}); call begin_emission with the "
+            "same pass_spans".format(len(die_ctx.span_records), len(spans)))
+    identity = {
+        "tp": tensor_parallel,
+        "rank": tensor_parallel_rank,
+        "layer": active_layers,
+        "span_set": spans,
+    }
+    category_names = (
+        attention_norm_name,
+        "attention_qkv_projection",
+        "attention_qk_matmul",
+        "attention_scale_mask",
+        "attention_softmax",
+        "attention_av_matmul",
+        "attention_output_projection",
+        "attention_residual_add",
+        mlp_norm_name,
+        mlp_projection_name,
+        mlp_activation_name,
+        "mlp_down_projection",
+        "mlp_residual_add",
+    )
+    records = []
+    for category in category_names:
+        ops, tensor_size, remote_read = layer_totals[category]
+        records.append({
+            "name": f"{phase}_{layer_label}_{category}",
+            "category": category,
+            "op_kind": die_ctx.op_kind_of(category),
+            "num_ops": ops * active_layers,
+            "tensor_size": tensor_size * active_layers,
+            "remote_read": remote_read * active_layers,
+            "layer_count": active_layers,
+            "weight_passes": weight_passes,
+            "external_consumers": False,
+            "boundary_after": category in (
+                "attention_output_projection", "mlp_down_projection"),
+            "identity": dict(identity),
+        })
+    for group in die_ctx.compile_regions(records):
+        builder.comp(
+            group["name"],
+            group["num_ops"],
+            group["tensor_size"],
+            group["remote_read"],
+            die_spec=die_ctx.build_spec(
+                group["op_kind"],
+                layer_count=group["layer_count"],
+                weight_passes=group["weight_passes"],
+                fusion_policy="auto" if group["fused"] else "none",
+            ),
+        )
+        if "attention_output_projection" in group["member_categories"]:
+            builder.all_reduce(
+                f"{phase}_{layer_label}_attention_all_reduce",
+                attention_collective_bytes * active_layers,
+                pg_name,
+            )
+        elif "mlp_down_projection" in group["member_categories"]:
+            builder.all_reduce(
+                f"{phase}_{layer_label}_mlp_all_reduce",
+                mlp_collective_bytes * active_layers,
+                pg_name,
+            )
+    if not include_output:
+        return
+    for category, totals, layer_count in (
+        (final_norm_name, final_layernorm, 1),
+        ("logits_projection", logits, 1),
+    ):
+        builder.comp(
+            f"{phase}_all_passes_{category}",
+            totals[0],
+            totals[1],
+            totals[2],
+            die_spec=die_ctx.build_spec(
+                die_ctx.op_kind_of(category),
+                layer_count=layer_count,
+                weight_passes=weight_passes,
+                fusion_policy="none",
+            ),
+        )
 
 
 def sanitize_node_prefix(value: str) -> str:

@@ -22,6 +22,16 @@ PREFILL_ROLE = "prefill"
 DECODE_ROLE = "decode"
 PHASE_ROLES = frozenset((PREFILL_ROLE, DECODE_ROLE))
 
+# Route-enumeration bounds (fail-closed): the shortest-path materialization
+# and the per-Prefill candidate Cartesian product are exponential in the
+# number of equivalent shortest paths, so grid/adversarial topologies must be
+# rejected instead of exploding CPU/memory at startup.  Both bounds are
+# orders of magnitude above every checked-in layout (the real 9-instance
+# layout has exactly one nearest-Decode candidate per Prefill instance), so
+# results are unchanged within the bounds.
+MAX_EQUIVALENT_SHORTEST_PATHS = 64
+MAX_ROUTE_CANDIDATE_COMBINATIONS = 4096
+
 
 @dataclass(frozen=True)
 class WscLlmHardware:
@@ -102,25 +112,13 @@ class WscLlmInstanceSpec:
 @dataclass(frozen=True)
 class WscLlmInstance:
     index: int
-    name: str
-    pg_name: str
     ranks: tuple[int, ...]
     phase_role: str
-    row_min: int
-    row_max: int
-    col_min: int
-    col_max: int
-    center_row: float
-    center_col: float
     wafer_center_manhattan_distance: float
 
     @property
     def size(self) -> int:
         return len(self.ranks)
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return (self.row_max - self.row_min + 1, self.col_max - self.col_min + 1)
 
 
 @dataclass(frozen=True)
@@ -143,6 +141,8 @@ class WscLlmTopology:
 
 
 def rank_coordinates(hardware: WscLlmHardware, rank: int) -> tuple[int, int]:
+    if isinstance(rank, bool) or not isinstance(rank, int):
+        raise ValueError(f"rank must be an integer, got {rank!r}")
     if rank < 0 or rank >= hardware.npus_count:
         raise ValueError(f"rank {rank} is outside 0-{hardware.npus_count - 1}")
     return divmod(rank, hardware.mesh_cols)
@@ -151,8 +151,6 @@ def rank_coordinates(hardware: WscLlmHardware, rank: int) -> tuple[int, int]:
 def build_instances(
     hardware: WscLlmHardware,
     specs: Sequence[WscLlmInstanceSpec],
-    *,
-    require_equal_size: bool = True,
 ) -> WscLlmTopology:
     if not specs:
         raise ValueError("at least one WSC-LLM instance is required")
@@ -167,8 +165,22 @@ def build_instances(
     for index, spec in enumerate(specs):
         if not spec.name:
             raise ValueError("instance name must not be empty")
-        if not spec.pg_name or spec.pg_name == "0":
+        if not spec.pg_name:
             raise ValueError("instance pg_name must be non-zero")
+        # pg_name 是通信组 id(C++ 侧按整数消费),resolver 上游已强制
+        # "可解析为正整数"。此处 int 规范化守卫拒绝零值与非规范十进制
+        # 字形——字面量 =="0" 守卫曾放行 "00"("00" 经 int 为 0,且与
+        # "0" 异形同 id,会绕开下方 duplicate pg_name 查重)。
+        try:
+            pg_id = int(spec.pg_name)
+        except ValueError as error:
+            raise ValueError(
+                f"instance pg_name must parse as a positive integer: "
+                f"{spec.pg_name!r}") from error
+        if pg_id <= 0 or str(pg_id) != str(spec.pg_name):
+            raise ValueError(
+                f"instance pg_name must be a canonical positive integer "
+                f"(non-zero), got {spec.pg_name!r}")
         if spec.pg_name in pg_names:
             raise ValueError(f"duplicate pg_name: {spec.pg_name}")
         pg_names.add(spec.pg_name)
@@ -210,16 +222,8 @@ def build_instances(
         instances.append(
             WscLlmInstance(
                 index=index,
-                name=spec.name,
-                pg_name=spec.pg_name,
                 ranks=tuple(spec.ranks),
                 phase_role=spec.phase_role,
-                row_min=row_min,
-                row_max=row_max,
-                col_min=col_min,
-                col_max=col_max,
-                center_row=center_row,
-                center_col=center_col,
                 wafer_center_manhattan_distance=(
                     abs(center_row - wafer_center_row)
                     + abs(center_col - wafer_center_col)
@@ -229,7 +233,7 @@ def build_instances(
 
     if sorted(all_ranks) != list(range(hardware.npus_count)):
         raise ValueError("WSC-LLM instances must cover every configured NPU exactly once")
-    if require_equal_size and len({instance.size for instance in instances}) != 1:
+    if len({instance.size for instance in instances}) != 1:
         raise ValueError(
             "direct KV shard pairing requires equal-size instances"
         )
@@ -279,6 +283,11 @@ def build_instances(
 
 
 def estimate_model_weight_bytes(model: WscLlmModel) -> int:
+    # 已知仓内分歧（2026-09-30 审查披露，metrics_postprocess 视本函数为
+    # 权威）：gelu 的 final norm 本式按 LayerNorm(weight+bias)=2*hidden
+    # 计，而 session_kv_manager/watermark 的孪生按 0 计——swiglu（生产
+    # trace_config 模型与全部钉子值）两式恒等。收敛方向属冻结公式家族
+    # 裁决，见 session_kv_manager 同名函数 docstring。
     mlp_matrices = 3 if model.mlp_variant == "swiglu" else 2
     norm_elements = (
         2 * model.hidden_size
@@ -291,15 +300,21 @@ def estimate_model_weight_bytes(model: WscLlmModel) -> int:
         + norm_elements
     )
     embedding_elements = 2 * model.vocab_size * model.hidden_size
-    final_norm_elements = model.hidden_size if model.mlp_variant == "swiglu" else 0
+    # Final norm: RMSNorm in the swiglu variant (weight only); the gelu
+    # variant carries a LayerNorm (weight + bias).
+    final_norm_elements = (
+        model.hidden_size
+        if model.mlp_variant == "swiglu"
+        else 2 * model.hidden_size
+    )
     return (
         model.layers * per_layer_elements + embedding_elements + final_norm_elements
     ) * model.bytes_per_elem
 
 
 def kv_cache_bytes_for_tokens(model: WscLlmModel, tokens: int) -> int:
-    if tokens < 0:
-        raise ValueError("KV token count must be non-negative")
+    if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+        raise ValueError("KV token count must be a non-negative integer")
     return 2 * model.layers * tokens * model.hidden_size * model.bytes_per_elem
 
 
@@ -354,6 +369,13 @@ class InstanceGraph:
                     for prefix in rebuild(parent)
                 )
             )
+            if len(paths) > MAX_EQUIVALENT_SHORTEST_PATHS:
+                raise ValueError(
+                    f"topology has more than {MAX_EQUIVALENT_SHORTEST_PATHS} "
+                    f"equivalent shortest paths from {source} to {node} "
+                    "(route enumeration bound exceeded; refusing the "
+                    "combinatorial blow-up)"
+                )
             cache[node] = paths
             return paths
 
@@ -375,6 +397,8 @@ class StaticPdRoute:
 @dataclass(frozen=True)
 class StaticPdMapping:
     routes: tuple[StaticPdRoute, ...]
+    # 以下三个汇总字段为测试专用(仅 test_wsc_llm_scheduler.py 断言消费,
+    # 生产决策只读 routes);保留作映射构建不变量的独立校验口径。
     total_hops: int
     shared_edge_occurrences: int
     edge_use_counts: tuple[tuple[int, int, int], ...]
@@ -394,6 +418,15 @@ def build_static_pd_mapping(
     graph = InstanceGraph(topology)
     prefill_indices = topology.indices_for_role(PREFILL_ROLE)
     decode_indices = topology.indices_for_role(DECODE_ROLE)
+    # SCHED-8（2026-10-01 移植）边界加固：空 Prefill 拓扑此前静默返回空
+    # 映射（routes=()），直到消费方 route_for_prefill 才 KeyError；现构
+    # 造期 fail-closed。生产拓扑唯一构造器 build_instances 已强制双角色
+    # 齐备，该守卫覆盖绕过它手工构造 WscLlmTopology 直接调本函数的调用
+    # 方。空 Decode 拓扑由下方 min(decode_distances.values()) 对空序列抛
+    # ValueError，同样不静默。
+    if not prefill_indices:
+        raise ValueError(
+            "static P-D mapping requires at least one Prefill instance")
     route_candidates: list[tuple[int, tuple[tuple[int, tuple[int, ...]], ...]]] = []
 
     for prefill_index in prefill_indices:
@@ -411,6 +444,17 @@ def build_static_pd_mapping(
             )
         )
         route_candidates.append((prefill_index, candidates))
+
+    combination_count = 1
+    for _, candidates in route_candidates:
+        combination_count *= len(candidates)
+    if combination_count > MAX_ROUTE_CANDIDATE_COMBINATIONS:
+        raise ValueError(
+            f"static P-D route enumeration would explore {combination_count} "
+            f"candidate combinations (bound "
+            f"{MAX_ROUTE_CANDIDATE_COMBINATIONS}); refusing the combinatorial "
+            "blow-up"
+        )
 
     best_objective: Optional[tuple[object, ...]] = None
     best_selection: Optional[tuple[tuple[int, int, tuple[int, ...]], ...]] = None
@@ -455,6 +499,35 @@ def build_static_pd_mapping(
         for source, target in zip(path, path[1:]):
             edge = graph.edge(source, target)
             edge_counts[edge] = edge_counts.get(edge, 0) + 1
+    # 3.17.3（2026-10-01 移植，doc §5.1 契约）：策略文档 §5.1 声明向心
+    # P/D 布局保证"每个 P 的最近 D 都在邻接位置，P→D 交接只需一跳链
+    # 路；离线规划同时最小化总跳数与共享链路数"。此前的选择器只做最小
+    # 化（总跳数、共边次数进 objective），不校验保证本身——一份自绘布
+    # 局若实际只能给出多跳/共边路由，会静默带病运行，而文档口径与运行
+    # 事实漂移。这里把两条文档性质升格为构造期 fail-closed 不变量：被
+    # 选中的每条 P→D 路由必须一跳，且任一物理边不得被两条路由共享。
+    # 在役 6P:3D 布局（六条互不相交一跳边）不受影响。
+    multi_hop = [
+        (prefill_index, decode_index, len(path) - 1)
+        for prefill_index, decode_index, path in best_selection
+        if len(path) - 1 != 1
+    ]
+    if multi_hop:
+        raise ValueError(
+            "centripetal P/D layout contract violated: selected P->D "
+            f"routes must be one hop, got multi-hop {multi_hop[:5]} -- the "
+            "layout does not place every Prefill next to its nearest "
+            "Decode instance (doc §5.1)"
+        )
+    shared_edges = sorted(
+        edge for edge, count in edge_counts.items() if count > 1
+    )
+    if shared_edges:
+        raise ValueError(
+            "centripetal P/D layout contract violated: P->D handoff edges "
+            f"must be pairwise disjoint, shared edges {shared_edges[:5]} -- "
+            "the layout forces routes to share physical links (doc §5.1)"
+        )
     routes = tuple(
         StaticPdRoute(
             prefill_instance_index=prefill_index,

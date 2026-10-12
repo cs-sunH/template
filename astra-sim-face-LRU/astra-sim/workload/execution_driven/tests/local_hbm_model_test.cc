@@ -9,9 +9,9 @@ local_hbm_model_test.cc -- sh_2.0 N-way HBM contention fixture.
 
 Standalone test (no baseline artifacts touched). Boots 6 ranks of the real
 online-mode stack (Sys + Workload + LocalHbmBandwidthModel + real fluid
-network + real AnalyticalRemoteMemory FIFO) from self-written tiny configs,
-then issues hand-built nodes through Workload::issue and asserts the N-way
-equal-split semantics numerically:
+network + real AnalyticalRemoteMemory per-port fluid model) from
+self-written tiny configs, then issues hand-built nodes through
+Workload::issue and asserts the N-way equal-split semantics numerically:
 
   Rank 0  three-way equal split (COMP + KV restore + comm send endpoint):
           each job drains its bytes at exactly full_rate/3, all served-byte
@@ -20,12 +20,13 @@ equal-split semantics numerically:
           completes (the legacy two-user case as the N=2 instance of the
           N-way model).
   Rank 2  pool endpoint join, HBM side first: the MEM node (hbm-access-mode
-          2) terminates at max(FIFO, HBM job) -- the FIFO time, proving the
-          join waited for the slower side and completed exactly once.
-  Rank 4  pool endpoint join, FIFO side first (restore+COMP+MEM three-way
-          dilution): termination at the HBM-side time; also the NoC transit
-          rank of rank5->rank3 traffic -- transit charges nothing (comm
-          served counters stay 0).
+          2) terminates at max(remote port, HBM job) -- the remote-port
+          time, proving the join waited for the slower side and completed
+          exactly once.
+  Rank 4  pool endpoint join, remote-port side first (restore+COMP+MEM
+          three-way dilution): termination at the HBM-side time; also the
+          NoC transit rank of rank5->rank3 traffic -- transit charges
+          nothing (comm served counters stay 0).
   Rank 5  hbm-charge=false send: no COMM_READ job is ever created (all model
           counters 0), the node still completes via the network alone.
   Rank 3  helper receiver: charged recv creates exactly one COMM_WRITE job,
@@ -166,8 +167,10 @@ int main() {
     }
     {
         FILE* f = std::fopen(remote_path.c_str(), "w");
-        // Per-rank ports: the FIFO of one rank never queues behind another
-        // rank's transaction (keeps the join-order math per rank exact).
+        // Per-rank fluid ports (2026-09-24 rework): transactions on one
+        // rank's port run as independent concurrent streams that split the
+        // port bandwidth -- one rank's transfer never serializes behind
+        // another rank's (keeps the join-order math per rank exact).
         std::fputs("{\n"
                    "  \"memory-type\": \"PER_NPU_MEMORY_EXPANSION\",\n"
                    "  \"npu-ids\": [0, 1, 2, 3, 4, 5],\n"
@@ -291,8 +294,9 @@ int main() {
     }
 
     // Rank 2: COMP (4 MB) + pool write (1 MB, hbm-access-mode 2) -- the HBM
-    // side of the join (t ~= 2100) finishes BEFORE the FIFO (t = 2500), so
-    // the MEM node must terminate at the FIFO time (join, not first-wins).
+    // side of the join (t ~= 2100) finishes BEFORE the remote port
+    // (t = 2500), so the MEM node must terminate at the remote-port time
+    // (join, not first-wins).
     {
         auto comp = make_node(2, ExecutionDriven::NodeKind::Compute, 4,
                               "s3a_comp");
@@ -308,9 +312,9 @@ int main() {
     }
 
     // Rank 4: restore (1 MB) + COMP (6 MB) + pool write (3 MB) -- three-way
-    // dilution makes the HBM side (t ~= 7100) finish AFTER the FIFO
-    // (t = 6500): FIFO-first join order. Rank 4 is also the NoC transit
-    // rank of the rank5 -> rank3 flow: transit must charge nothing.
+    // dilution makes the HBM side (t ~= 7100) finish AFTER the remote port
+    // (t = 6500): remote-port-first join order. Rank 4 is also the NoC
+    // transit rank of the rank5 -> rank3 flow: transit must charge nothing.
     {
         auto restore = make_node(4, ExecutionDriven::NodeKind::MemLoad, 2,
                                  "s3b_restore");
@@ -476,8 +480,9 @@ int main() {
     }
 
     // Rank 2 -- pool write join with the HBM side first: HBM job done ~2100
-    // (half rate), FIFO done exactly 2500; the MEM node must wait for the
-    // FIFO (2500), not complete at the first arrival (2100).
+    // (half rate), remote-port transfer done exactly 2500 (single stream on
+    // the port: latency + bytes/bw); the MEM node must wait for the remote
+    // port (2500), not complete at the first arrival (2100).
     {
         const auto* model =
             systems[2]->workload->local_hbm_bandwidth_model.get();
@@ -488,7 +493,7 @@ int main() {
         expect(model->peak_concurrent_jobs() == 2, "rank2 peak 2");
         const uint64_t tick = terminal(2, 2).second;
         expect(tick == 2500,
-               "rank2 pool MEM terminal at FIFO time 2500 (HBM side "
+               "rank2 pool MEM terminal at remote-port time 2500 (HBM side "
                "finished first), got " +
                    std::to_string(tick));
         expect(terminal(2, 1).second == 5100,
@@ -496,10 +501,10 @@ int main() {
                    std::to_string(terminal(2, 1).second));
     }
 
-    // Rank 4 -- FIFO-first join: the FIFO (6500) completes before the
-    // diluted HBM side (~7100); the MEM node terminates at the HBM-side
-    // time. Transit traffic from rank5 -> rank3 crosses rank 4 without
-    // charging it (comm counters stay zero).
+    // Rank 4 -- remote-port-first join: the remote-port transfer (6500)
+    // completes before the diluted HBM side (~7100); the MEM node
+    // terminates at the HBM-side time. Transit traffic from rank5 -> rank3
+    // crosses rank 4 without charging it (comm counters stay zero).
     {
         const auto* model =
             systems[4]->workload->local_hbm_bandwidth_model.get();
@@ -515,8 +520,8 @@ int main() {
                "rank4 NoC transit charges nothing");
         const uint64_t tick = terminal(4, 3).second;
         expect(tick >= 7099 && tick <= 7105,
-               "rank4 pool MEM terminal at HBM-side time ~7101 (FIFO "
-               "finished first at 6500), got " +
+               "rank4 pool MEM terminal at HBM-side time ~7101 (remote "
+               "port finished first at 6500), got " +
                    std::to_string(tick));
         expect(terminal(4, 1).second >= 3099 &&
                    terminal(4, 1).second <= 3105,

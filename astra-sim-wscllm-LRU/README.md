@@ -7,8 +7,8 @@
 >
 > 本仓是 ASTRA-sim 2.0 的晶圆级芯片（Wafer-Scale Chip, WSC）推理仿真改造仓，
 > 系 `astra-sim-wscllm` 的 **KV 冷热管理改造仓（-LRU）**：在 WSC-LLM 请求→实例
-> 映射**逐行保留**（静态 P/D 分区 + 最小排队选点 + 静态路由钉死 + FCFS 队头
-> 阻塞，`wsc_llm_scheduler.py` 零改动）的前提下，把原仓的"两态 KV + LRU 零代价
+> 映射**语义逐行保留**（静态 P/D 分区 + 最小排队选点 + 静态路由钉死 + FCFS 队头
+> 阻塞，`wsc_llm_scheduler.py` 映射语义零改动（2026-10-01 注记：映射**语义**零改动成立；文件级已含两仓互授的守卫加固——本仓在分叉后自加 rank/pg_name/字节数输入守卫，并回移母仓的 SCHED-8 空 Prefill 门与 3.17.3 向心布局契约门（构造期fail-closed），全部只收紧非法输入路径、对合法生产配置逐字节等价））的前提下，把原仓的"两态 KV + LRU 零代价
 > 删除 + 历史全量重算"整体替换为 **session 级二态 KV 冷热管理**——
 > 完整本地（LOCAL_HBM）/ 完整远端（REMOTE_MEMORY）二态 +
 > **session 级整体 LRU 逐出**（LRU 候选池逐个整体写回远端池，逐笔重查缺口，
@@ -24,7 +24,9 @@
 > 阅读仓内任何代码、配置或文档前，请先建立以下概念。硬件参数唯一权威来源是
 > `sh_test_mesh/hardware/face_case5_config_c.json`，运行时配置
 > （system.json / network.yml / remote_memory.json / comm_group.json）由
-> `sh_test_mesh/config_resolver.py` 从它派生，禁止手改。
+> `sh_test_mesh/config_resolver.py` 从它派生，禁止手改。Sys 侧读取 system.json
+> 时另按 `known_system_keys` 白名单做未知键 fail-closed 门
+> （`astra-sim/system/Sys.cc`），与 config_resolver 的模板侧白名单互为前后两道门。
 
 ## 核心概念与硬件架构建模
 
@@ -37,8 +39,11 @@ HBM。NPU 数量禁止单独配置，恒等于行 × 列；芯粒按 row-major �
 ### B. NoC（片上网络）
 
 晶圆内部芯粒间的互连：非环绕二维 mesh 上相邻芯粒间的有向链路（die-to-die），
-链路带宽与每跳时延取硬件配置 `d2d` 的值（多跳逐跳累计），XY（维序）确定性路由，逐跳
-store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（拥塞感知）。C++ 侧由
+链路带宽与每跳时延取硬件配置 `d2d` 的值（每跳时延逐跳累计），XY（维序）确定性路由，
+流体流水线模型——单条消息占用整条路径的全部链路、带宽串行化只在瓶颈链路发生一次
+（不是严格逐跳整包重发的 store-and-forward；vendored 上游唯一
+`transmission-mode: fluid-pipelined` 自证，见 `Topology::fluid_route`），
+共用同一链路的多条数据流进同一 FIFO 排队（拥塞感知）。C++ 侧由
 分析型网络后端实现（`extern/network_backend/analytical/congestion_aware/`），Python
 规划层有同一语义的确定性 XY 路由函数。注意：这是分析级模型，不建模路由器微架构
 （crossbar / VC / credit），也不做 cycle-accurate 仿真。
@@ -48,7 +53,10 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
 挂载在 NoC 上的**每一个单元**即一颗芯粒。代码与配置中统一称 **NPU**（或 rank），
 权威映射为"一个 FACE 物理计算 die = 一个 ASTRA-sim NPU"。每颗芯粒包含：
 
-- **计算单元**：峰值算力取硬件配置 `compute` 的值，算子以 Roofline 模型计时执行；
+- **计算单元**：生产配置走 **die 内成本模型**（硬件配置 `die` 节派生核网/
+  峰值/带宽，COMP 算子按 DieOpSpec 编译 DiePlan 后由 DieExecution 逐阶段执行，
+  见 H 节）；显式 legacy 后端（`compute-cost-model: roofline`）保留旧 Roofline
+  闭式；
 - **本地 HBM**（KV 热层）：带宽 / 时延 / 容量取硬件配置 `local-hbm` 的值（容量按
   profile 档位选择）；多用户带宽竞争模型见 G 节；
 - **网络接口（路由端口）**：mesh 上的一个 Device，经有向链路连接其在 mesh 中的物理邻居；
@@ -70,8 +78,10 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
   的边缘芯粒（曼哈顿距离最近、并列取最小 rank），由该边缘芯粒的端口代为完成远端访问，
   再经 NoC 返回。
 - **"统一"的含义**：远端池是统一逻辑地址空间——从边缘芯粒 A 写入的数据可以从另一个
-  边缘芯粒 B 读出、回到片上任意芯粒，写入端口与读出端口可以不同（manifest 字段
-  `logical_pool_shared_across_edges: true`），因此称为统一内存池。
+  边缘芯粒 B 读出、回到片上任意芯粒，写入端口与读出端口可以不同（真实承载：硬件
+  配置 `face_case5_config_c.json` 的 `remote-memory` 节声明单一逻辑池
+  `logical-pool: unified-kv-cache-pool`，`memory-type: PER_NPU_MEMORY_EXPANSION`
+  下全部边缘芯粒的端口同池互通；manifest 无该语义的专属字段），因此称为统一内存池。
 - **端口代价模型（2026-09-24 工作树口径，SerDes 片外链路并发化改造落地）**：
   每个边缘端口为**并发在途＋流平分**的流体端口，不再是"一事务完成再发下一笔"
   的严格 FIFO 串行队列（旧 `PendingMemoryRequest`/`pending_requests`/
@@ -84,7 +94,9 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
   值）下每个边缘 rank 一个独立端口（9×6 mesh 边界 26 个 rank，`npu-ids` 见
   resolver 派生的 `remote_memory.json`），事务按其边缘端口各自占用自己的共享
   域；池自身无带宽竞争面（竞争只发生在各端口内）。
-  （`extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.cc`）
+  （`extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.cc`；
+  该目录下 README.md 目前仍是单行 stub，后端契约（memory-type 取值、
+  bw/latency、transaction log）以本节与该源码为准，stub 补全待后续批次）
 - **事件精度（2026-09-24 口径）**：流体完成时刻 `fluid_finish_ns` 是连续量，
   Workload 回调唯一落在 `ceil(fluid_finish_ns)` 的 callback Tick 上——
   `callback_tick − issue_tick` **不等于**端口服务时长，含 ≤1 Tick 的向上取整
@@ -96,9 +108,25 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
   积分结算，是端口的唯一事实源；sensing 开启时另有逐事务明细
   `remote_memory_transactions.jsonl`（惰性建文件：零远端事务 run 零文件零
   残留；行含 `fluid_finish_ns` 与 `callback_tick` 两个时刻，积分字段负责
-  表达中途带宽重分）。
+  表达中途带宽重分；口径警示（RB-03 2026-10-01）：行内 `node_id` 是 C++
+  NodeStore 自 1 起的 store id，带逐 rank affine 偏移，**不是** Python 决策
+  json 自 0 起的图节点 id，未来做跨文件 join 时不得与 Python 侧任何 id
+  等同对齐）。run 末另有生产导出通道：正常结束前逐端口 `PortStats`
+  终态落盘 `bridge_dir/remote_memory_port_stats.json`（`dump_port_stats`，
+  rm-backend-D1 修复 2026-09-27；后端有端口才建文件，无端口 run 零文件零
+  残留）。生命周期口径（R5-batch3 2026-10-01 登记）：该文件留存于 run 的
+  bridge/ 目录散件——官方 runner 的 results/ 搬运清单与
+  `archive_run_outputs.sh` 常驻保留集均不含它，slo_tools 及全部 .py/.sh
+  亦无消费点；流体口径的自动化复算权威是 C++ 测试
+  `remote_port_sensing_test.cc`（基于事务行与后端 PortStats 夹具复算，
+  不读本文件）。读它属人工排查动作，不构成被归档保障的指标产物。
 - **限制（2026-09-24 口径）**：①`remote-mem-bw` 数值沿用历史口径按 B/ns 消费
-  （512 → 每端口 512 B/ns），单位解释未经物理资料核实，属模型假设；②流体
+  （512 → 每端口 512 B/ns），单位解释未经物理资料核实，属模型假设；该键与
+  system.json 的同名键出自同一源值（hardware json `remote-memory.bandwidth-gbps`，
+  GB/s）——system.json 侧 Sys.cc 按 GB/s ×1e9→B/s 消费、remote_memory.json 侧
+  按 B/ns 原始数值消费，GB/s ≡ B/ns（10⁹ 进制恒等）故两处同时正确，两生成文件
+  不得独立手改（2026-10-01 单位约定注记，详见 config_resolver.py/Sys.cc/
+  AnalyticalRemoteMemory.cc 三处注释）；②流体
   平分是理想 MAC 语义，未建模端口内仲裁开销与协议 outstanding 上限；③
   Python 策略层计价不建模池端口服务时长（全仓无 `remote-mem-bw` 计价消费
   点，NoC 迁移走 XY 路由跳数计价），并发化不改变 Python 决策计价；④
@@ -163,16 +191,26 @@ validate / 强制 liveness preflight / commit 装配 / 锚点注册四处消费�
 typed 数据——改前"DOM 随批驻留 + 同一棵 nlohmann DOM 被字段级提取 4 遍"的
 重复解码消除（sh_1.0 参考仓实测 30s 档 C++ 自身耗时 −16.1%，端到端无回退）。
 **协议收紧（fail-closed 强化，fixture 作者可见）**：顶层未知键、节点/边/watch/alarm
-键集不符（缺失或多余）、整型域违例（负数、>UINT64 字面量、tag/priority 超 32 位）
+键集不符（缺失或多余）、整型域违例（负数、>UINT64 字面量、tag/priority 超
+INT_MAX——Sys 发射链按 `int` 承载，2026-10-01 自 32 位上界收紧；同日补齐 NATIVE 窗口天花板：tag ≥ 5×10⁸ 亦解析层拒收，杜绝 Sys 侧 %5e8 折叠的 静默别名——boundary-E1 的解析层落点）
 在解析层直接经 `bridge_fatal` abort（与既有协议违例同通道同退出码）；错误响应仍
 先行于结构解析判定（时序不变）。Python 生产者（graph_batch_builder）本就满足全部
 键集，行为不变；三个 verify fixture 服务（same_tick_milestone / wakeup_guard /
 lifecycle）原先发射的空 `comm:{}`/`coll:{}` 已补满形缺省。本仓特有的节点级可选键
 `is_local_hbm_kv_restore`（仅真值发射）与顶层 HBM 字段（compute 可选
-`hbm_access_mode`：1=POOL_READ、2=POOL_WRITE，仅非零发射；comm 可选
-`hbm_charge`，仅 False 发射——三键 absent 即默认语义）在解析规则内一并收口
-（2026-09 数据面激活扩键集，照 sh_2.0 键集形态）。
-数组顺序契约：六个数组与 watch 成员一律按发射序保序，解析层不排序不去重。
+`hbm_access_mode`：1=POOL_READ，仅非零发射；协议域为 {0,1}——2026-10-01 起
+mode=2 在提交边界 fail-closed 拒收，POOL_WRITE 腿仅模型层保留，无发射者；
+comm 可选
+`hbm_charge`，仅 False 发射——三键 absent 即默认语义）在解析规则内一并收口；本仓相对母仓另放宽的 compute 可选键 `remote_weight_bytes`（远端算子 operand 流水线 roofline，Workload.cc 消费）亦在键集内
+（2026-09 数据面激活扩键集，照 sh_2.0 键集形态）。桥决策报文与 trace 边车的
+JSON 解析均为严格 parse：整输入须恰为一个 JSON 值，尾随内容或重复键一律视为
+生产者损坏并 fail-closed（`DecisionBridge.cc` / `WindowedTraceReader.cc`）。
+数组顺序契约：六个数组按发射序保序，解析层不排序不去重；watch members 是
+JSON 对象，解析侧按 nlohmann 的键序（规范十进制 rank 键的字典序，
+GraphBatchCommitter 的成员序消费注释自述 "10" precedes "2"）迭代——
+生产者恰按数值升序发射成员键，两序等价；契约的保序主体是数组与成员表的
+键集合，不承诺任意发射序的对象键序（ParsedGraphBatch.hh 的 W3 规范键
+域即为此设）。
 
 ### G. 芯粒本地 HBM 带宽模型（`hbm-bandwidth-contention`）
 
@@ -180,14 +218,15 @@ lifecycle）原先发射的空 `comm:{}`/`coll:{}` 已补满形缺省。本仓�
 `LocalHbmBandwidthModel` 流体模型（`astra-sim/workload/LocalHbmBandwidthModel.{hh,cc}`，
 由 system.json 键 `hbm-bandwidth-contention` 开关，默认开；2026-09 数据面激活起照
 sh_2.0 N-way 模型重写），本 rank 的全部 HBM 用户按**六类 JobKind**竞争同一份
-`local-mem-bw`（远端池启用后从两类扩为六类；池自身带宽竞争不在此模型内，由
+`local-mem-bw`（远端池启用后从两类扩为六类；die 计算后端起再增第七类
+DIE_COMPUTE——见下方第 7 条与 H 节；池自身带宽竞争不在此模型内，由
 边缘端口流体模型单独计时——2026-09-24 起并发在途＋流平分，见 D）：
 
 1. **COMP 节点（roofline 计算访存）**：bytes = `tensor_size`（读写合并计费），
    ops 与访存并行排空，单用户时保持 roofline `max(计算, 访存)` 语义。带非 0 校准
    runtime 的 COMP 节点不进流体模型、保持校准时长（本仓 trace 的 COMP 无 runtime）。
 2. **NoC p2p 通信的数据端点（COMM_READ / COMM_WRITE）**：发送方 rank 的 HBM 读 +
-   接收方 rank 的 HBM 写（bytes = comm 字节数；history_kv、prefill_to_decode_kv
+   接收方 rank 的 HBM 写（bytes = comm 字节数；history_kv、prefill_to_decode_xfer
    等迁移两端都计）。**多跳途经的中间芯粒不占 HBM**（路由器直通——网络后端只在
    端点计费）。bytes==0 不建作业，1B ACK 照常计；ET comm 节点属性 `hbm-charge`
    （默认 true）可显式豁免某端点。
@@ -203,32 +242,127 @@ sh_2.0 N-way 模型重写），本 rank 的全部 HBM 用户按**六类 JobKind*
    `mem_store(hbm_access_mode=1)` 记 POOL_READ（池写时的本地 HBM 读一次）——
    仅当逐出/回迁源 rank 本身是边缘 rank 时发生；借道链路的边缘端
    `mem_store`/`mem_load` 无 mode 键＝本地零计费、仅池端口流体计时。
+5. **die 计算内存腿（DIE_COMPUTE）**：die 后端（`compute-cost-model: die`）下
+   真实 COMP 节点的内部内存阶段，经 `issue_die_memory` 进入同一 N-way 仲裁：
+   排空量是**服务量 service_units**（= 实际字节/η，访问低效按占用服务时间折
+   算），实际字节推进 = 服务量×η（side-band 分列，**绝不回填 tensor_size /
+   D2D / 池 payload**）；**无 FLOPs 腿**（计算由 DieExecution 的 PE/VEC 阶段
+   推进）、**无 latency 相**（`local_mem_latency` 由 DieExecution 在每外层
+   节点首个内存请求前以一次性 TIMER 收取，至多一次）。完成回调直达
+   DieExecution sink（绝不经 Workload——内部 HBM 作业不伪装外层 COMP 完成，
+   外层节点恰一次 terminal）。RESTORE/POOL/COMM_* 各类与 DIE 同仲裁器竞争，
+   其均分语义逐字节不变；竞争回归见 `local_hbm_die_memory_test.cc` 的
+   S2 场景（die + restore + pool + comm 四方动态竞争）。
 
 仲裁口径：N 个并发用户严格均分（各得 `full_rate/N`），任一作业完成立即释放并给
 剩余用户重分配（事件驱动）；带宽直接用配置标量——读写共享同一总线与总带宽，不区分
 读写方向，不区分峰值/持续带宽；`local-mem-latency` 在每作业启动时计一次。p2p comm
 节点完成 = join(网络侧完成, 本端 HBM 作业完成)，两侧都到齐才触发节点完成（幂等）；
-池直连节点的两侧 General 事件共享同一 join 闩锁（同侧二次到达 = critical fail-closed）。
+池直连节点的两侧 General 事件共享同一 join 闩锁；两侧均为 General 事件、
+无 per-side 归属旗标，同侧二次到达不经专属守卫、由 2→1→0 倒计数与随后的
+重复 terminal fail-closed（`mark_online_terminal_or_fail`）兜住（报错点
+后移、错误信息归因为 duplicate terminal——Workload.cc 的 join 注释如实
+记载该局限）。
 **TP 集合通信（PacketBundle 3x 路径）不在范围**。端点计费总规则：**每字节每链
 恰好在正确端点计费一次**（过路 hop 不计、双计有守卫拒收），逐链路计费地图见
 §1.1 物理链路表。
 
-`hbm-bandwidth-contention: 0`（或 `local-mem-bw <= 0` 自动回退）＝完全恢复旧行为：
-roofline 闭式公式、comm 立即随网络完成、不计 HBM。指标导出（MetricCollector，
+`hbm-bandwidth-contention: 0`（或 `local-mem-bw <= 0` 竞争模型自动回退）＝关闭
+HBM 共享模型、恢复 roofline 闭式旧行为：comm 立即随网络完成、不计 HBM。但注意
+`local-mem-bw` 同时是 PacketBundle 本地处理路径（RS/AR 归约包、DBT int/root 包）
+的硬依赖：凡运行带 reduce 的集合通信，`local-mem-bw` 必须为正——缺失/非正在该
+路径首个本地处理点即 `sys_panic` fail-fast（不随本开关回退；本仓配置链由
+config_resolver 注入该键，仅手写仓外最小 system JSON 才会踩到）。集合通信
+算法层另有一族 fail-closed 守卫：plain Ring 拒驱动 All_to_All（StreamInit 即
+critical + exit(1)，须改配 direct）、HalvingDoubling 要求 2 的幂环规模、
+AllToAll 单节点退化即就地终止、CustomAlgorithm 的 rank/ET 文件域 `sys_panic`、
+CollectiveImplLookup 实现键解析期 critical + exit(1)（均在 `astra-sim/system/astraccl/` 下）。
+指标导出（MetricCollector，
 旧键不变）：每 rank `hbm_busy_ns`、六类 served bytes（comp / comm_read /
 comm_write / restore / pool_read / pool_write）、`peak_concurrent_jobs`、
 `redistribution_events`、`hbm_shared_ns`（多用户共享窗口时长）、
 `local_hbm_restore_bytes_issued`（restore 发射侧带计数）、真实利用率
-`hbm_busy_util = busy_ns / 墙钟窗口`。单测：
+`hbm_busy_util = busy_ns / 墙钟窗口`；die 后端另加 `die_service_units_served` /
+`die_actual_bytes_served` 两列（服务量与实际字节分列，不混入六类字节列）。
+单测：
 `astra-sim/workload/execution_driven/tests/local_hbm_bandwidth_model_test.cc` 与
-`local_hbm_model_test.cc`（6 作业 N-way 模型权威数值测试，2026-09 数据面激活新增）。
+`local_hbm_model_test.cc`（6 作业 N-way 模型权威数值测试，2026-09 数据面激活新增）
+与 `local_hbm_die_memory_test.cc`（DIE_COMPUTE 服务量作业 + S2 四方竞争场景，
+die 后端新增）。
 策略细节见《request实例映射与KV冷热管理策略说明.md》。
+
+## H. 计算成本后端（die 生产 / roofline / replay legacy）与 die 配置链
+
+die 内仿真器（设计文档《die内仿真器设计文档.md》）把本仓 die 内计算模型替换为
+共享成本库驱动的时间推进，**保留**本仓全部 KV 特性（二态冷热管理、远端共享池、
+全量 restore 状态机、远端权重路径的 pipeline/join）；唯一替换的是 COMP 计算路径。
+
+### H.1 三后端与分发序
+
+system.json 键 `compute-cost-model`（`die` | `roofline` | `replay`；缺键向后
+兼容：无键且 `roofline-enabled=1` 即旧 roofline）：
+
+| 后端 | COMP 行为 | 冲突矩阵（fail-closed） |
+|---|---|---|
+| `die`（生产） | timer/CPU op → replay；`op_role=control_marker` 微节点 → 旧微作业语义逐字节保留（HBM 模型在=1/1 字节 COMP 作业，否则 1ns 事件）；真 COMP 附 `die_op_spec` → DieModelAdapter（编译/复用 DiePlan → DieExecution 驱动 PE/VEC/NoC/内存阶段）；缺 spec 的真 COMP → throw（绝不静默回退 roofline/replay） | die + `roofline-enabled=1` 拒；die + `replay-only=1` 拒（resolver 与 C++ Sys 双层） |
+| `roofline`（显式 legacy） | 旧闭式 + 流体 COMP 路径原样（issue_comp 在 die 后端下入口即 throw） | — |
+| `replay`（显式 legacy） | 旧无 roofline 分发 | — |
+
+MEM_LOAD/MEM_STORE 分派（`issue_local_hbm_kv_restore` / `issue_remote_mem` 及其
+pipeline/join、输入就绪门槛）在 die 后端下原样保留——die 模型只接 COMP 计算路径；
+restore/pool/远端 KV 计费照旧。
+
+### H.2 die 配置链（五步）
+
+1. 硬件 JSON `die` 节（与 `compute` 节互斥；本仓裁定点 = large/0.75MB/800mm²/
+   NoC 512bit/HBM 4×1：带宽 1640 GB/s 与旧硬件严格连续，容量派生 64 GB）；
+2. `config_resolver` 经 ctypes 调 `libdie_model_cabi.so` 取派生
+   （`discover_cabi_library` 发现序：env `DIE_MODEL_CABI_PATH` → 仓内
+   `build/astra_analytical/build_congestion_aware/{lib,bin}/` → fail-closed；
+   **Python 零派生公式**）；派生回流 `peak-perf`（1492.05 TFLOPS）与
+   `local-mem-bw`（1640.0）；**容量对齐硬校验**：所选 capacity-profile bytes
+   必须等于派生 HBM 容量（本仓 `validation-die-64g`）——容量与 KV 账本耦合，
+   对齐后准入/逐出随 64 GB 变化，远程池/迁移机制照常兜底（不判请求失败）；
+3. 物化 `resolved_die_model.json`（库摘要原文，可 round-trip）+ system.json
+   注入 `die-model-config`（managed 绝对路径）+ die 模板三键
+   （`compute-cost-model`/`die-model-profile` 来自模板，冲突在 resolver 与
+   C++ 双层拒绝）；
+4. `plan_materializer` 把两键写进 `manifest.json` 与 `metrics_manifest.json`
+   （legacy 无键形状不变）；
+5. Python 生成侧：`online_scheduler_base` 从 manifest 构造
+   `online/die_model_adapter.py::DieModelContext` 并在每批发射前注入构图器；
+   列车体与 prefill 整段两条 COMP 发射路径都附 `die_op_spec`（spans 带绝对
+   位置，phase=train decode / prefill chunk），可融合纯本地链经 `compile_regions`
+   编译为 attention_region / ffn_region（collective 位置/bytes/参与者不变，
+   marker 一律显式 `op_role="control_marker"`）。本仓 spec 的
+   `kv_access.identity` 恒 `local`：远端搬运计费属于既有 remote/restore 图
+   路径，计算节点发射时其 KV 输入已就位于本地 HBM。
+
+### H.3 die 利用率三口径与指标出口
+
+每 die 节点完成时按契约 §7.6 填充：compute = PE FLOP/(PE_peak_die×elapsed)、
+memory = 实际字节/(B_mem×elapsed)、vector = eq-ops/(V_peak×elapsed)（elapsed =
+issue→完成实际跨度；竞争使利用率低于孤立估值）。聚合走 Statistics 的 duration
+加权和；`type=rank_compute` 记录新增 `active_kernel_die_{compute,memory,vector}_
+util` 三键（门控=compute-cost-model=die；roofline 键门控不动）；
+`metrics_postprocess` 管线级断言 die run 每 rank 三键非 null 且 ∈[0,1+ε]。
+
+### H.4 生命周期与竞争红线
+
+每外层 die COMP 节点恰一次 terminal（DieExecution Done → finish_generic_node，
+唯一完成出口）；内部 HBM DIE 作业绝不伪装外层完成；run 正常结束的 drain 检查
+包含 adapter 活跃执行集合（main_online 生命周期收尾门）。一个 die 同时至多一
+个计算侧内存请求；`hbm-bandwidth-contention=0` 时计算腿自驱满速率（结果注明
+双方争用未模拟），通信侧沿用旧开关语义。外部 RESTORE/POOL/COMM 端点与计算
+动态竞争的守恒回归：`local_hbm_die_memory_test.cc` S2。
 
 ## 1. 本仓是什么
 
 - **映射语义（保留对象，未改动）**：PD 分离：6P:3D + StaticPdMapping 静态路由
   （`wsc_llm_scheduler.py` 的 `build_instances` / `build_static_pd_mapping` /
-  `select_prefill_instance` / 路由钉死 / FCFS 队头阻塞逐行保留，零改动）；
+  `select_prefill_instance` / 路由钉死 / FCFS 队头阻塞语义逐行保留；文件级
+  守卫加固清单见文首注记——映射函数本体零改动，SCHED-8/3.17.3 构造期
+  fail-closed 门为 2026-10-01 对齐母仓补入）；
   prefill 实例内严格 FCFS，队头容量不足阻塞整条队列、不改投其他实例。
 - **KV 冷热管理（本仓改造核心，2026-09 改造）**：完整本地/完整远端二态
   （LOCAL_HBM / REMOTE_MEMORY，无 PARTIAL 部分驻留运行态）+ session 级整体
@@ -263,7 +397,8 @@ fail-closed 登记齐全且均已单值化：loader（`generate_wsc_llm_trace.py
 - 逐出单位 = **完整 logical session**（全部 L 层、全部 TP shard、全部本地
   resident payload 一次性写回后整体释放）；不逐层、不逐半层、无按容量压力
   动态决定保留层数的机制；旧 `PARTIAL_HBM_REMOTE` 运行态不可达（常量仅为
-  旧日志解析保留，`_check_invariants` 与消费侧白名单出现即 raise）；
+  两态白名单的拒绝值保留——无任何旧日志解析消费，唯一现存消费者是
+  fail-closed 不变量测试；`_check_invariants` 与消费侧白名单出现即 raise）；
   层区间字节按层数正比折算，逐 NPU 按整头（whole-head）分片，
   本地 + 远端逐字节守恒（`kv_cache_shard_bytes_for_layer_range` 守恒断言）。
 - 位置值域（决策日志 `history_location_before`）：`local_hbm` /
@@ -333,26 +468,48 @@ prefill 准入 `prepare_history`、decode 准入 P→D 交接 `move_prefill_to_d
 | remote_store 链 A（source≠edge） | [可选 1B trigger] → source `comm_send(bytes)`＝源端 COMM_READ 唯一数据计费 → edge `comm_recv`（`hbm_charge=false` 过路零计费）→ edge `mem_store`（池写本地零计费，仅池端口流体计时）→ 1B ack 双端；**源端收到 ack 后才物理释放** |
 | remote_store 链 B（source==edge 直连） | edge `mem_store(bytes, hbm_access_mode=1)`＝POOL_READ 唯一计费 + 池端口流体计时双异步 join |
 | remote_load（回迁） | [1B control/arm] → edge `mem_load`（仅池端口流体计时）→ edge `comm_send`（`hbm_charge=false`）→ target `comm_recv`（`hbm_charge=false`，目标写由 restore 承担）→ target `local_hbm_kv_restore`（节点级 `is_local_hbm_kv_restore=true`）＝RESTORE 唯一数据计费 |
-| noc_migrate（LOCAL 跨实例 / decode P→D 交接） | 既有 1000/3000 类 p2p 配对迁移（相对 TP 编号一一配对），两端正常 COMM_READ/COMM_WRITE 计费 |
+| noc_migrate（LOCAL 跨实例）/ decode P→D 交接 | 既有 p2p 配对迁移（相对 TP 编号一一配对），两端正常 COMM_READ/COMM_WRITE 计费；tag：LOCAL 跨实例 shard 走 `TransferTagAllocator` 分配器段，P→D joiner 配对走 3000 类 stage-tag（现役唯一取值，见下） |
 
 本拓扑 9×6 网格的 decode 实例居内部，逐出源多为非边缘 rank → 借道链 A 为主
 （直连链 B 仅当逐出源 rank 本身在 mesh 周界时发生；POOL_WRITE 路径 sh 发射端
 本就不使用）。KV 传输 tag 由 `TransferTagAllocator` 从 **100,000,000** 起单调分配
-（错开既有 `queue_index*10000+{1000,1900,3000}` 段；H8 修正 2026-09-24：原基址
+（错开既有 `queue_index*10000+{category}` stage-tag 段——boundary-C1 2026-09-27
+起现役仅 category=3000 的 P→D joiner 配对迁移一个调用点，history noc_migrate
+与逐出/回迁 shard 全走分配器段；H8 修正 2026-09-24：原基址
 10,000,000 只对 <1000 行队列成立——30s 窗口源 trace 实测 1177 行已段重叠，基址
-上移后队列 ≤9999 行两段不相交，且 `_stage_tag` 补了越界 fail-closed 守卫）；新节点命名避开
-`first_token` / `batch_train_` C++ 名字锚点子串。
+上移后队列 ≤9999 行两段不相交，且 `_stage_tag` 补了越界 fail-closed 守卫）。
+分配上限 = C++ NATIVE 段半开上界 **500,000,000**（Sys 对 NATIVE tag 无条件
+%5e8、≥5e8 即静默别名——boundary-E1 2026-09-26：分配越界在分配器 `take()`
+即 `OverflowError` fail-closed，不再放行至 2³²−1）。新节点命名避开
+`first_token` / `batch_train_` C++ 名字锚点子串；`kv` 子串仅出现在 history
+restore/transfer-arrival 末端节点（`*_recv_kv` / `*_target_hbm_write_kv`）——
+C++ code-7 memory anchor 经 `is_kv_route_transfer_leg`（`ParsedGraphBatch.hh`）
+对这两个精确腿后缀匹配后按"每 (request,rank) 最后一条 KV 传输腿"注册
+（2026-09-30 C-3：旧 `name.find("kv")` 裸子串匹配会被同请求的聚合节点
+`attention_qkv_projection` 命中，把锚点错置到 qkv 计算时刻，已废），P→D
+joiner 迁移节点已相应由 `_prefill_to_decode_kv` 改名 `_prefill_to_decode_xfer`
+（py-slo-E1 修复 2026-09-27）；配套 loader 侧防线（M-27，`generate_trace.py`
+`load_request_queue`）：session/request 标识含保留子串 "kv"/"first_token"
+即生成期 fail-closed 拒绝（防用户数据进入 C++ 锚点命名空间）。
 
-**逐出旁路支链（2026-09-13，KV 逐出与 request 推理并行化）**：三个逐出发射点
-（`history_evictions` / `prefill_evictions` / joiner `decode_evictions`，含净额
-预占路径经 decode 段的发射）经 `online/graph_batch_builder.py` 的
+**逐出旁路支链（2026-09-13，KV 逐出与 request 推理并行化）**：全部逐出发射点
+经 `online/graph_batch_builder.py` 的
 `_emit_side_branch`（全 rank `chain_checkpoint` fork → 发射 → `restore_chain`，
 分支**不 join**）fork 到旁路分支——逐出物理链不再阻塞主链任何节点（回迁/屏障/
 列车体），同 rank 上逐出流（COMM_READ）与推理计算（COMPUTE）时间重叠，HBM
 争用由 C++ `LocalHbmBandwidthModel` 的 **N-way 均分模型自动在线裁决**（C++ 零
-改动，逐流加入/离开即时重分配）。触发门语义不变：history 逐出的到达/interval
-门、decode 逐出的 prefill 段末门仍挂在分支首节点（只对齐逐出**开始**时刻，
-去掉的是完成阻塞）；`prefill_evictions` 无显式门，支链根 = fork 时各 rank
+改动，逐流加入/离开即时重分配）。发射点与触发门（2026-09-30 C-2/M-25 修订）：
+history 逐出的到达/interval 门、joiner `decode_evictions`（#4/#5 move/grow
+路径——运行时经预约不变量恒零逐出，随 joiner 首列车发射的原路径保留）的
+prefill 段末门仍挂在分支首节点（只对齐逐出**开始**时刻，去掉的是完成阻塞）；
+#2 净额预占逐出改为**决策时点就近发射**（`emit_decode_eviction_actions`，由
+调度器调用，不再随 joiner 列车头发射）：准入成功随 prefill 批发射（触发门 =
+prefill 段块末，与旧行为同门），阻塞 attempt 的逐出本边界无门立即发射（2026-09-30
+审查注记：现管理器下该臂结构性不可达——ensure_physical_fit 的边际门保证
+blocked ⟹ evictions==()，防御性保留；链到
+各 rank 当前 frontier——阻塞路径的 prefill 段块末尚不存在），节点上下文
+stamping (prefill, 0)（(decode, 1) 会被 C++ node-only decode 段资格门拒批），
+决策→发射窗口收敛为零。`prefill_evictions` 无显式门，支链根 = fork 时各 rank
 主链 frontier——fork 点可能合法携带的主链 armed 依赖（turn-0 准入形态的
 到达/interval 门 arm，2026-09-13 勘误证实的既有形态）由 helper **暂存清空、
 不进分支、恢复后归还原主链消费者**，分支自己的触发门 arming 在分支内完成
@@ -371,7 +528,13 @@ prefill 准入 `prepare_history`、decode 准入 P→D 交接 `move_prefill_to_d
   边：同缘直接 arm 依赖（store `mem_store` 完成挂回迁链首）；跨缘 1B p2p 中继
   （store 边缘在池写完成后发 1B、回迁边缘收 1B 后其池读链在其后，tag 走
   `TransferTagAllocator`）。粒度 = 池写落盘（不等源端 ack 全程）；懒处理（store
-  早已完成时补边即刻满足零时延）；terminal 会话终结时清登记。
+  早已完成时补边即刻满足零时延）；回迁发射消费登记即弹出（一次性消费、幂等，
+  2026-09-26 M2-01）；terminal 会话终结时清登记。decode 侧尾部（#2 预占逐出）
+  于决策时点发射时即登记（`_register_store_tails`，发射即登记、恒先于任何
+  后续回迁，C-2/M-25）；空表但调度器探针
+  （`set_pending_remote_store_probe`）报告该会话仍有已决策未发射的 decode 侧
+  remote_store 即结构性时序违例，fail-closed 拦截（补边无载体，静默放行会
+  复现池读先于池写）。
 
 **恢复四分支**（下一轮到达、映射照常选点后——**映射不看 KV 位置**——
 `prepare_history` 按态分流；**RECOMPUTE 已从历史路径删除**——恢复取代重算，
@@ -381,13 +544,15 @@ prefill 准入 `prepare_history`、decode 准入 P→D 交接 `move_prefill_to_d
 |---|---|
 | 无历史 | 建片上记录，随 prefill 增长（NO_HISTORY） |
 | LOCAL 同实例 | 零开销本地复用（LOCAL_HIT） |
-| LOCAL 跨实例 | 整份 KV NoC 迁移（NOC_MIGRATE，既有 1000 类路径原样保留） |
+| LOCAL 跨实例 | 整份 KV NoC 迁移（NOC_MIGRATE，既有 p2p 配对迁移路径原样保留；shard tag 走 `TransferTagAllocator` 分配器段） |
 | REMOTE（同/跨实例） | **全量回迁**到选定实例，逐 target rank 最近边缘端口（REMOTE_RESTORE，单段全层 `[0, L)`；恢复完成前不能消费历史 KV——单一全层就绪屏障 `history_tp_ready_barrier` 保障；**不回迁层区间**） |
 
 结构注记：PD 分离下会话经 P→D 交接驻留 D 实例、下一 turn prefill 恒选 P 实例，
 跨实例恢复统一走 REMOTE_RESTORE 全量回迁。旧 PARTIAL 两分支（REMOTE_LOAD
 同实例后缀回迁 / PARTIAL_MIGRATE 跨实例两段链）连同 prefix/suffix 双栅栏与首
-chunk 层段拆分真流水已整体删除；legacy 动作常量仅为旧日志解析保留。
+chunk 层段拆分真流水已整体删除；legacy 动作常量（REMOTE_LOAD /
+PARTIAL_MIGRATE）已从 session_kv_manager 整体删除——无任何 import 消费，
+旧日志夹具直接喂字符串字面量，仓内不再保留。
 
 **KV 指标观测（契约方案 A）**：`repo_variant` 维持 `"astra-sim-wscllm"` 不变；
 `kv_hit_state` **五值域不扩**——新运行二态位置 `local_hbm`/`remote_memory` 恒
@@ -398,7 +563,10 @@ chunk 层段拆分真流水已整体删除；legacy 动作常量仅为旧日志�
 `history_location_before` 二态映射，字段缺失回退 legacy `history_action` 四值表
 （旧产物兼容）；逐出/恢复消费契约行（`history_transfers` 对象 +
 `history_evictions`/`prefill_evictions`/`decode_evictions`/`completion_evictions`
-契约逐出行；legacy 镜像行不再消费防双计；`total_bytes` 标量回退使逐出条目不静默丢）；
+契约逐出行；legacy 镜像行不再消费防双计——B2 窗口产物回退 legacy 时 prefill/
+decode 两行按 (session_id, reason, total_bytes) 键去重防 #2 预占逐出双计，
+2026-09-30；`total_bytes` 标量回退使逐出条目不静默丢；决策日志保留恒 0 的
+`history_recompute_tokens` 列为冻结 schema 兼容占位，RECOMPUTE 已删、无生产者）；
 `hbm_watermark.py` 接受 journal **schema v1/v2 单文件不混版**，v2 remote 链参与
 行级自洽校验且**不计入逐 rank physical 判决口径**（远端池字节不占本地容量）、
 certified 层守恒扩五项；检测到 `history_transfers` 在场自动升级 S2 逐段对账重放
@@ -415,20 +583,35 @@ cd <本仓根>
 # ① 构建（首次需先配置；构建树已预置时可跳过 configure）
 #    裸仓无 build/：先放拼装 CMakeLists（上游 astra-analytical 仓的 vendored
 #    等价物，三行 add_subdirectory 聚合 AstraSim 库/analytical 后端/前端）：
-#    mkdir -p build/astra_analytical && cat > build/astra_analytical/CMakeLists.txt <<'EOF'
-#    cmake_minimum_required(VERSION 3.22)
-#    project(AstraSim_Analytical_Build)
-#    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ astra_sim_build)
-#    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../extern/network_backend/analytical backend_build)
-#    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../astra-sim/network_frontend/analytical frontend_build)
-#    EOF
-cmake -S build/astra_analytical -B build/astra_analytical/build_congestion_aware -DBUILDTARGET=congestion_aware -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON
+mkdir -p build/astra_analytical && cat > build/astra_analytical/CMakeLists.txt <<'EOF'
+cmake_minimum_required(VERSION 3.22)
+project(AstraSim_Analytical_Build)
+enable_testing()  # 顶层必须启用，ctest 才能看到各子目录注册的用例
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../ astra_sim_build)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../extern/network_backend/analytical backend_build)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../astra-sim/network_frontend/analytical frontend_build)
+EOF
+cmake -S build/astra_analytical -B build/astra_analytical/build_congestion_aware -DBUILDTARGET=congestion_aware -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release
+#    （Release 旗标自 die 后端起写入正式 configure 行：die 计划编译是热路径，
+#    -O0→-O3 对其有量级影响；无 fast-math，IEEE 浮点行为与数值结果不变。）
+#    （BUILDTARGET 合法值仅 all/congestion_aware：非法值在 configure 期即
+#    fail-closed 报错（前后端两份 CMakeLists 同守卫；2026-09-30 复原备案
+#    ——该守卫与 GLOB CONFIGURE_DEPENDS 曾一度从两份 CMakeLists 丢失，本日
+#    重建，与 experiment/仿真各功能开关清单.md §1 备案同源））
 cmake --build build/astra_analytical/build_congestion_aware -j
+#    全量构建含 die 后端两个 target：`die_model`（静态成本库，AstraSim PUBLIC
+#    链接）与 `die_model_cabi`（共享库，`.so` 落
+#    build/astra_analytical/build_congestion_aware/lib/libdie_model_cabi.so
+#    ——正是 Python 侧 .so 发现序的仓内路径；库自带 11 项 ctest）。
 
-# ② 物化输入（唯一允许源 = agent-traces/tracelab/astra_compute_20.csv 前 2 秒，
-#    arrival_time < 30e9 ns；物化器：traces/derive_20_first_30_seconds.py（运行 stdout 即权威 provenance 记录））
+# ② 物化输入（唯一允许源 = agent-traces/tracelab/astra_compute_20.csv 前 30 秒，
+#    arrival_time < 30e9 ns；物化器：sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py（运行 stdout 即权威 provenance 记录））
+#    物化器发布纪律（2026-09-30 口径）：queue/sidecar/provenance 三件全部
+#    写入 stage 文件后 os.replace 原子发布（不留半成品）；任一行时间不在
+#    1000 ns 网格上（或 arrival_scale 使 turn-0 越网格）即 fail-closed，
+#    不发布任何产物（off-grid 队列按契约不可发布）。
 #    产物放 sh_test_mesh/workload/llama2_7b_inference/traces/，
-#    并把 trace_config.csv 第 12 行 request_queue_csv 指向它
+#    并把 trace_config.csv 的 request_queue_csv 指向它
 #    （裸仓交付态该指针为占位串，用毕还原；kv_cache_policy=session_lru_tiered
 #    为本仓交付态唯一合法值，无需改动——旧值 session_lru_recompute 已于
 #    2026-09-25 深挖二轮从值域清除，传入即 fail-closed 拒绝）
@@ -441,7 +624,8 @@ cmake --build build/astra_analytical/build_congestion_aware -j
 #    P0 turn-0 修复（2026-08-30）配套：物化器同时写出 <queue>.provenance.json
 #    （FNV-1a 64/字节数/行数/会话数/turn-0 min-max/文件序相邻逆序/块连续）；
 #    C++ 侧 WindowedTraceReader 首开即流式复算并与边车逐字段比对，任一不匹配
-#    在任何 Submit 发生之前 fail-closed 退出（边车缺省仅记一行、不设门）。
+#    在任何 Submit 发生之前 fail-closed 退出；边车缺席同样 fail-closed
+#    （M-16，2026-09-30 起 REQUIRED：无边车的队列无法与截断队列区分）。
 
 # ③ 生成 plan 目录（runtime_config 四小件 + manifest + metrics_manifest）
 cd sh_test_mesh/workload/llama2_7b_inference && python3 plan_materializer.py && cd <仓根>
@@ -456,7 +640,33 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 #    request_metrics.csv——逐请求冻结 29 列，与 manifest 按 queue_index/
 #    request_id fail-closed 连接；summary/off 档不产该文件，原因写
 #    postprocess.log）
-python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py --bridge-dir <run>/bridge --manifest <ET_DIR>/manifest.json（期望值缺省 1177/112，异窗口传 --expected-requests/--expected-accepted-sessions；详见 --help）
+#    归档交互（2026-10-07 补记）：SH_ARCHIVE_RUN 默认开启时，成功 run 的
+#    cpp.log 已被归档步压缩为 cpp.log.gz——上面字面命令里的 <run_dir>/cpp.log
+#    随之不存在；工具已支持直接读取 .gz 回退（与 run_slo_postprocess.sh 的
+#    cpp.log → metrics.log → cpp.log.gz 同款回退口径），亦可按归档状态解压
+#    后传入明文日志。
+python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py --bridge-dir <run>/bridge --manifest <ET_DIR>/manifest.json --cpp-log <run>/cpp.log（期望值缺省 1177/112，异窗口传 --expected-requests/--expected-accepted-sessions；--cpp-log 必填，归档态给 cpp.log.gz；详见 --help）
+#    对账前置与降级口径（列车感知口径 2026-10-02 起，与 W 仓同契约）：
+#    - 对账只适用于感知 run（run_online_strategy_sensing.sh 产物）——
+#      ledger.jsonl / sensing_query_log.jsonl 仅感知运行产出；非感知
+#      strategy run 无对账数据源，入口 fail-closed 退出 2（设计内）。
+#    - 数据源门禁（缺失/为空一律退出码 2、不产出报告，消息注明所需
+#      env，不裸抛）：graph_batch_digests.jsonl 要求运行侧 env
+#      SH_GRAPH_DIGESTS=1；节点级对平（R2a watch 注册总数 / R5b 注入
+#      上限，按 completed_nodes 逐对计数）要求运行侧 env
+#      ASTRA_SIM_ONLINE_COMPLETED_NODES=exact——C++ 仅在该模式下保留
+#      逐节点完成明细（DecisionMailbox），必须在启动仿真前设置（进程
+#      启动时读取）。两者任一缺失即入口拒绝（2026-10-02 起不再降级
+#      SKIP），对账 run 的标准配方 = 感知 runner + 上述两 env。
+#    - online_decision_log.jsonl / ledger.jsonl / sensing_query_log.jsonl /
+#      train_ledger.jsonl（列车成员时间线，R7a1/R8b 回放数据源）缺失/
+#      为空/含坏行 → 退出码 2 fail-closed。
+#    - --cpp-log 必填（R0d/R0e/R2c/R3a/R3c 的权威数据源）：缺参由
+#      argparse 报错；路径给出但文件不存在（含 .gz 回退后），或文件在
+#      场但缺 service counters / phase-5/4 审计行 → 退出码 2，不产出
+#      报告。
+#    - 退出码：0 = 对平；1 = 存在失配（报告逐项列差异与证据）；2 =
+#      数据源缺失/为空/残缺（fail-closed，不产出报告）。
 
 # ⑤b 自动 SLO 指标提取（P3，2026-08-28；A4/2026-08-29 单遍化）：在线
 #    runner（strategy/sensing 两变体）在 postprocess 成功后、归档前自动
@@ -481,8 +691,11 @@ python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile
 #    env SH_SLO_POSTPROCESS：1=默认 warn（子命令失败只写
 #    slo_postprocess.FAIL 标记，不推翻仿真结果）、0=整步跳过、
 #    strict=失败即 runner 非零退出。runner 同时把 per-request manifest
-#    （metrics_manifest.json/manifest.json）拷入 run_dir 根（P2）——run_dir
-#    自包含，与仓还原状态解耦
+#    （metrics_manifest.json/manifest.json）拷入 run_dir 根（P2），并把运行时
+#    trace_config.csv 快照拷为 run_dir 根的 trace_config.csv.snapshot
+#    （P4/2026-10-01）——load_imbalance 的 CV 分母只认 run 本地副本、不回退
+#    仓内默认（METRIC-01 fail-closed 语义的供数侧）；run_dir 自包含，与仓
+#    还原状态解耦
 # ⑥ 一键清空测试记录 + 编译产物（还原裸仓库 = 无物化输入 + 无 build/）
 bash sh_test_mesh/run_scripts/clean_test_records.sh      # 清物化输入/运行产物/缓存（含 trace_config 指针回占位）
 bash sh_test_mesh/run_scripts/clean_build_artifacts.sh   # 清编译产物（build/）
@@ -518,7 +731,15 @@ watermark 5,000,000 ns / link_bucket 20,000,000 ns），null/缺失时回退文�
   峰值/timeavg/容量违规计数（违规数必须为 0，>0 照实输出并计 consistency
   violation；timeavg 与 capacity_timeavg 交叉差 >1% 计 violation）。桶记录仅发
   "有活动的桶 + 首末桶"；在线合成 manifest 无 planner 账本时输出全零序列并
-  注明原因（既有现状，真实水位线由离线脚本从 ledger.jsonl 重放补充）。
+  注明原因（既有现状，真实水位线由离线脚本 `slo_tools/hbm_watermark.py`
+  从 decision log / KV delta journal 重放补充——`bridge/ledger.jsonl`
+  非占用数据源，见 slo_tools README）。
+  G2-1 修复（2026-09-27）起，无 planner 账本 delta 的空闲 rank 也各发射一条
+  `capacity_timeavg` 记录（积分恒 0；util 列按重放口径：capacity/window
+  可得时空闲 util=0.0，collector 无重放数据（capacity 缺失或零窗口）时 util
+  列输出 null 并附 `timeavg_util_note`，postprocess 经 `_value_or_na` 渲染
+  为冻结 NA、不伪造 0——M-20，2026-09-30）——finalize 输出记录集合覆盖
+  全部 rank，多 rank 聚合不再缺行。
 - `link_bucket` / `link_total`（WP6，FluidScheduler 只读积分，不改流推进）：
   每桶 max/total bytes 与 mesh 边界链路峰值、每链路 total_bytes/active_ns。
   开关 env `ASTRA_LINK_OBSERVER`（metrics≠off 且值≠0 时启用，设 0 关闭；off 档
@@ -712,8 +933,13 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
 ### 3.1.1 运行开销与日志瘦身开关（2026-08-28，A/B/C/D 系列改造）
 
 - **env `SH_ARCHIVE_RUN`**（默认 `1` 开）：成功 run 结束后 runner 自动调
-  `sh_test_mesh/run_scripts/archive_run_outputs.sh <run_dir>` 做产物瘦身归档：
-  抽 `[METRIC]` 行 → `metrics.log`（常驻）；新运行的桥请求只追加到
+  `sh_test_mesh/run_scripts/archive_run_outputs.sh <run_dir> <metrics_detail>`
+  做产物瘦身归档（第 2 参 = runner 实际使用的 `--metrics-detail` 档位；
+  非法值即 FAIL）：抽 `[METRIC]` 行 → `metrics.log`（常驻）；**off 档豁免**
+  （2026-09-26 方案 A）——零 `[METRIC]` 行属正常设计，不判失败、cpp.log 照常
+  压缩，打 `[archive] no [METRIC] lines (metrics detail=off, by design)`
+  留痕；summary/full 档及
+  未传档位的裸调用零行仍拒绝归档（fail-closed）；新运行的桥请求只追加到
   `results/request_journal.jsonl`，不再生成海量 `request_*.json` inode；仅为
   兼容旧运行，若发现旧散装请求才归入 `bridge_requests.tar.gz`。`cpp.log` →
   `cpp.log.gz`（pigz 优先）；results/ 非必需 jsonl →
@@ -728,6 +954,9 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
   （P1/2026-08-30 权威 HBM delta journal 与 run 末 checksum 门产物，常驻
   不压缩；journal 开关 off 时不产生）、
   P2 拷入的 `metrics_manifest.json`/`manifest.json`、
+  P4（2026-10-01）拷入的 `trace_config.csv.snapshot`（运行时 trace_config
+  快照，load_imbalance CV 分母的 run 本地权威来源；归档步不触碰 run_dir
+  根级文件，快照常驻）、
   P3 自动 SLO 提取产物（`slo_*.csv`、`slo_*.json`、`cache_events.csv`、
   `kv_hit_states.csv`、`slo_postprocess.log`、`slo_postprocess.FAIL` 若有）。
   任一阶段失败不归档、
@@ -810,7 +1039,13 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
 `run_bridge_cpp_death_fixture.sh`（C++ 中途死亡 => Python 侧 BrokenPipe
 fail-closed 退出 1，纯 Python 无需二进制）——机制层健康自检。
 
-另有 C++ 单测 fixtures（`build/astra_analytical/build_congestion_aware/bin/`，无参数直跑）：
+另有 C++ 单测 fixtures（批量执行入口 = `tests/run_all.sh`：对 canonical 聚合树
+ctest 全量执行全部注册用例、含 OfflineGreedy，见 §5；逐个直跑时注意输出目录
+与参数契约——多数二进制在 `build/astra_analytical/build_congestion_aware/bin/`
+下，但前端部分测试未设 RUNTIME_OUTPUT_DIRECTORY、实际落在
+`build/astra_analytical/build_congestion_aware/frontend_build/`（如
+`AstraSim_Analytical_ChunkIdGeneratorTest`），OfflineGreedy 在
+`.../astra_sim_build/`）：
 `..._WindowedReaderTest`（P0 turn-0 修复后的日历 reader 单测：索引遍+日历提交/
 advisory 窗口/乱序 turn-0/首块超窗/arrival=0 t0 边界/同 tick 按 queue_index 排序/
 provenance 篡改与块结构违例 fail-closed/到达审计门自证）、
@@ -822,7 +1057,18 @@ late_static_submit=0），
 `..._LocalHbmBandwidthModelTest`（本地 HBM 带宽竞争数值/join 两序/回退，见 G 节）、
 `..._LocalHbmModelTest`（6 作业 N-way 模型权威数值测试：均分/回满/双序 join 各恰一次/
 hbm-charge=false/中转不计费，2026-09 数据面激活自 sh_2.0 拷入）、
-`..._NodeStoreTest`、`..._AlarmCancellationTest`（可取消 alarm 链路：bucket 清空时
+`..._DieModelAdapterTest`（die 后端分发序：Sys 冲突矩阵 fork 探针/die_spec 节点
+走 adapter 至 finish_generic_node 恰一次与利用率三口径聚合对账/control_marker
+旧微作业 +101/缺 spec throw/parser 拒 runtime_ns≠0，die 后端新增）、
+`..._DieExecutionLifecycleTest`（DieExecution 生命周期：独立满速 oracle 对拍
+span==oracle±latency、contention 中途活跃/槽位占用、大计划中途拆除零 terminal，
+die 后端新增）、
+`..._LocalHbmDieMemoryTest`（DIE_COMPUTE 服务量作业：均分精确 tick/actual 与
+service 分列/eta≥1 与零服务拒绝/cancel 静默；S2 = die+restore+pool+comm 四方
+动态竞争（本仓 N-way 回归），die 后端新增）、
+`..._NodeStoreTest`（Parts A/B/D/E 无参数直跑；原 Part C——静态 ETFeederGraphSource
+适配器夹具——已随离线静态臂整体退役，2026-09-27 起转正规 ctest 注册）、
+`..._AlarmCancellationTest`（可取消 alarm 链路：bucket 清空时
 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、legacy 后端回退
 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot node bucket
 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、sizeof 编译期
@@ -832,7 +1078,18 @@ stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot node bu
 `..._EventQueueDeferredTest`（EventQueue tick-end 收口 + 同 tick deferred 通道 +
 FluidScheduler deferred-flush 集成 + 1000 次随机操作对照参考实现）、
 `..._IngressIdleTest`（IDLE 五态生命周期/EOF 与 Error 终端/overflow 审计/
-close-vs-submit 竞争线性化）。Python 侧
+close-vs-submit 竞争线性化）；remote_port 三件（2026-09-24 阶段 5；原第四件
+Static/ETFeeder 门控已随离线静态臂退役，online 侧等价断言由
+`..._RemotePortOnlineGateTest` 承接）：
+`..._RemotePortNwayTest`（端口 N-way 共享窗口模型精确夹具，自包含 mkdtemp）、
+`..._RemotePortOnlineGateTest`（online 系统门控：同 rank 双 MEM/依赖序终态）、
+`..._RemotePortSensingTest`（sensing 逐事务明细三臂：明细行产出/行键复算/零事务
+零残留）；另有 `..._GraphBatchCommitterTest`（two-phase atomic
+commit）、`..._ParsedBatchTest`（ParsedGraphBatch 一次性结构解析的畸形协议
+矩阵）、`..._WatchRegistryTest`（watch/fence）、`..._DecisionMailboxTest`、
+`..._BridgeLoopbackTest`、`..._TerminalTailDrainTest`（关机尾清空回归）、
+`..._ServiceVacuumTest`（缺陷 A 服务终判计数真空回归）、
+`..._StatisticsCompactionTest` 等。Python 侧
 `online/test_propagating_tail.py`（`online_scheduler_base.py` 的在途尾部观测器
 PropagatingTailTracker：对到达未完成请求、未 ack 交付、未确认 provisional KV 动作
 三类在途工作记 current/peak/按来源计数，超限 fail-closed 报错、绝不截断；8 用例，
@@ -842,27 +1099,39 @@ pytest 或直跑）。
 
 - `astra-sim/workload/execution_driven/`：在线机制层（C++）
 - `sh_test_mesh/workload/llama2_7b_inference/online/`：在线调度器/构图器/服务层（Python）
-- `.../online/verify/`：对账与验证工具
+- `.../online/verify/`：对账与验证工具（其中 `diff_explainability.py` 与
+  `profile_scan_audit.py` 为**手动 CLI 审计门工具**：退出码无任何自动流水线
+  入口消费，需人工触发查阅，勿误以为有自动门禁兜底——py-verify-D2 登记
+  2026-09-27）
 - `sh_test_mesh/run_scripts/`：全部 runner 脚本 + Python 单测统一批量入口
-  `run_python_unit_tests.sh`（逐测试根 pytest 汇总退出码，任一根非 0 即整体非 0）
+  `run_python_unit_tests.sh`（逐测试根 pytest 汇总退出码，任一根非 0 即整体非 0）；
+  C++ 回归由仓库根 `tests/run_all.sh` 承担（2026-09-26 改造为 C++ ctest 统一
+  入口：对 canonical 聚合树 `build/astra_analytical/build_congestion_aware`
+  ctest 全量执行全部注册用例——`AstraSim_OfflineGreedyScheduleJournalTest`
+  常驻，两个 fluid 回归经 `ANALYTICAL_BUILD_*_TEST` option 瞬开瞬关；旧
+  `ctest -R "Analytical_"` 过滤匹配不到 OfflineGreedy，已去除。与 Python
+  入口分工互补，两入口均如实上报失败、树缺席打印显式 SKIP）
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
 - `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_postprocess_driver.py`（A4 单遍合并驱动，run_slo_postprocess.sh 链内使用；工具 CLI 不变）+ `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值；2026-09-25 起
 每条目为「值+证据+理由+consumers 读者登记」四要素、参数 value 未动——本仓
 审计注记暂领先姊妹仓冻结基线）+ tests；纯离线只读，详见目录内 README.md）
-- `sh_test_mesh/tests/` + workload 根：pytest（2026-09-24 修复后基线：workload
-  `llama2_7b_inference/`（含 online/）= 126 passed（另 7 subtests passed）；
-  `sh_test_mesh/tests/` =
-  49 passed（含 resolver PER_NPU 物化断言，随数据面激活改写）；
-  `slo_tools/tests/` = 125 passed + 1 skipped + 1 预存在环境性失败
-  （LoadImbalance 手算×1；driver_parity×2 已随 2026-09-24 夹具
-  train_ledger exits 键补全修正转为通过）；
+- `sh_test_mesh/tests/` + workload 根：pytest（用例数以
+  `sh_test_mesh/run_scripts/run_python_unit_tests.sh` 实跑为准；2026-10-01
+  深挖修复批次后新增 plan_materializer 两件移植测试（passthrough 4 例 +
+  provenance/publication 11 例）与 resolver 值组合门 1 例，Windows 主机
+  因 fcntl 缺失另有 `online/test_bridge_seq_ascii_guard.py` 不可收集、
+  5 例 bash/python3 子进程用例环境性失败（WSL 目标环境全绿）；
+  Linux 目标环境的逐根通过数以实跑为准）——唯一 skip 为
+  `test_hbm_watermark.py` 的 /var/tmp phase2 journal 真件对拍节（fixture
+  缺席的环境性跳过，与代码态无关）；passed/skip 基线一律以
+  `run_python_unit_tests.sh` 逐根输出为准）；
   §2 ② 物化后 trace_config 指向真实队列时，`test_wsc_llm_scheduler.py` 的
-  request-neutral 占位断言红为已知环境效应，与代码态无关——还原裸仓即绿）
+  request-neutral 占位断言红为已知环境效应，与代码态无关——还原裸仓即绿
 
 ## 6. 边界与纪律
 
-- 仿真输入唯一允许源 = astra_compute_20.csv 前 2 秒（更早的用户指示曾临时
-  授权过更大窗口；以当下指示为准）。
+- 仿真输入唯一允许源 = astra_compute_20.csv 前 30 秒（物化器冻结常量
+  `WINDOW_NS = 30e9 ns`，用户指示 2026-08-15 口径；以物化器代码为准）。
 - 缺失输入一律 fail-closed（generate 桩/materializer/runner/GEN_MATCH 均实测 exit=1）。
 - 映射保留区（`wsc_llm_scheduler.py` 全部映射函数 + 调度器内静态 P→D 路由与
   FCFS 语义）为保留对象，勿改；`session_kv_manager.py` 为二态 KV 内核交付物
@@ -893,11 +1162,11 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
   `extend_request_capacity` 回补到全量（防抢占语义保持，resident→reserved
   1:1 换位，任何瞬间不超订）。
 - **上条净额预占的由来（2026-09-06 准入双重计账楔死故障，6×8 拓扑全量首跑
-  实证；完整分析见《wscllm准入预占双重计账修复方案.md》）**：全量 22816 请求
+  实证；楔死机理与修复口径即本条所述）**：全量 22816 请求
   首跑提交至 22740 后楔死——4 个终态 85万–105万 token 超长会话被静态 P→D
   路由各钉死在一个 decode 实例，准入重试永 insufficient 且无事件可唤醒重试，
   C++ 侧事件队列+决策邮箱全空后由统一死端守卫 fail-closed
-  （`main_online.cc:1661`，安全网本身正确、未改）。根因是记账错误而非容量
+  （`main_online.cc` 的 `online_fatal("lost-wakeup dead end: …")`，安全网本身正确、未改）。根因是记账错误而非容量
   真不够：准入预占终态全量 KV 时未扣减本会话尚驻留于同一 decode 实例的旧 KV
   （`ensure_physical_fit` 的 remaining 不减自身旧驻留 + `protected_sessions`
   禁逐出自身），tp4 128 KiB/token/rank 下"旧+新"≈260GB ≫ 每 rank 预算
@@ -910,7 +1179,10 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
   （旧代码永久推迟/新代码准入成功且不变量干净/release 对称归零；旧 KV 在其它
   实例、EVICTED、净额钳 0 边界与旧行为一致）；30s 标准冒烟冻结基线与修复前
   逐字节一致（条件分支不触发）；4instance 全量重跑 22816/22816 全完成、无
-  lost-wakeup。
+  lost-wakeup。（2026-10-01 时效注记：该重跑先于 H8 基址上移——现行
+  `_stage_tag` 越界守卫下 queue_index ≥ 10000 的队列会在首个 joiner 迁移
+  处 fail-closed，22816 行的全量复现需缩窗或抬基址；本条按历史证据原样
+  保留。）
 - request_aggregated 折算口径：每个请求相位按 rank 折成 17 类算子节点
   （13 类层内算子 + attention/MLP 两个 All-Reduce + final norm + logits），
   聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与 token 展开总量
@@ -927,8 +1199,8 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
 - 发射并发骨架（拼 batch 改造形态，2026-08-22；§3.6 PD 分离豁免 = 仅
   decode 互拼、无混合迭代）：busy 门按 phase_role 分裂——prefill-only
   实例保持"一个 prefill 整段在飞"（逐 chunk 不拼，发射骨架与改造前一致）；
-  decode-only 实例 = "一个迭代列车在飞"（`in_flight_train` 冻结成员快照 +
-  membership_digest）。准入/发射 pass 只服务空闲实例：D 实例把全部
+  decode-only 实例 = "一个迭代列车在飞"（`in_flight_train` 冻结成员快照
+  = plan dict 本体）。准入/发射 pass 只服务空闲实例：D 实例把全部
   `active_decode` 成员冻结成一趟列车（迭代数 = max 剩余 token，交付默认
   T_max=8：2026-08-22 §7.4 A2 对拍裁决——无上限 TTFT -67.3%、16 仍
   -19.1%、8 全指标 ≤1.3%，"固定为使位移 ≤5% 的最大值"，原则 1 优先于
@@ -948,7 +1220,9 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
 - 接栅栏与段末屏障：列车/段发射不做块末恢复/段内清链，per-rank
   `previous_id` 无条件接续当前 frontier（per-rank 发行序 = 全局发射序，
   2026-08-19 五仓统一），跨请求 P2P 与集合通信参与序不会反转成环；每趟
-  D 侧列车以 TP 组 `batch_train_*_end_barrier`（bytes=迭代数）收尾，下一
+  D 侧列车以 TP 组 `batch_train_*_end_barrier`（bytes=迭代数；屏障族
+  coll.bytes 皆为名义控制量、非数据传输量，见策略说明"发射编排"口径注记）
+  收尾，下一
   turn 的 interval gate `after_node_id` 指向它（completion_gates 账本，
   post-barrier 口径与旧整段发射一致）；KV 准备段后另有 TP 组
   `*_history_tp_ready_barrier`。C++ 机制层适配（2026-08-22，照 sh_1.0
@@ -959,8 +1233,9 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
   跳过），机制夹具见 `graph_batch_committer_test.cc` Part I/J。
 - 折入输入口径 + 运行时 KV 账本：请求队列为唯一仿真输入，
   turn-0 源前缀折入该行 prefill_length（新会话首轮无历史可复用的输入折算，
-  `traces/derive_20_first_30_seconds.py:14-16`）；manifest 仅携带队列派生的
-  history_tokens_before 推导值（`plan_materializer.py:61-88`）；会话 KV 的
+  `sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py`
+  模块 docstring 的 prefix semantics 冻结口径）；manifest 仅携带队列派生的
+  history_tokens_before 推导值（`plan_materializer.py` 的 `_derive_manifest_requests`）；会话 KV 的
   规模/位置/驻留层由运行时 `SessionKVCacheManager` 二态账本动态维护
   （`wsc_llm_online_scheduler.py`；`session_kv_manager.py`）：驻留命中零开销
   复用、跨实例历史经 NoC 迁移或远端池全量回迁（REMOTE_RESTORE 单段）——
@@ -968,7 +1243,7 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
 - long double 时间精度适配：大 ns 级首达偏移超出 IEEE-754 double 精确整数
   范围（2^53）时，分析网络适配层返回 ASTRA-sim 时间以 `long double` 保持
   64 位事件时间精确，避免完成回调与事件映射键错位 1 ns
-  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc:105-110`）。
+  （见 `astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc` 的 sim_get_time long-double 保真段）。
 
 
 ---

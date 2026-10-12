@@ -12,9 +12,8 @@ AllToAll::AllToAll(ComType type,
                    int id,
                    RingTopology* allToAllTopology,
                    uint64_t data_size,
-                   RingTopology::Direction direction,
-                   InjectionPolicy injection_policy)
-    : Ring(type, id, allToAllTopology, data_size, direction, injection_policy) {
+                   RingTopology::Direction direction)
+    : Ring(type, id, allToAllTopology, data_size, direction) {
     this->middle_point = nodes_in_ring - 1;
     if (window == -1) {
         parallel_reduce = nodes_in_ring - 1;
@@ -23,6 +22,16 @@ AllToAll::AllToAll(ComType type,
     }
     if (type == ComType::All_to_All) {
         this->stream_count = nodes_in_ring - 1;
+    }
+    // Self-contained termination for a single-node ring (2026-09-30): the
+    // caller (Sys::generate_collective) skips 1-node dimensions today, but
+    // parallel_reduce would be 0 here -- no packet would ever be inserted
+    // and the stream would wait forever with no diagnosis if this class
+    // were constructed with nodes_in_ring == 1 directly. Close the class
+    // itself instead of relying on the caller's screen (same stance as
+    // HalvingDoubling's stream_count == 0 short-circuit).
+    if (nodes_in_ring <= 1) {
+        stream_count = 0;
     }
 }
 
@@ -44,45 +53,42 @@ void AllToAll::run(EventType event, CallData* data) {
 
     } else if (event == EventType::PacketReceived) {
         total_packets_received++;
-        insert_packet(nullptr);
+        insert_packet();
 
     } else if (event == EventType::StreamInit) {
+        if (stream_count == 0) {
+            // Degenerate single-node ring: nothing to exchange, terminate
+            // immediately (no packet is ever inserted).
+            exit();
+            return;
+        }
         for (int i = 0; i < parallel_reduce; i++) {
-            insert_packet(nullptr);
+            insert_packet();
         }
     }
 }
 
 void AllToAll::process_max_count() {
-    if (remained_packets_per_max_count > 0) {
-        remained_packets_per_max_count--;
-    }
+    release_packets();
 
-    if (remained_packets_per_max_count == 0) {
-        release_packets();
-        remained_packets_per_max_count = 1;
-
+    curr_receiver = ((RingTopology*)logical_topo)
+                        ->get_receiver(curr_receiver, direction);
+    if (curr_receiver == id) {
         curr_receiver = ((RingTopology*)logical_topo)
                             ->get_receiver(curr_receiver, direction);
-        if (curr_receiver == id) {
-            curr_receiver = ((RingTopology*)logical_topo)
-                                ->get_receiver(curr_receiver, direction);
-        }
+    }
 
-        curr_sender =
-            ((RingTopology*)logical_topo)->get_sender(curr_sender, direction);
-        if (curr_sender == id) {
-            curr_sender = ((RingTopology*)logical_topo)
-                              ->get_sender(curr_sender, direction);
-        }
+    curr_sender =
+        ((RingTopology*)logical_topo)->get_sender(curr_sender, direction);
+    if (curr_sender == id) {
+        curr_sender = ((RingTopology*)logical_topo)
+                          ->get_sender(curr_sender, direction);
     }
 }
 
-int AllToAll::get_non_zero_latency_packets() {
-    if (((RingTopology*)logical_topo)->get_dimension() !=
-        RingTopology::Dimension::Local) {
-        return parallel_reduce * 1;
-    } else {
-        return (nodes_in_ring - 1) * parallel_reduce * 1;
-    }
-}
+// get_non_zero_latency_packets is intentionally NOT overridden: the former
+// override returned the in-flight window (parallel_reduce) for non-Local
+// dimensions, under-counting the (nodes_in_ring - 1) packets a Direct round
+// actually receives. Ring's implementation -- (n - 1) * parallel_reduce for
+// every dimension -- is the actual receive count, so the base version is
+// used for both.

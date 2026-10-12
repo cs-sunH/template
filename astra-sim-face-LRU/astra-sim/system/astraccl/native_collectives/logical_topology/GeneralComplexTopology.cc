@@ -6,12 +6,13 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
 
 #include <algorithm>
-#include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <iterator>
+#include <string>
 
 #include "astra-sim/common/Logging.hh"
+#include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/astraccl/CollectiveImpl.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/DoubleBinaryTreeTopology.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
@@ -24,7 +25,29 @@ GeneralComplexTopology::GeneralComplexTopology(
     std::vector<int> dimension_size,
     std::vector<CollectiveImpl*> collective_impl) {
     int offset = 1;
-    uint64_t last_dim = collective_impl.size() - 1;
+    // sync-cpp-E6 (2026-09-30, ported from the joint repo): a non-empty
+    // implementation list SHORTER than the dimension count used to build a
+    // truncated topology covering only the first C dimensions --
+    // whole-cluster collectives silently ran on part of the cluster with
+    // zero warnings (the loop below simply iterates the implementation
+    // list). An empty list stays legal (the "this collective type is not
+    // used" shape from the lookup's bypass path), so last_dim below is
+    // computed after the empty check -- size() - 1 on an empty list
+    // underflows to UINT64_MAX.
+    if (!collective_impl.empty() &&
+        collective_impl.size() < dimension_size.size()) {
+        Sys::sys_panic(
+            "GeneralComplexTopology: collective implementation count (" +
+            std::to_string(collective_impl.size()) +
+            ") is smaller than dimension count (" +
+            std::to_string(dimension_size.size()) +
+            "): every physical dimension needs one collective "
+            "implementation, otherwise collectives would silently cover "
+            "only the first " + std::to_string(collective_impl.size()) +
+            " dimension(s)");
+    }
+    const uint64_t last_dim =
+        collective_impl.empty() ? 0 : collective_impl.size() - 1;
     if (collective_impl.size() > dimension_size.size()) {
         LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
             ->critical(
@@ -69,11 +92,11 @@ GeneralComplexTopology::GeneralComplexTopology(
                    CollectiveImplType::DoubleBinaryTree) {
             if (dim == last_dim) {
                 DoubleBinaryTreeTopology* DBT = new DoubleBinaryTreeTopology(
-                    id, dimension_size[dim], id % offset, offset);
+                    dimension_size[dim], id % offset, offset);
                 dimension_topology.push_back(DBT);
             } else {
                 DoubleBinaryTreeTopology* DBT = new DoubleBinaryTreeTopology(
-                    id, dimension_size[dim],
+                    dimension_size[dim],
                     (id - (id % (offset * dimension_size[dim]))) +
                         (id % offset),
                     offset);
@@ -91,23 +114,67 @@ GeneralComplexTopology::GeneralComplexTopology(
     std::vector<CollectiveImpl*> collective_impl) {
     // rank_map is a compact row-major embedding: dimension 0 changes fastest.
     // Build the X/Y slice containing this physical rank for each dimension.
-    assert(!rank_map.empty());
-    assert(collective_impl.size() == dimension_size.size());
-
+    //
+    // Fail-closed validation: these used to be assert()s, which vanish under
+    // NDEBUG (Release). A malformed communicator (e.g. this rank's id missing
+    // from rank_map) would otherwise index out of bounds below.
+    if (rank_map.empty()) {
+        LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
+            ->critical(
+                "######### Exiting because the communicator rank map is "
+                "empty #########");
+        std::exit(1);
+    }
+    if (collective_impl.size() != dimension_size.size()) {
+        LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
+            ->critical(
+                "######### Exiting because the number of collective "
+                "implementations ({}) does not match the number of physical "
+                "dimensions ({}) #########",
+                collective_impl.size(), dimension_size.size());
+        std::exit(1);
+    }
     int expected_ranks = 1;
     for (int size : dimension_size) {
-        assert(size > 0);
+        if (size <= 0) {
+            LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
+                ->critical(
+                    "######### Exiting because a communicator dimension has a "
+                    "non-positive size ({}) #########",
+                    size);
+            std::exit(1);
+        }
         expected_ranks *= size;
     }
-    assert(static_cast<int>(rank_map.size()) == expected_ranks);
+    if (static_cast<int>(rank_map.size()) != expected_ranks) {
+        LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
+            ->critical(
+                "######### Exiting because the communicator rank map has {} "
+                "entries but its dimensions describe {} ranks #########",
+                rank_map.size(), expected_ranks);
+        std::exit(1);
+    }
 
     auto rank_position = std::find(rank_map.begin(), rank_map.end(), id);
-    assert(rank_position != rank_map.end());
+    if (rank_position == rank_map.end()) {
+        LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
+            ->critical(
+                "######### Exiting because rank {} is not part of the "
+                "communicator rank map #########",
+                id);
+        std::exit(1);
+    }
     int compact_id = std::distance(rank_map.begin(), rank_position);
     int offset = 1;
 
     for (uint64_t dim = 0; dim < dimension_size.size(); dim++) {
-        assert(collective_impl[dim]->type == CollectiveImplType::Ring);
+        if (collective_impl[dim]->type != CollectiveImplType::Ring) {
+            LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
+                ->critical(
+                    "######### Exiting because a shaped communicator only "
+                    "supports the Ring collective implementation #########");
+            std::exit(1);
+        }
 
         int coordinate = (compact_id / offset) % dimension_size[dim];
         int slice_base = compact_id - coordinate * offset;

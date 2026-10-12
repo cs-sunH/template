@@ -68,6 +68,9 @@ OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
     "trace_granularity": "token_expanded",
     "prefill_chunk_size": "512",
+    # die 后端（第一期）：位置编码声明（rope=新 Q/K 旋转折入 qkv_rope
+    # 壳；缺省 none 向后兼容——legacy 配置无该键行为不变）。
+    "position_encoding": "none",
 }
 SUPPORTED_CONFIG_KEYS = set(REQUIRED_CONFIG_KEYS) | set(OPTIONAL_CONFIG_DEFAULTS)
 INT_CONFIG_KEYS = {
@@ -85,12 +88,6 @@ PATH_CONFIG_KEYS = {
     "hardware_config",
     "system_template",
 }
-OPERATOR_GRANULARITY = (
-    "rmsnorm,qkv,qk,scale_mask,softmax,av,out_proj,residual,"
-    "mlp_gate_up,swiglu,mlp_down,logits"
-)
-
-
 @dataclass(frozen=True)
 class FaceTraceConfig:
     config_csv: Path
@@ -126,6 +123,7 @@ class FaceTraceConfig:
     source_session_count: int
     source_average_decode_length: float
     trace_granularity: str
+    position_encoding: str
     configuration_digest: str
 
     @property
@@ -157,13 +155,47 @@ class TransferTriggerGate:
 class TransferTagAllocator:
     def __init__(self) -> None:
         self._next_tag = 1
+        # A tag-allocation ordinal is a position in the original sequence of
+        # ``take()`` calls.  Compact emitters may reserve a bounded span in
+        # one operation, but must retain the first old ordinal and advance by
+        # exactly the number of tags represented by that span.
+        self._next_emission_ordinal = 0
 
     def take(self) -> int:
-        if self._next_tag > 0xFFFFFFFF:
+        return self.reserve(1)
+
+    def reserve(self, count: int) -> int:
+        """Reserve a consecutive tag extent and return its first tag.
+
+        This is equivalent to ``count`` consecutive :meth:`take` calls but
+        does not allocate one Python object or invoke Python once per tag.
+        Callers retain the old allocation order by invoking it at the same
+        emission point.  Zero-sized reservations are rejected so an absent
+        emission cannot accidentally acquire a meaningful ordinal.
+        """
+        first, _ordinal = self.reserve_with_ordinal(count)
+        return first
+
+    def reserve_with_ordinal(self, count: int) -> tuple[int, int]:
+        """Reserve a consecutive span and return ``(first_tag, first_ordinal)``.
+
+        This is equivalent to ``count`` adjacent historical ``take()`` calls
+        at this exact point.  The ordinal advances per represented take, so
+        later allocations retain their old emission positions even when a
+        compact caller reserves the span in bulk.
+        """
+        if type(count) is not int or count <= 0:
+            raise ValueError("tag reservation count must be a positive integer")
+        first = self._next_tag
+        ordinal = self._next_emission_ordinal
+        last_exclusive = first + count
+        if last_exclusive - 1 > 0xFFFFFFFF:
             raise OverflowError("KV transfer communication tag space was exhausted")
-        tag = self._next_tag
-        self._next_tag += 1
-        return tag
+        if ordinal + count > 0xFFFFFFFFFFFFFFFF:
+            raise OverflowError("KV transfer tag emission ordinal was exhausted")
+        self._next_tag = last_exclusive
+        self._next_emission_ordinal = ordinal + count
+        return first, ordinal
 
 
 
@@ -231,6 +263,12 @@ def _parse_config_value(key: str, value: str) -> object:
     if key == "mlp_variant":
         if value not in {"gelu", "swiglu"}:
             raise ValueError("config key mlp_variant must be gelu or swiglu")
+        return value
+    if key == "position_encoding":
+        if value not in {"rope", "none"}:
+            raise ValueError(
+                "config key position_encoding must be rope or none, got "
+                f"{value!r}")
         return value
     if key in PATH_CONFIG_KEYS:
         if key == "output_dir" and not value:
@@ -404,6 +442,7 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         source_session_count=source_session_count,
         source_average_decode_length=source_average_decode_length,
         trace_granularity=str(parsed["trace_granularity"]),
+        position_encoding=str(parsed["position_encoding"]),
         configuration_digest=configuration_digest,
     )
 

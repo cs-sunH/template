@@ -16,10 +16,10 @@ Request-neutral lifecycle state machine (方案 §4 步骤 1-2 操作 3):
     FINISHED -- input closed && active==0 && no pending alarm/fence.
 
 Final end authority belongs exclusively to the ServiceCoordinator
-(总体方案 §5.5): EventQueue empty != FINISHED, and in online mode the
-Workload::call sim_notify_finished()/is_finished side effect is disabled
-(Workload.cc:625-634), so a temporarily empty graph can never end the online
-simulation and drop later injections.
+(总体方案 §5.5): EventQueue empty != FINISHED, and Workload has no
+end-of-input side effect (the static auto-advance/report path was retired
+with the static ET path), so a temporarily empty graph can never end the
+online simulation and drop later injections.
 
 wait_for_work() blocks (no busy wait) until signal_work() is raised or the
 input is closed; the main loop must guarantee that after wait_for_work
@@ -52,11 +52,6 @@ enum class InputCloseReason { ExplicitClose, EndOfFile, Error };
 
 class ServiceCoordinator {
   public:
-    // Fixture-only in-memory prefix. Production observers must use the hook,
-    // which still receives every transition. Keeping a fixed prefix prevents
-    // a long-lived open-input service from retaining one entry per request.
-    static constexpr std::size_t kTransitionLogCapacity = 64;
-
     // Step 1-10: transition observer (fixture/status logging). Invoked from
     // set_state under the internal mutex; the hook MUST NOT call back into
     // the coordinator (documented contract, same as the state queries).
@@ -77,12 +72,25 @@ class ServiceCoordinator {
     /// An arrival alarm was queued on the EventQueue (future tick).
     void on_alarm_scheduled();
     /// Input closed (thread-safe; may be called from the injector/bridge
-    /// thread): IDLE/DRAINING transition + maybe FINISHED. Phase-7 §10.7:
-    /// `reason` records HOW the input was closed (explicit close command /
-    /// CLI / EOF terminal command / error command) for the run-end
-    /// lifecycle audit (合同② EOF vs 显式 close vs 异常退出 三态区分).
+    /// thread): IDLE/DRAINING transition + deferred FINISHED evaluation
+    /// (see note_input_drained). Phase-7 §10.7: `reason` records HOW the
+    /// input was closed (explicit close command / CLI / EOF terminal
+    /// command / error command) for the run-end lifecycle audit (合同② EOF
+    /// vs 显式 close vs 异常退出 三态区分).
     void mark_input_closed(
         InputCloseReason reason = InputCloseReason::ExplicitClose);
+    /// M4 fix (2026-09-29): deferred FINISHED evaluation for a
+    /// producer-linearized close. note_input_drained() -- at a producer-
+    /// linearized close the bounded ingress queue routinely holds every
+    /// Submit (the --close-input startup path queues the whole turn-0
+    /// calendar before the first drain), so all three counters are still
+    /// zero when mark_input_closed runs and an immediate FINISHED
+    /// evaluation would stamp the state before the service accepted its
+    /// first request; the lifecycle transition log then stays silent for
+    /// the whole run. mark_input_closed defers the evaluation, and the
+    /// ingress drain calls this once the closed queue is empty (a no-op
+    /// while requests are still active/pending). Thread-safe.
+    void note_input_drained();
     /// Phase-7 §10.7: how the input was closed (valid once the input is
     /// closed; ExplicitClose is the default for the direct/CLI close path).
     [[nodiscard]] InputCloseReason input_close_reason() const;
@@ -131,10 +139,6 @@ class ServiceCoordinator {
     /// Raise the work signal (thread-safe; ingress enqueue / close path).
     void signal_work();
 
-    /// Bounded ordered prefix of state transitions (fixture assertion data).
-    [[nodiscard]] const std::vector<ServiceState>& transition_log() const;
-    /// Number of transitions omitted after the bounded prefix filled.
-    [[nodiscard]] uint64_t transition_log_dropped() const;
     /// Step 1-10: install the transition observer (IDLE/ACTIVE/DRAINING/
     /// FINISHED 迁移日志与时间). Overwrites any previous hook.
     void set_transition_hook(StateTransitionHook hook);
@@ -158,12 +162,14 @@ class ServiceCoordinator {
     // Phase-7 §10.7: how the input was closed (valid once input_open_ is
     // false). Guarded by mtx_.
     InputCloseReason input_close_reason_ = InputCloseReason::ExplicitClose;
+    // M4 fix (2026-09-29): set by mark_input_closed; the FINISHED evaluation
+    // is deferred to note_input_drained (see the note_input_drained
+    // comment). Guarded by mtx_.
+    bool finish_after_drain_ = false;
     uint64_t accepted_request_count_ = 0;
     uint64_t completed_request_count_ = 0;
     uint64_t active_request_count_ = 0;
     uint64_t pending_alarm_count_ = 0;
-    std::vector<ServiceState> transition_log_;
-    uint64_t transition_log_dropped_ = 0;
     StateTransitionHook transition_hook_;
 };
 

@@ -47,7 +47,9 @@ class CmdLineParser {
             // error occured
             std::cerr << "[Error] (AstraSim/analytical/common) "
                       << "Error parsing options: " << e.what() << std::endl;
-            exit(-1);
+            // (2026-10-01) exit-code unification, matching parse() in
+            // CmdLineParser.cc and the online family's EXIT_FAILURE.
+            std::exit(EXIT_FAILURE);
         }
     }
 

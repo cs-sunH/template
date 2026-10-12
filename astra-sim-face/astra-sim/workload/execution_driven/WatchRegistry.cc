@@ -21,12 +21,19 @@ namespace ExecutionDriven {
 uint64_t WatchRegistry::register_stage_watch(
     const std::string& request_id, const std::string& stage,
     uint64_t generation, std::set<CompletionKey> expected_members,
-    std::set<NodeTerminalStatus> satisfying_statuses) {
+    std::set<NodeTerminalStatus> satisfying_statuses,
+    bool* created) {
     const Identity identity{request_id, stage, generation};
     const auto existing = identity_to_watch_.find(identity);
     if (existing != identity_to_watch_.end()) {
         // Register once, fire once: a duplicate registration (e.g. a double
-        // commit of the same stage) must not create a second watch.
+        // commit of the same stage) must not create a second watch. The
+        // caller-visible `created` flag lets the committer turn this into a
+        // named protocol error instead of silently dropping the new member
+        // set (2026-09-30).
+        if (created != nullptr) {
+            *created = false;
+        }
         return existing->second;
     }
     const uint64_t watch_id = next_watch_id_++;
@@ -38,6 +45,9 @@ uint64_t WatchRegistry::register_stage_watch(
     watch.expected_members = std::move(expected_members);
     watch.satisfying_statuses = std::move(satisfying_statuses);
     const auto inserted = watches_.emplace(watch_id, std::move(watch));
+    if (created != nullptr) {
+        *created = true;
+    }
     for (const auto& member : inserted.first->second.expected_members) {
         member_to_watch_ids_[member].push_back(watch_id);
     }
@@ -98,21 +108,14 @@ void WatchRegistry::on_node_terminal(const CompletionKey& key,
                 fire.member_ranks.push_back(member.rank);
             }
         }
-        // Production installs a synchronous notifier, so retaining a second
-        // copy for a polling consumer would grow linearly with fired watches.
-        // Queue only the fixture/polling mode that has no notifier.
+        // Production installs a synchronous notifier (main_online.cc wires
+        // it to the DecisionMailbox push). An unset notifier drops the fire
+        // (facts-only fixture mode) -- fixtures that assert on fires must
+        // install one.
         if (notifier_) {
             notifier_(fire);
-        } else {
-            fired_.push_back(std::move(fire));
         }
     }
-}
-
-std::vector<WatchFire> WatchRegistry::fired_and_drain() {
-    std::vector<WatchFire> result = std::move(fired_);
-    fired_.clear();
-    return result;
 }
 
 size_t WatchRegistry::stale_count() const {
@@ -152,6 +155,18 @@ void WatchRegistry::remove_watch(uint64_t watch_id) {
             request_to_watch_ids_.erase(request_it);
         }
     }
+    // cpp-ed-core-7 (2026-09-26): sentinel index maintenance -- a sentinel
+    // watch removed through the generic paths (remove_watches_for_request at
+    // its REQUEST_COMPLETE commit) must not leave its id in
+    // sentinel_watch_ids_; drain_fired_sentinels would otherwise retain the
+    // stale id forever (an absent watch is "kept", not dropped). Mirrors the
+    // register_stage_watch prefix rule.
+    if (it->second.request_id.rfind("batch_train_", 0) == 0) {
+        auto& sentinel_ids = sentinel_watch_ids_;
+        sentinel_ids.erase(std::remove(sentinel_ids.begin(), sentinel_ids.end(),
+                                       watch_id),
+                           sentinel_ids.end());
+    }
     watches_.erase(it);
 }
 
@@ -173,25 +188,20 @@ void WatchRegistry::remove_watches_for_request(const std::string& request_id) {
 
 void WatchRegistry::drain_fired_sentinels() {
     // 拼 batch 适配(2026-08-22):已 fire 的哨兵逐个移除;未 fire 者保留。
-    size_t kept = 0;
-    for (size_t i = 0; i < sentinel_watch_ids_.size(); ++i) {
-        const uint64_t watch_id = sentinel_watch_ids_[i];
+    // cpp-ed-core-7 (2026-09-26): remove_watch now maintains
+    // sentinel_watch_ids_ itself (erase-on-remove), so this drain simply
+    // removes every fired sentinel through it -- unfired sentinels stay
+    // registered here, and ids of already-removed watches can no longer
+    // linger in the index. Iterate a snapshot: remove_watch erases from
+    // sentinel_watch_ids_, so walking the live vector by index would skip
+    // successors (the old keep-and-compact walk predated that maintenance).
+    const std::vector<uint64_t> snapshot = sentinel_watch_ids_;
+    for (const uint64_t watch_id : snapshot) {
         const auto it = watches_.find(watch_id);
         if (it != watches_.end() && it->second.fired) {
             remove_watch(watch_id);
-            continue;
         }
-        sentinel_watch_ids_[kept++] = watch_id;
     }
-    sentinel_watch_ids_.resize(kept);
-}
-
-void WatchRegistry::remove_all() {
-    watches_.clear();
-    identity_to_watch_.clear();
-    member_to_watch_ids_.clear();
-    request_to_watch_ids_.clear();
-    sentinel_watch_ids_.clear();
 }
 
 void WatchRegistry::set_fire_notifier(WatchFireNotifier notifier) {
@@ -274,9 +284,26 @@ void online_completion_hook(void* ctx, int rank, uint64_t node_id,
     if (context == nullptr || context->registry == nullptr) {
         return;
     }
+    // A4-9/cpp-ed-tests-b-4 (2026-09-26): the int-ABI bridge is validated
+    // fail-closed.  terminal_status is a NodeTerminalStatus value passed
+    // as int (CompletionObserver.hh); any other int would static_cast
+    // into an enumerator that does not exist and be silently unmatched
+    // against every watch's satisfying set.  The single authoritative
+    // mapping is the enum's own member range (0 = Success, 1 = Skipped).
+    if (terminal_status !=
+            static_cast<int>(NodeTerminalStatus::Success) &&
+        terminal_status !=
+            static_cast<int>(NodeTerminalStatus::Skipped)) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/completion_hook) invalid "
+                     "terminal_status=%d (not a NodeTerminalStatus "
+                     "member)\n",
+                     terminal_status);
+        std::abort();
+    }
     // (1) Route the terminal by its numeric member key -- read-only with
-    // respect to the graph. The direct index deliberately avoids constructing
-    // NodeStoreMeta(request_id, stage) for every non-watch terminal.
+    // respect to the graph. The direct index deliberately avoids building
+    // the request/stage metadata pair for every non-watch terminal.
     context->registry->on_node_terminal(
         CompletionKey{rank, node_id, generation},
         static_cast<NodeTerminalStatus>(terminal_status));

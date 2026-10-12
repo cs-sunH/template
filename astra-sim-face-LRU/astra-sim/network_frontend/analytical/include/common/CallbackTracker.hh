@@ -71,6 +71,16 @@ class CallbackTracker {
                    ChunkSize chunk_size,
                    int chunk_id) noexcept;
 
+    /// Diagnostic for the count-mismatch family (2026-09-30, ported from
+    /// the joint repo CallbackTracker.hh): true when an OUTSTANDING entry
+    /// shares (tag, src, dest) with this sim_recv call but carries a
+    /// different chunk_size. Such a pair can never meet -- the send side
+    /// only completes its own count key -- so both halves wait forever.
+    bool has_entry_with_mismatched_count(int tag,
+                                         int src,
+                                         int dest,
+                                         ChunkSize chunk_size) noexcept;
+
   private:
     /// map from (tag, src, dest, chunk_size, chunk_id) tuple to
     /// CallbackTrackerEntry

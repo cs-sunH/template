@@ -5,6 +5,7 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/NetworkParser.h"
 #include <cassert>
+#include <cmath>
 #include <iostream>
 
 using namespace NetworkAnalytical;
@@ -26,8 +27,11 @@ NetworkParser::NetworkParser(const std::string& path) noexcept
 
         // parse network configs
         parse_network_config_yml(network_config);
-    } catch (const YAML::BadFile& e) {
-        // loading network config file failed
+    } catch (const YAML::Exception& e) {
+        // loading or parsing the network config file failed: covers both
+        // BadFile (file open failure) and ParserException (malformed YAML
+        // syntax); any YAML error escaping this noexcept constructor would
+        // otherwise std::terminate without a diagnostic
         std::cerr << "[Error] (network/analytical) " << e.what() << std::endl;
         std::exit(-1);
     }
@@ -160,6 +164,19 @@ void NetworkParser::check_validity() const noexcept {
                   << std::endl;
         std::exit(-1);
     }
+
+    // topology list must be non-empty. An empty "topology" key yields
+    // dims_count == 0, which would silently pass every length check below
+    // (0 == 0) and only surface far later -- as an assert in
+    // get_dims_count()/get_npus_counts_per_dim() under a Debug build, or as
+    // an unrelated route failure in the first fluid emission -- instead of
+    // pointing at the missing key.
+    if (dims_count < 1) {
+        std::cerr << "[Error] (network/analytical) " << "topology list is empty; "
+                  << "the network config must define a non-empty topology list" << std::endl;
+        std::exit(-1);
+    }
+
     // dims_count should match
     if (dims_count != npus_count_per_dim.size()) {
         std::cerr << "[Error] (network/analytical) " << "length of npus_count (" << npus_count_per_dim.size()
@@ -190,8 +207,12 @@ void NetworkParser::check_validity() const noexcept {
     }
 
     // bandwidths should be all positive
+    // NaN/+inf 必须显式拒绝（2026-10-01 对齐）：NaN 藏在每个 "<= 0" 比
+    // 较后面，NaN/+inf 链路容量将永远约束不住流体调度器的 min-share
+    // 计算（std::min 遇 NaN 恒保留另一操作数）——该维度的拥塞控制被静
+    // 默禁用（fail-open）。+inf 藏在同一比较后面。
     for (const auto& bandwidth : bandwidth_per_dim) {
-        if (bandwidth <= 0) {
+        if (!std::isfinite(bandwidth) || bandwidth <= 0) {
             std::cerr << "[Error] (network/analytical) " << "bandwidth (" << bandwidth << ") should be larger than 0"
                       << std::endl;
             std::exit(-1);
@@ -199,8 +220,11 @@ void NetworkParser::check_validity() const noexcept {
     }
 
     // latency should be non-negative
+    // NaN/+inf 必须显式拒绝（与上方带宽守卫对称）：NaN 时延否则要很晚
+    // 才在 fluid_route 消费者的 isfinite 守卫处冒出，且带着误导性的
+    // "overflows EventTime" 消息而非真实的"非法输入"。
     for (const auto& latency : latency_per_dim) {
-        if (latency < 0) {
+        if (!std::isfinite(latency) || latency < 0) {
             std::cerr << "[Error] (network/analytical) " << "latency (" << latency << ") should be non-negative"
                       << std::endl;
             std::exit(-1);

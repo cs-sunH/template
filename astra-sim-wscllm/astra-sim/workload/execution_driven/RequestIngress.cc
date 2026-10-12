@@ -72,8 +72,45 @@ void RequestIngress::drain_commands() {
     for (auto& cmd : batch) {
         switch (cmd.kind) {
             case IngressCommandKind::Submit: {
-                // arrival alarms must be strictly future (EventQueue :33);
-                // a late request is clamped to the next tick (arrives now)
+                // F1-CPP C1-8 fix (2026-09-29): process-level empty/unique
+                // identity gate, the drain-side twin of the CSV reader's C3
+                // M5 row gates. The WindowedTraceReader rejects an empty or
+                // duplicated request_id only among its own rows; the
+                // command-FIFO channel (and any direct enqueue_command
+                // caller) had no equivalent, so a repeated id reached the
+                // downstream metric identity maps last-wins (the exact
+                // "unidentifiable request" hazard C3's M2 note named) and an
+                // empty id anchored nothing. The gate covers every producer
+                // path that drains through here (CSV turn-0 rows, FIFO
+                // Submits, fixtures) against ONE process-level set, so
+                // cross-source duplicates are caught too. Fail-closed with
+                // register_queue_index's duplicate/invalid handling -- the
+                // run must not report numbers on an ambiguous identity --
+                // and it fires BEFORE any arrival accounting or alarm
+                // scheduling for the offending command.
+                {
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    if (cmd.envelope.request_id.empty()) {
+                        std::fprintf(
+                            stderr,
+                            "[Error] (execution_driven/ingress) Submit has "
+                            "an empty request_id (every request must be "
+                            "identifiable)\n");
+                        std::abort();
+                    }
+                    if (!seen_submit_request_ids_
+                             .insert(cmd.envelope.request_id).second) {
+                        std::fprintf(
+                            stderr,
+                            "[Error] (execution_driven/ingress) duplicate "
+                            "Submit request_id: %s\n",
+                            cmd.envelope.request_id.c_str());
+                        std::abort();
+                    }
+                }
+                // arrival alarms must be strictly future (EventQueue's
+                // schedule_event same-time guard); a late request is
+                // clamped to the next tick (arrives now)
                 const auto current = eq_->get_current_time();
                 const auto arrival = cmd.envelope.arrival_world_ns;
                 const EventTime alarm_time =
@@ -99,6 +136,14 @@ void RequestIngress::drain_commands() {
                                RequestSource::ExternalStream) {
                         ++late_external_stream_;
                     } else {
+                        // Defensive only (2026-09-27 note): no production
+                        // producer enqueues a RequestSource::FutureAlarm
+                        // envelope into the command queue --
+                        // schedule_future_arrival drives future alarms
+                        // directly through schedule_event(), never as a
+                        // command -- so this arm counts nothing today. It
+                        // stays so an unknown future source surfaces in the
+                        // split counters instead of being dropped silently.
                         ++late_future_alarm_rounding_;
                     }
                 }
@@ -112,10 +157,21 @@ void RequestIngress::drain_commands() {
                 }
                 svc_->on_command_accepted();
                 svc_->on_alarm_scheduled();
-                auto* arg = new ArrivalAlarmArg{
-                    this, std::move(cmd.envelope), false};
+                // M1-5 (sync from face, 2026-09-26): hold the callback
+                // payload in a unique_ptr and release it only AFTER
+                // schedule_event succeeded, so the payload can never LEAK.
+                // (2026-09-27 correction: schedule_event is noexcept, so
+                // this does not preserve the command -- if the
+                // ArrivalAlarmArg allocation throws, the exception unwinds
+                // and the command is lost even though its counters were
+                // already bumped; true allocation-before-state-change
+                // hygiene would require moving the counters below, as
+                // schedule_future_arrival does.)
+                std::unique_ptr<ArrivalAlarmArg> arg(
+                    new ArrivalAlarmArg{this, std::move(cmd.envelope), false});
                 eq_->schedule_event(alarm_time, RequestIngress::arrival_cb,
-                                    arg);
+                                    arg.get());
+                (void)arg.release();  // EventQueue callback now owns it.
                 break;
             }
             case IngressCommandKind::CloseInput:
@@ -144,6 +200,22 @@ void RequestIngress::drain_commands() {
                 std::abort();
                 break;
         }
+    }
+    // M4 fix (2026-10-01, mirrored from the joint repo): the producer gate
+    // is closed and the queue just drained to empty -- every command
+    // linearized before the close has been observed. Complete the
+    // coordinator's deferred FINISHED evaluation here (see
+    // ServiceCoordinator::note_input_drained); it is a no-op while requests
+    // are still active/pending. Commands enqueued after the close are
+    // rejected by enqueue_command, so an empty queue under a closed gate is
+    // stable.
+    bool closed_and_drained = false;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        closed_and_drained = closed_ && queue_.empty();
+    }
+    if (closed_and_drained && svc_ != nullptr) {
+        svc_->note_input_drained();
     }
 }
 
@@ -256,8 +328,8 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
         throw std::runtime_error("future-arrival scheduling rejected: " +
                                  *validation_error);
     }
-    // arrival alarms must be strictly future (EventQueue :33); a late
-    // arrival is clamped to the next tick (arrives now)
+    // arrival alarms must be strictly future (EventQueue's schedule_event
+    // same-time guard); a late arrival is clamped to the next tick
     const auto current = eq_->get_current_time();
     const auto arrival = envelope.arrival_world_ns;
     // P0 fix (2026-08-30): this path only ever schedules FutureAlarm
@@ -282,15 +354,17 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
 void RequestIngress::mark_input_closed() {
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        if (closed_) {
-            return;
-        }
         // Set the ingress gate before closing the coordinator. A producer is
         // therefore either ordered before this close (and left in queue_ for
         // the drain-first loop) or rejected after it; there is no gap in which
         // svc.finished() can become true while a new command is still accepted.
         closed_ = true;
     }
+    // Close-through semantics: the coordinator is notified on EVERY call and
+    // keeps the FIRST close source (ServiceCoordinator::mark_input_closed),
+    // so an explicit close is never swallowed by an already-queued terminal
+    // command -- whichever terminal reaches the coordinator first owns the
+    // lifecycle-audit close source.
     if (svc_ != nullptr) {
         svc_->mark_input_closed();
     }
@@ -325,7 +399,12 @@ void RequestIngress::arrival_cb(void* const arg) {
     // scheduling on the envelope).
     ev.payload.ingress_seq = data->envelope.ingress_seq;
     ev.payload.queue_index = data->envelope.queue_index;
-    ingress->mailbox_->push(std::move(ev));
+    // Step 1-11: stamp the formation tick (the alarm fired on the
+    // simulation thread, so the bound EventQueue's current time is the
+    // formation tick); the delivery gate derives
+    // StateDelta.deferred_from_tick from the pending set's minimum.
+    ingress->mailbox_->push(std::move(ev),
+                            ingress->eq_->get_current_time());
     if (ingress->arrival_hook_) {
         ingress->arrival_hook_(data->envelope);
     }

@@ -53,9 +53,18 @@ other bridge protocol violation):
      request/stage/generation typing and domains, compute/comm/coll
      sub-object key sets (required + allowed), integer-overflow rejection
      (a JSON integer literal > UINT64_MAX parses as a double and fails
-     is_number_integer), negative-value rejection, tag/priority <=
-     UINT32_MAX. MEM-node liveness (tensor_size > 0 AND a configured
-     remote-memory port) stays in the preflight -- it needs Context.
+     is_number_integer), negative-value rejection, coll priority <=
+     INT_MAX and comm tag <= INT_MAX (Sys::front_end_sim_send/recv take
+     the tag as `int` and the coll priority rides Sys::get_priority's
+     `int explicit_priority` end-to-end, so a larger uint32 value would
+     truncate negative).
+     MEM-node liveness is NOT enforced here or in the preflight: a
+     zero-byte MEM node parses and commits, and is handled by the remote
+     backend's zero-byte / dual-zero timing semantics (the enqueue_job
+     tensor_size == 0 branch completes asynchronously within the
+     kDualZeroTimer / 1ns path); remote-memory port configuration is
+     enforced at run time by AnalyticalRemoteMemory::resolve_port_index
+     (fail-closed panic), because this parse layer has no Context.
   E1..E4 edge rules: exact key set {rank, from, to, kind}, rank domain,
      non-negative endpoints, kind == "data", from != to. Endpoint
      RESOLUTION (this batch vs committed history) stays in preflight.
@@ -134,6 +143,38 @@ inline NodeKind node_kind_from_type(uint64_t type) {
         default:
             return NodeKind::Invalid;
     }
+}
+
+/// C-3(2026-09-30,移植 wscllm 母仓 P1 修复):code-7 KV 传输腿的精确
+/// 后缀判定。旧 name.find("kv") 裸子串匹配还会命中同请求上下文里更晚
+/// 发射的聚合节点 "..._attention_qkv_projection"(含 "kv" 子串),配合
+/// "每 (request,rank) 最后一个 kv 节点 + collector 取 max-tick"语义,
+/// 每个请求(含 turn-0 无恢复请求)的 code-7 锚点都落到 qkv 计算时刻:
+/// 无恢复请求捏造伪 memory_anchor 行、有恢复请求的还原窗口被错置进
+/// prefill 窗口、逐出 store 的锚被逐出者自己 prefill 的 qkv 劫持。
+/// 本仓发射契约(generate_wsc_llm_trace.py _emit_kv_transfer)中唯一
+/// 合法的 kv 命名传输腿(名字后缀):
+///   - "_recv_kv"             (noc_migrate 目标侧数据到达,CommRecv);
+///   - "_target_hbm_write_kv" (remote_load 还原 HBM 写完成,MemLoad
+///     is_local_hbm_kv_restore)。
+/// P→D joiner 配对迁移({prefix}_prefill_to_decode_xfer)刻意不含 kv
+/// 子串;session/request 标识已由 loader 保留子串守卫拦截(M-27,
+/// generate_trace.py load_request_queue),后缀匹配不会命中用户数据。
+/// 与 node_kind_from_type 毗邻:前端选择与测试对"什么算 KV 传输腿"的
+/// 认定永不漂移。
+inline bool is_kv_route_transfer_leg(const OnlineNode& node) {
+    static const char* const kKvLegSuffixes[] = {"_recv_kv",
+                                                 "_target_hbm_write_kv"};
+    for (const char* suffix : kKvLegSuffixes) {
+        const std::string marker(suffix);
+        const std::string& name = node.name;
+        if (name.size() >= marker.size() &&
+            name.compare(name.size() - marker.size(), marker.size(),
+                         marker) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// One parsed node: the response's per-rank json id (the affine-stream

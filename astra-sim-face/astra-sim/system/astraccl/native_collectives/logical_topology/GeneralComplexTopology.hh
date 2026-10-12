@@ -8,11 +8,11 @@ LICENSE file in the root directory of this source tree.
 
 #include <vector>
 
-#include "astra-sim/system/astraccl/native_collectives/logical_topology/ComplexLogicalTopology.hh"
+#include "astra-sim/system/astraccl/native_collectives/logical_topology/LogicalTopology.hh"
 
 namespace AstraSim {
 
-class GeneralComplexTopology : public ComplexLogicalTopology {
+class GeneralComplexTopology : public LogicalTopology {
   public:
     GeneralComplexTopology(int id,
                            std::vector<int> dimension_size,

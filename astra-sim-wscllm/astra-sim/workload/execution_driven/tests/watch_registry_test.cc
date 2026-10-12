@@ -8,28 +8,36 @@ Exercises the stage-completion watch machinery (方案 §4 步骤 1-5) as a
 standalone test -- no network simulation, no baseline artifacts touched:
 
   Part A  Registration + identity: duplicate identity returns the existing
-          watch (register once / fire once), unknown-identity terminals
-          no-op, non-member terminals no-op, generation mismatch no-op
-          (meta level and key level), duplicate member terminal no-op.
+          watch (register once / fire once), member and non-member
+          terminals, generation mismatch no-op (key level), duplicate
+          member terminal no-op.
   Part B  Fire semantics: out-of-order completion fires exactly once when the
-          LAST member completes; fired_and_drain delivers once and clears;
-          terminals after the fire are no-ops; the explicit status policy
-          (Skipped is never implicitly upgraded to Success) rejects a
+          LAST member completes; the fire notifier observes the fire exactly
+          once; terminals after the fire are no-ops; the explicit status
+          policy (Skipped is never implicitly upgraded to Success) rejects a
           Skipped terminal when the watch does not list it.
-  Part C  Lifecycle + audit: remove_watch / remove_all, stale_count()==0
+  Part C  Lifecycle + audit: remove_watch, stale_count()==0
           end audit, empty expected set never fires (stale, documented
           programming error), fire notifier wiring.
-  Part D  online_completion_hook integration: the step-1-5 hook records the
+  Part D  Direct CompletionKey index: one terminal can satisfy multiple
+          watches, and removal must erase every direct-index route before
+          the id is reusable.
+  Part E  online_completion_hook integration: the step-1-5 hook records the
           fact through the registry (read-only) -- the ① half of the hook's
           two-job contract; the ② half (mailbox write) is the step-1-6
           notifier wiring exercised here via set_fire_notifier.
-  Part E  Deferred issue-pass coalescing: one pending pass per rank, FIFO by
+  Part F  Deferred issue-pass coalescing: one pending pass per rank, FIFO by
           first rank occurrence, stable preallocated callback arguments, and
           nested same-rank completion appended to the same drain.
-  Part F  Communicator replacement lifetime: exact rank-order/dimension
+  Part G  Communicator replacement lifetime: exact rank-order/dimension
           identity and DataSet-held shared ownership until collective finish.
-  Part G  Online HardwareResource: exact counters without per-node ID hashes;
+  Part H  Online HardwareResource: exact counters without per-node ID hashes;
           static diagnostic tracking remains enabled.
+
+(Letter realignment 2026-09-27: the header previously listed the direct
+index under no letter and described the hook test as Part D while the body
+banner said Part E with "D:" messages; letters now follow the body banners
+and main() execution order A..H.)
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WatchRegistryTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -48,6 +56,7 @@ Exit code 0 on ALL PASS.
 
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -71,10 +80,19 @@ CompletionKey key(int rank, uint64_t node_id, uint64_t generation) {
     return CompletionKey{rank, node_id, generation};
 }
 
+// Fire-recording notifier: fires are observed synchronously at fire time
+// (the deleted polling queue has no production consumer).
+std::function<void(const WatchFire&)> record_into(
+    std::vector<WatchFire>* fires) {
+    return [fires](const WatchFire& fire) { fires->push_back(fire); };
+}
+
 // ---------------------------------------------------------------- Part A --
 // Registration, identity lookup, no-op rules.
 void test_registration_and_noops() {
     WatchRegistry reg;
+    std::vector<WatchFire> fires;
+    reg.set_fire_notifier(record_into(&fires));
 
     // Two-member prefill watch (rank 0, nodes 1 and 2, generation 1).
     std::set<CompletionKey> members = {key(0, 1, 1), key(0, 2, 1)};
@@ -96,15 +114,24 @@ void test_registration_and_noops() {
         "req-1", "decode", 1, {key(0, 3, 1)}, statuses);
     expect(decode_id == 2, "A: second identity gets id 2");
 
-    // Unknown identity (request/stage/generation) terminal: no-op.
+    // key(0,1,1) IS a prefill member (on_node_terminal routes by
+    // CompletionKey only; the API carries no request identity): the first
+    // call records the member, the repeat is the duplicate-member-terminal
+    // no-op. Neither fires (member 2 pending), so both watches stay stale.
+    // (Comment corrected 2026-09-27: this block was labelled "unknown
+    // identity", but the true identity-miss case is the key-generation
+    // mismatch below.)
     reg.on_node_terminal(key(0, 1, 1),
                          NodeTerminalStatus::Success);
     reg.on_node_terminal(key(0, 1, 1),
                          NodeTerminalStatus::Success);
-    expect(reg.stale_count() == 2, "A: foreign terminals are no-ops");
+    expect(reg.stale_count() == 2,
+           "A: member terminal recorded, watch still stale");
 
-    // Generation mismatch at the meta level (identity miss) -- covered
-    // above; at the key level with a matching meta identity:
+    // Key-level generation mismatch: key(0,1,2) is not a member (the
+    // registered members carry generation 1), so the member-index lookup
+    // misses and the terminal is a no-op. A meta-level identity miss
+    // (unknown request/stage) routes through the same empty index.
     reg.on_node_terminal(key(0, 1, 2),
                          NodeTerminalStatus::Success);
     expect(reg.stale_count() == 2,
@@ -115,11 +142,12 @@ void test_registration_and_noops() {
                          NodeTerminalStatus::Success);
     expect(reg.stale_count() == 2, "A: non-member terminal is a no-op");
 
-    // Member 1 completes: recorded, not fired yet (member 2 pending).
-    reg.on_node_terminal(key(0, 1, 1),
-                         NodeTerminalStatus::Success);
-    expect(reg.stale_count() == 2, "A: half-completed watch still stale");
-    expect(reg.fired_and_drain().empty(), "A: nothing fired yet");
+    // Member 1's terminal was already recorded by the paired call at the
+    // top of Part A ("member terminal recorded, watch still stale"); the
+    // former third call here was a duplicate no-op whose comment claimed a
+    // fresh record (removed 2026-09-30). Only the pending-fire state is
+    // asserted here.
+    expect(fires.empty(), "A: nothing fired yet (member 2 pending)");
 
     // Duplicate terminal of the already-completed member: no-op.
     reg.on_node_terminal(key(0, 1, 1),
@@ -131,7 +159,6 @@ void test_registration_and_noops() {
     // Member 2 completes: fires once.
     reg.on_node_terminal(key(0, 2, 1),
                          NodeTerminalStatus::Skipped);
-    auto fires = reg.fired_and_drain();
     expect(fires.size() == 1, "A: watch fired once");
     expect(fires[0].watch_id == watch_id && fires[0].request_id == "req-1" &&
                fires[0].stage == "prefill" && fires[0].generation == 1 &&
@@ -142,16 +169,19 @@ void test_registration_and_noops() {
     // Terminals after the fire: no-op (fire once).
     reg.on_node_terminal(key(0, 2, 1),
                          NodeTerminalStatus::Success);
-    expect(reg.fired_and_drain().empty(), "A: no second fire");
+    expect(fires.size() == 1, "A: no second fire");
 
-    reg.remove_all();
-    expect(reg.stale_count() == 0, "A: remove_all clears the registry");
+    reg.remove_watch(watch_id);
+    reg.remove_watch(decode_id);
+    expect(reg.stale_count() == 0, "A: per-watch removal clears the audit");
 }
 
 // ---------------------------------------------------------------- Part B --
 // Out-of-order completion, explicit status policy, fire-once.
 void test_fire_semantics() {
     WatchRegistry reg;
+    std::vector<WatchFire> fires;
+    reg.set_fire_notifier(record_into(&fires));
 
     // Out-of-order: member 11 completes before member 10.
     reg.register_stage_watch("req-2", "decode", 1,
@@ -162,9 +192,9 @@ void test_fire_semantics() {
     expect(reg.stale_count() == 1, "B: out-of-order first member no fire");
     reg.on_node_terminal(key(0, 10, 1),
                          NodeTerminalStatus::Success);
-    const auto fires = reg.fired_and_drain();
     expect(fires.size() == 1 && fires[0].member_count == 2,
            "B: fires when the LAST member completes");
+    fires.clear();
 
     // Explicit status policy: a watch listing only Success must NOT count a
     // Skipped terminal (Skipped is never implicitly upgraded to Success).
@@ -179,7 +209,7 @@ void test_fire_semantics() {
     reg.on_node_terminal(key(0, 21, 1),
                          NodeTerminalStatus::Success);
     expect(reg.stale_count() == 0, "B: fires once both satisfy Success");
-    expect(reg.fired_and_drain().size() == 1, "B: exactly one fire");
+    expect(fires.size() == 1, "B: exactly one fire");
 
     // The phase-1 wscllm stage policy {Success, Skipped}: a Skipped terminal
     // satisfies (stages end when their last node is terminal; real traces
@@ -190,8 +220,6 @@ void test_fire_semantics() {
     reg.on_node_terminal(key(0, 30, 1),
                          NodeTerminalStatus::Skipped);
     expect(reg.stale_count() == 0, "B: {Success,Skipped} watch counts Skipped");
-
-    reg.remove_all();
 }
 
 // ---------------------------------------------------------------- Part C --
@@ -216,8 +244,7 @@ void test_lifecycle_and_notifier() {
     expect(reg.stale_count() == 1, "C: remove_watch drops the aborted watch");
     reg.on_node_terminal(key(0, 50, 1),
                          NodeTerminalStatus::Success);
-    expect(reg.fired_and_drain().empty(),
-           "C: removed watch's terminals are no-ops");
+    expect(notifier_calls == 0, "C: removed watch's terminals are no-ops");
     expect(reg.stale_count() == 1, "C: removed watch not stale");
 
     // Fire notification fires exactly once, synchronously, with the id.
@@ -225,8 +252,6 @@ void test_lifecycle_and_notifier() {
                          NodeTerminalStatus::Success);
     expect(notifier_calls == 1 && notifier_watch_id == 1,
            "C: notifier called once with the fired watch id");
-    expect(reg.fired_and_drain().empty(),
-           "C: notifier mode retains no duplicate polling record");
     expect(reg.stale_count() == 0, "C: all watches fired/removed");
 
     // Run-end audit: stale_count() == 0 (fired watches are not stale).
@@ -239,12 +264,10 @@ void test_lifecycle_and_notifier() {
     expect(reg.stale_count() == 1, "C: empty watch is stale");
     reg.on_node_terminal(key(0, 60, 1),
                          NodeTerminalStatus::Success);
-    expect(reg.fired_and_drain().empty(),
+    expect(notifier_calls == 1,
            "C: empty watch never fires (explicit)");
     reg.remove_watch(empty);
     expect(reg.stale_count() == 0, "C: empty watch removed, audit clean");
-
-    reg.remove_all();
 }
 
 // ---------------------------------------------------------------- Part D --
@@ -265,8 +288,6 @@ void test_direct_member_index() {
     expect(fired_ids.size() == 2 && fired_ids[0] == first &&
                fired_ids[1] == second,
            "D: one indexed terminal fires every overlapping watch once");
-    expect(reg.fired_and_drain().empty(),
-           "D: notifier mode has no retained fired-watch queue");
 
     const CompletionKey removed_key = key(4, 81, 5);
     const uint64_t removed = reg.register_stage_watch(
@@ -276,7 +297,6 @@ void test_direct_member_index() {
     reg.on_node_terminal(removed_key, NodeTerminalStatus::Success);
     expect(fired_ids.size() == 2,
            "D: removed watch is absent from the direct member index");
-    reg.remove_all();
 }
 
 // ---------------------------------------------------------------- Part E --
@@ -298,22 +318,24 @@ void test_online_hook() {
     online_completion_hook(&ctx, 2, 70, "req-8", "prefill", 1,
                            /*tick=*/12345, static_cast<int>(
                                NodeTerminalStatus::Skipped));
-    expect(fires == 0, "D: hook records the fact, no fire yet");
+    expect(fires == 0, "E: hook records the fact, no fire yet");
     online_completion_hook(&ctx, 2, 71, "req-8", "prefill", 1,
                            /*tick=*/12345, static_cast<int>(
                                NodeTerminalStatus::Success));
-    expect(fires == 1, "D: hook-recorded facts fire the watch");
-    expect(reg.stale_count() == 0, "D: fired watch not stale");
+    expect(fires == 1, "E: hook-recorded facts fire the watch");
+    expect(reg.stale_count() == 0, "E: fired watch not stale");
 
     // nullptr ctx / null registry: the hook is a no-op (never crashes).
     online_completion_hook(nullptr, 0, 1, "req-8", "prefill", 1, 0, 0);
     OnlineCompletionHookContext empty_ctx;
     online_completion_hook(&empty_ctx, 0, 1, "req-8", "prefill", 1, 0, 0);
-    expect(fires == 1, "D: null context is a no-op");
-
-    reg.remove_all();
+    expect(fires == 1, "E: null context is a no-op");
 }
 
+// ---------------------------------------------------------------- Part F --
+// Deferred issue-pass coalescing: one pending pass per rank, FIFO by first
+// rank occurrence, stable preallocated callback arguments, and a nested
+// same-rank completion appended to the same drain.
 struct CoalescingCtx {
     OnlineCompletionHookContext* hook = nullptr;
     std::vector<int> ranks;
@@ -326,7 +348,7 @@ void issue_pass_probe(void* opaque, const int rank) {
     if (rank == 0 && !probe->nested_scheduled) {
         probe->nested_scheduled = true;
         expect(probe->hook->schedule_issue_pass(0),
-               "E: callback-start clear permits nested same-rank pass");
+               "F: callback-start clear permits nested same-rank pass");
     }
 }
 
@@ -349,20 +371,23 @@ void test_issue_pass_coalescing() {
     online_completion_hook(&ctx, 1, 103, "", "", 0, 10, 0);
     online_completion_hook(&ctx, 0, 104, "", "", 0, 10, 0);
     expect(ctx.pending_issue_pass_count() == 3,
-           "E: duplicate terminals coalesce to one pass per rank");
+           "F: duplicate terminals coalesce to one pass per rank");
 
     // Deferred work drains only at a proceed boundary. Rank 0's callback
     // schedules a nested rank-0 pass after its pending bit was cleared.
     eq.schedule_event(10, no_op_event, nullptr);
     eq.proceed();
     expect(probe.ranks == std::vector<int>({2, 0, 1, 0}),
-           "E: first-rank FIFO preserved; nested pass appended same drain");
+           "F: first-rank FIFO preserved; nested pass appended same drain");
     expect(ctx.pending_issue_pass_count() == 0,
-           "E: no pending pass after the nested drain");
+           "F: no pending pass after the nested drain");
     expect(eq.finished() && !eq.has_deferred_work(),
-           "E: physical and deferred queues both empty");
+           "F: physical and deferred queues both empty");
 }
 
+// ---------------------------------------------------------------- Part G --
+// Communicator replacement lifetime: exact rank-order/dimension identity and
+// DataSet-held shared ownership until collective finish.
 struct LifetimeProbe {
     explicit LifetimeProbe(bool* destroyed) : destroyed(destroyed) {}
     ~LifetimeProbe() { *destroyed = true; }
@@ -372,20 +397,21 @@ struct LifetimeProbe {
 void test_communicator_lifetime() {
     expect(AstraSim::same_communicator_definition(
                {0, 2, 1}, {3}, {0, 2, 1}, {3}),
-           "F: identical ordered ranks and dimensions are a no-op definition");
+           "G: identical ordered ranks and dimensions are a no-op definition");
     expect(!AstraSim::same_communicator_definition(
                {0, 2, 1}, {3}, {0, 1, 2}, {3}),
-           "F: rank order is part of communicator identity");
+           "G: rank order is part of communicator identity");
     expect(!AstraSim::same_communicator_definition(
                {0, 2, 1}, {3}, {0, 2, 1}, {1, 3}),
-           "F: shaped dimensions are part of communicator identity");
+           "G: shaped dimensions are part of communicator identity");
 
     bool destroyed = false;
     std::weak_ptr<LifetimeProbe> weak;
     {
-        // The explicit creation tick keeps this isolated unit fixture
-        // independent of Sys while exercising the real DataSet owner field.
-        AstraSim::DataSet dataset(1, 0);
+        // The single-arg ctor keeps this isolated unit fixture independent
+        // of Sys while exercising the real DataSet owner field (the
+        // write-only creation_tick ctor parameter was removed 2026-09-28).
+        AstraSim::DataSet dataset(1);
         {
             auto probe = std::make_shared<LifetimeProbe>(&destroyed);
             weak = probe;
@@ -395,16 +421,17 @@ void test_communicator_lifetime() {
             probe.reset();
         }
         expect(!destroyed && !weak.expired(),
-               "F: communicator control block survives active DataSet");
+               "G: communicator control block survives active DataSet");
     }
     expect(destroyed && weak.expired(),
-           "F: DataSet completion/destruction releases old communicator");
+           "G: DataSet completion/destruction releases old communicator");
 }
 
+// ---------------------------------------------------------------- Part H --
+// Online HardwareResource: exact in-flight counters (the per-node ID hash
+// sets retired together with the static ET path).
 void test_online_hardware_counters_without_ids() {
-    AstraSim::HardwareResource online(1, ExecutionMode::Online);
-    expect(!online.tracks_node_ids(),
-           "G: online HardwareResource disables diagnostic ID hashes");
+    AstraSim::HardwareResource online(1);
     NodeView first;
     first.global_id = 1000;
     first.kind = NodeKind::Compute;
@@ -412,18 +439,12 @@ void test_online_hardware_counters_without_ids() {
     second.global_id = 1001;
     online.occupy(first);
     online.occupy(second);
-    expect(online.num_in_flight_gpu_comp_ops == 2 &&
-               online.gpu_ops_node.empty(),
-           "G: online concurrent compute uses exact count and no IDs");
+    expect(online.num_in_flight_gpu_comp_ops == 2,
+           "H: online concurrent compute uses exact counts");
     online.release(first);
     online.release(second);
-    expect(online.num_in_flight_gpu_comp_ops == 0 &&
-               online.gpu_ops_node.empty(),
-           "G: online releases return the counter to zero");
-
-    AstraSim::HardwareResource static_resource(1);
-    expect(static_resource.tracks_node_ids(),
-           "G: static HardwareResource preserves ID diagnostics");
+    expect(online.num_in_flight_gpu_comp_ops == 0,
+           "H: online releases return the counter to zero");
 }
 
 }  // namespace

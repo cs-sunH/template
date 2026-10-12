@@ -21,12 +21,30 @@ namespace ExecutionDriven {
 uint64_t WatchRegistry::register_stage_watch(
     const std::string& request_id, const std::string& stage,
     uint64_t generation, std::set<CompletionKey> expected_members,
-    std::set<NodeTerminalStatus> satisfying_statuses) {
+    std::set<NodeTerminalStatus> satisfying_statuses, bool* created) {
+    if (created != nullptr) {
+        *created = true;
+    }
     const Identity identity{request_id, stage, generation};
     const auto existing = identity_to_watch_.find(identity);
     if (existing != identity_to_watch_.end()) {
         // Register once, fire once: a duplicate registration (e.g. a double
-        // commit of the same stage) must not create a second watch.
+        // commit of the same stage) must not create a second watch. The
+        // silently swallowed new member set is evidence, not a crash: fire
+        // semantics keep a lost-wakeup backstop, so warn loudly instead of
+        // failing closed (2026-09-30, ported from the joint repo
+        // WatchRegistry.cc register_stage_watch).
+        if (created != nullptr) {
+            *created = false;
+        }
+        std::fprintf(stderr,
+                     "[Warn] (execution_driven/watch_registry) duplicate "
+                     "watch identity swallowed (register once / fire once): "
+                     "request_id=%s stage=%s generation=%llu "
+                     "dropped_member_count=%zu\n",
+                     request_id.c_str(), stage.c_str(),
+                     static_cast<unsigned long long>(generation),
+                     expected_members.size());
         return existing->second;
     }
     const uint64_t watch_id = next_watch_id_++;
@@ -125,6 +143,28 @@ size_t WatchRegistry::stale_count() const {
     return count;
 }
 
+void WatchRegistry::dump_unfired_to_stderr(const char* prefix) const {
+    // DeadEnd-census diagnostic only (2026-10-11, ported from WL):
+    // read-only dump of every registered-but-unfired watch. Never called
+    // on the hot path.
+    std::fprintf(stderr, "%s watch_registry_size=%zu stale=%zu\n", prefix,
+                 watches_.size(), stale_count());
+    for (const auto& entry : watches_) {
+        const StageWatch& watch = entry.second;
+        if (watch.fired) {
+            continue;
+        }
+        std::fprintf(stderr,
+                     "%s unfired watch_id=%llu request_id=%s stage=%s "
+                     "generation=%llu members_done=%zu members_expected=%zu\n",
+                     prefix, static_cast<unsigned long long>(watch.watch_id),
+                     watch.request_id.c_str(), watch.stage.c_str(),
+                     static_cast<unsigned long long>(watch.generation),
+                     watch.completed_members.size(),
+                     watch.expected_members.size());
+    }
+}
+
 void WatchRegistry::remove_watch(uint64_t watch_id) {
     const auto it = watches_.find(watch_id);
     if (it == watches_.end()) {
@@ -152,6 +192,21 @@ void WatchRegistry::remove_watch(uint64_t watch_id) {
             request_to_watch_ids_.erase(request_it);
         }
     }
+    // F10/E6 fix (2026-09-26): maintain the train-sentinel index on removal,
+    // symmetric with registration. Without this, a sentinel watch removed
+    // here (sentinel fire -> REQUEST_COMPLETE handling ->
+    // remove_watches_for_request) leaves a dangling id in
+    // sentinel_watch_ids_ forever: drain_fired_sentinels cannot distinguish
+    // "live but unfired" from "already removed" and retains the id, so the
+    // vector grows with every retired train and the per-commit drain
+    // degrades from O(alive sentinels) to O(all sentinels ever registered).
+    // remove_watches_for_request is covered too -- it delegates here.
+    if (it->second.request_id.rfind("batch_train_", 0) == 0) {
+        sentinel_watch_ids_.erase(
+            std::remove(sentinel_watch_ids_.begin(), sentinel_watch_ids_.end(),
+                        watch_id),
+            sentinel_watch_ids_.end());
+    }
     watches_.erase(it);
 }
 
@@ -173,17 +228,22 @@ void WatchRegistry::remove_watches_for_request(const std::string& request_id) {
 
 void WatchRegistry::drain_fired_sentinels() {
     // 拼 batch 适配(2026-08-22):已 fire 的哨兵逐个移除;未 fire 者保留。
-    size_t kept = 0;
-    for (size_t i = 0; i < sentinel_watch_ids_.size(); ++i) {
-        const uint64_t watch_id = sentinel_watch_ids_[i];
+    // F10/E6 fix (2026-09-26): remove_watch now also purges the id from
+    // sentinel_watch_ids_, so the fired ids are collected first and removed
+    // afterwards -- calling remove_watch inside an index scan over
+    // sentinel_watch_ids_ would shift the vector under the loop. After this
+    // call every id left in sentinel_watch_ids_ refers to a live, unfired
+    // sentinel watch; dangling ids (removed elsewhere) cannot exist.
+    std::vector<uint64_t> fired_ids;
+    for (const uint64_t watch_id : sentinel_watch_ids_) {
         const auto it = watches_.find(watch_id);
         if (it != watches_.end() && it->second.fired) {
-            remove_watch(watch_id);
-            continue;
+            fired_ids.push_back(watch_id);
         }
-        sentinel_watch_ids_[kept++] = watch_id;
     }
-    sentinel_watch_ids_.resize(kept);
+    for (const uint64_t watch_id : fired_ids) {
+        remove_watch(watch_id);
+    }
 }
 
 void WatchRegistry::remove_all() {

@@ -85,8 +85,9 @@ MODEL_LAYERS = 16
 PREFIX_LAYERS = 12  # PARTIAL 基驻留前缀 p（后缀 [12, 16) 已逐出到池）
 HISTORY_TOKENS = 100
 INPUT_TOKENS = 50
-DECODE_TOKENS = 8   # credit_iters="4" + _train_max_iter=5 → T1 五步/2 块 + T2 三步/1 块
-CREDIT_ITERS = "4"
+DECODE_TOKENS = 8   # auto tile（256 token ≥ 基础 100）→ 每 pass 1 tile；
+                    # _train_max_iter=5 → T1 五步/5 tile + T2 三步/3 tile
+TILE_BYTES = "auto"
 RID = "r1"
 SID = "s"
 
@@ -138,7 +139,7 @@ def _make_scheduler(model, hardware, topology, manager):
     scheduler.kv_manager = manager
     scheduler.p_chunk = 512
     scheduler._joint_horizon = CausalHorizonEstimator(
-        cold_start_default_tokens=1)
+        cold_start_default_forward_steps=1)
     scheduler._joint_flows = LinkFlowRegistry()
     scheduler._pool_ports = _PoolPortRegistry()
     scheduler._hbm_ports = HbmPortFlowRegistry()
@@ -154,7 +155,11 @@ def _make_scheduler(model, hardware, topology, manager):
             manager.nearest_edge(rank) for rank in instance.ranks}))
         for instance in topology.instances}
     scheduler.joint_config = parse_joint_config(
-        {"JOINT_REMOTE_CREDIT_ITERS": CREDIT_ITERS})
+        {"JOINT_REMOTE_READ_TILE_BYTES": TILE_BYTES,
+         # C4 完整动作面：本夹具被测机器 = remote-read 流生命周期（非
+         # argmin——P 选择已打桩强制）；边界允许面掩成 {remote-read}
+         # 保持既有臂形态（copy/recompute 的全链路由 C4 专项套件覆盖）。
+         "JOINT_ALLOWED_ACTIONS": "remote-read"})
     scheduler._joint_mode = scheduler.joint_config.scheduler_mode
     scheduler._prefill_task_cache = {}
     scheduler._decode_task_load_cache = {}
@@ -163,6 +168,10 @@ def _make_scheduler(model, hardware, topology, manager):
     scheduler._quota_enrolled = set()
     scheduler._link_telemetry_rates = {}
     scheduler._link_telemetry_flow_counts = {}
+    # ACC（验收纪律第 3 类，v2.0 §19.3）：预测器开销账本 __init__ 同款
+    # 初值（F6 销账口径：决策/摘要记账直访——替身漏设 = AttributeError）。
+    from joint.predictor_cost_accounting import PredictorCostAccounting
+    scheduler.predictor_cost = PredictorCostAccounting()
     scheduler._telemetry_last_tick_ns = 0
     scheduler._admission_decision_wall_ns_total = 0
     scheduler._admission_decision_wall_ns_max = 0
@@ -173,6 +182,7 @@ def _make_scheduler(model, hardware, topology, manager):
         "stay": 0, "copy": 0, "remote-read": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
+        "recompute_forced_action_mask": 0,
         "recompute_forced_quota_deferred": 0,
         "recompute_forced_evicted_permanent": 0,
     }
@@ -465,11 +475,12 @@ class DecodeReuseTest(unittest.TestCase):
         self.assertEqual(plan["exec_instance"], EXEC_INSTANCE)
         self.assertEqual(plan["read_prefix_layers"], PREFIX_LAYERS)
         self.assertLess(plan["read_prefix_layers"], MODEL_LAYERS)
-        # 计划字节 = 前缀层区间派生 × 步数，且严格异于全层口径
-        # （构造验证：两口径在本夹具下逐字节可分，非肉眼比对）。
-        context_per_step = HISTORY_TOKENS + INPUT_TOKENS + DECODE_TOKENS
-        expected_per_step = sum(self.run.prefix_bytes_at(context_per_step))
-        full_per_step = sum(self.run.full_bytes_at(context_per_step))
+        # 计划字节 = 前缀层区间派生的远端基础区间 × 步数（D09 式 18a：
+        # 输入/decode 增量本地读不过 NoC），且严格异于全层口径与旧终态
+        # 口径（构造验证：三口径在本夹具下逐字节可分）。
+        expected_per_step = sum(self.run.prefix_bytes_at(HISTORY_TOKENS))
+        full_per_step = sum(self.run.full_bytes_at(
+            HISTORY_TOKENS + INPUT_TOKENS + DECODE_TOKENS))
         self.assertNotEqual(expected_per_step, full_per_step)
         self.assertEqual(
             plan["total_bytes"], expected_per_step * DECODE_TOKENS)
@@ -495,19 +506,19 @@ class DecodeReuseTest(unittest.TestCase):
             sum(summary["total_bytes"]
                 for summary in self.run.runtime.remote_read_slice_summaries),
             plan["total_bytes"])
-        # 两列车切片形状（T_max=5 截断 → T1 五步 2 块 [4,1] / T2 三步
-        # 1 块 [3]，K 取列车统一值 min(4, S_j)）。
+        # 两列车切片形状（T_max=5 截断 → T1 五步 5 tile / T2 三步
+        # 3 tile；auto tile ≥ 基础区间 → 每 pass 1 tile）。
         summaries = self.run.runtime.remote_read_slice_summaries
         self.assertEqual(
-            [(s["steps"], s["block_steps"]) for s in summaries],
-            [(5, [4, 1]), (3, [3])])
+            [(s["steps"], s["block_count"]) for s in summaries],
+            [(5, 5), (3, 3)])
 
     def test_slices_are_transient_prefix_streams(self):
         # §一.7/§四：decode credit 切片 = 瞬时读流（不物化任何持久账本），
         # 层区间 = [0, p)、驻留前后恒 p（镜像 prefill 前缀读流口径）。
         blocks = self.run.scheduler._joint_remote_read_slice(
-            self.run.runtime, 4, 2)
-        self.assertEqual(len(blocks), 2)
+            self.run.runtime, 4)
+        self.assertEqual(len(blocks), 4)
         for block in blocks:
             self.assertEqual(block.kind, "noc_migrate")
             self.assertEqual(block.phase, "decode")
@@ -651,12 +662,13 @@ class FlowLifecycleTest(unittest.TestCase):
         self.assertNotIn(RID, point["pool_owners"])
         self.assertEqual(point["read_family"], [RID + "#readplan"])
         # 对账决策行（C8 步骤 2）：真值步数/真值流单位落盘（真值闭式：
-        # 列车数 = ceil(8/5) = 2 × 每列车块数 = ceil(5/4) = 2 → 4 单位）。
+        # 列车数 = ceil(8/5) = 2 × 每满列车 tile 数 = 5 步 × 每 pass
+        # 1 tile → 10 单位）。
         rows = self.run._log_rows("readplan_reconcile")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["decision"]["actual_steps"],
                          DECODE_TOKENS)
-        self.assertEqual(rows[0]["decision"]["truth_flow_units"], 4)
+        self.assertEqual(rows[0]["decision"]["truth_flow_units"], 10)
 
     def test_readplan_and_decode_owner_alternate_without_overlap(self):
         # T1 发射：当前列车 owner 接管——#readplan 先核销暂挂、
@@ -687,10 +699,10 @@ class FlowLifecycleTest(unittest.TestCase):
         self.assertNotIn(RID + "#readplan", settle2["hbm_owners"])
         self.assertEqual(settle2["read_family"], [])
         self.assertFalse(settle2["preplan_active"])
-        # 账本核销链：真值 4 单位，逐列车实际消费 3（2+1，列车碎片化）
-        # → 残差 1 在完成边界披露（C8 对账核销之二）。
-        self.assertEqual(settle2["preplan_consumed"], 3)
-        self.assertEqual(settle2["preplan_remaining"], 1)
+        # 账本核销链：真值闭式 10 单位（2 满列车 × 5 tile），逐列车实际
+        # 消费 8（5+3，T2 非满）→ 残差 2（碎片化，完成边界披露）。
+        self.assertEqual(settle2["preplan_consumed"], 8)
+        self.assertEqual(settle2["preplan_remaining"], 2)
 
     def test_completion_releases_readplan_and_run_end_audits_pass(self):
         completion = self.run.checkpoints["completion"]
@@ -702,10 +714,10 @@ class FlowLifecycleTest(unittest.TestCase):
         settle_rows = self.run._log_rows("readplan_settle")
         self.assertEqual(len(settle_rows), 1)
         self.assertEqual(
-            settle_rows[0]["decision"]["residual_units_released"], 1)
-        self.assertEqual(settle_rows[0]["decision"]["consumed_units"], 3)
-        self.assertEqual(settle_rows[0]["decision"]["truth_flow_units"], 4)
-        self.assertEqual(settle_rows[0]["decision"]["variance_units"], 1)
+            settle_rows[0]["decision"]["residual_units_released"], 2)
+        self.assertEqual(settle_rows[0]["decision"]["consumed_units"], 8)
+        self.assertEqual(settle_rows[0]["decision"]["truth_flow_units"], 10)
+        self.assertEqual(settle_rows[0]["decision"]["variance_units"], 2)
         # merge 在途流在册（完成批登记、merge_done 交付前）——家族断言
         # 只覆盖读流家族，merge owner 单独验证生命周期配对。
         self.assertIn(RID + "#merge", completion["hbm_owners"])

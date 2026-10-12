@@ -7,7 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/EventList.h"
 #include "common/Type.h"
+#include "common/WallClock.h"
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <utility>
@@ -90,7 +92,7 @@ class EventQueue {
      * callback or a deferred handler, same-tick events MUST go through
      * schedule_event_deferred(); schedule_event(current_time, ...) would
      * try_emplace a current_time EventList into the main map and trip the
-     * strict-increase assert (EventQueue.cpp :31) on the next proceed().
+     * strict-increase assert (EventQueue.cpp proceed()) on the next proceed().
      */
     void set_tick_end_callback(Callback callback, CallbackArg arg) noexcept;
 
@@ -131,7 +133,27 @@ class EventQueue {
      */
     [[nodiscard]] bool in_invoke_context() const noexcept;
 
+    /// Additive wall-clock instrumentation (measurement only; never gates
+    /// event dispatch). Process-global: exactly one event queue owns the
+    /// simulation thread, and the static-binary fixtures that never read
+    /// the counters pay only the bracket cost.
+    struct QueueWallStats {
+        WallClockBucket proceed;                     // total ns inside proceed()
+        uint64_t schedule_event_calls = 0;
+        uint64_t schedule_event_cancellable_calls = 0;
+        uint64_t cancel_event_calls = 0;
+        uint64_t deferred_schedule_calls = 0;
+    };
+
+    [[nodiscard]] static const QueueWallStats& queue_wall_stats() noexcept {
+        return wall_stats_;
+    }
+
   private:
+    /// instrumentation counters (see queue_wall_stats()); defined out-of-line
+    /// in EventQueue.cpp (an in-class initializer trips a GCC nested-struct
+    /// NSDMI diagnostic).
+    static QueueWallStats wall_stats_;
     /// true while the main queue's current EventList is being invoked
     bool in_invoke_ = false;
 

@@ -9,18 +9,23 @@ standalone test -- no network simulation, no baseline artifacts touched:
 
   Part A  Order + drain: events drain in insertion order; drain clears the
           pending set (new dedup epoch); has_decision_work toggles; seqs are
-          consecutive; StateDelta assembly (build_state_delta).
+          consecutive; StateDelta assembly (build_state_delta_v1).
   Part B  Same-epoch dedup: same identity (reason/request_id/stage/
           generation) pushes in one epoch collapse to one event; distinct
           identities stay; the same identity may legitimately return in a
           later epoch.
   Part C  Counters: event_count / delivery_count / coalescing_ratio /
-          tick_end_without_decision_count / no_decision_python_callback_count
-          / finalize_pending has_decision_work.
+          tick_end_without_decision_count / has_decision_work.
+  Part D  Completed-node accounting: compact production mode versus exact
+          audit mode.
+  Part E  Same-tick epoch order (策略规格 §6, review 2026-09-26 M9-1): a
+          completion-class deposit and a real ingress arrival sharing one
+          tick drain as [completion, ARRIVAL] through the real
+          EventQueue -> arrival_cb -> mailbox -> drain chain.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-face):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 Exit code 0 on ALL PASS.
@@ -28,6 +33,9 @@ Exit code 0 on ALL PASS.
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
+#include "astra-sim/workload/execution_driven/RequestIngress.hh"
+#include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
+#include "common/EventQueue.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +44,7 @@ Exit code 0 on ALL PASS.
 #include <vector>
 
 using namespace AstraSim::ExecutionDriven;
+using namespace NetworkAnalytical;
 
 namespace {
 
@@ -87,13 +96,14 @@ void test_order_drain_and_delta() {
            "A: second event seq 2, decode completion, payload kept");
     expect(!mailbox.has_decision_work(), "A: drain clears the pending set");
 
-    // build_state_delta carries tick + delivery_sequence + the events.
-    StateDelta delta = build_state_delta(events, /*tick=*/1234,
-                                         /*delivery_sequence=*/7);
+    // build_state_delta_v1 carries tick + delivery_sequence + the events.
+    StateDelta delta = build_state_delta_v1(events, /*tick=*/1234,
+                                            /*delivery_sequence=*/7,
+                                            /*deferred_from_tick=*/0, {}, {});
     expect(delta.tick == 1234 && delta.delivery_sequence == 7 &&
                delta.events.size() == 2,
            "A: StateDelta carries epoch fields");
-    const auto second = build_state_delta({}, 99, 8);
+    const auto second = build_state_delta_v1({}, 99, 8, 0, {}, {});
     expect(second.events.empty() && second.delivery_sequence == 8,
            "A: empty delta is valid (no-work epochs are separate)");
 
@@ -162,29 +172,24 @@ void test_counters() {
     expect(mailbox.coalescing_ratio() == 2.0,
            "C: 2 events batched into 1 delivery epoch -> ratio 2.0");
 
-    // A drain with no events (finalize-only epoch) is not a delivery.
-    mailbox.set_finalize_pending(true);
-    expect(mailbox.drain().empty(), "C: finalize-only drain has no events");
+    // A drain with no pending events is not a delivery epoch.
+    // (M1-3/M11-3, 2026-09-26: the former finalize-pending scaffolding --
+    // set_finalize_pending and the finalize-only epoch it produced -- is
+    // deleted as production-unreachable; the real commit-ack finalize is
+    // send_commit_ack -> ack file -> Python on_commit_ack.)
+    expect(mailbox.drain().empty(), "C: empty drain has no events");
     expect(mailbox.delivery_count() == 1,
            "C: empty drain is not a delivery epoch");
 
-    // Gate counters: no-work ticks increment; the Python-error counter is
-    // only incremented by a buggy entry (phase-1 acceptance: must stay 0).
+    // Gate counters: no-work ticks increment. (The former
+    // count_no_decision_python_callback increment hook and its always-zero
+    // counter were removed -- see DecisionMailbox.hh.)
     mailbox.count_tick_end_without_decision();
     mailbox.count_tick_end_without_decision();
-    mailbox.count_no_decision_python_callback();
     expect(mailbox.tick_end_without_decision_count() == 2,
            "C: no-work ticks counted");
-    expect(mailbox.no_decision_python_callback_count() == 1,
-           "C: python-error counter incremented explicitly");
 
-    // finalize_pending makes has_decision_work() true with no events; the
-    // drain consumes it (a finalize-only epoch delivers an empty delta).
     expect(!mailbox.has_decision_work(), "C: no work with empty mailbox");
-    mailbox.set_finalize_pending(true);
-    expect(mailbox.has_decision_work(), "C: finalize_pending is decision work");
-    expect(mailbox.drain().empty(), "C: finalize-only drain has no events");
-    expect(!mailbox.has_decision_work(), "C: drain consumed the finalize");
 }
 
 // ---------------------------------------------------------------- Part D --
@@ -193,9 +198,16 @@ void test_completed_fact_accumulator() {
     const int success = static_cast<int>(NodeTerminalStatus::Success);
     const int skipped = static_cast<int>(NodeTerminalStatus::Skipped);
 
+    // The exact audit mode is the production env-gated construction channel
+    // (ASTRA_SIM_ONLINE_COMPLETED_NODES=exact, read once by the
+    // constructor). Scope the env around the exact accumulator's
+    // construction so the fixture is deterministic and independent of an
+    // inherited environment; the compact accumulator is then constructed
+    // with the env unset (the production default).
+    ::setenv("ASTRA_SIM_ONLINE_COMPLETED_NODES", "exact", /*overwrite=*/1);
+    CompletedFactAccumulator exact;
+    ::unsetenv("ASTRA_SIM_ONLINE_COMPLETED_NODES");
     CompletedFactAccumulator compact;
-    // Make the fixture independent of an inherited audit-mode environment.
-    compact.set_exact_mode(false);
     compact.record(/*rank=*/3, /*node_id=*/101, "req-compact", "prefill",
                    /*generation=*/4, /*tick=*/500, success);
     compact.record(/*rank=*/3, /*node_id=*/102, "req-compact", "prefill",
@@ -209,17 +221,6 @@ void test_completed_fact_accumulator() {
                compact_counts.skipped == 1 && compact_counts.other == 1,
            "D: compact mode keeps O(1) success/skipped/invalid counters");
 
-    bool compact_mode_change_rejected = false;
-    try {
-        compact.set_exact_mode(true);
-    } catch (const std::logic_error&) {
-        compact_mode_change_rejected = true;
-    }
-    expect(compact_mode_change_rejected,
-           "D: mode cannot change after the first terminal");
-
-    CompletedFactAccumulator exact;
-    exact.set_exact_mode(true);
     exact.record(/*rank=*/7, /*node_id=*/7001, "req-exact", "decode",
                  /*generation=*/8, /*tick=*/9001, success);
     const std::vector<CompletedNodeFact> first_exact = exact.drain();
@@ -244,6 +245,83 @@ void test_completed_fact_accumulator() {
            "D: later exact drains retain cumulative terminal accounting");
 }
 
+// ---------------------------------------------------------------- Part E --
+// Same-tick epoch order: completions before arrivals (策略规格 §6: "同一
+// 时刻的事件先处理完成类、再处理到达类、最后启动新迭代"; review 2026-09-26
+// M9-1 coverage gap -- no fixture guarded this invariant).
+//
+// The production epoch is formed once per tick at the tick-end gate
+// (main_online.cc ed_driver_tick_end) by draining the mailbox in DEPOSIT
+// order. Deposit order is the EventQueue's same-tick EventList firing
+// order: the completion side deposits through the watch-fire hook, the
+// arrival side through RequestIngress::arrival_cb; nothing downstream
+// reorders by reason (DecisionMailbox::push preserves insertion order, Part
+// A). A same-tick ordering regression anywhere on that chain would
+// therefore silently flip the epoch order. This fixture drives the real
+// machinery end to end: a completion-class deposit (the watch-hook shape)
+// and a real future-alarm arrival share tick 1000, and the drained epoch --
+// and the StateDelta built from it -- must list the completion first.
+void completion_deposit(void* v) {
+    auto* mailbox = static_cast<DecisionMailbox*>(v);
+    DecisionEvent ev;
+    ev.reason = DecisionReason::REQUEST_COMPLETE;
+    ev.request_id = "req-complete";
+    mailbox->push(std::move(ev));
+}
+
+void test_same_tick_completion_before_arrival() {
+    EventQueue eq;
+    DecisionMailbox mailbox;
+    ServiceCoordinator svc;
+    RequestIngress ingress;
+    ingress.bind(&eq, &mailbox, &svc);
+
+    // Completion-class deposit armed BEFORE the arrival alarm: this is the
+    // shared-tick arm order the contract pins (the completion deposit must
+    // precede the arrival deposit within the same epoch).
+    eq.schedule_event(1000, completion_deposit, &mailbox);
+
+    // Real arrival path: a commit-leg future arrival targeting the SAME
+    // tick (RequestIngress::schedule_future_arrival arms the alarm;
+    // arrival_cb fires at 1000 and deposits the ARRIVAL event).
+    RequestEnvelope env;
+    env.session_id = "s-arrival";
+    env.turn_index = 0;
+    env.request_id = "req-arrival";
+    env.prefill_length = 100;
+    env.decode_length = 50;
+    env.arrival_world_ns = 1000;
+    ingress.schedule_future_arrival(env);
+
+    while (!eq.finished()) {
+        eq.proceed();
+    }
+    expect(eq.get_current_time() == 1000,
+           "E: both events fired in the shared tick 1000");
+
+    expect(mailbox.has_decision_work(), "E: the shared epoch has work");
+    const auto events = mailbox.drain();
+    expect(events.size() == 2,
+           "E: completion and arrival co-occur in one epoch");
+    expect(events[0].reason == DecisionReason::REQUEST_COMPLETE &&
+               events[0].request_id == "req-complete",
+           "E: completion-class deposits first in the same-tick epoch");
+    expect(events[1].reason == DecisionReason::ARRIVAL &&
+               events[1].request_id == "req-arrival",
+           "E: arrival-class deposits second in the same-tick epoch");
+
+    const StateDelta delta =
+        build_state_delta_v1(events, /*tick=*/1000, /*delivery_sequence=*/1,
+                             /*deferred_from_tick=*/0, {}, {});
+    expect(delta.tick == 1000 && delta.events.size() == 2 &&
+               delta.events[0].reason == DecisionReason::REQUEST_COMPLETE &&
+               delta.events[1].reason == DecisionReason::ARRIVAL,
+           "E: delta order is completion-before-arrival");
+
+    std::printf("[decision_mailbox_test] PASS: same-tick epoch drains "
+                "completion before arrival (spec §6 order)\n");
+}
+
 }  // namespace
 
 int main(int /*argc*/, char* /*argv*/[]) {
@@ -251,6 +329,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     test_dedup();
     test_counters();
     test_completed_fact_accumulator();
+    test_same_tick_completion_before_arrival();
 
     if (!g_ok) {
         std::fprintf(stderr,
@@ -258,6 +337,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
         return 1;
     }
     std::printf("[decision_mailbox_test] ALL PASS: order/drain/StateDelta, "
-                "same-epoch dedup, counters, completed-node accounting\n");
+                "same-epoch dedup, counters, completed-node accounting, "
+                "same-tick completion-before-arrival epoch order\n");
     return 0;
 }

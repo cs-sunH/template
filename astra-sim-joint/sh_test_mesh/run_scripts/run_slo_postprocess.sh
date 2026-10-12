@@ -133,10 +133,20 @@ else
 fi
 
 # metrics=off：无任何 [METRIC] 行 → 整步跳过（正常设计，不算失败）。
+# L21(2026-09-29 审查修复):区分 grep/zgrep 退出码——rc==1 仅是零匹配
+# (metrics=off 的设计内形态,照旧跳过);rc>=2 是输入损坏/不可读(gzip 校验
+# 失败等),此前被 || true 吞掉后按"设计内跳过、全过"放行。现 rc>=2
+# fail-closed:记 FAIL 条目并退出非零。
+METRIC_RC=0
 if [ "${METRIC_SRC##*.}" = "gz" ]; then
-  METRIC_LINES=$(zgrep -c '^\[METRIC\] ' "${METRIC_SRC}" || true)
+  METRIC_LINES=$(zgrep -c '^\[METRIC\] ' "${METRIC_SRC}") || METRIC_RC=$?
 else
-  METRIC_LINES=$(grep -c '^\[METRIC\] ' "${METRIC_SRC}" || true)
+  METRIC_LINES=$(grep -c '^\[METRIC\] ' "${METRIC_SRC}") || METRIC_RC=$?
+fi
+if [ "${METRIC_RC}" -ge 2 ]; then
+  warn "FAIL: metric source unreadable/corrupt: ${METRIC_SRC} (grep rc=${METRIC_RC}) — fail-closed (zero-match rc=1 stays a designed skip)"
+  printf '%s (exit=%s)\n' "metric-source: unreadable/corrupt ${METRIC_SRC}" "${METRIC_RC}" >> "${FAIL_MARKER}"
+  exit 1
 fi
 if [ "${METRIC_LINES:-0}" -eq 0 ]; then
   warn "no [METRIC] lines (metrics detail=off?) — SLO extraction skipped (by design)"
@@ -392,6 +402,13 @@ fi
 
 if [ "${SLO_FAIL}" -ne 0 ]; then
   warn "done WITH FAILURES (default=warn; see slo_postprocess.FAIL)"
+  # A5-1/infra-4 镜像（2026-09-30）：certified 层逐 rank 容量违规正式
+  # 判决的 exit 3 原样透传（warn/strict 边界仍在调用方 runner——默认
+  # warn 下 runner 只 WARN 不拦截，但进程码不再被折叠为 1，判决可被
+  # 上游区分）；其余失败仍为 1。
+  if [ "${DRIVER_RC}" -eq 3 ]; then
+    exit 3
+  fi
   exit 1
 fi
 log "done: all steps passed"

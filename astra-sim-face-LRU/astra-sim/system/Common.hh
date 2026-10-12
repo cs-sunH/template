@@ -13,12 +13,11 @@ namespace AstraSim {
 
 typedef unsigned long long Tick;
 
-constexpr uint64_t CLOCK_PERIOD = 1;           // 1ns
-constexpr uint64_t FREQ = 1000 * 1000 * 1000;  // 1GHz
+constexpr uint64_t CLOCK_PERIOD = 1;  // 1ns
 
-enum time_type_e { SE = 0, MS, US, NS, FS };
+enum time_type_e { NS = 0 };
 
-enum req_type_e { UINT8 = 0, BFLOAT16, FP32 };
+enum req_type_e { UINT8 = 0 };
 
 struct timespec_t {
     time_type_e time_res;
@@ -26,11 +25,14 @@ struct timespec_t {
 };
 
 struct sim_request {
-    uint32_t srcRank;
-    uint32_t dstRank;
-    uint32_t tag;
-    req_type_e reqType;
-    uint32_t vnet;
+    // Default member initializers: the rendezvous paths read fields straight
+    // off a caller-provided request, and callers that never fill them must
+    // not hand back indeterminate values (UB read).
+    uint32_t srcRank = 0;
+    uint32_t dstRank = 0;
+    uint32_t tag = 0;
+    req_type_e reqType = UINT8;
+    uint32_t vnet = 0;
 };
 
 class MetaData {
@@ -42,25 +44,17 @@ enum class ComType {
     Reduce_Scatter,
     All_Gather,
     All_Reduce,
-    All_to_All,
-    All_Reduce_All_to_All
+    All_to_All
 };
 
 enum class CollectiveOptimization { Baseline = 0, LocalBWAware };
 
-enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT, None };
+enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT };
 
-enum class InjectionPolicy {
-    Infinite = 0,
-    Aggressive,
-    SemiAggressive,
-    ExtraAggressive,
-    Normal
-};
+enum class InjectionPolicy { Normal = 0 };
 
 enum class StreamState {
     Created = 0,
-    Transferring,
     Ready,
     Executing,
     Zombie,

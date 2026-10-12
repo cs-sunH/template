@@ -30,6 +30,7 @@ import csv
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -135,19 +136,39 @@ def _run_scenario(work, queue, requests, expect_decode, expect_chunks,
     return 0
 
 
+def run_subprocess(cmd, *, cwd, timeout):
+    """R3-K6（2026-09-29 face 移植）：带超时的子进程调用；超时杀整个
+    进程组后再 fail——旧写法 runner 用裸 timeout=（超时只杀直接子进程，
+    bash runner 的孙进程沦为孤儿，与 finally 的 rmtree 竞态）、
+    plan_materializer 干脆无超时（挂起即整装置挂死）。start_new_session
+    使进程组可整体 SIGKILL，清理目录时不再有存活写入者。"""
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        proc.communicate()
+        fail(f"subprocess timed out after {timeout}s: {cmd}")
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 def plan_and_run(queue, work) -> None:
     """重生成 plan 目录并跑官方 runner(run_dir = work/run)。"""
     gen_root = os.path.join(REPO, "sh_test_mesh/generated")
     for name in os.listdir(gen_root):
         if name.startswith("llama2_7b_inference_54npus_plan_"):
             shutil.rmtree(os.path.join(gen_root, name))
-    subprocess.run(
-        [sys.executable, "plan_materializer.py"], cwd=WL,
-        check=True, capture_output=True)
+    materialize = run_subprocess(
+        [sys.executable, "plan_materializer.py"], cwd=WL, timeout=120)
+    if materialize.returncode != 0:
+        fail(f"plan_materializer failed: {materialize.stdout[-2000:]} "
+             f"{materialize.stderr}")
     run_dir = os.path.join(work, "run")
-    result = subprocess.run(
-        ["bash", RUNNER, run_dir, queue],
-        capture_output=True, text=True, timeout=300)
+    # cwd 沿用调用方（与改前一致）；cmd/输入均绝对路径。
+    result = run_subprocess(
+        ["bash", RUNNER, run_dir, queue], cwd=None, timeout=300)
     if result.returncode != 0:
         fail(f"runner failed: {result.stdout[-2000:]} {result.stderr}")
 

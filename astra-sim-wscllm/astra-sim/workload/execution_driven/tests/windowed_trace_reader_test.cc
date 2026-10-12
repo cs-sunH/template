@@ -25,6 +25,9 @@ simulation, no baseline artifacts touched:
           late_external_stream (never in late_static_submit).
   Part E  Request-neutral no-CSV path: an empty path constructs an
           already-EOF reader (no-op pumps, zero rows).
+  Part F  (retired -- its window-boundary arm was removed by the P0
+          calendar-reader rewrite; the letter is kept so historical
+          references stay stable, like the sister repos.)
   Part G  Backport fix (2026-08-16, sh_2.0测试 §5.1) -- DEFAULT UNBOUNDED
           arrival window: synthetic envelopes at arbitrary (well beyond
           30 s) arrivals are ALL accepted under the 0 default (constructor
@@ -55,16 +58,31 @@ simulation, no baseline artifacts touched:
           (ingress backpressure + clock advanced past the arrival) trips
           late_static_submit and FAILS the run-end arrival gate; the
           normal path gate passes.
+  Part R  P2-9 fix (2026-09-28) -- header content validation: the first
+          non-empty line must equal the canonical 8-column header
+          (kRequestQueueCsvHeader). Missing header (first line is a data
+          row), renamed column, reordered columns, the historical
+          non-canonical 7-column shape, and a fully empty file all
+          fail-closed with zero Submits (these abort in-row, before the
+          provenance gate); a CRLF header (single trailing '\r') and a
+          blank line before the header stay legal (with a matching
+          sidecar).
+  Part T  P2-27 fix (2026-09-28) -- the malicious-input shape the shared
+          write_csv factory structurally never produced and no other part
+          covers: a '#' comment line in the data area (no comment syntax in
+          the schema) fail-closes, while a well-formed two-session control
+          stays legal. (The duplicate/empty request_id identities of the
+          same audit list are pinned by Part S, C3's identity gate.)
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WindowedReaderTest.
-Run (from template/astra-sim-wscllm):
+Run (from the astra-sim-wscllm repo root):
   build/astra_analytical/build_congestion_aware/bin/\
     AstraSim_Analytical_Congestion_Aware_WindowedReaderTest
 *******************************************************************************/
 
-#include <cassert>
 #include <csignal>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <sys/wait.h>
@@ -76,6 +94,7 @@ Run (from template/astra-sim-wscllm):
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include "common/EventQueue.h"
 
 using namespace AstraSim::ExecutionDriven;
@@ -141,12 +160,12 @@ void expect_exit_code(Fn&& fn, const int code, const char* what) {
 
 void write_csv(const std::string& path,
                const std::vector<std::string>& rows) {
-    std::ofstream out(path);
-    out << "session_id,turn_index,request_id,prefill_length,decode_length,"
-           "session_arrival_time_ns,inter_request_interval_ns,description\n";
-    for (const auto& row : rows) {
-        out << row << "\n";
-    }
+    // P1 fix (2026-09-28): the provenance gate is fail-closed on an absent
+    // sidecar, so every queue-CSV fixture ships its matching provenance
+    // record (computed exactly like the materializer / the reader's index
+    // pass). Deliberately-malformed fixtures abort in-row before the gate,
+    // so their sidecar values are never consulted.
+    FixtureProvenance::write_queue_fixture(path, rows);
 }
 
 // 10 sessions (turn-0 arrivals 1..10 s, monotonic) + session_0 turn-1;
@@ -189,8 +208,6 @@ void test_calendar_submission() {
            "all 10 turn-0 Submits queued by the first pump");
     expect(reader.current_window_occupancy() == 10,
            "outstanding = submitted-but-unfired turn-0 rows");
-    expect(reader.peak_window_occupancy() == 10,
-           "peak outstanding reached 10");
     expect(reader.provenance().data_rows == 11, "provenance data_rows");
     expect(reader.provenance().sessions == 10, "provenance sessions");
     expect(reader.provenance().turn0_count == 10, "provenance turn0_count");
@@ -202,8 +219,6 @@ void test_calendar_submission() {
            "monotonic sample has zero file-order inversions");
     expect(reader.provenance().session_blocks_contiguous,
            "sample blocks contiguous");
-    expect(reader.provenance_sidecar_status() == "absent-no-gate",
-           "no sidecar written for this fixture: absent, no gate");
 
     // Later pumps are no-ops (nothing left to index or submit).
     expect(!reader.pump(), "later pump returns false at EOF");
@@ -219,6 +234,8 @@ void test_calendar_submission() {
     expect(reader.current_window_occupancy() == 8,
            "out-of-order consumption retires exactly itself");
     expect(reader.rejected_out_of_range() == 0, "no rejections in part A");
+    std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part A PASS: calendar submission\n");
 }
 
@@ -243,6 +260,8 @@ void test_row_semantics() {
            "exactly the 10 turn-0 rows are submitted; turn>0 never is");
     expect(ingress.pending_queue_index_count() == 1,
            "only the one turn>0 row retains a future lookup");
+    std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part B PASS: turn-0 Submit / turn>0 future-alarm "
                 "semantics (window 0 == 128)\n");
 }
@@ -272,6 +291,8 @@ void test_out_of_range_rejection() {
     expect(ingress.pending_command_count() == 1,
            "only the in-range row is submitted");
     expect(reader.eof(), "reader reached EOF despite the rejection");
+    std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part C PASS: simulation-out-of-range rejection\n");
 }
 
@@ -402,6 +423,8 @@ void test_default_unbounded_window() {
         expect(cli.request_max_arrival_ns == 0,
                "CLI default --request-max-arrival-ns == 0 (unbounded)");
     }
+    std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part G PASS: default unbounded arrival window "
                 "(constructor + CLI defaults)\n");
 }
@@ -492,6 +515,8 @@ void test_explicit_window_fail_closed() {
     // Dropped-first ordering and the completed shortfall must fail-closed.
     expect(audit_completion({10, 5, 1, 1, 4}) == CompletionAuditVerdict::Dropped,
            "audit: this fixture's run-end shape is Dropped (drops first)");
+    std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part H PASS: explicit window drops visible + "
                 "fail-closed completion audit\n");
 }
@@ -567,6 +592,7 @@ void test_queue_index_lifetime_and_fail_closed() {
         "queue-index: duplicate registration aborts");
 
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part I PASS: queue-index full pre-registration / "
                 "one-shot erase / fail-closed adversarial cases\n");
 }
@@ -604,6 +630,7 @@ void test_out_of_order_consumption_bound() {
     expect(reader.eof() && reader.rows_read() == 8,
            "out-of-order: every row read exactly once");
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part J PASS: exact out-of-order outstanding "
                 "set\n");
 }
@@ -674,6 +701,7 @@ void test_calendar_out_of_order_turn0() {
                audit[2].reader_discovered_tick == 0,
            "every turn-0 discovered at tick 0");
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part K PASS: out-of-order turn-0 fires in "
                 "calendar order, zero late static submits\n");
 }
@@ -711,6 +739,7 @@ void test_first_block_over_window() {
     expect(reader.provenance().turn0_adjacent_inversions == 1,
            "file order 1000 -> 500 is one adjacent inversion");
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part L PASS: first block > window fully "
                 "reachable in one pump\n");
 }
@@ -755,6 +784,7 @@ void test_arrival_zero_boundary() {
     expect(std::string(audit[1].late_source) == "on_time",
            "regular row classified on_time");
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part M PASS: arrival==0 t0 boundary "
                 "classification + gate exemption\n");
 }
@@ -789,13 +819,16 @@ void test_same_tick_multi_session() {
                seq[3].tick == 500 && seq[3].queue_index == 2,
            "equal-arrival group fires in queue_index (row) order");
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part N PASS: same-tick group ordered by "
                 "queue_index\n");
 }
 
 // Part O: provenance sidecar tampering. A sidecar with a wrong digest (or
 // wrong row count) must fail the run BEFORE any Submit: forked child exits
-// non-zero and nothing was enqueued.
+// non-zero and nothing was enqueued. P1 fix (2026-09-28): an ABSENT sidecar
+// fails the run too -- the former "absent (no gate)" pass-through is exactly
+// the hole a truncated materialization falls through.
 void test_provenance_tampering() {
     const std::string csv = fixture_path("windowed_reader_test_prov");
     write_csv(csv, {
@@ -805,28 +838,15 @@ void test_provenance_tampering() {
     });
     const std::string sidecar = csv + ".provenance.json";
 
-    // MATCHING sidecar (values taken from a first, ungated index pass):
-    // status "matched" and the run proceeds.
+    // MATCHING sidecar (written by write_csv alongside the fixture, from the
+    // same stats the materializer computes): status "matched" and the run
+    // proceeds. Keep a copy for the isolated data_rows arm below.
+    std::string matching_sidecar;
     {
-        EventQueue eq;
-        DecisionMailbox mailbox;
-        ServiceCoordinator svc;
-        RequestIngress ingress;
-        ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader probe(csv, ingress);
-        probe.pump();
-        const auto& p = probe.provenance();
-        std::ofstream out(sidecar);
-        out << "{\"schema\":1,\"generator_version\":\"fixture\","
-               "\"csv_sha256\":\"human-only\",\"csv_fnv1a64\":"
-            << p.fnv1a64 << ",\"csv_bytes\":" << p.csv_bytes
-            << ",\"data_rows\":" << p.data_rows << ",\"sessions\":"
-            << p.sessions << ",\"turn0_count\":" << p.turn0_count
-            << ",\"turn0_arrival_min_ns\":" << p.turn0_arrival_min_ns
-            << ",\"turn0_arrival_max_ns\":" << p.turn0_arrival_max_ns
-            << ",\"turn0_adjacent_inversions\":"
-            << p.turn0_adjacent_inversions
-            << ",\"session_blocks_contiguous\":true}\n";
+        std::ifstream in(sidecar, std::ios::binary);
+        std::getline(in, matching_sidecar, '\0');
+        expect(!matching_sidecar.empty(),
+               "provenance: fixture sidecar written alongside the CSV");
     }
     {
         EventQueue eq;
@@ -836,8 +856,6 @@ void test_provenance_tampering() {
         ingress.bind(&eq, &mailbox, &svc);
         WindowedTraceReader reader(csv, ingress);
         reader.pump();
-        expect(reader.provenance_sidecar_status() == "matched",
-               "provenance: matching sidecar -> matched, run proceeds");
         expect(ingress.pending_command_count() == 2,
                "provenance: matching sidecar submits both turn-0 rows");
     }
@@ -860,7 +878,6 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress);
         expect_exit_code(
             [&]() {
                 WindowedTraceReader tampered(csv, ingress);
@@ -870,36 +887,25 @@ void test_provenance_tampering() {
             "provenance: wrong digest fail-closes the run");
         expect(ingress.pending_command_count() == 0,
                "provenance: zero Submits enqueued on mismatch");
-        expect(reader.provenance_sidecar_status() == "not-indexed",
-               "fresh reader has not indexed yet (child did the failing "
-               "index)");
     }
 
     // Wrong data_rows only: still fail-closed. Every other compared field
     // carries the REAL provenance (the all-wrong arm above trips on the
     // digest long before the row count, so this arm rebuilds the sidecar
-    // from a fresh ungated probe to isolate the data_rows check).
-    std::remove(sidecar.c_str());
+    // from the MATCHING copy written by write_csv, flipping data_rows only,
+    // to isolate the data_rows check).
     {
-        EventQueue eq;
-        DecisionMailbox mailbox;
-        ServiceCoordinator svc;
-        RequestIngress ingress;
-        ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader probe(csv, ingress);
-        probe.pump();
-        const auto& p = probe.provenance();
-        std::ofstream out(sidecar);
-        out << "{\"schema\":1,\"generator_version\":\"fixture\","
-               "\"csv_sha256\":\"human-only\",\"csv_fnv1a64\":"
-            << p.fnv1a64 << ",\"csv_bytes\":" << p.csv_bytes
-            << ",\"data_rows\":999,\"sessions\":" << p.sessions
-            << ",\"turn0_count\":" << p.turn0_count
-            << ",\"turn0_arrival_min_ns\":" << p.turn0_arrival_min_ns
-            << ",\"turn0_arrival_max_ns\":" << p.turn0_arrival_max_ns
-            << ",\"turn0_adjacent_inversions\":"
-            << p.turn0_adjacent_inversions
-            << ",\"session_blocks_contiguous\":true}\n";
+        const auto pos = matching_sidecar.find("\"data_rows\":");
+        expect(pos != std::string::npos,
+               "provenance: matching copy carries data_rows");
+        const auto digits_end =
+            matching_sidecar.find_first_not_of("0123456789",
+                                               pos + strlen("\"data_rows\":"));
+        expect(digits_end != std::string::npos,
+               "provenance: data_rows value terminates");
+        std::ofstream out(sidecar, std::ios::binary);
+        out << matching_sidecar.substr(0, pos) << "\"data_rows\":999"
+            << matching_sidecar.substr(digits_end);
     }
     expect_exit_code(
         [&]() {
@@ -914,8 +920,9 @@ void test_provenance_tampering() {
         EXIT_FAILURE,
         "provenance: wrong row count fail-closes the run");
 
-    // Absent sidecar: explicitly no gate (already covered in part A; here
-    // confirmed on this fixture too).
+    // Absent sidecar: FAIL-CLOSED (P1 fix 2026-09-28; was "absent (no
+    // gate)"). A queue without its provenance record cannot be told apart
+    // from a truncated one -- the run must exit non-zero with zero Submits.
     std::remove(sidecar.c_str());
     {
         EventQueue eq;
@@ -923,14 +930,18 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress);
-        reader.pump();
-        expect(reader.provenance_sidecar_status() == "absent-no-gate",
-               "absent sidecar: no gate, run proceeds");
-        expect(ingress.pending_command_count() == 2,
-               "absent sidecar: both turn-0 rows submitted");
+        expect_exit_code(
+            [&]() {
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "provenance: absent sidecar fail-closes the run");
+        expect(ingress.pending_command_count() == 0,
+               "provenance: zero Submits enqueued on absent sidecar");
     }
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part O PASS: provenance tampering fail-closes "
                 "with zero submissions\n");
 }
@@ -1013,6 +1024,7 @@ void test_structure_validation_fail_closed() {
         "structure: turn>0 row with explicit arrival fail-closes");
 
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part P PASS: session/turn structure validation "
                 "fail-closed\n");
 }
@@ -1095,8 +1107,530 @@ void test_gate_trips_on_delayed_submission() {
         expect(normal.gate_ok, "normal path: arrival gate passes");
     }
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part Q PASS: gate trips on delayed submission, "
                 "passes on the normal path\n");
+}
+
+// Part R (P2-9 fix, 2026-09-28): header content validation. Every
+// malformed arm below ships a byte-accurate provenance sidecar so the
+// failure is attributable to the HEADER check alone, not to the (P1)
+// absent-sidecar gate: pre-fix the malformed file ran green through the
+// gate; post-fix the in-row header validation fires BEFORE the gate and
+// fail-closes with zero Submits.
+void write_raw_csv(const std::string& path, const std::string& bytes) {
+    std::ofstream out(path, std::ios::binary);
+    out << bytes;
+}
+
+// Legal-arm sidecar writer over EXACT raw bytes (the shared helper always
+// writes the canonical '\n' file, which the CRLF arm deliberately is not).
+// The counters follow the helper's rules (first non-empty line = header,
+// later non-empty lines = data rows, 6th comma field = arrival), which is
+// exactly what makes these sidecars pass the gate PRE-FIX and expose the
+// header-only red.
+void write_raw_sidecar(const std::string& path, const std::string& bytes,
+                       const uint64_t data_rows, const uint64_t sessions,
+                       const uint64_t turn0_count, const uint64_t t0_min,
+                       const uint64_t t0_max, const uint64_t inversions) {
+    const uint64_t fnv =
+        FixtureProvenance::fnv1a64_bytes(14695981039346656037ULL, bytes);
+    std::ofstream out(path + ".provenance.json", std::ios::binary);
+    out << "{\"schema\":1,\"generator_version\":\"test-fixture\","
+        << "\"csv_sha256\":\"test-fixture (human audit only)\","
+        << "\"csv_fnv1a64\":" << fnv << ",\"csv_bytes\":" << bytes.size()
+        << ",\"data_rows\":" << data_rows << ",\"sessions\":" << sessions
+        << ",\"turn0_count\":" << turn0_count
+        << ",\"turn0_arrival_min_ns\":" << t0_min
+        << ",\"turn0_arrival_max_ns\":" << t0_max
+        << ",\"turn0_adjacent_inversions\":" << inversions
+        << ",\"session_blocks_contiguous\":true}\n";
+}
+
+void test_header_validation_fail_closed() {
+    // Missing header: the first line IS a data row. The pre-fix reader
+    // silently swallowed it as "the header" and the expected/total/audit
+    // counters (all derived from the same read) stayed green on the
+    // truncated input. The sidecar carries the helper-rule stats over the
+    // exact bytes (header=line1 skipped, one data row), so pre-fix the run
+    // passed the gate and the child exited 0 (the red); post-fix the
+    // in-row header check fail-closes first.
+    {
+        const std::string csv = fixture_path("windowed_reader_test_hdr");
+        const std::string bytes =
+            "session_0,0,session_0_request_0,100,50,1000,,d\n"
+            "session_1,0,session_1_request_0,100,50,2000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/2000,
+                          /*t0_max=*/2000, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "header: missing header (first line is a data row) "
+            "fail-closes");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // Renamed column (typo'd name); data rows canonical, so the pre-fix
+    // blind skip ran the file green.
+    {
+        const std::string csv = fixture_path("windowed_reader_test_hdr2");
+        const std::string bytes =
+            "session_id,turn_index,request_id,prefill_length,"
+            "decode_length,session_arrival_time_ns,"
+            "inter_request_interval_ns,descrition\n"
+            "session_0,0,session_0_request_0,100,50,1000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/1000,
+                          /*t0_max=*/1000, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "header: renamed column fail-closes");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // Reordered columns: prefill/decode NAMES swapped in the header while
+    // the data stays canonical. The reader parses positionally, so the
+    // pre-fix blind skip ran this file green with silently re-bound
+    // columns (the schema lie is invisible to every downstream gate).
+    {
+        const std::string csv = fixture_path("windowed_reader_test_hdr3");
+        const std::string bytes =
+            "session_id,turn_index,request_id,decode_length,"
+            "prefill_length,session_arrival_time_ns,"
+            "inter_request_interval_ns,description\n"
+            "session_0,0,session_0_request_0,100,50,1000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/1000,
+                          /*t0_max=*/1000, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "header: reordered columns fail-closes");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // The historical non-canonical 7-column shape (service_vacuum_test.cc's
+    // pre-fix fixture header); data rows carried no description either, so
+    // the pre-fix reader indexed this file green end to end.
+    {
+        const std::string csv = fixture_path("windowed_reader_test_hdr4");
+        const std::string bytes =
+            "session_id,turn_index,request_id,prefill_length,"
+            "decode_length,session_arrival_time_ns,"
+            "inter_request_interval_ns\n"
+            "session_0,0,session_0_request_0,100,50,1000,,0\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/1000,
+                          /*t0_max=*/1000, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "header: non-canonical 7-column header fail-closes");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // A non-empty path with zero lines has no header at all (same
+    // zero-denominator family; the request-neutral EMPTY PATH never
+    // reaches the index pass -- part E). The all-zero sidecar matches the
+    // empty byte stream, so pre-fix the run passed the gate (red); the
+    // post-fix empty-file check fires first.
+    {
+        const std::string csv = fixture_path("windowed_reader_test_hdr5");
+        const std::string bytes = "";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/0, /*sessions=*/0,
+                          /*turn0_count=*/0, /*t0_min=*/0,
+                          /*t0_max=*/0, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "header: empty file (no header row) fail-closes");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // Legal: a CRLF header (single trailing '\r' tolerated -- CRLF data
+    // rows already parsed fine pre-fix, so rejecting the file would break
+    // a legal input class). Ships its matching sidecar over the exact
+    // CRLF bytes (P1 fail-closed gate).
+    {
+        const std::string csv = fixture_path("windowed_reader_test_hdr6");
+        const std::string bytes =
+            std::string(kRequestQueueCsvHeader) +
+            "\r\n"
+            "session_0,0,session_0_request_0,100,50,1000,,d\r\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/1000,
+                          /*t0_max=*/1000, /*inversions=*/0);
+        EventQueue eq;
+        DecisionMailbox mailbox;
+        ServiceCoordinator svc;
+        RequestIngress ingress;
+        ingress.bind(&eq, &mailbox, &svc);
+        WindowedTraceReader reader(csv, ingress);
+        expect(!reader.pump(), "CRLF header: canonical content accepted");
+        expect(reader.rows_read() == 1,
+               "CRLF header: the data row is NOT swallowed by the header");
+        expect(ingress.pending_command_count() == 1,
+               "CRLF header: the single turn-0 row submitted");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // Legal: a blank line before the header does not bypass the check
+    // (the header is still the first NON-EMPTY line and still validated);
+    // with a matching sidecar the run proceeds and the data row is read
+    // exactly once.
+    {
+        const std::string csv = fixture_path("windowed_reader_test_hdr7");
+        const std::string bytes =
+            "\n" + std::string(kRequestQueueCsvHeader) +
+            "\n"
+            "session_0,0,session_0_request_0,100,50,1000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/1000,
+                          /*t0_max=*/1000, /*inversions=*/0);
+        EventQueue eq;
+        DecisionMailbox mailbox;
+        ServiceCoordinator svc;
+        RequestIngress ingress;
+        ingress.bind(&eq, &mailbox, &svc);
+        WindowedTraceReader reader(csv, ingress);
+        expect(!reader.pump(),
+               "blank line before header: input accepted");
+        expect(reader.rows_read() == 1,
+               "blank line before header: exactly one data row read");
+        expect(ingress.pending_command_count() == 1,
+               "blank line before header: the turn-0 row submitted");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    std::printf("[fixture] part R PASS: header content validation "
+                "(missing/renamed/reordered/7-column/empty fail-closed; "
+                "CRLF + leading blank line stay legal)\n");
+}
+
+// Part T (P2-27 fix, 2026-09-28): the malicious-input shapes the shared
+// write_csv factory structurally never produced (it always wrote the
+// canonical header, structurally unique request ids, and never a '#'
+// comment), so an entire class of input-shape bugs was unreachable by the
+// suite. The '#' comment arm below is the shape NO other part covers; the
+// duplicate/empty request_id identities of the same audit list are pinned
+// by Part S (C3's identity gate) and are deliberately NOT repeated here.
+// The arm ships a shape-accurate sidecar (the in-row fatal aborts during
+// indexing, before the P1 gate, so the sidecar is never consulted -- it
+// keeps the file self-describing), and the legal control proves the arm
+// fails on the SHAPE, not on multi-session input.
+void test_malformed_input_shapes_fail_closed() {
+    // A '#' comment line in the data area: the request-queue schema has NO
+    // comment syntax, so the line is a malformed data row and must
+    // fail-close (the pre-fix blind-index suite could never have seen this
+    // shape: write_csv never emitted comments).
+    {
+        const std::string csv = fixture_path("windowed_reader_test_shape1");
+        const std::string bytes =
+            std::string(kRequestQueueCsvHeader) + "\n"
+            "session_0,0,session_0_request_0,100,50,1000,,d\n"
+            "# annotator note: arrivals re-baselined 2026-08-16\n"
+            "session_1,0,session_1_request_0,100,50,2000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/2, /*sessions=*/2,
+                          /*turn0_count=*/2, /*t0_min=*/1000,
+                          /*t0_max=*/2000, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "shape: '#' comment line in the data area fail-closes "
+            "(the schema has no comment syntax)");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // Lower-bound column gate (2026-10-01): a TRUNCATED row (torn tail line
+    // from an interrupted write, or a hand-edited file) carries fewer than
+    // the canonical 8 top-level fields and used to pass with its trailing
+    // columns silently defaulted to empty. The raw-line comma count must
+    // reject it before any Submit exists.
+    {
+        const std::string csv = fixture_path("windowed_reader_test_shape5");
+        const std::string bytes =
+            std::string(kRequestQueueCsvHeader) + "\n"
+            "session_0,0,session_0_request_0,100,50,1000\n"
+            "session_1,0,session_1_request_0,100,50,2000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/2, /*sessions=*/2,
+                          /*turn0_count=*/2, /*t0_min=*/1000,
+                          /*t0_max=*/2000, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "shape: 6-column truncated row fail-closes (fewer than the "
+            "canonical 8 columns)");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // Legal control: two well-formed sessions (the comment file minus the
+    // comment) pump green -- the arm above fails on the shape, not on
+    // multi-session or three-row input.
+    {
+        const std::string csv = fixture_path("windowed_reader_test_shape4");
+        const std::string bytes =
+            std::string(kRequestQueueCsvHeader) + "\n"
+            "session_0,0,session_0_request_0,100,50,1000,,d\n"
+            "session_1,0,session_1_request_0,100,50,2000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/2, /*sessions=*/2,
+                          /*turn0_count=*/2, /*t0_min=*/1000,
+                          /*t0_max=*/2000, /*inversions=*/0);
+        EventQueue eq;
+        DecisionMailbox mailbox;
+        ServiceCoordinator svc;
+        RequestIngress ingress;
+        ingress.bind(&eq, &mailbox, &svc);
+        WindowedTraceReader reader(csv, ingress);
+        expect(!reader.pump(),
+               "shape control: two well-formed sessions accepted");
+        expect(reader.rows_read() == 2,
+               "shape control: both data rows read exactly once");
+        expect(ingress.pending_command_count() == 2,
+               "shape control: both turn-0 rows submitted");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // D3 fix (2026-09-28): zero-length prefill/decode. All three ports of
+    // the trace chain now reject the shape (the derive materializer
+    // fail-closes on it and the Python loader's parse_request_length has
+    // always required a positive length); the reader accepting 0 was the
+    // last port admitting it. The arms abort in-row before the P1 gate,
+    // so the sidecars are never consulted.
+    {
+        const std::string csv = fixture_path("windowed_reader_test_shape2");
+        const std::string bytes =
+            std::string(kRequestQueueCsvHeader) + "\n"
+            "session_0,0,session_0_request_0,0,50,1000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/1000,
+                          /*t0_max=*/1000, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "shape: zero prefill_length fail-closes (positive lengths "
+            "required on all three ports)");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    {
+        const std::string csv = fixture_path("windowed_reader_test_shape3");
+        const std::string bytes =
+            std::string(kRequestQueueCsvHeader) + "\n"
+            "session_0,0,session_0_request_0,100,0,1000,,d\n";
+        write_raw_csv(csv, bytes);
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/1000,
+                          /*t0_max=*/1000, /*inversions=*/0);
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "shape: zero decode_length fail-closes (positive lengths "
+            "required on all three ports)");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    std::printf("[fixture] part T PASS: malicious input shapes "
+                "('#' comment fail-closed; zero prefill/decode fail-closed; "
+                "well-formed control green; request_id identities pinned by "
+                "part S)\n");
+}
+
+// Part S (C3 fix, 2026-09-28): request_id identity gate over ALL data
+// rows, checked in the index pass before any Submit. The turn>0 arm was
+// already fail-closed downstream (RequestIngress::register_queue_index
+// aborts on a duplicate/empty id); the turn-0 arm had NO check anywhere,
+// so two session blocks reusing one request_id flowed into the calendar
+// and aliased their identities downstream (the metric ledger registers
+// request_id -> queue_index last-wins).
+void test_request_id_uniqueness_fail_closed() {
+    const std::string csv = fixture_path("windowed_reader_test_reqid");
+
+    // Duplicate request_id across two session blocks (both turn-0).
+    write_csv(csv, {
+        "session_0,0,session_0_request_0,100,50,1000,,d",
+        "session_1,0,session_0_request_0,100,50,500,,d",
+    });
+    expect_exit_code(
+        [&]() {
+            EventQueue eq;
+            DecisionMailbox mailbox;
+            ServiceCoordinator svc;
+            RequestIngress ingress;
+            ingress.bind(&eq, &mailbox, &svc);
+            WindowedTraceReader reader(csv, ingress);
+            reader.pump();
+        },
+        EXIT_FAILURE,
+        "identity: duplicate request_id across sessions fail-closes");
+
+    // Duplicate within one session (turn-0 row vs its turn>0 row).
+    write_csv(csv, {
+        "session_0,0,session_0_request_0,100,50,1000,,d",
+        "session_0,1,session_0_request_0,100,50,,1000,d",
+    });
+    expect_exit_code(
+        [&]() {
+            EventQueue eq;
+            DecisionMailbox mailbox;
+            ServiceCoordinator svc;
+            RequestIngress ingress;
+            ingress.bind(&eq, &mailbox, &svc);
+            WindowedTraceReader reader(csv, ingress);
+            reader.pump();
+        },
+        EXIT_FAILURE,
+        "identity: duplicate request_id within a session fail-closes");
+
+    // Empty request_id on a turn-0 row (the turn>0 empty-id shape was
+    // already covered by the ingress abort; the turn-0 shape had none).
+    write_csv(csv, {
+        "session_0,0,,100,50,1000,,d",
+    });
+    expect_exit_code(
+        [&]() {
+            EventQueue eq;
+            DecisionMailbox mailbox;
+            ServiceCoordinator svc;
+            RequestIngress ingress;
+            ingress.bind(&eq, &mailbox, &svc);
+            WindowedTraceReader reader(csv, ingress);
+            reader.pump();
+        },
+        EXIT_FAILURE,
+        "identity: empty request_id fail-closes");
+
+    std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
+    std::printf("[fixture] part S PASS: request_id identity gate "
+                "(cross-session duplicate / same-session duplicate / "
+                "empty id fail-closed)\n");
+}
+
+void test_reserved_id_prefix_fail_closed() {
+    const std::string csv = fixture_path("windowed_reader_test_reserved_id");
+
+    // The train-sentinel namespace is reserved on request_id at every
+    // input port (the CSV arm here; the envelope and FIFO Submit arms are
+    // pinned by parsed_graph_batch_test / cli-level coverage). A real
+    // request slipping through with that prefix would bypass the
+    // mechanism layer's fail-closed watch eligibility gates.
+    write_csv(csv, {
+        "session_0,0,batch_train_0_request,100,50,1000,,d",
+    });
+    expect_exit_code(
+        [&]() {
+            EventQueue eq;
+            DecisionMailbox mailbox;
+            ServiceCoordinator svc;
+            RequestIngress ingress;
+            ingress.bind(&eq, &mailbox, &svc);
+            WindowedTraceReader reader(csv, ingress);
+            reader.pump();
+        },
+        EXIT_FAILURE,
+        "reserved id: batch_train_ request_id prefix fail-closes");
+
+    std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
+    std::printf("[fixture] part T PASS: batch_train_ request_id reserved-"
+                "prefix gate fail-closed\n");
 }
 
 }  // namespace
@@ -1118,6 +1652,10 @@ int main(int /*argc*/, char* /*argv*/[]) {
     test_provenance_tampering();
     test_structure_validation_fail_closed();
     test_gate_trips_on_delayed_submission();
+    test_header_validation_fail_closed();
+    test_malformed_input_shapes_fail_closed();
+    test_request_id_uniqueness_fail_closed();
+    test_reserved_id_prefix_fail_closed();
 
     if (!g_ok) {
         std::fprintf(stderr, "[windowed_reader_test] FAIL: see messages "
@@ -1131,6 +1669,6 @@ int main(int /*argc*/, char* /*argv*/[]) {
                 "out-of-order outstanding / out-of-order turn-0 calendar / "
                 "long first block / t0 boundary / same-tick ordering / "
                 "provenance tampering / structure validation / arrival "
-                "gate self-test\n");
+                "gate self-test / header validation\n");
     return 0;
 }

@@ -21,9 +21,10 @@ results/online_decision_log.jsonl 全量流 4 次（kv/load/hop/watermark）、
   * 每步复刻 run_step 的 "run:/ok:/FAIL:" 行与 slo_postprocess.FAIL
     条目语义；任一步失败 → 本进程退出码 1（shell 据此置 warn 态）；
     SloToolError → 该步 exit=2（与独立 CLI 的 run_main 一致）、
-    hbm_watermark 容量违规 → exit=3（P1 起仅 per_rank_total_hbm_
+    hbm_watermark 容量违规 → 该步 exit=3（P1 起仅 per_rank_total_hbm_
     certified 层的逐 rank physical 认证；旧 decision-log 上界层超限
-    只诊断，exit=0）；
+    只诊断，exit=0）。F11（2026-09-26）：违规判决的 rc=3 透传为整体
+    退出码（多步失败时优先于普通失败退码），不再收敛为 0/1；
   * 需排序分位数/事件的工具经 slo_common.BoundedSorter 有界外部排序
     （比较键与公式不动，红线 R9）。
 
@@ -42,6 +43,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import gzip
+import zlib
 import io
 import os
 import sys
@@ -58,8 +60,8 @@ import load_imbalance  # noqa: E402
 import restore_decomposition  # noqa: E402
 import slo_stats  # noqa: E402
 from slo_common import (  # noqa: E402
-    DECISION_LOG_RELPATH, REQUEST_METRICS_FILENAME, SloToolError,
-    default_manifest_path, iter_jsonl, load_request_manifest,
+    DECISION_LOG_RELPATH, INPUT_READ_ERRORS, REQUEST_METRICS_FILENAME,
+    SloToolError, default_manifest_path, iter_jsonl, load_request_manifest,
     load_slo_manifest, read_init_record, read_request_metrics, run_main,
     validated_request_rows,
 )
@@ -75,6 +77,11 @@ def emit(text: str) -> None:
 
 def warn(message: str) -> None:
     emit(f"[slo-postprocess] {message}")
+
+
+class _MetricSourceUnreadable(Exception):
+    """(2026-10-01)G2 读 metric 来源失败(坏 gzip/IO)——shell 链 L21 的
+    fail-closed 面在 driver 门控层的对应物(FAIL 条目 + exit 1)。"""
 
 
 # ---------------------------------------------------------------------------
@@ -142,19 +149,23 @@ def _record_failure(fail_marker: Path, label: str, rc: int) -> None:
 
 
 def _emit_step_result(label: str, block: str, rc: int,
-                      fail_marker: Path) -> bool:
-    """输出一步的 stderr 块 + ok/FAIL 行（顺序=shell run_step 同构）。"""
+                      fail_marker: Path) -> int:
+    """输出一步的 stderr 块 + ok/FAIL 行（顺序=shell run_step 同构）。
+
+    (2026-09-30, ported from the joint repo) A5-1/infra-4 镜像：返回该步
+    rc 原样上交，不再折成 bool——链上任一步的 rc=3 判决码可透传到整体
+    退出码（见 _overall_exit）。"""
     sys.stderr.write(block)
     if rc == 0:
         emit(f"[slo-postprocess] ok: {label}")
-        return False
+        return 0
     warn(f"FAIL: {label} (exit={rc}){FAIL_LINE_SUFFIX}")
     _record_failure(fail_marker, label, rc)
-    return True
+    return rc
 
 
-def run_step(label: str, body: Callable[[], int], fail_marker: Path) -> bool:
-    """单发步骤：stderr 整块捕获 → 回放 → ok/FAIL。返回 True=有失败。"""
+def run_step(label: str, body: Callable[[], int], fail_marker: Path) -> int:
+    """单发步骤：stderr 整块捕获 → 回放 → ok/FAIL。返回该步 rc。"""
     emit(f"[slo-postprocess] run: {label}")
     buffer = io.StringIO()
     rc = 0
@@ -164,6 +175,15 @@ def run_step(label: str, body: Callable[[], int], fail_marker: Path) -> bool:
     except SloToolError as exc:
         # 与独立 CLI 的 run_main 同款出口（exit=EXIT_FAIL_CLOSED）。
         print(f"[slo-tools] FAIL-CLOSED: {exc}", file=buffer)
+        rc = 2
+    except INPUT_READ_ERRORS as exc:
+        # (2026-09-30, ported from the joint repo) P2-16 补面：坏 UTF-8/
+        # IO/gzip 读取错误在步体内（如 restore 步整读尾部损坏的
+        # cpp.log.gz）此前逃入 except Exception 臂——步 rc=1 + Traceback，
+        # 与独立 CLI 的 FAIL-CLOSED exit=2 自钉契约失真；现与共享
+        # decision-log 迭代器同通道。
+        print(f"[slo-tools] FAIL-CLOSED: 输入读取失败"
+              f"（{type(exc).__name__}）：{exc}", file=buffer)
         rc = 2
     except Exception:
         traceback.print_exc(file=buffer)
@@ -197,6 +217,16 @@ class Sink:
             self.alive = False
             self.rc = 2
             return None
+        except INPUT_READ_ERRORS as exc:
+            # (2026-09-30, ported from the joint repo) P2-16 补面：与
+            # run_step 同款臂——sink 段体内的读取错误（如 train_ledger
+            # 坏字节）此前逃成裸 traceback（rc=1），现与共享迭代器同
+            # 通道 fail-closed。
+            print(f"[slo-tools] FAIL-CLOSED: 输入读取失败"
+                  f"（{type(exc).__name__}）：{exc}", file=self.buffer)
+            self.alive = False
+            self.rc = 2
+            return None
         except Exception:
             traceback.print_exc(file=self.buffer)
             self.alive = False
@@ -220,7 +250,7 @@ class Sink:
         if self.rc is None:
             self.rc = 0
 
-    def flush(self, fail_marker: Path) -> bool:
+    def flush(self, fail_marker: Path) -> int:
         assert self.rc is not None
         emit(f"[slo-postprocess] run: {self.label}")
         return _emit_step_result(self.label, self.buffer.getvalue(),
@@ -244,13 +274,29 @@ def gate_metric_source(run_dir: Path, fail_marker: Path) -> Optional[Path]:
 
 
 def has_metric_line(metric_src: Path) -> bool:
-    """G2：至少一条 '^[METRIC] ' 行（早停读；shell grep 同型）。"""
+    """G2：至少一条 '^[METRIC] ' 行（早停读；shell grep 同型）。
+
+    (2026-10-01)坏 gzip/IO 与 shell 链的 L21 fail-closed 面对齐:裸抛
+    会经 run_main 变成 exit 2 且不落 slo_postprocess.FAIL 条目——这里
+    捕获后复刻 shell 的 warn 行 + FAIL 条目并按 exit 1 收口(由调用方
+    的门控分支处理),诊断形态与旧链一致。(R2 注记:shell 侧 zgrep 仅
+    rc>=2 才判坏源、rc=1 的部分坏流被当"零匹配跳过";本侧任何 gzip
+    错误恒 fail——fail 面同向,边缘形态比 shell 更严,属收紧方向。)"""
     opener = (gzip.open if metric_src.name.endswith(".gz") else open)
-    with opener(metric_src, "rt", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if line.startswith("[METRIC] "):
-                return True
-    return False
+    try:
+        with opener(metric_src, "rt", encoding="utf-8",
+                    errors="replace") as handle:
+            for line in handle:
+                if line.startswith("[METRIC] "):
+                    return True
+        return False
+    except (OSError, EOFError, UnicodeDecodeError, zlib.error) as exc:
+        # (2026-10-01 R2) zlib.error: gzip 流中段损坏抛 zlib.error(不是
+        # OSError/EOFError 子类)——slo_common.INPUT_READ_ERRORS 同款补齐,
+        # 否则中段坏 gz 穿透 G2 门变成 exit 2 且零 FAIL 条目(恰是本修复
+        # 要消除的形态)。
+        warn(f"FAIL: metric source unreadable/corrupt: {metric_src} ({exc})")
+        raise _MetricSourceUnreadable(str(metric_src)) from exc
 
 
 def _env_gate(name: str) -> Optional[int]:
@@ -294,41 +340,67 @@ def _ns(**kwargs) -> argparse.Namespace:
     return argparse.Namespace(**kwargs)
 
 
+def _overall_exit(step_rcs) -> int:
+    """F11（2026-09-26）：certified 层容量违规判决（sink rc=3，即
+    hbm_watermark.EXIT_VIOLATION）透传为整体退出码。
+
+    此前 run() 恒收敛为 ``1 if any_fail else 0``——自动链（shell 默认
+    warn 口径对 rc==1）只见普通失败退码，README 所述「违规 exit 3」仅在
+    直接调用工具时成立。多步同时失败时违规判决优先于普通失败退码；
+    其余失败形态（1/2）仍收敛为 1 不变。
+    (2026-09-30, ported from the joint repo) A5-1/infra-4 镜像：输入改为
+    链上全部步骤 rc（run_step 单发步 + sink flush 步），rc 原样上抛——
+    退出码不再折叠，shell 侧对 3 单独透传（exit 3 = 判决码，非普通
+    失败）。"""
+    for rc in step_rcs:
+        if rc == hbm_watermark.EXIT_VIOLATION:
+            return rc
+    # None = 该步骤被跳过（未运行），不计失败；其余非零 rc 收敛为 1。
+    return 1 if any(rc not in (0, None) for rc in step_rcs) else 0
+
+
 def run(run_dir: Path) -> int:
     fail_marker = run_dir / FAIL_MARKER_NAME
     metric_src = gate_metric_source(run_dir, fail_marker)
     if metric_src is None:
         return 1
-    if not has_metric_line(metric_src):
+    try:
+        metric_present = has_metric_line(metric_src)
+    except _MetricSourceUnreadable as exc:
+        # (2026-10-01)与 shell 链 L21 的坏 gzip fail-closed 面对齐:
+        # FAIL 条目 + exit 1(而非 run_main 的 exit 2、零条目)。
+        _record_failure(fail_marker,
+                        f"metric-source: unreadable/corrupt {exc}", 1)
+        return 1
+    if not metric_present:
         warn("no [METRIC] lines (metrics detail=off?) — SLO extraction "
              "skipped (by design)")
         return 0
     have_rm, have_tl, skip_hbm = resolve_gates(run_dir)
     ctx = RunContext(run_dir)
-    any_fail = False
+    # (2026-09-30, ported from the joint repo) A5-1/infra-4 镜像：链上
+    # 全部步骤 rc（单发 run_step 步 + sink flush 步）逐个入表，交
+    # _overall_exit 原样上抛（rc=3 判决码透传），不再折成 any_fail。
+    step_rcs: list[int] = []
 
     # -- 步 1-4：共享 ctx.rows / ctx.slo_manifest（单发步骤） --------------
     if have_rm:
         e2e_args = _ns(run_dir=run_dir, output="", extra_pct="90,95")
-        any_fail = run_step(
+        step_rcs.append(run_step(
             "slo_stats.py e2e-stats --extra-pct 90,95",
-            lambda: slo_stats.cmd_e2e_stats(e2e_args, ctx), fail_marker) \
-            or any_fail
+            lambda: slo_stats.cmd_e2e_stats(e2e_args, ctx), fail_marker))
         backlog_args = _ns(run_dir=run_dir, output="", bucket_ns=None)
-        any_fail = run_step(
+        step_rcs.append(run_step(
             "slo_stats.py backlog (per-event, no --bucket-ns)",
-            lambda: slo_stats.cmd_backlog(backlog_args, ctx), fail_marker) \
-            or any_fail
+            lambda: slo_stats.cmd_backlog(backlog_args, ctx), fail_marker))
         session_args = _ns(run_dir=run_dir, output="", request_manifest=None)
-        any_fail = run_step(
+        step_rcs.append(run_step(
             "slo_stats.py session",
-            lambda: slo_stats.cmd_session(session_args, ctx), fail_marker) \
-            or any_fail
+            lambda: slo_stats.cmd_session(session_args, ctx), fail_marker))
         warmup_args = _ns(run_dir=run_dir, output="", manifest=None)
-        any_fail = run_step(
+        step_rcs.append(run_step(
             "slo_stats.py warmup",
-            lambda: slo_stats.cmd_warmup(warmup_args, ctx), fail_marker) \
-            or any_fail
+            lambda: slo_stats.cmd_warmup(warmup_args, ctx), fail_marker))
 
     # -- 步 5/6/8/9：decision log 单遍 + sink 扇出 ------------------------
     kv_sink = Sink("kv_cache_adapter.py")
@@ -360,7 +432,7 @@ def run(run_dir: Path) -> int:
         bucket_ns = load_imbalance.load_imbalance_bucket_ns(ctx.slo_manifest)
         repo_variant = ctx.repo_variant
         return {"bucket_ns": bucket_ns, "repo_variant": repo_variant,
-                "state": load_imbalance.li_prepare(repo_variant)}
+                "state": load_imbalance.li_prepare()}
 
     def hop_prepare() -> dict:
         repo_variant = ctx.repo_variant
@@ -376,9 +448,12 @@ def run(run_dir: Path) -> int:
         # P1（2026-08-30）：decision-log 重放的容量参数恒传（诊断计数）；
         # 正式判决只由 journal 路径（per_rank_total_hbm_certified 层）给出。
         scan = hbm_watermark.WatermarkScan(
-            run_dir, repo_variant, prep["mapping"], prep["tokens"],
+            run_dir, prep["mapping"], prep["tokens"],
             prep["coef"], prep["capacity"])
-        return {"repo_variant": repo_variant, "prep": prep, "scan": scan}
+        # (2026-10-01, ported from the face repo) R6-U5：重放失败隔离态
+        # （journal 在场时对照列 FAIL 而非全 sink 死亡）。
+        return {"repo_variant": repo_variant, "prep": prep, "scan": scan,
+                "replay_failure": None}
 
     kv_sink.prepare(kv_prepare)
     if have_tl:
@@ -407,7 +482,22 @@ def run(run_dir: Path) -> int:
                                      state["per_request"])
 
     def wm_consume(record: dict) -> None:
-        wm_sink.state["scan"].consume(record)
+        # (2026-10-01, ported from the face repo) R6-U5：journal 在场时
+        # decision-log 重放仅为对照列——重放中途 fail-closed 隔离为对照列
+        # FAIL（权威 journal 产物照常产出，sink 保活），不得杀死整个
+        # watermark sink；journal 缺席时重放即权威，fail-closed 不降级。
+        state = wm_sink.state
+        if state["replay_failure"] is not None:
+            return  # 对照重放已失败：余下记录不再喂（部分态只作对照列）
+        try:
+            state["scan"].consume(record)
+        except SloToolError as exc:
+            if not state["prep"]["journal_present"]:
+                raise  # journal 缺席：重放即权威，fail-closed 不降级
+            state["replay_failure"] = str(exc)
+            print(f"[hbm-watermark] 警告：decision-log 对照重放失败——"
+                  f"对照列标记 FAIL，journal 权威产物照常产出（{exc}）",
+                  file=sys.stderr)
 
     # sink 次序固定（红线 R8）：kv → load → hop → watermark（watermark
     # 注入 session_hint，必须最后；其余 sink 互不读对方注键）。
@@ -416,6 +506,9 @@ def run(run_dir: Path) -> int:
         (hop_sink, hop_consume), (wm_sink, wm_consume)]
 
     log_path = run_dir / DECISION_LOG_RELPATH
+    # (2026-10-01) iter_jsonl 是生成器：require_file 的缺文件 fail-closed
+    # 在首次 next() 才执行，由下方循环的 except SloToolError 臂统一广播
+    # （与独立链"每个工具都在同一行失败"同构），构造处无需另行包裹。
     records = iter_jsonl(log_path)
     while True:
         try:
@@ -424,9 +517,27 @@ def run(run_dir: Path) -> int:
             break
         except SloToolError as exc:
             # 迭代器自身失败（缺文件/JSON 损坏）：与独立链"每个工具都在
-            # 同一行失败"同构——所有存活 sink 以同一错误死亡。
+            # 同一行失败"同构——存活 sink 以同一错误死亡。唯一例外
+            # (2026-10-01,与独立 CLI 对齐):journal 在场时 watermark 的
+            # decision-log 重放仅为对照列——独立链把整个迭代循环包进
+            # R6-U5 隔离 try(对照列 FAIL、journal 权威三件产物照常
+            # 产出、exit 0),driver 若在此处 die 掉 wm_sink 会让 hbm
+            # 三件产物全不产出、整链 rc=1,产物集与独立链分叉;改为
+            # 置 replay_failure(零记录部分态,wm_finalize 走隔离 finish)。
             for sink, _ in sinks:
-                if sink.alive:
+                if not sink.alive or sink is not wm_sink:
+                    continue
+                wm_state = wm_sink.state
+                if (wm_state is not None
+                        and wm_state.get("prep", {}).get("journal_present")):
+                    wm_state["replay_failure"] = str(exc)
+                    print(f"[hbm-watermark] 警告：decision-log 对照重放失败——"
+                          f"对照列标记 FAIL，journal 权威产物照常产出（{exc}）",
+                          file=sys.stderr)
+                else:
+                    sink.die(exc)
+            for sink, _ in sinks:
+                if sink.alive and sink is not wm_sink:
                     sink.die(exc)
             break
         for sink, consume in sinks:
@@ -453,16 +564,27 @@ def run(run_dir: Path) -> int:
 
     def wm_finalize() -> int:
         state = wm_sink.state
-        replay = state["scan"].finish()
+        if state["replay_failure"] is None:
+            replay = state["scan"].finish()
+        else:
+            # (2026-10-01, ported from the face repo) R6-U5：对照重放已
+            # 失败：finish 的恰一次/非空断言对部分消费态不再适用（隔离
+            # 而非弃产）——以部分重放态支撑对照列，emit 以
+            # comparison_failure 显式披露对照列 FAIL。
+            try:
+                replay = state["scan"].finish()
+            except SloToolError:
+                replay = state["scan"].replay
         return hbm_watermark.watermark_emit(
-            wm_args, state["repo_variant"], state["prep"], replay)
+            wm_args, state["repo_variant"], state["prep"], replay,
+            comparison_failure=state["replay_failure"])
 
     # -- 按链序发射：5 → 6 → 7 → 8 → 9 -----------------------------------
     kv_sink.finish(kv_finalize)
-    any_fail = kv_sink.flush(fail_marker) or any_fail
+    step_rcs.append(kv_sink.flush(fail_marker))
     if have_tl:
         load_sink.finish(load_finalize)
-        any_fail = load_sink.flush(fail_marker) or any_fail
+        step_rcs.append(load_sink.flush(fail_marker))
 
     if have_rm:
         restore_args = _ns(run_dir=run_dir, output="", json="")
@@ -472,16 +594,16 @@ def run(run_dir: Path) -> int:
                 metric_src)
             return restore_decomposition.cmd_restore(restore_args,
                                                      precollected)
-        any_fail = run_step("restore_decomposition.py (detail=full)",
-                            restore_body, fail_marker) or any_fail
+        step_rcs.append(run_step("restore_decomposition.py (detail=full)",
+                                 restore_body, fail_marker))
 
     hop_sink.finish(hop_finalize)
-    any_fail = hop_sink.flush(fail_marker) or any_fail
+    step_rcs.append(hop_sink.flush(fail_marker))
     if not skip_hbm:
         wm_sink.finish(wm_finalize)
-        any_fail = wm_sink.flush(fail_marker) or any_fail
+        step_rcs.append(wm_sink.flush(fail_marker))
 
-    return 1 if any_fail else 0
+    return _overall_exit(step_rcs)
 
 
 def main() -> int:

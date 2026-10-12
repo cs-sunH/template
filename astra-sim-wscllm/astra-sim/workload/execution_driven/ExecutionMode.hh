@@ -6,19 +6,19 @@ ExecutionMode -- execution-driven mechanism layer (wscllm phase 1).
 
 Execution mode of the simulation binary, introduced by the step-1-2
 execution-mode factory (方案 §4 步骤 1-2 操作 4). Only replacing the main()
-function is not enough: the static Sys construction chain unconditionally
-constructs Workload, whose constructor immediately checks the .et file and
-creates the ETFeeder (Sys.cc:259-260, Workload.cc:30-35). Online mode must
-therefore be an explicit construction-mode parameter that flows from the
-online entry point into Sys and Workload, so that:
+function is not enough: the mode must flow as an explicit construction
+parameter from the entry point into Sys and Workload (the execution-mode
+factory branch in Sys::Sys; the Workload constructor takes the mode plus the
+injected GraphSource), so that:
 
-  - Static: legacy ETFeeder path, byte-for-byte the pre-phase-1 behavior
-    (default; the static main.cc passes no extra arguments).
+  - Static: the legacy ETFeeder path. RETIRED in this repository (the
+    offline static arm was removed with ETFeederGraphSource and the
+    Workload::fire() auto-advance entry with it); Online is the only
+    constructible mode and the enum member survives as the parameter's
+    domain value.
   - Online: a dynamic GraphSource is injected at Sys creation time; the
     ETFeeder is never constructed and no .et file is required. Final end
-    authority belongs to ServiceCoordinator, never to Workload::call's
-    sim_notify_finished()/is_finished side effect (Workload.cc:625-634),
-    which is disabled for online mode.
+    authority belongs to ServiceCoordinator, never to Workload.
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_EXECUTIONMODE_HH

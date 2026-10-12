@@ -28,7 +28,9 @@ struct LinkMembership {
 
 struct FluidFlow {
     FlowId flow_id;
-    NetworkAnalytical::ChunkSize total_bytes;
+    // total_bytes (write-only aggregate-init copy of the chunk size, zero
+    // readers repo-wide) retired 2026-09-27 (fluid-D1/C21); remaining_bytes
+    // is the working field.
     long double remaining_bytes;
 
     NetworkAnalytical::Bandwidth current_rate_Bpns;

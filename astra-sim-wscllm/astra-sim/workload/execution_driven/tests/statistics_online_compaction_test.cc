@@ -83,78 +83,6 @@ void expect_same_double_bits(double actual, double expected,
     expect(double_bits(actual) == double_bits(expected), message);
 }
 
-class TestNetworkApi final : public AstraSim::AstraNetworkAPI {
-  public:
-    TestNetworkApi() : AstraNetworkAPI(0) {}
-
-    int sim_send(void*, uint64_t, int, int, int, AstraSim::sim_request*,
-                 void (*)(void*), void*) override {
-        return 0;
-    }
-
-    int sim_recv(void*, uint64_t, int, int, int, AstraSim::sim_request*,
-                 void (*)(void*), void*) override {
-        return 0;
-    }
-
-    void sim_schedule(AstraSim::timespec_t, void (*)(void*), void*) override {}
-
-    AstraSim::timespec_t sim_get_time() override {
-        return {AstraSim::NS, 0};
-    }
-};
-
-std::string write_minimal_system_config() {
-    char path[] = "/tmp/astra_statistics_guard_XXXXXX";
-    const int fd = ::mkstemp(path);
-    if (fd < 0) {
-        std::fprintf(stderr,
-                     "[statistics_online_compaction_test] mkstemp failed: %s\n",
-                     std::strerror(errno));
-        std::exit(EXIT_FAILURE);
-    }
-
-    constexpr char contents[] =
-        "{\"scheduling-policy\":\"FIFO\",\"hbm-bandwidth-contention\":false}";
-    size_t offset = 0;
-    while (offset < sizeof(contents) - 1) {
-        const ssize_t written =
-            ::write(fd, contents + offset, sizeof(contents) - 1 - offset);
-        if (written <= 0) {
-            std::fprintf(
-                stderr,
-                "[statistics_online_compaction_test] system config write failed: %s\n",
-                std::strerror(errno));
-            ::close(fd);
-            ::unlink(path);
-            std::exit(EXIT_FAILURE);
-        }
-        offset += static_cast<size_t>(written);
-    }
-    if (::close(fd) != 0) {
-        std::fprintf(
-            stderr,
-            "[statistics_online_compaction_test] system config close failed: %s\n",
-            std::strerror(errno));
-        ::unlink(path);
-        std::exit(EXIT_FAILURE);
-    }
-    return path;
-}
-
-std::unique_ptr<AstraSim::Sys> make_online_test_system(
-    const std::string& system_config,
-    TestNetworkApi& network) {
-    return std::make_unique<AstraSim::Sys>(
-        0, "unused", "empty", system_config, &network,
-        std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
-        AstraSim::ExecutionDriven::ExecutionMode::Online,
-        // Empty-store NodeStoreGraphSource: the offline static GraphSource
-        // adapters were removed with the static path (2026-09-26); an empty
-        // store never yields nodes, matching the retired EmptyGraphSource.
-        std::make_shared<AstraSim::ExecutionDriven::NodeStoreGraphSource>());
-}
-
 struct CompactStatisticsSnapshot {
     Tick wall_time = 0;
     size_t retained_operator_count = 0;
@@ -193,35 +121,6 @@ bool compact_statistics_unchanged(const Statistics& stats,
            actual.total_compute_time == expected.total_compute_time;
 }
 
-Statistics* g_exit_snapshot_statistics = nullptr;
-CompactStatisticsSnapshot g_exit_snapshot;
-
-void verify_compact_state_at_exit() {
-    const bool unchanged =
-        g_exit_snapshot_statistics != nullptr &&
-        compact_statistics_unchanged(*g_exit_snapshot_statistics,
-                                     g_exit_snapshot);
-    ::_exit(unchanged ? EXIT_FAILURE : EXIT_SUCCESS);
-}
-
-void require_compact_state_unchanged_on_exit(Statistics& stats) {
-    g_exit_snapshot_statistics = &stats;
-    g_exit_snapshot = snapshot_compact_statistics(stats);
-    if (std::atexit(verify_compact_state_at_exit) != 0) {
-        ::_exit(EXIT_SUCCESS);
-    }
-}
-
-template <typename Fn>
-void expect_child_failure_without_compact_mutation(const char* message,
-                                                   Statistics& stats,
-                                                   Fn&& child_body) {
-    expect_child_failure(message, [&] {
-        require_compact_state_unchanged_on_exit(stats);
-        child_body();
-    });
-}
-
 void compact_start(Statistics& stats, const NodeView& node,
                    OnlineStatisticsState& state, Tick tick) {
     stats.record_online_service_start(node, state, tick);
@@ -234,7 +133,7 @@ void compact_end(Statistics& stats, const NodeView& node,
 
 void test_live_gpu_fails_closed() {
     expect_child_failure("live compact GPU query fails closed", [] {
-        Statistics stats(nullptr);
+        Statistics stats;
         stats.configure_online_history_preservation(false);
         const NodeView live = gpu_node(1);
         OnlineStatisticsState state;
@@ -245,7 +144,7 @@ void test_live_gpu_fails_closed() {
 }
 
 void test_direct_completed_gpu_union() {
-    Statistics stats(nullptr);
+    Statistics stats;
     stats.configure_online_history_preservation(false);
     const NodeView gpu = gpu_node(2);
     OnlineStatisticsState state;
@@ -260,65 +159,8 @@ void test_direct_completed_gpu_union() {
            "direct service GPU union remains exact");
 }
 
-void test_compact_post_processing_fails_closed_without_mutation() {
-    Statistics stats(nullptr);
-    stats.configure_online_history_preservation(false);
-    const NodeView gpu = gpu_node(3);
-    OnlineStatisticsState state;
-    compact_start(stats, gpu, state, 10);
-    state.compute_utilization = 0.5;
-    state.memory_utilization = 0.25;
-    compact_end(stats, gpu, state, 30);
-
-    const CompactStatisticsSnapshot before = snapshot_compact_statistics(stats);
-    expect(before.wall_time == 30 && before.gpu_busy_time == 20 &&
-               before.total_compute_time == 21,
-           "compact post-processing fixture has nonzero aggregate state");
-    expect_child_failure_without_compact_mutation(
-        "compact Statistics::post_processing fails closed without mutation",
-        stats, [&] { stats.post_processing(); });
-}
-
-void test_history_preserving_legacy_post_processing_succeeds(
-    const std::string& system_config) {
-    TestNetworkApi network;
-    const auto system = make_online_test_system(system_config, network);
-    Statistics& stats = *system->workload->stats;
-    stats.configure_online_history_preservation(true);
-
-    const NodeView gpu = gpu_node(4);
-    stats.record_start(gpu, 10);
-    stats.record_end(gpu, 30);
-    stats.post_processing();
-
-    expect(stats.get_wall_time() == 30,
-           "history-preserving legacy post-processing keeps wall time");
-    expect(stats.get_type_time(
-               Statistics::OperatorStatistics::OperatorType::GPU) == 20,
-           "history-preserving legacy post-processing keeps GPU union");
-}
-
-void test_compact_workload_report_fails_closed_without_mutation(
-    const std::string& system_config) {
-    expect_child_failure(
-        "compact Workload::report fails closed without mutation", [&] {
-            TestNetworkApi network;
-            const auto system = make_online_test_system(system_config, network);
-            Statistics& stats = *system->workload->stats;
-            const NodeView gpu = gpu_node(5);
-            OnlineStatisticsState state;
-            compact_start(stats, gpu, state, 10);
-            state.compute_utilization = 0.5;
-            state.memory_utilization = 0.25;
-            compact_end(stats, gpu, state, 30);
-
-            require_compact_state_unchanged_on_exit(stats);
-            system->workload->report();
-        });
-}
-
 void test_direct_overlapping_gpu_union_and_roofline() {
-    Statistics stats(nullptr);
+    Statistics stats;
     stats.configure_online_history_preservation(false);
     const NodeView first = gpu_node(10);
     const NodeView second = gpu_node(11);
@@ -356,7 +198,7 @@ void test_direct_overlapping_gpu_union_and_roofline() {
 }
 
 void test_cpu_no_util_and_comm_state_stay_compact() {
-    Statistics stats(nullptr);
+    Statistics stats;
     stats.configure_online_history_preservation(false);
 
     const NodeView cpu = make_node(20, NodeKind::Compute, true);
@@ -375,11 +217,9 @@ void test_cpu_no_util_and_comm_state_stay_compact() {
     const NodeView comm = make_node(22, NodeKind::CommSend);
     OnlineStatisticsState comm_state;
     compact_start(stats, comm, comm_state, 20);
-    comm_state.comm_size = 4096;
     compact_end(stats, comm, comm_state, 30);
 
-    expect(comm_state.completed && comm_state.comm_size.has_value() &&
-               comm_state.comm_size.value() == 4096,
+    expect(comm_state.completed,
            "compact NodeStore state retains terminal communication facts");
     expect(stats.retained_online_operator_count() == 0,
            "CPU, no-util GPU, and comm state never create map entries");
@@ -402,9 +242,9 @@ void test_exact_sum_matches_history_bit_for_bit() {
     constexpr Tick kLargeDuration = Tick{1} << 53;
     constexpr Tick kEnd = kLargeDuration + 2;
 
-    Statistics compact(nullptr);
+    Statistics compact;
     compact.configure_online_history_preservation(false);
-    Statistics history(nullptr);
+    Statistics history;
     history.configure_online_history_preservation(true);
 
     for (uint64_t index = 0; index < 3; ++index) {
@@ -450,7 +290,7 @@ void test_exact_sum_matches_history_bit_for_bit() {
 
 void run_long_direct_service(uint64_t node_count, uint64_t id_base,
                              const char* message) {
-    Statistics stats(nullptr);
+    Statistics stats;
     stats.configure_online_history_preservation(false);
     NodeView gpu = gpu_node(id_base);
     for (uint64_t index = 1; index <= node_count; ++index) {
@@ -479,7 +319,7 @@ void test_long_direct_service_stays_bounded() {
 
 void test_duplicate_direct_start_and_end_fail_closed() {
     expect_child_failure("duplicate direct GPU start fails closed", [] {
-        Statistics stats(nullptr);
+        Statistics stats;
         stats.configure_online_history_preservation(false);
         const NodeView gpu = gpu_node(300);
         OnlineStatisticsState state;
@@ -487,7 +327,7 @@ void test_duplicate_direct_start_and_end_fail_closed() {
         compact_start(stats, gpu, state, 1);
     });
     expect_child_failure("duplicate direct GPU end fails closed", [] {
-        Statistics stats(nullptr);
+        Statistics stats;
         stats.configure_online_history_preservation(false);
         const NodeView gpu = gpu_node(301);
         OnlineStatisticsState state;
@@ -498,7 +338,7 @@ void test_duplicate_direct_start_and_end_fail_closed() {
 }
 
 void test_microbenchmark_history_is_unchanged() {
-    Statistics stats(nullptr);
+    Statistics stats;
     stats.configure_online_history_preservation(true);
     const NodeView completed = gpu_node(400);
     const NodeView live = gpu_node(401);
@@ -518,17 +358,11 @@ void test_microbenchmark_history_is_unchanged() {
 int main() {
     test_live_gpu_fails_closed();
     test_direct_completed_gpu_union();
-    test_compact_post_processing_fails_closed_without_mutation();
     test_direct_overlapping_gpu_union_and_roofline();
     test_cpu_no_util_and_comm_state_stay_compact();
     test_exact_sum_matches_history_bit_for_bit();
     test_long_direct_service_stays_bounded();
     test_duplicate_direct_start_and_end_fail_closed();
     test_microbenchmark_history_is_unchanged();
-    const std::string system_config = write_minimal_system_config();
-    test_history_preserving_legacy_post_processing_succeeds(system_config);
-    test_compact_workload_report_fails_closed_without_mutation(system_config);
-    expect(::unlink(system_config.c_str()) == 0,
-           "remove temporary system config");
     return g_ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

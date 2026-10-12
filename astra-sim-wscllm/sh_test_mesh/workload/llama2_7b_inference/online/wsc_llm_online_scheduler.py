@@ -1,45 +1,27 @@
 #!/usr/bin/env python3
 """wsc_llm_online_scheduler.py -- 关感知策略调度器(strategy 模式,步骤 1-9)。
 
-以 _plan_wsc_llm_session_lru_recompute(wsc_llm_scheduler.py)为蓝本
-迁移,保持决策顺序逐行对应(每处迁移用 `# offline: wsc_llm_scheduler.py:XXXX`
-注释标注)。离线事件循环与在线边界的一一对应:
+2026-09-24 只在线化后本文件是在线关感知策略的唯一实现;原离线事件
+循环蓝本已从 wsc_llm_scheduler.py 删除,该文件现仅保留拓扑/静态路由/
+排队语义。早期迁移版本曾用 "# offline: <蓝本>:行号" 形式的行号锚逐处
+标注与蓝本的对应关系;蓝本删除后全部锚点悬空,已随 2026-09-28 死代码
+清理批整体移除(含正文 "蓝图 :NNNN" 与行内 "# :NNNN" 引用),本文件
+不再承载任何指向历史蓝本的跳转锚。
 
-  离线事件循环                                    在线边界
-  ----------------                                ----------------
-  预置 arrival 堆(:1711-1716)                     ingress ARRIVAL 事件喂入同一
-                                                  arrival heap(字段保持
-                                                  (time_ns, priority, sequence,
-                                                  kind, payload) 形状,同 tick
-                                                  排序规则逐字节同源)
-  completion 批(:1999-2092 中 completion 分支)     PREFILL_DRAIN / DECODE_COMPLETION
-                                                  / REQUEST_COMPLETE 事件处理:
-    prefill 完成(:2014-2038)                        _on_prefill_drain:
-      qp.popleft / waiting_decode_admissions          busy=False + qp.pop +
-      append / dirty                                  等待 decode 准入登记
-    decode 完成(:2040-2072)                         _on_decode_complete:
-      mark_complete + note_capacity_change            mark_complete + snapshots
-      + 下一次 arrival 排程(:2067-2072)               (下一次 arrival 排程在
-                                                       REQUEST_COMPLETE 边界做,
-                                                       与离线同 tick 同顺序)
-  arrival 批(:2074-2090)                            _on_arrival(经 arrival heap):
-    select_prefill_instance + route_for_prefill      快照 -> 选择 -> 静态路由
-    + qp.append                                      -> qp.append(顺序一致)
-  start_ready_iterations(:1915-1996)                _admit_pass(同 tick 末尾):
-    try_admit_waiting_decodes(:1917)                  decode 准入(容量 epoch/dirty
-                                                      门控,原样保留)
-    逐实例 serve(:1918-1996)                          per-instance 发射:
-      prefill: try_admit_prefill(qp[0]) + 发射         try_admit_prefill + 发射
-      decode:  发射 active_decode 整批                 prefill 整段 / decode 整段
-    **计时部分删除**:离线用 LUT 估计时长 push
-    iteration_complete 事件;在线由真实完成事件
-    (C++ 物理时钟)推进,排队/配对逻辑原样保留于
-    账本/准入逻辑,不体现在图结构上(构图粒度与
-    离线一致:prefill 整段 + decode 整段)。
+每 tick 的批序(现状语义,固定不变):
 
-决策顺序(line-by-line):每 tick 先处理 completion 批,再处理 arrival 批,最后
-跑准入/发射 pass——与离线同 tick 批序(priority 0 completion < 1 arrival)
-一致。
+  completion 批(priority 0,同 tick 先于 arrival)
+    _on_prefill_drain:实例空闲 + qp 出队 + 等待 decode 准入登记
+    _on_decode_complete:mark_complete + 快照
+    _on_request_complete:下一次 arrival 排程(REQUEST_COMPLETE 边界)
+  arrival 批(priority 1,_on_arrival 经 arrival heap)
+    快照 -> 选择 prefill 实例 -> 静态路由 -> qp 入队
+  准入/发射 pass(_admit_pass,同 tick 末尾)
+    decode 等待准入(dirty 门控——SCHED-1 2026-09-28 起 decode 侧的
+    capacity_epoch 重试门已随调用图不可达删除,epoch 重试仅存于 prefill
+    准入)+ per-instance 发射
+    (prefill 整段 / decode 整段;计时由 C++ 真实完成事件推进,
+    排队/配对逻辑保留于账本/准入层,不体现在图结构上)。
 
 关感知口径(方案 §4.1 第 6 条):策略输入全部来自 Python 账本——prefill 排队
 深度(len(qp))、KV 容量(kv_manager 账本 + capacity_epoch)、静态路由
@@ -66,7 +48,7 @@ tick、网络竞争)在阶段 1 即真实生效,只负责推进完成边界。
 混入 prefill chunk span(§3.6:P 侧逐 chunk 不拼,保持 _emit_prefill 现有
 整段骨架——聚合调用 weight_passes 缺省 = len(spans) = chunk 数,口径
 不变)。每 D 实例状态机:active_decode(批成员表)/in_flight_train(唯一
-在飞列车,冻结成员快照 + membership_digest;busy 门 = 一个列车在飞)/
+在飞列车,冻结成员快照;busy 门 = 一个列车在飞)/
 finalized_trains(幂等核销账本:同列车 exit 标记 watch 跨 tick fire、
 事件拆交付,首个信号核销恰一次,后续信号清 pending 集合)。列车终点 =
 全部 decode 工作耗尽(无 prefill 工作 ⇒ 迭代 = max 剩余 token;退出
@@ -75,9 +57,7 @@ reason(ARRIVAL/PREFILL_DRAIN/DECODE_COMPLETION/REQUEST_COMPLETE),
 D 侧由列车 exit 标记节点的 watch 驱动;P 侧 PREFILL_DRAIN 不变。
 """
 
-import hashlib
 import heapq
-import json
 import os
 import sys
 from collections import deque
@@ -94,7 +74,6 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _path)
 
 from generate_wsc_llm_trace import (  # noqa: E402
-    RECOMPUTE,
     _eviction_record_dict,
     _kv_transfer_dict,
     _xy_route,
@@ -107,6 +86,7 @@ from online.online_scheduler_base import (  # noqa: E402
     OnlineSchedulerBase,
 )
 from session_kv_manager import (  # noqa: E402
+    RECOMPUTE,
     RESIDENT,
     SessionKVCacheManager,
     kv_cache_shard_bytes_for_tokens,
@@ -130,12 +110,12 @@ class _OnlineInstanceState:
       - PREFILL_ROLE:busy = 一个 prefill 整段在飞(保持原骨架,P 侧
         逐 chunk 不拼);
       - DECODE_ROLE:busy 门 = 一个迭代列车在飞(in_flight_train);
-        iteration_count/train_seq/finalized_trains 为列车账本。
+        train_seq/finalized_trains 为列车账本。
     """
 
     __slots__ = ("index", "phase_role", "qp", "active_decode",
                  "active_decode_lookup", "busy",
-                 "in_flight_train", "finalized_trains", "iteration_count",
+                 "in_flight_train", "finalized_trains",
                  "train_seq", "first_step_remainder")
 
     def __init__(self, *, index: int, phase_role: str) -> None:
@@ -151,7 +131,6 @@ class _OnlineInstanceState:
         # ---- 拼 batch 列车账本(2026-08-22,D 实例;P 实例不使用) ----
         self.in_flight_train = None      # 唯一在飞列车(冻结成员快照)
         self.finalized_trains = []       # 已核销列车(待收后续跨交付信号)
-        self.iteration_count = 0         # 已完成迭代数(列车核销时闭式推进)
         self.train_seq = 0               # 列车序号(命名/审计用)
         # WP9 首步批拆分(2026-08-26):两段式发射的余量批挂起(首步唤醒
         # 到达后的首个决策边界发射;None = 无待发余量批)。
@@ -175,17 +154,16 @@ class _OnlineRequestRuntime:
         "prefill_instance_index", "prefill_assignment_key",
         "decode_instance_index", "static_route",
         "admitted_prefill", "prefill_attempt_epoch", "decode_capacity_reserved",
-        "history_cache_state_before", "hbm_before_request",
+        "history_cache_state_before",
         "history_action", "history_source_instance_index",
         "history_transfer_bytes", "history_transfer_shards",
         "history_recompute_tokens",
         "admission_evictions", "decode_target_evictions",
         "reservation_credit",
         "decode_queue_depth_before_enqueue",
-        "waiting_decode_admission", "prefill_decode_transfer",
-        "completion_evictions", "kv_state_after_completion",
-        "kv_instance_after_completion", "hbm_after_completion",
-        "completion_ns",
+        "prefill_decode_transfer",
+        "kv_state_after_completion",
+        "kv_instance_after_completion",
         "decode_tokens_consumed", "decode_train_joined",
     )
 
@@ -208,7 +186,6 @@ class _OnlineRequestRuntime:
         self.prefill_attempt_epoch = None
         self.decode_capacity_reserved = False
         self.history_cache_state_before = None
-        self.hbm_before_request = None
         self.history_action = None
         self.history_source_instance_index = None
         self.history_transfer_bytes = None
@@ -224,13 +201,9 @@ class _OnlineRequestRuntime:
         # 或已回补/已核销。
         self.reservation_credit = None
         self.decode_queue_depth_before_enqueue = None
-        self.waiting_decode_admission = False
         self.prefill_decode_transfer = None
-        self.completion_evictions = ()
         self.kv_state_after_completion = None
         self.kv_instance_after_completion = None
-        self.hbm_after_completion = None
-        self.completion_ns = None
         # ---- 拼 batch 列车推进字段(2026-08-22;列车核销时闭式推进,
         # 余额与逐 token 精确值逐点一致) ----
         self.decode_tokens_consumed = 0  # 已物理完成 decode token 数
@@ -269,7 +242,7 @@ def _history_transfer_shard_dicts(hardware, shards) -> list:
     序列化——逐 shard 附 noc_path/noc_hops(rank 级 XY 路由,与 decode 侧
     _kv_transfer_dict(hardware=...) 的 shards 同构、与离线 _paired_transfer
     的 routes 行同源);只读派生观测字段,不触调度/KV 决策(A/B 对拍剥离
-    清单条目)。transfer_shards 仅 NOC_MIGRATE 非空(local_hit/ABSENT/
+    清单条目)。transfer_shards 仅 NOC_MIGRATE 非空(ABSENT/
     recompute 恒空元组),非空时 source_rank/target_rank 必为具体 rank。"""
     rows = []
     for shard in shards:
@@ -288,9 +261,9 @@ def _history_transfer_shard_dicts(hardware, shards) -> list:
 class WscLlmOnlineScheduler(OnlineSchedulerBase):
     """strategy 变体:真实策略(关感知)在在线骨架中运行。
 
-    蓝本: _plan_wsc_llm_session_lru_recompute(wsc_llm_scheduler.py),
-    kv_cache_policy == "session_lru_recompute"(主变体)。拓扑 / 静态路由 /
-    KV 账本(与离线同一函数、同参数)在 __init__ 一次性构建,运行期策略输入
+    离线事件循环蓝本已随 2026-09-24 只在线化删除,本类是在线策略的
+    唯一实现。kv_cache_policy == "session_lru_recompute"(主变体)。
+    拓扑 / 静态路由 / KV 账本在 __init__ 一次性构建,运行期策略输入
     全部来自这些 Python 账本(关感知)。
     """
 
@@ -323,8 +296,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                     config.kv_cache_policy))
         self.graph = graph  # GraphBatchBuilder(由 online_service 注入)
 
-        # 蓝图 :1682-1683:拓扑 + 静态 PD 路由(alpha 默认 1.0,与离线同参)。
-        # offline: wsc_llm_scheduler.py
+        # 拓扑 + 静态 PD 路由(离线同参;alpha 调参旋钮与
+        # require_equal_size 形参已按只写不读族清除——alpha 从不影响路由
+        # 选择,等大校验恒开)。
         specs = tuple(
             WscLlmInstanceSpec(
                 name=group.name,
@@ -334,10 +308,8 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             )
             for group in config.inference_groups
         )
-        self.topology = build_instances(
-            config.hardware, specs, require_equal_size=True)
-        self.static_mapping = build_static_pd_mapping(
-            self.topology, alpha=1.0)
+        self.topology = build_instances(config.hardware, specs)
+        self.static_mapping = build_static_pd_mapping(self.topology)
         # Hop-Bytes 覆盖调查(2026-08-26,W B2wp9py 任务 4):prefill 决策
         # 的 history NOC_MIGRATE 迁移此前无路由字段(基线 60s 覆盖 70.4%,
         # 缺口 29.6% = history_transfer_bytes)。迁移路由在线可知
@@ -347,32 +319,28 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 静态映射语义;A/B 对拍剥离清单条目)。
         self._instance_graph = InstanceGraph(self.topology)
 
-        # 蓝图 :1694-1698:KV 账本。
-        # offline: wsc_llm_scheduler.py
+        # KV 账本。
         self.kv_manager = SessionKVCacheManager(
             self.topology,
             config.model,
         )
 
-        # 蓝图 :1699-1702:实例账本。
-        # offline: wsc_llm_scheduler.py
+        # 实例账本。
         self.instances = [
             _OnlineInstanceState(index=instance.index,
                                   phase_role=instance.phase_role)
             for instance in self.topology.instances
         ]
 
-        # 蓝图 :1703-1704:future arrival min-heap(在线由 ingress ARRIVAL
+        # future arrival min-heap(在线由 ingress ARRIVAL
         # 事件喂入)。阶段 4 §7.3:键含 queue_index,同 tick 到期项按冻结
         # 队列序稳定弹出(与 C++ 序列化的 arrivals 冻结队列序一致);
         # 消费规则 tick <= current_tick(见 _drain_arrival_heap)。
-        # offline: wsc_llm_scheduler.py
         self.arrival_heap = []
         self._sequence = 0
 
-        # 蓝图 :1723-1725:等待 decode 准入登记(按实例)。
+        # 等待 decode 准入登记(按实例)。
         # §7.3:deque 替换 list.pop(0)。
-        # offline: wsc_llm_scheduler.py
         self.waiting_decode_admissions = {
             instance.index: deque() for instance in self.topology.instances
         }
@@ -382,17 +350,20 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 只访问该集合(sorted 保持实例 index 序 = 离线循环序,决策确定性
         # 不受影响),不做全量实例扫描。
         self._ready_frontier = set()
-        # 蓝图 :1729-1732:容量 epoch / 准入门控。
-        # offline: wsc_llm_scheduler.py
+        # 容量 epoch(prefill 准入重试门)。
         self.capacity_epoch = [0 for _ in self.topology.instances]
-        # Last failed admission epoch lives on the request runtime itself.
-        # A second request_id->epoch dictionary would retain completed
-        # requests for the entire run.
-        self.decode_admission_epoch = [-1 for _ in self.topology.instances]
+        # Prefill 准入的失败 epoch 记在 request runtime 自己身上
+        # (prefill_attempt_epoch);按 request_id 建 epoch 字典会让已完成
+        # 请求整轮驻留,不做。
+        # SCHED-1(2026-09-28):decode 等待准入的 capacity_epoch 重试门已删
+        # (离线蓝图逐行迁移残留;在线调用图不可达——等待准入自 prefill
+        # drain 起目标容量已预占,move/grow 不成立即 raise,队列每准入 pass
+        # 必清空,epoch 比较臂永不定门)。decode_admission_dirty 保留为
+        # "append→dirty 恒配对"的待准入标记(_on_prefill_drain 写,本 pass
+        # 读)。
         self.decode_admission_dirty = set()
 
         # 请求运行账本(queue_index 序;manifest 事实 policy-independent)。
-        # offline: wsc_llm_scheduler.py(runtimes 由
         # _validate_and_expand_requests 构造;在线输入事实直接来自 manifest)。
         self.runtimes = [
             _OnlineRequestRuntime(record)
@@ -408,7 +379,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             runtime.request_id: index
             for index, runtime in enumerate(self.runtimes)
         }
-        # 蓝图 :1684 的 next_request(同 session 下一 turn 的 runtime 对象;
+        # 原 next_request(同 session 下一 turn 的 runtime 对象;
         # 没有则 None)。§7.3:(session_id, turn_index) 字典索引替换 O(N²)
         # 顺序扫描;turn+1 精确语义与扫描版逐项一致(值 = runtime 对象,
         # 与原扫描版返回对象一致)。
@@ -466,8 +437,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 策略 --
 
     def run_variant_policy(self, delta) -> None:
-        """决策顺序逐行对应离线事件循环:completion 批(:2006-2072)先于
-        arrival 批(:2074-2090),最后 start_ready_iterations(:2092)。
+        """决策批序固定:completion 批先于 arrival 批,最后准入/发射 pass。
 
         拼 batch 改造(§3.2 边界原子提交顺序):completion 批先按信号核销
         已完成列车(_finalize_completed_trains:核验列车 → 冻结成员闭式
@@ -480,7 +450,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         tick = delta["tick"]
 
         # ---- completion 批(离线 priority 0;同 tick 先于 arrival)----
-        # offline: wsc_llm_scheduler.py
         drained = []
         decode_done = []
         request_done = []
@@ -530,13 +499,11 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             self._on_request_complete(request_id, tick)
 
         # ---- arrival 批(离线 priority 1)----
-        # offline: wsc_llm_scheduler.py
         for arrival in delta["arrivals"]:
             self._push_arrival(arrival, tick)
         self._drain_arrival_heap(tick)
 
         # ---- 准入/发射 pass(离线 start_ready_iterations,计时部分删除)----
-        # offline: wsc_llm_scheduler.py
         # WP9 拆分列车的余量批先于本 pass 发射(首步唤醒到达后的首个
         # 决策边界;发射位置与 sh_1.0 母本一致 = 策略尾段)。
         for instance_index in wakeup_instances:
@@ -574,7 +541,17 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         (每成员 participation 次 token,无逐 token 循环)。"""
         signaled = {}
         for request_id in decode_done:
-            runtime = self.runtime_by_request_id[request_id]
+            # DECODE_COMPLETION 与 REQUEST_COMPLETE 同 tick 同请求交付且
+            # decode 先于 request(run_variant_policy 头注),runtime 仅在
+            # REQUEST_COMPLETE 边界弹出——此处查无 runtime 即协议违例,
+            # fail-closed 报样式化错误(与下方 stale completion mismatch
+            # 同款),不让裸 KeyError 抢先掩盖诊断信息。
+            runtime = self.runtime_by_request_id.get(request_id)
+            if runtime is None:
+                raise RuntimeError(
+                    "decode completion signal for request {} matches no "
+                    "live runtime (stale completion mismatch)".format(
+                        request_id))
             signaled.setdefault(
                 runtime.decode_instance_index, set()).add(request_id)
         for train_id in sentinel_trains:
@@ -597,14 +574,18 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                     for runtime, participation in train["members"]:
                         runtime.decode_tokens_consumed += participation
                     for request_id in train["exit_set"]:
-                        runtime = self.runtime_by_request_id[request_id]
+                        runtime = self.runtime_by_request_id.get(request_id)
+                        if runtime is None:
+                            raise RuntimeError(
+                                "exiting member {} lost its runtime before "
+                                "train finalization (stale completion "
+                                "mismatch)".format(request_id))
                         if runtime not in state.active_decode_lookup:
                             raise RuntimeError(
                                 "exiting member {} is not in the decode "
                                 "batch".format(request_id))
                         state.active_decode_lookup.discard(runtime)
                         state.active_decode.remove(runtime)
-                    state.iteration_count += iterations
                     state.in_flight_train = None
                     # M4 核销即删(2026-08-23,批次B 移植自 sh_3.0 母本):
                     # 列车核销后其 train_id→实例索引条目即死重(哨兵条目
@@ -660,6 +641,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         if sum(p for _, p in member_parts) != len(spans):
             raise RuntimeError(
                 "train span layout does not match the frozen plan")
+        # The pre-loop sum check is the ONLY layout guard: offset == sum of
+        # participations == len(spans) is pinned there, so a second
+        # post-loop equality check would be unreachable (removed 2026-09-30).
         first_spans = []
         rest_spans = []
         offset = 0
@@ -667,26 +651,31 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             first_spans.append(spans[offset])
             rest_spans.extend(spans[offset + 1:offset + participation])
             offset += participation
-        if offset != len(spans):
-            raise RuntimeError(
-                "train span layout does not match the frozen plan")
         return first_spans, rest_spans
 
     def _first_token_plan(self, plan, joiners):
         """WP9 首 token 观测计划(None = 开关关闭/无 debut,行为与拆分
         上线前逐字节一致)。
 
-        debut 成员 = 本交付加入列车且 decode_tokens_consumed == 0 的
-        decode 成员(计划期可知,WP9_CONTRACT §2)。多 token debut 挂
+        debut 成员 = 本交付加入列车的 decode 成员(joiner 即 debut;
+        joiner 的 decode_tokens_consumed 恒为 0 是状态机不变量,违反即
+        fail-closed,WP9_CONTRACT §2)。多 token debut 挂
         独立 first_token 标记;decode_length=1 的 debut 其 exit 标记名
         附加 first_token 子串(同节点 code 4/8 双锚点,保证 first_token_
         ns == completion_ns)。iterations >= 2 时物理拆两批(首步批 +
         余量批),否则仅做不拆车的标记增强。"""
         if not first_token_split_enabled():
             return None
-        debut = [
-            runtime for runtime in joiners
-            if runtime.decode_tokens_consumed == 0]
+        # WP9_CONTRACT §2 defines debut members as joiners with zero consumed
+        # tokens. decode_tokens_consumed only advances for frozen-plan train
+        # members (which set decode_train_joined at emission, so they are
+        # never joiners again); a joiner with consumed > 0 would violate
+        # that invariant -- fail closed instead of silently filtering.
+        if any(runtime.decode_tokens_consumed for runtime in joiners):
+            raise RuntimeError(
+                "first-token plan: joiner with decode_tokens_consumed > 0 "
+                "violates the debut invariant (WP9_CONTRACT section 2)")
+        debut = list(joiners)
         if not debut:
             return None
         debut_marker_members = [
@@ -718,7 +707,8 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         不进入 D 实例列车)。
 
         列车终点 = 全部 decode 工作耗尽(无 prefill 工作 ⇒ 迭代 = max
-        剩余 token;默认不设 T_max,§3.2.8)。成员退出不是列车边界
+        剩余 token;缺省 T_max=8、SH_TRAIN_MAX_ITER 可覆盖(0=不设限),
+        交付裁决见 __init__ 注释,§3.2.8)。成员退出不是列车边界
         (先验):退出成员在列车内挂 exit 标记。返回 None = 实例无工作。"""
         members = []
         for runtime in state.active_decode:
@@ -758,18 +748,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 state.index, state.train_seq + 1))
         state.train_seq += 1
         train_id = "batch_train_i{}_{}".format(state.index, state.train_seq)
-        snapshot = json.dumps(
-            {
-                "train_id": train_id,
-                "iterations": iterations,
-                "members": [
-                    [runtime.request_id, participation]
-                    for runtime, participation in member_parts],
-                "exits": [runtime.request_id for runtime in exit_members],
-                "capped": capped,
-            },
-            sort_keys=True,
-        )
         return {
             "train_id": train_id,
             "iterations": iterations,
@@ -780,8 +758,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             "signal_set": signal_set,
             "sentinel": sentinel,
             "pass_spans": pass_spans,
-            "membership_digest": hashlib.sha256(
-                snapshot.encode()).hexdigest(),
         }
 
     def _decode_decision_dict(self, runtime, route) -> dict:
@@ -868,10 +844,18 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             # 问题 2A 修复(2026-09-05):decode 决策核销——上行的临时快照
             # 即全集(时间线已证:发射点必在 decode_target_evictions 全部
             # append(#2 reserve/#4 move/#5 grow_decode)之后、之后无
-            # append;joiner 必在 append 后才进 active_decode),发射后置空
-            # 镜像 completion 对 completion_evictions 的先序列化后置空
-            # 语义,防未来工具读 decode 行时与 prefill 行 #2/#3 双计。
-            # M4 的既有置空(:1048 一带)保留为幂等兜底。
+            # append;joiner 必在 append 后才进 active_decode)。发射后置空
+            # 是发射点之后的内存核销(M4 幂等兜底保留),不是防双计防线:
+            # 决策行一经序列化发出,置空改变不了任何已落盘字段。
+            # 防双计的真实位置在下游消费端的字段所有权约定(SCHED-2 注释
+            # 归因修正,2026-09-28):decode 行携带 decode_target_evictions
+            # 全集(#2/#4/#5),prefill 行只携带发射时点子集(且 prefill 行
+            # 另有 admission_evictions/#3)——kv_cache_adapter 的
+            # extract_events_wscllm 与 hbm_watermark 的
+            # REPO_VARIANTS["astra-sim-wscllm"].eviction_lists 都只消费
+            # decode 行全集、prefill 行停消费该字段(hbm_watermark 侧直接
+            # 重复消费会触发 apply_evict fail-closed)。新工具不得对两行的
+            # 该字段求和,否则 #2/#4/#5 双计。
             runtime.decode_target_evictions = ()
         first_token = self._first_token_plan(plan, joiners)
         if first_token is not None:
@@ -1005,23 +989,22 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 边界 --
 
     def _on_arrival(self, runtime, tick: int) -> None:
-        """离线 arrival 批单条(:2074-2090):选择 prefill 实例 + 静态路由 +
+        """ARRIVAL 边界单条:选择 prefill 实例 + 静态路由 +
         qp 入队。快照在 append 之前取(ordering_key 反映选择时刻的排队深度)。
 
-        offline: wsc_llm_scheduler.py
-        """
-        runtime.estimated_arrival_ns = tick  # :2079
-        snapshots = self._prefill_snapshots()  # :2080
-        selected = select_prefill_instance(snapshots)  # :2081
+"""
+        runtime.estimated_arrival_ns = tick
+        snapshots = self._prefill_snapshots()
+        selected = select_prefill_instance(snapshots)
         selected_snapshot = next(
             snapshot for snapshot in snapshots
-            if snapshot.instance_index == selected)  # :2082-2084
-        route = self.static_mapping.route_for_prefill(selected)  # :2085
-        runtime.prefill_instance_index = selected  # :2086
-        runtime.prefill_assignment_key = selected_snapshot.ordering_key  # :2087
-        runtime.static_route = route  # :2088
-        runtime.decode_instance_index = route.decode_instance_index  # :2089
-        self.instances[selected].qp.append(runtime)  # :2090
+            if snapshot.instance_index == selected)
+        route = self.static_mapping.route_for_prefill(selected)
+        runtime.prefill_instance_index = selected
+        runtime.prefill_assignment_key = selected_snapshot.ordering_key
+        runtime.static_route = route
+        runtime.decode_instance_index = route.decode_instance_index
+        self.instances[selected].qp.append(runtime)
         self._note_instance_ready(selected)  # §7.3 ready frontier
         # 阶段 3 感知账本:进入 admitted 层(prefill_qp 排队账本成员;
         # contract ⑥)。查询/审计数据,不进策略判据。
@@ -1029,27 +1012,27 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                            {"type": "prefill_qp", "instance_index": selected})
 
     def _on_prefill_drain(self, request_id: str, tick: int) -> None:
-        """离线 prefill 完成分支(:2014-2038):实例空闲 + qp 出队 + 等待
+        """PREFILL_DRAIN 边界:实例空闲 + qp 出队 + 等待
         decode 准入登记 + dirty。
 
-        offline: wsc_llm_scheduler.py
-        """
+"""
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.prefill_instance_index]
         if not state.qp or state.qp[0] is not runtime:
             raise RuntimeError("Prefill FCFS queue order was corrupted")
-        state.busy = False  # :2011
-        state.qp.popleft()  # :2030(§7.3:deque O(1) 首出)
+        state.busy = False
+        state.qp.popleft()  # §7.3:deque O(1) 首出
         if state.qp:
             self._ready_frontier.add(state.index)  # §7.3:队列仍有等待
         else:
             self._ready_frontier.discard(state.index)
-        runtime.waiting_decode_admission = True  # :2032
-        if runtime.decode_instance_index is None:  # :2033-2034
+        if runtime.decode_instance_index is None:
             raise RuntimeError("WSC Prefill completion lost Decode target")
         self.waiting_decode_admissions[runtime.decode_instance_index].append(
-            runtime)  # :2035-2037
-        self.decode_admission_dirty.add(runtime.decode_instance_index)  # :2038
+            runtime)
+        # append→dirty 恒配对(SCHED-1 准入门的活断言依据):队列非空 ⇒
+        # dirty 在场,_try_admit_waiting_decodes 据此准入。
+        self.decode_admission_dirty.add(runtime.decode_instance_index)
         # 阶段 3 感知账本:admitted 层排队类型更新(waiting_decode)。
         self._ledger_admit(
             runtime.request_id, tick,
@@ -1057,7 +1040,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
              "instance_index": runtime.decode_instance_index})
 
     def _on_decode_complete(self, request_id: str, tick: int) -> None:
-        """离线 decode 完成分支(:2040-2066):mark_complete + 快照。
+        """DECODE_COMPLETION 边界:mark_complete + 快照。
         下一次 arrival 排程在 REQUEST_COMPLETE 边界(同 tick,见
         _on_request_complete)。
 
@@ -1065,29 +1048,25 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         _finalize_completed_trains(退出迭代在列车内先验已知,物理完成
         时刻 = exit 标记节点完成时刻;本方法在核销之后执行,成员已移除)。
 
-        offline: wsc_llm_scheduler.py
-        """
+"""
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
-        runtime.completion_ns = tick  # :2050
-        self.completed_requests += 1  # :2051
-        runtime.completion_evictions = self.kv_manager.mark_complete(  # :2052-2056
+        self.completed_requests += 1
+        # SCHED-9(2026-09-28):mark_complete 的恒空逐出返回管道已删
+        # (completion 恒零逐出——retain_complete 语义,请求完成不逐出任何
+        # KV,返回值恒 ());本边界仍递增 decode 实例的容量 epoch(完成时点
+        # 本身是账本变化,与逐出无关)。
+        self.kv_manager.mark_complete(
             runtime.session_id,
             tick,
             runtime.request_id,
         )
-        self._note_capacity_change(  # :2057-2060
-            state.index,
-            *(record.victim_instance_index
-              for record in runtime.completion_evictions),
-        )
-        snapshot = self.kv_manager.session_snapshot(runtime.session_id)  # :2061
-        if snapshot is None:  # :2062-2063
+        self._note_capacity_change(state.index)
+        snapshot = self.kv_manager.session_snapshot(runtime.session_id)
+        if snapshot is None:
             raise RuntimeError("completed session disappeared from KV manager")
-        runtime.kv_state_after_completion = snapshot.state  # :2064
-        runtime.kv_instance_after_completion = snapshot.instance_index  # :2065
-        runtime.hbm_after_completion = self.kv_manager.hbm_snapshots(  # :2066
-            state.index)
+        runtime.kv_state_after_completion = snapshot.state
+        runtime.kv_instance_after_completion = snapshot.instance_index
         self.log_decision(
             {"kind": "completion", "request_id": runtime.request_id,
              "priority": 0},
@@ -1097,10 +1076,10 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 "kv_state_after_completion": runtime.kv_state_after_completion,
                 "kv_instance_after_completion":
                     runtime.kv_instance_after_completion,
-                "completion_evictions": [
-                    _eviction_record_dict(record)
-                    for record in runtime.completion_evictions
-                ],
+                # 决策行 schema 冻结键:completion 恒零逐出(SCHED-9 管道
+                # 删除),字面 [] 保持行字节与消费端兼容(kv_cache_adapter/
+                # hbm_watermark/hopbytes 逐 completion_evictions 消费)。
+                "completion_evictions": [],
             },
         )
         # M4 核销即删(2026-08-23,批次B 移植自 sh_3.0 母本;字段清单为本仓
@@ -1112,7 +1091,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 线性常驻)——置空即删。
         runtime.admission_evictions = ()
         runtime.decode_target_evictions = ()
-        runtime.completion_evictions = ()
         runtime.prefill_decode_transfer = None
         runtime.history_action = None
         runtime.history_source_instance_index = None
@@ -1120,19 +1098,16 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         runtime.history_transfer_shards = ()   # 问题 4b holder 同步核销
         runtime.history_recompute_tokens = None
         runtime.history_cache_state_before = None
-        runtime.hbm_before_request = None
         runtime.reservation_credit = None    # 净额修正(2026-09-06)同步核销
         runtime.kv_state_after_completion = None
         runtime.kv_instance_after_completion = None
-        runtime.hbm_after_completion = None
 
     def _on_request_complete(self, request_id: str, tick: int) -> None:
-        """离线 decode 完成分支的下一次 arrival 排程(:2067-2072):
+        """REQUEST_COMPLETE 边界的下一次 arrival 排程:
         now + 该 turn 的 inter_request_interval_ns 注册未来 alarm
         (向 ingress,不再 push 到事件堆)。
 
-        offline: wsc_llm_scheduler.py
-        """
+"""
         runtime = self.runtime_by_request_id[request_id]
         # 原 run-end 的 decode 终值检查前移到释放边界；之后 runtime 不再
         # 常驻，仍以同一严格条件 fail-closed。
@@ -1144,9 +1119,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # §7.3:_runtime_index O(1) 定位(替换 O(N) 全量扫描)。
         following = self.next_request[self._runtime_index[runtime.request_id]]
         if following is not None:
-            interval = self._interval_ns(following)  # :2069-2071
-            # :2072 push_event(now_ns + interval, 1, "arrival", following) ->
-            # 在线等价:future alarm(阶段 1 的 alarm 语义,见 C++ Phase 4)。
+            interval = self._interval_ns(following)
+            # 下一次 arrival 排程:future alarm(阶段 1 的 alarm 语义,
+            # 见 C++ Phase 4)。
             self._batch["future_alarms"].append({
                 "arrival_world_ns": tick + interval,
                 "envelope": {
@@ -1184,8 +1159,8 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------- arrival heap --
 
     def _push_arrival(self, arrival: dict, tick: int) -> None:
-        """离线 :1706-1709 push_event(time_ns, priority=1, kind="arrival")。
-        字段形状与离线一致;阶段 4 §7.3 键含 queue_index —— 同 tick 到期项
+        """arrival 入堆:(time_ns, priority, queue_index, sequence, kind,
+        payload);阶段 4 §7.3 键含 queue_index —— 同 tick 到期项
         按冻结队列序稳定弹出,与 C++ 序列化的 arrivals 冻结队列序一致。
         """
         runtime = self.runtime_by_request_id[arrival["request_id"]]
@@ -1196,9 +1171,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         self._sequence += 1
 
     def _drain_arrival_heap(self, tick: int) -> None:
-        """离线 :2000-2004 同 tick 批 + :2004 按 (priority, sequence) 排序。
+        """同 tick 批弹出,按 (priority, sequence) 排序。
         阶段 4 §7.3:只消费 tick <= current_tick 的到期项(在线单 tick 单次
-        交付下堆内全部为当前批 push 的项,规则与离线循环同构;未来 alarm
+        交付下堆内全部为当前批 push 的项;未来 alarm
         的到期事件由 C++ 在到期 tick 交付,不会滞留堆中)。
         """
         while self.arrival_heap and self.arrival_heap[0][0] <= tick:
@@ -1211,40 +1186,46 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 准入 --
 
     def _admit_pass(self, tick: int) -> None:
-        """离线 start_ready_iterations(:1915-1996)的排队/准入部分;计时部分
-        (LUT 估计 + push iteration_complete)删除,由真实完成事件推进。
-        先 try_admit_waiting_decodes(:1917),再逐实例 serve(:1918-1996)。
+        """准入/发射 pass 的排队/准入部分;计时(LUT 估计 + push
+        iteration_complete)已随只在线化删除,由真实完成事件推进。
+        先 decode 等待准入,再逐实例 serve。
 
         阶段 4 §7.3:逐实例 serve 改为只访问 ready frontier(非忙且有排队
-        工作的实例;sorted 保持实例 index 序 = 离线 :1918 的循环序,决策
-        逐字节不变)。frontier 在到达/完成(设)与发射(清)时增量维护,
+        工作的实例;sorted 保持实例 index 序,决策序确定)。frontier 在到达/完成(设)与发射(清)时增量维护,
         单批访问条目数 = 到期/受影响条目数,与总 request 数无关。
 
-        offline: wsc_llm_scheduler.py
-        """
-        self._try_admit_waiting_decodes(tick)  # :1917
+"""
+        self._try_admit_waiting_decodes(tick)
         for instance_index in sorted(self._ready_frontier):  # §7.3 frontier
             self._profile_scan()  # §7.3:frontier 访问条目(就绪实例)
             state = self.instances[instance_index]
-            if self._instance_busy(state):  # 防御:frontier 与 busy 失步即内部错误
-                continue
-            if state.phase_role == PREFILL_ROLE:  # :1922-1952
-                if state.active_decode:  # :1923-1924
+            # SCHED-3(2026-09-28)fail-closed:frontier/busy 失步没有合法
+            # 场景——全部 4 个 add 点(到达 _note_instance_ready、prefill
+            # drain、列车核销、等待准入)都先验非忙,发射点(_emit_train*/
+            # P 分支)同步 discard;失步只可能是内部不变量破坏,静默
+            # continue 是 fail-open,与同库 fail-closed 风格相悖。
+            if self._instance_busy(state):
+                raise RuntimeError(
+                    "ready frontier contains busy instance {} "
+                    "(frontier/busy desync; internal invariant violated)"
+                    .format(instance_index))
+            if state.phase_role == PREFILL_ROLE:
+                if state.active_decode:
                     raise RuntimeError(
                         "Prefill-only instance contains Decode work")
-                if not state.qp:  # :1925-1926
+                if not state.qp:
                     continue
-                runtime = state.qp[0]  # :1927
-                if not self._try_admit_prefill(runtime, tick):  # :1928-1929
+                runtime = state.qp[0]
+                if not self._try_admit_prefill(runtime, tick):
                     continue
                 self._emit_prefill(runtime, tick)  # 聚合:prefill 整段
-                state.busy = True  # :1995(P 侧 busy = 整段在飞,§3.6)
+                state.busy = True  # P 侧 busy = 整段在飞,§3.6
                 self._ready_frontier.discard(state.index)  # §7.3:发射即忙
-            else:  # DECODE_ROLE, :1953-1973
-                if state.qp:  # :1954-1955
+            else:  # DECODE_ROLE
+                if state.qp:
                     raise RuntimeError(
                         "Decode-only instance contains Prefill work")
-                if not state.active_decode:  # :1956-1957
+                if not state.active_decode:
                     continue
                 # 拼 batch 改造(§3.2):decode 发射 = 冻结并发射整批
                 # active_decode 的迭代列车(decode 互拼,权重每迭代只读
@@ -1253,29 +1234,28 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 self._emit_train(state, tick)
 
     def _try_admit_prefill(self, runtime, now_ns: int) -> bool:
-        """离线 try_admit_prefill(:1746-1849),逐行对应;无逐 chunk 计时/
+        """Prefill 准入:无逐 chunk 计时/
         剩余块账本(聚合粒度)。
 
-        offline: wsc_llm_scheduler.py
-        """
-        if runtime.admitted_prefill:  # :1748-1749
+"""
+        if runtime.admitted_prefill:
             return True
         if (runtime.prefill_instance_index is None
-                or runtime.static_route is None):  # :1750-1751
+                or runtime.static_route is None):
             raise RuntimeError("WSC Prefill admission lost its static mapping")
-        prefill_instance = runtime.prefill_instance_index  # :1752
-        decode_instance = runtime.static_route.decode_instance_index  # :1753
-        admission_epoch = (  # :1754-1757
+        prefill_instance = runtime.prefill_instance_index
+        decode_instance = runtime.static_route.decode_instance_index
+        admission_epoch = (
             self.capacity_epoch[prefill_instance],
             self.capacity_epoch[decode_instance],
         )
-        if runtime.prefill_attempt_epoch == admission_epoch:  # :1758-1759
+        if runtime.prefill_attempt_epoch == admission_epoch:
             return False
-        runtime.prefill_attempt_epoch = admission_epoch  # :1760
-        final_shards = kv_cache_shard_bytes_for_tokens(  # :1761-1763
+        runtime.prefill_attempt_epoch = admission_epoch
+        final_shards = kv_cache_shard_bytes_for_tokens(
             self.config.model, runtime.final_context_tokens,
             self.topology.instances[0].size)
-        reservation = self.kv_manager.reserve_request_capacity(  # :1764-1772
+        reservation = self.kv_manager.reserve_request_capacity(
             runtime.request_id,
             runtime.session_id,
             decode_instance,
@@ -1284,9 +1264,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             phase="prefill_admission",
             reason="static_decode_final_kv_reservation",
         )
-        runtime.decode_target_evictions = tuple(  # :1773-1775
+        runtime.decode_target_evictions = tuple(
             (*runtime.decode_target_evictions, *reservation.evictions))
-        if not reservation.admitted:  # :1776-1782
+        if not reservation.admitted:
             # 准入预占净额修正(2026-09-06):全量预约把"本会话尚未迁走的
             # 旧 KV"与"终态全量"重复计入 decode 实例(super-linear 记账,
             # 超长会话在队列尾部永久 deep-gap)。仅当旧 KV 确实 RESIDENT 于
@@ -1332,14 +1312,12 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                           for record in reservation.evictions),
                     )
                 return False
-        runtime.decode_capacity_reserved = True  # :1783
-        before_snapshot = self.kv_manager.session_snapshot(  # :1784
+        runtime.decode_capacity_reserved = True
+        before_snapshot = self.kv_manager.session_snapshot(
             runtime.session_id)
-        runtime.history_cache_state_before = (  # :1785-1787
+        runtime.history_cache_state_before = (
             "ABSENT" if before_snapshot is None else before_snapshot.state)
-        runtime.hbm_before_request = self.kv_manager.hbm_snapshots(  # :1788
-            runtime.prefill_instance_index)
-        decision = self.kv_manager.prepare_history(  # :1789-1796
+        decision = self.kv_manager.prepare_history(
             runtime.session_id,
             runtime.prefill_instance_index,
             runtime.history_tokens_before,
@@ -1347,9 +1325,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             runtime.request_id,
             required_context_tokens=runtime.prefill_context_tokens,
         )
-        runtime.admission_evictions = tuple(  # :1797
+        runtime.admission_evictions = tuple(
             (*runtime.admission_evictions, *decision.evictions))
-        if decision.admission_blocked:  # :1798-1808
+        if decision.admission_blocked:
             self.kv_manager.release_request_capacity(runtime.request_id, now_ns)
             runtime.decode_capacity_reserved = False
             # 净额修正(2026-09-06):release 是 pop 语义,按登记值(净额)
@@ -1384,25 +1362,34 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 reason="history_vacated_decode_target",
             )
             runtime.reservation_credit = None
-        runtime.history_action = decision.action  # :1809
-        runtime.history_source_instance_index = decision.source_instance_index  # :1810
-        runtime.history_transfer_bytes = decision.transfer_bytes  # :1811
+        runtime.history_action = decision.action
+        runtime.history_source_instance_index = decision.source_instance_index
+        runtime.history_transfer_bytes = decision.transfer_bytes
         # 问题 4b(2026-09-05):留存 shard 明细供 prefill 决策序列化
-        # (此前只取聚合 bytes、shards 被丢弃;local_hit/ABSENT 时为 ())。
+        # (此前只取聚合 bytes、shards 被丢弃;ABSENT/RECOMPUTE 时为 ())。
         runtime.history_transfer_shards = decision.transfer_shards
-        runtime.history_recompute_tokens = decision.recompute_tokens  # :1812
-        growth = self.kv_manager.grow_prefill(  # :1826-1831
+        runtime.history_recompute_tokens = decision.recompute_tokens
+        growth = self.kv_manager.grow_prefill(
             runtime.session_id,
             runtime.prefill_context_tokens,
             now_ns,
             runtime.request_id,
         )
-        if not growth.admitted:  # :1832-1833
+        if not growth.admitted:
             raise RuntimeError("Prefill growth lost its successful capacity preflight")
-        runtime.admission_evictions = tuple(  # :1834
+        runtime.admission_evictions = tuple(
             (*runtime.admission_evictions, *growth.evictions))
-        runtime.admitted_prefill = True  # :1840
-        self._note_capacity_change(  # :1841-1848
+        runtime.admitted_prefill = True
+        # Invariant note (2026-10-01 review): on the net-credit SUCCESS path
+        # the first full attempt's evictions (full_attempt_evictions) are NOT
+        # re-merged here. That is currently equivalent -- ensure_physical_fit
+        # sources every victim from _candidate_sessions(fit 目标实例), so all
+        # victims of BOTH attempts live on decode_instance, which is already
+        # named explicitly above. If a future change ever evicts across
+        # instances (e.g. tiered reclaim), merge full_attempt_evictions into
+        # this call too, or the lost epoch wakeup re-creates the documented
+        # 2026-09-06 wedge shape.
+        self._note_capacity_change(
             prefill_instance,
             decode_instance,
             decision.source_instance_index,
@@ -1413,80 +1400,83 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         return True
 
     def _try_admit_waiting_decodes(self, now_ns: int) -> None:
-        """离线 try_admit_waiting_decodes(:1851-1913),逐行对应。
+        """Decode 等待队列准入(容量 epoch/dirty 门控)。
 
-        offline: wsc_llm_scheduler.py
-        """
+        SCHED-1(2026-09-28):离线蓝图逐行迁移的 capacity epoch 门与
+        waiting 成员守卫在在线调用图不可达,已删——调用图证据:等待队列
+        唯一 append 点 _on_prefill_drain 与 decode_admission_dirty.add
+        恒配对(队列非空 ⇒ dirty 在场),唯一消费点即本方法且每 pass 按
+        len 全量弹出(队列必清空);等待成员的目标容量已在 prefill 准入时
+        预占(runtime.decode_capacity_reserved),move/grow 不成立即
+        raise(准入无失败重试语义)。故 epoch 比较臂永不定门、
+        waiting_decode_admission 标志弹出处恒 True(成员守卫恒过,该
+        runtime 字段随之删除)。dirty 配对检查保留为 append 契约的活断言。
+
+"""
         ready_targets = tuple(
             instance_index
             for instance_index, queue in sorted(
                 self.waiting_decode_admissions.items())
             if queue
-            and (
-                instance_index in self.decode_admission_dirty
-                or self.decode_admission_epoch[instance_index]
-                != self.capacity_epoch[instance_index]
-            )
-        )  # :1852-1861
-        for target_instance in ready_targets:  # :1862
-            self.decode_admission_epoch[target_instance] = (  # :1863
-                self.capacity_epoch[target_instance])
-            self.decode_admission_dirty.discard(target_instance)  # :1864
-            queue = self.waiting_decode_admissions[target_instance]  # :1865
-            pending_count = len(queue)  # :1866
-            for _ in range(pending_count):  # :1867
-                runtime = queue.popleft()  # :1868(§7.3:deque O(1) 首出)
-                if not runtime.waiting_decode_admission:  # :1870-1871
-                    continue
-                if runtime.decode_instance_index != target_instance:  # :1872-1873
+            and instance_index in self.decode_admission_dirty
+        )
+        for target_instance in ready_targets:
+            self.decode_admission_dirty.discard(target_instance)
+            queue = self.waiting_decode_admissions[target_instance]
+            pending_count = len(queue)
+            for _ in range(pending_count):
+                runtime = queue.popleft()  # §7.3:deque O(1) 首出
+                if runtime.decode_instance_index != target_instance:
                     raise RuntimeError("WSC Decode target queue was corrupted")
-                if not runtime.decode_capacity_reserved:  # :1874-1875
+                if not runtime.decode_capacity_reserved:
                     raise RuntimeError(
                         "WSC Decode target was not reserved before Prefill")
-                self.kv_manager.release_request_capacity(  # :1876
-                    runtime.request_id, now_ns)
-                runtime.decode_capacity_reserved = False  # :1877
-                move = self.kv_manager.move_prefill_to_decode(  # :1878-1884
+                # Decode 准入边界(§4.4 先释放预留、后 P→D 迁移落位):
+                # journal 锚点取 decode_start(2026-09-30)。
+                self.kv_manager.release_request_capacity(
+                    runtime.request_id, now_ns,
+                    anchor_phase="decode")
+                runtime.decode_capacity_reserved = False
+                move = self.kv_manager.move_prefill_to_decode(
                     runtime.session_id,
                     target_instance,
                     now_ns,
                     runtime.request_id,
                     final_context_tokens=runtime.final_context_tokens,
                 )
-                runtime.decode_target_evictions = tuple(  # :1885-1887
+                runtime.decode_target_evictions = tuple(
                     (*runtime.decode_target_evictions, *move.evictions))
-                if move.admission_blocked:  # :1888-1889
+                if move.admission_blocked:
                     raise RuntimeError(
                         "released static Decode reservation was not "
                         "physically usable")
-                runtime.prefill_decode_transfer = move.transfer  # :1890
-                growth = self.kv_manager.grow_decode(  # :1891-1896
+                runtime.prefill_decode_transfer = move.transfer
+                growth = self.kv_manager.grow_decode(
                     runtime.session_id,
                     runtime.final_context_tokens,
                     now_ns,
                     runtime.request_id,
                 )
-                if not growth.admitted:  # :1897-1898
+                if not growth.admitted:
                     raise RuntimeError(
                         "Decode growth lost its successful target admission")
-                runtime.decode_target_evictions = tuple(  # :1899-1901
+                runtime.decode_target_evictions = tuple(
                     (*runtime.decode_target_evictions, *growth.evictions))
-                decode_state = self.instances[target_instance]  # :1902
-                if decode_state.phase_role != DECODE_ROLE:  # :1903-1904
+                decode_state = self.instances[target_instance]
+                if decode_state.phase_role != DECODE_ROLE:
                     raise RuntimeError(
                         "static route selected a non-Decode instance")
-                runtime.decode_queue_depth_before_enqueue = (  # :1905
+                runtime.decode_queue_depth_before_enqueue = (
                     len(decode_state.active_decode))
-                decode_state.active_decode.append(runtime)  # :1906
+                decode_state.active_decode.append(runtime)
                 decode_state.active_decode_lookup.add(runtime)  # §7.3 双侧同步
                 if not self._instance_busy(decode_state):  # §7.3
                     self._ready_frontier.add(target_instance)
-                runtime.waiting_decode_admission = False  # :1907
                 # 阶段 3 感知账本:admitted 层排队类型更新(active_decode)。
                 self._ledger_admit(
                     runtime.request_id, now_ns,
                     {"type": "active_decode", "instance_index": target_instance})
-                self._note_capacity_change(  # :1908-1913
+                self._note_capacity_change(
                     target_instance,
                     move.source_instance_index,
                     *(record.victim_instance_index for record in move.evictions),
@@ -1504,7 +1494,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         与改造前逐字节一致;拼 batch 改造仅追加 train_ledger 行(退化
         纯 prefill 列车:prefill_chunks>0 与 member_count>0 互斥)。
 
-        offline: wsc_llm_scheduler.py(发射对象为整段而非 chunk)
+        发射对象为整段而非 chunk。
         """
         plan = self._plan_dict(runtime)
         members = self.graph.emit_prefill_batch(plan)
@@ -1622,7 +1612,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         }
 
     def _prefill_snapshots(self):
-        """离线 prefill_snapshots(:1739-1744):仅 prefill 角色实例,
+        """prefill 快照:仅 prefill 角色实例,
         在 instances 序(实例 index 序)上构建。"""
         return tuple(
             PrefillQueueSnapshot(instance_index=state.index,
@@ -1632,7 +1622,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         )
 
     def _note_capacity_change(self, *instance_indexes) -> None:
-        """离线 note_capacity_change(:1734-1737)。"""
+        """容量变化登记:相关实例 capacity_epoch 递增。"""
         for instance_index in set(instance_indexes):
             if instance_index is not None:
                 self.capacity_epoch[instance_index] += 1
@@ -1675,7 +1665,15 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         return {"ready_count": len(detail), "detail": detail}
 
     def _interval_ns(self, runtime) -> int:
-        spec = self.config.request_queue[runtime.queue_index]
+        # P2-21（2026-09-28）：queue_index 与 C++ 同源（未过滤全量 CSV 行
+        # 序），config.request_queue 是 session_limit 过滤后的保序子序列
+        # ——经 config.queue_position_by_index 映射回过滤位次（limit==0
+        # 恒等；未携带映射的 duck-type 夹具按恒等回退）。
+        position_by_index = getattr(self.config,
+                                    "queue_position_by_index", None)
+        position = (position_by_index or {}).get(
+            runtime.queue_index, runtime.queue_index)
+        spec = self.config.request_queue[position]
         return spec.inter_request_interval_ns
 
     # --------------------------------------------------------------- 收尾 --

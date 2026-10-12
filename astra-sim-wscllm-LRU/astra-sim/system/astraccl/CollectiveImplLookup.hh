@@ -6,8 +6,6 @@
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/astraccl/CollectiveImpl.hh"
 
-using json = nlohmann::json;
-
 namespace AstraSim {
 
 // The GeneralComplexTopology class is needed when native algorithm is chosen.
@@ -27,18 +25,23 @@ enum class BypassRule {
  */
 
 /*
- * TODO: There is currently no safeguard to prevent a case where the custom algorithm's size does not fit the communication group
- * (Whether there is no commgroup specified, defaulting to all ranks, one big commgroup that includes all ranks, or a smaller commgroup).
+ * TODO: A custom algorithm's per-rank out-of-range access is already
+ * fail-closed (CustomAlgorithm::convert_algo_rank_to_real_rank panics when
+ * algo_rank falls outside [0, group size)), but there is still no safeguard
+ * for the opposite mismatch: a custom algorithm ET that defines FEWER ranks
+ * than the communication group it runs on (no commgroup specified and
+ * defaulting to all ranks, one big commgroup including all ranks, or a
+ * smaller commgroup).
  */
 class CollectiveImplLookup {
     public:
-        CollectiveImplLookup(int rank_);
+        CollectiveImplLookup() = default;
         // This class owns every CollectiveImpl stored in the maps below (the
         // only other deletions happen on plan-owned copies in
         // CollectivePlan), so free them all on teardown.
         ~CollectiveImplLookup();
 
-        void setup_collective_impl_from_config(json j);
+        void setup_collective_impl_from_config(nlohmann::json j);
 
         // Notes on `workload_node_id`: Ctrl+F for [operation specific custom collective].
         std::vector<CollectiveImpl*> get_collective_impl(
@@ -62,8 +65,6 @@ class CollectiveImplLookup {
         // To be applied only if no custom algorithm is specified.
         // The algorithm for each dimension is specified in the system input with the key "all-reduce-implementation".
         std::map<ComType, std::vector<CollectiveImpl*>> native_impl_per_coll_dim;
-
-        int rank;
 };
 
 } // namespace AstraSim

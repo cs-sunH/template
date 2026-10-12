@@ -20,6 +20,7 @@ LICENSE file in the root directory of this source tree.
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <unordered_set>
 #include <unistd.h>
 
 using namespace AstraSim;
@@ -398,7 +399,8 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
         fatal_metrics_error("metrics manifest run_id must be a string");
     }
     this->run_id_ = manifest.value("run_id", "");
-    if (manifest.contains("npus_count") && manifest["npus_count"].is_number()) {
+    if (manifest.contains("npus_count") &&
+        manifest["npus_count"].is_number_integer()) {
         this->manifest_npus_count_ =
             manifest["npus_count"].get<int64_t>();
     }
@@ -430,7 +432,7 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
         manifest["slo_sampling"].is_object()) {
         const json& slo = manifest["slo_sampling"];
         const auto read_ns = [&slo](const char* key) -> std::optional<uint64_t> {
-            if (!slo.contains(key) || !slo[key].is_number()) {
+            if (!slo.contains(key) || !slo[key].is_number_integer()) {
                 return std::nullopt;
             }
             const int64_t value = slo[key].get<int64_t>();
@@ -457,8 +459,14 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
         this->slo_sampling_provisional_ = true;
     }
 
-    // Requests (doc sec.4.2). queue_index must be unique (doc sec.4.5).
+    // Requests (doc sec.4.2). queue_index must be unique (doc sec.4.5) and
+    // request_id must be unique too (F1-CPP C1-8 同款移植): the online
+    // registration path keys rank/anchor lookups by request_id
+    // (request_index_by_request_id_, last-wins on re-registration), so two
+    // manifest entries sharing a request_id would silently hang the online
+    // anchors and watch rank sets on whichever entry registered last.
     const json requests = manifest.value("requests", json::array());
+    std::unordered_set<std::string> seen_request_ids;
     for (const auto& entry : requests) {
         RequestMetricState state;
         try {
@@ -469,24 +477,89 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             state.turn_index = entry.value("turn_index", 0);
             state.prefill_instance = entry.value("prefill_instance", -1);
             state.decode_instance = entry.value("decode_instance", -1);
-            for (const auto& rank : entry.at("prefill_ranks")) {
+            // Type-guard the rank sets BEFORE iterating (姊妹仓同款
+            // fail-closed 移植): nlohmann iterates a JSON scalar as a
+            // single-element sequence, so a scalar prefill_ranks/
+            // decode_ranks (e.g. 3) would silently become the one-element
+            // set {3} -- the request could then never satisfy its
+            // expected-rank completion checks and would be reported
+            // incomplete with zero diagnostics. Elements must be integers
+            // too (a float like 3.5 would silently truncate in get<int>).
+            if (!entry.contains("prefill_ranks") ||
+                !entry["prefill_ranks"].is_array()) {
+                fatal_metrics_error(
+                    "metrics manifest request prefill_ranks must be an array "
+                    "(queue_index " + std::to_string(state.queue_index) + ")");
+            }
+            if (!entry.contains("decode_ranks") ||
+                !entry["decode_ranks"].is_array()) {
+                fatal_metrics_error(
+                    "metrics manifest request decode_ranks must be an array "
+                    "(queue_index " + std::to_string(state.queue_index) + ")");
+            }
+            for (const auto& rank : entry["prefill_ranks"]) {
+                if (!rank.is_number_integer()) {
+                    fatal_metrics_error(
+                        "metrics manifest request prefill_ranks elements must "
+                        "be integers (queue_index " +
+                        std::to_string(state.queue_index) + ")");
+                }
                 state.prefill_ranks.insert(rank.get<int>());
             }
-            for (const auto& rank : entry.at("decode_ranks")) {
+            for (const auto& rank : entry["decode_ranks"]) {
+                if (!rank.is_number_integer()) {
+                    fatal_metrics_error(
+                        "metrics manifest request decode_ranks elements must "
+                        "be integers (queue_index " +
+                        std::to_string(state.queue_index) + ")");
+                }
                 state.decode_ranks.insert(rank.get<int>());
+            }
+            // An empty watch set would make every std::includes consensus
+            // check trivially true (the empty set is a subset of anything),
+            // silently waiving the expected-rank gate for this request.
+            // Fail closed with the offending field named.
+            if (state.prefill_ranks.empty()) {
+                fatal_metrics_error(
+                    "request queue_index " +
+                    std::to_string(state.queue_index) +
+                    " has an empty prefill_ranks array (the expected-rank "
+                    "consensus gate must not be vacuous)");
+            }
+            if (state.decode_ranks.empty()) {
+                fatal_metrics_error(
+                    "request queue_index " +
+                    std::to_string(state.queue_index) +
+                    " has an empty decode_ranks array (the expected-rank "
+                    "consensus gate must not be vacuous)");
             }
             const auto& arrival = entry.at("arrival");
             const std::string kind = arrival.at("kind").get<std::string>();
             if (kind == "absolute") {
                 state.arrival.kind = ArrivalSpec::Kind::ABSOLUTE;
-                state.arrival.value_ns =
-                    arrival.at("value_ns").get<Tick>();
+                // wl-metrics-E5 (aligned with face-LRU): validate in the
+                // signed domain BEFORE narrowing -- a negative JSON value
+                // would wrap into a huge Tick (uint64_t).
+                const int64_t value_ns =
+                    arrival.at("value_ns").get<int64_t>();
+                if (value_ns < 0) {
+                    fatal_metrics_error("negative arrival value_ns: " +
+                                        std::to_string(value_ns));
+                }
+                state.arrival.value_ns = static_cast<Tick>(value_ns);
             } else if (kind == "after_request") {
                 state.arrival.kind = ArrivalSpec::Kind::AFTER_REQUEST;
                 state.arrival.parent_queue_index =
                     arrival.at("parent_queue_index").get<int64_t>();
-                state.arrival.interval_ns =
-                    arrival.at("interval_ns").get<Tick>();
+                // Same signed-domain guard as value_ns above: a negative
+                // interval_ns would wrap into a huge Tick (uint64_t).
+                const int64_t interval_ns =
+                    arrival.at("interval_ns").get<int64_t>();
+                if (interval_ns < 0) {
+                    fatal_metrics_error("negative arrival interval_ns: " +
+                                        std::to_string(interval_ns));
+                }
+                state.arrival.interval_ns = static_cast<Tick>(interval_ns);
             } else {
                 fatal_metrics_error("unknown arrival kind: " + kind);
             }
@@ -495,7 +568,7 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             // it, in which case finalize skips the invariant and notes
             // manifest_decode_length_missing.
             if (entry.contains("decode_length") &&
-                entry["decode_length"].is_number()) {
+                entry["decode_length"].is_number_integer()) {
                 state.decode_length =
                     entry["decode_length"].get<int64_t>();
             }
@@ -507,77 +580,23 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             fatal_metrics_error("duplicate queue_index in manifest: " +
                                 std::to_string(state.queue_index));
         }
+        // F1-CPP C1-8 同款移植: request_id 撞号时别名 last-wins,锚点/watch
+        // 全部错绑且无诊断,run 可能全绿。与 queue_index 同一道 fail-closed 门。
+        if (!seen_request_ids.insert(state.request_id).second) {
+            fatal_metrics_error("duplicate request_id in manifest: " +
+                                state.request_id);
+        }
         this->request_index_by_queue_index_[state.queue_index] =
             this->requests_.size();
         this->requests_.push_back(std::move(state));
     }
 
-    // Sparse node events (doc sec.4.3): [node_id, event_code, subject_id].
-    const json events_by_rank =
-        manifest.value("node_events_by_rank", json::object());
-    for (auto it = events_by_rank.begin(); it != events_by_rank.end(); ++it) {
-        int rank;
-        try {
-            // Full-string validation (ParsedGraphBatch house style): stoi
-            // alone accepts trailing garbage ("12abc" -> 12) and negative
-            // keys, which silently build rank buckets that can never match
-            // (runtime ranks come from sys->id and are always >= 0).
-            size_t parsed_chars = 0;
-            rank = std::stoi(it.key(), &parsed_chars);
-            if (parsed_chars != it.key().size() || rank < 0) {
-                fatal_metrics_error("invalid rank key in "
-                                    "node_events_by_rank: " + it.key());
-            }
-        } catch (const std::exception&) {
-            fatal_metrics_error("non-integer rank key in node_events_by_rank: "
-                                + it.key());
-        }
-        for (const auto& triple : it.value()) {
-            // Type-guard every element BEFORE get<int64_t>: a string/bool/
-            // null/array element would throw a nlohmann type_error that no
-            // caller catches (std::terminate), bypassing the fail-closed
-            // channel. Same guard pattern as the top-level metadata above;
-            // short-circuit keeps triple[x] inside the size==3 domain.
-            if (!triple.is_array() || triple.size() != 3 ||
-                !triple[0].is_number_integer() ||
-                !triple[1].is_number_integer() ||
-                !triple[2].is_number_integer()) {
-                fatal_metrics_error(
-                    "node event must be a [node_id, event_code, subject_id] "
-                    "triple of integers");
-            }
-            // Validate in the wide int64 domain BEFORE narrowing: an event
-            // code like 256 wraps to a legal-looking uint8_t and a negative
-            // node id wraps to a huge uint64_t, so both must be rejected at
-            // full width (a wrapped code would silently attach the metric to
-            // the wrong event edge).
-            const int64_t node_id_wide = triple[0].get<int64_t>();
-            if (node_id_wide < 0) {
-                fatal_metrics_error("negative node id in node event: " +
-                                    std::to_string(node_id_wide));
-            }
-            const uint64_t node_id = static_cast<uint64_t>(node_id_wide);
-            const int64_t event_code_wide = triple[1].get<int64_t>();
-            if (event_code_wide < 1 || event_code_wide > 8) {
-                fatal_metrics_error("invalid node event code: " +
-                                    std::to_string(event_code_wide));
-            }
-            const uint8_t event_code =
-                static_cast<uint8_t>(event_code_wide);
-            const int64_t subject_id = triple[2].get<int64_t>();
-            NodeMetricEvent event{event_code, subject_id};
-            const bool is_issue_edge =
-                (event_code ==
-                 static_cast<uint8_t>(EventCode::PREFILL_START_ISSUE)) ||
-                (event_code ==
-                 static_cast<uint8_t>(EventCode::DECODE_START_ISSUE)) ||
-                (event_code ==
-                 static_cast<uint8_t>(EventCode::ITERATION_START_ISSUE));
-            auto& event_map =
-                is_issue_edge ? this->issue_events_ : this->complete_events_;
-            event_map[rank][node_id].push_back(event);
-        }
-    }
+    // The manifest's static node_events_by_rank table is no longer parsed:
+    // its offline per-rank node-id space overlapped the online per-rank id
+    // space (online ids 0..7733 vs static ids 1..8000+), so online runs had
+    // to discard it wholesale right after initialize(), and no producer of
+    // its iteration codes (5/6) exists anymore. Boundary events come
+    // exclusively from the dynamic anchor registration below.
 
     // Planner memory ledger deltas (doc sec.7.1/7.8). Anchors stay symbolic
     // here; they are resolved to actual ASTRA ticks at finalize time.
@@ -585,7 +604,7 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
     for (const auto& entry : memory_actions) {
         MemoryAction action;
         try {
-            action.sequence_index = entry.value("sequence_index", int64_t(0));
+            action.sequence_index = entry.at("sequence_index").get<int64_t>();
             action.anchor_kind = entry.at("anchor_kind").get<std::string>();
             action.anchor_quality =
                 entry.value("anchor_quality", std::string("unknown"));
@@ -595,13 +614,20 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                     entry["trigger_queue_index"].get<int64_t>();
             }
             action.rank = entry.at("rank").get<int>();
+            // Same signed-domain guard as the node-event rank keys: a
+            // negative rank can never match a simulated Sys id, so it would
+            // silently strand its ledger delta outside every per-rank
+            // replay/join.
+            if (action.rank < 0) {
+                fatal_metrics_error("negative rank in memory action: " +
+                                    std::to_string(action.rank));
+            }
             action.weight_delta_bytes =
                 entry.value("weight_delta_bytes", int64_t(0));
             action.resident_kv_delta_bytes =
                 entry.value("resident_kv_delta_bytes", int64_t(0));
             action.reserved_kv_delta_bytes =
                 entry.value("reserved_kv_delta_bytes", int64_t(0));
-            action.cause = entry.value("cause", std::string(""));
         } catch (const std::exception& e) {
             fatal_metrics_error(std::string("malformed memory action in ") +
                                 manifest_path + ": " + e.what());
@@ -647,29 +673,6 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
         }
         this->planner_memory_peaks_.push_back(entry);
     }
-
-    // Microbenchmark point descriptor (doc sec.8 extension key). Exactly one
-    // point per ET/run, so the point's active-rank totals are the iteration
-    // numerators; no windowed attribution is needed.
-    if (manifest.contains("microbenchmark") &&
-        manifest["microbenchmark"].is_object()) {
-        const json& point = manifest["microbenchmark"];
-        MicrobenchPointSpec spec;
-        try {
-            spec.benchmark_point_id =
-                point.at("benchmark_point_id").get<int64_t>();
-            spec.tp_degree = point.at("tp_degree").get<int64_t>();
-            for (const auto& rank : point.at("ranks")) {
-                spec.active_ranks.push_back(rank.get<int>());
-            }
-            spec.raw = point;
-        } catch (const std::exception& e) {
-            fatal_metrics_error(std::string("malformed microbenchmark point "
-                                            "in ") +
-                                manifest_path + ": " + e.what());
-        }
-        this->microbench_point_ = std::move(spec);
-    }
 }
 
 void MetricCollector::on_node_issue(int rank, uint64_t node_id, Tick tick) {
@@ -692,8 +695,8 @@ void MetricCollector::on_node_issue(int rank, uint64_t node_id, Tick tick) {
     // drop the rank bucket when it empties. Only the ROUTING tables are
     // erased: apply_event has already copied everything finalize consumes
     // (memory_anchor_ticks_ / spool + transfer maxima / requests_ /
-    // request_boundaries_ / first_token_ticks_ / iterations_) into its own
-    // derived storage.
+    // request_boundaries_ / first_token_ticks_) into its own derived
+    // storage.
     rank_it->second.erase(node_it);
     if (rank_it->second.empty()) {
         this->issue_events_.erase(rank_it);
@@ -768,25 +771,6 @@ void MetricCollector::apply_event(const NodeMetricEvent& event, int rank,
         }
         return;
     }
-    case EventCode::ITERATION_START_ISSUE:
-    case EventCode::ITERATION_END_COMPLETE: {
-        IterationMetricState& state = this->iterations_[event.subject_id];
-        state.benchmark_point_id = event.subject_id;
-        if (code == EventCode::ITERATION_START_ISSUE) {
-            if (!state.iteration_start.has_value() ||
-                tick < state.iteration_start.value()) {
-                state.iteration_start = tick;
-            }
-            state.start_ranks_seen.insert(rank);
-        } else {
-            if (!state.iteration_end.has_value() ||
-                tick > state.iteration_end.value()) {
-                state.iteration_end = tick;
-            }
-            state.end_ranks_seen.insert(rank);
-        }
-        return;
-    }
     case EventCode::MEMORY_ANCHOR_COMPLETE: {
         const MemoryAnchorTick anchor{event.subject_id, rank, node_id, tick};
         if (this->online_mode_) {
@@ -855,6 +839,22 @@ void MetricCollector::online_register_request(
         state.arrival.value_ns = arrival_value_ns;
         state.arrival.parent_queue_index = arrival_parent_queue_index;
         state.arrival.interval_ns = arrival_interval_ns;
+        // F1-CPP C1-4 同款移植:全新 queue_index 的 request_id 已被绑定到
+        // 其它 queue_index(manifest 或更早的动态注册)即跨源身份冲突——
+        // 无条件 insert 会把 request_index_by_request_id_ last-wins 重绑,
+        // 该 id 的全部节点/rank 锚点静默漂移到错误主体。与 load_manifest
+        // 的 request_id 查重同一 fail-closed 契约与通道。
+        const auto id_binding =
+            this->request_index_by_request_id_.find(request_id);
+        if (id_binding != this->request_index_by_request_id_.end()) {
+            fatal_metrics_error(
+                "duplicate request_id across sources: '" + request_id +
+                "' is already bound to queue_index " +
+                std::to_string(
+                    this->requests_[id_binding->second].queue_index) +
+                "; refusing to rebind it to queue_index " +
+                std::to_string(queue_index));
+        }
         this->request_index_by_queue_index_[queue_index] = this->requests_.size();
         this->request_index_by_request_id_[request_id] = this->requests_.size();
         this->requests_.push_back(std::move(state));
@@ -862,8 +862,31 @@ void MetricCollector::online_register_request(
     }
     // Idempotent re-registration: the online CSV data is authoritative for
     // the arrival/session fields; overwrite them (the manifest values are
-    // planner-side, the CSV row is the actual online input).
+    // planner-side, the CSV row is the actual online input). A renamed
+    // request_id must also drop the old map alias, or it would keep
+    // resolving to this request forever.
     RequestMetricState& state = this->requests_[existing->second];
+    if (state.request_id != request_id) {
+        // F1-CPP C1-4 同款移植 (2026-10-01), same gate as the fresh branch
+        // above: a renamed request_id that is already bound to ANOTHER
+        // queue_index is a cross-source identity conflict -- blindly
+        // erasing the old alias and re-binding here would last-wins-steal
+        // the id and silently drift every node/rank anchor of the other
+        // request onto this one.
+        const auto id_binding =
+            this->request_index_by_request_id_.find(request_id);
+        if (id_binding != this->request_index_by_request_id_.end() &&
+            id_binding->second != existing->second) {
+            fatal_metrics_error(
+                "duplicate request_id across sources: '" + request_id +
+                "' is already bound to queue_index " +
+                std::to_string(
+                    this->requests_[id_binding->second].queue_index) +
+                "; refusing to rebind it to queue_index " +
+                std::to_string(queue_index));
+        }
+        this->request_index_by_request_id_.erase(state.request_id);
+    }
     state.request_id = request_id;
     state.session_id = session_id;
     state.turn_index = turn_index;
@@ -875,18 +898,16 @@ void MetricCollector::online_register_request(
     this->request_index_by_request_id_[request_id] = existing->second;
 }
 
-void MetricCollector::clear_static_node_events() {
-    // Online mode only (see the header comment): the manifest's static
-    // node-event tables are keyed by the offline ET node-id space, which
-    // overlaps the online per-rank id space and would fire on unrelated
-    // online nodes. Clearing keeps the dynamic anchors as the sole event
-    // source. Requests/arrivals/memory actions stay loaded (the manifest
+void MetricCollector::enter_online_mode() {
+    // Online mode only (see the header comment): the collector serves the
+    // live dynamic graph, whose anchors are registered per committed batch
+    // before each issue pass. Latch the online emission rules and open the
+    // raw-anchor spool before a terminal event can be observed.  Requests/
+    // arrivals/memory actions stay loaded from the manifest (the manifest
     // request list is authoritative for arrivals; anchors are not).
     if (!this->enabled_) {
         return;
     }
-    this->issue_events_.clear();
-    this->complete_events_.clear();
     // D3 (2026-08-28): latch online mode for emit_watermark_records (the
     // hbm_watermark bucket lines are the documented all-zero series there
     // -- see the header comment on online_mode_).
@@ -1215,17 +1236,100 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             const auto windowed =
                 stats->calculate_roofline_utilization_in_window(0,
                                                                 sim_end_tick);
-            record["active_kernel_roofline_compute_util"] =
-                windowed.compute_utilization_weighted_sum /
-                static_cast<double>(windowed.total_comp_time);
-            record["active_kernel_roofline_memory_util"] =
-                windowed.memory_utilization_weighted_sum /
-                static_cast<double>(windowed.total_comp_time);
+            // 退化窗口判定(M-17 修复):WindowedRooflineUtilization 的
+            // total_comp_time 以 1ns 种子保底(Statistics.hh,同旧
+            // extract_utilizations 的防 0 除守卫口径),且每个被裁剪进窗口
+            // 的计算段至少贡献 1ns——因此 total_comp_time == 1 恰是"窗口
+            // 内无任何计算段"的真实信号。旧判定 `> 0` 在种子保底下恒真,
+            // null+note 分支成为死代码:无计算窗口的 rank 会输出 0.0
+            // 利用率而非 null,下游范围比较对 0.0 静默通过。
+            if (windowed.total_comp_time > 1) {
+                record["active_kernel_roofline_compute_util"] =
+                    windowed.compute_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                record["active_kernel_roofline_memory_util"] =
+                    windowed.memory_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+            } else {
+                // Degenerate run (no clipped compute time in the window):
+                // emit an explicit null + note instead of a 0/0 NaN, which
+                // every range comparison would silently pass.
+                record["active_kernel_roofline_compute_util"] = nullptr;
+                record["active_kernel_roofline_memory_util"] = nullptr;
+                record["active_kernel_roofline_note"] =
+                    "unavailable: zero total comp time in the utilization "
+                    "window";
+            }
         } else {
             record["active_kernel_roofline_compute_util"] = nullptr;
             record["active_kernel_roofline_memory_util"] = nullptr;
             record["active_kernel_roofline_note"] =
                 "unavailable: roofline model disabled";
+        }
+
+        // Die-backend active-kernel utilization (stage E2, contract §7.6
+        // caliber): the same duration-weighted window aggregation as the
+        // roofline pair above, populated by DieExecution::fill_utilizations
+        // -- compute = PE FLOP / (PE_peak_die * node elapsed), memory =
+        // actual bytes / (B_mem * node elapsed), vector = eq-ops /
+        // (V_peak * node elapsed).  Gated on the die backend itself (the
+        // roofline keys above keep their own legacy gate untouched), so a
+        // legacy run reports them null with a note instead.
+        record["active_kernel_die_source"] = "simulator";
+        record["active_kernel_die_definition"] =
+            "duration-weighted average of die per-node utilization over comp "
+            "nodes clipped to the utilization window (contract §7.6: "
+            "compute=PE FLOP/(PE_peak_die*elapsed), memory=actual bytes/"
+            "(B_mem*elapsed), vector=eq-ops/(V_peak*elapsed))";
+        if (sys->compute_cost_model == ComputeCostModel::Die &&
+            sim_end_tick > 0) {
+            const auto windowed =
+                stats->calculate_roofline_utilization_in_window(0,
+                                                                sim_end_tick);
+            // Same degenerate-window caliber as the roofline pair above
+            // (total_comp_time is 1-seeded; == 1 means no clipped compute
+            // time in the window).
+            if (windowed.total_comp_time > 1) {
+                const double die_compute =
+                    windowed.compute_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                const double die_memory =
+                    windowed.memory_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                const double die_vector =
+                    windowed.vector_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                record["active_kernel_die_compute_util"] = die_compute;
+                record["active_kernel_die_memory_util"] = die_memory;
+                record["active_kernel_die_vector_util"] = die_vector;
+                check_consistency(
+                    die_compute >= -kUtilEpsilon &&
+                        die_compute <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_compute_util out of range");
+                check_consistency(
+                    die_memory >= -kUtilEpsilon &&
+                        die_memory <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_memory_util out of range");
+                check_consistency(
+                    die_vector >= -kUtilEpsilon &&
+                        die_vector <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_vector_util out of range");
+            } else {
+                record["active_kernel_die_compute_util"] = nullptr;
+                record["active_kernel_die_memory_util"] = nullptr;
+                record["active_kernel_die_vector_util"] = nullptr;
+                record["active_kernel_die_note"] =
+                    "unavailable: no comp nodes in the utilization window";
+            }
+        } else {
+            record["active_kernel_die_compute_util"] = nullptr;
+            record["active_kernel_die_memory_util"] = nullptr;
+            record["active_kernel_die_vector_util"] = nullptr;
+            record["active_kernel_die_note"] =
+                "unavailable: compute-cost-model is not die";
         }
         emit_record(record.dump());
 
@@ -1301,9 +1405,14 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             hbm_record["redistribution_events"] =
                 hbm_model->redistribution_events();
             hbm_record["redistribution_events_definition"] =
-                "count of equal-share recomputations: every membership "
-                "change (job joining a non-empty set, completion leaving "
-                "survivors) with at least one remaining bandwidth user";
+                "count of real equal-share switches among the streaming "
+                "jobs: a zero-latency joiner onto a bus with at least one "
+                "streamer counts once at issue, each fixed-latency joiner "
+                "counts once at its latency-expiry transition (the first "
+                "streamer onto an idle bus starts no re-split), and each "
+                "completion batch leaving at least one streaming survivor "
+                "counts ONCE regardless of how many jobs completed "
+                "together (batch-level rule)";
             hbm_record["local_hbm_restore_bytes_issued"] =
                 rank_state.local_hbm_restore_bytes;
             hbm_record["local_hbm_bw_bytes_per_second"] = sys->local_mem_bw;
@@ -1562,206 +1671,10 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         }
     }
 
-    // Microbenchmark iteration boundary records (doc sec.4.3 codes 5/6 and
-    // sec.8.6), plus the doc sec.8.7 per-iteration utilization fields.
-    // Full detail only; service runs normally have none.
+    // Raw memory-anchor records, full detail only (the iteration boundary
+    // output block was removed with the code-5/6 iteration events: no
+    // producer of those events exists anymore).
     if (full_detail) {
-        std::unordered_map<int, const Sys*> systems_by_id;
-        for (const Sys* sys : systems) {
-            systems_by_id[sys->id] = sys;
-        }
-        for (const auto& [point_id, state] : this->iterations_) {
-            json record;
-            record["schema"] = 1;
-            record["type"] = "iteration";
-            record["source"] = "simulator";
-            record["repo_variant"] = this->repo_variant_;
-            record["run_id"] = this->run_id_;
-            record["benchmark_point_id"] = point_id;
-            record["iteration_start_ns"] = tick_or_null(state.iteration_start);
-            record["iteration_end_ns"] = tick_or_null(state.iteration_end);
-            if (state.iteration_start.has_value() &&
-                state.iteration_end.has_value()) {
-                record["iteration_time_ns"] =
-                    state.iteration_end.value() - state.iteration_start.value();
-            } else {
-                record["iteration_time_ns"] = nullptr;
-            }
-            record["start_ranks_seen"] = state.start_ranks_seen.size();
-            record["end_ranks_seen"] = state.end_ranks_seen.size();
-
-            // Doc sec.8.7 utilization fields. A microbenchmark run carries
-            // exactly one point per ET, so the per-rank num_ops/byte totals
-            // accumulated by on_compute_issue over the point's active ranks
-            // are precisely this iteration's numerators (no windowed
-            // attribution needed); idle sentinel ranks contribute nothing.
-            const bool have_spec = this->microbench_point_.has_value() &&
-                this->microbench_point_->benchmark_point_id == point_id &&
-                this->microbench_point_->tp_degree > 0;
-            const bool have_window = state.iteration_start.has_value() &&
-                state.iteration_end.has_value() &&
-                state.iteration_end.value() > state.iteration_start.value();
-            if (have_spec) {
-                record["point"] = this->microbench_point_->raw;
-                record["tp_degree"] = this->microbench_point_->tp_degree;
-            }
-            if (!have_spec || !have_window) {
-                record["num_ops_total"] = nullptr;
-                record["local_tensor_bytes_total"] = nullptr;
-                record["compute_util"] = nullptr;
-                record["hbm_bw_util"] = nullptr;
-                record["active_kernel_roofline_compute_util"] = nullptr;
-                record["active_kernel_roofline_memory_util"] = nullptr;
-                record["utilization_note"] =
-                    "unavailable: no matching microbenchmark point "
-                    "descriptor in the manifest, or zero-length iteration "
-                    "window";
-            } else {
-                const MicrobenchPointSpec& spec = this->microbench_point_.value();
-                unsigned __int128 num_ops_total = 0;
-                unsigned __int128 local_bytes_total = 0;
-                double compute_util_weighted_sum = 0;
-                double memory_util_weighted_sum = 0;
-                Tick total_comp_time = 0;
-                const Sys* reference_sys = nullptr;
-                for (const int rank : spec.active_ranks) {
-                    const auto state_it = this->rank_states_.find(rank);
-                    if (state_it != this->rank_states_.end()) {
-                        num_ops_total += state_it->second.total_num_ops;
-                        local_bytes_total += state_it->second.total_local_bytes;
-                    }
-                    const auto sys_it = systems_by_id.find(rank);
-                    if (sys_it == systems_by_id.end()) {
-                        continue;
-                    }
-                    if (reference_sys == nullptr) {
-                        reference_sys = sys_it->second;
-                    }
-                    const auto windowed = sys_it->second->workload->stats
-                        ->calculate_roofline_utilization_in_window(
-                            state.iteration_start.value(),
-                            state.iteration_end.value());
-                    compute_util_weighted_sum +=
-                        windowed.compute_utilization_weighted_sum;
-                    memory_util_weighted_sum +=
-                        windowed.memory_utilization_weighted_sum;
-                    total_comp_time += windowed.total_comp_time;
-                }
-
-                record["num_ops_total"] = u128_to_string(num_ops_total);
-                record["local_tensor_bytes_total"] =
-                    u128_to_string(local_bytes_total);
-                record["numerator_attribution"] =
-                    "sum of per-rank on_compute_issue totals over the "
-                    "point's active_ranks (one point per ET/run)";
-                record["compute_util_source"] = "simulator_microbenchmark";
-                record["compute_util_definition"] =
-                    "num_ops_total / (tp_degree * peak_flops_per_second * "
-                    "iteration_time_seconds)";
-                record["hbm_bw_util_source"] = "simulator_microbenchmark";
-                record["hbm_bw_util_definition"] =
-                    "local_tensor_bytes_total / (tp_degree * "
-                    "local_hbm_bw_bytes_per_second * "
-                    "iteration_time_seconds)";
-                record["active_kernel_roofline_source"] = "simulator";
-                record["active_kernel_roofline_definition"] =
-                    "duration-weighted average of roofline per-node "
-                    "utilization over comp nodes clipped to the iteration "
-                    "window, aggregated across active ranks; same weighting "
-                    "formula as 'Average compute utilization' (doc sec.8.7)";
-
-                const long double iteration_seconds =
-                    static_cast<long double>(
-                        state.iteration_end.value() -
-                        state.iteration_start.value()) /
-                    1e9L;
-                const double peak_flops =
-                    reference_sys != nullptr ? reference_sys->peak_perf : 0;
-                const double local_hbm_bw =
-                    reference_sys != nullptr ? reference_sys->local_mem_bw : 0;
-                const bool roofline_on = reference_sys != nullptr &&
-                    reference_sys->roofline_enabled;
-                record["peak_flops_per_second"] = peak_flops;
-                record["peak_flops_per_second_source"] =
-                    "system-configuration:peak-perf";
-                record["local_hbm_bw_bytes_per_second"] = local_hbm_bw;
-                record["local_hbm_bw_source"] =
-                    "system-configuration:local-mem-bw";
-
-                const std::string prefix = "benchmark_point_id " +
-                    std::to_string(point_id) + ": ";
-                if (roofline_on && peak_flops > 0) {
-                    const long double denominator =
-                        static_cast<long double>(spec.tp_degree) *
-                        static_cast<long double>(peak_flops) *
-                        iteration_seconds;
-                    const long double compute_util =
-                        u128_to_long_double(num_ops_total) / denominator;
-                    record["compute_util"] =
-                        static_cast<double>(compute_util);
-                    check_consistency(
-                        compute_util >= -kUtilEpsilon &&
-                            compute_util <= 1.0L + kUtilEpsilon,
-                        prefix + "compute_util out of range: numerator=" +
-                            u128_to_string(num_ops_total) +
-                            " denominator=tp_degree*peak_flops_per_second*"
-                            "iteration_time_seconds");
-                } else {
-                    record["compute_util"] = nullptr;
-                    record["compute_util_note"] =
-                        "unavailable: roofline model disabled or zero "
-                        "peak-perf";
-                }
-                if (roofline_on && local_hbm_bw > 0) {
-                    const long double denominator =
-                        static_cast<long double>(spec.tp_degree) *
-                        static_cast<long double>(local_hbm_bw) *
-                        iteration_seconds;
-                    const long double hbm_bw_util =
-                        u128_to_long_double(local_bytes_total) / denominator;
-                    record["hbm_bw_util"] =
-                        static_cast<double>(hbm_bw_util);
-                    check_consistency(
-                        hbm_bw_util >= -kUtilEpsilon &&
-                            hbm_bw_util <= 1.0L + kUtilEpsilon,
-                        prefix + "hbm_bw_util out of range: numerator=" +
-                            u128_to_string(local_bytes_total) +
-                            " denominator=tp_degree*local_hbm_bw*"
-                            "iteration_time_seconds");
-                } else {
-                    record["hbm_bw_util"] = nullptr;
-                    record["hbm_bw_util_note"] =
-                        "unavailable: roofline model disabled or zero "
-                        "local-mem-bw";
-                }
-                if (roofline_on && total_comp_time > 0) {
-                    const double compute_roofline =
-                        compute_util_weighted_sum /
-                        static_cast<double>(total_comp_time);
-                    const double memory_roofline =
-                        memory_util_weighted_sum /
-                        static_cast<double>(total_comp_time);
-                    record["active_kernel_roofline_compute_util"] =
-                        compute_roofline;
-                    record["active_kernel_roofline_memory_util"] =
-                        memory_roofline;
-                    check_consistency(
-                        compute_roofline <= 1.0 + kUtilEpsilon,
-                        prefix +
-                            "active_kernel_roofline_compute_util out of "
-                            "range");
-                    check_consistency(
-                        memory_roofline <= 1.0 + kUtilEpsilon,
-                        prefix +
-                            "active_kernel_roofline_memory_util out of "
-                            "range");
-                } else {
-                    record["active_kernel_roofline_compute_util"] = nullptr;
-                    record["active_kernel_roofline_memory_util"] = nullptr;
-                }
-            }
-            emit_record(record.dump());
-        }
         if (this->online_mode_) {
             // The raw anonymous spool is replayed exactly here, preserving
             // the legacy memory_anchor block's fields, multiplicity, and
@@ -1927,25 +1840,32 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
 namespace {
 
 // Signed 128-bit helpers for the capacity-time integral: per-rank ledger
-// states are bounded by capacity, but byte*ns areas are not.
+// states are bounded by capacity, but byte*ns areas are not. Negation is
+// clamped at -INT128_MAX: -INT128_MIN has no positive counterpart and
+// negating it would be UB (a magnitude that large is outside the realistic
+// ledger range, so legal inputs never hit the clamp).
+__int128 i128_abs_clamped(__int128 value) {
+    constexpr __int128 kMax =
+        static_cast<__int128>((static_cast<unsigned __int128>(1) << 127) - 1);
+    if (value < -kMax) {
+        return -kMax;
+    }
+    return value < 0 ? -value : value;
+}
+
 std::string i128_to_string(__int128 value) {
     if (value == 0) {
         return "0";
     }
-    std::string sign;
-    if (value < 0) {
-        sign = "-";
-        value = -value;
-    }
-    return sign + u128_to_string(static_cast<unsigned __int128>(value));
+    const std::string sign = value < 0 ? "-" : "";
+    return sign + u128_to_string(
+        static_cast<unsigned __int128>(i128_abs_clamped(value)));
 }
 
 long double i128_to_long_double(__int128 value) {
-    if (value < 0) {
-        return -u128_to_long_double(
-            static_cast<unsigned __int128>(-value));
-    }
-    return u128_to_long_double(static_cast<unsigned __int128>(value));
+    const long double magnitude = u128_to_long_double(
+        static_cast<unsigned __int128>(i128_abs_clamped(value)));
+    return value < 0 ? -magnitude : magnitude;
 }
 
 }  // namespace
@@ -1957,9 +1877,19 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
     totals.peaks_count = this->planner_memory_peaks_.size();
     if (this->memory_actions_.empty() && this->planner_memory_peaks_.empty()) {
         // WP8 (CPP_SPEC §B): no planner ledger rows at all (the online
-        // synthetic manifests carry none). Still emit the per-rank
-        // watermark summaries over the simulated ranks so the flat-zero
-        // replay is explicit downstream instead of a missing record.
+        // synthetic manifests carry none). Emit the same all-zero
+        // capacity_timeavg record per simulated rank that the replay path's
+        // no-delta fallback ranks get (G2-1: with no ledger actions the
+        // integrals are exactly zero, so the utilization is a defined 0.0
+        // whenever a positive capacity and window exist -- here no capacity
+        // exists, so the utils stay null with the same note), then the
+        // per-rank watermark summaries over the simulated ranks so the
+        // flat-zero replay is explicit downstream instead of a missing
+        // record.
+        for (const int rank : fallback_ranks) {
+            emit_idle_capacity_timeavg_record(rank, std::nullopt,
+                                              sim_end_tick, 0, 0);
+        }
         std::map<int, WatermarkSeries> flat_series;
         for (const int rank : fallback_ranks) {
             WatermarkSeries series;
@@ -2158,29 +2088,43 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         __int128 resident_area = 0;
         __int128 committed_area = 0;
         Tick previous = 0;
-        // Clamp each segment at 0, exactly like the WP8 watermark walk
-        // below (resident_pos/committed_pos): a negative intermediate book
-        // value (e.g. an anchor ordering where releases precede acquires)
-        // must not drive this direct integral below the clamped watermark
-        // integral and trip the >1% timeavg cross-check spuriously. Both
-        // integrals use the same "occupancy never goes below zero" step
-        // function.
-        const auto clamped = [](__int128 value) -> __int128 {
-            return value > 0 ? value : 0;
-        };
+        // 分量下溢 fail-closed(M-21 修复):manager 各发射点有逐 rank 下溢
+        // 守卫,重放中任一分量(w/reserved)出现负值只能是上游账本损坏绕过
+        // 了守卫。旧处置是把聚合中间值 clamp 0 后继续积分——与 Python 侧
+        // hbm_watermark 重放的"负分量 = 账本损坏 fail-closed(退出码 2)"
+        // 口径分裂,同一坏数据四种结局。现在与权威重放同口径:发现即
+        // fatal,不得把损坏账本平均成"合法"的容量时间均值。
+        const auto fail_negative_component =
+            [&rank](const __int128 w, const __int128 r, const __int128 rv,
+                    const int64_t sequence_index) {
+                if (w < 0 || r < 0 || rv < 0) {
+                    fatal_metrics_error(
+                        "negative ledger component in memory replay (rank " +
+                        std::to_string(rank) + " sequence_index " +
+                        std::to_string(sequence_index) +
+                        "): weight=" + i128_to_string(w) +
+                        " resident=" + i128_to_string(r) +
+                        " reserved=" + i128_to_string(rv) +
+                        " -- ledger corruption; the journal replay fail-closes "
+                        "on the same stream");
+                }
+            };
         for (const auto& delta : deltas) {
             const Tick elapsed = delta.tick - previous;
-            resident_area += clamped(weight + resident) * elapsed;
-            committed_area +=
-                clamped(weight + resident + reserved) * elapsed;
+            // 应用前分段积分:上一次分量检查已保证 weight/resident/reserved
+            // 非负,聚合值(w+r、w+r+reserved)必然非负,无需再 clamp。
+            resident_area += (weight + resident) * elapsed;
+            committed_area += (weight + resident + reserved) * elapsed;
             weight += delta.weight_delta;
             resident += delta.resident_delta;
             reserved += delta.reserved_delta;
+            fail_negative_component(weight, resident, reserved,
+                                    delta.sequence_index);
             previous = delta.tick;
         }
         const Tick tail = sim_end_tick - previous;
-        resident_area += clamped(weight + resident) * tail;
-        committed_area += clamped(weight + resident + reserved) * tail;
+        resident_area += (weight + resident) * tail;
+        committed_area += (weight + resident + reserved) * tail;
 
         // WP8 (CPP_SPEC §B): bucketed watermark sampling of the same step
         // function, filled by an independent walk that splits segments at
@@ -2208,6 +2152,11 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
                     wm_weight += deltas[next_delta].weight_delta;
                     wm_resident += deltas[next_delta].resident_delta;
                     wm_reserved += deltas[next_delta].reserved_delta;
+                    // 与直接积分同一分量下溢 fail-closed 门(M-21):两条
+                    // 走法对同一账本流必须同口径。
+                    fail_negative_component(wm_weight, wm_resident,
+                                            wm_reserved,
+                                            deltas[next_delta].sequence_index);
                     // A delta applying inside this bucket is occupancy
                     // activity even when the resulting value stays zero
                     // (e.g. a full release).
@@ -2391,13 +2340,26 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         const auto peak_it = peaks_by_rank.find(rank);
         // Ledger byte fields are integer-typed by the load_manifest parse
         // guard, so this value() read cannot throw.
+        std::optional<int64_t> capacity;
         if (peak_it != peaks_by_rank.end() &&
             peak_it->second->contains("ledger")) {
             series.capacity_bytes = (*peak_it->second)["ledger"].value(
                 "capacity_bytes", int64_t(0));
             series.capacity_known = true;
+            capacity = series.capacity_bytes;
         }
         watermark_series_by_rank.emplace(rank, std::move(series));
+
+        // G2-1: idle (no-delta) ranks must get the same capacity_timeavg
+        // record as replayed ranks. With no ledger actions their integrals
+        // are exactly zero, so the utilization is a defined 0.0 whenever a
+        // positive capacity and window exist; without this record the rank
+        // vanishes from multi-rank capacity_timeavg joins and the aggregate
+        // looks misaligned. No consistency cross-check is needed for a
+        // constant-zero numerator.
+        emit_idle_capacity_timeavg_record(rank, capacity, sim_end_tick,
+                                          total_by_rank[rank],
+                                          unresolved_by_rank[rank]);
     }
     emit_watermark_records(watermark_series_by_rank, sim_end_tick,
                            full_detail);
@@ -2450,6 +2412,57 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
     }
 
     return totals;
+}
+
+void MetricCollector::emit_idle_capacity_timeavg_record(
+    int rank, const std::optional<int64_t>& capacity, Tick sim_end_tick,
+    uint64_t actions_total, uint64_t actions_unresolved) {
+    // G2-1: the all-zero capacity_timeavg record of a rank with no replayed
+    // ledger deltas. Byte-identical in shape to a replayed rank's record,
+    // with every counter at its empty value.
+    json record;
+    record["schema"] = 1;
+    record["type"] = "capacity_timeavg";
+    record["source"] = "planner_memory_ledger";
+    record["repo_variant"] = this->repo_variant_;
+    record["run_id"] = this->run_id_;
+    record["rank"] = rank;
+    record["scope"] = "npu_local_hbm";
+    record["utilization_window"] = "[0, sim_end_ns]";
+    record["utilization_window_ns"] = sim_end_tick;
+    record["resident_definition"] = "weight + resident_kv";
+    record["committed_definition"] =
+        "weight + resident_kv + reserved_kv";
+    record["capacity_source"] =
+        "planner_memory_peaks.ledger.capacity_bytes";
+    if (capacity.has_value()) {
+        record["capacity_bytes"] = capacity.value();
+    } else {
+        record["capacity_bytes"] = nullptr;
+    }
+    record["resident_byte_ns"] = "0";
+    record["committed_byte_ns"] = "0";
+    if (capacity.has_value() && capacity.value() > 0 && sim_end_tick > 0) {
+        record["resident_capacity_timeavg_util"] = 0.0;
+        record["committed_capacity_timeavg_util"] = 0.0;
+    } else {
+        record["resident_capacity_timeavg_util"] = nullptr;
+        record["committed_capacity_timeavg_util"] = nullptr;
+        record["timeavg_util_note"] =
+            "undefined: zero capacity/window or missing planner peaks "
+            "entry for this rank";
+    }
+    record["actions_total"] = actions_total;
+    record["actions_replayed"] = static_cast<uint64_t>(0);
+    record["actions_unresolved"] = actions_unresolved;
+    record["anchor_quality_counts"] = json::object();
+    record["transfer_anchor_request_level_fallback"] = 0;
+    record["replay_final_physical_used_bytes"] = "0";
+    record["replay_final_committed_used_bytes"] = "0";
+    record["final_state_matches_planner"] = nullptr;
+    record["final_state_check_note"] =
+        "no replayed deltas for this rank";
+    emit_record(record.dump());
 }
 
 void MetricCollector::emit_watermark_records(
@@ -2555,9 +2568,12 @@ void MetricCollector::emit_watermark_records(
             if (changed.empty()) {
                 // Flat series (e.g. empty online planner ledger): only the
                 // window boundary buckets, both zero, note on the summary
-                // explains why.
+                // explains why.  At sim_end_tick <= one period the first
+                // and last boundary are the same bucket -- emit it once.
                 emit_bucket(0);
-                emit_bucket(last_bucket);
+                if (last_bucket != 0) {
+                    emit_bucket(last_bucket);
+                }
                 continue;
             }
             for (const uint64_t bucket : changed) {

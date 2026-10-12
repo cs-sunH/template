@@ -5,6 +5,7 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/StreamBaseline.hh"
 
+#include "astra-sim/system/SharedBusStat.hh"
 #include "astra-sim/system/astraccl/Algorithm.hh"
 
 using namespace AstraSim;
@@ -15,9 +16,6 @@ StreamBaseline::StreamBaseline(Sys* owner,
                                std::list<CollectivePhase> phases_to_go,
                                int priority)
     : BaseStream(stream_id, owner, phases_to_go) {
-    this->owner = owner;
-    this->stream_id = stream_id;
-    this->phases_to_go = phases_to_go;
     this->dataset = dataset;
     this->priority = priority;
     steps_finished = 0;
@@ -25,29 +23,22 @@ StreamBaseline::StreamBaseline(Sys* owner,
 
 void StreamBaseline::init() {
     initialized = true;
-    last_init = Sys::boostedTick();
     if (!my_current_phase.enabled) {
         return;
     }
     my_current_phase.algorithm->run(EventType::StreamInit, nullptr);
-    if (steps_finished == 1) {
-        queuing_delay.push_back(last_phase_change - creation_time);
-    }
-    queuing_delay.push_back(Sys::boostedTick() - last_phase_change);
 }
 
 void StreamBaseline::call(EventType event, CallData* data) {
-    SharedBusStat* sharedBusStat = (SharedBusStat*)data;
-    update_bus_stats(BusType::Both, sharedBusStat);
     my_current_phase.algorithm->run(EventType::General, data);
     if (data != nullptr) {
-        delete sharedBusStat;
+        // The only non-null payload reaching here is the SharedBusStat event
+        // stub allocated in MemBus; delete through the exact type because
+        // CallData's destructor is not virtual.
+        delete (SharedBusStat*)data;
     }
 }
 
 void StreamBaseline::consume(RecvPacketEventHandlerData* message) {
-    net_message_latency.back() +=
-        Sys::boostedTick() - message->ready_time;  // not accurate
-    net_message_counter++;
     my_current_phase.algorithm->run(EventType::PacketReceived, message);
 }

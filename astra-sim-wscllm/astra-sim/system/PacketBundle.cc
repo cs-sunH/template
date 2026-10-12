@@ -9,21 +9,6 @@ using namespace AstraSim;
 
 PacketBundle::PacketBundle(Sys* sys,
                            BaseStream* stream,
-                           std::list<MyPacket*> /*locked_packets*/,
-                           bool needs_processing,
-                           bool send_back,
-                           uint64_t size,
-                           MemBus::Transmition transmition) {
-    this->sys = sys;
-    this->needs_processing = needs_processing;
-    this->send_back = send_back;
-    this->size = size;
-    this->stream = stream;
-    this->transmition = transmition;
-}
-
-PacketBundle::PacketBundle(Sys* sys,
-                           BaseStream* stream,
                            bool needs_processing,
                            bool send_back,
                            uint64_t size,

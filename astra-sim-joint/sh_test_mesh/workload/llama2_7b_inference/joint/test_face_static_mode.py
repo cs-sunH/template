@@ -37,7 +37,6 @@ from joint.joint_config import (  # noqa: E402
     JointConfigError,
     JointMechanismConfig,
     QUOTA_OFF,
-    QUOTA_STATIC,
     QUOTA_AIMD,
     SCHEDULER_MODES,
     SCHEDULER_MODE_FACE_STATIC,

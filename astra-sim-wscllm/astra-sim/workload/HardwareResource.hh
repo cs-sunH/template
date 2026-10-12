@@ -11,18 +11,13 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/common/Logging.hh"
 #include <cstdint>
 
-#include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
-#include "astra-sim/workload/execution_driven/ExecutionMode.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
 
 namespace AstraSim {
 
 class HardwareResource {
   public:
-    HardwareResource(
-        int sys_id = -1,
-        ExecutionDriven::ExecutionMode execution_mode =
-            ExecutionDriven::ExecutionMode::Static);
+    explicit HardwareResource(int sys_id = -1);
     ~HardwareResource() {
         auto logger = LoggerFactory::get_logger("HardwareResource");
         if (this->num_in_flight_cpu_ops != 0 ||
@@ -32,53 +27,40 @@ class HardwareResource {
                 "!!!Hardware Resource sys.id={} has unreleased nodes!!!",
                 this->sys_id);
         }
-        for (auto node_id : cpu_ops_node) {
-            logger->critical("CPU node id: {}", node_id);
-        }
-        for (auto node_id : gpu_ops_node) {
-            logger->critical("GPU comp node id: {}", node_id);
-        }
-        for (auto node_id : gpu_comms_node) {
-            logger->critical("GPU comm node id: {}", node_id);
-        }
     }
-    void occupy(const std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void release(const std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    bool is_available(
-        const std::shared_ptr<Chakra::FeederV3::ETFeederNode> node) const;
-    // Step 1-8: online-mode overloads keyed by NodeView (global_id). The
-    // static ETFeederNode path above is untouched (byte-exact baseline);
-    // the online path (GraphSource::et_node == nullptr) dispatches on the
-    // NodeView fields: is_timer_op -> no-op, is_cpu_op -> CPU, kind==Compute
+    // Domain assumption (deliberate asymmetry, registered wl-F7): occupy/
+    // release abort on every reachable invariant violation (double-occupy,
+    // underflow, residual at the release of the last node), but the
+    // destructor only logs a critical line for residual in-flight counters.
+    // Rationale: the destructor runs inside process teardown -- a fatal
+    // exit path or a test harness dismantling Sys mid-run -- where an
+    // abort() could mask the ORIGINAL fatal cause and break harness exit
+    // semantics; the residual counters there are a symptom, never the
+    // first failure. Keep the critical line so the imbalance stays
+    // visible in logs; promote it to abort only if a teardown-order audit
+    // ever proves it can be the first failure.
+    // NodeView-keyed accessors (step 1-8). Dispatch on the NodeView
+    // fields: is_timer_op -> no-op, is_cpu_op -> CPU, kind==Compute
     // -> GPU comp, kind==CommRecv -> no-op, else -> GPU comm.
     void occupy(const ExecutionDriven::NodeView& node);
     void release(const ExecutionDriven::NodeView& node);
     bool is_available(const ExecutionDriven::NodeView& node) const;
-    [[nodiscard]] bool tracks_node_ids() const {
-        return retain_node_ids_;
-    }
-
-    std::unordered_set<uint64_t> cpu_ops_node;
-    std::unordered_set<uint64_t> gpu_ops_node;
-    std::unordered_set<uint64_t> gpu_comms_node;
 
     const int sys_id;
 
-    // Static mode retains exact IDs for legacy destructor diagnostics. Online
-    // mode already has NodeStore's fail-closed lifecycle and keeps only exact
-    // in-flight counters here, avoiding hash work on the per-node hot path.
-    const bool retain_node_ids_;
+    // NodeStore owns the fail-closed node lifecycle; only the exact
+    // in-flight counters live here, avoiding hash work on the per-node hot
+    // path (the static-mode per-node ID hash sets retired with the static
+    // ET path, 2026-09-27).
     uint32_t num_in_flight_cpu_ops;
     uint32_t num_in_flight_gpu_comp_ops;
     uint32_t num_in_flight_gpu_comm_ops;
 
-    // Live accumulator: tics_gpu_ops feeds Workload::report's exposed-
-    // communication line.  The write-only num_*/tics_cpu_ops/tics_gpu_comms
-    // debug counters (and HardwareResource::report) were removed as dead,
-    // and the write-only tics_hbm_dma_ops local-HBM occupancy counter joined
-    // them (2026-09-25, workload-F4: zero readers repo-wide; the local-HBM
-    // bandwidth model no longer accumulates it).
-    uint64_t tics_gpu_ops;
+    // The write-only tics_gpu_ops accumulator (and the earlier num_*/
+    // tics_cpu_ops/tics_gpu_comms debug counters plus HardwareResource::
+    // report) were removed as dead on 2026-09-27: its only reader,
+    // Workload::report's exposed-communication line, had zero callers
+    // repo-wide (workload-F4 follow-up).
 };
 
 }  // namespace AstraSim

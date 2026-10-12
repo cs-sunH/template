@@ -1,0 +1,79 @@
+/******************************************************************************
+This source code is licensed under the MIT license found in the
+LICENSE file in the root directory of this source tree.
+*******************************************************************************/
+
+/*
+DieModelAdapter.hh -- per-Workload (per-rank) bridge from a die-backend COMP
+NodeView to a DieExecution (die backend, stage B; design doc §8.1/§8.3).
+
+Responsibilities (one adapter per Workload, owned by the Workload):
+
+  - issue_die(NodeView): compile-or-reuse the immutable DiePlan through the
+    Sys-owned DieModelRuntime (Hardware + LRU PlanCache keyed with
+    DieModel::plan_cache_key; design doc §8.5 "执行句柄不入缓存"), create the
+    DieExecution with its completion handler data, and start it;
+  - track the set of live (not yet completed) DieExecutions so the Workload's
+    is_finished / drain checks include them (design doc §6.3 lifecycle red
+    line: a service must not exit while an outer node is still executing);
+  - retire finished executions lazily (a DieExecution completes inside its
+    own event callback, so it may not be destroyed synchronously there) and
+    tear every execution down on Workload destruction (no leak, no double
+    completion, no dangling HBM jobs).
+*/
+
+#ifndef __DIE_MODEL_ADAPTER_HH__
+#define __DIE_MODEL_ADAPTER_HH__
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "astra-sim/workload/execution_driven/GraphSource.hh"
+
+namespace AstraSim {
+
+class Sys;
+class Workload;
+class DieExecution;
+
+class DieModelAdapter {
+  public:
+    explicit DieModelAdapter(Workload* workload);
+    ~DieModelAdapter();
+
+    // Dispatch one die-backend real COMP node (die_spec != nullptr; the
+    // Workload layer guarantees the dispatch order of contract §7.3 before
+    // calling). Throws std::runtime_error when the node carries no
+    // die_op_spec (fail-closed, never a silent roofline fallback).
+    void issue_die(const ExecutionDriven::NodeView& node);
+
+    // Whether any outer node still has a live DieExecution. Purges retired
+    // entries first (they linger only until the next adapter entry point).
+    bool has_active_die_executions();
+
+    // DeadEnd-census diagnostic only (2026-10-11, ported from WL): one
+    // census line per live (not-yet-purged) execution, prefixed with
+    // `prefix`. Purely read-only; never called on the hot path.
+    void dump_census_to_stderr(const char* prefix) const;
+
+    // Workload teardown: cancel every pending event, drop the pending HBM
+    // die jobs, and destroy all executions. No completion callback fires.
+    void shutdown();
+
+  private:
+    friend class DieExecution;
+    // DieExecution completion hook: marks the execution retired (the object
+    // itself stays alive until the next purge -- it cannot destroy itself
+    // from inside its own completion callback).
+    void note_execution_finished(const DieExecution* execution);
+    void purge_finished_executions();
+
+    Workload* workload_;
+    Sys* sys_;
+    std::vector<std::unique_ptr<DieExecution>> active_;
+};
+
+}  // namespace AstraSim
+
+#endif /* __DIE_MODEL_ADAPTER_HH__ */

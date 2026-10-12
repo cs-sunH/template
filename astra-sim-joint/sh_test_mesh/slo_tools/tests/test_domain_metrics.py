@@ -17,6 +17,9 @@
 * home 迁移：completion 披露轨迹 + kv_delta_journal sidecar 消费面
   （C14 字段；F3 四层可信度分级：full/partial/empty/decision_only，
   行链断裂 fail-closed）；
+* 跨包对账钉测：离线 §10.3 预测距离档/分母规则常量与在线 joint 预测
+  距离桶界/成熟账本分母字串逐字锁等（ast 提在线源字面值比对，不
+  import joint——任一侧单改即报错，堵静默漂移）；
 * 纪律位：非 joint run（0 决策行）完全静默；manifest B 参数 fail-closed；
   selected_action 枚举/冗余断言位 fail-closed。
 
@@ -28,6 +31,7 @@ plan manifest + 仓内真实 slo_params_manifest.json（domain_* 两参数）。
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import contextlib
 import io
@@ -780,9 +784,157 @@ class DomainMetricsTests(unittest.TestCase):
         self.assertEqual(row["measured_ns"], "NA")
         self.assertEqual(row["measured_service_ns"], "1000")
         self.assertEqual(row["pred_measured_err_ns"], "NA")
+        # W5 重锚（§7.4/§9.3）：告警键改 settle 终点行族（settle_done
+        # 主源 + 旧 merge_done 兼容映射）。
         self.assertTrue(any(
-            "merge_done row missing" in warning
+            "settle endpoint row missing" in warning
             for warning in summary["warnings"]))
+        import shutil
+        resolved = Path(run_dir).resolve()
+        assert str(resolved).startswith(tempfile.gettempdir())
+        shutil.rmtree(resolved)
+
+    def _write_w5_settle_rows(self, run_dir, *, settle_tick,
+                               request_id="session_h_request_0",
+                               with_settle_row=True):
+        log = run_dir / "results" / "online_decision_log.jsonl"
+        with log.open("a", encoding="utf-8") as handle:
+            if with_settle_row:
+                handle.write(json.dumps({
+                    "kind": "settle_done", "request_id": request_id,
+                    "priority": 0, "tick": settle_tick,
+                    "decision": {
+                        "settle_done_ns": settle_tick,
+                        "service_done_ns": 1100,
+                        "settle_committed_ns": 1100,
+                        "merge_done_ns": settle_tick,
+                        "merge_payload_bytes": 9999,
+                        "settlement_policy": "consolidate",
+                        "settle_state": "SETTLE_DONE",
+                    },
+                }) + "\n")
+
+    def test_invalid_settle_evidence_cannot_become_a_completion_sample(self):
+        completion = {"tick": 100, "merge_transferred_bytes": 0}
+        for endpoint in (-1, 99, True, "150", float("nan")):
+            with self.subTest(endpoint=endpoint):
+                scan = dm.DomainScan()
+                scan.consume({
+                    "kind": "settle_done", "request_id": "r", "tick": 150,
+                    "decision": {"settle_done_ns": endpoint,
+                                 "service_done_ns": 100}})
+                self.assertIsNone(dm._settle_tick_for(
+                    scan, "r", "consolidate", completion))
+        scan = dm.DomainScan()
+        scan.consume({"kind": "settle_done", "request_id": "r", "tick": 150,
+                      "decision": {"settle_done_ns": 150}})
+        # 先扫描结算、后收到更晚的真实 completion 仍应拒绝逆序证据。
+        self.assertIsNone(dm._settle_tick_for(
+            scan, "r", "distributed", {"tick": 160}))
+
+    def test_w5_settle_done_row_is_primary_endpoint(self):
+        """W5（§7.4/§9.3）：settle_done 行 = settle 终点主源——measured
+        按 settle 终点配对（completion 行 service 终点分列保留）。"""
+        run_dir = build_run_dir(tag="domain_metrics_w5_settle")
+        log = run_dir / "results" / "online_decision_log.jsonl"
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_admission(
+                "session_j_request_0", 100,
+                [_cand("stay", 0, True, 600, 0,
+                       breakdown=_seg(compute=600)),
+                 _cand("recompute", 0, True, 900, 0,
+                       breakdown=_seg(compute=900)),
+                 _cand("copy", 0, False, hops=0,
+                       reason="no history to copy"),
+                 _cand("remote-read", 0, False, hops=0,
+                       reason="no resident remote history"),
+                 _cand("stay", 1, True, 900, 1,
+                       breakdown=_seg(compute=900)),
+                 _cand("recompute", 1, True, 950, 1,
+                       breakdown=_seg(compute=950)),
+                 _cand("copy", 1, False, hops=1,
+                       reason="no history to copy"),
+                 _cand("remote-read", 1, False, hops=1,
+                       reason="no resident remote history")],
+                "stay", 0, ["stay", "recompute"], cost_ns=600)) + "\n")
+            handle.write(json.dumps(_completion(
+                "session_j_request_0", 1100, "forward",
+                home_flipped_to=1, transferred=9999,
+                kv_instance_after=1)) + "\n")
+        self._write_w5_settle_rows(run_dir, settle_tick=1500,
+                                   request_id="session_j_request_0")
+        rc, summary, requests, instances = run_tool(run_dir)
+        self.assertEqual(rc, 0)
+        by_id = {row["request_id"]: row for row in requests}
+        row = by_id["session_j_request_0"]
+        # settle 终点配对：1500 − 100 = 1400（≠ service 1000）。
+        self.assertEqual(row["measured_ns"], "1400")
+        self.assertEqual(row["measured_service_ns"], "1000")
+        self.assertEqual(row["pred_measured_err_ns"], "800")
+        import shutil
+        resolved = Path(run_dir).resolve()
+        assert str(resolved).startswith(tempfile.gettempdir())
+        shutil.rmtree(resolved)
+
+    def test_w5_distributed_no_completion_fallback(self):
+        """W5（§9.3）：distributed 策略下缺 settle_done 行不得触发
+        completion=settle 回退——measured NA + 告警（无 merge 事件而仍
+        有 settle 的语义边界；consolidate 零载荷的 service 同刻回退在
+        有 settle_done 行时不会走到）。"""
+        run_dir = build_run_dir(tag="domain_metrics_w5_dist")
+        log = run_dir / "results" / "online_decision_log.jsonl"
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_admission(
+                "session_k_request_0", 100,
+                [_cand("stay", 0, True, 600, 0,
+                       breakdown=_seg(compute=600)),
+                 _cand("recompute", 0, True, 900, 0,
+                       breakdown=_seg(compute=900)),
+                 _cand("copy", 0, False, hops=0,
+                       reason="no history to copy"),
+                 _cand("remote-read", 0, False, hops=0,
+                       reason="no resident remote history"),
+                 _cand("stay", 1, True, 900, 1,
+                       breakdown=_seg(compute=900)),
+                 _cand("recompute", 1, True, 950, 1,
+                       breakdown=_seg(compute=950)),
+                 _cand("copy", 1, False, hops=1,
+                       reason="no history to copy"),
+                 _cand("remote-read", 1, False, hops=1,
+                       reason="no resident remote history")],
+                "stay", 0, ["stay", "recompute"], cost_ns=600)) + "\n")
+            handle.write(json.dumps(_completion(
+                "session_k_request_0", 1100, "stay",
+                transferred=0, kv_instance_after=0)) + "\n")
+        # run 级 manifest 声明 distributed（W5 起 prediction 节落盘）。
+        (run_dir / "bridge").mkdir(exist_ok=True)
+        manifest_path = run_dir / "bridge" / "joint_mechanism_manifest.json"
+        manifest_path.write_text(
+            json.dumps({"prediction": {
+                "settlement_policy": "distributed",
+                "future_demand_mode": "reverting"}}),
+            encoding="utf-8")
+        rc, summary, requests, instances = run_tool(run_dir)
+        self.assertEqual(rc, 0)
+        by_id = {row["request_id"]: row for row in requests}
+        row = by_id["session_k_request_0"]
+        self.assertEqual(row["measured_ns"], "NA")
+        self.assertTrue(any(
+            "distributed settlement without settle_done row" in warning
+            for warning in summary["warnings"]))
+        self.assertEqual(summary["derived"]["completion_error_report"][
+            "future_demand_mode"], "reverting")
+        # 现代 consolidate 同样必须显式闭合，零 merge 不能证明 settle。
+        manifest_path.write_text(json.dumps({"prediction": {
+            "settlement_policy": "consolidate",
+            "future_demand_mode": "recent"}}), encoding="utf-8")
+        rc, summary, requests, _ = run_tool(run_dir)
+        self.assertEqual(rc, 0)
+        row = next(row for row in requests
+                   if row["request_id"] == "session_k_request_0")
+        self.assertEqual(row["measured_ns"], "NA")
+        self.assertTrue(any("consolidate settlement without settle_done row"
+                            in warning for warning in summary["warnings"]))
         import shutil
         resolved = Path(run_dir).resolve()
         assert str(resolved).startswith(tempfile.gettempdir())
@@ -1521,6 +1673,71 @@ class PureFunctionTests(unittest.TestCase):
             assert resolved.name.startswith("slo_t_domain_sigma")
             import shutil
             shutil.rmtree(resolved)
+
+
+class OnlineOfflineLedgerReconciliationTests(unittest.TestCase):
+    """离线/在线共享字面值的跨包对账钉测（2026-09-30 整合收口）。
+
+    离线 slo_tools 与在线 joint 对同一概念各持一份常量（离线注释登记
+    "slo_tools 不 import joint 模块"的独立常量纪律），此前两侧均无对账
+    断言，任一侧单改即静默漂移。本类不引入 joint import——直接 ast
+    解析在线源文件提取字面赋值与离线常量比对：任一侧单改即在此处
+    报错，锁死漂移。在线源（sh_test_mesh/workload/llama2_7b_inference/
+    joint/）：
+      * prediction_config.py forecast_distance_buckets_ns（原 308-309 行）；
+      * forecast_validation.py CompletionMaturityLedger.DENOMINATOR_RULE
+        （原 545 行）。
+    """
+
+    ONLINE_JOINT_DIR = (TESTS_DIR.parents[1] / "workload" /
+                        "llama2_7b_inference" / "joint")
+
+    @classmethod
+    def _online_literal(cls, filename: str, name: str):
+        """从在线源文件提取名为 name 的唯一字面赋值（不 import joint）。"""
+        path = cls.ONLINE_JOINT_DIR / filename
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        hits = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = [t for t in node.targets
+                           if isinstance(t, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets = ([node.target]
+                           if isinstance(node.target, ast.Name) else [])
+            else:
+                continue
+            if any(t.id == name for t in targets):
+                hits.append(ast.literal_eval(node.value))
+        if len(hits) != 1:
+            raise AssertionError(
+                f"{path} 中名为 {name} 的字面赋值应有且仅有 1 处，实际 "
+                f"{len(hits)} 处——先复核再更新对账钉测")
+        return hits[0]
+
+    def test_denominator_rule_parity(self):
+        """分母规则字串两侧锁等：domain_metrics.ERROR_DENOMINATOR_RULE ==
+        forecast_validation.CompletionMaturityLedger.DENOMINATOR_RULE。"""
+        online = self._online_literal("forecast_validation.py",
+                                      "DENOMINATOR_RULE")
+        self.assertEqual(online,
+                         "(actual-predicted)/max(1,|predicted|) ns")
+        self.assertEqual(dm.ERROR_DENOMINATOR_RULE, online)
+
+    def test_forecast_distance_bucket_parity(self):
+        """预测距离前两档桶界逐字锁等：domain_metrics.
+        PREDICTION_DISTANCE_BANDS_NS[:2] == prediction_config.params.
+        forecast_distance_buckets_ns；并钉死语义轴差异（非矛盾，防误
+        "对齐"）：在线按预测 offset 三档封顶 far（2 桶界），离线按
+        realized 决策→settle 跨度四档多 beyond（3 桶界 + 4 标签）。"""
+        online_buckets = self._online_literal(
+            "prediction_config.py", "forecast_distance_buckets_ns")
+        self.assertEqual(online_buckets, (100_000_000, 400_000_000))
+        self.assertEqual(dm.PREDICTION_DISTANCE_BANDS_NS[:2], online_buckets)
+        self.assertEqual(len(online_buckets), 2)  # 在线 near/mid/far 封顶
+        self.assertEqual(len(dm.PREDICTION_DISTANCE_BANDS_NS), 3)
+        self.assertEqual(dm.PREDICTION_DISTANCE_BAND_LABELS,
+                         ("near", "mid", "far", "beyond"))
 
 
 if __name__ == "__main__":

@@ -14,13 +14,13 @@ wrapping the ETFeeder + DependancyResolver.
 exactly once per node; CompletionObserver/watch only record facts and never
 release dependencies a second time (步骤 1-5 操作 3).
 
-**在线模式不得自动发射后继**: dep_free_nodes() in online mode yields nodes
-only when the post-commit deferred path drains them into the source; the
-static auto-advance (issue_dep_free_nodes after every completion) must not
-leak into the online mode -- the online mode gate lives in Workload::call.
+**在线模式不得自动发射后继**: the online issue pass drains the source only
+through for_each_dep_free() on the post-commit deferred path; the static
+auto-advance (issue_dep_free_nodes after every completion) must not leak
+into the online mode -- the online mode gate lives in Workload::call.
 
-NodeView / OnlineNode share one POD: add_node stores it, dep_free_nodes()
-/ lookup() return it as the read view. Fields are the full transitive
+NodeView / OnlineNode share one POD: add_node stores it, for_each_dep_free()
+/ lookup_ptr() return it as the read view. Fields are the full transitive
 consumer inventory of a node from issue to terminal (step-1-4 operation 1):
 HardwareResource (is_timer_op / is_cpu_op / kind), Statistics (id / type /
 is_cpu_op), MetricCollector (rank + node_id only), local_mem tracker
@@ -39,6 +39,8 @@ reverse index (步骤 1-5).
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "DieTypes.hh"
 
 namespace Chakra {
 namespace FeederV3 {
@@ -63,13 +65,34 @@ enum class NodeKind : int {
     CommCollective = 7,
 };
 
+/// Compute-node role (die backend, stage B; contract §2): "compute" is a
+/// real compute op, "control_marker" a micro/sentinel node (first_token,
+/// drain, exit, sentinel, join, pstart, ... -- the comp(name,1,1) class)
+/// that must keep the legacy micro-job completion semantics instead of a
+/// die plan. The JSON spellings are exactly "compute" | "control_marker".
+enum class OpRole { Compute, ControlMarker };
+
 /// Compute-node attributes (issue_comp / issue_replay).
+/// remote_weight_bytes (the numeric field) is a diagnostic placeholder:
+/// production only reads the presence flag (has_remote_weight_bytes) and
+/// fails closed when a remote weight appears in this face repo; the value
+/// itself is never consumed. The parse layer must keep validating the
+/// remote_weight_bytes key (N12/N13 key-set contract).
 struct ComputeAttrs {
     uint64_t num_ops = 0;
     uint64_t tensor_size = 0;
     uint64_t runtime_ns = 0;  // replay runtime, duration_micros * 1000
     bool has_remote_weight_bytes = false;
     uint64_t remote_weight_bytes = 0;
+    // Stage B (die backend): the node's dispatch role and, when present,
+    // the strictly parsed immutable DieOpSpec. die_op_spec present implies
+    // runtime_ns == 0 (parser-enforced, contract §2); a real
+    // op_role=Compute node WITHOUT a die_spec fails closed in the die
+    // backend dispatch (never silently falls back to roofline). The
+    // shared_ptr keeps one immutable spec per node without copying the
+    // JSON payload into every short-lived view (design doc §8.3).
+    OpRole op_role = OpRole::Compute;
+    std::shared_ptr<const DieModel::DieOpSpec> die_spec;
 };
 
 /// Point-to-point comm attributes (issue_send_comm / issue_recv_comm).
@@ -92,8 +115,16 @@ struct CollAttrs {
     uint64_t bytes = 0;
     uint32_t priority = 0;
     std::string pg_name;
-    std::vector<bool> involved_dim;  // parsed bool_list; adapter fills the
-                                     // legacy 4x-true default when absent
+    std::vector<bool> involved_dim;  // parsed bool_list; the STATIC ET
+                                     // adapter (ETFeederGraphSource) fills
+                                     // the legacy 4x-true default when the
+                                     // attribute is absent -- online bridge
+                                     // responses parse to an EMPTY vector
+                                     // when omitted, and the committer's
+                                     // mandatory liveness preflight
+                                     // fail-closes on an empty value for
+                                     // collective nodes (a future producer
+                                     // omitting it must abort, not mis-time)
 };
 
 // Online-only, short-lived statistics state.  It lives in the NodeStore
@@ -104,19 +135,22 @@ struct OnlineStatisticsState {
     static constexpr uint64_t kInvalidTick = UINT64_MAX;
 
     uint64_t start_time = kInvalidTick;
-    uint64_t end_time = kInvalidTick;
     bool started = false;
     bool completed = false;
     bool is_gpu = false;
 
     // Short-lived per-node utilization state, filled by the online Workload
     // while the node executes and kept until terminal completion, where the
-    // two utilizations are compacted globally.  (The former write-only
+    // utilizations are compacted globally.  (The former write-only
     // operation_intensity / is_memory_bound / comm_size fields -- no
     // terminal consumer ever read them -- were removed as dead state, the
     // same rule that already removed network_bandwidth.)
+    // vector_utilization is the die-backend addition (stage B, contract
+    // §7.6): eq-ops / (vector peak * elapsed); unset for the legacy
+    // roofline/replay paths.
     std::optional<double> memory_utilization;
     std::optional<double> compute_utilization;
+    std::optional<double> vector_utilization;
 };
 
 /// The node record / read view. In static mode the ETFeederGraphSource
@@ -155,8 +189,8 @@ struct OnlineNode {
     OnlineStatisticsState online_statistics;
 };
 
-/// Read-side view; same POD as OnlineNode (add_node stores it, dep_free_nodes
-/// / lookup return it).
+/// Read-side view; same POD as OnlineNode (add_node stores it, for_each_dep_free
+/// / lookup_ptr return it).
 using NodeView = OnlineNode;
 
 class GraphSource {
@@ -165,16 +199,16 @@ class GraphSource {
 
     /// Currently free (dependency-satisfied, not yet issued) nodes, sorted by
     /// global_id for deterministic issue order. NOT consuming: take_node
-    /// marks a node as issued.
-    virtual std::vector<NodeView> dep_free_nodes() = 0;
+    /// marks a node as issued. Static-only view: the default implementation
+    /// yields nothing; the ETFeederGraphSource (static mode, whose issue
+    /// passes run through the default for_each_dep_free below) is the only
+    /// overrider. Online sources override for_each_dep_free instead and
+    /// never auto-emit.
+    virtual std::vector<NodeView> dep_free_nodes() { return {}; }
 
     /// The ONLY dependency-release entry. Releasing a node frees its
     /// children. Idempotent.
     virtual void finish_node(uint64_t node_id) = 0;
-
-    /// Stable async-callback handle; the NodeView must stay valid for the
-    /// consumers until the terminal record is done.
-    virtual std::optional<NodeView> lookup(uint64_t node_id) = 0;
 
     /// Consume a node from the free set at issue time (static resolver
     /// semantic preserved; required so dep_free_nodes cannot re-issue).
@@ -193,7 +227,7 @@ class GraphSource {
     virtual bool static_all_done() = 0;
 
     /// Zero-copy fast path for hot loops; the default keeps the by-value
-    /// semantics so static/empty sources are unchanged. The NodeStore-backed
+    /// semantics so static sources are unchanged. The NodeStore-backed
     /// source overrides it to iterate its stable storage (online nodes are
     /// collected only at quiescent commit boundaries -- never inside a
     /// callback -- so the references outlive the consume callback).
@@ -217,21 +251,6 @@ class GraphSource {
         return nullptr;
     }
     virtual bool mark_terminal_observed(uint64_t /*node_id*/) { return false; }
-};
-
-/// Empty source: yields no nodes, finishes nothing. Used as the step-1-2
-/// placeholder before the NodeStore-backed source landed (step 1-4).
-class EmptyGraphSource : public GraphSource {
-  public:
-    std::vector<NodeView> dep_free_nodes() override { return {}; }
-    void finish_node(uint64_t) override {}
-    std::optional<NodeView> lookup(uint64_t) override { return std::nullopt; }
-    void take_node(uint64_t) override {}
-    std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
-        uint64_t) override {
-        return nullptr;
-    }
-    bool static_all_done() override { return false; }
 };
 
 }  // namespace ExecutionDriven

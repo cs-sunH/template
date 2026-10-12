@@ -5,7 +5,7 @@
 (generate_wsc_llm_trace.py 模块级函数)由
 助手函数组成(_emit_control_trigger / _paired_transfer / _emit_prefill_stage /
 transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceBuilder
-(与 TraceBuilder 同构的在线侧 builder)驱动,保证:
+(接口面承袭 TraceBuilder 的在线侧 builder,见类 docstring 的差异说明)驱动,保证:
 
   - 节点属性、插入顺序、rank ownership 和跨 request 链结构稳定(节点级审计口径);
   - per-rank 节点 id 跨批次全局递增;
@@ -13,8 +13,11 @@ transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceB
     (completion_gates 账本,跨批次解析)。
 
 在线语义差异(刻意,注释标注):
-  - timer gate 始终发射节点(结构保留)但 runtime_ns=0:到达时间由 C++ 的
-    arrival alarm(future_alarms)替代,gate 不再等待——保持时长会双重等待;
+  - timer gate(SCHED-10 注释修正,2026-09-28):duration_ns == 0 时不发
+    射节点(直接返回 after_node_id,见 timer_gate 的结构契约);非零
+    duration 发射 runtime_ns=0 的 gate 节点(结构保留)——到达时间由
+    C++ 的 arrival alarm(future_alarms)替代,gate 不再等待,保持时长会
+    双重等待;
   - 每 request 拆两次发射:ARRIVAL 边界发射 prefill 整段(含 gates/history/
     recompute/barrier),PREFILL_DRAIN 边界发射 decode 整段(含 transfer 3000/
     decode/end barrier);
@@ -58,14 +61,15 @@ from generate_trace import (  # noqa: E402
     COMP_NODE,
     transformer_pass_aggregated,
 )
+# 源头导入(2026-09-27 再导出解耦):生成器不再转售这几个符号。
 from generate_wsc_llm_trace import (  # noqa: E402
     _emit_control_trigger,
     _emit_prefill_stage,
     _paired_transfer,
-    kv_cache_bytes_for_tokens,
-    sanitize_node_prefix,
 )
-from generate_wsc_llm_trace import NOC_MIGRATE, RECOMPUTE  # noqa: E402
+from generate_trace import sanitize_node_prefix  # noqa: E402
+from session_kv_manager import NOC_MIGRATE, RECOMPUTE  # noqa: E402
+from wsc_llm_scheduler import kv_cache_bytes_for_tokens  # noqa: E402
 
 
 def first_token_split_enabled() -> bool:
@@ -93,10 +97,11 @@ def first_token_split_enabled() -> bool:
 
 
 class OnlineTraceBuilder:
-    """与共享 TraceBuilder API 同构的在线侧每-rank builder。
-
-    同一接口面:timer_gate / arm_timer_gate / comp / all_reduce / comm_send /
-    comm_recv / next_id / previous_id / node_count——共享助手函数可直接驱动。
+    """在线侧每-rank builder，接口面承袭共享 TraceBuilder（comp /
+    all_reduce / comm_send / comm_recv / next_id / previous_id 同名同义，
+    共享助手函数可直接驱动）；timer_gate / arm_timer_gate 为本类独有——
+    共享 TraceBuilder 已于 2026-09-27 退役 timer_gate（在线计时由 alarm
+    驱动，静态 ET 生成器无需该机制），勿再宣称两者接口面一致。
     与 TraceBuilder 的差异:节点发射为 GraphBatch nodes[] dict(而非 ChakraNode
     对象),依赖记录为 parent_edges[](而非节点内联 data_deps);timer_gate
     忽略 duration(runtime_ns=0,alarm 替代等待)。
@@ -116,7 +121,6 @@ class OnlineTraceBuilder:
         # next_id 计数器,与位置无关)。
         self.nodes = []   # 本 rank 尚未交付的节点 dict(发射序)
         self.edges = []   # 本 rank 尚未交付的 parent edges
-        self.node_count = 0
         # 当前 request-stage 反向索引上下文(每次 per-request 发射前设置)。
         self.request_id = ""
         self.stage = ""
@@ -192,7 +196,6 @@ class OnlineTraceBuilder:
         self.previous_id = self.next_id
         self.next_id += 1
         self.nodes.append(node)
-        self.node_count += 1
         return node
 
     @staticmethod
@@ -207,7 +210,8 @@ class OnlineTraceBuilder:
                    after_node_id=None):
         """在线 timer gate:发射节点(runtime_ns=0,is_timer_op)。
 
-        与共享 TraceBuilder.timer_gate 的结构契约一致:
+        (2026-09-30 订正:共享 TraceBuilder 已退役 timer_gate,本描述自包含)
+        结构契约:
           - duration_ns == 0 → 直接返回 after_node_id,不发射节点
             (inter_request_interval_ns==0 的 request 不应多出 interval gate);
           - 否则直接创建节点(不经 _new_node)——不链 previous_id、不消费
@@ -249,14 +253,32 @@ class OnlineTraceBuilder:
             })
         self.next_id += 1
         self.nodes.append(node)
-        self.node_count += 1
         return node["id"]
 
     def comp(self, name: str, num_ops: int, tensor_size: int,
-             remote_read_size: int = 0) -> None:
+             remote_read_size: int = 0, *,
+             die_spec: dict = None, op_role: str = None) -> None:
+        """COMP 节点发射(die 后端扩展,契约 §2 compute 键集)。
+
+        die_spec 非 None 时附 compute.die_op_spec(dict;die 后端执行该
+        节点,runtime_ns 保持缺省 0——die_op_spec 存在 ⇒ runtime_ns 必为
+        0);op_role 缺省 "compute"(不写键,schema 缺省即 compute),仅
+        marker/哨兵显式写 "control_marker"(契约 §7 裁定 8)。"""
         node = self._new_node(name, COMP_NODE)
         node["compute"]["num_ops"] = self._uint64(num_ops)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
+        if op_role is not None:
+            if op_role not in ("compute", "control_marker"):
+                raise ValueError(
+                    "op_role must be 'compute' or 'control_marker', got "
+                    "{!r}".format(op_role))
+            node["compute"]["op_role"] = op_role
+        if die_spec is not None:
+            if node["compute"]["runtime_ns"] != 0:
+                raise ValueError(
+                    "die_op_spec requires runtime_ns == 0 (contract "
+                    "section 2)")
+            node["compute"]["die_op_spec"] = die_spec
         if self.remote_operand_loads and remote_read_size:
             node["compute"]["remote_weight_bytes"] = self._uint64(remote_read_size)
 
@@ -291,6 +313,12 @@ class GraphBatchBuilder:
 
     def __init__(self, config):
         self.config = config
+        # die 后端发射语境(None = legacy)。online_service.py 构造本构图器
+        # 时不感知 backend——语境由 OnlineSchedulerBase 从 manifest 的
+        # compute-cost-model/die-model-config 键构造后在每批发射前经
+        # set_die_context 注入(online_scheduler_base._begin_graph_batch;
+        # manifest 是 backend 的唯一声明源,契约 §7 裁定 2/7)。
+        self.die_context = None
         # strategy 模式保持物理跨 request 链。
         self.builders = {
             rank: OnlineTraceBuilder(
@@ -304,9 +332,20 @@ class GraphBatchBuilder:
         self.completion_gates = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
+    def set_die_context(self, die_context) -> None:
+        """注入 die 发射语境(幂等;None 恢复 legacy 发射)。"""
+        self.die_context = die_context
+
     # ------------------------------------------------------------- 批次 --
 
     def begin_batch(self) -> None:
+        # F2_PY（2026-09-29）RV4-F1：watches/assignments/kv_actions/
+        # future_alarms 四键是零读者死键（SCHED-9,2026-09-28 清了基类
+        # _graph_batch 模板一半、漏了构图器一半）——唯一消费方
+        # build_graph_batch 只读 nodes/parent_edges（_sorted_touched_ranks
+        # 另读 _touched_ranks），四键的全部读写都在调度器自己的累加器
+        # self._batch 上（online_scheduler_base._start_batch 建立），每次
+        # 交付在这里构造纯属 write-only 死重，删除。
         self.batch = {
             "nodes": [],
             "parent_edges": [],
@@ -314,36 +353,25 @@ class GraphBatchBuilder:
             # every appended node, so downstream GraphBatch metadata need not
             # rescan the complete node payload.
             "_touched_ranks": set(),
-            "watches": [],
-            "assignments": [],
-            "kv_actions": [],
-            "future_alarms": [],
         }
 
-    def _collect(self, marker: dict) -> None:
-        """把各 builder 自 marker 起新增的节点/边并入本批次。"""
+    def _collect(self) -> None:
+        """把各 builder 自上次交付以来新增的节点/边并入本批次。
+
+        发射调用与 _collect 一一对应(M1 收集即释放):每次发射进入时
+        builder 缓冲必为空,故全量并入即可,无需 marker 切片(G6-F5
+        修复 2026-09-27:原 _mark() 恒返回 (0, 0),nodes[node_mark:]
+        切片分支不可达,连同删除)。收集后立即 clear,释放对节点/边
+        dict 的最后一层 builder 引用。"""
         for rank, builder in self.builders.items():
-            node_mark, edge_mark = marker[rank]
             nodes = builder.nodes
             edges = builder.edges
-            # 正常路径的 marker 为 0，直接 extend 避免临时 slice；非零
-            # marker 仅保留本次新增尾部。所有 _mark() 都在同一发射调用内
-            # 被单次 _collect() 消费，故旧前缀已在先前批次交付，可立即
-            # clear 释放对节点/边 dict 的最后一层 builder 引用。
-            if len(nodes) > node_mark:
+            if nodes:
                 self.batch["_touched_ranks"].add(int(rank))
-            self.batch["nodes"].extend(
-                nodes if node_mark == 0 else nodes[node_mark:])
-            self.batch["parent_edges"].extend(
-                edges if edge_mark == 0 else edges[edge_mark:])
+            self.batch["nodes"].extend(nodes)
+            self.batch["parent_edges"].extend(edges)
             nodes.clear()
             edges.clear()
-
-    def _mark(self) -> dict:
-        return {
-            rank: (len(builder.nodes), len(builder.edges))
-            for rank, builder in self.builders.items()
-        }
 
     # ------------------------------------------------------------- 发射 --
 
@@ -365,9 +393,8 @@ class GraphBatchBuilder:
         # request 在本 rank 的链尾(共享 rank 上的链串行化)。
         # 保留:within-request 串行化;decode 段 frontier 接续(2026-08-19
         # 统一,见列车发射的 transfer-3000 触发链);同 session interval gate。
-        marker = self._mark()
         members = self._emit_prelim(request_plan)
-        self._collect(marker)
+        self._collect()
         return members
 
     def _set_context(self, request_plan: dict, stage: str,
@@ -425,6 +452,12 @@ class GraphBatchBuilder:
                 if source_index is None:
                     raise RuntimeError("NoC history action has no source")
                 source_group = self.group_by_index[source_index]
+                # 不变量注记(2026-09-27):NOC_MIGRATE 的源 = 该 session
+                # KV 现驻实例 = 上一请求完成列车所在 decode 实例,而
+                # previous_group 正来自该列车的 completion gate 账本——
+                # source_group.name != previous_group.name 按本仓
+                # request→instance 静态映射不变量不可达;分支保留为防御
+                # (跨实例唤醒链触发,防未来映射语义漂移)。
                 if source_group.name != previous_group.name:
                     _emit_control_trigger(
                         builders=builders,
@@ -456,6 +489,7 @@ class GraphBatchBuilder:
                 prefix=prefix, stage="history_recompute",
                 tokens=request_plan["history_recompute_tokens"],
                 initial_context_tokens=0,
+                die_ctx=self.die_context,
             )
         for rank in prefill_group.ranks:
             builders[rank].all_reduce(
@@ -466,6 +500,7 @@ class GraphBatchBuilder:
             prefix=prefix, stage="current_prefill",
             tokens=request_plan["prefill_length"],
             initial_context_tokens=request_plan["history_tokens_before"],
+            die_ctx=self.die_context,
         )
         # PREFILL_DRAIN watch 成员 = 每 rank 末个真实 prefill 节点
         # (遵循共享 EVENT_PREFILL_END 锚点口径，排除 end barrier)。
@@ -511,7 +546,10 @@ class GraphBatchBuilder:
           end barrier。
 
         返回 {"exit_members": {request_id: {rank: 标记节点 id}},
-              "block_ends": {rank: end barrier 节点 id}}——exit 标记即
+              "block_ends": {rank: end barrier 节点 id},
+              "sentinel_members": {rank: 哨兵标记节点 id}(sentinel=True
+              的 T_max 截断列车非空;调度器以其注册 batch_train_ 哨兵
+              watch,漏掉即截断列车永不核销)}——exit 标记即
         DECODE_COMPLETION watch 成员(barrier 前末节点口径:标记是列车
         体后、end barrier 前的真实节点);completion_gates 账本(下一
         turn interval gate 的 after_node_id 来源)= 本列车 post-barrier
@@ -525,13 +563,12 @@ class GraphBatchBuilder:
             raise RuntimeError(
                 "split train plans must be emitted through "
                 "emit_train_first_step/emit_train_remainder")
-        marker = self._mark()
         self._emit_train_head(train_plan)
         self._emit_train_body(
             train_plan, list(train_plan["pass_spans"]),
             int(train_plan["iterations"]))
         result = self._emit_train_tail_markers(train_plan, first_token)
-        self._collect(marker)
+        self._collect()
         return result
 
     def emit_train_first_step(self, train_plan: dict) -> dict:
@@ -566,7 +603,6 @@ class GraphBatchBuilder:
         if first_token is None or not first_token.get("split"):
             raise RuntimeError(
                 "emit_train_first_step requires a split first_token plan")
-        marker = self._mark()
         self._emit_train_head(train_plan)
         self._emit_train_body(train_plan, list(first_token["first_spans"]), 1)
         first_token_members = self._emit_first_token_markers(
@@ -579,8 +615,11 @@ class GraphBatchBuilder:
             rank: self._emit_train_marker(rank, f"{wakeup_id}_wakeup")
             for rank in decode_group.ranks
         }
-        self._collect(marker)
+        self._collect()
         return {
+            # first_token_members 无生产消费方(调度器只读 wakeup_members;
+            # C++ 按名字子串注册锚点),仅测试断言标记成员归属——测试专用
+            # 返回载荷(2R-py-online-D3 注记 2026-09-27)。
             "first_token_members": first_token_members,
             "wakeup_members": wakeup_members,
         }
@@ -603,12 +642,11 @@ class GraphBatchBuilder:
         if first_token is None or not first_token.get("split"):
             raise RuntimeError(
                 "emit_train_remainder requires a split first_token plan")
-        marker = self._mark()
         self._emit_train_body(
             train_plan, list(first_token["rest_spans"]),
             int(train_plan["iterations"]) - 1)
         result = self._emit_train_tail_markers(train_plan, first_token)
-        self._collect(marker)
+        self._collect()
         return result
 
     def _emit_train_head(self, train_plan: dict) -> None:
@@ -652,7 +690,13 @@ class GraphBatchBuilder:
         """折叠列车体(17 类聚合节点;weight_passes = 权重读取次数)。
 
         拆分时首步批传首步 span 组 + weight_passes=1,余量批传余量组 +
-        iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。"""
+        iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。
+
+        die 后端(wscllm 推广):die_context 非 None 时按 rank 写入发射
+        语境(phase = 列车 stage "decode",TP = 实例 rank 数,span 记录带
+        绝对位置——derive_span_records 按 wscllm span 恒等式还原),列车体
+        经 transformer_pass_aggregated 的 die 分支附 die_op_spec 并做
+        §7.2 region 融合;legacy 时 die_ctx=None,发射逐字节不变。"""
         instance_index = train_plan["instance_index"]
         decode_group = self.group_by_index[instance_index]
         train_id = train_plan["train_id"]
@@ -660,6 +704,16 @@ class GraphBatchBuilder:
             builder.set_context(train_id, "decode", 1)
         tensor_parallel = len(decode_group.ranks)
         for relative_rank, rank in enumerate(decode_group.ranks):
+            die_ctx = None
+            if self.die_context is not None:
+                self.die_context.begin_emission(
+                    phase="decode",
+                    tensor_parallel=tensor_parallel,
+                    tensor_parallel_rank=relative_rank,
+                    span_namespace=train_id,
+                    pass_spans=pass_spans,
+                )
+                die_ctx = self.die_context
             transformer_pass_aggregated(
                 self.builders[rank],
                 phase=train_id,
@@ -675,6 +729,7 @@ class GraphBatchBuilder:
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
                 weight_passes=weight_passes,
+                die_ctx=die_ctx,
             )
 
     def _emit_first_token_markers(self, train_plan: dict,
@@ -779,8 +834,13 @@ class GraphBatchBuilder:
         }
 
     def _emit_train_marker(self, rank: int, name: str) -> int:
-        """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。"""
-        self.builders[rank].comp(name, 1, 1)
+        """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。
+
+        契约 §7 裁定 8:一切 comp(name,1,1) 微节点(first_token/drain/
+        exit/sentinel/join/wakeup 等 marker)一律显式
+        op_role="control_marker"——不靠"数值很小"识别(设计文档 §7.3);
+        legacy 后端下该属性惰性(C++ 分发保持旧微作业语义,裁定 3)。"""
+        self.builders[rank].comp(name, 1, 1, op_role="control_marker")
         return self.builders[rank].previous_id
 
 
@@ -796,5 +856,14 @@ def _prefix_of(request_plan: dict) -> str:
 
 
 def _request_spec(config, request_plan: dict):
-    """从 config.request_queue 取 RequestSpec(按 manifest 的 queue_index)。"""
-    return config.request_queue[request_plan["queue_index"]]
+    """从 config.request_queue 取 RequestSpec(按 manifest 的 queue_index)。
+
+    P2-21（2026-09-28）：queue_index 与 C++ 同源（未过滤全量 CSV 数据行
+    序），config.request_queue 是 session_limit 过滤后的保序子序列——经
+    config.queue_position_by_index 映射回过滤位次（limit==0 恒等；未携带
+    映射的 duck-type 测试夹具按恒等回退，与 limit==0 行为一致）。
+    """
+    position_by_index = getattr(config, "queue_position_by_index", None)
+    position = (position_by_index or {}).get(
+        request_plan["queue_index"], request_plan["queue_index"])
+    return config.request_queue[position]

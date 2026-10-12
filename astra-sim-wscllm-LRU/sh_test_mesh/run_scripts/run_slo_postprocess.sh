@@ -97,8 +97,9 @@ warn() { echo "[slo-postprocess] $*" | tee -a "${LOG}" >&2; }
 # 进程内逐复刻（"run:/ok:/FAIL:" 行、.FAIL 条目、失败不拦后续步）。
 # 本层对 driver 退出码的处置：
 #   0 = 全部步骤成功；1 = 有步骤失败（driver 已按步写 FAIL 行与 .FAIL
-#       条目，此处只置 SLO_FAIL，不重复记条目）；其余 = driver 裸崩
-#       （argparse/解释器级），按原 run_step 语义兜底记一条。
+#       条目，此处只置 SLO_FAIL，不重复记条目）；3 = certified 层逐
+#       rank 容量违规正式判决（A5-1/infra-4：原样透传，见文件尾）；
+#       其余 = driver 裸崩（argparse/解释器级），按原 run_step 语义兜底记一条。
 
 # [METRIC] 行来源探测（与 slo_common.resolve_cpp_metric_log 同序）。
 if [ -f "${RUN_DIR}/cpp.log" ]; then
@@ -206,10 +207,30 @@ elif [ -d "${GUARD_BASE}" ] && mkdir -p "${GUARD_CG}" 2>/dev/null \
     rmdir "${GUARD_CG}" 2>/dev/null
     GUARD_CG=""
   fi
+else
+  # mkdir 成功但 memory.max/swap.max 写失败（cgroup 委托不完整等）会在
+  # 上面 elif 条件链短路：探测不成立也必须当场清掉刚建的组再降级，
+  # 不把空的 slo-mem-guard.$$ 残留给 user.slice（下方 EXIT trap 只是
+  # 兜底；mkdir 本身失败时这里 rmdir 幂等无操作）。
+  rmdir "${GUARD_CG}" 2>/dev/null
+  GUARD_CG=""
 fi
 if [ "${GUARD_MODE}" = none ]; then
   glog "WARN: cgroup guardrail unavailable — running WITHOUT memory cap"
 fi
+
+# 保底清场（EXIT trap）：手工 cgroup 组只允许在护栏生效期间存在。正常
+# 路径的 rmdir 在收尾段（成功或刻意保留取证残组后 GUARD_CG 均置空，
+# 本 trap 即空操作）；此处兜住其余一切退出路径（探测后中途失败等），
+# EXIT 时 GUARD_CG 非空且目录仍在则 rmdir，保证不残留 slo-mem-guard.$$
+# 目录。注意：未捕获信号的致命终止不保证触发 EXIT trap——但探测失败
+# 残留已由上方 else 分支当场清理，本 trap 覆盖其余正常失败路径。
+cleanup_guard_cg() {
+  if [ -n "${GUARD_CG}" ] && [ -d "${GUARD_CG}" ]; then
+    rmdir "${GUARD_CG}" 2>/dev/null || true
+  fi
+}
+trap cleanup_guard_cg EXIT
 
 # driver 启动（三模式）。三种模式都保证 $! 即真 driver 进程本身：
 #   systemd —— systemd-run --scope 对命令做 exec（无常驻包装层），
@@ -348,6 +369,9 @@ if [ "${GUARD_MODE}" = cgroup ] && [ -n "${GUARD_CG}" ]; then
   fi
   rmdir "${GUARD_CG}" 2>/dev/null \
     || glog "note: rmdir ${GUARD_CG} failed (leftover kept for inspection)"
+  # 收尾完成即置空：EXIT trap（见护栏探测段）据此识别"已清场/已刻意
+  # 保留取证"，不再重复 rmdir。
+  GUARD_CG=""
 elif [ "${GUARD_MODE}" = systemd ]; then
   if [ -n "${GUARD_PEAK}" ]; then
     glog "guardrail memory.peak=${GUARD_PEAK} oom=${GUARD_OOM:-NA} oom_kill=${GUARD_OOM_KILL:-0}"
@@ -364,7 +388,9 @@ elif [ "${GUARD_MODE}" = systemd ]; then
 fi
 
 if [ "${DRIVER_RC}" -ne 0 ]; then
-  if [ "${DRIVER_RC}" -ne 1 ]; then
+  # R2-3(2026-09-30):rc=3 exemption from appending driver-level FAIL entry——driver already writes per-step entry (e.g. hbm_watermark.py (exit=3)),
+  # old form double-records the same event; rc=1 (gate skip) likewise does not record.
+  if [ "${DRIVER_RC}" -ne 1 ] && [ "${DRIVER_RC}" -ne 3 ]; then
     warn "FAIL: slo_postprocess_driver.py (exit=${DRIVER_RC}) — marked in slo_postprocess.FAIL (simulation result NOT overturned)"
     printf '%s (exit=%s)\n' "slo_postprocess_driver.py" "${DRIVER_RC}" >> "${FAIL_MARKER}"
   fi
@@ -373,6 +399,13 @@ fi
 
 if [ "${SLO_FAIL}" -ne 0 ]; then
   warn "done WITH FAILURES (default=warn; see slo_postprocess.FAIL)"
+  # A5-1/infra-4：certified 层逐 rank 容量违规正式判决的 exit 3 原样
+  # 透传（warn/strict 边界仍在调用方 runner——默认 warn 下 runner 只
+  # WARN 不拦截，但进程码不再被折叠为 1，判决可被上游区分）；其余
+  # 失败仍为 1。
+  if [ "${DRIVER_RC}" -eq 3 ]; then
+    exit 3
+  fi
   exit 1
 fi
 log "done: all steps passed"

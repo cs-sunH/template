@@ -55,14 +55,6 @@ class Cache {
     }
     return this->cache.at(key).first;
   }
-  std::weak_ptr<const V> get_or_null(const K& key) {
-    std::shared_lock lock(cache_mutex);
-    if (this->cache.find(key) == this->cache.end()) {
-      return std::weak_ptr<V>();
-    }
-    std::weak_ptr<const V> value(this->cache.at(key).first);
-    return value;
-  }
   std::shared_ptr<const V> get_or_null_locked(const K& key) {
     std::shared_lock lock(cache_mutex);
     if (this->cache.find(key) == this->cache.end()) {

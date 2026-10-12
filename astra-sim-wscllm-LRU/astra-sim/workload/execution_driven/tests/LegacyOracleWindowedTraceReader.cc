@@ -81,20 +81,6 @@ void LegacyOracleWindowedTraceReader::read_one_row() {
         last_queue_index_by_session_.clear();
         return;
     }
-    // Checkpoints resume at the NEXT unread line. The old pre-read sample
-    // pointed at the row just consumed and duplicated it after restore.
-    std::streampos next_pos = file_.tellg();
-    if (next_pos == std::streampos(-1) && file_.eof()) {
-        // A final line without a trailing newline may set eofbit even though
-        // getline succeeded. Clear it and recover the byte position at EOF;
-        // the next getline still fails normally from that position.
-        file_.clear();
-        file_.seekg(0, std::ios::end);
-        next_pos = file_.tellg();
-    }
-    if (next_pos != std::streampos(-1)) {
-        last_file_pos_ = static_cast<int64_t>(next_pos);
-    }
     if (line.empty()) {
         return;  // blank line: not a data row, keep the same position
     }
@@ -112,6 +98,17 @@ void LegacyOracleWindowedTraceReader::read_one_row() {
     std::getline(row, decode_s, ',');
     std::getline(row, arrival_s, ',');
     std::getline(row, interval_s, ',');
+    // M11 sync (2026-09-29): '#' comment rows. The live WindowedTraceReader
+    // and the Python loader (generate_trace.py load_request_queue) skip any
+    // row whose request_id starts with '#' BEFORE counting the row, so a
+    // skipped row consumes neither a request position nor a queue index on
+    // either side. The oracle must skip at the same classification point or
+    // a '#' input builds a phantom request here and shifts every later
+    // queue_index against the calendar arm, breaking the elementwise
+    // equivalence this fixture exists to prove.
+    if (!request_id.empty() && request_id.front() == '#') {
+        return;
+    }
     ++data_rows_;
 
     RequestEnvelope env;

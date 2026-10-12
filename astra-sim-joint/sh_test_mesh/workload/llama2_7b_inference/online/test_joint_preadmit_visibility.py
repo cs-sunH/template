@@ -7,7 +7,7 @@
      1. 同 tick 两 remote-read 准入互见：第一笔准入相前缀读流
      （rid#prefill_read，准入事务成功路径的登记通道）后，第二笔决策的
      divisor_multi 已含第一笔一条物理并发流（注册表级精确断言 + JCM
-     estimate_action 计价抬升）；est 账本不触注册表；HBM 端点端口同
+     estimate_P_with_continuation 计价抬升）；est 账本不触注册表；HBM 端点端口同
      通道成对登记（C2 腿型）；
   2. 对账核销全生命周期：drain 真计划冻结处核销估计、以真值登记
      （est/actual 差值进决策日志 readplan_reconcile 行）；逐列车实际登记
@@ -44,6 +44,7 @@ from face_scheduler import (  # noqa: E402
 )
 from joint.hbm_port_flow_registry import HbmPortFlowRegistry  # noqa: E402
 from joint.joint_config import JointMechanismConfig  # noqa: E402
+from joint.capacity_summary import CapacitySummary  # noqa: E402
 from joint.joint_cost_model import (  # noqa: E402
     ACTION_REMOTE,
     InstanceLoadView,
@@ -142,6 +143,9 @@ def _scheduler(*, train_max_iter=8):
         layer_policy="adaptive", remote_actions="on")
     scheduler.kv_manager = SimpleNamespace(
         tp_degree=2,
+        # D04：JCM 构造注入 nearest_edge_fn——替身把池端口钉在每 rank
+        # 本地（pool 腿退化口径：无 NoC 段；本文件用例不依赖池腿）。
+        nearest_edge=lambda rank: rank,
         _sessions={
             "s1": SimpleNamespace(
                 working_kind=None, context_tokens=100,
@@ -150,6 +154,16 @@ def _scheduler(*, train_max_iter=8):
         },
         _effective_remaining_by_tp_rank=lambda index: (10**9, 10**9),
         _instance_reclaimable_capacity_by_tp_rank=lambda index: (0, 0),
+        # D11：容量驱逐摘要/容量账替身（零桶 = 快照时刻无合法 victim；
+        # 逐 rank 台账 (C, W, O, Z) 与 remaining=1e9 同源核对守恒）。
+        capacity_summary_snapshot=lambda: CapacitySummary(instances={}),
+        capacity_ledger_by_tp_rank=lambda index: (
+            (2 * 10**9, 0, 0, 10**9), (2 * 10**9, 0, 0, 10**9)),
+        # D09/D20：Tj 核销边界的暂存 lease 注销直达调用（本替身无在册
+        # lease——幂等空放语义；F6 教义：接口直达，替身补齐不软门）。
+        release_staging_lease=lambda request_id, boundary_epoch=None: False,
+        # 同上：在册 lease 查询接口（无在册 lease 恒 None）。
+        staging_lease_for_request=lambda request_id: None,
     )
     # log_decision 基类契约（__new__ 替身手工置初值）。
     scheduler.online_log_count = 0
@@ -159,6 +173,10 @@ def _scheduler(*, train_max_iter=8):
     scheduler._link_telemetry_rates = {}
     # M1：C8 遥测状态 __init__ 同款（时间加权活跃流数）。
     scheduler._link_telemetry_flow_counts = {}
+    # ACC（验收纪律第 3 类，v2.0 §19.3）：预测器开销账本 __init__ 同款
+    # 初值（F6 销账口径：决策/摘要记账直访——替身漏设 = AttributeError）。
+    from joint.predictor_cost_accounting import PredictorCostAccounting
+    scheduler.predictor_cost = PredictorCostAccounting()
     scheduler.p_chunk = 512  # N4：_joint_prefill_total_load_ns 同形切分（F6 替身补设）
     scheduler._link_telemetry_epoch_count = 0
     scheduler._link_telemetry_sample_count = 0
@@ -262,7 +280,7 @@ class SameTickReadplanVisibilityTest(unittest.TestCase):
                          scheduler._hbm_ports.leaked_owners())
 
     def test_remote_read_price_lifts_after_first_prefill_read_commitment(self):
-        # 决策级证据：JCM estimate_action 的 remote-read 计价在第一笔
+        # 决策级证据：JCM estimate_P_with_continuation 的 remote-read 计价在第一笔
         # 已提交读流（rid#prefill_read 实流）登记后抬升
         # （contention_divisor 与 cost_ns 同向）；est 账本本身不触注册
         # 表、不抬计价。NoC 腿主导配置（慢链路 / 快端点）——除数直接
@@ -291,7 +309,7 @@ class SameTickReadplanVisibilityTest(unittest.TestCase):
                 route_paths_fn=lambda s, t: _REQ2_PATHS)
 
         def remote_candidate():
-            return build_model().estimate_action(
+            return build_model().estimate_P_with_continuation(
                 session=_session_view(), request=RequestView(
                     request_id="r2", session_id="s2", input_tokens=50,
                     history_tokens_before=100, estimated_decode_tokens=3,
@@ -315,19 +333,23 @@ class SameTickReadplanVisibilityTest(unittest.TestCase):
         self.assertGreater(contended.cost_ns, quiet.cost_ns)
 
     def test_coverage_units_closed_form(self):
-        # 覆盖窗口闭式 = 列车数 × 每列车块数（auto K：块数 ≤ 8）。
+        # 覆盖窗口闭式 = 列车数 × 每列车 tile 数（D09：tile/pass=1 →
+        # 每列车 tile 数 = 步数上限）。
         scheduler = _scheduler()
-        self.assertEqual(scheduler._readplan_flow_units(1), (1, 1))
-        self.assertEqual(scheduler._readplan_flow_units(8), (1, 8))
-        self.assertEqual(scheduler._readplan_flow_units(32), (4, 8))
-        self.assertEqual(scheduler._readplan_flow_units(100), (13, 8))
-        # T_max = 0（不设限）：单列车闭式（K=ceil(100/8)=13 → 8 块）。
+        self.assertEqual(scheduler._readplan_flow_units(1, 1), (1, 1))
+        self.assertEqual(scheduler._readplan_flow_units(8, 1), (1, 8))
+        self.assertEqual(scheduler._readplan_flow_units(32, 1), (4, 8))
+        self.assertEqual(scheduler._readplan_flow_units(100, 1), (13, 8))
+        # 每 pass 2 tile 的成员：块数随 tile 数放大。
+        self.assertEqual(scheduler._readplan_flow_units(8, 2), (1, 16))
+        # T_max = 0（不设限）：单列车闭式。
         unlimited = _scheduler(train_max_iter=0)
-        self.assertEqual(unlimited._readplan_flow_units(100), (1, 8))
+        self.assertEqual(unlimited._readplan_flow_units(100, 1), (1, 100))
 
     def test_degenerate_cases_skip_preregistration(self):
-        # 与 drain 退化分支同口径：home 缺失 / home==exec / read_prefix
-        # <=0 不预登记（真计划亦 None，无承诺可登记）。
+        # 与 drain 退化分支同口径：源端缺失 / 源端==exec / read_prefix
+        # <=0 不预登记（真计划亦 None，无承诺可登记）。D-BI：源端 =
+        # resident ?? home（物理基础驻留优先，2026-09-26）。
         scheduler = _scheduler()
         runtime = _make_runtime("r1")
         scheduler._preregister_readplan_flows(
@@ -340,7 +362,7 @@ class SameTickReadplanVisibilityTest(unittest.TestCase):
                 missing_bytes_by_tp_rank=(0, 0)),
             0, 8)
         scheduler._preregister_readplan_flows(
-            runtime, _session_view(home=0), 0, 8)  # home == exec
+            runtime, _session_view(home=0, resident=0), 0, 8)  # 源端 == exec
         scheduler.kv_manager._sessions["s1"].base_resident_prefix_layers = 0
         scheduler._preregister_readplan_flows(
             runtime,
@@ -357,12 +379,17 @@ class ReadplanLifecycleTest(unittest.TestCase):
     """drain 对账 → 逐列车核销 → 完成清残余的全生命周期。"""
 
     def _truth_plan(self, steps):
+        # D09 字段：base_tokens=128（kv_token_bytes=4 → 512 B/rank）、
+        # tile 128 token ≥ 基础区间 → 每 pass 1 tile。
         return {
             "home_instance": 1,
             "exec_instance": 0,
             "steps": steps,
-            "context_per_step": 100 + 50 + steps,
+            "base_tokens": 128,
             "read_prefix_layers": 4,
+            "tile_tokens": 128,
+            "tiles_per_pass": 1,
+            "kv_token_bytes": 4,
             "total_bytes": 2 * 512 * steps,
             "shard_specs": (
                 (2, 0, 512, (2, 1, 0)),
@@ -392,7 +419,7 @@ class ReadplanLifecycleTest(unittest.TestCase):
         self.assertEqual(preplan["truth_flow_units"], 80)
 
         for slice_index in range(1, 11):
-            blocks = scheduler._joint_remote_read_slice(runtime, 8, 1)
+            blocks = scheduler._joint_remote_read_slice(runtime, 8)
             self.assertEqual(len(blocks), 8)
             scheduler._consume_readplan_units(runtime, len(blocks))
             owner = "r1#decode#{}".format(slice_index)
@@ -463,7 +490,7 @@ class ReadplanLifecycleTest(unittest.TestCase):
         runtime = self._admitted_remote_read(scheduler, estimated_decode=8)
         runtime.remote_read_credit_plan = self._truth_plan(16)
         scheduler._reconcile_readplan_at_drain(runtime, 500)
-        first_blocks = scheduler._joint_remote_read_slice(runtime, 8, 1)
+        first_blocks = scheduler._joint_remote_read_slice(runtime, 8)
         scheduler._consume_readplan_units(runtime, len(first_blocks))
         scheduler._register_transfer_flows(
             first_blocks, owner="r1#decode#1", serial_credit_stream=True)
@@ -479,7 +506,7 @@ class ReadplanLifecycleTest(unittest.TestCase):
         self.assertTrue(runtime.remote_read_preplan["registry_active"])
         self.assertIn("r1#readplan", scheduler._hbm_ports.leaked_owners())
 
-        second_blocks = scheduler._joint_remote_read_slice(runtime, 8, 1)
+        second_blocks = scheduler._joint_remote_read_slice(runtime, 8)
         scheduler._consume_readplan_units(runtime, len(second_blocks))
         scheduler._register_transfer_flows(
             second_blocks, owner="r1#decode#2", serial_credit_stream=True)
@@ -502,7 +529,7 @@ class ReadplanLifecycleTest(unittest.TestCase):
         runtime.remote_read_credit_plan = self._truth_plan(16)
         scheduler._reconcile_readplan_at_drain(runtime, 500)
         for slice_index in (1, 2):
-            blocks = scheduler._joint_remote_read_slice(runtime, 5, 1)
+            blocks = scheduler._joint_remote_read_slice(runtime, 5)
             scheduler._consume_readplan_units(runtime, len(blocks))
             scheduler._register_transfer_flows(
                 blocks, owner="r1#decode#{}".format(slice_index),
@@ -588,7 +615,8 @@ class ReadplanLeakAuditTest(unittest.TestCase):
             runtime, _session_view(), 0, 8)
         runtime.remote_read_credit_plan = {
             "home_instance": 1, "exec_instance": 0, "steps": 8,
-            "context_per_step": 158, "read_prefix_layers": 4,
+            "base_tokens": 128, "read_prefix_layers": 4,
+            "tile_tokens": 128, "tiles_per_pass": 1, "kv_token_bytes": 4,
             "total_bytes": 2 * 512 * 8,
             "shard_specs": ((2, 0, 512, (2, 1, 0)),
                             (3, 1, 512, (3, 2, 1)))}
@@ -609,7 +637,8 @@ class ReadplanLeakAuditTest(unittest.TestCase):
         scheduler._release_transfer_flows("r1#prefill_read")
         runtime.remote_read_credit_plan = {
             "home_instance": 1, "exec_instance": 0, "steps": 8,
-            "context_per_step": 158, "read_prefix_layers": 4,
+            "base_tokens": 128, "read_prefix_layers": 4,
+            "tile_tokens": 128, "tiles_per_pass": 1, "kv_token_bytes": 4,
             "total_bytes": 2 * 512 * 8,
             "shard_specs": ((2, 0, 512, (2, 1, 0)),
                             (3, 1, 512, (3, 2, 1)))}
@@ -746,8 +775,7 @@ class CostModelTelemetryConstructionTest(unittest.TestCase):
             "tick": 100, "link_telemetry": [
                 _sample(5, 1000, 500, 0, 100),
                 _sample(9, 250, 500, 0, 100)]})
-        model = scheduler._joint_cost_model(
-            0, decode_context_tokens=150, decode_average_length=5)
+        model = scheduler._joint_cost_model(0)
         self.assertIs(model.flow_registry, scheduler._joint_flows)
         # F4（复审修复）：原软门自切换（字段在场则强断言、否则
         # assertNotIn 自证缺席）恒绿零效——C7 已交付 link_telemetry_rates

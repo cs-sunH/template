@@ -9,10 +9,9 @@ Implementation (方案 §4 步骤 1-6).
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 
-#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <stdexcept>
 #include <utility>
 
 namespace AstraSim {
@@ -28,8 +27,16 @@ bool completed_nodes_exact_from_env() {
     if (std::strcmp(mode, "exact") == 0) {
         return true;
     }
-    throw std::runtime_error(
-        "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) or 'exact'");
+    // R1-B-L1 fix: this runs from the CompletedFactAccumulator constructor
+    // deep inside main's stack; a thrown runtime_error had no catcher and
+    // terminated the process through std::terminate, bypassing the binary's
+    // uniform [Error] channel. Fail through the channel instead.
+    std::fprintf(stderr,
+                 "[Error] (execution_driven/online) "
+                 "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) "
+                 "or 'exact', got: %s\n",
+                 mode);
+    std::exit(EXIT_FAILURE);
 }
 
 }  // namespace
@@ -77,29 +84,6 @@ size_t CompletedFactAccumulator::size() const {
     return exact_facts_.size();
 }
 
-void CompletedFactAccumulator::set_exact_mode(const bool exact_mode) {
-    if (counters_.total != 0) {
-        throw std::logic_error(
-            "CompletedFactAccumulator mode cannot change mid-delivery");
-    }
-    exact_mode_ = exact_mode;
-}
-
-StateDelta build_state_delta(std::vector<DecisionEvent> events,
-                             const uint64_t tick,
-                             const uint64_t delivery_sequence,
-                             const uint64_t deferred_from_tick,
-                             std::vector<RankInjectedSummary>
-                                 injected_unfinished) {
-    // Phase 4 (v1): the compatibility form fills the v1 defaults --
-    // delivery_epoch == delivery_sequence, empty completed_nodes /
-    // affected_ranks, and the self-consistent snapshot handle. Existing
-    // call sites (fixtures) compile unchanged and stay v1-consistent.
-    return build_state_delta_v1(std::move(events), tick, delivery_sequence,
-                                deferred_from_tick, {}, {},
-                                std::move(injected_unfinished));
-}
-
 StateDelta build_state_delta_v1(
     std::vector<DecisionEvent> events, const uint64_t tick,
     const uint64_t delivery_sequence, const uint64_t deferred_from_tick,
@@ -138,16 +122,13 @@ void DecisionMailbox::push(DecisionEvent e) {
 }
 
 bool DecisionMailbox::has_decision_work() const {
-    return !events_.empty() || finalize_pending_;
+    return !events_.empty();
 }
 
 std::vector<DecisionEvent> DecisionMailbox::drain() {
     std::vector<DecisionEvent> result = std::move(events_);
     events_.clear();
     pending_identities_.clear();  // a new dedup epoch starts
-    // The drain delivers ALL pending work: events and/or the finalize flag
-    // (a finalize-only epoch delivers an empty delta).
-    finalize_pending_ = false;
     if (!result.empty()) {
         ++delivery_count_;  // delivery epochs, not events
     }

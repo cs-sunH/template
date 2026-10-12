@@ -15,7 +15,9 @@ token):
        IDLE (option simply absent; nothing is loaded).
   R4  --request-queue-csv must name an existing, readable file.
   R5  --close-input is a boolean flag (value form = error).
-  R6  --bridge-dir is parsed and stored (reserved for step 1-7).
+  R6  --bridge-dir is parsed and stored (consumed by the online entry:
+       the decision bridge's working directory; required in online
+       mode).
   R7  unknown options in the online family (--request-* / --bridge-* /
        --close-* / --online-* / --command-*) are hard errors (the shared
        CmdLineParser would silently swallow them).
@@ -54,6 +56,18 @@ token):
        character (" +1", " -1", "\t-1"), nan/inf/garbage tails, ERANGE
        under/overflow, (0, 1e-9) "below clock resolution", and anything
        above 1e9; failed parses leave out untouched.
+  R15 M5-03 interaction (2026-09-26): the shared CmdLineParser fail-closes
+       on unknown options, so the online family must be stripped from argv
+       before the shared parser re-parses the static family (the raw
+       handover aborted the official online binary with "Option
+       'online-mode' does not exist" before the bridge FIFOs existed --
+       smoke failure 2026-09-26 round 1 full). strip_online_family_argv
+       (a) keeps argv[0] and every static token (values included),
+       (b) drops online-family tokens in both value forms -- separate-value
+       options also drop their value token exactly the way parse_online_cli
+       consumed it (blind argv[++i]), boolean flags drop only themselves,
+       (c) drops the WHOLE online family at prefix level (name-level
+       unknown detection stays parse_online_cli's job, which runs first).
 
 Build: registered in the CMake build (face M12② same fix) as target
   AstraSim_Analytical_Congestion_Aware_CliOnlineTest in
@@ -70,15 +84,29 @@ AstraSim_Analytical_Congestion_Aware_CliOnlineTest
   RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
 *******************************************************************************/
 
-#include <cassert>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include "astra-sim/workload/execution_driven/OnlineCli.hh"
 
 using namespace AstraSim::ExecutionDriven;
+
+// The aggregation build uses -O3 -DNDEBUG, which compiles bare CLI_CHECK()
+// into no-ops: every check below would silently vanish and main() would
+// print ALL PASS regardless of the parse failures (the R1-R14 contract
+// coverage would be void in the default build). CLI_CHECK keeps every
+// check fail-closed under NDEBUG -- same pattern as
+// ingress_idle_fixture.cc's FIXTURE_CHECK: one stderr line, then abort.
+#define CLI_CHECK(cond)                                                      \
+    ((cond) ? (void)0                                                        \
+            : (std::fprintf(stderr, "[cli_online_test] CHECK FAILED: %s "    \
+                                    "(%s:%d)\n",                            \
+                            #cond, __FILE__, __LINE__), std::abort()))
 
 namespace {
 
@@ -108,7 +136,15 @@ std::string parse_error(const std::vector<std::string>& toks) {
     Args a(toks);
     OnlineCliOptions out;
     std::string error;
-    assert(!parse_online_cli(a.argc, a.argv.data(), out, error));
+    CLI_CHECK(!parse_online_cli(a.argc, a.argv.data(), out, error));
+    return error;
+}
+
+// Discard buffer for parse calls whose error text is not under test
+// (R15 argv-strip cases assert on the STRIPPED argv, not on the message).
+std::string& err_buf() {
+    static std::string error;
+    error.clear();
     return error;
 }
 
@@ -118,121 +154,154 @@ int main() {
     OnlineCliOptions out;
 
     // R1: missing --online-mode is a hard error
-    assert(parse_error({}).find("--online-mode") != std::string::npos);
+    CLI_CHECK(parse_error({}).find("--online-mode") != std::string::npos);
 
     // R2: mode token required
-    assert(parse_error({"--online-mode"})
+    CLI_CHECK(parse_error({"--online-mode"})
                .find("requires a value") != std::string::npos);
     // R2: valid token, separate-value form
-    assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(out.mode == "strategy");
+    CLI_CHECK(parse_ok({"--online-mode", "strategy"}, out));
+    CLI_CHECK(out.mode == "strategy");
     // R2: valid token, inline "=" form
-    assert(parse_ok({"--online-mode=strategy"}, out));
-    assert(out.mode == "strategy");
+    CLI_CHECK(parse_ok({"--online-mode=strategy"}, out));
+    CLI_CHECK(out.mode == "strategy");
     // R2: the replay token was removed with the replay route (2026-08-18)
-    assert(parse_error({"--online-mode", "replay"})
+    CLI_CHECK(parse_error({"--online-mode", "replay"})
                .find("unknown --online-mode value") != std::string::npos);
-    assert(parse_error({"--online-mode=replay"})
+    CLI_CHECK(parse_error({"--online-mode=replay"})
                .find("unknown --online-mode value") != std::string::npos);
     // R2: any other token is a hard error
-    assert(parse_error({"--online-mode", "bogus"})
+    CLI_CHECK(parse_error({"--online-mode", "bogus"})
                .find("unknown --online-mode value") != std::string::npos);
-    assert(parse_error({"--online-mode=offline"})
+    CLI_CHECK(parse_error({"--online-mode=offline"})
                .find("unknown --online-mode value") != std::string::npos);
 
     // R3: --online-mode strategy alone -> request-neutral defaults (IDLE; no
     // CSV, no command FIFO)
-    assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(out.mode == "strategy" && !out.close_input &&
+    CLI_CHECK(parse_ok({"--online-mode", "strategy"}, out));
+    CLI_CHECK(out.mode == "strategy" && !out.close_input &&
            out.bridge_dir.empty() &&
            out.request_queue_csv.empty() && out.command_fifo.empty());
     // 2026-09-05 default pin (R3): the parse path writes back its local
     // default unconditionally, so the BARE-invocation behavioral default of
     // the parking watchdog is armed at 1.0 s (explicit 0 = off, R14).
-    assert(out.idle_watchdog_s == 1.0);
+    CLI_CHECK(out.idle_watchdog_s == 1.0);
 
     // R4: existing readable CSV accepted
-    assert(parse_ok({"--online-mode", "strategy",
+    CLI_CHECK(parse_ok({"--online-mode", "strategy",
                      "--request-queue-csv=/proc/self/exe"}, out));
-    assert(out.request_queue_csv == "/proc/self/exe");
+    CLI_CHECK(out.request_queue_csv == "/proc/self/exe");
     // R4: space-separated value form accepted
-    assert(parse_ok({"--online-mode", "strategy", "--request-queue-csv",
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--request-queue-csv",
                      "/proc/self/exe"}, out));
-    assert(out.request_queue_csv == "/proc/self/exe");
+    CLI_CHECK(out.request_queue_csv == "/proc/self/exe");
     // R4: missing file rejected
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--request-queue-csv=/no/such/file.csv"})
                .find("not readable") != std::string::npos);
 
     // R5: --close-input flag
-    assert(parse_ok({"--online-mode", "strategy", "--close-input"}, out));
-    assert(out.close_input);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--close-input"}, out));
+    CLI_CHECK(out.close_input);
     // R5: value form rejected
-    assert(parse_error({"--online-mode", "strategy", "--close-input=true"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--close-input=true"})
                .find("no value") != std::string::npos);
 
     // R6: --bridge-dir parsed and stored
-    assert(parse_ok({"--online-mode", "strategy", "--bridge-dir=/tmp/bridge"},
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--bridge-dir=/tmp/bridge"},
                     out));
-    assert(out.bridge_dir == "/tmp/bridge");
+    CLI_CHECK(out.bridge_dir == "/tmp/bridge");
     // R6: space-separated form
-    assert(parse_ok({"--online-mode", "strategy", "--bridge-dir", "/tmp/bridge"},
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--bridge-dir", "/tmp/bridge"},
                     out));
-    assert(out.bridge_dir == "/tmp/bridge");
+    CLI_CHECK(out.bridge_dir == "/tmp/bridge");
 
     // R11: --bridge-timeout-ms parsed and stored (both value forms); default
     // 0 = wait forever; negative / garbage / over-int-range are hard errors.
-    assert(parse_ok({"--online-mode", "strategy",
+    CLI_CHECK(parse_ok({"--online-mode", "strategy",
                      "--bridge-timeout-ms=300000"}, out));
-    assert(out.bridge_timeout_ms == 300000);
-    assert(parse_ok({"--online-mode", "strategy", "--bridge-timeout-ms",
+    CLI_CHECK(out.bridge_timeout_ms == 300000);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--bridge-timeout-ms",
                      "300000"}, out));
-    assert(out.bridge_timeout_ms == 300000);
-    assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(out.bridge_timeout_ms == 0);
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(out.bridge_timeout_ms == 300000);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy"}, out));
+    CLI_CHECK(out.bridge_timeout_ms == 0);
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--bridge-timeout-ms=-1"})
                .find("non-negative integer") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--bridge-timeout-ms=x"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--bridge-timeout-ms=x"})
                .find("non-negative integer") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--bridge-timeout-ms=99999999999"})
                .find("int range") != std::string::npos);
 
     // R7: typos in the online family are hard errors
-    assert(parse_error({"--online-mode", "strategy", "--request-qeue-csv=/x"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--request-qeue-csv=/x"})
                .find("unknown online-family") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--online-flag"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--online-flag"})
                .find("unknown online-family") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--bridge-dirx=/x"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--bridge-dirx=/x"})
                .find("unknown online-family") != std::string::npos);
 
     // R7: unrelated (non-online-family) options are left to the shared
     // CmdLineParser, not rejected here
-    assert(parse_ok({"--online-mode", "strategy", "--comm-scale=2.0"}, out));
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--comm-scale=2.0"}, out));
 
     // R8: missing value after --bridge-dir / --request-queue-csv /
     // --command-fifo
-    assert(parse_error({"--online-mode", "strategy", "--bridge-dir"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--bridge-dir"})
                .find("requires a value") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--request-queue-csv"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--request-queue-csv"})
                .find("requires a value") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--command-fifo"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--command-fifo"})
                .find("requires a value") != std::string::npos);
 
-    // R9: --command-fifo parsed and stored (inline and separate-value forms)
-    assert(parse_ok({"--online-mode", "strategy",
-                     "--command-fifo=/tmp/fixture_cmd.fifo"}, out));
-    assert(out.command_fifo == "/tmp/fixture_cmd.fifo");
-    assert(parse_ok({"--online-mode", "strategy", "--command-fifo",
-                     "/tmp/fixture_cmd.fifo"}, out));
-    assert(out.command_fifo == "/tmp/fixture_cmd.fifo");
+    // R9 (2026-10-01 起按 R15c 口径修订): --command-fifo parsed and
+    // stored (inline and separate-value forms). The value must name an
+    // EXISTING FIFO, so the fixture mkfifs one (per-process path).
+    const std::string fifo_path =
+        "/tmp/cli_online_fixture_" + std::to_string(::getpid()) + ".fifo";
+    // 陈旧 FIFO 防护：pid 复用 + 前一次 assert 中止运行残留的 FIFO（main
+    // 尾部的 remove 被跳过）会让 mkfifo 撞 EEXIST、把检查变成假红。
+    ::unlink(fifo_path.c_str());
+    CLI_CHECK(::mkfifo(fifo_path.c_str(), 0600) == 0);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy",
+                     "--command-fifo=" + fifo_path}, out));
+    CLI_CHECK(out.command_fifo == fifo_path);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--command-fifo",
+                     fifo_path}, out));
+    CLI_CHECK(out.command_fifo == fifo_path);
+    // R15c: 缺席路径与存在但非 FIFO 的文件都是硬错误。
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
+                        "--command-fifo=/no/such/fixture_cmd.fifo"})
+               .find("must name an existing FIFO") != std::string::npos);
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
+                        "--command-fifo=/proc/self/exe"})
+               .find("must name an existing FIFO") != std::string::npos);
     // R7: --command-* typos are hard errors
-    assert(parse_error({"--online-mode", "strategy", "--command-fifoX=/x"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--command-fifoX=/x"})
                .find("unknown online-family") != std::string::npos);
 
+    // R16（2026-10-01 补齐）：--close-input 与 --command-fifo 互斥——启动
+    // 即关门会在 FIFO 生产者注入任何东西之前杀死通道，无 CSV 的 run 以
+    // 零请求绿色退出。本仓 --close-input 是冻结的裸旗标词法（带值形态
+    // 一律硬错"takes no value"），故只测裸旗标形态 + FIFO 的互斥。
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
+                        "--command-fifo=" + fifo_path, "--close-input"})
+               .find("mutually exclusive") != std::string::npos);
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
+                        "--command-fifo=" + fifo_path, "--close-input=true"})
+               .find("takes no value") != std::string::npos);
+    // R16b（R2 复核补齐）：--request-queue-csv 与 --command-fifo 互斥
+    // （CSV 臂持有 queue-index 域，FIFO 信封 queue_index 恒 -1）。
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
+                        "--request-queue-csv=/proc/self/exe",
+                        "--command-fifo=" + fifo_path})
+               .find("mutually exclusive") != std::string::npos);
+    ::unlink(fifo_path.c_str());
+
     // missing --online-mode even with other online flags
-    assert(parse_error({"--request-queue-csv=/proc/self/exe", "--close-input"})
+    CLI_CHECK(parse_error({"--request-queue-csv=/proc/self/exe", "--close-input"})
                .find("--online-mode") != std::string::npos);
 
     // R11: phase-7 §10.4 --request-max-arrival-ns
@@ -241,53 +310,51 @@ int main() {
     // acceptance window into the code and silently dropped over-window
     // requests; the bound is now explicit-only and its drops fail-close
     // the run-end completion audit)
-    assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(out.request_max_arrival_ns == 0);
-    assert(parse_ok({"--online-mode", "strategy",
+    CLI_CHECK(parse_ok({"--online-mode", "strategy"}, out));
+    CLI_CHECK(out.request_max_arrival_ns == 0);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy",
                      "--request-max-arrival-ns=12345"}, out));
-    assert(out.request_max_arrival_ns == 12345);
+    CLI_CHECK(out.request_max_arrival_ns == 12345);
     // R11: non-integer / negative values are hard errors
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--request-max-arrival-ns=-5"})
                .find("non-negative integer") != std::string::npos);
     // R11: missing value forms rejected
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--request-max-arrival-ns"})
                .find("requires a value") != std::string::npos);
     // R11: typos in the new family are hard errors
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--request-window-row=64"})
                .find("unknown online-family") != std::string::npos);
 
     // R10: --sensing-enabled default OFF (feature flag; phase 6 before 默认关)
-    assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(!out.sensing_enabled);
-    assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(!out.sensing_enabled);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy"}, out));
+    CLI_CHECK(!out.sensing_enabled);
     // R10: flag form enables
-    assert(parse_ok({"--online-mode", "strategy", "--sensing-enabled"}, out));
-    assert(out.sensing_enabled);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--sensing-enabled"}, out));
+    CLI_CHECK(out.sensing_enabled);
     // R10: value form rejected
-    assert(parse_error({"--online-mode", "strategy", "--sensing-enabled=true"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--sensing-enabled=true"})
                .find("takes no value") != std::string::npos);
     // R10: --sensing-* typos are hard errors
-    assert(parse_error({"--online-mode", "strategy", "--sensing-enable=/x"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--sensing-enable=/x"})
                .find("unknown online-family") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--sensing-x"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--sensing-x"})
                .find("unknown online-family") != std::string::npos);
     // R10: coexists with the rest of the family
-    assert(parse_ok({"--online-mode", "strategy", "--close-input",
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--close-input",
                      "--sensing-enabled", "--bridge-dir=/tmp/bridge"}, out));
-    assert(out.sensing_enabled && out.close_input &&
+    CLI_CHECK(out.sensing_enabled && out.close_input &&
            out.bridge_dir == "/tmp/bridge");
 
     // R12 B.3 cleanup (2026-09-05): the --online-node-gc arm was removed;
     // M2 node GC is always on. The literal flag (both value forms) is an
     // unknown online-family option -- stale scripts fail closed at parse
     // time instead of silently disabling collection.
-    assert(parse_error({"--online-mode", "strategy", "--online-node-gc=0"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--online-node-gc=0"})
                .find("unknown online-family") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--online-node-gc", "1"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--online-node-gc", "1"})
                .find("unknown online-family") != std::string::npos);
 
     // R13: FP1 hardened unsigned lexicon (2026-09-01, sync-A16 batch P;
@@ -309,19 +376,19 @@ int main() {
                                        "9999999999999999999999999999999999"
                                        "999999999"}) {
             OnlineCliOptions probe = sentinel;
-            assert(parse_error({"--online-mode", "strategy", opt, bad})
+            CLI_CHECK(parse_error({"--online-mode", "strategy", opt, bad})
                        .find("integer") != std::string::npos);
             // separate-value form reaches the same lexicon
-            assert(!parse_ok({"--online-mode", "strategy", opt, bad}, probe));
-            assert(probe.request_max_arrival_ns == 777 &&
+            CLI_CHECK(!parse_ok({"--online-mode", "strategy", opt, bad}, probe));
+            CLI_CHECK(probe.request_max_arrival_ns == 777 &&
                    probe.bridge_timeout_ms == 777);
         }
     }
     // R13: int-typed options bound at exactly INT_MAX.
-    assert(parse_ok({"--online-mode", "strategy",
+    CLI_CHECK(parse_ok({"--online-mode", "strategy",
                      "--bridge-timeout-ms=2147483647"}, out));
-    assert(out.bridge_timeout_ms == 2147483647);
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(out.bridge_timeout_ms == 2147483647);
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--bridge-timeout-ms=2147483648"})
                .find("int range") != std::string::npos);
 
@@ -334,33 +401,33 @@ int main() {
         // sentinel: prove a failed parse writes nothing
         OnlineCliOptions sentinel;
         sentinel.online_validate = 777;
-        assert(parse_ok({"--online-mode", "strategy", "--online-validate=0"},
+        CLI_CHECK(parse_ok({"--online-mode", "strategy", "--online-validate=0"},
                         out));
-        assert(out.online_validate == 0);
-        assert(parse_ok({"--online-mode", "strategy", "--online-validate=1"},
+        CLI_CHECK(out.online_validate == 0);
+        CLI_CHECK(parse_ok({"--online-mode", "strategy", "--online-validate=1"},
                         out));
-        assert(out.online_validate == 1);
+        CLI_CHECK(out.online_validate == 1);
         OnlineCliOptions probe;
-        assert(parse_ok({"--online-mode", "strategy", "--online-validate",
+        CLI_CHECK(parse_ok({"--online-mode", "strategy", "--online-validate",
                          "0"},
                         probe));
-        assert(probe.online_validate == 0);
-        assert(parse_ok({"--online-mode", "strategy", "--online-validate",
+        CLI_CHECK(probe.online_validate == 0);
+        CLI_CHECK(parse_ok({"--online-mode", "strategy", "--online-validate",
                          "1"},
                         probe));
-        assert(probe.online_validate == 1);
+        CLI_CHECK(probe.online_validate == 1);
         for (const std::string& bad :
              {"2", "3", "01", "on", "true", "-1", "+1", "1x", " 1",
               "2147483647", "2147483648", "4294967296"}) {
             OnlineCliOptions p = sentinel;
-            assert(parse_error({"--online-mode", "strategy",
+            CLI_CHECK(parse_error({"--online-mode", "strategy",
                                 "--online-validate=" + bad})
                        .find("unknown --online-validate value") !=
                    std::string::npos);
             // separate-value form reaches the same enum check
-            assert(!parse_ok(
+            CLI_CHECK(!parse_ok(
                 {"--online-mode", "strategy", "--online-validate", bad}, p));
-            assert(p.online_validate == 777);
+            CLI_CHECK(p.online_validate == 777);
         }
     }
 
@@ -369,65 +436,154 @@ int main() {
     // explicit 0 = off escape is asserted immediately below.
     {
         OnlineCliOptions defaults_probe;
-        assert(defaults_probe.idle_watchdog_s == 1.0);
+        CLI_CHECK(defaults_probe.idle_watchdog_s == 1.0);
     }
     // accepted: 0 = off, sub-second, both bounds themselves
-    assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s", "0"},
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s", "0"},
                     out));
-    assert(out.idle_watchdog_s == 0.0);
-    assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s=0.5"},
+    CLI_CHECK(out.idle_watchdog_s == 0.0);
+    CLI_CHECK(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s=0.5"},
                     out));
-    assert(out.idle_watchdog_s == 0.5);
+    CLI_CHECK(out.idle_watchdog_s == 0.5);
     {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%.17g", kMinIdleWatchdogSeconds);
-        assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s",
+        CLI_CHECK(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s",
                          buf}, out));
-        assert(out.idle_watchdog_s == kMinIdleWatchdogSeconds);
+        CLI_CHECK(out.idle_watchdog_s == kMinIdleWatchdogSeconds);
         std::snprintf(buf, sizeof(buf), "%.17g", kMaxIdleWatchdogSeconds);
-        assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s",
+        CLI_CHECK(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s",
                          buf}, out));
-        assert(out.idle_watchdog_s == kMaxIdleWatchdogSeconds);
+        CLI_CHECK(out.idle_watchdog_s == kMaxIdleWatchdogSeconds);
     }
     // rejected lexicon: whitespace / sign characters anywhere
     for (const std::string& bad : {" +1", " -1", "\t-1", "+900", "-0.5",
                                    "1 ", "9 00"}) {
         OnlineCliOptions probe;
         probe.idle_watchdog_s = -42.5;
-        assert(parse_error({"--online-mode", "strategy",
+        CLI_CHECK(parse_error({"--online-mode", "strategy",
                             "--idle-watchdog-s", bad})
                    .find("whitespace or sign") != std::string::npos);
-        assert(!parse_ok({"--online-mode", "strategy",
+        CLI_CHECK(!parse_ok({"--online-mode", "strategy",
                           "--idle-watchdog-s", bad}, probe));
-        assert(probe.idle_watchdog_s == -42.5);
+        CLI_CHECK(probe.idle_watchdog_s == -42.5);
     }
     // rejected: garbage tails / non-finite / ERANGE both directions
     for (const std::string& bad : {"abc", "1e", "nan", "inf", "1e309",
                                    "1e-320", "0.0e0x"}) {
-        assert(parse_error({"--online-mode", "strategy",
+        CLI_CHECK(parse_error({"--online-mode", "strategy",
                             "--idle-watchdog-s", bad})
                    .find("finite number") != std::string::npos);
     }
     // rejected between the bounds (E26 order): below clock resolution and
     // above the platform cap
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--idle-watchdog-s=1e-10"})
                .find("clock resolution") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--idle-watchdog-s=9.3e9"})
                .find("upper bound") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy",
+    CLI_CHECK(parse_error({"--online-mode", "strategy",
                         "--idle-watchdog-s=1e308"})
                .find("upper bound") != std::string::npos);
     // missing value
-    assert(parse_error({"--online-mode", "strategy", "--idle-watchdog-s"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--idle-watchdog-s"})
                .find("requires a value") != std::string::npos);
     // --idle-* typos stay hard errors (family fail-closed)
-    assert(parse_error({"--online-mode", "strategy", "--idle-watchdog=1"})
+    CLI_CHECK(parse_error({"--online-mode", "strategy", "--idle-watchdog=1"})
                .find("unknown online-family") != std::string::npos);
 
-    std::printf("[cli] ALL PASS: R1-R14 online CLI contract verified "
+    // R15 (M5-03 interaction, 2026-09-26): strip_online_family_argv leaves
+    // ONLY the shared static family. The shape below is the official
+    // runner's invocation (run_online_strategy.sh) that used to abort the
+    // binary in the shared parser before the bridge FIFOs existed.
+    {
+        const std::vector<std::string> toks = {
+            // (no argv[0] here: Args prepends "fake_online_bin")
+            "--online-mode", "strategy",            // separate value form
+            "--bridge-dir=/tmp/b",                  // inline value form
+            "--online-validate", "0",
+            "--bridge-timeout-ms", "120000",
+            "--request-queue-csv", "/proc/self/exe",  // must be readable (R4)
+            "--close-input",                        // boolean flag
+            "--sensing-enabled",                    // boolean flag
+            "--workload-configuration", "/tmp/et_prefix",
+            "--comm-group-configuration=/tmp/cg.json",
+            "--system-configuration", "/tmp/system.json",
+            "--remote-memory-configuration", "/tmp/rm.json",
+            "--network-configuration=/tmp/net.yml",
+            "--logging-folder=off",
+            "--metrics-configuration=/tmp/m.json",
+            "--metrics-detail=full",
+        };
+        Args a(toks);
+        // The strip runs AFTER a successful parse in the real binary; pin
+        // that this exact argv parses (guards the test itself against
+        // drifting away from a legal invocation).
+        OnlineCliOptions parsed;
+        CLI_CHECK(parse_online_cli(a.argc, a.argv.data(), parsed, err_buf()));
+        const auto stripped = strip_online_family_argv(a.argc, a.argv.data());
+        const std::vector<std::string> expect = {
+            "fake_online_bin",
+            "--workload-configuration", "/tmp/et_prefix",
+            "--comm-group-configuration=/tmp/cg.json",
+            "--system-configuration", "/tmp/system.json",
+            "--remote-memory-configuration", "/tmp/rm.json",
+            "--network-configuration=/tmp/net.yml",
+            "--logging-folder=off",
+            "--metrics-configuration=/tmp/m.json",
+            "--metrics-detail=full",
+        };
+        CLI_CHECK(stripped.size() == expect.size());
+        for (size_t i = 0; i < expect.size() && i < stripped.size(); ++i) {
+            CLI_CHECK(std::string(stripped[i]) == expect[i]);
+        }
+        // (b) exact-mirror value consumption: the value token following a
+        // separate-value online option is dropped even when it itself looks
+        // like a flag -- parse_online_cli consumed it blind (argv[++i]), so
+        // the strip must too, or the two passes would disagree on ownership.
+        {
+            const std::vector<std::string> pair = {
+                "--bridge-dir", "--close-input", "x"};
+            Args p(pair);
+            const auto s = strip_online_family_argv(p.argc, p.argv.data());
+            CLI_CHECK(s.size() == 2);  // argv[0] + "x"
+            CLI_CHECK(std::string(s[1]) == "x");
+        }
+        // (c) prefix-level drop: a name-level UNKNOWN online token is still
+        // family (parse_online_cli rejects it before the strip ever runs in
+        // the real binary; here it just documents the boundary).
+        {
+            const std::vector<std::string> typo = {
+                "--online-flag=1",
+                "--workload-configuration", "/w"};
+            Args t(typo);
+            const auto s = strip_online_family_argv(t.argc, t.argv.data());
+            CLI_CHECK(s.size() == 3);
+            CLI_CHECK(std::string(s[1]) == "--workload-configuration");
+            CLI_CHECK(std::string(s[2]) == "/w");
+        }
+        // Degenerate shapes must not overrun: trailing valueless online
+        // option, and the empty-argv guard.
+        {
+            const std::vector<std::string> tail = {
+                "--idle-watchdog-s"};
+            Args tl(tail);
+            const auto s = strip_online_family_argv(tl.argc, tl.argv.data());
+            CLI_CHECK(s.size() == 1);
+            CLI_CHECK(std::string(s[0]) == "fake_online_bin");
+        }
+        {
+            char* empty_argv[1] = {const_cast<char*>("fake_online_bin")};
+            const auto s = strip_online_family_argv(1, empty_argv);
+            CLI_CHECK(s.size() == 1);
+            CLI_CHECK(std::string(s[0]) == "fake_online_bin");
+        }
+    }
+
+    std::printf("[cli] ALL PASS: R1-R15 online CLI contract verified "
                 "(incl. B.3 node-gc arm removal, FP1 "
-                "hardened unsigned lexicon + watchdog bounds)\n");
+                "hardened unsigned lexicon + watchdog bounds, M5-03 "
+                "argv strip)\n");
     return 0;
 }

@@ -5,9 +5,10 @@ LICENSE file in the root directory of this source tree.
 OnlineCli -- execution-driven mechanism layer (wscllm phase 1).
 
 Online entry CLI contract (方案 §4 步骤 1-2 操作 5). The shared CmdLineParser
-uses cxxopts with allow_unrecognised_options() (CmdLineParser.cc:18-21):
-unknown options are silently ignored with no strong-typed values, so the
-online entry must parse its own family explicitly:
+hard-errors on every unknown flag (CmdLineParser.cc, unmatched-token
+guard) except the online
+family tokens below, which carry no strong-typed values there, so the online
+entry must parse its own family explicitly (same hard-error contract):
 
   --online-mode=<mode>  required for the online binary (missing = hard error).
                         <mode> is the token "strategy" (live scheduler;
@@ -18,7 +19,8 @@ online entry must parse its own family explicitly:
   --request-queue-csv   optional path of the 8-column request queue CSV.
                         Request-neutral default: when absent the service
                         stays IDLE and reads no pre-loaded queue (the static
-                        baseline config, trace_config.csv:12, stays separate
+                        baseline config's request_queue_csv row of
+                        trace_config.csv stays separate
                         from the online defaults).
   --request-max-arrival-ns
                         optional simulation input window upper bound (ns) for
@@ -113,8 +115,9 @@ online entry must parse its own family explicitly:
   --online-validate     C1 validate switch (2026-08-28), amended by the B.2
                         cleanup (2026-09-05): strict <0|1> enum. 1 (frozen
                         CLI default, fail-closed like the pre-C1 behavior)
-                        = every batch runs GraphBatchCommitter::validate()
-                        before commit; 0 = production fast path, validation
+                        = every batch runs full validation + commit through
+                        GraphBatchCommitter::validate_and_commit(); 0 =
+                        production fast path, validation
                         skipped entirely (the official runner passes
                         "${SH_ONLINE_VALIDATE:-0}"; smoke/fixture/verify
                         runs pass 1 explicitly) while commit()'s mandatory
@@ -124,9 +127,11 @@ online entry must parse its own family explicitly:
                         never silently change validation frequency.
 
 Hard-error rules: unknown flags in the online family (prefixes --request-,
---bridge-, --close-, --online-) are rejected, because the shared parser would
-otherwise swallow typos silently. --request-queue-csv must name an existing,
-readable file.
+--bridge-, --close-, --online-, --command-, --sensing-, --idle-) are
+rejected, because the shared parser would otherwise swallow typos silently
+(the list matches is_online_family in OnlineCli.cc exactly, including the
+--idle- family added by P0-2 on 2026-08-31). --request-queue-csv must name
+an existing, readable file.
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_ONLINECLI_HH
@@ -153,10 +158,6 @@ inline constexpr double kMaxIdleWatchdogSeconds = 1.0e9;
 inline constexpr double kMinIdleWatchdogSeconds = 1.0e-9;
 
 struct OnlineCliOptions {
-    // Mode token: "" (unset) or "strategy". "" is rejected at the end of
-    // parse_online_cli; "replay" is rejected since the path-2 removal
-    // (2026-08-18).
-    std::string mode;
     bool close_input = false;
     std::string bridge_dir;
     // Decision-bridge response-wait poll timeout (ms; 0 = wait forever, the

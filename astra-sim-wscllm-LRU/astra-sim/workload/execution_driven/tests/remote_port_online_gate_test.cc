@@ -56,14 +56,14 @@ CompletionObserver hook 记录终态。
 
 PortStats 观测：方案阶段 5.3 验收要求直读后端 PortStats。
 port_stats/enable_transaction_log 在本仓后端头的
-public 段（AnalyticalRemoteMemory.hh:155-229），测试经公共接口直读。
+public 段（AnalyticalRemoteMemory.hh 的 PortStats 公共段），测试经公共接口直读。
 （更正：本文件早版注释误判该访问器为 private 并引入了 include 前访问宏
 seam——该 seam 已删除，公共接口即够。）
 
 已知边界：本套件场景不触碰 5.1 套件覆盖的 join-at-boundary 场景（双 MEM
 同刻就绪、端口此前空闲，streams_before==0 的 join 不被扣份——该行为已按
 方案 §3.1 在后端定为规格：served_streams 快照，
-AnalyticalRemoteMemory.cc:586-597/:647-652，旧“偏差”记录见
+AnalyticalRemoteMemory.cc 的 advance_port_continuous served_streams 快照，旧“偏差”记录见
 remote_port_nway_test.cc 头注的历史注记）；发射均经
 Workload 生产路径（issue_dep_free_nodes / issue_remote_mem / issue_send_comm
 / issue_recv_comm），完成回调落 Workload::call 真实终态处理。
@@ -104,7 +104,7 @@ AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest
 #include <astra-network-analytical/congestion_aware/Helper.h>
 
 // 后端头：PortStats/port_stats/enable_transaction_log 在本头 public 段
-// （AnalyticalRemoteMemory.hh:155-229），公共接口直读，无需访问宏。
+// （AnalyticalRemoteMemory.hh 的 PortStats 公共段），公共接口直读，无需访问宏。
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 #include <unistd.h>
@@ -165,7 +165,6 @@ struct TerminalRec {
     int status = -1;
 };
 std::map<uint64_t, TerminalRec> g_terminals;  // key = (rank<<32)|node_id
-std::vector<uint64_t> g_terminal_order;
 
 void terminal_hook(void* ctx, int rank, uint64_t node_id, const char*,
                    const char*, uint64_t, uint64_t tick, int status) {
@@ -176,7 +175,6 @@ void terminal_hook(void* ctx, int rank, uint64_t node_id, const char*,
     rec.count += 1;
     rec.tick = tick;
     rec.status = status;
-    g_terminal_order.push_back(key);
 }
 
 const TerminalRec& terminal_of(int rank, uint64_t node_id) {
@@ -224,7 +222,6 @@ const char* kSystemJson = R"({
   "collective-optimization": "localBWAware",
   "roofline-enabled": 1,
   "replay-only": 0,
-  "track-local-mem": 0,
   "trace-enabled": 0,
   "hbm-bandwidth-contention": 0,
   "hbm-kv-restore-bandwidth-sharing": 0,

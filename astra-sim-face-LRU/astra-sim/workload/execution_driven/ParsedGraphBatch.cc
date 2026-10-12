@@ -15,6 +15,7 @@ GraphBatchCommitter and consume the typed fields.
 
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
+#include <algorithm>
 #include <limits>
 #include <string>
 #include <vector>
@@ -33,15 +34,9 @@ namespace {
 
 // ---- typed getters (strict; the old .value(key, default) silently
 // defaulted absent keys and let type mismatches explode downstream) ----
-
-const nlohmann::json& field(const nlohmann::json& obj, const char* key,
-                            const std::string& where) {
-    const auto it = obj.find(key);
-    if (it == obj.end()) {
-        fail(where + ": missing field \"" + key + "\"");
-    }
-    return *it;
-}
+// (2026-10-01) the unused guarded `field()` helper was removed: every
+// access goes through check_key_set-guaranteed keys + the typed getters
+// below, and the dead helper suggested an unfollowed retrieval style.
 
 // Unsigned integer: rejects floats (incl. >UINT64 integer literals, which
 // nlohmann stores as double -- rule O6), negative values, bools and strings.
@@ -214,14 +209,15 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
     }
 
     // N12: compute -- required {num_ops, tensor_size, runtime_ns}; optional
-    // {remote_weight_bytes, hbm_access_mode}.
+    // {remote_weight_bytes, hbm_access_mode, op_role, die_op_spec}.
     const nlohmann::json& compute = node_json["compute"];
     if (!compute.is_object()) {
         fail(where + ": compute is not an object");
     }
     check_key_set(compute,
                   {"num_ops", "tensor_size", "runtime_ns",
-                   "remote_weight_bytes", "hbm_access_mode"},
+                   "remote_weight_bytes", "hbm_access_mode",
+                   "op_role", "die_op_spec"},
                   {"num_ops", "tensor_size", "runtime_ns"},
                   where + ".compute");
     node.compute.num_ops = get_uint(compute["num_ops"], "num_ops",
@@ -242,6 +238,40 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
         node.hbm_access_mode =
             get_int(compute["hbm_access_mode"], "hbm_access_mode",
                     where + ".compute");
+    }
+    if (compute.contains("op_role")) {
+        const std::string op_role =
+            get_string(compute["op_role"], "op_role", where + ".compute");
+        if (op_role == "compute") {
+            node.compute.op_role = OpRole::Compute;
+        } else if (op_role == "control_marker") {
+            node.compute.op_role = OpRole::ControlMarker;
+        } else {
+            fail(where + ": compute.op_role \"" + op_role +
+                 "\" is not one of compute|control_marker");
+        }
+    }
+    if (compute.contains("die_op_spec")) {
+        // Contract §2 conflict rule: a die-spec node must not carry a
+        // calibrated runtime (a non-zero runtime_ns would silently bypass
+        // the die execution and must fail closed at parse time, not at
+        // issue time).
+        if (node.compute.runtime_ns != 0) {
+            fail(where + ": compute.die_op_spec requires runtime_ns == 0 "
+                        "(die nodes execute the compiled plan, never a "
+                        "calibrated runtime)");
+        }
+        const nlohmann::json& spec_json = compute["die_op_spec"];
+        if (!spec_json.is_object()) {
+            fail(where + ": compute.die_op_spec is not an object");
+        }
+        try {
+            node.compute.die_spec = DieModel::parse_die_op_spec(spec_json);
+        } catch (const ParseError&) {
+            throw;
+        } catch (const std::exception& e) {
+            fail(where + ": compute.die_op_spec rejected: " + e.what());
+        }
     }
 
     // N13: comm -- required {bytes, src, dst, tag}; optional {hbm_charge}.
@@ -357,13 +387,30 @@ ParsedWatch parse_watch(const nlohmann::json& watch_json, size_t index,
     // W3: members -- non-empty object; keys are decimal rank strings
     // (std::stoi + no trailing characters, the pre-C1 rule exactly), values
     // are non-negative integer json ids. Insertion order == JSON object key
-    // order == the producer's ascending rank-string order.
+    // order == the producer's ascending rank-STRING (lexicographic) order
+    // -- an emission-order statement, not a numeric-order freeze (R6-V3:
+    // mixed digit widths such as "2" vs "10" do not iterate in numeric
+    // rank order, and every consumer set-ifies the members anyway).
     const nlohmann::json& members = watch_json["members"];
     if (!members.is_object() || members.empty()) {
         fail(where + ": empty/absent members");
     }
     watch.members.reserve(members.size());
     for (const auto& entry : members.items()) {
+        // ASCII-digit pre-check (2026-09-30, ported from the joint repo
+        // ParsedGraphBatch.cc parse_watch): std::stoi skips leading
+        // whitespace and a '+' sign, so " 5"/"+5" used to slip through
+        // the trailing-characters check as rank 5 -- looser than the
+        // documented decimal-rank-string key contract. Require pure ASCII
+        // digits. ("05" is all digits and stays accepted as rank 5 per the
+        // pre-existing behavior; only leading-space/plus forms are new
+        // rejections.)
+        const std::string& rank_key = entry.key();
+        if (rank_key.empty() ||
+            !std::all_of(rank_key.begin(), rank_key.end(),
+                         [](char c) { return c >= '0' && c <= '9'; })) {
+            fail(where + ": unparsable member rank: " + rank_key);
+        }
         int rank = 0;
         try {
             size_t parsed_chars = 0;
@@ -491,7 +538,8 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
         get_uint(resp["source_delivery_sequence"], "source_delivery_sequence",
                  "response");  // T2 (equality with the request seq is the
                                // bridge's check -- it knows the seq)
-    if (resp.contains("batch_id")) {
+    batch.has_batch_id = resp.contains("batch_id");
+    if (batch.has_batch_id) {
         batch.batch_id = get_uint(resp["batch_id"], "batch_id", "response");
     }
     if (resp.contains("error")) {

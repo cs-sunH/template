@@ -61,6 +61,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# M20(2026-09-29 审查修复):有界等待原语——$1=pid $2=timeout_s;0=已退出,
+# 1=超时仍在运行。计数式轮询(sleep 0.3 x 4/秒,与下方 ACTIVE->IDLE 等待同
+# idiom),不依赖 date/%3N 语义。
+# (2026-10-01 审查修复) python 单调钟毫秒（idle fixture 同款）：uutils
+# date 0.8.0 把 %3N 当不截断的纳秒字段，elapsed 毫秒算术溢出/荒谬值。
+monotonic_ms() {
+  python3 -c 'import time; print(int(time.monotonic_ns() // 1_000_000))'
+}
+
+wait_pid_bounded() {
+  local pid=$1 waited=0 max_waited=$(( $2 * 4 ))
+  while kill -0 "${pid}" 2>/dev/null; do
+    if (( waited >= max_waited )); then return 1; fi
+    sleep 0.3
+    waited=$((waited + 1))
+  done
+  return 0
+}
+
 start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
   local run_dir=$1
   rm -rf "${run_dir}"
@@ -69,11 +88,17 @@ start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
   cd "${PROJECT}"
   # --idle-watchdog-s 0 (2026-09-05): 看门狗默认已武装为 1s；本 fixture 的契约是刻意
   # IDLE 停车（request-neutral 无输入必须保持 IDLE 不退出），显式 0 恢复无界停车契约。
+  # M20(2026-09-29 审查修复):桥侧 response-poll 看门狗补武装(此前缺省
+  # 不传=0=永等)——Python 夹具服务单次决策交换停滞时 fail-closed abort 而
+  # 非无界挂死。120000ms 为宽松有界值(C++ 语义:毫秒,须大于最慢单决策
+  # 耗时;本夹具决策为毫秒级,正常路径永不触发,语义不变)。
+  # SH_BRIDGE_TIMEOUT_MS 可覆盖(显式 0=恢复永等逃生口)。
   "${BIN}" \
     --online-mode strategy \
     --bridge-dir "${run_dir}/bridge" \
     --online-validate 1 \
     --idle-watchdog-s 0 \
+    --bridge-timeout-ms "${SH_BRIDGE_TIMEOUT_MS:-120000}" \
     --command-fifo "${run_dir}/cmd.fifo" \
     --workload-configuration="${ET_PREFIX}" \
     --comm-group-configuration="${RC}/comm_group.json" \
@@ -83,16 +108,26 @@ start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
     --logging-folder=off \
     > "${run_dir}/cpp.log" 2>&1 &
   CPP_PID=$!
+  # M20(2026-09-29 审查修复):FIFO 就绪等待补墙钟预算（与 face 仓
+  # run_online_idle_fixture.sh 的 infra-F2 同款对齐；SH_FIFO_WAIT_S 可覆盖，
+  # 缺省 60s）——此前只有 kill -0 检查，防不了"进程存活但迟迟不建 FIFO"
+  # 的无界窗口。
+  local fifo_deadline=$(( $(date +%s) + ${SH_FIFO_WAIT_S:-60} ))
   until [ -p "${run_dir}/bridge/req_notify.fifo" ] && [ -p "${run_dir}/bridge/resp_notify.fifo" ]; do
     if ! kill -0 "${CPP_PID}" 2>/dev/null; then
       echo "[fixture] C++ exited before FIFO ready (see ${run_dir}/cpp.log)" >&2
       tail -5 "${run_dir}/cpp.log" >&2
       return 1
     fi
+    if (( $(date +%s) > fifo_deadline )); then
+      echo "[fixture] FIFOs not ready within ${SH_FIFO_WAIT_S:-60}s (see ${run_dir}/cpp.log tail)" >&2
+      tail -5 "${run_dir}/cpp.log" >&2
+      return 1
+    fi
     sleep 0.3
   done
   cd "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference"
-  python3 online/verify/same_tick_milestone_fixture_service.py \
+  python3 "${FIXTURE_SVC}" \
     --bridge-dir "${run_dir}/bridge" \
     > "${run_dir}/python.log" 2>&1 &
   PY_PID=$!
@@ -102,6 +137,20 @@ start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
 wait_for_exits() {  # $1=run_dir $2=name
   local run_dir=$1 name=$2
   local cpp_exit=0 py_exit=0
+  # M20(2026-09-29 审查修复):裸 wait 无界——CloseInput 丢失/夹具服务回归时
+  # 本 fixture 挂死而非失败。改为有界轮询(SH_EXIT_WAIT_S,缺省 120s)后再
+  # wait 收割退出码;超时 fail-closed(非零退出触发 EXIT trap 清场)。正常
+  # 路径进程自然退出,轮询立即返回,退出码语义不变。
+  if ! wait_pid_bounded "${CPP_PID}" "${SH_EXIT_WAIT_S:-120}"; then
+    echo "[fixture] FAIL: ${name} C++ did not exit within ${SH_EXIT_WAIT_S:-120}s (CloseInput lost?)" >&2
+    tail -8 "${run_dir}/cpp.log" >&2
+    exit 1
+  fi
+  if ! wait_pid_bounded "${PY_PID}" "${SH_EXIT_WAIT_S:-120}"; then
+    echo "[fixture] FAIL: ${name} Python did not exit within ${SH_EXIT_WAIT_S:-120}s" >&2
+    tail -8 "${run_dir}/python.log" >&2
+    exit 1
+  fi
   wait "${CPP_PID}" || cpp_exit=$?
   wait "${PY_PID}" || py_exit=$?
   CPP_PID=""
@@ -139,7 +188,7 @@ if ! kill -0 "${PY_PID}" 2>/dev/null; then
 fi
 echo "[fixture] IDLE held ~1s (processes alive); injecting 1 request"
 
-inject_ms=$(date +%s%3N)
+inject_ms=$(monotonic_ms)
 exec 3>"${run_dir}/cmd.fifo"
 echo '{"kind":"Submit","session_id":"stm_s0","turn_index":0,"request_id":"stm_s0_r0","prefill_length":4096,"decode_length":128,"arrival_world_ns":'"${T_NS}"',"inter_request_interval_ns":0}' >&3
 
@@ -164,7 +213,7 @@ while ! grep -q "ACTIVE -> IDLE" "${run_dir}/cpp.log"; do
     exit 1
   fi
 done
-echo "[fixture] request completed at +$(( $(date +%s%3N) - inject_ms ))ms; injecting CloseInput"
+echo "[fixture] request completed at +$(( $(monotonic_ms) - inject_ms ))ms; injecting CloseInput"
 echo '{"kind":"CloseInput"}' >&3
 exec 3>&-
 wait_for_exits "${run_dir}" scenario1
@@ -194,7 +243,9 @@ if ! grep -q 'seq=2 tick='"${T_PLUS2}"' deferred_from_tick=0 reasons=\["DECODE_C
   exit 1
 fi
 # 恰好 3 次 delivery(无额外 epoch、无事件丢失)。
-n_deliveries=$(grep -c "\[fixture\] delivery" "${log}")
+# L21 同族修复(2026-09-29 审查):grep -c 零命中时退出码 1,pipefail 使本
+# 赋值非零,set -e 先杀脚本,"got 0" 的 FAIL 诊断永远到不了——|| true 保住。
+n_deliveries=$(grep -c "\[fixture\] delivery" "${log}" || true)
 if [[ ${n_deliveries} -ne 3 ]]; then
   echo "[fixture] FAIL: expected exactly 3 deliveries, got ${n_deliveries}" >&2
   exit 1

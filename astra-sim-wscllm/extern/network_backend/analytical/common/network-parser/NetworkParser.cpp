@@ -5,6 +5,7 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/NetworkParser.h"
 #include <cassert>
+#include <cmath>
 #include <iostream>
 
 using namespace NetworkAnalytical;
@@ -26,8 +27,12 @@ NetworkParser::NetworkParser(const std::string& path) noexcept
 
         // parse network configs
         parse_network_config_yml(network_config);
-    } catch (const YAML::BadFile& e) {
-        // loading network config file failed
+    } catch (const YAML::Exception& e) {
+        // Loading the network config failed (file missing/unreadable, or a
+        // YAML syntax error). YAML::Exception is the common base of
+        // BadFile and ParserException: the constructor is noexcept, so a
+        // ParserException escaping here would hit std::terminate with no
+        // [Error] diagnosis (infra-E3/C16, 2026-09-27).
         std::cerr << "[Error] (network/analytical) " << e.what() << std::endl;
         std::exit(-1);
     }
@@ -92,6 +97,12 @@ void NetworkParser::parse_network_config_yml(const YAML::Node& network_config) n
 
     // parse vector values
     npus_count_per_dim = parse_vector<int>(network_config["npus_count"]);
+    // Unit note (2026-09-30 face parity): "bandwidth" is GB/s
+    // (gigaBYTES per second) end to end -- the analytical backend converts
+    // it to bytes/ns via the SI-identity bw_GBps_to_Bpns. The
+    // hardware-template source key (sh_test_mesh/hardware/*.json) is
+    // historically named "bandwidth-gbps" but carries GB/s, not Gbit/s;
+    // treating the value as Gbit/s would be off by 8x with no diagnostic.
     bandwidth_per_dim = parse_vector<Bandwidth>(network_config["bandwidth"]);
     latency_per_dim = parse_vector<Latency>(network_config["latency"]);
 
@@ -203,8 +214,14 @@ void NetworkParser::check_validity() const noexcept {
     }
 
     // bandwidths should be all positive
+    // NaN/+inf must be rejected explicitly (2026-09-30 face parity): a NaN
+    // hides behind every "<= 0" comparison, and a NaN/+inf link capacity
+    // would then never constrain the fluid scheduler's min-share
+    // computation (std::min with NaN always keeps the other operand) --
+    // silently disabling congestion control for that dimension
+    // (fail-open). +inf hides behind the same comparison.
     for (const auto& bandwidth : bandwidth_per_dim) {
-        if (bandwidth <= 0) {
+        if (!std::isfinite(bandwidth) || bandwidth <= 0) {
             std::cerr << "[Error] (network/analytical) " << "bandwidth (" << bandwidth << ") should be larger than 0"
                       << std::endl;
             std::exit(-1);
@@ -212,8 +229,13 @@ void NetworkParser::check_validity() const noexcept {
     }
 
     // latency should be non-negative
+    // NaN/+inf must be rejected explicitly, symmetric with the bandwidth
+    // guard above: a NaN latency would otherwise surface only much later,
+    // at the fluid_route consumer's isfinite guard, with a misleading
+    // "overflows EventTime" message instead of the real "invalid input"
+    // cause. +inf hides behind the same comparison.
     for (const auto& latency : latency_per_dim) {
-        if (latency < 0) {
+        if (!std::isfinite(latency) || latency < 0) {
             std::cerr << "[Error] (network/analytical) " << "latency (" << latency << ") should be non-negative"
                       << std::endl;
             std::exit(-1);

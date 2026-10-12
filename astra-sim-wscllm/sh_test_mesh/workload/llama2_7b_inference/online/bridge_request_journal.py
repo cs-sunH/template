@@ -67,6 +67,14 @@ def iter_request_records(bridge_dir):
     The journal is authoritative.  Loose files whose sequence is newer than
     its last row are appended as an interrupted-run tail; duplicate loose
     files are ignored without constructing an all-history ``set``.
+
+    SCHED-7(2026-09-28,登记):散尾合并无 run epoch 标识——纯理论缺口。
+    跨 run 混杂已被 runner 堵死:run_online_strategy.sh 每轮
+    ``rm -rf "${RUN_DIR}"`` 重建 bridge 目录(run 目录即版本,不轮转),
+    同目录不可能残留上一轮的 loose request。即使发生,两道 contiguous 门
+    (journal 行序 + 散尾 seq)使缺座混杂 fail-closed 而非静默错并;唯一
+    理论通道是"上轮恰好遗留 seq==journal 尾+1 的散装 request",该形态在
+    rm -rf 纪律下不可达,不引入 epoch 字段(改协议面大于收益)。
     """
     last_seq = -1
     path = _journal_path(bridge_dir)

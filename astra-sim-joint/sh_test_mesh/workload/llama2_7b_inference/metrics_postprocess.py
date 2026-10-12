@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import json
 import math
 import sys
@@ -92,10 +93,21 @@ RAW_COLUMNS = [
     "schema",
     "completed_requests",
     "incomplete_requests",
+    # M15(face-LRU 审计,2026-09-29)披露列:mean/p50/p95/p99_e2e_ns 口径
+    # 改为"全部 completed 请求"(ordering 违规者是真实完成,不再静默剔除);
+    # 旧 ordering-ok 口径经下列披露列保留可追溯。kv_bin/batch/count/
+    # sum/min/max_iteration_time_ns 六列在本仓保留:planner_roofline 记录
+    # 的历史写端（metrics_integration.py）已随 2026-10-01 死代码审计删
+    # 除（SH3 离线生成入口自 2026-08-18 起拒绝桩、全仓零 import——写端
+    # 不存在，"仍生产"为失实表述）；六列与 _planner_roofline_rows 读端
+    # 保留消费手工注入/历史日志的兼容面。
+    "completed_ordering_violations",
     "mean_e2e_ns",
     "p50_e2e_ns",
     "p95_e2e_ns",
     "p99_e2e_ns",
+    "completed_e2e_ordering_ok_mean_ns",
+    "completed_e2e_ordering_ok_p99_ns",
     "drain_tput_rps",
     "sim_window_tput_rps",
     "benchmark_point_id",
@@ -216,12 +228,31 @@ class Run:
         return first
 
 
+def _resolve_log_path(log_path: Path) -> Path:
+    """R5-F1（2026-09-29 face 移植）：归档 gz 形态透明回退——README ⑤ 步
+    的字面 cpp.log 路径在归档 run_dir 会 "log not found" 必失败。字面
+    路径缺失而 <path>.gz 在场时按 gz 解析；两者皆缺时原样返回（由调用
+    方报缺）。对齐同链范式（slo_common / ledger_reconcile 的透明 .gz
+    回退）。"""
+    if log_path.is_file() or str(log_path).endswith(".gz"):
+        return log_path
+    gz_path = log_path.with_name(log_path.name + ".gz")
+    if gz_path.is_file():
+        return gz_path
+    return log_path
+
+
 def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
     runs: list[Run] = []
     for log_path in log_paths:
+        log_path = _resolve_log_path(log_path)
         current: Optional[Run] = None
         run_index = 0
-        with log_path.open(encoding="utf-8", errors="replace") as source:
+        # R5-F1: 归档 gz 形态透明解析（_resolve_log_path 已把字面路径
+        # 解析到 <path>.gz；此处按后缀选 opener）。
+        opener = gzip.open if str(log_path).endswith(".gz") else open
+        with opener(log_path, "rt", encoding="utf-8",
+                    errors="replace") as source:
             for line in source:
                 if not line.startswith(METRIC_PREFIX):
                     continue
@@ -268,6 +299,9 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                 elif record_type == "consistency":
                     current.consistency.append(record)
                 # memory_anchor and unknown types are tolerated but unused.
+    # (2026-10-01 审查修复) 同 run_id 且 summary 全等的重复输入去重：
+    # 旧实现只查冲突不去重——同一 log 传两遍时 raw/normalized/request
+    # 行翻倍、type_counts 双计（summary 冲突仍 fail-closed）。
     seen: dict[str, Run] = {}
     for run in runs:
         previous = seen.get(run.run_id)
@@ -277,6 +311,7 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                     f"run_id {run.run_id!r} appears in multiple logs with "
                     "conflicting summaries (sec.11.4)"
                 )
+            continue
         seen[run.run_id] = run
     for run in runs:
         if run.schema_versions != {SUPPORTED_SCHEMA}:
@@ -285,7 +320,7 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                 f"versions {sorted(run.schema_versions)} (sec.11.4); this "
                 f"postprocessor supports schema {SUPPORTED_SCHEMA} only"
             )
-    return runs
+    return list(seen.values())
 
 
 def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
@@ -329,7 +364,11 @@ def _check_request_completion(run: Run) -> None:
     summary = run.summary
     if not run.requests:
         return  # summary detail level: nothing to cross-check against
-    completed_records = sum(1 for record in run.requests if record.get("completed"))
+    # R9-F2（2026-09-29 face 移植）：显式布尔判定——bool("false") 恒真
+    # 会把字符串化的 failed 计成 completed（与 _request_metric_rows 的
+    # `is True` 同口径）。
+    completed_records = sum(
+        1 for record in run.requests if record.get("completed") is True)
     incomplete_records = len(run.requests) - completed_records
     claimed_completed = summary.get("completed_unique_requests")
     claimed_incomplete = summary.get("incomplete_requests")
@@ -348,6 +387,21 @@ def _check_request_completion(run: Run) -> None:
 
 
 def _labels(run: Run, service_manifest: dict[str, Any], run_config: dict[str, Any]) -> dict[str, str]:
+    # F2_PY fix (2026-09-29, report 3.6 sister-repo sync from astra-sim-wscllm):
+    # a well-formed-JSON but malformed-shape manifest.json (e.g. "model":
+    # "llama2" -- a string, or "model": null -- an explicit JSON null) used to
+    # escape the chained .get calls below as a bare AttributeError, outside
+    # the PostprocessError channel that main() is the only catcher of.  The
+    # label blocks are comparison-group keys, so a wrong shape aborts through
+    # PostprocessError instead of crashing with a traceback.
+    for name in ("model", "hardware", "kv_management"):
+        block = service_manifest.get(name, {})
+        if not isinstance(block, dict):
+            raise PostprocessError(
+                f"run {run.run_id}: service manifest block {name!r} must "
+                f"be an object (got {type(block).__name__} "
+                f"{block!r}; fail-closed)"
+            )
     model = run_config.get("model") or service_manifest.get("model", {}).get("name", "")
     hardware_block = service_manifest.get("hardware", {})
     hardware = (
@@ -361,6 +415,17 @@ def _labels(run: Run, service_manifest: dict[str, Any], run_config: dict[str, An
     dataset = run_config.get("dataset") or ""
     if not dataset:
         queue_csv = service_manifest.get("request_queue_csv", "")
+        if not isinstance(queue_csv, str):
+            # RV7-1 (2026-09-29, report 3.6 sister-repo sync from
+            # astra-sim-wscllm): same family as the three blocks above -- a
+            # non-string (or explicit-null) queue path used to escape as a
+            # bare TypeError from Path(); route it through the same
+            # PostprocessError channel instead.
+            raise PostprocessError(
+                f"run {run.run_id}: service manifest request_queue_csv must "
+                f"be a string (got {type(queue_csv).__name__} "
+                f"{queue_csv!r}; fail-closed)"
+            )
         dataset = Path(queue_csv).name if queue_csv else ""
     return {
         "model": str(model),
@@ -393,10 +458,23 @@ def _service_rows(run: Run, labels: dict[str, str]) -> list[dict[str, Any]]:
         {
             "completed_requests": summary.get("completed_unique_requests", ""),
             "incomplete_requests": summary.get("incomplete_requests", ""),
+            # M15(face-LRU 审计,2026-09-29):mean/p50/p95/p99_e2e_ns 口径 =
+            # 全部 completed 请求(ordering 违规者是真实完成,不再静默剔除,
+            # 归一化分母随之去偏);旧 ordering-ok 口径经下面两个披露列与
+            # completed_ordering_violations 计数保留可追溯。
+            "completed_ordering_violations": summary.get(
+                "completed_ordering_violations", ""
+            ),
             "mean_e2e_ns": summary.get("mean_e2e_ns"),
             "p50_e2e_ns": summary.get("p50_e2e_ns"),
             "p95_e2e_ns": summary.get("p95_e2e_ns"),
             "p99_e2e_ns": summary.get("p99_e2e_ns"),
+            "completed_e2e_ordering_ok_mean_ns": summary.get(
+                "completed_e2e_ordering_ok_mean_ns"
+            ),
+            "completed_e2e_ordering_ok_p99_ns": summary.get(
+                "completed_e2e_ordering_ok_p99_ns"
+            ),
             "drain_tput_rps": summary.get("drain_tput_rps"),
             "sim_window_tput_rps": summary.get("sim_window_tput_rps"),
             "memory_actions_total": summary.get("memory_actions_total", ""),
@@ -405,6 +483,105 @@ def _service_rows(run: Run, labels: dict[str, str]) -> list[dict[str, Any]]:
         }
     )
     return [row]
+
+
+# 第一期（die 后端）：die 利用率三元组的管线级断言。C++ MetricCollector
+# 在每条 type=rank_compute 记录上输出 active_kernel_die_{compute,memory,
+# vector}_util（门控=compute-cost-model=die；roofline 键保持 legacy 门控
+# 不动）。本断言在后处理侧 fail-closed：声明 die 后端的 run，每个 rank
+# 的三个键必须非 null、数值、且落在 [0, 1+eps]（eps 与 C++
+# kUtilEpsilon 同值）。
+DIE_UTILIZATION_KEYS = (
+    "active_kernel_die_compute_util",
+    "active_kernel_die_memory_util",
+    "active_kernel_die_vector_util",
+)
+# 与 C++ MetricCollector 的 kUtilEpsilon 一致（上行在 1e-6 容差内钳制）。
+DIE_UTILIZATION_EPSILON = 1e-6
+# null 的唯一合法理由：窗口内没有任何计算段（C++ 端 note 原文，与本仓
+# roofline 键的 M-17 镜像口径同文案）。
+_DIE_NULL_NOTE_OK = "unavailable: zero comp time in utilization window"
+
+
+def _run_declares_die_backend(run: Run) -> bool:
+    """该 run 是否声明 die 计算后端。
+
+    声明源优先级：metrics_manifest.json 的 compute-cost-model（第一期
+    起由 plan_materializer 同步写入，归档 run 目录自带）> 同目录
+    manifest.json 的同名键（服务 manifest）> 无声明时从 rank_compute
+    记录自身推断（C++ 的 note 文案区分 not-die）。"""
+    metrics_manifest, service_manifest, _roofline = _load_manifest_sidecars(run)
+    for manifest in (metrics_manifest, service_manifest):
+        value = manifest.get("compute-cost-model") if isinstance(manifest, dict) else None
+        if isinstance(value, str) and value:
+            return value == "die"
+    for record in run.rank_compute:
+        if record.get("active_kernel_die_note") == (
+                "unavailable: compute-cost-model is not die"):
+            return False
+        if any(record.get(key) is not None for key in DIE_UTILIZATION_KEYS):
+            return True
+    return False
+
+
+def _check_die_utilization_records(runs) -> None:
+    """管线断言（第一期）：die 后端 run 的利用率三元组。
+
+    声明 die 计算后端的 run 必须在每条 rank_compute 记录上携带三个
+    active_kernel_die_* 利用率（非 null 数值且 ∈[0,1+eps]）；null 仅在
+    携带采集器"零计算窗口"note 时合法。其余情形（缺键、未知 note 的
+    null、越界/非数值、声明 die 却无 rank_compute 记录）一律
+    fail-closed。legacy run 不受断言（无声明即跳过）。"""
+    for run in runs:
+        if not _run_declares_die_backend(run):
+            continue
+        if not run.rank_compute:
+            raise PostprocessError(
+                f"run {run.run_id}: declares the die compute backend but "
+                "carries no type=rank_compute records (the utilization "
+                "triplet cannot be verified; truncated log, fail-closed)"
+            )
+        for index, record in enumerate(run.rank_compute):
+            rank = record.get("rank", "?")
+            for key in DIE_UTILIZATION_KEYS:
+                value = record.get(key)
+                if value is None:
+                    note = record.get("active_kernel_die_note")
+                    if note == _DIE_NULL_NOTE_OK:
+                        continue
+                    raise PostprocessError(
+                        f"run {run.run_id}: rank_compute #{index} "
+                        f"(rank {rank}) has {key}=null with note={note!r} "
+                        "(die backend utilization must be present on every "
+                        "rank; only the zero-comp-window note is a legal "
+                        "null)"
+                    )
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise PostprocessError(
+                        f"run {run.run_id}: rank_compute #{index} "
+                        f"(rank {rank}) has non-numeric {key}={value!r}"
+                    )
+                if not (-DIE_UTILIZATION_EPSILON <= value
+                        <= 1.0 + DIE_UTILIZATION_EPSILON):
+                    raise PostprocessError(
+                        f"run {run.run_id}: rank_compute #{index} "
+                        f"(rank {rank}) has {key}={value!r} outside "
+                        f"[0, 1+{DIE_UTILIZATION_EPSILON}]"
+                    )
+
+
+def _strict_rank_compute_int(value: Any, field_name: str) -> int:
+    """rank_compute 聚合字段的严格整型（真 int 拒 bool，或纯十进制串）。"""
+    if isinstance(value, bool):
+        raise PostprocessError(
+            f"rank_compute {field_name} must be an integer, got {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return int(value, 10)
+    raise PostprocessError(
+        f"rank_compute {field_name} must be an integer (or its decimal "
+        f"string form), got {value!r}")
 
 
 def _microbench_rows(
@@ -420,14 +597,28 @@ def _microbench_rows(
         rank = record.get("rank")
         if active_ranks and rank not in active_ranks:
             continue
-        ops_by_rank[rank] = int(record.get("total_num_ops", 0))
-        bytes_by_rank[rank] = int(record.get("total_local_bytes", 0))
+        # (2026-10-01 审查修复/R2 补正/R3 规整) R9-F1 同款严格整型口径：
+        # C++ 以 u128_to_string 落这两个字段——接受真 int（拒 bool）或纯
+        # 十进制字符串（精确解析）；拒 float/null/其它（静默截断与裸
+        # TypeError 均禁止）。助手定义提前到循环外（R3：原先每迭代重定义）。
+        ops_by_rank[rank] = _strict_rank_compute_int(
+            record.get("total_num_ops", 0), "total_num_ops")
+        bytes_by_rank[rank] = _strict_rank_compute_int(
+            record.get("total_local_bytes", 0), "total_local_bytes")
         peak_flops = record.get("peak_flops_per_second") or peak_flops
         local_bw = record.get("local_hbm_bw_bytes_per_second") or local_bw
     rows = []
+    implausible_iteration_rows = 0
     for iteration in run.iterations:
         row = _base_row(run, labels, SOURCE_MICROBENCHMARK)
-        iteration_time_ns = iteration.get("iteration_time_ns")
+        # L1(face-LRU 审计,2026-09-29):负值/超阈值(uint64 回绕伪时长)的
+        # iteration_time_ns 按既有容错风格置空并计数告警,不再原样落盘、
+        # 不再进 sec.8.7 重算。
+        iteration_time_ns, implausible = _sanity_iteration_time_ns(
+            iteration.get("iteration_time_ns")
+        )
+        if implausible:
+            implausible_iteration_rows += 1
         total_ops = sum(ops_by_rank.values())
         total_bytes = sum(bytes_by_rank.values())
         tp_degree = point.get("tp_degree", "")
@@ -463,6 +654,15 @@ def _microbench_rows(
             }
         )
         rows.append(row)
+    if implausible_iteration_rows:
+        print(
+            f"warning: run {run.run_id}: "
+            f"{implausible_iteration_rows} iteration record(s) carried an "
+            "implausible iteration_time_ns (negative or above the "
+            f"{MAX_PLAUSIBLE_ITERATION_TIME_NS} ns uint64-wrap guard); "
+            "field emptied and sec.8.7 recompute suppressed",
+            file=sys.stderr,
+        )
     return rows
 
 
@@ -540,12 +740,12 @@ def _memory_ledger_rows(run: Run, labels: dict[str, str]) -> list[dict[str, Any]
 
 
 def _int_or_none(value: Any) -> Optional[int]:
-    if value is None or isinstance(value, bool):
+    """R9-F1（2026-09-29 face 移植）：指标数值严格整型口径——仅接受真
+    int（bool 拒）；None/float/str 等一律 None（NA 口径），不再裸 int()
+    静默截断（5.7→5）或强转（"5"→5）——错型漂移绝不改写数值。"""
+    if value is None or isinstance(value, bool) or not isinstance(value, int):
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return value
 
 
 def _request_incomplete_reason(record: dict[str, Any]) -> str:
@@ -620,6 +820,51 @@ TRAIN_LEDGER_CANDIDATES = (
 _FIRST_TOKEN_SOURCE_EXACT = "exact"
 _FIRST_TOKEN_SOURCE_PROXY = "train_interpolated"
 
+# G5.5（2026-09-27）contract constants: the closed enumeration surfaces of
+# request_metrics.csv are pinned by tests/test_metrics_contract.py against
+# THESE module-level names (not against the test's own copy), so the
+# producer and the contract test share one source of truth.  In-row writers
+# below reference the names -- zero behavior change, literals deduplicated.
+_TERMINAL_STATUS_COMPLETED = "completed"
+_TERMINAL_STATUS_FAILED = "failed"
+_REQUEST_STATUS_NOT_ARRIVED = "not_arrived"
+_REQUEST_STATUS_IN_FLIGHT = "in_flight"
+TERMINAL_STATUS_VALUES = (
+    _TERMINAL_STATUS_COMPLETED, _TERMINAL_STATUS_FAILED,
+    _REQUEST_STATUS_NOT_ARRIVED, _REQUEST_STATUS_IN_FLIGHT)
+NA_SENTINEL = "NA"
+FIRST_TOKEN_SOURCE_VALUES = (
+    _FIRST_TOKEN_SOURCE_EXACT,
+    _FIRST_TOKEN_SOURCE_PROXY,
+    NA_SENTINEL,
+)
+
+
+# L1(face-LRU 审计,2026-09-29):iteration_time_ns 合理性上限(10^15 ns ≈
+# 11.6 天,远高于任何真实 iteration,远低于 uint64 回绕产生的 ~1.8e19 伪
+# 时长)。C++ 端自同日起对 end<start 窗口 clamp 为 0 并在 consistency 记录
+# 计数(iteration_time_underflow_clamped);旧日志仍可能携带回绕值/负值,
+# 按本工具既有容错风格跳过并打 stderr 警告(带计数),不伪造值。
+MAX_PLAUSIBLE_ITERATION_TIME_NS = 10 ** 15
+
+
+def _sanity_iteration_time_ns(value: Any) -> tuple[Optional[int], bool]:
+    """(value_or_None, implausible_flag) for one iteration_time_ns.
+
+    (None, False) = field absent; (None, True) = present but implausible
+    (negative or above the uint64-wrap guard threshold); (parsed, False) =
+    usable. Never raises, never fabricates.
+    """
+    if value is None:
+        return None, False
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None, True
+    if 0 <= parsed <= MAX_PLAUSIBLE_ITERATION_TIME_NS:
+        return parsed, False
+    return None, True
+
 
 def _load_model_bytes() -> tuple[Optional[int], Optional[int]]:
     """(W_bytes, kv_bytes_per_token) from this workload's trace_config.csv.
@@ -683,6 +928,11 @@ class _TrainProxyIndex:
         self.first_train_by_request: dict[str, tuple[int, dict[str, Any]]] = {}
         # ledger row position -> tick of the next row on the same instance.
         self.next_tick_by_position: dict[int, int] = {}
+        # R9-A2（2026-09-29 face 移植）：ledger 在场却不可读时的丢弃原因
+        # （"文件名(异常类型)"）；None = 单纯缺失。下游降级 note 据此区分
+        # "缺失"与"损坏丢弃"——旧写法两者同词 no_train_ledger，审计员被
+        # 误导为未归档。
+        self.load_failure: Optional[str] = None
 
     def available(self) -> bool:
         self._ensure_loaded()
@@ -711,7 +961,12 @@ class _TrainProxyIndex:
                     record = json.loads(line)
                     if isinstance(record, dict):
                         rows.append(record)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            # R9-A2（2026-09-29 face 移植）：在场却损坏 ≠ 缺失——记丢弃
+            # 原因供降级 note 区分（整册丢弃的降级语义本身保留：proxy 是
+            # display-only fallback，损坏不阻断后处理）。
+            self.load_failure = "{} ({})".format(
+                ledger_path.name, type(exc).__name__)
             return
         for position, row in enumerate(rows):
             if row.get("first_step"):
@@ -906,6 +1161,17 @@ def _request_rows_for_run(run: Run) -> tuple[list[dict[str, Any]], dict[str, int
                 )
 
         completed = record.get("completed") is True
+        # A stopped observation window does not establish request failure.
+        # The metrics stream contains the entire planned cohort, including
+        # closed-loop successors whose arrival has not yet been released.
+        if completed:
+            request_status = _TERMINAL_STATUS_COMPLETED
+        elif record.get("terminal_status") == _TERMINAL_STATUS_FAILED:
+            request_status = _TERMINAL_STATUS_FAILED
+        elif _int_or_none(record.get("arrival_ns")) is None:
+            request_status = _REQUEST_STATUS_NOT_ARRIVED
+        else:
+            request_status = _REQUEST_STATUS_IN_FLIGHT
         notes: list[str] = []
         # WP9（2026-08-26）：首 token 事件值与 C++ 侧 note（withheld 原因
         # 留痕；decode_length==1 的 min/max 聚合不对称放宽裁决见
@@ -927,9 +1193,16 @@ def _request_rows_for_run(run: Run) -> tuple[list[dict[str, Any]], dict[str, int
                 first_token_source = _FIRST_TOKEN_SOURCE_PROXY
             notes.append(proxy_note)
         elif first_token_ns is None:
-            notes.append("proxy_unavailable:no_train_ledger(results/)")
+            if proxy_index.load_failure is not None:
+                # R9-A2（2026-09-29 face 移植）：ledger 在场却损坏——降级
+                # note 区分于缺失（no_train_ledger），不再误导审计员。
+                notes.append(
+                    "proxy_unavailable:train_ledger_corrupt({})".format(
+                        proxy_index.load_failure))
+            else:
+                notes.append("proxy_unavailable:no_train_ledger(results/)")
         if first_token_source is None:
-            first_token_source = "NA"
+            first_token_source = NA_SENTINEL
         request_type = entry.get("request_type")
         if request_type in REQUEST_TYPE_KNOWN:
             type_counts[request_type] += 1
@@ -1001,7 +1274,7 @@ def _request_rows_for_run(run: Run) -> tuple[list[dict[str, Any]], dict[str, int
             "session_id": record.get("session_id", ""),
             "turn_index": record.get("turn_index", ""),
             "request_type": request_type,
-            "terminal_status": "completed" if completed else "failed",
+            "terminal_status": request_status,
             "arrival_ns": arrival,
             "prefill_start_ns": _int_or_none(record.get("prefill_start_ns")),
             "prefill_end_ns": _int_or_none(record.get("prefill_end_ns")),
@@ -1017,13 +1290,13 @@ def _request_rows_for_run(run: Run) -> tuple[list[dict[str, Any]], dict[str, int
             "prefill_decode_gap_ns": gap_ns,
             "decode_ns": decode_ns,
             "e2e_ns": e2e,
-            "kv_hit_state": "NA",
-            "restore_start_ns": "NA",
-            "restore_complete_ns": "NA",
-            "pre_prefill_restore_ns": "NA",
-            "hidden_restore_ns": "NA",
-            "exposed_restore_stall_ns": "NA",
-            "hidden_ratio": "NA",
+            "kv_hit_state": NA_SENTINEL,
+            "restore_start_ns": NA_SENTINEL,
+            "restore_complete_ns": NA_SENTINEL,
+            "pre_prefill_restore_ns": NA_SENTINEL,
+            "hidden_restore_ns": NA_SENTINEL,
+            "exposed_restore_stall_ns": NA_SENTINEL,
+            "hidden_ratio": NA_SENTINEL,
             "prefill_length": _int_or_none(entry.get("prefill_length")),
             "decode_length": _int_or_none(entry.get("decode_length")),
             "prefix_len": _int_or_none(entry.get("prefix_len")),
@@ -1140,10 +1413,29 @@ def build_groups(
             )
         return groups, run_configs
 
+    # Report 3.6 fix (2026-09-29, sister-repo sync from astra-sim-wscllm): a
+    # --group-config JSON value of the wrong shape (a top-level
+    # array/string/number, a non-object group entry, a non-object run entry)
+    # used to escape the chained .get calls below as a bare AttributeError --
+    # outside the PostprocessError channel that main() is the only catcher
+    # of.  The group config drives comparison-group keys, so every level is
+    # validated as the object shape its access pattern requires and a wrong
+    # shape aborts fail-closed (sec.11.4 family).
+    if not isinstance(group_config, dict):
+        raise PostprocessError(
+            "group config must be a JSON object with a 'groups' list "
+            f"(got {type(group_config).__name__} {group_config!r}; "
+            "fail-closed)"
+        )
     configured_groups = group_config.get("groups")
     if not isinstance(configured_groups, list) or not configured_groups:
         raise PostprocessError("group config must contain a non-empty 'groups' list")
-    for entry in configured_groups:
+    for entry_index, entry in enumerate(configured_groups):
+        if not isinstance(entry, dict):
+            raise PostprocessError(
+                f"group config entries[{entry_index}] must be an object "
+                f"(got {type(entry).__name__} {entry!r}; fail-closed)"
+            )
         group_id = entry.get("group_id")
         if not group_id:
             raise PostprocessError("group config entry without group_id")
@@ -1151,7 +1443,20 @@ def build_groups(
         labels_by_run: dict[str, dict[str, Any]] = {}
         baseline_run_id = entry.get("baseline_run_id")
         baseline_marks = 0
-        for run_entry in entry.get("runs", []):
+        group_runs = entry.get("runs", [])
+        if not isinstance(group_runs, list):
+            raise PostprocessError(
+                f"group {group_id}: 'runs' must be a list "
+                f"(got {type(group_runs).__name__} {group_runs!r}; "
+                "fail-closed)"
+            )
+        for run_entry in group_runs:
+            if not isinstance(run_entry, dict):
+                raise PostprocessError(
+                    f"group {group_id}: every run entry must be an object "
+                    f"(got {type(run_entry).__name__} {run_entry!r}; "
+                    "fail-closed)"
+                )
             run_id = run_entry.get("run_id")
             run = by_id.get(run_id)
             if run is None:
@@ -1257,12 +1562,33 @@ def build_normalized_rows(
         microbench: list[tuple[Run, dict[str, Any], float]] = []
         for run in group.runs:
             if run.init.get("run_mode") == "microbenchmark":
+                implausible_excluded = 0
                 for record in run.iterations:
-                    iteration_time = record.get("iteration_time_ns")
+                    # L1(face-LRU 审计,2026-09-29):implausible 的
+                    # iteration_time_ns(负值/uint64 回绕伪时长)不进归一化
+                    # 分母,按既有容错风格跳过并计数告警。
+                    iteration_time, implausible = _sanity_iteration_time_ns(
+                        record.get("iteration_time_ns")
+                    )
+                    if implausible:
+                        implausible_excluded += 1
+                        continue
                     if iteration_time:
                         microbench.append((run, record, float(iteration_time)))
+                if implausible_excluded:
+                    print(
+                        f"warning: run {run.run_id}: "
+                        f"{implausible_excluded} iteration record(s) "
+                        "excluded from the iteration-time normalization "
+                        "group (implausible iteration_time_ns guard)",
+                        file=sys.stderr,
+                    )
             else:
                 summary = run.summary
+                # M15(face-LRU 审计,2026-09-29):mean_e2e_ns 口径 = 全部
+                # completed 请求(ordering 违规者不再被静默剔除),归一化
+                # 分母随之去偏;旧 ordering-ok 口径见 summary 的
+                # completed_e2e_ordering_ok_* 披露字段。
                 mean_e2e = summary.get("mean_e2e_ns")
                 drain_tput = summary.get("drain_tput_rps")
                 if mean_e2e is None or drain_tput is None:
@@ -1451,7 +1777,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     log_paths = [Path(log) for log in args.logs]
     for log_path in log_paths:
-        if not log_path.is_file():
+        # R5-F1：先做 gz 透明回退再判存在（字面 cpp.log 缺失而 .gz 在场
+        # 的归档 run_dir 不再 "log not found" 必失败）。
+        if not _resolve_log_path(log_path).is_file():
             print(f"postprocess error: log not found: {log_path}", file=sys.stderr)
             return 1
     group_config = None
@@ -1470,6 +1798,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raw_rows = build_raw_rows(runs, run_configs)
         normalized_rows = build_normalized_rows(groups, args.normalization, args.baseline)
         request_rows, request_type_counts, request_notes = build_request_metrics(runs)
+        # 第一期：die 后端利用率三元组管线断言（在落盘前执行；
+        # legacy run 无声明即跳过，行为不变）。
+        _check_die_utilization_records(runs)
     except PostprocessError as error:
         print(f"postprocess error: {error}", file=sys.stderr)
         return 1

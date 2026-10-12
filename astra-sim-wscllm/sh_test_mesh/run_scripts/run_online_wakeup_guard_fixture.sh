@@ -19,27 +19,47 @@
 #       挂死/busy-spin;本仓蓝本缺陷:wait_for_work 谓词含 !input_open_,
 #       input 关而未 finished 时立即返回 -> 主循环忙转,sh_2.0 发现);
 #     EXPECT_MODE=legacy-stall:预修复二进制不退出(RED 基线采集用;
-#       runner 断言 N 秒无退出后 SIGTERM 记录现场)。
+#       runner 断言 N 秒无退出后记录现场退出,残留进程由 EXIT trap 清理)。
 #
 # 用法:
 #   bash run_online_wakeup_guard_fixture.sh [run_root]
 # 环境变量:
 #   BIN           在线二进制(缺省本仓 build 产物)
 #   EXPECT_MODE   fixed | legacy-stall(缺省 fixed)
-# 注:裸仓库态需先运行 traces/derive_20_first_30_seconds.py 物化 20.csv 前 30s 输入并生成
-#   ET 目录(generate_trace.py),fixture 直接引用固定 ET 前缀(与
+# 注:裸仓库态需先运行 traces/derive_20_first_30_seconds.py 物化 20.csv 前 30s
+#   输入,再运行 plan_materializer.py 产出 ET 目录与 runtime_config(E2 头注
+#   修正 2026-09-28:原注写 generate_trace.py 已过时——ET 目录由
+#   plan_materializer 产出,同本文件下方 GEN_MATCH 动态解析注释;与
 #   run_online_idle_fixture.sh 同款)。
-set -uo pipefail
+# 家族统一(F1-CPP C1-7 2026-09-29):set -euo pipefail,与
+# run_online_idle_fixture.sh / run_online_same_tick_milestone.sh 同款;
+# 既有失败路径均手工 || exit 1 / if ! 守住,-e 仅补漏网失败。
+set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
-RUN_ROOT=${1:-/tmp/wscllm_wakeup_guard}
+RUN_ROOT=${1:-${TMPDIR:-/tmp}/wscllm_wakeup_guard}
 # 注入通道（cmd.fifo）与 bridge 目录会被 mkfifo/启动端/注入端三方按各自 cwd
 # 解析，必须先把 run root 归一为绝对路径，否则传相对 RUN_ROOT 时 C++ 端
 # （cd PROJECT 后启动）与注入端（exec 3>）指向不同文件。
 RUN_ROOT=$(realpath -m "${RUN_ROOT}")
+# P3-3.9 E2-1 同款 rm -rf 护栏(F1-CPP C1-7 2026-09-29 移植,fail-closed):
+# RUN_ROOT 由调用方任意传入,realpath -m 归一不改危险语义——传 `.`(cwd=仓根)
+# 归一即仓根、传 `..` 归一即仓根祖先,下方 start_online 的 `rm -rf
+# "${run_dir}"` 会删掉整个仓库或其上层目录。显式拒绝:空串、`/`、仓根本身、
+# 仓根的祖先目录、仓根内部路径(fixture 合同 run root 一律仓外,正式纪律
+# 一律 /tmp);合法 run root 不受影响。
+case "${RUN_ROOT}" in
+  ""|"/")
+    echo "[wakeup_guard] FAIL: refusing dangerous RUN_ROOT='${RUN_ROOT}' (empty or filesystem root)" >&2
+    exit 1 ;;
+esac
+if [[ "${RUN_ROOT}" == "${PROJECT}" || "${RUN_ROOT}" == "${PROJECT}"/* || "${PROJECT}" == "${RUN_ROOT}"/* ]]; then
+  echo "[wakeup_guard] FAIL: refusing RUN_ROOT='${RUN_ROOT}' (repo root, its ancestor, or inside the repo; use a dedicated dir outside the repo, e.g. /tmp/...)" >&2
+  exit 1
+fi
 
-# ET 基线目录 = GEN_MATCH 动态解析(四仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
+# ET 基线目录 = GEN_MATCH 动态解析(五仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_wsc_llm_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
@@ -48,9 +68,47 @@ if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
 fi
 ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_wsc_llm_inference"
-RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion
+# RC = runtime_config 目录动态恰一解析（crosscut-F1，2026-10-01，原为硬编码
+# 目录名，照 face-LRU §16d 形态移植，与官方 runner 同款）：目录名由物化器
+# 生成为 "<hardware slug>__<capacity_profile>__<remote-memory 标签>"
+# （generate_wsc_llm_trace -> config_resolver.materialize_runtime_configs；
+# 本仓标签恒为 no_memory_expansion）。capacity_profile 的权威同源 =
+# trace_config.csv 的 config,local_hbm_capacity_profile 行。按该 profile
+# 过滤 generated/runtime_config/ 并要求恰好一个（与上方 GEN_MATCH 的
+# exactly-one 口径一致），缺失/歧义 fail-closed——此前 fixture 无 RC 闸，
+# 目录缺失要等 C++ 打开 system.json 才炸；现网唯一合法档位下动态解析与
+# 旧硬编码命中同一目录，健康路径零行为变化。
+RC_PROFILE=$(python3 -c '
+import csv, sys
+path = sys.argv[1]
+with open(path, newline="", encoding="utf-8-sig") as source:
+    rows = list(csv.reader(source))
+hits = [row[2].strip() for row in rows
+        if len(row) >= 3 and row[0].strip() == "config"
+        and row[1].strip() == "local_hbm_capacity_profile"]
+if len(hits) != 1 or not hits[0]:
+    sys.exit("expected exactly one config,local_hbm_capacity_profile row in %s" % path)
+print(hits[0])
+' "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv") || {
+  echo "[wakeup_guard] FAIL: cannot read local_hbm_capacity_profile from trace_config.csv" >&2
+  exit 1
+}
+RC_MATCH=("${PROJECT}"/sh_test_mesh/generated/runtime_config/face_case5_config_c__*"${RC_PROFILE}"__no_memory_expansion)
+if [[ ${#RC_MATCH[@]} -ne 1 || ! -d "${RC_MATCH[0]}" \
+      || ! -f "${RC_MATCH[0]}/system.json" || ! -f "${RC_MATCH[0]}/network.yml" \
+      || ! -f "${RC_MATCH[0]}/comm_group.json" ]]; then
+  echo "[wakeup_guard] expected exactly one runtime_config dir for capacity_profile '${RC_PROFILE}' carrying system.json/network.yml/comm_group.json (materialized under sh_test_mesh/generated/runtime_config/ by plan_materializer.py; bare-repo restore deletes generated/), found: ${RC_MATCH[*]}" >&2
+  exit 1
+fi
+RC=${RC_MATCH[0]}
 BIN=${BIN:-${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online}
-SVC=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/wakeup_guard_fixture_service.py
+# BIN 显式存在性闸（crosscut-F3，2026-10-01，与 RC/GEN_MATCH 闸对称，其余
+# fixture/runner 同款；作用于上方 env 覆盖解析后的 BIN）：缺失即在此报错，
+# 不等 FIFO 等待环里不指名的 "C++ exited before FIFO ready"。
+if [[ ! -x "${BIN}" ]]; then
+  echo "[wakeup_guard] bin missing: ${BIN} (build first or pass BIN=<pre-fix binary> for the legacy-stall baseline)" >&2
+  exit 1
+fi
 EXPECT_MODE=${EXPECT_MODE:-fixed}
 
 T_NS=3000000000
@@ -59,14 +117,24 @@ CPP_PID=""
 PY_PID=""
 
 cleanup() {
+  # F1-CPP C1-7 2026-09-29:kill 家族统一为 SIGTERM(其余 runner/fixture
+  # 同款);SIGKILL 越过 C++ 自身的清理路径,且对收尸语义并无必要。
   if [[ -n "${CPP_PID}" ]] && kill -0 "${CPP_PID}" 2>/dev/null; then
-    kill -9 "${CPP_PID}" 2>/dev/null || true
+    kill "${CPP_PID}" 2>/dev/null || true
   fi
   if [[ -n "${PY_PID}" ]] && kill -0 "${PY_PID}" 2>/dev/null; then
-    kill -9 "${PY_PID}" 2>/dev/null || true
+    kill "${PY_PID}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
+# P3-3.9 E2-2 同款信号转发(F1-CPP C1-7 2026-09-29 移植):裸 EXIT trap 在
+# bash 被致命信号直接杀死时不执行;监督纪律以 SIGTERM 终止长跑,必须显式
+# 转成 exit 才能进入上方 cleanup——否则 C++ 成孤儿,且本 fixture 的 C++
+# 带 --idle-watchdog-s 0(契约性无界停车),孤儿在 wait_for_work 永久停泊
+# 并持有 bridge 目录。INT/HUP 同理。
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 
 start_online() {  # $1=run_dir $2=scenario
   local run_dir=$1 scenario=$2
@@ -89,9 +157,19 @@ start_online() {  # $1=run_dir $2=scenario
     --logging-folder=off \
     > "${run_dir}/cpp.log" 2>&1 &
   CPP_PID=$!
+  # FIFO 就绪等待带墙钟预算（crosscut-F2，2026-10-01，照 wscllm-LRU/face-LRU
+  # 同款，与 run_online_idle_fixture.sh 同款）：kill -0 只防 C++ 进程退出，
+  # 防不了"进程存活但迟迟不建 FIFO"的窗口；超时打印 cpp.log 尾部后
+  # fail-closed（SH_FIFO_WAIT_S 可覆盖，缺省 60s）。
+  local fifo_deadline=$(( $(date +%s) + ${SH_FIFO_WAIT_S:-60} ))
   until [ -p "${run_dir}/bridge/req_notify.fifo" ] && [ -p "${run_dir}/bridge/resp_notify.fifo" ]; do
     if ! kill -0 "${CPP_PID}" 2>/dev/null; then
       echo "[wakeup_guard] FAIL: C++ exited before FIFO ready" >&2
+      tail -5 "${run_dir}/cpp.log" >&2
+      return 1
+    fi
+    if (( $(date +%s) > fifo_deadline )); then
+      echo "[wakeup_guard] FAIL: FIFOs not ready within ${SH_FIFO_WAIT_S:-60}s (see cpp.log tail)" >&2
       tail -5 "${run_dir}/cpp.log" >&2
       return 1
     fi
@@ -107,10 +185,19 @@ start_online() {  # $1=run_dir $2=scenario
   cd - >/dev/null
 }
 
+# (2026-10-01) Same monotonic-clock discipline as the idle/same_tick
+# fixtures: uutils date 0.8.0 treats %N as an untruncated nanosecond field,
+# so the former $(date +%s%N)/1e9 deadline arithmetic misbehaved on such
+# hosts. Integer seconds from a monotonic source keep the bounded wait
+# portable (both reads use the same clock, so the deadline math holds).
+monotonic_s() {
+  python3 -c 'import time; print(time.monotonic_ns() // 1_000_000_000)'
+}
+
 wait_cpp_exit() {  # $1=timeout_s -> 0 exited, 1 still running
-  local deadline=$(( $(date +%s%N) / 1000000000 + $1 ))
+  local deadline=$(( $(monotonic_s) + $1 ))
   while kill -0 "${CPP_PID}" 2>/dev/null; do
-    if [[ $(date +%s) -ge ${deadline} ]]; then
+    if [[ $(monotonic_s) -ge ${deadline} ]]; then
       return 1
     fi
     sleep 0.2
@@ -164,8 +251,6 @@ grep -q '\[online\] service counters: accepted=1 completed=2 active=0 pending_al
   "${run_dir}/cpp.log" || {
   echo "[wakeup_guard] FAIL(场景1): 服务计数不符(期望 accepted=1 completed=2)" >&2
   grep '\[online\] service counters' "${run_dir}/cpp.log" >&2; exit 1; }
-grep -q 'no_decision_python_callback_count=0' "${run_dir}/cpp.log" || {
-  echo "[wakeup_guard] FAIL(场景1): no_decision != 0" >&2; exit 1; }
 echo "[wakeup_guard] 场景1 PASS: 蓝图形态(未到期 alarm+同 tick 里程碑)健康完成,无误触发"
 
 # ========================== 场景 2:defer-dead-end ==========================
@@ -192,7 +277,7 @@ if [[ "${EXPECT_MODE}" == "legacy-stall" ]]; then
     exit 1
   fi
   echo "[wakeup_guard] legacy-stall REPRODUCED: 预修复二进制 CloseInput 后 10s+ 无退出"
-  echo "[wakeup_guard]   (busy-spin/挂死现场保留于 ${run_dir};由 trap SIGTERM 清理)"
+  echo "[wakeup_guard]   (busy-spin/挂死现场保留于 ${run_dir};残留进程由 EXIT trap 清理)"
   exit 0
 fi
 

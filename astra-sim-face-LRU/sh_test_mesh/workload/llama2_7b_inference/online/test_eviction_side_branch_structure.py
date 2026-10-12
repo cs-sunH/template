@@ -117,7 +117,6 @@ def _admission_plan(request_id, turn, *, extra=None):
         "history_action": None,
         "history_source_instance_index": None,
         "history_transfer_bytes": 0,
-        "history_recompute_tokens": 0,
         "history_tokens_before": 0,
         "prefill_context_tokens": 300,
         "prefill_length": 300,
@@ -340,10 +339,11 @@ class EvictionSideBranchStructureTest(unittest.TestCase):
         barrier = next(
             node for node in _rank_nodes(builder, 2)
             if node["name"] == "batch_train_i1_1_end_barrier")
-        self.assertTrue(barrier["id"])
         migration = next(
             node for node in _rank_nodes(builder, 0)
             if "_prefill_to_decode_kv_send_" in node["name"])
+        # joiner 3000 迁移先于列车体端屏障发射(id 按发射顺序单调分配)。
+        self.assertLess(migration["id"], barrier["id"])
         self._assert_branch_off_main_chain(fork_ids, {0: migration["id"]})
 
     def test_blocked_admission_evictions_context_and_collection(self):
@@ -392,9 +392,13 @@ class EvictionSideBranchStructureTest(unittest.TestCase):
         (触发门泄漏)→ 发射后 fail-closed;fork 点的主链 armed pending
         由 helper 暂存归还,不进分支、原消费者照常消费。"""
         builder = self.builder
-        # (泄漏守卫)emit_fn 内 arm 而不发射节点 → 发射后即拒。
+        # (泄漏守卫)emit_fn 内 arm 已发射节点而不发射消费者 → 发射后
+        # 即拒（arm 目标取真实节点 id——T4 前向断言拒未发射目标,与泄漏
+        # 守卫分测）。
         def _leaky():
-            builder.builders[0].arm_dependency(12345)
+            builder.builders[0].comp("leak_seed", 1, 1)
+            builder.builders[0].arm_dependency(
+                builder.builders[0].previous_id)
         with self.assertRaises(RuntimeError):
             builder._emit_side_branch(_leaky)
         # (暂存归还)fork 点携带主链 pending → 发射后原样归还;
@@ -402,14 +406,18 @@ class EvictionSideBranchStructureTest(unittest.TestCase):
         # 在生产即 run 中止,干净路径段换全新 builder。
         builder = GraphBatchBuilder(_make_config())
         builder.begin_batch()
+        # T4 前向断言（死锁真修 方案①）：arm 目标必须已发射——种子节点
+        # 充当主链 armed 门桩（替代旧合成 id 777）。
+        builder.builders[4].comp("stash_gate_seed", 1, 1)
+        gate = builder.builders[4].previous_id
 
         def _clean():
             for trace_builder in builder.builders.values():
                 trace_builder.comp("branch_node", 1, 1)
-        builder.builders[4].arm_dependency(777)
+        builder.builders[4].arm_dependency(gate)
         previous_on_0 = builder.builders[0].previous_id
         builder._emit_side_branch(_clean)
-        self.assertEqual(builder.builders[4].pending_extra_dependencies, [777])
+        self.assertEqual(builder.builders[4].pending_extra_dependencies, [gate])
         self.assertEqual(builder.builders[0].previous_id, previous_on_0)
         self.assertEqual(builder.builders[0].pending_extra_dependencies, [])
 

@@ -243,11 +243,18 @@ def test_fail_closed_kv_provisional_over_limit():
 
 
 def test_env_limit_override_applies_to_delivery_sources():
-    os.environ["SH_PROPAGATING_TAIL_LIMIT"] = "3"
+    # fixture 化还原:快照原值,finally 恢复(原本缺席则保持缺席)——
+    # 只 del 不还原会把调用方进程的 SH_PROPAGATING_TAIL_LIMIT 泄漏掉
+    # (E1, 2026-09-28)。
+    saved_limit = os.environ.get("SH_PROPAGATING_TAIL_LIMIT")
     try:
+        os.environ["SH_PROPAGATING_TAIL_LIMIT"] = "3"
         s = _scheduler()
     finally:
-        del os.environ["SH_PROPAGATING_TAIL_LIMIT"]
+        if saved_limit is None:
+            os.environ.pop("SH_PROPAGATING_TAIL_LIMIT", None)
+        else:
+            os.environ["SH_PROPAGATING_TAIL_LIMIT"] = saved_limit
     snapshot = s.propagating_tail.snapshot()
     assert snapshot[_PROPAGATING_TAIL_SOURCE_DELIVERY]["limit"] == 3
     assert snapshot[_PROPAGATING_TAIL_SOURCE_KV]["limit"] == 3

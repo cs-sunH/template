@@ -48,7 +48,6 @@ Exit code 0 on ALL PASS.
 #include <astra-network-analytical/congestion_aware/Helper.h>
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -75,6 +74,15 @@ void expect_true(const bool cond, const char* const what) {
         std::exit(1);
     }
 }
+
+// Setup guards that must stay fail-closed under -DNDEBUG (a bare <cassert>
+// assert compiles to a no-op in the default Release build; same pattern as
+// ingress_idle_fixture.cc's FIXTURE_CHECK).
+#define ALARM_TEST_CHECK(cond)                                               \
+    ((cond) ? (void)0                                                        \
+            : (std::fprintf(stderr, "[alarm_cancellation_test] CHECK "        \
+                                    "FAILED: %s (%s:%d)\n",                  \
+                            #cond, __FILE__, __LINE__), std::abort()))
 
 // ---- test-local payload: delivered by the normal callback path (the
 // consumer owns it after Sys pops the event) or reclaimed exactly once by
@@ -123,7 +131,6 @@ const char* kSystemJson = R"({
   "collective-optimization": "localBWAware",
   "roofline-enabled": 1,
   "replay-only": 0,
-  "track-local-mem": 0,
   "trace-enabled": 0,
   "hbm-bandwidth-contention": 0,
   "peak-perf": 261.12,
@@ -150,7 +157,7 @@ const char* kRemoteMemoryJson = R"({
 
 void write_text(const std::string& path, const std::string& content) {
     std::ofstream out(path);
-    assert(out.is_open());
+    ALARM_TEST_CHECK(out.is_open());
     out << content;
 }
 
@@ -471,7 +478,7 @@ int main() {
     std::vector<char> buffer(tmp_template.begin(), tmp_template.end());
     buffer.push_back('\0');
     const char* const made = mkdtemp(buffer.data());
-    assert(made != nullptr);
+    ALARM_TEST_CHECK(made != nullptr);
     const std::string config_dir(made);
     write_text(config_dir + "/system.json", kSystemJson);
     write_text(config_dir + "/network.yml", kNetworkYaml);

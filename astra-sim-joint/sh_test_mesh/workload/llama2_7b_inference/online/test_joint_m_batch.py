@@ -8,7 +8,9 @@
   M1（①+⑥）遥测物理口径统一——流数口径除数（合计吞吐无法反推流数）
         + AIMD 一致分母（collective 不再归因给 KV 流）+ ingest 解析；
   M2（②）配额拒候选保留配额前成本（feasible 判定不变）；
-  M4（⑤）γ_prefill 生产桥接（face ServiceFactorGroup 离开冷启动）；
+  M4（⑤）γ_prefill 生产桥接（2026-09-30 §8.1 单账本修复后改钉：
+        PublishedServiceFactorGroup 只读发布视图取代 face 本地更新通
+        道——M4 时间衰减桥接退役）；
   M5（⑦）零字节 shard 不计 wall-time 逐跳时延。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
@@ -26,11 +28,7 @@ for _p in (_ONLINE_DIR, _WORKLOAD_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from joint.joint_cost_model import (  # noqa: E402
-    LinkFlowRegistry,
-    TelemetryLinkFlowView,
-)
-from joint.test_joint_fixes import _load  # noqa: E402
+from joint.joint_cost_model import LinkFlowRegistry  # noqa: E402
 from test_joint_k_batch import _model  # noqa: E402
 
 
@@ -59,11 +57,13 @@ class FlowCountDivisorCaliberTest(unittest.TestCase):
         view = self._view(rates=1.0, flows=1.0)
         self.assertEqual(view.divisor_effective((0, 1)), 1.0)
 
-    def test_flow_count_absent_falls_back_to_rate_caliber(self):
-        # 兼容：流数缺席（旧二进制）退 capacity/速率旧口径——单流速率
-        # 语义注入（既有 DivisorEffectiveTest 同款形态）。
+    def test_flow_count_absent_reports_unknown_uses_registered(self):
+        # D13：流数缺席（旧二进制速率-only 形态）= 显式未知——除数退
+        # 在册流近似（0 在册 → 下界 1），capacity/速率旧口径冒充废除。
         view = self._view(rates=10.0 / 3.0, flows=None)
-        self.assertEqual(view.divisor_effective((0, 1)), 3.0)
+        self.assertIsNone(view.effective_divisor((0, 1)))
+        self.assertEqual(view.divisor_effective((0, 1)), 1.0)
+        self.assertEqual(view.disclosure()["unknown_flow_count_links"], 1)
 
     def test_flow_count_below_one_rejected(self):
         registry = LinkFlowRegistry()
@@ -135,7 +135,7 @@ class IngestFlowCountParsingTest(unittest.TestCase):
         from test_joint_quota_integration import _scheduler
         self.scheduler = _scheduler()
         # F6 教义：__new__ 替身不走 __init__——本测试面需的 M1 新状态
-        # 自行补设（生产 __init__ :553 区恒设）。
+        # 自行补设（生产 __init__ 区恒设）。
         self.scheduler._link_telemetry_flow_counts = {}
 
     def _ingest(self, sample_extra):
@@ -214,29 +214,66 @@ class QuotaRejectedKeepsCostTest(unittest.TestCase):
 
 # ==================================================== 5. M4（⑤）==
 
-class GammaPrefillProductionBridgeTest(unittest.TestCase):
-    """M4：纯 prefill 列车样本桥接 face ServiceFactorGroup 的 γ——
-    value 离开冷启动 1.0（修前零生产喂入点、恒 1.0）。"""
+class GammaPrefillPublishedViewTest(unittest.TestCase):
+    """§8.1 单账本（2026-09-30 修复，取代 M4 时间衰减桥接）：纯 prefill
+    列车样本只更新统一估计器（ServiceSampleRecorder）一次；face γ/
+    k_hide 经 PublishedServiceFactorGroup 读只读发布值（与 J 计价
+    ServiceFactors 同一发布规则、同一冻结 1/16 η 平滑），本地 observe
+    通道 fail-loud 拒绝。"""
 
-    def test_pure_prefill_sample_updates_gamma(self):
-        from joint.event_recursion_predictor import ServiceFactorGroup
-        group = ServiceFactorGroup()
-        group.observe_valid_service(
-            "prefill", observed_ratio=1.25,
-            completion_ns=1000, service_duration_ns=500)
-        self.assertFalse(group.cold_start)
-        self.assertEqual(group.value("prefill"), 1.25)
+    def test_published_view_reads_unified_estimator(self):
+        from joint.history_estimator import (
+            ServiceSampleRecorder, ServiceWorkSample)
+        from joint.prediction_config import PredictionParams
+        from joint.event_recursion_predictor import (
+            PublishedServiceFactorGroup)
+        recorder = ServiceSampleRecorder(PredictionParams())
+        view = PublishedServiceFactorGroup(recorder)
+        self.assertTrue(view.cold_start)
+        self.assertEqual(view.value("prefill"), 1.0)
+        recorder.observe(ServiceWorkSample(
+            work_id="prefill#1000", category="prefill",
+            observation_tick_ns=1000,
+            baseline_work_ns=400, busy_service_ns=500))
+        recorder.flush()
+        # η_sample = base/actual = 400/500 = 0.8 ⇒
+        # η_new = 15/16 + (1/16)·0.8，发布因子 = 1/η_new > 1.0（与 J
+        # 侧 ServiceFactors 同规则同值）；decode 未收样恒冷启动 1.0。
+        self.assertFalse(view.cold_start)
+        eta_new = (15.0 / 16.0) * 1.0 + (1.0 / 16.0) * 0.8
+        self.assertAlmostEqual(view.value("prefill"), 1.0 / eta_new)
+        self.assertAlmostEqual(view.value("decode"), 1.0)
+        self.assertEqual(view.snapshot()["groups"]["prefill"]["samples"], 1)
 
-    def test_sh30_wiring_feeds_kv_manager_factors(self):
-        # 文本钉：_observe_service_factors 纯 prefill 分支桥接调用在案
-        #（observe_valid_service + kv_manager.service_factors）。
+    def test_published_view_rejects_local_sample_channel(self):
+        from joint.event_recursion_predictor import (
+            PublishedServiceFactorGroup)
+        view = PublishedServiceFactorGroup(object())
+        with self.assertRaises(RuntimeError):
+            view.observe_valid_service(
+                "prefill", observed_ratio=1.25,
+                completion_ns=1000, service_duration_ns=500)
+
+    def test_sh30_wiring_single_ledger_text_pin(self):
+        # 文本钉：sh30 装配注入统一估计器发布源（kv_manager 的
+        # service_factor_source + _joint_factors 的 unified_source），
+        # 旧 M4 时间衰减桥接调用不在案（同一服务样本二次更新已退役，
+        # §8.1"只更新一次统一估计器，再发布只读版本"）。
         with open(os.path.join(
                 _ONLINE_DIR, "sh30_online_scheduler.py"),
                 encoding="utf-8") as handle:
             source = handle.read()
         self.assertIn(
+            "service_factor_source=self._joint_service_samples", source)
+        self.assertIn("unified_source=self._joint_service_samples", source)
+        self.assertNotIn(
             "self.kv_manager.service_factors.observe_valid_service(",
             source)
+        with open(os.path.join(
+                _WORKLOAD_DIR, "face_scheduler.py"),
+                encoding="utf-8") as handle:
+            face_source = handle.read()
+        self.assertIn("PublishedServiceFactorGroup(", face_source)
 
 
 # ==================================================== 6. M5（⑦）==
@@ -251,15 +288,16 @@ class ZeroByteShardNoHopLatencyTest(unittest.TestCase):
         rates = _rates(noc=10.0, hbm=1e9, lat=10)   # 每跳 10ns
         # N10 加固（chatgpt 指认 6000B/610ns 主导使新旧实现同返 610 钉
         # 不住旧 bug）：数据 shard 改 1B——rank0 真实发流一跳 = 0 startup
-        # + 10 hop + 1/10≈0 stream ⇒ 10；rank1 零字节十跳修前 10×10=100
-        # 抬高 wall、修后免 hop ⇒ wall=10（修前本测试得 100）。
+        # + 10 hop + ⌈1/10⌉=1 stream（D17 腿服务向上取整）⇒ 11；
+        # rank1 零字节十跳修前 10×10=100 抬高 wall、修后免 hop 且零字
+        # 节腿严格为 0 ⇒ wall=11（修前本测试得 100）。
         wall = _transfer_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=(((0, 6),),
                            ((0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),)),
             bytes_by_rank=(1, 0),
             include_self=True, kind="read")
-        self.assertEqual(wall, 10)
+        self.assertEqual(wall, 11)
 
 
 if __name__ == "__main__":  # pragma: no cover

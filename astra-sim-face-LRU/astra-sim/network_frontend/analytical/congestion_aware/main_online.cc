@@ -62,7 +62,8 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
   - run end: svc.finished() marks logical completion; process exit additionally
     requires the EventQueue, deferred issue pass, and DecisionMailbox to be
     drained.  Assertions completed == CSV data rows
-    (acceptance: 1177/1177 replay).
+    (acceptance: 1177/1177 -- "replay" here is only the historical
+    acceptance-run label; the replay route itself was removed).
 
 Step 1-10 (runners + IDLE fixture):
   - --request-queue-csv is optional (合同② request-neutral default): absent
@@ -72,13 +73,19 @@ Step 1-10 (runners + IDLE fixture):
   - lifecycle transition log: a ServiceCoordinator transition hook prints
     every IDLE/ACTIVE/DRAINING/FINISHED transition with elapsed + wall
     timestamps ("[online] lifecycle: ...").
-  - --command-fifo <path>: a detached external-producer thread reads JSON
-    Submit/CloseInput/EndOfFile/Error lines from the FIFO and writes the
-    thread-safe bounded ingress command queue (合同② 线程合同; the decision
-    bridge stays the decision channel only). This is the IDLE fixture's
-    injection channel -- the official runners never use it. Phase-7 §10.7:
-    the terminal command kinds (CloseInput/EndOfFile/Error) are
-    distinguished in the drain path and the run-end lifecycle audit
+  - --command-fifo <path>: an external-producer thread (joined at run end
+    via CommandFifoJoiner; main holds a write-end fd so the join cannot
+    hang as long as fixtures close their write end -- the contract below)
+    reads JSON Submit/CloseInput/EndOfFile/Error lines from the FIFO and
+    writes the thread-safe bounded ingress command queue (合同② 线程合同;
+    the decision bridge stays the decision channel only). This is the
+    IDLE fixture's injection channel -- the official runners never use
+    it. Fixture contract: hold the write end for the injection session
+    and close it (or send CloseInput/EndOfFile) before the run ends, or
+    the final join blocks (blocking-by-design: hang beats the former
+    detached-thread use-after-free). Phase-7 §10.7: the terminal command
+    kinds (CloseInput/EndOfFile/Error) are distinguished in the drain
+    path and the run-end lifecycle audit
     (close_source=explicit|eof|error), per 合同② EOF vs 显式 close vs
     异常退出 三态区分; Error is fail-closed abort (never a silent close).
   - ServiceCoordinator::maybe_finish returns a fully drained ACTIVE to IDLE
@@ -91,6 +98,10 @@ Step 1-10 (runners + IDLE fixture):
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/Workload.hh"
+// DeadEnd census (2026-10-11, ported from WL): the dump calls
+// LocalHbmBandwidthModel::dump_census_to_stderr through the Workload member,
+// so the full type is required here (Workload.hh only forward-declares it).
+#include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/execution_driven/DecisionBridge.hh"
 #include "astra-sim/workload/execution_driven/ExecutionMode.hh"
 #include "astra-sim/workload/execution_driven/GraphBatchCommitter.hh"
@@ -110,10 +121,14 @@ Step 1-10 (runners + IDLE fixture):
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 #include <sys/resource.h>
+#include <fcntl.h>
+#include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <fstream>
@@ -121,11 +136,8 @@ Step 1-10 (runners + IDLE fixture):
 #include <map>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <thread>
 #include <string>
-#include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -221,14 +233,21 @@ struct CommitArg {
 // sequence; the online dynamic graph interleaves requests across stages so
 // most boundary nodes would not match, measured 708/1177 completion
 // anchors). The batch's nodes carry request_id/stage (graph_batch_builder
-// contract); per (rank, request_id, stage) the FIRST node of the group is
-// the start anchor (issue event) and the LAST is the end anchor (complete
-// event). Transfer nodes of the KV routes (node names contain "kv" --
-// history_kv / prefill_to_decode_kv) register the memory anchor (code 7)
-// on the last transfer node of each (request_id, rank): the offline
-// doc-sec.4.3 semantics (transfer-arrival memory anchor = last transfer
-// node on each target rank). Watch members supply the prefill/decode rank
-// sets.
+// contract); START anchors are registered from the explicit naming
+// segments -- "_pstart_" marks the prefill_start (issue event) start
+// anchor and "_join_" the decode_start start anchor, min-tick aggregated
+// per (request_id, rank) across batches (P1-1: the earlier
+// first-of-group semantics let the dep-free admission gate / readiness
+// barrier fire first and systematically absorbed queue wait into the stage
+// windows, hidden_ratio == 1.0). END anchors (complete events) ride the
+// first/last terminal delivery of each group as before. Transfer nodes of
+// the KV routes are identified by the EXACT naming segments
+// "_kv_send_rank" / "_kv_recv_rank" / "_kv_transfer_action" (P1-6 removed
+// the bare-"kv" substring heuristic) and register the memory anchor
+// (code 7) on the last transfer node of each (request_id, rank): the
+// offline doc-sec.4.3 semantics (transfer-arrival memory anchor = last
+// transfer node on each target rank). Watch members supply the
+// prefill/decode rank sets.
 //
 // Installed as GraphBatchCommitter::Context::metrics_anchor_hook and
 // invoked from inside commit() (Phase B-1.5) -- see the "PHASE-7 §10.3
@@ -271,8 +290,19 @@ static void register_online_metrics_anchors(
         graph_sources[rank]->store().set_metric_anchor_flags(node_id, issue,
                                                              complete);
     };
-    // (request_id, rank, stage) -> first node of the group (start anchor).
-    std::map<std::tuple<std::string, int, std::string>, NodeRef> first_of;
+    // Start anchors use the DESIGNED marker nodes (graph_batch_builder.py
+    // §3.5 emission contract): "{train_id}_pstart_{request}" is the queue
+    // head's first-chunk train start (prefill_start) and
+    // "{train_id}_join_{request}" is the joiner's first-iteration train
+    // start (decode_start).  The previous registration keyed on the FIRST
+    // node of each (request, rank, stage) group, which is always a dep-free
+    // admission gate/barrier issued at the admission epoch -- the pstart/
+    // join marker never won the min-tick, so queue wait (history restore
+    // chains, blocked-admission retries, joiner eviction side branches)
+    // leaked into the stage windows and the WP5 decomposition degenerated
+    // to hidden_ratio == 1.0.
+    std::map<std::pair<std::string, int>, NodeRef> pstart_markers;
+    std::map<std::pair<std::string, int>, NodeRef> join_markers;
     // (request_id, rank) -> last KV-route transfer node.
     std::map<std::pair<std::string, int>, NodeRef> last_transfer;
     // WP9 (WP9_CONTRACT §1): every first-token marker node of the batch,
@@ -282,12 +312,11 @@ static void register_online_metrics_anchors(
     std::vector<std::pair<std::pair<std::string, int>, NodeRef>>
         first_token_nodes;
     // C1 (2026-08-29): typed walk (this was DOM walk #4) -- request_id /
-    // stage / rank / json id / name are direct field reads off the parsed
-    // batch; the vector preserves the emission order, so the first/last
-    // group selections see the exact same sequence the DOM walk saw.
+    // rank / json id / name are direct field reads off the parsed
+    // batch; the vector preserves the emission order, so the marker
+    // selections see the exact same sequence the DOM walk saw.
     for (const auto& parsed : batch.nodes) {
         const std::string& request_id = parsed.node.request_id;
-        const std::string& stage = parsed.node.stage;
         const int rank = parsed.node.rank;
         const uint64_t json_id = parsed.json_id;
         const auto store_id = committer.resolve_store_id(rank, json_id);
@@ -295,32 +324,55 @@ static void register_online_metrics_anchors(
             continue;  // defensive: B-1 just inserted every batch node
         }
         const std::string& name = parsed.node.name;
-        if (name.find("first_token") != std::string::npos) {
-            // WP9 observation-only marker: never feeds the first_of
-            // start-anchor or last_transfer groups below.
+        if (name.find("_first_token_") != std::string::npos) {
+            // WP9 observation-only marker: never feeds the start-marker or
+            // last_transfer groups below.
             first_token_nodes.push_back(
                 {{request_id, rank}, NodeRef{rank, *store_id}});
             continue;
         }
-        const auto group = std::make_tuple(request_id, rank, stage);
-        auto& first = first_of[group];
-        if (first.rank < 0) {
-            first = {rank, *store_id};
+        // Start markers (exact emission-contract segments): the pstart/
+        // join marker nodes carry the request's (stage, generation) context
+        // and are the sole start-anchor source.  Min-tick aggregation in
+        // apply_event keeps re-registration across batches harmless.
+        if (name.find("_pstart_") != std::string::npos) {
+            pstart_markers[{request_id, rank}] = {rank, *store_id};
+        } else if (name.find("_join_") != std::string::npos) {
+            join_markers[{request_id, rank}] = {rank, *store_id};
         }
-        if (name.find("kv") != std::string::npos) {
+        // KV-route transfer nodes (code-7 last-transfer anchors): exact
+        // segments of the three legitimate emission families --
+        // "{prefix}_history_kv_send/recv_rankX_to_rankY" (NOC_MIGRATE),
+        // "{prefix}_prefill_to_decode_kv_send/recv_rankX_to_rankY"
+        // (prefill->decode joiner migration) and
+        // "{prefix}_history_kv_transfer_actionNNN_*" (REMOTE_RESTORE
+        // restore chain, incl. its per-shard store/load/ack suffixes).
+        // The previous find("kv") substring heuristic additionally caught
+        // arbitrary embedded ids containing "kv", silently mis-routing
+        // anchors (P1-6).
+        if (name.find("_kv_send_rank") != std::string::npos ||
+            name.find("_kv_recv_rank") != std::string::npos ||
+            name.find("_kv_transfer_action") != std::string::npos) {
             last_transfer[{request_id, rank}] = {rank, *store_id};
         }
     }
-    // Start anchors: the FIRST node of each (request, rank, stage) group
-    // (issue event; min-tick semantics in apply_event, so re-registration
-    // across batches is harmless).
-    for (const auto& [group, ref] : first_of) {
-        const auto& [request_id, rank, stage] = group;
-        (void)rank;
-        const std::string kind =
-            stage == "prefill" ? "prefill_start" : "decode_start";
+    // Start anchors: the pstart/join marker nodes (issue event; min-tick
+    // semantics in apply_event, so re-registration across batches is
+    // harmless).
+    for (const auto& [key, ref] : pstart_markers) {
+        const auto& request_id = key.first;
+        (void)key.second;
         if (MetricCollector::instance().online_register_node_anchor(
-                ref.rank, ref.node_id, request_id, kind, false)) {
+                ref.rank, ref.node_id, request_id, "prefill_start", false)) {
+            set_anchor_flags(ref.rank, ref.node_id, /*issue=*/true,
+                             /*complete=*/false);
+        }
+    }
+    for (const auto& [key, ref] : join_markers) {
+        const auto& request_id = key.first;
+        (void)key.second;
+        if (MetricCollector::instance().online_register_node_anchor(
+                ref.rank, ref.node_id, request_id, "decode_start", false)) {
             set_anchor_flags(ref.rank, ref.node_id, /*issue=*/true,
                              /*complete=*/false);
         }
@@ -595,7 +647,16 @@ const char* service_state_name(const ServiceState state) {
         case ServiceState::FINISHED:
             return "FINISHED";
     }
-    return "UNKNOWN";
+    // Dead-code cleanup (2026-09-29): the switch is exhaustive over
+    // ServiceState, so the old trailing `return "UNKNOWN";` was unreachable
+    // and existed only to pacify -Wreturn-type -- a bogus name silently
+    // printed if the enum ever grew without this switch noticing. An
+    // out-of-enum value is a programming error: fail loud (same
+    // abort-with-diagnostic idiom as the watch fire notifier below).
+    std::cerr << "[Error] (execution_driven/online) service_state_name: "
+                 "unreachable state value"
+              << static_cast<int>(state) << std::endl;
+    std::abort();
 }
 
 // External producer thread for the IDLE fixture (合同② 线程合同: external
@@ -608,11 +669,17 @@ const char* service_state_name(const ServiceState state) {
 //   {"kind":"CloseInput"}
 // The FIFO open blocks until a writer opens the read end (the fixture script
 // holds one writer open for the whole injection session). EOF (writer
-// closed) exits the thread; the input stays open. The thread is detached:
-// it may be parked in the blocking FIFO open/read at run end and dies with
-// the process.
+// closed) exits the thread; the input stays open. The thread is JOINED at
+// run end by CommandFifoJoiner (fix 2026-09-28: the old detached thread
+// held references to main-stack ingress/svc -- a writer waking it after
+// main returned was a use-after-free window). main holds a write-end fd
+// for the whole run, so the reader's blocking open always completes and
+// closing that fd at join time unblocks a parked getline deterministically;
+// the stop flag short-circuits the parse/enqueue loops without touching
+// ingress/svc on the way out.
 void command_fifo_reader(const std::string& path, RequestIngress& ingress,
-                         ServiceCoordinator& svc) {
+                         ServiceCoordinator& svc,
+                         std::atomic<bool>& stop) {
     std::ifstream fifo(path);
     if (!fifo.is_open()) {
         std::cerr << "[online] command-fifo: cannot open " << path << ": "
@@ -620,55 +687,69 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
         return;
     }
     std::string line;
+    uint64_t malformed_lines = 0;
     while (std::getline(fifo, line)) {
+        if (stop.load(std::memory_order_acquire)) {
+            return;  // run ending: stop touching ingress/svc
+        }
         if (line.empty()) {
             continue;
         }
-        nlohmann::json cmd;
+        // M6 fix (2026-09-29): the FIELD EXTRACTION lives inside the same
+        // guard as the parse -- a type-mismatched but well-formed JSON line
+        // ({"kind":5}, {"turn_index":"x"}) used to throw
+        // nlohmann::json::type_error out of this thread entry function and
+        // std::terminate the whole process, breaking the "skipping
+        // malformed line" contract. Malformed lines are now skipped (and
+        // counted) exactly like unparsable ones.
+        IngressCommand ic;
         try {
-            cmd = nlohmann::json::parse(line);
+            const nlohmann::json cmd = nlohmann::json::parse(line);
+            const std::string kind = cmd.value("kind", std::string());
+            if (kind == "CloseInput") {
+                // Phase-7 §10.7: explicit close (合同② close 命令). The
+                // lifecycle audit records close_source=explicit.
+                ic.kind = IngressCommandKind::CloseInput;
+            } else if (kind == "EndOfFile") {
+                // Phase-7 §10.7: EOF terminal command (合同② EOF 命令) -- the
+                // producer declares the input naturally exhausted; distinct
+                // from an explicit close in the run-end lifecycle audit.
+                ic.kind = IngressCommandKind::EndOfFile;
+            } else if (kind == "Error") {
+                // Phase-7 §10.7: error terminal command (合同② error 命令) --
+                // fail-closed abort (进程退出非 0,不做静默降级); the drain
+                // path aborts on it.
+                ic.kind = IngressCommandKind::Error;
+            } else if (kind == "Submit") {
+                RequestEnvelope env;
+                env.session_id = cmd.value("session_id", std::string());
+                env.turn_index = cmd.value("turn_index", 0);
+                env.request_id = cmd.value("request_id", std::string());
+                env.prefill_length = cmd.value("prefill_length", uint64_t{0});
+                env.decode_length = cmd.value("decode_length", uint64_t{0});
+                env.arrival_world_ns = cmd.value("arrival_world_ns", uint64_t{0});
+                env.inter_request_interval_ns =
+                    cmd.value("inter_request_interval_ns", uint64_t{0});
+                ic.kind = IngressCommandKind::Submit;
+                ic.envelope = std::move(env);
+            } else {
+                std::cerr << "[online] command-fifo: unknown command kind: "
+                          << kind << std::endl;
+                continue;
+            }
         } catch (const std::exception&) {
+            ++malformed_lines;
             std::cerr << "[online] command-fifo: skipping malformed line: "
                       << line << std::endl;
-            continue;
-        }
-        const std::string kind = cmd.value("kind", std::string());
-        IngressCommand ic;
-        if (kind == "CloseInput") {
-            // Phase-7 §10.7: explicit close (合同② close 命令). The
-            // lifecycle audit records close_source=explicit.
-            ic.kind = IngressCommandKind::CloseInput;
-        } else if (kind == "EndOfFile") {
-            // Phase-7 §10.7: EOF terminal command (合同② EOF 命令) -- the
-            // producer declares the input naturally exhausted; distinct
-            // from an explicit close in the run-end lifecycle audit.
-            ic.kind = IngressCommandKind::EndOfFile;
-        } else if (kind == "Error") {
-            // Phase-7 §10.7: error terminal command (合同② error 命令) --
-            // fail-closed abort (进程退出非 0,不做静默降级); the drain
-            // path aborts on it.
-            ic.kind = IngressCommandKind::Error;
-        } else if (kind == "Submit") {
-            RequestEnvelope env;
-            env.session_id = cmd.value("session_id", std::string());
-            env.turn_index = cmd.value("turn_index", 0);
-            env.request_id = cmd.value("request_id", std::string());
-            env.prefill_length = cmd.value("prefill_length", uint64_t{0});
-            env.decode_length = cmd.value("decode_length", uint64_t{0});
-            env.arrival_world_ns = cmd.value("arrival_world_ns", uint64_t{0});
-            env.inter_request_interval_ns =
-                cmd.value("inter_request_interval_ns", uint64_t{0});
-            ic.kind = IngressCommandKind::Submit;
-            ic.envelope = std::move(env);
-        } else {
-            std::cerr << "[online] command-fifo: unknown command kind: "
-                      << kind << std::endl;
             continue;
         }
         // Bounded queue with backpressure: retry until accepted or the run
         // has finished (input closed and drained); a command rejected after
         // close is dropped once the run ends.
         while (!ingress.enqueue_command(ic)) {
+            if (stop.load(std::memory_order_acquire)) {
+                return;
+            }
             if (svc.finished()) {
                 std::cerr << "[online] command-fifo: dropping command after "
                              "input closed: "
@@ -679,8 +760,8 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
         }
     }
     std::cout << "[online] command-fifo: EOF (writer closed); producer "
-                 "thread exits, input stays open"
-              << std::endl;
+                 "thread exits, input stays open (malformed lines skipped: "
+              << malformed_lines << ")" << std::endl;
 }
 
 // ---------------------------------------------------------------------------
@@ -694,10 +775,16 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
 /// Line/Mesh dimension is a boundary link when its hop sits at either end
 /// of that dimension (coordinate 0 or dim_size-1). Ring/FullyConnected
 /// dimensions have no boundary (their links consume ids but never
-/// qualify). This backend has no remote-memory port topology inside the
-/// fluid link table (remote memory is a separate API), so the mesh
-/// boundary IS the edge set; when a dimension block is unsupported the
-/// set is marked not derived and the records fall back to -1 + note.
+/// qualify). Documented exception: a width==2 Ring degenerates to the
+/// mesh fallback (MultiDimTopology::connect_ring_dimension) and ALL of
+/// its npus directed links physically touch that dimension's boundary,
+/// yet they are consumed as ids only, never inserted into the edge set --
+/// a mild edge_max_* observation undercount on such topologies, kept for
+/// byte-exact id alignment with the backend link table. This backend has
+/// no remote-memory port topology inside the fluid link table (remote
+/// memory is a separate API), so the mesh boundary IS the edge set;
+/// when a dimension block is unsupported the set is marked not derived
+/// and the records fall back to -1 + note.
 struct EdgeLinkSet {
     std::set<LinkId> links;
     bool derived = false;
@@ -933,6 +1020,90 @@ static void emit_link_observer_records(
     }
 }
 
+// ---------------------------------------------------------------------------
+// DeadEnd census (死锁真修 遥测先行, 2026-10-11, ported from WL): the
+// lost-wakeup dead-end guard freezes a per-rank snapshot of every strand of
+// work (NodeStore unfinished nodes with unresolved dependency counts,
+// HardwareResource occupancy incl. the ③-lite comm-coll observation counter,
+// remote-MEM endpoint join latches, the local-HBM bandwidth model's job
+// list + transition prediction, live die executions) plus the unfired watch
+// registry. Read-only: not a single counter, flag, or event is touched, so
+// scheduling semantics are unchanged -- the run aborts with the identical
+// counters right after the dump.
+// ---------------------------------------------------------------------------
+static void dead_end_census_dump(
+    const std::vector<Workload*>& workloads,
+    const std::vector<std::shared_ptr<
+        AstraSim::ExecutionDriven::NodeStoreGraphSource>>& graph_sources,
+    const AstraSim::ExecutionDriven::WatchRegistry& watch_registry,
+    const uint64_t current_time_ns, const uint64_t active,
+    const uint64_t pending_alarm) {
+    std::fprintf(stderr,
+                 "[DeadEndCensus] time_ns=%llu active=%llu pending_alarm=%llu "
+                 "ranks=%zu\n",
+                 static_cast<unsigned long long>(current_time_ns),
+                 static_cast<unsigned long long>(active),
+                 static_cast<unsigned long long>(pending_alarm),
+                 workloads.size());
+    for (size_t rank = 0; rank < workloads.size(); ++rank) {
+        Workload* const workload = workloads[rank];
+        if (workload == nullptr) {
+            continue;
+        }
+        std::vector<const AstraSim::ExecutionDriven::OnlineNode*> unfinished;
+        std::vector<uint32_t> unresolved;
+        std::vector<bool> issued;
+        if (rank < graph_sources.size() && graph_sources[rank] != nullptr) {
+            graph_sources[rank]->store().for_each_unfinished(
+                [&](const AstraSim::ExecutionDriven::OnlineNode& node,
+                    const uint32_t unresolved_parents, const bool issued_flag) {
+                    unfinished.push_back(&node);
+                    unresolved.push_back(unresolved_parents);
+                    issued.push_back(issued_flag);
+                });
+        }
+        const HardwareResource* const hw = workload->hw_resource;
+        std::fprintf(stderr,
+                     "[DeadEndCensus] rank=%zu unfinished_nodes=%zu "
+                     "hw_gpu_comp=%u hw_gpu_comm=%u hw_gpu_comm_coll=%u "
+                     "hw_cpu=%u hw_hbm_dma=%u "
+                     "hw_remote_mem=%u hbm_joins=%zu hbm_join_pending_legs=%zu\n",
+                     rank, unfinished.size(),
+                     hw != nullptr ? hw->num_in_flight_gpu_comp_ops : 0u,
+                     hw != nullptr ? hw->num_in_flight_gpu_comm_ops : 0u,
+                     hw != nullptr ? hw->num_in_flight_gpu_comm_coll_ops
+                                   : 0u,
+                     hw != nullptr ? hw->num_in_flight_cpu_ops : 0u,
+                     hw != nullptr ? hw->num_in_flight_hbm_dma_ops : 0u,
+                     hw != nullptr ? hw->num_in_flight_remote_mem_ops : 0u,
+                     workload->hbm_endpoint_joins_count(),
+                     workload->hbm_endpoint_joins_pending_legs());
+        for (size_t index = 0; index < unfinished.size(); ++index) {
+            const AstraSim::ExecutionDriven::OnlineNode& node =
+                *unfinished[index];
+            std::fprintf(stderr,
+                         "[DeadEndCensus] rank=%zu node_id=%llu name=%s "
+                         "type=%llu request_id=%s stage=%s generation=%llu "
+                         "unresolved_parents=%u issued=%d\n",
+                         rank, static_cast<unsigned long long>(node.global_id),
+                         node.name.c_str(),
+                         static_cast<unsigned long long>(node.node_type),
+                         node.request_id.c_str(), node.stage.c_str(),
+                         static_cast<unsigned long long>(node.generation),
+                         unresolved[index], issued[index] ? 1 : 0);
+        }
+        if (workload->local_hbm_bandwidth_model != nullptr) {
+            workload->local_hbm_bandwidth_model->dump_census_to_stderr(
+                "[DeadEndCensus]");
+        }
+        if (workload->die_model_adapter() != nullptr) {
+            workload->die_model_adapter()->dump_census_to_stderr(
+                "[DeadEndCensus]");
+        }
+    }
+    watch_registry.dump_unfired_to_stderr("[DeadEndCensus]");
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -980,7 +1151,8 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Shared static options (same parser and extraction as the static main).
+    // Shared static options (the shared CmdLineParser; same extraction the
+    // removed offline main used).
     auto cmd_line_parser = CmdLineParser(argv[0]);
     cmd_line_parser.parse(argc, argv);
 
@@ -1011,7 +1183,8 @@ int main(int argc, char* argv[]) {
 
     AstraSim::LoggerFactory::init(logging_configuration, logging_folder);
 
-    // Side-band metrics collection, same as the static main.
+    // Side-band metrics collection (unchanged from the removed offline
+    // pipeline's behavior).
     MetricCollector::instance().initialize(metrics_configuration,
                                            metrics_detail);
     // Phase-7 §10.3: the manifest's static node-event table is keyed by the
@@ -1047,10 +1220,11 @@ int main(int argc, char* argv[]) {
     // Step 1-8: the online loop commits/emits comm from tick-end and deferred
     // contexts (post-commit issue pass). A start_flow flush scheduled at
     // current_time via schedule_event would insert a current_time EventList
-    // into the main queue and trip the strict-increase assert on the next
-    // proceed() (EventQueue.cpp:48). Deferred mode routes the flush through
-    // schedule_event_deferred (same-tick drain). The static main never
-    // enables it -- pre-extension behavior is byte-for-byte preserved.
+    // into the main queue and trip EventQueue::proceed's strict-increase
+    // guard (fail-closed exit in every build type) on the next proceed().
+    // Deferred mode routes the flush through schedule_event_deferred
+    // (same-tick drain). The removed offline pipeline never enables it --
+    // pre-extension behavior is byte-for-byte preserved.
     fluid_scheduler->set_deferred_flush_mode(true);
 
     // WP6 NoC link observer gating (CPP_SPEC §D): metrics != off AND env
@@ -1183,10 +1357,15 @@ int main(int argc, char* argv[]) {
 
     // Step 1-10: lifecycle transition log (合同② 目标 5: 五态迁移日志与时间).
     // Installed BEFORE --close-input so the close-at-startup transitions
-    // (IDLE -> DRAINING -> FINISHED) are logged too. The hook prints every
-    // IDLE/ACTIVE/DRAINING/FINISHED transition with elapsed- and wall-clock
-    // timestamps; the initial state is printed explicitly (IDLE is not a
-    // transition-log entry).
+    // are logged too. M4 fix (2026-09-29): the startup close lands
+    // IDLE -> DRAINING here and defers DRAINING -> FINISHED to the first
+    // ingress drain (ServiceCoordinator::note_input_drained) -- a close
+    // with the turn-0 calendar still queued in the ingress no longer
+    // stamps FINISHED at the pre-drain vacuum, so the lifecycle log keeps
+    // printing transitions for the whole run. The hook prints every
+    // IDLE/ACTIVE/DRAINING/FINISHED transition with elapsed- and
+    // wall-clock timestamps; the initial state is printed explicitly (IDLE
+    // is not a transition-log entry).
     const auto online_start = std::chrono::steady_clock::now();
     svc.set_transition_hook([&online_start](const ServiceState prev,
                                             const ServiceState next) {
@@ -1213,11 +1392,59 @@ int main(int argc, char* argv[]) {
 
     // Step 1-10: external-producer command FIFO (IDLE fixture injection
     // channel; the fixture script must mkfifo it before the binary starts).
+    std::atomic<bool> command_fifo_stop{false};
+    std::thread command_fifo_thread;
+    int command_fifo_write_fd = -1;
     if (!online_cli.command_fifo.empty()) {
-        std::thread(command_fifo_reader, online_cli.command_fifo,
-                    std::ref(ingress), std::ref(svc))
-            .detach();
+        command_fifo_thread =
+            std::thread(command_fifo_reader, online_cli.command_fifo,
+                        std::ref(ingress), std::ref(svc),
+                        std::ref(command_fifo_stop));
+        // Hold a write end for the whole run: the reader's blocking open
+        // always completes, and the joiner's close() of this fd unblocks a
+        // parked getline deterministically. O_NONBLOCK + retry: a FIFO
+        // O_WRONLY open fails with ENXIO until the reader's read-end open
+        // lands; bail out if the reader thread died first.
+        for (int attempt = 0; attempt < 1000; ++attempt) {
+            command_fifo_write_fd =
+                ::open(online_cli.command_fifo.c_str(), O_WRONLY | O_NONBLOCK);
+            if (command_fifo_write_fd >= 0 || errno != ENXIO) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (command_fifo_write_fd < 0) {
+            std::cerr << "[online] command-fifo: no writer-side handle on "
+                      << online_cli.command_fifo << ": "
+                      << std::strerror(errno) << std::endl;
+        }
     }
+    // RAII joiner, declared AFTER the thread and AFTER ingress/svc: its
+    // destructor runs on EVERY exit below (run-end audit failure, sensing
+    // run_id failure, normal return) and strictly BEFORE ingress/svc are
+    // destroyed, closing the UAF window the old detached thread left open
+    // (fix 2026-09-28).
+    struct CommandFifoJoiner {
+        std::thread& thread;
+        std::atomic<bool>& stop;
+        int& write_fd;
+        ~CommandFifoJoiner() {
+            if (!thread.joinable()) {
+                if (write_fd >= 0) {
+                    ::close(write_fd);
+                    write_fd = -1;
+                }
+                return;
+            }
+            stop.store(true, std::memory_order_release);
+            if (write_fd >= 0) {
+                ::close(write_fd);
+                write_fd = -1;
+            }
+            thread.join();
+        }
+    } command_fifo_joiner{command_fifo_thread, command_fifo_stop,
+                          command_fifo_write_fd};
 
     // --close-input closes external production only after every CSV row has
     // entered the bounded reader. Closing at startup made later window pumps
@@ -1277,6 +1504,11 @@ int main(int argc, char* argv[]) {
                          "manifest run_id empty and RUN_DIR not "
                          "resolvable)"
                       << std::endl;
+            // Same early-exit idiom as the normal-end audit failure exit in
+            // this file (2026-09-30): the "main" logger is async, so drain
+            // its queue before the failure exit terminates the process --
+            // queued startup lines would otherwise be lost.
+            AstraSim::LoggerFactory::shutdown();
             return EXIT_FAILURE;
         }
         memory_api->configure_transaction_detail(
@@ -1604,9 +1836,13 @@ int main(int argc, char* argv[]) {
             // (cursor 停驻形态/泵送-二次 drain 次序/Error 终止与 calendar
             // 不变量互相闭合; 重构打破不变量必须重做可达性分析). The
             // 11-field report itself is kept for the A3 watchdog so any
-            // silent-stall family stays attributable. window_occupancy in
-            // the calendar reader counts committed-but-untriggered turn-0
-            // entries.
+            // silent-stall family stays attributable. Exact field list
+            // (the count below is authoritative; keep it in sync with the
+            // lambda): tick / active / pending_alarm / window_occupancy /
+            // rows_read / data_rows / reader_eof / close_input /
+            // mailbox_work / deferred_work / pending_commands.
+            // window_occupancy in the calendar reader counts
+            // committed-but-untriggered turn-0 entries.
             const auto parking_diagnostics = [&]() {
                 return "tick=" +
                        std::to_string(event_queue->get_current_time()) +
@@ -1756,6 +1992,15 @@ int main(int argc, char* argv[]) {
                 // verdict -- same message family as face's fix, full
                 // counters included (deferred_work is necessarily "no"
                 // here: the has_deferred_work branch above precedes).
+                // DeadEnd census (diagnostic only, 2026-10-11, ported
+                // from WL): freeze the per-rank mechanism state before
+                // the fatal so the stranded work is attributable.
+                // Read-only; the abort below is unchanged.
+                dead_end_census_dump(workloads, graph_sources,
+                                     watch_registry,
+                                     event_queue->get_current_time(),
+                                     svc.active_request_count(),
+                                     svc.pending_alarm_count());
                 online_fatal(
                     "lost-wakeup dead end: queue+mailbox empty but service "
                     "not finished (active=" +
@@ -1803,9 +2048,15 @@ int main(int argc, char* argv[]) {
                     if (!ServiceCoordinator::checked_wait_deadline(
                             online_cli.idle_watchdog_s, now, deadline) ||
                         !svc.wait_for_work_until(deadline)) {
+                        // (2026-10-01) %g rendering: std::to_string(double)
+                        // prints 6 fixed decimals, so a 500ns arming showed
+                        // as "0.000000s" and contradicted the abort.
+                        char armed_s[32];
+                        std::snprintf(armed_s, sizeof(armed_s), "%.3g",
+                                      online_cli.idle_watchdog_s);
                         online_fatal(
                             "idle watchdog: no work within " +
-                            std::to_string(online_cli.idle_watchdog_s) +
+                            std::string(armed_s) +
                             "s of wall clock at the event-loop parking "
                             "point (" +
                             parking_diagnostics() +
@@ -1860,8 +2111,11 @@ int main(int argc, char* argv[]) {
     // terminal command / error); the CSV window EOF is reported separately
     // because it is NOT a close (the input stays open for external
     // injection -- the IDLE fixture contract). The ingress overflow audit
-    // counts bounded-queue rejections (0 on every official run: high_water
-    // 128 << capacity 4096; a growing producer would surface here).
+    // counts bounded-queue rejections (0 on every official run: the
+    // calendar reader tops up enqueueing until the bounded queue itself
+    // backpressures, and the main loop's drain -> pump -> secondary-drain
+    // ordering fully registers each top-up before the next one, so the
+    // queue never overflows; a growing producer would surface here).
     const char* close_source = "not_closed";
     if (svc.input_closed()) {
         switch (svc.input_close_reason()) {
@@ -1954,6 +2208,8 @@ int main(int argc, char* argv[]) {
               << ingress.late_arrival_count()
               << " late_static_submit="
               << ingress.late_static_submit_count()
+              << " late_static_submit_backpressure="
+              << ingress.late_static_submit_backpressure_count()
               << " late_external_stream="
               << ingress.late_external_stream_count()
               << " late_future_alarm_rounding="
@@ -1974,6 +2230,8 @@ int main(int argc, char* argv[]) {
               << arrival_summary.turn0_submitted
               << " late_static_submit="
               << arrival_summary.late_static_submit
+              << " late_static_submit_backpressure="
+              << arrival_summary.late_static_submit_backpressure
               << " late_external_stream="
               << arrival_summary.late_external_stream
               << " late_future_alarm_rounding="
@@ -2172,7 +2430,7 @@ int main(int argc, char* argv[]) {
     // artifact on the NORMAL end only -- it appends the terminal summary
     // row (per-port PortStats aggregates) so every sensing run leaves a
     // non-empty, parseable, recomputable
-    // results/remote_memory_transactions.jsonl even with zero remote
+    // <bridge_dir>/remote_memory_transactions.jsonl even with zero remote
     // transactions. Failure paths above exit without finalize: their
     // retained partial bridge file (rows, no summary) stays honest
     // debugging evidence.

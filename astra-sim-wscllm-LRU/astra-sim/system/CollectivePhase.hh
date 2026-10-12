@@ -10,17 +10,15 @@ LICENSE file in the root directory of this source tree.
 
 namespace AstraSim {
 
-class Sys;
 class Algorithm;
 class BaseStream;
 
 class CollectivePhase {
   public:
-    CollectivePhase(Sys* sys, int queue_id, Algorithm* algorithm);
+    CollectivePhase(int queue_id, Algorithm* algorithm);
     CollectivePhase();
     void init(BaseStream* stream);
 
-    Sys* sys;
     int queue_id;
     Algorithm* algorithm;
     uint64_t final_data_size;

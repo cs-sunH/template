@@ -60,6 +60,9 @@ class FakeNetworkApi : public AstraNetworkAPI {
         return 0;
     }
 
+    // AstraNetworkAPI 纯虚面:桩无链路带宽语义,返回有限占位值即可。
+    double get_BW_at_dimension(int /*dim*/) override { return 1.0; }
+
     int sim_recv(void*, uint64_t, int, int, int, sim_request*,
                  void (*)(void*), void*) override {
         return 0;
@@ -82,11 +85,18 @@ std::string write_minimal_system_config() {
         std::exit(EXIT_FAILURE);
     }
     // Roofline on with valid divisors: the COMP remote-weight case must
-    // reach the shrunk roofline throw (not the missing-config exit).
+    // reach the shrunk roofline throw (not the missing-config exit). The
+    // four *-implementation keys are mandatory: Sys fails closed
+    // (GeneralComplexTopology, empty implementation table) without them,
+    // and a single "ring" matches this fixture's one-dimension {1} shape.
     const std::string contents =
         "{\"scheduling-policy\":\"FIFO\",\"roofline-enabled\":1,"
         "\"peak-perf\":1000,\"local-mem-bw\":3000,"
-        "\"local-mem-latency\":100,\"hbm-bandwidth-contention\":false}";
+        "\"local-mem-latency\":100,\"hbm-bandwidth-contention\":false,"
+        "\"all-reduce-implementation\":[\"ring\"],"
+        "\"all-gather-implementation\":[\"ring\"],"
+        "\"reduce-scatter-implementation\":[\"ring\"],"
+        "\"all-to-all-implementation\":[\"ring\"]}";
     if (::write(fd, contents.c_str(), contents.size()) < 0) {
         std::fprintf(stderr,
                      "[mem_dispatch_throw_test] config write failed: %s\n",
@@ -165,6 +175,48 @@ void run_mem_case(const std::string& system_config,
     expect(loud, "MEM dispatch throw names the removed remote memory backend");
 }
 
+// The production issue paths (commit-time issue_rank callback and the
+// post-commit deferred issue pass) call issue_dep_free_nodes(), not
+// Workload::issue directly.  A node that throws in dispatch must propagate
+// through the pass WITH its identity attached (id/type/name): the online
+// fatal channel (main_online.cc) can then name the offending node, the
+// same information the commit-period try/catch surfaces.  The original
+// throw message must be preserved verbatim inside the enriched one.
+void run_mem_dep_free_pass_case(const std::string& system_config,
+                                NodeKind kind,
+                                uint64_t node_type,
+                                const char* label) {
+    std::shared_ptr<NodeStoreGraphSource> source;
+    Workload* workload = make_case_workload(system_config, source);
+
+    OnlineNode node;
+    node.kind = kind;
+    node.node_type = node_type;  // raw ChakraProtoMsg::NodeType value
+    node.name = label;
+    node.compute.tensor_size = 1024;
+    const uint64_t id = add_node(*source, std::move(node));
+
+    std::string message = "<no throw>";
+    bool threw = false;
+    try {
+        workload->issue_dep_free_nodes();
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        message = e.what();
+    }
+    expect(threw, label);
+    const bool loud =
+        message.find("MEM_LOAD/MEM_STORE") != std::string::npos &&
+        message.find("remote memory") != std::string::npos;
+    expect(loud, "issue pass preserves the original MEM throw message");
+    const bool named =
+        message.find("node issue failed") != std::string::npos &&
+        message.find("id=" + std::to_string(id)) != std::string::npos &&
+        message.find("type=" + std::to_string(node_type)) !=
+            std::string::npos;
+    expect(named, "issue pass names the failing node (id/type)");
+}
+
 void run_comp_remote_weight_case(const std::string& system_config,
                                  bool with_remote_weight) {
     std::shared_ptr<NodeStoreGraphSource> source;
@@ -201,6 +253,10 @@ int main() {
 
     run_mem_case(system_config, NodeKind::MemLoad, 2, "MEM_LOAD dispatch");
     run_mem_case(system_config, NodeKind::MemStore, 3, "MEM_STORE dispatch");
+    run_mem_dep_free_pass_case(system_config, NodeKind::MemLoad, 2,
+                               "MEM_LOAD issue pass");
+    run_mem_dep_free_pass_case(system_config, NodeKind::MemStore, 3,
+                               "MEM_STORE issue pass");
     run_comp_remote_weight_case(system_config, true);
     run_comp_remote_weight_case(system_config, false);
 

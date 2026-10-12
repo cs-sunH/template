@@ -26,7 +26,7 @@
         [--category typed|lru] \
         [--scheduler joint|load-first|affinity-first|face_static] \
         [--layer adaptive|legacy_half|minimal_layer_groups] \
-        [--remote on|off] [--remote-credit-iters auto|<正整数>] \
+        [--remote on|off] [--remote-read-tile-bytes auto|<正整数字节>] \
         [--quota off|static|aimd] \
         [--extra-env NAME=VALUE ...]
 
@@ -43,7 +43,7 @@ injected``）。不存在"aimd + 无遥测"的合法启动路径：内层 runner
 直跑遥测臂不受影响）。
 
 O11（2026-09-23，L6 断言的运行期双保险）：C++ 观测门还压在
-``MetricCollector::enabled`` 下（main_online.cc:1165）——``aimd`` ∧
+``MetricCollector::enabled`` 下（main_online.cc 的 MetricCollector 门）——``aimd`` ∧
 生效指标档 ``off`` ⇒ 遥测恒空、AIMD 静默空转。本 runner 在锁/二进制
 检查前同构 fail-closed（生效档解析 = ``SH_METRICS_DETAIL`` env >
 metrics_config.json detail_level，非法即拒）：aimd ∧ off ⇒ 打印指引 +
@@ -89,8 +89,12 @@ _ENV_ALLOWLIST = (
 _JOINT_SWITCH_VARS = (
     "JOINT_ABLATION_COMBO", "JOINT_CATEGORY_MODE", "JOINT_SCHEDULER_MODE",
     "JOINT_LAYER_POLICY", "JOINT_REMOTE_ACTIONS",
-    "JOINT_REMOTE_CREDIT_ITERS", "JOINT_REMOTE_READ_PARTIAL",
-    "JOINT_QUOTA_MODE",
+    "JOINT_REMOTE_READ_TILE_BYTES", "JOINT_REMOTE_READ_PARTIAL",
+    "JOINT_ALLOWED_ACTIONS", "JOINT_QUOTA_MODE", "JOINT_BOUNDARY_POLICY",
+    # W0（2026-09-29，《joint仓库当下+历史修改方案》§9.1）：版本化预测
+    # 配置的唯一入口（路径 → JSON；七正交研究轴 + §9.2 参数 preset）。
+    # 轴值不逐常数开 env；随仓 preset 见 run_scripts/prediction_presets/。
+    "JOINT_PREDICTION_CONFIG",
 )
 
 
@@ -113,7 +117,7 @@ def _scrub_environment() -> list[str]:
 
 
 def _resolve_metrics_detail() -> str:
-    """同构 run_online_strategy.sh:66-92 的档位解析：env SH_METRICS_DETAIL
+    """同构 run_online_strategy.sh 的档位解析段：env SH_METRICS_DETAIL
     > metrics_config.json detail_level；env/json 取值非法或 json 缺失均
     fail-closed（与内层 runner 同口径，先于一切副作用退出）。"""
     detail = os.environ.get("SH_METRICS_DETAIL")
@@ -197,8 +201,10 @@ def main(argv=None) -> int:
     parser.add_argument("--layer", choices=(
         "adaptive", "legacy_half", "minimal_layer_groups"))
     parser.add_argument("--remote", choices=("on", "off"))
-    parser.add_argument("--remote-credit-iters", dest="remote_credit_iters",
-                        help="remote-read credit 块大小 K：auto 或正整数")
+    parser.add_argument(
+        "--remote-read-tile-bytes", dest="remote_read_tile_bytes",
+        help="remote-read 字节 tile/缓冲配置（D09）：auto 或正整数字节"
+             "（按一个 token KV 粒度向下对齐）")
     parser.add_argument("--remote-read-partial", dest="remote_read_partial",
                         choices=("on", "off"),
                         help="PARTIAL 基 remote-read 适用面消融（缺省 on）")
@@ -235,10 +241,11 @@ def main(argv=None) -> int:
             os.environ["JOINT_LAYER_POLICY"] = args.layer
     if args.remote is not None:
         os.environ["JOINT_REMOTE_ACTIONS"] = args.remote
-    # remote-read credit 块大小 K（执行口径 = credit 交错流唯一机制，
-    # 无开关；取值校验由 joint_config.parse fail-closed 兜底）。
-    if args.remote_credit_iters is not None:
-        os.environ["JOINT_REMOTE_CREDIT_ITERS"] = args.remote_credit_iters
+    # remote-read 字节 tile/缓冲配置（D09：有限字节双缓冲唯一机制；
+    # 取值校验由 joint_config.parse fail-closed 兜底）。
+    if args.remote_read_tile_bytes is not None:
+        os.environ["JOINT_REMOTE_READ_TILE_BYTES"] = (
+            args.remote_read_tile_bytes)
     # PARTIAL 基 remote-read 适用面消融（需求①，2026-09-17；取值校验由
     # joint_config.parse fail-closed 兜底）。
     if args.remote_read_partial is not None:
@@ -267,10 +274,10 @@ def main(argv=None) -> int:
         link_telemetry_injected = True
 
     # O11（L6 shell 断言的运行期双保险，2026-09-23）：C++ 观测门还压在
-    # MetricCollector::enabled 下（main_online.cc:1165）——aimd ∧
+    # MetricCollector::enabled 下（main_online.cc）——aimd ∧
     # SH_METRICS_DETAIL=off ⇒ 即便 observer=1、--link-telemetry 在位，
     # link_telemetry[] 仍恒空 ⇒ AIMD 静默空转无信号。与内层
-    # run_online_strategy.sh:146-149 同构 fail-closed：无逃生口径（shell
+    # run_online_strategy.sh 同构 fail-closed：无逃生口径（shell
     # 断言无逃生，runner 亦无——显式 no-signal 对照臂亦不被承认）；直启
     # 本 runner 不再依赖内层脚本兜底。档位解析同构 env > json。
     metrics_detail = _resolve_metrics_detail()
@@ -278,7 +285,7 @@ def main(argv=None) -> int:
         raise SystemExit(
             "[joint_runner] FAIL: JOINT_QUOTA_MODE=aimd requires metrics "
             "enabled (C++ observer gate is behind MetricCollector::enabled, "
-            "main_online.cc:1165); SH_METRICS_DETAIL=off empties "
+            "main_online.cc 的 MetricCollector 门); SH_METRICS_DETAIL=off empties "
             "link_telemetry — use summary/full")
 
     binary = _REPO_ROOT / _BINARY_RELPATH

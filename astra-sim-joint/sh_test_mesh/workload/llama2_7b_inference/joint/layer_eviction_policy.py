@@ -60,7 +60,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 LAYER_POLICY_ADAPTIVE = "adaptive"
 LAYER_POLICY_LEGACY_HALF = "legacy_half"
@@ -89,27 +89,6 @@ class KHideResult:
     first_block_wait_ns: int
 
 
-def serial_restore_completion_ns(
-    k: int,
-    ell: int,
-    restore_ns_by_layer: Sequence[int],
-    first_block_wait_ns: int,
-) -> int:
-    """R̂_ℓ(k) = q̂ + Σ_{j=k+1..ℓ} r̂_j（逐层串行恢复；ell 为 1-based 层号）。"""
-    layers = len(restore_ns_by_layer)
-    if not 0 <= k <= layers:
-        raise LayerEvictionError(f"k={k} outside 0..{layers}")
-    if not 1 <= ell <= layers:
-        raise LayerEvictionError(f"ell={ell} outside 1..{layers}")
-    if ell <= k:
-        raise LayerEvictionError(
-            f"cold-layer check requires ell>k (ell={ell}, k={k})")
-    total = first_block_wait_ns
-    for j in range(k + 1, ell + 1):
-        total += int(restore_ns_by_layer[j - 1])
-    return total
-
-
 def layer_consumption_deadline_ns(
     ell: int,
     compute_ns_by_layer: Sequence[int],
@@ -119,25 +98,6 @@ def layer_consumption_deadline_ns(
     if not 1 <= ell <= layers:
         raise LayerEvictionError(f"ell={ell} outside 1..{layers}")
     return sum(int(compute_ns_by_layer[j - 1]) for j in range(1, ell))
-
-
-def exposed_stall_ns(
-    k: int,
-    compute_ns_by_layer: Sequence[int],
-    restore_ns_by_layer: Sequence[int],
-    first_block_wait_ns: int,
-) -> int:
-    """Ŝ(k) = max(0, max_{ℓ>k}[R̂_ℓ(k) − D̂_ℓ])；Ŝ(L)=0。"""
-    layers = len(compute_ns_by_layer)
-    if k == layers:
-        return 0
-    worst = 0
-    for ell in range(k + 1, layers + 1):
-        restore = serial_restore_completion_ns(
-            k, ell, restore_ns_by_layer, first_block_wait_ns)
-        deadline = layer_consumption_deadline_ns(ell, compute_ns_by_layer)
-        worst = max(worst, restore - deadline)
-    return worst
 
 
 def k_hide_deadline(
@@ -221,41 +181,10 @@ class OnlineMean:
         return self.count > 0
 
 
-class InputLengthEstimator:
-    """等待 session 下一轮输入长度的因果估计（§5.5 调用 2）。
-
-    优先级：本 session 已完成请求的新增输入长度在线均值 → 本 run 已
-    完成请求均值 → 无样本（返回 None，调用方保留目标 = L 并标
-    ``cold_start_unknown_input``）。不预测真实返回时刻；返回后按真实
-    请求重算。
-    """
-
-    def __init__(self) -> None:
-        self._session_means: dict[str, OnlineMean] = {}
-        self._run_mean = OnlineMean()
-
-    def observe_completed_turn(
-        self, session_id: str, input_tokens: int,
-    ) -> None:
-        """仅已完成轮次可入样（真实到达并完成后的新增输入长度）。"""
-        if input_tokens < 0:
-            raise LayerEvictionError("input length sample must be >= 0")
-        if session_id not in self._session_means:
-            self._session_means[session_id] = OnlineMean()
-        self._session_means[session_id].update(input_tokens)
-        self._run_mean.update(input_tokens)
-
-    def estimate_next_input(self, session_id: str) -> Optional[float]:
-        session_mean = self._session_means.get(session_id)
-        if session_mean is not None and session_mean.available:
-            return session_mean.mean
-        if self._run_mean.available:
-            return self._run_mean.mean
-        return None
-
-    def session_sample_count(self, session_id: str) -> int:
-        mean = self._session_means.get(session_id)
-        return mean.count if mean is not None else 0
+# (InputLengthEstimator was removed with the 2026-10-01 dead-code audit:
+# the §5.5 input-length estimation duty it documented is carried by
+# joint/history_estimator.py and the N12 run-mean channel; it had no
+# production caller. OnlineMean above survives -- it is pinned by tests.)
 
 
 class EwmaServiceFactor:

@@ -41,7 +41,6 @@ void _DependancyLayer::take_node(const NodeId& node) {
   }
   if (this->dependancy_free_nodes.find(node) ==
       this->dependancy_free_nodes.end()) {
-    const auto& parents = this->child_map_parent[node];
     throw std::runtime_error(
         "Node " + std::to_string(node) +
         " is not dependancy free or already taken/released");
@@ -79,19 +78,6 @@ void _DependancyLayer::finish_node(const NodeId& node) {
   this->parent_map_child.erase(node);
 }
 
-void _DependancyLayer::push_back_node(const NodeId& node) {
-  std::unique_lock<std::shared_mutex> lock(this->mutex);
-  if (this->dirty) {
-    throw std::runtime_error(
-        "dependancy layer is dirty, resolve_dependancy_free_nodes should be called first");
-  }
-  if (this->ongoing_nodes.find(node) == this->ongoing_nodes.end()) {
-    throw std::runtime_error("Node is not taken");
-  }
-  this->ongoing_nodes.erase(node);
-  this->dependancy_free_nodes.insert(node);
-}
-
 void _DependancyLayer::resolve_dependancy_free_nodes() {
   std::unique_lock<std::shared_mutex> lock(this->mutex);
   if ((!this->dependancy_free_nodes.empty()) || (!this->ongoing_nodes.empty()))
@@ -112,17 +98,6 @@ void _DependancyLayer::resolve_dependancy_free_nodes() {
 const std::unordered_set<NodeId>& _DependancyLayer::get_dependancy_free_nodes()
     const {
   return this->dependancy_free_nodes;
-}
-
-const std::unordered_set<NodeId>& _DependancyLayer::get_children(
-    NodeId node) const {
-  const auto& results = this->parent_map_child.at(node);
-  return this->parent_map_child.at(node);
-}
-
-const std::unordered_set<NodeId>& _DependancyLayer::get_parents(
-    NodeId node) const {
-  return this->child_map_parent.at(node);
 }
 
 const std::unordered_set<NodeId>& _DependancyLayer::get_ongoing_nodes() const {
@@ -166,12 +141,6 @@ void DependancyResolver::take_node(const NodeId& node) {
   this->enabled_dependancy.take_node(node);
 }
 
-void DependancyResolver::push_back_node(const NodeId& node) {
-  this->data_dependancy.push_back_node(node);
-  this->ctrl_dependancy.push_back_node(node);
-  this->enabled_dependancy.push_back_node(node);
-}
-
 void DependancyResolver::finish_node(const NodeId& node) {
   this->data_dependancy.finish_node(node);
   this->ctrl_dependancy.finish_node(node);
@@ -203,17 +172,5 @@ const _DependancyLayer& DependancyResolver::get_ctrl_dependancy() const {
 }
 
 const _DependancyLayer& DependancyResolver::get_enabled_dependancy() const {
-  return this->enabled_dependancy;
-}
-
-_DependancyLayer& DependancyResolver::get_data_dependancy_mut() {
-  return this->data_dependancy;
-}
-
-_DependancyLayer& DependancyResolver::get_ctrl_dependancy_mut() {
-  return this->ctrl_dependancy;
-}
-
-_DependancyLayer& DependancyResolver::get_enabled_dependancy_mut() {
   return this->enabled_dependancy;
 }

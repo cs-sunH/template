@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import os
 import random
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -171,8 +170,11 @@ class PercentileManyTests(unittest.TestCase):
 # 合成 sh_1.0 run_dir（driver parity 用）
 # ---------------------------------------------------------------------------
 
-def build_sh10_run_dir() -> Path:
-    run_dir = synthetic.make_run_dir("drv_parity")
+def build_sh10_run_dir(run_dir: Path) -> Path:
+    """填充合成 sh_1.0 run_dir(G7-12 修复 2026-09-27:目录生命周期移交
+    调用方的 tempfile 上下文,本函数只负责建目录与写桩,不再自带
+    mkdtemp——单一清理源,异常路径亦确定性回收)。"""
+    run_dir.mkdir(parents=True, exist_ok=True)
     results = run_dir / "results"
     results.mkdir(parents=True, exist_ok=True)
 
@@ -304,12 +306,18 @@ def build_sh10_run_dir() -> Path:
                      sort_keys=True) + "\n", encoding="utf-8")
 
     # -- trace_config（run_dir 本地优先；hardware 用仓内 validation 档）----
+    # inference_group 组行 = 配置实例总数（load_imbalance METRIC-01 分母，
+    # 与 hbm_watermark.count_configured_instances 同源）：本 fixture 用
+    # decode 实例 0/1，故落 2 组行；无组行时 load_imbalance fail-closed
+    # （trace_config 无 inference_group 组行）。
     (run_dir / "trace_config.csv").write_text(
         "kind,key,value,group_name,pg_name,ranks,description\n"
         "config,layers,1,,,,synthetic\n"
         "config,hidden_size,50,,,,synthetic\n"
         "config,bytes_per_elem,1,,,,synthetic\n"
-        "config,local_hbm_capacity_profile,validation-160gib,,,,synthetic\n",
+        "config,local_hbm_capacity_profile,validation-160gib,,,,synthetic\n"
+        "inference_group,,,synthetic_instance_0,1,\"0-5\",prefill,synthetic\n"
+        "inference_group,,,synthetic_instance_1,2,\"0-5\",decode,synthetic\n",
         encoding="utf-8")
     return run_dir
 
@@ -459,14 +467,20 @@ class DriverParityTests(unittest.TestCase):
     """合成 sh_1.0 fixture：旧链复刻 vs 当前链（单遍 driver）逐字节。"""
 
     def _compare(self, tag: str, mutate=None, expect_rc: int = 0):
-        run_dir = build_sh10_run_dir()
-        old_out = run_dir.parent / f"{tag}_old_out"
-        new_out = run_dir.parent / f"{tag}_new_out"
-        # mkdtemp 的 run_dir 与两份对拍快照在用例结束后即清，不留 /tmp
-        # 残骸（ignore_errors 兼容断言早退时目录尚未创建的情形）。
-        self.addCleanup(shutil.rmtree, run_dir, True)
-        self.addCleanup(shutil.rmtree, old_out, True)
-        self.addCleanup(shutil.rmtree, new_out, True)
+        # G7-11/G7-12 修复 2026-09-27:临时桩统一 tempfile 上下文语义——
+        # 一个 TemporaryDirectory 作唯一清理源,经 addCleanup 注册其
+        # cleanup(用例结束含断言失败/异常路径确定性回收,取代此前 mkdtemp
+        # + 三条独立 rmtree);run_dir 与两份对拍快照同落一根下,随之一并
+        # 回收,不留 /tmp 残骸。环境脆弱性("产物不齐偶发 2 项失败"的根因)
+        # 已由 2026-09-25 批两处隔离修复收敛:spill 文件断言局部化到本
+        # sorter 路径(不再 glob 共享系统临时目录)+ pytest prepend 模式
+        # 的 tests.* 导入路径补齐。
+        tmp_root = tempfile.TemporaryDirectory(prefix=f"slo_t_{tag}_")
+        self.addCleanup(tmp_root.cleanup)
+        run_dir = Path(tmp_root.name) / "run"
+        old_out = Path(tmp_root.name) / f"{tag}_old_out"
+        new_out = Path(tmp_root.name) / f"{tag}_new_out"
+        build_sh10_run_dir(run_dir)
         if mutate is not None:
             mutate(run_dir)
         rc_old = run_old_chain_replica(run_dir)
@@ -498,7 +512,8 @@ class DriverParityTests(unittest.TestCase):
         self._compare("g3", lambda rd: (rd / "request_metrics.csv").unlink())
 
     def test_failure_token_manifest_missing(self):
-        # 仅 hbm_watermark 失败（exit=3 链语义：整链 rc=1 + FAIL 条目）。
+        # 仅 hbm_watermark 失败（缺 token manifest → fail-closed 退出码 2；
+        # 链语义：整链 rc=1 + FAIL 条目）。
         def mutate(rd):
             (rd / "manifest.json").unlink()
         self._compare("notoken", mutate, expect_rc=1)

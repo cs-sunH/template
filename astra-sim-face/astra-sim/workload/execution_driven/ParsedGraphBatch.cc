@@ -8,7 +8,7 @@ for the rule catalogue (T/N/E/W/A/S/O) and the ordering/atomicity contract.
 Every rule here either replaces a per-walk nlohmann .value()/.find() of the
 old four-pass pipeline or tightens it fail-closed (unknown keys, exact key
 sets, integer domains); the committer-state-dependent rules (id-stream
-contiguity, cycles, p2p pairing, collective membership, MEM ports, watch
+contiguity, cycles, p2p pairing, collective membership, watch
 eligibility, alarm timing, touched-rank equality) deliberately stay in
 GraphBatchCommitter and consume the typed fields.
 ******************************************************************************/
@@ -44,7 +44,8 @@ const nlohmann::json& field(const nlohmann::json& obj, const char* key,
 }
 
 // Unsigned integer: rejects floats (incl. >UINT64 integer literals, which
-// nlohmann stores as double -- rule O6), negative values, bools and strings.
+// nlohmann stores as double -- the N-family integer-overflow rule in the
+// header catalogue), negative values, bools and strings.
 uint64_t get_uint(const nlohmann::json& value, const std::string& key,
                   const std::string& where) {
     if (!value.is_number_integer()) {
@@ -207,17 +208,18 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
     }
 
     // N12: compute -- required {num_ops, tensor_size, runtime_ns}; optional
-    // {remote_weight_bytes}. [face adaptation] no hbm_access_mode key: face
-    // has no MEM-node local-HBM access-mode contract (NO_MEMORY_EXPANSION;
-    // the N-user LocalHbmBandwidthModel derives access from node type), so
-    // the sh_1.0 optional key is dropped from the schema here.
+    // {remote_weight_bytes, op_role, die_op_spec}. [face adaptation] no
+    // hbm_access_mode key: face has no MEM-node local-HBM access-mode
+    // contract (NO_MEMORY_EXPANSION; the N-user LocalHbmBandwidthModel
+    // derives access from node type), so the sh_1.0 optional key is dropped
+    // from the schema here.
     const nlohmann::json& compute = node_json["compute"];
     if (!compute.is_object()) {
         fail(where + ": compute is not an object");
     }
     check_key_set(compute,
                   {"num_ops", "tensor_size", "runtime_ns",
-                   "remote_weight_bytes"},
+                   "remote_weight_bytes", "op_role", "die_op_spec"},
                   {"num_ops", "tensor_size", "runtime_ns"},
                   where + ".compute");
     node.compute.num_ops = get_uint(compute["num_ops"], "num_ops",
@@ -231,6 +233,40 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
         node.compute.remote_weight_bytes =
             get_uint(compute["remote_weight_bytes"], "remote_weight_bytes",
                      where + ".compute");
+    }
+    if (compute.contains("op_role")) {
+        const std::string op_role =
+            get_string(compute["op_role"], "op_role", where + ".compute");
+        if (op_role == "compute") {
+            node.compute.op_role = OpRole::Compute;
+        } else if (op_role == "control_marker") {
+            node.compute.op_role = OpRole::ControlMarker;
+        } else {
+            fail(where + ": compute.op_role \"" + op_role +
+                 "\" is not one of compute|control_marker");
+        }
+    }
+    if (compute.contains("die_op_spec")) {
+        // Contract §2 conflict rule: a die-spec node must not carry a
+        // calibrated runtime (a non-zero runtime_ns would silently bypass
+        // the die execution and must fail closed at parse time, not at
+        // issue time).
+        if (node.compute.runtime_ns != 0) {
+            fail(where + ": compute.die_op_spec requires runtime_ns == 0 "
+                        "(die nodes execute the compiled plan, never a "
+                        "calibrated runtime)");
+        }
+        const nlohmann::json& spec_json = compute["die_op_spec"];
+        if (!spec_json.is_object()) {
+            fail(where + ": compute.die_op_spec is not an object");
+        }
+        try {
+            node.compute.die_spec = DieModel::parse_die_op_spec(spec_json);
+        } catch (const ParseError&) {
+            throw;
+        } catch (const std::exception& e) {
+            fail(where + ": compute.die_op_spec rejected: " + e.what());
+        }
     }
 
     // N13: comm -- required {bytes, src, dst, tag}; optional {hbm_charge}.
@@ -353,6 +389,23 @@ ParsedWatch parse_watch(const nlohmann::json& watch_json, size_t index,
     }
     watch.members.reserve(members.size());
     for (const auto& entry : members.items()) {
+        // R1-A-L3 fix (2026-09-29): std::stoi skips leading whitespace and
+        // a '+' sign, so " 5"/"+5" used to slip through the
+        // trailing-characters check as rank 5 -- looser than the documented
+        // decimal-rank-string key contract (and ambiguous under the
+        // "producer emits ascending rank strings" ordering note). Require
+        // pure ASCII digits, matching the CLI integer lexicon (E25).
+        // (2026-10-01 completion:) multi-character keys with a leading '0'
+        // ("05") are rejected too -- the pure-digit test alone still let
+        // them through as rank 5, leaving the fix short of its own comment
+        // and letting "5"/"05" coexist as two members of one rank.
+        const std::string& rank_key = entry.key();
+        if (rank_key.empty() ||
+            !std::all_of(rank_key.begin(), rank_key.end(),
+                         [](char c) { return c >= '0' && c <= '9'; }) ||
+            (rank_key.size() > 1 && rank_key[0] == '0')) {
+            fail(where + ": unparsable member rank: " + rank_key);
+        }
         int rank = 0;
         try {
             size_t parsed_chars = 0;
@@ -483,6 +536,15 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
     if (resp.contains("batch_id")) {
         batch.batch_id = get_uint(resp["batch_id"], "batch_id", "response");
     }
+    // R6-V1 note (2026-09-29, protocol documentation): batch_id defaults to
+    // 0 here (T4 allows the field to be absent), while the ack validator
+    // requires batch_id == the request's delivery_sequence exactly. A
+    // handler that omitted batch_id for any seq > 0 epoch would therefore
+    // abort the whole round at the ack. All seven production handlers write
+    // batch_id explicitly, so the shapes can never meet today; the T4
+    // "optional" clause and the ack equality rule are two different
+    // contract layers -- keep writing batch_id explicitly in any new
+    // handler.
     if (resp.contains("error")) {
         batch.error = get_string(resp["error"], "error", "response");
     }

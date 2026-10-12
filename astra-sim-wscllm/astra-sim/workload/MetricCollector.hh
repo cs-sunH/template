@@ -72,8 +72,8 @@ class MetricCollector {
     // registration precedes the issue pass), so the second call for the
     // same edge is a silent miss. The erase touches ONLY these routing
     // tables: every finalize consumer (memory_anchor_ticks_ / spool,
-    // transfer maxima, requests_, request_boundaries_, first_token_ticks_,
-    // iterations_) reads derived storage filled by apply_event, never the
+    // transfer maxima, requests_, request_boundaries_, first_token_ticks_)
+    // reads derived storage filled by apply_event, never the
     // routing tables.
     void on_node_issue(int rank, uint64_t node_id, Tick tick);
     void on_node_complete(int rank, uint64_t node_id, Tick tick);
@@ -93,16 +93,23 @@ class MetricCollector {
     //     at load time (turn-0 rows carry an ABSOLUTE arrival; turn>0 rows
     //     arrive AFTER_REQUEST, parent = previous same-session row);
     //   - online_register_ranks: the watch member sets (prefill/decode);
-    //   - online_register_node_anchor: for every (rank, request, stage)
-    //     group the FIRST node is the start anchor (issue event) and the
-    //     LAST is the end anchor (complete event); transfer nodes of the
-    //     KV routes (node names contain "kv") register the memory anchor
-    //     (code 7) on the last transfer node of each (request, rank) --
-    //     the offline doc-sec.4.3 semantics.
+    //   - online_register_node_anchor: for every (request, rank, stage)
+    //     group the FIRST batch node is the start anchor (issue event),
+    //     while the end anchor (complete event) is the stage's WATCH MEMBER
+    //     node per (request, rank) -- the node whose completion satisfies
+    //     the watch, NOT the last batch node (the batch's last node can
+    //     postdate the watch fire; known R5/R7 window); the KV-route memory
+    //     anchor (code 7) registers on the last is_kv_route_transfer_leg
+    //     leg (ParsedGraphBatch.hh) per (request, rank) -- the offline
+    //     doc-sec.4.3 semantics (selection lives in main_online.cc's
+    //     register_online_metrics_anchors).
     // Registration is idempotent: re-registering an existing (request,
-    // rank, node, event) is a no-op, and re-registering a request updates
-    // only missing fields (the online CSV data is authoritative for
-    // arrival/session fields; rank sets merge). No registered anchor ever
+    // rank, node, event) is a no-op, and re-registering a request
+    // OVERWRITES the request's arrival/session fields with the online CSV
+    // data (the CSV row is authoritative; see online_register_request),
+    // and online_register_ranks REPLACES the watch rank sets -- a union
+    // would inflate the expected rank set and starve completion (see
+    // online_register_ranks). No registered anchor ever
     // makes the static path observable: all three entry points no-op when
     // metrics are disabled, and the static main never calls them.
     // Phase-7 §10.3: the online driver runs the collector against the live
@@ -184,8 +191,9 @@ class MetricCollector {
     // WP8/WP6 sampling anchors loaded from the manifest ``slo_sampling``
     // node (CPP_SPEC §A). A missing node or null values fall back to the
     // documented provisional anchor (5,000,000 ns) with provisional=true;
-    // batch B4 replaces them with derived values. Every related record
-    // echoes the period actually used.
+    // batch B4 has landed and fills the manifest with derived values, so
+    // the fallback only fires on a missing/malformed slo_sampling node.
+    // Every related record echoes the period actually used.
     [[nodiscard]] uint64_t slo_link_bucket_ns() const {
         return this->link_bucket_ns_;
     }
@@ -205,6 +213,10 @@ class MetricCollector {
         PREFILL_END_COMPLETE = 2,
         DECODE_START_ISSUE = 3,
         COMPLETION_COMPLETE = 4,
+        // Schema v1 freezes codes 5/6, but this repo has no live producer:
+        // the online main clears the static node-event tables and the
+        // online registration path never emits iteration anchors, so
+        // apply_event carries no case for them (accepted, then ignored).
         ITERATION_START_ISSUE = 5,
         ITERATION_END_COMPLETE = 6,
         MEMORY_ANCHOR_COMPLETE = 7,
@@ -259,14 +271,6 @@ class MetricCollector {
         std::optional<int64_t> decode_length;
     };
 
-    struct IterationMetricState {
-        int64_t benchmark_point_id = -1;
-        std::optional<Tick> iteration_start;
-        std::optional<Tick> iteration_end;
-        std::set<int> start_ranks_seen;
-        std::set<int> end_ranks_seen;
-    };
-
     struct MemoryAnchorTick {
         int64_t subject_id;
         int rank;
@@ -303,6 +307,9 @@ class MetricCollector {
     struct RankMetricState {
         unsigned __int128 total_num_ops = 0;
         unsigned __int128 total_local_bytes = 0;
+        // Always 0: this repo has no local HBM restore model. The field is
+        // schema-frozen for cross-repo [METRIC] output stability (see the
+        // rank_compute emission in finalize()).
         uint64_t local_hbm_restore_bytes = 0;
     };
 
@@ -344,11 +351,15 @@ class MetricCollector {
 
     // WP8 (CPP_SPEC §B): per-rank bucketed watermark sample series, filled
     // during the doc sec.7.8 delta replay. The step function is sampled at
-    // every ledger delta (event-driven) and at every watermark bucket
-    // boundary (periodic bottom line); bucket peaks are sparse (buckets
-    // that stayed zero are omitted at emit time). Areas use independent
-    // 128-bit accumulators so the timeavg cross-check against the direct
-    // replay integral is a real comparison, not a tautology.
+    // every ledger delta (event-driven: every delta's post-value is sampled
+    // individually, including same-tick delta groups and deltas anchored at
+    // the window end -- a same-tick transient that exceeds capacity is
+    // never folded away) and at every watermark bucket boundary (periodic
+    // bottom line); bucket peaks are sparse (buckets that stayed zero are
+    // omitted at emit time). Per-delta samples are zero-length: they move
+    // peaks/violations but no area, matching the direct integral. Areas use
+    // independent 128-bit accumulators so the timeavg cross-check against
+    // the direct replay integral is a real comparison, not a tautology.
     struct WatermarkSeries {
         // bucket index -> (resident peak bytes, committed peak bytes).
         std::map<uint64_t, std::pair<uint64_t, uint64_t>> bucket_peaks;
@@ -361,25 +372,15 @@ class MetricCollector {
         uint64_t committed_peak = 0;
         unsigned __int128 resident_area = 0;
         unsigned __int128 committed_area = 0;
-        // Same integral from the pre-existing direct delta loop, kept for
-        // the <=1% timeavg cross-check (A-class criterion).
+        // Resident-side integral from the pre-existing direct delta loop,
+        // kept for the <=1% timeavg cross-check (A-class criterion); the
+        // A-class check compares the resident side only.
         unsigned __int128 direct_resident_area = 0;
-        unsigned __int128 direct_committed_area = 0;
         uint64_t capacity_violations = 0;
         uint64_t sample_count = 0;
         bool capacity_known = false;
         int64_t capacity_bytes = 0;
         bool replayed = false;  // rank appeared in the delta replay loop
-    };
-
-    // Top-level ``microbenchmark`` manifest extension (doc sec.8): one point
-    // per ET/run, so a run's per-rank num_ops/byte totals over the point's
-    // active ranks are exactly that iteration's numerators.
-    struct MicrobenchPointSpec {
-        int64_t benchmark_point_id = -1;
-        int64_t tp_degree = 0;
-        std::vector<int> active_ranks;
-        nlohmann::json raw;  // full point descriptor, passed through
     };
 
     void load_manifest(const std::string& manifest_path);
@@ -452,6 +453,14 @@ class MetricCollector {
     uint64_t link_bucket_ns_ = 5000000;
     bool slo_sampling_provisional_ = true;
     bool slo_sampling_from_manifest_ = false;
+    // C2 (2026-09-28): requests_.size() as of the init record. The online
+    // driver registers CSV rows AFTER initialize(), so finalize's
+    // input_requests legitimately exceeds this in online mode; the summary
+    // echoes the init value, and outside online mode (where no dynamic
+    // registration path exists) a divergence is a consistency violation
+    // instead of a silent same-name-different-value pair across the two
+    // records.
+    std::optional<uint64_t> input_requests_at_initialize_;
 
     std::vector<RequestMetricState> requests_;
     std::unordered_map<int64_t, size_t> request_index_by_queue_index_;
@@ -459,7 +468,6 @@ class MetricCollector {
     // dynamic registration path (the online driver registers node/rank
     // anchors by request_id, which is what the committed nodes carry).
     std::unordered_map<std::string, size_t> request_index_by_request_id_;
-    std::map<int64_t, IterationMetricState> iterations_;
     // Static ET runs keep the legacy in-memory history.  Online service runs
     // stream raw records to memory_anchor_spool_ and retain only the bounded
     // planner-action index below, so terminal-node count cannot grow RAM.
@@ -481,8 +489,6 @@ class MetricCollector {
     std::vector<nlohmann::json> planner_memory_peaks_;
     // queue_index -> observed stage boundaries (filled during finalize).
     std::unordered_map<int64_t, RequestBoundaryInfo> request_boundaries_;
-    // Present only for run_mode=microbenchmark manifests (doc sec.8).
-    std::optional<MicrobenchPointSpec> microbench_point_;
 
     // Doc sec.5.4: sparse per-rank lookup from node id to boundary events.
     std::unordered_map<int, std::unordered_map<uint64_t, std::vector<NodeMetricEvent>>>

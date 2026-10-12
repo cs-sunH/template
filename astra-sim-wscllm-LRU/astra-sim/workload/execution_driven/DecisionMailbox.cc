@@ -11,30 +11,45 @@ Implementation (方案 §4 步骤 1-6).
 
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <utility>
 
 namespace AstraSim {
 namespace ExecutionDriven {
 
-namespace {
-
-bool completed_nodes_exact_from_env() {
+bool parse_completed_nodes_exact_env(bool& exact_mode, std::string& error) {
+    exact_mode = false;
+    error.clear();
     const char* const mode = std::getenv("ASTRA_SIM_ONLINE_COMPLETED_NODES");
     if (mode == nullptr) {
-        return false;
-    }
-    if (std::strcmp(mode, "exact") == 0) {
         return true;
     }
-    throw std::runtime_error(
-        "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) or 'exact'");
+    if (std::strcmp(mode, "exact") == 0) {
+        exact_mode = true;
+        return true;
+    }
+    error = "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) or "
+            "'exact', got: " +
+            std::string(mode);
+    return false;
 }
 
-}  // namespace
-
-CompletedFactAccumulator::CompletedFactAccumulator()
-    : exact_mode_(completed_nodes_exact_from_env()) {}
+CompletedFactAccumulator::CompletedFactAccumulator() {
+    // Backstop only: main_online.cc runs the same no-throw parse BEFORE the
+    // driver context (and this accumulator) exists and exits through the
+    // standard [Error] + exit(1) path on an invalid value, so this arm is
+    // unreachable on the production path. It stays fail-closed for any
+    // embedding that skips that pre-parse: the accumulator's constructor
+    // used to throw here, which escaped as a bare std::terminate (the stack
+    // construction sits outside every try block) and lost the message.
+    std::string error;
+    if (!parse_completed_nodes_exact_env(exact_mode_, error)) {
+        std::cerr << "[Error] (execution_driven/decision_mailbox) " << error
+                  << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+}
 
 void CompletedFactAccumulator::record(
     const int rank, const uint64_t node_id, const char* request_id,

@@ -25,8 +25,10 @@ kv_actions / future_alarms keep the ARRAY ORDER (the Python emission order).
 Store-id assignment order, issue order, Kahn inputs and anchor first/last
 selection all derive from it -- the parser NEVER sorts, dedups or filters
 these vectors. Watch members keep the JSON object key order (nlohmann
-objects iterate keys ascending, i.e. the decimal rank-string sort the
-producer emitted). Watch statuses are stored in raw array order with
+objects iterate keys ascending -- LEXICOGRAPHIC string order, i.e. the
+rank-string sort the producer emitted; with mixed digit widths such as
+"2" vs "10" that is NOT numeric rank order. R6-V3 port: every current
+consumer set-ifies the members, so no behavior depends on the key order). Watch statuses are stored in raw array order with
 duplicates preserved (<= 2 distinct values exist; consumers build the same
 std::set they built from the DOM).
 
@@ -101,6 +103,7 @@ other bridge protocol violation):
 
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
+#include "astra-sim/workload/execution_driven/PipelineDescriptor.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 
 namespace AstraSim {
@@ -201,10 +204,17 @@ struct ParsedGraphBatch {
     std::vector<ParsedAssignment> assignments;  // array order (counted)
     std::vector<ParsedKvAction> kv_actions;     // array order (counted)
     std::vector<ParsedAlarm> future_alarms;     // array order
+    std::vector<std::shared_ptr<const PipelineDescriptor>>
+        pipeline_descriptors;                   // array order, immutable
+    std::shared_ptr<const PipelineKernelContract> kernel_contract;
     std::vector<int> touched_ranks;             // empty when absent
     bool has_touched_ranks = false;
     std::string error;  // non-empty => decision failure (bridge aborts)
 };
+
+/// Single bridge/GraphBatch wire version shared by the file bridge and the
+/// strict typed parser.
+inline constexpr int kGraphBatchSchemaVersion = 2;
 
 /// Parse one response DOM into the typed batch. num_ranks >= 0 enables the
 /// rank-domain checks (N3/E2/W3/T8); -1 skips them (legacy fixtures).

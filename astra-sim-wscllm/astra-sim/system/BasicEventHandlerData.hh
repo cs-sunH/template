@@ -13,6 +13,9 @@ namespace AstraSim {
 
 class BasicEventHandlerData : public CallData {
   public:
+    // Also serves as the implicit default constructor of stat/data payloads
+    // inheriting the (sys_id, event) pair without using it, so both members
+    // must come out initialized.
     BasicEventHandlerData();
     BasicEventHandlerData(int sys_id, EventType event);
 

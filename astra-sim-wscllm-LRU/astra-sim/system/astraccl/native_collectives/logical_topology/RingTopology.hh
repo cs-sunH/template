@@ -43,6 +43,10 @@ class RingTopology : public BasicLogicalTopology {
     int index_in_ring;
     Dimension dimension;
 
+    // Fails closed (throws) when node_id is unknown instead of letting the
+    // map's operator[] default-insert a wrong mapping.
+    int checked_index(int node_id) const;
+
     virtual int get_receiver_homogeneous(int node_id,
                                          Direction direction,
                                          int offset);

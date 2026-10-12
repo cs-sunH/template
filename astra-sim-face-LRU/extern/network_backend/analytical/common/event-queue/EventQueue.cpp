@@ -39,8 +39,15 @@ bool EventQueue::has_deferred_work() const noexcept {
 }
 
 void EventQueue::proceed() noexcept {
-    // to proceed, next event should exist
-    assert(!finished());
+    // to proceed, next event should exist. NDEBUG-unrelated fail-closed
+    // (same convention as the guards below): proceeding on an empty queue
+    // would dereference end() in a Release build.
+    if (finished()) {
+        std::cerr << "[Error] (network/analytical) proceed() called on an "
+                     "empty event queue"
+                  << std::endl;
+        std::exit(-1);
+    }
 
     // proceed to the next event time
     auto current_event_list_it = event_queue.begin();
@@ -124,12 +131,23 @@ void EventQueue::schedule_event_deferred(const Callback callback, const Callback
 void EventQueue::schedule_event(const EventTime event_time,
                                 const Callback callback,
                                 const CallbackArg callback_arg) noexcept {
-    // time should be at least larger than current time. Fail closed in
-    // every build type (the former assert is compiled out of Release).
-    if (event_time < current_time) {
+    // A strictly-future time is required unless we are inside the invoke
+    // pass, where a same-tick event merges into the EventList currently
+    // being invoked (EventList::invoke_events observes appends). Fail
+    // closed in every build type (the former assert is compiled out of
+    // Release): a same-tick schedule from a tick-end/deferred/out-of-queue
+    // context would try_emplace a bucket at current_time that no proceed()
+    // can ever dispatch (strict-increase guard in proceed()) -- poisoning
+    // the whole queue. Same-tick work from those contexts MUST use
+    // schedule_event_deferred() instead. (Two-part guard: past events are
+    // rejected even inside the invoke pass.)
+    if (event_time < current_time ||
+        (event_time == current_time && !in_invoke_)) {
         std::cerr << "[Error] (network/analytical) schedule_event time "
-                  << event_time << " is earlier than current_time "
-                  << current_time << std::endl;
+                  << event_time << " is not strictly later than current_time "
+                  << current_time << " (same-tick outside the invoke context "
+                  << "is forbidden; use schedule_event_deferred)"
+                  << std::endl;
         std::exit(-1);
     }
 
@@ -143,11 +161,13 @@ EventHandle EventQueue::schedule_event_cancellable(
     const CallbackArg callback_arg,
     const EventCancellationCallback cancellation_callback) noexcept {
     // Fail closed in every build type (the former assert is compiled out
-    // of Release).
-    if (event_time < current_time) {
+    // of Release). Same two-part same-tick rule as schedule_event above.
+    if (event_time < current_time ||
+        (event_time == current_time && !in_invoke_)) {
         std::cerr << "[Error] (network/analytical) "
                   << "schedule_event_cancellable time " << event_time
-                  << " is earlier than current_time " << current_time
+                  << " is not strictly later than current_time " << current_time
+                  << " (same-tick outside the invoke context is forbidden)"
                   << std::endl;
         std::exit(-1);
     }

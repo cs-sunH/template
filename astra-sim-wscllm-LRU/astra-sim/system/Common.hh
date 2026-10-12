@@ -13,31 +13,39 @@ namespace AstraSim {
 
 typedef unsigned long long Tick;
 
-constexpr uint64_t CLOCK_PERIOD = 1;           // 1ns
-constexpr uint64_t FREQ = 1000 * 1000 * 1000;  // 1GHz
+constexpr uint64_t CLOCK_PERIOD = 1;  // 1ns
 
-enum time_type_e { SE = 0, MS, US, NS, FS };
+// Only NS survives: every other upstream time unit (SE/MS/US/FS) had zero
+// users in this repository.
+enum time_type_e { NS = 0 };
 
-enum req_type_e { UINT8 = 0, BFLOAT16, FP32 };
+// Every communication request in the simulator carries UINT8 payload
+// granularity; the wider dtypes (BFLOAT16/FP32) had zero users after the
+// type-typed removal in sh_test_mesh.
+enum req_type_e { UINT8 = 0 };
 
 struct timespec_t {
     time_type_e time_res;
     long double time_val;
 };
 
+// Every field carries an NSDMI: several producers fill only a subset of the
+// fields before the request is copied or read (Workload p2p endpoints,
+// CustomAlgorithm, the Sys rendezvous handshake copies), so a default would
+// otherwise propagate indeterminate values.
 struct sim_request {
-    uint32_t srcRank;
-    uint32_t dstRank;
-    uint32_t tag;
-    req_type_e reqType;
-    uint64_t reqCount;
-    uint32_t vnet;
-    uint32_t layerNum;
+    uint32_t srcRank = 0;
+    uint32_t dstRank = 0;
+    uint32_t tag = 0;
+    req_type_e reqType = UINT8;
+    uint32_t vnet = 0;
 };
 
+// Empty mixin base of the backend-facing handler data types (Rendezvous*
+// Data, WorkloadLayerHandlerData). The former dead `timestamp` field was
+// removed with the sim_request NSDMI change.
 class MetaData {
   public:
-    timespec_t timestamp;
 };
 
 enum class ComType {
@@ -45,13 +53,10 @@ enum class ComType {
     Reduce_Scatter,
     All_Gather,
     All_Reduce,
-    All_to_All,
-    All_Reduce_All_to_All
+    All_to_All
 };
 
 enum class CollectiveOptimization { Baseline = 0, LocalBWAware };
-
-enum class CollectiveBarrier { Blocking = 0, Non_Blocking };
 
 enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT };
 
@@ -61,21 +66,8 @@ enum class InterDimensionScheduling {
     OfflineGreedy
 };
 
-enum class InjectionPolicy {
-    Infinite = 0,
-    Aggressive,
-    SemiAggressive,
-    ExtraAggressive,
-    Normal
-};
-
-enum class PacketRouting { Hardware = 0, Software };
-
-enum class BusType { Both = 0, Shared, Mem };
-
 enum class StreamState {
     Created = 0,
-    Transferring,
     Ready,
     Executing,
     Zombie,

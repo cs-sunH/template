@@ -64,14 +64,6 @@ const std::vector<std::shared_ptr<const Link>>& Topology::get_directed_links() c
     return directed_links;
 }
 
-int Topology::get_devices_count() const noexcept {
-    assert(devices_count > 0);
-    assert(npus_count > 0);
-    assert(devices_count >= npus_count);
-
-    return devices_count;
-}
-
 int Topology::get_npus_count() const noexcept {
     assert(devices_count > 0);
     assert(npus_count > 0);

@@ -59,6 +59,7 @@ is green).
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include <astra-network-analytical/common/EventQueue.h>
 
 using namespace AstraSim::ExecutionDriven;
@@ -77,23 +78,62 @@ void expect(bool cond, const std::string& what) {
 
 // 30 single-turn sessions (P0 fix: one turn-0 row per session, blocks
 // contiguous -- the structure validation fail-closes otherwise); arrivals
-// in 3 batches of 10 (tick 1000/2000/3000). high_water=10 is advisory
-// now: the calendar reader indexes the whole file and queues every turn-0
-// Submit during the FIRST pump, so the vacuum window is "queued but not
-// yet drained", not "read window boundary".
-const char* kCsvHeader =
-    "session_id,turn_index,request_id,prefill_length,decode_length,"
-    "session_arrival_time_ns,inter_request_interval_ns";
+// in 3 batches of 10 (tick 1000/2000/3000). The calendar reader indexes
+// the whole file and queues every turn-0 Submit during the FIRST pump
+// (the A.4-removed row-window knob no longer exists), so the vacuum
+// window is "queued but not yet drained", not "read window boundary".
+//
+// Schema note (2026-09-28): this fixture CSV carries 7 columns -- the
+// WindowedTraceReader row parser getline's exactly these first 7
+// comma-separated fields and never reads a trailing 8th, so the optional
+// "description" column of the documented 8-column materializer schema
+// (WindowedTraceReader.hh constructor @param) is simply absent here;
+// 7-column input is accepted as-is.
+// (2026-10-01) the legacy 7-column shape is derived from the reader's
+// canonical kRequestQueueCsvHeader constant (minus the trailing description
+// column, exactly how the reader itself derives its legacy shape), so the
+// two documented header schemas cannot drift apart.
+const std::string kCsvHeader = [] {
+    const std::string canonical = kRequestQueueCsvHeader;
+    return canonical.substr(0, canonical.rfind(','));
+}();
 
 std::string make_csv(const std::string& path) {
-    std::ofstream out(path);
-    out << kCsvHeader << "\n";
+    // P1 fix (ported to this repo 2026-10-07): the provenance gate is
+    // fail-closed on an absent sidecar, so this fixture ships its matching
+    // record. The frozen 8-column FixtureProvenance::write_queue_fixture
+    // cannot be used verbatim (its header is the canonical 8 columns while
+    // this fixture deliberately keeps the documented legacy 7-column
+    // shape, WindowedTraceReader.cc header gate); the sidecar below is
+    // computed over the exact bytes written, with the same FNV-1a 64 the
+    // shared helper and the Python materializer use.
+    std::string bytes = kCsvHeader + "\n";
     for (int row = 0; row < 30; ++row) {
         const uint64_t arrival =
             1000 + static_cast<uint64_t>(row / 10) * 1000;  // 3 batches
-        out << "s" << row << ",0,req_" << row << ",100,10," << arrival
-            << ",0\n";
+        bytes += "s" + std::to_string(row) + ",0,req_" +
+                 std::to_string(row) + ",100,10," +
+                 std::to_string(arrival) + ",0\n";
     }
+    {
+        std::ofstream out(path, std::ios::binary);
+        out << bytes;
+    }
+    // Fixed-shape fixture stats: 30 rows, 30 distinct sessions, all
+    // turn-0; arrivals 1000/2000/3000 in 10-row batches -- never
+    // file-adjacent-decreasing (an equal predecessor is not an inversion).
+    std::ofstream sidecar(path + ".provenance.json", std::ios::binary);
+    sidecar << "{\"schema\":1,\"generator_version\":\"test-fixture\","
+            << "\"csv_sha256\":\"test-fixture (human audit only)\","
+            << "\"csv_fnv1a64\":"
+            << FixtureProvenance::fnv1a64_bytes(14695981039346656037ULL,
+                                                bytes)
+            << ",\"csv_bytes\":" << bytes.size()
+            << ",\"data_rows\":30,\"sessions\":30,\"turn0_count\":30,"
+            << "\"turn0_arrival_min_ns\":1000,"
+            << "\"turn0_arrival_max_ns\":3000,"
+            << "\"turn0_adjacent_inversions\":0,"
+            << "\"session_blocks_contiguous\":true}\n";
     return path;
 }
 
@@ -127,9 +167,12 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
     });
     if (!fixed_order) {
         // Historical behavior: the service could be closed while producers
-        // still queued work. Do not use mark_input_closed() here: its new
-        // linearized producer gate is precisely what this regression fixture
-        // must bypass in order to model the old defect.
+        // still queued work. Do not use RequestIngress::mark_input_closed()
+        // here: its linearized producer gate (the ingress producer gate,
+        // RequestIngress.hh) is precisely what this regression fixture must
+        // bypass in order to model the old defect. The
+        // ServiceCoordinator::mark_input_closed() call below closes only the
+        // coordinator, which is the historical shape being reproduced.
         svc.mark_input_closed();
     }
     reader.pump();  // initial pump before the loop (main_online.cc): the

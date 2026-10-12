@@ -19,8 +19,7 @@ class BinaryTree : public BasicLogicalTopology {
     enum class TreeType { RootMax, RootMin };
     enum class Type { Leaf, Root, Intermediate };
 
-    BinaryTree(int id,
-               TreeType tree_type,
+    BinaryTree(TreeType tree_type,
                int total_tree_nodes,
                int start,
                int stride);
@@ -39,7 +38,6 @@ class BinaryTree : public BasicLogicalTopology {
 
     int total_tree_nodes;
     int start;
-    TreeType tree_type;
     int stride;
     Node* tree;
     std::map<int, Node*> node_list;

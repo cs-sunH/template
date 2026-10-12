@@ -152,11 +152,12 @@ int main() {
         FILE* f = std::fopen(system_path.c_str(), "w");
         // Official-template fixture shape (阶段5夹具避雷): scheduling-policy /
         // preferred-dataset-splits / collective-optimization present, all four
-        // *-implementation keys = ["ring","ring"] (2 topology dims). With any
-        // *-implementation key missing, Sys's CONSTRUCTOR builds its per-ComType
-        // logical topologies (Sys.cc:266-272) from an empty native-impl list and
-        // GeneralComplexTopology throws "requires at least one collective
-        // implementation" before this test's own assertions can run.
+        // *-implementation keys = ["ring","ring"] (2 topology dims). The Sys
+        // constructor's logical_topologies build-out tolerates a missing key
+        // (GeneralComplexTopology accepts an empty native-impl list as a dummy
+        // topology), but the first use of that collective type would then fail
+        // inside CollectiveImplLookup::get_collective_impl; this test issues
+        // comm traffic, so every key stays populated.
         std::fputs("{\n"
                    "  \"scheduling-policy\": \"LIFO\",\n"
                    "  \"preferred-dataset-splits\": 6,\n"
@@ -255,11 +256,11 @@ int main() {
                          ExecutionDriven::NodeStoreGraphSource* source,
                          ExecutionDriven::OnlineNode node) {
         source->store().add_node(std::move(node));
-        for (const auto& nv : source->dep_free_nodes()) {
+        source->for_each_dep_free([&](const ExecutionDriven::NodeView& nv) {
             if (sys->workload->hw_resource->is_available(nv)) {
                 sys->workload->issue(nv);
             }
-        }
+        });
     };
 
     constexpr uint64_t kB = 1000000;  // 1 MB; 1000 B/ns -> 1000 ns exclusive

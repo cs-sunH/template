@@ -9,13 +9,12 @@ Implementation (方案 §4 步骤 1-4).
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 #include <algorithm>
-#include <cassert>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <map>
-#include <stdexcept>
-
-#include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
+#include <utility>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -28,11 +27,31 @@ uint64_t NodeStore::add_node(OnlineNode node) {
     if (node.global_id == 0) {
         node.global_id = next_id_++;
     } else {
+        // R1-A-L4（2026-10-01 补齐）：next_id_ = global_id + 1 在
+        // global_id == UINT64_MAX 处回绕到 0，静默重置 id 空间。只有
+        // 合成调用方能触达该哨兵值——fail-closed 而不是腐蚀 id 流。
+        if (node.global_id == std::numeric_limits<uint64_t>::max()) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/nodestore) add_node: "
+                         "global_id UINT64_MAX would overflow next_id_ "
+                         "(fail-closed\n");
+            std::abort();
+        }
         next_id_ = std::max(next_id_, node.global_id + 1);
     }
     const auto [it, inserted] =
         nodes_.emplace(node.global_id, NodeRecord{std::move(node)});
-    assert(inserted);
+    // Unconditional fail-closed (not NDEBUG-stripped): a duplicate id must
+    // never silently drop the new node AND re-arm the existing record into
+    // free_ids_ (an issued node would re-enter the issue set). Same contract
+    // as RequestIngress::register_queue_index's duplicate handling.
+    if (!inserted) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/nodestore) duplicate node "
+                     "id: %llu\n",
+                     static_cast<unsigned long long>(it->first));
+        std::abort();
+    }
     if (it->second.unresolved_parents == 0) {
         free_ids_.insert(node.global_id);
     }
@@ -41,8 +60,8 @@ uint64_t NodeStore::add_node(OnlineNode node) {
 
 void NodeStore::add_dependency(uint64_t parent, uint64_t child,
                                DepKind /*kind*/) {
-    // First version: all kinds resolve identically (precedence). The kind is
-    // stored per edge for the later fence upgrade (步骤 1-5 note forbids
+    // First version: every kind resolves identically as plain precedence and
+    // the kind is deliberately NOT stored per edge (the 步骤 1-5 note forbids
     // building the general fence early). Dead-parent edges are tolerated:
     // a parent that already finished no longer blocks the child.
     auto child_it = nodes_.find(child);
@@ -53,6 +72,25 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
     if (parent_it == nodes_.end() || parent_it->second.finished) {
         return;  // already-finished parent does not block
     }
+    // S5 守卫（2026-10-01 补齐）：落在已 issued/finished 子节点（或自环）
+    // 上的迟到边曾使 free 集与 issue/finish 位失同步——该边抬高
+    // unresolved_parents 而子节点已不在 free 集里，父节点随后 finish 又
+    // 把已 issued 的子节点重新插回 free_ids_，for_each_dep_free 会把该
+    // 节点第二次交给 Workload::issue（double terminal -> fail-closed
+    // abort）。提交器的强制 preflight 只给本批新鲜节点（构造上未
+    // issued）连边，官方路径永不触发；这么做的调用方是缺陷——点名并
+    // 终止（与 add_node 的重复 id 守卫同一 fail-closed 风格）。
+    if (child_it->second.issued || child_it->second.finished ||
+        parent == child) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/nodestore) add_dependency: "
+                     "late edge onto issued/finished node %llu (parent "
+                     "%llu) -- free-set accounting would corrupt "
+                     "(fail-closed)\n",
+                     static_cast<unsigned long long>(child),
+                     static_cast<unsigned long long>(parent));
+        std::abort();
+    }
     // A child added with no parents is free; recording a real parent takes it
     // out of the free set again.
     child_it->second.unresolved_parents++;
@@ -62,12 +100,6 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
     // M2 node GC: count the live child on the parent (the child of a
     // validated edge is always a fresh, unfinished batch node).
     ++parent_it->second.unfinished_children;
-}
-
-std::vector<uint64_t> NodeStore::resolve_free_nodes() const {
-    std::vector<uint64_t> result;
-    fill_free_node_snapshot(result);
-    return result;
 }
 
 void NodeStore::fill_free_node_snapshot(std::vector<uint64_t>& out) const {
@@ -95,7 +127,38 @@ void NodeStore::finish_node(uint64_t node_id) {
         if (child_it == nodes_.end()) {
             continue;  // M2: child already collected (it finished earlier)
         }
-        assert(child_it->second.unresolved_parents > 0);
+        // Static-DAG contract: a child still blocked by this parent can
+        // never have been ISSUED from the free set (issue requires
+        // unresolved_parents == 0, i.e. every parent finished first), so
+        // issued == 1 here means the free-set discipline itself broke.
+        // F1-CPP C1-5 同款移植(2026-09-30):原来是 NDEBUG 剥离的 assert;
+        // Release 构建下被破坏的不变量会让 uint32 计数器静默回绕而不是
+        // 大声失败(永不释放的子节点把 run 楔死进看门狗,永不 GC 的父
+        // 节点泄漏 RSS),零诊断。改用与 add_node 的 duplicate-id 门(及
+        // ServiceCoordinator/HardwareResource)同款的无条件 fail-closed
+        // 通道,点名节点 id 与越界计数。finished == 1 且 issued == 0 是
+        // 这里的合法形态(Workload::skip_invalid 会在父节点仍在跑时终结
+        // 从未执行的 invalid/metadata/零张量节点,原 Release 行为照常
+        // 释放其父边)——原样保留,只把被剥离的 assert 换成无条件守卫。
+        if (child_it->second.issued) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/nodestore) finish_node "
+                         "releases child %llu of node %llu while it is "
+                         "already issued=1 (finished=%d)\n",
+                         static_cast<unsigned long long>(child),
+                         static_cast<unsigned long long>(node_id),
+                         child_it->second.finished ? 1 : 0);
+            std::abort();
+        }
+        if (child_it->second.unresolved_parents == 0) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/nodestore) finish_node "
+                         "releases child %llu of node %llu with "
+                         "unresolved_parents == 0\n",
+                         static_cast<unsigned long long>(child),
+                         static_cast<unsigned long long>(node_id));
+            std::abort();
+        }
         if (--child_it->second.unresolved_parents == 0) {
             free_ids_.insert(child);
         }
@@ -118,20 +181,22 @@ void NodeStore::finish_node(uint64_t node_id) {
         if (parent_it == nodes_.end()) {
             continue;  // M2: parent already collected
         }
-        assert(parent_it->second.unfinished_children > 0);
+        // F1-CPP C1-5 同款移植(2026-09-30):原是 NDEBUG 剥离的 assert
+        // (见上方 child 侧注释);同款无条件 fail-closed 转换。
+        if (parent_it->second.unfinished_children == 0) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/nodestore) finish_node "
+                         "decrements parent %llu of node %llu with "
+                         "unfinished_children == 0\n",
+                         static_cast<unsigned long long>(parent),
+                         static_cast<unsigned long long>(node_id));
+            std::abort();
+        }
         if (--parent_it->second.unfinished_children == 0 &&
             parent_it->second.finished && gc_enabled_) {
             gc_fifo_.push_back(parent);
         }
     }
-}
-
-std::optional<OnlineNode> NodeStore::node(uint64_t node_id) const {
-    const auto it = nodes_.find(node_id);
-    if (it == nodes_.end()) {
-        return std::nullopt;
-    }
-    return it->second.node;
 }
 
 const OnlineNode* NodeStore::node_ptr(uint64_t node_id) const {
@@ -167,15 +232,6 @@ bool NodeStore::mark_terminal_observed(uint64_t node_id) {
     it->second.terminal_observed = true;
     return true;
 }
-
-size_t NodeStore::pending_count() const {
-    return std::count_if(nodes_.begin(), nodes_.end(),
-                         [](const auto& entry) {
-                             return !entry.second.finished;
-                         });
-}
-
-bool NodeStore::empty() const { return nodes_.empty(); }
 
 void NodeStore::set_gc_enabled(bool enabled) {
     // M2 node GC: the switch is set once by the committer constructor from
@@ -239,8 +295,9 @@ void NodeStore::collect_garbage() {
 }
 
 bool NodeStore::erased(uint64_t node_id) const {
-    // M2: absent == collected for committed store ids (see header). Used by
-    // the committer's store_ids_ prune pass only.
+    // M2: absent == collected for committed store ids (see header). Consumed
+    // only by the committer's liveness preflight and its commit-tail affine /
+    // anchor resolution (GraphBatchCommitter.cc).
     return nodes_.find(node_id) == nodes_.end();
 }
 
@@ -332,17 +389,6 @@ RankInjectedSummary NodeStore::injected_unfinished_summary(int rank) const {
 // NodeStoreGraphSource
 // ---------------------------------------------------------------------------
 
-std::vector<NodeView> NodeStoreGraphSource::dep_free_nodes() {
-    std::vector<NodeView> views;
-    for (const auto node_id : store_.resolve_free_nodes()) {
-        const auto node = store_.node(node_id);
-        if (node.has_value()) {
-            views.push_back(*node);
-        }
-    }
-    return views;
-}
-
 void NodeStoreGraphSource::for_each_dep_free(
     const std::function<void(const NodeView&)>& consume) {
     // The reusable vector is still a snapshot, so consume() may safely mutate
@@ -357,12 +403,29 @@ void NodeStoreGraphSource::for_each_dep_free(
     }
 }
 
-void NodeStoreGraphSource::finish_node(uint64_t node_id) {
-    store_.finish_node(node_id);
+void NodeStore::for_each_unfinished(const std::function<void(
+                                          const OnlineNode&, uint32_t, bool)>&
+                                          consume) const {
+    // DeadEnd-census diagnostic only (2026-10-11): ascending-id walk over
+    // the retained records; unfinished nodes only. Read-only.
+    std::vector<const NodeRecord*> pending;
+    pending.reserve(nodes_.size());
+    for (const auto& entry : nodes_) {
+        if (!entry.second.finished) {
+            pending.push_back(&entry.second);
+        }
+    }
+    std::sort(pending.begin(), pending.end(),
+              [](const NodeRecord* lhs, const NodeRecord* rhs) {
+                  return lhs->node.global_id < rhs->node.global_id;
+              });
+    for (const NodeRecord* record : pending) {
+        consume(record->node, record->unresolved_parents, record->issued);
+    }
 }
 
-std::optional<NodeView> NodeStoreGraphSource::lookup(uint64_t node_id) {
-    return store_.node(node_id);
+void NodeStoreGraphSource::finish_node(uint64_t node_id) {
+    store_.finish_node(node_id);
 }
 
 const NodeView* NodeStoreGraphSource::lookup_ptr(uint64_t node_id) {
@@ -380,177 +443,6 @@ bool NodeStoreGraphSource::mark_terminal_observed(uint64_t node_id) {
 
 void NodeStoreGraphSource::take_node(uint64_t node_id) {
     store_.mark_issued(node_id);
-}
-
-// ---------------------------------------------------------------------------
-// ETFeederGraphSource
-// ---------------------------------------------------------------------------
-
-ETFeederGraphSource::ETFeederGraphSource(
-    Chakra::FeederV3::ETFeeder* const et_feeder, const int rank)
-    : et_feeder_(et_feeder), rank_(rank) {
-    assert(et_feeder_ != nullptr);
-}
-
-NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
-    const auto node = et_feeder_->lookupNode(node_id);
-    assert(node != nullptr);
-    NodeView nv;
-    nv.global_id = node->id();
-    nv.rank = rank_;
-    nv.node_type = static_cast<uint64_t>(node->type());
-    nv.kind = static_cast<NodeKind>(nv.node_type);
-    nv.name = node->name();
-    nv.is_cpu_op = node->is_cpu_op();
-    nv.is_timer_op = node->get_attr<bool>("is_timer_op", false);
-    nv.inputs_values = node->get_inputs_values();
-    switch (nv.kind) {
-        case NodeKind::Compute:
-            // Strict attrs are read eagerly for every free node, but the
-            // baseline read them lazily only on the dispatch path that
-            // consumes them (e.g. CPU comp nodes replay and never carry
-            // num_ops). has_attr guards make the eager read byte-exact with
-            // the lazy strict read: whenever the baseline would have read
-            // the attr, it exists and the same value is produced.
-            if (node->has_attr("num_ops")) {
-                nv.compute.num_ops = node->num_ops<uint64_t>();
-            }
-            if (node->has_attr("tensor_size")) {
-                nv.compute.tensor_size = node->tensor_size<uint64_t>();
-            }
-            nv.compute.runtime_ns = node->runtime() * 1000;  // micros -> ns
-            if (node->has_attr("remote_weight_bytes")) {
-                nv.compute.has_remote_weight_bytes = true;
-                nv.compute.remote_weight_bytes =
-                    node->remote_weight_bytes<uint64_t>();
-            }
-            break;
-        case NodeKind::MemLoad:
-        case NodeKind::MemStore:
-            // issue_remote_mem consumes tensor_size (strict in the baseline).
-            if (node->has_attr("tensor_size")) {
-                nv.compute.tensor_size = node->tensor_size<uint64_t>();
-            }
-            // sh_2.0: the is_local_hbm_kv_restore attribute routes the node
-            // to the local HBM restore DMA path (HardwareResource hbm_dma).
-            nv.is_local_hbm_kv_restore =
-                node->get_attr<bool>("is_local_hbm_kv_restore", false);
-            // sh_2.0 N-way HBM contention: pool endpoint charging mode
-            // (0/absent = none, 1 = local HBM read, 2 = local HBM write).
-            nv.hbm_access_mode = static_cast<int>(
-                node->get_attr<uint64_t>("hbm-access-mode", uint64_t(0)));
-            break;
-        case NodeKind::CommSend:
-        case NodeKind::CommRecv:
-            // Baseline defaults preserved: comm_src/dst default to the local
-            // rank (this rank == adapter rank_), tag defaults 0; size was
-            // strict at consumption time, guard keeps eager reads identical.
-            if (node->has_attr("comm_size")) {
-                nv.comm.bytes = node->comm_size<uint64_t>();
-            }
-            if (node->has_attr("comm_src")) {
-                nv.comm.src = static_cast<int>(node->comm_src<uint32_t>(rank_));
-            } else {
-                nv.comm.src = rank_;
-            }
-            if (node->has_attr("comm_dst")) {
-                nv.comm.dst = static_cast<int>(node->comm_dst<uint32_t>(rank_));
-            } else {
-                nv.comm.dst = rank_;
-            }
-            if (node->has_attr("comm_tag")) {
-                nv.comm.tag = node->comm_tag<uint32_t>();
-            }
-            // hbm-charge (bool, default true): explicit opt-out of the
-            // local-HBM endpoint charge under hbm-bandwidth-contention
-            // (same get_attr<bool> pattern as is_timer_op above).
-            nv.comm.hbm_charge = node->get_attr<bool>("hbm-charge", true);
-            break;
-        case NodeKind::CommCollective:
-            if (node->has_attr("comm_type")) {
-                nv.coll.comm_type = node->comm_type<uint64_t>();
-            }
-            if (node->has_attr("comm_size")) {
-                nv.coll.bytes = node->comm_size<uint64_t>();
-            }
-            nv.coll.priority = node->comm_priority<uint32_t>();  // default 0u
-            nv.coll.pg_name = node->pg_name<std::string>("");    // default ""
-            // BROADCAST replay runtime (issue_coll_comm), micros -> ns
-            nv.compute.runtime_ns = node->runtime() * 1000;
-            if (node->has_attr("involved_dim")) {
-                const auto& attr = node->get_attr_msg("involved_dim");
-                if (attr.has_bool_list()) {
-                    const auto& bool_list = attr.bool_list();
-                    for (int i = 0; i < bool_list.values_size(); ++i) {
-                        nv.coll.involved_dim.push_back(bool_list.values(i));
-                    }
-                } else {
-                    // byte-exact legacy behavior (issue_coll_comm)
-                    std::cerr << "Expected bool_list in involved_dim but found"
-                                 " another type."
-                              << std::endl;
-                    std::exit(EXIT_FAILURE);
-                }
-            } else {
-                // legacy default: simulate 4 involved dimensions
-                for (int i = 0; i < 4; ++i) {
-                    nv.coll.involved_dim.push_back(true);
-                }
-            }
-            break;
-        default:
-            break;  // Invalid / Metadata / MemLoad / MemStore: no attrs read
-    }
-    return nv;
-}
-
-std::vector<NodeView> ETFeederGraphSource::dep_free_nodes() {
-    auto& resolver = et_feeder_->getDependancyResolver();
-    // Copy into a std::set (dedup + ascending order) -- byte-exact issue
-    // order of the pre-phase-1 issue_dep_free_nodes.
-    std::set<uint64_t> node_ids;
-    for (const auto node_id : resolver.get_dependancy_free_nodes()) {
-        node_ids.insert(node_id);
-    }
-    std::vector<NodeView> views;
-    views.reserve(node_ids.size());
-    for (const auto node_id : node_ids) {
-        views.push_back(view_of(node_id));
-    }
-    return views;
-}
-
-void ETFeederGraphSource::finish_node(uint64_t node_id) {
-    et_feeder_->getDependancyResolver().finish_node(node_id);
-}
-
-std::optional<NodeView> ETFeederGraphSource::lookup(uint64_t node_id) {
-    try {
-        return view_of(node_id);
-    } catch (const std::runtime_error&) {
-        // Legacy lookupNode semantics: a node id outside the index throws
-        // "not found in index" on first read; the optional contract turns
-        // that into a miss (byte-exact for every successful baseline, where
-        // lookups only ever hit).
-        return std::nullopt;
-    }
-}
-
-void ETFeederGraphSource::take_node(uint64_t node_id) {
-    et_feeder_->getDependancyResolver().take_node(node_id);
-}
-
-std::shared_ptr<Chakra::FeederV3::ETFeederNode> ETFeederGraphSource::et_node(
-    uint64_t node_id) {
-    // Same shape as the legacy et_feeder->lookupNode: never nullptr, throws
-    // only when the wrapper is dereferenced for an unknown id.
-    return et_feeder_->lookupNode(node_id);
-}
-
-bool ETFeederGraphSource::static_all_done() {
-    auto& resolver = et_feeder_->getDependancyResolver();
-    return resolver.get_dependancy_free_nodes().empty() &&
-           resolver.get_ongoing_nodes().empty();
 }
 
 }  // namespace ExecutionDriven

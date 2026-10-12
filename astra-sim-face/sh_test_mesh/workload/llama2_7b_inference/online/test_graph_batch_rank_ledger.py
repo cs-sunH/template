@@ -2,6 +2,7 @@
 """Focused regression for exact GraphBatch touched-rank accounting."""
 import os
 import sys
+import unittest
 from types import SimpleNamespace
 from unittest import mock
 
@@ -42,65 +43,70 @@ def _base_for(graph_batch):
     }
     scheduler._provisional_kv_actions = {}
     scheduler.digest_sink = None
-    scheduler._profile_batch = {"scanned_entries": 0, "full_scan_entries": 0}
+    # profile 行 schema = {delivery_sequence, tick, scanned_entries}
+    # (2026-09-26: full_scan_entries 死记账已从生产端删除;2026-09-29:
+    # profile_rows 死缓冲已删,无 sink 即不构建不驻留)。
+    scheduler._profile_batch = {"scanned_entries": 0}
     scheduler.profile_sink = None
-    scheduler.profile_rows = []
     return scheduler
 
 
-def test_collect_tracks_only_ranks_that_emitted_nodes():
-    """The private ledger is exact and records no edge-only/idle rank."""
-    config = SimpleNamespace(
-        npus_count=3,
-        remote_operand_loads=False,
-        inference_groups=(),
-        prefill_chunk_size=1,
-    )
-    builder = GraphBatchBuilder(config)
-    builder.begin_batch()
-    marker = builder._mark()
-    builder.builders[0].comp("rank_0", 1, 1)
-    builder.builders[2].comp("rank_2", 1, 1)
-    builder._collect(marker)
+class GraphBatchRankLedgerTests(unittest.TestCase):
+    def test_collect_tracks_only_ranks_that_emitted_nodes(self):
+        """The private ledger is exact and records no edge-only/idle rank."""
+        config = SimpleNamespace(
+            npus_count=3,
+            remote_operand_loads=False,
+            inference_groups=(),
+            prefill_chunk_size=1,
+        )
+        builder = GraphBatchBuilder(config)
+        builder.begin_batch()
+        marker = builder._mark()
+        builder.builders[0].comp("rank_0", 1, 1)
+        builder.builders[2].comp("rank_2", 1, 1)
+        builder._collect(marker)
 
-    assert builder.batch["_touched_ranks"] == {0, 2}
-    assert [node["rank"] for node in builder.batch["nodes"]] == [0, 2]
+        assert builder.batch["_touched_ranks"] == {0, 2}
+        assert [node["rank"] for node in builder.batch["nodes"]] == [0, 2]
+
+    def test_build_reuses_collected_rank_ledger_without_node_scan(self):
+        """Normal (digest-off) GraphBatch assembly never traverses nodes for ranks."""
+        nodes = _NoNodeIteration()
+        scheduler = _base_for({
+            "nodes": nodes,
+            "parent_edges": [],
+            "_touched_ranks": {2, 0},
+        })
+
+        batch = scheduler.build_graph_batch()
+
+        assert batch["touched_ranks"] == [0, 2]
+        assert nodes.iteration_count == 0
+
+    def test_digest_reuses_public_rank_metadata_without_second_node_scan(self):
+        """Digest serialization is the sole intended node walk when enabled."""
+        nodes = _NoNodeIteration()
+        scheduler = OnlineSchedulerBase.__new__(OnlineSchedulerBase)
+        scheduler._batch = {"tick": 123, "reasons": ["rank-ledger"]}
+        batch = {
+            "batch_id": 7,
+            "nodes": nodes,
+            "parent_edges": [],
+            "watches": [],
+            "future_alarms": [],
+            "touched_ranks": [0, 2],
+        }
+
+        # Stub the one required JSON serialization to expose any *additional*
+        # iteration that rank calculation would otherwise introduce.
+        with mock.patch.object(scheduler_base_module.json, "dumps",
+                               return_value="payload"):
+            digest = scheduler._digest_row(batch)
+
+        assert digest["ranks"] == [0, 2]
+        assert nodes.iteration_count == 0
 
 
-def test_build_reuses_collected_rank_ledger_without_node_scan():
-    """Normal (digest-off) GraphBatch assembly never traverses nodes for ranks."""
-    nodes = _NoNodeIteration()
-    scheduler = _base_for({
-        "nodes": nodes,
-        "parent_edges": [],
-        "_touched_ranks": {2, 0},
-    })
-
-    batch = scheduler.build_graph_batch()
-
-    assert batch["touched_ranks"] == [0, 2]
-    assert nodes.iteration_count == 0
-
-
-def test_digest_reuses_public_rank_metadata_without_second_node_scan():
-    """Digest serialization is the sole intended node walk when enabled."""
-    nodes = _NoNodeIteration()
-    scheduler = OnlineSchedulerBase.__new__(OnlineSchedulerBase)
-    scheduler._batch = {"tick": 123, "reasons": ["rank-ledger"]}
-    batch = {
-        "batch_id": 7,
-        "nodes": nodes,
-        "parent_edges": [],
-        "watches": [],
-        "future_alarms": [],
-        "touched_ranks": [0, 2],
-    }
-
-    # Stub the one required JSON serialization to expose any *additional*
-    # iteration that rank calculation would otherwise introduce.
-    with mock.patch.object(scheduler_base_module.json, "dumps",
-                           return_value="payload"):
-        digest = scheduler._digest_row(batch)
-
-    assert digest["ranks"] == [0, 2]
-    assert nodes.iteration_count == 0
+if __name__ == "__main__":
+    unittest.main()

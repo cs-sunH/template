@@ -24,6 +24,15 @@
 #   --scheduler），aimd 臂不显式设 SH_LINK_TELEMETRY——由 runner 置位、
 #   run_online_strategy.sh 消费追加 C++ 旗标（注入事实落 invocation.json
 #   的 link_telemetry_injected）。
+#   C7b（2026-09-27 修正轮）再扩 3 掩码臂 = 16 配置——mask_recompute /
+#   mask_copy_recompute / mask_remote_recompute（JOINT_ALLOWED_ACTIONS
+#   动作掩码预设，纯 env 臂；语法 = joint_config._parse_allowed_actions：
+#   逗号分隔 ALL_ACTIONS 子集、大小写敏感、禁空白）。掩码臂只设显式开关
+#   JOINT_SCHEDULER_MODE=load-first，**不设** JOINT_ABLATION_COMBO——
+#   预设与显式开关互斥（同值也算）fail-closed（审查报告掩码崩溃复现
+#   一节同款两行 env 组合）。全链路跑通依赖 C4 掩码/continuation 修复
+#   施工落地；修复前跑本矩阵三掩码臂预期 FAIL（P→D 边界缺继续基准），
+#   属记录性失败非脚本缺陷。
 # 已知边界：SIGKILL 不还原 trace_config 指针（不可捕获信号）；SIGINT
 #（Ctrl-C）在子进程前台期存在竞态窗口同样可能不还原——两态均以裸仓
 # 终检 clean_test_records.sh 兜底（四审-低4 补登）。
@@ -222,11 +231,34 @@ run_one "TJE_shadow_verify" JOINT_ABLATION_COMBO=TJE \
 run_one_runner "TJE_quota_static" --combo TJE --quota static
 run_one_runner "TJE_quota_aimd"   --combo TJE --quota aimd
 run_one_runner "TJE_face_static"  --scheduler face_static --quota static
+# C7b 三掩码臂（16 配置；纯 env 面 = run_one，仿 TJE_remote_off 风格）：
+# - mask_recompute：recompute-only 预设——JOINT_ALLOWED_ACTIONS=recompute
+#   + JOINT_SCHEDULER_MODE=load-first（joint_config docstring 臂预设①）；
+# - mask_copy_recompute：always-copy 预设——{copy,recompute} 掩码（臂
+#   预设②），同样 load-first；
+# - mask_remote_recompute：always-remote 预设——{remote-read,recompute}
+#   掩码（臂预设③），同样 load-first。
+# 掩码值语法照 _parse_allowed_actions：逗号分隔、无空格、全小写动作名
+# （ALL_ACTIONS = stay/recompute/copy/remote-read）。不设 combo env（与
+# JOINT_SCHEDULER_MODE 互斥 fail-closed）；category/layer 走显式缺省
+# （typed/adaptive，= 无 combo 时 parse_joint_config 缺省）。三臂依赖 C4
+# 掩码/continuation 修复（他人施工）——修复前预期 FAIL，矩阵整体退出码
+# 会如实反映（脚本不吞该失败）。
+run_one "mask_recompute" \
+  JOINT_ALLOWED_ACTIONS=recompute JOINT_SCHEDULER_MODE=load-first
+run_one "mask_copy_recompute" \
+  JOINT_ALLOWED_ACTIONS=copy,recompute JOINT_SCHEDULER_MODE=load-first
+run_one "mask_remote_recompute" \
+  JOINT_ALLOWED_ACTIONS=remote-read,recompute JOINT_SCHEDULER_MODE=load-first
 
 echo "[smoke-matrix] evidence root: ${EVIDENCE_ROOT}"
 echo "[smoke-matrix] summary:"
 rc_all=0
-for f in "${EVIDENCE_ROOT}"/combo_*/exit_code "${EVIDENCE_ROOT}"/TJE_*/exit_code; do
+for f in "${EVIDENCE_ROOT}"/combo_*/exit_code "${EVIDENCE_ROOT}"/TJE_*/exit_code \
+         "${EVIDENCE_ROOT}"/mask_*/exit_code; do
+  # G5.6：glob 无匹配时字面量落下，set -e 下 cat/basename 会中断汇总——
+  # 不存在的展开项直接跳过。
+  [ -e "${f}" ] || continue
   label=$(basename "$(dirname "${f}")")
   code=$(cat "${f}")
   printf '  %-22s exit=%s\n' "${label}" "${code}"

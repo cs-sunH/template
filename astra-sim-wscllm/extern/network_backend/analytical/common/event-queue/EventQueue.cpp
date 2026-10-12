@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/EventQueue.h"
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace NetworkAnalytical;
 
@@ -45,7 +47,22 @@ void EventQueue::proceed() noexcept {
     auto& current_event_list = current_event_list_it->second;
 
     // check the validity and update current time
-    assert(current_event_list.get_event_time() > current_time);
+    // Release-always fail-closed (cross-repo sync with the face backend,
+    // 2026-09-27): a same-tick schedule_event from the tick-end/deferred
+    // paths would insert an EventList at current_time and land here; a
+    // debug-only assert would let Release builds run on with silently
+    // corrupted time ordering. Same-tick events MUST go through
+    // schedule_event_deferred().
+    if (!(current_event_list.get_event_time() > current_time)) {
+        std::fprintf(stderr,
+                     "[EventQueue] strict-increase violated: next event at "
+                     "%llu but current time is %llu (same-tick events must go "
+                     "through schedule_event_deferred)\n",
+                     static_cast<unsigned long long>(
+                         current_event_list.get_event_time()),
+                     static_cast<unsigned long long>(current_time));
+        std::abort();
+    }
     current_time = current_event_list.get_event_time();
 
     // invoke events. in_invoke_ marks the only context in which a same-tick
@@ -66,7 +83,7 @@ void EventQueue::proceed() noexcept {
     // schedule_event(current_time, ...) issued from inside the callback (or
     // from the deferred drain below) would try_emplace a NEW EventList at
     // current_time, and the next proceed() would immediately trip the
-    // strict-increase assert at the top of this function (:31). Same-tick
+    // strict-increase assert at the top of this function. Same-tick
     // events MUST use schedule_event_deferred(); only future events may use
     // schedule_event. (If the callback were invoked before the erase, such an
     // event would instead be merged into the already-invoked current list by

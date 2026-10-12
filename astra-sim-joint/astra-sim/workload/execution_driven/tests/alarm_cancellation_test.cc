@@ -76,6 +76,20 @@ void expect_true(const bool cond, const char* const what) {
     }
 }
 
+// R4-NF1 port (2026-09-30, from the face repo): an expect_true failure
+// leaves via std::exit, skipping the run-end cleanup below; the config dir
+// is removed by an atexit handler instead, so a failing run leaves no /tmp
+// residue.
+static std::string g_config_dir_for_cleanup;
+
+static void cleanup_config_dir() {
+    if (!g_config_dir_for_cleanup.empty()) {
+        std::error_code ec;
+        std::filesystem::remove_all(g_config_dir_for_cleanup, ec);
+        g_config_dir_for_cleanup.clear();
+    }
+}
+
 // ---- test-local payload: delivered by the normal callback path (the
 // consumer owns it after Sys pops the event) or reclaimed exactly once by
 // the cancellation callback (Sys::cancel_event path) ----
@@ -150,7 +164,10 @@ const char* kRemoteMemoryJson = R"({
 
 void write_text(const std::string& path, const std::string& content) {
     std::ofstream out(path);
-    assert(out.is_open());
+    // NDEBUG-proof guard (2026-10-01 audit): this test's discipline forbids
+    // bare assert() -- Release builds strip it and the failure mode would
+    // become a confusing downstream symptom.
+    expect_true(out.is_open(), "fixture file opens for writing");
     out << content;
 }
 
@@ -467,12 +484,14 @@ void test_legacy_backend_fallback(const std::string& config_dir,
 
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    std::atexit(cleanup_config_dir);
     const std::string tmp_template = "/tmp/alarm_cancel_test_XXXXXX";
     std::vector<char> buffer(tmp_template.begin(), tmp_template.end());
     buffer.push_back('\0');
     const char* const made = mkdtemp(buffer.data());
-    assert(made != nullptr);
+    expect_true(made != nullptr, "fixture mkdtemp succeeds");
     const std::string config_dir(made);
+    g_config_dir_for_cleanup = config_dir;
     write_text(config_dir + "/system.json", kSystemJson);
     write_text(config_dir + "/network.yml", kNetworkYaml);
     write_text(config_dir + "/remote_memory.json", kRemoteMemoryJson);

@@ -15,9 +15,22 @@ project(Analytical)
 
 # Compilation target
 set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_aware)")
+# Fail closed on an illegal value: a bare if() over the legal names used to
+# configure successfully for any typo and produce zero targets -- the
+# breakage only surfaced as a missing binary at build time with no
+# diagnosis.
+if(NOT BUILDTARGET STREQUAL "all" AND NOT BUILDTARGET STREQUAL "congestion_aware")
+    message(FATAL_ERROR
+            "BUILDTARGET='${BUILDTARGET}' is not a legal value; supported: all, congestion_aware")
+endif()
 
-# Can be compiled into either library or executable
-option(NETWORK_BACKEND_BUILD_AS_LIBRARY "Build as a library" OFF)
+# Can be compiled into either library or executable. Library mode is the
+# default contract: the source globs below carry no main(), so the executable
+# branch cannot link standalone (historical congestion_aware/main.cc was
+# removed with the offline static pipeline). Consumers that need a binary
+# (the aggregate AstraSim build) add their own entry-point targets and link
+# the Analytical_Congestion_Aware library instead.
+option(NETWORK_BACKEND_BUILD_AS_LIBRARY "Build as a library" ON)
 
 # Focused regression fixture for the bounded, streaming link observer. Kept
 # opt-in so ordinary analytical builds retain their existing target graph.
@@ -41,14 +54,18 @@ if(NOT TARGET yaml-cpp)
     )
 endif()
 
-# Include src files to compile
+# Include src files to compile. CONFIGURE_DEPENDS: without it a newly added
+# source file is invisible until the next manual re-configure (the glob
+# result is cached and the build silently keeps using the stale file list).
 file(GLOB srcs_common
+        CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/common/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/common/event-queue/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/common/network-parser/*.cpp
 )
 
 file(GLOB srcs_congestion_aware
+        CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/network/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/fluid/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/topology/*.cpp
@@ -68,15 +85,12 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
                 ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
         )
     else ()
-        add_executable(Analytical_Congestion_Aware ${srcs_congestion_aware} ${srcs_common})
-
-        # Properties
-        set_target_properties(Analytical_Congestion_Aware
-                PROPERTIES
-                RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin/
-                LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/
-                ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/
-        )
+        # （2026-10-01 对齐）源 GLOB 不含任何 main()（历史
+        # congestion_aware/main.cc 已随离线静态管线删除），可执行分支必然
+        # 链接失败——与上方 option 注释一致，改在 configure 期显式报错，
+        # 而不是构建期报 "undefined reference to main" 的零诊断失败。
+        message(FATAL_ERROR
+                "NETWORK_BACKEND_BUILD_AS_LIBRARY=OFF (standalone executable) is not supported: the backend sources define no main(). Configure with -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON.")
     endif ()
 
     # Common properties

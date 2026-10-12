@@ -256,19 +256,16 @@ bool HalvingDoubling::ready() {
         return false;
     }
     MyPacket packet = packets.front();
-    sim_request snd_req;
-    snd_req.srcRank = id;
-    snd_req.dstRank = packet.preferred_dest;
-    snd_req.tag = stream->stream_id;
-    snd_req.reqType = UINT8;
-    snd_req.vnet = this->stream->current_queue_id;
+    // sim_request fields are write-only in this tree (face-LRU audit
+    // 2026-09-29 mirrored to joint); declarations stay for the front-end
+    // virtual interface.
+    sim_request snd_req{};
     stream->owner->front_end_sim_send(
         0, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_dest,
         stream->stream_id, &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE,
         &Sys::handleEvent,
         nullptr);  // stream_id+(packet.preferred_dest*50)
-    sim_request rcv_req;
-    rcv_req.vnet = this->stream->current_queue_id;
+    sim_request rcv_req{};
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
         stream, stream->owner->id, EventType::PacketReceived,
         packet.preferred_vnet);

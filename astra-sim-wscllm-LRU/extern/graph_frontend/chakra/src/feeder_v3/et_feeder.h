@@ -32,7 +32,7 @@ class ETFeeder {
  public:
   ChakraGlobalMetadata global_metadata;
   ETFeeder(const std::string& file_path)
-      : chakra_file(file_path, std::ios::binary | std::ios::in | std::ios::app),
+      : chakra_file(file_path, std::ios::binary | std::ios::in),
         _feeder_id(_feeder_id_cnt++),
         dependancy_resolver(RESOLVE_DATA_DEPS, RESOLVE_CTRL_DEPS) {
     if (!chakra_file.is_open())
@@ -42,7 +42,7 @@ class ETFeeder {
   }
 
   ~ETFeeder() {
-    // no explict cache release. Will be kicked-out natually.
+    // no explicit cache release. Will be kicked out naturally.
     index_map.clear();
     chakra_file.close();
   }
@@ -52,14 +52,6 @@ class ETFeeder {
   }
 
   std::shared_ptr<ETFeederNode> lookupNode(const NodeId& node_id);
-  bool hasNodesToIssue();
-  std::shared_ptr<ETFeederNode> getNextIssuableNode();
-  void pushBackIssuableNode(const NodeId& node_id);
-  void freeChildrenNodes(const NodeId& node_id);
-
-  // legacy interface
-  void addNode(std::shared_ptr<ETFeederNode> node);
-  void removeNode(const NodeId& node_id);
 
   const uint64_t& feeder_id() const;
 

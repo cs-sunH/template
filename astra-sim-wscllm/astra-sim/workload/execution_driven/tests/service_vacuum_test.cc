@@ -54,11 +54,13 @@ is green).
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include <astra-network-analytical/common/EventQueue.h>
 
 using namespace AstraSim::ExecutionDriven;
@@ -81,19 +83,29 @@ void expect(bool cond, const std::string& what) {
 // the whole file and queues every turn-0
 // Submit during the FIRST pump, so the vacuum window is "queued but not
 // yet drained", not "read window boundary".
-const char* kCsvHeader =
-    "session_id,turn_index,request_id,prefill_length,decode_length,"
-    "session_arrival_time_ns,inter_request_interval_ns";
+// P2-9 fix (2026-09-28): the fixture uses the canonical 8-column schema
+// (kRequestQueueCsvHeader, WindowedTraceReader.hh). The pre-fix fixture
+// carried a non-canonical 7-column header and only ran because the reader
+// skipped the first line blind; the reader now content-validates the
+// header and fail-closes on this shape. The rows ship through the shared
+// FixtureProvenance helper so the file also carries the matching
+// provenance sidecar the (P1, 2026-09-28) fail-closed gate requires.
+const char* kCsvHeader = AstraSim::ExecutionDriven::kRequestQueueCsvHeader;
 
 std::string make_csv(const std::string& path) {
-    std::ofstream out(path);
-    out << kCsvHeader << "\n";
+    std::vector<std::string> rows;
+    rows.reserve(30);
     for (int row = 0; row < 30; ++row) {
         const uint64_t arrival =
             1000 + static_cast<uint64_t>(row / 10) * 1000;  // 3 batches
-        out << "s" << row << ",0,req_" << row << ",100,10," << arrival
-            << ",0\n";
+        // Turn-0 arrivals are absolute, so the inter_request_interval_ns
+        // column stays empty (the reader fail-closes a non-empty interval
+        // on a turn-0 row -- mirrored twin of the empty-on-turn>0 gate).
+        rows.push_back("s" + std::to_string(row) + ",0,req_" +
+                       std::to_string(row) + ",100,10," +
+                       std::to_string(arrival) + ",,d");
     }
+    FixtureProvenance::write_queue_fixture(path, rows);
     return path;
 }
 
@@ -127,9 +139,11 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
     });
     if (!fixed_order) {
         // Historical behavior: the service could be closed while producers
-        // still queued work. Do not use mark_input_closed() here: its new
-        // linearized producer gate is precisely what this regression fixture
-        // must bypass in order to model the old defect.
+        // still queued work. The call below is ServiceCoordinator::
+        // mark_input_closed() (closes only the finished() verdict -- safe).
+        // Do NOT call RequestIngress::mark_input_closed() (the same-named
+        // ingress method): its linearized producer gate is precisely what
+        // this regression fixture must bypass to model the old defect.
         svc.mark_input_closed();
     }
     reader.pump();  // initial pump before the loop (main_online.cc): the

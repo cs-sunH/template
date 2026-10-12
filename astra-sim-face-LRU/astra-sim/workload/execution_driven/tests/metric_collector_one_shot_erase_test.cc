@@ -9,8 +9,12 @@ Covers, in order:
      for a fired edge is a silent miss (no drop, no double record).
   B. Output equivalence: manifest load + one-shot fire path vs. a
      direct-apply baseline (the pre-R2 semantics) produce byte-identical
-     [METRIC] output, including the multi-event bucket multiplicity, the
-     retained raw memory anchors and the transfer_complete replay.  This is
+     [METRIC] output EXCLUDING the finalize consistency record (its
+     unfired-issue/complete counters differ by construction: the baseline
+     never consumes its routing entries, the one-shot path drains them;
+     both arms' counters are pinned deterministically), including the
+     multi-event bucket multiplicity, the retained raw memory anchors and
+     the transfer_complete replay.  This is
      also the static-path red line: the static fire path keeps its
      unconditional call semantics.
   C. Online dynamic registration: return values (true for registered AND
@@ -55,6 +59,14 @@ using json = nlohmann::json;
 // x86-64, std::vector = 40).  If a different toolchain changes the numeric
 // value while the mirror assert still holds, update the number and re-prove
 // -- that failure mode is protective, not an equivalence break.
+// (2026-10-03, die backend stage B; face-LRU rollout) ComputeAttrs grew by
+// OpRole (enum) + the shared_ptr<const DieModel::DieOpSpec> die_spec, and
+// OnlineStatisticsState grew the die-only vector_utilization optional; the
+// mirror embeds those REAL types (not hand-copied fields), so the
+// sizeof(OnlineNode) == sizeof(mirror) contract automatically carries the
+// new layout and keeps proving exactly one thing: the two metric anchor
+// flags still ride in the bool tail padding (no growth beyond the
+// underlying members).
 // ---------------------------------------------------------------------------
 struct OnlineNodePreR2Mirror {
     uint64_t global_id = 0;
@@ -80,14 +92,18 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodePreR2Mirror),
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 408,
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 424,
               "OnlineNode layout anchor for this toolchain (see the mirror "
-              "assert above for the ABI-agnostic bound; 408 after the "
-              "deep-dive doc §2-47 removal of the write-only "
-              "OnlineStatisticsState optionals operation_intensity / "
-              "is_memory_bound / network_bandwidth (GCC 15 / libstdc++ "
-              "x86-64, std::vector = 40) -- number re-proved per the R2 "
-              "report's update-the-number rule for per-repo layout anchors)");
+              "assert above for the ABI-agnostic bound; 424 after the "
+              "die-backend stage B additions of ComputeAttrs::op_role + "
+              "the shared_ptr<const DieModel::DieOpSpec> die_spec and "
+              "OnlineStatisticsState::vector_utilization (2026-10-03, "
+              "+16 shared_ptr / +8 padded OpRole / +16 optional over the "
+              "former 384 of the deep-dive doc §2-47 / 2026-10-01 "
+              "dead-state removals) "
+              "(GCC 15 / libstdc++ x86-64, std::vector = 40) -- number "
+              "re-proved per the R2 report's update-the-number rule for "
+              "per-repo layout anchors)");
 
 namespace AstraSim {
 
@@ -357,6 +373,45 @@ std::vector<json> records_of_type(const std::string& output,
     return records;
 }
 
+// H9 (face-LRU audit, 2026-09-29): the finalize consistency record
+// legitimately differs between the two arms. finalize's leftover-event
+// sweep reports every manifest node event still sitting in the ROUTING
+// tables, and the baseline arm applies events directly via apply_event
+// without ever consuming its routing entries, while the one-shot arm
+// drains them to zero. The equivalence red line this fixture guards is
+// therefore the fire path's output EXCLUDING type=consistency records
+// (compared byte-identical below); the differing counters themselves are
+// pinned deterministically right after.
+std::string strip_consistency_records(const std::string& output) {
+    std::string kept;
+    size_t cursor = 0;
+    while (cursor < output.size()) {
+        const size_t newline = output.find('\n', cursor);
+        const std::string line = output.substr(
+            cursor, newline == std::string::npos ? std::string::npos
+                                                 : newline - cursor);
+        constexpr const char kPrefix[] = "[METRIC] ";
+        const bool is_metric_line =
+            line.compare(0, sizeof(kPrefix) - 1, kPrefix) == 0;
+        bool is_consistency = false;
+        if (is_metric_line) {
+            const json record =
+                json::parse(line.substr(sizeof(kPrefix) - 1));
+            is_consistency =
+                record.value("type", std::string()) == "consistency";
+        }
+        if (!is_consistency) {
+            kept += line;
+            kept += '\n';
+        }
+        if (newline == std::string::npos) {
+            break;
+        }
+        cursor = newline + 1;
+    }
+    return kept;
+}
+
 const json* record_for_rank(const std::vector<json>& records, int rank) {
     for (const auto& record : records) {
         if (record.value("rank", -1) == rank) {
@@ -500,9 +555,45 @@ void test_one_shot_erase_and_output_equivalence() {
         collector.finalize({}, 60);
     });
 
-    expect(one_shot_output == baseline_output,
+    // H9 (face-LRU audit, 2026-09-29): the raw byte-identical assertion can
+    // never pass -- the consistency record's unfired-issue/complete counters
+    // differ by construction (baseline residue 1/5 vs one-shot 0/0). The
+    // oracle compares everything the fire path controls, i.e. output minus
+    // consistency records, byte-identical; the consistency counters are then
+    // pinned deterministically per arm below.
+    expect(strip_consistency_records(one_shot_output) ==
+               strip_consistency_records(baseline_output),
            "one-shot fire path [METRIC] output is byte-identical to the "
-           "direct-apply baseline (static red line)");
+           "direct-apply baseline outside the consistency record (static "
+           "red line)");
+
+    const std::vector<json> one_shot_consistency =
+        records_of_type(one_shot_output, "consistency");
+    const std::vector<json> baseline_consistency =
+        records_of_type(baseline_output, "consistency");
+    expect(one_shot_consistency.size() == 1 && baseline_consistency.size() == 1,
+           "each arm emits exactly one consistency record");
+    if (one_shot_consistency.size() == 1) {
+        expect(one_shot_consistency[0].value("unfired_issue_events",
+                                             uint64_t(99)) == 0 &&
+                   one_shot_consistency[0].value("unfired_complete_events",
+                                                 uint64_t(99)) == 0,
+               "one-shot arm consumes every routing entry (0 unfired issue / "
+               "0 unfired complete)");
+    }
+    if (baseline_consistency.size() == 1) {
+        // The baseline keeps its unconsumed routing entries: 1 issue node
+        // bucket (rank 1 / node 100) and 4 complete node buckets -- the
+        // latter carrying 5 EVENTS, because the multi-event bucket on
+        // (rank 1, node 102) holds codes 2 and 7 and the sweep counts
+        // events, not buckets.
+        expect(baseline_consistency[0].value("unfired_issue_events",
+                                             uint64_t(99)) == 1 &&
+                   baseline_consistency[0].value("unfired_complete_events",
+                                                 uint64_t(99)) == 5,
+               "baseline arm reports its unconsumed entries exactly "
+               "(1 unfired issue / 5 unfired complete events)");
+    }
 
     const std::vector<json> anchors =
         records_of_type(one_shot_output, "memory_anchor");

@@ -42,6 +42,10 @@ def _echo_node(request_id, node_id, name):
 
 
 def main():
+    if len(sys.argv) != 3:
+        print("usage: python3 bridge_echo.py <bridge_dir> <ack_receipt>",
+              file=sys.stderr)
+        return 2
     bridge_dir = sys.argv[1]
     ack_receipt = sys.argv[2]
 

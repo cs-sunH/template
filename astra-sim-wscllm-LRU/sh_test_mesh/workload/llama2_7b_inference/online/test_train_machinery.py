@@ -173,7 +173,9 @@ class TrainPlanningTest(unittest.TestCase):
             {"ra": 5, "rb": 9})
         # span 数 = Σ participation(成员×迭代,无 padding)。
         self.assertEqual(len(plan["pass_spans"]), 14)
-        self.assertTrue(plan["membership_digest"])
+        # membership_digest 已随 2026-09-30 审查清理删除(只写不读,ledger
+        # 行不含该字段,冻结成员快照即 plan dict 本体)。
+        self.assertNotIn("membership_digest", plan)
 
     def test_train_spans_are_pure_decode(self):
         """§3.6 钉子:列车 span 全部 tokens==1(逐成员逐 token),绝无
@@ -213,7 +215,10 @@ class TrainFinalizeTest(unittest.TestCase):
         self.assertEqual(state.active_decode, [])
         self.assertEqual(state.active_decode_lookup, set())
         self.assertIsNone(state.in_flight_train)
-        self.assertEqual(state.iteration_count, 4)
+        # iteration_count 死账本已随 M2-04(2026-09-26)删除:列车核销只
+        # 推进 decode_tokens_consumed,实例上不存在任何只写不读的迭代
+        # 计数器。
+        self.assertFalse(hasattr(state, "iteration_count"))
         self.assertEqual(state.finalized_trains, [])
 
     def test_same_tick_multi_instance_and_split_delivery_idempotent(self):
@@ -503,6 +508,9 @@ class SplitEnvironmentTest(unittest.TestCase):
     显式 SH_FIRST_TOKEN_SPLIT=1 启用(研究/对拍)。"""
 
     def test_default_off_and_explicit_on(self):
+        # 先验值保存/还原(py-verify-C7 修复:此前 finally 只 pop——以
+        # SH_FIRST_TOKEN_SPLIT=1 跑 pytest 时全局 env 被清空)。
+        prior = os.environ.get("SH_FIRST_TOKEN_SPLIT")
         try:
             os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
             self.assertFalse(first_token_split_enabled())
@@ -511,7 +519,10 @@ class SplitEnvironmentTest(unittest.TestCase):
             os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
             self.assertTrue(first_token_split_enabled())
         finally:
-            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+            if prior is None:
+                os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+            else:
+                os.environ["SH_FIRST_TOKEN_SPLIT"] = prior
 
 
 if __name__ == "__main__":

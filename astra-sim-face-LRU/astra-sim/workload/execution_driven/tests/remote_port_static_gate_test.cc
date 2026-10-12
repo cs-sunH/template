@@ -420,8 +420,6 @@ int main(int argc, char* argv[]) {
         const auto st = memory_api->get_port_stats(0);
         expect(st.issued_count == 2 && st.issued_bytes == 1200,
                "port0 totals 2 / 1200");
-        expect(st.peak_streaming >= 2,
-               "port0 peak_streaming >= 2 (event-interval)");
         expect(st.peak_streaming == 2, "port0 peak_streaming == 2");
         expect(st.shared_busy_ns > 0.0, "port0 shared_busy_ns > 0");
         expect_near(st.shared_busy_ns, 200.0, 1e-9,

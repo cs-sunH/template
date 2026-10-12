@@ -8,7 +8,6 @@ Implementation (方案 §4 步骤 1-2 操作 2).
 
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -24,9 +23,17 @@ RequestIngress::RequestIngress(const size_t capacity) noexcept
 
 void RequestIngress::bind(EventQueue* const eq, DecisionMailbox* const mailbox,
                           ServiceCoordinator* const svc) noexcept {
-    assert(eq != nullptr);
-    assert(mailbox != nullptr);
-    assert(svc != nullptr);
+    // M-18 fail-closed(F1-CPP C1-5 同款镜像,2026-09-30):原来是 NDEBUG
+    // 剥离的 assert——Release 构建下空绑定只会炸在运行中段的解引用上,
+    // 零诊断。换成与 register_queue_index 的 duplicate/invalid 处置同款
+    // 的无条件 fail-closed 通道。
+    if (eq == nullptr || mailbox == nullptr || svc == nullptr) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/ingress) bind() requires "
+                     "non-null event queue, mailbox and service "
+                     "coordinator\n");
+        std::abort();
+    }
     eq_ = eq;
     mailbox_ = mailbox;
     svc_ = svc;
@@ -72,7 +79,33 @@ void RequestIngress::drain_commands() {
     for (auto& cmd : batch) {
         switch (cmd.kind) {
             case IngressCommandKind::Submit: {
-                // arrival alarms must be strictly future (EventQueue :33);
+                // F1-CPP C1-8 同款镜像(2026-09-30):进程级空/唯一身份门。
+                // CSV 读侧行门(M9 turn-0 查重 + register_queue_index 的
+                // turn>0 查重)在 drain 侧的合流兜底:--command-fifo 通道
+                // 及任何直接 enqueue_command 的调用方此前无等价门,重复
+                // id 会把下游指标身份图 last-wins 污染、空 id 锚不到任何
+                // 主体。fail-closed 于到达记账/alarm 调度之前。
+                {
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    if (cmd.envelope.request_id.empty()) {
+                        std::fprintf(
+                            stderr,
+                            "[Error] (execution_driven/ingress) Submit has "
+                            "an empty request_id (every request must be "
+                            "identifiable)\n");
+                        std::abort();
+                    }
+                    if (!seen_submit_request_ids_
+                             .insert(cmd.envelope.request_id).second) {
+                        std::fprintf(
+                            stderr,
+                            "[Error] (execution_driven/ingress) duplicate "
+                            "Submit request_id: %s\n",
+                            cmd.envelope.request_id.c_str());
+                        std::abort();
+                    }
+                }
+                // arrival alarms must be strictly future (EventQueue);
                 // a late request is clamped to the next tick (arrives now)
                 const auto current = eq_->get_current_time();
                 const auto arrival = cmd.envelope.arrival_world_ns;
@@ -92,6 +125,12 @@ void RequestIngress::drain_commands() {
                     if (cmd.envelope.source == RequestSource::StaticCsv) {
                         if (arrival == 0 && current == 0) {
                             ++t0_boundary_clamp_;
+                        } else if (cmd.backpressure_deferred) {
+                            // M5: the reader offered this entry while the
+                            // clock was still at/below its arrival; the
+                            // bounded queue parked it. Capacity artifact,
+                            // exempt from the run-end gate.
+                            ++late_static_submit_backpressure_;
                         } else {
                             ++late_static_submit_;
                         }
@@ -144,6 +183,21 @@ void RequestIngress::drain_commands() {
                 std::abort();
                 break;
         }
+    }
+    // M4 fix (2026-09-29): the producer gate is closed and the queue just
+    // drained to empty -- every command linearized before the close has
+    // been observed. Complete the coordinator's deferred FINISHED
+    // evaluation here (see ServiceCoordinator::note_input_drained); it is
+    // a no-op while requests are still active/pending. Commands enqueued
+    // after the close are rejected by enqueue_command, so an empty queue
+    // under a closed gate is stable.
+    bool closed_and_drained = false;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        closed_and_drained = closed_ && queue_.empty();
+    }
+    if (closed_and_drained && svc_ != nullptr) {
+        svc_->note_input_drained();
     }
 }
 
@@ -241,7 +295,19 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
         }
         if (!validation_error.has_value() && queue_index_tracking_enabled_) {
             const auto it = queue_index_map_.find(envelope.request_id);
-            assert(it != queue_index_map_.end());
+            // M-18 fail-closed(F1-CPP C1-5/C1-8 批同款镜像,2026-09-30):
+            // 原是 NDEBUG 剥离的 assert,Release 下直接 end() 解引用(UB)。
+            // 上方 validate_future_arrivals_locked 已 fail-closed 拒绝无
+            // 登记 id,此分支经单线程提交路径不可达;保留无条件守卫是为
+            // 挡住绕过校验的不安全直接调用方。
+            if (it == queue_index_map_.end()) {
+                std::fprintf(stderr,
+                             "[Error] (execution_driven/ingress) future "
+                             "arrival has no registered queue index: "
+                             "request_id=%s\n",
+                             envelope.request_id.c_str());
+                std::abort();
+            }
             filled.queue_index = it->second;
             queue_index_map_.erase(it);
         }
@@ -256,7 +322,7 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
         throw std::runtime_error("future-arrival scheduling rejected: " +
                                  *validation_error);
     }
-    // arrival alarms must be strictly future (EventQueue :33); a late
+    // arrival alarms must be strictly future (EventQueue); a late
     // arrival is clamped to the next tick (arrives now)
     const auto current = eq_->get_current_time();
     const auto arrival = envelope.arrival_world_ns;

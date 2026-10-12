@@ -9,9 +9,9 @@ main.cc (MetricCollector init, topology, FluidScheduler, Sys) but
 
   - parses the online CLI family explicitly (OnlineCli; defaults/mutex/missing
     rules unit-tested in tests/cli_online_test.cc). Step 1-8/1-9: --online-mode
-    takes the mode token replay|strategy; replay serves the offline decision
-    log (LUT clock, step 1-8), strategy runs the real policy scheduler with
-    real physics (step 1-9);
+    takes the single mode token strategy, which runs the real policy scheduler
+    with real physics (step 1-9); the replay token was removed with the replay
+    route on 2026-08-18 and any other value is a hard CLI error;
   - constructs Sys in ExecutionMode::Online with an injected GraphSource
     (NodeStore-backed), so no ETFeeder is built and no .et file is required;
   - runs the request-neutral main loop, draining ingress commands before
@@ -44,8 +44,8 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
          (rank, json member id) -> store id translation and the explicit
          satisfying status set;
       4. future_alarms -> RequestIngress::schedule_future_arrival (the
-         next-turn arrival alarm; replay authority = the offline prefill
-         record tick);
+         next-turn arrival alarm; the alarm tick is the arrival_world_ns
+         carried by the committed batch);
       then the per-rank issue pass (workload->issue_dep_free_nodes()),
       the REQUEST_COMPLETE ServiceCoordinator accounting (after the alarms:
       the last alarm of the batch keeps the service ACTIVE until the next
@@ -63,7 +63,7 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
   - run end: svc.finished() marks logical completion; process exit additionally
     requires the EventQueue, deferred issue pass, and DecisionMailbox to be
     drained.  Assertions completed == CSV data rows and
-    no_decision_python_callback_count == 0 (acceptance: 1177/1177 replay).
+    (acceptance: 1177/1177 requests).
 
 Step 1-10 (runners + IDLE fixture):
   - --request-queue-csv is optional (合同② request-neutral default): absent
@@ -116,6 +116,7 @@ Step 1-10 (runners + IDLE fixture):
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -126,11 +127,9 @@ Step 1-10 (runners + IDLE fixture):
 #include <map>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <thread>
 #include <string>
 #include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -185,7 +184,7 @@ struct OnlineDriverContext {
     std::vector<int>* affected_ranks_accumulator = nullptr;
     // Phase 6 (方案 §9.1): per-run mechanism counters (C++ side; the bridge
     // round-trip/channel counters live in FileDecisionBridge::Stats and are
-    // fetched through bridge->stats() at run end). See OnlineStatsCounters.hh
+    // fetched through stats_report() at run end). See OnlineStatsCounters.hh
     // for the field semantics.
     OnlineStatsCounters stats;
     // C1 validate switch (2026-08-28, --online-validate), B.2 cleanup
@@ -225,9 +224,11 @@ struct CommitArg {
 // sequence; the online dynamic graph interleaves requests across stages so
 // most boundary nodes would not match, measured 708/1177 completion
 // anchors). The batch's nodes carry request_id/stage (graph_batch_builder
-// contract); per (rank, request_id, stage) the FIRST node of the group is
-// the start anchor (issue event) and the LAST is the end anchor (complete
-// event). Transfer nodes of the KV routes (node names contain "kv" --
+// contract); per (rank, request_id, stage) the FIRST node of the group
+// registers the start anchor (issue event). End anchors are NOT taken from
+// the group's last node -- they come from the WATCH MEMBERS (the stage's
+// real last node per rank; see the end-anchor loop below). Transfer nodes
+// of the KV routes (node names contain "kv" --
 // history_kv / prefill_to_decode_kv) register the memory anchor (code 7)
 // on the last transfer node of each (request_id, rank): the offline
 // doc-sec.4.3 semantics (transfer-arrival memory anchor = last transfer
@@ -405,7 +406,7 @@ void ed_commit_cb(void* arg) {
     // Full-validation batches use one atomic validate_and_commit()
     // call; validation-off batches retain commit()'s mandatory preflight.
     // Phase 6 (方案 §9.1): graph_validate_ns is the API's validate_impl-only
-    // duration; the public validate() itself remains pure for fixtures.
+    // duration.
     const bool should_validate = driver->online_validate == 1;
     if (should_validate) {
         GraphBatchCommitter::ValidateAndCommitResult validation_result;
@@ -466,7 +467,15 @@ void ed_commit_cb(void* arg) {
     //      weight by now (every anchored node of the request has fired both
     //      its issue and complete hooks before the decode watch could fire,
     //      and the REQUEST_COMPLETE delta fact arrives at a strictly later
-    //      epoch) -- release the routing entries through the same loop. ----
+    //      epoch) -- release the routing entries through the same loop.
+    //      Invariant this release relies on (R2-HN4): within a group, the
+    //      anchors are registered at commit Phase B-1.5 -- strictly before
+    //      that commit's issue pass can run any group node and therefore
+    //      strictly before any watch of the group can fire -- so by the time
+    //      REQUEST_COMPLETE releases the routing, every group anchor has
+    //      already fired its events. Nothing currently re-checks the
+    //      invariant; breaking the register-before-issue order silently
+    //      drops those metrics. ----
     for (const auto& request_id : commit->completed_requests) {
         driver->watch_registry->remove_watches_for_request(request_id);
         MetricCollector::instance().online_release_request_anchors(
@@ -616,12 +625,18 @@ const char* service_state_name(const ServiceState state) {
 // silent write end of the FIFO and closes it right before the run-end join,
 // so a producer parked in the blocking open/read always returns (EOF) and
 // is reaped by join instead of outliving the stack objects it references.
+// command_fifo_done is set at BOTH exits so the run-end join can wait
+// bounded: std::getline on the FIFO only sees EOF once EVERY write end is
+// closed, so a producer that keeps its write end open past CloseInput would
+// otherwise block the join forever (see the run-end join for the backstop).
 void command_fifo_reader(const std::string& path, RequestIngress& ingress,
-                         ServiceCoordinator& svc) {
+                         ServiceCoordinator& svc,
+                         std::atomic<bool>& command_fifo_done) {
     std::ifstream fifo(path);
     if (!fifo.is_open()) {
         std::cerr << "[online] command-fifo: cannot open " << path << ": "
                   << std::strerror(errno) << std::endl;
+        command_fifo_done.store(true);
         return;
     }
     std::string line;
@@ -629,45 +644,50 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
         if (line.empty()) {
             continue;
         }
-        nlohmann::json cmd;
+        // R2-E1 fix (2026-09-29): the field extraction below also runs
+        // inside the try -- nlohmann's value() throws type_error for a
+        // wrong-typed field (e.g. "session_id": 5) or a non-object line,
+        // and this bare thread entry point used to let it escape to
+        // std::terminate, killing the whole simulation instead of skipping
+        // the malformed line as the message promises.
+        IngressCommand ic;
         try {
-            cmd = nlohmann::json::parse(line);
+            nlohmann::json cmd = nlohmann::json::parse(line);
+            const std::string kind = cmd.value("kind", std::string());
+            if (kind == "CloseInput") {
+                // Phase-7 §10.7: explicit close (合同② close 命令). The
+                // lifecycle audit records close_source=explicit.
+                ic.kind = IngressCommandKind::CloseInput;
+            } else if (kind == "EndOfFile") {
+                // Phase-7 §10.7: EOF terminal command (合同② EOF 命令) -- the
+                // producer declares the input naturally exhausted; distinct
+                // from an explicit close in the run-end lifecycle audit.
+                ic.kind = IngressCommandKind::EndOfFile;
+            } else if (kind == "Error") {
+                // Phase-7 §10.7: error terminal command (合同② error 命令) --
+                // fail-closed abort (进程退出非 0,不做静默降级); the drain
+                // path aborts on it.
+                ic.kind = IngressCommandKind::Error;
+            } else if (kind == "Submit") {
+                RequestEnvelope env;
+                env.session_id = cmd.value("session_id", std::string());
+                env.turn_index = cmd.value("turn_index", 0);
+                env.request_id = cmd.value("request_id", std::string());
+                env.prefill_length = cmd.value("prefill_length", uint64_t{0});
+                env.decode_length = cmd.value("decode_length", uint64_t{0});
+                env.arrival_world_ns = cmd.value("arrival_world_ns", uint64_t{0});
+                env.inter_request_interval_ns =
+                    cmd.value("inter_request_interval_ns", uint64_t{0});
+                ic.kind = IngressCommandKind::Submit;
+                ic.envelope = std::move(env);
+            } else {
+                std::cerr << "[online] command-fifo: unknown command kind: "
+                          << kind << std::endl;
+                continue;
+            }
         } catch (const std::exception&) {
             std::cerr << "[online] command-fifo: skipping malformed line: "
                       << line << std::endl;
-            continue;
-        }
-        const std::string kind = cmd.value("kind", std::string());
-        IngressCommand ic;
-        if (kind == "CloseInput") {
-            // Phase-7 §10.7: explicit close (合同② close 命令). The
-            // lifecycle audit records close_source=explicit.
-            ic.kind = IngressCommandKind::CloseInput;
-        } else if (kind == "EndOfFile") {
-            // Phase-7 §10.7: EOF terminal command (合同② EOF 命令) -- the
-            // producer declares the input naturally exhausted; distinct
-            // from an explicit close in the run-end lifecycle audit.
-            ic.kind = IngressCommandKind::EndOfFile;
-        } else if (kind == "Error") {
-            // Phase-7 §10.7: error terminal command (合同② error 命令) --
-            // fail-closed abort (进程退出非 0,不做静默降级); the drain
-            // path aborts on it.
-            ic.kind = IngressCommandKind::Error;
-        } else if (kind == "Submit") {
-            RequestEnvelope env;
-            env.session_id = cmd.value("session_id", std::string());
-            env.turn_index = cmd.value("turn_index", 0);
-            env.request_id = cmd.value("request_id", std::string());
-            env.prefill_length = cmd.value("prefill_length", uint64_t{0});
-            env.decode_length = cmd.value("decode_length", uint64_t{0});
-            env.arrival_world_ns = cmd.value("arrival_world_ns", uint64_t{0});
-            env.inter_request_interval_ns =
-                cmd.value("inter_request_interval_ns", uint64_t{0});
-            ic.kind = IngressCommandKind::Submit;
-            ic.envelope = std::move(env);
-        } else {
-            std::cerr << "[online] command-fifo: unknown command kind: "
-                      << kind << std::endl;
             continue;
         }
         // Bounded queue with backpressure: retry until accepted or the run
@@ -686,6 +706,7 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
     std::cout << "[online] command-fifo: EOF (writer closed); producer "
                  "thread exits, input stays open"
               << std::endl;
+    command_fifo_done.store(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -757,10 +778,17 @@ static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
         }
         case TopologyBuildingBlock::Ring: {
             // Ring: one bidirectional connect per src; no boundary concept.
-            // A width==2 Ring degenerates to the mesh fallback
-            // (MultiDimTopology::connect_ring_dimension), connecting only
-            // the npus/2 address-0 srcs -- npus link ids, not 2*npus.
+            // Degenerate sizes follow connect_ring_dimension exactly: a
+            // width==1 Ring builds no link and consumes no link id (same as
+            // a size-1 Mesh/FullyConnected dimension -- NetworkParser allows
+            // size-1 as a degenerate axis); a width==2 Ring degenerates to
+            // the mesh fallback (MultiDimTopology::connect_ring_dimension),
+            // connecting only the npus/2 address-0 srcs -- npus link ids,
+            // not 2*npus.
             saw_non_mesh_dim = true;
+            if (sizes[d] == 1) {
+                break;  // no links built by the backend: consume 0 ids
+            }
             if (sizes[d] == 2) {
                 next_id += static_cast<LinkId>(npus);
             } else {
@@ -985,7 +1013,8 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Shared static options (same parser and extraction as the static main).
+    // Shared static options (the shared CmdLineParser; same extraction the
+    // removed offline main used).
     auto cmd_line_parser = CmdLineParser(argv[0]);
     cmd_line_parser.parse(argc, argv);
 
@@ -1011,6 +1040,12 @@ int main(int argc, char* argv[]) {
     }
     const auto comm_scale = cmd_line_parser.get<double>("comm-scale");
     const auto injection_scale = cmd_line_parser.get<double>("injection-scale");
+    // (2026-09-30, R2 audit) The old non-negativity guard here is removed:
+    // CmdLineParser::parse (C3) rejects a non-finite or non-positive
+    // --injection-scale with exit(-1) BEFORE this point, so the local check
+    // was unreachable dead code whose "non-negative (0 legal)" wording also
+    // contradicted the parser's "strictly positive" contract. The parser is
+    // the single authority for this flag now.
     const auto rendezvous_protocol =
         cmd_line_parser.get<bool>("rendezvous-protocol");
     const auto metrics_configuration =
@@ -1020,7 +1055,8 @@ int main(int argc, char* argv[]) {
 
     AstraSim::LoggerFactory::init(logging_configuration, logging_folder);
 
-    // Side-band metrics collection, same as the static main.
+    // Side-band metrics collection (unchanged from the removed offline
+    // pipeline's behavior).
     MetricCollector::instance().initialize(metrics_configuration,
                                            metrics_detail);
     // Phase-7 §10.3: the manifest's static node-event table is keyed by the
@@ -1057,9 +1093,11 @@ int main(int argc, char* argv[]) {
     // contexts (post-commit issue pass). A start_flow flush scheduled at
     // current_time via schedule_event would insert a current_time EventList
     // into the main queue and trip the strict-increase assert on the next
-    // proceed() (EventQueue.cpp:33). Deferred mode routes the flush through
-    // schedule_event_deferred (same-tick drain). The static main never
-    // enables it -- pre-extension behavior is byte-for-byte preserved.
+    // proceed() (the EventQueue strict-increase rule). Deferred mode routes
+    // the flush through
+    // schedule_event_deferred (same-tick drain). The removed offline
+    // pipeline never enables it -- pre-extension behavior is byte-for-byte
+    // preserved.
     fluid_scheduler->set_deferred_flush_mode(true);
 
     // WP6 NoC link observer gating (CPP_SPEC §D): metrics != off AND env
@@ -1130,9 +1168,9 @@ int main(int argc, char* argv[]) {
         systems.push_back(system);
     }
 
-    // Online service: lifecycle authority + request-neutral ingress. No
-    // systems[i]->workload->fire(): in online mode the graph is fed by the
-    // dynamic source, not by the ETFeeder.
+    // Online service: lifecycle authority + request-neutral ingress. In
+    // online mode the graph is fed by the dynamic source, not by the
+    // ETFeeder, so no static replay pump drives the workload.
     ServiceCoordinator svc;
     DecisionMailbox mailbox;
     RequestIngress ingress;
@@ -1219,10 +1257,12 @@ int main(int argc, char* argv[]) {
     // channel; the fixture script must mkfifo it before the binary starts).
     int command_fifo_write_fd = -1;
     std::thread command_fifo_thread;
+    std::atomic<bool> command_fifo_done{false};
     if (!online_cli.command_fifo.empty()) {
         command_fifo_thread =
             std::thread(command_fifo_reader, online_cli.command_fifo,
-                        std::ref(ingress), std::ref(svc));
+                        std::ref(ingress), std::ref(svc),
+                        std::ref(command_fifo_done));
         // Hold a write end: it pairs the producer's blocking open and lets
         // the run-end join below force EOF for a producer parked in a
         // blocking read.
@@ -1261,8 +1301,8 @@ int main(int argc, char* argv[]) {
     // the ONLY thing the hook does in phase 1 besides the step-1-6 mailbox
     // write (the registry fire notifier is the wiring point). It never calls
     // GraphSource::finish_node: dependency release stays exclusively in
-    // Workload::call. The static binary never installs a hook (zero
-    // overhead contract).
+    // Workload::call. The legacy arm (backend/ED tests driving the workload
+    // layer directly) installs no hook (zero-overhead contract).
     WatchRegistry watch_registry;
     // Step 1-8: the hook additionally schedules the per-rank post-commit
     // deferred issue pass (ready-set drain) into the same tick's deferred
@@ -1506,6 +1546,14 @@ int main(int argc, char* argv[]) {
             // Linearize the producer close only at this exact finite-input
             // boundary so no later CSV Submit is rejected.
             ingress.mark_input_closed();
+            // (2026-09-30, R2 audit) M4 defers the coordinator's FINISHED
+            // evaluation to note_input_drained(). Drain unconditionally
+            // right after the close (idempotent, near-zero cost on an empty
+            // queue) instead of relying on "eof implies queued work" to make
+            // the loop's next drain the trigger -- a same-iteration break
+            // would otherwise leave state_ parked at DRAINING with the
+            // lifecycle log missing its final transition.
+            ingress.drain_commands();
         }
         // Defect fix A (2026-08-16, face主动测试错误分析.md 缺陷 A): pump()
         // QUEUES Submit commands into the bounded ingress queue; they only
@@ -1746,18 +1794,15 @@ int main(int argc, char* argv[]) {
 
     // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
     // completed_request_count == CSV data rows (1177 for the 20.csv
-    // first-30-seconds input; the offline replay equivalent of
-    // replay_poll_query_count == 0 is the never-incremented
-    // no_decision_python_callback_count -- no delivery epoch was ever
-    // dropped). tick_end_without_decision_count is a normal
-    // allowed-nonzero counter, reported separately.
+    // first-30-seconds input). tick_end_without_decision_count is a normal
+    // allowed-nonzero counter, reported separately. (The historical
+    // no_decision_python_callback_count gate was removed with its
+    // never-incremented counter -- see DecisionMailbox.hh.)
     std::cout << "[online] gate counters: event_count=" << mailbox.event_count()
               << " delivery_count=" << mailbox.delivery_count()
               << " coalescing_ratio=" << mailbox.coalescing_ratio()
               << " tick_end_without_decision_count="
-              << mailbox.tick_end_without_decision_count()
-              << " no_decision_python_callback_count="
-              << mailbox.no_decision_python_callback_count() << std::endl;
+              << mailbox.tick_end_without_decision_count() << std::endl;
     std::cout << "[online] service counters: accepted="
               << svc.accepted_request_count()
               << " completed=" << svc.completed_request_count()
@@ -1767,13 +1812,16 @@ int main(int argc, char* argv[]) {
     // Phase 7 §10.7: lifecycle full-semantics audit (合同② 三态区分:
     // EOF vs 显式 close vs 异常退出 + 迟到/拒绝/溢出审计). The close
     // source is audited explicitly (explicit close command / CLI / EOF
-    // terminal command / error); the CSV window EOF is reported separately
+    // terminal command); the CSV window EOF is reported separately
     // because it is NOT a close (the input stays open for external
-    // injection -- the IDLE fixture contract). The ingress overflow audit
-    // counts bounded-queue rejections (0 on every official run: the calendar
-    // reader parks its cursor whenever the queue is full instead of
-    // overflowing the 4096-command capacity; a growing producer would
-    // surface here).
+    // injection -- the IDLE fixture contract). The 异常退出 leg of 合同②
+    // never reaches this audit as a close source: an Error terminal
+    // command aborts fail-closed in RequestIngress::drain_commands, so
+    // InputCloseReason has no Error enumerator (cpp-ed-core-4). The
+    // ingress overflow audit counts bounded-queue rejections (0 on every
+    // official run: the calendar reader parks its cursor whenever the
+    // queue is full instead of overflowing the 4096-command capacity; a
+    // growing producer would surface here).
     const char* close_source = "not_closed";
     if (svc.input_closed()) {
         switch (svc.input_close_reason()) {
@@ -1782,9 +1830,6 @@ int main(int argc, char* argv[]) {
                 break;
             case InputCloseReason::EndOfFile:
                 close_source = "eof";
-                break;
-            case InputCloseReason::Error:
-                close_source = "error";
                 break;
         }
     }
@@ -1818,6 +1863,13 @@ int main(int argc, char* argv[]) {
               << " terminal_skipped=" << terminal_counts.skipped
               << " terminal_other=" << terminal_counts.other
               << std::endl;
+
+    // Chunk-lifecycle residual audit (warn-only, quiescence exit/shutdown
+    // path): the run end should have recycled every ChunkIdGenerator key and
+    // CallbackTracker entry. Resident leftovers are reported with counts and
+    // key samples on stderr; they never abort the run (a truncated window is
+    // a legal shape -- unlike the mid-run completion invariants).
+    CongestionAwareNetworkApi::audit_run_end_residuals();
 
     // Phase 5 (方案 §8.3): the atomic-commit counters. Every delivery epoch
     // produced exactly one GraphBatch (graph_batch_count == delivery_count,
@@ -1866,6 +1918,8 @@ int main(int argc, char* argv[]) {
               << ingress.late_arrival_count()
               << " late_static_submit="
               << ingress.late_static_submit_count()
+              << " late_static_submit_backpressure="
+              << ingress.late_static_submit_backpressure_count()
               << " late_external_stream="
               << ingress.late_external_stream_count()
               << " late_future_alarm_rounding="
@@ -1886,6 +1940,8 @@ int main(int argc, char* argv[]) {
               << arrival_summary.turn0_submitted
               << " late_static_submit="
               << arrival_summary.late_static_submit
+              << " late_static_submit_backpressure="
+              << arrival_summary.late_static_submit_backpressure
               << " late_external_stream="
               << arrival_summary.late_external_stream
               << " late_future_alarm_rounding="
@@ -1958,19 +2014,15 @@ int main(int argc, char* argv[]) {
             gate_ok = false;
         }
     }
-    if (mailbox.no_decision_python_callback_count() != 0) {
-        std::cerr << "[Error] (execution_driven/online) "
-                     "no_decision_python_callback_count="
-                  << mailbox.no_decision_python_callback_count()
-                  << " != 0" << std::endl;
-        gate_ok = false;
-    }
     if (mailbox.delivery_count() == 0 && expected_requests > 0) {
         std::cerr << "[Error] (execution_driven/online) delivery_count == 0: "
                      "the decision bridge never served an epoch"
                   << std::endl;
         gate_ok = false;
     }
+    // (2026-09-30 note) stale_count() != 0 implies !empty() (stale watches
+    // are still registered) -- the disjunct is diagnostic only, separating
+    // "residual watches" from "residual watches that can never fire".
     if (!watch_registry.empty() || watch_registry.stale_count() != 0 ||
         !epoch_affected_ranks.empty() ||
         online_hook_ctx.pending_issue_pass_count() != 0) {
@@ -2026,14 +2078,46 @@ int main(int argc, char* argv[]) {
     // this stack frame: closing the held write end forces EOF for a
     // producer parked in the blocking FIFO open/read, then join reaps it --
     // no detached thread may outlive the objects it references. Covers both
-    // exits below (gate-failure and normal).
+    // exits below (gate-failure and normal). std::thread has no timed join,
+    // so the wait polls the thread's done flag: EOF makes getline return and
+    // the reader exits within microseconds, so the bounded wait only turns
+    // into a fail-closed abort when an external writer is still holding the
+    // FIFO open past CloseInput/EOF (the same silent-stall family the idle
+    // watchdog backstops at the parking point -- the join point is the other
+    // potentially-unbounded wait, and it has no watchdog otherwise).
     if (command_fifo_write_fd >= 0) {
         ::close(command_fifo_write_fd);
         command_fifo_write_fd = -1;
     }
     if (command_fifo_thread.joinable()) {
+        constexpr auto command_fifo_join_timeout =
+            std::chrono::seconds(10);
+        const auto join_deadline =
+            std::chrono::steady_clock::now() + command_fifo_join_timeout;
+        while (!command_fifo_done.load()) {
+            if (std::chrono::steady_clock::now() >= join_deadline) {
+                online_fatal(
+                    "command-fifo join timeout: the producer thread did "
+                    "not exit within " +
+                    std::to_string(command_fifo_join_timeout.count()) +
+                    "s of the run-end write-end close (an external writer "
+                    "is holding the FIFO open past CloseInput/EOF, so "
+                    "getline never sees EOF) -- fail-closed abort instead "
+                    "of an unbounded join");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
         command_fifo_thread.join();
     }
+
+    // R1-A-EX fix: the systems are fully audited by this point, so release
+    // them before the exit branches -- the gate-failure return used to leak
+    // every Sys (and its Workload/HardwareResource trees) while the success
+    // path deleted them.
+    for (auto it : systems) {
+        delete it;
+    }
+    systems.clear();
 
     if (!gate_ok) {
         print_total_wall_time();
@@ -2043,11 +2127,6 @@ int main(int argc, char* argv[]) {
         AstraSim::LoggerFactory::shutdown();
         return EXIT_FAILURE;
     }
-
-    for (auto it : systems) {
-        delete it;
-    }
-    systems.clear();
 
     print_total_wall_time();
 

@@ -13,15 +13,34 @@ endif ()
 # Setup project
 project(AstraSim_Analytical)
 
+# CTest registration (review 2026-09-26 cpp-ed-tests-a-3 / cpp-frontend-9):
+# the fixture targets below used to build without any add_test/ctest
+# registration (manual runs only, no gate). enable_testing() here makes the
+# tests visible to ctest run from this directory of the build tree; the
+# registrations sit next to their targets. Two fixture targets that need
+# materialized sh_test_mesh/generated/ artifacts (gitignored by design) stay
+# build-only by contract -- see the comment on the registration block at the
+# bottom of this file.
+enable_testing()
+
 # Compilation target
 set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_aware)")
 
+# Fail closed on an illegal BUILDTARGET (2026-09-30, mirrored from the
+# joint repo): a typo (e.g. the historical "aware") otherwise configures
+# ZERO targets here and only surfaces later as "binary missing" from the
+# runner. Same discipline as the NETWORK_BACKEND_BUILD_AS_LIBRARY
+# FATAL_ERROR gate below.
+if (NOT BUILDTARGET STREQUAL "all" AND NOT BUILDTARGET STREQUAL "congestion_aware")
+    message(FATAL_ERROR "Unknown BUILDTARGET '${BUILDTARGET}' (legal: all | congestion_aware)")
+endif()
+
 # Include src files to compile
-file(GLOB srcs_common
+file(GLOB srcs_common CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/common/*.cc
 )
 
-file(GLOB srcs_congestion_aware
+file(GLOB srcs_congestion_aware CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/*.cc
 )
 
@@ -37,16 +56,17 @@ target_include_directories(AstraSim_Analytical_ChunkIdGeneratorTest PRIVATE
 set_target_properties(AstraSim_Analytical_ChunkIdGeneratorTest
         PROPERTIES COMPILE_WARNING_AS_ERROR OFF
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/)
+add_test(NAME AstraSim_Analytical_ChunkIdGeneratorTest
+        COMMAND AstraSim_Analytical_ChunkIdGeneratorTest)
 
 # Compile Congestion Aware Backend
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # Path-1 removal (2026-08-18): the static aware target and
     # congestion_aware/main.cc were deleted with the offline static pipeline
-    # (ruling A); the shared-source glob still excludes both entry files so
-    # the online target declares its own main only.
+    # (ruling A). The shared-source glob excludes the one remaining entry
+    # file (main_online.cc) so the online target declares its own main only.
     set(srcs_congestion_aware_shared ${srcs_congestion_aware} ${srcs_common})
     list(REMOVE_ITEM srcs_congestion_aware_shared
-            ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main_online.cc)
 
     # Execution-driven mechanism sources. The root CMake glob (root
@@ -54,7 +74,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # into the AstraSim static library; this file re-globs the same directory
     # explicitly so the online target and the fixtures below compile the
     # layer directly.
-    file(GLOB srcs_execution_driven
+    file(GLOB srcs_execution_driven CONFIGURE_DEPENDS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/*.cc)
 
     # Online entry point: shared sources + main_online.cc + execution_driven layer.
@@ -168,6 +188,10 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # Link libraries
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE Analytical_Congestion_Aware)
+    # main_online.cc spawns a std::thread for the command FIFO; link pthread
+    # explicitly (same reason as IngressIdleTest below) so the binary does not
+    # rely on glibc >= 2.34 having merged libpthread into libc.
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE pthread)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_CompletionFixture LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_CompletionFixture LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_NodeStoreTest LINK_PRIVATE AstraSim)
@@ -230,7 +254,11 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
 
     # Properties
-    # TODO: Switch to OFF after binary_function deprecation has been resolved
+    # Status note (2026-09-26 review, replaces the bare upstream TODO):
+    # warning-as-error stays OFF for the Online target on purpose -- the
+    # sources still trip the std::binary_function deprecation warnings;
+    # flip COMPILE_WARNING_AS_ERROR back ON once that deprecation is
+    # resolved.
     set_target_properties(AstraSim_Analytical_Congestion_Aware_Online PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_Online
             PROPERTIES
@@ -452,9 +480,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
 
     # Phase-1 step 1-2 IDLE lifecycle fixture (IDLE/ACTIVE/DRAINING/FINISHED
     # transitions, EOF/Error terminals, overflow audit, close-vs-submit race).
-    # Uses std::thread (the only thread-using test in this directory), so it
-    # additionally links pthread, matching the -pthread of its old manual
-    # g++ line.
+    # Uses std::thread, so it additionally links pthread (main_online.cc uses
+    # std::thread as well), matching the -pthread of its old manual g++ line.
     add_executable(AstraSim_Analytical_Congestion_Aware_IngressIdleTest
             ${srcs_congestion_aware_shared}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/ingress_idle_fixture.cc
@@ -472,4 +499,140 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
             ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     )
+
+    # ------------------------------------------------------------------
+    # Die backend (stage B, 2026-10-03): three hermetic fixtures over a
+    # real Sys + EventQueue (fake network API; no sh_test_mesh artifacts).
+    # Same recipe as AlarmCancellationTest: shared sources + the
+    # execution_driven glob, linked against AstraSim (which carries
+    # workload/DieExecution.cc + DieModelAdapter.cc and the die_model
+    # library) and the Analytical_Congestion_Aware static library (which
+    # carries the backend EventQueue sources).
+    # ------------------------------------------------------------------
+
+    # Die backend dispatch: backend resolution + conflict matrix (die +
+    # roofline/replay), die_spec -> adapter -> exactly one
+    # finish_generic_node, control_marker legacy micro-job, missing-spec
+    # fail-closed throw, parser runtime_ns conflict.
+    add_executable(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/die_model_adapter_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # DieExecution lifecycle: Timer/Memory mixed plan end-to-end, one-shot
+    # local_mem_latency, contention=0 self-drive vs an independent
+    # full-speed oracle, contention=1 arbitration, slot occupancy/release,
+    # single terminal, teardown of an in-flight execution.
+    add_executable(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/die_execution_lifecycle_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # LocalHbmBandwidthModel DIE_COMPUTE jobs: equal-share service drain,
+    # sink completion ticks, actual-vs-service separation, malformed-request
+    # guards, cancel_die_jobs_of teardown (direct model fixture).
+    add_executable(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/local_hbm_die_memory_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # ------------------------------------------------------------------
+    # CTest registrations (review 2026-09-26 cpp-ed-tests-a-3): every
+    # hermetically runnable fixture registers here so the targets form a
+    # runnable gate. CompletionFixture / LocalHbmTest stay build-only BY
+    # CONTRACT: their runs require materialized artifacts under
+    # sh_test_mesh/generated/ (gitignored by design, produced by
+    # make_*_fixture_et.py plus the runtime_config materialization), so a
+    # plain registration would be a permanently red gate; their manual run
+    # recipes live in their source headers. NodeStoreTest joined the gate
+    # (R4-N1, 2026-09-29): only its part C needs the fixture ET, and the
+    # no-arg invocation now passes the hermetic parts A/B/D with the part-C
+    # skip printed.
+    # ------------------------------------------------------------------
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_WatchRegistryTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_WatchRegistryTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_NodeStoreTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_NodeStoreTest)
+    # Bridge loopback: requires python3 on PATH (fail-closed timeout, not a
+    # hang) and the in-repo echo script as argv[1].
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_echo.py)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_ParsedBatchTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_ParsedBatchTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_WindowedReaderTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_WindowedReaderTest)
+    # Calendar oracle: no argv[1] -> hermetic synthetic fixture.
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_CalendarOracleTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_CalendarOracleTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_MetricAnchorSpoolTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_MetricAnchorSpoolTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_LocalMemTrackerTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_LocalMemTrackerTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_TerminalTailDrainTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_TerminalTailDrainTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_CliOnlineTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_CliOnlineTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_IngressIdleTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_IngressIdleTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest)
 endif ()

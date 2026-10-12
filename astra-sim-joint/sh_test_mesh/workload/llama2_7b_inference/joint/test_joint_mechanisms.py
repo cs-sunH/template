@@ -11,7 +11,9 @@
   minimal_layer_groups 最少完整层组、adaptive 目标外→目标内两扫描、
   未来信息隔离（估计器只随真实观测更新）；
 * J 选择：joint 全候选 argmin / load-first 与 affinity-first 顺序参照、
-  remote off 仅移除 remote-read 候选；
+  remote off 仅移除 remote-read 候选；M2 动作掩码
+  JOINT_ALLOWED_ACTIONS（2026-09-26 消融矩阵前置）= 候选集上限不是
+  强制：解析链、四臂行为、与 remote_enabled 交集、零适用 fail-closed；
 * home/merge：copy 异地执行不改 home、merge_back 增量恰好归并一次、
   工作副本释放无双份驻留、recompute 增量归并、remote-read 工作副本
   仅承载新增量；
@@ -24,7 +26,6 @@
 import os
 import sys
 import unittest
-from types import SimpleNamespace
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)
@@ -33,6 +34,7 @@ for _p in (_HERE, _PARENT, os.path.join(_PARENT, "online")):
         sys.path.insert(0, _p)
 
 from joint.joint_config import (  # noqa: E402
+    ALL_ACTIONS,
     COMBO_NAMES,
     COMBO_PRESETS,
     JointConfigError,
@@ -57,11 +59,13 @@ from joint.joint_cost_model import (  # noqa: E402
     InstanceLoadView,
     JointCostModel,
     LinkFlowRegistry,
+    MASK_INAPPLICABLE_REASON,
     RequestView,
     ServiceFactors,
     SessionKVView,
 )
 from joint.joint_scheduler import (  # noqa: E402
+    JointSchedulerError,
     select_instance_and_action,
 )
 from face_scheduler import (  # noqa: E402
@@ -138,6 +142,13 @@ class JointConfigParseTest(unittest.TestCase):
             {"JOINT_REMOTE_READ_PARTIAL": "maybe"},
             {"JOINT_REMOTE_READ_PARTIAL": "ON"},
             {"JOINT_REMOTE_READ_PARTIAL": " on"},
+            # M2 动作掩码：未知动作名 / 大小写 / 空白 / 悬挂逗号 / 空值
+            # 一律 fail-closed（数值合同同 SH30_ABLATION 风格）。
+            {"JOINT_ALLOWED_ACTIONS": "recompute,nowrap"},
+            {"JOINT_ALLOWED_ACTIONS": "STAY"},
+            {"JOINT_ALLOWED_ACTIONS": " stay"},
+            {"JOINT_ALLOWED_ACTIONS": "stay,"},
+            {"JOINT_ALLOWED_ACTIONS": ""},
         ):
             with self.assertRaises(JointConfigError, msg=repr(env)):
                 parse_joint_config(env)
@@ -157,6 +168,32 @@ class JointConfigParseTest(unittest.TestCase):
         self.assertEqual(manifest["remote_read_partial"], "off")
         self.assertEqual(
             manifest["source_env"]["JOINT_REMOTE_READ_PARTIAL"], "off")
+
+    def test_allowed_actions_switch_chain(self):
+        """M2 动作掩码全链路（仿 remote_read_partial 开关链）：env→
+        parse→属性→manifest→来源登记→派生放行集。"""
+        default = parse_joint_config({})
+        self.assertEqual(default.allowed_actions, "all")
+        self.assertEqual(default.allowed_action_set, frozenset(ALL_ACTIONS))
+        self.assertNotIn(
+            "JOINT_ALLOWED_ACTIONS", default.manifest_dict()["source_env"])
+        masked = parse_joint_config({"JOINT_ALLOWED_ACTIONS": "copy"})
+        self.assertEqual(masked.allowed_actions, "copy")
+        self.assertEqual(masked.allowed_action_set, frozenset({"copy"}))
+        manifest = masked.manifest_dict()
+        self.assertEqual(manifest["allowed_actions"], "copy")
+        self.assertEqual(
+            manifest["source_env"]["JOINT_ALLOWED_ACTIONS"], "copy")
+        # 重复 token 容忍（frozenset 集合语义去重）；定义源 = ALL_ACTIONS。
+        dup = parse_joint_config(
+            {"JOINT_ALLOWED_ACTIONS": "recompute,recompute"})
+        self.assertEqual(dup.allowed_action_set, frozenset({"recompute"}))
+        # 直接构造同走 __post_init__ 校验（fail-closed 不只 env 路径）。
+        with self.assertRaises(JointConfigError):
+            JointMechanismConfig(
+                category_mode="typed", scheduler_mode="joint",
+                layer_policy="adaptive", remote_actions="on",
+                allowed_actions="recompute,bogus")
 
     def test_manifest_carries_merge_semantics_v2(self):
         """合并语义版本机读键（§4.5 字面；裁定④：恒单值、非开关——旧
@@ -546,7 +583,7 @@ def _route(source, target):
     return ((source, target), 1)
 
 
-def _cost_model(loads, *, remote_enabled_partner=False):
+def _cost_model(loads, *, remote_enabled_partner=False, allowed_actions=None):
     rates = JointHardwareRates.from_gbps(
         noc_link_gbps=10.0, pool_port_gbps=5.0, local_hbm_gbps=100.0,
         d2d_latency_ns=10, pool_latency_ns=100)
@@ -554,7 +591,8 @@ def _cost_model(loads, *, remote_enabled_partner=False):
         rates=rates, loads=loads, flow_registry=LinkFlowRegistry(),
         service_factors=ServiceFactors(),
         prefill_ns_per_token=1.0, decode_ns_per_token=2.0,
-        model_layers=4, instance_tp_size=2, route_fn=_route)
+        model_layers=4, instance_tp_size=2, route_fn=_route,
+        allowed_actions=allowed_actions)
 
 
 def _load(index, total, remaining=(10**9, 10**9)):
@@ -691,6 +729,121 @@ class JointSelectionTest(unittest.TestCase):
         chosen = [(r.chosen.instance_index, r.chosen.action)
                   for r in records]
         self.assertEqual(len(set(chosen)), 1)
+
+
+# ================================================== M2 动作掩码 ==
+
+
+class AllowedActionsMaskTest(unittest.TestCase):
+    """M2（2026-09-26 消融矩阵前置）：动作掩码 JOINT_ALLOWED_ACTIONS。
+
+    语义裁定钉子：掩码是**候选集上限不是强制**；与 remote_enabled 取
+    交集；臂预设恒含 recompute（recompute-only={recompute}+load-first、
+    always-copy={copy,recompute}、always-remote={remote-read,recompute}）；
+    掩码剔除 recompute 致零适用维持 fail-closed（JointSchedulerError，
+    非容量拒绝）。仿 remote off 适用性表（test_remote_off_only_removes_
+    remote_candidates）逐候选断言。"""
+
+    def test_mask_is_candidate_upper_bound_not_mandate(self):
+        # 候选集上限：掩码命中（= 掩码外）且原本可用的动作统一改判
+        # MASK_INAPPLICABLE_REASON，原本就不可用的保留原物理/开关理由；
+        # recompute 不被误伤；枚举形状不变（每实例 4 动作）。
+        loads = {0: _load(0, 0), 1: _load(1, 0)}
+        session = _session(home=1, resident=1)
+        unmasked = select_instance_and_action(
+            mode="joint", cost_model=_cost_model(loads), session=session,
+            request=_request(), remote_enabled=True)
+        record = select_instance_and_action(
+            mode="joint",
+            cost_model=_cost_model(loads, allowed_actions=frozenset(
+                {"recompute"})),
+            session=session, request=_request(), remote_enabled=True)
+        self.assertEqual(len(record.candidates), 8)   # 形状不变
+        baseline = {
+            (c.instance_index, c.action): c for c in unmasked.candidates}
+        for candidate in record.candidates:
+            base = baseline[(candidate.instance_index, candidate.action)]
+            if candidate.action == "recompute":
+                # 掩码放行 recompute：与无掩码逐字段一致（零误伤）。
+                self.assertEqual(candidate.applicable, base.applicable)
+                self.assertEqual(
+                    candidate.inapplicable_reason,
+                    base.inapplicable_reason)
+            elif base.applicable:
+                self.assertFalse(candidate.applicable, str(base))
+                self.assertEqual(
+                    candidate.inapplicable_reason,
+                    MASK_INAPPLICABLE_REASON, str(base))
+            else:
+                # 原本就不可用：保留更具体的物理/开关理由。
+                self.assertEqual(
+                    candidate.inapplicable_reason,
+                    base.inapplicable_reason)
+        self.assertEqual(record.chosen.action, "recompute")
+
+    def test_mask_intersects_remote_enabled(self):
+        # 交集语义：掩码放行 remote-read 而能力开关关 ⇒ 仍是
+        # "remote actions disabled"（原物理/开关理由优先保留，不被掩码
+        # 理由覆盖）；能力开而掩码拒 ⇒ 掩码理由。
+        loads = {0: _load(0, 0), 1: _load(1, 5000)}
+        session = _session(home=1, resident=1)
+        model = _cost_model(
+            loads, allowed_actions=frozenset(
+                {"stay", "recompute", "copy", "remote-read"}))
+        applicability = dict(zip(
+            ACTION_ORDER, model.applicable_actions(
+                session, _request(), 0, remote_enabled=False)))
+        self.assertFalse(applicability["remote-read"][0])
+        self.assertEqual(applicability["remote-read"][1],
+                         "remote actions disabled")
+        model = _cost_model(loads, allowed_actions=frozenset({"recompute"}))
+        applicability = dict(zip(
+            ACTION_ORDER, model.applicable_actions(
+                session, _request(), 0, remote_enabled=True)))
+        self.assertFalse(applicability["remote-read"][0])
+        self.assertEqual(applicability["remote-read"][1],
+                         MASK_INAPPLICABLE_REASON)
+
+    def test_arm_presets_always_include_recompute(self):
+        # 三臂预设恒含 recompute；掩码是上限不是强制——各臂仍按代价
+        # argmin 在放行集内选择（load-first 先选点再选动作）。
+        loads = {0: _load(0, 0), 1: _load(1, 5000)}
+        session = _session(home=0, resident=1)
+        arms = (
+            ("recompute-only", frozenset({"recompute"}), "load-first"),
+            ("always-copy", frozenset({"copy", "recompute"}), "joint"),
+            ("always-remote",
+             frozenset({"remote-read", "recompute"}), "joint"),
+        )
+        for name, allowed, mode in arms:
+            self.assertIn(
+                "recompute", allowed, f"{name}: 臂预设恒含 recompute")
+            record = select_instance_and_action(
+                mode=mode,
+                cost_model=_cost_model(loads, allowed_actions=allowed),
+                session=session, request=_request(), remote_enabled=True)
+            self.assertIn(
+                record.chosen.action, allowed,
+                f"{name}: chosen must respect the mask upper bound")
+
+    def test_mask_excluding_recompute_zero_applicable_fails_closed(self):
+        # 掩码剔除 recompute 且其余动作物理不可用（turn-0 新会话仅
+        # stay/recompute 适用，两者均不在放行集）⇒ 零适用维持
+        # fail-closed（joint 与 load-first 同一 raise；非容量拒绝）。
+        loads = {0: _load(0, 0)}
+        fresh = SessionKVView(
+            session_id="s", home_instance=None, resident_instance=None,
+            location="none", history_tokens=0, resident_prefix_layers=0,
+            history_bytes_by_tp_rank=(0, 0), missing_bytes_by_tp_rank=(0, 0))
+        model = _cost_model(loads, allowed_actions=frozenset({"copy"}))
+        for mode in ("joint", "load-first"):
+            with self.assertRaisesRegex(JointSchedulerError, mode):
+                select_instance_and_action(
+                    mode=mode, cost_model=model, session=fresh,
+                    request=_request(), remote_enabled=True)
+
+
+# ======================================================== home / merge ==
 
 
 # ======================================================== home / merge ==

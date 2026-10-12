@@ -3,7 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
-File-implementation of the bridge protocol v0 (方案 §4 步骤 1-7).
+File-implementation of the bridge protocol v1 (方案 §4 步骤 1-7).
 
 Fail-closed semantics: every protocol violation (Python crash via EOF,
 EPIPE on the notification write, poll timeout, missing/corrupt response,
@@ -28,9 +28,11 @@ The static binary never constructs a bridge (zero impact on the baseline).
 #include <cstring>
 #include <fstream>
 #include <poll.h>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -54,7 +56,17 @@ std::string reason_name(const DecisionReason reason) {
         case DecisionReason::REQUEST_COMPLETE:
             return "REQUEST_COMPLETE";
     }
-    return "UNKNOWN";
+    // Dead-code cleanup (2026-10-01, ported from face-LRU's same fix of
+    // 2026-09-29): the switch is exhaustive over DecisionReason; the old
+    // trailing `return "UNKNOWN";` was unreachable and existed only to
+    // pacify -Wreturn-type. An out-of-enum value is a programming error:
+    // fail loud instead of printing a bogus reason name into the request
+    // JSON (same idiom as bridge_fatal).
+    std::fprintf(stderr,
+                 "[Error] (execution_driven/bridge) reason_name: unreachable "
+                 "reason value %d\n",
+                 static_cast<int>(reason));
+    std::abort();
 }
 
 // Recursive mkdir(2) loop (no std::filesystem dependency).
@@ -99,10 +111,42 @@ nlohmann::json read_json_file(const std::string& path) {
     if (!in) {
         throw std::runtime_error("cannot open " + path);
     }
+    // Strict JSON load (2026-10-01, ported from the face-LRU repo's
+    // DecisionBridge.cc read_json_file): istream operator>> parses in
+    // NON-strict mode -- it silently consumes the FIRST JSON value and
+    // leaves trailing bytes unread, and the DOM build last-wins on
+    // duplicate object keys. These files are machine-written by paired
+    // tooling, so trailing content or a duplicate key is producer
+    // corruption, not a legal shape. json::parse in its default strict
+    // mode rejects trailing bytes outright; the stateful parse callback
+    // rejects a repeated key inside one object.
+    struct KeyGuard {
+        std::vector<std::set<std::string>> stack;
+        std::string duplicate;
+        bool operator()(int, nlohmann::json::parse_event_t event,
+                        nlohmann::json& parsed) {
+            using EVT = nlohmann::json::parse_event_t;
+            if (event == EVT::object_start) {
+                stack.emplace_back();
+            } else if (event == EVT::key) {
+                if (!stack.back().insert(parsed.get<std::string>()).second) {
+                    duplicate = parsed.get<std::string>();
+                }
+            } else if (event == EVT::object_end && !stack.empty()) {
+                stack.pop_back();
+            }
+            return true;  // observe only; never discard subtree
+        }
+    } guard;
     nlohmann::json value;
-    in >> value;
-    if (in.bad()) {
-        throw std::runtime_error("corrupt JSON in " + path);
+    try {
+        value = nlohmann::json::parse(in, guard);
+    } catch (const nlohmann::json::exception& e) {
+        throw std::runtime_error("corrupt JSON in " + path + ": " + e.what());
+    }
+    if (!guard.duplicate.empty()) {
+        throw std::runtime_error("duplicate JSON key \"" + guard.duplicate +
+                                 "\" in " + path);
     }
     return value;
 }
@@ -115,7 +159,10 @@ int wait_readable(int fd, int timeout_ms) {
     pfd.events = POLLIN | POLLHUP;
     pfd.revents = 0;
     const int ms = (timeout_ms == 0) ? -1 : timeout_ms;
-    const int r = ::poll(&pfd, 1, ms);
+    int r;
+    do {
+        r = ::poll(&pfd, 1, ms);
+    } while (r < 0 && errno == EINTR);
     if (r == 0) {
         return 0;
     }
@@ -124,6 +171,15 @@ int wait_readable(int fd, int timeout_ms) {
     }
     return 1;
 }
+
+// Startup grace for the FIRST response byte (wait_response_byte): this
+// side's O_NONBLOCK read open succeeds before Python's resp write-end open
+// (its serve_forever opens the req read end first), so an empty writerless
+// FIFO in that window reports POLLHUP + read()==0 -- the same EOF signature
+// as peer death. A pre-first-byte EOF is retried for this long before the
+// fatal verdict; it only ever delays a genuinely dead startup peer, never
+// masks a mid-run death (post-first-byte EOF stays immediate).
+constexpr int kRespWriterStartupGraceMs = 10000;
 
 }  // namespace
 
@@ -372,7 +428,10 @@ void FileDecisionBridge::open_notify() {
     // (the false "Python side crashed", F1) and the mirror race EPIPE'd
     // Python's write (F7-style handshake wedges). With both fds long-lived
     // there are no mid-run writer/reader transitions at all: EOF on this fd
-    // can only be the peer process dying.
+    // can only be the peer process dying. The residual startup gap (the
+    // write end opens one Python statement after the req read end this
+    // function already waited for) is absorbed by wait_response_byte's
+    // first-byte startup grace, not here.
     if (resp_notify_fd_ < 0) {
         const std::string path = bridge_dir_ + "/resp_notify.fifo";
         resp_notify_fd_ = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
@@ -386,7 +445,12 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
     // Defect-B fix: one byte off the long-lived read end, with an EAGAIN
     // retry loop (the fd is O_NONBLOCK; a poll wake without a consumable
     // byte -- e.g. POLLHUP edges while Python churns its user-space state
-    // -- must not be mistaken for data or death).
+    // -- must not be mistaken for data or death). The pre-first-byte
+    // startup window (no writer yet on this side's fresh read end) gets
+    // kRespWriterStartupGraceMs of EOF retries before the death verdict.
+    const auto startup_grace_deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(kRespWriterStartupGraceMs);
     while (true) {
         const int wait = wait_readable(resp_notify_fd_, timeout_ms_);
         if (wait == 0) {
@@ -400,6 +464,7 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
         char byte = 0;
         const ssize_t n = ::read(resp_notify_fd_, &byte, 1);
         if (n == 1) {
+            resp_notify_byte_seen_ = true;
             // Defect-B fix guard (protocol drift detection): the channel is
             // strictly 1 byte per delivery (backpressure: one in-flight
             // epoch at a time -- C++ never sends request N+1 before
@@ -418,14 +483,38 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
             return;  // the notification byte (payload is the response file)
         }
         if (n == 0) {
-            // The ONLY way the peer's lifetime write end closes: the Python
-            // process died (crash/exit). Genuine crash detection -- under
-            // the old per-exchange protocol this same signature also fired
-            // for a live-but-between-opens peer (defect B's false kill).
-            bridge_fatal("Python side died (its long-lived resp_notify "
-                         "write end closed; EOF on resp_notify.fifo, "
-                         "delivery_sequence=" +
-                         std::to_string(seq) + ")");
+            // The ONLY way the peer's lifetime write end closes after a
+            // byte has crossed: the Python process died (crash/exit).
+            // Genuine crash detection -- under the old per-exchange
+            // protocol this same signature also fired for a
+            // live-but-between-opens peer (defect B's false kill).
+            //
+            // Before the FIRST byte ever crossed, EOF is ambiguous: this
+            // side's O_NONBLOCK read open precedes Python's write-end open
+            // (serve_forever pairs its req read end with C++'s req write
+            // open first), so a writerless empty FIFO here may be a
+            // live-but-not-yet-paired peer. Retry until the startup grace
+            // expires; a peer that died before its first response is still
+            // caught fail-closed at the deadline -- only the verdict is
+            // deferred, the message is unchanged.
+            if (resp_notify_byte_seen_ ||
+                std::chrono::steady_clock::now() >= startup_grace_deadline) {
+                std::string why = "Python side died (its long-lived "
+                                  "resp_notify write end closed; EOF on "
+                                  "resp_notify.fifo, delivery_sequence=" +
+                                  std::to_string(seq);
+                if (!resp_notify_byte_seen_) {
+                    why += "; no response byte ever arrived, startup grace "
+                           "expired";
+                }
+                why += ")";
+                bridge_fatal(why);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        if (errno == EINTR) {
+            continue;  // signal-interrupted read: retry the poll+read
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             continue;  // spurious wake: re-enter the poll
@@ -450,7 +539,10 @@ void FileDecisionBridge::notify_python() {
     ::sigemptyset(&ignore_action.sa_mask);
     ::sigaction(SIGPIPE, &ignore_action, &old_action);
     const char byte = '\n';
-    const ssize_t n = ::write(req_notify_fd_, &byte, 1);
+    ssize_t n;
+    do {
+        n = ::write(req_notify_fd_, &byte, 1);
+    } while (n < 0 && errno == EINTR);
     ::sigaction(SIGPIPE, &old_action, nullptr);
     if (n < 0) {
         if (errno == EPIPE) {
@@ -465,6 +557,10 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // C++ side (write request + notify + wait for Python + read response).
     // Every exit before the final accounting is bridge_fatal (abort), so the
     // only counted exit is the successful return.
+    // Minor④(2026-09-30):防御性清账——lock-step 协议下进入新交付时不应
+    // 有上一批的待删 response(提交回调已随 ack 回收);万一直接驱动方
+    // 跳过 ack,在此兜底 unlink,避免桥目录无界增长。
+    release_response_file();
     const auto bridge_t0 = std::chrono::steady_clock::now();
     const uint64_t seq = delta.delivery_sequence;
     write_file_atomic(request_path(seq), build_request_json(delta));
@@ -476,11 +572,19 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // req read end open -- decision_bridge.py).
     notify_python();
     // Wait for the response byte on the LIFETIME read end (defect-B fix):
-    // no per-exchange open/close handshake anymore; read()==0 can only be
-    // the peer's death (see wait_response_byte / open_notify).
+    // no per-exchange open/close handshake anymore; post-first-byte
+    // read()==0 can only be the peer's death, and the pre-first-byte
+    // startup window gets the bounded grace (see wait_response_byte /
+    // open_notify).
     wait_response_byte(seq);
 
     nlohmann::json resp;
+    // G1-1 (baseline-sync): read_json_file and every value<T>() extraction
+    // fail closed through bridge_fatal -- a type_error escaping as an
+    // uncaught exception would std::terminate and bypass the fatal teardown
+    // (zombie FIFOs). Messages stay split the way the fixture's frozen
+    // needles demand: "response missing or corrupt" for the read/parse,
+    // "malformed response field type" for typed field extraction.
     try {
         resp = read_json_file(response_path(seq));
     } catch (const std::exception& exc) {
@@ -488,26 +592,32 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
     }
-    if (resp.value("schema_version", -1) != kDecisionBridgeSchemaVersion) {
-        bridge_fatal("response schema_version mismatch for delivery_sequence=" +
-                     std::to_string(seq));
-    }
-    const uint64_t source_seq =
-        resp.value("source_delivery_sequence", uint64_t(-1));
-    if (source_seq != seq) {
-        bridge_fatal("response source_delivery_sequence=" +
-                     std::to_string(source_seq) + " != request seq=" +
-                     std::to_string(seq));
-    }
-
     // Error before structure (frozen ordering, rule T3/O4): a decision
     // failure aborts with the Python error message, never with a misleading
     // structural diagnostic -- the _fail skeleton carries all-empty arrays
     // and would parse cleanly anyway.
-    const std::string error = resp.value("error", std::string());
-    if (!error.empty()) {
-        bridge_fatal("Python decision failed for delivery_sequence=" +
-                     std::to_string(seq) + ": " + error);
+    try {
+        if (resp.value("schema_version", -1) != kDecisionBridgeSchemaVersion) {
+            bridge_fatal(
+                "response schema_version mismatch for delivery_sequence=" +
+                std::to_string(seq));
+        }
+        const uint64_t source_seq =
+            resp.value("source_delivery_sequence", uint64_t(-1));
+        if (source_seq != seq) {
+            bridge_fatal("response source_delivery_sequence=" +
+                         std::to_string(source_seq) + " != request seq=" +
+                         std::to_string(seq));
+        }
+        const std::string error = resp.value("error", std::string());
+        if (!error.empty()) {
+            bridge_fatal("Python decision failed for delivery_sequence=" +
+                         std::to_string(seq) + ": " + error);
+        }
+    } catch (const std::exception& exc) {
+        bridge_fatal(std::string("malformed response field type for "
+                                 "delivery_sequence=") +
+                     std::to_string(seq) + ": " + exc.what());
     }
 
     // C1 (2026-08-29): ONE structural parse into the typed ParsedGraphBatch.
@@ -552,21 +662,39 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                      std::strerror(errno));
     }
     stats_.channel_bytes += static_cast<uint64_t>(response_stat.st_size);
-    // Phase 7 (方案 §10.3): intermediate-product lifecycle. The response
-    // file is fully consumed (the batch is materialized above); delete it
-    // right away so the bridge dir holds only the request files (the
-    // decision-sequence evidence the idempotency fixture replays) plus the
-    // in-flight response. Measured on the frozen 20.csv first-30s input:
-    // response files are ~202 MB of the ~252 MB bridge footprint. The
-    // Python journals each successfully handled request into one ordered
-    // request_journal.jsonl and retires loose request files in bounded batches;
-    // idempotency/audit readers accept that journal and the legacy loose layout.
-    // On fail-closed paths the response stays on disk for post-mortem.
-    if (::unlink(response_path(seq).c_str()) != 0) {
-        bridge_fatal("unlink response " + response_path(seq) + ": " +
+    // Phase 7 (方案 §10.3): intermediate-product lifecycle. Minor④
+    // (2026-09-30):the response file is fully consumed (the batch is
+    // materialized above), but the UNLINK is deferred to the commit ack.
+    // The old "parse then delete immediately" ordering ran BEFORE Phase-A
+    // validation (which lives in the caller's commit callback, after this
+    // function returns) -- so a validation failure aborted a run whose
+    // response file was already gone, contradicting the documented
+    // fail-closed forensics contract. The response file now survives every
+    // fail-closed path (parse errors, Phase-A/B commit failures, bridge
+    // protocol violations): deliver_and_receive only records the pending
+    // unlink here; send_commit_ack performs it once the batch actually
+    // committed. Measured on the frozen 20.csv first-30s input: response
+    // files are ~202 MB of the ~252 MB bridge footprint -- retaining at
+    // most the single in-flight response until its ack keeps that bound
+    // (lock-step protocol: at most one delivery between response and ack).
+    response_unlink_pending_ = true;
+    response_unlink_seq_ = seq;
+    return batch;
+}
+
+void FileDecisionBridge::release_response_file() {
+    // Minor④(2026-09-30):提交成功后的 response 文件回收(实现见 .hh
+    // 注释)。lock-step 协议保证至多一个在途 response;若发现陈旧待删
+    // (理论上仅测试直接驱动会出现),先清掉再继续,保持桥目录守恒。
+    if (!response_unlink_pending_) {
+        return;
+    }
+    response_unlink_pending_ = false;
+    const std::string path = response_path(response_unlink_seq_);
+    if (::unlink(path.c_str()) != 0) {
+        bridge_fatal("unlink response " + path + ": " +
                      std::strerror(errno));
     }
-    return batch;
 }
 
 std::string FileDecisionBridge::stats_report() const {
@@ -586,6 +714,11 @@ std::string FileDecisionBridge::stats_report() const {
 void FileDecisionBridge::send_commit_ack(const uint64_t batch_id,
                                          const uint64_t delivery_seq,
                                          const bool success) {
+    // Minor④(2026-09-30):ack 即提交成功——此刻起 fail-closed 窗口已关,
+    // 在途 response 文件才被回收(校验失败路径全部停在 ack 之前,文件
+    // 因此保留作 post-mortem 取证,与 deliver_and_receive 的注释契约
+    // 一致)。
+    release_response_file();
     nlohmann::json ack;
     ack["schema_version"] = kDecisionBridgeSchemaVersion;
     ack["delivery_sequence"] = delivery_seq;

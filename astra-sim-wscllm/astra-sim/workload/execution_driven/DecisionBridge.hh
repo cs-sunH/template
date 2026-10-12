@@ -47,10 +47,14 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
     the v0 reserved field kept empty for backward comprehension.
   - Response fields: {schema_version, batch_id, source_delivery_sequence,
     nodes[], parent_edges[], watches[], assignments[], kv_actions[],
-    future_alarms[], error?}. The inner node/edge/watch/assignment/kv-action
-    schemas are carried opaquely by C++ (nlohmann::json arrays) and freeze
-    with step 1-8's graph_batch_builder; the step-1-11 committer parses
-    them. future_alarms[] (step 1-8) carries {arrival_world_ns, envelope{
+    future_alarms[], touched_ranks[], error?}. (2026-10-01 correction of
+    this block: since the C1 typed parse the six inner arrays are parsed
+    ONCE into typed vectors by ParsedGraphBatch -- with strict
+    allowed/required key sets and integer-domain checks that abort the run
+    on any mismatch -- not "carried opaquely as nlohmann arrays"; see the
+    C1 note below and ParsedGraphBatch.hh. The committer consumes the same
+    typed batch.) future_alarms[] (step 1-8) carries {arrival_world_ns,
+    envelope{
     request_id, session_id, turn_index, prefill_length, decode_length,
     inter_request_interval_ns}} -- the committer schedules these through
     RequestIngress::schedule_future_arrival inside the commit.
@@ -121,40 +125,40 @@ using GraphBatch = ParsedGraphBatch;
 /// exposed for fixtures and the step-1-8 wiring).
 nlohmann::json build_request_json(const StateDelta& delta);
 
-/// Decision channel interface (方案 §4 步骤 1-7 操作 2).
-class DecisionBridge {
-  public:
-    virtual ~DecisionBridge() = default;
-
-    /// Deliver one StateDelta to Python and block until the GraphBatch
-    /// reply arrives. Exactly one delivery per tick (backpressure).
-    virtual GraphBatch deliver_and_receive(const StateDelta& delta) = 0;
-
-    /// Notify Python that the batch with batch_id (epoch seq) was
-    /// committed. Python's provisional ledger finalizes on this ack
-    /// (step-1-6 pseudocode; the ledger itself lands with step 1-8/1-9).
-    virtual void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
-                                 bool success) = 0;
-};
-
 /// File-implementation of the v1 protocol (blocking FIFOs, atomic JSON
 /// files, fail-closed error/crash/timeout semantics). timeout_ms == 0
 /// waits forever (the phase-1 default).
+/// C2 (2026-09-28): the former abstract DecisionBridge base is gone --
+/// every producer and fixture used FileDecisionBridge directly (no base
+/// pointer/subclass anywhere), so the pure-virtual interface was a dead
+/// dispatch layer. The two protocol entry points:
+///   - deliver_and_receive: one StateDelta to Python, block until the
+///     GraphBatch reply arrives; exactly one delivery per tick
+///     (backpressure).
+///   - send_commit_ack: tell Python the batch (epoch seq) committed; the
+///     provisional ledger finalizes on this ack (step-1-6 pseudocode; the
+///     ledger itself lands with step 1-8/1-9). `success` is an
+///     ack-schema reserved field (2026-09-27 note): a commit ack is only
+///     ever sent after the batch fully committed -- any failure aborts
+///     fail-closed BEFORE the ack -- so every current producer passes
+///     true. Since the 2026-09-29 decision_bridge.py fix the peer does
+///     consume this field: an explicit false is fail-closed on the Python
+///     side; absent/true stays compatible with the frozen fixtures.
 /// C1 (2026-08-29): num_ranks feeds parse_graph_batch's rank-domain checks
 /// (node/edge/watch-member/touched-rank ranges). -1 (the default) disables
 /// them for legacy fixtures; the official online main passes its NPU count.
-class FileDecisionBridge : public DecisionBridge {
+class FileDecisionBridge {
   public:
     explicit FileDecisionBridge(std::string bridge_dir, int timeout_ms = 0,
                                 int num_ranks = -1);
-    ~FileDecisionBridge() override;
+    ~FileDecisionBridge();
 
     FileDecisionBridge(const FileDecisionBridge&) = delete;
     FileDecisionBridge& operator=(const FileDecisionBridge&) = delete;
 
-    GraphBatch deliver_and_receive(const StateDelta& delta) override;
+    GraphBatch deliver_and_receive(const StateDelta& delta);
     void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
-                         bool success) override;
+                         bool success);
 
     /// Create <bridge_dir>, both FIFOs and clean stale files. Must be
     /// called BEFORE either side starts (FIFO open order rule).
@@ -199,10 +203,6 @@ class FileDecisionBridge : public DecisionBridge {
         uint64_t channel_bytes = 0;
         uint64_t forced_flush_count = 0;
     };
-
-    const Stats& stats() const {
-        return stats_;
-    }
 
     /// One-line report ("[online] phase-6 stats counters:" continuation).
     std::string stats_report() const;

@@ -19,16 +19,19 @@ standalone test -- no network simulation, no baseline artifacts touched:
   Part C  Lifecycle + audit: remove_watch / remove_all, stale_count()==0
           end audit, empty expected set never fires (stale, documented
           programming error), fire notifier wiring.
-  Part D  online_completion_hook integration: the step-1-5 hook records the
+  Part D  Direct CompletionKey index: one terminal can satisfy multiple
+          overlapping watches (each fires once), and removal must erase
+          every direct-index route before the id is reusable.
+  Part E  online_completion_hook integration: the step-1-5 hook records the
           fact through the registry (read-only) -- the ① half of the hook's
           two-job contract; the ② half (mailbox write) is the step-1-6
           notifier wiring exercised here via set_fire_notifier.
-  Part E  Deferred issue-pass coalescing: one pending pass per rank, FIFO by
+  Part F  Deferred issue-pass coalescing: one pending pass per rank, FIFO by
           first rank occurrence, stable preallocated callback arguments, and
           nested same-rank completion appended to the same drain.
-  Part F  Communicator replacement lifetime: exact rank-order/dimension
+  Part G  Communicator replacement lifetime: exact rank-order/dimension
           identity and DataSet-held shared ownership until collective finish.
-  Part G  Online HardwareResource: exact counters without per-node ID hashes;
+  Part H  Online HardwareResource: exact counters without per-node ID hashes;
           static diagnostic tracking remains enabled.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WatchRegistryTest
@@ -60,11 +63,15 @@ namespace {
 
 bool g_ok = true;
 
-void expect(bool cond, const char* what) {
+// expect() is non-aborting (records and continues); it returns the
+// condition so dereference-after-expect sites can guard the subscript
+// (empty-vector operator[] is UB).
+bool expect(bool cond, const char* what) {
     if (!cond) {
         std::fprintf(stderr, "[watch_registry_test] FAIL: %s\n", what);
         g_ok = false;
     }
+    return cond;
 }
 
 CompletionKey key(int rank, uint64_t node_id, uint64_t generation) {
@@ -134,11 +141,12 @@ void test_registration_and_noops() {
     reg.on_node_terminal(key(0, 2, 1),
                          NodeTerminalStatus::Skipped);
     auto fires = reg.fired_and_drain();
-    expect(fires.size() == 1, "A: watch fired once");
-    expect(fires[0].watch_id == watch_id && fires[0].request_id == "req-1" &&
-               fires[0].stage == "prefill" && fires[0].generation == 1 &&
-               fires[0].member_count == 2,
-           "A: fire carries identity and member count");
+    if (expect(fires.size() == 1, "A: watch fired once")) {
+        expect(fires[0].watch_id == watch_id && fires[0].request_id == "req-1" &&
+                   fires[0].stage == "prefill" && fires[0].generation == 1 &&
+                   fires[0].member_count == 2,
+               "A: fire carries identity and member count");
+    }
     expect(reg.stale_count() == 1, "A: fired watch no longer stale");
 
     // Terminals after the fire: no-op (fire once).
@@ -300,18 +308,18 @@ void test_online_hook() {
     online_completion_hook(&ctx, 2, 70, "req-8", "prefill", 1,
                            /*tick=*/12345, static_cast<int>(
                                NodeTerminalStatus::Skipped));
-    expect(fires == 0, "D: hook records the fact, no fire yet");
+    expect(fires == 0, "E: hook records the fact, no fire yet");
     online_completion_hook(&ctx, 2, 71, "req-8", "prefill", 1,
                            /*tick=*/12345, static_cast<int>(
                                NodeTerminalStatus::Success));
-    expect(fires == 1, "D: hook-recorded facts fire the watch");
-    expect(reg.stale_count() == 0, "D: fired watch not stale");
+    expect(fires == 1, "E: hook-recorded facts fire the watch");
+    expect(reg.stale_count() == 0, "E: fired watch not stale");
 
     // nullptr ctx / null registry: the hook is a no-op (never crashes).
     online_completion_hook(nullptr, 0, 1, "req-8", "prefill", 1, 0, 0);
     OnlineCompletionHookContext empty_ctx;
     online_completion_hook(&empty_ctx, 0, 1, "req-8", "prefill", 1, 0, 0);
-    expect(fires == 1, "D: null context is a no-op");
+    expect(fires == 1, "E: null context is a no-op");
 
     reg.remove_all();
 }
@@ -328,7 +336,7 @@ void issue_pass_probe(void* opaque, const int rank) {
     if (rank == 0 && !probe->nested_scheduled) {
         probe->nested_scheduled = true;
         expect(probe->hook->schedule_issue_pass(0),
-               "E: callback-start clear permits nested same-rank pass");
+               "F: callback-start clear permits nested same-rank pass");
     }
 }
 
@@ -351,18 +359,18 @@ void test_issue_pass_coalescing() {
     online_completion_hook(&ctx, 1, 103, "", "", 0, 10, 0);
     online_completion_hook(&ctx, 0, 104, "", "", 0, 10, 0);
     expect(ctx.pending_issue_pass_count() == 3,
-           "E: duplicate terminals coalesce to one pass per rank");
+           "F: duplicate terminals coalesce to one pass per rank");
 
     // Deferred work drains only at a proceed boundary. Rank 0's callback
     // schedules a nested rank-0 pass after its pending bit was cleared.
     eq.schedule_event(10, no_op_event, nullptr);
     eq.proceed();
     expect(probe.ranks == std::vector<int>({2, 0, 1, 0}),
-           "E: first-rank FIFO preserved; nested pass appended same drain");
+           "F: first-rank FIFO preserved; nested pass appended same drain");
     expect(ctx.pending_issue_pass_count() == 0,
-           "E: no pending pass after the nested drain");
+           "F: no pending pass after the nested drain");
     expect(eq.finished() && !eq.has_deferred_work(),
-           "E: physical and deferred queues both empty");
+           "F: physical and deferred queues both empty");
 }
 
 struct LifetimeProbe {
@@ -374,13 +382,13 @@ struct LifetimeProbe {
 void test_communicator_lifetime() {
     expect(AstraSim::same_communicator_definition(
                {0, 2, 1}, {3}, {0, 2, 1}, {3}),
-           "F: identical ordered ranks and dimensions are a no-op definition");
+           "G: identical ordered ranks and dimensions are a no-op definition");
     expect(!AstraSim::same_communicator_definition(
                {0, 2, 1}, {3}, {0, 1, 2}, {3}),
-           "F: rank order is part of communicator identity");
+           "G: rank order is part of communicator identity");
     expect(!AstraSim::same_communicator_definition(
                {0, 2, 1}, {3}, {0, 2, 1}, {1, 3}),
-           "F: shaped dimensions are part of communicator identity");
+           "G: shaped dimensions are part of communicator identity");
 
     bool destroyed = false;
     std::weak_ptr<LifetimeProbe> weak;
@@ -397,16 +405,16 @@ void test_communicator_lifetime() {
             probe.reset();
         }
         expect(!destroyed && !weak.expired(),
-               "F: communicator control block survives active DataSet");
+               "G: communicator control block survives active DataSet");
     }
     expect(destroyed && weak.expired(),
-           "F: DataSet completion/destruction releases old communicator");
+           "G: DataSet completion/destruction releases old communicator");
 }
 
 void test_online_hardware_counters_without_ids() {
     AstraSim::HardwareResource online(7, ExecutionMode::Online);
     expect(!online.tracks_node_ids(),
-           "G: online HardwareResource disables diagnostic ID hashes");
+           "H: online HardwareResource disables diagnostic ID hashes");
     NodeView first;
     first.global_id = 1000;
     first.kind = NodeKind::Compute;
@@ -416,16 +424,16 @@ void test_online_hardware_counters_without_ids() {
     online.occupy(second);
     expect(online.num_in_flight_gpu_comp_ops == 2 &&
                online.gpu_ops_node.empty(),
-           "G: online concurrent compute uses exact count and no IDs");
+           "H: online concurrent compute uses exact count and no IDs");
     online.release(first);
     online.release(second);
     expect(online.num_in_flight_gpu_comp_ops == 0 &&
                online.gpu_ops_node.empty(),
-           "G: online releases return the counter to zero");
+           "H: online releases return the counter to zero");
 
     AstraSim::HardwareResource static_resource(7);
     expect(static_resource.tracks_node_ids(),
-           "G: static HardwareResource preserves ID diagnostics");
+           "H: static HardwareResource preserves ID diagnostics");
 }
 
 }  // namespace

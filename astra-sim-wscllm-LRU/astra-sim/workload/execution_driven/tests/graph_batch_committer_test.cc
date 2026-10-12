@@ -14,7 +14,8 @@ future arrival) through:
           epoch, node structure, edge structure, cycle, watch structure /
           eligibility / identity, send-recv pairing, collective split,
           assignment, kv action, alarm, touched_ranks). EVERY case must be
-          rejected by validate() AND leave the official state completely
+          rejected by the Phase-A validator (phase_a_validate below) AND
+          leave the official state completely
           untouched (零节点/零 watch/零账本动作: store node counts, free
           sets, store-id map, watch registry, in-flight/prefill-drained
           tracking, counters, issue-pass calls -- all byte-identical to the
@@ -56,8 +57,8 @@ future arrival) through:
           (shared aggregate body nodes under the batch-namespace
           request_id "batch_train_0_1" -- NOT a real request -- plus one
           exit marker per member per rank and one per-train ALL_REDUCE
-          end barrier) walks validate() + commit() + the full watch-fire
-          chain: both member decode watches fire, the namespace body /
+          end barrier) walks Phase-A validation + commit() + the full
+          watch-fire chain: both member decode watches fire, the namespace body /
           barrier terminals feed nothing, in-flight/prefill-drained
           tracking and the counters stay exact. Also proves the one rule
           that DOES guard the schema boundary: a member decode watch whose
@@ -68,6 +69,21 @@ future arrival) through:
           BOTH a drain marker (prefill watch, gen 0) and an exit marker
           (decode watch, gen 1) of two DIFFERENT requests -- the mixed
           prefill-chunk + decode-token folding case; both watches fire.
+  Part K  M2 node-GC bounded-id-history regressions: sparse id gaps and
+          duplicate / never-committed parents fail closed, while collected
+          parents still resolve (the affine translation persists after
+          erase).
+  Part L  A1 amortized collection bound: kGcAmortizeThreshold - 1 pending
+          candidates stay untouched, the threshold commit drains them, and
+          the retained window stays one live record + fixed O(ranks)
+          affine metadata.
+  Part M  preseeded NodeStore ids: add_node's actual returned id seeds the
+          affine range (the first mapping and next_auto_id agree).
+  Part N  affine drift: externally inserted NodeStore ids fail validate()
+          AND direct commit, both with zero delta/store/affine/counter
+          side effects.
+  Part O  million-node pressure: 1,000,000 committed json ids retain the
+          fixed O(ranks) affine metadata footprint.
   Part P  C1 (2026-08-29) parse/atomicity: a malformed response throws
           ParseError with the committer state byte-identical (parse is a
           pure local construction), a post-parse TYPED mutation is still
@@ -120,8 +136,9 @@ using namespace NetworkAnalytical;
 namespace AstraSim {
 namespace ExecutionDriven {
 
-// Test-only access to the fixed, rank-bounded preflight scratch.  Production
-// code exposes no mutable diagnostics for these implementation details.
+// Test-only access to the fixed, rank-bounded preflight scratch and to the
+// pure Phase-A validator (the production header exposes no standalone
+// validate() -- production only ever calls validate_and_commit()).
 struct GraphBatchCommitterTestAccess {
     static void seed_json_id_stream_stamp(GraphBatchCommitter& committer,
                                           uint64_t stamp) {
@@ -134,6 +151,14 @@ struct GraphBatchCommitterTestAccess {
 
     static size_t discovered_capacity(const GraphBatchCommitter& committer) {
         return committer.json_id_discovered_touched_ranks_.capacity();
+    }
+
+    // Pure Phase-A pass: the full checklist with zero committer side
+    // effects (same entry the production validate_and_commit() runs).
+    static std::optional<std::string> validate(
+        const GraphBatchCommitter& committer, const StateDelta& delta,
+        const GraphBatch& batch) {
+        return committer.validate_impl(delta, batch, nullptr);
     }
 };
 
@@ -155,6 +180,20 @@ uint64_t resolved_store_id(const GraphBatchCommitter& committer, int rank,
                           uint64_t json_id) {
     const auto store_id = committer.resolve_store_id(rank, json_id);
     return store_id.value_or(0);  // NodeStore never assigns automatic id 0.
+}
+
+// Test-local free-set snapshot of one rank's store (production iterates
+// through fill_free_node_snapshot() / node_ptr() without the extra copy).
+std::vector<uint64_t> free_ids_of(const NodeStore& store) {
+    std::vector<uint64_t> ids;
+    store.fill_free_node_snapshot(ids);
+    return ids;
+}
+
+// Test-local unfinished-count oracle: the phase-3 sensing summary's
+// node_count is exactly the unfinished (not yet finished) node count.
+size_t store_unfinished(const NodeStore& store) {
+    return store.injected_unfinished_summary(0).node_count;
 }
 
 bool same_counters(const GraphBatchCommitter::Counters& a,
@@ -183,6 +222,7 @@ struct Fixture {
     WatchRegistry registry;
     std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
     std::vector<int> issue_calls;
+    std::vector<WatchFire> fires;
     GraphBatchCommitter committer;
 
     static GraphBatchCommitter::Context make_context(Fixture* fixture) {
@@ -197,12 +237,12 @@ struct Fixture {
         ctx.communicator_members_for_pg =
             [](const std::string& pg_name,
                const std::vector<int>& /* participant_ranks */)
-            -> std::optional<std::vector<int>> {
+            -> std::optional<std::pair<std::vector<int>, size_t>> {
             if (pg_name == "tp0") {
-                return std::vector<int>({1, 2});
+                return std::make_pair(std::vector<int>({1, 2}), size_t(2));
             }
             if (pg_name == "train_pg") {
-                return std::vector<int>({0, 1, 2});
+                return std::make_pair(std::vector<int>({0, 1, 2}), size_t(2));
             }
             return std::nullopt;
         };
@@ -212,6 +252,11 @@ struct Fixture {
     Fixture()
         : ingress(4096), committer(make_context(this)) {
         ingress.bind(&eq, &mailbox, &svc);
+        // Synchronous fire recorder: fires are observed at fire time (the
+        // deleted polling queue has no production consumer).
+        registry.set_fire_notifier([this](const WatchFire& fire) {
+            fires.push_back(fire);
+        });
         // One DISTINCT NodeStore per rank (a fill-constructed vector would
         // share a single store across all three "ranks").
         sources.reserve(3);
@@ -224,7 +269,7 @@ struct Fixture {
 // Observable state snapshot: everything the commit can write, flattened
 // for byte-level equality comparison (零副作用 assertion of Part B/D/P).
 struct Snapshot {
-    std::vector<size_t> pending;              // per-rank store node counts
+    std::vector<size_t> pending;  // per-rank store unfinished-node counts
     std::vector<std::vector<uint64_t>> free;  // per-rank free sets
     size_t affine_ranks = 0;
     size_t watches = 0;
@@ -259,8 +304,8 @@ bool operator==(const Snapshot& a, const Snapshot& b) {
 Snapshot snapshot_of(const Fixture& f) {
     Snapshot s;
     for (const auto& src : f.sources) {
-        s.pending.push_back(src->store().pending_count());
-        s.free.push_back(src->store().resolve_free_nodes());
+        s.pending.push_back(store_unfinished(src->store()));
+        s.free.push_back(free_ids_of(src->store()));
     }
     s.affine_ranks = f.committer.rank_affine_count();
     s.watches = f.registry.size();
@@ -350,13 +395,13 @@ nlohmann::json prefill_watch(const std::string& request_id,
             {"statuses", nlohmann::json::array({"Success", "Skipped"})}};
 }
 
-// One batch node, parsed through the production path in isolation.
-ParsedNode parse_single_node(const nlohmann::json& node_json, int num_ranks) {
-    nlohmann::json resp;
-    resp["schema_version"] = 1;
-    resp["source_delivery_sequence"] = 0;
-    resp["nodes"] = nlohmann::json::array({node_json});
-    return parse_graph_batch(resp, num_ranks).nodes.at(0);
+// Pure Phase-A pass for the fixtures (the production header exposes no
+// standalone validate(); production only ever calls validate_and_commit(),
+// so the pure entry lives behind the TestAccess above).
+std::optional<std::string> phase_a_validate(
+    const GraphBatchCommitter& committer, const StateDelta& delta,
+    const GraphBatch& batch) {
+    return GraphBatchCommitterTestAccess::validate(committer, delta, batch);
 }
 
 GraphBatch parse_batch(const nlohmann::json& resp, int num_ranks = 3) {
@@ -459,7 +504,7 @@ StateDelta baseline_delta() {
 void expect_reject(Fixture& f, const StateDelta& delta, GraphBatch batch,
                    const char* what, const char* expected_error = nullptr) {
     const Snapshot before = snapshot_of(f);
-    const auto err = f.committer.validate(delta, batch);
+    const auto err = phase_a_validate(f.committer, delta, batch);
     expect(err.has_value(), what);
     if (!err.has_value()) {
         std::fprintf(stderr,
@@ -470,7 +515,8 @@ void expect_reject(Fixture& f, const StateDelta& delta, GraphBatch batch,
         expect(*err == expected_error,
                "B: validation reports the exact fail-closed reason");
     }
-    expect(snapshot_of(f) == before, "B: validate() left zero side effects");
+    expect(snapshot_of(f) == before,
+           "B: Phase-A validation left zero side effects");
     if (!(snapshot_of(f) == before)) {
         std::fprintf(stderr,
                      "[graph_batch_committer_test] state mutated by %s\n",
@@ -590,6 +636,104 @@ void test_negative_cases(Fixture& f) {
                       "B: send/recv pair incomplete within the batch");
     }
     {
+        // M-9 fail-closed:自环 send(src == dst)。发射端 P/D 分离下三处
+        // p2p 点位结构性跨 rank 或显式守卫,自环只可能来自错配/损坏——
+        // Topology 对自环 exit(-1) 报错误导、纯 Switch 静默按 2 跳计费,
+        // 提交边界统一拒绝。validate-on 与 validate-off(必检 preflight)
+        // 双路径同判。
+        GraphBatch b = base;
+        b.nodes[1].node.comm.dst = 0;  // send self-loop on rank 0
+        expect_reject(f, delta, b, "B: p2p self-loop (src == dst) rejected",
+                      "node[1] p2p self-loop (src == dst == 0)");
+        Fixture direct;
+        expect_direct_commit_reject(
+            direct, delta, b,
+            "B: validate-off direct commit rejects p2p self-loop");
+    }
+    {
+        // M-10 fail-closed:批命名空间哨兵的资格旁路只对 prefill 通道
+        // 开放。decode 通道的伪哨兵 watch(绕过 in-flight/prefill-drained
+        // 资格检查)能把 REQUEST_COMPLETE 送给 ServiceCoordinator 静默
+        // 错减 active 计数——生产三处哨兵 watch 全 STAGE_PREFILL,decode
+        // 形态一律拒绝。
+        GraphBatch b = base;
+        b.nodes[5].node.request_id = "batch_train_i0_1";
+        b.nodes[5].node.stage = "decode";
+        b.nodes[5].node.generation = 1;
+        b.watches[0] = typed_watch(
+            "batch_train_i0_1", "decode", {ParsedWatchMember{2, 0}},
+            {NodeTerminalStatus::Success});
+        expect_reject(f, delta, b,
+                      "B: decode-channel batch_train_ watch rejected "
+                      "(sentinel bypass is prefill-only)",
+                      "batch_train_ watch[0] uses the sentinel eligibility "
+                      "bypass with stage decode (the bypass is prefill-"
+                      "channel only)");
+        Fixture direct;
+        expect_direct_commit_reject(
+            direct, delta, b,
+            "B: validate-off direct commit rejects a decode-channel "
+            "batch_train_ watch");
+    }
+    {
+        // M-19 fail-closed:三个 HBM 路由键的跨字段一致性。
+        // (a) restore 位落在 COMP 节点上(Workload 分派根本不读它——
+        //     静默无效果)。
+        GraphBatch b = base;
+        b.nodes[0].node.is_local_hbm_kv_restore = true;
+        expect_reject(f, delta, b,
+                      "B: is_local_hbm_kv_restore on a non-MEM_LOAD node "
+                      "rejected");
+        // (b) restore 位 + hbm_access_mode:节点被 restore 位改道
+        //     restore-DMA 通道后 mode 键死亡(池事务静默消失)。
+        GraphBatch c = base;
+        c.nodes[0].node.node_type = 2;  // MEM_LOAD
+        c.nodes[0].node.is_local_hbm_kv_restore = true;
+        c.nodes[0].node.hbm_access_mode = 1;
+        expect_reject(f, delta, c,
+                      "B: is_local_hbm_kv_restore combined with "
+                      "hbm_access_mode rejected");
+        // (c) hbm_access_mode 落在 COMP 节点上(只有 MEM 分派读它)。
+        GraphBatch d = base;
+        d.nodes[0].node.hbm_access_mode = 1;
+        expect_reject(f, delta, d,
+                      "B: hbm_access_mode on a non-MEM node rejected");
+        // (d) comm.hbm_charge=false 萾在 collective 节点上(零计费位是
+        //     p2p 端点概念,type 7 不消费)。
+        GraphBatch e = base;
+        e.nodes[4].node.comm.hbm_charge = false;
+        expect_reject(f, delta, e,
+                      "B: comm.hbm_charge=false on a collective rejected");
+        // (e) hbm_access_mode=2:2026-10-01 域收紧后协议域为 {0,1},
+        //     mode=2 无发射者且 "mode≠1→pool WRITE" 分派对其是错误计费,
+        //     提交边界 fail-closed(域收紧前 {0,1,2} 会静默放行)。
+        GraphBatch g = base;
+        g.nodes[0].node.node_type = 3;  // MEM_STORE (mode 的另一合法节点型)
+        g.nodes[0].node.hbm_access_mode = 2;
+        expect_reject(f, delta, g,
+                      "B: hbm_access_mode=2 rejected (domain tightened to "
+                      "{0,1})");
+        // 对照组:标准生成器组合全放行——MEM_LOAD + mode 1(池端点直连)
+        // 是 mem_load 原语的合法形态。
+        GraphBatch legal = base;
+        legal.nodes[0].node.node_type = 2;  // MEM_LOAD
+        legal.nodes[0].node.hbm_access_mode = 1;
+        expect(!phase_a_validate(f.committer, delta, legal).has_value(),
+               "B: legal MEM_LOAD + hbm_access_mode=1 still passes");
+    }
+    {
+        // Minor②:validate-off 快速路径的 batch_id==delivery_sequence
+        // O(1) 必检(validate-on 侧由 validate_impl 原有检查覆盖)。
+        GraphBatch b = base;
+        b.batch_id = 5;
+        b.source_delivery_sequence = 5;
+        Fixture direct;
+        expect_direct_commit_reject(
+            direct, delta, b,
+            "B: validate-off direct commit rejects batch_id != "
+            "delivery_sequence");
+    }
+    {
         GraphBatch b = base;
         b.nodes[6].node.name = "r2_tp0_barrier_x";  // split tp0 group
         expect_reject(f, delta, b,
@@ -605,6 +749,37 @@ void test_negative_cases(Fixture& f) {
         expect_direct_commit_reject(
             direct, delta, b,
             "B: validate-off direct commit rejects zero-byte collective");
+    }
+    {
+        // CPP-02: a zero-byte send/recv PAIR passes the endpoint/tag/pairing
+        // rules but would exit the analytical fluid backend as an invalid
+        // flow -- rejected at the commit boundary, validate-on and off.
+        GraphBatch b = base;
+        b.nodes[1].node.comm.bytes = 0;  // matching send on rank 0
+        b.nodes[3].node.comm.bytes = 0;  // matching recv on rank 1
+        expect_reject(f, delta, b, "B: zero-byte p2p pair rejected",
+                      "node[1] p2p comm bytes must be positive");
+        Fixture direct;
+        expect_direct_commit_reject(
+            direct, delta, b,
+            "B: validate-off direct commit rejects zero-byte p2p pair");
+    }
+    {
+        // CPP-01: BROADCAST (comm_type 5) has no execution-driven
+        // implementation (the Workload arm is a placeholder) -- the batch
+        // must fail closed instead of committing as a silent local no-op.
+        GraphBatch b = base;
+        b.nodes[4].node.coll.comm_type = 5;  // tp0_barrier on rank 1
+        b.nodes[6].node.coll.comm_type = 5;  // same collective on rank 2
+        expect_reject(
+            f, delta, b, "B: BROADCAST collective rejected",
+            "mandatory liveness preflight: node[4] BROADCAST collectives "
+            "(comm_type 5) are not implemented in the execution-driven "
+            "path; the input graph must not use broadcast");
+        Fixture direct;
+        expect_direct_commit_reject(
+            direct, delta, b,
+            "B: validate-off direct commit rejects BROADCAST collective");
     }
     {
         GraphBatch b = base;
@@ -710,7 +885,7 @@ void test_json_id_stamp_wrap_and_recovery() {
     GraphBatch invalid = base;
     invalid.nodes[1].json_id = 2;  // rank 0 expects id 1 after its first node
     const Snapshot before_rejection = snapshot_of(f);
-    const auto rejection = f.committer.validate(delta, invalid);
+    const auto rejection = phase_a_validate(f.committer, delta, invalid);
     expect(rejection.has_value(),
            "C1: wrapped json-id stamp still rejects a broken stream");
     expect(snapshot_of(f) == before_rejection,
@@ -738,10 +913,10 @@ void test_positive_commit(Fixture& f) {
     GraphBatch no_touched = base;
     no_touched.has_touched_ranks = false;
     no_touched.touched_ranks.clear();
-    expect(!f.committer.validate(delta, no_touched).has_value(),
+    expect(!phase_a_validate(f.committer, delta, no_touched).has_value(),
            "C: batch without touched_ranks field validates (pre-5 fixture)");
 
-    expect(!f.committer.validate(delta, base).has_value(),
+    expect(!phase_a_validate(f.committer, delta, base).has_value(),
            "C: baseline batch validates clean");
     f.committer.commit(delta, base);
 
@@ -755,12 +930,12 @@ void test_positive_commit(Fixture& f) {
     expect(c.total_kv_actions == 1, "C: total_kv_actions == 1");
     expect(c.total_future_alarms == 1, "C: total_future_alarms == 1");
 
-    expect(f.sources[0]->store().pending_count() == 2,
-           "C: rank 0 store holds 2 nodes");
-    expect(f.sources[1]->store().pending_count() == 3,
-           "C: rank 1 store holds 3 nodes");
-    expect(f.sources[2]->store().pending_count() == 2,
-           "C: rank 2 store holds 2 nodes");
+    expect(store_unfinished(f.sources[0]->store()) == 2,
+           "C: rank 0 store holds 2 unfinished nodes");
+    expect(store_unfinished(f.sources[1]->store()) == 3,
+           "C: rank 1 store holds 3 unfinished nodes");
+    expect(store_unfinished(f.sources[2]->store()) == 2,
+           "C: rank 2 store holds 2 unfinished nodes");
 
     // Exact per-rank affine translation. NodeStore ids are PER-RANK (each
     // store starts at 1 here), while the metadata itself stays O(ranks).
@@ -778,13 +953,13 @@ void test_positive_commit(Fixture& f) {
            "C: rank 2 store ids 1, 2 (per-rank id space)");
 
     // Parent edges block their children (free set = the batch's roots).
-    expect(f.sources[0]->store().resolve_free_nodes() ==
+    expect(free_ids_of(f.sources[0]->store()) ==
                std::vector<uint64_t>({1}),
            "C: rank 0 free set {1} (child blocked by the parent edge)");
-    expect(f.sources[1]->store().resolve_free_nodes() ==
+    expect(free_ids_of(f.sources[1]->store()) ==
                std::vector<uint64_t>({1}),
            "C: rank 1 free set {1} (0->1->2 chain)");
-    expect(f.sources[2]->store().resolve_free_nodes() ==
+    expect(free_ids_of(f.sources[2]->store()) ==
                std::vector<uint64_t>({1, 2}),
            "C: rank 2 free set {1, 2} (no edges on rank 2)");
 
@@ -837,7 +1012,7 @@ void test_zero_node_batch(Fixture& f) {
 
     GraphBatch b = parse_batch(empty_response(1));
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
            "E: zero-node batch validates clean");
     f.committer.commit(delta, b);
 
@@ -889,7 +1064,7 @@ void test_single_node_batch(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
            "F: single-node batch validates clean");
     f.committer.commit(delta, b);
 
@@ -901,13 +1076,13 @@ void test_single_node_batch(Fixture& f) {
     expect(c.max_nodes_per_batch == 7, "F: max unchanged at 7");
     expect(c.total_watches == 2, "F: total_watches == 2");
 
-    expect(f.sources[0]->store().pending_count() == 3,
-           "F: rank 0 store holds 3 nodes");
+    expect(store_unfinished(f.sources[0]->store()) == 3,
+           "F: rank 0 store holds 3 unfinished nodes");
     expect(resolved_store_id(f.committer, 0, 2) == 3,
            "F: json id 2 of batch 2 -> store id 3 on rank 0");
     // The new node's parent is the PREVIOUS batch's node (store id 2) --
     // the cross-batch edge resolved through the persistent map.
-    expect(f.sources[0]->store().resolve_free_nodes() ==
+    expect(free_ids_of(f.sources[0]->store()) ==
                std::vector<uint64_t>({1}),
            "F: new node blocked by its cross-batch parent");
     expect(f.committer.in_flight_requests() ==
@@ -967,7 +1142,7 @@ void test_default_comm_compute_batch(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
            "G: metadata/compute nodes with default comm/coll validate");
     f.committer.commit(delta, b);
     expect(f.committer.counters().graph_batch_count == 4,
@@ -1016,22 +1191,22 @@ void test_hbm_charge_key_parsing(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0, 1});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
            "H: hbm_charge batch validates clean");
-    if (const auto err = f.committer.validate(delta, b)) {
+    if (const auto err = phase_a_validate(f.committer, delta, b)) {
         std::fprintf(stderr,
                      "[graph_batch_committer_test] H validate error: %s\n",
                      err->c_str());
     }
     f.committer.commit(delta, b);
 
-    const auto comp_view =
-        f.sources[0]->lookup(resolved_store_id(f.committer, 0, 13));
-    expect(comp_view.has_value() && comp_view->comm.hbm_charge,
+    const NodeView* comp_view =
+        f.sources[0]->lookup_ptr(resolved_store_id(f.committer, 0, 13));
+    expect(comp_view != nullptr && comp_view->comm.hbm_charge,
            "H: absent comm.hbm_charge defaults to true");
-    const auto send_view =
-        f.sources[0]->lookup(resolved_store_id(f.committer, 0, 14));
-    expect(send_view.has_value() && !send_view->comm.hbm_charge,
+    const NodeView* send_view =
+        f.sources[0]->lookup_ptr(resolved_store_id(f.committer, 0, 14));
+    expect(send_view != nullptr && !send_view->comm.hbm_charge,
            "H: comm.hbm_charge=false parsed into the NodeView");
 
     // The legacy kebab spelling is a parse-layer unknown key now: the
@@ -1192,15 +1367,15 @@ DecisionEvent drain_event(const std::string& req) {
 void drive_terminal(Fixture& f, int rank, uint64_t store_id,
                     NodeTerminalStatus status) {
     f.sources[rank]->store().finish_node(store_id);
-    const auto rec = f.sources[rank]->store().node(store_id);
-    expect(rec.has_value(), "train: node record for the driven node");
-    if (rec.has_value()) {
+    const OnlineNode* rec = f.sources[rank]->store().node_ptr(store_id);
+    expect(rec != nullptr, "train: node_ptr the driven node");
+    if (rec != nullptr) {
         f.registry.on_node_terminal(
             CompletionKey{rank, store_id, rec->generation}, status);
     }
 }
 
-// ----------------------------------------------------------- Part H ------
+// ----------------------------------------------------------- Part I ------
 // The two-request decode train: epoch 1 lands the arrivals + req_A's
 // prefill drain (a zero-node accounting batch), epoch 2 commits the train
 // (req_B's prefill drain is a delta fact of the SAME epoch -- delta facts
@@ -1216,7 +1391,7 @@ void test_train_batch_two_members(Fixture& f) {
     h1.events.push_back(arrival_event("req_B"));
     h1.events.push_back(drain_event("req_A"));
     GraphBatch setup = parse_batch(empty_response(4));
-    expect(!f.committer.validate(h1, setup).has_value(),
+    expect(!phase_a_validate(f.committer, h1, setup).has_value(),
            "I: epoch-1 zero-node setup batch validates clean");
     f.committer.commit(h1, setup);
     expect(f.committer.in_flight_requests() ==
@@ -1245,7 +1420,7 @@ void test_train_batch_two_members(Fixture& f) {
         no_drain_b.delivery_epoch = 5;
         no_drain_b.tick = 450;
         const Snapshot before = snapshot_of(f);
-        const auto err = f.committer.validate(no_drain_b, train);
+        const auto err = phase_a_validate(f.committer, no_drain_b, train);
         expect(err.has_value(),
                "I: decode watch of a never-drained member is blocked");
         if (err.has_value()) {
@@ -1264,7 +1439,7 @@ void test_train_batch_two_members(Fixture& f) {
     h2.delivery_epoch = 5;
     h2.tick = 450;
     h2.events.push_back(drain_event("req_B"));
-    expect(!f.committer.validate(h2, train).has_value(),
+    expect(!phase_a_validate(f.committer, h2, train).has_value(),
            "I: two-request train batch validates clean (zero relaxation)");
     f.committer.commit(h2, train);
 
@@ -1289,7 +1464,7 @@ void test_train_batch_two_members(Fixture& f) {
     // Per-rank pending nodes after Part G: {5, 3, 2}; the train adds 4.
     const size_t pending_after_g[3] = {5, 3, 2};
     for (int rank = 0; rank < 3; ++rank) {
-        expect(f.sources[rank]->store().pending_count() ==
+        expect(store_unfinished(f.sources[rank]->store()) ==
                    pending_after_g[rank] + 4,
                "I: per-rank store gained the 4 train nodes");
     }
@@ -1318,7 +1493,7 @@ void test_train_batch_two_members(Fixture& f) {
         drive_terminal(f, rank, barrier_ids[rank],
                        NodeTerminalStatus::Success);
     }
-    expect(f.registry.fired_and_drain().empty(),
+    expect(f.fires.empty(),
            "I: namespace body/barrier terminals fire no watch");
 
     // Member markers feed the member watches (one Skipped terminal on the
@@ -1332,7 +1507,7 @@ void test_train_batch_two_members(Fixture& f) {
                        rank == 1 ? NodeTerminalStatus::Skipped
                                  : NodeTerminalStatus::Success);
     }
-    const std::vector<WatchFire> fires = f.registry.fired_and_drain();
+    const std::vector<WatchFire>& fires = f.fires;
     expect(fires.size() == 2, "I: both member decode watches fired");
     std::set<std::string> fired_members;
     for (const auto& fire : fires) {
@@ -1350,18 +1525,21 @@ void test_train_batch_two_members(Fixture& f) {
     // The dependency chain closed: with body + markers finished on every
     // rank, each rank's end barrier entered its free set.
     for (int rank = 0; rank < 3; ++rank) {
-        const auto free = f.sources[rank]->store().resolve_free_nodes();
+        const auto free = free_ids_of(f.sources[rank]->store());
         const std::set<uint64_t> free_set(free.begin(), free.end());
         expect(free_set.count(barrier_ids[rank]) == 1,
                "I: end barrier free after its train finished");
     }
 }
 
-// ----------------------------------------------------------- Part I ------
+// ----------------------------------------------------------- Part J ------
 // Variant: ONE train folding a prefill chunk of req_C (drain marker,
 // prefill watch, gen 0) and a decode token of req_D (exit marker, decode
 // watch, gen 1) -- the mixed train. Both watches fire.
 void test_train_batch_drain_and_exit_markers(Fixture& f) {
+    // The old polling queue drained between the I and J sections; the
+    // synchronous recorder accumulates instead, so drop I's fires here.
+    f.fires.clear();
     StateDelta i1;
     i1.delivery_sequence = 6;
     i1.delivery_epoch = 6;
@@ -1374,7 +1552,7 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
     const GraphBatch train = train_batch(
         6, "batch_train_2_3", {{"req_C", "prefill"}, {"req_D", "decode"}},
         4, mixed_first_json_ids);
-    expect(!f.committer.validate(i1, train).has_value(),
+    expect(!phase_a_validate(f.committer, i1, train).has_value(),
            "J: mixed drain+exit train validates clean (zero relaxation)");
     f.committer.commit(i1, train);
 
@@ -1403,7 +1581,7 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
                        resolved_store_id(f.committer, rank, first_json_id + 2),
                        NodeTerminalStatus::Success);  // req_D exit marker
     }
-    const std::vector<WatchFire> fires = f.registry.fired_and_drain();
+    const std::vector<WatchFire>& fires = f.fires;
     expect(fires.size() == 2, "J: drain watch and exit watch both fired");
     std::map<std::string, std::pair<std::string, uint64_t>> fired;
     for (const auto& fire : fires) {
@@ -1451,7 +1629,7 @@ void test_parse_failure_atomicity(Fixture& f) {
         GraphBatch b = baseline_batch();
         b.nodes[0].node.rank = 99;
         const Snapshot before = snapshot_of(f);
-        expect(f.committer.validate(delta, b).has_value(),
+        expect(phase_a_validate(f.committer, delta, b).has_value(),
                "P: post-parse rank corruption rejected by validate");
         expect(snapshot_of(f) == before,
                "P: rejection of the corrupted batch has zero side effects");
@@ -1554,7 +1732,7 @@ bool commit_gc_batch(GcFixture& fixture, const GraphBatch& batch,
         arrival.generation = 0;
         delta.events.push_back(std::move(arrival));
     }
-    const auto error = fixture.committer->validate(delta, batch);
+    const auto error = phase_a_validate(*fixture.committer, delta, batch);
     expect(!error.has_value(), what);
     if (error.has_value()) {
         std::fprintf(stderr, "[graph_batch_committer_test] GC validate: %s\n",
@@ -1597,7 +1775,8 @@ void test_gc_bounded_id_history_and_pruning() {
     // rejected even when expensive semantic validation is skipped, and the
     // direct commit preflight must leave all state untouched.
     const GraphBatch gap = gc_compute_batch(1, 9, 1, "gc-gap");
-    const auto gap_error = fixture.committer->validate(gc_delta(1), gap);
+    const auto gap_error =
+        phase_a_validate(*fixture.committer, gc_delta(1), gap);
     expect(gap_error.has_value(), "K: sparse id gap fails validation");
     const auto counters_before_gap = fixture.committer->counters();
     bool gap_commit_threw = false;
@@ -1627,7 +1806,7 @@ void test_gc_bounded_id_history_and_pruning() {
     }
     const auto after_store_id = fixture.committer->resolve_store_id(0, 8);
     expect(after_store_id.has_value() &&
-               fixture.sources[0]->store().resolve_free_nodes() ==
+               free_ids_of(fixture.sources[0]->store()) ==
                    std::vector<uint64_t>({*after_store_id}),
            "K: edge from collected parent is non-blocking");
     finish_gc_json_id(fixture, 8, "K: child after collected parent maps");
@@ -1650,16 +1829,16 @@ void test_gc_bounded_id_history_and_pruning() {
            "K: all collected ids remain exactly resolvable in O(ranks) state");
 
     const auto duplicate_seven =
-        fixture.committer->validate(gc_delta(3),
+        phase_a_validate(*fixture.committer, gc_delta(3),
                                     gc_compute_batch(3, 7, 1, "gc-dup-7"));
     expect(duplicate_seven.has_value(),
            "K: duplicate collected first id fails closed");
     const auto duplicate_eight =
-        fixture.committer->validate(gc_delta(4),
+        phase_a_validate(*fixture.committer, gc_delta(4),
                                     gc_compute_batch(4, 8, 1, "gc-dup-8"));
     expect(duplicate_eight.has_value(),
            "K: duplicate committed range id fails closed");
-    const auto unknown_parent = fixture.committer->validate(
+    const auto unknown_parent = phase_a_validate(*fixture.committer, 
         gc_delta(5), gc_compute_batch(5, 10, 1, "gc-unknown", 6));
     expect(unknown_parent.has_value(),
            "K: never-committed low-id parent fails closed");
@@ -1801,7 +1980,8 @@ void test_affine_drift_fails_closed() {
     drift_delta.events.push_back(arrival);
     const GraphBatch next = gc_compute_batch(1, 42, 1, "gc-drift-next");
 
-    const size_t pending_before = fixture.sources[0]->store().pending_count();
+    const size_t pending_before =
+        store_unfinished(fixture.sources[0]->store());
     const size_t retained_before = fixture.sources[0]->store().retained_count();
     const uint64_t next_auto_before =
         fixture.sources[0]->store().next_auto_id();
@@ -1809,11 +1989,12 @@ void test_affine_drift_fails_closed() {
     const auto counters_before = fixture.committer->counters();
     const auto in_flight_before = fixture.committer->in_flight_requests();
 
-    const auto validation_error = fixture.committer->validate(drift_delta, next);
+    const auto validation_error =
+        phase_a_validate(*fixture.committer, drift_delta, next);
     expect(validation_error.has_value() &&
                validation_error->find("drift") != std::string::npos,
            "N: validate fails closed on external NodeStore drift");
-    expect(fixture.sources[0]->store().pending_count() == pending_before &&
+    expect(store_unfinished(fixture.sources[0]->store()) == pending_before &&
                fixture.sources[0]->store().retained_count() == retained_before &&
                fixture.sources[0]->store().next_auto_id() == next_auto_before &&
                fixture.committer->rank_affine_count() == affine_before &&
@@ -1830,7 +2011,7 @@ void test_affine_drift_fails_closed() {
         threw = true;
     }
     expect(threw, "N: direct commit fails closed on external NodeStore drift");
-    expect(fixture.sources[0]->store().pending_count() == pending_before &&
+    expect(store_unfinished(fixture.sources[0]->store()) == pending_before &&
                fixture.sources[0]->store().retained_count() == retained_before &&
                fixture.sources[0]->store().next_auto_id() == next_auto_before &&
                fixture.committer->rank_affine_count() == affine_before &&

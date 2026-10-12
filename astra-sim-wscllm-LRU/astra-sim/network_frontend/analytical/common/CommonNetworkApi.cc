@@ -106,8 +106,16 @@ timespec_t CommonNetworkApi::sim_get_time() {
     // integer nanoseconds above 2^53; a later completion can then be scheduled
     // under a Sys event-map key that differs by one nanosecond from the network
     // callback time, leaving the hardware resource permanently occupied.
+    // Platform note: this exactness argument relies on long double carrying
+    // the full 64-bit mantissa (x86-64's 80-bit type). On ABIs where long
+    // double is a 64-bit double (MSVC) the precision is lost again above
+    // 2^53 -- porting to those targets needs a fixed-width integer time path.
     const auto astra_sim_time = static_cast<long double>(current_time);
     return {NS, astra_sim_time};
+}
+
+bool CommonNetworkApi::backend_in_invoke_context() const {
+    return event_queue == nullptr || event_queue->in_invoke_context();
 }
 
 void CommonNetworkApi::sim_schedule(const timespec_t delta,
@@ -267,6 +275,31 @@ int CommonNetworkApi::sim_recv(void* const buffer,
     } else {
         // send() not yet called
         // create new entry and insert callback
+        // Count-mismatch diagnostic (2026-09-30, 自 wscllm 母仓 C3 同款移植):
+        // the review's "zero diagnostics" hang. If a same-(tag,src,dst)
+        // entry with a DIFFERENT count is outstanding, this registration is
+        // the wrong half of a count-mismatched pair: both entries now wait
+        // on each other forever (the send's chunk arrival only completes its
+        // own count key) and the run used to hang silently. Collective tags
+        // are per-stream (stream_id), so a same-key different-count entry
+        // cannot belong to a legitimate concurrent transfer. Diagnostic
+        // only: warn once per logical transfer (chunk 0), then register
+        // normally -- the run's outcome is unchanged, the mismatch is just
+        // visible.
+        if (chunk_id == 0 && CommonNetworkApi::callback_tracker
+                                 .has_entry_with_mismatched_count(tag, src,
+                                                                  dst,
+                                                                  count)) {
+            std::fprintf(stderr,
+                         "[Warning] (network/analytical) send/recv count "
+                         "mismatch suspected: sim_recv(tag=%d src=%d "
+                         "dst=%d count=%llu) does not match an "
+                         "outstanding entry with the same key but a "
+                         "different count -- the pair will wait on each "
+                         "other forever (silent-hang signature)\n",
+                         tag, src, dst,
+                         static_cast<unsigned long long>(count));
+        }
         auto* const new_entry =
             callback_tracker.create_new_entry(tag, src, dst, count, chunk_id);
         new_entry->register_recv_callback(msg_handler, fun_arg);

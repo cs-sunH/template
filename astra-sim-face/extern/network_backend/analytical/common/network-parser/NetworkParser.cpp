@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/NetworkParser.h"
 #include <cassert>
+#include <limits>
+#include <cmath>
 #include <iostream>
 
 using namespace NetworkAnalytical;
@@ -29,6 +31,13 @@ NetworkParser::NetworkParser(const std::string& path) noexcept
     } catch (const YAML::BadFile& e) {
         // loading network config file failed
         std::cerr << "[Error] (network/analytical) " << e.what() << std::endl;
+        std::exit(-1);
+    } catch (const YAML::Exception& e) {
+        // any other YAML failure (syntax/parser error, bad conversion,
+        // bad subscript, ...) must become a structured error message
+        // instead of escaping this noexcept constructor and terminating
+        std::cerr << "[Error] (network/analytical) invalid network config "
+                  << path << ": " << e.what() << std::endl;
         std::exit(-1);
     }
 }
@@ -92,6 +101,10 @@ void NetworkParser::parse_network_config_yml(const YAML::Node& network_config) n
 
     // parse vector values
     npus_count_per_dim = parse_vector<int>(network_config["npus_count"]);
+    // Unit note: "bandwidth" is GB/s (gigaBYTES per second) end to end --
+    // the analytical backend converts it to bytes/ns via the SI-identity
+    // bw_GBps_to_Bpns. The hardware-template source key is historically
+    // named "bandwidth-gbps" but carries GB/s, not Gbit/s.
     bandwidth_per_dim = parse_vector<Bandwidth>(network_config["bandwidth"]);
     latency_per_dim = parse_vector<Latency>(network_config["latency"]);
 
@@ -187,17 +200,35 @@ void NetworkParser::check_validity() const noexcept {
 
     // npus_count should be all positive. A size-1 dimension represents a
     // degenerate mesh axis, e.g. a 1-row x 2-column 2D mesh.
+    // (2026-09-30) The per-dimension product is also bounded: MultiDimTopology
+    // multiplies the counts into an int, and an overflowing product is UB --
+    // fail closed at the parser instead.
+    long long npus_product = 1;
     for (const auto& npus_count : npus_count_per_dim) {
         if (npus_count < 1) {
             std::cerr << "[Error] (network/analytical) " << "npus_count (" << npus_count << ") should be positive"
                       << std::endl;
             std::exit(-1);
         }
+        npus_product *= static_cast<long long>(npus_count);
+        if (npus_product > std::numeric_limits<int>::max()) {
+            std::cerr << "[Error] (network/analytical) "
+                      << "the product of npus_count dimensions (" << npus_product
+                      << ") overflows int -- the topology cannot be built"
+                      << std::endl;
+            std::exit(-1);
+        }
     }
 
     // bandwidths should be all positive
+    // NaN/+inf must be rejected explicitly: every "<= 0" comparison with
+    // NaN is false, so a NaN value would slip through, become the link
+    // capacity and then never constrain the fluid scheduler's
+    // std::min(new_rate, share) share computation -- silently disabling
+    // congestion control for that dimension (fail-open). +inf hides behind
+    // the same comparison.
     for (const auto& bandwidth : bandwidth_per_dim) {
-        if (bandwidth <= 0) {
+        if (!std::isfinite(bandwidth) || bandwidth <= 0) {
             std::cerr << "[Error] (network/analytical) " << "bandwidth (" << bandwidth << ") should be larger than 0"
                       << std::endl;
             std::exit(-1);
@@ -205,8 +236,13 @@ void NetworkParser::check_validity() const noexcept {
     }
 
     // latency should be non-negative
+    // NaN/+inf must be rejected explicitly, symmetric with the bandwidth
+    // check above: every "< 0" comparison with NaN is false, so a NaN
+    // latency would slip through and later trip the route-latency overflow
+    // guard with a misleading "overflows EventTime" message instead of the
+    // real "invalid input" cause. +inf hides behind the same comparison.
     for (const auto& latency : latency_per_dim) {
-        if (latency < 0) {
+        if (!std::isfinite(latency) || latency < 0) {
             std::cerr << "[Error] (network/analytical) " << "latency (" << latency << ") should be non-negative"
                       << std::endl;
             std::exit(-1);

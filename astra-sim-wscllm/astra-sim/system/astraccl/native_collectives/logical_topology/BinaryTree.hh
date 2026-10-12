@@ -19,11 +19,7 @@ class BinaryTree : public BasicLogicalTopology {
     enum class TreeType { RootMax, RootMin };
     enum class Type { Leaf, Root, Intermediate };
 
-    BinaryTree(int id,
-               TreeType tree_type,
-               int total_tree_nodes,
-               int start,
-               int stride);
+    BinaryTree(TreeType tree_type, int total_tree_nodes, int start, int stride);
     virtual ~BinaryTree();
 
     int get_num_of_nodes_in_dimension(int dimension) override {
@@ -39,9 +35,9 @@ class BinaryTree : public BasicLogicalTopology {
 
     int total_tree_nodes;
     int start;
-    TreeType tree_type;
     int stride;
-    Node* tree;
+    // Node* tree member removed (2026-09-27, C5): the root was only read
+    // during construction; queries use node_list.
     std::map<int, Node*> node_list;
 };
 

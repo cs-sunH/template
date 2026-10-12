@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #pragma once
 
 #include "common/EventQueue.h"
+#include "common/WallClock.h"
 #include "congestion_aware/Device.h"
 #include "congestion_aware/fluid/FluidFlow.h"
 #include <memory>
@@ -60,14 +61,12 @@ class Topology {
      *
      * @return number of devices in the topology
      */
-    [[nodiscard]] int get_devices_count() const noexcept;
 
     /**
      * Get the number of directed links in the topology.
      *
      * @return number of directed links
      */
-    [[nodiscard]] int get_links_count() const noexcept;
 
     /**
      * Get the number of network dimensions.
@@ -90,7 +89,27 @@ class Topology {
      */
     [[nodiscard]] std::vector<Bandwidth> get_bandwidth_per_dim() const noexcept;
 
+    /// Additive route-cache instrumentation (measurement only). Process-global
+    /// (inline static) so run-end reporting needs no Topology instance; every
+    /// binary runs at most one topology.
+    struct RouteCacheStats {
+        uint64_t lookups = 0;
+        uint64_t hits = 0;
+        uint64_t misses = 0;
+        uint64_t wholesale_clears = 0;
+        NetworkAnalytical::WallClockBucket wall;  // total ns inside fluid_route()
+    };
+
+    [[nodiscard]] static const RouteCacheStats& route_cache_stats() noexcept {
+        return route_cache_stats_;
+    }
+
   protected:
+    /// instrumentation counters (see route_cache_stats()); defined out-of-line
+    /// in Topology.cpp (an in-class initializer trips a GCC nested-struct
+    /// NSDMI diagnostic).
+    static RouteCacheStats route_cache_stats_;
+
     /// number of total devices in the topology
     /// device includes non-NPU devices such as switches
     int devices_count;

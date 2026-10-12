@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import sys
-from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
@@ -25,11 +23,8 @@ from wsc_llm_scheduler import (  # noqa: E402
     PREFILL_ROLE,
     WscLlmHardware,
     WscLlmModel,
-    kv_cache_bytes_for_tokens,
 )
-from session_kv_manager import NOC_MIGRATE, RECOMPUTE  # noqa: E402
 from generate_trace import (  # noqa: E402
-    ChakraNode,
     RequestSpec,
     TraceBuilder,
     clean_csv_row,
@@ -38,7 +33,6 @@ from generate_trace import (  # noqa: E402
     parse_int,
     parse_nonnegative_int,
     parse_rank_spec,
-    sanitize_node_prefix,
     shard_extent,
     transformer_pass_aggregated,
 )
@@ -68,8 +62,6 @@ REQUIRED_CONFIG_KEYS = (
     "bytes_per_elem",
     "model_name",
     "mlp_variant",
-    "output_prefix",
-    "output_dir",
     "request_queue_csv",
     "hardware_config",
     "local_hbm_capacity_profile",
@@ -81,8 +73,15 @@ OPTIONAL_CONFIG_DEFAULTS = {
     "trace_granularity": "token_expanded",
     "prefill_chunk_size": "512",
     "kv_cache_policy": "session_lru_recompute",
+    # kv_reserve_context_tokens 为遗留观测键:loader/生成管线零消费,仅在管
+    # trace_config.csv 携带、由 slo_tools/hbm_watermark.py 原始读 CSV 作 SLO
+    # 观测口径(R_kv 保留水位机制未落地,策略说明 §4.4/§7 已标注)。
+    # record_planning_iterations/output_prefix/output_dir 三零消费键已随
+    # CSV 行退役(2026-09-27)。
     "kv_reserve_context_tokens": "0",
-    "record_planning_iterations": "true",
+    # die 后端(wscllm 推广):模型位置编码声明(rope|none)。rope 时新 Q/K
+    # 的旋转归入 qkv_rope 壳的末段(设计文档 §7.1);缺省 none 向后兼容。
+    "position_encoding": "none",
 }
 SUPPORTED_CONFIG_KEYS = set(REQUIRED_CONFIG_KEYS) | set(OPTIONAL_CONFIG_DEFAULTS)
 INT_CONFIG_KEYS = {
@@ -94,18 +93,10 @@ INT_CONFIG_KEYS = {
     "bytes_per_elem",
 }
 PATH_CONFIG_KEYS = {
-    "output_dir",
     "request_queue_csv",
     "hardware_config",
     "system_template",
 }
-OPERATOR_GRANULARITY = (
-    "rmsnorm,qkv,qk,scale_mask,softmax,av,out_proj,residual,"
-    "mlp_gate_up,swiglu,mlp_down,logits"
-)
-IDLE_SENTINEL_DURATION_NS = 1000
-
-
 @dataclass(frozen=True)
 class WscLlmInferenceGroup:
     name: str
@@ -126,14 +117,21 @@ class WscLlmTraceConfig:
     bytes_per_elem: int
     model_name: str
     mlp_variant: str
-    output_prefix: str
-    output_dir: Optional[Path]
     request_queue_csv: Path
     request_queue: tuple[RequestSpec, ...]
+    # P2-21（2026-09-28）：queue_index 两端同源 C++。WindowedTraceReader
+    # 以未过滤全量 CSV 数据行序（0 起）编号 queue_index
+    # （process_indexed_row: queue_index = data_rows_-1），而
+    # request_queue 是 request_queue_session_limit 过滤后的保序子序列。
+    # request_queue_indices 与 request_queue 逐位对齐，给出每行的源 CSV
+    # 行序（= C++ queue_index，limit==0 时恒等）；queue_position_by_index
+    # 为其逆映射（源行序 -> 过滤位次），供 config.request_queue[pos]
+    # 定位（graph_batch_builder/scheduler）。
+    request_queue_indices: tuple[int, ...]
+    queue_position_by_index: dict[int, int]
     hardware_config: Path
     hardware_capacity_profile: str
     hardware: WscLlmHardware
-    hardware_metadata: dict[str, object]
     system_template: Path
     system_config: Path
     network_config: Path
@@ -141,15 +139,11 @@ class WscLlmTraceConfig:
     remote_operand_loads: bool
     inference_groups: tuple[WscLlmInferenceGroup, ...]
     request_queue_session_limit: int
-    selected_session_ids: tuple[str, ...]
-    source_request_count: int
-    source_session_count: int
     trace_granularity: str
     prefill_chunk_size: int
     kv_cache_policy: str
-    kv_reserve_context_tokens: int
-    record_planning_iterations: bool
-    configuration_digest: str
+    # die 后端(wscllm 推广):模型位置编码(rope|none;缺省 none)。
+    position_encoding: str = "none"
 
     @property
     def model(self) -> WscLlmModel:
@@ -163,78 +157,6 @@ class WscLlmTraceConfig:
             mlp_variant=self.mlp_variant,
         )
 
-
-
-def _add_idle_rank_sentinels(
-    builders: dict[int, TraceBuilder],
-) -> tuple[int, ...]:
-    """Give every otherwise-empty rank one root CPU timer for ASTRA compatibility."""
-
-    idle_ranks: list[int] = []
-    for rank in sorted(builders):
-        builder = builders[rank]
-        if builder.nodes:
-            continue
-        node_id = builder.timer_gate(
-            f"wsc_llm_idle_rank_{rank:04d}_sentinel",
-            IDLE_SENTINEL_DURATION_NS,
-        )
-        if node_id is None:
-            raise RuntimeError(f"rank {rank}: idle sentinel timer was not created")
-        idle_ranks.append(rank)
-    return tuple(idle_ranks)
-
-
-def _validate_rank_dag(rank: int, builder: TraceBuilder) -> None:
-    """Validate one rank-local Chakra DAG in O(V+E) time."""
-
-    if not builder.nodes:
-        raise RuntimeError(f"rank {rank}: Chakra ET DAG is empty")
-
-    nodes_by_id: dict[int, ChakraNode] = {}
-    for node in builder.nodes:
-        node_id = int(node.id)
-        if node_id in nodes_by_id:
-            raise RuntimeError(f"rank {rank}: duplicate node ID {node_id}")
-        nodes_by_id[node_id] = node
-
-    indegree = {node_id: 0 for node_id in nodes_by_id}
-    dependents: dict[int, list[int]] = {node_id: [] for node_id in nodes_by_id}
-    for node_id, node in nodes_by_id.items():
-        for raw_dependency_id in node.data_deps:
-            dependency_id = int(raw_dependency_id)
-            if dependency_id == node_id:
-                raise RuntimeError(
-                    f"rank {rank}: node {node_id} has a self-dependency"
-                )
-            if dependency_id not in nodes_by_id:
-                raise RuntimeError(
-                    f"rank {rank}: node {node_id} references missing dependency "
-                    f"{dependency_id}"
-                )
-            indegree[node_id] += 1
-            dependents[dependency_id].append(node_id)
-
-    ready = deque(node_id for node_id, degree in indegree.items() if degree == 0)
-    visited = 0
-    while ready:
-        node_id = ready.popleft()
-        visited += 1
-        for dependent_id in dependents[node_id]:
-            indegree[dependent_id] -= 1
-            if indegree[dependent_id] == 0:
-                ready.append(dependent_id)
-    if visited != len(nodes_by_id):
-        cyclic_ids = [node_id for node_id, degree in indegree.items() if degree > 0]
-        raise RuntimeError(
-            f"rank {rank}: Chakra ET DAG contains a cycle involving node IDs "
-            f"{cyclic_ids}"
-        )
-
-
-def _validate_all_rank_dags(builders: dict[int, TraceBuilder]) -> None:
-    for rank in sorted(builders):
-        _validate_rank_dag(rank, builders[rank])
 
 
 def _resolve_from_sh_test(path: Path) -> Path:
@@ -253,15 +175,23 @@ def _parse_config_value(key: str, value: str) -> object:
     if key in INT_CONFIG_KEYS:
         return parse_int(value, key)
     if key == "remote_operand_loads":
-        return parse_bool(value, key)
+        parsed_flag = parse_bool(value, key)
+        # 3.2 fix (2026-09-29): this repo has no remote weight pool --
+        # a node carrying remote_weight_bytes now fails at the C++ parse
+        # boundary, and the flag that would emit such nodes fails HERE,
+        # at the config boundary, instead of surviving load and aborting
+        # the simulation at first GPU-comp issue.
+        if parsed_flag:
+            raise ValueError(
+                f"config key {key}=true is not supported by this repo "
+                "(no remote weight pool; weights are always resident in "
+                "NPU local memory). Keep the key at false or remove it"
+            )
+        return parsed_flag
     if key == "request_queue_session_limit":
         return parse_nonnegative_int(value, key)
     if key == "prefill_chunk_size":
         return parse_int(value, key)
-    if key == "kv_reserve_context_tokens":
-        return parse_nonnegative_int(value, key)
-    if key == "record_planning_iterations":
-        return parse_bool(value, key)
     if key == "kv_cache_policy":
         # A.5(2026-09-05):legacy 与 relevant 两个历史变体已清除,唯一
         # 合法取值 session_lru_recompute;其余取值 fail-closed。
@@ -283,22 +213,12 @@ def _parse_config_value(key: str, value: str) -> object:
             raise ValueError("config key mlp_variant must be gelu or swiglu")
         return value
     if key in PATH_CONFIG_KEYS:
-        if key == "output_dir" and not value:
-            return None
         if not value:
             raise ValueError(f"config key {key} must not be empty")
         return Path(value)
     if not value:
         raise ValueError(f"config key {key} must not be empty")
     return value
-
-
-def _configuration_digest(paths: Sequence[Path]) -> str:
-    digest = hashlib.sha1()
-    for path in paths:
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()[:8]
 
 
 def _to_wsc_llm_hardware(hardware: ResolvedHardware) -> WscLlmHardware:
@@ -343,6 +263,34 @@ def select_first_session_requests(
         request for request in requests if request.session_id in selected_set
     )
     return selected_requests, selected_session_ids
+
+
+def queue_index_mappings(
+    source_request_queue: Sequence[RequestSpec],
+    selected_requests: Sequence[RequestSpec],
+) -> tuple[tuple[int, ...], dict[int, int]]:
+    """P2-21（2026-09-28）：queue_index 两端同源 C++ 的映射对。
+
+    C++ WindowedTraceReader 对它读到的队列 CSV 按"数据行序（0 起）"编号
+    queue_index（process_indexed_row: queue_index = data_rows_ - 1）；
+    session_limit 过滤只发生在 Python 侧（selected_requests 为源序列的
+    保序子序列），按过滤后序 enumerate 会与 C++ 错位（潜伏缺陷：
+    生产 trace_config 恒 limit=0 不触发）。返回：
+
+      * ``request_queue_indices`` —— 与 selected_requests 逐位对齐的
+        源 CSV 行序元组（manifest/metrics_manifest 的 requests[].
+        queue_index 取此值，与 C++ 注册/连接序一致）；
+      * ``queue_position_by_index`` —— 源行序 -> 过滤位次的逆映射
+        （config.request_queue[pos] 定位用；limit==0 时恒等）。
+    """
+    selected_ids = {request.request_id for request in selected_requests}
+    indices: list[int] = []
+    position_by_index: dict[int, int] = {}
+    for ordinal, request in enumerate(source_request_queue):
+        if request.request_id in selected_ids:
+            position_by_index[ordinal] = len(indices)
+            indices.append(ordinal)
+    return tuple(indices), position_by_index
 
 
 def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTraceConfig:
@@ -420,13 +368,14 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         )
         sys.exit(1)
     source_request_queue = load_request_queue(request_queue_csv)
-    request_queue, selected_session_ids = select_first_session_requests(
+    request_queue, _ = select_first_session_requests(
         source_request_queue,
         int(parsed["request_queue_session_limit"]),
     )
-    source_session_count = len(
-        {request.session_id for request in source_request_queue}
-    )
+    # P2-21（2026-09-28）：queue_index 两端同源 C++（未过滤全量 CSV 数据
+    # 行序）——过滤态下按过滤后序枚举与 WindowedTraceReader 错位。
+    request_queue_indices, queue_position_by_index = queue_index_mappings(
+        source_request_queue, request_queue)
     hardware_path = _resolve_from_sh_test(parsed["hardware_config"])
     hardware_capacity_profile = str(parsed["local_hbm_capacity_profile"])
     resolved_hardware = load_hardware_config(
@@ -434,7 +383,6 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         hardware_capacity_profile,
     )
     hardware = _to_wsc_llm_hardware(resolved_hardware)
-    hardware_metadata = resolved_hardware.metadata
     npus_count = resolved_hardware.npus_count
     system_template = _resolve_from_sh_test(parsed["system_template"])
     runtime_config_dir = (
@@ -452,13 +400,14 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         inference_groups=tuple((group.pg_name, group.ranks) for group in groups),
         output_dir=runtime_config_dir,
     )
-    digest_paths = [
-            config_csv.resolve(),
-            request_queue_csv,
-            hardware_path,
-            system_template,
-    ]
-    configuration_digest = _configuration_digest(tuple(digest_paths))
+
+    # die 后端:位置编码键的值域校验(rope|none;其他值 fail-closed,与
+    # face 侧 generate_face_trace.py 同款最小增量)。
+    position_encoding = str(parsed["position_encoding"])
+    if position_encoding not in ("rope", "none"):
+        raise ValueError(
+            "config key 'position_encoding' must be 'rope' or 'none', got "
+            f"{position_encoding!r}")
 
     return WscLlmTraceConfig(
         config_csv=config_csv.resolve(),
@@ -471,14 +420,13 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         bytes_per_elem=int(parsed["bytes_per_elem"]),
         model_name=str(parsed["model_name"]),
         mlp_variant=str(parsed["mlp_variant"]),
-        output_prefix=str(parsed["output_prefix"]),
-        output_dir=parsed["output_dir"],
         request_queue_csv=request_queue_csv,
         request_queue=request_queue,
+        request_queue_indices=request_queue_indices,
+        queue_position_by_index=queue_position_by_index,
         hardware_config=hardware_path,
         hardware_capacity_profile=hardware_capacity_profile,
         hardware=hardware,
-        hardware_metadata=hardware_metadata,
         system_template=system_template,
         system_config=runtime_configs.system,
         network_config=runtime_configs.network,
@@ -486,15 +434,10 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         remote_operand_loads=bool(parsed["remote_operand_loads"]),
         inference_groups=tuple(groups),
         request_queue_session_limit=int(parsed["request_queue_session_limit"]),
-        selected_session_ids=selected_session_ids,
-        source_request_count=len(source_request_queue),
-        source_session_count=source_session_count,
         trace_granularity=str(parsed["trace_granularity"]),
         prefill_chunk_size=int(parsed["prefill_chunk_size"]),
         kv_cache_policy=str(parsed["kv_cache_policy"]),
-        kv_reserve_context_tokens=int(parsed["kv_reserve_context_tokens"]),
-        record_planning_iterations=bool(parsed["record_planning_iterations"]),
-        configuration_digest=configuration_digest,
+        position_encoding=position_encoding,
     )
 
 
@@ -503,7 +446,27 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
 
 
 def _stage_tag(queue_index: int, category: int, relative_rank: int) -> int:
-    return queue_index * 10000 + category + relative_rank
+    # 4.1 tag-domain guards (2026-09-29): the 10000-wide per-request block
+    # assumes category+relative_rank stays inside it -- a TP/rank setup
+    # pushing past the block width would alias the NEXT request's tags
+    # (cross-request tag crosstalk, silent). And the total must stay inside
+    # the C++ NATIVE front-end window [0, 5e8): queue_index >= 50000 made
+    # the C++ sys_panic mid-run instead of failing here at the producer.
+    # Both bounds fail closed at the single tag factory.
+    if category + relative_rank >= 10000:
+        raise ValueError(
+            f"stage tag block overflow: category({category}) + "
+            f"relative_rank({relative_rank}) >= 10000 -- the per-request "
+            "tag block is 10000 wide and would alias the next request's "
+            "tags (rank/TP configuration too large for the tag domain)"
+        )
+    tag = queue_index * 10000 + category + relative_rank
+    if tag >= 500000000:
+        raise ValueError(
+            f"stage tag {tag} out of the C++ NATIVE window [0, 500000000): "
+            f"queue_index {queue_index} too large (max 49999)"
+        )
+    return tag
 
 
 def _xy_route(hardware: WscLlmHardware, source: int, target: int) -> list[int]:
@@ -522,7 +485,7 @@ def _xy_route(hardware: WscLlmHardware, source: int, target: int) -> list[int]:
 def _paired_transfer(
     *,
     config: WscLlmTraceConfig,
-    builders: dict[int, TraceBuilder],
+    builders: dict[int, "OnlineTraceBuilder"],
     queue_index: int,
     category: int,
     name: str,
@@ -591,7 +554,7 @@ def _paired_transfer(
 
 def _emit_control_trigger(
     *,
-    builders: dict[int, TraceBuilder],
+    builders: dict[int, "OnlineTraceBuilder"],
     queue_index: int,
     name: str,
     source_group: WscLlmInferenceGroup,
@@ -620,12 +583,13 @@ def _emit_control_trigger(
 def _emit_prefill_stage(
     *,
     config: WscLlmTraceConfig,
-    builders: dict[int, TraceBuilder],
+    builders: dict[int, "OnlineTraceBuilder"],
     group: WscLlmInferenceGroup,
     prefix: str,
     stage: str,
     tokens: int,
     initial_context_tokens: int,
+    die_ctx=None,
 ) -> dict[int, tuple[int, int]]:
     """Emit one chunked prefill stage; returns, per rank, the ids of the first
     and last *real* operator/collective nodes (the artificial
@@ -645,6 +609,19 @@ def _emit_prefill_stage(
     tp = len(group.ranks)
     for relative_rank, rank in enumerate(group.ranks):
         first_node_id = builders[rank].next_id
+        rank_die_ctx = None
+        if die_ctx is not None:
+            # die 后端(wscllm 推广):prefill/recompute 阶段逐 rank 写入
+            # 发射语境(phase=prefill;span 记录带绝对位置,恒等式见
+            # die_model_adapter 模块 docstring)。
+            die_ctx.begin_emission(
+                phase="prefill",
+                tensor_parallel=tp,
+                tensor_parallel_rank=relative_rank,
+                span_namespace=f"{prefix}_{stage}",
+                pass_spans=spans,
+            )
+            rank_die_ctx = die_ctx
         pass_count = transformer_pass_aggregated(
             builders[rank], phase=f"{prefix}_{stage}_request_aggregated",
             pass_spans=spans, layers=config.layers, hidden_size=config.hidden_size,
@@ -652,6 +629,7 @@ def _emit_prefill_stage(
             vocab_size=config.vocab_size, bytes_per_elem=config.bytes_per_elem,
             num_heads=config.num_heads, tensor_parallel_rank=relative_rank,
             mlp_variant=config.mlp_variant,
+            die_ctx=rank_die_ctx,
         )
         bounds[rank] = [first_node_id, builders[rank].previous_id]
         builders[rank].all_reduce(

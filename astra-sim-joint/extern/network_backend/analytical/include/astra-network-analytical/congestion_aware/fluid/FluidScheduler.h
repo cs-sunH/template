@@ -6,12 +6,15 @@ LICENSE file in the root directory of this source tree.
 #pragma once
 
 #include "common/EventQueue.h"
+#include "common/WallClock.h"
 #include "congestion_aware/Link.h"
 #include "congestion_aware/fluid/FluidFlow.h"
 #include "congestion_aware/fluid/FluidLinkState.h"
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <functional>
+#include <map>
 #include <optional>
 #include <queue>
 #include <unordered_map>
@@ -33,7 +36,16 @@ class FluidScheduler {
     void start_flow(NetworkAnalytical::ChunkSize bytes,
                     std::shared_ptr<const FluidRoute> route,
                     NetworkAnalytical::Callback callback,
-                    NetworkAnalytical::CallbackArg callback_arg) noexcept;
+                    NetworkAnalytical::CallbackArg callback_arg,
+                    int src_rank = -1, int dst_rank = -1,
+                    std::optional<LogicalFlowKey> logical_key = std::nullopt) noexcept;
+
+    /// Invoked at the existing pending-start bind point, after the ordinary
+    /// FlowId has been assigned and inserted into the active table.
+    void set_on_flow_bound(
+        std::function<void(const LogicalFlowKey&, FlowId)> callback) {
+        on_flow_bound_ = std::move(callback);
+    }
 
     void flush_pending_starts() noexcept;
 
@@ -53,17 +65,30 @@ class FluidScheduler {
      */
     void set_deferred_flush_mode(bool enabled) noexcept;
 
-    /**
-     * Schedule a flush of all pending flow starts via the same-tick deferred
-     * channel (schedule_event_deferred). Post-commit communication emission in
-     * online mode must go through this entry (or start_flow with deferred mode
-     * enabled); it never inserts a current_time event into the main queue.
-     */
-    void flush_pending_starts_deferred() noexcept;
+    // (flush_pending_starts_deferred was removed with the 2026-10-01
+    // dead-code audit: it had no caller -- start_flow's deferred arm
+    // schedules the shared flush_callback directly, which is the ONLY
+    // post-commit emission channel in online mode.)
 
     void mark_event_loop_started() noexcept;
     void handle_service_wakeup(uint64_t generation) noexcept;
     void handle_tail_arrival(FlowId flow_id) noexcept;
+
+    /// Per-directed-link version for D1 window invalidation. It changes only
+    /// when active membership or a member's allocated flow rate changes.
+    [[nodiscard]] uint64_t link_resource_version(LinkId link_id) const;
+
+    /// Observe an actual batch membership/rate transition. The before call
+    /// follows integration under old rates and receives the conservative set
+    /// of links that may change; the after call receives the exact changed
+    /// set after rates and versions have been committed. Observers must not
+    /// re-enter this scheduler, start flows, or publish workload completions.
+    using LinkResourceMutationObserver = std::function<void(
+        bool before_change, NetworkAnalytical::EventTime tick,
+        const std::vector<LinkId>& affected_links)>;
+    [[nodiscard]] uint64_t add_link_resource_mutation_observer(
+        LinkResourceMutationObserver observer);
+    void remove_link_resource_mutation_observer(uint64_t observer_id) noexcept;
 
     [[nodiscard]] uint64_t get_active_flow_count() const noexcept;
     [[nodiscard]] uint64_t get_active_route_memberships() const noexcept;
@@ -118,7 +143,6 @@ class FluidScheduler {
 
     void enable_link_observer(uint64_t link_bucket_ns) noexcept;
 
-    [[nodiscard]] bool link_observer_enabled() const noexcept;
 
     /// Bucket length actually in effect (echoed into every link record).
     [[nodiscard]] uint64_t link_observer_bucket_ns() const noexcept;
@@ -141,6 +165,86 @@ class FluidScheduler {
     /// discipline; the observer stays disabled afterwards).
     void link_observer_release() noexcept;
 
+    /// -------------------------------------------------------------------
+    /// W1 (joint work ledger, 2026-09-29): per-flow / per-link state
+    /// snapshot for the causal work ledger. The query integrates live flows
+    /// to the online tick-end static point before copying them, so
+    /// remaining_bytes and as_of_tick describe the actual decision boundary.
+    /// -------------------------------------------------------------------
+    struct FlowSnapshotEntry {
+        FlowId flow_id;
+        int src_rank = -1;
+        int dst_rank = -1;
+        uint64_t total_bytes;
+        long double remaining_bytes;
+        long double current_rate_Bpns;
+        NetworkAnalytical::EventTime last_rate_update_time;
+        std::vector<LinkId> route;
+        int state;  // FluidFlowState raw value (0 Active, 1 tail, 2 done)
+        std::optional<LogicalFlowKey> logical_key;
+    };
+
+    struct PendingFlowSnapshotEntry {
+        FlowId assigned_flow_id;
+        int src_rank = -1;
+        int dst_rank = -1;
+        uint64_t total_bytes = 0;
+        std::vector<LinkId> route;
+        std::optional<LogicalFlowKey> logical_key;
+    };
+
+    struct LinkSnapshotEntry {
+        LinkId link_id;
+        NetworkAnalytical::Bandwidth capacity_Bpns;
+        uint32_t active_flow_count;
+    };
+
+    /// Live flows (Active / PropagatingTail; completed flows are erased from
+    /// flows_by_id at their completion), ascending flow_id.
+    [[nodiscard]] std::vector<FlowSnapshotEntry> flow_snapshot() noexcept;
+
+    /// Starts assigned an id but not yet bound by flush_pending_starts().
+    /// This separate view preserves flow_snapshot()'s active-flow meaning.
+    [[nodiscard]] std::vector<PendingFlowSnapshotEntry>
+    pending_flow_snapshot() const;
+
+    /// All directed links with their capacity and active-flow count.
+    [[nodiscard]] std::vector<LinkSnapshotEntry> link_snapshot() const noexcept;
+
+    /// Current event-queue tick of the frame produced by flow_snapshot().
+    /// Tails can retain an older last_rate_update_time after leaving link
+    /// arbitration, so the frame watermark comes from the boundary itself.
+    [[nodiscard]] NetworkAnalytical::EventTime
+    flow_snapshot_as_of_tick() const noexcept;
+
+    /// -------------------------------------------------------------------
+    /// Additive wall-clock instrumentation (measurement only; the brackets
+    /// never gate scheduling logic). Buckets accumulate total ns + call
+    /// count; the counters complement total_started_flows /
+    /// total_completed_flows. Mutable solely because report_progress() is
+    /// const, matching the wall_start_time idiom.
+    /// -------------------------------------------------------------------
+    struct SchedulerWallStats {
+        NetworkAnalytical::WallClockBucket flush_pending_starts;
+        /// advance_dirty_flows() + recalculate_dirty_rates() combined
+        /// (each call increments calls by one).
+        NetworkAnalytical::WallClockBucket dirty_advance_recalc;
+        NetworkAnalytical::WallClockBucket service_wakeup;
+        /// Whole handle_tail_arrival(), INCLUDING the completion callback.
+        NetworkAnalytical::WallClockBucket tail_arrival;
+        /// The completion callback invoked at the end of handle_tail_arrival()
+        /// alone (subset of tail_arrival) -- the prime suspect for the
+        /// per-flow wall constant.
+        NetworkAnalytical::WallClockBucket completion_callback;
+        uint64_t completion_heap_stale_pops = 0;
+        uint64_t rebuild_calls = 0;
+        uint64_t rebuilds_performed = 0;
+    };
+
+    [[nodiscard]] const SchedulerWallStats& wall_clock_stats() const noexcept {
+        return wall_stats_;
+    }
+
   private:
     struct PendingFlowStart {
         FlowId flow_id;
@@ -148,6 +252,9 @@ class FluidScheduler {
         std::shared_ptr<const FluidRoute> route;
         NetworkAnalytical::Callback callback;
         NetworkAnalytical::CallbackArg callback_arg;
+        int src_rank = -1;
+        int dst_rank = -1;
+        std::optional<LogicalFlowKey> logical_key;
     };
 
     struct CompletionEntry {
@@ -189,8 +296,20 @@ class FluidScheduler {
 
     void begin_dirty_batch() noexcept;
     void mark_dirty(FlowId flow_id) noexcept;
+    void advance_live_flows_to_current_time() noexcept;
     void advance_dirty_flows(NetworkAnalytical::EventTime now) noexcept;
     void recalculate_dirty_rates(NetworkAnalytical::EventTime now) noexcept;
+    [[nodiscard]] std::vector<LinkId> dirty_route_links(
+        const std::vector<LinkId>& membership_links) const;
+    [[nodiscard]] std::vector<LinkId> changed_rate_links(
+        const std::vector<std::pair<FlowId, NetworkAnalytical::Bandwidth>>&
+            old_rates,
+        const std::vector<FlowId>& excluded_flows = {}) const;
+    void bump_link_resource_versions(
+        const std::vector<LinkId>& link_ids) noexcept;
+    void notify_link_resource_mutation(
+        bool before_change, NetworkAnalytical::EventTime tick,
+        const std::vector<LinkId>& affected_links) noexcept;
     void remove_memberships(FluidFlow& flow) noexcept;
     void clean_completion_heap() noexcept;
     void maybe_rebuild_completion_heap() noexcept;
@@ -208,7 +327,12 @@ class FluidScheduler {
     std::shared_ptr<NetworkAnalytical::EventQueue> event_queue;
     std::unordered_map<FlowId, FluidFlow> flows_by_id;
     std::vector<FluidLinkState> link_states;
+    std::vector<uint64_t> link_resource_versions_;
     std::vector<PendingFlowStart> pending_starts;
+    std::function<void(const LogicalFlowKey&, FlowId)> on_flow_bound_;
+    std::map<uint64_t, LinkResourceMutationObserver>
+        link_resource_mutation_observers_;
+    uint64_t next_link_resource_observer_id_ = 1;
 
     std::priority_queue<CompletionEntry, std::vector<CompletionEntry>, CompletionLater> completion_heap;
     uint64_t wakeup_generation;
@@ -236,6 +360,9 @@ class FluidScheduler {
     uint64_t max_dirty_flows;
     size_t peak_completion_heap_size;
     std::chrono::steady_clock::time_point wall_start_time;
+
+    /// instrumentation buckets (see the public SchedulerWallStats block)
+    mutable SchedulerWallStats wall_stats_;
 
     /// WP6 link observer state (empty/disabled until enabled by the online
     /// main; see the public block above). Only per-link state and the current

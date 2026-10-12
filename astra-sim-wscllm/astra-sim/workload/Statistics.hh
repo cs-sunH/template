@@ -12,7 +12,11 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
+// The ChakraProtoMsg::NodeType typedef below is part of this header's surface
+// (Workload/MetricCollector include it for the type). It comes straight from
+// the generated protobuf header; the feeder_v3 ETFeeder was retired together
+// with the offline static path (see Workload.hh).
+#include "extern/graph_frontend/chakra/schema/protobuf/et_def.pb.h"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
 
 typedef ChakraProtoMsg::NodeType ChakraNodeType;
@@ -27,34 +31,24 @@ class Statistics {
       public:
         static const Tick INVALID_TICK = UINT64_MAX;
         enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, INVALID };
-        static OperatorType get_operator_type(
-            const std::shared_ptr<Chakra::ETFeederNode> node);
-        // Step 1-8: online-mode overload dispatching on the NodeView fields
-        // (kind / is_cpu_op) with the same mapping as the ETFeederNode
-        // version: MemLoad/MemStore -> REMOTE_MEM, Compute -> CPU/GPU by
-        // is_cpu_op, CommSend/CommRecv/CommCollective -> COMM, else INVALID.
+        // Dispatching on the NodeView fields (kind / is_cpu_op):
+        // MemLoad/MemStore -> REMOTE_MEM, Compute -> CPU/GPU by is_cpu_op,
+        // CommSend/CommRecv/CommCollective -> COMM, else INVALID.
         static OperatorType get_operator_type(
             const ExecutionDriven::NodeView& node);
-        OperatorStatistics(NodeId node_id,
-                           Tick start_time,
-                           Tick end_time,
-                           OperatorType type)
-            : node_id(node_id),
-              start_time(start_time),
-              end_time(end_time),
-              type(type) {}
-        OperatorStatistics(NodeId node_id, Tick start_time, OperatorType type)
-            : node_id(node_id),
-              start_time(start_time),
+        // (2026-09-28 C1: the node_id member was write-only -- the map key
+        // carries the identity; operation_intensity/is_memory_bound had no
+        // reader after the compact online aggregation absorbed the roofline
+        // sums and were removed with their writer.)
+        OperatorStatistics(Tick start_time, OperatorType type)
+            : start_time(start_time),
               end_time(INVALID_TICK),
               type(type) {}
         OperatorStatistics()
-            : node_id(UINT64_MAX),
-              start_time(INVALID_TICK),
+            : start_time(INVALID_TICK),
               end_time(INVALID_TICK),
               type(OperatorType::INVALID) {}
 
-        NodeId node_id;
         Tick start_time;
         Tick end_time;
         OperatorType type;
@@ -62,30 +56,14 @@ class Statistics {
         // compute node
         std::optional<double> memory_utilization;
         std::optional<double> compute_utilization;
-        std::optional<double> operation_intensity;
-        std::optional<bool> is_memory_bound;
-
-        // communication node
-        std::optional<uint64_t> comm_size;  // Size of communication in bytes
-
-        // remote memory node
     };
 
   public:
-    Statistics(Workload* workload);
+    Statistics();
 
     OperatorStatistics& get_operator_statistics(NodeId node_id);
 
-    const OperatorStatistics& get_operator_statistics(NodeId node_id) const;
-
-    void record_start(std::shared_ptr<Chakra::ETFeederNode> node,
-                      Tick start_time);
-
-    void record_end(std::shared_ptr<Chakra::ETFeederNode> node, Tick end_time);
-
-    // Step 1-8: online-mode overloads keyed by NodeView::global_id (the
-    // static ETFeederNode path stays byte-exact for the baseline). The
-    // online path (GraphSource::et_node == nullptr) routes here.
+    // NodeView-keyed recorders (step 1-8), keyed by NodeView::global_id.
     void record_start(const ExecutionDriven::NodeView& node, Tick start_time);
 
     void record_end(const ExecutionDriven::NodeView& node, Tick end_time);
@@ -103,14 +81,15 @@ class Statistics {
         Tick end_time);
 
     // Read-only accessors for side-band metric computation (doc sec.5.7).
-    // Valid after post_processing() has run. They only scan existing
-    // operator statistics and never influence simulation execution.
+    // They only scan existing operator statistics and never influence
+    // simulation execution. get_wall_time() reads the running max
+    // maintained by record_end() (see wall_time below), so it is valid at
+    // MetricCollector::finalize time by explicit design (2026-08-28 fix).
+    // The other accessors need the completed or compacted history that
+    // online compaction produces.
 
     // Wall time of this rank: max operator end_time.
     Tick get_wall_time() const;
-
-    // Merged union of all intervals of the given operator type.
-    Tick get_type_time(OperatorStatistics::OperatorType type) const;
 
     // Merged union of the intervals of the given operator type, clipped to
     // [window_start, window_end].
@@ -121,13 +100,19 @@ class Statistics {
 
     // Duration-weighted sums of the roofline per-node utilization fields over
     // CPU/GPU operator statistics, clipped to [window_start, window_end].
-    // Same weighting formula as extract_utilizations() ("Average compute
-    // utilization"), only windowed and unnormalized so callers can aggregate
+    // Same weighting formula as the retired legacy "Average compute
+    // utilization" report line, only windowed and unnormalized so callers
+    // can aggregate
     // across ranks before dividing (doc sec.8.7). Read-only.
     struct WindowedRooflineUtilization {
         double compute_utilization_weighted_sum = 0;
         double memory_utilization_weighted_sum = 0;
-        // Includes the same 1ns guard as extract_utilizations().
+        // Die-backend-only field (contract §7.6): eq-ops / (vector
+        // peak * elapsed), aggregated with the same duration weighting and
+        // the same exact accumulator as the two sums above. Zero for every
+        // legacy backend (no producer ever set the field).
+        double vector_utilization_weighted_sum = 0;
+        // Includes the same 1ns guard as the retired legacy report line.
         Tick total_comp_time = 1ul;
     };
     WindowedRooflineUtilization calculate_roofline_utilization_in_window(
@@ -153,21 +138,8 @@ class Statistics {
         return operator_statistics.size();
     }
 
-    ~Statistics() {
-        operator_statistics.clear();
-    }
-
-    // Legacy finalization scans operator_statistics. Compact online service
-    // intentionally does not retain that per-node history, so fail closed
-    // before a legacy consumer can overwrite/report invalid aggregates.
-    // This preflight has no statistics-side effects.
-    void ensure_legacy_post_processing_supported() const;
-
-    void post_processing();
-
-    void report(std::shared_ptr<spdlog::logger> logger) const;
-
-    void report() const;
+    // (No destructor body: clearing a map in the destructor is what the
+    // map's own destructor does.)
 
   private:
     // Canonical online roofline sum: each contribution is first rounded as
@@ -184,11 +156,8 @@ class Statistics {
         [[nodiscard]] double value() const;
     };
 
-    void extract_type_time();
     Tick _calculateTotalRuntimeFromIntervals(
         const std::vector<std::pair<Tick, Tick>>& intervals) const;
-    void extract_utilizations();
-    void extract_comp_comm_overlap();
 
     // NodeView-only GPU accounting. The active-count integral closes a
     // fully-completed connected segment in O(1). A successful online service
@@ -204,35 +173,29 @@ class Statistics {
         Tick start_time,
         Tick end_time,
         const std::optional<double>& compute_utilization,
-        const std::optional<double>& memory_utilization);
+        const std::optional<double>& memory_utilization,
+        const std::optional<double>& vector_utilization =
+            std::nullopt);
     void add_online_total_comp_time(Tick duration);
     void require_online_compacted_full_window(Tick window_start,
                                               Tick window_end,
                                               Tick newest_retired_end,
                                               const char* consumer) const;
 
-    std::unordered_map<OperatorStatistics::OperatorType, Tick> type_time;
     // Fix (2026-08-28): zero-initialized + maintained as a running max in
     // record_end. Online mode reads get_wall_time() at MetricCollector
-    // finalize -- BEFORE Workload's post_processing() ever computes it -- so
-    // the member used to be an uninitialized read and the rank_compute
-    // records emitted garbage wall_time_ns values (varying per run). With the
-    // running max the finalize-time value is the true "max operator end_time"
-    // (identical to post_processing()'s own recompute, which stays as is).
+    // finalize, so the member used to be an uninitialized read and the
+    // rank_compute records emitted garbage wall_time_ns values (varying per
+    // run). With the running max the finalize-time value is the true
+    // "max operator end_time".
     Tick wall_time = 0;
-    Tick comp_comm_overlap;
-    double compute_bound_percentage_;
-    double average_compute_utilization_;
-    double average_memory_utilization_;
-    double average_operation_intensity_;
-    Workload* workload;
     std::unordered_map<NodeId, OperatorStatistics> operator_statistics;
     // A3-lite (2026-08-28): the start_times multimap was removed -- a
     // whole-tree grep found zero readers (only the insertions and the
     // destructor clear), so it was pure per-node dead weight. The
-    // operator_statistics map stays complete for static ET and online
-    // microbenchmark runs, whose legacy finalize consumers scan it directly.
-    // Online service runs instead retire terminal records into compact,
+    // operator_statistics map stays complete for online microbenchmark
+    // runs (online_history_preserved), whose windowed queries scan it
+    // directly. Compact-service runs instead retire terminal records into
     // completion-order aggregates; only their full-prefix GPU/roofline
     // queries are supported after compaction.
 
@@ -240,14 +203,13 @@ class Statistics {
     // by complete_online_service_operator; static and online microbenchmark
     // runs keep the legacy unordered_map scan unchanged.
     bool online_compaction_active_ = false;
-    // Set at the first direct compact-service record, including a live node.
-    // It keeps legacy finalization from silently treating an empty map as a
-    // completed service run before a terminal record activates compaction.
-    bool online_compact_statistics_recorded_ = false;
     bool online_mode_configured_ = false;
     bool online_history_preserved_ = false;
     OnlineExactDoubleSum online_compute_utilization_weighted_sum_;
     OnlineExactDoubleSum online_memory_utilization_weighted_sum_;
+    // Die backend (contract §7.6): vector (eq-op) utilization aggregate,
+    // same exact-accumulator discipline as the two above.
+    OnlineExactDoubleSum online_vector_utilization_weighted_sum_;
     Tick online_total_comp_time_ = 1ul;
     Tick online_roofline_newest_retired_end_ = 0;
 

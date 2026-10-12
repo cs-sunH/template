@@ -331,6 +331,26 @@ class ViolationDenominatorTests(unittest.TestCase):
         self.assertEqual(payload["per_terminal_status"]["rejected"],
                          {"total": 1, "violating": 0})
 
+    def test_observation_window_keeps_unfinished_and_unreleased_in_denominator(self):
+        run_dir, manifest, t_iso = self._setup()
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(queue_index="0", request_id="r0", e2e_ns="900",
+                                  arrival_ns="0", completion_ns="900"),
+            synthetic.request_row(queue_index="1", request_id="r1",
+                                  terminal_status="not_arrived", e2e_ns="NA"),
+            synthetic.request_row(queue_index="2", request_id="r2",
+                                  terminal_status="in_flight", e2e_ns="NA"),
+        ])
+        out = run_dir / "window_violation.json"
+        args = slo_argv(["violation", str(run_dir), "--t-isolated", str(t_iso),
+                         "--manifest", str(manifest), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_violation(args), 0)
+        payload = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(payload["violation_denominator"], 3)
+        self.assertEqual(payload["not_arrived_requests"], 1)
+        self.assertEqual(payload["in_flight_requests"], 1)
+        self.assertAlmostEqual(payload["completion_rate"], 1 / 3)
+
     def test_missing_bucket_in_t_isolated_fails_closed(self):
         run_dir, manifest, _ = self._setup()
         t_iso = synthetic.write_t_isolated(run_dir, [(1, 1, 400)])
@@ -347,17 +367,19 @@ class ViolationDenominatorTests(unittest.TestCase):
         """
         run_dir, manifest, t_iso = self._setup()
         # 同一 E2E 数据，附上夸张的 proxy first_token（若判定误读 proxy，
-        # 这些值全部远超 Deadline=800，verdict 必然翻转）。
+        # 这些值全部远超 Deadline=800，verdict 必然翻转）。十进制整数字
+        # 面量不带下划线（R8-F4，2026-09-29 face 移植：parse_ns 拒绝
+        # "1_000" 型字面量）。
         rows = [
             synthetic.request_row(
                 queue_index="0", request_id="r0", e2e_ns="900",
                 arrival_ns="0", completion_ns="900",
-                first_token_ns="10_000_000_000",
+                first_token_ns="10000000000",
                 first_token_source="train_interpolated"),
             synthetic.request_row(
                 queue_index="1", request_id="r1", e2e_ns="700",
                 arrival_ns="0", completion_ns="700",
-                first_token_ns="999_999_999_999",
+                first_token_ns="999999999999",
                 first_token_source="train_interpolated"),
             synthetic.request_row(
                 queue_index="2", request_id="r2",
@@ -533,6 +555,26 @@ class LoadImbalanceHandTests(unittest.TestCase):
         self.assertAlmostEqual(std / mean, 1 / 3)
         self.assertAlmostEqual(max(values) / mean, 4 / 3)
 
+    def test_partial_overlap_interval_not_inflated(self):
+        # L19（2026-09-29）：精确端点积分——[10,20) 在 span [0,100) 的
+        # b̄ = 10/100 = 0.1（旧"重叠桶计数×桶长"把部分重叠的边缘桶整桶
+        # 计入 → bucket=50 时虚增为 50/100=0.5，请求时长 ≪ 桶长时 CV
+        # 退化为每实例请求数度量）；零长度区间 [5,5) 恒贡献 0。
+        intervals = [
+            {"request_id": "a", "instance": 0, "admission_ns": 10,
+             "drain_ns": 20},
+            {"request_id": "b", "instance": 1, "admission_ns": 0,
+             "drain_ns": 100},
+        ]
+        stats = load_imbalance.instance_timeavg_backlog(
+            intervals, 50, 0, 100)
+        self.assertAlmostEqual(stats[0][0], 0.1)
+        self.assertAlmostEqual(stats[1][0], 1.0)
+        stats = load_imbalance.instance_timeavg_backlog(
+            [{"request_id": "z", "instance": 0, "admission_ns": 5,
+              "drain_ns": 5}], 50, 0, 100)
+        self.assertAlmostEqual(stats[0][0], 0.0)
+
     def test_missing_manifest_param_fails(self):
         run_dir = synthetic.make_run_dir("li2")
         synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-face")
@@ -619,6 +661,33 @@ class HopbytesTests(unittest.TestCase):
         self.assertEqual(acc["bytes_without_hops"], 50)
 
 
+class FaceHopsUniformityTests(unittest.TestCase):
+    """M18（2026-09-29）：collect_face 的 hops[0]×Σbytes 聚合前提 =
+    per-shard hops 全等——非全等（非同构实例块形状）fail-closed 并列
+    各 shard 值，不再静默取 hops[0] 失真（joint collect_face 的
+    hops[0] 消费面 = prefill 分支；decode 为逐 shard 精确、无此前提）。"""
+
+    def test_face_prefill_nonuniform_hops_fails_closed(self):
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "prefill", "request_id": "r0", "tick": 1,
+                  "decision": {"history_transfer_bytes": 600,
+                               "history_noc_hops": [2, 3]}}
+        with self.assertRaises(SloToolError) as ctx:
+            hopbytes.collect_face(record, acc, per_request)
+        self.assertIn("非全等", str(ctx.exception))
+        self.assertIn("[2, 3]", str(ctx.exception))
+        self.assertEqual(acc["hop_bytes_total"], 0)
+        self.assertEqual(acc["bytes_with_hops"], 0)
+        # 全等 hops 行为不变（对照）。
+        record = {"kind": "prefill", "request_id": "r1", "tick": 2,
+                  "decision": {"history_transfer_bytes": 600,
+                               "history_noc_hops": [2, 2]}}
+        hopbytes.collect_face(record, acc, per_request)
+        self.assertEqual(acc["hop_bytes_total"], 1200)
+
+
 class CliSurfaceTests(unittest.TestCase):
     """--help 可用 + 退出码纪律（fail-closed=2）。"""
 
@@ -661,8 +730,19 @@ class CliSurfaceTests(unittest.TestCase):
 
 
 class SessionPassthroughTests(unittest.TestCase):
-    """B4（S3 异常③）：metrics_manifest 透传 human_time_ns/tool_time_ns 后
-    T_session 可算；turn-0 双侧 null=0 贡献（非缺数据）；键缺席才 NA。"""
+    """B4（S3 异常③）+ H5（2026-09-29）：metrics_manifest 透传
+    human_time_ns/tool_time_ns 后 T_session 可算；initiator 口径 = 行上
+    等待是该轮之后的 gap（[completion(j), arrival(j+1)]），Σ 只累加除
+    末轮外的 turns；非末轮 turn-0/0-gap 双侧 null=0 贡献（非缺数据）；
+    键缺席（非末轮）才 NA。metrics_manifest 缺透传字段时从姊妹
+    manifest.json / run_dir/manifest.json 按 request_id 补齐（H5②）。
+
+    旧口径（等待记在到达方=触发 gap）钉住的全 turns 求和已废：
+    sidecar 冻结口径是 initiator（derive_20_first_30_seconds.py "the gap
+    after turn j is the human_time or tool_time recorded on turn j's own
+    row"），全 turns 求和系统性多扣恰一个末轮等待（快响应+长思考场景
+    T_session<0 → fail-closed 误中止）。
+    """
 
     def _write_run(self, manifest_requests):
         run_dir = synthetic.make_run_dir("sess")
@@ -678,11 +758,13 @@ class SessionPassthroughTests(unittest.TestCase):
         return run_dir
 
     def test_t_session_with_passthrough_keys(self):
-        # Σ(human+tool) = 0(turn-0) + 200(turn-1) = 200；
-        # T_session = 9000 - 1000 - 200 = 7800。
+        # initiator 口径：turn0 human=300 计入（[5000,5200] 前的窗口内
+        # 等待——手算 fixture 中 300 与 200 的物理间隙不必一致，只验
+        # 求和口径）；turn1（末轮）human=200 在窗口外不计、不留痕。
+        # Σ(human+tool) = 300；T_session = 9000 − 1000 − 300 = 7700。
         run_dir = self._write_run([
             synthetic.manifest_request(
-                "s0t0", "s0", 0, 0, human_time_ns=None, tool_time_ns=None),
+                "s0t0", "s0", 0, 0, human_time_ns=300, tool_time_ns=None),
             synthetic.manifest_request(
                 "s0t1", "s0", 1, 1, human_time_ns=200, tool_time_ns=None),
         ])
@@ -692,11 +774,18 @@ class SessionPassthroughTests(unittest.TestCase):
         with out.open(encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["t_session_ns"], "7800")
-        self.assertEqual(rows[0]["sum_human_tool_ns"], "200")
-        self.assertIn("turn0/0-gap", rows[0]["missing_fields_sample"])
+        self.assertEqual(rows[0]["t_session_ns"], "7700")
+        self.assertEqual(rows[0]["sum_human_tool_ns"], "300")
+        # 末轮（s0t1）的 human=200 不进求和也不留 soft_missing；非末轮
+        # turn0 的 tool 缺侧按 0 计留痕。
+        self.assertEqual(rows[0]["missing_field_count"], "1")
+        self.assertIn("s0t0:tool_time_ns=0",
+                      rows[0]["missing_fields_sample"])
+        self.assertNotIn("s0t1", rows[0]["missing_fields_sample"])
 
     def test_t_session_na_when_keys_absent(self):
+        # 键整体缺席（WP2 之前的 manifest）→ NA；只有非末轮 turn0 被
+        # 核对（末轮字段与 T_session 无关）→ 计数 2（human+tool 各 1）。
         run_dir = self._write_run([
             synthetic.manifest_request("s0t0", "s0", 0, 0),
             synthetic.manifest_request("s0t1", "s0", 1, 1),
@@ -707,7 +796,48 @@ class SessionPassthroughTests(unittest.TestCase):
         with out.open(encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(rows[0]["t_session_ns"], "NA")
-        self.assertEqual(rows[0]["missing_field_count"], "4")
+        self.assertEqual(rows[0]["missing_field_count"], "2")
+
+    def test_t_session_supplemented_from_manifest_json(self):
+        # H5②：face-LRU 物化器只把透传字段写进 manifest.json —— 
+        # metrics_manifest.json 缺字段时从姊妹 manifest.json 按
+        # request_id 补齐（只补缺键），t_session 不再恒 NA。
+        run_dir = self._write_run([
+            synthetic.manifest_request("s0t0", "s0", 0, 0),
+            synthetic.manifest_request("s0t1", "s0", 1, 1),
+        ])
+        (run_dir / "manifest.json").write_text(json.dumps({
+            "requests": [
+                {"request_id": "s0t0", "human_time_ns": 300},
+                {"request_id": "s0t1", "human_time_ns": 200},
+            ]}), encoding="utf-8")
+        out = run_dir / "slo_session.csv"
+        args = slo_argv(["session", str(run_dir), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_session(args), 0)
+        with out.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["t_session_ns"], "7700")
+        self.assertEqual(rows[0]["sum_human_tool_ns"], "300")
+
+    def test_t_session_single_turn_ignores_own_fields(self):
+        # 单轮会话：唯一 turn 即末轮 → Σ=0，T_session=completion−arrival
+        # （行上等待定义在窗口外，字段缺席不构成 NA）。
+        run_dir = synthetic.make_run_dir("sess1")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(
+                queue_index="0", request_id="s0t0", session_id="s0",
+                turn_index="0", arrival_ns="1000", completion_ns="5000"),
+        ])
+        synthetic.write_metrics_manifest(run_dir, [
+            synthetic.manifest_request("s0t0", "s0", 0, 0),
+        ])
+        out = run_dir / "slo_session.csv"
+        args = slo_argv(["session", str(run_dir), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_session(args), 0)
+        with out.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["t_session_ns"], "4000")
+        self.assertEqual(rows[0]["sum_human_tool_ns"], "0")
 
 
 class BacklogTests(unittest.TestCase):
@@ -726,6 +856,32 @@ class BacklogTests(unittest.TestCase):
         self.assertEqual(header, ["time_ns", "in_flight"])
         self.assertEqual([(r["time_ns"], r["in_flight"]) for r in rows],
                          [("100", "2"), ("500", "1"), ("900", "0")])
+
+    def test_backlog_bucket_fills_zero_event_buckets(self):
+        # L17（2026-09-29）：--bucket-ns 分桶补发零事件桶。事件 100(+2)、
+        # 500(−1)、900(−1)，bucket=200 → 桶 0:[0,200) 事件值 max=2；
+        # 桶 1:[200,400) 零事件 → 上一事件延续 2；桶 2:[400,600) 只发生
+        # 完成事件，真实峰值=桶起点携入值 2（C-4 批次 D 镜像 2026-09-30：
+        # 桶值口径补齐「桶起点携入值」max 项——只对桶内事件取 max 会把
+        # 该桶系统性低估为 1）；桶 3:[600,800) 零事件 → 延续 1；
+        # 桶 4:[800,1000) 的完成事件在 t=900，[800,900) 段携入 1
+        # → 桶峰值 1（事件后归 0）。无事件区段不再整桶丢失。
+        run_dir = synthetic.make_run_dir("bl2")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(request_id="r0", queue_index="0",
+                                  arrival_ns="100", completion_ns="500"),
+            synthetic.request_row(request_id="r1", queue_index="1",
+                                  arrival_ns="100", completion_ns="900"),
+        ])
+        out = run_dir / "backlog_b.csv"
+        args = slo_argv(["backlog", str(run_dir), "--bucket-ns", "200",
+                         "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_backlog(args), 0)
+        header, rows = synthetic.read_csv(out)
+        self.assertEqual(header, ["time_ns", "in_flight"])
+        self.assertEqual([(r["time_ns"], r["in_flight"]) for r in rows],
+                         [("0", "2"), ("200", "2"), ("400", "2"),
+                          ("600", "1"), ("800", "1")])
 
 
 class WarmupTests(unittest.TestCase):

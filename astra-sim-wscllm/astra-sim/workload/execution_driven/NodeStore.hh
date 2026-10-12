@@ -4,22 +4,29 @@ LICENSE file in the root directory of this source tree.
 
 NodeStore -- execution-driven mechanism layer (wscllm phase 1).
 
-Minimal dynamic node store (方案 §4 步骤 1-4). First version supports only
-"the current request's current stage": a GraphBatch adds a batch of nodes,
-finish_node releases their successors, and the batch is dropped once done.
-No general dynamic-graph platform is built (仿真加速分析.md §5.5).
+Minimal dynamic node store (方案 §4 步骤 1-4). Historical note: the
+phase-1 skeleton served only "the current request's current stage" --
+one GraphBatch in flight, dropped once done. Two deliberate departures
+since, both documented below: M2 node GC (2026-08-23; always on since
+the 2026-09-05 B.3 cleanup) erases finished nodes at the committer's
+commit-tail quiescent point, and committed store ids are never reused,
+so a past batch's finished parent stays recognizable to the committer's
+cross-batch affine resolution (erased()). Still no general
+dynamic-graph platform is built (仿真加速分析.md §5.5).
 
 Interfaces implemented here:
-  - NodeStore: the store itself (add_node / add_dependency / resolve_free_nodes
-    / finish_node / meta_for / pending_count / empty, plus mark_issued --
+  - NodeStore: the store itself (add_node / add_dependency /
+    fill_free_node_snapshot / finish_node / node_ptr, plus mark_issued --
     documented additions to the plan's skeleton).
   - NodeStoreGraphSource: online-mode GraphSource over a NodeStore.
 
 Dependency semantics: add_dependency(parent, child, kind) records a
 precedence edge; a child becomes free when every recorded parent has
-finished. DepKind (Data/Control/Enabled) is stored for the later fence
-upgrade; in this first version all kinds resolve identically (documented;
-the plan's own §1-5 note forbids building the general fence early).
+finished. The DepKind parameter exists for interface stability but is
+deliberately NOT stored: in this first version every kind resolves as
+plain precedence (documented; the plan's own §1-5 note forbids building
+the general fence early, so only DepKind::Data is constructed in
+production).
 finish_node is idempotent -- the sole dependency-release owner.
 *******************************************************************************/
 
@@ -27,7 +34,6 @@ finish_node is idempotent -- the sole dependency-release owner.
 #define EXECUTION_DRIVEN_NODESTORE_HH
 
 #include <cstdint>
-#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -39,13 +45,6 @@ namespace AstraSim {
 namespace ExecutionDriven {
 
 enum class DepKind : int { Data = 0, Control = 1, Enabled = 2 };
-
-/// Reverse-index payload for watch/fence (步骤 1-5).
-struct NodeStoreMeta {
-    std::string request_id;
-    std::string stage;
-    uint64_t generation = 0;
-};
 
 // ---------------------------------------------------------------------------
 // Phase-3 sensing: per-rank injected-unfinished ledger summary (方案 §6.2
@@ -99,12 +98,11 @@ class NodeStore {
 
     /// Precedence edge: parent must finish before child becomes free.
     /// Safe when the parent was added after the child (child is removed from
-    /// the free set when the edge is recorded).
+    /// the free set when the edge is recorded). Fail-closed on a late edge
+    /// onto an already-issued/finished child or a self-loop (S5 guard,
+    /// NodeStore.cc add_dependency) -- free-set accounting would corrupt
+    /// otherwise.
     void add_dependency(uint64_t parent, uint64_t child, DepKind kind);
-
-    /// Free (all parents finished) and not yet issued nodes, ascending id.
-    /// Non-consuming; mark_issued consumes.
-    std::vector<uint64_t> resolve_free_nodes() const;
 
     /// Fill a caller-owned snapshot of the current free ids, ascending.
     /// Reusing the caller's vector avoids allocating a fresh snapshot during
@@ -119,9 +117,6 @@ class NodeStore {
     /// The ONLY dependency release entry (idempotent): finishes the node and
     /// frees every child whose parents are all finished.
     void finish_node(uint64_t node_id);
-
-    /// Full record copy (by-value read accessor).
-    std::optional<OnlineNode> node(uint64_t node_id) const;
 
     /// Zero-copy full record (GraphSource::lookup_ptr / for_each_dep_free
     /// backing). Lifetime contract (M2 node GC, 2026-08-23): collection
@@ -155,12 +150,6 @@ class NodeStore {
     // already-finished, or duplicate terminal callbacks return false so
     // Workload can fail closed before recording statistics or observer facts.
     bool mark_terminal_observed(uint64_t node_id);
-
-    /// Reverse index (watch/fence).
-    std::optional<NodeStoreMeta> meta_for(uint64_t node_id) const;
-
-    size_t pending_count() const;
-    bool empty() const;
 
     // -------------------------------------------------------------------------
     // M2 node GC (2026-08-23; the --online-node-gc CLI arm was removed by
@@ -246,8 +235,10 @@ class NodeStore {
 /// when (步骤 1-6/1-11). Never auto-emits successors.
 class NodeStoreGraphSource : public GraphSource {
   public:
+    // Non-const only: every caller (committer, main_online, tests) holds a
+    // mutable source and mutates or reads through it; the former const
+    // overload had zero references (dead accessor, C2 2026-09-28).
     NodeStore& store() { return store_; }
-    const NodeStore& store() const { return store_; }
 
     void for_each_dep_free(
         const std::function<void(const NodeView&)>& consume) override;
@@ -257,11 +248,6 @@ class NodeStoreGraphSource : public GraphSource {
         uint64_t node_id) override;
     bool mark_terminal_observed(uint64_t node_id) override;
     void take_node(uint64_t node_id) override;
-    std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
-        uint64_t) override {
-        return nullptr;
-    }
-    bool static_all_done() override { return false; }
 
   private:
     NodeStore store_;

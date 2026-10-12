@@ -9,9 +9,11 @@ Two-state session model (2026-09 session-level Tiered-LRU, blueprint sh_2.0
 The only runtime states are "fully local" and "fully remote" (plus the
 stateless no-history / retired bookkeeping).  A session is never partially
 resident: the legacy ``PARTIAL_HBM_REMOTE`` runtime state and the suffix-half
-eviction/restore paths were removed; the legacy constants survive only for
-old-log parsing and are unreachable at runtime (``_check_invariants`` and the
-consumer whitelists both raise on them).
+eviction/restore paths were removed.  The ``PARTIAL_HBM_REMOTE`` constant is
+kept only as a rejected value of the two-state whitelist — nothing parses
+old logs with it, it is unreachable at runtime, and ``_check_invariants``
+plus the consumer whitelists both raise on it (its sole remaining consumer
+is the fail-closed invariant test).
 
 Reclamation is a single-stage whole-session LRU (``ensure_physical_fit``):
 candidates are completed inactive fully-local sessions of the instance in
@@ -39,7 +41,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import functools
-import hashlib
 import json
 import os
 from typing import Any, Iterable, Optional, Sequence
@@ -55,18 +56,16 @@ REMOTE_MEMORY = "remote_memory"
 NO_HISTORY = "NO_HISTORY"
 LOCAL_HIT = "LOCAL_HIT"
 NOC_MIGRATE = "NOC_MIGRATE"
-# Legacy log-parsing-only action constants: the runtime can no longer produce
-# them (the partial restore paths were removed; _check_invariants and the
-# consumer whitelists both raise on them).  They stay importable so old
-# decision logs / traces remain readable; new code must never emit them.
-REMOTE_LOAD = "REMOTE_LOAD"          # legacy: PARTIAL, same instance: suffix restore
-PARTIAL_MIGRATE = "PARTIAL_MIGRATE"  # legacy: PARTIAL, cross instance: prefix NoC
-                                     # migrate + suffix remote restore
+# The legacy partial-era action constants (REMOTE_LOAD / PARTIAL_MIGRATE)
+# are gone from this module: nothing imported them (old-log fixtures feed
+# the raw string literals), the runtime cannot emit them (the partial
+# restore paths were removed) and _check_invariants plus the consumer
+# whitelists both raise on non-two-state values.
 REMOTE_RESTORE = "REMOTE_RESTORE"    # REMOTE: full restore (the only remote path)
 
 # B1 已消费前缀的摊销压缩水位(2026-08-28,风格对齐 graph_batch_builder
-# 的 M1 压缩):_events 已消费水位达到该值且不小于现存总量一半时才整段
-# 删除前缀,均摊 O(1)/事件。
+# 的 M1 压缩):_events 已消费水位达到该值即整段删除前缀(单一水位条件,
+# 无二次门槛——见 compact_events),均摊 O(1)/事件。
 _EVENTS_COMPACT_THRESHOLD = 8192
 
 # Read-only metrics observation (implementation doc sec.7).  When a recorder
@@ -121,8 +120,10 @@ def _metrics_anchor_for_phase(phase: str) -> str:
         # admission/reservation actions at the request Prefill start.
         "prefill_admission": "prefill_start",
         "decode": "decode_start",
-        "prefill_decode": "decode_start",
-        "completion": "completion",
+        # "prefill_decode"/"completion" 键已删:两者从不流入本映射的唯一
+        # 三个调用点(预约/增长/整会话逐出的 anchor 标注)——prefill_decode
+        # 只作为 KVTransfer 的 phase 标签存在,completion 边界的预约释放与
+        # 核销在 retire_terminal_session 内直接硬编码 "completion"。
     }.get(phase, "stage_boundary")
 
 
@@ -133,16 +134,24 @@ def _journal_transaction(method: Any) -> Any:
     - recorder 未装或非 journal 模式:透传,零开销零行为差(journal 是
       纯观测旁路,关闭时与改前逐字节一致)。
     - 最外层公开调用:入口向 recorder 申请单调 transaction_id(journal
-      各行携带该 id);正常返回 = commit 点,此时方法体内的全部
-      _check_invariants_after_mutation 已通过,随即执行 ④ 逐 rank 对账
-      _journal_reconcile_transaction(manager 快照 vs journal 记账)。
+      各行携带该 id),并对 manager 全量可变状态拍回滚快照;正常返回 =
+      commit 点,此时方法体内的全部 _check_invariants_after_mutation 已
+      通过,随即执行 ④ 逐 rank 对账 _journal_reconcile_transaction
+      (manager 快照 vs journal 记账)。
     - 嵌套公开复用(retire_terminal_session 内部的预约释放、准入前置
       路径内部的 ensure_physical_fit 等):
       深度 +1 并入外层同一事务,不另起 id——事务粒度 = 调度器视角的一次
       manager 公开 mutation。
-    - 异常路径:放弃事务登记(abort),不执行对账(避免二次异常掩盖
-      原始错误);已写出的部分行保留在 journal 中,本轮 run 本就
-      fail-closed 终止。
+    - 失败路径(方法体异常 / journal 行写入失败 / commit 对账不一致):
+      manager 整体回滚到入口快照并放弃事务登记(abort),原异常继续上抛
+      ——事务对 manager 真原子(该原子性断言仅适用于 journal 模式;旁路
+      态——recorder 未装或非 journal 模式——直接透传,无快照亦无回滚,
+      全部内部 raise 点均被前置守卫结构性排除,故旁路态下不存在可达的
+      半更新路径):要么整体生效,要么整体回到入口状态,
+      失败重试不会叠加在半更新状态上。journal 是行级流式落盘,已写出
+      的行不可回收(见 MemoryActionRecorder.abort_transaction);observer
+      侧账本的补偿属 recorder/observer 域,两者都由本轮 fail-closed 终止
+      兜底。
     """
 
     @functools.wraps(method)
@@ -158,15 +167,22 @@ def _journal_transaction(method: Any) -> Any:
                 self._journal_transaction_depth -= 1
         recorder.begin_transaction()
         self._journal_transaction_depth = 1
+        snapshot = self._journal_rollback_snapshot()
         try:
             result = method(self, *args, **kwargs)
         except BaseException:
             self._journal_transaction_depth = 0
+            self._restore_journal_rollback_snapshot(snapshot)
             recorder.abort_transaction()
             raise
         self._journal_transaction_depth = 0
-        transaction_id, ranks = recorder.finish_transaction()
-        self._journal_reconcile_transaction(transaction_id, ranks)
+        try:
+            transaction_id, ranks = recorder.finish_transaction()
+            self._journal_reconcile_transaction(transaction_id, ranks)
+        except BaseException:
+            self._restore_journal_rollback_snapshot(snapshot)
+            recorder.abort_transaction()
+            raise
         return result
 
     return wrapper
@@ -175,6 +191,18 @@ def _journal_transaction(method: Any) -> Any:
 def _require_nonnegative_int(value: int, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
+
+
+def _require_int_vector(values: Sequence[Any], name: str) -> tuple[int, ...]:
+    """Reject non-int shard inputs before any coercion: ``int()`` would
+    silently truncate 1.9 to 1 and accept True as 1 (under-reservation)."""
+
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in values
+    ):
+        raise ValueError(f"{name} must contain integers")
+    return tuple(values)
 
 
 def partition_values_exact(total: int, partitions: int) -> tuple[int, ...]:
@@ -203,7 +231,20 @@ def attention_heads_by_tp_rank(num_heads: int, tp_degree: int) -> tuple[int, ...
 
 
 def estimate_model_weight_bytes(model: Any) -> int:
-    """Match the existing LLaMA-family model-size estimate exactly."""
+    """LLaMA-family model-size estimate (manager twin).
+
+    Known in-repo divergence (2026-09-30 audit, disclosed -- the old
+    "Match the existing LLaMA-family model-size estimate exactly" claim
+    was false): for the gelu variant this twin counts the final norm as 0
+    elements while wsc_llm_scheduler.estimate_model_weight_bytes counts a
+    final LayerNorm (weight + bias, 2*hidden_size).  The two agree exactly
+    on the swiglu variant -- the production trace_config.csv model, and
+    the shape every pinned test value assumes.  Converging either side is
+    a frozen-formula family ruling (it would silently move HBM capacity
+    accounting here / the W_bytes metric proxy in metrics_postprocess,
+    which treats the scheduler twin as authoritative, and desync the
+    sh/face lineage); left explicit for a user-level ruling instead of a
+    silent "fix"."""
 
     mlp_matrices = 3 if getattr(model, "mlp_variant", "gelu") == "swiglu" else 2
     norm_elements = (
@@ -283,6 +324,10 @@ def kv_cache_shard_bytes_for_tokens(
     )
 
 
+# 纯函数按 (model, tokens, tp, 层域) 复用(G5-11):同一会话状态会在增量
+# 不变量、快照与全量审计中重复求值;model 恒为可哈希 frozen dataclass,
+# maxsize 有界防长跑驻留增长。异常不入缓存,非法输入仍逐次 fail-closed。
+@functools.lru_cache(maxsize=4096)
 def kv_cache_shard_bytes_for_layer_range(
     model: Any,
     tokens: int,
@@ -295,7 +340,7 @@ def kv_cache_shard_bytes_for_layer_range(
 
     Layer ranges are derived from ``model.layers``; bytes scale linearly with
     the number of layers so any layer-range split is byte-conservative by
-    construction (blueprint sh_2.0 ``face_scheduler.py:400-443``)."""
+    construction (blueprint sh_2.0 ``face_scheduler.py``)."""
 
     if tokens < 0:
         raise ValueError("KV token count must be non-negative")
@@ -434,11 +479,11 @@ class SessionKVSnapshot:
     """Two-state read-only session view.
 
     ``local_shard_bytes`` is the physically resident distribution (all ``L``
-    layers when ``LOCAL_HBM``, the zero vector when ``REMOTE_MEMORY``);
-    ``remote_bytes`` is the remote remainder (0 / full vector).  Most fields
-    have real production consumers; ``remote_bytes`` and
-    ``logical_context_tokens`` currently have test-only readers (the legacy
-    full-vector/eviction-metadata fields were write-only and removed).
+    layers when ``LOCAL_HBM``, the zero vector when ``REMOTE_MEMORY``).
+    ``remote_bytes`` and ``logical_context_tokens`` currently have test-only
+    readers (the tiered-eviction sequence and scheduler unit tests assert on
+    them; the rest of the legacy full-vector/eviction-metadata fields were
+    write-only and removed).
     """
 
     session_id: str
@@ -472,8 +517,6 @@ class SessionKVState:
     last_completion_ns: Optional[int] = None
     active: bool = False
     last_request_id: Optional[str] = None
-    evicted_at_ns: Optional[int] = None
-    evicted_by_request_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -556,6 +599,9 @@ class CapacityResult:
 
     evictions: tuple[KVTransfer, ...]
     admitted: bool
+    # 逐 rank 深度诊断(deep-gap 定位用),决策边界后仅测试断言消费,
+    # 生产链不读(2026-09-30 审查登记:写后不读,保留作诊断信息;跨仓
+    # 序列化裁决不在本仓做)。
     insufficient_ranks: tuple[int, ...]
 
 
@@ -571,11 +617,19 @@ class RequestCapacityReservation:
 class HistoryDecision:
     action: str
     source_instance_index: Optional[int]
+    # 2026-10-01 审查登记:写后不读(完备性字段)——决策边界后生产链与
+    # 测试均零读者(消费方只读 action/evictions/transfers/
+    # source_instance_index/admission_blocked),保留仅令结果记录类型
+    # 完备;删除会改变结果记录形状,故登记而不删。
     target_instance_index: int
+    # 2026-10-01 审查登记:写后不读(完备性字段)——运行时历史 token 数
+    # 由调用方自带(record["history_tokens_before"]),本字段零读者,
+    # 处置口径同 target_instance_index。
     history_tokens: int
     transfers: tuple[KVTransfer, ...]
     evictions: tuple[KVTransfer, ...]
     admission_blocked: bool = False
+    # 逐 rank 深度诊断,决策边界后仅测试断言消费(同 CapacityResult 注)。
     insufficient_ranks: tuple[int, ...] = ()
 
     @property
@@ -585,12 +639,18 @@ class HistoryDecision:
 
 @dataclass(frozen=True)
 class MoveDecision:
+    # 2026-10-01 审查登记:action / target_instance_index 均为写后不读
+    # (完备性字段)——决策边界后生产链与测试均零读者(消费方只读
+    # transfer/evictions/admission_blocked/source_instance_index),保留
+    # 仅令结果记录类型完备;blocked 分支里 action 只是 empty_transfer
+    # 同级的惰性占位,真实语义在 admission_blocked。
     action: str
     source_instance_index: int
     target_instance_index: int
     transfer: KVTransfer
     evictions: tuple[KVTransfer, ...]
     admission_blocked: bool = False
+    # 逐 rank 深度诊断,决策边界后仅测试断言消费(同 CapacityResult 注)。
     insufficient_ranks: tuple[int, ...] = ()
 
 
@@ -622,9 +682,6 @@ class SessionKVCacheManager:
     decisions; capacity reclamation reports its ``remote_store`` transfers so
     nothing is silently dropped from the ledger.
     """
-
-    LOCAL_HBM = LOCAL_HBM
-    REMOTE_MEMORY = REMOTE_MEMORY
 
     def __init__(
         self,
@@ -673,6 +730,15 @@ class SessionKVCacheManager:
             if len(instance.ranks) != self.tp_degree:
                 raise ValueError("inconsistent TP degree in topology")
             for relative_rank, rank in enumerate(instance.ranks):
+                # "every NPU exactly once"纪律(对齐 loader 侧拓扑校验):
+                # 跨实例重复 rank 会让后建的实例状态静默覆盖先建状态
+                # (last-writer-wins),污染逐 rank 账本与守恒断言基准,
+                # 这里 fail-closed 而非静默吞掉。
+                if rank in self._rank_states:
+                    raise ValueError(
+                        f"rank {rank} appears in more than one TP instance; "
+                        "each NPU must belong to exactly one instance"
+                    )
                 state = NodeHBMState(
                     rank=rank,
                     instance_index=instance.index,
@@ -720,7 +786,7 @@ class SessionKVCacheManager:
         # parts that carry their own token counts and layer ranges, so
         # whole-session evictions and restores always remove the exact
         # recorded distribution of an earlier add under its own allocation
-        # key (blueprint sh_2.0 ``face_scheduler.py:2287-2399``).
+        # key (blueprint sh_2.0 仓 ``face_scheduler.py``（按函数名对应）).
         self._metrics_recorder = _METRICS_RECORDER
         self._metrics_parts: dict[str, list[dict[str, Any]]] = {}
         self._metrics_segment_counters: dict[str, int] = {}
@@ -749,23 +815,28 @@ class SessionKVCacheManager:
 
     @property
     def events(self) -> tuple[KVCacheEvent, ...]:
+        # test-only 读面(2026-09-30 审查登记):生产事件流走 events_since
+        # 增量切片;本 property 仅测试探针消费。
         return tuple(self._events)
 
     # B1 增量读取 + 水位压缩(2026-08-28):生产消费方(在线调度器的
     # kv_actions 流)本就持有 _kv_events_emitted 游标,改走 events_since
     # 增量切片,消除每决策批 events property 的全量 tuple() 拷贝(O(n²)
-    # CPU 残留);已消费前缀按水位整段删除(风格对齐 graph_batch_builder
-    # 的 M1 压缩:≥8192 且不小于一半才删,均摊 O(1)/事件)。event_index
+    # CPU 残留);已消费前缀按水位整段删除(本 manager 的 compact_events
+    # 唯一调用方在游标追平末端后调用,故 ≥8192 即整表清空,均摊 O(1)/
+    # 事件;风格源头是 graph_batch_builder 的 M1 压缩)。event_index
     # 由单调计数器分配,压缩不改变任何已发射事件的载荷。
     def events_since(self, index: int) -> list[KVCacheEvent]:
         """B1:列表位置 index 起的增量事件(消费方维护游标)。"""
         return self._events[index:]
 
     def compact_events(self, consumed: int) -> int:
-        """B1:已消费水位 ≥8192 且不小于现存一半时整段删除前缀,返回实际
-        删除条数(调用方游标同步减去该值;0 = 未压缩)。"""
-        if (consumed >= _EVENTS_COMPACT_THRESHOLD
-                and consumed * 2 >= len(self._events)):
+        """B1:已消费水位 ≥8192 时整段删除前缀,返回实际删除条数(调用方
+        游标同步减去该值;0 = 未压缩)。唯一调用方在发射游标追平列表末端
+        之后才调用,consumed 恒等于现存总量,故 ≥8192 即整表清空(均摊
+        O(1)/事件);无"不小于现存一半"的二次门槛(改前该条件在唯一调用
+        方下恒真,属死条件,已删)。"""
+        if consumed >= _EVENTS_COMPACT_THRESHOLD:
             del self._events[:consumed]
             return consumed
         return 0
@@ -776,6 +847,8 @@ class SessionKVCacheManager:
 
     @property
     def node_states(self) -> tuple[NodeHBMState, ...]:
+        # test-only 读面(2026-09-30 审查登记):仅单测消费,生产链不读;
+        # 保留作测试探针,不对外承诺。
         return tuple(self._rank_states[rank] for rank in sorted(self._rank_states))
 
     def session_snapshot(self, session_id: str) -> Optional[SessionKVSnapshot]:
@@ -796,6 +869,8 @@ class SessionKVCacheManager:
         )
 
     def hbm_snapshots(self, instance_index: Optional[int] = None) -> tuple[NodeHBMSnapshot, ...]:
+        # test-only 读面(2026-09-30 审查登记):仅单测消费,生产链不读;
+        # 保留作测试探针,不对外承诺。
         if instance_index is None:
             ranks = tuple(sorted(self._rank_states))
         else:
@@ -803,7 +878,10 @@ class SessionKVCacheManager:
         return tuple(self._rank_states[rank].snapshot() for rank in ranks)
 
     def remote_bytes_by_rank(self) -> dict[int, int]:
-        """Read-only view of the per-rank remote-pool account."""
+        """Read-only view of the per-rank remote-pool account.
+
+        test-only 读面(2026-09-30 审查登记):生产审计走 journal 重放
+        与 _check_invariants 的逐 rank 重算;本视图仅测试探针消费。"""
         return dict(self._remote_bytes_by_rank)
 
     def nearest_edge(self, rank: int) -> int:
@@ -855,10 +933,13 @@ class SessionKVCacheManager:
 
     @staticmethod
     def _fifo_sort(candidates: list[SessionKVState]) -> list[SessionKVState]:
-        """(last_completion_ns, session_id) 升序 = 纯 LRU(去类型化)。"""
+        """(last_completion_ns, session_id) 升序 = 纯 LRU(去类型化)。
+
+        last_completion_ns 只经 mark_complete 写入(非负 int、会话内非
+        递减),此处不做 int() 静默收编——坏类型直接在比较处暴露。"""
         candidates.sort(
             key=lambda session: (
-                int(session.last_completion_ns),
+                session.last_completion_ns,
                 session.session_id,
             )
         )
@@ -869,7 +950,7 @@ class SessionKVCacheManager:
         instance_index: int,
     ) -> list[SessionKVState]:
         """Whole-session LRU pool: completed inactive fully-local sessions,
-        ordered ``((last_completion_ns, session_id)`` ascending = pure LRU
+        ordered ``(last_completion_ns, session_id)`` ascending = pure LRU
         with a deterministic tie-break)."""
         return self._fifo_sort([
             session
@@ -1008,6 +1089,11 @@ class SessionKVCacheManager:
     ) -> None:
         """Credit the remote pool with bytes stored from ``instance_index``."""
         instance = self.topology.instance(instance_index)
+        # A10(2026-09-30):与 _add_shards/_remove_shards 同款长度/符号门
+        # ——旧实现无校验,zip 不齐会静默截断(M1-07 模式在 remote 账本
+        # 的残余面);当前全部调用方都传 tp 长度向量,属纵深防御。
+        if len(shards) != self.tp_degree or any(value < 0 for value in shards):
+            raise ValueError("invalid remote-pool KV shard vector")
         for rank, value in zip(instance.ranks, shards):
             if not value:
                 continue
@@ -1038,6 +1124,9 @@ class SessionKVCacheManager:
     ) -> None:
         """Debit the remote pool for bytes restored / written off."""
         instance = self.topology.instance(instance_index)
+        # A10(2026-09-30):同 _remote_add 的长度/符号门。
+        if len(shards) != self.tp_degree or any(value < 0 for value in shards):
+            raise ValueError("invalid remote-pool KV shard vector")
         for rank, value in zip(instance.ranks, shards):
             if not value:
                 continue
@@ -1225,6 +1314,13 @@ class SessionKVCacheManager:
             raise RuntimeError("KV shard count does not match TP instance")
         local_shards = self._local_prefix_shards(session)
         remote_shards = self._remote_shards(session)
+        if (
+            len(local_shards) != self.tp_degree
+            or len(remote_shards) != self.tp_degree
+        ):
+            # zip 对长度不齐会静默截断守恒断言(M1-07):长度必须在此
+            # 显式断言失败(shard_bytes 长度已在上方检查)。
+            raise RuntimeError("KV shard count does not match TP instance")
         for local_bytes, remote_bytes, total_bytes in zip(
             local_shards, remote_shards, session.shard_bytes
         ):
@@ -1315,7 +1411,7 @@ class SessionKVCacheManager:
     # because kv_cache_shard_bytes_for_layer_range is exactly linear in
     # tokens, whole-session evictions and restores remove precisely the
     # distribution an earlier add recorded under the same allocation key
-    # (blueprint sh_2.0 ``face_scheduler.py:2175-2399``).
+    # (blueprint sh_2.0 仓 ``face_scheduler.py``（按函数名对应）).
     # ------------------------------------------------------------------
 
     def _metrics_add_segment(
@@ -1469,7 +1565,7 @@ class SessionKVCacheManager:
         self._metrics_parts[session_id] = [consolidated]
 
     # ------------------------------------------------ transfer constructors --
-    # (blueprint sh_2.0 ``face_scheduler.py:2410-2665``, adapted to the
+    # (blueprint sh_2.0 仓 ``face_scheduler.py``（按函数名对应）, adapted to the
     # wscllm topology/hardware types and the shared _xy_route)
 
     def _local_hit_transfer(
@@ -1702,8 +1798,6 @@ class SessionKVCacheManager:
         session.remote_shard_bytes = tuple(
             old + new for old, new in zip(prior_remote, session_shards)
         )
-        session.evicted_at_ns = now_ns
-        session.evicted_by_request_id = trigger_request_id
         self._remote_add(
             session.session_id,
             source_instance,
@@ -1786,6 +1880,105 @@ class SessionKVCacheManager:
                 f"{transaction_id}: " + "; ".join(mismatches)
             )
 
+    def _journal_rollback_snapshot(self) -> dict[str, Any]:
+        """事务入口的 manager 全量可变状态快照(仅 journal 模式最外层)。
+
+        只拷贝容器与可变 dataclass 实例(shard 向量等字段均为不可变
+        tuple,浅拷字段即可);_events 事务内只追加,记长度即可。"""
+
+        return {
+            "rank_states": {
+                rank: replace(state) for rank, state in self._rank_states.items()
+            },
+            "sessions": {
+                session_id: replace(state)
+                for session_id, state in self._sessions.items()
+            },
+            "reservations": dict(self._reservations),
+            "event_count": len(self._events),
+            "event_index_next": self._event_index_next,
+            "deep_gap_events": self.deep_gap_events,
+            "pressure_event_keys": set(self._pressure_event_keys),
+            "pressure_event_keys_by_request": {
+                request_id: set(keys)
+                for request_id, keys in self._pressure_event_keys_by_request.items()
+            },
+            "remote_bytes_by_rank": dict(self._remote_bytes_by_rank),
+            "expected_resident_by_rank": dict(
+                self._invariant_expected_resident_by_rank
+            ),
+            "expected_reserved_by_rank": dict(
+                self._invariant_expected_reserved_by_rank
+            ),
+            "expected_remote_by_rank": dict(
+                self._invariant_expected_remote_by_rank
+            ),
+            "session_contributions": dict(self._invariant_session_contributions),
+            "session_remote_contributions": dict(
+                self._invariant_session_remote_contributions
+            ),
+            "reservation_contributions": dict(
+                self._invariant_reservation_contributions
+            ),
+            "metrics_parts": {
+                session_id: [dict(part) for part in parts]
+                for session_id, parts in self._metrics_parts.items()
+            },
+            "metrics_segment_counters": dict(self._metrics_segment_counters),
+        }
+
+    def _restore_journal_rollback_snapshot(self, snapshot: dict[str, Any]) -> None:
+        """失败路径:manager 整体回到事务入口快照(每事务至多一次)。"""
+
+        if len(self._events) < snapshot["event_count"]:
+            # 事务内 _events 只追加(消费方压缩发生在事务之外);跌破
+            # 快照长度说明追加式不变量被破坏,fail-closed。
+            raise RuntimeError(
+                "journal rollback: event log shrank mid-transaction"
+            )
+        self._rank_states = {
+            rank: replace(state) for rank, state in snapshot["rank_states"].items()
+        }
+        self._sessions = {
+            session_id: replace(state)
+            for session_id, state in snapshot["sessions"].items()
+        }
+        self._reservations = dict(snapshot["reservations"])
+        del self._events[snapshot["event_count"]:]
+        self._event_index_next = snapshot["event_index_next"]
+        self.deep_gap_events = snapshot["deep_gap_events"]
+        self._pressure_event_keys = set(snapshot["pressure_event_keys"])
+        self._pressure_event_keys_by_request = {
+            request_id: set(keys)
+            for request_id, keys in snapshot["pressure_event_keys_by_request"].items()
+        }
+        self._remote_bytes_by_rank = dict(snapshot["remote_bytes_by_rank"])
+        self._invariant_expected_resident_by_rank = dict(
+            snapshot["expected_resident_by_rank"]
+        )
+        self._invariant_expected_reserved_by_rank = dict(
+            snapshot["expected_reserved_by_rank"]
+        )
+        self._invariant_expected_remote_by_rank = dict(
+            snapshot["expected_remote_by_rank"]
+        )
+        self._invariant_session_contributions = dict(
+            snapshot["session_contributions"]
+        )
+        self._invariant_session_remote_contributions = dict(
+            snapshot["session_remote_contributions"]
+        )
+        self._invariant_reservation_contributions = dict(
+            snapshot["reservation_contributions"]
+        )
+        self._metrics_parts = {
+            session_id: [dict(part) for part in parts]
+            for session_id, parts in snapshot["metrics_parts"].items()
+        }
+        self._metrics_segment_counters = dict(
+            snapshot["metrics_segment_counters"]
+        )
+
     def verify_journal_checksum(self) -> Optional[dict[str, Any]]:
         """Run 末 checksum 门(fail-closed):流式重放权威 journal 并对账。
 
@@ -1794,7 +1987,8 @@ class SessionKVCacheManager:
            manager 快照完全一致(重放本身先校验 sequence 连续/前后快照自洽/
            planner_time_ns 与 transaction_id 单调/断行报行号);
         2. 写出条数一致(recorder 内存计数 vs 重放行数,流式丢失即暴露);
-        3. 守恒(B2 三态口径):本地 resident==0、reserved==0、
+        3. 守恒(B2 三列账本口径,resident/reserved/remote——位置模型
+           恒二态,见模块头):本地 resident==0、reserved==0、
            physical==weight(权重驻留、无会话/预约残留),且 remote==0
            ——retire_terminal_session 对远端账面静默核销后,远端池账本与
            会话账本同归零,"remote 字节与会话账本守恒"。
@@ -1936,17 +2130,66 @@ class SessionKVCacheManager:
         victim is evicted whole (all layers, all TP shards) and the shortfall
         is rechecked after every single eviction.  Over-release is allowed:
         the loop stops at the first eviction after which the requirement
-        fits, never at an exact byte boundary.  Exhaustion keeps the graceful
-        wscllm failure semantics: ``deep_gap_events`` counter + bounded
-        pressure event + ``admitted=False`` (never the sh blueprint's raise).
+        fits, never at an exact byte boundary.  The eviction loop is entered
+        only when the requirement could still fit once every reclaimable
+        session is evicted.  Outstanding request reservations
+        (``reserved_request_bytes``) are not reclaimable by eviction and
+        count into that judgment alongside the non-candidate residency.
+        Callers pass the gross requirement on the
+        first attempt and a vector net of the protected sessions' own
+        residency on the failure retry; because neither that residency nor
+        the co-resident active sessions' residency is ever a candidate, and
+        both are counted into the margin judgment below, a gross first
+        attempt that could not fit alongside them runs the graceful
+        exhaustion path without evicting anything.  Exhaustion keeps the
+        graceful wscllm failure semantics:
+        ``deep_gap_events`` counter + bounded pressure event +
+        ``admitted=False`` — never the sh blueprint's raise.  Two contract
+        violations still raise, and neither is capacity exhaustion: a shard
+        vector that cannot fit an empty instance raises ``ValueError`` (no
+        reclamation could ever admit it), and a loop that returns success
+        while the requirement still does not fit raises ``RuntimeError``
+        (internal accounting bug).
         """
 
-        required = tuple(int(value) for value in required_shards)
+        required = _require_int_vector(required_shards, "required KV shard vector")
         instance = self.topology.instance(instance_index)
         if len(required) != self.tp_degree or any(value < 0 for value in required):
             raise ValueError("required KV shard vector is invalid")
+        # Every protected session is excluded from the candidate pool; the
+        # LRU order is unchanged for the single-session callers
+        # (prepare_history / reserve / grow / move).
+        protected = set(protected_sessions)
+        # Residency that can never be freed by this reclamation is counted
+        # into the margin judgment: the protected sessions' own residency
+        # plus every active session on this instance (active sessions are
+        # never candidates, so their residency survives the loop).  Callers
+        # pass the gross requirement on the first attempt and net the
+        # protected residency out of ``required`` only on the failure retry
+        # — a requirement that cannot fit alongside the non-candidate
+        # residency goes straight to the graceful exhaustion path instead of
+        # evicting candidates it could never admit with
+        # (M1-10: 无效逐出循环).  Active-and-protected sessions are counted
+        # exactly once (the two sets are united, not intersected twice).
+        noncandidate_resident = [0] * self.tp_degree
+        for session in self._sessions.values():
+            if (
+                session.location == LOCAL_HBM
+                and session.instance_index == instance_index
+                and (session.active or session.session_id in protected)
+            ):
+                for index, value in enumerate(self._local_prefix_shards(session)):
+                    noncandidate_resident[index] += value
         maximum = tuple(
             self._rank_states[rank].capacity_bytes - self._rank_states[rank].model_weight_bytes
+            for rank in instance.ranks
+        )
+        # Outstanding decode-capacity reservations are never reclaimable by
+        # session eviction, so they count into the margin judgment exactly
+        # like active/protected residency (per-rank state of THIS instance's
+        # ranks, zipped in the same order as maximum/required).
+        reserved = tuple(
+            self._rank_states[rank].reserved_request_bytes
             for rank in instance.ranks
         )
         impossible = tuple(
@@ -1960,15 +2203,16 @@ class SessionKVCacheManager:
                 if rank in impossible
             )
             raise ValueError(f"request cannot fit an empty instance: {details}")
-        # Every protected session is excluded from the candidate pool; the
-        # LRU order is unchanged for the single-session callers
-        # (prepare_history / reserve / grow / move).
-        protected = set(protected_sessions)
         evictions: list[KVTransfer] = []
         insufficient = self._insufficient(instance_index, required)
         # Single stage: evict complete sessions in deterministic LRU order
         # until the requirement fits (or the pool is exhausted).
-        if insufficient:
+        if insufficient and all(
+            needed <= available - own - held
+            for needed, available, own, held in zip(
+                required, maximum, noncandidate_resident, reserved
+            )
+        ):
             candidates = [
                 session
                 for session in self._completed_local_candidates(instance_index)
@@ -1990,11 +2234,35 @@ class SessionKVCacheManager:
                     )
                 )
                 insufficient = self._insufficient(instance_index, required)
+        # D4-I1 (2026-09-05; 2026-09-30 补全规格复核项):在 deep-gap 与
+        # 成功两条返回路径之前统一复核每个受害者——非活跃、非保护会话、
+        # 且已落 REMOTE(规格 §4.2"复查全部受害者确已非活跃、非保护会
+        # 话";旧实现漏保护项/位置项,且 deep-gap 返回路径完全跳过复核;
+        # 因边际门保证 blocked ⟹ evictions==(),deep-gap 路径复核当前
+        # 恒空转;若该不变量未来被打破,此处复核恰是第一道兜底)。
+        for transfer in evictions:
+            evicted = self._sessions[transfer.session_id]
+            if evicted.active or evicted.last_completion_ns is None:
+                raise RuntimeError(
+                    "passive eviction victim is active or uncompleted: "
+                    f"{transfer.session_id}")
+            if evicted.session_id in protected:
+                raise RuntimeError(
+                    "passive eviction victim is a protected session: "
+                    f"{transfer.session_id}")
+            if evicted.location != REMOTE_MEMORY:
+                raise RuntimeError(
+                    "passive eviction victim is not fully remote after "
+                    f"eviction: {transfer.session_id}")
         if insufficient:
             before = self._remaining(instance_index)
             # D4 (2026-09-05): 被动逐出深缺口——整会话候选全耗尽(活跃会话
             # 占满、无可逐冷会话)优雅推迟 admitted=False;capacity_epoch 重试
-            # 机制保留(无死锁风险),计数入 summary 行观测。
+            # 机制保留(无死锁风险),计数入 summary 行观测。口径注记(2026-
+            # 09-29):计数按"每次 fit 尝试失败"递增、不去重——同一请求经
+            # capacity_epoch/准入重试再次撞深缺口会重复计数,故该值语义是
+            # 深缺口阻塞事件数而非被阻塞请求数(纯观测列,不进任何策略判据
+            # 与守恒校验;改去重会改变 summary 行数值,非本列本意)。
             self.deep_gap_events += 1
             self._pressure_event(
                 now_ns=now_ns,
@@ -2013,14 +2281,6 @@ class SessionKVCacheManager:
         if self._insufficient(instance_index, required):
             raise RuntimeError(
                 "physical-fit stage returned success while still insufficient")
-        # D4-I1 (2026-09-05): 返回前复核每个被逐会话均已完成且 inactive
-        # (_evict_session 入口已有同款守卫,此处捕获循环间的状态漂移)。
-        for transfer in evictions:
-            evicted = self._sessions[transfer.session_id]
-            if evicted.active or evicted.last_completion_ns is None:
-                raise RuntimeError(
-                    "passive eviction victim is active or uncompleted: "
-                    f"{transfer.session_id}")
         return CapacityResult(tuple(evictions), True, ())
 
     @_journal_transaction
@@ -2039,7 +2299,7 @@ class SessionKVCacheManager:
 
         if request_id in self._reservations:
             raise RuntimeError(f"duplicate KV reservation for request {request_id}")
-        required = tuple(int(value) for value in required_shards)
+        required = _require_int_vector(required_shards, "required KV shard vector")
         fit = self.ensure_physical_fit(
             instance_index,
             required,
@@ -2085,23 +2345,33 @@ class SessionKVCacheManager:
         self,
         request_id: str,
         now_ns: int,
+        *,
+        anchor_kind: str = "prefill_start",
     ) -> RequestCapacityReservation:
         """Release one request's decode-capacity reservation.
 
         ``now_ns`` 是本 mutation 的真实 planner 时刻(P1 语义修改①:改前
         本 API 无时间戳参数,metrics 复用最近 KV 事件时间——journal 化后
         该近似会污染权威账本时序,故改为必传参数,全部调用方显式给值;
-        传入时刻若早于 journal 已有最后时刻,recorder 直接 raise)。"""
+        传入时刻若早于 journal 已有最后时刻,recorder 直接 raise)。
+        ``anchor_kind`` 只标注 journal 行的审计边界列(默认 prefill_start
+        = Prefill 准入边界;decode 准入边界的释放由调用方显式传
+        decode_start),不影响任何逐出/配额行为。"""
 
-        reservation = self._reservations.pop(request_id)
-        for rank, value in zip(
-            self.topology.instance(reservation.instance_index).ranks,
-            reservation.shard_bytes,
-        ):
-            state = self._rank_states[rank]
-            if state.reserved_request_bytes < value:
+        # 先查后改:全部 rank 校验通过才减账并注销预约——中途失败时预约
+        # 原样保留,失败重试仍是同一笔已知预约(幂等),不会变成 unknown。
+        # 未知预约与 extend_request_capacity 同族:带上下文 RuntimeError
+        # (改前此处是裸 KeyError,与同族错误风格不一致)。
+        reservation = self._reservations.get(request_id)
+        if reservation is None:
+            raise RuntimeError(f"unknown KV reservation for request {request_id}")
+        ranks = self.topology.instance(reservation.instance_index).ranks
+        for rank, value in zip(ranks, reservation.shard_bytes):
+            if self._rank_states[rank].reserved_request_bytes < value:
                 raise RuntimeError("request reservation accounting underflow")
-            state.reserved_request_bytes -= value
+        for rank, value in zip(ranks, reservation.shard_bytes):
+            self._rank_states[rank].reserved_request_bytes -= value
+        del self._reservations[request_id]
         self._check_invariants_after_mutation(reservation_ids=(request_id,))
         if self._metrics_recorder is not None:
             for rank, value in zip(
@@ -2112,7 +2382,7 @@ class SessionKVCacheManager:
                     continue
                 self._metrics_recorder.record(
                     planner_time_ns=now_ns,
-                    anchor_kind="prefill_start",
+                    anchor_kind=anchor_kind,
                     request_id=request_id,
                     session_id=reservation.session_id,
                     rank=rank,
@@ -2146,7 +2416,9 @@ class SessionKVCacheManager:
         reservation = self._reservations.get(request_id)
         if reservation is None:
             raise RuntimeError(f"unknown KV reservation for request {request_id}")
-        extra = tuple(int(value) for value in extra_shards)
+        extra = _require_int_vector(
+            extra_shards, "reservation extension shard vector"
+        )
         if len(extra) != self.tp_degree or any(value < 0 for value in extra):
             raise ValueError("reservation extension shard vector is invalid")
         for rank, value in zip(
@@ -2264,6 +2536,9 @@ class SessionKVCacheManager:
             self._sessions[session_id] = state
             self._check_invariants_after_mutation(session_ids=(session_id,))
             before = self._remaining(target_instance_index)
+            # no_history 本身不搬移任何 KV(新会话零字节落位):before/
+            # after 只框定本事件,两者都取自上方 fit 逐出之后的余量——
+            # 逐出动作已自带逐笔 evict_session 事件,不在此重复。
             self._event(
                 now_ns=now_ns,
                 phase=phase,
@@ -2302,6 +2577,9 @@ class SessionKVCacheManager:
         protected = (session_id,)
 
         # ---- branch 2: LOCAL, same instance ----
+        # 防御分支(PD 分离拓扑生产不可达:准入目标恒为 prefill 实例而
+        # 历史 LOCAL 驻留只出现在 decode 实例;2026-09-30 审查登记保留
+        # 作单测替身路径),勿当死代码清除。
         if state.location == LOCAL_HBM and state.instance_index == target_instance_index:
             fit = self.ensure_physical_fit(
                 target_instance_index,
@@ -2552,9 +2830,9 @@ class SessionKVCacheManager:
             self.model_layers,
             delta,
             now_ns=now_ns,
-            anchor_kind=(
-                "completion" if phase == "decode" else "prefill_start"
-            ),
+            # anchor 与逐出/预约同走中心映射(M1-02:decode 增长曾硬编码
+            # completion,与 _metrics_anchor_for_phase 的 decode_start 冲突)。
+            anchor_kind=_metrics_anchor_for_phase(phase),
             request_id=trigger_request_id,
             cause=reason,
         )
@@ -2591,13 +2869,31 @@ class SessionKVCacheManager:
         *,
         final_context_tokens: Optional[int] = None,
     ) -> MoveDecision:
+        """Migrate a local prefill session onto the Decode instance.
+
+        Contract: the session KV context cannot shrink through a move —
+        ``final_context_tokens`` (defaulting to the current context) must be
+        ``>=`` the current ``logical_context_tokens``.  This mirrors the
+        ``_grow`` guard so a shrink request fails fast with a clean
+        ``ValueError`` instead of slipping past the target-side fit check
+        (which only sees the smaller final footprint on the cross-instance
+        path) and blowing up later at placement time.
+        """
+
         state = self._sessions[session_id]
         if state.location != LOCAL_HBM or state.instance_index is None or not state.active:
             raise RuntimeError("Prefill KV must be active and local before Decode")
         source_instance = state.instance_index
-        desired_final = self._history_shards(
+        final_tokens = (
             state.logical_context_tokens if final_context_tokens is None else final_context_tokens
         )
+        # 与 _grow 同款"上下文不可收缩"守卫(2026-10-01 审查修正):跨实例
+        # 路径的 fit 只按 shards(final) 判决,缺此守卫时收缩入参会在落位
+        # 阶段才以超容 RuntimeError 晚爆。生产调用方恒传 final >= 当前
+        # (final = prefill + decode,decode 段非负),本守卫纯防御。
+        if final_tokens < state.logical_context_tokens:
+            raise ValueError("session KV context cannot shrink")
+        desired_final = self._history_shards(final_tokens)
         existing_target = (
             state.shard_bytes if source_instance == target_instance_index else tuple(0 for _ in desired_final)
         )
@@ -2613,6 +2909,11 @@ class SessionKVCacheManager:
         )
         evictions = fit.evictions
         if not fit.admitted:
+            # Blocked move:``empty_transfer`` 只是让 MoveDecision 类型完备
+            # 的惰性占位(local_hit 形态、零网络 shard、target 钉在被阻塞
+            # 前的本地位)——它与 decision.action 的 NOC_MIGRATE 语义无关,
+            # 不代表任何字节搬移。消费方必须把 admission_blocked=True 视为
+            # "无迁移":在线调度器在读 transfer 之前即对该旗标 raise。
             empty_transfer = self._local_hit_transfer(
                 phase="prefill_decode",
                 reason="prefill_decode_local_reuse",
@@ -2628,6 +2929,9 @@ class SessionKVCacheManager:
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
             )
+        # 防御分支(source==target,PD 分离拓扑生产不可达:move 恒从
+        # prefill 实例迁往 decode 实例,两集合不相交;2026-09-30 审查登记
+        # 保留作单测替身路径),勿当死代码清除。
         if source_instance == target_instance_index:
             transfer = self._local_hit_transfer(
                 phase="prefill_decode",
@@ -2724,10 +3028,21 @@ class SessionKVCacheManager:
         session_id: str,
         completion_ns: int,
         request_id: str,
-    ) -> tuple[KVTransfer, ...]:
+    ) -> tuple[()]:  # 完成期零逐出为既定架构:恒空元组,注解如实校准。
+        # 完成时刻是 LRU 的唯一时间戳写入点:非负 int + 会话内非递减
+        # (float/bool/回退时刻会改变完成判断与逐出顺序,fail-closed)。
+        _require_nonnegative_int(completion_ns, "completion_ns")
         state = self._sessions[session_id]
         if state.location != LOCAL_HBM or state.instance_index is None or not state.active:
             raise RuntimeError("only active local sessions may complete")
+        if (
+            state.last_completion_ns is not None
+            and completion_ns < state.last_completion_ns
+        ):
+            raise ValueError(
+                f"completion time {completion_ns} moves backwards for session "
+                f"{session_id} (last completion {state.last_completion_ns})"
+            )
         state.active = False
         state.last_completion_ns = completion_ns
         state.last_request_id = request_id
@@ -2771,6 +3086,7 @@ class SessionKVCacheManager:
         an eviction, no transfer emitted).
         """
 
+        _require_nonnegative_int(completion_ns, "completion_ns")
         state = self._sessions.get(session_id)
         if state is None:
             raise KeyError(f"unknown KV session: {session_id}")
@@ -2807,16 +3123,25 @@ class SessionKVCacheManager:
             for reservation_id, reservation in self._reservations.items()
             if reservation.session_id == session_id
         )
+        # 先查后改(对齐 release_request_capacity 的两段式纪律):全部预约
+        # 的逐 rank 校验都通过后才统一减账并注销预约——中途失败时预约
+        # 原样保留、任何 rank 都未减账,失败重试仍是同一笔已知预约,
+        # 不会留下"预约已注销但部分 rank 已减账"的半更新残留。
+        for reservation_id in reservation_ids:
+            reservation = self._reservations[reservation_id]
+            for rank, value in zip(
+                self.topology.instance(reservation.instance_index).ranks,
+                reservation.shard_bytes,
+            ):
+                if self._rank_states[rank].reserved_request_bytes < value:
+                    raise RuntimeError("request reservation accounting underflow")
         for reservation_id in reservation_ids:
             reservation = self._reservations.pop(reservation_id)
             for rank, value in zip(
                 self.topology.instance(reservation.instance_index).ranks,
                 reservation.shard_bytes,
             ):
-                rank_state = self._rank_states[rank]
-                if rank_state.reserved_request_bytes < value:
-                    raise RuntimeError("request reservation accounting underflow")
-                rank_state.reserved_request_bytes -= value
+                self._rank_states[rank].reserved_request_bytes -= value
             if self._metrics_recorder is not None:
                 for rank, value in zip(
                     self.topology.instance(reservation.instance_index).ranks,
@@ -2827,7 +3152,10 @@ class SessionKVCacheManager:
                     self._metrics_recorder.record(
                         planner_time_ns=completion_ns,
                         anchor_kind="completion",
-                        request_id=reservation_id,
+                        # 归属与本地/远端核销行一致(M1-06):统一记
+                        # terminal_request_id;allocation_key 仍精确到
+                        # 具体预约,账本粒度不变。
+                        request_id=terminal_request_id,
                         session_id=session_id,
                         rank=rank,
                         instance_index=reservation.instance_index,
@@ -2920,6 +3248,12 @@ class SessionKVCacheManager:
                 raise RuntimeError("KV shard count does not match TP instance")
             local_shards = self._local_prefix_shards(session)
             remote_shards = self._remote_shards(session)
+            if (
+                len(local_shards) != self.tp_degree
+                or len(remote_shards) != self.tp_degree
+            ):
+                # 同 M1-07:zip 截断会让守恒断言被静默跳过,长度先行断言。
+                raise RuntimeError("KV shard count does not match TP instance")
             for local_bytes, remote_bytes, total_bytes in zip(
                 local_shards, remote_shards, session.shard_bytes
             ):

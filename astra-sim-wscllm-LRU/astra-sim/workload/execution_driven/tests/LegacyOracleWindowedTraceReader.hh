@@ -2,18 +2,21 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-LegacyOracleWindowedTraceReader -- VERBATIM BASELINE COPY of the pre-P0
+LegacyOracleWindowedTraceReader -- frozen copy of the pre-P0
 WindowedTraceReader (md5 of the original at copy time:
 WindowedTraceReader.hh 226a34653aa9538c03320f22ff3ffcf5,
 WindowedTraceReader.cc a9e1d6bfd6287814c0a4d20acdb7f9b7; archived at
-/var/tmp/phase1_reader/baseline_src/ during the 2026-08-30 P0 fix). Test-only
+/var/tmp/phase1_reader/baseline_src/ during the 2026-08-30 P0 fix -- the
+digests pin that copy-time snapshot only, not the current file). Test-only
 oracle for calendar_reader equivalence (V2): the OLD row-window semantics --
 turn-0 rows submitted in CSV row order as the bounded window discovers them
 -- is preserved byte-for-byte so the new calendar reader's (alarm_time,
-queue_index) fire sequence can be compared against it on the same input. The
-audit_completion family was removed (it now lives in the live
-WindowedTraceReader.hh); nothing else was changed. NEVER use this class in
-production code.
+queue_index) fire sequence can be compared against it on the same input.
+The audit_completion family was removed (it now lives in the live
+WindowedTraceReader.hh); the read-only statistics accessors, report(), and
+notify_consumed() were added afterwards for this fixture's own diagnostics
+(2026-09-27 note: the file is therefore no longer a verbatim copy of the
+archived source). NEVER use this class in production code.
 ******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_LEGACYORACLEWINDOWEDTRACEREADER_HH
@@ -119,9 +122,6 @@ class LegacyOracleWindowedTraceReader {
     // Previous CSV row per session, for the AFTER_REQUEST metrics
     // registration of turn>0 rows (mirrors the phase-1 loader).
     std::map<std::string, int64_t> last_queue_index_by_session_;
-    // Byte position of the next un-read row (sampled after each successful
-    // checkpoint's file_pos). -1 = never read / stream not open.
-    int64_t last_file_pos_ = -1;
 
     size_t occupancy() const;
     void read_one_row();

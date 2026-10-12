@@ -62,6 +62,9 @@ class TestNetworkApi final : public AstraSim::AstraNetworkAPI {
     AstraSim::timespec_t sim_get_time() override {
         return {AstraSim::NS, 0};
     }
+
+    // AstraNetworkAPI 纯虚面:桩无链路带宽语义,返回有限占位值即可。
+    double get_BW_at_dimension(int /*dim*/) override { return 1.0; }
 };
 
 class TestStream final : public AstraSim::BaseStream {
@@ -85,7 +88,14 @@ std::string write_minimal_system_config() {
     }
 
     constexpr char contents[] =
-        "{\"scheduling-policy\":\"FIFO\",\"hbm-bandwidth-contention\":false}";
+        "{\"scheduling-policy\":\"FIFO\",\"hbm-bandwidth-contention\":false,"
+        // The four *-implementation keys are mandatory: Sys fails closed
+        // (GeneralComplexTopology, empty implementation table) without
+        // them; a single "ring" matches this fixture's {1} shape.
+        "\"all-reduce-implementation\":[\"ring\"],"
+        "\"all-gather-implementation\":[\"ring\"],"
+        "\"reduce-scatter-implementation\":[\"ring\"],"
+        "\"all-to-all-implementation\":[\"ring\"]}";
     size_t offset = 0;
     while (offset < sizeof(contents) - 1) {
         const ssize_t written =
@@ -137,7 +147,7 @@ ReadyStream make_ready_stream(AstraSim::Sys& sys, int stream_id) {
     phase.final_data_size = 0;
     phase.enabled = false;
     phase.comm_type = AstraSim::ComType::None;
-    auto dataset = std::make_unique<AstraSim::DataSet>(1, 0);
+    auto dataset = std::make_unique<AstraSim::DataSet>(1);
     auto stream = std::make_unique<AstraSim::StreamBaseline>(
         &sys, dataset.get(), stream_id, std::list<AstraSim::CollectivePhase>{
                                            phase},

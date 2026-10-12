@@ -4,42 +4,8 @@
 
 using namespace Chakra::FeederV3;
 
-void ETFeeder::addNode(std::shared_ptr<ETFeederNode> node) {
-  throw std::runtime_error(
-      "For offloaded ETFeeder, the graph is static and readonly, and addNode is not supported");
-}
-
-void ETFeeder::removeNode(const NodeId& node_id) {
-  static bool firstTime = true;
-  if (firstTime) {
-    firstTime = false;
-    std::cerr
-        << "For offloaded ETFeeder, the graph is static and readonly, and removeNode is ignored"
-        << std::endl;
-  }
-}
-
-bool ETFeeder::hasNodesToIssue() {
-  return !this->dependancy_resolver.get_dependancy_free_nodes().empty();
-}
-
-std::shared_ptr<ETFeederNode> ETFeeder::getNextIssuableNode() {
-  const auto node_id =
-      *(this->dependancy_resolver.get_dependancy_free_nodes().begin());
-  this->dependancy_resolver.take_node(node_id);
-  return this->lookupNode(node_id);
-}
-
-void ETFeeder::pushBackIssuableNode(const NodeId& node_id) {
-  this->dependancy_resolver.push_back_node(node_id);
-}
-
 std::shared_ptr<ETFeederNode> ETFeeder::lookupNode(const NodeId& node_id) {
   return std::make_shared<ETFeederNode>(*this, node_id);
-}
-
-void ETFeeder::freeChildrenNodes(const NodeId& node_id) {
-  this->dependancy_resolver.finish_node(node_id);
 }
 
 uint64_t ETFeeder::_feeder_id_cnt = 0;
@@ -57,8 +23,23 @@ void ETFeeder::build_index_dependancy_cache() {
   std::streampos last_pos = this->chakra_file.tellg();
   while (true) {
     ret = ProtobufUtils::readMessage<ChakraNode>(this->chakra_file, node);
-    if (!ret)
+    if (!ret) {
+      // readMessage returns false both at a clean end-of-stream and on a
+      // read/parse failure. Only a clean EOF (nothing consumed past the last
+      // message boundary) may terminate the scan; a mid-stream failure or a
+      // truncated final message must fail closed, otherwise a silently
+      // truncated graph would participate in simulation.
+      if (!this->chakra_file.eof()) {
+        throw std::runtime_error(
+            "Failed to read Chakra node from ET file (stream or parse error)");
+      }
+      this->chakra_file.clear();
+      if (this->chakra_file.tellg() != last_pos) {
+        throw std::runtime_error(
+            "ET file is truncated: partial node message at end of file");
+      }
       break;
+    }
     // build index
     const auto& node_id = node.id();
     this->index_map[node_id] = last_pos;
@@ -87,7 +68,11 @@ std::shared_ptr<const ChakraNode> ETFeeder::get_raw_chakra_node(
   auto& pos = this->index_map[node_id];
   this->chakra_file.seekg(pos);
   ChakraNode node_msg;
-  ProtobufUtils::readMessage<ChakraNode>(this->chakra_file, node_msg);
+  if (!ProtobufUtils::readMessage<ChakraNode>(this->chakra_file, node_msg)) {
+    throw std::runtime_error(
+        "Failed to read node " + std::to_string(node_id) +
+        " from ET file at its indexed position");
+  }
   ETFeeder::_node_cache.put(key, node_msg);
   return ETFeeder::_node_cache.get_locked(key);
 }

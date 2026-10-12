@@ -27,9 +27,11 @@ set a decision flag -- they aggregate only through the watch/fence
 machinery into the stage milestones above.
 
 Same-epoch dedup: within one delivery epoch (the interval between two
-drains, i.e. one tick at the gate), a push with an identity that already
-exists in the pending set is a no-op ("同 tick 同 identity 去重"). After a
-drain the pending set is empty, so the same identity may legitimately
+drains -- ordinarily the single tick of one gate call, but a milestone
+formed in a tick's deferred drain may be delivered by a later tick's gate;
+see StateDelta.deferred_from_tick / step 1-11), a push with an identity that
+already exists in the pending set is a no-op ("同 tick 同 identity 去重").
+After a drain the pending set is empty, so the same identity may legitimately
 appear in a later epoch.
 
 Counters (report at run end):
@@ -43,9 +45,6 @@ Counters (report at run end):
                                        into one Python round-trip.
   tick_end_without_decision_count    -- every no-work tick-end gate call
                                        (normal, allowed nonzero).
-  no_decision_python_callback_count  -- only a buggy entry into Python with
-                                       no decision work increments this
-                                       (phase-1 acceptance: must be 0).
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_DECISIONMAILBOX_HH
@@ -147,14 +146,9 @@ class CompletedFactAccumulator {
     /// Transfer this delivery's exact-audit records and reset that buffer.
     std::vector<CompletedNodeFact> drain();
     [[nodiscard]] size_t size() const;
-    [[nodiscard]] bool exact_mode() const { return exact_mode_; }
     [[nodiscard]] const CompletedFactCounters& counters() const {
         return counters_;
     }
-
-    /// Test/embedding override. It is only legal before the first terminal,
-    /// preventing one run from silently switching its audit representation.
-    void set_exact_mode(bool exact_mode);
 
   private:
     bool exact_mode_ = false;
@@ -189,10 +183,13 @@ struct StateDelta {
     uint64_t delivery_epoch = 0;
     uint64_t tick = 0;               // EventQueue global time of the epoch
     // Step 1-11: when the epoch's events were formed at a tick EARLIER than
-    // the delivery tick (the explicit T+1 next-decision-boundary wakeup --
-    // 仿真加速分析.md §4.3), records the formation tick; 0 = the delivery
-    // happened in the same tick the events formed (the ordinary case). The
-    // "T -> T+1 延后" must be explicit, never silent (方案 step 1-11).
+    // the delivery tick (a milestone formed in the deferred drain of tick T
+    // and delivered by a later tick's gate -- 仿真加速分析.md §4.3), records
+    // the EARLIEST formation tick among the epoch's events (min-formation
+    // semantics; a mixed epoch is attributed to its earliest formed event);
+    // 0 = the delivery happened in the same tick the events formed (the
+    // ordinary case). The "T -> T+1 延后" must be explicit, never silent
+    // (方案 step 1-11).
     uint64_t deferred_from_tick = 0;
     std::vector<DecisionEvent> events;
     // Phase 4 (v1): per-node terminal facts since the previous delivery
@@ -211,21 +208,14 @@ struct StateDelta {
     std::vector<RankInjectedSummary> injected_unfinished;
 };
 
-/// Assemble a StateDelta from a drained event list (step-1-6 tick-end gate).
-/// deferred_from_tick: 0 = same-tick delivery, nonzero = the explicit
-/// T+1 wakeup delivered events formed at that tick (step 1-11).
-/// injected_unfinished: phase-3 sensing summary (empty when sensing is off).
-/// Phase-4 v1 defaults: delivery_epoch == delivery_sequence; completed_nodes
-/// / affected_ranks empty; snapshot_handle self-consistent
-/// {epoch: delivery_sequence, tick: tick, kind: ""} -- existing 4/5-arg call
-/// sites (fixtures) compile unchanged and stay v1-consistent.
-StateDelta build_state_delta(
-    std::vector<DecisionEvent> events, uint64_t tick,
-    uint64_t delivery_sequence, uint64_t deferred_from_tick = 0,
-    std::vector<RankInjectedSummary> injected_unfinished = {});
-/// v1: explicit form -- callers with completed-facts / affected-ranks
-/// payloads use the full signature (the tick-end gate in main_online.cc).
-/// injected_unfinished (phase-3 sensing) defaults to empty.
+/// Assemble a StateDelta from a drained event list (step-1-6 tick-end gate;
+/// the tick-end gate in main_online.cc). deferred_from_tick: the delivery
+/// gate derives it from the mailbox's pending formation-tick tracking --
+/// the epoch's earliest formation tick when that lies before the delivery
+/// tick, 0 = same-tick delivery (step 1-11). completed_nodes /
+/// affected_ranks carry the v1 payloads (empty for the compact production
+/// default); injected_unfinished (phase-3 sensing) defaults to empty.
+/// delivery_epoch is asserted equal to delivery_sequence (v1).
 StateDelta build_state_delta_v1(
     std::vector<DecisionEvent> events, uint64_t tick,
     uint64_t delivery_sequence, uint64_t deferred_from_tick,
@@ -237,18 +227,35 @@ class DecisionMailbox {
   public:
     /// Push one event; same-epoch same-identity duplicates are no-ops
     /// ("同 tick 同 identity 去重"; identity = reason/request_id/stage/
-    /// generation). Accepted events get consecutive seqs.
+    /// generation). Accepted events get consecutive seqs. formation_tick is
+    /// the simulation tick the event was formed at (the caller reads the
+    /// bound EventQueue's current time on the simulation thread); the
+    /// delivery gate derives StateDelta.deferred_from_tick from the pending
+    /// set's minimum (step 1-11, min-formation semantics).
+    void push(DecisionEvent e, uint64_t formation_tick);
+
+    /// Convenience overload for fixtures that do not model a clock: the
+    /// event contributes no formation tick (excluded from the minimum).
     void push(DecisionEvent e);
 
     /// True iff a delivery epoch has work: pending events.
     [[nodiscard]] bool has_decision_work() const;
 
+    /// Step 1-11: formation-tick tracking of the pending set. Valid only
+    /// while at least one accepted pending event carried a tick; resets at
+    /// every drain (a new delivery epoch starts with no formation record).
+    [[nodiscard]] bool has_pending_formation_tick() const {
+        return pending_formation_valid_;
+    }
+    [[nodiscard]] uint64_t min_pending_formation_tick() const {
+        return min_pending_formation_tick_;
+    }
+
     /// Deliver all pending events in insertion order and clear the pending
     /// set (a new dedup epoch starts after the call).
     std::vector<DecisionEvent> drain();
 
-    // --- counters (report at run end; phase-1 gate asserts
-    //     no_decision_python_callback_count == 0) ---
+    // --- counters (report at run end) ---
     [[nodiscard]] uint64_t event_count() const { return event_count_; }
     [[nodiscard]] uint64_t delivery_count() const { return delivery_count_; }
     [[nodiscard]] double coalescing_ratio() const {
@@ -259,32 +266,32 @@ class DecisionMailbox {
     [[nodiscard]] uint64_t tick_end_without_decision_count() const {
         return tick_end_without_decision_count_;
     }
-    [[nodiscard]] uint64_t no_decision_python_callback_count() const {
-        return no_decision_python_callback_count_;
-    }
 
     /// Tick-end gate no-work path (normal, allowed nonzero).
     void count_tick_end_without_decision() {
         ++tick_end_without_decision_count_;
     }
 
-    /// Only a buggy Python entry with no decision work increments this
-    /// (phase-1 acceptance: must stay 0).
-    void count_no_decision_python_callback() {
-        ++no_decision_python_callback_count_;
-    }
-
   private:
     using Identity = std::tuple<int, std::string, std::string, uint64_t>;
+
+    /// Shared acceptance path of the two push overloads: dedup identity,
+    /// formation-tick minimum update, seq assignment, append.
+    void push_common(DecisionEvent& e, bool has_tick,
+                     uint64_t formation_tick);
 
     uint64_t next_seq_ = 1;
     std::vector<DecisionEvent> events_;
     std::set<Identity> pending_identities_;
+    // Step 1-11: minimum formation tick over the accepted pending events
+    // that carried one (simulation thread only, like the rest of the
+    // mailbox); reset by drain with the epoch.
+    bool pending_formation_valid_ = false;
+    uint64_t min_pending_formation_tick_ = 0;
 
     uint64_t event_count_ = 0;
     uint64_t delivery_count_ = 0;
     uint64_t tick_end_without_decision_count_ = 0;
-    uint64_t no_decision_python_callback_count_ = 0;
 };
 
 }  // namespace ExecutionDriven

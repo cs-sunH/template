@@ -28,6 +28,8 @@ import os
 import random
 import subprocess
 import sys
+import atexit
+import shutil
 import tempfile
 import unittest
 from pathlib import Path

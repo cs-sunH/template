@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""decision_bridge.py -- Python 端 FileDecisionBridge 协议 v0 (方案 §4 步骤 1-7).
+"""decision_bridge.py -- Python 端 FileDecisionBridge,协议 v1 (方案 §4 步骤
+1-7;冻结规则以 C++ DecisionBridge.hh 协议块/kDecisionBridgeSchemaVersion=1
+为准——早期"协议 v0"标签已废,v0 仅存于 snapshot 保留字段的向后兼容语义).
 
 桥接目录 <bridge_dir>/ 由 C++ 先建好(含 req_notify.fifo / resp_notify.fifo,
 "先建 FIFO 再启动双方")。serve_forever 阻塞在 req_notify.fifo 的 read 上
@@ -25,14 +27,74 @@ request,C++ 不回 response 不连续发);
 超时与崩溃检测在 C++ 侧(C++ poll 超时/EOF/EPIPE 即 abort)。
 """
 
+# (2026-09-30, ported from the face repo) 模块头"协议 v0"标签改 v1,与
+# 本文件 SCHEMA_VERSION=1 及 C++ 对端 kDecisionBridgeSchemaVersion 一致。
+
 import json
 import os
 import sys
+import threading
 import time
 
 from bridge_request_journal import REQUEST_JOURNAL_NAME
 
 SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除)
+
+# (2026-10-01) Python 侧 FIFO open 有界等待:此前两个初始 open 均为无界
+# 阻塞——C++ 在建好 FIFO 之后、打开对端之前的窗口内死亡时,本进程会永久
+# 挂在 open 上(runner 的前台调用无超时,只能靠外部监督杀)。复用 C++ 侧
+# 同名 env BRIDGE_TIMEOUT_MS 的三态语义(未设=120000ms;显式 0=永等逃生口,
+# 与 C++ 侧 --bridge-timeout-ms=0 对齐;正值=毫秒),超时 stderr 留痕后
+# 非零退出(fail-closed,不做无界等待)。
+_BRIDGE_OPEN_TIMEOUT_MS_DEFAULT = 120000
+
+
+def _bridge_open_timeout_ms():
+    raw = os.environ.get("BRIDGE_TIMEOUT_MS")
+    if raw is None or raw == "":
+        return _BRIDGE_OPEN_TIMEOUT_MS_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        print("decision_bridge: invalid BRIDGE_TIMEOUT_MS {!r}".format(raw),
+              file=sys.stderr)
+        sys.exit(1)
+    if value < 0:
+        print("decision_bridge: negative BRIDGE_TIMEOUT_MS {!r}".format(raw),
+              file=sys.stderr)
+        sys.exit(1)
+    return value
+
+
+def _open_fifo_bounded(path, flags, what):
+    """有界阻塞 open(FIFO 的 open 会等对端,不能直接套超时)。
+
+    实现是把阻塞 open 放进守护线程 + 有界 join:健康路径 rendezvous 即刻
+    返回(语义与直接 os.open 完全一致);超时则 stderr 留痕后非零退出
+    (fail-closed)。0 = 永等逃生口(直接阻塞 open,恢复原无界契约)。
+    超时路径的线程随进程退出回收,无泄漏影响。"""
+    timeout_ms = _bridge_open_timeout_ms()
+    if timeout_ms == 0:
+        return os.open(path, flags)
+    result = {}
+
+    def _worker():
+        try:
+            result["fd"] = os.open(path, flags)
+        except OSError as exc:  # noqa: BLE001 -- 原样回传给调用方
+            result["error"] = exc
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+    worker.join(timeout_ms / 1000.0)
+    if "fd" in result:
+        return result["fd"]
+    if "error" in result:
+        raise result["error"]
+    print("decision_bridge: timed out after {} ms waiting for the C++ "
+          "side to open {} (C++ died before the bridge handshake?)"
+          .format(timeout_ms, what), file=sys.stderr)
+    sys.exit(1)
 
 _REQUEST_PREFIX = "request_"
 _RESPONSE_PREFIX = "response_"
@@ -41,6 +103,9 @@ _JSON_SUFFIX = ".json"
 _PROCESSING_STATS_PARTIAL_NAME = ".bridge_processing_stats.partial.jsonl"
 _JOURNAL_FLUSH_BATCH = 256
 
+# (2026-10-01 R2) future_alarms 补入补全面:错误骨架 _fail 显式写它、
+# DecisionBridge.hh 协议块也列为响应字段,此前 setdefault 补全面
+# 漏列(生产者恒显式给键,无运行期破裂;显式声明对齐协议面)。
 _RESPONSE_FIELDS = (
     "nodes",
     "parent_edges",
@@ -49,6 +114,9 @@ _RESPONSE_FIELDS = (
     "kv_actions",
     # 阶段 5 §8.2:touched ranks 集合(缺省 [];online scheduler 总是显式给出)。
     "touched_ranks",
+    # (2026-10-01 R2) future_alarms:错误骨架 _fail 显式写它、协议块也
+    # 列为响应字段——补全面对齐(生产者恒显式给键)。
+    "future_alarms",
 )
 
 
@@ -121,7 +189,7 @@ class _BoundedSequenceTracker:
 
 
 class BridgeServer:
-    """协议 v0 的 Python 端;用法:
+    """协议 v1 的 Python 端;用法:
 
         server = BridgeServer(bridge_dir)
         server.serve_forever(handler, on_commit_ack=None)
@@ -236,6 +304,8 @@ class BridgeServer:
         官方协议严格 +1 单调,正常路径只 stat 下一个序号。journal 批量回收
         将散装 request 尾部限制在 256 个以内;listdir 回退若发现未来序号,
         handler 前的 monotonic tracker 会 fail-closed,不会乱序交付。
+        快路径探测从 next_seq 起单调递增,contains(seq) 即 seq < next_seq
+        恒假——无需重复过滤(2026-10-01 死条件清理)。
         """
         reqs = []
         acks = []
@@ -246,8 +316,7 @@ class BridgeServer:
                 _REQUEST_PREFIX + str(req_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if not self._request_sequences.contains(req_probe):
-                reqs.append(req_probe)
+            reqs.append(req_probe)
             req_probe += 1
         ack_probe = self._ack_sequences.next_seq
         while True:
@@ -256,8 +325,7 @@ class BridgeServer:
                 _ACK_PREFIX + str(ack_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if not self._ack_sequences.contains(ack_probe):
-                acks.append(ack_probe)
+            acks.append(ack_probe)
             ack_probe += 1
         if reqs or acks:
             return sorted(reqs), sorted(acks)
@@ -415,21 +483,32 @@ class BridgeServer:
         返回 0 = 正常结束(C++ 关闭写端,read 得 EOF)。错误路径已写 error
         response 并 sys.exit(1),不会从这里返回。
 
-        缺陷 B 修复(2026-08-16):resp_notify 写端在此处一次打开、run 生命周期
-        持有(长连接,配对 C++ open_notify 持有的常开读端)。打开顺序无死锁:
-        C++ 先开 req 写端(重试至本侧 req 读端就绪)再开 resp 读端;本侧先开
-        req 读端(阻塞至 C++ req 写端)再开 resp 写端(此时 C++ resp 读端已在
-        或随后即到——非阻塞读端 open 恒成功,不互相等待)。
+        缺陷 B 修复(2026-08-16)+开序收紧(2026-09-30,配 C++ open_notify
+        同批改动):resp_notify 写端在此处一次打开、run 生命周期持有(长连
+        接,配对 C++ open_notify 持有的常开读端)。打开顺序无死锁:C++ 先
+        开 resp 读端(O_RDONLY|O_NONBLOCK,恒成功、永不等待)再重试开 req
+        写端;本侧【先】开 resp 写端(阻塞至 C++ resp 读端——该读端在 req
+        配对之前就已存在,故必即刻成功)【再】开 req 读端(阻塞至 C++ req
+        写端)。由此 req 配对完成时(C++ 首次可能到达 wait_response_byte
+        的最早时刻)本侧 resp 写端必然已注册,C++ 侧 read()==0 才真正只
+        可能是本进程死亡——消除启动窗口内 POLLHUP 误判健康对端。
         """
         t0 = time.monotonic_ns()
-        fd = os.open(self.req_notify, os.O_RDONLY)  # 阻塞直到 C++ 打开写端
+        # (2026-09-30) 开序收紧:resp 写端先开(读者恒在场,即刻返回),
+        # 再开 req 读端——与 C++ 侧 open_notify 的"resp 读端先开"配对。
+        # (2026-10-01) 两个 open 改有界等待(BRIDGE_TIMEOUT_MS 三态,见
+        # _open_fifo_bounded):C++ 在握手完成前死亡的窗口内不再无界挂死。
+        self._resp_fd = _open_fifo_bounded(
+            self.resp_notify, os.O_WRONLY, "resp_notify.fifo (read end)")
+        self._stats["gil_wait_ns"] += time.monotonic_ns() - t0
+        t0 = time.monotonic_ns()
+        fd = _open_fifo_bounded(
+            self.req_notify, os.O_RDONLY,
+            "req_notify.fifo (write end)")  # 阻塞直到 C++ 打开写端(有界)
         t1 = time.monotonic_ns()
         # 阶段 6 §9.1:两个初始打开都是等待 C++ 进程,计入 gil_wait_ns。
         self._stats["gil_wait_ns"] += (t1 - t0)
         try:
-            t0 = time.monotonic_ns()
-            self._resp_fd = os.open(self.resp_notify, os.O_WRONLY)
-            self._stats["gil_wait_ns"] += time.monotonic_ns() - t0
             while True:
                 t0 = time.monotonic_ns()
                 data = os.read(fd, 1)
@@ -443,7 +522,39 @@ class BridgeServer:
                     try:
                         self._handle_ack(ack_seq, on_commit_ack)
                     except BridgeError as exc:
-                        self._fail(ack_seq, "ack {}: {}".format(ack_seq, exc))
+                        # (2026-09-30, ported from the face repo)
+                        # A2-1 修复:ack 流失败不得把 error response 写到
+                        # response_<ack_seq>.json——ack_n 到达时 request_n
+                        # 的 response 已被 C++ 读走并 unlink,C++ 正在等
+                        # (或即将等)的是当前在途 request 的 response。严格
+                        # +1 单调 + 单在途背压下,ack_n 可与 request_{n+1}
+                        # 同轮并存,且 request_n 已消费并 mark,故当前请求
+                        # 序号 = _request_sequences.next_seq(恒 == n+1)。
+                        # 失败可见性三态、均 fail-closed:
+                        # (a) Python 先死 -> C++ 下次交付在 notify_python()
+                        #     EPIPE abort;(b) C++ 已阻塞在
+                        #     wait_response_byte(n+1) 的背靠背交错下,本
+                        #     _fail 写的 error response 会被立即读到并带
+                        #     错误串 abort——此时 response 字段恰是可见性
+                        #     通道;(c) 末 ack 后失败 -> 仅退出码可见。
+                        self._fail(
+                            self._request_sequences.next_seq,
+                            "ack {}: {}".format(ack_seq, exc))
+                    except Exception as exc:  # noqa: BLE001 -- on_commit_ack 异常
+                        # (2026-09-30, ported from the face repo)
+                        # B13 修复:与 request 循环同型的兜底——
+                        # on_commit_ack(账本 finalize 挂接点)的协议违例以
+                        # 普通 ValueError 等抛出,只捕 BridgeError 时会穿透
+                        # serve_forever:不写 error response、不通知 C++,
+                        # C++ 侧只能靠超时发现。统一走 _fail fail-closed
+                        # (stderr 留痕 + error response + resp_notify);
+                        # 序号沿用上面的 A2-1 口径(next_seq,非 ack 序号)。
+                        # except Exception 不捕 KeyboardInterrupt/SystemExit,
+                        # 与 request 循环写法一致。
+                        self._fail(
+                            self._request_sequences.next_seq,
+                            "ack {}: {}: {}".format(
+                                ack_seq, type(exc).__name__, exc))
                 for req_seq in reqs:
                     try:
                         self._handle_request(req_seq, handler)
@@ -456,9 +567,20 @@ class BridgeServer:
                               "{}".format(req_seq, exc), file=sys.stderr)
                         sys.exit(1)
                     except BridgeError as exc:
-                        self._fail(req_seq, str(exc))
+                        # (2026-10-01, ported from the face repo) A2-1 的
+                        # 请求路径同款口径:失败序号可能是 listdir 回退发现
+                        # 的未来序号(validate_new 拒绝),而 C++ 正在等的
+                        # 恒是当前在途请求 = _request_sequences.next_seq
+                        # (mark 只在成功收尾发生,失败时 next_seq 恒指向
+                        # C++ 等待的 response)。
+                        self._fail(
+                            self._request_sequences.next_seq,
+                            "request {}: {}".format(req_seq, exc))
                     except Exception as exc:  # noqa: BLE001 -- handler 异常
-                        self._fail(req_seq, "{}: {}".format(type(exc).__name__, exc))
+                        self._fail(
+                            self._request_sequences.next_seq,
+                            "request {}: {}: {}".format(
+                                req_seq, type(exc).__name__, exc))
         finally:
             os.close(fd)
             if self._resp_fd is not None:

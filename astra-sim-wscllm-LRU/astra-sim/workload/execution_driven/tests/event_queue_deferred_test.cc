@@ -37,7 +37,6 @@ AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest
   RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
 *******************************************************************************/
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <list>
@@ -55,6 +54,18 @@ AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest
 
 using namespace NetworkAnalytical;
 using namespace NetworkAnalyticalCongestionAware;
+
+// The aggregation build uses -O3 -DNDEBUG, which compiles bare EQ_CHECK()
+// into no-ops: every check below (and -- case E -- the production
+// EventQueue strict-increase assert itself) would silently vanish and
+// main() would print ALL TESTS PASSED regardless. EQ_CHECK keeps every
+// test-side check fail-closed under NDEBUG -- same pattern as
+// ingress_idle_fixture.cc's FIXTURE_CHECK: one stderr line, then abort.
+#define EQ_CHECK(cond)                                                       \
+    ((cond) ? (void)0                                                        \
+            : (std::fprintf(stderr, "[event_queue_deferred_test] CHECK "     \
+                                    "FAILED: %s (%s:%d)\n",                 \
+                            #cond, __FILE__, __LINE__), std::abort()))
 
 namespace {
 
@@ -78,10 +89,10 @@ class ReferenceQueue {
     [[nodiscard]] EventTime get_current_time() const noexcept { return current_time; }
 
     void proceed() noexcept {
-        assert(!finished());
+        EQ_CHECK(!finished());
         auto begin_it = event_queue.begin();
         auto& front = begin_it->second;
-        assert(front.event_time > current_time);
+        EQ_CHECK(front.event_time > current_time);
         current_time = front.event_time;
         // mirror EventList::invoke_events: pop_front + invoke loop, so events
         // scheduled at the current time from inside a handler (same-time
@@ -96,7 +107,7 @@ class ReferenceQueue {
     void schedule_event(EventTime t, Callback cb, CallbackArg arg) noexcept {
         // mirror the map-family schedule_event: try_emplace merges same-time
         // events into the existing EventList (same-time merge semantics)
-        assert(t >= current_time);
+        EQ_CHECK(t >= current_time);
         auto [it, inserted] = event_queue.try_emplace(t, RefEventList{t, {}});
         (void)inserted;
         it->second.events.emplace_back(cb, arg);
@@ -152,19 +163,19 @@ void test_case_a() {
     eq.schedule_event(10, case_a_physical, &ctx);
 
     eq.proceed();
-    assert(eq.get_current_time() == 10);
-    assert(ctx.tick_end_count == 1);
+    EQ_CHECK(eq.get_current_time() == 10);
+    EQ_CHECK(ctx.tick_end_count == 1);
     // physical, physical, tick-end, pre-scheduled deferred, callback deferred
-    assert(ctx.log == std::vector<int>({1, 1, 2, 3, 3}));
+    EQ_CHECK(ctx.log == std::vector<int>({1, 1, 2, 3, 3}));
 
     // second tick: two physical events at t=20
     eq.schedule_event(20, case_a_physical, &ctx);
     eq.schedule_event(20, case_a_physical, &ctx);
     eq.proceed();
-    assert(eq.get_current_time() == 20);
-    assert(ctx.tick_end_count == 2);
-    assert(ctx.log == std::vector<int>({1, 1, 2, 3, 3, 1, 1, 2, 3}));
-    assert(eq.finished());
+    EQ_CHECK(eq.get_current_time() == 20);
+    EQ_CHECK(ctx.tick_end_count == 2);
+    EQ_CHECK(ctx.log == std::vector<int>({1, 1, 2, 3, 3, 1, 1, 2, 3}));
+    EQ_CHECK(eq.finished());
 
     std::printf("[case A] PASS: tick-end exactly once per proceed, after "
                 "physical, before deferred\n");
@@ -210,12 +221,12 @@ void test_case_b() {
     eq.schedule_event_deferred(case_b_outer, &ctx);
 
     eq.proceed();
-    assert(eq.get_current_time() == 10);
+    EQ_CHECK(eq.get_current_time() == 10);
     // physical(0), then both outer deferred in insertion order (4,4), then the
     // two nested deferred appended by the outer ones, still in the same drain
     // pass (5,5): FIFO order, same-pass nested drain
-    assert(ctx.log == std::vector<int>({0, 4, 4, 5, 5}));
-    assert(eq.finished());
+    EQ_CHECK(ctx.log == std::vector<int>({0, 4, 4, 5, 5}));
+    EQ_CHECK(eq.finished());
 
     std::printf("[case B] PASS: deferred insertion order + nested same-pass "
                 "drain\n");
@@ -225,16 +236,21 @@ void test_case_b() {
 // case C: 1000 randomized ops identical to the reference implementation
 // ---------------------------------------------------------------------------
 
+// S10 fix (2026-09-29): one log pointer per context. The old DiffCtx held
+// BOTH logs and the SAME pointer was scheduled to both queues, so every
+// firing -- real or reference -- appended to both logs: the two logs were
+// mirror images by construction and the differential comparison was
+// vacuously true (a dropped or reordered event in either queue could never
+// be detected). Now each queue schedules its own payload bound to its own
+// log and the comparison below is a real differential.
 struct DiffCtx {
     int id;
-    std::vector<int>* real_log;
-    std::vector<int>* ref_log;
+    std::vector<int>* log;
 };
 
 void diff_handler(void* v) {
     auto* c = static_cast<DiffCtx*>(v);
-    c->real_log->push_back(c->id);
-    c->ref_log->push_back(c->id);
+    c->log->push_back(c->id);
 }
 
 void test_case_c() {
@@ -243,9 +259,12 @@ void test_case_c() {
     ReferenceQueue ref;
     std::vector<int> real_log;
     std::vector<int> ref_log;
-    // Owning pool for the per-event DiffCtx payloads (both queues schedule
-    // the same pointer; the handlers only read it). new without an owner
-    // leaked ~600 DiffCtx per run round -- test-only, but now freed.
+    // Owning pool for the per-event DiffCtx payloads: each event carries
+    // TWO payloads with the same id -- one bound to real_log (scheduled on
+    // the real queue) and one bound to ref_log (scheduled on the reference
+    // queue) -- so each firing appends only to its own queue's log (S10 fix
+    // 2026-09-29; new without an owner leaked ~600 DiffCtx per run round --
+    // test-only, but now freed).
     std::vector<std::unique_ptr<DiffCtx>> ctx_pool;
 
     std::uniform_int_distribution<int> op_dist(0, 99);
@@ -256,45 +275,47 @@ void test_case_c() {
         const int op = op_dist(rng);
         if (op < 60) {
             // schedule at a strictly future time (same-time scheduling from a
-            // handler is exercised separately in case D2, where it merges into
+            // handler is exercised separately in case F, where it merges into
             // the list currently being invoked)
             const auto t = eq.get_current_time() +
                            static_cast<EventTime>(time_dist(rng));
-            auto c = std::make_unique<DiffCtx>(
-                DiffCtx{id_dist(rng), &real_log, &ref_log});
-            eq.schedule_event(t, diff_handler, c.get());
-            ref.schedule_event(t, diff_handler, c.get());
-            ctx_pool.push_back(std::move(c));
+            const int id = id_dist(rng);
+            auto real_ctx = std::make_unique<DiffCtx>(DiffCtx{id, &real_log});
+            auto ref_ctx = std::make_unique<DiffCtx>(DiffCtx{id, &ref_log});
+            eq.schedule_event(t, diff_handler, real_ctx.get());
+            ref.schedule_event(t, diff_handler, ref_ctx.get());
+            ctx_pool.push_back(std::move(real_ctx));
+            ctx_pool.push_back(std::move(ref_ctx));
         } else {
             // proceed when possible
             if (eq.finished()) {
-                assert(ref.finished());
+                EQ_CHECK(ref.finished());
                 continue;
             }
-            assert(!ref.finished());
+            EQ_CHECK(!ref.finished());
             const auto real_before = real_log.size();
             const auto ref_before = ref_log.size();
             eq.proceed();
             ref.proceed();
             // event-for-event identical within this tick
             const auto ref_appended = ref_log.size() - ref_before;
-            assert(real_log.size() - real_before == ref_appended);
+            EQ_CHECK(real_log.size() - real_before == ref_appended);
             for (size_t i = 0; i < ref_appended; ++i) {
-                assert(real_log[real_before + i] == ref_log[ref_before + i]);
+                EQ_CHECK(real_log[real_before + i] == ref_log[ref_before + i]);
             }
-            assert(eq.get_current_time() == ref.get_current_time());
+            EQ_CHECK(eq.get_current_time() == ref.get_current_time());
         }
     }
 
     // drain leftovers and compare terminal state
     while (!eq.finished()) {
-        assert(!ref.finished());
+        EQ_CHECK(!ref.finished());
         eq.proceed();
         ref.proceed();
-        assert(eq.get_current_time() == ref.get_current_time());
+        EQ_CHECK(eq.get_current_time() == ref.get_current_time());
     }
-    assert(ref.finished());
-    assert(real_log == ref_log);
+    EQ_CHECK(ref.finished());
+    EQ_CHECK(real_log == ref_log);
 
     std::printf("[case C] PASS: 1000 randomized ops identical to reference\n");
 }
@@ -357,23 +378,25 @@ void run_fs_scenario(bool deferred_mode) {
     size_t guard = 0;
     while (!eq->finished()) {
         eq->proceed();
-        assert(++guard < 1000000);
+        EQ_CHECK(++guard < 1000000);
     }
-    assert(ctx.completed == 1);
-    assert(fs.get_total_started_flows() == 1);
-    assert(fs.get_total_completed_flows() == 1);
-    assert(fs.get_active_flow_count() == 0);
+    EQ_CHECK(ctx.completed == 1);
+    EQ_CHECK(fs.get_total_started_flows() == 1);
+    EQ_CHECK(fs.get_total_completed_flows() == 1);
+    EQ_CHECK(fs.get_active_flow_count() == 0);
 
     std::printf("[case D] PASS: FluidScheduler integration (%s flush mode), "
-                "no :48 assert, flow completed\n",
+                "no :71 assert, flow completed\n",
                 deferred_mode ? "deferred" : "legacy");
 }
 
 // ---------------------------------------------------------------------------
 // case E (map family): fail-fast proof -- schedule_event(current_time) from a
 // tick-end callback inserts a current_time EventList into the main map and the
-// NEXT proceed() must trip the strict-increase assert (EventQueue.cpp :48);
-// schedule_event(future) from the callback lands in the map normally.
+// NEXT proceed() must die by SIGABRT: via production's strict-increase assert
+// (EventQueue.cpp :71) when asserts are compiled in, or via the test's own
+// explicit EQ_CHECK abort under -DNDEBUG; schedule_event(future) from the
+// callback lands in the map normally.
 // ---------------------------------------------------------------------------
 
 struct CaseECtx {
@@ -406,39 +429,54 @@ bool run_case_e_child(bool bad) {
     eq.schedule_event(10, noop_handler, nullptr);
     eq.proceed();
     if (bad) {
-        // the next proceed must abort on the strict-increase assert
+        // The violating schedule must be fail-fast. M-2 Release fail-closed
+        // port (2026-09-30): schedule_event itself rejects a same-tick
+        // schedule outside the invoke context in EVERY build type (the
+        // former strict-increase assert in proceed() only fired in Debug
+        // builds; under -DNDEBUG the violating proceed() used to return
+        // silently with current_time unchanged). The child now dies inside
+        // the tick-end schedule, before the next proceed() ever runs.
         eq.proceed();
-        return false;  // should not reach here in a failing build
+        EQ_CHECK(eq.get_current_time() != 10);
+        return false;  // unreachable: EQ_CHECK aborted
     }
     // legal path: the future event is in the map and executes at t=15
-    assert(eq.get_current_time() == 10);
-    assert(!eq.finished());
+    EQ_CHECK(eq.get_current_time() == 10);
+    EQ_CHECK(!eq.finished());
     eq.proceed();
-    assert(eq.get_current_time() == 15);
-    assert(eq.finished());
+    EQ_CHECK(eq.get_current_time() == 15);
+    EQ_CHECK(eq.finished());
     return true;
 }
 
 void test_case_e() {
     // legal variant runs in-process
-    assert(run_case_e_child(/*bad=*/false));
-    // violating variant must abort (assert) -- verify in a forked child
+    EQ_CHECK(run_case_e_child(/*bad=*/false));
+    // violating variant must die fail-closed -- verify in a forked child
     pid_t pid = fork();
     if (pid == 0) {
         const bool reached_end = run_case_e_child(/*bad=*/true);
-        // Exit code must distinguish "ran through without the abort AND
-        // completed" (0) from "reached this line unexpectedly" (1): the bad
-        // child is expected to die from SIGABRT before ever getting here, so
-        // any exit -- including 1 -- tells the parent the assert did not
-        // fire and the parent's WIFSIGNALED check fails the test.
+        // Exit code must distinguish "ran through AND completed" (0) from
+        // "reached this line unexpectedly" (1): the bad child is expected
+        // to die fail-closed before ever getting here, so any exit --
+        // including 1 -- tells the parent the fail-fast path did not fire.
         std::_Exit(reached_end ? 0 : 1);
     }
     int status = 0;
     waitpid(pid, &status, 0);
-    // the child must have died from the assert (SIGABRT), not exited cleanly
-    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    // the child must not have survived the violating schedule: the
+    // fail-closed guard exits non-zero in every build type (before the
+    // M-2 port, the strict-increase assert in proceed() aborted the child
+    // with SIGABRT in Debug and the test's own EQ_CHECK abort covered
+    // NDEBUG). Death by signal or a non-zero exit both count; a clean 0
+    // exit means the guard never fired.
+    const bool child_died_fail_closed =
+        WIFSIGNALED(status) ||
+        (WIFEXITED(status) && WEXITSTATUS(status) != 0);
+    EQ_CHECK(child_died_fail_closed);
     std::printf("[case E] PASS: map fail-fast -- tick-end schedule_event("
-                "current_time) trips :48 on next proceed; future event OK\n");
+                "current_time) dies fail-closed in every build; future event "
+                "OK\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -477,8 +515,8 @@ void test_case_f() {
     eq.schedule_event(10, case_f_first, &ctx);
     eq.schedule_event(10, case_f_tail, &ctx);
     eq.proceed();
-    assert(ctx.log == std::vector<int>({1, 2, 3, 4}));
-    assert(eq.finished());
+    EQ_CHECK(ctx.log == std::vector<int>({1, 2, 3, 4}));
+    EQ_CHECK(eq.finished());
     std::printf("[case F] PASS: inline-first same-time FIFO / nested append\n");
 }
 

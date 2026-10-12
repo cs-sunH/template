@@ -54,6 +54,17 @@ void PacketBundle::call(EventType event, CallData* data) {
         needs_processing = false;
         // this->delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
         // HBM write/read pays the configured fixed access latency.
+        // local_mem_bw <= 0 would divide by zero and cast inf/NaN to an
+        // unsigned tick (UB): fail closed with the offending key named.
+        // (The resolver injects the key for official runs; this is the
+        // backstop for hand-written system.json, same discipline as the
+        // hbm_bandwidth_contention auto-off gate.)
+        if (!(sys->local_mem_bw > 0.0)) {
+            Sys::sys_panic(
+                "PacketBundle local-memory processing requires a positive "
+                "'local-mem-bw' in the system configuration (got " +
+                std::to_string(sys->local_mem_bw) + " GB/s)");
+        }
         const auto local_mem_access_delay =
             sys->local_mem_latency +
             static_cast<uint64_t>(static_cast<double>(size) /

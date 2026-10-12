@@ -64,10 +64,12 @@ Build: cmake --build build/astra_analytical/build_congestion_aware --target
        AstraSim_Analytical_Congestion_Aware_LocalHbmTest -j
 Run (from template/astra-sim-face, after generating the fixture):
   python3 astra-sim/workload/execution_driven/tests/make_local_hbm_fixture_et.py
-  build/astra_analytical/build_congestion_aware/AstraSim_Analytical/\
+  build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_LocalHbmTest --scenario fast
   (same binary with --scenario slow / --scenario legacy; the system and
-  network configurations default to the fixture set)
+  network configurations default to the fixture set; the binary lands in
+  <build-tree>/bin/ via the target's RUNTIME_OUTPUT_DIRECTORY, matching the
+  sibling fixtures)
 Exit code 0 on ALL PASS.
 */
 
@@ -291,17 +293,22 @@ int main(int argc, char* argv[]) {
 
     for (int i = 0; i < npus_count; i++) {
         auto network_api = std::make_unique<CongestionAwareNetworkApi>(i);
+        // This fixture exercises the legacy ETFeeder path: pass
+        // ExecutionMode::Static explicitly instead of relying on the ctor's
+        // default (the default exists only so this fixture and the
+        // completion_observer fixture keep compiling).
         auto* const system =
             new Sys(i, fixture_root + "/fixture", comm_group_configuration,
                     system_path, network_api.get(),
                     npus_count_per_dim, queues_per_dim, injection_scale,
-                    comm_scale, rendezvous_protocol);
+                    comm_scale, rendezvous_protocol,
+                    ExecutionDriven::ExecutionMode::Static);
         network_apis.push_back(std::move(network_api));
         systems.push_back(system);
     }
 
     for (int i = 0; i < npus_count; i++) {
-        systems[i]->workload->fire();
+        systems[i]->workload->call(EventType::General, nullptr);
     }
 
     fluid_scheduler->flush_pending_starts();

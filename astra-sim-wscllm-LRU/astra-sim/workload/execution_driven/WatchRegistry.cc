@@ -21,12 +21,29 @@ namespace ExecutionDriven {
 uint64_t WatchRegistry::register_stage_watch(
     const std::string& request_id, const std::string& stage,
     uint64_t generation, std::set<CompletionKey> expected_members,
-    std::set<NodeTerminalStatus> satisfying_statuses) {
+    std::set<NodeTerminalStatus> satisfying_statuses, bool* created) {
+    if (created != nullptr) {
+        *created = true;
+    }
     const Identity identity{request_id, stage, generation};
     const auto existing = identity_to_watch_.find(identity);
     if (existing != identity_to_watch_.end()) {
         // Register once, fire once: a duplicate registration (e.g. a double
         // commit of the same stage) must not create a second watch.
+        // Minor(2026-09-30):跨批重复身份静默吞掉新成员表——fire 语义有
+        // lost-wakeup 兜底,故不 fail-closed,但必须显式告警取证,不得
+        // 无声吞掉(谁在重复注册、新成员表多大,留在 stderr 供事后定位)。
+        if (created != nullptr) {
+            *created = false;
+        }
+        std::fprintf(stderr,
+                     "[Warn] (execution_driven/watch_registry) duplicate "
+                     "watch identity swallowed (register once / fire once): "
+                     "request_id=%s stage=%s generation=%llu "
+                     "dropped_member_count=%zu\n",
+                     request_id.c_str(), stage.c_str(),
+                     static_cast<unsigned long long>(generation),
+                     expected_members.size());
         return existing->second;
     }
     const uint64_t watch_id = next_watch_id_++;
@@ -94,21 +111,13 @@ void WatchRegistry::on_node_terminal(const CompletionKey& key,
                 fire.member_ranks.push_back(member.rank);
             }
         }
-        // Production installs a synchronous notifier, so retaining a second
-        // copy for a polling consumer would grow linearly with fired watches.
-        // Queue only the fixture/polling mode that has no notifier.
+        // Production installs a synchronous notifier (step 1-6 wiring); a
+        // fire without one has no consumer and is dropped (there is no
+        // polling queue to retain it).
         if (notifier_) {
             notifier_(fire);
-        } else {
-            fired_.push_back(std::move(fire));
         }
     }
-}
-
-std::vector<WatchFire> WatchRegistry::fired_and_drain() {
-    std::vector<WatchFire> result = std::move(fired_);
-    fired_.clear();
-    return result;
 }
 
 size_t WatchRegistry::stale_count() const {
@@ -119,6 +128,27 @@ size_t WatchRegistry::stale_count() const {
         }
     }
     return count;
+}
+
+void WatchRegistry::dump_unfired_to_stderr(const char* prefix) const {
+    // DeadEnd-census diagnostic only (2026-10-11): read-only dump of every
+    // registered-but-unfired watch. Never called on the hot path.
+    std::fprintf(stderr, "%s watch_registry_size=%zu stale=%zu\n", prefix,
+                 watches_.size(), stale_count());
+    for (const auto& entry : watches_) {
+        const StageWatch& watch = entry.second;
+        if (watch.fired) {
+            continue;
+        }
+        std::fprintf(stderr,
+                     "%s unfired watch_id=%llu request_id=%s stage=%s "
+                     "generation=%llu members_done=%zu members_expected=%zu\n",
+                     prefix, static_cast<unsigned long long>(watch.watch_id),
+                     watch.request_id.c_str(), watch.stage.c_str(),
+                     static_cast<unsigned long long>(watch.generation),
+                     watch.completed_members.size(),
+                     watch.expected_members.size());
+    }
 }
 
 void WatchRegistry::remove_watch(uint64_t watch_id) {
@@ -148,6 +178,16 @@ void WatchRegistry::remove_watch(uint64_t watch_id) {
             request_to_watch_ids_.erase(request_it);
         }
     }
+    // 拼 batch 适配(2026-08-22) + 2026-09-27 修复:哨兵索引同步清理 --
+    // remove_watch 是一切删除路径的唯一出口,任何路径删掉哨兵 watch 都不得
+    // 在 sentinel_watch_ids_ 里留下悬空 id(否则 drain_fired_sentinels 每
+    // 轮空扫且索引无界增长)。
+    if (it->second.request_id.rfind("batch_train_", 0) == 0) {
+        sentinel_watch_ids_.erase(
+            std::remove(sentinel_watch_ids_.begin(), sentinel_watch_ids_.end(),
+                        watch_id),
+            sentinel_watch_ids_.end());
+    }
     watches_.erase(it);
 }
 
@@ -169,17 +209,18 @@ void WatchRegistry::remove_watches_for_request(const std::string& request_id) {
 
 void WatchRegistry::drain_fired_sentinels() {
     // 拼 batch 适配(2026-08-22):已 fire 的哨兵逐个移除;未 fire 者保留。
-    size_t kept = 0;
-    for (size_t i = 0; i < sentinel_watch_ids_.size(); ++i) {
-        const uint64_t watch_id = sentinel_watch_ids_[i];
+    // 迭代快照:remove_watch 现在会同步清理 sentinel_watch_ids_,原位压缩
+    // 循环会在删除时挪动尚未访问的下标。
+    const std::vector<uint64_t> ids = sentinel_watch_ids_;
+    sentinel_watch_ids_.clear();
+    for (const uint64_t watch_id : ids) {
         const auto it = watches_.find(watch_id);
         if (it != watches_.end() && it->second.fired) {
-            remove_watch(watch_id);
+            remove_watch(watch_id);  // 同步清掉哨兵索引项
             continue;
         }
-        sentinel_watch_ids_[kept++] = watch_id;
+        sentinel_watch_ids_.push_back(watch_id);
     }
-    sentinel_watch_ids_.resize(kept);
 }
 
 void WatchRegistry::remove_all() {
@@ -271,8 +312,9 @@ void online_completion_hook(void* ctx, int rank, uint64_t node_id,
         return;
     }
     // (1) Route the terminal by its numeric member key -- read-only with
-    // respect to the graph. The direct index deliberately avoids constructing
-    // NodeStoreMeta(request_id, stage) for every non-watch terminal.
+    // respect to the graph. The direct index deliberately avoids
+    // constructing any per-terminal (request_id, stage) payload for
+    // non-watch terminals.
     context->registry->on_node_terminal(
         CompletionKey{rank, node_id, generation},
         static_cast<NodeTerminalStatus>(terminal_status));

@@ -35,10 +35,14 @@ class BasicTopology : public Topology {
     virtual ~BasicTopology() noexcept;
 
   protected:
-    /// bandwidth of each link
+    /// bandwidth of each link (write-only: assigned in the constructors, no
+    /// reader in this repo -- registered 2026-09 deep-dive, kept for face
+    /// cross-repo parity)
     Bandwidth bandwidth;
 
-    /// latency of each link
+    /// latency of each link (write-only: assigned in the constructors, no
+    /// reader in this repo -- registered 2026-09 deep-dive, kept for face
+    /// cross-repo parity)
     Latency latency;
 };
 

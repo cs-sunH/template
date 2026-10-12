@@ -81,6 +81,7 @@ class ForcedQuotaDeferredCountKeyTest(unittest.TestCase):
             "stay": 0, "copy": 0, "remote-read": 0,
             "recompute_elected": 0,
             "recompute_forced_no_history": 0,
+            "recompute_forced_action_mask": 0,
             "recompute_forced_quota_deferred": 0,
             "recompute_forced_evicted_permanent": 0,
         }
@@ -279,7 +280,7 @@ class ForwardLegContendedByBackgroundTest(unittest.TestCase):
         if with_background:
             flows.register_path((1, 0), owner="f-bg")
         model = _model({0: _load(), 1: _load()}, flows=flows)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session_view(
                 home=0, resident=0, history_bytes=(3000, 3000),
                 missing=(1000, 1000), location="partial_hbm_remote",

@@ -27,7 +27,8 @@ set a decision flag -- they aggregate only through the watch/fence
 machinery into the stage milestones above.
 
 Same-epoch dedup: within one delivery epoch (the interval between two
-drains, i.e. one tick at the gate), a push with an identity that already
+drains; with the explicit T+1 deferred boundary an epoch may span more
+than one tick), a push with an identity that already
 exists in the pending set is a no-op ("同 tick 同 identity 去重"). After a
 drain the pending set is empty, so the same identity may legitimately
 appear in a later epoch.
@@ -43,16 +44,12 @@ Counters (report at run end):
                                        into one Python round-trip.
   tick_end_without_decision_count    -- every no-work tick-end gate call
                                        (normal, allowed nonzero).
-  no_decision_python_callback_count  -- only a buggy entry into Python with
-                                       no decision work increments this
-                                       (phase-1 acceptance: must be 0).
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_DECISIONMAILBOX_HH
 #define EXECUTION_DRIVEN_DECISIONMAILBOX_HH
 
 #include <cstdint>
-#include <functional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -95,6 +92,10 @@ struct DecisionPayload {
 /// One scheduler-visible event. seq is assigned by the mailbox at push
 /// (accepted events only). stage is opaque ("prefill"/"decode" in wscllm
 /// phase 1); generation disambiguates same-request repeated stages.
+/// seq itself is a test-only diagnostic: production never reads it; its
+/// continuity invariant (monotonic at push, post-dedup) is asserted by the
+/// decision mailbox test as the only regression probe for the
+/// push/dedup semantics.
 struct DecisionEvent {
     uint64_t seq = 0;
     DecisionReason reason = DecisionReason::ARRIVAL;
@@ -132,11 +133,13 @@ struct CompletedFactCounters {
     uint64_t other = 0;
 };
 
-/// Per-delivery terminal-fact collector. Default production mode updates only
-/// CompletedFactCounters and drains an empty completed_nodes array. The
-/// explicit ASTRA_SIM_ONLINE_COMPLETED_NODES=exact mode retains the frozen
-/// legacy per-node records for deep audit/replay. The collector is
-/// simulation-thread-only, matching CompletionObserver's contract.
+/// Terminal-fact collector. Default production mode updates only the
+/// run-lifetime CompletedFactCounters and drains an empty completed_nodes
+/// array (the counters are never reset by drain()). The env-gated
+/// ASTRA_SIM_ONLINE_COMPLETED_NODES=exact audit mode (fixed at construction)
+/// retains the frozen legacy per-node records for deep audit/replay per
+/// delivery. The collector is simulation-thread-only, matching
+/// CompletionObserver's contract.
 class CompletedFactAccumulator {
   public:
     CompletedFactAccumulator();
@@ -148,15 +151,9 @@ class CompletedFactAccumulator {
     /// Transfer this delivery's wire records and reset the accumulator.
     std::vector<CompletedNodeFact> drain();
     [[nodiscard]] size_t size() const;
-    [[nodiscard]] bool exact_mode() const { return exact_mode_; }
     [[nodiscard]] const CompletedFactCounters& counters() const {
         return counters_;
     }
-
-    /// Test/embedding override. It is only legal before the first record of
-    /// an epoch, preventing one StateDelta from mixing exact and summary
-    /// records.
-    void set_exact_mode(bool exact_mode);
 
   private:
     bool exact_mode_ = false;
@@ -219,15 +216,7 @@ struct StateDelta {
 /// injected_unfinished: phase-3 sensing summary (empty when sensing is off).
 /// Phase-4 v1 defaults: delivery_epoch == delivery_sequence; completed_nodes
 /// / affected_ranks empty; snapshot_handle self-consistent
-/// {epoch: delivery_sequence, tick: tick, kind: ""} -- existing 4/5-arg call
-/// sites (fixtures) compile unchanged and stay v1-consistent.
-StateDelta build_state_delta(
-    std::vector<DecisionEvent> events, uint64_t tick,
-    uint64_t delivery_sequence, uint64_t deferred_from_tick = 0,
-    std::vector<RankInjectedSummary> injected_unfinished = {});
-/// v1: explicit form -- callers with completed-facts / affected-ranks
-/// payloads use the full signature (the tick-end gate in main_online.cc).
-/// injected_unfinished (phase-3 sensing) defaults to empty.
+/// {epoch: delivery_sequence, tick: tick, kind: ""}.
 StateDelta build_state_delta_v1(
     std::vector<DecisionEvent> events, uint64_t tick,
     uint64_t delivery_sequence, uint64_t deferred_from_tick,
@@ -242,17 +231,17 @@ class DecisionMailbox {
     /// generation). Accepted events get consecutive seqs.
     void push(DecisionEvent e);
 
-    /// True iff a delivery epoch has work: pending events or a pending
-    /// finalize (the commit-ack finalize flag is the step-1-7+ wiring
-    /// point; nothing sets it in phase 1's step 1-6).
+    /// True iff a delivery epoch has pending events.  (M1-3/M11-3,
+    /// 2026-09-26: the former finalize-pending scaffolding is gone -- the
+    /// real commit-ack finalize is send_commit_ack -> ack file -> Python
+    /// on_commit_ack, which never routes through this mailbox.)
     [[nodiscard]] bool has_decision_work() const;
 
     /// Deliver all pending events in insertion order and clear the pending
     /// set (a new dedup epoch starts after the call).
     std::vector<DecisionEvent> drain();
 
-    // --- counters (report at run end; phase-1 gate asserts
-    //     no_decision_python_callback_count == 0) ---
+    // --- counters (reported at run end) ---
     [[nodiscard]] uint64_t event_count() const { return event_count_; }
     [[nodiscard]] uint64_t delivery_count() const { return delivery_count_; }
     [[nodiscard]] double coalescing_ratio() const {
@@ -263,24 +252,10 @@ class DecisionMailbox {
     [[nodiscard]] uint64_t tick_end_without_decision_count() const {
         return tick_end_without_decision_count_;
     }
-    [[nodiscard]] uint64_t no_decision_python_callback_count() const {
-        return no_decision_python_callback_count_;
-    }
-
     /// Tick-end gate no-work path (normal, allowed nonzero).
     void count_tick_end_without_decision() {
         ++tick_end_without_decision_count_;
     }
-
-    /// Only a buggy Python entry with no decision work increments this
-    /// (phase-1 acceptance: must stay 0).
-    void count_no_decision_python_callback() {
-        ++no_decision_python_callback_count_;
-    }
-
-    /// Set/reset the finalize-pending flag (step-1-7+ commit-ack wiring;
-    /// kept here per the plan's has_decision_work definition).
-    void set_finalize_pending(bool pending) { finalize_pending_ = pending; }
 
   private:
     using Identity = std::tuple<int, std::string, std::string, uint64_t>;
@@ -288,12 +263,14 @@ class DecisionMailbox {
     uint64_t next_seq_ = 1;
     std::vector<DecisionEvent> events_;
     std::set<Identity> pending_identities_;
-    bool finalize_pending_ = false;
 
     uint64_t event_count_ = 0;
     uint64_t delivery_count_ = 0;
     uint64_t tick_end_without_decision_count_ = 0;
-    uint64_t no_decision_python_callback_count_ = 0;
+    // (2026-09-30) no_decision_python_callback_count_ removed: its
+    // increment hook was deleted with the old delivery path, leaving a
+    // write-only member behind an always-zero accessor and an always-true
+    // run-end assertion (dead acceptance theater).
 };
 
 }  // namespace ExecutionDriven

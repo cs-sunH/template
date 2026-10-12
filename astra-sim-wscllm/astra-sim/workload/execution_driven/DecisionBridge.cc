@@ -28,9 +28,11 @@ The static binary never constructs a bridge (zero impact on the baseline).
 #include <cstring>
 #include <fstream>
 #include <poll.h>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -99,10 +101,41 @@ nlohmann::json read_json_file(const std::string& path) {
     if (!in) {
         throw std::runtime_error("cannot open " + path);
     }
+    // Strict JSON load: istream operator>> parses in NON-strict mode --
+    // it silently consumes the FIRST JSON value and leaves trailing bytes
+    // unread, and the DOM build last-wins on duplicate object keys. These
+    // files are machine-written by paired tooling, so trailing content or
+    // a duplicate key is producer corruption, not a legal shape.
+    // json::parse in its default strict mode rejects trailing bytes
+    // outright; the stateful parse callback rejects a repeated key inside
+    // one object.
+    struct KeyGuard {
+        std::vector<std::set<std::string>> stack;
+        std::string duplicate;
+        bool operator()(int, nlohmann::json::parse_event_t event,
+                        nlohmann::json& parsed) {
+            using EVT = nlohmann::json::parse_event_t;
+            if (event == EVT::object_start) {
+                stack.emplace_back();
+            } else if (event == EVT::key) {
+                if (!stack.back().insert(parsed.get<std::string>()).second) {
+                    duplicate = parsed.get<std::string>();
+                }
+            } else if (event == EVT::object_end && !stack.empty()) {
+                stack.pop_back();
+            }
+            return true;  // observe only; never discard subtree
+        }
+    } guard;
     nlohmann::json value;
-    in >> value;
-    if (in.bad()) {
-        throw std::runtime_error("corrupt JSON in " + path);
+    try {
+        value = nlohmann::json::parse(in, guard);
+    } catch (const nlohmann::json::exception& e) {
+        throw std::runtime_error("corrupt JSON in " + path + ": " + e.what());
+    }
+    if (!guard.duplicate.empty()) {
+        throw std::runtime_error("duplicate JSON key \"" + guard.duplicate +
+                                 "\" in " + path);
     }
     return value;
 }
@@ -115,7 +148,10 @@ int wait_readable(int fd, int timeout_ms) {
     pfd.events = POLLIN | POLLHUP;
     pfd.revents = 0;
     const int ms = (timeout_ms == 0) ? -1 : timeout_ms;
-    const int r = ::poll(&pfd, 1, ms);
+    int r;
+    do {
+        r = ::poll(&pfd, 1, ms);
+    } while (r < 0 && errno == EINTR);
     if (r == 0) {
         return 0;
     }
@@ -466,6 +502,9 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
+        if (errno == EINTR) {
+            continue;  // signal-interrupted read: retry the poll+read
+        }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             continue;  // spurious wake: re-enter the poll
         }
@@ -489,7 +528,10 @@ void FileDecisionBridge::notify_python() {
     ::sigemptyset(&ignore_action.sa_mask);
     ::sigaction(SIGPIPE, &ignore_action, &old_action);
     const char byte = '\n';
-    const ssize_t n = ::write(req_notify_fd_, &byte, 1);
+    ssize_t n;
+    do {
+        n = ::write(req_notify_fd_, &byte, 1);
+    } while (n < 0 && errno == EINTR);
     ::sigaction(SIGPIPE, &old_action, nullptr);
     if (n < 0) {
         if (errno == EPIPE) {
@@ -527,26 +569,37 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
     }
-    if (resp.value("schema_version", -1) != kDecisionBridgeSchemaVersion) {
-        bridge_fatal("response schema_version mismatch for delivery_sequence=" +
-                     std::to_string(seq));
-    }
-    const uint64_t source_seq =
-        resp.value("source_delivery_sequence", uint64_t(-1));
-    if (source_seq != seq) {
-        bridge_fatal("response source_delivery_sequence=" +
-                     std::to_string(source_seq) + " != request seq=" +
-                     std::to_string(seq));
-    }
-
     // Error before structure (frozen ordering, rule T3/O4): a decision
     // failure aborts with the Python error message, never with a misleading
     // structural diagnostic -- the _fail skeleton carries all-empty arrays
     // and would parse cleanly anyway.
-    const std::string error = resp.value("error", std::string());
-    if (!error.empty()) {
-        bridge_fatal("Python decision failed for delivery_sequence=" +
-                     std::to_string(seq) + ": " + error);
+    // The value<>() extractions throw nlohmann::json::type_error when a key
+    // exists with a JSON type that does not match the default's type; such a
+    // response is malformed and must fail closed through the one-line
+    // [Error] channel (bridge_fatal), never escape as an uncaught exception
+    // (std::terminate bypasses the bridge's fatal contract).
+    try {
+        if (resp.value("schema_version", -1) != kDecisionBridgeSchemaVersion) {
+            bridge_fatal(
+                "response schema_version mismatch for delivery_sequence=" +
+                std::to_string(seq));
+        }
+        const uint64_t source_seq =
+            resp.value("source_delivery_sequence", uint64_t(-1));
+        if (source_seq != seq) {
+            bridge_fatal("response source_delivery_sequence=" +
+                         std::to_string(source_seq) + " != request seq=" +
+                         std::to_string(seq));
+        }
+        const std::string error = resp.value("error", std::string());
+        if (!error.empty()) {
+            bridge_fatal("Python decision failed for delivery_sequence=" +
+                         std::to_string(seq) + ": " + error);
+        }
+    } catch (const std::exception& exc) {
+        bridge_fatal(std::string("malformed response field type for "
+                                 "delivery_sequence=") +
+                     std::to_string(seq) + ": " + exc.what());
     }
 
     // C1 (2026-08-29): ONE structural parse into the typed ParsedGraphBatch.
@@ -568,23 +621,24 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
     }
-    // Phase 6 (方案 §9.1): round-trip accounting. B1 (2026-08-23): the
-    // response contribution to channel_bytes is the on-disk response file
-    // size (stat before the unlink), matching the request side's exact
-    // body-bytes count.
+    // Phase 6 (方案 §9.1): round-trip accounting.
     stats_.roundtrip_count += 1;
     stats_.roundtrip_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - bridge_t0)
             .count();
     // B1 (2026-08-23): the response's channel_bytes contribution is the
-    // REAL on-disk file size (stat, taken before the unlink below). The
-    // previous resp.dump().size() re-serialized the whole response just to
-    // count bytes and reported the compact-dump length, which is NOT the
-    // byte count that crossed the channel (the Python side writes spaced
-    // json.dump files; the request side already counts exact body bytes at
-    // write_file_atomic). Statistical field only (allowed-diff category):
-    // the value shifts slightly upward to the true bridged bytes.
+    // REAL on-disk file size (stat, taken before the unlink below), matching
+    // the request side's exact body-bytes count. The previous
+    // resp.dump().size() re-serialized the whole response just to count
+    // bytes and reported the compact-dump length, which is NOT the byte
+    // count that crossed the channel (since the Python side's C3 change,
+    // 2026-08-28, decision_bridge.py writes response/ack JSON with COMPACT
+    // separators -- dumps(payload, separators=(",", ":")) -- so the stat'
+    // size is again close to a compact dump; the stat remains the
+    // authority because it is the bytes that actually crossed. The request
+    // side already counts exact body bytes at write_file_atomic).
+    // Statistical field only (allowed-diff category).
     struct stat response_stat {};
     if (::stat(response_path(seq).c_str(), &response_stat) != 0) {
         bridge_fatal("stat response " + response_path(seq) + ": " +

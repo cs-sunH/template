@@ -7,23 +7,10 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
-PacketBundle::PacketBundle(Sys* sys,
-                           BaseStream* stream,
-                           std::list<MyPacket*> locked_packets,
-                           bool needs_processing,
-                           bool send_back,
-                           uint64_t size,
-                           MemBus::Transmition transmition) {
-    this->sys = sys;
-    this->locked_packets = locked_packets;
-    this->needs_processing = needs_processing;
-    this->send_back = send_back;
-    this->size = size;
-    this->stream = stream;
-    this->transmition = transmition;
-    creation_time = Sys::boostedTick();
-}
-
+// (The locked_packets constructor parameter is gone: it was passed by value
+// and immediately discarded -- call() used to stamp each packet's ready_time
+// here, and that loop was retired together with the removal of
+// MyPacket::ready_time.)
 PacketBundle::PacketBundle(Sys* sys,
                            BaseStream* stream,
                            bool needs_processing,
@@ -36,7 +23,6 @@ PacketBundle::PacketBundle(Sys* sys,
     this->size = size;
     this->stream = stream;
     this->transmition = transmition;
-    creation_time = Sys::boostedTick();
 }
 
 void PacketBundle::send_to_MA() {
@@ -62,15 +48,18 @@ void PacketBundle::call(EventType event, CallData* data) {
                 "the system configuration before collective processing can "
                 "compute a local memory access delay");
         }
-        // this->delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
+        // delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
         // HBM write/read pays the configured fixed access latency.
+        // delay stays a local: try_register_event consumes it through a
+        // non-const Tick& and zeroes it, so storing it on the object
+        // would be dead state.
         const auto local_mem_access_delay =
             sys->local_mem_latency +
             static_cast<uint64_t>(static_cast<double>(size) /
                                   sys->local_mem_bw * 1e9);
-        this->delay = 3 * local_mem_access_delay;  // write + read + read
+        Tick delay = 3 * local_mem_access_delay;  // write + read + read
         sys->try_register_event(this, EventType::CommProcessingFinished, data,
-                                this->delay);
+                                delay);
         return;
     }
     stream->call(EventType::General, data);

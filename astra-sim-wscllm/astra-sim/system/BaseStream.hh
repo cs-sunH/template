@@ -32,22 +32,16 @@ class BaseStream : public Callable, public StreamStat {
     virtual void init() = 0;
 
     int stream_id;
-    int total_packets_sent;
     std::list<CollectivePhase> phases_to_go;
     int current_queue_id;
     CollectivePhase my_current_phase;
     ComType current_com_type;
-    Tick creation_time;
-    Tick last_init;
     Sys* owner;
     DataSet* dataset;
     int steps_finished;
-    int initial_data_size;
     int priority;
     StreamState state;
     bool initialized;
-
-    Tick last_phase_change;
 
 };
 

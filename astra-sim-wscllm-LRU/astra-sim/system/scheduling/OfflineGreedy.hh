@@ -49,12 +49,17 @@ class OfflineGreedyScheduleJournal {
                         std::vector<int> schedule,
                         uint64_t chunk_size,
                         size_t expected_consumers);
-    static size_t pending_entry_count();
-    static void reset();
 
   private:
     static std::map<OfflineGreedyScheduleKey, OfflineGreedyScheduleEntry>
         entries;
+    // Per-communicator high-water mark of published chunk ids. Chunk ids are
+    // rank-local num_streams counters, so they only agree across ranks while
+    // every rank issues the same collective sequence; a publish whose chunk
+    // id moves backwards within one namespace means two ranks counted
+    // different streams for the same logical collective and the rendezvous
+    // can never complete. publish() rejects that (see OfflineGreedy.cc).
+    static std::map<int64_t, int64_t> last_published_chunk_id;
 };
 
 class DimElapsedTime {

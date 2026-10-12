@@ -11,6 +11,7 @@ Implementation (方案 §4 步骤 1-2 操作 5).
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdio>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -67,6 +68,16 @@ bool split_flag(const std::string& token, std::string& name,
     value = token.substr(eq + 1);
     has_inline_value = true;
     return true;
+}
+
+// (2026-10-01) Render a watchdog bound for diagnostics: std::to_string
+// (double) prints %f with 6 decimals, so the 1e-9 lower bound rendered as
+// "0.000000" and contradicted the rejection it justified. %g keeps the
+// exponent visible for sub-microsecond and gigasecond bounds.
+std::string render_seconds(const double seconds) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%.3g", seconds);
+    return std::string(buffer);
 }
 
 }  // namespace
@@ -183,6 +194,27 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 value = argv[++i];
             }
+            // Empty-value rejection (2026-09-30, ported from the joint repo
+            // OnlineCli.cc parse_online_cli): an explicitly empty inline
+            // value ("--request-queue-csv=") used to be stored as "" and
+            // downgraded to "absent" -- a silent zero-request IDLE run. All
+            // three path options reject the empty spelling here.
+            // (2026-10-01) Flag-like value rejection: "--bridge-dir
+            // --close-input" (a dropped value) used to consume the next
+            // flag as a path, mkdir a directory literally named
+            // "--close-input", and park the bridge open retry forever --
+            // reject values that themselves look like an option token.
+            if (value.empty()) {
+                error = "option " + name + " requires a non-empty value";
+                return false;
+            }
+            if (value.rfind("--", 0) == 0) {
+                error = "option " + name + " requires a value, got the "
+                        "flag-like token " + value +
+                        " (a missing value must not silently swallow the "
+                        "next option)";
+                return false;
+            }
             if (name == "--bridge-dir") {
                 bridge_dir = value;
             } else if (name == "--request-queue-csv") {
@@ -209,6 +241,17 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
             if (!is_ascii_digits(value)) {
                 error = "option " + name + " requires a non-negative "
                         "integer (ASCII digits only), got: " + value;
+                return false;
+            }
+            // (2026-10-01) Flag-like value rejection, same rationale as the
+            // path options above: a dropped value must not silently consume
+            // the following option token. NOTE: on these digit-lexicon
+            // options this arm is unreachable defense ('-' fails
+            // is_ascii_digits first) -- kept for symmetry with the path
+            // options and future lexicon changes.
+            if (value.rfind("--", 0) == 0) {
+                error = "option " + name + " requires a value, got the "
+                        "flag-like token " + value;
                 return false;
             }
             char* end = nullptr;
@@ -270,10 +313,26 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
             if (!value.empty() && (value[0] == '+' || value[0] == '-')) {
                 lex_bad = true;
             }
+            // (2026-10-01) Decimal-only lexicon: strtod also accepts hex
+            // floats ("0x10" -> 16.0) and bare-dot forms; the contract's
+            // stated grammar is decimal seconds ("1e+3"/"1.5" style).
+            // Restrict the first character to a digit or '.', and reject
+            // the 0x prefix explicitly (".5"/"1." stay legal).
+            if (!value.empty() &&
+                !(std::isdigit(static_cast<unsigned char>(value[0])) ||
+                  value[0] == '.')) {
+                lex_bad = true;
+            }
+            if (value.size() >= 2 && value[0] == '0' &&
+                (value[1] == 'x' || value[1] == 'X')) {
+                lex_bad = true;
+            }
             if (lex_bad) {
                 error = "option --idle-watchdog-s requires a non-negative "
-                        "number of seconds with no whitespace or sign "
-                        "characters, got: " + value;
+                        "decimal number of seconds with no whitespace "
+                        "anywhere and no sign character at the leading "
+                        "position (internal signs as in 1e+3 are legal), "
+                        "got: " + value;
                 return false;
             }
             char* end = nullptr;
@@ -293,13 +352,13 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
             } else if (parsed_s < kMinIdleWatchdogSeconds) {
                 error = "option --idle-watchdog-s is below the clock "
                         "resolution (minimum " +
-                        std::to_string(kMinIdleWatchdogSeconds) +
+                        render_seconds(kMinIdleWatchdogSeconds) +
                         " s), got: " + value;
                 return false;
             } else if (parsed_s > kMaxIdleWatchdogSeconds) {
                 error = "option --idle-watchdog-s exceeds the accepted "
                         "upper bound (maximum " +
-                        std::to_string(kMaxIdleWatchdogSeconds) +
+                        render_seconds(kMaxIdleWatchdogSeconds) +
                         " s), got: " + value;
                 return false;
             } else {

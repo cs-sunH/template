@@ -18,13 +18,11 @@ int DataSet::id_auto_increment = 0;
 DataSet::DataSet(int total_streams)
     : DataSet(total_streams, Sys::boostedTick()) {}
 
-DataSet::DataSet(int total_streams, Tick creation_tick) {
+DataSet::DataSet(int total_streams, Tick /*creation_tick*/) {
     this->my_id = id_auto_increment++;
     this->total_streams = total_streams;
     this->finished_streams = 0;
-    this->finish_tick = 0;
     this->active = true;
-    this->creation_tick = creation_tick;
     this->notifier = nullptr;
 }
 
@@ -43,22 +41,24 @@ void DataSet::retain_communicator_group(
     communicator_group_owner_ = std::move(communicator_group);
 }
 
+void DataSet::fire_completion() {
+    Callable* c = notifier->first;
+    EventType ev = notifier->second;
+    delete notifier;
+    notifier = nullptr;
+    IntData* int_data = new IntData(my_id);
+    c->call(ev, int_data);
+    delete int_data;
+}
+
 void DataSet::notify_stream_finished(StreamStat* data) {
+    // The StreamStat payload is identity-only since the write-only statistic
+    // chain was removed (face-LRU audit 2026-09-29).
+    (void)data;
     finished_streams++;
-    if (data != nullptr) {
-        update_stream_stats(data);
-    }
     if (finished_streams == total_streams) {
-        finish_tick = Sys::boostedTick();
         if (notifier != nullptr) {
-            take_stream_stats_average();
-            Callable* c = notifier->first;
-            EventType ev = notifier->second;
-            delete notifier;
-            notifier = nullptr;
-            IntData* int_data = new IntData(my_id);
-            c->call(ev, int_data);
-            delete int_data;
+            fire_completion();
         }
     }
 }

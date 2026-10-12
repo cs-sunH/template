@@ -37,7 +37,12 @@ class Ring final : public BasicTopology {
      * @param npus_count number of npus in a ring
      * @param bandwidth bandwidth of link
      * @param latency latency of link
-     * @param bidirectional true if ring is bidirectional, false otherwise
+     * @param bidirectional true if ring is bidirectional, false otherwise.
+     *        Repo note (2026-09-27): the default `true` is the only
+     *        reachable value -- the sole construction site
+     *        (topology/Helper.cpp) omits the argument -- so the
+     *        unidirectional construction path is unreachable; the
+     *        parameter is retained for signature parity.
      */
     Ring(int npus_count, Bandwidth bandwidth, Latency latency, bool bidirectional = true) noexcept;
 

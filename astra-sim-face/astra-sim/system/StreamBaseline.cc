@@ -25,29 +25,21 @@ StreamBaseline::StreamBaseline(Sys* owner,
 
 void StreamBaseline::init() {
     initialized = true;
-    last_init = Sys::boostedTick();
     if (!my_current_phase.enabled) {
         return;
     }
     my_current_phase.algorithm->run(EventType::StreamInit, nullptr);
-    if (steps_finished == 1) {
-        queuing_delay.push_back(last_phase_change - creation_time);
-    }
-    queuing_delay.push_back(Sys::boostedTick() - last_phase_change);
 }
 
 void StreamBaseline::call(EventType event, CallData* data) {
-    SharedBusStat* sharedBusStat = (SharedBusStat*)data;
-    update_bus_stats(BusType::Both, sharedBusStat);
+    // The payload used to be a heap SharedBusStat stat carrier that this
+    // function accumulated into the (dead) bus stats and then deleted; the
+    // accounting was removed end to end on 2026-10-01 and senders register
+    // no payload, so the event is simply forwarded untouched. No allocation
+    // remains on this path, so ownership stays exactly-once (nothing).
     my_current_phase.algorithm->run(EventType::General, data);
-    if (data != nullptr) {
-        delete sharedBusStat;
-    }
 }
 
 void StreamBaseline::consume(RecvPacketEventHandlerData* message) {
-    net_message_latency.back() +=
-        Sys::boostedTick() - message->ready_time;  // not accurate
-    net_message_counter++;
     my_current_phase.algorithm->run(EventType::PacketReceived, message);
 }

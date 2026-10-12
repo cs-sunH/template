@@ -43,7 +43,7 @@ class CallbackTrackerEntry {
     /**
      * Check if the transmission of the chunk is finished.
      *
-     * @return true if the transmission of the chunk is alread finished,
+     * @return true if the transmission of the chunk is already finished,
      *         false otherwise
      */
     [[nodiscard]] bool is_transmission_finished() const noexcept;

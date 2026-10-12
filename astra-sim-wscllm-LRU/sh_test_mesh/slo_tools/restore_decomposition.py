@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""WP5 restore 三段分解（五仓逐字节相同，标准库实现）。
+"""WP5 restore 三段分解（标准库实现）。
+
+同源性注记（2026-09-30 审查）：本文件曾是五仓逐字节拷贝，现各仓已
+各自演化（本仓 C-3 锚点描述更新、joint 仓加 R6-U8 孤儿锚点计数——
+本仓已同步该计数）；跨仓对拍以函数语义为准，不再声明字节一致。
 
 输入 = cpp.log（full 档；经 slo_common.resolve_cpp_metric_log 统一回退：
 cpp.log → metrics.log → cpp.log.gz，归档后的 run_dir 同样可用）：``[METRIC]``
 行中的
   * type=memory_anchor 记录（subject_id=queue_index, rank, node_id,
     tick_ns；由 C++ 侧 KV transfer 锚点注册——main_online.cc 的
-    last_transfer（名字含 "kv" 的最后节点）→ MetricCollector 事件码 7）；
+    last_transfer（is_kv_route_transfer_leg 精确后缀匹配的 KV 传输
+    腿最后节点,2026-09-30 起替代旧 "kv" 裸子串启发式）→
+    MetricCollector 事件码 7）；
   * type=request 记录（prefill_start_ns/prefill_end_ns 等请求边界）。
 
 每请求：
@@ -82,14 +88,25 @@ def scan_metric_anchors_requests(cpp_log: Path
         if rtype == "memory_anchor":
             subject = record.get("subject_id")
             tick = record.get("tick_ns")
-            if not isinstance(subject, int) or not isinstance(tick, int):
-                fail(f"{cpp_log}: memory_anchor 记录缺整数 subject_id/"
-                     f"tick_ns（{record}）")
+            # bool 是 int 子类须显式排除；subject_id（queue_index）与
+            # tick_ns 均不允许负值（负锚点归属错请求/参与 min 运算直接
+            # 污染 restore_start）。
+            if isinstance(subject, bool) or not isinstance(subject, int) \
+                    or subject < 0 or isinstance(tick, bool) \
+                    or not isinstance(tick, int) or tick < 0:
+                fail(f"{cpp_log}: memory_anchor 记录 subject_id/tick_ns 必须为"
+                     f"非负整数（实得 subject_id={subject!r}, "
+                     f"tick_ns={tick!r}；{record}）")
             anchors.setdefault(subject, []).append(tick)
         elif rtype == "request":
             queue_index = record.get("queue_index")
-            if not isinstance(queue_index, int):
-                fail(f"{cpp_log}: request 记录缺整数 queue_index（{record}）")
+            # G13（2026-09-30）：与上方 memory_anchor 分支同款门——bool
+            # 是 int 子类（True==1 会并进 requests[1]），负值同理拒绝。
+            if (isinstance(queue_index, bool)
+                    or not isinstance(queue_index, int)
+                    or queue_index < 0):
+                fail(f"{cpp_log}: request 记录缺非负整数 queue_index"
+                     f"（实得 {queue_index!r}；{record}）")
             requests[queue_index] = {
                 "queue_index": queue_index,
                 "request_id": record.get("request_id"),
@@ -164,11 +181,18 @@ def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
             "exposed_restore_stall_ns": exposed,
             "hidden_ratio": ratio,
         })
+    # R6-U8（2026-09-29 joint 修正，2026-09-30 本仓同步）：孤儿锚点
+    # （subject_id 无对应 request 记录）旧实现静默丢弃、两侧对不上账
+    # 无留痕——计数入 summary，非零即提示 cpp.log 的 request 记录缺行。
+    n_orphan_anchors = sum(
+        len(ticks) for subject, ticks in anchors.items()
+        if subject not in requests)
     summary = {
         "n_requests": len(rows),
         "n_with_anchors": sum(1 for r in rows
                               if r["restore_complete_ns"] is not None),
         "n_no_anchor_na": n_no_anchor,
+        "n_orphan_anchor_records_dropped": n_orphan_anchors,
         "n_missing_prefill_boundary_na": n_no_boundary,
         "n_zero_restore_duration_na_ratio": n_zero_duration,
         "formula_source": "主规格 §3.2（A 类固定公式，逐字符实现）",

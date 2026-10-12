@@ -79,6 +79,7 @@ windowed_trace_reader_test.cc) so they survive -DNDEBUG Release builds.
 #include <vector>
 
 #include "astra-sim/workload/execution_driven/OnlineCli.hh"
+#include "astra-sim/workload/execution_driven/OnlineCliFamily.hh"
 
 using namespace AstraSim::ExecutionDriven;
 
@@ -126,7 +127,29 @@ std::string parse_error(const std::vector<std::string>& toks) {
 
 }  // namespace
 
+// R15 (2026-09-30, R2 audit): pin the shared online-family prefix table.
+// CmdLineParser.cc exempts exactly these prefixes from its unmatched-token
+// fail-closed guard; before the shared header the two lists were hand-synced
+// copies with nothing locking them together.
+static void test_family_prefix_table() {
+    struct Case { const char* token; bool family; };
+    const Case cases[] = {
+        {"--request-queue-csv", true},   {"--bridge-timeout-ms", true},
+        {"--close-input", true},         {"--online-mode", true},
+        {"--command-fifo", true},        {"--sensing-enabled", true},
+        {"--idle-watchdog-s", true},
+        {"--online", false},             {"--bridge", false},
+        {"--idle", false},               {"--workload-configuration", false},
+        {"--injection-scale", false},    {"-online-mode", false},
+    };
+    for (const Case& c : cases) {
+        expect(is_online_family_token(c.token) == c.family,
+               "R15: family table classifies token as expected");
+    }
+}
+
 int main() {
+    test_family_prefix_table();
     OnlineCliOptions out;
 
     // R1: missing --online-mode is a hard error
@@ -140,12 +163,9 @@ int main() {
     // R2: valid token, separate-value form
     expect(parse_ok({"--online-mode", "strategy"}, out),
            "R2: valid token parses (separate-value form)");
-    expect(out.mode == "strategy",
-           "R2: separate-value form stores mode=strategy");
     // R2: valid token, inline "=" form
     expect(parse_ok({"--online-mode=strategy"}, out),
            "R2: valid token parses (inline \"=\" form)");
-    expect(out.mode == "strategy", "R2: inline form stores mode=strategy");
     // R2: the replay token was removed with the replay route (2026-08-18)
     expect(parse_error({"--online-mode", "replay"})
                .find("unknown --online-mode value") != std::string::npos,
@@ -165,8 +185,7 @@ int main() {
     // CSV, no command FIFO)
     expect(parse_ok({"--online-mode", "strategy"}, out),
            "R3: strategy alone parses (request-neutral defaults)");
-    expect(out.mode == "strategy" && !out.close_input &&
-               out.bridge_dir.empty() &&
+    expect(!out.close_input && out.bridge_dir.empty() &&
                out.request_queue_csv.empty() && out.command_fifo.empty(),
            "R3: no CSV, no command FIFO, no bridge dir, close_input off");
     // 2026-09-05 default pin (R3): the parse path writes back its local

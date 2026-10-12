@@ -10,18 +10,21 @@
 
 基类负责 request-neutral 的簿记:
   - delivery sequence 门(阶段 4 §7.2):Python 记录 last_applied_sequence;
-    重复 delivery(seq == last_applied_sequence)经深度比对后返回上次 batch
-    的 digest(幂等重放,不重新产生任何 assignment/KV action/图节点,状态
-    零变更);跳号/重复旧 seq(seq != last_applied_sequence + 1)即
-    fail-closed(C++ 单在途背压 + 原子文件发布下不可能出现,出现即协议
-    违例);
+    重复 delivery(seq == last_applied_sequence)经深度比对后返回上次
+    GraphBatch dict 的深拷贝副本(幂等重放,不重新产生任何 assignment/
+    KV action/图节点,状态零变更);跳号/重复旧 seq(seq !=
+    last_applied_sequence + 1)即 fail-closed(C++ 单在途背压 + 原子文件
+    发布下不可能出现,出现即协议违例);
   - 校验 C++ 请求 schema(delivery_sequence/tick/reasons/arrivals/completed_groups);
   - 核销 completion:completed_groups 里的每个 stage 从 in-flight 请求的
     待办 stage 集合中移除;REQUEST_COMPLETE(stage == "")把请求整体核销;
   - 处理 arrivals:到达的请求登记为 in-flight(prefill+decode 两段待办);
-  - 批次累加器:本批次所有决策产出的 nodes/parent_edges/watches/
-    assignments/kv_actions/future_alarms 汇集在 self._batch 里,
-    build_graph_batch() 组装成 GraphBatch dict 并写 digest 行。
+  - 批次累加器:本批次决策产出的 watches/assignments/kv_actions/
+    future_alarms 汇集在 self._batch 里;nodes/parent_edges 由构图器
+    (graph_batch_builder)自身的累加器持有,经 _graph_batch() 进入
+    build_graph_batch() 组装成 GraphBatch dict 并写 digest 行
+    (2026-10-01 更正:旧注称节点/边也汇集在 self._batch——对应的两个
+    死键已于当日删除)。
 """
 
 import copy
@@ -44,7 +47,7 @@ _PROPAGATING_TAIL_SOURCE_DELIVERY = "delivery_start"  # _emitted_by_delivery(未
 _PROPAGATING_TAIL_SOURCE_KV = "kv_provisional"        # _provisional_kv_actions(未确认)
 
 # delivery 类来源(delivery_start / kv_provisional)默认上限推导:
-# FileDecisionBridge v0 背压 = 一轮至多 1 个在途 request(C++ 不收到
+# FileDecisionBridge v1 背压 = 一轮至多 1 个在途 request(C++ 不收到
 # response 不发下一个;见 decision_bridge.py 协议头),ack 序列严格 +1
 # 单调(_BoundedSequenceTracker),故最大合法未确认交付数 = 1。默认上限
 # 取 8 = 8x 合法窗口,余量覆盖:响应文件原子发布与 ack 文件写入之间的
@@ -84,7 +87,7 @@ class PropagatingTailTracker:
         }
 
     def configure_limit(self, name, limit) -> None:
-        """显式覆盖某来源上限(测试/运维;必须为正整数)。"""
+        """单测专用:显式覆盖某来源上限(生产路径零调用;必须为正整数)。"""
         self._require(name)["limit"] = int(limit)
 
     def _require(self, name) -> dict:
@@ -113,8 +116,9 @@ class PropagatingTailTracker:
                     source["limit"]))
 
     def snapshot(self) -> dict:
-        """随时可读的观测快照:{来源: {current, peak, grow_count, limit}}。
-        current 动态重读容器(缩减点不挂钩,快照仍准确)。"""
+        """测试专用观测快照(生产零调用;test_propagating_tail 经它断言
+        current/peak/grow_count/limit):{来源: {current, peak, grow_count,
+        limit}}。current 动态重读容器(缩减点不挂钩,快照仍准确)。"""
         return {
             name: {
                 "current": len(source["getter"]()),
@@ -165,6 +169,12 @@ class OnlineSchedulerBase:
         }
         if len(self.unseen_request_ids) != self.expected_request_count:
             raise ValueError("manifest request_id values must be unique")
+        # die 后端发射语境(wscllm 推广;契约 §7 裁定 2/7):manifest 的
+        # compute-cost-model == "die" 时构造 DieModelContext(die-model-
+        # config 绝对路径 + 模型行),每批发射前注入构图器(_begin_graph_
+        # batch)。无键/roofline/replay = legacy,行为不变;未知值 fail-
+        # closed。online_service.py 不感知注入点。
+        self.die_model_context = self._build_die_model_context(manifest, config)
         self.digest_sink = digest_sink  # callable(dict) 或 None(不写 digest)
         # M3 流式落盘(2026-08-23,批次B 移植自 sh_3.0 母本):
         # decision_log_sink / profile_sink 提供时逐行 append+flush 写出,
@@ -196,7 +206,7 @@ class OnlineSchedulerBase:
         # 尚未应用任何交付(首个合法 seq 为 0)。
         self.last_applied_sequence = -1
         # 最近一次已应用交付的 (seq, delta, batch) 副本(幂等重放的凭据;
-        # 重复 delivery 深度比对 delta 后返回缓存 batch 的 digest)。
+        # 重复 delivery 深度比对 delta 后深拷贝返回缓存 batch)。
         # B3(2026-08-23,批次B 移植自 sh_3.0 母本):生产路径默认引用缓存
         # (不深拷)——C++ 单在途背压下无重复交付,重放返回路径
         # (_gate_delivery_sequence)仍逐次 deepcopy,幂等语义不变;仅幂等
@@ -210,7 +220,7 @@ class OnlineSchedulerBase:
         self._acked_through = -1
         self._acked_out_of_order = set()
         self._batch = None        # 本批次累加器(每次 on_decision_batch 重建)
-        # online_decision_log.jsonl 行(replay 模式)。M3 流式落盘起,
+        # online_decision_log.jsonl 行(策略变体自产决策)。M3 流式落盘起,
         # 生产路径(decision_log_sink 提供)行即写即弃,不驻留本列表;
         # online_log_count 恒维护(行号 seq 与结束计数用)。
         self.online_log_rows = []
@@ -260,8 +270,7 @@ class OnlineSchedulerBase:
         # [(request_id, stage), ...]};commit ack 到达时做层转移的凭据。
         self._emitted_by_delivery = {}
         # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数
-        # 无关;full_scan_entries 恒为 0 = 不存在 O(总规模) 全量扫描)。
-        # 行: {delivery_sequence, tick, scanned_entries, full_scan_entries}
+        # 无关)。行: {delivery_sequence, tick, scanned_entries}
         # (profile_sink 逐行写出;缺省 None = 不落盘)。
         self._profile_batch = None
         # 阶段 5 §8.2:Python provisional KV 账本(commit ack 前不入账)。
@@ -336,7 +345,7 @@ class OnlineSchedulerBase:
         返回 GraphBatch dict。
 
         幂等重放(§7.2):seq == last_applied_sequence 的重复 delivery 在
-        sequence 门处直接返回上次 batch 的 digest,以下任何一步都不执行
+        sequence 门处深拷贝返回上次 GraphBatch dict,以下任何一步都不执行
         (不重新产生 assignment/KV action/图节点,状态零变更)。
 
         阶段 6 §9.1:scheduler_self_ns = 本函数 Python 墙钟耗时(两次返回
@@ -462,7 +471,6 @@ class OnlineSchedulerBase:
                 "delivery_sequence": delivery_sequence,
                 "tick": self._batch["tick"],
                 "scanned_entries": self._profile_batch["scanned_entries"],
-                "full_scan_entries": self._profile_batch["full_scan_entries"],
             })
         return batch
 
@@ -470,11 +478,11 @@ class OnlineSchedulerBase:
 
     def _gate_delivery_sequence(self, delta: dict):
         """阶段 4 §7.2 delivery sequence 门。返回 None = 正常新交付,继续
-        走完整管线;返回 dict = 幂等重放(上次 batch 的 digest 副本)。
+        走完整管线;返回 dict = 幂等重放(上次 GraphBatch dict 的深拷贝)。
 
         - 幂等:seq == last_applied_sequence -> 深度比对 delta 与缓存(同
-          seq 不同内容 = 协议违例 fail-closed),一致则返回缓存 batch 的
-          digest,不重新产生任何 assignment/KV action/图节点,状态零变更;
+          seq 不同内容 = 协议违例 fail-closed),一致则深拷贝返回缓存
+          batch,不重新产生任何 assignment/KV action/图节点,状态零变更;
         - 单调:seq != last_applied_sequence + 1 -> fail-closed(C++ 单在途
           背压 + 原子文件发布下不可能跳号;重复旧 seq 亦属违例——本通道的
           重复只能是对同一交付的重试,即"上一次交付")。
@@ -788,13 +796,17 @@ class OnlineSchedulerBase:
                 out.write(line)
 
     def _start_batch(self, delta: dict) -> None:
-        self._profile_batch = {"scanned_entries": 0, "full_scan_entries": 0}
+        self._profile_batch = {"scanned_entries": 0}
+        # (2026-10-01) The former "nodes": [] / "parent_edges": [] keys are
+        # removed: they were write-only (build_graph_batch takes the node
+        # arrays from the graph builder's own accumulator via _graph_batch;
+        # nothing ever read self._batch["nodes"]/"parent_edges"]). The
+        # watches/assignments/kv_actions/future_alarms lists below ARE
+        # read-write accumulators.
         self._batch = {
             "delivery_sequence": delta["delivery_sequence"],
             "tick": delta["tick"],
             "reasons": list(delta["reasons"]),
-            "nodes": [],
-            "parent_edges": [],
             "watches": [],
             "assignments": [],
             "kv_actions": [],
@@ -815,25 +827,55 @@ class OnlineSchedulerBase:
         # (步骤 1-9)持有自己的构图器时同样生效。
         self._begin_graph_batch()
 
+    @staticmethod
+    def _build_die_model_context(manifest, config):
+        """manifest -> DieModelContext(backend 声明的唯一来源)。
+
+        compute-cost-model 缺失/roofline/replay -> None(legacy 回归保护:
+        旧 plan 目录的 manifest 无该键,行为不变);"die" -> 构造;其他值
+        fail-closed。惰性 import:legacy 路径不加载 die_model_adapter。"""
+        backend = manifest.get("compute-cost-model") if isinstance(
+            manifest, dict) else None
+        if backend is None or backend in ("roofline", "replay"):
+            return None
+        if backend != "die":
+            raise ValueError(
+                "manifest compute-cost-model {!r} is unsupported (expected "
+                "'die', 'roofline' or 'replay')".format(backend))
+        try:
+            from online.die_model_adapter import DieModelContext  # noqa: E402
+        except ImportError:  # pragma: no cover -- flat-import 调用方兜底
+            from die_model_adapter import DieModelContext  # noqa: E402
+        return DieModelContext.from_service(manifest, config)
+
     def _begin_graph_batch(self) -> None:
         """变体若持有构图器(GraphBatchBuilder),每批发射前
-        重建其批次累加器;没有则跳过(基类自身不构图)。"""
+        重建其批次累加器;没有则跳过(基类自身不构图)。
+
+        wscllm die 推广:同时把 die 发射语境注入构图器(幂等 setter)。
+        注入点在 run_variant_policy 之前(发射即消费);构图器由
+        online_service 构造时不感知 backend,manifest 是唯一声明源。"""
         graph = getattr(self, "graph", None)
         if graph is not None and hasattr(graph, "begin_batch"):
             graph.begin_batch()
+        die_context = getattr(self, "die_model_context", None)
+        if die_context is not None and graph is not None and hasattr(
+                graph, "set_die_context"):
+            graph.set_die_context(die_context)
 
     def _graph_batch(self) -> dict:
-        """构图器累加器(节点/边);没有构图器时返回空批次模板。"""
+        """构图器累加器(节点/边);没有构图器时返回空批次模板。
+
+        模板只携带本方法唯一消费方 build_graph_batch 读取的两键(nodes/
+        parent_edges);watches/assignments/kv_actions/future_alarms 恒取自
+        self._batch(变体累加器),模板里的同名键是零读者死键
+        (SCHED-9,2026-09-28 删除)。"""
         graph = getattr(self, "graph", None)
         if graph is not None and graph.batch is not None:
             return graph.batch
         return {
             "nodes": [],
             "parent_edges": [],
-            "watches": [],
-            "assignments": [],
-            "kv_actions": [],
-            "future_alarms": [],
         }
 
     def _settle_completions(self, delta: dict) -> None:
@@ -858,7 +900,7 @@ class OnlineSchedulerBase:
             if stage == STAGE_REQUEST:
                 del self.in_flight[request_id]
                 self.completed_request_count += 1
-                # 阶段 3 感知:REQUSET_COMPLETE 边界核销 -> completed-unreconciled。
+                # 阶段 3 感知:REQUEST_COMPLETE 边界核销 -> completed-unreconciled。
                 self._ledger_complete(request_id, delta["tick"])
             else:
                 if stage not in pending:
@@ -898,8 +940,8 @@ class OnlineSchedulerBase:
         """把一次实际执行的决策写入 online_decision_log(与离线
         decision_log.jsonl 同构: seq/tick/priority/kind/request_id/decision)。
 
-        replay 模式默认沿用离线记录的 decision 内容(重放的就是离线决策);
-        变体可传入自产 decision。seq 用在线决策序(1 起),tick 用在线边界 tick。
+        缺省沿用 record 自带的 decision 内容;变体可传入自产 decision。
+        seq 用在线决策序(1 起),tick 用在线边界 tick。
 
         M3 流式落盘:提供 decision_log_sink 时行即写即弃(online_log_count
         恒维护行号);缺省缓冲在 online_log_rows(兼容测试/夹具直读)。
@@ -956,8 +998,8 @@ class OnlineSchedulerBase:
     # --------------------------------------------------------------- 收尾 --
 
     def on_commit_ack(self, ack: dict) -> None:
-        """commit ack 到达(provisional 账本 finalize 挂接点;replay 模式只
-        计数)。阶段 3:ack 的 batch_id == 请求批次 delivery_sequence;该批次
+        """commit ack 到达(provisional 账本 finalize 挂接点)。阶段 3:ack
+        的 batch_id == 请求批次 delivery_sequence;该批次
         发射过的 request/stage 转移入 committed 层(分层账本最小子集;
         簿记免费,感知关闭时同样记账)。
 
@@ -984,6 +1026,16 @@ class OnlineSchedulerBase:
             raise ValueError(
                 "ack batch_id {} != delivery_sequence {} (v1 forbids "
                 "divergence)".format(ack.get("batch_id"), seq))
+        # SCHED-4(2026-09-28):v1 ack 的 success 字段(协议冻结保留字段,
+        # C++ FileDecisionBridge::send_commit_ack 侧注记)被消费——commit
+        # ack 只在批次完整提交后发出,任何失败都在 ack 之前 fail-closed
+        # abort,故现役生产者恒传 true、字面 false 即对端自称未提交,按
+        # 协议违例 fail-closed。缺席/true 放行(兼容不携带该字段的夹具
+        # ack;test_propagating_tail 等)。
+        if ack.get("success") is False:
+            raise ValueError(
+                "ack for delivery {} reports success=false (peer claims "
+                "the batch did not commit; fail-closed)".format(seq))
         if seq > self.last_applied_sequence:
             raise ValueError(
                 "ack for delivery {} not yet applied (last_applied={})"
@@ -1023,6 +1075,22 @@ class OnlineSchedulerBase:
     def verify_run_end(self) -> None:
         """serve_forever 返回(EOF)后的协议一致性校验;失败抛异常(fail-closed)。"""
         if self.ack_count != self.delivery_count:
+            # SCHED-6(2026-09-28):C++ 单在途背压下 ack 严格随 response 到达
+            # (读完 response 才发 ack,再发下一 request),故 ack_count <
+            # delivery_count 只能是尾部交付未被确认 = ack 流在运行中途中断
+            # ——即 serve_forever 因 C++ 写端关闭(EOF,中途 abort/崩溃)返
+            # 回,不是 Python ack 记账失步;正常结束的运行 ack 水位必然闭
+            # 合(_acked_through == last_applied_sequence ⇒ 每笔恰一 ack ⇒
+            # 计数相等)。诊断据此分岔,不再一律误报"protocol mismatch"。
+            if self._acked_through < self.last_applied_sequence:
+                raise RuntimeError(
+                    "run ended at bridge EOF with unacknowledged deliveries: "
+                    "acked_through={} < last_applied={} (ack_count={} "
+                    "delivery_count={}) — the C++ side stopped acking "
+                    "mid-run (abort/crash before run end), not an ack "
+                    "bookkeeping desync".format(
+                        self._acked_through, self.last_applied_sequence,
+                        self.ack_count, self.delivery_count))
             raise RuntimeError(
                 "protocol mismatch at run end: ack_count={} != delivery_count={}"
                 .format(self.ack_count, self.delivery_count))
@@ -1091,9 +1159,19 @@ class OnlineSchedulerBase:
                 "(completed={} unreconciled={})".format(
                         self.completed_request_count,
                         self.ledger_completed_unreconciled_count))
-            if self.injected_unfinished_record_count == 0:
+            # SCHED-5(2026-09-28):injected-unfinished 摘要每已应用交付恰
+            # 记录一次(_record_ledger_summary 仅应用路径调用,先于
+            # delivery_count 递增)——二者 run 末恒等。断言改等式:零交付
+            # 感知运行(如 0-request 冒烟,两者同为 0)合法通过,不再被旧
+            # 的"record_count != 0"断言误判失败;失衡(应用了交付却漏记
+            # 摘要)仍 fail-closed。
+            if self.injected_unfinished_record_count != self.delivery_count:
                 raise RuntimeError(
-                    "sensing ledger: no injected-unfinished history recorded")
+                    "sensing ledger: injected-unfinished history records "
+                    "({}) != applied deliveries ({}) — the ledger_summary "
+                    "chain is broken".format(
+                        self.injected_unfinished_record_count,
+                        self.delivery_count))
 
     def _release_acknowledged_reply(self, seq: int) -> None:
         """Drop the last response as soon as C++ confirms receipt.
@@ -1117,5 +1195,3 @@ class OnlineSchedulerBase:
         graph = getattr(self, "graph", None)
         if graph is not None and hasattr(graph, "batch"):
             graph.batch = None
-            if hasattr(graph, "batch_first_step"):
-                graph.batch_first_step = False

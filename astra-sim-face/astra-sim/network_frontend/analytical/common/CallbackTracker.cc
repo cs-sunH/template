@@ -4,6 +4,7 @@ LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
 #include "common/CallbackTracker.hh"
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -55,7 +56,7 @@ CallbackTrackerEntry* CallbackTracker::create_new_entry(
     // create key
     const auto key = std::make_tuple(tag, src, dest, chunk_size, chunk_id);
 
-    // create new emtpy entry
+    // create new empty entry
     const auto entry = tracker.emplace(key, CallbackTrackerEntry()).first;
 
     // return pointer to entry
@@ -90,4 +91,21 @@ void CallbackTracker::pop_entry(const int tag,
 
     // erase entry from the tracker
     tracker.erase(entry);
+}
+
+size_t CallbackTracker::size() const noexcept {
+    return tracker.size();
+}
+
+std::vector<std::tuple<int, int, int, ChunkSize, int>>
+CallbackTracker::resident_key_samples(const size_t max_samples) const {
+    std::vector<std::tuple<int, int, int, ChunkSize, int>> samples;
+    samples.reserve(std::min(max_samples, tracker.size()));
+    for (const auto& entry : tracker) {
+        if (samples.size() >= max_samples) {
+            break;
+        }
+        samples.push_back(entry.first);
+    }
+    return samples;
 }

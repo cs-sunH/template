@@ -15,7 +15,8 @@ class Workload;
 
 class WorkloadLayerHandlerData : public BasicEventHandlerData, public MetaData {
   public:
-    int sys_id;
+    // sys_id is inherited from BasicEventHandlerData; redeclaring it here
+    // would shadow the base field and read back garbage via a base pointer.
     Workload* workload;
     uint64_t node_id;
     WorkloadLayerHandlerData();

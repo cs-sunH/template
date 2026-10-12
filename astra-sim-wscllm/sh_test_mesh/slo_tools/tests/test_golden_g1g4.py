@@ -149,8 +149,16 @@ class G1SingleRequestNoContention(unittest.TestCase):
             ])
         manifest = synthetic.write_slo_manifest(
             self.run_dir, {"imbalance_bucket_ns": 1000})
-        intervals = load_imbalance.collect_intervals(self.run_dir,
-                                                     "astra-sim-face")
+        # D2: collect_intervals 已删（仅测试引用的死包装）——直接组合
+        # 生产原语（与 CLI/driver 同一循环体）。
+        _state = load_imbalance.li_prepare()
+        for _record in load_imbalance.iter_jsonl(
+                self.run_dir / load_imbalance.DECISION_LOG_RELPATH):
+            load_imbalance.li_consume_decision(
+                _record, "astra-sim-face", _state)
+        _drains, _skipped = load_imbalance.li_collect_drains(self.run_dir)
+        intervals = load_imbalance.li_assemble_intervals(
+            _state, _drains, _skipped)
         self.assertEqual(intervals, [{
             "request_id": "s0_r0", "instance": 3,
             "admission_ns": 2000, "drain_ns": 8000}])
@@ -251,8 +259,16 @@ class G2TwoRequestsQueued(unittest.TestCase):
             ])
         manifest = synthetic.write_slo_manifest(
             self.run_dir, {"imbalance_bucket_ns": 100})
-        intervals = load_imbalance.collect_intervals(self.run_dir,
-                                                     "astra-sim-face")
+        # D2: collect_intervals 已删（仅测试引用的死包装）——直接组合
+        # 生产原语（与 CLI/driver 同一循环体）。
+        _state = load_imbalance.li_prepare()
+        for _record in load_imbalance.iter_jsonl(
+                self.run_dir / load_imbalance.DECISION_LOG_RELPATH):
+            load_imbalance.li_consume_decision(
+                _record, "astra-sim-face", _state)
+        _drains, _skipped = load_imbalance.li_collect_drains(self.run_dir)
+        intervals = load_imbalance.li_assemble_intervals(
+            _state, _drains, _skipped)
         self.assertEqual(len(intervals), 2)
         stats = load_imbalance.instance_timeavg_backlog(intervals, 100,
                                                         100, 900)
@@ -421,8 +437,10 @@ class ScanExportSkeletonTests(unittest.TestCase):
             synthetic.request_row(request_id="r0", queue_index="0",
                                   arrival_ns="0", completion_ns="10",
                                   e2e_ns="10"),
+            # A4-9（2026-09-26）：原 dropped 行改 failed（词表收紧后同
+            # 角色非 completed 终态），drain 断言语义不变。
             synthetic.request_row(request_id="r1", queue_index="1",
-                                  terminal_status="dropped"),
+                                  terminal_status="failed"),
         ])
         args = slo_argv(["scan-export", "--point", f"{run_dir}=1.0",
                          "-o", "-"])

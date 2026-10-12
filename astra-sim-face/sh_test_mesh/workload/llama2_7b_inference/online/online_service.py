@@ -38,6 +38,11 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 
 from generate_face_trace import load_face_trace_config  # noqa: E402
 from online.decision_bridge import BridgeServer  # noqa: E402
+from online.die_model_oracle import (  # noqa: E402
+    MANIFEST_COMPUTE_COST_MODEL_KEY,
+    DieModelOracle,
+    resolve_die_model_config_path,
+)
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
 
 
@@ -66,8 +71,8 @@ class _JsonlSink:
     """jsonl 逐行落盘器(M3 流式落盘 + B2 常驻 fd,2026-08-23)。
 
     常驻 fd:构造(或首行)时打开一次,__call__ 只 write+flush,结束
-    close——不再每行 open/close。行格式与 _write_jsonl 完全一致
-    (json.dumps(row, sort_keys=True) + "\\n"),行序不变 ⇒ 与改前结束
+    close——不再每行 open/close。行格式恒为
+    json.dumps(row, sort_keys=True) + "\\n",行序不变 ⇒ 与改前结束
     一次性写出的文件逐字节相同。
 
     eager=True:构造即截断建文件(与改前"结束统一写出"对 0 行也建空
@@ -78,7 +83,8 @@ class _JsonlSink:
 
     def __init__(self, path: str, *, eager: bool = True):
         self.path = path
-        self.count = 0
+        # (2026-10-01) the write-only row counter is removed (zero readers;
+        # the verify tools keep their own sink-local counters).
         self._output = None
         if eager:
             self._open()
@@ -94,7 +100,6 @@ class _JsonlSink:
         # 阶段 7 §10.3:强制 flush 治理——流式审计行,崩溃/被杀时不得丢失
         # 尾部(常驻 fd 缓冲会滞留;每行一次 flush 的开销可忽略)。
         self._output.flush()
-        self.count += 1
 
     def close(self) -> None:
         if self._output is not None:
@@ -108,24 +113,16 @@ class _DigestSink(_JsonlSink):
 
 
 class _NullSink:
-    """D2(2026-08-28):丢弃型 sink——行计数保持、不序列化不落盘不驻留。
+    """D2(2026-08-28):丢弃型 sink——不序列化不落盘不驻留。
     供默认关的 jsonl(profile 等)使用:行 dict 由产出方构造(字段精简,
-    开销可忽略),昂贵的 json.dumps+flush 与文件驻留全部跳过。"""
-
-    def __init__(self):
-        self.count = 0
+    开销可忽略),昂贵的 json.dumps+flush 与文件驻留全部跳过。(2026-10-01
+    行计数属性已随 _JsonlSink 的一并删除:两者都零读者。)"""
 
     def __call__(self, row: dict) -> None:
-        self.count += 1
+        pass
 
     def close(self) -> None:
         pass
-
-
-def _write_jsonl(path: str, rows: list) -> None:
-    with open(path, "w", encoding="utf-8") as output:
-        for row in rows:
-            output.write(json.dumps(row, sort_keys=True) + "\n")
 
 
 def main(argv=None) -> int:
@@ -142,6 +139,16 @@ def main(argv=None) -> int:
                         help="阶段 3 感知开关(默认关,阶段 6 前默认关):分层"
                              "账本最小子集 + 两层剩余负载查询;感知数据是"
                              "查询/审计输入,不进策略判据,决策序列不变")
+    parser.add_argument(
+        "--die-model-lib", default=None,
+        help="阶段 D:libdie_model_cabi.so 路径(缺省 env "
+             "DIE_MODEL_CABI_PATH → 仓内 build 发现序,见 "
+             "online/die_model_oracle.py;fail-closed,不回退 roofline)")
+    parser.add_argument(
+        "--die-model-config", default=None,
+        help="阶段 D:resolved_die_model.json 路径(缺省 env "
+             "DIE_MODEL_CONFIG_PATH → 仓内发现 → manifest 的 "
+             "die-model-config 键)")
     args = parser.parse_args(argv)
 
     manifest_path = os.path.join(args.plan_dir, "manifest.json")
@@ -160,6 +167,48 @@ def main(argv=None) -> int:
 
     # 根因 #5(蓝本裁决 2026-08-15 第三项):strategy 模式保持物理跨 request 链。
     graph = GraphBatchBuilder(config)
+
+    # 阶段 D(2026-10-03,契约 §3.2/§7 裁定 2):计算成本后端选择。
+    # backend=die(manifest compute-cost-model == "die",或显式
+    # --die-model-lib/--die-model-config 选通)时构造 DieModelOracle 注入
+    # 调度器——select_decode_instance 的本地计算成本换 die 孤立估值;
+    # backend 非 die 完全不走此路(缺 manifest 键 = 旧 roofline 兼容态,
+    # 回归保护)。die 后端下库/配置缺位一律 fail-closed,绝不静默回退。
+    compute_cost_model = manifest.get(MANIFEST_COMPUTE_COST_MODEL_KEY)
+    if compute_cost_model is not None and compute_cost_model not in (
+            "die", "roofline", "replay"):
+        raise ValueError(
+            "manifest {!r} must be one of die|roofline|replay, got {!r}"
+            .format(MANIFEST_COMPUTE_COST_MODEL_KEY, compute_cost_model))
+    if compute_cost_model in ("roofline", "replay") and (
+            args.die_model_lib is not None
+            or args.die_model_config is not None):
+        raise ValueError(
+            "manifest compute-cost-model={!r} conflicts with explicit "
+            "--die-model-lib/--die-model-config (die backend)".format(
+                compute_cost_model))
+    die_backend = (
+        compute_cost_model == "die"
+        or args.die_model_lib is not None
+        or args.die_model_config is not None
+    )
+    cost_oracle = None
+    if die_backend:
+        die_config_path = resolve_die_model_config_path(
+            explicit=args.die_model_config,
+            manifest=manifest,
+            plan_dir=args.plan_dir,
+        )
+        if die_config_path is None:
+            raise RuntimeError(
+                "die backend requires resolved_die_model.json: pass "
+                "--die-model-config, set DIE_MODEL_CONFIG_PATH, materialize "
+                "a discoverable copy, or set the manifest die-model-config "
+                "key (fail-closed; no roofline fallback)")
+        cost_oracle = DieModelOracle(
+            lib_path=args.die_model_lib,
+            config_json_path=str(die_config_path),
+        )
     # C2/D2(2026-08-28):digest 默认关(SH_GRAPH_DIGESTS=1 恢复恒写)。
     digest_sink = (
         _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
@@ -211,6 +260,7 @@ def main(argv=None) -> int:
             sensing_query_sink=sensing_query_sink,
             online_stats_sink=online_stats_sink,
             ledger_sink=ledger_sink,
+            cost_oracle=cost_oracle,
         )
     else:
         raise ValueError(
@@ -233,11 +283,12 @@ def main(argv=None) -> int:
 
     # 运行结束校验(fail-closed):
     scheduler.verify_run_end()
-    # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
-    # full_scan_entries 恒为 0)——M3 起已在 build_graph_batch 逐行流式
-    # 写出,不再结束一次性写出。
-    if getattr(scheduler, "profile_sink", None) is None:
-        scheduler.dump_profile(os.path.join(args.bridge_dir, "profile.jsonl"))
+    # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关)
+    # ——profile_sink 恒非 None(SH_PROFILE_JSONL=1 为 _JsonlSink,默认为
+    # _NullSink),行已在 build_graph_batch 逐行流式处理;结束期不存在
+    # 兜底写出路径(A2-7,2026-09-26:原 dump_profile 回退分支在本 CLI
+    # 恒不可达,已删;2026-09-29:基类 dump_profile/profile_rows 死代码对
+    # 亦已删,无 sink 即不构建不驻留)。
 
     # 阶段 6 §9.1:online_stats.jsonl -- 分项计数器统一采集(Python 侧)。
     # 每已应用交付一行(合并桥接层每 request 服务时间) + 一行汇总。
@@ -272,13 +323,18 @@ def main(argv=None) -> int:
     partial_path = os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME)
 
     def _base_stat_rows():
-        if getattr(scheduler, "online_stats_sink", None) is not None:
-            with open(partial_path, "r", encoding="utf-8") as source:
-                for line in source:
-                    if line.strip():
-                        yield json.loads(line)
-        else:
-            yield from scheduler.online_stats_rows
+        # (2026-09-29)原 else 分支(缓冲 scheduler.online_stats_rows)已删:
+        # 本 CLI 恒传 _JsonlSink(基础行进 .partial 暂存),该分支仓内不可达
+        # (缓冲形态仅供基类测试/夹具直读);缺 sink 即装配损坏,fail-closed
+        # 而非静默空流。
+        if getattr(scheduler, "online_stats_sink", None) is None:
+            raise RuntimeError(
+                "online_stats sink is None; this CLI always streams base "
+                "rows to {}".format(ONLINE_STATS_PARTIAL_NAME))
+        with open(partial_path, "r", encoding="utf-8") as source:
+            for line in source:
+                if line.strip():
+                    yield json.loads(line)
 
     def _merged_stat_rows():
         # 两个输入都是严格 delivery_sequence 顺序流,用 merge join 保持 O(1)
@@ -316,15 +372,8 @@ def main(argv=None) -> int:
         os.unlink(partial_path)
     server.discard_per_request_stats()
 
-    # online_decision_log / train_ledger 已由 _JsonlSink 逐行落盘(M3)。
-    if getattr(scheduler, "decision_log_sink", None) is None:
-        _write_jsonl(os.path.join(args.bridge_dir, DECISION_LOG_NAME),
-                     scheduler.online_log_rows)
-    # 拼 batch 列车台账(§7.3 不变量断言输入;每次列车发射一行)。
-    if (getattr(scheduler, "train_ledger_sink", None) is None
-            and getattr(scheduler, "train_ledger_rows", None)):
-        _write_jsonl(os.path.join(args.bridge_dir, "train_ledger.jsonl"),
-                     scheduler.train_ledger_rows)
+    # online_decision_log / train_ledger 已由 _JsonlSink 逐行落盘(M3;
+    # 本 CLI 恒传非 None sink,结束期无兜底写出路径)。
     if args.sensing:
         # 阶段 3:分层账本导出(结束总账核对与差异报告输入;感知关闭的
         # 正式跑不经过这里)。B3:sensing_query_log 已流式落盘,不再结束
@@ -336,6 +385,9 @@ def main(argv=None) -> int:
                  profile_sink, sensing_query_sink, ledger_sink):
         if sink is not None:
             sink.close()
+    # 阶段 D:释放 die 成本库模型句柄(库内 LRU 计划缓存随句柄销毁)。
+    if cost_oracle is not None:
+        cost_oracle.close()
     return 0
 
 

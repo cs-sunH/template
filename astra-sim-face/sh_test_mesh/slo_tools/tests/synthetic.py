@@ -108,7 +108,7 @@ def write_jsonl(run_dir: Path, name: str,
 
 
 def write_slo_manifest(root: Path, params: dict) -> Path:
-    """带值的测试用 slo_params_manifest.json（生产仓内清单 value=null）。"""
+    """带值的测试用 slo_params_manifest.json（B4b 后生产仓内清单亦已全量填值）。"""
     base = json.loads(
         (Path(__file__).resolve().parent.parent /
          "slo_params_manifest.json").read_text(encoding="utf-8"))

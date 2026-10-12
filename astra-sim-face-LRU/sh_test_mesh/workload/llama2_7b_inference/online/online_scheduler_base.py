@@ -44,7 +44,7 @@ _PROPAGATING_TAIL_SOURCE_DELIVERY = "delivery_start"  # _emitted_by_delivery(未
 _PROPAGATING_TAIL_SOURCE_KV = "kv_provisional"        # _provisional_kv_actions(未确认)
 
 # delivery 类来源(delivery_start / kv_provisional)默认上限推导:
-# FileDecisionBridge v0 背压 = 一轮至多 1 个在途 request(C++ 不收到
+# FileDecisionBridge 背压 = 一轮至多 1 个在途 request(C++ 不收到
 # response 不发下一个;见 decision_bridge.py 协议头),ack 序列严格 +1
 # 单调(_BoundedSequenceTracker),故最大合法未确认交付数 = 1。默认上限
 # 取 8 = 8x 合法窗口,余量覆盖:响应文件原子发布与 ack 文件写入之间的
@@ -130,6 +130,22 @@ class PropagatingTailTracker:
 # in-flight 核销,由变体的列车核销逻辑按 train_id 路由。
 BATCH_TRAIN_PREFIX = "batch_train_"
 
+# P1-6(face-LRU 审计,2026-09-29):节点名保留子串。C++ 锚点注册
+# (main_online.cc register_online_metrics_anchors)按精确命名段识别 KV
+# 传输锚点(_kv_send_rank / _kv_recv_rank / _kv_transfer_action)、
+# first_token 标记(_first_token_)、阶段起始锚点(_pstart_ / _join_)与
+# 列车哨兵前缀(batch_train_);图节点名内嵌 request_id/session_id
+# (经 sanitize 保留字母数字与 _/-),id 一旦携带保留子串会把传输锚点
+# 误路由 / first_token 标记错锚且数值"貌似合理"、把队列等待或恢复链
+# 时间吸进 decode 窗口(_pstart_/_join_ 按 (request_id, rank) 注册
+# decode_start 起始锚点)、或让 _settle_completions 的哨兵前缀通道
+# 静默跳过核销(batch_train_ 前缀)。加载侧 fail-closed 拒绝(区分
+# 大小写,与 C++ find 匹配同口径;2026-10-01 补 _pstart_/_join_/
+# batch_train_ 三段——此前仅 kv/first_token 两段入清单,其余锚点段
+# 无 manifest 门)。
+_RESERVED_NODE_NAME_SUBSTRINGS = ("kv", "first_token", "_join_", "_pstart_")
+_RESERVED_REQUEST_ID_PREFIXES = ("batch_train_",)
+
 # 完成边界 stage -> 语义(与 C++ build_request_json 的 completed_groups 一致)。
 STAGE_PREFILL = "prefill"
 STAGE_DECODE = "decode"
@@ -137,37 +153,59 @@ STAGE_REQUEST = ""  # REQUEST_COMPLETE: 该 request 全部阶段完成(收尾/�
 
 
 class OnlineSchedulerBase:
-    """批次框架基类。run_variant_policy 由变体(replay/strategy)实现。"""
+    """批次框架基类。run_variant_policy 由变体实现(replay 决策日志回放
+    变体已随 2026-08-18 批删除,现存变体 = strategy 在线策略)。"""
 
     def __init__(
         self,
         *,
         manifest: dict,
         config,
-        replay=None,
         digest_sink=None,
-        mode: str = "replay",
         sensing: bool = False,
         decision_log_sink=None,
         profile_sink=None,
-        defensive_reply_cache: bool = False,
         sensing_query_sink=None,
         online_stats_sink=None,
         ledger_sink=None,
     ):
-        self.mode = mode
         self.config = config
         # 运行期不保留完整 manifest 或 request_id -> manifest record 副本。
         # 唯一需要跨 delivery 保存的输入身份状态是尚未到达的 request ID：
         # arrival 后立即删除，故它单调缩小，不会随完成请求永久增长。
         requests = manifest["requests"]
         self.expected_request_count = len(requests)
+        for record in requests:
+            for field in ("request_id", "session_id"):
+                value = record.get(field, "")
+                for token in _RESERVED_NODE_NAME_SUBSTRINGS:
+                    if token in value:
+                        raise ValueError(
+                            "manifest {} {!r} contains reserved node-name "
+                            "substring {!r} (metric anchors match node-name "
+                            "segments; ids are embedded verbatim into every "
+                            "graph node name)".format(field, value, token))
+                if field == "request_id":
+                    for prefix in _RESERVED_REQUEST_ID_PREFIXES:
+                        if value.startswith(prefix):
+                            raise ValueError(
+                                "manifest request_id {!r} uses reserved "
+                                "sentinel prefix {!r} (train sentinel watch "
+                                "channel would silently skip settlement)"
+                                .format(value, prefix))
         self.unseen_request_ids = {
             record["request_id"] for record in requests
         }
         if len(self.unseen_request_ids) != self.expected_request_count:
             raise ValueError("manifest request_id values must be unique")
-        self.replay = replay
+        # die 后端发射语境(阶段 C;契约 §7 裁定 2/7;face-LRU 随迁
+        # 2026-10-03):manifest 的 compute-cost-model == "die" 时构造
+        # DieModelContext(die-model-config 绝对路径 + 模型行),每批发射前
+        # 注入构图器(_begin_graph_batch)。无键/roofline/replay = legacy,
+        # 行为不变;未知值 fail-closed。online_service.py 不感知注入点。
+        self.die_model_context = self._build_die_model_context(manifest, config)
+        # 2026-09-26(R2 py-online-D2):原 self.mode/self.replay 只写不读
+        # 死字段移除(replay 变体已删;strategy 子类自行校验 mode)。
         self.digest_sink = digest_sink  # callable(dict) 或 None(不写 digest)
         # M3 流式落盘(2026-08-23):decision_log_sink / profile_sink 提供
         # 时逐行 append+flush 写出,调度器不再驻留行列表(online_log_count
@@ -200,9 +238,11 @@ class OnlineSchedulerBase:
         # 重复 delivery 深度比对 delta 后返回缓存 batch 的 digest)。
         # B3(2026-08-23):生产路径默认引用缓存(不深拷)——C++ 单在途
         # 背压下无重复交付,重放返回路径(_gate_delivery_sequence)仍逐次
-        # deepcopy,幂等语义不变;仅幂等 fixture(defensive_reply_cache=
-        # True,显式开关)保留改前的双深拷防御姿态。
-        self.defensive_reply_cache = bool(defensive_reply_cache)
+        # deepcopy,幂等语义不变。
+        # (2026-09-30) N 死代码清理:defensive_reply_cache 参数与双深拷
+        # 分支删除——全仓 grep 零调用(无任何构造点传 True;幂等 fixture
+        # 经重放路径的逐次 deepcopy 获得同等防御,见 _gate_delivery_
+        # sequence)。
         self._delivery_reply_cache = None
         # Ack 去重采用连续水位 + 少量乱序洞，而不是已见 seq 的永久集合。
         # _acked_out_of_order 至多覆盖仍在 _emitted_by_delivery 中等待确认的
@@ -210,7 +250,7 @@ class OnlineSchedulerBase:
         self._acked_through = -1
         self._acked_out_of_order = set()
         self._batch = None        # 本批次累加器(每次 on_decision_batch 重建)
-        # online_decision_log.jsonl 行(replay 模式)。M3 流式落盘起,
+        # online_decision_log.jsonl 行。M3 流式落盘起,
         # 生产路径(decision_log_sink 提供)行即写即弃,不驻留本列表;
         # online_log_count 恒维护(行号 seq 与结束计数用)。
         self.online_log_rows = []
@@ -259,13 +299,20 @@ class OnlineSchedulerBase:
         # 本批次发射记录:delivery_seq -> {"tick": tick, "requests":
         # [(request_id, stage), ...]};commit ack 到达时做层转移的凭据。
         self._emitted_by_delivery = {}
-        # 决策边界两层剩余负载查询快照(感知开启时记录,写
-        # sensing_query_log.jsonl)。
-        self.sensing_query_rows = []
-        # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数
-        # 无关;full_scan_entries 恒为 0 = 不存在 O(总规模) 全量扫描)。
+        # (2026-09-30, ported from the face repo) R3-I1:原 sensing_query_
+        # rows 无 sink 时的全量驻留缓冲已删——sensing 查询行全仓唯一读者
+        # 是 sensing_query_sink(生产传 sink 即写即弃),缓冲列表无任何
+        # 读者,只随 delivery 数线性涨内存;无 sink 时不构建不驻留
+        # (见 _record_sensing_query)。
+        # 阶段 4 §7.3:每决策批扫描条目数 profile(scanned_entries 验收:
+        # 与总 request 数无关;full_scan_entries = 本批 O(总规模) 全量遍历
+        # 条目数,KV 逐出候选池扫描经 full_scan_observer 按设计如实计数,
+        # 调度器请求索引面不应产生计数)。
         # 行: {delivery_sequence, tick, scanned_entries, full_scan_entries}。
-        self.profile_rows = []
+        # (2026-09-30, ported from the face repo) R3-I1 同款:原 profile_
+        # rows 无 sink 时的缓冲已删——生产路径行仅经 profile_sink 流式
+        # 写出;无 sink 的嵌入/测试路径对缓冲无读者(本仓测试
+        # test_graph_batch_rank_ledger 直写该属性作夹具,不受影响)。
         self._profile_batch = None
         # 阶段 5 §8.2:Python provisional KV 账本(commit ack 前不入账)。
         # kv_actions 在 build_graph_batch 时先入暂存区(每 delivery 一条,
@@ -328,6 +375,27 @@ class OnlineSchedulerBase:
 
     # ------------------------------------------------------------- 固定阶段 --
 
+    @staticmethod
+    def _build_die_model_context(manifest, config):
+        """manifest -> DieModelContext(backend 声明的唯一来源;阶段 C)。
+
+        compute-cost-model 缺失/roofline/replay -> None(legacy 回归保护:
+        旧 plan 目录的 manifest 无该键,行为不变);"die" -> 构造;其他值
+        fail-closed。惰性 import:legacy 路径不加载 die_model_adapter。"""
+        backend = manifest.get("compute-cost-model") if isinstance(
+            manifest, dict) else None
+        if backend is None or backend in ("roofline", "replay"):
+            return None
+        if backend != "die":
+            raise ValueError(
+                "manifest compute-cost-model {!r} is unsupported (expected "
+                "'die', 'roofline' or 'replay')".format(backend))
+        try:
+            from online.die_model_adapter import DieModelContext  # noqa: E402
+        except ImportError:  # pragma: no cover -- flat-import 调用方兜底
+            from die_model_adapter import DieModelContext  # noqa: E402
+        return DieModelContext.from_service(manifest, config)
+
     def on_decision_batch(self, delta: dict) -> dict:
         """固定阶段:delivery sequence 门 -> 校验 schema -> 核销 completion
         -> 处理 arrivals -> run_variant_policy() -> build_graph_batch() ->
@@ -357,22 +425,15 @@ class OnlineSchedulerBase:
             self._record_sensing_query(delta)
         self.run_variant_policy(delta)
         batch = self.build_graph_batch()
-        # §7.2:缓存本次已应用交付(幂等重放凭据)。B3(2026-08-23):生产
-        # 路径引用缓存(批对象/下一批 begin_batch 重建累加器,旧引用不被
-        # 改写;delta 桥读后即弃);defensive_reply_cache=True(幂等
-        # fixture)保留双深拷防御姿态——副本防对端 setdefault 污染缓存。
-        if self.defensive_reply_cache:
-            self._delivery_reply_cache = {
-                "seq": delta["delivery_sequence"],
-                "delta": copy.deepcopy(delta),
-                "batch": copy.deepcopy(batch),
-            }
-        else:
-            self._delivery_reply_cache = {
-                "seq": delta["delivery_sequence"],
-                "delta": delta,
-                "batch": batch,
-            }
+        # §7.2:缓存本次已应用交付(幂等重放凭据)。B3(2026-08-23):
+        # 引用缓存(批对象/下一批 begin_batch 重建累加器,旧引用不被
+        # 改写;delta 桥读后即弃)。(2026-09-30)defensive_reply_cache
+        # 双深拷分支已删,见 __init__ 注。
+        self._delivery_reply_cache = {
+            "seq": delta["delivery_sequence"],
+            "delta": delta,
+            "batch": batch,
+        }
         self.last_applied_sequence = delta["delivery_sequence"]
         self._record_online_stats(delta, batch, time.monotonic_ns() - t0)
         return batch
@@ -453,18 +514,17 @@ class OnlineSchedulerBase:
         if self.digest_sink is not None:
             self.digest_sink(self._digest_row(batch))
         # 阶段 4 §7.3:本决策批扫描条目数入 profile(M3:行在产出时即
-        # 完整,提供 profile_sink 时逐行流式写出;缺省缓冲在 profile_rows,
-        # 供测试/夹具直读)。
-        profile_row = {
-            "delivery_sequence": delivery_sequence,
-            "tick": self._batch["tick"],
-            "scanned_entries": self._profile_batch["scanned_entries"],
-            "full_scan_entries": self._profile_batch["full_scan_entries"],
-        }
+        # 完整,提供 profile_sink 时逐行流式写出)。
+        # (2026-09-30, ported from the face repo) R3-I1:无 sink 的嵌入/
+        # 测试路径对缓冲无读者,行不再构建不驻留(旧 else 分支缓冲
+        # profile_rows 已删;full_scan_entries 为本仓活记账,行形状不变)。
         if self.profile_sink is not None:
-            self.profile_sink(profile_row)
-        else:
-            self.profile_rows.append(profile_row)
+            self.profile_sink({
+                "delivery_sequence": delivery_sequence,
+                "tick": self._batch["tick"],
+                "scanned_entries": self._profile_batch["scanned_entries"],
+                "full_scan_entries": self._profile_batch["full_scan_entries"],
+            })
         return batch
 
     # ------------------------------------------------------------- 校验/簿记 --
@@ -508,8 +568,10 @@ class OnlineSchedulerBase:
         self._profile_batch["scanned_entries"] += count
 
     def _profile_full_scan(self, count: int = 1) -> None:
-        """记录本决策批的 O(总规模) 全量扫描条目数。§7.3 之后应恒为 0;
-        任何 > 0 都意味着索引队列被绕过(profile 审计 fail-closed)。"""
+        """记录本决策批的 O(总规模) 全量扫描条目数。KV 管理器逐出候选池
+        扫描(session 级 Tiered-LRU 受害者选取,按设计遍历全会话)经
+        full_scan_observer 接线至此如实计数(2026-09-26,R2 py-online-D1);
+        调度器自身的请求索引/队列面不应产生计数(>0 即索引队列被绕过)。"""
         self._profile_batch["full_scan_entries"] += count
 
     def _validate_schema(self, delta: dict) -> None:
@@ -761,6 +823,11 @@ class OnlineSchedulerBase:
         """决策边界分层剩余负载查询快照(策略运行前 = 边界视图;§10.1 后
         为四层视图:admitted / issued / ready + C++ injected-unfinished
         摘要)。"""
+        # (2026-09-30, ported from the face repo) B3/R3-I1:仅在提供
+        # sink 时构建并写出查询行;无 sink 的嵌入/测试路径全仓无读者,
+        # 行不再构建与驻留(旧 else 分支缓冲 sensing_query_rows 已删)。
+        if self.sensing_query_sink is None:
+            return
         row = {
             "delivery_sequence": delta["delivery_sequence"],
             "tick": delta["tick"],
@@ -771,11 +838,7 @@ class OnlineSchedulerBase:
             "issued": self._sensing_issued_view(),
             "ready": self._sensing_ready_view(),
         }
-        # B3:流式落盘(行在产出时即完整;缺省缓冲,供夹具直读)。
-        if self.sensing_query_sink is not None:
-            self.sensing_query_sink(row)
-        else:
-            self.sensing_query_rows.append(row)
+        self.sensing_query_sink(row)
 
     def dump_ledger(self, path: str) -> None:
         """完成账本导出。
@@ -824,11 +887,19 @@ class OnlineSchedulerBase:
         self._begin_graph_batch()
 
     def _begin_graph_batch(self) -> None:
-        """变体若持有构图器(如 replay 的 GraphBatchBuilder),每批发射前
-        重建其批次累加器;没有则跳过(基类自身不构图)。"""
+        """变体若持有构图器(如 strategy 的 GraphBatchBuilder),每批发射前
+        重建其批次累加器;没有则跳过(基类自身不构图)。
+
+        阶段 C(face-LRU 随迁):同时把 die 发射语境注入构图器(幂等
+        setter)。注入点在发射即消费;构图器由 online_service 构造时不
+        感知 backend,manifest 是唯一声明源。"""
         graph = getattr(self, "graph", None)
         if graph is not None and hasattr(graph, "begin_batch"):
             graph.begin_batch()
+        die_context = getattr(self, "die_model_context", None)
+        if die_context is not None and graph is not None and hasattr(
+                graph, "set_die_context"):
+            graph.set_die_context(die_context)
 
     def _graph_batch(self) -> dict:
         """构图器累加器(节点/边);没有构图器时返回空批次模板。"""
@@ -906,8 +977,8 @@ class OnlineSchedulerBase:
         """把一次实际执行的决策写入 online_decision_log(与离线
         decision_log.jsonl 同构: seq/tick/priority/kind/request_id/decision)。
 
-        replay 模式默认沿用离线记录的 decision 内容(重放的就是离线决策);
-        变体可传入自产 decision。seq 用在线决策序(1 起),tick 用在线边界 tick。
+        replay 决策日志回放变体已删除(2026-08-18):现存变体传入自产
+        decision。seq 用在线决策序(1 起),tick 用在线边界 tick。
 
         M3 流式落盘:提供 decision_log_sink 时行即写即弃(online_log_count
         恒维护行号);缺省缓冲在 online_log_rows(兼容测试/夹具直读)。
@@ -958,8 +1029,8 @@ class OnlineSchedulerBase:
     # --------------------------------------------------------------- 收尾 --
 
     def on_commit_ack(self, ack: dict) -> None:
-        """commit ack 到达(provisional 账本 finalize 挂接点;replay 模式只
-        计数)。阶段 3:ack 的 batch_id == 请求批次 delivery_sequence;该批次
+        """commit ack 到达(provisional 账本 finalize 挂接点)。阶段 3:ack
+        的 batch_id == 请求批次 delivery_sequence;该批次
         发射过的 request/stage 转移入 committed 层(分层账本最小子集;
         簿记免费,感知关闭时同样记账)。
 
@@ -986,6 +1057,17 @@ class OnlineSchedulerBase:
             raise ValueError(
                 "ack batch_id {} != delivery_sequence {} (v1 forbids "
                 "divergence)".format(ack.get("batch_id"), seq))
+        # M11-5(2026-09-30, ported from the face repo):commit ack 的 success
+        # 字段 fail-closed 校验。C++ send_commit_ack 恒写 ack["success"]
+        # (DecisionBridge.cc),语义 = C++ 端 GraphBatch 提交结果;显式
+        # False = 提交未成功,provisional KV 账本绝不允许以本 ack 为凭据
+        # finalize(不静默 pop 入 committed 层)。字段缺失容忍(既有夹具
+        # 握手可不携带该字段),显式 False 即 fail-closed:异常向上传播,
+        # serve 循环以非 0 退出。
+        if ack.get("success") is False:
+            raise ValueError(
+                "commit ack for delivery {} reports success=false; "
+                "provisional KV ledger must not finalize".format(seq))
         if seq > self.last_applied_sequence:
             raise ValueError(
                 "ack for delivery {} not yet applied (last_applied={})"
@@ -1094,7 +1176,12 @@ class OnlineSchedulerBase:
                 "(completed={} unreconciled={})".format(
                         self.completed_request_count,
                         self.ledger_completed_unreconciled_count))
-            if self.injected_unfinished_record_count == 0:
+            # (2026-09-30, ported from the face repo) R3-I3:空 manifest
+            # (0 请求)的合法运行零交付,injected-unfinished 历史恒 0——
+            # 旧写法把它误判为协议违例(非 sensing 同输入正常退出 0)。
+            # 仅在确有交付时才要求该历史。
+            if (self.delivery_count > 0
+                    and self.injected_unfinished_record_count == 0):
                 raise RuntimeError(
                     "sensing ledger: no injected-unfinished history recorded")
 
@@ -1117,8 +1204,12 @@ class OnlineSchedulerBase:
         if not current_batch:
             return
         self._batch = None
+        # 2026-09-29(P3 face-LRU 审计):原 WP9 残留的
+        # `if hasattr(graph, "batch_first_step"): graph.batch_first_step
+        # = False` 死分支删除——本仓 GraphBatchBuilder 无该属性
+        # (hasattr 恒 False,全仓 grep 零写点;verify/long_run_memory_
+        # fixture 的同名 getattr 带缺省 False,不受影响)。joint 仓的
+        # builder 携带该活属性,不适用本清理。
         graph = getattr(self, "graph", None)
         if graph is not None and hasattr(graph, "batch"):
             graph.batch = None
-            if hasattr(graph, "batch_first_step"):
-                graph.batch_first_step = False

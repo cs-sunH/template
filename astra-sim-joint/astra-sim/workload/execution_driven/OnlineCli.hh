@@ -5,9 +5,11 @@ LICENSE file in the root directory of this source tree.
 OnlineCli -- execution-driven mechanism layer (wscllm phase 1).
 
 Online entry CLI contract (方案 §4 步骤 1-2 操作 5). The shared CmdLineParser
-uses cxxopts with allow_unrecognised_options() (CmdLineParser.cc:18-21):
-unknown options are silently ignored with no strong-typed values, so the
-online entry must parse its own family explicitly:
+is fail-closed on unknown options (net-frontend-E2 fix, see CmdLineParser.cc):
+a misspelled shared option aborts the run instead of silently running on
+defaults, so the online entry must parse its own family explicitly and strip
+it from argv before the shared parser runs (see the metadata tables below
+and strip_online_family_argv in main_online.cc):
 
   --online-mode=<mode>  required for the online binary (missing = hard error).
                         <mode> is the token "strategy" (live scheduler;
@@ -15,10 +17,13 @@ online entry must parse its own family explicitly:
                         2026-08-18). Inline "=" values are legal
                         (--online-mode=strategy); a separate value token is
                         also accepted. Any other token is a hard error.
-  --request-queue-csv   optional path of the 8-column request queue CSV.
+  --request-queue-csv   optional path of the request queue CSV (the joint
+                        canonical 9-column shape with next_trigger_type;
+                        see traces/materialize_20_30s.py).
                         Request-neutral default: when absent the service
                         stays IDLE and reads no pre-loaded queue (the static
-                        baseline config, trace_config.csv:12, stays separate
+                        baseline config, trace_config.csv request_queue_csv row,
+stays separate
                         from the online defaults).
   --request-max-arrival-ns
                         frozen simulation input window upper bound (ns) for
@@ -174,7 +179,71 @@ namespace ExecutionDriven {
 /// (E26 ordering: lexicon/finiteness -> ==0 accept (off) -> (0, 1e-9)
 /// reject -> >1e9 reject).
 inline constexpr double kMaxIdleWatchdogSeconds = 1.0e9;
-inline constexpr double kMinIdleWatchdogSeconds = 1.0e-9;
+inline constexpr double kMinIdleWatchdogSeconds = 1e-9;
+
+/// Single source of truth for the online-family option metadata
+/// (net-frontend-E2 companion, ported from the wscllm parser's network-F7
+/// fix): the prefix lexicon, the value-taking option names and the bare
+/// boolean flag names live in this one table. parse_online_cli judges
+/// family membership from it, and main_online.cc's argv strip (which
+/// removes the already-validated online family before the shared static
+/// CmdLineParser re-parses argv -- that parser is fail-closed on unknown
+/// options) queries the same table, so the two passes can never disagree
+/// about token ownership. Adding an option means touching exactly this
+/// table plus its parse arm. Note: the joint boolean flags are BARE flags
+/// (an inline "=" value is a hard parse error here, unlike the wscllm
+/// true/false-literal forms), so the strip never consumes a following
+/// token for them.
+inline constexpr const char* kOnlineFamilyPrefixes[] = {
+    "--request-", "--bridge-", "--close-", "--online-",
+    "--command-", "--sensing-",
+    // P0-2 (2026-08-31): the --idle- family (--idle-watchdog-s).
+    "--idle-",
+    // C6 (WP2 link telemetry, joint 遥测改造): the --link- family
+    // (--link-telemetry).
+    "--link-",
+};
+inline constexpr const char* kOnlineFamilyValueOptions[] = {
+    "--online-mode", "--online-validate", "--bridge-dir",
+    "--request-queue-csv", "--command-fifo", "--request-max-arrival-ns",
+    "--bridge-timeout-ms", "--idle-watchdog-s",
+};
+inline constexpr const char* kOnlineFamilyBooleanFlags[] = {
+    "--close-input", "--link-telemetry", "--sensing-enabled",
+};
+
+/// True iff the token belongs to the online family (by prefix) and must be
+/// consumed/validated by parse_online_cli before the shared parser runs.
+inline bool is_online_family_token(const std::string& token) {
+    for (const char* const prefix : kOnlineFamilyPrefixes) {
+        if (token.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// True iff the named online-family option consumes a value token in BOTH
+/// forms (inline "=" and separated next token).
+inline bool online_family_option_takes_value(const std::string& name) {
+    for (const char* const option : kOnlineFamilyValueOptions) {
+        if (name == option) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// True iff the named online-family option is a bare boolean flag (never
+/// consumes a following token; an inline value is a parse error).
+inline bool online_family_boolean_flag(const std::string& name) {
+    for (const char* const flag : kOnlineFamilyBooleanFlags) {
+        if (name == flag) {
+            return true;
+        }
+    }
+    return false;
+}
 
 struct OnlineCliOptions {
     // Mode token: "" (unset) or "strategy". "" is rejected at the end of

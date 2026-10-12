@@ -29,11 +29,10 @@ class HalvingDoubling : public Algorithm {
     void reduce();
     bool iteratable();
     virtual int get_non_zero_latency_packets();
-    void insert_packet(Callable* sender);
+    void insert_packet();
     bool ready();
     void exit();
 
-    RingTopology::Direction dimension;
     MemBus::Transmition transmition;
     int zero_latency_packets;
     int non_zero_latency_packets;
@@ -42,14 +41,11 @@ class HalvingDoubling : public Algorithm {
     int curr_sender;
     int nodes_in_ring;
     int stream_count;
-    int remained_packets_per_max_count;
-    int remained_packets_per_message;
     int parallel_reduce;
     std::list<MyPacket> packets;
     bool toggle;
     long free_packets;
     uint64_t msg_size;
-    std::list<MyPacket*> locked_packets;
     bool processed;
     bool send_back;
     bool NPU_to_MA;

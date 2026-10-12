@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """idempotency_fixture.py -- 阶段 4 §7.2 幂等 fixture(重放同一 delivery)。
 
+登记(py-verify-D2 2026-09-27):手动 CLI 夹具工具——全仓无外部引用、
+不被 pytest 收集,仅 __main__ 手动可达,属有意保留的手动装置(非死文件)。
+
 把一次真实运行产出的 request_journal.jsonl（兼容旧 request_<seq>.json）逐一喂给
 一个真实的 WscLlmOnlineScheduler,每个 delta 喂两次:
 
@@ -34,6 +37,7 @@ import copy
 import json
 import os
 import sys
+from pathlib import Path
 
 _ONLINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -101,7 +105,10 @@ def main(argv=None) -> int:
     with open(manifest_path, "r", encoding="utf-8") as source:
         manifest = json.load(source)
     if args.config:
-        config = load_wsc_llm_trace_config(args.config)
+        # args.config 是 argparse 裸 str;loader 签名是 Path(默认参数
+        # CONFIG_CSV_PATH 亦然),直接传 str 会在 .exists() 处 AttributeError
+        # (与 online_service.py 同款 Path 归一,传播到本夹具)。
+        config = load_wsc_llm_trace_config(Path(args.config))
     else:
         config = load_wsc_llm_trace_config()
 

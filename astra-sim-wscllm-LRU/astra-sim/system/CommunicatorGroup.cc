@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CommunicatorGroup.hh"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 #include "astra-sim/system/CollectivePlan.hh"
@@ -59,6 +60,34 @@ CommunicatorGroup::CommunicatorGroup(int comm_group_id,
                                      Sys* generator,
                                      std::vector<int> dimension_sizes) {
     set_id(comm_group_id);
+    // Fail closed on malformed rank data here instead of at collective
+    // runtime: an empty group builds a zero-node ring, and a duplicated
+    // rank passes the dimension-product check below while double-counting
+    // one node in every ring built from this group.
+    if (involved_NPUs.empty()) {
+        throw std::invalid_argument(
+            "Communicator group must contain at least one rank");
+    }
+    std::vector<int> sorted_ranks = involved_NPUs;
+    std::sort(sorted_ranks.begin(), sorted_ranks.end());
+    if (std::adjacent_find(sorted_ranks.begin(), sorted_ranks.end()) !=
+        sorted_ranks.end()) {
+        throw std::invalid_argument(
+            "Communicator group must not contain duplicate ranks");
+    }
+    // Every rank must name a real node in [0, total_nodes): an out-of-range
+    // rank escapes to the topology's address translation and reads past the
+    // node table (UB in Release builds). Same fail-closed channel as the
+    // other malformed-input guards: the Workload construction sites catch
+    // this and exit with the diagnosis.
+    for (int rank : involved_NPUs) {
+        if (rank < 0 || rank >= generator->total_nodes) {
+            throw std::invalid_argument(
+                "Communicator group rank " + std::to_string(rank) +
+                " is outside the cluster range [0, " +
+                std::to_string(generator->total_nodes) + ")");
+        }
+    }
     this->involved_NPUs = involved_NPUs;
     this->generator = generator;
     this->dimension_sizes = dimension_sizes;
@@ -94,22 +123,45 @@ CommunicatorGroup::~CommunicatorGroup() {
 
 void CommunicatorGroup::set_id(int id) {
     // id 0 is reserved for the default comm group, which is all ranks.
-    // CTRL+F "default communication group"
-    assert(id > 0);
+    // CTRL+F "default communication group".  Checked instead of asserted:
+    // the assert compiles out in release builds and a zero id would
+    // silently zero the num_streams base below.
+    if (id <= 0) {
+        throw std::invalid_argument("Communicator group id must be positive");
+    }
+    // Each comm group owns the disjoint stream-id block [id*1e6, (id+1)*1e6).
+    // Collective tags are folded into [COLLECTIVE, RENDEZVOUS) via
+    // `tag % 5e8`, so any block base at or beyond 5e8 (id >= 500) wraps into
+    // another group's tag space and cross-group tag collisions deliver
+    // streams to the wrong group; and past INT_MAX/1e6 the block itself
+    // overflows. Refuse both (same fail-closed channel as above: the
+    // Workload construction sites catch and exit with the diagnosis).
+    if (id >= 500 ||
+        id > std::numeric_limits<int>::max() / 1000000) {
+        throw std::invalid_argument(
+            "Communicator group id " + std::to_string(id) +
+            " exceeds the 500-group tag-space bound (its stream-id block "
+            "would wrap or overflow)");
+    }
     this->id = id;
     this->num_streams = id * 1000000;
 }
 
-bool CommunicatorGroup::matches_definition(
-    const std::vector<int>& ranks,
-    const std::vector<int>& dimensions) const {
-    return same_communicator_definition(involved_NPUs, dimension_sizes, ranks,
-                                        dimensions);
-}
+// (CommunicatorGroup::matches_definition was removed (2026-10-01): zero
+// callers repo-wide. Workload.cc's group dedup compares involved_NPUs
+// directly instead -- a matches_definition-style comparison with a default
+// empty dimension list is always false against a file-declared shaped group
+// and would invert the dedup's protection; see the dedup comment there.)
 
 CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64_t workload_node_id) {
-    if (comm_plans.find(comm_type) != comm_plans.end()) {
-        return comm_plans[comm_type];
+    // The cache key must include workload_node_id: with per-node custom
+    // collective implementations, a second same-type workload node in this
+    // communicator would otherwise silently reuse the first node's plan
+    // (its ET/algorithm) instead of its own.
+    const std::pair<ComType, uint64_t> plan_key =
+        std::make_pair(comm_type, workload_node_id);
+    if (comm_plans.find(plan_key) != comm_plans.end()) {
+        return comm_plans[plan_key];
     }
 
     if (!dimension_sizes.empty()) {
@@ -133,10 +185,10 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             generator->id, involved_NPUs, dimension_sizes,
             collective_implementation);
         std::vector<bool> dimensions_involved(dimension_sizes.size(), true);
-        comm_plans[comm_type] = new CollectivePlan(
+        comm_plans[plan_key] = new CollectivePlan(
             logical_topology, collective_implementation, dimensions_involved,
             true, false);
-        return comm_plans[comm_type];
+        return comm_plans[plan_key];
     } else if (static_cast<uint64_t>(generator->total_nodes) == involved_NPUs.size()) {
         LogicalTopology* logical_topology =
             generator->get_logical_topology(comm_type);
@@ -149,10 +201,10 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
         }
         std::vector<bool> dimensions_involved(10, true);
         bool should_be_removed = false;
-        comm_plans[comm_type] =
+        comm_plans[plan_key] =
             new CollectivePlan(logical_topology, collective_implementation,
                                dimensions_involved, should_be_removed, false);
-        return comm_plans[comm_type];
+        return comm_plans[plan_key];
     } else {
         std::vector<CollectiveImpl*> collective_implementation =
             generator->collective_impl_lookup->get_collective_impl(comm_type, workload_node_id);
@@ -184,13 +236,11 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             RingTopology::Dimension::Local, generator->id, involved_NPUs);
         std::vector<bool> dimensions_involved(1, true);
         bool should_be_removed = true;
-        comm_plans[comm_type] =
+        comm_plans[plan_key] =
             new CollectivePlan(logical_topology, collective_implementation,
                                dimensions_involved, should_be_removed, true);
-        return comm_plans[comm_type];
+        return comm_plans[plan_key];
     }
-    assert(false);
-    return nullptr;
 }
 
 int CommunicatorGroup::get_position_in_group() {

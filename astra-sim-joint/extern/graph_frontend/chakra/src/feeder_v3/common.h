@@ -23,6 +23,9 @@ constexpr static bool RESOLVE_DATA_DEPS = true;
 constexpr static bool RESOLVE_CTRL_DEPS = true;
 
 constexpr static size_t DEFAULT_PROTOBUF_BUFFER_SIZE = 16384;
+// sanity bound on a single message size varint: rejects corrupt/crafted
+// sizes (e.g. 0xFFFFFFFF) before any allocation arithmetic runs
+constexpr static size_t MAX_PROTOBUF_MESSAGE_SIZE = 256ull * 1024 * 1024;
 
 } // namespace FeederV3
 } // namespace Chakra

@@ -13,7 +13,13 @@ namespace FeederV3 {
 template <typename K, typename V>
 class Cache {
  public:
-  Cache(size_t capacity) : capacity(capacity) {}
+  Cache(size_t capacity) : capacity(capacity) {
+    // capacity is immutable after construction; a 0 capacity would make the
+    // eviction loop in put() spin forever and call front() on an empty list.
+    if (this->capacity < 1) {
+      throw std::runtime_error("Cache capacity must be at least 1");
+    }
+  }
   void put(const K& key, const V& value) {
     std::unique_lock lock(cache_mutex);
     if (this->cache.find(key) != this->cache.end()) {
@@ -36,18 +42,6 @@ class Cache {
           std::make_pair(std::make_shared<V>(value), --this->lru.end());
     }
   }
-  bool has(const K& key) {
-    std::shared_lock lock(cache_mutex);
-    return this->cache.find(key) != this->cache.end();
-  }
-  std::weak_ptr<const V> get(const K& key) {
-    std::shared_lock lock(cache_mutex);
-    if (this->cache.find(key) == this->cache.end()) {
-      throw std::runtime_error("Key not found in cache");
-    }
-    std::weak_ptr<const V> value(this->cache.at(key).first);
-    return value;
-  }
   std::shared_ptr<const V> get_locked(const K& key) {
     std::shared_lock lock(cache_mutex);
     if (this->cache.find(key) == this->cache.end()) {
@@ -55,29 +49,12 @@ class Cache {
     }
     return this->cache.at(key).first;
   }
-  std::weak_ptr<const V> get_or_null(const K& key) {
-    std::shared_lock lock(cache_mutex);
-    if (this->cache.find(key) == this->cache.end()) {
-      return std::weak_ptr<V>();
-    }
-    std::weak_ptr<const V> value(this->cache.at(key).first);
-    return value;
-  }
   std::shared_ptr<const V> get_or_null_locked(const K& key) {
     std::shared_lock lock(cache_mutex);
     if (this->cache.find(key) == this->cache.end()) {
       return std::shared_ptr<const V>();
     }
     return this->cache.at(key).first;
-  }
-
-  void remove(const K& key) {
-    std::unique_lock lock(cache_mutex);
-    if (this->cache.find(key) == this->cache.end()) {
-      throw std::runtime_error("Key not found in cache");
-    }
-    this->lru.erase(this->cache[key].second);
-    this->cache.erase(key);
   }
 
   ~Cache() {

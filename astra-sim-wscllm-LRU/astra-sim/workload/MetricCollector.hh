@@ -55,26 +55,18 @@ class MetricCollector {
         return this->enabled_;
     }
 
-    // Online service statistics can retire terminal node records.  The one
-    // exception is an enabled microbenchmark: its arbitrary iteration window
-    // queries still require the complete per-node history.
-    [[nodiscard]] bool preserve_online_operator_history() const {
-        return this->enabled_ && this->run_mode_ == "microbenchmark";
-    }
-
-    // Sparse boundary events. Only nodes listed in the manifest (static) or
-    // dynamically registered (online) ever match; all other nodes cost two
-    // failed hash lookups. R2 one-shot semantics (2026-08-29): a matched
-    // node bucket is applied in full (a bucket can carry several events,
-    // e.g. a code-4 + code-7 watch tail) and then ERASED immediately; an
-    // empty rank bucket is erased too. Each (rank, node) edge fires at most
-    // once (take_node consumes the free set; store ids are never reused;
-    // registration precedes the issue pass), so the second call for the
-    // same edge is a silent miss. The erase touches ONLY these routing
-    // tables: every finalize consumer (memory_anchor_ticks_ / spool,
-    // transfer maxima, requests_, request_boundaries_, first_token_ticks_,
-    // iterations_) reads derived storage filled by apply_event, never the
-    // routing tables.
+    // Sparse boundary events. Only dynamically registered (rank, node)
+    // anchors ever match; all other nodes cost two failed hash lookups. R2
+    // one-shot semantics (2026-08-29): a matched node bucket is applied in
+    // full (a bucket can carry several events, e.g. a code-4 + code-7 watch
+    // tail) and then ERASED immediately; an empty rank bucket is erased too.
+    // Each (rank, node) edge fires at most once (take_node consumes the free
+    // set; store ids are never reused; registration precedes the issue
+    // pass), so the second call for the same edge is a silent miss. The
+    // erase touches ONLY these routing tables: every finalize consumer
+    // (memory_anchor_ticks_ / spool, transfer maxima, requests_,
+    // request_boundaries_, first_token_ticks_) reads derived storage filled
+    // by apply_event, never the routing tables.
     void on_node_issue(int rank, uint64_t node_id, Tick tick);
     void on_node_complete(int rank, uint64_t node_id, Tick tick);
 
@@ -82,13 +74,12 @@ class MetricCollector {
     // Phase-7 §10.3: online dynamic anchor registration (plan step 1-8
     // contract ⑤/⑥, implemented at phase 7).
     //
-    // The static manifest's sparse node events only match the offline
-    // per-rank node-id sequence. The online dynamic graph emits per-rank
-    // node ids in the online emission order, which interleaves requests
-    // across stages, so most boundary nodes do not match the static table
-    // (measured: 708/1177 requests got a completion anchor). The online
-    // driver therefore registers the anchors dynamically, BEFORE the nodes
-    // are issued, from the same data it commits:
+    // The collector no longer parses any static manifest node-event table:
+    // the online dynamic graph emits per-rank node ids in the online
+    // emission order, which interleaves requests across stages, and the
+    // retired offline per-rank node-id space overlapped it, so boundary
+    // anchors are registered dynamically, BEFORE the nodes are issued, from
+    // the same data the online driver commits:
     //   - online_register_request: one call per request-queue CSV data row
     //     at load time (turn-0 rows carry an ABSOLUTE arrival; turn>0 rows
     //     arrive AFTER_REQUEST, parent = previous same-session row);
@@ -96,25 +87,25 @@ class MetricCollector {
     //   - online_register_node_anchor: for every (rank, request, stage)
     //     group the FIRST node is the start anchor (issue event) and the
     //     LAST is the end anchor (complete event); transfer nodes of the
-    //     KV routes (node names contain "kv") register the memory anchor
-    //     (code 7) on the last transfer node of each (request, rank) --
-    //     the offline doc-sec.4.3 semantics.
+    //     KV routes (exact suffix match, see is_kv_route_transfer_leg in
+    //     ParsedGraphBatch.hh: names ending in "_recv_kv" or
+    //     "_target_hbm_write_kv") register the memory anchor (code 7) on
+    //     the last transfer node of each (request, rank) -- the offline
+    //     doc-sec.4.3 semantics. The exact-suffix rule (C-3, 2026-09-30)
+    //     replaced the old bare `find("kv")` substring test so names like
+    //     ..._attention_qkv_projection can never hit the memory anchor.
     // Registration is idempotent: re-registering an existing (request,
-    // rank, node, event) is a no-op, and re-registering a request updates
-    // only missing fields (the online CSV data is authoritative for
-    // arrival/session fields; rank sets merge). No registered anchor ever
-    // makes the static path observable: all three entry points no-op when
-    // metrics are disabled, and the static main never calls them.
-    // Phase-7 §10.3: the online driver runs the collector against the live
-    // dynamic graph. The manifest's static node-event table is keyed by the
-    // OFFLINE ET's global node-id space, which overlaps the online per-rank
-    // id space (measured: online ids 0..7733 vs static ids 1..8000+), so
-    // static events would fire on unrelated online nodes and corrupt every
-    // request state. The online main therefore clears the static tables
-    // right after initialize() and lets the dynamic anchors fully own the
-    // event tables. The offline static main never calls this; the static
-    // [METRIC] bytes are untouched.
-    void clear_static_node_events();
+    // rank, node, event) is a no-op, and re-registering a request
+    // overwrites its arrival/session fields from the online CSV (the
+    // online data is authoritative), while the watch member sets are
+    // replaced, not unioned. All three registration entry points no-op when
+    // metrics are disabled.
+    // The online driver runs the collector against the live dynamic graph;
+    // enter_online_mode() latches the online emission rules (spooled raw
+    // anchors, no hbm_watermark bucket lines) and opens the anonymous
+    // anchor spool before the first terminal event can be observed. The
+    // init/summary [METRIC] bytes are untouched.
+    void enter_online_mode();
 
     void online_register_request(int64_t queue_index,
                                  const std::string& request_id,
@@ -206,13 +197,13 @@ class MetricCollector {
     // Manifest event codes (doc sec.4.3). Code 8 (FIRST_TOKEN_COMPLETE,
     // WP9 /tmp/slo_wps/plans/WP9_CONTRACT.md §1) is the first-token marker
     // complete edge: subject is the request, multiple ranks take the min.
+    // Codes 5/6 (iteration boundaries) had no producer left once the static
+    // manifest event table was retired and were removed with it.
     enum class EventCode : uint8_t {
         PREFILL_START_ISSUE = 1,
         PREFILL_END_COMPLETE = 2,
         DECODE_START_ISSUE = 3,
         COMPLETION_COMPLETE = 4,
-        ITERATION_START_ISSUE = 5,
-        ITERATION_END_COMPLETE = 6,
         MEMORY_ANCHOR_COMPLETE = 7,
         FIRST_TOKEN_COMPLETE = 8,
     };
@@ -265,14 +256,6 @@ class MetricCollector {
         std::optional<int64_t> decode_length;
     };
 
-    struct IterationMetricState {
-        int64_t benchmark_point_id = -1;
-        std::optional<Tick> iteration_start;
-        std::optional<Tick> iteration_end;
-        std::set<int> start_ranks_seen;
-        std::set<int> end_ranks_seen;
-    };
-
     struct MemoryAnchorTick {
         int64_t subject_id;
         int rank;
@@ -323,7 +306,6 @@ class MetricCollector {
         int64_t weight_delta_bytes = 0;
         int64_t resident_kv_delta_bytes = 0;
         int64_t reserved_kv_delta_bytes = 0;
-        std::string cause;
     };
 
     // Observed request stage boundaries, stored during the finalize request
@@ -380,16 +362,6 @@ class MetricCollector {
         bool replayed = false;  // rank appeared in the delta replay loop
     };
 
-    // Top-level ``microbenchmark`` manifest extension (doc sec.8): one point
-    // per ET/run, so a run's per-rank num_ops/byte totals over the point's
-    // active ranks are exactly that iteration's numerators.
-    struct MicrobenchPointSpec {
-        int64_t benchmark_point_id = -1;
-        int64_t tp_degree = 0;
-        std::vector<int> active_ranks;
-        nlohmann::json raw;  // full point descriptor, passed through
-    };
-
     void load_manifest(const std::string& manifest_path);
     void reset_for_initialize();
     void ensure_online_memory_anchor_spool();
@@ -412,6 +384,13 @@ class MetricCollector {
     MemoryReplayTotals emit_memory_records(Tick sim_end_tick,
                                            bool full_detail,
                                            const std::vector<int>& fallback_ranks);
+    // G2-1 (shared by the empty-ledger early path and the no-delta fallback
+    // ranks of the replay path): emit the all-zero capacity_timeavg record
+    // of a rank with no ledger actions, so every simulated rank appears in
+    // multi-rank capacity_timeavg joins.
+    void emit_idle_capacity_timeavg_record(
+        int rank, const std::optional<int64_t>& capacity, Tick sim_end_tick,
+        uint64_t actions_total, uint64_t actions_unresolved);
     // WP8 (CPP_SPEC §B): aggregate the per-rank watermark series to
     // instance-level bucket peaks and emit the hbm_watermark /
     // hbm_watermark_summary records (bucket detail full-only; the summary
@@ -422,13 +401,12 @@ class MetricCollector {
 
     bool enabled_ = false;
     std::string detail_level_ = "off";
-    // D3 (2026-08-28): set by clear_static_node_events (online mode only).
-    // Online synthetic manifests carry no planner ledger, so the
-    // hbm_watermark bucket records are the documented all-zero series (the
-    // authoritative WP8 data source is the ledger.jsonl replay, see
-    // slo_tools/hbm_watermark.py) and metrics_postprocess does not consume
-    // them -- emit_watermark_records skips the bucket lines (the per-rank
-    // summary records stay).
+    // Set by enter_online_mode (online runs only). Online synthetic
+    // manifests carry no planner ledger, so the hbm_watermark bucket records
+    // are the documented all-zero series (the authoritative WP8 data source
+    // is the ledger.jsonl replay, see slo_tools/hbm_watermark.py) and
+    // metrics_postprocess does not consume them -- emit_watermark_records
+    // skips the bucket lines (the per-rank summary records stay).
     bool online_mode_ = false;
     // A2 (2026-08-28): request_id -> anchored (rank, node) pairs, filled by
     // online_register_node_anchor and drained by
@@ -467,7 +445,6 @@ class MetricCollector {
     // dynamic registration path (the online driver registers node/rank
     // anchors by request_id, which is what the committed nodes carry).
     std::unordered_map<std::string, size_t> request_index_by_request_id_;
-    std::map<int64_t, IterationMetricState> iterations_;
     // Static ET runs keep the legacy in-memory history.  Online service runs
     // stream raw records to memory_anchor_spool_ and retain only the bounded
     // planner-action index below, so terminal-node count cannot grow RAM.
@@ -489,8 +466,6 @@ class MetricCollector {
     std::vector<nlohmann::json> planner_memory_peaks_;
     // queue_index -> observed stage boundaries (filled during finalize).
     std::unordered_map<int64_t, RequestBoundaryInfo> request_boundaries_;
-    // Present only for run_mode=microbenchmark manifests (doc sec.8).
-    std::optional<MicrobenchPointSpec> microbench_point_;
 
     // Doc sec.5.4: sparse per-rank lookup from node id to boundary events.
     std::unordered_map<int, std::unordered_map<uint64_t, std::vector<NodeMetricEvent>>>

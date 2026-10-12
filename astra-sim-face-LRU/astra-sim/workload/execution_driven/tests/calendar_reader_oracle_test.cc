@@ -48,6 +48,7 @@ AstraSim_Analytical_Congestion_Aware_CalendarOracleTest.
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
 #include "astra-sim/workload/execution_driven/tests/LegacyOracleWindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include "common/EventQueue.h"
 
 using namespace AstraSim::ExecutionDriven;
@@ -166,20 +167,23 @@ void compare_arms(const std::string& csv, const char* label) {
 
 // Synthetic hermetic fixture: out-of-order turn-0 across session blocks,
 // a same-tick group, an arrival==0 row, multi-turn blocks.
+// M-16 同款修复(移植到本仓 2026-10-07):provenance 门 REQUIRED——经共享
+// helper 写出,CSV 与 sidecar 同一次落盘(字节布局与原逐行写完全一致)。
 void write_synthetic(const std::string& csv) {
-    std::ofstream out(csv);
-    out << "session_id,turn_index,request_id,prefill_length,decode_length,"
-           "session_arrival_time_ns,inter_request_interval_ns,description\n";
-    // File-order turn-0 arrivals: 500, 100, 300, 300, 0, 700  (blocks
-    // contiguous, arrivals wildly non-monotonic).
-    out << "s0,0,s0_r0,100,50,500,,d\n";
-    out << "s0,1,s0_r1,100,50,,90,d\n";
-    out << "s1,0,s1_r0,100,50,100,,d\n";
-    out << "s2,0,s2_r0,100,50,300,,d\n";
-    out << "s2,1,s2_r1,100,50,,50,d\n";
-    out << "s3,0,s3_r0,100,50,300,,d\n";
-    out << "s4,0,s4_r0,100,50,0,,d\n";
-    out << "s5,0,s5_r0,100,50,700,,d\n";
+    FixtureProvenance::write_queue_fixture(csv, {
+        // File-order turn-0 arrivals (us-grid scaled): 500000, 100000,
+        // 300000, 300000, 0, 700000  (blocks contiguous, arrivals wildly
+        // non-monotonic; the reader rejects non-1000ns-grid timing since
+        // 2026-09-30).
+        "s0,0,s0_r0,100,50,500000,,d",
+        "s0,1,s0_r1,100,50,,90000,d",
+        "s1,0,s1_r0,100,50,100000,,d",
+        "s2,0,s2_r0,100,50,300000,,d",
+        "s2,1,s2_r1,100,50,,50000,d",
+        "s3,0,s3_r0,100,50,300000,,d",
+        "s4,0,s4_r0,100,50,0,,d",
+        "s5,0,s5_r0,100,50,700000,,d",
+    });
 }
 
 }  // namespace
@@ -195,6 +199,7 @@ int main(int argc, char* argv[]) {
         write_synthetic(csv);
         compare_arms(csv, "synthetic");
         std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
     }
     if (!g_ok) {
         std::fprintf(stderr,

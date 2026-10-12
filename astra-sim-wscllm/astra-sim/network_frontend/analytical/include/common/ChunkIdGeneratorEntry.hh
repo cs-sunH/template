@@ -57,10 +57,14 @@ class ChunkIdGeneratorEntry {
 
   private:
     /// current available chunk id for sim_send() call
-    int send_id;
+    // Internal counters are uint64_t with an increment-time cap guard
+    // (2026-09-27): the old bare int could overflow (UB) after 2^31
+    // unpaired sends/receives. The public getters stay int -- the guard
+    // keeps values far below that bound.
+    uint64_t send_id;
 
     /// current available chunk id for sim_recv() call
-    int recv_id;
+    uint64_t recv_id;
 
     /// Logical sends that have not reached CallbackTracker::pop_entry().
     uint64_t outstanding_;

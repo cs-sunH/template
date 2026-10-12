@@ -192,7 +192,12 @@ void write_configs(const std::string& dir, double remote_bw,
     system += "  \"local-mem-latency\": 100,\n";
     system += "  \"remote-mem-bw\": " + std::to_string(remote_bw) + ",\n";
     system += "  \"remote-mem-latency\": " +
-              std::to_string(remote_latency_ns) + "\n";
+              // Latency fields are integer ns by the 3.11 strict-parse
+              // contract (parse_latency_ns_field rejects a JSON float like
+              // the 100.000000 that std::to_string(double) emitted here);
+              // every caller passes an integral value, so cast to integer.
+              std::to_string(static_cast<long long>(remote_latency_ns)) +
+              "\n";
     system += "}\n";
     write_text(dir + "/system.json", system);
     write_text(dir + "/comm_group.json", "{}\n");
@@ -209,7 +214,7 @@ void write_configs(const std::string& dir, double remote_bw,
                    std::to_string(remote_bw) +
                    ",\n"
                    "  \"remote-mem-latency\": " +
-                   std::to_string(remote_latency_ns) +
+                   std::to_string(static_cast<long long>(remote_latency_ns)) +
                    ",\n"
                    "  \"npu-ids\": [0, 1]\n"
                    "}\n");

@@ -38,10 +38,36 @@
 平局与 tie 序：固定 ``(instance_index, ACTION_ORDER)`` 确定序（事前
 定义，不按事后输赢调整）。remote on/off 是正交能力开关：off 仅从候
 选动作集中移除 remote-read，全部 instance、其余动作与生命周期不变。
+动作掩码 ``JOINT_ALLOWED_ACTIONS``（M2，2026-09-26 消融矩阵前置）是
+**候选集上限不是强制**：命中掩码的动作在进入本模块前已由 JCM
+``applicable_actions`` 尾部剔除（掩码命中且原本可用 ⇒ "action
+excluded by JOINT_ALLOWED_ACTIONS mask"），本模块枚举循环与
+candidates 形状不变、四模式共用同一上限；recompute 不豁免——掩码
+剔除 recompute 致零适用时维持 fail-closed（下方各 raise，非容量拒
+绝；臂预设恒含 recompute：recompute-only={recompute}+load-first、
+always-copy={copy,recompute}、always-remote={remote-read,recompute}）。
 
 本模块只做选择与记录；发射/驱逐提交/合并事务由在线调度器与
 KVCacheManager 执行（§7 模块边界：scheduler 管选择与事务提交，
 cost_model 管纯预测）。
+
+D18（2026-09-26，两阶段决策）：本模块现提供两个选择入口——
+``select_instance_and_action``（P 发射点，式 1a：每候选估
+P + 默认 D 延续 π0 的整轮，**不做全 D 搜索**）与
+``select_decode_target_and_action``（P→D 边界，式 1b/1c：真实快照
+上恰好一次全遍历，原地继续恒为候选且平局优先，只有严格更低成本才
+切换；M2 掩码剔除延续动作时除外——掩码是候选集上限不是强制，红线
+掩码感知裁定见该入口 docstring）。每请求正常恰两次全候选遍历，D 提
+交后无第三次位置决策（v2.0 §2/§16/§17）。
+
+D01（2026-09-26，阶段扩展收口）：上述两入口即估价器"阶段参数与
+当前布局参数"的落点（P：布局 = 到达时 SessionKVView；D：布局 =
+PDBoundaryView→BoundaryKVLayout）；初始 argmin 与初始平局序
+``(cost, (instance_index, ACTION_ORDER))`` **保留不变**（C07 现状
+即无组合搜索，不引入新优化器），D 边界单独用式(1c) 平局键；两阶段
+SelectionRecord 的 ``diagnostics["decision_stage"]``（"P"/"D"）与
+候选 notes 的 ``decision_stage=`` 键自描述决策阶段——两个时刻的
+全部实例×动作审计项逐候选可辨阶段（v2.0 §22 验收）。
 """
 
 from __future__ import annotations
@@ -58,8 +84,11 @@ from joint.joint_config import (
 )
 from joint.joint_cost_model import (
     ACTION_ORDER,
+    ACTION_REMOTE,
+    ACTION_STAY,
     ActionCandidate,
     JointCostModel,
+    PDBoundaryView,
     SessionKVView,
 )
 from joint.link_quota import derive_rho_eff
@@ -72,6 +101,125 @@ _SCHEDULER_MODES = (
 
 class JointSchedulerError(ValueError):
     """fail-closed：非法模式或状态不一致。"""
+
+
+def _candidate_id(candidate: ActionCandidate) -> str:
+    suffix = ""
+    if candidate.action == "hybrid":
+        suffix = ":" + ",".join(str(item)
+                                 for item in sorted(candidate.copy_subset))
+    return f"{candidate.instance_index}:{candidate.action}{suffix}"
+
+
+def _candidate_evaluation(candidate: ActionCandidate) -> dict:
+    """Small immutable audit row captured before/after E0 repricing."""
+    breakdown = candidate.breakdown
+    quality = {}
+    if breakdown is not None:
+        quality = dict(breakdown.projection_stats.get("native_kernel", {}))
+    return {
+        "candidate_id": _candidate_id(candidate),
+        "status": ("ok" if candidate.applicable and candidate.cost_ns is not None
+                   else "inapplicable"),
+        "applicable": bool(candidate.applicable),
+        "inapplicable_reason": candidate.inapplicable_reason,
+        "cost_ns": candidate.cost_ns,
+        "service_ns": (None if breakdown is None
+                        else breakdown.predicted_service_done),
+        "settle_ns": (None if breakdown is None
+                       else breakdown.predicted_merge_done),
+        "precision": candidate.projection_precision,
+        "native_kernel": quality,
+    }
+
+
+def _projection_arbitrate(cost_model: JointCostModel, candidates,
+                          *, boundary: bool = False):
+    """Exact-refine the complete applicable face when E0's trigger fires."""
+    rows = list(candidates)
+    applicable = [item for item in rows
+                  if item.applicable and item.cost_ns is not None]
+    if not applicable:
+        return tuple(rows), None
+    order_key = (lambda item: item.boundary_order_key()) if boundary else (
+        lambda item: item.order_key())
+    approximate_best = min(
+        applicable, key=lambda item: (item.cost_ns, order_key(item)))
+    prediction = cost_model._resolved_prediction_config()
+    params = prediction.params
+    reasons = []
+    if len(applicable) >= 2:
+        ranked = sorted(applicable,
+                        key=lambda item: (item.cost_ns, order_key(item)))
+        margin = max(1, math.ceil(
+            max(0, ranked[0].cost_ns)
+            * params.window_refine_margin_ppm / 1_000_000))
+        if ranked[1].cost_ns - ranked[0].cost_ns <= margin:
+            reasons.append("sensitive_margin")
+    for item in applicable:
+        quality = item.breakdown.projection_stats.get("native_kernel", {})
+        if quality.get("unsupported_reason") is not None:
+            reasons.append("unsupported_window")
+        if int(quality.get("refinement_count", 0)) > 0:
+            reasons.append("window_refinement")
+        profile = quality.get("approximation_profile")
+        if profile is not None and profile not in (
+                "exact", "native_die_timer_window_v1"):
+            reasons.append("window_profile_anomaly")
+    # Keep the first-seen order stable and avoid reporting the same trigger
+    # once per candidate.
+    reason_tuple = tuple(dict.fromkeys(reasons))
+    old_tie_order = [
+        _candidate_id(item)
+        for item in sorted(rows, key=lambda item: order_key(item))]
+    approximate_results = [_candidate_evaluation(item) for item in rows]
+    exact_best_id = None
+    exact_ids = []
+    exact_rows = []
+    try:
+        if reason_tuple:
+            position_by_object = {
+                id(item): index for index, item in enumerate(rows)}
+            for item in applicable:
+                exact = cost_model.reprice_candidate_exact(item)
+                rows[position_by_object[id(item)]] = exact
+                exact_ids.append(_candidate_id(exact))
+            exact_rows = [_candidate_evaluation(item) for item in rows]
+            exact_applicable = [item for item in rows
+                                if item.applicable and item.cost_ns is not None]
+            exact_best = min(
+                exact_applicable,
+                key=lambda item: (item.cost_ns, order_key(item)))
+            exact_best_id = _candidate_id(exact_best)
+    finally:
+        for item in rows:
+            context = item.projection_context
+            if context is not None:
+                context.close()
+    return tuple(rows), {
+        "trigger_reason": "+".join(reason_tuple) if reason_tuple else None,
+        "exact_recomputed_ids": exact_ids,
+        "approximate_selected_id": _candidate_id(approximate_best),
+        "exact_selected_id": exact_best_id,
+        "old_tie_order": old_tie_order,
+        # Preserve the raw configured-precision face before exact rows replace
+        # the candidates returned to the selector.  This is also the source
+        # consumed by the acceptance-only L3 exporter.
+        "approx_results": approximate_results,
+        "exact_results": exact_rows,
+    }
+
+
+def _selection_diagnostics(base, arbitration, chosen):
+    result = dict(base)
+    if arbitration is not None:
+        projection = dict(arbitration)
+        projection["selected_id"] = _candidate_id(chosen)
+        projection["selected_cost_source"] = (
+            "exact" if projection.get("trigger_reason") else "configured")
+        projection["selected_precision"] = chosen.projection_precision
+        result["projection_arbitration"] = projection
+    return result
 
 
 @dataclass
@@ -170,12 +318,23 @@ def select_instance_and_action(
     session: SessionKVView,
     request,
     remote_enabled: bool,
+    prep_frontier_by_instance=None,
+    pipeline_identity_provider=None,
 ) -> SelectionRecord:
     """发射点选择：枚举全候选 -> 按模式选择 -> 返回完整记录。
 
     ``request`` 为 RequestView（无 oracle 输入；结构上不接受
     decode_length/final_context_tokens）。枚举阶段对每个 (instance,
-    action) 调用 ``estimate_action``（只读，不修改任何账本或事件队列）。
+    action) 调用 ``estimate_P_with_continuation``（只读，不修改任何账本或事件队列）。
+
+    D01（2026-09-26）：全实例×四动作枚举与初始平局序
+    ``(cost, (instance_index, ACTION_ORDER))`` 保留不变（joint 主臂
+    argmin，C07 现状）；记录 ``diagnostics["decision_stage"]="P"``。
+
+    D03 修复轮二（2026-09-27）：``prep_frontier_by_instance`` = 逐目标
+    实例的准备腿最早发射时刻（决策相对 ns；缺省 None = 全部空闲 0，
+    行为与旧口径逐字节一致）——调度器按构图事实（准入链接续 rank
+    frontier）注入，见 sh30 ``_prep_frontier_by_instance``。
     """
     if mode not in _SCHEDULER_MODES:
         raise JointSchedulerError(f"unknown scheduler mode: {mode!r}")
@@ -186,13 +345,30 @@ def select_instance_and_action(
     candidates: list[ActionCandidate] = []
     for instance_index in instance_indices:
         for action in ACTION_ORDER:
-            candidates.append(cost_model.estimate_action(
+            pipeline_identities = (
+                pipeline_identity_provider(
+                    "P", instance_index, action, context=session)
+                if pipeline_identity_provider is not None else None)
+            if (pipeline_identity_provider is not None
+                    and action == ACTION_REMOTE
+                    and not pipeline_identities):
+                raise JointSchedulerError(
+                    "production P remote-read candidate lacks explicit "
+                    "pipeline identities")
+            candidates.append(cost_model.estimate_P_with_continuation(
                 session=session,
                 request=request,
                 instance_index=instance_index,
                 action=action,
                 remote_enabled=remote_enabled,
+                prep_frontier_ns=int(
+                    (prep_frontier_by_instance or {}).get(
+                        instance_index, 0)),
+                pipeline_identities=pipeline_identities,
             ))
+
+    candidates, arbitration = _projection_arbitrate(
+        cost_model, candidates, boundary=False)
 
     if mode == SCHEDULER_MODE_JOINT:
         applicable = [
@@ -202,7 +378,9 @@ def select_instance_and_action(
         if not applicable:
             raise JointSchedulerError(
                 "joint selection found no applicable candidate "
-                "(execution-protocol gap; not a capacity rejection)")
+                "(execution-protocol gap — incl. JOINT_ALLOWED_ACTIONS "
+                "mask excluding every remaining action, M2; not a "
+                "capacity rejection)")
         best = min(
             applicable,
             key=lambda candidate: (
@@ -221,6 +399,10 @@ def select_instance_and_action(
             tie_break_note=(
                 f"tie among {len(ties) + 1} at cost {best.cost_ns}ns -> "
                 "(instance_index, action order)" if ties else ""),
+            # D01（2026-09-26）：决策阶段自描述（P 初始时刻；与 D 边界
+            # 记录的 "D" 对称）。
+            diagnostics=_selection_diagnostics(
+                {"decision_stage": "P"}, arbitration, best),
         )
 
     # ---- 逐模式 instance 规则（顺序参照 + face_static 对照臂）：先定
@@ -246,7 +428,9 @@ def select_instance_and_action(
         rho_eff, radius_hops = _static_ball_radius(cost_model)
         if anchor is None:
             # turn-0 无历史：无距离锚，球退化为空约束（全部实例照常
-            # 参与）——如实记录，不 fail-closed（recompute 恒适用）。
+            # 参与）——如实记录，不 fail-closed（recompute 物理面恒有
+            # 定义；JOINT_ALLOWED_ACTIONS 掩码剔除时全实例零适用 ⇒
+            # 下方防御 raise，M2）。
             masked = list(instance_indices)
             note = (
                 "face_static: no KV anchor (fresh session), static ball "
@@ -279,12 +463,18 @@ def select_instance_and_action(
             best_at_index, _per_instance_note = _best_at_instance(
                 candidates, index)
             if best_at_index is None:
-                continue  # recompute 恒适用，实际不可达
+                # 无掩码时不可达（recompute 物理面恒有定义）；M2 掩码
+                # 剔除后本实例可能零适用动作——跳过（实例不因动作面
+                # 为空而出球）。
+                continue
             key = (best_at_index.cost_ns, best_at_index.order_key())
             if chosen_key is None or key < chosen_key:
                 chosen_instance = index
                 chosen_key = key
-        if chosen_instance is None:  # pragma: no cover - 防御性 fail-closed
+        if chosen_instance is None:
+            # 无掩码时不可达（锚实例 hop=0 恒入球且 recompute 可用）；
+            # M2 掩码把球内全部实例的适用动作剔空时可达——零适用维持
+            # fail-closed（候选集上限不是强制，非容量拒绝）。
             raise JointSchedulerError(
                 f"face_static found no applicable action inside the "
                 f"static ball of radius {radius_hops} around "
@@ -318,7 +508,9 @@ def select_instance_and_action(
 
     best, action_note = _best_at_instance(candidates, chosen_instance)
     if best is None:
-        # recompute 在任何 instance 恒适用，此处不可达；防御性 fail-closed。
+        # 无掩码时不可达（recompute 在任何 instance 物理面恒有定义）；
+        # M2 掩码剔除 recompute 且其余动作在本实例不适用时可达——零适
+        # 用维持 fail-closed（候选集上限不是强制，非容量拒绝）。
         raise JointSchedulerError(
             f"sequential mode {mode!r} found no applicable action at "
             f"instance {chosen_instance}")
@@ -329,6 +521,250 @@ def select_instance_and_action(
         instance_rule_note=note,
         remote_enabled=remote_enabled,
         tie_break_note=action_note,
-        diagnostics={"sequential_instance": chosen_instance,
-                     **extra_diagnostics},
+        diagnostics=_selection_diagnostics(
+            {"decision_stage": "P",
+             "sequential_instance": chosen_instance,
+             **extra_diagnostics}, arbitration, best),
+    )
+
+
+def select_decode_target_and_action(
+    *,
+    mode: str,
+    cost_model: JointCostModel,
+    boundary: PDBoundaryView,
+    remote_enabled: bool,
+    decision_epoch: int = 0,
+    inherited_obligation_ids: Sequence[str] = (),
+    pipeline_identity_provider=None,
+) -> SelectionRecord:
+    """P→D 边界二次选择（D18，v2.0 §2.3/§2.5/§16.2/§17）。
+
+    D17（2026-09-27，v2.0 §18/D17）：``decision_epoch``（边界阶段
+    epoch）与 ``inherited_obligation_ids``（继承义务 ID）为纯披露通
+    道，逐候选透传进 breakdown schema——不计入计价、不改变任何候选
+    成本与选择。
+
+    **恰好一次全遍历**：全部 instance × 四动作调 ``estimate_D_remaining``
+    （真实边界快照 S_B、共同 n̂_B、继承义务在负载视图内），随后
+    ``boundary_order_key`` 一次 argmin——平局键 = ``(cost, 非继续标记,
+    instance_index, action_order)``，**式(1c)：只有改变方案的完整预测
+    剩余成本严格小于原地继续时才切换；成本相同优先继续**。原地继续
+    x0 归并在对应的 (i_P, action) 记录上（``is_continuation=True``），
+    不作第五动作（v2.0 §2.4）。
+
+    与初始遍历（``select_instance_and_action``）的关系：每请求正常恰
+    两次全候选遍历（§17"成功路径通常只进行 P、D 两次全候选遍历"）；
+    D 提交后无第三次位置决策（验收红线）。本入口是协议级边界规则，
+    不随调度模式变体（J-off 臂的差异只在初始选择规则——消融合同）；
+    ``mode`` 仅进记录披露。
+
+    已知终止的请求不进入本函数（调度器在 P_COMPUTE_DONE 直接结算，
+    不做无意义的 D 选点——v2.0 §2.3/§16.4）。
+
+    M2 掩码与 continuation 红线（掩码感知裁定：掩码是候选集上限不是
+    强制）：原地继续 x0 归并在 (i_P, 默认延续动作) 记录上——完整型
+    stay、增量型 remote-read。延续动作属允许面（无掩码或掩码放行）
+    时，该记录缺席 = 边界视图与候选面不一致（结构性缺陷，
+    fail-closed 不变）；延续动作被掩码剔除时，其缺席是掩码上限的合
+    法结果——在允许面内正常选择，平局键退化为
+    ``(cost, instance_index, action_order)``（无继续候选可优先），
+    决策行 diagnostics 披露 ``continuation_masked_out``；掩码把允许
+    面整体剔空时抛明确的 no-applicable-under-mask 错误（不许空序列
+    ``min()``）——归因掩码，非容量拒绝。
+    """
+    if mode not in _SCHEDULER_MODES:
+        raise JointSchedulerError(f"unknown scheduler mode: {mode!r}")
+    instance_indices = sorted(cost_model.loads.keys())
+    if not instance_indices:
+        raise JointSchedulerError("no instance load views available")
+
+    candidates: list[ActionCandidate] = []
+    for instance_index in instance_indices:
+        for action in ACTION_ORDER:
+            pipeline_identities = (
+                pipeline_identity_provider(
+                    "D", instance_index, action, context=boundary)
+                if pipeline_identity_provider is not None else None)
+            if (pipeline_identity_provider is not None
+                    and action == ACTION_REMOTE
+                    and not pipeline_identities):
+                raise JointSchedulerError(
+                    "production D remote-read candidate lacks explicit "
+                    "pipeline identities")
+            candidates.append(cost_model.estimate_D_remaining(
+                boundary=boundary,
+                instance_index=instance_index,
+                action=action,
+                remote_enabled=remote_enabled,
+                decision_epoch=decision_epoch,
+                inherited_obligation_ids=inherited_obligation_ids,
+                pipeline_identities=pipeline_identities,
+            ))
+    # ---- W10 hybrid 子集候选（主文 §10 ``add_source_subset_plans_and_
+    # deduplicate``：仅 D 阶段、仅 action_space=source_subset_hybrid 显式
+    # 配置；基础四动作仍完整参选）。端点 ∅/S 与纯 remote/copy 去重——
+    # 只加真子集；超预算 = 显式"不支持此扩展"（不静默换别种混合最优），
+    # diagnostics 披露预算/枚举数。----
+    hybrid_diagnostics: dict = {}
+    if getattr(cost_model, "hybrid_action_space_enabled",
+               lambda: False)():
+        from joint.action_work_graph import SUBSET_ROLE_PROPER
+        unsupported = []
+        for instance_index in instance_indices:
+            status = cost_model.hybrid_support_status(
+                boundary=boundary, instance_index=instance_index)
+            if not status.supported:
+                unsupported.append({
+                    "instance_index": instance_index,
+                    "reason": status.reason,
+                    "source_count": status.source_count,
+                    "enumeration_count": status.enumeration_count,
+                })
+                continue
+            for plan in cost_model.enumerate_hybrid_subsets(
+                    boundary=boundary, instance_index=instance_index):
+                if plan.role != SUBSET_ROLE_PROPER:
+                    continue    # 端点去重：纯动作候选已在上方完整参选
+                pipeline_identities = (
+                    pipeline_identity_provider(
+                        "D", instance_index, "hybrid", plan.copy_sources,
+                        context=boundary)
+                    if pipeline_identity_provider is not None else None)
+                if pipeline_identity_provider is not None and not pipeline_identities:
+                    raise JointSchedulerError(
+                        "production D hybrid remote-read candidate lacks "
+                        "explicit pipeline identities")
+                candidates.append(cost_model.estimate_D_hybrid_remaining(
+                    boundary=boundary,
+                    instance_index=instance_index,
+                    copy_subset=plan.copy_sources,
+                    remote_enabled=remote_enabled,
+                    decision_epoch=decision_epoch,
+                    inherited_obligation_ids=inherited_obligation_ids,
+                    pipeline_identities=pipeline_identities,
+                ))
+        if unsupported:
+            hybrid_diagnostics["hybrid_unsupported"] = unsupported
+    candidates, arbitration = _projection_arbitrate(
+        cost_model, candidates, boundary=True)
+    applicable = [
+        candidate for candidate in candidates
+        if candidate.applicable and candidate.cost_ns is not None
+    ]
+    # 掩码感知红线判据：延续动作是否被 JOINT_ALLOWED_ACTIONS 剔除
+    # （``getattr`` 兼容选择器存根——真实 JCM 恒有该属性，None=无掩码）。
+    continuation_action = (
+        ACTION_REMOTE if boundary.is_increment_layout() else ACTION_STAY)
+    allowed_actions = getattr(cost_model, "allowed_actions", None)
+    continuation_masked = (
+        allowed_actions is not None
+        and continuation_action not in allowed_actions)
+    if not applicable:
+        if continuation_masked:
+            # 掩码把允许面整体剔空：fail-closed（明确归因掩码、非容量
+            # 拒绝；不许空序列 min()）。
+            raise JointSchedulerError(
+                "boundary D selection found no applicable candidate "
+                "under JOINT_ALLOWED_ACTIONS mask (continuation "
+                f"{continuation_action}@i_P is mask-excluded too; "
+                f"p_instance={boundary.p_instance_index}, "
+                f"p_action={boundary.p_action!r})")
+        # 原地继续恒为候选（验收红线）：x0 记录缺失 = 边界视图与候选
+        # 面不一致（结构性缺陷，非容量拒绝）——fail-closed。
+        raise JointSchedulerError(
+            "boundary traversal lost the in-place continuation record "
+            f"(p_instance={boundary.p_instance_index}, "
+            f"p_action={boundary.p_action!r})")
+    continuation_records = [
+        candidate for candidate in applicable if candidate.is_continuation]
+    if continuation_masked:
+        if continuation_records:
+            # 掩码剔除延续动作后其记录仍现身 = 候选面掩码过滤失效
+            # （状态不一致，非容量拒绝）——fail-closed。
+            raise JointSchedulerError(
+                "mask-excluded continuation record is still applicable "
+                f"({continuation_action}@i_P; p_action="
+                f"{boundary.p_action!r})")
+        best = min(applicable, key=lambda candidate: (
+            candidate.cost_ns, candidate.order_key()))
+        ties = [
+            candidate for candidate in applicable
+            if candidate.cost_ns == best.cost_ns
+            and candidate.order_key() != best.order_key()
+        ]
+        decision_note = (
+            f"continuation ({continuation_action}@i_P) excluded by "
+            "JOINT_ALLOWED_ACTIONS mask; selected within allowed face")
+        tie_note = (
+            f"tie among {len(ties) + 1} at cost {best.cost_ns}ns -> "
+            "(cost, instance, action order)" if ties else decision_note)
+        return SelectionRecord(
+            mode=mode,
+            chosen=best,
+            candidates=tuple(candidates),
+            instance_rule_note=(
+                "boundary instance x action argmin; continuation x0 "
+                "merged into (i_P, action) records; continuation "
+                "mask-excluded (M2 upper bound, not a mandate)"),
+            remote_enabled=remote_enabled,
+            tie_break_note=tie_note,
+            diagnostics=_selection_diagnostics({
+                "decision_stage": "D",
+                "decision_epoch": int(decision_epoch),
+                "p_instance_index": boundary.p_instance_index,
+                "p_action": boundary.p_action,
+                "decode_steps": int(boundary.decode_steps),
+                "is_continuation": bool(best.is_continuation),
+                "continuation_action": continuation_action,
+                "continuation_cost_ns": None,
+                "continuation_masked_out": True,
+                **hybrid_diagnostics,
+            }, arbitration, best),
+        )
+    if not continuation_records:
+        # 原地继续恒为候选（验收红线）：x0 记录缺失 = 边界视图与候选
+        # 面不一致（结构性缺陷，非容量拒绝）——fail-closed。
+        raise JointSchedulerError(
+            "boundary traversal lost the in-place continuation record "
+            f"(p_instance={boundary.p_instance_index}, "
+            f"p_action={boundary.p_action!r})")
+    best = min(applicable, key=lambda candidate: (
+        candidate.cost_ns, candidate.boundary_order_key()))
+    ties = [
+        candidate for candidate in applicable
+        if candidate.cost_ns == best.cost_ns
+        and candidate.boundary_order_key() != best.boundary_order_key()
+    ]
+    if best.is_continuation:
+        decision_note = "in-place continuation (equal-cost preferred)"
+    else:
+        continuation = continuation_records[0]
+        decision_note = (
+            "switch from continuation "
+            f"({continuation.cost_ns}ns -> {best.cost_ns}ns, strict "
+            "improvement per Eq.1c)")
+    return SelectionRecord(
+        mode=mode,
+        chosen=best,
+        candidates=tuple(candidates),
+        instance_rule_note=(
+            "boundary instance x action argmin; continuation x0 merged "
+            "into (i_P, action) records"),
+        remote_enabled=remote_enabled,
+        tie_break_note=(
+            f"tie among {len(ties) + 1} at cost {best.cost_ns}ns -> "
+            "(cost, non-continuation, instance, action order)"
+            if ties else decision_note),
+        diagnostics=_selection_diagnostics({
+            "decision_stage": "D",
+            "decision_epoch": int(decision_epoch),
+            "p_instance_index": boundary.p_instance_index,
+            "p_action": boundary.p_action,
+            "decode_steps": int(boundary.decode_steps),
+            "is_continuation": bool(best.is_continuation),
+            "continuation_cost_ns": continuation_records[0].cost_ns,
+            # W10：hybrid 扩展面披露（pure_four 缺省恒空——零漂移）。
+            **hybrid_diagnostics,
+        }, arbitration, best),
     )

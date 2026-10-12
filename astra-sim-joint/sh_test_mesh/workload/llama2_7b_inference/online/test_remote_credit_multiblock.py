@@ -8,7 +8,7 @@ C4b-FIX）：remote-read auto-K 多块 credit 体块的列车级集体节点
   缺省回落 train_id——M 个体块在同一 rank 发射 M 份同名
   ``{train_id}_all_layers_{attention,mlp}_all_reduce``；C++
   GraphBatchCommitter 预检按 (pg_name, name) 计参与者、要求每 rank
-  恰 1（GraphBatchCommitter.cc:634-659），M=8 时拒批：
+  恰 1（GraphBatchCommitter.cc），M=8 时拒批：
   "has 8 participants on rank 30 (expected exactly one)" → 次生
   ack_count != delivery_count。K ≥ S_j 单块路径完整执行通过（v1
   等价锚），缺陷特定于多块。
@@ -57,6 +57,9 @@ from online.test_remote_credit_stream import (  # noqa: E402
     _remote_runtime,
     _scheduler,
 )
+from online.test_remote_credit_stream import (  # noqa: E402
+    RemoteCreditEmissionTest as _StreamSurfaceHost,
+)
 
 
 def _preflight_collective_multiplicity(nodes):
@@ -82,10 +85,11 @@ def _parents_by_rank(edges):
 
 
 class T1MultiBlockPreflightTest(unittest.TestCase):
-    """T1 joiner 多块（K=2，M=4）：预检谓词 + 命名 + I2 拓扑保持。"""
+    """T1 joiner 多体块（D09：decode=8、auto tile → 逐迭代体块 1..8）：
+    预检谓词 + 命名 + I2 拓扑保持。"""
 
-    def _emit_t1(self, credit_iters="2", decode=8):
-        s = _scheduler(credit_iters)
+    def _emit_t1(self, tile_bytes="auto", decode=8):
+        s = _scheduler(tile_bytes)
         rt = _remote_runtime(decode=decode)
         _install_remote(s, rt)
         state = s.instances[EXEC_INSTANCE]
@@ -108,8 +112,8 @@ class T1MultiBlockPreflightTest(unittest.TestCase):
         self.assertEqual(
             {key: value for key, value in counts.items() if value != 1},
             {}, "collective multiplicity preflight violated")
-        # 命名规则：4 个体块逐块 _rcb1.._rcb4 后缀，引用本列车。
-        for block in (1, 2, 3, 4):
+        # 命名规则：8 个体块逐块 _rcb1.._rcb8 后缀，引用本列车。
+        for block in (1, 2, 3, 4, 5, 6, 7, 8):
             self.assertIn(
                 "{}_rcb{}_all_layers_mlp_all_reduce".format(
                     train_id, block),
@@ -125,7 +129,7 @@ class T1MultiBlockPreflightTest(unittest.TestCase):
                 name for node in nodes
                 if node["rank"] == rank and node["type"] == COMM_COLL_NODE
                 for name in (node["name"],)}
-            for block in (1, 2, 3, 4):
+            for block in (1, 2, 3, 4, 5, 6, 7, 8):
                 self.assertIn(
                     "{}_rcb{}_all_layers_attention_all_reduce".format(
                         train_id, block),
@@ -134,25 +138,17 @@ class T1MultiBlockPreflightTest(unittest.TestCase):
     def test_i2_gating_maps_onto_block_phases(self):
         s, rt, plan = self._emit_t1()
         nodes = self._nodes(s)
-        parents = _parents_by_rank(s.graph.batch["parent_edges"])
         train_id = plan["train_id"]
-        # I2：尾块 b（2..4）的 recv 门恰好门控一个体块节点，且被门控
-        # 节点携带匹配的 _rcb{b} 相位；门序 = 块序（不依赖后续块）。
+        by_id = {node["id"]: node for node in nodes}
+        legs_by_tile, recv_anchors, consume_deps = (
+            _StreamSurfaceHost._credit_stream_surface(s))
+        # I2：tile b（2..8）恰一条 consume completion run，其消费体块
+        # 末携带匹配的 _rcb{b} 相位；门序 = 块序（不依赖后续块）。
         gated_node_ids = {}
-        for block in (2, 3, 4):
-            recv = [
-                node for node in nodes
-                if "_credit%d_recv" % block in node["name"]
-                and node["rank"] == 0][0]
-            targets = [
-                to for (rank, to), froms in parents.items()
-                if rank == 0 and recv["id"] in froms]
-            body_targets = [
-                node for node in nodes
-                if node["id"] in targets and node["rank"] == 0
-                and node["request_id"] == train_id]
-            self.assertEqual(len(body_targets), 1, block)
-            gated = body_targets[0]
+        for block in (2, 3, 4, 5, 6, 7, 8):
+            self.assertIn(block, consume_deps)
+            gated = by_id[consume_deps[block]]
+            self.assertEqual(gated["request_id"], train_id)
             self.assertTrue(
                 gated["name"].startswith(
                     "{}_rcb{}_".format(train_id, block)),
@@ -163,19 +159,20 @@ class T1MultiBlockPreflightTest(unittest.TestCase):
         self.assertLess(gated_node_ids[3], gated_node_ids[4])
         # 无门消费扫描：被门控节点均为 COMP 计算体。
         for block, node_id in gated_node_ids.items():
-            node = [n for n in nodes if n["id"] == node_id][0]
+            node = by_id[node_id]
             self.assertTrue(node["compute"]["num_ops"] > 0, block)
-        # 块 1 主链先行（无旁挂 recv 门；既有 test_t1_multi_block_
-        # structure 已钉 pd_transfer 主链位，此处只钉不存在块 1 门控）。
-        self.assertFalse([
-            node for node in nodes if "_credit1_recv" in node["name"]])
+        # 块 1 主链先行（compact 发射：tile 1 的 data_recv 支链锚发射
+        # 序先于块 1 体块末 = 主链头位、无旁挂释放门）。
+        self.assertLess(recv_anchors[1], consume_deps[1])
+        self.assertNotIn(("release_ack_send", 0), legs_by_tile[1])
 
 
 class T2ContinuationMultiBlockPreflightTest(unittest.TestCase):
-    """T2+ 续坐多块（K=3，块 [3, 2]）：预检谓词 + 续坐发射形态保持。"""
+    """T2+ 续坐多体块（D09：T1=3 迭代、T2=5 迭代 → 逐迭代体块）：
+    预检谓词 + 续坐发射形态保持。"""
 
     def test_continuation_multiblock_preflight(self):
-        s = _scheduler(credit_iters="3")
+        s = _scheduler(tile_bytes="auto")
         rt = _remote_runtime(decode=8)
         _install_remote(s, rt)
         state = s.instances[EXEC_INSTANCE]
@@ -197,20 +194,21 @@ class T2ContinuationMultiBlockPreflightTest(unittest.TestCase):
             drained=tuple(train["drain_members"]),
             completed_now=completed, sentinel_trains=(), tick=2)
         state.qp.remove(head)
-        # T2（iterations=5，K=3 → 两块 [3, 2]，无 joiner 槽位 = D7 续坐）。
+        # T2（iterations=5，无 joiner 槽位 = D7 续坐）：逐迭代 5 体块。
         s.graph.begin_batch()
         plan2 = s._plan_train(state)
         s._emit_train(state, plan2, [], 3)
         nodes = s.graph.batch["nodes"]
         summary = rt.remote_read_slice_summaries[1]
-        self.assertEqual(summary["block_steps"], [3, 2])
+        self.assertEqual(summary["steps"], 5)
+        self.assertEqual(summary["block_count"], 5)
         counts = _preflight_collective_multiplicity(nodes)
         self.assertTrue(counts)
         self.assertEqual(
             {key: value for key, value in counts.items() if value != 1},
             {}, "collective multiplicity preflight violated")
         train_id = plan2["train_id"]
-        for block in (1, 2):
+        for block in (1, 2, 3, 4, 5):
             self.assertIn(
                 "{}_rcb{}_all_layers_mlp_all_reduce".format(
                     train_id, block),
@@ -218,22 +216,28 @@ class T2ContinuationMultiBlockPreflightTest(unittest.TestCase):
         self.assertNotIn(
             "{}_all_layers_mlp_all_reduce".format(train_id),
             {node["name"] for node in nodes})
-        # 续坐形态保持：块 1 上主链（remote_credit 动作名在案）、
-        # 无 readiness barrier（I3b）。
-        self.assertTrue([
-            node for node in nodes
-            if "remote_credit_action" in node["name"]])
+        # 续坐形态保持：compact 发射面（T2 批次 decode_remote_credit
+        # 草稿携带本切片 5 tile 的数据腿；块 1 主链 + 无 readiness
+        # barrier（I3b））。
+        legs_by_tile, _anchors, _consume = (
+            _StreamSurfaceHost._credit_stream_surface(s))
+        self.assertEqual(sorted(legs_by_tile), list(range(1, 6)))
+        for tile, legs in legs_by_tile.items():
+            self.assertTrue(
+                any(endpoint == "data_send"
+                    for endpoint, _rank in legs), tile)
         self.assertFalse([
             node for node in nodes
             if node["name"].endswith("_decode_kv_ready_barrier")])
 
 
 class SingleBlockAnchorNamingTest(unittest.TestCase):
-    """K ≥ S 单块：无 _rcb 后缀（v1 等价锚命名侧钉）。"""
+    """单迭代列车（decode=1 → M=1 单体块）：无 _rcb 后缀（单块等价锚
+    命名侧钉——多块后缀仅为消解同名集体参与者，单块保持裸名）。"""
 
     def test_single_block_keeps_v1_collective_names(self):
-        s = _scheduler(credit_iters="8")
-        rt = _remote_runtime(decode=8)
+        s = _scheduler(tile_bytes="auto")
+        rt = _remote_runtime(decode=1)
         _install_remote(s, rt)
         state = s.instances[EXEC_INSTANCE]
         state.active_decode.append(rt)

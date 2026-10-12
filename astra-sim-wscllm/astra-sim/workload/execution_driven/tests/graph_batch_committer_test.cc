@@ -10,13 +10,12 @@ GraphSources, a real WatchRegistry, a real RequestIngress over an EventQueue
 + DecisionMailbox + ServiceCoordinator -- the alarm path schedules a genuine
 future arrival) through:
 
-  Part A  static/pure checks: compute_touched_ranks (sorted unique, rank
-          filtering).
   Part B  deliberately illegal batches (one per Phase-A rule category:
           epoch, node structure, edge structure, cycle, watch structure /
           eligibility / identity, send-recv pairing, collective split,
           assignment, kv action, alarm, touched_ranks). EVERY case must be
-          rejected by validate() AND leave the official state completely
+          rejected by the Phase-A validator (phase_a_validate below) AND
+          leave the official state completely
           untouched (零节点/零 watch/零账本动作: store node counts, free
           sets, store-id map, watch registry, in-flight/prefill-drained
           tracking, counters, issue-pass calls -- all byte-identical to the
@@ -58,7 +57,8 @@ future arrival) through:
           (shared aggregate body nodes under the batch-namespace
           request_id "batch_train_0_1" -- NOT a real request -- plus one
           exit marker per member per rank and one per-train ALL_REDUCE
-          end barrier) walks validate() + commit() + the full watch-fire
+          end barrier) walks Phase-A validation + commit() + the full
+          watch-fire
           chain: both member decode watches fire, the namespace body /
           barrier terminals feed nothing, in-flight/prefill-drained
           tracking and the counters stay exact. Also proves the one rule
@@ -70,12 +70,26 @@ future arrival) through:
           BOTH a drain marker (prefill watch, gen 0) and an exit marker
           (decode watch, gen 1) of two DIFFERENT requests -- the mixed
           prefill-chunk + decode-token folding case; both watches fire.
+  GC regressions  five NodeStore-GC/affine regressions (assertion labels
+          K-O): bounded id history with pruning, the amortized tracking
+          bound, preseeded store-id capture, external-id drift fail-closed,
+          and the O(ranks) affine metadata under million-node pressure.
   Part P  C1 (2026-08-29) parse/atomicity: a malformed response throws
           ParseError with the committer state byte-identical (parse is a
           pure local construction), a post-parse TYPED mutation is still
           rejected fail-closed with zero side effects, and a watch-member
           mutation is blocked by the preflight BEFORE any Phase-B assembly
           runs (two-phase atomicity under the typed batch).
+  Part Q  P2-31 (2026-09-28) metrics_anchor_hook chain: make_context now
+          installs the Context::metrics_anchor_hook (a replica of
+          main_online.cc's register_online_metrics_anchors selection walk
+          ending in NodeStore::set_metric_anchor_flags), and the part pins
+          the P1-1 contract through the real commit chain -- the hook fires
+          at Phase B-1.5 (before the issue pass) with affine STORE ids, the
+          history_kv migrate legs become the memory anchors on both ranks,
+          and the qkv compute node never anchors (neither as a stolen
+          memory anchor nor as a fabricated one on a transfer-free
+          request).
 
 Also asserts the pre-phase-5 fixture tolerance: a batch WITHOUT the
 touched_ranks field validates identically (has_touched_ranks == false).
@@ -122,8 +136,9 @@ using namespace NetworkAnalytical;
 namespace AstraSim {
 namespace ExecutionDriven {
 
-// Test-only access to the fixed, rank-bounded preflight scratch.  Production
-// code exposes no mutable diagnostics for these implementation details.
+// Test-only access to the fixed, rank-bounded preflight scratch and to the
+// pure Phase-A validator (the production header exposes no standalone
+// validate() -- production only ever calls validate_and_commit()).
 struct GraphBatchCommitterTestAccess {
     static void seed_json_id_stream_stamp(GraphBatchCommitter& committer,
                                           uint64_t stamp) {
@@ -136,6 +151,24 @@ struct GraphBatchCommitterTestAccess {
 
     static size_t discovered_capacity(const GraphBatchCommitter& committer) {
         return committer.json_id_discovered_touched_ranks_.capacity();
+    }
+
+    // Pure Phase-A pass: the full checklist with zero committer side
+    // effects (same entry the production validate_and_commit() runs).
+    static std::optional<std::string> validate(
+        const GraphBatchCommitter& committer, const StateDelta& delta,
+        const GraphBatch& batch) {
+        return committer.validate_impl(delta, batch, nullptr);
+    }
+
+    // Pure mandatory-liveness preflight pass (4.5 fix, 2026-09-29): the
+    // production commit runs this AFTER validate_impl, so a batch that
+    // validate_impl already rejects can never reach it -- direct coverage
+    // of the preflight's own rules needs this standalone entry.
+    static std::optional<std::string> preflight(
+        const GraphBatchCommitter& committer, const StateDelta& delta,
+        const GraphBatch& batch) {
+        return committer.mandatory_liveness_preflight(delta, batch);
     }
 };
 
@@ -159,6 +192,20 @@ uint64_t resolved_store_id(const GraphBatchCommitter& committer, int rank,
     return store_id.value_or(0);  // NodeStore never assigns automatic id 0.
 }
 
+// Test-local free-set snapshot of one rank's store (production iterates
+// through fill_free_node_snapshot() / node_ptr() without the extra copy).
+std::vector<uint64_t> free_ids_of(const NodeStore& store) {
+    std::vector<uint64_t> ids;
+    store.fill_free_node_snapshot(ids);
+    return ids;
+}
+
+// Test-local unfinished-count oracle: the phase-3 sensing summary's
+// node_count is exactly the unfinished (not yet finished) node count.
+size_t store_unfinished(const NodeStore& store) {
+    return store.injected_unfinished_summary(0).node_count;
+}
+
 bool same_counters(const GraphBatchCommitter::Counters& a,
                    const GraphBatchCommitter::Counters& b) {
     return a.graph_batch_count == b.graph_batch_count &&
@@ -177,6 +224,18 @@ bool same_counters(const GraphBatchCommitter::Counters& a,
 // real RequestIngress bound to an EventQueue + DecisionMailbox +
 // ServiceCoordinator (so future-alarm commits schedule genuine arrival
 // alarms), and an issue_rank lambda recording every call.
+// One anchor decision the metrics_anchor_hook replica made (Part Q). `kind`
+// mirrors the production registration kinds; the memory anchor (production
+// kind "" + transfer_anchor=true) is recorded as "memory" here.
+struct AnchorHit {
+    std::string request_id;
+    int rank = -1;
+    uint64_t store_id = 0;
+    const char* kind = "";
+    bool issue = false;
+    bool complete = false;
+};
+
 struct Fixture {
     EventQueue eq;
     DecisionMailbox mailbox;
@@ -185,6 +244,16 @@ struct Fixture {
     WatchRegistry registry;
     std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
     std::vector<int> issue_calls;
+    // Watch fires recorded by the notifier (fires are observed synchronously
+    // at fire time; consume/clear between parts where the old polling queue
+    // used to drain).
+    std::vector<WatchFire> fires;
+    // metrics_anchor_hook observability (P2-31, 2026-09-28): every anchor
+    // decision the hook made, whether the hook fired at all, and the issue
+    // call count at hook entry (the Phase B-1.5 ordering proof).
+    std::vector<AnchorHit> anchor_hits;
+    bool hook_invoked = false;
+    size_t hook_issue_calls_at_entry = 0;
     GraphBatchCommitter committer;
 
     static GraphBatchCommitter::Context make_context(Fixture* fixture) {
@@ -196,15 +265,120 @@ struct Fixture {
         ctx.issue_rank = [fixture](int rank) {
             fixture->issue_calls.push_back(rank);
         };
+        // P2-31 (2026-09-28): the fixture historically never installed the
+        // Context::metrics_anchor_hook, so the "main_online kv anchor"
+        // chain (P1-1) was the only link with no fixture-driven coverage.
+        // The lambda below is the test replica of main_online.cc's
+        // register_online_metrics_anchors selection walk: first node of
+        // each (request, rank, stage) group -> start anchor, watch members
+        // -> end anchors, and the LAST KV-route transfer leg per
+        // (request, rank) -- identified EXACTLY via is_kv_route_transfer_leg
+        // (ParsedGraphBatch.hh), NOT a "kv" substring -- -> the memory
+        // anchor. The store ids come from the committer's own affine
+        // resolver (the hook contract). The MetricCollector::instance gate
+        // is stubbed open: this binary keeps the collector disabled and the
+        // collector-side registration semantics are covered by the
+        // collector fixtures -- the chain pinned here is the committer-side
+        // wiring (hook invocation point, affine store-id translation,
+        // predicate-driven anchor choice), ending in the same
+        // NodeStore::set_metric_anchor_flags writes production makes.
+        ctx.metrics_anchor_hook =
+            [fixture](const GraphBatch& batch,
+                      const GraphBatchCommitter& committer) {
+                fixture->hook_invoked = true;
+                fixture->hook_issue_calls_at_entry =
+                    fixture->issue_calls.size();
+                const auto register_anchor =
+                    [&](const std::string& request_id, int rank,
+                        uint64_t store_id, const char* kind, bool issue,
+                        bool complete) {
+                        if (rank < 0 ||
+                            rank >= static_cast<int>(fixture->sources.size())) {
+                            return;  // defensive: mirrors production's bounds
+                        }
+                        fixture->anchor_hits.push_back(AnchorHit{
+                            request_id, rank, store_id, kind, issue,
+                            complete});
+                        fixture->sources[rank]->store()
+                            .set_metric_anchor_flags(store_id, issue,
+                                                     complete);
+                    };
+                struct NodeRef {
+                    int rank = -1;
+                    uint64_t store_id = 0;
+                };
+                std::map<std::tuple<std::string, int, std::string>, NodeRef>
+                    first_of;
+                std::map<std::pair<std::string, int>, NodeRef> last_transfer;
+                std::vector<std::pair<std::pair<std::string, int>, NodeRef>>
+                    first_token_nodes;
+                for (const auto& parsed : batch.nodes) {
+                    const auto store_id = committer.resolve_store_id(
+                        parsed.node.rank, parsed.json_id);
+                    if (!store_id.has_value()) {
+                        continue;  // defensive: B-1 just inserted every node
+                    }
+                    if (parsed.node.name.find("first_token") !=
+                        std::string::npos) {
+                        first_token_nodes.push_back(
+                            {{parsed.node.request_id, parsed.node.rank},
+                             NodeRef{parsed.node.rank, *store_id}});
+                        continue;
+                    }
+                    auto& first = first_of[{parsed.node.request_id,
+                                            parsed.node.rank,
+                                            parsed.node.stage}];
+                    if (first.rank < 0) {
+                        first = {parsed.node.rank, *store_id};
+                    }
+                    if (is_kv_route_transfer_leg(parsed.node)) {
+                        last_transfer[{parsed.node.request_id,
+                                       parsed.node.rank}] =
+                            {parsed.node.rank, *store_id};
+                    }
+                }
+                for (const auto& [group, ref] : first_of) {
+                    register_anchor(std::get<0>(group), ref.rank, ref.store_id,
+                                    std::get<2>(group) == "prefill"
+                                        ? "prefill_start"
+                                        : "decode_start",
+                                    /*issue=*/true, /*complete=*/false);
+                }
+                for (const auto& watch : batch.watches) {
+                    const bool is_prefill = watch.stage == "prefill";
+                    for (const auto& member : watch.members) {
+                        const auto store_id = committer.resolve_store_id(
+                            member.rank, member.json_id);
+                        if (!store_id.has_value()) {
+                            continue;
+                        }
+                        register_anchor(watch.request_id, member.rank,
+                                        *store_id,
+                                        is_prefill ? "prefill_end"
+                                                   : "completion",
+                                        /*issue=*/false, /*complete=*/true);
+                    }
+                }
+                for (const auto& [key, ref] : last_transfer) {
+                    register_anchor(key.first, ref.rank, ref.store_id,
+                                    "memory", /*issue=*/false,
+                                    /*complete=*/true);
+                }
+                for (const auto& [key, ref] : first_token_nodes) {
+                    register_anchor(key.first, ref.rank, ref.store_id,
+                                    "first_token", /*issue=*/false,
+                                    /*complete=*/true);
+                }
+            };
         ctx.communicator_members_for_pg =
             [](const std::string& pg_name,
                const std::vector<int>& /* participant_ranks */)
-            -> std::optional<std::vector<int>> {
+            -> std::optional<std::pair<std::vector<int>, size_t>> {
             if (pg_name == "tp0") {
-                return std::vector<int>({1, 2});
+                return std::make_pair(std::vector<int>({1, 2}), size_t(2));
             }
             if (pg_name == "train_pg") {
-                return std::vector<int>({0, 1, 2});
+                return std::make_pair(std::vector<int>({0, 1, 2}), size_t(2));
             }
             return std::nullopt;
         };
@@ -214,6 +388,9 @@ struct Fixture {
     Fixture()
         : ingress(4096), committer(make_context(this)) {
         ingress.bind(&eq, &mailbox, &svc);
+        registry.set_fire_notifier([this](const WatchFire& fire) {
+            fires.push_back(fire);
+        });
         // One DISTINCT NodeStore per rank (a fill-constructed vector would
         // share a single store across all three "ranks").
         sources.reserve(3);
@@ -226,7 +403,7 @@ struct Fixture {
 // Observable state snapshot: everything the commit can write, flattened
 // for byte-level equality comparison (零副作用 assertion of Part B/D/P).
 struct Snapshot {
-    std::vector<size_t> pending;              // per-rank store node counts
+    std::vector<size_t> pending;  // per-rank store unfinished-node counts
     std::vector<std::vector<uint64_t>> free;  // per-rank free sets
     size_t affine_ranks = 0;
     size_t watches = 0;
@@ -261,8 +438,8 @@ bool operator==(const Snapshot& a, const Snapshot& b) {
 Snapshot snapshot_of(const Fixture& f) {
     Snapshot s;
     for (const auto& src : f.sources) {
-        s.pending.push_back(src->store().pending_count());
-        s.free.push_back(src->store().resolve_free_nodes());
+        s.pending.push_back(store_unfinished(src->store()));
+        s.free.push_back(free_ids_of(src->store()));
     }
     s.affine_ranks = f.committer.rank_affine_count();
     s.watches = f.registry.size();
@@ -352,13 +529,22 @@ nlohmann::json prefill_watch(const std::string& request_id,
             {"statuses", nlohmann::json::array({"Success", "Skipped"})}};
 }
 
-// One batch node, parsed through the production path in isolation.
-ParsedNode parse_single_node(const nlohmann::json& node_json, int num_ranks) {
-    nlohmann::json resp;
-    resp["schema_version"] = 1;
-    resp["source_delivery_sequence"] = 0;
-    resp["nodes"] = nlohmann::json::array({node_json});
-    return parse_graph_batch(resp, num_ranks).nodes.at(0);
+// Pure Phase-A pass for the fixtures (the production header exposes no
+// standalone validate(); production only ever calls validate_and_commit(),
+// so the pure entry lives behind the TestAccess above).
+std::optional<std::string> phase_a_validate(
+    const GraphBatchCommitter& committer, const StateDelta& delta,
+    const GraphBatch& batch) {
+    return GraphBatchCommitterTestAccess::validate(committer, delta, batch);
+}
+
+// Pure mandatory-liveness preflight pass for the fixtures (4.5 fix): the
+// production commit runs it after validate_impl, so direct coverage of the
+// preflight's own rules needs the standalone entry.
+std::optional<std::string> phase_a_preflight(
+    const GraphBatchCommitter& committer, const StateDelta& delta,
+    const GraphBatch& batch) {
+    return GraphBatchCommitterTestAccess::preflight(committer, delta, batch);
 }
 
 GraphBatch parse_batch(const nlohmann::json& resp, int num_ranks = 3) {
@@ -455,28 +641,13 @@ StateDelta baseline_delta() {
     return d;
 }
 
-// ----------------------------------------------------------- Part A ------
-void test_static_checks(const Fixture& f) {
-    (void)f;
-    const GraphBatch base = baseline_batch();
-    expect(GraphBatchCommitter::compute_touched_ranks(base, 3) ==
-               std::vector<int>({0, 1, 2}),
-           "A: compute_touched_ranks covers all three ranks");
-    expect(GraphBatchCommitter::compute_touched_ranks(base, 2) ==
-               std::vector<int>({0, 1}),
-           "A: compute_touched_ranks filters out-of-range ranks");
-    // C1: non-object entries can no longer reach this pure helper (the
-    // parse layer rejects them); the rank filter above keeps the tolerance
-    // contract for out-of-range typed values.
-}
-
 // ----------------------------------------------------------- Part B ------
 // Every illegal batch must be rejected with the state byte-identical to the
 // pre-validate snapshot (zero nodes / zero watches / zero ledger actions).
 void expect_reject(Fixture& f, const StateDelta& delta, GraphBatch batch,
                    const char* what, const char* expected_error = nullptr) {
     const Snapshot before = snapshot_of(f);
-    const auto err = f.committer.validate(delta, batch);
+    const auto err = phase_a_validate(f.committer, delta, batch);
     expect(err.has_value(), what);
     if (!err.has_value()) {
         std::fprintf(stderr,
@@ -487,7 +658,8 @@ void expect_reject(Fixture& f, const StateDelta& delta, GraphBatch batch,
         expect(*err == expected_error,
                "B: validation reports the exact fail-closed reason");
     }
-    expect(snapshot_of(f) == before, "B: validate() left zero side effects");
+    expect(snapshot_of(f) == before,
+           "B: Phase-A validation left zero side effects");
     if (!(snapshot_of(f) == before)) {
         std::fprintf(stderr,
                      "[graph_batch_committer_test] state mutated by %s\n",
@@ -624,6 +796,37 @@ void test_negative_cases(Fixture& f) {
             "B: validate-off direct commit rejects zero-byte collective");
     }
     {
+        // CPP-02: a zero-byte send/recv PAIR passes the endpoint/tag/pairing
+        // rules but would exit the analytical fluid backend as an invalid
+        // flow -- rejected at the commit boundary, validate-on and off.
+        GraphBatch b = base;
+        b.nodes[1].node.comm.bytes = 0;  // matching send on rank 0
+        b.nodes[3].node.comm.bytes = 0;  // matching recv on rank 1
+        expect_reject(f, delta, b, "B: zero-byte p2p pair rejected",
+                      "node[1] p2p comm bytes must be positive");
+        Fixture direct;
+        expect_direct_commit_reject(
+            direct, delta, b,
+            "B: validate-off direct commit rejects zero-byte p2p pair");
+    }
+    {
+        // CPP-01: BROADCAST (comm_type 5) has no execution-driven
+        // implementation (the Workload arm is a placeholder) -- the batch
+        // must fail closed instead of committing as a silent local no-op.
+        GraphBatch b = base;
+        b.nodes[4].node.coll.comm_type = 5;  // tp0_barrier on rank 1
+        b.nodes[6].node.coll.comm_type = 5;  // same collective on rank 2
+        expect_reject(
+            f, delta, b, "B: BROADCAST collective rejected",
+            "mandatory liveness preflight: node[4] BROADCAST collectives "
+            "(comm_type 5) are not implemented in the execution-driven "
+            "path; the input graph must not use broadcast");
+        Fixture direct;
+        expect_direct_commit_reject(
+            direct, delta, b,
+            "B: validate-off direct commit rejects BROADCAST collective");
+    }
+    {
         GraphBatch b = base;
         b.assignments[0].request_id.clear();
         expect_reject(f, delta, b, "B: assignment without request_id");
@@ -727,7 +930,7 @@ void test_json_id_stamp_wrap_and_recovery() {
     GraphBatch invalid = base;
     invalid.nodes[1].json_id = 2;  // rank 0 expects id 1 after its first node
     const Snapshot before_rejection = snapshot_of(f);
-    const auto rejection = f.committer.validate(delta, invalid);
+    const auto rejection = phase_a_validate(f.committer, delta, invalid);
     expect(rejection.has_value(),
            "C1: wrapped json-id stamp still rejects a broken stream");
     expect(snapshot_of(f) == before_rejection,
@@ -755,10 +958,10 @@ void test_positive_commit(Fixture& f) {
     GraphBatch no_touched = base;
     no_touched.has_touched_ranks = false;
     no_touched.touched_ranks.clear();
-    expect(!f.committer.validate(delta, no_touched).has_value(),
+    expect(!phase_a_validate(f.committer, delta, no_touched).has_value(),
            "C: batch without touched_ranks field validates (pre-5 fixture)");
 
-    expect(!f.committer.validate(delta, base).has_value(),
+    expect(!phase_a_validate(f.committer, delta, base).has_value(),
            "C: baseline batch validates clean");
     f.committer.commit(delta, base);
 
@@ -772,12 +975,12 @@ void test_positive_commit(Fixture& f) {
     expect(c.total_kv_actions == 1, "C: total_kv_actions == 1");
     expect(c.total_future_alarms == 1, "C: total_future_alarms == 1");
 
-    expect(f.sources[0]->store().pending_count() == 2,
-           "C: rank 0 store holds 2 nodes");
-    expect(f.sources[1]->store().pending_count() == 3,
-           "C: rank 1 store holds 3 nodes");
-    expect(f.sources[2]->store().pending_count() == 2,
-           "C: rank 2 store holds 2 nodes");
+    expect(store_unfinished(f.sources[0]->store()) == 2,
+           "C: rank 0 store holds 2 unfinished nodes");
+    expect(store_unfinished(f.sources[1]->store()) == 3,
+           "C: rank 1 store holds 3 unfinished nodes");
+    expect(store_unfinished(f.sources[2]->store()) == 2,
+           "C: rank 2 store holds 2 unfinished nodes");
 
     // Exact per-rank affine translation. NodeStore ids are PER-RANK (each
     // store starts at 1 here), while the metadata itself stays O(ranks).
@@ -795,13 +998,13 @@ void test_positive_commit(Fixture& f) {
            "C: rank 2 store ids 1, 2 (per-rank id space)");
 
     // Parent edges block their children (free set = the batch's roots).
-    expect(f.sources[0]->store().resolve_free_nodes() ==
+    expect(free_ids_of(f.sources[0]->store()) ==
                std::vector<uint64_t>({1}),
            "C: rank 0 free set {1} (child blocked by the parent edge)");
-    expect(f.sources[1]->store().resolve_free_nodes() ==
+    expect(free_ids_of(f.sources[1]->store()) ==
                std::vector<uint64_t>({1}),
            "C: rank 1 free set {1} (0->1->2 chain)");
-    expect(f.sources[2]->store().resolve_free_nodes() ==
+    expect(free_ids_of(f.sources[2]->store()) ==
                std::vector<uint64_t>({1, 2}),
            "C: rank 2 free set {1, 2} (no edges on rank 2)");
 
@@ -819,20 +1022,76 @@ void test_positive_commit(Fixture& f) {
 // Post-commit negatives: rejected against the committed state -- e.g. an
 // alarm for a request that is in-flight NOW (legal before the commit) --
 // and still zero side effects on the committed state.
+// 4.5 fix (2026-09-29): the old cases mutated the BASELINE batch (re-sending
+// already-committed node ids), so the json-id-stream rule rejected them
+// before the intended rules could even run -- both assertions were trivially
+// true and the targeted rules had zero coverage. These cases use ZERO-NODE
+// batches (the id-stream pass is vacuously clean over them), so the
+// rejection comes from the intended rule.
 void test_post_commit_negatives(Fixture& f) {
-    const StateDelta delta = baseline_delta();
-    const GraphBatch base = baseline_batch();
     {
-        GraphBatch b = base;
-        b.future_alarms[0].envelope.request_id = "r1";  // in-flight NOW
-        expect_reject(f, delta, b,
-                      "D: alarm for a now in-flight request rejected");
+        // The post-commit alarm rule (validate_impl): r1 went in-flight at
+        // the Part C commit; an alarm for it is now illegal.
+        nlohmann::json resp = empty_response(1);
+        resp["future_alarms"] = nlohmann::json::array({
+            {{"arrival_world_ns", 200},
+             {"envelope", {{"request_id", "r1"}, {"session_id", "s1"},
+                           {"turn_index", 1}, {"prefill_length", 100},
+                           {"decode_length", 10},
+                           {"inter_request_interval_ns", 20000000}}}},
+        });
+        GraphBatch b = parse_batch(resp);
+        StateDelta delta;
+        delta.delivery_sequence = 1;
+        delta.delivery_epoch = 1;
+        delta.tick = 150;
+        const Snapshot before = snapshot_of(f);
+        const auto err = phase_a_validate(f.committer, delta, b);
+        expect(err.has_value(),
+               "D: alarm for a now in-flight request rejected");
+        if (err.has_value()) {
+            expect(err->find("already in-flight request") !=
+                       std::string::npos,
+                   "D: rejection names the post-commit alarm rule");
+        }
+        // The preflight carries the same rule -- both layers must reject
+        // the identical batch (the commit path runs them in this order).
+        const auto preflight_err = phase_a_preflight(f.committer, delta, b);
+        expect(preflight_err.has_value() &&
+                   preflight_err->find("already in-flight request") !=
+                       std::string::npos,
+               "D: the liveness preflight rejects the in-flight alarm too");
+        expect(snapshot_of(f) == before,
+               "D: rejected alarm batch left zero side effects");
     }
     {
-        GraphBatch b = base;
-        b.nodes[1].json_id = 0;  // in-batch duplicate id on rank 0
-        expect_reject(f, delta, b,
-                      "D: in-batch duplicate node id rejected, state intact");
+        // Duplicate alarm request_ids within one batch (also post-commit
+        // shaped, id-stream clean).
+        nlohmann::json resp = empty_response(2);
+        const nlohmann::json envelope = {
+            {"request_id", "r9"}, {"session_id", "s1"},
+            {"turn_index", 1}, {"prefill_length", 100},
+            {"decode_length", 10},
+            {"inter_request_interval_ns", 20000000}};
+        resp["future_alarms"] = nlohmann::json::array({
+            {{"arrival_world_ns", 200}, {"envelope", envelope}},
+            {{"arrival_world_ns", 300}, {"envelope", envelope}},
+        });
+        GraphBatch b = parse_batch(resp);
+        StateDelta delta;
+        delta.delivery_sequence = 2;
+        delta.delivery_epoch = 1;
+        delta.tick = 150;
+        const Snapshot before = snapshot_of(f);
+        const auto err = phase_a_validate(f.committer, delta, b);
+        expect(err.has_value(),
+               "D: duplicate alarm request_id in one batch rejected");
+        if (err.has_value()) {
+            expect(err->find("duplicate request_id") != std::string::npos,
+                   "D: rejection names the duplicate-alarm rule");
+        }
+        expect(snapshot_of(f) == before,
+               "D: rejected duplicate-alarm batch left zero side effects");
     }
     const auto& c = f.committer.counters();
     expect(c.graph_batch_count == 1 && c.total_nodes == 7,
@@ -854,7 +1113,7 @@ void test_zero_node_batch(Fixture& f) {
 
     GraphBatch b = parse_batch(empty_response(1));
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
            "E: zero-node batch validates clean");
     f.committer.commit(delta, b);
 
@@ -906,7 +1165,7 @@ void test_single_node_batch(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
            "F: single-node batch validates clean");
     f.committer.commit(delta, b);
 
@@ -918,13 +1177,13 @@ void test_single_node_batch(Fixture& f) {
     expect(c.max_nodes_per_batch == 7, "F: max unchanged at 7");
     expect(c.total_watches == 2, "F: total_watches == 2");
 
-    expect(f.sources[0]->store().pending_count() == 3,
-           "F: rank 0 store holds 3 nodes");
+    expect(store_unfinished(f.sources[0]->store()) == 3,
+           "F: rank 0 store holds 3 unfinished nodes");
     expect(resolved_store_id(f.committer, 0, 2) == 3,
            "F: json id 2 of batch 2 -> store id 3 on rank 0");
     // The new node's parent is the PREVIOUS batch's node (store id 2) --
     // the cross-batch edge resolved through the persistent map.
-    expect(f.sources[0]->store().resolve_free_nodes() ==
+    expect(free_ids_of(f.sources[0]->store()) ==
                std::vector<uint64_t>({1}),
            "F: new node blocked by its cross-batch parent");
     expect(f.committer.in_flight_requests() ==
@@ -984,7 +1243,7 @@ void test_default_comm_compute_batch(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
            "G: metadata/compute nodes with default comm/coll validate");
     f.committer.commit(delta, b);
     expect(f.committer.counters().graph_batch_count == 4,
@@ -1033,9 +1292,9 @@ void test_hbm_charge_key_parsing(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0, 1});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
            "H: hbm_charge batch validates clean");
-    if (const auto err = f.committer.validate(delta, b)) {
+    if (const auto err = phase_a_validate(f.committer, delta, b)) {
         std::fprintf(stderr,
                      "[graph_batch_committer_test] H validate error: %s\n",
                      err->c_str());
@@ -1209,15 +1468,15 @@ DecisionEvent drain_event(const std::string& req) {
 void drive_terminal(Fixture& f, int rank, uint64_t store_id,
                     NodeTerminalStatus status) {
     f.sources[rank]->store().finish_node(store_id);
-    const auto meta = f.sources[rank]->store().meta_for(store_id);
-    expect(meta.has_value(), "train: meta_for the driven node");
-    if (meta.has_value()) {
+    const OnlineNode* node = f.sources[rank]->store().node_ptr(store_id);
+    expect(node != nullptr, "train: node_ptr the driven node");
+    if (node != nullptr) {
         f.registry.on_node_terminal(
-            CompletionKey{rank, store_id, meta->generation}, status);
+            CompletionKey{rank, store_id, node->generation}, status);
     }
 }
 
-// ----------------------------------------------------------- Part H ------
+// ----------------------------------------------------------- Part I ------
 // The two-request decode train: epoch 1 lands the arrivals + req_A's
 // prefill drain (a zero-node accounting batch), epoch 2 commits the train
 // (req_B's prefill drain is a delta fact of the SAME epoch -- delta facts
@@ -1233,7 +1492,7 @@ void test_train_batch_two_members(Fixture& f) {
     h1.events.push_back(arrival_event("req_B"));
     h1.events.push_back(drain_event("req_A"));
     GraphBatch setup = parse_batch(empty_response(4));
-    expect(!f.committer.validate(h1, setup).has_value(),
+    expect(!phase_a_validate(f.committer, h1, setup).has_value(),
            "I: epoch-1 zero-node setup batch validates clean");
     f.committer.commit(h1, setup);
     expect(f.committer.in_flight_requests() ==
@@ -1262,7 +1521,7 @@ void test_train_batch_two_members(Fixture& f) {
         no_drain_b.delivery_epoch = 5;
         no_drain_b.tick = 450;
         const Snapshot before = snapshot_of(f);
-        const auto err = f.committer.validate(no_drain_b, train);
+        const auto err = phase_a_validate(f.committer, no_drain_b, train);
         expect(err.has_value(),
                "I: decode watch of a never-drained member is blocked");
         if (err.has_value()) {
@@ -1281,7 +1540,7 @@ void test_train_batch_two_members(Fixture& f) {
     h2.delivery_epoch = 5;
     h2.tick = 450;
     h2.events.push_back(drain_event("req_B"));
-    expect(!f.committer.validate(h2, train).has_value(),
+    expect(!phase_a_validate(f.committer, h2, train).has_value(),
            "I: two-request train batch validates clean (zero relaxation)");
     f.committer.commit(h2, train);
 
@@ -1306,7 +1565,7 @@ void test_train_batch_two_members(Fixture& f) {
     // Per-rank pending nodes after Part G: {5, 3, 2}; the train adds 4.
     const size_t pending_after_g[3] = {5, 3, 2};
     for (int rank = 0; rank < 3; ++rank) {
-        expect(f.sources[rank]->store().pending_count() ==
+        expect(store_unfinished(f.sources[rank]->store()) ==
                    pending_after_g[rank] + 4,
                "I: per-rank store gained the 4 train nodes");
     }
@@ -1335,7 +1594,7 @@ void test_train_batch_two_members(Fixture& f) {
         drive_terminal(f, rank, barrier_ids[rank],
                        NodeTerminalStatus::Success);
     }
-    expect(f.registry.fired_and_drain().empty(),
+    expect(f.fires.empty(),
            "I: namespace body/barrier terminals fire no watch");
 
     // Member markers feed the member watches (one Skipped terminal on the
@@ -1349,7 +1608,8 @@ void test_train_batch_two_members(Fixture& f) {
                        rank == 1 ? NodeTerminalStatus::Skipped
                                  : NodeTerminalStatus::Success);
     }
-    const std::vector<WatchFire> fires = f.registry.fired_and_drain();
+    const std::vector<WatchFire> fires = std::move(f.fires);
+    f.fires.clear();
     expect(fires.size() == 2, "I: both member decode watches fired");
     std::set<std::string> fired_members;
     for (const auto& fire : fires) {
@@ -1367,14 +1627,14 @@ void test_train_batch_two_members(Fixture& f) {
     // The dependency chain closed: with body + markers finished on every
     // rank, each rank's end barrier entered its free set.
     for (int rank = 0; rank < 3; ++rank) {
-        const auto free = f.sources[rank]->store().resolve_free_nodes();
+        const auto free = free_ids_of(f.sources[rank]->store());
         const std::set<uint64_t> free_set(free.begin(), free.end());
         expect(free_set.count(barrier_ids[rank]) == 1,
                "I: end barrier free after its train finished");
     }
 }
 
-// ----------------------------------------------------------- Part I ------
+// ----------------------------------------------------------- Part J ------
 // Variant: ONE train folding a prefill chunk of req_C (drain marker,
 // prefill watch, gen 0) and a decode token of req_D (exit marker, decode
 // watch, gen 1) -- the mixed train. Both watches fire.
@@ -1391,7 +1651,7 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
     const GraphBatch train = train_batch(
         6, "batch_train_2_3", {{"req_C", "prefill"}, {"req_D", "decode"}},
         4, mixed_first_json_ids);
-    expect(!f.committer.validate(i1, train).has_value(),
+    expect(!phase_a_validate(f.committer, i1, train).has_value(),
            "J: mixed drain+exit train validates clean (zero relaxation)");
     f.committer.commit(i1, train);
 
@@ -1420,7 +1680,8 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
                        resolved_store_id(f.committer, rank, first_json_id + 2),
                        NodeTerminalStatus::Success);  // req_D exit marker
     }
-    const std::vector<WatchFire> fires = f.registry.fired_and_drain();
+    const std::vector<WatchFire> fires = std::move(f.fires);
+    f.fires.clear();
     expect(fires.size() == 2, "J: drain watch and exit watch both fired");
     std::map<std::string, std::pair<std::string, uint64_t>> fired;
     for (const auto& fire : fires) {
@@ -1468,21 +1729,48 @@ void test_parse_failure_atomicity(Fixture& f) {
         GraphBatch b = baseline_batch();
         b.nodes[0].node.rank = 99;
         const Snapshot before = snapshot_of(f);
-        expect(f.committer.validate(delta, b).has_value(),
+        expect(phase_a_validate(f.committer, delta, b).has_value(),
                "P: post-parse rank corruption rejected by validate");
         expect(snapshot_of(f) == before,
                "P: rejection of the corrupted batch has zero side effects");
     }
-    // (3) A corrupted watch member is blocked by the MANDATORY preflight
-    //     (member-not-a-batch-node) BEFORE any Phase-B assembly can run --
-    //     the direct validate-off commit path stays atomic.
+    // (3) A corrupted watch member is blocked before any Phase-B assembly
+    //     can run -- the direct validate-off commit path stays atomic.
+    //     4.5 fix (2026-09-29): the old case re-sent the baseline node ids
+    //     alongside the corrupted member, so commit() threw from the
+    //     json-id-stream rule long before any watch-member rule -- the
+    //     assertion was trivially true. A ZERO-NODE batch keeps the
+    //     id-stream pass vacuously clean, so the block now comes from the
+    //     watch-member identity rule itself (validate_impl AND the
+    //     mandatory liveness preflight, each asserted directly, plus the
+    //     production commit entry).
     {
-        GraphBatch b = baseline_batch();
-        b.watches[0].members[0].json_id = 7777;
+        nlohmann::json resp = empty_response(3);
+        resp["watches"] = nlohmann::json::array({
+            prefill_watch("r1", {{"0", 7777}}),
+        });
+        GraphBatch b = parse_batch(resp);
+        StateDelta seq3_delta;
+        seq3_delta.delivery_sequence = 3;
+        seq3_delta.delivery_epoch = 1;
+        seq3_delta.tick = 150;
         const Snapshot before = snapshot_of(f);
+        const auto validate_err = phase_a_validate(f.committer, seq3_delta, b);
+        expect(validate_err.has_value() &&
+                   validate_err->find("is not a node of this batch") !=
+                       std::string::npos,
+               "P: corrupted watch member rejected by the member identity "
+               "rule (validate)");
+        const auto preflight_err =
+            phase_a_preflight(f.committer, seq3_delta, b);
+        expect(preflight_err.has_value() &&
+                   preflight_err->find("is not a node of this batch") !=
+                       std::string::npos,
+               "P: corrupted watch member rejected by the member identity "
+               "rule (mandatory liveness preflight)");
         bool threw = false;
         try {
-            f.committer.commit(delta, b);
+            f.committer.commit(seq3_delta, b);
         } catch (const std::runtime_error&) {
             threw = true;
         }
@@ -1571,7 +1859,7 @@ bool commit_gc_batch(GcFixture& fixture, const GraphBatch& batch,
         arrival.generation = 0;
         delta.events.push_back(std::move(arrival));
     }
-    const auto error = fixture.committer->validate(delta, batch);
+    const auto error = phase_a_validate(*fixture.committer, delta, batch);
     expect(!error.has_value(), what);
     if (error.has_value()) {
         std::fprintf(stderr, "[graph_batch_committer_test] GC validate: %s\n",
@@ -1614,7 +1902,8 @@ void test_gc_bounded_id_history_and_pruning() {
     // rejected even when expensive semantic validation is skipped, and the
     // direct commit preflight must leave all state untouched.
     const GraphBatch gap = gc_compute_batch(1, 9, 1, "gc-gap");
-    const auto gap_error = fixture.committer->validate(gc_delta(1), gap);
+    const auto gap_error =
+        phase_a_validate(*fixture.committer, gc_delta(1), gap);
     expect(gap_error.has_value(), "K: sparse id gap fails validation");
     const auto counters_before_gap = fixture.committer->counters();
     bool gap_commit_threw = false;
@@ -1644,7 +1933,7 @@ void test_gc_bounded_id_history_and_pruning() {
     }
     const auto after_store_id = fixture.committer->resolve_store_id(0, 8);
     expect(after_store_id.has_value() &&
-               fixture.sources[0]->store().resolve_free_nodes() ==
+               free_ids_of(fixture.sources[0]->store()) ==
                    std::vector<uint64_t>({*after_store_id}),
            "K: edge from collected parent is non-blocking");
     finish_gc_json_id(fixture, 8, "K: child after collected parent maps");
@@ -1667,16 +1956,16 @@ void test_gc_bounded_id_history_and_pruning() {
            "K: all collected ids remain exactly resolvable in O(ranks) state");
 
     const auto duplicate_seven =
-        fixture.committer->validate(gc_delta(3),
-                                    gc_compute_batch(3, 7, 1, "gc-dup-7"));
+        phase_a_validate(*fixture.committer, gc_delta(3),
+                         gc_compute_batch(3, 7, 1, "gc-dup-7"));
     expect(duplicate_seven.has_value(),
            "K: duplicate collected first id fails closed");
     const auto duplicate_eight =
-        fixture.committer->validate(gc_delta(4),
-                                    gc_compute_batch(4, 8, 1, "gc-dup-8"));
+        phase_a_validate(*fixture.committer, gc_delta(4),
+                         gc_compute_batch(4, 8, 1, "gc-dup-8"));
     expect(duplicate_eight.has_value(),
            "K: duplicate committed range id fails closed");
-    const auto unknown_parent = fixture.committer->validate(
+    const auto unknown_parent = phase_a_validate(*fixture.committer,
         gc_delta(5), gc_compute_batch(5, 10, 1, "gc-unknown", 6));
     expect(unknown_parent.has_value(),
            "K: never-committed low-id parent fails closed");
@@ -1818,7 +2107,7 @@ void test_affine_drift_fails_closed() {
     drift_delta.events.push_back(arrival);
     const GraphBatch next = gc_compute_batch(1, 42, 1, "gc-drift-next");
 
-    const size_t pending_before = fixture.sources[0]->store().pending_count();
+    const size_t pending_before = store_unfinished(fixture.sources[0]->store());
     const size_t retained_before = fixture.sources[0]->store().retained_count();
     const uint64_t next_auto_before =
         fixture.sources[0]->store().next_auto_id();
@@ -1826,11 +2115,12 @@ void test_affine_drift_fails_closed() {
     const auto counters_before = fixture.committer->counters();
     const auto in_flight_before = fixture.committer->in_flight_requests();
 
-    const auto validation_error = fixture.committer->validate(drift_delta, next);
+    const auto validation_error =
+        phase_a_validate(*fixture.committer, drift_delta, next);
     expect(validation_error.has_value() &&
                validation_error->find("drift") != std::string::npos,
            "N: validate fails closed on external NodeStore drift");
-    expect(fixture.sources[0]->store().pending_count() == pending_before &&
+    expect(store_unfinished(fixture.sources[0]->store()) == pending_before &&
                fixture.sources[0]->store().retained_count() == retained_before &&
                fixture.sources[0]->store().next_auto_id() == next_auto_before &&
                fixture.committer->rank_affine_count() == affine_before &&
@@ -1847,7 +2137,7 @@ void test_affine_drift_fails_closed() {
         threw = true;
     }
     expect(threw, "N: direct commit fails closed on external NodeStore drift");
-    expect(fixture.sources[0]->store().pending_count() == pending_before &&
+    expect(store_unfinished(fixture.sources[0]->store()) == pending_before &&
                fixture.sources[0]->store().retained_count() == retained_before &&
                fixture.sources[0]->store().next_auto_id() == next_auto_before &&
                fixture.committer->rank_affine_count() == affine_before &&
@@ -1903,10 +2193,176 @@ void test_affine_metadata_under_million_node_pressure() {
            "O: one million committed ids retain O(ranks) affine metadata");
 }
 
+// ----------------------------------------------------------- Part Q ------
+// P2-31 (2026-09-28): the metrics_anchor_hook chain, fixture-driven. The
+// fixture historically never installed Context::metrics_anchor_hook
+// (make_context omitted the member), so the P1-1 "main_online kv anchor"
+// fix had no test that would go red through THIS chain: commit ->
+// Phase B-1.5 hook invocation -> affine store-id resolution ->
+// is_kv_route_transfer_leg-driven memory-anchor choice. Q1 is the exact
+// P1-1 red scenario (a history_kv migrate leg followed, in emission order,
+// by the aggregated "..._attention_qkv_projection" COMPUTE node of the
+// same request context): the qkv node must carry NO anchor and the
+// history_kv legs must be the memory anchors. Q2 is the fabrication leg
+// (a transfer-free request whose only node is qkv-named compute): no
+// memory anchor may exist for it.
+std::optional<uint64_t> find_anchor_hit(const Fixture& f,
+                                        const std::string& request_id,
+                                        int rank, const char* kind) {
+    for (const auto& hit : f.anchor_hits) {
+        if (hit.request_id == request_id && hit.rank == rank &&
+            std::string(hit.kind) == kind) {
+            return hit.store_id;
+        }
+    }
+    return std::nullopt;
+}
+
+bool has_anchor_hit_on(const Fixture& f, uint64_t store_id, bool complete) {
+    for (const auto& hit : f.anchor_hits) {
+        if (hit.store_id == store_id &&
+            (complete ? hit.complete : hit.issue)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+nlohmann::json kv_leg_node(int rank, uint64_t id, int type, int src, int dst,
+                           int tag, const std::string& req,
+                           const std::string& stage,
+                           const std::string& name) {
+    return {
+        {"rank", rank}, {"id", id}, {"type", type}, {"name", name},
+        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
+        {"request_id", req}, {"stage", stage},
+        {"generation", stage == "decode" ? 1 : 0},
+        {"compute", {{"num_ops", 1000}, {"tensor_size", 4096},
+                     {"runtime_ns", 10000}}},
+        {"comm", {{"bytes", 4096}, {"src", src}, {"dst", dst}, {"tag", tag}}},
+        {"coll", coll_defaults()},
+    };
+}
+
+StateDelta anchor_arrival_delta(uint64_t sequence, const char* request_id) {
+    StateDelta delta;
+    delta.delivery_sequence = sequence;
+    delta.delivery_epoch = sequence;
+    delta.tick = 100 + sequence;
+    DecisionEvent arrival;
+    arrival.reason = DecisionReason::ARRIVAL;
+    arrival.request_id = request_id;
+    arrival.stage = "prefill";
+    arrival.generation = 0;
+    arrival.payload.session_id = "s1";
+    arrival.payload.prefill_length = 100;
+    arrival.payload.decode_length = 10;
+    delta.events.push_back(arrival);
+    return delta;
+}
+
+void test_metrics_anchor_hook_chain() {
+    Fixture f;  // local fixture: the hook records must start empty
+
+    // -- Q1: the P1-1 red scenario, one KV migrate request rank1 -> rank0.
+    //    Emission order per rank mirrors the real graph_batch_builder order:
+    //    the transfer leg first, the aggregated qkv compute pass after it.
+    nlohmann::json resp = empty_response(0);
+    resp["nodes"] = nlohmann::json::array({
+        kv_leg_node(1, 0, 5, 1, 0, 9, "req_kv", "prefill",
+                    "req_kv_prefill_history_kv_send_rank1_to_rank0"),
+        kv_leg_node(0, 0, 6, 1, 0, 9, "req_kv", "prefill",
+                    "req_kv_prefill_history_kv_recv_rank1_to_rank0"),
+        compute_node(0, 1, "req_kv", "prefill",
+                     "req_kv_current_prefill_request_aggregated_all_layers_"
+                     "attention_qkv_projection"),
+    });
+    resp["parent_edges"] = nlohmann::json::array({data_edge(0, 0, 1)});
+    resp["touched_ranks"] = nlohmann::json::array({0, 1});
+    GraphBatch b = parse_batch(resp);
+    const StateDelta delta = anchor_arrival_delta(0, "req_kv");
+
+    expect(!phase_a_validate(f.committer, delta, b).has_value(),
+           "Q1: kv-migrate batch validates clean");
+    f.committer.commit(delta, b);
+
+    expect(f.hook_invoked, "Q1: metrics_anchor_hook fired during commit");
+    expect(f.hook_issue_calls_at_entry == 0,
+           "Q1: hook ran BEFORE the issue pass (Phase B-1.5 ordering)");
+    expect(f.issue_calls == std::vector<int>({0, 1}),
+           "Q1: the issue pass ran AFTER the hook (touched ranks {0,1})");
+
+    const uint64_t send_store = resolved_store_id(f.committer, 1, 0);
+    const uint64_t recv_store = resolved_store_id(f.committer, 0, 0);
+    const uint64_t qkv_store = resolved_store_id(f.committer, 0, 1);
+    expect(send_store != 0 && recv_store != 0 && qkv_store != 0,
+           "Q1: every batch node got a store id (hook resolves after B-1)");
+
+    // The memory anchors are the history_kv legs -- on BOTH ranks -- not
+    // the qkv compute node that the old "kv" substring match stole the
+    // anchor with (P1-1).
+    expect(find_anchor_hit(f, "req_kv", 0, "memory") ==
+               std::optional<uint64_t>(recv_store),
+           "Q1: rank 0 memory anchor is the history_kv recv leg's STORE id");
+    expect(find_anchor_hit(f, "req_kv", 1, "memory") ==
+               std::optional<uint64_t>(send_store),
+           "Q1: rank 1 memory anchor is the history_kv send leg's STORE id");
+    expect(!has_anchor_hit_on(f, qkv_store, /*complete=*/true),
+           "Q1: the qkv compute node received NO complete-edge anchor");
+    expect(!has_anchor_hit_on(f, qkv_store, /*complete=*/false),
+           "Q1: the qkv compute node received NO issue-edge anchor either "
+           "(it is not its group's first node)");
+    const auto* recv_node = f.sources[0]->store().node_ptr(recv_store);
+    const auto* qkv_node = f.sources[0]->store().node_ptr(qkv_store);
+    expect(recv_node != nullptr && recv_node->metric_complete_anchor &&
+               recv_node->metric_issue_anchor,
+           "Q1: recv leg store node carries issue (start) + complete "
+           "(memory) anchor flags");
+    expect(qkv_node != nullptr && !qkv_node->metric_issue_anchor &&
+               !qkv_node->metric_complete_anchor,
+           "Q1: qkv compute node store node carries NO anchor flags "
+           "(the P1-1 fast-path cache stays clean)");
+    // The start anchors are the groups' first nodes (the legs here).
+    expect(find_anchor_hit(f, "req_kv", 0, "prefill_start") ==
+               std::optional<uint64_t>(recv_store),
+           "Q1: rank 0 start anchor is the group's first node (the leg)");
+
+    // -- Q2: a transfer-free request whose only node is a qkv-named compute
+    //    node (the turn-0 / RECOMPUTE fabrication shape). No memory anchor
+    //    may exist; the node is only its group's start anchor.
+    nlohmann::json resp2 = empty_response(1);
+    resp2["nodes"] = nlohmann::json::array({
+        // json id 2: the per-rank json-id stream stays contiguous (0,1 were
+        // consumed by Q1's rank-0 nodes).
+        compute_node(0, 2, "req_qkv_only", "prefill",
+                     "req_qkv_only_current_prefill_request_aggregated_all_"
+                     "layers_attention_qkv_projection"),
+    });
+    resp2["touched_ranks"] = nlohmann::json::array({0});
+    GraphBatch b2 = parse_batch(resp2);
+    const StateDelta delta2 = anchor_arrival_delta(1, "req_qkv_only");
+    expect(!phase_a_validate(f.committer, delta2, b2).has_value(),
+           "Q2: transfer-free qkv-named batch validates clean");
+    f.committer.commit(delta2, b2);
+
+    const uint64_t only_store = resolved_store_id(f.committer, 0, 2);
+    expect(find_anchor_hit(f, "req_qkv_only", 0, "memory") == std::nullopt,
+           "Q2: NO memory anchor exists for the transfer-free request "
+           "(the qkv name alone fabricates none)");
+    expect(find_anchor_hit(f, "req_qkv_only", 0, "prefill_start") ==
+               std::optional<uint64_t>(only_store),
+           "Q2: the qkv compute node is only the stage start anchor");
+    const auto* only_node = f.sources[0]->store().node_ptr(only_store);
+    expect(only_node != nullptr && !only_node->metric_complete_anchor,
+           "Q2: transfer-free qkv node carries NO complete-edge flag");
+
+    std::printf("[graph_batch_committer_test] part Q PASS: metrics anchor "
+                "hook chain (legs anchor, qkv never, no fabrication)\n");
+}
+
 }  // namespace
 int main() {
     Fixture f;
-    test_static_checks(f);
     test_negative_cases(f);
     test_validate_and_commit_atomic();
     test_json_id_stamp_wrap_and_recovery();
@@ -1924,6 +2380,7 @@ int main() {
     test_preseeded_store_id_is_captured();
     test_affine_drift_fails_closed();
     test_affine_metadata_under_million_node_pressure();
+    test_metrics_anchor_hook_chain();
     if (g_ok) {
         std::printf("[graph_batch_committer_test] ALL PASS\n");
         return 0;

@@ -66,29 +66,52 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      comparison anchors on this). What changes is only that a
      NON-monotonic input (the full TraceLab queue) now submits every turn-0
      BEFORE its declared arrival instead of 491 times after.
+     M5 FIX (2026-09-29): the "drain at t=0" step above holds only while the
+     whole calendar fits the bounded ingress queue (capacity 4096 plus the
+     loop's drain-after-pump top-up, so turn-0 counts up to ~2x capacity).
+     Beyond that the cursor parks on backpressure and later batches drain at
+     a clock that has already advanced. The reader now marks every entry it
+     ever had to park (CalendarEntry::backpressure_deferred, carried to the
+     drain on the IngressCommand) and its clamp counts into the separate
+     late_static_submit_backpressure bucket: disclosed in the arrival audit,
+     EXEMPT from the run-end gate. A row offered to the ingress only after
+     the clock had already passed its arrival (no backpressure involved)
+     still counts as late_static_submit and fails the gate -- the reader
+     defect the gate was built for.
   5. PROVENANCE GATE (fail-closed). The index pass computes over the raw
      file: FNV-1a 64 (offset basis 14695981039346656037, prime 1099511628211,
      per byte: h ^= b; h *= prime, all mod 2^64 -- byte-for-byte the same
      algorithm as the Python materializer's sidecar writer), csv byte count,
      data-row count, session count, turn-0 count, turn-0 arrival min/max,
      turn-0 file-order adjacent inversion count, and session-block
-     contiguity. If a sidecar `<queue_csv>.provenance.json` exists, every
-     field is compared; any mismatch (or unparsable JSON, or schema != 1)
-     fails the run with [Error] + exit BEFORE any Submit. An absent sidecar
-     logs one "[online] provenance sidecar: absent (no gate)" line and
-     continues (smoke fixtures materialized by older scripts).
+     contiguity. The sidecar `<queue_csv>.provenance.json` is REQUIRED
+     (M-16 同款修复,移植到本仓 2026-10-07): every field is compared; any
+     mismatch (or unparsable JSON, or schema != 1, or an ABSENT sidecar)
+     fails the run with [Error] + exit BEFORE any Submit. The former
+     "absent (no gate)" pass-through let a truncated half-written queue
+     (materializer dying mid-derivation, before its sidecar existed)
+     silently shrink the simulation input while every gate stayed green; the
+     materializer now publishes queue+sidecar atomically and the reader
+     refuses any queue that arrives without its provenance record.
   6. ARRIVAL TIME AUDIT + RUN-END GATE. Every turn-0 entry records its
      declared arrival and the simulation tick at which its Submit was
      enqueued (discovered; via RequestIngress::current_time()). The ingress
      records the effective alarm tick per static Submit. At run end the
      reader joins the two (audit_static_arrivals): per-entry
-     declared/discovered/effective/late_by_ns/late_source (static_late /
-     t0_boundary / on_time) plus summary counters and ingress-delay
+     declared/discovered/effective/late_by_ns/late_source (static_submit_late
+     / t0_boundary / capacity_backpressure / on_time; see ArrivalAuditEntry)
+     plus summary counters and ingress-delay
      percentiles (nearest-rank p50/p99/max). The GATE for a finite static
      CSV run: late_static_submit_count == 0 AND every turn-0 ingress_delay
      == 0 except t0-boundary rows (declared==0, discovered==0, effective==1
      -- the EventQueue strict-future rule's inherent boundary; the source
-     CSV legally contains arrival==0; counted separately, never gated).
+     CSV legally contains arrival==0; counted separately, never gated) and
+     except capacity_backpressure rows (M5: a late Submit whose entry was
+     parked by ingress backpressure is a capacity artifact of the bounded
+     command queue, classified "capacity_backpressure", kept in the delay
+     percentiles but NOT counted by the gate -- the gated counters are
+     late_static_submit / nonzero_delay_rows over "static_submit_late"
+     rows only).
      External stream (command FIFO) and future-alarm clamps are never gated.
      Metric origins stay DECLARED (the fix must never mask itself by
      rebasing metrics onto effective arrivals).
@@ -122,6 +145,16 @@ with producers.
 
 namespace AstraSim {
 namespace ExecutionDriven {
+/// Canonical 8-column request-queue CSV header (2026-09-30, ported from the
+/// face repo WindowedTraceReader.hh). The index pass fail-closes on any
+/// first non-empty line that is neither this header nor the legacy
+/// hand-written-fixture 7-column shape (same names minus the description
+/// column); one trailing '\r' is tolerated for CRLF inputs, matching the
+/// binary-mode line split.
+inline constexpr char kRequestQueueCsvHeader[] =
+    "session_id,turn_index,request_id,prefill_length,decode_length,"
+    "session_arrival_time_ns,inter_request_interval_ns,description";
+
 
 class WindowedTraceReader {
   public:
@@ -194,14 +227,19 @@ class WindowedTraceReader {
         bool session_blocks_contiguous = true;
     };
     const ProvenanceStats& provenance() const { return prov_; }
-    /// Sidecar comparison outcome ("matched" / "absent-no-gate").
+    /// Sidecar comparison outcome ("matched"; "not-indexed" before/during
+    /// the index pass. M-16 同款移植 2026-10-07 起缺席即 fail-closed,
+    /// 不再有 absent 状态).
     const std::string& provenance_sidecar_status() const {
         return provenance_status_;
     }
 
     /// Per-turn-0 arrival audit record (joined from the reader's calendar
     /// and the ingress's effective-arrival records). late_source:
-    /// "on_time" / "t0_boundary" / "static_submit_late" / "no_effective_record"
+    /// "on_time" / "t0_boundary" / "static_submit_late" /
+    /// "capacity_backpressure" (M5: a late Submit whose entry was parked by
+    /// ingress backpressure at least once -- a capacity artifact, disclosed
+    /// but exempt from the run-end gate) / "no_effective_record"
     /// (the last one is itself a gate failure: a submitted turn-0 whose
     /// Submit never drained -- impossible on a completed run).
     struct ArrivalAuditEntry {
@@ -211,6 +249,7 @@ class WindowedTraceReader {
         uint64_t effective_arrival_ns = 0;
         uint64_t late_by_ns = 0;
         const char* late_source = "no_effective_record";
+        bool backpressure_deferred = false;
     };
 
     /// Summary of the arrival audit + the run-end static-arrival gate
@@ -227,6 +266,11 @@ class WindowedTraceReader {
         uint64_t delay_p99_ns = 0;
         uint64_t delay_max_ns = 0;
         uint64_t nonzero_delay_rows = 0;  // delay>0 excluding t0-boundary
+        // M5: Submit-path clamps whose entry was parked by ingress
+        // backpressure at least once. Disclosed separately and EXEMPT from
+        // the run-end gate (a capacity artifact of the bounded queue, not
+        // reader lateness); the gated counter stays late_static_submit.
+        uint64_t late_static_submit_backpressure = 0;
         bool gate_ok = true;
         std::string gate_why;
     };
@@ -249,6 +293,10 @@ class WindowedTraceReader {
         bool submitted = false;
         bool rejected = false;
         uint64_t discovered_tick = 0;  // eq time when its Submit was enqueued
+        // M5 (face-LRU audit, 2026-09-29): the cursor offered this entry to
+        // the ingress and was parked by queue backpressure at least once.
+        // Its eventual clamp is a CAPACITY artifact, not reader lateness.
+        bool backpressure_deferred = false;
     };
 
     std::string csv_path_;
@@ -281,6 +329,10 @@ class WindowedTraceReader {
     uint64_t prev_turn0_arrival_ = 0;
     bool have_prev_turn0_ = false;
     std::unordered_set<std::string> seen_sessions_;
+    // Cross-row request_id uniqueness set (2026-09-30, ported from the face
+    // repo WindowedTraceReader.hh): populated during the index pass; cleared
+    // with the per-session tails once the whole file is validated.
+    std::unordered_set<std::string> seen_request_ids_;
 
     // ---- turn-0 calendar ----
     std::vector<CalendarEntry> calendar_;

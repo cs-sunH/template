@@ -6,7 +6,8 @@ cpp.log → metrics.log → cpp.log.gz，归档后的 run_dir 同样可用）：
 行中的
   * type=memory_anchor 记录（subject_id=queue_index, rank, node_id,
     tick_ns；由 C++ 侧 KV transfer 锚点注册——main_online.cc 的
-    last_transfer（名字含 "kv" 的最后节点）→ MetricCollector 事件码 7）；
+    last_transfer（名字含精确命名段 "_kv_send_rank" / "_kv_recv_rank" /
+    "_kv_transfer_action" 的最后节点）→ MetricCollector 事件码 7）；
   * type=request 记录（prefill_start_ns/prefill_end_ns 等请求边界）。
 
 每请求：
@@ -77,19 +78,44 @@ def scan_metric_anchors_requests(cpp_log: Path
     """
     anchors: dict[int, list[int]] = {}
     requests: dict[int, dict] = {}
+    n_metric_records = 0
     for record in read_cpp_metric_records(cpp_log):
+        n_metric_records += 1
         rtype = record.get("type")
         if rtype == "memory_anchor":
             subject = record.get("subject_id")
             tick = record.get("tick_ns")
-            if not isinstance(subject, int) or not isinstance(tick, int):
-                fail(f"{cpp_log}: memory_anchor 记录缺整数 subject_id/"
-                     f"tick_ns（{record}）")
+            # (2026-09-30, ported from the joint repo) bool 是 int 子类须
+            # 显式排除；subject_id（queue_index）与 tick_ns 均不允许负值
+            # （负锚点归属错请求/参与 min 运算直接污染 restore_start）。
+            if isinstance(subject, bool) or not isinstance(subject, int) \
+                    or subject < 0 or isinstance(tick, bool) \
+                    or not isinstance(tick, int) or tick < 0:
+                fail(f"{cpp_log}: 第 {n_metric_records} 条 [METRIC] 记录的 "
+                     f"memory_anchor subject_id/tick_ns 必须为非负整数"
+                     f"（实得 subject_id={subject!r}, tick_ns={tick!r}；"
+                     f"{record}）")
             anchors.setdefault(subject, []).append(tick)
         elif rtype == "request":
             queue_index = record.get("queue_index")
-            if not isinstance(queue_index, int):
+            # (2026-10-01) bool 排除(True 经 isinstance int 且作 1 归到
+            # 错请求)——同函数 memory_anchor 分支已显式排除,此处补齐。
+            if isinstance(queue_index, bool) or not isinstance(queue_index, int):
                 fail(f"{cpp_log}: request 记录缺整数 queue_index（{record}）")
+            # (2026-09-30, sync-py-E8/py-slo-E5) 同 queue_index 重复
+            # type=request 记录 fail-closed：旧实现静默取后值会掩盖
+            # C++ 侧 per-request 度量重复发射（prefill 边界被后值覆盖，
+            # restore 分解悄错）。定位口径：共享 [METRIC] 迭代器
+            # （read_cpp_metric_records）不携带 cpp.log 物理行号，报
+            # [METRIC] 记录序数 + 完整记录内容（request_id/边界字段
+            # 可直接定位日志行）。
+            if queue_index in requests:
+                fail(f"{cpp_log}: 第 {n_metric_records} 条 [METRIC] 记录："
+                     f"queue_index={queue_index} 的 type=request 记录重复"
+                     f"（首次见 request_id="
+                     f"{requests[queue_index].get('request_id')!r}；"
+                     f"重复记录={record}）——per-request 度量应恰一条，"
+                     f"拒绝静默取后值")
             requests[queue_index] = {
                 "queue_index": queue_index,
                 "request_id": record.get("request_id"),
@@ -164,6 +190,12 @@ def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
             "exposed_restore_stall_ns": exposed,
             "hidden_ratio": ratio,
         })
+    # (2026-09-30, ported from the joint repo) R6-U8：孤儿锚点（subject_id
+    # 无对应 request 记录）被丢弃时必须留痕——请求侧 NA 已有
+    # n_no_anchor_na 计数，锚点侧静默消失会让两侧对不上账。
+    n_orphan_anchor_records = sum(
+        len(ticks) for subject, ticks in anchors.items()
+        if subject not in requests)
     summary = {
         "n_requests": len(rows),
         "n_with_anchors": sum(1 for r in rows
@@ -171,6 +203,7 @@ def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
         "n_no_anchor_na": n_no_anchor,
         "n_missing_prefill_boundary_na": n_no_boundary,
         "n_zero_restore_duration_na_ratio": n_zero_duration,
+        "n_orphan_anchor_records_dropped": n_orphan_anchor_records,
         "formula_source": "主规格 §3.2（A 类固定公式，逐字符实现）",
         "anchor_semantics": "restore_start=min(anchor ticks), "
                             "restore_complete=max(anchor ticks), "

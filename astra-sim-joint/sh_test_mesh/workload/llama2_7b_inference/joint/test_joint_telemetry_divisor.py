@@ -2,18 +2,21 @@
 """test_joint_telemetry_divisor.py -- C7（WP2，仅 JCM 半）遥测族 +
 N2/M1/N3 复核口径 + O 批补漏（O7③/O10③）的零后端单测。
 
-覆盖（N2/M1/N3 现行口径）：
+覆盖（N2/M1/N3 现行口径 + D13 收紧）：
   1. divisor_effective 数值断言（N2 叠加口径）：旧流并发两口径
-     （注册 flows / 遥测换算或 M1 流数）取大者为 base、候选自身
+     （注册 flows / 遥测流数）取大者为 base、候选自身
      self_overlap 恒叠加；C7 max 而非相加去重保留（§4.1——同一流量
-     不重复计数）：注册表漏计时实测抬升（floor > registered → 取
+     不重复计数）：注册表漏计时流数抬升（floor > registered → 取
      floor）、多计时不放大（registered > floor → 取 registered）；
+     D13：速率-only 链路 = 显式未知（不换算 capacity/速率除数，退
+     在册流近似，unknown_flow_count_links 披露）；
   2. 空窗口/未开遥测 → collective_coverage 条件不满足（telemetry_
      enabled_whole_run=False / 窗口序列空洞 / 空序列三分支 + 全闲
      epoch 零长窗合法锚）；
-  3. transfer_factor EWMA 更新与样本纪律：首样本直接初始化、α 时间
-     衰减公式复算、同 tick 多链路 Σactual/Σbase 单条更新、零字节/
-     零活跃样本拒绝计数、名义速率非法 fail-closed；
+  3. transfer_factor EWMA 更新与样本纪律：固定 1/16 系数（首样本同
+     规则自 1.0 出发，D14）、同 tick 多链路 Σactual/Σbase 单条更新、
+     亚名义样本记异常跳过、零字节/零活跃样本拒绝计数、名义速率非法
+     fail-closed；
   4. 冻结交接接口（C8 联合冻结 kwarg 名）：``link_telemetry_rates =
     {link_id: 实测有效速率(B/ns)}`` 传入 JointCostModel 构造——None/
     空字典 = 零漂移（与无字段构造同值），遥测在链路上抬升 remote 计
@@ -21,10 +24,10 @@ N2/M1/N3 复核口径 + O 批补漏（O7③/O10③）的零后端单测。
     查询/披露计数，不参与端点合并），畸形键 fail-closed；
   5. M1 流数口径与混合形态（O7③，A19'(g)③）：``link_flow_counts``
      在场取时间加权活跃流数为物理除数（divisor_effective 的
-     _flow_counts 优先腿）；混合形态（仅流数链 + 速率链并存）下
-     ``_effective`` 键集 = rates ∪ flow_counts 并集——_union_floor/
-     telemetry_links/max_effective_divisor 计入仅流数链路；披露双口径
-     可辨认（N3：flow_count_links / legacy_rate_divisor_links）；
+     _flow_counts 优先腿）；混合形态（仅流数链 + 速率链并存）下仅
+     流数链路计入 _union_floor/披露键集，速率-only 链路计入 unknown_
+     flow_count_links（D13）；披露双口径可辨认
+     （N3/D13：flow_count_links / unknown_flow_count_links）；
   6. O10③（A19'(j)③）：LinkFlowRegistry ``leaked_owners()`` 公共
      泄漏视图——注册→全释放 = 空、注册→漏释放 = 返回该 owner 的在
      途流 id（release_flow 单独释放的账本残留不算泄漏）。
@@ -32,7 +35,6 @@ N2/M1/N3 复核口径 + O 批补漏（O7③/O10③）的零后端单测。
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_joint_telemetry_divisor.py   （或 pytest 同路径）
 """
-import math
 import os
 import sys
 import unittest
@@ -53,7 +55,6 @@ from joint.joint_cost_model import (  # noqa: E402
     RequestView,
     ServiceFactors,
     SessionKVView,
-    TelemetryLinkFlowView,
 )
 
 
@@ -102,7 +103,8 @@ def _route(source, target):
     return ((source, target), 1)
 
 
-def _model(link_telemetry_rates=None, *, rates=None):
+def _model(link_telemetry_rates=None, *, rates=None,
+           link_telemetry_flow_counts=None):
     return JointCostModel(
         rates=rates if rates is not None else _rates(),
         loads={0: _load(0), 1: _load(1)},
@@ -111,42 +113,48 @@ def _model(link_telemetry_rates=None, *, rates=None):
         prefill_ns_per_token=1.0, decode_ns_per_token=2.0,
         model_layers=4, instance_tp_size=2, route_fn=_route,
         route_paths_fn=_disjoint_paths,
-        link_telemetry_rates=link_telemetry_rates)
+        link_telemetry_rates=link_telemetry_rates,
+        link_telemetry_flow_counts=link_telemetry_flow_counts)
 
 
 # ================================================= 1. divisor_effective ==
 
 
 class DivisorEffectiveTest(unittest.TestCase):
-    """divisor_effective = max(divisor_registered, B_link/实测速率)。"""
+    """divisor_effective = max(注册在册流, 遥测时间加权流数)（D13：流
+    数口径——capacity/实测速率旧口径冒充流数废除，速率-only 链路 =
+    显式未知、退在册流近似）。"""
 
     def test_undercount_lifted_by_telemetry(self):
-        # 漏计分支：注册表只登记 1 流，实测速率 = B/3（物理上 3 条流
-        # 均分）→ 实测除数 3 把注册除数 1 抬起来。
+        # 漏计分支：注册表只登记 1 流，遥测流数 3（物理上 3 条流）→
+        # 遥测流数把注册除数 1 抬起来。
         registry = LinkFlowRegistry()
         registry.register(3, 5)
         view = registry.with_effective_rates(
-            {(3, 5): 10.0 / 3.0}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(3, 5): 3.0})
         self.assertEqual(view.divisor_effective((3, 5)), 3.0)
 
     def test_overcount_not_amplified(self):
-        # 多计分支：注册表 4 流（保守多计），实测速率 B/1.2（物理上
-        # ~1.2 流均分）→ max 取 4，不放大到 4×1.2。
+        # 多计分支：注册表 4 流（保守多计），遥测流数 1.2（时间加权
+        # 均值低于瞬时峰值）→ max 取 4，不放大。
         registry = LinkFlowRegistry()
         for _ in range(4):
             registry.register(3, 5)
         view = registry.with_effective_rates(
-            {(3, 5): 10.0 / 1.2}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(3, 5): 1.2})
         self.assertEqual(view.divisor_effective((3, 5)), 4.0)
 
     def test_max_not_sum_dedup(self):
-        # §4.1 去重：注册 2 流 + 实测除数 3 → 3（非 5）——同一流量
+        # §4.1 去重：注册 2 流 + 遥测流数 3 → 3（非 5）——同一流量
         # 不重复计数。
         registry = LinkFlowRegistry()
         registry.register(3, 5)
         registry.register(3, 5)
         view = registry.with_effective_rates(
-            {(3, 5): 10.0 / 3.0}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(3, 5): 3.0})
         merged = view.divisor_effective((3, 5))
         self.assertEqual(merged, 3.0)
         self.assertNotEqual(merged, 5.0)
@@ -161,18 +169,35 @@ class DivisorEffectiveTest(unittest.TestCase):
         self.assertIsNone(view.measured_effective_rate((3, 5)))
         self.assertIsNone(view.effective_divisor((3, 5)))
         self.assertEqual(view.measured_effective_rate((7, 9)), 5.0)
-        self.assertAlmostEqual(view.effective_divisor((7, 9)), 2.0)
+        # D13：(7,9) 有速率样本而无流数 → 流数除数 None（显式未知，
+        # 速率不再换算成除数）。
+        self.assertIsNone(view.effective_divisor((7, 9)))
+
+    def test_rate_only_link_explicit_unknown_uses_registered(self):
+        # D13 验收（缺流数不由"总吞吐满载"推断单流）：速率-only 链路
+        # ——capacity/rate 名义 5——不抬升除数，退注册表在册流近似；
+        # 披露 unknown_flow_count_links 可辨认。
+        registry = LinkFlowRegistry()
+        registry.register(3, 5)
+        view = registry.with_effective_rates(
+            {(3, 5): 2.0}, link_capacity_bytes_per_ns=10.0)
+        # 名义 capacity/rate = 5——若仍冒充流数会得 max(1, 5) = 5。
+        self.assertEqual(view.divisor_effective((3, 5)), 1.0)
+        self.assertEqual(view.effective_divisor((3, 5)), None)
+        self.assertEqual(view.disclosure()["unknown_flow_count_links"], 1)
 
     def test_include_self_registered_leg(self):
-        # N2 叠加口径：旧流并发两口径（注册/遥测换算）取大 + 候选
-        # self_overlap 恒叠加。基础 1 流 + self_overlap 2：换算 2.5 →
-        # max(1, 2.5)+2 = 4.5；换算 4.5 → max(1, 4.5)+2 = 6.5。
+        # N2 叠加口径：旧流并发两口径（注册/遥测流数）取大 + 候选
+        # self_overlap 恒叠加。基础 1 流 + self_overlap 2：流数 2.5 →
+        # max(1, 2.5)+2 = 4.5；流数 4.5 → max(1, 4.5)+2 = 6.5。
         registry = LinkFlowRegistry()
         registry.register(3, 5)
         view_a = registry.with_effective_rates(
-            {(3, 5): 4.0}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(3, 5): 2.5})
         view_b = registry.with_effective_rates(
-            {(3, 5): 10.0 / 4.5}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(3, 5): 4.5})
         self.assertEqual(
             view_a.divisor_effective((3, 5), include_self=True,
                                      self_overlap=2), 4.5)
@@ -181,8 +206,8 @@ class DivisorEffectiveTest(unittest.TestCase):
                                      self_overlap=2), 6.5)
 
     def test_rate_above_capacity_floored_at_one(self):
-        # 非物理输入（速率超容量 → 名义除数 < 1）不放大带宽：合并下界
-        # 被 max(1, ·) 截住。
+        # 非物理输入（速率超容量）不再是除数输入（D13：速率-only =
+        # 显式未知）：除数退注册表在册流，空注册表下自然下界 1。
         registry = LinkFlowRegistry()
         view = registry.with_effective_rates(
             {(3, 5): 20.0}, link_capacity_bytes_per_ns=10.0)
@@ -196,23 +221,25 @@ class TelemetryKeySpaceTest(unittest.TestCase):
     def test_string_key_equivalent_to_tuple(self):
         registry = LinkFlowRegistry()
         view = registry.with_effective_rates(
-            {"3->5": 10.0 / 3.0}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={"3->5": 3.0})
         self.assertEqual(view.divisor_effective((3, 5)), 3.0)
         self.assertEqual(view.divisor_effective("3->5"), 3.0)
 
     def test_bare_int_link_id_endpoint_free_consumption(self):
         # 裸整型 LinkId（C8 _ingest_link_telemetry 原样键）：合法接收，
-        # 速率/有效除数可查、divisor_effective 给纯遥测腿（无注册腿可
-        # 言——键空间不相交）；不参与端点合并（(3,5) 不被抬升）；
-        # disclosure 的 opaque_link_id_entries 计数披露（可见缺口，非
-        # 静默）。
+        # 速率可查（观测/披露通道）；D13：整型键无流数通道（流数仅端
+        # 点形键）→ 有效除数 None、divisor_effective 显式未知 fail-
+        # closed；不参与端点合并（(3,5) 不被抬升）；disclosure 的
+        # opaque_link_id_entries 计数披露（可见缺口，非静默）。
         registry = LinkFlowRegistry()
         registry.register(3, 5)
         view = registry.with_effective_rates(
             {17: 5.0}, link_capacity_bytes_per_ns=10.0)
         self.assertEqual(view.measured_effective_rate(17), 5.0)
-        self.assertAlmostEqual(view.effective_divisor(17), 2.0)
-        self.assertEqual(view.divisor_effective(17), 2.0)
+        self.assertIsNone(view.effective_divisor(17))
+        with self.assertRaises(JointCostError):
+            view.divisor_effective(17)
         self.assertEqual(view.divisor_effective((3, 5)), 1.0)
         report = view.disclosure()
         self.assertEqual(report["opaque_link_id_entries"], 1)
@@ -249,14 +276,15 @@ class TelemetryUnionDivisorTest(unittest.TestCase):
 
     def test_union_floor_lifts_bottleneck(self):
         # 并集 {(0,1),(1,2)}（N2 叠加口径逐链路）：(0,1) 注册 2 流无遥
-        # 测 → 2+自身 1 = 3；(1,2) 注册 1 + 遥测换算 5 → max+自身 1
+        # 测 → 2+自身 1 = 3；(1,2) 注册 1 + 遥测流数 5 → max+自身 1
         # = 6 → 并集瓶颈 6。include_self=False：(1,2) 侧 max(1,5)=5。
         registry = LinkFlowRegistry()
         registry.register(0, 1)
         registry.register(0, 1)
         registry.register(1, 2)
         view = registry.with_effective_rates(
-            {(1, 2): 2.0}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(1, 2): 5.0})
         paths = ((0, 1, 2),)
         self.assertEqual(registry.divisor_multi(paths, include_self=True), 3)
         self.assertEqual(view.divisor_multi(paths, include_self=True), 6.0)
@@ -265,23 +293,25 @@ class TelemetryUnionDivisorTest(unittest.TestCase):
             view.divisor_multi(paths, include_self=False), 5.0)
 
     def test_registered_bottleneck_dominates(self):
-        # 注册瓶颈 6 > 遥测 floor 2 → 不放大回 6（多计不放大在并集
+        # 注册瓶颈 6 > 遥测流数 2 → 不放大回 6（多计不放大在并集
         # 层同样成立）。
         registry = LinkFlowRegistry()
         for _ in range(5):
             registry.register(0, 1)
         view = registry.with_effective_rates(
-            {(0, 1): 5.0}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(0, 1): 2.0})
         self.assertEqual(
             view.divisor_multi(((0, 1),), include_self=True), 6.0)
 
     def test_view_divisor_single_path_merges(self):
-        # N2：(1,2) 注册 1 + 换算 7 → max + 候选 1 = 8（旧口径
-        # max(注册含候选 2, 换算 7) = 7 漏候选叠加）。
+        # N2：(1,2) 注册 1 + 遥测流数 7 → max + 候选 1 = 8（旧口径
+        # max(注册含候选 2, 流数 7) = 7 漏候选叠加）。
         registry = LinkFlowRegistry()
         registry.register(1, 2)
         view = registry.with_effective_rates(
-            {(1, 2): 10.0 / 7.0}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(1, 2): 7.0})
         self.assertEqual(
             view.divisor((0, 1, 2), include_self=True), 8.0)
 
@@ -292,7 +322,8 @@ class TelemetryUnionDivisorTest(unittest.TestCase):
         before_flows = registry.snapshot()
         before_divisor = registry.divisor_multi(((3, 4, 5),))
         view = registry.with_effective_rates(
-            {(4, 5): 1.0}, link_capacity_bytes_per_ns=10.0)
+            {}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(4, 5): 10.0})
         self.assertEqual(view.divisor_effective((4, 5)), 10.0)
         self.assertEqual(registry.snapshot(), before_flows)
         self.assertEqual(
@@ -300,13 +331,17 @@ class TelemetryUnionDivisorTest(unittest.TestCase):
         self.assertFalse(registry.collective_coverage)
 
     def test_disclosure_and_coverage_passthrough(self):
+        # D13 披露键语义：telemetry_links = 速率 ∪ 流数并集（覆盖度）；
+        # max_effective_divisor 只扫流数；速率-only 链路入 unknown 计数。
         registry = LinkFlowRegistry()
         view = registry.with_effective_rates(
-            {(3, 5): 10.0 / 3.0, (7, 9): 5.0},
-            link_capacity_bytes_per_ns=10.0)
+            {(7, 9): 5.0}, link_capacity_bytes_per_ns=10.0,
+            link_flow_counts={(3, 5): 3.0})
         report = view.disclosure()
         self.assertEqual(report["telemetry_links"], 2)
         self.assertAlmostEqual(report["max_effective_divisor"], 3.0)
+        self.assertEqual(report["flow_count_links"], 1)
+        self.assertEqual(report["unknown_flow_count_links"], 1)
         self.assertEqual(report["link_capacity_bytes_per_ns"], 10.0)
         self.assertFalse(report["collective_coverage"])
         registry.collective_coverage = True   # 翻转接线在 SH 侧 C8
@@ -359,36 +394,32 @@ class LinkFlowRegistryLeakedOwnersTest(unittest.TestCase):
 
 
 class MixedFormFlowCountUnionTest(unittest.TestCase):
-    """O7③（A19'(g)③，2026-09-23）：混合形态（一条仅流数链+一条速率
-    链）下 ``_effective`` 键集 = rates ∪ flow_counts 并集——
-    _union_floor/telemetry_links/max_effective_divisor 计入仅流数链路
-    （修前漏计：探针 (1,2) 仅流数 7.0 时 divisor_effective=8.0 正确、
-    _union_floor 只给 1.0、披露键集不含）。divisor_effective 经
-    _flow_counts 优先本已正确（回归锚），纯仅流数形态（__post_init__
-    假速率分支）不回退。
-    """
+    """O7③（A19'(g)③，2026-09-23）+ D13（2026-09-27）：混合形态（一
+    条仅流数链+一条速率链）下，仅流数链路计入 _union_floor/披露键集；
+    速率-only 链路 = 流数显式未知（unknown_flow_count_links 披露、除
+    数退在册流近似——capacity/速率旧口径废除，不再产生除数腿）。"""
 
     def test_union_floor_counts_flow_count_only_link(self):
         # 探针形态复现：链路 (1,2) 仅流数 7.0（不在 rates 键集）、
-        # 链路 (3,4) 仅速率（B=10、rate=2.5 ⇒ 除数 4.0）。
+        # 链路 (3,4) 仅速率（D13：显式未知，不换算除数）。
         registry = LinkFlowRegistry()
         view = registry.with_effective_rates(
             {(3, 4): 2.5}, link_capacity_bytes_per_ns=10.0,
             link_flow_counts={(1, 2): 7.0})
-        # divisor_effective 回归锚：流数腿 7+自身 1=8；速率腿
-        # max(注册 0, 4)=4。
+        # divisor_effective 回归锚：流数腿 7+自身 1=8；速率-only 链路
+        # 退注册表在册流近似（0 → 下界 1）。
         self.assertEqual(
             view.divisor_effective((1, 2), include_self=True,
                                    self_overlap=1), 8.0)
-        self.assertEqual(view.divisor_effective((3, 4)), 4.0)
-        # 修前：_union_floor 只扫 rates 键集 ⇒ 1.0（漏仅流数链路）。
+        self.assertEqual(view.divisor_effective((3, 4)), 1.0)
+        # 仅流数链路照旧进 _union_floor（O7③ 纪律）。
         self.assertEqual(view._union_floor(((1, 2, 9),)), 7.0)
-        # 披露同步：键集并集计数与下界。
+        # 披露同步：键集并集计数 + 流数/未知双口径可辨认。
         report = view.disclosure()
         self.assertEqual(report["telemetry_links"], 2)
         self.assertEqual(report["max_effective_divisor"], 7.0)
         self.assertEqual(report["flow_count_links"], 1)
-        self.assertEqual(report["legacy_rate_divisor_links"], 1)
+        self.assertEqual(report["unknown_flow_count_links"], 1)
 
     def test_pure_flow_count_form_unchanged(self):
         # 纯仅流数形态（JointCostModel.__post_init__ 假速率分支同式
@@ -403,7 +434,7 @@ class MixedFormFlowCountUnionTest(unittest.TestCase):
         self.assertEqual(report["telemetry_links"], 1)
         self.assertEqual(report["max_effective_divisor"], 7.0)
         self.assertEqual(report["flow_count_links"], 1)
-        self.assertEqual(report["legacy_rate_divisor_links"], 0)
+        self.assertEqual(report["unknown_flow_count_links"], 0)
 
 
 # ============================================ 2. JointCostModel 接线 ==
@@ -414,10 +445,29 @@ class ModelTelemetryWiringTest(unittest.TestCase):
 
     @staticmethod
     def _remote_candidate(model):
-        return model.estimate_action(
+        return model.estimate_P_with_continuation(
             session=_session(history_bytes=(1000, 1000)),
             request=_request(decode=3), instance_index=1,
             action=ACTION_REMOTE, remote_enabled=True)
+
+    @staticmethod
+    def _price_face(breakdown):
+        """计价零漂移比较面（2026-09-30 修复轮同步）：剥除
+        ``projection_stats`` 墙时分段——§5.6 交付面的逐候选前推宿主
+        墙时（wall_ns）与 2026-10-05 埋点新增的构建/前推粗相分段
+        （build_wall_ns / closure_wall_ns / candidate_world_wall_ns /
+        reference_world_wall_ns）均为非计价量、逐次运行必不同；其余
+        字段（含事件/闭包计数等确定性披露）保留在相等面（确定性披露，
+        零漂移语义不变）。"""
+        import dataclasses
+        payload = dataclasses.asdict(breakdown)
+        stats = dict(payload.get("projection_stats") or {})
+        for volatile_key in (
+                "wall_ns", "build_wall_ns", "closure_wall_ns",
+                "candidate_world_wall_ns", "reference_world_wall_ns"):
+            stats.pop(volatile_key, None)
+        payload["projection_stats"] = stats
+        return payload
 
     def test_none_and_empty_dict_zero_drift(self):
         # 无遥测 = 原 Registry 模型：None、空字典、缺省三态同值。
@@ -426,29 +476,45 @@ class ModelTelemetryWiringTest(unittest.TestCase):
             _model(link_telemetry_rates=None)).breakdown
         empty_case = self._remote_candidate(
             _model(link_telemetry_rates={})).breakdown
-        self.assertEqual(base, none_case)
-        self.assertEqual(base, empty_case)
+        self.assertEqual(self._price_face(base), self._price_face(none_case))
+        self.assertEqual(self._price_face(base), self._price_face(empty_case))
         self.assertEqual(base.contention_divisor, 1)
 
     def test_telemetry_lifts_remote_pricing(self):
         # resident=0 → instance=1 的逐 rank 路径 ((0,2),(1,3))；对
-        # (0,2) 喂实测速率 B/2（物理 2 流均分）→ N2 叠加口径 noc 腿
-        # 除数 = 旧流 2 + 候选 1 = 3、remote_read_ns 三倍；breakdown
-        # 披露位保守取整 = 3。
+        # (0,2) 喂遥测流数 2 → N2 叠加口径该路径 noc 腿除数 = 旧流 2
+        # + 候选 1 = 3、remote_read_ns 三倍；breakdown 披露位保守取整
+        # = 3。（D13：遥测除数走流数口径。）
         rates = _rates(noc=10.0, lat=0)
         base = self._remote_candidate(_model(rates=rates)).breakdown
         lifted = self._remote_candidate(_model(
-            link_telemetry_rates={(0, 2): 5.0}, rates=rates)).breakdown
+            link_telemetry_flow_counts={(0, 2): 2.0}, rates=rates)).breakdown
         self.assertEqual(base.contention_divisor, 1)
         self.assertEqual(lifted.contention_divisor, 3)
         self.assertEqual(
             lifted.remote_read_ns - base.remote_read_ns,
             2 * base.remote_read_ns)
 
+    def test_rate_only_telemetry_no_longer_lifts_pricing(self):
+        # D13 验收钉测（缺流数不由"总吞吐满载"推断单流）：速率-only
+        # 遥测（capacity/rate 名义 2）不再抬升计价除数——remote 候选
+        # 与无遥测基逐位一致（旧 capacity/速率回退会把 contention 抬
+        # 到 3）；披露面 unknown_flow_count_links = 1 可辨认。
+        rates = _rates(noc=10.0, lat=0)
+        base = self._remote_candidate(_model(rates=rates))
+        rate_only_model = _model(
+            link_telemetry_rates={(0, 2): 5.0}, rates=rates)
+        rate_only = self._remote_candidate(rate_only_model)
+        self.assertEqual(
+            self._price_face(rate_only.breakdown),
+            self._price_face(base.breakdown))
+        report = rate_only_model.link_telemetry_disclosure()
+        self.assertEqual(report["unknown_flow_count_links"], 1)
+
     def test_telemetry_disclosure_channels(self):
         self.assertEqual(
             _model().link_telemetry_disclosure(), {"telemetry": False})
-        model = _model(link_telemetry_rates={(0, 2): 5.0})
+        model = _model(link_telemetry_flow_counts={(0, 2): 2.0})
         report = model.link_telemetry_disclosure()
         self.assertTrue(report["telemetry"])
         self.assertEqual(report["telemetry_links"], 1)
@@ -464,7 +530,7 @@ class ModelTelemetryWiringTest(unittest.TestCase):
         fed = self._remote_candidate(_model(
             link_telemetry_rates={17: 5.0, 23: 10.0 / 3.0},
             rates=rates)).breakdown
-        self.assertEqual(base, fed)
+        self.assertEqual(self._price_face(base), self._price_face(fed))
         report = _model(
             link_telemetry_rates={17: 5.0, 23: 10.0 / 3.0},
             rates=rates).link_telemetry_disclosure()
@@ -472,10 +538,11 @@ class ModelTelemetryWiringTest(unittest.TestCase):
         self.assertEqual(report["telemetry_links"], 0)
 
     def test_fractional_divisor_ceil_in_breakdown(self):
-        # 换算 2.5（非整数）+ 候选 1（N2 叠加）→ 计价腿用原值 3.5、
-        # 披露位 ceil=4（保守侧）。
+        # 时间加权流数 2.5（非整数）+ 候选 1（N2 叠加）→ 计价腿用原值
+        # 3.5、披露位 ceil=4（保守侧）。
         rates = _rates(noc=10.0, lat=0)
-        model = _model(link_telemetry_rates={(0, 2): 4.0}, rates=rates)
+        model = _model(
+            link_telemetry_flow_counts={(0, 2): 2.5}, rates=rates)
         lifted = self._remote_candidate(model).breakdown
         self.assertEqual(lifted.contention_divisor, 4)
         # 计价腿仍是 3.5 除数：bytes/有效速率 与 3.5 除数解析一致
@@ -565,23 +632,33 @@ class CollectiveCoverageTest(unittest.TestCase):
 
 
 class TransferFactorEwmaTest(unittest.TestCase):
-    """观测入口 observe_transfer_from_link_window 的样本纪律。"""
+    """观测入口 observe_transfer_from_link_window 的样本纪律。
 
-    def test_first_sample_initializes(self):
+    D14（v2.0 §9.2）：更新规则改为固定 1/16 EWMA 平滑效率 η（首样本
+    同规则、自 η=1 出发），因子 = 1/η_new；亚名义样本（η_sample>1）
+    不再钳位，记录异常并跳过。
+    """
+
+    def test_first_sample_blends_from_cold_start(self):
         # served 1000 B、active 2000 ns、名义 1 B/ns → base 1000、
-        # actual 2000 → 样本比 = 名义/实测 = 2.0（拥胀方向 ≥ 1）。
+        # actual 2000 → η_sample = base/actual = 1/2（因子口径
+        # 名义/实测 = 2.0，拥胀方向 ≥ 1）；首样本同规则：
+        # η = 15/16 + 1/32 = 31/32，因子 = 32/31。
         factors = ServiceFactors()
         factors.observe_transfer_from_link_window(
             served_bytes=1000, active_ns=2000,
             nominal_rate_bytes_per_ns=1.0, tick_ns=100)
         factors.flush()
-        self.assertAlmostEqual(factors.transfer_factor, 2.0)
+        self.assertAlmostEqual(factors.transfer_factor, 32.0 / 31.0,
+                               places=12)
         self.assertEqual(factors.updates["transfer_factor"], 1)
         self.assertEqual(factors.rejected.get("transfer_factor", 0), 0)
 
-    def test_ewma_alpha_decay_replicated(self):
-        # 两样本 α 公式复算：α = 1 − exp(−Δt/τ)，τ = 上一有效样本的
-        # 正服务时长（§5.4/P3 原文），非首样本 EWMA 推进。
+    def test_fixed_coef_regardless_of_tick_gap(self):
+        # 固定系数 1/16：更新权值与 tick 间隔无关（旧 α=1−exp(−Δt/τ)
+        # 时间衰减退役）。两样本链（η 空间）：η_1 = 31/32，
+        # η_2 = 15/16·(31/32) + 1/16·(1/4) = 473/512，
+        # 因子 = 512/473。
         factors = ServiceFactors()
         factors.observe_transfer_from_link_window(
             served_bytes=1000, active_ns=2000,
@@ -590,15 +667,15 @@ class TransferFactorEwmaTest(unittest.TestCase):
             served_bytes=1000, active_ns=4000,
             nominal_rate_bytes_per_ns=1.0, tick_ns=10_000)
         factors.flush()
-        alpha = 1.0 - math.exp(-(10_000 - 100) / 2000)
-        expected = (1 - alpha) * 2.0 + alpha * 4.0
+        expected = 512.0 / 473.0
         self.assertAlmostEqual(factors.transfer_factor, expected,
-                               places=9)
+                               places=12)
         self.assertEqual(factors.updates["transfer_factor"], 2)
 
     def test_same_tick_links_aggregate_single_update(self):
-        # 同 tick 两链路样本：Σactual/Σbase 单条更新（_record 既有
-        # 时刻汇总纪律）——(2000+3000)/(1000+3000) = 1.25。
+        # 同 tick 两链路样本：η_sample = Σbase/Σactual 单条更新
+        # （_record 既有时刻汇总纪律）——4000/5000 = 0.8；
+        # η = 15/16 + 0.8/16 = 0.9875，因子 = 16/15.8。
         factors = ServiceFactors()
         factors.observe_transfer_from_link_window(
             served_bytes=1000, active_ns=2000,
@@ -607,7 +684,8 @@ class TransferFactorEwmaTest(unittest.TestCase):
             served_bytes=3000, active_ns=3000,
             nominal_rate_bytes_per_ns=1.0, tick_ns=50)
         factors.flush()
-        self.assertAlmostEqual(factors.transfer_factor, 1.25)
+        self.assertAlmostEqual(factors.transfer_factor, 16.0 / 15.8,
+                               places=12)
         self.assertEqual(factors.updates["transfer_factor"], 1)
 
     def test_zero_sample_rejected_not_updated(self):
@@ -624,6 +702,20 @@ class TransferFactorEwmaTest(unittest.TestCase):
         self.assertEqual(factors.transfer_factor, 1.0)
         self.assertEqual(factors.updates.get("transfer_factor", 0), 0)
         self.assertEqual(factors.rejected["transfer_factor"], 2)
+
+    def test_subnominal_sample_anomalous_skipped(self):
+        # D14：亚名义样本（实测快于名义：active_ns 欠计/空闲混入，
+        # ratio<1 ⟺ η_sample>1 出有效窗口）记录异常并跳过——原 A12'
+        # 钳位 1.0 属"无声截断"，退役。
+        factors = ServiceFactors()
+        factors.observe_transfer_from_link_window(
+            served_bytes=1000, active_ns=500,
+            nominal_rate_bytes_per_ns=1.0, tick_ns=10)
+        factors.flush()
+        self.assertEqual(factors.transfer_factor, 1.0)
+        self.assertNotIn("transfer_factor", factors.updates)
+        self.assertEqual(factors.anomalous.get("transfer_factor"), 1)
+        self.assertNotIn("transfer_factor", factors.rejected)
 
     def test_congestion_direction_above_one(self):
         # 方向锚：实测速率低于名义（拥胀）→ 因子 > 1（与因子族

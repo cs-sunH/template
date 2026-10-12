@@ -64,8 +64,6 @@ from joint.joint_cost_model import (  # noqa: E402
 )
 from joint.joint_scheduler import SelectionRecord  # noqa: E402
 from joint.link_quota import (  # noqa: E402
-    QUOTA_AIMD,
-    QUOTA_STATIC,
     LinkQuotaTracker,
     challenger_flips,
 )
@@ -76,7 +74,6 @@ from online.sh30_online_scheduler import (  # noqa: E402
     _TASK_LOAD_CACHE_CAPACITY,  # F6 销账：替身对齐 __init__ 初值
     Sh30OnlineScheduler,
 )
-from online.online_scheduler_base import OnlineSchedulerBase  # noqa: E402
 
 
 # ============================================================ 夹具构造 ==
@@ -219,6 +216,7 @@ def _scheduler(*, quota_mode="static"):
         "stay": 0, "copy": 0, "remote-read": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
+        "recompute_forced_action_mask": 0,
         "recompute_forced_quota_deferred": 0,
         "recompute_forced_evicted_permanent": 0,
     }

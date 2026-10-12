@@ -3,9 +3,10 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 GraphBatchCommitter -- execution-driven mechanism layer (wscllm phase 5).
-Two-phase atomic GraphBatch commit (方案 §8.1/§8.2): Phase A validate()
-(run the full checklist, touch nothing) then Phase B commit() (add nodes,
-edges, watches, alarms, issue the touched ranks, update counters).
+Two-phase atomic GraphBatch commit (方案 §8.1/§8.2): Phase A validation
+(run the full checklist via validate_impl, touch nothing) then Phase B
+commit() (add nodes, edges, watches, alarms, issue the touched ranks,
+update counters).
 
 The validation rules are the empirical contract of the real 20.csv
 first-30s runs -- every rule in the header comment was verified against
@@ -176,6 +177,20 @@ void GraphBatchCommitter::apply_delta_facts(
                 in_flight.insert(ev.request_id);
                 break;
             case DecisionReason::PREFILL_DRAIN:
+                // (2026-10-01) batch_train_ sentinel facts are never
+                // inserted: the sentinel namespace only fires prefill-stage
+                // watches (M2-1 forbids decode sentinels, so no
+                // REQUEST_COMPLETE ever erases the entry), no eligibility
+                // query reads a sentinel key (both watch-eligibility paths
+                // bypass the batch_train_ prefix first), and sentinel ids
+                // are unique per truncated train -- inserting them grew
+                // prefill_drained_ linearly with the train count for the
+                // whole run (pure garbage retention, against the B-series
+                // "memory scales with the in-flight window, not the
+                // cumulative node count" discipline).
+                if (ev.request_id.rfind("batch_train_", 0) == 0) {
+                    break;
+                }
                 prefill_drained.insert(ev.request_id);
                 break;
             case DecisionReason::REQUEST_COMPLETE:
@@ -275,6 +290,16 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
                 return "node[" + std::to_string(node_index) +
                        "] collective bytes must be positive";
             }
+            // R2-E2 fix (2026-09-29): a zero-byte p2p (type 5/6) used to
+            // pass validation and only blow up inside the fluid backend's
+            // start_flow (exit(-1), far from the root cause -- the same
+            // late-failure shape the type-7 check above already prevents).
+            // Reject it at the same choke point.
+            if ((type == 5 || type == 6) && parsed.node.comm.bytes == 0) {
+                return "node[" + std::to_string(node_index) +
+                       "] p2p (type " + std::to_string(type) +
+                       ") bytes must be positive";
+            }
 
             uint64_t expected = id;  // an arbitrary first id is legal
             if (json_id_seen_stamp_by_rank_[rank] == stream_stamp) {
@@ -314,7 +339,8 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
 
 std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     const StateDelta& delta, const GraphBatch& batch) const {
-    // This is deliberately independent of validate(): production can skip
+    // This is deliberately independent of the full validation pass
+    // (validate_impl): production can skip
     // that exhaustive diagnostic pass, but it must never commit a batch
     // that can strand graph nodes, stage watches, p2p callbacks, collectives,
     // or request accounting.  Every container below is local; no fact set,
@@ -326,6 +352,18 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     };
 
     try {
+        // [epoch] M2-2 (2026-09-26, sunk from validate_impl): the commit
+        // ack echoes batch_id verbatim back to Python's ledger, so a
+        // production commit (--online-validate=0, which runs ONLY this
+        // preflight) must not skip the batch_id == delivery_sequence
+        // identity rule. validate_impl checks it earlier in its richer
+        // rule order and keeps its own copy; this copy arms the
+        // production path.
+        if (batch.batch_id != delta.delivery_sequence) {
+            return fail("batch_id " + std::to_string(batch.batch_id) +
+                        " != delivery_sequence " +
+                        std::to_string(delta.delivery_sequence));
+        }
         // Apply this delta's facts in a compact overlay rather than copying the
         // whole live-request sets.  The result is exactly apply_delta_facts()
         // for every request mentioned by the delta, while untouched requests
@@ -349,6 +387,17 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                     facts_it->second.in_flight = true;
                     break;
                 case DecisionReason::PREFILL_DRAIN:
+                    // (2026-10-01) mirror the sentinel skip added to
+                    // apply_delta_facts the same day: batch_train_ facts
+                    // are never tracked, and skipping here keeps this
+                    // overlay's "exactly apply_delta_facts" contract true
+                    // (nothing reads a sentinel's facts today -- both
+                    // watch-eligibility paths bypass the prefix first --
+                    // but the invariant must not fork between preflight
+                    // and validate).
+                    if (event.request_id.rfind("batch_train_", 0) == 0) {
+                        break;
+                    }
                     facts_it->second.prefill_drained = true;
                     break;
                 case DecisionReason::REQUEST_COMPLETE:
@@ -447,6 +496,16 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
             const uint32_t coll_priority = node.coll.priority;
             const std::vector<bool>& coll_involved_dims =
                 node.coll.involved_dim;
+            if (type == 7 && coll_involved_dims.empty()) {
+                // (2026-09-30) The parser treats involved_dim as optional
+                // (absent = empty), but an empty vector reaches
+                // issue_coll_comm's topology-dimension selection and
+                // silently produces a zero-dimension collective. The real
+                // builder always sends the full vector; a future producer
+                // omitting it must fail closed here, not mis-time.
+                return fail("node[" + std::to_string(node_index) +
+                            "] coll node carries no involved_dim");
+            }
             if (type == 5 || type == 6) {
                 if (is_cpu_op) {
                     return fail("node[" + std::to_string(node_index) +
@@ -765,7 +824,21 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 return fail("watch[" + std::to_string(watch_index) +
                             "] empty/absent statuses");
             }
-            if (request_id.rfind("batch_train_", 0) != 0) {
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // M2-1 (2026-09-26, sunk from validate_impl): the batch
+                // sentinel namespace only exists for the prefill drain; a
+                // decode sentinel would fire REQUEST_COMPLETE accounting
+                // for a batch namespace id that never arrived (an
+                // on_request_completed underflow). Production commits with
+                // --online-validate=0 run ONLY this preflight, so the rule
+                // lives here -- validate_impl keeps its own richer copy.
+                if (stage != "prefill") {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] batch_train sentinel watch requires "
+                                "stage=prefill, got " + stage + " (" +
+                                request_id + ")");
+                }
+            } else {
                 const RequestFacts facts = request_facts(request_id);
                 if (stage == "prefill" && !facts.in_flight) {
                     return fail("prefill watch[" + std::to_string(watch_index) +
@@ -838,6 +911,46 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                             *ingress_error);
             }
         }
+
+        // (2026-09-30) touched_ranks consistency, sunk here from
+        // validate_impl so the production fast path
+        // (--online-validate=0, which runs ONLY this preflight) no longer
+        // accepts a wrong DECLARED rank set: the issue pass itself uses the
+        // self-computed set, but the declared value feeds Python-side
+        // ledgers -- a wrong declaration must fail closed, not pass as an
+        // informational field. Cheap O(#ranks): rank_graphs already holds
+        // exactly the ranks that carry nodes.
+        // (2026-10-01) the sorted-unique half of the declared contract is
+        // enforced here too: the parse layer deliberately admits duplicates
+        // (T8 leaves sorted-unique to the consumer), and without this check
+        // a duplicated declaration like {3,3} spoofed the size comparison
+        // below into passing while a genuinely touched rank went
+        // undeclared. validate_impl keeps its richer copy.
+        if (batch.has_touched_ranks) {
+            if (std::adjacent_find(batch.touched_ranks.begin(),
+                                   batch.touched_ranks.end(),
+                                   [](const int a, const int b) {
+                                       return a >= b;
+                                   }) != batch.touched_ranks.end()) {
+                return fail(
+                    "touched_ranks is not strictly ascending (duplicate or "
+                    "unsorted rank declaration)");
+            }
+            if (batch.touched_ranks.size() != rank_graphs.size()) {
+                return fail("touched_ranks declares " +
+                            std::to_string(batch.touched_ranks.size()) +
+                            " ranks but the batch carries nodes on " +
+                            std::to_string(rank_graphs.size()) + " ranks");
+            }
+            for (const int declared_rank : batch.touched_ranks) {
+                if (rank_graphs.find(declared_rank) == rank_graphs.end()) {
+                    return fail(
+                        "touched_ranks declares rank " +
+                        std::to_string(declared_rank) +
+                        " which carries no node in this batch");
+                }
+            }
+        }
     } catch (const std::exception& exc) {
         return fail(std::string("malformed batch entry: ") + exc.what());
     }
@@ -895,7 +1008,8 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
     try {
         // A committed rank owns an exact affine mapping onto the NodeStore's
         // automatic id stream. Check it before every semantic rule; this is a
-        // read-only fail-closed diagnostic and validate() remains pure.
+        // read-only fail-closed diagnostic and the full validation stays
+        // pure.
         if (auto drift_error = validate_affine_drift()) {
             return drift_error;
         }
@@ -903,7 +1017,7 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
         // ---- delta facts first: the batch is validated against the state
         //      AFTER this epoch's arrivals/completions (the commit applies
         //      the same facts before adding anything). Local copies only --
-        //      validate() touches no committer state. ----
+        //      the validation touches no committer state. ----
         std::set<std::string> in_flight = in_flight_;
         std::set<std::string> prefill_drained = prefill_drained_;
         apply_delta_facts(delta, in_flight, prefill_drained);
@@ -1018,6 +1132,14 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             if (type == 7 && node.coll.bytes == 0) {
                 return "node[" + std::to_string(node_index) +
                        "] collective bytes must be positive";
+            }
+            // R2-E2 fix (2026-09-29): same early rejection for a zero-byte
+            // p2p -- the fluid backend's start_flow exits on it, far from
+            // the root cause.
+            if ((type == 5 || type == 6) && node.comm.bytes == 0) {
+                return "node[" + std::to_string(node_index) +
+                       "] p2p (type " + std::to_string(type) +
+                       ") bytes must be positive";
             }
             if (node.coll.pg_name.empty() && type == 7) {
                 return "node[" + std::to_string(node_index) +
@@ -1391,11 +1513,6 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
     }
 }
 
-std::optional<std::string> GraphBatchCommitter::validate(
-    const StateDelta& delta, const GraphBatch& batch) const {
-    return validate_impl(delta, batch, nullptr);
-}
-
 GraphBatchCommitter::ValidateAndCommitResult
 GraphBatchCommitter::validate_and_commit(const StateDelta& delta,
                                          const GraphBatch& batch) {
@@ -1437,30 +1554,47 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
                                  const GraphBatch& batch) {
     if (validation_commit_in_progress_) {
         throw std::runtime_error(
-            "commit reentered while validate_and_commit owns preflight scratch");
+            "commit reentered while an outer commit()/validate_and_commit() "
+            "owns the preflight scratch");
     }
     // Production may skip the expensive semantic validator, but every batch
     // still pays this bounded liveness preflight.  It covers the affine/id
     // contract plus every malformed shape that can strand work permanently.
     // All three checks are pure and precede any delta, NodeStore, watch,
     // ingress, counter, or affine state change.
-    if (auto drift_error = validate_affine_drift()) {
-        throw std::runtime_error("commit preflight: " + *drift_error);
-    }
-    if (auto id_error = validate_json_id_stream(batch, &commit_touched_ranks_)) {
-        throw std::runtime_error("commit preflight: " + *id_error);
-    }
-    if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
-        throw std::runtime_error("commit preflight: " + *liveness_error);
-    }
+    // M2-4 (2026-09-26): commit() now owns the same scratch guard as
+    // validate_and_commit() -- the in-progress flag stays set across the
+    // whole preflight+mutation body, so a nested mutating commit() from a
+    // Context callback fails closed at entry instead of clear/rewriting
+    // commit_touched_ranks_ while the outer commit_after_preflight iterates
+    // it (UB). Unreachable on the current wiring (issue_rank binds
+    // Workload::issue_dep_free_nodes; the metrics anchor hook takes a const
+    // committer) -- defensive depth only.
+    validation_commit_in_progress_ = true;
+    try {
+        if (auto drift_error = validate_affine_drift()) {
+            throw std::runtime_error("commit preflight: " + *drift_error);
+        }
+        if (auto id_error =
+                validate_json_id_stream(batch, &commit_touched_ranks_)) {
+            throw std::runtime_error("commit preflight: " + *id_error);
+        }
+        if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
+            throw std::runtime_error("commit preflight: " + *liveness_error);
+        }
 
-    commit_after_preflight(delta, batch, commit_touched_ranks_);
+        commit_after_preflight(delta, batch, commit_touched_ranks_);
+    } catch (...) {
+        validation_commit_in_progress_ = false;
+        throw;
+    }
+    validation_commit_in_progress_ = false;
 }
 
 void GraphBatchCommitter::commit_after_preflight(
     const StateDelta& delta, const GraphBatch& batch,
     const std::vector<int>& touched_ranks) {
-    // ---- delta facts first (the same facts validate() used) ----
+    // ---- delta facts first (the same facts the full validation used) ----
     apply_delta_facts(delta, in_flight_, prefill_drained_);
 
     // ---- Phase B-1: nodes (per-rank affine json id -> store id).
@@ -1553,6 +1687,14 @@ void GraphBatchCommitter::commit_after_preflight(
     //      ids; C1: typed members in JSON key order, statuses from the
     //      parse-layer enum -- the "unknown status" throw is structurally
     //      gone). ----
+    // R1-A-L1 fix: watch_registry is the one Context service pointer without
+    // an explicit check; a batch carrying watches with it unset would
+    // dereference null. Same fail-loud shape as the other service guards.
+    if (!batch.watches.empty() && ctx_.watch_registry == nullptr) {
+        throw std::runtime_error(
+            "commit: batch carries watches but Context::watch_registry is "
+            "not configured");
+    }
     for (const auto& watch : batch.watches) {
         const std::string& request_id = watch.request_id;
         const std::string& stage = watch.stage;
@@ -1580,9 +1722,24 @@ void GraphBatchCommitter::commit_after_preflight(
         for (const auto status : watch.statuses) {
             statuses.insert(status);
         }
+        bool watch_created = false;
         ctx_.watch_registry->register_stage_watch(
             request_id, stage, generation, std::move(members),
-            std::move(statuses));
+            std::move(statuses), &watch_created);
+        if (!watch_created) {
+            // (2026-09-30) A re-registered (request_id, stage, generation)
+            // identity used to silently no-op: the registry kept the OLD
+            // member set, so the new members' completions could never
+            // advance the watch and the run died much later at the run-end
+            // stale audit with no pointer to the cause. The protocol emits
+            // each watch identity exactly once (batch ids are strictly
+            // monotonic), so a duplicate is a producer bug -- name it here.
+            throw std::runtime_error(
+                "commit: duplicate watch identity (request_id=" + request_id +
+                " stage=" + stage +
+                " generation=" + std::to_string(generation) +
+                ") -- each watch identity must be registered exactly once");
+        }
     }
 
     // ---- Phase B-4: schedule future arrival alarms ----
@@ -1598,6 +1755,16 @@ void GraphBatchCommitter::commit_after_preflight(
     // Reuse the sorted-unique rank set collected by the mandatory id-stream
     // preflight.  Re-walking every JSON node here used to add a second
     // O(nodes) pass plus an allocating std::set on every committed batch.
+    // cpp-ed-core-5 (2026-09-26): fail closed on an unwired issue_rank
+    // instead of letting the first hot-path call throw an uncaught
+    // std::bad_function_call -- an empty std::function here is an
+    // initialization defect (the online entry binds
+    // systems[rank]->workload->issue_dep_free_nodes()), so name it as such.
+    if (!ctx_.issue_rank) {
+        throw std::runtime_error(
+            "commit: Context::issue_rank is not wired -- the online entry "
+            "must configure the committer context before the first commit");
+    }
     for (const int rank : touched_ranks) {
         ctx_.issue_rank(rank);
     }

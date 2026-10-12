@@ -46,6 +46,7 @@ Exit code 0 on ALL PASS.
 
 #include <json/json.hpp>
 
+#include "DieTypes.hh"
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 using namespace AstraSim::ExecutionDriven;
@@ -89,6 +90,18 @@ void expect_parse_error(const nlohmann::json& resp, const char* what,
     }
 }
 
+nlohmann::json empty_kernel_contract() {
+    return {{"projection_abi_version", 1},
+            {"descriptor_version", 1},
+            {"pipeline_protocol_version", 1},
+            {"model_version", "v6-compact-window-20261005"},
+            {"timer_whitelist_version", "timer-whitelist-v1-20261005"},
+            {"window_tile_limit", 1},
+            {"window_local_error_ppm", 10000},
+            {"window_refine_margin_ppm", 20000},
+            {"prediction_config_sha256", std::string(64, '0')}};
+}
+
 ParsedGraphBatch parse_ok(const nlohmann::json& resp, const char* what,
                           int num_ranks = 3) {
     try {
@@ -123,6 +136,45 @@ nlohmann::json compute_full() {
             {"remote_weight_bytes", 777}};
 }
 
+// Die backend (joint rollout stage 1, contract §2): a legal die_op_spec
+// object. Unsigned literals on purpose (the strict spec parser requires
+// is_number_unsigned, which nlohmann text parsing always provides; in-test
+// construction with plain ints would store signed and be rejected).
+nlohmann::json valid_die_op_spec() {
+    nlohmann::json span;
+    span["request_id"] = "r1";
+    span["q_tokens"] = 8u;
+    span["kv_tokens"] = 128u;
+    span["q_start_pos"] = 0u;
+    span["kv_start_pos"] = 0u;
+    nlohmann::json spec;
+    spec["schema_version"] = 1u;
+    spec["op_kind"] = "norm";
+    spec["phase"] = "prefill";
+    spec["dtype"] = "bf16";
+    spec["model_dims"] = {{"hidden", 4096u},
+                          {"ffn", 14336u},
+                          {"vocab", 152064u},
+                          {"mlp_variant", "swiglu"},
+                          {"norm_type", "rmsnorm"},
+                          {"position_encoding", "rope"},
+                          {"num_q_heads", 32u},
+                          {"num_kv_heads", 8u},
+                          {"head_dim", 128u}};
+    spec["tp_slice"] = {{"tensor_parallel", 1u},
+                        {"tensor_parallel_rank", 0u},
+                        {"q_heads_local", 32u},
+                        {"kv_heads_local", 8u},
+                        {"ffn_local", 14336u},
+                        {"vocab_local", 152064u}};
+    spec["spans"] = nlohmann::json::array({span});
+    spec["layer_count"] = 1u;
+    spec["weight_passes"] = 1u;
+    spec["kv_access"] = {{"identity", "local"}};
+    spec["fusion_policy"] = "auto";
+    return spec;
+}
+
 // sh_3.0's MemAttrs sub-object (optional at the node level, all keys
 // optional within it -- the pre-C1 .value(key, default) semantics).
 nlohmann::json mem_full() {
@@ -154,9 +206,11 @@ nlohmann::json node_json(int rank, uint64_t id, int type,
 // watch, an alarm carrying queue_index, touched_ranks.
 nlohmann::json max_shape_response() {
     nlohmann::json resp;
-    resp["schema_version"] = 1;
+    resp["schema_version"] = 2;
     resp["batch_id"] = 42;
     resp["source_delivery_sequence"] = 42;
+    resp["pipeline_descriptors"] = nlohmann::json::array();
+    resp["kernel_contract"] = empty_kernel_contract();
     nlohmann::json nodes = nlohmann::json::array();
     for (int type = 1; type <= 7; ++type) {
         nlohmann::json node = node_json(0, static_cast<uint64_t>(type - 1),
@@ -226,12 +280,12 @@ void test_top_level_rules() {
     }
     {  // T1: wrong value
         nlohmann::json resp = base;
-        resp["schema_version"] = 2;
-        expect_parse_error(resp, "T1: schema_version != 1", "schema_version");
+        resp["schema_version"] = 1;
+        expect_parse_error(resp, "T1: schema_version != 2", "schema_version");
     }
     {  // T1: wrong type
         nlohmann::json resp = base;
-        resp["schema_version"] = "1";
+        resp["schema_version"] = "2";
         expect_parse_error(resp, "T1: schema_version not integer",
                            "schema_version");
     }
@@ -253,8 +307,10 @@ void test_top_level_rules() {
     }
     {  // T5: all six arrays optional == empty
         nlohmann::json resp;
-        resp["schema_version"] = 1;
+        resp["schema_version"] = 2;
         resp["source_delivery_sequence"] = 7;
+        resp["pipeline_descriptors"] = nlohmann::json::array();
+        resp["kernel_contract"] = empty_kernel_contract();
         const ParsedGraphBatch parsed =
             parse_ok(resp, "T5: bare-bones response");
         expect(parsed.nodes.empty() && parsed.parent_edges.empty() &&
@@ -421,6 +477,120 @@ void test_node_rules() {
         resp["nodes"][0]["compute"]["hbm_access_mode"] = 1;
         expect_parse_error(resp, "N12: compute unknown hbm_access_mode",
                            "hbm_access_mode");
+    }
+    {  // N12/die (joint rollout stage 1, contract §2): op_role +
+       // die_op_spec extensions. Unsigned literals on purpose in the spec
+       // builder (the strict spec parser requires is_number_unsigned;
+       // in-test construction with plain ints would store signed and be
+       // rejected).
+        using OpRole = AstraSim::ExecutionDriven::OpRole;
+        // Accept: op_role=control_marker parses to the enum.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "control_marker";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role control_marker accepted");
+            expect(parsed.nodes[0].node.compute.op_role ==
+                       OpRole::ControlMarker,
+                   "N12: op_role control_marker -> enum");
+            expect(parsed.nodes[0].node.compute.die_spec == nullptr,
+                   "N12: op_role alone leaves die_spec null");
+        }
+        // Accept: op_role=compute is the explicit default spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "compute";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role compute accepted");
+            expect(parsed.nodes[0].node.compute.op_role == OpRole::Compute,
+                   "N12: op_role compute -> enum");
+        }
+        // Accept: die_op_spec with runtime_ns == 0 parses the immutable
+        // spec (DieModel::parse_die_op_spec ran without error).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: die_op_spec accepted");
+            expect(parsed.nodes[0].node.compute.die_spec != nullptr,
+                   "N12: die_op_spec -> shared spec");
+            expect(parsed.nodes[0].node.compute.die_spec->op_kind ==
+                       DieModel::OpKind::Norm,
+                   "N12: parsed spec carries op_kind norm");
+        }
+        // Reject: unknown op_role spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "marker";
+            expect_parse_error(resp, "N12: op_role unknown spelling",
+                               "op_role");
+        }
+        // Reject: op_role must be a string.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = 1;
+            expect_parse_error(resp, "N12: op_role int", "not a string");
+        }
+        // Reject: die_op_spec + runtime_ns != 0 (contract §2 conflict rule:
+        // a calibrated runtime must never silently bypass the die plan).
+        {
+            nlohmann::json resp = base;  // compute_full carries runtime_ns
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            expect_parse_error(resp, "N12: die_op_spec with runtime_ns",
+                               "runtime_ns == 0");
+        }
+        // Reject: die_op_spec must be an object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = "norm";
+            expect_parse_error(resp, "N12: die_op_spec string",
+                               "die_op_spec is not an object");
+        }
+        // Reject: an inner spec violation surfaces as a ParseError carrying
+        // the original library message (here: an unknown key inside the
+        // spec object).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["surprise"] = 1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec unknown inner key",
+                               "die_op_spec rejected");
+        }
+        // Reject: a missing required key inside the spec object (spans).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec.erase("spans");
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec missing spans",
+                               "die_op_spec rejected");
+        }
+        // Reject: an enum misspelling inside the spec object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["op_kind"] = "normalize";
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec bad op_kind",
+                               "die_op_spec rejected");
+        }
+        // Reject: a signed integer inside the spec object (the strict
+        // spec parser requires unsigned storage).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["layer_count"] = -1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec negative layer_count",
+                               "die_op_spec rejected");
+        }
     }
     {  // N12m: sh_3.0 mem sub-object -- optional node key, optional fields,
         //  unknown keys / wrong types / non-object rejected; a fully absent
@@ -720,9 +890,11 @@ void test_opaque_and_order_rules() {
     }
     {  // O4: the frozen error skeleton parses cleanly, error carried
         nlohmann::json resp;
-        resp["schema_version"] = 1;
+        resp["schema_version"] = 2;
         resp["batch_id"] = 5;
         resp["source_delivery_sequence"] = 5;
+        resp["pipeline_descriptors"] = nlohmann::json::array();
+        resp["kernel_contract"] = empty_kernel_contract();
         resp["nodes"] = nlohmann::json::array();
         resp["parent_edges"] = nlohmann::json::array();
         resp["watches"] = nlohmann::json::array();

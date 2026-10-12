@@ -41,16 +41,12 @@ class HalvingDoubling : public Algorithm {
     int curr_sender;
     int nodes_in_ring;
     int stream_count;
-    int max_count;
-    int remained_packets_per_max_count;
     int remained_packets_per_message;
     int parallel_reduce;
-    InjectionPolicy injection_policy;
     std::list<MyPacket> packets;
     bool toggle;
     long free_packets;
     uint64_t msg_size;
-    std::list<MyPacket*> locked_packets;
     bool processed;
     bool send_back;
     bool NPU_to_MA;

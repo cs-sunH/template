@@ -7,9 +7,8 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
-BasicEventHandlerData::BasicEventHandlerData() {
-    this->sys_id = 0;
-}
+BasicEventHandlerData::BasicEventHandlerData()
+    : sys_id(0), event(EventType::CallEvents) {}
 
 BasicEventHandlerData::BasicEventHandlerData(int sys_id, EventType event) {
     this->sys_id = sys_id;

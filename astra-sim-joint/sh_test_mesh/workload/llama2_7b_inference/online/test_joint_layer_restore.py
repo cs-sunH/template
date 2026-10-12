@@ -325,6 +325,43 @@ class SuffixRestoreLedgerTests(unittest.TestCase):
             and event["boundary"] == "mark_complete"
             for event in self.manager.restore_events))
 
+    def test_restore_events_carry_at_ns_when_plumbed(self):
+        # M4：issue/complete 事件携带可选 at_ns——SH 在线调用面透传时
+        # 刻（issue→complete 配对 = 恢复窗口下界）。
+        self.manager.prepare_prefill(
+            session_id="s", target_instance_index=0,
+            history_tokens=100, trigger_request_id="r3", action="stay",
+            at_ns=1000)
+        self.assertTrue(any(
+            event["subject"] == "r3#restore" and event["event"] == "issue"
+            and event["at_ns"] == 1000
+            for event in self.manager.restore_events))
+        self.assertEqual(
+            self.manager._settle_restore_groups(
+                "s", boundary="prefill_drain", at_ns=1500),
+            1)
+        self.assertTrue(any(
+            event["subject"] == "r3#restore"
+            and event["event"] == "complete"
+            and event["at_ns"] == 1500
+            for event in self.manager.restore_events))
+
+    def test_restore_events_default_at_ns_is_none(self):
+        # M4：不传 at_ns ⇒ 事件恒 None（直构夹具确定性零漂移锚）。
+        self.manager.prepare_prefill(
+            session_id="s", target_instance_index=0,
+            history_tokens=100, trigger_request_id="r4", action="stay")
+        self.assertTrue(any(
+            event["subject"] == "r4#restore" and event["event"] == "issue"
+            and event["at_ns"] is None
+            for event in self.manager.restore_events))
+        self.manager._settle_restore_groups("s", boundary="merge")
+        self.assertTrue(any(
+            event["subject"] == "r4#restore"
+            and event["event"] == "complete"
+            and event["at_ns"] is None
+            for event in self.manager.restore_events))
+
 
 class RestoreGraphStructureTests(unittest.TestCase):
     def setUp(self):
@@ -692,6 +729,19 @@ class AdaptiveDecisionDisciplineTests(unittest.TestCase):
         self.assertIn("coverage_no_collective_telemetry", row["statuses"])
         self.assertIn("coverage_no_link_model", row["statuses"])
         self.assertIn("pool_divisor", row)
+
+    def test_disclosure_rows_carry_at_ns_when_plumbed(self):
+        # M4：决策披露行携带可选 at_ns——缺省 None（直构夹具零漂移）；
+        # 透传时刻逐行落账（供两阶段决策验证）。
+        self._target()
+        self.assertTrue(self.manager.adaptive_decisions)
+        self.assertTrue(all(
+            row["at_ns"] is None
+            for row in self.manager.adaptive_decisions))
+        self.manager._adaptive_retention_target_tokens(
+            "s", 100, None, at_ns=4242)
+        self.assertEqual(
+            self.manager.adaptive_decision_find("s")["at_ns"], 4242)
 
     def test_recursion_matches_closed_form_without_contention(self):
         """递推 vs 解析：无争用对称夹具下递推 ≥ 闭式（K8 名实订正

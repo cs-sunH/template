@@ -14,11 +14,10 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CommunicatorGroup.hh"
 #include "astra-sim/workload/execution_driven/ExecutionMode.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
+#include "astra-sim/workload/DieModelAdapter.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/Statistics.hh"
-#include "astra-sim/workload/LocalMemUsageTracker.hh"
-#include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
 namespace spdlog {
 class logger;
@@ -33,13 +32,14 @@ class WorkloadLayerHandlerData;
 class Workload : public Callable {
   public:
     // execution_mode/graph_source: step-1-2 execution-mode factory
-    // (ExecutionMode.hh). Static default keeps the legacy call sites and the
-    // byte-for-byte static behavior unchanged.
+    // (ExecutionMode.hh). The offline static path is retired in this
+    // repository (the ETFeederGraphSource adapter was removed with it);
+    // Online is the only constructible mode.
     Workload(Sys* sys,
              std::string et_filename,
              std::string comm_group_filename,
              ExecutionDriven::ExecutionMode execution_mode =
-                 ExecutionDriven::ExecutionMode::Static,
+                 ExecutionDriven::ExecutionMode::Online,
              std::shared_ptr<ExecutionDriven::GraphSource> graph_source =
                  nullptr);
     ~Workload();
@@ -52,9 +52,7 @@ class Workload : public Callable {
 
     // event-based simulation. Step 1-4 (方案 §4 步骤 1-4 操作 4): every issue_*
     // consumes the NodeView read view from the GraphSource (依赖状态唯一所有
-    // 者); the ETFeederNode handle is fetched through GraphSource::et_node
-    // only where the static-path consumers (HardwareResource / Statistics /
-    // local_mem tracker) still need it.
+    // 者).
     void issue_dep_free_nodes();
     void issue(const ExecutionDriven::NodeView& node);
     void issue_metadata(const ExecutionDriven::NodeView& node);
@@ -66,31 +64,36 @@ class Workload : public Callable {
     void issue_recv_comm(const ExecutionDriven::NodeView& node);
     void skip_invalid(const ExecutionDriven::NodeView& node);
     void call(EventType event, CallData* data);
-    void fire();
 
-    // stats
-    void report();
-
-    Chakra::ETFeeder* et_feeder;
     std::unordered_map<int, std::shared_ptr<CommunicatorGroup>> comm_groups;
     HardwareResource* hw_resource;
     Sys* sys;
     Statistics* stats;
-    std::unique_ptr<LocalMemUsageTracker> local_mem_usage_tracker;
     // Multi-user local-HBM bandwidth contention (hbm-bandwidth-contention):
     // one fluid model per rank; null in the legacy closed-form mode.
     std::unique_ptr<LocalHbmBandwidthModel> local_hbm_bandwidth_model;
+    // Die backend: one adapter per rank, constructed only under
+    // compute-cost-model=die (its constructor fail-closes without the Sys
+    // die runtime). DECLARED AFTER local_hbm_bandwidth_model on purpose:
+    // members destruct in reverse order, so the adapter (and its live
+    // DieExecutions, which must drop their pending HBM die jobs) unwinds
+    // while the fluid model is still alive; ~Workload additionally shuts
+    // it down FIRST, before the model reset, for the same reason.
+    std::unique_ptr<DieModelAdapter> die_adapter_;
     std::unordered_map<int, uint64_t> collective_comm_node_id_map;
     std::unordered_map<int, DataSet*> collective_comm_wrapper_map;
-    bool is_finished;
 
-    // step-1-2 execution-mode factory state: online mode never constructs the
-    // ETFeeder and never requires .et files; the dynamic GraphSource is
-    // injected at Sys creation (NodeStore-backed implementation in step 1-4).
-    ExecutionDriven::ExecutionMode execution_mode_;
+    // step-1-2 execution-mode factory state: Workload never constructs an
+    // ETFeeder (the offline static path is retired) and never requires .et
+    // files; the dynamic GraphSource is injected at Sys creation
+    // (NodeStore-backed implementation in step 1-4). The execution mode
+    // itself is constructor-local: Online is the only accepted value and no
+    // code reads it afterwards.
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
     // Path-2 removal (2026-08-18): the replay-clock scope flag was deleted
-    // with the replay route; strategy mode always keeps real physics.
+    // with the replay-only dispatch route (--online-mode replay; distinct
+    // from the issue_replay operator issue path, which remains); strategy
+    // mode always keeps real physics.
 
     // LocalHbmBandwidthModel completion callback (re-entrant, fired from the
     // model's transition event): COMP jobs take the plain generic completion
@@ -99,6 +102,41 @@ class Workload : public Callable {
     // ownership of wlhd.
     void on_local_hbm_job_complete(WorkloadLayerHandlerData* wlhd,
                                    LocalHbmBandwidthModel::JobKind kind);
+
+    /// Teardown-only companion of on_local_hbm_job_complete: when the
+    /// LocalHbmBandwidthModel is destroyed with jobs still in flight (fatal
+    /// exit path / test harness dismantling Sys mid-run), the destructor
+    /// deletes the residual payloads itself and drops the pending
+    /// HbmCommJoin entry of the joined comm node -- that node can never
+    /// complete through a join whose endpoint job will never fire. Absent
+    /// entry (COMP jobs, or the network side already consumed the join) is
+    /// a silent no-op.
+    void abandon_local_hbm_join_entry(uint64_t node_id);
+
+    /// Body shared by every generic (wlhd) node completion: node release /
+    /// stats / metrics / terminal record / dependency release. Extracted
+    /// from Workload::call's generic branch so the LocalHbmBandwidthModel
+    /// callback can complete COMP nodes through the exact same path.
+    /// Public since the die backend: the DieExecution of a die-backend
+    /// COMP node finishes through this same single exit (contract §7.3;
+    /// the HBM-delivered completions already ran it from
+    /// on_local_hbm_job_complete).
+    void finish_generic_node(uint64_t node_id);
+
+    /// Die backend (contract §7.6): fill the utilization fields of the
+    /// node's statistics state ahead of finish_generic_node -- compact
+    /// OnlineStatisticsState in online service mode (including the
+    /// die-only vector_utilization), the legacy OperatorStatistics record
+    /// otherwise. Must run BEFORE the generic completion consumes them.
+    void record_die_utilizations(uint64_t node_id,
+                                 double compute_utilization,
+                                 double memory_utilization,
+                                 double vector_utilization);
+
+    /// Die backend adapter accessor (null off the die backend).
+    DieModelAdapter* die_model_adapter() {
+        return die_adapter_.get();
+    }
 
   private:
     // R4-14: cached "workload" logger -- fetched once in the constructor;
@@ -126,15 +164,11 @@ class Workload : public Callable {
                                     Tick end_time);
     void mark_online_terminal_or_fail(uint64_t node_id);
 
-    // Body shared by every generic (wlhd) node completion: node release /
-    // stats / metrics / terminal record / dependency release / static-mode
-    // auto-advance.  Extracted from Workload::call's generic branch so the
-    // LocalHbmBandwidthModel callback can complete COMP nodes through the
-    // exact same path.  event is the completion event the caller observed
-    // (PacketSent/PacketReceived for p2p network completions, General
-    // otherwise; the network-bandwidth statistics it used to feed were
-    // removed as write-only dead state).
-    void finish_generic_node(uint64_t node_id, EventType event);
+    // Die-backend COMP dispatch (contract §7.3 frozen order): timer -> cpu
+    // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
+    // fail-closed throw. Reached only under
+    // sys->compute_cost_model == ComputeCostModel::Die.
+    void issue_die_comp(const ExecutionDriven::NodeView& node);
 
     // Two-event join for p2p comm nodes with an HBM endpoint job: the node
     // completes exactly once, when both the network-side callback and the
@@ -143,7 +177,6 @@ class Workload : public Callable {
     struct HbmCommJoin {
         bool network_done = false;
         bool hbm_done = false;
-        EventType completion_event = EventType::General;
     };
     std::unordered_map<uint64_t, HbmCommJoin> hbm_comm_join_;
     void maybe_complete_hbm_joined_comm(uint64_t node_id);

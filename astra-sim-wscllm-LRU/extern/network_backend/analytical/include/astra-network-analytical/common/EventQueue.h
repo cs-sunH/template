@@ -33,9 +33,12 @@ class EventQueue {
 
     /**
      * Check all registered events are invoked.
-     * i.e., check if the event queue is empty.
+     * i.e., check if both the main event queue and the same-tick deferred
+     * queue are empty (ONLINE-07 fix, 2026-09-26: a deferred event pended
+     * outside a proceed context is still pending work, so finished() must
+     * not report quiescence while one waits).
      *
-     * @return true if the event queue is empty, false otherwise
+     * @return true if both queues are empty, false otherwise
      */
     [[nodiscard]] bool finished() const noexcept;
 
@@ -43,12 +46,20 @@ class EventQueue {
      * Proceed the event queue.
      * i.e., first update the current event time to the next registered event
      * time, and then invoke all events registered at the current updated event
-     * time.
+     * time. When the main queue is empty while deferred events pended outside
+     * a proceed context, this runs a deferred-only drain pass at the current
+     * time instead (no clock advance, no main list, no tick-end callback).
      */
     void proceed() noexcept;
 
     /**
      * Schedule an event with a given event time.
+     *
+     * event_time must be strictly greater than current_time unless called
+     * inside the invoke pass (see in_invoke_context()), where a same-tick
+     * event merges into the EventList currently being invoked; same-tick
+     * work from any other context must use schedule_event_deferred()
+     * instead. Violations fail closed in every build type.
      *
      * @param event_time time of event
      * @param callback callback function pointer
@@ -90,7 +101,8 @@ class EventQueue {
      * callback or a deferred handler, same-tick events MUST go through
      * schedule_event_deferred(); schedule_event(current_time, ...) would
      * try_emplace a current_time EventList into the main map and trip the
-     * strict-increase assert (EventQueue.cpp :31) on the next proceed().
+     * strict-increase fail-closed guard in EventQueue.cpp proceed() on the
+     * next proceed().
      */
     void set_tick_end_callback(Callback callback, CallbackArg arg) noexcept;
 
@@ -108,14 +120,11 @@ class EventQueue {
      * 2026-08-16, 同步自 face 0049ef5 / face-defectfix2-done).
      *
      * The deferred queue (deferred_queue_, container-independent of the
-     * main std::map) only drains inside proceed(); a deferred event
-     * scheduled outside a proceed context (or left over after one) is
-     * INVISIBLE to finished() -- the main map can be empty while deferred
-     * work still pends. The online main loop queries this so it can force
-     * the next decision boundary (schedule_event(T+1, wakeup)) and let a
-     * proceed() drain it, instead of blocking on a wait that would never
-     * be woken. Informational for the static binary (nothing schedules
-     * deferred there).
+     * main std::map) only drains inside proceed(); since the ONLINE-07 fix
+     * (2026-09-26) finished() accounts for it, this predicate now just
+     * distinguishes "why the queue is not finished" and serves as a
+     * parking-point diagnostic -- the online main loop no longer needs it
+     * to force a drain (proceed() runs a deferred-only pass itself).
      *
      * @return true if deferred_queue_ is non-empty
      */

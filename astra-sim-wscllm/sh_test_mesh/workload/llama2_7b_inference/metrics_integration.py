@@ -1,17 +1,19 @@
 """Service-route metrics integration helpers.
 
 ``MemoryActionRecorder`` is the P1 authoritative HBM delta journal shared by
-``session_kv_manager`` and the online routes (doc sec.7.2/10.3); the manifest
-``memory_actions`` stream is rebuilt by streaming the journal file back.
-``load_chiplets_per_npu`` resolves the per-NPU chiplet count from
-``metrics_config.json``.  Nothing here feeds back into request mapping,
-scheduling, KV management, or dynamic graph construction.
+``session_kv_manager`` and the online routes (doc sec.7.2/10.3); the journal
+file is the authoritative physical ledger, streamed back line by line at
+replay time (``replay_journal``).  ``load_chiplets_per_npu`` resolves the
+per-NPU chiplet count from ``metrics_config.json``.  Nothing here feeds back
+into request mapping, scheduling, KV management, or dynamic graph
+construction.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,6 +25,11 @@ from metrics_schema import (  # noqa: E402
 
 METRICS_CONFIG_PATH = Path(__file__).resolve().parent / "metrics_config.json"
 
+# Single source of truth for the config schema version: the same constant
+# the metrics contract tests pin (metrics_schema.SCHEMA_VERSION), so a
+# future version bump updates both consumers together (R5-F2, 2026-10-01).
+from metrics_schema import SCHEMA_VERSION as _EXPECTED_SCHEMA_VERSION
+
 __all__ = [
     "MemoryActionRecorder",
     "load_chiplets_per_npu",
@@ -30,35 +37,84 @@ __all__ = [
 
 
 def load_chiplets_per_npu() -> int:
+    # 配置损坏/缺失不是静默场景：stderr 记录原因后回退默认值 4（与
+    # metrics_config.json 当前值相同，但掩盖配置错误会让排查失去线索）。
     try:
         with METRICS_CONFIG_PATH.open(encoding="utf-8") as source:
             config = json.load(source)
-        return int(config.get("memory", {}).get("chiplets_per_npu", 4))
-    except (OSError, ValueError, TypeError):
+        # Schema gate (R4-blind-F2, 2026-10-01): schema_version was
+        # previously consumed by nothing at runtime, so a future format
+        # revision would silently read the new file under the old key
+        # shape. A missing or non-1 version walks this function's existing
+        # stderr + default-4 channel like every other malformed-config
+        # path.
+        schema_version = config.get("schema_version")
+        if schema_version != _EXPECTED_SCHEMA_VERSION:
+            print(
+                f"metrics_integration: {METRICS_CONFIG_PATH} has "
+                f"schema_version={schema_version!r} (expected "
+                f"{_EXPECTED_SCHEMA_VERSION}); falling back to "
+                "chiplets_per_npu=4",
+                file=sys.stderr,
+            )
+            return 4
+        memory = config.get("memory")
+        if not isinstance(memory, dict):
+            print(
+                f"metrics_integration: {METRICS_CONFIG_PATH} lacks a valid "
+                "'memory' object; falling back to chiplets_per_npu=4",
+                file=sys.stderr,
+            )
+            return 4
+        chiplets = memory.get("chiplets_per_npu", 4)
+        # Report 4.3 fix (2026-09-29): the bare int() silently coerced bools
+        # (True -> 1), floats (4.5 -> 4) and numeric strings ("4" -> 4), so
+        # a corrupted config value passed as a valid chiplet count.  The
+        # count must be a real integer (bool is an int subclass and is
+        # rejected explicitly); a wrong-shaped value walks this function's
+        # existing stderr + default-4 channel like every other
+        # malformed-config path above.
+        if (
+            isinstance(chiplets, bool)
+            or not isinstance(chiplets, int)
+            or chiplets < 1
+        ):
+            # Value-domain twin of the type gate (2026-09-30): 0/negative is
+            # the same corrupted-config shape and previously slipped through
+            # to die inside MemoryMetricsObserver's own _require_int, far
+            # from the config file; route it through this function's
+            # stderr + default-4 channel like every other malformed value.
+            print(
+                f"metrics_integration: {METRICS_CONFIG_PATH} has a "
+                f"non-positive 'chiplets_per_npu' ({chiplets!r}); falling "
+                "back to chiplets_per_npu=4",
+                file=sys.stderr,
+            )
+            return 4
+        return chiplets
+    except (OSError, ValueError, TypeError, AttributeError) as error:
+        print(
+            f"metrics_integration: cannot read chiplets_per_npu from "
+            f"{METRICS_CONFIG_PATH} ({error}); falling back to 4",
+            file=sys.stderr,
+        )
         return 4
 
 
 class MemoryActionRecorder:
-    """Planner memory delta sequence: streaming journal-first ledger.
+    """Planner memory delta sequence: streaming journal ledger.
 
-    Two modes:
-
-    - ``journal_path`` given (P1 authoritative HBM delta journal): every
-      :meth:`record` appends exactly one JSON line to the journal file and
-      flushes it (line-atomic crash consistency; a torn tail line is rejected
-      with its line number on replay).  Nothing is retained in memory — the
-      manifest ``memory_actions`` stream is rebuilt by streaming the file back
-      (:meth:`iter_journal_deltas`).  The journal is the authoritative
-      physical ledger replayed by the run-end checksum gate
-      (``SessionKVCacheManager.verify_journal_checksum``).
-    - ``journal_path`` omitted (legacy in-memory mode): deltas accumulate in
-      ``self.deltas`` exactly as before and the manifest walks the list.
+    Every :meth:`record` appends exactly one JSON line to the journal file
+    and flushes it (line-atomic crash consistency; a torn tail line is
+    rejected with its line number on replay).  Nothing is retained in
+    memory -- the journal is the authoritative physical ledger replayed by
+    the run-end checksum gate
+    (``SessionKVCacheManager.verify_journal_checksum``).
 
     The KV manager still calls :meth:`record` only *after* it applied the
     identical state change (doc sec.7.2); the recorder assigns the sequence
-    index, forwards the delta to the read-only observer, and (in journal
-    mode) streams the journal row.  Journal semantics (P1, four mandatory
-    rules):
+    index, forwards the delta to the read-only observer, and streams the
+    journal row.  Journal semantics (P1, four mandatory rules):
 
     - ``sequence`` is a dedicated monotonic counter (never ``len(list)``), so
       zero-delta records skipped by the manager leave the sequence contiguous
@@ -106,12 +162,9 @@ class MemoryActionRecorder:
         journal_path: Optional[Any] = None,
     ) -> None:
         self.observer = observer
-        # 非流式兼容模式(journal_path=None)才驻留;journal 模式恒空。
-        self.deltas: list[MemoryDelta] = []
         self.journal_path = Path(journal_path) if journal_path is not None else None
         self._journal_output: Optional[Any] = None
-        # ② 独立单调计数器:流式下唯一可靠的 sequence 来源(改前
-        # len(self.deltas) 在零 delta 记录被跳过/spool 化时不可靠)。
+        # ② 独立单调计数器:流式下唯一可靠的 sequence 来源。
         self._sequence = 0
         self.record_count = 0
         # rank -> [weight, resident, reserved]:journal 记账的逐 rank 运行
@@ -125,7 +178,6 @@ class MemoryActionRecorder:
         self._transaction_id_next = 1
         self._transaction_active: Optional[int] = None
         self._transaction_ranks: set[int] = set()
-        self.transaction_count = 0
         if self.journal_path is not None:
             self.journal_path.parent.mkdir(parents=True, exist_ok=True)
             # 覆盖上一轮残留;常驻 fd + 每行 flush(§10.3 治理口径)。
@@ -162,7 +214,6 @@ class MemoryActionRecorder:
         self._transaction_id_next += 1
         self._transaction_active = transaction_id
         self._transaction_ranks = set()
-        self.transaction_count += 1
         return transaction_id
 
     def finish_transaction(self) -> tuple[int, frozenset[int]]:
@@ -235,8 +286,12 @@ class MemoryActionRecorder:
         self._sequence += 1
         self.record_count += 1
         if not self.journal_enabled:
-            self.deltas.append(delta)
-            return
+            # legacy 内存驻留模式已删除:journal 路径是唯一权威账本,
+            # 无 journal 的 record 一律 fail-closed。
+            raise RuntimeError(
+                "kv delta journal mode is required (legacy in-memory "
+                "deltas mode removed; construct with journal_path)"
+            )
         before = self._rank_totals.get(rank)
         if before is None:
             raise RuntimeError(
@@ -294,10 +349,25 @@ class MemoryActionRecorder:
 
     # ----------------------------------------------------- 流式回读/重放 --
 
-    def _read_journal_row(self, line_number: int, line: Any) -> dict[str, Any]:
-        """Decode and shape-check one journal line (fail-closed, with line no)."""
+    def _read_journal_row(self, line_number: int, raw: Any) -> dict[str, Any]:
+        """Decode and shape-check one journal line (fail-closed, with line no).
+
+        D2 fix (2026-09-28): the UTF-8 decode moved inside this method's
+        try (a bad-byte line used to escape the replay loop as a bare
+        UnicodeDecodeError, outside this line-numbered fail-closed
+        channel), and the row shape check now covers the sub-objects and
+        numeric fields the replay arithmetic touches --
+        ``before_bytes``/``after_bytes`` must be objects carrying exactly
+        the three non-negative integer components, and
+        sequence/transaction_id/planner_time_ns/rank/capacity_bytes/
+        deltas must be integers (bool excluded -- F2_PY 2026-09-29 closed
+        the capacity_bytes/schema_version residues of the same list).  The
+        replay loop previously escaped with bare
+        KeyError/TypeError on such structurally corrupt rows.
+        """
 
         try:
+            line = raw.decode("utf-8", errors="strict")
             row = json.loads(line)
         except (UnicodeDecodeError, ValueError) as error:
             raise RuntimeError(
@@ -315,40 +385,48 @@ class MemoryActionRecorder:
                 f"kv delta journal line {line_number} has wrong fields: "
                 f"missing={sorted(missing)}, unknown={sorted(unknown)}"
             )
-        if row["schema_version"] != self.JOURNAL_SCHEMA_VERSION:
+        # F2_PY fix (2026-09-29, RV5-F5 / SC-1 same family): the former
+        # `!= 1` comparison swallowed bool masquerades (True == 1); the
+        # schema version must be the literal integer.
+        schema_version = row["schema_version"]
+        if (isinstance(schema_version, bool)
+                or not isinstance(schema_version, int)
+                or schema_version != self.JOURNAL_SCHEMA_VERSION):
             raise RuntimeError(
                 f"kv delta journal line {line_number}: unsupported "
-                f"schema_version {row['schema_version']!r}"
+                f"schema_version {schema_version!r}"
             )
-        return row
-
-    def iter_journal_deltas(self):
-        """Stream the journal back as ``MemoryDelta`` rows (manifest source)."""
-
-        if not self.journal_enabled:
-            raise RuntimeError("iter_journal_deltas requires journal mode")
-        with self.journal_path.open("r", encoding="utf-8") as source:
-            for line_number, line in enumerate(source, 1):
-                if not line.strip():
-                    raise RuntimeError(
-                        f"kv delta journal line {line_number} is blank "
-                        "(fail-closed)"
-                    )
-                row = self._read_journal_row(line_number, line)
-                yield MemoryDelta(
-                    sequence_index=row["sequence"],
-                    planner_time_ns=row["planner_time_ns"],
-                    anchor_kind=row["anchor_kind"],
-                    trigger_queue_index=None,
-                    request_id=row["request_id"],
-                    session_id=row["session_id"],
-                    rank=row["rank"],
-                    allocation_key=row["allocation_key"],
-                    weight_delta_bytes=row["weight_delta_bytes"],
-                    resident_kv_delta_bytes=row["resident_kv_delta_bytes"],
-                    reserved_kv_delta_bytes=row["reserved_kv_delta_bytes"],
-                    cause=row["cause"],
+        # F2_PY fix (2026-09-29, RV5-F5): capacity_bytes joined the int
+        # gate list -- a bool/non-int value used to flow into the replay's
+        # per-rank capacity audit summary (and the later drift gate
+        # `!=` let bool/int rows inter-penetrate).
+        for name in ("sequence", "transaction_id", "planner_time_ns",
+                     "rank", "capacity_bytes", "weight_delta_bytes",
+                     "resident_kv_delta_bytes", "reserved_kv_delta_bytes"):
+            value = row[name]
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise RuntimeError(
+                    f"kv delta journal line {line_number}: {name} must be "
+                    f"an integer (got {value!r})"
                 )
+        for name in ("before_bytes", "after_bytes"):
+            sub = row[name]
+            if (not isinstance(sub, dict)
+                    or set(sub) != {"weight", "resident", "reserved"}):
+                raise RuntimeError(
+                    f"kv delta journal line {line_number}: {name} must be "
+                    "an object with exactly weight/resident/reserved"
+                )
+            for key in ("weight", "resident", "reserved"):
+                value = sub[key]
+                if (isinstance(value, bool) or not isinstance(value, int)
+                        or value < 0):
+                    raise RuntimeError(
+                        f"kv delta journal line {line_number}: {name}."
+                        f"{key} must be a non-negative integer "
+                        f"(got {value!r})"
+                    )
+        return row
 
     def replay_journal(self) -> dict[str, Any]:
         """Stream-replay the whole journal, validating every invariant.
@@ -375,8 +453,7 @@ class MemoryActionRecorder:
         with self.journal_path.open("rb") as source:
             for line_number, raw in enumerate(source, 1):
                 digest.update(raw)
-                row = self._read_journal_row(
-                    line_number, raw.decode("utf-8", errors="strict"))
+                row = self._read_journal_row(line_number, raw)
                 line_count += 1
                 if row["sequence"] != expected_sequence:
                     raise RuntimeError(
@@ -463,7 +540,13 @@ class MemoryActionRecorder:
         return {
             "line_count": line_count,
             "sha256": digest.hexdigest(),
-            "transaction_count": len(transaction_ids),
+            # D2 fix (2026-09-28): transaction_count 不再计入 transaction_id=0
+            # 哨兵（0 = 事务前的构造期权重预载行，不是 manager 公开事务）
+            # ——旧行为让每本 journal 的该审计字段恒 +1。contiguity/单调
+            # 校验仍覆盖全部 id（含 0）；max_transaction_id 不受影响
+            # （真实 id 从 1 起，0 永不可能是最大值）。
+            "transaction_count": sum(
+                1 for tid in transaction_ids if tid != 0),
             "max_transaction_id": max(transaction_ids) if transaction_ids else 0,
             "ranks": ranks,
         }

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import json
 import math
 import sys
@@ -63,10 +64,17 @@ from metrics_schema import (  # noqa: E402
     NORMALIZATION_RATIO_TO_BASELINE,
     MetricsSchemaError,
     build_normalization_record,
+    check_schema_version,
 )
+from metrics_schema import SCHEMA_VERSION  # noqa: E402
 
 METRIC_PREFIX = "[METRIC] "
-SUPPORTED_SCHEMA = 1
+# (2026-10-01, R5-F2 discipline) Single authoritative source: the schema
+# version constant is imported from metrics_schema (the old local hardcode
+# drifted silently on a version bump and wrote a stale label into the
+# product at line ~1218). The consumer-side gate now uses the schema
+# module's own checker as well.
+SUPPORTED_SCHEMA = SCHEMA_VERSION
 
 SOURCE_SIMULATOR = "simulator"
 SOURCE_MICROBENCHMARK = "simulator_microbenchmark"
@@ -106,13 +114,7 @@ RAW_COLUMNS = [
     "prefill_chunk",
     "decode_batch",
     "kv_length",
-    "kv_bin",
     "repeat_index",
-    "batch",
-    "count",
-    "sum_iteration_time_ns",
-    "min_iteration_time_ns",
-    "max_iteration_time_ns",
     "iteration_start_ns",
     "iteration_end_ns",
     "iteration_time_ns",
@@ -163,7 +165,6 @@ class Run:
     iterations: list[dict[str, Any]] = field(default_factory=list)
     capacity_timeavg: list[dict[str, Any]] = field(default_factory=list)
     planner_peaks: list[dict[str, Any]] = field(default_factory=list)
-    consistency: list[dict[str, Any]] = field(default_factory=list)
     schema_versions: set[int] = field(default_factory=set)
 
     @property
@@ -181,12 +182,72 @@ class Run:
         return first
 
 
+def _schema_versions_exact(schemas: set) -> bool:
+    """Type-strict ``schemas == {SUPPORTED_SCHEMA}`` equality.
+
+    F2_PY fix (2026-09-29, RV5-F4 / D2 SC-1 same family): Python set
+    equality swallows bool/float masquerades (``{True} == {1}``,
+    ``{1.0} == {1}``), so a producer lying with ``"schema": true/1.0``
+    walked both the run-level and group-level gates.  The schema version
+    must be the literal integer.
+    """
+    if len(schemas) != 1:
+        return False
+    value = next(iter(schemas))
+    # (2026-10-01) Route the value through metrics_schema's own checker
+    # (single authority: _require_int + SCHEMA_VERSION equality) instead of
+    # re-implementing the literal-integer rule here; a failure degrades to
+    # the same False -> PostprocessError with this file's run context.
+    try:
+        check_schema_version(value)
+    except MetricsSchemaError:
+        return False
+    return True
+
+
+def _reject_json_constant(token: str) -> Any:
+    """F2_PY fix (2026-09-29, RV5-F10): reject NaN/Infinity/-Infinity JSON
+    literals at parse time.
+
+    stdlib json parses these literals to non-finite floats, which the
+    summary display columns (p50/p95/p99 etc.) used to carry verbatim into
+    raw_metrics.csv with exit code 0 (the A1 P1-4 finite gates only cover
+    the judgment fields).  Same fail-closed caliber as
+    slo_common.load_json_strict (this module deliberately does not import
+    slo_common -- stdlib independent); C++ nlohmann producers serialize
+    non-finite floats as null, never as these literals.
+    """
+    raise PostprocessError(
+        f"non-finite JSON literal {token} (NaN/Infinity) in metrics input "
+        "(fail-closed; sec.11.4)")
+
+
+def _resolve_log_path(log_path: Path) -> Path:
+    """sync-py-E4 (2026-10-07, ported from the wscllm-LRU repo): 官方 runner 归档
+    (archive_run_outputs.sh) 把 cpp.log 压缩为 cpp.log.gz 并删除原文件，
+    README ⑤ 步的字面 cpp.log 路径会 "log not found" 必失败。对齐同链
+    范式（slo_common / ledger_reconcile 的透明 .gz 回退）：字面路径缺失
+    而 <path>.gz 在场时按 gz 解析；两者皆缺时原样返回（由调用方统一报
+    not found）。"""
+    if log_path.is_file() or str(log_path).endswith(".gz"):
+        return log_path
+    gz_path = log_path.with_name(log_path.name + ".gz")
+    if gz_path.is_file():
+        return gz_path
+    return log_path
+
+
 def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
     runs: list[Run] = []
     for log_path in log_paths:
         current: Optional[Run] = None
         run_index = 0
-        with log_path.open(encoding="utf-8", errors="replace") as source:
+        # sync-py-E4: 归档 gz 形态透明解析（_resolve_log_path 已把字面
+        # 路径解析到 <path>.gz；此处按后缀选 opener）。
+        opener = (
+            gzip.open if str(log_path).endswith(".gz") else open)
+        with opener(log_path, "rt", encoding="utf-8",
+                    errors="replace") as source:
             for line in source:
                 if not line.startswith(METRIC_PREFIX):
                     continue
@@ -194,7 +255,8 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                 if not payload:
                     continue
                 try:
-                    record = json.loads(payload)
+                    record = json.loads(payload,
+                                        parse_constant=_reject_json_constant)
                 except json.JSONDecodeError as error:
                     raise PostprocessError(
                         f"{log_path}: malformed [METRIC] JSON line: {error}"
@@ -228,21 +290,44 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                     current.capacity_timeavg.append(record)
                 elif record_type == "planner_memory_peaks":
                     current.planner_peaks.append(record)
-                elif record_type == "consistency":
-                    current.consistency.append(record)
-                # memory_anchor and unknown types are tolerated but unused.
+                # consistency, memory_anchor and unknown types are tolerated
+                # but unused.
     seen: dict[str, Run] = {}
+    deduped: list[Run] = []
     for run in runs:
         previous = seen.get(run.run_id)
         if previous is not None:
+            # A repeated run_id with an identical summary AND identical
+            # per-request records is the same run seen twice (e.g. the same
+            # log passed twice) -- keep one Run so raw/normalized rows do
+            # not double.  Conflicting summaries still fail (sec.11.4).
+            # Report 4.3 fix (2026-09-29): the dedup used to compare the
+            # summary only, so a second run with a byte-identical summary
+            # but diverging request/rank/iteration records was silently
+            # dropped record-by-record; the per-record collections are now
+            # compared as well and any divergence fails closed.
             if previous.summary != run.summary:
                 raise PostprocessError(
                     f"run_id {run.run_id!r} appears in multiple logs with "
                     "conflicting summaries (sec.11.4)"
                 )
+            if (previous.requests != run.requests
+                    or previous.rank_compute != run.rank_compute
+                    or previous.iterations != run.iterations
+                    or previous.capacity_timeavg != run.capacity_timeavg
+                    or previous.planner_peaks != run.planner_peaks):
+                raise PostprocessError(
+                    f"run_id {run.run_id!r} appears in multiple logs with "
+                    "identical summaries but diverging per-request or "
+                    "per-measurement records (sec.11.4; no silent record "
+                    "drop -- dedup requires byte-identical record sets)"
+                )
+            continue
         seen[run.run_id] = run
+        deduped.append(run)
+    runs = deduped
     for run in runs:
-        if run.schema_versions != {SUPPORTED_SCHEMA}:
+        if not _schema_versions_exact(run.schema_versions):
             raise PostprocessError(
                 f"run {run.run_id}: unsupported or mixed metric schema "
                 f"versions {sorted(run.schema_versions)} (sec.11.4); this "
@@ -261,16 +346,133 @@ def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any]]:
         return metrics_manifest, service_manifest
     path = Path(manifest_path)
     try:
-        metrics_manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        metrics_manifest = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_json_constant)
+    except (OSError, json.JSONDecodeError) as error:
+        # 读取/解析失败降级为空 manifest 时必须留痕：否则 request 路径
+        # 最终以误导性的 no-request-entries fail-closed，真实原因被掩盖。
+        print(
+            f"postprocess warning: cannot read {path} ({error}); "
+            "continuing without it",
+            file=sys.stderr,
+        )
         metrics_manifest = {}
     try:
         service_manifest = json.loads(
-            (path.parent / "manifest.json").read_text(encoding="utf-8")
+            (path.parent / "manifest.json").read_text(encoding="utf-8"),
+            parse_constant=_reject_json_constant
         )
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as error:
+        print(
+            f"postprocess warning: cannot read {path.parent / 'manifest.json'} "
+            f"({error}); labels degrade to empty strings",
+            file=sys.stderr,
+        )
         service_manifest = {}
     return metrics_manifest, service_manifest
+
+
+# die 后端利用率三元组的管线级断言(wscllm die 推广)。C++ MetricCollector
+# 在每条 type=rank_compute 记录上输出 active_kernel_die_{compute,memory,
+# vector}_util(门控=compute-cost-model=die;roofline 键保持 legacy 门控
+# 不动)。本断言在后处理侧 fail-closed:声明 die 后端的 run,每个 rank 的
+# 三个键必须非 null、数值、且落在 [0, 1+eps](eps 与 C++ kUtilEpsilon 同值)。
+DIE_UTILIZATION_KEYS = (
+    "active_kernel_die_compute_util",
+    "active_kernel_die_memory_util",
+    "active_kernel_die_vector_util",
+)
+# 与 C++ MetricCollector 的 kUtilEpsilon 一致(上行在 1e-6 容差内钳制)。
+DIE_UTILIZATION_EPSILON = 1e-6
+# null 的唯一合法理由:窗口内没有任何 comp 节点(C++ 端 note 原文)。
+_DIE_NULL_NOTE_OK = "unavailable: no comp nodes in the utilization window"
+
+
+def _run_declares_die_backend(run: Run) -> bool:
+    """该 run 是否声明 die 计算后端。
+
+    声明源优先级:metrics_manifest.json 的 compute-cost-model(plan_
+    materializer 同步写入,归档 run 目录自带)> 同目录 manifest.json 的
+    同名键(服务 manifest)> 无声明时从 rank_compute 记录自身推断(C++
+    的 note 文案区分 not-die)。
+    """
+
+    metrics_manifest, service_manifest = _load_manifest_sidecars(run)
+    # 归档 run 目录兜底:init 的 manifest_path 不在(或指向别处)时,按
+    # 日志同目录的 metrics_manifest.json / manifest.json 发现(runner 把
+    # 两份 manifest 都拷进 run 目录;读取失败静默跳过,由记录自推断收尾)。
+    sidecar_candidates = (
+        run.log_path.parent / "metrics_manifest.json",
+        run.log_path.parent / "manifest.json",
+    )
+    manifests = [metrics_manifest, service_manifest]
+    for sidecar in sidecar_candidates:
+        try:
+            manifests.append(json.loads(
+                sidecar.read_text(encoding="utf-8"),
+                parse_constant=_reject_json_constant))
+        except (OSError, json.JSONDecodeError):
+            continue
+    for manifest in manifests:
+        value = manifest.get("compute-cost-model") if isinstance(manifest, dict) else None
+        if isinstance(value, str) and value:
+            return value == "die"
+    for record in run.rank_compute:
+        if record.get("active_kernel_die_note") == (
+                "unavailable: compute-cost-model is not die"):
+            return False
+        if any(record.get(key) is not None for key in DIE_UTILIZATION_KEYS):
+            return True
+    return False
+
+
+def _check_die_utilization_records(runs: Sequence[Run]) -> None:
+    """Pipeline assertion: die-backend utilization triplet.
+
+    A run that declares the die compute backend must carry, on EVERY
+    rank_compute record, the three active_kernel_die_* utilization values as
+    non-null numbers within [0, 1+eps]; a null is legal only with the
+    collector's "no comp nodes" note.  Anything else (missing keys, a null
+    with an unknown note, out-of-range or non-numeric values, or a die run
+    with no rank_compute records at all) fails the postprocess fail-closed.
+    """
+
+    for run in runs:
+        if not _run_declares_die_backend(run):
+            continue
+        if not run.rank_compute:
+            raise PostprocessError(
+                f"run {run.run_id}: declares the die compute backend but "
+                "carries no type=rank_compute records (the utilization "
+                "triplet cannot be verified; truncated log, fail-closed)"
+            )
+        for index, record in enumerate(run.rank_compute):
+            rank = record.get("rank", "?")
+            for key in DIE_UTILIZATION_KEYS:
+                value = record.get(key)
+                if value is None:
+                    note = record.get("active_kernel_die_note")
+                    if note == _DIE_NULL_NOTE_OK:
+                        continue
+                    raise PostprocessError(
+                        f"run {run.run_id}: rank_compute #{index} "
+                        f"(rank {rank}) has {key}=null with note={note!r} "
+                        "(die backend utilization must be present on every "
+                        "rank; only the no-comp-nodes note is a legal null)"
+                    )
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise PostprocessError(
+                        f"run {run.run_id}: rank_compute #{index} "
+                        f"(rank {rank}) has non-numeric {key}={value!r}"
+                    )
+                if not (-DIE_UTILIZATION_EPSILON <= value
+                        <= 1.0 + DIE_UTILIZATION_EPSILON):
+                    raise PostprocessError(
+                        f"run {run.run_id}: rank_compute #{index} "
+                        f"(rank {rank}) has {key}={value!r} outside "
+                        f"[0, 1+{DIE_UTILIZATION_EPSILON}]"
+                    )
 
 
 def _check_request_completion(run: Run) -> None:
@@ -341,11 +543,23 @@ FIRST_TOKEN_SOURCE_EXACT = "exact"
 FIRST_TOKEN_SOURCE_TRAIN_INTERPOLATED = "train_interpolated"
 
 
-def _int_or_na(value: Any) -> Any:
-    """Render a metrics JSON integer, or the frozen NA placeholder."""
+def _int_or_na(value: Any, field: str = "") -> Any:
+    """Render a metrics JSON integer, or the frozen NA placeholder.
+
+    D2 fix (2026-09-28): a non-numeric non-null value used to escape as a
+    bare int() ValueError/TypeError (bypassing the PostprocessError
+    channel, so main() died with a traceback instead of the sec.11.4
+    "postprocess error" exit); it now aborts through the same channel.
+    """
     if value is None:
         return NA
-    return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise PostprocessError(
+            f"request record field {field or '?'} is not an integer or "
+            f"null (got {value!r}; fail-closed)"
+        ) from None
 
 
 def _int_or_none(value: Any) -> Optional[int]:
@@ -372,6 +586,15 @@ def _manifest_request_entries(
     ``(entries_by_queue_index, per_manifest_request_counts)``.
     """
     merged: dict[int, dict[str, Any]] = {}
+    # D2 fix (2026-09-28): only manifests that actually DECLARE a requests
+    # list participate in the per-manifest count check.  The former
+    # `counts[name] = 0` for an absent/non-list requests key contradicted
+    # this function's own one-sided tolerance (fields absent from one
+    # manifest are taken from the other) -- write_request_metrics then
+    # failed every run whose service manifest carries no requests array
+    # with a misleading "declares 0 requests" message.  A manifest that
+    # declares an empty list still counts as declaring 0 and fails the
+    # check when the log carries records.
     counts: dict[str, int] = {}
     for name, manifest in (
         ("metrics_manifest.json", metrics_manifest),
@@ -379,8 +602,7 @@ def _manifest_request_entries(
     ):
         requests = manifest.get("requests")
         if not isinstance(requests, list):
-            counts[name] = 0
-            continue
+            continue  # not declared: nothing to count (one-sided tolerance)
         counts[name] = len(requests)
         for entry in requests:
             if not isinstance(entry, dict) or "queue_index" not in entry:
@@ -400,6 +622,17 @@ def _manifest_request_entries(
                     )
                 combined = dict(entry)
                 for key, value in previous.items():
+                    if (
+                        key in combined
+                        and value is not None
+                        and combined[key] != value
+                        and key != "request_id"
+                    ):
+                        raise PostprocessError(
+                            f"run {run.run_id}: queue_index {queue_index} "
+                            f"has conflicting {key} across manifests "
+                            f"({value!r} vs {combined[key]!r})"
+                        )
                     combined.setdefault(key, value)
                 merged[queue_index] = combined
             else:
@@ -413,6 +646,18 @@ def _manifest_request_entries(
     return merged, counts
 
 
+def _int_field(value: Any, field: str, run_id: str, queue_index: Any) -> int:
+    """Required metrics JSON integer (D2 fix: fail through PostprocessError,
+    never a bare int() ValueError/TypeError)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise PostprocessError(
+            f"run {run_id}: queue_index {queue_index!r}: record field "
+            f"{field} is not an integer (got {value!r}; fail-closed)"
+        ) from None
+
+
 def _check_request_row_invariants(
     run_id: str, record: dict[str, Any], queue_index: Any
 ) -> None:
@@ -421,8 +666,27 @@ def _check_request_row_invariants(
     Checked only among the fields that are present: arrival <= first_token
     <= completion (first_token skipped while NA), e2e == completion -
     arrival, and queue+prefill+gap+decode == e2e.  Any violation aborts
-    (no silent clamping).
+    (no silent clamping).  D2 fix (2026-09-28): a present non-numeric
+    field used to escape the comparisons as a bare TypeError (same
+    PostprocessError-channel bypass as the rendering path) -- every field
+    read here must be integer-coercible or None.
     """
+    checked_fields = (
+        "arrival_ns", "first_token_ns", "completion_ns", "e2e_ns",
+        "queue_ns", "prefill_ns", "prefill_decode_gap_ns", "decode_ns",
+    )
+    record = dict(record)
+    for name in checked_fields:
+        value = record.get(name)
+        if value is None:
+            continue
+        try:
+            record[name] = int(value)
+        except (TypeError, ValueError):
+            raise PostprocessError(
+                f"run {run_id}: queue_index {queue_index}: field {name} "
+                f"is not an integer or null (got {value!r}; fail-closed)"
+            ) from None
     arrival = record.get("arrival_ns")
     first_token = record.get("first_token_ns")
     completion = record.get("completion_ns")
@@ -521,12 +785,29 @@ TRAIN_LEDGER_CANDIDATES = (
     Path("results") / "train_ledger.jsonl",
 )
 
+# Directories searched for trace_config.csv by the first-token proxy, in
+# order, seeded by main() with the run dirs of the logs being postprocessed
+# (run-dir frozen copy wins; MODULE_DIR is the permanent fallback).
+_CONFIG_SEARCH_DIRS: Optional[list[Path]] = None
+
+
+def _trace_config_candidates() -> list[Path]:
+    dirs: list[Path] = list(_CONFIG_SEARCH_DIRS) if _CONFIG_SEARCH_DIRS else []
+    dirs.append(MODULE_DIR)
+    return [directory / "trace_config.csv" for directory in dirs]
+
 
 def _load_model_bytes() -> tuple[Optional[int], Optional[int]]:
     """(W_bytes, kv_bytes_per_token) from this workload's trace_config.csv.
 
-    Returns (None, None) when the config or a model row is missing/invalid
-    (proxy then degrades to NA; nothing is fabricated).
+    Candidate order: the run-dir frozen copy the runner stages next to
+    cpp.log first, then the repo-current file -- re-running this
+    postprocessor over an archived run dir after a campaign changed the
+    model rows must keep deriving the proxy from the run's own parameters
+    (same run_dir-first discipline as hbm_watermark.load_trace_config).
+
+    Returns (None, None) when no candidate exists or a model row is
+    missing/invalid (proxy then degrades to NA; nothing is fabricated).
     """
 
     try:
@@ -537,7 +818,13 @@ def _load_model_bytes() -> tuple[Optional[int], Optional[int]]:
         )
     except ImportError:
         return None, None
-    config_path = MODULE_DIR / "trace_config.csv"
+    config_path: Optional[Path] = None
+    for candidate in _trace_config_candidates():
+        if candidate.is_file():
+            config_path = candidate
+            break
+    if config_path is None:
+        return None, None
     values: dict[str, str] = {}
     try:
         with config_path.open(encoding="utf-8") as source:
@@ -584,6 +871,11 @@ class _TrainProxyIndex:
         self.first_train_by_request: dict[str, tuple[int, dict[str, Any]]] = {}
         # ledger row position -> tick of the next row on the same instance.
         self.next_tick_by_position: dict[int, int] = {}
+        # Why the proxy is unavailable (instructions note): an absent ledger
+        # and a corrupt ledger are different failures -- a corrupt line is
+        # reported with its line number instead of masquerading as
+        # "ledger missing".
+        self.unavailable_reason = "no_train_ledger(results/)"
 
     def available(self) -> bool:
         self._ensure_loaded()
@@ -601,18 +893,35 @@ class _TrainProxyIndex:
                 ledger_path = path
                 break
         if ledger_path is None:
-            return
+            return  # unavailable_reason keeps the absent-ledger note
         rows: list[dict[str, Any]] = []
         try:
             with ledger_path.open(encoding="utf-8") as source:
-                for line in source:
+                for line_number, line in enumerate(source, 1):
                     line = line.strip()
                     if not line:
                         continue
-                    record = json.loads(line)
-                    if isinstance(record, dict):
-                        rows.append(record)
-        except (OSError, json.JSONDecodeError):
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError as error:
+                        self.unavailable_reason = (
+                            f"train_ledger_corrupt(line {line_number}: "
+                            f"{error.msg})"
+                        )
+                        return
+                    if not isinstance(record, dict):
+                        # Same channel as corrupt lines (2026-09-30): a
+                        # valid-JSON-but-non-object row is a third damage
+                        # shape that used to vanish silently (neither
+                        # counted nor reported).
+                        self.unavailable_reason = (
+                            f"train_ledger_non_object(line {line_number})")
+                        return
+                    rows.append(record)
+        except OSError as error:
+            # 与 corrupt 同理：ledger 在场但读不了也不是"不存在"，
+            # 行级备注要如实区分（不留缺省的 no_train_ledger 误报）。
+            self.unavailable_reason = f"train_ledger_unreadable({error})"
             return
         for position, row in enumerate(rows):
             if row.get("first_step"):
@@ -789,7 +1098,7 @@ def _request_metric_rows(
                 first_token_source = FIRST_TOKEN_SOURCE_TRAIN_INTERPOLATED
             notes.append(proxy_note)
         elif first_token_ns is None:
-            notes.append("proxy_unavailable:no_train_ledger(results/)")
+            notes.append(f"proxy_unavailable:{proxy_index.unavailable_reason}")
         if first_token_ns is not None:
             # Ordering invariant is re-checked fail-closed on the FILLED
             # value (exact or proxy): arrival <= first_token <= completion.
@@ -805,10 +1114,15 @@ def _request_metric_rows(
         # exact rows are EXEMPT: WP9_CONTRACT §6 relaxes dl1 equality to an
         # informational TP skew (first_token <= completion is legal).
         completion_ns = _int_or_none(record.get("completion_ns"))
+        # 4.3 fix (2026-09-29): the gate compared the RAW entry value
+        # (`== 1`), so a JSON string "1" silently bypassed the dl1
+        # invariant while the row's own length lexicon (_int_or_none)
+        # accepted it. Parse through the same lens first (口径一致).
+        dl1_decode_length = _int_or_none(entry.get("decode_length"))
         if (first_token_source == FIRST_TOKEN_SOURCE_TRAIN_INTERPOLATED
                 and first_token_ns is not None
                 and completion_ns is not None
-                and entry.get("decode_length") == 1
+                and dl1_decode_length == 1
                 and first_token_ns != completion_ns):
             raise PostprocessError(
                 f"run {run.run_id}: queue_index {queue_index} request "
@@ -828,19 +1142,32 @@ def _request_metric_rows(
                 notes.append(f"{column}={NA}(manifest field absent)")
                 lengths[column] = NA
             else:
-                lengths[column] = int(value)
+                parsed = _int_or_none(value)
+                if parsed is None:
+                    raise PostprocessError(
+                        f"run {run.run_id}: queue_index {queue_index}: "
+                        f"manifest field {column}={value!r} is not an "
+                        "integer (fail-closed)"
+                    )
+                lengths[column] = parsed
         rows.append(
             {
-                "queue_index": int(queue_index),
+                "queue_index": _int_field(
+                    queue_index, "queue_index", run.run_id, queue_index),
                 "request_id": record.get("request_id", ""),
                 "session_id": record.get("session_id", ""),
-                "turn_index": int(record.get("turn_index", 0)),
+                "turn_index": _int_field(
+                    record.get("turn_index", 0), "turn_index",
+                    run.run_id, queue_index),
                 "request_type": request_type,
                 "terminal_status": terminal_status,
-                "arrival_ns": _int_or_na(record.get("arrival_ns")),
-                "prefill_start_ns": _int_or_na(record.get("prefill_start_ns")),
-                "prefill_end_ns": _int_or_na(record.get("prefill_end_ns")),
-                "decode_start_ns": _int_or_na(record.get("decode_start_ns")),
+                "arrival_ns": _int_or_na(record.get("arrival_ns"), "arrival_ns"),
+                "prefill_start_ns": _int_or_na(
+                    record.get("prefill_start_ns"), "prefill_start_ns"),
+                "prefill_end_ns": _int_or_na(
+                    record.get("prefill_end_ns"), "prefill_end_ns"),
+                "decode_start_ns": _int_or_na(
+                    record.get("decode_start_ns"), "decode_start_ns"),
                 # WP9 首 token(2026-08-26):exact = request 记录的
                 # first_token_ns(事件码 8,split ON 时由首步批 first_token
                 # 标记产出);缺失时 train-interpolated proxy(B4 fallback,
@@ -850,14 +1177,16 @@ def _request_metric_rows(
                 "first_token_source": (
                     first_token_source if first_token_source is not None
                     else NA),
-                "completion_ns": _int_or_na(record.get("completion_ns")),
-                "queue_ns": _int_or_na(record.get("queue_ns")),
-                "prefill_ns": _int_or_na(record.get("prefill_ns")),
+                "completion_ns": _int_or_na(
+                    record.get("completion_ns"), "completion_ns"),
+                "queue_ns": _int_or_na(record.get("queue_ns"), "queue_ns"),
+                "prefill_ns": _int_or_na(record.get("prefill_ns"), "prefill_ns"),
                 "prefill_decode_gap_ns": _int_or_na(
-                    record.get("prefill_decode_gap_ns")
+                    record.get("prefill_decode_gap_ns"),
+                    "prefill_decode_gap_ns"
                 ),
-                "decode_ns": _int_or_na(record.get("decode_ns")),
-                "e2e_ns": _int_or_na(record.get("e2e_ns")),
+                "decode_ns": _int_or_na(record.get("decode_ns"), "decode_ns"),
+                "e2e_ns": _int_or_na(record.get("e2e_ns"), "e2e_ns"),
                 # WP4/WP5 fill the KV-hit and restore columns; frozen NA here.
                 "kv_hit_state": NA,
                 "restore_start_ns": NA,
@@ -950,6 +1279,24 @@ def write_request_metrics(
 
 
 def _labels(run: Run, service_manifest: dict[str, Any], run_config: dict[str, Any]) -> dict[str, str]:
+    # F2_PY fix (2026-09-29, RV5-F3): a well-formed-JSON but malformed-shape
+    # manifest.json (e.g. "model": "llama2" -- a string, not an object) used
+    # to escape the chained .get as a bare AttributeError.  Report 3.6
+    # follow-up (2026-09-29): the original guard exempted explicit JSON null
+    # blocks ("model": null), which then still crashed the same way on the
+    # chained .get below; a null block is a shape violation too, so only a
+    # dict block passes.  The label blocks are comparison-group keys (the
+    # kv_policy value below is already fail-closed on unknown values), so a
+    # wrong shape aborts through PostprocessError instead of escaping as a
+    # bare traceback.
+    for name in ("model", "hardware", "kv_management"):
+        block = service_manifest.get(name, {})
+        if not isinstance(block, dict):
+            raise PostprocessError(
+                f"run {run.run_id}: service manifest block {name!r} must "
+                f"be an object (got {type(block).__name__} "
+                f"{block!r}; fail-closed)"
+            )
     model = run_config.get("model") or service_manifest.get("model", {}).get("name", "")
     hardware_block = service_manifest.get("hardware", {})
     hardware = (
@@ -971,6 +1318,19 @@ def _labels(run: Run, service_manifest: dict[str, Any], run_config: dict[str, An
     dataset = run_config.get("dataset") or ""
     if not dataset:
         queue_csv = service_manifest.get("request_queue_csv", "")
+        if not isinstance(queue_csv, str):
+            # RV7-1 (2026-09-29): same family as the three blocks above -- a
+            # non-string queue path (hand-edited manifest) used to escape as
+            # a bare TypeError from Path().  Report 3.6 follow-up (same
+            # date): an explicit JSON null slipped past the original
+            # `is not None` exemption and silently degraded the label to
+            # ""; a null path is a shape violation too and now takes the
+            # same PostprocessError channel.
+            raise PostprocessError(
+                f"run {run.run_id}: service manifest request_queue_csv must "
+                f"be a string (got {type(queue_csv).__name__} "
+                f"{queue_csv!r}; fail-closed)"
+            )
         dataset = Path(queue_csv).name if queue_csv else ""
     return {
         "model": str(model),
@@ -1021,26 +1381,60 @@ def _microbench_rows(
     run: Run, labels: dict[str, str], metrics_manifest: dict[str, Any]
 ) -> list[dict[str, Any]]:
     point = metrics_manifest.get("microbenchmark", {})
+    # Fail-closed: a point that declares tp_degree without ranks gives no
+    # attribution for the utilization denominators (the numerator would
+    # aggregate every rank_compute record while the denominator still
+    # assumes tp_degree ranks, silently inflating the ratios).
+    tp_degree = point.get("tp_degree", "")
+    if tp_degree and "ranks" not in point:
+        raise PostprocessError(
+            f"run {run.run_id}: microbenchmark manifest point declares "
+            f"tp_degree {tp_degree!r} but no ranks; the utilization "
+            "denominators cannot be attributed (fail-closed)"
+        )
     active_ranks = set(point.get("ranks", []))
     ops_by_rank: dict[int, int] = {}
     bytes_by_rank: dict[int, int] = {}
     peak_flops: Optional[float] = None
     local_bw: Optional[float] = None
+
+    def _rank_int(record: dict[str, Any], field: str) -> int:
+        # F2_PY fix (2026-09-29, RV5-F2): a non-numeric total_num_ops /
+        # total_local_bytes used to escape as a bare int() ValueError/
+        # TypeError (D2 MP-3 collection-point miss) -- same
+        # PostprocessError channel as _int_field, message carries the
+        # run id and field name.
+        try:
+            return int(record.get(field, 0))
+        except (TypeError, ValueError):
+            raise PostprocessError(
+                f"run {run.run_id}: rank_compute record field {field} is "
+                f"not an integer (got {record.get(field)!r}; fail-closed)"
+            ) from None
+
+    _reject_duplicate_rank_records(run, run.rank_compute, "rank_compute")
     for record in run.rank_compute:
         rank = record.get("rank")
         if active_ranks and rank not in active_ranks:
             continue
-        ops_by_rank[rank] = int(record.get("total_num_ops", 0))
-        bytes_by_rank[rank] = int(record.get("total_local_bytes", 0))
-        peak_flops = record.get("peak_flops_per_second") or peak_flops
-        local_bw = record.get("local_hbm_bw_bytes_per_second") or local_bw
+        ops_by_rank[rank] = _rank_int(record, "total_num_ops")
+        bytes_by_rank[rank] = _rank_int(record, "total_local_bytes")
+        # First active rank wins (the C++ rank_compute denominators come
+        # from that rank's own system configuration at finalize time);
+        # a later rank must not silently replace it on heterogeneous
+        # per-rank hardware.  (D2 fix 2026-09-28: the former comment
+        # cited "reference_sys in MetricCollector.cc" -- no such entity
+        # exists in this repository.)
+        if peak_flops is None:
+            peak_flops = record.get("peak_flops_per_second") or None
+        if local_bw is None:
+            local_bw = record.get("local_hbm_bw_bytes_per_second") or None
     rows = []
     for iteration in run.iterations:
         row = _base_row(run, labels, SOURCE_MICROBENCHMARK)
         iteration_time_ns = iteration.get("iteration_time_ns")
         total_ops = sum(ops_by_rank.values())
         total_bytes = sum(bytes_by_rank.values())
-        tp_degree = point.get("tp_degree", "")
         compute_util: Optional[float] = None
         hbm_bw_util: Optional[float] = None
         if (
@@ -1049,11 +1443,41 @@ def _microbench_rows(
             and peak_flops
             and local_bw
         ):
-            window_s = iteration_time_ns / 1e9
-            # doc sec.8.7 (derived from rank_compute + iteration records; the
-            # C++ iteration record itself does not carry utilization fields).
-            compute_util = total_ops / (tp_degree * peak_flops * window_s)
-            hbm_bw_util = total_bytes / (tp_degree * local_bw * window_s)
+            # F2_PY fix (2026-09-29, RV5-F2): a truthy non-numeric operand
+            # (e.g. iteration_time_ns "1000") escaped the division as a
+            # bare TypeError (same D2 MP-3 channel bypass) -- abort through
+            # PostprocessError with the run id; the arithmetic itself is
+            # unchanged for numeric operands.
+            try:
+                window_s = iteration_time_ns / 1e9
+                # doc sec.8.7, recomputed from the rank_compute records.  The
+                # C++ finalize emits type=rank_compute records that carry
+                # achieved_compute_util under the same formula
+                # (num_ops / (peak_flops_per_second * window_seconds)), gated
+                # on the roofline (nullptr otherwise -- MetricCollector.cc
+                # finalize); this recomputation is the roofline-independent
+                # port of that contract.  (D2 fix 2026-09-28: the former
+                # comment referenced "reference_sys" and a C++ "iteration
+                # record" -- neither entity exists in this repository; there
+                # is no iteration-record producer here either, so this whole
+                # per-iteration branch is contract-latent, see P2-22.)
+                # Registered limitation (D2 2026-09-28, contract-latent):
+                # rank_compute totals are per RUN while the denominator below
+                # is per ITERATION -- with N iterations per point each row's
+                # ratio would inflate ~N-fold.  Untouchable without a producer
+                # that attributes ops/bytes per iteration; this repo has none.
+                compute_util = total_ops / (tp_degree * peak_flops * window_s)
+                hbm_bw_util = total_bytes / (tp_degree * local_bw * window_s)
+            except (TypeError, ValueError):
+                raise PostprocessError(
+                    f"run {run.run_id}: microbench iteration utilization "
+                    "operands are not all numeric "
+                    f"(iteration_time_ns={iteration_time_ns!r}, "
+                    f"tp_degree={tp_degree!r}, "
+                    f"peak_flops_per_second={peak_flops!r}, "
+                    f"local_hbm_bw_bytes_per_second={local_bw!r}; "
+                    "fail-closed)"
+                ) from None
         row.update(
             {
                 "benchmark_point_id": iteration.get("benchmark_point_id", ""),
@@ -1076,7 +1500,31 @@ def _microbench_rows(
     return rows
 
 
+def _reject_duplicate_rank_records(
+        run: "Run", records: list, record_type: str) -> None:
+    """Rank-cardinality reconciliation (2026-09-30): the C++ writer promises
+    exactly one <record_type> record per rank per run; a duplicate means a
+    log-assembly defect (double append / spliced logs) and previously
+    silently overwrote (planner_peaks / rank_compute) or double-counted
+    (capacity_timeavg raw rows). Fail closed like the same-run summary
+    conflict gate instead of emitting distorted rows."""
+    seen: set = set()
+    for record in records:
+        rank = record.get("rank")
+        if rank in seen:
+            raise PostprocessError(
+                f"run {run.run_id}: duplicate {record_type} record for rank "
+                f"{rank!r} (the writer emits one record per rank; a "
+                "duplicate would silently distort the per-rank rows)"
+            )
+        seen.add(rank)
+
+
 def _memory_ledger_rows(run: Run, labels: dict[str, str]) -> list[dict[str, Any]]:
+    _reject_duplicate_rank_records(run, run.planner_peaks,
+                                   "planner_memory_peaks")
+    _reject_duplicate_rank_records(run, run.capacity_timeavg,
+                                   "capacity_timeavg")
     peaks_by_rank = {
         record.get("rank"): record for record in run.planner_peaks
     }
@@ -1149,7 +1597,6 @@ def build_raw_rows(
 class Group:
     group_id: str
     runs: list[Run]
-    allow_digest_mismatch: bool
     baseline_run_id: Optional[str]
     labels_by_run: dict[str, dict[str, Any]]
 
@@ -1167,11 +1614,24 @@ def build_groups(
         # mixed feeds never silently mix different workloads (sec.11.4).
         auto: dict[tuple[Any, ...], list[Run]] = {}
         for run in runs:
+            # P2-22 fix (2026-09-28): microbenchmark runs carry their measured
+            # benchmark_point_id set into the auto key -- runs measuring
+            # different point sets must never share a normalization group
+            # (cross-point denominators are meaningless; sec.11.4).  Service
+            # runs keep the legacy key (empty point set).
+            if run.init.get("run_mode") == "microbenchmark":
+                point_ids = tuple(sorted({
+                    str(record.get("benchmark_point_id", ""))
+                    for record in getattr(run, "iterations", [])
+                }))
+            else:
+                point_ids = ()
             key = (
                 run.init.get("repo_variant", ""),
                 run.init.get("run_mode", ""),
                 run.init.get("trace_digest", ""),
                 run.init.get("request_mapping_digest", ""),
+                point_ids,
             )
             auto.setdefault(key, []).append(run)
         for index, members in enumerate(
@@ -1181,17 +1641,34 @@ def build_groups(
                 Group(
                     group_id=f"auto_{index}",
                     runs=members,
-                    allow_digest_mismatch=False,
                     baseline_run_id=None,
                     labels_by_run={},
                 )
             )
         return groups, run_configs
 
+    # Report 3.6 fix (2026-09-29): a --group-config JSON value of the wrong
+    # shape (a top-level array/string/number, a non-object group entry, a
+    # non-object run entry) used to escape the chained .get calls below as a
+    # bare AttributeError -- outside the PostprocessError channel that main()
+    # is the only catcher of.  The group config drives comparison-group keys,
+    # so every level is validated as the object shape its access pattern
+    # requires and a wrong shape aborts fail-closed (sec.11.4 family).
+    if not isinstance(group_config, dict):
+        raise PostprocessError(
+            "group config must be a JSON object with a 'groups' list "
+            f"(got {type(group_config).__name__} {group_config!r}; "
+            "fail-closed)"
+        )
     configured_groups = group_config.get("groups")
     if not isinstance(configured_groups, list) or not configured_groups:
         raise PostprocessError("group config must contain a non-empty 'groups' list")
-    for entry in configured_groups:
+    for entry_index, entry in enumerate(configured_groups):
+        if not isinstance(entry, dict):
+            raise PostprocessError(
+                f"group config entries[{entry_index}] must be an object "
+                f"(got {type(entry).__name__} {entry!r}; fail-closed)"
+            )
         group_id = entry.get("group_id")
         if not group_id:
             raise PostprocessError("group config entry without group_id")
@@ -1199,13 +1676,38 @@ def build_groups(
         labels_by_run: dict[str, dict[str, Any]] = {}
         baseline_run_id = entry.get("baseline_run_id")
         baseline_marks = 0
-        for run_entry in entry.get("runs", []):
+        member_ids: set[str] = set()
+        group_runs = entry.get("runs", [])
+        if not isinstance(group_runs, list):
+            raise PostprocessError(
+                f"group {group_id}: 'runs' must be a list "
+                f"(got {type(group_runs).__name__} {group_runs!r}; "
+                "fail-closed)"
+            )
+        for run_entry in group_runs:
+            if not isinstance(run_entry, dict):
+                raise PostprocessError(
+                    f"group {group_id}: every run entry must be an object "
+                    f"(got {type(run_entry).__name__} {run_entry!r}; "
+                    "fail-closed)"
+                )
             run_id = run_entry.get("run_id")
             run = by_id.get(run_id)
             if run is None:
                 raise PostprocessError(
                     f"group {group_id}: run_id {run_id!r} not found in the input logs"
                 )
+            # D2 fix (2026-09-28): a duplicated run_id inside one group used
+            # to be appended twice, silently double-counting the run in
+            # every group statistic and emitting two identical normalized
+            # rows (sec.11.4 family: no silent double counting).
+            if run_id in member_ids:
+                raise PostprocessError(
+                    f"group {group_id}: run_id {run_id!r} is listed more "
+                    "than once in the group (sec.11.4; no silent double "
+                    "counting)"
+                )
+            member_ids.add(run_id)
             members.append(run)
             labels = {
                 key: run_entry[key]
@@ -1237,7 +1739,7 @@ def build_groups(
         schemas = set()
         for run in members:
             schemas |= run.schema_versions
-        if schemas != {SUPPORTED_SCHEMA}:
+        if not _schema_versions_exact(schemas):
             raise PostprocessError(
                 f"group {group_id}: mixed metric schema versions "
                 f"{sorted(schemas)} must not be normalized together (sec.11.4)"
@@ -1246,7 +1748,6 @@ def build_groups(
             Group(
                 group_id=group_id,
                 runs=members,
-                allow_digest_mismatch=bool(entry.get("allow_digest_mismatch", False)),
                 baseline_run_id=baseline_run_id,
                 labels_by_run=labels_by_run,
             )
@@ -1300,15 +1801,47 @@ def build_normalized_rows(
         elif method != NORMALIZATION_GROUP_MAX:
             raise PostprocessError(f"unknown normalization method {method!r}")
 
-        # Service rows: one per run.  Microbenchmark rows: one per point.
+        # Service rows: one per run.  Microbenchmark rows: one per
+        # iteration -- a benchmark point spans multiple iteration records,
+        # so one point yields many rows and the normalized value is the
+        # per-iteration value.  An iteration without a usable
+        # iteration_time_ns still emits a row (normalized_iteration_time
+        # carries the NA placeholder), so the normalized CSV stays aligned
+        # with raw_metrics.csv instead of silently skipping rows.
         service: list[tuple[Run, float, float]] = []
         microbench: list[tuple[Run, dict[str, Any], float]] = []
+        null_iterations: list[tuple[Run, dict[str, Any]]] = []
+        def _finite(value: Any, name: str, run: Run) -> float:
+            # D2 fix (2026-09-28): a non-numeric value (e.g. the string
+            # "NA") escaped float() as a bare ValueError/TypeError outside
+            # the PostprocessError channel -- reject it with the run id,
+            # same collection-point discipline as the non-finite gates.
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                raise PostprocessError(
+                    f"run {run.run_id}: {name} is not a number "
+                    f"({value!r}); cannot normalize (sec.11.4)"
+                ) from None
+            if not math.isfinite(number):
+                # P1 fix (2026-09-28): same non-finite hole as
+                # the service summaries -- reject at collection.
+                raise PostprocessError(
+                    f"run {run.run_id}: {name} is not a finite number "
+                    f"({value!r}); cannot normalize (sec.11.4)"
+                )
+            return number
+
         for run in group.runs:
             if run.init.get("run_mode") == "microbenchmark":
                 for record in run.iterations:
                     iteration_time = record.get("iteration_time_ns")
                     if iteration_time:
-                        microbench.append((run, record, float(iteration_time)))
+                        microbench.append(
+                            (run, record,
+                             _finite(iteration_time, "iteration_time_ns", run)))
+                    else:
+                        null_iterations.append((run, record))
             else:
                 summary = run.summary
                 mean_e2e = summary.get("mean_e2e_ns")
@@ -1318,7 +1851,15 @@ def build_normalized_rows(
                         f"run {run.run_id}: summary lacks mean_e2e_ns/"
                         "drain_tput_rps; cannot normalize (sec.11.4)"
                     )
-                service.append((run, float(mean_e2e), float(drain_tput)))
+                # P1 fix (2026-09-28): a NaN/Inf summary value would slip
+                # every "is None"/"<= 0" gate below (nan <= 0 is False) and
+                # poison the whole group's normalized columns with nan while
+                # main() still exits 0 -- reject at collection with the run
+                # id in the message.
+                service.append(
+                    (run,
+                     _finite(mean_e2e, "mean_e2e_ns", run),
+                     _finite(drain_tput, "drain_tput_rps", run)))
 
         def denominator(values: list[float], baseline_value: Optional[float]) -> float:
             if method == NORMALIZATION_GROUP_MAX:
@@ -1327,6 +1868,15 @@ def build_normalized_rows(
                         f"group {group.group_id}: empty normalization group "
                         "(sec.11.4)"
                     )
+                # P1 fix (2026-09-28): max() propagates a NaN sitting in the
+                # FIRST slot and silently drops one elsewhere -- every group
+                # value must be finite before the max is trusted.
+                for item in values:
+                    if not math.isfinite(item):
+                        raise PostprocessError(
+                            f"group {group.group_id}: normalization group "
+                            f"value is not finite ({item!r}) (sec.11.4)"
+                        )
                 value = max(values)
             else:
                 if baseline_value is None:
@@ -1335,10 +1885,13 @@ def build_normalized_rows(
                         "value for normalization (sec.11.4)"
                     )
                 value = baseline_value
-            if value <= 0:
+            # P1 fix (2026-09-28): the former `value <= 0` gate let NaN
+            # through (nan <= 0 is False); the denominator must be finite
+            # AND positive.
+            if not (math.isfinite(value) and value > 0):
                 raise PostprocessError(
-                    f"group {group.group_id}: normalization denominator is 0 "
-                    "(sec.11.4)"
+                    f"group {group.group_id}: normalization denominator is "
+                    f"not finite or not positive ({value!r}) (sec.11.4)"
                 )
             return value
 
@@ -1358,17 +1911,51 @@ def build_normalized_rows(
             [tput for _, _, tput in service],
             None if baseline_service is None else baseline_service[1],
         ) if service else None
-        baseline_iteration = (
-            next(
-                (value for run, _, value in microbench if run.run_id == baseline_run_id),
-                None,
+        # P2-22 fix (2026-09-28): microbench normalization must align by
+        # benchmark_point_id.  The legacy path computed ONE denominator for
+        # the whole group -- group_max across points, or the baseline run's
+        # FIRST iteration regardless of point -- so cross-point ratios were
+        # meaningless (a 10x-larger point dominates every smaller point's
+        # normalized value).  Records are partitioned by point id; each
+        # point gets its own denominator (group max within the point, or
+        # the baseline run's value within the SAME point).  Groups whose
+        # records carry no benchmark_point_id keep the exact legacy
+        # single-bucket behavior: every id is "" so the partition is one
+        # bucket over all records (this repo has no iteration producer yet;
+        # the point-id branch is contract-latent and pinned by tests).
+        micro_by_point: dict[str, list[tuple[Run, dict[str, Any], float]]] = {}
+        row_slot: list[tuple[str, int]] = []
+        for run, record, value in microbench:
+            point_id = str(record.get("benchmark_point_id", ""))
+            members = micro_by_point.setdefault(point_id, [])
+            row_slot.append((point_id, len(members)))
+            members.append((run, record, value))
+        point_den: dict[str, Any] = {}
+        point_normalized: dict[str, list[Any]] = {}
+        for point_id, members in micro_by_point.items():
+            baseline_value = (
+                next(
+                    (value for run, _, value in members
+                     if run.run_id == baseline_run_id),
+                    None,
+                )
+                if baseline_run_id
+                else None
             )
-            if baseline_run_id
-            else None
-        )
-        iteration_den = denominator(
-            [value for _, _, value in microbench], baseline_iteration
-        ) if microbench else None
+            point_den[point_id] = denominator(
+                [value for _, _, value in members], baseline_value)
+            point_normalized[point_id] = [
+                _normalize_value(
+                    method=method,
+                    metric_name="iteration_time_ns",
+                    raw_value=value,
+                    group_id=group.group_id,
+                    group_values=[value for _, _, value in members],
+                    baseline_run_id=baseline_run_id,
+                    baseline_value=baseline_value,
+                )
+                for _, _, value in members
+            ]
 
         for run, mean_e2e, drain_tput in service:
             time_record = _normalize_value(
@@ -1410,16 +1997,11 @@ def build_normalized_rows(
                     "normalized_iteration_time": "",
                 }
             )
-        for run, record, iteration_time in microbench:
-            iteration_record = _normalize_value(
-                method=method,
-                metric_name="iteration_time_ns",
-                raw_value=iteration_time,
-                group_id=group.group_id,
-                group_values=[value for _, _, value in microbench],
-                baseline_run_id=baseline_run_id,
-                baseline_value=baseline_iteration,
-            )
+        for (run, record, iteration_time), (point_id, slot) in zip(
+                microbench, row_slot):
+            # P2-22 fix (2026-09-28): per-point denominator and per-point
+            # normalized record (computed in the partition pass above).
+            iteration_record = point_normalized[point_id][slot]
             rows.append(
                 {
                     "run_id": run.run_id,
@@ -1431,10 +2013,31 @@ def build_normalized_rows(
                     "baseline_run_id": baseline_run_id or "",
                     "denominator_time": "",
                     "denominator_tput": "",
-                    "denominator_iteration_time": iteration_den,
+                    "denominator_iteration_time": point_den[point_id],
                     "normalized_time": "",
                     "normalized_tput": "",
                     "normalized_iteration_time": iteration_record.normalized_value,
+                }
+            )
+        for run, record in null_iterations:
+            # The NA-normalized counterpart of an iteration record that
+            # carries no usable iteration_time_ns (rows are never skipped;
+            # see the collection loop above).
+            rows.append(
+                {
+                    "run_id": run.run_id,
+                    "benchmark_point_id": record.get("benchmark_point_id", ""),
+                    "repo_variant": run.init.get("repo_variant", ""),
+                    "source": SOURCE_MICROBENCHMARK,
+                    "normalization_group_id": group.group_id,
+                    "normalization_method": method,
+                    "baseline_run_id": baseline_run_id or "",
+                    "denominator_time": "",
+                    "denominator_tput": "",
+                    "denominator_iteration_time": "",
+                    "normalized_time": "",
+                    "normalized_tput": "",
+                    "normalized_iteration_time": NA,
                 }
             )
     return rows
@@ -1473,7 +2076,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    log_paths = [Path(log) for log in args.logs]
+    # sync-py-E4 (2026-10-07): 字面 cpp.log 缺失时透明回退 cpp.log.gz
+    # (runner 归档形态;见 _resolve_log_path)。
+    log_paths = [_resolve_log_path(Path(log)) for log in args.logs]
+    # Seed the first-token proxy's config search order with the run dirs of
+    # the logs being postprocessed (frozen trace_config.csv copy first,
+    # repo-current file as fallback); distinct run dirs keep their own
+    # order of appearance.
+    seen_dirs: set[Path] = set()
+    seeded_dirs: list[Path] = []
+    for log_path in log_paths:
+        run_dir = log_path.resolve().parent
+        if run_dir not in seen_dirs:
+            seen_dirs.add(run_dir)
+            seeded_dirs.append(run_dir)
+    global _CONFIG_SEARCH_DIRS
+    _CONFIG_SEARCH_DIRS = seeded_dirs
     for log_path in log_paths:
         if not log_path.is_file():
             print(f"postprocess error: log not found: {log_path}", file=sys.stderr)
@@ -1493,6 +2111,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         groups, run_configs = build_groups(runs, group_config)
         raw_rows = build_raw_rows(runs, run_configs)
         normalized_rows = build_normalized_rows(groups, args.normalization, args.baseline)
+        _check_die_utilization_records(runs)
     except PostprocessError as error:
         print(f"postprocess error: {error}", file=sys.stderr)
         return 1

@@ -142,14 +142,26 @@ class WatchRegistry {
   public:
     using WatchFireNotifier = std::function<void(const WatchFire&)>;
 
+    struct MemberProgression {
+        int rank = -1;
+        uint64_t first_node_id = 0;
+        uint64_t count = 0;
+        uint64_t stride = 0;
+    };
+
     /// Register a stage-completion watch over an exact member set (frozen).
     /// Duplicate identity (request_id, stage, generation) returns the
     /// existing watch_id (register once / fire once). Empty expected_members
     /// never fires (programming error caught by the end audit).
+    /// `created`(可空出参,Minor 镜像 2026-09-30):false = 该身份已在册,
+    /// 本次是跨批重复注册——新成员表被 register once / fire once 语义吞掉
+    /// (有 lost-wakeup 兜底,故只告警不 fail-closed);调用方借此只统计
+    /// 真正创建的 watch,total_watches 不再把被吞的重复计入。
     uint64_t register_stage_watch(
         const std::string& request_id, const std::string& stage,
         uint64_t generation, std::set<CompletionKey> expected_members,
-        std::set<NodeTerminalStatus> satisfying_statuses);
+        std::set<NodeTerminalStatus> satisfying_statuses,
+        bool* created = nullptr);
 
     /// Completion-fact recording, called by the online hook (read-only with
     /// respect to the graph; never releases dependencies). The direct member
@@ -171,6 +183,14 @@ class WatchRegistry {
     /// completed request is removed at REQUEST_COMPLETE commit).
     [[nodiscard]] size_t size() const { return watches_.size(); }
     [[nodiscard]] bool empty() const { return watches_.empty(); }
+
+    /// Number of live watch references whose exact member IDs intersect one
+    /// of the supplied compact progressions.  This reads the authoritative
+    /// reverse member index, counting only unresolved members of live watches
+    /// that may still deliver a terminal callback. Fired/completed facts do
+    /// not pin their executor; it never expands a tile progression.
+    [[nodiscard]] uint64_t member_reference_count(
+        const std::vector<MemberProgression>& progressions) const;
 
     /// Lifecycle: request end / batch abort / run finish.
     void remove_watch(uint64_t watch_id);

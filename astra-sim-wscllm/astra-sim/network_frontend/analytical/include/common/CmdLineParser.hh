@@ -43,8 +43,12 @@ class CmdLineParser {
         try {
             // try retrieving options
             return parsed[name].as<T>();
-        } catch (const cxxopts::OptionException& e) {
-            // error occured
+        } catch (const std::exception& e) {
+            // error occurred. Broadened from cxxopts::OptionException
+            // (G4-F10 fix, 2026-09-27): every cxxopts failure derives from
+            // std::exception, so no exception type can escape this noexcept
+            // function into std::terminate; every failure mode still fails
+            // closed with a message and a nonzero exit.
             std::cerr << "[Error] (AstraSim/analytical/common) "
                       << "Error parsing options: " << e.what() << std::endl;
             exit(-1);

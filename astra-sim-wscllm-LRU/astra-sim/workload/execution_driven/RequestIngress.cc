@@ -8,7 +8,6 @@ Implementation (方案 §4 步骤 1-2 操作 2).
 
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -24,9 +23,17 @@ RequestIngress::RequestIngress(const size_t capacity) noexcept
 
 void RequestIngress::bind(EventQueue* const eq, DecisionMailbox* const mailbox,
                           ServiceCoordinator* const svc) noexcept {
-    assert(eq != nullptr);
-    assert(mailbox != nullptr);
-    assert(svc != nullptr);
+    // M-18 fail-closed(姊妹仓 F1-CPP C1-5 同款移植):原来是 NDEBUG 剥离
+    // 的 assert——Release 构建下空绑定只会炸在运行中段的解引用上,零诊断。
+    // 换成与 register_queue_index 的 duplicate/invalid 处置同款的无条件
+    // fail-closed 通道。
+    if (eq == nullptr || mailbox == nullptr || svc == nullptr) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/ingress) bind() requires "
+                     "non-null event queue, mailbox and service "
+                     "coordinator\n");
+        std::abort();
+    }
     eq_ = eq;
     mailbox_ = mailbox;
     svc_ = svc;
@@ -72,7 +79,39 @@ void RequestIngress::drain_commands() {
     for (auto& cmd : batch) {
         switch (cmd.kind) {
             case IngressCommandKind::Submit: {
-                // arrival alarms must be strictly future (EventQueue :33);
+                // F1-CPP C1-8 同款移植(2026-09-30):进程级空/唯一身份门,
+                // CSV 读侧行门(M9 turn-0 查重 + register_queue_index 的
+                // turn>0 查重)在 drain 侧的合流兜底。WindowedTraceReader
+                // 只对自己经手的行查重;--command-fifo 通道(以及任何直接
+                // enqueue_command 的调用方)此前无等价门——重复 id 会一路
+                // 走到下游指标身份图 last-wins 污染、空 id 锚不到任何主体,
+                // run 可能全绿。此门覆盖所有经 drain_commands 的生产路径
+                // (CSV turn-0、FIFO Submit、测试夹具),对同一个进程级
+                // 集合查重,跨源撞号同样拦截。与 register_queue_index 的
+                // duplicate/invalid 处置同款 fail-closed——身份不可辨的
+                // run 不得产出数字;且在到达记账/alarm 调度之前触发。
+                {
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    if (cmd.envelope.request_id.empty()) {
+                        std::fprintf(
+                            stderr,
+                            "[Error] (execution_driven/ingress) Submit has "
+                            "an empty request_id (every request must be "
+                            "identifiable)\n");
+                        std::abort();
+                    }
+                    if (!seen_submit_request_ids_
+                             .insert(cmd.envelope.request_id).second) {
+                        std::fprintf(
+                            stderr,
+                            "[Error] (execution_driven/ingress) duplicate "
+                            "Submit request_id: %s\n",
+                            cmd.envelope.request_id.c_str());
+                        std::abort();
+                    }
+                }
+                // arrival alarms must be strictly future
+                // (EventQueue::schedule_event strict-future rule);
                 // a late request is clamped to the next tick (arrives now)
                 const auto current = eq_->get_current_time();
                 const auto arrival = cmd.envelope.arrival_world_ns;
@@ -99,6 +138,14 @@ void RequestIngress::drain_commands() {
                                RequestSource::ExternalStream) {
                         ++late_external_stream_;
                     } else {
+                        // Defensive only (2026-09-27 note): no production
+                        // producer enqueues a RequestSource::FutureAlarm
+                        // envelope into the command queue --
+                        // schedule_future_arrival drives future alarms
+                        // directly through schedule_event(), never as a
+                        // command -- so this arm counts nothing today. It
+                        // stays so an unknown future source surfaces in the
+                        // split counters instead of being dropped silently.
                         ++late_future_alarm_rounding_;
                     }
                 }
@@ -144,6 +191,21 @@ void RequestIngress::drain_commands() {
                 std::abort();
                 break;
         }
+    }
+    // M4 fix (2026-09-29): the producer gate is closed and the queue just
+    // drained to empty -- every command linearized before the close has
+    // been observed. Complete the coordinator's deferred FINISHED
+    // evaluation here (see ServiceCoordinator::note_input_drained); it is
+    // a no-op while requests are still active/pending. Commands enqueued
+    // after the close are rejected by enqueue_command, so an empty queue
+    // under a closed gate is stable.
+    bool closed_and_drained = false;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        closed_and_drained = closed_ && queue_.empty();
+    }
+    if (closed_and_drained && svc_ != nullptr) {
+        svc_->note_input_drained();
     }
 }
 
@@ -241,7 +303,19 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
         }
         if (!validation_error.has_value() && queue_index_tracking_enabled_) {
             const auto it = queue_index_map_.find(envelope.request_id);
-            assert(it != queue_index_map_.end());
+            // M-18 fail-closed(姊妹仓 F1-CPP C1-5/C1-8 批同款移植):原来
+            // 是 NDEBUG 剥离的 assert,Release 下直接 end() 解引用(UB)。
+            // 上方 validate_future_arrivals_locked 已 fail-closed 拒绝无
+            // 登记 id,此分支经单线程提交路径不可达;保留无条件守卫是为
+            // 挡住绕过校验的不安全直接调用方——带诊断终止,而非读 end()。
+            if (it == queue_index_map_.end()) {
+                std::fprintf(stderr,
+                             "[Error] (execution_driven/ingress) future "
+                             "arrival has no registered queue index: "
+                             "request_id=%s\n",
+                             envelope.request_id.c_str());
+                std::abort();
+            }
             filled.queue_index = it->second;
             queue_index_map_.erase(it);
         }
@@ -256,15 +330,21 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
         throw std::runtime_error("future-arrival scheduling rejected: " +
                                  *validation_error);
     }
-    // arrival alarms must be strictly future (EventQueue :33); a late
+    // arrival alarms must be strictly future
+    // (EventQueue::schedule_event strict-future rule); a late
     // arrival is clamped to the next tick (arrives now)
     const auto current = eq_->get_current_time();
     const auto arrival = envelope.arrival_world_ns;
     // P0 fix (2026-08-30): this path only ever schedules FutureAlarm
-    // envelopes; its clamps are relative-interval sub-tick rounding, never a
-    // static-CSV reader defect, and are never gated.
+    // envelopes. Minor① 契约统一(2026-09-30):迟到判定与提交边界校验层
+    // (GraphBatchCommitter future_alarm 检查:arrival < delta.tick 才
+    // fail)对齐——arrival == delta.tick 是两层共同承认的"准点"边界,
+    // EventQueue 严格未来规则把它钳到 current+1 属于契约内钳制,不再
+    // 混入 late_future_alarm_rounding_ 的"真迟到"计数;严格早于当前
+    // tick(提交边界本应已 fail-closed,仅不安全直接调用方可达)才算
+    // 迟到。
     filled.source = RequestSource::FutureAlarm;
-    if (arrival <= current) {
+    if (arrival < current) {
         ++late_future_alarm_rounding_;
     }
     const EventTime alarm_time =

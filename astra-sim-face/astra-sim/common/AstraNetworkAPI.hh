@@ -102,13 +102,18 @@ class AstraNetworkAPI {
         return BackendType::NotSpecified;
     };
 
+    /// Whether the backend is currently inside its invoke pass (an event
+    /// callback dispatched by the network backend itself).  Sys uses this to
+    /// decide whether a zero-delay registration may merge into the current
+    /// tick (static dispatch keeps its byte-exact same-tick merge semantics)
+    /// or must defer to the next tick; outside the invoke pass a same-tick
+    /// insertion would hit the EventQueue's strict-increase guard and kill
+    /// the run.  Backends without the notion report true (upstream behavior:
+    /// merge allowed).
+    virtual bool backend_in_invoke_context() const { return true; }
+
     virtual int sim_comm_get_rank() {
         return rank;
-    };
-
-    virtual int sim_comm_set_rank(int rank) {
-        this->rank = rank;
-        return this->rank;
     };
 
     virtual timespec_t sim_get_time() = 0;

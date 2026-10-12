@@ -22,13 +22,16 @@ class Algorithm : public Callable {
     virtual void call(EventType event, CallData* data);
     virtual void exit();
 
-    int id;
-    BaseStream* stream;
-    LogicalTopology* logical_topo;
-    uint64_t data_size;
-    uint64_t final_data_size;
-    ComType comType;
-    bool enabled;
+    // Default member initializers: CollectivePhase reads final_data_size and
+    // comType unconditionally right after construction, and algorithm classes
+    // whose constructor leaves a member untouched on some ComType paths must
+    // not propagate indeterminate values.
+    BaseStream* stream = nullptr;
+    LogicalTopology* logical_topo = nullptr;
+    uint64_t data_size = 0;
+    uint64_t final_data_size = 0;
+    ComType comType = ComType::None;
+    bool enabled = true;
 };
 
 }  // namespace AstraSim

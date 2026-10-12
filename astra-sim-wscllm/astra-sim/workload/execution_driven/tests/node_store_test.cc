@@ -8,10 +8,11 @@ Exercises the step-1-4 mechanisms (方案 §4 步骤 1-4) as a standalone
 test -- no network simulation, no baseline artifacts touched:
 
   Part A  NodeStore semantics: id assignment, dependency blocking/release,
-          mark_issued, finish_node idempotency, dead-parent edges, reverse
-          index (meta_for), pending_count.
+          mark_issued, finish_node idempotency, dead-parent edges, the
+          node_ptr record view (request/stage/generation identity), the
+          unfinished-count oracle.
   Part B  NodeStoreGraphSource: store-backed for_each_dep_free / lookup_ptr /
-          take_node / finish_node delegation, no-auto-emit, static_all_done
+          take_node / finish_node delegation, no-auto-emit
           false (online authority belongs to the ServiceCoordinator).
   Part D  phase-3 sensing: per-rank injected-unfinished ledger summary
           (classification by compute ops / comm bytes / estimated remaining
@@ -61,12 +62,26 @@ bool contains(const std::vector<uint64_t>& ids, uint64_t id) {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
+// Test-local free-set snapshot (production iterates through
+// fill_free_node_snapshot() / node_ptr() without the extra copy).
+std::vector<uint64_t> free_ids_of(const NodeStore& store) {
+    std::vector<uint64_t> ids;
+    store.fill_free_node_snapshot(ids);
+    return ids;
+}
+
+// Test-local unfinished-count oracle: the phase-3 sensing summary's
+// node_count is exactly the unfinished (not yet finished) node count.
+size_t store_unfinished(const NodeStore& store) {
+    return store.injected_unfinished_summary(0).node_count;
+}
+
 // ---------------------------------------------------------------- Part A --
 // NodeStore unit semantics.
 void test_node_store() {
     NodeStore store;
-    expect(store.empty(), "A: empty() initially true");
-    expect(store.pending_count() == 0, "A: pending_count() initially 0");
+    expect(store.retained_count() == 0, "A: empty store holds no records");
+    expect(store_unfinished(store) == 0, "A: unfinished count initially 0");
 
     OnlineNode n;
     n.kind = NodeKind::Compute;
@@ -76,14 +91,14 @@ void test_node_store() {
     expect(id1 == 1 && id2 == 2, "A: add_node assigns 1, 2");
     expect(store.next_auto_id() == 3,
            "A: next_auto_id exposes the following automatic id");
-    expect(!store.empty(), "A: non-empty after adds");
-    expect(store.pending_count() == 2, "A: pending_count() == 2");
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2}),
+    expect(store.retained_count() == 2, "A: two records after adds");
+    expect(store_unfinished(store) == 2, "A: unfinished count == 2");
+    expect(free_ids_of(store) == std::vector<uint64_t>({1, 2}),
            "A: both nodes free, ascending");
     std::vector<uint64_t> free_snapshot = {99};
     store.fill_free_node_snapshot(free_snapshot);
     expect(free_snapshot == std::vector<uint64_t>({1, 2}),
-           "A: caller-owned free snapshot matches resolve_free_nodes");
+           "A: caller-owned free snapshot matches the free set");
 
     OnlineNode m;
     m.global_id = 7;
@@ -94,39 +109,37 @@ void test_node_store() {
     expect(store.add_node(m) == 7, "A: explicit global_id kept");
     expect(store.next_auto_id() == 8,
            "A: explicit global_id advances the following automatic id");
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2, 7}),
+    expect(free_ids_of(store) == std::vector<uint64_t>({1, 2, 7}),
            "A: free set ascending incl. 7");
-    const auto rec = store.node(7);
-    expect(rec.has_value() && rec->kind == NodeKind::Metadata,
-           "A: node() returns stored record");
-    const auto meta = store.meta_for(7);
-    expect(meta.has_value() && meta->request_id == "req-7" &&
-               meta->stage == "prefill" && meta->generation == 3,
-           "A: meta_for returns reverse index");
-    expect(!store.meta_for(999).has_value(), "A: meta_for miss is nullopt");
-    expect(!store.node(999).has_value(), "A: node() miss is nullopt");
+    const OnlineNode* rec = store.node_ptr(7);
+    expect(rec != nullptr && rec->kind == NodeKind::Metadata,
+           "A: node_ptr returns the stored record");
+    expect(rec != nullptr && rec->request_id == "req-7" &&
+               rec->stage == "prefill" && rec->generation == 3,
+           "A: record carries the request/stage/generation identity");
+    expect(store.node_ptr(999) == nullptr, "A: node_ptr miss is nullptr");
 
     // Dependency: child added after parent -> child leaves the free set.
     store.add_dependency(1, 7, DepKind::Data);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2}),
+    expect(free_ids_of(store) == std::vector<uint64_t>({1, 2}),
            "A: child with recorded parent is not free");
-    expect(store.node(7).has_value(), "A: blocked child still stored");
+    expect(store.node_ptr(7) != nullptr, "A: blocked child still stored");
 
     // mark_issued consumes; idempotent; unknown ids ignored.
     store.mark_issued(1);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({2}),
+    expect(free_ids_of(store) == std::vector<uint64_t>({2}),
            "A: mark_issued removes from free set");
     store.mark_issued(1);
     store.mark_issued(999);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({2}),
+    expect(free_ids_of(store) == std::vector<uint64_t>({2}),
            "A: mark_issued idempotent / unknown-id no-op");
 
     // finish_node is the only dependency-release entry; idempotent.
     store.finish_node(1);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({2, 7}),
+    expect(free_ids_of(store) == std::vector<uint64_t>({2, 7}),
            "A: finish_node frees the child");
     store.finish_node(1);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({2, 7}),
+    expect(free_ids_of(store) == std::vector<uint64_t>({2, 7}),
            "A: finish_node idempotent (no double release)");
 
     // Dead-parent edge: parent already finished -> child stays free.
@@ -134,11 +147,11 @@ void test_node_store() {
     store.finish_node(idc);
     const uint64_t idd = store.add_node(n);
     store.add_dependency(idc, idd, DepKind::Control);
-    expect(contains(store.resolve_free_nodes(), idd),
+    expect(contains(free_ids_of(store), idd),
            "A: edge to finished parent does not block child");
 
-    // DepKind is accepted and stored per edge (all resolve identically in
-    // the first version; documented in NodeStore.hh).
+    // DepKind is accepted but deliberately NOT stored per edge (all kinds
+    // resolve identically in the first version; documented in NodeStore.hh).
     OnlineNode fence_a;
     fence_a.name = "fence-a";
     OnlineNode fence_b;
@@ -146,21 +159,23 @@ void test_node_store() {
     const uint64_t fa = store.add_node(fence_a);
     const uint64_t fb = store.add_node(fence_b);
     store.add_dependency(fa, fb, DepKind::Enabled);
-    expect(!contains(store.resolve_free_nodes(), fb),
+    expect(!contains(free_ids_of(store), fb),
            "A: Enabled edge blocks like the others (first version)");
     store.finish_node(fa);
-    expect(contains(store.resolve_free_nodes(), fb),
+    expect(contains(free_ids_of(store), fb),
            "A: Enabled edge releases on finish");
 
-    // 7 nodes stored so far (1, 2, 7, 3=idc, 4=idd, 5=fa, 6=fb);
-    // finished so far: 1, 3, 5 -> 4 pending.
-    expect(store.pending_count() == 4, "A: pending_count() == 4");
+    // 7 nodes stored so far (1, 2, 7 -- 7 explicit; 8=idc, 9=idd, 10=fa,
+    // 11=fb -- the automatic ids continue at 8 because the explicit 7
+    // advanced next_auto_id, asserted above); finished so far: 1, 8, 10
+    // -> 4 unfinished.
+    expect(store_unfinished(store) == 4, "A: unfinished count == 4");
     store.finish_node(2);
     store.finish_node(7);
     store.finish_node(idd);
     store.finish_node(fb);
-    expect(store.pending_count() == 0,
-           "A: pending_count() 0 after all finishes");
+    expect(store_unfinished(store) == 0,
+           "A: unfinished count 0 after all finishes");
 
     // Online terminal delivery is a single-fire transition.  It must reject
     // unknown and not-yet-issued ids before any Statistics/observer side
@@ -196,7 +211,7 @@ void test_node_gc() {
     const uint64_t off_id = off_store.add_node(n);
     off_store.finish_node(off_id);
     off_store.collect_garbage();
-    expect(off_store.node(off_id).has_value(),
+    expect(off_store.node_ptr(off_id) != nullptr,
            "E: gc off keeps finished nodes (pre-M2 behavior)");
     expect(off_store.gc_erased_count() == 0, "E: gc off erases nothing");
 
@@ -207,14 +222,15 @@ void test_node_gc() {
     store.set_gc_enabled(true);
     const uint64_t a = store.add_node(n);
     store.finish_node(a);
-    expect(store.node(a).has_value(),
+    expect(store.node_ptr(a) != nullptr,
            "E: finish_node itself never erases");
     store.collect_garbage();
-    expect(!store.node(a).has_value(),
+    expect(store.node_ptr(a) == nullptr,
            "E: childless finished node erased at collect_garbage");
     expect(store.erased(a), "E: erased() observes the collection");
     expect(store.gc_erased_count() == 1, "E: gc_erased_count tracked");
-    expect(store.pending_count() == 0, "E: pending_count unaffected");
+    expect(store_unfinished(store) == 0,
+           "E: unfinished count unaffected by collection");
 
     // Chain: the parent is retained while its child is unfinished; the
     // child's finish re-enqueues it and one collect removes both.
@@ -223,20 +239,20 @@ void test_node_gc() {
     store.add_dependency(p, c, DepKind::Data);
     store.mark_issued(p);
     store.finish_node(p);
-    expect(contains(store.resolve_free_nodes(), c),
+    expect(contains(free_ids_of(store), c),
            "E: child freed by the parent finish (unaffected by GC)");
     store.collect_garbage();
-    expect(store.node(p).has_value(),
+    expect(store.node_ptr(p) != nullptr,
            "E: parent retained while its child is unfinished");
     store.finish_node(c);
     store.collect_garbage();
-    expect(!store.node(p).has_value() && !store.node(c).has_value(),
+    expect(store.node_ptr(p) == nullptr && store.node_ptr(c) == nullptr,
            "E: chain collected after the last child finishes");
 
     // Erased => finished: the dead-parent no-op is preserved.
     const uint64_t late = store.add_node(n);
     store.add_dependency(p, late, DepKind::Data);
-    expect(contains(store.resolve_free_nodes(), late),
+    expect(contains(free_ids_of(store), late),
            "E: edge onto an erased (finished) parent does not block");
     store.finish_node(p);  // finish of an erased id: still a no-op
     expect(store.retained_count() == 1, "E: only the late node remains");
@@ -291,11 +307,9 @@ void test_node_store_graph_source() {
     expect(views.size() == 1 && views[0].global_id == 8,
            "B: edge to finished parent does not block");
 
-    // Online-mode invariants: no ETFeederNode handle, never static-done, and
-    // finish_node releases store dependencies without auto-emitting (the
-    // static auto-advance lives behind the mode gate in Workload::call).
-    expect(src.et_node(8) == nullptr, "B: online source has no et node");
-    expect(!src.static_all_done(), "B: online source is never static-done");
+    // Online-mode invariant: finish_node releases store dependencies
+    // without auto-emitting (the static auto-advance was retired with the
+    // static ET path).
     src.finish_node(8);
     expect(collect_free().empty(), "B: no auto-emit after finish");
 

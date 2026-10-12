@@ -15,7 +15,7 @@ Cases:
   C. without a callback, 1000 randomized schedule/proceed runs are
      event-for-event identical to the pre-extension reference implementation;
   D. FluidScheduler integration: comm started from a tick-end callback
-     (deferred flush mode) does not trip the EventQueue strict-increase assert
+     (deferred flush mode) does not trip the EventQueue strict-increase abort
      and the flow completes; the legacy (non-deferred) start_flow path still
      works from within a physical event handler.
   F. Same-time physical FIFO remains exact with the inline-first EventList:
@@ -227,14 +227,12 @@ void test_case_b() {
 
 struct DiffCtx {
     int id;
-    std::vector<int>* real_log;
-    std::vector<int>* ref_log;
+    std::vector<int>* log;
 };
 
 void diff_handler(void* v) {
     auto* c = static_cast<DiffCtx*>(v);
-    c->real_log->push_back(c->id);
-    c->ref_log->push_back(c->id);
+    c->log->push_back(c->id);
 }
 
 void test_case_c() {
@@ -248,6 +246,12 @@ void test_case_c() {
     std::uniform_int_distribution<int> id_dist(0, 999);
     std::uniform_int_distribution<int> time_dist(1, 50);
 
+    // Neither queue owns its callback arg (caller-owned payloads, same as
+    // production); collect every DiffCtx so the case cleans up after the
+    // final drain (the former shared-context shape leaked one per op).
+    std::vector<DiffCtx*> ctxs;
+    ctxs.reserve(1200);
+
     for (int step = 0; step < 1000; ++step) {
         const int op = op_dist(rng);
         if (op < 60) {
@@ -256,9 +260,17 @@ void test_case_c() {
             // the list currently being invoked)
             const auto t = eq.get_current_time() +
                            static_cast<EventTime>(time_dist(rng));
-            auto* c = new DiffCtx{id_dist(rng), &real_log, &ref_log};
-            eq.schedule_event(t, diff_handler, c);
-            ref.schedule_event(t, diff_handler, c);
+            // Each queue gets its OWN context/log (2026-09-30): the former
+            // shared DiffCtx wrote both logs in one call, making the
+            // per-event order comparison below vacuously true for any
+            // relative ordering the two implementations chose.
+            const int next_id = id_dist(rng);
+            auto* creal = new DiffCtx{next_id, &real_log};
+            auto* cref = new DiffCtx{next_id, &ref_log};
+            ctxs.push_back(creal);
+            ctxs.push_back(cref);
+            eq.schedule_event(t, diff_handler, creal);
+            ref.schedule_event(t, diff_handler, cref);
         } else {
             // proceed when possible
             if (eq.finished()) {
@@ -289,6 +301,9 @@ void test_case_c() {
     }
     assert(ref.finished());
     assert(real_log == ref_log);
+    for (auto* c : ctxs) {
+        delete c;
+    }
 
     std::printf("[case C] PASS: 1000 randomized ops identical to reference\n");
 }
@@ -340,7 +355,7 @@ void run_fs_scenario(bool deferred_mode) {
     if (deferred_mode) {
         // comm emitted from the tick-end callback (post-commit emission);
         // without the deferred channel this would insert a current_time event
-        // into the main queue and trip the strict-increase assert
+        // into the main queue and trip the strict-increase abort
         eq->set_tick_end_callback(fs_comm_tick_end, &ctx);
         eq->schedule_event(10, noop_handler, nullptr);
     } else {
@@ -366,8 +381,11 @@ void run_fs_scenario(bool deferred_mode) {
 // ---------------------------------------------------------------------------
 // case E (map family): fail-fast proof -- schedule_event(current_time) from a
 // tick-end callback inserts a current_time EventList into the main map and the
-// NEXT proceed() must trip the strict-increase assert (EventQueue.cpp :31);
-// schedule_event(future) from the callback lands in the map normally.
+// NEXT proceed() must trip the strict-increase abort (Release-always
+// std::abort() at the top of EventQueue::proceed() -- the former debug-only
+// assert at EventQueue.cpp :31 was promoted on 2026-09-27 so Release builds
+// fail closed too); schedule_event(future) from the callback lands in the map
+// normally.
 // ---------------------------------------------------------------------------
 
 struct CaseECtx {
@@ -400,7 +418,7 @@ bool run_case_e_child(bool bad) {
     eq.schedule_event(10, noop_handler, nullptr);
     eq.proceed();
     if (bad) {
-        // the next proceed must abort on the strict-increase assert
+        // the next proceed must abort on the strict-increase check
         eq.proceed();
         return false;  // should not reach here in a failing build
     }
@@ -420,7 +438,7 @@ void test_case_e() {
     pid_t pid = fork();
     if (pid == 0) {
         const bool reached_end = run_case_e_child(/*bad=*/true);
-        // A healthy build aborts on the strict-increase assert inside
+        // A healthy build aborts on the strict-increase check inside
         // run_case_e_child and never reaches _Exit. Reaching this line means
         // the fail-fast guarantee is broken either way; encode the outcome
         // (1 = returned true, 2 = returned false) so the parent's SIGABRT
@@ -432,7 +450,8 @@ void test_case_e() {
     // the child must have died from the assert (SIGABRT), not exited cleanly
     assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
     std::printf("[case E] PASS: map fail-fast -- tick-end schedule_event("
-                "current_time) trips :31 on next proceed; future event OK\n");
+                "current_time) trips the strict-increase abort on next "
+                "proceed; future event OK\n");
 }
 
 // ---------------------------------------------------------------------------

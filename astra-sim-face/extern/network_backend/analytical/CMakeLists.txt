@@ -16,6 +16,15 @@ project(Analytical)
 # Compilation target
 set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_aware)")
 
+# Fail closed on an illegal BUILDTARGET (2026-09-30, mirrored from the
+# joint repo): a typo (e.g. the historical "aware") otherwise configures
+# ZERO targets here and only surfaces later as "binary missing" from the
+# runner. Same discipline as the NETWORK_BACKEND_BUILD_AS_LIBRARY
+# FATAL_ERROR gate below.
+if (NOT BUILDTARGET STREQUAL "all" AND NOT BUILDTARGET STREQUAL "congestion_aware")
+    message(FATAL_ERROR "Unknown BUILDTARGET '${BUILDTARGET}' (legal: all | congestion_aware)")
+endif()
+
 # Can be compiled into either library or executable
 option(NETWORK_BACKEND_BUILD_AS_LIBRARY "Build as a library" OFF)
 
@@ -42,13 +51,13 @@ if(NOT TARGET yaml-cpp)
 endif()
 
 # Include src files to compile
-file(GLOB srcs_common
+file(GLOB srcs_common CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/common/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/common/event-queue/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/common/network-parser/*.cpp
 )
 
-file(GLOB srcs_congestion_aware
+file(GLOB srcs_congestion_aware CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/network/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/fluid/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/topology/*.cpp
@@ -81,7 +90,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # Include directories
     target_include_directories(Analytical_Congestion_Aware PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(Analytical_Congestion_Aware PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/astra-network-analytical/)
-    target_include_directories(Analytical_Congestion_Aware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern/)
+    # (2026-09-30) Removed: PRIVATE include of a nonexistent extern/ dir
+    # (vendored extern was dropped; no source includes "extern/...").
 endif ()
 
 if (ANALYTICAL_BUILD_FLUID_SCHEDULER_LINK_OBSERVER_TEST)

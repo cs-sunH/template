@@ -9,9 +9,9 @@ Implementation (方案 §4 步骤 1-6).
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <stdexcept>
 #include <utility>
 
 namespace AstraSim {
@@ -27,8 +27,18 @@ bool completed_nodes_exact_from_env() {
     if (std::strcmp(mode, "exact") == 0) {
         return true;
     }
-    throw std::runtime_error(
-        "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) or 'exact'");
+    // Fail-closed with the module's standard one-line [Error] + non-zero
+    // exit (2026-10-01 fix): this fires from the CompletedFactAccumulator
+    // constructor, whose only construction site is a stack object in
+    // main_online.cc with no try/catch -- the former std::runtime_error
+    // terminated the process via std::terminate (still non-zero, but with
+    // an uncaught-exception trace instead of the disciplined diagnostic).
+    std::fprintf(stderr,
+                 "[Error] (execution_driven/mailbox) ASTRA_SIM_ONLINE_"
+                 "COMPLETED_NODES must be unset (default) or 'exact', got: "
+                 "%s\n",
+                 mode);
+    std::exit(EXIT_FAILURE);
 }
 
 }  // namespace
@@ -76,29 +86,6 @@ size_t CompletedFactAccumulator::size() const {
     return exact_facts_.size();
 }
 
-void CompletedFactAccumulator::set_exact_mode(const bool exact_mode) {
-    if (counters_.total != 0) {
-        throw std::logic_error(
-            "CompletedFactAccumulator mode cannot change after a terminal");
-    }
-    exact_mode_ = exact_mode;
-}
-
-StateDelta build_state_delta(std::vector<DecisionEvent> events,
-                             const uint64_t tick,
-                             const uint64_t delivery_sequence,
-                             const uint64_t deferred_from_tick,
-                             std::vector<RankInjectedSummary>
-                                 injected_unfinished) {
-    // Phase 4 (v1): the compatibility form fills the v1 defaults --
-    // delivery_epoch == delivery_sequence, empty completed_nodes /
-    // affected_ranks, and the self-consistent snapshot handle. Existing
-    // call sites (fixtures) compile unchanged and stay v1-consistent.
-    return build_state_delta_v1(std::move(events), tick, delivery_sequence,
-                                deferred_from_tick, {}, {},
-                                std::move(injected_unfinished));
-}
-
 StateDelta build_state_delta_v1(
     std::vector<DecisionEvent> events, const uint64_t tick,
     const uint64_t delivery_sequence, const uint64_t deferred_from_tick,
@@ -125,11 +112,29 @@ StateDelta build_state_delta_v1(
     return delta;
 }
 
+void DecisionMailbox::push(DecisionEvent e, const uint64_t formation_tick) {
+    push_common(e, true, formation_tick);
+}
+
 void DecisionMailbox::push(DecisionEvent e) {
+    // Fixture convenience: no formation tick, excluded from the minimum.
+    push_common(e, false, 0);
+}
+
+void DecisionMailbox::push_common(DecisionEvent& e, const bool has_tick,
+                                  const uint64_t formation_tick) {
     const Identity identity{static_cast<int>(e.reason), e.request_id, e.stage,
                             e.generation};
     if (!pending_identities_.insert(identity).second) {
-        return;  // same-epoch duplicate: no-op
+        return;  // same-epoch duplicate: no-op (the original event's
+                 // formation tick already stands)
+    }
+    // Step 1-11: track the pending set's earliest formation tick (the
+    // delivery gate reads it for StateDelta.deferred_from_tick).
+    if (has_tick && (!pending_formation_valid_ ||
+                     formation_tick < min_pending_formation_tick_)) {
+        min_pending_formation_tick_ = formation_tick;
+        pending_formation_valid_ = true;
     }
     e.seq = next_seq_++;
     events_.push_back(std::move(e));
@@ -144,6 +149,7 @@ std::vector<DecisionEvent> DecisionMailbox::drain() {
     std::vector<DecisionEvent> result = std::move(events_);
     events_.clear();
     pending_identities_.clear();  // a new dedup epoch starts
+    pending_formation_valid_ = false;  // the formation record ends with it
     if (!result.empty()) {
         ++delivery_count_;  // delivery epochs, not events
     }

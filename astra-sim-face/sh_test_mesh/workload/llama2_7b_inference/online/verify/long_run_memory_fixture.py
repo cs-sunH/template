@@ -124,8 +124,9 @@ def _assert_after_ack(scheduler, seq: int) -> None:
         raise RuntimeError("delivery {} retained its scheduler batch after ack".format(seq))
     if scheduler.graph.batch is not None:
         raise RuntimeError("delivery {} retained its graph batch after ack".format(seq))
-    if getattr(scheduler.graph, "batch_first_step", False):
-        raise RuntimeError("delivery {} retained graph first-step state after ack".format(seq))
+    # (2026-09-26: the former batch_first_step getattr check is gone with
+    # the attribute itself -- the graph no longer carries first-step state,
+    # so the guard was a恒 False dead branch.)
     for rank, builder in scheduler.graph.builders.items():
         if builder.nodes or builder.edges:
             raise RuntimeError(
@@ -191,7 +192,6 @@ def main() -> int:
     scheduler = _MemoryScheduler(
         manifest={"requests": _LazyRequests(request_count)},
         config=_FixtureConfig(),
-        mode="memory_fixture",
         profile_sink=_discard_row,
         online_stats_sink=_discard_row,
     )

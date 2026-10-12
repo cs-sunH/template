@@ -17,19 +17,21 @@ namespace AstraSim {
 
 class CommunicatorGroup;
 
+// Callable via the deferred-completion path: issue_coll_comm registers the
+// DataSet itself as the event callback (register_event), and the fired
+// event lands in call() -> notify_stream_finished(nullptr).
 class DataSet : public Callable, public StreamStat {
   public:
     DataSet(int total_streams);
-    DataSet(int total_streams, Tick creation_tick);
     ~DataSet();
     void set_notifier(Callable* layer, EventType event);
+    void call(EventType event, CallData* data) override;
     /// Keep the communicator definition used to build this collective alive
     /// until every stream has completed. Metadata may replace the map entry
     /// while this DataSet is still active.
     void retain_communicator_group(
         std::shared_ptr<CommunicatorGroup> communicator_group);
     void notify_stream_finished(StreamStat* data);
-    void call(EventType event, CallData* data);
 
     static int id_auto_increment;
     int my_id;
@@ -37,8 +39,6 @@ class DataSet : public Callable, public StreamStat {
     int finished_streams;
     bool finished;
     bool active;
-    Tick finish_tick;
-    Tick creation_tick;
     std::pair<Callable*, EventType>* notifier;
 
   private:

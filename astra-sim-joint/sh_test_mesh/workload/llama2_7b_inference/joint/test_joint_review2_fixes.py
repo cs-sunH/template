@@ -49,7 +49,6 @@ for _p in (_HERE, _WL):
 from face_scheduler import (  # noqa: E402
     KVCapacityError,
     KVCacheManager,
-    kv_cache_shard_bytes_for_tokens,
 )
 from joint.test_joint_fixes import (  # noqa: E402
     _manager,
@@ -64,15 +63,14 @@ from joint.test_joint_mechanisms import (  # noqa: E402
     _two_instance_topology,
 )
 from joint.joint_cost_model import (  # noqa: E402
-    ACTION_REMOTE,
     CausalHorizonEstimator,
-    JointCostModel,
     LinkFlowRegistry,
     ServiceFactors,
     SessionKVView,
     RequestView,
     _transfer_ns,
 )
+from joint.joint_config import ALL_ACTIONS  # noqa: E402
 
 
 def _runtime(request_id, session_id=None, joint_action="stay"):
@@ -111,7 +109,7 @@ class DeadlockGuardPendingReadyTest(unittest.TestCase):
         scheduler.kv_manager = _manager()
         scheduler._kv_ledger_epoch = 0
         scheduler._stalled_by_instance = {}
-        scheduler._batch = None
+        scheduler._batch = {"tick": 0}
         scheduler.online_log_count = 0
         scheduler.decision_log_sink = None
         scheduler.online_log_rows = []
@@ -175,6 +173,7 @@ class DeepGapLedgerBoundaryTest(unittest.TestCase):
         _seed(kv, "s", 0, 10, 10, "human")
         _seed(kv, "hog", 0, 300, 10, "human")
         kv._sessions["hog"].active = True
+        kv._refresh_capacity_summary(("hog",))  # D11 白盒重索引
         kv.prepare_prefill(
             session_id="s", target_instance_index=0,
             history_tokens=10, trigger_request_id="t1", action="stay")
@@ -202,6 +201,7 @@ class DeepGapLedgerBoundaryTest(unittest.TestCase):
         _seed(kv, "s", 0, 10, 10, "human")
         _seed(kv, "hog", 0, 300, 10, "human")
         kv._sessions["hog"].active = True
+        kv._refresh_capacity_summary(("hog",))  # D11 白盒重索引
         kv.prepare_prefill(
             session_id="s", target_instance_index=1,
             history_tokens=10, trigger_request_id="t1", action="copy")
@@ -244,7 +244,7 @@ class MergeIncrementPricingTest(unittest.TestCase):
         model = _model({0: _load(), 1: _load()})
         session = _session_view()          # home 0，执行 1（异地）
         request = _request_view()          # input 500/rank，decode 增长 1000/rank
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=1,
             action="copy", remote_enabled=True)
         self.assertTrue(candidate.applicable)
@@ -257,11 +257,11 @@ class MergeIncrementPricingTest(unittest.TestCase):
         """基础历史翻倍不改变 merge 段（v2 下 copy 恒零字节翻转 = 0；
         物理面 home 侧释放量随基础变化，但执行端并集已在胜者侧）。"""
         loads = {0: _load(), 1: _load()}
-        small = _model(loads).estimate_action(
+        small = _model(loads).estimate_P_with_continuation(
             session=_session_view(history_bytes=(1000, 1000)),
             request=_request_view(), instance_index=1,
             action="copy", remote_enabled=True)
-        big = _model(loads).estimate_action(
+        big = _model(loads).estimate_P_with_continuation(
             session=_session_view(history_bytes=(5000, 5000)),
             request=_request_view(), instance_index=1,
             action="copy", remote_enabled=True)
@@ -330,7 +330,11 @@ class ClassifierActionFilterTest(unittest.TestCase):
         scheduler.joint_config = SimpleNamespace(
             remote_enabled=remote_enabled,
             # O12：分类器直读消融开关（F6 无软门），夹具显式供值。
-            remote_read_partial_enabled=True)
+            remote_read_partial_enabled=True,
+            # M2（2026-09-26）：分类器第二过滤点直读掩码放行集，夹具
+            # 显式供全集（本类不测掩码面——M2ActionMaskPhysical
+            # FeasibilityTest 另钉）。
+            allowed_action_set=frozenset(ALL_ACTIONS))
         return scheduler
 
     @staticmethod
@@ -370,7 +374,7 @@ class ClassifierActionFilterTest(unittest.TestCase):
         原断言（"PARTAL 基即使 remote on 也不参与判定"）钉的是 N1(a)
         解除（2026-09-17《部分层逐出kv管理改造分析方案》需求①）之前
         的旧口径；解除后 JCM action_applicability（joint_cost_model.py
-        :1363-1427）与 O12 修复后的分类器都把 PARTIAL 基 remote-read
+       ）与 O12 修复后的分类器都把 PARTIAL 基 remote-read
         列为合法适用动作（后缀池恢复物化＋前缀读流）。M1 设计前提
         "按适用动作集合过滤"不变，变的是适用集合本身。本用例场景
         （final 800 整份放不下）下 remote-read 的 input-only 足迹可行
@@ -394,7 +398,7 @@ class CausalHorizonEstimatorTest(unittest.TestCase):
     """M3 + 覆盖缺口：session→run→冷启动优先级 + 版本递增。"""
 
     def test_precedence_and_version(self):
-        estimator = CausalHorizonEstimator(cold_start_default_tokens=1)
+        estimator = CausalHorizonEstimator(cold_start_default_forward_steps=1)
         self.assertEqual(estimator.version, 0)
         self.assertEqual(estimator.estimate("a"), (1, "cold_start_default"))
         estimator.observe_completed("a", 7)          # run 1 样本
@@ -414,11 +418,16 @@ class CausalHorizonEstimatorTest(unittest.TestCase):
         scheduler = Sh30OnlineScheduler.__new__(Sh30OnlineScheduler)
         scheduler._snapshot_verify = False
         scheduler._joint_horizon = CausalHorizonEstimator(
-            cold_start_default_tokens=3)
+            cold_start_default_forward_steps=3)
         state = _OnlineInstanceState(index=0)
         state.snapshot_epoch = state.ledger_epoch
         state.snapshot_cache = object()
         state.snapshot_horizon_version = scheduler._joint_horizon.version
+        # N14（2026-09-30，§8.2/A08）：条件剩余长度估计器同为快照隐藏
+        # 输入，其版本一并入缓存命中条件——替身对齐该第二键（本用例
+        # 只验证 horizon 版本这一失效键，长度版本须先置为一致）。
+        state.snapshot_length_version = (
+            scheduler._joint_length_history_or_default().version)
         # 版本一致 → 命中缓存（同一对象）。
         self.assertIs(
             scheduler._task_load_snapshot(state, 0), state.snapshot_cache)
@@ -549,11 +558,18 @@ class ServiceFactorPurityTest(unittest.TestCase):
         scheduler._decode_task_load_cache = {}
         scheduler._task_load_cache_capacity = 128
         scheduler._joint_factors = ServiceFactors()
-        # M4：γ_prefill 桥接目标（face ServiceFactorGroup）——替身
-        # 补设同款真件（真实件可断言桥接后样本纯度语义不变）。
-        from joint.event_recursion_predictor import ServiceFactorGroup
-        scheduler.kv_manager = SimpleNamespace(
-            service_factors=ServiceFactorGroup())
+        # 纯度门跨请求 HBM 在册流查询直达 _hbm_ports——替身补设（F6：
+        # 漏设 = AttributeError，登记查询静默丢失已不可能）。
+        from joint.hbm_port_flow_registry import HbmPortFlowRegistry
+        scheduler._hbm_ports = HbmPortFlowRegistry()
+        # §8.1 单账本（2026-09-30 修复，取代 M4 桥接）：样本唯一更新点
+        # = 统一 recorder——替身补设同款真件（断言纯列车入样/排除语义
+        # 不变）；face γ 现经发布视图读同一账本，kv_manager 桩不再被
+        # _observe_service_factors 触碰。
+        from joint.history_estimator import (
+            PredictionParams, ServiceSampleRecorder)
+        scheduler._joint_service_samples = ServiceSampleRecorder(
+            PredictionParams())
         scheduler.runtime_by_request_id = {}
         return scheduler
 
@@ -570,15 +586,18 @@ class ServiceFactorPurityTest(unittest.TestCase):
             "members": [("r0", 2)], "had_joiners": False,
         }
         scheduler._observe_service_factors(state, train, 200)
-        self.assertEqual(scheduler._joint_factors.updates.get(
-            "decode_factor", 0), 0)
-        # 同型列车但成员为 stay → 收样（flush 后可见）。
+        self.assertEqual(scheduler._joint_service_samples.updates.get(
+            "decode", 0), 0)
+        # 同型列车但成员为 stay → 收样（flush 后可见）。span 取
+        # 2×roofline 基数（2 步共 1554ns）——D14 有效样本窗口
+        # 0<η≤1（除数口径 ratio ≥ 1）要求 span ≥ base，亚 roofline
+        # 样本会被记异常跳过、不再进 updates。
         scheduler.runtime_by_request_id["r0"] = _runtime(
             "r0", joint_action="stay")
-        scheduler._observe_service_factors(state, train, 300)
-        scheduler._joint_factors.flush()
-        self.assertEqual(scheduler._joint_factors.updates.get(
-            "decode_factor", 0), 1)
+        scheduler._observe_service_factors(state, train, 100 + 2 * 1554)
+        scheduler._joint_service_samples.flush()
+        self.assertEqual(scheduler._joint_service_samples.updates.get(
+            "decode", 0), 1)
 
     def test_transfer_gated_prefill_train_excluded(self):
         scheduler = self._scheduler()
@@ -593,13 +612,15 @@ class ServiceFactorPurityTest(unittest.TestCase):
         }
         gated = dict(base_train, history_transfer_gated=True)
         scheduler._observe_service_factors(state, gated, 200)
-        self.assertEqual(scheduler._joint_factors.updates.get(
-            "prefill_factor", 0), 0)
+        self.assertEqual(scheduler._joint_service_samples.updates.get(
+            "prefill", 0), 0)
+        # 纯列车 span 取 2×roofline 基数（512-token chunk = 47186ns，
+        # D14 有效窗口 ratio ≥ 1，同上）。
         pure = dict(base_train, history_transfer_gated=False)
-        scheduler._observe_service_factors(state, pure, 300)
-        scheduler._joint_factors.flush()
-        self.assertEqual(scheduler._joint_factors.updates.get(
-            "prefill_factor", 0), 1)
+        scheduler._observe_service_factors(state, pure, 100 + 2 * 47186)
+        scheduler._joint_service_samples.flush()
+        self.assertEqual(scheduler._joint_service_samples.updates.get(
+            "prefill", 0), 1)
 
 
 # ================================================== K2/K3 水印真实路径 ==
@@ -826,7 +847,7 @@ class RemoteBaseMergePricingTest(unittest.TestCase):
             history_bytes_by_tp_rank=(0, 0),
             missing_bytes_by_tp_rank=(5000, 5000))
         request = _request_view()
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=1,
             action="copy", remote_enabled=True)
         self.assertTrue(candidate.applicable)
@@ -840,7 +861,7 @@ class RemoteBaseMergePricingTest(unittest.TestCase):
         """LOCAL 基（跨实例）copy：执行端并集 ⊇ home 基础 → 零字节翻转
         （零传输零池写），不再有 NoC→home 增量回传计价。"""
         model = _model({0: _load(), 1: _load()})
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session_view(), request=_request_view(),
             instance_index=1, action="copy", remote_enabled=True)
         self.assertEqual(candidate.breakdown.merge_ns, 0)
@@ -885,6 +906,10 @@ class GrowthEvictionEmissionTest(unittest.TestCase):
         # 支路直达 _hbm_ports.register）。
         from joint.hbm_port_flow_registry import HbmPortFlowRegistry
         scheduler._hbm_ports = HbmPortFlowRegistry()
+        # §5.5（2026-09-30 修复）：kv_eviction 行的 θ 预测对账块经
+        # runtime_by_request_id 查询暂存预测——替身补同款初值（本场景
+        # 无 θ 预测 → 对账返回 None，行形态不变）。
+        scheduler.runtime_by_request_id = {}
         scheduler._quota_tracker = None  # off 档 __init__ 初值（F6 销账）
         scheduler._instance_edge_ports = {}
         return scheduler
@@ -899,6 +924,7 @@ class GrowthEvictionEmissionTest(unittest.TestCase):
         # 紧容量下 s 必须最后种入（先种的已完成会话是合法逐出 victim）。
         _seed(kv, "hog", 0, 300, 10, "human")
         kv._sessions["hog"].active = True
+        kv._refresh_capacity_summary(("hog",))  # D11 白盒重索引
         _seed(kv, "victim", 0, 10, 10, "human")
         _seed(kv, "s", 0, 2, 10, "human")
         runtime = _runtime("r0", session_id="s")
@@ -1064,7 +1090,7 @@ class RemoteBaseAtHomeMergePricingTest(unittest.TestCase):
             resident_prefix_layers=0,
             history_bytes_by_tp_rank=(0, 0),
             missing_bytes_by_tp_rank=(5000, 5000))
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=session, request=_request_view(),
             instance_index=0, action="copy", remote_enabled=True)
         self.assertTrue(candidate.applicable)
@@ -1084,7 +1110,7 @@ class GuardMessageEmbedsRecordsTest(unittest.TestCase):
         scheduler.kv_manager = _manager()
         scheduler._kv_ledger_epoch = 0
         scheduler._stalled_by_instance = {}
-        scheduler._batch = None
+        scheduler._batch = {"tick": 0}
         scheduler.online_log_count = 0
         scheduler.decision_log_sink = None
         scheduler.online_log_rows = []
@@ -1136,6 +1162,42 @@ class SidecarDumpFunctionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dump_joint_kv_ledgers(
                 scheduler, os.path.join(tmp, "again.json"))
+
+    def test_dump_includes_m4_measurement_keys(self):
+        # M4：restore_events（第五键）与 adaptive_decisions（第六键）随
+        # 台账侧车落盘（E/容量验证测量日志的消费面）。替身 kv_manager
+        # 漏设属性经 getattr 缺省空序列（不连坐、不 AttributeError）。
+        import tempfile
+        from online.online_service import dump_joint_kv_ledgers
+        kv = _manager()
+        kv.restore_events.append(
+            {"subject": "r#restore", "event": "issue", "at_ns": None})
+        kv.adaptive_decisions.append(
+            {"session_id": "s", "k_target": 4, "source": "recursion",
+             "statuses": [], "at_ns": 7})
+        scheduler = SimpleNamespace(kv_manager=kv)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "joint_kv_ledgers.json")
+            dump_joint_kv_ledgers(scheduler, path)
+            import json
+            data = json.load(open(path))
+        self.assertEqual(
+            data["restore_events"],
+            [{"subject": "r#restore", "event": "issue", "at_ns": None}])
+        self.assertEqual(
+            data["adaptive_decisions"],
+            [{"session_id": "s", "k_target": 4, "source": "recursion",
+              "statuses": [], "at_ns": 7}])
+        # 替身漏设两属性：键恒在、值为空序列（copy_handoff 同款兼容）。
+        bare = SimpleNamespace(
+            kv_manager=SimpleNamespace(deep_gap_events=[]))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "bare.json")
+            dump_joint_kv_ledgers(bare, path)
+            import json
+            data = json.load(open(path))
+        self.assertEqual(data["restore_events"], [])
+        self.assertEqual(data["adaptive_decisions"], [])
 
 
 class MissingBytesFailsTest(unittest.TestCase):

@@ -17,7 +17,9 @@ SimSendCaller::SimSendCaller(Sys* sys,
                              sim_request request,
                              void (*msg_handler)(void* fun_arg),
                              void* fun_arg,
-                             bool should_cleanup) {
+                             bool should_cleanup,
+                             std::optional<AstraNetworkAPI::LogicalFlowKey>
+                                 logical_key) {
     this->sys = sys;
     this->buffer = buffer;
     this->count = count;
@@ -28,12 +30,20 @@ SimSendCaller::SimSendCaller(Sys* sys,
     this->msg_handler = msg_handler;
     this->fun_arg = fun_arg;
     this->should_cleanup = should_cleanup;
+    this->logical_key = std::move(logical_key);
 }
 
 void SimSendCaller::call(EventType type, CallData* data) {
-    sys->comm_NI->sim_send(this->buffer, this->count, this->type, this->dst,
-                           this->tag, &this->request, this->msg_handler,
-                           this->fun_arg);
+    if (logical_key.has_value()) {
+        sys->comm_NI->sim_send_correlated(
+            this->buffer, this->count, this->type, this->dst, this->tag,
+            &this->request, this->msg_handler, this->fun_arg,
+            *logical_key);
+    } else {
+        sys->comm_NI->sim_send(this->buffer, this->count, this->type, this->dst,
+                               this->tag, &this->request, this->msg_handler,
+                               this->fun_arg);
+    }
     if (should_cleanup) {
         delete this;
     }

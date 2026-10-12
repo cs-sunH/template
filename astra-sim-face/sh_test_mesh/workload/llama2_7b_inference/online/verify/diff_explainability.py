@@ -160,12 +160,12 @@ def _load_run(run_dir):
         arrivals.extend((req["tick"], record["request_id"])
                         for record in req.get("arrivals") or [])
         for group in req.get("completed_groups") or []:
-            completions.setdefault(group["request_id"], {})[group["stage"]] = \
+            # 空/缺 stage = request-complete 边:单遍归位,不再先落 ""
+            # 残键再二遍遍历洗成 request_complete(旧双遍写法在
+            # completions 里残留空字符串 stage 键,污染逐 request 对平)。
+            stage = group.get("stage") or "request_complete"
+            completions.setdefault(group["request_id"], {})[stage] = \
                 req["tick"]
-        for group in req.get("completed_groups") or []:
-            if not group.get("stage"):
-                completions[group["request_id"]]["request_complete"] = \
-                    req["tick"]
         reasons += len(req.get("reasons") or [])
         _digest_request_excluding_summary(request_digest_excl_summary, req)
     if request_record_count == 0:
@@ -215,12 +215,15 @@ def _load_cpp_counters(cpp_log_path):
     with opener(cpp_log_path, "rt", encoding="utf-8", errors="replace") as source:
         text = source.read()
     counters = {}
-    delivery = re.search(r"\[online\] delivery_count=(\d+)", text)
-    if delivery:
-        counters["delivery_count"] = int(delivery.group(1))
-    event = re.search(r"\[online\] event_count=(\d+)", text)
-    if event:
-        counters["event_count"] = int(event.group(1))
+    # C++ 唯一门计数行是单行 "[online] gate counters: event_count=N
+    # delivery_count=M ..."(main_online.cc),前缀紧邻,旧的正则
+    # "\[online\] delivery_count=" / "\[online\] event_count=" 永不命中,
+    # 门计数对平静默失效(假绿)。按实际格式整行提取两个计数。
+    gate = re.search(r"\[online\] gate counters: "
+                     r"event_count=(\d+) delivery_count=(\d+)", text)
+    if gate:
+        counters["event_count"] = int(gate.group(1))
+        counters["delivery_count"] = int(gate.group(2))
     service = re.search(r"\[online\] service counters: accepted=(\d+) "
                         r"completed=(\d+) active=(\d+) pending_alarm=(\d+)",
                         text)
@@ -243,7 +246,8 @@ def classify_differences(baseline, sensing):
       categories:  {类别: 计数}
       differences: [ {类别, seq, request_id, 说明, 证据} ]
     无差异行不产出差异条目;仅差异行进入分类。"""
-    categories = {"无差异": 0, "真实完成事件时序": 0, "排队状态差异": 0}
+    categories = {"无差异": 0, "真实完成事件时序": 0, "排队状态差异": 0,
+                  "行数不一致(缺陷)": 0}
     differences = []
     bl = baseline["decision_log"]
     sn = sensing["decision_log"]
@@ -253,17 +257,21 @@ def classify_differences(baseline, sensing):
             categories["无差异"] += 1
             continue
         if idx >= len(bl) or idx >= len(sn):
+            # 行数对不上 = docstring 契约的缺陷级(退出码 1),不得归入
+            # "排队状态差异"冒充已归类差异(旧写法 defects 恒空、
+            # return 1 永不可达,报告恒绿)。
             row = bl[idx] if idx < len(bl) else sn[idx]
             request_id = row.get("request_id", "")
             differences.append({
-                "类别": "排队状态差异",
+                "类别": "行数不一致(缺陷)",
+                "缺陷": True,
                 "seq": idx,
                 "request_id": request_id,
                 "说明": "决策行数不一致(决策序列长度不同,感知开/关决策边界数"
                         "不同):baseline={} sensing={}".format(len(bl), len(sn)),
                 "证据": json.dumps(row, sort_keys=True),
             })
-            categories["排队状态差异"] += 1
+            categories["行数不一致(缺陷)"] += 1
             continue
         baseline_row = bl[idx]
         sensing_row = sn[idx]
@@ -325,13 +333,20 @@ def main(argv=None) -> int:
     baseline = _load_run(args.baseline_run)
     sensing = _load_run(args.sensing_run)
 
-    findings = []  # (级别, 条目, 证据);级别: PASS / INFO / DIFF / DEFECT
+    findings = []  # (级别, 条目, 证据);级别: PASS / DIFF / DEFECT
 
     # ---- 1. 决策行逐行对平 ----
     categories, differences = classify_differences(baseline, sensing)
     if differences:
         findings.append(("DIFF", "决策行差异",
                          "{} 条(见分类清单)".format(len(differences))))
+        for diff in differences:
+            if diff.get("缺陷"):
+                # 行数不一致/无法归类差异:显式 DEFECT 级,兑现 docstring
+                # 契约"1 = 存在无法归类的差异或行数对不上"。
+                findings.append(
+                    ("DEFECT", "决策行数不一致(行数对不上,契约缺陷级)",
+                     diff["说明"]))
     else:
         findings.append(("PASS", "决策行逐字节一致",
                          "{} 行 = 全部无差异".format(len(baseline["decision_log"]))))
@@ -435,9 +450,25 @@ def main(argv=None) -> int:
     if not differences and not diffs:
         verdict = "全部无差异:感知开/关决策序列逐字节一致,差异已全部归类并解释"
         ok = True
+    elif not defects and diffs and not differences:
+        # 决策行一致但载体摘要(digest/KV/完成事实)不一致:感知数据不进
+        # 决策判据,字节一致的决策序列不可能产生不同载体——无法归类的
+        # 差异 = 契约缺陷级,必须走差异出口(旧写法在此恒 exit 0 假绿)。
+        verdict = ("决策行一致但载体摘要不一致(无法归类的缺陷差异):"
+                   "{} 项载体维度不同".format(len(diffs)))
+        ok = False
     elif not defects:
-        verdict = ("差异均已归类并解释(无缺陷差异):决策差异 {} 条,其余载体"
-                   "差异均为设计内/事件时序类".format(len(differences)))
+        # (2026-10-01) 措辞修正:载体差异的成因随 categories 实际主导类别
+        # 而定,不再硬编码归因"完成事件时序"——旧文案在该归因不成立时
+        # 仍是断言式输出,误导读者。
+        # categories maps category name -> occurrence count.
+        top_categories = sorted(
+            (name for name in categories if categories[name] > 0),
+            key=lambda name: -categories[name]) if categories else []
+        lead = ("主导归类:{}".format(",".join(top_categories[:3]))
+                if top_categories else "无差异类别记录")
+        verdict = ("差异均已归类并解释(无缺陷差异):决策差异 {} 条,{}"
+                   .format(len(differences), lead))
         ok = True
     else:
         verdict = "存在无法归类的缺陷差异:{} 条".format(len(defects))
@@ -476,6 +507,9 @@ def _render(report_path, baseline, sensing, findings, categories,
     lines.append("| 排队状态差异 | {} | 决策输入(排队深度/KV 状态)在决策"
                  "tick 不同(本报告预期 0) |".format(
                      categories.get("排队状态差异", 0)))
+    lines.append("| 行数不一致(缺陷) | {} | 决策序列长度不同,无法逐行对平"
+                 "(docstring 契约:行数对不上 = 缺陷,退出 1) |".format(
+                     categories.get("行数不一致(缺陷)", 0)))
     lines.append("")
     lines.append("## 逐项比较")
     lines.append("")

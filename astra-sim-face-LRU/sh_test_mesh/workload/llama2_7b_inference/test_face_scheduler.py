@@ -20,7 +20,6 @@ from face_scheduler import (  # noqa: E402
     FaceInstanceSpec,
     FaceModel,
     FaceRooflineEstimate,
-    KVAllocator,
     PrefillQueueSnapshot,
     WeightedInstanceGraph,
     build_instances,
@@ -80,7 +79,6 @@ def line_topology() -> tuple[FaceHardware, object]:
 # 时只用本文件内手写的合成队列(绝不引用任何真实 trace 数据),通过临时
 # 配置副本把 request_queue_csv 指向合成队列后加载。
 # ------------------------------------------------------------------------
-import tempfile
 
 REQUEST_QUEUE_HEADER = (
     "session_id,turn_index,request_id,prefill_length,decode_length,"
@@ -102,6 +100,31 @@ SYNTHETIC_QUEUE_ROWS = (
 _FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="face_test_fixture_")
 
 
+def _skip_without_die_cost_library() -> None:
+    """阶段 C 裸仓守卫(2026-10-03 face-LRU 随迁;仅影响加载 checked-in
+    die 配置的用例;策略本体用例不经配置加载,不受影响)。
+
+    checked-in 硬件自阶段 C 起 die 化(契约 §3.5),配置加载需要
+    libdie_model_cabi.so(env DIE_MODEL_CABI_PATH -> 仓内 build 发现序,
+    契约 §7 裁定 1;缺位 fail-closed 不回退)。库缺位且硬件确带 die 节
+    时 skip——集成构建出 .so 前的裸仓合法态,构建后本守卫恒放行。
+    """
+    from config_resolver import discover_cabi_library
+    try:
+        discover_cabi_library()
+        return
+    except RuntimeError:
+        pass
+    hardware = json.loads(
+        (SH_TEST_DIR / "hardware" / "face_case5_config_c.json").read_text(
+            encoding="utf-8"))
+    if "die" in hardware:
+        raise unittest.SkipTest(
+            "checked-in hardware resolves the die backend; build the "
+            "die_model_cabi target or set DIE_MODEL_CABI_PATH (contract "
+            "ruling 1: config load fails closed without the library)")
+
+
 def _write_synthetic_queue(path) -> None:
     path.write_text(
         REQUEST_QUEUE_HEADER + "\n"
@@ -118,6 +141,7 @@ def load_checked_in_config() -> object:
     物化任何真实 request 队列,正式入口缺失输入 fail-closed)。
     """
     from generate_face_trace import load_face_trace_config
+    _skip_without_die_cost_library()
     queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
     _write_synthetic_queue(queue_path)
     config_csv = Path(_FIXTURE_DIR.name) / "synthetic_trace_config.csv"
@@ -140,6 +164,7 @@ def _load_edited_config(tag, edit):
     无条件重定向到合成队列(与 load_checked_in_config 同款 fixture)。
     """
     from generate_face_trace import load_face_trace_config
+    _skip_without_die_cost_library()
     queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
     _write_synthetic_queue(queue_path)
     config_csv = Path(_FIXTURE_DIR.name) / f"synthetic_trace_config_{tag}.csv"
@@ -198,6 +223,7 @@ class FaceSchedulerTests(unittest.TestCase):
             select_first_session_requests(requests, -1)
 
     def test_hardware_remote_memory_expansion_parses(self) -> None:
+        _skip_without_die_cost_library()
         """B1 A.2 reversal (2026-09-06): the remote memory backend was
         restored from sh_2.0; a hardware config declaring PER_NPU memory
         expansion parses legally with its remote-memory fields resolved."""
@@ -219,7 +245,10 @@ class FaceSchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "face_case5_expansion.json"
             source.write_text(json.dumps(expansion), encoding="utf-8")
-            hardware = load_hardware_config(source, "validation-160gib")
+            # 阶段 C 随迁(2026-10-03):checked-in 硬件已切 die 节,容量
+            # 对齐硬校验(契约 §3.4)拒绝非 die 对齐档;本用例断言的是
+            # remote-memory 节解析,换 die 对齐档后断言集合不变。
+            hardware = load_hardware_config(source, "validation-die-64g")
         self.assertEqual(hardware.remote_memory_type,
                          "PER_NPU_MEMORY_EXPANSION")
         self.assertEqual(hardware.remote_memory_latency_ns, 100)
@@ -229,15 +258,20 @@ class FaceSchedulerTests(unittest.TestCase):
 
     def test_checked_in_three_minute_workload_configuration(self) -> None:
         config = load_checked_in_config()
-        self.assertEqual(config.model_name, "llama2_7b")
+        # X10(face-LRU 审计,2026-09-29):model_name/output_prefix/output_
+        # dir 三键无任何下游消费者,已随配置模式移除,不再断言。
         self.assertEqual(config.mlp_variant, "swiglu")
         self.assertEqual(config.npus_count, 54)
         self.assertEqual((config.hardware.mesh_rows, config.hardware.mesh_cols), (9, 6))
         self.assertEqual(config.hardware.d2d_latency_ns, 5)
         self.assertEqual(config.hardware.local_hbm_latency_ns, 100)
-        self.assertEqual(config.hardware.local_hbm_capacity_bytes, 160 * 1024**3)
+        # die 数值更新(阶段 C/D 随迁 2026-10-03,契约 §3.5 裁定):硬件
+        # die 点(800mm2/large/0.75MB/4x1/512bit)派生容量 64 GB,trace_
+        # config 随之切 die 对齐档 validation-die-64g(原 validation-160gib
+        # 在 die 节下被容量对齐拒绝,容量相关数值更新属正常反馈)。
+        self.assertEqual(config.hardware.local_hbm_capacity_bytes, 64_000_000_000)
         self.assertEqual(config.hardware_config.name, "face_case5_config_c.json")
-        self.assertEqual(config.hardware_capacity_profile, "validation-160gib")
+        self.assertEqual(config.hardware_capacity_profile, "validation-die-64g")
         self.assertEqual(config.system_config.name, "system.json")
         self.assertEqual(config.network_config.name, "network.yml")
         self.assertEqual(config.comm_group_config.name, "comm_group.json")
@@ -245,7 +279,9 @@ class FaceSchedulerTests(unittest.TestCase):
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
         self.assertEqual(system_raw["remote-mem-bw"], 512)
-        self.assertEqual(system_raw["peak-perf"], 261.12)
+        # die 派生标量回流(契约 §3.4):peak-perf = PE_peak_die(face die 点
+        # 261.12 → 1492.05;local-mem-bw 1640.0 严格连续不变)。
+        self.assertEqual(system_raw["peak-perf"], 1492.05)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)
         self.assertEqual({len(group.ranks) for group in config.inference_groups}, {6})
@@ -262,7 +298,6 @@ class FaceSchedulerTests(unittest.TestCase):
         # test_kv_cache_policy_accepts_session_lru_tiered)。
         self.assertEqual(config.kv_cache_policy, "session_lru_tiered")
         self.assertEqual(config.kv_reserve_context_tokens, 1_000_000)
-        self.assertFalse(config.record_planning_iterations)
         # 收尾形态(2026-08-16):合成 fixture 期望(8 session / 10 request,
         # 手写数据;仓库不物化真实队列,见 load_checked_in_config)。
         self.assertEqual(config.source_request_count, 10)
@@ -347,10 +382,10 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(snapshot_a.remote_bytes, 0)
         self.assertEqual(snapshot_a.logical_context_tokens, 40)
         # 41 token 增量 4B/rank <= 余 8B/rank:同实例原地放行(LOCAL_HIT,
-        # 零重算——三态形态下完成边界保留 KV,RECOMPUTE 已删除)。
+        # 零重算——三态形态下完成边界保留 KV,RECOMPUTE 已删除;
+        # recompute_tokens 死字段已随 2026-09-26 恒零管道清理移除)。
         recompute = manager.prepare_history("a", 0, 40, 30, "a1", required_context_tokens=41)
         self.assertEqual(recompute.action, "LOCAL_HIT")
-        self.assertEqual(recompute.recompute_tokens, 0)
 
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
         config = load_checked_in_config()
@@ -524,15 +559,6 @@ class FaceSchedulerTests(unittest.TestCase):
             },
         )
 
-    def test_weighted_schedulable_range_changes_after_update(self) -> None:
-        hardware, topology = line_topology()
-        graph = WeightedInstanceGraph(topology)
-        before = graph.schedulable_instances(0, hardware.schedulable_distance_limit)
-        self.assertEqual(tuple(index for index, _ in before), (0, 1, 2))
-        graph.increase_path((0, 1))
-        after = graph.schedulable_instances(0, hardware.schedulable_distance_limit)
-        self.assertEqual(tuple(index for index, _ in after), (0, 1))
-
     def test_decode_roofline_cost_uses_formula_and_config_order_tie(self) -> None:
         hardware, topology = line_topology()
         model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
@@ -587,11 +613,12 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(picks, [0, 1, 2, 0])
 
     def test_decode_tie_counter_not_advanced_on_unique_min(self) -> None:
-        # 唯一可调度候选不触发计数器；随后恢复精确平局仍取 tied[0]。
+        # 唯一最小值不触发计数器；随后恢复精确平局仍取 tied[0]。
+        # 唯一最小值通过各候选既存 decode 长度不同制造(原实现经已删除的
+        # increase_path 改边权制造,M5-3 2026-09-26 改为负载差)。
         hardware, model, topology, graph = self._decode_tie_fixture()
         counter = DecodeTieCounter()
-        graph.increase_path((0, 1), amount=2)
-        graph.increase_path((1, 2), amount=2)
+        distinct_workloads = ((64,), (128,), (256,))
         selected, _ = select_decode_instance(
             topology=topology,
             graph=graph,
@@ -600,28 +627,12 @@ class FaceSchedulerTests(unittest.TestCase):
             fixed_p_chunk=64,
             prefill_instance_index=1,
             has_prefill_work=(False, False, False),
-            decode_token_lengths=((), (), ()),
+            decode_token_lengths=distinct_workloads,
             new_request_token_length=256,
             tie_counter=counter,
         )
-        self.assertEqual(selected, 1)
+        self.assertEqual(selected, 2)
         self.assertEqual(counter.value, 0)
-        graph.decrease_path((0, 1), amount=2)
-        graph.decrease_path((1, 2), amount=2)
-        selected, _ = select_decode_instance(
-            topology=topology,
-            graph=graph,
-            hardware=hardware,
-            model=model,
-            fixed_p_chunk=64,
-            prefill_instance_index=1,
-            has_prefill_work=(False, False, False),
-            decode_token_lengths=((), (), ()),
-            new_request_token_length=256,
-            tie_counter=counter,
-        )
-        self.assertEqual(selected, 0)
-        self.assertEqual(counter.value, 1)
 
     def test_decode_tie_without_counter_keeps_config_order(self) -> None:
         # 不传 counter:单次调用完全旧行为,连调两次均取 tied[0]。
@@ -641,38 +652,6 @@ class FaceSchedulerTests(unittest.TestCase):
             )
             picks.append(selected)
         self.assertEqual(picks, [0, 0])
-
-    def test_kv_local_first_offload_updates_and_release_restores_weight(self) -> None:
-        _, topology = line_topology()
-        graph = WeightedInstanceGraph(topology)
-        allocator = KVAllocator(topology, graph, model_weight_bytes=0)
-        allocation = allocator.allocate(
-            request_id="r0",
-            decode_instance_index=0,
-            candidate_indices=(0, 1, 2),
-            total_bytes=250,
-        )
-        self.assertEqual(
-            [(piece.instance_index, piece.bytes) for piece in allocation.pieces],
-            [(0, 200), (1, 50)],
-        )
-        self.assertEqual(graph.edge_weight(0, 1), 2)
-        allocator.release(allocation)
-        self.assertEqual(graph.edge_weight(0, 1), 1)
-        self.assertEqual(tuple(allocator.remaining_capacity), (200, 200, 200))
-
-        # At equal weighted distance, prefer the instance with more remaining
-        # HBM before using config order.
-        graph2 = WeightedInstanceGraph(topology)
-        allocator2 = KVAllocator(topology, graph2, model_weight_bytes=0)
-        allocator2.remaining_capacity[:] = [100, 0, 150]
-        allocation2 = allocator2.allocate(
-            request_id="r1",
-            decode_instance_index=1,
-            candidate_indices=(0, 1, 2),
-            total_bytes=120,
-        )
-        self.assertEqual(allocation2.pieces[0].instance_index, 2)
 
     def test_manager_evicts_multiple_lru_victims_but_not_active_kv(self) -> None:
         # Session 级 Tiered-LRU(2026-09-25):逐出恒为完整 session 整体

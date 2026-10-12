@@ -16,7 +16,7 @@ namespace AstraSim {
 class LogGP;
 class MemMovRequest : public Callable, public SharedBusStat {
   public:
-    MemMovRequest(int request_num,
+    MemMovRequest(int /*request_num*/,
                   Sys* sys,
                   LogGP* loggp,
                   uint64_t size,
@@ -30,8 +30,6 @@ class MemMovRequest : public Callable, public SharedBusStat {
     }
     void call(EventType event, CallData* data);
 
-    static int id;
-    int my_id;
     uint64_t size;
     int latency;
     Callable* callable;
@@ -48,7 +46,6 @@ class MemMovRequest : public Callable, public SharedBusStat {
     Tick total_processing_queue_time;
     Tick total_processing_time;
     Tick start_time;
-    int request_num;
 };
 
 }  // namespace AstraSim

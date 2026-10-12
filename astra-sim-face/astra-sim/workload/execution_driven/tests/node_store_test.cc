@@ -8,9 +8,10 @@ Exercises the three step-1-4 mechanisms (方案 §4 步骤 1-4) as a standalone
 test -- no network simulation, no baseline artifacts touched:
 
   Part A  NodeStore semantics: id assignment, dependency blocking/release,
-          mark_issued, finish_node idempotency, dead-parent edges, reverse
-          index (meta_for), pending_count.
-  Part B  NodeStoreGraphSource: store-backed dep_free_nodes / lookup /
+          mark_issued, finish_node idempotency, dead-parent edges, stored
+          reverse-index fields, unfinished count (observed through the
+          production injected-unfinished summary).
+  Part B  NodeStoreGraphSource: store-backed for_each_dep_free / lookup_ptr /
           take_node / finish_node delegation, no-auto-emit, static_all_done
           false (online authority belongs to the ServiceCoordinator).
   Part C  ETFeederGraphSource adapter: built over a real ETFeeder reading
@@ -25,10 +26,11 @@ test -- no network simulation, no baseline artifacts touched:
           grouping; finished nodes excluded; mark_issued moves the resource
           state from free to in-flight).
   Part E  M2 node GC (2026-08-23; the --online-node-gc CLI arm was removed
-          by the B.3 cleanup (2026-09-05) -- collection always on): quiescent-point
-          collection of finished childless nodes, parent retention while a
-          child is unfinished, dead-parent no-op onto erased ids, and the
-          gc-off (default) pre-M2 never-erase behavior.
+          by the B.3 cleanup (2026-09-05); collection stays default OFF per
+          store and is enabled explicitly via set_gc_enabled(true)):
+          quiescent-point collection of finished childless nodes, parent
+          retention while a child is unfinished, dead-parent no-op onto
+          erased ids, and the gc-off (default) pre-M2 never-erase behavior.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_NodeStoreTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -68,12 +70,27 @@ bool contains(const std::vector<uint64_t>& ids, uint64_t id) {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
+// Live-path free-set read: the production issue pass consumes the store
+// through fill_free_node_snapshot (non-consuming, ascending ids).
+std::vector<uint64_t> free_ids_via_snapshot(const NodeStore& store) {
+    std::vector<uint64_t> ids;
+    store.fill_free_node_snapshot(ids);
+    return ids;
+}
+
+// Live-path unfinished count: the phase-3 sensing summary counts exactly
+// the committed-but-not-terminal records.
+size_t unfinished_via_summary(const NodeStore& store) {
+    return store.injected_unfinished_summary(0).node_count;
+}
+
 // ---------------------------------------------------------------- Part A --
 // NodeStore unit semantics.
 void test_node_store() {
     NodeStore store;
-    expect(store.empty(), "A: empty() initially true");
-    expect(store.pending_count() == 0, "A: pending_count() initially 0");
+    expect(store.retained_count() == 0, "A: store initially empty");
+    expect(unfinished_via_summary(store) == 0,
+           "A: unfinished count initially 0");
 
     OnlineNode n;
     n.kind = NodeKind::Compute;
@@ -83,14 +100,15 @@ void test_node_store() {
     expect(id1 == 1 && id2 == 2, "A: add_node assigns 1, 2");
     expect(store.next_auto_id() == 3,
            "A: next_auto_id exposes the following automatic id");
-    expect(!store.empty(), "A: non-empty after adds");
-    expect(store.pending_count() == 2, "A: pending_count() == 2");
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2}),
+    expect(store.retained_count() != 0, "A: non-empty after adds");
+    expect(unfinished_via_summary(store) == 2,
+           "A: unfinished count == 2");
+    expect(free_ids_via_snapshot(store) == std::vector<uint64_t>({1, 2}),
            "A: both nodes free, ascending");
     std::vector<uint64_t> free_snapshot = {99};
     store.fill_free_node_snapshot(free_snapshot);
-    expect(free_snapshot == std::vector<uint64_t>({1, 2}),
-           "A: caller-owned free snapshot matches resolve_free_nodes");
+    expect(free_snapshot == free_ids_via_snapshot(store),
+           "A: caller-owned free snapshot matches the free set");
 
     OnlineNode m;
     m.global_id = 7;
@@ -101,73 +119,60 @@ void test_node_store() {
     expect(store.add_node(m) == 7, "A: explicit global_id kept");
     expect(store.next_auto_id() == 8,
            "A: explicit global_id advances the following automatic id");
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2, 7}),
+    expect(free_ids_via_snapshot(store) ==
+               std::vector<uint64_t>({1, 2, 7}),
            "A: free set ascending incl. 7");
-    const auto rec = store.node(7);
-    expect(rec.has_value() && rec->kind == NodeKind::Metadata,
-           "A: node() returns stored record");
-    const auto meta = store.meta_for(7);
-    expect(meta.has_value() && meta->request_id == "req-7" &&
-               meta->stage == "prefill" && meta->generation == 3,
-           "A: meta_for returns reverse index");
-    expect(!store.meta_for(999).has_value(), "A: meta_for miss is nullopt");
-    expect(!store.node(999).has_value(), "A: node() miss is nullopt");
+    const OnlineNode* rec = store.node_ptr(7);
+    expect(rec != nullptr && rec->kind == NodeKind::Metadata,
+           "A: node_ptr returns the stored record");
+    expect(rec != nullptr && rec->request_id == "req-7" &&
+               rec->stage == "prefill" && rec->generation == 3,
+           "A: stored record carries the reverse index");
+    expect(store.node_ptr(999) == nullptr,
+           "A: unknown id has no stored record");
 
     // Dependency: child added after parent -> child leaves the free set.
     store.add_dependency(1, 7, DepKind::Data);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2}),
+    expect(free_ids_via_snapshot(store) == std::vector<uint64_t>({1, 2}),
            "A: child with recorded parent is not free");
-    expect(store.node(7).has_value(), "A: blocked child still stored");
+    expect(store.node_ptr(7) != nullptr, "A: blocked child still stored");
 
     // mark_issued consumes; idempotent; unknown ids ignored.
     store.mark_issued(1);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({2}),
+    expect(free_ids_via_snapshot(store) == std::vector<uint64_t>({2}),
            "A: mark_issued removes from free set");
     store.mark_issued(1);
     store.mark_issued(999);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({2}),
+    expect(free_ids_via_snapshot(store) == std::vector<uint64_t>({2}),
            "A: mark_issued idempotent / unknown-id no-op");
 
     // finish_node is the only dependency-release entry; idempotent.
     store.finish_node(1);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({2, 7}),
+    expect(free_ids_via_snapshot(store) == std::vector<uint64_t>({2, 7}),
            "A: finish_node frees the child");
     store.finish_node(1);
-    expect(store.resolve_free_nodes() == std::vector<uint64_t>({2, 7}),
+    expect(free_ids_via_snapshot(store) == std::vector<uint64_t>({2, 7}),
            "A: finish_node idempotent (no double release)");
 
     // Dead-parent edge: parent already finished -> child stays free.
     const uint64_t idc = store.add_node(n);
     store.finish_node(idc);
     const uint64_t idd = store.add_node(n);
-    store.add_dependency(idc, idd, DepKind::Control);
-    expect(contains(store.resolve_free_nodes(), idd),
+    store.add_dependency(idc, idd, DepKind::Data);
+    expect(contains(free_ids_via_snapshot(store), idd),
            "A: edge to finished parent does not block child");
 
-    // DepKind is accepted and stored per edge (all resolve identically in
-    // the first version; documented in NodeStore.hh).
-    OnlineNode fence_a;
-    fence_a.name = "fence-a";
-    OnlineNode fence_b;
-    fence_b.name = "fence-b";
-    const uint64_t fa = store.add_node(fence_a);
-    const uint64_t fb = store.add_node(fence_b);
-    store.add_dependency(fa, fb, DepKind::Enabled);
-    expect(!contains(store.resolve_free_nodes(), fb),
-           "A: Enabled edge blocks like the others (first version)");
-    store.finish_node(fa);
-    expect(contains(store.resolve_free_nodes(), fb),
-           "A: Enabled edge releases on finish");
-
-    // 7 nodes stored so far (1, 2, 7, 3=idc, 4=idd, 5=fa, 6=fb);
-    // finished so far: 1, 3, 5 -> 4 pending.
-    expect(store.pending_count() == 4, "A: pending_count() == 4");
+    // 5 nodes stored so far (1, 2, 7, 8=idc, 9=idd -- the explicit
+    // global_id=7 advanced the auto counter past 7, so the two automatic
+    // ids are 8..9, matching next_auto_id()==8 asserted above); finished
+    // so far: 1, 8 -> 3 unfinished.
+    expect(unfinished_via_summary(store) == 3,
+           "A: unfinished count == 3");
     store.finish_node(2);
     store.finish_node(7);
     store.finish_node(idd);
-    store.finish_node(fb);
-    expect(store.pending_count() == 0,
-           "A: pending_count() 0 after all finishes");
+    expect(unfinished_via_summary(store) == 0,
+           "A: unfinished count 0 after all finishes");
 
     // Online terminal delivery is a single-fire transition.  It must reject
     // unknown and not-yet-issued ids before any Statistics/observer side
@@ -188,7 +193,8 @@ void test_node_store() {
 
 // ---------------------------------------------------------------- Part E --
 // M2 node GC (2026-08-23; B.3 cleanup 2026-09-05 removed the --online-node-gc
-// CLI arm -- collection always on): finished childless nodes are
+// CLI arm; NodeStore::gc_enabled_ defaults to false and the tests below opt
+// in via set_gc_enabled(true)): finished childless nodes are
 // erased at the quiescent collect_garbage() point (never inside
 // finish_node); a parent is retained while any child is unfinished and is
 // collected by the last child's finish; edges onto an erased (i.e. already
@@ -203,7 +209,7 @@ void test_node_gc() {
     const uint64_t off_id = off_store.add_node(n);
     off_store.finish_node(off_id);
     off_store.collect_garbage();
-    expect(off_store.node(off_id).has_value(),
+    expect(off_store.node_ptr(off_id) != nullptr,
            "E: gc off keeps finished nodes (pre-M2 behavior)");
     expect(off_store.gc_erased_count() == 0, "E: gc off erases nothing");
 
@@ -214,14 +220,15 @@ void test_node_gc() {
     store.set_gc_enabled(true);
     const uint64_t a = store.add_node(n);
     store.finish_node(a);
-    expect(store.node(a).has_value(),
+    expect(store.node_ptr(a) != nullptr,
            "E: finish_node itself never erases");
     store.collect_garbage();
-    expect(!store.node(a).has_value(),
+    expect(store.node_ptr(a) == nullptr,
            "E: childless finished node erased at collect_garbage");
     expect(store.erased(a), "E: erased() observes the collection");
     expect(store.gc_erased_count() == 1, "E: gc_erased_count tracked");
-    expect(store.pending_count() == 0, "E: pending_count unaffected");
+    expect(unfinished_via_summary(store) == 0,
+           "E: unfinished count unaffected");
 
     // Chain: the parent is retained while its child is unfinished; the
     // child's finish re-enqueues it and one collect removes both.
@@ -230,20 +237,20 @@ void test_node_gc() {
     store.add_dependency(p, c, DepKind::Data);
     store.mark_issued(p);
     store.finish_node(p);
-    expect(contains(store.resolve_free_nodes(), c),
+    expect(contains(free_ids_via_snapshot(store), c),
            "E: child freed by the parent finish (unaffected by GC)");
     store.collect_garbage();
-    expect(store.node(p).has_value(),
+    expect(store.node_ptr(p) != nullptr,
            "E: parent retained while its child is unfinished");
     store.finish_node(c);
     store.collect_garbage();
-    expect(!store.node(p).has_value() && !store.node(c).has_value(),
+    expect(store.node_ptr(p) == nullptr && store.node_ptr(c) == nullptr,
            "E: chain collected after the last child finishes");
 
     // Erased => finished: the dead-parent no-op is preserved.
     const uint64_t late = store.add_node(n);
     store.add_dependency(p, late, DepKind::Data);
-    expect(contains(store.resolve_free_nodes(), late),
+    expect(contains(free_ids_via_snapshot(store), late),
            "E: edge onto an erased (finished) parent does not block");
     store.finish_node(p);  // finish of an erased id: still a no-op
     expect(store.retained_count() == 1, "E: only the late node remains");
@@ -254,7 +261,13 @@ void test_node_gc() {
 // NodeStoreGraphSource delegation.
 void test_node_store_graph_source() {
     NodeStoreGraphSource src;
-    expect(src.dep_free_nodes().empty(), "B: empty source yields no nodes");
+    auto collect_free = [](NodeStoreGraphSource& source) {
+        std::vector<uint64_t> ids;
+        source.for_each_dep_free(
+            [&](const NodeView& view) { ids.push_back(view.global_id); });
+        return ids;
+    };
+    expect(collect_free(src).empty(), "B: empty source yields no nodes");
 
     OnlineNode x;
     x.global_id = 5;
@@ -263,31 +276,31 @@ void test_node_store_graph_source() {
     x.request_id = "req-5";
     src.store().add_node(x);
 
-    auto views = src.dep_free_nodes();
-    expect(views.size() == 1 && views[0].global_id == 5 &&
-               views[0].comm.bytes == 42,
-           "B: store-backed dep_free_nodes returns the view");
-    expect(!src.dep_free_nodes().empty(),
-           "B: dep_free_nodes is non-consuming");
-    const auto looked = src.lookup(5);
-    expect(looked.has_value() && looked->request_id == "req-5",
-           "B: lookup returns the view");
-    expect(!src.lookup(6).has_value(), "B: lookup miss is nullopt");
+    const auto free_ids = collect_free(src);
+    expect(free_ids.size() == 1 && free_ids[0] == 5,
+           "B: store-backed issue pass yields the view");
+    expect(!collect_free(src).empty(),
+           "B: the free-set read is non-consuming");
+    const NodeView* looked = src.lookup_ptr(5);
+    expect(looked != nullptr && looked->request_id == "req-5" &&
+               looked->comm.bytes == 42,
+           "B: lookup_ptr returns the view");
+    expect(src.lookup_ptr(6) == nullptr, "B: lookup miss is null");
 
     src.take_node(5);
-    expect(src.dep_free_nodes().empty(), "B: take_node consumes");
+    expect(collect_free(src).empty(), "B: take_node consumes");
     src.take_node(5);  // idempotent
     src.finish_node(5);
     src.finish_node(5);  // idempotent
-    expect(src.dep_free_nodes().empty(), "B: finished node stays consumed");
+    expect(collect_free(src).empty(), "B: finished node stays consumed");
 
     // Child added after the parent finished: edge recorded, child free.
     OnlineNode y;
     y.global_id = 8;
     src.store().add_node(y);
     src.store().add_dependency(5, 8, DepKind::Data);
-    views = src.dep_free_nodes();
-    expect(views.size() == 1 && views[0].global_id == 8,
+    const auto freed = collect_free(src);
+    expect(freed.size() == 1 && freed[0] == 8,
            "B: edge to finished parent does not block");
 
     // Online-mode invariants: no ETFeederNode handle, never static-done, and
@@ -296,7 +309,7 @@ void test_node_store_graph_source() {
     expect(src.et_node(8) == nullptr, "B: online source has no et node");
     expect(!src.static_all_done(), "B: online source is never static-done");
     src.finish_node(8);
-    expect(src.dep_free_nodes().empty(), "B: no auto-emit after finish");
+    expect(collect_free(src).empty(), "B: no auto-emit after finish");
 
     // for_each_dep_free must retain a snapshot while its callback releases a
     // child: that child belongs to the next pass, not this traversal.
@@ -501,12 +514,9 @@ void test_et_feeder_graph_source(const std::string& et_path) {
            "C: static_all_done when free and ongoing are both empty");
     expect(src.dep_free_nodes().empty(), "C: no free nodes after all taken");
 
-    // lookup / et_node handles after the lifecycle.
-    const auto looked = src.lookup(1);
-    expect(looked.has_value() && looked->compute.num_ops == 10000,
-           "C: lookup after finish still returns the view");
-    expect(!src.lookup(42).has_value(),
-           "C: lookup miss is nullopt (legacy not-found throws as miss)");
+    // D1 (2026-09-28): the test-only GraphSource::lookup by-value API was
+    // removed; the production read paths are lookup_ptr / dep_free_nodes.
+    // et_node handle after the lifecycle.
     const auto etn = src.et_node(1);
     expect(etn != nullptr && etn->id() == 1,
            "C: et_node returns the ETFeederNode handle");
@@ -532,12 +542,24 @@ int main(int argc, char* argv[]) {
     test_node_store_graph_source();
     test_injected_unfinished_summary();
     if (et_path.empty()) {
+        // R4-N1 fix (2026-09-29): only part C needs the materialized
+        // fixture ET; the hermetic parts (A/B/D) fully pass without it, so
+        // the no-arg invocation is a PASS with the part-C skip printed --
+        // which is what lets this test register in ctest (the previous
+        // shape printed SKIP and then returned 1, making a plain
+        // registration a permanently red gate). The manual part-C recipe
+        // stays documented in the source header.
         std::fprintf(stderr,
                      "[node_store_test] SKIP part C (no --fixture-et given); "
                      "run make_completion_fixture_et.py first\n");
-        std::fprintf(stderr,
-                     "[node_store_test] FAIL: --fixture-et is required\n");
-        return 1;
+        if (!g_ok) {
+            std::fprintf(stderr,
+                         "[node_store_test] FAIL: see messages above\n");
+            return 1;
+        }
+        std::printf("[node_store_test] ALL PASS (hermetic parts A/B/D; "
+                    "part C skipped -- needs --fixture-et)\n");
+        return 0;
     }
     test_et_feeder_graph_source(et_path);
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test_kv_transfer_emission.py -- B3(2026-09-06)KV 转移发射钉子测试。
 
-照抄 sh_2.0 test_graph_batch_builder.py:388-460(流水锁定)并适配本仓
+照抄 sh_2.0 仓 test_graph_batch_builder.py 的流水锁定用例(按用例名对应,非本仓同名文件)并适配本仓
 P/D 分离发射骨架,另钉 remote_store/remote_load/noc_migrate 三链的
 HBM 计费键(策略文档 §9 地图,计费三险逐节点核对):
 
@@ -431,8 +431,11 @@ class RemoteRestoreEmissionTest(unittest.TestCase):
             self.builder.emit_prefill_batch(plan)
 
     def test_partial_history_action_fails_closed(self):
-        """PARTIAL 消费侧不可达:携带 legacy PARTIAL 迁移对象/动作的
-        合成 plan 直接被拒(多于一段的恢复)。"""
+        """PARTIAL 消费侧不可达:发射侧唯一拒绝触发器是恢复段数 >1
+        (graph_batch_builder emit 段 len(history_transfers) > 1 →
+        RuntimeError "history must carry at most one transfer");动作
+        字符串本身不在发射侧校验域内。本用例以双段合成 plan 触发该
+        fail-closed 门,锁定"无多段恢复"语义。"""
         plan = _prefill_plan(
             turn_index=1,
             history_action="PARTIAL_MIGRATE", history_source=1,
@@ -480,7 +483,13 @@ class HistoryEvictionTriggerTest(unittest.TestCase):
     def test_turn1_history_eviction_uses_pending_gate(self):
         builder = GraphBatchBuilder(_make_config())
         builder.begin_batch()
-        plan = _prefill_plan(turn_index=1, history_action=None)
+        # 2026-10-01 审查修正:_emit_prelim 的无传输分支在 turn>0 已
+        # fail-closed(生产 PD 分离下 turn>0 恒带恰一段迁移/恢复传输),
+        # 本替身 plan 同步携带一段 REMOTE_RESTORE 恢复传输;用例目标
+        # (逐出触发门消费 interval 门)不受影响。
+        plan = _prefill_plan(
+            turn_index=1, history_action=None,
+            history_transfers=(_full_load_transfer(),))
         plan["history_evictions"] = (self._store_transfer(),)
         builder.completion_gates[SESSION] = (
             1, {rank: None for rank in DECODE_RANKS})

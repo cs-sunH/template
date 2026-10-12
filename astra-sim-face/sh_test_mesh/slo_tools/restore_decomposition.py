@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""WP5 restore 三段分解（五仓逐字节相同，标准库实现）。
+"""WP5 restore 三段分解（同源变体族——各仓存在登记的预期差异，勿跨仓
+直接覆盖同步；标准库实现）。
 
 输入 = cpp.log（full 档；经 slo_common.resolve_cpp_metric_log 统一回退：
 cpp.log → metrics.log → cpp.log.gz，归档后的 run_dir 同样可用）：``[METRIC]``
@@ -88,7 +89,8 @@ def scan_metric_anchors_requests(cpp_log: Path
             anchors.setdefault(subject, []).append(tick)
         elif rtype == "request":
             queue_index = record.get("queue_index")
-            if not isinstance(queue_index, int):
+            if not isinstance(queue_index, int) or isinstance(
+                    queue_index, bool):
                 fail(f"{cpp_log}: request 记录缺整数 queue_index（{record}）")
             requests[queue_index] = {
                 "queue_index": queue_index,
@@ -118,6 +120,7 @@ def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
     n_no_anchor = 0
     n_no_boundary = 0
     n_zero_duration = 0
+
     for queue_index in sorted(requests):
         info = requests[queue_index]
         ticks = anchors.get(queue_index)
@@ -164,6 +167,11 @@ def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
             "exposed_restore_stall_ns": exposed,
             "hidden_ratio": ratio,
         })
+    # 孤儿锚点（subject_id 无对应 request 记录）被丢弃时必须留痕：请求侧
+    # NA 已有 n_no_anchor_na 计数，锚点侧静默消失会让两侧对不上账。
+    n_orphan_anchor_records = sum(
+        len(ticks) for subject, ticks in anchors.items()
+        if subject not in requests)
     summary = {
         "n_requests": len(rows),
         "n_with_anchors": sum(1 for r in rows
@@ -171,6 +179,7 @@ def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
         "n_no_anchor_na": n_no_anchor,
         "n_missing_prefill_boundary_na": n_no_boundary,
         "n_zero_restore_duration_na_ratio": n_zero_duration,
+        "n_orphan_anchor_records_dropped": n_orphan_anchor_records,
         "formula_source": "主规格 §3.2（A 类固定公式，逐字符实现）",
         "anchor_semantics": "restore_start=min(anchor ticks), "
                             "restore_complete=max(anchor ticks), "

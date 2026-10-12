@@ -367,16 +367,39 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                             manifest_path + ": " + e.what());
     }
 
-    this->schema_version_ = manifest.value("schema_version", 0);
+    // B9 fix (2026-09-28): manifest.value<T>() throws json::type_error on a
+    // type-malformed field, and these top-level scalars sit before every
+    // other guard -- the throw used to escape as an uncaught exception
+    // (terminate, no [METRIC][ERROR] line, buffered records lost). Route it
+    // through the fatal_metrics_error channel like every other malformed
+    // manifest field.
+    try {
+        this->schema_version_ = manifest.value("schema_version", 0);
+        this->repo_variant_ = manifest.value("repo_variant", "unknown");
+        this->run_mode_ = manifest.value("run_mode", "service");
+        this->run_id_ = manifest.value("run_id", "");
+    } catch (const std::exception& e) {
+        fatal_metrics_error("malformed metrics manifest scalar field in " +
+                            manifest_path + ": " + e.what());
+    }
     if (this->schema_version_ != 1) {
         // Doc sec.12.1: unsupported schema versions must be rejected.
         fatal_metrics_error(
             "unsupported metrics manifest schema_version: " +
             std::to_string(this->schema_version_) + " (expected 1)");
     }
-    this->repo_variant_ = manifest.value("repo_variant", "unknown");
-    this->run_mode_ = manifest.value("run_mode", "service");
-    this->run_id_ = manifest.value("run_id", "");
+    // Optional manifest fields: absence is a legal state for every field
+    // below -- synthetic-prerun manifests legitimately omit them (the
+    // Python reader, metrics_schema.py, tolerates a missing npus_count /
+    // digests the same way), and each consumer (the init-record echo, the
+    // npus_count consistency self-audit) is written for the has-value
+    // case. The is_string()/is_number() gates therefore also let a
+    // present-but-wrong-typed value pass through as absent: this C++
+    // reader deliberately never fails the run on an optional diagnostic
+    // field. That tolerance face is wider than the Python reader's (which
+    // rejects a wrong-typed present field); a malformed manifest shows up
+    // downstream as the missing echo / skipped self-audit, not as an
+    // error here.
     if (manifest.contains("npus_count") && manifest["npus_count"].is_number()) {
         this->manifest_npus_count_ =
             manifest["npus_count"].get<int64_t>();
@@ -471,8 +494,16 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                 state.arrival.kind = ArrivalSpec::Kind::AFTER_REQUEST;
                 state.arrival.parent_queue_index =
                     arrival.at("parent_queue_index").get<int64_t>();
-                state.arrival.interval_ns =
-                    arrival.at("interval_ns").get<Tick>();
+                // Same signed-domain guard as the absolute branch above: a
+                // negative interval_ns would silently wrap when narrowed to
+                // Tick (uint64_t) and poison the resolved arrival/e2e.
+                const int64_t interval_ns =
+                    arrival.at("interval_ns").get<int64_t>();
+                if (interval_ns < 0) {
+                    fatal_metrics_error("negative arrival interval_ns: " +
+                                        std::to_string(interval_ns));
+                }
+                state.arrival.interval_ns = static_cast<Tick>(interval_ns);
             } else {
                 fatal_metrics_error("unknown arrival kind: " + kind);
             }
@@ -512,8 +543,21 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                     it.key());
             }
         } catch (const std::exception&) {
-            fatal_metrics_error("non-integer rank key in node_events_by_rank: "
-                                + it.key());
+            // R2-1 fix (2026-09-28): this handler used to evaluate it.key()
+            // itself, which throws json::invalid_iterator a second time when
+            // node_events_by_rank is a scalar (its single-element primitive
+            // iterator has no key) or an array, and that second throw escaped
+            // the handler and load_manifest -> std::terminate, bypassing the
+            // [METRIC][ERROR] fail-closed channel. Gate the key read on
+            // objectness (key() cannot throw on an object iterator) and fall
+            // back to the container's type_name(), which never throws.
+            fatal_metrics_error(
+                "non-integer rank key in node_events_by_rank: " +
+                (events_by_rank.is_object()
+                     ? it.key()
+                     : std::string("(node_events_by_rank is ") +
+                           events_by_rank.type_name() +
+                           ", not an object)"));
         }
         for (const auto& triple : it.value()) {
             if (!triple.is_array() || triple.size() != 3) {
@@ -521,25 +565,41 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                     "node event must be a [node_id, event_code, subject_id] "
                     "triple");
             }
+            // S1 fix (2026-09-28): the same B9 shape one level down -- the
+            // shape check above only validates arrayness and arity, so a
+            // triple element of the wrong JSON type still throws
+            // json::type_error, which used to escape load_manifest as an
+            // uncaught exception (terminate, no [METRIC][ERROR] line).
+            // Route it through the fatal_metrics_error channel like every
+            // other malformed manifest field.
+            int64_t node_id_wide = 0;
+            int64_t event_code_wide = 0;
+            int64_t subject_id = 0;
+            try {
+                node_id_wide = triple[0].get<int64_t>();
+                event_code_wide = triple[1].get<int64_t>();
+                subject_id = triple[2].get<int64_t>();
+            } catch (const std::exception& e) {
+                fatal_metrics_error(
+                    std::string("malformed node event triple in ") +
+                    manifest_path + ": " + e.what());
+            }
             // Validate in the wide int64 domain BEFORE narrowing: an event
             // code like 256 wraps to a legal-looking uint8_t and a negative
             // node id wraps to a huge uint64_t, so both must be rejected at
             // full width (a wrapped code would silently attach the metric to
             // the wrong event edge).
-            const int64_t node_id_wide = triple[0].get<int64_t>();
             if (node_id_wide < 0) {
                 fatal_metrics_error("negative node id in node event: " +
                                     std::to_string(node_id_wide));
             }
             const uint64_t node_id = static_cast<uint64_t>(node_id_wide);
-            const int64_t event_code_wide = triple[1].get<int64_t>();
             if (event_code_wide < 1 || event_code_wide > 8) {
                 fatal_metrics_error("invalid node event code: " +
                                     std::to_string(event_code_wide));
             }
             const uint8_t event_code =
                 static_cast<uint8_t>(event_code_wide);
-            const int64_t subject_id = triple[2].get<int64_t>();
             NodeMetricEvent event{event_code, subject_id};
             const bool is_issue_edge =
                 (event_code ==
@@ -576,7 +636,10 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                 entry.value("resident_kv_delta_bytes", int64_t(0));
             action.reserved_kv_delta_bytes =
                 entry.value("reserved_kv_delta_bytes", int64_t(0));
-            action.cause = entry.value("cause", std::string(""));
+            // (2026-10-01) the manifest "cause" column is deliberately NOT
+            // parsed into a member: nothing on the C++ side ever read it
+            // (the write-only store was removed); downstream consumers that
+            // need it read the manifest directly.
         } catch (const std::exception& e) {
             fatal_metrics_error(std::string("malformed memory action in ") +
                                 manifest_path + ": " + e.what());
@@ -713,8 +776,11 @@ void MetricCollector::apply_event(const NodeMetricEvent& event, int rank,
     }
     case EventCode::ITERATION_START_ISSUE:
     case EventCode::ITERATION_END_COMPLETE: {
+        // (2026-10-01) the former `state.benchmark_point_id = subject_id`
+        // write-only mirror of the map key was removed (finalize reads the
+        // key; the similarly named MicrobenchPointSpec field is a different
+        // struct).
         IterationMetricState& state = this->iterations_[event.subject_id];
-        state.benchmark_point_id = event.subject_id;
         if (code == EventCode::ITERATION_START_ISSUE) {
             if (!state.iteration_start.has_value() ||
                 tick < state.iteration_start.value()) {
@@ -768,7 +834,7 @@ void MetricCollector::on_compute_issue(int rank, uint64_t num_ops,
 // ---------------------------------------------------------------------------
 // Phase-7 §10.3: online dynamic anchor registration (see the header comment).
 // All entry points no-op when metrics are disabled; none of them touches the
-// static manifest path (the static main never calls them).
+// static manifest path (there is no static main anymore to call them).
 // ---------------------------------------------------------------------------
 
 void MetricCollector::online_register_request(
@@ -803,7 +869,15 @@ void MetricCollector::online_register_request(
     // the arrival/session fields; overwrite them (the manifest values are
     // planner-side, the CSV row is the actual online input).
     RequestMetricState& state = this->requests_[existing->second];
+    // (2026-09-30, R2 audit) If the same queue_index re-registers under a
+    // DIFFERENT request_id, the old id's reverse mapping used to survive as
+    // a stale alias that could still route anchor registrations to this
+    // request. Drop it when the id changes.
+    const std::string previous_request_id = state.request_id;
     state.request_id = request_id;
+    if (previous_request_id != request_id) {
+        this->request_index_by_request_id_.erase(previous_request_id);
+    }
     state.session_id = session_id;
     state.turn_index = turn_index;
     state.arrival.kind = absolute_arrival ? ArrivalSpec::Kind::ABSOLUTE
@@ -1092,10 +1166,11 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         record["total_num_ops"] = u128_to_string(rank_state.total_num_ops);
         record["total_local_bytes"] =
             u128_to_string(rank_state.total_local_bytes);
-        // face has no local HBM restore model, so this stays 0 (kept for
-        // cross-repo [METRIC] output schema stability).
-        record["local_hbm_restore_bytes"] =
-            rank_state.local_hbm_restore_bytes;
+        // face has no local HBM restore model, so this stays 0.  Kept as a
+        // constant for cross-repo [METRIC] output schema stability: the
+        // sister repos emit this key on every rank row (review
+        // 2026-09-26 C3/cpp-workload-3 cross-repo disposition).
+        record["local_hbm_restore_bytes"] = 0;
 
         // achieved_compute_util = sum(num_ops) / (peak_flops * window_s)
         // (doc sec.3.7). Hardware constants come from the parsed system
@@ -1168,6 +1243,68 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             record["active_kernel_roofline_note"] =
                 "unavailable: roofline model disabled";
         }
+
+        // Die-backend active-kernel utilization (stage E2, contract §7.6
+        // caliber): the same duration-weighted window aggregation as the
+        // roofline pair above, populated by DieExecution::fill_utilizations
+        // -- compute = PE FLOP / (PE_peak_die * node elapsed), memory =
+        // actual bytes / (B_mem * node elapsed), vector = eq-ops /
+        // (V_peak * node elapsed).  Gated on the die backend itself (the
+        // roofline keys above keep their own legacy gate untouched), so a
+        // legacy run reports them null with a note instead.
+        record["active_kernel_die_source"] = "simulator";
+        record["active_kernel_die_definition"] =
+            "duration-weighted average of die per-node utilization over comp "
+            "nodes clipped to the utilization window (contract §7.6: "
+            "compute=PE FLOP/(PE_peak_die*elapsed), memory=actual bytes/"
+            "(B_mem*elapsed), vector=eq-ops/(V_peak*elapsed))";
+        if (sys->compute_cost_model == ComputeCostModel::Die &&
+            sim_end_tick > 0) {
+            const auto windowed =
+                stats->calculate_roofline_utilization_in_window(0,
+                                                                sim_end_tick);
+            if (windowed.total_comp_time > 0) {
+                const double die_compute =
+                    windowed.compute_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                const double die_memory =
+                    windowed.memory_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                const double die_vector =
+                    windowed.vector_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                record["active_kernel_die_compute_util"] = die_compute;
+                record["active_kernel_die_memory_util"] = die_memory;
+                record["active_kernel_die_vector_util"] = die_vector;
+                check_consistency(
+                    die_compute >= -kUtilEpsilon &&
+                        die_compute <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_compute_util out of range");
+                check_consistency(
+                    die_memory >= -kUtilEpsilon &&
+                        die_memory <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_memory_util out of range");
+                check_consistency(
+                    die_vector >= -kUtilEpsilon &&
+                        die_vector <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_vector_util out of range");
+            } else {
+                record["active_kernel_die_compute_util"] = nullptr;
+                record["active_kernel_die_memory_util"] = nullptr;
+                record["active_kernel_die_vector_util"] = nullptr;
+                record["active_kernel_die_note"] =
+                    "unavailable: no comp nodes in the utilization window";
+            }
+        } else {
+            record["active_kernel_die_compute_util"] = nullptr;
+            record["active_kernel_die_memory_util"] = nullptr;
+            record["active_kernel_die_vector_util"] = nullptr;
+            record["active_kernel_die_note"] =
+                "unavailable: compute-cost-model is not die";
+        }
         emit_record(record.dump());
 
         // Multi-user local-HBM bandwidth contention export (sh_2.0
@@ -1226,9 +1363,12 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
                 "at a membership change (issue or completion)";
             hbm_record["redistribution_events"] = redistribution_events;
             hbm_record["redistribution_events_definition"] =
-                "count of equal-share recomputations: every membership "
-                "change (job joining a non-empty set, completion leaving "
-                "survivors) with at least one remaining bandwidth user";
+                "count of membership changes with a non-empty remaining "
+                "active-job set: a job joining a non-empty set, or a "
+                "completion leaving at least one active job (survivors "
+                "count any active job, including FLOPs-tail or "
+                "memory-latency jobs that are not current bandwidth "
+                "users)";
             hbm_record["local_hbm_bw_bytes_per_second"] = sys->local_mem_bw;
             hbm_record["local_hbm_bw_source"] =
                 "system-configuration:local-mem-bw";
@@ -1337,6 +1477,17 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         record["request_id"] = state.request_id;
         record["prefill_instance"] = state.prefill_instance;
         record["decode_instance"] = state.decode_instance;
+        // A4-9 (2026-09-26): terminal_status single authoritative
+        // vocabulary.  This collector emits the request-level fact as the
+        // `completed` boolean; the downstream postprocess
+        // (metrics_postprocess.py) derives the request_metrics.csv
+        // terminal_status string from it, and that vocabulary is exactly
+        // {"completed", "failed"} -- frozen identically in
+        // slo_common.py TERMINAL_STATUSES and
+        // tests/test_metrics_contract.py TERMINAL_STATUS_VALUES.  The
+        // node-level NodeTerminalStatus{Success, Skipped} int enum
+        // (CompletionObserver.hh) is a separate layer with no string
+        // intersection.
         record["completed"] = completed;
         record["arrival_ns"] = tick_or_null(state.resolved_arrival);
         record["prefill_start_ns"] = tick_or_null(state.prefill_start);
@@ -1392,15 +1543,19 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
                 record["first_token_completion_skew_ns"] =
                     state.completion.value() - first_token.value();
             }
+            // (2026-10-01) when BOTH conditions hold (no code-8 event AND
+            // no manifest decode_length) the missing-event reason wins: it
+            // is the primary cause of a null first_token_ns, and the old
+            // branch order let the secondary skew-field note mask it.
             if (!first_token_note.empty()) {
                 record["first_token_note"] = first_token_note;
+            } else if (!first_token.has_value()) {
+                record["first_token_note"] =
+                    "no code-8 first-token event observed for this request";
             } else if (completed && !state.decode_length.has_value()) {
                 record["first_token_note"] =
                     "manifest_decode_length_missing: decode-length==1 skew "
                     "field not evaluable";
-            } else if (!first_token.has_value()) {
-                record["first_token_note"] =
-                    "no code-8 first-token event observed for this request";
             }
         }
 
@@ -1699,9 +1854,13 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     }
 
     // Capacity-time integral over the planner memory ledger (doc sec.7.8),
-    // anchored to the actual ASTRA ticks collected above. Emits one
-    // capacity_timeavg record per rank in every non-off mode; the raw
-    // planner peaks passthrough is full-detail only.
+    // anchored to the actual ASTRA ticks collected above. With at least one
+    // planner row present, emits exactly one capacity_timeavg record per
+    // simulated rank in every non-off mode (a rank with no resolvable
+    // anchor still emits its zero/capacity record); the raw planner peaks
+    // passthrough is full-detail only. A run with no planner rows at all
+    // takes the WP8 flat-watermark early return instead and emits no
+    // capacity_timeavg record.
     std::vector<int> all_ranks;
     all_ranks.reserve(systems.size());
     for (const Sys* sys : systems) {
@@ -1802,7 +1961,12 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         memory_totals.transfer_anchor_request_level_fallback;
     emit_record(summary.dump());
 
-    // Consistency record (doc sec.12.6).
+    // Consistency record: a machine-readable self-audit of this run's
+    // metric collection. "ok" is true only when no internal invariant
+    // violation was recorded (see check_consistency) and no manifest event
+    // was dropped during collection; the raw violation messages are listed
+    // verbatim so the downstream post-processing can gate on them instead
+    // of trusting the run blindly.
     if (this->manifest_npus_count_.has_value()) {
         check_consistency(
             this->manifest_npus_count_.value() ==
@@ -1910,9 +2074,24 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
     }
 
     // Per-rank capacity and final planner ledger from the peaks payload.
+    // B9 fix (2026-09-28): peaks entries are stored raw (load_manifest
+    // pushes them without validation), so a type-malformed "rank" field
+    // used to escape as an uncaught json::type_error -- terminate, no
+    // [METRIC][ERROR] line, buffered records lost. Every peaks rank read
+    // goes through this one checked helper.
+    const auto peaks_entry_rank = [](const json& entry) -> int {
+        try {
+            return entry.value("rank", -1);
+        } catch (const std::exception& e) {
+            fatal_metrics_error(
+                "malformed planner memory peaks 'rank' field (expected an "
+                "integer): " +
+                std::string(e.what()));
+        }
+    };
     std::map<int, const json*> peaks_by_rank;
     for (const auto& entry : this->planner_memory_peaks_) {
-        const int rank = entry.value("rank", -1);
+        const int rank = peaks_entry_rank(entry);
         if (rank >= 0) {
             peaks_by_rank[rank] = &entry;
         }
@@ -2037,6 +2216,18 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         totals.actions_replayed++;
     }
 
+    // B10 fix (2026-09-28): finalize promises one capacity_timeavg record
+    // per rank in every non-off mode, but only ranks with at least one
+    // RESOLVED anchor ever entered deltas_by_rank above -- a rank whose
+    // actions all failed anchor resolution (e.g. a DRAINING-truncated run)
+    // or that has no actions at all lost its record entirely. Seed every
+    // simulated rank with an empty delta list so its record is still
+    // emitted; emplace never overwrites a rank that resolved at least one
+    // anchor, and ranks absent from fallback_ranks keep their records.
+    for (const int rank : fallback_ranks) {
+        deltas_by_rank.emplace(rank, std::vector<AnchoredDelta>());
+    }
+
     // Per-rank replay over [0, sim_end_ns] (doc sec.7.8). Resident covers
     // weight + resident_kv, committed covers weight + resident_kv +
     // reserved_kv (doc sec.3.8).
@@ -2101,7 +2292,10 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         // boundary (periodic bottom line), so a bucket fully inside a long
         // constant segment still gets sampled. Peaks are sparse: buckets
         // that stayed at zero are not stored (emit treats missing as 0).
-        {
+        // B10 fix: seeded (no resolved delta) ranks skip the walk -- their
+        // watermark series keeps coming from the fallback below as a
+        // replayed=false flat series, exactly as before the seed.
+        if (!deltas.empty()) {
             WatermarkSeries series;
             series.replayed = true;
             series.capacity_known = capacity.has_value();
@@ -2191,7 +2385,6 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
                 seg_start = seg_end;
             }
             series.direct_resident_area = resident_area;
-            series.direct_committed_area = committed_area;
             watermark_series_by_rank[rank] = std::move(series);
         }
 
@@ -2264,7 +2457,10 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
             i128_to_string(weight + resident);
         record["replay_final_committed_used_bytes"] =
             i128_to_string(weight + resident + reserved);
-        if (unresolved_by_rank[rank] == 0 && planner_physical.has_value()) {
+        // B10 fix: the cross-check needs a replay to compare against;
+        // seeded (no resolved delta) ranks report the existing skipped form.
+        if (!deltas.empty() && unresolved_by_rank[rank] == 0 &&
+            planner_physical.has_value()) {
             const bool matches =
                 weight + resident == planner_physical.value() &&
                 weight + resident + reserved == planner_committed.value();
@@ -2330,8 +2526,8 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
             sorted_peaks.push_back(&entry);
         }
         std::sort(sorted_peaks.begin(), sorted_peaks.end(),
-                  [](const json* a, const json* b) {
-                      return a->value("rank", -1) < b->value("rank", -1);
+                  [&peaks_entry_rank](const json* a, const json* b) {
+                      return peaks_entry_rank(*a) < peaks_entry_rank(*b);
                   });
         for (const json* entry : sorted_peaks) {
             json record;
@@ -2340,7 +2536,7 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
             record["source"] = "planner_memory_ledger";
             record["repo_variant"] = this->repo_variant_;
             record["run_id"] = this->run_id_;
-            record["rank"] = entry->value("rank", -1);
+            record["rank"] = peaks_entry_rank(*entry);
             record["scope"] = "npu_local_hbm";
             record["chiplet_scope"] = "physical_chiplet_projection";
             record["projection"] = "measurement_only_equal_striping";

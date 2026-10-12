@@ -14,11 +14,10 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CommunicatorGroup.hh"
 #include "astra-sim/workload/execution_driven/ExecutionMode.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
+#include "astra-sim/workload/DieModelAdapter.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/Statistics.hh"
-#include "astra-sim/workload/LocalMemUsageTracker.hh"
-#include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
 namespace spdlog {
 class logger;
@@ -33,13 +32,14 @@ class WorkloadLayerHandlerData;
 class Workload : public Callable {
   public:
     // execution_mode/graph_source: step-1-2 execution-mode factory
-    // (ExecutionMode.hh). Static default keeps the legacy call sites and the
-    // byte-for-byte static behavior unchanged.
+    // (ExecutionMode.hh). The offline static path is retired in this
+    // repository (the ETFeederGraphSource adapter was removed with it);
+    // Online is the only constructible mode.
     Workload(Sys* sys,
              std::string et_filename,
              std::string comm_group_filename,
              ExecutionDriven::ExecutionMode execution_mode =
-                 ExecutionDriven::ExecutionMode::Static,
+                 ExecutionDriven::ExecutionMode::Online,
              std::shared_ptr<ExecutionDriven::GraphSource> graph_source =
                  nullptr);
     ~Workload();
@@ -50,11 +50,15 @@ class Workload : public Callable {
     void initialize_comm_groups(std::string comm_group_filename);
     void issue_pytorch_pg_metadata(const ExecutionDriven::NodeView& node);
 
+    // Teardown-only（2026-10-01 对齐）：丢弃该节点挂起的 Hbm 端点 join
+    // 表项——不投递任何完成、不触发任何指标锚点（进程已在
+    // fatal/teardown 路径上）。由 ~LocalHbmBandwidthModel 的残余作业
+    // drain 调用。
+    void abandon_hbm_endpoint_join(uint64_t node_id);
+
     // event-based simulation. Step 1-4 (方案 §4 步骤 1-4 操作 4): every issue_*
     // consumes the NodeView read view from the GraphSource (依赖状态唯一所有
-    // 者); the ETFeederNode handle is fetched through GraphSource::et_node
-    // only where the static-path consumers (HardwareResource / Statistics /
-    // local_mem tracker) still need it.
+    // 者).
     void issue_dep_free_nodes();
     void issue(const ExecutionDriven::NodeView& node);
     void issue_metadata(const ExecutionDriven::NodeView& node);
@@ -68,28 +72,70 @@ class Workload : public Callable {
     void issue_recv_comm(const ExecutionDriven::NodeView& node);
     void skip_invalid(const ExecutionDriven::NodeView& node);
     void call(EventType event, CallData* data);
-    void fire();
 
-    // stats
-    void report();
+    // Body shared by every generic (wlhd) node completion: node release /
+    // stats / metrics / terminal record / dependency release.  Extracted
+    // from Workload::call's generic branch so the LocalHbmBandwidthModel
+    // callback can complete COMP nodes through the exact same path.  Public
+    // since stage B: the DieExecution of a die-backend COMP node finishes
+    // through this same single exit (contract §7.3; the HBM-delivered
+    // completions already ran it from Workload::call's join tail).
+    void finish_generic_node(uint64_t node_id);
 
-    Chakra::ETFeeder* et_feeder;
+    // Die backend (stage B, contract §7.6): fill the utilization fields of
+    // the node's statistics state ahead of finish_generic_node -- compact
+    // OnlineStatisticsState in online service mode (including the
+    // die-only vector_utilization), the legacy OperatorStatistics record
+    // otherwise. Must run BEFORE the generic completion consumes them.
+    void record_die_utilizations(uint64_t node_id,
+                                 double compute_utilization,
+                                 double memory_utilization,
+                                 double vector_utilization);
+
+    // Die backend adapter accessor (stage B; null off the die backend).
+    DieModelAdapter* die_model_adapter() {
+        return die_adapter_.get();
+    }
+
+    // DeadEnd-census diagnostic only (2026-10-11): number of pending
+    // remote-MEM endpoint join latches (each latch's two completion legs
+    // are still in flight). Read-only; never called on the hot path.
+    size_t hbm_endpoint_joins_count() const {
+        return hbm_endpoint_joins_.size();
+    }
+    // ... and the sum of their remaining legs (2 -> both pending, 1 -> one
+    // leg arrived, 0 would mean erased -- reported for completeness).
+    size_t hbm_endpoint_joins_pending_legs() const {
+        size_t pending = 0;
+        for (const auto& entry : hbm_endpoint_joins_) {
+            pending += entry.second.pending_completions;
+        }
+        return pending;
+    }
+
     std::unordered_map<int, std::shared_ptr<CommunicatorGroup>> comm_groups;
     HardwareResource* hw_resource;
     Sys* sys;
     Statistics* stats;
-    std::unique_ptr<LocalMemUsageTracker> local_mem_usage_tracker;
     // Multi-user local-HBM bandwidth contention (hbm-bandwidth-contention):
     // one fluid model per rank; null in the legacy closed-form mode.
     std::unique_ptr<LocalHbmBandwidthModel> local_hbm_bandwidth_model;
+    // Die backend (stage B): one adapter per rank, constructed only under
+    // compute-cost-model=die (its constructor fail-closes without the Sys
+    // die runtime). DECLARED AFTER local_hbm_bandwidth_model on purpose:
+    // members destruct in reverse order, so the adapter (and its live
+    // DieExecutions, which must drop their pending HBM die jobs) unwinds
+    // while the fluid model is still alive.
+    std::unique_ptr<DieModelAdapter> die_adapter_;
     std::unordered_map<int, uint64_t> collective_comm_node_id_map;
     std::unordered_map<int, DataSet*> collective_comm_wrapper_map;
-    bool is_finished;
 
-    // step-1-2 execution-mode factory state: online mode never constructs the
-    // ETFeeder and never requires .et files; the dynamic GraphSource is
-    // injected at Sys creation (NodeStore-backed implementation in step 1-4).
-    ExecutionDriven::ExecutionMode execution_mode_;
+    // step-1-2 execution-mode factory state: Workload never constructs an
+    // ETFeeder (the offline static path is retired) and never requires .et
+    // files; the dynamic GraphSource is injected at Sys creation
+    // (NodeStore-backed implementation in step 1-4). The execution mode is
+    // validated in the constructor (only Online is constructible) and not
+    // retained -- the former execution_mode_ member was write-only.
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
     // Path-2 removal (2026-08-18): the replay-clock scope flag was deleted
     // with the replay route; strategy mode always keeps real physics.
@@ -119,16 +165,14 @@ class Workload : public Callable {
     void complete_online_statistics(const ExecutionDriven::NodeView& node,
                                     Tick end_time);
     void mark_online_terminal_or_fail(uint64_t node_id);
-    void record_network_bandwidth(uint64_t node_id, Tick execution_time);
+    // record_network_bandwidth 删除：comm-size → 带宽整条链无生产读者，
+    // 各调用点算出的耗时全部被空实现丢弃（对齐 face-LRU 姊妹仓）。
 
-    // Body shared by every generic (wlhd) node completion: node release /
-    // stats / metrics / terminal record / dependency release / static-mode
-    // auto-advance.  Extracted from Workload::call's generic branch so the
-    // LocalHbmBandwidthModel callback can complete COMP nodes through the
-    // exact same path.  event is the completion event the caller observed
-    // (PacketSent/PacketReceived keep their network-bandwidth statistics
-    // semantics).
-    void finish_generic_node(uint64_t node_id, EventType event);
+    // Die-backend COMP dispatch (contract §7.3 frozen order): timer -> cpu
+    // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
+    // fail-closed. Reached only under
+    // sys->compute_cost_model == ComputeCostModel::Die.
+    void issue_die_comp(const ExecutionDriven::NodeView& node);
 
     // sh_2.0 N-way HBM contention: endpoint join state for nodes whose
     // completion is the JOIN of two independent async completions -- the

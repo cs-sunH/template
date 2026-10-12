@@ -40,7 +40,6 @@ rider，本卡零 JCM 改动）；C13 交接 #handoff/#copy-stream 科目不冲�
 import os
 import sys
 import unittest
-from types import SimpleNamespace
 
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -578,19 +577,47 @@ class MergeWatchSettlementClosureTests(unittest.TestCase):
         row = {"seq": 0, "session_id": "session_x",
                "trigger_request_id": "r1", "direction": "forward"}
         scheduler = _bare_scheduler(_SettledKvManager(row))
+        # W5（§7.4 重锚）：watch 交付前置 = settlement 记录在案（生产
+        # 在 _complete_requests 的 SETTLE_COMMITTED 段登记；缺记录 =
+        # watch 通道与结算账本脱钩，fail-closed）。
+        scheduler._joint_settlement_ledger()["r1"] = {
+            "stage": "SETTLE_COMMITTED",
+            "settlement_policy": "consolidate",
+            "service_done_ns": 1_000_000,
+            "settle_committed_ns": 1_000_000,
+            "merge_payload_bytes": 128,
+            "merge_done_ns": None,
+            "settle_done_ns": None,
+        }
         scheduler._on_merge_done("batch_train_merge_r1", 2_000_000)
         # R15：#merge 流注销恰一次。
         self.assertEqual(
             scheduler._joint_flows.released, ["r1#merge"])
         self.assertEqual(
             scheduler._pool_ports.released, ["r1#merge"])
-        # C3b 披露行照落（kind=merge_done）。
-        self.assertEqual(len(scheduler.online_log_rows), 1)
+        # C3b 披露行照落（kind=merge_done）+ W5 settle_done 事件行
+        # （§7.4 三类事件：service（completion 行）/物理 merge（本行）/
+        # settle（settle_done 行——echo service/merge 双时标））。
+        self.assertEqual(len(scheduler.online_log_rows), 2)
         logged = scheduler.online_log_rows[0]
         self.assertEqual(logged["kind"], "merge_done")
         self.assertEqual(logged["tick"], 2_000_000)
         self.assertEqual(
             logged["decision"]["merge_done_ns"], 2_000_000)
+        settle_row = scheduler.online_log_rows[1]
+        self.assertEqual(settle_row["kind"], "settle_done")
+        self.assertEqual(
+            settle_row["decision"]["settle_done_ns"], 2_000_000)
+        self.assertEqual(
+            settle_row["decision"]["merge_done_ns"], 2_000_000)
+        self.assertEqual(
+            settle_row["decision"]["service_done_ns"], 1_000_000)
+        self.assertEqual(
+            settle_row["decision"]["settlement_policy"], "consolidate")
+        self.assertEqual(
+            settle_row["decision"]["settle_state"], "SETTLE_DONE")
+        # 结算账本闭合即弹出（有界）。
+        self.assertEqual(scheduler._joint_settlement_ledger(), {})
         self.assertEqual(
             scheduler._pending_merge_alarms, {})
 

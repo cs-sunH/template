@@ -17,13 +17,10 @@ namespace AstraSim {
 class Sys;
 class PacketBundle : public Callable {
   public:
-    PacketBundle(Sys* sys,
-                 BaseStream* stream,
-                 std::list<MyPacket*> locked_packets,
-                 bool needs_processing,
-                 bool send_back,
-                 uint64_t size,
-                 MemBus::Transmition transmition);
+    // (The locked_packets constructor parameter is gone: it was passed by
+    // value and immediately discarded -- call() used to stamp each packet's
+    // ready_time here, and that loop was retired together with the removal
+    // of MyPacket::ready_time.)
     PacketBundle(Sys* sys,
                  BaseStream* stream,
                  bool needs_processing,
@@ -35,14 +32,11 @@ class PacketBundle : public Callable {
     void call(EventType event, CallData* data);
 
     Sys* sys;
-    std::list<MyPacket*> locked_packets;
     bool needs_processing;
     bool send_back;
     uint64_t size;
     BaseStream* stream;
     MemBus::Transmition transmition;
-    Tick delay;
-    Tick creation_time;
 };
 
 }  // namespace AstraSim

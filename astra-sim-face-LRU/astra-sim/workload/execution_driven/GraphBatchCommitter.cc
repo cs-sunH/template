@@ -10,6 +10,8 @@ edges, watches, alarms, issue the touched ranks, update counters).
 The validation rules are the empirical contract of the real 20.csv
 first-30s runs -- every rule in the header comment was verified against
 strategy (3531 batches) and replay (3491 batches) with zero violations.
+The replay route was removed on 2026-08-18; the replay figure is retained
+as historical provenance only.
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/GraphBatchCommitter.hh"
@@ -176,7 +178,17 @@ void GraphBatchCommitter::apply_delta_facts(
                 in_flight.insert(ev.request_id);
                 break;
             case DecisionReason::PREFILL_DRAIN:
-                prefill_drained.insert(ev.request_id);
+                // M3 fix (2026-09-29): batch_train_ sentinel/wakeup fires
+                // arrive as PREFILL_DRAIN but NEVER as REQUEST_COMPLETE
+                // (prefill-stage fires push that reason only), so an insert
+                // here was permanent -- prefill_drained_ grew one entry per
+                // train for the whole run (unbounded). No read path consults
+                // a batch_train_ entry (every eligibility check bypasses the
+                // batch namespace), so skipping the insert is
+                // behavior-neutral and re-bounds the set by real requests.
+                if (ev.request_id.rfind("batch_train_", 0) != 0) {
+                    prefill_drained.insert(ev.request_id);
+                }
                 break;
             case DecisionReason::REQUEST_COMPLETE:
                 in_flight.erase(ev.request_id);
@@ -275,6 +287,23 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
                 return "node[" + std::to_string(node_index) +
                        "] collective bytes must be positive";
             }
+            // C2/C3: same-style mandatory p2p rules.  A zero-byte p2p
+            // transfer has no analytical-backend completion path
+            // (start_flow exits on bytes == 0; a zero-byte recv waits
+            // forever), and a self-send diverges by topology (ring/mesh
+            // degenerate route vs. switch completing).  Both must fail
+            // closed here -- before any commit side effect -- rather than
+            // depend on the backend topology or the validation flag.
+            if ((type == 5 || type == 6) &&
+                (parsed.node.comm.bytes == 0 ||
+                 parsed.node.comm.src == parsed.node.comm.dst)) {
+                return "node[" + std::to_string(node_index) +
+                       "] p2p comm bytes must be positive and src must "
+                       "differ from dst (bytes=" +
+                       std::to_string(parsed.node.comm.bytes) +
+                       " src=" + std::to_string(parsed.node.comm.src) +
+                       " dst=" + std::to_string(parsed.node.comm.dst) + ")";
+            }
 
             uint64_t expected = id;  // an arbitrary first id is legal
             if (json_id_seen_stamp_by_rank_[rank] == stream_stamp) {
@@ -325,6 +354,44 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
         return std::string("mandatory liveness preflight: ") + reason;
     };
 
+    // O(1) epoch check (2026-09-30, ported from the joint repo
+    // GraphBatchCommitter.cc mandatory_liveness_preflight): batch_id ==
+    // delivery_sequence used to live only in the full --online-validate
+    // diagnostic path, so the default direct-commit fast path never checked
+    // it -- an out-of-order/replayed batch could commit under the wrong
+    // epoch (the Python ack side has a backstop, the C++ side had none).
+    // The full validate() path repeats the same checks; no behavior
+    // difference there.
+    if (batch.batch_id != delta.delivery_sequence) {
+        return fail("batch_id " + std::to_string(batch.batch_id) +
+                    " != delivery_sequence " +
+                    std::to_string(delta.delivery_sequence));
+    }
+    // (2026-10-01) A missing batch_id parses as 0 and is indistinguishable
+    // from an explicit 0 on epoch 0 -- which would silently bypass the
+    // epoch check above on the very first delivery. Require the field to
+    // have been present (T4 stays optional for legacy parse tolerance; the
+    // commit path is not tolerant).
+    if (!batch.has_batch_id) {
+        return fail("batch_id is absent (the epoch check requires an "
+                    "explicit batch_id on every committed batch)");
+    }
+    if (batch.source_delivery_sequence != delta.delivery_sequence) {
+        return fail("source_delivery_sequence " +
+                    std::to_string(batch.source_delivery_sequence) +
+                    " != delivery_sequence " +
+                    std::to_string(delta.delivery_sequence));
+    }
+    // (2026-10-01) Error responses must never reach commit: the official
+    // bridge path aborts on a non-empty error before structural parsing
+    // (error-first ordering), but commit() is a public entry ("the mandatory
+    // preflight runs even with validate off") -- a fixture or future caller
+    // handing an error batch straight to commit() would silently commit an
+    // empty graph. Fail closed here instead.
+    if (!batch.error.empty()) {
+        return fail("batch carries an error payload: " + batch.error);
+    }
+
     try {
         // Apply this delta's facts in a compact overlay rather than copying the
         // whole live-request sets.  The result is exactly apply_delta_facts()
@@ -349,7 +416,15 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                     facts_it->second.in_flight = true;
                     break;
                 case DecisionReason::PREFILL_DRAIN:
-                    facts_it->second.prefill_drained = true;
+                    // Same batch_train_ filter as apply_delta_facts (M3):
+                    // train sentinels fire PREFILL_DRAIN but never
+                    // REQUEST_COMPLETE, so honoring the event here would
+                    // mark the overlay's copy of the fact permanently
+                    // drained -- diverging from apply_delta_facts(), whose
+                    // result this overlay claims to reproduce exactly.
+                    if (event.request_id.rfind("batch_train_", 0) != 0) {
+                        facts_it->second.prefill_drained = true;
+                    }
                     break;
                 case DecisionReason::REQUEST_COMPLETE:
                     facts_it->second.in_flight = false;
@@ -459,6 +534,16 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
             const uint32_t coll_priority = node.coll.priority;
             const std::vector<bool>& coll_involved_dims =
                 node.coll.involved_dim;
+            if (type == 7 && coll_involved_dims.empty()) {
+                // (2026-09-30) The parser treats involved_dim as optional
+                // (absent = empty), but an empty vector reaches
+                // issue_coll_comm's topology-dimension selection and
+                // silently produces a zero-dimension collective. The real
+                // builder always sends the full vector; a future producer
+                // omitting it must fail closed here, not mis-time.
+                return fail("node[" + std::to_string(node_index) +
+                            "] coll node carries no involved_dim");
+            }
             if (type == 5 || type == 6) {
                 if (is_cpu_op) {
                     return fail("node[" + std::to_string(node_index) +
@@ -777,7 +862,29 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 return fail("watch[" + std::to_string(watch_index) +
                             "] empty/absent statuses");
             }
-            if (request_id.rfind("batch_train_", 0) != 0) {
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // M3 defense (2026-09-29): the cross-layer contract fixes
+                // every batch_train_ watch to the PREFILL stage (all three
+                // Python emission points -- train sentinel x2, first-step
+                // wakeup -- hardcode stage=prefill). A decode-stage sentinel
+                // fire maps to REQUEST_COMPLETE in main_online's
+                // stage->reason boundary and would underflow the
+                // ServiceCoordinator completion accounting (abort with a
+                // misleading "completion with no active request" message).
+                // Reject the batch here so the contract violation surfaces
+                // as a GraphBatch validation failure instead.
+                if (stage != "prefill") {
+                    return fail("sentinel watch[" +
+                                std::to_string(watch_index) +
+                                "] for train " + request_id +
+                                " carries stage \"" + stage +
+                                "\"; batch_train_ watches are fixed to the "
+                                "prefill stage by the cross-layer contract "
+                                "(a decode-stage sentinel fire would push "
+                                "REQUEST_COMPLETE and corrupt the service "
+                                "completion accounting)");
+                }
+            } else {
                 const RequestFacts facts = request_facts(request_id);
                 if (stage == "prefill" && !facts.in_flight) {
                     return fail("prefill watch[" + std::to_string(watch_index) +
@@ -850,6 +957,47 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                             *ingress_error);
             }
         }
+
+        // (2026-09-30) touched_ranks consistency, sunk here from
+        // validate_impl so the production fast path
+        // (--online-validate=0, which runs ONLY this preflight) no longer
+        // accepts a wrong DECLARED rank set: the issue pass itself uses the
+        // self-computed set, but the declared value feeds Python-side
+        // ledgers -- a wrong declaration must fail closed, not pass as an
+        // informational field. Cheap O(#ranks): rank_graphs already holds
+        // exactly the ranks that carry nodes.
+        // (2026-10-01) Sorted-unique guard: without it a duplicate
+        // declaration (e.g. [0,0] against nodes on ranks {0,2}) passed both
+        // the size check (2 == 2) and the one-way membership check while
+        // silently under-reporting rank 2 -- the exact fail-open this block
+        // exists to close. With sorted-unique enforced, size equality plus
+        // one-way membership imply set equality.
+        if (batch.has_touched_ranks) {
+            if (!std::is_sorted(batch.touched_ranks.begin(),
+                                batch.touched_ranks.end())) {
+                return fail("touched_ranks is not sorted ascending");
+            }
+            if (std::adjacent_find(batch.touched_ranks.begin(),
+                                   batch.touched_ranks.end()) !=
+                batch.touched_ranks.end()) {
+                return fail("touched_ranks declares a rank twice");
+            }
+        }
+        if (batch.has_touched_ranks &&
+            batch.touched_ranks.size() != rank_graphs.size()) {
+            return fail("touched_ranks declares " +
+                        std::to_string(batch.touched_ranks.size()) +
+                        " ranks but the batch carries nodes on " +
+                        std::to_string(rank_graphs.size()) + " ranks");
+        }
+        for (const int declared_rank : batch.touched_ranks) {
+            if (rank_graphs.find(declared_rank) == rank_graphs.end()) {
+                return fail(
+                    "touched_ranks declares rank " +
+                    std::to_string(declared_rank) +
+                    " which carries no node in this batch");
+            }
+        }
     } catch (const std::exception& exc) {
         return fail(std::string("malformed batch entry: ") + exc.what());
     }
@@ -901,18 +1049,6 @@ void GraphBatchCommitter::record_affine_node(const int rank,
     ++affine.store_next;
 }
 
-std::vector<int> GraphBatchCommitter::compute_touched_ranks(
-    const GraphBatch& batch, const int num_ranks) {
-    std::set<int> ranks;
-    for (const auto& parsed : batch.nodes) {
-        const int rank = parsed.node.rank;
-        if (rank >= 0 && rank < num_ranks) {
-            ranks.insert(rank);
-        }
-    }
-    return std::vector<int>(ranks.begin(), ranks.end());
-}
-
 std::optional<std::string> GraphBatchCommitter::validate_impl(
     const StateDelta& delta, const GraphBatch& batch,
     std::vector<int>* const json_id_touched_ranks) const {
@@ -958,7 +1094,6 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
         std::unordered_map<int, std::set<uint64_t>> batch_ids;
         std::set<std::pair<std::string, std::string>> node_stages;
         std::set<int> touched;
-        uint64_t node_count = 0;
         uint64_t node_index = 0;
         for (const auto& parsed : batch.nodes) {
             const int rank = parsed.node.rank;
@@ -1042,6 +1177,25 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                            "] recv node rank " + std::to_string(rank) +
                            " != comm.dst " + std::to_string(dst);
                 }
+                // C2: a zero-byte p2p transfer has no completion path in
+                // the analytical backend (FluidScheduler::start_flow exits
+                // on bytes == 0; a zero-byte recv would wait forever in
+                // Release).  Reject it here, before commit, so the batch's
+                // zero-side-effect failure contract holds -- the commit
+                // layer only rejects zero-byte collectives (type 7).
+                if (node.comm.bytes == 0) {
+                    return "node[" + std::to_string(node_index) +
+                           "] p2p comm bytes must be positive";
+                }
+                // C3: self-communication (src == dst) diverges by backend
+                // topology -- ring/mesh routing degenerates to a size-1
+                // route (backend exit), while a switch topology completes
+                // normally.  Reject at validation so the behavior no
+                // longer depends on the configured topology.
+                if (src == dst) {
+                    return "node[" + std::to_string(node_index) +
+                           "] p2p comm src must differ from dst (self-send)";
+                }
             }
             // A zero-byte collective has no completion path in the
             // analytical backend: AllGather reaches 0/0 chunking, while
@@ -1055,13 +1209,30 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                 return "node[" + std::to_string(node_index) +
                        "] collective with empty pg_name";
             }
+            // Same fail-closed involved_dim rule as
+            // mandatory_liveness_preflight (2026-09-30): the parser treats
+            // involved_dim as optional (absent = empty), but an empty
+            // vector reaches issue_coll_comm's topology-dimension selection
+            // and silently produces a zero-dimension collective. The real
+            // builder always sends the full vector; a future producer
+            // omitting it must fail closed here, not mis-time.
+            if (type == 7 && node.coll.involved_dim.empty()) {
+                return "node[" + std::to_string(node_index) +
+                       "] coll node carries no involved_dim";
+            }
             // C1 (2026-08-29): the involved_dim array shape/typing check
-            // moved to the parse layer (face has no MEM-node contract, so
-            // unlike sh_1.0 nothing else lives at this spot).
+            // moved to the parse layer. Note (ed-coord-C3 fix, 2026-09-26):
+            // MEM nodes DO exist in this repo -- but only through the
+            // restore-DMA bit and the HBM access-mode domain:
+            // is_local_hbm_kv_restore / compute.hbm_access_mode are parsed
+            // in ParsedGraphBatch.cc and routed by
+            // Workload::issue_local_hbm_kv_restore, so unlike sh_1.0 no
+            // MEM-specific contract check lives at this spot (the
+            // hbm_access_mode non-negativity guard above is this pass's
+            // only MEM-adjacent rule).
 
             node_stages.insert({request_id, stage});
             touched.insert(rank);
-            ++node_count;
             ++node_index;
         }
 
@@ -1262,6 +1433,19 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             // 是哨兵标记节点,fire 后事件经四类 reason 通道送回 Python
             // 侧按 train_id 核销。
             if (request_id.rfind("batch_train_", 0) == 0) {
+                // M3 defense (2026-09-29): mandatory-preflight twin of the
+                // full-validation rule above -- the batch_train_ namespace is
+                // fixed to the prefill stage (a decode-stage sentinel fire
+                // would push REQUEST_COMPLETE and corrupt the service
+                // completion accounting). Runs on EVERY commit path,
+                // including --online-validate=0.
+                if (stage != "prefill") {
+                    return "watch[" + std::to_string(watch_index) +
+                           "] sentinel/train watch " + request_id +
+                           " carries stage \"" + stage +
+                           "\"; batch_train_ watches are fixed to the "
+                           "prefill stage by the cross-layer contract";
+                }
                 // batch sentinel: train-scoped, no request eligibility.
             } else if (stage == "prefill") {
                 if (in_flight.count(request_id) == 0) {
@@ -1416,10 +1600,10 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                 return "touched_ranks not sorted unique";
             }
             // S1 (2026-08-23): reuse this validate pass's own touched set
-            // instead of re-walking batch.nodes through
-            // compute_touched_ranks(): by this point every node has an
-            // in-range rank (fail-closed in the node pass above), so the
-            // sorted-unique rank sets are identical by construction.
+            // instead of re-walking batch.nodes for the rank set: by this
+            // point every node has an in-range rank (fail-closed in the node
+            // pass above), so the sorted-unique rank sets are identical by
+            // construction.
             const std::vector<int> computed(touched.begin(), touched.end());
             if (declared != computed) {
                 std::ostringstream os;
@@ -1508,17 +1692,29 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
     // contract plus every malformed shape that can strand work permanently.
     // All three checks are pure and precede any delta, NodeStore, watch,
     // ingress, counter, or affine state change.
-    if (auto drift_error = validate_affine_drift()) {
-        throw std::runtime_error("commit preflight: " + *drift_error);
-    }
-    if (auto id_error = validate_json_id_stream(batch, &commit_touched_ranks_)) {
-        throw std::runtime_error("commit preflight: " + *id_error);
-    }
-    if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
-        throw std::runtime_error("commit preflight: " + *liveness_error);
-    }
+    // Same scratch ownership as validate_and_commit: the preflight writes
+    // commit_touched_ranks_ and commit_after_preflight keeps reading it from
+    // inside issue-pass callbacks, so a nested mutating commit must fail
+    // closed instead of rewriting the scratch mid-iteration.
+    validation_commit_in_progress_ = true;
+    try {
+        if (auto drift_error = validate_affine_drift()) {
+            throw std::runtime_error("commit preflight: " + *drift_error);
+        }
+        if (auto id_error =
+                validate_json_id_stream(batch, &commit_touched_ranks_)) {
+            throw std::runtime_error("commit preflight: " + *id_error);
+        }
+        if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
+            throw std::runtime_error("commit preflight: " + *liveness_error);
+        }
 
-    commit_after_preflight(delta, batch, commit_touched_ranks_);
+        commit_after_preflight(delta, batch, commit_touched_ranks_);
+    } catch (...) {
+        validation_commit_in_progress_ = false;
+        throw;
+    }
+    validation_commit_in_progress_ = false;
 }
 
 void GraphBatchCommitter::commit_after_preflight(
@@ -1617,6 +1813,7 @@ void GraphBatchCommitter::commit_after_preflight(
     //      ids; C1: typed members in JSON key order, statuses from the
     //      parse-layer enum -- the "unknown status" throw is structurally
     //      gone). ----
+    size_t created_watch_count = 0;
     for (const auto& watch : batch.watches) {
         const std::string& request_id = watch.request_id;
         const std::string& stage = watch.stage;
@@ -1644,9 +1841,17 @@ void GraphBatchCommitter::commit_after_preflight(
         for (const auto status : watch.statuses) {
             statuses.insert(status);
         }
+        bool created = false;
         ctx_.watch_registry->register_stage_watch(
             request_id, stage, generation, std::move(members),
-            std::move(statuses));
+            std::move(statuses), &created);
+        // Count only watches actually created (2026-09-30, ported from the
+        // joint repo GraphBatchCommitter.cc commit): a cross-batch duplicate
+        // identity swallowed by register-once / fire-once semantics is
+        // warned about by the registry and must not inflate total_watches.
+        if (created) {
+            ++created_watch_count;
+        }
     }
 
     // ---- Phase B-4: schedule future arrival alarms ----
@@ -1674,7 +1879,7 @@ void GraphBatchCommitter::commit_after_preflight(
     counters_.total_nodes += node_count;
     counters_.max_nodes_per_batch =
         std::max(counters_.max_nodes_per_batch, node_count);
-    counters_.total_watches += batch.watches.size();
+    counters_.total_watches += created_watch_count;
     counters_.total_assignments += batch.assignments.size();
     counters_.total_kv_actions += batch.kv_actions.size();
     counters_.total_future_alarms += batch.future_alarms.size();

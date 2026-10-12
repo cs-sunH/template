@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""decision_bridge.py -- Python 端 FileDecisionBridge 协议 v0 (方案 §4 步骤 1-7).
+"""decision_bridge.py -- Python 端 FileDecisionBridge 协议 v1 (方案 §4 步骤 1-7).
 
 桥接目录 <bridge_dir>/ 由 C++ 先建好(含 req_notify.fifo / resp_notify.fifo,
 "先建 FIFO 再启动双方")。serve_forever 阻塞在 req_notify.fifo 的 read 上
@@ -8,9 +8,17 @@ commit_ack 与 request 分开记账(同一 seq 的 request 与 ack 可并存)。
 
 request 处理: 读 request_<seq>.json(原子发布: 临时文件+rename,不会读到
 半截) -> handler(request) -> 写 response_<seq>.json(原子) -> 往
-resp_notify.fifo 写 1 字节(C++ 长连接读端 poll)。handler 抛异常或协议
-错误 => 写带 error 字段的 response、通知 C++、以非 0 退出(fail-closed,
-stderr 留痕);C++ 读到 error 即 abort。C++ 端崩溃/结束 => req_notify.fifo
+resp_notify.fifo 写 1 字节(C++ 长连接读端 poll)。response 发布前 handler
+抛异常或协议错误 => 写带 error 字段的 response、通知 C++、以非 0 退出
+(fail-closed,stderr 留痕);C++ 读到 error 即 abort。
+M17(2026-09-29)失败语义收窄:"response 已发布"之后的一切失败(审计
+journal unlink 失败等)与 ack 通道失败一律不再触碰桥文件通道——不写/
+不覆写 response_<seq>.json、不注水 resp_notify——错误走 stderr 结构化
+留痕 + 非 0 退出,桥协议的失败语义由进程退出表达(C++ 侧对 EOF/进程
+退出本就 fail-closed abort,见 DecisionBridge.cc wait_response_byte 的
+EOF 分支);覆写已发布的好 response 或向已被消费删除的槽位注水,只会
+令 C++ 以无关消息 abort 并打破"通道严格 1 字节/交付"冻结不变量。
+C++ 端崩溃/结束 => req_notify.fifo
 写端关闭 => read 返回 EOF => serve_forever 返回 0;resp_notify 写端
 BrokenPipe(C++ 常开读端关闭,运行中途) => BridgePipeError fail-closed
 退出(缺陷 B 修复 2026-08-16:resp 通道双侧长连接,消除按交换开/关握手
@@ -25,12 +33,26 @@ request,C++ 不回 response 不连续发);
 超时与崩溃检测在 C++ 侧(C++ poll 超时/EOF/EPIPE 即 abort)。
 """
 
+import fcntl
 import json
 import os
 import sys
 import time
 
 from bridge_request_journal import REQUEST_JOURNAL_NAME
+
+def _reject_duplicate_keys(pairs):
+    """json.loads 的 object_pairs_hook：重复键视为生产者损坏 fail-closed
+    （与 C++ DecisionBridge/WindowedTraceReader 的重复键守卫同一纪律）。"""
+    seen = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ValueError(
+                "duplicate JSON key {!r} (strict parse: producer "
+                "corruption)".format(key))
+        seen.add(key)
+    return dict(pairs)
+
 
 SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除)
 
@@ -41,13 +63,26 @@ _JSON_SUFFIX = ".json"
 _PROCESSING_STATS_PARTIAL_NAME = ".bridge_processing_stats.partial.jsonl"
 _JOURNAL_FLUSH_BATCH = 256
 
+# 响应字段冻结清单(声明与实发一致;M17 轻级 3 2026-09-29:补录
+# schema_version / batch_id / source_delivery_sequence——_handle_request
+# 对清单逐字段 setdefault,本清单即全部实发字段的权威声明)。
 _RESPONSE_FIELDS = (
+    # 头三字段的缺省不是 [](见 _handle_request 头部注入:SCHEMA_VERSION /
+    # 0 / 请求 seq);列于此处仅为字段清单完整性,循环里的 setdefault 对
+    # 它们是已存在字段的 no-op。
+    "schema_version",
+    "batch_id",
+    "source_delivery_sequence",
     "nodes",
     "parent_edges",
     "watches",
     "assignments",
     "kv_actions",
-    # 阶段 5 §8.2:touched ranks 集合(缺省 [];online scheduler 总是显式给出)。
+    "future_alarms",
+    # 阶段 5 §8.2:touched ranks 集合(缺省=不写该键,C++ 自算且不校验
+    # 声明值——见 _handle_request 的跳过分支;online scheduler 总是显式
+    # 给出;R2-2 注记修正 2026-09-30:旧注"缺省 []"与实发行为矛盾,
+    # 仅 _fail 的 error response 才显式携带空列表)。
     "touched_ranks",
 )
 
@@ -67,7 +102,9 @@ def _write_json_atomic(path, payload):
     断电极端场景 fail-closed(整轮重跑,与 campaign 实操一致)。
     """
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as target:
+    # newline="":禁用平台换行翻译,保证发布的 JSON 字节与 dumps 输出
+    # 逐字节一致(同 request journal 的 LF 契约)。
+    with open(tmp, "w", encoding="utf-8", newline="") as target:
         # C3(2026-08-28):紧凑分隔符(separators=(",", ":"))——JSON 语义
         # 不变(C++ 侧 nlohmann 解析空白不敏感),通道字节显著缩小
         # (响应数组占大头;省 I/O 与 C++ 读侧拷贝)。
@@ -121,7 +158,7 @@ class _BoundedSequenceTracker:
 
 
 class BridgeServer:
-    """协议 v0 的 Python 端;用法:
+    """协议 v1 的 Python 端;用法:
 
         server = BridgeServer(bridge_dir)
         server.serve_forever(handler, on_commit_ack=None)
@@ -166,19 +203,23 @@ class BridgeServer:
         # 因而成功 run 只有单一 journal,异常 run 的未 flush 尾部也有界。
         self._request_journal = open(
             os.path.join(bridge_dir, REQUEST_JOURNAL_NAME),
-            "w", encoding="utf-8", buffering=1024 * 1024)
+            # newline="":逐行 JSON 的换行契约固定为单字节 LF,禁用平台
+            # 换行翻译(Windows 文本模式会把 \n 转成 \r\n,污染 C++/校验
+            # 夹具按字节读取的行分隔符)。
+            "w", encoding="utf-8", newline="", buffering=1024 * 1024)
         self._pending_request_paths = []
         self._processing_stats_path = os.path.join(
             bridge_dir, _PROCESSING_STATS_PARTIAL_NAME)
         self._processing_stats_stream = open(
             self._processing_stats_path,
-            "w", encoding="utf-8", buffering=1024 * 1024)
+            "w", encoding="utf-8", newline="", buffering=1024 * 1024)
 
     # ------------------------------------------------------------- helpers --
 
     def stats(self):
-        """阶段 6 §9.1:桥接通道分项汇总(Python 视角)。含每 request 服务
-        时间行列表(per_request),供 online_stats.jsonl 合并。"""
+        """阶段 6 §9.1:桥接通道分项汇总(Python 视角,仅 4 个计数器)。
+        每 request 服务时间行不经此接口——由 ``per_request_stats()``
+        流式接口提供,online_stats.jsonl 合并时消费。"""
         return dict(self._stats)
 
     def per_request_stats(self):
@@ -203,6 +244,13 @@ class BridgeServer:
         if not self._pending_request_paths:
             return
         self._request_journal.flush()
+        # M17 轻级 2(2026-09-29):flush 只保证字节到达内核页缓存;紧随的
+        # unlink 删除散装 request 后,journal 即 committed 侧唯一权威审计
+        # 数据源(ledger_reconcile 经 iter_request_records 消费)。unlink 前
+        # 补 os.fsync(写路径),关闭"断电丢审计尾部"窗口(否则 unlink 可先
+        # 持久化而 journal 行仍在页缓存,断电即丢尾)。与 B4 去除的响应
+        # 瞬态文件 fsync 口径不同:journal 是持久审计文件。
+        os.fsync(self._request_journal.fileno())
         pending, self._pending_request_paths = self._pending_request_paths, []
         for path in pending:
             try:
@@ -225,7 +273,11 @@ class BridgeServer:
     def _seq_of(name, prefix):
         if name.startswith(prefix) and name.endswith(_JSON_SUFFIX):
             body = name[len(prefix):-len(_JSON_SUFFIX)]
-            if body.isdigit():
+            # ASCII 数字严格校验:str.isdigit() 放行 Unicode 数字——全角
+            # "１２"经 int() 归一化与 ASCII 同号碰撞(静默跳过)、上标
+            # "²"直接 int() 崩溃。桥文件名序号只会由本侧与 C++ 以 ASCII
+            # 十进制写出,其余字形一律不视为序号文件。
+            if body.isascii() and body.isdigit():
                 return int(body)
         return None
 
@@ -300,17 +352,35 @@ class BridgeServer:
     def _handle_request(self, seq, handler):
         t0 = time.monotonic_ns()
         path = os.path.join(self.bridge_dir, _REQUEST_PREFIX + str(seq) + _JSON_SUFFIX)
-        self._request_sequences.validate_new(seq)
+        # M17 轻级 1(2026-09-29):消费 validate_new 返回值。旧 seq 重复的
+        # 幂等过滤发生在 _new_files 探测层;漏进处理层的重复 seq 属生产者
+        # 违约——静默重跑会写出重复 journal 行(ledger_reconcile 的连续性
+        # 校验随之失真)、并重写已被 C++ 消费删除的 response 槽位。按重复
+        # seq 结构化报错退出,不触碰通道(该槽位 C++ 已不再等待)。
+        if not self._request_sequences.validate_new(seq):
+            self._fail_channel(
+                seq, "duplicate request seq {} (strict monotonic bridge "
+                "protocol: already serviced)".format(seq))
         try:
             with open(path, "r", encoding="utf-8") as source:
                 raw_request = source.read()
-            request = json.loads(raw_request)
+            # 严格 parse（2026-10-01 补齐，与仓级纪律对齐）：json.loads
+            # 拒尾随内容但对重复键静默取末值——README 声明"尾随内容或重复
+            # 键一律视为生产者损坏并 fail-closed"，C++ 侧已兑现；配对生
+            # 产者（nlohmann DOM dump）不会产出重复键，本门只拦
+            # fixtures/外部生产者的手写损坏。
+            request = json.loads(
+                raw_request,
+                object_pairs_hook=_reject_duplicate_keys)
         except (OSError, ValueError) as exc:
             raise BridgeError("bad request file {}: {}".format(path, exc)) from exc
-        if request.get("schema_version") != SCHEMA_VERSION:
+        schema_value = request.get("schema_version")
+        # bool 排除（R2 复核补齐）：True == 1 会按 1 放行。
+        if (isinstance(schema_value, bool)
+                or schema_value != SCHEMA_VERSION):
             raise BridgeError(
                 "request {} schema_version {!r} != {}".format(
-                    seq, request.get("schema_version"), SCHEMA_VERSION))
+                    seq, schema_value, SCHEMA_VERSION))
         self._stats["channel_bytes"] += os.path.getsize(path)
         response = handler(request)
         self._stats["handler_calls"] += 1
@@ -324,41 +394,59 @@ class BridgeServer:
                 # 字段缺省 = C++ 自算 touched ranks 且不校验声明值。legacy
                 # fixture 不知道该字段,真实 scheduler 则总是显式给出。
                 continue
+            # 头三字段(schema_version/batch_id/source_delivery_sequence)
+            # 已由上方 setdefault 注入类型化缺省,此处循环对其是 no-op
+            # (清单完整性见 _RESPONSE_FIELDS 注)。
             response.setdefault(field, [])
         response_path = os.path.join(
             self.bridge_dir, _RESPONSE_PREFIX + str(seq) + _JSON_SUFFIX)
         _write_json_atomic(response_path, response)
         self._stats["forced_flush_count"] += 1
-        self._stats["channel_bytes"] += os.path.getsize(response_path)
-        # processing_ns 保持原口径:读 request 到 response 原子发布;journal
-        # 与内部统计流的审计开销不混入桥服务时间。
-        processing_row = {
-            "seq": seq,
-            "processing_ns": time.monotonic_ns() - t0,
-        }
-        self._processing_stats_stream.write(json.dumps(
-            processing_row, separators=(",", ":")) + "\n")
-        if self._canonical_request_producer:
-            # Reuse the exact C++ request bytes and append the JSONL delimiter
-            # separately: no O(request-bytes) strip/newline scan and no
-            # raw_record + "\\n" full-size temporary string.
-            self._request_journal.write(raw_request)
-            self._request_journal.write("\n")
-        else:
-            # Fixtures and external producers retain the original tolerant
-            # normalization contract, including pretty/multiline JSON.
-            raw_record = raw_request.strip()
-            if "\n" in raw_record or "\r" in raw_record:
-                raw_record = json.dumps(request, separators=(",", ":"))
-            self._request_journal.write(raw_record + "\n")
-        self._pending_request_paths.append(path)
-        if len(self._pending_request_paths) >= _JOURNAL_FLUSH_BATCH:
-            self._flush_request_journal()
-        self._request_sequences.mark(seq)
+        # M17(2026-09-29):response 已发布——此后的一切失败不得再触碰
+        # 桥文件通道(_fail 会用 error response 覆写刚发布的好 response,
+        # 令 C++ 以无关决策错误 abort)。错误走 stderr 结构化留痕 + 非 0
+        # 退出,失败语义由进程退出表达;C++ 读到好 response 正常推进,
+        # 随后按 EOF/进程退出 fail-closed(协议自洽)。
+        try:
+            self._stats["channel_bytes"] += os.path.getsize(response_path)
+            # processing_ns 保持原口径:读 request 到 response 原子发布;
+            # journal 与内部统计流的审计开销不混入桥服务时间。
+            processing_row = {
+                "seq": seq,
+                "processing_ns": time.monotonic_ns() - t0,
+            }
+            self._processing_stats_stream.write(json.dumps(
+                processing_row, separators=(",", ":")) + "\n")
+            if self._canonical_request_producer:
+                # Reuse the exact C++ request bytes and append the JSONL delimiter
+                # separately: no O(request-bytes) strip/newline scan and no
+                # raw_record + "\\n" full-size temporary string.
+                self._request_journal.write(raw_request)
+                self._request_journal.write("\n")
+            else:
+                # Fixtures and external producers retain the original tolerant
+                # normalization contract, including pretty/multiline JSON.
+                raw_record = raw_request.strip()
+                if "\n" in raw_record or "\r" in raw_record:
+                    raw_record = json.dumps(request, separators=(",", ":"))
+                self._request_journal.write(raw_record + "\n")
+            self._pending_request_paths.append(path)
+            if len(self._pending_request_paths) >= _JOURNAL_FLUSH_BATCH:
+                self._flush_request_journal()
+            self._request_sequences.mark(seq)
+        except (OSError, BridgeError) as exc:
+            self._fail_channel(
+                seq, "post-response audit bookkeeping failed for seq {}: "
+                "{} (response already published; channel not touched)".format(
+                    seq, exc))
 
     def _handle_ack(self, seq, on_commit_ack):
         path = os.path.join(self.bridge_dir, _ACK_PREFIX + str(seq) + _JSON_SUFFIX)
-        self._ack_sequences.validate_new(seq)
+        # M17 轻级 1:与 request 通道同理,消费 validate_new 返回值。
+        if not self._ack_sequences.validate_new(seq):
+            self._fail_channel(
+                seq, "duplicate commit_ack seq {} (strict monotonic bridge "
+                "protocol: already serviced)".format(seq))
         try:
             ack = _read_json_atomic(path)
         except (OSError, ValueError) as exc:
@@ -379,7 +467,13 @@ class BridgeServer:
             pass  # 尽力删除;失败不阻断(下一轮 _new_files 不再列出它)
 
     def _fail(self, seq, message):
-        """写带 error 字段的 response、通知 C++、非 0 退出(fail-closed)。"""
+        """response 发布前的 request 通道失败:写带 error 字段的 response、
+        通知 C++、非 0 退出(fail-closed)。
+
+        适用边界(M17 2026-09-29):仅限 C++ 正在等待该 seq response 的场景
+        (读 request 失败/schema 违约/handler 异常——该槽位尚未发布,写入
+        error response 是协议内应答)。ack 通道失败与"response 已发布"之后
+        的失败走 _fail_channel(不触碰通道)。"""
         # 缺陷 B 修复配套:F1 现场 python.log 0 字节、无可诊断性——_fail 现在
         # 先在 stderr 留痕(错误路径的证据行),再走 fail-closed 收尾。
         print("decision_bridge: fail-closed at seq {}: {}".format(
@@ -402,38 +496,125 @@ class BridgeServer:
                 os.path.join(self.bridge_dir, _RESPONSE_PREFIX + str(seq) + _JSON_SUFFIX),
                 response)
             self._notify_response()
-        except OSError:
-            pass  # 已尽力;以非 0 退出为准
+        except (OSError, BridgePipeError):
+            # _notify_response 抛的是 BridgePipeError(Exception 子类,非
+            # OSError),单捕 OSError 接不到;错误响应通道已死时二者同样
+            # 已尽力,以非 0 退出为准(2026-09-26 批修正捕获类型)。
+            pass
+        sys.exit(1)
+
+    def _fail_channel(self, seq, message):
+        """M17(2026-09-29):不触碰桥文件通道的失败语义。
+
+        适用于:(a) ack 通道失败——ack 槽位已被 C++ 消费即删,写
+        "response_<ack_seq>.json" 会被 C++ 当作错位响应消费,并在其 unlink
+        后令真正的下一交付找不到 response_<N+1>.json 以无关消息 abort,
+        注入 1 字节还直接打破"通道严格 1 字节/交付"冻结不变量;(b) request
+        的 response 已发布之后的失败(审计 journal/统计流写失败等)——覆写
+        刚发布的好 response 同样以无关决策错误 abort C++。
+
+        处置:stderr 结构化留痕(JSON 一行,事件/seq/错误)+ 非 0 退出;
+        桥协议的失败语义由进程退出表达——C++ 对 Python 进程退出本就
+        fail-closed(DecisionBridge.cc:首字节后 EOF => "Python side died",
+        超时/EPIPE 同 abort),判定真实、无错位消息。
+        """
+        print(json.dumps({
+            "event": "decision_bridge_channel_failure",
+            "seq": seq,
+            "error": message,
+        }, separators=(",", ":")), file=sys.stderr)
+        print("decision_bridge: fail-closed (channel untouched) at seq {}: "
+              "{}".format(seq, message), file=sys.stderr)
         sys.exit(1)
 
     # ----------------------------------------------------------- main loop --
 
+    # req_notify 读端打开的等待上界与探测步长。协议时序:C++ 先建 FIFO、
+    # 随即打开 req 写端(重试至本侧读端就绪),正常启动在亚秒级;写端
+    # 超窗不至 = C++ 死在 FIFO 建好之后的启动窗口。旧实现的阻塞
+    # os.open 在该窗口无限挂起,且挂起点在 serve_forever 的 try 之外
+    # ——信号(SystemExit)逃过 finally 的审计流收尾。按 fail-closed
+    # 纪律收敛为有界等待 + BridgeError。
+    _REQ_NOTIFY_OPEN_TIMEOUT_S = 60.0
+    _REQ_NOTIFY_OPEN_POLL_S = 0.01
+
+    def _open_req_notify(self):
+        """有界打开 req_notify 读端,返回 ``(fd, 预读字节或 None)``。
+
+        旧实现 ``os.open(path, O_RDONLY)`` 阻塞到 C++ 打开写端为止(见
+        类常量注释的两个问题)。本实现改非阻塞 open(FIFO 读端恒立即
+        成功)+ 写端就绪探测,三态区分:
+          - read 抛 BlockingIOError => 写端已在,fcntl 恢复阻塞语义后
+            返回(此后与旧阻塞 open 完全等价:read 阻塞等字节、写端
+            关闭得 EOF => serve_forever 返回 0);
+          - read 得 b"" => 写端数为零(C++ 未达/已死),限时有界重试;
+          - read 得到字节 => 写端已在且首字节已到,字节随 fd 一并返回,
+            由主循环先消费(通知字节不丢)。
+        等待超窗 => BridgeError(fail-closed;serve_forever 的 finally
+        负责审计流收尾)。"""
+        deadline = time.monotonic() + self._REQ_NOTIFY_OPEN_TIMEOUT_S
+        fd = os.open(self.req_notify, os.O_RDONLY | os.O_NONBLOCK)
+        while True:
+            try:
+                first_byte = os.read(fd, 1)
+            except BlockingIOError:
+                # 写端已开、缓冲尚空:恢复阻塞读语义后交还主循环。
+                flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+                return fd, None
+            if first_byte:
+                flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+                return fd, first_byte
+            # b"":写端数为零(C++ 未达或已死)——有界重试。
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise BridgeError(
+                    "req_notify {} had no writer within {}s (C++ side never "
+                    "opened its write end; died after FIFO creation?)"
+                    .format(self.req_notify,
+                            self._REQ_NOTIFY_OPEN_TIMEOUT_S))
+            time.sleep(self._REQ_NOTIFY_OPEN_POLL_S)
+
     def serve_forever(self, handler, on_commit_ack=None):
         """阻塞循环,不轮询: 每收到 req_notify.fifo 一个字节处理一批新文件。
 
-        返回 0 = 正常结束(C++ 关闭写端,read 得 EOF)。错误路径已写 error
-        response 并 sys.exit(1),不会从这里返回。
+        返回 0 = 正常结束(C++ 关闭写端,read 得 EOF)。错误路径 fail-closed
+        以非 0 退出,不会从这里返回:response 发布前的 request 通道错误写
+        error response 后 sys.exit(1)(_fail);ack 通道错误与 response 发布
+        后的错误不触碰通道,stderr 结构化留痕后 sys.exit(1)(_fail_channel,
+        M17 2026-09-29);req_notify 读端打开等待超窗抛 BridgeError(由
+        online_service 顶层兜底非 0 退出,审计流经 finally 收尾)。
 
         缺陷 B 修复(2026-08-16):resp_notify 写端在此处一次打开、run 生命周期
         持有(长连接,配对 C++ open_notify 持有的常开读端)。打开顺序无死锁:
         C++ 先开 req 写端(重试至本侧 req 读端就绪)再开 resp 读端;本侧先开
-        req 读端(阻塞至 C++ req 写端)再开 resp 写端(此时 C++ resp 读端已在
-        或随后即到——非阻塞读端 open 恒成功,不互相等待)。
+        req 读端(有界等待写端就绪,见 _open_req_notify)再开 resp 写端
+        (此时 C++ resp 读端已在或随后即到——非阻塞读端 open 恒成功,不互相
+        等待)。
         """
-        t0 = time.monotonic_ns()
-        fd = os.open(self.req_notify, os.O_RDONLY)  # 阻塞直到 C++ 打开写端
-        t1 = time.monotonic_ns()
-        # 阶段 6 §9.1:两个初始打开都是等待 C++ 进程,计入 gil_wait_ns。
-        self._stats["gil_wait_ns"] += (t1 - t0)
+        fd = None
+        pending_byte = None
         try:
+            t0 = time.monotonic_ns()
+            fd, pending_byte = self._open_req_notify()
+            t1 = time.monotonic_ns()
+            # 阶段 6 §9.1:两个初始打开都是等待 C++ 进程,计入 gil_wait_ns。
+            self._stats["gil_wait_ns"] += (t1 - t0)
             t0 = time.monotonic_ns()
             self._resp_fd = os.open(self.resp_notify, os.O_WRONLY)
             self._stats["gil_wait_ns"] += time.monotonic_ns() - t0
             while True:
                 t0 = time.monotonic_ns()
-                data = os.read(fd, 1)
-                # 阶段 6 §9.1:读端阻塞 = 等待 C++ 进程(独立进程架构下 GIL
-                # 等待的对应物),计入 gil_wait_ns。
+                if pending_byte is not None:
+                    # _open_req_notify 探测期预读的首个通知字节:此处
+                    # 消费,不再读 fd(字节不丢)。
+                    data = pending_byte
+                    pending_byte = None
+                else:
+                    data = os.read(fd, 1)
+                # 阶段 6 §9.1:读端阻塞 = 等待 C++ 进程(独立进程架构
+                # 下 GIL 等待的对应物),计入 gil_wait_ns。
                 self._stats["gil_wait_ns"] += time.monotonic_ns() - t0
                 if not data:
                     return 0  # C++ 结束或崩溃: 写端关闭 => EOF
@@ -442,7 +623,20 @@ class BridgeServer:
                     try:
                         self._handle_ack(ack_seq, on_commit_ack)
                     except BridgeError as exc:
-                        self._fail(ack_seq, "ack {}: {}".format(ack_seq, exc))
+                        # M17(2026-09-29):ack 通道失败不再写 response/注水
+                        # (ack 槽位已被 C++ 消费即删;错位 response + 1 字节
+                        # 会令 C++ 以无关消息 abort 并打破"严格 1 字节/交付"
+                        # 冻结不变量)。错误走 stderr + 非 0 退出,失败语义
+                        # 由进程退出表达(C++ 侧 EOF/进程退出 => fail-closed)。
+                        self._fail_channel(
+                            ack_seq, "ack {}: {}".format(ack_seq, exc))
+                    except Exception as exc:  # noqa: BLE001 -- ack 应用异常
+                        # 与 request 通道对称:on_commit_ack 抛出的非桥异常也
+                        # 结构化留痕后 fail-closed,不让 C++ 侧只靠 FIFO
+                        # EPIPE/超时兜底(同样不触碰通道,见上)。
+                        self._fail_channel(
+                            ack_seq, "ack {}: {}: {}".format(
+                                ack_seq, type(exc).__name__, exc))
                 for req_seq in reqs:
                     try:
                         self._handle_request(req_seq, handler)
@@ -459,7 +653,8 @@ class BridgeServer:
                     except Exception as exc:  # noqa: BLE001 -- handler 异常
                         self._fail(req_seq, "{}: {}".format(type(exc).__name__, exc))
         finally:
-            os.close(fd)
+            if fd is not None:
+                os.close(fd)
             if self._resp_fd is not None:
                 os.close(self._resp_fd)
                 self._resp_fd = None

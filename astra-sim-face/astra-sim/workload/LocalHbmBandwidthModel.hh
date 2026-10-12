@@ -36,6 +36,15 @@ class WorkloadLayerHandlerData;
  *              out of its local HBM (created by Workload::issue_send_comm).
  *   COMM_WRITE p2p recv endpoint: the receiver's rank writes `comm bytes`
  *              into its local HBM (created by Workload::issue_recv_comm).
+ *   DIE_COMPUTE die-backend internal memory stage (stage B, contract
+ *              §7.4): one job per MemoryRequest of a DieExecution. The job
+ *              drains SERVICE UNITS (actual_bytes/eta) at the equal-share
+ *              rate -- the access inefficiency is spent as service time,
+ *              never by inflating actual bytes -- and has NO latency phase
+ *              and NO FLOP leg (the DieExecution charges local_mem_latency
+ *              itself, once per outer node, and drains compute through the
+ *              plan's PE/VEC stages). Completion fires the sink Callable
+ *              directly (the sink is the DieExecution, not the Workload).
  *
  * Multi-hop NoC routes never touch intermediate chiplets' HBM (router
  * pass-through); the network backend only charges endpoints, and this model
@@ -46,11 +55,12 @@ class WorkloadLayerHandlerData;
  * among the survivors (event-driven, no fixed quantum). The bandwidth is
  * the configured local-mem-bw verbatim. local_mem_latency is charged once
  * per job at its start (sh_2.0 convention: a latency-only phase precedes
- * the byte drain and does not consume bandwidth).
+ * the byte drain and does not consume bandwidth) -- except DIE_COMPUTE
+ * jobs, which never enter the latency phase (see above).
  */
 class LocalHbmBandwidthModel : public Callable {
   public:
-    enum class JobKind { COMP, COMM_READ, COMM_WRITE };
+    enum class JobKind { COMP, COMM_READ, COMM_WRITE, DIE_COMPUTE };
 
     LocalHbmBandwidthModel(Sys* sys, Workload* workload);
     ~LocalHbmBandwidthModel() override;
@@ -62,9 +72,28 @@ class LocalHbmBandwidthModel : public Callable {
                          WorkloadLayerHandlerData* wlhd);
     void issue_comm_write(uint64_t bytes,
                           WorkloadLayerHandlerData* wlhd);
+    // Stage B (contract §7.4): one die internal memory request. The job
+    // drains `service_units` at its equal share of the physical bandwidth;
+    // the actual-byte advance is served_service * eta (side-band only).
+    // `actual_bytes` is carried for bookkeeping/trace, never drained and
+    // never written back into any tensor_size/D2D payload. Completion
+    // fires sink->call(EventType::General, data); the sink owns `data`
+    // from that callback on (and this model owns it until then, including
+    // destruction-time cleanup).
+    void issue_die_memory(double service_units,
+                          double actual_bytes,
+                          Callable* sink,
+                          CallData* data);
     void call(EventType type, CallData* data) override;
 
     bool has_active_jobs() const;
+
+    // Stage B teardown helper: drop every pending DIE_COMPUTE job of `sink`
+    // WITHOUT firing its callback (the owning DieExecution is going away --
+    // e.g. Workload destruction). The job payloads are reclaimed here. Old
+    // COMP/COMM_* jobs are untouched (their completions route through the
+    // Workload, which outlives this call).
+    void cancel_die_jobs_of(Callable* sink);
 
     // Read-only side-band counters.  They are accumulated inside
     // advance_to() from the already-computed step_ns and per-user served
@@ -84,15 +113,27 @@ class LocalHbmBandwidthModel : public Callable {
     double comm_write_bytes_served() const {
         return this->comm_write_bytes_served_;
     }
+    // Stage B die side-band (kept SEPARATE from actual bytes by contract
+    // §7.4/§6.2: service units are the drained quantity; actual bytes are
+    // service * eta and are never fed back into any byte-based consumer).
+    double die_service_units_served() const {
+        return this->die_service_units_served_;
+    }
+    double die_actual_bytes_served() const {
+        return this->die_actual_bytes_served_;
+    }
     // Largest number of simultaneously active jobs observed at a
     // membership change (issue/completion).
     uint64_t peak_concurrent_jobs() const {
         return this->peak_concurrent_jobs_;
     }
-    // Count of equal-share redistributions: every membership change that
-    // leaves at least one active bandwidth user (a job joining a non-empty
-    // set, or a completion leaving survivors behind) recomputes the
-    // full_rate/N split and is counted once.
+    // Count of equal-share redistributions: every membership change of the
+    // ACTIVE JOB SET that leaves at least one active job (a job joining a
+    // non-empty set, or a completion leaving survivors behind) recomputes
+    // the full_rate/N split and is counted once. Latency-to-bandwidth phase
+    // transitions reshuffle the bandwidth-user set without a membership
+    // change of the active set and are not counted (the finalize export's
+    // definition string documents the same active-job-set caliber).
     uint64_t redistribution_events() const {
         return this->redistribution_events_;
     }
@@ -105,6 +146,14 @@ class LocalHbmBandwidthModel : public Callable {
         double remaining_bytes;
         double memory_latency_ns;
         Tick start_tick;
+        // DIE_COMPUTE only (contract §7.4): the drained quantity is service
+        // units (remaining_service), and served actual bytes are tracked as
+        // service * eta. The sink receives the completion directly; the
+        // Workload layer is not involved in a die job's completion.
+        double remaining_service = 0.0;
+        double service_eta = 0.0;
+        Callable* die_sink = nullptr;
+        CallData* die_data = nullptr;
     };
 
     class TransitionData : public CallData {
@@ -120,11 +169,15 @@ class LocalHbmBandwidthModel : public Callable {
                    uint64_t bytes,
                    WorkloadLayerHandlerData* wlhd);
     void advance_to(Tick now);
+    void harvest_completed_jobs(Tick now);
     void cancel_scheduled_transition();
     void schedule_next_transition();
     static void destroy_transition_data(CallData* data);
     static bool memory_done(const Job& job);
     static bool complete(const Job& job);
+    // The drained bandwidth quantity of a job: service units for
+    // DIE_COMPUTE, bytes for every legacy kind.
+    static double remaining_drain(const Job& job);
     void note_membership_change();
 
     Sys* sys;
@@ -143,6 +196,8 @@ class LocalHbmBandwidthModel : public Callable {
     double compute_bytes_served_ = 0.0;
     double comm_read_bytes_served_ = 0.0;
     double comm_write_bytes_served_ = 0.0;
+    double die_service_units_served_ = 0.0;
+    double die_actual_bytes_served_ = 0.0;
     uint64_t peak_concurrent_jobs_ = 0;
     uint64_t redistribution_events_ = 0;
 };

@@ -15,7 +15,10 @@ using json = nlohmann::json;
 
 namespace AstraSim {
 
-    CollectiveImplLookup::CollectiveImplLookup(int rank_) : rank(rank_) {}
+    // The historic `rank` member this constructor used to initialize had no
+    // reader anywhere; the parameter is kept because Sys.cc still passes the
+    // owning rank at construction.
+    CollectiveImplLookup::CollectiveImplLookup(int /*rank_*/) {}
 
     CollectiveImplLookup::~CollectiveImplLookup() {
         for (auto& it : per_node_custom_impl) {

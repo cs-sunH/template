@@ -68,13 +68,6 @@ class Topology {
      */
     [[nodiscard]] std::vector<int> get_npus_count_per_dim() const noexcept;
 
-    /**
-     * Get the bandwidth per each network dimension.
-     *
-     * @return bandwidth per each dimension
-     */
-    [[nodiscard]] std::vector<Bandwidth> get_bandwidth_per_dim() const noexcept;
-
   protected:
     /// number of total devices in the topology
     /// device includes non-NPU devices such as switches

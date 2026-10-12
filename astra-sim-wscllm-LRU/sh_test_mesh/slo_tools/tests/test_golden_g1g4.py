@@ -92,8 +92,16 @@ class G1SingleRequestNoContention(unittest.TestCase):
         })
         self.t_iso = synthetic.write_t_isolated(self.run_dir, [(0, 0, 3000)])
         synthetic.write_cpp_log(self.run_dir, [], repo_variant="astra-sim-face")
+        # METRIC-01：load_imbalance 分母=全部配置实例，权威来源=trace_
+        # config.csv 的 inference_group 组行数（run_dir 缺该文件会回退仓
+        # workload 的 9 组——断言配置实例数的用例必须显式落盘）。此处
+        # 4 组：本用例 decode 落实例 3，实例 0-2 全程空闲计入分母。
+        synthetic.write_trace_config(self.run_dir, 4)
+        # metrics_manifest 仅服务 kv_cache_adapter 的 turn_index 映射，
+        # 不再参与 load_imbalance 分母。
         synthetic.write_metrics_manifest(
-            self.run_dir, [synthetic.manifest_request("s0_r0", "s0", 0, 0)])
+            self.run_dir, [synthetic.manifest_request(
+                "s0_r0", "s0", 0, 0, prefill_ranks=[0, 1, 2, 3])])
 
     def test_e2e_stats(self):
         out = self.run_dir / "e2e.csv"
@@ -254,7 +262,7 @@ class G2TwoRequestsQueued(unittest.TestCase):
         intervals = load_imbalance.collect_intervals(self.run_dir,
                                                      "astra-sim-face")
         self.assertEqual(len(intervals), 2)
-        stats = load_imbalance.instance_timeavg_backlog(intervals, 100,
+        stats = load_imbalance.instance_timeavg_backlog(intervals,
                                                         100, 900)
         # 两请求同实例：b̄_0 = (400+800)/800 = 1.5；单实例 → CV=0。
         self.assertAlmostEqual(stats[0][0], 1.5)
@@ -273,7 +281,10 @@ class G3SessionTwoTurns(unittest.TestCase):
         self.run_dir = synthetic.make_run_dir("g3")
         # turn0: arrival 0 → completion 1000；turn1: arrival 5000 →
         # completion 7000；human 1000 + tool 500。
-        # T_session = 7000 − 0 − 1500 = 5500。
+        # 期望值变更（H5① initiator 口径，2026-09-29 face 修正、
+        # 2026-09-30 本仓同步；旧 1500/5500）：Σ 只含窗口内前 n−1 轮等待
+        # = turn0 的 1000（末轮 turn1 的 500 落在 last_completion 之后、
+        # 窗口外不计）；T_session = 7000 − 0 − 1000 = 6000。
         synthetic.write_request_metrics(self.run_dir, [
             synthetic.request_row(
                 request_id="s0_r0", session_id="s0", turn_index="0",
@@ -303,11 +314,15 @@ class G3SessionTwoTurns(unittest.TestCase):
         self.assertEqual(row["n_turns"], "2")
         self.assertEqual(row["first_arrival_ns"], "0")
         self.assertEqual(row["last_completion_ns"], "7000")
-        self.assertEqual(row["sum_human_tool_ns"], "1500")
-        self.assertEqual(row["t_session_ns"], "5500")
+        # 期望值变更（H5① initiator 口径，旧 1500/5500）：Σ 只含窗口内
+        # 的前 n−1 轮等待 = turn0 的 1000（末轮 turn1 的 500 不计）；
+        # T_session = 7000 − 0 − 1000 = 6000。
+        self.assertEqual(row["sum_human_tool_ns"], "1000")
+        self.assertEqual(row["t_session_ns"], "6000")
 
     def test_missing_transparent_fields_na_and_counted(self):
         # manifest 缺 human/tool 透传字段（WP2 之前的状态）→ NA 行+计数。
+        # H5① 起末轮行不进缺数据核对（其等待定义在窗口外），计数由 4 → 2。
         synthetic.write_metrics_manifest(self.run_dir, [
             synthetic.manifest_request("s0_r0", "s0", 0, 0),
             synthetic.manifest_request("s0_r1", "s0", 1, 1),
@@ -318,7 +333,7 @@ class G3SessionTwoTurns(unittest.TestCase):
         _, rows = synthetic.read_csv(out)
         row = rows[0]
         self.assertEqual(row["t_session_ns"], "NA")
-        self.assertEqual(row["missing_field_count"], "4")
+        self.assertEqual(row["missing_field_count"], "2")
         self.assertIn("s0_r0:human_time_ns", row["missing_fields_sample"])
 
 

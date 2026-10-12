@@ -19,8 +19,7 @@ class BinaryTree : public BasicLogicalTopology {
     enum class TreeType { RootMax, RootMin };
     enum class Type { Leaf, Root, Intermediate };
 
-    BinaryTree(int id,
-               TreeType tree_type,
+    BinaryTree(TreeType tree_type,
                int total_tree_nodes,
                int start,
                int stride);
@@ -31,17 +30,20 @@ class BinaryTree : public BasicLogicalTopology {
     }
 
     Node* initialize_tree(int depth, Node* parent);
-    void build_tree(Node* node);
+    // Assigns in-order ids to every node under `node` and inserts them into
+    // node_list; start_counter is the running id cursor (a ctor local -- no
+    // member needed after construction).
+    void build_tree(Node* node, int& start_counter);
     int get_parent_id(int id);
     int get_left_child_id(int id);
     int get_right_child_id(int id);
     Type get_node_type(int id);
 
     int total_tree_nodes;
-    int start;
-    TreeType tree_type;
     int stride;
-    Node* tree;
+    // All constructed nodes are owned (and destroyed) through node_list;
+    // the ctor's subtree root is a local because no reader survives
+    // construction.
     std::map<int, Node*> node_list;
 };
 

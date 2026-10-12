@@ -12,9 +12,10 @@ namespace AstraSim {
 
 class BasicLogicalTopology : public LogicalTopology {
   public:
-    enum class BasicTopology { Ring = 0, BinaryTree };
-
-    BasicLogicalTopology(BasicTopology basic_topology) {}
+    // The BasicTopology enum and constructor parameter had no reader (the
+    // concrete subclasses carry the topology identity themselves) and were
+    // removed together.
+    BasicLogicalTopology() {}
 
     virtual ~BasicLogicalTopology() = default;
 

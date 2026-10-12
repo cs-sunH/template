@@ -499,7 +499,17 @@ const char* kKillScript =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    "resp={'schema_version':1,'batch_id':0,'source_delivery_sequence':0,"
+    // schema-2 minimal legal response (C5-era T6): exchange 1 must COMPLETE
+    // normally so the scenario's subject is the seq-1 hard death, not a
+    // version-mismatch abort during exchange 1.
+    "resp={'schema_version':2,'batch_id':0,'source_delivery_sequence':0,"
+    "'pipeline_descriptors':[],'kernel_contract':{"
+    "'projection_abi_version':1,'descriptor_version':1,"
+    "'pipeline_protocol_version':1,'model_version':'v6-compact-window-20261005',"
+    "'timer_whitelist_version':'timer-whitelist-v1-20261005',"
+    "'window_tile_limit':1,'window_local_error_ppm':10000,"
+    "'window_refine_margin_ppm':20000,'prediction_config_sha256':"
+    "'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'},"
     "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
     "'kv_actions':[],'future_alarms':[]}\n"
     "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
@@ -544,7 +554,17 @@ const char* kTwoByteScript =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    "resp={'schema_version':1,'batch_id':0,'source_delivery_sequence':0,"
+    // schema-2 base (same C5-era upgrade as the other inline scripts): the
+    // scenario's subject is the two-byte channel violation, and the byte
+    // invariant must fire regardless of the response body's validity.
+    "resp={'schema_version':2,'batch_id':0,'source_delivery_sequence':0,"
+    "'pipeline_descriptors':[],'kernel_contract':{"
+    "'projection_abi_version':1,'descriptor_version':1,"
+    "'pipeline_protocol_version':1,'model_version':'v6-compact-window-20261005',"
+    "'timer_whitelist_version':'timer-whitelist-v1-20261005',"
+    "'window_tile_limit':1,'window_local_error_ppm':10000,"
+    "'window_refine_margin_ppm':20000,'prediction_config_sha256':"
+    "'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'},"
     "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
     "'kv_actions':[],'future_alarms':[]}\n"
     "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
@@ -607,7 +627,16 @@ const char* kUnknownKeyScript =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    "resp={'schema_version':1,'batch_id':0,'source_delivery_sequence':0,"
+    // schema-2 base (so the version gate passes) + the unknown key: the
+    // scenario's subject is the ParseError, not a schema-1 mismatch.
+    "resp={'schema_version':2,'batch_id':0,'source_delivery_sequence':0,"
+    "'pipeline_descriptors':[],'kernel_contract':{"
+    "'projection_abi_version':1,'descriptor_version':1,"
+    "'pipeline_protocol_version':1,'model_version':'v6-compact-window-20261005',"
+    "'timer_whitelist_version':'timer-whitelist-v1-20261005',"
+    "'window_tile_limit':1,'window_local_error_ppm':10000,"
+    "'window_refine_margin_ppm':20000,'prediction_config_sha256':"
+    "'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'},"
     "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
     "'kv_actions':[],'future_alarms':[],'echo_of_request':{'x':1}}\n"
     "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
@@ -625,7 +654,10 @@ void test_malformed_response_abort_messages() {
         {"F: corrupt response JSON", kBadJsonScript,
          "response missing or corrupt"},
         {"F: missing schema_version", kMissingSchemaScript,
-         "response schema_version mismatch"},
+         // The 2026-10-01 audit fix split the single legacy "mismatch"
+         // diagnostic into "missing or not an integer" vs "mismatch";
+         // this scenario (the key entirely absent) hits the first one.
+         "response schema_version missing or not an integer"},
         {"F: unknown top-level key", kUnknownKeyScript,
          "malformed GraphBatch response"},
     };

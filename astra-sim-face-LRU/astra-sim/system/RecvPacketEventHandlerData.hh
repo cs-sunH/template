@@ -17,19 +17,21 @@ class WorkloadLayerHandlerData;
 class RecvPacketEventHandlerData : public BasicEventHandlerData {
   public:
     RecvPacketEventHandlerData();
-    // vnet/stream_id inputs are kept for the astraccl call sites but are no
-    // longer stored: both fields had zero readers.
+    // The vnet/stream_id parameters were removed (dead value chain cleanup
+    // 2026-09-30): both were ignored anonymous arguments fed from
+    // MyPacket::preferred_vnet / BaseStream::stream_id at the astraccl call
+    // sites and had zero readers anywhere in the tree.
     RecvPacketEventHandlerData(BaseStream* owner,
                                int sys_id,
-                               EventType event,
-                               int /*vnet*/,
-                               int /*stream_id*/);
+                               EventType event);
 
     Workload* workload;
     WorkloadLayerHandlerData* wlhd;
     BaseStream* owner;
     CustomAlgorithm* custom_algorithm;
-    Tick ready_time = 0;
+    // ready_time was removed (dead code cleanup 2026-09-30): the member was
+    // only ever written by the constructor and had zero readers anywhere in
+    // the tree.
 };
 
 }  // namespace AstraSim

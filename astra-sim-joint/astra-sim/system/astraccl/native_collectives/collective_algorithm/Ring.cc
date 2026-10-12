@@ -5,6 +5,7 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/astraccl/native_collectives/collective_algorithm/Ring.hh"
 
+#include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/PacketBundle.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 
@@ -92,6 +93,30 @@ int Ring::get_non_zero_latency_packets() {
 }
 
 void Ring::run(EventType event, CallData* data) {
+    // C3-style guard (mirrors wscllm 2026-09-28; face-LRU audit 2026-09-29):
+    // a StreamInit reaching THIS (base) run with comType == All_to_All means
+    // the dispatch selected plain Ring for an all-to-all stream
+    // ("ring"/"oneRing" in all-to-all-implementation). Plain Ring is doubly
+    // wrong for All_to_All: its neighbor pair is fixed at construction
+    // (process_max_count only releases packets, no rotation), so every
+    // exchange talks to the single ring neighbor instead of all n-1 peers,
+    // and its stream_count ((n-1)*n/2) counts rounds that never deliver the
+    // all-to-all data set. The AllToAll subclass (the "direct"
+    // implementation) is the correct all_to_all path and overrides run(), so
+    // this guard never fires for it -- even though its base-constructor
+    // pass-through legitimately constructs the Ring base with All_to_All.
+    // Dormant today (no workload emits all_to_all), so this converts a
+    // silent wrong-traffic simulation into a loud misconfiguration failure
+    // without touching any current run.
+    if (event == EventType::StreamInit && comType == ComType::All_to_All) {
+        LoggerFactory::get_logger("system::collective::Ring")
+            ->critical(
+                "######### Exiting because plain Ring must not drive "
+                "All_to_All (all-to-all-implementation must be direct; "
+                "ring neighbor is fixed and stream_count is wrong) "
+                "#########");
+        std::exit(1);
+    }
     if (event == EventType::General) {
         free_packets += 1;
         ready();
@@ -216,7 +241,7 @@ bool Ring::ready() {
         return false;
     }
     MyPacket packet = packets.front();
-    sim_request snd_req;
+    sim_request snd_req{};
     snd_req.srcRank = id;
     snd_req.dstRank = packet.preferred_dest;
     snd_req.tag = stream->stream_id;
@@ -227,7 +252,7 @@ bool Ring::ready() {
         stream->stream_id, &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE,
         &Sys::handleEvent,
         nullptr);  // stream_id+(packet.preferred_dest*50)
-    sim_request rcv_req;
+    sim_request rcv_req{};
     rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
         stream, stream->owner->id, EventType::PacketReceived,

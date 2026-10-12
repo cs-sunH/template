@@ -3,7 +3,7 @@
   "detail_level": "full",
   "memory": {
     "chiplets_per_npu": 4,
-    "projection": "equal_striping",
+    "projection": "measurement_only_equal_striping",
     "wasted_definition": "capacity_minus_weight_minus_resident_kv"
   },
   "microbenchmark": {

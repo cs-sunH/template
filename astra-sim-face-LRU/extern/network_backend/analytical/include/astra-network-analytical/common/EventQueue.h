@@ -50,6 +50,12 @@ class EventQueue {
     /**
      * Schedule an event with a given event time.
      *
+     * event_time must be strictly greater than current_time unless called
+     * inside the invoke pass (see in_invoke_context()), where a same-tick
+     * event merges into the EventList currently being invoked; same-tick
+     * work from any other context must use schedule_event_deferred()
+     * instead. Violations fail closed in every build type.
+     *
      * @param event_time time of event
      * @param callback callback function pointer
      * @param callback_arg argument of the callback function

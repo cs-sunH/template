@@ -13,7 +13,7 @@ using namespace std;
 using namespace AstraSim;
 
 BinaryTree::BinaryTree(
-    int id, TreeType tree_type, int total_tree_nodes, int start, int stride)
+    TreeType tree_type, int total_tree_nodes, int start, int stride)
     : BasicLogicalTopology() {
     // The tree builder below allocates node ids for a complete binary tree of
     // depth floor(log2(total_tree_nodes)) + 1, which only covers every rank
@@ -34,7 +34,6 @@ BinaryTree::BinaryTree(
     }
     this->total_tree_nodes = total_tree_nodes;
     this->start = start;
-    this->tree_type = tree_type;
     this->stride = stride;
     tree = new Node(-1, nullptr, nullptr, nullptr);
     int depth = 1;

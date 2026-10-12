@@ -188,10 +188,11 @@ def kv_cache_shard_bytes_for_layer_range(
 ) -> tuple[int, ...]:
     """Return exact whole-head KV bytes for ``[layer_start, layer_end)``.
 
-    B2 (2026-09-06, sh_2.0 ``face_scheduler.py:400-443``): layer ranges are
-    derived from ``model.layers`` so suffix offloading stays model-independent;
-    the per-rank whole-head split and the total-byte conservation assertion
-    match the blueprint exactly.
+    B2 (2026-09-06, sh_2.0 face_scheduler.py 的层范围辅助函数):
+    layer ranges are derived from ``model.layers`` so residency sizing stays
+    model-independent under the two-state whole-session model (LOCAL/REMOTE,
+    全层域整体外迁,无 suffix 分层); the per-rank whole-head split and the
+    total-byte conservation assertion match the blueprint exactly.
     """
 
     _require_nonnegative_int(tokens, "tokens")
@@ -228,9 +229,10 @@ def kv_cache_shard_bytes_for_layer_range(
 def _rank_coordinates(hardware: Any, rank: int) -> tuple[int, int]:
     """Lazy re-export of the mapping module's coordinate helper.
 
-    face_scheduler.py imports this module at load time (NOC_MIGRATE
-    re-export), so a module-level back-import would be circular; the lazy
-    call site keeps a single authoritative implementation.
+    face_scheduler.py imports this module at load time
+    (estimate_model_weight_bytes import), so a module-level back-import
+    would be circular; the lazy call site keeps a single authoritative
+    implementation.
     """
 
     from face_scheduler import rank_coordinates
@@ -241,8 +243,8 @@ def _rank_coordinates(hardware: Any, rank: int) -> tuple[int, int]:
 def physical_edge_ranks(hardware: Any) -> tuple[int, ...]:
     """Return all ranks on the deterministic physical mesh boundary.
 
-    B2 (2026-09-06, sh_2.0 ``face_scheduler.py:446-459``): the remote-memory
-    port set is the complete mesh boundary.
+    B2 (2026-09-06, sh_2.0 face_scheduler.py 的 select_decode_instance
+    校验段): the remote-memory port set is the complete mesh boundary.
     """
 
     edges = []
@@ -259,7 +261,7 @@ def physical_edge_ranks(hardware: Any) -> tuple[int, ...]:
 
 
 def manhattan_hops(hardware: Any, source: int, target: int) -> int:
-    """B2 (sh ``:462-465``): Manhattan distance in mesh coordinates."""
+    """B2 (sh_2.0 face_scheduler.py 蓝本): Manhattan distance in mesh coordinates."""
 
     source_row, source_col = _rank_coordinates(hardware, source)
     target_row, target_col = _rank_coordinates(hardware, target)
@@ -271,7 +273,7 @@ def nearest_edge_rank(
     rank: int,
     edge_ranks: Sequence[int],
 ) -> int:
-    """B2 (sh ``:487-498``): nearest boundary rank, ties by lowest index."""
+    """B2 (sh_2.0 face_scheduler.py 蓝本): nearest boundary rank, ties by lowest index."""
 
     if not edge_ranks:
         raise ValueError("at least one remote-memory edge rank is required")
@@ -331,10 +333,15 @@ class SessionKVSnapshot:
     ``shard_bytes`` remains the full-model logical shard vector (all layers
     at ``logical_context_tokens``); the physically resident distribution is
     ``local_shard_bytes`` (the whole ``[0, model_layers)`` domain for
-    LOCAL_HBM, empty otherwise) and the remote remainder is
-    ``remote_shard_bytes`` (the exact dual).  ``resident_prefix_layers`` is
+    LOCAL_HBM, empty otherwise) and the remote remainder is ``remote_bytes``
+    (the exact byte dual of ``local_bytes``).  ``resident_prefix_layers`` is
     a compat field kept for old-log consumers: new writes are always
     ``model.layers`` (local) or ``0`` (remote).
+
+    P3(face-LRU 审计,2026-09-29):原 ``remote_shard_bytes`` 逐 shard 镜像
+    与 ``evicted_at_ns``/``evicted_by_request_id`` 逐出审计三字段删除
+    (全仓 grep 零读者,含测试;逐出事实由 EvictionRecord/KVCacheEvent
+    流承载)。
     """
 
     session_id: str
@@ -347,12 +354,11 @@ class SessionKVSnapshot:
     local_bytes: int
     remote_bytes: int
     local_shard_bytes: tuple[int, ...]
-    remote_shard_bytes: tuple[int, ...]
     last_completion_ns: Optional[int]
     active: bool
-    last_request_id: Optional[str] = None
-    evicted_at_ns: Optional[int] = None
-    evicted_by_request_id: Optional[str] = None
+    # last_request_id 快照镜像字段已删除(死代码清理 2026-09-30):全仓零
+    # 读者;会话态自身的 last_request_id 仍在 SessionKVState 上活跃
+    # (retire_terminal_session 所有权校验消费)。
 
 
 @dataclass
@@ -367,14 +373,12 @@ class SessionKVState:
     last_completion_ns: Optional[int] = None
     active: bool = False
     last_request_id: Optional[str] = None
-    evicted_at_ns: Optional[int] = None
-    evicted_by_request_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
 class KVTransferShard:
     """B2 KVTransfer shard (contract §4): physical edge port + XY path +
-    layer range per shard (sh ``:1119-1133``)."""
+    layer range per shard (sh_2.0 face_scheduler.py 蓝本)."""
 
     source_rank: Optional[int]
     target_rank: Optional[int]
@@ -393,7 +397,7 @@ class KVTransferShard:
 
 @dataclass(frozen=True)
 class KVTransfer:
-    """B2 KVTransfer (contract §4, sh ``:1136-1183``): kind carrier with the
+    """B2 KVTransfer (contract §4, sh_2.0 face_scheduler.py 蓝本): kind carrier with the
     ``local_hit / noc_migrate / remote_load / remote_store`` whitelist and
     layer-domain conservation validation."""
 
@@ -411,8 +415,14 @@ class KVTransfer:
     layer_end: int
     resident_prefix_layers_before: int
     resident_prefix_layers_after: int
+    # P3(face-LRU 审计,2026-09-29):物理发射 tick(决策账本行可能晚于
+    # 阻塞 attempt 落盘——跨阻塞 attempt 累积的逐出在最终准入行序列化,
+    # 行 tick ≠ 物理 tick)。0 = 旧产物/未知(行 tick 回退)。
+    time_ns: int = 0
 
     def __post_init__(self) -> None:
+        if self.time_ns < 0:
+            raise ValueError("KV transfer time_ns must be non-negative")
         if self.kind not in {
             "local_hit",
             "noc_migrate",
@@ -480,12 +490,14 @@ class RequestCapacityReservation:
 
 @dataclass(frozen=True)
 class HistoryDecision:
+    # 2026-09-26 死管道清理:transfer_shards/recompute_tokens/location_before/
+    # resident_prefix_layers_before 四个只写不读字段(全仓 grep 零读者,亦不进
+    # 决策日志序列化面)连同五处字面量写入一并移除;恢复/迁移的逐段传输事实
+    # 由 transfers(KVTransfer,契约 §4)承载。
+    # 2026-10-01 死管道清理续:target_instance_index/history_tokens 两个
+    # 只写不读字段同标准移除(action 保留——调度器决策日志与测试有读者)。
     action: str
     source_instance_index: Optional[int]
-    target_instance_index: int
-    history_tokens: int
-    transfer_shards: tuple[KVTransferShard, ...]
-    recompute_tokens: int
     evictions: tuple[EvictionRecord, ...]
     admission_blocked: bool = False
     insufficient_ranks: tuple[int, ...] = ()
@@ -493,16 +505,19 @@ class HistoryDecision:
     # whole-session transfer; hbm_watermark's "same request + same kind
     # twice fails" guard keeps a single prefill record per request).
     transfers: tuple[KVTransfer, ...] = ()
-    location_before: Optional[str] = None
-    resident_prefix_layers_before: Optional[int] = None
 
 
 @dataclass(frozen=True)
 class MoveDecision:
-    action: str
+    # 2026-10-01 死管道清理:action/target_instance_index 两个只写不读字段
+    # 移除(全仓 grep 零读者;消费方只读 source_instance_index/transfer/
+    # evictions/admission_blocked/insufficient_ranks)。
+    # transfer 可空:容量阻塞(admission_blocked=True)分支不携带迁移
+    # ——此前伪造的 local_hit 占位 transfer 宣称"同实例零开销复用"而
+    # 真实动因是跨实例迁移被容量阻塞,全仓零读者,已删(防未来消费者
+    # 误读);成功路径恒非空。
     source_instance_index: int
-    target_instance_index: int
-    transfer: KVTransfer
+    transfer: Optional[KVTransfer]
     evictions: tuple[EvictionRecord, ...]
     admission_blocked: bool = False
     insufficient_ranks: tuple[int, ...] = ()
@@ -559,7 +574,7 @@ class SessionKVCacheManager:
         self.model_weight_bytes_by_tp_rank = model_weight_shard_bytes_by_tp_rank(
             model, self.tp_degree
         )
-        # B2 (sh ``:1220-1236``): remote-memory edge ports, defaulting to the
+        # B2 (sh_2.0 face_scheduler.py 蓝本): remote-memory edge ports, defaulting to the
         # complete mesh boundary.
         if edge_ranks is None:
             normalized_edges = physical_edge_ranks(topology.hardware)
@@ -580,7 +595,9 @@ class SessionKVCacheManager:
         self.edge_ranks = normalized_edges
 
         self._rank_states: dict[int, NodeHBMState] = {}
-        self._rank_relative_indexes: dict[int, int] = {}
+        # _rank_relative_indexes 死存储已删除(死代码清理 2026-09-30):
+        # 构造期写入后全仓零读者;逐 NPU 相对序经 topology.instance
+        # (idx).ranks 的 zip 顺序隐式承载。
         for instance in instances:
             if len(instance.ranks) != self.tp_degree:
                 raise ValueError("inconsistent TP degree in topology")
@@ -598,8 +615,11 @@ class SessionKVCacheManager:
                         f"has {state.capacity_bytes}"
                     )
                 self._rank_states[rank] = state
-                self._rank_relative_indexes[rank] = relative_rank
         self._sessions: dict[str, SessionKVState] = {}
+        # §7.3 profile 接线(R2 py-online-D1 修复,2026-09-26):受害候选
+        # 池扫描(_completed_local_candidates 遍历全会话)经此观察者如实
+        # 计入调度器逐批 full_scan_entries;缺省 None = 未接线静默跳过。
+        self.full_scan_observer = None
         self._reservations: dict[str, RequestCapacityReservation] = {}
         self._events: list[KVCacheEvent] = []
         # B1(2026-08-28):kv 事件流水号独立于列表位置——前缀压缩后
@@ -668,7 +688,7 @@ class SessionKVCacheManager:
         return None if state is None else self._snapshot_of(state)
 
     def session_snapshots(self) -> tuple[SessionKVSnapshot, ...]:
-        """B2 (sh ``session_snapshots :1789-1790``): all snapshots, sorted."""
+        """B2 (sh_2.0 face_scheduler.py 的 session_snapshots 蓝本): all snapshots, sorted."""
 
         return tuple(
             self._snapshot_of(self._sessions[session_id])
@@ -683,16 +703,18 @@ class SessionKVCacheManager:
         complete vector locally and nothing remotely, a REMOTE_MEMORY session
         the exact dual."""
         local_shard_bytes = self._local_shards_for(state)
-        remote_shard_bytes = (
-            ()
+        # P3(2026-09-29):原 remote_shard_bytes 逐 shard 镜像删除(零读者);
+        # remote_bytes 保留(test_admission_liveness 等读者),口径不变。
+        remote_bytes = (
+            0
             if state.location == LOCAL_HBM
-            else kv_cache_shard_bytes_for_layer_range(
+            else sum(kv_cache_shard_bytes_for_layer_range(
                 self.model,
                 state.logical_context_tokens,
                 self.tp_degree,
                 layer_start=0,
                 layer_end=self.model.layers,
-            )
+            ))
         )
         return SessionKVSnapshot(
             session_id=state.session_id,
@@ -703,14 +725,10 @@ class SessionKVCacheManager:
             shard_bytes=state.shard_bytes,
             resident_prefix_layers=state.resident_prefix_layers,
             local_bytes=sum(local_shard_bytes),
-            remote_bytes=sum(remote_shard_bytes),
+            remote_bytes=remote_bytes,
             local_shard_bytes=local_shard_bytes,
-            remote_shard_bytes=remote_shard_bytes,
             last_completion_ns=state.last_completion_ns,
             active=state.active,
-            last_request_id=state.last_request_id,
-            evicted_at_ns=state.evicted_at_ns,
-            evicted_by_request_id=state.evicted_by_request_id,
         )
 
     def hbm_snapshots(self, instance_index: Optional[int] = None) -> tuple[NodeHBMSnapshot, ...]:
@@ -763,7 +781,7 @@ class SessionKVCacheManager:
 
     @staticmethod
     def _fifo_sort(candidates: list[SessionKVState]) -> list[SessionKVState]:
-        """B2 (sh ``:2667-2675``): (last_completion_ns, session_id) 升序 = LRU."""
+        """B2 (sh_2.0 face_scheduler.py 的 LRU 排序蓝本): (last_completion_ns, session_id) 升序 = LRU."""
 
         candidates.sort(
             key=lambda session: (
@@ -1154,7 +1172,7 @@ class SessionKVCacheManager:
             self._check_invariants()
 
     # ------------------------------------------------------------------
-    # B2 transfer constructors (contract §4/§5; sh ``:2420-2665``).
+    # B2 transfer constructors (contract §4/§5; sh_2.0 face_scheduler.py 蓝本).
     # ------------------------------------------------------------------
 
     def _xy_path(self, source: int, target: int) -> tuple[int, ...]:
@@ -1172,6 +1190,7 @@ class SessionKVCacheManager:
         reason: str,
         session: SessionKVState,
         trigger_request_id: str,
+        time_ns: int,
     ) -> KVTransfer:
         return KVTransfer(
             kind="local_hit",
@@ -1188,6 +1207,7 @@ class SessionKVCacheManager:
             layer_end=self.model.layers,
             resident_prefix_layers_before=self.model.layers,
             resident_prefix_layers_after=self.model.layers,
+            time_ns=time_ns,
         )
 
     def _noc_transfer(
@@ -1199,6 +1219,7 @@ class SessionKVCacheManager:
         trigger_request_id: str,
         source_instance_index: int,
         target_instance_index: int,
+        time_ns: int,
     ) -> KVTransfer:
         if session.resident_prefix_layers != self.model.layers:
             raise RuntimeError("NoC migration requires a fully resident session")
@@ -1234,6 +1255,7 @@ class SessionKVCacheManager:
             layer_end=self.model.layers,
             resident_prefix_layers_before=self.model.layers,
             resident_prefix_layers_after=self.model.layers,
+            time_ns=time_ns,
         )
 
     def _remote_load_transfer(
@@ -1246,6 +1268,7 @@ class SessionKVCacheManager:
         target_instance_index: int,
         layer_start: int,
         layer_end: int,
+        time_ns: int,
     ) -> KVTransfer:
         target = self.topology.instance(target_instance_index)
         transfer_shards = kv_cache_shard_bytes_for_layer_range(
@@ -1286,6 +1309,7 @@ class SessionKVCacheManager:
             layer_end=layer_end,
             resident_prefix_layers_before=layer_start,
             resident_prefix_layers_after=layer_end,
+            time_ns=time_ns,
         )
 
     def _remote_store_transfer(
@@ -1298,6 +1322,7 @@ class SessionKVCacheManager:
         layer_start: int,
         layer_end: int,
         resident_prefix_layers_after: int,
+        time_ns: int,
     ) -> KVTransfer:
         if session.instance_index is None:
             raise RuntimeError("cannot store a non-local KV session")
@@ -1341,6 +1366,7 @@ class SessionKVCacheManager:
             layer_end=layer_end,
             resident_prefix_layers_before=session.resident_prefix_layers,
             resident_prefix_layers_after=resident_prefix_layers_after,
+            time_ns=time_ns,
         )
 
     # ------------------------------------------------------------------
@@ -1391,13 +1417,15 @@ class SessionKVCacheManager:
             layer_start=0,
             layer_end=self.model.layers,
             resident_prefix_layers_after=0,
+            time_ns=now_ns,
         )
         self._remove_shards(instance_index, local_shards)
         victim.location = REMOTE_MEMORY
         victim.instance_index = None
         victim.resident_prefix_layers = 0
-        victim.evicted_at_ns = now_ns
-        victim.evicted_by_request_id = trigger_request_id
+        # P3(2026-09-29):原 victim.evicted_at_ns / evicted_by_request_id
+        # 写点删除(快照字段随零读者一并移除;逐出事实由 EvictionRecord
+        # 与 evict_full 事件承载)。
         self._check_invariants_after_mutation(session_ids=(victim.session_id,))
         after = self._remaining(instance_index)
         record = EvictionRecord(
@@ -1495,6 +1523,10 @@ class SessionKVCacheManager:
                 for session in self._completed_local_candidates(instance_index)
                 if session.session_id not in protected
             ]
+            # §7.3 profile(R2 py-online-D1 修复):候选池按设计 O(全会话)
+            # 遍历+排序——经观察者如实计入本决策批 full_scan_entries。
+            if self.full_scan_observer is not None:
+                self.full_scan_observer(len(self._sessions))
             candidate_index = 0
             while insufficient:
                 if candidate_index >= len(candidates):
@@ -1552,14 +1584,21 @@ class SessionKVCacheManager:
             )
             return CapacityResult(tuple(evictions), False, insufficient)
 
-        # D4-I1 复核 (sh ``:2973-2981``): 返回前逐笔复查被逐会话均已完成
-        # 且 inactive(入口守卫之外的循环间状态漂移捕获)。
+        # D4-I1 复核 (sh_2.0 face_scheduler.py 蓝本): 返回前逐笔复查被逐会话均已完成
+        # 且 inactive 且非保护(入口守卫之外的循环间状态漂移捕获;"非保护"
+        # 与 README/策略说明的复核口径逐字对齐——保护由候选过滤构造保证,
+        # 此处为该保证的显式复核,防未来过滤路径改动引入漏网)。
         for record in evictions:
             evicted = self._sessions.get(record.victim_session_id)
-            if evicted is None or evicted.active or evicted.last_completion_ns is None:
+            if (
+                evicted is None
+                or evicted.active
+                or evicted.last_completion_ns is None
+                or record.victim_session_id in protected
+            ):
                 raise RuntimeError(
-                    "passive eviction victim is active or uncompleted: "
-                    f"{record.victim_session_id}")
+                    "passive eviction victim is active, uncompleted or "
+                    f"protected: {record.victim_session_id}")
         return CapacityResult(tuple(evictions), True, ())
 
     def reserve_request_capacity(
@@ -1573,7 +1612,17 @@ class SessionKVCacheManager:
         phase: str = "admission",
         reason: str = "request_reservation",
     ) -> CapacityResult:
-        """Reserve a target's final KV footprint without placing KV there."""
+        """Reserve a target's final KV footprint without placing KV there.
+
+        R2 py-sched-D3 定位注记(2026-09-26):本 API 与
+        ``release_request_capacity`` 在产线主链零调用(face 准入链的
+        容量收敛由 ``ensure_physical_fit`` 直连承载,见
+        face_online_scheduler 准入注释"链无 reserve_request_capacity
+        调用"),``_reservations`` 在真实运行中恒空,下游 reserved 台账
+        比对/终局检查均为恒真空转;唯一调用方 =
+        test_face_kv_incremental_invariants.py(经 invoke 反射)。保留
+        为测试驱动的预约语义入口/未来扩展位,非在线路径。
+        """
 
         if request_id in self._reservations:
             raise RuntimeError(f"duplicate KV reservation for request {request_id}")
@@ -1656,10 +1705,6 @@ class SessionKVCacheManager:
             raise RuntimeError(f"session {session_id} received an overlapping request")
 
         desired = self._history_shards(required_context_tokens)
-        location_before = None if state is None else state.location
-        prefix_layers_before = (
-            None if state is None else state.resident_prefix_layers
-        )
 
         def blocked_decision(
             action: str,
@@ -1669,15 +1714,9 @@ class SessionKVCacheManager:
             return HistoryDecision(
                 action=action,
                 source_instance_index=source_instance_index,
-                target_instance_index=target_instance_index,
-                history_tokens=history_tokens,
-                transfer_shards=(),
-                recompute_tokens=0,
                 evictions=fit.evictions,
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
-                location_before=location_before,
-                resident_prefix_layers_before=prefix_layers_before,
             )
 
         if state is None:
@@ -1721,13 +1760,7 @@ class SessionKVCacheManager:
             return HistoryDecision(
                 action=NO_HISTORY,
                 source_instance_index=None,
-                target_instance_index=target_instance_index,
-                history_tokens=0,
-                transfer_shards=(),
-                recompute_tokens=0,
                 evictions=fit.evictions,
-                location_before=None,
-                resident_prefix_layers_before=None,
             )
 
         if state.location == LOCAL_HBM:
@@ -1769,6 +1802,7 @@ class SessionKVCacheManager:
                     reason="history_local_reuse",
                     session=state,
                     trigger_request_id=trigger_request_id,
+                    time_ns=now_ns,
                 )
                 before = self._remaining(target_instance_index)
                 self._event(
@@ -1790,14 +1824,8 @@ class SessionKVCacheManager:
                 return HistoryDecision(
                     action=LOCAL_HIT,
                     source_instance_index=source_instance,
-                    target_instance_index=target_instance_index,
-                    history_tokens=history_tokens,
-                    transfer_shards=(),
-                    recompute_tokens=0,
                     evictions=fit.evictions,
                     transfers=(transfer,),
-                    location_before=location_before,
-                    resident_prefix_layers_before=prefix_layers_before,
                 )
 
             # LOCAL 跨实例:整份 NoC 迁移(face 既有 1000 类路径,语义保留)。
@@ -1808,6 +1836,7 @@ class SessionKVCacheManager:
                 trigger_request_id=trigger_request_id,
                 source_instance_index=source_instance,
                 target_instance_index=target_instance_index,
+                time_ns=now_ns,
             )
             before = self._remaining(target_instance_index)
             # The dynamic transfer contract admits target shards before releasing
@@ -1836,14 +1865,8 @@ class SessionKVCacheManager:
             return HistoryDecision(
                 action=NOC_MIGRATE,
                 source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-                history_tokens=history_tokens,
-                transfer_shards=transfer.shards,
-                recompute_tokens=0,
                 evictions=fit.evictions,
                 transfers=(transfer,),
-                location_before=location_before,
-                resident_prefix_layers_before=prefix_layers_before,
             )
 
         if state.location != REMOTE_MEMORY:
@@ -1870,6 +1893,7 @@ class SessionKVCacheManager:
             target_instance_index=target_instance_index,
             layer_start=0,
             layer_end=self.model.layers,
+            time_ns=now_ns,
         )
         before = self._remaining(target_instance_index)
         self._add_shards(target_instance_index, history_shards)
@@ -1878,8 +1902,6 @@ class SessionKVCacheManager:
         state.resident_prefix_layers = self.model.layers
         state.active = True
         state.last_request_id = trigger_request_id
-        state.evicted_at_ns = None
-        state.evicted_by_request_id = None
         self._check_invariants_after_mutation(session_ids=(session_id,))
         after = self._remaining(target_instance_index)
         self._event(
@@ -1901,14 +1923,8 @@ class SessionKVCacheManager:
         return HistoryDecision(
             action=_REMOTE_RESTORE,
             source_instance_index=None,
-            target_instance_index=target_instance_index,
-            history_tokens=history_tokens,
-            transfer_shards=(),
-            recompute_tokens=0,
             evictions=fit.evictions,
             transfers=(transfer,),
-            location_before=location_before,
-            resident_prefix_layers_before=prefix_layers_before,
         )
 
     def _grow(
@@ -2005,17 +2021,9 @@ class SessionKVCacheManager:
         )
         evictions = fit.evictions
         if not fit.admitted:
-            placeholder = self._local_hit_transfer(
-                phase="prefill_decode",
-                reason="prefill_decode_local_reuse",
-                session=state,
-                trigger_request_id=trigger_request_id,
-            )
             return MoveDecision(
-                action=LOCAL_HIT if source_instance == target_instance_index else NOC_MIGRATE,
                 source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-                transfer=placeholder,
+                transfer=None,
                 evictions=evictions,
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
@@ -2026,6 +2034,7 @@ class SessionKVCacheManager:
                 reason="prefill_decode_local_reuse",
                 session=state,
                 trigger_request_id=trigger_request_id,
+                time_ns=now_ns,
             )
             before = self._remaining(target_instance_index)
             self._event(
@@ -2044,7 +2053,7 @@ class SessionKVCacheManager:
                 before=before,
                 after=before,
             )
-            return MoveDecision(LOCAL_HIT, source_instance, target_instance_index, transfer, evictions)
+            return MoveDecision(source_instance, transfer, evictions)
 
         transfer = self._noc_transfer(
             phase="prefill_decode",
@@ -2053,6 +2062,7 @@ class SessionKVCacheManager:
             trigger_request_id=trigger_request_id,
             source_instance_index=source_instance,
             target_instance_index=target_instance_index,
+            time_ns=now_ns,
         )
         before = self._remaining(target_instance_index)
         self._add_shards(target_instance_index, state.shard_bytes)
@@ -2076,7 +2086,7 @@ class SessionKVCacheManager:
             before=before,
             after=after,
         )
-        return MoveDecision(NOC_MIGRATE, source_instance, target_instance_index, transfer, evictions)
+        return MoveDecision(source_instance, transfer, evictions)
 
     def grow_decode(
         self,
@@ -2146,7 +2156,8 @@ class SessionKVCacheManager:
     ) -> Optional[int]:
         """Forget terminal KV in the two-state model.
 
-        B2 (sh ``:3434-3510``): no eviction transfer is emitted and this is
+        B2 (sh_2.0 face_scheduler.py 的 forget-terminal 蓝本): no eviction
+        transfer is emitted and this is
         not counted as an eviction.  Only the bytes still physically
         resident in local HBM are decremented; remote-only bytes are
         silently written off with their terminal session metadata (远端账面

@@ -52,14 +52,6 @@ class ETFeeder {
   }
 
   std::shared_ptr<ETFeederNode> lookupNode(const NodeId& node_id);
-  bool hasNodesToIssue();
-  std::shared_ptr<ETFeederNode> getNextIssuableNode();
-  void pushBackIssuableNode(const NodeId& node_id);
-  void freeChildrenNodes(const NodeId& node_id);
-
-  // legacy interface
-  void addNode(std::shared_ptr<ETFeederNode> node);
-  void removeNode(const NodeId& node_id);
 
   const uint64_t& feeder_id() const;
 

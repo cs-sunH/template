@@ -27,8 +27,10 @@ enum class BypassRule {
  */
 
 /*
- * TODO: There is currently no safeguard to prevent a case where the custom algorithm's size does not fit the communication group
- * (Whether there is no commgroup specified, defaulting to all ranks, one big commgroup that includes all ranks, or a smaller commgroup).
+ * Known limitation (2026-09-26 review, replaces the bare upstream TODO):
+ * there is no safeguard preventing a custom algorithm whose size does not
+ * fit the communication group (no commgroup specified / all-rank default
+ * group / a smaller group alike). This is upstream behavior kept as-is.
  */
 class CollectiveImplLookup {
     public:
@@ -43,6 +45,18 @@ class CollectiveImplLookup {
             uint64_t workload_node_id,
             BypassRule bypass_rule = BypassRule::NO_BYPASS
         );
+
+        // Phase-time re-validation of the (native implementation x collective
+        // type) whitelist enforced inside get_collective_impl: the All-Reduce
+        // split-phase paths in Sys (collective-optimization: localBWAware /
+        // inter-dimension-scheduling: OfflineGreedy) reuse the All-Reduce
+        // implementation for their Reduce_Scatter/All_Gather phases, so the
+        // lookup-time check -- which only sees the original collective type
+        // -- cannot catch such a rewritten pairing. Sys calls this from
+        // generate_collective_phase with the *phase* type; a violating
+        // pairing fails loud.
+        static void ensure_native_impl_supports(ComType comm_type,
+                                                CollectiveImplType impl_type);
 
     private:
         // Map from Chakra node id (integer) to a custom algorithm identifier/filepath.
@@ -59,8 +73,6 @@ class CollectiveImplLookup {
         // To be applied only if no custom algorithm is specified.
         // The algorithm for each dimension is specified in the system input with the key "all-reduce-implementation".
         std::map<ComType, std::vector<CollectiveImpl*>> native_impl_per_coll_dim;
-
-        int rank;
 };
 
 } // namespace AstraSim

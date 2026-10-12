@@ -3,7 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
-Interface + File implementation (方案 §4 步骤 1-7).
+File implementation of the decision channel (方案 §4 步骤 1-7).
 
 The C++ <-> Python decision channel of the Execution-Driven loop. The
 tick-end gate (ed_driver_tick_end) drains the DecisionMailbox into one
@@ -61,8 +61,11 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
     the LIFETIME resp_notify read end, or EPIPE on the req_notify write,
     means the Python process is gone -> C++ aborts with a clear message.
     Because both resp ends are long-lived, "no writer yet" states no longer
-    exist mid-run and cannot be mistaken for death. A poll timeout
-    (timeout_ms > 0) aborts identically.
+    exist mid-run and cannot be mistaken for death. The one residual
+    no-writer window is startup (before Python's write-end open lands and
+    before the first byte ever crossed): EOF there is retried for a bounded
+    startup grace before the fatal verdict (wait_response_byte). A poll
+    timeout (timeout_ms > 0) aborts identically.
   - Duplicate seq idempotency: Python tracks processed request seqs and
     ack seqs separately and ignores duplicates (files are atomic, so a
     duplicate can only come from a retry).
@@ -118,40 +121,43 @@ using GraphBatch = ParsedGraphBatch;
 /// exposed for fixtures and the step-1-8 wiring).
 nlohmann::json build_request_json(const StateDelta& delta);
 
-/// Decision channel interface (方案 §4 步骤 1-7 操作 2).
-class DecisionBridge {
-  public:
-    virtual ~DecisionBridge() = default;
-
-    /// Deliver one StateDelta to Python and block until the GraphBatch
-    /// reply arrives. Exactly one delivery per tick (backpressure).
-    virtual GraphBatch deliver_and_receive(const StateDelta& delta) = 0;
-
-    /// Notify Python that the batch with batch_id (epoch seq) was
-    /// committed. Python's provisional ledger finalizes on this ack
-    /// (step-1-6 pseudocode; the ledger itself lands with step 1-8/1-9).
-    virtual void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
-                                 bool success) = 0;
-};
-
-/// File-implementation of the v0 protocol (blocking FIFOs, atomic JSON
-/// files, fail-closed error/crash/timeout semantics). timeout_ms == 0
-/// waits forever (the phase-1 default).
+/// File-implementation of the v1 decision channel (方案 §4 步骤 1-7 操作 2;
+/// blocking FIFOs, atomic JSON files, fail-closed error/crash/timeout
+/// semantics). The tick-end gate (ed_driver_tick_end) drains the
+/// DecisionMailbox into one StateDelta and calls deliver_and_receive(delta);
+/// the returned GraphBatch is the scheduler's reply. This bridge is a
+/// DECISION channel, NOT a runtime request injection channel -- Producer ->
+/// C++ submit/close/EOF/error always go through the step-1-2 command queue
+/// and never touch req_notify.fifo. (2026-09-29: the abstract DecisionBridge
+/// interface was removed -- nothing ever held a base-class pointer or
+/// reference, so this concrete class is the only decision channel.)
+/// timeout_ms == 0 waits forever (the phase-1 default).
 /// C1 (2026-08-29): num_ranks feeds parse_graph_batch's rank-domain checks
 /// (node/edge/watch-member/touched-rank ranges). -1 (the default) disables
 /// them for legacy fixtures; the official online main passes its NPU count.
-class FileDecisionBridge : public DecisionBridge {
+class FileDecisionBridge {
   public:
     explicit FileDecisionBridge(std::string bridge_dir, int timeout_ms = 0,
                                 int num_ranks = -1);
-    ~FileDecisionBridge() override;
+    ~FileDecisionBridge();
 
     FileDecisionBridge(const FileDecisionBridge&) = delete;
     FileDecisionBridge& operator=(const FileDecisionBridge&) = delete;
 
-    GraphBatch deliver_and_receive(const StateDelta& delta) override;
+    /// Deliver one StateDelta to Python and block until the GraphBatch
+    /// reply arrives. Exactly one delivery per tick (backpressure).
+    GraphBatch deliver_and_receive(const StateDelta& delta);
+
+    /// Notify Python that the batch with batch_id (epoch seq) was
+    /// committed. Python's provisional ledger finalizes on this ack
+    /// (step-1-6 pseudocode; the ledger itself lands with step 1-8/1-9).
+    /// `success` is an ack-schema reserved field (2026-09-27 note): a
+    /// commit ack is only ever sent after the batch fully committed -- any
+    /// failure aborts fail-closed BEFORE the ack -- so every current
+    /// producer passes true, and the python peer (online_scheduler_base)
+    /// asserts ack["success"] is True.
     void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
-                         bool success) override;
+                         bool success);
 
     /// Create <bridge_dir>, both FIFOs and clean stale files. Must be
     /// called BEFORE either side starts (FIFO open order rule).
@@ -208,10 +214,21 @@ class FileDecisionBridge : public DecisionBridge {
     void notify_python();  // one byte on req_notify.fifo (EPIPE => abort)
     void write_file_atomic(const std::string& path,
                            const nlohmann::json& payload) const;
+    /// Minor④(2026-09-30):response 文件延迟 unlink——deliver_and_receive
+    /// 只登记待删序号,真正的 unlink 延迟到 send_commit_ack(提交成功)。
+    /// Phase-A/B 校验失败发生在 deliver_and_receive 返回之后、ack 之前,
+    /// 早先"解析完立刻 unlink"会让注释承诺的"fail-closed 路径保留
+    /// response 文件取证"落空。
+    void release_response_file();
+
     /// Defect-B fix: poll + read exactly ONE byte off the long-lived
     /// resp_notify read end. read()==0 => Python's lifetime write end
-    /// closed => genuine peer death. EAGAIN (spurious wake before the
-    /// byte) re-enters the poll. Returns false only via bridge_fatal.
+    /// closed => genuine peer death -- EXCEPT before the first byte ever
+    /// crossed, where the peer's write end may simply not exist yet
+    /// (startup window); there the EOF is retried for a bounded startup
+    /// grace (kRespWriterStartupGraceMs) before the same fatal verdict.
+    /// EAGAIN (spurious wake before the byte) re-enters the poll. Returns
+    /// only via bridge_fatal or with the byte consumed.
     void wait_response_byte(uint64_t seq);
 
     std::string bridge_dir_;
@@ -221,6 +238,17 @@ class FileDecisionBridge : public DecisionBridge {
     // Defect-B fix (2026-08-16): resp_notify read end, held open for the
     // run lifetime (see open_notify). -1 until open_notify/lazy open.
     int resp_notify_fd_ = -1;
+    // Whether ANY response byte ever crossed this bridge. Writer-history
+    // proxy: once true, a writer existed, so a later EOF is unambiguous
+    // peer death; before the first byte, EOF may still be the startup
+    // no-writer window (see wait_response_byte).
+    bool resp_notify_byte_seen_ = false;
+    // Minor④(2026-09-30):待删除的 response 文件序号(has_pending 为 false
+    // 时无效)。deliver_and_receive 成功解析后置位,send_commit_ack 提交
+    // 成功时消费。fail-closed 路径(校验失败/桥协议违规)停在 ack 之前,
+    // response 文件因此留在盘上作 post-mortem 证据——与类注释一致。
+    bool response_unlink_pending_ = false;
+    uint64_t response_unlink_seq_ = 0;
     // Mutable: write_file_atomic() is const (the phase-1 contract) but the
     // phase-6 channel accounting is a per-run observation, not bridge state.
     mutable Stats stats_;

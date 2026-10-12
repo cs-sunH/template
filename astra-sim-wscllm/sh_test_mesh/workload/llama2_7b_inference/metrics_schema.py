@@ -12,7 +12,8 @@ those components may emit.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
@@ -57,9 +58,10 @@ SERVICE_EVENT_CODES = frozenset(
 ARRIVAL_ABSOLUTE = "absolute"
 ARRIVAL_AFTER_REQUEST = "after_request"
 
-RUN_MODE_SERVICE = "service"
-RUN_MODE_MICROBENCHMARK = "microbenchmark"
-RUN_MODES = frozenset({RUN_MODE_SERVICE, RUN_MODE_MICROBENCHMARK})
+# D2 fix (2026-09-28): the RUN_MODE_SERVICE / RUN_MODE_MICROBENCHMARK /
+# RUN_MODES constants were deleted -- zero references anywhere (the
+# postprocessor keys run modes off the raw init-record strings, and the
+# C++ collector validates run_mode independently).
 
 NORMALIZATION_GROUP_MAX = "group_max"
 NORMALIZATION_RATIO_TO_BASELINE = "ratio_to_baseline"
@@ -67,9 +69,11 @@ NORMALIZATION_METHODS = frozenset(
     {NORMALIZATION_GROUP_MAX, NORMALIZATION_RATIO_TO_BASELINE}
 )
 
-NATIVE_MEMORY_SCOPE = "npu_local_hbm"
-CHIPLET_PROJECTION_SCOPE = "physical_chiplet_projection"
-CHIPLET_PROJECTION_METHOD = "measurement_only_equal_striping"
+# D2 fix (2026-09-28): NATIVE_MEMORY_SCOPE / CHIPLET_PROJECTION_SCOPE /
+# CHIPLET_PROJECTION_METHOD and the MemoryProjection declaration class were
+# deleted -- zero references outside the class itself (the chiplet
+# projection of the observer is fixed by DEFAULT_CHIPLETS_PER_NPU and the
+# equal-striping implementation; no manifest declaration is parsed).
 DEFAULT_CHIPLETS_PER_NPU = 4
 
 
@@ -213,7 +217,31 @@ def _validate_rank_set(ranks: Any, name: str) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class RequestMetadata:
-    """One request record of the manifest ``requests`` array."""
+    """One request record of the manifest ``requests`` array.
+
+    M11-4 (2026-09-26, face 仓同源移植): ``decode_length`` is part of the
+    real manifest contract -- plan_materializer writes it on every request
+    entry (WP9, SLO B2-C) and the C++ collector reads it as an optional
+    field.  It was previously rejected here as an unknown field, which made
+    every real artifact of this repository fail this frozen schema.
+
+    Report 3.15 fix (2026-09-29): the same drift, remaining field set -- the
+    unknown-field gate now accepts every field this repository's
+    plan_materializer.py actually writes into the manifests' ``requests[]``
+    records (frozen-contract sync, known-field set = producer output union):
+
+    - ``metrics_manifest.json`` requests (``_derive_metrics_requests``):
+      ``human_time_ns`` / ``tool_time_ns`` (WP2 sidecar passthrough, P2-13;
+      absent when the sidecar row/column is empty).
+    - ``manifest.json`` requests (``_derive_requests``):
+      ``prefill_length`` / ``history_tokens_before`` /
+      ``prefill_context_tokens`` / ``final_context_tokens`` (queue-derived
+      token bookkeeping) and ``request_type`` / ``prefix_len`` (WP2 sidecar
+      passthrough, absent when the sidecar row/column is empty).
+
+    All of them stay optional (``absent = not declared``, matching the C++
+    reader) and are validated/serialized only when declared.
+    """
 
     queue_index: int
     request_id: str
@@ -224,6 +252,15 @@ class RequestMetadata:
     prefill_ranks: tuple[int, ...]
     decode_instance: int
     decode_ranks: tuple[int, ...]
+    decode_length: Optional[int] = None
+    human_time_ns: Optional[int] = None
+    tool_time_ns: Optional[int] = None
+    prefill_length: Optional[int] = None
+    history_tokens_before: Optional[int] = None
+    prefill_context_tokens: Optional[int] = None
+    final_context_tokens: Optional[int] = None
+    request_type: Optional[str] = None
+    prefix_len: Optional[int] = None
 
     def __post_init__(self) -> None:
         _require_int(self.queue_index, "queue_index", 0)
@@ -240,9 +277,25 @@ class RequestMetadata:
         object.__setattr__(
             self, "decode_ranks", _validate_rank_set(self.decode_ranks, "decode_ranks")
         )
+        if self.decode_length is not None:
+            _require_int(self.decode_length, "decode_length", 0)
+        for name in (
+            "human_time_ns",
+            "tool_time_ns",
+            "prefill_length",
+            "history_tokens_before",
+            "prefill_context_tokens",
+            "final_context_tokens",
+            "prefix_len",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                _require_int(value, name, 0)
+        if self.request_type is not None:
+            _require_str(self.request_type, "request_type")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "queue_index": self.queue_index,
             "request_id": self.request_id,
             "session_id": self.session_id,
@@ -253,10 +306,40 @@ class RequestMetadata:
             "decode_instance": self.decode_instance,
             "decode_ranks": list(self.decode_ranks),
         }
+        # Optional fields: serialized only when declared, matching the C++
+        # reader's "absent = not declared" semantics.
+        if self.decode_length is not None:
+            result["decode_length"] = self.decode_length
+        for name in (
+            "human_time_ns",
+            "tool_time_ns",
+            "prefill_length",
+            "history_tokens_before",
+            "prefill_context_tokens",
+            "final_context_tokens",
+            "prefix_len",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                result[name] = value
+        if self.request_type is not None:
+            result["request_type"] = self.request_type
+        return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "RequestMetadata":
         data = _require_mapping(data, "request")
+        optional = {
+            "decode_length",
+            "human_time_ns",
+            "tool_time_ns",
+            "prefill_length",
+            "history_tokens_before",
+            "prefill_context_tokens",
+            "final_context_tokens",
+            "request_type",
+            "prefix_len",
+        }
         expected = {
             "queue_index",
             "request_id",
@@ -267,11 +350,11 @@ class RequestMetadata:
             "prefill_ranks",
             "decode_instance",
             "decode_ranks",
-        }
+        } | optional
         unknown = set(data) - expected
         if unknown:
             raise MetricsSchemaError(f"request has unknown fields {sorted(unknown)}")
-        missing = expected - set(data)
+        missing = expected - set(data) - optional
         if missing:
             raise MetricsSchemaError(f"request is missing fields {sorted(missing)}")
         return cls(
@@ -284,6 +367,15 @@ class RequestMetadata:
             prefill_ranks=tuple(data["prefill_ranks"]),
             decode_instance=data["decode_instance"],
             decode_ranks=tuple(data["decode_ranks"]),
+            decode_length=data.get("decode_length"),
+            human_time_ns=data.get("human_time_ns"),
+            tool_time_ns=data.get("tool_time_ns"),
+            prefill_length=data.get("prefill_length"),
+            history_tokens_before=data.get("history_tokens_before"),
+            prefill_context_tokens=data.get("prefill_context_tokens"),
+            final_context_tokens=data.get("final_context_tokens"),
+            request_type=data.get("request_type"),
+            prefix_len=data.get("prefix_len"),
         )
 
 
@@ -310,6 +402,9 @@ class NodeMetricEvent:
 
         return EVENT_EDGE_BY_CODE[self.event_code]
 
+    # (2026-10-01) to_triple/from_triple are test-support round-trip
+    # helpers (consumed only by sh_test_mesh/tests/test_metrics_contract.py);
+    # the production serialization path never goes through the triple form.
     def to_triple(self) -> list[int]:
         return [self.node_id, self.event_code, self.subject_id]
 
@@ -322,455 +417,6 @@ class NodeMetricEvent:
         ):
             raise MetricsSchemaError("node event must be a [node_id, event_code, subject_id] triple")
         return cls(node_id=triple[0], event_code=triple[1], subject_id=triple[2])
-
-
-@dataclass(frozen=True)
-class MemoryProjection:
-    """The measurement-only chiplet projection declaration of the manifest."""
-
-    native_scope: str = NATIVE_MEMORY_SCOPE
-    chiplets_per_npu: int = DEFAULT_CHIPLETS_PER_NPU
-    projection: str = CHIPLET_PROJECTION_METHOD
-
-    def __post_init__(self) -> None:
-        _require_str(self.native_scope, "memory_projection.native_scope")
-        _require_int(self.chiplets_per_npu, "memory_projection.chiplets_per_npu", 1)
-        _require_str(self.projection, "memory_projection.projection")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "native_scope": self.native_scope,
-            "chiplets_per_npu": self.chiplets_per_npu,
-            "projection": self.projection,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "MemoryProjection":
-        data = _require_mapping(data, "memory_projection")
-        return cls(
-            native_scope=data.get("native_scope", NATIVE_MEMORY_SCOPE),
-            chiplets_per_npu=data.get("chiplets_per_npu", DEFAULT_CHIPLETS_PER_NPU),
-            projection=data.get("projection", CHIPLET_PROJECTION_METHOD),
-        )
-
-
-@dataclass(frozen=True)
-class MetricsManifest:
-    """Validated in-memory form of ``metrics_manifest.json``."""
-
-    repo_variant: str
-    run_mode: str
-    npus_count: int
-    mesh_rows: int
-    mesh_columns: int
-    trace_digest: str
-    request_mapping_digest: str
-    kv_event_digest: str
-    requests: tuple[RequestMetadata, ...]
-    node_events_by_rank: Mapping[int, tuple[NodeMetricEvent, ...]]
-    memory_projection: MemoryProjection = field(default_factory=MemoryProjection)
-    memory_actions: tuple[Any, ...] = ()
-    planner_memory_peaks: tuple[Any, ...] = ()
-    schema_version: int = SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        check_schema_version(self.schema_version)
-        _require_str(self.repo_variant, "repo_variant")
-        if self.run_mode not in RUN_MODES:
-            raise MetricsSchemaError(f"run_mode must be one of {sorted(RUN_MODES)}")
-        _require_int(self.npus_count, "npus_count", 1)
-        _require_int(self.mesh_rows, "mesh.rows", 1)
-        _require_int(self.mesh_columns, "mesh.columns", 1)
-        _require_str(self.trace_digest, "trace_digest")
-        _require_str(self.request_mapping_digest, "request_mapping_digest")
-        _require_str(self.kv_event_digest, "kv_event_digest")
-        if not isinstance(self.memory_projection, MemoryProjection):
-            raise MetricsSchemaError("memory_projection must be a MemoryProjection")
-        _validate_request_collection(self.requests)
-        validated_events: dict[int, tuple[NodeMetricEvent, ...]] = {}
-        for rank, events in self.node_events_by_rank.items():
-            _require_int(rank, "node_events_by_rank key", 0)
-            if rank >= self.npus_count:
-                raise MetricsSchemaError(
-                    f"node events listed for rank {rank} beyond npus_count {self.npus_count}"
-                )
-            for event in events:
-                if not isinstance(event, NodeMetricEvent):
-                    raise MetricsSchemaError("node events must be NodeMetricEvent instances")
-            validated_events[rank] = tuple(events)
-        object.__setattr__(self, "node_events_by_rank", validated_events)
-        object.__setattr__(self, "requests", tuple(self.requests))
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "repo_variant": self.repo_variant,
-            "run_mode": self.run_mode,
-            "trace_digest": self.trace_digest,
-            "request_mapping_digest": self.request_mapping_digest,
-            "kv_event_digest": self.kv_event_digest,
-            "npus_count": self.npus_count,
-            "mesh": {"rows": self.mesh_rows, "columns": self.mesh_columns},
-            "memory_projection": self.memory_projection.to_dict(),
-            "requests": [request.to_dict() for request in self.requests],
-            "node_events_by_rank": {
-                str(rank): [event.to_triple() for event in events]
-                for rank, events in sorted(self.node_events_by_rank.items())
-            },
-            "memory_actions": list(self.memory_actions),
-            "planner_memory_peaks": list(self.planner_memory_peaks),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "MetricsManifest":
-        data = _require_mapping(data, "manifest")
-        check_schema_version(data.get("schema_version"))
-        for digest_field in ("trace_digest", "request_mapping_digest", "kv_event_digest"):
-            _require_str(data.get(digest_field), digest_field)
-        mesh = _require_mapping(data.get("mesh"), "mesh")
-        raw_events = _require_mapping(data.get("node_events_by_rank", {}), "node_events_by_rank")
-        events_by_rank: dict[int, tuple[NodeMetricEvent, ...]] = {}
-        for rank_key, triples in raw_events.items():
-            try:
-                rank = int(rank_key)
-            except (TypeError, ValueError):
-                raise MetricsSchemaError(
-                    f"node_events_by_rank key {rank_key!r} is not an integer rank"
-                ) from None
-            if isinstance(triples, (str, bytes)) or not isinstance(triples, Sequence):
-                raise MetricsSchemaError("node_events_by_rank values must be lists of triples")
-            events_by_rank[rank] = tuple(NodeMetricEvent.from_triple(t) for t in triples)
-        raw_requests = data.get("requests", [])
-        if isinstance(raw_requests, (str, bytes)) or not isinstance(raw_requests, Sequence):
-            raise MetricsSchemaError("requests must be a list")
-        return cls(
-            repo_variant=data.get("repo_variant"),
-            run_mode=data.get("run_mode"),
-            npus_count=data.get("npus_count"),
-            mesh_rows=mesh.get("rows"),
-            mesh_columns=mesh.get("columns"),
-            trace_digest=data["trace_digest"],
-            request_mapping_digest=data["request_mapping_digest"],
-            kv_event_digest=data["kv_event_digest"],
-            requests=tuple(RequestMetadata.from_dict(r) for r in raw_requests),
-            node_events_by_rank=events_by_rank,
-            memory_projection=MemoryProjection.from_dict(
-                data.get("memory_projection", {})
-            ),
-            memory_actions=tuple(data.get("memory_actions", [])),
-            planner_memory_peaks=tuple(data.get("planner_memory_peaks", [])),
-        )
-
-
-def _validate_request_collection(requests: Sequence[RequestMetadata]) -> None:
-    """Manifest completeness rules on the request array itself."""
-
-    queue_indices = [request.queue_index for request in requests]
-    if len(set(queue_indices)) != len(queue_indices):
-        raise MetricsSchemaError("queue_index values must be unique")
-    if sorted(queue_indices) != list(range(len(queue_indices))):
-        raise MetricsSchemaError(
-            "queue_index values must be contiguous starting at 0"
-        )
-    request_ids = [request.request_id for request in requests]
-    if len(set(request_ids)) != len(request_ids):
-        scoped_keys = [
-            (request.session_id, request.turn_index, request.request_id)
-            for request in requests
-        ]
-        if len(set(scoped_keys)) != len(scoped_keys):
-            raise MetricsSchemaError(
-                "request_id values are not unique and neither is "
-                "(session_id, turn_index, request_id)"
-            )
-
-
-class MetricManifestBuilder:
-    """Sidecar manifest builder used by the ET generator while it emits traces.
-
-    The builder performs the generation-time completeness checks: contiguous
-    unique queue indices, request uniqueness, stage boundary nodes for every
-    expected rank, node ids within each rank's ET node range, and digest
-    presence.  Identical events recorded twice are deduplicated.
-    """
-
-    def __init__(
-        self,
-        *,
-        repo_variant: str,
-        run_mode: str,
-        npus_count: int,
-        mesh_rows: int,
-        mesh_columns: int,
-        node_count_by_rank: Mapping[int, int],
-        memory_projection: Optional[MemoryProjection] = None,
-    ) -> None:
-        _require_str(repo_variant, "repo_variant")
-        if run_mode not in RUN_MODES:
-            raise MetricsSchemaError(f"run_mode must be one of {sorted(RUN_MODES)}")
-        _require_int(npus_count, "npus_count", 1)
-        _require_int(mesh_rows, "mesh_rows", 1)
-        _require_int(mesh_columns, "mesh_columns", 1)
-        self.repo_variant = repo_variant
-        self.run_mode = run_mode
-        self.npus_count = npus_count
-        self.mesh_rows = mesh_rows
-        self.mesh_columns = mesh_columns
-        self.memory_projection = memory_projection or MemoryProjection()
-        self._node_count_by_rank = {
-            _require_int(rank, "node_count_by_rank key", 0): _require_int(
-                count, "node_count_by_rank value", 0
-            )
-            for rank, count in node_count_by_rank.items()
-        }
-        self._digests: dict[str, str] = {}
-        self._requests: list[RequestMetadata] = []
-        self._queue_indices: set[int] = set()
-        self._events_by_rank: dict[int, set[NodeMetricEvent]] = {}
-        self._memory_actions: list[Any] = []
-        self._planner_memory_peaks: list[Any] = []
-
-    def set_digests(
-        self,
-        *,
-        trace_digest: str,
-        request_mapping_digest: str,
-        kv_event_digest: str,
-    ) -> None:
-        self._digests = {
-            "trace_digest": _require_str(trace_digest, "trace_digest"),
-            "request_mapping_digest": _require_str(
-                request_mapping_digest, "request_mapping_digest"
-            ),
-            "kv_event_digest": _require_str(kv_event_digest, "kv_event_digest"),
-        }
-
-    def add_request(self, metadata: RequestMetadata) -> None:
-        if not isinstance(metadata, RequestMetadata):
-            raise MetricsSchemaError("add_request expects a RequestMetadata")
-        if metadata.queue_index in self._queue_indices:
-            raise MetricsSchemaError(
-                f"duplicate queue_index {metadata.queue_index}"
-            )
-        for rank in metadata.prefill_ranks + metadata.decode_ranks:
-            if rank >= self.npus_count:
-                raise MetricsSchemaError(
-                    f"request {metadata.queue_index} references rank {rank} "
-                    f"beyond npus_count {self.npus_count}"
-                )
-        self._queue_indices.add(metadata.queue_index)
-        self._requests.append(metadata)
-
-    def add_node_event(
-        self, rank: int, node_id: int, event_code: int, subject_id: int
-    ) -> bool:
-        """Record one boundary event; returns False if it was a duplicate."""
-
-        event = NodeMetricEvent(
-            node_id=node_id, event_code=event_code, subject_id=subject_id
-        )
-        _require_int(rank, "rank", 0)
-        if rank >= self.npus_count:
-            raise MetricsSchemaError(
-                f"event rank {rank} beyond npus_count {self.npus_count}"
-            )
-        node_count = self._node_count_by_rank.get(rank)
-        if node_count is None:
-            raise MetricsSchemaError(f"no ET node count known for rank {rank}")
-        if event.node_id >= node_count:
-            raise MetricsSchemaError(
-                f"node_id {event.node_id} out of range for rank {rank} "
-                f"with {node_count} ET nodes"
-            )
-        events = self._events_by_rank.setdefault(rank, set())
-        if event in events:
-            return False
-        events.add(event)
-        return True
-
-    def add_memory_action(self, action: Any) -> None:
-        self._memory_actions.append(action)
-
-    def add_planner_memory_peak(self, peak: Any) -> None:
-        self._planner_memory_peaks.append(peak)
-
-    def build(self) -> MetricsManifest:
-        for digest_field in ("trace_digest", "request_mapping_digest", "kv_event_digest"):
-            if digest_field not in self._digests:
-                raise MetricsSchemaError(f"missing digest field {digest_field}")
-        requests = tuple(sorted(self._requests, key=lambda r: r.queue_index))
-        events_by_rank = {
-            rank: tuple(sorted(events, key=lambda e: (e.node_id, e.event_code, e.subject_id)))
-            for rank, events in sorted(self._events_by_rank.items())
-        }
-        if self.run_mode == RUN_MODE_SERVICE:
-            self._check_service_stage_boundaries(requests, events_by_rank)
-        return MetricsManifest(
-            repo_variant=self.repo_variant,
-            run_mode=self.run_mode,
-            npus_count=self.npus_count,
-            mesh_rows=self.mesh_rows,
-            mesh_columns=self.mesh_columns,
-            memory_projection=self.memory_projection,
-            requests=requests,
-            node_events_by_rank=events_by_rank,
-            memory_actions=tuple(self._memory_actions),
-            planner_memory_peaks=tuple(self._planner_memory_peaks),
-            **self._digests,
-        )
-
-    def _check_service_stage_boundaries(
-        self,
-        requests: tuple[RequestMetadata, ...],
-        events_by_rank: Mapping[int, tuple[NodeMetricEvent, ...]],
-    ) -> None:
-        """Every expected rank must carry its stage boundary nodes, and every
-        service event subject must reference a known queue_index."""
-
-        known_subjects = {request.queue_index for request in requests}
-        for rank, events in events_by_rank.items():
-            for event in events:
-                if event.event_code in SERVICE_EVENT_CODES and (
-                    event.subject_id not in known_subjects
-                ):
-                    raise MetricsSchemaError(
-                        f"rank {rank} event {event.to_triple()} references an "
-                        f"unknown queue_index {event.subject_id}"
-                    )
-        for request in requests:
-            for code, ranks in (
-                (EVENT_PREFILL_START, request.prefill_ranks),
-                (EVENT_PREFILL_END, request.prefill_ranks),
-                (EVENT_DECODE_START, request.decode_ranks),
-                (EVENT_DECODE_END, request.decode_ranks),
-            ):
-                for rank in ranks:
-                    if not any(
-                        event.event_code == code and event.subject_id == request.queue_index
-                        for event in events_by_rank.get(rank, ())
-                    ):
-                        raise MetricsSchemaError(
-                            f"request {request.queue_index} is missing the "
-                            f"event_code {code} boundary node on rank {rank}"
-                        )
-
-
-@dataclass(frozen=True)
-class RequestTiming:
-    """Schema-level reconstruction of one request's stage boundaries."""
-
-    queue_index: int
-    prefill_start_ns: Optional[int]
-    prefill_end_ns: Optional[int]
-    decode_start_ns: Optional[int]
-    completion_ns: Optional[int]
-    completed: bool
-
-
-class RequestTimingTracker:
-    """Pure-Python mirror of the collector's per-request timing semantics.
-
-    Across all TP ranks of a stage the request start is the *minimum* issue
-    tick and the request end is the *maximum* complete tick.  A request whose
-    expected rank boundaries are only partially observed stays incomplete.
-    """
-
-    _CODE_TO_FIELD = {
-        EVENT_PREFILL_START: "prefill_start_ns",
-        EVENT_PREFILL_END: "prefill_end_ns",
-        EVENT_DECODE_START: "decode_start_ns",
-        EVENT_DECODE_END: "completion_ns",
-    }
-
-    def __init__(self, manifest: MetricsManifest) -> None:
-        if not isinstance(manifest, MetricsManifest):
-            raise MetricsSchemaError("RequestTimingTracker expects a MetricsManifest")
-        if manifest.run_mode != RUN_MODE_SERVICE:
-            raise MetricsSchemaError("RequestTimingTracker only supports service manifests")
-        self._requests = {r.queue_index: r for r in manifest.requests}
-        # queue_index -> event_code -> rank -> tick
-        self._ticks: dict[int, dict[int, dict[int, int]]] = {
-            request.queue_index: {code: {} for code in self._CODE_TO_FIELD}
-            for request in manifest.requests
-        }
-
-    def record_event(
-        self, rank: int, event_code: int, subject_id: int, tick_ns: int
-    ) -> bool:
-        """Record one observed boundary tick; duplicate (rank, code, subject)
-        events with the same tick are deduplicated and return False."""
-
-        _require_int(rank, "rank", 0)
-        _require_int(tick_ns, "tick_ns", 0)
-        if event_code not in self._CODE_TO_FIELD:
-            raise MetricsSchemaError(
-                f"event_code {event_code} is not a service stage boundary"
-            )
-        request = self._requests.get(subject_id)
-        if request is None:
-            raise MetricsSchemaError(f"unknown queue_index {subject_id}")
-        expected_ranks = (
-            request.prefill_ranks
-            if event_code in (EVENT_PREFILL_START, EVENT_PREFILL_END)
-            else request.decode_ranks
-        )
-        if rank not in expected_ranks:
-            raise MetricsSchemaError(
-                f"rank {rank} is not an expected rank for event_code {event_code} "
-                f"of request {subject_id}"
-            )
-        seen = self._ticks[subject_id][event_code]
-        if rank in seen:
-            if seen[rank] != tick_ns:
-                raise MetricsSchemaError(
-                    f"conflicting ticks for request {subject_id} event_code "
-                    f"{event_code} on rank {rank}: {seen[rank]} vs {tick_ns}"
-                )
-            return False
-        seen[rank] = tick_ns
-        return True
-
-    def timing_for(self, queue_index: int) -> RequestTiming:
-        request = self._requests.get(queue_index)
-        if request is None:
-            raise MetricsSchemaError(f"unknown queue_index {queue_index}")
-        ticks = self._ticks[queue_index]
-
-        def stage_value(code: int, ranks: tuple[int, ...], reducer) -> Optional[int]:
-            seen = ticks[code]
-            if any(rank not in seen for rank in ranks):
-                return None
-            return reducer(seen[rank] for rank in ranks)
-
-        prefill_start = stage_value(EVENT_PREFILL_START, request.prefill_ranks, min)
-        prefill_end = stage_value(EVENT_PREFILL_END, request.prefill_ranks, max)
-        decode_start = stage_value(EVENT_DECODE_START, request.decode_ranks, min)
-        completion = stage_value(EVENT_DECODE_END, request.decode_ranks, max)
-        completed = all(
-            value is not None
-            for value in (prefill_start, prefill_end, decode_start, completion)
-        )
-        return RequestTiming(
-            queue_index=queue_index,
-            prefill_start_ns=prefill_start,
-            prefill_end_ns=prefill_end,
-            decode_start_ns=decode_start,
-            completion_ns=completion,
-            completed=completed,
-        )
-
-    def resolve_arrival_ns(self, queue_index: int) -> int:
-        """Resolve a request arrival; parent-relative arrivals need the
-        parent's actual completion tick from this tracker."""
-
-        request = self._requests.get(queue_index)
-        if request is None:
-            raise MetricsSchemaError(f"unknown queue_index {queue_index}")
-        arrival = request.arrival
-        if arrival.kind == ARRIVAL_ABSOLUTE:
-            return arrival.resolve()
-        parent = self.timing_for(arrival.parent_queue_index)
-        return arrival.resolve(parent.completion_ns)
 
 
 @dataclass(frozen=True)
@@ -853,8 +499,11 @@ class MemoryDelta:
 def stripe_bytes_evenly(total_bytes: int, partitions: int) -> tuple[int, ...]:
     """Deterministic equal striping of one allocation across chiplets.
 
-    Negative values stripe their magnitude and carry the sign, so adding and
-    later removing the same byte count walks the distribution back exactly.
+    Negative values stripe their magnitude and carry the sign.  NOTE (D2
+    fix, 2026-09-28): striping is NOT additive across segments --
+    stripe(a) + stripe(b) != stripe(a+b) in general (remainders stack on
+    the low chiplets), so removals must NOT be computed by striping the
+    aggregate magnitude; see ``_removal_distribution``.
     """
 
     _require_int(total_bytes, "total_bytes")
@@ -865,196 +514,6 @@ def stripe_bytes_evenly(total_bytes: int, partitions: int) -> tuple[int, ...]:
         sign * (base + (1 if index < remainder else 0)) for index in range(partitions)
     )
 
-
-@dataclass(frozen=True)
-class MemoryLedgerSnapshot:
-    """One authoritative ledger state (rank scope or projected chiplet scope)."""
-
-    capacity_bytes: int
-    weight_bytes: int
-    resident_kv_bytes: int
-    reserved_kv_bytes: int
-    physical_used_bytes: int
-    committed_used_bytes: int
-    uncommitted_free_bytes: int
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "capacity_bytes": self.capacity_bytes,
-            "weight_bytes": self.weight_bytes,
-            "resident_kv_bytes": self.resident_kv_bytes,
-            "reserved_kv_bytes": self.reserved_kv_bytes,
-            "physical_used_bytes": self.physical_used_bytes,
-            "committed_used_bytes": self.committed_used_bytes,
-            "uncommitted_free_bytes": self.uncommitted_free_bytes,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "MemoryLedgerSnapshot":
-        data = _require_mapping(data, "ledger snapshot")
-        return cls(
-            capacity_bytes=data.get("capacity_bytes"),
-            weight_bytes=data.get("weight_bytes"),
-            resident_kv_bytes=data.get("resident_kv_bytes"),
-            reserved_kv_bytes=data.get("reserved_kv_bytes"),
-            physical_used_bytes=data.get("physical_used_bytes"),
-            committed_used_bytes=data.get("committed_used_bytes"),
-            uncommitted_free_bytes=data.get("uncommitted_free_bytes"),
-        )
-
-
-@dataclass(frozen=True)
-class MemoryPeakSnapshot:
-    """Peak value plus the same-moment component snapshot at the peak."""
-
-    scope: str
-    rank: int
-    chiplet_index: Optional[int]
-    peak_kind: str
-    peak_value_bytes: int
-    capacity_bytes: int
-    weight_at_peak_bytes: int
-    resident_kv_at_peak_bytes: int
-    reserved_kv_at_peak_bytes: int
-    free_at_peak_bytes: int
-    planner_time_ns: int
-    sequence_index: int
-    cause: str
-    request_id: Optional[str]
-    session_id: Optional[str]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "scope": self.scope,
-            "rank": self.rank,
-            "chiplet_index": self.chiplet_index,
-            "peak_kind": self.peak_kind,
-            "peak_value_bytes": self.peak_value_bytes,
-            "capacity_bytes": self.capacity_bytes,
-            "weight_at_peak_bytes": self.weight_at_peak_bytes,
-            "resident_kv_at_peak_bytes": self.resident_kv_at_peak_bytes,
-            "reserved_kv_at_peak_bytes": self.reserved_kv_at_peak_bytes,
-            "free_at_peak_bytes": self.free_at_peak_bytes,
-            "planner_time_ns": self.planner_time_ns,
-            "sequence_index": self.sequence_index,
-            "cause": self.cause,
-            "request_id": self.request_id,
-            "session_id": self.session_id,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "MemoryPeakSnapshot":
-        data = _require_mapping(data, "peak snapshot")
-        return cls(
-            scope=data.get("scope"),
-            rank=data.get("rank"),
-            chiplet_index=data.get("chiplet_index"),
-            peak_kind=data.get("peak_kind"),
-            peak_value_bytes=data.get("peak_value_bytes"),
-            capacity_bytes=data.get("capacity_bytes"),
-            weight_at_peak_bytes=data.get("weight_at_peak_bytes"),
-            resident_kv_at_peak_bytes=data.get("resident_kv_at_peak_bytes"),
-            reserved_kv_at_peak_bytes=data.get("reserved_kv_at_peak_bytes"),
-            free_at_peak_bytes=data.get("free_at_peak_bytes"),
-            planner_time_ns=data.get("planner_time_ns"),
-            sequence_index=data.get("sequence_index"),
-            cause=data.get("cause"),
-            request_id=data.get("request_id"),
-            session_id=data.get("session_id"),
-        )
-
-
-@dataclass(frozen=True)
-class ChipletMemoryResult:
-    chiplet_index: int
-    ledger: MemoryLedgerSnapshot
-    peak_physical: MemoryPeakSnapshot
-    peak_committed: MemoryPeakSnapshot
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "chiplet_index": self.chiplet_index,
-            "ledger": self.ledger.to_dict(),
-            "peak_physical": self.peak_physical.to_dict(),
-            "peak_committed": self.peak_committed.to_dict(),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "ChipletMemoryResult":
-        data = _require_mapping(data, "chiplet result")
-        return cls(
-            chiplet_index=data.get("chiplet_index"),
-            ledger=MemoryLedgerSnapshot.from_dict(data.get("ledger")),
-            peak_physical=MemoryPeakSnapshot.from_dict(data.get("peak_physical")),
-            peak_committed=MemoryPeakSnapshot.from_dict(data.get("peak_committed")),
-        )
-
-
-@dataclass(frozen=True)
-class RankMemoryResult:
-    rank: int
-    ledger: MemoryLedgerSnapshot
-    peak_physical: MemoryPeakSnapshot
-    peak_committed: MemoryPeakSnapshot
-    chiplets: tuple[ChipletMemoryResult, ...]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "rank": self.rank,
-            "ledger": self.ledger.to_dict(),
-            "peak_physical": self.peak_physical.to_dict(),
-            "peak_committed": self.peak_committed.to_dict(),
-            "chiplets": [chiplet.to_dict() for chiplet in self.chiplets],
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "RankMemoryResult":
-        data = _require_mapping(data, "rank result")
-        return cls(
-            rank=data.get("rank"),
-            ledger=MemoryLedgerSnapshot.from_dict(data.get("ledger")),
-            peak_physical=MemoryPeakSnapshot.from_dict(data.get("peak_physical")),
-            peak_committed=MemoryPeakSnapshot.from_dict(data.get("peak_committed")),
-            chiplets=tuple(
-                ChipletMemoryResult.from_dict(c) for c in data.get("chiplets", [])
-            ),
-        )
-
-
-@dataclass(frozen=True)
-class MemoryMetricsResult:
-    """Final observer output: authoritative rank ledgers plus the
-    measurement-only equal-striping chiplet projection."""
-
-    chiplets_per_npu: int
-    ranks: Mapping[int, RankMemoryResult]
-    native_scope: str = NATIVE_MEMORY_SCOPE
-    projection: str = CHIPLET_PROJECTION_METHOD
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "native_scope": self.native_scope,
-            "projection": self.projection,
-            "chiplets_per_npu": self.chiplets_per_npu,
-            "ranks": {
-                str(rank): result.to_dict()
-                for rank, result in sorted(self.ranks.items())
-            },
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "MemoryMetricsResult":
-        data = _require_mapping(data, "memory metrics result")
-        raw_ranks = _require_mapping(data.get("ranks"), "ranks")
-        return cls(
-            chiplets_per_npu=data.get("chiplets_per_npu"),
-            native_scope=data.get("native_scope", NATIVE_MEMORY_SCOPE),
-            projection=data.get("projection", CHIPLET_PROJECTION_METHOD),
-            ranks={
-                int(rank): RankMemoryResult.from_dict(result)
-                for rank, result in raw_ranks.items()
-            },
-        )
 
 
 @dataclass
@@ -1073,74 +532,6 @@ class _ComponentState:
     @property
     def committed(self) -> int:
         return self.physical + self.reserved_kv_bytes
-
-    def ledger(self) -> MemoryLedgerSnapshot:
-        return MemoryLedgerSnapshot(
-            capacity_bytes=self.capacity_bytes,
-            weight_bytes=self.weight_bytes,
-            resident_kv_bytes=self.resident_kv_bytes,
-            reserved_kv_bytes=self.reserved_kv_bytes,
-            physical_used_bytes=self.physical,
-            committed_used_bytes=self.committed,
-            uncommitted_free_bytes=self.capacity_bytes - self.committed,
-        )
-
-
-class _PeakTracker:
-    """Tracks one peak kind for one scope, keeping the same-moment snapshot."""
-
-    def __init__(
-        self,
-        *,
-        scope: str,
-        rank: int,
-        chiplet_index: Optional[int],
-        peak_kind: str,
-        capacity_bytes: int,
-    ) -> None:
-        self.scope = scope
-        self.rank = rank
-        self.chiplet_index = chiplet_index
-        self.peak_kind = peak_kind
-        self.snapshot = MemoryPeakSnapshot(
-            scope=scope,
-            rank=rank,
-            chiplet_index=chiplet_index,
-            peak_kind=peak_kind,
-            peak_value_bytes=0,
-            capacity_bytes=capacity_bytes,
-            weight_at_peak_bytes=0,
-            resident_kv_at_peak_bytes=0,
-            reserved_kv_at_peak_bytes=0,
-            free_at_peak_bytes=capacity_bytes,
-            planner_time_ns=0,
-            sequence_index=-1,
-            cause="init",
-            request_id=None,
-            session_id=None,
-        )
-
-    def consider(self, state: _ComponentState, delta: MemoryDelta) -> None:
-        value = state.physical if self.peak_kind == "physical_used" else state.committed
-        if value <= self.snapshot.peak_value_bytes:
-            return
-        self.snapshot = MemoryPeakSnapshot(
-            scope=self.scope,
-            rank=self.rank,
-            chiplet_index=self.chiplet_index,
-            peak_kind=self.peak_kind,
-            peak_value_bytes=value,
-            capacity_bytes=state.capacity_bytes,
-            weight_at_peak_bytes=state.weight_bytes,
-            resident_kv_at_peak_bytes=state.resident_kv_bytes,
-            reserved_kv_at_peak_bytes=state.reserved_kv_bytes,
-            free_at_peak_bytes=state.capacity_bytes - state.committed,
-            planner_time_ns=delta.planner_time_ns,
-            sequence_index=delta.sequence_index,
-            cause=delta.cause,
-            request_id=delta.request_id,
-            session_id=delta.session_id,
-        )
 
 
 class MemoryMetricsObserver:
@@ -1161,57 +552,18 @@ class MemoryMetricsObserver:
         self._allocations: dict[
             int, dict[str, list[tuple[int, ...]]]
         ] = {}
-        self._rank_peaks: dict[int, tuple[_PeakTracker, _PeakTracker]] = {}
-        self._chiplet_peaks: dict[int, list[tuple[_PeakTracker, _PeakTracker]]] = {}
-        self._finalized: Optional[MemoryMetricsResult] = None
 
     def initialize_rank(self, rank: int, capacity_bytes: int) -> None:
         _require_int(rank, "rank", 0)
         _require_int(capacity_bytes, "capacity_bytes", 1)
         if rank in self._ranks:
             raise MetricsSchemaError(f"rank {rank} is already initialized")
-        self._finalized = None
         self._ranks[rank] = _ComponentState(capacity_bytes=capacity_bytes)
         capacities = stripe_bytes_evenly(capacity_bytes, self.chiplets_per_npu)
         self._chiplets[rank] = [
             _ComponentState(capacity_bytes=capacity) for capacity in capacities
         ]
         self._allocations[rank] = {}
-        self._rank_peaks[rank] = (
-            _PeakTracker(
-                scope="rank",
-                rank=rank,
-                chiplet_index=None,
-                peak_kind="physical_used",
-                capacity_bytes=capacity_bytes,
-            ),
-            _PeakTracker(
-                scope="rank",
-                rank=rank,
-                chiplet_index=None,
-                peak_kind="committed_used",
-                capacity_bytes=capacity_bytes,
-            ),
-        )
-        self._chiplet_peaks[rank] = [
-            (
-                _PeakTracker(
-                    scope="chiplet",
-                    rank=rank,
-                    chiplet_index=index,
-                    peak_kind="physical_used",
-                    capacity_bytes=capacity,
-                ),
-                _PeakTracker(
-                    scope="chiplet",
-                    rank=rank,
-                    chiplet_index=index,
-                    peak_kind="committed_used",
-                    capacity_bytes=capacity,
-                ),
-            )
-            for index, capacity in enumerate(capacities)
-        ]
 
     def record_delta(self, delta: MemoryDelta) -> None:
         if not isinstance(delta, MemoryDelta):
@@ -1219,7 +571,6 @@ class MemoryMetricsObserver:
         state = self._ranks.get(delta.rank)
         if state is None:
             raise MetricsSchemaError(f"rank {delta.rank} is not initialized")
-        self._finalized = None
 
         state.weight_bytes += delta.weight_delta_bytes
         state.resident_kv_bytes += delta.resident_kv_delta_bytes
@@ -1232,17 +583,22 @@ class MemoryMetricsObserver:
             )
 
         self._apply_chiplet_projection(delta)
-        self._rank_peaks[delta.rank][0].consider(state, delta)
-        self._rank_peaks[delta.rank][1].consider(state, delta)
-        for index, chiplet_state in enumerate(self._chiplets[delta.rank]):
-            physical_peak, committed_peak = self._chiplet_peaks[delta.rank][index]
-            physical_peak.consider(chiplet_state, delta)
-            committed_peak.consider(chiplet_state, delta)
 
     def _apply_chiplet_projection(self, delta: MemoryDelta) -> None:
         """Stripe each component of the delta across the chiplets and attach
         it to the delta's allocation key; removes subtract the same recorded
-        distribution for that key."""
+        distribution for that key.
+
+        D2 fix (2026-09-28): removals now walk back the key's RECORDED
+        per-chiplet distribution (``_removal_distribution``) instead of
+        striping the negative delta's magnitude.  Striping is not additive
+        across segments (stripe(a)+stripe(b) != stripe(a+b): remainders
+        stack on the low chiplets), so multi-segment growth followed by a
+        whole-segment release used to leave a residual distribution like
+        (1, 0, 0, -1) -- silent negative per-chiplet occupancy plus a ghost
+        allocation record that is never reclaimed.  Over-removal (more
+        than the key holds) fails closed.
+        """
 
         allocations = self._allocations[delta.rank]
         key = delta.allocation_key
@@ -1266,7 +622,14 @@ class MemoryMetricsObserver:
             ]
         new_record = []
         for index, component in enumerate(component_deltas):
-            stripe = stripe_bytes_evenly(component, self.chiplets_per_npu)
+            if component < 0:
+                stripe = tuple(
+                    -value
+                    for value in self._removal_distribution(
+                        record[index], -component)
+                )
+            else:
+                stripe = stripe_bytes_evenly(component, self.chiplets_per_npu)
             new_record.append(
                 tuple(previous + change for previous, change in zip(record[index], stripe))
             )
@@ -1284,34 +647,31 @@ class MemoryMetricsObserver:
         else:
             allocations[key] = new_record
 
-    def finalize(self) -> MemoryMetricsResult:
-        if self._finalized is not None:
-            return self._finalized
-        ranks: dict[int, RankMemoryResult] = {}
-        for rank, state in sorted(self._ranks.items()):
-            chiplets = []
-            for index, chiplet_state in enumerate(self._chiplets[rank]):
-                physical_peak, committed_peak = self._chiplet_peaks[rank][index]
-                chiplets.append(
-                    ChipletMemoryResult(
-                        chiplet_index=index,
-                        ledger=chiplet_state.ledger(),
-                        peak_physical=physical_peak.snapshot,
-                        peak_committed=committed_peak.snapshot,
-                    )
-                )
-            rank_physical_peak, rank_committed_peak = self._rank_peaks[rank]
-            ranks[rank] = RankMemoryResult(
-                rank=rank,
-                ledger=state.ledger(),
-                peak_physical=rank_physical_peak.snapshot,
-                peak_committed=rank_committed_peak.snapshot,
-                chiplets=tuple(chiplets),
+    def _removal_distribution(self, dist: tuple[int, ...],
+                              amount: int) -> tuple[int, ...]:
+        """Deterministic removal of ``amount`` bytes from a key's recorded
+        per-chiplet distribution: largest recorded amount first, ties by
+        chiplet index (equal-striping orders the remainder the same way, so
+        a single-segment key removes exactly its own striping and walks
+        back to zero).  Removing more than the key holds fails closed.
+        """
+
+        removed = [0] * len(dist)
+        remaining = amount
+        for index in sorted(range(len(dist)), key=lambda i: (-dist[i], i)):
+            take = min(dist[index], remaining)
+            removed[index] = take
+            remaining -= take
+            if remaining == 0:
+                break
+        if remaining:
+            raise MetricsSchemaError(
+                f"cannot remove {amount} bytes from allocation holding "
+                f"{sum(dist)} across chiplets {dist}: per-chiplet "
+                f"occupancy would go negative (producer ledger bug, "
+                f"fail-closed)"
             )
-        self._finalized = MemoryMetricsResult(
-            chiplets_per_npu=self.chiplets_per_npu, ranks=ranks
-        )
-        return self._finalized
+        return tuple(removed)
 
 
 @dataclass(frozen=True)
@@ -1344,8 +704,18 @@ class NormalizationRecord:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise MetricsSchemaError(f"{name} must be numeric")
-        if self.denominator_value <= 0:
-            raise MetricsSchemaError("normalization denominator must be > 0")
+            # P1 fix (2026-09-28): a NaN/Inf field would slip every "<=" /
+            # ">" comparison (nan <= 0 is False) and silently poison the
+            # normalized columns -- every numeric field must be finite.
+            if not math.isfinite(float(value)):
+                raise MetricsSchemaError(
+                    f"{name} must be a finite number (got {value!r})"
+                )
+        if not (math.isfinite(float(self.denominator_value))
+                and self.denominator_value > 0):
+            raise MetricsSchemaError(
+                "normalization denominator must be finite and > 0"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1383,7 +753,11 @@ def select_normalization_denominator(
 
     ``group_max`` divides by the largest value inside the comparison group;
     ``ratio_to_baseline`` divides by the selected baseline run's value.  A
-    zero denominator is never usable.
+    zero denominator is never usable; nor is a non-finite one (P1 fix,
+    2026-09-28: NaN slips the former ``<= 0`` comparison -- ``nan <= 0`` is
+    False -- and max() propagates a NaN that sits in the first slot, so
+    EVERY group value and the baseline must be finite, and the final
+    denominator must be finite and positive).
     """
 
     if method == NORMALIZATION_GROUP_MAX:
@@ -1395,6 +769,10 @@ def select_normalization_denominator(
         for value in values:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise MetricsSchemaError("group values must be numeric")
+            if not math.isfinite(float(value)):
+                raise MetricsSchemaError(
+                    f"group values must be finite (got {value!r})"
+                )
         denominator = max(values)
     elif method == NORMALIZATION_RATIO_TO_BASELINE:
         _require_str(baseline_run_id, "baseline_run_id")
@@ -1402,13 +780,19 @@ def select_normalization_denominator(
             baseline_value, (int, float)
         ):
             raise MetricsSchemaError("ratio_to_baseline requires a numeric baseline_value")
+        if not math.isfinite(float(baseline_value)):
+            raise MetricsSchemaError(
+                f"baseline_value must be finite (got {baseline_value!r})"
+            )
         denominator = baseline_value
     else:
         raise MetricsSchemaError(
             f"normalization_method must be one of {sorted(NORMALIZATION_METHODS)}"
         )
-    if denominator <= 0:
-        raise MetricsSchemaError("normalization denominator must be > 0")
+    if not (math.isfinite(float(denominator)) and denominator > 0):
+        raise MetricsSchemaError(
+            "normalization denominator must be finite and > 0"
+        )
     return float(denominator)
 
 

@@ -28,7 +28,13 @@
 #   results/graph_batch_digests.jsonl results/online_stats.jsonl
 #   results/profile.jsonl(存在时) results/train_ledger.jsonl
 #   results/ledger.jsonl results/sensing_query_log.jsonl(仅 sensing 跑产生,
-#   对账/差异报告输入;strategy 跑无此二件,保留集不受影响)
+#     对账/差异报告输入;strategy 跑无此二件,保留集不受影响)
+#   results/kv_delta_journal.jsonl + results/kv_delta_journal_checksum.json
+#     (P1 2026-08-30 权威 HBM delta journal 与 run 末 checksum 门产物;
+#     本仓为消费侧、无写入方——写入方在 W 仓 KV_DELTA_JOURNAL 开关与
+#     joint 仓 online_service 侧车链,正常 face run 不存在、缺文件不是
+#     错误;在场时为 hbm_watermark certified 层 exit-3 正式判决与归档后
+#     幂等重跑的输入,常驻不压缩)
 #   campaign_provenance.json(存在时)
 #   SLO 自动提取产物(P3,2026-08-28,由 run_slo_postprocess.sh 写在 run_dir
 #   根,本脚本不触碰这些 SLO 产物文件,此处显式登记为常驻):slo_*.csv、
@@ -95,6 +101,10 @@ if [ -f "${RUN_DIR}/cpp.log" ] && [ "${ARCHIVE_DETAIL}" != "off" ]; then
 fi
 
 # ④ results/ 非必需 jsonl → results_extra.tar.gz(常驻集见头部注释)。
+# 登记纪律（2026-09-28 注明）：本步对 results/ 内未列入下方豁免清单的
+# 文件一律 tar 后删除散装——生产方新增的必需产物（jsonl/checksum 等）
+# 必须同步登记这里与头部"常驻保留集"，否则会被静默归档走，下游只能以
+# "缺文件 fail-closed"事后暴露。
 if [ -d "${RUN_DIR}/results" ]; then
   EXTRA_LIST=$(mktemp /tmp/archive_results_extra.XXXXXX)
   find "${RUN_DIR}/results" -maxdepth 1 -type f \
@@ -106,6 +116,8 @@ if [ -d "${RUN_DIR}/results" ]; then
     ! -name 'train_ledger.jsonl' \
     ! -name 'ledger.jsonl' \
     ! -name 'sensing_query_log.jsonl' \
+    ! -name 'kv_delta_journal.jsonl' \
+    ! -name 'kv_delta_journal_checksum.json' \
     ! -name 'campaign_provenance.json' \
     -printf '%f\n' > "${EXTRA_LIST}"
   if [ -s "${EXTRA_LIST}" ]; then

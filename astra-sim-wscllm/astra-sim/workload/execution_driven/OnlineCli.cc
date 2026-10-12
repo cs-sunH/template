@@ -11,6 +11,8 @@ tests/cli_online_test.cc).
 
 #include <unistd.h>
 
+#include <sys/stat.h>
+
 #include <cerrno>
 #include <cctype>
 #include <cmath>
@@ -25,16 +27,9 @@ namespace ExecutionDriven {
 
 namespace {
 
-bool is_online_family(const std::string& token) {
-    return token.rfind("--request-", 0) == 0 || token.rfind("--bridge-", 0) == 0 ||
-           token.rfind("--close-", 0) == 0 || token.rfind("--online-", 0) == 0 ||
-           token.rfind("--command-", 0) == 0 || token.rfind("--sensing-", 0) == 0 ||
-           // P0-2 (2026-08-31, 总文档 §4 P0-2.3): the --idle- family
-           // (--idle-watchdog-s). Without this prefix the shared parser
-           // would silently swallow a typo'd --idle-* flag (the header
-           // contract: the online family is parsed fail-closed here).
-           token.rfind("--idle-", 0) == 0;
-}
+// (The online-family prefix lexicon lives in OnlineCli.hh's single
+// metadata table -- network-F7 fix; is_online_family_token below is the
+// shared query. The former file-local mirror is gone.)
 
 // FP1 (2026-09-01, sync-A16 batch P; contract E25): the frozen unsigned
 // integer lexicon -- non-empty and every character an ASCII '0'..'9'.
@@ -55,20 +50,20 @@ bool is_ascii_digits(const std::string& s) {
     return true;
 }
 
-// Returns the inline value after "=", or false when the value is missing.
-bool split_flag(const std::string& token, std::string& name,
+// Splits "name=value": has_inline_value reports whether an "=" value was
+// attached (a bare flag leaves value empty).
+void split_flag(const std::string& token, std::string& name,
                 std::string& value, bool& has_inline_value) {
     const auto eq = token.find('=');
     if (eq == std::string::npos) {
         name = token;
         has_inline_value = false;
         value.clear();
-        return true;
+        return;
     }
     name = token.substr(0, eq);
     value = token.substr(eq + 1);
     has_inline_value = true;
-    return true;
 }
 
 }  // namespace
@@ -106,9 +101,20 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     for (int i = 1; i < argc; ++i) {
         const std::string token(argv[i]);
         if (token.rfind("--", 0) != 0) {
-            continue;  // positional / value token; handled by the consumer
+            // A non-option token here is the separated VALUE of a shared
+            // (non-online-family) option, e.g. the path after
+            // --workload-configuration: online-family options consume their
+            // own values in the arms below (P2-4/P2-5, 2026-09-28), so this
+            // token must be left untouched for CmdLineParser, which owns
+            // the shared options and consumes the value with them. A truly
+            // stray positional rides along and is dropped into cxxopts'
+            // unmatched list (verified: with no parse_positional() target
+            // defined, consume_positional() returns false and the token is
+            // silently discarded) -- this loop has no positional grammar of
+            // its own and must not guess.
+            continue;
         }
-        if (!is_online_family(token)) {
+        if (!is_online_family_token(token)) {
             continue;  // shared static options: left to CmdLineParser
         }
         std::string name;
@@ -163,19 +169,47 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                         "tier was removed on 2026-09-05)";
                 return false;
             }
-        } else if (name == "--close-input") {
+        } else if (name == "--close-input" || name == "--sensing-enabled") {
+            // P2-5 fix (2026-09-28): unified boolean-flag semantics (see
+            // online_boolean_literal in the header). The pre-fix parser
+            // rejected the inline "=..." form while silently IGNORING a
+            // separated value token (it is not "--"-prefixed, so the loop
+            // skipped it as a positional): "--close-input false" armed the
+            // close and "--sensing-enabled false" enabled sensing -- both
+            // intents silently inverted. Every form now parses explicitly:
+            //   bare flag                  -> true
+            //   --flag=true|1 / =false|0   -> inline value
+            //   --flag true|1 / false|0    -> separated value (consumed)
+            //   --flag <anything else>     -> hard parse error
+            // A "--"-prefixed next token is NOT a value: the flag stands
+            // alone (true) and the option after it is parsed normally.
+            bool flag_true = true;
             if (has_inline_value) {
-                error = "flag --close-input takes no value";
-                return false;
+                const int lit = online_boolean_literal(value);
+                if (lit < 0) {
+                    error = "flag " + name + " requires a boolean value "
+                            "(true/1/false/0), got: " + value;
+                    return false;
+                }
+                flag_true = lit == 1;
+            } else if (i + 1 < argc) {
+                const std::string next(argv[i + 1]);
+                if (next.rfind("--", 0) != 0) {
+                    const int lit = online_boolean_literal(next);
+                    if (lit < 0) {
+                        error = "flag " + name + " requires a boolean "
+                                "value (true/1/false/0), got: " + next;
+                        return false;
+                    }
+                    ++i;  // consume the explicit separated value
+                    flag_true = lit == 1;
+                }
             }
-            close_input = true;
-        } else if (name == "--sensing-enabled") {
-            // Phase-3 perception feature flag (default off until phase 6).
-            if (has_inline_value) {
-                error = "flag --sensing-enabled takes no value";
-                return false;
+            if (name == "--close-input") {
+                close_input = flag_true;
+            } else {
+                sensing_enabled = flag_true;
             }
-            sensing_enabled = true;
         } else if (name == "--bridge-dir" || name == "--request-queue-csv" ||
                    name == "--command-fifo") {
             if (!has_inline_value) {
@@ -185,11 +219,68 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 value = argv[++i];
             }
+            // P2-4 fix (2026-09-28), F1-CPP C1-6 fix (2026-09-29): fail
+            // closed instead of storing a "--"-prefixed literal as the
+            // value. The guard now covers BOTH value forms: it originally
+            // sat inside the !has_inline_value branch, so the inline shape
+            // "--bridge-dir=--close-input" slipped through, stored the
+            // literal directory name and INVERTED the close semantics
+            // exactly like the separated shape -- under the official
+            // runner (which cd's to the repo root first) ensure_bridge_dir
+            // materialized a "--close-input" directory in the repo root
+            // and the runner's no-timeout FIFO wait loop wedged both
+            // sides. "--bridge-dir --close-input" (separated) used to
+            // swallow the token and silently arm nothing -- same poison,
+            // same diagnosis.
+            if (value.rfind("--", 0) == 0) {
+                error = "option " + name + " requires a value (the value "
+                        "token looks like another option, not a "
+                        "value: " + value + ")";
+                return false;
+            }
+            // P2-6 fix (2026-09-28): an explicitly given but EMPTY value
+            // ("--request-queue-csv=") used to be stored as "" and
+            // indistinguishable from the option being absent downstream:
+            // the readability check was skipped, expected_requests stayed 0
+            // and the completion audit / static-arrival gate / delivery
+            // gate all ran against a zero denominator (a zero-request run
+            // exits green). An empty value is now a hard parse error,
+            // distinct from omitting the option.
+            if (value.empty()) {
+                error = "option " + name + " requires a non-empty value "
+                        "(an explicitly empty value is not the same as "
+                        "omitting the option)";
+                return false;
+            }
+            struct stat path_stat;
             if (name == "--bridge-dir") {
+                // P2-4 fix: legality gate. A path that exists but is not a
+                // directory fails here instead of later in
+                // FileDecisionBridge::ensure_bridge_dir. A NON-existent
+                // path stays legal: ensure_bridge_dir creates the directory
+                // (the official runner's documented "C++ first: creates
+                // the bridge dir + FIFOs" contract).
+                if (::stat(value.c_str(), &path_stat) == 0 &&
+                    !S_ISDIR(path_stat.st_mode)) {
+                    error = "option --bridge-dir exists but is not a "
+                            "directory: " + value;
+                    return false;
+                }
                 bridge_dir = value;
             } else if (name == "--request-queue-csv") {
                 request_queue_csv = value;
             } else {
+                // P2-4 fix: the FIFO must exist at parse time (the fixture
+                // script mkfifs it before the binary starts -- OnlineCli.hh
+                // contract). The reader thread's old soft "cannot open"
+                // log left the input gate silently open for the whole run.
+                if (::stat(value.c_str(), &path_stat) != 0 ||
+                    !S_ISFIFO(path_stat.st_mode)) {
+                    error = "option --command-fifo must name an existing "
+                            "FIFO (mkfifo it before the binary starts): " +
+                            value;
+                    return false;
+                }
                 command_fifo = value;
             }
         } else if (name == "--request-max-arrival-ns" ||
@@ -235,7 +326,8 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
         } else if (name == "--idle-watchdog-s") {
             // P0-2 (2026-08-31, 总文档 §4 P0-2.3): wall-clock event-loop
             // parking watchdog. Double seconds (sub-second armings are legal
-            // for fixtures; campaigns use >= 600), 0 = off (frozen default).
+            // for fixtures; campaigns use >= 600), 0 = off (the default arms
+            // at 1.0 s since 2026-09-05 -- ships armed; OnlineCli.hh).
             // FP1 (2026-09-01, sync-A16 batch P; E25/E26) frozen lexicon and
             // the ONE ordering that removes the "0 = off" ambiguity:
             //   1) token non-empty, contains no whitespace character, and
@@ -262,19 +354,48 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 value = argv[++i];
             }
             bool lex_bad = value.empty();
+            bool exponent_marker_just_seen = false;
             for (const char c : value) {
                 if (std::isspace(static_cast<unsigned char>(c))) {
                     lex_bad = true;
                     break;
                 }
+                // Hex-float lex gap (2026-10-01 fix): std::strtod accepts
+                // "0x10"/"0x1p4" (hex / hex-float literals), which no
+                // documented value form of this option uses. Restrict the
+                // token to the plain decimal grammar [0-9] '.' 'e'/'E',
+                // allowing ONE sign ONLY immediately after an exponent
+                // marker (so "1e-320" stays a legal subnormal literal)
+                // -- signs anywhere else, and every hex/x/X/nan/inf token,
+                // die here with the lex diagnostic.
+                if (c >= '0' && c <= '9') {
+                    exponent_marker_just_seen = false;
+                    continue;
+                }
+                if (c == '.') {
+                    exponent_marker_just_seen = false;
+                    continue;
+                }
+                if (c == 'e' || c == 'E') {
+                    exponent_marker_just_seen = true;
+                    continue;
+                }
+                if ((c == '+' || c == '-') &&
+                    exponent_marker_just_seen) {
+                    exponent_marker_just_seen = false;
+                    continue;
+                }
+                lex_bad = true;
+                break;
             }
             if (!value.empty() && (value[0] == '+' || value[0] == '-')) {
                 lex_bad = true;
             }
             if (lex_bad) {
-                error = "option --idle-watchdog-s requires a non-negative "
-                        "number of seconds with no whitespace or sign "
-                        "characters, got: " + value;
+                error = "option --idle-watchdog-s requires a plain "
+                        "non-negative decimal number of seconds (digits, "
+                        "dot, exponent only; no whitespace, signs, or hex), "
+                        "got: " + value;
                 return false;
             }
             char* end = nullptr;
@@ -314,6 +435,45 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
 
     if (mode.empty()) {
         error = "missing required option --online-mode";
+        return false;
+    }
+    // C3 fix (2026-09-28): --close-input and --command-fifo are mutually
+    // exclusive. With a FIFO the input-close signaling belongs to the
+    // producer's CloseInput/EndOfFile commands; --close-input closes the
+    // gate immediately at startup (no-CSV arm of the close rule in
+    // main_online), so the FIFO channel is dead on arrival: every later
+    // Submit/CloseInput command is rejected by the closed gate and the run
+    // finishes as a seemingly healthy ZERO-request run (no CSV -> the
+    // completion audit's denominator is 0 and is skipped). No official
+    // runner combines the two (the CSV runners pair --close-input with
+    // --request-queue-csv; the FIFO fixtures never pass --close-input).
+    // --close-input=false with a FIFO stays legal: the flag is explicitly
+    // off.
+    if (close_input && !command_fifo.empty()) {
+        error =
+            "--close-input and --command-fifo are mutually exclusive: "
+            "--close-input would close the input gate at startup, making "
+            "the FIFO producer channel dead (a zero-request run that exits "
+            "green). Let the producer signal CloseInput/EndOfFile over the "
+            "FIFO instead";
+        return false;
+    }
+    // 3.16 fix (2026-09-29): --request-queue-csv and --command-fifo are
+    // mutually exclusive too. The combination parses legally (only the
+    // close-input pair was excluded above), but the CSV arm installs the
+    // arrival hook on the ingress and its queue-index domain is the CSV
+    // data-row order -- a FIFO envelope's queue_index stays at the default
+    // -1, so the first FIFO Submit died in notify_consumed(-1) deep inside
+    // the reader's accounting with a message about the wrong subsystem.
+    // Reject the combination at the parse boundary where both flags are
+    // visible.
+    if (!request_queue_csv.empty() && !command_fifo.empty()) {
+        error =
+            "--request-queue-csv and --command-fifo are mutually exclusive: "
+            "the CSV path owns the ingress arrival hooks and the queue-index "
+            "domain, while FIFO Submit envelopes arrive with no CSV queue "
+            "index (the combination aborted on the first FIFO Submit). Pick "
+            "one input channel";
         return false;
     }
     if (!request_queue_csv.empty()) {

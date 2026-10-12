@@ -57,10 +57,31 @@ void ETFeeder::build_index_dependancy_cache() {
   std::streampos last_pos = this->chakra_file.tellg();
   while (true) {
     ret = ProtobufUtils::readMessage<ChakraNode>(this->chakra_file, node);
-    if (!ret)
+    if (!ret) {
+      // readMessage returns false only for a clean boundary EOF (eofbit
+      // set by the peek probe) or for an oversize/parse-failed message;
+      // truncated tails throw inside readMessage. A false return without
+      // eof is therefore still corruption and must not silently shorten
+      // the graph.
+      if (!this->chakra_file.eof())
+        throw std::runtime_error(
+            "Failed to read node message, file might be corrupted");
       break;
+    }
     // build index
     const auto& node_id = node.id();
+    if (this->index_map.find(node_id) != this->index_map.end()) {
+      // a duplicate id would silently merge the two definitions (attrs
+      // from the last one, deps unioned); report both file offsets
+      throw std::runtime_error(
+          "Duplicate node id " + std::to_string(node_id) +
+          " in ET file, first occurrence at offset " +
+          std::to_string(
+              static_cast<std::streamoff>(this->index_map.at(node_id))) +
+          ", duplicate at offset " +
+          std::to_string(static_cast<std::streamoff>(last_pos)) +
+          ", file might be corrupted");
+    }
     this->index_map[node_id] = last_pos;
     last_pos = this->chakra_file.tellg();
     // build dependancy
@@ -87,7 +108,10 @@ std::shared_ptr<const ChakraNode> ETFeeder::get_raw_chakra_node(
   auto& pos = this->index_map[node_id];
   this->chakra_file.seekg(pos);
   ChakraNode node_msg;
-  ProtobufUtils::readMessage<ChakraNode>(this->chakra_file, node_msg);
+  if (!ProtobufUtils::readMessage<ChakraNode>(this->chakra_file, node_msg))
+    throw std::runtime_error(
+        "Failed to read node " + std::to_string(node_id) +
+        " message, file might be corrupted");
   ETFeeder::_node_cache.put(key, node_msg);
   return ETFeeder::_node_cache.get_locked(key);
 }

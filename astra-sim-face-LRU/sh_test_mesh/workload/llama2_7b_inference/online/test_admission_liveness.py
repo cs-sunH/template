@@ -119,9 +119,12 @@ def _make_scheduler():
     scheduler._batch = {"assignments": []}
     # B3(2026-09-06):三态 KV 发射面打桩(决策行为真,构图发射零动作;
     # 完整构图链由 test_graph_batch_builder 与 runner 冒烟覆盖)。
+    # B4 决策→发射窗口补丁(2026-10-01):准入门新查 has_pending_store_
+    # decision,打桩恒 False(无"已决策未发射"窗口)。
     scheduler.graph = SimpleNamespace(
         sync_pending_history_after_evictions=lambda transfers: None,
         emit_eviction_actions=lambda plan, transfers: None,
+        has_pending_store_decision=lambda session_id: False,
         note_request_complete=(
             lambda session_id, following, location: None),
         retire_request_state=lambda request_id: None,
@@ -157,6 +160,20 @@ def _make_runtime(request_id, session_id, *, turn=0, queue_index=0,
     })
 
 
+class _PChunkHolderReset:
+    """测试卫生(L22,2026-09-29):_make_scheduler 按生产 __init__ 同款
+    改写模块级全局 face_online_scheduler._P_CHUNK_HOLDER(生产默认
+    [0],真实调度器构造时经 :529 按 self.p_chunk 重置)。该全局若不在
+    测试结束后复位,同进程 pytest/unittest 顺序收集时泄漏的 128 会改
+    变后续测试文件里 _OnlineRequestRuntime.remaining_chunks 的离线默
+    认口径——setUp 保存、addCleanup 恢复,消除文件间顺序依赖。"""
+
+    def setUp(self):
+        super().setUp()
+        holder = face_online_scheduler._P_CHUNK_HOLDER
+        self.addCleanup(holder.__setitem__, 0, holder[0])
+
+
 def _kv_admit_prefill(manager, session_id, instance_index, tokens,
                       now_ns, request_id):
     """经与真实准入相同的调用序列把会话置为 RESIDENT+active。"""
@@ -168,7 +185,7 @@ def _kv_admit_prefill(manager, session_id, instance_index, tokens,
     assert growth.admitted, "fixture 预放置 grow_prefill 必须成功"
 
 
-def _occupancy_tokens(manager):
+def _occupancy_bytes(manager):
     """空实例每 rank 可用 KV 字节(扣模型权重)。"""
     snapshot = manager.hbm_snapshots(0)
     return min(state.remaining_bytes for state in snapshot)
@@ -181,13 +198,13 @@ def _pressure_events(manager):
     ]
 
 
-class DecodeAdmissionLivenessTest(unittest.TestCase):
+class DecodeAdmissionLivenessTest(_PChunkHolderReset, unittest.TestCase):
     """用例 A:decode 阻塞即重开重试门;blocker 完成的下一边界准入。"""
 
     def test_blocked_then_admitted_after_blocker_completes(self):
         scheduler = _make_scheduler()
         manager = scheduler.kv_manager
-        avail = _occupancy_tokens(manager)
+        avail = _occupancy_bytes(manager)
         # X 上下文占空实例 ~60%;Y 占 inst1 剩余 -> X 的全量 handoff 放不下。
         tokens_x = _tokens_for_bytes(int(avail * 0.6))
         tokens_y = _tokens_for_bytes(avail - _shard_per_rank(tokens_x) + 1)
@@ -234,13 +251,13 @@ class DecodeAdmissionLivenessTest(unittest.TestCase):
             scheduler._batch["assignments"][-1]["decode_instance_index"], 1)
 
 
-class PrefillAdmissionLivenessTest(unittest.TestCase):
+class PrefillAdmissionLivenessTest(_PChunkHolderReset, unittest.TestCase):
     """用例 C:prefill 阻塞即置 dirty;不变状态重试;释放后准入。"""
 
     def test_blocked_marks_dirty_and_retries_then_admits(self):
         scheduler = _make_scheduler()
         manager = scheduler.kv_manager
-        avail = _occupancy_tokens(manager)
+        avail = _occupancy_bytes(manager)
         tokens_x = _tokens_for_bytes(int(avail * 0.6))
         tokens_y = _tokens_for_bytes(avail - _shard_per_rank(tokens_x) + 1)
         _kv_admit_prefill(manager, "sy", 1, tokens_y, 100, "ry")
@@ -271,7 +288,7 @@ class PrefillAdmissionLivenessTest(unittest.TestCase):
         self.assertNotIn(1, scheduler.prefill_admission_dirty)
 
 
-class DecodeSelectionFilterTest(unittest.TestCase):
+class DecodeSelectionFilterTest(_PChunkHolderReset, unittest.TestCase):
     """P1 decode 选择期过滤三态 + 决策确定性 + 零副作用。"""
 
     def _costs(self):
@@ -287,7 +304,7 @@ class DecodeSelectionFilterTest(unittest.TestCase):
     def test_three_states_and_zero_side_effects(self):
         scheduler = _make_scheduler()
         manager = scheduler.kv_manager
-        avail = _occupancy_tokens(manager)
+        avail = _occupancy_bytes(manager)
         tokens_s = _tokens_for_bytes(int(avail * 0.3))
         _kv_admit_prefill(manager, "sx", 0, tokens_s, 100, "rx")
         runtime = self._runtime(_tokens_for_bytes(int(avail * 0.55)))
@@ -350,8 +367,10 @@ class DecodeSelectionFilterTest(unittest.TestCase):
         self.assertEqual(after[3], before[4])
 
 
-class PrefillSelectionFilterTest(unittest.TestCase):
-    """P1 prefill 选择期过滤三态(全上下文保守口径)。"""
+class PrefillSelectionFilterTest(_PChunkHolderReset, unittest.TestCase):
+    """P1 prefill 选择期过滤三态(M12 后增量口径:会话本地驻留且已在候选
+    实例上时按增量需求 = prefill_context 分片 − 已驻留 local_shard_bytes,
+    其余无会话/远端/异实例按全量——镜像 prepare_history 的真实准入门)。"""
 
     def _snapshots(self):
         return [
@@ -363,7 +382,7 @@ class PrefillSelectionFilterTest(unittest.TestCase):
     def test_three_states(self):
         scheduler = _make_scheduler()
         manager = scheduler.kv_manager
-        avail = _occupancy_tokens(manager)
+        avail = _occupancy_bytes(manager)
         tokens_p = _tokens_for_bytes(int(avail * 0.55))
         runtime = _make_runtime("rx", "sx", prefill_context_tokens=tokens_p)
         snapshots = self._snapshots()
@@ -401,7 +420,7 @@ class PrefillSelectionFilterTest(unittest.TestCase):
             "kept_all_infeasible")
 
 
-class ProbeSemanticsTest(unittest.TestCase):
+class ProbeSemanticsTest(_PChunkHolderReset, unittest.TestCase):
     """预检口径:source==target 按增量、source!=target 按全量(镜像
     move_prefill_to_decode);非本地驻留(三态 location 之外)的会话状态
     不给增量信用。B2(2026-09-06):RESIDENT 常量换三态 location,增量
@@ -410,7 +429,7 @@ class ProbeSemanticsTest(unittest.TestCase):
     def test_incremental_vs_full_requirement(self):
         scheduler = _make_scheduler()
         manager = scheduler.kv_manager
-        avail = _occupancy_tokens(manager)
+        avail = _occupancy_bytes(manager)
         tokens_s = _tokens_for_bytes(int(avail * 0.3))
         tokens_f = _tokens_for_bytes(int(avail * 0.9))
         _kv_admit_prefill(manager, "sx", 0, tokens_s, 100, "rx")
@@ -440,7 +459,7 @@ class ProbeSemanticsTest(unittest.TestCase):
         self.assertFalse(scheduler._probe_instance_capacity(2, over_shards))
 
 
-class DecodeEvictionSerializationTest(unittest.TestCase):
+class DecodeEvictionSerializationTest(_PChunkHolderReset, unittest.TestCase):
     """问题 2A 顺带修复(2026-09-05,方案 §4/T-E1):decode 决策行新增
     decode_target_evictions 快照序列化(与 wscllm 同名同构;face 的 decode
     决策在 _try_admit_waiting_decodes 内发射,快照天然含跨 attempt 累积),
@@ -490,7 +509,7 @@ class DecodeEvictionSerializationTest(unittest.TestCase):
     def test_decode_row_serializes_injected_then_clears(self):
         scheduler = _make_scheduler()
         tokens_x = _tokens_for_bytes(
-            int(_occupancy_tokens(scheduler.kv_manager) * 0.6))
+            int(_occupancy_bytes(scheduler.kv_manager) * 0.6))
         runtime = self._decode_ready_runtime(scheduler, tokens_x)
         e4 = self._eviction(400, "prefill_decode",
                             "prefill_decode_capacity", "victim_a")
@@ -516,7 +535,7 @@ class DecodeEvictionSerializationTest(unittest.TestCase):
     def test_completion_row_unaffected_by_decode_row_serialization(self):
         scheduler = _make_scheduler()
         tokens_x = _tokens_for_bytes(
-            int(_occupancy_tokens(scheduler.kv_manager) * 0.6))
+            int(_occupancy_bytes(scheduler.kv_manager) * 0.6))
         runtime = self._decode_ready_runtime(scheduler, tokens_x)
         e4 = self._eviction(400, "prefill_decode",
                             "prefill_decode_capacity", "victim_a")
@@ -565,7 +584,6 @@ class DecodeEvictionSerializationTest(unittest.TestCase):
         runtime = _make_runtime("rx", "sx", prefill_context_tokens=64)
         runtime.prefill_instance_index = 0
         runtime.prefill_assignment_key = (0, 0, 0)
-        runtime.history_recompute_tokens = 0  # _emit_admission 读取该聚合字段
         # 初始()(真实准入发射时点的取值)→ 数值不变:仍为空列表。
         self.assertEqual(_emit(runtime)["decision"]
                          ["decode_target_evictions"], [])
@@ -579,7 +597,7 @@ class DecodeEvictionSerializationTest(unittest.TestCase):
                          [self._expected_dict(e4)])
 
 
-class TieredRestoreAdmissionTest(unittest.TestCase):
+class TieredRestoreAdmissionTest(_PChunkHolderReset, unittest.TestCase):
     """Session 级 Tiered-LRU(2026-09-25 重写):唯一恢复路径经真实
     _try_admit_prefill 接线——REMOTE -> REMOTE_RESTORE(单笔全量回迁
     [0, L));铺垫改用重写后 _evict_session(reason='probe') 整体外迁;
@@ -629,9 +647,8 @@ class TieredRestoreAdmissionTest(unittest.TestCase):
         self.assertEqual(
             (transfer.layer_start, transfer.layer_end),
             (0, MODEL.layers))
-        self.assertEqual(
-            runtime.history_recompute_tokens, 0)
-        # remaining_chunks = ceil(20/128) = 1(recompute 项已删除)。
+        # remaining_chunks = ceil(20/128) = 1(recompute 项已删除,字段随
+        # 2026-09-26 恒零管道清理移除)。
         self.assertEqual(runtime.remaining_chunks, 1)
         restored = manager.session_snapshot("sy")
         self.assertEqual(restored.location, "local_hbm")
@@ -643,6 +660,39 @@ class TieredRestoreAdmissionTest(unittest.TestCase):
         self.assertEqual(restored.local_bytes, restored.total_bytes)
         self.assertEqual(restored.remote_bytes, 0)
         self.assertTrue(restored.active)
+
+    def test_remote_restore_defers_while_store_unemitted(self):
+        """B4 决策→发射窗口补丁(2026-10-01):decode 侧逐出"已决策未发射"
+        的窗口内,REMOTE 会话下一 turn 的回迁准入被推迟(纯推迟,无
+        mutation);store 发射(计数核销)后同一请求放行。防池读先于
+        池写。"""
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        _kv_admit_prefill(manager, "sy", 0, 100, 100, "ry")
+        manager.mark_complete("sy", 100, "ry")
+        manager._evict_session(
+            manager._sessions["sy"], now_ns=110, phase="decode",
+            reason="decode_target_capacity", trigger_request_id="probe")
+        # 模拟"已决策未发射"窗口:graph 桩报告存在 pending store 决策。
+        pending = {"sy": True}
+        scheduler.graph.has_pending_store_decision = (
+            lambda session_id: pending.get(session_id, False))
+        runtime = _make_runtime(
+            "ry1", "sy", turn=1,
+            prefill_context_tokens=120, final_context_tokens=120,
+            prefill_length=20, history_tokens_before=100)
+        runtime.prefill_instance_index = 0
+        self.assertFalse(scheduler._try_admit_prefill(runtime, 120))
+        # 推迟是纯推迟:会话仍 REMOTE、未发生任何准入 mutation。
+        self.assertIn(0, scheduler.prefill_admission_dirty)
+        snapshot = manager.session_snapshot("sy")
+        self.assertEqual(snapshot.location, "remote_memory")
+        self.assertFalse(runtime.admitted_prefill)
+        # store 发射(计数核销)后:同一决策边界之后的重试放行。
+        pending["sy"] = False
+        runtime.prefill_attempt_epoch = -1  # 强制重开纪元门(dirty 亦可)
+        self.assertTrue(scheduler._try_admit_prefill(runtime, 121))
+        self.assertEqual(runtime.history_action, "REMOTE_RESTORE")
 
 
 if __name__ == "__main__":

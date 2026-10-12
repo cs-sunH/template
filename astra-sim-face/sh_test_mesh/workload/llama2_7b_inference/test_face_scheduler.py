@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import atexit
 import json
+import math
+import os
 import sys
 import tempfile
 import unittest
@@ -15,15 +18,18 @@ if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
 from face_scheduler import (  # noqa: E402
+    ESTIMATE_SOURCE_DIE,
+    ESTIMATE_SOURCE_LEGACY,
     DecodeTieCounter,
     FaceHardware,
     FaceInstanceSpec,
     FaceModel,
     FaceRooflineEstimate,
-    KVAllocator,
     PrefillQueueSnapshot,
     WeightedInstanceGraph,
     build_instances,
+    build_die_estimate_specs,
+    die_derived_face_hardware,
     estimate_iteration_time_ns,
     estimate_model_weight_bytes,
     select_decode_instance,
@@ -80,7 +86,6 @@ def line_topology() -> tuple[FaceHardware, object]:
 # 时只用本文件内手写的合成队列(绝不引用任何真实 trace 数据),通过临时
 # 配置副本把 request_queue_csv 指向合成队列后加载。
 # ------------------------------------------------------------------------
-import tempfile
 
 REQUEST_QUEUE_HEADER = (
     "session_id,turn_index,request_id,prefill_length,decode_length,"
@@ -100,6 +105,10 @@ SYNTHETIC_QUEUE_ROWS = (
 )
 
 _FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="face_test_fixture_")
+# 模块级 TemporaryDirectory 缺少退出钩子：断言失败/外部信号中断时目录
+# 永久滞留系统临时区（磁盘残片）。atexit 兜底清理；正常解释器退出路径
+# 上 TemporaryDirectory 自身的隐式清理与其幂等共存。
+atexit.register(_FIXTURE_DIR.cleanup)
 
 
 def _write_synthetic_queue(path) -> None:
@@ -110,6 +119,33 @@ def _write_synthetic_queue(path) -> None:
     )
 
 
+def _skip_without_die_cost_library() -> None:
+    """阶段 C 裸仓守卫(仅影响加载 checked-in die 配置的用例;策略本体
+    用例不经配置加载,不受影响)。
+
+    checked-in 硬件自阶段 C 起 die 化(契约 §3.5),配置加载需要
+    libdie_model_cabi.so(env DIE_MODEL_CABI_PATH -> 仓内 build 发现序,
+    契约 §7 裁定 1;缺位 fail-closed 不回退)。库缺位且硬件确带 die 节
+    时 skip——集成构建出 .so 前的裸仓合法态,构建后本守卫恒放行。
+    (C 阶段对 D 域测试的最小直接相关修补:失败根因是 C 的硬件/配置
+    默认切换,非策略逻辑。)
+    """
+    from config_resolver import discover_cabi_library
+    try:
+        discover_cabi_library()
+        return
+    except RuntimeError:
+        pass
+    hardware = json.loads(
+        (SH_TEST_DIR / "hardware" / "face_case5_config_c.json").read_text(
+            encoding="utf-8"))
+    if "die" in hardware:
+        raise unittest.SkipTest(
+            "checked-in hardware resolves the die backend; build the "
+            "die_model_cabi target or set DIE_MODEL_CABI_PATH (contract "
+            "ruling 1: config load fails closed without the library)")
+
+
 def load_checked_in_config() -> object:
     """request-neutral fixture:checked-in 配置 + 手写合成队列(一次性物化)。
 
@@ -117,7 +153,7 @@ def load_checked_in_config() -> object:
     checked-in 配置一致;仅输入队列槽位替换为合成数据(收尾形态:仓库不
     物化任何真实 request 队列,正式入口缺失输入 fail-closed)。
     """
-    from generate_face_trace import load_face_trace_config
+    _skip_without_die_cost_library()
     queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
     _write_synthetic_queue(queue_path)
     config_csv = Path(_FIXTURE_DIR.name) / "synthetic_trace_config.csv"
@@ -139,7 +175,7 @@ def _load_edited_config(tag, edit, *, source_name="trace_config.csv"):
     edit(line) 返回替换行,返回 None 表示删除该行;request_queue_csv 行
     无条件重定向到合成队列(与 load_checked_in_config 同款 fixture)。
     """
-    from generate_face_trace import load_face_trace_config
+    _skip_without_die_cost_library()
     queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
     _write_synthetic_queue(queue_path)
     config_csv = Path(_FIXTURE_DIR.name) / f"synthetic_trace_config_{tag}.csv"
@@ -230,16 +266,22 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual((config.hardware.mesh_rows, config.hardware.mesh_cols), (9, 6))
         self.assertEqual(config.hardware.d2d_latency_ns, 5)
         self.assertEqual(config.hardware.local_hbm_latency_ns, 100)
-        self.assertEqual(config.hardware.local_hbm_capacity_bytes, 160 * 1024**3)
+        # die 模型数值更新(阶段 C 硬件 die 点,契约 §3.5,规则不变):
+        # 容量 profile 换 die 对齐条目 validation-die-64g(64 GB = 库派生
+        # HBM 容量;原 validation-160gib 在 die 节下不再合法)。
+        self.assertEqual(config.hardware.local_hbm_capacity_bytes, 64_000_000_000)
         self.assertEqual(config.hardware_config.name, "face_case5_config_c.json")
-        self.assertEqual(config.hardware_capacity_profile, "validation-160gib")
+        self.assertEqual(config.hardware_capacity_profile, "validation-die-64g")
         self.assertEqual(config.system_config.name, "system.json")
         self.assertEqual(config.network_config.name, "network.yml")
         self.assertEqual(config.comm_group_config.name, "comm_group.json")
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
+        # die 模型数值更新(阶段 C 派生标量回流,契约 §3.4,规则不变):
+        # local-mem-bw 保持严格连续(1640 GB/s);peak-perf 261.12 ->
+        # 1492.05(die 库派生 PE 峰值)。
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["peak-perf"], 261.12)
+        self.assertEqual(system_raw["peak-perf"], 1492.05)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)
         self.assertEqual({len(group.ranks) for group in config.inference_groups}, {6})
@@ -252,7 +294,6 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(config.prefill_chunk_size, 512)
         self.assertEqual(config.kv_cache_policy, "session_lru_recompute")
         self.assertEqual(config.kv_reserve_context_tokens, 1_000_000)
-        self.assertFalse(config.record_planning_iterations)
         # 收尾形态(2026-08-16):合成 fixture 期望(8 session / 10 request,
         # 手写数据;仓库不物化真实队列,见 load_checked_in_config)。
         self.assertEqual(config.source_request_count, 10)
@@ -421,7 +462,7 @@ class FaceSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(select_prefill_instance(tied), 1)
 
-    def test_roofline_estimate_uses_exact_tokens_and_validates_prefill_context(self) -> None:
+    def test_roofline_estimate_uses_exact_tokens(self) -> None:
         hardware, topology = line_topology()
         model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
         self.assertGreater(
@@ -432,30 +473,11 @@ class FaceSchedulerTests(unittest.TestCase):
                 p_chunk=8,
                 d_batch=1,
                 d_token=257,
-                p_context_tokens=64,
             ),
             0,
         )
-        with self.assertRaisesRegex(ValueError, "p_context_tokens must be zero"):
-            estimate_iteration_time_ns(
-                hardware,
-                model,
-                instance_size=2,
-                p_chunk=0,
-                d_batch=1,
-                d_token=257,
-                p_context_tokens=1,
-            )
-        with self.assertRaisesRegex(ValueError, "must include the current Prefill chunk"):
-            estimate_iteration_time_ns(
-                hardware,
-                model,
-                instance_size=2,
-                p_chunk=8,
-                d_batch=1,
-                d_token=257,
-                p_context_tokens=7,
-            )
+        # (2026-09-29) p_context_tokens 生产死参已删,其两个校验分支的
+        # 断言随之移除(参数不存在了)。
 
         _, costs = select_decode_instance(
             topology=topology,
@@ -485,14 +507,9 @@ class FaceSchedulerTests(unittest.TestCase):
             },
         )
 
-    def test_weighted_schedulable_range_changes_after_update(self) -> None:
-        hardware, topology = line_topology()
-        graph = WeightedInstanceGraph(topology)
-        before = graph.schedulable_instances(0, hardware.schedulable_distance_limit)
-        self.assertEqual(tuple(index for index, _ in before), (0, 1, 2))
-        graph.increase_path((0, 1))
-        after = graph.schedulable_instances(0, hardware.schedulable_distance_limit)
-        self.assertEqual(tuple(index for index, _ in after), (0, 1))
+    # test_weighted_schedulable_range_changes_after_update was removed on
+    # 2026-09-26 (M5-3): it only exercised the deleted WeightedInstanceGraph
+    # weight-write path (increase_path), which had no production caller.
 
     def test_decode_roofline_cost_uses_formula_and_config_order_tie(self) -> None:
         hardware, topology = line_topology()
@@ -548,11 +565,12 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(picks, [0, 1, 2, 0])
 
     def test_decode_tie_counter_not_advanced_on_unique_min(self) -> None:
-        # 唯一可调度候选不触发计数器；随后恢复精确平局仍取 tied[0]。
+        # 唯一最小值不触发计数器；随后恢复精确平局仍取 tied[0]。
+        # 唯一最小值通过各候选既存 decode 长度不同制造(原实现经已删除的
+        # increase_path 改边权制造,M5-3 2026-09-26 改为负载差)。
         hardware, model, topology, graph = self._decode_tie_fixture()
         counter = DecodeTieCounter()
-        graph.increase_path((0, 1), amount=2)
-        graph.increase_path((1, 2), amount=2)
+        distinct_workloads = ((64,), (128,), (256,))
         selected, _ = select_decode_instance(
             topology=topology,
             graph=graph,
@@ -561,14 +579,13 @@ class FaceSchedulerTests(unittest.TestCase):
             fixed_p_chunk=64,
             prefill_instance_index=1,
             has_prefill_work=(False, False, False),
-            decode_token_lengths=((), (), ()),
+            decode_token_lengths=distinct_workloads,
             new_request_token_length=256,
             tie_counter=counter,
         )
-        self.assertEqual(selected, 1)
+        self.assertEqual(selected, 2)
         self.assertEqual(counter.value, 0)
-        graph.decrease_path((0, 1), amount=2)
-        graph.decrease_path((1, 2), amount=2)
+        equal_workloads = ((), (), ())
         selected, _ = select_decode_instance(
             topology=topology,
             graph=graph,
@@ -577,7 +594,7 @@ class FaceSchedulerTests(unittest.TestCase):
             fixed_p_chunk=64,
             prefill_instance_index=1,
             has_prefill_work=(False, False, False),
-            decode_token_lengths=((), (), ()),
+            decode_token_lengths=equal_workloads,
             new_request_token_length=256,
             tie_counter=counter,
         )
@@ -603,37 +620,10 @@ class FaceSchedulerTests(unittest.TestCase):
             picks.append(selected)
         self.assertEqual(picks, [0, 0])
 
-    def test_kv_local_first_offload_updates_and_release_restores_weight(self) -> None:
-        _, topology = line_topology()
-        graph = WeightedInstanceGraph(topology)
-        allocator = KVAllocator(topology, graph, model_weight_bytes=0)
-        allocation = allocator.allocate(
-            request_id="r0",
-            decode_instance_index=0,
-            candidate_indices=(0, 1, 2),
-            total_bytes=250,
-        )
-        self.assertEqual(
-            [(piece.instance_index, piece.bytes) for piece in allocation.pieces],
-            [(0, 200), (1, 50)],
-        )
-        self.assertEqual(graph.edge_weight(0, 1), 2)
-        allocator.release(allocation)
-        self.assertEqual(graph.edge_weight(0, 1), 1)
-        self.assertEqual(tuple(allocator.remaining_capacity), (200, 200, 200))
-
-        # At equal weighted distance, prefer the instance with more remaining
-        # HBM before using config order.
-        graph2 = WeightedInstanceGraph(topology)
-        allocator2 = KVAllocator(topology, graph2, model_weight_bytes=0)
-        allocator2.remaining_capacity[:] = [100, 0, 150]
-        allocation2 = allocator2.allocate(
-            request_id="r1",
-            decode_instance_index=1,
-            candidate_indices=(0, 1, 2),
-            total_bytes=120,
-        )
-        self.assertEqual(allocation2.pieces[0].instance_index, 2)
+    # test_kv_local_first_offload_updates_and_release_restores_weight was
+    # removed on 2026-09-26 (M5-3): it only tested the deleted KVAllocator
+    # cross-instance placement cluster, which contradicted the two-state
+    # resident-or-evicted session model and had no production caller.
 
     def test_manager_deletes_multiple_lru_victims_but_not_active_kv(self) -> None:
         model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
@@ -686,7 +676,7 @@ class FaceSchedulerTests(unittest.TestCase):
             [
                 (event.event_type, event.session_id, event.phase,
                  event.reason, event.trigger_request_id)
-                for event in manager.events
+                for event in manager.events_since(0)
             ],
             [
                 ("no_history", "a", "history", "window_first_request", "a0"),
@@ -729,13 +719,13 @@ class FaceSchedulerTests(unittest.TestCase):
             manager.retire_terminal_session("terminal", 10, "terminal_r0")
 
         manager.mark_complete("terminal", 10, "terminal_r0")
-        completion_actions = manager.events
+        completion_actions = manager.events_since(0)
         self.assertEqual(
             manager.retire_terminal_session("terminal", 10, "terminal_r0"),
             0,
         )
-        self.assertEqual(manager.events, completion_actions)
-        self.assertEqual(manager.session_ids, ())
+        self.assertEqual(manager.events_since(0), completion_actions)
+        self.assertEqual(tuple(sorted(manager._sessions)), ())
         self.assertIsNone(manager.session_snapshot("terminal"))
         self.assertTrue(
             all(snapshot.resident_kv_bytes == 0
@@ -778,7 +768,7 @@ class FaceSchedulerTests(unittest.TestCase):
             self.assertNotIn(request_id, manager._pressure_event_keys_by_request)
             self.assertFalse(manager._pressure_event_keys)
             manager.retire_terminal_session(session_id, index, request_id)
-            self.assertEqual(manager.session_ids, ())
+            self.assertEqual(tuple(sorted(manager._sessions)), ())
 
     def test_pressure_event_dedup_is_request_scoped_and_retired(self) -> None:
         model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
@@ -824,7 +814,7 @@ class FaceSchedulerTests(unittest.TestCase):
 
         pressure_events = [
             event
-            for event in manager.events
+            for event in manager.events_since(0)
             if event.reason in {
                 "test_request_scoped_pressure",
                 "retry_after_previous_capacity_block",
@@ -926,12 +916,12 @@ class PassiveEvictionModeTests(unittest.TestCase):
 
         # 完成边界零逐出——retain_complete 事件在场,会话 RESIDENT。
         event_types = [
-            (event.event_type, event.session_id) for event in manager.events
+            (event.event_type, event.session_id) for event in manager.events_since(0)
         ]
         self.assertIn(("retain_complete", "a"), event_types)
         self.assertIn(("retain_complete", "b"), event_types)
         self.assertFalse(
-            [event for event in manager.events if event.event_type == "evict_delete"]
+            [event for event in manager.events_since(0) if event.event_type == "evict_delete"]
         )
         for session_id, completion_ns in (("a", 10), ("b", 20)):
             snapshot = manager.session_snapshot(session_id)
@@ -984,7 +974,7 @@ class PassiveEvictionModeTests(unittest.TestCase):
             manager.ensure_physical_fit(0, (280, 280), 5, "r9")
         self.assertEqual(manager.deep_gap_events, 1)
         deep_gaps = [
-            event for event in manager.events if event.event_type == "deep_gap"
+            event for event in manager.events_since(0) if event.event_type == "deep_gap"
         ]
         self.assertEqual(len(deep_gaps), 1)
         self.assertEqual(
@@ -992,7 +982,7 @@ class PassiveEvictionModeTests(unittest.TestCase):
         )
         self.assertEqual(deep_gaps[0].insufficient_ranks, (0, 1))
         # fail-closed raise 不留部分变异。
-        self.assertEqual(manager.session_ids, ())
+        self.assertEqual(tuple(sorted(manager._sessions)), ())
         self.assertEqual(
             tuple(s.remaining_bytes for s in manager.hbm_snapshots(0)),
             (128, 128),
@@ -1022,7 +1012,7 @@ class PassiveEvictionModeTests(unittest.TestCase):
         self.assertEqual(decision.insufficient_ranks, (0, 1))
         self.assertEqual(manager.deep_gap_events, 1)
         deep_gaps = [
-            event for event in manager.events if event.event_type == "deep_gap"
+            event for event in manager.events_since(0) if event.event_type == "deep_gap"
         ]
         self.assertEqual(len(deep_gaps), 1)
         self.assertEqual(
@@ -1046,10 +1036,327 @@ class PassiveEvictionModeTests(unittest.TestCase):
             ("z", 40, "z0"),
         ):
             manager.retire_terminal_session(session_id, now_ns, request_id)
-        self.assertEqual(manager.session_ids, ())
+        self.assertEqual(tuple(sorted(manager._sessions)), ())
         manager.assert_final_state()
 
 
+
+
+# ------------------------------------------------------------------------
+# 阶段 D(2026-10-03):die 后端估值源测试(die 模型数值更新,规则不变)。
+#
+# 上方既有用例分类处置结论(见 /tmp/die_build/stage_D/REPORT.md):
+#   - 规则类(候选集合/tie-break/边界 0/max 组合结构/取整下限/
+#     KV/配置加载)全部保持原断言语义,走 legacy 路径(cost_oracle
+#     缺省 None)原样通过;
+#   - 原文件无"纯旧 roofline 数值复算"用例(test_roofline_estimate_
+#     uses_exact_tokens 等仅断言 >0 与字段形状),无需数值更新;
+#   - 本节新增 die 路径的数值钉子(期望值按新模型计算)与 oracle
+#     契约测试。
+# ------------------------------------------------------------------------
+
+# face_case5 die 点(契约 §3.5 裁定)的 wrapped resolved 配置。
+FACE_CASE5_DIE_CONFIG = {
+    "schema_version": 1,
+    "profile": "mesh_die_v1",
+    "die": {
+        "sram-mb-per-core": 0.75,
+        "core-type": "large",
+        "compute-area-mm2": 800,
+        "hbm-per-side": 4,
+        "hbm-sides": 1,
+        "noc-width-bits": 512,
+    },
+}
+
+
+def _die_library_available() -> bool:
+    # 与生产发现序完全一致(env DIE_MODEL_CABI_PATH -> 仓内 build 路径,
+    # 契约 §7 裁定 1):不得 mock 掉仓内候选——否则 .so 已落在仓内
+    # build/ 发现路径上时本守卫仍会误判缺库而 skip(阶段 E 修复,与
+    # test_die_model_oracle._library_available 同款)。
+    from online.die_model_oracle import discover_cabi_library
+    try:
+        discover_cabi_library(None)
+    except RuntimeError:
+        return False
+    return True
+
+
+@unittest.skipUnless(
+    _die_library_available(),
+    "libdie_model_cabi.so not found; build extern/die_model and export "
+    "DIE_MODEL_CABI_PATH (see test_die_model_oracle docstring)")
+class DieModelEstimateTests(unittest.TestCase):
+    """estimate_iteration_time_ns 换源后的结构/数值/接线测试。
+
+    结构保留断言(与 legacy 路径同形):linear + max(prefill, decode)
+    + d2d_latency_ns、max(1, ceil(...)) 取整、p_chunk==0 && d_batch==0
+    -> 0。数值断言按 die 模型计算(die 模型数值更新,规则不变)。
+    """
+
+    TOY = FaceModel(1, 8, 16, 4, 32, 2, "gelu")  # hidden 整除 heads、bf16
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from online.die_model_oracle import DieModelOracle
+        cls._temp = tempfile.TemporaryDirectory(prefix="face_die_est_")
+        config_path = Path(cls._temp.name) / "resolved_die_model.json"
+        config_path.write_text(json.dumps(FACE_CASE5_DIE_CONFIG),
+                               encoding="utf-8")
+        cls.oracle = DieModelOracle(config_json_path=str(config_path))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.oracle.close()
+        cls._temp.cleanup()
+
+    def test_die_estimate_value_pin(self) -> None:
+        # die 模型数值更新(规则不变):固定工作负载的孤立估值钉子,
+        # 期望值来自当前 die_model 库(mesh_die_v1,face die 点)。
+        # E3 下界修正:编译期剪枝下界由"launch 串行和"换为健全的
+        # 槽位占用和 + lag 折算关键路径(旧下界在该 launch 主导的
+        # 微型负载上剪掉了真最优,所有分段选中更大的核组/上下文,
+        # 各分段估值全部变短),钉子 6338 -> 6197。
+        hardware = FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 0, 0)
+        value = estimate_iteration_time_ns(
+            hardware, self.TOY, instance_size=2, p_chunk=8, d_batch=1,
+            d_token=257, cost_oracle=self.oracle)
+        self.assertEqual(value, 6197)
+        # 确定性:同一输入重复估值逐字节相等(库内计划缓存 + 纯函数)。
+        again = estimate_iteration_time_ns(
+            hardware, self.TOY, instance_size=2, p_chunk=8, d_batch=1,
+            d_token=257, cost_oracle=self.oracle)
+        self.assertEqual(value, again)
+
+    def test_die_estimate_structure_and_boundaries(self) -> None:
+        hardware = FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 0, 0)
+        # 空负载短路(规则不变)。
+        self.assertEqual(
+            estimate_iteration_time_ns(
+                hardware, self.TOY, instance_size=2, p_chunk=0, d_batch=0,
+                d_token=0, cost_oracle=self.oracle),
+            0)
+        # ceil-to-1ns 下限 + 无条件 d2d_latency_ns 附加(规则不变):
+        # d2d=5 与 d2d=0 的差恰为 5。
+        base = estimate_iteration_time_ns(
+            hardware, self.TOY, instance_size=2, p_chunk=8, d_batch=1,
+            d_token=257, cost_oracle=self.oracle)
+        with_d2d = estimate_iteration_time_ns(
+            FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 5, 0),
+            self.TOY, instance_size=2, p_chunk=8, d_batch=1, d_token=257,
+            cost_oracle=self.oracle)
+        self.assertEqual(with_d2d - base, 5)
+        self.assertGreaterEqual(base, 1)
+        # 纯 decode 负载(prefill 缺席)与混合负载都为正。
+        decode_only = estimate_iteration_time_ns(
+            hardware, FaceModel(2, 64, 128, 8, 256, 2, "gelu"),
+            instance_size=3, p_chunk=0, d_batch=4, d_token=400,
+            cost_oracle=self.oracle)
+        self.assertGreater(decode_only, 0)
+
+    def test_die_estimate_combination_matches_oracle_labels(self) -> None:
+        # 组合结构契约:linear = norm+qkv_rope+o_proj+ffn_region+residual
+        # 五段求和,attention 取 max(prefill, decode),再 +d2d 与取整。
+        # (逐段秒数取自 oracle 对同一 spec 集的批量结果,不在测试内
+        # 复算任何时间公式。)
+        model = FaceModel(2, 64, 128, 8, 256, 2, "gelu")
+        hardware = FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 5, 0)
+        kwargs = dict(instance_size=3, p_chunk=512, d_batch=4, d_token=400)
+        specs, labels = build_die_estimate_specs(
+            model, config_hash=self.oracle.config_hash, **kwargs)
+        results = self.oracle.estimate(specs)
+        seconds = {
+            label: result["total_seconds"]
+            for label, result in zip(labels, results)}
+        linear = sum(seconds[name] for name in (
+            "norm", "qkv_rope", "o_proj", "ffn_region", "residual"))
+        expected = max(
+            1,
+            math.ceil(
+                (linear + max(seconds["attention_prefill"],
+                              seconds["attention_decode"])) * 1e9)
+            + hardware.d2d_latency_ns)
+        self.assertEqual(
+            estimate_iteration_time_ns(
+                hardware, model, cost_oracle=self.oracle, **kwargs),
+            expected)
+
+    def test_die_spec_batch_contract(self) -> None:
+        # 构造的 spec 集逐字段合规:库侧零错误(坏 spec 会以错误位
+        # 返回);线性五规格共享同一合并批 spans(M = p_chunk + d_batch,
+        # §4.2 规则 1);decode attention = d_batch 个 (1, d_token) span,
+        # 绝对位置 = KV 末位;tp_slice = rank 0 最大分片;layer_count =
+        # layers、weight_passes = 1(权重每层一次的 scheduler 现行口径)。
+        model = FaceModel(2, 64, 128, 8, 256, 2, "gelu")
+        specs, labels = build_die_estimate_specs(
+            model, instance_size=6, p_chunk=512, d_batch=4, d_token=400,
+            config_hash="contract-test")
+        self.assertEqual(
+            labels,
+            ("norm", "qkv_rope", "o_proj", "ffn_region", "residual",
+             "attention_prefill", "attention_decode"))
+        results = self.oracle.estimate(specs)
+        self.assertEqual(self.oracle.last_errors, [None] * len(specs))
+        self.assertNotIn(None, results)
+        for spec in specs:
+            self.assertEqual(spec["schema_version"], 1)
+            self.assertEqual(spec["layer_count"], model.layers)
+            self.assertEqual(spec["weight_passes"], 1)
+            self.assertEqual(spec["kv_access"], {"identity": "local"})
+            self.assertEqual(spec["fusion_policy"], "auto")
+        linear_specs = specs[:5]
+        batch_spans = linear_specs[0]["spans"]
+        for spec in linear_specs[1:]:
+            self.assertEqual(spec["spans"], batch_spans)
+        # 合并批片段 = 1 个 prefill chunk span + 4 个 decode span;
+        # M = sum(q_tokens) = p_chunk + d_batch(§4.2 规则 1)。
+        self.assertEqual(len(batch_spans), 1 + 4)
+        self.assertEqual(sum(s["q_tokens"] for s in batch_spans), 512 + 4)
+        self.assertEqual(batch_spans[0]["q_tokens"], 512)
+        decode_spans = specs[-1]["spans"]
+        self.assertEqual(len(decode_spans), 4)
+        for span in decode_spans:
+            self.assertEqual(span["q_tokens"], 1)
+            self.assertEqual(span["kv_tokens"], 400)
+            self.assertEqual(span["q_start_pos"], 399)
+            self.assertEqual(span["kv_start_pos"], 0)
+        tp_slice = linear_specs[0]["tp_slice"]
+        self.assertEqual(tp_slice["tensor_parallel"], 6)
+        self.assertEqual(tp_slice["tensor_parallel_rank"], 0)
+        self.assertEqual(tp_slice["q_heads_local"], 2)   # shard_extent(8,6,0)
+        self.assertEqual(tp_slice["ffn_local"], 22)      # shard_extent(128,6,0)
+        # dtype 映射:bytes_per_elem 2 -> bf16。
+        self.assertEqual(linear_specs[0]["dtype"], "bf16")
+
+    def test_roofline_source_labels_by_backend(self) -> None:
+        hardware, topology = line_topology()
+        model = FaceModel(1, 8, 16, 4, 32, 2, "gelu")
+        common = dict(
+            topology=topology,
+            graph=WeightedInstanceGraph(topology),
+            hardware=hardware,
+            model=model,
+            fixed_p_chunk=64,
+            prefill_instance_index=1,
+            has_prefill_work=(False, False, False),
+            decode_token_lengths=((257,), (), ()),
+            new_request_token_length=385,
+        )
+        _, legacy_costs = select_decode_instance(**common)
+        self.assertEqual(
+            {cost.current_roofline.source for cost in legacy_costs},
+            {ESTIMATE_SOURCE_LEGACY})
+        _, die_costs = select_decode_instance(**common,
+                                              cost_oracle=self.oracle)
+        self.assertEqual(
+            {cost.current_roofline.source for cost in die_costs},
+            {ESTIMATE_SOURCE_DIE})
+
+    def test_die_decode_tie_round_robin_unchanged(self) -> None:
+        # 平局轮转规则在 die 源下不变:同负载候选的孤立估值逐位相等
+        # -> 真实三方平局 -> 轮流取 [0, 1, 2, 0]。
+        hardware, topology = line_topology()
+        model = FaceModel(1, 8, 16, 4, 32, 2, "gelu")
+        graph = WeightedInstanceGraph(topology)
+        counter = DecodeTieCounter()
+        picks = []
+        for _ in range(4):
+            selected, _ = select_decode_instance(
+                topology=topology,
+                graph=graph,
+                hardware=hardware,
+                model=model,
+                fixed_p_chunk=64,
+                prefill_instance_index=1,
+                has_prefill_work=(False, False, False),
+                decode_token_lengths=((), (), ()),
+                new_request_token_length=256,
+                tie_counter=counter,
+                cost_oracle=self.oracle,
+            )
+            picks.append(selected)
+        self.assertEqual(picks, [0, 1, 2, 0])
+
+    def test_die_derived_face_hardware_scalars(self) -> None:
+        hardware = FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 5, 100,
+                                label="FACE")
+        derived = die_derived_face_hardware(hardware, self.oracle)
+        # 派生标量注入(契约 §3.4):face die 点 = 1492.05 TFLOPS、
+        # 1640 GB/s;其余字段保持 hardware JSON 读数。
+        self.assertAlmostEqual(derived.peak_perf_tflops, 1492.05)
+        self.assertAlmostEqual(derived.local_hbm_bandwidth_gbps, 1640.0)
+        self.assertEqual(derived.mesh_rows, hardware.mesh_rows)
+        self.assertEqual(derived.mesh_cols, hardware.mesh_cols)
+        self.assertEqual(
+            derived.local_hbm_capacity_bytes, hardware.local_hbm_capacity_bytes)
+        self.assertEqual(derived.d2d_bandwidth_gbps, hardware.d2d_bandwidth_gbps)
+        self.assertEqual(derived.d2d_latency_ns, hardware.d2d_latency_ns)
+        self.assertEqual(
+            derived.local_hbm_latency_ns, hardware.local_hbm_latency_ns)
+        self.assertEqual(derived.label, hardware.label)
+        self.assertAlmostEqual(
+            derived.schedulable_distance_limit, 2.0 / 1640.0)
+        # 原对象不可变:dataclasses.replace 语义(不原地修改)。
+        self.assertEqual(hardware.peak_perf_tflops, 1.0)
+
+    def test_scheduler_constructor_injects_die_scalars(self) -> None:
+        # 接线:cost_oracle 经构造器注入 -> estimate_hardware/topology 带
+        # oracle 派生标量;缺省(None)保持 config.hardware(回归保护)。
+        from online.face_online_scheduler import FaceOnlineScheduler
+        from online.graph_batch_builder import GraphBatchBuilder
+        config = load_checked_in_config()
+        graph = GraphBatchBuilder(config)
+        manifest = {"requests": [{
+            "request_id": "die_wire_r0", "session_id": "die_wire_s0",
+            "turn_index": 0, "queue_index": 0, "prefill_length": 8,
+            "decode_length": 2, "history_tokens_before": 0,
+            "prefill_context_tokens": 8, "final_context_tokens": 8,
+        }]}
+        legacy = FaceOnlineScheduler(
+            manifest=manifest, config=config, graph=graph)
+        self.assertIsNone(legacy.cost_oracle)
+        self.assertIs(legacy.estimate_hardware, config.hardware)
+        die = FaceOnlineScheduler(
+            manifest=manifest, config=config, graph=graph,
+            cost_oracle=self.oracle)
+        self.assertIs(die.cost_oracle, self.oracle)
+        self.assertAlmostEqual(die.estimate_hardware.peak_perf_tflops,
+                               1492.05)
+        self.assertAlmostEqual(
+            die.topology.hardware.local_hbm_bandwidth_gbps, 1640.0)
+        # mesh 几何/KV 容量不随 die 标量注入改变。
+        self.assertEqual(
+            (die.topology.hardware.mesh_rows,
+             die.topology.hardware.mesh_cols),
+            (config.hardware.mesh_rows, config.hardware.mesh_cols))
+        self.assertEqual(
+            die.topology.hardware.local_hbm_capacity_bytes,
+            config.hardware.local_hbm_capacity_bytes)
+
+        # 直连构造路径(不经 online_service):manifest 声明 die 后端时,
+        # 调度器从基类 DieModelContext 的同一份配置自动构造 oracle——
+        # 发射走 die、预测也走 die,不允许一半新模型一半旧 roofline。
+        die_manifest = dict(manifest)
+        die_manifest["compute-cost-model"] = "die"
+        die_manifest["die-model-config"] = str(
+            Path(self._temp.name) / "resolved_die_model.json")
+        direct = FaceOnlineScheduler(
+            manifest=die_manifest, config=config, graph=graph)
+        self.assertIsNotNone(direct.cost_oracle)
+        self.assertAlmostEqual(direct.estimate_hardware.peak_perf_tflops,
+                               1492.05)
+        direct.close()  # 调度器自有的 oracle 在此释放(注入的不归它管)
+        # 注入 oracle 与 manifest 配置不一致 -> fail-closed。
+        other_config = Path(self._temp.name) / "other_die_model.json"
+        other_config.write_text(json.dumps(FACE_CASE5_DIE_CONFIG),
+                                encoding="utf-8")
+        clash = dict(die_manifest)
+        clash["die-model-config"] = str(other_config)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            FaceOnlineScheduler(
+                manifest=clash, config=config, graph=graph,
+                cost_oracle=self.oracle)
 
 
 if __name__ == "__main__":

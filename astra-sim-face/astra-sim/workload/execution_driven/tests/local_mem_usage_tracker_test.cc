@@ -20,7 +20,6 @@ old O(ticks * live_tensors) snapshot representation is impractical.
 #include <map>
 #include <set>
 #include <string>
-#include <sys/resource.h>
 #include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
@@ -56,6 +55,10 @@ struct LocalMemUsageTrackerTestAccess {
     static const std::unordered_map<TensorId, uint64_t>& tensor_sizes(
         const LocalMemUsageTracker& tracker) {
         return tracker.tensorSize;
+    }
+
+    static uint64_t peak_mem_usage(const LocalMemUsageTracker& tracker) {
+        return tracker.peak_memory_usage_;
     }
 
     static const std::unordered_map<TensorId, MemActivity>& writes(
@@ -96,6 +99,22 @@ MemActivity activity(const Tick start, const Tick end, std::string node_name,
     return MemActivity{start, end, std::move(node_name), node_id};
 }
 
+// R4-NF2 fix (2026-09-29): expect()/read_file failures leave via
+// std::exit, which skips scope guards, so the dumped temp traces are
+// unlinked by an atexit handler instead -- a failing run leaves no /tmp
+// residue. (Double unlink after a successful manual cleanup is a harmless
+// ENOENT.)
+static std::vector<std::string>& temp_trace_paths() {
+    static std::vector<std::string> paths;
+    return paths;
+}
+
+static void cleanup_temp_traces() {
+    for (const auto& path : temp_trace_paths()) {
+        ::unlink(path.c_str());
+    }
+}
+
 std::string temporary_prefix() {
     char pattern[] = "/tmp/astra-local-mem-tracker-XXXXXX";
     const int fd = ::mkstemp(pattern);
@@ -110,6 +129,27 @@ std::string temporary_prefix() {
     }
     return pattern;
 }
+
+#ifdef __linux__
+// Current resident set of this process in KiB (/proc/self/statm, field 2).
+// getrusage's ru_maxrss is a monotone process high-water mark, NOT the
+// current occupancy: a delta between two ru_maxrss samples stays ~0 unless
+// the new allocation exceeds the pre-existing peak, so a quadratic-snapshot
+// regression can hide behind memory the process already touched. The
+// tracker's live structures are still held at both measurement points
+// below, so the CURRENT resident delta is the regression-sensitive signal
+// (review 2026-09-26 cpp-ed-tests-a-6). -1 on read failure.
+long current_resident_kib() {
+    std::ifstream statm("/proc/self/statm");
+    long total_pages = 0;
+    long resident_pages = 0;
+    if (!(statm >> total_pages >> resident_pages)) {
+        return -1;
+    }
+    const long page_kib = static_cast<long>(::sysconf(_SC_PAGESIZE)) / 1024;
+    return resident_pages * page_kib;
+}
+#endif
 
 std::string read_file(const std::string& path) {
     std::ifstream input(path, std::ios::binary);
@@ -336,15 +376,20 @@ LegacyResult legacy_reference(const LocalMemUsageTracker& tracker) {
                  (max_lifetime - min_lifetime)) *
                 (count - 1));
         }
-        // R5 (2026-08-29, authorized micro-item): the same provable
-        // [0, 255] intensity range as the production getSizeColor (every
-        // size scales by max_tensor_size, the maximum over all entries) is
-        // restated here with the production-side clamp + unsigned args +
-        // bounded snprintf, eliminating the format-overflow warning without
-        // changing a single output byte (the byte-exact golden comparison
-        // against the production implementation still holds; the
-        // max_tensor_size == 0 path used to be a division-by-zero UB and
-        // is now the well-defined blue, same as production).
+        // NON-INDEPENDENT ORACLE SEGMENT (review 2026-09-26
+        // cpp-ed-tests-a-7): the intensity/color computation below restates
+        // the production getSizeColor formula field-by-field (same
+        // [0, 255] range, every size scaled by max_tensor_size, the maximum
+        // over all entries, same clamp).  The byte-exact golden comparison
+        // therefore does NOT independently validate the color channel: a
+        // shared mis-derivation would pass on both sides.  Independence of
+        // the remaining trace (event set, order, ts/dur/pid/tid fields,
+        // sizes, lifetimes) is unaffected.  R5 (2026-08-29): the
+        // production-side clamp + unsigned args + bounded snprintf
+        // eliminated the format-overflow warning without changing a single
+        // output byte; the max_tensor_size == 0 path used to be a
+        // division-by-zero UB and is now the well-defined blue, same as
+        // production.
         const double heatmap_ratio =
             (max_tensor_size == 0)
                 ? 0.0
@@ -429,12 +474,14 @@ void test_byte_exact_reference_and_boundaries() {
     tracker.buildMemoryTimeline();
     expect(AstraSim::LocalMemUsageTrackerTestAccess::trace_spool_open(tracker),
            "nonempty trace uses an anonymous spool instead of a JSON vector");
-    expect(tracker.getPeakMemUsage() == expected.peak,
+    expect(AstraSim::LocalMemUsageTrackerTestAccess::peak_mem_usage(tracker) ==
+               expected.peak,
            "single-sweep peak equals legacy snapshot peak");
 
     const std::string prefix = temporary_prefix();
     const std::string trace_path = prefix + ".17.json";
     tracker.dumpMemoryTrace(prefix);
+    temp_trace_paths().push_back(trace_path);
     const std::string actual = read_file(trace_path);
     expect(actual == expected.trace,
            "streamed pretty trace is byte-identical to the legacy JSON dump");
@@ -454,6 +501,7 @@ void test_byte_exact_reference_and_boundaries() {
     const std::string empty_prefix = temporary_prefix();
     const std::string empty_path = empty_prefix + ".3.json";
     empty_tracker.dumpMemoryTrace(empty_prefix);
+    temp_trace_paths().push_back(empty_path);
     expect(read_file(empty_path) == "{\n  \"traceEvents\": []\n}",
            "empty trace keeps the legacy pretty JSON spelling");
     if (::unlink(empty_path.c_str()) != 0) {
@@ -483,32 +531,42 @@ void test_high_overlap_pressure() {
                                 activity(0, index + 1, "stress-reader", index)});
     }
 
-    struct rusage before {};
-    struct rusage after {};
-    if (::getrusage(RUSAGE_SELF, &before) != 0) {
-        std::fprintf(stderr, "getrusage(before) failed: %s\n", std::strerror(errno));
+#ifdef __linux__
+    const long rss_before_kib = current_resident_kib();
+    if (rss_before_kib < 0) {
+        std::fprintf(stderr, "reading /proc/self/statm failed: %s\n",
+                     std::strerror(errno));
         std::exit(EXIT_FAILURE);
     }
+#endif
     LocalMemUsageTracker tracker(9);
     AstraSim::LocalMemUsageTrackerTestAccess::seed(
         tracker, std::move(sizes), std::move(writes), std::move(reads));
     tracker.buildMemoryTrace();
     tracker.buildMemoryTimeline();
-    if (::getrusage(RUSAGE_SELF, &after) != 0) {
-        std::fprintf(stderr, "getrusage(after) failed: %s\n", std::strerror(errno));
+#ifdef __linux__
+    const long rss_after_kib = current_resident_kib();
+    if (rss_after_kib < 0) {
+        std::fprintf(stderr, "reading /proc/self/statm failed: %s\n",
+                     std::strerror(errno));
         std::exit(EXIT_FAILURE);
     }
+#endif
 
-    expect(tracker.getPeakMemUsage() == kTensorCount,
+    expect(AstraSim::LocalMemUsageTrackerTestAccess::peak_mem_usage(tracker) ==
+               kTensorCount,
            "high-overlap sweep preserves the all-live peak");
     expect(AstraSim::LocalMemUsageTrackerTestAccess::trace_event_count(tracker) ==
                8 * kTensorCount + 4,
            "high-overlap trace is spooled as individual events");
 #ifdef __linux__
-    const long rss_delta_kib = after.ru_maxrss - before.ru_maxrss;
+    const long rss_delta_kib = rss_after_kib - rss_before_kib;
     // The 4,096-timestamp / 4,096-live-tensor legacy layout is hundreds of
     // MiB before its JSON DOM.  This deliberately generous cap leaves room
-    // for the linked simulator but rejects a return to quadratic snapshots.
+    // for allocator noise but rejects a return to quadratic snapshots.  The
+    // measurement is the CURRENT resident set (see current_resident_kib for
+    // why ru_maxrss was rejected), taken with the tracker's live structures
+    // still held.
     expect(rss_delta_kib >= 0 && rss_delta_kib < 256L * 1024L,
            "high-overlap tracker stays below the quadratic-snapshot RSS range");
 #endif
@@ -517,6 +575,7 @@ void test_high_overlap_pressure() {
 }  // namespace
 
 int main() {
+    std::atexit(cleanup_temp_traces);
     test_byte_exact_reference_and_boundaries();
     test_high_overlap_pressure();
     if (!g_ok) {

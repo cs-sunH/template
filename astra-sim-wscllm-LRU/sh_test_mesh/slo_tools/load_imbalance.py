@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""WP7 负载不均衡度（离线重建，五仓逐字节相同，标准库实现）。
+"""WP7 负载不均衡度（离线重建，标准库实现）。
+
+同步基线注记（2026-09-26）：本文件与 face/wscllm 家族同名脚本已按仓分叉
+（本仓先行 METRIC-01 精确时间比例积分），不再跨仓逐字节相同。
 
 算法严格按主规格 §1.5-A：
 
     逐请求 (instance, admission→drain 区间)
-      → 各 instance 积压时间序列（桶长 = manifest imbalance_bucket_ns）
-      → 时间平均 CV 与 Max/Mean；不做账本 dump。
+      → 各 instance 积压时间积分（时间比例精确积分；imbalance_bucket_ns
+        仅作名义桶长登记）
+      → 全部配置实例上的时间平均 CV 与 Max/Mean；不做账本 dump。
 
 区间语义（逐仓字段映射，全部来自基线产物事实核对）：
   * admission = decision log kind=prefill 行的 tick（S1 另有显式
@@ -22,8 +26,17 @@
     全仓 time_avg_backlog 退化为 0；exits 终态行在五仓账本格式下均每请求
     恰一行，0902 批次实测 0 重复/0 缺失/0 零长度区间。）
 
-统计口径：每实例时间平均积压 b̄_i = Σ(桶内积压×桶长)/总跨度；
-CV = stdev_population(b̄_i)/mean(b̄_i)；Max/Mean = max(b̄_i)/mean(b̄_i)。
+统计口径（METRIC-01 修正，2026-09-26；2026-09-29 分母来源修正）：每实例
+时间平均积压 b̄_i = Σ_r (drain_r − admission_r) / 总跨度——闭开区间
+[admission, drain) 重叠时长的精确时间比例积分（∫in-flight dt 恒等式），
+不再按「覆盖桶数×桶长」近似（部分覆盖桶按整桶计会高估）；分母=全部配置
+实例——配置实例总数的权威来源是 trace_config.csv 的 inference_group 组
+行数（本仓标准布局 9 组 × 6 rank；plan_materializer 的 manifest 不携带
+实例/组清单，request manifest 的 prefill_ranks 是每实例 rank 数而非实例
+数；部署实例连续编号 0..N−1），全程空闲实例 b̄=0 计入总体——只对出现过
+的实例求 CV 会从分母移除空闲实例、低估不均衡。bucket_ns 不参与积分，仅
+随输出登记（名义桶长）。CV = stdev_population(b̄_i)/mean(b̄_i)；
+Max/Mean = max(b̄_i)/mean(b̄_i)。
 """
 
 from __future__ import annotations
@@ -41,6 +54,11 @@ from slo_common import (  # noqa: E402
     detect_repo_variant, emit_json, fail, iter_jsonl, load_slo_manifest,
     open_output, require_param_int, run_main, write_csv,
 )
+# METRIC-01：配置实例总数的权威来源 = trace_config.csv 的 inference_group
+# 组行数（解析与候选链复用 hbm_watermark，单一口径不另立推导）；每实例
+# NPU 数（prefill_ranks 长度）是 hbm_watermark.load_npus_per_instance 的
+# 语义，与本工具分母无关。
+from hbm_watermark import count_configured_instances  # noqa: E402
 
 # 逐仓 admission 字段分支：S1/S3 的 prefill decision 携带显式
 # admission_time_ns；FACE/W 只有 tick（= 准入决策时刻）。基线核对：
@@ -55,7 +73,7 @@ EXPLICIT_ADMISSION_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def li_prepare(repo_variant: str) -> dict:
+def li_prepare() -> dict:
     """decision-log 扫描态（A4：driver 单遍复用；CLI 路径同构）。"""
     return {"admissions": {}, "decode_instances": {}}
 
@@ -70,14 +88,16 @@ def li_consume_decision(record: dict, repo_variant: str, state: dict) -> None:
         return  # 原循环体的 continue（无 request_id 行不参与归集）
     decision = record.get("decision") or {}
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    # bool 是 int 子类：True/False 不得冒充 tick（与下游 instance 域检查
+    # 同纪律，显式排除）。
+    if isinstance(tick, bool) or not isinstance(tick, int):
         fail(f"decision log 行缺整数 tick（kind={kind!r}, "
              f"request={request_id!r}）")
     if kind == "prefill":
         admission = tick
         for field in EXPLICIT_ADMISSION_FIELDS.get(repo_variant, ()):
             value = decision.get(field)
-            if isinstance(value, int):
+            if isinstance(value, int) and not isinstance(value, bool):
                 admission = value
                 break
         if request_id in admissions:
@@ -85,10 +105,15 @@ def li_consume_decision(record: dict, repo_variant: str, state: dict) -> None:
         admissions[request_id] = admission
     elif kind == "decode":
         instance = decision.get("decode_instance_index")
-        if not isinstance(instance, int):
+        if isinstance(instance, bool) or not isinstance(instance, int):
             fail(f"请求 {request_id} 的 decode 决策缺整数 "
                  f"decode_instance_index（逐仓字段映射失效？repo="
                  f"{repo_variant}）")
+        if request_id in decode_instances:
+            # 同请求多条 decode 决策不再 last-wins（实例归属取决于行序、
+            # 掩盖账本重复）——与上方 prefill 判重及 hbm_watermark 的
+            # (request_id, kind) 判重同口径。
+            fail(f"请求 {request_id} 出现多次 decode 决策（应恰一次）")
         decode_instances[request_id] = instance
 
 
@@ -117,7 +142,8 @@ def li_collect_drains(run_dir: Path) -> tuple[dict, int]:
             fail("train_ledger 记录缺 exits 数组（schema 不符）")
         tick = record.get("tick")
         instance = record.get("instance_index")
-        if not isinstance(tick, int) or not isinstance(instance, int):
+        if isinstance(tick, bool) or not isinstance(tick, int) \
+                or isinstance(instance, bool) or not isinstance(instance, int):
             fail("train_ledger 记录缺整数 tick/instance_index（schema 不符）")
         for request_id in exited:
             if not isinstance(request_id, str):
@@ -139,9 +165,16 @@ def li_assemble_intervals(state: dict, drains: dict,
     skipped_no_drain = []
     skipped_bad_order = []
     instance_mismatch = 0
-    for request_id, admission in sorted(admissions.items()):
+    # 遍历域 = admission ∪ decode 两源并集：只遍历 admissions 会把"无
+    # prefill 准入却有 decode 决策"的请求整行静默消失（区间缺一角、
+    # 分位/积分分母失真）——显式进跳过清单留痕。
+    for request_id in sorted(set(admissions) | set(decode_instances)):
+        admission = admissions.get(request_id)
         instance = decode_instances.get(request_id)
         drain = drains.get(request_id)
+        if admission is None:
+            skipped_no_admission.append(request_id)
+            continue
         if instance is None:
             skipped_no_decode.append(request_id)
             continue
@@ -164,7 +197,8 @@ def li_assemble_intervals(state: dict, drains: dict,
         print(f"[load-imbalance] 跳过 WP9 first_step 账本行: "
               f"{skipped_first_step_rows} 行（发射边界记录，非终态 drain）",
               file=sys.stderr)
-    for label, skipped in (("无 decode 决策", skipped_no_decode),
+    for label, skipped in (("无 prefill 准入", skipped_no_admission),
+                           ("无 decode 决策", skipped_no_decode),
                            ("无 drain 记录", skipped_no_drain),
                            ("drain 早于 admission", skipped_bad_order)):
         if skipped:
@@ -180,73 +214,58 @@ def li_assemble_intervals(state: dict, drains: dict,
 
 
 def collect_intervals(run_dir: Path, repo_variant: str) -> list[dict]:
-    """逐请求 (instance, admission→drain) 区间重建（CLI/独立调用入口）。"""
-    state = li_prepare(repo_variant)
+    """逐请求 (instance, admission→drain) 区间重建（公开 API 入口）。
+
+    生产路径（CLI cmd_load_imbalance / driver load_imbalance_finish）已改
+    拆分面（li_prepare/li_consume_decision/li_collect_drains/li_assemble_
+    intervals 单遍复用），本整读包装不再被生产消费——保留入口供测试与
+    外部调用（内部即同一拆分面的串装，语义一致）。"""
+    state = li_prepare()
     for record in iter_jsonl(run_dir / DECISION_LOG_RELPATH):
         li_consume_decision(record, repo_variant, state)
     drains, skipped_first_step_rows = li_collect_drains(run_dir)
     return li_assemble_intervals(state, drains, skipped_first_step_rows)
 
 
-def _interval_covered_buckets(admission_ns: int, drain_ns: int,
-                              span_start: int, bucket_ns: int,
-                              n_buckets: int) -> int:
-    """单区间 [admission, drain) 对 sum(series) 的桶贡献数（O(1)）。
-
-    与逐桶累加逐语句等价：admission < bucket_end(b) ⟺ b >= first；
-    drain > bucket_start(b) ⟺ b < last 或（b == last 且 drain 不落桶边界）。
-
-    零长区间（admission == drain，闭开区间时间重叠为 0）恒计 0 桶：
-    下式对桶边界对齐相位会推出 hi < lo 得 0、非对齐相位得 1 桶
-    （相位不一致），按「时间重叠 >0 才计入」契约前置判零（修
-    2026-09-24；drain < admission 由调用方 skipped_bad_order 拦截）。
-    """
-    if drain_ns <= admission_ns:
-        return 0
-    first = (admission_ns - span_start) // bucket_ns
-    last = (drain_ns - span_start) // bucket_ns
-    hi = last - 1 if (drain_ns - span_start) % bucket_ns == 0 else last
-    lo = max(0, first)
-    hi = min(n_buckets - 1, hi)
-    return hi - lo + 1 if hi >= lo else 0
-
-
-def instance_timeavg_backlog(intervals: list[dict], bucket_ns: int,
-                             span_start: int, span_end: int
+def instance_timeavg_backlog(intervals: list[dict], span_start: int,
+                             span_end: int,
+                             n_configured: Optional[int] = None
                              ) -> dict[int, tuple[float, int]]:
     """各 instance 积压 → 时间平均积压（返回 instance -> (b̄, n_req)）。
 
-    桶 j 覆盖 [span_start + j*bucket, +bucket)；请求区间对桶的覆盖按
-    时间重叠 >0 计入（区间端点闭开 [admission, drain)）。
+    METRIC-01（2026-09-26）：b̄_i = Σ_r (drain_r − admission_r) / 总跨度
+    ——时间比例精确积分，区间 [admission, drain) 闭开重叠时长逐区间可加
+    （∫ in-flight dt 恒等式）。取代旧「覆盖桶数×桶长」近似：部分覆盖的
+    末桶按整桶计，每区间最多高估一整桶，下游 CV 随区间数叠加。
 
-    2026-08-30 爆内存根治：原实现为每实例预分配 ``[0] * n_buckets``
-    稠密分桶序列并逐桶累加，稠密序列的唯一消费方式是
-    ``sum(series) * bucket_ns``（Σ桶计数×桶长）。全量 tracelab 跨度
-    2.7e15 ns ÷ 1ms 桶 = 每实例 27 亿桶 × 9 实例 ≈ 182 GiB，曾把
-    80GB VM 拖入全局 OOM。现改为 O(1) 区间算术（_interval_covered_buckets
-    逐语句等价推导见其 docstring），每实例只持一个整数累加器，
+    n_configured=配置实例数（emit 传 trace_config.csv 的 inference_group
+    组行数；None=仅区间内出现的实例）：分母必须含全部配置实例——全程
+    空闲实例 b̄=0 计入 CV/Max-Mean 总体，缺席会低估不均衡；区间出现配置
+    外实例属 decision log 与 trace_config 不一致，fail-closed。
+
+    2026-08-30 爆内存根治（沿用）：不预分配每实例稠密分桶序列
+    （全量 tracelab 曾达 182 GiB），每实例只持一个整数累加器，
     内存 O(区间数)，与时间跨度/桶长彻底解耦。
     """
-    n_buckets = max(1, math.ceil((span_end - span_start) / bucket_ns))
-    covered_buckets: dict[int, int] = {}
-    counts: dict[int, int] = {}
-    for interval in intervals:
-        instance = interval["instance"]
-        covered_buckets[instance] = covered_buckets.get(instance, 0) + \
-            _interval_covered_buckets(interval["admission_ns"],
-                                      interval["drain_ns"], span_start,
-                                      bucket_ns, n_buckets)
-        counts[instance] = counts.get(instance, 0) + 1
-    result: dict[int, tuple[float, int]] = {}
     total = span_end - span_start
     if total <= 0:
         fail("load_imbalance：时间跨度为 0，无法做时间平均")
-    for instance, covered in covered_buckets.items():
-        covered_ns = covered * bucket_ns
-        # 末桶可能被 span 截断：按实际桶数×桶长覆盖，误差 ≤1 桶（记录于
-        # 输出的 bucket_ns/span，供交叉核对）。
-        result[instance] = (covered_ns / total, counts[instance])
-    return result
+    busy_ns: dict[int, int] = {}
+    counts: dict[int, int] = {}
+    for interval in intervals:
+        instance = interval["instance"]
+        if n_configured is not None and not 0 <= instance < n_configured:
+            fail(f"load_imbalance：区间实例 {instance} 超出配置实例域 "
+                 f"[0,{n_configured})——decision log 与 trace_config 配置"
+                 f"实例布局不一致（实例须连续编号 0..N-1）")
+        busy_ns[instance] = busy_ns.get(instance, 0) + \
+            interval["drain_ns"] - interval["admission_ns"]
+        counts[instance] = counts.get(instance, 0) + 1
+    instances = range(n_configured) if n_configured is not None \
+        else sorted(busy_ns)
+    return {instance: (busy_ns.get(instance, 0) / total,
+                       counts.get(instance, 0))
+            for instance in instances}
 
 
 def load_imbalance_bucket_ns(manifest: dict) -> int:
@@ -272,7 +291,7 @@ def cmd_load_imbalance(args: argparse.Namespace) -> int:
     manifest = load_slo_manifest(args.manifest or default_manifest_path())
     bucket_ns = load_imbalance_bucket_ns(manifest)
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
-    state = li_prepare(repo_variant)
+    state = li_prepare()
     for record in iter_jsonl(args.run_dir / DECISION_LOG_RELPATH):
         li_consume_decision(record, repo_variant, state)
     return load_imbalance_finish(args, repo_variant, bucket_ns, state)
@@ -282,8 +301,17 @@ def load_imbalance_emit(args: argparse.Namespace, repo_variant: str,
                         bucket_ns: int, intervals: list[dict]) -> int:
     span_start = min(i["admission_ns"] for i in intervals)
     span_end = max(i["drain_ns"] for i in intervals)
-    stats = instance_timeavg_backlog(intervals, bucket_ns, span_start,
-                                     span_end)
+    # METRIC-01：分母含全部配置实例（配置实例总数=trace_config.csv 的
+    # inference_group 组行数，与 hbm_watermark.count_configured_instances
+    # 同一权威来源；本仓部署实例连续编号）。配置实例数缺失即 fail-closed
+    # ——CV 总体无定义，不得静默退化为"仅出现过的实例"。分母候选链同样
+    # 不回退仓内默认 trace_config（allow_repo_default=False）：改布局
+    # 跑出的 run 若不带本地 trace_config 副本，默认配置的组行数会让 CV
+    # 分母静默膨胀——fail-closed。
+    npus = count_configured_instances(args.run_dir, None,
+                                      allow_repo_default=False)
+    stats = instance_timeavg_backlog(intervals, span_start, span_end,
+                                     n_configured=npus)
     values = [stats[i][0] for i in sorted(stats)]
     n_instances = len(values)
     mean = sum(values) / n_instances
@@ -306,12 +334,14 @@ def load_imbalance_emit(args: argparse.Namespace, repo_variant: str,
         "command": "load_imbalance",
         "repo_variant": repo_variant,
         "algorithm": "per-request (instance, admission->drain) -> "
-                     "per-instance backlog series -> time-averaged "
-                     "CV and Max/Mean (spec 1.5-A)",
+                     "per-instance backlog time integral (exact, "
+                     "time-proportional) -> time-averaged CV and "
+                     "Max/Mean over ALL configured instances (spec 1.5-A)",
         "bucket_ns": bucket_ns,
         "span_start_ns": span_start,
         "span_end_ns": span_end,
         "n_instances": n_instances,
+        "n_instances_configured": npus,
         "n_requests_used": len(intervals),
         "time_avg_backlog_mean": mean,
         "time_avg_backlog_population_std": std,

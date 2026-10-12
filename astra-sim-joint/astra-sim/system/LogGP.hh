@@ -46,7 +46,6 @@ class LogGP : public Callable {
 
     MemBus* NPU_MEM;
     int request_num;
-    std::string name;
     Tick L;
     Tick o;
     Tick g;

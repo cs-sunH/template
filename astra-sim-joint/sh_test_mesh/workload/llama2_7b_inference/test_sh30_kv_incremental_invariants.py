@@ -40,13 +40,18 @@ def _manager(strict_invariants: bool) -> KVCacheManager:
 
 class IncrementalInvariantTests(unittest.TestCase):
     def test_incremental_and_strict_mutations_stay_equivalent(self) -> None:
-        """F4-c 改写（kimi 复审，2026-09-14）：本用例原驱动跨实例
-        ``move_request_capacity_reservation(0→1)``——joint 仓 M3 钉死
-        decode 于 prefill 实例（红线 #4：跨实例预约移动 fail-closed），
-        该驱动面已从合同中移除。语义意图（增量/严格不变量在**全部合法
-        变更面**上等价）保留：跨实例轮换改走 merge v2 腿（2026-09-17：
-        PARTIAL 混合 remote-read 反向翻转 + REMOTE 基 copy 就地转正），
-        同实例生命周期覆盖 move/move_prefill_to_decode 的同实例分支。"""
+        """F4-c 改写（kimi 复审，2026-09-14；D18 修订 2026-09-26；D20
+        修订 2026-09-26）：本用例原驱动跨实例 ``move_request_capacity_
+        reservation(0→1)``——joint 仓 M3 曾钉死 decode 于 prefill 实例
+        （红线 #4：跨实例预约移动 fail-closed）。D18 废除强制同址并将
+        跨实例移动重设计为真实预约事务，D20 再升级为幂等 epoch 的跨阶
+        段预约事务（face_scheduler.commit_stage_reservation_transaction，
+        事务语义由 joint/test_d20_stage_transaction.py 与 test_joint_
+        fixes.py 钉测覆盖）；本用例沿同实例生命周期覆盖
+        commit_stage_reservation_transaction / move_prefill_to_decode
+        的原地分支，跨实例轮换仍走 merge v2 腿（2026-09-17：PARTIAL
+        混合 remote-read 反向翻转 + REMOTE 基 copy 就地转正）。语义意
+        图（增量/严格不变量在**全部合法变更面**上等价）不变。"""
         fast = _manager(False)
         strict = _manager(True)
 
@@ -92,9 +97,16 @@ class IncrementalInvariantTests(unittest.TestCase):
             reservation_request_id="request",
         )
         invoke(
-            "move_request_capacity_reservation",
+            # D20（2026-09-26）：预约移动经幂等 epoch 的跨阶段预约事务
+            # （commit_stage_reservation_transaction，v2.0 §14.5/§16.4）；
+            # 同实例原地继续 = 纯 resize 事务（stay 足迹 = 准入足迹）。
+            "commit_stage_reservation_transaction",
             request_id="request",
-            target_instance_index=0,  # M3 钉死：同实例 no-op（跨实例 raise）
+            target_instance_index=0,
+            stage_action="stay",
+            stage_epoch=1,
+            history_tokens=0,
+            input_tokens=4,
         )
         invoke(
             "move_prefill_to_decode",
@@ -275,6 +287,162 @@ class IncrementalInvariantTests(unittest.TestCase):
                 manager._check_invariants_after_mutation(session_ids=("session",))
             with self.assertRaisesRegex(RuntimeError, "KV accounting mismatch"):
                 manager._check_invariants()
+
+    def test_base_contribution_follows_physical_base_instance(self) -> None:
+        """D-BI 回归（2026-09-26，冒烟矩阵 v20-b2 rank20 幻影贡献根因）。
+
+        turn-0：prefill@0 → ``move_prefill_to_decode`` 迁至实例 1 →
+        merge stay 提交（无工作副本，逻辑 home 粘滞于 0，KV 终驻实例 1）。
+        turn-1 跨实例工作副本事务的基础物理在实例 1 而非 home 0——守恒
+        期望的基础贡献必须跟随 ``base_instance_index``，不得给 home 记
+        幻影字节（修复前：增量审计报 "KV accounting mismatch:
+        state=<工作副本>, expected=<工作副本+基础>"，主控冒烟矩阵 12 臂
+        全灭的同型失败）；merge 的基础侧释放/传输端点同口径。"""
+        fast = _manager(False)
+        strict = _manager(True)
+
+        def verify() -> None:
+            fast._check_invariants()
+            strict._check_invariants()
+            self.assertEqual(fast.hbm_snapshots(), strict.hbm_snapshots())
+            self.assertEqual(fast.session_snapshots(), strict.session_snapshots())
+
+        def invoke(name: str, *args: object, **kwargs: object) -> object:
+            with mock.patch.object(
+                fast,
+                "_check_invariants",
+                side_effect=AssertionError("normal mutation used the full verifier"),
+            ):
+                fast_result = getattr(fast, name)(*args, **kwargs)
+            self.assertEqual(
+                fast_result,
+                getattr(strict, name)(*args, **kwargs),
+            )
+            verify()
+            return fast_result
+
+        # ---- turn-0：stay@0 + P→D 迁移到 1 + merge stay 提交。 ----
+        invoke(
+            "prepare_prefill",
+            session_id="session",
+            target_instance_index=0,
+            history_tokens=0,
+            trigger_request_id="turn0",
+        )
+        invoke(
+            "expand_prefill",
+            session_id="session",
+            instance_index=0,
+            context_tokens=4,
+            trigger_request_id="turn0",
+        )
+        invoke(
+            "move_prefill_to_decode",
+            session_id="session",
+            target_instance_index=1,
+            trigger_request_id="turn0",
+        )
+        invoke(
+            "expand_decode",
+            session_id="session",
+            instance_index=1,
+            final_context_tokens=5,
+            trigger_request_id="turn0",
+        )
+        invoke("merge_back", session_id="session", trigger_request_id="turn0",
+               new_tokens=1)
+        session = fast._sessions["session"]
+        self.assertEqual(
+            (session.instance_index, session.home_instance,
+             session.working_kind, session.location),
+            (1, 0, None, fast.LOCAL_HBM),
+        )
+        self.assertIsNone(session.base_instance_index)
+        self.assertEqual(
+            [fast._rank_states[rank].kv_cache_bytes
+             for rank in fast.topology.instance(0).ranks],
+            [0, 0],
+        )
+
+        # ---- turn-1：copy 回 home（基础物理在实例 1）。 ----
+        invoke(
+            "prepare_prefill",
+            session_id="session",
+            target_instance_index=0,
+            history_tokens=5,
+            trigger_request_id="turn1",
+            action="copy",
+        )
+        session = fast._sessions["session"]
+        # 工作副本活跃期：基础贡献记在物理基础实例 1（D-BI），不是 home 0。
+        base_contribution = fast._incremental_base_contribution(session)
+        self.assertIsNotNone(base_contribution)
+        self.assertEqual(base_contribution[0], 1)
+        self.assertTrue(any(base_contribution[1]))
+        self.assertEqual(
+            fast._invariant_expected_kv_by_rank[
+                fast.topology.instance(0).ranks[0]],
+            sum(session.shard_bytes[:1]),
+        )
+        invoke(
+            "expand_prefill",
+            session_id="session",
+            instance_index=0,
+            context_tokens=6,
+            trigger_request_id="turn1",
+        )
+        invoke("merge_back", session_id="session", trigger_request_id="turn1",
+               new_tokens=1)
+        # 零字节翻转：胜者 = 执行端 0，败者 = 物理基础所在 1；home 已在
+        # 0，不迁移。
+        self.assertEqual(fast.last_merge_outcome["direction"], "reverse")
+        self.assertTrue(fast.last_merge_outcome["zero_byte_flip"])
+        self.assertEqual(fast.last_merge_outcome["winner_instance"], 0)
+        self.assertEqual(fast.last_merge_outcome["loser_instance"], 1)
+        self.assertFalse(fast.last_merge_outcome["home_flipped"])
+        self.assertEqual(
+            [fast._rank_states[rank].kv_cache_bytes
+             for rank in fast.topology.instance(1).ranks],
+            [0, 0],
+        )
+        invoke("mark_complete", "session", 6, "human")
+        fast.assert_final_state()
+        strict.assert_final_state()
+
+    def test_remote_read_merge_forward_targets_base_instance(self) -> None:
+        """D-BI 回归（forward 腿）：remote-read 基础在他侧时，少并多
+        forward 的传输目标/胜者是物理基础驻留实例，随后 ``home := 胜者``
+        迁移 home（I7），终态审计全绿。"""
+        fast = _manager(False)
+        fast.prepare_prefill(
+            session_id="session", target_instance_index=0,
+            history_tokens=0, trigger_request_id="turn0")
+        fast.expand_prefill(
+            session_id="session", instance_index=0, context_tokens=4,
+            trigger_request_id="turn0")
+        fast.move_prefill_to_decode(
+            session_id="session", target_instance_index=1,
+            trigger_request_id="turn0")
+        fast.expand_decode(
+            session_id="session", instance_index=1, final_context_tokens=5,
+            trigger_request_id="turn0")
+        fast.merge_back(session_id="session", trigger_request_id="turn0",
+                        new_tokens=1)
+        fast.prepare_prefill(
+            session_id="session", target_instance_index=0,
+            history_tokens=5, trigger_request_id="turn1",
+            action="remote-read")
+        fast.expand_prefill(
+            session_id="session", instance_index=0, context_tokens=1,
+            trigger_request_id="turn1")
+        fast.merge_back(session_id="session", trigger_request_id="turn1",
+                        new_tokens=1)
+        self.assertEqual(fast.last_merge_outcome["direction"], "forward")
+        self.assertEqual(fast.last_merge_outcome["winner_instance"], 1)
+        self.assertTrue(fast.last_merge_outcome["home_flipped"])
+        self.assertEqual(fast._sessions["session"].home_instance, 1)
+        fast.mark_complete("session", 6, "human")
+        fast.assert_final_state()
 
 
 if __name__ == "__main__":

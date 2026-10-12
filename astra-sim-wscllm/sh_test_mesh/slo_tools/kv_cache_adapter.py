@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""WP4 canonical cache 事件适配器（逐仓适配；五仓文件逐字节相同，语义差异
-全部收在 REPO_VARIANTS 表；标准库实现）。
+"""WP4 canonical cache 事件适配器（逐仓适配；同源变体族，与 face 已实质分叉，
+A.5 起存在 README 登记的预期差异——wscllm 变体的 canonical 提取已与 face
+分叉：问题 2A 后 decode 决策行序列化 decode_target_evictions 全集（#2 预占
+/#4 move/#5 grow_decode；发射后写端置空核销），本仓只消费 decode 行全集、
+prefill 行不再重复消费其子集（防双计）。语义差异全部收在 REPO_VARIANTS
+表；标准库实现）。
 
 输入 = run_dir/results/*.jsonl（online_decision_log.jsonl 为主；per-request
 manifest 提供 turn_index 等上下文）。只做输出层映射，native 日志保持原样，
@@ -24,8 +28,11 @@ manifest 提供 turn_index 等上下文）。只做输出层映射，native 日�
                    NOC_MIGRATE, RECOMPUTE}；RECOMPUTE 的
                    history_recompute_tokens==history_tokens_before
                    （83/83 全量重算 → miss，无 partial 语义）。
-  astra-sim-wscllm 同 face（RECOMPUTE 802/802 全量重算）；decode 决策另有
-                   static_route（hopbytes.py 用）。
+  astra-sim-wscllm 现行动作域为三值 {NO_HISTORY, NOC_MIGRATE,
+                   RECOMPUTE}（同实例 LOCAL_HIT 臂已于 2026-09-26 删除，
+                   PD 分离下不可达；LOCAL_HIT 映射仅为 face/旧产物容忍，
+                   2026-10-01 登记；RECOMPUTE 802/802 全量重算）；decode
+                   决策另有 static_route（hopbytes.py 用）。
   astra-sim-sh_1.0 prefill.decision.history_transfer ∈ null | {kind:
                    noc_migrate|local_hit|remote_load, shards[{
                    bytes,noc_path,source_rank,target_rank}...],
@@ -61,6 +68,46 @@ from slo_common import (  # noqa: E402
     run_main, write_csv,
 )
 
+def _shard_bytes_strict(shards, where):
+    """(2026-10-01) Strict per-shard byte read for fallback shard summation.
+
+    A bare int() on a null/float/bool/string cell raised an uncaught
+    TypeError/ValueError (rc=1 traceback) or silently coerced (true->1,
+    12.5->12) -- violating the P2-16 fail-closed exit-code discipline the
+    sibling _byte_count/_sum_shard_bytes helpers already enforce. Non-dict
+    entries are skipped as before (schema tolerance); a dict entry whose
+    "bytes" is present but not a non-negative-int-shaped value fails closed (0 is legal: an absent "bytes" key defaults to it).
+    """
+    total = 0
+    for shard in shards:
+        if not isinstance(shard, dict):
+            continue
+        value = shard.get("bytes", 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            fail("{}: shard \"bytes\" is not a non-negative int: {!r}"
+                 .format(where, value))
+        total += value
+    return total
+
+
+def _strict_total_bytes(value, where):
+    """(2026-10-01, F1 复审 / face R7-F3 同构) Strict total_bytes choke point.
+
+    Rejects bool (isinstance(True, int) masquerade), floats, strings and
+    negative values with the fail() channel -- the former bare int() path
+    let true count as 1 byte, 3.5 truncate to 3, and -5 through to the
+    canonical CSV. ZERO is legal here (matching _shard_bytes_strict and
+    the module-wide "only >0 counts" convention); the CALLER applies the
+    skip-after-validation, so a 0-byte transfer takes the same silent
+    skip the native side gives it (G1: the first revision of this helper
+    failed on 0, hijacking the dedicated shard-sum-mismatch diagnostics
+    for a legitimate zero).
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        fail("{}: total_bytes is not a non-negative int: {!r}".format(where, value))
+    return value
+
+
 CACHE_EVENT_COLUMNS = ("action_id", "request_id", "start_ns", "end_ns",
                        "bytes", "source", "target", "cause")
 KV_HIT_STATE_COLUMNS = ("request_id", "turn_index", "kv_hit_state", "evidence")
@@ -75,7 +122,10 @@ def _turn_index_map(manifest: dict) -> dict[str, int]:
     for entry in manifest_requests(manifest):
         request_id = entry.get("request_id")
         turn = entry.get("turn_index")
-        if isinstance(request_id, str) and isinstance(turn, int):
+        # (2026-10-01) bool exclusion: isinstance(True, int) is True, and a
+        # bool turn would collide with the real turn 1 dict key.
+        if (isinstance(request_id, str) and isinstance(turn, int)
+                and not isinstance(turn, bool)):
             result[request_id] = turn
     return result
 
@@ -207,8 +257,33 @@ def _event(request_id: str, tick: int, nbytes: Optional[int], source: Any,
 def _eviction_bytes_face(entry: dict) -> Optional[int]:
     shard_bytes = entry.get("shard_bytes")
     if isinstance(shard_bytes, list) and shard_bytes:
+        # 4.3 fix (2026-09-29): 元素零校验曾让一个字符串元素从 sum() 裸抛
+        # TypeError 逃出 fail() 契约退出码,bool 元素按 1 字节计。逐元素
+        # 严格非负整数(拒 bool),违规走本层 fail() 契约通道。
+        for element in shard_bytes:
+            if not isinstance(element, int) or isinstance(element, bool) \
+                    or element < 0:
+                fail(
+                    "逐出条目 shard_bytes 元素必须是非负整数"
+                    f"(got {element!r}, trigger_request_id="
+                    f"{entry.get('trigger_request_id')!r})"
+                )
         return int(sum(shard_bytes))
     return None
+
+
+def _entry_time_ns(entry: dict, tick: int) -> int:
+    """逐出条目 time_ns → 事件 start_ns（D2 修复 2026-09-28）。
+
+    ``entry.get("time_ns", tick)`` 的缺省只在键缺席时生效——写端显式落
+    null（或任何非整数）时返回 None，事件 start_ns 携 None 落盘为 NA。
+    现口径：非整数（含 None/bool）一律回退决策发射 tick（本层文档口径：
+    start_ns=决策/记录发射 tick）。
+    """
+    time_ns = entry.get("time_ns")
+    if isinstance(time_ns, int) and not isinstance(time_ns, bool):
+        return time_ns
+    return tick
 
 
 def extract_events_face_wscllm(record: dict) -> list[dict]:
@@ -218,11 +293,11 @@ def extract_events_face_wscllm(record: dict) -> list[dict]:
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    if isinstance(tick, bool) or not isinstance(tick, int):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
         nbytes = decision.get("history_transfer_bytes")
-        if isinstance(nbytes, int) and nbytes > 0:
+        if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
             events.append(_event(
                 request_id, tick, nbytes,
                 decision.get("history_source_instance_index"),
@@ -235,14 +310,14 @@ def extract_events_face_wscllm(record: dict) -> list[dict]:
                 if nbytes:
                     events.append(_event(
                         entry.get("trigger_request_id") or request_id,
-                        entry.get("time_ns", tick), nbytes,
+                        _entry_time_ns(entry, tick), nbytes,
                         entry.get("victim_instance_index"), None,
                         f"{FAMILY_EVICTION}:{entry.get('reason')}"))
     elif kind == "decode":
         transfer = decision.get("prefill_decode_transfer")
         if isinstance(transfer, dict):
             nbytes = transfer.get("total_bytes")
-            if isinstance(nbytes, int) and nbytes > 0:
+            if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
                 events.append(_event(
                     transfer.get("trigger_request_id") or request_id, tick,
                     nbytes, transfer.get("source_instance_index"),
@@ -254,7 +329,7 @@ def extract_events_face_wscllm(record: dict) -> list[dict]:
             if nbytes:
                 events.append(_event(
                     entry.get("trigger_request_id") or request_id,
-                    entry.get("time_ns", tick), nbytes,
+                    _entry_time_ns(entry, tick), nbytes,
                     entry.get("victim_instance_index"), None,
                     f"{FAMILY_EVICTION}:{entry.get('reason')}"))
     return events
@@ -268,11 +343,17 @@ def _transfer_object_events(transfer: dict, default_request: str, tick: int,
     if transfer.get("kind") == "local_hit":
         return []
     nbytes = transfer.get("total_bytes")
-    if not isinstance(nbytes, int):
+    if isinstance(nbytes, bool) or not isinstance(nbytes, int):
         shards = transfer.get("shards")
         if isinstance(shards, list):
-            nbytes = sum(int(s.get("bytes", 0)) for s in shards
-                         if isinstance(s, dict))
+            nbytes = _shard_bytes_strict(shards, "transfer shards")
+        else:
+            nbytes = None
+    if nbytes is None:
+        return []
+    # F1: no bool/float/string/negative byte count may reach the canonical
+    # CSV; a validated ZERO takes the module-wide silent skip (G1).
+    nbytes = _strict_total_bytes(nbytes, "transfer total_bytes")
     if not nbytes:
         return []
     return [_event(
@@ -288,7 +369,7 @@ def extract_events_sh10(record: dict) -> list[dict]:
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    if isinstance(tick, bool) or not isinstance(tick, int):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
         events.extend(_transfer_object_events(
@@ -324,7 +405,7 @@ def extract_events_sh20(record: dict) -> list[dict]:
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    if isinstance(tick, bool) or not isinstance(tick, int):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
         transfers = decision.get("history_transfers")
@@ -334,7 +415,7 @@ def extract_events_sh20(record: dict) -> list[dict]:
                     entry, request_id, tick, FAMILY_HISTORY))
         else:
             nbytes = decision.get("history_transfer_bytes")
-            if isinstance(nbytes, int) and nbytes > 0:
+            if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
                 events.append(_event(
                     request_id, tick, nbytes, NA, NA,
                     f"{FAMILY_HISTORY}:aggregate_bytes_only"))
@@ -349,7 +430,7 @@ def extract_events_sh20(record: dict) -> list[dict]:
                 events.extend(_transfer_object_events(
                     entry, request_id, tick, FAMILY_EVICTION))
         nbytes = decision.get("prefill_decode_transfer_bytes")
-        if isinstance(nbytes, int) and nbytes > 0:
+        if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
             events.append(_event(
                 request_id, tick, nbytes, NA, NA,
                 f"{FAMILY_PD}:aggregate_bytes_only"))
@@ -368,11 +449,11 @@ def extract_events_sh30(record: dict) -> list[dict]:
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    if isinstance(tick, bool) or not isinstance(tick, int):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
         nbytes = decision.get("history_transfer_bytes")
-        if isinstance(nbytes, int) and nbytes > 0:
+        if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
             events.append(_event(
                 request_id, tick, nbytes,
                 decision.get("history_source_instance_index"),
@@ -382,7 +463,7 @@ def extract_events_sh30(record: dict) -> list[dict]:
     elif kind == "completion":
         for entry in decision.get("completion_evictions") or []:
             nbytes = entry.get("total_bytes") if isinstance(entry, dict) else None
-            if isinstance(nbytes, int) and nbytes > 0:
+            if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
                 layer_note = ""
                 if isinstance(entry, dict) and "layer_start" in entry:
                     layer_note = (f";layers={entry.get('layer_start')}-"
@@ -398,8 +479,65 @@ def extract_events_sh30(record: dict) -> list[dict]:
 
 def extract_events_wscllm(record: dict) -> list[dict]:
     """wscllm 仓内 policy 收口（A.5/2026-09-05）：唯一保留变体
-    session_lru_recompute 与 face 共用提取口径。"""
-    return extract_events_face_wscllm(record)
+    session_lru_recompute，hit_state 与 face 共用四值口径；canonical 事件
+    提取自 2026-09-27 起与 face 分叉（问题 2A 收口）——decode 行携带的
+    decode_target_evictions 是全集（#2 预占/#4 move/#5 grow_decode，发射
+    后写端置空核销），prefill 行携带的只是发射时点子集：故本仓 decode 行
+    消费全集、prefill 行停消费该字段（防与 prefill 行 #2/#3 双计）。face
+    写端无 decode 行逐出序列化，维持 prefill 行口径（extract_events_
+    face_wscllm）。"""
+    events = []
+    kind = record.get("kind")
+    decision = record.get("decision") or {}
+    request_id = record.get("request_id")
+    tick = record.get("tick")
+    if isinstance(tick, bool) or not isinstance(tick, int):
+        fail(f"decision log 行缺整数 tick（request={request_id!r}）")
+    if kind == "prefill":
+        nbytes = decision.get("history_transfer_bytes")
+        if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
+            events.append(_event(
+                request_id, tick, nbytes,
+                decision.get("history_source_instance_index"),
+                decision.get("prefill_instance_index"),
+                f"{FAMILY_HISTORY}:history_action="
+                f"{decision.get('history_action')}"))
+        for entry in decision.get("admission_evictions") or []:
+            nbytes = _eviction_bytes_face(entry)
+            if nbytes:
+                events.append(_event(
+                    entry.get("trigger_request_id") or request_id,
+                    _entry_time_ns(entry, tick), nbytes,
+                    entry.get("victim_instance_index"), None,
+                    f"{FAMILY_EVICTION}:{entry.get('reason')}"))
+    elif kind == "decode":
+        transfer = decision.get("prefill_decode_transfer")
+        if isinstance(transfer, dict):
+            nbytes = transfer.get("total_bytes")
+            if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
+                events.append(_event(
+                    transfer.get("trigger_request_id") or request_id, tick,
+                    nbytes, transfer.get("source_instance_index"),
+                    transfer.get("target_instance_index"),
+                    f"{FAMILY_PD}:{transfer.get('reason')}"))
+        for entry in decision.get("decode_target_evictions") or []:
+            nbytes = _eviction_bytes_face(entry)
+            if nbytes:
+                events.append(_event(
+                    entry.get("trigger_request_id") or request_id,
+                    _entry_time_ns(entry, tick), nbytes,
+                    entry.get("victim_instance_index"), None,
+                    f"{FAMILY_EVICTION}:{entry.get('reason')}"))
+    elif kind == "completion":
+        for entry in decision.get("completion_evictions") or []:
+            nbytes = _eviction_bytes_face(entry)
+            if nbytes:
+                events.append(_event(
+                    entry.get("trigger_request_id") or request_id,
+                    _entry_time_ns(entry, tick), nbytes,
+                    entry.get("victim_instance_index"), None,
+                    f"{FAMILY_EVICTION}:{entry.get('reason')}"))
+    return events
 
 
 REPO_VARIANTS: dict[str, dict[str, Any]] = {
@@ -418,7 +556,11 @@ REPO_VARIANTS: dict[str, dict[str, Any]] = {
         "shard_sum_check": True,
         "partial_semantics": False,
         "notes": "同 face（RECOMPUTE 802/802 全量重算）；PD 迁移 100% "
-                 "NOC_MIGRATE；decode 另有 static_route（hopbytes.py 用）",
+                 "NOC_MIGRATE；decode 另有 static_route（hopbytes.py 用）。"
+                 "问题 2A（2026-09-05）后 decode_target_evictions 全集随 "
+                 "decode 决策行落盘（发射后写端置空核销）——canonical 提取"
+                 "与 reconcile native 侧均只消费 decode 行全集，prefill 行"
+                 "子集不再消费（防双计）",
     },
     "astra-sim-sh_1.0": {
         "hit_state": _hit_state_sh10,
@@ -512,11 +654,9 @@ def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
             if isinstance(holder, dict):
                 total = holder.get("total_bytes")
                 shards = holder.get("shards")
-                if (isinstance(total, int) and isinstance(shards, list)
+                if (isinstance(total, int) and not isinstance(total, bool) and isinstance(shards, list)
                         and shards):
-                    shard_total = sum(int(s.get("bytes", 0))
-                                      for s in shards
-                                      if isinstance(s, dict))
+                    shard_total = _shard_bytes_strict(shards, "holder shards")
                     if shard_total != total:
                         state.shard_sum_violations += 1
         for field in ("completion_evictions", "history_evictions",
@@ -528,10 +668,8 @@ def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
                 if isinstance(holder, dict):
                     total = holder.get("total_bytes")
                     shards = holder.get("shards")
-                    if isinstance(total, int) and isinstance(shards, list):
-                        shard_total = sum(int(s.get("bytes", 0))
-                                          for s in shards
-                                          if isinstance(s, dict))
+                    if isinstance(total, int) and not isinstance(total, bool) and isinstance(shards, list):
+                        shard_total = _shard_bytes_strict(shards, "holder shards")
                         if shard_total != total:
                             state.shard_sum_violations += 1
 
@@ -631,29 +769,33 @@ def adapter_emit(args: argparse.Namespace, repo_variant: str, variant: dict,
 
     if args.reconcile:
         return reconcile(run_dir=args.run_dir, repo_variant=repo_variant,
-                         variant=variant, out_path=out_path,
-                         summary=summary)
+                         out_path=out_path, summary=summary)
     return 0
 
 
-def reconcile(run_dir: Path, repo_variant: str, variant: dict,
-              out_path: Optional[Path],
-              summary: dict) -> int:
+def reconcile(run_dir: Path, repo_variant: str,
+              out_path: Optional[Path], summary: dict) -> int:
     """canonical bytes/count vs native 逐项对账（以 native 为准）。
 
     native 侧：独立从 decision log 重放聚合（按 family）；canonical 侧：
-    重新解析已写出的 cache_events.csv 聚合。（原形参 events 在函数体内
-    零使用——对账始终重读 CSV + 独立重放 native，2026-08-30 阶段2加固
-    §3.4a 删除该死参数。）
+    重新解析已写出的 cache_events.csv 聚合。（原形参 events/variant 在
+    函数体内零使用——对账始终重读 CSV + 独立重放 native，2026-08-30
+    阶段2加固 §3.4a 起先后删除。）
+
+    逐出字段的行归属按 repo_variant 分叉（问题 2A 收口）：wscllm 的
+    decode_target_evictions 全集随 decode 行落盘（native 重放与 canonical
+    提取同口径，prefill 行子集不消费、防双计）；face 维持 prefill 行
+    decode_target_evictions；S1 维持 decode 行 decode_evictions。
     """
     import csv as _csv
 
+    wscllm_decode_target = repo_variant == "astra-sim-wscllm"
     native: dict[str, dict[str, int]] = {}
     for record in iter_jsonl(run_dir / DECISION_LOG_RELPATH):
         decision = record.get("decision") or {}
-        request_id = record.get("request_id")
+        # D2 死代码删除（2026-09-28）：request_id/tick 在本对账循环内
+        # 零使用（native 桶只按 kind/decision 聚合），不再赋值。
         kind = record.get("kind")
-        tick = record.get("tick")
         buckets = []
         if kind == "prefill":
             if isinstance(decision.get("history_transfers"), list):
@@ -665,7 +807,7 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                             "kind") == "local_hit":
                         continue
                     total = entry.get("total_bytes")
-                    if isinstance(total, int) and total > 0:
+                    if isinstance(total, int) and not isinstance(total, bool) and total > 0:
                         buckets.append((FAMILY_HISTORY, total))
             else:
                 nbytes = decision.get("history_transfer_bytes")
@@ -675,12 +817,15 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                         nbytes = 0  # 名义 KV 规模，无物理搬运
                     else:
                         total = transfer.get("total_bytes")
-                        if isinstance(total, int):
+                        if isinstance(total, int) and not isinstance(total, bool):
                             nbytes = total
-                if isinstance(nbytes, int) and nbytes > 0:
+                if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
                     buckets.append((FAMILY_HISTORY, nbytes))
-            for field in ("admission_evictions", "decode_target_evictions",
-                          "history_evictions", "prefill_evictions"):
+            for field in (("admission_evictions", "history_evictions",
+                           "prefill_evictions") if wscllm_decode_target
+                          else ("admission_evictions",
+                                "decode_target_evictions",
+                                "history_evictions", "prefill_evictions")):
                 for entry in decision.get(field) or []:
                     if isinstance(entry, dict) and entry.get(
                             "kind") == "local_hit":
@@ -689,12 +834,11 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                     if isinstance(entry, dict) and not nbytes:
                         total = entry.get("total_bytes")
                         shards = entry.get("shards")
-                        if not isinstance(total, int) and isinstance(
+                        if (isinstance(total, bool) or not isinstance(total, int)) and isinstance(
                                 shards, list) and shards:
-                            total = sum(int(s.get("bytes", 0))
-                                        for s in shards
-                                        if isinstance(s, dict))
-                        nbytes = total if isinstance(total, int) else None
+                            total = _shard_bytes_strict(shards, "entry shards")
+                        nbytes = total if (isinstance(total, int) and
+                            not isinstance(total, bool) and total > 0) else None
                     if nbytes:
                         buckets.append((FAMILY_EVICTION, nbytes))
         elif kind == "decode":
@@ -705,21 +849,31 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                     nbytes = 0  # 名义 KV 规模，无物理搬运
                 else:
                     total = transfer.get("total_bytes")
-                    if isinstance(total, int):
+                    if isinstance(total, int) and not isinstance(total, bool):
                         nbytes = total
-            if isinstance(nbytes, int) and nbytes > 0:
+            if isinstance(nbytes, int) and not isinstance(nbytes, bool) and nbytes > 0:
                 buckets.append((FAMILY_PD, nbytes))
-            for entry in decision.get("decode_evictions") or []:
+            for entry in decision.get("decode_target_evictions"
+                                      if wscllm_decode_target
+                                      else "decode_evictions") or []:
                 if isinstance(entry, dict) and entry.get(
-                        "kind") != "local_hit":
+                        "kind") == "local_hit":
+                    continue
+                if wscllm_decode_target:
+                    # wscllm 形态：shard_bytes 列表（与 prefill 行 admission_
+                    # evictions 同构；无 total_bytes/shards 键）。
+                    nbytes = _eviction_bytes_face(entry)
+                else:
+                    # S1 形态：transfer 对象（total_bytes 或 Σshards）。
                     total = entry.get("total_bytes")
                     shards = entry.get("shards")
-                    if not isinstance(total, int) and isinstance(
+                    if (isinstance(total, bool) or not isinstance(total, int)) and isinstance(
                             shards, list) and shards:
-                        total = sum(int(s.get("bytes", 0)) for s in shards
-                                    if isinstance(s, dict))
-                    if isinstance(total, int) and total > 0:
-                        buckets.append((FAMILY_EVICTION, total))
+                        total = _shard_bytes_strict(shards, "entry shards")
+                    nbytes = total if (isinstance(total, int) and
+                            not isinstance(total, bool) and total > 0) else None
+                if nbytes:
+                    buckets.append((FAMILY_EVICTION, nbytes))
         elif kind == "completion":
             for entry in decision.get("completion_evictions") or []:
                 nbytes = None
@@ -731,12 +885,15 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                     total = entry.get("total_bytes")
                     shards = entry.get("shards")
                     if not nbytes:
-                        if isinstance(total, int):
+                        # G2 (2026-10-01): require total > 0 like the other
+                        # native-side gates -- a negative total_bytes fell
+                        # through the bare isinstance check into the bucket.
+                        if (isinstance(total, int)
+                                and not isinstance(total, bool)
+                                and total > 0):
                             nbytes = total
                         elif isinstance(shards, list):
-                            nbytes = sum(int(s.get("bytes", 0))
-                                         for s in shards
-                                         if isinstance(s, dict))
+                            nbytes = _shard_bytes_strict(shards, "eviction shards")
                 if nbytes:
                     buckets.append((FAMILY_EVICTION, nbytes))
         for family, nbytes in buckets:
@@ -755,7 +912,21 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
             family = family_of(row["cause"])
             slot = canonical.setdefault(family, {"count": 0, "bytes": 0})
             slot["count"] += 1
-            slot["bytes"] += int(row["bytes"])
+            # (2026-10-01) Strict integer read for the bytes cell: a bare
+            # int() on an NA/blank/malformed value used to raise an
+            # uncaught ValueError traceback (breaking the fail() channel
+            # contract). Every extract path guarantees a positive integer
+            # today; this guard turns a future regression into a named
+            # fail-closed error instead.
+            try:
+                bytes_value = int(str(row["bytes"]).strip())
+            except (TypeError, ValueError):
+                fail("canonical cache_events.csv 的 bytes 列出现非整数值: "
+                     "{!r} ({} 行)".format(row["bytes"], csv_path))
+            if bytes_value <= 0:
+                fail("canonical cache_events.csv 的 bytes 列出现非正值: "
+                     "{!r} ({} 行)".format(row["bytes"], csv_path))
+            slot["bytes"] += bytes_value
 
     mismatches = []
     families = sorted(set(native) | set(canonical))

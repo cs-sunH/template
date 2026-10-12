@@ -22,7 +22,9 @@ run_online_same_tick_milestone.sh 的 Python 端(方案 step 1-11 / 仿真加速
   (c) milestone 在下一 delivery epoch 交付,decode 图随后正常提交
       (seq=2 reasons=[DECODE_COMPLETION, REQUEST_COMPLETE]),request
       完成(completed=1,双进程 exit 0);
-  (d) 无事件丢失(no_decision_python_callback_count==0)、无死锁(轮询有界)。
+  (d) 无事件丢失(gate counters 行 delivery_count>=1;2026-10-01 修订:
+      no_decision_python_callback_count 计数器已随死代码清理删除,
+      runner 断言同口径)、无死锁(轮询有界)。
 
 日志:每次 delivery 一行 `[fixture] delivery ...`(seq / tick /
 deferred_from_tick / reasons / arrivals / completed_groups / wall_ms)。
@@ -52,7 +54,6 @@ class SameTickMilestoneHandler:
     def __init__(self):
         self.next_ids = {}  # rank -> 下一个 json node id
         self.pending_decode = {}  # request_id -> bool(prefill 已发、decode 未发)
-        self.delivery_count = 0
 
     def _next_id(self, rank):
         nid = self.next_ids.get(rank, 1)
@@ -106,7 +107,6 @@ class SameTickMilestoneHandler:
         }
 
     def __call__(self, request):
-        self.delivery_count += 1
         seq = request.get("delivery_sequence", -1)
         tick = request.get("tick", -1)
         deferred = request.get("deferred_from_tick", 0)

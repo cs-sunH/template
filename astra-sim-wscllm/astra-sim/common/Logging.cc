@@ -46,6 +46,15 @@ void LoggerFactory::shutdown(void) {
 }
 
 void LoggerFactory::init_default_components(const std::string& log_path) {
+    // Idempotency guard (network-F12 fix): get_logger copies every
+    // default_sinks entry into each logger that does not already carry it,
+    // and its dedup is per-logger only. A second init without this clear
+    // would push a SECOND console sink into default_sinks (the first entry
+    // stays) and every later get_logger would install both -- every line
+    // written twice. Clearing first makes re-init restart the default set
+    // instead of accumulating.
+    default_sinks.clear();
+
     auto sink_color_console =
         std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     sink_color_console->set_level(spdlog::level::info);
@@ -60,7 +69,7 @@ void LoggerFactory::init_default_components(const std::string& log_path) {
     std::filesystem::path folderPath(log_path);
 
     if (!std::filesystem::exists(folderPath)) {
-        std::filesystem::create_directory(folderPath);
+        std::filesystem::create_directories(folderPath);
     }
 
     auto sink_rotate_out =

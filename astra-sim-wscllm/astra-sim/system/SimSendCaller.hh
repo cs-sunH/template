@@ -22,9 +22,14 @@ class SimSendCaller : public Callable {
     sim_request request;
     void (*msg_handler)(void* fun_arg);
     void* fun_arg;
-    bool should_cleanup;
     void call(EventType type, CallData* data);
     Sys* sys;
+    // (2026-10-01) The should_cleanup constructor flag and the
+    // `delete this` branch it gated are gone: its only historical source
+    // (Sys::sim_send's delay>0 deferred branch) was removed with the
+    // static path, and the sole construction site (RendezvousSendData)
+    // embeds the caller as a member deleted with its shell, passing
+    // false unconditionally.
     SimSendCaller(Sys* sys,
                   void* buffer,
                   uint64_t count,
@@ -33,8 +38,7 @@ class SimSendCaller : public Callable {
                   int tag,
                   sim_request request,
                   void (*msg_handler)(void* fun_arg),
-                  void* fun_arg,
-                  bool should_cleanup);
+                  void* fun_arg);
 };
 
 }  // namespace AstraSim

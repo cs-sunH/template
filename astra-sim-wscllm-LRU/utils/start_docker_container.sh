@@ -15,7 +15,8 @@ PROJECT_DIR="${SCRIPT_DIR:?}/.."
 # start
 echo "[ASTRA-sim] Starting a Docker Container from astrasim/astra-sim:latest..."
 
-# build docker image
+# run an interactive container from the prebuilt astrasim/astra-sim image
+# (image itself is built by utils/build_docker_image.sh)
 docker run -i -t \
     -v "${PROJECT_DIR:?}:/app/astra-sim" \
     astrasim/astra-sim:latest \

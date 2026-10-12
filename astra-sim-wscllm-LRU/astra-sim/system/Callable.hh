@@ -33,6 +33,10 @@ struct SystemEventHandle {
         event_id_ = 0;
     }
 
+    // DeadEnd-census diagnostic only (2026-10-11): absolute scheduled tick
+    // of the live event; 0 when invalid(). Read-only, no scheduling effect.
+    [[nodiscard]] Tick event_time() const noexcept { return event_time_; }
+
   private:
     Sys* owner_ = nullptr;
     Tick event_time_ = 0;

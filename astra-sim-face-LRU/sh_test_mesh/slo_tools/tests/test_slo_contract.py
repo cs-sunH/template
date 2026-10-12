@@ -170,18 +170,28 @@ class FailClosedTests(unittest.TestCase):
             bucket_index(edges, -1)
 
     def test_violation_on_null_manifest_fails(self):
+        # 意图钉住：--manifest 指向 value=null 的未推导参数 → violation
+        # 拒绝执行（fail-closed），与 test_require_param_null_fails_closed
+        # 同源。显式落 null 副本（不借道生产清单），且 t_iso 补齐 (1,1)
+        # 桶，防止 T_isolated 缺桶路径抢跑顶替本意。
         run_dir = synthetic.make_run_dir("fc1")
         synthetic.write_request_metrics(
             run_dir, [synthetic.request_row(e2e_ns="1000",
                                             completion_ns="1100",
                                             arrival_ns="100")])
-        t_iso = synthetic.write_t_isolated(run_dir, [(0, 0, 400)])
+        null_manifest = synthetic.write_slo_manifest(run_dir, {
+            "alpha_main": None,  # 合成未推导态
+            "bucket_percentiles": synthetic.TEST_BUCKET_EDGES,
+        })
+        t_iso = synthetic.write_t_isolated(run_dir, [(0, 0, 400), (1, 1, 400)])
         args = slo_argv(["violation", str(run_dir),
                          "--t-isolated", str(t_iso),
-                         "--manifest", str(default_manifest_path()),
+                         "--manifest", str(null_manifest),
                          "-o", "-"])
-        with self.assertRaises(SloToolError):
+        with self.assertRaises(SloToolError) as ctx:
             slo_stats.cmd_violation(args)
+        self.assertIn("参数未推导（value=null）：alpha_main",
+                      str(ctx.exception))
 
     def test_assert_no_proxy_columns(self):
         assert_no_proxy_columns(["e2e_ns", "terminal_status"])
@@ -326,12 +336,12 @@ class ViolationDenominatorTests(unittest.TestCase):
             synthetic.request_row(
                 queue_index="0", request_id="r0", e2e_ns="900",
                 arrival_ns="0", completion_ns="900",
-                first_token_ns="10_000_000_000",
+                first_token_ns="10000000000",
                 first_token_source="train_interpolated"),
             synthetic.request_row(
                 queue_index="1", request_id="r1", e2e_ns="700",
                 arrival_ns="0", completion_ns="700",
-                first_token_ns="999_999_999_999",
+                first_token_ns="999999999999",
                 first_token_source="train_interpolated"),
             synthetic.request_row(
                 queue_index="2", request_id="r2",
@@ -655,11 +665,13 @@ class LoadImbalanceHandTests(unittest.TestCase):
             {"kind": "completion", "request_id": "r2", "tick": 100,
              "decision": {}},
         ]
+        # 2026-09-26 fixture 口径修复：load_imbalance 自 2026-09-04 起读
+        # 非 first_step 行的 exits 终态数组（空 exits ⇒ 无 drain 记录）。
         ledger = [
             {"train_id": "t0", "instance_index": 0, "tick": 100,
-             "drains": ["r0", "r1"], "exits": [], "joiners": []},
+             "drains": [], "exits": ["r0", "r1"], "joiners": []},
             {"train_id": "t1", "instance_index": 1, "tick": 100,
-             "drains": ["r2"], "exits": [], "joiners": []},
+             "drains": [], "exits": ["r2"], "joiners": []},
         ]
         synthetic.write_jsonl(run_dir, "online_decision_log.jsonl",
                               decisions)
@@ -685,6 +697,26 @@ class LoadImbalanceHandTests(unittest.TestCase):
         self.assertAlmostEqual(std, 0.5)
         self.assertAlmostEqual(std / mean, 1 / 3)
         self.assertAlmostEqual(max(values) / mean, 4 / 3)
+
+    def test_partial_overlap_interval_not_inflated(self):
+        # L19（2026-09-29）：精确端点积分——[10,20) 在 span [0,100) 的
+        # b̄ = 10/100 = 0.1（旧"重叠桶计数×桶长"把部分重叠的边缘桶整桶
+        # 计入 → bucket=50 时虚增为 50/100=0.5，请求时长 ≪ 桶长时 CV
+        # 退化为每实例请求数度量）；零长度区间 [5,5) 恒贡献 0。
+        intervals = [
+            {"request_id": "a", "instance": 0, "admission_ns": 10,
+             "drain_ns": 20},
+            {"request_id": "b", "instance": 1, "admission_ns": 0,
+             "drain_ns": 100},
+        ]
+        stats = load_imbalance.instance_timeavg_backlog(
+            intervals, 50, 0, 100)
+        self.assertAlmostEqual(stats[0][0], 0.1)
+        self.assertAlmostEqual(stats[1][0], 1.0)
+        stats = load_imbalance.instance_timeavg_backlog(
+            [{"request_id": "z", "instance": 0, "admission_ns": 5,
+              "drain_ns": 5}], 50, 0, 100)
+        self.assertAlmostEqual(stats[0][0], 0.0)
 
     def test_missing_manifest_param_fails(self):
         run_dir = synthetic.make_run_dir("li2")
@@ -722,6 +754,53 @@ class HopbytesTests(unittest.TestCase):
         self.assertEqual(hopbytes._shard_hops(
             {"noc_path": [1, 2, 3]}), 2)
         self.assertIsNone(hopbytes._shard_hops({"bytes": 1}))
+
+    def test_prefill_noc_migrate_restore_counted_once(self):
+        """XC-1 回归钉子（2026-09-30 第二轮审计）：prefill 决策的
+        NOC_MIGRATE 恢复行（transfer_hop_bytes 内）与标量路径
+        （history_transfer_bytes × history_noc_hops）恰好覆盖同一笔
+        迁移——行消费按恢复域豁免，只允许标量路径计一次；逐出行
+        （remote_store）仍经行消费计一次。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "prefill", "request_id": "r0", "tick": 5,
+                  "decision": {
+                      "history_transfer_bytes": 700,
+                      "history_noc_hops": [2, 2],
+                      "history_evictions": [],
+                      "prefill_evictions": [],
+                      "transfer_hop_bytes": [
+                          {"kind": "noc_migrate", "total_bytes": 700,
+                           "noc_hop_bytes": 1400, "shard_count": 2},
+                          {"kind": "remote_store", "total_bytes": 500,
+                           "noc_hop_bytes": 1000, "shard_count": 1}]}}
+        hopbytes.collect_face(record, acc, per_request)
+        # 恢复 700×2 hops=1400（标量路径一次）+ 逐出 1000 hops（行一次）。
+        self.assertEqual(acc["actions_with_hops"], 2)
+        self.assertEqual(acc["hop_bytes_total"], 2400)
+        self.assertEqual(acc["bytes_with_hops"], 1200)
+        self.assertEqual(acc["bytes_without_hops"], 0)
+
+    def test_decode_pd_migration_counted_once_via_rows(self):
+        """XC-1 对拍：decode 分支行消费后即返回，PD 迁移腿（noc_migrate）
+        只经 transfer_hop_bytes 行计一次，kv_noc_hops 不再叠加。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "decode", "request_id": "r0", "tick": 9,
+                  "decision": {
+                      "decode_instance_index": 1,
+                      "decode_evictions": [],
+                      "kv_noc_hops": [2, 2],
+                      "transfer_hop_bytes": [
+                          {"kind": "noc_migrate", "total_bytes": 600,
+                           "noc_hop_bytes": 1200, "shard_count": 2}]}}
+        hopbytes.collect_face(record, acc, per_request)
+        self.assertEqual(acc["actions_with_hops"], 1)
+        self.assertEqual(acc["hop_bytes_total"], 1200)
+        self.assertEqual(acc["bytes_with_hops"], 600)
+        self.assertEqual(acc["bytes_without_hops"], 0)
 
     def test_sh30_consumes_new_shards_field(self):
         """B4 升级：S3 决策日志 completion_evictions[].shards[].noc_hops
@@ -771,6 +850,166 @@ class HopbytesTests(unittest.TestCase):
         hopbytes.collect_wscllm(record2, acc, per_request)
         self.assertEqual(acc["bytes_without_hops"], 50)
 
+    def test_face_eviction_contract_rows_counted(self):
+        """R2 py-slo-E2（2026-09-26）：face/B3 契约逐出行
+        （history/prefill/decode_evictions、completion_eviction_
+        transfers）的 total_bytes 计入 bytes_without_hops——分母完备，
+        不再两头都不进；恢复传输（有 hops 观测）仍进覆盖侧。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        # prefill：恢复 600B × hops[0]=2（覆盖侧）+ 逐出 700B/200B（无覆盖侧）。
+        record = {"kind": "prefill", "request_id": "r0", "tick": 1,
+                  "decision": {
+                      "history_transfer_bytes": 600,
+                      "history_noc_hops": [2, 2],
+                      "history_evictions": [
+                          {"kind": "remote_store", "total_bytes": 700},
+                          {"kind": "local_hit", "total_bytes": 0}],
+                      "prefill_evictions": [
+                          {"kind": "remote_store", "total_bytes": 200}]}}
+        hopbytes.collect_face(record, acc, per_request)
+        self.assertEqual(acc["bytes_with_hops"], 600)
+        self.assertEqual(acc["hop_bytes_total"], 1200)
+        self.assertEqual(acc["bytes_without_hops"], 900)
+        self.assertEqual(per_request["r0"]["bytes_without"], 900)
+        # decode：PD 迁移契约行（无 hops → 无覆盖侧）+ decode 逐出行。
+        record = {"kind": "decode", "request_id": "r1", "tick": 2,
+                  "decision": {
+                      "prefill_decode_transfer": [
+                          {"kind": "noc_migrate", "total_bytes": 300}],
+                      "kv_noc_hops": [],
+                      "decode_evictions": [
+                          {"kind": "remote_store", "total_bytes": 500}]}}
+        hopbytes.collect_face(record, acc, per_request)
+        self.assertEqual(acc["bytes_without_hops"], 900 + 800)
+        self.assertEqual(per_request["r1"]["bytes_without"], 800)
+        # completion：完成段逐出契约行（transfer 契约行字段）。
+        record = {"kind": "completion", "request_id": "r2", "tick": 3,
+                  "decision": {
+                      "completion_evictions": [
+                          {"kind": "remote_store", "reason": "synthetic",
+                           "total_bytes": 0}],
+                      "completion_eviction_transfers": [
+                          {"kind": "remote_store", "total_bytes": 400}]}}
+        hopbytes.collect_face(record, acc, per_request)
+        self.assertEqual(acc["bytes_without_hops"], 900 + 800 + 400)
+        self.assertEqual(per_request["r2"]["bytes_without"], 400)
+        # 分母完备：coverage = with / (with + without)。
+        total = acc["bytes_with_hops"] + acc["bytes_without_hops"]
+        self.assertEqual(total, 600 + 900 + 800 + 400)
+
+    def test_face_nonuniform_hops_fails_closed(self):
+        """M18（2026-09-29）：collect_face 的 hops[0]×Σbytes 聚合前提 =
+        per-shard hops 全等——非全等（非同构实例块形状）fail-closed 并
+        列各 shard 值，不再静默取 hops[0] 失真（prefill/decode 两支）。"""
+        for field, hops in (("history_noc_hops", [2, 3]),
+                            ("kv_noc_hops", [2, 1, 2])):
+            acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+                   "bytes_with_hops": 0, "bytes_without_hops": 0}
+            per_request: dict = {}
+            if field == "history_noc_hops":
+                record = {"kind": "prefill", "request_id": "r0", "tick": 1,
+                          "decision": {"history_transfer_bytes": 600,
+                                       "history_noc_hops": hops}}
+            else:
+                record = {"kind": "decode", "request_id": "r0", "tick": 1,
+                          "decision": {"prefill_decode_transfer": [
+                              {"kind": "noc_migrate", "total_bytes": 600}],
+                              "kv_noc_hops": hops}}
+            with self.assertRaises(SloToolError) as ctx:
+                hopbytes.collect_face(record, acc, per_request)
+            self.assertIn("非全等", str(ctx.exception))
+            self.assertIn(str(hops), str(ctx.exception))
+            self.assertEqual(acc["hop_bytes_total"], 0)
+            self.assertEqual(acc["bytes_with_hops"], 0)
+        # 全等 hops 行为不变（对照）。
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "prefill", "request_id": "r1", "tick": 2,
+                  "decision": {"history_transfer_bytes": 600,
+                               "history_noc_hops": [2, 2]}}
+        hopbytes.collect_face(record, acc, per_request)
+        self.assertEqual(acc["hop_bytes_total"], 1200)
+
+    def test_shard_aggregate_holder_without_shards_counted(self):
+        """A5-3 口径（2026-09-30 自 face 仓对齐，取代本仓 2026-09-26 E5）：
+        holder 无 shards 键时聚合 total_bytes 不再进 bytes_without_hops
+        （结构损坏字节不得混入覆盖侧分母口径），改记 dropped_bytes +
+        dropped_holders 留痕（coverage 分母含 dropped_bytes，见
+        hopbytes_emit——同守恒、可诊断）；local_hit holder 不计入任何
+        桶（collect_sh10/sh30 复用的 _accumulate_shard_transfers 与
+        collect_face/collect_sh20 口径一致）。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "prefill", "request_id": "r0", "tick": 1,
+                  "decision": {
+                      "history_transfer": {
+                          "kind": "noc_migrate", "total_bytes": 1500}}}
+        hopbytes.collect_sh10(record, acc, per_request)
+        self.assertEqual(acc["bytes_without_hops"], 0)
+        self.assertEqual(acc["hop_bytes_total"], 0)
+        self.assertEqual(acc.get("dropped_bytes"), 1500)
+        self.assertEqual(acc.get("dropped_holders"), 1)
+        self.assertNotIn("r0", per_request)
+        # local_hit holder（信息量 bytes）不进任何桶。
+        record2 = {"kind": "prefill", "request_id": "r1", "tick": 2,
+                   "decision": {
+                       "history_transfer": {
+                           "kind": "local_hit", "total_bytes": 999}}}
+        hopbytes.collect_sh10(record2, acc, per_request)
+        self.assertEqual(acc["bytes_without_hops"], 0)
+        self.assertNotIn("r1", per_request)
+
+    def test_sh20_mixed_invalid_rows_dropped_accounted(self):
+        """B4②（2026-09-28 契约，2026-10-01 自 face 仓对齐移植）：sh20
+        混合无效行在 continue 处不再蒸发——可估的 total_bytes 计入
+        dropped_bytes 并留在 coverage 分母（2000/(2000+1000)=2/3，而非
+        旧实现的 2000/2000=1）；noc_hop_bytes 缺失/非法的行不计 coverage
+        分子、可估字节转 dropped_bytes（R2-F3）；行全无效/空列表回退
+        aggregate 口径（A5-4），completion 无 aggregate 字段直接计
+        dropped_bytes；local_hit 名义行维持不计入任何桶。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0,
+               "dropped_holders": 0, "dropped_bytes": 0}
+        per_request: dict = {}
+        record = {"kind": "decode", "request_id": "r0", "tick": 1,
+                  "decision": {
+                      "prefill_decode_transfer_bytes": 3000,
+                      "transfer_hop_bytes": [
+                          {"total_bytes": 2000, "shard_count": 4,
+                           "noc_hop_bytes": 8000},
+                          {"total_bytes": 1000, "shard_count": "x"}]}}
+        hopbytes.collect_sh20(record, acc, per_request)
+        self.assertEqual(acc["bytes_with_hops"], 2000)
+        self.assertEqual(acc["dropped_bytes"], 1000)
+        total = (acc["bytes_with_hops"] + acc["bytes_without_hops"]
+                 + acc["dropped_bytes"])
+        self.assertEqual(total, 3000)
+        # 行全无效的 completion 记录：无 aggregate 字段可回退 → 可估
+        # 字节直接计 dropped_bytes（旧实现回退盲区，字节无声消失）。
+        record2 = {"kind": "completion", "request_id": "r0", "tick": 2,
+                   "decision": {"transfer_hop_bytes": [
+                       {"total_bytes": 500}]}}
+        hopbytes.collect_sh20(record2, acc, per_request)
+        self.assertEqual(acc["dropped_bytes"], 1500)
+        # 空列表 hop_rows 回退盲区：aggregate 字节计入无覆盖侧
+        # （A5-4 同口径），不再绕过回退。
+        record3 = {"kind": "prefill", "request_id": "r0", "tick": 3,
+                   "decision": {"history_transfer_bytes": 4096,
+                                "transfer_hop_bytes": []}}
+        hopbytes.collect_sh20(record3, acc, per_request)
+        self.assertEqual(acc["bytes_without_hops"], 4096)
+        # local_hit 名义行（结构可判、零搬运）维持不计入任何桶。
+        record4 = {"kind": "prefill", "request_id": "r0", "tick": 4,
+                   "decision": {"transfer_hop_bytes": [
+                       {"total_bytes": 0, "shard_count": 0}]}}
+        hopbytes.collect_sh20(record4, acc, per_request)
+        self.assertEqual(acc["dropped_bytes"], 1500)
+        self.assertEqual(acc["bytes_without_hops"], 4096)
+
 
 class CliSurfaceTests(unittest.TestCase):
     """--help 可用 + 退出码纪律（fail-closed=2）。"""
@@ -814,8 +1053,19 @@ class CliSurfaceTests(unittest.TestCase):
 
 
 class SessionPassthroughTests(unittest.TestCase):
-    """B4（S3 异常③）：metrics_manifest 透传 human_time_ns/tool_time_ns 后
-    T_session 可算；turn-0 双侧 null=0 贡献（非缺数据）；键缺席才 NA。"""
+    """B4（S3 异常③）+ H5（2026-09-29）：metrics_manifest 透传
+    human_time_ns/tool_time_ns 后 T_session 可算；initiator 口径 = 行上
+    等待是该轮之后的 gap（[completion(j), arrival(j+1)]），Σ 只累加除
+    末轮外的 turns；非末轮 turn-0/0-gap 双侧 null=0 贡献（非缺数据）；
+    键缺席（非末轮）才 NA。metrics_manifest 缺透传字段时从姊妹
+    manifest.json / run_dir/manifest.json 按 request_id 补齐（H5②）。
+
+    旧口径（等待记在到达方=触发 gap）钉住的全 turns 求和已废：
+    sidecar 冻结口径是 initiator（derive_20_first_30_seconds.py "the gap
+    after turn j is the human_time or tool_time recorded on turn j's own
+    row"），全 turns 求和系统性多扣恰一个末轮等待（快响应+长思考场景
+    T_session<0 → fail-closed 误中止）。
+    """
 
     def _write_run(self, manifest_requests):
         run_dir = synthetic.make_run_dir("sess")
@@ -831,11 +1081,13 @@ class SessionPassthroughTests(unittest.TestCase):
         return run_dir
 
     def test_t_session_with_passthrough_keys(self):
-        # Σ(human+tool) = 0(turn-0) + 200(turn-1) = 200；
-        # T_session = 9000 - 1000 - 200 = 7800。
+        # initiator 口径：turn0 human=300 计入（[5000,5200] 前的窗口内
+        # 等待——手算 fixture 中 300 与 200 的物理间隙不必一致，只验
+        # 求和口径）；turn1（末轮）human=200 在窗口外不计、不留痕。
+        # Σ(human+tool) = 300；T_session = 9000 − 1000 − 300 = 7700。
         run_dir = self._write_run([
             synthetic.manifest_request(
-                "s0t0", "s0", 0, 0, human_time_ns=None, tool_time_ns=None),
+                "s0t0", "s0", 0, 0, human_time_ns=300, tool_time_ns=None),
             synthetic.manifest_request(
                 "s0t1", "s0", 1, 1, human_time_ns=200, tool_time_ns=None),
         ])
@@ -845,11 +1097,18 @@ class SessionPassthroughTests(unittest.TestCase):
         with out.open(encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["t_session_ns"], "7800")
-        self.assertEqual(rows[0]["sum_human_tool_ns"], "200")
-        self.assertIn("turn0/0-gap", rows[0]["missing_fields_sample"])
+        self.assertEqual(rows[0]["t_session_ns"], "7700")
+        self.assertEqual(rows[0]["sum_human_tool_ns"], "300")
+        # 末轮（s0t1）的 human=200 不进求和也不留 soft_missing；非末轮
+        # turn0 的 tool 缺侧按 0 计留痕。
+        self.assertEqual(rows[0]["missing_field_count"], "1")
+        self.assertIn("s0t0:tool_time_ns=0",
+                      rows[0]["missing_fields_sample"])
+        self.assertNotIn("s0t1", rows[0]["missing_fields_sample"])
 
     def test_t_session_na_when_keys_absent(self):
+        # 键整体缺席（WP2 之前的 manifest）→ NA；只有非末轮 turn0 被
+        # 核对（末轮字段与 T_session 无关）→ 计数 2（human+tool 各 1）。
         run_dir = self._write_run([
             synthetic.manifest_request("s0t0", "s0", 0, 0),
             synthetic.manifest_request("s0t1", "s0", 1, 1),
@@ -860,7 +1119,48 @@ class SessionPassthroughTests(unittest.TestCase):
         with out.open(encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(rows[0]["t_session_ns"], "NA")
-        self.assertEqual(rows[0]["missing_field_count"], "4")
+        self.assertEqual(rows[0]["missing_field_count"], "2")
+
+    def test_t_session_supplemented_from_manifest_json(self):
+        # H5②：face-LRU 物化器只把透传字段写进 manifest.json —— 
+        # metrics_manifest.json 缺字段时从姊妹 manifest.json 按
+        # request_id 补齐（只补缺键），t_session 不再恒 NA。
+        run_dir = self._write_run([
+            synthetic.manifest_request("s0t0", "s0", 0, 0),
+            synthetic.manifest_request("s0t1", "s0", 1, 1),
+        ])
+        (run_dir / "manifest.json").write_text(json.dumps({
+            "requests": [
+                {"request_id": "s0t0", "human_time_ns": 300},
+                {"request_id": "s0t1", "human_time_ns": 200},
+            ]}), encoding="utf-8")
+        out = run_dir / "slo_session.csv"
+        args = slo_argv(["session", str(run_dir), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_session(args), 0)
+        with out.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["t_session_ns"], "7700")
+        self.assertEqual(rows[0]["sum_human_tool_ns"], "300")
+
+    def test_t_session_single_turn_ignores_own_fields(self):
+        # 单轮会话：唯一 turn 即末轮 → Σ=0，T_session=completion−arrival
+        # （行上等待定义在窗口外，字段缺席不构成 NA）。
+        run_dir = synthetic.make_run_dir("sess1")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(
+                queue_index="0", request_id="s0t0", session_id="s0",
+                turn_index="0", arrival_ns="1000", completion_ns="5000"),
+        ])
+        synthetic.write_metrics_manifest(run_dir, [
+            synthetic.manifest_request("s0t0", "s0", 0, 0),
+        ])
+        out = run_dir / "slo_session.csv"
+        args = slo_argv(["session", str(run_dir), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_session(args), 0)
+        with out.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["t_session_ns"], "4000")
+        self.assertEqual(rows[0]["sum_human_tool_ns"], "0")
 
 
 class BacklogTests(unittest.TestCase):
@@ -879,6 +1179,29 @@ class BacklogTests(unittest.TestCase):
         self.assertEqual(header, ["time_ns", "in_flight"])
         self.assertEqual([(r["time_ns"], r["in_flight"]) for r in rows],
                          [("100", "2"), ("500", "1"), ("900", "0")])
+
+    def test_backlog_bucket_fills_zero_event_buckets(self):
+        # L17（2026-09-29）：--bucket-ns 分桶补发零事件桶。事件 100(+2)、
+        # 500(−1)、900(−1)，bucket=200 → 桶 0:[0,200) 值 2；桶 1:[200,400)
+        # 零事件 → 上一事件延续 2；桶 2:[400,600) 事件(500,−1) →
+        # max(桶起点延续 2, 事件后 1)=2；桶 3:[600,800) 零事件 → 延续 1；
+        # 桶 4:[800,1000) 事件(900,−1) → 1。无事件区段不再整桶丢失。
+        run_dir = synthetic.make_run_dir("bl2")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(request_id="r0", queue_index="0",
+                                  arrival_ns="100", completion_ns="500"),
+            synthetic.request_row(request_id="r1", queue_index="1",
+                                  arrival_ns="100", completion_ns="900"),
+        ])
+        out = run_dir / "backlog_b.csv"
+        args = slo_argv(["backlog", str(run_dir), "--bucket-ns", "200",
+                         "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_backlog(args), 0)
+        header, rows = synthetic.read_csv(out)
+        self.assertEqual(header, ["time_ns", "in_flight"])
+        self.assertEqual([(r["time_ns"], r["in_flight"]) for r in rows],
+                         [("0", "2"), ("200", "2"), ("400", "2"),
+                          ("600", "1"), ("800", "1")])
 
 
 class WarmupTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""WP4 canonical cache 事件适配器（逐仓适配；五仓文件逐字节相同，语义差异
-全部收在 REPO_VARIANTS 表；标准库实现）。
+"""WP4 canonical cache 事件适配器（逐仓适配；同源变体族——语义差异
+全部收在 REPO_VARIANTS 表，勿跨仓直接覆盖同步；标准库实现）。
 
 输入 = run_dir/results/*.jsonl（online_decision_log.jsonl 为主；per-request
 manifest 提供 turn_index 等上下文）。只做输出层映射，native 日志保持原样，
@@ -30,7 +30,7 @@ manifest 提供 turn_index 等上下文）。只做输出层映射，native 日�
                    noc_migrate|local_hit|remote_load, shards[{
                    bytes,noc_path,source_rank,target_rank}...],
                    total_bytes,...}；完成/逐出为 remote_store 等传输对象。
-                   local_hit 无数据 shard（generate_face_trace.py:541），
+                   local_hit 无数据 shard（generate_face_trace.py 的 local_hit 分支），
                    total_bytes 为名义规模——不产 canonical 事件。
   astra-sim-sh_2.0 决策只落 history_transfer_bytes /
                    prefill_decode_transfer_bytes / *_eviction_count 聚合值;
@@ -42,8 +42,10 @@ manifest 提供 turn_index 等上下文）。只做输出层映射，native 日�
   astra-sim-sh_3.0 prefill.decision.prefill_affinity_reason ∈
                    {first_request_non_edge, first_request_edge_fallback,
                    resident_local_hbm, resident_prefix_layers,
-                   remote_edge_load_balance}（sh30_online_scheduler.py:
-                   1150-1221 三分支）；PARTIAL_HBM_REMOTE 驻留 → partial。
+                   remote_edge_load_balance}（见姊妹仓 sh_3.0 的
+                   sh30_online_scheduler.py，按 prefill_affinity_reason
+                   符号名检索——2026-10-01 去行号锚，行号随姊妹仓编辑
+                   漂移）；PARTIAL_HBM_REMOTE 驻留 → partial。
 """
 
 from __future__ import annotations
@@ -56,9 +58,9 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from slo_common import (  # noqa: E402
-    DECISION_LOG_RELPATH, NA, detect_repo_variant, emit_json, fail,
-    iter_jsonl, load_request_manifest, manifest_requests, open_output,
-    run_main, write_csv,
+    DECISION_LOG_RELPATH, EXIT_FAIL_CLOSED, NA, detect_repo_variant,
+    emit_json, fail, iter_jsonl, load_request_manifest, manifest_requests,
+    open_output, run_main, write_csv,
 )
 
 CACHE_EVENT_COLUMNS = ("action_id", "request_id", "start_ns", "end_ns",
@@ -69,6 +71,32 @@ FAMILY_HISTORY = "history_transfer"
 FAMILY_PD = "prefill_decode_transfer"
 FAMILY_EVICTION = "eviction"
 
+# kv 决策日志 kind 全集（B5，2026-09-28）：以生产方
+# online/face_online_scheduler.py 的 log_decision 调用点为准
+# （kind 枚举:prefill / decode / completion / decode_admission_probe /
+# prefill_admission_probe 两处 probe 各两个调用点;session_kv_manager
+# 不写决策行;行号从略,按 kind 名检索），与 hbm_watermark.WatermarkScan.consume
+# 的枚举同源。分两类：
+#   * KINDS_MAIN：承载迁移/逐出载荷的决策行（canonical 映射对象）；
+#   * KINDS_ADMISSION_PROBE：P0-1/P1 选择期容量预检的观测性行（无载荷，
+#     跳过但计数留痕，与 hbm 侧同型不静默）。
+# 之外的 kind 一律 fail-closed（EXIT_FAIL_CLOSED）：未知 kind 在 canonical
+# 与 native（--reconcile 重放）两侧同盲会让对账恒 pass，抓不到生产方
+# 新增/拼写漂移的 kind，禁止猜测映射。
+KINDS_MAIN = ("prefill", "decode", "completion")
+KINDS_ADMISSION_PROBE = ("decode_admission_probe",
+                         "prefill_admission_probe")
+
+
+def _fail_unknown_kind(kind: Any, record: dict) -> None:
+    """未知 kind 的统一 fail-closed 报错（列出 kind/request/seq）。"""
+    fail(f"decision log 行未知 kind={kind!r}（request="
+         f"{record.get('request_id')!r}，seq={record.get('seq', '?')}）——"
+         f"合法 kind 全集：{KINDS_MAIN + KINDS_ADMISSION_PROBE}"
+         f"（生产方 face_online_scheduler log_decision）；未知 kind 双侧"
+         f"静默跳过会让 --reconcile 恒 pass，生产方新增 kind 需扩登记清单"
+         f"与映射，禁止猜测")
+
 
 def _turn_index_map(manifest: dict) -> dict[str, int]:
     result = {}
@@ -76,6 +104,11 @@ def _turn_index_map(manifest: dict) -> dict[str, int]:
         request_id = entry.get("request_id")
         turn = entry.get("turn_index")
         if isinstance(request_id, str) and isinstance(turn, int):
+            # 重复 request_id 拒绝静默取后值（与 slo_stats cmd_session /
+            # hbm_watermark.load_token_manifest 的唯一性 fail-closed 同
+            # 口径，R7-F9：消除"取后值/报错/覆盖"三口径并存）。
+            if request_id in result:
+                fail(f"per-request manifest request_id 重复：{request_id}")
             result[request_id] = turn
     return result
 
@@ -197,10 +230,83 @@ def _event(request_id: str, tick: int, nbytes: Optional[int], source: Any,
     }
 
 
+def _shards_bytes_sum(shards, where: str) -> int:
+    """shards[].bytes 的统一严格求和 choke point（M15/R2-F2）。
+
+    canonical 提取、shard_sum 复检与 --reconcile native 重放的每个
+    shards 求和点都收敛到本函数：逐 shard 必须是对象且 bytes 为非负
+    int（bool/float/str 一律 fail-closed）——int() 会把 float 静默截断
+    记账、str 裸 TypeError 以退出码 1 崩壳。缺 bytes 键按 0 计（缺席
+    语义，与"在场非法"区分）。_eviction_bytes_face docstring 的"全部
+    求和点"声称以此为准。
+    """
+    total = 0
+    for shard in shards:
+        if not isinstance(shard, dict):
+            fail(f"{where}: shards 成员必须是对象（实得 {shard!r}）")
+        value = shard.get("bytes")
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) \
+                or value < 0:
+            fail(f"{where}: shards[].bytes 含非法值 {value!r}"
+                 f"（须为非负整数）——float 静默截断/str 裸崩均禁止，"
+                 f"fail-closed")
+        total += value
+    return total
+
+
+def _strict_total_bytes(value, where: str) -> int:
+    """在场 total_bytes 的严格标量校验：bool/float/str 拒绝，负值拒绝
+    （R7-F3：负 bytes 不再静默写入 canonical CSV——仓内其他 bytes 入账
+    点均拒负）。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        fail(f"{where}: total_bytes 在场但不是整数（实得 {value!r}）"
+             f"——float 截断/str 裸崩禁止，fail-closed")
+    if value < 0:
+        fail(f"{where}: total_bytes 为负（{value}）——bytes 入账拒绝负值")
+    return value
+
+
 def _eviction_bytes_face(entry: dict) -> Optional[int]:
+    """FACE/W 逐出条目 → 实例合计 bytes。
+
+    本文件全部逐出求和 choke point：canonical 提取与 --reconcile native
+    重放两侧共用（此处收紧即双侧同封，对账不再同盲）；canonical 侧的
+    回退链与 reconcile native 臂同款（R8-F2），口径唯一。
+
+    字节来源回退链：shard_bytes 列表严格求和 → 缺席时 total_bytes 严格
+    标量（R7-F2 回退）→ 再缺席时 shards[].bytes 严格求和（走
+    _shards_bytes_sum）→ 全缺席 None。校验强度与
+    hbm_watermark._sum_shard_bytes 同型（逐元素非负整数，违反
+    fail-closed exit 2）：float 走 int() 会静默截断记账、str/None 会裸
+    TypeError 以退出码 1 崩壳。
+    """
+    if not isinstance(entry, dict):
+        fail(f"逐出条目必须是对象（实得 {entry!r}）")
+    where = (f"逐出条目（request={entry.get('trigger_request_id')!r}，"
+             f"reason={entry.get('reason')!r}）")
     shard_bytes = entry.get("shard_bytes")
+    if shard_bytes is not None and not isinstance(shard_bytes, list):
+        fail(f"{where}: shard_bytes 在场但不是数组（实得 {shard_bytes!r}）"
+             f"——fail-closed")
     if isinstance(shard_bytes, list) and shard_bytes:
-        return int(sum(shard_bytes))
+        total = 0
+        for value in shard_bytes:
+            if isinstance(value, bool) or not isinstance(value, int) \
+                    or value < 0:
+                fail(f"{where}: shard_bytes 含非法元素 {value!r}"
+                     f"（须为非负整数）——float 静默截断/str 裸崩"
+                     f"均禁止（与 hbm_watermark._sum_shard_bytes 同强度，"
+                     f"fail-closed）")
+            total += value
+        return total
+    total = entry.get("total_bytes")
+    if total is not None:
+        return _strict_total_bytes(total, where)
+    shards = entry.get("shards")
+    if isinstance(shards, list) and shards:
+        return _shards_bytes_sum(shards, where)
     return None
 
 
@@ -211,7 +317,7 @@ def extract_events_face_wscllm(record: dict) -> list[dict]:
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    if not isinstance(tick, int) or isinstance(tick, bool):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
         nbytes = decision.get("history_transfer_bytes")
@@ -267,18 +373,27 @@ def extract_events_face_wscllm(record: dict) -> list[dict]:
 
 def _transfer_object_events(transfer: dict, default_request: str, tick: int,
                             family: str) -> list[dict]:
-    """S1 传输对象 → canonical 事件（bytes 取 total_bytes，缺失则 Σshards）。"""
+    """S1 传输对象 → canonical 事件（bytes 取 total_bytes，缺失则 Σshards）。
+
+    bytes 口径收敛：Σshards 走 _shards_bytes_sum（严格求和 choke point，
+    M15/R2-F2）；total_bytes 在场须为非负 int（R7-F3：负值不再静默写入
+    canonical CSV——仓内其他 bytes 入账点均拒负；float/str 同拒），
+    缺席且无 shards → 无事件（零字节传输不产行，语义不变）。
+    """
     if not isinstance(transfer, dict):
         return []
     if transfer.get("kind") == "local_hit":
         return []
-    nbytes = transfer.get("total_bytes")
-    if not isinstance(nbytes, int):
+    where = (f"{family} 传输对象（request={default_request!r}，tick={tick}，"
+             f"kind={transfer.get('kind')!r}）")
+    total = transfer.get("total_bytes")
+    if total is not None:
+        nbytes = _strict_total_bytes(total, where)
+    else:
         shards = transfer.get("shards")
-        if isinstance(shards, list):
-            nbytes = sum(int(s.get("bytes", 0)) for s in shards
-                         if isinstance(s, dict))
-    if not nbytes:
+        nbytes = (_shards_bytes_sum(shards, where)
+                  if isinstance(shards, list) else 0)
+    if nbytes <= 0:
         return []
     return [_event(
         transfer.get("trigger_request_id") or default_request, tick, nbytes,
@@ -293,7 +408,7 @@ def extract_events_sh10(record: dict) -> list[dict]:
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    if not isinstance(tick, int) or isinstance(tick, bool):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
         events.extend(_transfer_object_events(
@@ -329,7 +444,7 @@ def extract_events_sh20(record: dict) -> list[dict]:
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    if not isinstance(tick, int) or isinstance(tick, bool):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
         transfers = decision.get("history_transfers")
@@ -373,7 +488,7 @@ def extract_events_sh30(record: dict) -> list[dict]:
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
     tick = record.get("tick")
-    if not isinstance(tick, int):
+    if not isinstance(tick, int) or isinstance(tick, bool):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
         nbytes = decision.get("history_transfer_bytes")
@@ -449,7 +564,7 @@ REPO_VARIANTS: dict[str, dict[str, Any]] = {
         "notes": "affinity_reason 分布（60s_summary）：first_request_"
                  "non_edge 116/resident_local_hbm 1239/remote_edge_load_"
                  "balance 80/resident_prefix_layers 19（→partial）；代码 "
-                 "sh30_online_scheduler.py:1150-1221",
+                 "sh30_online_scheduler.py",
     },
 }
 
@@ -470,12 +585,16 @@ class AdapterState:
     死亡且不调 emit，边写会在死 sink 场景留下半截产物，改变失败语义。
     """
 
-    __slots__ = ("events", "hit_states", "shard_sum_violations")
+    __slots__ = ("events", "hit_states", "shard_sum_violations",
+                 "skipped_admission_probe")
 
     def __init__(self) -> None:
         self.events: list[tuple] = []
         self.hit_states: dict[str, tuple[str, str]] = {}
         self.shard_sum_violations = 0
+        # KINDS_ADMISSION_PROBE 观测行计数（adapter_emit 打印审计行 +
+        # 计入 summary，不静默；与 hbm_watermark 同型）。
+        self.skipped_admission_probe = 0
 
 
 def adapter_prepare(repo_variant: str, manifest: dict
@@ -491,9 +610,23 @@ def adapter_prepare(repo_variant: str, manifest: dict
 def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
                     state: AdapterState) -> None:
     """单条决策记录的适配器处理（与独立 CLI 的循环体逐语句等价）。"""
+    kind = record.get("kind")
+    if kind in KINDS_ADMISSION_PROBE:
+        # 观测性行：跳过不消费（无映射负载），但计数留痕（B5，与
+        # hbm_watermark 的 skipped_admission_probe 同型）。
+        state.skipped_admission_probe += 1
+        return
+    if kind not in KINDS_MAIN:
+        _fail_unknown_kind(kind, record)
     decision = record.get("decision") or {}
     request_id = record.get("request_id")
-    if record.get("kind") == "prefill" and isinstance(request_id, str):
+    if kind == "prefill" and isinstance(request_id, str):
+        if request_id in state.hit_states:
+            # R2-F4：重复 prefill 决策拒绝静默覆盖 hit_state（同链消费者
+            # load_imbalance 的 prefill/decode 查重与 hbm_watermark
+            # seen_kinds 的"恰一次"不变量同口径，fail-closed）。
+            fail(f"请求 {request_id} 出现多次 prefill 决策（准入应恰一次）"
+                 f"——kv_hit_state 不允许静默覆盖")
         hit_state, evidence = variant["hit_state"](
             decision, turns.get(request_id), request_id)
         state.hit_states[request_id] = (hit_state, evidence)
@@ -506,6 +639,9 @@ def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
         for event in extracted)
     if variant["shard_sum_check"]:
         # native 不变量复检：Σshards == total_bytes（以 native 为准）。
+        # Σshards 走统一严格求和（M15/R2-F2：int() 的 float 截断/str
+        # 裸崩不再绕过 choke point）。
+        sum_where = (f"shard 复检（request={request_id!r}，kind={kind}）")
         for holder in (decision.get("prefill_decode_transfer"),
                        decision.get("history_transfer")):
             if isinstance(holder, dict):
@@ -513,10 +649,7 @@ def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
                 shards = holder.get("shards")
                 if (isinstance(total, int) and isinstance(shards, list)
                         and shards):
-                    shard_total = sum(int(s.get("bytes", 0))
-                                      for s in shards
-                                      if isinstance(s, dict))
-                    if shard_total != total:
+                    if _shards_bytes_sum(shards, sum_where) != total:
                         state.shard_sum_violations += 1
         for field in ("completion_evictions", "history_evictions",
                       "prefill_evictions", "decode_evictions"):
@@ -525,21 +658,15 @@ def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
                     total = holder.get("total_bytes")
                     shards = holder.get("shards")
                     if isinstance(total, int) and isinstance(shards, list):
-                        shard_total = sum(int(s.get("bytes", 0))
-                                          for s in shards
-                                          if isinstance(s, dict))
-                        if shard_total != total:
+                        if _shards_bytes_sum(shards, sum_where) != total:
                             state.shard_sum_violations += 1
 
 
 def cmd_adapter(args: argparse.Namespace) -> int:
     # CLI 入口（独立运行行为不变）。A4 driver 经 adapter_prepare /
     # adapter_consume / adapter_emit 组合复用同一逻辑（单遍 decision log）。
+    # repo_variant 登记校验由 adapter_prepare 统一执行（fail-closed）。
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
-    variant = REPO_VARIANTS.get(repo_variant)
-    if variant is None:
-        fail(f"未登记的 repo_variant：{repo_variant}（REPO_VARIANTS 需扩表，"
-             f"禁止猜测映射）")
     manifest = load_request_manifest(args.run_dir, args.request_manifest)
     variant, turns, state = adapter_prepare(repo_variant, manifest)
     log_path = args.run_dir / DECISION_LOG_RELPATH
@@ -554,6 +681,7 @@ def adapter_emit(args: argparse.Namespace, repo_variant: str, variant: dict,
     events = adapter_state.events
     hit_states = adapter_state.hit_states
     shard_sum_violations = adapter_state.shard_sum_violations
+    skipped_admission_probe = adapter_state.skipped_admission_probe
     manifest_ids = [str(e.get("request_id")) for e in
                     manifest_requests(manifest) if e.get("request_id")]
     state_rows = []
@@ -587,8 +715,29 @@ def adapter_emit(args: argparse.Namespace, repo_variant: str, variant: dict,
         "no_history_not_counted_as_miss": True,
         "n_events": len(events),
         "n_requests_without_prefill_decision": n_no_prefill_decision,
+        "n_decision_rows_without_manifest_entry": (
+            len(hit_states) - sum(1 for r in manifest_ids if r in hit_states)),
         "shard_sum_violations": shard_sum_violations,
+        "n_skipped_admission_probe_rows": skipped_admission_probe,
     }
+    n_orphan_decisions = summary["n_decision_rows_without_manifest_entry"]
+    if n_orphan_decisions:
+        # 反向对账留痕（2026-09-30）：决策日志存在而 per-request manifest
+        # 缺席的请求此前在 kv_hit_states.csv 中静默缺席（正向已有
+        # n_requests_without_prefill_decision，反向无计数）。对照
+        # hbm_watermark 对同向不一致的 fail-closed 口径，此处选择计数留痕
+        # 而非硬失败——manifest 截损的旧 run 仍可诊断（分母如实偏小）。
+        print(f"[kv-cache-adapter] {n_orphan_decisions} 条决策行无对应 "
+              f"manifest 请求（hit_states 有、manifest 无；命中率分母 "
+              f"不含这些行）", file=sys.stderr)
+    if skipped_admission_probe:
+        # 审计行（不静默）：跳过的 admission_probe 观测行数量如实报告，
+        # 供对拍与人工核账（与 hbm-watermark 的 finish 审计行同型，同为
+        # stderr 流道——driver Sink 只接管 stderr，两行都必须走 stderr
+        # 才能保住旧链/新链 slo_postprocess.log 行序一致）。
+        print(f"[kv-cache-adapter] 跳过 {skipped_admission_probe} 条 "
+              f"admission_probe 观测行（decode/prefill 选择期容量预检"
+              f"介入记录，无映射负载）", file=sys.stderr)
 
     out_path = None
     if args.output == "-":
@@ -627,29 +776,44 @@ def adapter_emit(args: argparse.Namespace, repo_variant: str, variant: dict,
 
     if args.reconcile:
         return reconcile(run_dir=args.run_dir, repo_variant=repo_variant,
-                         variant=variant, out_path=out_path,
+                         out_path=out_path,
                          summary=summary)
+    if shard_sum_violations:
+        # 2026-09-26 A5-13 处置：native 不变量违反（Σshards !=
+        # total_bytes）默认路径不再静默容忍——warn 输出 + 非零码
+        # （EXIT_FAIL_CLOSED，账本不自洽）计入退出判定；--reconcile
+        # 路径维持原 fail 语义（reconcile 末尾显式报错）。
+        print(f"[kv-cache-adapter] 警告：native 不变量复检失败："
+              f"Σshards != total_bytes 共 {shard_sum_violations} 条"
+              f"（默认路径 warn+非零码退出 {EXIT_FAIL_CLOSED}；"
+              f"--reconcile 下为硬 fail）", file=sys.stderr)
+        return EXIT_FAIL_CLOSED
     return 0
 
 
-def reconcile(run_dir: Path, repo_variant: str, variant: dict,
+def reconcile(run_dir: Path, repo_variant: str,
               out_path: Optional[Path],
               summary: dict) -> int:
     """canonical bytes/count vs native 逐项对账（以 native 为准）。
 
     native 侧：独立从 decision log 重放聚合（按 family）；canonical 侧：
-    重新解析已写出的 cache_events.csv 聚合。（原形参 events 在函数体内
-    零使用——对账始终重读 CSV + 独立重放 native，2026-08-30 阶段2加固
-    §3.4a 删除该死参数。）
+    重新解析已写出的 cache_events.csv 聚合。（原形参 events / variant 在
+    函数体内零使用——对账始终重读 CSV + 独立重放 native，2026-08-30
+    阶段2加固 §3.4a 删除 events 死参数。）
     """
     import csv as _csv
 
     native: dict[str, dict[str, int]] = {}
     for record in iter_jsonl(run_dir / DECISION_LOG_RELPATH):
         decision = record.get("decision") or {}
-        request_id = record.get("request_id")
         kind = record.get("kind")
-        tick = record.get("tick")
+        if kind in KINDS_ADMISSION_PROBE:
+            # 观测性行：与 canonical 侧（adapter_consume）同口径跳过。
+            continue
+        if kind not in KINDS_MAIN:
+            # B5：native 侧重放与 canonical 侧共用同一 kind 闸，未知
+            # kind fail-closed，双侧不得同盲（否则对账恒 pass）。
+            _fail_unknown_kind(kind, record)
         buckets = []
         if kind == "prefill":
             transfer_list = decision.get("history_transfers")
@@ -657,22 +821,22 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                 # B3-6（S2 新产物）：partial 两段式恢复逐段对象——native
                 # 侧按段计数/求和（与 canonical 逐段事件同粒度对账）。
                 for entry in transfer_list:
-                    if not isinstance(entry, dict) or entry.get(
-                            "kind") == "local_hit":
-                        continue
-                    total = entry.get("total_bytes")
-                    if isinstance(total, int) and total > 0:
-                        buckets.append((FAMILY_HISTORY, total))
+                    derived = _transfer_object_events(
+                        entry, str(record.get("request_id") or ""),
+                        record.get("tick", 0), FAMILY_HISTORY)
+                    for event in derived:
+                        buckets.append((FAMILY_HISTORY, event["bytes"]))
             else:
                 nbytes = decision.get("history_transfer_bytes")
                 transfer = decision.get("history_transfer")
                 if isinstance(transfer, dict):
-                    if transfer.get("kind") == "local_hit":
-                        nbytes = 0  # 名义 KV 规模，无物理搬运
-                    else:
-                        total = transfer.get("total_bytes")
-                        if isinstance(total, int):
-                            nbytes = total
+                    # R7-F2：native 臂与 canonical 臂同函数取 bytes——
+                    # total_bytes 缺席时 Σshards 回退 + 负值/类型严格
+                    # 校验同封（此前 native 臂缺回退，--reconcile 假红）。
+                    derived = _transfer_object_events(
+                        transfer, str(record.get("request_id") or ""),
+                        record.get("tick", 0), FAMILY_HISTORY)
+                    nbytes = derived[0]["bytes"] if derived else 0
                 if isinstance(nbytes, int) and nbytes > 0:
                     buckets.append((FAMILY_HISTORY, nbytes))
             for field in ("admission_evictions", "decode_target_evictions",
@@ -681,28 +845,22 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                     if isinstance(entry, dict) and entry.get(
                             "kind") == "local_hit":
                         continue
+                    # 逐出 bytes 与 canonical 臂同 choke point（R8-F2：
+                    # shard_bytes→total_bytes→Σshards 回退链口径唯一，
+                    # canonical 不再静默丢事件、--reconcile 不再假红）。
                     nbytes = _eviction_bytes_face(entry)
-                    if isinstance(entry, dict) and not nbytes:
-                        total = entry.get("total_bytes")
-                        shards = entry.get("shards")
-                        if not isinstance(total, int) and isinstance(
-                                shards, list) and shards:
-                            total = sum(int(s.get("bytes", 0))
-                                        for s in shards
-                                        if isinstance(s, dict))
-                        nbytes = total if isinstance(total, int) else None
                     if nbytes:
                         buckets.append((FAMILY_EVICTION, nbytes))
         elif kind == "decode":
             transfer = decision.get("prefill_decode_transfer")
             nbytes = decision.get("prefill_decode_transfer_bytes")
             if isinstance(transfer, dict):
-                if transfer.get("kind") == "local_hit":
-                    nbytes = 0  # 名义 KV 规模，无物理搬运
-                else:
-                    total = transfer.get("total_bytes")
-                    if isinstance(total, int):
-                        nbytes = total
+                # R7-F2：同 prefill 臂——native 与 canonical 同函数取
+                # bytes（回退链/严格校验同封）。
+                derived = _transfer_object_events(
+                    transfer, str(record.get("request_id") or ""),
+                    record.get("tick", 0), FAMILY_PD)
+                nbytes = derived[0]["bytes"] if derived else 0
             if isinstance(nbytes, int) and nbytes > 0:
                 buckets.append((FAMILY_PD, nbytes))
             # S1 decode 行为 decode_evictions（total_bytes/shards）；FACE/
@@ -715,40 +873,20 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                             "kind") == "local_hit":
                         continue
                     nbytes = _eviction_bytes_face(entry)
-                    if not nbytes:
-                        total = entry.get("total_bytes")
-                        shards = entry.get("shards")
-                        if isinstance(total, int):
-                            nbytes = total
-                        elif isinstance(shards, list) and shards:
-                            nbytes = sum(int(s.get("bytes", 0))
-                                         for s in shards
-                                         if isinstance(s, dict))
-                    if isinstance(nbytes, int) and nbytes > 0:
+                    if nbytes:
                         buckets.append((FAMILY_EVICTION, nbytes))
         elif kind == "completion":
             for entry in decision.get("completion_evictions") or []:
-                nbytes = None
                 if isinstance(entry, dict) and entry.get(
                         "kind") == "local_hit":
                     continue
-                if isinstance(entry, dict):
-                    nbytes = _eviction_bytes_face(entry)
-                    total = entry.get("total_bytes")
-                    shards = entry.get("shards")
-                    if not nbytes:
-                        if isinstance(total, int):
-                            nbytes = total
-                        elif isinstance(shards, list):
-                            nbytes = sum(int(s.get("bytes", 0))
-                                         for s in shards
-                                         if isinstance(s, dict))
+                nbytes = _eviction_bytes_face(entry)
                 if nbytes:
                     buckets.append((FAMILY_EVICTION, nbytes))
         for family, nbytes in buckets:
             slot = native.setdefault(family, {"count": 0, "bytes": 0})
             slot["count"] += 1
-            slot["bytes"] += int(nbytes)
+            slot["bytes"] += nbytes
 
     csv_path = out_path if out_path is not None else (
         run_dir / "cache_events.csv")

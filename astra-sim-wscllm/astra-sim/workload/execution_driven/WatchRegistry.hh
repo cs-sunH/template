@@ -34,19 +34,24 @@ Semantics (all explicit, none implied):
     regardless of which path produced the terminal fact (real traces
     contain INVALID_NODE / metadata nodes that are always skipped).
   - A watch fires ONCE, synchronously inside on_node_terminal, when every
-    expected member has a satisfying terminal; the fire is queued for
-    fired_and_drain() and reported to the fire notifier (step 1-6 wires the
-    notifier to the DecisionMailbox push).
+    expected member has a satisfying terminal; the fire is reported to the
+    fire notifier (step 1-6 wires the notifier to the DecisionMailbox push).
   - Lifecycle: register once, fire once, remove_watch on request end / batch
-    abort, remove_all on run finish; the run-end audit is
-    stale_count() == 0 (every registered watch either fired or was removed).
+    abort; the run-end audit is stale_count() == 0 (every registered watch
+    either fired or was removed).
 
 The online CompletionObserver hook (online_completion_hook below) does
-EXACTLY two things (步骤 1-5 操作 3): (1) record the completion fact via
-WatchRegistry::on_node_terminal and (2) write the DecisionMailbox when a
-watch fires -- the notifier wiring lands in step 1-6. It NEVER calls
-NodeStore::finish_node. The static binary never installs a hook (zero
-overhead contract, CompletionObserver.hh).
+EXACTLY four things (步骤 1-5 操作 3, extended by step 1-8 / phase 4):
+(1) record the completion fact via WatchRegistry::on_node_terminal,
+(1b) append the raw terminal fact to the completed-facts ledger (the
+O(1)-counters production arm; exact audit mode keeps the per-node
+record), (2) write the DecisionMailbox when a watch fires (the notifier
+wiring landed in step 1-6) and (3) schedule the per-rank post-commit
+deferred issue pass (step 1-8).
+It NEVER calls GraphSource::finish_node (dependency release belongs
+exclusively to Workload::call). (Historical note, 2026-10-01: "the static
+binary never installs a hook" -- the static path is retired in this repo;
+the online entry is the sole binary, CompletionObserver.hh.)
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_WATCHREGISTRY_HH
@@ -62,8 +67,10 @@ overhead contract, CompletionObserver.hh).
 #include <vector>
 
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
+// DecisionMailbox.hh is required: CompletedFactAccumulator (below) is
+// defined there. (The NodeStore.hh include was removed 2026-09-27: no
+// symbol from it is used, and DecisionMailbox.hh already pulls it in.)
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
-#include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 namespace NetworkAnalytical {
 class EventQueue;
@@ -82,9 +89,6 @@ struct CompletionKey {
     bool operator==(const CompletionKey& other) const {
         return rank == other.rank && node_id == other.node_id &&
                generation == other.generation;
-    }
-    bool operator!=(const CompletionKey& other) const {
-        return !(*this == other);
     }
     bool operator<(const CompletionKey& other) const {
         if (rank != other.rank) {
@@ -144,12 +148,16 @@ class WatchRegistry {
 
     /// Register a stage-completion watch over an exact member set (frozen).
     /// Duplicate identity (request_id, stage, generation) returns the
-    /// existing watch_id (register once / fire once). Empty expected_members
-    /// never fires (programming error caught by the end audit).
+    /// existing watch_id (register once / fire once) and, when `created` is
+    /// provided, reports created=false so the committer can reject the
+    /// duplicate as a named protocol error (each identity is emitted exactly
+    /// once by the producer). Empty expected_members never fires
+    /// (programming error caught by the end audit).
     uint64_t register_stage_watch(
         const std::string& request_id, const std::string& stage,
         uint64_t generation, std::set<CompletionKey> expected_members,
-        std::set<NodeTerminalStatus> satisfying_statuses);
+        std::set<NodeTerminalStatus> satisfying_statuses,
+        bool* created = nullptr);
 
     /// Completion-fact recording, called by the online hook (read-only with
     /// respect to the graph; never releases dependencies). The direct member
@@ -157,10 +165,6 @@ class WatchRegistry {
     /// request_id/stage metadata. A key may belong to multiple watches; each
     /// retains its own duplicate/status/fire semantics.
     void on_node_terminal(const CompletionKey& key, NodeTerminalStatus status);
-
-    /// Fired watches since the last call in no-notifier fixture/polling mode;
-    /// production notifier mode retains no polling queue.
-    std::vector<WatchFire> fired_and_drain();
 
     /// Registered-but-not-fired watches. Run-end audit must be 0 (aborted
     /// requests must remove_watch before finishing).
@@ -186,8 +190,6 @@ class WatchRegistry {
     /// (request_id 前缀 "batch_train_")。O(存活哨兵数)。
     void drain_fired_sentinels();
 
-    void remove_all();
-
     /// Fire notification (step 1-6 wires this to the DecisionMailbox push).
     void set_fire_notifier(WatchFireNotifier notifier);
 
@@ -209,7 +211,6 @@ class WatchRegistry {
         request_to_watch_ids_;
     // 拼 batch 适配(2026-08-22):哨兵 watch id 索引。
     std::vector<uint64_t> sentinel_watch_ids_;
-    std::vector<WatchFire> fired_;
     WatchFireNotifier notifier_;
 };
 
@@ -275,8 +276,9 @@ struct OnlineCompletionHookContext {
 ///   (3) (step 1-8) schedule the per-rank post-commit deferred issue pass
 ///       (ready-set drain; runs after finish_node in the same tick).
 /// NEVER calls GraphSource::finish_node: dependency release belongs
-/// exclusively to Workload::call. The static binary never installs this
-/// hook (static hook stays null, byte-exact).
+/// exclusively to Workload::call. (Historical note, 2026-10-01: "the
+/// static binary never installs this hook" -- the static path is retired
+/// in this repo; the online entry always installs it.)
 void online_completion_hook(void* ctx, int rank, uint64_t node_id,
                             const char* request_id, const char* stage,
                             uint64_t generation, uint64_t tick,

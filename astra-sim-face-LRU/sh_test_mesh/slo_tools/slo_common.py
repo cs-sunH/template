@@ -25,6 +25,7 @@ import os
 import pickle
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional, Sequence
 
@@ -43,12 +44,64 @@ def fail(message: str) -> None:
     raise SloToolError(message)
 
 
+# (2026-09-30, ported from the joint repo) INPUT_READ_ERRORS（批次 D 镜像）：
+# 坏 UTF-8/IO/CSV/gzip 类读取错误与 SloToolError 同出口
+# （EXIT_FAIL_CLOSED=2），不再逃逸成裸 traceback + 退出码 1。iter_jsonl
+# （R7-F1）已在读取层把 UnicodeDecodeError/OSError 转成 SloToolError；
+# 本通道兜住其余读取面（read_request_metrics 的 CSV 坏字节、restore 步
+# 整读损坏的 cpp.log.gz、BoundedSorter spill IO 等）。覆盖面：
+# UnicodeDecodeError（坏字节）；OSError（缺文件/权限；gzip.BadGzipFile
+# 是其子类）；csv.Error（结构坏行）；EOFError（截断 gzip）；zlib.error
+# （坏 deflate 流）。
+INPUT_READ_ERRORS = (UnicodeDecodeError, OSError, csv.Error, EOFError,
+                     zlib.error, pickle.UnpicklingError)
+
+
+def _reject_json_constant(token: str) -> None:
+    fail(f"JSON 含非有限常量字面量 {token}——NaN/Infinity 不进入本工具链"
+         f"（fail-closed）")
+
+
+def load_json_strict(text: str, where: str) -> Any:
+    """json.loads 的 fail-closed 变体：NaN/Infinity/-Infinity 字面量一律拒绝。
+
+    (2026-09-30, ported from the joint repo) iter_jsonl/read_cpp_metric_
+    records 已有内联 parse_constant 门（O9）；本入口供 manifest 类整体装载
+    （load_slo_manifest/load_request_manifest）复用同一教义。其余解析错误
+    与 json.loads 同语义，统一转 SloToolError。
+    (2026-09-30 第二轮审计 MH-1) 同时挂 parse_float 有限值门：1e400 这类
+    越界浮点字面量经 float() 收敛成 inf 而 parse_constant 不覆盖——不挂
+    该钩子时 inf 会进入 require_param_* 并以裸 OverflowError（退出码 1）
+    逃逸 fail-closed 通道。
+    """
+    def _finite_float(token: str) -> float:
+        value = float(token)
+        if not math.isfinite(value):
+            _reject_json_constant(token)
+        return value
+
+    try:
+        return json.loads(text, parse_constant=_reject_json_constant,
+                          parse_float=_finite_float)
+    except json.JSONDecodeError as exc:
+        fail(f"{where}: 非法 JSON（{exc}）")
+
+
 def run_main(main_fn) -> int:
-    """统一入口：SloToolError → stderr + EXIT_FAIL_CLOSED。"""
+    """统一入口：SloToolError → stderr + EXIT_FAIL_CLOSED。
+
+    (2026-09-30, ported from the joint repo) 坏 UTF-8/IO/CSV/gzip 读取
+    错误（INPUT_READ_ERRORS）并入同一 fail-closed 出口，不再裸
+    traceback + 退出码 1。
+    """
     try:
         return main_fn()
     except SloToolError as exc:
         print(f"[slo-tools] FAIL-CLOSED: {exc}", file=sys.stderr)
+        return EXIT_FAIL_CLOSED
+    except INPUT_READ_ERRORS as exc:
+        print(f"[slo-tools] FAIL-CLOSED: 输入读取失败"
+              f"（{type(exc).__name__}）：{exc}", file=sys.stderr)
         return EXIT_FAIL_CLOSED
 
 
@@ -71,9 +124,12 @@ def load_slo_manifest(path: Optional[Path] = None) -> dict:
             f"SLO 参数清单不存在：{manifest_path}（--manifest 可显式指定；"
             f"仓内默认位置 sh_test_mesh/slo_tools/{SLO_MANIFEST_FILENAME}）")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        fail(f"SLO 参数清单不是合法 JSON：{manifest_path}: {exc}")
+        text = manifest_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"SLO 参数清单不可读：{manifest_path}: {exc}")
+    # (2026-09-30, ported from the joint repo) 经 load_json_strict 装载——
+    # NaN/Infinity 字面量在 parse 层即拒绝。
+    manifest = load_json_strict(text, str(manifest_path))
     if manifest.get("schema_version") != 1:
         fail(
             f"SLO 参数清单 schema_version 必须为 1，实得 "
@@ -212,10 +268,22 @@ def is_na(value: Any) -> bool:
 
 
 def parse_ns(value: Any, field: str, where: str) -> Optional[int]:
-    """整数纳秒解析：'NA'→None；其余必须为非负整数（fail-closed）。"""
+    """整数纳秒解析：'NA'→None；其余必须为非负整数（fail-closed）。
+
+    (2026-09-30, ported from the face repo) bool 与下划线字面量一律拒绝
+    （R8-F4）：int("1_000", 10) 会把 "1_000" 静默收成 1000，bool 经
+    str() 变 "True" 且类型化调用面（manifest JSON）下 True 按整数 1
+    参与算术——两者都不是产物的合法字面量口径。
+    """
+    if isinstance(value, bool):
+        fail(f"{where}: 字段 {field} 为布尔值（{value!r}）——整数纳秒"
+             f"不允许 bool")
     if is_na(value):
         return None
     text = str(value).strip()
+    if "_" in text:
+        fail(f"{where}: 字段 {field} 含下划线字面量（实得 {value!r}）"
+             f"——只接受十进制整数字面量")
     try:
         number = int(text, 10)
     except ValueError:
@@ -226,9 +294,16 @@ def parse_ns(value: Any, field: str, where: str) -> Optional[int]:
 
 
 def parse_int(value: Any, field: str, where: str) -> Optional[int]:
+    """整数解析：'NA'→None；拒绝 bool/下划线字面量（口径同 parse_ns，
+    R8-F4；2026-09-30, ported from the face repo）。"""
+    if isinstance(value, bool):
+        fail(f"{where}: 字段 {field} 为布尔值（{value!r}）——整数不允许 bool")
     if is_na(value):
         return None
     text = str(value).strip()
+    if "_" in text:
+        fail(f"{where}: 字段 {field} 含下划线字面量（实得 {value!r}）"
+             f"——只接受十进制整数字面量")
     try:
         return int(text, 10)
     except ValueError:
@@ -345,7 +420,6 @@ def validated_request_rows(records: Iterable[dict[str, str]],
             record.get("hidden_ratio"), "hidden_ratio", where)
         record["turn_index"] = parse_int(
             record.get("turn_index"), "turn_index", where)
-        record["_queue_index"] = queue_index
         typed.append(record)
         if queue_index in seen:
             dup = True
@@ -383,23 +457,44 @@ def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
 #   * chunk 容量 C = env SH_SLO_SORT_CHUNK（缺省 65536 元素；<=0 按 1 计）；
 #   * 排序期驻留 = 恰一个未满 chunk（<=C 元素）+ spill 文件句柄；归并期
 #     额外持有每路 spill 的有界读缓冲（heapq.merge 惰性迭代，不整读）；
-#   * spill 文件 = pickle 序列化的已排序 chunk，落在系统临时目录，
-#     sorted_iter 耗尽后删除（进程退出兜底再删一次）；
+#   * spill 文件 = 已排序 chunk 的逐条 pickle 流（逐元素 dump；归并期
+#     逐元素 load，单路只驻留一个元素，不整读 chunk）（R2-F6，
+#     2026-09-30, ported from the face repo：实现与本合同对齐），落在系统
+#     临时目录，sorted_iter 耗尽后删除；提前中断（消费方 break/islice）
+#     经 _merged 的 finally 同样确定性删除。无进程退出兜底——消费方既
+#     不耗尽也不 close 迭代器而直接弃置时，残片留待系统临时目录清理；
 #   * 只用于纯整数/整数元组的全序排序（比较语义与 sorted() 逐元素相同，
 #     外部归并输出序列 ≡ sorted()；相等元素不可区分 ⇒ 无稳定性可见差）。
 #   * 需要稳定序（比较键并列时按输入序）的调用方必须自带单调序号列
-#     （如 (tick, seq, payload)）——见 slo_stats/hbm_watermark 接入点。
+#     （如 (tick, seq, payload)）——见 slo_stats 接入点（backlog 重建 /
+#     e2e 分位；hbm_watermark 不经本通道）。
 SORT_CHUNK_ENV = "SH_SLO_SORT_CHUNK"
 SORT_CHUNK_DEFAULT = 65536
 
 
 def bounded_sort_chunk_size() -> int:
     raw = os.environ.get(SORT_CHUNK_ENV, "")
+    if not raw:
+        return SORT_CHUNK_DEFAULT
+    # (2026-09-30, ported from the face repo) R9-F4：调优旋钮（非数据
+    # 通道）：非法值回退默认但必须留痕——静默回退会让"设了不生效"
+    # 不可诊断（下划线字面量与 parse_ns/parse_int 同口径，
+    # int("1_000", 10) 会静默收成 1000）。
+    if "_" in raw:
+        print(f"[slo-common] 警告：{SORT_CHUNK_ENV} 含下划线字面量"
+              f"（{raw!r}）——回退默认 {SORT_CHUNK_DEFAULT}", file=sys.stderr)
+        return SORT_CHUNK_DEFAULT
     try:
-        size = int(raw) if raw else SORT_CHUNK_DEFAULT
+        size = int(raw, 10)
     except ValueError:
-        size = SORT_CHUNK_DEFAULT
-    return size if size > 0 else 1
+        print(f"[slo-common] 警告：{SORT_CHUNK_ENV} 非整数（{raw!r}）"
+              f"——回退默认 {SORT_CHUNK_DEFAULT}", file=sys.stderr)
+        return SORT_CHUNK_DEFAULT
+    if size <= 0:
+        print(f"[slo-common] 警告：{SORT_CHUNK_ENV} 非正（{raw!r}）——"
+              f"按 1 计（每 chunk 一元素，强制 spill 路径）", file=sys.stderr)
+        return 1
+    return size
 
 
 class BoundedSorter:
@@ -432,7 +527,11 @@ class BoundedSorter:
         os.close(fd)
         path = Path(name)
         with path.open("wb") as handle:
-            pickle.dump(self._buffer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            # (2026-09-30, ported from the face repo) R2-F6：逐条 dump
+            # （非整块列表一次 dump）：归并期才能逐条 load，单路 spill
+            # 同一时刻只驻留一个元素（内存合同，见文件头注）。
+            for item in self._buffer:
+                pickle.dump(item, handle, protocol=pickle.HIGHEST_PROTOCOL)
         self._spills.append(path)
         self._buffer = []
 
@@ -441,7 +540,10 @@ class BoundedSorter:
         with path.open("rb") as handle:
             while True:
                 try:
-                    yield from pickle.load(handle)
+                    # (2026-09-30, ported from the face repo) R2-F6：逐条
+                    # load：每次 next() 只反序列化一个元素，heapq.merge
+                    # 各路各持一个元素，不整读 chunk。
+                    yield pickle.load(handle)
                 except EOFError:
                     break
 
@@ -458,6 +560,13 @@ class BoundedSorter:
             try:
                 yield from heapq.merge(*iters)
             finally:
+                # (2026-09-30, ported from the face repo) R2-F6：提前中断
+                # （消费方 break/islice）时先显式 close 各路 spill 生成器：
+                # 其 with 块借 GeneratorExit 确定性释放文件句柄，再统一
+                # unlink（否则句柄悬置到 GC，句柄打开期间的 unlink 在强制
+                # 文件锁平台上会失败留下残片）。
+                for spill_iter in iters:
+                    spill_iter.close()
                 for path in spills:
                     try:
                         path.unlink()
@@ -483,6 +592,12 @@ def nearest_rank_percentile_many(values: Sequence[int],
     n = len(values)
     if n == 0:
         fail("分位数计算：样本为空")
+    # (2026-10-01) 空列表防御:裸 assert 在 python -O 下被剥离后会以
+    # AssertionError 逃出 fail-closed 通道(值错误恒 exit 2);p_list 为空
+    # 直接 fail。末行的 not-None 过滤同属该边界死代码,一并删除(正常
+    # 路径必非 None)。
+    if not p_list:
+        fail("分位数列表为空")
     for p in p_list:
         if not 0.0 < p <= 1.0:
             fail(f"分位数 p 非法：{p}")
@@ -501,12 +616,14 @@ def nearest_rank_percentile_many(values: Sequence[int],
             current = next(ordered)
             cursor += 1
         results[i] = current
-    assert all(value is not None for value in results)
     return [value for value in results if value is not None]  # type: ignore[ruff]
 
 
 def fmt_ratio(value: Optional[float], digits: int = 6) -> str:
-    if value is None:
+    # (2026-09-30, ported from the joint repo) O9：nan/inf 一律 NA（与
+    # iter_jsonl 的 NaN/Inf fail-closed 同教义；修前 f"{nan:.6f}" 写成
+    # 'nan' 字符串穿透 CSV）。
+    if value is None or not math.isfinite(value):
         return NA
     return f"{value:.{digits}f}"
 
@@ -550,17 +667,37 @@ def resolve_cpp_metric_log(run_dir: Path) -> Path:
 def iter_jsonl(path: Path) -> Iterator[dict]:
     require_file(path, f"JSONL 文件")
     with path.open(encoding="utf-8") as handle:
-        for lineno, line in enumerate(handle, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                fail(f"{path}:{lineno}: 非法 JSON（{exc}）")
-            if not isinstance(record, dict):
-                fail(f"{path}:{lineno}: JSONL 行必须是对象")
-            yield record
+        try:
+            for lineno, line in enumerate(handle, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+
+                def _reject_constant(text: str) -> None:
+                    # (2026-09-30, ported from the joint repo) O9：
+                    # NaN/Infinity/-Infinity 字面量 fail-closed——默认
+                    # json.loads 会静默收 nan/inf 进统计，下游 write_csv
+                    # 只 None→NA、nan 写成 'nan' 字符串再被 float() 静默
+                    # 中毒；NA 语义一律走 null/'NA'（与 parse_ns/parse_int
+                    # 的 fail-closed 同教义）。
+                    fail(f"{path}:{lineno}: 非法 JSON 数值字面量 {text!r}"
+                         f"（NaN/Infinity fail-closed；缺失语义请用 null 或 "
+                         f"'NA'）")
+
+                try:
+                    record = json.loads(line, parse_constant=_reject_constant)
+                except json.JSONDecodeError as exc:
+                    fail(f"{path}:{lineno}: 非法 JSON（{exc}）")
+                if not isinstance(record, dict):
+                    fail(f"{path}:{lineno}: JSONL 行必须是对象")
+                yield record
+        except (UnicodeDecodeError, OSError) as exc:
+            # (2026-09-30, ported from the face repo) R7-F1：读取层异常
+            # （坏编码/IO 错误）与 JSON 损坏同走 fail-closed：裸
+            # UnicodeDecodeError/OSError 会绕过 SloToolError 通道以退出码
+            # 1 崩出（driver 共享迭代器场景下还会吞掉各 sink 的同错广播
+            # 留痕）。
+            fail(f"{path}: 读取失败（{exc!r}）")
 
 
 def read_cpp_metric_records(cpp_log: Path) -> Iterator[dict]:
@@ -580,8 +717,30 @@ def read_cpp_metric_records(cpp_log: Path) -> Iterator[dict]:
             if not stripped.startswith("[METRIC]"):
                 continue
             payload = stripped[len("[METRIC]"):].strip()
+
+            def _reject_constant(text: str) -> None:
+                # (2026-09-30, ported from the joint repo) JSON's default
+                # decoder accepts NaN/Infinity extensions; SLO inputs
+                # require missing values to be explicit null/NA.
+                fail(f"{cpp_log}:{lineno}: [METRIC] 非法 JSON 数值字面量 "
+                     f"{text!r}（NaN/Infinity fail-closed）")
+
+            def _parse_finite_float(text: str) -> float:
+                # (2026-09-30, ported from the joint repo) 非有限浮点门：
+                # 过大浮点字面量（1e400）经 float() 收敛成 inf——
+                # parse_constant 不覆盖该形态，单独在 parse_float 钩子拒。
+                value = float(text)
+                if not math.isfinite(value):
+                    fail(f"{cpp_log}:{lineno}: [METRIC] 非有限 JSON 浮点数 "
+                         f"{text!r}（要求有限数值）")
+                return value
+
             try:
-                record = json.loads(payload)
+                record = json.loads(
+                    payload,
+                    parse_constant=_reject_constant,
+                    parse_float=_parse_finite_float,
+                )
             except json.JSONDecodeError as exc:
                 fail(f"{cpp_log}:{lineno}: [METRIC] 行 JSON 非法（{exc}）")
             if not isinstance(record, dict):
@@ -613,12 +772,83 @@ def detect_repo_variant(run_dir: Path, explicit: Optional[str] = None) -> str:
     return str(variant)
 
 
+# H5②（2026-09-29）：WP2 会话透传字段。face-LRU 物化器只把这两个字段写进
+# manifest.json（plan_materializer._derive_manifest_requests 的 sidecar
+# 透传），metrics_manifest.json 的合成口径（_derive_metrics_requests）
+# 不带——装载链若只认 metrics_manifest.json，session 统计的透传字段永远
+# 读不到（t_session 恒 NA、exit 0）。已装载 manifest 的 requests 整体缺
+# 这两个字段时，从姊妹 manifest.json（与已装载文件同目录）与
+# run_dir/manifest.json 按 request_id 补齐缺键（只补缺、不覆盖既有值；
+# 无候选/无匹配按原样返回——"字段缺席 → NA+计数"契约不变）。
+SESSION_PASSTHROUGH_FIELDS: tuple[str, ...] = ("human_time_ns", "tool_time_ns")
+
+
+def _requests_carry_passthrough(manifest: dict) -> bool:
+    requests = manifest.get("requests")
+    if not isinstance(requests, list):
+        return True  # 结构问题交 manifest_requests 的 fail-closed
+    return any(isinstance(row, dict)
+               and any(key in row for key in SESSION_PASSTHROUGH_FIELDS)
+               for row in requests)
+
+
+def _supplement_session_passthrough(manifest: dict, loaded_from: Path,
+                                    run_dir: Path) -> Optional[Path]:
+    """从 manifest.json 候选补齐 per-request 会话透传字段（只补缺键）。
+
+    返回实际提供补充的路径；无需补充/无可候选时返回 None。
+    """
+    if _requests_carry_passthrough(manifest):
+        return None
+    candidates: list[Path] = []
+    if loaded_from is not None:
+        candidates.append(loaded_from.parent / "manifest.json")
+    candidates.append(run_dir / "manifest.json")
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen or not candidate.is_file():
+            continue
+        seen.add(candidate)
+        try:
+            # (2026-10-01) 与 load_json_strict 同口径:NaN/Infinity 字面量
+            # 在解析层拒绝(默认 json.loads 接受);失败仍按本函数契约吞掉
+            # (补充源损坏不升级 fail-closed,主源装载已各自把关)。
+            data = json.loads(
+                candidate.read_text(encoding="utf-8"),
+                parse_constant=_reject_json_constant)
+        except (OSError, ValueError):
+            continue  # 补充源缺失/损坏不升级为 fail-closed（NA 契约兜底）
+        requests = data.get("requests") if isinstance(data, dict) else None
+        if not isinstance(requests, list):
+            continue
+        donor_by_id = {row.get("request_id"): row for row in requests
+                       if isinstance(row, dict)}
+        filled = 0
+        for row in manifest.get("requests") or []:
+            if not isinstance(row, dict):
+                continue
+            donor = donor_by_id.get(row.get("request_id"))
+            if not isinstance(donor, dict):
+                continue
+            for key in SESSION_PASSTHROUGH_FIELDS:
+                if key not in row and key in donor:
+                    row[key] = donor[key]
+                    filled += 1
+        if filled:
+            return candidate
+    return None
+
+
 def load_request_manifest(run_dir: Path,
                           explicit: Optional[Path] = None) -> dict:
     """per-request manifest（WP1/WP2 连接与 session 字段透传来源）。
 
     优先级：--request-manifest 显式 > run_dir/metrics_manifest.json >
     cpp.log init 行 manifest_path 指向的 generated 副本。
+    H5②：已装载 manifest 的 requests 整体缺 human_time_ns/tool_time_ns
+    时，从姊妹 manifest.json / run_dir/manifest.json 按 request_id 补齐
+    （成功时在返回对象上标注 ``_passthrough_supplement_source``；补不齐
+    保持原样，消费方按 NA 契约处理）。
     """
     candidates: list[Path] = []
     if explicit is not None:
@@ -637,11 +867,17 @@ def load_request_manifest(run_dir: Path,
     for candidate in candidates:
         if candidate.is_file():
             try:
-                data = json.loads(candidate.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                fail(f"per-request manifest 非法 JSON：{candidate}: {exc}")
+                text = candidate.read_text(encoding="utf-8")
+            except OSError as exc:
+                fail(f"per-request manifest 不可读：{candidate}: {exc}")
+            # (2026-09-30, ported from the joint repo) 经 load_json_strict
+            # 装载——NaN/Infinity 字面量在 parse 层即拒绝。
+            data = load_json_strict(text, str(candidate))
             if not isinstance(data, dict):
                 fail(f"per-request manifest 必须是对象：{candidate}")
+            source = _supplement_session_passthrough(data, candidate, run_dir)
+            if source is not None:
+                data["_passthrough_supplement_source"] = str(source)
             return data
     fail(
         f"找不到 per-request manifest（尝试：{[str(c) for c in candidates]}）——"

@@ -18,8 +18,7 @@ namespace AstraSim {
 class Sys;
 class LogGP : public Callable {
   public:
-    LogGP(std::string /*name*/,  // name member had no readers; param kept for call-site compat
-          Sys* sys,
+    LogGP(Sys* sys,
           Tick L,
           Tick o,
           Tick g,
@@ -27,7 +26,7 @@ class LogGP : public Callable {
           EventType trigger_event);
     ~LogGP();
     void process_next_read();
-    void request_read(int bytes,
+    void request_read(uint64_t bytes,
                       bool processed,
                       bool send_back,
                       Callable* callable);
@@ -41,11 +40,10 @@ class LogGP : public Callable {
                         bool model_shared_bus,
                         int communication_delay);
 
-    enum class State { Free, waiting, Sending, Receiving };
+    enum class State { Free, Sending, Receiving };
     enum class ProcState { Free, Processing };
 
     MemBus* NPU_MEM;
-    int request_num;
     Tick L;
     Tick o;
     Tick g;
@@ -69,6 +67,8 @@ class LogGP : public Callable {
     int subsequent_reads;
     int THRESHOLD;
     int local_reduction_delay;
+
+    Tick reduction_processing_delay(Tick size) const;
 };
 
 }  // namespace AstraSim

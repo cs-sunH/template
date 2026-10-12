@@ -45,6 +45,15 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      counted, never submitted, reported; any drop fail-closes the run-end
      completion audit). Ingress backpressure (full command queue) parks a
      cursor; later pump() calls resume from it.
+     Capacity note (2026-09-27): the calendar has no internal top-up
+     ceiling -- the bounded ingress command queue (default capacity 4096)
+     is the only backpressure. A turn-0 (session) count above that capacity
+     parks the cursor; if the clock advances past a parked entry's declared
+     arrival, its submission counts late_static_submit and the run-end
+     arrival gate fail-closes (root cause: capacity backpressure, not late
+     discovery -- see RequestIngress::late_static_submit_count). Turn-0
+     scale above the ingress capacity is therefore unsupported fail-closed,
+     never silently degraded.
   4. EQUIVALENCE ARGUMENT (why the calendar is not a behavior change for
      inputs that were already correct). EventQueue is a
      std::map<EventTime, EventList>; all events scheduled within one drain at
@@ -56,11 +65,17 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      (arrival, queue_index) order: within an equal-arrival group the
      insertion order is again queue_index ascending. Equal alarm groups are
      equal arrival groups (all turn-0 Submits drain at t=0 before any event
-     fires, so no Submit is ever clamped except arrival==0 -> 1, and those
-     rows form one group whose internal order is row order == queue_index
-     order in both arms). Hence the (alarm_time, queue_index) fire sequence
-     is ELEMENTWISE IDENTICAL to the old unbounded arm -- for ANY input, not
-     just monotonic ones. For inputs that were already arrival-monotonic in
+     fires, so no Submit is ever clamped except arrival==0 -> 1). Scope
+     correction (2026-09-27): the earlier "ELEMENTWISE IDENTICAL for ANY
+     input" claim had exactly one counter-example family -- a tick-1 alarm
+     group that MIXES those clamped arrival==0 rows with genuine arrival==1
+     rows whose file order interleaves them: the old arm inserts that group
+     in row order (queue_index ascending), the calendar arm in (arrival,
+     queue_index) order, so the two arms can order that one group's members
+     differently (same member set, same tick 1). Outside that family the
+     (alarm_time, queue_index) fire sequence is ELEMENTWISE IDENTICAL to
+     the old unbounded arm -- for any monotonic OR non-monotonic input.
+     For inputs that were already arrival-monotonic in
      file order (the 20.csv smoke input) the calendar order IS the row order,
      so the old bounded-window arm is byte-identical too (V3 three-way
      comparison anchors on this). What changes is only that a
@@ -72,18 +87,22 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      algorithm as the Python materializer's sidecar writer), csv byte count,
      data-row count, session count, turn-0 count, turn-0 arrival min/max,
      turn-0 file-order adjacent inversion count, and session-block
-     contiguity. If a sidecar `<queue_csv>.provenance.json` exists, every
-     field is compared; any mismatch (or unparsable JSON, or schema != 1)
-     fails the run with [Error] + exit BEFORE any Submit. An absent sidecar
-     logs one "[online] provenance sidecar: absent (no gate)" line and
-     continues (smoke fixtures materialized by older scripts).
+     contiguity. The sidecar `<queue_csv>.provenance.json` is REQUIRED (P1
+     fix 2026-09-28): every field is compared; any mismatch (or unparsable
+     JSON, or schema != 1, or an ABSENT sidecar) fails the run with [Error]
+     + exit BEFORE any Submit. The former "absent (no gate)" pass-through
+     let a truncated half-written queue (materializer dying mid-derivation,
+     before its sidecar existed) silently shrink the simulation input while
+     every gate stayed green; the materializer now publishes
+     queue+sidecar atomically and the reader refuses any queue that arrives
+     without its provenance record.
   6. ARRIVAL TIME AUDIT + RUN-END GATE. Every turn-0 entry records its
      declared arrival and the simulation tick at which its Submit was
      enqueued (discovered; via RequestIngress::current_time()). The ingress
      records the effective alarm tick per static Submit. At run end the
      reader joins the two (audit_static_arrivals): per-entry
-     declared/discovered/effective/late_by_ns/late_source (static_late /
-     t0_boundary / on_time) plus summary counters and ingress-delay
+     declared/discovered/effective/late_by_ns/late_source (on_time /
+     t0_boundary / static_submit_late) plus summary counters and ingress-delay
      percentiles (nearest-rank p50/p99/max). The GATE for a finite static
      CSV run: late_static_submit_count == 0 AND every turn-0 ingress_delay
      == 0 except t0-boundary rows (declared==0, discovered==0, effective==1
@@ -122,6 +141,24 @@ with producers.
 
 namespace AstraSim {
 namespace ExecutionDriven {
+
+/// P2-9 fix (2026-09-28): the canonical 8-column request-queue CSV header.
+/// The reader parses every data row positionally, so a header whose column
+/// names or order disagree with this exact string would silently re-map the
+/// schema; the index pass therefore fail-closes on any first non-empty line
+/// that does not match (a single trailing '\r' is tolerated for CRLF
+/// inputs, matching the binary-mode line split). Shared by the reader and
+/// the reader unit tests so both pin the same schema.
+inline constexpr char kRequestQueueCsvHeader[] =
+    "session_id,turn_index,request_id,prefill_length,decode_length,"
+    "session_arrival_time_ns,inter_request_interval_ns,description";
+
+/// D3 fix (2026-09-28): positive-length lexicon shared by all three ports of
+/// the trace chain. prefill_length and decode_length must be >= 1: the derive
+/// materializer fail-closes on a non-positive length row and the Python
+/// loader (generate_trace.parse_request_length) has always required a
+/// positive length; the reader rejects 0 in-row (reader_fatal) since the same
+/// batch, so no port admits the shape anymore.
 
 class WindowedTraceReader {
   public:
@@ -169,13 +206,6 @@ class WindowedTraceReader {
     /// The whole-file data-row count. Equals data_rows() after the index
     /// pass. The run-end completion audit denominator.
     uint64_t total_data_rows() const { return data_rows_; }
-    /// Number of pump calls that indexed rows or submitted at least one
-    /// calendar entry.
-    size_t read_pumps() const { return read_pumps_; }
-    /// Accumulated wall time spent reading/parsing the index pass.
-    uint64_t io_read_ns() const { return io_read_ns_; }
-    /// Peak outstanding (submitted-but-unfired turn-0) count.
-    size_t peak_window_occupancy() const { return peak_occupancy_; }
     /// Exact current count of submitted turn-0 rows whose alarm has not
     /// fired yet.
     size_t current_window_occupancy() const { return outstanding_rows_.size(); }
@@ -193,11 +223,11 @@ class WindowedTraceReader {
         uint64_t turn0_adjacent_inversions = 0;
         bool session_blocks_contiguous = true;
     };
+    /// 测试专用 (test-only accessor; the production run-end report prints
+    /// the same stats through report(), and the sidecar gate consumes the
+    /// fields internally -- windowed_trace_reader_test.cc and
+    /// calendar_reader_oracle_test.cc assert on it).
     const ProvenanceStats& provenance() const { return prov_; }
-    /// Sidecar comparison outcome ("matched" / "absent-no-gate").
-    const std::string& provenance_sidecar_status() const {
-        return provenance_status_;
-    }
 
     /// Per-turn-0 arrival audit record (joined from the reader's calendar
     /// and the ingress's effective-arrival records). late_source:
@@ -215,8 +245,10 @@ class WindowedTraceReader {
 
     /// Summary of the arrival audit + the run-end static-arrival gate
     /// (finite static CSV runs; external stream / future alarms never
-    /// gated). delay percentiles are nearest-rank over ALL turn-0 entries
-    /// (t0-boundary rows contribute delay 1).
+    /// gated). delay percentiles are nearest-rank over the SUBMITTED
+    /// turn-0 entries (rows rejected by a --request-max-arrival-ns window
+    /// or never submitted are outside the delay domain; t0-boundary rows
+    /// contribute delay 1).
     struct ArrivalAuditSummary {
         uint64_t turn0_submitted = 0;
         uint64_t late_static_submit = 0;
@@ -238,7 +270,9 @@ class WindowedTraceReader {
     ArrivalAuditSummary audit_static_arrivals() const;
 
     /// One [online] windowed reader: ... line (rows, sessions, calendar
-    /// stats, io ns, throughput, late split, rejected).
+    /// stats, io ns, throughput, rejected). The late-arrival split counts
+    /// are NOT part of this line: main_online prints them on the adjacent
+    /// "[online] ingress late arrivals:" line.
     void report(std::ostream& os) const;
 
   private:
@@ -272,7 +306,6 @@ class WindowedTraceReader {
     // ---- index pass state ----
     std::ifstream file_;  // binary; chunked raw-byte reads
     ProvenanceStats prov_;
-    std::string provenance_status_ = "not-indexed";
     uint64_t fnv1a64_ = 14695981039346656037ULL;  // FNV-1a 64 offset basis
     // Session-block validation state.
     std::string current_session_;
@@ -281,6 +314,15 @@ class WindowedTraceReader {
     uint64_t prev_turn0_arrival_ = 0;
     bool have_prev_turn0_ = false;
     std::unordered_set<std::string> seen_sessions_;
+    // C3 fix (2026-09-28): request_id uniqueness across ALL data rows
+    // (turn-0 AND turn>0, cross-session). The turn>0 arm was already
+    // fail-closed via RequestIngress::register_queue_index (duplicate or
+    // empty id aborts); the turn-0 arm had no check at all -- a duplicated
+    // turn-0 request_id across two session blocks flowed into the calendar
+    // and aliased the two identities downstream (metrics anchors register
+    // per request_id, last-wins). One reader-level set closes the whole
+    // domain before any Submit exists.
+    std::unordered_set<std::string> seen_request_ids_;
 
     // ---- turn-0 calendar ----
     std::vector<CalendarEntry> calendar_;

@@ -10,11 +10,6 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSimAnalytical;
 
-CallbackTracker::CallbackTracker() noexcept {
-    // initialize tracker
-    tracker = {};
-}
-
 std::optional<CallbackTrackerEntry*> CallbackTracker::search_entry(
     const int tag,
     const int src,
@@ -90,4 +85,27 @@ void CallbackTracker::pop_entry(const int tag,
 
     // erase entry from the tracker
     tracker.erase(entry);
+}
+
+bool CallbackTracker::has_entry_with_mismatched_count(
+    const int tag,
+    const int src,
+    const int dest,
+    const ChunkSize chunk_size) noexcept {
+    assert(tag >= 0);
+    assert(src >= 0);
+    assert(dest >= 0);
+    assert(chunk_size > 0);
+
+    // Linear scan: the tracker only holds OUTSTANDING chunks, so the scan
+    // is bounded by the in-flight window, not by the transfer size.
+    for (const auto& keyed_entry : tracker) {
+        const auto& key = keyed_entry.first;
+        if (std::get<0>(key) == tag && std::get<1>(key) == src &&
+            std::get<2>(key) == dest &&
+            std::get<3>(key) != chunk_size) {
+            return true;
+        }
+    }
+    return false;
 }

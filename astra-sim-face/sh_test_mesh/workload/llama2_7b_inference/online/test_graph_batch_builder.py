@@ -23,7 +23,9 @@
 import json
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +40,7 @@ from online.graph_batch_builder import (  # noqa: E402
     OnlineTraceBuilder,
 )
 from online.face_online_scheduler import FaceOnlineScheduler  # noqa: E402
+from online.online_scheduler_base import OnlineSchedulerBase  # noqa: E402
 
 SESSION = "session_train_0"
 REQUEST_A = f"{SESSION}_request_0"
@@ -354,10 +357,10 @@ class TrainEmissionNailTest(unittest.TestCase):
             w_two, 0,
             "train body bytes must amortize weights across members "
             "(trap 1: per-member weight recounting yields W == 0)")
-        # 不变量:向列车加成员 B 的边际字节 = B 的逐 token 激活/KV 分量,
-        # 零额外权重(b2 - b1 == member_b - W)。基元级 B=1/B=2 同迭代
-        # 权重字节相等断言见 test_weight_passes.py(A0)。
-        self.assertEqual(b2 - b1, member_b - w_two)
+        # 注:曾有一行 `assertEqual(b2 - b1, member_b - w_two)` 的"零额外
+        # 权重"不变量断言,但该式是 w_two 定义式的代数恒等式(w_two 消去
+        # 后两侧都等于 b2 - b1),无判别力,已删除;权重摊销的基元级对拍
+        # 见 test_weight_passes.py(A0)。
 
     def test_prefill_train_drain_marker_watch(self):
         """纯 prefill 列车:chunk spans + drain 标记 + end barrier;
@@ -505,6 +508,200 @@ class CompletionGateLifetimeTest(unittest.TestCase):
         self.assertEqual(scheduler.kv_manager.calls, [])
         self.assertEqual(scheduler.graph.retired, [])
         self.assertEqual(len(scheduler._batch["future_alarms"]), 1)
+
+
+class DieBackendEmissionTest(unittest.TestCase):
+    """die 后端发射语境(阶段 C):spec 附着、marker op_role、region
+    融合与 collective 不变量;legacy 路径逐字节不变由上方既有用例钉住。"""
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.resolved = Path(self._temp.name) / "resolved_die_model.json"
+        self.resolved.write_text(json.dumps({
+            "schema_version": 1, "profile": "mesh_die_v1",
+            "die": {"sram-mb-per-core": 0.75, "core-type": "large",
+                    "compute-area-mm2": 800, "hbm-per-side": 4,
+                    "hbm-sides": 1, "noc-width-bits": 512},
+            "derived": {}}))
+        system = Path(self._temp.name) / "system.json"
+        system.write_text(json.dumps({
+            "compute-cost-model": "die",
+            "die-model-profile": "mesh_die_v1"}))
+        config = _make_config()
+        config.position_encoding = "rope"
+        config.system_config = system
+        self.config = config
+
+    def _die_context(self):
+        from online.die_model_adapter import DieModelContext
+        return DieModelContext.from_service({
+            "requests": [],
+            "compute-cost-model": "die",
+            "die-model-config": str(self.resolved),
+        }, self.config)
+
+    def _emit_train(self, die: bool):
+        builder = GraphBatchBuilder(self.config)
+        if die:
+            builder.set_die_context(self._die_context())
+        builder.begin_batch()
+        spans = [(128, 128), (128, 256), (44, 300), (1, 101), (1, 102)]
+        plan = _train_plan(
+            "batch_train_i1_1", spans, iterations=3,
+            exits=(REQUEST_A,), drains=(REQUEST_B,))
+        result = builder.emit_iteration_train(plan)
+        return builder, result
+
+    def test_die_body_fuses_regions_and_attaches_specs(self):
+        builder, _ = self._emit_train(die=True)
+        nodes = _rank_nodes(builder, 2)
+        body = [node for node in nodes
+                if node["request_id"] == "batch_train_i1_1"
+                and node["type"] == COMP_NODE]
+        names = [node["name"] for node in body]
+        # 融合:qk/scale/softmax/av -> attention_region;up/gelu/down ->
+        # ffn_region(17 类体节点 -> 12)。
+        self.assertIn("batch_train_i1_1_all_layers_attention_region", names)
+        self.assertIn("batch_train_i1_1_all_layers_ffn_region", names)
+        for absorbed in ("attention_qk_matmul", "attention_scale_mask",
+                         "attention_softmax", "attention_av_matmul",
+                         "mlp_up_projection", "mlp_gelu",
+                         "mlp_down_projection"):
+            self.assertNotIn(
+                "batch_train_i1_1_all_layers_" + absorbed, names)
+        # 每个体 COMP 节点附 die_op_spec,runtime_ns 恒 0(契约 §2)。
+        for node in body:
+            spec = node["compute"].get("die_op_spec")
+            self.assertIsNotNone(spec, node["name"])
+            self.assertEqual(node["compute"]["runtime_ns"], 0)
+            self.assertEqual(spec["schema_version"], 1)
+            self.assertEqual(spec["phase"], "decode")
+            self.assertEqual(spec["kv_access"], {"identity": "local"})
+            self.assertEqual(
+                spec["provenance"], "transformer_pass_aggregated")
+        region = next(
+            node for node in body
+            if node["name"].endswith("_attention_region"))
+        self.assertEqual(
+            region["compute"]["die_op_spec"]["op_kind"], "attention_region")
+        self.assertEqual(
+            region["compute"]["die_op_spec"]["fusion_policy"], "auto")
+        # 融合节点 num_ops = 四成分之和(与 legacy 同 span 逐类求和)。
+        builder_legacy, _ = self._emit_train(die=False)
+        legacy_body_ops = {
+            node["name"]: node["compute"]["num_ops"]
+            for node in _rank_nodes(builder_legacy, 2)
+            if node["request_id"] == "batch_train_i1_1"
+            and node["type"] == COMP_NODE}
+        expected = sum(
+            legacy_body_ops["batch_train_i1_1_all_layers_" + category]
+            for category in ("attention_qk_matmul", "attention_scale_mask",
+                             "attention_softmax", "attention_av_matmul"))
+        self.assertEqual(region["compute"]["num_ops"], expected)
+
+    def test_die_specs_carry_absolute_span_positions(self):
+        builder, _ = self._emit_train(die=True)
+        node = next(
+            node for node in _rank_nodes(builder, 2)
+            if node["name"].endswith("_all_layers_attention_region"))
+        spans = node["compute"]["die_op_spec"]["spans"]
+        # face 恒等式:kv = q_start + q_tokens,kv 覆盖自会话起点(0)。
+        for record in spans:
+            self.assertEqual(
+                record["q_start_pos"] + record["q_tokens"],
+                record["kv_tokens"])
+            self.assertEqual(record["kv_start_pos"], 0)
+        self.assertEqual(
+            [(record["q_tokens"], record["q_tokens"]) for record in spans],
+            [(span[0], span[0]) for span in
+             [(128, 128), (128, 256), (44, 300), (1, 101), (1, 102)]])
+        # spec 的 TP 切片与发射 rank 一致(instance_1 = ranks (2,3),
+        # TP=2;rank2 -> relative 0:8 头按 shard_extent 平分 -> 4)。
+        tp_slice = node["compute"]["die_op_spec"]["tp_slice"]
+        self.assertEqual(tp_slice["tensor_parallel"], 2)
+        self.assertEqual(tp_slice["tensor_parallel_rank"], 0)
+        self.assertEqual(tp_slice["q_heads_local"], 4)
+        self.assertEqual(tp_slice["kv_heads_local"], 4)
+
+    def test_die_collectives_and_markers_unchanged(self):
+        """collective 不变量 + marker op_role(契约 §7 裁定 3/8)。"""
+        builder_die, result_die = self._emit_train(die=True)
+        builder_legacy, result_legacy = self._emit_train(die=False)
+
+        def collectives(builder):
+            return [
+                (node["name"], node["coll"]["bytes"], node["coll"]["pg_name"])
+                for node in _rank_nodes(builder, 2) if node["coll"]["bytes"]]
+
+        # 两个 All-Reduce + end barrier 的名字/bytes/pg 与 legacy 全等
+        # (融合不改 collective 位置/数量/参与者/bytes)。
+        self.assertEqual(collectives(builder_die), collectives(builder_legacy))
+        # watch 承载节点身份不变:exit 标记仍是列车体后、end barrier 前
+        # 的最后一个真实 COMP 节点(融合少发 5 个体节点,标记绝对 id 相应
+        # 前移——身份/挂点不变,不比绝对 id)。
+        for builder in (builder_die, builder_legacy):
+            nodes = _rank_nodes(builder, 2)
+            barrier_id = next(
+                node["id"] for node in nodes
+                if node["name"] == "batch_train_i1_1_end_barrier")
+            marker = nodes[
+                result_die["exit_members"][REQUEST_A][2]
+                if builder is builder_die else
+                result_legacy["exit_members"][REQUEST_A][2]]
+            self.assertEqual(marker["type"], COMP_NODE)
+            self.assertEqual(marker["name"],
+                             "batch_train_i1_1_exit_" + REQUEST_A)
+            self.assertLess(marker["id"], barrier_id)
+            self.assertEqual(
+                max(node["id"] for node in nodes
+                    if node["id"] < barrier_id
+                    and node["type"] == COMP_NODE),
+                marker["id"])
+        # 一切 comp(name,1,1) 微节点显式 control_marker;普通体节点
+        # 不写 op_role(schema 缺省 = compute)。
+        for node in _rank_nodes(builder_die, 2):
+            role = node["compute"].get("op_role")
+            if node["name"].endswith(("_exit_" + REQUEST_A,
+                                      "_drain_" + REQUEST_B)):
+                self.assertEqual(role, "control_marker", node["name"])
+            elif node["request_id"] == "batch_train_i1_1":
+                self.assertIsNone(role, node["name"])
+        # legacy 路径 marker 同样带 op_role(后端无关的节点身份标记),
+        # 其余 compute 键与 die 路径一致(缺省最小:无多余键)。
+        legacy_marker = next(
+            node for node in _rank_nodes(builder_legacy, 2)
+            if node["name"].endswith("_exit_" + REQUEST_A))
+        self.assertEqual(legacy_marker["compute"]["op_role"],
+                         "control_marker")
+
+    def test_scheduler_base_builds_and_injects_die_context(self):
+        """manifest -> DieModelContext -> 每批发射前注入构图器(唯一注入点)。"""
+        manifest = {
+            "requests": [],
+            "compute-cost-model": "die",
+            "die-model-config": str(self.resolved),
+        }
+        context = OnlineSchedulerBase._build_die_model_context(
+            manifest, self.config)
+        self.assertIsNotNone(context)
+        # legacy manifest(无键/roofline/replay)-> None(回归保护)。
+        for legacy_manifest in (
+                {"requests": []},
+                {"requests": [], "compute-cost-model": "roofline"},
+                {"requests": [], "compute-cost-model": "replay"}):
+            self.assertIsNone(OnlineSchedulerBase._build_die_model_context(
+                legacy_manifest, self.config))
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            OnlineSchedulerBase._build_die_model_context(
+                {"requests": [], "compute-cost-model": "quantum"},
+                self.config)
+        # 注入点:_begin_graph_batch 在 run_variant_policy 之前注入。
+        scheduler = SimpleNamespace(
+            die_model_context=context,
+            graph=GraphBatchBuilder(self.config))
+        OnlineSchedulerBase._begin_graph_batch(scheduler)
+        self.assertIs(scheduler.graph.die_context, context)
 
 
 if __name__ == "__main__":

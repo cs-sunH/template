@@ -44,7 +44,7 @@ merge 义务预留（借还配对）：
 * 链路侧：双候选方向路径各 1 槽，owner 字符串 = ``rid#merge-reserve``
   （与 SH owner 约定同构）；service_done（计算/响应完成）时刻方向裁决
   即释放败者侧（:meth:`LinkQuotaTracker.adjudicate_merge_direction`），
-  胜者侧到 ``_on_merge_done``（SH:2099-2112）释放
+  胜者侧到 ``_on_merge_done``（sh30_online_scheduler.py 的 _on_merge_done）释放
   （:meth:`LinkQuotaTracker.release_merge`）。
 * 端口侧：双候选胜者侧各 1 个 bulk-write 名额，封顶 ``N_bulk(port) =
   Q_init``，超限 quota_deferred（wait_reason=quota_port）。N_bulk 冻结
@@ -58,7 +58,7 @@ merge 义务预留（借还配对）：
   home 侧保留量；部分驻留/多源状态按唯一有效块集合如实披露。预测
   预留不替代容量与数据就绪约束。
 
-quota_deferred 语义（冻结；对照 joint_scheduler.py:156-159 的零候选
+quota_deferred 语义（冻结；对照 joint_scheduler.py 的零候选
 fail-closed——``JointSchedulerError`` 会终局 run）：
 
 * 任一判据不满足 → 动作标记不适用（实例不掩码）；**全部动作不可行时
@@ -127,7 +127,7 @@ AIMD 控制律（C10，D5 冻结；仅 ``mode=aimd``，static 下 Q 恒 = Q_init
 
 SH 衔接面（C11 对接合同，本卡只冻结接口语义、不改 SH）：
 
-* **重试键接口**：SH:1775-1802 的 ``_admit_attempt_epoch`` /
+* **重试键接口**：sh30_online_scheduler.py 的 ``_admit_attempt_epoch`` /
   ``_current_retry_key`` epoch 键重试门扩展一个配额代数分量——
   :meth:`LinkQuotaTracker.quota_retry_key` 返回 ``(quota_epoch,)``，
   流 settle / 预留释放 / 方向裁决 / 配额调整均 bump 该代数；C11 以
@@ -183,6 +183,9 @@ MERGE_DIRECTIONS = (MERGE_DIRECTION_FORWARD, MERGE_DIRECTION_REVERSE)
 #: 重复计费，故初值取 0。终值由 C10 三选一闭合，任一选择须登记物理
 #: 单位与来源，不据结果扩大。（C10 终冻决议 = **维持 0**，见
 #: /tmp/joint_exec/C10/delta_adm_freeze.md 与执行计划 §4 补遗。）
+#: D05（2026-09-27）后合并腿为三腿 max（含目标 HBM 写腿，v2.0 C02/
+#: §15.2）——"I / 有效带宽" ≤ 已计价合并腿，正 δ_adm 仍是重复计费，
+#: 冻结值 0 不变。
 DELTA_ADM_INITIAL_NS = 0
 
 # ------------------------------------------- AIMD 控制律常数（C10，D5）--
@@ -388,7 +391,7 @@ def extend_retry_key(base_key: tuple, quota_retry_key: tuple) -> tuple:
     """重试键扩展（C11 对接合同）。
 
     SH 既有键 = ``(kv_ledger_epoch, ((instance, epoch), ...))``
-    （SH:1817-1827 ``_current_retry_key``）；配额分量追加在末位：
+    （sh30 ``_current_retry_key``）；配额分量追加在末位：
     ``full = base + (quota_epoch,)``。配额代数 bump（流 settle / 预留
     释放 / 方向裁决 / 配额调整）使 full 键变化 → 重试门重开，deferred
     请求获再评估。缺省 base = () 时即纯配额键。
@@ -484,7 +487,7 @@ def quota_deferred_requeue(
 ) -> QuotaDeferred:
     """全部动作配额不可行时的**回队**裁决（C9 步骤 6 冻结语义）。
 
-    对照 joint_scheduler.py:156-159 的零候选 fail-closed
+    对照 joint_scheduler 的零候选 fail-closed
     （``JointSchedulerError`` 会终局 run）：配额判据导致的"全部动作
     不可行"不是执行协议缺口，**严禁**走该 fail-closed——正确语义 =
     请求回 ``pending_admissions``，重试键扩展配额代数（流 settle /
@@ -702,7 +705,7 @@ class LinkQuotaTracker:
 
     def quota_retry_key(self) -> tuple:
         """配额重试代数（C11 对接合同；经 :func:`extend_retry_key` 并入
-        SH:1775-1802 的 epoch 键重试门）。"""
+        sh30 epoch 键重试门）。"""
         return (self._quota_epoch,)
 
     @property
@@ -1270,7 +1273,7 @@ class LinkQuotaTracker:
         self._quota_epoch += 1
 
     def release_merge(self, rid: str) -> None:
-        """merge_done（SH:2099-2112 ``_on_merge_done``）释放：裁决后 =
+        """merge_done（sh30_online_scheduler.py 的 ``_on_merge_done``）释放：裁决后 =
         胜者侧；未裁决即整体释放 = 双侧撤销（remote 轮取消/翻转前撤回
         路径）。实际合并流的链路占用与端口在册由调用方按 oneshot 类
         ``admit_flow`` 另行登记（预留 → 实占的转换在 SH 侧完成）。"""

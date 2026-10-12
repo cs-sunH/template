@@ -8,6 +8,7 @@ tests/cli_online_test.cc).
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/OnlineCli.hh"
+#include "astra-sim/workload/execution_driven/OnlineCliFamily.hh"
 
 #include <unistd.h>
 
@@ -16,8 +17,6 @@ tests/cli_online_test.cc).
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
-#include <limits>
 #include <string>
 
 namespace AstraSim {
@@ -25,15 +24,13 @@ namespace ExecutionDriven {
 
 namespace {
 
+// (2026-09-30, R2 audit) The prefix list moved to OnlineCliFamily.hh as
+// kOnlineFamilyPrefixes so CmdLineParser.cc's unmatched-token exemption
+// cites the SAME table instead of a hand-synced copy; the --idle- entry
+// (P0-2, 2026-08-31: without it the shared parser would silently swallow a
+// typo'd --idle-* flag) lives there now.
 bool is_online_family(const std::string& token) {
-    return token.rfind("--request-", 0) == 0 || token.rfind("--bridge-", 0) == 0 ||
-           token.rfind("--close-", 0) == 0 || token.rfind("--online-", 0) == 0 ||
-           token.rfind("--command-", 0) == 0 || token.rfind("--sensing-", 0) == 0 ||
-           // P0-2 (2026-08-31, 总文档 §4 P0-2.3): the --idle- family
-           // (--idle-watchdog-s). Without this prefix the shared parser
-           // would silently swallow a typo'd --idle-* flag (the header
-           // contract: the online family is parsed fail-closed here).
-           token.rfind("--idle-", 0) == 0;
+    return is_online_family_token(token);
 }
 
 // FP1 (2026-09-01, sync-A16 batch P; contract E25): the frozen unsigned
@@ -55,20 +52,22 @@ bool is_ascii_digits(const std::string& s) {
     return true;
 }
 
-// Returns the inline value after "=", or false when the value is missing.
-bool split_flag(const std::string& token, std::string& name,
+// D5 (2026-09-28): was `bool split_flag(...)` documented as "Returns false
+// when the value is missing", but every path returned true (a missing inline
+// value is not a parse error here -- the per-option handlers demand one). The
+// dead return-value contract is gone; the outputs carry all the information.
+void split_flag(const std::string& token, std::string& name,
                 std::string& value, bool& has_inline_value) {
     const auto eq = token.find('=');
     if (eq == std::string::npos) {
         name = token;
         has_inline_value = false;
         value.clear();
-        return true;
+        return;
     }
     name = token.substr(0, eq);
     value = token.substr(eq + 1);
     has_inline_value = true;
-    return true;
 }
 
 }  // namespace
@@ -185,6 +184,26 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 value = argv[++i];
             }
+            // R1-B-L2 fix (2026-09-29): an explicitly empty inline value
+            // ("--request-queue-csv=") used to be stored as "" and
+            // downgraded to "absent" -- a silent zero-request IDLE run,
+            // inconsistent with --bridge-dir='s hard error in main. All
+            // three path options reject the empty spelling here.
+            if (value.empty()) {
+                error = "option " + name +
+                        " requires a non-empty value";
+                return false;
+            }
+            // A value that is itself flag-shaped means the value token is
+            // missing and the NEXT option was swallowed as the path (e.g.
+            // "--bridge-dir --close-input" would mkdir a directory named
+            // "--close-input" and silently drop the flag). Reject it here.
+            if (value.rfind("--", 0) == 0) {
+                error = "option " + name + " requires a path value, got '" +
+                        value + "' (a value token starting with -- means " +
+                        "the value is missing)";
+                return false;
+            }
             if (name == "--bridge-dir") {
                 bridge_dir = value;
             } else if (name == "--request-queue-csv") {
@@ -235,7 +254,8 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
         } else if (name == "--idle-watchdog-s") {
             // P0-2 (2026-08-31, 总文档 §4 P0-2.3): wall-clock event-loop
             // parking watchdog. Double seconds (sub-second armings are legal
-            // for fixtures; campaigns use >= 600), 0 = off (frozen default).
+            // for fixtures; campaigns use >= 600). 0 = off; the default is
+            // 1.0 (armed) since 2026-09-05 -- see the local's comment above.
             // FP1 (2026-09-01, sync-A16 batch P; E25/E26) frozen lexicon and
             // the ONE ordering that removes the "0 = off" ambiguity:
             //   1) token non-empty, contains no whitespace character, and
@@ -324,7 +344,6 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
         }
     }
 
-    out.mode = mode;
     out.close_input = close_input;
     out.bridge_dir = bridge_dir;
     out.bridge_timeout_ms = bridge_timeout_ms;

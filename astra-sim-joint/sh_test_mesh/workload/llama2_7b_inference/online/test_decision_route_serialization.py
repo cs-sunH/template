@@ -7,7 +7,7 @@ prefill_evictions；decode 行 prefill_decode_transfer / decode_evictions），
 KVTransferShard 创建时由 deterministic_xy_route 算好，序列化零新算；
 既有聚合 history_transfer_bytes 保留；核销置空沿用 completion M4 块
 （不新增提前置空，每请求恰一条 decode 行）。对齐目标 = S1
-（sh10_online_scheduler.py:1140-1142/:1187-1188）；hopbytes.py
+（sh10_online_scheduler.py 姊妹仓的 shard 级序列化段）；hopbytes.py
 collect_sh30 读取端前向兼容（旧 log 无新键 → 数值不变，0902 回归另证）。
 
 覆盖：
@@ -27,8 +27,6 @@ collect_sh30 读取端前向兼容（旧 log 无新键 → 数值不变，0902 �
 import os
 import sys
 import unittest
-from collections import deque
-from types import SimpleNamespace
 
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -98,6 +96,13 @@ def _two_instance_topology(hardware):
 
 
 class _GraphStub:
+    def __init__(self):
+        # 生产 _pipeline_identity_provider 直访 graph.pipeline_identity_
+        # allocator（真 GraphBatchBuilder 自带；替身挂真分配器——与
+        # test_prefill_remote_read_scheduler._GraphStub 同款壳模式）。
+        from joint.pipeline_identity import PipelineIdentityAllocator
+        self.pipeline_identity_allocator = PipelineIdentityAllocator()
+
     def emit_admission_batch(self, plan):
         return {"eviction_watches": []}
 
@@ -122,7 +127,7 @@ def _decision_shell(kv_manager, *, hardware=None, model=None, topology=None,
         CausalHorizonEstimator, LinkFlowRegistry,
     )
     scheduler._joint_horizon = CausalHorizonEstimator(
-        cold_start_default_tokens=10)
+        cold_start_default_forward_steps=10)
     # R15：流登记表/池端口（drain 路径的登记/注销钩子）。
     from online.sh30_online_scheduler import _PoolPortRegistry
     scheduler._joint_flows = LinkFlowRegistry()
@@ -139,9 +144,34 @@ def _decision_shell(kv_manager, *, hardware=None, model=None, topology=None,
     scheduler._quota_tracker = None  # off 档 __init__ 初值（F6 销账）
     scheduler._hbm_ports = HbmPortFlowRegistry()
     scheduler._snapshot_verify = False
+    # D18（2026-09-26）：drain 边界二次决策（_joint_boundary_view +
+    # _joint_boundary_cost_model → _joint_cost_model）需 J 组件同源
+    # 初值——缺设即 AttributeError（fail-loud，不静默退化）。
+    from joint.joint_config import parse_joint_config
+    from joint.joint_cost_model import JointHardwareRates, ServiceFactors
+    scheduler.joint_config = parse_joint_config()
+    scheduler._joint_mode = scheduler.joint_config.scheduler_mode
+    scheduler._joint_rates = JointHardwareRates.from_gbps(
+        noc_link_gbps=hardware.d2d_bandwidth_gbps,
+        pool_port_gbps=hardware.d2d_bandwidth_gbps,
+        local_hbm_gbps=hardware.local_hbm_bandwidth_gbps,
+        d2d_latency_ns=int(hardware.d2d_latency_ns),
+        pool_latency_ns=0,
+    )
+    scheduler._joint_factors = ServiceFactors()
+    scheduler._link_telemetry_rates = {}
+    scheduler._link_telemetry_flow_counts = {}
+    # cfg2（§5.6"版本失效、失败重评等额外遍历须累计报告"，2026-09-30
+    # 修复轮）：提交点版本失效/容量回退 = 该边界一次额外遍历，run 级
+    # 累计披露（_joint_boundary_fallback_count 直访递增）——__init__
+    # 同款初值（F6 销账口径：替身漏设 = AttributeError）。
+    scheduler._joint_boundary_fallback_count = 0
+    # ACC（验收纪律第 3 类，v2.0 §19.3）：预测器开销账本 __init__ 同款
+    # 初值（F6 销账口径：_account_decision_wall / 边界决策 / 容量摘要
+    # 记账直访——替身漏设 = AttributeError）。
+    from joint.predictor_cost_accounting import PredictorCostAccounting
+    scheduler.predictor_cost = PredictorCostAccounting()
     scheduler.kv_manager = kv_manager
-    scheduler.edge_free_mask = (False, False)
-    scheduler.edge_mask = (True, True)
     scheduler.instances = [
         _OnlineInstanceState(index=i)
         for i in range(len(topology.instances))
@@ -150,7 +180,7 @@ def _decision_shell(kv_manager, *, hardware=None, model=None, topology=None,
     scheduler._kv_ledger_epoch = 0
     scheduler._ready_frontier = set()
     # SH30_ABLATION 消融旗标已退役（no_affinity 形参仅为保持调用签名，
-    # 不再有任何行为效果——decode 恒同执行实例）。
+    # 不再有任何行为效果——decode 实例由 D18 边界二次决策决定）。
     scheduler.graph = _GraphStub()
     scheduler._ledger_admit = lambda *args, **kwargs: None
     scheduler._batch = {"assignments": [], "delivery_sequence": 0}
@@ -317,9 +347,14 @@ class PrefillDecisionRouteSerializationTest(unittest.TestCase):
 
 
 class DecodeDecisionRouteSerializationTest(unittest.TestCase):
-    """decode 决策行两键（问题 4a）：no_affinity drain 全链的
-    prefill_decode_transfer = noc_migrate 含手算 XY 路径；
-    decode_evictions 列表落盘；不新增提前置空。"""
+    """decode 决策行两键（问题 4a）：D18 边界二次决策切换 decode 实例
+    后的 prefill_decode_transfer = noc_migrate 含手算 XY 路径；
+    decode_evictions 列表落盘；不新增提前置空。
+
+    （D18 修订 2026-09-26：本用例曾钉"drain 不做跨实例迁移、
+    prefill_decode_transfer 恒 local_hit"的旧同址协议——该协议已废除；
+    强制同址取消后重载场景真实产生 noc_migrate 迁移腿，本名下的路由
+    序列化断言自此落在真实跨实例全链上。）"""
 
     def test_noc_migrate_row_carries_shard_routes(self):
         hardware = _tiny_hardware()
@@ -330,7 +365,8 @@ class DecodeDecisionRouteSerializationTest(unittest.TestCase):
             kv, hardware=hardware, model=model, topology=topology,
             no_affinity=True)
         # r0 已在实例 0 准入（预约+会话+qp），实例 0 另有排队负载 ->
-        # no_affinity drain 均衡到轻载实例 1（跨实例 noc_migrate 全链）。
+        # D18 边界二次决策（式 1b/1c）把 decode 切换到轻载实例 1
+        # （跨实例 noc_migrate 全链；预约换址 + 工作副本迁移）。
         runtime = _make_runtime("r0")
         scheduler.runtime_by_request_id["r0"] = runtime
         # joint（§3.1）：预约只覆盖已知 prefill 上下文（history+input），
@@ -356,37 +392,64 @@ class DecodeDecisionRouteSerializationTest(unittest.TestCase):
         runtime.prefill_instance_index = 0
         scheduler.instances[0].qp.append(runtime)
         runtime.queued_chunk_load_ns = 0  # drain 的 fail-closed 断言要求 0
-        heavy = _make_runtime("heavy0")
-        scheduler.runtime_by_request_id["heavy0"] = heavy
-        scheduler.instances[0].qp.append(heavy)
-        heavy.queued_chunk_load_ns = scheduler._queued_chunk_load_full_ns(
-            instance_size=topology.instance(0).size, runtime=heavy)
+        # D19 等待接口拆分（2026-09-26）：排队积压不再重压原地接续
+        # （不重排队，见 §19.1 P→D 专项）——边界 argmin 翻转机制改用
+        # **在服**负载（active decode 成员进原地接续等待基）。
+        for seq in range(3):
+            heavy = _make_runtime(f"active0_{seq}")
+            scheduler.runtime_by_request_id[f"active0_{seq}"] = heavy
+            scheduler.instances[0].active_decode.append(heavy)
         self.assertGreater(
             scheduler._task_load_snapshot(
                 scheduler.instances[0], 1000).total_task_load_ns,
             scheduler._task_load_snapshot(
                 scheduler.instances[1], 1000).total_task_load_ns)
 
-        # joint（§1.1）：本轮 prefill/decode 保持同一执行 instance——
-        # drain 不做跨实例迁移（基底 no_affinity 消融随 SH30_ABLATION
-        # 退役）；prefill_decode_transfer 恒 local_hit。
+        # D18：P_COMPUTE_DONE -> D_DECISION_PENDING -> D_COMMITTED，
+        # 切换 decode 执行实例到 1（严格更低剩余成本才切换，式 1c）。
+        # C4 完整动作面：本例被测机器 = 迁移行的 shard 路由披露，允许
+        # 面掩成 {copy,stay} 保持迁移臂（remote/recompute 的执行面由
+        # C4 专项套件覆盖；stay 放行 = 式 1c 回退腿保持合法）。
+        from joint.joint_config import parse_joint_config
+        scheduler.joint_config = parse_joint_config(
+            {"JOINT_ALLOWED_ACTIONS": "copy,stay"})
+        scheduler._joint_mode = scheduler.joint_config.scheduler_mode
         scheduler._on_prefill_drain("r0", 1000)
-        self.assertEqual(runtime.decode_instance_index, 0)
+        self.assertEqual(runtime.joint_stage, "D_COMMITTED")
+        self.assertEqual(runtime.decode_instance_index, 1)
+        self.assertFalse(runtime.joint_decode_is_continuation)
         self.assertEqual(
-            runtime.prefill_decode_transfer.kind, "local_hit")
+            runtime.prefill_decode_transfer.kind, "noc_migrate")
+        self.assertEqual(
+            kv._sessions[runtime.session_id].instance_index, 1)
 
         decode_rows = [row for row in scheduler.online_log_rows
                        if row["kind"] == "decode"]
         self.assertEqual(len(decode_rows), 1)
         decision = decode_rows[0]["decision"]
-        # joint（§1.1）：decode 固定执行实例 0，prefill_decode_transfer
-        # = local_hit（零节点迁移；noc 路由序列化由 prefill 侧
-        # copy/restore 行覆盖——见 PrefillDecisionRouteSerializationTest）。
-        self.assertEqual(decision["decode_instance_index"], 0)
+        # decode 执行实例 1，prefill_decode_transfer = noc_migrate：
+        # 逐 shard XY 路由随行序列化（_transfer_summary 全链）。
+        self.assertEqual(decision["decode_instance_index"], 1)
+        # D18 披露键：边界决策产物与阶段。修复轮三 F7：decision_stage
+        # 词表四方对齐为 "P"/"D"（P 行、候选面 notes、ACC、probe 合成
+        # 行同此）——状态机细节（D_COMMITTED）由 boundary_transaction/
+        # stage_epoch 披露，不再进本词表位。
+        self.assertEqual(decision["decision_stage"], "D")
+        self.assertEqual(
+            decision["joint_decode_action"],
+            runtime.joint_decode_action)
+        self.assertFalse(decision["is_continuation"])
+        boundary = decision["boundary_decision"]
+        self.assertEqual(boundary["chosen_instance_index"], 1)
+        self.assertFalse(boundary["is_continuation"])
+        self.assertFalse(boundary["fallback"])
+        self.assertGreater(boundary["decode_steps"], 0)
         summary = decision["prefill_decode_transfer"]
-        self.assertEqual(summary["kind"], "local_hit")
+        self.assertEqual(summary["kind"], "noc_migrate")
         self.assertEqual(summary, _transfer_summary(
             runtime.prefill_decode_transfer))
+        for shard in summary["shards"]:
+            _assert_shard_route(self, shard, hardware)
 
         # 新键 2：decode_evictions 列表落盘（空目标实例 -> 空列表，
         # 本夹具自然无逐出；列表类型本身即序列化契约）。

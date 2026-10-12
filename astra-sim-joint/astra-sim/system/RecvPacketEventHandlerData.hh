@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/BaseStream.hh"
 #include "astra-sim/system/BasicEventHandlerData.hh"
-#include "astra-sim/system/astraccl/custom_collectives/CustomAlgorithm.hh"
+#include "astra-sim/system/Callable.hh"
 
 namespace AstraSim {
 
@@ -23,12 +23,13 @@ class RecvPacketEventHandlerData : public BasicEventHandlerData {
                                int vnet);
 
     Workload* workload;
+    /// Optional receiver-side callable for descriptor-driven transport.
+    /// Legacy Workload and collective paths leave this null.
+    Callable* callable;
     WorkloadLayerHandlerData* wlhd;
     BaseStream* owner;
-    CustomAlgorithm* custom_algorithm;
     int vnet;
     bool message_end;
-    Tick ready_time;
 };
 
 }  // namespace AstraSim

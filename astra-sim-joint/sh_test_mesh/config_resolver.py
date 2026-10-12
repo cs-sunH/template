@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import ctypes
 import json
 import math
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 
+# 阶段 C(第一期推广,契约 §3.2/§7 裁定 1):"die-model-config" 加入
+# managed 集——system 模板出现即拒,由 resolver 注入(resolved_die_
+# model.json 绝对路径)。"compute-cost-model"/"die-model-profile" 来自
+# system 模板(die 模板自带),不在 managed 集。
 _MANAGED_SYSTEM_FIELDS = frozenset(
     {
         "peak-perf",
@@ -22,10 +27,191 @@ _MANAGED_SYSTEM_FIELDS = frozenset(
         "local-mem-capacity-note",
         "remote-mem-bw",
         "remote-mem-latency",
+        "die-model-config",
     }
 )
 _SUPPORTED_TOPOLOGIES = frozenset(
     {"Line", "Mesh", "Ring", "Switch", "FullyConnected"}
+)
+
+# ---------------------------------------------------------------------------
+# die 成本库 C ABI(第一期;契约 §3.3/§7 裁定 1)。resolver 通过 ctypes
+# 调 libdie_model_cabi.so 取硬件派生值——禁止在 Python 复写第二套派生
+# 公式。发现序(env DIE_MODEL_CABI_PATH -> 仓内 build/astra_analytical/
+# build_congestion_aware/{lib,bin}/)失败即 fail-closed,绝不静默回退
+# roofline。
+# ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_CABI_LIBRARY_NAME = "libdie_model_cabi.so"
+_CABI_LIBRARY_ENV = "DIE_MODEL_CABI_PATH"
+_DIE_NODE_KEYS = frozenset(
+    {
+        "sram-mb-per-core",
+        "core-type",
+        "compute-area-mm2",
+        "hbm-per-side",
+        "hbm-sides",
+        "noc-width-bits",
+    }
+)
+_LEGAL_NOC_WIDTH_BITS = frozenset({64, 128, 256, 512, 1024})
+_CACHED_CABI: dict[str, Any] = {}
+
+
+def cabi_library_candidates(repo_root: Optional[Path] = None) -> tuple[Path, ...]:
+    """契约 §7 裁定 1 的仓内发现路径序(测试/诊断也用它列候选)。"""
+    root = Path(repo_root) if repo_root is not None else _REPO_ROOT
+    build = root / "build" / "astra_analytical" / "build_congestion_aware"
+    return (build / "lib" / _CABI_LIBRARY_NAME, build / "bin" / _CABI_LIBRARY_NAME)
+
+
+def discover_cabi_library() -> Path:
+    """发现序:env DIE_MODEL_CABI_PATH -> 仓内 build 路径 -> fail-closed。"""
+    candidates: list[Path] = []
+    env_value = os.environ.get(_CABI_LIBRARY_ENV)
+    if env_value:
+        candidates.append(Path(env_value))
+    candidates.extend(cabi_library_candidates())
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        "die hardware node present but {} not found; build the "
+        "die_model_cabi target first (contract ruling 1: candidates = "
+        "env {} -> {})".format(
+            _CABI_LIBRARY_NAME, _CABI_LIBRARY_ENV,
+            " -> ".join(str(path) for path in cabi_library_candidates())))
+
+
+def _load_cabi_library() -> ctypes.CDLL:
+    """加载并缓存 libdie_model_cabi.so(进程内单例;签名按 DieCApi.h)。"""
+    library_path = discover_cabi_library()
+    cache_key = str(library_path)
+    library = _CACHED_CABI.get(cache_key)
+    if library is not None:
+        return library
+    library = ctypes.CDLL(str(library_path))
+    library.die_create_model.argtypes = [ctypes.c_char_p]
+    library.die_create_model.restype = ctypes.c_void_p
+    library.die_hardware_summary.argtypes = [ctypes.c_void_p]
+    library.die_hardware_summary.restype = ctypes.c_void_p
+    library.die_free_result.argtypes = [
+        ctypes.c_char_p]
+    library.die_free_result.restype = None
+    library.die_destroy_model.argtypes = [ctypes.c_void_p]
+    library.die_destroy_model.restype = None
+    library.die_last_error.argtypes = []
+    library.die_last_error.restype = ctypes.c_char_p
+    _CACHED_CABI[cache_key] = library
+    return library
+
+
+def _cabi_last_error(library: ctypes.CDLL) -> str:
+    raw = library.die_last_error()
+    if not raw:
+        return ""
+    return raw.decode("utf-8", errors="replace")
+
+
+def derive_die_hardware(die_node: dict[str, Any]) -> dict[str, Any]:
+    """调 die_create_model + die_hardware_summary 取派生硬件(契约 §3.3)。
+
+    die 六参数的值域校验(合法 (面积,每侧,侧数) 布局表、位宽集合、
+    (sram,核型) 命中核表)全部由库内 make_hardware 承担——本函数只做
+    结构检查(六键齐全/基础类型),库报错原文透传(ValueError)。返回
+    库的 §3.3 摘要 dict(schema_version/profile/die/derived)。"""
+    library = _load_cabi_library()
+    config_json = json.dumps(
+        {"schema_version": 1, "die": die_node}, sort_keys=True)
+    model = library.die_create_model(config_json.encode("utf-8"))
+    if not model:
+        raise ValueError(
+            "die hardware node rejected by the die_model cost library: "
+            "{}".format(_cabi_last_error(library)))
+    try:
+        summary_ptr = library.die_hardware_summary(model)
+        if not summary_ptr:
+            raise ValueError(
+                "die_hardware_summary failed: {}".format(
+                    _cabi_last_error(library)))
+        summary_cchar = ctypes.cast(summary_ptr, ctypes.c_char_p)
+        raw = summary_cchar.value
+        library.die_free_result(summary_cchar)
+        if raw is None:
+            raise ValueError("die_hardware_summary returned an empty buffer")
+        return json.loads(raw.decode("utf-8"))
+    finally:
+        library.die_destroy_model(model)
+
+
+def _validate_die_node_structure(die: dict[str, Any]) -> None:
+    """die 节六键的结构检查(键集/基础类型/枚举;值域由库校验)。"""
+    context = "Hardware configuration.die"
+    if not isinstance(die, dict):
+        raise ValueError(f"{context} must be an object")
+    actual = set(die)
+    if actual != set(_DIE_NODE_KEYS):
+        missing = sorted(_DIE_NODE_KEYS - actual)
+        extra = sorted(actual - _DIE_NODE_KEYS)
+        raise ValueError(
+            f"{context} has invalid keys (missing {', '.join(missing)}; "
+            f"unexpected {', '.join(extra)})")
+    _require_number(die["sram-mb-per-core"], f"{context}.sram-mb-per-core", positive=True)
+    core_type = die["core-type"]
+    if not isinstance(core_type, str) or core_type not in {"small", "large"}:
+        raise ValueError(f"{context}.core-type must be 'small' or 'large'")
+    _require_number(die["compute-area-mm2"], f"{context}.compute-area-mm2", positive=True)
+    _require_int(die["hbm-per-side"], f"{context}.hbm-per-side", positive=True)
+    _require_int(die["hbm-sides"], f"{context}.hbm-sides", positive=True)
+    noc_width = _require_int(die["noc-width-bits"], f"{context}.noc-width-bits", positive=True)
+    if noc_width not in _LEGAL_NOC_WIDTH_BITS:
+        raise ValueError(
+            f"{context}.noc-width-bits must be one of "
+            f"{sorted(_LEGAL_NOC_WIDTH_BITS)}, got {noc_width}")
+
+# 已知 system 模板键全集（与 Sys.cc known_system_keys 门同步——含五个
+# 已退役 *-implementation-custom 键：它们在 C++ 侧经
+# CollectiveImplLookup.cc 的 reject_retired_custom_key 专属 fail-closed
+# 拒绝，模板层按已知放行后由该门给出点名诊断；漂移两侧同步维护）。
+_KNOWN_SYSTEM_TEMPLATE_KEYS = frozenset(
+    {
+        "scheduling-policy",
+        "collective-optimization",
+        "local-reduction-delay",
+        "active-chunks-per-dimension",
+        "L",
+        "o",
+        "g",
+        "G",
+        "endpoint-delay",
+        "model-shared-bus",
+        "preferred-dataset-splits",
+        "peak-perf",
+        "local-mem-bw",
+        "local-mem-latency",
+        "remote-mem-bw",
+        "remote-mem-latency",
+        "pipeline-tile-fraction",
+        "hbm-kv-restore-bandwidth-sharing",
+        "hbm-bandwidth-contention",
+        "roofline-enabled",
+        "trace-enabled",
+        "replay-only",
+        "track-local-mem",
+        "local-mem-trace-filename",
+        "compute-cost-model",
+        "die-model-profile",
+        "die-model-config",
+        "all-reduce-implementation",
+        "reduce-scatter-implementation",
+        "all-gather-implementation",
+        "all-to-all-implementation",
+        "all-reduce-implementation-custom",
+        "all-gather-implementation-custom",
+        "reduce-scatter-implementation-custom",
+        "all-to-all-implementation-custom",
+        "per-node-custom-implementation",
+    }
 )
 
 
@@ -51,14 +237,29 @@ class ResolvedHardware:
     remote_memory_logical_pool: str | None
     peak_perf_tflops: float
     metadata: dict[str, object]
+    # die 后端(第一期,契约 §3.1/§3.3):die 节存在时非 None——die 六参数
+    # 原文 + 库派生摘要(derived 全字段);peak_perf_tflops /
+    # local_hbm_bandwidth_gbps 此时来自 derived(PE_peak_die、HBM 总带宽
+    # /1e9),legacy 路径两值为空/沿用 compute 节。
+    die_node: Optional[dict[str, Any]] = None
+    die_summary: Optional[dict[str, Any]] = None
+
+    @property
+    def die_derived(self) -> Optional[dict[str, Any]]:
+        if self.die_summary is None:
+            return None
+        return self.die_summary.get("derived")
+
+    @property
+    def die_profile(self) -> str:
+        if self.die_summary is None:
+            return ""
+        return str(self.die_summary.get("profile", ""))
 
     @property
     def npus_count(self) -> int:
         return self.mesh_rows * self.mesh_cols
 
-    @property
-    def mesh_label(self) -> str:
-        return f"{self.mesh_rows}x{self.mesh_cols}"
 
     @property
     def remote_memory_runtime_label(self) -> str:
@@ -75,6 +276,9 @@ class RuntimeConfigPaths:
     network: Path
     remote_memory: Path
     comm_group: Path
+    # die 后端(第一期):die 硬件时为 resolved_die_model.json 的路径(与
+    # 三件套同目录),legacy 时为 None。
+    die_model: Optional[Path] = None
 
 
 def _read_json(path: Path, description: str) -> dict[str, Any]:
@@ -149,22 +353,30 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
             "Hardware configuration must not contain legacy npus-count; "
             "derive it from mesh"
         )
-    _require_exact_keys(
-        data,
-        {
-            "schema-version",
-            "slug",
-            "label",
-            "paper-case",
-            "mesh",
-            "local-hbm",
-            "d2d",
-            "remote-memory",
-            "compute",
-            "notes",
-        },
-        "Hardware configuration",
-    )
+    # die 后端(第一期,契约 §3.1):顶层键集 = 核心键 + "notes" + 计算描述
+    # 二选一("compute" legacy 或 "die" 新后端;互斥判定在下方 compute 段)。
+    _required_top_level = {
+        "schema-version",
+        "slug",
+        "label",
+        "paper-case",
+        "mesh",
+        "local-hbm",
+        "d2d",
+        "remote-memory",
+        "notes",
+    }
+    actual_top_level = set(data)
+    missing_top_level = _required_top_level - actual_top_level
+    extra_top_level = actual_top_level - _required_top_level - {"compute", "die"}
+    if missing_top_level or extra_top_level:
+        details = []
+        if missing_top_level:
+            details.append(f"missing {', '.join(sorted(missing_top_level))}")
+        if extra_top_level:
+            details.append(f"unexpected {', '.join(sorted(extra_top_level))}")
+        raise ValueError(
+            "Hardware configuration has invalid keys (" + "; ".join(details) + ")")
     if _require_int(data["schema-version"], "Hardware configuration.schema-version") != 1:
         raise ValueError("Hardware configuration.schema-version must be 1")
     slug = _require_string(data, "slug", "Hardware configuration")
@@ -274,9 +486,52 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         positive=True,
     )
 
-    compute = _require_object(data, "compute", "Hardware configuration")
-    _require_exact_keys(compute, {"peak-perf-tflops"}, "Hardware configuration.compute")
-    peak_perf = _require_number(compute["peak-perf-tflops"], "Hardware configuration.compute.peak-perf-tflops", positive=True)
+    # die 后端(第一期,契约 §3.1):die 节与 compute.peak-perf-tflops 互斥
+    # 出现——并存即报错(新后端不得静默沿用旧算力);二者全无同样报错。
+    die_node = data.get("die")
+    compute_node = data.get("compute")
+    if die_node is not None and compute_node is not None:
+        raise ValueError(
+            "Hardware configuration must not declare both 'die' and "
+            "'compute.peak-perf-tflops' (mutually exclusive compute "
+            "descriptions, contract section 3.1)")
+    die_summary: Optional[dict[str, Any]] = None
+    if die_node is not None:
+        if not isinstance(die_node, dict):
+            raise ValueError("Hardware configuration.die must be an object")
+        _validate_die_node_structure(die_node)
+        # 值域校验(合法布局组合/核表命中)与派生全部经 ctypes 同源
+        # (契约 §3.3:禁止 Python 复写第二套派生公式)。
+        die_summary = derive_die_hardware(die_node)
+        derived = die_summary.get("derived") or {}
+        try:
+            derived_peak = float(derived["pe_peak_tflops"])
+            derived_bandwidth = float(derived["hbm_bandwidth_bytes"]) / 1e9
+            derived_capacity = int(float(derived["hbm_capacity_bytes"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "die cost library returned an incomplete derived block: "
+                f"{derived!r}") from error
+        # 契约 §3.4 容量对齐:die 节存在时所选 capacity-profile 的 bytes
+        # 必须等于 HBM 派生容量,不等即报错(错误信息给出两边数值)。
+        if capacity != derived_capacity:
+            raise ValueError(
+                f"Capacity profile {capacity_profile!r}.bytes ({capacity}) "
+                "does not match the die-derived HBM capacity "
+                f"({derived_capacity} = hbm-sides x hbm-per-side x 16 GiB); "
+                "select a die-aligned capacity profile (contract "
+                "section 3.4)")
+        peak_perf = derived_peak
+        local_bandwidth = derived_bandwidth
+    elif compute_node is not None:
+        if not isinstance(compute_node, dict):
+            raise ValueError("Hardware configuration.compute must be an object")
+        _require_exact_keys(compute_node, {"peak-perf-tflops"}, "Hardware configuration.compute")
+        peak_perf = _require_number(compute_node["peak-perf-tflops"], "Hardware configuration.compute.peak-perf-tflops", positive=True)
+    else:
+        raise ValueError(
+            "Hardware configuration must declare exactly one of 'die' or "
+            "'compute.peak-perf-tflops' (contract section 3.1)")
     notes = data["notes"]
     if not isinstance(notes, list) or not all(isinstance(note, str) and note.strip() for note in notes):
         raise ValueError("Hardware configuration.notes must be a list of non-empty strings")
@@ -304,6 +559,8 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         remote_memory_npu_selection=remote_memory_npu_selection,
         remote_memory_logical_pool=remote_memory_logical_pool,
         peak_perf_tflops=peak_perf,
+        die_node=(dict(die_node) if die_node is not None else None),
+        die_summary=die_summary,
         metadata=metadata,
     )
 
@@ -427,6 +684,17 @@ def materialize_runtime_configs(
     managed_fields = sorted(_MANAGED_SYSTEM_FIELDS.intersection(system_template))
     if managed_fields:
         raise ValueError(f"System template contains managed hardware field(s): {', '.join(managed_fields)}")
+    # (2026-10-01 审查修复) 模板未知键门（Sys.cc known_system_keys 的
+    # 派生侧镜像）：拼错键此前会流入生成的 system.json 并被 C++ 未知键
+    # 门拦截——启动失败远离编辑点；此处最早边界拦截（两键集同步）。
+    unknown_template_keys = sorted(
+        set(system_template) - _KNOWN_SYSTEM_TEMPLATE_KEYS)
+    if unknown_template_keys:
+        raise ValueError(
+            "System template contains unknown key(s) (typo? see "
+            "_KNOWN_SYSTEM_TEMPLATE_KEYS / Sys.cc known_system_keys): "
+            + ", ".join(unknown_template_keys)
+        )
     remote_memory = _prepare_remote_memory(hardware)
     comm_groups = _prepare_comm_groups(inference_groups, hardware)
 
@@ -442,11 +710,35 @@ def materialize_runtime_configs(
     system["peak-perf"] = hardware.peak_perf_tflops
 
     destination = Path(output_dir)
+    die_model_path: Optional[Path] = None
+    if hardware.die_summary is not None:
+        # die 后端(第一期,契约 §3.2/§3.3):resolved_die_model.json 落
+        # runtime_config 目录(库的 §3.3 摘要原文,可被 make_hardware
+        # round-trip);system.json 注入 die-model-config(绝对路径,
+        # managed 字段)并做冲突 fail-closed(die + roofline-enabled /
+        # compute-cost-model != die)。peak-perf/local-mem-bw 已在上方由
+        # ResolvedHardware 的派生值填充(§3.4 回流口径)。
+        cost_model = system.get("compute-cost-model")
+        if cost_model is not None and cost_model != "die":
+            raise ValueError(
+                "System template declares compute-cost-model "
+                f"{cost_model!r} but the hardware resolves the die backend; "
+                "use a die system template (contract section 3.2)")
+        if system.get("roofline-enabled"):
+            raise ValueError(
+                "die backend conflicts with roofline-enabled=1 in the "
+                "system template (contract section 3.2 conflict matrix)")
+        die_model_path = destination / "resolved_die_model.json"
+        _write_text_atomically(
+            die_model_path, _serialize_json(hardware.die_summary))
+        system["die-model-config"] = str(die_model_path.resolve())
+
     paths = RuntimeConfigPaths(
         system=destination / "system.json",
         network=destination / "network.yml",
         remote_memory=destination / "remote_memory.json",
         comm_group=destination / "comm_group.json",
+        die_model=die_model_path,
     )
     _write_text_atomically(paths.system, _serialize_json(system))
     _write_text_atomically(paths.network, _network_yaml(hardware))

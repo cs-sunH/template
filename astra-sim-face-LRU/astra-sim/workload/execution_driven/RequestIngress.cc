@@ -8,7 +8,6 @@ Implementation (方案 §4 步骤 1-2 操作 2).
 
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -24,12 +23,23 @@ RequestIngress::RequestIngress(const size_t capacity) noexcept
 
 void RequestIngress::bind(EventQueue* const eq, DecisionMailbox* const mailbox,
                           ServiceCoordinator* const svc) noexcept {
-    assert(eq != nullptr);
-    assert(mailbox != nullptr);
-    assert(svc != nullptr);
+    // NDEBUG-unrelated fail-closed (same family as the F10 fix below): a
+    // null binding would only explode later, mid-run, under NDEBUG.
+    if (eq == nullptr || mailbox == nullptr || svc == nullptr) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/ingress) bind() requires "
+                     "non-null event queue, mailbox and service "
+                     "coordinator\n");
+        std::abort();
+    }
     eq_ = eq;
     mailbox_ = mailbox;
     svc_ = svc;
+}
+
+bool RequestIngress::is_closed() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return closed_;
 }
 
 bool RequestIngress::enqueue_command(IngressCommand cmd) {
@@ -72,8 +82,39 @@ void RequestIngress::drain_commands() {
     for (auto& cmd : batch) {
         switch (cmd.kind) {
             case IngressCommandKind::Submit: {
-                // arrival alarms must be strictly future (EventQueue :33);
-                // a late request is clamped to the next tick (arrives now)
+                // Process-level empty/unique request_id gate (2026-09-30,
+                // ported from the joint repo RequestIngress.cc
+                // drain_commands): the CSV reader's row gates (WindowedTraceReader
+                // turn-0 dedup + register_queue_index turn>0 dedup) cover only
+                // the reader path; --command-fifo producers and any direct
+                // enqueue_command caller had no equivalent gate, and a
+                // duplicate id pollutes the downstream identity maps
+                // last-wins while an empty id anchors to nothing. Fail
+                // closed BEFORE the arrival accounting / alarm scheduling.
+                {
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    if (cmd.envelope.request_id.empty()) {
+                        std::fprintf(
+                            stderr,
+                            "[Error] (execution_driven/ingress) Submit has "
+                            "an empty request_id (every request must be "
+                            "identifiable)\n");
+                        std::abort();
+                    }
+                    if (!seen_submit_request_ids_
+                             .insert(cmd.envelope.request_id).second) {
+                        std::fprintf(
+                            stderr,
+                            "[Error] (execution_driven/ingress) duplicate "
+                            "Submit request_id: %s\n",
+                            cmd.envelope.request_id.c_str());
+                        std::abort();
+                    }
+                }
+                // arrival alarms must be strictly future (the EventQueue
+                // rejects any non-invoke schedule that is not strictly
+                // later than its current time); a late request is clamped
+                // to the next tick (arrives now)
                 const auto current = eq_->get_current_time();
                 const auto arrival = cmd.envelope.arrival_world_ns;
                 const EventTime alarm_time =
@@ -92,6 +133,12 @@ void RequestIngress::drain_commands() {
                     if (cmd.envelope.source == RequestSource::StaticCsv) {
                         if (arrival == 0 && current == 0) {
                             ++t0_boundary_clamp_;
+                        } else if (cmd.backpressure_deferred) {
+                            // M5: the reader offered this entry while the
+                            // clock was still at/below its arrival; the
+                            // bounded queue parked it. Capacity artifact,
+                            // exempt from the run-end gate.
+                            ++late_static_submit_backpressure_;
                         } else {
                             ++late_static_submit_;
                         }
@@ -99,7 +146,17 @@ void RequestIngress::drain_commands() {
                                RequestSource::ExternalStream) {
                         ++late_external_stream_;
                     } else {
-                        ++late_future_alarm_rounding_;
+                        // Future alarms never enter the command queue (they
+                        // go through schedule_future_arrival with its own
+                        // clamp accounting), so a FutureAlarm-sourced command
+                        // Submit is a producer-mechanism violation: fail
+                        // closed instead of misfiling it into the exempt
+                        // rounding bucket.
+                        std::fprintf(stderr,
+                                     "[Error] (execution_driven/ingress) "
+                                     "FutureAlarm-sourced command Submit is "
+                                     "a mechanism violation\n");
+                        std::abort();
                     }
                 }
                 if (cmd.envelope.source == RequestSource::StaticCsv) {
@@ -144,6 +201,21 @@ void RequestIngress::drain_commands() {
                 std::abort();
                 break;
         }
+    }
+    // M4 fix (2026-09-29): the producer gate is closed and the queue just
+    // drained to empty -- every command linearized before the close has
+    // been observed. Complete the coordinator's deferred FINISHED
+    // evaluation here (see ServiceCoordinator::note_input_drained); it is
+    // a no-op while requests are still active/pending. Commands enqueued
+    // after the close are rejected by enqueue_command, so an empty queue
+    // under a closed gate is stable.
+    bool closed_and_drained = false;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        closed_and_drained = closed_ && queue_.empty();
+    }
+    if (closed_and_drained && svc_ != nullptr) {
+        svc_->note_input_drained();
     }
 }
 
@@ -241,7 +313,22 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
         }
         if (!validation_error.has_value() && queue_index_tracking_enabled_) {
             const auto it = queue_index_map_.find(envelope.request_id);
-            assert(it != queue_index_map_.end());
+            if (it == queue_index_map_.end()) {
+                // F10 fix (2026-09-26): this used to be
+                // assert(it != end()) followed by it->second -- a no-op
+                // assertion under NDEBUG, i.e. an end() dereference (UB) in
+                // Release builds. The defensive recheck above makes the
+                // branch unreachable through validate_future_arrivals_locked,
+                // but an unsafe direct caller must fail closed with a
+                // diagnostic, not read end()->second. Mirrors the
+                // register_queue_index abort contract.
+                std::fprintf(stderr,
+                             "[Error] (execution_driven/ingress) future "
+                             "arrival has no registered queue index: "
+                             "request_id=%s\n",
+                             envelope.request_id.c_str());
+                std::abort();
+            }
             filled.queue_index = it->second;
             queue_index_map_.erase(it);
         }
@@ -256,8 +343,10 @@ void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
         throw std::runtime_error("future-arrival scheduling rejected: " +
                                  *validation_error);
     }
-    // arrival alarms must be strictly future (EventQueue :33); a late
-    // arrival is clamped to the next tick (arrives now)
+    // arrival alarms must be strictly future (EventQueue::schedule_event
+    // fail-closes on any time that is not strictly later than the queue's
+    // current time); a late arrival is clamped to the next tick (arrives
+    // now)
     const auto current = eq_->get_current_time();
     const auto arrival = envelope.arrival_world_ns;
     // P0 fix (2026-08-30): this path only ever schedules FutureAlarm

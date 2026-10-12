@@ -261,7 +261,13 @@ class TrainFinalizeTest(unittest.TestCase):
 
     def test_busy_gate_skips_in_flight_instance(self):
         """busy 门:列车在飞的实例不重复发射(_plan_and_emit_trains
-        跳过;graph stub 一旦被调即失败)。"""
+        跳过;graph stub 一旦被调即失败)。
+
+        R3-K2(2026-09-29)修复:旧夹具 _ready_frontier 装配为空集,
+        发射循环体一次都不执行,断言恒真(无判别力)。现把在飞实例
+        显式加入 frontier,使被测的 `in_flight_train is not None →
+        continue` busy 门分支真正执行;graph stub 仍任何调用即失败,
+        分支未被跳过(误发射)时会立刻暴露。"""
         scheduler = _bare_scheduler()
         scheduler.graph = SimpleNamespace(
             emit_iteration_train=lambda *_a, **_k: (_ for _ in ()).throw(
@@ -271,7 +277,16 @@ class TrainFinalizeTest(unittest.TestCase):
                                  "members": [], "exit_set": set(),
                                  "drain_set": set(),
                                  "prefill_chunk_tokens": []}
+        # 无 first_step 残批、实例确实在 ready frontier 上——旧夹具缺
+        # 这一步,循环体从不执行。frontier 分支会经 _profile_scan 记账,
+        # 裸装配需提供批次累加器。
+        scheduler._profile_batch = {"scanned_entries": 0}
+        scheduler._ready_frontier.add(state.index)
         scheduler._plan_and_emit_trains(0)  # 不得发射、不得抛
+        # busy 门语义:在飞实例保持就绪标记(跳过 ≠ 移出),由完成事件
+        # 核销列车后重建状态。
+        self.assertIn(state.index, scheduler._ready_frontier)
+        self.assertEqual(scheduler._profile_batch["scanned_entries"], 1)
 
 
 HARDWARE = FaceHardware(

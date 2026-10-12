@@ -12,6 +12,7 @@ Implementation (方案 §4 步骤 1-4).
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <stdexcept>
 
@@ -28,11 +29,35 @@ uint64_t NodeStore::add_node(OnlineNode node) {
     if (node.global_id == 0) {
         node.global_id = next_id_++;
     } else {
+        // R1-A-L4 fix: next_id_ = global_id + 1 wraps to 0 at
+        // global_id == UINT64_MAX, silently resetting the id space. Only a
+        // synthetic caller can reach the sentinel; fail closed instead of
+        // corrupting the id stream.
+        if (node.global_id == std::numeric_limits<uint64_t>::max()) {
+            std::cerr << "[Error] (execution_driven/node_store) add_node: "
+                         "global_id UINT64_MAX would overflow next_id_ "
+                         "(fail-closed)"
+                      << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
         next_id_ = std::max(next_id_, node.global_id + 1);
     }
     const auto [it, inserted] =
         nodes_.emplace(node.global_id, NodeRecord{std::move(node)});
-    assert(inserted);
+    // cpp-ed-core-6 (2026-09-26): explicit fail-closed instead of assert --
+    // under NDEBUG a duplicate global_id used to silently drop the new node
+    // (free_ids_/counters untouched) while still returning the dropped
+    // node's id, corrupting the id stream with no diagnostic. A duplicate
+    // id is a caller defect (the committer's affine translation and the
+    // json-id stream preflight both guarantee uniqueness); name it and die.
+    if (!inserted) {
+        std::cerr << "[Error] (execution_driven/node_store) add_node: "
+                     "duplicate global_id "
+                  << it->first
+                  << " -- the new node is refused (fail-closed)"
+                  << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
     if (it->second.unresolved_parents == 0) {
         free_ids_.insert(node.global_id);
     }
@@ -41,10 +66,11 @@ uint64_t NodeStore::add_node(OnlineNode node) {
 
 void NodeStore::add_dependency(uint64_t parent, uint64_t child,
                                DepKind /*kind*/) {
-    // First version: all kinds resolve identically (precedence). The kind is
-    // stored per edge for the later fence upgrade (步骤 1-5 note forbids
-    // building the general fence early). Dead-parent edges are tolerated:
-    // a parent that already finished no longer blocks the child.
+    // First version: all kinds resolve identically (precedence). The kind
+    // argument is deliberately discarded -- no per-edge kind storage exists
+    // yet (the 步骤 1-5 note forbids building the general fence early).
+    // Dead-parent edges are tolerated: a parent that already finished no
+    // longer blocks the child.
     auto child_it = nodes_.find(child);
     if (child_it == nodes_.end()) {
         return;  // unknown child: edge cannot be recorded
@@ -52,6 +78,25 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
     auto parent_it = nodes_.find(parent);
     if (parent_it == nodes_.end() || parent_it->second.finished) {
         return;  // already-finished parent does not block
+    }
+    // S5 fix (2026-09-28): a late edge onto an already-issued/finished child
+    // (or a self-loop) used to desync the free set from the issue/finish
+    // bits: the edge bumped unresolved_parents while the child stayed
+    // outside the free set, and the parent's later finish re-inserted the
+    // issued child into free_ids_, so for_each_dep_free handed the node to
+    // Workload::issue a second time (double terminal -> fail-closed abort).
+    // The committer's mandatory preflight only ever edges fresh same-batch
+    // nodes (unissued by construction), so the official path never trips;
+    // a caller that does this is a defect -- name it and die (same
+    // fail-closed style as add_node's duplicate-id guard).
+    if (child_it->second.issued || child_it->second.finished ||
+        parent == child) {
+        std::cerr << "[Error] (execution_driven/node_store) add_dependency: "
+                     "late edge onto issued/finished node "
+                  << child << " (parent " << parent
+                  << ") -- free-set accounting would corrupt (fail-closed)"
+                  << std::endl;
+        std::exit(EXIT_FAILURE);
     }
     // A child added with no parents is free; recording a real parent takes it
     // out of the free set again.
@@ -62,12 +107,6 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
     // M2 node GC: count the live child on the parent (the child of a
     // validated edge is always a fresh, unfinished batch node).
     ++parent_it->second.unfinished_children;
-}
-
-std::vector<uint64_t> NodeStore::resolve_free_nodes() const {
-    std::vector<uint64_t> result;
-    fill_free_node_snapshot(result);
-    return result;
 }
 
 void NodeStore::fill_free_node_snapshot(std::vector<uint64_t>& out) const {
@@ -95,7 +134,18 @@ void NodeStore::finish_node(uint64_t node_id) {
         if (child_it == nodes_.end()) {
             continue;  // M2: child already collected (it finished earlier)
         }
-        assert(child_it->second.unresolved_parents > 0);
+        // Same fail-closed policy as add_node above: under NDEBUG the bare
+        // assert vanishes and an underflow would wrap the uint32 counter,
+        // leaving the child permanently stuck outside the free set with no
+        // diagnostic until an unrelated late dead-end abort.
+        if (child_it->second.unresolved_parents == 0) {
+            std::cerr << "[Error] (execution_driven/node_store) finish_node: "
+                         "unresolved_parents underflow on child "
+                      << child
+                      << " -- edge accounting is corrupt (fail-closed)"
+                      << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
         if (--child_it->second.unresolved_parents == 0) {
             free_ids_.insert(child);
         }
@@ -118,20 +168,19 @@ void NodeStore::finish_node(uint64_t node_id) {
         if (parent_it == nodes_.end()) {
             continue;  // M2: parent already collected
         }
-        assert(parent_it->second.unfinished_children > 0);
+        if (parent_it->second.unfinished_children == 0) {
+            std::cerr << "[Error] (execution_driven/node_store) finish_node: "
+                         "unfinished_children underflow on parent "
+                      << parent
+                      << " -- edge accounting is corrupt (fail-closed)"
+                      << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
         if (--parent_it->second.unfinished_children == 0 &&
             parent_it->second.finished && gc_enabled_) {
             gc_fifo_.push_back(parent);
         }
     }
-}
-
-std::optional<OnlineNode> NodeStore::node(uint64_t node_id) const {
-    const auto it = nodes_.find(node_id);
-    if (it == nodes_.end()) {
-        return std::nullopt;
-    }
-    return it->second.node;
 }
 
 const OnlineNode* NodeStore::node_ptr(uint64_t node_id) const {
@@ -167,24 +216,6 @@ bool NodeStore::mark_terminal_observed(uint64_t node_id) {
     it->second.terminal_observed = true;
     return true;
 }
-
-std::optional<NodeStoreMeta> NodeStore::meta_for(uint64_t node_id) const {
-    const auto it = nodes_.find(node_id);
-    if (it == nodes_.end()) {
-        return std::nullopt;
-    }
-    return NodeStoreMeta{it->second.node.request_id, it->second.node.stage,
-                         it->second.node.generation};
-}
-
-size_t NodeStore::pending_count() const {
-    return std::count_if(nodes_.begin(), nodes_.end(),
-                         [](const auto& entry) {
-                             return !entry.second.finished;
-                         });
-}
-
-bool NodeStore::empty() const { return nodes_.empty(); }
 
 void NodeStore::set_gc_enabled(bool enabled) {
     // M2 node GC: the switch is set once by the committer constructor from
@@ -248,8 +279,11 @@ void NodeStore::collect_garbage() {
 }
 
 bool NodeStore::erased(uint64_t node_id) const {
-    // M2: absent == collected for committed store ids (see header). Used by
-    // the committer's store_ids_ prune pass only.
+    // M2: absent == collected for committed store ids (see header). The
+    // committer calls this from its affine/liveness checks -- preflight
+    // parent-endpoint resolution, full-validation edge checks, and the
+    // commit-phase B-2 edge / B-3 watch-member lookups (five call sites in
+    // GraphBatchCommitter.cc) -- plus the store-level unit tests.
     return nodes_.find(node_id) == nodes_.end();
 }
 
@@ -341,22 +375,17 @@ RankInjectedSummary NodeStore::injected_unfinished_summary(int rank) const {
 // NodeStoreGraphSource
 // ---------------------------------------------------------------------------
 
-std::vector<NodeView> NodeStoreGraphSource::dep_free_nodes() {
-    std::vector<NodeView> views;
-    for (const auto node_id : store_.resolve_free_nodes()) {
-        const auto node = store_.node(node_id);
-        if (node.has_value()) {
-            views.push_back(*node);
-        }
-    }
-    return views;
-}
-
 void NodeStoreGraphSource::for_each_dep_free(
     const std::function<void(const NodeView&)>& consume) {
     // The reusable vector is still a snapshot, so consume() may safely mutate
     // the free set / release dependencies. Newly released children are not
     // visited until the next issue pass.
+    // NOT REENTRANT (2026-09-30 note): the snapshot lives in a member
+    // vector that a nested for_each_dep_free call would overwrite via
+    // assign() while the outer range-for still iterates it. Safe today
+    // because the only caller chain (completion -> deferred issue pass)
+    // never re-enters; a future caller that does must receive its own
+    // local snapshot.
     store_.fill_free_node_snapshot(dep_free_scratch_ids_);
     for (const auto node_id : dep_free_scratch_ids_) {
         const OnlineNode* node = store_.node_ptr(node_id);
@@ -368,10 +397,6 @@ void NodeStoreGraphSource::for_each_dep_free(
 
 void NodeStoreGraphSource::finish_node(uint64_t node_id) {
     store_.finish_node(node_id);
-}
-
-std::optional<NodeView> NodeStoreGraphSource::lookup(uint64_t node_id) {
-    return store_.node(node_id);
 }
 
 const NodeView* NodeStoreGraphSource::lookup_ptr(uint64_t node_id) {
@@ -432,6 +457,52 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
                 nv.compute.has_remote_weight_bytes = true;
                 nv.compute.remote_weight_bytes =
                     node->remote_weight_bytes<uint64_t>();
+            }
+            // Stage B (die backend, contract §2): the ET static path carries
+            // op_role / die_op_spec as ordinary string attributes; the spec
+            // arrives as the JSON serialization of the same DieOpSpec the
+            // online GraphBatch carries (design doc §8.3). Both stay
+            // optional; a shape-less historical ET simply leaves die_spec
+            // null and the die backend fails closed on real COMP nodes at
+            // issue time.
+            {
+                const std::string op_role =
+                    node->get_attr<std::string>("op_role", "compute");
+                if (op_role == "compute") {
+                    nv.compute.op_role = OpRole::Compute;
+                } else if (op_role == "control_marker") {
+                    nv.compute.op_role = OpRole::ControlMarker;
+                } else {
+                    std::cerr << "[Error] (execution_driven/node_store) "
+                                 "view_of: unknown op_role attribute \""
+                              << op_role << "\" (legal: compute|"
+                                 "control_marker)" << std::endl;
+                    std::exit(EXIT_FAILURE);
+                }
+                if (node->has_attr("die_op_spec")) {
+                    const std::string spec_json_text =
+                        node->get_attr<std::string>("die_op_spec", "");
+                    nlohmann::json spec_json;
+                    try {
+                        spec_json = nlohmann::json::parse(spec_json_text);
+                    } catch (const std::exception& e) {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_op_spec attribute is not "
+                                     "valid JSON: "
+                                  << e.what() << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
+                    try {
+                        nv.compute.die_spec =
+                            DieModel::parse_die_op_spec(spec_json);
+                    } catch (const std::exception& e) {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_op_spec attribute "
+                                     "rejected: "
+                                  << e.what() << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
+                }
             }
             break;
         case NodeKind::MemLoad:
@@ -525,18 +596,6 @@ std::vector<NodeView> ETFeederGraphSource::dep_free_nodes() {
 
 void ETFeederGraphSource::finish_node(uint64_t node_id) {
     et_feeder_->getDependancyResolver().finish_node(node_id);
-}
-
-std::optional<NodeView> ETFeederGraphSource::lookup(uint64_t node_id) {
-    try {
-        return view_of(node_id);
-    } catch (const std::runtime_error&) {
-        // Legacy lookupNode semantics: a node id outside the index throws
-        // "not found in index" on first read; the optional contract turns
-        // that into a miss (byte-exact for every successful baseline, where
-        // lookups only ever hit).
-        return std::nullopt;
-    }
 }
 
 void ETFeederGraphSource::take_node(uint64_t node_id) {

@@ -14,7 +14,8 @@ future arrival) through:
           epoch, node structure, edge structure, cycle, watch structure /
           eligibility / identity, send-recv pairing, collective split,
           assignment, kv action, alarm, touched_ranks). EVERY case must be
-          rejected by validate() AND leave the official state completely
+          rejected by the full validation (validate_and_commit) AND leave
+          the official state completely
           untouched (零节点/零 watch/零账本动作: store node counts, free
           sets, store-id map, watch registry, in-flight/prefill-drained
           tracking, counters, issue-pass calls -- all byte-identical to the
@@ -51,7 +52,8 @@ future arrival) through:
           body nodes under the batch-namespace request_id
           "batch_train_0_1" -- NOT a real request -- plus one exit marker
           per member per rank and one per-train ALL_REDUCE end barrier)
-          walks validate() + commit() + the full watch-fire chain: both
+          walks the atomic validate_and_commit() + the full watch-fire
+          chain: both
           member decode watches fire, the namespace body / barrier
           terminals feed nothing, in-flight/prefill-drained tracking and
           the counters stay exact. Also proves the one rule that DOES
@@ -75,6 +77,10 @@ future arrival) through:
 
 Also asserts the pre-phase-5 fixture tolerance: a batch WITHOUT the
 touched_ranks field validates identically (has_touched_ranks == false).
+
+  Part H  (2026-09-30 header entry; the section itself already existed):
+          the hbm_charge key parsing on comm nodes -- the snake_case
+          spelling accepted, the kebab-case spelling rejected fail-closed.
 
 Batches are BUILT as response JSON documents and converted through the
 production parse_graph_batch (num_ranks = 3), so every fixture batch
@@ -133,6 +139,18 @@ struct GraphBatchCommitterTestAccess {
     static size_t discovered_capacity(const GraphBatchCommitter& committer) {
         return committer.json_id_discovered_touched_ranks_.capacity();
     }
+
+    // Read-only views of the delta-fact tracking sets (the public getters
+    // were removed as production-dead; these keep the zero-side-effect
+    // assertions exact).
+    static const std::set<std::string>& in_flight(
+        const GraphBatchCommitter& committer) {
+        return committer.in_flight_;
+    }
+    static const std::set<std::string>& prefill_drained(
+        const GraphBatchCommitter& committer) {
+        return committer.prefill_drained_;
+    }
 };
 
 }  // namespace ExecutionDriven
@@ -147,6 +165,14 @@ void expect(bool cond, const char* what) {
         std::fprintf(stderr, "[graph_batch_committer_test] FAIL: %s\n", what);
         g_ok = false;
     }
+}
+
+// Live-path free-set read (the production issue pass consumes the store
+// through fill_free_node_snapshot; non-consuming, ascending ids).
+std::vector<uint64_t> store_free_ids(const NodeStore& store) {
+    std::vector<uint64_t> ids;
+    store.fill_free_node_snapshot(ids);
+    return ids;
 }
 
 uint64_t resolved_store_id(const GraphBatchCommitter& committer, int rank,
@@ -182,6 +208,15 @@ struct Fixture {
     std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
     std::vector<int> issue_calls;
     GraphBatchCommitter committer;
+    // Fires observed through the production fire notifier (the only fire
+    // delivery path); drained test-side where the assertions are relative.
+    std::vector<WatchFire> watch_fires;
+
+    std::vector<WatchFire> drain_watch_fires() {
+        std::vector<WatchFire> drained = std::move(watch_fires);
+        watch_fires.clear();
+        return drained;
+    }
 
     static GraphBatchCommitter::Context make_context(
         Fixture* fixture, bool install_collective_resolver,
@@ -228,6 +263,9 @@ struct Fixture {
           committer(make_context(this, install_collective_resolver,
                                  declared_topology_is_consistent)) {
         ingress.bind(&eq, &mailbox, &svc);
+        registry.set_fire_notifier([this](const WatchFire& fire) {
+            watch_fires.push_back(fire);
+        });
         // One DISTINCT NodeStore per rank (a fill-constructed vector would
         // share a single store across all three "ranks").
         sources.reserve(3);
@@ -240,17 +278,14 @@ struct Fixture {
 // Observable state snapshot: everything the commit can write, flattened
 // for byte-level equality comparison (零副作用 assertion of Part B/D/P).
 struct Snapshot {
-    std::vector<size_t> pending;              // per-rank store node counts
+    std::vector<size_t> pending;  // per-rank unfinished (un-terminal) counts
     std::vector<std::vector<uint64_t>> free;  // per-rank free sets
-    size_t affine_ranks = 0;
     size_t watches = 0;
     size_t in_flight = 0;
     size_t prefill_drained = 0;
     bool event_queue_finished = false;
     bool event_queue_has_deferred_work = false;
     size_t ingress_pending_commands = 0;
-    size_t ingress_pending_queue_indices = 0;
-    size_t ingress_scheduled_future_arrivals = 0;
     size_t ingress_late_arrivals = 0;
     std::vector<int> issue_calls;
     uint64_t graph_batch_count = 0;
@@ -265,14 +300,11 @@ struct Snapshot {
 
 bool operator==(const Snapshot& a, const Snapshot& b) {
     return a.pending == b.pending && a.free == b.free &&
-           a.affine_ranks == b.affine_ranks && a.watches == b.watches &&
+           a.watches == b.watches &&
            a.in_flight == b.in_flight && a.prefill_drained == b.prefill_drained &&
            a.event_queue_finished == b.event_queue_finished &&
            a.event_queue_has_deferred_work == b.event_queue_has_deferred_work &&
            a.ingress_pending_commands == b.ingress_pending_commands &&
-           a.ingress_pending_queue_indices == b.ingress_pending_queue_indices &&
-           a.ingress_scheduled_future_arrivals ==
-               b.ingress_scheduled_future_arrivals &&
            a.ingress_late_arrivals == b.ingress_late_arrivals &&
            a.issue_calls == b.issue_calls &&
            a.graph_batch_count == b.graph_batch_count &&
@@ -288,19 +320,21 @@ bool operator==(const Snapshot& a, const Snapshot& b) {
 Snapshot snapshot_of(const Fixture& f) {
     Snapshot s;
     for (const auto& src : f.sources) {
-        s.pending.push_back(src->store().pending_count());
-        s.free.push_back(src->store().resolve_free_nodes());
+        // Live-path observations: the phase-3 sensing summary counts the
+        // unfinished records; the issue pass reads the free set through
+        // fill_free_node_snapshot.
+        s.pending.push_back(
+            src->store().injected_unfinished_summary(0).node_count);
+        s.free.push_back(store_free_ids(src->store()));
     }
-    s.affine_ranks = f.committer.rank_affine_count();
     s.watches = f.registry.size();
-    s.in_flight = f.committer.in_flight_requests().size();
-    s.prefill_drained = f.committer.prefill_drained_requests().size();
+    s.in_flight =
+        GraphBatchCommitterTestAccess::in_flight(f.committer).size();
+    s.prefill_drained =
+        GraphBatchCommitterTestAccess::prefill_drained(f.committer).size();
     s.event_queue_finished = f.eq.finished();
     s.event_queue_has_deferred_work = f.eq.has_deferred_work();
     s.ingress_pending_commands = f.ingress.pending_command_count();
-    s.ingress_pending_queue_indices = f.ingress.pending_queue_index_count();
-    s.ingress_scheduled_future_arrivals =
-        f.ingress.scheduled_future_arrival_count();
     s.ingress_late_arrivals = f.ingress.late_arrival_count();
     s.issue_calls = f.issue_calls;
     const auto& c = f.committer.counters();
@@ -495,7 +529,7 @@ StateDelta baseline_delta() {
 void expect_reject(Fixture& f, const StateDelta& delta, GraphBatch batch,
                    const char* what, const char* expected_error = nullptr) {
     const Snapshot before = snapshot_of(f);
-    const auto err = f.committer.validate(delta, batch);
+    const auto err = f.committer.validate_and_commit(delta, batch).error;
     expect(err.has_value(), what);
     if (!err.has_value()) {
         std::fprintf(stderr,
@@ -506,7 +540,8 @@ void expect_reject(Fixture& f, const StateDelta& delta, GraphBatch batch,
         expect(*err == expected_error,
                "B: validation reports the exact fail-closed reason");
     }
-    expect(snapshot_of(f) == before, "B: validate() left zero side effects");
+    expect(snapshot_of(f) == before,
+           "B: the rejected batch left zero side effects");
     if (!(snapshot_of(f) == before)) {
         std::fprintf(stderr,
                      "[graph_batch_committer_test] state mutated by %s\n",
@@ -701,8 +736,9 @@ void test_negative_cases(Fixture& f) {
 }
 
 // ---------------------------------------------------- Mandatory preflight --
-// The online driver can intentionally omit validate() (--online-validate=0;
-// the former sampled tier was removed on 2026-09-05).  Calling commit()
+// The online driver can intentionally omit the full validation
+// (--online-validate=0; the former sampled tier was removed on 2026-09-05).
+// Calling commit()
 // directly here is exactly that path: every case must fail before delta
 // facts, NodeStore,
 // watches, ingress alarms, issue calls, counters, or the EventQueue change.
@@ -978,9 +1014,6 @@ void test_mandatory_liveness_preflight() {
             "commit preflight: mandatory liveness preflight: future arrivals "
             "cannot be scheduled: future arrival request_id r3 has no registered "
             "queue index");
-        expect(f.ingress.pending_queue_index_count() == 1 &&
-                   f.ingress.scheduled_future_arrival_count() == 0,
-               "P: failed multi-alarm preflight consumed no queue index or reservation");
 
         // The retained r2 entry schedules with the first ingress serial.  If
         // the rejected batch had partially scheduled its earlier alarm, r2's
@@ -997,8 +1030,6 @@ void test_mandatory_liveness_preflight() {
         Fixture f;
         f.ingress.register_queue_index("r2", 42);
         f.committer.commit(delta, base);
-        expect(f.ingress.scheduled_future_arrival_count() == 1,
-               "P: successful future alarm reserves its request id");
 
         GraphBatch duplicate;
         duplicate.future_alarms = base.future_alarms;
@@ -1010,12 +1041,14 @@ void test_mandatory_liveness_preflight() {
             "commit preflight: mandatory liveness preflight: future arrivals "
             "cannot be scheduled: future arrival request_id r2 is already "
             "scheduled and awaiting arrival");
-        expect(f.ingress.scheduled_future_arrival_count() == 1,
-               "P: rejected cross-batch alarm retains only the original reservation");
 
         f.eq.proceed();
-        expect(f.ingress.scheduled_future_arrival_count() == 0,
-               "P: future arrival callback releases its reservation");
+        // The reservation's release is observable on the live path: the
+        // reserved alarm actually fires and deposits exactly one ARRIVAL.
+        const std::vector<DecisionEvent> arrivals = f.mailbox.drain();
+        expect(arrivals.size() == 1 && arrivals[0].request_id == "r2",
+               "P: rejected cross-batch alarm retained only the original "
+               "reservation, which the arrival callback released");
     }
 }
 
@@ -1072,7 +1105,7 @@ void test_json_id_stamp_wrap_and_recovery() {
     GraphBatch invalid = base;
     invalid.nodes[1].json_id = 2;  // rank 0 expects id 1 after its first node
     const Snapshot before_rejection = snapshot_of(f);
-    const auto rejection = f.committer.validate(delta, invalid);
+    const auto rejection = f.committer.validate_and_commit(delta, invalid).error;
     expect(rejection.has_value(),
            "C1: wrapped json-id stamp still rejects a broken stream");
     expect(snapshot_of(f) == before_rejection,
@@ -1096,16 +1129,25 @@ void test_positive_commit(Fixture& f) {
     const GraphBatch base = baseline_batch();
 
     // Pre-phase-5 fixture tolerance: a batch without touched_ranks still
-    // validates (absent field != declared empty array).
-    GraphBatch no_touched = base;
-    no_touched.has_touched_ranks = false;
-    no_touched.touched_ranks.clear();
-    expect(!f.committer.validate(delta, no_touched).has_value(),
-           "C: batch without touched_ranks field validates (pre-5 fixture)");
+    // validates (absent field != declared empty array). Proven on a fresh
+    // fixture so the tolerance commit does not disturb this fixture's
+    // baseline state below.
+    {
+        Fixture fresh;
+        GraphBatch no_touched = base;
+        no_touched.has_touched_ranks = false;
+        no_touched.touched_ranks.clear();
+        const auto tolerance =
+            fresh.committer.validate_and_commit(delta, no_touched);
+        expect(!tolerance.error.has_value(),
+               "C: batch without touched_ranks field validates (pre-5 fixture)");
+        expect(fresh.committer.counters().graph_batch_count == 1,
+               "C: the tolerance batch committed once");
+    }
 
-    expect(!f.committer.validate(delta, base).has_value(),
+    const auto committed = f.committer.validate_and_commit(delta, base);
+    expect(!committed.error.has_value(),
            "C: baseline batch validates clean");
-    f.committer.commit(delta, base);
 
     const auto& c = f.committer.counters();
     expect(c.graph_batch_count == 1, "C: graph_batch_count == 1");
@@ -1117,17 +1159,18 @@ void test_positive_commit(Fixture& f) {
     expect(c.total_kv_actions == 1, "C: total_kv_actions == 1");
     expect(c.total_future_alarms == 1, "C: total_future_alarms == 1");
 
-    expect(f.sources[0]->store().pending_count() == 2,
-           "C: rank 0 store holds 2 nodes");
-    expect(f.sources[1]->store().pending_count() == 3,
-           "C: rank 1 store holds 3 nodes");
-    expect(f.sources[2]->store().pending_count() == 2,
-           "C: rank 2 store holds 2 nodes");
+    expect(f.sources[0]->store().injected_unfinished_summary(0).node_count ==
+               2,
+           "C: rank 0 store holds 2 unfinished nodes");
+    expect(f.sources[1]->store().injected_unfinished_summary(0).node_count ==
+               3,
+           "C: rank 1 store holds 3 unfinished nodes");
+    expect(f.sources[2]->store().injected_unfinished_summary(0).node_count ==
+               2,
+           "C: rank 2 store holds 2 unfinished nodes");
 
     // Exact per-rank affine translation. NodeStore ids are PER-RANK (each
     // store starts at 1 here), while the metadata itself stays O(ranks).
-    expect(f.committer.rank_affine_count() == 3,
-           "C: affine metadata has one record per rank");
     expect(resolved_store_id(f.committer, 0, 0) == 1 &&
                resolved_store_id(f.committer, 0, 1) == 2,
            "C: rank 0 store ids 1, 2");
@@ -1140,21 +1183,21 @@ void test_positive_commit(Fixture& f) {
            "C: rank 2 store ids 1, 2 (per-rank id space)");
 
     // Parent edges block their children (free set = the batch's roots).
-    expect(f.sources[0]->store().resolve_free_nodes() ==
+    expect(store_free_ids(f.sources[0]->store()) ==
                std::vector<uint64_t>({1}),
            "C: rank 0 free set {1} (child blocked by the parent edge)");
-    expect(f.sources[1]->store().resolve_free_nodes() ==
+    expect(store_free_ids(f.sources[1]->store()) ==
                std::vector<uint64_t>({1}),
            "C: rank 1 free set {1} (0->1->2 chain)");
-    expect(f.sources[2]->store().resolve_free_nodes() ==
+    expect(store_free_ids(f.sources[2]->store()) ==
                std::vector<uint64_t>({1, 2}),
            "C: rank 2 free set {1, 2} (no edges on rank 2)");
 
     expect(f.registry.size() == 1, "C: one watch registered");
-    expect(f.committer.in_flight_requests() ==
+    expect(GraphBatchCommitterTestAccess::in_flight(f.committer) ==
                std::set<std::string>({"r1"}),
            "C: r1 in-flight after the commit");
-    expect(f.committer.prefill_drained_requests().empty(),
+    expect(GraphBatchCommitterTestAccess::prefill_drained(f.committer).empty(),
            "C: nothing prefill-drained yet");
     expect(f.issue_calls == std::vector<int>({0, 1, 2}),
            "C: issue pass covered exactly the touched ranks {0, 1, 2}");
@@ -1199,11 +1242,11 @@ void test_zero_node_batch(Fixture& f) {
 
     GraphBatch b = parse_batch(empty_response(1));
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    const auto e_committed = f.committer.validate_and_commit(delta, b);
+    expect(!e_committed.error.has_value(),
            "E: zero-node batch validates clean");
-    f.committer.commit(delta, b);
 
-    expect(f.committer.in_flight_requests().empty(),
+    expect(GraphBatchCommitterTestAccess::in_flight(f.committer).empty(),
            "E: r1 leaves the in-flight set on REQUEST_COMPLETE");
     const auto& c = f.committer.counters();
     expect(c.graph_batch_count == 2, "E: graph_batch_count == 2");
@@ -1251,9 +1294,9 @@ void test_single_node_batch(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    const auto f_committed = f.committer.validate_and_commit(delta, b);
+    expect(!f_committed.error.has_value(),
            "F: single-node batch validates clean");
-    f.committer.commit(delta, b);
 
     const auto& c = f.committer.counters();
     expect(c.graph_batch_count == 3, "F: graph_batch_count == 3");
@@ -1263,16 +1306,17 @@ void test_single_node_batch(Fixture& f) {
     expect(c.max_nodes_per_batch == 7, "F: max unchanged at 7");
     expect(c.total_watches == 2, "F: total_watches == 2");
 
-    expect(f.sources[0]->store().pending_count() == 3,
-           "F: rank 0 store holds 3 nodes");
+    expect(f.sources[0]->store().injected_unfinished_summary(0).node_count ==
+               3,
+           "F: rank 0 store holds 3 unfinished nodes");
     expect(resolved_store_id(f.committer, 0, 2) == 3,
            "F: json id 2 of batch 2 -> store id 3 on rank 0");
     // The new node's parent is the PREVIOUS batch's node (store id 2) --
     // the cross-batch edge resolved through the persistent map.
-    expect(f.sources[0]->store().resolve_free_nodes() ==
+    expect(store_free_ids(f.sources[0]->store()) ==
                std::vector<uint64_t>({1}),
            "F: new node blocked by its cross-batch parent");
-    expect(f.committer.in_flight_requests() ==
+    expect(GraphBatchCommitterTestAccess::in_flight(f.committer) ==
                std::set<std::string>({"r3"}),
            "F: r3 in-flight");
     expect(f.issue_calls == std::vector<int>({0, 1, 2, 0}),
@@ -1329,9 +1373,9 @@ void test_default_comm_compute_batch(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    const auto g_committed = f.committer.validate_and_commit(delta, b);
+    expect(!g_committed.error.has_value(),
            "G: metadata/compute nodes with default comm/coll validate");
-    f.committer.commit(delta, b);
     expect(f.committer.counters().graph_batch_count == 4,
            "G: graph_batch_count == 4");
 }
@@ -1378,26 +1422,26 @@ void test_hbm_charge_key_parsing(Fixture& f) {
     resp["touched_ranks"] = nlohmann::json::array({0, 1});
     GraphBatch b = parse_batch(resp);
 
-    expect(!f.committer.validate(delta, b).has_value(),
+    const auto h_committed = f.committer.validate_and_commit(delta, b);
+    expect(!h_committed.error.has_value(),
            "H: hbm_charge batch validates clean");
-    if (const auto err = f.committer.validate(delta, b)) {
+    if (h_committed.error.has_value()) {
         std::fprintf(stderr,
                      "[graph_batch_committer_test] H validate error: %s\n",
-                     err->c_str());
+                     h_committed.error->c_str());
     }
-    f.committer.commit(delta, b);
 
-    const auto comp_view =
-        f.sources[0]->lookup(resolved_store_id(f.committer, 0, 5));
-    expect(comp_view.has_value() && comp_view->comm.hbm_charge,
+    const NodeView* comp_view =
+        f.sources[0]->lookup_ptr(resolved_store_id(f.committer, 0, 5));
+    expect(comp_view != nullptr && comp_view->comm.hbm_charge,
            "H: absent comm.hbm_charge defaults to true");
-    const auto send_view =
-        f.sources[0]->lookup(resolved_store_id(f.committer, 0, 6));
-    expect(send_view.has_value() && !send_view->comm.hbm_charge,
+    const NodeView* send_view =
+        f.sources[0]->lookup_ptr(resolved_store_id(f.committer, 0, 6));
+    expect(send_view != nullptr && !send_view->comm.hbm_charge,
            "H: comm.hbm_charge=false parsed into the NodeView");
-    const auto recv_view =
-        f.sources[1]->lookup(resolved_store_id(f.committer, 1, 3));
-    expect(recv_view.has_value() && recv_view->comm.hbm_charge,
+    const NodeView* recv_view =
+        f.sources[1]->lookup_ptr(resolved_store_id(f.committer, 1, 3));
+    expect(recv_view != nullptr && recv_view->comm.hbm_charge,
            "H: absent comm.hbm_charge defaults to true (recv pair member)");
 
     // C1: the legacy kebab spelling now aborts the single structural parse
@@ -1556,11 +1600,11 @@ DecisionEvent drain_event(const std::string& req) {
 void drive_terminal(Fixture& f, int rank, uint64_t store_id,
                     NodeTerminalStatus status) {
     f.sources[rank]->store().finish_node(store_id);
-    const auto meta = f.sources[rank]->store().meta_for(store_id);
-    expect(meta.has_value(), "train: meta_for the driven node");
-    if (meta.has_value()) {
+    const OnlineNode* node = f.sources[rank]->store().node_ptr(store_id);
+    expect(node != nullptr, "train: node_ptr for the driven node");
+    if (node != nullptr) {
         f.registry.on_node_terminal(
-            CompletionKey{rank, store_id, meta->generation}, status);
+            CompletionKey{rank, store_id, node->generation}, status);
     }
 }
 
@@ -1585,13 +1629,13 @@ void test_train_batch_two_members(Fixture& f) {
     i1.events.push_back(arrival_event("req_B"));
     i1.events.push_back(drain_event("req_A"));
     GraphBatch setup = parse_batch(empty_response(5));
-    expect(!f.committer.validate(i1, setup).has_value(),
+    const auto i1_committed = f.committer.validate_and_commit(i1, setup);
+    expect(!i1_committed.error.has_value(),
            "I: epoch-1 zero-node setup batch validates clean");
-    f.committer.commit(i1, setup);
-    expect(f.committer.in_flight_requests() ==
+    expect(GraphBatchCommitterTestAccess::in_flight(f.committer) ==
                std::set<std::string>({"r3", "r9", "r10", "req_A", "req_B"}),
            "I: both train members in-flight after epoch 1");
-    expect(f.committer.prefill_drained_requests() ==
+    expect(GraphBatchCommitterTestAccess::prefill_drained(f.committer) ==
                std::set<std::string>({"req_A"}),
            "I: req_A prefill-drained after epoch 1");
 
@@ -1612,7 +1656,7 @@ void test_train_batch_two_members(Fixture& f) {
         no_drain_b.delivery_epoch = 6;
         no_drain_b.tick = 550;
         const Snapshot probe_before = snapshot_of(f);
-        const auto err = f.committer.validate(no_drain_b, train);
+        const auto err = f.committer.validate_and_commit(no_drain_b, train).error;
         expect(err.has_value(),
                "I: decode watch of a never-drained member is blocked");
         if (err.has_value()) {
@@ -1631,9 +1675,9 @@ void test_train_batch_two_members(Fixture& f) {
     i2.delivery_epoch = 6;
     i2.tick = 550;
     i2.events.push_back(drain_event("req_B"));
-    expect(!f.committer.validate(i2, train).has_value(),
+    const auto i2_committed = f.committer.validate_and_commit(i2, train);
+    expect(!i2_committed.error.has_value(),
            "I: two-request train batch validates clean (zero relaxation)");
-    f.committer.commit(i2, train);
 
     const auto& c = f.committer.counters();
     expect(c.graph_batch_count == before.graph_batch_count + 2,
@@ -1643,10 +1687,10 @@ void test_train_batch_two_members(Fixture& f) {
     expect(c.total_watches == before.total_watches + 2,
            "I: total_watches +2 (the member watches)");
     expect(c.max_nodes_per_batch == 12, "I: max_nodes_per_batch == 12");
-    expect(f.committer.in_flight_requests() ==
+    expect(GraphBatchCommitterTestAccess::in_flight(f.committer) ==
                std::set<std::string>({"r3", "r9", "r10", "req_A", "req_B"}),
            "I: train commit adds no arrivals");
-    expect(f.committer.prefill_drained_requests() ==
+    expect(GraphBatchCommitterTestAccess::prefill_drained(f.committer) ==
                std::set<std::string>({"req_A", "req_B"}),
            "I: req_B drained by the train epoch's own delta fact");
     expect(f.registry.size() == before.watches + 2,
@@ -1656,9 +1700,9 @@ void test_train_batch_two_members(Fixture& f) {
     for (int rank = 0; rank < 3; ++rank) {
         expect(f.issue_calls[before.issue_calls.size() + rank] == rank,
                "I: issue pass covered exactly the touched ranks {0, 1, 2}");
-        expect(f.sources[rank]->store().pending_count() ==
-                   before.pending[rank] + 4,
-               "I: per-rank store gained the 4 train nodes");
+        expect(f.sources[rank]->store().injected_unfinished_summary(0)
+                       .node_count == before.pending[rank] + 4,
+               "I: per-rank store gained the 4 unfinished train nodes");
     }
 
     // Store-id translation: rank-local contiguous train ids resolve through
@@ -1685,7 +1729,7 @@ void test_train_batch_two_members(Fixture& f) {
         drive_terminal(f, rank, barrier_ids[rank],
                        NodeTerminalStatus::Success);
     }
-    expect(f.registry.fired_and_drain().empty(),
+    expect(f.watch_fires.empty(),
            "I: namespace body/barrier terminals fire no watch");
 
     // Member markers feed the member watches (one Skipped terminal on the
@@ -1699,7 +1743,7 @@ void test_train_batch_two_members(Fixture& f) {
                        rank == 1 ? NodeTerminalStatus::Skipped
                                  : NodeTerminalStatus::Success);
     }
-    const std::vector<WatchFire> fires = f.registry.fired_and_drain();
+    const std::vector<WatchFire> fires = f.drain_watch_fires();
     expect(fires.size() == 2, "I: both member decode watches fired");
     std::set<std::string> fired_members;
     for (const auto& fire : fires) {
@@ -1717,7 +1761,7 @@ void test_train_batch_two_members(Fixture& f) {
     // The dependency chain closed: with body + markers finished on every
     // rank, each rank's end barrier entered its free set.
     for (int rank = 0; rank < 3; ++rank) {
-        const auto free = f.sources[rank]->store().resolve_free_nodes();
+        const auto free = store_free_ids(f.sources[rank]->store());
         const std::set<uint64_t> free_set(free.begin(), free.end());
         expect(free_set.count(barrier_ids[rank]) == 1,
                "I: end barrier free after its train finished");
@@ -1745,9 +1789,9 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
     const GraphBatch train = train_batch(
         7, "batch_train_2_3", {{"req_C", "prefill"}, {"req_D", "decode"}},
         4, mixed_first_json_ids);
-    expect(!f.committer.validate(j1, train).has_value(),
+    const auto j1_committed = f.committer.validate_and_commit(j1, train);
+    expect(!j1_committed.error.has_value(),
            "J: mixed drain+exit train validates clean (zero relaxation)");
-    f.committer.commit(j1, train);
 
     const auto& c = f.committer.counters();
     expect(c.graph_batch_count == before.graph_batch_count + 1,
@@ -1756,11 +1800,11 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
            "J: total_nodes +12 (the 12-node mixed train)");
     expect(c.total_watches == before.total_watches + 2,
            "J: total_watches +2");
-    expect(f.committer.in_flight_requests() ==
+    expect(GraphBatchCommitterTestAccess::in_flight(f.committer) ==
                std::set<std::string>(
                    {"r3", "r9", "r10", "req_A", "req_B", "req_C", "req_D"}),
            "J: mixed-train members in-flight");
-    expect(f.committer.prefill_drained_requests() ==
+    expect(GraphBatchCommitterTestAccess::prefill_drained(f.committer) ==
                std::set<std::string>({"req_A", "req_B", "req_D"}),
            "J: req_D drained by the train epoch's own delta fact");
     expect(f.registry.size() == before.watches + 2,
@@ -1778,7 +1822,7 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
                        resolved_store_id(f.committer, rank, first_json_id + 2),
                        NodeTerminalStatus::Success);  // req_D exit marker
     }
-    const std::vector<WatchFire> fires = f.registry.fired_and_drain();
+    const std::vector<WatchFire> fires = f.drain_watch_fires();
     expect(fires.size() == 2, "J: drain watch and exit watch both fired");
     std::map<std::string, std::pair<std::string, uint64_t>> fired;
     for (const auto& fire : fires) {
@@ -1805,10 +1849,10 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
     const GraphBatch sentinel = train_batch(
         8, "batch_train_9_9", {{"batch_train_9_9", "prefill"}}, 4,
         sentinel_first_json_ids);
-    expect(!f.committer.validate(j2, sentinel).has_value(),
+    const auto j2_committed = f.committer.validate_and_commit(j2, sentinel);
+    expect(!j2_committed.error.has_value(),
            "J: batch-namespace sentinel watch bypasses in-flight "
            "eligibility");
-    f.committer.commit(j2, sentinel);
     for (int rank = 0; rank < 3; ++rank) {
         drive_terminal(f, rank,
                        resolved_store_id(
@@ -1816,14 +1860,69 @@ void test_train_batch_drain_and_exit_markers(Fixture& f) {
                            sentinel_first_json_ids.at(rank) + 1),
                        NodeTerminalStatus::Success);  // sentinel marker
     }
-    const std::vector<WatchFire> sentinel_fires =
-        f.registry.fired_and_drain();
+    const std::vector<WatchFire> sentinel_fires = f.drain_watch_fires();
     expect(sentinel_fires.size() == 1,
            "J: sentinel watch fired exactly once");
     if (!sentinel_fires.empty()) {
         expect(sentinel_fires[0].request_id == "batch_train_9_9" &&
                    sentinel_fires[0].stage == "prefill",
                "J: sentinel fire carries the train identity");
+    }
+}
+
+// ----------------------------------------------------------- Part R2 ------
+// (2026-10-01) Same-day regression pins for the two committer fixes:
+// (a) apply_delta_facts skips batch_train_ sentinel PREFILL_DRAIN facts
+//     (prefill_drained_ used to retain one entry per truncated train for
+//     the whole run -- linear growth, zero readers);
+// (b) a DUPLICATED touched_ranks declaration that spoofed the size
+//     comparison ({0,0,1} vs nodes on {0,1,2}) must fail the production
+//     preflight (the parse layer deliberately admits duplicates, T8).
+// (b) must run on the FRESH fixture (first registered test): a later
+// re-commit of the baseline json ids would be rejected by the affine
+// drift/id-stream preflight BEFORE the touched_ranks block, masking the
+// reason under test.
+void test_touched_ranks_duplicate_gate(Fixture&) {
+    // Fresh local fixture (Part P's isolation pattern): a re-commit of the
+    // baseline json ids on the shared fixture would die in the affine
+    // drift/id-stream preflight first and mask the reason under test.
+    Fixture fresh;
+    GraphBatch b = baseline_batch();
+    // declared {0,0,1} vs nodes on {0,1,2}: size 3 == 3 and every declared
+    // rank carries nodes, so ONLY the strict-ascending check catches it.
+    b.touched_ranks = std::vector<int>({0, 0, 1});
+    expect_direct_commit_reject(
+        fresh, baseline_delta(), b,
+        "R2: duplicated touched_ranks declaration rejected on the "
+        "production path",
+        "commit preflight: mandatory liveness preflight: touched_ranks is "
+        "not strictly ascending (duplicate or unsorted rank declaration)");
+}
+
+void test_sentinel_facts_gate(Fixture& f) {
+    // (a) real drains stay tracked; sentinel drains do not. r1's arrival
+    // was committed by Part C and completed by Part E, but apply_delta_facts
+    // applies a drain fact regardless of in-flight state (facts are trusted
+    // C++ watch-fire records); the fixture's earlier parts left req_A/req_B/
+    // req_D in prefill_drained_, so assert membership instead of set
+    // equality.
+    {
+        StateDelta d2;
+        d2.delivery_sequence = 100;
+        d2.delivery_epoch = 100;
+        d2.tick = 700;
+        d2.events.push_back(drain_event("r1"));
+        d2.events.push_back(drain_event("batch_train_5_5"));
+        const auto committed2 = f.committer.validate_and_commit(
+            d2, parse_batch(empty_response(100)));
+        expect(!committed2.error.has_value(),
+               "R2: zero-node setup batch with mixed drain facts commits");
+        const std::set<std::string>& drained =
+            GraphBatchCommitterTestAccess::prefill_drained(f.committer);
+        expect(drained.count("r1") == 1,
+               "R2: the real request's drain fact is retained");
+        expect(drained.count("batch_train_5_5") == 0,
+               "R2: sentinel drain fact not retained in prefill_drained_");
     }
 }
 
@@ -1859,8 +1958,8 @@ void test_parse_failure_atomicity(Fixture& f) {
         GraphBatch b = baseline_batch();
         b.nodes[0].node.rank = 99;
         const Snapshot before = snapshot_of(f);
-        expect(f.committer.validate(delta, b).has_value(),
-               "P: post-parse rank corruption rejected by validate");
+        expect(f.committer.validate_and_commit(delta, b).error.has_value(),
+               "P: post-parse rank corruption rejected by the validation");
         expect(snapshot_of(f) == before,
                "P: rejection of the corrupted batch has zero side effects");
     }
@@ -1946,14 +2045,13 @@ GraphBatch gc_empty_batch(uint64_t sequence) {
 bool commit_gc_batch(GcFixture& fixture, const GraphBatch& batch,
                      const char* what) {
     const StateDelta delta = gc_delta(batch.batch_id);
-    const auto error = fixture.committer->validate(delta, batch);
+    const auto error = fixture.committer->validate_and_commit(delta, batch).error;
     expect(!error.has_value(), what);
     if (error.has_value()) {
         std::fprintf(stderr, "[graph_batch_committer_test] GC validate: %s\n",
                      error->c_str());
         return false;
     }
-    fixture.committer->commit(delta, batch);
     return true;
 }
 
@@ -1981,15 +2079,15 @@ void test_gc_bounded_id_history_and_pruning() {
     finish_gc_json_id(fixture, 7, "K: first id has a live mapping");
     fixture.committer->finalize_node_garbage();
     expect(first_store_id.has_value() &&
-               fixture.sources[0]->store().erased(*first_store_id) &&
-               fixture.committer->rank_affine_count() == 1,
+               fixture.sources[0]->store().erased(*first_store_id),
            "K: finalized node is erased but its affine translation persists");
 
     // The producer contract is one contiguous per-rank stream. A gap must be
     // rejected even when expensive semantic validation is skipped, and the
     // direct commit preflight must leave all state untouched.
     const GraphBatch gap = gc_compute_batch(1, 9, 1, "gc-gap");
-    const auto gap_error = fixture.committer->validate(gc_delta(1), gap);
+    const auto gap_error =
+        fixture.committer->validate_and_commit(gc_delta(1), gap).error;
     expect(gap_error.has_value(), "K: sparse id gap fails validation");
     const auto counters_before_gap = fixture.committer->counters();
     bool gap_commit_threw = false;
@@ -2002,7 +2100,6 @@ void test_gc_bounded_id_history_and_pruning() {
            "K: validate-off direct commit rejects sparse id gap");
     expect(first_store_id.has_value() &&
                fixture.committer->resolve_store_id(0, 7) == first_store_id &&
-               fixture.committer->rank_affine_count() == 1 &&
                fixture.sources[0]->store().retained_count() == 0 &&
                fixture.committer->counters().graph_batch_count ==
                    counters_before_gap.graph_batch_count,
@@ -2019,7 +2116,7 @@ void test_gc_bounded_id_history_and_pruning() {
     }
     const auto after_store_id = fixture.committer->resolve_store_id(0, 8);
     expect(after_store_id.has_value() &&
-               fixture.sources[0]->store().resolve_free_nodes() ==
+               store_free_ids(fixture.sources[0]->store()) ==
                    std::vector<uint64_t>({*after_store_id}),
            "K: edge from collected parent is non-blocking");
     finish_gc_json_id(fixture, 8, "K: child after collected parent maps");
@@ -2037,22 +2134,22 @@ void test_gc_bounded_id_history_and_pruning() {
                next_store_id.has_value() &&
                fixture.sources[0]->store().erased(*first_store_id) &&
                fixture.sources[0]->store().erased(*after_store_id) &&
-               fixture.sources[0]->store().erased(*next_store_id) &&
-               fixture.committer->rank_affine_count() == 1,
+               fixture.sources[0]->store().erased(*next_store_id),
            "K: all collected ids remain exactly resolvable in O(ranks) state");
 
     const auto duplicate_seven =
-        fixture.committer->validate(gc_delta(3),
-                                    gc_compute_batch(3, 7, 1, "gc-dup-7"));
+        fixture.committer->validate_and_commit(
+            gc_delta(3), gc_compute_batch(3, 7, 1, "gc-dup-7")).error;
     expect(duplicate_seven.has_value(),
            "K: duplicate collected first id fails closed");
     const auto duplicate_eight =
-        fixture.committer->validate(gc_delta(4),
-                                    gc_compute_batch(4, 8, 1, "gc-dup-8"));
+        fixture.committer->validate_and_commit(
+            gc_delta(4), gc_compute_batch(4, 8, 1, "gc-dup-8")).error;
     expect(duplicate_eight.has_value(),
            "K: duplicate committed range id fails closed");
-    const auto unknown_parent = fixture.committer->validate(
-        gc_delta(5), gc_compute_batch(5, 10, 1, "gc-unknown", 6));
+    const auto unknown_parent =
+        fixture.committer->validate_and_commit(
+            gc_delta(5), gc_compute_batch(5, 10, 1, "gc-unknown", 6)).error;
     expect(unknown_parent.has_value(),
            "K: never-committed low-id parent fails closed");
 }
@@ -2103,7 +2200,6 @@ void test_gc_amortized_tracking_bound() {
     expect(root_store_id.has_value() && threshold_store_id.has_value() &&
                !fixture.sources[0]->store().erased(*root_store_id) &&
                fixture.sources[0]->store().erased(*threshold_store_id) &&
-               fixture.committer->rank_affine_count() == 1 &&
                fixture.sources[0]->store().retained_count() == 1,
            "L: collection keeps one live record and fixed affine metadata");
 
@@ -2126,8 +2222,7 @@ void test_gc_amortized_tracking_bound() {
     const auto second_last_store_id =
         fixture.committer->resolve_store_id(0, second_last);
     expect(second_last_store_id.has_value() &&
-               fixture.sources[0]->store().erased(*second_last_store_id) &&
-               fixture.committer->rank_affine_count() == 1,
+               fixture.sources[0]->store().erased(*second_last_store_id),
            "L: later collected ids retain translation without per-node state");
 
     const uint64_t final_short = second_first + second_count;
@@ -2144,7 +2239,6 @@ void test_gc_amortized_tracking_bound() {
     expect(root_store_id.has_value() && final_store_id.has_value() &&
                !fixture.sources[0]->store().erased(*root_store_id) &&
                fixture.sources[0]->store().erased(*final_store_id) &&
-               fixture.committer->rank_affine_count() == 1 &&
                fixture.sources[0]->store().retained_count() == 1,
            "L: final drain retains only the live NodeStore record");
 }
@@ -2162,8 +2256,7 @@ void test_preseeded_store_id_is_captured() {
     const auto store_id = fixture.committer->resolve_store_id(0, 73);
     expect(store_id.has_value() && *store_id == 3 &&
                fixture.sources[0]->store().next_auto_id() == 4 &&
-               !fixture.committer->resolve_store_id(0, 72).has_value() &&
-               fixture.committer->rank_affine_count() == 1,
+               !fixture.committer->resolve_store_id(0, 72).has_value(),
            "M: first affine mapping uses add_node's actual returned id");
 }
 
@@ -2193,26 +2286,28 @@ void test_affine_drift_fails_closed() {
     drift_delta.events.push_back(arrival);
     const GraphBatch next = gc_compute_batch(1, 42, 1, "gc-drift-next");
 
-    const size_t pending_before = fixture.sources[0]->store().pending_count();
+    const size_t pending_before =
+        fixture.sources[0]->store().injected_unfinished_summary(0).node_count;
     const size_t retained_before = fixture.sources[0]->store().retained_count();
     const uint64_t next_auto_before =
         fixture.sources[0]->store().next_auto_id();
-    const size_t affine_before = fixture.committer->rank_affine_count();
     const auto counters_before = fixture.committer->counters();
 
-    const auto validation_error = fixture.committer->validate(drift_delta, next);
+    const auto validation_error =
+        fixture.committer->validate_and_commit(drift_delta, next).error;
     expect(validation_error.has_value() &&
                validation_error->find("drift") != std::string::npos,
-           "N: validate fails closed on external NodeStore drift");
-    expect(fixture.sources[0]->store().pending_count() == pending_before &&
+           "N: validation fails closed on external NodeStore drift");
+    expect(fixture.sources[0]->store().injected_unfinished_summary(0)
+                       .node_count == pending_before &&
                fixture.sources[0]->store().retained_count() == retained_before &&
                fixture.sources[0]->store().next_auto_id() == next_auto_before &&
-               fixture.committer->rank_affine_count() == affine_before &&
                fixture.committer->resolve_store_id(0, 41) == first_store_id &&
                !fixture.committer->resolve_store_id(0, 42).has_value() &&
-               fixture.committer->in_flight_requests().empty() &&
+               GraphBatchCommitterTestAccess::in_flight(*fixture.committer)
+                   .empty() &&
                same_counters(fixture.committer->counters(), counters_before),
-           "N: validate drift failure leaves delta/store/affine/counters intact");
+           "N: validation drift failure leaves delta/store/counters intact");
 
     bool threw = false;
     try {
@@ -2221,15 +2316,16 @@ void test_affine_drift_fails_closed() {
         threw = true;
     }
     expect(threw, "N: direct commit fails closed on external NodeStore drift");
-    expect(fixture.sources[0]->store().pending_count() == pending_before &&
+    expect(fixture.sources[0]->store().injected_unfinished_summary(0)
+                       .node_count == pending_before &&
                fixture.sources[0]->store().retained_count() == retained_before &&
                fixture.sources[0]->store().next_auto_id() == next_auto_before &&
-               fixture.committer->rank_affine_count() == affine_before &&
                fixture.committer->resolve_store_id(0, 41) == first_store_id &&
                !fixture.committer->resolve_store_id(0, 42).has_value() &&
-               fixture.committer->in_flight_requests().empty() &&
+               GraphBatchCommitterTestAccess::in_flight(*fixture.committer)
+                   .empty() &&
                same_counters(fixture.committer->counters(), counters_before),
-           "N: direct drift failure leaves delta/store/affine/counters intact");
+           "N: direct drift failure leaves delta/store/counters intact");
 }
 
 void test_affine_metadata_under_million_node_pressure() {
@@ -2272,14 +2368,14 @@ void test_affine_metadata_under_million_node_pressure() {
                *first_store_id == 1 && *last_store_id == kTotalNodes &&
                fixture.sources[0]->store().erased(*first_store_id) &&
                fixture.sources[0]->store().erased(*last_store_id) &&
-               fixture.sources[0]->store().retained_count() == 0 &&
-               fixture.committer->rank_affine_count() == 1,
+               fixture.sources[0]->store().retained_count() == 0,
            "O: one million committed ids retain O(ranks) affine metadata");
 }
 
 }  // namespace
 int main() {
     Fixture f;
+    test_touched_ranks_duplicate_gate(f);
     test_negative_cases(f);
     test_mandatory_liveness_preflight();
     test_validate_and_commit_atomic();
@@ -2293,6 +2389,7 @@ int main() {
     test_parse_failure_atomicity(f);
     test_train_batch_two_members(f);
     test_train_batch_drain_and_exit_markers(f);
+    test_sentinel_facts_gate(f);
     test_gc_bounded_id_history_and_pruning();
     test_gc_amortized_tracking_bound();
     test_preseeded_store_id_is_captured();

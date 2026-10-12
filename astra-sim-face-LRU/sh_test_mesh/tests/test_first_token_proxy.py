@@ -65,7 +65,8 @@ def _fake_index(first_train_by_request, next_tick_by_position):
 class ModelBytesTests(unittest.TestCase):
     def test_authoritative_conversions(self):
         """trace_config.csv (llama2_7b, swiglu) -> frozen face_scheduler
-        numbers (test_face_scheduler.py:371 pins the same value)."""
+        numbers (test_face_scheduler.py's authoritative-conversions test
+        pins the same value)."""
 
         weight_bytes, kv_per_token = mp._load_model_bytes()
         self.assertEqual(weight_bytes, 13_476_831_232)
@@ -165,9 +166,11 @@ class ProxyFormulaTests(unittest.TestCase):
 
     def test_dl1_pinned_to_completion(self):
         """decode_length==1 debut inside a MULTI-iteration train: share<1
-        interpolation lands BEFORE the recorded completion tick, but
-        exact-mode semantics for dl1 is first_token==completion -- pin and
-        say so (face 0902 full_rt: 18/268 dl1 rows, up to 4.9s early)."""
+        interpolation lands BEFORE the recorded completion tick -- pinned
+        to completion.  The pin is an approximation biased LATE (proxy >=
+        exact first token), display-only: WP9_CONTRACT sec.6 (2026-08-27)
+        relaxed the old first_token==completion equality for dl1 (face 0902
+        full_rt: 18/268 dl1 rows, up to 4.9s early)."""
         index = _fake_index(
             {"r": (0, _ledger_row(tick=1_000_000, iterations=8))},
             {0: 9_000_000},

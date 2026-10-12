@@ -12,6 +12,7 @@ the root directory of this source tree.
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 #include "astra-sim/system/Common.hh"
@@ -59,7 +60,17 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
   }
 
   json j;
-  conf_file >> j;
+  // nlohmann::json reports malformed or truncated configuration through an
+  // exception. This constructor is noexcept because the Sys factory uses it
+  // as a fail-closed boundary; let the backend print the configuration path
+  // before taking the hard-exit path instead of terminating without context.
+  try {
+    conf_file >> j;
+  } catch (const std::exception& e) {
+    cerr << "Unable to parse remote-memory configuration "
+         << memory_configuration << ": " << e.what() << endl;
+    exit(1);
+  }
 
   if (j.contains("memory-type")) {
     string mem_type_str = j["memory-type"];
@@ -259,7 +270,8 @@ Tick AnalyticalRemoteMemory::ceil_tick(double t_ns) {
     fatal("non-finite completion time");
   }
   const double c = ceil(t_ns);
-  if (c < 0.0 || c > static_cast<double>(numeric_limits<Tick>::max())) {
+  if (c < 0.0 ||
+      c >= static_cast<double>(numeric_limits<Tick>::max())) {
     fatal("callback Tick out of representable range");
   }
   return static_cast<Tick>(c);
@@ -361,14 +373,76 @@ AnalyticalRemoteMemory::flip_due_jobs(PortState& port, const double t) {
   return summary;
 }
 
+bool AnalyticalRemoteMemory::has_due_stream_membership_flip(
+    const PortState& port, const double time_ns) {
+  return any_of(port.jobs.begin(), port.jobs.end(),
+      [time_ns](const PortJob& job) {
+        return (job.state == PortJobState::LatencyWaiting && job.bytes > 0 &&
+                job.latency_ready_ns <= time_ns + kTimeEpsNs) ||
+               (job.state == PortJobState::Streaming &&
+                job.remaining_bytes <= kByteEps);
+      });
+}
+
+void AnalyticalRemoteMemory::notify_port_resource_mutation(
+    const bool before_change, const std::size_t port_index,
+    const double time_ns) noexcept {
+  if (port_resource_mutation_observers_.empty()) return;
+  const uint64_t version = ports_.at(port_index).resource_version;
+  std::vector<PortResourceMutationObserver> observers;
+  observers.reserve(port_resource_mutation_observers_.size());
+  for (const auto& entry : port_resource_mutation_observers_) {
+    observers.push_back(entry.second);
+  }
+  for (const auto& observer : observers) {
+    try {
+      observer(before_change, port_index, time_ns, version);
+    } catch (const std::exception& error) {
+      fatal(std::string("port resource mutation observer failed: ") +
+            error.what());
+    } catch (...) {
+      fatal("port resource mutation observer failed");
+    }
+  }
+}
+
+void AnalyticalRemoteMemory::bump_port_resource_version(
+    const std::size_t port_index, const double time_ns) noexcept {
+  PortState& port = ports_.at(port_index);
+  if (port.resource_version == numeric_limits<uint64_t>::max()) {
+    fatal("port resource version exhausted");
+  }
+  ++port.resource_version;
+  notify_port_resource_mutation(false, port_index, time_ns);
+}
+
 double AnalyticalRemoteMemory::advance_port(const double bw_bytes_per_ns,
                                             PortState& port, double from_ns,
                                             const double to_ns,
-                                            const bool stop_at_first_completion) {
+                                            const bool stop_at_first_completion,
+                                            const std::size_t port_index,
+                                            const bool publish_resource_mutations) {
+  const auto flip_at = [this, &port, port_index,
+                        publish_resource_mutations](const double time_ns) {
+    const bool resource_change =
+        publish_resource_mutations &&
+        has_due_stream_membership_flip(port, time_ns);
+    if (resource_change) {
+      notify_port_resource_mutation(true, port_index, time_ns);
+    }
+    const FlipSummary result = flip_due_jobs(port, time_ns);
+    if (publish_resource_mutations &&
+        (result.joins != 0 || result.completions != 0)) {
+      // One version per port and continuous instant, irrespective of how
+      // many streams join or exhaust together.
+      bump_port_resource_version(port_index, time_ns);
+    }
+    return result;
+  };
   double t = from_ns;
   while (to_ns - t > kTimeEpsNs || stop_at_first_completion) {
     // (A) Sweep the event point at t.
-    const FlipSummary flip = flip_due_jobs(port, t);
+    const FlipSummary flip = flip_at(t);
     if (stop_at_first_completion && flip.stream_completed) {
       return t;
     }
@@ -440,7 +514,7 @@ double AnalyticalRemoteMemory::advance_port(const double bw_bytes_per_ns,
   // (A') Final sweep: event points exactly at to_ns.  The loop condition
   // stops integration at to_ns before their flip (e.g. a stream whose
   // completion instant is exactly the target Tick).
-  flip_due_jobs(port, to_ns);
+  flip_at(to_ns);
   return to_ns;
 }
 
@@ -448,16 +522,18 @@ void AnalyticalRemoteMemory::advance_all_ports_to(const double t_ns) {
   if (t_ns < current_time_ns_ - kTimeEpsNs) {
     fatal("time regression in fluid advance");
   }
-  for (PortState& port : ports_) {
-    advance_port(remote_mem_bw, port, current_time_ns_, t_ns,
-                 /*stop_at_first_completion=*/false);
+  for (std::size_t port_index = 0; port_index < ports_.size(); ++port_index) {
+    advance_port(remote_mem_bw, ports_[port_index], current_time_ns_, t_ns,
+                 /*stop_at_first_completion=*/false, port_index,
+                 /*publish_resource_mutations=*/true);
   }
   current_time_ns_ = t_ns;
 }
 
-Tick AnalyticalRemoteMemory::earliest_callback_tick() const {
+Tick AnalyticalRemoteMemory::earliest_callback_tick() {
   double best_ns = numeric_limits<double>::infinity();
-  for (const PortState& port : ports_) {
+  for (std::size_t port_index = 0; port_index < ports_.size(); ++port_index) {
+    const PortState& port = ports_[port_index];
     for (const PortJob& job : port.jobs) {
       if (job.state == PortJobState::FluidCompleteAwaitingCallback) {
         best_ns = min(best_ns, static_cast<double>(job.callback_tick));
@@ -471,7 +547,8 @@ Tick AnalyticalRemoteMemory::earliest_callback_tick() const {
   // Exact first streaming completion per port: latency joins happen at known
   // instants, so a read-only piecewise replay gives the exact instant and the
   // transition event never fires before any due callback.
-  for (const PortState& port : ports_) {
+  for (std::size_t port_index = 0; port_index < ports_.size(); ++port_index) {
+    const PortState& port = ports_[port_index];
     const bool has_streaming_or_joining = any_of(
         port.jobs.begin(), port.jobs.end(), [](const PortJob& job) {
           return job.state == PortJobState::Streaming ||
@@ -488,7 +565,8 @@ Tick AnalyticalRemoteMemory::earliest_callback_tick() const {
     const double first_completion =
         advance_port(remote_mem_bw, peek, current_time_ns_,
                      numeric_limits<double>::infinity(),
-                     /*stop_at_first_completion=*/true);
+                     /*stop_at_first_completion=*/true, port_index,
+                     /*publish_resource_mutations=*/false);
     best_ns = min(best_ns, first_completion);
   }
   if (!isfinite(best_ns)) {
@@ -789,6 +867,11 @@ void AnalyticalRemoteMemory::issue(uint64_t tensor_size,
     fatal("non-finite latency-ready instant");
   }
 
+  const bool dual_zero = tensor_size == 0 && remote_mem_latency_ns == 0.0;
+  if (!dual_zero) {
+    notify_port_resource_mutation(true, port_index, now_ns);
+  }
+
   ++stats.issued_count;
   stats.issued_bytes += tensor_size;
   ++stats.in_flight_count;
@@ -815,7 +898,7 @@ void AnalyticalRemoteMemory::issue(uint64_t tensor_size,
     telemetry->latency_ready_ns = ready_ns;
   }
 
-  if (tensor_size == 0 && remote_mem_latency_ns == 0.0) {
+  if (dual_zero) {
     // §3.2 semantic change: 0B/0ns no longer completes on the issue stack.
     // It runs as an independent one-shot timer at +1ns, outside the port job
     // set and never inside any bandwidth denominator.
@@ -824,6 +907,9 @@ void AnalyticalRemoteMemory::issue(uint64_t tensor_size,
     // the issuing rank's Sys is never an event host for backend state.
     if (host_sys_ == nullptr) {
       fatal("issue before set_sys");
+    }
+    if (now == numeric_limits<Tick>::max()) {
+      fatal("dual-zero callback Tick would overflow");
     }
     DualZeroJob job;
     job.timer_seq = ++next_timer_seq_;
@@ -857,6 +943,7 @@ void AnalyticalRemoteMemory::issue(uint64_t tensor_size,
   }
   ++stats.latency_waiting_count;
   port.jobs.push_back(std::move(job));
+  bump_port_resource_version(port_index, now_ns);
 
   // Deadline-diff replan: keeps the queued transition when it still covers
   // the new earliest deadline (the §3.3 same-Tick keep rule lives here).
@@ -868,6 +955,35 @@ void AnalyticalRemoteMemory::issue(uint64_t tensor_size,
 //------------------------------------------------------------------------------
 
 std::size_t AnalyticalRemoteMemory::port_count() const { return ports_.size(); }
+
+uint64_t AnalyticalRemoteMemory::port_resource_version(
+    const std::size_t port_index) const {
+  if (port_index >= ports_.size()) {
+    fatal("port_resource_version port index is out of range");
+  }
+  return ports_[port_index].resource_version;
+}
+
+uint64_t AnalyticalRemoteMemory::add_port_resource_mutation_observer(
+    PortResourceMutationObserver observer) {
+  if (!observer) {
+    throw std::invalid_argument("remote port resource observer is empty");
+  }
+  if (next_port_resource_observer_id_ == 0 ||
+      next_port_resource_observer_id_ == numeric_limits<uint64_t>::max()) {
+    throw std::overflow_error("remote port resource observer id exhausted");
+  }
+  const uint64_t id = next_port_resource_observer_id_++;
+  port_resource_mutation_observers_.emplace(id, std::move(observer));
+  return id;
+}
+
+void AnalyticalRemoteMemory::remove_port_resource_mutation_observer(
+    const uint64_t observer_id) noexcept {
+  if (observer_id != 0) {
+    port_resource_mutation_observers_.erase(observer_id);
+  }
+}
 
 AnalyticalRemoteMemory::PortStatsSnapshot
 AnalyticalRemoteMemory::port_stats(const std::size_t port_index) const {
@@ -913,6 +1029,56 @@ AnalyticalRemoteMemory::make_stats_replay_copy(const PortState& port) {
     copy.jobs.push_back(std::move(scalar_clone));
   }
   return copy;
+}
+
+//------------------------------------------------------------------------------
+// W1 (joint work ledger): per-port job snapshot
+//------------------------------------------------------------------------------
+
+std::vector<AnalyticalRemoteMemory::PortLedgerSnapshot>
+AnalyticalRemoteMemory::port_snapshot() {
+  // Pure read of the live per-port job sets. Dual-zero timers are not port
+  // jobs (they never stream); they are invisible here by design -- the
+  // ledger keys on real streaming/latency service, and a zero-byte
+  // zero-latency transaction carries no servable work. Jobs stay in
+  // port.jobs in issue order, and issue_seq is per-port monotonic, so the
+  // container order already is the ascending identity order.
+  // An unrelated event can open a decision boundary before the next remote
+  // transition alarm.  Integrate the continuous port service to that
+  // boundary before exporting residual bytes; otherwise the ledger reports
+  // stale work with an older as_of_ns while Python treats it as current.
+  const Tick now = Sys::boostedTick();
+  advance_all_ports_to(static_cast<double>(now) * CLOCK_PERIOD);
+  std::vector<PortLedgerSnapshot> snapshot;
+  snapshot.reserve(ports_.size());
+  for (std::size_t index = 0; index < ports_.size(); ++index) {
+    const PortState& port = ports_[index];
+    PortLedgerSnapshot block;
+    block.port_index = index;
+    block.bandwidth_Bpns = remote_mem_bw;
+    block.latency_waiting_count = port.stats.latency_waiting_count;
+    block.streaming_count = port.stats.streaming_count;
+    block.completion_waiting_count = port.stats.completion_waiting_count;
+    block.as_of_ns = current_time_ns_;
+    block.jobs.reserve(port.jobs.size());
+    for (const PortJob& job : port.jobs) {
+      PortJobSnapshot entry;
+      entry.issue_seq = job.issue_seq;
+      entry.sys_id = job.wlhd != nullptr ? job.wlhd->sys_id : -1;
+      entry.node_id = job.wlhd != nullptr ? job.wlhd->node_id : 0;
+      entry.bytes = job.bytes;
+      entry.remaining_bytes =
+          job.state == PortJobState::Streaming ? job.remaining_bytes
+          : job.state == PortJobState::FluidCompleteAwaitingCallback
+              ? 0.0
+              : static_cast<double>(job.bytes);
+      entry.latency_ready_ns = job.latency_ready_ns;
+      entry.state = static_cast<int>(job.state);
+      block.jobs.push_back(entry);
+    }
+    snapshot.push_back(std::move(block));
+  }
+  return snapshot;
 }
 
 //------------------------------------------------------------------------------

@@ -42,6 +42,15 @@ class CommonNetworkApi : public AstraNetworkAPI {
      */
     static CallbackTracker& get_callback_tracker() noexcept;
 
+    /// Run-end diagnostics: outstanding (unpaired) callback-tracker entries
+    /// and chunk-id keys. A normally finished run leaves both empty.
+    [[nodiscard]] static size_t outstanding_callback_entry_count() noexcept {
+        return callback_tracker.size();
+    }
+    [[nodiscard]] static size_t outstanding_chunk_key_count() noexcept {
+        return chunk_id_generator.size();
+    }
+
     /**
      * Callback to be invoked when a chunk arrives its destination.
      *
@@ -61,6 +70,11 @@ class CommonNetworkApi : public AstraNetworkAPI {
      * Implement sim_get_time of AstraNetworkAPI.
      */
     [[nodiscard]] timespec_t sim_get_time() override;
+
+    /// The analytical backend merges same-tick events only inside its invoke
+    /// pass (EventQueue::in_invoke_context); see AstraNetworkAPI for the
+    /// contract and Sys::try_register_event for the consumer.
+    [[nodiscard]] bool backend_in_invoke_context() const override;
 
     /**
      * Implement sim_schedule of AstraNetworkAPI.

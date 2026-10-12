@@ -38,6 +38,8 @@ class Ring final : public BasicTopology {
      * @param bandwidth bandwidth of link
      * @param latency latency of link
      * @param bidirectional true if ring is bidirectional, false otherwise
+     *   (upstream API; every construction site in this repository keeps the
+     *   default true, so the unidirectional branches are not exercised here)
      */
     Ring(int npus_count, Bandwidth bandwidth, Latency latency, bool bidirectional = true) noexcept;
 

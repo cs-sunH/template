@@ -5,8 +5,10 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
 #include "astra-sim/common/Logging.hh"
+#include "astra-sim/system/Sys.hh"
 
 #include <cassert>
+#include <cstdlib>
 #include <iostream>
 
 using namespace std;
@@ -31,6 +33,21 @@ RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs) {
             index_in_ring = i;
         }
     }
+    // Fail closed on duplicated ranks: a communicator like [3, 3] collapses
+    // in id_to_index (keyed by node id) while total_nodes_in_ring still
+    // counts both entries, so ring arithmetic wraps onto the rank itself and
+    // the ring silently self-sends. The id -> index map size detects every
+    // such duplicate exactly at the point where the communicator reaches the
+    // topology layer.
+    if (id_to_index.size() != NPUs.size()) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("custom ring, id: {}, dimension: {}: duplicate node "
+                       "id(s) within the same ring dimension ({} ranks given, "
+                       "{} unique); a duplicated rank would corrupt the ring "
+                       "mapping and self-send",
+                       id, name, NPUs.size(), id_to_index.size());
+        std::exit(1);
+    }
 
     LoggerFactory::get_logger("system::topology::RingTopology")
         ->info("custom ring, id: {}, dimension: {} total nodes in ring: {} "
@@ -38,6 +55,17 @@ RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs) {
                id, name, total_nodes_in_ring, index_in_ring,
                total_nodes_in_ring);
 
+    // R6-T3 fix (ported from the face repo, 2026-09-30): the assert below
+    // is compiled out of release builds, so a non-member issuing rank used
+    // to proceed with index_in_ring == -1 and mis-route every message. A
+    // non-member rank cannot route in this ring; fail loud in every build
+    // type.
+    if (index_in_ring < 0) {
+        Sys::sys_panic("RingTopology: issuing rank " + std::to_string(id) +
+                       " is not a member of the ring (membership does not "
+                       "contain it); a non-member rank cannot route in this "
+                       "ring");
+    }
     assert(index_in_ring >= 0);
 }
 RingTopology::RingTopology(Dimension dimension,
@@ -77,46 +105,37 @@ int RingTopology::get_receiver_homogeneous(int node_id,
                                            Direction direction,
                                            int offset) {
     assert(id_to_index.find(node_id) != id_to_index.end());
-    int index = id_to_index[node_id];
-    if (direction == RingTopology::Direction::Clockwise) {
-        int receiver = node_id + offset;
-        if (index == total_nodes_in_ring - 1) {
-            receiver -= (total_nodes_in_ring * offset);
-            index = 0;
-        } else {
-            index++;
-        }
-        if (receiver < 0) {
-            LoggerFactory::get_logger("system::topology::RingTopology")
-                ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
-                           "id: {}, offset: {}, index_in_ring {} receiver {}",
-                           name, id, name, index, node_id, offset,
-                           index_in_ring, receiver);
-        }
-        assert(receiver >= 0);
-        id_to_index[receiver] = index;
-        index_to_id[index] = receiver;
-        return receiver;
-    } else {
-        int receiver = node_id - offset;
-        if (index == 0) {
-            receiver += (total_nodes_in_ring * offset);
-            index = total_nodes_in_ring - 1;
-        } else {
-            index--;
-        }
-        if (receiver < 0) {
-            LoggerFactory::get_logger("system::topology::RingTopology")
-                ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
-                           "id: {}, offset: {}, index_in_ring {} receiver {}",
-                           name, id, name, index, node_id, offset,
-                           index_in_ring, receiver);
-        }
-        assert(receiver >= 0);
-        id_to_index[receiver] = index;
-        index_to_id[index] = receiver;
-        return receiver;
+    // The Anticlockwise branch was removed as dead code: the only call site
+    // in the repo (the ring walk in the offset-based constructor above)
+    // hard-codes Clockwise. Refuse every other direction instead of silently
+    // walking the ring the wrong way. The Clockwise wrap-around below stays
+    // reachable.
+    if (direction != RingTopology::Direction::Clockwise) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {}: get_receiver_homogeneous "
+                       "supports Clockwise only",
+                       name, id);
+        std::exit(1);
     }
+    int index = id_to_index[node_id];
+    int receiver = node_id + offset;
+    if (index == total_nodes_in_ring - 1) {
+        receiver -= (total_nodes_in_ring * offset);
+        index = 0;
+    } else {
+        index++;
+    }
+    if (receiver < 0) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
+                       "id: {}, offset: {}, index_in_ring {} receiver {}",
+                       name, id, name, index, node_id, offset,
+                       index_in_ring, receiver);
+    }
+    assert(receiver >= 0);
+    id_to_index[receiver] = index;
+    index_to_id[index] = receiver;
+    return receiver;
 }
 
 int RingTopology::get_receiver(int node_id, Direction direction) {

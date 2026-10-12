@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""decision_bridge.py -- Python 端 FileDecisionBridge 协议 v0 (方案 §4 步骤 1-7).
+"""decision_bridge.py -- Python 端 FileDecisionBridge,协议 v1 (方案 §4 步骤
+1-7;冻结规则以 C++ DecisionBridge.hh 协议块/kDecisionBridgeSchemaVersion=1
+为准——早期"协议 v0"标签已废,v0 仅存于 snapshot 保留字段的向后兼容语义).
 
 桥接目录 <bridge_dir>/ 由 C++ 先建好(含 req_notify.fifo / resp_notify.fifo,
 "先建 FIFO 再启动双方")。serve_forever 阻塞在 req_notify.fifo 的 read 上
@@ -49,6 +51,9 @@ _RESPONSE_FIELDS = (
     "kv_actions",
     # 阶段 5 §8.2:touched ranks 集合(缺省 [];online scheduler 总是显式给出)。
     "touched_ranks",
+    # 注:future_alarms 不在此列——C++ T5 对 absent 数组按空处理,成功
+    # 响应无需补全;错误骨架(_fail)显式携带空 future_alarms 属诊断完备,
+    # 两条路径语义等价。
 )
 
 
@@ -121,7 +126,7 @@ class _BoundedSequenceTracker:
 
 
 class BridgeServer:
-    """协议 v0 的 Python 端;用法:
+    """协议 v1 的 Python 端;用法:
 
         server = BridgeServer(bridge_dir)
         server.serve_forever(handler, on_commit_ack=None)
@@ -177,8 +182,8 @@ class BridgeServer:
     # ------------------------------------------------------------- helpers --
 
     def stats(self):
-        """阶段 6 §9.1:桥接通道分项汇总(Python 视角)。含每 request 服务
-        时间行列表(per_request),供 online_stats.jsonl 合并。"""
+        """阶段 6 §9.1:桥接通道分项汇总(Python 视角)。每 request 服务
+        时间行经 per_request_stats() 流式读取,供 online_stats.jsonl 合并。"""
         return dict(self._stats)
 
     def per_request_stats(self):
@@ -238,6 +243,10 @@ class BridgeServer:
         """
         reqs = []
         acks = []
+        # (2026-09-29)原逐项 `if not sequences.contains(probe)` 过滤已删:
+        # probe 自 next_seq 起,contains(p) == (p < next_seq) 恒假,过滤
+        # 恒真(no-op 防御)。listdir 回退路径的 contains 过滤保留(那里
+        # 扫的是全目录,已处理未回收的旧 seq 须被剔除)。
         req_probe = self._request_sequences.next_seq
         while True:
             probe = os.path.join(
@@ -245,8 +254,7 @@ class BridgeServer:
                 _REQUEST_PREFIX + str(req_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if not self._request_sequences.contains(req_probe):
-                reqs.append(req_probe)
+            reqs.append(req_probe)
             req_probe += 1
         ack_probe = self._ack_sequences.next_seq
         while True:
@@ -255,8 +263,7 @@ class BridgeServer:
                 _ACK_PREFIX + str(ack_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if not self._ack_sequences.contains(ack_probe):
-                acks.append(ack_probe)
+            acks.append(ack_probe)
             ack_probe += 1
         if reqs or acks:
             return sorted(reqs), sorted(acks)
@@ -300,7 +307,18 @@ class BridgeServer:
     def _handle_request(self, seq, handler):
         t0 = time.monotonic_ns()
         path = os.path.join(self.bridge_dir, _REQUEST_PREFIX + str(seq) + _JSON_SUFFIX)
-        self._request_sequences.validate_new(seq)
+        # (2026-10-01)恢复"重复 seq 幂等忽略"早退:validate_new 对已消费
+        # 旧序号返回 False,此处按返回值静默忽略后直接返回——幂等忽略是
+        # 双侧冻结契约的明文条款(本模块 docstring 协议规则与 C++ 侧
+        # DecisionBridge.hh 协议块 "Duplicate seq idempotency ... ignores
+        # duplicates"),不能只靠调用方不喂重复来实现(重试场景下重执行
+        # handler = 决策批重复注入,恰是该条款要防的损坏)。仓内调用方
+        # (serve_forever 的 _new_files 扫描与 bridge_streaming_fixture 的
+        # 递增直调)结构上只喂未处理的新序号,早退不触发。validate_new 的
+        # 严格单调 gate 不变:未来序号仍抛 BridgeError 走调用方既有 _fail
+        # 兜底。
+        if not self._request_sequences.validate_new(seq):
+            return
         try:
             with open(path, "r", encoding="utf-8") as source:
                 raw_request = source.read()
@@ -358,7 +376,11 @@ class BridgeServer:
 
     def _handle_ack(self, seq, on_commit_ack):
         path = os.path.join(self.bridge_dir, _ACK_PREFIX + str(seq) + _JSON_SUFFIX)
-        self._ack_sequences.validate_new(seq)
+        # (2026-10-01)恢复"重复 ack 幂等忽略"早退:同 _handle_request——
+        # 已消费旧序号按 validate_new 返回 False 静默忽略,与双侧冻结契约
+        # 文本(DecisionBridge.hh 协议块)一致;严格单调 gate 不变。
+        if not self._ack_sequences.validate_new(seq):
+            return
         try:
             ack = _read_json_atomic(path)
         except (OSError, ValueError) as exc:
@@ -442,7 +464,37 @@ class BridgeServer:
                     try:
                         self._handle_ack(ack_seq, on_commit_ack)
                     except BridgeError as exc:
-                        self._fail(ack_seq, "ack {}: {}".format(ack_seq, exc))
+                        # A2-1 修复(2026-09-26):ack 流失败不得把 error
+                        # response 写到 response_<ack_seq>.json——ack_n 到达
+                        # 时 request_n 的 response 已被 C++ 读走并 unlink,
+                        # C++ 正在等(或即将等)的是当前在途 request 的
+                        # response。严格 +1 单调 + 单在途背压下,ack_n 可与
+                        # request_{n+1} 同轮并存,且 request_n 已消费并 mark,
+                        # 故当前请求序号 = _request_sequences.next_seq(恒
+                        # == n+1)。(r5 勘误)失败可见性三态、均 fail-closed:
+                        # (a) Python 先死 -> C++ 下次交付在 notify_python()
+                        #     EPIPE abort;(b) C++ 已阻塞在
+                        #     wait_response_byte(n+1) 的背靠背交错下,本
+                        #     _fail 写的 error response 会被立即读到并带
+                        #     错误串 abort——此时 response 字段恰是可见性
+                        #     通道;(c) 末 ack 后失败 -> 仅退出码可见。
+                        self._fail(
+                            self._request_sequences.next_seq,
+                            "ack {}: {}".format(ack_seq, exc))
+                    except Exception as exc:  # noqa: BLE001 -- on_commit_ack 异常
+                        # B13 修复(2026-09-28):与 request 循环同型的兜底——
+                        # on_commit_ack(账本 finalize 挂接点)的协议违例以
+                        # 普通 ValueError 等抛出,只捕 BridgeError 时会穿透
+                        # serve_forever:不写 error response、不通知 C++,
+                        # C++ 侧只能靠超时发现。统一走 _fail fail-closed
+                        # (stderr 留痕 + error response + resp_notify);
+                        # 序号沿用上面的 A2-1 口径(next_seq,非 ack 序号)。
+                        # except Exception 不捕 KeyboardInterrupt/SystemExit,
+                        # 与 request 循环写法一致。
+                        self._fail(
+                            self._request_sequences.next_seq,
+                            "ack {}: {}: {}".format(
+                                ack_seq, type(exc).__name__, exc))
                 for req_seq in reqs:
                     try:
                         self._handle_request(req_seq, handler)

@@ -26,5 +26,4 @@ RecvPacketEventHandlerData::RecvPacketEventHandlerData(BaseStream* owner,
     this->wlhd = nullptr;
     this->owner = owner;
     this->custom_algorithm = nullptr;
-    ready_time = Sys::boostedTick();
 }

@@ -8,7 +8,7 @@
   astra-sim-sh_1.0  shard 级：decision log 的 history_transfer /
                     prefill_decode_transfer / 各类逐出传输对象的
                     shards[].noc_path（hops = len(noc_path)-1；生成侧
-                    generate_face_trace.py:587 亦落 noc_hops 字段——
+                    sh_1.0 仓 generate_face_trace.py 亦落 noc_hops 字段——
                     读取时优先用显式 noc_hops，缺省由 noc_path 推导）。
   astra-sim-wscllm  实例级：decode 决策的 static_route.hop_count ×
                     prefill_decode_transfer.total_bytes（粒度为实例间
@@ -25,6 +25,11 @@
                     decode_target_evictions）计入 bytes_without_hops
                     ——契约行无 shard 级路由，coverage 如实低于 1
                     （此前逐出字节整类不进账、notes 误称满覆盖）。
+                    2026-09-26（G7-15）起顶层 noc_hops 缺席的 prefill 行
+                    （REMOTE_RESTORE 远端回迁）逐对象消费 transfer_hop_
+                    bytes 行的 shard 级 hops 补全 hop 分子（行字节合计与
+                    history_transfer_bytes 相符才启用；旧产物回退标量
+                    bytes_without_hops 口径）。
   astra-sim-face    per-TP-shard 级（B2wp9py 起决策日志附带只读
                     hops 列表：prefill=history_noc_hops、decode=
                     kv_noc_hops，与 shards 一一对齐；hops 全等时
@@ -40,6 +45,15 @@
                     同 S1）；无路由的聚合 bytes 字段不计入本账。
 
 覆盖率为 0 的仓输出 hop_bytes=0 并显式标注 coverage，不臆造 hop 数。
+
+口径警示（2026-09-30 审查登记）：``hop_bytes_total`` 是单一总和列，
+astra-sim-wscllm 变体内混合两种 hop 单位——decode 行 shards[]/
+transfer_hop_bytes 为 mesh 跳（deterministic_xy_route），prefill 行
+history 迁移 noc_hops 与 static_route.hop_count 回退为实例图跳（实例
+邻接最短路）；granularity 列已登记该混合粒度，但同一总和内跨动作类
+（decode 传输 / prefill 迁移 / 恢复）比较或二次加工 hop 分子不可比。
+不拆列（下游消费面大、列结构冻结），以本警示 + REPO_HOP_SOURCES
+notes + slo_tools/README.md 对应行为权威口径。
 """
 
 from __future__ import annotations
@@ -66,7 +80,9 @@ PER_REQUEST_COLUMNS = ("request_id", "actions_with_hops", "hop_bytes",
 def _shard_hops(shard: dict) -> Optional[int]:
     """优先显式 noc_hops 字段；缺省由 noc_path 推导（len-1）。"""
     hops = shard.get("noc_hops")
-    if isinstance(hops, int) and hops >= 0:
+    # bool 显式排除（True 是 int 子类，旧实现当 1 跳计费——与本文件
+    # G7-15 处的排除纪律对齐）。
+    if isinstance(hops, int) and not isinstance(hops, bool) and hops >= 0:
         return hops
     path = shard.get("noc_path")
     if isinstance(path, list) and path:
@@ -85,7 +101,10 @@ def _accumulate_shard_transfers(holder: dict, request_id: str, acc: dict,
         if not isinstance(shard, dict):
             continue
         nbytes = shard.get("bytes")
-        if not isinstance(nbytes, int) or nbytes <= 0:
+        # bool 显式排除(True 是 int 子类,旧实现当 1 字节计——与本文件
+        # _shard_hops 的 hops 门排除纪律对齐)。
+        if isinstance(nbytes, bool) or not isinstance(nbytes, int) \
+                or nbytes <= 0:
             continue
         hops = _shard_hops(shard)
         slot = per_request.setdefault(
@@ -103,7 +122,11 @@ def _accumulate_shard_transfers(holder: dict, request_id: str, acc: dict,
             acc["bytes_with_hops"] += nbytes
 
 
-def collect_sh10(record: dict, acc: dict, per_request: dict) -> None:
+def _collect_shard_route_record(record: dict, acc: dict,
+                                per_request: dict) -> None:
+    """shard 级 noc 路由消费（S1/S3 共用实现，逐语句同体；两仓 holder 集
+    与 count/fallback 语义完全一致——显式 noc_hops 优先、noc_path 推导
+    兜底、无路由 bytes 计 bytes_without_hops）。"""
     decision = record.get("decision") or {}
     request_id = record.get("request_id") or NA
     kind = record.get("kind")
@@ -122,6 +145,11 @@ def collect_sh10(record: dict, acc: dict, per_request: dict) -> None:
     elif kind == "completion":
         for entry in decision.get("completion_evictions") or []:
             _accumulate_shard_transfers(entry, request_id, acc, per_request)
+
+
+def collect_sh10(record: dict, acc: dict, per_request: dict) -> None:
+    """S1 shard 级消费（_collect_shard_route_record 薄包装，公开 API）。"""
+    _collect_shard_route_record(record, acc, per_request)
 
 
 def collect_face(record: dict, acc: dict, per_request: dict) -> None:
@@ -150,9 +178,18 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
     if kind == "prefill":
         nbytes = decision.get("history_transfer_bytes")
         hops = decision.get("history_noc_hops")
-        if isinstance(nbytes, int) and nbytes > 0:
+        if (not isinstance(nbytes, bool)
+                and isinstance(nbytes, int) and nbytes > 0):
             if isinstance(hops, list) and hops and all(
-                    isinstance(h, int) and h >= 0 for h in hops):
+                    isinstance(h, int) and not isinstance(h, bool)
+                    and h >= 0 for h in hops):
+                if any(h != hops[0] for h in hops):
+                    fail(
+                        f"hopbytes: prefill history_noc_hops 非全等"
+                        f"（request={request_id!r}, hops={hops}）——聚合"
+                        f"口径 bytes×hops[0] 与逐 shard bytes×hops 求和"
+                        f"严格相等的前提破坏（基线核对：per-shard hops"
+                        f" 全等），拒绝臆造聚合值")
                 hop_bytes = nbytes * hops[0]
                 slot = _slot()
                 slot["actions"] += 1
@@ -173,8 +210,14 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
         if isinstance(shards, list) and isinstance(hops, list) \
                 and len(shards) == len(hops):
             for shard, hop in zip(shards, hops):
-                nbytes = (shard or {}).get("bytes")
-                if not isinstance(nbytes, int) or nbytes <= 0:
+                if not isinstance(shard, dict):
+                    # 非 dict 真值成员跳过（与 _accumulate_shard_transfers
+                    # 同纪律），不裸 AttributeError。
+                    continue
+                nbytes = shard.get("bytes")
+                if (isinstance(nbytes, bool)
+                        or not isinstance(nbytes, int)
+                        or nbytes <= 0):
                     continue
                 if isinstance(hop, int) and hop >= 0:
                     slot = _slot()
@@ -196,9 +239,12 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
             # total_bytes，缺席时回退 Σ shards[].bytes。
             nbytes = None
             if isinstance(transfer, dict):
-                total = transfer.get("total_bytes")
-                if isinstance(total, int) and total > 0:
-                    nbytes = total
+                # local_hit 守卫（R3-1，2026-09-30）：名义整份 KV 非物理
+                # 搬运，与 collect_wscllm decode 回退臂同口径。
+                if transfer.get("kind") != "local_hit":
+                    total = transfer.get("total_bytes")
+                    if isinstance(total, int) and total > 0:
+                        nbytes = total
             if nbytes is None and isinstance(shards, list):
                 shard_total = 0
                 for shard in shards:
@@ -207,21 +253,16 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
                         shard_total += shard["bytes"]
                 if shard_total > 0:
                     nbytes = shard_total
-            if isinstance(nbytes, int) and nbytes > 0:
+            if (not isinstance(nbytes, bool)
+                    and isinstance(nbytes, int) and nbytes > 0):
                 slot = _slot()
                 slot["bytes_without"] += nbytes
                 acc["bytes_without_hops"] += nbytes
 
 
-def _route_hops(row: dict) -> Optional[int]:
-    """优先显式 noc_hops；缺省由 noc_path 推导（len-1）；皆缺 → None。"""
-    hops = row.get("noc_hops")
-    if isinstance(hops, int) and hops >= 0:
-        return hops
-    path = row.get("noc_path")
-    if isinstance(path, list) and path:
-        return max(0, len(path) - 1)
-    return None
+# （2026-10-01 合并）_route_hops 与 _shard_hops 此前是 AST 级逐字重复
+# 的两份拷贝——现为单一实现 + 别名。
+_route_hops = _shard_hops
 
 
 def _consume_wscllm_eviction_rows(rows, request_id: str, acc: dict,
@@ -233,13 +274,37 @@ def _consume_wscllm_eviction_rows(rows, request_id: str, acc: dict,
         if not isinstance(entry, dict):
             continue
         nbytes = entry.get("total_bytes")
-        if not isinstance(nbytes, int) or nbytes <= 0:
+        # bool 显式排除(True 是 int 子类,旧实现当 1 字节计——同上排 bool
+        # 纪律)。
+        if isinstance(nbytes, bool) or not isinstance(nbytes, int) \
+                or nbytes <= 0:
             continue
         slot = per_request.setdefault(
             request_id, {"actions": 0, "hop_bytes": 0,
                          "bytes_with": 0, "bytes_without": 0})
         slot["bytes_without"] += nbytes
         acc["bytes_without_hops"] += nbytes
+
+
+# F1 同款跨行去重态（R5-batch3，2026-10-01；机制照 kv_cache_adapter 2026-09-30
+# 的 F1 移植）：B2 窗口产物的同一笔 #2 预占逐出在 prefill 行（准入快照）与
+# decode 行（全集）各序列化一次，legacy 回退臂两臂同读会双计入
+# bytes_without_hops。去重键 = (session_id, reason, total_bytes)（与
+# kv_cache_adapter._legacy_eviction_key 同键同语义：_kv_transfer_rows 行
+# 结构不携带 time_ns，同一 KVTransfer 的两次序列化三元组恒等；同一会话在
+# 一个请求持有期内不可能以同 reason 同字节被逐出两次）。去重态随 acc 生命
+# 周期（hopbytes_prepare 每 run 新建；CLI/driver/直连调用共用同一 acc 即
+# 共用同一去重态），以 "_" 前缀私有键承载、hopbytes_emit 的 summary 过滤
+# 私有键——不新增 collector 形参，契约路径（分段字段/decode_evictions
+# 在场）不触碰该态，现行产物字节不变。
+LEGACY_DEDUP_ACC_KEY = "_wscllm_legacy_eviction_keys"
+
+
+def _legacy_eviction_key(entry: dict) -> tuple:
+    """legacy 逐出条目的跨行去重键（kv_cache_adapter._legacy_eviction_key
+    同款；调用方保证 entry 为 dict）。"""
+    return (str(entry.get("session_id")), str(entry.get("reason")),
+            entry.get("total_bytes"))
 
 
 def _consume_wscllm_evictions(decision: dict, kind, request_id: str,
@@ -258,7 +323,14 @@ def _consume_wscllm_evictions(decision: dict, kind, request_id: str,
       否则（旧产物）：prefill 行读 admission_evictions+decode_target_
       evictions（准入快照，decode 行不另读），completion 行读
       completion_evictions。
+
+    F1 跨行去重（2026-10-01，见 LEGACY_DEDUP_ACC_KEY）：B2 窗口产物的
+    同一笔 #2 预占逐出在 prefill 行（准入快照）与 decode 行（全集）各
+    序列化一次——prefill legacy 臂消费后把去重键记入 acc 私有去重态，
+    decode legacy 臂跳过已记键（与 kv_cache_adapter.extract_events_
+    face_wscllm 的 F1 同键同两侧；契约路径不触碰去重态）。
     """
+    legacy_seen = acc.setdefault(LEGACY_DEDUP_ACC_KEY, {})
     if kind == "prefill":
         if ("history_evictions" in decision
                 or "prefill_evictions" in decision):
@@ -266,14 +338,34 @@ def _consume_wscllm_evictions(decision: dict, kind, request_id: str,
                 _consume_wscllm_eviction_rows(decision.get(field),
                                               request_id, acc, per_request)
         else:
+            # F1 登记侧：本行 legacy 逐出条目（含无 bytes/零 bytes 的
+            # 条目，与 kv_cache_adapter 登记口径一致）按三元组记键。
+            seen = legacy_seen.setdefault(str(request_id), set())
             for field in ("admission_evictions", "decode_target_evictions"):
-                _consume_wscllm_eviction_rows(decision.get(field),
-                                              request_id, acc, per_request)
+                rows = decision.get(field) or []
+                for entry in rows:
+                    if isinstance(entry, dict):
+                        seen.add(_legacy_eviction_key(entry))
+                _consume_wscllm_eviction_rows(rows, request_id, acc,
+                                              per_request)
     elif kind == "decode":
-        # 旧产物 decode 行无 decode_evictions 字段（get→None→空操作）；
-        # 旧路径的 decode 侧逐出已按准入快照计入 prefill 行。
-        _consume_wscllm_eviction_rows(decision.get("decode_evictions"),
-                                      request_id, acc, per_request)
+        # 单键取用（与 prefill 行同式）：契约字段 decode_evictions 在场
+        # （B3+）优先；缺席（B2 窗口/旧产物）回退 legacy decode_target_
+        # evictions——decode 侧逐出（#2 预占/#4 move/#5 grow_decode 累积）
+        # 自 B2 起随 decode 行落盘，不回退则 B2 move/grow 逐出字节两桶
+        # 皆不入。F1 去重：跳过 prefill 行准入快照已消费的 #2 条目（同
+        # 键=同一次物理逐出的双序列化；非 dict 成员本就不计数，不过滤）。
+        if "decode_evictions" in decision:
+            _consume_wscllm_eviction_rows(decision.get("decode_evictions"),
+                                          request_id, acc, per_request)
+        else:
+            seen = legacy_seen.get(str(request_id))
+            rows = decision.get("decode_target_evictions") or []
+            if seen:
+                rows = [entry for entry in rows
+                        if not isinstance(entry, dict)
+                        or _legacy_eviction_key(entry) not in seen]
+            _consume_wscllm_eviction_rows(rows, request_id, acc, per_request)
     elif kind == "completion":
         _consume_wscllm_eviction_rows(decision.get("completion_evictions"),
                                       request_id, acc, per_request)
@@ -295,13 +387,23 @@ def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
         # 行 + transfer_hop_bytes），对本仓产物恒死，已删除
         # （2026-09-24）。
         if kind == "prefill":
-            nbytes = decision.get("history_transfer_bytes")
-            if isinstance(nbytes, int) and nbytes > 0:
+            # local_hit 守卫（2026-10-01 补齐，与 decode 回退臂/face/sh 系
+            # 同款 R3-1 口径）：LOCAL_HIT 的 history_transfer_bytes 是名义
+            # 整份 KV（信息量，非物理搬运），携带 noc_hops 字段的旧产物
+            # 若不排除会把非物理字节推高 bytes_with_hops/coverage 分子。
+            if decision.get("history_action") == "LOCAL_HIT":
+                nbytes = 0
+            else:
+                nbytes = decision.get("history_transfer_bytes")
+            if (not isinstance(nbytes, bool)
+                    and isinstance(nbytes, int) and nbytes > 0):
                 hops = decision.get("noc_hops")
                 slot = per_request.setdefault(
                     request_id, {"actions": 0, "hop_bytes": 0,
                                  "bytes_with": 0, "bytes_without": 0})
-                if isinstance(hops, int) and hops >= 0:
+                # bool 显式排除（同 G7-15 行级门）。
+                if isinstance(hops, int) and not isinstance(hops, bool) \
+                        and hops >= 0:
                     slot["actions"] += 1
                     slot["hop_bytes"] += nbytes * hops
                     slot["bytes_with"] += nbytes
@@ -309,8 +411,58 @@ def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
                     acc["hop_bytes_total"] += nbytes * hops
                     acc["bytes_with_hops"] += nbytes
                 else:
-                    slot["bytes_without"] += nbytes
-                    acc["bytes_without_hops"] += nbytes
+                    # G7-15（2026-09-26）：顶层 noc_hops 缺席（REMOTE_RESTORE
+                    # 远端回迁——B3 起远端池无实例语义、不发射实例间 hop 诊断
+                    # 字段）时，旧实现把整笔回迁字节落 bytes_without_hops，
+                    # hop 分子缺整类；写侧 transfer_hop_bytes 行逐对象携带
+                    # shard 级 hops（max shard noc_path len−1），此处逐对象
+                    # 消费补全远程迁移度量。行集合缺席/形状异常/行字节合计
+                    # 与标量不符（旧产物）→ 回退旧标量口径，不臆造。
+                    # G6 口径披露（2026-09-30 审查）：写侧 hops 是"max
+                    # shard hops"——逐分片回迁各 rank 曼哈顿跳数不同时，
+                    # total_bytes×max_hops 是 Hop-Bytes 的**上界口径**（严格
+                    # 定义为 Σ bytes_i×hops_i，恒高估）；同文件 collect_face
+                    # 对非全等 hops 是 fail-closed 拒绝，本处用 max 聚合是
+                    # 写侧序列化粒度（单标量/行）所限的已知近似。根治需
+                    # 写侧逐 shard 序列化 bytes×hops 对，另立批次。
+                    rows = decision.get("transfer_hop_bytes")
+                    row_total = 0
+                    usable = isinstance(rows, list) and bool(rows)
+                    if usable:
+                        for row in rows:
+                            if not isinstance(row, dict):
+                                usable = False
+                                break
+                            value = row.get("total_bytes")
+                            if not isinstance(value, int) or isinstance(
+                                    value, bool) or value < 0:
+                                usable = False
+                                break
+                            row_total += value
+                        usable = usable and row_total == nbytes
+                    if usable:
+                        for row in rows:
+                            value = row["total_bytes"]
+                            if value <= 0:
+                                continue  # 零长段：无物理搬运
+                            hop = row.get("hops")
+                            # 零跳口径统一：hops=0 = 已知零跳路由 = 计入
+                            # 覆盖（与 decode 分支/_shard_hops 的 >=0 口径
+                            # 一致；零跳只是 hop 分子为 0，不是"无路由"）。
+                            if isinstance(hop, int) and not isinstance(
+                                    hop, bool) and hop >= 0:
+                                slot["actions"] += 1
+                                slot["hop_bytes"] += value * hop
+                                slot["bytes_with"] += value
+                                acc["actions_with_hops"] += 1
+                                acc["hop_bytes_total"] += value * hop
+                                acc["bytes_with_hops"] += value
+                            else:
+                                slot["bytes_without"] += value
+                                acc["bytes_without_hops"] += value
+                    else:
+                        slot["bytes_without"] += nbytes
+                        acc["bytes_without_hops"] += nbytes
         return
     # decode：问题 4b（2026-09-05）shard 级优先——prefill_decode_transfer
     # 含非空 shards[] 且任一 shard 携带 noc_hops/noc_path 时逐 shard
@@ -329,14 +481,21 @@ def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
     static_route = decision.get("static_route")
     nbytes = (transfer or {}).get("total_bytes") if isinstance(
         transfer, dict) else None
+    # local_hit 守卫（R2-3/R3-1，2026-09-30）：名义整份 KV 非物理搬运
+    # （写侧 shards=()，本文件头注 sh_2.0 行同口径"local_hit 无物理
+    # 搬运不计入"）——聚合回退臂漏守卫会把 stay 边界的名义字节计入
+    # hop 账；collect_face/collect_aggregate_only 的同型臂已同口径补齐。
+    if isinstance(transfer, dict) and transfer.get("kind") == "local_hit":
+        nbytes = None
     hops = (static_route or {}).get("hop_count") if isinstance(
         static_route, dict) else None
-    if not isinstance(nbytes, int) or nbytes <= 0:
+    if isinstance(nbytes, bool) or not isinstance(nbytes, int) or nbytes <= 0:
         return
     slot = per_request.setdefault(
         request_id, {"actions": 0, "hop_bytes": 0,
                      "bytes_with": 0, "bytes_without": 0})
-    if isinstance(hops, int) and hops >= 0:
+    # bool 显式排除（static_route.hop_count 谎报 true=1 跳）。
+    if isinstance(hops, int) and not isinstance(hops, bool) and hops >= 0:
         slot["actions"] += 1
         slot["hop_bytes"] += nbytes * hops
         slot["bytes_with"] += nbytes
@@ -357,7 +516,7 @@ def collect_aggregate_only(record: dict, acc: dict, per_request: dict) -> None:
     nbytes = None
     if kind == "prefill":
         nbytes = decision.get("history_transfer_bytes")
-        if not isinstance(nbytes, int):
+        if isinstance(nbytes, bool) or not isinstance(nbytes, int):
             transfer = decision.get("history_transfer")
             if isinstance(transfer, dict):
                 total = transfer.get("total_bytes")
@@ -365,12 +524,16 @@ def collect_aggregate_only(record: dict, acc: dict, per_request: dict) -> None:
                     nbytes = total
     elif kind == "decode":
         nbytes = decision.get("prefill_decode_transfer_bytes")
-        if not isinstance(nbytes, int):
+        if isinstance(nbytes, bool) or not isinstance(nbytes, int):
             transfer = decision.get("prefill_decode_transfer")
             if isinstance(transfer, dict):
-                total = transfer.get("total_bytes")
-                if isinstance(total, int):
-                    nbytes = total
+                # local_hit 守卫（R3-1，2026-09-30）：同上，跨变体补齐。
+                if transfer.get("kind") == "local_hit":
+                    nbytes = None
+                else:
+                    total = transfer.get("total_bytes")
+                    if isinstance(total, int):
+                        nbytes = total
     if isinstance(nbytes, int) and nbytes > 0:
         slot = per_request.setdefault(
             request_id, {"actions": 0, "hop_bytes": 0,
@@ -399,19 +562,31 @@ def collect_sh20(record: dict, acc: dict, per_request: dict) -> None:
             nbytes = row.get("total_bytes")
             hop_bytes = row.get("noc_hop_bytes")
             shard_count = row.get("shard_count")
-            if (not isinstance(nbytes, int) or nbytes <= 0
-                    or not isinstance(shard_count, int) or shard_count <= 0):
+            if (not isinstance(nbytes, int) or isinstance(nbytes, bool)
+                    or nbytes <= 0
+                    or not isinstance(shard_count, int)
+                    or isinstance(shard_count, bool) or shard_count <= 0):
                 continue  # local_hit / 名义规模：无物理搬运
             slot = per_request.setdefault(
                 request_id, {"actions": 0, "hop_bytes": 0,
                              "bytes_with": 0, "bytes_without": 0})
-            slot["actions"] += 1
-            slot["bytes_with"] += nbytes
-            acc["actions_with_hops"] += 1
-            acc["bytes_with_hops"] += nbytes
-            if isinstance(hop_bytes, int) and hop_bytes > 0:
+            # M-36：与 collect_wscllm 的 G7-15 口径对齐——shard_count>0 而
+            # noc_hop_bytes 缺席/类型谎报（str/float/bool）的行不再计入
+            # 覆盖侧（hop 分子无贡献却进 bytes_with_hops 分母 → coverage
+            # 虚增），落 bytes_without_hops（宁缺勿造，不臆造 hop 数）；
+            # 显式 0 = 已知零跳路由，仍计入覆盖侧（与本文件零跳口径
+            # 一致：零跳只是 hop 分子为 0，不是"无路由"）。
+            if isinstance(hop_bytes, int) \
+                    and not isinstance(hop_bytes, bool) and hop_bytes >= 0:
+                slot["actions"] += 1
+                slot["bytes_with"] += nbytes
+                acc["actions_with_hops"] += 1
+                acc["bytes_with_hops"] += nbytes
                 slot["hop_bytes"] += hop_bytes
                 acc["hop_bytes_total"] += hop_bytes
+            else:
+                slot["bytes_without"] += nbytes
+                acc["bytes_without_hops"] += nbytes
         return
     collect_aggregate_only(record, acc, per_request)
 
@@ -421,33 +596,17 @@ def collect_sh30(record: dict, acc: dict, per_request: dict) -> None:
     noc_path 新字段（B3 60s 证据：completion_evictions 96 行 / 960 shards
     全带 noc_hops；ad-hoc 复核 hop_bytes=2383397232640）。
 
-    count/fallback 语义与 S1 分支一致（_accumulate_shard_transfers：显式
-    noc_hops 优先、noc_path 推导兜底、无路由 bytes 计 bytes_without_hops）。
+    count/fallback 语义与 S1 分支一致（_accumulate_shard_transfers）；
     holder 集照 S1（history_transfer / prefill_decode_transfer / 各类
-    逐出列表）；S3 现仅 completion_evictions 落 shards，其余 holder 留作
+    逐出列表）——函数体与 collect_sh10 逐语句相同（2026-09-29 合并为
+    _collect_shard_route_record 单一实现，本名保留为薄包装，公开 API
+    不变）。S3 现仅 completion_evictions 落 shards，其余 holder 留作
     字段同步后的前向兼容。B3 之前的 aggregate-only 停用口径
     （history_transfer_bytes / prefill_decode_transfer_bytes 无路由可聚）
     不再计入本账——那些记录无 noc 路由信息，不属于 Hop-Bytes 可判定
     宇宙；其量级（60s 参考跑 1045595684864 B）由门 JSON 另行登记。
     """
-    decision = record.get("decision") or {}
-    request_id = record.get("request_id") or NA
-    kind = record.get("kind")
-    if kind == "prefill":
-        _accumulate_shard_transfers(decision.get("history_transfer"),
-                                    request_id, acc, per_request)
-        for field in ("history_evictions", "prefill_evictions"):
-            for entry in decision.get(field) or []:
-                _accumulate_shard_transfers(entry, request_id, acc,
-                                            per_request)
-    elif kind == "decode":
-        _accumulate_shard_transfers(decision.get("prefill_decode_transfer"),
-                                    request_id, acc, per_request)
-        for entry in decision.get("decode_evictions") or []:
-            _accumulate_shard_transfers(entry, request_id, acc, per_request)
-    elif kind == "completion":
-        for entry in decision.get("completion_evictions") or []:
-            _accumulate_shard_transfers(entry, request_id, acc, per_request)
+    _collect_shard_route_record(record, acc, per_request)
 
 
 REPO_HOP_SOURCES: dict[str, dict] = {
@@ -473,9 +632,16 @@ REPO_HOP_SOURCES: dict[str, dict] = {
                  "decode_target_evictions，单键取用防 B3 双序列化双计）"
                  "计入 bytes_without_hops——契约行无 shard 级路由，"
                  "coverage 如实低于 1（不臆造 hop 数；此前逐出字节整类"
-                 "不进账）。2026-09-05 规划的 prefill 行 history_transfer_"
+                 "不进账）。2026-09-26（G7-15）起顶层 noc_hops 缺席的 "
+                 "prefill 行（REMOTE_RESTORE 远端回迁）逐对象消费 "
+                 "transfer_hop_bytes 行的 shard 级 hops 补全 hop 分子"
+                 "（行字节合计与标量相符才启用，旧产物回退标量口径）。"
+                 "2026-09-05 规划的 prefill 行 history_transfer_"
                  "shards[] shard 级分支因写侧零生产（生成侧为 history_"
-                 "transfers 行 + transfer_hop_bytes）删除。",
+                 "transfers 行 + transfer_hop_bytes）删除。"
+                 "口径警示：hop_bytes_total 混合 mesh 跳（decode shard 级）"
+                 "与实例图跳（prefill 迁移 noc_hops/static_route 回退）"
+                 "两种单位，跨动作类比较不可比（模块 docstring 口径警示）。",
     },
     "astra-sim-face": {
         "collector": collect_face,
@@ -509,8 +675,14 @@ def hopbytes_prepare(repo_variant: str) -> tuple[dict, dict, dict]:
     source = REPO_HOP_SOURCES.get(repo_variant)
     if source is None:
         fail(f"未登记的 repo_variant：{repo_variant}（REPO_HOP_SOURCES 需扩表）")
+    # hop_bytes_total 混合单位警示：wscllm 变体下该列同时累计 mesh 跳
+    # （decode shard 级）与实例图跳（prefill 迁移/static_route 回退）
+    # 两种分子，跨动作类不可比（见模块 docstring 口径警示）。
     acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
-           "bytes_with_hops": 0, "bytes_without_hops": 0}
+           "bytes_with_hops": 0, "bytes_without_hops": 0,
+           # F1 跨行去重态（私有键，emit 过滤；仅 wscllm legacy 回退臂
+           # 读写）：request_id → {(session_id, reason, total_bytes), ...}。
+           LEGACY_DEDUP_ACC_KEY: {}}
     return source, acc, {}
 
 
@@ -556,7 +728,10 @@ def hopbytes_emit(args: argparse.Namespace, repo_variant: str, source: dict,
         "repo_variant": repo_variant,
         "formula": "Hop-Bytes = sum(bytes * noc_hops) over transfer "
                    "records carrying hop fields (spec 1.5-A)",
-        **acc,
+        # 私有键（LEGACY_DEDUP_ACC_KEY 去重态）不进 summary——acc 的
+        # "_" 前缀键是运行态，不是指标。
+        **{key: value for key, value in acc.items()
+           if not str(key).startswith("_")},
         "coverage_bytes_ratio": coverage,
         "notes": source["notes"],
         "granularity": source["granularity"],

@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/EventQueue.h"
 #include <cassert>
+#include <cstdlib>
+#include <iostream>
 
 using namespace NetworkAnalytical;
 
@@ -15,8 +17,12 @@ EventTime EventQueue::get_current_time() const noexcept {
 }
 
 bool EventQueue::finished() const noexcept {
-    // check whether event queue is empty
-    return event_queue.empty();
+    // check whether both the main queue and the same-tick deferred queue
+    // are empty (ONLINE-07 fix, 2026-09-26): deferred work pended outside a
+    // proceed context is real pending work, so quiescence requires both
+    // queues drained -- previously deferred events alone kept finished()
+    // true and external drivers terminated too early.
+    return event_queue.empty() && deferred_queue_.empty();
 }
 
 size_t EventQueue::scheduled_event_count() const noexcept {
@@ -31,21 +37,59 @@ size_t EventQueue::scheduled_event_count() const noexcept {
 bool EventQueue::has_deferred_work() const noexcept {
     // defect-C fix (2026-08-16, 同步自 face 0049ef5): the same-tick
     // deferred queue drains only inside proceed(); deferred events pended
-    // outside a proceed context are invisible to finished() (which sees
-    // only the main map) and would otherwise have no execution path.
+    // outside a proceed context would otherwise have no execution path.
+    // Since the ONLINE-07 fix (2026-09-26) finished() accounts for them,
+    // this predicate remains as the "why not finished" distinguisher and
+    // parking-point diagnostic.
     return !deferred_queue_.empty();
 }
 
 void EventQueue::proceed() noexcept {
-    // to proceed, next event should exist
-    assert(!finished());
+    // to proceed, next event should exist (main queue or deferred queue).
+    // NDEBUG-unrelated fail-closed (Release fail-closed port, 2026-09-30):
+    // proceeding on an empty queue would dereference end() in a Release
+    // build.
+    if (finished()) {
+        std::cerr << "[Error] (network/analytical) proceed() called on an "
+                     "empty event queue"
+                  << std::endl;
+        std::exit(-1);
+    }
+
+    // ONLINE-07 fix (2026-09-26): deferred-only pass. The main map is empty
+    // while same-tick deferred events pended outside a proceed context.
+    // Stay at current_time (deferred events belong to the current tick),
+    // run no main EventList and no tick-end callback (one tick_end per tick
+    // is preserved), and drain the deferred FIFO exactly like the tail of a
+    // regular pass below.
+    if (event_queue.empty()) {
+        while (!deferred_queue_.empty()) {
+            // Copy before invocation: a nested callback may grow/reallocate
+            // the deque, while the local pair remains stable.
+            const auto deferred = deferred_queue_.front();
+            deferred_queue_.pop_front();
+            deferred.first(deferred.second);
+        }
+        return;
+    }
 
     // proceed to the next event time
     auto current_event_list_it = event_queue.begin();
     auto& current_event_list = current_event_list_it->second;
 
-    // check the validity and update current time
-    assert(current_event_list.get_event_time() > current_time);
+    // check the validity and update current time. Fail closed in every
+    // build type (the former assert is compiled out of Release): a
+    // non-increasing event time here means a same-tick schedule_event()
+    // escaped an invoke/tick-end/deferred context -- see the tick-end
+    // comment below -- and would silently rewind simulation time (and
+    // re-fire the tick-end callback, corrupting decision epochs).
+    if (current_event_list.get_event_time() <= current_time) {
+        std::cerr << "[Error] (network/analytical) event queue time must "
+                  << "strictly increase: "
+                  << current_event_list.get_event_time()
+                  << " <= current_time " << current_time << std::endl;
+        std::exit(-1);
+    }
     current_time = current_event_list.get_event_time();
 
     // invoke events. in_invoke_ marks the only context in which a same-tick
@@ -66,7 +110,7 @@ void EventQueue::proceed() noexcept {
     // schedule_event(current_time, ...) issued from inside the callback (or
     // from the deferred drain below) would try_emplace a NEW EventList at
     // current_time, and the next proceed() would immediately trip the
-    // strict-increase assert at the top of this function (:31). Same-tick
+    // strict-increase fail-closed guard at the top of this function. Same-tick
     // events MUST use schedule_event_deferred(); only future events may use
     // schedule_event. (If the callback were invoked before the erase, such an
     // event would instead be merged into the already-invoked current list by
@@ -111,8 +155,26 @@ void EventQueue::schedule_event_deferred(const Callback callback, const Callback
 void EventQueue::schedule_event(const EventTime event_time,
                                 const Callback callback,
                                 const CallbackArg callback_arg) noexcept {
-    // time should be at least larger than current time
-    assert(event_time >= current_time);
+    // A strictly-future time is required unless we are inside the invoke
+    // pass, where a same-tick event merges into the EventList currently
+    // being invoked (EventList::invoke_events observes appends). Fail
+    // closed in every build type (the former assert is compiled out of
+    // Release; Release fail-closed port, 2026-09-30): a same-tick schedule
+    // from a tick-end/deferred/out-of-queue context would try_emplace a
+    // bucket at current_time that no proceed() can ever dispatch
+    // (strict-increase guard in proceed()) -- poisoning the whole queue.
+    // Same-tick work from those contexts MUST use schedule_event_deferred()
+    // instead. (Two-part guard: past events are rejected even inside the
+    // invoke pass.)
+    if (event_time < current_time ||
+        (event_time == current_time && !in_invoke_)) {
+        std::cerr << "[Error] (network/analytical) schedule_event time "
+                  << event_time << " is not strictly later than current_time "
+                  << current_time << " (same-tick outside the invoke context "
+                  << "is forbidden; use schedule_event_deferred)"
+                  << std::endl;
+        std::exit(-1);
+    }
 
     auto event_list_it = event_queue.try_emplace(event_time, event_time).first;
     event_list_it->second.add_event(callback, callback_arg);
@@ -123,7 +185,18 @@ EventHandle EventQueue::schedule_event_cancellable(
     const Callback callback,
     const CallbackArg callback_arg,
     const EventCancellationCallback cancellation_callback) noexcept {
-    assert(event_time >= current_time);
+    // Fail closed in every build type (the former assert is compiled out
+    // of Release; Release fail-closed port, 2026-09-30). Same two-part
+    // same-tick rule as schedule_event above.
+    if (event_time < current_time ||
+        (event_time == current_time && !in_invoke_)) {
+        std::cerr << "[Error] (network/analytical) "
+                  << "schedule_event_cancellable time " << event_time
+                  << " is not strictly later than current_time " << current_time
+                  << " (same-tick outside the invoke context is forbidden)"
+                  << std::endl;
+        std::exit(-1);
+    }
     assert(callback != nullptr);
 
     auto event_list_it = event_queue.try_emplace(event_time, event_time).first;

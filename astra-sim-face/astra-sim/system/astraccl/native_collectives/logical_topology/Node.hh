@@ -6,8 +6,6 @@ LICENSE file in the root directory of this source tree.
 #ifndef __NODE_HH__
 #define __NODE_HH__
 
-#include "astra-sim/system/Common.hh"
-
 namespace AstraSim {
 
 class Node {

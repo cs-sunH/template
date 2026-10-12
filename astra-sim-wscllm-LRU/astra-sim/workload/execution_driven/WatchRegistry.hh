@@ -34,12 +34,14 @@ Semantics (all explicit, none implied):
     regardless of which path produced the terminal fact (real traces
     contain INVALID_NODE / metadata nodes that are always skipped).
   - A watch fires ONCE, synchronously inside on_node_terminal, when every
-    expected member has a satisfying terminal; the fire is queued for
-    fired_and_drain() and reported to the fire notifier (step 1-6 wires the
-    notifier to the DecisionMailbox push).
-  - Lifecycle: register once, fire once, remove_watch on request end / batch
-    abort, remove_all on run finish; the run-end audit is
-    stale_count() == 0 (every registered watch either fired or was removed).
+    expected member has a satisfying terminal; the fire is reported to the
+    fire notifier (step 1-6 wires the notifier to the DecisionMailbox push).
+    A fire without an installed notifier has no consumer and is dropped.
+  - Lifecycle: register once, fire once, remove_watch on request end /
+    batch abort. remove_all() is a test/fixture convenience only --
+    production never calls it; the run-end audit is
+    stale_count() == 0 (every registered watch either fired or was
+    removed), which is what keeps the production lifecycle honest.
 
 The online CompletionObserver hook (online_completion_hook below) does
 EXACTLY two things (步骤 1-5 操作 3): (1) record the completion fact via
@@ -146,10 +148,15 @@ class WatchRegistry {
     /// Duplicate identity (request_id, stage, generation) returns the
     /// existing watch_id (register once / fire once). Empty expected_members
     /// never fires (programming error caught by the end audit).
+    /// `created`(可空出参,Minor 修复 2026-09-30):false = 该身份已在册,
+    /// 本次是跨批重复注册——新成员表被 register once / fire once 语义吞掉
+    /// (有 lost-wakeup 兜底,故只告警不 fail-closed);调用方借此只统计
+    /// 真正创建的 watch,total_watches 不再把被吞的重复计入。
     uint64_t register_stage_watch(
         const std::string& request_id, const std::string& stage,
         uint64_t generation, std::set<CompletionKey> expected_members,
-        std::set<NodeTerminalStatus> satisfying_statuses);
+        std::set<NodeTerminalStatus> satisfying_statuses,
+        bool* created = nullptr);
 
     /// Completion-fact recording, called by the online hook (read-only with
     /// respect to the graph; never releases dependencies). The direct member
@@ -157,10 +164,6 @@ class WatchRegistry {
     /// request_id/stage metadata. A key may belong to multiple watches; each
     /// retains its own duplicate/status/fire semantics.
     void on_node_terminal(const CompletionKey& key, NodeTerminalStatus status);
-
-    /// Fired watches since the last call in no-notifier fixture/polling mode;
-    /// production notifier mode retains no polling queue.
-    std::vector<WatchFire> fired_and_drain();
 
     /// Registered-but-not-fired watches. Run-end audit must be 0 (aborted
     /// requests must remove_watch before finishing).
@@ -172,7 +175,17 @@ class WatchRegistry {
     [[nodiscard]] size_t size() const { return watches_.size(); }
     [[nodiscard]] bool empty() const { return watches_.empty(); }
 
-    /// Lifecycle: request end / batch abort / run finish.
+    // DeadEnd-census diagnostic only (2026-10-11): one stderr line per
+    // registered-but-unfired watch (identity + member progress), prefixed
+    // with `prefix`. Purely read-only; normal paths never call this.
+    void dump_unfired_to_stderr(const char* prefix) const;
+
+    /// Lifecycle: request end / batch abort / run finish. The single-watch
+    /// form is the internal workhorse of remove_watches_for_request (and
+    /// of drain_fired_sentinels' stale-sentinel cleanup); the bulk forms
+    /// are the production entry points (remove_watches_for_request at the
+    /// REQUEST_COMPLETE commit; remove_all is the test/fixture teardown
+    /// convenience -- production never calls it).
     void remove_watch(uint64_t watch_id);
 
     /// Phase 4: remove every registered watch of one request (all stages /
@@ -209,7 +222,6 @@ class WatchRegistry {
         request_to_watch_ids_;
     // 拼 batch 适配(2026-08-22):哨兵 watch id 索引。
     std::vector<uint64_t> sentinel_watch_ids_;
-    std::vector<WatchFire> fired_;
     WatchFireNotifier notifier_;
 };
 

@@ -1,6 +1,7 @@
 #ifndef CHAKRA_FEEDER_V3_ET_FEEDER_NODE_H
 #define CHAKRA_FEEDER_V3_ET_FEEDER_NODE_H
 
+#include <exception>
 #include <functional>
 #include <memory>
 #include "common.h"
@@ -123,6 +124,13 @@ class ETFeederNode {
   // without knowing whole def of etfeeder
   [[noreturn]] void complain_attr_not_found(const std::string& attr_name) const;
 
+  // translates conversion failures (std::bad_cast, std::invalid_argument,
+  // ...) into std::runtime_error carrying node id and attribute name, so
+  // callers that only catch runtime_error stay covered
+  [[noreturn]] void complain_attr_type_mismatch(
+      const std::string& attr_name,
+      const std::exception& cause) const;
+
   // ETFeederNode only store minimal thing to reduce memory usage.
   ETFeeder& feeder;
   NodeId node_id;
@@ -189,7 +197,13 @@ T ETFeederNode::get_attr(const std::string& attr_name, const T& default_value)
   // option 1 or 3: user provide default value or systemwise default value
   if (this->has_attr(attr_name)) {
     const auto attr = this->get_attr_msg(attr_name);
-    return this->get_attr<T>(attr, DEFAULT_STRICT_TYPING);
+    try {
+      return this->get_attr<T>(attr, DEFAULT_STRICT_TYPING);
+    } catch (const std::exception& e) {
+      // a present-but-mistyped attribute must surface as runtime_error
+      // (the type callers gate on), not escape as a bare bad_cast
+      this->complain_attr_type_mismatch(attr_name, e);
+    }
   }
   return default_value;
 }
@@ -199,7 +213,11 @@ T ETFeederNode::get_attr(const std::string& attr_name) const {
   // option 2: throw complaints
   if (this->has_attr(attr_name)) {
     const auto attr = this->get_attr_msg(attr_name);
-    return this->get_attr<T>(attr, DEFAULT_STRICT_TYPING);
+    try {
+      return this->get_attr<T>(attr, DEFAULT_STRICT_TYPING);
+    } catch (const std::exception& e) {
+      this->complain_attr_type_mismatch(attr_name, e);
+    }
   }
   this->complain_attr_not_found(attr_name);
 }

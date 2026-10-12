@@ -20,6 +20,7 @@ position -- always by the arrival calendar built by the streaming index pass
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <set>
 #include <vector>
 
 #include <json/json.hpp>
@@ -41,8 +42,8 @@ uint64_t now_ns() {
 // FNV-1a 64 over one byte (offset basis 14695981039346656037, prime
 // 1099511628211; h ^= b; h *= prime, all arithmetic mod 2^64). Byte-for-byte
 // the same algorithm as the Python materializer's provenance sidecar writer
-// (derive_20_first_30_seconds.py) -- the cross-language gate depends on the
-// two implementations agreeing on every input byte.
+// (traces/materialize_20_30s.py queue_provenance) -- the cross-language gate
+// depends on the two implementations agreeing on every input byte.
 constexpr uint64_t kFnv1a64OffsetBasis = 14695981039346656037ULL;
 constexpr uint64_t kFnv1a64Prime = 1099511628211ULL;
 
@@ -107,6 +108,46 @@ int parse_turn_index_column(const std::string& value, const std::string& where) 
                      value + "' " + where);
     }
     return std::stoi(value);
+}
+
+// Strict JSON load for the provenance sidecar (same as the wscllm reader):
+// istream operator>> parses in NON-strict mode -- it silently consumes the
+// FIRST JSON value and leaves trailing bytes unread, and the DOM build
+// last-wins on duplicate object keys. The sidecar is machine-written by
+// the paired materializer, so trailing content or a duplicate key is
+// producer corruption, not a legal shape. json::parse in its default
+// strict mode rejects trailing bytes outright; the stateful parse callback
+// rejects a repeated key inside one object.
+nlohmann::json strict_json_load(std::istream& in, const std::string& what) {
+    struct KeyGuard {
+        std::vector<std::set<std::string>> stack;
+        std::string duplicate;
+        bool operator()(int, nlohmann::json::parse_event_t event,
+                        nlohmann::json& parsed) {
+            using EVT = nlohmann::json::parse_event_t;
+            if (event == EVT::object_start) {
+                stack.emplace_back();
+            } else if (event == EVT::key) {
+                if (!stack.back().insert(parsed.get<std::string>()).second) {
+                    duplicate = parsed.get<std::string>();
+                }
+            } else if (event == EVT::object_end && !stack.empty()) {
+                stack.pop_back();
+            }
+            return true;  // observe only; never discard subtree
+        }
+    } guard;
+    nlohmann::json value;
+    try {
+        value = nlohmann::json::parse(in, guard);
+    } catch (const nlohmann::json::exception& e) {
+        reader_fatal("invalid JSON in " + what + ": " + e.what());
+    }
+    if (!guard.duplicate.empty()) {
+        reader_fatal("duplicate JSON key \"" + guard.duplicate + "\" in " +
+                     what);
+    }
+    return value;
 }
 
 // Nearest-rank percentile (workspace convention: the ceil(rank*N)-th
@@ -224,19 +265,131 @@ void WindowedTraceReader::run_index_pass() {
                      });
     io_read_ns_ += now_ns() - start;
 
+    // R3-J4 port (2026-09-30, from the face repo): the Python loader
+    // rejects a queue that yields zero requests ("must contain at least
+    // one request"); this reader used to accept it and run a silent
+    // zero-request simulation (an all-comment/blank-row file indexes zero
+    // rows). Same fail-closed contract here.
+    if (data_rows_ == 0) {
+        reader_fatal("request queue CSV contains zero data rows "
+                     "(csv=" + csv_path_ + ")");
+    }
+
     check_provenance_sidecar();
     indexed_ = true;
 }
 
 void WindowedTraceReader::process_indexed_row(const std::string& line) {
-    if (line.empty()) {
-        return;  // blank line: not a data row
+    if (line.empty() || line == "\r") {
+        // Blank line: not a data row. A CRLF file's blank line is a lone
+        // '\r' char -- without this arm it fell through to
+        // the comma-count gate and was misreported as a column-count
+        // violation (the Python reference reader skips blank rows).
+        return;
     }
     if (!header_seen_) {
         header_seen_ = true;
+        // R5-N1 port (2026-09-30, from the face repo, aligned with this
+        // repo's L11 column-shape contract): the header is content-checked
+        // instead of blindly swallowed. Three legal shapes: the canonical
+        // 8-column header, the joint canonical 9-column header (the same
+        // 8 columns with the typed-eviction next_trigger_type column
+        // inserted before description -- the output shape of this repo's
+        // traces/materialize_20_30s.py and the input shape of the Python
+        // loaders' REQUEST_QUEUE_COLUMNS), and the legacy
+        // hand-written-fixture 7-column shape (same names minus the
+        // description column). Anything else fails closed -- the pre-fix
+        // behavior silently lost the first data row of a headerless input
+        // and turned a single-line file into a zero-request empty run. One
+        // trailing '\r' is tolerated (CRLF input).
+        std::string header = line;
+        // (the blank-line arm above guarantees non-empty here)
+        if (header.back() == '\r') {
+            header.pop_back();
+        }
+        const std::string canonical =
+            "session_id,turn_index,request_id,prefill_length,decode_length,"
+            "session_arrival_time_ns,inter_request_interval_ns,description";
+        const std::string canonical_joint =
+            "session_id,turn_index,request_id,prefill_length,decode_length,"
+            "session_arrival_time_ns,inter_request_interval_ns,"
+            "next_trigger_type,description";
+        const std::string legacy7 =
+            canonical.substr(0, canonical.rfind(','));
+        if (header != canonical && header != canonical_joint &&
+            header != legacy7) {
+            reader_fatal("request queue CSV header is not a documented "
+                         "header (expected the canonical 8-column header, "
+                         "the joint canonical 9-column header, or "
+                         "the legacy 7-column shape, got \"" + header +
+                         "\"): " + csv_path_);
+        }
         return;
     }
-    std::istringstream row(line);
+    // L11 fix (2026-09-29): explicit CRLF handling. The raw line may ride a
+    // trailing '\r' (Windows-produced CSV); strip it HERE, before any field
+    // is parsed, so the \r can no longer land silently inside the last
+    // column. The provenance hash above already consumed the raw bytes and
+    // is unaffected.
+    std::string clean_line = line;
+    if (clean_line.back() == '\r') {
+        clean_line.pop_back();
+    }
+    // L13 fix (2026-09-29): '#' COMMENT rows. The Python reference reader
+    // (generate_trace.py load_request_queue) skips every row whose
+    // request_id cell starts with '#', before all other validation; this
+    // reader used to count them as data rows and submit them, so a
+    // hand-written fixture (no provenance sidecar to catch the divergence)
+    // could disagree with Python about what is a request. Skipped rows do
+    // not consume a queue index: data_rows_/rows_read_ count only real data
+    // rows, exactly Python's accepted-row counting.
+    {
+        std::istringstream probe(clean_line);
+        std::string probe_session, probe_turn, probe_request;
+        std::getline(probe, probe_session, ',');
+        std::getline(probe, probe_turn, ',');
+        std::getline(probe, probe_request, ',');
+        if (!probe_request.empty() && probe_request[0] == '#') {
+            return;
+        }
+    }
+    // L13 fix (2026-09-29): QUOTED fields. The Python reference reader is
+    // quote-aware (csv.DictReader), so a quoted field with an embedded
+    // comma parses correctly there while the positional split below would
+    // silently re-map every later column. This reader never supported
+    // quoted fields -- fail closed instead of mis-parsing.
+    if (clean_line.find('"') != std::string::npos) {
+        reader_fatal("CSV data row contains a double-quoted field (the "
+                     "windowed reader parses positionally and does not "
+                     "support quote-aware CSV): data row " +
+                     std::to_string(data_rows_) + " (csv=" + csv_path_ + ")");
+    }
+    // L11 fix (2026-09-29, REPAIR of the earlier column-shape gate): the
+    // previous gate ran `if (std::getline(row, description_ride, ','))`
+    // after the seven field getlines and fatalled whenever the 8th
+    // (description) field was NON-EMPTY -- i.e. it rejected every canonical
+    // materializer row (",,d") and only tolerated rows missing the
+    // description column outright. The correct gate is a comma count: the
+    // canonical queue schema has 8 columns (7 commas) and the joint
+    // canonical schema has 9 columns (8 commas -- next_trigger_type rides
+    // before the trailing free-text columns); the columns this reader
+    // parses positionally are the FIRST SEVEN either way, so both tails
+    // are free text ignored here, and the legacy hand-written-fixture
+    // shape of 7 columns (no description -- the ServiceVacuumTest
+    // contract) stays legal. Anything else fails closed with the data-row
+    // index: < 7 columns means a required column (e.g.
+    // inter_request_interval_ns) would silently default to 0, and > 9
+    // columns means an unquoted comma shifted the whole positional split.
+    const size_t comma_count =
+        static_cast<size_t>(std::count(clean_line.begin(), clean_line.end(),
+                                       ','));
+    if (comma_count < 6 || comma_count > 8) {
+        reader_fatal("CSV data row does not carry the canonical 8/9 columns "
+                     "(got " + std::to_string(comma_count + 1) +
+                     " comma-separated fields; 7, 8 or 9 legal): data row " +
+                     std::to_string(data_rows_) + " (csv=" + csv_path_ + ")");
+    }
+    std::istringstream row(clean_line);
     std::string session_id, turn_index_s, request_id, prefill_s, decode_s,
         arrival_s, interval_s;
     std::getline(row, session_id, ',');
@@ -246,6 +399,20 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
     std::getline(row, decode_s, ',');
     std::getline(row, arrival_s, ',');
     std::getline(row, interval_s, ',');
+    // L13 fix (2026-09-29): EMPTY request_id. Python SYNTHESIZES
+    // "request_{n}" for an empty cell; this reader deliberately diverges
+    // (fail-closed, no fabrication): the id keys the metrics registration,
+    // the ingress one-shot queue-index map and the graph request namespace,
+    // and a silently invented id would mask a broken producer. Standard
+    // materializer output always carries non-empty ids (zero behavior
+    // change on legal input).
+    if (request_id.empty()) {
+        reader_fatal("CSV field request_id is empty (the Python reference "
+                     "reader would synthesize request_{n}; the windowed "
+                     "reader refuses to fabricate ids): session_id=" +
+                     session_id + " data row " +
+                     std::to_string(data_rows_) + " (csv=" + csv_path_ + ")");
+    }
     ++data_rows_;
     // Frozen queue index (CSV data-row order, 0-based). Turn-0 carries it
     // directly in the Submit envelope. Turn>0 rows are ALL pre-registered
@@ -262,6 +429,32 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
     env.session_id = session_id;
     env.turn_index = parse_turn_index_column(turn_index_s, row_where);
     env.request_id = request_id;
+    // C3 identity gate (ported from the wscllm reader): a cross-row
+    // duplicate request_id aliases the metric ledger and the anchor
+    // lookups downstream (request_id -> queue_index last-wins). Fail here,
+    // before any Submit. (The empty-id leg this gate used to carry was
+    // unreachable -- the L13 lexical gate above already rejected it on the
+    // same row; removed with the 2026-10-01 dead-branch audit.)
+    if (!seen_request_ids_.insert(request_id).second) {
+        reader_fatal("request_id is not unique across data rows: "
+                     "request_id=" +
+                     request_id + " session_id=" + session_id +
+                     " data row " + std::to_string(queue_index) +
+                     " (csv=" + csv_path_ + ")");
+    }
+    // Reserved-token gate (4.2 fix, same as the wscllm reader): "first_token"
+    // is the WP9 node-name anchor substring and the graph builder embeds the
+    // sanitized session_id / request_id in every regular node name -- an id
+    // carrying it hijacks every node of that request into the marker arm.
+    if (session_id.find("first_token") != std::string::npos ||
+        request_id.find("first_token") != std::string::npos) {
+        reader_fatal("session_id/request_id must not contain the reserved "
+                     "marker token \"first_token\" (it is the WP9 node-name "
+                     "anchor substring): session_id=" +
+                     session_id + " request_id=" + request_id +
+                     " data row " + std::to_string(queue_index) +
+                     " (csv=" + csv_path_ + ")");
+    }
     env.prefill_length =
         parse_u64_column("prefill_length", prefill_s, row_where);
     env.decode_length =
@@ -271,11 +464,30 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
             ? 0
             : parse_u64_column("inter_request_interval_ns", interval_s,
                                row_where);
+    // Turn>0 arrivals are parent-complete + interval: an empty interval
+    // column on a turn>0 row silently scheduled the next request at
+    // parent-complete +0. The materializer leaves the column empty ONLY on
+    // turn-0 rows (absolute arrival), so the empty default is legal
+    // exclusively there.
+    if (env.turn_index > 0 && interval_s.empty()) {
+        reader_fatal("CSV field inter_request_interval_ns is empty on a "
+                     "turn>0 row (turn arrivals are parent-complete + "
+                     "interval): " +
+                     row_where);
+    }
     env.queue_index = queue_index;
 
     const bool is_turn0 = !arrival_s.empty();
 
     // ---- fail-closed session-block structure validation (P0 fix item 2) ----
+    if (session_id.empty()) {
+        // An empty session_id must not fall through into the block logic:
+        // current_session_ default-constructs to "" so the row would skip
+        // the new-session branch and die later in the misleading
+        // "internal: block state lost" defensive arm.
+        reader_fatal("CSV field session_id is empty: data row " +
+                     std::to_string(queue_index) + " (csv=" + csv_path_ + ")");
+    }
     if (session_id != current_session_) {
         if (seen_sessions_.count(session_id) != 0) {
             reader_fatal(
@@ -399,23 +611,28 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
 void WindowedTraceReader::check_provenance_sidecar() {
     // Fail-closed provenance gate (P0 fix item 6). Runs AFTER the index
     // stats are complete and BEFORE the first Submit: any mismatch aborts
-    // the process with zero submissions. An absent sidecar is explicitly
-    // not a gate (older materializations / hand-written fixtures).
+    // the process with zero submissions.
+    // M-16 修复(姊妹仓 P1 同款移植,2026-09-30):sidecar 缺席从
+    // "absent-no-gate" 放行改为 fail-closed(REQUIRED)。旧缺席通道正是
+    // 半途失败的物化会掉进去的洞:截断队列 + 无 sidecar 会被照常索引,
+    // run-end 审计在缩水分母上全绿。缺席与在但读不了统一 fail-closed,
+    // errno 仍进错误消息便于区分截断物化与权限/IO 故障。
     const std::string sidecar = csv_path_ + ".provenance.json";
     std::ifstream in(sidecar, std::ios::binary);
     if (!in.is_open()) {
-        provenance_status_ = "absent-no-gate";
-        std::cout << "[online] provenance sidecar: absent (no gate): "
-                  << sidecar << std::endl;
-        return;
+        reader_fatal("provenance sidecar is MISSING (fail-closed): " +
+                     sidecar +
+                     " must sit next to the request queue CSV and match it "
+                     "(errno=" + std::to_string(errno) + " " +
+                     std::strerror(errno) +
+                     "); a queue without its provenance record cannot be "
+                     "told apart from a truncated one -- refusing to "
+                     "submit anything (re-materialize with "
+                     "sh_test_mesh/workload/llama2_7b_inference/traces/"
+                     "materialize_20_30s.py)");
     }
-    nlohmann::json doc;
-    try {
-        in >> doc;
-    } catch (const std::exception& e) {
-        reader_fatal("provenance sidecar is not valid JSON: " + sidecar +
-                     " (" + e.what() + ")");
-    }
+    nlohmann::json doc = strict_json_load(in,
+                                          "provenance sidecar " + sidecar);
     auto expect_u64 = [&](const char* field, uint64_t computed) {
         if (!doc.contains(field) || !doc[field].is_number_unsigned()) {
             reader_fatal(std::string("provenance sidecar field missing or not "
@@ -481,9 +698,13 @@ void WindowedTraceReader::submit_from_calendar() {
         cmd.kind = IngressCommandKind::Submit;
         cmd.envelope = entry.envelope;
         cmd.envelope.source = RequestSource::StaticCsv;
+        cmd.backpressure_deferred = entry.backpressure_deferred;
         if (!ingress_.enqueue_command(cmd)) {
             // Bounded ingress (capacity 4096): backpressure, NOT a failure.
-            // The cursor stays on this entry; the next pump retries.
+            // The cursor stays on this entry; the next pump retries. The
+            // eventual drain clamp is a capacity artifact (M5), not reader
+            // lateness.
+            entry.backpressure_deferred = true;
             return;
         }
         entry.submitted = true;
@@ -573,10 +794,13 @@ WindowedTraceReader::arrival_audit() const {
             row.effective_arrival_ns == 1) {
             row.late_source = "t0_boundary";
         } else if (row.late_by_ns > 0) {
-            row.late_source = "static_submit_late";
+            row.late_source = entry.backpressure_deferred
+                ? "capacity_backpressure"
+                : "static_submit_late";
         } else {
             row.late_source = "on_time";
         }
+        row.backpressure_deferred = entry.backpressure_deferred;
         audit.push_back(row);
     }
     std::sort(audit.begin(), audit.end(),
@@ -590,6 +814,8 @@ WindowedTraceReader::ArrivalAuditSummary
 WindowedTraceReader::audit_static_arrivals() const {
     ArrivalAuditSummary summary;
     summary.late_static_submit = ingress_.late_static_submit_count();
+    summary.late_static_submit_backpressure =
+        ingress_.late_static_submit_backpressure_count();
     summary.late_external_stream = ingress_.late_external_stream_count();
     summary.late_future_alarm_rounding =
         ingress_.late_future_alarm_rounding_count();
@@ -608,6 +834,9 @@ WindowedTraceReader::audit_static_arrivals() const {
         if (std::string(row.late_source) == "static_submit_late") {
             ++summary.nonzero_delay_rows;
         }
+        // capacity_backpressure rows keep their delay in the percentile
+        // stats (informative) but are exempt from the gate counters above:
+        // the bounded ingress queue, not the reader, made them late (M5).
         ++summary.turn0_submitted;
         delays.push_back(row.late_by_ns);
     }

@@ -5,11 +5,14 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/EventQueue.h"
 #include <cassert>
+#include <cstdlib>
+#include <iostream>
 
 using namespace NetworkAnalytical;
 
-EventQueue::EventQueue() noexcept : current_time(0), event_queue() {}
+EventQueue::QueueWallStats EventQueue::wall_stats_{};
 
+EventQueue::EventQueue() noexcept : current_time(0), event_queue() {}
 EventTime EventQueue::get_current_time() const noexcept {
     return current_time;
 }
@@ -37,6 +40,10 @@ bool EventQueue::has_deferred_work() const noexcept {
 }
 
 void EventQueue::proceed() noexcept {
+    // instrumentation bracket: whole tick (physical events + tick-end cb +
+    // deferred drain). Measurement only.
+    const WallBracket proceed_bracket(wall_stats_.proceed);
+
     // to proceed, next event should exist
     assert(!finished());
 
@@ -66,7 +73,7 @@ void EventQueue::proceed() noexcept {
     // schedule_event(current_time, ...) issued from inside the callback (or
     // from the deferred drain below) would try_emplace a NEW EventList at
     // current_time, and the next proceed() would immediately trip the
-    // strict-increase assert at the top of this function (:31). Same-tick
+    // strict-increase assert at the top of this function (EventQueue.cpp proceed()). Same-tick
     // events MUST use schedule_event_deferred(); only future events may use
     // schedule_event. (If the callback were invoked before the erase, such an
     // event would instead be merged into the already-invoked current list by
@@ -102,6 +109,7 @@ bool EventQueue::in_invoke_context() const noexcept {
 
 void EventQueue::schedule_event_deferred(const Callback callback, const CallbackArg callback_arg) noexcept {
     assert(callback != nullptr);
+    ++wall_stats_.deferred_schedule_calls;
     // Deferred events belong to the current tick. The compact pair FIFO is
     // executed by the current proceed() drain (or the next one when scheduled
     // outside a proceed context), without a per-event list-node allocation.
@@ -111,11 +119,25 @@ void EventQueue::schedule_event_deferred(const Callback callback, const Callback
 void EventQueue::schedule_event(const EventTime event_time,
                                 const Callback callback,
                                 const CallbackArg callback_arg) noexcept {
-    // time should be at least larger than current time
+    // Fail closed in every build type (2026-10-01 audit: the M-2 mirror
+    // below existed only for the cancellable variant; a Release build
+    // silently accepted a past-time event here and let the next proceed()
+    // rewind current_time and replay it). Same two-part same-tick rule as
+    // schedule_event_cancellable.
+    if (event_time < current_time ||
+        (event_time == current_time && !in_invoke_)) {
+        std::cerr << "[Error] (network/analytical) "
+                  << "schedule_event time " << event_time
+                  << " is not strictly later than current_time " << current_time
+                  << " (same-tick outside the invoke context is forbidden)"
+                  << std::endl;
+        std::exit(-1);
+    }
     assert(event_time >= current_time);
 
     auto event_list_it = event_queue.try_emplace(event_time, event_time).first;
     event_list_it->second.add_event(callback, callback_arg);
+    ++wall_stats_.schedule_event_calls;
 }
 
 EventHandle EventQueue::schedule_event_cancellable(
@@ -123,15 +145,27 @@ EventHandle EventQueue::schedule_event_cancellable(
     const Callback callback,
     const CallbackArg callback_arg,
     const EventCancellationCallback cancellation_callback) noexcept {
-    assert(event_time >= current_time);
+    // Fail closed in every build type (M-2 Release fail-closed mirror,
+    // 2026-09-30). Same two-part same-tick rule as schedule_event above.
+    if (event_time < current_time ||
+        (event_time == current_time && !in_invoke_)) {
+        std::cerr << "[Error] (network/analytical) "
+                  << "schedule_event_cancellable time " << event_time
+                  << " is not strictly later than current_time " << current_time
+                  << " (same-tick outside the invoke context is forbidden)"
+                  << std::endl;
+        std::exit(-1);
+    }
     assert(callback != nullptr);
 
     auto event_list_it = event_queue.try_emplace(event_time, event_time).first;
+    ++wall_stats_.schedule_event_cancellable_calls;
     return event_list_it->second.add_cancellable_event(
         callback, callback_arg, cancellation_callback);
 }
 
 bool EventQueue::cancel_event(EventHandle& handle) noexcept {
+    ++wall_stats_.cancel_event_calls;
     if (!handle.valid()) {
         handle.reset();
         return false;

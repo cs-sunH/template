@@ -13,17 +13,49 @@ LICENSE file in the root directory of this source tree.
 
 using namespace NetworkAnalyticalCongestionAware;
 
+Topology::RouteCacheStats Topology::route_cache_stats_{};
+
 Topology::Topology() noexcept : npus_count(-1), devices_count(-1), dims_count(-1) {
     npus_count_per_dim = {};
 }
 
 std::shared_ptr<const FluidRoute> Topology::fluid_route(const DeviceId src,
                                                         const DeviceId dest) const noexcept {
+    // instrumentation bracket + lookup counter (measurement only)
+    const NetworkAnalytical::WallBracket route_bracket(route_cache_stats_.wall);
+    ++route_cache_stats_.lookups;
+
+    // Fail closed on self-send. With src == dest every concrete topology
+    // degenerates differently: Mesh/Ring/MultiDimTopology return a
+    // single-device route (a size<2 route), FullyConnected returns a
+    // link-less device pair (no src->src link exists), and Switch silently
+    // models a 2-hop self-loop that changes the send timing. None of these is
+    // a meaningful send, so funnel them all into one explicit error here,
+    // where every route request passes through.
+    if (src == dest) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "self-send is not supported: route requested with "
+                  << "src == dest (device " << src << ")" << std::endl;
+        std::exit(-1);
+    }
+
     const auto key = (static_cast<uint64_t>(static_cast<uint32_t>(src)) << 32U) |
                      static_cast<uint32_t>(dest);
     const auto cached = fluid_route_cache.find(key);
     if (cached != fluid_route_cache.end()) {
+        ++route_cache_stats_.hits;
         return cached->second;
+    }
+    ++route_cache_stats_.misses;
+    // Bound the cache (face-LRU audit, 2026-09-29 mirrored to joint):
+    // route() is a pure function of the immutable topology, so a wholesale
+    // clear can never change any computed route -- it only recomputes.
+    // Without this the cache grows to npus^2 entries for the whole
+    // simulation lifetime.
+    constexpr size_t kFluidRouteCacheCapacity = 1u << 20;
+    if (fluid_route_cache.size() >= kFluidRouteCacheCapacity) {
+        fluid_route_cache.clear();
+        ++route_cache_stats_.wholesale_clears;
     }
 
     const auto device_route = route(src, dest);
@@ -64,13 +96,8 @@ const std::vector<std::shared_ptr<const Link>>& Topology::get_directed_links() c
     return directed_links;
 }
 
-int Topology::get_devices_count() const noexcept {
-    assert(devices_count > 0);
-    assert(npus_count > 0);
-    assert(devices_count >= npus_count);
-
-    return devices_count;
-}
+// (get_devices_count was removed with the 2026-10-01 dead-code audit:
+// zero callers repo-wide; get_npus_count carries the live surface.)
 
 int Topology::get_npus_count() const noexcept {
     assert(devices_count > 0);
@@ -80,17 +107,9 @@ int Topology::get_npus_count() const noexcept {
     return npus_count;
 }
 
-int Topology::get_links_count() const noexcept {
-    assert(devices_count > 0);
-    assert(devices.size() == static_cast<size_t>(devices_count));
-
-    auto links_count = 0;
-    for (const auto& device : devices) {
-        links_count += device->get_links_count();
-    }
-
-    return links_count;
-}
+// (get_links_count was removed with the 2026-10-01 dead-code audit: its
+// only caller was Device::get_links_count via the equally dead topology
+// counter; directed_links.size() is the live link-count surface.)
 
 int Topology::get_dims_count() const noexcept {
     assert(dims_count > 0);

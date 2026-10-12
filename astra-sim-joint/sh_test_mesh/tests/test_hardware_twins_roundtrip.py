@@ -121,11 +121,24 @@ class HardwareTwinsRoundtripTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.base_source = json.loads(
             _BASE_SOURCE.read_text(encoding="utf-8"))
-        cls.base_hardware = {
-            profile: load_hardware_config(_BASE_SOURCE, profile)
-            for profile in cls.base_source["local-hbm"][
-                "capacity-profiles"]
-        }
+        # die 推广第一期（2026-10-03）：base/孪生的计算描述统一为 die 节
+        # （孪生与 base 只允许 D2D 带宽与身份/说明不同，C18 冻结合同不
+        # 变）。die 节下仅 die 对齐容量档（validation-die-64g）可装载——
+        # legacy 两档（paper-64gib/validation-160gib）在容量对齐门处被
+        # 拒（合法拒绝，非孪生缺陷），装载侧枚举跳过该特定错误。
+        cls.base_hardware = {}
+        for profile in cls.base_source["local-hbm"][
+                "capacity-profiles"]:
+            try:
+                cls.base_hardware[profile] = load_hardware_config(
+                    _BASE_SOURCE, profile)
+            except ValueError as error:
+                if "die-derived HBM capacity" not in str(error):
+                    raise
+        if not cls.base_hardware:
+            raise RuntimeError(
+                "die base hardware must expose at least one loadable "
+                "(die-aligned) capacity profile")
         cls.twins = {
             suffix: json.loads(
                 (_HARDWARE_DIR / f"face_case5_config_c_{suffix}.json")
@@ -163,20 +176,27 @@ class HardwareTwinsRoundtripTests(unittest.TestCase):
         }
 
     def test_six_combos_schema_rho_and_roundtrip(self) -> None:
-        """6 组合：exact-key schema 过 + ρ 派生一致 + 写回重载零漂移。"""
+        """三孪生 × 可装载容量档：exact-key schema 过 + ρ 派生一致 +
+        写回重载零漂移。die 推广第一期起 base/孪生同为 die 节，可装载
+        档 = die 对齐档（validation-die-64g）；源内 legacy 两档在容量
+        对齐门处拒绝（保留其他 legacy 用途）。"""
         profiles = sorted(
             self.base_source["local-hbm"]["capacity-profiles"])
         self.assertEqual(
-            len(profiles), 2,
-            f"C18 合同 = 三孪生 × 2 容量档，base 源应有且仅有 2 档，"
+            len(profiles), 3,
+            f"die 推广后 base 源应有 3 档（2 legacy + 1 die 对齐），"
             f"实得 {profiles}")
+        loadable = sorted(self.base_hardware)
+        self.assertEqual(
+            loadable, ["validation-die-64g"],
+            f"die 节下可装载档应恰为 die 对齐档，实得 {loadable}")
         combos = 0
         for suffix, (d2d_gbps, expected_rho, expected_q_init) \
                 in _TWINS.items():
             source_path = (
                 _HARDWARE_DIR / f"face_case5_config_c_{suffix}.json")
             source = self.twins[suffix]
-            for profile in profiles:
+            for profile in loadable:
                 combos += 1
                 with self.subTest(twin=suffix, profile=profile):
                     # 1) exact-key schema：load_hardware_config 内
@@ -223,7 +243,7 @@ class HardwareTwinsRoundtripTests(unittest.TestCase):
                         self._resolved_fields(second),
                         msg=(f"{suffix}/{profile}: canonical 写回重载应"
                              "逐字段零漂移"))
-        self.assertEqual(combos, 6)
+        self.assertEqual(combos, len(_TWINS) * len(loadable))
 
     def test_twin_rho_disclosure_notes_match_computation(self) -> None:
         """孪生 notes 披露的 ρ 近似值与计算值交叉核对（双向钉死）。"""

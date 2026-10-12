@@ -14,6 +14,7 @@ if str(MODULE_DIR) not in sys.path:
 
 from session_kv_manager import (  # noqa: E402
     PARTIAL_HBM_REMOTE,
+    REMOTE_MEMORY,
     SessionKVCacheManager,
     SessionKVState,
     kv_cache_shard_bytes_for_tokens,
@@ -264,6 +265,96 @@ class IncrementalInvariantTests(unittest.TestCase):
             manager._check_incremental_session_invariants(ghost)
         ghost.resident_prefix_layers = manager.model_layers
         manager._check_invariants()
+
+
+class MutationInputValidationTests(unittest.TestCase):
+    """mutation 输入契约与守恒断言的 fail-closed 回归(MEM-02/03/04、
+    M1-07):精度损失类型、坏时间戳、校验顺序、zip 截断一律显式失败。"""
+
+    def test_release_capacity_failure_keeps_reservation_retryable(self) -> None:
+        """MEM-02:release 先全量校验后减账注销——underflow 失败时预约
+        原样保留,修复记账后重试幂等成功(失败不再把请求变成 unknown)。"""
+        manager = _manager(False)
+        required = kv_cache_shard_bytes_for_tokens(
+            manager.model, 4, manager.tp_degree)
+        manager.prepare_history(
+            "session", 0, 0, 0, "request", required_context_tokens=4)
+        manager.reserve_request_capacity("request", "session", 0, required, 0)
+        rank = manager.topology.instance(0).ranks[0]
+        manager._rank_states[rank].reserved_request_bytes -= 1
+        with self.assertRaisesRegex(
+                RuntimeError, "reservation accounting underflow"):
+            manager.release_request_capacity("request", 1)
+        self.assertIn("request", manager._reservations)
+        manager._rank_states[rank].reserved_request_bytes += 1
+        manager.release_request_capacity("request", 2)
+        self.assertNotIn("request", manager._reservations)
+        manager._check_invariants()
+
+    def test_shard_vectors_reject_precision_losing_types(self) -> None:
+        """MEM-03:1.9/True 在 int() 静默截断(1.9→1、True→1,低估预约)
+        之前即被拒绝:fit/reserve/extend 三个入口一致 fail-closed。"""
+        manager = _manager(False)
+        for bad in ((1.9,), (True,)):
+            with self.assertRaises(ValueError):
+                manager.ensure_physical_fit(0, bad, 0, "request")
+            with self.assertRaises(ValueError):
+                manager.reserve_request_capacity("rq", "session", 0, bad, 0)
+        self.assertNotIn("rq", manager._reservations)
+        good = kv_cache_shard_bytes_for_tokens(
+            manager.model, 4, manager.tp_degree)
+        manager.prepare_history(
+            "session", 0, 0, 0, "request", required_context_tokens=4)
+        manager.reserve_request_capacity("request", "session", 0, good, 1)
+        for bad in ((1.9,), (True,)):
+            with self.assertRaises(ValueError):
+                manager.extend_request_capacity("request", bad, 2)
+
+    def test_completion_timestamp_contract(self) -> None:
+        """MEM-04:完成时刻是 LRU 的唯一时间戳写入点——非负 int + 会话内
+        非递减(float/bool/负数/回退一律 ValueError,fail-closed)。"""
+        manager = _manager(False)
+        manager.prepare_history(
+            "session", 0, 0, 0, "request", required_context_tokens=4)
+        for bad in (1.5, True, -1, "7"):
+            with self.assertRaises(ValueError):
+                manager.mark_complete("session", bad, "request")
+        manager.grow_prefill("session", 4, 1, "request")
+        manager.mark_complete("session", 5, "request")
+        self.assertFalse(manager.session_snapshot("session").active)
+        # 下一 turn:完成时刻回退拒绝、递增接受。
+        manager.prepare_history(
+            "session", 0, 4, 6, "request2", required_context_tokens=4)
+        with self.assertRaisesRegex(ValueError, "moves backwards"):
+            manager.mark_complete("session", 4, "request2")
+        manager.mark_complete("session", 7, "request2")
+        # 终态退休的完成时刻同样要求非负 int。
+        for bad in (1.5, True, -1):
+            with self.assertRaisesRegex(ValueError, "completion_ns"):
+                manager.retire_terminal_session("session", bad, "request2")
+        manager.retire_terminal_session("session", 8, "request2")
+        manager._check_invariants()
+
+    def test_incremental_check_rejects_short_remote_shard_vector(self) -> None:
+        """M1-07:remote shard 向量长度不齐时守恒断言必须显式失败
+        (zip 不再静默截断、跳过 local+remote=total 检查)。"""
+        manager = _tiered_manager(False)
+        manager.prepare_history(
+            "a", 0, 0, 1, "a0", required_context_tokens=20)
+        manager.grow_prefill("a", 20, 2, "a0")
+        manager.mark_complete("a", 3, "a0")
+        decision = manager.prepare_history(
+            "b", 0, 0, 4, "b0", required_context_tokens=20)
+        self.assertFalse(decision.admission_blocked)
+        remote = manager._sessions["a"]
+        self.assertEqual(remote.location, REMOTE_MEMORY)
+        remote.remote_shard_bytes = ()
+        with self.assertRaisesRegex(
+                RuntimeError, "KV shard count does not match"):
+            manager._check_incremental_session_invariants(remote)
+        with self.assertRaisesRegex(
+                RuntimeError, "KV shard count does not match"):
+            manager._check_invariants()
 
 
 if __name__ == "__main__":

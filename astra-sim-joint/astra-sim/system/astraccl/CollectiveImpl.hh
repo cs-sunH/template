@@ -12,6 +12,8 @@ namespace AstraSim {
 
 // For legacy reasons we are calling this and everywhere below 'Collective Implementation'
 // but it really is 'Collective Algorithm'.
+// (The retired CustomCollectiveImpl tier was removed with the custom path;
+// configuring its keys fails closed in CollectiveImplLookup.cc.)
 enum class CollectiveImplType {
     Ring = 0,
     OneRing,
@@ -20,7 +22,6 @@ enum class CollectiveImplType {
     DoubleBinaryTree,
     HalvingDoubling,
     OneHalvingDoubling,
-    CustomCollectiveImpl,
 };
 
 /*
@@ -50,22 +51,6 @@ class DirectCollectiveImpl : public CollectiveImpl {
     }
 
     int direct_collective_window;
-};
-
-/*
- * CustomCollectiveImpl contains information about non-native, custom collective algorithms.
- * This data structure contains the filename of the Chakra ET which holds the implementation.
- * That filename is provided in the System layer input.
- */
-class CustomCollectiveImpl : public CollectiveImpl {
-  public:
-    CustomCollectiveImpl(CollectiveImplType type, std::string filename)
-        : CollectiveImpl(type) {
-        this->filename = filename;
-    }
-
-    /* The filename of the corresponding Chakra ET file */
-    std::string filename;
 };
 
 } // namespace AstraSim

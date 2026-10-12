@@ -17,7 +17,7 @@ echo "[ASTRA-sim] Building Docker Image..."
 echo ""
 
 # build docker image
-docker build -t astrasim/astra-sim:latest ${PROJECT_DIR:?}
+docker build -t astrasim/astra-sim:latest "${PROJECT_DIR:?}"
 
 # finalize
 echo ""

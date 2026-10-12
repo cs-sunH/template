@@ -60,11 +60,15 @@ namespace {
 
 bool g_ok = true;
 
-void expect(bool cond, const char* what) {
+// expect() is non-aborting (records and continues); it returns the
+// condition so dereference-after-expect sites can guard the subscript
+// (empty-vector operator[] is UB).
+bool expect(bool cond, const char* what) {
     if (!cond) {
         std::fprintf(stderr, "[watch_registry_test] FAIL: %s\n", what);
         g_ok = false;
     }
+    return cond;
 }
 
 CompletionKey key(int rank, uint64_t node_id, uint64_t generation) {
@@ -132,11 +136,12 @@ void test_registration_and_noops() {
     reg.on_node_terminal(key(0, 2, 1),
                          NodeTerminalStatus::Skipped);
     auto fires = reg.fired_and_drain();
-    expect(fires.size() == 1, "A: watch fired once");
-    expect(fires[0].watch_id == watch_id && fires[0].request_id == "req-1" &&
-               fires[0].stage == "prefill" && fires[0].generation == 1 &&
-               fires[0].member_count == 2,
-           "A: fire carries identity and member count");
+    if (expect(fires.size() == 1, "A: watch fired once")) {
+        expect(fires[0].watch_id == watch_id && fires[0].request_id == "req-1" &&
+                   fires[0].stage == "prefill" && fires[0].generation == 1 &&
+                   fires[0].member_count == 2,
+               "A: fire carries identity and member count");
+    }
     expect(reg.stale_count() == 1, "A: fired watch no longer stale");
 
     // Terminals after the fire: no-op (fire once).
@@ -276,6 +281,30 @@ void test_direct_member_index() {
     reg.on_node_terminal(removed_key, NodeTerminalStatus::Success);
     expect(fired_ids.size() == 2,
            "D: removed watch is absent from the direct member index");
+    reg.remove_all();
+}
+
+void test_member_progression_pins() {
+    WatchRegistry reg;
+    reg.register_stage_watch("pin-a", "decode", 1,
+                             {key(3, 2, 1), key(3, 6, 1)},
+                             {NodeTerminalStatus::Success});
+    reg.register_stage_watch("pin-b", "decode", 1,
+                             {key(3, 6, 1)},
+                             {NodeTerminalStatus::Success});
+    const std::vector<WatchRegistry::MemberProgression> ranges{
+        {3, 2, 3, 2}, {4, 2, 3, 2}};
+    expect(reg.member_reference_count(ranges) == 3,
+           "D: compact affine query counts exact live WatchRegistry pins");
+    reg.on_node_terminal(key(3, 2, 1), NodeTerminalStatus::Success);
+    expect(reg.member_reference_count(ranges) == 2,
+           "D: completed member callbacks stop pinning before watch cleanup");
+    reg.remove_watches_for_request("pin-a");
+    expect(reg.member_reference_count(ranges) == 1,
+           "D: per-request removal releases only that request's pins");
+    reg.remove_watches_for_request("pin-b");
+    expect(reg.member_reference_count(ranges) == 0,
+           "D: pin count reaches zero after all owning watches are removed");
     reg.remove_all();
 }
 
@@ -434,6 +463,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     test_fire_semantics();
     test_lifecycle_and_notifier();
     test_direct_member_index();
+    test_member_progression_pins();
     test_online_hook();
     test_issue_pass_coalescing();
     test_communicator_lifetime();

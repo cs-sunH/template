@@ -197,21 +197,17 @@ class DebutPlanTest(unittest.TestCase):
     def tearDown(self):
         os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
 
-    def _plan(self, iterations=8, spans=None, members=None, chunks=None):
-        members = members if members is not None else [(REQUEST_A, 8)]
-        chunks = chunks if chunks is not None else [
-            (REQUEST_A, 128)] * iterations
+    def _plan(self, iterations=8):
         return {
             "train_id": "batch_train_i1_9",
             "iterations": iterations,
-            "members": members,
+            "members": [(REQUEST_A, 8)],
             "drain_members": [],
             "exit_members": [],
             "sentinel": False,
-            "prefill_chunk_tokens": chunks,
-            "pass_spans": spans if spans is not None else (
-                [(128, 128 + 128 * (i + 1)) for i in range(iterations)]
-                + [(1, 201 + i) for i in range(8)]),
+            "prefill_chunk_tokens": [(REQUEST_A, 128)] * iterations,
+            "pass_spans": ([(128, 128 + 128 * (i + 1)) for i in range(iterations)]
+                           + [(1, 201 + i) for i in range(8)]),
         }
 
     def test_debut_is_fresh_joiner_only(self):
@@ -434,14 +430,16 @@ class SplitEmissionTest(unittest.TestCase):
 
     def test_off_equivalence_byte_identical(self):
         """(e):SH_FIRST_TOKEN_SPLIT=0 时调度器不产 first_token 计划,
-        构图器发射与无该键的整列发射逐节点逐边一致。"""
-        plan_on = self._two_member_plan()
-        builder_off = self._new_builder()
+        debut 成员经 OFF 路径仍走整列发射,列车不带任何 first_token
+        标记节点(X2 修复,2026-09-29:旧版对拍两侧输入完全相同,只证
+        明构图器确定性;现钉住真正的 OFF 契约——对会触发拆分的 debut
+        输入,OFF 也不拆车、不加标记、plan 不携带 first_token 键)。"""
         try:
             os.environ["SH_FIRST_TOKEN_SPLIT"] = "0"
             s = _bare_scheduler()
             fresh = _runtime(REQUEST_B)
             s.runtime_by_request_id = {REQUEST_B: fresh}
+            # debut 成员(ON 时会拆车的输入)在 OFF 下不产拆分计划。
             self.assertIsNone(
                 s._first_token_plan({"train_id": "t", "iterations": 4,
                                      "members": [], "prefill_chunk_tokens":
@@ -450,13 +448,25 @@ class SplitEmissionTest(unittest.TestCase):
             self.assertNotIn("first_token", plan_off)
         finally:
             os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
-        builder_plain = self._new_builder()
-        builder_plain.emit_iteration_train(plan_on)
+        builder_off = self._new_builder()
         builder_off.emit_iteration_train(plan_off)
+        names = [node["name"]
+                 for node in builder_off.batch["nodes"]]
+        self.assertFalse(
+            any("_first_token_" in name for name in names),
+            "OFF mode must not emit first_token marker nodes")
+        self.assertFalse(
+            any("_wakeup" in name for name in names),
+            "OFF mode must not emit first-step wakeup markers")
+        # OFF 整列发射与显式 first_token=None 计划同构(键缺失与显式
+        # None 在构图器同一 get() 缺省路径合并,防实现漂移成下标访问)。
+        builder_none = self._new_builder()
+        plan_none = self._two_member_plan(first_token=None)
+        builder_none.emit_iteration_train(plan_none)
         self.assertEqual(
-            builder_plain.batch["nodes"], builder_off.batch["nodes"])
+            builder_none.batch["nodes"], builder_off.batch["nodes"])
         self.assertEqual(
-            builder_plain.batch["parent_edges"],
+            builder_none.batch["parent_edges"],
             builder_off.batch["parent_edges"])
 
 

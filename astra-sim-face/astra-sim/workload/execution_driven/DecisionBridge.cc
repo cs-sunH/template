@@ -3,12 +3,16 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
-File-implementation of the bridge protocol v0 (方案 §4 步骤 1-7).
+File-implementation of the bridge protocol v1 (frozen rules, phase 4
+§7.1; 方案 §4 步骤 1-7). The phase-1 "v0" label that used to sit here was
+stale -- inside this protocol v0 names only the reserved snapshot field
+kept for backward comprehension.
 
 Fail-closed semantics: every protocol violation (Python crash via EOF,
 EPIPE on the notification write, poll timeout, missing/corrupt response,
 schema mismatch, non-empty error field) prints one [Error] line and aborts.
-The static binary never constructs a bridge (zero impact on the baseline).
+The legacy arm (backend/ED tests driving the workload layer directly) never
+constructs a bridge (zero impact on the baseline).
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/DecisionBridge.hh"
@@ -108,14 +112,42 @@ nlohmann::json read_json_file(const std::string& path) {
 }
 
 // poll() helper: 0 = timeout, 1 = readable (POLLIN or POLLHUP), -1 = error.
-// timeout_ms == 0 means wait forever.
-int wait_readable(int fd, int timeout_ms) {
+// The caller passes an ABSOLUTE deadline (steady_clock::time_point::max()
+// means wait forever). (2026-10-01) deadline-based restart: the old loop
+// re-armed poll with the FULL timeout after every EINTR, and its caller's
+// EAGAIN retry loop granted a fresh full budget per spurious wake, so a
+// periodic signal source (attached profiler) or a spurious-wake storm
+// could defer the BRIDGE_TIMEOUT_MS abort indefinitely -- a silent
+// weakening of the documented timeout contract (same fix family as
+// ServiceCoordinator's absolute-deadline wait_for_work_until).
+int wait_readable(int fd,
+                  const std::chrono::steady_clock::time_point deadline) {
     struct pollfd pfd;
     pfd.fd = fd;
     pfd.events = POLLIN | POLLHUP;
     pfd.revents = 0;
-    const int ms = (timeout_ms == 0) ? -1 : timeout_ms;
-    const int r = ::poll(&pfd, 1, ms);
+    // (2026-10-01) deadline-based EINTR restart: the old loop re-armed poll
+    // with the FULL timeout after every signal delivery, so a periodic
+    // signal source (attached profiler) could defer the BRIDGE_TIMEOUT_MS
+    // abort indefinitely -- a silent weakening of the documented timeout
+    // contract (same fix family as ServiceCoordinator's absolute-deadline
+    // wait_for_work_until). The deadline is absolute; each restart waits
+    // only the remaining budget.
+    int r;
+    do {
+        int ms = -1;
+        if (deadline != std::chrono::steady_clock::time_point::max()) {
+            const auto remaining = std::chrono::duration_cast<
+                std::chrono::milliseconds>(deadline -
+                                           std::chrono::steady_clock::now())
+                .count();
+            if (remaining <= 0) {
+                return 0;  // budget exhausted across restarts
+            }
+            ms = static_cast<int>(remaining);
+        }
+        r = ::poll(&pfd, 1, ms);
+    } while (r < 0 && errno == EINTR);
     if (r == 0) {
         return 0;
     }
@@ -390,8 +422,14 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
     // retry loop (the fd is O_NONBLOCK; a poll wake without a consumable
     // byte -- e.g. POLLHUP edges while Python churns its user-space state
     // -- must not be mistaken for data or death).
+    // One absolute budget for the whole exchange (see wait_readable).
+    const auto deadline =
+        (timeout_ms_ == 0)
+            ? std::chrono::steady_clock::time_point::max()
+            : std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(timeout_ms_);
     while (true) {
-        const int wait = wait_readable(resp_notify_fd_, timeout_ms_);
+        const int wait = wait_readable(resp_notify_fd_, deadline);
         if (wait == 0) {
             bridge_fatal("timeout waiting for the Python response byte "
                          "(delivery_sequence=" + std::to_string(seq) + ")");
@@ -430,8 +468,8 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
                          "delivery_sequence=" +
                          std::to_string(seq) + ")");
         }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            continue;  // spurious wake: re-enter the poll
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            continue;  // spurious wake or signal interruption: re-enter poll
         }
         bridge_fatal("read resp_notify.fifo: " +
                      std::string(std::strerror(errno)));
@@ -453,7 +491,12 @@ void FileDecisionBridge::notify_python() {
     ::sigemptyset(&ignore_action.sa_mask);
     ::sigaction(SIGPIPE, &ignore_action, &old_action);
     const char byte = '\n';
-    const ssize_t n = ::write(req_notify_fd_, &byte, 1);
+    // Retry on EINTR: a signal delivery must not surface as a write error
+    // and abort the bridge (the byte was not consumed).
+    ssize_t n;
+    do {
+        n = ::write(req_notify_fd_, &byte, 1);
+    } while (n < 0 && errno == EINTR);
     ::sigaction(SIGPIPE, &old_action, nullptr);
     if (n < 0) {
         if (errno == EPIPE) {
@@ -491,12 +534,31 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
     }
-    if (resp.value("schema_version", -1) != kDecisionBridgeSchemaVersion) {
+    // Pre-read type guards: these three keys are read OUTSIDE the parse
+    // try-block below (Error-before-structure, frozen ordering T3/O4), so a
+    // present-but-wrongly-typed key would make value<T>() throw an
+    // uncaught type_error and bypass the [Error] bridge_fatal channel.
+    // Missing keys keep the original default semantics (mismatch fatal);
+    // wrong types are named and die through the same channel.
+    const auto schema_it = resp.find("schema_version");
+    if (schema_it != resp.end() && !schema_it->is_number_integer()) {
+        bridge_fatal("response schema_version has wrong JSON type for "
+                     "delivery_sequence=" +
+                     std::to_string(seq));
+    }
+    if (schema_it == resp.end() ||
+        schema_it->get<int64_t>() !=
+            static_cast<int64_t>(kDecisionBridgeSchemaVersion)) {
         bridge_fatal("response schema_version mismatch for delivery_sequence=" +
                      std::to_string(seq));
     }
-    const uint64_t source_seq =
-        resp.value("source_delivery_sequence", uint64_t(-1));
+    const auto source_it = resp.find("source_delivery_sequence");
+    if (source_it == resp.end() || !source_it->is_number_integer()) {
+        bridge_fatal("response source_delivery_sequence missing or wrong "
+                     "JSON type for delivery_sequence=" +
+                     std::to_string(seq));
+    }
+    const uint64_t source_seq = source_it->get<uint64_t>();
     if (source_seq != seq) {
         bridge_fatal("response source_delivery_sequence=" +
                      std::to_string(source_seq) + " != request seq=" +
@@ -507,7 +569,14 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // failure aborts with the Python error message, never with a misleading
     // structural diagnostic -- the _fail skeleton carries all-empty arrays
     // and would parse cleanly anyway.
-    const std::string error = resp.value("error", std::string());
+    const auto error_it = resp.find("error");
+    if (error_it != resp.end() && !error_it->is_string()) {
+        bridge_fatal("response error field has wrong JSON type for "
+                     "delivery_sequence=" +
+                     std::to_string(seq));
+    }
+    const std::string error =
+        error_it == resp.end() ? std::string() : error_it->get<std::string>();
     if (!error.empty()) {
         bridge_fatal("Python decision failed for delivery_sequence=" +
                      std::to_string(seq) + ": " + error);
@@ -541,14 +610,17 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - bridge_t0)
             .count();
-    // B1 (2026-08-23): the response's channel_bytes contribution is the
-    // REAL on-disk file size (stat, taken before the unlink below). The
-    // previous resp.dump().size() re-serialized the whole response just to
-    // count bytes and reported the compact-dump length, which is NOT the
-    // byte count that crossed the channel (the Python side writes spaced
-    // json.dump files; the request side already counts exact body bytes at
-    // write_file_atomic). Statistical field only (allowed-diff category):
-    // the value shifts slightly upward to the true bridged bytes.
+    // B1 (2026-08-23; premise corrected 2026-09-26): the response's
+    // channel_bytes contribution is the REAL on-disk file size (stat,
+    // taken before the unlink below) -- the bytes actually crossed via
+    // the response file, no matter how the peer serialized it. (The
+    // original B1 note justified the stat by "the Python side writes
+    // spaced json.dump files"; that premise is stale -- the Python
+    // responder has written compact-separator JSON since its C3 change
+    // on 2026-08-28. The stat stays the accounting truth either way; the
+    // request side already counts exact body bytes at write_file_atomic.)
+    // Statistical field only (allowed-diff category): the value tracks
+    // the true bridged bytes.
     struct stat response_stat {};
     if (::stat(response_path(seq).c_str(), &response_stat) != 0) {
         bridge_fatal("stat response " + response_path(seq) + ": " +

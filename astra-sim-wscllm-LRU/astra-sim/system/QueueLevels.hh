@@ -8,7 +8,6 @@ LICENSE file in the root directory of this source tree.
 
 #include <vector>
 
-#include "astra-sim/common/AstraNetworkAPI.hh"
 #include "astra-sim/system/QueueLevelHandler.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
 
@@ -22,9 +21,10 @@ class QueueLevels {
         int level);
     std::pair<int, RingTopology::Direction> get_next_queue_at_level_last(
         int level);
-    QueueLevels(std::vector<int> lv,
-                int offset,
-                AstraNetworkAPI::BackendType backend);
+    QueueLevels(std::vector<int> lv, int offset);
+
+  private:
+    void check_level(int level) const;
 };
 
 }  // namespace AstraSim

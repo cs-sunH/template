@@ -44,7 +44,7 @@ class CmdLineParser {
             // try retrieving options
             return parsed[name].as<T>();
         } catch (const cxxopts::OptionException& e) {
-            // error occured
+            // error occurred
             std::cerr << "[Error] (AstraSim/analytical/common) "
                       << "Error parsing options: " << e.what() << std::endl;
             exit(-1);

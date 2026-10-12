@@ -17,11 +17,13 @@ project(AstraSim_Analytical)
 set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_aware)")
 
 # Include src files to compile
-file(GLOB srcs_common
+# L24(2026-09-29 审查修复/infra-E8,对齐根与后端 CMakeLists):三处 GLOB 补
+# CONFIGURE_DEPENDS——增删源文件后不再依赖手工重跑 cmake 才能被发现。
+file(GLOB srcs_common CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/common/*.cc
 )
 
-file(GLOB srcs_congestion_aware
+file(GLOB srcs_congestion_aware CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/*.cc
 )
 
@@ -41,17 +43,22 @@ set_target_properties(AstraSim_Analytical_ChunkIdGeneratorTest
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # Path-1 removal (2026-08-18): the static aware target and
     # congestion_aware/main.cc were deleted with the offline static pipeline
-    # (ruling A); the shared-source glob still excludes both entry files so
-    # the online target declares its own main only.
+    # (ruling A); only main_online.cc survives in congestion_aware/, and the
+    # shared-source glob still excludes it so each target below declares its
+    # own main.
     set(srcs_congestion_aware_shared ${srcs_congestion_aware} ${srcs_common})
     list(REMOVE_ITEM srcs_congestion_aware_shared
-            ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main_online.cc)
 
-    # Execution-driven mechanism sources (online target only). The root CMake
-    # glob over astra-sim/workload/*.cc is non-recursive, so execution_driven/
-    # is listed explicitly here; the static target must not contain any of them.
-    file(GLOB srcs_execution_driven
+    # Execution-driven mechanism sources (online target only). The frontend
+    # globs above are non-recursive, so execution_driven/ is listed explicitly
+    # here. Note that the repo-root CMakeLists ALSO globs
+    # astra-sim/workload/execution_driven/*.cc into the AstraSim static
+    # library, so these sources are compiled both into that library and
+    # directly into every frontend target declared below.
+    # L24(2026-09-29 审查修复/infra-E8):GLOB 补 CONFIGURE_DEPENDS（同上
+    # 两处 srcs glob 的口径）。
+    file(GLOB srcs_execution_driven CONFIGURE_DEPENDS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/*.cc)
 
     # Online entry point: shared sources + main_online.cc + execution_driven layer.
@@ -553,4 +560,102 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
             ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     )
+
+    # ------------------------------------------------------------------
+    # Die backend (stage B, 2026-10-03, face-LRU rollout): three hermetic
+    # fixtures over a real Sys + EventQueue (fake network API; no
+    # sh_test_mesh artifacts). Same recipe as AlarmCancellationTest: shared
+    # sources + the execution_driven glob, linked against AstraSim (which
+    # carries workload/DieExecution.cc + DieModelAdapter.cc and the
+    # die_model library) and the Analytical_Congestion_Aware static library
+    # (which carries the backend EventQueue sources). Per this repo's
+    # convention the fixtures are no-argument direct-run binaries under
+    # bin/ (see README sec.4); the die_model library's own ctest suite is
+    # registered by extern/die_model/CMakeLists.txt.
+    # ------------------------------------------------------------------
+
+    # Die backend dispatch: backend resolution + conflict matrix (die +
+    # roofline/replay), die_spec -> adapter -> exactly one
+    # finish_generic_node, control_marker legacy micro-job, missing-spec
+    # fail-closed throw, parser runtime_ns conflict.
+    add_executable(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/die_model_adapter_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # DieExecution lifecycle: Timer/Memory mixed plan end-to-end, one-shot
+    # local_mem_latency, contention=0 self-drive vs an independent
+    # full-speed oracle, contention=1 arbitration, slot occupancy/release,
+    # single terminal, teardown of an in-flight execution.
+    add_executable(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/die_execution_lifecycle_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # LocalHbmBandwidthModel DIE_COMPUTE jobs: equal-share service drain,
+    # sink completion ticks, actual-vs-service separation, malformed-request
+    # guards, cancel_die_jobs_of teardown (direct model fixture).
+    add_executable(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/local_hbm_die_memory_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # X8 (face-LRU audit, 2026-09-29): the eight executable targets below
+    # had no RUNTIME_OUTPUT_DIRECTORY property, so their binaries landed in
+    # the build-tree root instead of bin/ -- the README's run-from-bin
+    # invocation paths (incl. MetricOneShotEraseTest) failed with
+    # "No such file".  Relocate them like every other target.
+    foreach(_x8_target IN ITEMS
+            AstraSim_Analytical_ChunkIdGeneratorTest
+            AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest
+            AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest
+            AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest
+            AstraSim_Analytical_Congestion_Aware_MetricAnchorSpoolTest
+            AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest
+            AstraSim_Analytical_Congestion_Aware_LocalMemTrackerTest
+            AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest)
+        if (TARGET ${_x8_target})
+            set_target_properties(${_x8_target}
+                    PROPERTIES
+                    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+                    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+                    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/)
+        endif ()
+    endforeach()
 endif ()

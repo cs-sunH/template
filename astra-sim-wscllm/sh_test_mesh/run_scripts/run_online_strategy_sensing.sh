@@ -16,9 +16,28 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 
 RUN_DIR=$1
+# 相对 run_dir 归一(realpath -m,与 fixture 同款):rm -rf/mkdir 在调用方 cwd
+# 执行、此后 cd PROJECT,不归一则后续 ${RUN_DIR} 引用相对 PROJECT 解析,
+# 传相对路径且调用目录非仓根时必然 No such file or directory。
+RUN_DIR=$(realpath -m "${RUN_DIR}")
+# P3-3.9 E2(2026-09-28)rm -rf 护栏(fail-closed,与 GEN_MATCH/RC 闸同风格):
+# RUN_DIR 由调用方任意传入,realpath -m 归一不改危险语义——传 `.`(cwd=仓根)
+# 归一即仓根、传 `..` 归一即仓根祖先,下方 `rm -rf "${RUN_DIR}"` 会删掉整个
+# 仓库或其上层目录。显式拒绝:空串、`/`、仓根本身、仓根的祖先目录、仓根
+# 内部路径(runner 合同 run_dir 一律仓外,正式纪律 run_dir 一律 /tmp,
+# 见 README §2);合法 run_dir 不受影响。
+case "${RUN_DIR}" in
+  ""|"/")
+    echo "[run_online_strategy_sensing] FAIL: refusing dangerous RUN_DIR='${RUN_DIR}' (empty or filesystem root)" >&2
+    exit 1 ;;
+esac
+if [[ "${RUN_DIR}" == "${PROJECT}" || "${RUN_DIR}" == "${PROJECT}"/* || "${PROJECT}" == "${RUN_DIR}"/* ]]; then
+  echo "[run_online_strategy_sensing] FAIL: refusing RUN_DIR='${RUN_DIR}' (repo root, its ancestor, or inside the repo; use a dedicated dir outside the repo, e.g. /tmp/...)" >&2
+  exit 1
+fi
 REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
 
-# ET 基线目录 = GEN_MATCH 动态解析(四仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
+# ET 基线目录 = GEN_MATCH 动态解析(五仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_wsc_llm_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
@@ -27,8 +46,48 @@ if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
 fi
 ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_wsc_llm_inference"
-RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion
+# RC = runtime_config 目录动态恰一解析（crosscut-F1，2026-10-01，原为硬编码
+# 目录名，照 face-LRU §16d 形态移植，与 run_online_strategy.sh 同款）：
+# 目录名由物化器生成为 "<hardware slug>__<capacity_profile>__<remote-memory
+# 标签>"（generate_wsc_llm_trace -> config_resolver.materialize_runtime_configs；
+# 本仓标签恒为 no_memory_expansion）。capacity_profile 的权威同源 =
+# trace_config.csv 的 config,local_hbm_capacity_profile 行（plan_materializer
+# 按同一文件落目录名）。按该 profile 过滤 generated/runtime_config/ 并要求
+# 恰好一个（与上方 GEN_MATCH 的 exactly-one 口径一致），缺失/歧义
+# fail-closed——换 profile 后硬编码名会找不到目录或静默加载错误容量档；
+# 现网唯一合法档位下动态解析与旧硬编码命中同一目录，健康路径零行为变化。
+RC_PROFILE=$(python3 -c '
+import csv, sys
+path = sys.argv[1]
+with open(path, newline="", encoding="utf-8-sig") as source:
+    rows = list(csv.reader(source))
+hits = [row[2].strip() for row in rows
+        if len(row) >= 3 and row[0].strip() == "config"
+        and row[1].strip() == "local_hbm_capacity_profile"]
+if len(hits) != 1 or not hits[0]:
+    sys.exit("expected exactly one config,local_hbm_capacity_profile row in %s" % path)
+print(hits[0])
+' "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv") || {
+  echo "[runner] FAIL: cannot read local_hbm_capacity_profile from trace_config.csv" >&2
+  exit 1
+}
+RC_MATCH=("${PROJECT}"/sh_test_mesh/generated/runtime_config/face_case5_config_c__*"${RC_PROFILE}"__no_memory_expansion)
+if [[ ${#RC_MATCH[@]} -ne 1 || ! -d "${RC_MATCH[0]}" \
+      || ! -f "${RC_MATCH[0]}/system.json" || ! -f "${RC_MATCH[0]}/network.yml" \
+      || ! -f "${RC_MATCH[0]}/comm_group.json" ]]; then
+  echo "[runner] expected exactly one runtime_config dir for capacity_profile '${RC_PROFILE}' carrying system.json/network.yml/comm_group.json (materialized under sh_test_mesh/generated/runtime_config/ by plan_materializer.py; bare-repo restore deletes generated/), found: ${RC_MATCH[*]}" >&2
+  exit 1
+fi
+RC=${RC_MATCH[0]}
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
+# BIN 显式存在性闸（crosscut-F3，2026-10-01，与上方 GEN_MATCH/RC 闸对称，
+# 与 run_online_strategy.sh 同款）：裸仓未编译时原报错路径是 FIFO 等待环
+# 里的 "C++ exited before FIFO ready"，诊断晚一步且不指名缺什么；缺失即
+# 在此报错。
+if [[ ! -x "${BIN}" ]]; then
+  echo "[runner] bin missing: ${BIN} (build first: cmake --build build/astra_analytical/build_congestion_aware)" >&2
+  exit 1
+fi
 
 # 桥侧看门狗（2026-08-22 引入；P0-2 2026-08-31 常态化+定位修正；收尾批
 # 2026-09-01 与主 runner 统一武装——sensing 变体此前保留旧"缺省不设=永等"
@@ -81,6 +140,25 @@ if [[ "${DETAIL}" != "off" && "${DETAIL}" != "summary" && "${DETAIL}" != "full" 
   exit 1
 fi
 
+# P3-3.9 E2(2026-09-28)孤儿 C++ 清理(对齐 run_online_idle_fixture.sh 的
+# CPP_PID+cleanup+trap EXIT 模式,与 run_online_strategy.sh 同款):下方 C++
+# 后台启动,脚本若在任何 wait 之前被终止(监督纪律 kill <pid>),C++ 成孤儿、
+# 继续向 RUN_DIR/bridge 写文件至桥看门狗超时,与下一次运行的 rm -rf 重建
+# 互踩。正常路径 C++ 已被 wait 收尸,cleanup 的 kill -0 落空、零扰动;
+# 失败/被杀路径 kill 残留 C++。
+CPP_PID=""
+cleanup() {
+  if [[ -n "${CPP_PID}" ]] && kill -0 "${CPP_PID}" 2>/dev/null; then
+    kill "${CPP_PID}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+# 裸 EXIT trap 在 bash 被致命信号直接杀死时不执行;监督纪律以 SIGTERM 终止
+# 长跑,必须显式转成 exit 才能进入上方清理。INT/HUP 同理。
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
 rm -rf "${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
 cd "${PROJECT}"
@@ -93,6 +171,11 @@ cp "${ET_DIR}/metrics_manifest.json" "${RUN_DIR}/metrics_manifest.json"
 if [ -f "${ET_DIR}/manifest.json" ]; then
   cp "${ET_DIR}/manifest.json" "${RUN_DIR}/manifest.json"
 fi
+# run-time 配置随 run_dir 冻结（hbm_watermark.load_trace_config 首选
+# run_dir/trace_config.csv）：后处理重跑旧 run_dir 不再回退仓内现行文件
+# （campaign 换 capacity profile/模型行后该文件字节会变）。
+cp "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv" \
+   "${RUN_DIR}/trace_config.csv"
 
 # A1/C1/D3(2026-08-28)降耗开关(runner 默认值,env 可覆盖;同
 # run_online_strategy.sh)。
@@ -120,9 +203,20 @@ export PYTHONUNBUFFERED=1
   > "${RUN_DIR}/cpp.log" 2>&1 &
 CPP_PID=$!
 
+# FIFO 就绪等待带墙钟预算（crosscut-F2，2026-10-01，照 wscllm-LRU 同款，
+# 与 run_online_strategy.sh 同款）：上面的 kill -0 只防 C++ 进程退出，
+# 防不了"进程存活但迟迟不建 FIFO"的窗口；超时打印 cpp.log 尾部后
+# fail-closed（SH_FIFO_WAIT_S 可覆盖，缺省 60s；健康运行 FIFO 秒级就绪，
+# 预算不会误伤）。
+fifo_deadline=$(( $(date +%s) + ${SH_FIFO_WAIT_S:-60} ))
 until [ -p "${RUN_DIR}/bridge/req_notify.fifo" ] && [ -p "${RUN_DIR}/bridge/resp_notify.fifo" ]; do
   if ! kill -0 "${CPP_PID}" 2>/dev/null; then
     echo "[run_online_strategy_sensing] C++ exited before FIFO ready (see cpp.log)" >&2
+    exit 1
+  fi
+  if (( $(date +%s) > fifo_deadline )); then
+    echo "[run_online_strategy_sensing] FIFOs not ready within ${SH_FIFO_WAIT_S:-60}s (see cpp.log tail)" >&2
+    tail -5 "${RUN_DIR}/cpp.log" >&2 || true
     exit 1
   fi
   sleep 0.3
@@ -137,7 +231,11 @@ python3 -u online/online_service.py \
   --plan-dir "${ET_DIR}" \
   > "${RUN_DIR}/python.log" 2>&1 || PY_EXIT=$?
 
-wait "${CPP_PID}"; CPP_EXIT=$?
+# C++ 非零退出(桥超时/楔死 abort)时 wait 返回非零;set -e 下裸 wait 会
+# 立即终止脚本、跳过下方退出码回显与诊断。|| 接住退出码走失败诊断路径;
+# 成功路径 || 右侧不执行,先显式置 0(set -u 下未初始化引用即死)。
+CPP_EXIT=0
+wait "${CPP_PID}" || CPP_EXIT=$?
 echo "[run_online_strategy_sensing] cpp_exit=${CPP_EXIT} python_exit=${PY_EXIT}"
 if [[ ${CPP_EXIT} -ne 0 ]]; then
   tail -5 "${RUN_DIR}/cpp.log" >&2
@@ -152,11 +250,17 @@ fi
 
 # 后处理:复用 run_metrics_postprocess.sh 的能力([METRIC] 行已在 cpp.log)。
 if grep -q '\[METRIC\]' "${RUN_DIR}/cpp.log"; then
-  bash "${POSTPROCESS}" "${RUN_DIR}/cpp.log" \
+  # R4-blind-F3（2026-10-01）：postprocess 失败原先在 set -e 下静默死退出
+  # （输出全进 postprocess.log，控制台零诊断）；显式捕获并报错，与其余
+  # 失败出口同款响亮。
+  if ! bash "${POSTPROCESS}" "${RUN_DIR}/cpp.log" \
     --out-raw="${RUN_DIR}/raw_metrics.csv" \
     --out-normalized="${RUN_DIR}/normalized_metrics.csv" \
     --out-requests="${RUN_DIR}/request_metrics.csv" \
-    > "${RUN_DIR}/postprocess.log" 2>&1
+    > "${RUN_DIR}/postprocess.log" 2>&1; then
+    echo "[run_online_strategy_sensing] FAIL: metrics postprocess exited non-zero; see ${RUN_DIR}/postprocess.log" >&2
+    exit 1
+  fi
   echo "[run_online_strategy_sensing] metrics postprocess: raw=$(ls "${RUN_DIR}/raw_metrics.csv") normalized=$(ls "${RUN_DIR}/normalized_metrics.csv")"
   if [ -f "${RUN_DIR}/request_metrics.csv" ]; then
     echo "[run_online_strategy_sensing] request metrics: ${RUN_DIR}/request_metrics.csv"
@@ -205,6 +309,6 @@ if [[ "${SLO_MODE}" != "0" ]]; then
 fi
 # D1(2026-08-28):成功后产物瘦身归档(SH_ARCHIVE_RUN=0 关闭)。
 if [[ "${SH_ARCHIVE_RUN:-1}" != "0" ]]; then
-  bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" || exit 1
+  bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" "${DETAIL}" || exit 1
 fi
 echo "[run_online_strategy_sensing] PASS: ${RUN_DIR}"

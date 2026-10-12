@@ -433,10 +433,28 @@ void LocalMemUsageTracker::dumpMemoryTrace(const std::string& filename) {
 
 void LocalMemUsageTracker::buildMemoryTimeline() {
   TimelineActionsByTick actions_by_tick;
+  // R1-C5 port (2026-09-30, from the face repo): a read-before-write
+  // tensor (its last read ends strictly before its write starts -- a
+  // malformed input shape) used to stay in the live-byte sweep forever:
+  // the write inserted it into live_tensors, but its removal action (the
+  // last read) sat at an earlier tick where the erase had already been
+  // consumed as a no-op, so its bytes inflated the peak to the end of the
+  // trace. Exclude such tensors from the byte accounting (their B/E
+  // lifetime events are still emitted, unchanged).
+  std::unordered_set<TensorId> read_before_write_tensors;
+  for (const auto& item : this->memReads) {
+    const auto write_it = this->memWrites.find(item.first);
+    if (write_it != this->memWrites.end() && !item.second.empty() &&
+        item.second.back().end < write_it->second.start) {
+      read_before_write_tensors.insert(item.first);
+    }
+  }
   for (const auto& item : this->memWrites) {
     const TensorId& tensorName = item.first;
     const MemActivity& writeActivity = item.second;
-    actions_by_tick[writeActivity.start].writes.push_back(&tensorName);
+    if (read_before_write_tensors.count(tensorName) == 0) {
+      actions_by_tick[writeActivity.start].writes.push_back(&tensorName);
+    }
     json tensorWriteEvent = {
         {"name", tensorName},
         {"cat", "tensorLifetime"},
@@ -450,7 +468,10 @@ void LocalMemUsageTracker::buildMemoryTimeline() {
   for (const auto& item : this->memReads) {
     const TensorId& tensorName = item.first;
     const MemActivity& latestReadActivity = item.second.back();
-    actions_by_tick[latestReadActivity.end].last_reads.push_back(&tensorName);
+    if (read_before_write_tensors.count(tensorName) == 0) {
+      actions_by_tick[latestReadActivity.end].last_reads.push_back(
+          &tensorName);
+    }
     json tensorLastReadEvent = {
         {"name", tensorName},
         {"cat", "tensorLifetime"},
@@ -497,9 +518,26 @@ void LocalMemUsageTracker::buildMemoryTimeline() {
 void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
   // Calculate lifetime for each tensor
   std::vector<std::tuple<TensorId, Tick, Tick, uint64_t>> tensorLifetimes; // tensor, start, end, size
-  
+
+  // (2026-10-01 audit) Skip the read-before-write tensors that
+  // buildMemoryTimeline already excludes from the byte accounting: their
+  // write starts strictly AFTER their last read ends, so end - start would
+  // wrap around ~1.8e19 ns -- the sort, min/max lifetime scaling and the
+  // args.lifetime_ns output were all corrupted by one malformed tensor.
+  std::unordered_set<TensorId> read_before_write_tensors;
+  for (const auto& item : this->memReads) {
+    const auto write_it = this->memWrites.find(item.first);
+    if (write_it != this->memWrites.end() && !item.second.empty() &&
+        item.second.back().end < write_it->second.start) {
+      read_before_write_tensors.insert(item.first);
+    }
+  }
+
   for (const auto& item : this->memWrites) {
     const TensorId& tensorName = item.first;
+    if (read_before_write_tensors.count(tensorName) > 0) {
+      continue;
+    }
     Tick start = item.second.start;
     Tick end;
     

@@ -96,6 +96,22 @@ MemActivity activity(const Tick start, const Tick end, std::string node_name,
     return MemActivity{start, end, std::move(node_name), node_id};
 }
 
+// R4-NF2 port (2026-09-30, from the face repo): expect()/read_file
+// failures leave via std::exit, which skips scope guards, so the dumped
+// temp traces are unlinked by an atexit handler instead -- a failing run
+// leaves no /tmp residue. (Double unlink after a successful manual cleanup
+// is a harmless ENOENT.)
+static std::vector<std::string>& temp_trace_paths() {
+    static std::vector<std::string> paths;
+    return paths;
+}
+
+static void cleanup_temp_traces() {
+    for (const auto& path : temp_trace_paths()) {
+        ::unlink(path.c_str());
+    }
+}
+
 std::string temporary_prefix() {
     char pattern[] = "/tmp/astra-local-mem-tracker-XXXXXX";
     const int fd = ::mkstemp(pattern);
@@ -435,6 +451,7 @@ void test_byte_exact_reference_and_boundaries() {
     const std::string prefix = temporary_prefix();
     const std::string trace_path = prefix + ".17.json";
     tracker.dumpMemoryTrace(prefix);
+    temp_trace_paths().push_back(trace_path);
     const std::string actual = read_file(trace_path);
     expect(actual == expected.trace,
            "streamed pretty trace is byte-identical to the legacy JSON dump");
@@ -454,6 +471,7 @@ void test_byte_exact_reference_and_boundaries() {
     const std::string empty_prefix = temporary_prefix();
     const std::string empty_path = empty_prefix + ".3.json";
     empty_tracker.dumpMemoryTrace(empty_prefix);
+    temp_trace_paths().push_back(empty_path);
     expect(read_file(empty_path) == "{\n  \"traceEvents\": []\n}",
            "empty trace keeps the legacy pretty JSON spelling");
     if (::unlink(empty_path.c_str()) != 0) {
@@ -517,6 +535,7 @@ void test_high_overlap_pressure() {
 }  // namespace
 
 int main() {
+    std::atexit(cleanup_temp_traces);
     test_byte_exact_reference_and_boundaries();
     test_high_overlap_pressure();
     if (!g_ok) {

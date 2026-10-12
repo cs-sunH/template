@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """B3-5 T2 golden case 运行版（真仿真断言，G1-G4）。
 
-用 hand-craft 队列（8 列 + canonical sidecar 15 列，落在仓内
-workload/llama2_7b_inference/traces/ 下，命名以
-``_request_queue_recompute.csv`` 结尾以便 sidecar 兄弟 join）逐场景跑
+用 hand-craft 队列（8 列 + canonical sidecar 15 列，写在 --work-dir 下
+（2026-09-26 py-slo-tests-4：不再落仓内 traces/，调用方给 /tmp 即全量
+仓外），命名以 ``_request_queue_recompute.csv`` 结尾以便 sidecar 兄弟
+join；trace_config 指针按绝对路径解析）逐场景跑
 run_online_strategy.sh（detail=full、SH_FIRST_TOKEN_SPLIT=1），对
 request_metrics.csv / online_decision_log / train_ledger / kv_cache_adapter
 输出做手算断言：
@@ -20,18 +21,24 @@ request_metrics.csv / online_decision_log / train_ledger / kv_cache_adapter
      第二轮 kv_hit_state 由 decision history_action 手推并与
      kv_cache_adapter --reconcile 输出一致。
   G4 已知 restore：迷你 3 轮 session 若产生 history NOC_MIGRATE 锚点
-     （memory_anchor code7），对锚点请求核对三段和 = 总 restore 时长；
-     无锚点则打印 FALLBACK_G4（改用 t3_full_off_split 真实锚点核对，
-     由调用方执行）。
+     （memory_anchor code7），对锚点请求核对三段和 = 总 restore 时长
+     ——仅锚点窗与 prefill 窗重叠或更早（rs≤pe）的形态；窗整体落在
+     prefill 结束后的 rs>pe 形态（行内判别 pre=hidden=0，如 turn-0
+     prefill→decode 迁移腿）属规格登记的非恒等形态（各指标测试建议.md
+     §B），豁免并记 note，全部豁免时同 FALLBACK_G4；无锚点则打印
+     FALLBACK_G4（改用 t3_full_off_split 真实锚点核对，由调用方执行）。
 
 Usage: python3 run_golden_live.py <repo_root> [--work-dir DIR]
-退出码 0 = 全过；非 0 = 有断言失败（stderr 列明细）。
+退出码 0 = 全过；非 0 = 有断言失败（stderr 列明细）。golden_g4 无锚点
+时标 FALLBACK_G4（非 PASS、不计失败；锚点核对按 docstring 由调用方改
+用 t3_full_off_split 执行）。
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import json
 import math
 import os
@@ -73,6 +80,33 @@ def write_csv(path: Path, columns: list[str], rows: list[dict]) -> None:
             writer.writerow({key: row.get(key, "") for key in columns})
 
 
+def write_provenance_sidecar(repo: Path, queue_path: Path) -> None:
+    """为 golden 队列写 <queue>.provenance.json（P1 门对齐，移植自
+    wscllm 仓 run_golden_live 同款修复，2026-10-07）。
+
+    C++ WindowedTraceReader 的 provenance 门（2026-10-07 起本仓缺席即
+    fail-closed，对齐 wscllm P1 2026-09-28）对每个队列 CSV fail-closed
+    地要求同名 .provenance.json 边车，缺失即视同截断输入、在首个 Submit
+    前拒绝提交。golden live 此前只写 8 列 CSV，四个场景自本门落地起
+    启动即 reader_fatal。统计算法零复制：直接复用权威物化器
+    traces/derive_20_first_30_seconds.py 的 queue_provenance（与 C++
+    索引遍逐字节同口径，含 CSV writer 的 CRLF 字节）。"""
+    derive_path = (
+        repo / "sh_test_mesh/workload/llama2_7b_inference/traces"
+        / "derive_20_first_30_seconds.py")
+    spec = importlib.util.spec_from_file_location(
+        "derive_20_first_30_seconds", derive_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    provenance = module.queue_provenance(
+        str(queue_path), "run_golden_live.py hand-crafted golden queue")
+    sidecar = Path(str(queue_path) + ".provenance.json")
+    with sidecar.open("w", encoding="utf-8") as handle:
+        json.dump(provenance, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
 def set_pointer(trace_config: Path, rel_queue: str) -> None:
     lines = trace_config.read_text(encoding="utf-8").splitlines(keepends=True)
     out = []
@@ -86,19 +120,30 @@ def set_pointer(trace_config: Path, rel_queue: str) -> None:
 
 
 def instance_count(repo_root: Path) -> tuple[int, int]:
-    """(unified_or_prefill_instances, total_instances) from trace_config."""
+    """(prefill-capable instances, total instances) from trace_config.
+
+    py-slo-tests-7（2026-09-26 修正判定逻辑）：face 仓 inference_group 行
+    第 7 列起为自由文本描述（如 "Unified Prefill+Decode center instance
+    …"），并非逐格角色枚举——旧实现按整格 == "decode" 的集合成员判定
+    恒不成立，prefill_like 恒等于 total。改按描述文本大小写不敏感包含
+    判定：Unified/Prefill 字样（或空描述，保守视为可宿）计入，仅明确
+    decode-only（含 decode 且无 prefill/unified 字样）不计入。
+    """
     trace_config = (repo_root / "sh_test_mesh/workload/llama2_7b_inference"
                     / "trace_config.csv")
     total = 0
-    prefill_like = 0
+    prefill_capable = 0
     with trace_config.open(encoding="utf-8") as handle:
         for row in csv.reader(handle):
             if row and row[0] == "inference_group":
                 total += 1
-                roles = {cell.strip() for cell in row[6:] if cell.strip()}
-                if not roles or "decode" not in roles:
-                    prefill_like += 1
-    return prefill_like, total
+                text = " ".join(cell.strip() for cell in row[6:]
+                                if cell.strip()).lower()
+                if "decode" in text and "prefill" not in text \
+                        and "unified" not in text:
+                    continue  # decode-only：不宿 prefill
+                prefill_capable += 1
+    return prefill_capable, total
 
 
 def run_scenario(repo_root: Path, work_dir: Path, name: str,
@@ -346,12 +391,17 @@ def scenario_g2(run_dir: Path, notes: list[str], expected_overflow: int,
         if entry.get("kind") == "prefill":
             prefill_inst[entry["request_id"]] = entry["decision"].get(
                 "prefill_instance_index")
-    arrival = to_int(rows[0]["arrival_ns"])
     queued = [r for r in rows if to_int(r["queue_ns"]) > 0]
     notes.append(
         f"G2: {len(rows)} requests, overflow expected {expected_overflow}, "
         f"queued observed {len(queued)}")
-    check(len(queued) >= 1, "G2: no request queued (burst insufficient)")
+    # py-slo-tests-6（2026-09-26 接线断言）：expected_overflow 不再只进
+    # notes——场景请求量 = prefill 实例数 + expected_overflow，同刻突发
+    # 下排队数必须 >= 设计溢出量（严于旧 >=1，且不超约：后续请求可能在
+    # 实例释放后排入，queued 可大于溢出量）。
+    check(len(queued) >= expected_overflow,
+          f"G2: queued {len(queued)} < designed overflow "
+          f"{expected_overflow} (burst insufficient)")
     # For each queued request, the occupying earlier request on the same
     # instance must have finished prefill before this one starts, and the
     # queue time must approximate one occupying prefill span.
@@ -515,18 +565,36 @@ def scenario_g4(run_dir: Path, notes: list[str]) -> bool:
         notes.append("G4: no anchored restore request in mini scenario -> "
                      "FALLBACK_G4 (use t3_full_off_split anchors)")
         return False
+    checked = 0
     for row in anchored:
         total = to_int(row["restore_complete_ns"]) - to_int(
             row["restore_start_ns"])
         seg_sum = (to_int(row["pre_prefill_restore_ns"])
                    + to_int(row["hidden_restore_ns"])
                    + to_int(row["exposed_restore_stall_ns"]))
+        # 规格登记的非恒等形态（experiment/各指标测试建议.md §B）：A 类
+        # 公式的 exposed 段不夹锚点窗，锚点窗整体落在 prefill 结束之后
+        # （rs>pe）时三段和 = rc−pe ≠ rc−rs——行内判别为 pre 与 hidden
+        # 同 0（turn-0 的 prefill→decode 迁移腿即此形）。公式按 §2.2
+        # 红线冻结不改，本层对此形态豁免恒等断言、只记 note。
+        if (to_int(row["pre_prefill_restore_ns"]) == 0
+                and to_int(row["hidden_restore_ns"]) == 0):
+            notes.append(
+                f"G4: {row['request_id']} anchor window entirely after "
+                f"prefill (pre=hidden=0, spec-documented rs>pe shape): "
+                f"identity exempt (seg_sum={seg_sum}, window={total})")
+            continue
         check(seg_sum == total,
               f"G4: {row['request_id']} segments {seg_sum} != restore total "
               f"{total}")
         notes.append(
             f"G4: {row['request_id']} three segments {seg_sum} == restore "
             f"total {total} (hand OK)")
+        checked += 1
+    if checked == 0:
+        notes.append("G4: every anchored row is the spec-documented rs>pe "
+                     "shape; no identity asserted -> FALLBACK_G4")
+        return False
     return True
 
 
@@ -545,7 +613,6 @@ def main() -> int:
     manifest_path = (args.manifest or Path(__file__).resolve().parents[1]
                      / "slo_params_manifest.json")
     wl = repo / "sh_test_mesh/workload/llama2_7b_inference"
-    traces = wl / "traces"
     work = args.work_dir
     work.mkdir(parents=True, exist_ok=True)
     prefill_instances, _total = instance_count(repo)
@@ -558,36 +625,56 @@ def main() -> int:
     notes: list[str] = []
     failures: list[str] = []
     status: dict[str, str] = {}
-    for name, (queue_rows, sidecar_rows) in scenarios.items():
-        queue_path = traces / f"{name}_request_queue_recompute.csv"
-        sidecar_path = traces / f"{name}_canonical_sidecar.csv"
-        write_csv(queue_path, QUEUE_COLUMNS, queue_rows)
-        write_csv(sidecar_path, SIDECAR_COLUMNS, sidecar_rows)
-        rel = (f"llama2_7b_inference/traces/{queue_path.name}")
-        try:
-            run_dir = run_scenario(repo, work, name, rel)
-            if name == "golden_g1":
-                scenario_g1(run_dir, notes)
-            elif name == "golden_g2":
-                scenario_g2(run_dir, notes, expected_overflow=3,
-                           manifest_path=manifest_path)
-            elif name == "golden_g3":
-                scenario_g3(run_dir, notes)
-            else:
-                scenario_g4(run_dir, notes)
-            status[name] = "PASS"
-            print(f"[golden] {name}: PASS")
-        except (GoldenCheckError, subprocess.CalledProcessError) as error:
-            status[name] = f"FAIL: {error}"
-            failures.append(f"{name}: {error}")
-            print(f"[golden] {name}: FAIL: {error}", file=sys.stderr)
-    # Restore the neutral pointer whatever happened.
-    set_pointer(wl / "trace_config.csv", PLACEHOLDER_REL)
-    for stale in list((repo / "sh_test_mesh/generated").glob(
-            "llama2_7b_inference_54npus_*")) + \
-            list((repo / "sh_test_mesh/generated").glob(
-                "llama2_7b_wsc_llm_inference_54npus_*")):
-        shutil.rmtree(stale)
+    # py-slo-tests（本轮加固，对齐 train_a1_eviction_fixture 的 finally 纪律）：
+    # 断言助手（to_int/read_jsonl 等）抛出的未捕异常会穿透下面的 except 集，
+    # 还原块必须放 finally，否则仓内 trace_config 指针被永久指向 /tmp golden
+    # 队列——"Restore the neutral pointer whatever happened" 才真正成立。
+    try:
+        for name, (queue_rows, sidecar_rows) in scenarios.items():
+            # py-slo-tests-4（2026-09-26）：golden 队列/sidecar 改写 --work-dir
+            # （调用方给 /tmp 即全量仓外），不再写仓内 traces/。trace_config
+            # 的 request_queue_csv 指针按绝对路径解析
+            # （generate_face_trace._resolve_request_queue 对绝对路径原样
+            # 返回），sidecar 兄弟命名 join 在任意目录同样成立；runner 的
+            # REQUEST_CSV 入参亦接受绝对路径。
+            queue_path = work / f"{name}_request_queue_recompute.csv"
+            sidecar_path = work / f"{name}_canonical_sidecar.csv"
+            write_csv(queue_path, QUEUE_COLUMNS, queue_rows)
+            write_provenance_sidecar(repo, queue_path)
+            write_csv(sidecar_path, SIDECAR_COLUMNS, sidecar_rows)
+            rel = str(queue_path.resolve())
+            try:
+                run_dir = run_scenario(repo, work, name, rel)
+                if name == "golden_g1":
+                    scenario_g1(run_dir, notes)
+                    status[name] = "PASS"
+                elif name == "golden_g2":
+                    scenario_g2(run_dir, notes, expected_overflow=3,
+                                manifest_path=manifest_path)
+                    status[name] = "PASS"
+                elif name == "golden_g3":
+                    scenario_g3(run_dir, notes)
+                    status[name] = "PASS"
+                else:
+                    # py-slo-tests-1（2026-09-26）：接收 scenario_g4 返回值——
+                    # 无锚点回退（False）未执行任何断言，标 FALLBACK_G4 而非
+                    # PASS（状态不再失真；不计失败，t3_full_off_split 锚点
+                    # 核对按 docstring 由调用方执行）。
+                    status[name] = ("PASS" if scenario_g4(run_dir, notes)
+                                    else "FALLBACK_G4")
+                print(f"[golden] {name}: {status[name]}")
+            except (GoldenCheckError, subprocess.CalledProcessError) as error:
+                status[name] = f"FAIL: {error}"
+                failures.append(f"{name}: {error}")
+                print(f"[golden] {name}: FAIL: {error}", file=sys.stderr)
+    finally:
+        # Restore the neutral pointer whatever happened.
+        set_pointer(wl / "trace_config.csv", PLACEHOLDER_REL)
+        for stale in list((repo / "sh_test_mesh/generated").glob(
+                "llama2_7b_inference_54npus_*")) + \
+                list((repo / "sh_test_mesh/generated").glob(
+                    "llama2_7b_wsc_llm_inference_54npus_*")):
+            shutil.rmtree(stale)
     report = {"status": status, "notes": notes}
     (work / "golden_report.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")

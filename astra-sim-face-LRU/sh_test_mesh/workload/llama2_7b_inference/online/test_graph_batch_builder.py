@@ -47,7 +47,6 @@ SESSION = "session_train_0"
 REQUEST_A = f"{SESSION}_request_0"
 REQUEST_B = f"{SESSION}_request_1"
 PREFILL_TOKENS = 300   # chunk 128 -> 3 个 chunk(多 chunk 灯具)
-CHUNKS = 3
 DECODE_RANKS = (2, 3)
 
 
@@ -97,7 +96,6 @@ def _admission_plan(request_id=REQUEST_A, turn=0):
         "history_action": None,
         "history_source_instance_index": None,
         "history_transfer_bytes": 0,
-        "history_recompute_tokens": 0,
         "history_tokens_before": 0,
         "prefill_context_tokens": PREFILL_TOKENS,
         "prefill_length": PREFILL_TOKENS,
@@ -359,10 +357,23 @@ class TrainEmissionNailTest(unittest.TestCase):
             w_two, 0,
             "train body bytes must amortize weights across members "
             "(trap 1: per-member weight recounting yields W == 0)")
-        # 不变量:向列车加成员 B 的边际字节 = B 的逐 token 激活/KV 分量,
-        # 零额外权重(b2 - b1 == member_b - W)。基元级 B=1/B=2 同迭代
-        # 权重字节相等断言见 test_weight_passes.py(A0)。
-        self.assertEqual(b2 - b1, member_b - w_two)
+        # 不变量(X1 修复,2026-09-29):加成员 B 的边际字节与既有成员
+        # 无关(逐 token 激活/KV 分量线性可加,零额外权重)。旧断言
+        # b2 - b1 == member_b - w_two 是把 w_two 的推导式代入后的代数
+        # 恒等式,同值对同值,恒真;改为用第四/五次独立发射(成员 C 独
+        # 跑与 B+C 拼车)交叉验证同一边际——两边来自不同发射通道,真
+        # 可失败。
+        member_c = self._body_weight_bytes(
+            [(1, 61), (1, 62)], 2, "batch_train_i1_mc")
+        b_bc = self._body_weight_bytes(
+            [(1, 41), (1, 42), (1, 61), (1, 62)], 2,
+            "batch_train_i1_bc")
+        self.assertGreater(b_bc, member_c)
+        self.assertEqual(
+            b2 - b1, b_bc - member_c,
+            "marginal bytes of adding member B must not depend on the "
+            "existing members (per-token components add linearly; zero "
+            "extra weight)")
 
     def test_prefill_train_drain_marker_watch(self):
         """纯 prefill 列车:chunk spans + drain 标记 + end barrier;
@@ -570,15 +581,19 @@ class KVTransferBillingNailTest(unittest.TestCase):
         RESTORE 唯一数据计费(不得退化普通 mem_load)。"""
         from generate_face_trace import PendingHistoryGate
         builder = self._make_builder()
+        # T4 前向断言（死锁真修 方案①）：arm 目标必须已在本 rank 发射——
+        # 种子节点充当 timer gate（替代旧合成 id）。
+        builder.builders[4].comp("gate_probe", 1, 1)
+        gate_id = builder.builders[4].previous_id
         gate = PendingHistoryGate(
-            source_instance_index=0, timer_gates=(None, 12),
+            source_instance_index=0, timer_gates=(None, gate_id),
             location="remote_memory")
         record = self._emit(
             builder,
             self._load([self._shard(1, 4, 1, 512, (1, 4))]),
             "kvtest_remote_load", gate=gate)
         self.assertFalse(record["shards"][0]["direct_edge_access"])
-        # control rank 4(target 组相对位 1)arm gate 12 后 1B request 到
+        # control rank 4(target 组相对位 1)arm gate 后 1B request 到
         # edge 1——门/arm 边均在同 rank。
         request_send = next(node for node in builder.batch["nodes"]
                             if node["name"].endswith(
@@ -586,7 +601,7 @@ class KVTransferBillingNailTest(unittest.TestCase):
         self.assertEqual(request_send["comm"]["bytes"], 1)
         edges_from_gate = [
             edge for edge in builder.batch["parent_edges"]
-            if edge["from"] == 12]
+            if edge["from"] == gate_id]
         self.assertTrue(edges_from_gate)
         pool_load = next(node for node in builder.batch["nodes"]
                          if node["name"].endswith("shard0_remote_load"))
@@ -610,8 +625,12 @@ class KVTransferBillingNailTest(unittest.TestCase):
         from generate_face_trace import PendingHistoryGate
         self.assertEqual(TransferTagAllocator().take(), 10_000_000)
         builder = self._make_builder()
+        # T4 前向断言（死锁真修 方案①）：arm 目标必须已发射——种子节点
+        # 充当 timer gate（替代旧合成 id）。
+        builder.builders[4].comp("gate_probe", 1, 1)
+        gate_id = builder.builders[4].previous_id
         gate = PendingHistoryGate(
-            source_instance_index=0, timer_gates=(None, 12),
+            source_instance_index=0, timer_gates=(None, gate_id),
             location="remote_memory")
         self._emit(builder,
                    self._store([self._shard(0, 0, 0, 512, (0,))]),
@@ -655,13 +674,14 @@ class _GateRecorder:
 class _TerminalKVRecorder:
     """Records terminal KV retirement without needing a real topology."""
 
-    def __init__(self, released_instance_index=1):
-        self.released_instance_index = released_instance_index
+    def __init__(self):
         self.calls = []
 
     def retire_terminal_session(self, session_id, completion_ns, request_id):
         self.calls.append((session_id, completion_ns, request_id))
-        return self.released_instance_index
+        # 测试桩无实例拓扑可释放：返回 None（_note_capacity_change 在本
+        # 测试族被打桩，返回值不参与任何断言）。
+        return None
 
 
 class CompletionGateLifetimeTest(unittest.TestCase):

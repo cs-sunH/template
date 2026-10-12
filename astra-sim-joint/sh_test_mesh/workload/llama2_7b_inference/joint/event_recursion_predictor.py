@@ -12,8 +12,8 @@
   构图器 GB 的逐组恢复支链同构），推进可观测依赖与资源仲裁，输出逐
   层恢复完成时刻 ``R̂_ℓ(k)`` 与消费期限 ``D̂_ℓ``。恢复写腿与计算
   memory 腿在同一端口仲裁内竞争（§5.4"恢复写入造成的 HBM 竞争不能
-  遗漏"）——候选自致的计算减速单列 ``compute_slowdown_ns`` 记账、
-  不回移期限。
+  遗漏"）——候选自致的计算减速单列记账（``cumulative_layer_offset_ns``
+  累计偏移与 ``end_to_end_slowdown_ns`` 终点差两个口径）、不回移期限。
 * 逐出侧：加入候选写回流（源 HBM 读/路径传输/池端口写），输出空间
   可用时刻；同一缺口多 victim 按**对象顺序逐个决策**，每定一个 victim
   其写回流即登记进共享快照供后续 victim 推演——同批 victim 不得各自
@@ -22,7 +22,8 @@
   ``q̂`` 取"首块启动等待"与"写回流空间可用时刻"的关键路径最大值，
   恢复流在含已定写回流的共享快照上递推。
 
-资源仲裁口径与 C1 ``LinkFlowRegistry.divisor_multi`` / C2
+资源仲裁口径与 C1 链路流份额（``LinkFlowRegistry`` 登记执行器；D13
+起 J 计价经每路径服务视图消费）/ C2
 ``HbmPortFlowRegistry.divisor`` 同源（冻结形状注入，不 import 交付物）：
 等权 N-way 均分——资源上共享流数 n_e（已提交在册 + 活跃候选）决定份额
 ``peak_e·η_e/n_e``，流启动/完成/已提交 ETA 到期时重算（§5.4）。
@@ -109,6 +110,46 @@ class ConservationViolationError(EventRecursionError):
     解释器旗标免疫。"""
 
 
+def _integral_value(value, name: str, *, nonnegative: bool = False) -> int:
+    """Validate an integer-valued runtime scalar before ledger conversion."""
+    if isinstance(value, bool):
+        raise EventRecursionError(f"{name} must be an integer")
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise EventRecursionError(
+                f"{name} must be a finite integer, got {value!r}")
+        result = int(value)
+    else:
+        raise EventRecursionError(
+            f"{name} must be a finite integer, got {value!r}")
+    if nonnegative and result < 0:
+        raise EventRecursionError(f"{name} must be non-negative")
+    return result
+
+
+def _finite_nonnegative_number(value, name: str) -> float:
+    """Validate a service duration that may be fractional before projection."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EventRecursionError(
+            f"{name} must be a finite non-negative number, got {value!r}")
+    result = float(value)
+    if not math.isfinite(result) or result < 0:
+        raise EventRecursionError(
+            f"{name} must be a finite non-negative number, got {value!r}")
+    return result
+
+
+def _split_integer_bytes(total: int, parts: int) -> Tuple[int, ...]:
+    """Largest-remainder split used when a cold group is clipped at k."""
+    if parts <= 0:
+        raise EventRecursionError("byte split requires a positive part count")
+    quotient, remainder = divmod(int(total), int(parts))
+    return tuple(quotient + (index < remainder)
+                 for index in range(int(parts)))
+
+
 # ============================================================ 只读快照 ==
 
 
@@ -124,6 +165,27 @@ class CommittedFlow:
     flow_id: str
     resources: Tuple[str, ...]
     release_eta_ns: Optional[int]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.flow_id, str) or not self.flow_id.strip():
+            raise EventRecursionError("committed flow id must be non-empty")
+        if (isinstance(self.resources, (str, bytes))
+                or not self.resources):
+            raise EventRecursionError(
+                f"committed flow {self.flow_id!r} occupies no resource")
+        resource_keys = []
+        for key in self.resources:
+            if not isinstance(key, str) or not key.strip():
+                raise EventRecursionError(
+                    f"committed flow {self.flow_id!r} has invalid resource")
+            resource_keys.append(key)
+        if len(set(resource_keys)) != len(resource_keys):
+            raise EventRecursionError(
+                f"committed flow {self.flow_id!r} repeats a resource")
+        if self.release_eta_ns is not None:
+            _integral_value(
+                self.release_eta_ns,
+                f"committed flow {self.flow_id!r} release ETA")
 
 
 @dataclass(frozen=True)
@@ -148,14 +210,27 @@ class ResourceSnapshot:
         # step() 后 `start <= NaN` 恒 False 流永不激活、
         # `max(NaN, min(starts))` 保持 NaN ⇒ run() 死循环（K8 同族
         # 教义：入口 fail-closed，与 peak/字节字段同一验证面）。
-        if not math.isfinite(self.now_ns):
-            raise EventRecursionError(
-                f"snapshot now_ns must be finite, got {self.now_ns!r}")
+        _integral_value(
+            self.now_ns, "snapshot now_ns", nonnegative=True)
+        seen_flow_ids = set()
         for key, rate in self.peak_bytes_per_ns.items():
-            if not math.isfinite(rate) or rate <= 0:
+            if not isinstance(key, str) or not key.strip():
+                raise EventRecursionError("resource key must be non-empty")
+            try:
+                finite_rate = math.isfinite(rate)
+            except (TypeError, ValueError, OverflowError):
+                finite_rate = False
+            if not finite_rate or rate <= 0:
                 raise EventRecursionError(
                     f"resource {key!r} peak rate must be finite positive")
         for flow in self.committed:
+            if not isinstance(flow, CommittedFlow):
+                raise EventRecursionError(
+                    "snapshot committed entries must be CommittedFlow")
+            if flow.flow_id in seen_flow_ids:
+                raise EventRecursionError(
+                    f"duplicate committed flow id {flow.flow_id!r}")
+            seen_flow_ids.add(flow.flow_id)
             if not flow.resources:
                 raise EventRecursionError(
                     f"committed flow {flow.flow_id!r} occupies no resource")
@@ -163,11 +238,6 @@ class ResourceSnapshot:
             # `eta > now` 恒 False ⇒ 在册流被当已过期、竞争份额被
             # 静默忽略（乐观方向，K8 自称封死的同族形态）；负值合法
             # （已过期语义）。
-            if (flow.release_eta_ns is not None
-                    and not math.isfinite(flow.release_eta_ns)):
-                raise EventRecursionError(
-                    f"committed flow {flow.flow_id!r} release ETA must "
-                    f"be finite, got {flow.release_eta_ns!r}")
             for key in flow.resources:
                 if key not in self.peak_bytes_per_ns:
                     raise EventRecursionError(
@@ -223,7 +293,13 @@ class EfficiencyFactors:
         # 式；生产路径 EWMA 恒正有限，仅直连误用可触发）。
         for kind, table in (("eta", self.eta), ("gamma", self.gamma)):
             for key, value in table.items():
-                if not math.isfinite(value) or value <= 0:
+                try:
+                    finite = math.isfinite(value)
+                    positive = value > 0
+                except (TypeError, ValueError, OverflowError):
+                    finite = False
+                    positive = False
+                if not finite or not positive:
                     raise EventRecursionError(
                         f"{kind} factor for {key!r} must be finite "
                         "positive")
@@ -258,28 +334,47 @@ class RestoreGroupLeg:
     startup_ns: int = 0
 
     def __post_init__(self) -> None:
-        if not 0 <= self.layer_start < self.layer_end:
+        start = _integral_value(
+            self.layer_start, "restore leg layer_start", nonnegative=True)
+        end = _integral_value(
+            self.layer_end, "restore leg layer_end", nonnegative=True)
+        if not start < end:
             raise EventRecursionError(
-                f"restore leg layer range [{self.layer_start}, "
-                f"{self.layer_end}) is empty")
+                f"restore leg layer range [{start}, {end}) is empty")
+        if (isinstance(self.bytes_by_rank, (str, bytes))
+                or not self.bytes_by_rank):
+            raise EventRecursionError("restore leg rank vectors must be non-empty")
         if len(self.bytes_by_rank) != len(self.path_by_rank):
             raise EventRecursionError(
                 "restore leg bytes/path rank vectors must align")
         # K8（2026-09-23 外部审计）：NaN/inf 经 ``value < 0`` 检查（NaN
         # 比较恒 False）存活到 int() 转换，以裸 ValueError 逃出 face 的
         # except EventRecursionError 降级通道——数值字段统一有限性设防。
-        if any(not math.isfinite(value) for value in self.bytes_by_rank):
-            raise EventRecursionError(
-                "restore leg bytes must be finite numbers")
-        if any(value < 0 for value in self.bytes_by_rank):
-            raise EventRecursionError("restore leg bytes must be >= 0")
-        if not math.isfinite(self.startup_ns) or self.startup_ns < 0:
-            raise EventRecursionError("restore leg startup must be >= 0")
+        for rank_index, value in enumerate(self.bytes_by_rank):
+            _integral_value(
+                value, f"restore leg bytes_by_rank[{rank_index}]",
+                nonnegative=True)
+        _integral_value(
+            self.startup_ns, "restore leg startup", nonnegative=True)
         for rank_index, (rank_bytes, path) in enumerate(
                 zip(self.bytes_by_rank, self.path_by_rank)):
+            if isinstance(path, (str, bytes)):
+                # Keep construction lightweight; LayerRecursionPredictor
+                # validates the path shape together with the snapshot so
+                # malformed paths still use its normal fail-closed boundary.
+                continue
+            seen_resources = set()
+            for key in path:
+                if not isinstance(key, str) or not key.strip():
+                    raise EventRecursionError(
+                        f"restore leg rank {rank_index} has invalid resource")
+                if key in seen_resources:
+                    raise EventRecursionError(
+                        f"restore leg rank {rank_index} repeats resource {key!r}")
+                seen_resources.add(key)
             if rank_bytes > 0 and not path:
                 raise EventRecursionError(
-                    f"restore leg [{self.layer_start}, {self.layer_end}) "
+                    f"restore leg [{start}, {end}) "
                     f"rank {rank_index} has bytes but no restore path "
                     "(missing model facts must fail closed, not zero cost)")
 
@@ -301,6 +396,11 @@ class ComputeLayerSegment:
     group: str = "prefill"
 
     def __post_init__(self) -> None:
+        _integral_value(self.layer, "compute segment layer", nonnegative=True)
+        if (isinstance(self.base_ns_by_rank, (str, bytes))
+                or not self.base_ns_by_rank):
+            raise EventRecursionError(
+                "compute segment rank vectors must be non-empty")
         if not (
             len(self.base_ns_by_rank)
             == len(self.memory_bytes_by_rank)
@@ -308,19 +408,19 @@ class ComputeLayerSegment:
         ):
             raise EventRecursionError(
                 "compute segment rank vectors must align")
-        if any(value < 0 for value in self.base_ns_by_rank):
-            raise EventRecursionError("compute base ns must be >= 0")
-        # K8：NaN/inf 设防（同 RestoreGroupLeg——int()/比较链逃逸通道封死）。
-        if any(not math.isfinite(value)
-               for value in self.base_ns_by_rank):
-            raise EventRecursionError(
-                "compute base ns must be finite numbers")
-        if any(not math.isfinite(value)
-               for value in self.memory_bytes_by_rank):
-            raise EventRecursionError(
-                "compute memory bytes must be finite numbers")
-        if any(value < 0 for value in self.memory_bytes_by_rank):
-            raise EventRecursionError("compute memory bytes must be >= 0")
+        for rank_index, value in enumerate(self.base_ns_by_rank):
+            _finite_nonnegative_number(
+                value, f"compute base ns[{rank_index}]")
+        for rank_index, value in enumerate(self.memory_bytes_by_rank):
+            _integral_value(
+                value, f"compute memory bytes[{rank_index}]",
+                nonnegative=True)
+        if not isinstance(self.group, str) or not self.group.strip():
+            raise EventRecursionError("compute segment group must be non-empty")
+        for rank_index, key in enumerate(self.port_by_rank):
+            if not isinstance(key, str) or not key.strip():
+                raise EventRecursionError(
+                    f"compute segment port {rank_index} must be non-empty")
 
 
 @dataclass(frozen=True)
@@ -337,17 +437,40 @@ class WritebackVictim:
     startup_ns: int = 0
 
     def __post_init__(self) -> None:
+        if not isinstance(self.victim_id, str) or not self.victim_id.strip():
+            raise EventRecursionError("writeback victim id must be non-empty")
+        if (isinstance(self.bytes_by_rank, (str, bytes))
+                or not self.bytes_by_rank):
+            raise EventRecursionError(
+                "writeback rank vectors must be non-empty")
         if len(self.bytes_by_rank) != len(self.path_by_rank):
             raise EventRecursionError(
                 "writeback bytes/path rank vectors must align")
         # K8：NaN/inf 设防（同上两类腿）。
-        if any(not math.isfinite(value) for value in self.bytes_by_rank):
-            raise EventRecursionError(
-                "writeback bytes must be finite numbers")
-        if any(value < 0 for value in self.bytes_by_rank):
-            raise EventRecursionError("writeback bytes must be >= 0")
-        if not math.isfinite(self.startup_ns) or self.startup_ns < 0:
-            raise EventRecursionError("writeback startup must be >= 0")
+        for rank_index, value in enumerate(self.bytes_by_rank):
+            _integral_value(
+                value, f"writeback bytes_by_rank[{rank_index}]",
+                nonnegative=True)
+        _integral_value(
+            self.startup_ns, "writeback startup", nonnegative=True)
+        for rank_index, (rank_bytes, path) in enumerate(
+                zip(self.bytes_by_rank, self.path_by_rank)):
+            if isinstance(path, (str, bytes)):
+                raise EventRecursionError(
+                    f"writeback rank {rank_index} path must be a sequence")
+            seen_resources = set()
+            for key in path:
+                if not isinstance(key, str) or not key.strip():
+                    raise EventRecursionError(
+                        f"writeback rank {rank_index} has invalid resource")
+                if key in seen_resources:
+                    raise EventRecursionError(
+                        f"writeback rank {rank_index} repeats resource {key!r}")
+                seen_resources.add(key)
+            if rank_bytes > 0 and not path:
+                raise EventRecursionError(
+                    f"writeback victim {self.victim_id!r} rank {rank_index} "
+                    "has bytes but no path")
 
 
 # ============================================================ 递推引擎 ==
@@ -382,34 +505,46 @@ class UnifiedTimeline:
         start_ns: int,
     ) -> None:
         """登记候选流（``start_ns`` ≥ 当前时间；激活由 step 驱动）。"""
+        if not isinstance(flow_id, str) or not flow_id.strip():
+            raise EventRecursionError("flow id must be non-empty")
         if (flow_id in self._pending or flow_id in self.completions
                 or any(flow.flow_id == flow_id for flow in self.active)):
             # A14'（H4）：重复 id 检查补在册 active——原只查 pending/
             # completions，同 id 二次添加产生双份份额条目且 next() 只
             # 结第一份、第二份永久滞留。
             raise EventRecursionError(f"duplicate flow id {flow_id!r}")
-        if remaining_bytes < 0:
-            raise EventRecursionError("flow bytes must be >= 0")
-        if not resources:
+        remaining = _integral_value(
+            remaining_bytes, f"flow {flow_id!r} bytes", nonnegative=True)
+        if isinstance(resources, (str, bytes)) or not resources:
             raise EventRecursionError(
                 f"flow {flow_id!r} must occupy at least one resource")
+        seen_resources = set()
         for key in resources:
+            if not isinstance(key, str) or not key.strip():
+                raise EventRecursionError(
+                    f"flow {flow_id!r} has invalid resource")
+            if key in seen_resources:
+                raise EventRecursionError(
+                    f"flow {flow_id!r} repeats resource {key!r}")
+            seen_resources.add(key)
             if key not in self.snapshot.peak_bytes_per_ns:
                 raise EventRecursionError(
                     f"flow {flow_id!r} uses unknown resource {key!r}")
-        start_value = float(start_ns)
-        if not math.isfinite(start_value):
+        try:
+            start_value = _integral_value(
+                start_ns, f"flow {flow_id!r} start_ns", nonnegative=True)
+        except EventRecursionError as exc:
             # A14'（H4）：NaN 永不激活且空活跃分支 max(now, min([nan]))
             # = now 不前进 ⇒ run() 死循环；inf 直接把时刻推到无穷——
             # 均拒绝（docstring"≥ 当前时间"为调用方契约，不作硬校验）。
             raise EventRecursionError(
-                f"flow {flow_id!r} start_ns must be finite")
-        if remaining_bytes == 0:
+                f"flow {flow_id!r} start_ns must be finite integer") from exc
+        if remaining == 0:
             self.completions[flow_id] = max(
                 int(start_value), int(self.now_ns))
             return
         self._pending[flow_id] = (
-            tuple(resources), int(remaining_bytes), start_value)
+            tuple(resources), remaining, float(start_value))
 
     def pending_flow_ids(self) -> Tuple[str, ...]:
         return tuple(sorted(self._pending))
@@ -634,13 +769,21 @@ class LayerTiming:
 
 @dataclass(frozen=True)
 class KTrace:
-    """单个 k 的递推记录（一致性抽检/日志用）。"""
+    """单个 k 的递推记录（一致性抽检/日志用）。
+
+    D15（2026-09-26）双口径减速记账：``cumulative_layer_offset_ns``
+    是**累计指标**（Σ_ℓ max(0, 消费完成 − reference 消费完成)——早期
+    停顿会随依赖链在每层重复计入，只作单列成本审计，**不得**当请求
+    总延迟）；``end_to_end_slowdown_ns`` 是**请求总延迟**口径（最终
+    完成时刻差：末层消费完成 − reference 末层消费完成，max(0,·)）。
+    """
 
     k: int
     feasible: bool
     binding_layer: Optional[int]
     exposed_stall_ns: int                # Ŝ(k) = max(0, max(R̂−D̂))
-    compute_slowdown_ns: int             # 候选自致计算减速（单列成本）
+    cumulative_layer_offset_ns: int      # Σ_ℓ max(0, ĉ_ℓ−ĉ_ℓ^ref)（累计，非总延迟）
+    end_to_end_slowdown_ns: int          # 末层消费完成时刻差（请求总延迟口径）
     timings: Tuple[LayerTiming, ...]
 
 
@@ -654,7 +797,7 @@ class KHidePrediction:
     analytic_min_k: Optional[int]        # 解析最小可行 k（None = 不可用）
     statuses: Tuple[str, ...]
     selected_trace: KTrace
-    all_traces: Tuple[KTrace, ...]       # 枚举过的 k（抽检/审计）
+    all_traces: Tuple[KTrace, ...]       # 仅 keep_all_traces=True（诊断）时保留
 
     def as_dict(self) -> dict:
         return {
@@ -668,8 +811,10 @@ class KHidePrediction:
                 "feasible": self.selected_trace.feasible,
                 "binding_layer": self.selected_trace.binding_layer,
                 "exposed_stall_ns": self.selected_trace.exposed_stall_ns,
-                "compute_slowdown_ns": (
-                    self.selected_trace.compute_slowdown_ns),
+                "cumulative_layer_offset_ns": (
+                    self.selected_trace.cumulative_layer_offset_ns),
+                "end_to_end_slowdown_ns": (
+                    self.selected_trace.end_to_end_slowdown_ns),
             },
         }
 
@@ -697,12 +842,8 @@ class LayerRecursionPredictor:
         # L2（P2-2）：先校验再 int()——NaN/inf 的 int() 裸 ValueError
         # 逃出调用方只 catch EventRecursionError 的降级通道
         # （face_scheduler 递推入口）；负等待无物理意义同拒。
-        if (not math.isfinite(first_block_wait_ns)
-                or first_block_wait_ns < 0):
-            raise EventRecursionError(
-                "first_block_wait_ns must be finite non-negative, got "
-                f"{first_block_wait_ns!r}")
-        self.first_block_wait_ns = int(first_block_wait_ns)
+        self.first_block_wait_ns = _integral_value(
+            first_block_wait_ns, "first_block_wait_ns", nonnegative=True)
         if not self.legs and not self.segments:
             raise EventRecursionError(
                 "predictor requires restore legs or compute segments")
@@ -710,10 +851,19 @@ class LayerRecursionPredictor:
                 leg.layer_start for leg in self.legs):
             raise EventRecursionError(
                 "restore legs must be in consumption order (layer asc)")
+        previous_end = None
+        for leg in self.legs:
+            if previous_end is not None and leg.layer_start < previous_end:
+                raise EventRecursionError(
+                    "restore legs must not overlap in layer coverage")
+            previous_end = leg.layer_end
         if [seg.layer for seg in self.segments] != sorted(
                 seg.layer for seg in self.segments):
             raise EventRecursionError(
                 "compute segments must be in layer order")
+        if len({seg.layer for seg in self.segments}) != len(self.segments):
+            raise EventRecursionError(
+                "compute segments must contain each layer at most once")
         # L2（P3 小项）：腿间 rank 数等长——_run_dependency_driven 以
         # leg0 定 rank_count、按 rank_index 索引各腿 bytes_by_rank，
         # 跨腿不一致会裸 IndexError（生产腿恒同 TP 组不可达，防御
@@ -724,6 +874,9 @@ class LayerRecursionPredictor:
                 "restore legs must share a common rank count")
         for leg in self.legs:
             for path in leg.path_by_rank:
+                if isinstance(path, (str, bytes)):
+                    raise EventRecursionError(
+                        "restore path must be a sequence of resource keys")
                 for key in path:
                     if key not in snapshot.peak_bytes_per_ns:
                         raise EventRecursionError(
@@ -738,6 +891,39 @@ class LayerRecursionPredictor:
                     self.segments[0].base_ns_by_rank):
                 raise EventRecursionError(
                     "compute/restore rank counts must align")
+
+    def _cold_legs_for_k(self, k: int) -> Tuple[RestoreGroupLeg, ...]:
+        """Return the cold suffix, clipping a group that crosses the boundary.
+
+        A restore group is an aggregate over a layer interval.  Filtering only
+        on ``layer_start >= k`` drops the suffix of a group such as ``[0, 4)``
+        when two layers are already hot, which makes both recursive timing and
+        the analytic lower bound optimistic.  Split aggregate bytes evenly by
+        layer with the same largest-remainder rule used by graph construction.
+        """
+        k_value = _integral_value(k, "k", nonnegative=True)
+        clipped: List[RestoreGroupLeg] = []
+        for leg in self.legs:
+            if leg.layer_end <= k_value:
+                continue
+            start = max(leg.layer_start, k_value)
+            if start == leg.layer_start:
+                clipped.append(leg)
+                continue
+            span = leg.layer_end - leg.layer_start
+            offset = start - leg.layer_start
+            suffix_span = leg.layer_end - start
+            suffix_bytes = tuple(
+                sum(_split_integer_bytes(total, span)[offset:])
+                for total in leg.bytes_by_rank)
+            clipped.append(RestoreGroupLeg(
+                layer_start=start,
+                layer_end=leg.layer_end,
+                bytes_by_rank=suffix_bytes,
+                path_by_rank=leg.path_by_rank,
+                startup_ns=leg.startup_ns,
+            ))
+        return tuple(clipped)
 
     # ---------------------------------------------------- 依赖驱动递推 --
     def _run_dependency_driven(
@@ -888,7 +1074,14 @@ class LayerRecursionPredictor:
                     timeline.completions.get(
                         f"compute:L{layer}:r{rank_index}")
                     if mem_bytes > 0 else None)
-                assert port_done is not None or mem_bytes == 0
+                # (2026-10-01 审查修复) 裸 assert 在 python -O 下被剥
+                # 离，违约以裸 AssertionError 击穿调用方的
+                # _EventRecursionError 降级通道——与模块自身的 raise 级
+                # 不变量纪律一致（ConservationViolationError 教义）。
+                if port_done is None and mem_bytes > 0:
+                    raise EventRecursionError(
+                        "compute port completion missing for non-zero "
+                        f"mem_bytes at layer {layer} rank {rank_index}")
                 layer_done.append(int(math.ceil(max(
                     compute_leg_end,
                     port_done if port_done is not None else 0.0,
@@ -917,7 +1110,7 @@ class LayerRecursionPredictor:
         枝健全性）；不计中间层启动与 rank 间互斥。字节/速率不可用 →
         None（解析不可用，不剪枝）。**不是** ``Σ_j max_r r̂_j`` 逐层近似。
         """
-        cold_legs = [leg for leg in self.legs if leg.layer_start >= k]
+        cold_legs = self._cold_legs_for_k(k)
         if not cold_legs:
             return float(self.first_block_wait_ns)
         rank_count = len(cold_legs[0].bytes_by_rank)
@@ -967,6 +1160,7 @@ class LayerRecursionPredictor:
     def predict_k_hide(
         self, *, prune_from_analytic: bool = True,
         analytic_min_k=_AUTO_ANALYTIC,
+        keep_all_traces: bool = False,
     ) -> KHidePrediction:
         """枚举 k̂_hide（钉死剪枝口径）。
 
@@ -974,6 +1168,11 @@ class LayerRecursionPredictor:
         ``analytic_min_k=None`` = 调用方声明解析校验不可用/未给出可行
         k——不剪枝、自 0 全枚举并标注 ``analytic_unavailable``（来源降
         级 fallback；不当零代价、不删实例候选）。缺省 = 自算解析下界。
+        ``keep_all_traces`` = D15 诊断控制（缺省关）：False 时多 k 枚举
+        只保留**选中** k 的完整 trace，落选 k 的逐层 ``timings`` 随枚举
+        即弃（不保留 ``all_traces``，临时内存不留 O(L²) 项）；True 时
+        保留全部枚举过的 k trace 供抽检/审计。两态**只变记录、不变所选
+        k**——枚举顺序、剪枝起点与首个可行 k 判定完全同一。
         """
         statuses = list(self.snapshot.coverage_statuses())
         if self.snapshot.unknown_eta_flow_ids():
@@ -1026,7 +1225,8 @@ class LayerRecursionPredictor:
         selected: Optional[KTrace] = None
         for k in range(start_k, model_layers + 1):
             trace = self._trace_for_k(k, deadlines, reference_consumption)
-            traces.append(trace)
+            if keep_all_traces:
+                traces.append(trace)
             if trace.feasible:
                 selected = trace
                 break
@@ -1050,15 +1250,19 @@ class LayerRecursionPredictor:
         self, k: int, deadlines: Mapping[int, int],
         reference_consumption: Mapping[int, int],
     ) -> KTrace:
-        cold_legs = [leg for leg in self.legs if leg.layer_start >= k]
+        cold_legs = self._cold_legs_for_k(k)
         consumption, _rank, by_layer = self._run_dependency_driven(cold_legs)
         # 候选自致计算减速 = 含候选恢复流的消费完成 − reference 消费完成
-        # （逐层单列成本记账，不回移/不放松期限）。
+        # （逐层单列成本记账，不回移/不放松期限）。D15 双口径：
+        #   累计口径 = Σ_ℓ max(0, Δĉ_ℓ)——早期停顿沿依赖链逐层重复计入，
+        #     只作单列成本审计；
+        #   请求总延迟口径 = 末层消费完成时刻差——早期停顿只计一次。
         timings: List[LayerTiming] = []
         worst_over = 0
         binding = None
-        slowdown = 0
-        for layer in sorted(set(deadlines) | set(consumption)):
+        cumulative_offset = 0
+        layer_domain = sorted(set(deadlines) | set(consumption))
+        for layer in layer_domain:
             restore_done = by_layer.get(layer)
             deadline = int(deadlines.get(layer, 0))
             timings.append(LayerTiming(
@@ -1075,13 +1279,21 @@ class LayerRecursionPredictor:
             actual = consumption.get(layer)
             reference = reference_consumption.get(layer)
             if actual is not None and reference is not None:
-                slowdown += max(0, actual - reference)
+                cumulative_offset += max(0, actual - reference)
+        end_to_end = 0
+        if layer_domain:
+            final_layer = layer_domain[-1]
+            final_actual = consumption.get(final_layer)
+            final_reference = reference_consumption.get(final_layer)
+            if final_actual is not None and final_reference is not None:
+                end_to_end = max(0, int(final_actual) - int(final_reference))
         return KTrace(
             k=k,
             feasible=worst_over <= 0,
             binding_layer=binding,
             exposed_stall_ns=max(0, worst_over),
-            compute_slowdown_ns=slowdown,
+            cumulative_layer_offset_ns=cumulative_offset,
+            end_to_end_slowdown_ns=end_to_end,
             timings=tuple(timings),
         )
 
@@ -1137,6 +1349,12 @@ def predict_space_available(
     statuses = list(snapshot.coverage_statuses())
     if snapshot.unknown_eta_flow_ids():
         statuses.append(STATUS_UNKNOWN_RELEASE_ETA)
+    seen_victim_ids = set()
+    for victim in victims:
+        if victim.victim_id in seen_victim_ids:
+            raise EventRecursionError(
+                f"duplicate writeback victim id {victim.victim_id!r}")
+        seen_victim_ids.add(victim.victim_id)
     results: List[VictimSpacePrediction] = []
     for victim in victims:
         for path in victim.path_by_rank:
@@ -1204,23 +1422,20 @@ def predict_release_and_recall(
     efficiency = efficiency or EfficiencyFactors()
     # L2（P2-2）：合流入口与构造器同一先校验后转换纪律——int(NaN)
     # 裸 ValueError 逃出 EventRecursionError 降级通道。
-    if (not math.isfinite(first_block_wait_ns)
-            or first_block_wait_ns < 0):
-        raise EventRecursionError(
-            "first_block_wait_ns must be finite non-negative, got "
-            f"{first_block_wait_ns!r}")
+    first_block_wait_ns = _integral_value(
+        first_block_wait_ns, "first_block_wait_ns", nonnegative=True)
     space = predict_space_available(snapshot, victims, efficiency)
+    victim_by_id = {victim.victim_id: victim for victim in victims}
     committed_extra: List[CommittedFlow] = []
     for victim in space.victims:
-        victim_spec = next(
-            v for v in victims if v.victim_id == victim.victim_id)
+        victim_spec = victim_by_id[victim.victim_id]
         for rank_index, eta in enumerate(victim.per_rank_complete_ns):
             committed_extra.append(CommittedFlow(
                 flow_id=f"writeback:{victim.victim_id}:r{rank_index}",
                 resources=victim_spec.path_by_rank[rank_index],
                 release_eta_ns=int(eta),
             ))
-    merged_wait = int(first_block_wait_ns)
+    merged_wait = first_block_wait_ns
     if space.victims:
         merged_wait = max(
             merged_wait,
@@ -1360,4 +1575,74 @@ class ServiceFactorGroup:
                 }
                 for name in sorted(
                     set(self._factors) | set(self.unobservable_samples))},
+        }
+
+
+class PublishedServiceFactorGroup:
+    """η/γ 的只读发布视图（§8.1：T/J/E 共享同一服务样本时只更新统一
+    估计器一次，消费方读只读发布值——2026-09-30 修复）。
+
+    生产（sh30 joint 模式）：KVCacheManager 经 ``service_factor_source``
+    以本视图替换 ``ServiceFactorGroup``——``value(group)`` 委托统一服务
+    样本估计器（``ServiceSampleRecorder.efficiency_factor``，与 J 计价
+    的 prefill/decode 因子同一发布规则、同一冻结 1/16 η 平滑）；
+    ``observe_valid_service`` fail-loud 拒绝——同一服务样本不得二次
+    更新（旧 M4 时间衰减桥接通道随 §8.1 单账本收敛退役）。
+    ``mark_unobservable``/``snapshot`` 维持 §5.4 披露形态（冷启动 =
+    统一估计器该账本尚无已接受更新；组样本数 = 该类别已接受 η 更新
+    数）。standalone face（无统一估计器在场）继续使用
+    ``ServiceFactorGroup``（生产无喂入点，恒冷启动 1.0；§5.4 更新通
+    道为其库面契约，EwmaServiceFactor 不再被 sh30 桥接喂入）。
+    """
+
+    #: 披露组全集（snapshot 恒全键在位，跨 run 对比形态稳定）。
+    DISCLOSURE_GROUPS = ("prefill", "decode", "pool")
+
+    def __init__(self, source: object) -> None:
+        self._source = source
+        self.unobservable_samples: dict = {}
+
+    @property
+    def cold_start(self) -> bool:
+        """统一估计器尚无任何已接受 η 更新（与 ServiceFactorGroup 的
+        "样本被接受后才离开冷启动"语义同向——拒收样本不翻旗）。"""
+        updates = getattr(self._source, "updates", None) or {}
+        return not any(updates.values())
+
+    def value(self, group: str) -> float:
+        """只读发布值（决策时点读；统一估计器内部 flush 幂等）。"""
+        return float(self._source.efficiency_factor(group))
+
+    def observe_valid_service(
+        self,
+        group: str,
+        *,
+        observed_ratio: float,
+        completion_ns: int,
+        service_duration_ns: int,
+    ) -> float:
+        raise RuntimeError(
+            "PublishedServiceFactorGroup is read-only (§8.1 single-ledger "
+            "publish): the same service sample must update only the "
+            "unified estimator once; feed ServiceSampleRecorder instead")
+
+    def mark_unobservable(self, group: str, reason: str = "mixed_wait") -> None:
+        """缺可分离样本：保持原估计并标记不可观测（§5.4，披露计数）。"""
+        self.unobservable_samples[group] = (
+            self.unobservable_samples.get(group, 0) + 1)
+
+    def snapshot(self) -> dict:
+        updates = getattr(self._source, "updates", None) or {}
+        return {
+            "cold_start": self.cold_start,
+            "groups": {
+                name: {
+                    "value": self.value(name),
+                    "samples": int(updates.get(name, 0)),
+                    "unobservable_samples": (
+                        self.unobservable_samples.get(name, 0)),
+                }
+                for name in sorted(
+                    set(self.DISCLOSURE_GROUPS)
+                    | set(self.unobservable_samples))},
         }

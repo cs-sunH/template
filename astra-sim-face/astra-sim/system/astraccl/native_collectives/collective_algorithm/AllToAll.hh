@@ -19,8 +19,7 @@ class AllToAll : public Ring {
              int id,
              RingTopology* allToAllTopology,
              uint64_t data_size,
-             RingTopology::Direction direction,
-             InjectionPolicy injection_policy);
+             RingTopology::Direction direction);
     void run(EventType event, CallData* data);
     void process_max_count();
     int get_non_zero_latency_packets();

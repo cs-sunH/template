@@ -24,8 +24,11 @@ void ETFeeder::build_index_dependancy_cache() {
   while (true) {
     ret = ProtobufUtils::readMessage<ChakraNode>(this->chakra_file, node);
     if (!ret) {
-      // eof is a clean end of trace; any other failure is a corrupt or
-      // truncated message and must not silently shorten the graph
+      // readMessage returns false only for a clean boundary EOF (eofbit
+      // set by the peek probe) or for an oversize/parse-failed message;
+      // truncated tails throw inside readMessage. A false return without
+      // eof is therefore still corruption and must not silently shorten
+      // the graph.
       if (!this->chakra_file.eof())
         throw std::runtime_error(
             "Failed to read node message, file might be corrupted");
@@ -33,6 +36,18 @@ void ETFeeder::build_index_dependancy_cache() {
     }
     // build index
     const auto& node_id = node.id();
+    if (this->index_map.find(node_id) != this->index_map.end()) {
+      // a duplicate id would silently merge the two definitions (attrs
+      // from the last one, deps unioned); report both file offsets
+      throw std::runtime_error(
+          "Duplicate node id " + std::to_string(node_id) +
+          " in ET file, first occurrence at offset " +
+          std::to_string(
+              static_cast<std::streamoff>(this->index_map.at(node_id))) +
+          ", duplicate at offset " +
+          std::to_string(static_cast<std::streamoff>(last_pos)) +
+          ", file might be corrupted");
+    }
     this->index_map[node_id] = last_pos;
     last_pos = this->chakra_file.tellg();
     // build dependancy

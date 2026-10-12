@@ -17,7 +17,6 @@ Link::Link(const LinkId id, const Bandwidth bandwidth, const Latency latency) no
     assert(bandwidth > 0);
     assert(latency >= 0);
 
-    // convert bandwidth from GB/s to B/ns
     bandwidth_Bpns = bw_GBps_to_Bpns(bandwidth);
 }
 

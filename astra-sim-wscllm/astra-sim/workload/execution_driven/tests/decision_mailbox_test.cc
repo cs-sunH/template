@@ -9,14 +9,14 @@ standalone test -- no network simulation, no baseline artifacts touched:
 
   Part A  Order + drain: events drain in insertion order; drain clears the
           pending set (new dedup epoch); has_decision_work toggles; seqs are
-          consecutive; StateDelta assembly (build_state_delta).
+          consecutive; StateDelta assembly (build_state_delta_v1).
   Part B  Same-epoch dedup: same identity (reason/request_id/stage/
           generation) pushes in one epoch collapse to one event; distinct
           identities stay; the same identity may legitimately return in a
           later epoch.
   Part C  Counters: event_count / delivery_count / coalescing_ratio /
-          tick_end_without_decision_count / no_decision_python_callback_count
-          / eventless drain is not a delivery epoch.
+          tick_end_without_decision_count / eventless drain is not a
+          delivery epoch.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -31,7 +31,6 @@ Exit code 0 on ALL PASS.
 
 #include <cstdio>
 #include <cstdlib>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -66,6 +65,21 @@ DecisionEvent stage_done(const std::string& request_id,
     return ev;
 }
 
+// The audit mode is fixed at construction through the documented environment
+// path (ASTRA_SIM_ONLINE_COMPLETED_NODES); these helpers keep the fixture
+// independent of an inherited environment and restore it right after.
+CompletedFactAccumulator make_compact_accumulator() {
+    ::unsetenv("ASTRA_SIM_ONLINE_COMPLETED_NODES");
+    return CompletedFactAccumulator();
+}
+
+CompletedFactAccumulator make_exact_accumulator() {
+    ::setenv("ASTRA_SIM_ONLINE_COMPLETED_NODES", "exact", 1);
+    CompletedFactAccumulator acc;
+    ::unsetenv("ASTRA_SIM_ONLINE_COMPLETED_NODES");
+    return acc;
+}
+
 // ---------------------------------------------------------------- Part A --
 // Order, drain, seq, StateDelta assembly.
 void test_order_drain_and_delta() {
@@ -87,13 +101,14 @@ void test_order_drain_and_delta() {
            "A: second event seq 2, decode completion, payload kept");
     expect(!mailbox.has_decision_work(), "A: drain clears the pending set");
 
-    // build_state_delta carries tick + delivery_sequence + the events.
-    StateDelta delta = build_state_delta(events, /*tick=*/1234,
-                                         /*delivery_sequence=*/7);
+    // build_state_delta_v1 carries tick + delivery_sequence + the events.
+    StateDelta delta = build_state_delta_v1(events, /*tick=*/1234,
+                                            /*delivery_sequence=*/7,
+                                            /*deferred_from_tick=*/0, {}, {});
     expect(delta.tick == 1234 && delta.delivery_sequence == 7 &&
                delta.events.size() == 2,
            "A: StateDelta carries epoch fields");
-    const auto second = build_state_delta({}, 99, 8);
+    const auto second = build_state_delta_v1({}, 99, 8, 0, {}, {});
     expect(second.events.empty() && second.delivery_sequence == 8,
            "A: empty delta is valid (no-work epochs are separate)");
 
@@ -167,15 +182,13 @@ void test_counters() {
     expect(mailbox.delivery_count() == 1,
            "C: empty drain is not a delivery epoch");
 
-    // Gate counters: no-work ticks increment; the Python-error counter is
-    // only incremented by a buggy entry (phase-1 acceptance: must stay 0).
+    // Gate counter: no-work ticks increment (the Python-error counter's only
+    // former set path was a test-only call and was removed; production keeps
+    // reading the always-0 counter at the run-end gate).
     mailbox.count_tick_end_without_decision();
     mailbox.count_tick_end_without_decision();
-    mailbox.count_no_decision_python_callback();
     expect(mailbox.tick_end_without_decision_count() == 2,
            "C: no-work ticks counted");
-    expect(mailbox.no_decision_python_callback_count() == 1,
-           "C: python-error counter incremented explicitly");
 
     // has_decision_work is true iff pending events exist (the retired
     // finalize_pending arm was removed with the finalize-only epoch).
@@ -188,9 +201,7 @@ void test_completed_fact_accumulator() {
     const int success = static_cast<int>(NodeTerminalStatus::Success);
     const int skipped = static_cast<int>(NodeTerminalStatus::Skipped);
 
-    CompletedFactAccumulator compact;
-    // Make the fixture independent of an inherited audit-mode environment.
-    compact.set_exact_mode(false);
+    CompletedFactAccumulator compact = make_compact_accumulator();
     compact.record(/*rank=*/3, /*node_id=*/101, "req-compact", "prefill",
                    /*generation=*/4, /*tick=*/500, success);
     compact.record(/*rank=*/3, /*node_id=*/102, "req-compact", "prefill",
@@ -204,17 +215,7 @@ void test_completed_fact_accumulator() {
                compact_counts.skipped == 1 && compact_counts.other == 1,
            "D: compact mode keeps O(1) success/skipped/invalid counters");
 
-    bool compact_mode_change_rejected = false;
-    try {
-        compact.set_exact_mode(true);
-    } catch (const std::logic_error&) {
-        compact_mode_change_rejected = true;
-    }
-    expect(compact_mode_change_rejected,
-           "D: mode cannot change after the first terminal");
-
-    CompletedFactAccumulator exact;
-    exact.set_exact_mode(true);
+    CompletedFactAccumulator exact = make_exact_accumulator();
     exact.record(/*rank=*/7, /*node_id=*/7001, "req-exact", "decode",
                  /*generation=*/8, /*tick=*/9001, success);
     const std::vector<CompletedNodeFact> first_exact = exact.drain();
@@ -239,6 +240,46 @@ void test_completed_fact_accumulator() {
            "D: later exact drains retain cumulative terminal accounting");
 }
 
+// ---------------------------------------------------------------- Part E --
+// Step 1-11 formation-tick tracking of the pending set (the delivery gate's
+// StateDelta.deferred_from_tick source).
+void test_formation_tick_tracking() {
+    DecisionMailbox mailbox;
+    expect(!mailbox.has_pending_formation_tick(),
+           "E: fresh epoch holds no formation record");
+
+    mailbox.push(arrival("req-a"), 500);
+    expect(mailbox.has_pending_formation_tick() &&
+               mailbox.min_pending_formation_tick() == 500,
+           "E: ticked push records its formation tick");
+
+    // Min-formation semantics: a later event formed EARLIER in the tick
+    // timeline lowers the epoch minimum (the gate records
+    // deferred_from_tick only when that minimum precedes the delivery
+    // tick).
+    mailbox.push(stage_done("req-a", "decode", 1), 300);
+    expect(mailbox.has_pending_formation_tick() &&
+               mailbox.min_pending_formation_tick() == 300,
+           "E: epoch minimum is the earliest pending formation tick");
+
+    // Tickless pushes are excluded from the minimum.
+    mailbox.push(arrival("req-b"));
+    expect(mailbox.has_pending_formation_tick() &&
+               mailbox.min_pending_formation_tick() == 300,
+           "E: tickless push leaves the epoch minimum untouched");
+
+    const auto events = mailbox.drain();
+    expect(events.size() == 3, "E: drain delivers all pending events");
+    expect(!mailbox.has_pending_formation_tick(),
+           "E: drain resets the formation record for the next epoch");
+
+    // A tickless-only epoch keeps no formation record at all.
+    mailbox.push(arrival("req-c"));
+    expect(!mailbox.has_pending_formation_tick(),
+           "E: tickless-only epoch holds no formation record");
+    expect(mailbox.drain().size() == 1, "E: tickless epoch drains normally");
+}
+
 }  // namespace
 
 int main(int /*argc*/, char* /*argv*/[]) {
@@ -246,6 +287,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     test_dedup();
     test_counters();
     test_completed_fact_accumulator();
+    test_formation_tick_tracking();
 
     if (!g_ok) {
         std::fprintf(stderr,
@@ -253,6 +295,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
         return 1;
     }
     std::printf("[decision_mailbox_test] ALL PASS: order/drain/StateDelta, "
-                "same-epoch dedup, counters, completed-node accounting\n");
+                "same-epoch dedup, counters, completed-node accounting, "
+                "formation-tick tracking\n");
     return 0;
 }

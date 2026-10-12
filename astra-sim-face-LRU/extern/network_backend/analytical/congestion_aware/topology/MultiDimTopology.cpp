@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <utility>
 
 using namespace NetworkAnalytical;
@@ -45,6 +46,18 @@ MultiDimTopology::MultiDimTopology(std::vector<TopologyBuildingBlock> topology_p
     for (auto dim = 0; dim < dims_count; dim++) {
         const auto dim_size = this->npus_count_per_dim[dim];
         assert(dim_size >= 1);
+
+        // sync-cpp-E18 (2026-09-30, ported from the joint repo): overflow
+        // guard -- the running product feeds every address translation below
+        // (strides/npus_count are int). A large-dimension config whose
+        // product exceeds INT_MAX would wrap around and turn
+        // translate_address into an out-of-bounds read; fail closed instead.
+        if (dim_size != 0 && npus_count > std::numeric_limits<int>::max() / dim_size) {
+            std::cerr << "[Error] (network/analytical/congestion_aware) "
+                      << "product of per-dimension NPU counts overflows "
+                      << std::numeric_limits<int>::max() << std::endl;
+            std::exit(-1);
+        }
 
         strides.push_back(npus_count);
         npus_count *= dim_size;

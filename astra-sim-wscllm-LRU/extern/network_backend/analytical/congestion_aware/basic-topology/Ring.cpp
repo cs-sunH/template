@@ -17,8 +17,9 @@ Ring::Ring(const int npus_count, const Bandwidth bandwidth, const Latency latenc
 
     // connect npus in a ring
     // a ring of 2 npus degenerates to a single pair of links (Mesh-equivalent),
-    // and a single npu needs no link, following the same degeneration rule as
-    // MultiDimTopology::connect_ring_dimension
+    // and a single npu needs no link -- the same degeneration rule as
+    // MultiDimTopology::connect_ring_dimension (size <= 1 connects nothing,
+    // size == 2 connects a single pair)
     if (npus_count == 2) {
         connect(0, 1, bandwidth, latency, bidirectional);
     } else if (npus_count > 2) {

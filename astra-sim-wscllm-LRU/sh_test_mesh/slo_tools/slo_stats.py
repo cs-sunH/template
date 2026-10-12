@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""WP3 SLO 统计后处理（纯离线脚本，五仓逐字节相同，标准库实现）。
+"""WP3 SLO 统计后处理（纯离线脚本，标准库实现）。
+
+同步基线注记（2026-09-26）：本文件与 face/wscllm 家族同名脚本已按仓分叉，
+不再跨仓逐字节相同；跨仓同步义务仅覆盖 slo_common 框架契约的调用面。
 
 输入 = run_dir（含 request_metrics.csv / cpp.log / metrics_manifest.json）。
 所有数值参数（α、ε、分桶边界、warm-up 窗口等）一律从
@@ -26,6 +29,7 @@ sh_test_mesh/slo_tools/slo_params_manifest.json 读取；value=null（B4 未
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Optional
@@ -78,6 +82,17 @@ def add_output_arg(parser: argparse.ArgumentParser, name: str) -> None:
 # e2e-stats
 # ---------------------------------------------------------------------------
 
+def _range_label_text(edges: list[float], idx: int) -> str:
+    """range_label 的纯实现（格式化溢出由调用侧统一包裹）。"""
+    if idx == 0:
+        if len(edges) <= 2:
+            return f"[{edges[0]:g},+inf)"
+        return f"[{edges[0]:g},{edges[1]:g}]"
+    if idx >= len(edges) - 2:
+        return f"({edges[idx]:g},+inf)"
+    return f"({edges[idx]:g},{edges[idx + 1]:g}]"
+
+
 def cmd_e2e_stats(args: argparse.Namespace, ctx=None) -> int:
     rows = ctx.rows if ctx is not None else load_rows(args.run_dir)
     values = completed_e2e(rows)
@@ -90,7 +105,12 @@ def cmd_e2e_stats(args: argparse.Namespace, ctx=None) -> int:
         for pct in extras:
             if not 0 < pct <= 100:
                 fail(f"--extra-pct 百分位非法：{pct}")
-        pcts.extend(extras)
+        # 与主档去重（保持顺序）——重复分位会重复排序取样并输出同名列。
+        seen = set(pcts)
+        for pct in extras:
+            if pct not in seen:
+                seen.add(pct)
+                pcts.append(pct)
     # 先分位后转单位：分位在整数纳秒样本上取值，ms 只作展示换算。
     # 多分位共享一次有界排序（A4；公式与逐次 nearest_rank_percentile
     # 完全一致——同一 sorted 序列上的同一 index 公式）。
@@ -179,38 +199,58 @@ def request_deadline(row: dict, alpha: float,
     return int(alpha * t_iso)
 
 
-def cmd_violation(args: argparse.Namespace) -> int:
-    manifest = load_slo_manifest(args.manifest or default_manifest_path())
-    alpha = require_param_number(manifest, args.alpha_name)
-    prefill_edges, decode_edges = require_bucket_edges(manifest)
-    t_isolated = load_t_isolated(Path(args.t_isolated))
-    rows = load_rows(args.run_dir)
-    # 显式自证：判定只消费 E2E/长度/终态列。
-    assert_no_proxy_columns(
-        ("e2e_ns", "prefill_length", "decode_length", "terminal_status"),
-        "violation 判定列集")
-
-    denominator = 0
-    numerator = 0
+def violation_counts(rows: list[dict], alpha: float,
+                     prefill_edges: list[float], decode_edges: list[float],
+                     t_isolated: dict[tuple[int, int], int]
+                     ) -> tuple[int, int, int, dict[str, dict[str, int]]]:
+    """violation 分子/分母的单一实现（cmd_violation 与 cmd_scan_export
+    共用；D2 修复：scan-export 链此前自带一份无 terminal_status 门的
+    循环——非 completed 且携带 e2e 的行会被计入分子，靠 drain 断言事后
+    拦截、潜伏）。口径：分母 = 全部终态行；分子 = completed 且 e2e 超
+    Deadline(r)；非 completed 终态计入分母不进分子（显式判定，不依赖
+    写端 failed⇒e2e_ns 为 NA 的巧合）。rows_without_e2e = e2e 为 NA 的
+    行数。返回 (numerator, denominator, rows_without_e2e,
+    per_terminal_status)。
+    """
+    den = 0
+    num = 0
     no_e2e = 0
     per_status: dict[str, dict[str, int]] = {}
     for row in rows:
         status = row["terminal_status"]
         if status not in TERMINAL_STATUSES:
             fail(f"queue_index={row.get('queue_index')}: 非法终态 {status!r}")
-        denominator += 1
-        bucket = per_status.setdefault(
-            status, {"total": 0, "violating": 0})
+        den += 1
+        bucket = per_status.setdefault(status, {"total": 0, "violating": 0})
         bucket["total"] += 1
         e2e = row.get("e2e_ns")
         deadline = request_deadline(row, alpha, prefill_edges,
                                     decode_edges, t_isolated)
         if e2e is None:
             no_e2e += 1
-            continue  # 非完成终态：计入分母；E2E 不可得，不进分子
+            continue  # e2e 不可得：计入分母；不进分子
+        if status != "completed":
+            continue  # 非 completed 终态计入分母；不进分子（显式判定）
         if e2e > deadline:
-            numerator += 1
+            num += 1
             bucket["violating"] += 1
+    return num, den, no_e2e, per_status
+
+
+def cmd_violation(args: argparse.Namespace) -> int:
+    manifest = load_slo_manifest(args.manifest or default_manifest_path())
+    alpha = require_param_number(manifest, args.alpha_name)
+    prefill_edges, decode_edges = require_bucket_edges(manifest)
+    t_isolated = load_t_isolated(Path(args.t_isolated))
+    rows = load_rows(args.run_dir)
+    # 判定列代理守卫：数据驱动门（assert_no_proxy_columns）仅在
+    # load_t_isolated（T_isolated 表 fieldnames）；request_metrics 为
+    # 冻结 schema、恒含 first_token_ns/first_token_source 列，判定路径
+    # 只消费 e2e/长度/终态列，不读 proxy 列（2026-09-30 审查清理：原在
+    # 此处对源码常量元组复检一遍属恒真仪式，删除）。
+
+    numerator, denominator, no_e2e, per_status = violation_counts(
+        rows, alpha, prefill_edges, decode_edges, t_isolated)
     if denominator == 0:
         fail("violation 分母为 0（request_metrics 无终态行）")
     rate = numerator / denominator
@@ -227,7 +267,8 @@ def cmd_violation(args: argparse.Namespace) -> int:
                          "bucket=(prefill_length,decode_length) by frozen "
                          "manifest edges",
         "denominator_rule": "全部终态 completed+rejected+dropped+"
-                            "timed_out+failed",
+                            "timed_out+failed；非 completed 终态计入"
+                            "分母不进分子",
         "proxy_guard": "first_token_ns/first_token_source 显式断言"
                        "拒绝进入判定（主规格 §1.2-A）",
     }
@@ -275,16 +316,30 @@ def cmd_bucket_stats(args: argparse.Namespace) -> int:
         entry = buckets[(pb, db)]
         n = len(entry["e2e"])
         t_iso = t_isolated[(pb, db)]
+        # 溢出守卫（R2 复核补齐，与 range_label 同族）：畸形巨整数的
+        # int/int 真除即 OverflowError，走 fail-closed 出口而非裸栈。
+        try:
+            _ = float(t_iso) if t_iso else 0.0
+        except OverflowError:
+            fail("T_isolated 值超出浮点可表示范围"
+                 f"（bucket=({pb},{db}), t_iso={t_iso!r}）——manifest 含"
+                 f"畸形巨值，拒绝产出 bucket-stats")
+
+        def range_label(edges: list[float], idx: int) -> str:
+            # 溢出守卫（2026-10-01 对齐）：巨整数边界（如 10**400）的
+            # f"{edge:g}" 格式化即 OverflowError——包裹为 fail-closed，
+            # 不让 bucket-stats 以裸栈/退出码 1 崩溃。
+            try:
+                return _range_label_text(edges, idx)
+            except OverflowError:
+                fail(f"分桶边界超出浮点可表示范围"
+                     f"（edges={edges!r}, idx={idx}）——manifest 分桶参数"
+                     f"含畸形巨值，拒绝产出 bucket-stats")
+
         out_rows.append((
             pb, db,
-            # 2026-09-05 口径裁决：interior edges 为左桶闭上界（右闭），
-            # 末桶无上限（吸收 x > edges[-1]）——与 campaign BucketGrid 对齐
-            (f"[{prefill_edges[pb]:g},{prefill_edges[pb + 1]:g} inclusive]"
-             if pb < len(prefill_edges) - 2
-             else f"[{prefill_edges[pb]:g},+inf)"),
-            (f"[{decode_edges[db]:g},{decode_edges[db + 1]:g} inclusive]"
-             if db < len(decode_edges) - 2
-             else f"[{decode_edges[db]:g},+inf)"),
+            range_label(prefill_edges, pb),
+            range_label(decode_edges, db),
             n, t_iso,
             nearest_rank_percentile(entry["e2e"], 0.50),
             nearest_rank_percentile(entry["e2e"], 0.99),
@@ -321,13 +376,31 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
     else:
         rows = load_rows(args.run_dir)
         manifest = load_request_manifest(args.run_dir, args.request_manifest)
-    per_request = {str(r.get("request_id")): r
-                   for r in manifest_requests(manifest) if r.get("request_id")}
+    # R6-U6（2026-09-29 face 移植，2026-09-30 本仓同步）：request_id 是
+    # 与 request_metrics.csv 连接的键：重复时拒绝静默取后值（静默
+    # last-wins 会把 human/tool 透传记到错误轮次上、污染 T_session 且无
+    # 留痕——与 validated_request_rows 对 queue_index 重复即 fail 同口径）。
+    per_request: dict[str, dict] = {}
+    for entry in manifest_requests(manifest):
+        key = str(entry.get("request_id")) if entry.get("request_id") else None
+        if key is None:
+            continue
+        if key in per_request:
+            fail(f"per-request manifest request_id 重复：{key}")
+        per_request[key] = entry
     sessions: dict[str, list[dict]] = {}
+    empty_id_rows = 0
     for row in rows:
-        sessions.setdefault(row.get("session_id") or NA, []).append(row)
+        session_id = row.get("session_id")
+        if not session_id:
+            # 空/缺失 session_id 的行不并入任何会话（旧行为全部并入 "NA"
+            # 伪会话——跨真实会话合并，把不同会话的轮次串进同一 T_session
+            # 样本、污染分位）；显式排除 + 计数留痕。
+            empty_id_rows += 1
+            continue
+        sessions.setdefault(session_id, []).append(row)
     if not sessions:
-        fail("session：request_metrics 无行")
+        fail("session：request_metrics 无行（或全部行 session_id 为空）")
     out_rows = []
     t_sessions: list[int] = []
     na_sessions = 0
@@ -351,7 +424,18 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
             missing.append("completion_ns(partial)")
         human_tool_total = 0
         soft_missing: list[str] = []
-        for turn in turns:
+        # H5①（2026-09-29 face 修正，2026-09-30 本仓同步；initiator 口径）
+        # ：trace 冻结语义 = "turn j 的 human/tool 等待记在 turn j 自己
+        # 行上"（derive_20_first_30_seconds.py: "the gap after turn j is
+        # the human_time or tool_time recorded on turn j's own row"），
+        # 物理上落在 [completion(j), arrival(j+1)]——只有 j ≤ n−2 的等待
+        # 落在会话窗口 [first_arrival, last_completion] 内。Σ(human+tool)
+        # 因此只累加除末轮外的 turns（按 turn_index 排序后排除末轮）；
+        # 末轮行上字段无论在场/缺席/取值如何都不进求和、不计
+        # soft_missing 也不构成缺数据（其等待定义在窗口外，对 T_session
+        # 无影响）。单轮会话 turns[:-1] 为空 → Σ=0，T_session=
+        # 末轮 completion−首轮 arrival。
+        for turn in turns[:-1]:
             entry = per_request.get(str(turn.get("request_id")), {})
             human = entry.get("human_time_ns")
             tool = entry.get("tool_time_ns")
@@ -369,14 +453,25 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
                     f"{turn.get('request_id')}:human/tool=0(turn0/0-gap)")
                 continue
             # trace 中 human_time/tool_time 逐行互斥：缺侧按 0 计。
+            # manifest 透传值必须为整数（bool 是 int 子类须显式排除）：
+            # float 静默截断、str 裸崩、bool 计 1ns 都会污染 T_session
+            # ——fail-closed 拒绝。
+            for name, value in (("human_time_ns", human),
+                                ("tool_time_ns", tool)):
+                if value is None:
+                    continue
+                if isinstance(value, bool) or not isinstance(value, int):
+                    fail(f"request {turn.get('request_id')}: manifest "
+                         f"{name} 必须为整数纳秒（实得 {value!r}，"
+                         f"类型 {type(value).__name__}）")
             if human is None:
                 soft_missing.append(f"{turn.get('request_id')}:human_time_ns=0")
             else:
-                human_tool_total += int(human)
+                human_tool_total += human
             if tool is None:
                 soft_missing.append(f"{turn.get('request_id')}:tool_time_ns=0")
             else:
-                human_tool_total += int(tool)
+                human_tool_total += tool
         missing_field_rows += len(missing)
         if missing:
             na_sessions += 1
@@ -385,8 +480,10 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
                              completions[-1] if completions else NA,
                              NA, NA, len(missing), ";".join(missing[:5])))
             continue
-        first_arrival = min(arrivals)
-        last_completion = max(completions)
+        # M6-06：统一为 README/NA 分支口径——首轮 arrival/末轮 completion
+        # （轮序）。此前正常分支用 min/max，乱序会话下两分支偏差。
+        first_arrival = arrivals[0]
+        last_completion = completions[-1]
         t_session = last_completion - first_arrival - human_tool_total
         if t_session < 0:
             fail(f"session {session_id}: T_session 为负"
@@ -412,6 +509,9 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
               f"P50={nearest_rank_percentile(t_sessions, 0.50)}ns "
               f"P95={nearest_rank_percentile(t_sessions, 0.95)}ns",
               file=sys.stderr)
+    if empty_id_rows:
+        print(f"[slo-stats] session: {empty_id_rows} 行 session_id 为空"
+              f"——显式排除（不并入任何会话、不进分位）", file=sys.stderr)
     print(f"[slo-stats] session: NA 会话 {na_sessions}（缺字段行 "
           f"{missing_field_rows}）——缺 manifest 透传字段"
           f"（human_time_ns/tool_time_ns，WP2）时输出 NA+计数",
@@ -458,22 +558,55 @@ def cmd_backlog(args: argparse.Namespace, ctx=None) -> int:
     if missing:
         print(f"[slo-stats] backlog: {missing} 行 arrival_ns=NA 被跳过（计数）",
               file=sys.stderr)
+    # M6-05：末态非零/负在途此前仅告警且照常写出（负值可入
+    # slo_backlog.csv）——与同目录 violation/scan 的 fail(...) 口径对齐，
+    # 事件不一致的时序拒绝输出。
+    if any(inflight < 0 for _, inflight in series):
+        fail(f"backlog：时序出现负在途（completion 早于 arrival？）——"
+             f"事件不一致，拒绝输出")
     if current != 0:
-        print(f"[slo-stats] backlog: 事件重放后 in_flight={current}≠0"
-              f"（未 drain 或事件缺失）", file=sys.stderr)
+        fail(f"backlog：事件重放末态 in_flight={current}≠0（存在未 drain "
+             f"的 arrival 或缺失 completion）——事件不一致，拒绝输出")
     bucket = args.bucket_ns
     if bucket:
-        bucket = int(bucket)
+        try:
+            bucket = int(bucket)
+        except (TypeError, ValueError):
+            # 非 "NA" 字符串（如 abc）在此裸 ValueError traceback——包成
+            # fail-closed SloToolError，走 run_main 统一退出码。
+            fail(f"--bucket-ns 必须为整数（实得 {args.bucket_ns!r}）")
         if bucket <= 0:
             fail("--bucket-ns 必须为正整数")
-        bucketed: list[tuple[int, int]] = []
+        # 分桶输出补发零事件桶。事件间在途值分段常值，无事件桶的在途值 =
+        # 上一事件值延续（carry）——旧行为整桶丢弃使下游"按行求均值"把
+        # 无事件区段漏计为零样本。桶值口径：桶内事件峰值与桶起点延续值的
+        # 较大者——桶内只发生完成事件时真实峰值=携入值，只对桶内事件取
+        # max 会系统性低估。仅补齐 [首事件桶, 末事件桶] 内的全部无事件桶；
+        # 生成器流式产出，内存 O(事件桶数)，与 span/桶长解耦。
+        idx_values: dict[int, int] = {}  # 桶号 -> 事件桶代表值
+        idx_tail: dict[int, int] = {}    # 桶号 -> 桶内末事件后的在途值
+        carry = 0  # 上一锚点行值延续到本桶起点的携带在途值（跨桶区段）
         for time, inflight in series:
-            slot = (time // bucket) * bucket
-            if bucketed and bucketed[-1][0] == slot:
-                bucketed[-1] = (slot, max(bucketed[-1][1], inflight))
+            idx = time // bucket
+            if idx in idx_values:
+                idx_values[idx] = max(idx_values[idx], inflight)
             else:
-                bucketed.append((slot, inflight))
-        series = bucketed
+                idx_values[idx] = max(carry, inflight)
+            idx_tail[idx] = inflight
+            carry = inflight
+        first_idx, last_idx = min(idx_values), max(idx_values)
+
+        def _bucketed():
+            # 零事件桶代表值 = 上一事件值的跨桶延续（事件间在途分段常值；
+            # 注意取末事件后的在途值，而非前一事件桶的峰值代表值）。
+            tail = 0
+            for idx in range(first_idx, last_idx + 1):
+                if idx in idx_values:
+                    yield (idx * bucket, idx_values[idx])
+                    tail = idx_tail[idx]
+                else:
+                    yield (idx * bucket, tail)
+        series = _bucketed()
     stream, close = open_output(args.output, "slo_backlog.csv", args.run_dir)
     try:
         write_csv(stream, ("time_ns", "in_flight"), series)
@@ -515,7 +648,15 @@ def cmd_warmup(args: argparse.Namespace, ctx=None) -> int:
     # A4：两组 P99 各走一次有界排序（公式不变）。
     p99_full = nearest_rank_percentile_many(full_values, [0.99])[0]
     p99_trimmed = nearest_rank_percentile_many(trimmed, [0.99])[0]
-    relative = abs(p99_full - p99_trimmed) / p99_full if p99_full else 0.0
+    # Report 4.3 fix（2026-09-29 face 修正，2026-09-30 本仓同步）：旧
+    # `... / p99_full if p99_full else 0.0` 折叠分支把全零 p99_full 变成
+    # relative=0.0 并判 warmup_stable=true 静默放行。全零 P99 E2E 物理
+    # 不可达（每个 completed 请求 e2e 恒正），只能来自损坏的指标输入，
+    # 稳定性判定不可判定 → 经本模块 fail() 通道 fail-closed，不静默通过。
+    if not p99_full:
+        fail("warmup：p99_full_ns == 0——全零 P99 E2E 物理不可达，只能来自"
+             " 损坏的指标输入（fail-closed，不判 warmup_stable）")
+    relative = abs(p99_full - p99_trimmed) / p99_full
     payload = {
         "command": "warmup",
         "window_ns": window_ns,
@@ -585,8 +726,8 @@ def cmd_normalized(args: argparse.Namespace) -> int:
         out_rows.append((
             r["run_dir"], r["repo_variant"], r["n_completed"], r["n_rows"],
             r["p50"], r["p99"], fmt_ratio(r["tput"], 9),
-            fmt_ratio(r["p50"] / max_p50),
-            fmt_ratio(r["p99"] / max_p99),
+            fmt_ratio(r["p50"] / max_p50 if max_p50 else None),
+            fmt_ratio(r["p99"] / max_p99 if max_p99 else None),
             fmt_ratio(r["tput"] / max_tput
                       if (r["tput"] is not None and max_tput) else None),
         ))
@@ -622,11 +763,21 @@ def cmd_scan_export(args: argparse.Namespace) -> int:
             lam = float(lambda_text)
         except ValueError:
             fail(f"--point λ 非数值：{spec!r}")
+        if not math.isfinite(lam):
+            # INPUT-01：float() 接受 "inf"/"nan"/"1e999"——NaN 参与比较
+            # 恒假、Inf 使 λ 缩放列失义，一律 fail-closed。
+            fail(f"--point λ 必须为有限数值：{spec!r}")
         if lam <= 0:
             fail(f"--point λ 必须为正：{spec!r}")
         points.append((Path(run_dir_text), lam))
     if not points:
         fail("scan-export：至少需要一个 --point RUN_DIR=LAMBDA")
+    if args.manifest and not args.t_isolated:
+        # 显式报错(2026-09-30 审查清理:此前 --manifest 在缺 --t-isolated
+        # 时被静默忽略,调用方误以为 manifest 参与了计算)。
+        fail("scan-export：--manifest 仅与 --t-isolated 联合使用（violation/"
+             "goodput 列的参数来源）；缺 --t-isolated 时本命令不读任何 "
+             "manifest——请去掉 --manifest 或补齐 --t-isolated")
     manifest = None
     t_isolated = None
     alpha = None
@@ -653,17 +804,18 @@ def cmd_scan_export(args: argparse.Namespace) -> int:
         rate = None
         goodput = None
         if t_isolated is not None:
-            den = 0
-            num = 0
-            for row in rows:
-                den += 1
-                e2e = row.get("e2e_ns")
-                deadline = request_deadline(row, alpha, prefill_edges,
-                                            decode_edges, t_isolated)
-                if e2e is not None and e2e > deadline:
-                    num += 1
+            # D2 修复：与 cmd_violation 共用 violation_counts 单一实现
+            # （分子显式排除非 completed；此前本链的裸循环只认
+            # "e2e 非 NA 即可进分子"，与 violation 口径分叉）。
+            num, den, _, _ = violation_counts(
+                rows, alpha, prefill_edges, decode_edges, t_isolated)
             rate = num / den
-            goodput = ((n_completed / den) * (1 - rate)) if den else None
+            # F7/M6-02：goodput = tput×(1−violation_rate)（README 公式，
+            # 单位 rps）。旧实现 (n_completed/den)×(1−rate) 在 drain 完备
+            # 断言（input==completed）下完成率因子恒 1，tput 从未参与，
+            # 列名 goodput_rps 名不副实。tput 不可得（span≤0/无完成）→ NA。
+            goodput = (tput * (1 - rate)) if (tput is not None and den) \
+                else None
         out_rows.append((
             str(run_dir), variant, fmt_ratio(lam), n_input, n_completed,
             "true" if drain_ok else "false",
@@ -746,7 +898,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_run_dir_arg(p)
     add_output_arg(p, "slo_backlog.csv")
     p.add_argument("--bucket-ns", default=None,
-                   help="可选时序分桶（桶内取 max；默认逐事件）")
+                   help="可选时序分桶（桶值=桶内事件峰值与桶起点携入值的"
+                        "较大者，零事件桶补行；默认逐事件）")
     p.set_defaults(func=cmd_backlog)
 
     p = sub.add_parser("warmup", help="剔除前缀前后 P99 E2E 对比判定")

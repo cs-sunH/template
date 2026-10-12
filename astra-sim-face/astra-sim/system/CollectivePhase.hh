@@ -20,7 +20,8 @@ class CollectivePhase {
     CollectivePhase();
     void init(BaseStream* stream);
 
-    Sys* sys;
+    // The Sys* constructor argument is kept for the unchanged call sites
+    // (every caller passes `this`); the phase itself carries no Sys pointer.
     int queue_id;
     Algorithm* algorithm;
     uint64_t initial_data_size;

@@ -49,13 +49,7 @@ HalvingDoubling::HalvingDoubling(ComType type,
     default:
         stream_count = log2(nodes_in_ring);
     }
-    if (type == ComType::All_Gather) {
-        max_count = 0;
-    } else {
-        max_count = log2(nodes_in_ring);
-    }
     remained_packets_per_message = 1;
-    remained_packets_per_max_count = 1;
     switch (type) {
     case ComType::All_Reduce:
         this->final_data_size = data_size;
@@ -124,15 +118,14 @@ void HalvingDoubling::run(EventType event, CallData* data) {
 
 void HalvingDoubling::release_packets() {
     if (NPU_to_MA == true) {
-        (new PacketBundle(stream->owner, stream, locked_packets, processed,
-                          send_back, msg_size, transmition))
+        (new PacketBundle(stream->owner, stream, processed, send_back,
+                          msg_size, transmition))
             ->send_to_MA();
     } else {
-        (new PacketBundle(stream->owner, stream, locked_packets, processed,
-                          send_back, msg_size, transmition))
+        (new PacketBundle(stream->owner, stream, processed, send_back,
+                          msg_size, transmition))
             ->send_to_NPU();
     }
-    locked_packets.clear();
 }
 
 void HalvingDoubling::process_stream_count() {
@@ -152,27 +145,24 @@ void HalvingDoubling::process_stream_count() {
 }
 
 void HalvingDoubling::process_max_count() {
-    if (remained_packets_per_max_count > 0) {
-        remained_packets_per_max_count--;
-    }
-    if (remained_packets_per_max_count == 0) {
-        max_count--;
-        release_packets();
-        remained_packets_per_max_count = 1;
+    // The old max_count / remained_packets_per_max_count two-level gate was
+    // always true (the remainder counter was hard-wired to 1 and max_count
+    // had no reader), so every inserted packet releases a bundle and advances
+    // the receiver offset.
+    release_packets();
+    rank_offset *= offset_multiplier;
+    msg_size /= offset_multiplier;
+    if (rank_offset == nodes_in_ring && comType == ComType::All_Reduce) {
+        offset_multiplier = 0.5;
         rank_offset *= offset_multiplier;
         msg_size /= offset_multiplier;
-        if (rank_offset == nodes_in_ring && comType == ComType::All_Reduce) {
-            offset_multiplier = 0.5;
-            rank_offset *= offset_multiplier;
-            msg_size /= offset_multiplier;
-        }
-        curr_receiver = id;
-        RingTopology::Direction direction = specify_direction();
-        for (int i = 0; i < rank_offset; i++) {
-            curr_receiver = ((RingTopology*)logical_topo)
-                                ->get_receiver(curr_receiver, direction);
-            curr_sender = curr_receiver;
-        }
+    }
+    curr_receiver = id;
+    RingTopology::Direction direction = specify_direction();
+    for (int i = 0; i < rank_offset; i++) {
+        curr_receiver = ((RingTopology*)logical_topo)
+                            ->get_receiver(curr_receiver, direction);
+        curr_sender = curr_receiver;
     }
 }
 
@@ -183,8 +173,7 @@ void HalvingDoubling::reduce() {
 }
 
 bool HalvingDoubling::iteratable() {
-    if (stream_count == 0 &&
-        free_packets == (parallel_reduce * 1)) {  // && not_delivered==0
+    if (stream_count == 0 && free_packets == (parallel_reduce * 1)) {
         exit();
         return false;
     }
@@ -194,15 +183,12 @@ bool HalvingDoubling::iteratable() {
 void HalvingDoubling::insert_packet(Callable* sender) {
     if (zero_latency_packets == 0 && non_zero_latency_packets == 0) {
         zero_latency_packets = parallel_reduce * 1;
-        non_zero_latency_packets =
-            get_non_zero_latency_packets();  //(nodes_in_ring-1)*parallel_reduce*1;
+        non_zero_latency_packets = get_non_zero_latency_packets();
         toggle = !toggle;
     }
     if (zero_latency_packets > 0) {
-        packets.push_back(MyPacket(
-            msg_size, stream->current_queue_id, curr_sender,
-            curr_receiver));  // vnet Must be changed for alltoall topology
-        locked_packets.push_back(&packets.back());
+        packets.push_back(
+            MyPacket(msg_size, curr_sender, curr_receiver));
         processed = false;
         send_back = false;
         NPU_to_MA = true;
@@ -210,10 +196,8 @@ void HalvingDoubling::insert_packet(Callable* sender) {
         zero_latency_packets--;
         return;
     } else if (non_zero_latency_packets > 0) {
-        packets.push_back(MyPacket(
-            msg_size, stream->current_queue_id, curr_sender,
-            curr_receiver));  // vnet Must be changed for alltoall topology
-        locked_packets.push_back(&packets.back());
+        packets.push_back(
+            MyPacket(msg_size, curr_sender, curr_receiver));
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
             processed = true;
@@ -242,27 +226,20 @@ bool HalvingDoubling::ready() {
         return false;
     }
     MyPacket packet = packets.front();
+    // sim_request fields are write-only in this tree (face-LRU audit
+    // 2026-09-29); declarations stay for the front-end virtual interface.
     sim_request snd_req;
-    snd_req.srcRank = id;
-    snd_req.dstRank = packet.preferred_dest;
-    snd_req.tag = stream->stream_id;
-    snd_req.reqType = UINT8;
-    snd_req.vnet = this->stream->current_queue_id;
     stream->owner->front_end_sim_send(
         0, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_dest,
         stream->stream_id, &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE,
-        &Sys::handleEvent,
-        nullptr);  // stream_id+(packet.preferred_dest*50)
+        &Sys::handleEvent, nullptr);
     sim_request rcv_req;
-    rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-        stream, stream->owner->id, EventType::PacketReceived,
-        packet.preferred_vnet, stream->stream_id);
+        stream, stream->owner->id, EventType::PacketReceived);
     stream->owner->front_end_sim_recv(
         0, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_src,
         stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,
-        &Sys::handleEvent,
-        ehd);  // stream_id+(owner->id*50)
+        &Sys::handleEvent, ehd);
     reduce();
     return true;
 }
@@ -270,9 +247,6 @@ bool HalvingDoubling::ready() {
 void HalvingDoubling::exit() {
     if (packets.size() != 0) {
         packets.clear();
-    }
-    if (locked_packets.size() != 0) {
-        locked_packets.clear();
     }
     stream->owner->proceed_to_next_vnet_baseline((StreamBaseline*)stream);
 }

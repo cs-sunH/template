@@ -79,6 +79,27 @@ def manifest_request(request_id: str, session_id: str, turn_index: int,
     return entry
 
 
+def write_trace_config(root: Path, n_instances: int) -> Path:
+    """写含 n_instances 个 inference_group 组行的最小 trace_config.csv。
+
+    配置实例总数的权威来源（METRIC-01 分母；load_imbalance 经
+    hbm_watermark.count_configured_instances 读取，单一口径）。注意
+    run_dir 缺该文件时会回退到仓 workload 的 trace_config（9 组）——
+    断言配置实例数的用例必须显式落盘本文件。
+    """
+    import csv
+    path = root / "trace_config.csv"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["kind", "key", "value", "group_name", "pg_name",
+                         "ranks", "description"])
+        for index in range(n_instances):
+            writer.writerow([
+                "inference_group", "", "", f"synthetic_instance_{index}",
+                index + 1, "0-5", "prefill", "synthetic group"])
+    return path
+
+
 def write_cpp_log(run_dir: Path, records: Sequence[dict],
                   repo_variant: str = "astra-sim-face") -> Path:
     """records 直接为 [METRIC] JSON 对象；init 行自动前置。"""

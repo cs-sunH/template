@@ -43,6 +43,13 @@ set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/yaml-cpp")
 
+# die-internal cost model library (die内仿真器设计文档 §8.1; stage A1 wiring;
+# face-LRU rollout 2026-10-03).  Vendored byte-identical with the face base
+# repository -- the five repos must run the same model version.  Builds the
+# die_model static library plus its unit tests; the target is linked into
+# AstraSim below so the runtime stages can adopt it incrementally.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/die_model")
+
 
 # Find Protobuf
 # TODO: We want to use the advanced semantics 'protobuf CONFIG REQUIRED'.
@@ -58,7 +65,14 @@ else()
 endif()
 
 # Files to compile
-file(GLOB srcs
+# L24(2026-09-29 审查修复):GLOB 加 CONFIGURE_DEPENDS——增删源文件后不再
+# 依赖手工重跑 cmake 才能被发现。
+# 批次K核实修正(2026-09-29):原写法 `file(GLOB CONFIGURE_DEPENDS srcs ...)`
+# 把 CONFIGURE_DEPENDS 放在了 <variable> 位——CMake 语义下结果存进名为
+# "CONFIGURE_DEPENDS" 的变量,"srcs" 反被当成 glob 模式,srcs 恒空,
+# add_library(AstraSim ...) 直接 "No SOURCES" 失败(任何含本仓的配置树
+# 均无法生成)。按 file() 语法把关键字移到变量之后,修复且保留 L24 意图。
+file(GLOB srcs CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/*.cc"
@@ -67,9 +81,11 @@ file(GLOB srcs
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/logical_topology/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/collective_algorithm/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/custom_collectives/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/memory/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/common/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/third_party/utils/*.cc"
+    # L24(2026-09-29 审查修复):删除 third_party/utils/*.cc glob——该目录
+    # 只有 protolib.py(+__pycache__),无任何 .cc,glob 恒空(连带:其
+    # target_include_directories 行已按同批裁定删除,见下方 Include
+    # Directories 处 infra-N 注)。
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/feeder_v3/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/remote_memory_backend/analytical/*.cc")
@@ -81,6 +97,9 @@ add_library(AstraSim STATIC ${srcs})
 target_link_libraries(AstraSim PUBLIC fmt::fmt)
 target_link_libraries(AstraSim PUBLIC spdlog::spdlog)
 target_link_libraries(AstraSim PUBLIC yaml-cpp)
+# PUBLIC: AstraSim consumers see extern/die_model/include (DieModel.hh) and
+# the shared extern/helper nlohmann/json include via die_model's interface.
+target_link_libraries(AstraSim PUBLIC die_model)
 
 # Same as above.
 if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")
@@ -95,7 +114,9 @@ target_include_directories(AstraSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(AstraSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/extern/network_backend/analytical/include/astra-network-analytical)
 target_include_directories(AstraSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/)
 target_include_directories(AstraSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf)
-target_include_directories(AstraSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/third_party/utils)
+# infra-N(2026-09-30,L24 批次裁定的死代码):删除对 chakra/src/third_party/
+# utils 的 include 行——该目录仅 .py(protolib.py),全仓零消费者,且随 L24
+# 删除其 glob 后更无引用。
 target_include_directories(AstraSim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/)
 target_include_directories(AstraSim PUBLIC ${Protobuf_INCLUDE_DIR})
 

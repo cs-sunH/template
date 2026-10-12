@@ -45,8 +45,11 @@ class LogGP : public Callable {
     enum class ProcState { Free, Processing };
 
     MemBus* NPU_MEM;
-    int request_num;
-    std::string name;
+    // (2026-09-30) request_num removed: the monotonically increasing id was
+    // passed to MemMovRequest whose own member had already been deleted as
+    // write-only; nothing ever read it back.
+    // (2026-10-01) the name member is removed the same way: only the ctor
+    // ever wrote it and nothing read it back.
     Tick L;
     Tick o;
     Tick g;

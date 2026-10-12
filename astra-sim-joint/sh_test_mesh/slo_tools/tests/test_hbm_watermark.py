@@ -37,6 +37,8 @@ import csv
 import json
 import subprocess
 import sys
+import atexit
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -53,7 +55,9 @@ CAPACITY_PER_INSTANCE = 6000  # 1000 B/NPU × 6 NPU
 
 
 def make_run_dir(tag: str) -> Path:
-    return Path(tempfile.mkdtemp(prefix=f"slo_hbm_{tag}_"))
+    d = Path(tempfile.mkdtemp(prefix=f"slo_hbm_{tag}_"))
+    atexit.register(shutil.rmtree, d, ignore_errors=True)
+    return d
 
 
 def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
@@ -138,14 +142,20 @@ def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
 
 def write_journal(run_dir: Path, rows: list[dict],
                   checksum: dict | None = None) -> None:
-    """落合成 kv_delta_journal.jsonl（+可选 checksum json）。"""
+    """落合成 kv_delta_journal.jsonl（+可选 checksum json）。
+
+    newline 显式固定 LF（2026-09-29，报告 3.18.1）：journal sha256 证书对
+    文件字节计算，write_text 缺省 newline 会在 Windows CRLF 盘把 \n 翻译成
+    \r\n → 10 例 journal-tier 测试假红；显式 LF 保证字节与证书一致。
+    """
     results = run_dir / "results"
     results.mkdir(parents=True, exist_ok=True)
     import hashlib
     payload = "".join(json.dumps(row, sort_keys=True) + "\n"
                       for row in rows)
-    (results / "kv_delta_journal.jsonl").write_text(payload,
-                                                    encoding="utf-8")
+    with (results / "kv_delta_journal.jsonl").open(
+            "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(payload)
     if checksum is None:
         (results / "kv_delta_journal_checksum.json").unlink(missing_ok=True)
         return
@@ -318,8 +328,12 @@ class HandCalcReplayTests(unittest.TestCase):
         self.assertEqual(summary["coef_bytes_per_token"], COEF)
         self.assertEqual(summary["capacity_bytes_per_instance"],
                          CAPACITY_PER_INSTANCE)
-        self.assertEqual(summary["total_evict_events"], 1)
-        self.assertEqual(summary["total_evict_bytes"], 40)
+        # M17（2026-09-29）：认证层显式披露——本仓自产 run 无 per-rank
+        # journal 生产者，certification_layer 恒 upper_bound_only。
+        self.assertEqual(summary["certification_layer"], "upper_bound_only")
+        # L18（2026-09-29）：顶层逐出计数改名 _upper_bound。
+        self.assertEqual(summary["total_evict_events_upper_bound"], 1)
+        self.assertEqual(summary["total_evict_bytes_upper_bound"], 40)
         self.assertEqual(summary["actions"]["partial_evictions"], 1)
         instance = summary["instances"]["0"]
         self.assertEqual(instance["peak_occupancy_bytes"], 260)
@@ -747,13 +761,31 @@ class FailClosedTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("不在跟踪态", proc.stderr)
 
-    def test_negative_occupancy_fails(self):
-        """多扣（会话跟踪实例与实际占用错位）→ 负占用 fail-closed。
+    def test_negative_occupancy_guard_fails_unit(self):
+        """负占用守卫（多扣 → 结构错拒绝输出）由重放基元直接钉住。
 
-        构造：A 驻留实例 0；下一轮 prefill 决策谎报 LOCAL_HIT 到实例 1
-        （local_hit_location_mismatch），会话归属改到 1 而 bytes 仍挂在
-        实例 0 的占用上；随后 completion 从实例 1 逐出 A 全量 → 实例 1
-        占用转负 → 结构错拒绝输出。
+        R6-U4（2026-09-29 face 移植）修复后，LOCAL_HIT source≠target
+        （账本谎报位置）路径已在上游随迁占用、不再借末段负占用崩溃兜底
+        （见 test_local_hit_relocation_keeps_occupancy_consistent）；
+        守卫本身仍须对任何多扣保持 fail-closed。
+        """
+        replay = hw.WatermarkReplay("astra-sim-face", {}, {}, COEF, None)
+        replay._apply(0, 0, 50)
+        with self.assertRaises(SloToolError) as ctx:
+            replay._apply(1, 0, -100)
+        self.assertIn("负占用", str(ctx.exception))
+
+    def test_local_hit_relocation_keeps_occupancy_consistent(self):
+        """R6-U4（2026-09-29 face 移植）：LOCAL_HIT source≠target（账本
+        谎报位置）→ 会话归属切换时占用随迁——instances 占用与 instance
+        指向保持一致，不再出现"占用滞留 source + 指向 target"的跟踪态
+        分裂（旧分裂在此场景的唯一可见症状是末段 completion 逐出把实例 1
+        占用打成负数崩溃）；位置矛盾由 local_hit_location_mismatch +
+        restore_occupancy_relocated 计数留痕。
+
+        手算（COEF=100）：A +100@t0（实例0）→ decode grow 零增量；
+        LOCAL_HIT@t30 谎报目标实例 1 → 100B 随迁（实例0 归零、实例1
+        100B）；completion@t50 逐出 A 100B → 实例1 归零。
         """
         reset_seq()
         records = [
@@ -781,8 +813,27 @@ class FailClosedTests(unittest.TestCase):
         write_fixture(run_dir, repo_variant="astra-sim-face",
                       records=records, token_requests=tokens)
         proc = run_tool(run_dir)
-        self.assertEqual(proc.returncode, 2)
-        self.assertIn("负占用", proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(
+            summary["anomalies"]["local_hit_location_mismatch"], 1)
+        self.assertEqual(
+            summary["actions"]["restore_occupancy_relocated"], 1)
+        self.assertEqual(
+            summary["actions"]["restore_occupancy_relocated_bytes"], 100)
+        # 占用账目一致：迁移后实例0 归零、逐出后实例1 归零（无幽灵滞留）。
+        self.assertEqual(
+            summary["instances"]["0"]["residual_occupancy_bytes"], 0)
+        self.assertEqual(
+            summary["instances"]["1"]["residual_occupancy_bytes"], 0)
+        # joint summary 无 face 的 total_evict_* 聚合键，按 actions 计数
+        # 与逐实例 evict 列对账（口径一致）。
+        self.assertEqual(summary["actions"]["evictions"], 1)
+        self.assertEqual(summary["actions"]["evict_bytes"], 100)
+        self.assertEqual(
+            summary["instances"]["1"]["evict_events"], 1)
+        self.assertEqual(
+            summary["instances"]["1"]["evict_bytes"], 100)
 
     def test_unknown_repo_variant_fails(self):
         records, tokens = base_handcalc_records()
@@ -809,6 +860,90 @@ class FailClosedTests(unittest.TestCase):
                          "degraded_peak_recorded")
         self.assertEqual(summary["instances"]["0"]["peak_occupancy_bytes"],
                          260)
+
+    def test_scalar_restore_type_lie_fails_closed(self):
+        # F2_PY（2026-09-29）RV5-F7 等价移植：标量 restore 分支的 source
+        # 类型谎报（bytes 臂已由 R8-F1 严格化）——字符串静默降 None 曾抑制
+        # 下游 restore_source_mismatch 诊断、bool 冒充 1 实例。在场非 int
+        # （含 bool/浮点/字符串）→ fail；键缺席/None 保留缺省语义。
+        scalar_mapping = {"restore": {
+            "bytes_path": ["history_transfer_bytes"],
+            "kind_field": "history_action",
+            "source_field": "history_source_instance_index"}}
+
+        def scalar_restore(decision):
+            record = {"kind": "prefill", "tick": 5, "decision": decision}
+            return hw._prefill_restore_actions(record, scalar_mapping,
+                                               "w:seq=?")
+
+        # source_field 类型谎报：字符串数字/bool/浮点。
+        for bad in ("3", True, 1.0):
+            with self.subTest(source=repr(bad)):
+                with self.assertRaisesRegex(SloToolError,
+                                            "source_instance_index"):
+                    scalar_restore({"history_transfer_bytes": 100,
+                                    "history_source_instance_index": bad})
+        # 合法值与缺席语义不变。
+        self.assertEqual(scalar_restore({
+            "history_transfer_bytes": 100,
+            "history_source_instance_index": 3})[0]["logged_source"], 3)
+        self.assertIsNone(scalar_restore({
+            "history_transfer_bytes": 100})[0]["logged_source"])
+        # 对象臂（S1 history_transfer）：source 类型谎报（total_bytes 已由
+        # R8-F1 严格化，此处一并钉住防回退）。
+        obj_mapping = {"restore": {"bytes_path": ["history_transfer"]}}
+        with self.assertRaisesRegex(SloToolError, "total_bytes"):
+            hw._prefill_restore_actions(
+                {"kind": "prefill", "tick": 5, "decision": {
+                    "history_transfer": {"kind": "remote_load",
+                                         "total_bytes": True}}},
+                obj_mapping, "w:seq=?")
+        with self.assertRaisesRegex(SloToolError, "source_instance_index"):
+            hw._prefill_restore_actions(
+                {"kind": "prefill", "tick": 5, "decision": {
+                    "history_transfer": {"kind": "noc_migrate",
+                                         "total_bytes": 100,
+                                         "source_instance_index": "0"}}},
+                obj_mapping, "w:seq=?")
+        ok = hw._prefill_restore_actions(
+            {"kind": "prefill", "tick": 5, "decision": {
+                "history_transfer": {"kind": "noc_migrate",
+                                     "total_bytes": 100,
+                                     "source_instance_index": 0}}},
+            obj_mapping, "w:seq=?")
+        self.assertEqual(ok[0]["bytes"], 100)
+        self.assertEqual(ok[0]["logged_source"], 0)
+
+    def test_decode_move_type_lie_fails_closed(self):
+        # F2_PY（2026-09-29）RV5-F7 等价移植：_decode_move_actions 的
+        # source isinstance 宽松门补齐（bytes 臂已由 R8-F1 严格化）——
+        # 对象臂/source_field（S2 形态）三处；缺席/None 语义不变。
+        move_mapping = {"decode_move": {
+            "bytes_path": ["prefill_decode_transfer"]}}
+        s2_mapping = {"decode_move": {
+            "bytes_path": ["prefill_decode_transfer_bytes"],
+            "source_field": "prefill_instance_index"}}
+
+        def decode_move(decision, mapping=move_mapping):
+            record = {"kind": "decode", "tick": 5, "decision": decision}
+            return hw._decode_move_actions(record, mapping, "w:seq=?")
+
+        # 对象臂：source 字符串曾静默降 None。
+        with self.assertRaisesRegex(SloToolError, "source_instance_index"):
+            decode_move({"prefill_decode_transfer": {
+                "total_bytes": 100, "source_instance_index": "0"}})
+        # S2 source_field：bool 曾冒充实例 1。
+        with self.assertRaisesRegex(SloToolError, "prefill_instance_index"):
+            decode_move({"prefill_decode_transfer_bytes": 100,
+                         "prefill_instance_index": True}, s2_mapping)
+        # 合法值与缺席语义不变。
+        ok = decode_move({"prefill_decode_transfer": {
+            "total_bytes": 100, "source_instance_index": 0}})
+        self.assertEqual(ok[0]["bytes"], 100)
+        self.assertEqual(ok[0]["logged_source"], 0)
+        absent = decode_move({"prefill_decode_transfer": None})
+        self.assertEqual(absent[0]["bytes"], 0)
+        self.assertIsNone(absent[0]["logged_source"])
 
 
 class UnitHelperTests(unittest.TestCase):
@@ -1089,6 +1224,7 @@ class JournalParityRealTests(unittest.TestCase):
     @unittest.skipUnless(FIXTURE.is_dir(), "phase2 journal fixture 缺失")
     def test_real_journal_certified_and_matches_checksum(self):
         out = Path(tempfile.mkdtemp(prefix="slo_hbm_parity_"))
+        atexit.register(shutil.rmtree, out, ignore_errors=True)
         proc = subprocess.run(
             [sys.executable, str(SLO_TOOLS_DIR / "hbm_watermark.py"),
              str(self.FIXTURE), "--json", str(out / "summary.json"),
@@ -1656,8 +1792,12 @@ class JointSession411GoldenTests(unittest.TestCase):
                          ["peak_occupancy_bytes"], 761036652544)
         # 逐出账：披露 4 条（57,365,397,504）+ 注入 2 条（10,623,221,760）
         # + session_000333 victim 1 条（51,606,077,440）。
-        self.assertEqual(summary["total_evict_events"], 7)
-        self.assertEqual(summary["total_evict_bytes"], 119594696704)
+        # L18（2026-09-29）：顶层逐出计数改名 _upper_bound（来源 =
+        # decision-log 重放对照列，journal 权威路径下不混用）。
+        self.assertEqual(summary["total_evict_events_upper_bound"], 7)
+        self.assertEqual(summary["total_evict_bytes_upper_bound"],
+                         119594696704)
+        self.assertIn("eviction_counters_source", summary)
         # R17-2d 哨兵：kv_eviction 逐条计数 + reason 分桶随 summary 落盘。
         self.assertEqual(summary["actions"]["evict_entries_kv_eviction"], 2)
         self.assertEqual(summary["actions"][
@@ -1724,5 +1864,661 @@ class JointSession411GoldenTests(unittest.TestCase):
         self.assertIn("history_tokens_discarded", proc.stderr)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+# ---------------------------------------------------------------------------
+# W1（2026-09-27）：P→D 跨实例迁移重放钉测。
+#
+# 素材抽自 b4 冒烟 combo_T 臂（/home/sunhao/joint_smoke_evidence_v20_b4/
+# combo_T）session_3 的 request_0/request_1 生命周期（tick/bytes/实例
+# 逐字段抄录）：request_0 stay-prefill@1 → decode 迁 1→5（f(11747)）；
+# request_1 remote-read 工作副本@0（f(6434)=3,373,268,992）→ decode 迁
+# 0→4 → 完成 forward 合并 4→home 5（3,373,793,280）。修复前 _joint_decode
+# 只改 instance 不搬 P 工作副本：源实例 0 残留幻影 3,373,268,992，完成
+# 结算在实例 4 多扣 → 负占用 fail-closed（b4 五臂 exit=2 的根因）。
+# 另附同实例（P==D + local_hit 披露）对照请求：交割字节为信息量，占用
+# 不变。coef=524,288（layers=32/hidden=4096/bpe=2，与在盘真实 run 对齐）。
+# ---------------------------------------------------------------------------
+
+MIG_COEF = 524288
+MIG_F_U0 = 11747 * MIG_COEF          # 6,158,811,136（request_0 P→D 搬移）
+MIG_F_D0 = 11837 * MIG_COEF          # 6,205,997,056（request_0 终态）
+MIG_WORK1 = 6434 * MIG_COEF          # 3,373,268,992（request_1 工作副本）
+MIG_MERGE1 = 6435 * MIG_COEF         # 3,373,793,280（request_1 完成合并）
+MIG_F_FINAL = 18272 * MIG_COEF       # 9,579,790,336（session_3 终态）
+
+
+def _mig_move_transfer(source: int, total_bytes: int, session: str,
+                       kind: str = "noc_migrate",
+                       reason: str = "prefill_decode_instance_migrate") -> dict:
+    """decode 行 prefill_decode_transfer 披露（真实日志形态，shards 略）。"""
+    return {"kind": kind, "phase": "prefill_decode", "reason": reason,
+            "session_id": session, "source_instance_index": source,
+            "target_instance_index": source,
+            "layer_start": 0, "layer_end": 32,
+            "resident_prefix_layers_before": 0,
+            "resident_prefix_layers_after": 32,
+            "total_bytes": total_bytes, "shards": []}
+
+
+def migration_records() -> list[dict]:
+    """combo_T session_3 切片 + 同实例对照请求（seq/tick 合成单调）。"""
+    seq = 0
+
+    def nxt() -> int:
+        nonlocal seq
+        seq += 1
+        return seq
+
+    def prefill(request_id, tick, instance, action):
+        return {"kind": "prefill", "request_id": request_id,
+                "priority": 0, "seq": nxt(), "tick": tick,
+                "decision": {"prefill_instance_index": instance,
+                             "joint_action": action,
+                             "history_tokens_discarded": 0,
+                             "history_evictions": [],
+                             "history_transfers": [],
+                             "history_transfer_bytes": 0,
+                             "history_source_instance_index": None}}
+
+    def decode(request_id, tick, instance, action, transfer):
+        return {"kind": "decode", "request_id": request_id,
+                "priority": 0, "seq": nxt(), "tick": tick,
+                "decision": {"decode_instance_index": instance,
+                             "joint_action": action,
+                             "prefill_decode_transfer": transfer,
+                             "decode_evictions": []}}
+
+    def completion(request_id, tick, *, direction, working_copy, merges,
+                   home_flipped=None, origin_home=None):
+        return {"kind": "completion", "request_id": request_id,
+                "priority": 0, "seq": nxt(), "tick": tick,
+                "decision": {"joint_action": "remote-read",
+                             "merge_direction": direction,
+                             "joint_working_copy": working_copy,
+                             "merge_transfers": merges,
+                             "home_flipped_to": home_flipped,
+                             "origin_home_instance": origin_home,
+                             "kv_location_after_completion": "local_hbm",
+                             "completion_evictions": []}}
+
+    def merge_noc(source, total):
+        return {"kind": "noc_migrate", "phase": "completion",
+                "reason": "merge_working_copy_to_home",
+                "session_id": "session_3",
+                "source_instance_index": source,
+                "layer_start": 0, "layer_end": 32, "total_bytes": total,
+                "shards": []}
+
+    return [
+        # request_0：stay-prefill@1 → P→D 迁 1→5 → 本地提交（stay）。
+        prefill("s3_r0", 100, 1, "stay"),
+        decode("s3_r0", 200, 5, "stay",
+               _mig_move_transfer(1, MIG_F_U0, "session_3")),
+        completion("s3_r0", 300, direction="stay", working_copy=False,
+                   merges=[]),
+        # request_1：remote-read 工作副本@0 → P→D 迁 0→4 → forward 合并
+        # 4→home 5（home_flipped_to=5，真实行同款）。
+        prefill("s3_r1", 400, 0, "remote-read"),
+        decode("s3_r1", 500, 4, "remote-read",
+               _mig_move_transfer(0, MIG_WORK1, "session_3")),
+        completion("s3_r1", 600, direction="forward", working_copy=True,
+                   merges=[merge_noc(4, MIG_MERGE1)],
+                   home_flipped=5, origin_home=1),
+        # 同实例对照：stay-prefill@3 → P==D local_hit 交割（字节为信息量，
+        # 占用不变）→ 本地提交。
+        prefill("s9_r0", 700, 3, "stay"),
+        decode("s9_r0", 800, 3, "stay",
+               _mig_move_transfer(3, 100 * MIG_COEF, "session_9",
+                                  kind="local_hit",
+                                  reason="prefill_decode_local_reuse")),
+        completion("s9_r0", 900, direction="stay", working_copy=False,
+                   merges=[]),
+    ]
+
+
+def migration_token_requests() -> list[dict]:
+    """token 事实：request_0 (0,11747,11837)、request_1
+    (11837,18271,18272)、对照 (0,100,101)——逐字段对应真实 manifest。"""
+    return [
+        token_row("s3_r0", "session_3", 0, 11747, 11837),
+        token_row("s3_r1", "session_3", 11837, 18271, 18272),
+        token_row("s9_r0", "session_9", 0, 100, 101),
+    ]
+
+
+def run_migration(tag: str, mutate=None) -> tuple[subprocess.CompletedProcess,
+                                                  dict]:
+    """跑迁移切片；mutate(records) 供负例篡改（深拷贝后注入）。"""
+    import copy
+    records = migration_records()
+    if mutate is not None:
+        records = mutate(copy.deepcopy(records))
+    run_dir = make_run_dir(tag)
+    write_fixture(run_dir, repo_variant="astra-sim-joint",
+                  records=records,
+                  token_requests=migration_token_requests(),
+                  layers=32, hidden_size=4096, bytes_per_elem=2,
+                  npu_bytes=1 << 40)
+    proc = run_tool(run_dir)
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text()) \
+        if summary_path.exists() else {}
+    return proc, summary
+
+
+class JointPrefillDecodeMigrationTests(unittest.TestCase):
+    """W1 钉测：joint decode 行 P→D 迁移重放（源扣/目标加）+ fail-closed。"""
+
+    def test_cross_instance_migration_replay_closes(self):
+        """修复主线：跨实例 P→D 迁移逐字节搬移——重放零异常闭合，工作
+        副本精确落位（实例 4 峰值=合并前工作副本），无幻影残留、无负
+        占用（b4 combo_T 型 exit=2 不再复现）。"""
+        proc, summary = run_migration("wmig1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual({k: v for k, v in summary["anomalies"].items()
+                          if v}, {})
+        actions = summary["actions"]
+        # 两次跨实例搬移，字节精确（f(11747) + f(6434)）。
+        self.assertEqual(actions["joint_decode_move"], 2)
+        self.assertEqual(actions["joint_decode_move_bytes"],
+                         MIG_F_U0 + MIG_WORK1)
+        # 实例 4：峰值=合并前工作副本 f(6435)，结算后残留归零——修复前
+        # 此处只加过 1 token 增量、被合并整扣成 -3,373,268,992。
+        self.assertEqual(summary["instances"]["4"]["peak_occupancy_bytes"],
+                         MIG_MERGE1)
+        self.assertEqual(summary["instances"]["4"]["residual_occupancy_bytes"],
+                         0)
+        # 源实例 0/1 幻影清零；home 5 终态 = f(18272)（base+增量并入）。
+        self.assertEqual(summary["instances"]["0"]["residual_occupancy_bytes"],
+                         0)
+        self.assertEqual(summary["instances"]["1"]["residual_occupancy_bytes"],
+                         0)
+        self.assertEqual(summary["instances"]["5"]["residual_occupancy_bytes"],
+                         MIG_F_FINAL)
+        self.assertEqual(summary["instances"]["5"]["peak_occupancy_bytes"],
+                         MIG_F_FINAL)
+        # 同实例对照：local_hit 交割不改占用，会话驻留 f(101) 不动。
+        self.assertEqual(summary["instances"]["3"]["residual_occupancy_bytes"],
+                         101 * MIG_COEF)
+        # 两个 stay-prefill 行各自计数（request_0/request_1 会话对照）。
+        self.assertEqual(actions["joint_stay_prefill"], 2)
+
+    def test_same_instance_disclosure_is_occupancy_noop(self):
+        """同实例路径回归：P==D + local_hit 披露行不产生任何搬移/增量
+        计数（行为与修复前逐字段一致）。"""
+        proc, summary = run_migration("wmig2")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        actions = summary["actions"]
+        self.assertNotIn("joint_decode_stay", actions)
+        # 对照请求唯一增长 = decode 增量 1 token（f(101)−f(100)）。
+        self.assertEqual(summary["instances"]["3"]["peak_occupancy_bytes"],
+                         101 * MIG_COEF)
+
+    def test_migration_bytes_mismatch_fails_closed(self):
+        """迁移 bytes ≠ 跟踪工作副本（整份搬移口径）→ fail-closed。"""
+        def mutate(records):
+            for row in records:
+                if row["request_id"] == "s3_r1" and row["kind"] == "decode":
+                    row["decision"]["prefill_decode_transfer"]["total_bytes"] \
+                        += MIG_COEF
+            return records
+        proc, _ = run_migration("wmig3", mutate)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("整份搬移", proc.stderr)
+
+    def test_migration_source_mismatch_fails_closed(self):
+        """披露源端 ≠ 跟踪工作副本实例 → fail-closed。"""
+        def mutate(records):
+            for row in records:
+                if row["request_id"] == "s3_r1" and row["kind"] == "decode":
+                    row["decision"]["prefill_decode_transfer"][
+                        "source_instance_index"] = 3
+            return records
+        proc, _ = run_migration("wmig4", mutate)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("跟踪工作副本实例", proc.stderr)
+
+    def test_cross_instance_without_disclosure_fails_closed(self):
+        """跨实例 decode 行无 prefill_decode_transfer 披露 → fail-closed
+        （迁移字节必须落盘，拒绝静默漏记）。"""
+        def mutate(records):
+            for row in records:
+                if row["request_id"] == "s3_r1" and row["kind"] == "decode":
+                    row["decision"]["prefill_decode_transfer"] = None
+            return records
+        proc, _ = run_migration("wmig5", mutate)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("prefill_decode_transfer", proc.stderr)
+
+    def test_noc_transfer_with_same_instance_fails_closed(self):
+        """noc_migrate 披露但源==目标（manager 不产此形态）→ fail-closed。"""
+        def mutate(records):
+            for row in records:
+                if row["request_id"] == "s3_r0" and row["kind"] == "decode":
+                    row["decision"]["decode_instance_index"] = 1
+            return records
+        proc, _ = run_migration("wmig6", mutate)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("同实例交割", proc.stderr)
+
+    def test_local_hit_across_instances_fails_closed(self):
+        """local_hit 披露但源≠目标（交割/搬移形态互斥）→ fail-closed。"""
+        def mutate(records):
+            for row in records:
+                if row["request_id"] == "s9_r0" and row["kind"] == "decode":
+                    row["decision"]["decode_instance_index"] = 2
+                    row["decision"]["prefill_decode_transfer"][
+                        "source_instance_index"] = 3
+            return records
+        proc, _ = run_migration("wmig7", mutate)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("与搬移语义矛盾", proc.stderr)
+
+    def test_non_integer_decode_instance_fails_closed(self):
+        """joint decode 决策缺整数 decode_instance_index → fail-closed
+        （与 _joint_prefill 同级容错，不产 None 假实例桶）。"""
+        def mutate(records):
+            for row in records:
+                if row["request_id"] == "s3_r1" and row["kind"] == "decode":
+                    row["decision"]["decode_instance_index"] = None
+            return records
+        proc, _ = run_migration("wmig8", mutate)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("decode_instance_index", proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# G1（2026-09-27）钉测：sh30 D 边界三决策行（boundary_duplicate_ignored /
+# boundary_commit_fallback / boundary_terminal）入 joint_audit_kinds 词表
+# ——混插后重放零异常闭合（ALL-STEPS-PASSED 等价口径：exit 0 且 stderr
+# 空），且主账字节守恒逐位不变（对照不插行基线对拍 instances/actions/
+# anomalies 三表 + instances.csv/series.csv 字节级一致）。生产端无条件落
+# 行的写点符号锚：_on_prefill_drain（sh30 的 _on_prefill_drain 换址提交段）、
+# _settle_terminal_at_boundary（sh30）。
+# ---------------------------------------------------------------------------
+
+class BoundaryAuditKindTests(unittest.TestCase):
+    """G1 词表补全钉测（仿 test_hbm_watermark_staging_lease 的审计行混
+    插对拍形态）：boundary_* 行零重放语义差 + 未知 kind 门不误红。"""
+
+    COEF_G1 = 100  # B/token（layers=1, hidden=50, bytes_per_elem=1）
+
+    @staticmethod
+    def _seq() -> "_SeqCounter":
+        return _SeqCounter()
+
+    @staticmethod
+    def _records(seq: "_SeqCounter") -> list[dict]:
+        """单请求 joint stay 生命周期（coef=100：f(10)=1000、f(12)=1200
+        → 残差 1200、峰 1200），字段面与 staging_lease 钉测同款。"""
+        request_id = "s0_r0"
+        return [
+            {"kind": "prefill", "request_id": request_id, "priority": 0,
+             "seq": seq.nxt(), "tick": 100,
+             "decision": {"prefill_instance_index": 0,
+                          "joint_action": "stay",
+                          "history_tokens_discarded": 0,
+                          "history_evictions": [],
+                          "history_transfers": [],
+                          "history_transfer_bytes": 0,
+                          "history_source_instance_index": None}},
+            {"kind": "decode", "request_id": request_id, "priority": 0,
+             "seq": seq.nxt(), "tick": 110,
+             "decision": {"decode_instance_index": 0,
+                          "joint_action": "stay",
+                          "decode_evictions": []}},
+            {"kind": "completion", "request_id": request_id, "priority": 0,
+             "seq": seq.nxt(), "tick": 190,
+             "decision": {"joint_action": "stay",
+                          "merge_direction": "stay",
+                          "joint_working_copy": False,
+                          "merge_transfers": [],
+                          "home_flipped_to": None,
+                          "origin_home_instance": 0,
+                          "kv_location_after_completion": "local_hbm",
+                          "completion_evictions": []}},
+        ]
+
+    @staticmethod
+    def _boundary_rows(seq: "_SeqCounter") -> list[dict]:
+        """三种 boundary 决策行（字段面逐符号对齐生产写点；消费端在
+        request_id/tick 门之前登记跳过，不载运任何账本事件）。"""
+        request_id = "s0_r0"
+        return [
+            # sh30 _on_prefill_drain 幂等门（D20 幂等门重复 P_COMPUTE_DONE
+            # 通知披露）。
+            {"kind": "boundary_duplicate_ignored", "request_id": request_id,
+             "priority": 0, "seq": seq.nxt(), "tick": 104,
+             "decision": {"joint_stage": "P_COMPUTE_DONE",
+                          "joint_boundary_epoch": 0,
+                          "rule": "duplicate P_COMPUTE_DONE notification "
+                                  "is idempotent (v2.0 sec.16.4 stage "
+                                  "epoch)"}},
+            # sh30 _on_prefill_drain 换址回退段（Eq.1c 换址提交失败回退披露）。
+            {"kind": "boundary_commit_fallback", "request_id": request_id,
+             "priority": 0, "seq": seq.nxt(), "tick": 107,
+             "decision": {"failed_instance_index": 1,
+                          "failed_action": "remote",
+                          "fallback_instance_index": 0,
+                          "stage_epoch": 0, "reason": "synthetic commit "
+                          "failure",
+                          "rule": "Eq.1c fallback: continuation stays "
+                                  "legal when the switch commit fails "
+                                  "without irreversible work"}},
+            # sh30 _settle_terminal_at_boundary（已知终止直接结算
+            # 披露）。
+            {"kind": "boundary_terminal", "request_id": request_id,
+             "priority": 0, "seq": seq.nxt(), "tick": 108,
+             "decision": {"instance_index": 0,
+                          "rule": "observed terminal at P_COMPUTE_DONE: "
+                                  "skip D selection, settle directly "
+                                  "(v2.0 sec.16.4)"}},
+        ]
+
+    def _run(self, tag: str, records: list[dict]) -> tuple[
+            subprocess.CompletedProcess, dict, Path]:
+        run_dir = make_run_dir(tag)
+        write_fixture(run_dir, repo_variant="astra-sim-joint",
+                      records=records,
+                      token_requests=[token_row("s0_r0", "session_0",
+                                                0, 10, 12)],
+                      layers=1, hidden_size=50, bytes_per_elem=1,
+                      npu_bytes=1 << 40)
+        proc = run_tool(run_dir)
+        summary = json.loads(
+            (run_dir / "summary.json").read_text()) \
+            if (run_dir / "summary.json").exists() else {}
+        return proc, summary, run_dir
+
+    def test_boundary_rows_mixed_replay_still_closes(self):
+        """钉测①：三种 boundary 行混插（两两夹在主账行之间）后重放零
+        异常闭合（exit 0、stderr 空），残差/峰与纯主账场景一致——缺词
+        表时未知-kind 门 fail-closed 误红的主证。"""
+        seq = self._seq()
+        records = self._records(seq)
+        mixed = records[:1] + self._boundary_rows(seq) + records[1:]
+        proc, summary, _ = self._run("g1mix", mixed)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("fail-closed", proc.stderr)
+        inst = summary["instances"]["0"]
+        self.assertEqual(inst["residual_occupancy_bytes"], 12 * self.COEF_G1)
+        self.assertEqual(inst["peak_occupancy_bytes"], 12 * self.COEF_G1)
+
+    def test_w5_settle_done_row_mixed_replay_zero_delta(self):
+        """W5（§7.4）钉测：settle_done 统一结算披露行混插后重放零异常
+        闭合 + 主账字节守恒不变（audit 词表纳新 = 零重放语义差；KV 账
+        本走 completion 行重放，本行仅审计——与 merge_done 行同款）。"""
+        seq = self._seq()
+        records = self._records(seq)
+        settle_row = {
+            "kind": "settle_done", "request_id": "s0_r0",
+            "priority": 0, "seq": seq.nxt(), "tick": 195,
+            "decision": {
+                "settle_done_ns": 195, "service_done_ns": 190,
+                "settle_committed_ns": 190, "merge_done_ns": None,
+                "merge_payload_bytes": 0,
+                "settlement_policy": "consolidate",
+                "settle_state": "SETTLE_DONE"},
+        }
+        mixed = records + [settle_row]
+        base_proc, base_summary, base_dir = self._run("w5s0", records)
+        mixed_proc, mixed_summary, mixed_dir = self._run("w5s1", mixed)
+        self.assertEqual(base_proc.returncode, 0, base_proc.stderr)
+        self.assertEqual(mixed_proc.returncode, 0, mixed_proc.stderr)
+        self.assertEqual(base_summary["instances"],
+                         mixed_summary["instances"])
+        self.assertEqual(base_summary["actions"], mixed_summary["actions"])
+
+    def test_boundary_rows_zero_ledger_delta_bitwise(self):
+        """钉测②：主账字节守恒逐位不变——混插行与不插行基线对拍，
+        instances/actions/anomalies 三表相等 + instances.csv/series.csv
+        字节级一致（boundary 行跳过 = 零重放语义差）。"""
+        base_seq = self._seq()
+        base_records = self._records(base_seq)
+        mixed_seq = self._seq()
+        mixed_records = (self._records(mixed_seq)[:1]
+                         + self._boundary_rows(mixed_seq)
+                         + self._records(mixed_seq)[1:])
+        base_proc, base_summary, base_dir = self._run("g1bit0", base_records)
+        mixed_proc, mixed_summary, mixed_dir = self._run(
+            "g1bit1", mixed_records)
+        self.assertEqual(base_proc.returncode, 0, base_proc.stderr)
+        self.assertEqual(mixed_proc.returncode, 0, mixed_proc.stderr)
+        self.assertEqual(base_summary["instances"],
+                         mixed_summary["instances"])
+        self.assertEqual(base_summary["actions"], mixed_summary["actions"])
+        self.assertEqual(base_summary["anomalies"],
+                         mixed_summary["anomalies"])
+        # CSV provenance 列内嵌 run_dir 绝对路径，剥离后字节级对拍。
+        def strip_path(data: bytes, run_dir: Path) -> bytes:
+            return data.replace(str(run_dir).encode(), b"")
+
+        self.assertEqual(
+            strip_path((base_dir / "instances.csv").read_bytes(), base_dir),
+            strip_path((mixed_dir / "instances.csv").read_bytes(), mixed_dir))
+        self.assertEqual(
+            strip_path((base_dir / "series.csv").read_bytes(), base_dir),
+            strip_path((mixed_dir / "series.csv").read_bytes(), mixed_dir))
+
+    def test_boundary_rows_need_not_bypass_fail_closed(self):
+        """词表外边界同形行（篡改 kind 后缀）仍被未知-kind 门拒收：
+        本修复是纳新入词表，不是放开校验。"""
+        seq = self._seq()
+        records = self._records(seq)
+        row = self._boundary_rows(seq)[0]
+        row["kind"] = "boundary_duplicate_ignored_x"
+        mixed = records[:1] + [row] + records[1:]
+        proc, _, _ = self._run("g1unk", mixed)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("未知 kind='boundary_duplicate_ignored_x'",
+                      proc.stderr)
+
+
+class CopyHandoffBaseRerecordTests(unittest.TestCase):
+    """R9 钉测（修复轮三 W10，2026-09-27，仿 BoundaryAuditKindTests 混插
+    形态）：P=copy 交接轮 D 边界无迁移（boundary_remote_no_migration）
+    的 base 重录形态混插重放。
+
+    执行侧语义（face_scheduler R9）：P=copy 交接轮的 D 边界转记录点先闭
+    合 C13 journal（home 侧物理留存已随逐块交接在轮内释放完）再按
+    pool-only 基同科目把 base_* **重录到 i_P**——旧工作副本转 base 记
+    账、不建来源槽，轮末 merge 退化常规两位置。重放若仍走 W2 来源侧三
+    位置模型：forward 胜者误裁 stale base（决策行真值胜者 = i_P），败者
+    i_P 无 noc 腿 fail-closed——修复轮三 g4 门 combo 四臂实测红形
+    （chain_smoke/combo_none session_2：败者 0（跟踪 17919115264 B））。
+
+    手算口径 coef=100 B/token（layers=1, hidden=50, bytes_per_elem=1），
+    session_0 三轮 + session_1 一轮（W3 pool-only 来源槽形态混插对照）：
+      r0 stay@3：驻留 f(100)=10000 @inst3；
+      r1 P=copy@0（C13 两块 history 3→0 各 5000）→ D=remote-read@2 无迁
+         移边界：stale base@3 释放、base 重录 (0, f(140)=14000)、exec@2
+         增量 10 token=1000；merge forward 一腿 2→0 → 胜者 0 终态
+         f(150)=15000；
+      r2 stay 续轮：增长至 f(170)=17000 @inst0（boundary_kind 若在 v2
+         结算残留，增长基误裁增量族 → "增长为负"红——清账守卫）；
+      s1_r0 remote-read@1 → D 边界无迁移@2（W3 pool-only 来源槽）→
+         forward 三位置（胜者=source=1）→ 终态 f(60)=6000 @inst1。
+    """
+
+    COEF = 100
+
+    @staticmethod
+    def _seq() -> "_SeqCounter":
+        return _SeqCounter()
+
+    @classmethod
+    def _records(cls, seq: "_SeqCounter") -> tuple[list[dict], list[dict]]:
+        rid0, rid1, rid2, ridx = ("s0_r0", "s0_r1", "s0_r2", "s1_r0")
+
+        def row(kind: str, request_id: str, tick: int,
+                decision: dict) -> dict:
+            return {"kind": kind, "request_id": request_id, "priority": 0,
+                    "seq": seq.nxt(), "tick": tick, "decision": decision}
+
+        def merge_leg(session_id: str, total_bytes: int) -> dict:
+            return {"kind": "noc_migrate",
+                    "reason": "merge_working_copy_to_home",
+                    "source_instance_index": 2, "total_bytes": total_bytes,
+                    "session_id": session_id, "layer_start": 0,
+                    "layer_end": 1, "phase": "completion", "shards": [],
+                    "resident_prefix_layers_before": 0,
+                    "resident_prefix_layers_after": 1}
+
+        records = [
+            # r0：驻留建立（stay@3）。
+            row("prefill", rid0, 100, {
+                "prefill_instance_index": 3, "joint_action": "stay",
+                "history_tokens_discarded": 0, "history_evictions": [],
+                "history_transfers": [], "history_transfer_bytes": 0,
+                "history_source_instance_index": None}),
+            # session_1：W3 pool-only 来源槽轮（混插对照——分叉按
+            # joint_action 逐行独立，非 copy 轮必须照走三位置）。
+            row("prefill", ridx, 105, {
+                "prefill_instance_index": 1, "joint_action": "remote-read",
+                "history_tokens_discarded": 0, "history_evictions": [],
+                "history_transfers": [], "history_transfer_bytes": 0,
+                "history_source_instance_index": None}),
+            row("decode", rid0, 110, {
+                "decode_instance_index": 3, "joint_action": "stay",
+                "decode_evictions": []}),
+            row("decode", ridx, 115, {
+                "decode_instance_index": 2, "joint_action": "remote-read",
+                "decode_evictions": [],
+                "prefill_decode_transfer": {
+                    "kind": "local_hit",
+                    "reason": "boundary_remote_no_migration",
+                    "source_instance_index": 2, "total_bytes": 0,
+                    "layer_start": 0, "layer_end": 1,
+                    "phase": "prefill_decode", "session_id": "session_1",
+                    "shards": [], "resident_prefix_layers_before": 1,
+                    "resident_prefix_layers_after": 1}}),
+            row("completion", rid0, 190, {
+                "joint_action": "stay", "merge_direction": "stay",
+                "joint_working_copy": False, "merge_transfers": [],
+                "home_flipped_to": None, "origin_home_instance": 3,
+                "kv_location_after_completion": "local_hbm",
+                "completion_evictions": []}),
+            row("completion", ridx, 195, {
+                "joint_action": "remote-read", "merge_direction": "forward",
+                "joint_working_copy": True, "merge_transferred_bytes": 1000,
+                "merge_transfers": [merge_leg("session_1", 1000)],
+                "home_flipped_to": None, "origin_home_instance": 1,
+                "kv_location_after_completion": "local_hbm",
+                "completion_evictions": []}),
+            # r1：R9 轮（P=copy 交接 + D 边界无迁移 + 两位置 forward）。
+            row("prefill", rid1, 200, {
+                "prefill_instance_index": 0, "joint_action": "copy",
+                "history_tokens_discarded": 0, "history_evictions": [],
+                "history_source_instance_index": 3,
+                "history_transfer_bytes": 10000,
+                "history_transfers": [
+                    {"kind": "noc_migrate",
+                     "reason": "history_prefix_working_copy",
+                     "source_instance_index": 3, "total_bytes": 5000,
+                     "layer_start": 0, "layer_end": 1},
+                    {"kind": "noc_migrate",
+                     "reason": "history_prefix_handoff_tail",
+                     "source_instance_index": 3, "total_bytes": 5000,
+                     "layer_start": 0, "layer_end": 1}]}),
+            row("decode", rid1, 210, {
+                "decode_instance_index": 2, "joint_action": "copy",
+                "joint_decode_action": "remote-read",
+                "decode_evictions": [],
+                "prefill_decode_transfer": {
+                    "kind": "local_hit",
+                    "reason": "boundary_remote_no_migration",
+                    "source_instance_index": 2, "total_bytes": 0,
+                    "layer_start": 0, "layer_end": 1,
+                    "phase": "prefill_decode", "session_id": "session_0",
+                    "shards": [], "resident_prefix_layers_before": 1,
+                    "resident_prefix_layers_after": 1}}),
+            row("completion", rid1, 290, {
+                "joint_action": "copy", "merge_direction": "forward",
+                "joint_working_copy": True, "merge_transferred_bytes": 1000,
+                "merge_transfers": [merge_leg("session_0", 1000)],
+                "home_flipped_to": None, "origin_home_instance": 0,
+                "kv_location_after_completion": "local_hbm",
+                "completion_evictions": []}),
+            # r2：stay 续轮（boundary_kind 清账守卫）。
+            row("prefill", rid2, 300, {
+                "prefill_instance_index": 0, "joint_action": "stay",
+                "history_tokens_discarded": 0, "history_evictions": [],
+                "history_transfers": [], "history_transfer_bytes": 0,
+                "history_source_instance_index": None}),
+            row("decode", rid2, 310, {
+                "decode_instance_index": 0, "joint_action": "stay",
+                "decode_evictions": []}),
+            row("completion", rid2, 390, {
+                "joint_action": "stay", "merge_direction": "stay",
+                "joint_working_copy": False, "merge_transfers": [],
+                "home_flipped_to": None, "origin_home_instance": 0,
+                "kv_location_after_completion": "local_hbm",
+                "completion_evictions": []}),
+        ]
+        tokens = [
+            token_row(rid0, "session_0", 0, 100, 100),
+            token_row(ridx, "session_1", 0, 50, 60),
+            token_row(rid1, "session_0", 100, 140, 150),
+            token_row(rid2, "session_0", 150, 160, 170),
+        ]
+        return records, tokens
+
+    def _run(self, tag: str) -> tuple[subprocess.CompletedProcess, dict]:
+        seq = self._seq()
+        records, tokens = self._records(seq)
+        run_dir = make_run_dir(tag)
+        write_fixture(run_dir, repo_variant="astra-sim-joint",
+                      records=records, token_requests=tokens,
+                      layers=1, hidden_size=50, bytes_per_elem=1,
+                      npu_bytes=1 << 40)
+        proc = run_tool(run_dir)
+        summary = json.loads((run_dir / "summary.json").read_text()) \
+            if (run_dir / "summary.json").exists() else {}
+        return proc, summary
+
+    def test_r9_base_rerecord_mixed_replay_closes(self):
+        """钉测①（先红后绿）：R9 轮混插重放闭合（exit 0、stderr 无
+        fail-closed），逐实例占用与手算一致——误建来源槽时三位置结算
+        撞"败者无 noc 腿"fail-closed（exit 2）的主证。"""
+        proc, summary = self._run("r9mix")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("fail-closed", proc.stderr)
+        instances = summary["instances"]
+        # 胜者 inst0：merge 终态 f(150)=15000 → r2 续轮增长至 f(170)。
+        self.assertEqual(instances["0"]["residual_occupancy_bytes"],
+                         170 * self.COEF)
+        self.assertEqual(instances["0"]["peak_occupancy_bytes"],
+                         170 * self.COEF)
+        # stale base inst3：R9 闭合点释放（journal home 侧镜像）→ 残差 0。
+        self.assertEqual(instances["3"]["residual_occupancy_bytes"], 0)
+        self.assertEqual(instances["3"]["peak_occupancy_bytes"],
+                         100 * self.COEF)
+        # exec inst2：merge 腿整份搬出 → 残差 0、峰 = 增量 1000。
+        self.assertEqual(instances["2"]["residual_occupancy_bytes"], 0)
+        self.assertEqual(instances["2"]["peak_occupancy_bytes"], 10 * self.COEF)
+        # W3 混插对照（session_1）不受扰：胜者=source=1 终态 f(60)。
+        self.assertEqual(instances["1"]["residual_occupancy_bytes"],
+                         60 * self.COEF)
+
+    def test_r9_form_dispatch_and_accounting(self):
+        """钉测②：形态分叉逐行独立——R9 轮走 base 重录＋journal home
+        侧释放科目（不建来源槽），W3 pool-only 轮照走来源槽＋三位置。"""
+        proc, summary = self._run("r9act")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        actions = summary["actions"]
+        self.assertEqual(actions.get("joint_boundary_base_rerecord"), 1)
+        self.assertEqual(actions.get("joint_copy_handoff_base_release"), 1)
+        self.assertEqual(actions.get("joint_copy_handoff_base_release_bytes"),
+                         100 * self.COEF)
+        self.assertEqual(actions.get("joint_boundary_source_stash"), 1)
+        self.assertEqual(actions.get("joint_merge_three_position"), 1)
+
+
+class _SeqCounter:
+    """局部 seq 计数器（不触碰模块级 *_record.next_seq 共享状态）。"""
+
+    def __init__(self) -> None:
+        self.value = 100
+
+    def nxt(self) -> int:
+        self.value += 1
+        return self.value

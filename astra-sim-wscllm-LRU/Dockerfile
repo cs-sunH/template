@@ -14,26 +14,38 @@ LABEL maintainer="Jinsun Yoo <jinsun@gatech.edu>"
 ### ================== System Setups ======================
 ## Install System Dependencies
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt -y update
+# clang-format-18 via the llvm.org apt source (S2-2/G-confirm 2026-09-28):
+# the shared .clang-format uses InsertNewlineAtEOF (needs >=16) and
+# InsertBraces (needs >=15); ubuntu:22.04's stock clang-format (14) rejects
+# the config outright, breaking the documented formatting toolchain.
+RUN apt -y update && apt -y install wget gnupg lsb-release ca-certificates
+RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+      | gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" \
+      > /etc/apt/sources.list.d/llvm.list \
+    && apt -y update
 RUN apt -y install \
     coreutils wget vim git \
-    gcc g++ clang-format \
+    gcc g++ clang-format-18 \
     make cmake \
-    libboost-dev libboost-program-options-dev \
-    openmpi-bin openmpi-doc libopenmpi-dev \
-    python3.11 python3-pip python3-venv \
-    graphviz
+    python3.11 python3.11-venv
 
-## Create Python venv: Required for Python 3.11
-RUN python3 -m venv /opt/venv/astra-sim
+## Create Python venv: pinned to python3.11 (the unversioned python3 on
+## ubuntu:22.04 is 3.10 and would silently diverge from the documented
+## toolchain)
+RUN python3.11 -m venv /opt/venv/astra-sim
 ENV PATH="/opt/venv/astra-sim/bin:$PATH"
 RUN pip3 install --upgrade pip
 
 ## Add astra-sim to PYTHONPATH
 ENV PYTHONPATH="/app/astra-sim"
-
-# STG dependencies
-RUN pip3 install numpy sympy graphviz pandas
+# (2026-09-28 cleanup, G-confirm S4-1) STG deps numpy/sympy/graphviz/pandas
+# removed: zero importers/callers across this repository (apt graphviz
+# likewise). PYTHONPATH itself is carried over from the upstream image for
+# layout compatibility: no in-repo Python depends on it (all Python lives
+# under sh_test_mesh/ and manages sys.path relative to its own files).
+# pytest is installed below because the README's unified Python test entry
+# (run_python_unit_tests.sh / python3 -m pytest) must be runnable in-container.
 ### ======================================================
 
 
@@ -80,8 +92,10 @@ RUN cmake --build . --target install --config Release --parallel $(nproc)
 ENV PATH="/opt/protobuf-${PROTOBUF_VER}/install/bin:$PATH"
 ENV protobuf_DIR="/opt/protobuf-${PROTOBUF_VER}/install"
 
-# Also, install Python protobuf package
-RUN pip3 install protobuf==5.${PROTOBUF_VER}
+# Also, install Python protobuf package, plus pytest: the README's unified
+# Python regression entry (run_python_unit_tests.sh, i.e. per-root
+# python3 -m pytest) runs inside this venv and fails bare without it.
+RUN pip3 install protobuf==5.${PROTOBUF_VER} pytest
 
 # Set the environment variable
 ENV PROTOBUF_FROM_SOURCE=True

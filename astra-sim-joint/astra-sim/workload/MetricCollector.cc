@@ -20,6 +20,7 @@ LICENSE file in the root directory of this source tree.
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <unordered_set>
 #include <unistd.h>
 
 using namespace AstraSim;
@@ -34,6 +35,46 @@ constexpr double kUtilEpsilon = 1e-6;
 [[noreturn]] void fatal_metrics_error(const std::string& message) {
     std::cerr << "[METRIC][ERROR] " << message << std::endl;
     exit(EXIT_FAILURE);
+}
+
+// Strict JSON load for the metrics manifest (same as the wscllm
+// collector): istream operator>> parses in NON-strict mode -- it silently
+// consumes the FIRST JSON value and leaves trailing bytes unread, and the
+// DOM build last-wins on duplicate object keys. The manifest is
+// machine-written by paired tools, so trailing content or a duplicate key
+// is producer corruption, not a legal shape. json::parse in its default
+// strict mode rejects trailing bytes outright; the stateful parse callback
+// rejects a repeated key inside one object.
+nlohmann::json strict_json_load(std::istream& in, const std::string& what) {
+    struct KeyGuard {
+        std::vector<std::set<std::string>> stack;
+        std::string duplicate;
+        bool operator()(int, nlohmann::json::parse_event_t event,
+                        nlohmann::json& parsed) {
+            using EVT = nlohmann::json::parse_event_t;
+            if (event == EVT::object_start) {
+                stack.emplace_back();
+            } else if (event == EVT::key) {
+                if (!stack.back().insert(parsed.get<std::string>()).second) {
+                    duplicate = parsed.get<std::string>();
+                }
+            } else if (event == EVT::object_end && !stack.empty()) {
+                stack.pop_back();
+            }
+            return true;  // observe only; never discard subtree
+        }
+    } guard;
+    nlohmann::json value;
+    try {
+        value = nlohmann::json::parse(in, guard);
+    } catch (const nlohmann::json::exception& e) {
+        fatal_metrics_error("invalid JSON in " + what + ": " + e.what());
+    }
+    if (!guard.duplicate.empty()) {
+        fatal_metrics_error("duplicate JSON key \"" + guard.duplicate +
+                            "\" in " + what);
+    }
+    return value;
 }
 
 [[noreturn]] void fatal_metric_write(const int error_number) noexcept {
@@ -359,14 +400,53 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
     if (!manifest_file.is_open()) {
         fatal_metrics_error("cannot open metrics manifest: " + manifest_path);
     }
-    json manifest;
-    try {
-        manifest_file >> manifest;
-    } catch (const std::exception& e) {
-        fatal_metrics_error("failed to parse metrics manifest " +
-                            manifest_path + ": " + e.what());
+    json manifest = strict_json_load(manifest_file, "metrics manifest " +
+                                                          manifest_path);
+
+    // Nesting-depth gate (same as the wscllm collector): the
+    // json::value(key, default) reads below copy the stored value through
+    // nlohmann's RECURSIVE copy constructor, so a hostile manifest with
+    // ~1100 nested containers overflows the stack inside an uncancellable
+    // copy (no exception reaches the catch, no [METRIC][ERROR] record,
+    // silent stderr death). Walk the parsed document ITERATIVELY (explicit
+    // stack -- this walk itself must not recurse) and fail-closed past a
+    // bound far above any legitimate manifest.
+    {
+        constexpr size_t kMaxManifestDepth = 64;
+        std::vector<std::pair<const json*, size_t>> pending;
+        pending.emplace_back(&manifest, 0);
+        while (!pending.empty()) {
+            const json* node = pending.back().first;
+            const size_t depth = pending.back().second;
+            pending.pop_back();
+            if (node->is_array() || node->is_object()) {
+                if (depth >= kMaxManifestDepth) {
+                    fatal_metrics_error(
+                        "metrics manifest nesting depth exceeds " +
+                        std::to_string(kMaxManifestDepth) + " (" +
+                        manifest_path + ")");
+                }
+                for (auto it = node->begin(); it != node->end(); ++it) {
+                    pending.emplace_back(&it.value(), depth + 1);
+                }
+            }
+        }
     }
 
+    // Top-level type guard BEFORE any value() read (same as the wscllm
+    // collector): a top level that is not a JSON object (e.g. a bare
+    // array) would throw a nlohmann type_error that no caller of
+    // load_manifest catches (std::terminate), bypassing this file's own
+    // fail-closed channel (fatal_metrics_error).
+    if (!manifest.is_object()) {
+        fatal_metrics_error(
+            "metrics manifest top level must be a JSON object");
+    }
+    if (manifest.contains("schema_version") &&
+        !manifest["schema_version"].is_number_integer()) {
+        fatal_metrics_error(
+            "metrics manifest schema_version must be an integer");
+    }
     this->schema_version_ = manifest.value("schema_version", 0);
     if (this->schema_version_ != 1) {
         // Doc sec.12.1: unsupported schema versions must be rejected.
@@ -374,10 +454,21 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             "unsupported metrics manifest schema_version: " +
             std::to_string(this->schema_version_) + " (expected 1)");
     }
+    if (manifest.contains("repo_variant") &&
+        !manifest["repo_variant"].is_string()) {
+        fatal_metrics_error("metrics manifest repo_variant must be a string");
+    }
     this->repo_variant_ = manifest.value("repo_variant", "unknown");
+    if (manifest.contains("run_mode") && !manifest["run_mode"].is_string()) {
+        fatal_metrics_error("metrics manifest run_mode must be a string");
+    }
     this->run_mode_ = manifest.value("run_mode", "service");
+    if (manifest.contains("run_id") && !manifest["run_id"].is_string()) {
+        fatal_metrics_error("metrics manifest run_id must be a string");
+    }
     this->run_id_ = manifest.value("run_id", "");
-    if (manifest.contains("npus_count") && manifest["npus_count"].is_number()) {
+    if (manifest.contains("npus_count") &&
+        manifest["npus_count"].is_number_integer()) {
         this->manifest_npus_count_ =
             manifest["npus_count"].get<int64_t>();
     }
@@ -409,7 +500,10 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
         manifest["slo_sampling"].is_object()) {
         const json& slo = manifest["slo_sampling"];
         const auto read_ns = [&slo](const char* key) -> std::optional<uint64_t> {
-            if (!slo.contains(key) || !slo[key].is_number()) {
+            // Integer-only (same full-width discipline as the rank elements
+            // and node events): a float 5000000.9 would silently truncate
+            // in get<int64_t> under a wide is_number() gate.
+            if (!slo.contains(key) || !slo[key].is_number_integer()) {
                 return std::nullopt;
             }
             const int64_t value = slo[key].get<int64_t>();
@@ -436,8 +530,14 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
         this->slo_sampling_provisional_ = true;
     }
 
-    // Requests (doc sec.4.2). queue_index must be unique (doc sec.4.5).
+    // Requests (doc sec.4.2). queue_index must be unique (doc sec.4.5)
+    // and request_id must be unique too (M-14 镜像): the online
+    // registration path keys rank/anchor lookups by request_id (last-wins
+    // on re-registration), so two manifest entries sharing a request_id
+    // would silently hang the online anchors and watch rank sets on
+    // whichever entry registered last.
     const json requests = manifest.value("requests", json::array());
+    std::unordered_set<std::string> seen_request_ids;
     for (const auto& entry : requests) {
         RequestMetricState state;
         try {
@@ -448,10 +548,44 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             state.turn_index = entry.value("turn_index", 0);
             state.prefill_instance = entry.value("prefill_instance", -1);
             state.decode_instance = entry.value("decode_instance", -1);
-            for (const auto& rank : entry.at("prefill_ranks")) {
+            // Type-guard the rank sets BEFORE iterating(M-13 镜像,姊妹
+            // 仓同款 fail-closed):nlohmann iterates a JSON scalar as a
+            // single-element sequence, so a scalar prefill_ranks/
+            // decode_ranks would silently become the one-element set --
+            // the request could then never satisfy its expected-rank
+            // completion checks and would be reported incomplete with
+            // zero diagnostics. Elements must be integers too (a float
+            // like 3.5 would silently truncate in get<int>).
+            if (!entry.contains("prefill_ranks") ||
+                !entry["prefill_ranks"].is_array()) {
+                fatal_metrics_error(
+                    "metrics manifest request prefill_ranks must be an "
+                    "array (queue_index " +
+                    std::to_string(state.queue_index) + ")");
+            }
+            if (!entry.contains("decode_ranks") ||
+                !entry["decode_ranks"].is_array()) {
+                fatal_metrics_error(
+                    "metrics manifest request decode_ranks must be an "
+                    "array (queue_index " +
+                    std::to_string(state.queue_index) + ")");
+            }
+            for (const auto& rank : entry["prefill_ranks"]) {
+                if (!rank.is_number_integer()) {
+                    fatal_metrics_error(
+                        "metrics manifest request prefill_ranks elements "
+                        "must be integers (queue_index " +
+                        std::to_string(state.queue_index) + ")");
+                }
                 state.prefill_ranks.insert(rank.get<int>());
             }
-            for (const auto& rank : entry.at("decode_ranks")) {
+            for (const auto& rank : entry["decode_ranks"]) {
+                if (!rank.is_number_integer()) {
+                    fatal_metrics_error(
+                        "metrics manifest request decode_ranks elements "
+                        "must be integers (queue_index " +
+                        std::to_string(state.queue_index) + ")");
+                }
                 state.decode_ranks.insert(rank.get<int>());
             }
             const auto& arrival = entry.at("arrival");
@@ -474,7 +608,7 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             // it, in which case finalize skips the invariant and notes
             // manifest_decode_length_missing.
             if (entry.contains("decode_length") &&
-                entry["decode_length"].is_number()) {
+                entry["decode_length"].is_number_integer()) {
                 state.decode_length =
                     entry["decode_length"].get<int64_t>();
             }
@@ -486,7 +620,21 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             fatal_metrics_error("duplicate queue_index in manifest: " +
                                 std::to_string(state.queue_index));
         }
+        // M-14 镜像(F1-CPP C1-8 同款,2026-09-30):request_id 撞号时别名
+        // last-wins,锚点/watch 全部错绑且无诊断。与 queue_index 同一道
+        // fail-closed 门。
+        if (!seen_request_ids.insert(state.request_id).second) {
+            fatal_metrics_error("duplicate request_id in manifest: " +
+                                state.request_id);
+        }
         this->request_index_by_queue_index_[state.queue_index] =
+            this->requests_.size();
+        // (2026-10-01 audit) The id map must be populated HERE too: the
+        // online_register_request cross-source guard consults it to reject
+        // a dynamic request whose id is already bound by the MANIFEST --
+        // without this fill, the manifest side of that guard was blind and
+        // a colliding dynamic registration silently re-bound the id.
+        this->request_index_by_request_id_[state.request_id] =
             this->requests_.size();
         this->requests_.push_back(std::move(state));
     }
@@ -508,6 +656,17 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                     "node event must be a [node_id, event_code, subject_id] "
                     "triple");
             }
+            // (2026-10-01 audit) Every triple field is type/domain-checked
+            // BEFORE the typed get<>: a bare get on a string or float field
+            // throws a nlohmann type_error OUTSIDE this file's
+            // fatal_metrics_error channel (std::terminate, no [METRIC]
+            // [ERROR] line and a non-conventional exit), and a negative
+            // integer would wrap through get<uint64_t> silently.
+            if (!triple[0].is_number_unsigned()) {
+                fatal_metrics_error("node event node_id must be a "
+                                    "non-negative integer: " +
+                                    triple[0].dump());
+            }
             const uint64_t node_id = triple[0].get<uint64_t>();
             // Validate the event code on the wide JSON number BEFORE the
             // uint8_t narrowing: a 256-offset code (e.g. 264 -> 8) would
@@ -524,6 +683,10 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             }
             const uint8_t event_code =
                 static_cast<uint8_t>(event_code_wide);
+            if (!triple[2].is_number_integer()) {
+                fatal_metrics_error("node event subject_id must be an "
+                                    "integer: " + triple[2].dump());
+            }
             const int64_t subject_id = triple[2].get<int64_t>();
             NodeMetricEvent event{event_code, subject_id};
             const bool is_issue_edge =
@@ -573,6 +736,34 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
     // annotations at finalize.
     const json peaks = manifest.value("planner_memory_peaks", json::array());
     for (const auto& entry : peaks) {
+        // (2026-10-01 audit) Validate the fields the replay actually reads
+        // (rank; ledger.capacity_bytes when a ledger object is present) at
+        // load time: a later entry.value("rank", -1) on a mistyped field
+        // throws a nlohmann type_error during finalize -- AFTER the event
+        // loop, outside the fatal_metrics_error channel (bare terminate,
+        // no [METRIC][ERROR] line). Same discipline as the requests loop.
+        if (!entry.is_object() ||
+            (entry.contains("rank") &&
+             !(entry["rank"].is_number_integer() &&
+               entry["rank"].get<int64_t>() >= -1))) {
+            fatal_metrics_error(
+                std::string("malformed planner_memory_peaks entry in ") +
+                manifest_path + ": rank must be an integer (got " +
+                (entry.is_object() && entry.contains("rank")
+                     ? entry["rank"].dump()
+                     : entry.dump()) +
+                ")");
+        }
+        if (entry.contains("ledger")) {
+            if (!entry["ledger"].is_object() ||
+                (entry["ledger"].contains("capacity_bytes") &&
+                 !entry["ledger"]["capacity_bytes"].is_number_integer())) {
+                fatal_metrics_error(
+                    std::string("malformed planner_memory_peaks entry in ") +
+                    manifest_path +
+                    ": ledger.capacity_bytes must be an integer");
+            }
+        }
         this->planner_memory_peaks_.push_back(entry);
     }
 
@@ -783,6 +974,23 @@ void MetricCollector::online_register_request(
         state.arrival.value_ns = arrival_value_ns;
         state.arrival.parent_queue_index = arrival_parent_queue_index;
         state.arrival.interval_ns = arrival_interval_ns;
+        // M-14 镜像(F1-CPP C1-4 同款,2026-09-30):全新 queue_index 的
+        // request_id 已被绑定到其它 queue_index(manifest 或更早的动态
+        // 注册)即跨源身份冲突——无条件 insert 会把
+        // request_index_by_request_id_ last-wins 重绑,该 id 的全部节点
+        // /rank 锚点静默漂移到错误主体。与 load_manifest 的 request_id
+        // 查重同一 fail-closed 契约与通道。
+        const auto id_binding =
+            this->request_index_by_request_id_.find(request_id);
+        if (id_binding != this->request_index_by_request_id_.end()) {
+            fatal_metrics_error(
+                "duplicate request_id across sources: '" + request_id +
+                "' is already bound to queue_index " +
+                std::to_string(
+                    this->requests_[id_binding->second].queue_index) +
+                "; refusing to rebind it to queue_index " +
+                std::to_string(queue_index));
+        }
         this->request_index_by_queue_index_[queue_index] = this->requests_.size();
         this->request_index_by_request_id_[request_id] = this->requests_.size();
         this->requests_.push_back(std::move(state));
@@ -792,7 +1000,27 @@ void MetricCollector::online_register_request(
     // the arrival/session fields; overwrite them (the manifest values are
     // planner-side, the CSV row is the actual online input).
     RequestMetricState& state = this->requests_[existing->second];
-    state.request_id = request_id;
+    if (state.request_id != request_id) {
+        // (2026-10-01 audit) The id is part of the row's identity: swapping
+        // it must neither leave the OLD id pointing at this row nor steal
+        // an id already owned by a different queue_index (the same M-14
+        // cross-source contract as the fresh-registration branch above;
+        // a bare overwrite used to leave a dangling old-id binding).
+        const auto id_binding =
+            this->request_index_by_request_id_.find(request_id);
+        if (id_binding != this->request_index_by_request_id_.end() &&
+            id_binding->second != existing->second) {
+            fatal_metrics_error(
+                "duplicate request_id across sources: '" + request_id +
+                "' is already bound to queue_index " +
+                std::to_string(
+                    this->requests_[id_binding->second].queue_index) +
+                "; refusing to rebind it to queue_index " +
+                std::to_string(queue_index));
+        }
+        this->request_index_by_request_id_.erase(state.request_id);
+        state.request_id = request_id;
+    }
     state.session_id = session_id;
     state.turn_index = turn_index;
     state.arrival.kind = absolute_arrival ? ArrivalSpec::Kind::ABSOLUTE
@@ -1021,6 +1249,11 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         return;
     }
     const bool full_detail = (this->detail_level_ == "full");
+    // L1 (face-LRU audit, 2026-09-29): iteration records whose end anchor
+    // precedes their start anchor are clamped to 0 instead of emitting a
+    // uint64-wrapped ~1.8e19 pseudo-duration; counted here, disclosed in
+    // the consistency record, never fatal.
+    uint64_t iteration_time_underflow_clamped = 0;
 
     // Drain any logger output still sitting in the stdout FILE buffer so the
     // metric records appear after it, in one contiguous block.
@@ -1143,11 +1376,14 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             const auto windowed =
                 stats->calculate_roofline_utilization_in_window(0,
                                                                 sim_end_tick);
-            // Guard the weighted-average division (same >0 protection style
-            // as the benchmark-point branch below): total_comp_time == 0
-            // would emit 0/0 = NaN, which JSON-serializes as null without
-            // any note.
-            if (windowed.total_comp_time > 0) {
+            // M-17 镜像(wscllm-LRU 批次C 同款,2026-09-30):退化窗口判定
+            // 改用真实"无计算窗口"信号。WindowedRooflineUtilization 的
+            // total_comp_time 以 1ns 种子保底(Statistics.hh),且每个被
+            // 裁剪进窗口的计算段至少贡献 1ns——total_comp_time == 1 恰是
+            // "窗口内无任何计算段"的真实信号;旧判定 `> 0` 恒真,退化
+            // null+note 分支是死代码,无计算窗口的 rank 输出 0.0 利用率
+            // 而非 null,下游范围比较对 0.0 静默通过。
+            if (windowed.total_comp_time > 1) {
                 record["active_kernel_roofline_compute_util"] =
                     windowed.compute_utilization_weighted_sum /
                     static_cast<double>(windowed.total_comp_time);
@@ -1165,6 +1401,71 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             record["active_kernel_roofline_memory_util"] = nullptr;
             record["active_kernel_roofline_note"] =
                 "unavailable: roofline model disabled";
+        }
+
+        // Die-backend active-kernel utilization (joint rollout stage 1,
+        // contract §7.6 caliber): the same duration-weighted window
+        // aggregation as the roofline pair above, populated by
+        // DieExecution::fill_utilizations -- compute = PE FLOP /
+        // (PE_peak_die * node elapsed), memory = actual bytes / (B_mem *
+        // node elapsed), vector = eq-ops / (V_peak * node elapsed).  Gated
+        // on the die backend itself (the roofline keys above keep their own
+        // legacy gate untouched), so a legacy run reports them null with a
+        // note instead.  The degenerate-window判定 mirrors the M-17 note
+        // above (total_comp_time is 1ns-seeded; == 1 is the real "no comp
+        // window" signal).
+        record["active_kernel_die_source"] = "simulator";
+        record["active_kernel_die_definition"] =
+            "duration-weighted average of die per-node utilization over comp "
+            "nodes clipped to the utilization window (contract §7.6: "
+            "compute=PE FLOP/(PE_peak_die*elapsed), memory=actual bytes/"
+            "(B_mem*elapsed), vector=eq-ops/(V_peak*elapsed))";
+        if (sys->compute_cost_model == ComputeCostModel::Die &&
+            sim_end_tick > 0) {
+            const auto windowed =
+                stats->calculate_roofline_utilization_in_window(0,
+                                                                sim_end_tick);
+            if (windowed.total_comp_time > 1) {
+                const double die_compute =
+                    windowed.compute_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                const double die_memory =
+                    windowed.memory_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                const double die_vector =
+                    windowed.vector_utilization_weighted_sum /
+                    static_cast<double>(windowed.total_comp_time);
+                record["active_kernel_die_compute_util"] = die_compute;
+                record["active_kernel_die_memory_util"] = die_memory;
+                record["active_kernel_die_vector_util"] = die_vector;
+                check_consistency(
+                    die_compute >= -kUtilEpsilon &&
+                        die_compute <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_compute_util out of range");
+                check_consistency(
+                    die_memory >= -kUtilEpsilon &&
+                        die_memory <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_memory_util out of range");
+                check_consistency(
+                    die_vector >= -kUtilEpsilon &&
+                        die_vector <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " active_kernel_die_vector_util out of range");
+            } else {
+                record["active_kernel_die_compute_util"] = nullptr;
+                record["active_kernel_die_memory_util"] = nullptr;
+                record["active_kernel_die_vector_util"] = nullptr;
+                record["active_kernel_die_note"] =
+                    "unavailable: zero comp time in utilization window";
+            }
+        } else {
+            record["active_kernel_die_compute_util"] = nullptr;
+            record["active_kernel_die_memory_util"] = nullptr;
+            record["active_kernel_die_vector_util"] = nullptr;
+            record["active_kernel_die_note"] =
+                "unavailable: compute-cost-model is not die";
         }
         emit_record(record.dump());
 
@@ -1233,6 +1534,15 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             hbm_record["comm_write_bytes_served"] = comm_write_bytes_served;
             hbm_record["pool_read_bytes_served"] = pool_read_bytes_served;
             hbm_record["pool_write_bytes_served"] = pool_write_bytes_served;
+            // Die backend side-band (joint rollout stage 1, contract §7.4):
+            // the DIE_COMPUTE legs drain SERVICE UNITS (actual bytes/eta);
+            // the actual-byte advance is service*eta. Both stay separate
+            // from every bytes_served column above and from any tensor_size
+            // / D2D payload (never fed back into a byte-based consumer).
+            hbm_record["die_service_units_served"] =
+                hbm_model->die_service_units_served();
+            hbm_record["die_actual_bytes_served"] =
+                hbm_model->die_actual_bytes_served();
             hbm_record["peak_concurrent_jobs"] =
                 hbm_model->peak_concurrent_jobs();
             hbm_record["peak_concurrent_jobs_definition"] =
@@ -1304,8 +1614,21 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     });
 
     std::vector<Tick> completed_e2e;
+    // M15 (face-LRU audit, 2026-09-29): the summary e2e population is ALL
+    // completed requests; the old ordering-ok-only caliber and the
+    // ordering-violation count stay traceable via these and the
+    // completed_e2e_ordering_ok_* summary fields below.
+    std::vector<Tick> completed_e2e_ordering_ok;
+    uint64_t completed_ordering_violations = 0;
     uint64_t completed_unique_requests = 0;
     std::optional<Tick> first_arrival;
+    // L16 (face-LRU audit, 2026-09-29): the drain window brackets the SAME
+    // population as the drain_tput numerator -- completed requests only.
+    // first_arrival above stays the all-request first arrival; a truncated
+    // run whose earliest arrivals never completed used to inflate the
+    // window (last_completion - stuck arrival) and silently deflate
+    // drain_tput. Full-completion runs are unchanged: the two coincide.
+    std::optional<Tick> first_completed_arrival;
     std::optional<Tick> last_completion;
 
     for (const size_t index : request_order) {
@@ -1465,7 +1788,7 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
                 record["prefill_decode_gap_ns"] = decode_start - prefill_end;
                 record["decode_ns"] = completion - decode_start;
                 record["e2e_ns"] = completion - arrival;
-                completed_e2e.push_back(completion - arrival);
+                completed_e2e_ordering_ok.push_back(completion - arrival);
             } else {
                 // Withhold derived fields instead of emitting underflowed
                 // unsigned arithmetic; the violation is reported above.
@@ -1477,9 +1800,29 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
                 record["stage_breakdown_note"] =
                     "withheld: stage ordering violation (see consistency "
                     "record)";
+                completed_ordering_violations++;
             }
+            // M15 (face-LRU audit, 2026-09-29): the summary population is
+            // ALL completed requests. An ordering violation is still a real
+            // completion; excluding it silently biased mean/p50/p95/p99 --
+            // and, through normalized_metrics.csv's mean_e2e denominator,
+            // every normalized figure -- toward the ordering-ok strict
+            // subset. The ordering-ok caliber stays traceable via
+            // completed_e2e_ordering_ok_mean_ns/p99_ns below. Underflow
+            // guard: completion < arrival requires an ordering violation
+            // (already reported above); clamp that pathological sample to 0
+            // instead of wrapping into a ~1.8e19 pseudo-duration.
+            completed_e2e.push_back(completion >= arrival
+                                        ? completion - arrival
+                                        : 0);
 
             completed_unique_requests++;
+            // L16 (face-LRU audit, 2026-09-29): drain-window start tracks
+            // the completed population (see the declaration above).
+            if (!first_completed_arrival.has_value() ||
+                arrival < first_completed_arrival.value()) {
+                first_completed_arrival = arrival;
+            }
             if (!last_completion.has_value() ||
                 completion > last_completion.value()) {
                 last_completion = completion;
@@ -1525,8 +1868,20 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             record["iteration_end_ns"] = tick_or_null(state.iteration_end);
             if (state.iteration_start.has_value() &&
                 state.iteration_end.has_value()) {
-                record["iteration_time_ns"] =
-                    state.iteration_end.value() - state.iteration_start.value();
+                // L1 (face-LRU audit, 2026-09-29): clamp an end<start window
+                // (rank-skewed start/end anchors) to 0 instead of emitting a
+                // uint64-wrapped ~1.8e19 pseudo-duration; counted in the
+                // consistency record (iteration_time_underflow_clamped) and
+                // warned on stderr, never fatal.
+                if (state.iteration_end.value() >=
+                    state.iteration_start.value()) {
+                    record["iteration_time_ns"] =
+                        state.iteration_end.value() -
+                        state.iteration_start.value();
+                } else {
+                    record["iteration_time_ns"] = 0;
+                    iteration_time_underflow_clamped++;
+                }
             } else {
                 record["iteration_time_ns"] = nullptr;
             }
@@ -1751,7 +2106,13 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     summary["completed_unique_requests"] = completed_unique_requests;
     summary["incomplete_requests"] =
         input_requests - completed_unique_requests;
+    // M15 (face-LRU audit, 2026-09-29): the e2e mean/percentiles below come
+    // from ALL completed requests (ordering violators included); these
+    // disclosure fields keep the old ordering-ok caliber traceable.
+    summary["completed_ordering_violations"] = completed_ordering_violations;
     summary["first_arrival_ns"] = tick_or_null(first_arrival);
+    summary["first_completed_arrival_ns"] =
+        tick_or_null(first_completed_arrival);
     summary["last_completion_ns"] = tick_or_null(last_completion);
     summary["sim_end_ns"] = sim_end_tick;
     summary["percentile_method"] = "nearest_rank";
@@ -1777,19 +2138,44 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         summary["p95_e2e_ns"] = nullptr;
         summary["p99_e2e_ns"] = nullptr;
     }
+    // M15 (face-LRU audit, 2026-09-29): old-caliber (ordering-ok subset)
+    // mean and p99, retained for traceability against the all-completed
+    // population figures above.
+    std::sort(completed_e2e_ordering_ok.begin(),
+              completed_e2e_ordering_ok.end());
+    if (!completed_e2e_ordering_ok.empty()) {
+        long double ordering_ok_sum = 0;
+        for (const Tick value : completed_e2e_ordering_ok) {
+            ordering_ok_sum += static_cast<long double>(value);
+        }
+        summary["completed_e2e_ordering_ok_mean_ns"] = static_cast<double>(
+            ordering_ok_sum / completed_e2e_ordering_ok.size());
+        summary["completed_e2e_ordering_ok_p99_ns"] =
+            nearest_rank_percentile(completed_e2e_ordering_ok, 0.99);
+    } else {
+        summary["completed_e2e_ordering_ok_mean_ns"] = nullptr;
+        summary["completed_e2e_ordering_ok_p99_ns"] = nullptr;
+    }
 
     // drain_tput_rps (doc sec.3.4): numerator is the number of unique
     // requests with an actual completion, never the input request count.
+    // L16 (face-LRU audit, 2026-09-29): the window brackets the same
+    // completed population -- first COMPLETED arrival to last completion.
+    // The old all-request first arrival let arrivals that never completed
+    // (truncated / stuck-prefix runs) inflate the denominator and silently
+    // deflate drain_tput; full-completion runs are unchanged (the two
+    // arrivals coincide). first_arrival_ns above stays the all-request
+    // first arrival for its own consumers.
     summary["drain_tput_numerator"] = completed_unique_requests;
     summary["drain_tput_window"] =
-        "last_completion_ns - first_arrival_ns";
+        "last_completion_ns - first_completed_arrival_ns";
     summary["sim_window_tput_numerator"] = completed_unique_requests;
     summary["sim_window_tput_window"] = "[0, sim_end_ns]";
-    if (completed_unique_requests > 0 && first_arrival.has_value() &&
+    if (completed_unique_requests > 0 && first_completed_arrival.has_value() &&
         last_completion.has_value() &&
-        last_completion.value() > first_arrival.value()) {
+        last_completion.value() > first_completed_arrival.value()) {
         const Tick denominator =
-            last_completion.value() - first_arrival.value();
+            last_completion.value() - first_completed_arrival.value();
         summary["drain_tput_denominator_ns"] = denominator;
         summary["drain_tput_rps"] =
             static_cast<double>(completed_unique_requests) * 1e9 /
@@ -1849,6 +2235,10 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     consistency["memory_actions_unresolved"] = memory_totals.actions_unresolved;
     consistency["memory_actions_unresolved_by_reason"] =
         memory_totals.unresolved_by_reason;
+    // L1 (face-LRU audit, 2026-09-29): iteration records whose
+    // end<start window was clamped to 0 (see the iteration pass).
+    consistency["iteration_time_underflow_clamped"] =
+        iteration_time_underflow_clamped;
     emit_record(consistency.dump());
 
     for (const auto& violation : this->consistency_violations_) {
@@ -1858,6 +2248,12 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     if (this->dropped_events_ > 0) {
         std::cerr << "[METRIC][ERROR] " << this->dropped_events_
                   << " node events referenced unknown subjects" << std::endl;
+    }
+    if (iteration_time_underflow_clamped > 0) {
+        std::cerr << "[METRIC][WARN] " << iteration_time_underflow_clamped
+                  << " iteration records had iteration_end < iteration_start; "
+                     "iteration_time_ns clamped to 0"
+                  << std::endl;
     }
     // C5 (2026-08-28): all finalize-time records are buffered -- drain the
     // channel so the [METRIC] block is complete before main_online's
@@ -2097,13 +2493,37 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         __int128 resident_area = 0;
         __int128 committed_area = 0;
         Tick previous = 0;
+        // M-21 镜像(wscllm-LRU 批次C 同款,2026-09-30):分量下溢
+        // fail-closed。manager 各发射点有逐 rank 下溢守卫,重放中任一分量
+        // 出现负值只能是上游账本损坏绕过了守卫——与 Python 侧
+        // hbm_watermark 重放的"负分量 = 账本损坏 fail-closed"同口径,
+        // 不得把损坏账本积分成"合法"的容量时间均值。
+        const auto fail_negative_component =
+            [&rank](const __int128 w, const __int128 r, const __int128 rv,
+                    const int64_t sequence_index) {
+                if (w < 0 || r < 0 || rv < 0) {
+                    fatal_metrics_error(
+                        "negative ledger component in memory replay (rank " +
+                        std::to_string(rank) + " sequence_index " +
+                        std::to_string(sequence_index) +
+                        "): weight=" + i128_to_string(w) +
+                        " resident=" + i128_to_string(r) +
+                        " reserved=" + i128_to_string(rv) +
+                        " -- ledger corruption; the journal replay "
+                        "fail-closes on the same stream");
+                }
+            };
         for (const auto& delta : deltas) {
             const Tick elapsed = delta.tick - previous;
+            // 应用前分段积分:上一次分量检查已保证各分量非负,聚合值必然
+            // 非负。
             resident_area += (weight + resident) * elapsed;
             committed_area += (weight + resident + reserved) * elapsed;
             weight += delta.weight_delta;
             resident += delta.resident_delta;
             reserved += delta.reserved_delta;
+            fail_negative_component(weight, resident, reserved,
+                                    delta.sequence_index);
             previous = delta.tick;
         }
         const Tick tail = sim_end_tick - previous;
@@ -2136,6 +2556,12 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
                     wm_weight += deltas[next_delta].weight_delta;
                     wm_resident += deltas[next_delta].resident_delta;
                     wm_reserved += deltas[next_delta].reserved_delta;
+                    // 与直接积分同一分量下溢 fail-closed 门(M-21 镜像):
+                    // 两条走法对同一账本流必须同口径。
+                    fail_negative_component(wm_weight, wm_resident,
+                                            wm_reserved,
+                                            deltas[next_delta]
+                                                .sequence_index);
                     // A delta applying inside this bucket is occupancy
                     // activity even when the resulting value stays zero
                     // (e.g. a full release).
@@ -2304,6 +2730,69 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
             record["final_state_check_note"] =
                 "skipped: unresolved anchors or missing planner peaks entry";
         }
+        emit_record(record.dump());
+    }
+
+    // L16 (face-LRU audit, 2026-09-29): a simulated rank whose ledger
+    // actions ALL failed anchor resolution -- or that has no actions at all
+    // -- never enters deltas_by_rank, so the loop above emitted no
+    // capacity_timeavg row for it and raw_metrics.csv silently lost the
+    // rank (the downstream evaluates rows, not the simulated rank
+    // universe). Emit an explicit all-zero replay row with the same column
+    // schema; the action counters keep the unresolved disclosure.
+    for (const int rank : fallback_ranks) {
+        if (deltas_by_rank.count(rank) > 0) {
+            continue;
+        }
+        const auto peak_it = peaks_by_rank.find(rank);
+        std::optional<int64_t> capacity;
+        if (peak_it != peaks_by_rank.end() &&
+            peak_it->second->contains("ledger")) {
+            capacity = (*peak_it->second)["ledger"].value(
+                "capacity_bytes", int64_t(0));
+        }
+        json record;
+        record["schema"] = 1;
+        record["type"] = "capacity_timeavg";
+        record["source"] = "planner_memory_ledger";
+        record["repo_variant"] = this->repo_variant_;
+        record["run_id"] = this->run_id_;
+        record["rank"] = rank;
+        record["scope"] = "npu_local_hbm";
+        record["utilization_window"] = "[0, sim_end_ns]";
+        record["utilization_window_ns"] = sim_end_tick;
+        record["resident_definition"] = "weight + resident_kv";
+        record["committed_definition"] =
+            "weight + resident_kv + reserved_kv";
+        record["capacity_source"] =
+            "planner_memory_peaks.ledger.capacity_bytes";
+        record["capacity_bytes"] =
+            capacity.has_value() ? json(capacity.value()) : json(nullptr);
+        record["resident_byte_ns"] = "0";
+        record["committed_byte_ns"] = "0";
+        if (capacity.has_value() && capacity.value() > 0 &&
+            sim_end_tick > 0) {
+            record["resident_capacity_timeavg_util"] = 0.0;
+            record["committed_capacity_timeavg_util"] = 0.0;
+        } else {
+            record["resident_capacity_timeavg_util"] = nullptr;
+            record["committed_capacity_timeavg_util"] = nullptr;
+            record["timeavg_util_note"] =
+                "undefined: zero capacity/window or missing planner peaks "
+                "entry for this rank";
+        }
+        record["actions_total"] = total_by_rank[rank];
+        record["actions_replayed"] = static_cast<uint64_t>(0);
+        record["actions_unresolved"] = unresolved_by_rank[rank];
+        record["anchor_quality_counts"] = json::object();
+        record["transfer_anchor_request_level_fallback"] =
+            static_cast<uint64_t>(0);
+        record["replay_final_physical_used_bytes"] = "0";
+        record["replay_final_committed_used_bytes"] = "0";
+        record["final_state_matches_planner"] = nullptr;
+        record["final_state_check_note"] =
+            "no replayed deltas for this rank (all anchors unresolved or no "
+            "ledger actions)";
         emit_record(record.dump());
     }
 
@@ -2486,13 +2975,24 @@ void MetricCollector::emit_watermark_records(
                 emit_bucket(last_bucket);
                 continue;
             }
+            // Ascending order over the changed set (std::set iterates
+            // ascending, so bucket 0 emits first when present), exactly one
+            // emission per bucket, followed by AT MOST one make-up emission
+            // for each boundary bucket (0 and last) that the changed set
+            // missed -- a make-up bucket can therefore trail the ascending
+            // run instead of being slotted into it (2026-10-01 audit:
+            // corrected the former "slotted in, NOT appended" claim, which
+            // the code below never honored). The old order additionally
+            // double-emitted bucket 0 for a degenerate window
+            // (last_bucket==0 with bucket 0 outside the changed set); the
+            // guards below keep each make-up strictly single.
             for (const uint64_t bucket : changed) {
                 emit_bucket(bucket);
             }
             if (changed.count(0) == 0) {
                 emit_bucket(0);
             }
-            if (changed.count(last_bucket) == 0) {
+            if (changed.count(last_bucket) == 0 && last_bucket != 0) {
                 emit_bucket(last_bucket);
             }
         }

@@ -15,6 +15,18 @@ class LoggerFactory {
     LoggerFactory() = delete;
     static std::shared_ptr<spdlog::logger> get_logger(
         const std::string& logger_name);
+    /// log_conf_path: an spdlog_setup configuration file name, or the
+    /// literal "empty" (= no config file; the DEFAULT, and a different
+    /// sense of the word than the log_path disable token below).
+    /// log_path: the logging FOLDER for the default rotating file sinks;
+    /// any of the three disable tokens "off" / "none" / "empty" runs
+    /// console-only (no file sink is created). Everything else names the
+    /// folder (created on demand). Re-init restarts the default sink set
+    /// instead of accumulating it; loggers created BEFORE a re-init keep
+    /// their previously installed sinks and will additionally pick up the
+    /// new default sinks on their next get_logger -- pair consecutive
+    /// init cycles with shutdown() to avoid double console output on such
+    /// loggers.
     static void init(const std::string& log_conf_path = "empty",
                      const std::string& log_path = "log");
     static void shutdown(void);

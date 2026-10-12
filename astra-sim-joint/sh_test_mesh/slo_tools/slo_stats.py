@@ -14,8 +14,10 @@ sh_test_mesh/slo_tools/slo_params_manifest.json 读取；value=null（B4 未
                 显式断言拒绝进入判定
   bucket-stats  长度分桶（边界=manifest bucket_percentiles）+ slowdown
                 =E2E/T_isolated(bucket)
-  session       T_session=末轮 completion−首轮 arrival−Σ(human+tool)，
-                P50/P95；缺字段→NA 行+计数
+  session       T_session=末轮 completion−首轮 arrival−Σ(human+tool)
+                （initiator 口径：行上等待=该轮之后的 gap，Σ 只累加除
+                末轮外的 turns——末轮等待物理在窗口外），P50/P95；
+                缺字段→NA 行+计数
   backlog       arrival/completion 事件重建在途请求数时序（CSV）
   warmup        剔除前缀前后 P99 E2E 对比判定（窗口/门限从 manifest）
   normalized    Normalized Time/TPS（0-1，对齐比较组内 max）
@@ -26,6 +28,7 @@ sh_test_mesh/slo_tools/slo_params_manifest.json 读取；value=null（B4 未
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Optional
@@ -33,7 +36,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from slo_common import (  # noqa: E402
-    NA, REQUEST_METRICS_FILENAME, TERMINAL_STATUSES,
+    NA, REQUEST_METRICS_FILENAME, REQUEST_STATUSES,
     assert_no_proxy_columns, bucket_index, default_manifest_path,
     detect_repo_variant, emit_json, fail, fmt_ratio, load_request_manifest,
     load_slo_manifest, manifest_requests, nearest_rank_percentile,
@@ -177,7 +180,11 @@ def request_deadline(row: dict, alpha: float,
         fail(f"queue_index={row.get('queue_index')}: T_isolated 表缺桶 "
              f"(prefill_bucket={pb}, decode_bucket={db})——先补全孤立基线"
              f"矩阵（B4），不得跳过")
-    return int(alpha * t_iso)
+    # R6-U2（2026-09-29 face 移植）：ceil 取 α×T 的真实边界（判定式为
+    # e2e > deadline：恰等于边界不算违规）；int() 截断会在边界样本上把
+    # deadline 压低一格而翻转判定。冻结 α 为二进制精确值（如 0.5）时
+    # ceil==int，官方产物数值不变。
+    return math.ceil(alpha * t_iso)
 
 
 def cmd_violation(args: argparse.Namespace) -> int:
@@ -198,7 +205,7 @@ def cmd_violation(args: argparse.Namespace) -> int:
     deadlines: list[int] = []
     for row in rows:
         status = row["terminal_status"]
-        if status not in TERMINAL_STATUSES:
+        if status not in REQUEST_STATUSES:
             fail(f"queue_index={row.get('queue_index')}: 非法终态 {status!r}")
         denominator += 1
         bucket = per_status.setdefault(
@@ -211,6 +218,11 @@ def cmd_violation(args: argparse.Namespace) -> int:
         if e2e is None:
             no_e2e += 1
             continue  # 非完成终态：计入分母；E2E 不可得，不进分子
+        if status != "completed":
+            # D2（批次 D 镜像，2026-09-30）：非 completed 终态显式不进
+            # 分子——不依赖写端 failed⇒e2e_ns 为 NA 的巧合（rejected/
+            # dropped 行携带 e2e 时旧实现会误计分子）。
+            continue
         if e2e > deadline:
             numerator += 1
             bucket["violating"] += 1
@@ -226,11 +238,14 @@ def cmd_violation(args: argparse.Namespace) -> int:
         "violation_rate": rate,
         "rows_without_e2e": no_e2e,
         "per_terminal_status": per_status,
+        "completion_rate": per_status.get("completed", {}).get("total", 0) / denominator,
+        "not_arrived_requests": per_status.get("not_arrived", {}).get("total", 0),
+        "in_flight_requests": per_status.get("in_flight", {}).get("total", 0),
         "deadline_rule": "Deadline(r)=alpha*T_isolated(bucket(r)); "
                          "bucket=(prefill_length,decode_length) by frozen "
                          "manifest edges",
-        "denominator_rule": "全部终态 completed+rejected+dropped+"
-                            "timed_out+failed",
+        "denominator_rule": "全部预定请求 completed+rejected+dropped+"
+                            "timed_out+failed+not_arrived+in_flight",
         "proxy_guard": "first_token_ns/first_token_source 显式断言"
                        "拒绝进入判定（主规格 §1.2-A）",
     }
@@ -246,6 +261,22 @@ def cmd_violation(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # bucket-stats
 # ---------------------------------------------------------------------------
+
+def _bucket_label(edges: list[float], idx: int) -> str:
+    """桶 i 的区间标签（真实覆盖口径，L17 2026-09-29 标签修正）。
+
+    实现口径（bucket_index，2026-09-05 裁决）不变：桶 i（非末桶）覆盖
+    edges[i] < x <= edges[i+1]——内边界值归左桶，即除首桶外左端**开**；
+    首桶左端含 edges[0]（x < edges[0] 报错）。旧标签 "[a,b] inclusive"
+    声称左端含入，与实现不符——本函数按真实口径出标签：
+    首桶 [a,b]、内部桶 (a,b]、末桶 (a,+inf)（单桶表即 [a,+inf)）。
+    """
+    last = idx == len(edges) - 2
+    left = "[" if idx == 0 else "("
+    if last:
+        return f"{left}{edges[idx]:g},+inf)"
+    return f"{left}{edges[idx]:g},{edges[idx + 1]:g}]"
+
 
 def cmd_bucket_stats(args: argparse.Namespace) -> int:
     manifest = load_slo_manifest(args.manifest or default_manifest_path())
@@ -281,13 +312,11 @@ def cmd_bucket_stats(args: argparse.Namespace) -> int:
         out_rows.append((
             pb, db,
             # 2026-09-05 口径裁决：interior edges 为左桶闭上界（右闭），
-            # 末桶无上限（吸收 x > edges[-1]）——与 campaign BucketGrid 对齐
-            (f"[{prefill_edges[pb]:g},{prefill_edges[pb + 1]:g} inclusive]"
-             if pb < len(prefill_edges) - 2
-             else f"[{prefill_edges[pb]:g},+inf)"),
-            (f"[{decode_edges[db]:g},{decode_edges[db + 1]:g} inclusive]"
-             if db < len(decode_edges) - 2
-             else f"[{decode_edges[db]:g},+inf)"),
+            # 末桶无上限（吸收 x > edges[-1]）——与 campaign BucketGrid 对齐；
+            # 标签按真实覆盖口径出（L17，2026-09-29：内边界左端排他，
+            # 见 _bucket_label）。
+            _bucket_label(prefill_edges, pb),
+            _bucket_label(decode_edges, db),
             n, t_iso,
             nearest_rank_percentile(entry["e2e"], 0.50),
             nearest_rank_percentile(entry["e2e"], 0.99),
@@ -317,6 +346,26 @@ def cmd_bucket_stats(args: argparse.Namespace) -> int:
 # session
 # ---------------------------------------------------------------------------
 
+def _strict_manifest_ns(value, field: str, where: str) -> int:
+    """manifest 透传 ns 字段的严格解析（human_time_ns/tool_time_ns）。
+
+    R6-U1（2026-09-29 face 移植）：manifest 是类型化 JSON——bool 一律
+    拒绝（True 会按 1ns 计入 Σ(human+tool)）；非整数 float 拒绝（int()
+    静默截断记账）；字符串拒绝（与 token manifest/turn_index 的
+    isinstance int 口径一致，非 CSV 文本通道）。非法值走 SloToolError
+    （fail-closed RC=2，带字段名与定位），不得裸 traceback 以退出码 1
+    崩出。整数值 float 接受（与 require_param_int 同型）。
+    """
+    if isinstance(value, bool):
+        fail(f"{where}: 字段 {field} 为布尔值（{value!r}）——ns 字段拒绝 bool")
+    if isinstance(value, int):
+        return value
+    if (isinstance(value, float) and math.isfinite(value)
+            and value == int(value)):
+        return int(value)
+    fail(f"{where}: 字段 {field} 不是整数纳秒（实得 {value!r}）")
+
+
 def cmd_session(args: argparse.Namespace, ctx=None) -> int:
     if ctx is not None:
         rows = ctx.rows
@@ -324,13 +373,30 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
     else:
         rows = load_rows(args.run_dir)
         manifest = load_request_manifest(args.run_dir, args.request_manifest)
-    per_request = {str(r.get("request_id")): r
-                   for r in manifest_requests(manifest) if r.get("request_id")}
+    per_request: dict[str, dict] = {}
+    for entry in manifest_requests(manifest):
+        if not entry.get("request_id"):
+            continue
+        key = str(entry["request_id"])
+        # R6-U6（2026-09-29 face 移植）：request_id 是与
+        # request_metrics.csv 连接的键：重复时拒绝静默取后值（与
+        # load_token_manifest 的唯一性 fail-closed 同口径）。
+        if key in per_request:
+            fail(f"per-request manifest request_id 重复：{key}")
+        per_request[key] = entry
     sessions: dict[str, list[dict]] = {}
+    empty_id_rows = 0
     for row in rows:
-        sessions.setdefault(row.get("session_id") or NA, []).append(row)
+        session_id = row.get("session_id")
+        if not session_id:
+            # 空/缺失 session_id 的行不并入任何会话（旧行为全部并入 "NA"
+            # 伪会话——跨真实会话合并、串改分位样本）；显式排除+计数留痕
+            #（批次 D 镜像，2026-09-30）。
+            empty_id_rows += 1
+            continue
+        sessions.setdefault(session_id, []).append(row)
     if not sessions:
-        fail("session：request_metrics 无行")
+        fail("session：request_metrics 无行（或全部行 session_id 为空）")
     out_rows = []
     t_sessions: list[int] = []
     na_sessions = 0
@@ -354,7 +420,17 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
             missing.append("completion_ns(partial)")
         human_tool_total = 0
         soft_missing: list[str] = []
-        for turn in turns:
+        # H5①（2026-09-29，initiator 口径修正）：trace 冻结语义 = "turn j
+        # 的 human/tool 等待记在 turn j 自己行上"（derive_20_first_30_
+        # seconds.py: "the gap after turn j is the human_time or tool_time
+        # recorded on turn j's own row"），物理上落在
+        # [completion(j), arrival(j+1)]——只有 j ≤ n−2 的等待落在会话窗口
+        # [first_arrival, last_completion] 内。Σ(human+tool) 因此只累加
+        # 除末轮外的 turns（按 turn_index 排序后排除末轮）；末轮行上字段
+        # 无论在场/缺席/取值如何都不进求和、不计 soft_missing 也不构成
+        # 缺数据（其等待定义在窗口外，对 T_session 无影响）。单轮会话
+        # turns[:-1] 为空 → Σ=0，T_session=末轮 completion−首轮 arrival。
+        for turn in turns[:-1]:
             entry = per_request.get(str(turn.get("request_id")), {})
             human = entry.get("human_time_ns")
             tool = entry.get("tool_time_ns")
@@ -365,21 +441,29 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
                 continue
             if human is None and tool is None:
                 # B4 语义修正（2026-08-26，S3 异常③）：字段已在场而双侧
-                # null = turn-0（会话首行，窗口内无前向 gap）或 0-gap 无
-                # 类型延续——对本会话 Σ(human+tool) 的贡献为 0，不是缺数据
-                # （缺数据=键缺席，上一分支）。计入 soft_missing 留痕。
+                # null = 0-gap（该轮之后无等待，属真实零贡献）——对本会话
+                # Σ(human+tool) 的贡献为 0，不是缺数据（缺数据=键缺席，
+                # 上一分支）。计入 soft_missing 留痕。initiator 口径下
+                # 旧注记"turn-0 窗口内无前向 gap"不再成立（turn-0 行上的
+                # 等待是 turn-0 之后的 gap，在窗口内）；0-gap 语义不变。
                 soft_missing.append(
-                    f"{turn.get('request_id')}:human/tool=0(turn0/0-gap)")
+                    f"{turn.get('request_id')}:human/tool=0(0-gap)")
                 continue
             # trace 中 human_time/tool_time 逐行互斥：缺侧按 0 计。
+            turn_where = (f"session={session_id} "
+                          f"request={turn.get('request_id')}")
             if human is None:
                 soft_missing.append(f"{turn.get('request_id')}:human_time_ns=0")
             else:
-                human_tool_total += int(human)
+                # R6-U1（2026-09-29 face 移植）：透传值严格解析，拒
+                # bool/非整值 float/str（见 _strict_manifest_ns）。
+                human_tool_total += _strict_manifest_ns(
+                    human, "human_time_ns", turn_where)
             if tool is None:
                 soft_missing.append(f"{turn.get('request_id')}:tool_time_ns=0")
             else:
-                human_tool_total += int(tool)
+                human_tool_total += _strict_manifest_ns(
+                    tool, "tool_time_ns", turn_where)
         missing_field_rows += len(missing)
         if missing:
             na_sessions += 1
@@ -392,8 +476,11 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
         last_completion = max(completions)
         t_session = last_completion - first_arrival - human_tool_total
         if t_session < 0:
+            # H5① 新口径下的负值判据不变（窗口内净等待不可能为负），
+            # 文案与 initiator 口径一致：Σ 只含前 n−1 轮的窗口内等待。
             fail(f"session {session_id}: T_session 为负"
-                 f"（{last_completion}-{first_arrival}-{human_tool_total}）"
+                 f"（{last_completion}-{first_arrival}-{human_tool_total}；"
+                 f"Σ(human+tool) 只含除末轮外的窗口内等待）"
                  f"——completion/arrival 或 human/tool 字段可疑")
         t_sessions.append(t_session)
         out_rows.append((session_id, len(turns), first_arrival,
@@ -410,6 +497,9 @@ def cmd_session(args: argparse.Namespace, ctx=None) -> int:
     finally:
         if close:
             stream.close()
+    if empty_id_rows:
+        print(f"[slo-stats] session: {empty_id_rows} 行 session_id 为空"
+              f"——显式排除（不并入任何会话、不进分位）", file=sys.stderr)
     if t_sessions:
         print(f"[slo-stats] session: n={len(t_sessions)} "
               f"P50={nearest_rank_percentile(t_sessions, 0.50)}ns "
@@ -447,11 +537,13 @@ def cmd_backlog(args: argparse.Namespace, ctx=None) -> int:
     sorter = BoundedSorter()
     for event in events:
         sorter.add(event)
-    events = list(sorter.sorted_iter())
+    # R6-U7（2026-09-29 face 移植）：归并结果单遍消费（重放进 series
+    # 变点表），不整表物化——10 万行输入下全量 list() 物化峰值 ~158MB，
+    # series 变点数恒 ≤ 事件数。
     series: list[tuple[int, int]] = []
     current = 0
     last_time = None
-    for time, delta in events:
+    for time, delta in sorter.sorted_iter():
         current += delta
         if time == last_time:
             series[-1] = (time, current)
@@ -469,14 +561,37 @@ def cmd_backlog(args: argparse.Namespace, ctx=None) -> int:
         bucket = int(bucket)
         if bucket <= 0:
             fail("--bucket-ns 必须为正整数")
-        bucketed: list[tuple[int, int]] = []
+        # L17（2026-09-29）：分桶输出补发零事件桶。事件间在途值分段常值，
+        # 无事件桶的在途值 = 上一事件值延续——旧行为整桶丢弃使下游
+        # "按行求均值"把无事件区段漏计为零样本。C-4（批次 D 镜像，
+        # 2026-09-30）：桶值口径补齐「桶起点携入值」项——桶内只发生
+        # 完成事件时真实峰值=携入值，只对桶内事件取 max 会系统性低估。
+        # 仅补齐 [首事件桶, 末事件桶] 内的全部无事件桶；生成器流式产出，
+        # 内存 O(事件桶数)，与 span/桶长解耦。
+        idx_values: dict[int, int] = {}  # 桶号 -> 事件桶代表值
+        idx_tail: dict[int, int] = {}    # 桶号 -> 桶内末事件后的在途值
+        carry = 0  # 上一锚点行值延续到本桶起点的携带在途值（跨桶区段）
         for time, inflight in series:
-            slot = (time // bucket) * bucket
-            if bucketed and bucketed[-1][0] == slot:
-                bucketed[-1] = (slot, max(bucketed[-1][1], inflight))
+            idx = time // bucket
+            if idx in idx_values:
+                idx_values[idx] = max(idx_values[idx], inflight)
             else:
-                bucketed.append((slot, inflight))
-        series = bucketed
+                idx_values[idx] = max(carry, inflight)
+            idx_tail[idx] = inflight
+            carry = inflight
+        first_idx, last_idx = min(idx_values), max(idx_values)
+
+        def _bucketed():
+            # 零事件桶代表值 = 上一事件值的跨桶延续（事件间在途分段常值；
+            # 注意取末事件后的在途值，而非前一事件桶的峰值代表值）。
+            tail = 0
+            for idx in range(first_idx, last_idx + 1):
+                if idx in idx_values:
+                    yield (idx * bucket, idx_values[idx])
+                    tail = idx_tail[idx]
+                else:
+                    yield (idx * bucket, tail)
+        series = _bucketed()
     stream, close = open_output(args.output, "slo_backlog.csv", args.run_dir)
     try:
         write_csv(stream, ("time_ns", "in_flight"), series)
@@ -518,7 +633,18 @@ def cmd_warmup(args: argparse.Namespace, ctx=None) -> int:
     # A4：两组 P99 各走一次有界排序（公式不变）。
     p99_full = nearest_rank_percentile_many(full_values, [0.99])[0]
     p99_trimmed = nearest_rank_percentile_many(trimmed, [0.99])[0]
-    relative = abs(p99_full - p99_trimmed) / p99_full if p99_full else 0.0
+    # Report 4.3 fix (2026-09-29, sister-repo sync from astra-sim-wscllm):
+    # the old `... / p99_full if p99_full else 0.0` collapse branch turned an
+    # all-zero p99_full into relative=0.0 and judged every such input
+    # warmup_stable=true.  An all-zero P99 E2E is physically unreachable
+    # (every completed request has a positive e2e) and can only come from
+    # corrupted metrics input, so the stability judgment is undecidable ->
+    # fail-closed through this module's fail() channel instead of a silent
+    # pass.
+    if not p99_full:
+        fail("warmup：p99_full_ns == 0——全零 P99 E2E 物理不可达，只能来自"
+             "损坏的指标输入，剔除前缀稳定性不可判定（fail-closed）")
+    relative = abs(p99_full - p99_trimmed) / p99_full
     payload = {
         "command": "warmup",
         "window_ns": window_ns,
@@ -737,7 +863,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_bucket_stats)
 
     p = sub.add_parser("session", help="T_session=末轮 completion−首轮 arrival"
-                                       "−Σ(human+tool)；P50/P95")
+                                       "−Σ(human+tool)（initiator 口径：Σ 不含"
+                                       "末轮行上等待）；P50/P95")
     add_run_dir_arg(p)
     add_output_arg(p, "slo_session.csv")
     p.add_argument("--request-manifest", type=Path, default=None,

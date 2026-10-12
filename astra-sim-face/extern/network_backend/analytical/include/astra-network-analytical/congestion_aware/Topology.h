@@ -31,7 +31,7 @@ class Topology {
      * Route is a list of devices (pointers) that the chunk should traverse,
      * including the src and dest devices themselves.
      *
-     * e.g., route(0, 3) = [0, 5, 7, 2, 3]
+     * e.g., for a 1D line/mesh: route(0, 3) = [0, 1, 2, 3]
      *
      * @param src src NPU id
      * @param dest dest NPU id

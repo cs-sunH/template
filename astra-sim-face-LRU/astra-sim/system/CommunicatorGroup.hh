@@ -16,6 +16,7 @@ namespace AstraSim {
 
 class Sys;
 class CollectivePlan;
+class CollectiveImpl;
 
 /// Communicator identity is order-sensitive: custom-collective rank mapping
 /// and shaped dimensions both depend on the exact sequence. Comparing sorted
@@ -59,7 +60,15 @@ class CommunicatorGroup {
     int pos_in_group;
     Sys* generator;
     std::vector<int> dimension_sizes;
-    std::map<ComType, CollectivePlan*> comm_plans;
+    // C1: plans are cached per (ComType, resolved implementation set).
+    // CollectiveImplLookup gives per-workload-node mappings priority, so
+    // two collectives of the same ComType may resolve to different
+    // implementations; a ComType-only key silently reused the first
+    // node's plan for every later collective of that type.  The lookup
+    // registry owns stable impl pointers, so pointer identity keys plans
+    // that are interchangeable; equal keys share one plan.
+    using PlanImplKey = std::vector<const CollectiveImpl*>;
+    std::map<std::pair<ComType, PlanImplKey>, CollectivePlan*> comm_plans;
 };
 
 }  // namespace AstraSim

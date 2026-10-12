@@ -32,6 +32,7 @@ METRICS_CONFIG_PATH = Path(__file__).resolve().parent / "metrics_config.json"
 
 __all__ = [
     "MemoryActionRecorder",
+    "load_chiplets_per_npu",
 ]
 
 
@@ -39,7 +40,16 @@ def load_chiplets_per_npu() -> int:
     try:
         with METRICS_CONFIG_PATH.open(encoding="utf-8") as source:
             config = json.load(source)
-        return int(config.get("memory", {}).get("chiplets_per_npu", 4))
+        # POST-05 (2026-09-26): guard the root and the "memory" block — a
+        # JSON root (or block) that is not an object used to escape as a
+        # bare AttributeError outside this loader's degrade-to-default
+        # contract; keep the default instead.
+        if not isinstance(config, dict):
+            return 4
+        memory = config.get("memory")
+        if not isinstance(memory, dict):
+            return 4
+        return int(memory.get("chiplets_per_npu", 4))
     except (OSError, ValueError, TypeError):
         return 4
 
@@ -55,7 +65,7 @@ class MemoryActionRecorder:
       with its line number on replay).  Nothing is retained in memory.
       :meth:`iter_journal_deltas` streams the journal back solely for the
       read-back test (sh_test_mesh/workload/llama2_7b_inference/
-      test_kv_delta_journal.py:274); no manifest ``memory_actions`` rebuild
+      test_kv_delta_journal.py); no manifest ``memory_actions`` rebuild
       chain exists in this repo.  The journal is the authoritative
       physical ledger replayed by the run-end checksum gate
       (``SessionKVCacheManager.verify_journal_checksum``).
@@ -273,10 +283,41 @@ class MemoryActionRecorder:
             before[2] + component_deltas[2],
             before[3] + component_deltas[3],
         ]
+        # M-21 (2026-09-30): a negative post-delta component column is
+        # ledger corruption -- the same fail-closed contract the observer
+        # (weight/resident/reserved), the C++ journal replay and the
+        # watermark enforce.  The journal row used to carry it verbatim,
+        # leaving the remote column (journal-only, unseen by the observer)
+        # as the one negative component that could still land on disk.
+        for name, value in zip(
+            ("weight", "resident", "reserved", "remote"), after
+        ):
+            if value < 0:
+                raise RuntimeError(
+                    f"kv delta journal rank {rank} component {name} "
+                    f"underflowed to {value} after sequence {sequence} "
+                    f"(allocation_key={allocation_key!r}, cause={cause!r}); "
+                    "negative components are ledger corruption (fail-closed)"
+                )
         if instance_index is None:
             instance_index = self._rank_instance.get(rank)
         else:
             self._rank_instance.setdefault(rank, int(instance_index))
+        # The journal reader (hbm_watermark) requires a non-negative integer
+        # instance_index on every row, so a row with a null/untyped value
+        # must never be written: previously ``instance_index=None`` fell
+        # through to the journal when the rank had never carried an
+        # instance, producing a row the reader side rejects.
+        if (
+            isinstance(instance_index, bool)
+            or not isinstance(instance_index, int)
+            or instance_index < 0
+        ):
+            raise RuntimeError(
+                f"kv delta journal rank {rank} row {sequence}: "
+                f"instance_index must be a non-negative integer, got "
+                f"{instance_index!r} (fail-closed write-side type gate)"
+            )
         row = {
             "schema_version": self.JOURNAL_SCHEMA_VERSION,
             "sequence": sequence,
@@ -350,7 +391,7 @@ class MemoryActionRecorder:
         """Stream the journal back as ``MemoryDelta`` rows.
 
         Read-back use only: the sole caller is the journal round-trip test
-        (sh_test_mesh/workload/llama2_7b_inference/test_kv_delta_journal.py:274).
+        (sh_test_mesh/workload/llama2_7b_inference/test_kv_delta_journal.py).
         No manifest ``memory_actions`` rebuild chain exists in this repo
         (the former "(manifest source)" claim was stale; corrected
         2026-09-25).
@@ -388,9 +429,15 @@ class MemoryActionRecorder:
         per-rank ``before_bytes`` == running totals, ``after_bytes`` ==
         before + deltas, ``planner_time_ns`` non-decreasing, and
         ``transaction_id`` non-decreasing with each id's rows contiguous.
-        Any violation raises with the offending line number; a torn/partial
-        tail line is treated the same way (crash tolerance = fail-closed
-        reporting, never silent truncation).
+        ``transaction_count`` counts manager transactions only (the id-0
+        weight-preload group is excluded); ``max_transaction_id`` stays the
+        raw maximum.  注记（2026-10-01）：重放只能看见**有行**的事务 id
+        ——零行事务（如 mark_complete、零 delta 的增长）不落行但消耗 id，
+        run 尾部若全是零行事务，重放的这两个量会小于 recorder 自身计数
+        （checksum 门不交叉比对此二值，故无功能影响；此 docstring 旧称
+        "mirroring the recorder's counter" 在该形态下不成立）。  Any violation raises with the offending line number; a
+        torn/partial tail line is treated the same way (crash tolerance =
+        fail-closed reporting, never silent truncation).
         """
 
         if not self.journal_enabled:
@@ -406,8 +453,18 @@ class MemoryActionRecorder:
         with self.journal_path.open("rb") as source:
             for line_number, raw in enumerate(source, 1):
                 digest.update(raw)
-                row = self._read_journal_row(
-                    line_number, raw.decode("utf-8", errors="strict"))
+                try:
+                    text = raw.decode("utf-8", errors="strict")
+                except UnicodeDecodeError as error:
+                    # POST-05 (2026-09-26): the decode used to sit outside
+                    # _read_journal_row's fail-closed guard, so a bad byte
+                    # escaped without the line number its own contract
+                    # promises ("断行由重放方 fail-closed 报行号").
+                    raise RuntimeError(
+                        f"kv delta journal line {line_number} is corrupt "
+                        f"(fail-closed): {error}"
+                    ) from None
+                row = self._read_journal_row(line_number, text)
                 line_count += 1
                 if row["sequence"] != expected_sequence:
                     raise RuntimeError(
@@ -495,10 +552,15 @@ class MemoryActionRecorder:
             }
             for rank, state in sorted(totals.items())
         }
+        # transaction_count mirrors the recorder's own counter
+        # (begin_transaction), which never counts the id-0 weight-preload
+        # group: including id 0 here used to make every run-end
+        # reconciliation differ by exactly +1.
+        manager_transactions = sum(1 for tid in transaction_ids if tid != 0)
         return {
             "line_count": line_count,
             "sha256": digest.hexdigest(),
-            "transaction_count": len(transaction_ids),
+            "transaction_count": manager_transactions,
             "max_transaction_id": max(transaction_ids) if transaction_ids else 0,
             "ranks": ranks,
         }

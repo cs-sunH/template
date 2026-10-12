@@ -4,7 +4,6 @@ LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
@@ -24,7 +23,9 @@ CustomAlgorithm::CustomAlgorithm(std::string et_filename, int id, int pos_in_com
         this->et_feeder = new Chakra::FeederV3::ETFeeder(et_filename);
         this->comm_group = comm_group;
     } catch (const std::runtime_error& e) {
-        // TODO(jinsun): Solve.
+        // Status note (2026-09-26 review, replaces the bare upstream
+        // "TODO(jinsun): Solve."): this path is already fail-closed
+        // (log below + std::exit(1)); no recovery path is planned.
         auto logger = AstraSim::LoggerFactory::get_logger("system::astraccl::custom_collectives");
         logger->error("Error: Cannot access et file for collective algorithm: \n'" + et_filename + "'.\n"
                      "Please adjust the system JSON file, and keep in mind the path to the et file is relative to the working directory.\n"
@@ -69,6 +70,13 @@ void CustomAlgorithm::issue(shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
     if (type == ChakraNodeType::COMM_SEND_NODE) {
         sim_request snd_req;
         int dst_rank = convert_algo_rank_to_real_rank(node->comm_dst());
+        // Latent hazard (registered 2026-09-30): an ET node that spells out
+        // comm_src writes an ALGORITHM-space rank, while the absent-attr
+        // default is a PHYSICAL rank (owner->id); blindly converting would
+        // double-map the default. The analytical backend never reads
+        // sim_request::srcRank (it takes src from the API argument), so this
+        // is inert today -- a backend that consumes srcRank needs an
+        // attr-presence query on the chakra feeder first.
         snd_req.srcRank = node->comm_src(this->stream->owner->id);
         snd_req.dstRank = dst_rank;
         snd_req.reqType = UINT8;
@@ -81,7 +89,10 @@ void CustomAlgorithm::issue(shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
             0, Sys::dummy_data,
             // Note that we're using the comm size as hardcoded in the Impl
             // Chakra et, ed through the comm. api, and ignore the comm.size fed
-            // in the workload chakra et. TODO: fix.
+            // in the workload chakra et.  Status note (2026-09-26 review,
+            // replaces the bare upstream TODO): this divergence is current
+            // intentional behavior (custom ET wins); aligning it is deferred
+            // upstream.
             node->comm_size(), UINT8, dst_rank, node->comm_tag(),
             &snd_req, Sys::FrontEndSendRecvType::NATIVE, &Sys::handleEvent,
             sehd);

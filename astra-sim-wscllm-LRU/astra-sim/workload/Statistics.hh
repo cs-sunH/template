@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+// et_feeder.h stays: the ChakraProtoMsg::NodeType typedef below is part of
+// this header's surface (Workload/MetricCollector include it for the type).
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
 
@@ -21,41 +23,26 @@ typedef uint64_t NodeId;
 
 namespace AstraSim {
 class Workload;
-class LocalMemoryTracker;
 class Statistics {
   public:
     class OperatorStatistics {
       public:
         static const Tick INVALID_TICK = UINT64_MAX;
         enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, INVALID };
-        static OperatorType get_operator_type(
-            const std::shared_ptr<Chakra::ETFeederNode> node);
-        // Step 1-8: online-mode overload dispatching on the NodeView fields
-        // (kind / is_cpu_op) with the same mapping as the ETFeederNode
-        // version: MemLoad/MemStore -> REMOTE_MEM, Compute -> CPU/GPU by
-        // is_cpu_op, CommSend/CommRecv/CommCollective -> COMM, else INVALID.
+        // Dispatching on the NodeView fields (kind / is_cpu_op):
+        // MemLoad/MemStore -> REMOTE_MEM, Compute -> CPU/GPU by is_cpu_op,
+        // CommSend/CommRecv/CommCollective -> COMM, else INVALID.
         static OperatorType get_operator_type(
             const ExecutionDriven::NodeView& node);
-        OperatorStatistics(NodeId node_id,
-                           Tick start_time,
-                           Tick end_time,
-                           OperatorType type)
-            : node_id(node_id),
-              start_time(start_time),
-              end_time(end_time),
-              type(type) {}
-        OperatorStatistics(NodeId node_id, Tick start_time, OperatorType type)
-            : node_id(node_id),
-              start_time(start_time),
+        OperatorStatistics(Tick start_time, OperatorType type)
+            : start_time(start_time),
               end_time(INVALID_TICK),
               type(type) {}
         OperatorStatistics()
-            : node_id(UINT64_MAX),
-              start_time(INVALID_TICK),
+            : start_time(INVALID_TICK),
               end_time(INVALID_TICK),
               type(OperatorType::INVALID) {}
 
-        NodeId node_id;
         Tick start_time;
         Tick end_time;
         OperatorType type;
@@ -63,8 +50,9 @@ class Statistics {
         // compute node
         std::optional<double> memory_utilization;
         std::optional<double> compute_utilization;
-        std::optional<double> operation_intensity;
-        std::optional<bool> is_memory_bound;
+        // (2026-10-01 清除：operation_intensity/is_memory_bound 写后不读
+        // ——compact online 聚合吸收 roofline 求和后二者再无读者，随其
+        // 写点一并移除。)
     };
 
   public:
@@ -72,16 +60,10 @@ class Statistics {
 
     OperatorStatistics& get_operator_statistics(NodeId node_id);
 
-    const OperatorStatistics& get_operator_statistics(NodeId node_id) const;
+    // (The const get_operator_statistics overload was removed -- its only
+    // historical callers all bound a non-const Statistics lvalue.)
 
-    void record_start(std::shared_ptr<Chakra::ETFeederNode> node,
-                      Tick start_time);
-
-    void record_end(std::shared_ptr<Chakra::ETFeederNode> node, Tick end_time);
-
-    // Step 1-8: online-mode overloads keyed by NodeView::global_id (the
-    // static ETFeederNode path stays byte-exact for the baseline). The
-    // online path (GraphSource::et_node == nullptr) routes here.
+    // NodeView-keyed recorders (step 1-8), keyed by NodeView::global_id.
     void record_start(const ExecutionDriven::NodeView& node, Tick start_time);
 
     void record_end(const ExecutionDriven::NodeView& node, Tick end_time);
@@ -114,13 +96,20 @@ class Statistics {
 
     // Duration-weighted sums of the roofline per-node utilization fields over
     // CPU/GPU operator statistics, clipped to [window_start, window_end].
-    // Same weighting formula as extract_utilizations() ("Average compute
-    // utilization"), only windowed and unnormalized so callers can aggregate
-    // across ranks before dividing (doc sec.8.7). Read-only.
+    // Same weighting formula as the removed legacy extract_utilizations()
+    // ("Average compute utilization": utilization * duration accumulated
+    // over CPU/GPU nodes, with a 1ns total guard), only windowed and
+    // unnormalized so callers can aggregate across ranks before dividing
+    // (doc sec.8.7). Read-only.
     struct WindowedRooflineUtilization {
         double compute_utilization_weighted_sum = 0;
         double memory_utilization_weighted_sum = 0;
-        // Includes the same 1ns guard as extract_utilizations().
+        // Die-backend-only field (stage B, contract §7.6): eq-ops / (vector
+        // peak * elapsed), aggregated with the same duration weighting and
+        // the same exact accumulator as the two sums above. Zero for every
+        // legacy backend (no producer ever set the field).
+        double vector_utilization_weighted_sum = 0;
+        // Includes the same 1ns guard as the removed extract_utilizations().
         Tick total_comp_time = 1ul;
     };
     WindowedRooflineUtilization calculate_roofline_utilization_in_window(
@@ -147,7 +136,11 @@ class Statistics {
     }
 
     ~Statistics() {
-        operator_statistics.clear();
+        // G2-15: clear() keeps the hash buckets allocated; swap-with-empty
+        // (same pattern as Statistics.cc's online_gpu_active_nodes_ reset)
+        // releases the reserved memory along with the elements.
+        std::unordered_map<NodeId, OperatorStatistics>().swap(
+            operator_statistics);
     }
 
     // Legacy finalization scans operator_statistics. Compact online service
@@ -158,9 +151,8 @@ class Statistics {
 
     void post_processing();
 
-    void report(std::shared_ptr<spdlog::logger> logger) const;
-
-    void report() const;
+    // (The report(logger)/report() pair was removed with its zero callers;
+    // see the note in Statistics.cc.)
 
   private:
     // Canonical online roofline sum: each contribution is first rounded as
@@ -177,11 +169,17 @@ class Statistics {
         [[nodiscard]] double value() const;
     };
 
-    void extract_type_time();
+    // (The legacy finalize aggregation chain -- extract_type_time,
+    // extract_utilizations, extract_comp_comm_overlap and their six
+    // write-only members type_time / comp_comm_overlap /
+    // compute_bound_percentage_ / average_compute_utilization_ /
+    // average_memory_utilization_ / average_operation_intensity_ -- was
+    // removed (2026-10-01): a whole-repo grep found zero readers outside
+    // the chain itself, and post_processing's only remaining callers are
+    // the fail-closed preflight test and the history-preserving
+    // microbenchmark fixture, neither of which reads those aggregates.)
     Tick _calculateTotalRuntimeFromIntervals(
         const std::vector<std::pair<Tick, Tick>>& intervals) const;
-    void extract_utilizations();
-    void extract_comp_comm_overlap();
 
     // NodeView-only GPU accounting. The active-count integral closes a
     // fully-completed connected segment in O(1). A successful online service
@@ -197,14 +195,20 @@ class Statistics {
         Tick start_time,
         Tick end_time,
         const std::optional<double>& compute_utilization,
-        const std::optional<double>& memory_utilization);
+        const std::optional<double>& memory_utilization,
+        const std::optional<double>& vector_utilization =
+            std::nullopt);
     void add_online_total_comp_time(Tick duration);
     void require_online_compacted_full_window(Tick window_start,
                                               Tick window_end,
                                               Tick newest_retired_end,
                                               const char* consumer) const;
 
-    std::unordered_map<OperatorStatistics::OperatorType, Tick> type_time;
+    // (The six legacy finalize aggregates -- type_time, comp_comm_overlap,
+    // compute_bound_percentage_, average_compute_utilization_,
+    // average_memory_utilization_, average_operation_intensity_ -- were
+    // removed with the extract_* chain that was their only writer; nothing
+    // ever read them. See the note near _calculateTotalRuntimeFromIntervals.)
     // Fix (2026-08-28): zero-initialized + maintained as a running max in
     // record_end. Online mode reads get_wall_time() at MetricCollector
     // finalize -- BEFORE Workload's post_processing() ever computes it -- so
@@ -213,11 +217,6 @@ class Statistics {
     // running max the finalize-time value is the true "max operator end_time"
     // (identical to post_processing()'s own recompute, which stays as is).
     Tick wall_time = 0;
-    Tick comp_comm_overlap;
-    double compute_bound_percentage_;
-    double average_compute_utilization_;
-    double average_memory_utilization_;
-    double average_operation_intensity_;
     Workload* workload;
     std::unordered_map<NodeId, OperatorStatistics> operator_statistics;
     // A3-lite (2026-08-28): the start_times multimap was removed -- a
@@ -241,6 +240,9 @@ class Statistics {
     bool online_history_preserved_ = false;
     OnlineExactDoubleSum online_compute_utilization_weighted_sum_;
     OnlineExactDoubleSum online_memory_utilization_weighted_sum_;
+    // Stage B (die backend, contract §7.6): vector (eq-op) utilization
+    // aggregate, same exact-accumulator discipline as the two above.
+    OnlineExactDoubleSum online_vector_utilization_weighted_sum_;
     Tick online_total_comp_time_ = 1ul;
     Tick online_roofline_newest_retired_end_ = 0;
 

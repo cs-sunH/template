@@ -65,7 +65,9 @@ def _fake_index(first_train_by_request, next_tick_by_position):
 class ModelBytesTests(unittest.TestCase):
     def test_authoritative_conversions(self):
         """trace_config.csv (llama2_7b, swiglu) -> frozen face_scheduler
-        numbers (test_wsc_llm_scheduler.py:646 pins the same value)."""
+        numbers (test_wsc_llm_scheduler.py
+        test_llama2_7b_tp6_partition_is_exact_without_model_padding pins
+        the same value)."""
 
         weight_bytes, kv_per_token = mp._load_model_bytes()
         self.assertEqual(weight_bytes, 13_476_831_232)

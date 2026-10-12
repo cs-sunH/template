@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import atexit
 import json
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -16,10 +18,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from slo_common import REQUEST_METRICS_COLUMNS  # noqa: E402
 
+# E1(2026-09-28): make_run_dir 此前 mkdtemp 后全程无清理——每次套件运行
+# 都在 /tmp 泄漏 slo_t_<tag>_* 目录。登记 + 进程退出时统一回收
+# (atexit;kill -9 除外)。cleanup_run_dirs() 亦可被测试显式提前调用
+# (幂等)。
+_RUN_DIRS: list[Path] = []
+
 
 def make_run_dir(tag: str) -> Path:
     root = Path(tempfile.mkdtemp(prefix=f"slo_t_{tag}_"))
+    _RUN_DIRS.append(root)
     return root
+
+
+def cleanup_run_dirs() -> None:
+    """回收 make_run_dir 登记的全部临时 run_dir(幂等,可重复调用)。"""
+    while _RUN_DIRS:
+        shutil.rmtree(_RUN_DIRS.pop(), ignore_errors=True)
+
+
+atexit.register(cleanup_run_dirs)
 
 
 def write_request_metrics(run_dir: Path, rows: Sequence[dict]) -> Path:
@@ -108,7 +126,8 @@ def write_jsonl(run_dir: Path, name: str,
 
 
 def write_slo_manifest(root: Path, params: dict) -> Path:
-    """带值的测试用 slo_params_manifest.json（生产仓内清单 value=null）。"""
+    """带值的测试用 slo_params_manifest.json（以生产清单为 base 覆写指定
+    参数；生产清单自 B4b 起已全量填充非 null value/evidence/rationale）。"""
     base = json.loads(
         (Path(__file__).resolve().parent.parent /
          "slo_params_manifest.json").read_text(encoding="utf-8"))

@@ -192,12 +192,28 @@ def _bare_scheduler():
     return scheduler
 
 
+def _set_split_env(value):
+    """R5-S5（2026-09-29 face 移植）：设开关前保存外部预置值（返回恢复
+    凭据）——旧写法无脑覆盖 + 无条件 pop，吞掉外部预置值并向外泄漏测试
+    污染。"""
+    saved = os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+    os.environ["SH_FIRST_TOKEN_SPLIT"] = value
+    return saved
+
+
+def _restore_split_env(saved):
+    if saved is None:
+        os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+    else:
+        os.environ["SH_FIRST_TOKEN_SPLIT"] = saved
+
+
 class SplitEnvironmentTest(unittest.TestCase):
     """开关姿态（B4 起缺省关；显式 "1" 开）。"""
 
     def test_default_off_and_explicit_on(self):
+        saved = os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
         try:
-            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
             # 2026-08-26 B4 缺省翻转：60s 门-2（决策等价）失败 → 默认
             # proxy 口径，拆分仅显式 "1" 启用（研究/对拍）。
             self.assertFalse(first_token_split_enabled())
@@ -206,7 +222,7 @@ class SplitEnvironmentTest(unittest.TestCase):
             os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
             self.assertTrue(first_token_split_enabled())
         finally:
-            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+            _restore_split_env(saved)
 
 
 class DebutPlanTest(unittest.TestCase):
@@ -215,11 +231,11 @@ class DebutPlanTest(unittest.TestCase):
     B4 起拆分缺省关——本类钉拆分语义，setUp 显式置 "1"。"""
 
     def setUp(self):
-        os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
+        self._saved_env = _set_split_env("1")
         self.s = _bare_scheduler()
 
     def tearDown(self):
-        os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+        _restore_split_env(self._saved_env)
 
     def _plan(self, iterations=8, spans=None, members=None, chunks=None):
         members = members if members is not None else [(REQUEST_A, 8)]
@@ -260,12 +276,12 @@ class DebutPlanTest(unittest.TestCase):
     def test_disabled_returns_none(self):
         fresh = _runtime(REQUEST_B, consumed=0)
         self.s.runtime_by_request_id = {REQUEST_B: fresh}
+        saved = _set_split_env("0")
         try:
-            os.environ["SH_FIRST_TOKEN_SPLIT"] = "0"
             self.assertIsNone(
                 self.s._first_token_plan(self._plan(), [fresh]))
         finally:
-            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+            _restore_split_env(saved)
 
     def test_tmax_1_plus_7_split(self):
         """(c)：8 迭代（T_max=8 截断同构）拆 1+7——首步 = 首 chunk +
@@ -475,8 +491,8 @@ class SplitEmissionTest(unittest.TestCase):
         构图器发射与无该键的整列发射逐节点逐边一致。"""
         plan_on = self._two_member_plan()
         builder_off = self._new_builder()
+        saved = _set_split_env("0")
         try:
-            os.environ["SH_FIRST_TOKEN_SPLIT"] = "0"
             s = _bare_scheduler()
             fresh = _runtime(REQUEST_B)
             s.runtime_by_request_id = {REQUEST_B: fresh}
@@ -487,7 +503,7 @@ class SplitEmissionTest(unittest.TestCase):
             plan_off = self._two_member_plan()
             self.assertNotIn("first_token", plan_off)
         finally:
-            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+            _restore_split_env(saved)
         builder_plain = self._new_builder()
         builder_plain.emit_iteration_train(plan_on)
         builder_off.emit_iteration_train(plan_off)

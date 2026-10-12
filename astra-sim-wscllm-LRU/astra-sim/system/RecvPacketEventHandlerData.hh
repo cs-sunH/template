@@ -25,8 +25,6 @@ class RecvPacketEventHandlerData : public BasicEventHandlerData {
     WorkloadLayerHandlerData* wlhd;
     BaseStream* owner;
     CustomAlgorithm* custom_algorithm;
-    bool message_end;
-    Tick ready_time;
 };
 
 }  // namespace AstraSim

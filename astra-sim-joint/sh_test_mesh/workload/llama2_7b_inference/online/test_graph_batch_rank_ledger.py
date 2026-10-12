@@ -14,6 +14,10 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 from online import online_scheduler_base as scheduler_base_module  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
 from online.online_scheduler_base import OnlineSchedulerBase  # noqa: E402
+from joint.prediction_config import (  # noqa: E402
+    JointPredictionConfig,
+    make_pipeline_kernel_contract,
+)
 
 
 class _NoNodeIteration(list):
@@ -41,10 +45,17 @@ def _base_for(graph_batch):
         "future_alarms": [],
     }
     scheduler._provisional_kv_actions = {}
+    # schema-2 批组装面（生产 build_graph_batch 生成 kernel_contract 需
+    # 预测配置；__init__ 由 _load_prediction_config 注入，缺省轴与
+    # JointPredictionConfig() 一致）。
+    from joint.prediction_config import JointPredictionConfig
+    scheduler._joint_prediction_config = JointPredictionConfig()
     scheduler.digest_sink = None
-    scheduler._profile_batch = {"scanned_entries": 0, "full_scan_entries": 0}
+    # profile 行 schema = {delivery_sequence, tick, scanned_entries}
+    # (2026-09-29 face 移植: full_scan_entries 死记账已从生产端删除;
+    # profile_rows 死缓冲已删,无 sink 即不构建不驻留)。
+    scheduler._profile_batch = {"scanned_entries": 0}
     scheduler.profile_sink = None
-    scheduler.profile_rows = []
     return scheduler
 
 
@@ -94,6 +105,11 @@ def test_digest_reuses_public_rank_metadata_without_second_node_scan():
         "watches": [],
         "future_alarms": [],
         "touched_ranks": [0, 2],
+        # digest 载荷覆盖面（schema-2 批的强制键；无远读管线的批 =
+        # 空 descriptor 数组 + 缺省配置 kernel contract）。
+        "pipeline_descriptors": [],
+        "kernel_contract": make_pipeline_kernel_contract(
+            JointPredictionConfig()),
     }
 
     # Stub the one required JSON serialization to expose any *additional*

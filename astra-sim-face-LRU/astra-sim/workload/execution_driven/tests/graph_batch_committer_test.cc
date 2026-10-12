@@ -10,8 +10,10 @@ GraphSources, a real WatchRegistry, a real RequestIngress over an EventQueue
 + DecisionMailbox + ServiceCoordinator -- the alarm path schedules a genuine
 future arrival) through:
 
-  Part A  static/pure checks: compute_touched_ranks (sorted unique, rank
-          filtering).
+  Part A  retired 2026-09-27 together with the production-unused
+          compute_touched_ranks helper it pinned (the live touched-rank
+          source is the validate pass's own set, GraphBatchCommitter.cc);
+          later parts keep their letters.
   Part B  deliberately illegal batches (one per Phase-A rule category:
           epoch, node structure, edge structure, cycle, watch structure /
           eligibility / identity, send-recv pairing, collective split,
@@ -48,6 +50,11 @@ future arrival) through:
           pre-C1 this case used an EMPTY comm {}, which the C1 parse-layer
           key-set rule now rejects -- the same-tick milestone verify service
           was updated to emit the defaults with it).
+  Part H  online JSON "hbm_charge" parsing nail (低-2 online key
+          unification): the snake_case comm-section key parses into
+          NodeView comm.hbm_charge, an absent key defaults to true, and the
+          legacy kebab spelling comm["hbm-charge"] is rejected fail-closed
+          by the C1 parse-layer key-set rule.
   Part I  拼 batch §3.1 前置验证, 2026-08-22 (ported from the sh_1.0
           mother's Part H): a two-request decode train (shared aggregate
           body nodes under the batch-namespace request_id
@@ -74,6 +81,17 @@ future arrival) through:
           rejected fail-closed with zero side effects, and a watch-member
           mutation is blocked by the preflight BEFORE any Phase-B assembly
           runs (two-phase atomicity under the typed batch).
+  GC regressions (labels K-O): NodeStore garbage-collection lifecycle with
+          node_gc=true -- bounded (rank, json id) history and affine
+          translation persistence: arbitrary first ids, sparse-gap and
+          duplicate fail-closed rejection, and collected-parent edge
+          resolution (K); amortized bulk pruning at the 4096 threshold
+          with one live record + fixed affine metadata (L); preseeded
+          stores and affine mapping through add_node's returned ids (M);
+          external NodeStore drift failing closed in validate and direct
+          commit with zero side effects (N); and a million-id pressure
+          batch where every committed id stays resolvable in O(ranks)
+          affine metadata (O).
 
 Also asserts the pre-phase-5 fixture tolerance: a batch WITHOUT the
 touched_ranks field validates identically (has_touched_ranks == false).
@@ -491,21 +509,6 @@ StateDelta baseline_delta() {
     return d;
 }
 
-// ----------------------------------------------------------- Part A ------
-void test_static_checks(const Fixture& f) {
-    (void)f;
-    const GraphBatch base = baseline_batch();
-    expect(GraphBatchCommitter::compute_touched_ranks(base, 3) ==
-               std::vector<int>({0, 1, 2}),
-           "A: compute_touched_ranks covers all three ranks");
-    expect(GraphBatchCommitter::compute_touched_ranks(base, 2) ==
-               std::vector<int>({0, 1}),
-           "A: compute_touched_ranks filters out-of-range ranks");
-    // C1: non-object entries can no longer reach this pure helper (the
-    // parse layer rejects them); the rank filter above keeps the tolerance
-    // contract for out-of-range typed values.
-}
-
 // ----------------------------------------------------------- Part B ------
 // Every illegal batch must be rejected with the state byte-identical to the
 // pre-validate snapshot (zero nodes / zero watches / zero ledger actions).
@@ -573,9 +576,22 @@ void test_negative_cases(Fixture& f) {
         expect_reject(f, delta, b, "B: node rank out of range");
     }
     {
+        // An in-batch duplicate id (0, 0 on rank 0).  L23 (2026-09-29):
+        // this case was labeled "duplicate node id within a rank", but the
+        // mandatory json-id stream preflight runs before every semantic
+        // rule in BOTH validate() and commit(), and per-rank stream
+        // contiguity already subsumes in-batch duplicates -- the reported
+        // reason is "breaks the contiguous json-id stream (expected 1)".
+        // The structural duplicate-id pass stays as defense in depth but
+        // is unreachable through the public entry points (a genuine
+        // duplicate would always break the +1 chain first), so the case is
+        // renamed to what it actually pins.  The reachable duplicate rule
+        // (cross-batch, affine history) is covered by GC label K.
         GraphBatch b = base;
         b.nodes[1].json_id = 0;  // duplicate id 0 on rank 0
-        expect_reject(f, delta, b, "B: duplicate node id within a rank");
+        expect_reject(f, delta, b,
+                      "B: in-batch duplicate id rejected by the mandatory "
+                      "json-id stream rule");
     }
     {
         GraphBatch b = base;
@@ -1192,9 +1208,14 @@ void test_post_commit_negatives(Fixture& f) {
     }
     {
         GraphBatch b = base;
+        // L23 (2026-09-29): same subsumption as the Part B case -- the
+        // mandatory json-id stream preflight (which commit() always pays,
+        // even with the semantic validator off) rejects this in-batch
+        // duplicate before any duplicate-id rule could.
         b.nodes[1].json_id = 0;  // in-batch duplicate id on rank 0
         expect_reject(f, delta, b,
-                      "D: in-batch duplicate node id rejected, state intact");
+                      "D: in-batch duplicate node id rejected by the "
+                      "json-id stream preflight, state intact");
     }
     const auto& c = f.committer.counters();
     expect(c.graph_batch_count == 1 && c.total_nodes == 7,
@@ -2318,7 +2339,6 @@ void test_affine_metadata_under_million_node_pressure() {
 }  // namespace
 int main() {
     Fixture f;
-    test_static_checks(f);
     test_negative_cases(f);
     test_mandatory_liveness_preflight();
     test_validate_and_commit_atomic();

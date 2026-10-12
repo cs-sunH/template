@@ -6,7 +6,7 @@ face 调度器结构适配:runtime 对象账本 + 两段式 chunk 工作)。
 覆盖(设计文档 §3.2 构造规则 + §7.7):
   1. 异长 decode 同批退出(成员退出迭代先验,列车不因退出截断);
   2. 混合迭代(队列头 chunk × 迭代 + 成员 token;每迭代 ≤1 chunk;
-     列车终于头部 drain);face 两段式 chunk(recompute 段 + 当前段);
+     列车终于头部 drain);chunk 口径为两态化后的 prefill 单段(B2 起 recompute 段已删除);
   3. final chunk 后下一轮进 decode(drain 成员判定);
   4. KV/current_decode_token 闭式账本(连续列车推进 = 逐 token 精确);
   5. busy 门(列车在飞不重复发射);
@@ -43,7 +43,7 @@ from online.face_online_scheduler import (  # noqa: E402
 
 
 def _runtime(request_id, *, ctx=100, decode=4, remaining_chunks=0,
-             prefill=512, history=0, recompute=0, instance=0):
+             prefill=512, history=0, instance=0):
     record = {
         "request_id": request_id,
         "session_id": f"session_{request_id}",
@@ -59,7 +59,6 @@ def _runtime(request_id, *, ctx=100, decode=4, remaining_chunks=0,
     runtime.prefill_instance_index = instance
     runtime.decode_instance_index = instance
     runtime.remaining_chunks = remaining_chunks
-    runtime.history_recompute_tokens = recompute
     return runtime
 
 
@@ -130,12 +129,12 @@ class TrainPlanningTest(unittest.TestCase):
     def test_face_chunk_plan_ignores_history_recompute(self):
         """B2(2026-09-06):RECOMPUTE 从调度器规划删除——重算段不再生成
         chunk,remaining_chunks 口径去掉 ceil(R/p) 项;history(H=600)只
-        决定当前段(P=300)的 span 起点,history_recompute_tokens 字段
-        保持惰性(零 chunk、零 span)。"""
+        决定当前段(P=300)的 span 起点(零 chunk、零 span;原 history_
+        recompute_tokens 字段已随 2026-09-26 恒零管道清理整体移除)。"""
         scheduler = _bare_scheduler()
         state = scheduler.instances[0]
         head = _runtime("r2s", ctx=900, decode=1, remaining_chunks=1,
-                        prefill=300, history=600, recompute=600)
+                        prefill=300, history=600)
         state.qp.append(head)
         scheduler.runtime_by_request_id["r2s"] = head
         plan = scheduler._plan_train(state, head)
@@ -263,8 +262,11 @@ class TrainFinalizeTest(unittest.TestCase):
     def test_busy_gate_skips_in_flight_instance(self):
         """busy 门:列车在飞的实例不重复发射(_plan_and_emit_trains
         跳过;graph stub 一旦被调即失败)。frontier 必须含该实例——
-        空 frontier 时循环体不执行,门不在执行路径上(删掉 busy 门
-        该测试仍通过);scanned_entries 断言钉住循环确已访问。"""
+        空 frontier 时循环体不执行,门不在执行路径上;且实例必须持有
+        remaining_chunks > 0 的 qp 成员(否则删掉 busy 门后 _plan_train
+        返回 None、循环体仍不触发射,门是虚防护)——本夹具两个条件
+        都钉住,删门必然触发 graph stub 断言;scanned_entries 断言钉住
+        循环确已访问。"""
         scheduler = _bare_scheduler()
         scheduler._profile_batch = {
             "scanned_entries": 0, "full_scan_entries": 0}
@@ -277,6 +279,10 @@ class TrainFinalizeTest(unittest.TestCase):
                                  "members": [], "exit_set": set(),
                                  "drain_set": set(),
                                  "prefill_chunk_tokens": []}
+        # 有排队 chunk 工作的 busy 实例:busy 门是唯一防发射的闸。
+        busy_head = _runtime("busy_head", remaining_chunks=1, instance=0)
+        busy_head.admitted_prefill = True
+        state.qp.append(busy_head)
         scheduler._plan_and_emit_trains(0)  # 不得发射、不得抛
         self.assertEqual(scheduler._profile_batch["scanned_entries"], 1)
 
@@ -362,9 +368,50 @@ class LayerABCrossCheckTest(unittest.TestCase):
             if any(name.endswith(n) for n in linear_names))
         linear_weight_total = layers * (
             4 * h * h + 2 * h * ffn) * bpe
-        self.assertGreater(weight_b, linear_weight_total)
-        # 权重分量 == 常量(与 span 数/批成员数无关,A0 已证,这里锚
-        # 定"每迭代恰一次"的量级:weight_passes=1 ⇒ 权重只计一份)。
+
+        def _linear_tensor_bytes(pass_spans):
+            """同口径探针:四类线性投影节点 tensor_size 的全 rank 求和。"""
+            probe_rank_nodes = []
+            for rank in range(tp):
+                rec = _Rec()
+                transformer_pass_aggregated(
+                    rec, phase="x", pass_spans=pass_spans, layers=layers,
+                    hidden_size=h, ffn_size=ffn, tensor_parallel=tp,
+                    pg_name="pg", vocab_size=MODEL.vocab_size,
+                    bytes_per_elem=bpe, num_heads=MODEL.num_heads,
+                    mlp_variant=MODEL.mlp_variant, weight_passes=1,
+                    tensor_parallel_rank=rank)
+                probe_rank_nodes.append(rec.nodes)
+            return sum(
+                ts for nodes in probe_rank_nodes
+                for name, _ops, ts in nodes
+                if any(name.endswith(n) for n in linear_names))
+
+        # 判别 oracle(L22,2026-09-29;取代弱 assertGreater——weight_b
+        # 含激活分量(本组成下 ~25 MB ≫ 8 MB 权重),原断言连权重归零
+        # 都放行,翻倍更不设防)。四类线性节点的 tensor_size = 激活分量
+        # (线性于 token 总数,与 span 切分/kv_length 无关)+ 权重常量
+        # (weight_passes=1 ⇒ 每迭代恰一份,与 span 数/批成员数无关,
+        # A0 已证)。三探针交叉锁定:
+        #   P1|P2:token 总数同 514、span 切分与 kv_length 不同 ⇒ 逐字
+        #     节相等(权重若按 span 注入或随 kv 缩放即破坏);
+        #   P3:激活严格线性 ⇒ W = 2*ts(1tok) - ts(2tok) 精确消去激活
+        #     解出权重常量,必须逐字节 == linear_weight_total(归零/翻
+        #     倍/口径漂移即破坏)。
+        self.assertEqual(
+            _linear_tensor_bytes([(514, 1)]), weight_b,
+            "linear-node tensor_size must not change with span split or "
+            "kv_length at a fixed token total (weight constant is "
+            "span-count invariant)")
+        ts_one_token = _linear_tensor_bytes([(1, 1)])
+        ts_two_tokens = _linear_tensor_bytes([(2, 1)])
+        self.assertEqual(
+            2 * ts_one_token - ts_two_tokens, linear_weight_total,
+            "weight component must equal exactly one weight_passes copy "
+            "of the closed-form per-iteration weight constant "
+            "(layers*(4h^2+2*h*ffn)*bpe, all ranks)")
+        # 权重分量 == 常量(与 span 数/批成员数无关,A0 已证,上面 P1|
+        # P2|P3 三探针已锚定"每迭代恰一次"的精确量级)。
         # 时间域镜像(容差记录:层次 A attention 取 max,层次 B 逐类
         # max 求和;镜像按单 rank 链 × tp 并行取 max 口径,容差 3×)。
         perf = 6 * HARDWARE.peak_perf_tflops * 1e12

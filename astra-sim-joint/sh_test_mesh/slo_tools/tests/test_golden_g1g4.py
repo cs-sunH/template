@@ -272,8 +272,10 @@ class G3SessionTwoTurns(unittest.TestCase):
     def setUp(self):
         self.run_dir = synthetic.make_run_dir("g3")
         # turn0: arrival 0 → completion 1000；turn1: arrival 5000 →
-        # completion 7000；human 1000 + tool 500。
-        # T_session = 7000 − 0 − 1500 = 5500。
+        # completion 7000；initiator 口径（H5①，2026-09-29）：行上
+        # human/tool = 该轮之后的 gap——turn0 的 human 1000 在窗口内、
+        # turn1（末轮）的 tool 500 定义在窗口外不计。
+        # T_session = 7000 − 0 − 1000 = 6000。
         synthetic.write_request_metrics(self.run_dir, [
             synthetic.request_row(
                 request_id="s0_r0", session_id="s0", turn_index="0",
@@ -303,11 +305,16 @@ class G3SessionTwoTurns(unittest.TestCase):
         self.assertEqual(row["n_turns"], "2")
         self.assertEqual(row["first_arrival_ns"], "0")
         self.assertEqual(row["last_completion_ns"], "7000")
-        self.assertEqual(row["sum_human_tool_ns"], "1500")
-        self.assertEqual(row["t_session_ns"], "5500")
+        # 期望值变更（H5① initiator 口径，旧 1500/5500）：Σ 只含窗口内
+        # 的前 n−1 轮等待 = turn0 的 1000（末轮 turn1 的 500 不计）；
+        # T_session = 7000 − 0 − 1000 = 6000。
+        self.assertEqual(row["sum_human_tool_ns"], "1000")
+        self.assertEqual(row["t_session_ns"], "6000")
 
     def test_missing_transparent_fields_na_and_counted(self):
-        # manifest 缺 human/tool 透传字段（WP2 之前的状态）→ NA 行+计数。
+        # manifest 缺 human/tool 透传字段（WP2 之前的状态）→ NA 行+计数；
+        # 只核对非末轮（s0_r0）→ 2 条（human+tool 各 1；末轮 s0_r1 字段
+        # 与 T_session 无关，H5① 起不进核对）。
         synthetic.write_metrics_manifest(self.run_dir, [
             synthetic.manifest_request("s0_r0", "s0", 0, 0),
             synthetic.manifest_request("s0_r1", "s0", 1, 1),
@@ -318,7 +325,7 @@ class G3SessionTwoTurns(unittest.TestCase):
         _, rows = synthetic.read_csv(out)
         row = rows[0]
         self.assertEqual(row["t_session_ns"], "NA")
-        self.assertEqual(row["missing_field_count"], "4")
+        self.assertEqual(row["missing_field_count"], "2")
         self.assertIn("s0_r0:human_time_ns", row["missing_fields_sample"])
 
 

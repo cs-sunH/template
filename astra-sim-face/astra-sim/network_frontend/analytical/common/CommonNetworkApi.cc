@@ -7,6 +7,8 @@ LICENSE file in the root directory of this source tree.
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
+#include <string>
 
 using namespace AstraSim;
 using namespace AstraSimAnalytical;
@@ -29,8 +31,58 @@ void CommonNetworkApi::set_event_queue(
     CommonNetworkApi::event_queue = std::move(event_queue_ptr);
 }
 
-CallbackTracker& CommonNetworkApi::get_callback_tracker() noexcept {
-    return callback_tracker;
+void CommonNetworkApi::audit_run_end_residuals() {
+    // Run-end residual audit (warn-only, never aborts): a quiescent run end
+    // should have recycled every ChunkIdGenerator key (each key is erased
+    // once its completion gate proves totality) and every CallbackTracker
+    // entry (each completion pops it). recv-first keys intentionally stay
+    // resident until their sends arrive -- so a resident key at a quiescent
+    // run end means a completion never happened. This can be a real defect
+    // OR a legal truncated-window shape, hence warn (with counts and key
+    // samples) instead of the abort used for mid-run invariant breaks.
+    static constexpr size_t max_key_samples = 5;
+    const auto chunk_residuals =
+        chunk_id_generator.resident_key_samples(max_key_samples);
+    const auto tracker_residuals =
+        callback_tracker.resident_key_samples(max_key_samples);
+    if (chunk_residuals.empty() && tracker_residuals.empty()) {
+        return;
+    }
+    const auto format_chunk_key = [](const auto& key) {
+        return "tag=" + std::to_string(std::get<0>(key)) +
+               " src=" + std::to_string(std::get<1>(key)) +
+               " dest=" + std::to_string(std::get<2>(key)) +
+               " size=" + std::to_string(std::get<3>(key));
+    };
+    const auto format_tracker_key = [](const auto& key) {
+        return "tag=" + std::to_string(std::get<0>(key)) +
+               " src=" + std::to_string(std::get<1>(key)) +
+               " dest=" + std::to_string(std::get<2>(key)) +
+               " size=" + std::to_string(std::get<3>(key)) +
+               " chunk=" + std::to_string(std::get<4>(key));
+    };
+    if (!chunk_residuals.empty()) {
+        std::fprintf(stderr,
+                     "[Warn] (network/analytical) run-end residual audit: "
+                     "%zu ChunkIdGenerator key(s) still resident "
+                     "(%zu sampled):",
+                     chunk_id_generator.size(), chunk_residuals.size());
+        for (const auto& key : chunk_residuals) {
+            std::fprintf(stderr, " [%s]", format_chunk_key(key).c_str());
+        }
+        std::fprintf(stderr, "\n");
+    }
+    if (!tracker_residuals.empty()) {
+        std::fprintf(stderr,
+                     "[Warn] (network/analytical) run-end residual audit: "
+                     "%zu CallbackTracker entry(s) still resident "
+                     "(%zu sampled):",
+                     callback_tracker.size(), tracker_residuals.size());
+        for (const auto& key : tracker_residuals) {
+            std::fprintf(stderr, " [%s]", format_tracker_key(key).c_str());
+        }
+        std::fprintf(stderr, "\n");
+    }
 }
 
 void CommonNetworkApi::process_chunk_arrival(void* args) noexcept {
@@ -43,7 +95,7 @@ void CommonNetworkApi::process_chunk_arrival(void* args) noexcept {
     delete data;
 
     // search tracker
-    auto& tracker = CommonNetworkApi::get_callback_tracker();
+    auto& tracker = callback_tracker;
     const auto entry = tracker.search_entry(tag, src, dest, count, chunk_id);
     if (!entry.has_value()) {
         std::fprintf(stderr,
@@ -110,19 +162,50 @@ timespec_t CommonNetworkApi::sim_get_time() {
     return {NS, astra_sim_time};
 }
 
+bool CommonNetworkApi::backend_in_invoke_context() const {
+    return event_queue == nullptr || event_queue->in_invoke_context();
+}
+
 void CommonNetworkApi::sim_schedule(const timespec_t delta,
                                     void (*fun_ptr)(void*),
                                     void* const fun_arg) {
-    assert(delta.time_res == NS);
+    // (2026-09-30) The time_res == NS assert is gone: time_type_e has a
+    // single enumerator, so the branch could never fire. The time-regression
+    // check below was assert-only and compiled out of Release builds -- a
+    // negative delta would then insert into a past EventQueue bucket that
+    // never fires (a silent hang instead of a named error), so it is now a
+    // hard abort (fail-closed in every build type).
     assert(fun_ptr != nullptr);
 
     // calculate absolute event time
     const auto current_time = sim_get_time();
     const auto event_time = current_time.time_val + delta.time_val;
+    // (2026-10-01) range guard before the long double -> uint64
+    // conversion: a sum past UINT64_MAX is UB (x86-64 yields the 0x8000...
+    // "integer indefinite" sentinel, which then sorts INTO the queue).
+    // Unreachable with realistic deltas (< 1e12 ns), but this is the one
+    // unguarded conversion left on the README §7 precision chain (same
+    // discipline as FluidScheduler's checked_add_time).
+    if (!(event_time >= 0.0L) ||
+        event_time > static_cast<long double>(
+                         std::numeric_limits<EventTime>::max())) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule overflow: "
+                     "event_time is outside the uint64 ns range\n");
+        std::abort();
+    }
     const auto event_time_ns = static_cast<EventTime>(event_time);
 
     // schedule the event to the event queue
-    assert(event_time_ns >= event_queue->get_current_time());
+    if (event_time_ns < event_queue->get_current_time()) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule regression: "
+                     "event_time=%llu < current_time=%llu (negative delta?)\n",
+                     static_cast<unsigned long long>(event_time_ns),
+                     static_cast<unsigned long long>(
+                         event_queue->get_current_time()));
+        std::abort();
+    }
     event_queue->schedule_event(event_time_ns, fun_ptr, fun_arg);
 }
 
@@ -132,7 +215,6 @@ CommonNetworkApi::sim_schedule_cancellable(
     void (*fun_ptr)(void*),
     void* const fun_arg,
     const AstraNetworkAPI::ScheduleCancellationCallback cancellation_cleanup) {
-    assert(delta.time_res == NS);
     assert(fun_ptr != nullptr);
     if (next_cancellable_schedule_token_ == 0) {
         std::abort();
@@ -143,8 +225,26 @@ CommonNetworkApi::sim_schedule_cancellable(
     // EventQueue control block.
     const auto current_time = sim_get_time();
     const auto event_time = current_time.time_val + delta.time_val;
+    // (2026-10-01) same pre-conversion range guard as sim_schedule above.
+    if (!(event_time >= 0.0L) ||
+        event_time > static_cast<long double>(
+                         std::numeric_limits<EventTime>::max())) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule_cancellable "
+                     "overflow: event_time is outside the uint64 ns range\n");
+        std::abort();
+    }
     const auto event_time_ns = static_cast<EventTime>(event_time);
-    assert(event_time_ns >= event_queue->get_current_time());
+    // Release-active regression guard, same rationale as sim_schedule.
+    if (event_time_ns < event_queue->get_current_time()) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/common) sim_schedule_cancellable "
+                     "regression: event_time=%llu < current_time=%llu\n",
+                     static_cast<unsigned long long>(event_time_ns),
+                     static_cast<unsigned long long>(
+                         event_queue->get_current_time()));
+        std::abort();
+    }
 
     const uint64_t token = next_cancellable_schedule_token_++;
     auto* const context = new CancellableScheduleContext{
@@ -226,6 +326,17 @@ int CommonNetworkApi::sim_recv(void* const buffer,
                                sim_request* const request,
                                void (*msg_handler)(void*),
                                void* const fun_arg) {
+    // Fail closed before any bookkeeping: a null handler would otherwise be
+    // registered in the CallbackTracker and later invoked (or scheduled) as
+    // a null call. No chunk id is consumed on this path.
+    if (msg_handler == nullptr) {
+        std::fprintf(stderr,
+                     "[Error] (network/analytical) sim_recv requires a "
+                     "non-null msg_handler (tag=%d src=%d count=%llu)\n",
+                     tag, src, static_cast<unsigned long long>(count));
+        std::abort();
+    }
+
     // query chunk id
     const auto dst = sim_comm_get_rank();
     const auto chunk_id =
@@ -246,8 +357,9 @@ int CommonNetworkApi::sim_recv(void* const buffer,
             CommonNetworkApi::chunk_id_generator.complete(tag, src, dst,
                                                            count, chunk_id);
 
-            // run recv callback immediately. In the invoke context (static
-            // path) the current_time alarm merges into the EventList currently
+            // run recv callback immediately. In the invoke context (legacy
+            // arm: backend/ED tests driving the backend directly) the
+            // current_time alarm merges into the EventList currently
             // being invoked and executes within the same pass -- pre-extension
             // behavior, byte-for-byte preserved. From a tick-end/deferred
             // context (online post-commit issue pass) a schedule_event at

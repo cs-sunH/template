@@ -9,8 +9,10 @@ Implementation (方案 §4 步骤 1-6).
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -27,8 +29,30 @@ bool completed_nodes_exact_from_env() {
     if (std::strcmp(mode, "exact") == 0) {
         return true;
     }
-    throw std::runtime_error(
-        "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) or 'exact'");
+    // L9 diagnostic (2026-09-29): the name itself is consistent across the
+    // repo (DecisionMailbox.hh -- verified), so the failure mode is a bad
+    // VALUE, and the throw used to escape the DecisionMailbox member
+    // construction in main_online as a bare terminate. Print an
+    // attributable line before rethrowing so the invalid value and its
+    // remedy are in the log even if the terminate handler's what() output
+    // is lost.
+    std::fprintf(stderr,
+                 "[Error] (execution_driven/mailbox) env "
+                 "ASTRA_SIM_ONLINE_COMPLETED_NODES=%s is invalid (must be "
+                 "unset or 'exact'); completed-nodes exact audit stays off "
+                 "only if unset\n",
+                 mode);
+    // R1-B-L1 port (2026-09-30): this runs from the
+    // CompletedFactAccumulator constructor deep inside main's stack; a
+    // thrown runtime_error had no catcher and terminated the process
+    // through std::terminate, bypassing the binary's uniform [Error]
+    // channel. Fail through the channel instead.
+    std::fprintf(stderr,
+                 "[Error] (execution_driven/online) "
+                 "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) "
+                 "or 'exact', got: %s\n",
+                 mode);
+    std::exit(EXIT_FAILURE);
 }
 
 }  // namespace
@@ -128,11 +152,28 @@ StateDelta build_state_delta_v1(
 void DecisionMailbox::push(DecisionEvent e) {
     const Identity identity{static_cast<int>(e.reason), e.request_id, e.stage,
                             e.generation};
-    if (!pending_identities_.insert(identity).second) {
+    if (pending_identities_.find(identity) != pending_identities_.end()) {
         return;  // same-epoch duplicate: no-op
     }
-    e.seq = next_seq_++;
-    events_.push_back(std::move(e));
+    if (next_seq_ == std::numeric_limits<uint64_t>::max() ||
+        event_count_ == std::numeric_limits<uint64_t>::max()) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/mailbox) decision event "
+                     "sequence/counter exhausted (fail-closed)\n");
+        std::exit(EXIT_FAILURE);
+    }
+    const auto inserted = pending_identities_.emplace(identity);
+    if (!inserted.second) {
+        return;
+    }
+    e.seq = next_seq_;
+    try {
+        events_.push_back(std::move(e));
+    } catch (...) {
+        pending_identities_.erase(inserted.first);
+        throw;
+    }
+    ++next_seq_;
     ++event_count_;
 }
 
@@ -141,6 +182,13 @@ bool DecisionMailbox::has_decision_work() const {
 }
 
 std::vector<DecisionEvent> DecisionMailbox::drain() {
+    if (!events_.empty() &&
+        delivery_count_ == std::numeric_limits<uint64_t>::max()) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/mailbox) delivery "
+                     "counter exhausted (fail-closed)\n");
+        std::exit(EXIT_FAILURE);
+    }
     std::vector<DecisionEvent> result = std::move(events_);
     events_.clear();
     pending_identities_.clear();  // a new dedup epoch starts

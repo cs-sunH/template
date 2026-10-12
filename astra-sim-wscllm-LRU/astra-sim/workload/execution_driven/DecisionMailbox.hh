@@ -133,6 +133,14 @@ struct CompletedFactCounters {
 /// explicit ASTRA_SIM_ONLINE_COMPLETED_NODES=exact mode retains the frozen
 /// legacy per-node records for deep audit/replay. The collector is
 /// simulation-thread-only, matching CompletionObserver's contract.
+///
+/// Construction never throws: the accumulator is a stack member of
+/// main_online's driver context, built outside any try block, so a
+/// constructor exception used to die as a bare std::terminate (message
+/// lost). The ASTRA_SIM_ONLINE_COMPLETED_NODES value is validated through
+/// parse_completed_nodes_exact_env() (below) -- main_online runs it BEFORE
+/// the context exists and fails with [Error] + exit(1); the constructor
+/// re-runs the same no-throw parse as a fail-closed backstop.
 class CompletedFactAccumulator {
   public:
     CompletedFactAccumulator();
@@ -144,7 +152,6 @@ class CompletedFactAccumulator {
     /// Transfer this delivery's exact-audit records and reset that buffer.
     std::vector<CompletedNodeFact> drain();
     [[nodiscard]] size_t size() const;
-    [[nodiscard]] bool exact_mode() const { return exact_mode_; }
     [[nodiscard]] const CompletedFactCounters& counters() const {
         return counters_;
     }
@@ -158,6 +165,14 @@ class CompletedFactAccumulator {
     std::vector<CompletedNodeFact> exact_facts_;
     CompletedFactCounters counters_;
 };
+
+/// No-throw parser for ASTRA_SIM_ONLINE_COMPLETED_NODES (must be unset --
+/// default compact mode -- or "exact"). Returns true and fills
+/// `exact_mode` on success; returns false and fills `error` on an invalid
+/// value. Constructors must not throw (see CompletedFactAccumulator), so
+/// the production entry calls this BEFORE the stack objects exist and
+/// handles an invalid value through the standard [Error] + exit(1) path.
+bool parse_completed_nodes_exact_env(bool& exact_mode, std::string& error);
 
 /// Snapshot handle (schema v1, phase 4): a placeholder until phase 7 wires
 /// the congestion snapshot. v1 self-consistent value: {"epoch": delivery_

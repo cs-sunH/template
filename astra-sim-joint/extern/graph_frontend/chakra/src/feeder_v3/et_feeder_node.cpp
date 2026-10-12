@@ -164,3 +164,12 @@ std::string ETFeederNode::get_outputs_types(const std::string& default_) const {
       std::to_string(this->node_id) +
       " feeder->id=" + std::to_string(this->feeder.feeder_id()));
 }
+
+[[noreturn]] void ETFeederNode::complain_attr_type_mismatch(
+    const std::string& attr_name,
+    const std::exception& cause) const {
+  throw std::runtime_error(
+      "Attribute " + attr_name + " in node " + std::to_string(this->node_id) +
+      " feeder->id=" + std::to_string(this->feeder.feeder_id()) +
+      " has an incompatible or unsupported type: " + cause.what());
+}

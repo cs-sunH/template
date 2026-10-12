@@ -7,12 +7,11 @@ Covers, in order:
      and erase it immediately (empty rank bucket dropped too): bucket counts
      strictly decrease per fired node, unfired entries stay, a second call
      for a fired edge is a silent miss (no drop, no double record).
-  B. Output equivalence: manifest load + one-shot fire path vs. a
-     direct-apply baseline (the pre-R2 semantics) produce byte-identical
-     [METRIC] output, including the multi-event bucket multiplicity, the
-     retained raw memory anchors and the transfer_complete replay.  This is
-     also the static-path red line: the static fire path keeps its
-     unconditional call semantics.
+  B. Output equivalence: dynamic anchor registration + one-shot fire path
+     vs. a direct-apply baseline (the pre-R2 semantics) produce
+     byte-identical [METRIC] output, including the multi-event bucket
+     multiplicity, the retained raw memory anchors and the
+     transfer_complete replay.
   C. Online dynamic registration: return values (true for registered AND
      idempotent duplicates; false for disabled/unknown request/kind), the
      online spool precision, and the A2 request-level release coexisting
@@ -22,10 +21,11 @@ Covers, in order:
      two static_asserts against a pre-R2 mirror struct), default-false on
      every NodeStore view, OR semantics of set_metric_anchor_flags, and
      flag visibility through the NodeStoreGraphSource views (the exact data
-     path Workload::issue consumes).  The ETFeederGraphSource builds its
-     views the same way (default-constructed NodeView, per-field assign,
-     never touching the metric flags), so static views are structurally
-     flag-false -- the gate `execution_mode_ != Online || flag` keeps the
+     path Workload::issue consumes).  The retired static/ET source
+     (ETFeederGraphSource, removed with the static route) built its views
+     the same way (default-constructed NodeView, per-field assign, never
+     touching the metric flags), so static views were structurally
+     flag-false -- the gate `execution_mode_ != Online || flag` kept the
      static path on the original unconditional logic.
 *******************************************************************************/
 
@@ -55,9 +55,14 @@ using json = nlohmann::json;
 // so the flags moved into the new 8-byte block and sizeof grew 440 -> 448.
 // The dead-state sweep then removed the three write-only
 // OnlineStatisticsState fields (operation_intensity, is_memory_bound,
-// network_bandwidth; Workload::record_network_bandwidth survives only as
-// the fail-closed lookup guard), shrinking OnlineStatisticsState
-// 112 -> 72 and OnlineNode 448 -> 408 on the same toolchain.
+// network_bandwidth) together with Workload::record_network_bandwidth --
+// the terminal fail-closed lookup guard now lives in Workload's
+// mark_online_terminal_or_fail / complete_online_statistics (which already
+// ran on every terminal path) -- and the write-only terminal-communication
+// fact field comm_size (std::optional<uint64_t>; review item wl-metrics-D2:
+// no production writer ever existed in this repository) -- shrinking
+// OnlineStatisticsState 112 -> 72 -> 56 and OnlineNode 448 -> 408 -> 392
+// on the same toolchain.
 // The mirror now locks the FULL current field list (ABI-agnostic against
 // accidental field insertion/removal/reorder); the numeric assert anchors
 // the current toolchain value (GCC 15 / libstdc++ x86-64, std::vector=40).
@@ -91,7 +96,13 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodeLayoutMirror),
               "OnlineNode full-layout mirror: no field was inserted, "
               "removed, or reordered behind this test's back");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 408,
+// Die backend (stage B, 2026-10-03): ComputeAttrs grew by OpRole (enum,
+// 4 bytes + 4 padding) and the immutable shared_ptr<const DieOpSpec>
+// (16 bytes) -- 392 -> 432 on the same toolchain. The mirror above embeds
+// the REAL ComputeAttrs type, so the mirror equality carries the new
+// layout automatically; this numeric anchor is re-proved for the current
+// toolchain only.
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 432,
               "OnlineNode layout anchor for this toolchain (see the mirror "
               "assert above for the ABI-agnostic bound)");
 
@@ -220,7 +231,9 @@ std::string write_manifest(const json& manifest) {
     return pattern;
 }
 
-// Anchor layout (subject queue_index 10 everywhere):
+// Anchor layout (subject queue_index 10 everywhere), registered dynamically
+// (the manifest's static node_events_by_rank table was retired -- no
+// producer of the offline per-rank node-id space exists anymore):
 //   rank 1  node 100: issue  code 1 (prefill_start) + complete code 2
 //                    (prefill_end)                          -> 2 edges
 //   rank 1  node 101: complete code 7 (memory anchor)       -> 1 edge
@@ -235,8 +248,8 @@ json make_manifest() {
     request["request_id"] = "r10";
     request["session_id"] = "s0";
     request["turn_index"] = 0;
-    request["prefill_ranks"] = json::array();
-    request["decode_ranks"] = json::array();
+    request["prefill_ranks"] = json::array({1});
+    request["decode_ranks"] = json::array({1, 2});
     request["arrival"] = {{"kind", "absolute"}, {"value_ns", 0}};
 
     json manifest;
@@ -245,18 +258,6 @@ json make_manifest() {
     manifest["run_mode"] = "service";
     manifest["run_id"] = "metric-one-shot-erase-fixture";
     manifest["requests"] = json::array({request});
-    json rank1_events = json::array({
-        json::array({100, 1, 10}),
-        json::array({100, 2, 10}),
-        json::array({101, 7, 10}),
-        json::array({102, 2, 10}),
-        json::array({102, 7, 10}),
-    });
-    json rank2_events = json::array({
-        json::array({200, 7, 10}),
-    });
-    manifest["node_events_by_rank"] =
-        json::object({{"1", rank1_events}, {"2", rank2_events}});
     manifest["planner_memory_peaks"] = json::array();
     manifest["memory_actions"] = json::array({
         json{
@@ -372,29 +373,49 @@ const json* record_for_rank(const std::vector<json>& records, int rank) {
     return nullptr;
 }
 
-// A + B + C(static half): the one-shot fire path against the direct-apply
-// baseline.  Runs on the SAME manifest so the only variable is the routing
-// consumption; byte-identical output is the equivalence proof.
+// A + B + C(dynamic-registration half): the one-shot fire path against the
+// direct-apply baseline.  Runs on the SAME anchor set so the only variable
+// is the routing consumption; byte-identical output is the equivalence
+// proof.
 void test_one_shot_erase_and_output_equivalence() {
     const std::string manifest_path = write_manifest(make_manifest());
     MetricCollector& collector = MetricCollector::instance();
 
     const std::string one_shot_output = capture_stdout([&] {
         collector.initialize(manifest_path, "full");
+        // The manifest request provides queue 10; the alias table is fed by
+        // the dynamic registration path.
+        collector.online_register_request(10, "r10", "s0", 0, true, 0, -1, 0);
+        // Same (rank, node, event) shape the retired static table carried.
+        expect(collector.online_register_node_anchor(1, 100, "r10",
+                                                    "prefill_start", false),
+               "start anchor registration returns true");
+        expect(collector.online_register_node_anchor(1, 100, "r10",
+                                                    "prefill_end", false),
+               "end anchor registration returns true");
+        expect(collector.online_register_node_anchor(1, 101, "r10", "", true),
+               "rank-1 transfer anchor registration returns true");
+        expect(collector.online_register_node_anchor(1, 102, "r10",
+                                                    "prefill_end", false),
+               "multi-event bucket code-2 registration returns true");
+        expect(collector.online_register_node_anchor(1, 102, "r10", "", true),
+               "multi-event bucket code-7 registration returns true");
+        expect(collector.online_register_node_anchor(2, 200, "r10", "", true),
+               "rank-2 transfer anchor registration returns true");
         // Loaded shape: 1 issue node bucket (rank 1 / node 100), 4 complete
         // node buckets across 2 rank buckets.
         expect(AstraSim::MetricCollectorTestAccess::issue_rank_bucket_count(
                    collector) == 1,
-               "manifest loads one issue rank bucket");
+               "anchors load one issue rank bucket");
         expect(AstraSim::MetricCollectorTestAccess::issue_node_bucket_count(
                    collector) == 1,
-               "manifest loads one issue node bucket");
+               "anchors load one issue node bucket");
         expect(AstraSim::MetricCollectorTestAccess::
                    complete_rank_bucket_count(collector) == 2,
-               "manifest loads two complete rank buckets");
+               "anchors load two complete rank buckets");
         expect(AstraSim::MetricCollectorTestAccess::
                    complete_node_bucket_count(collector) == 4,
-               "manifest loads four complete node buckets");
+               "anchors load four complete node buckets");
         const uint64_t dropped_before =
             AstraSim::MetricCollectorTestAccess::dropped_event_count(collector);
 
@@ -474,9 +495,8 @@ void test_one_shot_erase_and_output_equivalence() {
         collector.initialize(manifest_path, "full");
         // Pre-R2 semantics equivalent: every event applied exactly once
         // through apply_event directly (never through the routing tables),
-        // in the same order the one-shot run fired them.  The manifest's
-        // routing entries are never consumed and stay retained -- the old
-        // "static buckets live until process end" behavior.
+        // in the same order the one-shot run fired them. The routing tables
+        // stay empty -- apply_event never writes them.
         AstraSim::MetricCollectorTestAccess::apply_event_direct(collector, 1,
                                                                 10, 1, 100, 5);
         AstraSim::MetricCollectorTestAccess::apply_event_direct(collector, 2,
@@ -495,11 +515,11 @@ void test_one_shot_erase_and_output_equivalence() {
                                                                 10, 2, 200,
                                                                 50);
         expect(AstraSim::MetricCollectorTestAccess::issue_node_bucket_count(
-                   collector) == 1,
-               "baseline keeps its unconsumed issue entries");
+                   collector) == 0,
+               "direct-apply baseline writes no routing entry");
         expect(AstraSim::MetricCollectorTestAccess::
-                   complete_node_bucket_count(collector) == 4,
-               "baseline keeps its unconsumed complete entries");
+                   complete_node_bucket_count(collector) == 0,
+               "direct-apply baseline writes no routing entry");
         expect(AstraSim::MetricCollectorTestAccess::
                    retained_raw_anchor_count(collector) == 3,
                "baseline retains the same raw anchor count");
@@ -557,7 +577,7 @@ void test_online_registration_and_a2_coexistence() {
 
     (void)capture_stdout([&] {
         collector.initialize(manifest_path, "full");
-        collector.clear_static_node_events();
+        collector.enter_online_mode();
         expect(AstraSim::MetricCollectorTestAccess::spool_open(collector),
                "online transition opens the spool");
         collector.online_register_request(10, "r10", "s0", 0, true, 0, -1, 0);
@@ -702,15 +722,12 @@ void test_online_node_flag_plumbing() {
     expect(ptr != nullptr && !ptr->metric_issue_anchor &&
                !ptr->metric_complete_anchor,
            "node_ptr view of an unanchored node is flag-false");
-    const auto opt = store.node(plain_id);
-    expect(opt.has_value() && !opt->metric_issue_anchor &&
-               !opt->metric_complete_anchor,
-           "by-value lookup view of an unanchored node is flag-false");
 
-    // ETFeederGraphSource::view_of constructs its views exactly this way
-    // (default-constructed NodeView, per-field assignment, never touching
-    // the metric flags), so static/ET views are structurally flag-false and
-    // the `execution_mode_ != Online || flag` gate keeps the static path on
+    // The retired static/ET source (ETFeederGraphSource, removed with the
+    // static route) constructed its views exactly this way (default-
+    // constructed NodeView, per-field assignment, never touching the metric
+    // flags), so static/ET views are structurally flag-false and the
+    // `execution_mode_ != Online || flag` gate keeps the static path on
     // the original unconditional call.
     NodeView et_style_view;
     et_style_view.global_id = 7;

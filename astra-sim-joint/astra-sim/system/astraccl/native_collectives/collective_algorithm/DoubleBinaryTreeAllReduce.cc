@@ -14,7 +14,6 @@ DoubleBinaryTreeAllReduce::DoubleBinaryTreeAllReduce(int id,
                                                      BinaryTree* tree,
                                                      uint64_t data_size)
     : Algorithm() {
-    this->id = id;
     this->logical_topo = tree;
     this->data_size = data_size;
     this->state = State::Begin;
@@ -37,7 +36,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
     } else if (state == State::SendingDataToParent &&
                type == BinaryTree::Type::Leaf) {  // leaf.3
         // sending
-        sim_request snd_req;
+        sim_request snd_req{};
         snd_req.srcRank = stream->owner->id;
         snd_req.dstRank = parent;
         snd_req.tag = stream->stream_id;
@@ -48,7 +47,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
                                           Sys::FrontEndSendRecvType::COLLECTIVE,
                                           &Sys::handleEvent, nullptr);
         // receiving
-        sim_request rcv_req;
+        sim_request rcv_req{};
         rcv_req.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
             stream, stream->owner->id, EventType::PacketReceived,
@@ -76,7 +75,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         // arrived on the simulation side, in which case the callback would enter
         // the same state again.
         state = State::WaitingForTwoChildData;
-        sim_request rcv_req;
+        sim_request rcv_req{};
         rcv_req.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
             stream, stream->owner->id, EventType::PacketReceived,
@@ -122,7 +121,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         // the same state again.
         state = State::WaitingDataFromParent;
         // sending
-        sim_request snd_req;
+        sim_request snd_req{};
         snd_req.srcRank = stream->owner->id;
         snd_req.dstRank = parent;
         snd_req.tag = stream->stream_id;
@@ -133,7 +132,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
                                           Sys::FrontEndSendRecvType::COLLECTIVE,
                                           &Sys::handleEvent, nullptr);
         // receiving
-        sim_request rcv_req;
+        sim_request rcv_req{};
         rcv_req.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
             stream, stream->owner->id, EventType::PacketReceived,
@@ -153,7 +152,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
 
     } else if (state == State::SendingDataToChilds &&
                type == BinaryTree::Type::Intermediate) {
-        sim_request snd_req;
+        sim_request snd_req{};
         snd_req.srcRank = stream->owner->id;
         snd_req.dstRank = left_child;
         snd_req.tag = stream->stream_id;
@@ -163,7 +162,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
             0, Sys::dummy_data, data_size, UINT8, left_child, stream->stream_id,
             &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE, &Sys::handleEvent,
             nullptr);
-        sim_request snd_req2;
+        sim_request snd_req2{};
         snd_req2.srcRank = stream->owner->id;
         snd_req2.dstRank = right_child;
         snd_req2.tag = stream->stream_id;
@@ -183,7 +182,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         // the same state again.
         state = State::WaitingForOneChildData;
         int only_child_id = left_child >= 0 ? left_child : right_child;
-        sim_request rcv_req;
+        sim_request rcv_req{};
         rcv_req.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
             stream, stream->owner->id, EventType::PacketReceived,
@@ -204,7 +203,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
     } else if (state == State::SendingDataToChilds &&
                type == BinaryTree::Type::Root) {  // root.2
         int only_child_id = left_child >= 0 ? left_child : right_child;
-        sim_request snd_req;
+        sim_request snd_req{};
         snd_req.srcRank = stream->owner->id;
         snd_req.dstRank = only_child_id;
         snd_req.tag = stream->stream_id;

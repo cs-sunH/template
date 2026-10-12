@@ -6,21 +6,17 @@ LICENSE file in the root directory of this source tree.
 #ifndef __MY_PACKET_HH__
 #define __MY_PACKET_HH__
 
-#include "astra-sim/system/Callable.hh"
-#include "astra-sim/system/Common.hh"
+#include <cstdint>
 
 namespace AstraSim {
 
-class MyPacket : public Callable {
+// Plain data carrier for in-flight collective packets. It used to derive from
+// Callable with an empty call(), but it is never dispatched as a callback.
+class MyPacket {
   public:
-    MyPacket(int preferred_vnet, int preferred_src, int preferred_dest);
-    MyPacket(uint64_t msg_size,
-             int preferred_vnet,
-             int preferred_src,
-             int preferred_dest);
-    void call(EventType event, CallData* data);
+    MyPacket(int preferred_src, int preferred_dest);
+    MyPacket(uint64_t msg_size, int preferred_src, int preferred_dest);
 
-    int preferred_vnet;
     int preferred_dest;
     int preferred_src;
     uint64_t msg_size;

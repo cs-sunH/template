@@ -31,7 +31,9 @@ class ProtobufUtils {
     std::unique_lock<std::mutex> lock(_mutex);
     if (f.eof())
       return false;
-    static char buffer[DEFAULT_PROTOBUF_BUFFER_SIZE];
+    // Message-local buffer, not a static shared one: a short read must never
+    // be able to expose another call's stale bytes to the parser.
+    char buffer[DEFAULT_PROTOBUF_BUFFER_SIZE];
     uint32_t size;
     lock.unlock();
     if (!readVarint32(f, size))
@@ -43,49 +45,17 @@ class ProtobufUtils {
       buffer_use = new char[size + 1];
     }
     f.read(buffer_use, size);
-    buffer_use[size] = 0;
-    msg.ParseFromArray(buffer_use, size);
+    const std::streamsize bytes_read = f.gcount();
+    // Fail closed: a short read (truncated/corrupt stream) or a failed parse
+    // must return false instead of silently handing back partial data.
+    const bool size_complete =
+        bytes_read == static_cast<std::streamsize>(size);
+    const bool parse_ok =
+        size_complete && msg.ParseFromArray(buffer_use, static_cast<int>(size));
     if (size > DEFAULT_PROTOBUF_BUFFER_SIZE - 1) {
       delete[] buffer_use;
     }
-    return true;
-  }
-
-  static bool writeVarint32(std::ostream& f, uint32_t value) {
-    std::unique_lock<std::mutex> lock(_mutex);
-    uint8_t byte;
-    while (value > 0x7f) {
-      byte = (value & 0x7f) | 0x80;
-      f.write(reinterpret_cast<char*>(&byte), 1);
-      value >>= 7;
-    }
-    byte = value;
-    f.write(reinterpret_cast<char*>(&byte), 1);
-    return true;
-  }
-
-  template <typename T>
-  static bool writeMessage(std::ostream& f, T& msg) {
-    std::unique_lock<std::mutex> lock(_mutex);
-    static char buffer[DEFAULT_PROTOBUF_BUFFER_SIZE];
-    size_t size = msg.ByteSizeLong();
-    if (size > DEFAULT_PROTOBUF_BUFFER_SIZE - 1) {
-      // buffer is not large enough, use a dynamic buffer
-      char* buffer_use = new char[size];
-      msg.SerializeToArray(buffer_use, size);
-      lock.unlock();
-      writeVarint32(f, size);
-      lock.lock();
-      f.write(buffer_use, size);
-      delete[] buffer_use;
-    } else {
-      msg.SerializeToArray(buffer, size);
-      lock.unlock();
-      writeVarint32(f, size);
-      lock.lock();
-      f.write(buffer, size);
-    }
-    return true;
+    return size_complete && parse_ok;
   }
 
  private:

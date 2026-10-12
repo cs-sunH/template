@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # archive_run_outputs.sh —— D1 成功运行产物瘦身归档(2026-08-28)。
 #
-# Usage: bash archive_run_outputs.sh <run_dir>
+# Usage: bash archive_run_outputs.sh <run_dir> [metrics_detail]
+#   metrics_detail = 调用方 runner 实际使用的 --metrics-detail 档位
+#     (off|summary|full);缺省按未知档处理——无 [METRIC] 行即 FAIL(fail-closed)。
 #
 # 前提:仅由 run_online_strategy*.sh 在整条链路(C++/Python/postprocess)
 # 全部成功后调用;失败 run 不归档、全量保留供排查(调用方保证)。
@@ -32,17 +34,26 @@
 #     journal 开关 off 时不存在;审计/重放输入,常驻不压缩)
 #   campaign_provenance.json(存在时)
 #   SLO 自动提取产物(P3,2026-08-28,由 run_slo_postprocess.sh 写在 run_dir
-#   根,本脚本不触碰 run_dir 根级文件,此处显式登记为常驻):slo_*.csv、
+#   根,本脚本只新增 metrics.log/cpp.log.gz 并删除 cpp.log（run_dir 根级）——其余 run_dir 根级文件不触碰,此处显式登记为常驻):slo_*.csv、
 #   slo_*.json、cache_events.csv、kv_hit_states.csv、slo_postprocess.log、
 #   slo_postprocess.FAIL(若有)、metrics_manifest.json/manifest.json(P2
-#   拷入的 per-request manifest,run_dir 自包含的关键件)
+#   拷入的 per-request manifest,run_dir 自包含的关键件)、
+#   trace_config.csv.snapshot(P4 2026-10-01 runner 拷入的运行时
+#   trace_config 快照,load_imbalance CV 分母的 run 本地权威来源)
 set -uo pipefail
 
-RUN_DIR=${1:?"usage: archive_run_outputs.sh <run_dir>"}
+RUN_DIR=${1:?"usage: archive_run_outputs.sh <run_dir> [metrics_detail]"}
 if [ ! -d "${RUN_DIR}" ]; then
   echo "[archive] FAIL: run dir not found: ${RUN_DIR}" >&2
   exit 1
 fi
+
+# metrics_detail 档位校验(off|summary|full;缺省=未知档,见 ① 的豁免语义)。
+METRICS_DETAIL=${2:-}
+case "${METRICS_DETAIL}" in
+  ""|off|summary|full) ;;
+  *) echo "[archive] FAIL: invalid metrics_detail '${METRICS_DETAIL}' (expected off|summary|full)" >&2; exit 1 ;;
+esac
 
 if command -v pigz >/dev/null 2>&1; then
   COMPRESS=(pigz)
@@ -51,20 +62,29 @@ else
 fi
 
 # ① [METRIC] 行抽取(cpp.log 尚在时;已归档重跑则跳过)。
+#    off 档豁免(2026-09-26,方案 A):--metrics-detail=off 是受支持档位,
+#    C++ 端合法地不落任何 [METRIC] 行(与 run_slo_postprocess.sh 的
+#    "by design 整步跳过"同口径)——此时无 [METRIC] 行不算失败,清掉空
+#    metrics.log 后照常归档。summary/full 档(及未传档位的裸调用)无
+#    [METRIC] 行仍 FAIL:采集异常不得被静默归档掩盖。
 if [ -f "${RUN_DIR}/cpp.log" ]; then
   grep '^\[METRIC\] ' "${RUN_DIR}/cpp.log" > "${RUN_DIR}/metrics.log" || true
   METRIC_LINES=$(wc -l < "${RUN_DIR}/metrics.log")
   if [ "${METRIC_LINES}" -eq 0 ]; then
-    echo "[archive] FAIL: no [METRIC] lines in cpp.log (refusing to archive)" >&2
     rm -f "${RUN_DIR}/metrics.log"
-    exit 1
+    if [ "${METRICS_DETAIL}" != "off" ]; then
+      echo "[archive] FAIL: no [METRIC] lines in cpp.log (refusing to archive; metrics detail=${METRICS_DETAIL:-unknown})" >&2
+      exit 1
+    fi
+    echo "[archive] no [METRIC] lines (metrics detail=off, by design) — metrics.log skipped"
+  else
+    echo "[archive] metrics.log: ${METRIC_LINES} [METRIC] lines retained"
   fi
-  echo "[archive] metrics.log: ${METRIC_LINES} [METRIC] lines retained"
 fi
 
 # ② bridge/request_*.json 散装 → 单 tar.gz。
 if compgen -G "${RUN_DIR}/bridge/request_*.json" > /dev/null; then
-  LIST=$(mktemp /tmp/archive_bridge_files.XXXXXX)
+  LIST=$(mktemp /tmp/archive_bridge_files.XXXXXX) || { echo "[archive] FAIL: mktemp for bridge list" >&2; exit 1; }
   find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' -printf '%f\n' \
     > "${LIST}"
   tar -C "${RUN_DIR}/bridge" --null --files-from \
@@ -90,7 +110,7 @@ fi
 
 # ④ results/ 非必需 jsonl → results_extra.tar.gz(常驻集见头部注释)。
 if [ -d "${RUN_DIR}/results" ]; then
-  EXTRA_LIST=$(mktemp /tmp/archive_results_extra.XXXXXX)
+  EXTRA_LIST=$(mktemp /tmp/archive_results_extra.XXXXXX) || { echo "[archive] FAIL: mktemp for results-extra list" >&2; exit 1; }
   find "${RUN_DIR}/results" -maxdepth 1 -type f \
     ! -name 'request_journal.jsonl' \
     ! -name 'online_decision_log.jsonl' \

@@ -36,8 +36,20 @@ enum MemoryArchitectureType {
 //   * When latency expires, a positive-byte transaction joins its port's
 //     active stream set. N concurrent streams each receive
 //     remote_mem_bw / N; whenever one stream exhausts, the survivors
-//     re-split immediately at the new N (streams finishing at the same
-//     continuous instant leave the denominator as one batch).
+//     re-split immediately at the new N. "Same-continuous-instant
+//     finishers leave the denominator as one batch" describes the intent;
+//     the implementation maintains the denominator arithmetically inside
+//     the completion pass (loop-entry stream count minus the completions
+//     already applied there -- an integer identity equal to re-reading the
+//     per-job count, so the rate division stays bit-identical), and the
+//     only divergence -- between that per-instant count and
+//     serve_interval's whole-interval count at one shared instant -- is
+//     absorbed by the completion tolerances: kByteEps/kTimeEpsNs as the
+//     t~0 floors plus a floating-point slack that scales with
+//     4 * double_epsilon * instant (fix 2026-09-28: a fixed absolute
+//     tolerance cannot absorb rounding residue at large clocks, where
+//     fl(clock + remaining/rate) carries an error of order
+//     ulp(clock) ~ clock * 2^-52).
 //   * Time advances in continuous ns substeps; the observable Workload
 //     callback lands on Tick ceil(fluid_finish_ns). A positive transfer
 //     shorter than 1ns still observes its callback on the next Tick.
@@ -87,6 +99,8 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
       uint64_t tensor_size,
       AstraSim::WorkloadLayerHandlerData* wlhd);
   void call(AstraSim::EventType type, AstraSim::CallData* data);
+  // Test-only runtime probe (production code never calls it): the sole
+  // caller is the remote_port_nway_test fail-closed configuration probe.
   uint64_t get_remote_mem_runtime(uint64_t tensor_size);
 
   // Four mutually exclusive working states, distinguishable from outside
@@ -124,7 +138,8 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   // Conservation: issued_count == completed_count and issued_bytes ==
   // completed_bytes at normal end (fail-closed audit), and bytes_served
   // matches completed_bytes within the per-transaction completion residue
-  // (kByteEps on the bytes path, bw * kTimeEpsNs on the time path; the
+  // (kByteEps on the bytes path and bw * kTimeEpsNs on the time path as
+  // t~0 floors, each plus a 4*epsilon*instant floating-point slack; the
   // aggregate bound is audited in verify_drained).
   struct PortStats {
     // count/bytes pairs (conservation-audited at normal end).
@@ -158,9 +173,13 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
     double shared_busy_ns; // actual service time with streaming_count >= 2
     double bytes_served;   // bytes actually carried by the port (per-job
                            // exact attribution; equals completed_bytes minus
-                           // the <= kByteEps-per-job completion residue)
+                           // the per-job completion residue bounded by
+                           // served_residue_budget)
   };
 
+  // Test-only observation face: production reads go through get_port_stats;
+  // the only callers of get_port_count/get_port_jobs are
+  // remote_port_nway_test.cc assertions.
   std::size_t get_port_count() const;
   std::vector<PortJobSnapshot> get_port_jobs(std::size_t port_index) const;
   PortStats get_port_stats(std::size_t port_index) const;
@@ -266,6 +285,14 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
     double port_busy_ns = 0.0;
     double shared_busy_ns = 0.0;
     double bytes_served = 0.0;
+    // Aggregate fail-closed bound for |completed_bytes - bytes_served|,
+    // accumulated per completion as kByteEps + bw * (kTimeEpsNs +
+    // 4 * double_epsilon * max(fluid_finish_ns, 1.0)) -- the same scaled
+    // residue the completion clamps may leave behind, so the audit in
+    // verify_drained stays tight at large clocks where a fixed
+    // kByteEps-only bound would false-positive (fix 2026-09-28). Cleared
+    // by shutdown().
+    double served_residue_budget = 0.0;
   };
 
   void arm_transition_event(AstraSim::Tick deadline_tick);
@@ -290,7 +317,10 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   // dual-zero fires and bandwidth-exhaustion instants in order.
   void advance_all_ports(double target_ns);
   double earliest_transition_ns() const;
-  void serve_interval(double dt_ns);
+  // dt_ns: interval length; interval_end_ns: its absolute end instant,
+  // anchoring the floating-point slack (residue scales with ulp of the
+  // instant, not of the length).
+  void serve_interval(double dt_ns, double interval_end_ns);
   void process_transitions_at(double t_ns);
   std::size_t active_stream_count(const PortState& port) const;
   std::size_t total_job_count() const;
@@ -307,8 +337,12 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   std::vector<PortState> ports;
   std::unordered_map<int, std::size_t> per_npu_port_indices;
 
-  AstraSim::Sys* host_sys = nullptr;  // Sys of the FIRST set_sys call; owns
-                                      // the single global transition event
+  AstraSim::Sys* host_sys = nullptr;  // Sys of the FIRST set_sys call (the
+                                      // analytical frontend's rank-0 by
+                                      // design -- dispatch context only,
+                                      // never a billing/latency path);
+                                      // owns the single global transition
+                                      // event
 
   double clock_ns = 0.0;  // continuous backend time, <= observable Tick
   AstraSim::SystemEventHandle transition_event;

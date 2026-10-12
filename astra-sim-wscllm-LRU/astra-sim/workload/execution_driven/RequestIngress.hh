@@ -25,9 +25,10 @@ problem (总体方案 §5.4).
 #ifndef EXECUTION_DRIVEN_REQUESTINGRESS_HH
 #define EXECUTION_DRIVEN_REQUESTINGRESS_HH
 
-#include <cassert>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <map>
@@ -70,9 +71,10 @@ struct RequestEnvelope {
     uint64_t arrival_world_ns = 0;
     uint64_t inter_request_interval_ns = 0;
     // Phase 4 (schema v1): frozen queue index (CSV data-row order, 0-based;
-    // -1 = unknown, defensive only). Turn-0 rows carry this value directly in
-    // their Submit envelope.  Only turn>0 rows need the one-shot lookup used
-    // by future-arrival scheduling.
+    // -1 = unknown, e.g. FIFO-injected envelopes). Turn-0 rows carry this
+    // value directly in their Submit envelope; turn>0 rows register it via
+    // register_queue_index for the one-shot lookup used by future-arrival
+    // scheduling.
     int64_t queue_index = -1;
     // P0 turn-0 late-discovery fix (2026-08-30): producer path of this
     // arrival. Default ExternalStream (fixtures / command FIFO); the
@@ -164,15 +166,21 @@ class RequestIngress {
     /// path. late_static_submit_ counts Submit-path clamps of
     /// RequestSource::StaticCsv envelopes (turn-0 rows read from the request
     /// queue CSV) EXCLUDING the t=0 boundary case (see t0_boundary_clamp_):
-    /// a static CSV is finite and fully indexed before the simulation starts,
-    /// so ANY such clamp means the reader discovered the row too late -- the
-    /// defect this fix eradicates -- and the run-end gate fail-closes on it.
+    /// the calendar reader tries every turn-0 Submit from tick 0 in
+    /// (arrival, queue_index) order, so ANY such clamp means the bounded
+    /// command queue parked the cursor past the declared arrival while the
+    /// clock advanced -- turn-0 (session) scale above the ingress queue
+    /// capacity (attribution corrected 2026-09-27: capacity backpressure,
+    /// not the eradicated late-discovery defect). The run-end gate still
+    /// fail-closes on it.
     size_t late_static_submit_count() const { return late_static_submit_; }
     /// Submit-path clamps of RequestSource::ExternalStream envelopes (the
     /// command-FIFO producer / fixtures may legitimately run late; no gate).
     size_t late_external_stream_count() const { return late_external_stream_; }
     /// Clamps inside schedule_future_arrival (RequestSource::FutureAlarm):
-    /// sub-tick rounding of relative-interval scheduling, not a reader defect.
+    /// strictly-past target ticks only (Minor① 契约统一,2026-09-30)——
+    /// arrival == current 是提交边界校验层承认的"准点"边界,EventQueue
+    /// 严格未来规则的 +1 钳制不再计入本计数。
     size_t late_future_alarm_rounding_count() const {
         return late_future_alarm_rounding_;
     }
@@ -185,10 +193,15 @@ class RequestIngress {
     size_t t0_boundary_clamp_count() const { return t0_boundary_clamp_; }
 
     /// P0 fix (2026-08-30): simulation clock of the bound EventQueue
-    /// (asserts bind() happened). Lets the reader stamp each turn-0 Submit
-    /// with its discovery tick without reaching into the queue itself.
+    /// (fails closed if bind() never happened -- M-18: was an
+    /// NDEBUG-stripped assert).
     NetworkAnalytical::EventTime current_time() const {
-        assert(eq_ != nullptr);
+        if (eq_ == nullptr) {
+            std::fprintf(stderr,
+                         "[Error] (execution_driven/ingress) current_time() "
+                         "before bind()\n");
+            std::abort();
+        }
         return eq_->get_current_time();
     }
 
@@ -251,6 +264,13 @@ class RequestIngress {
     // publishes ARRIVAL. This closes cross-batch duplicate alarms without
     // retaining historical request ids after arrival.
     std::unordered_set<std::string> scheduled_future_request_ids_;
+    // F1-CPP C1-8 同款移植(2026-09-30):每个经 drain_commands 的 Submit 的
+    // 进程级身份门集合,生产路径不限(CSV turn-0、--command-fifo、夹具)。
+    // CSV 读侧的 M9 turn-0 查重与 register_queue_index 的 turn>0 查重只
+    // 覆盖各自通道;此门在 drain 侧合流兜底,重复/空 id 一律 fail-closed
+    // (见 drain_commands 的 Submit 分支)。mtx_ 保护;仅仿真线程在 drain
+    // 时写入。
+    std::unordered_set<std::string> seen_submit_request_ids_;
     // Fixtures that do not use a CSV reader retain the legacy unknown-index
     // behavior. A non-empty WindowedTraceReader enables strict mode before it
     // reads any rows; register_queue_index also enables it defensively.

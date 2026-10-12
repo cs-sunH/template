@@ -8,7 +8,8 @@ Execution mode of the simulation binary, introduced by the step-1-2
 execution-mode factory (方案 §4 步骤 1-2 操作 4). Only replacing the main()
 function is not enough: the static Sys construction chain unconditionally
 constructs Workload, whose constructor immediately checks the .et file and
-creates the ETFeeder (Sys.cc:259-260, Workload.cc:30-35). Online mode must
+creates the ETFeeder (see the execution-mode factory in Sys.cc and the
+ETFeeder construction in the Workload constructor). Online mode must
 therefore be an explicit construction-mode parameter that flows from the
 online entry point into Sys and Workload, so that:
 
@@ -17,7 +18,7 @@ online entry point into Sys and Workload, so that:
   - Online: a dynamic GraphSource is injected at Sys creation time; the
     ETFeeder is never constructed and no .et file is required. Final end
     authority belongs to ServiceCoordinator, never to Workload::call's
-    sim_notify_finished()/is_finished side effect (Workload.cc:625-634),
+    sim_notify_finished()/is_finished side effect (Workload.cc),
     which is disabled for online mode.
 *******************************************************************************/
 

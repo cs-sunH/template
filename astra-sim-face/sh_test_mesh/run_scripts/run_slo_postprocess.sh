@@ -42,7 +42,13 @@
 # kv_delta_journal.jsonl 时走 journal 权威重放（含 checksum 证书时
 # per_rank_total_hbm_certified——正式逐 rank 容量判决，违规 exit 3；
 # 缺证书降级 resident_kv_exact/lifecycle_replay_exact 仅报告）；
-# 缺 journal 的旧 run 为 upper_bound_only 上界口径（超限只诊断、exit 0）。
+# 缺 journal 的旧 run 为 upper_bound_only 上界口径（超限只诊断、exit 0；
+# 例外：checksum 在场而 journal 缺失=证书孤儿，fail-closed exit 2，
+# 2026-09-28 B12）。注意本仓为消费侧：face 无 journal/checksum 写入方
+# （生产方在 W 仓 KV_DELTA_JOURNAL 开关与 joint 仓 online_service 侧车
+# 链），本仓 runner 正常跑出的 run_dir 恒缺 journal——即恒走
+# upper_bound_only 上界口径；certified/exit-3 判决链仅当 journal+
+# checksum 被置入 run_dir（跨仓产物归位）时可达。
 #
 # 不纳入自动提取（输入跨 run_dir 或依赖外部表，留 campaign 阶段）：
 #   slo_stats.py violation / bucket-stats（要 T_isolated 表）、
@@ -51,8 +57,12 @@
 # 失败语义（文档 P；A4 后由 driver 逐复刻）：默认 warn——某步失败打印
 # 告警并写 ${RUN_DIR}/slo_postprocess.FAIL 标记（含失败步骤与退出码），
 # 不推翻仿真结果（runner 退出码不因 warn 改变）；SH_SLO_POSTPROCESS=strict
-# 时失败即 runner 非零退出（由调用方 runner 实现）。本脚本自身退出码：
-# 全过=0，任一步失败=1。
+# 时失败即 runner 非零退出（由调用方 runner 实现）。warn/strict 边界
+# 在调用方 runner：本脚本只负责把失败如实上抛、不吞码。
+# 本脚本自身退出码：全过=0，任一步失败=1；driver 上抛的容量违规正式
+# 判决（exit 3，仅 hbm_watermark per_rank_total_hbm_certified 层的逐
+# rank physical>capacity）原样透传为 3（2026-09-26 A5-1/infra-4：不再
+# 折叠为 1，warn 模式下 runner 仍只 WARN 不拦截，但进程码保留判决）。
 #
 # 内存护栏（2026-08-30 爆内存根治 §3.5/§3.6）：driver 进程包 cgroup v2
 # 内存上限（默认 16G，SH_SLO_MEM_LIMIT 覆盖，值直写 MemoryMax/memory.max，
@@ -79,26 +89,62 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 SLO_TOOLS=$(cd -- "${SCRIPT_DIR}/../slo_tools" && pwd -P)
 
 RUN_DIR=${1:?"usage: run_slo_postprocess.sh <run_dir>"}
+FAIL_MARKER=${RUN_DIR}/slo_postprocess.FAIL
+LOG=${RUN_DIR}/slo_postprocess.log
+# .FAIL 标记先清（rm -f 对尚不存在的 run_dir 是无害 no-op）——与旧序一致，
+# 非法入参早退不残留上一轮的 .FAIL。日志截断（: > LOG）移到 run_dir 存在性
+# 校验之后（目录缺失时无处建文件）；此时值校验的 warn() 落 LOG 会附带一行
+# tee "No such file or directory" 噪声（双错入参病态路径，FAIL 行仍照常上
+# stderr，exit 2 不受影响）。
+rm -f "${FAIL_MARKER}"
+
+log() { echo "[slo-postprocess] $*" >> "${LOG}"; }
+warn() { echo "[slo-postprocess] $*" | tee -a "${LOG}" >&2; }
+
+# SH_SLO_SKIP_HBM 参数校验（2026-09-28 fail-closed；F3C 起值校验先于
+# run_dir 存在性校验——错误码语义一致：值错误恒 exit 2，不再被 run_dir
+# 缺失的 exit 1 遮蔽；唯一更早的退出是无入参时的 ${1:?} 用法错误）：
+# driver _env_gate 只认 "1"/"0"，用户设 SH_SLO_SKIP_HBM=true 之类的值会被
+# 静默按 0 处理（开关失效无告警）——非法值即 exit 2（工具族 fail-closed
+# 契约码），不再静默失效。
+SKIP_HBM=${SH_SLO_SKIP_HBM:-0}
+case "${SKIP_HBM}" in
+  0|1) ;;
+  *)
+    warn "FAIL: invalid SH_SLO_SKIP_HBM='${SKIP_HBM}' (expected 0|1) — fail-closed, refusing to silently ignore"
+    exit 2
+    ;;
+esac
+
+# SH_SLO_MEM_LIMIT 值校验（2026-09-29 fail-closed，对齐上方 SH_SLO_SKIP_HBM
+# 既有范式；值校验同样先于 run_dir 存在性校验，错误码语义一致：值错误恒
+# exit 2）。合法值 = "max" 或正整数（可带 K/M/G/T/P 后缀，如 "16G"/"8G"/
+# 字节数），与 systemd MemoryMax / cgroup v2 memory.max 的解析口径一致。
+# 非法值会让下方 systemd 探测与 cgroup 写入双双失败 → 静默裸跑（护栏被
+# 悄然撤下）+ WARN 把原因误归因为 "guardrail unavailable"——不再静默失效。
+GUARD_MEM_LIMIT="${SH_SLO_MEM_LIMIT:-16G}"
+if ! [[ "${GUARD_MEM_LIMIT}" =~ ^(max|[0-9]+[KkMmGgTtPp]?)$ ]]; then
+  warn "FAIL: invalid SH_SLO_MEM_LIMIT='${GUARD_MEM_LIMIT}' (expected max|<bytes>[K|M|G|T|P]) — fail-closed, refusing to silently drop the guardrail"
+  exit 2
+fi
+
+# run_dir 存在性校验（在 SKIP_HBM 值校验之后，见上——F3C 错误码语义一致化）。
 if [ ! -d "${RUN_DIR}" ]; then
   echo "[slo-postprocess] FAIL: run dir not found: ${RUN_DIR}" >&2
   exit 1
 fi
 
-FAIL_MARKER=${RUN_DIR}/slo_postprocess.FAIL
-LOG=${RUN_DIR}/slo_postprocess.log
-rm -f "${FAIL_MARKER}"
 : > "${LOG}"
 SLO_FAIL=0
-
-log() { echo "[slo-postprocess] $*" >> "${LOG}"; }
-warn() { echo "[slo-postprocess] $*" | tee -a "${LOG}" >&2; }
 
 # run_step（A4 前 9 子命令的执行壳）已由 slo_postprocess_driver.py 在
 # 进程内逐复刻（"run:/ok:/FAIL:" 行、.FAIL 条目、失败不拦后续步）。
 # 本层对 driver 退出码的处置：
 #   0 = 全部步骤成功；1 = 有步骤失败（driver 已按步写 FAIL 行与 .FAIL
-#       条目，此处只置 SLO_FAIL，不重复记条目）；其余 = driver 裸崩
-#       （argparse/解释器级），按原 run_step 语义兜底记一条。
+#       条目，此处只置 SLO_FAIL，不重复记条目）；3 = hbm_watermark
+#       certified 层逐 rank 容量违规正式判决（2026-09-26 A5-1/infra-4
+#       起原样透传，不再折叠为 1）；其余 = driver 裸崩（argparse/解释器
+#       级），按原 run_step 语义兜底记一条。
 
 # [METRIC] 行来源探测（与 slo_common.resolve_cpp_metric_log 同序）。
 if [ -f "${RUN_DIR}/cpp.log" ]; then
@@ -114,10 +160,19 @@ else
 fi
 
 # metrics=off：无任何 [METRIC] 行 → 整步跳过（正常设计，不算失败）。
+# grep/zgrep 退出码语义：0=命中、1=零命中、≥2=错误（文件不可读/gz 损坏）。
+# rc≥2 必须与"设计内跳过"区分开——归档后幂等重跑路径（cpp.log.gz）正是
+# 本脚本文档化场景，坏源静默当 off 跳过会把损坏日志伪装成正常（fail-open）。
+METRIC_RC=0
 if [ "${METRIC_SRC##*.}" = "gz" ]; then
-  METRIC_LINES=$(zgrep -c '^\[METRIC\] ' "${METRIC_SRC}" || true)
+  METRIC_LINES=$(zgrep -c '^\[METRIC\] ' "${METRIC_SRC}" 2>/dev/null) || METRIC_RC=$?
 else
-  METRIC_LINES=$(grep -c '^\[METRIC\] ' "${METRIC_SRC}" || true)
+  METRIC_LINES=$(grep -c '^\[METRIC\] ' "${METRIC_SRC}" 2>/dev/null) || METRIC_RC=$?
+fi
+if [ "${METRIC_RC}" -ge 2 ]; then
+  warn "FAIL: metric source unreadable/corrupt: ${METRIC_SRC} (grep rc=${METRIC_RC})"
+  printf '%s (exit=1)\n' "metric-source: ${METRIC_SRC} unreadable (grep rc=${METRIC_RC})" >> "${FAIL_MARKER}"
+  exit 1
 fi
 if [ "${METRIC_LINES:-0}" -eq 0 ]; then
   warn "no [METRIC] lines (metrics detail=off?) — SLO extraction skipped (by design)"
@@ -144,8 +199,8 @@ else
   warn "results/train_ledger.jsonl absent — load_imbalance.py skipped (by design)"
 fi
 # A.5/2026-09-05：legacy 与 relevant 两个历史变体已清除，session-KV
-# 水位重放对全部产物适用；SKIP_HBM 仅由显式 env（SH_SLO_SKIP_HBM）置位。
-SKIP_HBM=${SH_SLO_SKIP_HBM:-0}
+# 水位重放对全部产物适用；SKIP_HBM 仅由显式 env（SH_SLO_SKIP_HBM）置位
+# （非法值已在脚本入口 fail-closed，见顶部校验，此处不再重复赋值）。
 
 # A4（2026-08-29）：9 个子命令收敛为单遍 driver。门控探测结果经 env
 # 传入（driver 裸调用时自探测并复刻同款说明行，双保险）；driver 的
@@ -172,11 +227,58 @@ SKIP_HBM=${SH_SLO_SKIP_HBM:-0}
 # 走保存的 fd。
 exec {GUARD_ERR_FD}>&2
 glog() { echo "[slo-postprocess] $*" >&"${GUARD_ERR_FD}"; }
-GUARD_MEM_LIMIT="${SH_SLO_MEM_LIMIT:-16G}"
+# GUARD_MEM_LIMIT 已在脚本入口完成缺省与值校验（SH_SLO_MEM_LIMIT，见顶部）。
 GUARD_BASE="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user-$(id -u).service"
 GUARD_CG="${GUARD_BASE}/slo-mem-guard.$$"
 GUARD_MODE=none
 GUARD_TELE_PATH=""   # 护栏遥测（memory.peak/memory.events）读取的组路径
+
+# 护栏组兜底清理（2026-09-29）：正常收尾路径（wait 之后的 telemetry 回显处）
+# 处置完 GUARD_CG 会将其清空，故本 trap 只覆盖"建组后脚本被信号/异常中断"
+# 的半程路径，防 slo-mem-guard.<pid> 子 cgroup 泄漏；组内仍有存活进程时
+# rmdir 自然失败（best-effort，不强杀——正常路径组内已无人，INT/TERM 路径
+# 见 cleanup_children，driver 先被清掉，rmdir 成功率随之提高）。
+cleanup_guard_cg() {
+  if [ -n "${GUARD_CG:-}" ]; then
+    rmdir "${GUARD_CG}" 2>/dev/null || true
+  fi
+}
+
+# 信号清场（2026-10-01 S-3）：INT/TERM 落到本 wrapper 时此前只转 exit——
+# driver 成孤儿继续跑完 9 步并写 run_dir 内 slo_*.csv/slo_postprocess.log/
+# .FAIL，调用方 runner 收 130/143 走 warn 分支后照常 archive_run_outputs.sh
+# （压缩 cpp.log、归档 results/），与仍存活的 driver 读写竞态。现 INT/TERM
+# 先按主 runner cleanup_cpp 范式（TERM→~3s 宽限轮询→KILL）清掉尚存活的
+# driver 与采样循环再转 exit——130/143 保码上抛语义不变（调用方契约仍是
+# rc≠0≠3 → warn 继续；本修复只求 run_dir 在归档前静止）。trap 注册在
+# driver 启动前，故 kill_child 走 ${DRIVER_PID:-}/${SAMPLE_PID:-} 空值守卫
+# （未启动时 no-op）；三种启动模式 $! 即真 driver，kill 直接有效。Ctrl-C
+# （INT 广播前台进程组）场景 driver 同收 INT 自死，kill -0 不命中即 no-op，
+# 行为不变。wait 收尸由宽限轮询 kill -0 兼带，函数尾部再 wait 一次兜底。
+kill_child() {
+  local pid="${1:-}" _i
+  [ -n "${pid}" ] || return 0
+  kill -0 "${pid}" 2>/dev/null || return 0
+  kill "${pid}" 2>/dev/null || true
+  for _i in $(seq 1 30); do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -9 "${pid}" 2>/dev/null || true
+  wait "${pid}" 2>/dev/null || true
+}
+cleanup_children() {
+  kill_child "${DRIVER_PID:-}"
+  kill_child "${SAMPLE_PID:-}"
+}
+on_signal() {
+  cleanup_children
+  cleanup_guard_cg
+  exit "$1"
+}
+trap cleanup_guard_cg EXIT
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
 # systemd-run --user 需要连上 user bus；init.scope 直启 shell 常缺
 # XDG_RUNTIME_DIR，按 uid 推导（socket 在场才设）。
@@ -190,19 +292,26 @@ if command -v systemd-run >/dev/null 2>&1 \
         -p MemorySwapMax=0 -- true >/dev/null 2>&1; then
   GUARD_MODE=systemd
   glog "memory guardrail: systemd-run --user --scope (MemoryMax=${GUARD_MEM_LIMIT}, MemorySwapMax=0)"
-elif [ -d "${GUARD_BASE}" ] && mkdir -p "${GUARD_CG}" 2>/dev/null \
-   && printf '%s\n' "${GUARD_MEM_LIMIT}" > "${GUARD_CG}/memory.max" 2>/dev/null \
-   && echo 0 > "${GUARD_CG}/memory.swap.max" 2>/dev/null; then
-  echo 1 > "${GUARD_CG}/memory.oom.group" 2>/dev/null  # 失败容忍
-  # 探测本 shell 能否自迁移并自证落位（init.scope 下 EACCES → 本路径
-  # 不可用，清场降级）。写入成功 ≠ 已落位：必须回读 /proc/<pid>/cgroup
-  # 确认确实在 slo-mem-guard 组内，不得"以为在护栏里"。
-  if ( echo "${BASHPID}" > "${GUARD_CG}/cgroup.procs" 2>/dev/null \
-       && grep -q slo-mem-guard "/proc/${BASHPID}/cgroup" 2>/dev/null )
-  then
-    GUARD_MODE=cgroup
-    glog "memory guardrail: cgroup ${GUARD_CG} (memory.max=${GUARD_MEM_LIMIT}, swap.max=0, oom.group=1)"
+elif [ -d "${GUARD_BASE}" ] && mkdir -p "${GUARD_CG}" 2>/dev/null; then
+  if printf '%s\n' "${GUARD_MEM_LIMIT}" > "${GUARD_CG}/memory.max" 2>/dev/null \
+     && echo 0 > "${GUARD_CG}/memory.swap.max" 2>/dev/null; then
+    echo 1 > "${GUARD_CG}/memory.oom.group" 2>/dev/null  # 失败容忍
+    # 探测本 shell 能否自迁移并自证落位（init.scope 下 EACCES → 本路径
+    # 不可用，清场降级）。写入成功 ≠ 已落位：必须回读 /proc/<pid>/cgroup
+    # 确认确实在 slo-mem-guard 组内，不得"以为在护栏里"。
+    if ( echo "${BASHPID}" > "${GUARD_CG}/cgroup.procs" 2>/dev/null \
+         && grep -q slo-mem-guard "/proc/${BASHPID}/cgroup" 2>/dev/null )
+    then
+      GUARD_MODE=cgroup
+      glog "memory guardrail: cgroup ${GUARD_CG} (memory.max=${GUARD_MEM_LIMIT}, swap.max=0, oom.group=1)"
+    else
+      rmdir "${GUARD_CG}" 2>/dev/null
+      GUARD_CG=""
+    fi
   else
+    # 半程失败回滚（2026-09-29）：mkdir 已建出组而 memory.max/swap.max 写入
+    # 失败时，原 && 链直接短路——组被泄漏（后续运行 pid 不同，该组永不
+    # 复用）。此处显式清场后降级裸跑。
     rmdir "${GUARD_CG}" 2>/dev/null
     GUARD_CG=""
   fi
@@ -346,8 +455,14 @@ if [ "${GUARD_MODE}" = cgroup ] && [ -n "${GUARD_CG}" ]; then
   if [ "${GUARD_OOM_KILL:-0}" -gt 0 ] 2>/dev/null; then
     glog "WARN: guardrail OOM-killed driver (oom_kill=${GUARD_OOM_KILL}, rc=${DRIVER_RC})"
   fi
-  rmdir "${GUARD_CG}" 2>/dev/null \
-    || glog "note: rmdir ${GUARD_CG} failed (leftover kept for inspection)"
+  # 清场后置空 GUARD_CG（2026-09-29）：EXIT trap 只兜"未走到这里"的半程
+  # 路径；保留取证的显式决定也不能再被 trap 二次清理。
+  if rmdir "${GUARD_CG}" 2>/dev/null; then
+    GUARD_CG=""
+  else
+    glog "note: rmdir ${GUARD_CG} failed (leftover kept for inspection)"
+    GUARD_CG=""
+  fi
 elif [ "${GUARD_MODE}" = systemd ]; then
   if [ -n "${GUARD_PEAK}" ]; then
     glog "guardrail memory.peak=${GUARD_PEAK} oom=${GUARD_OOM:-NA} oom_kill=${GUARD_OOM_KILL:-0}"
@@ -364,7 +479,15 @@ elif [ "${GUARD_MODE}" = systemd ]; then
 fi
 
 if [ "${DRIVER_RC}" -ne 0 ]; then
-  if [ "${DRIVER_RC}" -ne 1 ]; then
+  if [ "${DRIVER_RC}" -eq 1 ] || [ "${DRIVER_RC}" -eq 3 ]; then
+    # rc==1 与 rc==3 的步骤级 FAIL 条目 driver 已按步写好（rc==3 的唯一
+    # 产生路径就是 wm_sink.flush 的步骤级记录），此处不重复记；仅当条目
+    # 缺失（driver 在步骤壳之外裸崩）时兜底补一条，免得下方 warn 的
+    # "see slo_postprocess.FAIL" 空指。
+    if [ ! -s "${FAIL_MARKER}" ]; then
+      printf '%s (exit=%s)\n' "slo_postprocess_driver.py bare crash" "${DRIVER_RC}" >> "${FAIL_MARKER}"
+    fi
+  else
     warn "FAIL: slo_postprocess_driver.py (exit=${DRIVER_RC}) — marked in slo_postprocess.FAIL (simulation result NOT overturned)"
     printf '%s (exit=%s)\n' "slo_postprocess_driver.py" "${DRIVER_RC}" >> "${FAIL_MARKER}"
   fi
@@ -373,6 +496,13 @@ fi
 
 if [ "${SLO_FAIL}" -ne 0 ]; then
   warn "done WITH FAILURES (default=warn; see slo_postprocess.FAIL)"
+  # A5-1/infra-4（2026-09-26）：certified 层逐 rank 容量违规正式判决的
+  # exit 3 原样透传（warn/strict 边界仍在调用方 runner——默认 warn 下
+  # runner 只 WARN 不拦截，但进程码不再被折叠为 1，判决可被上游区分）；
+  # 其余失败仍为 1。
+  if [ "${DRIVER_RC}" -eq 3 ]; then
+    exit 3
+  fi
   exit 1
 fi
 log "done: all steps passed"

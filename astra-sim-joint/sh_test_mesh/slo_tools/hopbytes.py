@@ -8,7 +8,7 @@
   astra-sim-sh_1.0  shard 级：decision log 的 history_transfer /
                     prefill_decode_transfer / 各类逐出传输对象的
                     shards[].noc_path（hops = len(noc_path)-1；生成侧
-                    generate_face_trace.py:587 亦落 noc_hops 字段——
+                    generate_face_trace.py 的 noc_hops 供给段 亦落 noc_hops 字段——
                     读取时优先用显式 noc_hops，缺省由 noc_path 推导）。
   astra-sim-wscllm  实例级：decode 决策的 static_route.hop_count ×
                     prefill_decode_transfer.total_bytes（粒度为实例间
@@ -58,12 +58,22 @@ PER_REQUEST_COLUMNS = ("request_id", "actions_with_hops", "hop_bytes",
 def _shard_hops(shard: dict) -> Optional[int]:
     """优先显式 noc_hops 字段；缺省由 noc_path 推导（len-1）。"""
     hops = shard.get("noc_hops")
-    if isinstance(hops, int) and hops >= 0:
+    # bool 显式排除（True 是 int 子类，旧实现当 1 跳计费——批次 D 镜像）。
+    if isinstance(hops, int) and not isinstance(hops, bool) and hops >= 0:
         return hops
     path = shard.get("noc_path")
     if isinstance(path, list) and path:
         return max(0, len(path) - 1)
     return None
+
+
+def _drop_invalid_shard_bytes(nbytes) -> int:
+    """非法 shard bytes 的可估字节数（积分值 float）；不可估返 0
+    （不臆造字节数，由 dropped_shards 计数留痕）。
+    （R7-F5，2026-09-29 face 移植）"""
+    if isinstance(nbytes, float) and nbytes.is_integer() and nbytes > 0:
+        return int(nbytes)
+    return 0
 
 
 def _accumulate_shard_transfers(holder: dict, request_id: str, acc: dict,
@@ -73,16 +83,33 @@ def _accumulate_shard_transfers(holder: dict, request_id: str, acc: dict,
     shards = holder.get("shards")
     if not isinstance(shards, list):
         return
+    counted_bytes = 0  # 实际计入分母桶（覆盖侧/无覆盖侧）的 shard 字节
+    dropped_shards = 0  # 非法 bytes/结构的 shard 计数（R7-F5 留痕）
+    dropped_estimated = 0  # 非法 shard 中可估的字节（float 积分值）
     for shard in shards:
         if not isinstance(shard, dict):
+            dropped_shards += 1
             continue
         nbytes = shard.get("bytes")
-        if not isinstance(nbytes, int) or nbytes <= 0:
+        if isinstance(nbytes, bool) or not isinstance(nbytes, int):
+            # R7-F5（2026-09-29 face 移植）：混合 holder 内单个非法 bytes
+            # 不再静默蒸发——可估值暂记，混合场景计入 dropped_bytes
+            # （分母守恒）；全无效场景由 holder 级 total_bytes 代表
+            # （同源不双计）。
+            dropped_shards += 1
+            dropped_estimated += _drop_invalid_shard_bytes(nbytes)
             continue
+        if nbytes < 0:
+            # 负字节同为账本垃圾：计数留痕，不臆造守恒。
+            dropped_shards += 1
+            continue
+        if nbytes == 0:
+            continue  # 零字节 shard 无可守恒字节（合法，不计数）
         hops = _shard_hops(shard)
         slot = per_request.setdefault(
             request_id, {"actions": 0, "hop_bytes": 0,
                          "bytes_with": 0, "bytes_without": 0})
+        counted_bytes += nbytes
         if hops is None:
             slot["bytes_without"] += nbytes
             acc["bytes_without_hops"] += nbytes
@@ -93,6 +120,12 @@ def _accumulate_shard_transfers(holder: dict, request_id: str, acc: dict,
             acc["actions_with_hops"] += 1
             acc["hop_bytes_total"] += nbytes * hops
             acc["bytes_with_hops"] += nbytes
+    if dropped_shards:
+        acc["dropped_shards"] = acc.get("dropped_shards", 0) + dropped_shards
+    if counted_bytes and dropped_estimated:
+        # 混合 holder：holder 级回退不触发（避免与有效 shard 双计），
+        # 非法 shard 的可估字节在此入账留痕。
+        acc["dropped_bytes"] = acc.get("dropped_bytes", 0) + dropped_estimated
 
 
 def collect_sh10(record: dict, acc: dict, per_request: dict) -> None:
@@ -137,12 +170,22 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
             request_id, {"actions": 0, "hop_bytes": 0,
                          "bytes_with": 0, "bytes_without": 0})
 
+    def _require_uniform_hops(hops: list) -> None:
+        """M18（2026-09-29）：hops[0]×Σbytes 聚合前提 = per-shard hops
+        全等（face 实例同构 rank 块）。非全等（非同构实例块形状）时旧
+        实现静默取 hops[0] 失真——fail-closed 并列各 shard 值，不猜。"""
+        if len(set(hops)) != 1:
+            fail(f"hopbytes: request={request_id} kind={kind} "
+                 f"history_noc_hops 非全等（{hops}）——hops[0]×Σbytes 聚合"
+                 f"前提不成立（非同构实例块形状？），拒绝静默失真")
+
     if kind == "prefill":
         nbytes = decision.get("history_transfer_bytes")
         hops = decision.get("history_noc_hops")
         if isinstance(nbytes, int) and nbytes > 0:
             if isinstance(hops, list) and hops and all(
                     isinstance(h, int) and h >= 0 for h in hops):
+                _require_uniform_hops(hops)
                 hop_bytes = nbytes * hops[0]
                 slot = _slot()
                 slot["actions"] += 1
@@ -162,10 +205,25 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
             transfer, dict) else None
         if isinstance(shards, list) and isinstance(hops, list) \
                 and len(shards) == len(hops):
+            counted_bytes = 0  # 实际计入分母桶的 shard 字节
+            dropped_shards = 0  # 非法 bytes/结构的 shard 计数（R7-F5）
+            dropped_estimated = 0  # 非法 shard 中可估的字节
             for shard, hop in zip(shards, hops):
                 nbytes = (shard or {}).get("bytes")
-                if not isinstance(nbytes, int) or nbytes <= 0:
+                if isinstance(nbytes, bool) or not isinstance(nbytes, int):
+                    # R7-F5（2026-09-29 face 移植）：非法 bytes 不静默蒸发
+                    # （与 sh10 同口径）——可估值暂记，混合场景计
+                    # dropped_bytes；全无效场景由 holder 级 total_bytes
+                    # 代表，不双计。
+                    dropped_shards += 1
+                    dropped_estimated += _drop_invalid_shard_bytes(nbytes)
                     continue
+                if nbytes < 0:
+                    dropped_shards += 1
+                    continue
+                if nbytes == 0:
+                    continue
+                counted_bytes += nbytes
                 if isinstance(hop, int) and hop >= 0:
                     slot = _slot()
                     slot["actions"] += 1
@@ -178,6 +236,12 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
                     slot = _slot()
                     slot["bytes_without"] += nbytes
                     acc["bytes_without_hops"] += nbytes
+            if dropped_shards:
+                acc["dropped_shards"] = (
+                    acc.get("dropped_shards", 0) + dropped_shards)
+            if counted_bytes and dropped_estimated:
+                acc["dropped_bytes"] = (
+                    acc.get("dropped_bytes", 0) + dropped_estimated)
 
 
 def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
@@ -194,7 +258,9 @@ def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
                 slot = per_request.setdefault(
                     request_id, {"actions": 0, "hop_bytes": 0,
                                  "bytes_with": 0, "bytes_without": 0})
-                if isinstance(hops, int) and hops >= 0:
+                # bool 显式排除（批次 D 镜像）。
+                if isinstance(hops, int) and not isinstance(hops, bool) \
+                        and hops >= 0:
                     slot["actions"] += 1
                     slot["hop_bytes"] += nbytes * hops
                     slot["bytes_with"] += nbytes
@@ -216,7 +282,8 @@ def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
     slot = per_request.setdefault(
         request_id, {"actions": 0, "hop_bytes": 0,
                      "bytes_with": 0, "bytes_without": 0})
-    if isinstance(hops, int) and hops >= 0:
+    # bool 显式排除（static_route.hop_count 谎报 true=1 跳）。
+    if isinstance(hops, int) and not isinstance(hops, bool) and hops >= 0:
         slot["actions"] += 1
         slot["hop_bytes"] += nbytes * hops
         slot["bytes_with"] += nbytes
@@ -273,15 +340,27 @@ def collect_sh20(record: dict, acc: dict, per_request: dict) -> None:
     relevant_kinds = ("prefill", "decode", "completion")
     hop_rows = decision.get("transfer_hop_bytes")
     if kind in relevant_kinds and isinstance(hop_rows, list):
+        dropped_row_bytes = 0  # hop 非法行中可估的 total_bytes（R2-F3 留痕）
         for row in hop_rows:
             if not isinstance(row, dict):
                 continue
             nbytes = row.get("total_bytes")
-            hop_bytes = row.get("noc_hop_bytes")
             shard_count = row.get("shard_count")
-            if (not isinstance(nbytes, int) or nbytes <= 0
-                    or not isinstance(shard_count, int) or shard_count <= 0):
+            # bool 显式排除（True 冒充 1B/1 shard——批次 D 镜像）。
+            if (not isinstance(nbytes, int) or isinstance(nbytes, bool)
+                    or nbytes <= 0
+                    or not isinstance(shard_count, int)
+                    or isinstance(shard_count, bool) or shard_count <= 0):
                 continue  # local_hit / 名义规模：无物理搬运
+            hop_bytes = row.get("noc_hop_bytes")
+            if isinstance(hop_bytes, bool) or not isinstance(hop_bytes, int) \
+                    or hop_bytes < 0:
+                # R2-F3（2026-09-29 face 移植）：noc_hop_bytes 缺失/非法的
+                # 行不得计入 coverage 分子（零贡献虚高 coverage 且零留痕）
+                # ——可估字节转入 dropped_bytes 留痕；行仍是真实搬运，不
+                # 触发 aggregate 回退以免 aggregate 字段同源双计。
+                dropped_row_bytes += nbytes
+                continue
             slot = per_request.setdefault(
                 request_id, {"actions": 0, "hop_bytes": 0,
                              "bytes_with": 0, "bytes_without": 0})
@@ -289,9 +368,11 @@ def collect_sh20(record: dict, acc: dict, per_request: dict) -> None:
             slot["bytes_with"] += nbytes
             acc["actions_with_hops"] += 1
             acc["bytes_with_hops"] += nbytes
-            if isinstance(hop_bytes, int) and hop_bytes > 0:
-                slot["hop_bytes"] += hop_bytes
-                acc["hop_bytes_total"] += hop_bytes
+            slot["hop_bytes"] += hop_bytes
+            acc["hop_bytes_total"] += hop_bytes
+        if dropped_row_bytes:
+            acc["dropped_bytes"] = (
+                acc.get("dropped_bytes", 0) + dropped_row_bytes)
         return
     collect_aggregate_only(record, acc, per_request)
 
@@ -437,7 +518,10 @@ def hopbytes_prepare(repo_variant: str) -> tuple[dict, dict, dict]:
     if source is None:
         fail(f"未登记的 repo_variant：{repo_variant}（REPO_HOP_SOURCES 需扩表）")
     acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
-           "bytes_with_hops": 0, "bytes_without_hops": 0}
+           "bytes_with_hops": 0, "bytes_without_hops": 0,
+           # R7-F5/R2-F3（2026-09-29 face 移植）：非法 shard/行留痕通道
+           # （随 **acc 进 summary JSON；不蒸发、可核账）。
+           "dropped_shards": 0, "dropped_bytes": 0}
     return source, acc, {}
 
 

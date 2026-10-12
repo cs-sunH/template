@@ -52,7 +52,8 @@
 # 告警并写 ${RUN_DIR}/slo_postprocess.FAIL 标记（含失败步骤与退出码），
 # 不推翻仿真结果（runner 退出码不因 warn 改变）；SH_SLO_POSTPROCESS=strict
 # 时失败即 runner 非零退出（由调用方 runner 实现）。本脚本自身退出码：
-# 全过=0，任一步失败=1。
+# 全过=0，任一步失败=1；例外（sync-py-E10）：driver rc=3（hbm_watermark
+# certified 层逐 rank 容量违规的正式判决）原样透传 exit 3，不折叠为 1。
 #
 # 内存护栏（2026-08-30 爆内存根治 §3.5/§3.6）：driver 进程包 cgroup v2
 # 内存上限（默认 16G，SH_SLO_MEM_LIMIT 覆盖，值直写 MemoryMax/memory.max，
@@ -114,10 +115,20 @@ else
 fi
 
 # metrics=off：无任何 [METRIC] 行 → 整步跳过（正常设计，不算失败）。
+# L21(2026-09-29 审查修复):区分 grep/zgrep 退出码——rc==1 仅是零匹配
+# (metrics=off 的设计内形态,照旧跳过);rc>=2 是输入损坏/不可读(gzip 校验
+# 失败等),此前被 || true 吞掉后按"设计内跳过、全过"放行。现 rc>=2
+# fail-closed:记 FAIL 条目并退出非零。
+METRIC_RC=0
 if [ "${METRIC_SRC##*.}" = "gz" ]; then
-  METRIC_LINES=$(zgrep -c '^\[METRIC\] ' "${METRIC_SRC}" || true)
+  METRIC_LINES=$(zgrep -c '^\[METRIC\] ' "${METRIC_SRC}") || METRIC_RC=$?
 else
-  METRIC_LINES=$(grep -c '^\[METRIC\] ' "${METRIC_SRC}" || true)
+  METRIC_LINES=$(grep -c '^\[METRIC\] ' "${METRIC_SRC}") || METRIC_RC=$?
+fi
+if [ "${METRIC_RC}" -ge 2 ]; then
+  warn "FAIL: metric source unreadable/corrupt: ${METRIC_SRC} (grep rc=${METRIC_RC}) — fail-closed (zero-match rc=1 stays a designed skip)"
+  printf '%s (exit=%s)\n' "metric-source: unreadable/corrupt ${METRIC_SRC}" "${METRIC_RC}" >> "${FAIL_MARKER}"
+  exit 1
 fi
 if [ "${METRIC_LINES:-0}" -eq 0 ]; then
   warn "no [METRIC] lines (metrics detail=off?) — SLO extraction skipped (by design)"
@@ -190,19 +201,28 @@ if command -v systemd-run >/dev/null 2>&1 \
         -p MemorySwapMax=0 -- true >/dev/null 2>&1; then
   GUARD_MODE=systemd
   glog "memory guardrail: systemd-run --user --scope (MemoryMax=${GUARD_MEM_LIMIT}, MemorySwapMax=0)"
-elif [ -d "${GUARD_BASE}" ] && mkdir -p "${GUARD_CG}" 2>/dev/null \
-   && printf '%s\n' "${GUARD_MEM_LIMIT}" > "${GUARD_CG}/memory.max" 2>/dev/null \
-   && echo 0 > "${GUARD_CG}/memory.swap.max" 2>/dev/null; then
-  echo 1 > "${GUARD_CG}/memory.oom.group" 2>/dev/null  # 失败容忍
-  # 探测本 shell 能否自迁移并自证落位（init.scope 下 EACCES → 本路径
-  # 不可用，清场降级）。写入成功 ≠ 已落位：必须回读 /proc/<pid>/cgroup
-  # 确认确实在 slo-mem-guard 组内，不得"以为在护栏里"。
-  if ( echo "${BASHPID}" > "${GUARD_CG}/cgroup.procs" 2>/dev/null \
-       && grep -q slo-mem-guard "/proc/${BASHPID}/cgroup" 2>/dev/null )
-  then
-    GUARD_MODE=cgroup
-    glog "memory guardrail: cgroup ${GUARD_CG} (memory.max=${GUARD_MEM_LIMIT}, swap.max=0, oom.group=1)"
+elif [ -d "${GUARD_BASE}" ] && mkdir -p "${GUARD_CG}" 2>/dev/null; then
+  # infra-E9(2026-09-30):写入子链从条件链里拆出——此前 `mkdir && 写
+  # memory.max && 写 swap.max` 拼在同一条 elif 条件上,mkdir 成功而任一
+  # 写入失败(EACCES/只读)时条件整体为假、静默降级,但已建的 slo-mem-guard
+  # 目录(带半套限制)残留泄漏。现在写入失败也走清场 rmdir,不留半套限制目录。
+  if printf '%s\n' "${GUARD_MEM_LIMIT}" > "${GUARD_CG}/memory.max" 2>/dev/null \
+     && echo 0 > "${GUARD_CG}/memory.swap.max" 2>/dev/null; then
+    echo 1 > "${GUARD_CG}/memory.oom.group" 2>/dev/null  # 失败容忍
+    # 探测本 shell 能否自迁移并自证落位（init.scope 下 EACCES → 本路径
+    # 不可用，清场降级）。写入成功 ≠ 已落位：必须回读 /proc/<pid>/cgroup
+    # 确认确实在 slo-mem-guard 组内，不得"以为在护栏里"。
+    if ( echo "${BASHPID}" > "${GUARD_CG}/cgroup.procs" 2>/dev/null \
+         && grep -q slo-mem-guard "/proc/${BASHPID}/cgroup" 2>/dev/null )
+    then
+      GUARD_MODE=cgroup
+      glog "memory guardrail: cgroup ${GUARD_CG} (memory.max=${GUARD_MEM_LIMIT}, swap.max=0, oom.group=1)"
+    else
+      rmdir "${GUARD_CG}" 2>/dev/null
+      GUARD_CG=""
+    fi
   else
+    # mkdir 成功而限制写失败：清掉半套(或零套)限制的空组再降级裸跑。
     rmdir "${GUARD_CG}" 2>/dev/null
     GUARD_CG=""
   fi
@@ -367,12 +387,25 @@ if [ "${DRIVER_RC}" -ne 0 ]; then
   if [ "${DRIVER_RC}" -ne 1 ]; then
     warn "FAIL: slo_postprocess_driver.py (exit=${DRIVER_RC}) — marked in slo_postprocess.FAIL (simulation result NOT overturned)"
     printf '%s (exit=%s)\n' "slo_postprocess_driver.py" "${DRIVER_RC}" >> "${FAIL_MARKER}"
+  elif [ ! -s "${FAIL_MARKER}" ]; then
+    # 兜底（2026-09-28）：rc==1 本应信托 driver 内部 _record_failure 已逐步
+    # 写 .FAIL，但解释器级未捕获异常同为 rc=1 且必然无条目——缺条目时补
+    # 一条，不改退出码语义，不触 slo_postprocess.log 字节对拍契约。
+    warn "FAIL: slo_postprocess_driver.py (exit=1, no per-step record) — backfilled in slo_postprocess.FAIL"
+    printf '%s (exit=1, no per-step record)\n' "slo_postprocess_driver.py" >> "${FAIL_MARKER}"
   fi
   SLO_FAIL=1
 fi
 
 if [ "${SLO_FAIL}" -ne 0 ]; then
   warn "done WITH FAILURES (default=warn; see slo_postprocess.FAIL)"
+  # sync-py-E10(2026-09-30,参考 face 同脚本):driver rc=3 是 hbm_watermark
+  # certified 层逐 rank 容量违规的正式判决——原样 exit 3 透传,不再折叠为
+  # 1（warn/strict 边界仍在调用方 runner——默认 warn 下 runner 只 WARN
+  # 不拦截,但进程码可被上游区分判决与普通失败;其余失败仍为 1）。
+  if [ "${DRIVER_RC}" -eq 3 ]; then
+    exit 3
+  fi
   exit 1
 fi
 log "done: all steps passed"

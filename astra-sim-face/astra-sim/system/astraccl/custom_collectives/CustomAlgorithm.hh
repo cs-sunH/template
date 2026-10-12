@@ -7,10 +7,7 @@ LICENSE file in the root directory of this source tree.
 #define __CUSTOMALGORITHM__HH
 
 #include <stdlib.h>
-#include <unistd.h>
 
-#include "astra-sim/system/MemBus.hh"
-#include "astra-sim/system/MyPacket.hh"
 #include "astra-sim/system/astraccl/Algorithm.hh"
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 #include "astra-sim/system/CommunicatorGroup.hh"
@@ -25,13 +22,17 @@ namespace AstraSim {
  * The Chakra ET representation is a file that contains the nodes of the
  * algorithm. The nodes are either COMM_SEND, COMM_RECV, or COMP.
  *
- * To use this implementation, write the "ABSOLUTE" path to the Chakra trace
+ * To use this implementation, write the path to the Chakra trace
  * file in the system layer input (instead of traditional `Ring`, etc.), under
- * `{all-reduce|all-to-all|all-gather}-implementation-custom`.
+ * `{all-reduce|all-to-all|all-gather}-implementation-custom`. The path is
+ * resolved relative to the simulator's working directory (an absolute path
+ * also works).
  *
  * For a detailed description on using a Chakra ET based representation, refer
  * to the documentation in the public wiki.
- * TODO: Add a verifier to verify correct communication behavior.
+ * Known limitation (2026-09-26 review, replaces the bare upstream TODO):
+ * no verifier exists for the custom algorithm's communication behavior;
+ * correctness relies on the Chakra ET file being well-formed.
  */
 class CustomAlgorithm : public Algorithm {
   public:
@@ -51,8 +52,9 @@ class CustomAlgorithm : public Algorithm {
     /*
      * The following functions move through the Chakra ET and issues nodes whose
      * dependencies are resolved, Similar to how the Workload layer moves
-     * through the workload Chakra ET.
-     * TODO: merge with impl in Workload layer.
+     * through the workload Chakra ET.  Status note (2026-09-26 review,
+     * replaces the bare upstream TODO): the structural duplication with
+     * the Workload layer is known; merging is deferred upstream.
      */
     void issue(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
     void issue_dep_free_nodes();

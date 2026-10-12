@@ -29,7 +29,6 @@ import argparse
 import json
 import os
 import sys
-import time
 
 _ONLINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)

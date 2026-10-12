@@ -7,7 +7,9 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/common/Logging.hh"
 
 #include <cassert>
+#include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 
 using namespace std;
 using namespace AstraSim;
@@ -18,6 +20,13 @@ RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs) {
         name = "vertical";
     } else if (dimension == Dimension::Horizontal) {
         name = "horizontal";
+    }
+    // Fail closed instead of asserting: the default release build compiles
+    // the assert out, and a wrong rank list would otherwise surface only as
+    // a broken ring at collective runtime.
+    if (NPUs.empty()) {
+        throw std::invalid_argument(
+            "RingTopology requires a non-empty NPU list");
     }
     this->id = id;
     this->total_nodes_in_ring = NPUs.size();
@@ -33,12 +42,15 @@ RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs) {
     }
 
     LoggerFactory::get_logger("system::topology::RingTopology")
-        ->info("custom ring, id: {}, dimension: {} total nodes in ring: {} "
-               "index in ring: {} total nodes in ring {}",
-               id, name, total_nodes_in_ring, index_in_ring,
-               total_nodes_in_ring);
+        ->info("rank-mapped ring, id: {}, dimension: {} total nodes in ring: {} "
+               "index in ring: {}",
+               id, name, total_nodes_in_ring, index_in_ring);
 
-    assert(index_in_ring >= 0);
+    if (index_in_ring < 0) {
+        throw std::invalid_argument(
+            "RingTopology requires the local rank to be present in the NPU "
+            "list");
+    }
 }
 RingTopology::RingTopology(Dimension dimension,
                            int id,
@@ -51,12 +63,15 @@ RingTopology::RingTopology(Dimension dimension,
     } else if (dimension == Dimension::Horizontal) {
         name = "horizontal";
     }
+    if (total_nodes_in_ring <= 0 || offset <= 0) {
+        throw std::invalid_argument(
+            "RingTopology requires a positive ring size and offset");
+    }
     if (id == 0) {
         LoggerFactory::get_logger("system::topology::RingTopology")
             ->info("ring of node 0, id: {} dimension: {} total nodes in ring: "
-                   "{} index in ring: {} offset: {} total nodes in ring: {}",
-                   id, name, total_nodes_in_ring, index_in_ring, offset,
-                   total_nodes_in_ring);
+                   "{} index in ring: {} offset: {}",
+                   id, name, total_nodes_in_ring, index_in_ring, offset);
     }
     this->id = id;
     this->total_nodes_in_ring = total_nodes_in_ring;
@@ -76,52 +91,53 @@ RingTopology::RingTopology(Dimension dimension,
 int RingTopology::get_receiver_homogeneous(int node_id,
                                            Direction direction,
                                            int offset) {
-    assert(id_to_index.find(node_id) != id_to_index.end());
-    int index = id_to_index[node_id];
-    if (direction == RingTopology::Direction::Clockwise) {
-        int receiver = node_id + offset;
-        if (index == total_nodes_in_ring - 1) {
-            receiver -= (total_nodes_in_ring * offset);
-            index = 0;
-        } else {
-            index++;
-        }
-        if (receiver < 0) {
-            LoggerFactory::get_logger("system::topology::RingTopology")
-                ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
-                           "id: {}, offset: {}, index_in_ring {} receiver {}",
-                           name, id, name, index, node_id, offset,
-                           index_in_ring, receiver);
-        }
-        assert(receiver >= 0);
-        id_to_index[receiver] = index;
-        index_to_id[index] = receiver;
-        return receiver;
-    } else {
-        int receiver = node_id - offset;
-        if (index == 0) {
-            receiver += (total_nodes_in_ring * offset);
-            index = total_nodes_in_ring - 1;
-        } else {
-            index--;
-        }
-        if (receiver < 0) {
-            LoggerFactory::get_logger("system::topology::RingTopology")
-                ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
-                           "id: {}, offset: {}, index_in_ring {} receiver {}",
-                           name, id, name, index, node_id, offset,
-                           index_in_ring, receiver);
-        }
-        assert(receiver >= 0);
-        id_to_index[receiver] = index;
-        index_to_id[index] = receiver;
-        return receiver;
+    // The only caller (the RingTopology constructor) always walks the ring
+    // clockwise, so the former Anticlockwise branch was dead code and was
+    // removed. The direction parameter is kept for signature compatibility.
+    (void)direction;
+    const auto node_it = id_to_index.find(node_id);
+    if (node_it == id_to_index.end()) {
+        // Fail closed (2026-09-27): the old assert vanished under NDEBUG and
+        // operator[] then silently inserted index 0 for the missing key,
+        // corrupting the ring. Log and terminate instead.
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {}: node id {} is not in the ring "
+                       "id_to_index map",
+                       name, id, node_id);
+        std::exit(EXIT_FAILURE);
     }
+    int index = node_it->second;
+    int receiver = node_id + offset;
+    if (index == total_nodes_in_ring - 1) {
+        receiver -= (total_nodes_in_ring * offset);
+        index = 0;
+    } else {
+        index++;
+    }
+    if (receiver < 0) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
+                       "id: {}, offset: {}, index_in_ring {} receiver {}",
+                       name, id, name, index, node_id, offset,
+                       index_in_ring, receiver);
+        std::exit(EXIT_FAILURE);
+    }
+    assert(receiver >= 0);
+    id_to_index[receiver] = index;
+    index_to_id[index] = receiver;
+    return receiver;
 }
 
 int RingTopology::get_receiver(int node_id, Direction direction) {
-    assert(id_to_index.find(node_id) != id_to_index.end());
-    int index = id_to_index[node_id];
+    const auto node_it = id_to_index.find(node_id);
+    if (node_it == id_to_index.end()) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {}: node id {} is not in the ring "
+                       "id_to_index map",
+                       name, id, node_id);
+        std::exit(EXIT_FAILURE);
+    }
+    int index = node_it->second;
     if (direction == RingTopology::Direction::Clockwise) {
         index++;
         if (index == total_nodes_in_ring) {
@@ -138,8 +154,15 @@ int RingTopology::get_receiver(int node_id, Direction direction) {
 }
 
 int RingTopology::get_sender(int node_id, Direction direction) {
-    assert(id_to_index.find(node_id) != id_to_index.end());
-    int index = id_to_index[node_id];
+    const auto node_it = id_to_index.find(node_id);
+    if (node_it == id_to_index.end()) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {}: node id {} is not in the ring "
+                       "id_to_index map",
+                       name, id, node_id);
+        std::exit(EXIT_FAILURE);
+    }
+    int index = node_it->second;
     if (direction == RingTopology::Direction::Anticlockwise) {
         index++;
         if (index == total_nodes_in_ring) {

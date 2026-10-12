@@ -19,8 +19,7 @@ class Ring : public Algorithm {
          int id,
          RingTopology* ring_topology,
          uint64_t data_size,
-         RingTopology::Direction direction,
-         InjectionPolicy injection_policy);
+         RingTopology::Direction direction);
     virtual void run(EventType event, CallData* data);
     void process_stream_count();
     void release_packets();
@@ -41,19 +40,15 @@ class Ring : public Algorithm {
     int curr_sender;
     int nodes_in_ring;
     int stream_count;
-    int max_count;
     int remained_packets_per_max_count;
     int remained_packets_per_message;
     int parallel_reduce;
-    InjectionPolicy injection_policy;
     std::list<MyPacket> packets;
     bool toggle;
     long free_packets;
-    // total_packets_received 保留：AllToAll 继承 Ring，在 AllToAll.cc 读取该成员；
-    // 对称的 total_packets_sent 全仓零读者，已删除。
+    // total_packets_received 保留：AllToAll 继承 Ring，在 AllToAll.cc 读取该成员。
     long total_packets_received;
     uint64_t msg_size;
-    std::list<MyPacket*> locked_packets;
     bool processed;
     bool send_back;
     bool NPU_to_MA;

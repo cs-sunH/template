@@ -30,10 +30,6 @@ void StreamBaseline::init() {
         return;
     }
     my_current_phase.algorithm->run(EventType::StreamInit, nullptr);
-    if (steps_finished == 1) {
-        queuing_delay.push_back(last_phase_change - creation_time);
-    }
-    queuing_delay.push_back(Sys::boostedTick() - last_phase_change);
 }
 
 void StreamBaseline::call(EventType event, CallData* data) {
@@ -46,8 +42,5 @@ void StreamBaseline::call(EventType event, CallData* data) {
 }
 
 void StreamBaseline::consume(RecvPacketEventHandlerData* message) {
-    net_message_latency.back() +=
-        Sys::boostedTick() - message->ready_time;  // not accurate
-    net_message_counter++;
     my_current_phase.algorithm->run(EventType::PacketReceived, message);
 }

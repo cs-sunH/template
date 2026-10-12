@@ -18,12 +18,13 @@ D1 读放大因果口径的零后端单测（F1 冻结形态的解析锚点）�
      rank 主导；K ≥ read_passes 单 credit 退化不变量；
   6. 代表路径广播锚（route_paths_fn 未注入）：字节均衡、空链路时
      与旧聚合口径（_transfer_ns）同 wall 值（C4 金值重推导的桥接锚）；
-  7. 池腿保真边界（F3）：_pool_transfer_ns 五消费点口径不变
-     （copy 混合腿的池后缀腿数值回归）。
+  7. 池腿逐 shard（D04，取代 F3 聚合口径）：copy 混合腿的池后缀按
+     _pool_transfer_ns_shards 逐 rank 计价（式 7），数值回归钉死。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_joint_shard_pricing.py   （或 pytest 同路径）
 """
+import math
 import os
 import sys
 import unittest
@@ -45,11 +46,12 @@ from joint.joint_cost_model import (  # noqa: E402
     RequestView,
     ServiceFactors,
     SessionKVView,
-    _pool_transfer_ns,
+    _pool_transfer_ns_shards,
     _transfer_ns,
     _transfer_ns_shards,
     _shard_stream_ns_shards,
 )
+from joint.hbm_port_flow_registry import HbmPortFlowRegistry  # noqa: E402
 
 
 # ============================================================ 夹具构造 ==
@@ -116,23 +118,34 @@ class PerRankFootprintTest(unittest.TestCase):
 
 
 class CopyStreamingCostTest(unittest.TestCase):
-    """Copy cost starts at the first C13 chunk and overlaps the tail."""
+    """Copy 递推：chunk 只门控其层区间，末 chunk 到达后的计算由式(13)
+    递推保留（D02——旧 max(tail, compute) 吸收形态废除）。"""
 
     def test_copy_prefix_tail_overlaps_compute(self):
         model = _model(rates=_rates(noc=10.0, hbm=100.0, lat=0))
         model.model_layers = 16
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(
                 history_bytes=(1600, 1600), prefix=16, resident=0),
             request=_request(input_tokens=50, decode=10),
             instance_index=1, action=ACTION_COPY, remote_enabled=True)
         self.assertTrue(candidate.applicable)
-        # Full prefix transfer is retained in the audit breakdown (160 ns),
-        # while the critical path is first chunk 80 ns + max(tail 80 ns,
-        # compute 70 ns) = 160 ns.
+        # 审计 breakdown 保留全前缀传输量（160 ns = 逐 shard 1600/10，
+        # disjoint 路径除数 1）。D02 递推：chunk 0（层 0-7）到达 80、
+        # chunk 1（层 8-15）到达 160（通道内串行链 80+80）；prefill 计
+        # 算 50 按层均分（2×4 + 14×3）：F7 = 88+3×6 = 106 → F8 =
+        # max(106,160)+3 = 163 → F15 = 163+21 = 184（末 chunk 到达后
+        # 的 8 层计算逐层保留——旧 max(80, 50) 形态整体吸收）；decode
+        # 20 串行其后 ⇒ cost = 184 + 20 = 204。
         self.assertEqual(candidate.breakdown.history_prep_ns, 160)
-        self.assertEqual(candidate.cost_ns, 160)
+        self.assertIn("prefill_first_forward_ns=184",
+                      candidate.breakdown.notes)
+        self.assertEqual(candidate.cost_ns, 204)
         self.assertIn("copy_handoff_chunks=2", candidate.breakdown.notes)
+        self.assertIn("copy_handoff_first_chunk_ns=80",
+                      candidate.breakdown.notes)
+        self.assertIn("copy_handoff_chunk_walls=80,160",
+                      candidate.breakdown.notes)
 
 
 def _route(source, target):
@@ -140,7 +153,7 @@ def _route(source, target):
 
 
 def _model(loads=None, *, rates=None, route_paths_fn="disjoint",
-           credit_iters="auto"):
+           tile_bytes="auto"):
     return JointCostModel(
         rates=rates if rates is not None else _rates(),
         loads=loads if loads is not None else {0: _load(0), 1: _load(1)},
@@ -151,7 +164,7 @@ def _model(loads=None, *, rates=None, route_paths_fn="disjoint",
         route_paths_fn=(
             _disjoint_paths if route_paths_fn == "disjoint"
             else route_paths_fn),
-        remote_credit_iters=credit_iters)
+        remote_read_tile_bytes=tile_bytes)
 
 
 # ==================================================== 1. 平价锚点（§1.2）==
@@ -181,21 +194,32 @@ class ParityAnchorTest(unittest.TestCase):
         # 跳时延剥离后 ≡ 本地扫描项（hop 启动另计，不进扫描项平价）。
         self.assertEqual(wall - 2 * rates.d2d_latency_ns, local_scan_ns)
 
-    def test_estimate_action_per_step_parity(self):
-        # estimate_action 层：per-step =（全流 wall − 跳时延）/ 遍数 ≡
-        # 本地逐 shard 扫描（数值整除夹具：1640000 B/rank、4 遍）。
+    def test_estimate_p_with_continuation_per_step_parity(self):
+        # D06 修订（2026-09-27，v2.0 §9.1 式(6)）：本锚原断言"暂存写腿
+        # ≡ 本地扫描项"（执行端写腿独占端口的旧口径）。D06 起执行端口
+        # 上候选计算读与 remote 暂存写同分母（候选阶段 k = 计算读 +
+        # 暂存写 = 2）——写腿 = 1640000×4/(1640/2) = 8000 主导（home
+        # 读腿 4000、noc 腿 1619 均被遮蔽），全流 wall = 1×5 跳时延 +
+        # 8000 = 8005。per-step 旧平价由"独占读平价"改为"共享份额"：
+        # 写腿每步 = 1640000/820 = 2000 = 本地扫描项 × 候选阶段流数。
         rates = _rates(noc=4050.0, hbm=1640.0, lat=5)
         model = _model(rates=rates)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(1_640_000, 1_640_000),
                              history_tokens=100),
             request=_request(decode=3), instance_index=1,
             action=ACTION_REMOTE, remote_enabled=True)
         self.assertTrue(candidate.applicable)
         self.assertIn("remote_read_passes=4", candidate.breakdown.notes)
-        per_step = (
-            candidate.breakdown.remote_read_ns - rates.d2d_latency_ns) // 4
-        self.assertEqual(per_step, 1_640_000 // 1640)
+        self.assertEqual(
+            candidate.breakdown.remote_read_ns,
+            rates.d2d_latency_ns
+            + (1_640_000 * 4) // (1640 // 2))
+        # 共享份额逐步守恒：per-step 写腿 = 独占扫描 × k。
+        self.assertEqual(
+            (candidate.breakdown.remote_read_ns
+             - rates.d2d_latency_ns) // 4,
+            2 * (1_640_000 // 1640))
 
     def test_sub_parity_config_noc_leg_degrades(self):
         # 对照：ρ<1 配置（noc=1200 < hbm=1640、d=1 > ρ=0.73）——noc 腿
@@ -208,11 +232,12 @@ class ParityAnchorTest(unittest.TestCase):
             paths_by_rank=(((0, 1),),),
             bytes_by_rank=(shard_bytes,),
             include_self=True, kind="read")
+        # D17：腿服务时间向上取整（1_640_000/1200 = 1366.67 → 1367）。
         self.assertEqual(
-            wall - rates.d2d_latency_ns, int(shard_bytes / 1200))
+            wall - rates.d2d_latency_ns, math.ceil(shard_bytes / 1200))
         self.assertGreater(
             wall - rates.d2d_latency_ns,
-            int(shard_bytes / rates.local_hbm_bytes_per_ns))
+            math.ceil(shard_bytes / rates.local_hbm_bytes_per_ns))
 
 
 # ==================================================== 2. 三腿 min 夹具 ==
@@ -281,6 +306,98 @@ class ThreeLegMaxTest(unittest.TestCase):
                 include_self=True, kind="prefetch")
 
 
+# ============================================ 2.5 merge 目标写腿（D05）==
+
+
+class MergeTargetWriteLegTest(unittest.TestCase):
+    """merge 目标 HBM 写腿（D05，v2.0 C02/§15.2）：kind="merge" 三腿 =
+    源读 + NoC + 落点写——与执行侧 noc_migrate 双端点登记同腿型（旧
+    "merge 无 exec 写腿"计价废除；目标端口 = 各自方向路径末端 rank）。
+
+    验收（joint修改文档 D05）：目标 HBM 慢 NoC 快时 merge 反映目标写
+    瓶颈；容量充足不令该项消失（落点空间准备是另一前驱，仍在
+    _space_available_ns_estimate 单列计价，与本写带宽腿正交）。
+    """
+
+    BYTES = 6000
+
+    def _registry(self, contended_port, flows):
+        registry = HbmPortFlowRegistry()
+        registry.attach_active_decode_provider(
+            lambda port: flows if port == contended_port else 0)
+        return registry
+
+    def test_target_write_bottleneck_when_target_hbm_slow_noc_fast(self):
+        # 目标端口 rank1 在册 3 流（u_exec=3）、源端口 rank0 闲置：
+        # legs = noc 6000/1000=6 / 源读 6000/10=600 / 目标写
+        # 6000/(10/(3+1))=2400 → wall = 2400（写腿绑定）。旧无写腿口径
+        # = max(6, 600) = 600——目标 HBM 慢（10）NoC 快（1000）时系统
+        # 性漏计 4×目标写瓶颈。
+        rates = _rates(noc=1000.0, hbm=10.0, lat=0)
+        wall = _transfer_ns_shards(
+            rates, LinkFlowRegistry(), self._registry(1, 3),
+            paths_by_rank=(((0, 1),),), bytes_by_rank=(self.BYTES,),
+            include_self=True, kind="merge")
+        self.assertEqual(wall, 2400)
+        self.assertNotEqual(wall, 600)
+
+    def test_write_leg_registry_none_degenerates_to_read_parity(self):
+        # port_registry=None（离线/单测口径）：u_home=u_exec=0 → 写腿与
+        # 源读腿同值——merge ≡ copy = 600（D05 前既有金样未漂的成因：
+        # hbm 快夹具下写腿被 noc/读腿遮蔽；hbm 慢夹具下同率腿不改 max）。
+        rates = _rates(noc=1000.0, hbm=10.0, lat=0)
+        merge_wall = _transfer_ns_shards(
+            rates, LinkFlowRegistry(), None,
+            paths_by_rank=(((0, 1),),), bytes_by_rank=(self.BYTES,),
+            include_self=True, kind="merge")
+        copy_wall = _transfer_ns_shards(
+            rates, LinkFlowRegistry(), None,
+            paths_by_rank=(((0, 1),),), bytes_by_rank=(self.BYTES,),
+            include_self=True, kind="copy")
+        self.assertEqual(merge_wall, 600)
+        self.assertEqual(merge_wall, copy_wall)
+
+    def test_estimate_merge_reflects_target_write_with_ample_capacity(self):
+        # estimate_P_with_continuation 层（REMOTE 基，tp=2 disjoint）：
+        # exec 增量 (12000,12000) ≤ home 保留 (50000,50000) → 前向
+        # （byte_le 含等号）。前向路径 (2,0)/(3,1)：源端口 rank2/3 闲置、
+        # 目标端口 rank0/1 活跃 decode 2 流 → 前向 = max(noc 12, 源读
+        # 1200, 目标写 12000/(10/3)=3600) = 3600（目标写瓶颈，NoC 快
+        # 1000B/ns 仅 12）；反向路径 (0,2)/(1,3)：源端口 rank0/1 u=2 →
+        # 反向 = max(noc 50, 源读 15000, 目标写 5000) = 15000（仅披露）。
+        # 双侧负载 hbm_remaining=10^9 ≫ 需求 → 空间准备为 0（无
+        # home/exec_merge_eviction_writeback_est 注记）——容量充足不令
+        # 目标写腿消失（该腿是带宽服务，不是空间等待）。
+        rates = _rates(noc=1000.0, hbm=10.0, lat=0)
+        registry = HbmPortFlowRegistry()
+        registry.attach_active_decode_provider(
+            lambda port: 2 if port in (0, 1) else 0)
+        model = JointCostModel(
+            rates=rates,
+            loads={0: _load(0), 1: _load(1)},
+            flow_registry=LinkFlowRegistry(),
+            service_factors=ServiceFactors(),
+            prefill_ns_per_token=1.0, decode_ns_per_token=2.0,
+            model_layers=4, instance_tp_size=2, route_fn=_route,
+            route_paths_fn=_disjoint_paths,
+            hbm_port_registry=registry)
+        candidate = model.estimate_P_with_continuation(
+            session=_session(history_bytes=(50_000, 50_000)),
+            request=_request(input_tokens=50, decode=10,
+                             input_bytes=(10_000, 10_000)),
+            instance_index=1, action=ACTION_REMOTE, remote_enabled=True)
+        self.assertTrue(candidate.applicable)
+        breakdown = candidate.breakdown
+        self.assertIn("merge_v2_direction=forward", breakdown.notes)
+        self.assertEqual(breakdown.merge_ns, 3600)
+        self.assertIn("merge_v2_forward_ns=3600", breakdown.notes)
+        self.assertIn("merge_v2_reverse_ns=15000", breakdown.notes)
+        self.assertNotIn("home_merge_eviction_writeback_est",
+                         breakdown.notes)
+        self.assertNotIn("exec_merge_eviction_writeback_est",
+                         breakdown.notes)
+
+
 # ==================================================== 3. TP 并行口径 ==
 
 
@@ -342,32 +459,36 @@ class TpParallelismTest(unittest.TestCase):
             include_self=True, kind="read")
         self.assertEqual(wall, 600)
 
-    def test_copy_disjoint_through_estimate_action(self):
-        # estimate_action 层（copy NoC 前缀腿）：disjoint 逐 rank 路径
+    def test_copy_disjoint_through_estimate_p_with_continuation(self):
+        # estimate_P_with_continuation 层（copy NoC 前缀腿）：disjoint 逐 rank 路径
         # → 每 rank 3000/10 = 300 → history_prep = 10 + 300；旧聚合口径
         # = 10 + 600（总 6000 ÷ 10）。
         model = _model(rates=_rates(noc=10.0, hbm=1e9))
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(3000, 3000)),
             request=_request(), instance_index=1,
             action=ACTION_COPY, remote_enabled=True)
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.history_prep_ns, 10 + 300)
 
-    def test_endpoint_leg_binds_through_estimate_action(self):
-        # 端点腿正式消费（E12）：noc=4050/hbm=1640（ρ≈2.47）下 home 读
-        # 腿 500 ns 主导（noc 腿 202.5）→ history_prep = 10 + 500 > 旧
-        # 聚合口径 10 + 404。
+    def test_endpoint_leg_binds_through_estimate_p_with_continuation(self):
+        # 端点腿正式消费（E12）+ D06 阶段份额（2026-09-27，式 6）：
+        # noc=4050/hbm=1640 下 copy 候选执行端口并发流 k = 计算读 +
+        # copy 留存写 = 2——exec 写腿 = 820000/(1640/2) = 1000 主导
+        # （home 读腿 820000/1640 = 500、noc 腿 202.5 均被遮蔽）→
+        # history_prep = 10 + 1000 > 旧聚合口径 10 + 405（D17：旧聚合
+        # 原语带宽服务向上取整，1_640_000/4050 = 404.94）；写腿与计算
+        # 读同分母、不各自独占整端口。
         model = _model(rates=_rates(noc=4050.0, hbm=1640.0))
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(820_000, 820_000)),
             request=_request(), instance_index=1,
             action=ACTION_COPY, remote_enabled=True)
-        self.assertEqual(candidate.breakdown.history_prep_ns, 10 + 500)
+        self.assertEqual(candidate.breakdown.history_prep_ns, 10 + 1000)
         legacy = _transfer_ns(
             total_bytes=1_640_000, path_hops=1, divisor=1,
             rates=model.rates, per_hop_latency_ns=None, startup_ns=0)
-        self.assertEqual(legacy, 10 + 404)
+        self.assertEqual(legacy, 10 + 405)
         self.assertGreater(candidate.breakdown.history_prep_ns, legacy)
 
 
@@ -388,7 +509,7 @@ class ReadAmplificationCausalTest(unittest.TestCase):
         # （prefill 单遍缺省）+ 10（decode 步）= 11 → 全流 wall = 50000
         # × 11 / 1000 = 550。若误用 H+I = 120k 基数则为 660。
         model = self._model()
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(50_000, 50_000)),
             request=_request(input_tokens=50, decode=10,
                              input_bytes=(10_000, 10_000)),
@@ -402,11 +523,11 @@ class ReadAmplificationCausalTest(unittest.TestCase):
     def test_increment_size_does_not_inflate_remote_stream(self):
         # 同 H、I 放大 5×（100k 增量）：远读流不变（增量本地读取）。
         model = self._model()
-        small = model.estimate_action(
+        small = model.estimate_P_with_continuation(
             session=_session(history_bytes=(50_000, 50_000)),
             request=_request(input_bytes=(10_000, 10_000)),
             instance_index=1, action=ACTION_REMOTE, remote_enabled=True)
-        large = model.estimate_action(
+        large = model.estimate_P_with_continuation(
             session=_session(history_bytes=(50_000, 50_000)),
             request=_request(input_tokens=250, decode=10,
                              input_bytes=(50_000, 50_000)),
@@ -418,7 +539,7 @@ class ReadAmplificationCausalTest(unittest.TestCase):
         # prefill 两遍扫描夹具：prefill_scan_passes=2、decode=0 → 遍数
         # = 2（prefill 对基础历史的实际消费遍数，非固定 1 遍）。
         model = self._model()
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(50_000, 50_000)),
             request=_request(input_tokens=50, decode=0,
                              input_bytes=(10_000, 10_000),
@@ -434,13 +555,13 @@ class ReadAmplificationCausalTest(unittest.TestCase):
         # 因果缺省：input > 0 → 单遍；input == 0 且 decode == 0 → 无读流
         #（遍数 0，credit 拆分恒 0、无 K 披露）。
         model = self._model()
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(50_000, 50_000)),
             request=_request(input_tokens=50, decode=0,
                              input_bytes=(10_000, 10_000)),
             instance_index=1, action=ACTION_REMOTE, remote_enabled=True)
         self.assertIn("remote_read_passes=1", candidate.breakdown.notes)
-        empty = model.estimate_action(
+        empty = model.estimate_P_with_continuation(
             session=_session(history_bytes=(50_000, 50_000)),
             request=_request(input_tokens=0, decode=0, input_bytes=(0, 0)),
             instance_index=1, action=ACTION_REMOTE, remote_enabled=True)
@@ -455,7 +576,7 @@ class ReadAmplificationCausalTest(unittest.TestCase):
         # home 保留 (50000,50000) → 反向 = 50 → merge = min = 12（旧
         # 聚合前向 = 24000/1000 = 24，TP 并行减半）。
         model = self._model()
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(50_000, 50_000)),
             request=_request(input_tokens=50, decode=10,
                              input_bytes=(10_000, 10_000)),
@@ -468,31 +589,50 @@ class ReadAmplificationCausalTest(unittest.TestCase):
 
 
 class CreditShardSplitTest(unittest.TestCase):
-    """读流按 shard 字节分布切 credit 块：first/remaining 逐 shard 取 max。"""
+    """D09 字节 tile 审计拆分：首 tile / 其余流送段逐 shard 取 max
+    （tile = 配置 auto = 256 token × 100 B/token = 25600 B/shard）。"""
 
     def test_skewed_ranks_driven_by_max_rank(self):
-        # history (90000, 10000)、passes = 1+3 = 4、auto K = ceil(4/8) = 1
-        # → credit1 = (90000, 10000)：first = max(90, 10) = 90；其余 3 遍
-        # = (270000, 30000)：stream = max(270, 30) = 270；全流 = 360。
-        model = _model(rates=_rates(noc=1000.0, hbm=1e9, lat=0))
-        candidate = model.estimate_action(
+        # history (90000, 10000)、passes = 1+3 = 4、tile = 25600：
+        # 首 tile = (25600, 25600) → 25；其余 = (334400, 14400) →
+        # max(334, 14) = 334；全流审计 = max(360, 40) = 360（不变）。
+        rates = _rates(noc=1000.0, hbm=1e9, lat=0)
+        model = _model(rates=rates)
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(90_000, 10_000)),
             request=_request(input_tokens=20, decode=3,
                              input_bytes=(2000, 2000)),
             instance_index=1, action=ACTION_REMOTE, remote_enabled=True)
         breakdown = candidate.breakdown
-        self.assertIn("remote_credit_k=1", breakdown.notes)
-        self.assertEqual(breakdown.remote_read_first_credit_ns, 90)
-        self.assertEqual(breakdown.remote_read_stream_ns, 270)
+        self.assertIn("remote_read_tile_tokens=256", breakdown.notes)
+        tile_bytes = 25_600
+        paths = (_disjoint_paths(0, 1),)
+        paths_by_rank = tuple((path,) for path in paths[0])
+        expected_first = _transfer_ns_shards(
+            rates, LinkFlowRegistry(), None,
+            paths_by_rank=paths_by_rank,
+            bytes_by_rank=(tile_bytes, tile_bytes),
+            include_self=True, kind="read")
+        expected_stream = _shard_stream_ns_shards(
+            rates, LinkFlowRegistry(), None,
+            paths_by_rank=paths_by_rank,
+            bytes_by_rank=(360_000 - tile_bytes, 40_000 - tile_bytes),
+            include_self=True, kind="read")
+        self.assertEqual(breakdown.remote_read_first_credit_ns,
+                         expected_first)
+        self.assertGreater(expected_first, 0)
+        self.assertEqual(breakdown.remote_read_stream_ns, expected_stream)
+        # D17：流送腿向上取整——334_400/1000 = 334.4 → 335。
+        self.assertEqual(breakdown.remote_read_stream_ns, 335)
         self.assertEqual(breakdown.remote_read_ns, 360)
 
-    def test_single_credit_degenerate_invariant(self):
-        # K ≥ read_passes（单 credit）：first == 全流总时延、remaining == 0
-        # （不变量在逐 shard 口径下保持）。
+    def test_single_tile_stream_degenerate_invariant(self):
+        # 流字节 ≤ 一个 tile（5000×4=20000 ≤ 25600）：首 tile = 全流、
+        # remaining == 0（单 tile 退化不变量在 tile 口径下保持）。
         model = _model(
-            rates=_rates(noc=1000.0, hbm=1e9, lat=0), credit_iters="4")
-        candidate = model.estimate_action(
-            session=_session(history_bytes=(90_000, 10_000)),
+            rates=_rates(noc=1000.0, hbm=1e9, lat=0), tile_bytes="auto")
+        candidate = model.estimate_P_with_continuation(
+            session=_session(history_bytes=(5_000, 5_000)),
             request=_request(input_tokens=20, decode=3,
                              input_bytes=(2000, 2000)),
             instance_index=1, action=ACTION_REMOTE, remote_enabled=True)
@@ -503,34 +643,33 @@ class CreditShardSplitTest(unittest.TestCase):
         self.assertEqual(breakdown.remote_read_stream_ns, 0)
 
     def test_hop_latency_only_in_first_credit(self):
-        # 逐跳时延只进首块暴露段（其余读流纯流送段无时延）：lat=10、
-        # disjoint 1 跳 → first = 10 + 90 = 100、stream = 270（无时延）。
-        # _shard_stream_ns_shards 直接口径：与 _transfer_ns_shards 同
-        # 腿源，仅剥离 startup/逐跳时延（650/350 = 首/余 per shard）。
+        # 逐跳时延只进首 tile 暴露段（其余读流纯流送段无时延）：lat=10、
+        # disjoint 1 跳 → first = 10 + ⌈25.6⌉ = 36、stream = 335（无时
+        # 延；D17 腿服务向上取整）。
         rates = _rates(noc=1000.0, hbm=1e9, lat=10)
         model = _model(rates=rates)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(90_000, 10_000)),
             request=_request(input_tokens=20, decode=3,
                              input_bytes=(2000, 2000)),
             instance_index=1, action=ACTION_REMOTE, remote_enabled=True)
         breakdown = candidate.breakdown
-        self.assertEqual(breakdown.remote_read_first_credit_ns, 100)
-        self.assertEqual(breakdown.remote_read_stream_ns, 270)
+        self.assertEqual(breakdown.remote_read_first_credit_ns, 26 + 10)
+        self.assertEqual(breakdown.remote_read_stream_ns, 335)
         paths = (_disjoint_paths(0, 1),)
         paths_by_rank = tuple((path,) for path in paths[0])
         stream_only = _shard_stream_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=paths_by_rank,
-            bytes_by_rank=(240_000, 240_000),
+            bytes_by_rank=(360_000 - 25_600, 40_000 - 25_600),
             include_self=True, kind="read")
         with_latency = _transfer_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=paths_by_rank,
-            bytes_by_rank=(240_000, 240_000),
+            bytes_by_rank=(25_600, 25_600),
             include_self=True, kind="read")
-        self.assertEqual(stream_only, 240)
-        self.assertEqual(with_latency, 240 + 10)
+        self.assertEqual(stream_only, 335)
+        self.assertEqual(with_latency, 26 + 10)
 
 
 # ============================================ 6. 代表路径广播锚（C4 桥接）==
@@ -545,7 +684,7 @@ class RepresentativeBroadcastParityTest(unittest.TestCase):
         # 3000/(10/2) = 600 → wall = 10 + 600 ≡ 旧聚合
         # _transfer_ns(6000, hops=1, divisor=1) = 10 + 600。
         model = _model(rates=_rates(noc=10.0, hbm=1e5), route_paths_fn=None)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(3000, 3000)),
             request=_request(), instance_index=1,
             action=ACTION_COPY, remote_enabled=True)
@@ -555,20 +694,26 @@ class RepresentativeBroadcastParityTest(unittest.TestCase):
         self.assertEqual(candidate.breakdown.history_prep_ns, legacy)
         self.assertEqual(candidate.breakdown.history_prep_ns, 610)
 
-    def test_pool_suffix_leg_unchanged(self):
-        # F3 池腿保真：copy 混合腿的池后缀（missing 守卫）口径不变。
+    def test_pool_suffix_leg_per_shard(self):
+        # D04（2026-09-26）：池后缀逐 shard 计价——每 rank 1000 B、退
+        # 化口径独立池端口（除数 1）→ 100 + max(1000/5, 1000/1e5) =
+        # 300（旧聚合口径 pool(2000)=500 随 _pool_transfer_ns 废除）。
         model = _model(rates=_rates(noc=10.0, hbm=1e5), route_paths_fn=None)
-        candidate = model.estimate_action(
+        candidate = model.estimate_P_with_continuation(
             session=_session(history_bytes=(3000, 3000),
                              missing=(1000, 1000),
                              location="partial_hbm_remote", prefix=3),
             request=_request(), instance_index=1,
             action=ACTION_COPY, remote_enabled=True)
-        expected_pool = _pool_transfer_ns(
-            total_bytes=2000, divisor=1, rates=model.rates)
+        expected_pool = _pool_transfer_ns_shards(
+            model.rates, model._noc_registry, model.hbm_port_registry,
+            kind="pool_restore",
+            edge_ranks_by_rank=(0, 1),
+            paths_by_rank=((0,), (1,)),
+            bytes_by_rank=(1000, 1000))
         self.assertEqual(
             candidate.breakdown.history_prep_ns, 610 + expected_pool)
-        self.assertEqual(expected_pool, 100 + 400)
+        self.assertEqual(expected_pool, 100 + 200)
 
 
 if __name__ == "__main__":

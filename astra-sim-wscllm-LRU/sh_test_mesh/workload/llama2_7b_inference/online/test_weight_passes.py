@@ -18,6 +18,8 @@ weight_passes 权重口径单测(拼 batch 改造,2026-08-22;不跑仿真)。
 
 import os
 import sys
+import unittest
+from pathlib import Path
 
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -49,6 +51,19 @@ class _RecordingBuilder:
 
     def all_reduce(self, name, comm_size, pg_name):
         self.all_reduces.append({"name": name, "bytes": comm_size})
+
+
+class _DieRecordingBuilder(_RecordingBuilder):
+    """die 语境的记录替身(阶段 C):接受 die_spec/op_role 扩展参数。"""
+
+    def comp(self, name, num_ops, tensor_size, remote_read_size=0, *,
+             die_spec=None, op_role=None):
+        self.comp_nodes.append({
+            "name": name, "num_ops": num_ops,
+            "tensor_size": tensor_size,
+            "remote_read": remote_read_size,
+            "die_spec": die_spec, "op_role": op_role,
+        })
 
 
 KWARGS = dict(
@@ -261,6 +276,75 @@ def _run_all():
     print("[weight-passes] case 4 PASS: out-of-range weight_passes fails "
           "closed")
     print("[weight-passes] all cases PASS")
+
+
+class DieContextConservationTests(unittest.TestCase):
+    """die 语境的字节守恒(阶段 C):融合只合并节点,不重计工作量。
+    同 span 同参数下,die 发射与 legacy 发射的全部 COMP num_ops/
+    tensor_size/remote_read 与 AllReduce bytes 逐字节相等(契约 §2
+    "num_ops/tensor_size 照旧发射,兼容统计")。"""
+
+    @staticmethod
+    def _die_ctx(spans, **kwargs):
+        from online.die_model_adapter import DieModelContext
+        context = DieModelContext(
+            profile="mesh_die_v1",
+            die_config_path=Path("/nonexistent/resolved_die_model.json"),
+            config_hash="0" * 64,
+            dtype="bf16",
+            model_dims={
+                "hidden": 4096, "ffn": 11008, "vocab": 32000,
+                "mlp_variant": "swiglu", "norm_type": "rmsnorm",
+                "position_encoding": "rope", "num_q_heads": 32,
+                "num_kv_heads": 32, "head_dim": 128,
+            },
+            num_q_heads=32, num_kv_heads=32,
+            ffn_size=11008, vocab_size=32000)
+        context.begin_emission(
+            phase=kwargs.pop("phase", "decode"),
+            tensor_parallel=kwargs.pop("tensor_parallel", 6),
+            tensor_parallel_rank=kwargs.pop("tensor_parallel_rank", 0),
+            span_namespace="batch_train_i1_1",
+            pass_spans=spans)
+        assert not kwargs
+        return context
+
+    def test_die_emission_conserves_totals_and_collectives(self):
+        spans = [(1, 33), (1, 34), (512, 900), (7, 120)]
+        legacy = _RecordingBuilder()
+        die = _DieRecordingBuilder()
+        transformer_pass_aggregated(
+            legacy, phase="test", pass_spans=spans, **KWARGS)
+        transformer_pass_aggregated(
+            die, phase="test", pass_spans=spans, die_ctx=self._die_ctx(spans),
+            **KWARGS)
+        self.assertEqual(
+            sum(node["num_ops"] for node in die.comp_nodes),
+            sum(node["num_ops"] for node in legacy.comp_nodes))
+        self.assertEqual(
+            sum(node["tensor_size"] for node in die.comp_nodes),
+            sum(node["tensor_size"] for node in legacy.comp_nodes))
+        self.assertEqual(
+            sum(node["remote_read"] for node in die.comp_nodes),
+            sum(node["remote_read"] for node in legacy.comp_nodes))
+        self.assertEqual(
+            [(node["name"], node["bytes"]) for node in die.all_reduces],
+            [(node["name"], node["bytes"]) for node in legacy.all_reduces])
+        # 17 类体节点(15 body + final_norm + logits)-> 12+2:两条链融合。
+        self.assertEqual(len(legacy.comp_nodes), 15)
+        self.assertEqual(len(die.comp_nodes), 10)
+        names = [node["name"] for node in die.comp_nodes]
+        self.assertIn("test_all_layers_attention_region", names)
+        self.assertIn("test_all_layers_ffn_region", names)
+        for node in die.comp_nodes:
+            self.assertIsNotNone(node["die_spec"], node["name"])
+            self.assertEqual(node["op_role"], None)
+        # weight_passes 语义进入 spec(缺省 = len(spans),与 legacy 字节
+        # 公式同源)。
+        region = next(node for node in die.comp_nodes
+                      if node["name"].endswith("_ffn_region"))
+        self.assertEqual(region["die_spec"]["weight_passes"], len(spans))
+        self.assertEqual(region["die_spec"]["layer_count"], 32)
 
 
 if __name__ == "__main__":

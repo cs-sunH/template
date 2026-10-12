@@ -29,23 +29,6 @@ const ChakraAttr ETFeederNode::get_attr_msg(
   this->complain_attr_not_found(attr_name);
 }
 
-bool ETFeederNode::get_attr_msg(
-    const std::string& attr_name,
-    const ChakraAttr** attr) const {
-  const auto node = this->get_chakra_node();
-  for (auto& iter_attr : node->attr())
-    if (iter_attr.name() == attr_name) {
-      *attr = &iter_attr;
-      return true;
-    }
-  return false;
-}
-
-ChakraAttr::ValueCase ETFeederNode::get_attr_type(
-    const ChakraAttr& attr) const {
-  return attr.value_case();
-}
-
 NodeId ETFeederNode::id() const {
   auto node = this->get_chakra_node();
   return node->id();

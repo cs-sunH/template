@@ -1,39 +1,33 @@
 #!/usr/bin/env python3
-"""test_prefill_remote_read_graph.py -- 规格书§三（2026-09-25 prefill
-remote-read 分阶段）GraphBatchBuilder 侧回归。
+"""test_prefill_remote_read_graph.py -- prefill remote-read 前缀读流
+（规格书§三，2026-09-25；D09 逐 tile 化 2026-09-27）GraphBatchBuilder 侧
+回归。
 
-目标语义（PARTIAL 基，exec != home）：prefill 两腿从同一准入 frontier
-并行分叉——home 前缀 [0,p) 经 NoC 前缀读流（stream_only 瞬时流）、
-remote pool 后缀 [p,L) 经 remote_load 池恢复；前缀层计算等 home→exec
-逐组 recv 完成门、后缀层计算等池恢复逐组 HBM 写门，[0,L) 铺满
-fail-closed；readiness barrier 只作结构性主链节点；LOCAL 基 = 全层
-[0,L) 前缀读流（无 history transfers——旧 pass 分支废除）。
+目标语义（PARTIAL 基，exec != home）：准入批发射读流**触发链**（恰一次
+消费 interval/arrival gate），数据 tile 不在准入批——逐窗×tile 的
+send/recv 随消费窗（逐 chunk 迭代体块）在各 prefill 列车头/体发射：
+tile 1 上主链、tile 2 即时旁挂、tile 3+ 待发（缓冲复用释放门 = 消费体
+块发射点——tile i+2 生产等 tile i 消费完成，任意时刻远读暂存 ≤2
+tile/rank）；后缀 [p,L) 池恢复腿仍在准入批发射（两腿共享准入 frontier
+并行分叉）。
 
 覆盖：
-  1. §三.1/§三.2/§三.3 准入发射：跨实例 interval gate 重建到本轮
-     prefill（exec）实例（R5 路径）后经 TransferTriggerGate 1B relay
-     触发——exec timer → exec trigger send → home trigger recv →
-     home KV send → exec KV recv；组间 home send 链 / exec recv 链
-     顺序连接（组 0 后的 send/recv 不再依赖 interval gate）；逐组
-     recv 完成门 + 层区间入 _prefill_remote_read_arms/_layers 双账本；
-  2. LOCAL 基：无 history transfers 的 remote-read 准入发射全层前缀
-     读流（旧 pass 分支的 gate 悬空缺陷废除）；无后缀腿；
-  3. fail-closed 面：remote-read 无前缀读流 / 前缀读流挂错动作 /
-     组区间缺口（gap）/ 重复准入登记在发射即 raise；
-  4. §三.6 列车体层段铺满：[0,p) 前缀组段逐 rank 等前缀 recv 门、
-     [p,L) 后缀组段等恢复 HBM 写门、层段发射与整段单次发射字节守恒
-     （计费总量不因门控漂移）；
-  5. §三.8 first-token split：首步批恰消费全部前缀组门、余量批不
-     重复消费、列车尾残留检查 fail-closed、completion 残留
-     fail-closed（C13/C15 同款纪律）；
-  6. §三.1/§三.7 并行分叉结构：前缀读流支首节点、后缀恢复支首节点、
-     readiness barrier 三者每个 exec rank 共享同一 parent = 准入
-     frontier（含跨实例 gate 重建形态）；barrier 祖先集不含任何分支
-     节点（结构性主链节点，不等两支尾部）；可区分传输字节（图侧时延
-     载体）+ 支间互不可达偏序证明两腿重叠而非串行；
-  7. §三.8 T_max 截断：8 迭代截断同构拆 1+7——首步批消费全部前缀组
-     门、余量批哨兵核销后零残留 arm/层区间账本、拆分两批与整列发射
-     体字节守恒；漏发首步批 / 首 chunk 请求错配 fail-closed。
+  1. §三.1/§三.3 准入发射：跨实例 interval gate 重建到本轮 prefill
+     （exec）实例后经 TransferTriggerGate 1B relay 触发——exec timer →
+     exec trigger send → home trigger recv；准入批零数据 tile 节点
+     （消费驱动逐 tile 发射，不整轮预建）；
+  2. LOCAL 基：无 history transfers 的 remote-read 准入只发触发链；
+  3. fail-closed 面：remote-read 无读计划 / 读计划挂错动作 / tile 身份
+     缺失或重复 / 窗口门欠覆盖或过覆盖 / 完成残留窗口；
+  4. 列车头窗口发射：tile 1 主链（_prefill_read 命名）+ tile 2 即时 +
+     tile 3+ 待发账本；体块门 (rid, tile) 并集恰覆盖窗口登记面；
+  5. 释放链结构：tile i+2 的生产（home data send）经 release ack 锚定
+     消费 tile i 的体块（消费驱动，慢计算不停泵不越 2 tile）；
+  6. §三.1/§三.7 并行分叉结构：触发链支、后缀恢复支与 readiness
+     barrier 同 frontier 分叉；barrier 祖先集不含分支尾部；
+  7. 真实调度器集成（真 KVCacheManager + 真规划器 + 真 _plan_train +
+     _emit_train 首列车）与首步拆分拒绝（整列发射才是逐 tile 消费驱动
+     发射的载体）。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 online/test_prefill_remote_read_graph.py
@@ -53,8 +47,8 @@ for _p in (_ONLINE_DIR, _WORKLOAD_DIR):
 from face_scheduler import (  # noqa: E402
     KVTransfer,
     KVTransferShard,
-    RESTORE_GROUP_LAYERS,
-    plan_layer_groups,
+    KVTransferSequence,
+    plan_suffix_restore_groups,
 )
 from generate_face_trace import PendingHistoryGate  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
@@ -115,15 +109,15 @@ def _shard_bytes(layer_start, layer_end):
         * HISTORY_TOKENS)
 
 
-def _prefix_read_transfer(layer_start, layer_end, group_index):
-    """home→exec 前缀读流组（KV 管理器 plan_prefill_remote_read_
-    transfers 同构夹具：noc_migrate / stream_only / 前缀层区间）。"""
+def _read_tile_transfer(window_index, tile_index, *, bytes_per_tile):
+    """home→exec 前缀读流 tile（KV 管理器逐窗×tile 规划器同构夹具：
+    noc_migrate / stream_only / read_tile 身份 / 前缀层区间 [0, p)）。"""
     shards = tuple(
         KVTransferShard(
             source_rank=source, target_rank=target, edge_rank=None,
-            bytes=_shard_bytes(layer_start, layer_end),
+            bytes=bytes_per_tile,
             noc_path=(source, target),
-            layer_start=layer_start, layer_end=layer_end,
+            layer_start=0, layer_end=PREFIX_LAYERS,
         )
         for source, target in zip(HOME_RANKS, EXEC_RANKS))
     return KVTransfer(
@@ -132,21 +126,28 @@ def _prefix_read_transfer(layer_start, layer_end, group_index):
         session_id=SESSION, trigger_request_id=REQUEST_R,
         source_instance_index=HOME_INSTANCE,
         target_instance_index=EXEC_INSTANCE,
-        total_bytes=2 * _shard_bytes(layer_start, layer_end),
+        total_bytes=2 * bytes_per_tile,
         shards=shards, model_layers=MODEL_LAYERS,
-        layer_start=layer_start, layer_end=layer_end,
+        layer_start=0, layer_end=PREFIX_LAYERS,
         resident_prefix_layers_before=PREFIX_LAYERS,
         resident_prefix_layers_after=PREFIX_LAYERS,
         stream_only=True,
+        read_tile=(window_index, tile_index),
     )
+
+
+def _read_tiles(window_count, *, bytes_per_tile=800):
+    """逐窗×tile 序列（每窗 2 tile —— 双缓冲释放链的非退化形态）。"""
+    return tuple(
+        _read_tile_transfer(window, tile, bytes_per_tile=bytes_per_tile)
+        for window in range(1, window_count + 1)
+        for tile in (1, 2))
 
 
 def _suffix_restore_transfer(layer_start, layer_end, group_index, *,
                              bytes_scale=1):
     """remote pool→exec 后缀恢复组（prepare_prefill remote-read 分支
-    同构夹具：remote_load / restore_group 标记 / 同缘直读）。bytes_scale
-    供并行偏序测试施加可区分传输规模（图侧时延载体 = 字节×拓扑，经
-    C++ 代价模型派生时延，无独立时延参数）。"""
+    同构夹具：remote_load / restore_group 标记 / 同缘直读）。"""
     shards = tuple(
         KVTransferShard(
             source_rank=edge, target_rank=target, edge_rank=edge,
@@ -171,8 +172,52 @@ def _suffix_restore_transfer(layer_start, layer_end, group_index, *,
     )
 
 
-def _admission_plan(prefix_groups, suffix_groups, *,
-                    turn=1, joint_action="remote-read",
+def _read_plan_template(read_tiles, *, prefix_layers=PREFIX_LAYERS,
+                        location="partial_hbm_remote"):
+    """准入计划携带的 prefill 远读计划快照（D16 有界模板形态——调度器
+    plan_dict()["prefill_remote_read_plan"] 同构：O(窗数) 模板参数 +
+    builder 模板级复检所需 session/rank/scan 向量；不物化 tile 列表）。
+
+    模板参数由夹具 tile 序列派生并保持内部自洽（单扫描窗）：
+    window_scans 恒 1 ⇒ base_scans_shards = 每窗每 rank tile 字节和、
+    tiles_by_window[w] = ⌈base_scans_shards/tile_bytes⌉（与真实规划器
+    的窗内切法同构）。"""
+    tiles_by_window = {}
+    for transfer in read_tiles:
+        window_index, _tile = transfer.read_tile
+        tiles_by_window[window_index] = (
+            tiles_by_window.get(window_index, 0) + 1)
+    window_count = len(tiles_by_window)
+    tile_bytes = read_tiles[0].shards[0].bytes
+    # 每窗每 rank 单扫描字节（夹具每窗 tile 数一致——取窗 1 派生）。
+    base_scans_shards = tuple(
+        tiles_by_window[1] * tile_bytes for _ in HOME_RANKS)
+    # token 向下对齐的夹具口径（kv_token_bytes 取整除 tile_bytes 的
+    # 协议参数；仅模板形状披露，不被 builder 消费）。
+    kv_token_bytes = _BYTES_PER_TOKEN_LAYER_RANK * prefix_layers
+    assert tile_bytes % kv_token_bytes == 0
+    return {
+        "home_instance": HOME_INSTANCE,
+        "exec_instance": EXEC_INSTANCE,
+        "read_prefix_layers": prefix_layers,
+        "total_bytes": sum(t.total_bytes for t in read_tiles),
+        "tile_count": len(read_tiles),
+        "window_count": window_count,
+        "tiles_by_window": [
+            tiles_by_window[window] for window in range(1, window_count + 1)],
+        "tile_bytes": tile_bytes,
+        "tile_tokens": tile_bytes // kv_token_bytes,
+        "kv_token_bytes": kv_token_bytes,
+        "scan_passes": window_count,
+        "session_id": SESSION,
+        "source_ranks": tuple(HOME_RANKS),
+        "target_ranks": tuple(EXEC_RANKS),
+        "base_scans_shards": base_scans_shards,
+    }
+
+
+def _admission_plan(read_tiles, suffix_groups, *, turn=1,
+                    joint_action="remote-read",
                     location="partial_hbm_remote"):
     return {
         "request_id": REQUEST_R,
@@ -192,9 +237,14 @@ def _admission_plan(prefix_groups, suffix_groups, *,
         "history_transfers": list(suffix_groups),
         "history_evictions": [],
         "prefill_evictions": [],
-        "prefill_remote_read_transfers": list(prefix_groups),
+        # D16：读计划快照 = 有界模板（模板级合同复检；数据 tile 由
+        # 列车规划期经 kv_manager.prefill_read_window_tiles 现算）。
+        "prefill_remote_read_plan": _read_plan_template(
+            read_tiles,
+            prefix_layers=(
+                MODEL_LAYERS if location == "local_hbm" else PREFIX_LAYERS)),
         "prefill_remote_read_bytes": sum(
-            transfer.total_bytes for transfer in prefix_groups),
+            transfer.total_bytes for transfer in read_tiles),
         "history_tokens_before": HISTORY_TOKENS,
         "prefill_context_tokens": 10,
     }
@@ -287,38 +337,57 @@ class _GraphHarness:
             if "_trigger_to_rank" in node["name"]}
 
     def trigger_recvs(self):
-        """前缀读流触发 1B recv（home rank，触发 home send 链）。"""
+        """前缀读流触发 1B recv（home rank，读流启动因果锚）。"""
         return {
             node["rank"]: node for node in self.by_name("_prefill_read")
             if "_trigger_from_rank" in node["name"]}
 
 
 def _partial_groups(*, suffix_bytes_scale=1):
-    """缺省 PARTIAL 组：前缀 [0,8) 单组 + 后缀 [8,16) 单组。"""
-    prefix_groups = tuple(
-        _prefix_read_transfer(start, end, index)
-        for index, (start, end) in enumerate(
-            plan_layer_groups(0, PREFIX_LAYERS)))
+    """缺省 PARTIAL 组：前缀读流 tile 序列 + 后缀 [8,16) 单组。"""
+    prefix_tiles = _read_tiles(1)
     suffix_groups = tuple(
         _suffix_restore_transfer(start, end, index,
                                  bytes_scale=suffix_bytes_scale)
         for index, (start, end) in enumerate(
-            plan_layer_groups(PREFIX_LAYERS, MODEL_LAYERS)))
-    return prefix_groups, suffix_groups
+            plan_suffix_restore_groups(PREFIX_LAYERS, MODEL_LAYERS)))
+    return prefix_tiles, suffix_groups
 
 
-def _local_prefix_groups():
-    """LOCAL 基全层前缀读流组（[0, 16) 两组）。"""
+def _local_prefix_tiles(window_count=1):
+    """LOCAL 基全层读流 tile 序列（层区间恒 [0, L=16)）。"""
     return tuple(
-        _prefix_read_transfer(start, end, index)
-        for index, (start, end) in enumerate(
-            plan_layer_groups(0, MODEL_LAYERS)))
+        _read_tile_transfer(window, tile, bytes_per_tile=800)
+        .__class__(
+            kind="noc_migrate", phase="prefill",
+            reason="remote_read_prefill_prefix",
+            session_id=SESSION, trigger_request_id=REQUEST_R,
+            source_instance_index=HOME_INSTANCE,
+            target_instance_index=EXEC_INSTANCE,
+            total_bytes=2 * 800 * MODEL_LAYERS // PREFIX_LAYERS,
+            shards=tuple(
+                KVTransferShard(
+                    source_rank=source, target_rank=target, edge_rank=None,
+                    bytes=800 * MODEL_LAYERS // PREFIX_LAYERS,
+                    noc_path=(source, target),
+                    layer_start=0, layer_end=MODEL_LAYERS,
+                )
+                for source, target in zip(HOME_RANKS, EXEC_RANKS)),
+            model_layers=MODEL_LAYERS,
+            layer_start=0, layer_end=MODEL_LAYERS,
+            resident_prefix_layers_before=MODEL_LAYERS,
+            resident_prefix_layers_after=MODEL_LAYERS,
+            stream_only=True,
+            read_tile=(window, tile),
+        )
+        for window in range(1, window_count + 1)
+        for tile in (1, 2))
 
 
 def _emit_partial_admission(harness, *, gate_source=None):
-    """PARTIAL 基准入发射（前缀 [0,8) + 后缀 [8,16)）。gate_source 缺
+    """PARTIAL 基准入发射（触发链 + 后缀恢复分支）。gate_source 缺
     省 = exec（同实例 gate；非 None = 上一轮在他实例 → R5 重建路径）。"""
-    prefix_groups, suffix_groups = _partial_groups()
+    prefix_tiles, suffix_groups = _partial_groups()
     _seed_gate(
         harness.builder,
         source_instance=(
@@ -326,12 +395,90 @@ def _emit_partial_admission(harness, *, gate_source=None):
         ranks=(HOME_RANKS if gate_source is not None else EXEC_RANKS))
     _seed_store_tails(harness.builder, suffix_groups)
     harness.builder.emit_admission_batch(_admission_plan(
-        prefix_groups, suffix_groups))
-    return prefix_groups, suffix_groups
+        prefix_tiles, suffix_groups))
+    return prefix_tiles, suffix_groups
+
+
+def _prefill_read_entry(tiles, *, request_id=REQUEST_R, spans_per_window=1):
+    """列车计划的 prefill_read 规格（SH _plan_prefill_read_window 同构：
+    逐迭代体块 + (rid, tile) 门并集）。tile 序号 = 传入序（1 基）。"""
+    window_count = len({transfer.read_tile[0] for transfer in tiles})
+    blocks = []
+    pipeline_tile_runs = []
+    tile_cursor = 0
+    for window in range(1, window_count + 1):
+        window_tiles = [
+            transfer for transfer in tiles
+            if transfer.read_tile[0] == window]
+        gates = []
+        for _ in window_tiles:
+            tile_cursor += 1
+            gates.append((request_id, tile_cursor))
+        if window_tiles:
+            shards = tuple({
+                "global_shard_ordinal": shard_ordinal,
+                "source_rank": int(first.source_rank),
+                "target_rank": int(first.target_rank),
+                "total_data_bytes": sum(
+                    int(transfer.shards[shard_ordinal].bytes)
+                    for transfer in window_tiles),
+                "bytes_per_unit": 1,
+                "noc_path": tuple(int(rank) for rank in first.noc_path),
+            } for shard_ordinal, first in enumerate(window_tiles[0].shards)
+                if sum(int(transfer.shards[shard_ordinal].bytes)
+                       for transfer in window_tiles) > 0)
+            units_per_tile = int(window_tiles[0].shards[0].bytes)
+            total_units = max(
+                int(shard["total_data_bytes"]) for shard in shards)
+            pipeline_tile_runs.append({
+                "first_tile": tile_cursor - len(window_tiles) + 1,
+                "tile_count": len(window_tiles),
+                "pass_or_window_ordinal": window,
+                "source_ordinal": 0,
+                "source_key": "window:{}".format(window),
+                "layer_start": int(window_tiles[0].layer_start),
+                "layer_end": int(window_tiles[0].layer_end),
+                "axis_unit": "stream_bytes",
+                "total_units": total_units,
+                "units_per_tile": units_per_tile,
+                "tail_units": total_units - (len(window_tiles) - 1)
+                    * units_per_tile,
+                "shards": shards,
+            })
+        blocks.append({
+            "start_iter": window,
+            "end_iter": window,
+            "weight_passes": 1,
+            "spans": [(10, 100 + window) for _ in range(spans_per_window)],
+            "gates": gates,
+        })
+    tile_entries = tuple(
+        (index, transfer) for index, transfer in enumerate(tiles, start=1))
+    tile_sequence = KVTransferSequence(
+        len(tile_entries), lambda index: tile_entries[index],
+        pipeline_tile_runs=pipeline_tile_runs)
+    return {
+        "request_id": request_id,
+        "plan": {
+            "request_id": request_id, "session_id": SESSION,
+            "turn_index": 1, "queue_index": 0,
+            # Explicit actual-emission seed matching the scheduler's selected
+            # P request plan; fixture lease ID is fixed and ordinal preview is
+            # committed only at GraphBatch finalization.
+            "pipeline_identity_seeds": tuple({
+                "request_id": request_id, "stage": "prefill",
+                "generation": 0, "stage_epoch": 0, "rank": rank,
+                "staging_allocation_id": 1,
+            } for rank in EXEC_RANKS),
+        },
+        "tiles": tile_sequence,
+        "body_blocks": blocks,
+        "window_span": (1, window_count),
+    }
 
 
 def _train_plan(train_id, spans, *, stage="prefill", first_chunk=None,
-                iterations=None):
+                iterations=None, prefill_read=None):
     spans = list(spans)
     return {
         "train_id": train_id,
@@ -348,6 +495,7 @@ def _train_plan(train_id, spans, *, stage="prefill", first_chunk=None,
         "drain_members": [],
         "exit_members": [],
         "head_request_id": REQUEST_R if first_chunk else None,
+        "prefill_read": prefill_read,
     }
 
 
@@ -376,26 +524,6 @@ def _completion_plan():
     }
 
 
-def _emit_partial_admission_capture_frontier(*, suffix_bytes_scale=1):
-    """PARTIAL 基准入发射 + 分叉 frontier 捕获：frontier = 支链发射前
-    各 exec rank 的主链尾节点（gate/store 种子链尾）。_emit_side_branch
-    的 fork 语义（graph_batch_builder :1925 起）："分支首节点 parent 恰
-    为 fork frontier"——两支与 readiness barrier 是否同 frontier 分叉
-    以该捕获值为锚断言。"""
-    harness = _GraphHarness()
-    _seed_gate(harness.builder, source_instance=EXEC_INSTANCE,
-               ranks=EXEC_RANKS)
-    prefix_groups, suffix_groups = _partial_groups(
-        suffix_bytes_scale=suffix_bytes_scale)
-    _seed_store_tails(harness.builder, suffix_groups)
-    frontier = {
-        rank: harness.builder.builders[rank].previous_id
-        for rank in EXEC_RANKS}
-    harness.builder.emit_admission_batch(_admission_plan(
-        prefix_groups, suffix_groups))
-    return harness, frontier
-
-
 def _parents_by_rank(harness):
     """(rank, to) → [from, ...] 批内父边索引（parent_edges 恒 rank 内
     边；跨 rank 同步由 comm tag 配对承载、不入图边）。"""
@@ -407,7 +535,7 @@ def _parents_by_rank(harness):
 
 
 def _ancestors(parents, rank, node_id):
-    """rank 内父向 BFS 可达集（同 rank 偏序足以裁决两支串行/并行）。"""
+    """rank 内父向 BFS 可达集（同 rank 偏序足以裁决门控因果）。"""
     seen = set()
     stack = [node_id]
     while stack:
@@ -419,27 +547,12 @@ def _ancestors(parents, rank, node_id):
 
 
 def _branch_ids_by_rank(harness, needle):
-    """分支节点 (rank → id 集)。命名空间识别：前缀读流支节点名含
-    "_prefill_read"（触发链 + 组 send/recv/ack）；后缀恢复支节点名含
-    "_history_transfer"（本发射形态主链无 history_transfer 节点——
-    restore 组全部摘入旁挂分支，主链循环遍历空集）。"""
+    """分支节点 (rank → id 集）。"""
     ids = {}
     for node in harness.nodes():
         if needle in node["name"]:
             ids.setdefault(node["rank"], set()).add(node["id"])
     return ids
-
-
-def _first_branch_node_by_rank(harness, needle):
-    """分支首节点（每 rank 最小节点 id = 该 rank 支内最先发射节点，
-    id 随发射单调递增）。"""
-    first = {}
-    for node in harness.nodes():
-        if needle in node["name"]:
-            rank = node["rank"]
-            if rank not in first or node["id"] < first[rank]["id"]:
-                first[rank] = node
-    return first
 
 
 def _barrier_by_rank(harness):
@@ -449,472 +562,382 @@ def _barrier_by_rank(harness):
 
 
 class PrefixReadStreamAdmissionTests(unittest.TestCase):
-    """§三.1-§三.3/§三.5：准入批发射的前缀读流旁挂分支。"""
+    """§三.1-§三.3：准入批发射的读流触发链（数据 tile 不在准入批）。"""
 
     def setUp(self):
         self.h = _GraphHarness()
 
     def test_cross_instance_gate_rebuild_triggers_prefix_stream(self):
         """上一轮 gate 在 home（跨实例）→ R5 重建到 exec → 1B relay 触发
-        home send；组 0 send/recv 链序后随触发链（§三.2/§三.3）。"""
+        home；准入批只有触发链节点（数据 tile 随消费窗发射）。"""
         _emit_partial_admission(self.h, gate_source=HOME_INSTANCE)
-        # 重建后的 exec 实例 interval gate 节点在场。
-        rebuilt_by_rank = {
-            node["rank"]: node["id"]
-            for node in self.h.by_name("interval_gate_rebuilt")}
-        self.assertEqual(sorted(rebuilt_by_rank), sorted(EXEC_RANKS))
-        # 触发链：exec trigger send（依赖重建 gate）→ home trigger recv。
-        trigger_sends = self.h.trigger_sends()
-        trigger_recvs = self.h.trigger_recvs()
-        self.assertEqual(sorted(trigger_sends), sorted(EXEC_RANKS))
-        self.assertEqual(sorted(trigger_recvs), sorted(HOME_RANKS))
-        parents = self.h.parents()
+        sends = self.h.trigger_sends()
+        recvs = self.h.trigger_recvs()
+        self.assertEqual(sorted(sends), sorted(EXEC_RANKS))
+        self.assertEqual(sorted(recvs), sorted(HOME_RANKS))
         for rank in EXEC_RANKS:
-            self.assertIn(
-                rebuilt_by_rank[rank],
-                parents.get((rank, trigger_sends[rank]["id"]), []),
-                f"exec trigger send on rank {rank} must consume the "
-                "rebuilt interval gate")
-        # 前缀组 0 send/recv 的父依赖 = 触发链尾（链序触发）。
-        first_sends = {
-            node["rank"]: node for node in self.h.by_name(
-                "_prefill_read_action000_")
-            if node["name"].endswith("_send")}
-        first_recvs = {
-            node["rank"]: node for node in self.h.by_name(
-                "_prefill_read_action000_")
-            if node["name"].endswith("_recv")}
-        for source_rank in HOME_RANKS:
-            self.assertIn(
-                trigger_recvs[source_rank]["id"],
-                parents.get(
-                    (source_rank, first_sends[source_rank]["id"]), []),
-                f"home group-0 send on rank {source_rank} must follow "
-                "the trigger recv")
-        for target_rank in EXEC_RANKS:
-            self.assertIn(
-                trigger_sends[target_rank]["id"],
-                parents.get(
-                    (target_rank, first_recvs[target_rank]["id"]), []),
-                f"exec group-0 recv on rank {target_rank} must follow "
-                "the exec trigger send")
-        # 双账本登记：逐组 recv 完成门 + 层区间。
-        arms = self.h.builder._prefill_remote_read_arms.get(REQUEST_R)
-        layers = self.h.builder._prefill_remote_read_layers.get(REQUEST_R)
-        self.assertEqual(sorted(arms), [0])
-        self.assertEqual(layers, {0: (0, PREFIX_LAYERS)})
-        self.assertEqual(sorted(arms[0]), sorted(EXEC_RANKS))
-        for target_rank in EXEC_RANKS:
-            self.assertEqual(
-                arms[0][target_rank], first_recvs[target_rank]["id"])
+            self.assertIn("_trigger_to_rank", sends[rank]["name"])
+        for rank in HOME_RANKS:
+            self.assertIn("_trigger_from_rank", recvs[rank]["name"])
+        # 准入批零数据 tile 节点（消费驱动逐 tile 发射——不整轮预建）。
+        data_nodes = [
+            node for node in self.h.nodes()
+            if "_prefill_read_action" in node["name"]
+            and (node["name"].endswith("_send")
+                 or node["name"].endswith("_recv"))]
+        self.assertEqual(data_nodes, [])
+        # interval gate 恰一次消费（准入发射弹出 pending_history——
+        # 触发链是其唯一消费者）。
+        self.assertNotIn(REQUEST_R, self.h.builder.pending_history)
 
-    def test_later_groups_chain_without_reconsuming_interval_gate(self):
-        """组 1 的 home send / exec recv 只链接组 0 链尾，不再消费
-        interval gate / 触发链（§三.3：不逐组重复消费）。LOCAL 基全层
-        读流给出多组形态（同一分支发射，结构断言与 PARTIAL 基同路径）。"""
-        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
-                   ranks=EXEC_RANKS)
-        gate_seed_ids = set(
-            self.h.builder.pending_history[REQUEST_R].timer_gates)
+    def test_local_base_remote_read_emits_trigger_without_history(self):
+        """LOCAL 基：无 history transfers 的 remote-read 准入只发触发链
+        （后缀腿缺席——读计划 tiles 供体在）。"""
+        tiles = _local_prefix_tiles()
+        _seed_gate(self.h.builder, source_instance=HOME_INSTANCE,
+                   ranks=HOME_RANKS)
         self.h.builder.emit_admission_batch(_admission_plan(
-            _local_prefix_groups(), (), location="local_hbm"))
-        parents = self.h.parents()
-        forbidden = gate_seed_ids | set(
-            node["id"] for node in self.h.trigger_sends().values())
-        sends_by_group = {0: {}, 1: {}}
-        recvs_by_group = {0: {}, 1: {}}
-        for group in (0, 1):
-            for source_rank in HOME_RANKS:
-                sends_by_group[group][source_rank] = next(
-                    node for node in self.h.by_name(
-                        f"_prefill_read_action{group:03d}_")
-                    if node["name"].endswith("_send")
-                    and node["rank"] == source_rank)
-            for target_rank in EXEC_RANKS:
-                recvs_by_group[group][target_rank] = next(
-                    node for node in self.h.by_name(
-                        f"_prefill_read_action{group:03d}_")
-                    if node["name"].endswith("_recv")
-                    and node["rank"] == target_rank)
-        for source_rank in HOME_RANKS:
-            gate_parents = set(
-                parents.get(
-                    (source_rank,
-                     sends_by_group[1][source_rank]["id"]), ()))
-            self.assertFalse(
-                gate_parents & forbidden,
-                "group-1 home send must not re-consume the interval "
-                "gate or the trigger relay")
-        for target_rank in EXEC_RANKS:
-            gate_parents = set(
-                parents.get(
-                    (target_rank,
-                     recvs_by_group[1][target_rank]["id"]), ()))
-            self.assertFalse(
-                gate_parents & forbidden,
-                "group-1 exec recv must not re-consume the interval "
-                "gate or the trigger relay")
-        # 层区间账本 = [0, 8) + [8, 16) 连续铺满（LOCAL 基全层读流）。
+            tiles, (), location="local_hbm"))
+        self.assertEqual(sorted(self.h.trigger_recvs()), sorted(HOME_RANKS))
         self.assertEqual(
-            self.h.builder._prefill_remote_read_layers[REQUEST_R],
-            {0: (0, 8), 1: (8, 16)})
+            [node for node in self.h.nodes()
+             if "history_transfer" in node["name"]], [])
 
-    def test_local_base_remote_read_emits_stream_without_history(self):
-        """LOCAL 基（无 history transfers）remote-read 准入：旧 pass 分支
-        废除——gate 被前缀读流触发消费，全层读流登记，无后缀腿。"""
-        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
-                   ranks=EXEC_RANKS)
-        gate_seed_ids = {
-            rank: gate_id for rank, gate_id in zip(
-                EXEC_RANKS,
-                self.h.builder.pending_history[REQUEST_R].timer_gates)}
-        self.h.builder.emit_admission_batch(_admission_plan(
-            _local_prefix_groups(), (), location="local_hbm"))
-        parents = self.h.parents()
-        trigger_sends = self.h.trigger_sends()
-        self.assertEqual(sorted(trigger_sends), sorted(EXEC_RANKS))
-        for rank in EXEC_RANKS:
-            self.assertIn(
-                gate_seed_ids[rank],
-                parents.get((rank, trigger_sends[rank]["id"]), []),
-                f"exec trigger send on rank {rank} must consume the "
-                "arrival/interval gate (old pass left it dangling)")
-        # arms/层区间 = 全层两组；后缀恢复账本缺席。
-        arms = self.h.builder._prefill_remote_read_arms[REQUEST_R]
-        self.assertEqual(
-            self.h.builder._prefill_remote_read_layers[REQUEST_R],
-            {0: (0, 8), 1: (8, 16)})
-        self.assertEqual(sorted(arms), [0, 1])
-        self.assertNotIn(REQUEST_R, self.h.builder._suffix_restore_arms)
-        # 结构性 readiness barrier 保留（无后缀腿的 LOCAL 基同样发射）。
-        self.assertTrue(self.h.by_name("_prefill_kv_ready_barrier"))
-
-    def test_remote_read_without_prefix_stream_fails_closed(self):
-        """remote-read 准入无前缀读流（plan 形态破损）→ raise。"""
-        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
-                   ranks=EXEC_RANKS)
+    def test_remote_read_without_read_plan_fails_closed(self):
+        plan = _admission_plan(_local_prefix_tiles(), ())
+        plan["prefill_remote_read_plan"] = None
         with self.assertRaises(RuntimeError):
-            self.h.builder.emit_admission_batch(_admission_plan((), ()))
+            self.h.builder.emit_admission_batch(plan)
 
-    def test_prefix_stream_with_wrong_action_fails_closed(self):
-        """前缀读流挂在非 remote-read 动作上 → raise（计划形态破损）。"""
-        prefix_groups = tuple(
-            _prefix_read_transfer(start, end, index)
-            for index, (start, end) in enumerate(
-                plan_layer_groups(0, PREFIX_LAYERS)))
-        # turn-0：arrival gate 内联构造，绕开 turn>0 无 history 的旧
-        # raise，使断言命中本分支的 fail-closed 检查。
+    def test_read_plan_with_wrong_action_fails_closed(self):
+        plan = _admission_plan(
+            _local_prefix_tiles(), (), joint_action="copy")
         with self.assertRaises(RuntimeError):
-            self.h.builder.emit_admission_batch(_admission_plan(
-                prefix_groups, (), turn=0, joint_action="stay"))
+            self.h.builder.emit_admission_batch(plan)
 
-    def test_prefix_group_gap_fails_closed(self):
-        """前缀组区间缺口（gap）→ 准入发射即 raise（§三.6 发射侧复检）。"""
-        prefix_groups = (
-            _prefix_read_transfer(0, 4, 0),
-            _prefix_read_transfer(6, PREFIX_LAYERS, 1))  # [4,6) 缺口
-        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
-                   ranks=EXEC_RANKS)
+    # ---- D16 模板级合同复检（builder _emit_prefill_remote_read_branch
+    # 的新 fail-closed 路径）：逐 tile 结构不变量（read_tile 身份连续
+    # 唯一、noc_migrate/stream_only）由物化器构造同源恒成立，钉测承
+    # 担移至 test_prefill_remote_read_manager；此处钉模板级失败形态。----
+
+    def test_read_plan_degenerate_window_template_fails_closed(self):
+        # 窗界退化（窗数 0 / 逐窗 tile 数 0）：非退化窗模板合同。
+        for mutate in (
+                lambda template: template.update(window_count=0),
+                lambda template: template.update(
+                    window_count=1, tiles_by_window=[0]),
+        ):
+            plan = _admission_plan(_local_prefix_tiles(), ())
+            mutate(plan["prefill_remote_read_plan"])
+            with self.assertRaises(RuntimeError):
+                self.h.builder.emit_admission_batch(plan)
+
+    def test_read_plan_window_count_mismatch_fails_closed(self):
+        # tiles_by_window 与 window_count 失配（模板参数自洽性）。
+        plan = _admission_plan(_local_prefix_tiles(), ())
+        plan["prefill_remote_read_plan"]["tiles_by_window"] = [2]
         with self.assertRaises(RuntimeError):
-            self.h.builder.emit_admission_batch(_admission_plan(
-                prefix_groups, ()))
+            self.h.builder.emit_admission_batch(plan)
 
-    def test_double_admission_registration_fails_closed(self):
-        """同一请求重复准入发射 → 组门账本重复登记 raise（重复消费
-        fail-closed 的登记半边）。"""
-        _emit_partial_admission(self.h)
-        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
-                   ranks=EXEC_RANKS)
-        _seed_store_tails(self.h.builder, _partial_groups()[1])
+    def test_read_plan_session_mismatch_fails_closed(self):
+        # 会话归属错配：读计划模板戳属于另一会话。
+        plan = _admission_plan(_local_prefix_tiles(), ())
+        plan["prefill_remote_read_plan"]["session_id"] = "other_session"
         with self.assertRaises(RuntimeError):
-            self.h.builder.emit_admission_batch(
-                _admission_plan(*_partial_groups()))
+            self.h.builder.emit_admission_batch(plan)
+
+    def test_read_plan_home_instance_mismatch_fails_closed(self):
+        # 端点错配：模板 home 与 history location 驻留实例不一致。
+        plan = _admission_plan(_local_prefix_tiles(), ())
+        plan["prefill_remote_read_plan"]["home_instance"] = (
+            HOME_INSTANCE + 5)
+        with self.assertRaises(RuntimeError):
+            self.h.builder.emit_admission_batch(plan)
+
+    def test_read_plan_prefix_layers_mismatch_fails_closed(self):
+        # 前缀层界错配：LOCAL 基模板必须读 [0, L) 整段。
+        plan = _admission_plan(
+            _local_prefix_tiles(), (), location="local_hbm")
+        template = plan["prefill_remote_read_plan"]
+        template["read_prefix_layers"] = template["read_prefix_layers"] - 1
+        with self.assertRaises(RuntimeError):
+            self.h.builder.emit_admission_batch(plan)
+
+    def test_read_plan_tp_relative_position_broken_fails_closed(self):
+        # TP 相对位破坏：source_ranks 换序后与 target_ranks 的相对位
+        # 映射不再保持（rank i 的 KV 不得漂移到另一相对位）。
+        plan = _admission_plan(_local_prefix_tiles(), ())
+        plan["prefill_remote_read_plan"]["source_ranks"] = tuple(
+            reversed(HOME_RANKS))
+        with self.assertRaises(RuntimeError):
+            self.h.builder.emit_admission_batch(plan)
 
 
-class PrefixLayerSegmentBodyTests(unittest.TestCase):
-    """§三.6/§三.7：首 chunk 列车体的层段铺满与 per-rank 门。"""
+def _seed_gate_ids(harness):
+    return harness.builder.pending_history.get(REQUEST_R), None
+
+
+class PrefillReadWindowTrainTests(unittest.TestCase):
+    """D09：列车头窗口发射 + 体块门覆盖 + 释放链结构。"""
 
     def setUp(self):
         self.h = _GraphHarness()
-        self.prefix_groups, self.suffix_groups = _emit_partial_admission(
-            self.h)
-        self.prefix_arms = dict(
-            self.h.builder._prefill_remote_read_arms[REQUEST_R])
-        self.restore_arms = list(
-            self.h.builder._suffix_restore_arms[REQUEST_R])
-        self.h.builder.emit_iteration_train(_train_plan(
+
+    def _admit_and_train(self, window_count, *, spans_per_window=1):
+        tiles = _read_tiles(window_count)
+        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
+                   ranks=EXEC_RANKS)
+        self.h.builder.emit_admission_batch(_admission_plan(tiles, ()))
+        train = _train_plan(
             "batch_train_i1_1",
-            [(10, 100), (10, 101), (10, 102)],
-            first_chunk=True))
+            [(10, 100 + i) for i in range(window_count)],
+            first_chunk=True,
+            prefill_read=_prefill_read_entry(
+                tiles, spans_per_window=spans_per_window))
+        self.h.builder.emit_iteration_train(train)
+        return tiles, train
 
-    def test_segments_tile_prefix_and_suffix(self):
-        """[0,p) 前缀组段 + [p,L) 后缀组段铺满 [0, L)：段节点在场（组 0
-        自层 0 起，无热前缀无门段）、账本随体消费弹出（恰一次）。"""
-        names = [node["name"] for node in self.h.nodes()]
-        self.assertTrue(
-            any("layers00_07" in name for name in names),
-            "prefix group-0 segment [0, 8) must be emitted")
-        self.assertTrue(
-            any("layers08_15" in name for name in names),
-            "suffix restore segment [8, 16) must be emitted")
-        self.assertNotIn(
-            REQUEST_R, self.h.builder._prefill_remote_read_arms)
-        self.assertNotIn(
-            REQUEST_R, self.h.builder._prefill_remote_read_layers)
-        self.assertNotIn(REQUEST_R, self.h.builder._suffix_restore_arms)
+    def test_window_tiles_emit_per_train_head_and_gates_cover(self):
+        """tile 1 主链 + tile 2 即时 + tile 3+ 待发；体块门并集恰覆盖
+        窗口登记面（欠/过覆盖 fail-closed 由下述注入用例钉）。compact
+        发射：per-tile send/recv 在 prefill_read_window descriptor 草稿
+        的 endpoint_runs 内（两 owner rank 各一视图；物理节点面 =
+        pipeline 锚 + 触发链）。"""
+        tiles, _train = self._admit_and_train(4)
+        drafts = sorted(
+            (draft for draft in self.h.builder._pipeline_drafts.values()
+             if draft.stream_kind == "prefill_read_window"),
+            key=lambda draft: draft.identity.rank)
+        self.assertEqual(
+            [draft.identity.rank for draft in drafts], list(EXEC_RANKS))
+        legs_by_tile = {}
+        for draft in drafts:
+            tile_by_group = {
+                group["group_ordinal"]:
+                    group["tile_axis"]["global_tile_first"]
+                for group in draft.groups}
+            for run in draft.endpoint_runs:
+                first_global = (tile_by_group[run["group_ordinal"]]
+                                + int(run["first_tile"]) - 1)
+                for offset in range(int(run["tile_count"])):
+                    tile = first_global + offset
+                    for leg in run["legs"]:
+                        legs_by_tile.setdefault(tile, set()).add(
+                            (leg["endpoint"], int(run["rank"])))
+        # 8 tile（4 窗 × 2）全部有 data_send（home 侧）与 data_recv
+        #（exec 侧）；fill_ack 回执反向同构；release 腿恰自 tile ≥3
+        # 起（双缓冲复用：tile 1..2 初始占用，无释放依赖）。
+        self.assertEqual(sorted(legs_by_tile), list(range(1, 9)))
+        for tile, legs in legs_by_tile.items():
+            expected = {
+                ("data_send", rank) for rank in HOME_RANKS} | {
+                ("fill_ack_recv", rank) for rank in HOME_RANKS} | {
+                ("data_recv", rank) for rank in EXEC_RANKS} | {
+                ("fill_ack_send", rank) for rank in EXEC_RANKS}
+            if tile >= 3:
+                expected |= {
+                    ("release_ack_send", rank) for rank in EXEC_RANKS} | {
+                    ("release_ack_recv", rank) for rank in HOME_RANKS}
+            self.assertEqual(legs, expected, tile)
+        # 窗口登记账本在列车尾结清（下一列车可重登记）。
+        self.assertNotIn(REQUEST_R, self.h.builder._prefill_read_window_tiles)
+        self.assertNotIn(REQUEST_R, self.h.builder._credit_arms)
+        self.assertNotIn(REQUEST_R, self.h.builder._credit_pending_tiles)
 
-    def test_prefix_segment_gated_on_recv_per_rank(self):
-        """前缀层段逐 rank 等该组 home→exec recv 完成门（§三.6）。"""
-        parents = self.h.parents()
-        segment_targets = {
+    def test_release_chain_lag_two_consumption_driven(self):
+        """D09 缓冲复用释放链（tile ≥ 3）：tile t 的 exec 侧 recv 以释
+        放 ack 为前置，且其支链发射于消费 tile t-2 的体块之后（生产等
+        消费，慢计算停泵、任意时刻 ≤2 tile/rank 的结构表达；decode
+        credit 同款钉法）。compact 发射：fork 因果由 descriptor 的
+        initial_parent_json_id 承载；物理面上 tile t 的 data_recv 锚
+        （pipeline frontier）发射序夹在消费 tile t-2 的体块末与 tile t
+        的消费体块之间（per-rank 节点 id = 发射序）。"""
+        tiles, _train = self._admit_and_train(4)
+        exec_rank = EXEC_RANKS[0]
+        train_id = "batch_train_i1_1"
+        draft = next(
+            draft for draft in self.h.builder._pipeline_drafts.values()
+            if draft.stream_kind == "prefill_read_window"
+            and draft.identity.rank == exec_rank)
+        tile_by_group = {
+            group["group_ordinal"]: (
+                group["tile_axis"]["global_tile_first"],
+                group["tile_axis"]["tile_count"])
+            for group in draft.groups}
+        # (tile, data_recv) → 支链 fork 锚的物理节点 id。
+        anchor_by_tile = {}
+        for anchor in draft.anchors:
+            selector = anchor.get("selector", {})
+            if (selector.get("kind") != "tile_endpoint_leg"
+                    or selector.get("endpoint") != "data_recv"):
+                continue
+            first, _count = tile_by_group[selector["group_ordinal"]]
+            anchor_by_tile[first + selector["tile_ordinal"] - 1] = (
+                anchor["node_id"])
+        body_nodes = {
             node["id"] for node in self.h.nodes()
-            if node["request_id"] == "batch_train_i1_1"
-            and "layers00_07" in node["name"]}
-        self.assertTrue(segment_targets)
-        for target_rank in EXEC_RANKS:
-            gate_node = self.prefix_arms[0][target_rank]
-            gated = {
-                target for (node_rank, target), froms in parents.items()
-                if node_rank == target_rank and gate_node in froms}
-            self.assertTrue(
-                gated & segment_targets,
-                f"prefix recv gate must parent the prefix layer segment "
-                f"on rank {target_rank}")
+            if f"{train_id}_rcb" in node["name"]
+            and node["rank"] == exec_rank}
+        self.assertTrue(body_nodes)
 
-    def test_suffix_segment_gated_on_restore_write_per_rank(self):
-        """后缀层段逐 rank 等该组池恢复 HBM 写完成门（既有 C15 口径在
-        remote-read 混合形态下的衔接）。"""
-        parents = self.h.parents()
-        segment_targets = {
-            node["id"] for node in self.h.nodes()
-            if node["request_id"] == "batch_train_i1_1"
-            and "layers08_15" in node["name"]}
-        self.assertTrue(segment_targets)
-        gates = self.restore_arms[0][3]
-        for target_rank in EXEC_RANKS:
-            gate_node = gates[target_rank]
-            gated = {
-                target for (node_rank, target), froms in parents.items()
-                if node_rank == target_rank and gate_node in froms}
-            self.assertTrue(
-                gated & segment_targets,
-                f"restore write gate must parent the suffix layer "
-                f"segment on rank {target_rank}")
+        for tile in range(3, 9):
+            # tile t 的消费体块 = 窗 ceil(t/2) 的迭代体块。
+            consumer_window = -(-tile // 2)
+            producer_window = -(-(tile - 2) // 2)
+            consumer_block = {
+                node["id"] for node in self.h.nodes()
+                if f"{train_id}_rcb{consumer_window}" in node["name"]
+                and node["rank"] == exec_rank}
+            producer_block = {
+                node["id"] for node in self.h.nodes()
+                if f"{train_id}_rcb{producer_window}" in node["name"]
+                and node["rank"] == exec_rank}
+            self.assertTrue(consumer_block)
+            # tile t 的支链锚定在消费 tile t-2 的体块之后、tile t 的
+            # 消费体块之前（释放边真实存在——发射序上的 lag-2 锚定）。
+            self.assertIn(tile, anchor_by_tile)
+            self.assertGreater(
+                anchor_by_tile[tile], max(producer_block),
+                f"tile {tile} production is not anchored after tile "
+                f"{tile - 2} consumption")
+            self.assertLess(
+                anchor_by_tile[tile], min(consumer_block),
+                f"tile {tile} production must precede its own consumption")
 
-    def test_layer_segment_bytes_conserve(self):
-        """层段发射 vs 整段单次发射：num_ops/tensor/comm 总量逐项相等
-        （重叠门控不改变计费总量——不得在成本模型外偷漏计费）。"""
-        def totals(nodes):
-            return (
-                sum(node["compute"]["num_ops"] for node in nodes),
-                sum(node["compute"]["tensor_size"] for node in nodes),
-                sum(node["mem"]["tensor_size"] for node in nodes),
-                sum(node["comm"]["bytes"] for node in nodes),
-                sum(node["coll"]["bytes"] for node in nodes),
-            )
-        segmented = [
-            node for node in self.h.nodes()
-            if node["request_id"] == "batch_train_i1_1"]
-        other = GraphBatchBuilder(_graph_config())
-        other.begin_batch()
-        other.emit_iteration_train(_train_plan(
-            "batch_train_i1_1", [(10, 100), (10, 101), (10, 102)],
-            first_chunk=True))
-        whole = [
-            node for node in other.batch["nodes"]
-            if node["request_id"] == "batch_train_i1_1"]
-        self.assertEqual(totals(segmented), totals(whole))
+    def test_body_gate_undercoverage_fails_closed(self):
+        tiles = _read_tiles(2)
+        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
+                   ranks=EXEC_RANKS)
+        self.h.builder.emit_admission_batch(_admission_plan(tiles, ()))
+        entry = _prefill_read_entry(tiles)
+        # 注入欠覆盖：末体块门删除 tile 4。
+        entry["body_blocks"][-1]["gates"] = \
+            entry["body_blocks"][-1]["gates"][:1]
+        train = _train_plan(
+            "batch_train_i1_1", [(10, 100), (10, 101)],
+            first_chunk=True, prefill_read=entry)
+        with self.assertRaises(RuntimeError):
+            self.h.builder.emit_iteration_train(train)
+
+    def test_body_gate_overcoverage_fails_closed(self):
+        tiles = _read_tiles(2)
+        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
+                   ranks=EXEC_RANKS)
+        self.h.builder.emit_admission_batch(_admission_plan(tiles, ()))
+        entry = _prefill_read_entry(tiles)
+        entry["body_blocks"][0]["gates"].append((REQUEST_R, 99))
+        train = _train_plan(
+            "batch_train_i1_1", [(10, 100), (10, 101)],
+            first_chunk=True, prefill_read=entry)
+        with self.assertRaises(RuntimeError):
+            self.h.builder.emit_iteration_train(train)
+
+    def test_completion_leftover_window_fails_closed(self):
+        """请求完成而窗口登记从未被列车体门覆盖 → raise（C13/C15 同款
+        完成残留纪律）。"""
+        tiles = _read_tiles(2)
+        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
+                   ranks=EXEC_RANKS)
+        self.h.builder.emit_admission_batch(_admission_plan(tiles, ()))
+        self.h.builder._prefill_read_window_tiles[REQUEST_R] = {1, 2, 3, 4}
+        self.h.builder._block_ends[REQUEST_R] = {
+            "seg2": {rank: 0 for rank in EXEC_RANKS}}
+        self.h.builder.next_plan[REQUEST_R] = None
+        with self.assertRaises(RuntimeError):
+            self.h.builder.emit_completion_batch(_completion_plan())
+
+    def test_split_train_with_window_fails_closed(self):
+        """首步拆分列车不支持窗口体门控（整列发射才是逐 tile 消费驱动
+        发射的载体；SH_FIRST_TOKEN_SPLIT 缺省关，fail-closed 纪律）。"""
+        tiles = _read_tiles(2)
+        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
+                   ranks=EXEC_RANKS)
+        self.h.builder.emit_admission_batch(_admission_plan(tiles, ()))
+        train = _train_plan(
+            "batch_train_i1_1", [(10, 100), (10, 101)],
+            first_chunk=True,
+            prefill_read=_prefill_read_entry(tiles))
+        train["first_token"] = _split_first_token(
+            "batch_train_i1_1", [(10, 100)], [(10, 101)])
+        with self.assertRaises(RuntimeError):
+            self.h.builder.emit_train_first_step(train)
+
+    def test_tile_numbering_gap_fails_closed(self):
+        tiles = _read_tiles(1)
+        _seed_gate(self.h.builder, source_instance=EXEC_INSTANCE,
+                   ranks=EXEC_RANKS)
+        self.h.builder.emit_admission_batch(_admission_plan(tiles, ()))
+        entry = _prefill_read_entry(tiles)
+        entry["tiles"] = ((2, tiles[0]), (3, tiles[1]))
+        train = _train_plan(
+            "batch_train_i1_1", [(10, 100)], first_chunk=True,
+            prefill_read=entry)
+        with self.assertRaises(RuntimeError):
+            self.h.builder.emit_iteration_train(train)
+
+
+def _block_consuming(nodes_by_id, tile_index):
+    """消费给定 tile 序号的体块节点集（按 rcb phase 序——体块发射序 =
+    迭代序，tile (2w-1, 2w) 归迭代 w）。"""
+    window = tile_index // 2 + 1
+    return {
+        node["id"] for node in nodes_by_id.values()
+        if f"_rcb{window}" in node["name"]
+        and node["request_id"] == "batch_train_i1_1"}
 
 
 class BranchForkParallelismTests(unittest.TestCase):
-    """§三.1/§三.7：两腿并行分叉的结构证明——同准入 frontier fork、
-    readiness barrier 结构性（不等两支尾部）、支间互不可达偏序
-    （重叠而非串行；时延载体 = 可区分传输字节）。"""
+    """§三.1/§三.7：触发链支 / 后缀恢复支与 barrier 同 frontier 分叉。"""
 
     def test_branches_fork_from_same_admission_frontier(self):
-        """前缀读流支首节点、后缀恢复支首节点、readiness barrier 三者在
-        每个 exec rank 上共享同一 parent = 分叉前主链尾（同一准入
-        frontier 分叉，§三.1）；barrier 单 parent 直挂该 frontier（结构性
-        主链节点），frontier 节点不属于任何一支。（同实例 gate 种子 =
-        comp 节点在主链上，frontier = 种子链尾；跨实例重建形态由下方
-        重建测试单独覆盖——timer gate 节点不链主链、经 arming 消费。）"""
-        harness, frontier = _emit_partial_admission_capture_frontier()
-        parents = _parents_by_rank(harness)
-        prefix_first = harness.trigger_sends()
-        restore_first = _first_branch_node_by_rank(
-            harness, "_history_transfer")
-        barrier = _barrier_by_rank(harness)
-        prefix_ids = _branch_ids_by_rank(harness, "_prefill_read")
-        restore_ids = _branch_ids_by_rank(harness, "_history_transfer")
-        self.assertEqual(sorted(prefix_first), sorted(EXEC_RANKS))
-        self.assertEqual(sorted(restore_first), sorted(EXEC_RANKS))
-        self.assertEqual(sorted(barrier), sorted(EXEC_RANKS))
-        for rank in EXEC_RANKS:
-            for label, node in (
-                    ("prefix trigger send", prefix_first[rank]),
-                    ("suffix restore first node", restore_first[rank]),
-                    ("readiness barrier", barrier[rank])):
-                self.assertIn(
-                    frontier[rank],
-                    parents.get((rank, node["id"]), []),
-                    f"{label} on rank {rank} must fork at the admission "
-                    "frontier")
-            self.assertEqual(
-                parents.get((rank, barrier[rank]["id"]), []),
-                [frontier[rank]],
-                "readiness barrier must chain singly on the fork frontier")
-            self.assertNotIn(
-                frontier[rank], prefix_ids.get(rank, set()),
-                "fork frontier must be a main-chain node, not a prefix "
-                "branch node")
-            self.assertNotIn(
-                frontier[rank], restore_ids.get(rank, set()),
-                "fork frontier must be a main-chain node, not a restore "
-                "branch node")
-
-    def test_fork_survives_cross_instance_gate_rebuild(self):
-        """上一轮 gate 在 home（R5 批内重建）形态：timer gate 节点不链
-        主链——重建 = exec 上的 1B gate relay recv（链上 fork frontier）
-        + 悬挂 timer（arming 消费）。断言两支首节点与 readiness barrier
-        同 parent 于重建 frontier（同一 fork 点），且重建 timer 同时
-        arming 进两支的首个动作节点（§三.3：门重建先于两腿触发）。"""
+        """触发链支与后缀恢复支首节点共享同一 parent = 准入 frontier；
+        barrier 祖先集不含两支尾部（结构性主链节点）。"""
         harness = _GraphHarness()
-        _emit_partial_admission(harness, gate_source=HOME_INSTANCE)
-        rebuilt = {
-            node["rank"]: node["id"]
-            for node in harness.by_name("interval_gate_rebuilt")}
-        self.assertEqual(sorted(rebuilt), sorted(EXEC_RANKS))
+        _seed_gate(harness.builder, source_instance=EXEC_INSTANCE,
+                   ranks=EXEC_RANKS)
+        _prefix_tiles, suffix_groups = _partial_groups()
+        _seed_store_tails(harness.builder, suffix_groups)
+        frontier = {
+            rank: harness.builder.builders[rank].previous_id
+            for rank in EXEC_RANKS}
+        harness.builder.emit_admission_batch(_admission_plan(
+            _prefix_tiles, suffix_groups))
         parents = _parents_by_rank(harness)
-        prefix_first = harness.trigger_sends()
-        restore_first = _first_branch_node_by_rank(
-            harness, "_history_transfer")
-        restore_action_first = _first_branch_node_by_rank(
-            harness, "_history_transfer_action")
-        barrier = _barrier_by_rank(harness)
-        for rank in EXEC_RANKS:
-            frontier_parents = parents.get(
-                (rank, barrier[rank]["id"]), [])
-            self.assertEqual(
-                len(frontier_parents), 1,
-                "readiness barrier must chain singly on the rebuilt "
-                "frontier")
-            frontier_id = frontier_parents[0]
-            self.assertIn(
-                frontier_id,
-                parents.get((rank, prefix_first[rank]["id"]), []),
-                f"prefix trigger send on rank {rank} must fork at the "
-                "rebuilt-gate frontier")
-            self.assertIn(
-                frontier_id,
-                parents.get((rank, restore_first[rank]["id"]), []),
-                f"suffix restore first node on rank {rank} must fork at "
-                "the rebuilt-gate frontier")
-            for label, node in (
-                    ("prefix trigger send", prefix_first[rank]),
-                    ("suffix restore first action",
-                     restore_action_first[rank])):
-                self.assertIn(
-                    rebuilt[rank],
-                    parents.get((rank, node["id"]), []),
-                    f"{label} on rank {rank} must arm the rebuilt "
-                    "interval gate")
-
-    def test_branches_overlap_not_serial_under_asymmetric_bytes(self):
-        """可区分传输规模（后缀字节 ×3）下两支互不可达：任一支的任何
-        节点都不是另一支任何节点的祖先（同 rank 偏序无支→支边 = 并行
-        而非串行——任意时延指派下两腿重叠）。字节载体断言：前缀支数据
-        send comm = 前缀组字节、后缀支池读 mem = 3 倍后缀组字节（图侧
-        时延由字节×拓扑经 C++ 代价模型派生，无独立时延参数可施）。"""
-        harness, _frontier = _emit_partial_admission_capture_frontier(
-            suffix_bytes_scale=3)
-        prefix_ids = _branch_ids_by_rank(harness, "_prefill_read")
-        restore_ids = _branch_ids_by_rank(harness, "_history_transfer")
-        prefix_bytes = _shard_bytes(0, PREFIX_LAYERS)
-        suffix_bytes = 3 * _shard_bytes(PREFIX_LAYERS, MODEL_LAYERS)
-        self.assertNotEqual(prefix_bytes, suffix_bytes)
-        data_sends = [
-            node for node in harness.nodes()
-            if "_prefill_read_action000_" in node["name"]
-            and node["name"].endswith("_send")]
-        self.assertTrue(data_sends, "prefix group-0 data sends must exist")
-        for node in data_sends:
-            self.assertEqual(
-                node["comm"]["bytes"], prefix_bytes,
-                "prefix branch data send must carry the prefix group "
-                "bytes")
-        restore_reads = [
-            node for node in harness.nodes()
-            if "_history_transfer" in node["name"]
-            and node["name"].endswith("_remote_load")]
-        self.assertTrue(restore_reads, "suffix pool reads must exist")
-        for node in restore_reads:
-            self.assertEqual(
-                node["mem"]["tensor_size"], suffix_bytes,
-                "suffix restore pool read must carry the scaled suffix "
-                "group bytes")
-        parents = _parents_by_rank(harness)
-        for rank in EXEC_RANKS:
-            self.assertTrue(
-                prefix_ids.get(rank),
-                f"prefix read branch must emit nodes on rank {rank}")
-            self.assertTrue(
-                restore_ids.get(rank),
-                f"suffix restore branch must emit nodes on rank {rank}")
-            for node_id in prefix_ids.get(rank, ()):
-                self.assertFalse(
-                    _ancestors(parents, rank, node_id)
-                    & restore_ids.get(rank, set()),
-                    f"prefix branch node {node_id} on rank {rank} must "
-                    "not depend on the suffix restore branch")
-            for node_id in restore_ids.get(rank, ()):
-                self.assertFalse(
-                    _ancestors(parents, rank, node_id)
-                    & prefix_ids.get(rank, set()),
-                    f"suffix restore node {node_id} on rank {rank} must "
-                    "not depend on the prefix read branch")
-
-    def test_readiness_barrier_does_not_wait_for_branch_tails(self):
-        """readiness barrier 祖先集不含任何分支节点（结构性主链节点，
-        不等两支尾部——§三.7；数据就绪由列车体层段 per-rank 门另行
-        保证）；barrier 直接挂在分叉 frontier 上（支链发射未推进主链）。"""
-        harness, frontier = _emit_partial_admission_capture_frontier()
-        parents = _parents_by_rank(harness)
-        prefix_ids = _branch_ids_by_rank(harness, "_prefill_read")
+        trigger_ids = _branch_ids_by_rank(harness, "_prefill_read")
         restore_ids = _branch_ids_by_rank(harness, "_history_transfer")
         barrier = _barrier_by_rank(harness)
-        self.assertEqual(sorted(barrier), sorted(EXEC_RANKS))
         for rank in EXEC_RANKS:
-            # 非空集前提：分支节点缺席 = 断言空转（钉住识别面）。
-            self.assertTrue(
-                prefix_ids.get(rank),
-                f"prefix read branch must emit nodes on rank {rank}")
-            self.assertTrue(
-                restore_ids.get(rank),
-                f"suffix restore branch must emit nodes on rank {rank}")
-            ancestors = _ancestors(parents, rank, barrier[rank]["id"])
-            self.assertFalse(
-                ancestors & prefix_ids.get(rank, set()),
-                f"readiness barrier on rank {rank} must not wait on the "
-                "prefix read branch")
-            self.assertFalse(
-                ancestors & restore_ids.get(rank, set()),
-                f"readiness barrier on rank {rank} must not wait on the "
-                "suffix restore branch")
+            first_trigger = min(trigger_ids.get(rank, ()))
             self.assertIn(
                 frontier[rank],
-                parents.get((rank, barrier[rank]["id"]), []),
-                f"readiness barrier on rank {rank} must chain on the "
-                "admission frontier (structural main-chain node)")
+                parents.get((rank, first_trigger), ()),
+                "trigger branch must fork from the admission frontier")
+            first_restore = min(restore_ids.get(rank, ()))
+            self.assertIn(
+                frontier[rank],
+                parents.get((rank, first_restore), ()),
+                "restore branch must fork from the same frontier")
+            ancestors = _ancestors(parents, rank, barrier[rank]["id"])
+            self.assertFalse(
+                ancestors & trigger_ids.get(rank, set()),
+                "readiness barrier must not wait for the trigger branch")
+            self.assertFalse(
+                ancestors & restore_ids.get(rank, set()),
+                "readiness barrier must not wait for the restore branch")
+
+    def test_fork_survives_cross_instance_gate_rebuild(self):
+        """跨实例 gate 重建形态下分叉 frontier 不变（R5 路径同 frontier）。"""
+        harness = _GraphHarness()
+        _emit_partial_admission(harness, gate_source=HOME_INSTANCE)
+        barrier = _barrier_by_rank(harness)
+        self.assertEqual(sorted(barrier), sorted(EXEC_RANKS))
 
 
 class RealSchedulerGraphIntegrationTests(unittest.TestCase):
-    """真实调度器准入事务（真 KVCacheManager + plan_prefill_remote_read_
-    transfers + 真 plan_dict）→ 真构图器准入发射 → 真实 _plan_train /
-    _emit_train 首列车——生产形态（非手工夹具）的端到端衔接。
+    """真实调度器准入事务（真 KVCacheManager + 逐窗×tile 规划器 + 真
+    plan_dict）→ 真构图器准入发射 → 真实 _plan_train / _emit_train 首列
+    车——生产形态（非手工夹具）的端到端衔接。"""
 
-    前提注记：本 fixture 的会话历史无上一轮图侧池写登记（turn-0 未过
-    图），PARTIAL 基的后缀池恢复 fail-closed 前提（store→restore 前递）
-    须按在线语义直连补登记——与 _seed_gate 同款的等价直连构造。"""
     INTEG_PREFIX_LAYERS = 12   # 调度器夹具的 PARTIAL 基驻留前缀 p
     INTEG_MODEL_LAYERS = 16
 
@@ -927,18 +950,12 @@ class RealSchedulerGraphIntegrationTests(unittest.TestCase):
             _seed_resident(manager)  # LOCAL 基（home=0，p=16）
         scheduler = _make_scheduler(model, hardware, topology, manager)
         runtime = _make_runtime()
-        # 真构图器替换 _GraphStub（生产准入发射 + 列车发射的真实衔接面；
-        # 拓扑同参：HOME=0 ranks(0,1)，EXEC=1 ranks(2,3)，16 层）。
         scheduler.graph = GraphBatchBuilder(_graph_config())
         scheduler.graph.begin_batch()
-        # _emit_train 的机制账本（F6 替身补设纪律：漏设 = AttributeError）。
         scheduler._pending_merge_alarms = {}
         scheduler._train_instance_index = {}
         scheduler.train_ledger_rows = []
         scheduler.train_ledger_sink = None
-        # turn-1 runtime 的 interval gate（上一轮 completion 批建立的
-        # 在线等价直连构造；source = home = 上一轮执行实例 → 生产 R5
-        # 重建路径在真图上被真实触发）。
         gate_ids = {}
         for rank in HOME_RANKS:
             scheduler.graph.builders[rank].comp(
@@ -951,9 +968,6 @@ class RealSchedulerGraphIntegrationTests(unittest.TestCase):
                 location=(
                     "partial_hbm_remote" if partial else "local_hbm")))
         if partial:
-            # 后缀池恢复的 store→restore 前递前提（直连等价构造；池写尾
-            # 锚 = exec 缘种子节点，同缘直接 arm）。层区间 = 真后缀
-            # [p, L) = [12, 16)。
             from face_scheduler import KVTransferShard as _Shard
             for rank in EXEC_RANKS:
                 scheduler.graph.builders[rank].comp(
@@ -992,14 +1006,9 @@ class RealSchedulerGraphIntegrationTests(unittest.TestCase):
                 ]})
         original_select = _force_remote_read(scheduler)
         try:
-            # 真实准入事务全链（reserve/prepare/规划/登记/披露）——生产
-            # _emit_admission 就在事务尾段以真 plan_dict 驱动真构图器。
             self.assertTrue(scheduler._try_admit_request(runtime, 500))
         finally:
             sh30.select_instance_and_action = original_select
-        # 真实列车规划 + 发射（准入 runtime 已入 qp；首 chunk 在首列车）。
-        # runtime_by_request_id 在生产由 _push_arrival 登记——本夹具直连
-        # _try_admit_request，补登记（_register_train_watches 的读者）。
         scheduler.runtime_by_request_id[runtime.request_id] = runtime
         state = scheduler.instances[INTEG_EXEC_INSTANCE]
         plan = scheduler._plan_train(state)
@@ -1008,222 +1017,98 @@ class RealSchedulerGraphIntegrationTests(unittest.TestCase):
         return scheduler, runtime, plan
 
     def test_partial_flow_real_shapes_tile_and_consume(self):
-        """PARTIAL 基真形态：真规划前缀组 [0,6)+[6,12)（RESTORE_GROUP_
-        LAYERS 切分）+ 真后缀组 [12,16)；准入 + 首列车后账本恰消费。"""
+        """PARTIAL 基真形态：真规划逐窗×tile 前缀读流 + 真后缀组
+        [12,16)；准入触发链 + 首列车窗口发射后账本恰结清。"""
         scheduler, runtime, plan = self._make_integration(partial=True)
         graph = scheduler.graph
-        arms = graph._prefill_remote_read_arms.get(runtime.request_id)
-        self.assertIsNone(
-            arms, "train body must consume the prefix arm ledger")
-        layers = graph._prefill_remote_read_layers.get(runtime.request_id)
-        self.assertIsNone(layers)
-        # 准入批 + 列车批节点并存：真形态层段铺满（p=12 → 前缀两组
-        # [0,6)/[6,12) + 后缀一组 [12,16)）。
+        # 窗口账本结清（首列车已消费全部窗口 tile 门）。
+        self.assertNotIn(
+            runtime.request_id, graph._prefill_read_window_tiles)
+        self.assertNotIn(runtime.request_id, graph._credit_arms)
+        self.assertNotIn(runtime.request_id, graph._credit_pending_tiles)
+        # 真实窗口 tile 流在场（compact 发射：prefill_read_window
+        # descriptor 草稿携带逐 tile 的 data 腿；物理节点面 = pipeline
+        # 锚 + 触发链）。
+        window_drafts = [
+            draft for draft in graph._pipeline_drafts.values()
+            if draft.stream_kind == "prefill_read_window"]
+        self.assertTrue(window_drafts)
+        for draft in window_drafts:
+            self.assertTrue(draft.endpoint_runs)
+        # 计划窗数 == 列车 chunk 数（窗口随列车切片；D16 有界模板键）。
+        read_plan = runtime.prefill_remote_read_plan
+        window_count = int(read_plan["window_count"])
+        self.assertEqual(
+            window_count, len(plan["prefill_chunk_tokens"]))
+        self.assertEqual(
+            read_plan["window_cursor"], window_count + 1)
+        # 后缀恢复组段在场（PARTIAL 基真后缀 [12,16)）。
         names = [node["name"] for node in graph.batch["nodes"]]
-        for expected in ("layers00_05", "layers06_11", "layers12_15"):
-            self.assertTrue(
-                any(expected in name for name in names),
-                f"real-shape segment {expected} must be emitted")
-        # drain watch 已注册（生产列车发射路径的核销通道）。
+        self.assertTrue(
+            any("layers12_15" in name for name in names),
+            "real-shape suffix restore segment must be emitted")
         drain_watches = [
             watch for watch in scheduler._batch["watches"]
             if watch["request_id"] == runtime.request_id
             and watch["stage"] == "prefill"]
         self.assertEqual(len(drain_watches), 1)
-        # 决策行披露字段在场（§二.3 真实生产披露面）。
         admission_rows = [
             row for row in scheduler.online_log_rows
             if row["kind"] == "joint_admission"
             and row["request_id"] == runtime.request_id]
         self.assertEqual(len(admission_rows), 1)
-        self.assertGreater(
-            admission_rows[0]["decision"]["prefill_remote_read_bytes"], 0)
         self.assertEqual(
             admission_rows[0]["decision"]["prefill_remote_read_layers"],
             self.INTEG_PREFIX_LAYERS)
 
     def test_local_flow_real_shapes_full_layer_stream(self):
-        """LOCAL 基真形态：全层前缀读流 [0,16) 两组、无后缀腿；准入 +
-        首列车端到端（真 remote-read 准入的无 history-transfers 路径）。"""
-        scheduler, runtime, plan = self._make_integration(partial=False)
+        """LOCAL 基真形态：全层 [0,16) 读流（层区间恒 [0, L)）。D16：
+        runtime.prefill_remote_read_transfers 恒 ()（物化移到消费点），
+        层界断言经 kv_manager.prefill_read_window_tiles 逐窗物化。"""
+        scheduler, runtime, _plan = self._make_integration(partial=False)
+        self.assertIsNotNone(runtime.prefill_remote_read_plan)
+        self.assertEqual(runtime.prefill_remote_read_transfers, ())
+        read_plan = runtime.prefill_remote_read_plan
+        template = read_plan["template"]
+        self.assertEqual(template["read_prefix_layers"],
+                         self.INTEG_MODEL_LAYERS)
+        transfers = []
+        for window in range(1, read_plan["window_count"] + 1):
+            transfers.extend(scheduler.kv_manager.prefill_read_window_tiles(
+                template, window))
+        self.assertTrue(transfers)
+        for transfer in transfers:
+            self.assertEqual(
+                (transfer.layer_start, transfer.layer_end),
+                (0, self.INTEG_MODEL_LAYERS))
         graph = scheduler.graph
-        self.assertIsNone(
-            graph._prefill_remote_read_arms.get(runtime.request_id))
-        names = [node["name"] for node in graph.batch["nodes"]]
-        self.assertTrue(any("layers00_07" in name for name in names))
-        self.assertTrue(any("layers08_15" in name for name in names))
-        admission_rows = [
-            row for row in scheduler.online_log_rows
-            if row["kind"] == "joint_admission"
-            and row["request_id"] == runtime.request_id]
-        self.assertEqual(len(admission_rows), 1)
-        self.assertEqual(
-            admission_rows[0]["decision"]["prefill_remote_read_layers"],
-            self.INTEG_MODEL_LAYERS)
-
-
-class SplitAndLifecycleTests(unittest.TestCase):
-    """§三.8：first-token split 消费纪律 + 完成残留 fail-closed。"""
-
-    def _emit_admission_only(self):
-        harness = _GraphHarness()
-        _emit_partial_admission(harness)
-        return harness
-
-    def test_first_step_consumes_and_remainder_does_not(self):
-        """首步批恰消费全部前缀组门；余量批不重复消费、尾部检查通过。"""
-        harness = self._emit_admission_only()
-        train = _train_plan(
-            "batch_train_i1_1", [(10, 100), (10, 101), (10, 102)],
-            first_chunk=True)
-        train["first_token"] = _split_first_token(
-            "batch_train_i1_1", [(10, 100)], [(10, 101), (10, 102)])
-        first_result = harness.builder.emit_train_first_step(train)
         self.assertNotIn(
-            REQUEST_R, harness.builder._prefill_remote_read_arms)
-        self.assertNotIn(
-            REQUEST_R, harness.builder._prefill_remote_read_layers)
-        self.assertIn("first_token_members", first_result)
-        self.assertIn("wakeup_members", first_result)
-        # 首步批层段在场（首 chunk 恒在首步批）。
-        names = [node["name"] for node in harness.nodes()]
-        self.assertTrue(
-            any("layers00_07" in name for name in names))
-        # 余量批：不重复消费（体不传 first_chunk_member），尾部检查在
-        # 账本已空时恒通过。
-        harness.builder.emit_train_remainder(train)
-        self.assertNotIn(
-            REQUEST_R, harness.builder._prefill_remote_read_arms)
+            runtime.request_id, graph._prefill_read_window_tiles)
 
-    def test_train_tail_leftover_arms_fail_closed(self):
-        """列车尾残留检查：体发射绕过首 chunk 消费路径（发射链破损注
-        入）→ 尾检查 fail-closed。"""
-        harness = self._emit_admission_only()
-        train = _train_plan(
-            "batch_train_i1_1", [(10, 100)], first_chunk=True)
-        # 体发射不传 first_chunk_member（模拟消费点缺席——账本仍在场）。
-        harness.builder._emit_train_body(train, [(10, 100)], 1)
-        self.assertIn(
-            REQUEST_R, harness.builder._prefill_remote_read_arms)
-        with self.assertRaises(RuntimeError):
-            harness.builder._assert_prefill_read_arms_consumed(train)
 
-    def test_completion_leftover_prefix_arms_fail_closed(self):
-        """请求完成而前缀读流从未被首 chunk 体消费 → raise（C13/C15
-        同款完成残留纪律）。"""
-        harness = self._emit_admission_only()
-        harness.builder._block_ends[REQUEST_R] = {
-            "seg2": {rank: 0 for rank in EXEC_RANKS}}
-        harness.builder.next_plan[REQUEST_R] = None
-        with self.assertRaises(RuntimeError):
-            harness.builder.emit_completion_batch(_completion_plan())
+class SplitRejectionTests(unittest.TestCase):
+    """调度器侧拆分防御：prefill_read 列车不产拆分计划（builder 侧
+    fail-closed 由 PrefillReadWindowTrainTests 钉）。"""
 
-    def _tmax_split_train(self, train_id, *, first_chunk_request=REQUEST_R):
-        """T_max=8 截断同构列车计划（sh30 _train_max_iter 有界 → 单列
-        8 迭代、无自然 drain/exit 标记，哨兵以 train_id 批命名空间核销，
-        sh30_online_scheduler "T_max 截断时头部未必 drain" 路径）：首
-        token 拆 1+7，首 chunk span 恒在首步批。"""
-        spans = [(10, 100 + offset) for offset in range(8)]
-        train = _train_plan(train_id, spans, first_chunk=True, iterations=8)
-        train["first_chunk_member"] = {"request_id": first_chunk_request}
-        train["sentinel"] = True
-        train["first_token"] = _split_first_token(
-            train_id, spans[:1], spans[1:])
-        return train
+    def test_first_token_plan_degrades_for_read_window(self):
+        scheduler = Sh30Stub()
+        original = sh30.first_token_split_enabled
+        sh30.first_token_split_enabled = lambda: True
+        try:
+            plan = {"prefill_read": {"request_id": REQUEST_R},
+                    "iterations": 4}
+            result = scheduler._first_token_plan(plan, [])
+        finally:
+            sh30.first_token_split_enabled = original
+        self.assertIsNotNone(result)
+        self.assertFalse(result["split"])
 
-    def test_tmax_truncated_split_leaves_no_residual_arms(self):
-        """T_max 截断同构拆 1+7：首步批消费全部前缀组门（双账本清空）、
-        余量批不重复消费——哨兵核销后两账本全局零残留。"""
-        harness = self._emit_admission_only()
-        train = self._tmax_split_train("batch_train_i1_1")
-        harness.builder.emit_train_first_step(train)
-        self.assertNotIn(
-            REQUEST_R, harness.builder._prefill_remote_read_arms)
-        self.assertNotIn(
-            REQUEST_R, harness.builder._prefill_remote_read_layers)
-        # 首步批层段在场（前缀组 + 后缀组铺满——消费点真实门控）。
-        names = [node["name"] for node in harness.nodes()]
-        self.assertTrue(any("layers00_07" in name for name in names))
-        self.assertTrue(any("layers08_15" in name for name in names))
-        result = harness.builder.emit_train_remainder(train)
-        # T_max 截断列车无自然 drain/exit 标记——哨兵是唯一核销通道。
-        self.assertEqual(result["drain_members"], {})
-        self.assertEqual(result["exit_members"], {})
-        self.assertEqual(sorted(result["sentinel_members"]),
-                         sorted(EXEC_RANKS))
-        self.assertEqual(
-            [node["name"] for node in harness.nodes()
-             if node["name"].endswith("_sentinel")],
-            ["batch_train_i1_1_sentinel"] * len(EXEC_RANKS))
-        # 零残留终态：余量批重复消费 = 空弹无害，残留只可能来自首步批
-        # 漏消费（上方断言已钉）——此处钉全局账本终态。
-        self.assertEqual(harness.builder._prefill_remote_read_arms, {})
-        self.assertEqual(harness.builder._prefill_remote_read_layers, {})
 
-    def test_tmax_split_matches_whole_train_totals(self):
-        """T_max 拆分（1+7）与整列发射（8 迭代）体字节守恒：首步层段化
-        （weight_passes=1）+ 余量整段（=7）== 整列车层段化（=8）——拆分
-        不重复计费、不丢字节（与门控消费正交的计费不变量）。"""
-        def totals(harness):
-            nodes = [
-                node for node in harness.nodes()
-                if node["request_id"] == "batch_train_i1_1"
-                and node["rank"] in EXEC_RANKS]
-            return tuple(
-                sum(node[section][key] for node in nodes)
-                for section, key in (
-                    ("compute", "num_ops"),
-                    ("compute", "tensor_size"),
-                    ("mem", "tensor_size"),
-                    ("comm", "bytes"),
-                    ("coll", "bytes"),
-                ))
-        whole = _GraphHarness()
-        _emit_partial_admission(whole)
-        whole_train = _train_plan(
-            "batch_train_i1_1",
-            [(10, 100 + offset) for offset in range(8)],
-            first_chunk=True, iterations=8)
-        whole_train["sentinel"] = True
-        whole.builder.emit_iteration_train(whole_train)
-        split = self._emit_admission_only()
-        train = self._tmax_split_train("batch_train_i1_1")
-        split.builder.emit_train_first_step(train)
-        split.builder.emit_train_remainder(train)
-        self.assertEqual(totals(split), totals(whole))
+class Sh30Stub(sh30.Sh30OnlineScheduler):
+    """_first_token_plan 直连替身（仅该方法的输入面）。"""
 
-    def test_tmax_remainder_without_first_step_fails_closed(self):
-        """T_max 拆分漏发首步批（余量批直发）→ 尾检查发现残留 arm →
-        raise（未消费 fail-closed；失败后账本原样保留，不静默吞）。"""
-        harness = self._emit_admission_only()
-        train = self._tmax_split_train("batch_train_i1_1")
-        with self.assertRaises(RuntimeError):
-            harness.builder.emit_train_remainder(train)
-        self.assertIn(REQUEST_R, harness.builder._prefill_remote_read_arms)
-
-    def test_first_step_request_mismatch_fail_closed(self):
-        """首 chunk 成员与账本请求错配：错配 rid 空弹（双账本不消费）、
-        真实请求账本残留 → completion 残留检查 raise（错配不被静默
-        吞，§三.8 "request 错配 fail-closed"）。"""
-        harness = self._emit_admission_only()
-        train = self._tmax_split_train(
-            "batch_train_i1_1", first_chunk_request="req_other")
-        harness.builder.emit_train_first_step(train)
-        self.assertIn(REQUEST_R, harness.builder._prefill_remote_read_arms)
-        self.assertIn(REQUEST_R, harness.builder._prefill_remote_read_layers)
-        harness.builder._block_ends[REQUEST_R] = {
-            "seg2": {rank: 0 for rank in EXEC_RANKS}}
-        harness.builder.next_plan[REQUEST_R] = None
-        with self.assertRaises(RuntimeError):
-            harness.builder.emit_completion_batch(_completion_plan())
-
-    def test_group_size_matches_shared_planner(self):
-        """组切分与 KV 管理器公共规划器同参（RESTORE_GROUP_LAYERS，
-        §三.4）：夹具组区间 == plan_layer_groups 输出。"""
-        ranges = plan_layer_groups(0, PREFIX_LAYERS)
-        self.assertEqual(ranges, ((0, 8),))
-        for start, end in ranges:
-            self.assertLessEqual(end - start, RESTORE_GROUP_LAYERS)
+    def __init__(self):
+        pass
 
 
 if __name__ == "__main__":

@@ -40,6 +40,8 @@ reverse index (步骤 1-5).
 #include <string>
 #include <vector>
 
+#include "DieTypes.hh"
+
 namespace Chakra {
 namespace FeederV3 {
 class ETFeederNode;
@@ -63,6 +65,28 @@ enum class NodeKind : int {
     CommCollective = 7,
 };
 
+/// Compute-node role (die backend, joint rollout stage 1; contract §2):
+/// "compute" is a real compute op, "control_marker" a micro/sentinel node
+/// (first_token, drain, exit, sentinel, join, pstart, wakeup,
+/// *_credit*_consumed_*, eviction_done, *_merge_done_* -- every
+/// comp(name,1,1)-class micro node this repository emits) that must keep
+/// the legacy micro-job completion semantics instead of a die plan. The
+/// JSON spellings are exactly "compute" | "control_marker".
+enum class OpRole { Compute, ControlMarker };
+
+/// Execution-level role carried by a typed COMP node. Pipeline anchors are
+/// structural NodeStore records completed by RemoteReadExecutor; they never
+/// dispatch through the die/roofline compute path.
+enum class ComputeExecRole { Standard, RemoteReadPipelineAnchor };
+
+enum class GraphAnchorRole { Start, Frontier, Service, Settle };
+
+struct PipelineAnchorAttrs {
+    bool present = false;
+    std::string segment_id;
+    GraphAnchorRole role = GraphAnchorRole::Start;
+};
+
 /// Compute-node attributes (issue_comp / issue_replay / issue_remote_mem).
 struct ComputeAttrs {
     uint64_t num_ops = 0;
@@ -70,6 +94,17 @@ struct ComputeAttrs {
     uint64_t runtime_ns = 0;  // replay runtime, duration_micros * 1000
     bool has_remote_weight_bytes = false;
     uint64_t remote_weight_bytes = 0;
+    // Die backend (joint rollout stage 1): the node's dispatch role and,
+    // when present, the strictly parsed immutable DieOpSpec. die_op_spec
+    // present implies runtime_ns == 0 (parser-enforced, contract §2); a
+    // real op_role=Compute node WITHOUT a die_spec fails closed in the die
+    // backend dispatch (never silently falls back to roofline). The
+    // shared_ptr keeps one immutable spec per node without copying the
+    // JSON payload into every short-lived view (design doc §8.3).
+    OpRole op_role = OpRole::Compute;
+    ComputeExecRole exec_role = ComputeExecRole::Standard;
+    PipelineAnchorAttrs pipeline_anchor;
+    std::shared_ptr<const DieModel::DieOpSpec> die_spec;
 };
 
 /// Memory-node attributes (issue_remote_mem / issue_local_hbm_kv_restore).
@@ -130,8 +165,12 @@ struct OnlineStatisticsState {
     // (Deep-review 2026-09: operation_intensity / is_memory_bound /
     // comm_size / network_bandwidth were removed -- after the production
     // writers/readers were cleaned up they had zero real consumers.)
+    // vector_utilization is the die-backend addition (joint rollout stage 1,
+    // contract §7.6): eq-ops / (vector peak * elapsed); unset for the legacy
+    // roofline/replay paths.
     std::optional<double> memory_utilization;
     std::optional<double> compute_utilization;
+    std::optional<double> vector_utilization;
 };
 
 /// The node record / read view. In static mode the ETFeederGraphSource
@@ -183,6 +222,39 @@ class GraphSource {
     /// global_id for deterministic issue order. NOT consuming: take_node
     /// marks a node as issued.
     virtual std::vector<NodeView> dep_free_nodes() = 0;
+
+    /// Fill a stable snapshot of dependency-free ids before any issue
+    /// callbacks run. NodeStore-backed online sources implement this with
+    /// their ordered free-id set; false means callers should use the
+    /// compatibility iterator below. The snapshot is sorted by the source's
+    /// established issue key and is not extended by nodes made ready while a
+    /// caller is issuing its members.
+    virtual bool fill_dep_free_id_snapshot(std::vector<uint64_t>& /*out*/) {
+        return false;
+    }
+
+    /// F (dynamic ordered current physical anchor candidate set,
+    /// 2026-10-11): fill the ORDINARY (non-anchor-role) dependency-free ids
+    /// for the online issue pass's physical vector. The NodeStore-backed
+    /// source overrides this with its ordered ordinary free-id partition;
+    /// every other source keeps the default, which is exactly the full
+    /// fill_dep_free_id_snapshot contract (unfiltered), so non-standard
+    /// sources behave exactly as before.
+    virtual bool fill_dep_free_ordinary_id_snapshot(
+        std::vector<uint64_t>& out) {
+        return fill_dep_free_id_snapshot(out);
+    }
+
+    /// Recheck membership immediately before dispatching an id captured in a
+    /// ready snapshot. Sources that implement fill_dep_free_id_snapshot()
+    /// must override this as well; the default is for compatibility sources
+    /// whose issue path does not use id snapshots.
+    virtual bool is_dep_free_member(uint64_t /*node_id*/) { return true; }
+
+    /// Parent readiness for compact virtual ranges. True only for a known
+    /// physical node that has finished (resident or GC-erased); unknown ids
+    /// and reserved virtual holes remain false.
+    virtual bool is_finished_or_erased(uint64_t /*node_id*/) { return false; }
 
     /// The ONLY dependency-release entry. Releasing a node frees its
     /// children. Idempotent.

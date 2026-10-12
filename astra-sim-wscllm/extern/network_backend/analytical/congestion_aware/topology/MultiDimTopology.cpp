@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "congestion_aware/MultiDimTopology.h"
 #include <cassert>
 #include <cstdlib>
+#include <limits>
 #include <iostream>
 #include <utility>
 
@@ -40,6 +41,10 @@ MultiDimTopology::MultiDimTopology(std::vector<TopologyBuildingBlock> topology_p
     this->npus_count_per_dim = std::move(npus_count_per_dim);
     this->bandwidth_per_dim = std::move(bandwidth_per_dim);
 
+    // int64 accumulation with an overflow guard (2026-09-27): the old int
+    // multiply had signed-overflow UB for pathological dim sizes; every dim
+    // is int64-promoted before the multiply and the running product is
+    // range-checked, so overflow fails loudly instead of wrapping.
     npus_count = 1;
     strides.clear();
     for (auto dim = 0; dim < dims_count; dim++) {
@@ -47,7 +52,16 @@ MultiDimTopology::MultiDimTopology(std::vector<TopologyBuildingBlock> topology_p
         assert(dim_size >= 1);
 
         strides.push_back(npus_count);
-        npus_count *= dim_size;
+        const long long next =
+            static_cast<long long>(npus_count) *
+            static_cast<long long>(dim_size);
+        if (next > static_cast<long long>(std::numeric_limits<int>::max())) {
+            std::cerr << "[Error] (network/analytical/congestion_aware) "
+                      << "npus_count overflow: product of dimension sizes "
+                      << "exceeds INT_MAX" << std::endl;
+            std::exit(-1);
+        }
+        npus_count = static_cast<int>(next);
     }
 
     devices_count = npus_count;
@@ -192,6 +206,14 @@ void MultiDimTopology::connect_mesh_dimension(const int dim) noexcept {
 void MultiDimTopology::connect_ring_dimension(const int dim) noexcept {
     assert(0 <= dim && dim < dims_count);
 
+    // Degenerate sizes, aligned with the 1D Ring constructor: a size-1
+    // dimension builds no link (the ring loop would degenerate into a
+    // src->src self-connect); a 2-NPU ring is a single bidirectional
+    // connect, not the ring loop (which would double-build both directed
+    // links).
+    if (npus_count_per_dim[dim] == 1) {
+        return;
+    }
     if (npus_count_per_dim[dim] == 2) {
         connect_mesh_dimension(dim);
         return;

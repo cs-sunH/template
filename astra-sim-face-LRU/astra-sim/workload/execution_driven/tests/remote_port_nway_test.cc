@@ -746,10 +746,14 @@ uint64_t run_event_loop(EventQueue& queue, const std::string& tag,
 
 // plan sec.5.1 conservation: count/bytes pairs closed, and the served-bytes
 // integral within the per-job completion residue bound (kByteEps +
-// bw * kTimeEpsNs per completed transaction).
+// bw * (kTimeEpsNs + 4 * double_epsilon * finish_scale_ns) per completed
+// transaction -- the SCALED production bound; finish_scale_ns defaults to a
+// small-clock value for the tiny-clock phases, where the slack is
+// negligible and the bound reduces to the historical fixed form).
 void expect_port_conservation(const AnalyticalRemoteMemory& mem,
                               std::size_t port, double bw,
-                              const std::string& tag) {
+                              const std::string& tag,
+                              double finish_scale_ns = 1000.0) {
     const auto st = mem.get_port_stats(port);
     expect(st.issued_count == st.completed_count,
            tag + ": port " + std::to_string(port) + " issued_count " +
@@ -764,8 +768,10 @@ void expect_port_conservation(const AnalyticalRemoteMemory& mem,
     const double signed_gap = static_cast<double>(st.completed_bytes) -
                               st.bytes_served;
     const double gap = signed_gap < 0 ? -signed_gap : signed_gap;
-    const double bound = static_cast<double>(st.completed_count) *
-                         (1e-6 + bw * 1e-9);
+    const double bound =
+        static_cast<double>(st.completed_count) *
+        (1e-6 + bw * (1e-9 + 4.0 * 2.220446049250313e-16 *
+                                   finish_scale_ns));
     expect(gap <= bound,
            tag + ": port " + std::to_string(port) + " bytes_served " +
                std::to_string(st.bytes_served) + " vs completed_bytes " +
@@ -827,8 +833,20 @@ void expect_child_rejected(const std::function<void()>& body,
                      "SIGKILLed (%s)\n",
                      what.c_str());
     }
-    const bool survived = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    expect(!survived, "fail-closed (child must not survive): " + what);
+    // X6 (face-LRU audit, 2026-09-29): the probes' contract is that the
+    // child must NOT survive with exit 0.  A clean non-zero exit is the
+    // explicit fail-closed verdict (the semantic guards call exit(1)).  A
+    // SIGABRT death is the parser-layer fail-fast form (nlohmann throws on
+    // e.g. 1e400 before the semantic guards run) -- still a rejection.
+    // Any OTHER signal death (SIGKILL after a stall, SIGSEGV) produced no
+    // verdict at all and fails the probe, as before the audit flagged it.
+    const bool exited_cleanly = WIFEXITED(status);
+    const bool clean_rejection = exited_cleanly && WEXITSTATUS(status) != 0;
+    const bool fail_fast_abort = WIFSIGNALED(status) &&
+                                 WTERMSIG(status) == SIGABRT;
+    expect(clean_rejection || fail_fast_abort,
+           "fail-closed (child must exit non-zero or fail-fast abort, not "
+           "stall/SIGKILL/survive): " + what);
 }
 
 void run_fail_closed_probes(const std::string& dir) {
@@ -2174,6 +2192,180 @@ void phase_stress(const std::string& dir) {
     std::fflush(stdout);
 }
 
+// ---------------------------------------------------------------------------
+// Phase BIGCLOCK (fix 2026-09-28 regression canary): the completion
+// tolerances must scale with ulp(clock) -- 4 * double_epsilon * instant on
+// top of the kByteEps / kTimeEpsNs floors -- because fl(clock +
+// remaining/rate) carries a rounding residue of order rate * ulp(clock)
+// bytes once the clock grows past ~1e7 ns. A fixed absolute tolerance
+// dead-locks the advance loop into the zero-step guard or fires the
+// overservice guard there (pre-fix: bw=1000 solo streams violate on a
+// large fraction of completions from clock ~4e7; bw=512 N=3 streams from
+// ~6.7e7). Both cases run real Sys event loops and chain transactions
+// through the terminal hook:
+//   (a) "bigclk1k": bw=1000 (non-dyadic), latency 100. A 1e11 B warm-up
+//       advances the continuous clock to ~1e8 ns; 50 chained 800003 B
+//       solo follow-ups then complete at that clock (solo keeps
+//       rate = bw, maximizing the rounding residue).
+//   (b) "bigclk512": bw=512 (the official dyadic config), latency 100. A
+//       2^37 B warm-up advances the clock to ~2.68e8 ns bit-exactly (N=1
+//       dyadic rate is always exact); 15 rounds of 3 concurrent 2^32 B
+//       transactions (rate = fl(512/3), non-dyadic) then complete at
+//       clocks from ~2.7e8 to ~6.5e8 ns.
+// Post-fix every transaction delivers exactly once, the backend drains and
+// conservation holds within the SCALED residue bound. Pre-fix these phases
+// end in sys_panic inside the advance loop, failing the test loudly.
+// ---------------------------------------------------------------------------
+
+struct BigClockChainState {
+    Sys* sys = nullptr;
+    ExecutionDriven::NodeStoreGraphSource* source = nullptr;
+    uint64_t bytes_per_job = 0;
+    int depth = 1;      // concurrent transactions kept in flight
+    int issued = 0;
+    int delivered = 0;
+    int target = 0;     // total transactions for the phase
+} g_bigclock;
+
+void bigclock_hook(void* ctx, int rank, uint64_t node_id, const char* name,
+                   const char* stage, uint64_t generation, uint64_t tick,
+                   int status) {
+    terminal_hook(ctx, rank, node_id, name, stage, generation, tick, status);
+    if (g_bigclock.sys == nullptr) {
+        return;
+    }
+    g_bigclock.delivered++;
+    while (g_bigclock.issued < g_bigclock.target &&
+           g_bigclock.issued - g_bigclock.delivered < g_bigclock.depth) {
+        add_and_issue(g_bigclock.sys, g_bigclock.source,
+                      make_mem_node(0, g_bigclock.bytes_per_job,
+                                    "bc_" +
+                                        std::to_string(g_bigclock.issued)));
+        g_bigclock.issued++;
+    }
+}
+
+void phase_bigclock_1k(const std::string& dir) {
+    const std::string tag = "bigclk1k";
+    const std::string cfg_path = dir + "/remote_" + tag + ".json";
+    write_file(cfg_path,
+               "{\n"
+               "  \"memory-type\": \"PER_NPU_MEMORY_EXPANSION\",\n"
+               "  \"npu-ids\": [0],\n"
+               "  \"remote-mem-bw\": 1000,\n"
+               "  \"remote-mem-latency\": 100\n"
+               "}\n");
+
+    PhaseStack stack;
+    bootstrap_phase(dir, tag, 1, cfg_path, stack);
+    auto* mem = stack.memory.get();
+
+    g_bigclock = {};
+    g_bigclock.sys = stack.systems[0];
+    g_bigclock.source = stack.sources[0].get();
+    g_bigclock.bytes_per_job = 800003;
+    g_bigclock.depth = 1;
+    g_bigclock.target = 51;  // warm-up + 50 chained follow-ups
+    ExecutionDriven::CompletionObserver::instance().set_hook(bigclock_hook,
+                                                             &g_recorder);
+
+    // Warm-up: 1e11 B / 1000 B/ns = 1e8 ns of solo streaming pushes the
+    // continuous clock past 1e8 ns (cb = ceil(100 + 1e8) = 100000100).
+    add_and_issue(stack.systems[0], stack.sources[0].get(),
+                  make_mem_node(0, 100000000000ULL, "bc_warm"));
+    g_bigclock.issued = 1;
+
+    run_event_loop(*stack.event_queue, tag, *mem, 1);
+    ExecutionDriven::CompletionObserver::instance().set_hook(terminal_hook,
+                                                             &g_recorder);
+
+    expect(static_cast<int>(g_recorder.order.size()) == 51,
+           tag + ": all 51 chained transactions delivered exactly once "
+                  "(got " + std::to_string(g_recorder.order.size()) + ")");
+    {
+        const auto st = mem->get_port_stats(0);
+        expect(st.issued_count == 51 && st.completed_count == 51,
+               tag + ": port count conservation at 51");
+        const double finish_scale = 1.1e8;
+        const double bound =
+            51.0 * (1e-6 +
+                    1000.0 * (1e-9 + 4.0 * 2.220446049250313e-16 *
+                                        finish_scale));
+        const double gap = std::fabs(static_cast<double>(st.completed_bytes) -
+                                     st.bytes_served);
+        expect(gap <= bound,
+               tag + ": bytes_served within the scaled residue bound");
+    }
+    expect(mem->is_drained(), tag + ": backend fully drained");
+    g_bigclock = {};
+    teardown_phase(stack);
+    std::printf("[remote_port_nway_test] phase %s: ALL PASS\n", tag.c_str());
+    std::fflush(stdout);
+}
+
+void phase_bigclock_512(const std::string& dir) {
+    const std::string tag = "bigclk512";
+    const std::string cfg_path = dir + "/remote_" + tag + ".json";
+    write_file(cfg_path,
+               "{\n"
+               "  \"memory-type\": \"PER_NPU_MEMORY_EXPANSION\",\n"
+               "  \"npu-ids\": [0],\n"
+               "  \"remote-mem-bw\": 512,\n"
+               "  \"remote-mem-latency\": 100\n"
+               "}\n");
+
+    PhaseStack stack;
+    bootstrap_phase(dir, tag, 1, cfg_path, stack);
+    auto* mem = stack.memory.get();
+
+    g_bigclock = {};
+    g_bigclock.sys = stack.systems[0];
+    g_bigclock.source = stack.sources[0].get();
+    g_bigclock.bytes_per_job = 4294967296ULL;  // 2^32 B per transaction
+    g_bigclock.depth = 3;                      // rate = fl(512/3), non-dyadic
+    g_bigclock.target = 46;                    // warm-up + 15 rounds x 3
+    ExecutionDriven::CompletionObserver::instance().set_hook(bigclock_hook,
+                                                             &g_recorder);
+
+    // Warm-up: 2^37 B / 512 B/ns = 2^28 ns exactly (dyadic N=1 rate is
+    // bit-exact at any clock) pushes the continuous clock to ~2.68e8 ns;
+    // cb = ceil(100 + 268435456) = 268435556.
+    add_and_issue(stack.systems[0], stack.sources[0].get(),
+                  make_mem_node(0, 137438953472ULL, "bc_warm"));
+    g_bigclock.issued = 1;
+
+    run_event_loop(*stack.event_queue, tag, *mem, 1);
+    ExecutionDriven::CompletionObserver::instance().set_hook(terminal_hook,
+                                                             &g_recorder);
+
+    expect(static_cast<int>(g_recorder.order.size()) == 46,
+           tag + ": all 46 transactions delivered exactly once (got " +
+               std::to_string(g_recorder.order.size()) + ")");
+    {
+        const auto st = mem->get_port_stats(0);
+        expect(st.issued_count == 46 && st.completed_count == 46,
+               tag + ": port count conservation at 46");
+        expect(st.peak_streaming == 3,
+               tag + ": the 3-way concurrent split was reached (peak "
+                      "streaming " +
+                   std::to_string(st.peak_streaming) + ")");
+        const double finish_scale = 7e8;
+        const double bound =
+            46.0 * (1e-6 +
+                    512.0 * (1e-9 + 4.0 * 2.220446049250313e-16 *
+                                       finish_scale));
+        const double gap = std::fabs(static_cast<double>(st.completed_bytes) -
+                                     st.bytes_served);
+        expect(gap <= bound,
+               tag + ": bytes_served within the scaled residue bound");
+    }
+    expect(mem->is_drained(), tag + ": backend fully drained");
+    g_bigclock = {};
+    teardown_phase(stack);
+    std::printf("[remote_port_nway_test] phase %s: ALL PASS\n", tag.c_str());
+    std::fflush(stdout);
+}
+
 }  // namespace
 
 // Last-resort hang detector: the proceed/wall-clock watchdogs between
@@ -2272,6 +2464,8 @@ int main() {
     phase_reentry_issue(dir);
     phase_early_shutdown(dir);
     phase_stress(dir);
+    phase_bigclock_1k(dir);
+    phase_bigclock_512(dir);
 
     ExecutionDriven::CompletionObserver::instance().set_hook(nullptr,
                                                              nullptr);
@@ -2290,6 +2484,9 @@ int main() {
         "system_reentry.json", "network_reentry.yml",
         "system_earlyshut.json", "network_earlyshut.yml",
         "system_stress.json",  "network_stress.yml",
+        "system_bigclk1k.json", "network_bigclk1k.yml",
+        "system_bigclk512.json", "network_bigclk512.yml",
+        "remote_bigclk1k.json", "remote_bigclk512.json",
         "remote_pernpup.json", "remote_anchor4.json",
         "remote_pernode.json", "remote_pool.json",
         "remote_zerolat.json", "remote_awaitcb.json",
@@ -2297,6 +2494,15 @@ int main() {
         "remote_reentry.json", "remote_earlyshut.json",
         "remote_pf_latovf_rt.json", "remote_pf_bwuf_rt.json",
         "remote_pf_badrank.json", "remote_pf_undrained.json",
+        // L23 (2026-09-29): the fail-closed probes fork children whose
+        // bootstrap_phase(dir, "pf_*") calls also write these system/
+        // network fixture files into the same directory; they were missing
+        // here, so rmdir() hit ENOTEMPTY and the whole mkdtemp directory
+        // leaked into /tmp on every run.
+        "system_pf_latovf_rt.json", "network_pf_latovf_rt.yml",
+        "system_pf_bwuf_rt.json", "network_pf_bwuf_rt.yml",
+        "system_pf_badrank.json", "network_pf_badrank.yml",
+        "system_pf_undrained.json", "network_pf_undrained.yml",
         "txn_zerolat.jsonl",
         "pf_bw_zero.json", "pf_bw_neg.json", "pf_bw_str.json",
         "pf_lat_neg.json", "pf_lat_ovf.json", "pf_bw_ovf.json",
@@ -2321,7 +2527,9 @@ int main() {
                 "(undelivered wlhd deleted, event cancelled, counters "
                 "reset, idempotent), fail-closed x12 (ctor + runtime Tick "
                 "overflow + unconfigured rank + undrained destructor), "
-                "conservation, 4000x10000B single-port stress\n");
+                "conservation, 4000x10000B single-port stress, big-clock "
+                "scaled-tolerance canaries (bw=1000 @1e8ns chain, bw=512 "
+                "3-way @2.7e8-6.5e8ns)\n");
     std::fflush(stdout);
     return 0;
 }

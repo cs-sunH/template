@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Regression fixture for bounded bridge bookkeeping and request journaling."""
+"""Regression fixture for bounded bridge bookkeeping and request journaling.
+
+登记(py-verify-D2 2026-09-27):手动 CLI 夹具工具——全仓无外部引用、
+不被 pytest 收集,仅 __main__ 手动可达,属有意保留的手动装置(非死文件)。
+"""
 
 import json
 import os

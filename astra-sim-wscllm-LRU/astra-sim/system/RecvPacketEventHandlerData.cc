@@ -23,6 +23,4 @@ RecvPacketEventHandlerData::RecvPacketEventHandlerData(
     this->wlhd = nullptr;
     this->owner = owner;
     this->custom_algorithm = nullptr;
-    this->message_end = true;
-    ready_time = Sys::boostedTick();
 }

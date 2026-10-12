@@ -40,8 +40,8 @@ class Device {
      * @return number of outgoing links
      *
      * Dead accessor (2026-09 deep-dive): only caller is the dead
-     * Topology::get_links_count(); kept unchanged from the face backend for
-     * cross-repo parity.
+     * Topology::get_links_count(); retained by the 2026-09-27 infra-D2
+     * annotation-route decision (the three sister repos deleted it).
      */
     [[nodiscard]] int get_links_count() const noexcept;
 

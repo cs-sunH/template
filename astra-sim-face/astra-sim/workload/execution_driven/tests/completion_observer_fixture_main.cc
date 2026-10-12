@@ -19,7 +19,7 @@ the hook count equals the number of completed nodes (54 ranks x 3 = 162).
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_CompletionFixture
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm, after generating the synthetic trace):
+Run (from template/astra-sim-face, after generating the synthetic trace):
   python3 astra-sim/workload/execution_driven/tests/make_completion_fixture_et.py
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_CompletionFixture \
@@ -171,11 +171,16 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < npus_count; i++) {
         // create network and system
         auto network_api = std::make_unique<CongestionAwareNetworkApi>(i);
+        // This fixture exercises the legacy ETFeeder path: pass
+        // ExecutionMode::Static explicitly instead of relying on the ctor's
+        // default (the default exists only so this fixture and the
+        // local_hbm fixture keep compiling).
         auto* const system =
             new Sys(i, workload_configuration, comm_group_configuration,
                     system_configuration, network_api.get(),
                     npus_count_per_dim, queues_per_dim, injection_scale,
-                    comm_scale, rendezvous_protocol);
+                    comm_scale, rendezvous_protocol,
+                    ExecutionDriven::ExecutionMode::Static);
 
         // push back network and system
         network_apis.push_back(std::move(network_api));
@@ -184,7 +189,7 @@ int main(int argc, char* argv[]) {
 
     // Initiate ASTRA-sim simulation
     for (int i = 0; i < npus_count; i++) {
-        systems[i]->workload->fire();
+        systems[i]->workload->call(EventType::General, nullptr);
     }
 
     fluid_scheduler->flush_pending_starts();

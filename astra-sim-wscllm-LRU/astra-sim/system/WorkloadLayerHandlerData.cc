@@ -8,5 +8,6 @@ LICENSE file in the root directory of this source tree.
 using namespace AstraSim;
 
 WorkloadLayerHandlerData::WorkloadLayerHandlerData() {
+    workload = nullptr;
     node_id = 0;
 }

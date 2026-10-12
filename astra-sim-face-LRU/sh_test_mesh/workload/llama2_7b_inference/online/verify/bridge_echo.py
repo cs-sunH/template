@@ -42,6 +42,12 @@ def _echo_node(request_id, node_id, name):
 
 
 def main():
+    # (2026-09-30, ported from the face repo) argv 数量守卫:参数缺失时
+    # IndexError 掩盖真实原因,改为 usage + return 2。
+    if len(sys.argv) != 3:
+        print("usage: python3 bridge_echo.py <bridge_dir> <ack_receipt>",
+              file=sys.stderr)
+        return 2
     bridge_dir = sys.argv[1]
     ack_receipt = sys.argv[2]
 

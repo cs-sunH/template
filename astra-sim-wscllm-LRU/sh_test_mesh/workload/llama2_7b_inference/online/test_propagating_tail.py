@@ -56,7 +56,8 @@ def _delta(seq, tick, arrivals=(), completed=()):
 
 
 def _ack(seq):
-    return {"schema_version": 1, "delivery_sequence": seq, "batch_id": seq}
+    return {"schema_version": 1, "delivery_sequence": seq, "batch_id": seq,
+            "success": True}
 
 
 class _TailScheduler(OnlineSchedulerBase):
@@ -264,13 +265,29 @@ def test_tracker_rejects_bad_registration_and_unknown_source():
     tracker = PropagatingTailTracker()
     container = []
     tracker.register("src", lambda: container, 4)
-    for bad in (0, -1):
+    # register 与 configure_limit 都必须落实正整数契约:0/负值/bool(int
+    # 子类型)/浮点(会被 int() 静默截断)一律结构化拒绝(2026-09-26
+    # ONLINE-06:configure_limit 原先不做任何校验)。
+    for bad in (0, -1, True, False, 2.5):
         try:
             tracker.register("other", lambda: container, bad)
         except ValueError:
             pass
         else:
-            raise AssertionError("non-positive limit must be rejected")
+            raise AssertionError(
+                "non-positive-integer limit must be rejected: {!r}".format(bad))
+        try:
+            tracker.configure_limit("src", bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "configure_limit must reject non-positive-integer limit: "
+                "{!r}".format(bad))
+    # 合法覆盖仍然生效。
+    tracker.configure_limit("src", 6)
+    assert tracker.snapshot()["src"]["limit"] == 6
+    tracker.configure_limit("src", 4)
     try:
         tracker.register("src", lambda: container, 4)
     except ValueError:

@@ -22,11 +22,17 @@ Covers, in order:
      two static_asserts against a pre-R2 mirror struct), default-false on
      every NodeStore view, OR semantics of set_metric_anchor_flags, and
      flag visibility through the NodeStoreGraphSource views (the exact data
-     path Workload::issue consumes).  The ETFeederGraphSource builds its
-     views the same way (default-constructed NodeView, per-field assign,
-     never touching the metric flags), so static views are structurally
-     flag-false -- the gate `execution_mode_ != Online || flag` keeps the
-     static path on the original unconditional logic.
+     path Workload::issue consumes).  The retired static/ET source
+     (ETFeederGraphSource, removed with the static route) built its views
+     the same way (default-constructed NodeView, per-field assign, never
+     touching the metric flags).  Correction (2026-10-01): an earlier
+     revision of this note claimed a gate
+     `execution_mode_ != Online || flag` kept "the static path" on
+     unconditional logic -- no such gate exists (the static mode is
+     unconstructable in this repo: Workload's constructor fails closed on
+     any non-Online mode); the live gate is the anchor flag alone
+     (MetricCollector::instance().enabled() plus the node's metric anchor
+     bits, Workload.cc issue/terminal paths).
 *******************************************************************************/
 
 #include "astra-sim/workload/MetricCollector.hh"
@@ -61,9 +67,22 @@ using json = nlohmann::json;
 // OnlineStatisticsState slimmed to {memory_utilization, compute_utilization,
 // comm_size} -- this repo's online path has no readers for the removed
 // operation_intensity/is_memory_bound/network_bandwidth optionals -- which
-// lowered the anchor 440 -> 400; the mirror assert -- the real "size did
-// not grow" proof -- holds unchanged with offsets 57/58/59 and the next
-// member at 64.)
+// lowered the anchor 440 -> 400.  2026-09-27 anchor update, same rule: the
+// comm_size optional removed too (still no online readers), lowering the
+// anchor 400 -> 384; the mirror assert -- the real "size did not grow"
+// proof -- holds unchanged with offsets 57/58/59 and the next member at
+// 64.  2026-10-01 anchor update, same rule: the write-only
+// OnlineStatisticsState::end_time dead member removed (no reader anywhere),
+// lowering the anchor 384 -> 376; the mirror assert again holds unchanged
+// (both sides carry the slimmed OnlineStatisticsState).  2026-10-03 die
+// backend anchor update, same rule: ComputeAttrs grew by OpRole (enum) +
+// the shared_ptr<const DieModel::DieOpSpec> die_spec and
+// OnlineStatisticsState grew the die-only vector_utilization optional, so
+// the anchor moved 376 -> 416; the mirror embeds those REAL types (not
+// hand-copied fields), so the sizeof(OnlineNode) == sizeof(mirror)
+// contract automatically carries the new layout and keeps proving exactly
+// one thing: the two metric anchor flags still ride in the bool tail
+// padding (no growth beyond the underlying members).)
 // ---------------------------------------------------------------------------
 struct OnlineNodePreR2Mirror {
     uint64_t global_id = 0;
@@ -87,7 +106,7 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodePreR2Mirror),
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 400,
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 416,
               "OnlineNode layout anchor for this toolchain (see the mirror "
               "assert above for the ABI-agnostic bound)");
 
@@ -698,15 +717,12 @@ void test_online_node_flag_plumbing() {
     expect(ptr != nullptr && !ptr->metric_issue_anchor &&
                !ptr->metric_complete_anchor,
            "node_ptr view of an unanchored node is flag-false");
-    const auto opt = store.node(plain_id);
-    expect(opt.has_value() && !opt->metric_issue_anchor &&
-               !opt->metric_complete_anchor,
-           "by-value lookup view of an unanchored node is flag-false");
 
-    // ETFeederGraphSource::view_of constructs its views exactly this way
-    // (default-constructed NodeView, per-field assignment, never touching
-    // the metric flags), so static/ET views are structurally flag-false and
-    // the `execution_mode_ != Online || flag` gate keeps the static path on
+    // The retired static/ET source (ETFeederGraphSource, removed with the
+    // static route) constructed its views exactly this way (default-
+    // constructed NodeView, per-field assignment, never touching the metric
+    // flags), so static/ET views are structurally flag-false and the
+    // `execution_mode_ != Online || flag` gate keeps the static path on
     // the original unconditional call.
     NodeView et_style_view;
     et_style_view.global_id = 7;

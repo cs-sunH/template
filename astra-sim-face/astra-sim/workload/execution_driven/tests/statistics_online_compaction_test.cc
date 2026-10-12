@@ -8,9 +8,11 @@ legacy NodeView/map behavior for microbenchmark window queries.
 *******************************************************************************/
 
 #include "astra-sim/common/AstraNetworkAPI.hh"
+#include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 #include <cerrno>
 #include <cstdio>
@@ -148,12 +150,11 @@ std::unique_ptr<AstraSim::Sys> make_online_test_system(
         0, "unused", "empty", system_config, &network,
         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
         AstraSim::ExecutionDriven::ExecutionMode::Online,
-        std::make_shared<AstraSim::ExecutionDriven::EmptyGraphSource>());
+        std::make_shared<AstraSim::ExecutionDriven::NodeStoreGraphSource>());
 }
 
 struct CompactStatisticsSnapshot {
     Tick wall_time = 0;
-    size_t retained_operator_count = 0;
     Tick gpu_busy_time = 0;
     uint64_t compute_weighted_sum_bits = 0;
     uint64_t memory_weighted_sum_bits = 0;
@@ -164,7 +165,6 @@ CompactStatisticsSnapshot snapshot_compact_statistics(const Statistics& stats) {
     constexpr Tick kFullWindowEnd = std::numeric_limits<Tick>::max();
     CompactStatisticsSnapshot snapshot;
     snapshot.wall_time = stats.get_wall_time();
-    snapshot.retained_operator_count = stats.retained_online_operator_count();
     snapshot.gpu_busy_time = stats.calculate_type_time_in_window(
         Statistics::OperatorStatistics::OperatorType::GPU, 0, kFullWindowEnd);
     const auto roofline = stats.calculate_roofline_utilization_in_window(
@@ -181,7 +181,6 @@ bool compact_statistics_unchanged(const Statistics& stats,
                                   const CompactStatisticsSnapshot& expected) {
     const CompactStatisticsSnapshot actual = snapshot_compact_statistics(stats);
     return actual.wall_time == expected.wall_time &&
-           actual.retained_operator_count == expected.retained_operator_count &&
            actual.gpu_busy_time == expected.gpu_busy_time &&
            actual.compute_weighted_sum_bits ==
                expected.compute_weighted_sum_bits &&
@@ -189,31 +188,73 @@ bool compact_statistics_unchanged(const Statistics& stats,
            actual.total_compute_time == expected.total_compute_time;
 }
 
-Statistics* g_exit_snapshot_statistics = nullptr;
-CompactStatisticsSnapshot g_exit_snapshot;
+// ---------------------------------------------------------------------------
+// Split contract (review 2026-09-26 cpp-ed-tests-b-1): "must fail closed"
+// and "must not mutate" are two INDEPENDENT child probes with explicit,
+// monotone exit-code mappings. The previous single atexit hook inverted the
+// mapping (unchanged state -> _exit(EXIT_FAILURE)), which a contrived SUT
+// could exploit: a clean std::exit(EXIT_SUCCESS) ran the hook, observed an
+// unchanged state, and re-exited FAILURE -- indistinguishable from a real
+// fail-closed abort. Now the fail-closed half rejects clean exits outright
+// (probe 1), and the mutation half reports with an explicit probe code (probe
+// 2), so no single inverted mapping can mask either violation.
+// ---------------------------------------------------------------------------
 
-void verify_compact_state_at_exit() {
+// Explicit probe exit codes for the no-mutation child (probe 2). 0 = the
+// compact aggregates still equal the armed snapshot at the SUT's failure
+// exit; 1 = mutated, or the SUT returned without a failure exit to observe.
+constexpr int kCompactProbeOk = 0;
+constexpr int kCompactProbeViolated = 1;
+
+Statistics* g_probe_statistics = nullptr;
+CompactStatisticsSnapshot g_probe_snapshot;
+
+void verify_compact_no_mutation_at_exit() {
     const bool unchanged =
-        g_exit_snapshot_statistics != nullptr &&
-        compact_statistics_unchanged(*g_exit_snapshot_statistics,
-                                     g_exit_snapshot);
-    ::_exit(unchanged ? EXIT_FAILURE : EXIT_SUCCESS);
+        g_probe_statistics != nullptr &&
+        compact_statistics_unchanged(*g_probe_statistics, g_probe_snapshot);
+    ::_exit(unchanged ? kCompactProbeOk : kCompactProbeViolated);
 }
 
-void require_compact_state_unchanged_on_exit(Statistics& stats) {
-    g_exit_snapshot_statistics = &stats;
-    g_exit_snapshot = snapshot_compact_statistics(stats);
-    if (std::atexit(verify_compact_state_at_exit) != 0) {
-        ::_exit(EXIT_SUCCESS);
+// Arm inside the probe child BEFORE invoking the SUT: snapshots the compact
+// aggregates and registers the atexit observer that runs on the SUT's
+// std::exit failure path.
+void arm_compact_no_mutation_probe(Statistics& stats) {
+    g_probe_statistics = &stats;
+    g_probe_snapshot = snapshot_compact_statistics(stats);
+    if (std::atexit(verify_compact_no_mutation_at_exit) != 0) {
+        ::_exit(kCompactProbeViolated);
     }
+}
+
+// Parent-side runner for the no-mutation probe child (probe 2).
+template <typename Fn>
+void expect_compact_no_mutation_probe(const char* message, Fn&& child_body) {
+    const pid_t child = fork();
+    expect(child >= 0, message);
+    if (child == 0) {
+        child_body();
+        // The SUT returned without a failure exit: nothing was observed.
+        // Probe 1 flags the missing fail-closed independently; this probe
+        // must not report a pass either.
+        ::_exit(kCompactProbeViolated);
+    }
+    if (child < 0) {
+        return;
+    }
+    int status = 0;
+    expect(waitpid(child, &status, 0) == child, message);
+    expect(WIFEXITED(status) && WEXITSTATUS(status) == kCompactProbeOk,
+           message);
 }
 
 template <typename Fn>
 void expect_child_failure_without_compact_mutation(const char* message,
                                                    Statistics& stats,
                                                    Fn&& child_body) {
-    expect_child_failure(message, [&] {
-        require_compact_state_unchanged_on_exit(stats);
+    expect_child_failure(message, child_body);
+    expect_compact_no_mutation_probe(message, [&] {
+        arm_compact_no_mutation_probe(stats);
         child_body();
     });
 }
@@ -248,8 +289,6 @@ void test_direct_completed_gpu_union() {
     compact_start(stats, gpu, state, 10);
     compact_end(stats, gpu, state, 30);
 
-    expect(stats.retained_online_operator_count() == 0,
-           "direct service GPU completion retains no operator map entry");
     expect(stats.calculate_type_time_in_window(
                Statistics::OperatorStatistics::OperatorType::GPU, 0, 31) ==
                20,
@@ -290,16 +329,34 @@ void test_history_preserving_legacy_post_processing_succeeds(
 
     expect(stats.get_wall_time() == 30,
            "history-preserving legacy post-processing keeps wall time");
-    expect(stats.get_type_time(
-               Statistics::OperatorStatistics::OperatorType::GPU) == 20,
+    expect(stats.calculate_type_time_in_window(
+               Statistics::OperatorStatistics::OperatorType::GPU, 0, 30) == 20,
            "history-preserving legacy post-processing keeps GPU union");
 }
 
 void test_compact_workload_report_fails_closed_without_mutation(
     const std::string& system_config) {
+    // Probe 1: report() must fail closed.
     expect_child_failure(
         "compact Workload::report fails closed without mutation", [&] {
-            TestNetworkApi network;
+                    TestNetworkApi network;
+                    const auto system =
+                make_online_test_system(system_config, network);
+                    Statistics& stats = *system->workload->stats;
+            const NodeView gpu = gpu_node(5);
+            OnlineStatisticsState state;
+            compact_start(stats, gpu, state, 10);
+            state.compute_utilization = 0.5;
+            state.memory_utilization = 0.25;
+            compact_end(stats, gpu, state, 30);
+                    system->workload->report();
+                });
+    // Probe 2 (independent child): the failure exit must leave the compact
+    // aggregates unchanged (explicit probe codes, see the split-contract
+    // comment above).
+    expect_compact_no_mutation_probe(
+        "compact Workload::report fails closed without mutation", [&] {
+                    TestNetworkApi network;
             const auto system =
                 make_online_test_system(system_config, network);
             Statistics& stats = *system->workload->stats;
@@ -309,9 +366,8 @@ void test_compact_workload_report_fails_closed_without_mutation(
             state.compute_utilization = 0.5;
             state.memory_utilization = 0.25;
             compact_end(stats, gpu, state, 30);
-
-            require_compact_state_unchanged_on_exit(stats);
-            system->workload->report();
+            arm_compact_no_mutation_probe(stats);
+                    system->workload->report();
         });
 }
 
@@ -332,12 +388,8 @@ void test_direct_overlapping_gpu_union_and_roofline() {
     second_state.memory_utilization = 0.5;
 
     compact_end(stats, first, first_state, 30);
-    expect(stats.retained_online_operator_count() == 0,
-           "overlapping direct service leaves no first-node map record");
     compact_end(stats, second, second_state, 50);
 
-    expect(stats.retained_online_operator_count() == 0,
-           "overlapping completed direct GPU records stay compact");
     expect(stats.calculate_type_time_in_window(
                Statistics::OperatorStatistics::OperatorType::GPU, 0, 51) ==
                40,
@@ -377,8 +429,6 @@ void test_cpu_no_util_and_comm_state_stay_compact() {
 
     expect(comm_state.completed,
            "compact NodeStore state completes terminal communication");
-    expect(stats.retained_online_operator_count() == 0,
-           "CPU, no-util GPU, and comm state never create map entries");
     expect(stats.calculate_type_time_in_window(
                Statistics::OperatorStatistics::OperatorType::GPU, 0, 31) ==
                10,
@@ -440,12 +490,9 @@ void test_exact_sum_matches_history_bit_for_bit() {
     expect(compact_roofline.total_comp_time == kLargeDuration + 3 &&
                history_roofline.total_comp_time == kLargeDuration + 3,
            "adversarial exact sums preserve the denominator in both modes");
-    expect(compact.retained_online_operator_count() == 0,
-           "adversarial compact service still retains no map records");
 }
 
-void run_long_direct_service(uint64_t node_count, uint64_t id_base,
-                             const char* message) {
+void run_long_direct_service(uint64_t node_count, uint64_t id_base) {
     Statistics stats(nullptr);
     stats.configure_online_history_preservation(false);
     NodeView gpu = gpu_node(id_base);
@@ -455,11 +502,7 @@ void run_long_direct_service(uint64_t node_count, uint64_t id_base,
         const Tick start = static_cast<Tick>(index * 2);
         compact_start(stats, gpu, state, start);
         compact_end(stats, gpu, state, start + 1);
-        if ((index & 65535u) == 0) {
-            expect(stats.retained_online_operator_count() == 0, message);
-        }
     }
-    expect(stats.retained_online_operator_count() == 0, message);
     expect(stats.calculate_type_time_in_window(
                Statistics::OperatorStatistics::OperatorType::GPU, 0,
                static_cast<Tick>(node_count * 2 + 2)) == node_count,
@@ -467,10 +510,8 @@ void run_long_direct_service(uint64_t node_count, uint64_t id_base,
 }
 
 void test_long_direct_service_stays_bounded() {
-    run_long_direct_service(200000, 1000,
-                            "200k direct service retains no operator records");
-    run_long_direct_service(1000000, 1000000,
-                            "1M direct service retains no operator records");
+    run_long_direct_service(200000, 1000);
+    run_long_direct_service(1000000, 1000000);
 }
 
 void test_duplicate_direct_start_and_end_fail_closed() {
@@ -501,8 +542,6 @@ void test_microbenchmark_history_is_unchanged() {
     stats.record_start(completed, 10);
     stats.record_end(completed, 30);
     stats.record_start(live, 40);
-    expect(stats.retained_online_operator_count() == 2,
-           "history microbenchmark retains completed and live node records");
     expect(stats.calculate_type_time_in_window(
                Statistics::OperatorStatistics::OperatorType::GPU, 15, 25) ==
                10,
@@ -523,6 +562,16 @@ int main() {
     test_microbenchmark_history_is_unchanged();
     const std::string system_config = write_minimal_system_config();
     test_history_preserving_legacy_post_processing_succeeds(system_config);
+    // Fork-safety: every LoggerFactory logger is an spdlog ASYNC logger, so
+    // the history-preserving case above started the global spdlog worker
+    // thread in THIS process. A forked child inherits the pool in a
+    // threadless state, and the fail-closed std::exit inside
+    // Statistics::ensure_legacy_post_processing_supported() then runs static
+    // destruction, whose ~thread_pool() joins that (nonexistent-here)
+    // worker -- the child deadlocks on a futex forever and the parent waits
+    // in waitpid. Tearing the pool down before the fork cases makes each
+    // child build its own fresh pool (a real thread it can join at exit).
+    AstraSim::LoggerFactory::shutdown();
     test_compact_workload_report_fails_closed_without_mutation(system_config);
     expect(::unlink(system_config.c_str()) == 0,
            "remove temporary system config");

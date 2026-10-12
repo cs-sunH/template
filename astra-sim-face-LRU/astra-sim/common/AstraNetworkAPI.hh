@@ -74,6 +74,20 @@ class AstraNetworkAPI {
                               void* fun_arg) = 0;
 
     /**
+     * Whether the backend is currently inside its event-invoke pass.
+     *
+     * The analytical backend merges same-tick events only inside the invoke
+     * pass and fails closed on a same-tick schedule from any other context
+     * (tick-end / deferred handlers).  Sys consults this before registering a
+     * delta==0 event so that a delay collapsed to zero by configuration
+     * (e.g. communication_delay truncated by a fractional injection scale)
+     * defers to the next tick there instead of killing the run, while static
+     * dispatch keeps its byte-exact same-tick merge semantics.  Backends
+     * without the notion report true (upstream behavior: merge allowed).
+     */
+    virtual bool backend_in_invoke_context() const { return true; }
+
+    /**
      * Schedule an alarm that an opt-in frontend may later remove.
      *
      * Non-analytical and fake backends retain their legacy behavior: schedule

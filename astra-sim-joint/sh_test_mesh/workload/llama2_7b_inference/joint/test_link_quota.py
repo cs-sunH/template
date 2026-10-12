@@ -19,7 +19,7 @@
 * δ_adm 近平局带：margin >= delta 才翻转、δ=0（冻结初值）与既有
   argmin 比较组合后零行为变更；
 * quota_deferred 回队：全部动作不可行 → 回队记录而非
-  JointSchedulerError（对照 joint_scheduler.py:156-159 零候选
+  JointSchedulerError（对照 joint_scheduler.py 零候选
   fail-closed 会终局 run）；
 * joint_config 解析：off/static/aimd 三值合法、非法值 fail-closed、
   缺省 off（F7）、manifest 含该键、与 combo 预设正交。
@@ -580,7 +580,7 @@ class MergeBorrowLedgerInvariantTest(unittest.TestCase):
 
 class DeferredRetryKeyTest(unittest.TestCase):
     """配额代数（信用占用代数）：流 settle/预留释放 bump 键；C11 经
-    extend_retry_key 并入 SH:1775-1802 的 epoch 键重试门。"""
+    extend_retry_key 并入  的 epoch 键重试门。"""
 
     def setUp(self):
         self.t = _tracker(noc=4.0, hbm=2.0)
@@ -705,8 +705,12 @@ class DeltaAdmFlipBandTest(unittest.TestCase):
 
 
 class QuotaDeferredRequeueTest(unittest.TestCase):
-    """全部动作不可行 → 回 pending_admissions，严禁零候选 fail-closed
-    （joint_scheduler.py:156-159 的 JointSchedulerError 会终局 run）。"""
+    """配额判据压塌全部动作 → 回 pending_admissions，严禁此处零候选
+    fail-closed（select_instance_and_action 的 no-applicable
+    JointSchedulerError 会终局 run；M2 2026-09-26 语义边界：该 raise
+    保留给候选集为空——含动作掩码 JOINT_ALLOWED_ACTIONS 剔除 recompute
+    等致零适用，维持 fail-closed；配额压塌不同——选择面存在、判据临
+    时挡路，走回队重试）。"""
 
     def _exhausted_verdicts(self):
         t = _tracker(noc=4.0, hbm=2.0)

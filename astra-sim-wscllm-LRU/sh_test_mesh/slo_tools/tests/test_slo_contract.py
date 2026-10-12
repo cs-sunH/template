@@ -326,12 +326,12 @@ class ViolationDenominatorTests(unittest.TestCase):
             synthetic.request_row(
                 queue_index="0", request_id="r0", e2e_ns="900",
                 arrival_ns="0", completion_ns="900",
-                first_token_ns="10_000_000_000",
+                first_token_ns="10000000000",
                 first_token_source="train_interpolated"),
             synthetic.request_row(
                 queue_index="1", request_id="r1", e2e_ns="700",
                 arrival_ns="0", completion_ns="700",
-                first_token_ns="999_999_999_999",
+                first_token_ns="999999999999",
                 first_token_source="train_interpolated"),
             synthetic.request_row(
                 queue_index="2", request_id="r2",
@@ -740,19 +740,13 @@ class LoadImbalanceHandTests(unittest.TestCase):
         synthetic.write_jsonl(run_dir, "online_decision_log.jsonl",
                               decisions)
         synthetic.write_jsonl(run_dir, "train_ledger.jsonl", ledger)
-        manifest = synthetic.write_slo_manifest(
-            run_dir, {"imbalance_bucket_ns": 50})
-        import argparse
-        ns = argparse.Namespace(
-            run_dir=run_dir, manifest=manifest, output="-", json="",
-            repo_variant=None)
         # 手算：instance0 区间 [0,100)×2 请求 → b̄=2；instance1 b̄=1；
         # mean=1.5；population std=0.5；CV=1/3；Max/Mean=4/3。
         intervals = load_imbalance.collect_intervals(run_dir,
                                                      "astra-sim-face")
         self.assertEqual(len(intervals), 3)
         stats = load_imbalance.instance_timeavg_backlog(
-            intervals, 50, 0, 100)
+            intervals, 0, 100)
         self.assertAlmostEqual(stats[0][0], 2.0)
         self.assertAlmostEqual(stats[1][0], 1.0)
         values = [stats[i][0] for i in sorted(stats)]
@@ -763,14 +757,37 @@ class LoadImbalanceHandTests(unittest.TestCase):
         self.assertAlmostEqual(max(values) / mean, 4 / 3)
 
     def test_missing_manifest_param_fails(self):
+        # M29（2026-09-29 重写）：--manifest 指向不存在的清单 → 装载即
+        # fail-closed，错误信息指向 manifest 参数本身（而非后续 decision
+        # log 缺失等无关原因——旧用例 manifest=None 走默认清单兜底、实际
+        # 由缺决策日志报错，属错误原因通过）。
         run_dir = synthetic.make_run_dir("li2")
+        synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-face")
+        missing = run_dir / "absent_slo_params_manifest.json"
+        import argparse
+        ns = argparse.Namespace(
+            run_dir=run_dir, manifest=missing, output="-", json="",
+            repo_variant=None)
+        with self.assertRaises(SloToolError) as ctx:
+            load_imbalance.cmd_load_imbalance(ns)
+        self.assertIn("SLO 参数清单不存在", str(ctx.exception))
+        self.assertIn(str(missing), str(ctx.exception))
+
+    def test_manifest_none_falls_back_to_default_manifest(self):
+        # 生产语义钉住：manifest 参数缺省（None）≠ 失败——cmd 层显式
+        # 兜底默认清单（脚本同目录，见 load_slo_manifest 的 default_
+        # manifest_path 链）。仓内默认清单参数已推导（imbalance_bucket_ns
+        # 有值），故命令越过清单装载、死于后续缺失输入；此处断言错误
+        # 与 manifest 无关（不出现"参数清单不存在"）即证明兜底发生。
+        run_dir = synthetic.make_run_dir("li2b")
         synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-face")
         import argparse
         ns = argparse.Namespace(
             run_dir=run_dir, manifest=None, output="-", json="",
             repo_variant=None)
-        with self.assertRaises(SloToolError):
+        with self.assertRaises(SloToolError) as ctx:
             load_imbalance.cmd_load_imbalance(ns)
+        self.assertNotIn("参数清单不存在", str(ctx.exception))
 
 
 class HopbytesTests(unittest.TestCase):
@@ -1000,8 +1017,10 @@ class SessionPassthroughTests(unittest.TestCase):
         return run_dir
 
     def test_t_session_with_passthrough_keys(self):
-        # Σ(human+tool) = 0(turn-0) + 200(turn-1) = 200；
-        # T_session = 9000 - 1000 - 200 = 7800。
+        # H5①（2026-09-30 本仓同步）：Σ 只含前 n−1 轮——turn-1（末轮）
+        # 的 human=200 落在 last_completion 之后、窗口外不计；
+        # Σ(human+tool) = 0(turn-0 双侧 null)；
+        # T_session = 9000 - 1000 - 0 = 8000（旧 200/7800）。
         run_dir = self._write_run([
             synthetic.manifest_request(
                 "s0t0", "s0", 0, 0, human_time_ns=None, tool_time_ns=None),
@@ -1014,8 +1033,8 @@ class SessionPassthroughTests(unittest.TestCase):
         with out.open(encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["t_session_ns"], "7800")
-        self.assertEqual(rows[0]["sum_human_tool_ns"], "200")
+        self.assertEqual(rows[0]["t_session_ns"], "8000")
+        self.assertEqual(rows[0]["sum_human_tool_ns"], "0")
         self.assertIn("turn0/0-gap", rows[0]["missing_fields_sample"])
 
     def test_t_session_na_when_keys_absent(self):
@@ -1029,7 +1048,8 @@ class SessionPassthroughTests(unittest.TestCase):
         with out.open(encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(rows[0]["t_session_ns"], "NA")
-        self.assertEqual(rows[0]["missing_field_count"], "4")
+        # H5①：末轮行不进缺数据核对（其等待定义在窗口外），4 → 2。
+        self.assertEqual(rows[0]["missing_field_count"], "2")
 
 
 class BacklogTests(unittest.TestCase):
@@ -1069,7 +1089,8 @@ class WarmupTests(unittest.TestCase):
         self.assertEqual(slo_stats.cmd_warmup(args), 0)
         payload = json.loads(out.read_text(encoding="utf-8"))
         # 全样本 P99=5000（nearest-rank: ceil(.99*20)=20 → max）；
-        # 剔除 arrival<250 的 2 行后全为 1000 → P99=1000。
+        # 剔除 arrival < t0+window=100+250=350 的 3 行（r1/r2/r3，
+        # arrival 100/200/300）后全为 1000 → P99=1000。
         self.assertEqual(payload["p99_full_ns"], 5000)
         self.assertEqual(payload["p99_after_warmup_ns"], 1000)
         self.assertAlmostEqual(payload["relative_change"], 0.8)
@@ -1165,6 +1186,278 @@ class CppLogFallbackTests(unittest.TestCase):
             archived)
         self.assertEqual((rows_plain, summary_plain),
                          (rows_archived, summary_archived))
+
+class FixBatchAContractTests(unittest.TestCase):
+    """修复批次 A（2026-09-26）fail-closed 回归面（slo_common/slo_stats/
+    load_imbalance/kv_cache_adapter）。
+
+    INPUT-01 float NaN/Inf 拒绝 + bucket 边界有限性；INPUT-02 负索引拒绝；
+    INPUT-03 manifest 非对象条目拒绝；KV-01 负 bytes 事件拒绝；METRIC-01
+    时间比例精确积分 + 全配置实例分母；F7/M6-02 goodput=tput×(1−rate)；
+    M6-05 backlog 末态非零/负在途 fail；M6-06 会话首末口径统一。
+    """
+
+    # -- INPUT-01 ---------------------------------------------------------
+
+    def test_bucket_edges_nan_inf_fail_closed(self):
+        # NaN 参与比较恒为假，会绕过严格递增断言——有限性检查前置。
+        for bad in (float("nan"), float("inf")):
+            manifest = {"params": {"bucket_percentiles": {"value": {
+                "percentiles": [50],
+                "prefill_edges_tokens": [0, 1000, bad],
+                "decode_edges_tokens": [0, 200, 400],
+            }}}}
+            with self.assertRaises(SloToolError) as ctx:
+                require_bucket_edges(manifest)
+            self.assertIn("NaN/Inf", str(ctx.exception))
+
+    def test_parse_float_nan_inf_fail_closed(self):
+        with self.assertRaises(SloToolError):
+            slo_common.parse_float("nan", "hidden_ratio", "w")
+        with self.assertRaises(SloToolError):
+            slo_common.parse_float("-inf", "hidden_ratio", "w")
+        self.assertIsNone(slo_common.parse_float("NA", "hidden_ratio", "w"))
+        self.assertEqual(
+            slo_common.parse_float("0.5", "hidden_ratio", "w"), 0.5)
+
+    # -- INPUT-02 ---------------------------------------------------------
+
+    def test_negative_queue_or_turn_index_fail_closed(self):
+        run_dir = synthetic.make_run_dir("fcb_neg")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(request_id="r0", queue_index="0",
+                                  arrival_ns="0", completion_ns="10",
+                                  e2e_ns="10")])
+        path = run_dir / "request_metrics.csv"
+        rows = list(read_request_metrics(path))
+        slo_common.validated_request_rows(iter(rows), path)  # 基线可过
+        rows[0]["queue_index"] = "-3"
+        with self.assertRaises(SloToolError) as ctx:
+            slo_common.validated_request_rows(iter(rows), path)
+        self.assertIn("queue_index 为负", str(ctx.exception))
+        rows[0]["queue_index"] = "0"
+        rows[0]["turn_index"] = "-1"
+        with self.assertRaises(SloToolError) as ctx:
+            slo_common.validated_request_rows(iter(rows), path)
+        self.assertIn("turn_index 为负", str(ctx.exception))
+
+    # -- INPUT-03 ---------------------------------------------------------
+
+    def test_manifest_non_dict_request_fail_closed(self):
+        manifest = {"requests": [{"request_id": "r0"}, 42]}
+        with self.assertRaises(SloToolError) as ctx:
+            slo_common.manifest_requests(manifest)
+        self.assertIn("requests[1]", str(ctx.exception))
+
+    # -- KV-01 ------------------------------------------------------------
+
+    def test_negative_transfer_bytes_fail_closed(self):
+        # 契约路径（-LRU 新产物 history_transfers）负 bytes → 拒绝。
+        record = {"kind": "prefill", "request_id": "r0", "tick": 5,
+                  "decision": {"history_transfers": [{
+                      "kind": "remote_load", "total_bytes": -100,
+                      "source_instance_index": 0,
+                      "target_instance_index": 1}]}}
+        with self.assertRaises(SloToolError) as ctx:
+            kv_cache_adapter.extract_events_face_wscllm(record)
+        self.assertIn("bytes 为负", str(ctx.exception))
+
+    def test_negative_shard_sum_fail_closed(self):
+        # shard 回退路径合计为负同样不得产出负 bytes 事件。
+        record = {"kind": "prefill", "request_id": "r0", "tick": 5,
+                  "decision": {"history_transfers": [{
+                      "kind": "noc_migrate",
+                      "shards": [{"bytes": -30}, {"bytes": -20}]}]}}
+        with self.assertRaises(SloToolError):
+            kv_cache_adapter.extract_events_face_wscllm(record)
+
+    # -- METRIC-01 --------------------------------------------------------
+
+    def test_partial_bucket_exact_time_integral(self):
+        # 部分覆盖桶按时间比例积分：[0,75) 对 50ns 桶 = 0.75（旧口径按
+        # 整桶计 2×50/100 = 1.0，高估）。
+        intervals = [{"request_id": "r0", "instance": 0,
+                      "admission_ns": 0, "drain_ns": 75}]
+        stats = load_imbalance.instance_timeavg_backlog(
+            intervals, 0, 100)
+        self.assertAlmostEqual(stats[0][0], 0.75)
+
+    def test_emit_denominator_includes_idle_instances(self):
+        # 分母=全部配置实例（trace_config.csv inference_group 组行数，
+        # hbm_watermark.count_configured_instances 同一权威来源）：实例 1
+        # 全程空闲 b̄=0 计入 CV（旧口径从分母移除 → CV=0 低估；更早口径
+        # 取 request manifest prefill_ranks 长度=每实例 rank 数 6，同错）。
+        run_dir = synthetic.make_run_dir("fcb_li")
+        synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-face")
+        synthetic.write_trace_config(run_dir, 2)
+        synthetic.write_jsonl(run_dir, "online_decision_log.jsonl", [
+            {"kind": "prefill", "request_id": "r0", "tick": 0,
+             "decision": {}},
+            {"kind": "decode", "request_id": "r0", "tick": 0,
+             "decision": {"decode_instance_index": 0}},
+            {"kind": "completion", "request_id": "r0", "tick": 100,
+             "decision": {}},
+        ])
+        synthetic.write_jsonl(run_dir, "train_ledger.jsonl", [
+            {"train_id": "batch_train_i0_1", "instance_index": 0,
+             "tick": 100, "drains": [], "joiners": [], "exits": ["r0"]},
+        ])
+        manifest = synthetic.write_slo_manifest(
+            run_dir, {"imbalance_bucket_ns": 50})
+        import argparse
+        ns = argparse.Namespace(
+            run_dir=run_dir, manifest=manifest,
+            output=str(run_dir / "li.csv"),
+            json=str(run_dir / "li.json"), repo_variant=None)
+        self.assertEqual(load_imbalance.cmd_load_imbalance(ns), 0)
+        _, rows = synthetic.read_csv(run_dir / "li.csv")
+        self.assertEqual([r["instance_index"] for r in rows], ["0", "1"])
+        self.assertEqual(rows[1]["n_requests"], "0")
+        self.assertEqual(rows[1]["time_avg_backlog"], "0.000000")
+        payload = json.loads((run_dir / "li.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(payload["n_instances"], 2)
+        self.assertEqual(payload["n_instances_configured"], 2)
+        # b̄=[1.0, 0] → mean=0.5、总体 std=0.5 → CV=1（旧口径单实例 CV=0）。
+        self.assertAlmostEqual(payload["cv_time_avg"], 1.0)
+
+    def test_interval_instance_outside_configured_fails(self):
+        intervals = [{"request_id": "r0", "instance": 5,
+                      "admission_ns": 0, "drain_ns": 10}]
+        with self.assertRaises(SloToolError) as ctx:
+            load_imbalance.instance_timeavg_backlog(
+                intervals, 0, 10, n_configured=2)
+        self.assertIn("超出配置实例域", str(ctx.exception))
+
+    def test_emit_without_configured_instances_fails(self):
+        # trace_config.csv 无 inference_group 组行（配置实例总数缺失）
+        # → fail-closed，不静默退化为"仅出现过的实例"。
+        run_dir = synthetic.make_run_dir("fcb_li2")
+        synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-face")
+        # 仅表头+config 行（无任何 inference_group 组行）。
+        (run_dir / "trace_config.csv").write_text(
+            "kind,key,value,group_name,pg_name,ranks,description\n"
+            "config,layers,1,,,,synthetic\n", encoding="utf-8")
+        synthetic.write_jsonl(run_dir, "online_decision_log.jsonl", [
+            {"kind": "prefill", "request_id": "r0", "tick": 0,
+             "decision": {}},
+            {"kind": "decode", "request_id": "r0", "tick": 0,
+             "decision": {"decode_instance_index": 0}},
+            {"kind": "completion", "request_id": "r0", "tick": 10,
+             "decision": {}},
+        ])
+        synthetic.write_jsonl(run_dir, "train_ledger.jsonl", [
+            {"train_id": "t", "instance_index": 0, "tick": 10,
+             "drains": [], "joiners": [], "exits": ["r0"]},
+        ])
+        manifest = synthetic.write_slo_manifest(
+            run_dir, {"imbalance_bucket_ns": 50})
+        import argparse
+        ns = argparse.Namespace(run_dir=run_dir, manifest=manifest,
+                                output="-", json="", repo_variant=None)
+        with self.assertRaises(SloToolError) as ctx:
+            load_imbalance.cmd_load_imbalance(ns)
+        self.assertIn("inference_group", str(ctx.exception))
+
+    # -- F7/M6-02 ---------------------------------------------------------
+
+    def test_scan_export_goodput_is_tput_times_survival(self):
+        # goodput = tput×(1−violation_rate)（README 公式；旧实现完成率
+        # 因子恒 1、tput 未参与）。单请求 e2e=1000 ≤ Deadline=2×3000=6000
+        # → rate=0、span=1000ns → tput=1e6 rps → goodput=1e6。
+        run_dir = synthetic.make_run_dir("fcb_scan")
+        synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-face")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(request_id="r0", queue_index="0",
+                                  arrival_ns="100", completion_ns="1100",
+                                  e2e_ns="1000", prefill_length="500",
+                                  decode_length="100")])
+        t_iso = synthetic.write_t_isolated(run_dir, [(0, 0, 3000)])
+        manifest = synthetic.write_slo_manifest(run_dir, {
+            "alpha_main": 2.0,
+            "bucket_percentiles": synthetic.TEST_BUCKET_EDGES})
+        out = run_dir / "scan.csv"
+        args = slo_argv(["scan-export", "--point", f"{run_dir}=1.0",
+                         "--t-isolated", str(t_iso),
+                         "--manifest", str(manifest), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_scan_export(args), 0)
+        _, rows = synthetic.read_csv(out)
+        self.assertAlmostEqual(float(rows[0]["violation_rate"]), 0.0)
+        self.assertAlmostEqual(float(rows[0]["tput_rps"]), 1e6)
+        self.assertAlmostEqual(float(rows[0]["goodput_rps"]), 1e6)
+
+    def test_scan_export_goodput_zero_when_all_violating(self):
+        # 全体违约 → goodput = tput×(1−1) = 0（旧实现输出 tput×1 因子）。
+        run_dir = synthetic.make_run_dir("fcb_scan2")
+        synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-face")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(request_id="r0", queue_index="0",
+                                  arrival_ns="100", completion_ns="1100",
+                                  e2e_ns="1000", prefill_length="500",
+                                  decode_length="100")])
+        t_iso = synthetic.write_t_isolated(run_dir, [(0, 0, 100)])
+        manifest = synthetic.write_slo_manifest(run_dir, {
+            "alpha_main": 0.5,
+            "bucket_percentiles": synthetic.TEST_BUCKET_EDGES})
+        out = run_dir / "scan.csv"
+        args = slo_argv(["scan-export", "--point", f"{run_dir}=1.0",
+                         "--t-isolated", str(t_iso),
+                         "--manifest", str(manifest), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_scan_export(args), 0)
+        _, rows = synthetic.read_csv(out)
+        self.assertAlmostEqual(float(rows[0]["violation_rate"]), 1.0)
+        self.assertAlmostEqual(float(rows[0]["goodput_rps"]), 0.0)
+
+    # -- M6-05 ------------------------------------------------------------
+
+    def test_backlog_unsettled_tail_fails_closed(self):
+        # 末态 in_flight≠0（arrival 无 completion）→ 拒绝输出（旧仅告警）。
+        run_dir = synthetic.make_run_dir("fcb_bl1")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(request_id="r0", queue_index="0",
+                                  arrival_ns="100", completion_ns="NA")])
+        args = slo_argv(["backlog", str(run_dir), "-o", "-"])
+        with self.assertRaises(SloToolError) as ctx:
+            slo_stats.cmd_backlog(args)
+        self.assertIn("in_flight", str(ctx.exception))
+
+    def test_backlog_negative_inflight_fails_closed(self):
+        # completion 早于 arrival → 时序出现负在途，拒绝输出。
+        run_dir = synthetic.make_run_dir("fcb_bl2")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(request_id="r0", queue_index="0",
+                                  arrival_ns="500", completion_ns="100")])
+        args = slo_argv(["backlog", str(run_dir), "-o", "-"])
+        with self.assertRaises(SloToolError) as ctx:
+            slo_stats.cmd_backlog(args)
+        self.assertIn("负在途", str(ctx.exception))
+
+    # -- M6-06 ------------------------------------------------------------
+
+    def test_out_of_order_session_uses_turn_order_endpoints(self):
+        # 乱序会话：NA 行与正常行同口径——首轮 arrival/末轮 completion
+        # 取轮序首/尾（turn0 arrival 500、turn1 arrival 100）。
+        run_dir = synthetic.make_run_dir("fcb_sess")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(
+                queue_index="0", request_id="s0t0", session_id="s0",
+                turn_index="0", arrival_ns="500", completion_ns="700"),
+            synthetic.request_row(
+                queue_index="1", request_id="s0t1", session_id="s0",
+                turn_index="1", arrival_ns="100", completion_ns="900"),
+        ])
+        synthetic.write_metrics_manifest(run_dir, [
+            synthetic.manifest_request("s0t0", "s0", 0, 0),
+            synthetic.manifest_request("s0t1", "s0", 1, 1),
+        ])
+        out = run_dir / "slo_session.csv"
+        args = slo_argv(["session", str(run_dir), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_session(args), 0)
+        with out.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["first_arrival_ns"], "500")
+        self.assertEqual(rows[0]["last_completion_ns"], "900")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

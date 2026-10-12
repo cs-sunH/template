@@ -74,25 +74,18 @@ class FluidScheduler {
      * same-time merge keeps it inside the same invoke_events pass). A comm
      * node emitted from a tick-end callback or the deferred drain would insert
      * a current_time EventList into the main queue and trip the EventQueue
-     * strict-increase assert on the next proceed(). Online drivers must enable
-     * deferred mode; the static path stays in the legacy mode (default), which
-     * is byte-for-byte the pre-extension behavior.
+     * strict-increase assert on the next proceed(). The online main enables
+     * deferred mode unconditionally; the legacy mode (default) has no
+     * production driver left since the offline static entry was removed and
+     * survives only in the regression tests with the pre-extension
+     * byte-for-byte alarm behavior.
      */
     void set_deferred_flush_mode(bool enabled) noexcept;
 
-    /**
-     * Schedule a flush of all pending flow starts via the same-tick deferred
-     * channel (schedule_event_deferred). Post-commit communication emission in
-     * online mode must go through this entry (or start_flow with deferred mode
-     * enabled); it never inserts a current_time event into the main queue.
-     *
-     * Dead accessor (2026-09 deep-dive): no caller anywhere in this repo today
-     * (online emitters enter via start_flow/flush_pending_starts under
-     * deferred mode). Kept unchanged from the face backend for cross-repo
-     * parity.
-     */
-    void flush_pending_starts_deferred() noexcept;
-
+    // (flush_pending_starts_deferred() removed 2026-09-28 C1: zero callers
+    // -- online emitters enter via start_flow/flush_pending_starts under
+    // deferred mode. The cross-repo parity registration it carried is
+    // superseded by this deletion; the other parity members keep theirs.)
     void mark_event_loop_started() noexcept;
     void handle_service_wakeup(uint64_t generation) noexcept;
     void handle_tail_arrival(FlowId flow_id) noexcept;
@@ -169,7 +162,7 @@ class FluidScheduler {
 
     /// Dead accessor (2026-09 deep-dive): zero callers in this repo -- the
     /// enable gate lives in the online main, which tracks the state itself;
-    /// kept unchanged from the face backend for cross-repo parity.
+    /// retained by the 2026-09-27 infra-D2 annotation-route decision.
     [[nodiscard]] bool link_observer_enabled() const noexcept;
 
     /// Bucket length actually in effect (echoed into every link record).

@@ -17,9 +17,9 @@ Terminal status semantics (explicit per path, never implied):
               generic WorkloadLayerHandlerData branch of Workload::call).
   Skipped  -- the node never executed: INVALID_NODE, metadata nodes, or a
               roofline COMP node with tensor_size == 0 (Workload::skip_invalid).
-There is no cancellation path in this codebase (grep "cancel" over
-Workload.cc / the chakra feeder finds none), so a CANCELLED status is NOT
-defined here -- per the step-1-3 acceptance rule, unconstructible statuses
+No node-terminal path in this workload layer cancels a node (cancellable
+primitives exist only for alarms and HBM transitions, never for graph
+nodes), so a CANCELLED status is NOT defined here -- per the step-1-3 acceptance rule, unconstructible statuses
 are deleted from the enum instead of being declared. Whether Skipped
 satisfies a watch is decided explicitly by the watch type (step 1-5), never
 by defaulting Skipped to Success.

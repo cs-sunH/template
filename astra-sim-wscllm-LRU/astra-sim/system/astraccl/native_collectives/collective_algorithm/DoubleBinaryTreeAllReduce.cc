@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/astraccl/native_collectives/collective_algorithm/DoubleBinaryTreeAllReduce.hh"
 
+#include <memory>
+
 #include "astra-sim/system/PacketBundle.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 
@@ -14,7 +16,6 @@ DoubleBinaryTreeAllReduce::DoubleBinaryTreeAllReduce(int id,
                                                      BinaryTree* tree,
                                                      uint64_t data_size)
     : Algorithm() {
-    this->id = id;
     this->logical_topo = tree;
     this->data_size = data_size;
     this->state = State::Begin;
@@ -36,8 +37,13 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
 
     } else if (state == State::SendingDataToParent &&
                type == BinaryTree::Type::Leaf) {  // leaf.3
+        // State should be set before sim_recv (ported from the wscllm
+        // mother repo). The message might have already arrived on the
+        // simulation side, in which case the callback would enter the same
+        // state again.
+        state = State::WaitingDataFromParent;
         // sending
-        sim_request snd_req;
+        sim_request snd_req{};
         snd_req.srcRank = stream->owner->id;
         snd_req.dstRank = parent;
         snd_req.tag = stream->stream_id;
@@ -48,15 +54,20 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
                                           Sys::FrontEndSendRecvType::COLLECTIVE,
                                           &Sys::handleEvent, nullptr);
         // receiving
-        sim_request rcv_req;
+        sim_request rcv_req{};
+        rcv_req.srcRank = (uint32_t)parent;
+        rcv_req.dstRank = (uint32_t)stream->owner->id;
         rcv_req.vnet = this->stream->current_queue_id;
-        RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived);
+        // The handler data is heap-allocated and handed to the frontend; a
+        // unique_ptr keeps it from leaking if the submission path throws
+        // before ownership transfers.
+        std::unique_ptr<RecvPacketEventHandlerData> ehd(
+            new RecvPacketEventHandlerData(stream, stream->owner->id,
+                                           EventType::PacketReceived));
         stream->owner->front_end_sim_recv(0, Sys::dummy_data, data_size, UINT8,
                                           parent, stream->stream_id, &rcv_req,
                                           Sys::FrontEndSendRecvType::COLLECTIVE,
-                                          &Sys::handleEvent, ehd);
-        state = State::WaitingDataFromParent;
+                                          &Sys::handleEvent, ehd.release());
 
     } else if (state == State::WaitingDataFromParent &&
                type == BinaryTree::Type::Leaf) {  // leaf.4
@@ -75,22 +86,28 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         // arrived on the simulation side, in which case the callback would enter
         // the same state again.
         state = State::WaitingForTwoChildData;
-        sim_request rcv_req;
+        sim_request rcv_req{};
+        rcv_req.srcRank = (uint32_t)left_child;
+        rcv_req.dstRank = (uint32_t)stream->owner->id;
         rcv_req.vnet = this->stream->current_queue_id;
-        RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived);
+        std::unique_ptr<RecvPacketEventHandlerData> ehd(
+            new RecvPacketEventHandlerData(stream, stream->owner->id,
+                                           EventType::PacketReceived));
         stream->owner->front_end_sim_recv(
             0, Sys::dummy_data, data_size, UINT8, left_child, stream->stream_id,
             &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE, &Sys::handleEvent,
-            ehd);
-        sim_request rcv_req2;
+            ehd.release());
+        sim_request rcv_req2{};
+        rcv_req2.srcRank = (uint32_t)right_child;
+        rcv_req2.dstRank = (uint32_t)stream->owner->id;
         rcv_req2.vnet = this->stream->current_queue_id;
-        RecvPacketEventHandlerData* ehd2 = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived);
+        std::unique_ptr<RecvPacketEventHandlerData> ehd2(
+            new RecvPacketEventHandlerData(stream, stream->owner->id,
+                                           EventType::PacketReceived));
         stream->owner->front_end_sim_recv(
             0, Sys::dummy_data, data_size, UINT8, right_child,
             stream->stream_id, &rcv_req2, Sys::FrontEndSendRecvType::COLLECTIVE,
-            &Sys::handleEvent, ehd2);
+            &Sys::handleEvent, ehd2.release());
 
     } else if (state == State::WaitingForTwoChildData &&
                type == BinaryTree::Type::Intermediate &&
@@ -119,7 +136,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         // the same state again.
         state = State::WaitingDataFromParent;
         // sending
-        sim_request snd_req;
+        sim_request snd_req{};
         snd_req.srcRank = stream->owner->id;
         snd_req.dstRank = parent;
         snd_req.tag = stream->stream_id;
@@ -130,14 +147,17 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
                                           Sys::FrontEndSendRecvType::COLLECTIVE,
                                           &Sys::handleEvent, nullptr);
         // receiving
-        sim_request rcv_req;
+        sim_request rcv_req{};
+        rcv_req.srcRank = (uint32_t)parent;
+        rcv_req.dstRank = (uint32_t)stream->owner->id;
         rcv_req.vnet = this->stream->current_queue_id;
-        RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived);
+        std::unique_ptr<RecvPacketEventHandlerData> ehd(
+            new RecvPacketEventHandlerData(stream, stream->owner->id,
+                                           EventType::PacketReceived));
         stream->owner->front_end_sim_recv(0, Sys::dummy_data, data_size, UINT8,
                                           parent, stream->stream_id, &rcv_req,
                                           Sys::FrontEndSendRecvType::COLLECTIVE,
-                                          &Sys::handleEvent, ehd);
+                                          &Sys::handleEvent, ehd.release());
 
     } else if (state == State::WaitingDataFromParent &&
                type == BinaryTree::Type::Intermediate &&
@@ -149,7 +169,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
 
     } else if (state == State::SendingDataToChilds &&
                type == BinaryTree::Type::Intermediate) {
-        sim_request snd_req;
+        sim_request snd_req{};
         snd_req.srcRank = stream->owner->id;
         snd_req.dstRank = left_child;
         snd_req.tag = stream->stream_id;
@@ -159,7 +179,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
             0, Sys::dummy_data, data_size, UINT8, left_child, stream->stream_id,
             &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE, &Sys::handleEvent,
             nullptr);
-        sim_request snd_req2;
+        sim_request snd_req2{};
         snd_req2.srcRank = stream->owner->id;
         snd_req2.dstRank = right_child;
         snd_req2.tag = stream->stream_id;
@@ -179,14 +199,17 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         // the same state again.
         state = State::WaitingForOneChildData;
         int only_child_id = left_child >= 0 ? left_child : right_child;
-        sim_request rcv_req;
+        sim_request rcv_req{};
+        rcv_req.srcRank = (uint32_t)only_child_id;
+        rcv_req.dstRank = (uint32_t)stream->owner->id;
         rcv_req.vnet = this->stream->current_queue_id;
-        RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived);
+        std::unique_ptr<RecvPacketEventHandlerData> ehd(
+            new RecvPacketEventHandlerData(stream, stream->owner->id,
+                                           EventType::PacketReceived));
         stream->owner->front_end_sim_recv(
             0, Sys::dummy_data, data_size, UINT8, only_child_id,
             stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,
-            &Sys::handleEvent, ehd);
+            &Sys::handleEvent, ehd.release());
 
     } else if (state == State::WaitingForOneChildData &&
                type == BinaryTree::Type::Root) {  // root.2
@@ -197,9 +220,9 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         return;
 
     } else if (state == State::SendingDataToChilds &&
-               type == BinaryTree::Type::Root) {  // root.2
+               type == BinaryTree::Type::Root) {  // root.3
         int only_child_id = left_child >= 0 ? left_child : right_child;
-        sim_request snd_req;
+        sim_request snd_req{};
         snd_req.srcRank = stream->owner->id;
         snd_req.dstRank = only_child_id;
         snd_req.tag = stream->stream_id;

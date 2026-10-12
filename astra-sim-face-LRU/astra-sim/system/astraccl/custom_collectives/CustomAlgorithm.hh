@@ -25,9 +25,10 @@ namespace AstraSim {
  * The Chakra ET representation is a file that contains the nodes of the
  * algorithm. The nodes are either COMM_SEND, COMM_RECV, or COMP.
  *
- * To use this implementation, write the "ABSOLUTE" path to the Chakra trace
- * file in the system layer input (instead of traditional `Ring`, etc.), under
- * `{all-reduce|all-to-all|all-gather}-implementation-custom`.
+ * To use this implementation, write the path to the Chakra trace file in the
+ * system layer input (instead of traditional `Ring`, etc.), under
+ * `{all-reduce|all-to-all|all-gather}-implementation-custom`. The path is
+ * resolved relative to the working directory; absolute paths also work.
  *
  * For a detailed description on using a Chakra ET based representation, refer
  * to the documentation in the public wiki.
@@ -57,8 +58,6 @@ class CustomAlgorithm : public Algorithm {
     void issue(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
     void issue_dep_free_nodes();
 
-    // Rank Id
-    int id;
     // ET Feeder for the Chakra ET for this specific communication & rank.
     // This is separate from the ET Feeder in the Workload layer, which is used
     // to traverse the whole workload Chakra ET.

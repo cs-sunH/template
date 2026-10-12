@@ -42,9 +42,6 @@ class EvictionClassPass:
 
     trigger_type: Optional[str]
 
-    def describe(self) -> str:
-        return self.trigger_type if self.trigger_type is not None else "all"
-
 
 def eviction_class_order(category_mode: str) -> tuple[EvictionClassPass, ...]:
     """返回类别遍历序（typed = human→tool 两遍；lru = 单遍全集合）。
@@ -107,17 +104,3 @@ def classify_with_fallback(
         raw_next_request_type=next_request_type,
         fallback=True,
     )
-
-
-def victim_sort_key(session):
-    """类内确定序：``(last_completion_ns, session_id)``（SH 原序）。
-
-    两模式共用同一排序键；``last_completion_ns`` 为 None 的 session 不是
-    合法 victim（未完成），调用方应先行过滤。
-    """
-    completion = session.last_completion_ns
-    if completion is None:
-        raise EvictionPriorityError(
-            f"session {session.session_id!r} has no completion time; "
-            "it is not a legal eviction victim")
-    return (int(completion), session.session_id)

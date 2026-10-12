@@ -32,16 +32,15 @@ class MemMovRequest : public Callable, public SharedBusStat {
     Callable* callable;
     bool processed;
     bool send_back;
-    Sys* sys;
     EventType callEvent = EventType::General;
     LogGP* loggp;
     std::list<MemMovRequest>::iterator pointer;
 
-    Tick total_transfer_queue_time;
-    Tick total_transfer_time;
-    Tick total_processing_queue_time;
-    Tick total_processing_time;
-    Tick start_time;
+    // (2026-10-01) the four total_* queue/transfer/processing accumulators
+    // and the start_time they were computed from are removed: LogGP was the
+    // only writer (six += sites) and nothing ever read them back -- the same
+    // write-only shape as the SharedBusStat/StreamStat accounting removed
+    // earlier.
 };
 
 }  // namespace AstraSim

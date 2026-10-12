@@ -17,15 +17,9 @@ namespace AstraSim {
 class Sys;
 class PacketBundle : public Callable {
   public:
-    // locked_packets is accepted for call-site compatibility with the
-    // astraccl algorithms but is no longer stored: it was never read here.
-    PacketBundle(Sys* sys,
-                 BaseStream* stream,
-                 std::list<MyPacket*> /*locked_packets*/,
-                 bool needs_processing,
-                 bool send_back,
-                 uint64_t size,
-                 MemBus::Transmition transmition);
+    // The locked_packets parameter the astraccl algorithms used to pass was
+    // never read here and has been removed together with the dead
+    // Ring/HalvingDoubling locked_packets storage.
     PacketBundle(Sys* sys,
                  BaseStream* stream,
                  bool needs_processing,

@@ -54,28 +54,24 @@ void AllToAll::run(EventType event, CallData* data) {
 }
 
 void AllToAll::process_max_count() {
-    if (remained_packets_per_max_count > 0) {
-        remained_packets_per_max_count--;
-    }
+    // The old max_count / remained_packets_per_max_count two-level gate was
+    // always true (the remainder counter was hard-wired to 1 and max_count
+    // had no reader), so every inserted packet releases a bundle and rotates
+    // the receiver/sender ring positions.
+    release_packets();
 
-    if (remained_packets_per_max_count == 0) {
-        max_count--;
-        release_packets();
-        remained_packets_per_max_count = 1;
-
+    curr_receiver = ((RingTopology*)logical_topo)
+                        ->get_receiver(curr_receiver, direction);
+    if (curr_receiver == id) {
         curr_receiver = ((RingTopology*)logical_topo)
                             ->get_receiver(curr_receiver, direction);
-        if (curr_receiver == id) {
-            curr_receiver = ((RingTopology*)logical_topo)
-                                ->get_receiver(curr_receiver, direction);
-        }
+    }
 
-        curr_sender =
-            ((RingTopology*)logical_topo)->get_sender(curr_sender, direction);
-        if (curr_sender == id) {
-            curr_sender = ((RingTopology*)logical_topo)
-                              ->get_sender(curr_sender, direction);
-        }
+    curr_sender =
+        ((RingTopology*)logical_topo)->get_sender(curr_sender, direction);
+    if (curr_sender == id) {
+        curr_sender = ((RingTopology*)logical_topo)
+                          ->get_sender(curr_sender, direction);
     }
 }
 

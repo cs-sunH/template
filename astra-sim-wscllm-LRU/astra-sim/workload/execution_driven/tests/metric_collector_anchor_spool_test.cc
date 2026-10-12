@@ -129,8 +129,8 @@ json make_manifest(bool with_transfer_actions) {
     request["request_id"] = "r10";
     request["session_id"] = "s0";
     request["turn_index"] = 0;
-    request["prefill_ranks"] = json::array();
-    request["decode_ranks"] = json::array();
+    request["prefill_ranks"] = json::array({1});
+    request["decode_ranks"] = json::array({1, 2, 3});
     request["arrival"] = {{"kind", "absolute"}, {"value_ns", 0}};
 
     json manifest;
@@ -139,7 +139,6 @@ json make_manifest(bool with_transfer_actions) {
     manifest["run_mode"] = "service";
     manifest["run_id"] = "metric-anchor-spool-fixture";
     manifest["requests"] = json::array({request});
-    manifest["node_events_by_rank"] = json::object();
     manifest["planner_memory_peaks"] = json::array();
     manifest["memory_actions"] = json::array();
     if (with_transfer_actions) {
@@ -329,7 +328,7 @@ void test_static_online_equivalence_and_maxima() {
 
     const std::string online_output = capture_stdout([&] {
         collector.initialize(manifest_path, "full");
-        collector.clear_static_node_events();
+        collector.enter_online_mode();
         collector.online_register_request(10, "r10", "s0", 0, true, 0, -1,
                                           0);
         record_four_anchors(collector);
@@ -367,7 +366,7 @@ void test_static_online_equivalence_and_maxima() {
     expect_anchor_payload(online_anchors);
     expect_transfer_replay(online_capacity);
     expect(static_anchors == online_anchors,
-           "static and online memory_anchor JSON records are byte-schema equivalent");
+           "static and online memory_anchor JSON records are structurally equivalent");
     expect(static_capacity == online_capacity,
            "static and online transfer replay records are exactly equivalent");
 
@@ -381,7 +380,7 @@ void test_long_timeline_storage_bound_and_reinitialize() {
 
     (void)capture_stdout([&] {
         collector.initialize(manifest_path, "summary");
-        collector.clear_static_node_events();
+        collector.enter_online_mode();
         for (uint64_t i = 1; i <= kAnchorCount; ++i) {
             AstraSim::MetricCollectorTestAccess::record_memory_anchor(
                 collector, 999, static_cast<int>(i % 8), i, i);
@@ -416,7 +415,7 @@ void test_long_timeline_storage_bound_and_reinitialize() {
                "reinitialize clears old spool record count");
         expect(!AstraSim::MetricCollectorTestAccess::finalized(collector),
                "reinitialize clears finalization state");
-        collector.clear_static_node_events();
+        collector.enter_online_mode();
         expect(AstraSim::MetricCollectorTestAccess::spool_open(collector),
                "reinitialize opens a fresh online spool");
         collector.finalize({}, 1);
@@ -461,9 +460,9 @@ void test_tmpfile_failure_is_fail_closed() {
         if (errno != EMFILE && errno != ENFILE) {
             _exit(78);
         }
-        // clear_static_node_events must try tmpfile and terminate rather than
+        // enter_online_mode must try tmpfile and terminate rather than
         // silently retain an unbounded vector when no descriptor is available.
-        collector.clear_static_node_events();
+        collector.enter_online_mode();
         _exit(EXIT_SUCCESS);
     }
     if (child >= 0) {

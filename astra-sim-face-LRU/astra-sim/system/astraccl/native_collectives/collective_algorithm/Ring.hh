@@ -41,8 +41,6 @@ class Ring : public Algorithm {
     int curr_sender;
     int nodes_in_ring;
     int stream_count;
-    int max_count;
-    int remained_packets_per_max_count;
     int remained_packets_per_message;
     int parallel_reduce;
     InjectionPolicy injection_policy;
@@ -51,7 +49,6 @@ class Ring : public Algorithm {
     long free_packets;
     long total_packets_received;
     uint64_t msg_size;
-    std::list<MyPacket*> locked_packets;
     bool processed;
     bool send_back;
     bool NPU_to_MA;

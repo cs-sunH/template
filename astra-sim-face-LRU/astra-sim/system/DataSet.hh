@@ -20,7 +20,9 @@ class CommunicatorGroup;
 class DataSet : public Callable, public StreamStat {
   public:
     DataSet(int total_streams);
-    DataSet(int total_streams, Tick creation_tick);
+    // The creation_tick storage had no reader and was removed; the two-arg
+    // signature is kept so existing call sites keep compiling.
+    DataSet(int total_streams, Tick /*creation_tick*/);
     ~DataSet();
     void set_notifier(Callable* layer, EventType event);
     /// Keep the communicator definition used to build this collective alive
@@ -36,11 +38,10 @@ class DataSet : public Callable, public StreamStat {
     int total_streams;
     int finished_streams;
     bool active;
-    Tick finish_tick;
-    Tick creation_tick;
     std::pair<Callable*, EventType>* notifier;
 
   private:
+    void fire_completion();
     std::shared_ptr<CommunicatorGroup> communicator_group_owner_;
 };
 

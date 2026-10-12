@@ -25,7 +25,6 @@ LogGP::LogGP(std::string name,
     this->prevState = State::Free;
     this->sys = sys;
     this->processing_state = ProcState::Free;
-    this->name = name;
     this->trigger_event = trigger_event;
     this->subsequent_reads = 0;
     this->THRESHOLD = 8;

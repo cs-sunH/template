@@ -26,8 +26,10 @@ BaseStream::BaseStream(int stream_id,
         }
     }
     state = StreamState::Created;
-    creation_time = Sys::boostedTick();
-    total_packets_sent = 0;
     current_queue_id = -1;
+    // The scheduler reads current_com_type before the first phase transition
+    // assigns it (insert_stream inspects queued streams' current_com_type),
+    // so it must not start out indeterminate.
+    current_com_type = ComType::None;
     priority = 0;
 }

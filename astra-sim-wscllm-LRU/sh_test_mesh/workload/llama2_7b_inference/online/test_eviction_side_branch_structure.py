@@ -396,7 +396,7 @@ class DecodeEvictionSideBranchTest(unittest.TestCase):
         self.assertTrue(self.tails)
         body = [node for node in self.nodes
                 if any(fragment in node["name"] for fragment in (
-                    "prefill_to_decode_kv", "_join_", "batch_train_i1",
+                    "prefill_to_decode_xfer", "_join_", "batch_train_i1",
                     "end_barrier"))]
         self.assertTrue(body)
         tail_ids_by_rank = {}
@@ -409,7 +409,7 @@ class DecodeEvictionSideBranchTest(unittest.TestCase):
                 & tail_ids_by_rank.get(node["rank"], set()), set(),
                 "eviction reachable from {}".format(node["name"]))
         # joiner 迁移首节点(rank 5 迁移 recv)直接挂 fork_5(主链)。
-        migration = _nodes_of(self.nodes, 5, "prefill_to_decode_kv")
+        migration = _nodes_of(self.nodes, 5, "prefill_to_decode_xfer")
         self.assertTrue(migration)
         migration_parents = _parents_of(self.edges, 5, migration[0]["id"])
         self.assertIn(self.forks[5], migration_parents)
@@ -460,7 +460,8 @@ class SideBranchHelperTest(unittest.TestCase):
         builder = GraphBatchBuilder(_make_config())
         builder.begin_batch()
         builder.emit_prefill_batch(_plan())
-        gate = 12345  # 独立 id 充当主链 armed 门桩(id 仅 per-rank 唯一)
+        gate = builder.builders[0].previous_id  # 批次1 真实节点 id 充当
+        # 主链 armed 门桩（T4 前向断言：arm 目标必须已发射；合成 id 已拒）
         builder.begin_batch()
         # 主链 armed pending(fork 点合法携带)。
         builder.builders[0].arm_dependency(gate)
@@ -483,12 +484,20 @@ class SideBranchHelperTest(unittest.TestCase):
                       _parents_of(builder.batch["parent_edges"], 0,
                                   main_id))
         self.assertEqual(builder.builders[0].pending_extra_dependencies, [])
-        # 分支节点(rank 1)不携带该门(暂存契约:不进分支)。
+        # 分支节点(rank 1)不携带该门(暂存契约:不进分支)。节点 id 为
+        # per-rank 命名空间,跨 rank 裸 id 比较有数值碰撞之虞;命名空间
+        # 诚实的等价断言 = rank 1 的 pending 未被分支泄漏污染(门只 armed
+        # 在 rank 0),且分支节点只挂本 rank frontier 父边。
+        self.assertEqual(builder.builders[1].pending_extra_dependencies,
+                         [])
         branch_node = _nodes_of(builder.batch["nodes"], 1,
                                 "branch_only_rank1")
         self.assertEqual(len(branch_node), 1)
-        self.assertNotIn(gate, _parents_of(builder.batch["parent_edges"], 1,
-                                           branch_node[0]["id"]))
+        branch_parents = _parents_of(builder.batch["parent_edges"], 1,
+                                     branch_node[0]["id"])
+        self.assertTrue(
+            all(0 <= parent < branch_node[0]["id"]
+                for parent in branch_parents))
 
     def test_side_branch_restores_chain(self):
         """正常路径:分支发射后主链 frontier 回滚到 fork 点;主链后续

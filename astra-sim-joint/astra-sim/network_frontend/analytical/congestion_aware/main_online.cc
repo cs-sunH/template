@@ -92,6 +92,8 @@ Step 1-10 (runners + IDLE fixture):
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/Sys.hh"
+#include "astra-sim/workload/DieModelAdapter.hh"
+#include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/Workload.hh"
 #include "astra-sim/workload/execution_driven/DecisionBridge.hh"
@@ -100,10 +102,14 @@ Step 1-10 (runners + IDLE fixture):
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 #include "astra-sim/workload/execution_driven/OnlineCli.hh"
 #include "astra-sim/workload/execution_driven/OnlineStatsCounters.hh"
+#include "astra-sim/workload/execution_driven/RemoteReadExecutor.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
+#include "astra-sim/workload/execution_driven/TileTransportAdapter.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
 #include "astra-sim/workload/execution_driven/WatchRegistry.hh"
+#include "astra-sim/workload/execution_driven/WorkLedgerV2Publisher.hh"
+#include "astra-sim/workload/execution_driven/WorkLedgerV2RuntimeSnapshot.hh"
 #include "common/CmdLineParser.hh"
 #include "congestion_aware/CongestionAwareNetworkApi.hh"
 #include <astra-network-analytical/common/EventQueue.h>
@@ -113,8 +119,11 @@ Step 1-10 (runners + IDLE fixture):
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 #include <sys/resource.h>
+#include <unistd.h>
 
 #include <cerrno>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -122,6 +131,7 @@ Step 1-10 (runners + IDLE fixture):
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -142,6 +152,12 @@ using namespace NetworkAnalytical;
 using namespace NetworkAnalyticalCongestionAware;
 
 namespace {
+
+struct FlowBoundCallbackReset {
+    ~FlowBoundCallbackReset() {
+        CongestionAwareNetworkApi::set_flow_bound_callback({});
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Step-1-8 decision-loop context
@@ -170,6 +186,8 @@ struct OnlineDriverContext {
     // reset) by the next ed_driver_tick_end delivery, which serializes it as
     // StateDelta.deferred_from_tick. 0 = no pending deferral.
     uint64_t deferred_from_tick = 0;
+    uint64_t last_delivery_event_count = 0;
+    uint64_t last_delivery_tick = 0;
     // Phase-3 perception feature flag (方案 §6.2 操作 1; default off until
     // phase 6): when set, the tick-end gate computes the per-rank
     // injected-unfinished ledger summary into StateDelta.injected_unfinished.
@@ -215,6 +233,18 @@ struct OnlineDriverContext {
     std::vector<uint64_t> link_telemetry_prev_bytes;
     std::vector<uint64_t> link_telemetry_prev_active_ns;
     std::vector<uint64_t> link_telemetry_prev_flow_active_ns;
+    // W1 (joint work ledger, 2026-09-29): handles for the per-delivery
+    // const active-resource frame and sparse cursor patches (all read at the
+    // tick-end static point on the simulation thread). The publisher retains
+    // only the preceding resource frame for visible state-version changes.
+    Analytical::AnalyticalRemoteMemory* work_ledger_memory_api = nullptr;
+    std::vector<Sys*>* work_ledger_systems = nullptr;
+    RemoteReadExecutor* work_ledger_remote_read_executor = nullptr;
+    TileTransportAdapter* work_ledger_pipeline_transport = nullptr;
+    // One reusable callback-ordered protocol-v4 sequencer/provider. The
+    // execution fixture installs the same component around the same runtime.
+    std::unique_ptr<ExecutionDriven::WorkLedgerV2Publisher>
+        work_ledger_publisher;
 };
 
 // The commit payload: the StateDelta + GraphBatch response of one delivery
@@ -229,6 +259,140 @@ struct CommitArg {
     GraphBatch batch;
     std::vector<std::string> completed_requests;
 };
+
+// ---------------------------------------------------------------------------
+// Additive wall-clock instrumentation (measurement only; never gates any
+// decision). Follows the OnlineStatsCounters idiom: plain cumulative
+// buckets. The three timers live file-scope because their instrumentation
+// points (the commit callback, the bridge round-trip inside the tick-end
+// gate, and the two issue_dep_free_nodes lambdas) are wired before
+// driver_ctx exists; the event loop is single-threaded (watch fires and
+// hook lambdas run on the simulation thread only).
+// ---------------------------------------------------------------------------
+struct MainWallTimers {
+    NetworkAnalytical::WallClockBucket ed_commit_cb;        // whole four-phase commit
+    NetworkAnalytical::WallClockBucket bridge_round_trip;   // deliver_and_receive
+    NetworkAnalytical::WallClockBucket issue_dep_free_nodes;  // both issue passes
+    NetworkAnalytical::WallClockBucket work_ledger_runtime_export;
+    NetworkAnalytical::WallClockBucket work_ledger_publish;
+};
+
+MainWallTimers g_main_wall;
+
+// [MainWall] heartbeat cadence anchor: the tick-end gate prints the
+// g_main_wall + sim_send buckets once per >=5s of wall time so an
+// aborted/killed run still yields them (the end-of-run dump at run end is
+// the clean-exit path only).
+std::chrono::steady_clock::time_point g_main_wall_last_report =
+    std::chrono::steady_clock::now();
+
+void print_wall_bucket(std::ostringstream& os,
+                       const char* const name,
+                       const NetworkAnalytical::WallClockBucket& bucket) {
+    const uint64_t per_call =
+        bucket.calls == 0 ? 0 : bucket.ns / bucket.calls;
+    os << ' ' << name << "=[ns=" << bucket.ns << " calls=" << bucket.calls
+       << " ns_per_call=" << per_call << ']';
+}
+
+// In the online main, both issue wrappers cover every DIE adapter call, so
+// the adapter total is nested inside MainWall's issue bucket. The subtraction
+// is only an inclusive-boundary residual, not a separately measured phase;
+// child adapter fields are nested within die_issue_ns and must not be added
+// to it. Do not assume this decomposition for static runs or direct/reentrant
+// adapter calls outside those wrappers.
+void print_die_adapter_timing(std::ostringstream& os,
+                              const uint64_t outer_issue_ns) {
+    const auto& timing = DieModelAdapter::cumulative_issue_timing();
+    const bool residual_valid = outer_issue_ns >= timing.total_issue_ns;
+    os << " die_adapter=[calls=" << timing.calls
+       << " die_issue_ns=" << timing.total_issue_ns
+       << " issue_residual_valid=" << (residual_valid ? 1 : 0)
+       << " issue_minus_die_ns=";
+    if (residual_valid) {
+        os << outer_issue_ns - timing.total_issue_ns;
+    } else {
+        os << "na";
+    }
+    os << " plan_key_calls=" << timing.plan_key_calls
+       << " plan_key_ns=" << timing.plan_key_ns
+       << " cache_get_ns=" << timing.cache_get_ns
+       << " cache_get_calls=" << timing.cache_get_calls
+       << " cache_hits=" << timing.cache_hits
+       << " cache_misses=" << timing.cache_misses
+       << " compile_ns=" << timing.compile_ns
+       << " compile_calls=" << timing.compile_calls
+       << " cache_put_ns=" << timing.cache_put_ns
+       << " cache_put_calls=" << timing.cache_put_calls
+       << " setup_ns=" << timing.setup_ns
+       << " setup_calls=" << timing.setup_calls
+       << " start_ns=" << timing.start_ns
+       << " start_calls=" << timing.start_calls << ']';
+}
+
+// Cumulative per-Workload diagnostics. These buckets are measured inside the
+// MainWall issue wrappers; report them as their own counters and do not add or
+// subtract them against the outer issue or DIE adapter totals. Synchronous
+// callbacks can trigger more issue work while a wrapper is active, so the
+// aggregates are not independent wall-clock phases. snapshot_ns currently
+// includes both the physical ready-id snapshot and virtual-endpoint capture.
+void print_workload_issue_timing(
+    std::ostringstream& os,
+    const std::vector<Sys*>* const systems,
+    const std::vector<std::shared_ptr<NodeStoreGraphSource>>* const
+        graph_sources) {
+    uint64_t snapshot_ns = 0;
+    uint64_t issue_ns = 0;
+    uint64_t snapshot_passes = 0;
+    uint64_t snapshot_full_fills = 0;
+    uint64_t snapshot_reuse_hits = 0;
+    uint64_t candidates = 0;
+    uint64_t issue_calls = 0;
+    uint64_t node_view_materializations = 0;
+    if (systems != nullptr) {
+        for (const Sys* const system : *systems) {
+            if (system == nullptr || system->workload == nullptr) {
+                continue;
+            }
+            const auto& timing = system->workload->dep_free_issue_timing();
+            snapshot_ns += timing.snapshot_ns;
+            issue_ns += timing.issue_ns;
+            snapshot_passes += timing.snapshot_passes;
+            snapshot_full_fills += timing.snapshot_full_fills;
+            snapshot_reuse_hits += timing.snapshot_reuse_hits;
+            candidates += timing.candidates;
+            issue_calls += timing.issue_calls;
+            node_view_materializations += timing.node_view_materializations;
+        }
+    }
+
+    uint64_t ready_snapshot_calls = 0;
+    uint64_t ready_snapshot_ids_copied = 0;
+    uint64_t ready_membership_queries = 0;
+    if (graph_sources != nullptr) {
+        for (const auto& source : *graph_sources) {
+            if (source == nullptr) {
+                continue;
+            }
+            const auto& stats = source->store().ready_set_stats();
+            ready_snapshot_calls += stats.snapshot_calls;
+            ready_snapshot_ids_copied += stats.snapshot_ids_copied;
+            ready_membership_queries += stats.membership_queries;
+        }
+    }
+
+    os << " workload_issue_cumulative=[snapshot_ns=" << snapshot_ns
+       << " issue_ns=" << issue_ns
+       << " snapshot_passes=" << snapshot_passes
+       << " snapshot_full_fills=" << snapshot_full_fills
+       << " snapshot_reuse_hits=" << snapshot_reuse_hits
+       << " candidates=" << candidates
+       << " issue_calls=" << issue_calls
+       << " node_view_materializations=" << node_view_materializations << ']'
+       << " node_ready_cumulative=[snapshot_calls=" << ready_snapshot_calls
+       << " snapshot_ids_copied=" << ready_snapshot_ids_copied
+       << " membership_queries=" << ready_membership_queries << ']';
+}
 
 // C6 (WP2 link telemetry, --link-telemetry): the per-decision-epoch NoC
 // link window differential, installed as the DecisionBridge's
@@ -311,6 +475,90 @@ nlohmann::json compute_link_telemetry(OnlineDriverContext& driver,
     }
     driver.link_telemetry_prev_tick = delta.tick;
     return array;
+}
+
+// ---------------------------------------------------------------------------
+// W1 (joint work ledger, 2026-09-29): each v4 delivery includes one current
+// active_resources vector, collected by traversing active fluid flows, HBM
+// jobs, and remote-memory port jobs in O(A). Deterministic canonical ordering
+// adds O(A log A) worst-case. Lifecycle, dependency, and cursor changes remain
+// sparse in node_transitions and cursor patches; there is no full NodeStore
+// node walk per delivery.
+//
+// Resource rows are sampled at the tick-end static point after integrating
+// continuous service. Resource identity is enriched through the NodeStore
+// meta index (rank, node_id -> request_id, stage, generation), while node
+// lifecycle facts and release obligations come from sparse transitions.
+// ---------------------------------------------------------------------------
+
+[[noreturn]] void online_fatal(const std::string& what);
+
+void append_work_ledger_node_transition(
+    OnlineDriverContext& driver, const std::string& kind, const int rank,
+    const uint64_t node_id, ExecutionDriven::OnlineNode node,
+    const std::vector<uint64_t>& parent_store_ids) {
+    if (driver.work_ledger_publisher == nullptr) {
+        online_fatal("protocol-v4 publisher is not initialized");
+    }
+    try {
+        if (driver.graph_sources == nullptr) {
+            throw std::runtime_error("NodeStore sources are unavailable");
+        }
+        ExecutionDriven::append_work_ledger_v2_node_transition(
+            *driver.work_ledger_publisher, *driver.graph_sources,
+            driver.work_ledger_remote_read_executor, kind, rank, node_id,
+            std::move(node), parent_store_ids, Sys::boostedTick());
+    } catch (const std::exception& error) {
+        online_fatal(error.what());
+    }
+}
+
+nlohmann::json collect_v2_active_resources(OnlineDriverContext& driver,
+                                           const uint64_t tick) {
+    if (driver.graph_sources == nullptr || driver.work_ledger_systems == nullptr ||
+        driver.work_ledger_memory_api == nullptr || driver.fluid_scheduler == nullptr ||
+        driver.work_ledger_remote_read_executor == nullptr ||
+        driver.work_ledger_pipeline_transport == nullptr) {
+        online_fatal("protocol-v4 resource publisher is not fully wired");
+    }
+    try {
+        const auto snapshot_t0 = std::chrono::steady_clock::now();
+        nlohmann::json resources =
+            ExecutionDriven::collect_work_ledger_v2_active_resources(
+            *driver.graph_sources, *driver.work_ledger_systems,
+            driver.work_ledger_memory_api, driver.fluid_scheduler,
+            driver.work_ledger_remote_read_executor,
+            driver.work_ledger_pipeline_transport, tick);
+        g_main_wall.work_ledger_runtime_export.ns += static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - snapshot_t0).count());
+        ++g_main_wall.work_ledger_runtime_export.calls;
+        return resources;
+    } catch (const std::exception& error) {
+        online_fatal(error.what());
+    }
+}
+
+nlohmann::json compute_work_ledger_v4(OnlineDriverContext& driver,
+                                      const StateDelta& delta) {
+    if (driver.work_ledger_remote_read_executor == nullptr ||
+        driver.work_ledger_publisher == nullptr) {
+        online_fatal("protocol-v4 pipeline publisher is not wired");
+    }
+    nlohmann::json cursor_patches =
+        driver.work_ledger_remote_read_executor->take_cursor_patches(
+            delta.tick);
+    nlohmann::json resources =
+        collect_v2_active_resources(driver, delta.tick);
+    const auto publish_t0 = std::chrono::steady_clock::now();
+    nlohmann::json frame = driver.work_ledger_publisher->publish(
+        delta.delivery_sequence, delta.tick, std::move(cursor_patches),
+        std::move(resources));
+    g_main_wall.work_ledger_publish.ns += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - publish_t0).count());
+    ++g_main_wall.work_ledger_publish.calls;
+    return frame;
 }
 
 [[noreturn]] void online_fatal(const std::string& what) {
@@ -399,6 +647,12 @@ static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
             break;
         }
         case TopologyBuildingBlock::Ring: {
+            // (2026-10-01 R2 审查修复) 尺寸 <=1 的环维度在后端
+            // connect_ring_dimension 中零连接——此处跳过计数，保持
+            // edge link id 复刻与后端一致（否则后续所有 id 错位）。
+            if (sizes[d] <= 1) {
+                break;
+            }
             if (sizes[d] == 2) {
                 // Radix-2 Ring consumes npus link ids (not 2*npus) and
                 // its links carry mesh boundary semantics, exactly as
@@ -594,8 +848,8 @@ static void emit_link_observer_records(
 // anchors). The batch's nodes carry request_id/stage (graph_batch_builder
 // contract); per (rank, request_id, stage) the FIRST node of the group is
 // the start anchor (issue event) and the LAST is the end anchor (complete
-// event). Transfer nodes of the KV routes (node names contain "kv" --
-// history_kv / prefill_to_decode_kv) register the memory anchor (code 7)
+// event). Transfer nodes of the KV routes (exact emission-contract legs --
+// transfer legs of the KV routes register the memory anchor (code 7)
 // on the last transfer node of each (request_id, rank): the offline
 // doc-sec.4.3 semantics (transfer-arrival memory anchor = last transfer
 // node on each target rank). Watch members supply the prefill/decode rank
@@ -760,6 +1014,9 @@ static void register_online_metrics_anchors(
 // the run BEFORE a single node/watch/alarm/ledger action enters the official
 // state (fail-closed, zero side effects; 方案 §8.2).
 void ed_commit_cb(void* arg) {
+    // instrumentation bracket: whole four-phase commit (measurement only)
+    const NetworkAnalytical::WallBracket commit_bracket(g_main_wall.ed_commit_cb);
+
     auto* commit = static_cast<CommitArg*>(arg);
     auto* driver = commit->driver;
     const GraphBatch& batch = commit->batch;
@@ -842,6 +1099,10 @@ void ed_commit_cb(void* arg) {
 
     // ---- 拼 batch 适配(2026-08-22):回收已 fire 的列车哨兵 watch ----
     driver->watch_registry->drain_fired_sentinels();
+    if (driver->work_ledger_remote_read_executor != nullptr) {
+        driver->work_ledger_remote_read_executor
+            ->notify_watch_registry_changed();
+    }
 
     // ---- Commit ack: Python's provisional ledger finalizes ----
     driver->bridge->send_commit_ack(batch.batch_id,
@@ -874,6 +1135,136 @@ void ed_delivery_wakeup(void*) {}
 // and schedule the four-phase commit as a same-tick deferred event.
 void ed_driver_tick_end(void* ctx) {
     auto* driver = static_cast<OnlineDriverContext*>(ctx);
+
+    // Instrumentation heartbeat (measurement only): one steady_clock read per
+    // tick; on a >=5s wall cadence stream the main-loop buckets that the
+    // end-of-run dump would otherwise only print on clean exits. std::cerr,
+    // matching [FluidProgress]. sim_send buckets join here because the
+    // backend heartbeat (FluidScheduler) must not include the frontend
+    // network-api header.
+    const auto main_wall_now = std::chrono::steady_clock::now();
+    if (main_wall_now - g_main_wall_last_report >= std::chrono::seconds(5)) {
+        g_main_wall_last_report = main_wall_now;
+        std::ostringstream main_wall_os;
+        main_wall_os << "[MainWall]";
+        main_wall_os << " tick=" << driver->event_queue->get_current_time()
+                     << " deliveries=" << driver->delivery_seq
+                     << " events_seen=" << driver->mailbox->event_count()
+                     << " last_delivery_tick=" << driver->last_delivery_tick
+                     << " last_delivery_events="
+                     << driver->last_delivery_event_count;
+        // These existing buckets account for completed calls only. In
+        // particular, eq_proceed includes callbacks (and bridge/commit work),
+        // so it is not an exclusive native-runtime duration. An active call
+        // has not yet added its elapsed time when this heartbeat is printed.
+        main_wall_os << " native_wall_scope=completed_calls_inclusive"
+                     << " fluid_wall_available="
+                     << (driver->fluid_scheduler != nullptr ? 1 : 0);
+        if (driver->fluid_scheduler != nullptr) {
+            const auto& fluid_wall = driver->fluid_scheduler->wall_clock_stats();
+            print_wall_bucket(main_wall_os, "fluid_flush",
+                              fluid_wall.flush_pending_starts);
+            print_wall_bucket(main_wall_os, "fluid_dirty_advance_recalc",
+                              fluid_wall.dirty_advance_recalc);
+            print_wall_bucket(main_wall_os, "fluid_service_wakeup",
+                              fluid_wall.service_wakeup);
+            print_wall_bucket(main_wall_os, "fluid_tail_arrival",
+                              fluid_wall.tail_arrival);
+            print_wall_bucket(main_wall_os, "fluid_completion_callback",
+                              fluid_wall.completion_callback);
+        }
+        print_wall_bucket(main_wall_os, "eq_proceed",
+                          EventQueue::queue_wall_stats().proceed);
+        print_wall_bucket(main_wall_os, "ed_commit_cb", g_main_wall.ed_commit_cb);
+        print_wall_bucket(main_wall_os, "bridge_round_trip",
+                          g_main_wall.bridge_round_trip);
+        print_wall_bucket(main_wall_os, "issue_dep_free_nodes",
+                          g_main_wall.issue_dep_free_nodes);
+        print_die_adapter_timing(main_wall_os,
+                                g_main_wall.issue_dep_free_nodes.ns);
+        print_workload_issue_timing(main_wall_os, driver->work_ledger_systems,
+                                    driver->graph_sources);
+        print_wall_bucket(main_wall_os, "work_ledger_runtime_export",
+                          g_main_wall.work_ledger_runtime_export);
+        print_wall_bucket(main_wall_os, "work_ledger_publish",
+                          g_main_wall.work_ledger_publish);
+        if (driver->work_ledger_remote_read_executor != nullptr) {
+            const auto& metrics =
+                driver->work_ledger_remote_read_executor->producer_metrics();
+            main_wall_os << " work_ledger_rows=[helpers="
+                         << metrics.row_helper_visits
+                         << " diagnostic_helpers="
+                         << metrics.diagnostic_row_helper_visits
+                         << " authoritative_snapshots="
+                         << metrics.authoritative_snapshot_calls
+                         << " blocked_diagnostics="
+                         << metrics.blocked_diagnostics_calls
+                         << " slot_patches=" << metrics.slot_patch_rows
+                         << " target_delta_rows="
+                         << metrics.target_delta_patch_rows
+                         << " target_claim_members="
+                         << metrics.target_claim_shard_elements
+                         << " target_consume_additions="
+                         << metrics.target_consume_added_shards
+                         << " target_delta_ops="
+                         << metrics.target_delta_operations
+                         << " target_full_row_json="
+                         << metrics.target_full_row_json_builds
+                         << " credit_patches=" << metrics.credit_patch_rows
+                         << " obligation_patches="
+                         << metrics.obligation_patch_rows
+                         << " cursor_run_patches="
+                         << metrics.cursor_run_patch_rows
+                         << " cursor_run_captures="
+                         << metrics.cursor_run_captures
+                         << " endpoint_index_candidates="
+                         << metrics.endpoint_index_candidate_examinations
+                         << " endpoint_index_blocks="
+                         << metrics.endpoint_index_blocks_examined
+                         << " endpoint_index_search_steps="
+                         << metrics.endpoint_index_block_search_steps
+                         << " endpoint_index_sort_comparisons="
+                         << metrics.endpoint_index_sort_comparisons
+                         << " endpoint_index_tree_build_ops="
+                         << metrics.endpoint_index_tree_build_operations
+                         << " current_cursor_candidates="
+                         << metrics.current_cursor_candidates_examined
+                         << " anchor_resource_queries="
+                         << metrics.anchor_resource_queries
+                         << " anchor_coordinate_rejections="
+                         << metrics.anchor_coordinate_rejections
+                         << " anchor_dynamic_preflights="
+                         << metrics.anchor_dynamic_preflights
+                         << " virtual_physical_cursor_skips="
+                         << metrics.virtual_physical_cursor_skips
+                         << " obligation_completed_count_reads="
+                         << metrics.obligation_completed_count_reads
+                         << " endpoint_index_entries="
+                         << metrics.endpoint_index_entries_built
+                         << " terminal_watch_entries="
+                         << metrics.terminal_watcher_index_entries_built
+                         << " terminal_watch_insert_steps="
+                         << metrics.terminal_watcher_index_insert_steps
+                         << " terminal_watch_query_visits="
+                         << metrics.terminal_watcher_index_query_node_visits
+                         << " terminal_watch_candidates="
+                         << metrics.terminal_watcher_index_candidate_examinations
+                         << ']';
+            main_wall_os << " sparse_capture=[ns="
+                         << metrics.resource_row_capture_ns +
+                                metrics.cursor_patch_capture_ns
+                         << " calls="
+                         << metrics.resource_row_capture_calls +
+                                metrics.cursor_patch_capture_calls
+                         << "] actual_issue=[ns=" << metrics.actual_issue_ns
+                         << " calls=" << metrics.actual_issue_calls << ']';
+        }
+        const auto& send_stats = CongestionAwareNetworkApi::send_wall_stats();
+        print_wall_bucket(main_wall_os, "sim_send_presend", send_stats.presend);
+        print_wall_bucket(main_wall_os, "sim_send_start_flow", send_stats.start_flow);
+        std::cerr << main_wall_os.str() << std::endl;
+    }
+
     if (!driver->mailbox->has_decision_work()) {
         // Step 1-11: defensive reset -- a pending deferral must never leak
         // into a later, unrelated delivery (there is no code path that
@@ -933,6 +1324,15 @@ void ed_driver_tick_end(void* ctx) {
         driver->delivery_seq++, deferred_from,
         driver->completed_facts.drain(), std::move(affected_ranks),
         std::move(injected_unfinished));
+    driver->last_delivery_event_count = delta.events.size();
+    driver->last_delivery_tick = delta.tick;
+    // W1 (joint work ledger): upgrade the snapshot handle from the v1
+    // placeholder to the work-ledger-backed handle. The official online
+    // main always installs the WorkLedgerProvider (see the wiring above),
+    // so every delivery's handle names the ledger frame the same epoch was
+    // built from; the expiry rule is unchanged (same epoch/tick only) and
+    // legacy fixtures without the provider keep the "" kind.
+    delta.snapshot_handle.kind = "work_ledger_v4";
     auto* commit = new CommitArg;
     commit->driver = driver;
     for (const auto& ev : delta.events) {
@@ -945,7 +1345,13 @@ void ed_driver_tick_end(void* ctx) {
     // tick-end callback, same-tick events MUST go through
     // schedule_event_deferred). Phase 5: the delta travels with the batch
     // (the committer validates the batch against the delta facts).
+    const auto bridge_t0 = std::chrono::steady_clock::now();
     commit->batch = driver->bridge->deliver_and_receive(delta);
+    g_main_wall.bridge_round_trip.ns += static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - bridge_t0)
+            .count());
+    ++g_main_wall.bridge_round_trip.calls;
     commit->delta = std::move(delta);
     driver->event_queue->schedule_event_deferred(ed_commit_cb, commit);
 }
@@ -965,7 +1371,16 @@ const char* service_state_name(const ServiceState state) {
         case ServiceState::FINISHED:
             return "FINISHED";
     }
-    return "UNKNOWN";
+    // Dead-code cleanup (2026-09-29): the switch is exhaustive over
+    // ServiceState, so the old trailing `return "UNKNOWN";` was unreachable
+    // and existed only to pacify -Wreturn-type -- a bogus name silently
+    // printed if the enum ever grew without this switch noticing. An
+    // out-of-enum value is a programming error: fail loud (same
+    // abort-with-diagnostic idiom as the watch fire notifier below).
+    std::cerr << "[Error] (execution_driven/online) service_state_name: "
+                 "unreachable state value"
+              << static_cast<int>(state) << std::endl;
+    std::abort();
 }
 
 // External producer thread for the IDLE fixture (合同② 线程合同: external
@@ -981,58 +1396,139 @@ const char* service_state_name(const ServiceState state) {
 // closed) exits the thread; the input stays open. The thread is detached:
 // it may be parked in the blocking FIFO open/read at run end and dies with
 // the process.
+// Raw-channel diagnostics for the FIFO reader thread (4.4 fix, same as the
+// wscllm entry): the thread is detached BY DESIGN (it may be parked in the
+// blocking FIFO open/read at run end and dies with the process), so it
+// outlives main and must not touch iostreams -- std::cout/std::cerr are
+// destroyed during static destruction after main returns, and a post-main
+// diagnostics write from this thread was undefined behavior. write(2) on
+// the process-level stderr descriptor has no such lifetime exposure.
+void fifo_reader_log(const std::string& message) {
+    const char* bytes = message.c_str();
+    size_t remaining = message.size();
+    while (remaining > 0) {
+        const ssize_t written =
+            ::write(STDERR_FILENO, bytes, remaining);
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        if (written <= 0) {
+            return;  // diagnostics are best-effort; never wedge the thread
+        }
+        bytes += written;
+        remaining -= static_cast<size_t>(written);
+    }
+}
+
 void command_fifo_reader(const std::string& path, RequestIngress& ingress,
                          ServiceCoordinator& svc) {
     std::ifstream fifo(path);
     if (!fifo.is_open()) {
-        std::cerr << "[online] command-fifo: cannot open " << path << ": "
-                  << std::strerror(errno) << std::endl;
+        fifo_reader_log("[online] command-fifo: cannot open " + path + ": " +
+                        std::strerror(errno) + "\n");
         return;
     }
     std::string line;
+    uint64_t malformed_lines = 0;
     while (std::getline(fifo, line)) {
         if (line.empty()) {
             continue;
         }
-        nlohmann::json cmd;
-        try {
-            cmd = nlohmann::json::parse(line);
-        } catch (const std::exception&) {
-            std::cerr << "[online] command-fifo: skipping malformed line: "
-                      << line << std::endl;
-            continue;
-        }
-        const std::string kind = cmd.value("kind", std::string());
+        // M6 fix (2026-09-29): the FIELD EXTRACTION lives inside the same
+        // guard as the parse -- a type-mismatched or key-incomplete but
+        // well-formed JSON line ({"kind":5}, a Submit missing turn_index
+        // for cmd.at(), a string-typed numeric field for .get<int64_t>())
+        // used to throw an nlohmann::json exception out of this thread
+        // entry function and std::terminate the whole process, breaking
+        // the "skipping malformed line" contract. Malformed lines are now
+        // skipped (and counted) exactly like unparsable ones.
         IngressCommand ic;
-        if (kind == "CloseInput") {
-            // Phase-7 §10.7: explicit close (合同② close 命令). The
-            // lifecycle audit records close_source=explicit.
-            ic.kind = IngressCommandKind::CloseInput;
-        } else if (kind == "EndOfFile") {
-            // Phase-7 §10.7: EOF terminal command (合同② EOF 命令) -- the
-            // producer declares the input naturally exhausted; distinct
-            // from an explicit close in the run-end lifecycle audit.
-            ic.kind = IngressCommandKind::EndOfFile;
-        } else if (kind == "Error") {
-            // Phase-7 §10.7: error terminal command (合同② error 命令) --
-            // fail-closed abort (进程退出非 0,不做静默降级); the drain
-            // path aborts on it.
-            ic.kind = IngressCommandKind::Error;
-        } else if (kind == "Submit") {
-            RequestEnvelope env;
-            env.session_id = cmd.value("session_id", std::string());
-            env.turn_index = cmd.value("turn_index", 0);
-            env.request_id = cmd.value("request_id", std::string());
-            env.prefill_length = cmd.value("prefill_length", uint64_t{0});
-            env.decode_length = cmd.value("decode_length", uint64_t{0});
-            env.arrival_world_ns = cmd.value("arrival_world_ns", uint64_t{0});
-            env.inter_request_interval_ns =
-                cmd.value("inter_request_interval_ns", uint64_t{0});
-            ic.kind = IngressCommandKind::Submit;
-            ic.envelope = std::move(env);
-        } else {
-            std::cerr << "[online] command-fifo: unknown command kind: "
-                      << kind << std::endl;
+        try {
+            const nlohmann::json cmd = nlohmann::json::parse(line);
+            const std::string kind = cmd.value("kind", std::string());
+            if (kind == "CloseInput") {
+                // Phase-7 §10.7: explicit close (合同② close 命令). The
+                // lifecycle audit records close_source=explicit.
+                ic.kind = IngressCommandKind::CloseInput;
+            } else if (kind == "EndOfFile") {
+                // Phase-7 §10.7: EOF terminal command (合同② EOF 命令) -- the
+                // producer declares the input naturally exhausted; distinct
+                // from an explicit close in the run-end lifecycle audit.
+                ic.kind = IngressCommandKind::EndOfFile;
+            } else if (kind == "Error") {
+                // Phase-7 §10.7: error terminal command (合同② error 命令) --
+                // fail-closed abort (进程退出非 0,不做静默降级); the drain
+                // path aborts on it.
+                ic.kind = IngressCommandKind::Error;
+            } else if (kind == "Submit") {
+                // D3 symmetric port gates (ported from the wscllm entry): the
+                // CSV reader and the Python loader both reject an out-of-int32
+                // turn_index, non-positive lengths, and ids carrying the
+                // reserved WP9 anchor token; this FIFO port failed them in
+                // silently or deep downstream. Same malformed-line channel as
+                // above: loud stderr + skip.
+                const auto fifo_session = cmd.value("session_id", std::string());
+                const auto fifo_request = cmd.value("request_id", std::string());
+                const auto& turn_val = cmd.at("turn_index");
+                int64_t turn_parsed = -1;
+                if (turn_val.is_number_integer() ||
+                    turn_val.is_number_unsigned()) {
+                    turn_parsed = turn_val.get<int64_t>();
+                }
+                const auto nonneg_u64 = [](const nlohmann::json& v,
+                                           uint64_t& out) -> bool {
+                    if (v.is_number_unsigned()) {
+                        out = v.get<uint64_t>();
+                        return true;
+                    }
+                    if (v.is_number_integer() && v.get<int64_t>() >= 0) {
+                        out = static_cast<uint64_t>(v.get<int64_t>());
+                        return true;
+                    }
+                    return false;
+                };
+                uint64_t fifo_prefill = 0, fifo_decode = 0;
+                uint64_t fifo_arrival = 0, fifo_interval = 0;
+                const bool fifo_bad =
+                    fifo_session.empty() || fifo_request.empty() ||
+                    turn_parsed < 0 || turn_parsed > 2147483647LL ||
+                    !nonneg_u64(cmd.at("prefill_length"), fifo_prefill) ||
+                    !nonneg_u64(cmd.at("decode_length"), fifo_decode) ||
+                    !nonneg_u64(cmd.at("arrival_world_ns"), fifo_arrival) ||
+                    !nonneg_u64(cmd.at("inter_request_interval_ns"),
+                                fifo_interval) ||
+                    fifo_prefill == 0 || fifo_decode == 0 ||
+                    fifo_session.find("first_token") != std::string::npos ||
+                    fifo_request.find("first_token") != std::string::npos;
+                if (fifo_bad) {
+                    fifo_reader_log("[online] command-fifo: Submit line "
+                                    "violates the envelope contract "
+                                    "(non-empty ids without the reserved "
+                                    "\"first_token\" token, turn_index in "
+                                    "[0, 2^31-1], positive lengths, "
+                                    "non-negative arrival/interval fields): " +
+                                    line + "\n");
+                    continue;
+                }
+                RequestEnvelope env;
+                env.session_id = fifo_session;
+                env.turn_index = static_cast<int>(turn_parsed);
+                env.request_id = fifo_request;
+                env.prefill_length = fifo_prefill;
+                env.decode_length = fifo_decode;
+                env.arrival_world_ns = fifo_arrival;
+                env.inter_request_interval_ns = fifo_interval;
+                ic.kind = IngressCommandKind::Submit;
+                ic.envelope = std::move(env);
+            } else {
+                fifo_reader_log("[online] command-fifo: unknown command "
+                                "kind: " + kind + "\n");
+                continue;
+            }
+        } catch (const std::exception&) {
+            ++malformed_lines;
+            fifo_reader_log("[online] command-fifo: skipping malformed line: " +
+                            line + "\n");
             continue;
         }
         // Bounded queue with backpressure: retry until accepted or the run
@@ -1040,17 +1536,62 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
         // close is dropped once the run ends.
         while (!ingress.enqueue_command(ic)) {
             if (svc.finished()) {
-                std::cerr << "[online] command-fifo: dropping command after "
-                             "input closed: "
-                          << line << std::endl;
+                fifo_reader_log("[online] command-fifo: dropping command "
+                                "after input closed: " + line + "\n");
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
-    std::cout << "[online] command-fifo: EOF (writer closed); producer "
-                 "thread exits, input stays open"
-              << std::endl;
+    fifo_reader_log("[online] command-fifo: EOF (writer closed); producer "
+                    "thread exits, input stays open (malformed lines "
+                    "skipped: " + std::to_string(malformed_lines) + ")\n");
+}
+
+// ---------------------------------------------------------------------------
+// Online-family argv strip for the shared static parser (net-frontend-E2
+// companion, ported from the wscllm entry's strip_online_family_argv)
+// ---------------------------------------------------------------------------
+
+// CmdLineParser is fail-closed on unknown options, so the online family
+// (already validated and consumed by parse_online_cli above) must be
+// stripped from argv before the shared parser re-parses only the static
+// family -- without this strip the shared parser aborts on the first
+// online token (e.g. --bridge-dir), killing every legitimate online
+// invocation during option parsing. Token ownership is judged by the
+// shared metadata tables in OnlineCli.hh (prefixes, value-taking names,
+// bare flag names): a value option without an inline "=" value consumes
+// the next token exactly the way parse_online_cli does; the joint boolean
+// flags are bare (an inline value is a hard parse error there), so they
+// never consume a following token. By the time this strip runs,
+// parse_online_cli has already fail-closed rejected the malformed shapes.
+std::vector<char*> strip_online_family_argv(int argc, char* argv[]) {
+    std::vector<char*> out;
+    if (argc <= 0) {
+        return out;
+    }
+    out.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i) {
+        const std::string token(argv[i]);
+        if (!is_online_family_token(token)) {
+            out.push_back(argv[i]);
+            continue;
+        }
+        std::string name;
+        bool has_inline_value = false;
+        const auto eq = token.find('=');
+        if (eq == std::string::npos) {
+            name = token;
+        } else {
+            name = token.substr(0, eq);
+            has_inline_value = true;
+        }
+        if (!has_inline_value && i + 1 < argc &&
+            online_family_option_takes_value(name)) {
+            ++i;
+        }
+    }
+    return out;
 }
 
 }  // namespace
@@ -1100,9 +1641,15 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Shared static options (same parser and extraction as the static main).
+    // Shared static options (same parser and extraction as the static
+    // main). The online family was already validated and consumed by
+    // parse_online_cli above, so it is stripped from argv here -- the
+    // shared parser is fail-closed on unknown options (net-frontend-E2)
+    // and would otherwise abort on the first online token.
+    auto static_argv = strip_online_family_argv(argc, argv);
     auto cmd_line_parser = CmdLineParser(argv[0]);
-    cmd_line_parser.parse(argc, argv);
+    cmd_line_parser.parse(static_cast<int>(static_argv.size()),
+                          static_argv.data());
 
     const auto workload_configuration =
         cmd_line_parser.get<std::string>("workload-configuration");
@@ -1122,6 +1669,9 @@ int main(int argc, char* argv[]) {
         cmd_line_parser.get<int>("num-queues-per-dim");
     const auto comm_scale = cmd_line_parser.get<double>("comm-scale");
     const auto injection_scale = cmd_line_parser.get<double>("injection-scale");
+    // (2026-10-01 审查清理) 删除了此处不可达的 R7-B补遗 非负检查：共享
+    // CmdLineParser 的 C3 门（见 CmdLineParser.cc）在 parse() 内已要求
+    // --injection-scale 为有限正数（更严），主入口的 >= 0 检查永不触发。
     const auto rendezvous_protocol =
         cmd_line_parser.get<bool>("rendezvous-protocol");
     const auto metrics_configuration =
@@ -1168,7 +1718,7 @@ int main(int argc, char* argv[]) {
     // contexts (post-commit issue pass). A start_flow flush scheduled at
     // current_time via schedule_event would insert a current_time EventList
     // into the main queue and trip the strict-increase assert on the next
-    // proceed() (EventQueue.cpp:33). Deferred mode routes the flush through
+    // proceed() (EventQueue.cpp proceed()). Deferred mode routes the flush through
     // schedule_event_deferred (same-tick drain). The static main never
     // enables it -- pre-extension behavior is byte-for-byte preserved.
     fluid_scheduler->set_deferred_flush_mode(true);
@@ -1323,7 +1873,12 @@ int main(int argc, char* argv[]) {
 
     // Step 1-10: lifecycle transition log (合同② 目标 5: 五态迁移日志与时间).
     // Installed BEFORE --close-input so the close-at-startup transitions
-    // (IDLE -> DRAINING -> FINISHED) are logged too. The hook prints every
+    // are logged too. M4 fix (2026-09-29): the startup close lands
+    // IDLE -> DRAINING here and defers DRAINING -> FINISHED to the first
+    // ingress drain (ServiceCoordinator::note_input_drained) -- a close
+    // with the turn-0 calendar still queued in the ingress no longer
+    // stamps FINISHED at the pre-drain vacuum, so the lifecycle log keeps
+    // printing transitions for the whole run. The hook prints every
     // IDLE/ACTIVE/DRAINING/FINISHED transition with elapsed- and wall-clock
     // timestamps; the initial state is printed explicitly (IDLE is not a
     // transition-log entry).
@@ -1410,9 +1965,47 @@ int main(int argc, char* argv[]) {
         [](void* opaque, const int rank) {
             auto* const online_workloads =
                 static_cast<std::vector<Workload*>*>(opaque);
+            const auto issue_t0 = std::chrono::steady_clock::now();
             (*online_workloads)[rank]->issue_dep_free_nodes();
+            g_main_wall.issue_dep_free_nodes.ns += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - issue_t0)
+                    .count());
+            ++g_main_wall.issue_dep_free_nodes.calls;
         },
         &workloads);
+
+    // C3: virtual endpoint callbacks return to the same coalesced deferred
+    // per-rank issue path as ordinary dependency releases. The adapter is
+    // declared before the executor so the executor is destroyed first, and
+    // both remain alive through the fully drained online loop.
+    TileTransportAdapter pipeline_transport(systems, workloads);
+    RemoteReadExecutor remote_read_executor(
+        graph_sources, workloads, &pipeline_transport,
+        [&online_hook_ctx](const int rank) {
+            online_hook_ctx.schedule_issue_pass(rank);
+        });
+    remote_read_executor.set_watch_reference_counter(
+        [&watch_registry](const auto& progressions) {
+            std::vector<WatchRegistry::MemberProgression> ranges;
+            ranges.reserve(progressions.size());
+            for (const auto& progression : progressions) {
+                ranges.push_back({progression.rank,
+                                  progression.first_store_id,
+                                  progression.count,
+                                  progression.stride});
+            }
+            return watch_registry.member_reference_count(ranges);
+        });
+    for (Workload* workload : workloads) {
+        workload->set_remote_read_executor(&remote_read_executor);
+    }
+    CongestionAwareNetworkApi::set_flow_bound_callback(
+        [&pipeline_transport](const AstraNetworkAPI::LogicalFlowKey& key,
+                             const NetworkAnalyticalCongestionAware::FlowId id) {
+            pipeline_transport.on_flow_bound(key, id);
+        });
+    const FlowBoundCallbackReset flow_bound_callback_reset;
     CompletionObserver::instance().set_hook(online_completion_hook,
                                             &online_hook_ctx);
 
@@ -1429,10 +2022,14 @@ int main(int argc, char* argv[]) {
     // happen on the simulation thread only (Workload::call), so no locking.
     std::vector<int> epoch_affected_ranks;
     watch_registry.set_fire_notifier(
-        [&mailbox, &epoch_affected_ranks](const WatchFire& fire) {
+        [&mailbox, &epoch_affected_ranks,
+         &remote_read_executor](const WatchFire& fire) {
             epoch_affected_ranks.insert(epoch_affected_ranks.end(),
                                         fire.member_ranks.begin(),
                                         fire.member_ranks.end());
+            remote_read_executor.notify_service_gate(
+                fire.request_id, fire.stage, fire.generation);
+            remote_read_executor.notify_watch_registry_changed();
         if (fire.stage == "prefill") {
             DecisionEvent ev;
             ev.reason = DecisionReason::PREFILL_DRAIN;
@@ -1474,6 +2071,46 @@ int main(int argc, char* argv[]) {
     driver_ctx.svc = &svc;
     driver_ctx.watch_registry = &watch_registry;
     driver_ctx.graph_sources = &graph_sources;
+    driver_ctx.work_ledger_remote_read_executor = &remote_read_executor;
+    driver_ctx.work_ledger_pipeline_transport = &pipeline_transport;
+    const auto ledger_epoch_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string ledger_epoch =
+        "cpp_online-" + std::to_string(::getpid()) + "-" +
+        std::to_string(ledger_epoch_ns);
+    driver_ctx.work_ledger_publisher =
+        std::make_unique<ExecutionDriven::WorkLedgerV2Publisher>(ledger_epoch);
+    remote_read_executor.set_ledger_publishers(
+        [&driver_ctx](const std::string& kind, const int rank,
+                      const uint64_t node_id,
+                      const ExecutionDriven::OnlineNode& node,
+                      const std::vector<uint64_t>& parents) {
+            append_work_ledger_node_transition(
+                driver_ctx, kind, rank, node_id, node, parents);
+        },
+        [&driver_ctx](nlohmann::json run) {
+            if (driver_ctx.work_ledger_publisher == nullptr) {
+                online_fatal("protocol-v4 publisher is not initialized");
+            }
+            driver_ctx.work_ledger_publisher->append_pipeline_transition(
+                std::move(run));
+        },
+        [&driver_ctx](nlohmann::json declaration) {
+            if (driver_ctx.work_ledger_publisher == nullptr) {
+                online_fatal("protocol-v4 publisher is not initialized");
+            }
+            driver_ctx.work_ledger_publisher->append_descriptor_commit(
+                std::move(declaration));
+        });
+    for (Workload* workload : workloads) {
+        workload->set_ledger_transition_observer(
+            [&driver_ctx](const std::string& kind,
+                          const ExecutionDriven::NodeView& node) {
+                append_work_ledger_node_transition(
+                    driver_ctx, kind, node.rank, node.global_id, node, {});
+            });
+    }
     // Phase-3 perception feature flag (default off until phase 6; the
     // --sensing-enabled token gates the injected-unfinished summary delivery
     // only -- query/audit data, never a strategy decision input).
@@ -1496,9 +2133,42 @@ int main(int argc, char* argv[]) {
     committer_ctx.num_ranks = static_cast<int>(npus_count);
     committer_ctx.graph_sources = &graph_sources;
     committer_ctx.watch_registry = &watch_registry;
+    committer_ctx.publish_node_transition =
+        [&driver_ctx](const std::string& kind, const int rank,
+                      const uint64_t node_id,
+                      const ExecutionDriven::OnlineNode& node,
+                      const std::vector<uint64_t>& parents) {
+            append_work_ledger_node_transition(
+                driver_ctx, kind, rank, node_id, node, parents);
+        };
+    committer_ctx.commit_kernel_contract =
+        [&workloads](std::shared_ptr<const
+                          ExecutionDriven::PipelineKernelContract> contract) {
+            for (Workload* workload : workloads) {
+                workload->set_pipeline_kernel_contract(contract);
+            }
+        };
+    committer_ctx.prepare_pipeline_batch =
+        [&remote_read_executor](const GraphBatch& batch,
+                                const GraphBatchCommitter& committer) {
+            return remote_read_executor.prepare_batch(batch, committer);
+        };
+    committer_ctx.commit_pipeline_batch =
+        [&remote_read_executor](std::shared_ptr<void> prepared,
+                                const GraphBatch& batch,
+                                const GraphBatchCommitter& committer) {
+            remote_read_executor.commit_batch(std::move(prepared), batch,
+                                             committer);
+        };
     committer_ctx.ingress = &ingress;
     committer_ctx.issue_rank = [&systems](int rank) {
+        const auto issue_t0 = std::chrono::steady_clock::now();
         systems[rank]->workload->issue_dep_free_nodes();
+        g_main_wall.issue_dep_free_nodes.ns += static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - issue_t0)
+                .count());
+        ++g_main_wall.issue_dep_free_nodes.calls;
     };
     // The mandatory GraphBatch liveness preflight cannot infer a collective's
     // true process-group membership from the batch itself: that declaration is
@@ -1610,6 +2280,24 @@ int main(int argc, char* argv[]) {
                           "fabricates data")
                   << ")" << std::endl;
     }
+    // W1 (joint work ledger, 2026-09-29): install the work-ledger provider
+    // UNCONDITIONALLY on the official online path. The causal ledger is a
+    // NECESSARY input of the new J formal path (方案 §4.2:168: it must not
+    // depend on an optional analytics switch happening to be on); the
+    // telemetry tier governs output volume, never the existence of the
+    // ledger channel. The provider performs const reads at the tick-end
+    // static point and the decision sequence is unchanged (query/audit
+    // channel, same argument as the sensing summary).
+    driver_ctx.work_ledger_memory_api = memory_api.get();
+    driver_ctx.work_ledger_systems = &systems;
+    bridge.set_work_ledger_provider(
+        [&driver_ctx](const StateDelta& delta) {
+            return compute_work_ledger_v4(driver_ctx, delta);
+        });
+    std::cout << "[online] work ledger: enabled (protocol v4; callback-ordered "
+                 "lifecycle, sparse cursor/resource patches; "
+                 "independent of --link-telemetry)"
+              << std::endl;
     if (online_cli.sensing_enabled) {
         std::cout << "[online] sensing: enabled (--sensing-enabled; "
                      "injected-unfinished ledger summary delivered per "
@@ -2013,6 +2701,129 @@ int main(int argc, char* argv[]) {
               << driver_ctx.stats.report() << " " << bridge.stats_report()
               << std::endl;
 
+    // Instrumentation-only wall-clock breakdown (measurement only; brackets
+    // are two steady_clock::now() calls per timed region, additive to the
+    // simulation). Per bucket: total ns, call count, ns/call.
+    {
+        const auto& sched_stats = fluid_scheduler->wall_clock_stats();
+        const auto& queue_stats = EventQueue::queue_wall_stats();
+        const auto& send_stats = CongestionAwareNetworkApi::send_wall_stats();
+        const auto& route_stats = Topology::route_cache_stats();
+        std::ostringstream wall_os;
+        wall_os << "[online] wall-clock breakdown [FinalWall]:";
+        print_wall_bucket(wall_os, "fluid_flush", sched_stats.flush_pending_starts);
+        print_wall_bucket(wall_os, "fluid_dirty_advance_recalc",
+                          sched_stats.dirty_advance_recalc);
+        print_wall_bucket(wall_os, "fluid_service_wakeup", sched_stats.service_wakeup);
+        print_wall_bucket(wall_os, "fluid_tail_arrival", sched_stats.tail_arrival);
+        print_wall_bucket(wall_os, "fluid_completion_callback",
+                          sched_stats.completion_callback);
+        wall_os << " heap_stale_pops=" << sched_stats.completion_heap_stale_pops
+                << " heap_rebuilds=" << sched_stats.rebuilds_performed
+                << '/' << sched_stats.rebuild_calls
+                << " flows_started=" << fluid_scheduler->get_total_started_flows()
+                << " flows_completed=" << fluid_scheduler->get_total_completed_flows();
+        print_wall_bucket(wall_os, "eq_proceed", queue_stats.proceed);
+        wall_os << " eq_schedule_event=" << queue_stats.schedule_event_calls
+                << " eq_schedule_cancellable="
+                << queue_stats.schedule_event_cancellable_calls
+                << " eq_cancel_event=" << queue_stats.cancel_event_calls
+                << " eq_schedule_deferred=" << queue_stats.deferred_schedule_calls;
+        print_wall_bucket(wall_os, "sim_send_presend", send_stats.presend);
+        print_wall_bucket(wall_os, "sim_send_start_flow", send_stats.start_flow);
+        print_wall_bucket(wall_os, "fluid_route", route_stats.wall);
+        wall_os << " route_cache_lookups=" << route_stats.lookups
+                << " hits=" << route_stats.hits
+                << " misses=" << route_stats.misses
+                << " wholesale_clears=" << route_stats.wholesale_clears;
+        print_wall_bucket(wall_os, "ed_commit_cb", g_main_wall.ed_commit_cb);
+        print_wall_bucket(wall_os, "bridge_round_trip", g_main_wall.bridge_round_trip);
+        print_wall_bucket(wall_os, "issue_dep_free_nodes",
+                          g_main_wall.issue_dep_free_nodes);
+        print_die_adapter_timing(wall_os,
+                                 g_main_wall.issue_dep_free_nodes.ns);
+        print_workload_issue_timing(wall_os, &systems, &graph_sources);
+        print_wall_bucket(wall_os, "work_ledger_runtime_export",
+                          g_main_wall.work_ledger_runtime_export);
+        print_wall_bucket(wall_os, "work_ledger_envelope_publish",
+                          g_main_wall.work_ledger_publish);
+        std::cout << wall_os.str() << std::endl;
+    }
+
+    // Final cumulative work-ledger producer counters are also emitted on
+    // clean exits shorter than the periodic [MainWall] heartbeat interval.
+    // Keep capture, callback-transition construction and envelope publication
+    // separate; bridge_round_trip above includes all three plus serialization
+    // and the Python response wait.
+    {
+        std::ostringstream progress_os;
+        progress_os << "[JointProgress] tick=" << Sys::boostedTick()
+                    << " deliveries=" << driver_ctx.delivery_seq
+                    << " events_seen=" << mailbox.event_count()
+                    << " last_delivery_tick="
+                    << driver_ctx.last_delivery_tick
+                    << " last_delivery_events="
+                    << driver_ctx.last_delivery_event_count;
+        uint64_t ledger_logical_events = 0;
+        if (driver_ctx.work_ledger_publisher != nullptr) {
+            ledger_logical_events =
+                driver_ctx.work_ledger_publisher->watermark();
+            progress_os << " logical_watermark=" << ledger_logical_events
+                        << " state_version="
+                        << driver_ctx.work_ledger_publisher->state_version();
+        }
+        if (driver_ctx.work_ledger_remote_read_executor != nullptr) {
+            const auto& metrics = driver_ctx.work_ledger_remote_read_executor
+                                      ->producer_metrics();
+            const uint64_t pipeline_transitions =
+                metrics.transition_publish_calls;
+            progress_os << " row_patches=[slot=" << metrics.slot_patch_rows
+                        << " target_delta="
+                        << metrics.target_delta_patch_rows
+                        << " target_claim_members="
+                        << metrics.target_claim_shard_elements
+                        << " target_consume_additions="
+                        << metrics.target_consume_added_shards
+                        << " target_delta_ops="
+                        << metrics.target_delta_operations
+                        << " target_full_row_json="
+                        << metrics.target_full_row_json_builds
+                        << " credit=" << metrics.credit_patch_rows
+                        << " obligation=" << metrics.obligation_patch_rows
+                        << " cursor_runs=" << metrics.cursor_run_patch_rows
+                        << " cursor_run_captures="
+                        << metrics.cursor_run_captures
+                        << " helpers=" << metrics.row_helper_visits
+                        << " diagnostic_helpers="
+                        << metrics.diagnostic_row_helper_visits << ']'
+                        << " ledger_events=[node="
+                        << (ledger_logical_events >= pipeline_transitions
+                                ? ledger_logical_events - pipeline_transitions
+                                : 0)
+                        << " pipeline=" << pipeline_transitions << ']'
+                        << " sparse_capture=[resource_ns="
+                        << metrics.resource_row_capture_ns
+                        << " resource_calls="
+                        << metrics.resource_row_capture_calls
+                        << " cursor_ns=" << metrics.cursor_patch_capture_ns
+                        << " cursor_calls="
+                        << metrics.cursor_patch_capture_calls
+                        << " total_ns="
+                        << metrics.resource_row_capture_ns +
+                               metrics.cursor_patch_capture_ns
+                        << " calls="
+                        << metrics.resource_row_capture_calls +
+                               metrics.cursor_patch_capture_calls << ']'
+                        << " transition_publish=[ns="
+                        << metrics.transition_publish_ns
+                        << " calls=" << metrics.transition_publish_calls
+                        << ']'
+                        << " actual_issue=[ns=" << metrics.actual_issue_ns
+                        << " calls=" << metrics.actual_issue_calls << ']';
+        }
+        std::cout << progress_os.str() << std::endl;
+    }
+
     // Phase 7 §10.4 / P0 fix (2026-08-30): calendar-reader report (rows /
     // sessions / calendar stats / io time / throughput), the late-arrival
     // clamp counters SPLIT by producer path (static-CSV Submit / external
@@ -2025,6 +2836,8 @@ int main(int argc, char* argv[]) {
               << ingress.late_arrival_count()
               << " late_static_submit="
               << ingress.late_static_submit_count()
+              << " late_static_submit_backpressure="
+              << ingress.late_static_submit_backpressure_count()
               << " late_external_stream="
               << ingress.late_external_stream_count()
               << " late_future_alarm_rounding="
@@ -2045,6 +2858,8 @@ int main(int argc, char* argv[]) {
               << arrival_summary.turn0_submitted
               << " late_static_submit="
               << arrival_summary.late_static_submit
+              << " late_static_submit_backpressure="
+              << arrival_summary.late_static_submit_backpressure
               << " late_external_stream="
               << arrival_summary.late_external_stream
               << " late_future_alarm_rounding="
@@ -2148,6 +2963,16 @@ int main(int argc, char* argv[]) {
                   << std::endl;
         gate_ok = false;
     }
+    if (!remote_read_executor.is_drained()) {
+        std::cerr << "[Error] (execution_driven/online) pipeline terminal "
+                     "audit: descriptors="
+                  << remote_read_executor.active_descriptor_count()
+                  << " unfinished_cursors="
+                  << remote_read_executor.active_cursor_count()
+                  << " active_transfers=" << pipeline_transport.active_count()
+                  << std::endl;
+        gate_ok = false;
+    }
     // Phase 5 (方案 §8.3) gates: every delivery produced exactly one
     // committed batch (all runs), and NO single-node batch ever bridged on
     // the OFFICIAL path (CSV-driven runs, expected_requests > 0). The
@@ -2176,6 +3001,16 @@ int main(int argc, char* argv[]) {
     }
     if (!gate_ok) {
         print_total_wall_time();
+        // R1-A-EX port (2026-09-30): release the owned stacks before the
+        // failure exit instead of leaking them, in the same order as the
+        // normal path (§3.4: the remote backend settles and dies while
+        // every host Sys is alive; only then are the Sys objects deleted).
+        memory_api->shutdown();
+        memory_api.reset();
+        for (auto it : systems) {
+            delete it;
+        }
+        systems.clear();
         // The "main" logger is async: shutdown drains its queue so the
         // wall-time line lands before this failure exit terminates the
         // process (the normal path relies on the shutdown below).

@@ -11,8 +11,9 @@ fully-drained ACTIVE returns to IDLE while the input stays open (合同②
 
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 
-#include <cassert>
 #include <cmath>
+#include <cstdlib>
+#include <iostream>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -27,7 +28,16 @@ void ServiceCoordinator::on_command_accepted() {
 
 void ServiceCoordinator::on_request_arrived() {
     std::lock_guard<std::mutex> lock(mtx_);
-    assert(pending_alarm_count_ > 0);
+    // Fail-closed like NodeStore's counter guards: under NDEBUG a bare assert
+    // would vanish and the uint64_t counter would wrap, desynchronizing the
+    // ACTIVE/IDLE lifecycle with no diagnostic.
+    if (pending_alarm_count_ == 0) {
+        std::cerr << "[Error] (execution_driven/service_coordinator) "
+                     "on_request_arrived: pending_alarm_count underflow "
+                     "(fail-closed)"
+                  << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
     --pending_alarm_count_;
     ++active_request_count_;
     if (state_ == ServiceState::IDLE) {
@@ -37,7 +47,13 @@ void ServiceCoordinator::on_request_arrived() {
 
 void ServiceCoordinator::on_request_completed() {
     std::lock_guard<std::mutex> lock(mtx_);
-    assert(active_request_count_ > 0);
+    if (active_request_count_ == 0) {
+        std::cerr << "[Error] (execution_driven/service_coordinator) "
+                     "on_request_completed: active_request_count underflow "
+                     "(fail-closed)"
+                  << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
     --active_request_count_;
     ++completed_request_count_;
     maybe_finish();
@@ -54,6 +70,13 @@ void ServiceCoordinator::mark_input_closed(const InputCloseReason reason) {
     // (the hook below may read it back on the same thread only via the
     // state queries; the audit queries input_close_reason()/input_closed()
     // after the run).
+    // First close wins (2026-09-30): the audit field records WHICH terminal
+    // command closed the input; a second close (e.g. the CLI --close-input
+    // followed by the FIFO's EndOfFile drain) must not rewrite the recorded
+    // source. Everything below is idempotent for an already-closed input.
+    if (!input_open_) {
+        return;
+    }
     input_close_reason_ = reason;
     input_open_ = false;
     if (state_ == ServiceState::IDLE) {
@@ -62,9 +85,28 @@ void ServiceCoordinator::mark_input_closed(const InputCloseReason reason) {
     } else if (state_ == ServiceState::ACTIVE) {
         set_state(ServiceState::DRAINING);
     }
-    maybe_finish();
+    // M4 fix (2026-09-30, mirrored from the joint repo): do NOT evaluate
+    // maybe_finish() here. At a producer-linearized close the bounded
+    // ingress queue routinely holds every Submit (the --close-input startup
+    // path queues the whole turn-0 calendar before the first drain), so all
+    // three counters are still zero and the old immediate evaluation
+    // stamped FINISHED for a service that had not even accepted its first
+    // request -- the state_ label then sat at FINISHED for the whole run
+    // and the lifecycle transition log went silent. The FINISHED evaluation
+    // moves to note_input_drained(), called by the ingress drain once the
+    // closed queue is empty.
+    finish_after_drain_ = true;
     wakeup_pending_ = true;
     work_cv_.notify_one();
+}
+
+void ServiceCoordinator::note_input_drained() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (input_open_ || !finish_after_drain_) {
+        return;  // input still open, or nothing deferred (already drained)
+    }
+    finish_after_drain_ = false;
+    maybe_finish();
 }
 
 InputCloseReason ServiceCoordinator::input_close_reason() const {
@@ -108,9 +150,26 @@ bool ServiceCoordinator::checked_wait_deadline(
     if (!std::isfinite(timeout_s) || timeout_s <= 0.0) {
         return false;
     }
-    const double duration_max_count = static_cast<double>(
-        std::chrono::steady_clock::duration::max().count());
-    if (timeout_s > duration_max_count) {
+    // M1-1 (2026-09-26, unit-corrected): step 2 must compare SECONDS
+    // against the tick-domain ceiling -- the maximum steady_clock::duration
+    // CONVERTED to seconds. The original guard compared timeout_s against
+    // duration::max().count(), a raw tick count (~9.22e18 on the ns-based
+    // steady_clock): a 1e9x unit mismatch that let every 9.3e9..9.2e18 s
+    // input through the guard into the overflowed float->int conversion
+    // below (UB; the fixture's expected false came from the saturated
+    // negative cast, not from this check). The ceiling is derived from the
+    // duration's own period, so it stays correct at any clock granularity
+    // (~9.22e9 s on the ns steady_clock). Comparing >= the ceiling leaves
+    // headroom for the double rounding of the seconds->ticks multiply
+    // below (the cast truncates, so anything strictly under the ceiling
+    // converts to a representable tick count).
+    using Duration = std::chrono::steady_clock::duration;
+    constexpr double kTickPeriodS =
+        static_cast<double>(Duration::period::num) /
+        static_cast<double>(Duration::period::den);
+    const double tick_domain_max_s =
+        static_cast<double>(Duration::max().count()) * kTickPeriodS;
+    if (timeout_s >= tick_domain_max_s) {
         return false;  // could not be represented as a duration at all
     }
     const std::chrono::steady_clock::duration timeout =
@@ -157,16 +216,6 @@ void ServiceCoordinator::signal_work() {
     work_cv_.notify_one();
 }
 
-std::vector<ServiceState> ServiceCoordinator::transition_log() const {
-    std::lock_guard<std::mutex> lock(mtx_);
-    return transition_log_;
-}
-
-uint64_t ServiceCoordinator::transition_log_dropped() const {
-    std::lock_guard<std::mutex> lock(mtx_);
-    return transition_log_dropped_;
-}
-
 void ServiceCoordinator::set_transition_hook(StateTransitionHook hook) {
     std::lock_guard<std::mutex> lock(mtx_);
     transition_hook_ = std::move(hook);
@@ -196,11 +245,6 @@ void ServiceCoordinator::set_state(const ServiceState next) {
     // caller holds mtx_
     const ServiceState prev = state_;
     state_ = next;
-    if (transition_log_.size() < kTransitionLogCapacity) {
-        transition_log_.push_back(next);
-    } else {
-        ++transition_log_dropped_;
-    }
     if (transition_hook_) {
         // Contract: the hook must not call back into the coordinator (it is
         // invoked with mtx_ held); the online entry uses it to print the
@@ -221,12 +265,11 @@ void ServiceCoordinator::maybe_finish() {
         return;
     }
     // Step 1-10 (合同② 目标 5 五态迁移): the input is still open and every
-    // accepted/active request has drained (active==0, no pending alarm or
-    // fence) -- the service returns to IDLE and keeps waiting for the next
-    // external injection (IDLE --ACTIVE--> ... --complete--> IDLE). The
-    // official runners close the input at startup, so this branch is
-    // unreachable there (input_open_ is false); it is the IDLE fixture's
-    // contract.
+    // accepted/active request has drained (active==0, no pending alarm --
+    // the class tracks no fence count; the general fence was deliberately
+    // not built, 步骤 1-5 note) -- the service returns to IDLE and keeps
+    // waiting for the next submission (a later Submit re-activates it via
+    // on_command_accepted / on_request_arrived).
     if (input_open_ && active_request_count_ == 0 &&
         pending_alarm_count_ == 0 && state_ == ServiceState::ACTIVE) {
         set_state(ServiceState::IDLE);

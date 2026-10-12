@@ -9,23 +9,17 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/CommunicatorGroup.hh"
 #include "astra-sim/system/IntData.hh"
-#include "astra-sim/system/Sys.hh"
 
 using namespace AstraSim;
 
 int DataSet::id_auto_increment = 0;
 
-DataSet::DataSet(int total_streams)
-    : DataSet(total_streams, Sys::boostedTick()) {}
-
-DataSet::DataSet(int total_streams, Tick creation_tick) {
+DataSet::DataSet(int total_streams) {
     this->my_id = id_auto_increment++;
     this->total_streams = total_streams;
     this->finished_streams = 0;
     this->finished = false;
-    this->finish_tick = 0;
     this->active = true;
-    this->creation_tick = creation_tick;
     this->notifier = nullptr;
 }
 
@@ -37,6 +31,31 @@ void DataSet::set_notifier(Callable* callable, EventType event) {
     // Broadcast used to set the notifier twice, leaking the first pair.
     delete notifier;
     notifier = new std::pair<Callable*, EventType>(callable, event);
+    if (total_streams == 0 && !finished) {
+        // Zero-stream DataSet (a zero-byte non-custom collective generates
+        // no stream, so notify_stream_finished can never fire -- the same
+        // hang mode the custom-collective path guards against in
+        // Sys::generate_collective). Nothing will ever complete it, so
+        // complete it here and deliver the notification below instead of
+        // leaving the workload waiting for CollectiveCommunicationFinished
+        // forever.
+        finished = true;
+    }
+    if (finished) {
+        // Completion already happened before the notifier was registered:
+        // fire immediately (same delivery as notify_stream_finished).
+        Callable* c = notifier->first;
+        EventType ev = notifier->second;
+        delete notifier;
+        notifier = nullptr;
+        IntData* int_data = new IntData(my_id);
+        c->call(ev, int_data);
+        delete int_data;
+    }
+}
+
+void DataSet::call(EventType event, CallData* data) {
+    notify_stream_finished(((StreamStat*)data));
 }
 
 void DataSet::retain_communicator_group(
@@ -45,27 +64,21 @@ void DataSet::retain_communicator_group(
 }
 
 void DataSet::notify_stream_finished(StreamStat* data) {
+    // data is only a type tag for the notification; the per-stream stat
+    // accumulation it used to feed was write-only end to end and was
+    // removed (see StreamStat.hh).
+    (void)data;
     finished_streams++;
-    if (data != nullptr) {
-        update_stream_stats(data);
-    }
     if (finished_streams == total_streams) {
         finished = true;
-        finish_tick = Sys::boostedTick();
         if (notifier != nullptr) {
-            take_stream_stats_average();
             Callable* c = notifier->first;
             EventType ev = notifier->second;
             delete notifier;
             notifier = nullptr;
             IntData* int_data = new IntData(my_id);
-            int_data->execution_time = finish_tick - creation_tick;
             c->call(ev, int_data);
             delete int_data;
         }
     }
-}
-
-void DataSet::call(EventType event, CallData* data) {
-    notify_stream_finished(((StreamStat*)data));
 }

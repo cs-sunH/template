@@ -175,7 +175,6 @@ const char* kSystemJson = R"({
   "collective-optimization": "localBWAware",
   "roofline-enabled": 1,
   "replay-only": 0,
-  "track-local-mem": 0,
   "trace-enabled": 0,
   "hbm-bandwidth-contention": 0,
   "hbm-kv-restore-bandwidth-sharing": 0,

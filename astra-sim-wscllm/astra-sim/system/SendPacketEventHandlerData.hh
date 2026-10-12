@@ -15,11 +15,9 @@ namespace AstraSim {
 
 class SendPacketEventHandlerData : public BasicEventHandlerData {
   public:
-    int tag;
     Callable* callable;
     WorkloadLayerHandlerData* wlhd;
     SendPacketEventHandlerData();
-    SendPacketEventHandlerData(Callable* callable, int tag);
 };
 
 }  // namespace AstraSim

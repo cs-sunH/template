@@ -34,17 +34,8 @@ namespace {
 // ---- typed getters (strict; the old .value(key, default) silently
 // defaulted absent keys and let type mismatches explode downstream) ----
 
-const nlohmann::json& field(const nlohmann::json& obj, const char* key,
-                            const std::string& where) {
-    const auto it = obj.find(key);
-    if (it == obj.end()) {
-        fail(where + ": missing field \"" + key + "\"");
-    }
-    return *it;
-}
-
 // Unsigned integer: rejects floats (incl. >UINT64 integer literals, which
-// nlohmann stores as double -- rule O6), negative values, bools and strings.
+// nlohmann stores as double), negative values, bools and strings.
 uint64_t get_uint(const nlohmann::json& value, const std::string& key,
                   const std::string& where) {
     if (!value.is_number_integer()) {
@@ -141,9 +132,6 @@ void check_rank_domain(const int rank, const int num_ranks,
     }
 }
 
-constexpr uint64_t kUint32Max =
-    static_cast<uint64_t>(std::numeric_limits<uint32_t>::max());
-
 ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
                       int num_ranks) {
     const std::string where =
@@ -214,14 +202,18 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
     }
 
     // N12: compute -- required {num_ops, tensor_size, runtime_ns}; optional
-    // {remote_weight_bytes, hbm_access_mode}.
+    // {remote_weight_bytes, hbm_access_mode, op_role, die_op_spec}. The two
+    // die keys (stage B, contract §2) carry the dispatch role of the COMP
+    // node and, for die-backend real compute ops, the strictly parsed
+    // DieOpSpec (die_op_spec present ⇒ runtime_ns == 0, enforced here).
     const nlohmann::json& compute = node_json["compute"];
     if (!compute.is_object()) {
         fail(where + ": compute is not an object");
     }
     check_key_set(compute,
                   {"num_ops", "tensor_size", "runtime_ns",
-                   "remote_weight_bytes", "hbm_access_mode"},
+                   "remote_weight_bytes", "hbm_access_mode", "op_role",
+                   "die_op_spec"},
                   {"num_ops", "tensor_size", "runtime_ns"},
                   where + ".compute");
     node.compute.num_ops = get_uint(compute["num_ops"], "num_ops",
@@ -235,6 +227,40 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
         node.compute.remote_weight_bytes =
             get_uint(compute["remote_weight_bytes"], "remote_weight_bytes",
                      where + ".compute");
+    }
+    if (compute.contains("op_role")) {
+        const std::string op_role =
+            get_string(compute["op_role"], "op_role", where + ".compute");
+        if (op_role == "compute") {
+            node.compute.op_role = OpRole::Compute;
+        } else if (op_role == "control_marker") {
+            node.compute.op_role = OpRole::ControlMarker;
+        } else {
+            fail(where + ": compute.op_role \"" + op_role +
+                 "\" is not one of compute|control_marker");
+        }
+    }
+    if (compute.contains("die_op_spec")) {
+        // Contract §2 conflict rule: a die-spec node must not carry a
+        // calibrated runtime (a non-zero runtime_ns would silently bypass
+        // the die execution and must fail closed at parse time, not at
+        // issue time).
+        if (node.compute.runtime_ns != 0) {
+            fail(where + ": compute.die_op_spec requires runtime_ns == 0 "
+                        "(die nodes execute the compiled plan, never a "
+                        "calibrated runtime)");
+        }
+        const nlohmann::json& spec_json = compute["die_op_spec"];
+        if (!spec_json.is_object()) {
+            fail(where + ": compute.die_op_spec is not an object");
+        }
+        try {
+            node.compute.die_spec = DieModel::parse_die_op_spec(spec_json);
+        } catch (const ParseError&) {
+            throw;
+        } catch (const std::exception& e) {
+            fail(where + ": compute.die_op_spec rejected: " + e.what());
+        }
     }
     if (compute.contains("hbm_access_mode")) {
         // sh_2.0 adaptation: the OnlineNode carries the N-way HBM contention
@@ -255,8 +281,30 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
     node.comm.src = get_int(comm["src"], "src", where + ".comm");
     node.comm.dst = get_int(comm["dst"], "dst", where + ".comm");
     const uint64_t tag = get_uint(comm["tag"], "tag", where + ".comm");
-    if (tag > kUint32Max) {
+    // Tightened (2026-10-01) from the old UINT32_MAX bound: Sys::
+    // front_end_sim_send/recv take the tag as `int`, so a tag in
+    // [2^31, 2^32) would truncate to a negative int and silently alias in
+    // the NATIVE tag folding / CallbackTracker key space. INT_MAX is the
+    // largest value representable end-to-end without changing the Sys
+    // signatures.
+    if (tag > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
         fail(where + ": comm tag out of range: " + std::to_string(tag));
+    }
+    // NATIVE 窗口天花板守卫（2026-10-01 补齐，boundary-E1 的解析层落点）：
+    // Sys 对 NATIVE tag 无条件 %5e8 折叠——一个落在 [5e8, 2^31) 的 tag
+    // 会在 Sys 内静默折进另一条流的 tag 空间（跨流完成事件串扰、计时
+    // 静默错乱），必须在解析边界 fail-closed，而不是放行进 Sys。合法
+    // tag 全部 < 5e8：stage-tag 段（queue_index*10000+category+rank，
+    // _stage_tag 越界守卫保证 ≤9999 行队列时 < 1e8）与
+    // TransferTagAllocator 分配器段（[1e8, 5e8) 半开、take() 越界即
+    // OverflowError）。
+    if (tag >= 500000000ULL) {
+        fail(where + ": comm tag " + std::to_string(tag) +
+             " is at or beyond the NATIVE front-end window ceiling "
+             "(500000000) -- Sys folds every NATIVE tag modulo 5e8, so a "
+             "tag at or beyond the ceiling would silently alias another "
+             "stream; stage tags must stay in queue_index*10000+category"
+             "+rank and allocator tags in the TransferTagAllocator segment");
     }
     node.comm.tag = static_cast<uint32_t>(tag);
     if (comm.contains("hbm_charge")) {
@@ -282,7 +330,14 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
     node.coll.bytes = get_uint(coll["bytes"], "bytes", where + ".coll");
     const uint64_t priority =
         get_uint(coll["priority"], "priority", where + ".coll");
-    if (priority > kUint32Max) {
+    // Tightened (2026-10-01) from the old UINT32_MAX bound, same family as
+    // the tag rule above: the priority rides Sys::generate_* ->
+    // get_priority(int) as an `int` end-to-end (Workload::issue_coll_comm
+    // passes the uint32 NodeView field straight into the `int
+    // explicit_priority` parameter), so a priority in [2^31, 2^32) would
+    // turn negative under EXPLICIT scheduling. INT_MAX is the largest value
+    // representable end-to-end without changing the Sys signatures.
+    if (priority > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
         fail(where + ": coll priority out of range: " +
              std::to_string(priority));
     }
@@ -354,32 +409,44 @@ ParsedWatch parse_watch(const nlohmann::json& watch_json, size_t index,
              " does not match stage " + watch.stage);
     }
 
-    // W3: members -- non-empty object; keys are decimal rank strings
-    // (std::stoi + no trailing characters, the pre-C1 rule exactly), values
-    // are non-negative integer json ids. Insertion order == JSON object key
-    // order == the producer's ascending rank-string order.
+    // W3: members -- non-empty object; keys are CANONICAL decimal rank
+    // strings (ASCII digits only, no sign/whitespace, no leading zeros --
+    // the exact std::to_string(rank) shape the Python producer emits) and
+    // values are non-negative integer json ids. Insertion order == JSON
+    // object key order == the producer's rank-string order. (2026-09-29:
+    // the old std::stoi + trailing-characters check was advertised as "the
+    // pre-C1 rule exactly" but stoi's own laxness accepted " 5" (leading
+    // whitespace), "+5" and "007" -- key shapes no producer writes; every
+    // non-canonical shape fails closed now under the same "unparsable
+    // member rank" message.)
     const nlohmann::json& members = watch_json["members"];
     if (!members.is_object() || members.empty()) {
         fail(where + ": empty/absent members");
     }
     watch.members.reserve(members.size());
     for (const auto& entry : members.items()) {
+        const std::string& key = entry.key();
+        bool canonical = !key.empty() && (key[0] != '0' || key.size() == 1);
+        for (size_t c = 0; canonical && c < key.size(); ++c) {
+            canonical = key[c] >= '0' && key[c] <= '9';
+        }
+        if (!canonical) {
+            fail(where + ": unparsable member rank: " + key);
+        }
         int rank = 0;
         try {
-            size_t parsed_chars = 0;
-            rank = std::stoi(entry.key(), &parsed_chars);
-            if (parsed_chars != entry.key().size()) {
-                fail(where + ": unparsable member rank: " + entry.key());
-            }
+            // Canonical digits only, so stoi cannot misread a shape; the
+            // catch stays for a digit run beyond the int range.
+            rank = std::stoi(key);
         } catch (const ParseError&) {
             throw;
         } catch (const std::exception&) {
-            fail(where + ": unparsable member rank: " + entry.key());
+            fail(where + ": unparsable member rank: " + key);
         }
         check_rank_domain(rank, num_ranks, where);
         watch.members.push_back(
             ParsedWatchMember{rank,
-                              get_uint(entry.value(), "members[" + entry.key() +
+                              get_uint(entry.value(), "members[" + key +
                                                           "]",
                                        where)});
     }

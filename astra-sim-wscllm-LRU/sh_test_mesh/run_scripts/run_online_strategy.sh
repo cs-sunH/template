@@ -2,7 +2,7 @@
 # wscllm phase-1 step-1-10 官方在线 runner:strategy 模式(真实策略,实时物理)。
 # Usage: bash run_online_strategy.sh <run_dir> <request_csv>
 # request-neutral(裸仓库):仓库不预置输入队列;request_csv 由调用方按
-# traces/derive_20_first_30_seconds.py 物化后必填传入(缺失即 fail-closed)。
+# sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py 物化后必填传入(缺失即 fail-closed)。
 # 流程(C++ 先起建桥,Python 服务后起,等退出码,
 # 收日志,[METRIC] 行经 run_metrics_postprocess.sh 后处理)。
 set -euo pipefail
@@ -10,11 +10,54 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 
-RUN_DIR=$1
-REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
+RUN_DIR=${1:?"usage: bash run_online_strategy.sh <run_dir> <request_csv>"}
+# infra-E3：RUN_DIR 规范化为绝对路径——本脚本启动 Python 服务前会 cd 进
+# workload 目录且不回退，相对路径 RUN_DIR 在 cd 后会解析到 workload 目录下的
+# 另一位置（bridge FIFO、cpp/python 日志与全部后处理产物随之错位）。
+RUN_DIR=$(realpath -m "${RUN_DIR}")
+# infra-F1：RUN_DIR 完全来自调用方 $1，realpath -m 不校验危险性——下方
+# rm -rf 前拒绝顶级系统目录、$HOME、仓根及其祖先、以及仓内路径（campaign
+# run_dir 的正当落点在仓外 ../runs/）。
+case ":/bin:/boot:/dev:/etc:/home:/lib:/lib32:/lib64:/media:/mnt:/opt:/proc:/root:/run:/sbin:/srv:/sys:/tmp:/usr:/var:" in
+  *:"${RUN_DIR}":*)
+    echo "[runner] refusing dangerous RUN_DIR: ${RUN_DIR}" >&2
+    exit 1
+    ;;
+esac
+if [[ -z "${RUN_DIR}" || "${RUN_DIR}" == "/" || "${RUN_DIR}" == "${HOME}" \
+      || "${PROJECT}" == "${RUN_DIR}" || "${PROJECT}" == "${RUN_DIR}/"* \
+      || "${RUN_DIR}" == "${PROJECT}"/* ]]; then
+  echo "[runner] refusing dangerous RUN_DIR: ${RUN_DIR}" >&2
+  exit 1
+fi
+REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
+# R3-1(2026-09-30):绝对化,使下方 D2 同一性闸与 C++ 侧 --request-queue-csv
+# 在任何调用 CWD 下解析到同一文件(旧形态透传原始串,相对路径在 cd 后错位)。
+REQUEST_CSV=$(realpath -m "${REQUEST_CSV}")
+
+# D2 双源同一性闸(2026-09-30 审查):C++ 侧吃本 runner 第二参
+# (--request-queue-csv),Python 侧经 trace_config.csv 的 request_queue_csv
+# 指针产出 manifest(h_hist/h_pre/h_fin/interval 均由其派生)——同一事实
+# 的两份拷贝无交叉校验时,id 相交而内容不同会静默分叉(到达时刻取 C++
+# 文件、派生量取 Python manifest,SLO e2e 的到达模型互相矛盾)。此处
+# 用仓内 loader 解析指针,归一化后与实参不同路径即 fail-closed。
+# R2-5(2026-09-30):if ! 形态——set -e 下"先赋值后查 $?"的旧形态会在命令
+# 替换失败时直接退出,丢失定制报错(退出码仍 1,fail-closed 不破)。
+if ! PY_CSV_PTR=$(cd "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference" && python3 -c '
+import sys
+sys.path.insert(0, ".")
+from generate_wsc_llm_trace import load_wsc_llm_trace_config
+print(load_wsc_llm_trace_config().request_queue_csv.resolve())'); then
+  echo "[runner] cannot resolve trace_config.csv request_queue_csv pointer (loader fail-closed; loader error printed above)" >&2
+  exit 1
+fi
+if [[ "$(realpath -m "${REQUEST_CSV}")" != "$(realpath -m "${PY_CSV_PTR}")" ]]; then
+  echo "[runner] request csv dual-source mismatch: argv=${REQUEST_CSV} vs trace_config.csv=${PY_CSV_PTR} — same fact must come from one file (fail-closed)" >&2
+  exit 1
+fi
 
 # ET 基线目录 = GEN_MATCH 动态解析(四仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
-# 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
+# 输入由 sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_wsc_llm_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
   echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after the traces/ materializer; its stdout is the authoritative provenance record), found: ${GEN_MATCH[*]}" >&2
@@ -22,7 +65,43 @@ if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
 fi
 ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_wsc_llm_inference"
-RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
+# RC = runtime_config 目录动态解析（sync-py-E11，2026-09-30 face-LRU 同款
+# 移植，原为硬编码目录名）：目录名由配置装载器生成为 "<hardware slug>__<
+# capacity_profile>__<remote-memory 标签>"（generate_wsc_llm_trace ->
+# config_resolver.materialize_runtime_configs；本仓 hardware json 的
+# remote-memory.npu-selection=mesh-boundary → 标签恒 edge_remote_memory_
+# pool）。capacity_profile 权威同源 = trace_config.csv 的 config,local_
+# hbm_capacity_profile 行（物化即按它落目录名，与 generate_wsc_llm_trace
+# 消费同一文件）。按该 profile 过滤 generated/runtime_config/ 并要求恰好
+# 一个（与上方 GEN_MATCH 的 exactly-one 口径一致），缺失/歧义 fail-closed
+# ——旧 profile 残留时硬编码名会静默加载错误容量档。
+RC_PROFILE=$(python3 -c '
+import csv, sys
+path = sys.argv[1]
+with open(path, newline="", encoding="utf-8-sig") as source:
+    rows = list(csv.reader(source))
+hits = [row[2].strip() for row in rows
+        if len(row) >= 3 and row[0].strip() == "config"
+        and row[1].strip() == "local_hbm_capacity_profile"]
+if len(hits) != 1 or not hits[0]:
+    sys.exit("expected exactly one config,local_hbm_capacity_profile row in %s" % path)
+print(hits[0])
+' "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv") || {
+  echo "[runner] FAIL: cannot read local_hbm_capacity_profile from trace_config.csv (sync-py-E11)" >&2
+  exit 1
+}
+RC_MATCH=("${PROJECT}"/sh_test_mesh/generated/runtime_config/*__"${RC_PROFILE}"__edge_remote_memory_pool)
+# RC 显式存在性闸(对齐上方 GEN_MATCH 闸;2026-09-26 引入,sync-py-E11 起含
+# 四小件校验):runtime_config 四小件由 plan_materializer.py 经
+# config_resolver 物化于 generated/runtime_config/(裸仓还原会删
+# generated/)——缺失/歧义即在此报错,不等 C++ 打开 system.json 才失败。
+if [[ ${#RC_MATCH[@]} -ne 1 || ! -f "${RC_MATCH[0]}/system.json" \
+      || ! -f "${RC_MATCH[0]}/network.yml" || ! -f "${RC_MATCH[0]}/comm_group.json" \
+      || ! -f "${RC_MATCH[0]}/remote_memory.json" ]]; then
+  echo "[runner] FAIL: expected exactly one runtime_config dir for capacity_profile '${RC_PROFILE}' carrying system.json/network.yml/comm_group.json/remote_memory.json (re-run plan_materializer.py), found: ${RC_MATCH[*]}" >&2
+  exit 1
+fi
+RC=${RC_MATCH[0]}
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 
 # 桥侧看门狗（2026-08-22 引入；P0-2 2026-08-31 常态化+定位修正）：向 C++ 桥传
@@ -92,6 +171,16 @@ cp "${ET_DIR}/metrics_manifest.json" "${RUN_DIR}/metrics_manifest.json"
 if [ -f "${ET_DIR}/manifest.json" ]; then
   cp "${ET_DIR}/manifest.json" "${RUN_DIR}/manifest.json"
 fi
+# P4(2026-10-01):trace_config.csv 运行时快照拷入 run_dir 根——load_imbalance
+# 的 CV 分母经 count_configured_instances 只认 run_dir 本地副本、不回退仓内
+# 默认(hbm_watermark.resolve_trace_config_path 的 allow_repo_default=False,
+# METRIC-01 防改布局 run 的分母静默膨胀);runner 此前不落这份副本,官方链路
+# 的 load_imbalance 步必然 fail-closed。命名用 B0 归档名
+# trace_config.csv.snapshot;拷贝点在 D2 闸之后,快照即经闸验证的
+# "argv==指针"那份配置,与仓还原状态解耦(同上方 P2 的 run_dir 自包含
+# rationale;归档步不触碰 run_dir 根级文件,快照常驻)。
+cp "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv" \
+   "${RUN_DIR}/trace_config.csv.snapshot"
 
 # A1/C1/D3(2026-08-28)降耗开关(runner 默认值,env 可覆盖;B.3 清除 2026-09-05
 #   移除 --online-node-gc 旗标——M2 节点 GC 摊销回收恒开,不可禁用):
@@ -127,9 +216,18 @@ export PYTHONUNBUFFERED=1
   > "${RUN_DIR}/cpp.log" 2>&1 &
 CPP_PID=$!
 
+# FIFO 就绪等待带墙钟预算（infra-F2）：上面的 kill -0 只防 C++ 进程退出，
+# 防不了"进程存活但迟迟不建 FIFO"的窗口；超时打印 cpp.log 尾部后
+# fail-closed（SH_FIFO_WAIT_S 可覆盖，缺省 60s）。
+fifo_deadline=$(( $(date +%s) + ${SH_FIFO_WAIT_S:-60} ))
 until [ -p "${RUN_DIR}/bridge/req_notify.fifo" ] && [ -p "${RUN_DIR}/bridge/resp_notify.fifo" ]; do
   if ! kill -0 "${CPP_PID}" 2>/dev/null; then
     echo "[run_online_strategy] C++ exited before FIFO ready (see cpp.log)" >&2
+    exit 1
+  fi
+  if (( $(date +%s) > fifo_deadline )); then
+    echo "[run_online_strategy] FIFOs not ready within ${SH_FIFO_WAIT_S:-60}s (see cpp.log tail)" >&2
+    tail -5 "${RUN_DIR}/cpp.log" >&2 || true
     exit 1
   fi
   sleep 0.3
@@ -160,7 +258,10 @@ fi
 [[ ${CPP_EXIT} -eq 0 && ${PY_EXIT} -eq 0 ]] || exit 1
 
 # 后处理:复用 run_metrics_postprocess.sh 的能力([METRIC] 行已在 cpp.log)。
-if grep -q '\[METRIC\]' "${RUN_DIR}/cpp.log"; then
+# 锚定探测（2026-10-01 对齐）：C++ 的 [METRIC][ERROR]/[METRIC][FATAL]
+# 诊断行不是指标记录——非锚定 grep 会被其误命中；与归档/SLO 层的
+# '^\[METRIC\] ' 同款锚定。
+if grep -q '^\[METRIC\] ' "${RUN_DIR}/cpp.log"; then
   bash "${POSTPROCESS}" "${RUN_DIR}/cpp.log" \
     --out-raw="${RUN_DIR}/raw_metrics.csv" \
     --out-normalized="${RUN_DIR}/normalized_metrics.csv" \
@@ -173,7 +274,14 @@ if grep -q '\[METRIC\]' "${RUN_DIR}/cpp.log"; then
     echo "[run_online_strategy] request metrics: none (detail=${DETAIL}; see postprocess.log)"
   fi
 else
-  echo "[run_online_strategy] WARNING: no [METRIC] lines in cpp.log; postprocess skipped" >&2
+  # off 档无 [METRIC] 行属正常设计(与 run_slo_postprocess.sh 的 by-design
+  # 口径一致,归档步 archive_run_outputs.sh 同样豁免);summary/full 档无行
+  # 才是异常,保留 WARNING(归档步会 fail-closed)。
+  if [ "${DETAIL}" = "off" ]; then
+    echo "[run_online_strategy] no [METRIC] lines (metrics detail=off, by design); postprocess skipped"
+  else
+    echo "[run_online_strategy] WARNING: no [METRIC] lines in cpp.log; postprocess skipped" >&2
+  fi
 fi
 # 阶段 7 §10.5 中间产物生命周期: 最终结果 / 检查点 / 临时产物分目录。
 #  - results/    : 最终结果(审计 jsonl,Python 决策侧写出)。保留规则:每
@@ -217,8 +325,10 @@ if [[ "${SLO_MODE}" != "0" ]]; then
   fi
 fi
 # D1(2026-08-28):成功后产物瘦身归档(失败路径早已 exit 1 全量保留)。
+# 传 DETAIL 档位:off 档归档豁免 [METRIC] 检查(2026-09-26 方案 A,与
+# run_slo_postprocess.sh 口径对齐),summary/full 档无 [METRIC] 行仍 FAIL。
 # SH_ARCHIVE_RUN=0 关闭(调试/对拍需要散装 bridge 文件时)。
 if [[ "${SH_ARCHIVE_RUN:-1}" != "0" ]]; then
-  bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" || exit 1
+  bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" "${DETAIL}" || exit 1
 fi
 echo "[run_online_strategy] PASS: ${RUN_DIR}"

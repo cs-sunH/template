@@ -4,12 +4,14 @@ LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
 #include "congestion_aware/fluid/FluidScheduler.h"
+#include "congestion_aware/Topology.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 
 using namespace NetworkAnalytical;
 using namespace NetworkAnalyticalCongestionAware;
@@ -57,12 +59,19 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
     link_states.reserve(directed_links.size());
     for (size_t index = 0; index < directed_links.size(); ++index) {
         const auto& link = directed_links[index];
-        if (link == nullptr || link->get_id() != index || link->get_bandwidth_Bpns() <= 0) {
+        // isfinite closes the second bandwidth entry point at consumption
+        // time: a NaN/+inf capacity would pass the `<= 0` comparison and
+        // then never constrain recalculate_dirty_rates' min-share
+        // computation (std::min with NaN always keeps the other operand).
+        if (link == nullptr || link->get_id() != index ||
+            !std::isfinite(link->get_bandwidth_Bpns()) ||
+            link->get_bandwidth_Bpns() <= 0) {
             std::cerr << "[Error] (network/analytical/congestion_aware) invalid directed LinkId table"
                       << std::endl;
             std::exit(-1);
         }
         link_states.push_back({link->get_id(), link->get_bandwidth_Bpns(), {}});
+        link_resource_versions_.push_back(0);
     }
 }
 
@@ -74,7 +83,10 @@ FluidScheduler::~FluidScheduler() noexcept {
 void FluidScheduler::start_flow(const ChunkSize bytes,
                                 std::shared_ptr<const FluidRoute> route,
                                 const Callback callback,
-                                const CallbackArg callback_arg) noexcept {
+                                const CallbackArg callback_arg,
+                                const int src_rank,
+                                const int dst_rank,
+                                std::optional<LogicalFlowKey> logical_key) noexcept {
     if (bytes == 0 || route == nullptr || route->link_ids.empty() || callback == nullptr) {
         std::cerr << "[Error] (network/analytical/congestion_aware) invalid fluid flow" << std::endl;
         std::exit(-1);
@@ -85,12 +97,14 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
         std::exit(-1);
     }
 
-    pending_starts.push_back({next_flow_id++, bytes, std::move(route), callback, callback_arg});
+    pending_starts.push_back({next_flow_id++, bytes, std::move(route),
+                              callback, callback_arg, src_rank, dst_rank,
+                              std::move(logical_key)});
     if (event_loop_started && !flush_scheduled) {
         flush_scheduled = true;
         if (deferred_flush_mode) {
             // Online/deferred mode: never insert a current_time event into the
-            // main queue from a tick-end/deferred context (EventQueue :33
+            // main queue from a tick-end/deferred context (EventQueue.cpp proceed()
             // strict-increase assert). Post-commit comm emission lands here and
             // is executed by the same-tick deferred drain.
             event_queue->schedule_event_deferred(flush_callback, this);
@@ -106,14 +120,6 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
 
 void FluidScheduler::set_deferred_flush_mode(const bool enabled) noexcept {
     deferred_flush_mode = enabled;
-}
-
-void FluidScheduler::flush_pending_starts_deferred() noexcept {
-    if (flush_scheduled) {
-        return;
-    }
-    flush_scheduled = true;
-    event_queue->schedule_event_deferred(flush_callback, this);
 }
 
 void FluidScheduler::flush_callback(void* const context) noexcept {
@@ -174,7 +180,27 @@ void FluidScheduler::mark_dirty(const FlowId flow_id) noexcept {
     }
 }
 
+void FluidScheduler::advance_live_flows_to_current_time() noexcept {
+    // A tick-end callback may be opened by an unrelated event before the
+    // scheduler's own completion wakeup.  Integrate every active flow to the
+    // boundary without changing rates or scheduling; the next mutation will
+    // still recalculate shares through the normal dirty-batch path.
+    const auto now = event_queue->get_current_time();
+    begin_dirty_batch();
+    for (const auto& [flow_id, flow] : flows_by_id) {
+        if (flow.state == FluidFlowState::Active) {
+            mark_dirty(flow_id);
+        }
+    }
+    if (!dirty_flow_ids.empty()) {
+        advance_dirty_flows(now);
+    }
+}
+
 void FluidScheduler::advance_dirty_flows(const EventTime now) noexcept {
+    // instrumentation bracket (measurement only)
+    const NetworkAnalytical::WallBracket dirty_bracket(wall_stats_.dirty_advance_recalc);
+
     // WP6 link observer (CPP_SPEC §D): integrate the just-ended constant
     // interval with the pre-change rates/memberships. advance_dirty_flows
     // is the single choke point both mutation paths pass through before
@@ -233,6 +259,9 @@ EventTime FluidScheduler::predicted_finish_time(const FluidFlow& flow, const Eve
 }
 
 void FluidScheduler::recalculate_dirty_rates(const EventTime now) noexcept {
+    // instrumentation bracket (measurement only)
+    const NetworkAnalytical::WallBracket dirty_bracket(wall_stats_.dirty_advance_recalc);
+
     // advance_dirty_flows() sorts the existing dirty prefix. A start batch
     // then appends strictly increasing, never-reused flow ids, all greater
     // than every existing id; a completion batch appends nothing. Preserve
@@ -271,6 +300,94 @@ void FluidScheduler::recalculate_dirty_rates(const EventTime now) noexcept {
     peak_completion_heap_size = std::max(peak_completion_heap_size, completion_heap.size());
 }
 
+std::vector<LinkId> FluidScheduler::dirty_route_links(
+    const std::vector<LinkId>& membership_links) const {
+    std::vector<LinkId> result = membership_links;
+    for (const FlowId flow_id : dirty_flow_ids) {
+        const auto found = flows_by_id.find(flow_id);
+        if (found == flows_by_id.end() ||
+            found->second.state != FluidFlowState::Active) {
+            continue;
+        }
+        result.insert(result.end(), found->second.route->link_ids.begin(),
+                      found->second.route->link_ids.end());
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+std::vector<LinkId> FluidScheduler::changed_rate_links(
+    const std::vector<std::pair<FlowId, Bandwidth>>& old_rates,
+    const std::vector<FlowId>& excluded_flows) const {
+    std::vector<LinkId> result;
+    for (const auto& old_rate : old_rates) {
+        if (std::find(excluded_flows.begin(), excluded_flows.end(),
+                      old_rate.first) != excluded_flows.end()) {
+            continue;
+        }
+        const auto found = flows_by_id.find(old_rate.first);
+        if (found == flows_by_id.end() ||
+            found->second.state != FluidFlowState::Active ||
+            found->second.current_rate_Bpns == old_rate.second) {
+            continue;
+        }
+        result.insert(result.end(), found->second.route->link_ids.begin(),
+                      found->second.route->link_ids.end());
+    }
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
+
+void FluidScheduler::bump_link_resource_versions(
+    const std::vector<LinkId>& link_ids) noexcept {
+    for (const LinkId link_id : link_ids) {
+        if (link_id >= link_resource_versions_.size()) {
+            std::cerr << "[Error] (network/analytical/congestion_aware) "
+                         "invalid link in resource-version mutation"
+                      << std::endl;
+            std::exit(-1);
+        }
+        auto& version = link_resource_versions_[link_id];
+        if (version == std::numeric_limits<uint64_t>::max()) {
+            std::cerr << "[Error] (network/analytical/congestion_aware) "
+                         "link resource version exhausted"
+                      << std::endl;
+            std::exit(-1);
+        }
+        ++version;
+    }
+}
+
+void FluidScheduler::notify_link_resource_mutation(
+    const bool before_change, const EventTime tick,
+    const std::vector<LinkId>& affected_links) noexcept {
+    if (affected_links.empty() || link_resource_mutation_observers_.empty()) {
+        return;
+    }
+    // Snapshot callbacks so an observer can unregister itself without
+    // invalidating the stable, registration-ordered dispatch for this batch.
+    std::vector<LinkResourceMutationObserver> observers;
+    observers.reserve(link_resource_mutation_observers_.size());
+    for (const auto& entry : link_resource_mutation_observers_) {
+        observers.push_back(entry.second);
+    }
+    for (const auto& observer : observers) {
+        try {
+            observer(before_change, tick, affected_links);
+        } catch (const std::exception& error) {
+            std::cerr << "[Error] link resource mutation observer failed: "
+                      << error.what() << std::endl;
+            std::exit(-1);
+        } catch (...) {
+            std::cerr << "[Error] link resource mutation observer failed"
+                      << std::endl;
+            std::exit(-1);
+        }
+    }
+}
+
 void FluidScheduler::check_resource_limits(const uint64_t new_flows,
                                            const uint64_t new_memberships) const noexcept {
     const auto flow_overflow = new_flows > max_active_flows - std::min(active_flow_count, max_active_flows);
@@ -299,6 +416,9 @@ void FluidScheduler::check_resource_limits(const uint64_t new_flows,
 }
 
 void FluidScheduler::flush_pending_starts() noexcept {
+    // instrumentation bracket: whole batch flush (measurement only)
+    const NetworkAnalytical::WallBracket flush_bracket(wall_stats_.flush_pending_starts);
+
     flush_scheduled = false;
     if (pending_starts.empty()) {
         return;
@@ -331,8 +451,25 @@ void FluidScheduler::flush_pending_starts() noexcept {
     }
     advance_dirty_flows(now);
 
+    std::vector<LinkId> membership_links;
+    membership_links.reserve(new_memberships);
+    for (const auto& pending : pending_starts) {
+        membership_links.insert(membership_links.end(),
+                                pending.route->link_ids.begin(),
+                                pending.route->link_ids.end());
+    }
+    std::sort(membership_links.begin(), membership_links.end());
+    membership_links.erase(
+        std::unique(membership_links.begin(), membership_links.end()),
+        membership_links.end());
+    const std::vector<LinkId> before_links =
+        dirty_route_links(membership_links);
+    notify_link_resource_mutation(true, now, before_links);
+
     for (const auto& pending : pending_starts) {
         FluidFlow flow{pending.flow_id,
+                       pending.src_rank,
+                       pending.dst_rank,
                        pending.bytes,
                        static_cast<long double>(pending.bytes),
                        0.0,
@@ -344,6 +481,7 @@ void FluidScheduler::flush_pending_starts() noexcept {
                        FluidFlowState::Active,
                        pending.callback,
                        pending.callback_arg};
+        flow.logical_key = pending.logical_key;
         flow.memberships.reserve(flow.route->link_ids.size());
         const auto inserted = flows_by_id.emplace(flow.flow_id, std::move(flow));
         assert(inserted.second);
@@ -360,6 +498,23 @@ void FluidScheduler::flush_pending_starts() noexcept {
             stored.memberships.push_back({link_id, active_index});
         }
         mark_dirty(stored.flow_id);
+
+        // Side-band registration is deliberately after the legacy FlowId
+        // allocation, active-table insertion, and route-membership bind. It
+        // cannot affect matching, arbitration, or allocation order.
+        if (stored.logical_key && on_flow_bound_) {
+            try {
+                on_flow_bound_(*stored.logical_key, stored.flow_id);
+            } catch (const std::exception& error) {
+                std::cerr << "[Error] logical flow binding callback failed: "
+                          << error.what() << std::endl;
+                std::exit(-1);
+            } catch (...) {
+                std::cerr << "[Error] logical flow binding callback failed"
+                          << std::endl;
+                std::exit(-1);
+            }
+        }
     }
 
     active_flow_count += pending_starts.size();
@@ -367,7 +522,25 @@ void FluidScheduler::flush_pending_starts() noexcept {
     total_started_flows += pending_starts.size();
     pending_starts.clear();
 
+    std::vector<std::pair<FlowId, Bandwidth>> old_rates;
+    old_rates.reserve(dirty_flow_ids.size());
+    for (const FlowId flow_id : dirty_flow_ids) {
+        const auto found = flows_by_id.find(flow_id);
+        if (found != flows_by_id.end()) {
+            old_rates.emplace_back(flow_id, found->second.current_rate_Bpns);
+        }
+    }
+
     recalculate_dirty_rates(now);
+    std::vector<LinkId> changed_links = membership_links;
+    const auto rate_changed_links = changed_rate_links(old_rates);
+    changed_links.insert(changed_links.end(), rate_changed_links.begin(),
+                         rate_changed_links.end());
+    std::sort(changed_links.begin(), changed_links.end());
+    changed_links.erase(std::unique(changed_links.begin(), changed_links.end()),
+                        changed_links.end());
+    bump_link_resource_versions(changed_links);
+    notify_link_resource_mutation(false, now, changed_links);
     maybe_rebuild_completion_heap();
     schedule_next_wakeup();
     note_scheduler_event();
@@ -382,10 +555,12 @@ void FluidScheduler::clean_completion_heap() noexcept {
             break;
         }
         completion_heap.pop();
+        ++wall_stats_.completion_heap_stale_pops;
     }
 }
 
 void FluidScheduler::maybe_rebuild_completion_heap() noexcept {
+    ++wall_stats_.rebuild_calls;
     const auto rebuild_threshold = active_flow_count >
                                            (std::numeric_limits<uint64_t>::max() - 1024) / 4
                                        ? std::numeric_limits<uint64_t>::max()
@@ -393,6 +568,7 @@ void FluidScheduler::maybe_rebuild_completion_heap() noexcept {
     if (completion_heap.size() <= rebuild_threshold) {
         return;
     }
+    ++wall_stats_.rebuilds_performed;
 
     decltype(completion_heap) rebuilt;
     while (!completion_heap.empty()) {
@@ -475,6 +651,9 @@ void FluidScheduler::schedule_tail_arrival(FluidFlow& flow, const EventTime now)
 }
 
 void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
+    // instrumentation bracket (measurement only)
+    const NetworkAnalytical::WallBracket wakeup_bracket(wall_stats_.service_wakeup);
+
     if (generation != wakeup_generation) {
         return;
     }
@@ -516,6 +695,28 @@ void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
     }
     advance_dirty_flows(now);
 
+    std::vector<LinkId> membership_links;
+    for (const FlowId flow_id : completed_ids) {
+        const auto& route = flows_by_id.at(flow_id).route->link_ids;
+        membership_links.insert(membership_links.end(), route.begin(),
+                                route.end());
+    }
+    std::sort(membership_links.begin(), membership_links.end());
+    membership_links.erase(
+        std::unique(membership_links.begin(), membership_links.end()),
+        membership_links.end());
+    const std::vector<LinkId> before_links =
+        dirty_route_links(membership_links);
+    std::vector<std::pair<FlowId, Bandwidth>> old_rates;
+    old_rates.reserve(dirty_flow_ids.size());
+    for (const FlowId flow_id : dirty_flow_ids) {
+        const auto found = flows_by_id.find(flow_id);
+        if (found != flows_by_id.end()) {
+            old_rates.emplace_back(flow_id, found->second.current_rate_Bpns);
+        }
+    }
+    notify_link_resource_mutation(true, now, before_links);
+
     for (const auto flow_id : completed_ids) {
         auto& flow = flows_by_id.at(flow_id);
         flow.remaining_bytes = 0.0L;
@@ -531,12 +732,25 @@ void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
     }
 
     recalculate_dirty_rates(now);
+    std::vector<LinkId> changed_links = membership_links;
+    const auto rate_changed_links = changed_rate_links(old_rates, completed_ids);
+    changed_links.insert(changed_links.end(), rate_changed_links.begin(),
+                         rate_changed_links.end());
+    std::sort(changed_links.begin(), changed_links.end());
+    changed_links.erase(std::unique(changed_links.begin(), changed_links.end()),
+                        changed_links.end());
+    bump_link_resource_versions(changed_links);
+    notify_link_resource_mutation(false, now, changed_links);
     maybe_rebuild_completion_heap();
     schedule_next_wakeup();
     note_scheduler_event();
 }
 
 void FluidScheduler::handle_tail_arrival(const FlowId flow_id) noexcept {
+    // instrumentation bracket: whole tail arrival INCLUDING the completion
+    // callback below (measurement only)
+    const NetworkAnalytical::WallBracket tail_bracket(wall_stats_.tail_arrival);
+
     const auto found = flows_by_id.find(flow_id);
     if (found == flows_by_id.end() || found->second.state != FluidFlowState::PropagatingTail ||
         found->second.tail_scheduler != this) {
@@ -551,7 +765,12 @@ void FluidScheduler::handle_tail_arrival(const FlowId flow_id) noexcept {
     flows_by_id.erase(found);
     ++total_completed_flows;
     note_scheduler_event();
-    callback(callback_arg);
+    {
+        // instrumentation bracket: the completion callback chain into
+        // Workload/DieExecution alone (subset of tail_arrival)
+        const NetworkAnalytical::WallBracket callback_bracket(wall_stats_.completion_callback);
+        callback(callback_arg);
+    }
 }
 
 void FluidScheduler::note_scheduler_event() noexcept {
@@ -579,7 +798,39 @@ void FluidScheduler::report_progress() const noexcept {
               << " completed_flows=" << total_completed_flows
               << " route_memberships=" << active_route_memberships
               << " heap=" << completion_heap.size() << " peak_heap=" << peak_completion_heap_size
-              << " dirty_average=" << dirty_average << " dirty_max=" << max_dirty_flows;
+              << " dirty_average=" << dirty_average << " dirty_max=" << max_dirty_flows
+              // instrumentation buckets (ns totals + call counts, cumulative)
+              << " flush_ns=" << wall_stats_.flush_pending_starts.ns
+              << " flush_n=" << wall_stats_.flush_pending_starts.calls
+              << " dirty_ns=" << wall_stats_.dirty_advance_recalc.ns
+              << " dirty_n=" << wall_stats_.dirty_advance_recalc.calls
+              << " svcwake_ns=" << wall_stats_.service_wakeup.ns
+              << " svcwake_n=" << wall_stats_.service_wakeup.calls
+              << " tail_ns=" << wall_stats_.tail_arrival.ns
+              << " tail_n=" << wall_stats_.tail_arrival.calls
+              << " tailcb_ns=" << wall_stats_.completion_callback.ns
+              << " tailcb_n=" << wall_stats_.completion_callback.calls
+              << " heap_stale=" << wall_stats_.completion_heap_stale_pops
+              << " heap_rebuild=" << wall_stats_.rebuilds_performed
+              << '/' << wall_stats_.rebuild_calls;
+    // Cross-component instrumentation buckets (statics; measurement only) so
+    // an aborted run still yields them through this heartbeat. SendWallStats
+    // (sim_send) is frontend-owned and instead streams on the [MainWall]
+    // wall-time cadence line in main_online.cc.
+    const auto& queue_stats = NetworkAnalytical::EventQueue::queue_wall_stats();
+    const auto& route_stats = Topology::route_cache_stats();
+    std::cerr << " eq_proceed_ns=" << queue_stats.proceed.ns
+              << " eq_ticks=" << queue_stats.proceed.calls
+              << " eq_sched=" << queue_stats.schedule_event_calls
+              << " eq_sched_cxl=" << queue_stats.schedule_event_cancellable_calls
+              << " eq_cancel=" << queue_stats.cancel_event_calls
+              << " eq_defer=" << queue_stats.deferred_schedule_calls
+              << " route_ns=" << route_stats.wall.ns
+              << " route_n=" << route_stats.wall.calls
+              << " route_lookups=" << route_stats.lookups
+              << " route_hits=" << route_stats.hits
+              << " route_misses=" << route_stats.misses
+              << " route_clears=" << route_stats.wholesale_clears;
     for (size_t i = 0; i < std::min<size_t>(3, congestion.size()); ++i) {
         std::cerr << " congested_link_" << i << '=' << congestion[i].second << ':' << congestion[i].first;
     }
@@ -596,6 +847,37 @@ size_t FluidScheduler::link_count() const noexcept {
 
 uint64_t FluidScheduler::get_active_route_memberships() const noexcept {
     return active_route_memberships;
+}
+
+uint64_t FluidScheduler::link_resource_version(const LinkId link_id) const {
+    if (link_id >= link_resource_versions_.size()) {
+        throw std::out_of_range("FluidScheduler LinkId has no resource version");
+    }
+    return link_resource_versions_[link_id];
+}
+
+uint64_t FluidScheduler::add_link_resource_mutation_observer(
+    LinkResourceMutationObserver observer) {
+    if (!observer) {
+        throw std::invalid_argument(
+            "FluidScheduler resource mutation observer is empty");
+    }
+    if (next_link_resource_observer_id_ == 0 ||
+        next_link_resource_observer_id_ ==
+            std::numeric_limits<uint64_t>::max()) {
+        throw std::overflow_error(
+            "FluidScheduler resource mutation observer id exhausted");
+    }
+    const uint64_t id = next_link_resource_observer_id_++;
+    link_resource_mutation_observers_.emplace(id, std::move(observer));
+    return id;
+}
+
+void FluidScheduler::remove_link_resource_mutation_observer(
+    const uint64_t observer_id) noexcept {
+    if (observer_id != 0) {
+        link_resource_mutation_observers_.erase(observer_id);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -655,10 +937,6 @@ void FluidScheduler::enable_link_observer(const uint64_t link_bucket_ns) noexcep
             observer.active_links.push_back(static_cast<LinkId>(link));
         }
     }
-}
-
-bool FluidScheduler::link_observer_enabled() const noexcept {
-    return link_observer_.enabled;
 }
 
 uint64_t FluidScheduler::link_observer_bucket_ns() const noexcept {
@@ -895,6 +1173,85 @@ void FluidScheduler::link_observer_release() noexcept {
     observer.spool_record_count = 0;
     observer.finalized = false;
     observer.enabled = false;
+}
+
+std::vector<FluidScheduler::FlowSnapshotEntry>
+FluidScheduler::flow_snapshot() noexcept {
+    // W1 (joint work ledger): copy the live per-flow state (remaining bytes,
+    // current rate, route, memberships) at the caller's static point.
+    // Ascending flow_id keeps the export deterministic (unordered_map order
+    // must never leak into a diff). Completed flows are already erased from
+    // flows_by_id, so the export IS the arbitration set.
+    advance_live_flows_to_current_time();
+    std::vector<std::pair<FlowId, const FluidFlow*>> live;
+    live.reserve(flows_by_id.size());
+    for (const auto& [flow_id, flow] : flows_by_id) {
+        live.emplace_back(flow_id, &flow);
+    }
+    std::sort(live.begin(), live.end(),
+              [](const auto& lhs, const auto& rhs) {
+                  return lhs.first < rhs.first;
+              });
+    std::vector<FlowSnapshotEntry> snapshot;
+    snapshot.reserve(live.size());
+    for (const auto& entry : live) {
+        const FluidFlow& flow = *entry.second;
+        FlowSnapshotEntry out;
+        out.flow_id = entry.first;
+        out.src_rank = flow.src_rank;
+        out.dst_rank = flow.dst_rank;
+        out.total_bytes = flow.total_bytes;
+        out.remaining_bytes = flow.remaining_bytes;
+        out.current_rate_Bpns = flow.current_rate_Bpns;
+        out.last_rate_update_time = flow.last_rate_update_time;
+        out.route = flow.route->link_ids;
+        out.state = static_cast<int>(flow.state);
+        out.logical_key = flow.logical_key;
+        snapshot.push_back(std::move(out));
+    }
+    return snapshot;
+}
+
+std::vector<FluidScheduler::PendingFlowSnapshotEntry>
+FluidScheduler::pending_flow_snapshot() const {
+    std::vector<PendingFlowSnapshotEntry> snapshot;
+    snapshot.reserve(pending_starts.size());
+    for (const auto& pending : pending_starts) {
+        PendingFlowSnapshotEntry out;
+        out.assigned_flow_id = pending.flow_id;
+        out.src_rank = pending.src_rank;
+        out.dst_rank = pending.dst_rank;
+        out.total_bytes = pending.bytes;
+        if (pending.route != nullptr) {
+            out.route = pending.route->link_ids;
+        }
+        out.logical_key = pending.logical_key;
+        snapshot.push_back(std::move(out));
+    }
+    return snapshot;
+}
+
+std::vector<FluidScheduler::LinkSnapshotEntry>
+FluidScheduler::link_snapshot() const noexcept {
+    // W1: per-link capacity + active-flow count. The full active set per
+    // link is reconstructable on the Python side from the flows' routes
+    // (each membership lists its link), so only the count travels the wire.
+    std::vector<LinkSnapshotEntry> snapshot;
+    snapshot.reserve(link_states.size());
+    for (const auto& link : link_states) {
+        snapshot.push_back(LinkSnapshotEntry{
+            link.link_id, link.capacity_Bpns,
+            static_cast<uint32_t>(link.active_flows.size())});
+    }
+    return snapshot;
+}
+
+NetworkAnalytical::EventTime
+FluidScheduler::flow_snapshot_as_of_tick() const noexcept {
+    // flow_snapshot() integrates active flows to this same event-queue
+    // boundary.  Propagating tails have no link service left, so their older
+    // last_rate_update_time must not pull the frame watermark backwards.
+    return event_queue == nullptr ? 0 : event_queue->get_current_time();
 }
 
 void FluidScheduler::link_observer_integrate(const EventTime now) noexcept {

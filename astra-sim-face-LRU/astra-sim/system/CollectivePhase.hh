@@ -25,7 +25,8 @@ class CollectivePhase {
     Algorithm* algorithm = nullptr;
     uint64_t final_data_size = 0;
     bool enabled = false;
-    ComType comm_type = ComType::None;
+    // comm_type was removed (dead code cleanup 2026-09-30): the member was
+    // only ever written (from algorithm->comType) and had zero readers.
 };
 
 }  // namespace AstraSim

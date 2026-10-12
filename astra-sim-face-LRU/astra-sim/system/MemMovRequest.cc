@@ -10,9 +10,8 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
-MemMovRequest::MemMovRequest(int request_num,
-                             LogGP* loggp,
-                             int size,
+MemMovRequest::MemMovRequest(LogGP* loggp,
+                             uint64_t size,
                              Callable* callable,
                              bool processed,
                              bool send_back)
@@ -22,8 +21,6 @@ MemMovRequest::MemMovRequest(int request_num,
     this->processed = processed;
     this->send_back = send_back;
     this->loggp = loggp;
-    this->request_num = request_num;
-    this->start_time = Sys::boostedTick();
 }
 
 void MemMovRequest::call(EventType event, CallData* data) {

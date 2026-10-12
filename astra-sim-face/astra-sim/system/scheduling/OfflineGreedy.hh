@@ -49,8 +49,6 @@ class OfflineGreedyScheduleJournal {
                         std::vector<int> schedule,
                         uint64_t chunk_size,
                         size_t expected_consumers);
-    static size_t pending_entry_count();
-    static void reset();
 
   private:
     static std::map<OfflineGreedyScheduleKey, OfflineGreedyScheduleEntry>

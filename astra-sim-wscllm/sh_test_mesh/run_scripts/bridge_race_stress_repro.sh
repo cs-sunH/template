@@ -19,7 +19,7 @@
 set -uo pipefail
 
 BUDGET=${1:-60}
-WORK=$(mktemp -d /tmp/bridge_race_repro.XXXXXX)
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/bridge_race_repro.XXXXXX")
 trap 'rm -rf "${WORK}"' EXIT
 
 # ---- 复刻旧 C++ 模式(逐交换 open/poll/read/close)----

@@ -10,49 +10,34 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
-int MemMovRequest::id = 0;
-MemMovRequest::MemMovRequest(int request_num,
-                             Sys* sys,
-                             LogGP* loggp,
-                             int size,
+MemMovRequest::MemMovRequest(LogGP* loggp,
+                             uint64_t size,
                              Callable* callable,
                              bool processed,
-                             bool send_back)
-    : SharedBusStat(BusType::Mem, 0, 0, 0, 0) {
+                             bool send_back) {
     this->size = size;
     this->callable = callable;
     this->processed = processed;
     this->send_back = send_back;
-    this->my_id = id++;
-    this->sys = sys;
     this->loggp = loggp;
     this->total_transfer_queue_time = 0;
     this->total_transfer_time = 0;
     this->total_processing_queue_time = 0;
     this->total_processing_time = 0;
-    this->request_num = request_num;
     this->start_time = Sys::boostedTick();
-    this->mem_bus_finished = true;
 }
 
 void MemMovRequest::call(EventType event, CallData* data) {
-    update_bus_stats(BusType::Mem, (SharedBusStat*)data);
-    total_mem_bus_transfer_delay +=
-        ((SharedBusStat*)data)->total_shared_bus_transfer_delay;
-    total_mem_bus_processing_delay +=
-        ((SharedBusStat*)data)->total_shared_bus_processing_delay;
-    total_mem_bus_processing_queue_delay +=
-        ((SharedBusStat*)data)->total_shared_bus_processing_queue_delay;
-    total_mem_bus_transfer_queue_delay +=
-        ((SharedBusStat*)data)->total_shared_bus_transfer_queue_delay;
-    mem_request_counter = 1;
-    mem_bus_finished = true;
+    // The accumulation of the carried SharedBusStat stats into the inherited
+    // (dead, zero-reader) bus-stat fields -- including the contradictory
+    // `mem_request_counter = 1;` hard overwrite -- was removed with the
+    // SharedBusStat accounting itself (2026-10-01, face parity). The request
+    // just forwards the (now payload-less, nullptr) completion to its LogGP.
     loggp->talking_it = pointer;
     loggp->call(callEvent, data);
 }
 
 void MemMovRequest::wait_wait_for_mem_bus(
     std::list<MemMovRequest>::iterator pointer) {
-    mem_bus_finished = false;
     this->pointer = pointer;
 }

@@ -88,7 +88,7 @@ def _store_transfer(session_id=SESSION, trigger=REQUEST_A, *, shards=None):
     )
 
 
-def _store_shards(session_id=SESSION):
+def _store_shards():
     from session_kv_manager import KVTransferShard
     return (
         KVTransferShard(source_rank=0, target_rank=0, edge_rank=0,
@@ -136,7 +136,6 @@ def _restore_plan(location, action, transfers, *, history_instance=None,
         "history_source_instance_index": None,
         "history_transfer_bytes": sum(
             transfer.total_bytes for transfer in transfers),
-        "history_recompute_tokens": 0,
         "history_tokens_before": 0,
         "prefill_context_tokens": 300,
         "prefill_length": 300,
@@ -219,7 +218,10 @@ class StoreRestoreOrderingTest(unittest.TestCase):
         harness = _Harness()
         builder = harness.builder
         store_ids = harness.emit_evictions(_store_transfer())
-        self.assertEqual(store_ids, {0: store_ids[0], 1: store_ids[1]})
+        # 两缘各登记一条 mem_store 尾(键 = edge_rank 0/1,值为节点 id)。
+        self.assertEqual(sorted(store_ids), [0, 1])
+        for node_id in store_ids.values():
+            self.assertIsInstance(node_id, int)
         plan = _restore_plan(
             "remote_memory", "REMOTE_RESTORE",
             (_load_transfer(_load_shards({0: 0, 4: 1})),))
@@ -235,6 +237,30 @@ class StoreRestoreOrderingTest(unittest.TestCase):
                 f"mem_store {store_ids[edge]}")
         # (e) 登记表消费即清除。
         self.assertNotIn(SESSION, builder.pending_store_tails)
+
+    def test_restore_chain_node_names_carry_kv_anchor_segment(self):
+        """R2 py-slo-E1(2026-09-26):恢复链节点名必须携带精确命名段
+        "_kv_transfer_action"——C++ main_online.cc register_online_metrics_
+        anchors 仅对名字含 "_kv_send_rank" / "_kv_recv_rank" /
+        "_kv_transfer_action" 三段的节点登记 code-7 传输锚点(restore 三段
+        分解唯一数据源;P1-6 修复起由旧 find("kv") 子串启发式收紧为精确
+        段)。旧名 *_history_transfer_actionNNN_* 不含该段,REMOTE_RESTORE(
+        tiered-LRU 唯一远端恢复路径)的恢复锚点永不发射。"""
+        harness = _Harness()
+        builder = harness.builder
+        plan = _restore_plan(
+            "remote_memory", "REMOTE_RESTORE",
+            (_load_transfer(_load_shards({0: 0, 4: 1})),))
+        builder.emit_admission_batch(plan)
+        restore_nodes = [
+            node for node in builder.batch["nodes"]
+            if "_history_kv_transfer_action" in node["name"]]
+        self.assertTrue(
+            restore_nodes,
+            "restore chain must emit kv-named nodes for the C++ "
+            "code-7 transfer anchor contract")
+        for node in restore_nodes:
+            self.assertIn("_kv_transfer_action", node["name"])
 
     def test_cross_edge_full_restore_uses_relay(self):
         """(b):跨缘 1B 中继——relay send 直接依赖 mem_store,relay arrival
@@ -357,6 +383,39 @@ class StoreRestoreOrderingTest(unittest.TestCase):
             if "_store_relay" in node["name"]]
         self.assertEqual(relay_nodes, [])
         self.assertGreater(len(builder.batch["nodes"]), before_nodes)
+
+    def test_store_decision_lifecycle_counter_roundtrip(self):
+        """B4 决策→发射窗口的计数生命周期(R2 补钉,2026-10-01):
+
+        sync 登记"已决策未发射" → 门可见 → 物理发射核销计数并登记
+        tails → 回迁消费 tails → 双表清空;terminal 回收清退未发射的
+        决策登记。钉住 decode 侧逐出决策-发射分离窗口的门语义。
+        """
+        harness = _Harness()
+        builder = harness.builder
+        store = _store_transfer()
+        # 决策时点(sync):计数登记,准入门可见。
+        builder.sync_pending_history_after_evictions([store])
+        self.assertTrue(builder.has_pending_store_decision(SESSION))
+        # 物理发射(blocked 逐出路径):计数核销,tails 登记。
+        harness.emit_evictions(store)
+        self.assertFalse(builder.has_pending_store_decision(SESSION))
+        self.assertEqual(sorted(builder.pending_store_tails), [SESSION])
+        # 回迁发射:tails 消费,双表全空。
+        plan = _restore_plan(
+            "remote_memory", "REMOTE_RESTORE",
+            (_load_transfer(_load_shards({0: 0, 4: 1})),))
+        builder.emit_admission_batch(plan)
+        self.assertEqual(builder.pending_store_tails, {})
+        self.assertEqual(builder.pending_store_decisions, {})
+        # terminal 回收:未发射的决策登记清退(terminal 会话不会再有
+        # 下一 turn 消费该门)。
+        builder.sync_pending_history_after_evictions([_store_transfer()])
+        self.assertTrue(builder.has_pending_store_decision(SESSION))
+        builder.retire_completion_gate(SESSION)
+        self.assertFalse(builder.has_pending_store_decision(SESSION))
+        self.assertEqual(builder.pending_store_tails, {})
+        self.assertEqual(builder.pending_store_decisions, {})
 
 
 if __name__ == "__main__":

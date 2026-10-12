@@ -6,10 +6,9 @@
   "all-reduce-implementation": ["ring", "ring"],
   "all-gather-implementation": ["ring", "ring"],
   "reduce-scatter-implementation": ["ring", "ring"],
-  "all-to-all-implementation": ["ring", "ring"],
+  "all-to-all-implementation": ["direct", "direct"],
   "collective-optimization": "localBWAware",
   "roofline-enabled": 1,
   "hbm-bandwidth-contention": 1,
-  "track-local-mem": 0,
   "trace-enabled": 0
 }

@@ -25,8 +25,12 @@ kv_actions / future_alarms keep the ARRAY ORDER (the Python emission order).
 Store-id assignment order, issue order, Kahn inputs and anchor first/last
 selection all derive from it -- the parser NEVER sorts, dedups or filters
 these vectors. Watch members keep the JSON object key order (nlohmann
-objects iterate keys ascending, i.e. the decimal rank-string sort the
-producer emitted). Watch statuses are stored in raw array order with
+objects iterate keys ascending -- LEXICOGRAPHIC string order, i.e. the
+rank-string sort the producer emitted; with mixed digit widths such as
+"2" vs "10" that is NOT numeric rank order. R6-V3: every current
+consumer set-ifies the members, so no behavior depends on the key order;
+treat this note as an emission-order statement, not a numeric-order
+freeze). Watch statuses are stored in raw array order with
 duplicates preserved (<= 2 distinct values exist; consumers build the same
 std::set they built from the DOM).
 
@@ -41,7 +45,10 @@ other bridge protocol violation):
      BEFORE the structural parse -- the frozen error-response skeleton
      carries all-empty arrays, so the message must be the decision error,
      not a misleading structural one);
-  T4 batch_id optional, integer, default 0;
+  T4 batch_id optional, integer, default 0 (a MISSING batch_id is
+     indistinguishable from 0 on epoch 0 -- the preflight's epoch check
+     requires has_batch_id when it enforces batch_id == seq; see the
+     ParsedGraphBatch field below);
   T5 the six arrays are optional (absent == empty; zero-node batches and
      pre-phase-5 fixtures are legal);
   T6 NO unknown top-level keys (the response schema is frozen with
@@ -86,6 +93,9 @@ other bridge protocol violation):
   O4 error responses: the frozen skeleton parses cleanly and aborts on T3
      in the bridge (error-before-parse ordering preserved).
   O5 no size cap (byte-parity with the old DOM path).
+  O6 an integer literal > UINT64_MAX parses as a double (nlohmann) and
+     fails the is_number_integer gate in get_uint (see ParsedGraphBatch.cc
+     and the O6 section of parsed_graph_batch_test.cc).
 ******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_PARSEGRAPHBATCH_HH
@@ -193,6 +203,13 @@ struct ParsedKvAction {
 /// this is the canonical type.
 struct ParsedGraphBatch {
     uint64_t batch_id = 0;
+    // (2026-10-01) Mirrors has_touched_ranks' role: epoch 0 with a MISSING
+    // batch_id is indistinguishable from an explicit 0, silently bypassing
+    // the batch_id == delivery_sequence epoch check on the first delivery.
+    // parse_graph_batch clears this when the key is absent (the preflight
+    // then fails closed); direct struct construction (tests/fixtures)
+    // defaults to present.
+    bool has_batch_id = true;
     uint64_t source_delivery_sequence = 0;
     std::vector<ParsedNode> nodes;              // array order (rule O1)
     std::vector<ParsedEdge> parent_edges;       // array order

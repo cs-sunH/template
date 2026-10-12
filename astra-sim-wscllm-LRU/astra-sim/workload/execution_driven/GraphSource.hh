@@ -5,26 +5,24 @@ LICENSE file in the root directory of this source tree.
 GraphSource -- execution-driven mechanism layer (wscllm phase 1).
 
 Dynamic graph source abstraction (方案 §4 步骤 1-2 操作 4 / 步骤 1-4 操作 4;
-动态图边界 contract ①). In online mode the source is injected at Sys
-creation time so the ETFeeder is never constructed and no .et file is
-required; in static mode Workload constructs the ETFeederGraphSource
-wrapping the ETFeeder + DependancyResolver.
+动态图边界 contract ①). The online-mode source (NodeStoreGraphSource) is
+injected at Sys creation time so the ETFeeder is never constructed and no
+.et file is required.
 
 **依赖状态唯一所有者 = GraphSource**: Workload calls GraphSource::finish_node
 exactly once per node; CompletionObserver/watch only record facts and never
 release dependencies a second time (步骤 1-5 操作 3).
 
-**在线模式不得自动发射后继**: dep_free_nodes() in online mode yields nodes
+**在线模式不得自动发射后继**: for_each_dep_free() in online mode yields nodes
 only when the post-commit deferred path drains them into the source; the
 static auto-advance (issue_dep_free_nodes after every completion) must not
 leak into the online mode -- the online mode gate lives in Workload::call.
 
-NodeView / OnlineNode share one POD: add_node stores it, dep_free_nodes()
-/ lookup() return it as the read view. Fields are the full transitive
+NodeView / OnlineNode share one POD: add_node stores it, for_each_dep_free()
+/ lookup_ptr() hand it out as the read view. Fields are the full transitive
 consumer inventory of a node from issue to terminal (step-1-4 operation 1):
 HardwareResource (is_timer_op / is_cpu_op / kind), Statistics (id / type /
-is_cpu_op), MetricCollector (rank + node_id only), local_mem tracker
-(ETFeederNode-bound in static mode, via GraphSource::et_node), comm
+is_cpu_op), MetricCollector (rank + node_id only), comm
 src/dst/tag/size, collective comm_type/size/priority/pg_name/involved_dim,
 metadata inputs_values, plus the online-only request_id/stage/generation
 reverse index (步骤 1-5).
@@ -40,11 +38,7 @@ reverse index (步骤 1-5).
 #include <string>
 #include <vector>
 
-namespace Chakra {
-namespace FeederV3 {
-class ETFeederNode;
-}  // namespace FeederV3
-}  // namespace Chakra
+#include "DieTypes.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -63,6 +57,13 @@ enum class NodeKind : int {
     CommCollective = 7,
 };
 
+/// Compute-node role (die backend, stage B; contract §2): "compute" is a
+/// real compute op, "control_marker" a micro/sentinel node (first_token,
+/// drain, exit, sentinel, join, pstart, ... -- the comp(name,1,1) class)
+/// that must keep the legacy micro-job completion semantics instead of a
+/// die plan. The JSON spellings are exactly "compute" | "control_marker".
+enum class OpRole { Compute, ControlMarker };
+
 /// Compute-node attributes (issue_comp / issue_replay / issue_remote_mem).
 struct ComputeAttrs {
     uint64_t num_ops = 0;
@@ -70,6 +71,15 @@ struct ComputeAttrs {
     uint64_t runtime_ns = 0;  // replay runtime, duration_micros * 1000
     bool has_remote_weight_bytes = false;
     uint64_t remote_weight_bytes = 0;
+    // Stage B (die backend): the node's dispatch role and, when present,
+    // the strictly parsed immutable DieOpSpec. die_op_spec present implies
+    // runtime_ns == 0 (parser-enforced, contract §2); a real
+    // op_role=Compute node WITHOUT a die_spec fails closed in the die
+    // backend dispatch (never silently falls back to roofline). The
+    // shared_ptr keeps one immutable spec per node without copying the
+    // JSON payload into every short-lived view (design doc §8.3).
+    OpRole op_role = OpRole::Compute;
+    std::shared_ptr<const DieModel::DieOpSpec> die_spec;
 };
 
 /// Point-to-point comm attributes (issue_send_comm / issue_recv_comm).
@@ -92,8 +102,12 @@ struct CollAttrs {
     uint64_t bytes = 0;
     uint32_t priority = 0;
     std::string pg_name;
-    std::vector<bool> involved_dim;  // parsed bool_list; adapter fills the
-                                     // legacy 4x-true default when absent
+    // parsed bool_list; may be empty -- the adapter no longer fills any
+    // default (the legacy 4x-true default fill moved to
+    // Sys::generate_collective, which pads a short vector with true up to
+    // the topology's dimension count, N14 parser contract; the commit
+    // preflight additionally requires the exact declared dimension count).
+    std::vector<bool> involved_dim;
 };
 
 // Online-only, short-lived statistics state.  It lives in the NodeStore
@@ -109,19 +123,22 @@ struct OnlineStatisticsState {
     bool completed = false;
     bool is_gpu = false;
 
-    // Retained until terminal completion for the online Workload's
-    // terminal-communication bookkeeping (comm_size: bytes on the live
-    // NodeStore record).  Only compute/memory utilization is compacted
-    // globally.
+    // Retained until terminal completion; only compute/memory utilization
+    // is compacted globally.  (The former terminal-communication fact field
+    // comm_size was removed: unlike face-LRU, no production writer ever
+    // existed in this repository, so the field was write-only test
+    // self-reference.)
+    // vector_utilization is the die-backend addition (stage B, contract
+    // §7.6): eq-ops / (vector peak * elapsed); unset for the legacy
+    // roofline/replay paths.
     std::optional<double> memory_utilization;
     std::optional<double> compute_utilization;
-    std::optional<uint64_t> comm_size;
+    std::optional<double> vector_utilization;
 };
 
-/// The node record / read view. In static mode the ETFeederGraphSource
-/// fills every field from the ETFeederNode; in online mode the NodeStore
-/// fills them from GraphBatch data, including the reverse index
-/// request_id / stage / generation.
+/// The node record / read view. The NodeStore fills every field from
+/// GraphBatch data, including the reverse index request_id / stage /
+/// generation.
 struct OnlineNode {
     uint64_t global_id = 0;
     int rank = 0;
@@ -133,8 +150,7 @@ struct OnlineNode {
     // sh_2.0/sh_3.0 specific (§4.3.3): MEM_LOAD/MEM_STORE nodes carrying this
     // attribute dispatch to issue_local_hbm_kv_restore (LocalHbmBandwidthModel
     // restore DMA, HardwareResource hbm_dma class) instead of the remote-mem
-    // FIFO. The ETFeederGraphSource reads the attr; the online GraphBatch
-    // carries it explicitly.
+    // FIFO. The online GraphBatch carries the attribute explicitly.
     bool is_local_hbm_kv_restore = false;
     // sh_2.0 N-way HBM contention: MEM_LOAD/MEM_STORE endpoint charging mode
     // (attr "hbm-access-mode", 0/absent = none, 1 = local HBM read, 2 = local
@@ -146,8 +162,7 @@ struct OnlineNode {
     // registration path (GraphBatchCommitter Phase B-1.5) registers an
     // anchor for this (rank, node); false = no routing entry exists on
     // that edge, so Workload skips the two-level MetricCollector hash
-    // lookup entirely. Static-mode views
-    // built by ETFeederGraphSource leave both flags false.
+    // lookup entirely.
     bool metric_issue_anchor = false;
     bool metric_complete_anchor = false;
     std::string inputs_values;  // metadata pg info (issue_pytorch_pg_metadata)
@@ -162,83 +177,49 @@ struct OnlineNode {
     OnlineStatisticsState online_statistics;
 };
 
-/// Read-side view; same POD as OnlineNode (add_node stores it, dep_free_nodes
-/// / lookup return it).
+/// Read-side view; same POD as OnlineNode (add_node stores it, for_each_
+/// dep_free / lookup_ptr hand it out).
 using NodeView = OnlineNode;
 
 class GraphSource {
   public:
     virtual ~GraphSource() = default;
 
-    /// Currently free (dependency-satisfied, not yet issued) nodes, sorted by
-    /// global_id for deterministic issue order. NOT consuming: take_node
-    /// marks a node as issued.
-    virtual std::vector<NodeView> dep_free_nodes() = 0;
-
     /// The ONLY dependency-release entry. Releasing a node frees its
     /// children. Idempotent.
     virtual void finish_node(uint64_t node_id) = 0;
 
-    /// Stable async-callback handle; the NodeView must stay valid for the
-    /// consumers until the terminal record is done.
-    virtual std::optional<NodeView> lookup(uint64_t node_id) = 0;
-
-    /// Consume a node from the free set at issue time (static resolver
-    /// semantic preserved; required so dep_free_nodes cannot re-issue).
+    /// Consume a node from the free set at issue time (required so a later
+    /// issue pass cannot re-issue it).
     virtual void take_node(uint64_t node_id) = 0;
 
-    /// Static-compatibility handle for the ETFeederNode-bound consumers
-    /// (HardwareResource / Statistics / local_mem tracker). nullptr in
-    /// online mode; those consumers gain NodeView overloads in later steps
-    /// when the online path actually executes nodes.
-    virtual std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
-        uint64_t node_id) = 0;
-
-    /// Static finish check: dependency resolver empty AND no ongoing nodes.
-    /// False in online mode (the end authority belongs exclusively to the
-    /// ServiceCoordinator).
-    virtual bool static_all_done() = 0;
-
-    /// Zero-copy fast path for hot loops; the default keeps the by-value
-    /// semantics so static/empty sources are unchanged. The NodeStore-backed
-    /// source overrides it to iterate its stable storage (online nodes are
+    /// Zero-copy issue pass over the currently free (dependency-satisfied,
+    /// not yet issued) nodes, ascending global_id for deterministic issue
+    /// order. Non-consuming: take_node marks a node as issued. The
+    /// NodeStore-backed source iterates its stable storage (online nodes are
     /// collected only at quiescent commit boundaries -- never inside a
     /// callback -- so the references outlive the consume callback).
     virtual void for_each_dep_free(
-        const std::function<void(const NodeView&)>& consume) {
-        for (const auto& nv : dep_free_nodes()) {
-            consume(nv);
-        }
-    }
+        const std::function<void(const NodeView&)>& consume) = 0;
 
-    /// Zero-copy lookup for the online terminal paths. Returns nullptr when
-    /// unsupported (static sources) -- online callers treat that as unknown
-    /// node. Default returns nullptr; the NodeStore-backed source overrides.
+    /// Zero-copy lookup for the online terminal paths. Returns nullptr for
+    /// an unknown node. Default returns nullptr; the NodeStore-backed
+    /// source overrides.
     virtual const NodeView* lookup_ptr(uint64_t /*node_id*/) { return nullptr; }
 
     // Online-only mutable short-lived statistics state and terminal
-    // single-fire guard.  Static sources deliberately use the default
-    // unsupported implementations, preserving their ET behavior.
+    // single-fire guard. The default implementations are the unsupported
+    // "no online statistics" fallbacks (return nullptr / false); the
+    // NodeStore-backed source overrides both. (2026-09-29 note: no static
+    // source exists in the production tree any more -- the defaults stay
+    // because the virtual interface is deliberately kept as the seam for
+    // future source implementations and test doubles, not because a static
+    // adapter consumes them.)
     virtual OnlineStatisticsState* mutable_online_statistics(
         uint64_t /*node_id*/) {
         return nullptr;
     }
     virtual bool mark_terminal_observed(uint64_t /*node_id*/) { return false; }
-};
-
-/// Empty source: yields no nodes, finishes nothing. Used as the step-1-2
-/// placeholder before the NodeStore-backed source landed (step 1-4).
-class EmptyGraphSource : public GraphSource {
-  public:
-    std::vector<NodeView> dep_free_nodes() override { return {}; }
-    void finish_node(uint64_t) override {}
-    std::optional<NodeView> lookup(uint64_t) override { return std::nullopt; }
-    void take_node(uint64_t) override {}
-    std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
-        uint64_t) override {
-        return nullptr;
-    }
-    bool static_all_done() override { return false; }
 };
 
 }  // namespace ExecutionDriven

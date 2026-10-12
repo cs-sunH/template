@@ -703,7 +703,7 @@ class EwmaQuotaCouplingScenarioTest(unittest.TestCase):
 class DeferredRetryChainScenarioTest(unittest.TestCase):
     """剧本 5：quota_deferred 重试链——(d) 释放必唤醒 deferred、
     无漏唤醒/重复唤醒（模块级"唤醒"契约 = 配额代数 bump，C11 接线
-    到 SH:1775-1802 epoch 键重试门）。"""
+    到 sh30_online_scheduler.py 的 epoch 键重试门（_current_retry_key）。"""
 
     def test_chain_wakes_exactly_once_per_release_side_event(self):
         t = _tracker()                          # aimd, Q_init = 2

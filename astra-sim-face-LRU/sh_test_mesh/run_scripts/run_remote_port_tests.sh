@@ -35,8 +35,10 @@
 #     <bin>/...RemotePortNwayTest                                    -> exit 0
 #     <bin>/...RemotePortOnlineGateTest                              -> exit 0
 #     <bin>/...RemotePortStaticGateTest --fixture-dir <同上临时目录>   -> exit 0
-#   三者 ALL PASS；nway 十个 phase（pernpup/anchor4/pernode/pool/zerolat/
-#   awaitcb/tinyres/reentry/earlyshut/stress）逐个 ALL PASS，尾行含
+#   三者 ALL PASS；nway 当时十个 phase（pernpup/anchor4/pernode/pool/zerolat/
+#   awaitcb/tinyres/reentry/earlyshut/stress）逐个 ALL PASS（bigclock 两 phase
+#   为该记录之后新增）；截至当前测试 main 共十三个 phase/stage（上述十个 +
+#   bigclk1k/bigclk512 两 phase + fail-closed 探针组），尾行含
 #   "synchronous callback re-entry ... early shutdown ... fail-closed x12
 #   ... 4000x10000B single-port stress"。
 set -u
@@ -74,10 +76,13 @@ run_one "${TARGETS[0]}" timeout 600 "$BIN/${TARGETS[0]}"
 run_one "${TARGETS[1]}" timeout 600 "$BIN/${TARGETS[1]}"
 run_one "${TARGETS[2]}" timeout 600 "$BIN/${TARGETS[2]}" --fixture-dir "$FIXTURE_DIR"
 
-rm -rf "$FIXTURE_DIR"
+# L21(2026-09-29 审查修复):fixture 清理移到失败判定之后——此前 rm -rf 在
+# rc 判定前无条件执行,失败路径连取证用的夹具一起删掉,无法复跑定位。
+# 现成功才清,失败保留 fixture 并打印路径。
 if [[ $rc -eq 0 ]]; then
+    rm -rf "$FIXTURE_DIR"
     echo "[remote-port-regression] ALL PASS (exit codes 0)"
 else
-    echo "[remote-port-regression] FAILURES PRESENT"
+    echo "[remote-port-regression] FAILURES PRESENT (fixture retained for forensics: ${FIXTURE_DIR})"
 fi
 exit "$rc"

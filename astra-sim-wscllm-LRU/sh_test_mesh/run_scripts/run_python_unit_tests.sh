@@ -4,17 +4,20 @@
 # Usage: bash run_python_unit_tests.sh [pytest 附加参数...]
 #
 # 背景（旧报告 DC-孤儿测试测试接线）：6/7 KV/调度 Python 单测此前不在任何
-# 回归入口（误导性的 tests/run_all.sh 已删除）；本脚本补上单一清单入口，
-# 逐测试根调用 pytest 并汇总退出码（任一根非 0 即整体非 0）。仍无 CI，
+# 回归入口；本脚本补上 Python 单测的单一清单入口，逐测试根调用 pytest 并
+# 汇总退出码（任一根非 0 即整体非 0）。C++ 侧回归由 tests/run_all.sh 承担
+# （2026-09-26 改造为 C++ ctest 统一入口、全量执行含 OfflineGreedy——该文件
+# 实存且保留，并非"已删除"；两个入口的分工登记见根 README §5）。仍无 CI，
 # 本入口只面向本地交付前回归。
 #
 # 测试根清单（与根 README §5 基线口径一致）：
-#   1. workload/llama2_7b_inference（含 online/ 子目录，126 passed 基线）
-#   2. tests/（sh_test_mesh/tests，49 passed 基线）
-#   3. slo_tools/tests/（125 passed + 1 skipped 基线）
+#   1. workload/llama2_7b_inference（含 online/ 子目录）
+#   2. tests/（sh_test_mesh/tests）
+#   3. slo_tools/tests/
 #
 # 已知环境性结果（README §5，非本脚本缺陷）：
-#   * slo_tools/tests 存在 1 例预存在环境性失败（LoadImbalance 手算×1）；
+#   * （旧记「slo_tools/tests 1 例 LoadImbalance 手算环境性失败」已不复现——
+#     2026-09-26 文档同步批复核实测 test_slo_contract.py 71/71 通过，删除该条）；
 #   * trace_config.csv 的 request_queue_csv 指向真实队列时，
 #     test_wsc_llm_scheduler 的 request-neutral 占位断言红（还原裸仓即绿）。
 # 本脚本如实上报失败，不做任何排除/过滤（避免再现「自称全绿」的误导入口）。

@@ -34,14 +34,23 @@ Scenarios (方案 §4 步骤 1-2 操作 6, amended step 1-10):
      child, draining an Error command must abort (SIGABRT); the parent
      asserts the child died by signal (NOT by a clean exit -- the old
      silent-close behavior would have exited 0).
+  7. Transition observation through the production hook (step 1-10
+     amendment): the transition hook observes every IDLE -> ACTIVE -> ...
+     cycle across a long run (the former in-memory bounded transition log
+     and its dropped counter were removed as production-dead; the hook is
+     the only transition observer).
   8. Close-vs-Submit race: close and one producer contend on the same ingress
      mutex. The Submit is either accepted before close and fully drained, or
      rejected after close; every later Submit is rejected and no command is
      left behind at the finished exit.
+  9. FP1 (2026-09-01): checked_wait_deadline bounds -- 0/negative/non-finite/
+     over-duration/sub-tick timeouts fail with out_deadline untouched, the
+     near-max now() exercises the pre-addition bound, and
+     wait_for_work_until consumes a pending signal exactly once.
 
-Expected state-transition log across all scenarios: 2 (scenario 1), 4
-(scenario 2), 2 (scenario 3), 2 (scenario 4; the log records the NEW state
-of each transition, initial IDLE is not an entry).
+Expected state-transition sequences across all scenarios: 2 (scenario 1),
+4 (scenario 2), 2 (scenario 3), 2 (scenario 4; the recorded entries are the
+NEW state of each transition, initial IDLE is not an entry).
 
 Build: registered in the CMake build (M12②) as target
   AstraSim_Analytical_Congestion_Aware_IngressIdleTest in
@@ -72,6 +81,7 @@ windowed_trace_reader_test.cc) so they survive -DNDEBUG Release builds.
 #include <cstdio>
 #include <csignal>
 #include <limits>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -99,14 +109,23 @@ struct Fixture {
     ServiceCoordinator svc;
     RequestIngress ingress;
     std::vector<EventTime> arrival_ticks;
-    std::vector<ServiceState> scenario1_transitions;
-    std::vector<ServiceState> scenario2_transitions;
-    std::vector<ServiceState> scenario3_transitions;
+    // Transition record via the production StateTransitionHook (the only
+    // transition observer; entries are the NEW state of each transition).
+    // The hook runs under the coordinator mutex but from several threads
+    // (close/producer races), so the record itself is mutex-guarded.
+    std::mutex transitions_mtx;
+    std::vector<ServiceState> transitions;
 
     // Step 1-6: the ingress now deposits ARRIVAL into the mailbox (the
     // fixture never drains it -- the mailbox is a pure sink here, and the
     // fixture has no tick-end gate).
-    Fixture() { ingress.bind(&eq, &mailbox, &svc); }
+    Fixture() {
+        ingress.bind(&eq, &mailbox, &svc);
+        svc.set_transition_hook([this](ServiceState, ServiceState next) {
+            std::lock_guard<std::mutex> lock(transitions_mtx);
+            transitions.push_back(next);
+        });
+    }
 };
 
 void run_loop(Fixture& f) {
@@ -145,13 +164,12 @@ void scenario1_no_requests(Fixture& f) {
 
     expect(f.svc.state() == ServiceState::FINISHED,
            "scenario 1: service FINISHED after close");
-    expect(f.svc.transition_log().size() == 2,
+    expect(f.transitions.size() == 2,
            "scenario 1: exactly 2 transitions logged");
-    expect(f.svc.transition_log()[0] == ServiceState::DRAINING,
+    expect(f.transitions[0] == ServiceState::DRAINING,
            "scenario 1: first transition is DRAINING");
-    expect(f.svc.transition_log()[1] == ServiceState::FINISHED,
+    expect(f.transitions[1] == ServiceState::FINISHED,
            "scenario 1: second transition is FINISHED");
-    f.scenario1_transitions = f.svc.transition_log();
 
     std::printf("[fixture] scenario 1 PASS: IDLE -> DRAINING -> FINISHED "
                 "(no busy wait, no premature exit)\n");
@@ -212,13 +230,12 @@ void scenario3_close_at_startup_with_preloaded_queue(Fixture& f) {
     // immediately (no request accepted yet), and the preloaded requests run
     // to completion while DRAINING -- "不再接受新 request,等待已接受 request
     // 全部完成后才结束" per 合同②/总体方案 §5.5 -- then FINISHED.
-    expect(f.svc.transition_log().size() == 2,
+    expect(f.transitions.size() == 2,
            "scenario 3: exactly 2 transitions logged");
-    expect(f.svc.transition_log()[0] == ServiceState::DRAINING,
+    expect(f.transitions[0] == ServiceState::DRAINING,
            "scenario 3: first transition is DRAINING");
-    expect(f.svc.transition_log()[1] == ServiceState::FINISHED,
+    expect(f.transitions[1] == ServiceState::FINISHED,
            "scenario 3: second transition is FINISHED");
-    f.scenario3_transitions = f.svc.transition_log();
 
     std::printf("[fixture] scenario 3 PASS: close-at-startup + preloaded "
                 "2 requests processed (accepted=2, completed=2), no drop\n");
@@ -247,11 +264,11 @@ void scenario4_eof_command(Fixture& f) {
 
     expect(f.svc.state() == ServiceState::FINISHED,
            "scenario 4: service FINISHED after EOF drain");
-    expect(f.svc.transition_log().size() == 2,
+    expect(f.transitions.size() == 2,
            "scenario 4: exactly 2 transitions logged");
-    expect(f.svc.transition_log()[0] == ServiceState::DRAINING,
+    expect(f.transitions[0] == ServiceState::DRAINING,
            "scenario 4: first transition is DRAINING");
-    expect(f.svc.transition_log()[1] == ServiceState::FINISHED,
+    expect(f.transitions[1] == ServiceState::FINISHED,
            "scenario 4: second transition is FINISHED");
     expect(f.svc.input_closed(), "scenario 4: input is closed");
     expect(f.svc.input_close_reason() == InputCloseReason::EndOfFile,
@@ -318,26 +335,29 @@ void scenario6_error_command_aborts() {
     int status = 0;
     expect(waitpid(pid, &status, 0) == pid,
            "scenario 6: waitpid reclaimed the child");
-    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT) {
+    // Runtime expect, not std::abort: a failure must be recorded and let the
+    // remaining scenarios run and report (the fixture exits non-zero via
+    // g_ok at the end), instead of killing the whole process here.
+    const bool child_aborted =
+        WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+    expect(child_aborted,
+           "scenario 6: Error command aborts fail-closed (SIGABRT expected; "
+           "the old silent-close regression would exit cleanly)");
+    if (child_aborted) {
         std::printf("[fixture] scenario 6 PASS: Error command aborts "
                     "fail-closed (SIGABRT, not a silent close)\n");
-    } else {
-        std::fprintf(stderr,
-                     "[fixture] FAIL: scenario 6 expected SIGABRT, got "
-                     "status=%d\n",
-                     status);
-        std::abort();
     }
 }
 
-void scenario7_transition_log_is_bounded() {
+void scenario7_hook_observes_every_transition() {
     ServiceCoordinator svc;
     uint64_t hook_count = 0;
     svc.set_transition_hook(
         [&hook_count](ServiceState, ServiceState) { ++hook_count; });
 
-    constexpr uint64_t cycles =
-        ServiceCoordinator::kTransitionLogCapacity / 2 + 16;
+    // Long run: far more transitions than the removed in-memory log ever
+    // retained -- the hook (the only remaining observer) must see each one.
+    constexpr uint64_t cycles = 48;
     for (uint64_t i = 0; i < cycles; ++i) {
         svc.on_command_accepted();
         svc.on_alarm_scheduled();
@@ -345,26 +365,20 @@ void scenario7_transition_log_is_bounded() {
         svc.on_request_completed();
     }
     svc.mark_input_closed();
+    // M4 (2026-09-30): close defers the FINISHED evaluation to the ingress
+    // drain (note_input_drained). This fixture drives the coordinator
+    // standalone, so it plays the drain completion explicitly -- in
+    // production RequestIngress::drain_commands calls it once the closed
+    // queue empties.
+    svc.note_input_drained();
 
     const uint64_t transitions = cycles * 2 + 2;
     expect(svc.finished(), "scenario 7: service finished after close");
-    expect(svc.transition_log().size() ==
-           ServiceCoordinator::kTransitionLogCapacity,
-           "scenario 7: transition log capped at kTransitionLogCapacity");
-    expect(svc.transition_log_dropped() ==
-           transitions - ServiceCoordinator::kTransitionLogCapacity,
-           "scenario 7: dropped counter matches the overflow");
     expect(hook_count == transitions,
            "scenario 7: hook observed every transition");
-    for (std::size_t i = 0; i < svc.transition_log().size(); ++i) {
-        expect(svc.transition_log()[i] ==
-               (i % 2 == 0 ? ServiceState::ACTIVE : ServiceState::IDLE),
-               "scenario 7: log entries alternate ACTIVE/IDLE");
-    }
 
-    std::printf("[fixture] scenario 7 PASS: transition memory is capped at "
-                "%zu entries while hook observed all %llu transitions\n",
-                ServiceCoordinator::kTransitionLogCapacity,
+    std::printf("[fixture] scenario 7 PASS: hook observed all %llu "
+                "transitions\n",
                 static_cast<unsigned long long>(transitions));
 }
 
@@ -495,17 +509,16 @@ void scenario2_inject_at_ticks(Fixture& f) {
     // queue: no dependency on any rank being idle
     expect(f.arrival_ticks == std::vector<EventTime>({1000, 2000}),
            "scenario 2: alarms fired at exactly 1000/2000");
-    expect(f.svc.transition_log().size() == 4,
+    expect(f.transitions.size() == 4,
            "scenario 2: exactly 4 transitions logged");
-    expect(f.svc.transition_log()[0] == ServiceState::ACTIVE,
+    expect(f.transitions[0] == ServiceState::ACTIVE,
            "scenario 2: transition 1 is ACTIVE");
-    expect(f.svc.transition_log()[1] == ServiceState::IDLE,
+    expect(f.transitions[1] == ServiceState::IDLE,
            "scenario 2: transition 2 is IDLE");
-    expect(f.svc.transition_log()[2] == ServiceState::DRAINING,
+    expect(f.transitions[2] == ServiceState::DRAINING,
            "scenario 2: transition 3 is DRAINING");
-    expect(f.svc.transition_log()[3] == ServiceState::FINISHED,
+    expect(f.transitions[3] == ServiceState::FINISHED,
            "scenario 2: transition 4 is FINISHED");
-    f.scenario2_transitions = f.svc.transition_log();
 
     std::printf("[fixture] scenario 2 PASS: IDLE -> ACTIVE -> IDLE -> "
                 "DRAINING -> FINISHED; alarms at exactly 1000/2000\n");
@@ -608,7 +621,7 @@ int main() {
     }
     scenario5_overflow_audit();
     scenario6_error_command_aborts();
-    scenario7_transition_log_is_bounded();
+    scenario7_hook_observes_every_transition();
     scenario8_close_submit_race_is_linearized();
     scenario9_checked_deadline_bounds();
     if (!g_ok) {
@@ -616,9 +629,9 @@ int main() {
                      "[ingress_idle_fixture] FAIL: see messages above\n");
         return 1;
     }
-    std::printf("[fixture] ALL PASS: 10 state transitions logged "
-                "(2 + 4 + 2 + 2) + overflow audit + fail-closed abort + "
-                "bounded transition audit + close/submit linearization + "
+    std::printf("[fixture] ALL PASS: 10 state transitions observed via the "
+                "hook (2 + 4 + 2 + 2) + overflow audit + fail-closed abort + "
+                "hook transition audit + close/submit linearization + "
                 "FP1 checked-deadline bounds\n");
     return 0;
 }

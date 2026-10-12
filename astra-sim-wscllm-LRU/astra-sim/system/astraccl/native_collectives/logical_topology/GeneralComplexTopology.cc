@@ -6,8 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
 
 #include <algorithm>
-#include <cassert>
-#include <iostream>
+#include <cstdlib>
 #include <iterator>
 #include <stdexcept>
 
@@ -24,17 +23,32 @@ GeneralComplexTopology::GeneralComplexTopology(
     std::vector<int> dimension_size,
     std::vector<CollectiveImpl*> collective_impl) {
     int offset = 1;
-    if (collective_impl.empty()) {
-        throw std::runtime_error(
-            "GeneralComplexTopology requires at least one collective "
-            "implementation");
-    }
+    // An empty implementation list is tolerated here: Sys unconditionally
+    // builds one topology per collective type from the BYPASS_ALL_CUSTOM
+    // lookup, and a collective type with no native configuration simply gets
+    // an empty (dummy) topology. Requesting such a collective fails later
+    // with a proper diagnostic inside CollectiveImplLookup::get_collective_impl
+    // instead of terminating during Sys construction.
     if (collective_impl.size() > dimension_size.size()) {
         throw std::runtime_error(
             "GeneralComplexTopology requires at most one collective "
             "implementation per topology dimension");
     }
-    uint64_t last_dim = collective_impl.size() - 1;
+    // Same positivity contract as the rank-map constructor below: a zero or
+    // negative dimension reaches the ring arithmetic as a modulo-by-zero or
+    // an empty ring instead of failing here.
+    for (int size : dimension_size) {
+        if (size <= 0) {
+            throw std::runtime_error(
+                "GeneralComplexTopology requires every topology dimension "
+                "size to be positive");
+        }
+    }
+    // Clamp before the subtraction: on the tolerated empty implementation
+    // list, size() - 1 would wrap around (the value is never read -- the
+    // loop below does not execute -- but the wrap stays a latent trap).
+    const uint64_t last_dim =
+        collective_impl.empty() ? 0 : collective_impl.size() - 1;
     for (uint64_t dim = 0; dim < collective_impl.size(); dim++) {
         if (collective_impl[dim]->type == CollectiveImplType::Ring ||
             collective_impl[dim]->type == CollectiveImplType::Direct ||
@@ -70,11 +84,11 @@ GeneralComplexTopology::GeneralComplexTopology(
                    CollectiveImplType::DoubleBinaryTree) {
             if (dim == last_dim) {
                 DoubleBinaryTreeTopology* DBT = new DoubleBinaryTreeTopology(
-                    id, dimension_size[dim], id % offset, offset);
+                    dimension_size[dim], id % offset, offset);
                 dimension_topology.push_back(DBT);
             } else {
                 DoubleBinaryTreeTopology* DBT = new DoubleBinaryTreeTopology(
-                    id, dimension_size[dim],
+                    dimension_size[dim],
                     (id - (id % (offset * dimension_size[dim]))) +
                         (id % offset),
                     offset);
@@ -169,13 +183,22 @@ int GeneralComplexTopology::get_num_of_nodes_in_dimension(int dimension) {
         LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
             ->critical("dim: {} requested! but max dim is {}", dimension,
                        dimension_topology.size() - 1);
+        std::exit(1);
     }
-    assert(static_cast<uint64_t>(dimension) < dimension_topology.size());
     return dimension_topology[dimension]->get_num_of_nodes_in_dimension(0);
 }
 
 BasicLogicalTopology* GeneralComplexTopology::get_basic_topology_at_dimension(
     int dimension, ComType type) {
+    // 与上方 get_num_of_nodes_in_dimension 同款 fail-closed 守卫
+    // （2026-10-01 对齐）：本访问器此前完全没有守卫，越界维度解引用越过
+    // vector 末端（UB），而不是带着维度数字在手地失败。
+    if (static_cast<uint64_t>(dimension) >= dimension_topology.size()) {
+        LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
+            ->critical("dim: {} requested! but max dim is {}", dimension,
+                       dimension_topology.size() - 1);
+        std::exit(1);
+    }
     return dimension_topology[dimension]->get_basic_topology_at_dimension(0,
                                                                           type);
 }

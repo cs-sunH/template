@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""WP8 补充主数据源：离线 HBM KV 水位线重建（五仓逐字节相同，标准库实现）。
+"""WP8 补充主数据源：离线 HBM KV 水位线重建（同源变体族，与 face 已实质分叉，勿跨仓直接覆盖同步；
+A.5 起存在 README 登记的预期差异，标准库实现）。
 
 在线模式 C++ 内存账本为空是既有现状（C++ 侧 hbm_watermark 记录全零属预
 期）；真实 KV 占用时序在 python 侧产物中。经五仓 B0 基线逐仓实测核对：
@@ -23,7 +24,8 @@ log 一行说明判定依据，无需新 CLI 参数）：
     且四道门全过：journal sha256 == checksum.sha256、行级链自洽
     （before == 前行 after、after == before + 三类 delta）、重放终态 ==
     checksum 终态、证书四项 checks 全 true。流式重放 journal 得逐 rank
-    physical=weight+resident+reserved 时序，对行内 capacity_bytes 逐 rank
+    physical=weight+resident+reserved 时序（术语注记：≡ metrics_schema
+    的 committed 口径），对行内 capacity_bytes 逐 rank
     认证——**正式容量判决只在本层给出**（违规 → 退出码 3，fail-loud）。
   * ``resident_kv_exact``——journal 在场、行级链自洽，但 checksum 缺失：
     逐 rank resident/weight/reserved 时序精确（行级 before/after 自证），
@@ -119,7 +121,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from slo_common import (  # noqa: E402
     DECISION_LOG_RELPATH, NA, SloToolError, default_manifest_path,
-    detect_repo_variant, emit_json, fail, iter_jsonl,
+    detect_repo_variant, emit_json, fail, iter_jsonl, load_json_strict,
     load_request_manifest, load_slo_manifest, manifest_requests,
     open_output, read_init_record, require_param_int, run_main, write_csv,
 )
@@ -174,27 +176,43 @@ INSTANCE_COLUMNS = (
 # ---------------------------------------------------------------------------
 
 def _sum_shard_bytes(entry: dict) -> Optional[int]:
-    """FACE/W 逐出条目：shard_bytes 列表 → 实例合计。"""
+    """FACE/W 逐出条目：shard_bytes 列表 → 实例合计。
+
+    bool 排除（2026-09-29，对齐姊妹文件 hopbytes.py D2 的 _byte_count
+    口径）：isinstance(True, int) 为真，bool shard 曾按 1 字节计入合计；
+    现 bool 一律 None → 调用方 _evict_action 走既定"缺可解析 bytes"
+    fail-closed 出口，不把布尔值当字节。
+    """
     shards = entry.get("shard_bytes")
     if not isinstance(shards, list) or not shards:
         return None
     total = 0
     for value in shards:
-        if not isinstance(value, int) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return None
         total += value
     return total
 
 
 def _scalar_bytes(entry: dict) -> Optional[int]:
+    # bool 排除（2026-09-29，对齐 hopbytes.py D2 口径）：
+    # isinstance(True, int) 为真，total_bytes=true 曾按 1 字节放行；
+    # bool → None → 调用方 _evict_action fail-closed，不静默当 1 字节。
     value = entry.get("total_bytes")
-    if isinstance(value, int) and value >= 0:
-        return value
-    return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _evict_action(tick: int, entry: dict, bytes_of, where: str) -> dict:
-    """逐出条目 → 规范动作。victim 实例缺省 None（用跟踪态归位）。"""
+    """逐出条目 → 规范动作。victim 实例缺省 None（用跟踪态归位）。
+
+    D2 修复（2026-09-28）：victim_instance_index/source_instance_index 与
+    time_ns 在场但非整数（类型谎报）时不再静默降级——前者降 None 会把
+    归因错误伪装成"跟踪态归位"、后者降 tick 会把时序污染伪装成发射
+    时刻，均按本文件 fail-closed 姿态拒绝。键缺席/None 仍走既定缺省
+    （victim → 跟踪态归位；time_ns → 记录发射 tick）。
+    """
     nbytes = bytes_of(entry)
     if nbytes is None:
         fail(f"{where}: 逐出条目缺可解析 bytes（shard_bytes/total_bytes）")
@@ -207,13 +225,20 @@ def _evict_action(tick: int, entry: dict, bytes_of, where: str) -> dict:
     victim_instance = entry.get("victim_instance_index")
     if victim_instance is None:
         victim_instance = entry.get("source_instance_index")
-    if victim_instance is not None and not isinstance(victim_instance, int):
-        victim_instance = None
+    if victim_instance is not None and (
+            isinstance(victim_instance, bool)
+            or not isinstance(victim_instance, int)):
+        fail(f"{where}: 逐出条目 victim_instance_index 非整数"
+             f"（{victim_instance!r}）——类型谎报不静默降级")
     time_ns = entry.get("time_ns")
-    eff_tick = time_ns if isinstance(time_ns, int) and time_ns >= 0 else tick
+    if time_ns is not None and (isinstance(time_ns, bool)
+                                or not isinstance(time_ns, int)
+                                or time_ns < 0):
+        fail(f"{where}: 逐出条目 time_ns 非非负整数（{time_ns!r}）——"
+             f"类型谎报/负时刻不静默降级为记录 tick")
+    eff_tick = time_ns if time_ns is not None else tick
     return {"type": "evict", "tick": eff_tick, "session": victim_session,
-            "bytes": nbytes, "instance": victim_instance,
-            "kind": entry.get("kind"), "reason": entry.get("reason")}
+            "bytes": nbytes, "instance": victim_instance}
 
 
 def _collect_eviction_lists(record: dict, mapping: dict, where: str) -> list:
@@ -256,7 +281,17 @@ def _prefill_restore_actions(record: dict, mapping: dict, where: str) -> list:
         if rows is None:
             holders = []
         elif isinstance(rows, list):
-            holders = [row for row in rows if isinstance(row, dict)]
+            # D2 修复（2026-09-28）：非对象成员不再静默过滤——每段的
+            # bytes 是逐段恢复对账的唯一来源，静默丢段会让占用重放低报
+            # （upper_bound 层低报、full 层对账假通过），按
+            # _collect_eviction_lists 同款 fail-closed 拒绝。
+            holders = []
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    fail(f"{where}: {restore_list_field}[{index}] 必须是"
+                         f"对象（实得 {type(row).__name__}）——非对象成员"
+                         f"不静默丢弃")
+                holders.append(row)
         else:
             fail(f"{where}: {restore_list_field} 必须是数组")
         actions = []
@@ -269,8 +304,17 @@ def _prefill_restore_actions(record: dict, mapping: dict, where: str) -> list:
             if row_kind in ("local_hit", "LOCAL_HIT"):
                 row_bytes = 0
             row_source = row.get("source_instance_index")
-            if row_source is not None and not isinstance(row_source, int):
-                row_source = None
+            # F2_PY 修复（2026-09-29，RV5-F7）：对齐 HB-2 的"类型谎报不
+            # 静默降级"纪律——在场非整数（含 bool、浮点、字符串）此前
+            # 静默降 None，下游 apply_restore 的 restore_source_mismatch
+            # 诊断计数随之被静默抑制（异常漏报）；键缺席/None 保留 None
+            # （跟踪态归位）语义。
+            if row_source is not None and (
+                    isinstance(row_source, bool)
+                    or not isinstance(row_source, int)):
+                fail(f"{where}: {restore_list_field} 成员 "
+                     f"source_instance_index 非整数（{row_source!r}）——"
+                     f"类型谎报不静默降级")
             actions.append({
                 "type": "restore", "tick": record.get("tick", 0),
                 "session": record.get("session_hint"), "bytes": row_bytes,
@@ -284,14 +328,32 @@ def _prefill_restore_actions(record: dict, mapping: dict, where: str) -> list:
             holder = holder.get(path_element)
         else:
             holder = None
+    # F2_PY 修复（2026-09-29，RV5-F7）：与上方 restore_list 分支同款
+    # "类型谎报不静默降级"守卫补到标量分支——isinstance 宽松门此前放行
+    # bool（冒充 1 实例/1 字节）、字符串 source 静默降 None（下游
+    # restore_source_mismatch 诊断计数被静默抑制，异常漏报）。在场非整数
+    # （含 bool/浮点/字符串）一律 fail-closed；键缺席/None 仍走既定缺省
+    # （bytes → 0、source → None 跟踪态归位）。
     if isinstance(holder, dict):
         value = holder.get("total_bytes")
+        if value is not None and (isinstance(value, bool)
+                                  or not isinstance(value, int)):
+            fail(f"{where}: history 恢复 total_bytes 非整数（{value!r}）——"
+                 f"类型谎报不静默降级")
         if isinstance(value, int):
             nbytes = value
         kind = holder.get("kind")
         source = holder.get("source_instance_index")
+        if source is not None and (isinstance(source, bool)
+                                   or not isinstance(source, int)):
+            fail(f"{where}: history 恢复 source_instance_index 非整数"
+                 f"（{source!r}）——类型谎报不静默降级")
         if isinstance(source, int):
             logged_source = source
+    elif holder is not None and (isinstance(holder, bool)
+                                 or not isinstance(holder, int)):
+        fail(f"{where}: history 恢复 bytes 非整数（{holder!r}）——类型谎报"
+             f"不静默降级")
     elif isinstance(holder, int):
         nbytes = holder
     if spec.get("kind_field"):
@@ -300,6 +362,10 @@ def _prefill_restore_actions(record: dict, mapping: dict, where: str) -> list:
             kind = value
     if spec.get("source_field"):
         value = decision.get(spec["source_field"])
+        if value is not None and (isinstance(value, bool)
+                                  or not isinstance(value, int)):
+            fail(f"{where}: history 恢复 {spec['source_field']} 非整数"
+                 f"（{value!r}）——类型谎报不静默降级")
         if isinstance(value, int):
             logged_source = value
     if spec.get("state_before_field"):
@@ -330,17 +396,37 @@ def _decode_move_actions(record: dict, mapping: dict, where: str) -> list:
             holder = holder.get(path_element)
         else:
             holder = None
+    # F2_PY 修复（2026-09-29，RV5-F7）：与 _prefill_restore_actions 标量
+    # 分支同款"类型谎报不静默降级"守卫——bool 冒充 1 实例/1 字节、字符串
+    # source 静默降 None（restore_source_mismatch 诊断被静默抑制）不再
+    # 放行；键缺席/None 仍走既定缺省（bytes → 0、source → 跟踪态归位）。
     if isinstance(holder, dict):
         value = holder.get("total_bytes")
+        if value is not None and (isinstance(value, bool)
+                                  or not isinstance(value, int)):
+            fail(f"{where}: decode 迁移 total_bytes 非整数（{value!r}）——"
+                 f"类型谎报不静默降级")
         if isinstance(value, int):
             nbytes = value
         source = holder.get("source_instance_index")
+        if source is not None and (isinstance(source, bool)
+                                   or not isinstance(source, int)):
+            fail(f"{where}: decode 迁移 source_instance_index 非整数"
+                 f"（{source!r}）——类型谎报不静默降级")
         if isinstance(source, int):
             logged_source = source
+    elif holder is not None and (isinstance(holder, bool)
+                                 or not isinstance(holder, int)):
+        fail(f"{where}: decode 迁移 bytes 非整数（{holder!r}）——类型谎报"
+             f"不静默降级")
     elif isinstance(holder, int):
         nbytes = holder
     if spec.get("source_field"):
         value = decision.get(spec["source_field"])
+        if value is not None and (isinstance(value, bool)
+                                  or not isinstance(value, int)):
+            fail(f"{where}: decode 迁移 {spec['source_field']} 非整数"
+                 f"（{value!r}）——类型谎报不静默降级")
         if isinstance(value, int):
             logged_source = value
     if nbytes < 0:
@@ -374,19 +460,23 @@ REPO_VARIANTS: dict[str, dict] = {
             "local-hbm.capacity-profiles.validation-160gib.bytes=171798691840"
             "（每 NPU）",
     },
-    # W 同 FACE 字段族 + history_cache_state_before。基线实测账本缺口：decode
-    # 准入期逐出（decode_target_evictions 在 prefill 记录落盘之后才累积，
-    # decode 记录不含逐出列表）不落盘——full_tracelab 本 run 实测 7,923 例
-    # RECOMPUTE(state_before=EVICTED) 隐含静默逐出（802 为 FACE 基线旧数，
-    # 非 W 本 run 口径）；重放按账本断言在恢复点对账扣减
-    # （silent_evictions_reconciled），逐出真实时刻 ∈ 上次可见事件与恢复
-    # tick 之间，占用在该窗口为上界。P1（2026-08-30）起缺 journal 的 run
-    # 一律标 upper_bound_only（上界，无物理违规认证）；journal 在场的 run
-    # 以 kv_delta_journal 为权威、本重放仅作对照列。
+    # W 同 FACE 字段族 + history_cache_state_before。decode 侧逐出口径
+    # （问题 2A 收口，2026-09-05 写端修复 + 2026-09-27 工具跟进）：decode 行
+    # 序列化 decode_target_evictions 全集（#2 预占/#4 move/#5 grow_decode，
+    # 发射后写端置空核销），prefill 行携带的只是发射时点子集——本仓只
+    # 消费 decode 行全集、prefill 行停消费该字段（防与 prefill 行 #2/#3
+    # 双计，直接重复消费会触发 apply_evict fail-closed）。2026-09-05 之前
+    # 的旧产物（decode 行无该字段）账本缺口仍由 RECOMPUTE/
+    # state_before=EVICTED 恢复点对账兜底（silent_evictions_reconciled；
+    # full_tracelab 基线 run 实测 7,923 例，802 为 FACE 基线旧数）——静默
+    # 逐出真实时刻 ∈ 上次可见事件与恢复 tick 之间，占用在该窗口为上界。
+    # P1（2026-08-30）起缺 journal 的 run 一律标 upper_bound_only（上界，
+    # 无物理违规认证）；journal 在场的 run 以 kv_delta_journal 为权威、
+    # 本重放仅作对照列。
     "astra-sim-wscllm": {
         "eviction_lists": (
             ("prefill", "admission_evictions", _sum_shard_bytes),
-            ("prefill", "decode_target_evictions", _sum_shard_bytes),
+            ("decode", "decode_target_evictions", _sum_shard_bytes),
             ("completion", "completion_evictions", _sum_shard_bytes),
         ),
         "restore": {"bytes_path": ["history_transfer_bytes"],
@@ -635,6 +725,17 @@ def compute_capacity_calibers(model: SimpleNamespace, tp_degree: int,
     kv_shards_per_token = kv_cache_shard_bytes_for_tokens(model, 1, tp_degree)
     reserve_shards = kv_cache_shard_bytes_for_tokens(
         model, reserve_context_tokens, tp_degree)
+    # 负容量档门（2026-09-29，报告 4.3）：capacity < 任一 rank 的 weight
+    # shard 时 ⌊(capacity−weight)/kv⌋ 为负 → hard_tokens/limit 全为负值，
+    # journal 硬上限诊断随之全量误报。硬件容量装不下权重分片属配置矛盾，
+    # 走本函数既有的 ValueError 通道（调用方 warning + capacity_calibers=
+    # NA，绝不静默 clamp 出负上限）；journal 正式认证用行内 capacity_bytes，
+    # 不受本门影响。
+    if capacity_bytes_per_npu < max(weight_shards):
+        raise ValueError(
+            f"capacity_bytes_per_npu ({capacity_bytes_per_npu}) < 逐 rank "
+            f"weight shard 最大值 ({max(weight_shards)})——容量档装不下模型"
+            f"权重，拒绝产出负 hard_tokens/limit")
     # 0 头 shard（num_heads < tp_degree 的退化切分）不持有 KV，对 resident
     # 上限不构成约束——min 只在 kv>0 的 rank 上取。
     hard_tokens = min(
@@ -769,10 +870,8 @@ def load_token_manifest(run_dir: Path, explicit: Optional[Path]) -> dict:
     for candidate in candidates:
         if not candidate.is_file():
             continue
-        try:
-            data = json.loads(candidate.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            fail(f"token manifest 非法 JSON：{candidate}: {exc}")
+        data = load_json_strict(candidate.read_text(encoding="utf-8"),
+                                f"token manifest {candidate}")
         if not isinstance(data, dict) or not isinstance(
                 data.get("requests"), list):
             fail(f"token manifest 缺 requests 数组：{candidate}")
@@ -789,6 +888,13 @@ def load_token_manifest(run_dir: Path, explicit: Optional[Path]) -> dict:
             for field in ("prefill_context_tokens", "final_context_tokens",
                           "history_tokens_before"):
                 value = entry.get(field)
+                # bool 冒充门（2026-09-29，报告 3.4）：isinstance(True, int)
+                # 为真，true 曾通过下方的 int 门按 1 token 放行——token 事实
+                # 被布尔值谎报。bool 显式拒绝，错误信息说明收到布尔值。
+                if isinstance(value, bool):
+                    fail(f"token manifest {request_id} {field} 收到布尔值"
+                         f"（{value!r}）——bool 是 int 子类但不是合法 "
+                         f"token 数，不放行（{candidate}）")
                 if not isinstance(value, int) or value < 0:
                     fail(f"token manifest {request_id} 缺非负整数 {field}"
                          f"（{candidate}）")
@@ -872,8 +978,10 @@ def resolve_hardware_capacity(profile: str, explicit: Optional[Path]) -> dict:
         if not candidate.is_file():
             continue
         try:
-            data = json.loads(candidate.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+            data = load_json_strict(
+                candidate.read_text(encoding="utf-8"),
+                f"hardware {candidate}")
+        except (SloToolError, OSError):
             continue
         if not isinstance(data, dict):
             continue
@@ -887,6 +995,13 @@ def resolve_hardware_capacity(profile: str, explicit: Optional[Path]) -> dict:
         if not isinstance(entry, dict):
             fail(f"hardware 容量档 {profile!r} 结构错误：{candidate}")
         value = entry.get("bytes")
+        # bool 冒充门（2026-09-29，报告 3.4）：isinstance(True, int) 为真，
+        # capacity_bytes=true 曾按 1 字节容量放行 → journal 权威重放逐事件
+        # 判违规 → 正式物理违规判决（退出码 3）被布尔值错误触发。bool 显式
+        # 拒绝，错误信息说明收到布尔值。
+        if isinstance(value, bool):
+            fail(f"hardware 容量档 {profile!r}.bytes 收到布尔值（{value!r}）"
+                 f"——bool 是 int 子类但不是合法容量，不放行：{candidate}")
         if not isinstance(value, int) or value <= 0:
             fail(f"hardware 容量档 {profile!r}.bytes 非正整数：{candidate}")
         return {"path": str(candidate), "profile": profile, "bytes": value}
@@ -933,6 +1048,13 @@ def load_bucket_ns(manifest: dict) -> tuple[int, bool]:
     """
     params = manifest.get("params") or {}
     entry = params.get("watermark_sample_period_ns")
+    # D2 修复（2026-09-28）：条目在场但非对象（结构损坏）不再静默降级为
+    # "未推导（null）"——降级警告文案会撒谎（掩盖清单损坏）。与
+    # slo_common.require_param 的结构门同款 fail-closed；键缺席或
+    # value=null 仍按既定口径走临时锚点（本工具文档化的 provisional）。
+    if entry is not None and not isinstance(entry, dict):
+        fail(f"watermark_sample_period_ns 参数条目结构错误（需为对象，实得 "
+             f"{type(entry).__name__}: {entry!r}）")
     value = entry.get("value") if isinstance(entry, dict) else None
     if value is None:
         print(
@@ -956,14 +1078,13 @@ class _ChangePoint:
     """单变点：同 tick 的占用事件归并为一行（RLE 的原子；逐出标记在
     _UnitLog.evicts 独立成表，merged_change_points 归并时叠加同 tick 行）。"""
 
-    __slots__ = ("tick", "start", "end", "peak", "delta")
+    __slots__ = ("tick", "start", "end", "peak")
 
     def __init__(self, tick: int, start: int) -> None:
         self.tick = tick
         self.start = start  # 本 tick 首事件前占用
         self.end = start
         self.peak = start  # 本 tick 内事件后占用的最大值（含进入值）
-        self.delta = 0
 
 
 class _UnitLog:
@@ -997,7 +1118,6 @@ class _UnitLog:
             self.points.append(self.open)
             self.last_tick = tick
         self.occupancy += delta
-        self.open.delta += delta
         self.open.end = self.occupancy
         if self.occupancy > self.open.peak:
             self.open.peak = self.occupancy
@@ -1018,13 +1138,22 @@ class _UnitLog:
         duration = self.last_tick - self.first_tick
         evict_events = sum(pair[0] for pair in self.evicts.values())
         evict_bytes = sum(pair[1] for pair in self.evicts.values())
+        try:
+            mean = (self.area / duration) if duration > 0 \
+                else float(self.peak)
+        except OverflowError as error:
+            # D2 修复（2026-09-28）：超大字节（畸形账本 delta）的 int→float
+            # 溢出走 fail-closed 出口（SloToolError → 退出码 2），不再裸
+            # OverflowError 栈（run_main 不捕它，退出码语义被破坏为 1）。
+            fail(f"占用面积/峰值超出浮点可表示范围（area={self.area}, "
+                 f"peak={self.peak}）：账本含畸形超大 delta，拒绝产出"
+                 f"水位线（{error}）")
         return {
             "first_event_ns": self.first_tick,
             "last_event_ns": self.last_tick,
             "duration_ns": duration,
             "peak_occupancy_bytes": self.peak,
-            "mean_occupancy_bytes": (self.area / duration) if duration > 0
-            else float(self.peak),
+            "mean_occupancy_bytes": mean,
             "residual_occupancy_bytes": self.occupancy,
             "evict_events": evict_events,
             "evict_bytes": evict_bytes,
@@ -1075,9 +1204,12 @@ class _UnitLog:
 class ChangePointLog:
     """全部实例的变点日志（P1-④：series 行字典全量物化就此消灭）。
 
-    add(tick, instance, delta) 要求 tick 对同一实例单调不减（decision-log
-    重放的 tick 回退检查与 journal 的 planner_time_ns 单调检查保证）；
-    逐出标记走独立 per-unit 表。内存 O(变点数+实例数)。
+    add(tick, instance, delta) 要求 tick 对同一实例单调不减——decision-log
+    路径的记录级 tick 回退检查是主防线，本类再设 per-instance fail-closed
+    守卫（2026-09-27，M10-B4）：逐出条目的 time_ns 可覆盖记录 tick 作为
+    占用事件 tick，记录级检查盖不住它；倒序 tick 会静默打乱 RLE 变点序
+    与面积积分，在此拒绝重放。逐出标记（add_evict）走独立 per-unit 表、
+    归并时排序，不要求单调。内存 O(变点数+实例数)。
     """
 
     def __init__(self) -> None:
@@ -1091,7 +1223,12 @@ class ChangePointLog:
         return unit
 
     def add(self, tick: int, instance: int, delta: int) -> None:
-        self._unit(instance).add(tick, delta)
+        unit = self._unit(instance)
+        if 0 <= unit.prev_tick and tick < unit.prev_tick:
+            fail(f"实例 {instance} 占用事件 tick 回退（{tick} < "
+                 f"{unit.prev_tick}）——逐出条目 time_ns 倒序或输入时序"
+                 f"错乱，RLE 变点序将失真，拒绝重放")
+        unit.add(tick, delta)
 
     def add_evict(self, tick: int, instance: int, nbytes: int) -> None:
         self._unit(instance).add_evict(tick, nbytes)
@@ -1126,10 +1263,13 @@ def bucket_row_sweep(change_points_factory, origin: int, span_end: int,
     同样喂本函数）——两遍消费（先锚桶后扫行）均流式，除锚桶索引集合外
     不新增整表物化。语义与旧 bucketize 逐行等价：桶 j 覆盖
     [origin + j·B, +B)；事件 tick 落在 [bucket_start, bucket_end) 计入
-    桶 j，末桶 bucket_end 钳到 span_end+1（含恰落在 span_end 的事件）；
-    锚桶 = 有变点（事件或逐出）的桶位，锚桶间无变点且占用>0 的桶位补
-    占位行（占用保持段）；出界（负桶号）变点只进统计不产行。迭代器
-    元素 = (tick, occ_start, occ_end, occ_peak, evict_events,
+    桶 j（归属判定经 bucket_end = min(bucket_start + bucket_ns,
+    span_end + 1) 钳制，含恰落在 span_end 的事件）；**产出的 series/
+    intervals 行 bucket_end 一律写未钳制的 bucket_start + bucket_ns**
+    （末行 bucket_end_ns 可超出 span_end+1 至桶长-1，无损恢复对拍按此
+    构造）；锚桶 = 有变点（事件或逐出）的桶位，锚桶间无变点且占用>0
+    的桶位补占位行（占用保持段）；出界（负桶号）变点只进统计不产行。
+    迭代器元素 = (tick, occ_start, occ_end, occ_peak, evict_events,
     evict_bytes)。
     """
     n_buckets = (span_end - origin) // bucket_ns + 1
@@ -1191,12 +1331,11 @@ def bucket_row_sweep(change_points_factory, origin: int, span_end: int,
 class SessionState:
     """会话跟踪态：当前实例 + 当前本地 bytes（分层仓可为部分层）。"""
 
-    __slots__ = ("instance", "bytes", "tokens")
+    __slots__ = ("instance", "bytes")
 
     def __init__(self) -> None:
         self.instance: Optional[int] = None
         self.bytes: int = 0
-        self.tokens: int = 0
 
 
 class ReplayReport:
@@ -1226,12 +1365,8 @@ class ReplayReport:
 class WatermarkReplay:
     """按文件顺序重放决策记录，产出逐实例 delta 事件流与违规计数。"""
 
-    def __init__(self, repo_variant: str, mapping: dict, tokens: dict,
-                 coef_bytes_per_token: int,
+    def __init__(self, coef_bytes_per_token: int,
                  capacity_per_instance: Optional[int]) -> None:
-        self.repo_variant = repo_variant
-        self.mapping = mapping
-        self.tokens = tokens
         self.coef = coef_bytes_per_token
         self.capacity = capacity_per_instance
         self.sessions: dict[str, SessionState] = {}
@@ -1300,7 +1435,6 @@ class WatermarkReplay:
         session.bytes -= action["bytes"]
         if session.bytes == 0:
             session.instance = None
-            session.tokens = 0
         self.report.actions["evictions"] += 1
         self.report.actions["evict_bytes"] += action["bytes"]
 
@@ -1314,7 +1448,13 @@ class WatermarkReplay:
         kind = action.get("kind")
         state_before = action.get("state_before")
         if nbytes:
-            ratio = nbytes / expected if expected else None
+            try:
+                ratio = nbytes / expected if expected else None
+            except OverflowError:
+                # D2 修复（2026-09-28）：畸形超大 bytes 的比值计算走
+                # fail-closed（同 stats 的 OverflowError 处置）。
+                fail(f"restore bytes 超出浮点可表示范围（{nbytes}）——"
+                     f"账本含畸形超大 delta，拒绝重放")
             bucket = (f"{ratio:.3f}" if ratio is not None else "no-tokens")
             self.report.restore_ratio_hist[bucket] = \
                 self.report.restore_ratio_hist.get(bucket, 0) + 1
@@ -1340,7 +1480,6 @@ class WatermarkReplay:
                      f"（tick={action['tick']}）——重放内部状态损坏")
             session.bytes = 0
             session.instance = None
-            session.tokens = 0
             source = None
 
         # 显式 kind 优先（S1 的 local_hit.total_bytes 是"本地复用 KV 大小"
@@ -1408,6 +1547,16 @@ class WatermarkReplay:
                  f"（tick={action['tick']}）——重放次序或账本缺失")
         source = session.instance
         nbytes = action["bytes"]
+        # D2 修复（2026-09-28）：跨实例零字节交割不再按 stay 静默放行——
+        # 账本宣称没有迁移、但会话跟踪 bytes 仍挂在源实例且归属要切到
+        # 目标实例，源实例占用从此永不回收（幻影占用零异常）。与同函数
+        # "无跟踪实例/bytes 超跟踪"两处 fail 同姿态；会话本无驻留
+        # （bytes==0）时仅实例归属切换，仍按 stay 计。
+        if nbytes == 0 and source != target and session.bytes > 0:
+            fail(f"decode 零字节交割但会话 {action['session']!r} 在源实例 "
+                 f"{source} 仍跟踪 {session.bytes} B（tick={action['tick']}，"
+                 f"目标实例 {target}）——账本宣称无迁移而驻留未清，源实例"
+                 f"占用将成幻影；拒绝重放")
         if source == target or nbytes == 0:
             # 同实例交割（S1/S2 P==D 时仍记 f(c)）：占用不变。
             self.report.actions["decode_stay"] += 1
@@ -1439,7 +1588,6 @@ class WatermarkReplay:
             self._apply(tick, instance, delta)
             session.bytes += delta
         session.instance = instance
-        session.tokens = tokens
         self.report.actions[label] = self.report.actions.get(label, 0) + 1
 
     def apply_own_relocation(self, tick: int, session_id: str,
@@ -1454,7 +1602,6 @@ class WatermarkReplay:
                 self.report.actions["evict_bytes"] += session.bytes
             session.bytes = 0
             session.instance = None
-            session.tokens = 0
             self.report.actions["own_relocation_remote"] += 1
         elif location == "partial_hbm_remote":
             # 分层部分去向：留下/离开比例账本未落——保留 bytes（上界），
@@ -1468,19 +1615,21 @@ class WatermarkReplay:
 # ---------------------------------------------------------------------------
 
 class WatermarkScan:
-    """A4 driver 复用面：单条决策记录一次 consume，扫完 finish。
+    """决策日志扫描器：单条决策记录一次 consume，扫完 finish。
 
-    与独立 CLI 的 replay_decision_log 循环体逐语句等价（含 fail 消息与
-    记录内「逐出→恢复/迁移→增长」固定次序、session_hint 回写）。注意
+    独立 CLI 与 A4 driver 共用同一循环体（含 fail 消息与记录内
+    「逐出→恢复/迁移→增长」固定次序、session_hint 回写）。注意
     consume 会向 record 注入 session_hint 键——driver 的 sink 次序中
     watermark 必须最后（kv/load/hop 不读该键，注入对其不可见）。
     """
 
-    def __init__(self, run_dir: Path, repo_variant: str, mapping: dict,
+    def __init__(self, run_dir: Path, mapping: dict,
                  tokens: dict, coef: int,
                  capacity: Optional[int]) -> None:
-        self.replay = WatermarkReplay(repo_variant, mapping, tokens, coef,
-                                      capacity)
+        # D2 死参删除（2026-09-28）：repo_variant 形参零使用（映射表
+        # mapping 已携带逐仓字段；扫描器内无 variant 分支），CLI 与
+        # driver 调用点同步收窄。
+        self.replay = WatermarkReplay(coef, capacity)
         self.mapping = mapping
         self.tokens = tokens
         self.seen_kinds: dict[tuple[str, str], int] = {}
@@ -1549,10 +1698,6 @@ class WatermarkScan:
             if field is not None:
                 replay.apply_own_relocation(
                     tick, session_id, decision.get(field))
-            else:
-                session = replay.sessions.get(session_id)
-                if session is not None:
-                    session.tokens = token_row["final_context_tokens"]
 
         # 3) 计数型逐出（S2）：无 victim/bytes，只记事件数（上界重建）。
         for count_field in mapping.get("eviction_count_fields", ()):
@@ -1582,16 +1727,6 @@ class WatermarkScan:
         if not self.replay.cplog.has_events():
             fail(f"{self.log_path}: 没有任何可重放的 KV 动作")
         return self.replay
-
-
-def replay_decision_log(run_dir: Path, repo_variant: str, mapping: dict,
-                        tokens: dict, coef: int,
-                        capacity: Optional[int]) -> WatermarkReplay:
-    scan = WatermarkScan(run_dir, repo_variant, mapping, tokens, coef,
-                         capacity)
-    for record in iter_jsonl(scan.log_path):
-        scan.consume(record)
-    return scan.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -1655,12 +1790,16 @@ class JournalReplay:
                  f"——kv_delta_journal 行结构/链不自洽（账本损坏，"
                  f"fail-closed 不降级）")
 
-    def consume(self, row: dict, where: str) -> None:
+    def consume(self, row: dict) -> None:
+        # D2 死参删除（2026-09-28）：where 形参零使用（本类消息自带
+        # journal_path + sequence_last 定位），调用方不再传。
         for field in JOURNAL_REQUIRED_FIELDS:
             self._require(field in row, f"缺字段 {field}")
-        self._require(row.get("schema_version") == 1,
-                      f"schema_version 必须为 1（实得 "
-                      f"{row.get('schema_version')!r}）")
+        _sv = row.get("schema_version")
+        self._require(isinstance(_sv, int) and not isinstance(_sv, bool)
+                      and _sv == 1,
+                      f"schema_version 必须为字面整数 1（实得 "
+                      f"{_sv!r}；True==1/1.0==1 的冒充按 D2 同族拒绝）")
         sequence = row["sequence"]
         tick = row["planner_time_ns"]
         self._require(isinstance(sequence, int) and not isinstance(
@@ -1740,6 +1879,11 @@ class JournalReplay:
         self.rank_instance[rank] = instance
         self.rank_capacity[rank] = capacity
         self.state[rank] = parsed_after
+        # 术语口径注记（2026-09-27）：本工具的 "physical" = w+r+s ≡
+        # metrics_schema._ComponentState.committed（weight+resident+
+        # reserved）；metrics_schema 的 physical(=weight+resident) 在
+        # journal 逐 rank 容量认证中不单独使用。产物键名（per_rank_
+        # physical_* 等）为五仓冻结契约，保持不变。
         physical_after = parsed_after["w"] + parsed_after["r"] + \
             parsed_after["s"]
         if physical_after > capacity:
@@ -1766,6 +1910,8 @@ class JournalReplay:
         self.rows += 1
 
     def final_rank_state(self) -> dict:
+        # "physical" 键 = w+r+s ≡ metrics_schema 的 committed 口径
+        # （五仓产物契约键名，术语映射见 consume 内注记）。
         return {rank: {
             "instance_index": self.rank_instance[rank],
             "capacity_bytes": self.rank_capacity[rank],
@@ -1778,7 +1924,8 @@ class JournalReplay:
 
 def load_journal_checksum(path: Path) -> dict:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = load_json_strict(path.read_text(encoding="utf-8"),
+                                f"journal checksum {path}")
     except json.JSONDecodeError as exc:
         fail(f"kv_delta_journal_checksum.json 非法 JSON：{path}: {exc}")
     if not isinstance(data, dict):
@@ -1803,13 +1950,10 @@ def replay_journal(journal_path: Path,
             stripped = raw.strip()
             if not stripped:
                 continue
-            try:
-                row = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                fail(f"{journal_path}:{lineno}: 非法 JSON（{exc}）")
+            row = load_json_strict(stripped, f"{journal_path}:{lineno}")
             if not isinstance(row, dict):
                 fail(f"{journal_path}:{lineno}: journal 行必须是对象")
-            replay.consume(row, f"{journal_path}:{lineno}")
+            replay.consume(row)
     if replay.rows == 0:
         fail(f"{journal_path}: 没有任何可重放的 KV delta 行")
     sha256_hex = replay.sha256.hexdigest()
@@ -1824,13 +1968,27 @@ def replay_journal(journal_path: Path,
                  f"{sha256_hex}，checksum={expected_sha}）——账本完整性"
                  f"破坏，fail-closed 不降级")
         expected_lines = checksum.get("line_count")
-        if isinstance(expected_lines, int) and expected_lines != replay.rows:
+        # P2-15（2026-09-28）：行数对账只对真 int 生效——bool 冒充数值
+        # （isinstance(True, int) 为真，"line_count": true 在重放恰 1 行时
+        # 被当 1）与类型谎报不得参与行数比对，也不得作为完备性证据
+        # （bool 排除写法同 _require_nonnegative_int）。缺行数键/bool/
+        # 类型错 → checksum 完备性不成立 → 层降 lifecycle（与 ranks 块
+        # 缺失同款 fail-closed 降级）；真 int 才比对，不符仍硬失败。
+        line_count_valid = (
+            not isinstance(expected_lines, bool)
+            and isinstance(expected_lines, int))
+        if line_count_valid and expected_lines != replay.rows:
             fail(f"{journal_path}: journal 行数与证书不符（journal="
                  f"{replay.rows}，checksum={expected_lines}）")
         ranks_block = checksum.get("ranks")
         # 终态对账门是 certified 的硬前置：checksum 在场但 ranks 块缺失/为空
         # 时对账根本没执行，凭 checks 四个 true 授 certified 即为虚判——
         # fail-closed 降 lifecycle（sha256/line_count 必备键缺失同理）。
+        # P2-15（2026-09-28）：字段级对账同样 fail-closed——证书条目缺
+        # 字段/类型不符/bool 冒充数值不再静默跳过（旧 isinstance 门两分支
+        # 都不过即零比对穿过 certified），一律判对账未完成
+        # （terminal_reconciled=False → 降 lifecycle_replay_exact）；
+        # 真 int 且数值不符仍硬失败 exit 2（账本与证书矛盾）。
         terminal_reconciled = False
         if isinstance(ranks_block, dict) and ranks_block:
             terminal_reconciled = True
@@ -1849,14 +2007,20 @@ def replay_journal(journal_path: Path,
                 for field, key in (("weight", "w"), ("resident", "r"),
                                    ("reserved", "s")):
                     value = entry.get(field)
-                    if isinstance(value, int) and value != state[key]:
+                    if isinstance(value, bool) or not isinstance(value, int):
+                        # 缺字段/类型谎报/bool 冒充：该字段无真 int 可比
+                        # 对，对账未执行——零比对穿过即虚判（P2-15）。
+                        terminal_reconciled = False
+                        continue
+                    if value != state[key]:
                         fail(
                             f"{checksum_path}: rank {rank} 终态 {field} 与"
                             f" journal 重放不符（证书 {value}，重放 "
                             f"{state[key]}）——账本与证书矛盾")
                 capacity = entry.get("capacity_bytes")
-                if isinstance(capacity, int) and \
-                        capacity != replay.rank_capacity.get(rank):
+                if isinstance(capacity, bool) or not isinstance(capacity, int):
+                    terminal_reconciled = False
+                elif capacity != replay.rank_capacity.get(rank):
                     fail(f"{checksum_path}: rank {rank} capacity 与 journal"
                          f" 不符（证书 {capacity}，重放 "
                          f"{replay.rank_capacity.get(rank)}）")
@@ -1870,7 +2034,7 @@ def replay_journal(journal_path: Path,
             checksum.get("checks"), dict) else {}
         checksum_complete = (
             checksum.get("sha256") is not None
-            and isinstance(checksum.get("line_count"), int)
+            and line_count_valid
             and terminal_reconciled)
         if checksum_complete and checks and all(checks.get(name) is True
                 for name in (
@@ -2010,6 +2174,12 @@ def watermark_prepare(args: argparse.Namespace, repo_variant: str,
 
     # P1-①：tier 判定基础（run_dir 内容探测；最终 tier 在 emit 侧经
     # journal 重放 + 证书对账落定）。
+    # D2 修复（2026-09-28）：capacity 降级不再一票覆盖 journal 路径的
+    # violation_check——journal 逐 rank 认证用的容量是行内 capacity_bytes
+    # （与 trace_config→hardware 推导链无关），journal 在场时 capacity
+    # 降级只影响 decision-log 对照列的诊断计数。旧实现把
+    # "degraded_peak_recorded" 覆盖到 journal 在场的 run 上，summary 的
+    # violation_check 字段对实际执行的检查撒谎。
     journal_path = args.run_dir / KV_DELTA_JOURNAL_RELPATH
     checksum_path = args.run_dir / KV_DELTA_JOURNAL_CHECKSUM_RELPATH
     journal_present = journal_path.is_file()
@@ -2018,10 +2188,10 @@ def watermark_prepare(args: argparse.Namespace, repo_variant: str,
         violation_check = "per_rank_physical_gt_capacity"
     elif journal_present:
         violation_check = "per_rank_reported_no_formal_verdict"
+    elif capacity is None:
+        violation_check = "degraded_peak_recorded"
     else:
         violation_check = "diagnostic_upper_bound_only"
-    if capacity is None:
-        violation_check = "degraded_peak_recorded"
 
     # P1-④：绘图 series 全局行预算（manifest 新键，fail-closed）。
     row_budget = require_param_int(manifest, "watermark_series_row_budget")
@@ -2054,7 +2224,7 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
     # 重放的容量参数恒为诊断口径（upper_bound_only 层不出物理违规认证）。
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
     prep = watermark_prepare(args, repo_variant)
-    scan = WatermarkScan(args.run_dir, repo_variant, prep["mapping"],
+    scan = WatermarkScan(args.run_dir, prep["mapping"],
                          prep["tokens"], prep["coef"], prep["capacity"])
     for record in iter_jsonl(scan.log_path):
         scan.consume(record)
@@ -2066,7 +2236,8 @@ def _intervals_rows(cplog: ChangePointLog, repo_variant: str):
     """intervals.csv 的行流：per instance 变点区间（含逐出列）。"""
     for instance in cplog.eventful_units():
         unit = cplog.units[instance]
-        next_tick: Optional[int] = None
+        # D2 死变量删除（2026-09-28）：next_tick 从未使用（循环只依赖
+        # pending/item），不再赋值。
         pending: Optional[tuple] = None
         for item in unit.merged_change_points():
             if pending is not None:
@@ -2268,8 +2439,13 @@ def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
                        stat["evict_events"],
                        # P1-⑤：full_reconciled 也输出真实逐出 bytes（JSON
                        # 本就有，NA 展示分支只保留给 count_only 档）。
-                       stat["evict_bytes"] if coverage in ("full",
-                                                           "full_reconciled")
+                       # journal 在场时该单元格取值源是权威 journal 重放
+                       # （evicts 账本），NA 门必须同源取
+                       # instances_csv_coverage（journal_exact 恒真值输出），
+                       # 否则 count_only 决策日志 + journal 的组合会把权威
+                       # 逐出字节吞成 NA（2026-09-30 修正门源错位）。
+                       stat["evict_bytes"] if instances_csv_coverage in (
+                           "full", "full_reconciled", "journal_exact")
                        else NA,
                        violation_instances.get(instance, 0),
                        upper_bound_peaks.get(instance, NA))
@@ -2362,6 +2538,15 @@ def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
         "violation_instances": {str(k): v for k, v in
                                 sorted(violation_instances.items())},
         "max_exceed_bytes": max_exceed_bytes,
+        # 报告 4.3 修复（2026-09-29）：summary 顶层逐出计数恒取 decision-log
+        # 重放（上界/对照列），journal 在场时与 journal 权威口径的
+        # instances.* 计数混在同一输出里且无来源标注。加显式 source 标注
+        # 字段（与 occupancy_source/capacity_source 同风格；与 joint 仓
+        # eviction_counters_source 同名同义），计数口径本身不动。
+        "eviction_counters_source": (
+            "decision-log KV 动作重放（上界；kv_delta_journal 权威路径"
+            "在场时为对照列，非 journal 认证值；instances.* 为权威口径）"),
+        "instances_counters_source": occupancy_source,
         "total_evict_events": replay.report.actions["evictions"],
         "total_evict_bytes": replay.report.actions["evict_bytes"],
         "partial_evictions": replay.report.actions["partial_evictions"],
@@ -2377,7 +2562,12 @@ def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
                     stat["residual_occupancy_bytes"],
                 "evict_events": stat["evict_events"],
                 "evict_bytes": stat["evict_bytes"],
-                "interval_rows": len(cplog.units[instance].points),
+                # D2 修复（2026-09-28）：口径与全局 interval_rows 对齐——
+                # 计 merged_change_points 行数（事件变点 ∪ 逐出 tick 的
+                # RLE 行，即 intervals.csv 里该实例的实际行数）；旧值
+                # len(points) 只数事件变点、漏逐出行，两字段相加对不上。
+                "interval_rows": sum(
+                    1 for _ in cplog.units[instance].merged_change_points()),
                 "violation_events": violation_instances.get(instance, 0),
             }
             for instance, stat in ((u, cplog.units[u].stats())

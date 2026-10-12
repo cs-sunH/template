@@ -15,7 +15,8 @@ simulation, no baseline artifacts touched:
   Part B  Row semantics: turn-0 rows are submitted exactly once (command
           queue count == turn-0 row count), turn>0 rows are registered but
           never submitted (future_alarm path), EOF yields data_rows == total
-          data rows after one pump; window 0 and 128 are equivalent now.
+          data rows after one pump (the A.4-removed row-window knob no
+          longer exists: one pump indexes the whole file).
   Part C  Out-of-range rejection: a turn-0 arrival beyond max_arrival_ns is
           rejected (never submitted, counted) regardless of its file
           position; in-range rows still submit.
@@ -48,13 +49,25 @@ simulation, no baseline artifacts touched:
           from the gate (late_static_submit stays 0, gate ok).
   Part N  Same tick, multiple sessions: the equal-arrival group fires in
           queue_index (row) order -- the equivalence argument's core.
-  Part O  Provenance sidecar tampering (wrong digest / wrong row count):
-          fail-closed exit BEFORE any Submit (zero commands enqueued).
+  Part O  Provenance sidecar gate, ONE negative case per compared arm
+          (non-JSON, schema, every expect_u64 field, the contiguity flag,
+          plus the missing-field shape): each tampered sidecar is the
+          MATCHED record with only its target field rewritten, so the
+          fail-closed exit BEFORE any Submit (zero commands enqueued) is
+          attributable to that arm -- a sidecar that also zeroes
+          csv_fnv1a64/csv_bytes fatal-s at the FIRST compared arm
+          (csv_fnv1a64) and never reaches the arm under test.
   Part P  Session block not contiguous / turn_index gap: fail-closed exit.
-  Part Q  V4 gate self-test: a deliberately delayed calendar submission
-          (ingress backpressure + clock advanced past the arrival) trips
-          late_static_submit and FAILS the run-end arrival gate; the
-          normal path gate passes.
+  Part Q  V4 gate self-test (M5 update 2026-09-30): a backpressure-parked
+          submission is a capacity artifact (late_static_submit_backpressure,
+          gate PASSES); true late discovery still trips late_static_submit
+          and FAILS the gate; the normal path gate passes.
+  Part R  Turn>0 runtime chain (review 2026-09-26 M9-2): a commit-leg
+          future arrival whose target tick is already past is clamped to
+          current+1 and counted in late_future_alarm_rounding, and the
+          production arrival hook (main_online.cc) drives the consumption
+          leg -- every fired alarm (turn-0 and turn>0) retires its row via
+          reader.notify_consumed.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WindowedReaderTest.
 Run (from template/astra-sim-face):
@@ -65,6 +78,7 @@ Run (from template/astra-sim-face):
 #include <cassert>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <sys/wait.h>
@@ -76,6 +90,7 @@ Run (from template/astra-sim-face):
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include "common/EventQueue.h"
 
 using namespace AstraSim::ExecutionDriven;
@@ -139,14 +154,28 @@ void expect_exit_code(Fn&& fn, const int code, const char* what) {
            what);
 }
 
+// cpp-ed-tests-b-2: child-side probe for the tampered-sidecar zero-Submit
+// check below. Captureless function so std::atexit accepts it;
+// g_probe_ingress is assigned inside the forked child, so it points at the
+// CHILD's ingress copy whose queue the failing index pass would have fed.
+RequestIngress* g_probe_ingress = nullptr;
+
+void verify_zero_submits_at_exit() {
+    const bool zero_submits =
+        g_probe_ingress != nullptr &&
+        g_probe_ingress->pending_command_count() == 0;
+    ::_exit(zero_submits ? EXIT_FAILURE : 2);
+}
+
 void write_csv(const std::string& path,
                const std::vector<std::string>& rows) {
-    std::ofstream out(path);
-    out << "session_id,turn_index,request_id,prefill_length,decode_length,"
-           "session_arrival_time_ns,inter_request_interval_ns,description\n";
-    for (const auto& row : rows) {
-        out << row << "\n";
-    }
+    // P1 fix (2026-09-28, ported to this repo 2026-10-07): the provenance
+    // gate is fail-closed on an absent sidecar, so every queue-CSV fixture
+    // ships its matching provenance record (computed exactly like the
+    // materializer / the reader's index pass). Deliberately-malformed
+    // fixtures abort in-row before the gate, so their sidecar values are
+    // never consulted.
+    FixtureProvenance::write_queue_fixture(path, rows);
 }
 
 // 10 sessions (turn-0 arrivals 1..10 s, monotonic) + session_0 turn-1;
@@ -189,21 +218,6 @@ void test_calendar_submission() {
            "all 10 turn-0 Submits queued by the first pump");
     expect(reader.current_window_occupancy() == 10,
            "outstanding = submitted-but-unfired turn-0 rows");
-    expect(reader.peak_window_occupancy() == 10,
-           "peak outstanding reached 10");
-    expect(reader.provenance().data_rows == 11, "provenance data_rows");
-    expect(reader.provenance().sessions == 10, "provenance sessions");
-    expect(reader.provenance().turn0_count == 10, "provenance turn0_count");
-    expect(reader.provenance().turn0_arrival_min_ns == 1000000000ULL,
-           "provenance turn0 arrival min");
-    expect(reader.provenance().turn0_arrival_max_ns == 10000000000ULL,
-           "provenance turn0 arrival max");
-    expect(reader.provenance().turn0_adjacent_inversions == 0,
-           "monotonic sample has zero file-order inversions");
-    expect(reader.provenance().session_blocks_contiguous,
-           "sample blocks contiguous");
-    expect(reader.provenance_sidecar_status() == "absent-no-gate",
-           "no sidecar written for this fixture: absent, no gate");
 
     // Later pumps are no-ops (nothing left to index or submit).
     expect(!reader.pump(), "later pump returns false at EOF");
@@ -219,6 +233,7 @@ void test_calendar_submission() {
     expect(reader.current_window_occupancy() == 8,
            "out-of-order consumption retires exactly itself");
     expect(reader.rejected_out_of_range() == 0, "no rejections in part A");
+    std::remove(csv.c_str());
     std::printf("[fixture] part A PASS: calendar submission\n");
 }
 
@@ -232,25 +247,157 @@ void test_row_semantics() {
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
 
-    // Advisory window 0 and 128 are now EQUIVALENT: both index the whole
-    // file and submit every turn-0 in arrival order.
+    // One pump indexes the whole file and submits every turn-0 in arrival
+    // order (whole-file index pass; no row window anymore).
     WindowedTraceReader reader(csv, ingress);
-    expect(!reader.pump(), "window 0: one pump drains the calendar");
-    expect(reader.eof(), "window 0 reaches EOF");
+    expect(!reader.pump(), "one pump drains the calendar");
+    expect(reader.eof(), "EOF after the single pump");
     expect(reader.data_rows() == 11, "data_rows == 11");
     expect(reader.rows_read() == 11, "rows_read == 11");
     expect(ingress.pending_command_count() == 10,
            "exactly the 10 turn-0 rows are submitted; turn>0 never is");
-    expect(ingress.pending_queue_index_count() == 1,
-           "only the one turn>0 row retains a future lookup");
+    std::remove(csv.c_str());
     std::printf("[fixture] part B PASS: turn-0 Submit / turn>0 future-alarm "
-                "semantics (window 0 == 128)\n");
+                "semantics (whole-file index pass)\n");
+}
+
+// (2026-10-01) Pins for the three same-day reader gates: CRLF blank
+// lines, a UTF-8 BOM header, and short (<7-column) data rows.
+// P1 port (2026-10-07): every legal arm below ships a byte-accurate
+// provenance sidecar so the pass/fail is attributable to the shape gate
+// under test, not to the fail-closed absent-sidecar gate; the counters
+// follow the reader's own line semantics (a CRLF blank line is skipped,
+// not counted), with the hash over the exact raw bytes via the shared
+// helper's FNV routine.
+void write_raw_csv(const std::string& path, const std::string& bytes) {
+    std::ofstream out(path, std::ios::binary);
+    out << bytes;
+}
+
+void write_raw_sidecar(const std::string& path, const std::string& bytes,
+                       const uint64_t data_rows, const uint64_t sessions,
+                       const uint64_t turn0_count, const uint64_t t0_min,
+                       const uint64_t t0_max, const uint64_t inversions) {
+    const uint64_t fnv =
+        FixtureProvenance::fnv1a64_bytes(14695981039346656037ULL, bytes);
+    std::ofstream out(path + ".provenance.json", std::ios::binary);
+    out << "{\"schema\":1,\"generator_version\":\"test-fixture\","
+        << "\"csv_sha256\":\"test-fixture (human audit only)\","
+        << "\"csv_fnv1a64\":" << fnv << ",\"csv_bytes\":" << bytes.size()
+        << ",\"data_rows\":" << data_rows << ",\"sessions\":" << sessions
+        << ",\"turn0_count\":" << turn0_count
+        << ",\"turn0_arrival_min_ns\":" << t0_min
+        << ",\"turn0_arrival_max_ns\":" << t0_max
+        << ",\"turn0_adjacent_inversions\":" << inversions
+        << ",\"session_blocks_contiguous\":true}\n";
+}
+
+void test_reader_input_shape_gates() {
+    // (1) CRLF blank lines are skipped exactly like LF blank lines.
+    {
+        const std::string csv =
+            fixture_path("windowed_reader_test_crlf_blank");
+        const std::string bytes =
+            std::string(kRequestQueueCsvHeader) +
+            "\r\n"
+            "\r\n"  // CRLF blank line -- used to reach the header
+                    // branch as "\r" and die with a wrong message
+            "s0,0,s0_r0,100,10,500,,d\r\n"
+            "\r\n"  // a second one among data rows
+            "s0,1,s0_r1,100,10,,1000,d\r\n";
+        write_raw_csv(csv, bytes);
+        // Reader line semantics: both "\r" blank lines are skipped, so
+        // data_rows=2 / one session / one turn-0 (arrival 500); the
+        // hash/byte counters stay on the raw CRLF bytes.
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/2, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/500,
+                          /*t0_max=*/500, /*inversions=*/0);
+        EventQueue eq;
+        DecisionMailbox mailbox;
+        ServiceCoordinator svc;
+        RequestIngress ingress;
+        ingress.bind(&eq, &mailbox, &svc);
+        WindowedTraceReader reader(csv, ingress);
+        expect(!reader.pump(), "CRLF blank lines: one pump drains");
+        expect(reader.data_rows() == 2,
+               "CRLF blank lines are not data rows");
+        expect(ingress.pending_command_count() == 1,
+               "CRLF blank lines: only the turn-0 row is submitted");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // (2) A UTF-8 BOM before the header is accepted (utf-8-sig parity).
+    {
+        const std::string csv = fixture_path("windowed_reader_test_bom");
+        const std::string bytes =
+            std::string("\xEF\xBB\xBF") + kRequestQueueCsvHeader +
+            "\n"
+            "s0,0,s0_r0,100,10,500,,d\n";
+        write_raw_csv(csv, bytes);
+        // First non-empty line = the BOM-prefixed header; one data row,
+        // one turn-0 (arrival 500); hash over the raw bytes incl. BOM.
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/1, /*sessions=*/1,
+                          /*turn0_count=*/1, /*t0_min=*/500,
+                          /*t0_max=*/500, /*inversions=*/0);
+        EventQueue eq;
+        DecisionMailbox mailbox;
+        ServiceCoordinator svc;
+        RequestIngress ingress;
+        ingress.bind(&eq, &mailbox, &svc);
+        WindowedTraceReader reader(csv, ingress);
+        expect(!reader.pump(), "BOM header: one pump drains");
+        expect(reader.data_rows() == 1, "BOM header: the data row counts");
+        expect(ingress.pending_command_count() == 1,
+               "BOM header: the turn-0 row is submitted");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    // (3) A short row (fewer than 7 columns) fails closed at the reader
+    // (reader_fatal exits EXIT_FAILURE; 4 columns: valid-looking turn-0
+    // shape, but the interval column does not exist -- pre-fix it
+    // registered with interval=0).
+    {
+        const std::string csv = fixture_path("windowed_reader_test_short_row");
+        const std::string bytes =
+            std::string(kRequestQueueCsvHeader) +
+            "\n"
+            "s0,0,s0_r0,100,10\n"
+            "s0,1,s0_r1,100,10\n";
+        write_raw_csv(csv, bytes);
+        // Sidecar ships for failure attribution (the row check must fire,
+        // not the absent-sidecar gate); its values are never consulted --
+        // the reader fatal-s in-row during the index pass, BEFORE the
+        // gate. Helper-rule stats over the bytes: two data rows, no
+        // arrival field (taken<6), so zero turn-0.
+        write_raw_sidecar(csv, bytes,
+                          /*data_rows=*/2, /*sessions=*/1,
+                          /*turn0_count=*/0, /*t0_min=*/0,
+                          /*t0_max=*/0, /*inversions=*/0);
+        expect_exit_code(
+            [&csv]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE, "reader aborts a <7-column data row");
+        std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
+    }
+    std::printf("[fixture] part S PASS: CRLF blank / BOM header / short-row "
+                "gates\n");
 }
 
 void test_out_of_range_rejection() {
     const std::string csv = fixture_path("windowed_reader_test_reject");
-    // The out-of-range row sits FIRST in the file; the calendar submits in
-    // arrival order and processes the rejection per entry either way.
+    // The out-of-range row sits FIRST in the file (data row 0); the calendar
+    // submits in arrival order and processes the rejection per entry either
+    // way.
     write_csv(csv, {
         "session_0,0,session_0_request_0,100,50,40000000000,,d",
         "session_1,0,session_1_request_0,100,50,20000000000,,d",
@@ -262,7 +409,8 @@ void test_out_of_range_rejection() {
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
 
-    // max_arrival_ns = 30s: row 1 (20s) in range, row 2 (40s) rejected.
+    // max_arrival_ns = 30s: data row 0 (40s, written first) is rejected,
+    // data row 1 (20s) is in range and submitted.
     WindowedTraceReader reader(csv, ingress,
                                /*max_arrival_ns=*/30000000000ULL);
     reader.pump();
@@ -272,6 +420,7 @@ void test_out_of_range_rejection() {
     expect(ingress.pending_command_count() == 1,
            "only the in-range row is submitted");
     expect(reader.eof(), "reader reached EOF despite the rejection");
+    std::remove(csv.c_str());
     std::printf("[fixture] part C PASS: simulation-out-of-range rejection\n");
 }
 
@@ -402,6 +551,7 @@ void test_default_unbounded_window() {
         expect(cli.request_max_arrival_ns == 0,
                "CLI default --request-max-arrival-ns == 0 (unbounded)");
     }
+    std::remove(csv.c_str());
     std::printf("[fixture] part G PASS: default unbounded arrival window "
                 "(constructor + CLI defaults)\n");
 }
@@ -492,6 +642,7 @@ void test_explicit_window_fail_closed() {
     // Dropped-first ordering and the completed shortfall must fail-closed.
     expect(audit_completion({10, 5, 1, 1, 4}) == CompletionAuditVerdict::Dropped,
            "audit: this fixture's run-end shape is Dropped (drops first)");
+    std::remove(csv.c_str());
     std::printf("[fixture] part H PASS: explicit window drops visible + "
                 "fail-closed completion audit\n");
 }
@@ -518,9 +669,6 @@ void test_queue_index_lifetime_and_fail_closed() {
     expect(reader.rows_read() == 4, "all four rows indexed in one pump");
     expect(ingress.pending_command_count() == 2,
            "both turn-0 rows submitted");
-    expect(ingress.pending_queue_index_count() == 2,
-           "both turn>0 rows pre-registered by the index pass");
-    expect(reader.provenance().turn0_count == 2, "provenance turn0_count");
 
     RequestEnvelope future0;
     future0.session_id = "session_0";
@@ -528,20 +676,21 @@ void test_queue_index_lifetime_and_fail_closed() {
     future0.request_id = "session_0_request_1";
     future0.arrival_world_ns = 100;
     ingress.schedule_future_arrival(future0);
-    expect(ingress.pending_queue_index_count() == 1,
-           "queue-index: first lookup erased at future schedule");
     RequestEnvelope future1;
     future1.session_id = "session_1";
     future1.turn_index = 1;
     future1.request_id = "session_1_request_1";
     future1.arrival_world_ns = 200;
     ingress.schedule_future_arrival(future1);
-    expect(ingress.pending_queue_index_count() == 0,
-           "queue-index: second lookup erased at future schedule");
     while (!eq.finished()) {
         eq.proceed();
     }
 
+    // Death mechanism note: unlike the duplicate-registration case below
+    // (fprintf + std::abort in the register path), a missing/mismatched
+    // lookup dies inside schedule_future_arrival as a thrown
+    // std::runtime_error -- uncaught in the forked child -> terminate ->
+    // SIGABRT. The observed signal is identical either way.
     expect_sigabrt(
         [&]() {
             RequestEnvelope missing;
@@ -549,7 +698,8 @@ void test_queue_index_lifetime_and_fail_closed() {
             missing.arrival_world_ns = 300;
             ingress.schedule_future_arrival(missing);
         },
-        "queue-index: missing production lookup aborts");
+        "queue-index: missing production lookup throws runtime_error "
+        "(uncaught -> SIGABRT)");
     expect_sigabrt(
         [&]() {
             RequestEnvelope injected;
@@ -643,7 +793,6 @@ void test_calendar_out_of_order_turn0() {
         "session_1,0,session_1_request_0,100,50,100,,d",
         "session_2,0,session_2_request_0,100,50,300,,d",
     });
-    expect(true, "fixture written");  // silence unused-warning style checks
 
     EventQueue eq;
     DecisionMailbox mailbox;
@@ -705,12 +854,8 @@ void test_first_block_over_window() {
     expect(!reader.pump(), "one pump drains the whole 151-row file");
     expect(reader.rows_read() == 151, "all rows indexed");
     expect(reader.data_rows() == 151, "data_rows == 151");
-    expect(ingress.pending_queue_index_count() == 149,
-           "every turn>0 row of the long block pre-registered");
     expect(ingress.pending_command_count() == 2,
            "both turn-0 rows submitted (file position irrelevant)");
-    expect(reader.provenance().turn0_adjacent_inversions == 1,
-           "file order 1000 -> 500 is one adjacent inversion");
     std::remove(csv.c_str());
     std::printf("[fixture] part L PASS: first block > window fully "
                 "reachable in one pump\n");
@@ -807,27 +952,33 @@ void test_provenance_tampering() {
     const std::string sidecar = csv + ".provenance.json";
 
     // MATCHING sidecar (values taken from a first, ungated index pass):
-    // status "matched" and the run proceeds.
+    // status "matched" and the run proceeds. The exact text is kept in
+    // matched_sidecar: every tampering case below copies it and rewrites
+    // ONLY its target field, so the child's fatal is attributable to that
+    // single comparison arm (a hand-written sidecar that also zeroes
+    // csv_fnv1a64/csv_bytes fatal-s at the FIRST compared arm instead).
+    std::string matched_sidecar;
     {
-        EventQueue eq;
-        DecisionMailbox mailbox;
-        ServiceCoordinator svc;
-        RequestIngress ingress;
-        ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader probe(csv, ingress);
-        probe.pump();
-        const auto& p = probe.provenance();
+        // Hand-computed independent oracle for this exact 3-row fixture
+        // (264 bytes; FNV-1a 64 over the raw bytes, offset basis
+        // 14695981039346656037, prime 1099511628211): the index pass must
+        // reproduce every field. data_rows=3, sessions=2, turn0_count=2,
+        // arrival min/max = 500/1000, file order 1000 -> 500 = one
+        // adjacent inversion, blocks contiguous.
+        matched_sidecar =
+            "{\"schema\":1,\"generator_version\":\"fixture\","
+            "\"csv_sha256\":\"human-only\","
+            "\"csv_fnv1a64\":17266060097935176346,"
+            "\"csv_bytes\":264,"
+            "\"data_rows\":3,"
+            "\"sessions\":2,"
+            "\"turn0_count\":2,"
+            "\"turn0_arrival_min_ns\":500,"
+            "\"turn0_arrival_max_ns\":1000,"
+            "\"turn0_adjacent_inversions\":1,"
+            "\"session_blocks_contiguous\":true}\n";
         std::ofstream out(sidecar);
-        out << "{\"schema\":1,\"generator_version\":\"fixture\","
-               "\"csv_sha256\":\"human-only\",\"csv_fnv1a64\":"
-            << p.fnv1a64 << ",\"csv_bytes\":" << p.csv_bytes
-            << ",\"data_rows\":" << p.data_rows << ",\"sessions\":"
-            << p.sessions << ",\"turn0_count\":" << p.turn0_count
-            << ",\"turn0_arrival_min_ns\":" << p.turn0_arrival_min_ns
-            << ",\"turn0_arrival_max_ns\":" << p.turn0_arrival_max_ns
-            << ",\"turn0_adjacent_inversions\":"
-            << p.turn0_adjacent_inversions
-            << ",\"session_blocks_contiguous\":true}\n";
+        out << matched_sidecar;
     }
     {
         EventQueue eq;
@@ -837,14 +988,76 @@ void test_provenance_tampering() {
         ingress.bind(&eq, &mailbox, &svc);
         WindowedTraceReader reader(csv, ingress);
         reader.pump();
-        expect(reader.provenance_sidecar_status() == "matched",
-               "provenance: matching sidecar -> matched, run proceeds");
+        // D2 (2026-09-28): provenance_sidecar_status() was removed with the
+        // dead accessor; the gate's outcomes here stay observable through the
+        // pending-command counts below (matched/absent both proceed, tampered
+        // ones abort before any Submit).
         expect(ingress.pending_command_count() == 2,
                "provenance: matching sidecar submits both turn-0 rows");
     }
 
-    // Wrong on EVERY compared field: the child must exit(1) with zero
-    // submissions. (The reader prints [Error] to the child's stderr.)
+    // Tamper helpers over the matched record. with_field rewrites the value
+    // token (digits or true/false) after "field":; without_field deletes
+    // the whole "field":<value>, entry (a mid-JSON field only) so expect_u64
+    // takes its "field missing" fatal instead of the mismatch one.
+    auto sidecar_with_field = [&](const char* field, const char* value) {
+        const std::string key = std::string("\"") + field + "\":";
+        const std::size_t key_at = matched_sidecar.find(key);
+        expect(key_at != std::string::npos,
+               "provenance tamper helper: target field present");
+        if (key_at == std::string::npos) {
+            return matched_sidecar;
+        }
+        const std::size_t value_begin = key_at + key.size();
+        std::size_t value_end = value_begin;
+        while (value_end < matched_sidecar.size() &&
+               matched_sidecar[value_end] != ',' &&
+               matched_sidecar[value_end] != '}') {
+            ++value_end;
+        }
+        return matched_sidecar.substr(0, value_begin) + value +
+               matched_sidecar.substr(value_end);
+    };
+    auto sidecar_without_field = [&](const char* field) {
+        const std::string key = std::string("\"") + field + "\":";
+        const std::size_t key_at = matched_sidecar.find(key);
+        expect(key_at != std::string::npos,
+               "provenance tamper helper: target field present");
+        const std::size_t entry_end =
+            key_at == std::string::npos
+                ? std::string::npos
+                : matched_sidecar.find(',', key_at);
+        expect(entry_end != std::string::npos,
+               "provenance tamper helper: mid-JSON field entry");
+        if (key_at == std::string::npos || entry_end == std::string::npos) {
+            return matched_sidecar;
+        }
+        return matched_sidecar.substr(0, key_at) +
+               matched_sidecar.substr(entry_end + 1);
+    };
+    // One forked-child negative run per tampered sidecar text: the child
+    // must exit(EXIT_FAILURE) (reader_fatal) -- nothing else.
+    auto expect_sidecar_fatals = [&](const std::string& text,
+                                     const char* what) {
+        std::ofstream out(sidecar);
+        out << text;
+        expect_exit_code(
+            [&]() {
+                EventQueue eq;
+                DecisionMailbox mailbox;
+                ServiceCoordinator svc;
+                RequestIngress ingress;
+                ingress.bind(&eq, &mailbox, &svc);
+                WindowedTraceReader tampered(csv, ingress);
+                tampered.pump();
+            },
+            EXIT_FAILURE, what);
+    };
+
+    // Wrong on EVERY compared field: csv_fnv1a64 is the FIRST arm the gate
+    // compares, so this case exercises the digest-mismatch fatal itself;
+    // the child must exit(1) with zero submissions. (The reader prints
+    // [Error] to the child's stderr.)
     {
         std::ofstream out(sidecar);
         out << "{\"schema\":1,\"generator_version\":\"fixture\","
@@ -861,45 +1074,81 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress);
+        // The fail-closed index pass runs in a forked child (expect_exit_code
+        // forks before invoking the lambda, so &ingress inside it is the
+        // child's copy). The zero-Submit property must be observed on THAT
+        // child's ingress at the moment it exits: asserting on parent-side
+        // objects that never pumped the CSV was trivially true (review
+        // 2026-09-26 cpp-ed-tests-b-2). The child arms an atexit probe
+        // (std::exit runs atexit handlers) that re-exits EXIT_FAILURE iff
+        // zero Submits were enqueued; a nonzero queue exits 2 and the parent
+        // exit-code assertion below fails.
         expect_exit_code(
             [&]() {
+                g_probe_ingress = &ingress;
+                std::atexit(verify_zero_submits_at_exit);
                 WindowedTraceReader tampered(csv, ingress);
                 tampered.pump();
             },
             EXIT_FAILURE,
-            "provenance: wrong digest fail-closes the run");
-        expect(ingress.pending_command_count() == 0,
-               "provenance: zero Submits enqueued on mismatch");
-        expect(reader.provenance_sidecar_status() == "not-indexed",
-               "fresh reader has not indexed yet (child did the failing "
-               "index)");
+            "provenance: wrong digest fail-closes the run with zero "
+            "Submits enqueued");
     }
 
-    // Wrong data_rows only: still fail-closed.
-    {
-        std::ofstream out(sidecar);
-        out << "{\"schema\":1,\"csv_fnv1a64\":0,\"csv_bytes\":0,"
-               "\"data_rows\":999,\"sessions\":0,\"turn0_count\":0,"
-               "\"turn0_arrival_min_ns\":0,\"turn0_arrival_max_ns\":0,"
-               "\"turn0_adjacent_inversions\":0,"
-               "\"session_blocks_contiguous\":true}\n";
-    }
-    expect_exit_code(
-        [&]() {
-            EventQueue eq;
-            DecisionMailbox mailbox;
-            ServiceCoordinator svc;
-            RequestIngress ingress;
-            ingress.bind(&eq, &mailbox, &svc);
-            WindowedTraceReader tampered(csv, ingress);
-            tampered.pump();
-        },
-        EXIT_FAILURE,
-        "provenance: wrong row count fail-closes the run");
+    // One negative case per remaining comparison arm, each starting from
+    // the matched record with ONLY the target field rewritten (gate order:
+    // schema, csv_fnv1a64, csv_bytes, data_rows, sessions, turn0_count,
+    // turn0_arrival_min_ns, turn0_arrival_max_ns,
+    // turn0_adjacent_inversions, session_blocks_contiguous; the non-JSON
+    // shape fatals before any field comparison). Review A2 (2026-09-28):
+    // the previous "wrong data_rows only" case hand-wrote
+    // csv_fnv1a64/csv_bytes as 0, so the child fatal-s at the csv_fnv1a64
+    // arm -- the data_rows arm, and every other arm, had zero coverage.
+    expect_sidecar_fatals(sidecar_with_field("schema", "2"),
+                          "provenance: wrong sidecar schema fail-closes "
+                          "the run");
+    expect_sidecar_fatals(sidecar_with_field("csv_bytes", "1"),
+                          "provenance: wrong byte count fail-closes the "
+                          "run");
+    expect_sidecar_fatals(sidecar_with_field("data_rows", "999"),
+                          "provenance: wrong row count fail-closes the "
+                          "run");
+    expect_sidecar_fatals(sidecar_with_field("sessions", "999"),
+                          "provenance: wrong session count fail-closes "
+                          "the run");
+    expect_sidecar_fatals(sidecar_with_field("turn0_count", "999"),
+                          "provenance: wrong turn-0 count fail-closes the "
+                          "run");
+    expect_sidecar_fatals(
+        sidecar_with_field("turn0_arrival_min_ns", "0"),
+        "provenance: wrong turn-0 arrival minimum fail-closes the run");
+    expect_sidecar_fatals(
+        sidecar_with_field("turn0_arrival_max_ns", "0"),
+        "provenance: wrong turn-0 arrival maximum fail-closes the run");
+    // Actual inversions on this fixture are 1 (file-order turn-0 arrivals
+    // 1000 then 500); claiming 0 is a mismatch.
+    expect_sidecar_fatals(
+        sidecar_with_field("turn0_adjacent_inversions", "0"),
+        "provenance: wrong inversion count fail-closes the run");
+    expect_sidecar_fatals(
+        sidecar_with_field("session_blocks_contiguous", "false"),
+        "provenance: sidecar claiming non-contiguous blocks fail-closes "
+        "the run");
+    // A missing (or non-unsigned) compared field: expect_u64's other
+    // fatal, "field missing or not an unsigned integer".
+    expect_sidecar_fatals(
+        sidecar_without_field("sessions"),
+        "provenance: sidecar missing a compared field fail-closes the "
+        "run");
+    // Not JSON at all: fatal before any field comparison.
+    expect_sidecar_fatals("{\"schema\":1,",
+                          "provenance: non-JSON sidecar fail-closes the "
+                          "run");
 
-    // Absent sidecar: explicitly no gate (already covered in part A; here
-    // confirmed on this fixture too).
+    // Absent sidecar: FAIL-CLOSED (P1 fix 2026-09-28, ported to this repo
+    // 2026-10-07; was "absent (no gate)"). A queue without its provenance
+    // record cannot be told apart from a truncated one -- the run must
+    // exit non-zero with zero Submits.
     std::remove(sidecar.c_str());
     {
         EventQueue eq;
@@ -907,14 +1156,18 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress);
-        reader.pump();
-        expect(reader.provenance_sidecar_status() == "absent-no-gate",
-               "absent sidecar: no gate, run proceeds");
-        expect(ingress.pending_command_count() == 2,
-               "absent sidecar: both turn-0 rows submitted");
+        expect_exit_code(
+            [&]() {
+                WindowedTraceReader reader(csv, ingress);
+                reader.pump();
+            },
+            EXIT_FAILURE,
+            "provenance: absent sidecar fail-closes the run");
+        expect(ingress.pending_command_count() == 0,
+               "provenance: zero Submits enqueued on absent sidecar");
     }
     std::remove(csv.c_str());
+    std::remove((csv + ".provenance.json").c_str());
     std::printf("[fixture] part O PASS: provenance tampering fail-closes "
                 "with zero submissions\n");
 }
@@ -1001,10 +1254,13 @@ void test_structure_validation_fail_closed() {
                 "fail-closed\n");
 }
 
-// Part Q (V4 gate self-test): a deliberately DELAYED calendar submission
-// trips late_static_submit and FAILS the run-end arrival gate; the normal
-// path passes. The delay is produced by ingress backpressure (capacity 1)
-// plus the clock advancing past the parked entry's arrival.
+// Part Q (V4 gate self-test, M5 update 2026-09-30, mirrored from the joint
+// repo): a submission parked by ingress BACKPRESSURE (capacity 1) and
+// drained after the clock advanced is a capacity artifact -- it counts into
+// late_static_submit_backpressure and the gate PASSES. A row the reader
+// itself discovers late (no backpressure: the first pump happens after the
+// clock advanced) still trips late_static_submit and FAILS the gate. The
+// normal path passes.
 void noop_callback(void*) {}
 
 void test_gate_trips_on_delayed_submission() {
@@ -1033,27 +1289,58 @@ void test_gate_trips_on_delayed_submission() {
     expect(eq.get_current_time() == 5000, "clock advanced to 5000");
     reader.pump();  // submits the parked entry at discovered=5000
     ingress.drain_commands();
-    expect(ingress.late_static_submit_count() == 1,
-           "delayed static Submit counts in late_static_submit");
+    // M5: the parked entry's clamp is a capacity artifact -- the reader
+    // offered it at t=0 and the bounded queue deferred it.
+    expect(ingress.late_static_submit_count() == 0,
+           "backpressure-deferred Submit is NOT in late_static_submit");
+    expect(ingress.late_static_submit_backpressure_count() == 1,
+           "backpressure-deferred Submit counts in the M5 bucket");
     expect(ingress.t0_boundary_clamp_count() == 0,
            "not a t0 boundary (declared 2000)");
     const auto summary = reader.audit_static_arrivals();
-    expect(!summary.gate_ok,
-           "arrival gate FAILS on the delayed submission (V4 self-test)");
-    expect(summary.late_static_submit == 1, "summary late_static_submit=1");
+    expect(summary.gate_ok,
+           "arrival gate PASSES on the backpressure-deferred submission "
+           "(M5: capacity artifact, exempt)");
+    expect(summary.late_static_submit == 0, "summary late_static_submit=0");
+    expect(summary.late_static_submit_backpressure == 1,
+           "summary late_static_submit_backpressure=1");
     const auto audit = reader.arrival_audit();
-    bool found_late = false;
+    bool found_deferred = false;
     for (const auto& row : audit) {
-        if (std::string(row.late_source) == "static_submit_late") {
-            found_late = row.declared_arrival_ns == 2000 &&
-                         row.reader_discovered_tick == 5000 &&
-                         row.effective_arrival_ns == 5001 &&
-                         row.late_by_ns == 3001;
+        if (std::string(row.late_source) == "capacity_backpressure") {
+            found_deferred = row.declared_arrival_ns == 2000 &&
+                             row.reader_discovered_tick == 5000 &&
+                             row.effective_arrival_ns == 5001 &&
+                             row.late_by_ns == 3001 &&
+                             row.backpressure_deferred;
         }
     }
-    expect(found_late,
+    expect(found_deferred,
            "audit row records declared=2000 discovered=5000 "
-           "effective=5001 late_by=3001");
+           "effective=5001 late_by=3001 as capacity_backpressure");
+
+    // True late discovery (no backpressure: the first pump happens after the
+    // clock advanced past both arrivals) still trips the gate.
+    {
+        EventQueue eq_late;
+        DecisionMailbox mailbox_late;
+        ServiceCoordinator svc_late;
+        RequestIngress ingress_late;
+        ingress_late.bind(&eq_late, &mailbox_late, &svc_late);
+        WindowedTraceReader reader_late(csv, ingress_late);
+        eq_late.schedule_event(5000, noop_callback, nullptr);
+        while (!eq_late.finished()) {
+            eq_late.proceed();
+        }
+        reader_late.pump();  // first discovery at 5000: no park, pure lateness
+        ingress_late.drain_commands();
+        expect(ingress_late.late_static_submit_count() == 2,
+               "true late discovery counts in late_static_submit");
+        expect(ingress_late.late_static_submit_backpressure_count() == 0,
+               "true late discovery is not a backpressure artifact");
+        expect(!reader_late.audit_static_arrivals().gate_ok,
+               "arrival gate still FAILS on true late discovery");
+    }
 
     // Normal path (fresh ingress, no backpressure): gate passes.
     {
@@ -1077,8 +1364,111 @@ void test_gate_trips_on_delayed_submission() {
                "normal path: arrival gate passes");
     }
     std::remove(csv.c_str());
-    std::printf("[fixture] part Q PASS: gate trips on delayed submission, "
-                "passes on the normal path\n");
+    std::printf("[fixture] part Q PASS: gate exempts backpressure artifacts, "
+                "trips true late discovery, passes on the normal path\n");
+}
+
+// Part R (review 2026-09-26 M9-2): the turn>0 runtime chain no other part
+// reaches end to end. (a) The late-future-alarm clamp: schedule_future_arrival
+// with a target tick at or before the current clock clamps the alarm to
+// current+1 and counts late_future_alarm_rounding (RequestIngress.cc), the
+// branch every prior fixture skipped (all future alarms were strictly in
+// schedule-time future). (b) The consumption leg: the production arrival hook
+// (main_online.cc) calls reader.notify_consumed(env.queue_index) inside
+// arrival_cb, so each FIRED alarm retires its row from the reader's
+// outstanding set -- previously notify_consumed was only ever driven by hand.
+void test_future_arrival_clamp_and_consumption_leg() {
+    const std::string csv =
+        fixture_path("windowed_reader_test_future_clamp");
+    write_csv(csv, {
+        "session_0,0,session_0_request_0,100,50,100,,d",
+        "session_0,1,session_0_request_1,100,50,,90,d",
+    });
+
+    EventQueue eq;
+    DecisionMailbox mailbox;
+    ServiceCoordinator svc;
+    RequestIngress ingress;
+    ingress.bind(&eq, &mailbox, &svc);
+    WindowedTraceReader reader(csv, ingress);
+
+    // Production consumption leg: the arrival hook is the main_online.cc
+    // shape (notify the reader from inside arrival_cb), extended with a fire
+    // log and occupancy snapshots for the assertions below.
+    std::vector<FireRecord> seq;
+    std::vector<size_t> occupancy_after_notify;
+    ingress.set_arrival_hook([&](const RequestEnvelope& env) {
+        seq.push_back(FireRecord{eq.get_current_time(), env.queue_index});
+        reader.notify_consumed(env.queue_index);
+        occupancy_after_notify.push_back(reader.current_window_occupancy());
+    });
+
+    // Index pass: one turn-0 Submit (arrival 100); the turn>0 row is
+    // pre-registered (one-shot queue-index lookup for request
+    // session_0_request_1).
+    expect(!reader.pump(), "future-clamp: one pump indexes the file");
+    expect(reader.rows_read() == 2, "future-clamp: both rows indexed");
+    expect(ingress.pending_command_count() == 1,
+           "future-clamp: only the turn-0 row submitted");
+    ingress.drain_commands();  // arms the turn-0 alarm at 100
+    expect(reader.current_window_occupancy() == 1,
+           "future-clamp: the turn-0 row is outstanding before its alarm");
+
+    // Turn-0 alarm fires at 100; the hook's notify_consumed retires the row.
+    while (!eq.finished()) {
+        eq.proceed();
+    }
+    expect(eq.get_current_time() == 100, "future-clamp: turn-0 fired at 100");
+    expect(reader.current_window_occupancy() == 0,
+           "future-clamp: hook->notify_consumed retired the turn-0 row");
+
+    // Commit-leg stand-in (committer Part P covers commit->schedule; here the
+    // RUNTIME branch is the target): the turn>0 arrival is scheduled with the
+    // interval-based target 100+90=190 while the clock is already at 5000 --
+    // the late-future-alarm rounding case. The one-shot lookup is consumed
+    // and the alarm clamps to current+1.
+    eq.schedule_event(5000, noop_callback, nullptr);
+    while (!eq.finished()) {
+        eq.proceed();
+    }
+    expect(eq.get_current_time() == 5000,
+           "future-clamp: clock advanced past the interval-based target");
+    RequestEnvelope future;
+    future.session_id = "session_0";
+    future.turn_index = 1;
+    future.request_id = "session_0_request_1";
+    future.prefill_length = 100;
+    future.decode_length = 50;
+    future.arrival_world_ns = 190;
+    ingress.schedule_future_arrival(future);
+    expect(ingress.late_future_alarm_rounding_count() == 1,
+           "future-clamp: past-target future arrival counted exactly once "
+           "in late_future_alarm_rounding");
+    expect(ingress.late_static_submit_count() == 0 &&
+               ingress.late_external_stream_count() == 0,
+           "future-clamp: the clamp stays out of the static/external "
+           "counters");
+    expect(eq.get_current_time() == 5000 && !eq.finished(),
+           "future-clamp: the clamped alarm waits at current+1");
+
+    while (!eq.finished()) {
+        eq.proceed();
+    }
+    expect(seq.size() == 2, "future-clamp: both arrivals fired");
+    expect(seq[0].tick == 100 && seq[0].queue_index == 0,
+           "future-clamp: turn-0 fired at its declared tick");
+    expect(seq[1].tick == 5001 && seq[1].queue_index == 1,
+           "future-clamp: past-target future alarm clamped to current+1 "
+           "(5001) with the resolved queue index");
+    expect(occupancy_after_notify == std::vector<size_t>({0, 0}),
+           "future-clamp: the consumption leg kept the outstanding set "
+           "exact through both fired alarms");
+    expect(reader.audit_static_arrivals().gate_ok,
+           "future-clamp: the future-alarm rounding is never gated");
+
+    std::remove(csv.c_str());
+    std::printf("[fixture] part R PASS: late future-alarm clamp to "
+                "current+1 + hook->notify_consumed consumption leg\n");
 }
 
 }  // namespace
@@ -1086,6 +1476,7 @@ void test_gate_trips_on_delayed_submission() {
 int main(int /*argc*/, char* /*argv*/[]) {
     test_calendar_submission();
     test_row_semantics();
+    test_reader_input_shape_gates();
     test_out_of_range_rejection();
     test_late_counter_split();
     test_no_csv_path();
@@ -1100,6 +1491,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     test_provenance_tampering();
     test_structure_validation_fail_closed();
     test_gate_trips_on_delayed_submission();
+    test_future_arrival_clamp_and_consumption_leg();
 
     if (!g_ok) {
         std::fprintf(stderr, "[windowed_reader_test] FAIL: see messages "
@@ -1113,6 +1505,6 @@ int main(int /*argc*/, char* /*argv*/[]) {
                 "out-of-order outstanding / out-of-order turn-0 calendar / "
                 "long first block / t0 boundary / same-tick ordering / "
                 "provenance tampering / structure validation / arrival "
-                "gate self-test\n");
+                "gate self-test / future-alarm clamp + consumption leg\n");
     return 0;
 }

@@ -86,6 +86,9 @@ enum class IngressCommandKind { Submit, CloseInput, EndOfFile, Error };
 struct IngressCommand {
     IngressCommandKind kind = IngressCommandKind::Submit;
     RequestEnvelope envelope;
+    // M5: the calendar reader had to park this entry on ingress backpressure
+    // at least once before it drained; its clamp is a capacity artifact.
+    bool backpressure_deferred = false;
 };
 
 class RequestIngress {
@@ -98,6 +101,12 @@ class RequestIngress {
     /// Thread-safe, bounded, with backpressure: returns false when the queue
     /// is full (producer must retry) or after the input was closed.
     bool enqueue_command(IngressCommand cmd);
+
+    /// (2026-10-01) Read-only, thread-safe: distinguish a closed-gate
+    /// rejection from a full-queue rejection (enqueue_command's false means
+    /// either; a closed gate is terminal, a full queue is retryable
+    /// backpressure).
+    bool is_closed() const;
 
     /// Simulation thread only: pop all pending commands, schedule arrival
     /// alarms, drive IDLE -> ACTIVE accounting.
@@ -157,8 +166,9 @@ class RequestIngress {
     /// report compatibility. Observation only -- the clamping itself is the
     /// frozen late-arrival policy, unchanged. Simulation-thread report point.
     size_t late_arrival_count() const {
-        return late_static_submit_ + late_external_stream_ +
-               late_future_alarm_rounding_ + t0_boundary_clamp_;
+        return late_static_submit_ + late_static_submit_backpressure_ +
+               late_external_stream_ + late_future_alarm_rounding_ +
+               t0_boundary_clamp_;
     }
     /// P0 fix (2026-08-30): late-arrival clamp counters SPLIT by producer
     /// path. late_static_submit_ counts Submit-path clamps of
@@ -168,6 +178,13 @@ class RequestIngress {
     /// so ANY such clamp means the reader discovered the row too late -- the
     /// defect this fix eradicates -- and the run-end gate fail-closes on it.
     size_t late_static_submit_count() const { return late_static_submit_; }
+    /// M5 (face-LRU audit, 2026-09-29): Submit-path clamps of StaticCsv
+    /// envelopes whose entry was parked by ingress backpressure at least
+    /// once. Capacity artifact of the bounded queue, NOT reader lateness:
+    /// disclosed separately and exempt from the run-end static-arrival gate.
+    size_t late_static_submit_backpressure_count() const {
+        return late_static_submit_backpressure_;
+    }
     /// Submit-path clamps of RequestSource::ExternalStream envelopes (the
     /// command-FIFO producer / fixtures may legitimately run late; no gate).
     size_t late_external_stream_count() const { return late_external_stream_; }
@@ -208,18 +225,22 @@ class RequestIngress {
     /// Phase 7 §10.7: overflow audit -- how many enqueue attempts were
     /// rejected because the bounded command queue was full (capacity_).
     /// Thread-safe (matching enqueue_command's lock). 0 on every official
-    /// run (the windowed reader tops up at most high_water=128 un-consumed
-    /// rows << capacity 4096); the counter exists so a producer that grows
-    /// without bound is caught by the run-end audit instead of silently
-    /// backpressuring forever.
+    /// run: the calendar reader tops up only right after a full ingress
+    /// drain (main loop's drain -> pump -> re-drain ordering), so the
+    /// un-consumed rows stay well under capacity 4096; the counter exists
+    /// so a producer that grows without bound is caught by the run-end
+    /// audit instead of silently backpressuring forever.
     size_t overflow_count() const;
     /// Phase 7 §10.7: peak command-queue occupancy (un-consumed commands)
     /// observed since construction. Thread-safe.
     size_t peak_command_occupancy() const;
 
-    /// One-shot future-arrival queue-index entries currently retained.  In
-    /// the windowed reader path this is bounded by the unconsumed row window,
-    /// rather than growing with all CSV rows seen during the run.
+    /// One-shot future-arrival queue-index entries currently retained.  The
+    /// calendar reader pre-registers every turn>0 row at indexing time (the
+    /// 2026-08-30 P0 fix -- WindowedTraceReader's "full pre-registration"
+    /// note), so this starts at ALL turn>0 CSV rows of the run and shrinks
+    /// one-shot as their future alarms fire; it is NOT bounded by an
+    /// unconsumed row window.
     size_t pending_queue_index_count() const;
 
     /// Number of request ids reserved by successfully scheduled future alarms
@@ -256,6 +277,13 @@ class RequestIngress {
     // publishes ARRIVAL. This closes cross-batch duplicate alarms without
     // retaining historical request ids after arrival.
     std::unordered_set<std::string> scheduled_future_request_ids_;
+    // Process-level identity gate set for every Submit drained by
+    // drain_commands (2026-09-30, ported from the joint repo
+    // RequestIngress.hh; all producer paths -- CSV turn-0, --command-fifo,
+    // fixtures). Duplicate/empty ids fail closed at drain time (see
+    // drain_commands' Submit branch). Guarded by mtx_; written only by the
+    // simulation thread while draining.
+    std::unordered_set<std::string> seen_submit_request_ids_;
     // Fixtures that do not use a CSV reader retain the legacy unknown-index
     // behavior. A non-empty WindowedTraceReader enables strict mode before it
     // reads any rows; register_queue_index also enables it defensively.
@@ -263,6 +291,7 @@ class RequestIngress {
     // P0 fix (2026-08-30): late-arrival clamp counters split by producer
     // path (see the public accessors above for the exact semantics).
     size_t late_static_submit_ = 0;
+    size_t late_static_submit_backpressure_ = 0;
     size_t late_external_stream_ = 0;
     size_t late_future_alarm_rounding_ = 0;
     size_t t0_boundary_clamp_ = 0;
@@ -271,6 +300,11 @@ class RequestIngress {
     // mtx_; written by the simulation thread at Submit drain time.
     std::map<int64_t, StaticCsvArrivalRecord> static_csv_arrivals_;
     // Phase 7 §10.7: overflow audit counters (guarded by mtx_).
+    // (2026-10-01 wording fix) The bound is a MECHANISM, not a guarantee:
+    // inputs whose turn-0 count exceeds the queue capacity plus one
+    // drain's top-up legitimately park the cursor and increment this on
+    // each failed top-up (M5 backpressure, exempt from the late-arrival
+    // gate); 0 on inputs that fit. Not an anomaly signal by itself.
     size_t overflow_count_ = 0;
     size_t peak_command_occupancy_ = 0;
     // Producer terminal gate, guarded by mtx_. Set by direct close or when a

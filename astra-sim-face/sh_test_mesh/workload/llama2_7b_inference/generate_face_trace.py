@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +25,7 @@ from face_scheduler import (  # noqa: E402
     FaceModel,
     kv_cache_bytes_for_tokens,
 )
-from session_kv_manager import NOC_MIGRATE, RECOMPUTE  # noqa: E402
+from session_kv_manager import NOC_MIGRATE  # noqa: E402  (re-export: graph_batch_builder import)
 from generate_trace import (  # noqa: E402
     InferenceGroup,
     RequestSpec,
@@ -64,22 +63,20 @@ REQUIRED_CONFIG_KEYS = (
     "system_template",
     "remote_operand_loads",
 )
-# 2026-09-25 死配置清理：output_prefix/output_dir 曾服务已删除的离线静态
-# ET 生成路径，现无任何消费者。键仍被接受但值不装载（多余键忽略），以
-# 兼容既有 trace_config.csv。
-IGNORED_CONFIG_KEYS = ("output_prefix", "output_dir")
 OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
     "trace_granularity": "token_expanded",
     "prefill_chunk_size": "512",
     "kv_cache_policy": "session_lru_recompute",
     "kv_reserve_context_tokens": "0",
-    "record_planning_iterations": "true",
+    # 阶段 C(契约 §2/设计文档 §7.1):模型位置编码声明;无该键默认
+    # none(向后兼容——旧 trace_config 行为不变)。rope 时新 Q/K 旋转
+    # 归入 qkv_rope 壳的末段(die_op_spec.model_dims.position_encoding)。
+    "position_encoding": "none",
 }
 SUPPORTED_CONFIG_KEYS = (
     set(REQUIRED_CONFIG_KEYS)
     | set(OPTIONAL_CONFIG_DEFAULTS)
-    | set(IGNORED_CONFIG_KEYS)
 )
 INT_CONFIG_KEYS = {
     "layers",
@@ -127,7 +124,7 @@ class FaceTraceConfig:
     prefill_chunk_size: int
     kv_cache_policy: str
     kv_reserve_context_tokens: int
-    record_planning_iterations: bool
+    position_encoding: str
 
     @property
     def model(self) -> FaceModel:
@@ -166,8 +163,6 @@ def _parse_config_value(key: str, value: str) -> object:
         return parse_int(value, key)
     if key == "kv_reserve_context_tokens":
         return parse_nonnegative_int(value, key)
-    if key == "record_planning_iterations":
-        return parse_bool(value, key)
     if key == "kv_cache_policy":
         if value != "session_lru_recompute":
             raise ValueError(
@@ -185,6 +180,12 @@ def _parse_config_value(key: str, value: str) -> object:
     if key == "mlp_variant":
         if value not in {"gelu", "swiglu"}:
             raise ValueError("config key mlp_variant must be gelu or swiglu")
+        return value
+    if key == "position_encoding":
+        if value not in {"rope", "none"}:
+            raise ValueError(
+                "config key position_encoding must be rope or none, got "
+                f"{value!r}")
         return value
     if key in PATH_CONFIG_KEYS:
         if not value:
@@ -244,6 +245,9 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         raise FileNotFoundError(f"trace config CSV not found: {config_csv}")
     values: dict[str, str] = {}
     groups: list[InferenceGroup] = []
+    # (2026-09-30, R2 audit) instance-name uniqueness bookkeeping -- see the
+    # duplicate-name fail-closed check in the inference_group branch below.
+    seen_group_names: set[str] = set()
     with config_csv.open(newline="", encoding="utf-8-sig") as source:
         reader = csv.DictReader(source)
         if reader.fieldnames is None:
@@ -274,6 +278,21 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
                     raise ValueError(
                         f"line {line_number}: inference_group requires name and pg_name"
                     )
+                # (2026-09-30, R2 audit) group_name must be UNIQUE: the
+                # migration emitters decide "same instance, zero nodes" by
+                # source_group.name == target_group.name, while every ledger
+                # and decision path keys instances by index/rank set -- two
+                # same-named groups would move ledger bytes with NO physical
+                # migration nodes and no error anywhere.
+                if name in seen_group_names:
+                    raise ValueError(
+                        f"line {line_number}: duplicate inference_group "
+                        f"name {name!r} (instance identity for the "
+                        "migration emitters is name-based; duplicate "
+                        "names would silently suppress cross-instance "
+                        "migration nodes)"
+                    )
+                seen_group_names.add(name)
                 groups.append(
                     InferenceGroup(
                         name=name,
@@ -371,7 +390,7 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         prefill_chunk_size=int(parsed["prefill_chunk_size"]),
         kv_cache_policy=str(parsed["kv_cache_policy"]),
         kv_reserve_context_tokens=int(parsed["kv_reserve_context_tokens"]),
-        record_planning_iterations=bool(parsed["record_planning_iterations"]),
+        position_encoding=str(parsed["position_encoding"]),
     )
 
 
@@ -380,7 +399,20 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
 
 
 def _stage_tag(queue_index: int, category: int, relative_rank: int) -> int:
-    return queue_index * 10000 + category + relative_rank
+    # comm_tag 经 ChakraAttr uint32_val 序列化，C++ 侧按有符号 int 消费：
+    # queue_index >= 214,748 时 queue_index*10000 越过 2^31，tag 会以负数
+    # 参与网络层配对（错配/死锁）；越过 2^32 则 protobuf 赋值直接抛错。
+    # 全量 astra_compute_20 级(千万行)trace 物化可达该量级，故在生成侧
+    # fail-closed 拒绝，而不是静默回绕。
+    tag = queue_index * 10000 + category + relative_rank
+    if tag >= 2 ** 31:
+        raise ValueError(
+            "comm_tag {} (queue_index={}, category={}, relative_rank={}) "
+            "exceeds the 31-bit safe range of the uint32/int32 ET tag "
+            "field; the materialized queue is too large for the "
+            "tag-per-queue*10000 encoding".format(
+                tag, queue_index, category, relative_rank))
+    return tag
 
 
 def _xy_route(hardware: FaceHardware, source: int, target: int) -> list[int]:

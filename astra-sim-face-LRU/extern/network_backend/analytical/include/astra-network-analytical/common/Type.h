@@ -31,6 +31,10 @@ using Latency = double;
 using EventTime = uint64_t;
 
 /// Basic multi-dimensional topology building blocks
-enum class TopologyBuildingBlock { Undefined, Ring, FullyConnected, Switch, Mesh };
+// Undefined was removed (dead code cleanup 2026-09-30): it had zero
+// producers (NetworkParser::parse_topology_name exits on unknown names) and
+// zero consumers (Helper.cpp's switch handles it only through its default
+// error arm).
+enum class TopologyBuildingBlock { Ring, FullyConnected, Switch, Mesh };
 
 }  // namespace NetworkAnalytical

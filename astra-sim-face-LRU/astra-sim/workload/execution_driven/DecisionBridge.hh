@@ -176,6 +176,11 @@ class FileDecisionBridge : public DecisionBridge {
     /// ends long-lived, read()==0 on this fd can ONLY mean the Python
     /// process died (its lifetime write end closed) -- EOF semantics become
     /// true. Python holds the write end from serve_forever start to exit.
+    ///
+    /// ed-bridge-E1 (2026-09-30): the resp read end opens BEFORE the req
+    /// write-end retry loop (open order and rationale in DecisionBridge.cc
+    /// open_notify) -- a never-blocking read end first means the peer's
+    /// resp write open can never wait on this process's req rendezvous.
     void open_notify();
 
     /// Phase-6 (方案 §9.1) per-run channel stats. Cumulative across the run;
@@ -185,8 +190,15 @@ class FileDecisionBridge : public DecisionBridge {
     ///     + notify + wait for Python + read response);
     ///   - channel_bytes: JSON payload bytes written AND read through the
     ///     channel (request_<seq>.json + response_<seq>.json +
-    ///     commit_ack_<seq>.json; the C++ side counts its own dump size,
-    ///     which equals the on-disk file bytes);
+    ///     commit_ack_<seq>.json). B1 (2026-08-23) accounting: the request
+    ///     and commit_ack files count the C++ dump bytes, which equal their
+    ///     exact on-disk file bytes, but the response file counts the
+    ///     stat'd ON-DISK size -- the response is Python-owned and C++
+    ///     never re-serializes it, so stat is the authoritative byte count
+    ///     that crossed the channel. (Comment fix 2026-09-30: both sides
+    ///     now write COMPACT JSON -- Python switched to
+    ///     json.dumps(separators=(",", ":")) -- but the stat-based rule
+    ///     itself is serializer-independent and unchanged.)
     ///   - forced_flush_count: one per atomic JSON file write
     ///     (write_file_atomic's out.flush(); 方案 §15: 正式日志无逐节点强制
     ///     flush -- 该计数必须为 O(deliveries) 而非 O(nodes)).

@@ -3,47 +3,40 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
-// TODO: HardwareResource.cc should be moved to the system layer.
 
 #include "astra-sim/workload/HardwareResource.hh"
 
 #include <cstdlib>
 
+#include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
+
 using namespace std;
 using namespace AstraSim;
-using namespace Chakra;
 
 typedef ChakraProtoMsg::NodeType ChakraNodeType;
 
 namespace {
 
-// sh_2.0: static ET nodes carry the KV-restore flag as an ET attribute; the
-// GraphSource adapters copy the same value into the NodeView field
-// (NodeStore.cc / ParsedGraphBatch.cc), so both overload sets classify on
-// identical inputs.
-bool is_local_hbm_kv_restore(
-    const shared_ptr<Chakra::FeederV3::ETFeederNode>& node) {
-    return node->get_attr<bool>("is_local_hbm_kv_restore", false);
-}
-
 // ---------------------------------------------------------------------------
-// 方案 §4 发射门控改造: ONE semantic classification shared verbatim by both
-// overload sets (static ETFeederNode and online NodeView).
+// 方案 §4 发射门控改造: ONE semantic classification for the NodeView
+// overloads.
 //
-// kind_value is the node kind in the shared 0..7 value space: the static
-// overloads pass static_cast<uint64_t>(node->type()) (ChakraProtoMsg::
-// NodeType, et_def.proto) and the NodeView overloads pass
+// kind_value is the node kind in the shared 0..7 value space:
 // static_cast<uint64_t>(node.kind) (ExecutionDriven::NodeKind,
-// GraphSource.hh). The two enums mirror each other value-for-value and the
-// GraphSource adapters derive kind from the raw type, so this single
-// function classifies both paths identically.
+// GraphSource.hh), which mirrors the raw ChakraProtoMsg::NodeType values the
+// committed GraphBatch carries.
 enum class HwResClass {
     NoOp,       // timer nodes; COMM_RECV endpoints (existing semantics)
     HbmDma,     // local HBM KV restore DMA (sh_2.0 fourth class, single slot)
     RemoteMem,  // remote MEM_LOAD/MEM_STORE: counted, UNLIMITED node slot
     Cpu,
     GpuComp,
-    GpuComm,  // COMM_SEND/COMM_COLL + legacy metadata/invalid fall-through
+    GpuComm,  // COMM_SEND + legacy metadata/invalid fall-through
+    GpuCommColl,  // COMM_COLL（all_reduce/屏障）: 死锁真修 ③-lite
+                  // (2026-10-11)——集合通信不再占 gpu_comm 单槽等成员：
+                  // 等成员/交换期间不阻塞同 rank 的 p2p（四方环闭合成分
+                  // 之三拆除）。计数观测、无限额、available 恒真；同实例
+                  // 集合间仍由 per-rank 图 frontier 串行（体节点链位）。
 };
 
 HwResClass classify_hw_resource(const uint64_t kind_value,
@@ -77,6 +70,12 @@ HwResClass classify_hw_resource(const uint64_t kind_value,
         static_cast<uint64_t>(ChakraNodeType::COMM_RECV_NODE)) {
         return HwResClass::NoOp;
     }
+    // 死锁真修 ③-lite（2026-10-11）：COMM_COLL 独立成类、不占 gpu_comm
+    // 单槽（见 HwResClass::GpuCommColl 注记）。须在 GpuComm 兜底前。
+    if (kind_value ==
+        static_cast<uint64_t>(ChakraNodeType::COMM_COLL_NODE)) {
+        return HwResClass::GpuCommColl;
+    }
     return HwResClass::GpuComm;
 }
 
@@ -94,34 +93,19 @@ const char* hw_res_class_label(const HwResClass cls) {
             return "gpu_comp";
         case HwResClass::GpuComm:
             return "gpu_comm";
+        case HwResClass::GpuCommColl:
+            return "gpu_comm_coll";
     }
     return "unknown";
 }
 
-// occupy-side check: with node-id retention enabled, an id must never be
-// inserted twice (a second insert would pair with only one release).
-void ensure_unique_node_id(std::unordered_set<uint64_t>& node_ids,
-                           const HwResClass cls,
-                           const int sys_id,
-                           const uint64_t node_id) {
-    if (!node_ids.emplace(node_id).second) {
-        LoggerFactory::get_logger("HardwareResource")
-            ->critical("HardwareResource duplicate node occupy (class={}): "
-                       "sys.id={} node={}",
-                       hw_res_class_label(cls), sys_id, node_id);
-        std::abort();
-    }
-}
-
-// release-side pre-decrement checks (方案 §4, NDEBUG-independent): the class
-// counter is non-zero, and with node-id retention enabled the node is
-// actually tracked in the set. node_ids == nullptr models retention off.
-void check_release_preconditions(
-    const uint32_t counter,
-    const std::unordered_set<uint64_t>* node_ids,
-    const HwResClass cls,
-    const int sys_id,
-    const uint64_t node_id) {
+// release-side pre-decrement check (方案 §4, NDEBUG-independent): the class
+// counter must be non-zero -- a release without a matching occupy is a
+// lifecycle violation.
+void check_release_preconditions(const uint32_t counter,
+                                 const HwResClass cls,
+                                 const int sys_id,
+                                 const uint64_t node_id) {
     if (counter == 0) {
         LoggerFactory::get_logger("HardwareResource")
             ->critical("HardwareResource release underflow (class={}): "
@@ -129,137 +113,109 @@ void check_release_preconditions(
                        hw_res_class_label(cls), sys_id, node_id);
         std::abort();
     }
-    if (node_ids != nullptr && node_ids->count(node_id) == 0) {
-        LoggerFactory::get_logger("HardwareResource")
-            ->critical("HardwareResource release of untracked node id "
-                       "(class={}): sys.id={} node={}",
-                       hw_res_class_label(cls), sys_id, node_id);
-        std::abort();
-    }
+}
+
+// occupy-side single-slot pre-increment check (NDEBUG-independent, same
+// discipline as check_release_preconditions below): a second concurrent
+// occupation of a single-slot class means the is_available gate in
+// Workload::issue_dep_free_nodes was bypassed -- a lifecycle violation that
+// must abort, not assert (Sys::call_events swallows std::exception, so the
+// accounting corruption has to fail closed here).
+[[noreturn]] void occupy_class_fatal(const char* what,
+                                     const int sys_id,
+                                     const uint64_t node_id) {
+    LoggerFactory::get_logger("HardwareResource")
+        ->critical("HardwareResource fatal: {} (sys.id={} node={})", what,
+                   sys_id, node_id);
+    std::abort();
 }
 
 void occupy_class(HardwareResource& hr,
                   const HwResClass cls,
-                  const uint64_t node_id,
-                  const bool static_et_path) {
+                  const uint64_t node_id) {
     switch (cls) {
         case HwResClass::NoOp:
             return;
         case HwResClass::HbmDma:
-            assert(hr.num_in_flight_hbm_dma_ops == 0);
-            ++hr.num_in_flight_hbm_dma_ops;
-            if (hr.retain_node_ids_) {
-                ensure_unique_node_id(hr.hbm_dma_ops_node, cls, hr.sys_id,
-                                      node_id);
+            if (hr.num_in_flight_hbm_dma_ops != 0) {
+                occupy_class_fatal("HBM-DMA single slot busy on occupy",
+                                   hr.sys_id, node_id);
             }
+            ++hr.num_in_flight_hbm_dma_ops;
             return;
         case HwResClass::RemoteMem:
             // 方案 §4: independent counted slot -- no capacity limit and no
             // single-slot assert; arbitrarily many remote MEM nodes may be
             // in flight at once.
             ++hr.num_in_flight_remote_mem_ops;
-            if (hr.retain_node_ids_) {
-                ensure_unique_node_id(hr.remote_mem_ops_node, cls, hr.sys_id,
-                                      node_id);
-            }
             return;
         case HwResClass::Cpu:
-            assert(hr.num_in_flight_cpu_ops == 0);
-            ++hr.num_in_flight_cpu_ops;
-            if (hr.retain_node_ids_) {
-                ensure_unique_node_id(hr.cpu_ops_node, cls, hr.sys_id,
-                                      node_id);
+            if (hr.num_in_flight_cpu_ops != 0) {
+                occupy_class_fatal("CPU single slot busy on occupy", hr.sys_id,
+                                   node_id);
             }
+            ++hr.num_in_flight_cpu_ops;
             return;
         case HwResClass::GpuComp:
-            // The static ET path keeps its legacy single-slot debug assert;
-            // the online NodeView path stays a plain count (two concurrently
-            // occupied COMP nodes are a supported online state, serialized
-            // in production only by the is_available gate in
-            // Workload::issue_dep_free_nodes).
-            if (static_et_path) {
-                assert(hr.num_in_flight_gpu_comp_ops == 0);
-            }
+            // Plain count (two concurrently occupied COMP nodes are a
+            // supported state, serialized in production only by the
+            // is_available gate in Workload::issue_dep_free_nodes).
             ++hr.num_in_flight_gpu_comp_ops;
-            if (hr.retain_node_ids_) {
-                ensure_unique_node_id(hr.gpu_ops_node, cls, hr.sys_id,
-                                      node_id);
-            }
+            return;
+        case HwResClass::GpuCommColl:
+            // 死锁真修 ③-lite（2026-10-11）：集合不占 gpu_comm 单槽等
+            // 成员——计数观测（无单槽断言、无容量门），available 恒真。
+            ++hr.num_in_flight_gpu_comm_coll_ops;
             return;
         case HwResClass::GpuComm:
             // Existing comm single-slot occupancy semantics, unchanged.
-            assert(hr.num_in_flight_gpu_comm_ops == 0);
-            ++hr.num_in_flight_gpu_comm_ops;
-            if (hr.retain_node_ids_) {
-                ensure_unique_node_id(hr.gpu_comms_node, cls, hr.sys_id,
-                                      node_id);
+            if (hr.num_in_flight_gpu_comm_ops != 0) {
+                occupy_class_fatal("GPU comm single slot busy on occupy",
+                                   hr.sys_id, node_id);
             }
+            ++hr.num_in_flight_gpu_comm_ops;
             return;
     }
 }
 
 void release_class(HardwareResource& hr,
                    const HwResClass cls,
-                   const uint64_t node_id,
-                   const bool static_et_path) {
+                   const uint64_t node_id) {
     switch (cls) {
         case HwResClass::NoOp:
             return;
         case HwResClass::HbmDma:
-            check_release_preconditions(
-                hr.num_in_flight_hbm_dma_ops,
-                hr.retain_node_ids_ ? &hr.hbm_dma_ops_node : nullptr, cls,
-                hr.sys_id, node_id);
+            check_release_preconditions(hr.num_in_flight_hbm_dma_ops, cls,
+                                        hr.sys_id, node_id);
             --hr.num_in_flight_hbm_dma_ops;
             assert(hr.num_in_flight_hbm_dma_ops == 0);
-            if (hr.retain_node_ids_) {
-                hr.hbm_dma_ops_node.erase(node_id);
-            }
             return;
         case HwResClass::RemoteMem:
-            check_release_preconditions(
-                hr.num_in_flight_remote_mem_ops,
-                hr.retain_node_ids_ ? &hr.remote_mem_ops_node : nullptr, cls,
-                hr.sys_id, node_id);
+            check_release_preconditions(hr.num_in_flight_remote_mem_ops, cls,
+                                        hr.sys_id, node_id);
             --hr.num_in_flight_remote_mem_ops;
-            if (hr.retain_node_ids_) {
-                hr.remote_mem_ops_node.erase(node_id);
-            }
             return;
         case HwResClass::Cpu:
-            check_release_preconditions(
-                hr.num_in_flight_cpu_ops,
-                hr.retain_node_ids_ ? &hr.cpu_ops_node : nullptr, cls,
-                hr.sys_id, node_id);
+            check_release_preconditions(hr.num_in_flight_cpu_ops, cls,
+                                        hr.sys_id, node_id);
             --hr.num_in_flight_cpu_ops;
             assert(hr.num_in_flight_cpu_ops == 0);
-            if (hr.retain_node_ids_) {
-                hr.cpu_ops_node.erase(node_id);
-            }
             return;
         case HwResClass::GpuComp:
-            check_release_preconditions(
-                hr.num_in_flight_gpu_comp_ops,
-                hr.retain_node_ids_ ? &hr.gpu_ops_node : nullptr, cls,
-                hr.sys_id, node_id);
+            check_release_preconditions(hr.num_in_flight_gpu_comp_ops, cls,
+                                        hr.sys_id, node_id);
             --hr.num_in_flight_gpu_comp_ops;
-            if (static_et_path) {
-                assert(hr.num_in_flight_gpu_comp_ops == 0);
-            }
-            if (hr.retain_node_ids_) {
-                hr.gpu_ops_node.erase(node_id);
-            }
+            return;
+        case HwResClass::GpuCommColl:
+            check_release_preconditions(
+                hr.num_in_flight_gpu_comm_coll_ops, cls, hr.sys_id, node_id);
+            --hr.num_in_flight_gpu_comm_coll_ops;
             return;
         case HwResClass::GpuComm:
-            check_release_preconditions(
-                hr.num_in_flight_gpu_comm_ops,
-                hr.retain_node_ids_ ? &hr.gpu_comms_node : nullptr, cls,
-                hr.sys_id, node_id);
+            check_release_preconditions(hr.num_in_flight_gpu_comm_ops, cls,
+                                        hr.sys_id, node_id);
             --hr.num_in_flight_gpu_comm_ops;
             assert(hr.num_in_flight_gpu_comm_ops == 0);
-            if (hr.retain_node_ids_) {
-                hr.gpu_comms_node.erase(node_id);
-            }
             return;
     }
 }
@@ -279,6 +235,9 @@ bool available_class(const HardwareResource& hr, const HwResClass cls) {
             return hr.num_in_flight_cpu_ops == 0;
         case HwResClass::GpuComp:
             return hr.num_in_flight_gpu_comp_ops == 0;
+        case HwResClass::GpuCommColl:
+            // ③-lite：集合永不因槽位阻塞 issue（等成员不占槽）。
+            return true;
         case HwResClass::GpuComm:
             return hr.num_in_flight_gpu_comm_ops == 0;
     }
@@ -287,53 +246,14 @@ bool available_class(const HardwareResource& hr, const HwResClass cls) {
 
 }  // namespace
 
-HardwareResource::HardwareResource(
-    int sys_id, const ExecutionDriven::ExecutionMode execution_mode)
+HardwareResource::HardwareResource(int sys_id)
     : sys_id(sys_id),
-      retain_node_ids_(execution_mode ==
-                       ExecutionDriven::ExecutionMode::Static),
       num_in_flight_cpu_ops(0),
       num_in_flight_gpu_comp_ops(0),
       num_in_flight_gpu_comm_ops(0),
+      num_in_flight_gpu_comm_coll_ops(0),
       num_in_flight_hbm_dma_ops(0),
-      num_in_flight_remote_mem_ops(0) {
-
-    tics_gpu_ops = 0;
-}
-
-void HardwareResource::occupy(
-    const shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
-    occupy_class(*this,
-                 classify_hw_resource(static_cast<uint64_t>(node->type()),
-                                      node->is_cpu_op(),
-                                      node->get_attr<bool>("is_timer_op",
-                                                           false),
-                                      is_local_hbm_kv_restore(node)),
-                 node->id(),
-                 /*static_et_path=*/true);
-}
-
-void HardwareResource::release(
-    const shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
-    release_class(*this,
-                  classify_hw_resource(static_cast<uint64_t>(node->type()),
-                                       node->is_cpu_op(),
-                                       node->get_attr<bool>("is_timer_op",
-                                                            false),
-                                       is_local_hbm_kv_restore(node)),
-                  node->id(),
-                  /*static_et_path=*/true);
-}
-
-bool HardwareResource::is_available(
-    const shared_ptr<Chakra::FeederV3::ETFeederNode> node) const {
-    return available_class(
-        *this,
-        classify_hw_resource(static_cast<uint64_t>(node->type()),
-                             node->is_cpu_op(),
-                             node->get_attr<bool>("is_timer_op", false),
-                             is_local_hbm_kv_restore(node)));
-}
+      num_in_flight_remote_mem_ops(0) {}
 
 // ---------------------------------------------------------- NodeView (§4.3.3)
 
@@ -343,8 +263,7 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
                                       node.is_cpu_op,
                                       node.is_timer_op,
                                       node.is_local_hbm_kv_restore),
-                 node.global_id,
-                 /*static_et_path=*/false);
+                 node.global_id);
 }
 
 void HardwareResource::release(const ExecutionDriven::NodeView& node) {
@@ -353,8 +272,7 @@ void HardwareResource::release(const ExecutionDriven::NodeView& node) {
                                        node.is_cpu_op,
                                        node.is_timer_op,
                                        node.is_local_hbm_kv_restore),
-                  node.global_id,
-                  /*static_et_path=*/false);
+                  node.global_id);
 }
 
 bool HardwareResource::is_available(

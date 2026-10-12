@@ -822,5 +822,204 @@ class CopyHandoffParallelTailTests(unittest.TestCase):
         self.assertNotIn(REQUEST_G, self.builder._copy_handoff_layers)
 
 
+class CopyHandoffBoundarySourceRecordTests(unittest.TestCase):
+    """R9（修复轮三，2026-09-27）：P=copy 交接轮 × D 边界第三实例转记录
+    的 journal 生命周期钉测（probe 实测形态 session_1_request_2，seq 265：
+    P=copy@5 交接轮 D=remote-read@2，轮末三位置 merge 撞 journal 守卫
+    fail-closed）。
+
+    根因：C13 交接在 prefill drain 边界已把 base 侧物理留存逐块释放，
+    而来源侧转记录分支的 record_to_base 占用判据仍按 base_* 元数据代理
+    "物理保留"——把交接产物记成 boundary_source 且留下已释放实例的
+    base 记录与开放 journal。修复（face_scheduler
+    commit_boundary_decode_transition）：有 journal 先闭合（未结算 =
+    因果序破损 fail-closed），base_* 按 pool-only 基同科目重录到 i_P
+    侧交接产物——轮末 merge 退化为常规两位置，journal 不残留。
+
+    本钉测以真实 KVCacheManager 驱动全链（登记 → drain 结算 → D 边界
+    转记录 → decode 增长 → merge），并钉守卫活性（残留 journal 入
+    三位置 merge 仍 fail-closed，修复不得绕过守卫）。
+    """
+
+    HISTORY = 24   # turn-0 基础历史（probe 基 14161 的缩比类比）
+    INPUT = 6      # turn-1 prefill 输入
+    GROWTH = 3     # D 边界后 decode 增长步
+    HOME = 2       # turn-0 执行实例 = base 原驻留（journal home 侧）
+    P_INST = 0     # turn-1 P=copy 执行实例（journal exec 侧）
+    J = 1          # D 边界第三实例（≠ i_P 且 ≠ base）
+
+    def _manager(self):
+        hardware = FaceHardware(
+            mesh_rows=2,
+            mesh_cols=3,
+            local_hbm_capacity_bytes=10 ** 9,
+            local_hbm_bandwidth_gbps=100.0,
+            d2d_bandwidth_gbps=200.0,
+            peak_perf_tflops=1.0,
+            d2d_latency_ns=0,
+            local_hbm_latency_ns=0,
+        )
+        model = FaceModel(
+            layers=2,
+            hidden_size=64,
+            ffn_size=128,
+            num_heads=8,
+            vocab_size=256,
+            bytes_per_elem=2,
+            mlp_variant="gelu",
+        )
+        topology = build_instances(
+            hardware,
+            (
+                FaceInstanceSpec("ins0", "1", (0, 3)),
+                FaceInstanceSpec("ins1", "2", (1, 4)),
+                FaceInstanceSpec("ins2", "3", (2, 5)),
+            ),
+        )
+        return model, KVCacheManager(topology, model)
+
+    def _instance_bytes(self, kv, instance_index):
+        return tuple(
+            kv._rank_states[rank].kv_cache_bytes
+            for rank in kv.topology.instance(instance_index).ranks)
+
+    def _drive_probe_shape(self):
+        """全链驱动 probe 形态：返回 (kv, journal_events_seen_at_drain)。"""
+        model, kv = self._manager()
+        # turn-0：基础历史建立于 HOME。
+        kv.prepare_prefill(
+            session_id="s", target_instance_index=self.HOME,
+            history_tokens=0, trigger_request_id="seed")
+        kv.expand_prefill(
+            session_id="s", instance_index=self.HOME,
+            context_tokens=self.HISTORY, trigger_request_id="seed")
+        kv.mark_complete("s", 100)
+        # turn-1 P=copy：跨实例交接（HOME → P_INST），登记 journal。
+        kv.prepare_prefill(
+            session_id="s", target_instance_index=self.P_INST,
+            history_tokens=self.HISTORY, trigger_request_id="r1",
+            action="copy")
+        journal = kv._sessions["s"].copy_handoff
+        self.assertIsNotNone(
+            journal, "cross-instance P=copy must register the journal")
+        self.assertEqual(journal.home_instance, self.HOME)
+        self.assertEqual(journal.exec_instance, self.P_INST)
+        # prefill drain 边界（expand_prefill 唯一在线调用面）：逐块结算，
+        # home 侧物理留存清零（base_* 元数据仍在，物理真值以账本为准）。
+        kv.expand_prefill(
+            session_id="s", instance_index=self.P_INST,
+            context_tokens=self.HISTORY + self.INPUT,
+            trigger_request_id="r1")
+        self.assertTrue(journal.all_settled())
+        self.assertEqual(
+            sum(journal.home_shards()), 0,
+            "drain settle must release the home-side retention")
+        return kv
+
+    def test_boundary_source_record_closes_journal_and_rerecords_base(self):
+        kv = self._drive_probe_shape()
+        # D 边界：remote-read 落第三实例（j≠i_P 且 j≠base）→ 来源侧转
+        # 记录分支。修复点：journal 在此闭合（未结算 = fail-closed），
+        # base_* 重录到 i_P 侧交接产物（pool-only 基同科目）。
+        kv.commit_boundary_decode_transition(
+            session_id="s", p_instance_index=self.P_INST,
+            target_instance_index=self.J, action="remote-read",
+            history_tokens=self.HISTORY + self.INPUT,
+            trigger_request_id="r1")
+        session = kv._sessions["s"]
+        self.assertIsNone(
+            session.copy_handoff,
+            "journal must close when the copy product is re-recorded")
+        self.assertIsNone(
+            session.boundary_source_instance_index,
+            "base authority moved to the copy product: no boundary source")
+        self.assertEqual(session.base_instance_index, self.P_INST)
+        self.assertEqual(
+            session.base_resident_prefix_layers, kv.model.layers)
+        self.assertEqual(
+            session.base_history_tokens, self.HISTORY + self.INPUT)
+        kv._check_invariants_after_mutation(session_ids=("s",))
+        # decode 增长 + 轮末 merge：常规两位置（base@i_P 对 exec 增量），
+        # journal 不再进入任何 merge 面。
+        kv.expand_decode(
+            session_id="s", instance_index=self.J,
+            final_context_tokens=self.GROWTH, trigger_request_id="r1")
+        kv.merge_back(
+            session_id="s", trigger_request_id="r1",
+            new_tokens=self.GROWTH)
+        session = kv._sessions["s"]
+        total_tokens = self.HISTORY + self.INPUT + self.GROWTH
+        full = kv_cache_shard_bytes_for_tokens(
+            kv.model, total_tokens, kv.tp_degree)
+        self.assertIsNone(session.copy_handoff)
+        self.assertEqual(session.instance_index, self.P_INST)
+        self.assertEqual(tuple(int(v) for v in session.shard_bytes),
+                         tuple(int(v) for v in full))
+        held = {i: sum(self._instance_bytes(kv, i))
+                for i in (self.HOME, self.P_INST, self.J)}
+        nonzero = [i for i, v in held.items() if v > 0]
+        self.assertEqual(
+            nonzero, [self.P_INST],
+            "winner = copy-product instance; no stranded bytes")
+        self.assertEqual(self._instance_bytes(kv, self.P_INST),
+                         tuple(int(v) for v in full))
+        # 闭合事件落账（科目 #handoff close，boundary 披露新结算点）。
+        close_events = [event for event in kv.copy_handoff_events
+                        if event.get("event") == "close"]
+        self.assertEqual(len(close_events), 1)
+        self.assertEqual(
+            close_events[0]["boundary"], "boundary_source_record")
+
+    def test_three_position_merge_guard_still_armed_on_residual_journal(self):
+        # 守卫活性：任何绕过生命周期点的残留 journal 入三位置 merge 仍
+        # fail-closed——修复只补结算点，不放宽守卫。
+        model, kv = self._manager()
+        kv.prepare_prefill(
+            session_id="s", target_instance_index=self.HOME,
+            history_tokens=0, trigger_request_id="seed")
+        kv.expand_prefill(
+            session_id="s", instance_index=self.HOME,
+            context_tokens=self.HISTORY, trigger_request_id="seed")
+        kv.mark_complete("s", 100)
+        # P=remote-read（增量型，home 保留基础）→ D=remote-read@第三实例
+        # → 来源侧转记录（真 boundary_source，无 journal）。
+        kv.prepare_prefill(
+            session_id="s", target_instance_index=self.P_INST,
+            history_tokens=self.HISTORY, trigger_request_id="r1",
+            action="remote-read")
+        kv.expand_prefill(
+            session_id="s", instance_index=self.P_INST,
+            context_tokens=self.HISTORY + self.INPUT,
+            trigger_request_id="r1")
+        kv.commit_boundary_decode_transition(
+            session_id="s", p_instance_index=self.P_INST,
+            target_instance_index=self.J, action="remote-read",
+            history_tokens=self.HISTORY + self.INPUT,
+            trigger_request_id="r1")
+        session = kv._sessions["s"]
+        self.assertIsNotNone(session.boundary_source_instance_index)
+        # 注入残留 journal（模拟未知路径漏闭合），直接进入三位置合并面：
+        # 守卫是 _merge_back_three_position 的首句（先于任何结算/审计）
+        # ——修复只补生命周期结算点，不得绕过或放宽该守卫。
+        from face_scheduler import CopyHandoffChunk, CopyHandoffJournal
+        residual_shards = (1,) * kv.tp_degree
+        session.copy_handoff = CopyHandoffJournal(
+            session_id="s", trigger_request_id="r1",
+            home_instance=self.HOME, exec_instance=self.P_INST,
+            base_history_tokens=self.HISTORY,
+            chunks=(CopyHandoffChunk(
+                index=0, layer_start=0, layer_end=2,
+                shard_bytes=residual_shards),))
+        session.copy_handoff.h_home_shards = residual_shards
+        session.copy_handoff.h_exec_shards = residual_shards
+        with self.assertRaises(RuntimeError) as caught:
+            kv._merge_back_three_position(
+                session=session, trigger_request_id="r1",
+                new_tokens=self.GROWTH, reservation_request_id=None,
+                at_ns=None, home_residual_bytes=None)
+        self.assertIn("cannot carry a copy handoff journal",
+                      str(caught.exception))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

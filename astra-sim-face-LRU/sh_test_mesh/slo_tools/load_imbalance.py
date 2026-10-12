@@ -4,7 +4,9 @@
 算法严格按主规格 §1.5-A：
 
     逐请求 (instance, admission→drain 区间)
-      → 各 instance 积压时间序列（桶长 = manifest imbalance_bucket_ns）
+      → 各 instance 积压时间积分（L19 2026-09-29：精确端点积分
+        Σ[drain−admission]；imbalance_bucket_ns 保留为登记/对账参数，
+        不再进入取值）
       → 时间平均 CV 与 Max/Mean；不做账本 dump。
 
 区间语义（逐仓字段映射，全部来自基线产物事实核对）：
@@ -22,7 +24,9 @@
     全仓 time_avg_backlog 退化为 0；exits 终态行在五仓账本格式下均每请求
     恰一行，0902 批次实测 0 重复/0 缺失/0 零长度区间。）
 
-统计口径：每实例时间平均积压 b̄_i = Σ(桶内积压×桶长)/总跨度；
+统计口径：每实例时间平均积压 b̄_i = Σ_区间[drain−admission]/总跨度
+（L19 2026-09-29 精确积分；旧"重叠桶计数×桶长"近似对部分重叠桶整桶
+计入、请求时长 ≪ 桶长时 CV 退化为每实例请求数度量）；
 CV = stdev_population(b̄_i)/mean(b̄_i)；Max/Mean = max(b̄_i)/mean(b̄_i)。
 """
 
@@ -32,7 +36,6 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -57,8 +60,12 @@ EXPLICIT_ADMISSION_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def li_prepare(repo_variant: str) -> dict:
-    """decision-log 扫描态（A4：driver 单遍复用；CLI 路径同构）。"""
+def li_prepare() -> dict:
+    """decision-log 扫描态（A4：driver 单遍复用；CLI 路径同构）。
+
+    (2026-09-30) N 死代码清理:原 repo_variant 形参已删——函数体从未
+    使用它（逐仓差异在 li_consume_decision 的 EXPLICIT_ADMISSION_FIELDS
+    查表，与本函数无关）。"""
     return {"admissions": {}, "decode_instances": {}}
 
 
@@ -136,7 +143,6 @@ def li_assemble_intervals(state: dict, drains: dict,
     admissions = state["admissions"]
     decode_instances = state["decode_instances"]
     intervals = []
-    skipped_no_admission = []
     skipped_no_decode = []
     skipped_no_drain = []
     skipped_bad_order = []
@@ -183,27 +189,26 @@ def li_assemble_intervals(state: dict, drains: dict,
 
 def collect_intervals(run_dir: Path, repo_variant: str) -> list[dict]:
     """逐请求 (instance, admission→drain) 区间重建（CLI/独立调用入口）。"""
-    state = li_prepare(repo_variant)
+    state = li_prepare()
     for record in iter_jsonl(run_dir / DECISION_LOG_RELPATH):
         li_consume_decision(record, repo_variant, state)
     drains, skipped_first_step_rows = li_collect_drains(run_dir)
     return li_assemble_intervals(state, drains, skipped_first_step_rows)
 
 
-def _interval_covered_buckets(admission_ns: int, drain_ns: int,
-                              span_start: int, bucket_ns: int,
-                              n_buckets: int) -> int:
-    """单区间 [admission, drain) 对 sum(series) 的桶贡献数（O(1)）。
+def _interval_covered_ns(admission_ns: int, drain_ns: int) -> int:
+    """单区间 [admission, drain) 的精确重叠时长（半开区间测度，O(1)）。
 
-    与逐桶累加逐语句等价：admission < bucket_end(b) ⟺ b >= first；
-    drain > bucket_start(b) ⟺ b < last 或（b == last 且 drain 不落桶边界）。
+    L19（2026-09-29，积压语义修正）：积压 = 在途请求对时间的积分
+    （spec §1.5-A 时间平均 b̄_i = Σ(桶内积压×桶长)/总跨度的精确值）。
+    桶格是对时间轴的划分，区间对桶格的"按比例分摊重叠时长"之和恒等于
+    区间长度本身——精确端点处理退化为 O(1) 长度积分，无需物化桶格。
+    旧实现按"重叠桶计数×桶长"聚合，把部分重叠的边缘桶整桶计入：请求
+    时长 ≪ bucket_ns 时每请求虚增至多一整桶，CV 退化为"每实例请求数"
+    的度量（2026-09-29 T4 同源问题的积分侧根治——零长度区间 [a,a)
+    恒贡献 0，上游客仅剔除 drain < admission，零长度在此天然为 0）。
     """
-    first = (admission_ns - span_start) // bucket_ns
-    last = (drain_ns - span_start) // bucket_ns
-    hi = last - 1 if (drain_ns - span_start) % bucket_ns == 0 else last
-    lo = max(0, first)
-    hi = min(n_buckets - 1, hi)
-    return hi - lo + 1 if hi >= lo else 0
+    return drain_ns - admission_ns if drain_ns > admission_ns else 0
 
 
 def instance_timeavg_backlog(intervals: list[dict], bucket_ns: int,
@@ -211,35 +216,33 @@ def instance_timeavg_backlog(intervals: list[dict], bucket_ns: int,
                              ) -> dict[int, tuple[float, int]]:
     """各 instance 积压 → 时间平均积压（返回 instance -> (b̄, n_req)）。
 
-    桶 j 覆盖 [span_start + j*bucket, +bucket)；请求区间对桶的覆盖按
-    时间重叠 >0 计入（区间端点闭开 [admission, drain)）。
+    b̄_i = Σ_区间 [drain−admission] / 总跨度（L19 精确积分；bucket_ns
+    不再进入取值——旧桶计数近似对部分重叠桶整桶计入、虚增积压，精确
+    端点处理下桶格划分对积分无贡献；bucket_ns 保留为登记参数继续读取/
+    校验/输出，供跨 run 网格对账）。
 
     2026-08-30 爆内存根治：原实现为每实例预分配 ``[0] * n_buckets``
     稠密分桶序列并逐桶累加，稠密序列的唯一消费方式是
     ``sum(series) * bucket_ns``（Σ桶计数×桶长）。全量 tracelab 跨度
     2.7e15 ns ÷ 1ms 桶 = 每实例 27 亿桶 × 9 实例 ≈ 182 GiB，曾把
-    80GB VM 拖入全局 OOM。现改为 O(1) 区间算术（_interval_covered_buckets
-    逐语句等价推导见其 docstring），每实例只持一个整数累加器，
+    80GB VM 拖入全局 OOM。2026-09-29 起改为每区间 O(1) 精确长度积分
+    （_interval_covered_ns），每实例只持一个整数累加器，
     内存 O(区间数)，与时间跨度/桶长彻底解耦。
     """
-    n_buckets = max(1, math.ceil((span_end - span_start) / bucket_ns))
-    covered_buckets: dict[int, int] = {}
+    covered_ns_by_instance: dict[int, int] = {}
     counts: dict[int, int] = {}
     for interval in intervals:
         instance = interval["instance"]
-        covered_buckets[instance] = covered_buckets.get(instance, 0) + \
-            _interval_covered_buckets(interval["admission_ns"],
-                                      interval["drain_ns"], span_start,
-                                      bucket_ns, n_buckets)
+        covered_ns_by_instance[instance] = \
+            covered_ns_by_instance.get(instance, 0) + \
+            _interval_covered_ns(interval["admission_ns"],
+                                 interval["drain_ns"])
         counts[instance] = counts.get(instance, 0) + 1
     result: dict[int, tuple[float, int]] = {}
     total = span_end - span_start
     if total <= 0:
         fail("load_imbalance：时间跨度为 0，无法做时间平均")
-    for instance, covered in covered_buckets.items():
-        covered_ns = covered * bucket_ns
-        # 末桶可能被 span 截断：按实际桶数×桶长覆盖，误差 ≤1 桶（记录于
-        # 输出的 bucket_ns/span，供交叉核对）。
+    for instance, covered_ns in covered_ns_by_instance.items():
         result[instance] = (covered_ns / total, counts[instance])
     return result
 
@@ -267,7 +270,7 @@ def cmd_load_imbalance(args: argparse.Namespace) -> int:
     manifest = load_slo_manifest(args.manifest or default_manifest_path())
     bucket_ns = load_imbalance_bucket_ns(manifest)
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
-    state = li_prepare(repo_variant)
+    state = li_prepare()
     for record in iter_jsonl(args.run_dir / DECISION_LOG_RELPATH):
         li_consume_decision(record, repo_variant, state)
     return load_imbalance_finish(args, repo_variant, bucket_ns, state)

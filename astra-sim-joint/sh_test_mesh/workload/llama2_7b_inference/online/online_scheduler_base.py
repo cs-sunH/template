@@ -28,10 +28,25 @@ import copy
 import hashlib
 import json
 import os
+import sys
 import tempfile
 import time
 
-SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除,本校验器与 C++ 序列化为权威)
+SCHEMA_VERSION = 2  # GraphBatch / bridge wire schema v2 (2026-10-05)
+
+# W1(2026-09-29):因果运行账本 import 路径引导(与 sh30 同款:本文件位于
+# online/,joint 包在上一级)。路径只做 import 用途。
+_W1_WORKLOAD_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _W1_WORKLOAD_DIR not in sys.path:
+    sys.path.insert(0, _W1_WORKLOAD_DIR)
+
+from joint.native_ledger import (  # noqa: E402
+    NativeDualLedgerReceiver,
+    NativePipelineLedgerFacade,
+)
+from joint.pipeline_ledger import (  # noqa: E402
+    PipelineLedgerError,
+)
 
 # ---------------------------------------------------------------- B4 在途尾部
 # 方案 §4-B4 "PropagatingTail"(真实在途尾部):基类中三个"已产生、等待
@@ -52,6 +67,19 @@ _PROPAGATING_TAIL_SOURCE_KV = "kv_provisional"        # _provisional_kv_actions(
 # 扩展(届时应显式配置)。SH_PROPAGATING_TAIL_LIMIT=<正整数> 覆盖。
 _PROPAGATING_TAIL_DELIVERY_LIMIT_DEFAULT = 8
 _PROPAGATING_TAIL_LIMIT_ENV = "SH_PROPAGATING_TAIL_LIMIT"
+
+#: on_decision_batch 墙时分段键(2026-10-05 埋点):五个父阶段和账本
+#: apply 内的三个 nested 子阶段；子阶段不可与父 apply 桶相加。
+_DELIVERY_SEGMENT_KEYS = (
+    "apply_work_ledger_ns",
+    "ledger_typed_parse_ns",
+    "ledger_prepare_ns",
+    "ledger_commit_ns",
+    "settle_completions_ns",
+    "process_arrivals_ns",
+    "run_variant_policy_ns",
+    "build_graph_batch_ns",
+)
 
 
 class PropagatingTailTracker:
@@ -142,6 +170,15 @@ STAGE_REQUEST = ""  # REQUEST_COMPLETE: 该 request 全部阶段完成(收尾/�
 class OnlineSchedulerBase:
     """批次框架基类。run_variant_policy 由变体(replay/strategy)实现。"""
 
+    # M11/R5-S1(2026-09-29 face 移植): delivery 类在途尾部(delivery_start /
+    # kv_provisional)上限的显式覆盖口。None = 走环境变量
+    # SH_PROPAGATING_TAIL_LIMIT / 默认 8(生产语义不变)。离线重放/对账类
+    # 工具不喂或延后 commit ack, 未确认交付数不受生产桥单在途背压窗口
+    # 约束, 必须在构造前对本属性显式调大, 否则第 9 笔交付即 fail-closed
+    # RuntimeError。环境变量显式设置时仍最优先(运维逃生门语义不变);
+    # 无论哪个来源, 非正整数一律构造期 fail-closed。
+    propagating_tail_delivery_limit = None
+
     def __init__(
         self,
         *,
@@ -157,6 +194,7 @@ class OnlineSchedulerBase:
         sensing_query_sink=None,
         online_stats_sink=None,
         ledger_sink=None,
+        work_ledger_sink=None,
     ):
         self.mode = mode
         self.config = config
@@ -170,6 +208,12 @@ class OnlineSchedulerBase:
         }
         if len(self.unseen_request_ids) != self.expected_request_count:
             raise ValueError("manifest request_id values must be unique")
+        # die 后端发射语境(第一期;契约 §7 裁定 2/7):manifest 的
+        # compute-cost-model == "die" 时构造 DieModelContext(die-model-
+        # config 绝对路径 + 模型行),每批发射前注入构图器
+        # (_begin_graph_batch)。无键/roofline/replay = legacy,行为不变;
+        # 未知值 fail-closed。online_service.py 不感知注入点。
+        self.die_model_context = self._build_die_model_context(manifest, config)
         self.replay = replay
         self.digest_sink = digest_sink  # callable(dict) 或 None(不写 digest)
         # M3 流式落盘(2026-08-23):decision_log_sink / profile_sink 提供
@@ -263,12 +307,13 @@ class OnlineSchedulerBase:
         # [(request_id, stage), ...]};commit ack 到达时做层转移的凭据。
         self._emitted_by_delivery = {}
         # 决策边界两层剩余负载查询快照(感知开启时记录,写
-        # sensing_query_log.jsonl)。
-        self.sensing_query_rows = []
+        # sensing_query_log.jsonl)。(R3-I1,2026-09-29 face 移植)原
+        # sensing_query_rows 无 sink 时的全量驻留缓冲已删:全仓 grep 证实
+        # 无 sink 路径零读者——仅在提供 sink 时构建并写出查询行,行不再
+        # 无谓驻留。
         # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数
         # 无关;full_scan_entries 恒为 0 = 不存在 O(总规模) 全量扫描)。
-        # 行: {delivery_sequence, tick, scanned_entries, full_scan_entries}。
-        self.profile_rows = []
+        # 行: {delivery_sequence, tick, scanned_entries}。
         self._profile_batch = None
         # 阶段 5 §8.2:Python provisional KV 账本(commit ack 前不入账)。
         # kv_actions 在 build_graph_batch 时先入暂存区(每 delivery 一条,
@@ -296,6 +341,13 @@ class OnlineSchedulerBase:
         #     合并桥接层 processing_ns,保留缓冲(online_service 落盘)。
         self.python_callback_count_by_reason = {}
         self.scheduler_self_ns_total = 0
+        # 墙时分段累计(2026-10-05 埋点,perf_counter_ns):on_decision_batch
+        # 五个父阶段及 ledger apply 下的三个 nested 子阶段
+        # (typed_parse/prepare/commit)的
+        # 每已应用交付之和——逐交付行字段见 _record_online_stats,累计值
+        # run 末由 delivery_segment_totals() 供汇总行消费。
+        self.delivery_segment_ns_totals = {
+            key: 0 for key in _DELIVERY_SEGMENT_KEYS}
         # B3(2026-08-28):提供 online_stats_sink 时行即写即弃(online_service
         # 落盘),本列表不再驻留;缺省缓冲(测试/夹具路径)。
         self.online_stats_rows = []
@@ -308,17 +360,27 @@ class OnlineSchedulerBase:
         #   delivery 类 = _PROPAGATING_TAIL_DELIVERY_LIMIT_DEFAULT(8x 桥
         #     背压窗口,推导见模块头),SH_PROPAGATING_TAIL_LIMIT 覆盖。
         self.propagating_tail = PropagatingTailTracker()
-        _delivery_tail_limit = os.environ.get(
+        # M11/R5-S1(2026-09-29 face 移植): 上限解析优先级 = 环境变量显式
+        # 设置(运维逃生门, 语义与改前一致) > 类属性覆盖(重放/对账工具
+        # 构造前设置) > 默认 8。任一来源非正整数即构造期 fail-closed。
+        _delivery_tail_limit_env = os.environ.get(
             _PROPAGATING_TAIL_LIMIT_ENV, "")
-        if not _delivery_tail_limit:
-            _delivery_tail_limit = _PROPAGATING_TAIL_DELIVERY_LIMIT_DEFAULT
-        else:
-            _delivery_tail_limit = int(_delivery_tail_limit)
+        if _delivery_tail_limit_env:
+            _delivery_tail_limit = int(_delivery_tail_limit_env)
             if _delivery_tail_limit <= 0:
                 raise ValueError(
                     "{} must be a positive integer, got {!r}".format(
                         _PROPAGATING_TAIL_LIMIT_ENV,
                         os.environ[_PROPAGATING_TAIL_LIMIT_ENV]))
+        elif self.propagating_tail_delivery_limit is not None:
+            _delivery_tail_limit = int(self.propagating_tail_delivery_limit)
+            if _delivery_tail_limit <= 0:
+                raise ValueError(
+                    "propagating_tail_delivery_limit must be a positive "
+                    "integer, got {!r}".format(
+                        self.propagating_tail_delivery_limit))
+        else:
+            _delivery_tail_limit = _PROPAGATING_TAIL_DELIVERY_LIMIT_DEFAULT
         self.propagating_tail.register(
             _PROPAGATING_TAIL_SOURCE_ARRIVALS,
             lambda: self.in_flight, self.expected_request_count)
@@ -328,38 +390,116 @@ class OnlineSchedulerBase:
         self.propagating_tail.register(
             _PROPAGATING_TAIL_SOURCE_KV,
             lambda: self._provisional_kv_actions, _delivery_tail_limit)
+        # ---------------------------------------------------------------- W1
+        # 因果运行账本（2026-09-29）：C++ request JSON 顶层 additive 字段
+        # work_ledger 的 Python 侧账本（joint/work_ledger.py）。首交付全量、
+        # 后续增量，幂等应用沿 delivery 门；字段缺席（旧对端）记录在
+        # work_ledger_absent_seen，不补零冒装。查询/因果背景通道，本基类
+        # 不进策略判据（sh30 消费接线由主 Agent 串行整合，见
+        # /tmp/joint_w1/INTEGRATION_NOTES.md）。
+        # v4 N-line: the protocol-v4 dual ledger (work + pipeline) lives in
+        # the native receiver (extern/joint_ledger via joint/native_ledger).
+        # Python keeps the handle, the small pricing views and the journal
+        # note; the Python reference decoder (work_ledger.py/pipeline_ledger
+        # offline face) remains for equivalence testing only.
+        self.joint_ledger_receiver = NativeDualLedgerReceiver()
+        self.joint_work_ledger = self.joint_ledger_receiver
+        self.joint_pipeline_ledger = NativePipelineLedgerFacade(
+            self.joint_ledger_receiver)
+        self._work_ledger_event_sink = work_ledger_sink
+        self._last_work_ledger_note = None
+        self.work_ledger_absent_seen = False
 
     # ------------------------------------------------------------- 固定阶段 --
 
-    def on_decision_batch(self, delta: dict) -> dict:
+    @staticmethod
+    def _build_die_model_context(manifest, config):
+        """manifest -> DieModelContext(backend 声明的唯一来源)。
+
+        compute-cost-model 缺失/roofline/replay -> None(legacy 回归保护:
+        旧 plan 目录的 manifest 无该键,行为不变);"die" -> 构造;其他值
+        fail-closed。惰性 import:legacy 路径不加载 die_model_adapter。"""
+        backend = manifest.get("compute-cost-model") if isinstance(
+            manifest, dict) else None
+        if backend is None or backend in ("roofline", "replay"):
+            return None
+        if backend != "die":
+            raise ValueError(
+                "manifest compute-cost-model {!r} is unsupported (expected "
+                "'die', 'roofline' or 'replay')".format(backend))
+        try:
+            from online.die_model_adapter import DieModelContext  # noqa: E402
+        except ImportError:  # pragma: no cover -- flat-import 调用方兜底
+            from die_model_adapter import DieModelContext  # noqa: E402
+        return DieModelContext.from_service(manifest, config)
+
+    def on_decision_batch(self, delta: dict,
+                          work_ledger_segment: bytes = None) -> dict:
         """固定阶段:delivery sequence 门 -> 校验 schema -> 核销 completion
         -> 处理 arrivals -> run_variant_policy() -> build_graph_batch() ->
         返回 GraphBatch dict。
 
+        ``work_ledger_segment``（v4 N 主线）:桥层结构扫描出的 request 顶
+        层 work_ledger 成员原始字节。在场时 delta 不携带该子对象，账本
+        接收走原生批入口（常数次 FFI，不逐事件跨语言、不重建 DTO）；
+        缺席时 delta["work_ledger"] dict 由同一原生核心接收（嵌入/离线
+        调用方的形态适配，非第二状态机）。外层 gate 仍先于原生提交。
+
         幂等重放(§7.2):seq == last_applied_sequence 的重复 delivery 在
         sequence 门处直接返回上次 batch 的 digest,以下任何一步都不执行
-        (不重新产生 assignment/KV action/图节点,状态零变更)。
+        (不重新产生任何 assignment/KV action/图节点,状态零变更)。
 
         阶段 6 §9.1:scheduler_self_ns = 本函数 Python 墙钟耗时(两次返回
         路径都累计;官方路径无幂等重放,故累计 = 各已应用交付之和)。
         """
         t0 = time.monotonic_ns()
-        self._validate_schema(delta)
-        replayed = self._gate_delivery_sequence(delta)
+        self._validate_schema(delta, work_ledger_segment)
+        self._last_work_ledger_phase_ns = {
+            "ledger_typed_parse_ns": 0,
+            "ledger_prepare_ns": 0,
+            "ledger_commit_ns": 0,
+        }
+        replayed = self._gate_delivery_sequence(delta, work_ledger_segment)
         if replayed is not None:
             self.scheduler_self_ns_total += time.monotonic_ns() - t0
             return replayed
+        outer_canonical = self._canonical_bridge_metadata(delta)
+        # C4: apply the mandatory v4 ledger before strategy mutation; only
+        # after both COW ledgers commit do we record the auxiliary summary.
+        work_ledger_canonical = None
+        # C4：应用因果运行账本交付（策略之前——同 tick 新承诺在策略
+        # 可见面形成前已入账）。v4 先原子验证并提交，再记录辅助
+        # summary，避免坏 envelope 留下已接受流水之外的 summary 副作用。
+        # 墙时分段(2026-10-05 埋点,perf_counter_ns):固定阶段五段。
+        _seg_t0 = time.perf_counter_ns()
+        work_ledger_canonical = self._apply_work_ledger(
+            delta, work_ledger_segment)
         self._record_ledger_summary(delta)
+        segments = {"apply_work_ledger_ns":
+                    time.perf_counter_ns() - _seg_t0}
+        segments.update(getattr(self, "_last_work_ledger_phase_ns", {}))
         self.delivery_count += 1
         self._start_batch(delta)
+        _seg_t0 = time.perf_counter_ns()
         self._settle_completions(delta)
+        segments["settle_completions_ns"] = (
+            time.perf_counter_ns() - _seg_t0)
+        _seg_t0 = time.perf_counter_ns()
         self._process_arrivals(delta)
+        segments["process_arrivals_ns"] = (
+            time.perf_counter_ns() - _seg_t0)
         if self.sensing_enabled:
             # 决策边界两层剩余负载查询快照(策略运行前 = 边界视图;查询是
             # 审计输入,不进策略判据)。
             self._record_sensing_query(delta)
+        _seg_t0 = time.perf_counter_ns()
         self.run_variant_policy(delta)
+        segments["run_variant_policy_ns"] = (
+            time.perf_counter_ns() - _seg_t0)
+        _seg_t0 = time.perf_counter_ns()
         batch = self.build_graph_batch()
+        segments["build_graph_batch_ns"] = (
+            time.perf_counter_ns() - _seg_t0)
         # §7.2:缓存本次已应用交付(幂等重放凭据)。B3(2026-08-23):生产
         # 路径引用缓存(批对象/下一批 begin_batch 重建累加器,旧引用不被
         # 改写;delta 桥读后即弃);defensive_reply_cache=True(幂等
@@ -367,24 +507,38 @@ class OnlineSchedulerBase:
         if self.defensive_reply_cache:
             self._delivery_reply_cache = {
                 "seq": delta["delivery_sequence"],
-                "delta": copy.deepcopy(delta),
+                "outer_canonical": outer_canonical,
+                "work_ledger_canonical": work_ledger_canonical,
                 "batch": copy.deepcopy(batch),
             }
         else:
             self._delivery_reply_cache = {
                 "seq": delta["delivery_sequence"],
-                "delta": delta,
+                "outer_canonical": outer_canonical,
+                "work_ledger_canonical": work_ledger_canonical,
                 "batch": batch,
             }
         self.last_applied_sequence = delta["delivery_sequence"]
-        self._record_online_stats(delta, batch, time.monotonic_ns() - t0)
+        self._record_online_stats(delta, batch, time.monotonic_ns() - t0,
+                                  segments=segments)
         return batch
 
     def _record_online_stats(self, delta: dict, batch: dict,
-                             scheduler_self_ns: int) -> None:
+                             scheduler_self_ns: int,
+                             segments: dict = None) -> None:
         """阶段 6 §9.1:已应用交付的 Python 侧分项统计(每交付一行 +
-        reason 计数累计)。"""
+        reason 计数累计)。
+
+        segments(墙时埋点)=五个 on_decision_batch 父阶段及
+        {ledger_typed_parse_ns, ledger_prepare_ns, ledger_commit_ns}
+        三个嵌套 apply 子阶段(perf_counter_ns)。ledger子阶段不可与
+        apply_work_ledger_ns 相加；它们之和是父阶段的分解面；
+        缺省 None(直调本方法的测试/夹具)= 所有段全 0 如实入账,行字段
+        恒在(形状稳定)。"""
         self.scheduler_self_ns_total += scheduler_self_ns
+        totals = self.delivery_segment_ns_totals
+        for key in _DELIVERY_SEGMENT_KEYS:
+            totals[key] += int((segments or {}).get(key, 0))
         for reason in delta["reasons"]:
             self.python_callback_count_by_reason[reason] = (
                 self.python_callback_count_by_reason.get(reason, 0) + 1)
@@ -395,11 +549,21 @@ class OnlineSchedulerBase:
             "scheduler_self_ns": scheduler_self_ns,
             "node_count": len(batch["nodes"]),
         }
+        for key in _DELIVERY_SEGMENT_KEYS:
+            row[key] = int((segments or {}).get(key, 0))
         # B3:流式落盘(基础行,online_service 结束期合并 processing_ns)。
         if self.online_stats_sink is not None:
             self.online_stats_sink(row)
         else:
             self.online_stats_rows.append(row)
+
+    def delivery_segment_totals(self) -> dict:
+        """墙时分段累计的只读副本(run 末汇总行消费;__new__ 壳替身/
+        旧装配形态按零账如实)。"""
+        totals = getattr(self, "delivery_segment_ns_totals", None)
+        if totals is None:
+            return {key: 0 for key in _DELIVERY_SEGMENT_KEYS}
+        return dict(totals)
 
     def run_variant_policy(self, delta) -> None:  # noqa: D401 -- 变体挂钩
         raise NotImplementedError
@@ -430,6 +594,27 @@ class OnlineSchedulerBase:
         delivery_sequence = self._batch["delivery_sequence"]
         graph_batch = self._graph_batch()
         touched_ranks = self._sorted_touched_ranks(graph_batch)
+        # C1 actual publication ordering: descriptor ordinals commit and the
+        # strict wire conversion happens BEFORE this batch is assembled,
+        # digested, or reported.  finalize_pipeline_identities appends the
+        # finished descriptors to the builder accumulator; running it after
+        # the digest would publish a batch whose content_sha256 and
+        # pipeline_descriptor_count miss the very descriptors it carries.
+        graph = getattr(self, "graph", None)
+        finalize_pipeline_identities = getattr(
+            graph, "finalize_pipeline_identities", None)
+        if callable(finalize_pipeline_identities):
+            finalize_pipeline_identities()
+        # The immutable descriptor objects are converted to strict wire JSON
+        # by GraphBatchBuilder at the original emission point. Keep an empty
+        # array for batches without a remote-read pipeline; the run contract
+        # is mandatory regardless, so native/runtime values cannot diverge.
+        pipeline_descriptors = graph_batch.get("pipeline_descriptors", [])
+        if not isinstance(pipeline_descriptors, list):
+            raise TypeError("pipeline_descriptors must be a list")
+        from joint.prediction_config import make_pipeline_kernel_contract
+        kernel_contract = make_pipeline_kernel_contract(
+            self._joint_prediction_config)
         batch = {
             "schema_version": SCHEMA_VERSION,
             "batch_id": delivery_sequence,
@@ -443,6 +628,8 @@ class OnlineSchedulerBase:
             # 阶段 5 §8.2:touched ranks 集合(本批节点 rank 升序去重;零节点
             # 批 = []);由构图收集时的精确 rank 账本给出，C++ 仍会校验。
             "touched_ranks": touched_ranks,
+            "pipeline_descriptors": pipeline_descriptors,
+            "kernel_contract": kernel_contract,
         }
         # 阶段 5 §8.2:本批 kv_actions 先入 provisional 暂存区(非空才记账),
         # commit ack 到达后 finalize(见 on_commit_ack);幂等重放不经过这里
@@ -456,22 +643,31 @@ class OnlineSchedulerBase:
         if self.digest_sink is not None:
             self.digest_sink(self._digest_row(batch))
         # 阶段 4 §7.3:本决策批扫描条目数入 profile(M3:行在产出时即
-        # 完整,提供 profile_sink 时逐行流式写出;缺省缓冲,供 dump_profile)。
-        profile_row = {
-            "delivery_sequence": delivery_sequence,
-            "tick": self._batch["tick"],
-            "scanned_entries": self._profile_batch["scanned_entries"],
-            "full_scan_entries": self._profile_batch["full_scan_entries"],
-        }
+        # 完整,提供 profile_sink 时逐行流式写出;2026-09-29 face 移植起
+        # 无 sink 时不再构建不驻留——profile_rows/dump_profile 死代码对
+        # 已删)。
         if self.profile_sink is not None:
-            self.profile_sink(profile_row)
-        else:
-            self.profile_rows.append(profile_row)
+            self.profile_sink({
+                "delivery_sequence": delivery_sequence,
+                "tick": self._batch["tick"],
+                "scanned_entries": self._profile_batch["scanned_entries"],
+            })
+        self._note_backend_batch(batch)
         return batch
+
+    def _note_backend_batch(self, batch: dict) -> None:
+        """后端事件量记账钩子（ACC，验收纪律第 3 类 / v2.0 §19.3）。
+
+        基底 no-op（非 joint 变体零影响）；joint 变体覆盖为预测器开
+        销账本的图批计数喂入。幂等重放在 sequence 门早退不经过本函
+        数——同一交付天然只计一次。"""
+
+        return None
 
     # ------------------------------------------------------------- 校验/簿记 --
 
-    def _gate_delivery_sequence(self, delta: dict):
+    def _gate_delivery_sequence(self, delta: dict,
+                                work_ledger_segment: bytes = None):
         """阶段 4 §7.2 delivery sequence 门。返回 None = 正常新交付,继续
         走完整管线;返回 dict = 幂等重放(上次 batch 的 digest 副本)。
 
@@ -481,6 +677,11 @@ class OnlineSchedulerBase:
         - 单调:seq != last_applied_sequence + 1 -> fail-closed(C++ 单在途
           背压 + 原子文件发布下不可能跳号;重复旧 seq 亦属违例——本通道的
           重复只能是对同一交付的重试,即"上一次交付")。
+
+        v4 N 主线:子对象身份比对用同一交付形态的原始字节(桥层 segment
+        路径 = work_ledger 成员原始字节;dict 路径 = canonical dumps)。
+        确定性生产者对相同内容输出相同字节;跨形态重复在同一运行内不可
+        达(单生产者),canonical 兜底比对保持 dict 路径的既有接受集。
         """
         seq = delta["delivery_sequence"]
         if seq == self.last_applied_sequence:
@@ -489,10 +690,20 @@ class OnlineSchedulerBase:
                 raise ValueError(
                     "duplicate delivery {} but applied-delivery cache "
                     "missing/inconsistent".format(seq))
-            if delta != cached["delta"]:
+            try:
+                outer_canonical = self._canonical_bridge_metadata(delta)
+                child_canonical = self._work_ledger_child_bytes(
+                    delta, work_ledger_segment)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "duplicate delivery {} is not canonical JSON: {}".format(
+                        seq, exc)) from exc
+            if (outer_canonical != cached["outer_canonical"]
+                    or child_canonical
+                    != cached["work_ledger_canonical"]):
                 raise ValueError(
                     "duplicate delivery {} carries a different delta: "
-                    "idempotent replay must byte-match the applied delivery"
+                    "idempotent replay must preserve typed canonical content"
                     .format(seq))
             return copy.deepcopy(cached["batch"])
         if seq != self.last_applied_sequence + 1:
@@ -502,6 +713,15 @@ class OnlineSchedulerBase:
                 "delivery)".format(seq, self.last_applied_sequence))
         return None
 
+    @staticmethod
+    def _work_ledger_child_bytes(delta: dict,
+                                 work_ledger_segment: bytes = None) -> bytes:
+        """Delivery-form child identity bytes for the idempotent gate."""
+        if work_ledger_segment is not None:
+            return work_ledger_segment
+        return OnlineSchedulerBase._canonical_work_ledger_bytes(
+            delta.get("work_ledger"))
+
     # ------------------------------------------------------ §7.3 profile --
 
     def _profile_scan(self, count: int = 1) -> None:
@@ -509,23 +729,20 @@ class OnlineSchedulerBase:
         条目;非全量扫描)。验收:每批计数与总 request 数无关。"""
         self._profile_batch["scanned_entries"] += count
 
-    def _profile_full_scan(self, count: int = 1) -> None:
-        """记录本决策批的 O(总规模) 全量扫描条目数。§7.3 之后应恒为 0;
-        任何 > 0 都意味着索引队列被绕过(profile 审计 fail-closed)。"""
-        self._profile_batch["full_scan_entries"] += count
+    # (2026-09-29 face 移植)原 _profile_full_scan + dump_profile +
+    # profile_rows 缓冲死代码对已删:全仓 grep 证实 dump_profile 零调用、
+    # profile_rows 零读者(full_scan_entries 死记账同步删除;生产路径走
+    # profile_sink 流式落盘;缓冲分支从未被任何人消费),见
+    # build_graph_batch。
 
-    def dump_profile(self, path: str) -> None:
-        """把每决策批扫描条目数写为 profile.jsonl(阶段 4 §7.3 验收输入)。
-        M3:生产路径由 profile_sink 逐行流式写出(online_service),本方法
-        仅服务缺省缓冲模式(测试/夹具)——流式模式下 rows 为空,不覆写。"""
-        with open(path, "w", encoding="utf-8") as out:
-            for row in self.profile_rows:
-                out.write(json.dumps(row, sort_keys=True) + "\n")
+    def _validate_schema(self, delta: dict,
+                         work_ledger_segment: bytes = None) -> None:
+        """Validate the outer bridge-v2 frame and mandatory inner v4 ledger.
 
-    def _validate_schema(self, delta: dict) -> None:
-        """schema v1 校验器(阶段 4 §7.1;原契约 §6 各条强制,契约文档已
-        删除)。任何不满足即抛异常 -> BridgeServer 写 error
-        response 并以非 0 退出(fail-closed,绝不静默降级)。"""
+        v4 N 主线:``work_ledger_segment`` 在场时子对象校验由原生接收器在
+        prepare 阶段承担（外层 gate 先行、原生提交随后）；Python 只保留
+        外层帧与句柄检查。
+        """
         if not isinstance(delta, dict):
             raise ValueError("delta must be a dict, got {!r}".format(type(delta)))
         if delta.get("schema_version") != SCHEMA_VERSION:
@@ -604,6 +821,49 @@ class OnlineSchedulerBase:
         if "ledger_summary" in delta and not isinstance(
                 delta["ledger_summary"], dict):
             raise ValueError("delta ledger_summary must be a dict")
+        if work_ledger_segment is None:
+            work_ledger_payload = delta.get("work_ledger")
+            if not isinstance(work_ledger_payload, dict):
+                raise ValueError(
+                    "delta requires a v4 work_ledger object")
+            if (type(work_ledger_payload.get("schema_version")) is not int
+                    or work_ledger_payload.get("schema_version") != 4):
+                raise ValueError(
+                    "work_ledger schema_version must be protocol 4")
+            if handle.get("kind") != "work_ledger_v4":
+                raise ValueError(
+                    "work_ledger protocol 4 requires snapshot_handle.kind "
+                    "work_ledger_v4")
+        # snapshot_handle.kind 与 strict v4 child envelope 对齐（segment
+        # 路径子对象校验由原生 prepare 承担，句柄检查两侧相同）。
+        handle_kind = handle.get("kind", "")
+        if handle_kind != "work_ledger_v4":
+            raise ValueError(
+                "delta snapshot_handle.kind {!r} is unknown".format(
+                    handle_kind))
+
+    @staticmethod
+    def _canonical_bridge_metadata(delta):
+        """Canonical outer bytes excluding the one separately retained child."""
+        metadata = {key: value for key, value in delta.items()
+                    if key != "work_ledger"}
+        try:
+            return json.dumps(
+                metadata, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "bridge metadata is not canonical JSON: {}".format(exc)) from exc
+
+    @staticmethod
+    def _canonical_work_ledger_bytes(payload):
+        try:
+            return json.dumps(
+                payload, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "work_ledger is not canonical JSON: {}".format(exc)) from exc
 
     def _record_ledger_summary(self, delta: dict) -> None:
         """阶段 3 感知:记录 C++ 交付的 injected-unfinished 摘要
@@ -618,6 +878,64 @@ class OnlineSchedulerBase:
                 "delta ledger_summary.injected_unfinished must be a list")
         self.last_injected_unfinished = injected
         self.injected_unfinished_record_count += 1
+
+    def _apply_work_ledger(self, delta: dict,
+                           work_ledger_segment: bytes = None) -> bytes:
+        """Apply the mandatory protocol-v4 pipeline and node events atomically.
+
+        查询/因果背景通道:本基类不读账本做任何策略决策(sh30 消费接线
+        见 _joint_decision_snapshot/_joint_world_source)。
+
+        v4 N 主线(2026-10-12):接收/校验/应用/提交整体驻留原生双账本
+        接收器(joint/native_ledger -> extern/joint_ledger)。桥层 segment
+        路径按原始字节一次 prepare+commit(常数次 FFI);dict 路径(嵌入
+        /离线调用方)紧凑序列化后进同一核心。任何校验失败 = 异常向上
+        传播(fail-closed),两账本保持提交前状态;原生 prepare 的
+        phase 计时(typed parse/staging/commit)如实进入墙时分段账本。
+        v3 轮的 Python 融合流式 apply 已否决回退,其结论由本原生路径
+        承接(存档于 v3 证据根)。
+        """
+        receiver = getattr(self, "joint_ledger_receiver", None)
+        if receiver is None:
+            raise PipelineLedgerError(
+                "protocol-v4 requires the native dual-ledger receiver")
+        if work_ledger_segment is not None:
+            receipt = receiver.receive(
+                work_ledger_segment,
+                delivery_sequence=delta["delivery_sequence"],
+                tick=delta["tick"])
+            child_bytes = bytes(work_ledger_segment)
+        else:
+            payload = delta.get("work_ledger")
+            if not isinstance(payload, dict):
+                raise PipelineLedgerError(
+                    "protocol-v4 work_ledger envelope is required")
+            receipt = receiver.receive_payload_dict(payload)
+            child_bytes = self._canonical_work_ledger_bytes(payload)
+        phase_ns = {
+            "ledger_typed_parse_ns": int(receipt["parse_ns"]),
+            "ledger_prepare_ns": int(receipt["stage_ns"]),
+            "ledger_commit_ns": int(receipt["commit_ns"]),
+        }
+        self._last_work_ledger_phase_ns = phase_ns
+        self.work_ledger_absent_seen = False
+        self._last_work_ledger_note = {
+            "snapshot_kind": receipt["snapshot_kind"],
+            "event_watermark": None,  # v4 wire carries base/logical fields
+        }
+        sink = getattr(self, "_work_ledger_event_sink", None)
+        if sink is not None:
+            sink({
+                "delivery_sequence": delta["delivery_sequence"],
+                "tick": delta["tick"],
+                "snapshot_kind": receipt["snapshot_kind"],
+                "applied_events": receipt["applied_events"],
+                "replayed_events": receipt["replayed_events"],
+                "event_watermark": receipt["event_watermark"],
+                "active_works": receiver.active_work_count(),
+                "ledger_version": receiver.version,
+            })
+        return child_bytes
 
     # ------------------------------------------------------- 感知账本(阶段 3) --
 
@@ -771,6 +1089,11 @@ class OnlineSchedulerBase:
         """决策边界分层剩余负载查询快照(策略运行前 = 边界视图;§10.1 后
         为四层视图:admitted / issued / ready + C++ injected-unfinished
         摘要)。"""
+        # B3/R3-I1(2026-09-29 face 移植):仅在提供 sink 时构建并写出查询
+        # 行;无 sink 的嵌入/测试路径全仓无读者,行不再构建与驻留(旧
+        # else 分支缓冲 sensing_query_rows 已删)。
+        if self.sensing_query_sink is None:
+            return
         row = {
             "delivery_sequence": delta["delivery_sequence"],
             "tick": delta["tick"],
@@ -781,11 +1104,7 @@ class OnlineSchedulerBase:
             "issued": self._sensing_issued_view(),
             "ready": self._sensing_ready_view(),
         }
-        # B3:流式落盘(行在产出时即完整;缺省缓冲,供夹具直读)。
-        if self.sensing_query_sink is not None:
-            self.sensing_query_sink(row)
-        else:
-            self.sensing_query_rows.append(row)
+        self.sensing_query_sink(row)
 
     def dump_ledger(self, path: str) -> None:
         """完成账本导出。
@@ -806,7 +1125,7 @@ class OnlineSchedulerBase:
                 out.write(line)
 
     def _start_batch(self, delta: dict) -> None:
-        self._profile_batch = {"scanned_entries": 0, "full_scan_entries": 0}
+        self._profile_batch = {"scanned_entries": 0}
         self._batch = {
             "delivery_sequence": delta["delivery_sequence"],
             "tick": delta["tick"],
@@ -835,10 +1154,18 @@ class OnlineSchedulerBase:
 
     def _begin_graph_batch(self) -> None:
         """变体若持有构图器(如 replay 的 GraphBatchBuilder),每批发射前
-        重建其批次累加器;没有则跳过(基类自身不构图)。"""
+        重建其批次累加器;没有则跳过(基类自身不构图)。
+
+        第一期 die 后端:同时把 die 发射语境注入构图器(幂等 setter)。注入
+        点在 run_variant_policy 之前(发射即消费);构图器由 online_service
+        构造时不感知 backend,manifest 是唯一声明源。"""
         graph = getattr(self, "graph", None)
         if graph is not None and hasattr(graph, "begin_batch"):
             graph.begin_batch()
+        die_context = getattr(self, "die_model_context", None)
+        if die_context is not None and graph is not None and hasattr(
+                graph, "set_die_context"):
+            graph.set_die_context(die_context)
 
     def _graph_batch(self) -> dict:
         """构图器累加器(节点/边);没有构图器时返回空批次模板。"""
@@ -944,6 +1271,8 @@ class OnlineSchedulerBase:
             {
                 "nodes": batch["nodes"],
                 "parent_edges": batch["parent_edges"],
+                "pipeline_descriptors": batch["pipeline_descriptors"],
+                "kernel_contract": batch["kernel_contract"],
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -958,6 +1287,7 @@ class OnlineSchedulerBase:
             "tick": self._batch["tick"],
             "reasons": self._batch["reasons"],
             "node_count": len(batch["nodes"]),
+            "pipeline_descriptor_count": len(batch["pipeline_descriptors"]),
             "edge_count": len(batch["parent_edges"]),
             "watch_count": len(batch["watches"]),
             "future_alarm_count": len(batch["future_alarms"]),
@@ -1109,9 +1439,28 @@ class OnlineSchedulerBase:
                 "(completed={} unreconciled={})".format(
                         self.completed_request_count,
                         self.ledger_completed_unreconciled_count))
-            if self.injected_unfinished_record_count == 0:
+            # R3-I3(2026-09-29 face 移植):空 manifest(0 请求)的合法运行
+            # 零交付,injected-unfinished 历史恒 0——旧写法把它误判为协议
+            # 违例(非 sensing 同输入正常退出 0)。仅在确有交付时才要求该
+            # 历史。
+            if (self.delivery_count > 0
+                    and self.injected_unfinished_record_count == 0):
                 raise RuntimeError(
                     "sensing ledger: no injected-unfinished history recorded")
+        # W1(2026-09-29):因果运行账本结束守恒审计——凡收到过 work_ledger
+        # 交付(全量或增量),served+remaining==total 必须逐工作守恒;违反 =
+        # 物理账本不合法,fail-closed(§4.3:176)。活跃工作不强制清空:最后
+        # 一帧交付先于 run 尾排空,末端事实不补零也不虚报。getattr 容忍
+        # __new__ 替身(替身不经 __init__,按定义零账本交付——无审计面)。
+        work_ledger = getattr(self, "joint_work_ledger", None)
+        if work_ledger is not None and (
+                work_ledger.full_load_count > 0
+                or work_ledger.applied_event_count > 0):
+            report = work_ledger.conservation_report()
+            if not report["conserved"]:
+                raise RuntimeError(
+                    "work ledger: conservation violated at run end: "
+                    "{}".format(report["violations"][:5]))
 
     def _release_acknowledged_reply(self, seq: int) -> None:
         """Drop the last response as soon as C++ confirms receipt.

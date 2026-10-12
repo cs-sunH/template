@@ -16,8 +16,8 @@ alive. (A chained graph would dead-end after skip_invalid -- that path
 never re-triggers issue_dep_free_nodes, matching how real traces place
 invalid/metadata nodes at chain ends.)
 
-The all_reduce uses the rank's own pg from the fixed comm_group.json
-(runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion),
+The all_reduce uses the rank's own pg from the materialized comm_group.json
+(runtime_config/<slug>__<profile>__no_memory_expansion, resolved dynamically),
 exactly like the real generated traces. The node attrs mirror the encoding
 of TraceBuilder in generate_trace.py (comp/all_reduce), so ETFeeder parses
 them identically.
@@ -63,14 +63,32 @@ OUTPUT_DIR = (
     / "completion_fixture"
 )
 TRACE_PREFIX = "fixture"
-COMM_GROUP = (
-    PROJECT_ROOT
-    / "sh_test_mesh"
-    / "generated"
-    / "runtime_config"
-    / "face_case5_config_c__validation-160gib__no_memory_expansion"
-    / "comm_group.json"
-)
+
+
+def _runtime_config_dir():
+    """Resolve the materialized runtime_config directory dynamically.
+
+    (2026-10-01) the hardcoded ``face_case5_config_c__validation-160gib__
+    profile name drifted from the runner-side dynamic resolution (the runner
+    reads hardware.capacity_profile from the plan manifest and globs); a
+    profile switch left this script reading a stale directory. Same
+    exactly-one contract as the runners.
+    """
+    import glob
+    import sys as _sys
+    matches = sorted(glob.glob(
+        str(PROJECT_ROOT / "sh_test_mesh" / "generated" / "runtime_config"
+            / "*__*__no_memory_expansion")))
+    if len(matches) != 1:
+        _sys.exit(
+            "expected exactly one materialized runtime_config dir "
+            f"(*__<profile>__no_memory_expansion), found {matches}: "
+            "run plan_materializer.py first (see README §2③)")
+    return pathlib.Path(matches[0])
+
+
+RUNTIME_CONFIG_DIR = _runtime_config_dir()
+COMM_GROUP = RUNTIME_CONFIG_DIR / "comm_group.json"
 
 
 def uint64_attr(name: str, value: int) -> ChakraAttr:

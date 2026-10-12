@@ -51,14 +51,40 @@ CPP_PID=""
 PY_PID=""
 
 cleanup() {
+  # L21(2026-09-29 审查修复):先 SIGTERM 后 SIGKILL——此前一律 -9 剥夺了
+  # C++/Python 的信号处理与日志/core 取证窗口(本脚本 legacy-stall 模式的
+  # 现场保留语义恰依赖 SIGTERM,见下方注释)。宽限 ~3s 后 -9 兜底。
   if [[ -n "${CPP_PID}" ]] && kill -0 "${CPP_PID}" 2>/dev/null; then
+    kill "${CPP_PID}" 2>/dev/null || true
+    local _i
+    for _i in $(seq 1 30); do
+      kill -0 "${CPP_PID}" 2>/dev/null || break
+      sleep 0.1
+    done
     kill -9 "${CPP_PID}" 2>/dev/null || true
   fi
   if [[ -n "${PY_PID}" ]] && kill -0 "${PY_PID}" 2>/dev/null; then
+    kill "${PY_PID}" 2>/dev/null || true
+    for _i in $(seq 1 30); do
+      kill -0 "${PY_PID}" 2>/dev/null || break
+      sleep 0.1
+    done
     kill -9 "${PY_PID}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
+
+# M20(2026-09-29 审查修复):有界等待原语——$1=pid $2=timeout_s;0=已退出,
+# 1=超时仍在运行。计数式轮询(sleep 0.3 x 4/秒),不依赖 date/%3N 语义。
+wait_pid_bounded() {
+  local pid=$1 waited=0 max_waited=$(( $2 * 4 ))
+  while kill -0 "${pid}" 2>/dev/null; do
+    if (( waited >= max_waited )); then return 1; fi
+    sleep 0.3
+    waited=$((waited + 1))
+  done
+  return 0
+}
 
 start_online() {  # $1=run_dir $2=scenario
   local run_dir=$1 scenario=$2
@@ -68,11 +94,21 @@ start_online() {  # $1=run_dir $2=scenario
   cd "${PROJECT}"
   # --idle-watchdog-s 0 (2026-09-05): 看门狗默认已武装为 1s；本 fixture 的契约是刻意
   # IDLE 停车（request-neutral 无输入必须保持 IDLE 不退出），显式 0 恢复无界停车契约。
+  # M20(2026-09-29 审查修复):桥侧 response-poll 看门狗补武装(此前缺省
+  # 不传=0=永等)。仅 EXPECT_MODE=fixed(修复后二进制)注入;legacy-stall 采
+  # RED 基线用的预修复二进制可能早于 2026-08-22 该旗标引入,保持旧调用
+  # 字节不变。120000ms 为宽松有界值(C++ 语义:毫秒;正常夹具决策毫秒级,
+  # 永不触发,语义不变)。SH_BRIDGE_TIMEOUT_MS 可覆盖(显式 0=恢复永等)。
+  local bridge_timeout_args=()
+  if [[ "${EXPECT_MODE}" != "legacy-stall" ]]; then
+    bridge_timeout_args=(--bridge-timeout-ms "${SH_BRIDGE_TIMEOUT_MS:-120000}")
+  fi
   "${BIN}" \
     --online-mode strategy \
     --bridge-dir "${run_dir}/bridge" \
     --online-validate 1 \
     --idle-watchdog-s 0 \
+    "${bridge_timeout_args[@]}" \
     --command-fifo "${run_dir}/cmd.fifo" \
     --workload-configuration="${ET_PREFIX}" \
     --comm-group-configuration="${RC}/comm_group.json" \
@@ -91,7 +127,7 @@ start_online() {  # $1=run_dir $2=scenario
     sleep 0.3
   done
   cd "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference"
-  python3 online/verify/wakeup_guard_fixture_service.py \
+  python3 "${SVC}" \
     --bridge-dir "${run_dir}/bridge" \
     --scenario "${scenario}" \
     > "${run_dir}/python.log" 2>&1 &
@@ -140,8 +176,22 @@ done
 echo '{"kind":"CloseInput"}' >&3
 exec 3>&-
 
-py_exit=0; wait "${PY_PID}" || py_exit=$?; PY_PID=""
-cpp_exit=0; wait "${CPP_PID}" || cpp_exit=$?; CPP_PID=""
+# M20(2026-09-29 审查修复):场景1 收尾的裸 wait 无界(Python 服务或 C++ 挂死
+# 时回归被掩盖为挂起)——先有界轮询(SH_EXIT_WAIT_S,缺省 120s),超时
+# fail-closed(非零退出触发 EXIT trap 清场);正常路径立即通过,退出码仍由
+# wait 收割,语义不变。
+py_exit=0
+if ! wait_pid_bounded "${PY_PID}" "${SH_EXIT_WAIT_S:-120}"; then
+  echo "[wakeup_guard] FAIL(场景1): Python ${SH_EXIT_WAIT_S:-120}s 未退出(挂死?)" >&2
+  tail -12 "${run_dir}/python.log" >&2; exit 1
+fi
+wait "${PY_PID}" || py_exit=$?; PY_PID=""
+cpp_exit=0
+if ! wait_pid_bounded "${CPP_PID}" "${SH_EXIT_WAIT_S:-120}"; then
+  echo "[wakeup_guard] FAIL(场景1): C++ ${SH_EXIT_WAIT_S:-120}s 未退出(挂死?)" >&2
+  tail -12 "${run_dir}/cpp.log" >&2; exit 1
+fi
+wait "${CPP_PID}" || cpp_exit=$?; CPP_PID=""
 echo "[wakeup_guard] 场景1: cpp_exit=${cpp_exit} python_exit=${py_exit}"
 if [[ ${cpp_exit} -ne 0 || ${py_exit} -ne 0 ]]; then
   echo "[wakeup_guard] FAIL(场景1): 非零退出" >&2

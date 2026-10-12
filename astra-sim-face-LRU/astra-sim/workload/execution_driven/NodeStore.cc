@@ -9,13 +9,17 @@ Implementation (方案 §4 步骤 1-4).
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 #include <algorithm>
-#include <cassert>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <stdexcept>
 
+#include <json/json.hpp>
+
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
+
+#include "astra-sim/common/Logging.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -28,11 +32,29 @@ uint64_t NodeStore::add_node(OnlineNode node) {
     if (node.global_id == 0) {
         node.global_id = next_id_++;
     } else {
+        // Wrap guard (2026-09-30, ported from the joint repo NodeStore.cc
+        // add_node): next_id_ = global_id + 1 wraps to 0 at
+        // global_id == UINT64_MAX, silently resetting the id space. Only a
+        // synthetic caller can reach the sentinel; fail closed instead of
+        // corrupting the id stream.
+        if (node.global_id == std::numeric_limits<uint64_t>::max()) {
+            std::cerr << "NodeStore::add_node global_id UINT64_MAX would "
+                         "overflow next_id_ (fail-closed)"
+                      << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
         next_id_ = std::max(next_id_, node.global_id + 1);
     }
     const auto [it, inserted] =
         nodes_.emplace(node.global_id, NodeRecord{std::move(node)});
-    assert(inserted);
+    if (!inserted) {
+        // NDEBUG-unrelated fail-closed: in a Release build `it` would alias
+        // the OLD record and a finished-free duplicate id could be re-inserted
+        // into the free set and issued twice.
+        std::cerr << "NodeStore::add_node duplicate global_id "
+                  << node.global_id << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
     if (it->second.unresolved_parents == 0) {
         free_ids_.insert(node.global_id);
     }
@@ -41,13 +63,27 @@ uint64_t NodeStore::add_node(OnlineNode node) {
 
 void NodeStore::add_dependency(uint64_t parent, uint64_t child,
                                DepKind /*kind*/) {
-    // First version: all kinds resolve identically (precedence). The kind is
-    // stored per edge for the later fence upgrade (步骤 1-5 note forbids
-    // building the general fence early). Dead-parent edges are tolerated:
-    // a parent that already finished no longer blocks the child.
+    // First version: all kinds resolve identically (plain precedence) and
+    // the kind argument is deliberately IGNORED -- it is NOT stored per
+    // edge (no kind field on the record; ed-coord-C2 fix, 2026-09-26). The
+    // anonymous parameter only reserves the signature for the later fence
+    // upgrade (步骤 1-5 note forbids building the general fence early).
+    // Dead-parent edges are tolerated:
+    // a parent that already finished no longer blocks the child. A child that
+    // already finished is the opposite: recording the edge would leak
+    // parent.unfinished_children (never decremented by the finished child)
+    // and could revive the finished child into the free set, so it is a
+    // mechanism violation and fails closed (production never reaches this:
+    // the committer preflight forces every edge's child to be a fresh
+    // unfinished node of the current batch).
     auto child_it = nodes_.find(child);
     if (child_it == nodes_.end()) {
         return;  // unknown child: edge cannot be recorded
+    }
+    if (child_it->second.finished) {
+        std::cerr << "NodeStore::add_dependency child " << child
+                  << " already finished (parent " << parent << ")" << std::endl;
+        std::exit(EXIT_FAILURE);
     }
     auto parent_it = nodes_.find(parent);
     if (parent_it == nodes_.end() || parent_it->second.finished) {
@@ -95,7 +131,14 @@ void NodeStore::finish_node(uint64_t node_id) {
         if (child_it == nodes_.end()) {
             continue;  // M2: child already collected (it finished earlier)
         }
-        assert(child_it->second.unresolved_parents > 0);
+        if (child_it->second.unresolved_parents == 0) {
+            // NDEBUG-unrelated fail-closed: a double release would push the
+            // counter below zero and corrupt the free-set invariant.
+            std::cerr << "NodeStore::finish_node unresolved_parents underflow "
+                         "for child "
+                      << child << " (parent " << node_id << ")" << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
         if (--child_it->second.unresolved_parents == 0) {
             free_ids_.insert(child);
         }
@@ -118,7 +161,14 @@ void NodeStore::finish_node(uint64_t node_id) {
         if (parent_it == nodes_.end()) {
             continue;  // M2: parent already collected
         }
-        assert(parent_it->second.unfinished_children > 0);
+        if (parent_it->second.unfinished_children == 0) {
+            // NDEBUG-unrelated fail-closed: mirrors the unresolved_parents
+            // guard above (double release would underflow the GC counter).
+            std::cerr << "NodeStore::finish_node unfinished_children underflow "
+                         "for parent "
+                      << parent << " (child " << node_id << ")" << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
         if (--parent_it->second.unfinished_children == 0 &&
             parent_it->second.finished && gc_enabled_) {
             gc_fifo_.push_back(parent);
@@ -184,8 +234,6 @@ size_t NodeStore::pending_count() const {
                          });
 }
 
-bool NodeStore::empty() const { return nodes_.empty(); }
-
 void NodeStore::set_gc_enabled(bool enabled) {
     // M2 node GC: the switch is set once by the committer constructor from
     // its Context (the official path always enables it -- the
@@ -248,8 +296,13 @@ void NodeStore::collect_garbage() {
 }
 
 bool NodeStore::erased(uint64_t node_id) const {
-    // M2: absent == collected for committed store ids (see header). Used by
-    // the committer's store_ids_ prune pass only.
+    // M2: absent == collected for committed store ids (see header).
+    // Comment fix (2026-09-30, face-LRU audit): the old text pointed at a
+    // "committer's store_ids_ prune pass" member that no longer exists.
+    // Current consumers are GraphBatchCommitter's cross-batch reference
+    // checks -- parent-edge parent/child resolution and watch-member
+    // resolution (preflight/validate/commit) -- which treat an absent
+    // committed id as a GC-collected node.
     return nodes_.find(node_id) == nodes_.end();
 }
 
@@ -337,6 +390,28 @@ RankInjectedSummary NodeStore::injected_unfinished_summary(int rank) const {
     return summary;
 }
 
+void NodeStore::for_each_unfinished(const std::function<void(
+                                          const OnlineNode&, uint32_t, bool)>&
+                                          consume) const {
+    // DeadEnd-census diagnostic only (2026-10-11, ported from WL):
+    // ascending-id walk over the retained records; unfinished nodes only.
+    // Read-only.
+    std::vector<const NodeRecord*> pending;
+    pending.reserve(nodes_.size());
+    for (const auto& entry : nodes_) {
+        if (!entry.second.finished) {
+            pending.push_back(&entry.second);
+        }
+    }
+    std::sort(pending.begin(), pending.end(),
+              [](const NodeRecord* lhs, const NodeRecord* rhs) {
+                  return lhs->node.global_id < rhs->node.global_id;
+              });
+    for (const NodeRecord* record : pending) {
+        consume(record->node, record->unresolved_parents, record->issued);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // NodeStoreGraphSource
 // ---------------------------------------------------------------------------
@@ -398,12 +473,22 @@ void NodeStoreGraphSource::take_node(uint64_t node_id) {
 ETFeederGraphSource::ETFeederGraphSource(
     Chakra::FeederV3::ETFeeder* const et_feeder, const int rank)
     : et_feeder_(et_feeder), rank_(rank) {
-    assert(et_feeder_ != nullptr);
+    // NDEBUG-unrelated fail-closed (same convention as add_node above): a
+    // null feeder would only explode later, mid-run, under NDEBUG.
+    if (et_feeder_ == nullptr) {
+        std::cerr << "ETFeederGraphSource requires a non-null ETFeeder"
+                  << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
 }
 
 NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
     const auto node = et_feeder_->lookupNode(node_id);
-    assert(node != nullptr);
+    if (node == nullptr) {
+        std::cerr << "ETFeederGraphSource::view_of unknown node id "
+                  << node_id << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
     NodeView nv;
     nv.global_id = node->id();
     nv.rank = rank_;
@@ -433,6 +518,52 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
                 nv.compute.remote_weight_bytes =
                     node->remote_weight_bytes<uint64_t>();
             }
+            // Stage B (die backend, contract §2): the ET static path carries
+            // op_role / die_op_spec as ordinary string attributes; the spec
+            // arrives as the JSON serialization of the same DieOpSpec the
+            // online GraphBatch carries (design doc §8.3). Both stay
+            // optional; a shape-less historical ET simply leaves die_spec
+            // null and the die backend fails closed on real COMP nodes at
+            // issue time.
+            {
+                const std::string op_role =
+                    node->get_attr<std::string>("op_role", "compute");
+                if (op_role == "compute") {
+                    nv.compute.op_role = OpRole::Compute;
+                } else if (op_role == "control_marker") {
+                    nv.compute.op_role = OpRole::ControlMarker;
+                } else {
+                    std::cerr << "[Error] (execution_driven/node_store) "
+                                 "view_of: unknown op_role attribute \""
+                              << op_role << "\" (legal: compute|"
+                                 "control_marker)" << std::endl;
+                    std::exit(EXIT_FAILURE);
+                }
+                if (node->has_attr("die_op_spec")) {
+                    const std::string spec_json_text =
+                        node->get_attr<std::string>("die_op_spec", "");
+                    nlohmann::json spec_json;
+                    try {
+                        spec_json = nlohmann::json::parse(spec_json_text);
+                    } catch (const std::exception& e) {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_op_spec attribute is not "
+                                     "valid JSON: "
+                                  << e.what() << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
+                    try {
+                        nv.compute.die_spec =
+                            DieModel::parse_die_op_spec(spec_json);
+                    } catch (const std::exception& e) {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_op_spec attribute "
+                                     "rejected: "
+                                  << e.what() << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
+                }
+            }
             break;
         case NodeKind::MemLoad:
         case NodeKind::MemStore:
@@ -446,8 +577,20 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
                 node->get_attr<bool>("is_local_hbm_kv_restore", false);
             // sh_2.0 N-way HBM contention: pool endpoint charging mode
             // (0/absent = none, 1 = local HBM read, 2 = local HBM write).
-            nv.hbm_access_mode = static_cast<int>(
-                node->get_attr<uint64_t>("hbm-access-mode", uint64_t(0)));
+            // Range-check before narrowing: a uint64 attr truncated to int
+            // could wrap into the legal {0,1,2} domain and silently flip the
+            // read/write direction (face-LRU audit 2026-09-29, L2 residual).
+            {
+                const uint64_t raw_mode = node->get_attr<uint64_t>(
+                    "hbm-access-mode", uint64_t(0));
+                if (raw_mode > 2) {
+                    LoggerFactory::get_logger("workload")
+                        ->critical("hbm-access-mode must be 0/1/2 (got {})",
+                                   raw_mode);
+                    std::exit(EXIT_FAILURE);
+                }
+                nv.hbm_access_mode = static_cast<int>(raw_mode);
+            }
             break;
         case NodeKind::CommSend:
         case NodeKind::CommRecv:

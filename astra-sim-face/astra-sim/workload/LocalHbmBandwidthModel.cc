@@ -40,13 +40,36 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
 
 LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
     cancel_scheduled_transition();
+    // (2026-09-30, R2 audit) A throw out of schedule_next_transition after a
+    // job was pushed (or an early run termination) used to leak every
+    // in-flight job's WorkloadLayerHandlerData -- the normal path drains all
+    // jobs before destruction, so this only runs on the abnormal paths.
+    for (const Job& job : jobs) {
+        delete job.wlhd;
+        // DIE_COMPUTE payloads have no WorkloadLayerHandlerData; the model
+        // owned them from issue_die_memory until here (the sink is gone or
+        // going away with the Workload -- never call it from a destructor).
+        delete job.die_data;
+    }
+    jobs.clear();
 }
 
 bool LocalHbmBandwidthModel::has_active_jobs() const {
     return !jobs.empty();
 }
 
+double LocalHbmBandwidthModel::remaining_drain(const Job& job) {
+    return job.kind == JobKind::DIE_COMPUTE ? job.remaining_service
+                                            : job.remaining_bytes;
+}
+
 bool LocalHbmBandwidthModel::memory_done(const Job& job) {
+    if (job.kind == JobKind::DIE_COMPUTE) {
+        // No latency phase (contract §7.4: the DieExecution charges
+        // local_mem_latency itself as a one-shot TIMER before the first
+        // memory request); the service stream is the only memory quantity.
+        return job.remaining_service <= kEpsilon;
+    }
     return job.memory_latency_ns <= kEpsilon &&
         job.remaining_bytes <= kEpsilon;
 }
@@ -92,7 +115,7 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
         for (Job& job : jobs) {
             if (job.memory_latency_ns > kEpsilon) {
                 step_ns = std::min(step_ns, job.memory_latency_ns);
-            } else if (job.remaining_bytes > kEpsilon) {
+            } else if (remaining_drain(job) > kEpsilon) {
                 bandwidth_users.push_back(&job);
             }
         }
@@ -104,7 +127,7 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
         if (per_user_rate > 0) {
             for (const Job* job : bandwidth_users) {
                 step_ns = std::min(
-                    step_ns, job->remaining_bytes / per_user_rate);
+                    step_ns, remaining_drain(*job) / per_user_rate);
             }
         }
 
@@ -128,11 +151,20 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                     job.remaining_bytes = 0;
                     clamped_residue = true;
                 }
+                if (job.remaining_service > 0 &&
+                    job.remaining_service <= kEpsilon) {
+                    job.remaining_service = 0;
+                    clamped_residue = true;
+                }
             }
             if (per_user_rate > 0) {
                 for (Job* job : bandwidth_users) {
-                    if (job->remaining_bytes / per_user_rate <= kEpsilon) {
-                        job->remaining_bytes = 0;
+                    if (remaining_drain(*job) / per_user_rate <= kEpsilon) {
+                        if (job->kind == JobKind::DIE_COMPUTE) {
+                            job->remaining_service = 0;
+                        } else {
+                            job->remaining_bytes = 0;
+                        }
                         clamped_residue = true;
                     }
                 }
@@ -151,8 +183,16 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
             }
         }
         for (Job* job : bandwidth_users) {
-            job->remaining_bytes = std::max(
-                0.0, job->remaining_bytes - per_user_rate * step_ns);
+            const double served = per_user_rate * step_ns;
+            if (job->kind == JobKind::DIE_COMPUTE) {
+                // Contract §7.4: service units are drained; the actual-byte
+                // advance is served * eta and is bookkeeping only.
+                job->remaining_service =
+                    std::max(0.0, job->remaining_service - served);
+            } else {
+                job->remaining_bytes =
+                    std::max(0.0, job->remaining_bytes - served);
+            }
         }
         // Read-only side-band accumulation: reuse the step_ns and
         // per_user_rate already computed above.  These counters must not
@@ -172,12 +212,53 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                     this->comm_write_bytes_served_ +=
                         per_user_rate * step_ns;
                     break;
+                case JobKind::DIE_COMPUTE:
+                    this->die_service_units_served_ +=
+                        per_user_rate * step_ns;
+                    this->die_actual_bytes_served_ +=
+                        per_user_rate * step_ns * job->service_eta;
+                    break;
                 }
             }
         }
         remaining_ns -= step_ns;
     }
     last_update_tick = now;
+}
+
+void LocalHbmBandwidthModel::harvest_completed_jobs(Tick now) {
+    std::vector<Job> completed;
+    for (auto it = jobs.begin(); it != jobs.end();) {
+        if (complete(*it)) {
+            completed.push_back(std::move(*it));
+            it = jobs.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (!completed.empty() && !jobs.empty()) {
+        // At least one survivor remains: its share immediately widens from
+        // full_rate/N to full_rate/(N-k) -- one redistribution event.
+        ++redistribution_events_;
+    }
+
+    for (const Job& job : completed) {
+        const uint64_t elapsed = now - job.start_tick;
+        if (job.kind == JobKind::COMP) {
+            workload->hw_resource->tics_gpu_ops += elapsed;
+        }
+        if (job.kind == JobKind::DIE_COMPUTE) {
+            // Contract §7.4/§6.3: the sink is the DieExecution (an internal
+            // memory stage of a still-running outer node -- NOT an outer
+            // COMP completion). The DieExecution accounts the outer node's
+            // GPU occupancy itself at its own completion; this callback only
+            // hands back the memory port.
+            CallData* const data = job.die_data;
+            job.die_sink->call(EventType::General, data);
+            continue;
+        }
+        workload->on_local_hbm_job_complete(job.wlhd, job.kind);
+    }
 }
 
 void LocalHbmBandwidthModel::cancel_scheduled_transition() {
@@ -205,7 +286,7 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
     for (const Job& job : jobs) {
         if (job.memory_latency_ns > kEpsilon) {
             next_ns = std::min(next_ns, job.memory_latency_ns);
-        } else if (job.remaining_bytes > kEpsilon) {
+        } else if (remaining_drain(job) > kEpsilon) {
             bandwidth_users.push_back(&job);
         }
     }
@@ -217,7 +298,7 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
             static_cast<double>(bandwidth_users.size());
     if (per_user_rate > 0) {
         for (const Job* job : bandwidth_users) {
-            next_ns = std::min(next_ns, job->remaining_bytes / per_user_rate);
+            next_ns = std::min(next_ns, remaining_drain(*job) / per_user_rate);
         }
     }
 
@@ -240,6 +321,15 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
     if (!std::isfinite(next_ns)) {
         throw std::runtime_error("local HBM model has no schedulable transition");
     }
+    // Upper bound before the uint64 cast (2026-09-30): a tiny-but-positive
+    // local-mem-bw gives per_user_rate ~ 0 and a finite-but-astronomical
+    // next_ns; casting that to Tick is UB. Mirror of the R5-Q5 guard on the
+    // closed-form COMP path in Workload (1e18 ns ~= 31 years of sim time).
+    if (next_ns >= 1e18) {
+        throw std::runtime_error(
+            "local HBM model transition delay exceeds 1e18 ns "
+            "(check local-mem-bw / job sizes)");
+    }
     Tick delay = static_cast<Tick>(std::ceil(next_ns));
     delay = std::max<Tick>(1, delay);
     scheduled_transition_event = sys->register_event_cancellable(
@@ -254,7 +344,17 @@ void LocalHbmBandwidthModel::issue_job(JobKind kind,
                                        uint64_t num_ops,
                                        uint64_t bytes,
                                        WorkloadLayerHandlerData* wlhd) {
-    advance_to(Sys::boostedTick());
+    const Tick now = Sys::boostedTick();
+    advance_to(now);
+    // The advance above can drive an already-active job to completion at
+    // this very tick -- the tick its still-pending transition event was
+    // scheduled for, which the schedule_next_transition() below cancels
+    // before that event can fire. Harvest those completions here with the
+    // same predicate and callbacks as the transition dispatch: a drained
+    // job left in `jobs` would defer its completion to a later transition,
+    // inflating tics_gpu_ops and peak_concurrent_jobs and delaying the
+    // node past the physical bandwidth-exhaustion tick.
+    harvest_completed_jobs(now);
     if (bytes == 0) {
         // Zero-byte endpoints never create an HBM job (the Workload layer
         // already guards this); reaching here is a wiring bug, not a data
@@ -301,6 +401,67 @@ void LocalHbmBandwidthModel::issue_comm_write(
     issue_job(JobKind::COMM_WRITE, 0, bytes, wlhd);
 }
 
+void LocalHbmBandwidthModel::issue_die_memory(double service_units,
+                                              double actual_bytes,
+                                              Callable* sink,
+                                              CallData* data) {
+    // Contract §7.4: no latency phase, no FLOP leg; the drained quantity is
+    // service_units. eta is derived from the served amounts
+    // (actual/service) so the side-band actual-byte counter matches the
+    // request triple the DieExecution received from the plan.
+    if (!(service_units > 0.0) || !(actual_bytes >= 0.0) ||
+        sink == nullptr || data == nullptr) {
+        delete data;
+        throw std::runtime_error(
+            "local HBM model refused a malformed die memory request");
+    }
+    if (actual_bytes > 0.0 && service_units <= actual_bytes) {
+        // eta <= 1 would mean the access is at least as efficient as an
+        // ideal eta=1 stream -- the die calibration etas are all < 1.
+        delete data;
+        throw std::runtime_error(
+            "local HBM model refused a die memory request with eta >= 1 "
+            "(service_units must exceed actual_bytes)");
+    }
+    const double eta = actual_bytes / service_units;
+
+    const Tick now = Sys::boostedTick();
+    advance_to(now);
+    harvest_completed_jobs(now);
+    if (!jobs.empty()) {
+        // Joining a non-empty set reshapes everyone's equal share.
+        ++redistribution_events_;
+    }
+    Job job{};
+    job.kind = JobKind::DIE_COMPUTE;
+    job.wlhd = nullptr;
+    job.remaining_ops = 0.0;
+    job.remaining_bytes = 0.0;
+    job.memory_latency_ns = 0.0;
+    job.start_tick = now;
+    job.remaining_service = service_units;
+    job.service_eta = eta;
+    job.die_sink = sink;
+    job.die_data = data;
+    jobs.push_back(std::move(job));
+    note_membership_change();
+    schedule_next_transition();
+}
+
+void LocalHbmBandwidthModel::cancel_die_jobs_of(Callable* sink) {
+    for (auto it = jobs.begin(); it != jobs.end();) {
+        if (it->kind == JobKind::DIE_COMPUTE && it->die_sink == sink) {
+            delete it->die_data;
+            it = jobs.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // A wiped job may have been the next transition's reason; re-arm the
+    // prediction for whatever remains (a no-op when nothing is left).
+    schedule_next_transition();
+}
+
 void LocalHbmBandwidthModel::call(EventType, CallData* data) {
     TransitionData* transition = static_cast<TransitionData*>(data);
     const uint64_t generation = transition->generation;
@@ -316,28 +477,7 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
 
     const Tick now = Sys::boostedTick();
     advance_to(now);
-    std::vector<Job> completed;
-    for (auto it = jobs.begin(); it != jobs.end();) {
-        if (complete(*it)) {
-            completed.push_back(std::move(*it));
-            it = jobs.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    if (!completed.empty() && !jobs.empty()) {
-        // At least one survivor remains: its share immediately widens from
-        // full_rate/N to full_rate/(N-k) -- one redistribution event.
-        ++redistribution_events_;
-    }
-
-    for (const Job& job : completed) {
-        const uint64_t elapsed = now - job.start_tick;
-        if (job.kind == JobKind::COMP) {
-            workload->hw_resource->tics_gpu_ops += elapsed;
-        }
-        workload->on_local_hbm_job_complete(job.wlhd, job.kind);
-    }
+    harvest_completed_jobs(now);
 
     // A completion callback may immediately issue the next job (e.g. the
     // freed comm slot lets a queued SEND issue inside

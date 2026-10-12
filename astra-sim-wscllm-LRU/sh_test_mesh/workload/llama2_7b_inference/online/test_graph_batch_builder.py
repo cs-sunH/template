@@ -25,7 +25,9 @@ batch 现有整段骨架,§3.6)。
 import json
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +42,8 @@ from online.graph_batch_builder import (  # noqa: E402
     OnlineTraceBuilder,
 )
 from online.wsc_llm_online_scheduler import WscLlmOnlineScheduler  # noqa: E402
+from online.online_scheduler_base import OnlineSchedulerBase  # noqa: E402
+from session_kv_manager import KVTransfer, KVTransferShard  # noqa: E402
 
 SESSION = "session_train_0"
 REQUEST_A = f"{SESSION}_request_0"
@@ -71,9 +75,10 @@ def _make_config():
         request_queue=[],
         # transfer 3000 的 shard 均分与 NoC 路由所需(kv_cache_bytes_for_
         # tokens 只读 layers/hidden_size/bytes_per_elem;_xy_route 只读
-        # mesh_cols)。
+        # mesh_cols)。hardware 的 mesh_rows/npus_count 供 KV shard 校验
+        # 的边缘成员判定(physical_edge_ranks;2x2 网格全员边界)。
         model=SimpleNamespace(layers=2, hidden_size=64, bytes_per_elem=2),
-        hardware=SimpleNamespace(mesh_cols=2),
+        hardware=SimpleNamespace(npus_count=4, mesh_rows=2, mesh_cols=2),
     )
 
 
@@ -229,9 +234,12 @@ class TrainEmissionNailTest(unittest.TestCase):
             sorted(result["exit_members"][REQUEST_A]), sorted(DECODE_RANKS))
         for rank in DECODE_RANKS:
             nodes = _rank_nodes(self.builder, rank)
+            # key= 按 id 取:规避 max() 对 dict 的隐式比较地雷(同名多节点
+            # 时 dict 不可排序会 TypeError)。
             barrier = max(
-                node for node in nodes
-                if node["name"] == "batch_train_i1_1_end_barrier")
+                (node for node in nodes
+                 if node["name"] == "batch_train_i1_1_end_barrier"),
+                key=lambda n: n["id"])
             marker = nodes[result["exit_members"][REQUEST_A][rank]]
             self.assertEqual(marker["type"], COMP_NODE)
             self.assertEqual(marker["request_id"], REQUEST_A)
@@ -262,10 +270,10 @@ class TrainEmissionNailTest(unittest.TestCase):
         指标锚点,上下文 (joiner, decode, 1))。"""
         self._emit_two_member_train()
         sends = [node for node in _rank_nodes(self.builder, 0)
-                 if "prefill_to_decode_kv" in node["name"]
+                 if "prefill_to_decode_xfer" in node["name"]
                  and node["type"] == 5]
         recvs = [node for node in _rank_nodes(self.builder, 2)
-                 if "prefill_to_decode_kv" in node["name"]
+                 if "prefill_to_decode_xfer" in node["name"]
                  and node["type"] == 6]
         self.assertTrue(sends and recvs)
         for rank in DECODE_RANKS:
@@ -540,7 +548,7 @@ class FirstStepSplitEmissionTest(unittest.TestCase):
         plan = _split_plan(
             "batch_train_i4_1", spans, 2, joiners=[_joiner_plan(REQUEST_B, 40)],
             exits=(REQUEST_A,))
-        result = self.builder.emit_iteration_train(plan)
+        self.builder.emit_iteration_train(plan)
         for node in self.builder.batch["nodes"]:
             self.assertNotIn("first_token", node["name"])
             self.assertNotIn("first_step", node["name"])
@@ -627,6 +635,32 @@ class _TerminalKVRecorder:
         return self.released_instance_index
 
 
+def _history_restore_transfer(session_id, trigger_request_id):
+    """全层 [0, L) 单段 remote_load(2026-10-01 审查修正:_emit_prelim 的
+    无传输分支在 turn>0 已 fail-closed,turn-1 替身 plan 同步携带一段
+    REMOTE_RESTORE 恢复传输)。2x2 网格全员边界:edge 0 直连恢复到
+    prefill rank 0,对齐发射侧 remote_load shard 校验(source==edge、
+    noc_path 端点吻合)。"""
+    return KVTransfer(
+        kind="remote_load",
+        phase="history",
+        reason="history_remote_restore",
+        session_id=session_id,
+        trigger_request_id=trigger_request_id,
+        source_instance_index=None,
+        target_instance_index=0,
+        total_bytes=64,
+        shards=(KVTransferShard(
+            source_rank=0, target_rank=0, edge_rank=0, bytes=64,
+            noc_path=(0,), layer_start=0, layer_end=2),),
+        model_layers=2,
+        layer_start=0,
+        layer_end=2,
+        resident_prefix_layers_before=0,
+        resident_prefix_layers_after=2,
+    )
+
+
 class CompletionGateLifetimeTest(unittest.TestCase):
     """跨 turn gate 只在在途期保留；terminal REQUEST_COMPLETE 回收。"""
 
@@ -657,6 +691,8 @@ class CompletionGateLifetimeTest(unittest.TestCase):
             "history_tokens_before": 0,
             "prefill_length": 128,
             "prefill_context_tokens": 128,
+            "history_transfers": (
+                _history_restore_transfer(SESSION, REQUEST_B),),
         }
 
     def test_turn_one_admission_consumes_gate_and_terminal_retires(self):
@@ -753,6 +789,275 @@ class CompletionGateLifetimeTest(unittest.TestCase):
             [(REQUEST_B, SESSION, 1, "remote_memory")])
         self.assertEqual(scheduler.graph.released_requests, [REQUEST_A])
 
+
+
+class DieBackendEmissionTest(unittest.TestCase):
+    """die 后端发射语境(阶段 C):spec 附着(train 体 + prefill 整段两条
+    COMP 发射路径)、marker op_role、region 融合与 collective 不变量;
+    legacy 路径逐字节不变由上方既有用例钉住。"""
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.resolved = Path(self._temp.name) / "resolved_die_model.json"
+        self.resolved.write_text(json.dumps({
+            "schema_version": 1, "profile": "mesh_die_v1",
+            "die": {"sram-mb-per-core": 0.75, "core-type": "large",
+                    "compute-area-mm2": 800, "hbm-per-side": 4,
+                    "hbm-sides": 1, "noc-width-bits": 512},
+            "derived": {}}))
+        self.system = Path(self._temp.name) / "system.json"
+        self.system.write_text(json.dumps({
+            "compute-cost-model": "die",
+            "die-model-profile": "mesh_die_v1"}))
+        self.config = _make_config()
+        # 真实 loader 副产的两个 die 相关字段(测试替身直接补属性)。
+        self.config.position_encoding = "rope"
+        self.config.system_config = self.system
+        # P 侧发射按 queue_index 取 RequestSpec(同 CompletionGate
+        # LifetimeTest 的两请求替身)。
+        self.config.request_queue = [
+            SimpleNamespace(session_arrival_time_ns=0,
+                            inter_request_interval_ns=None),
+            SimpleNamespace(session_arrival_time_ns=None,
+                            inter_request_interval_ns=1000),
+        ]
+
+    def _die_context(self):
+        from online.die_model_adapter import DieModelContext
+        return DieModelContext.from_service({
+            "requests": [],
+            "compute-cost-model": "die",
+            "die-model-config": str(self.resolved),
+        }, self.config)
+
+    def _emit_train(self, die: bool):
+        builder = GraphBatchBuilder(self.config)
+        if die:
+            builder.set_die_context(self._die_context())
+        builder.begin_batch()
+        spans = [(128, 128), (128, 256), (44, 300), (1, 101), (1, 102)]
+        plan = _train_plan(
+            "batch_train_i1_1", spans, iterations=3, exits=(REQUEST_A,))
+        result = builder.emit_iteration_train(plan)
+        return builder, result
+
+    def _prefill_plan(self):
+        return {
+            "request_id": REQUEST_B,
+            "session_id": SESSION,
+            "turn_index": 0,
+            "queue_index": 0,
+            "prefill_instance_index": 0,
+            "decode_instance_index": 1,
+            "history_action": None,
+            "history_source_instance_index": None,
+            "history_transfer_bytes": 0,
+            "history_recompute_tokens": 0,
+            "history_tokens_before": 0,
+            "prefill_length": 128,
+            "prefill_context_tokens": 128,
+            "history_transfers": (),
+        }
+
+    def _emit_prefill(self, die: bool):
+        builder = GraphBatchBuilder(self.config)
+        if die:
+            builder.set_die_context(self._die_context())
+        builder.begin_batch()
+        builder.emit_prefill_batch(self._prefill_plan())
+        return builder
+
+    def test_die_train_body_fuses_regions_and_attaches_specs(self):
+        builder, _ = self._emit_train(die=True)
+        nodes = _rank_nodes(builder, 2)
+        body = [node for node in nodes
+                if node["request_id"] == "batch_train_i1_1"
+                and node["type"] == COMP_NODE]
+        names = [node["name"] for node in body]
+        # 融合:qk/scale/softmax/av -> attention_region;up/gelu/down ->
+        # ffn_region(17 类体节点 -> 12)。
+        self.assertIn("batch_train_i1_1_all_layers_attention_region", names)
+        self.assertIn("batch_train_i1_1_all_layers_ffn_region", names)
+        for absorbed in ("attention_qk_matmul", "attention_scale_mask",
+                         "attention_softmax", "attention_av_matmul",
+                         "mlp_up_projection", "mlp_gelu",
+                         "mlp_down_projection"):
+            self.assertNotIn(
+                "batch_train_i1_1_all_layers_" + absorbed, names)
+        # 每个体 COMP 节点附 die_op_spec,runtime_ns 恒 0(契约 §2)。
+        for node in body:
+            spec = node["compute"].get("die_op_spec")
+            self.assertIsNotNone(spec, node["name"])
+            self.assertEqual(node["compute"]["runtime_ns"], 0)
+            self.assertEqual(spec["schema_version"], 1)
+            self.assertEqual(spec["phase"], "decode")
+            self.assertEqual(spec["kv_access"], {"identity": "local"})
+            self.assertEqual(
+                spec["provenance"], "transformer_pass_aggregated")
+            # 13 类层节点 layer_count=layers;tail(final_norm/logits)
+            # layer_count=1(契约 §2 语义;两类都在场)。
+            self.assertIn(spec["layer_count"], (1, 2))
+            self.assertEqual(spec["weight_passes"], 3)
+        region = next(
+            node for node in body
+            if node["name"].endswith("_attention_region"))
+        self.assertEqual(
+            region["compute"]["die_op_spec"]["op_kind"], "attention_region")
+        self.assertEqual(
+            region["compute"]["die_op_spec"]["fusion_policy"], "auto")
+        self.assertEqual(
+            region["compute"]["die_op_spec"]["layer_count"], 2)
+        # 融合节点 num_ops = 四成分之和(与 legacy 同 span 逐类求和)。
+        builder_legacy, _ = self._emit_train(die=False)
+        legacy_body_ops = {
+            node["name"]: node["compute"]["num_ops"]
+            for node in _rank_nodes(builder_legacy, 2)
+            if node["request_id"] == "batch_train_i1_1"
+            and node["type"] == COMP_NODE}
+        expected = sum(
+            legacy_body_ops["batch_train_i1_1_all_layers_" + category]
+            for category in ("attention_qk_matmul", "attention_scale_mask",
+                             "attention_softmax", "attention_av_matmul"))
+        self.assertEqual(region["compute"]["num_ops"], expected)
+
+    def test_die_specs_carry_absolute_span_positions(self):
+        builder, _ = self._emit_train(die=True)
+        node = next(
+            node for node in _rank_nodes(builder, 2)
+            if node["name"].endswith("_all_layers_attention_region"))
+        spans = node["compute"]["die_op_spec"]["spans"]
+        # 恒等式:kv = q_start + q_tokens,kv 覆盖自会话起点(0)。
+        for record in spans:
+            self.assertEqual(
+                record["q_start_pos"] + record["q_tokens"],
+                record["kv_tokens"])
+            self.assertEqual(record["kv_start_pos"], 0)
+        # spec 的 TP 切片与发射 rank 一致(decode 实例 = ranks (2,3),
+        # TP=2;rank2 -> relative 0:8 头按 shard_extent 平分 -> 4)。
+        tp_slice = node["compute"]["die_op_spec"]["tp_slice"]
+        self.assertEqual(tp_slice["tensor_parallel"], 2)
+        self.assertEqual(tp_slice["tensor_parallel_rank"], 0)
+        self.assertEqual(tp_slice["q_heads_local"], 4)
+        self.assertEqual(tp_slice["kv_heads_local"], 4)
+        self.assertEqual(
+            node["compute"]["die_op_spec"]["model_dims"]
+            ["position_encoding"], "rope")
+
+    def test_die_prefill_body_attaches_specs(self):
+        """wscllm 特有:P 侧 emit_prefill_batch 整段发射同样附 spec
+        (phase=prefill;chunk span 恒等式 kv = ctx + processed + chunk);
+        restore/迁移/端点节点不在 die 计费内(仅 COMP 附 spec)。"""
+        builder = self._emit_prefill(die=True)
+        nodes = _rank_nodes(builder, 0)  # prefill 实例 = ranks (0,1)
+        body = [node for node in nodes
+                if node["type"] == COMP_NODE
+                and "current_prefill" in node["name"]]
+        self.assertTrue(body)
+        for node in body:
+            spec = node["compute"].get("die_op_spec")
+            self.assertIsNotNone(spec, node["name"])
+            self.assertEqual(spec["phase"], "prefill")
+            self.assertEqual(node["compute"]["runtime_ns"], 0)
+            spans = spec["spans"]
+            self.assertEqual(len(spans), 1)  # prefill 128 = 1 chunk
+            self.assertEqual(spans[0]["q_tokens"], 128)
+            self.assertEqual(spans[0]["kv_tokens"], 128)
+            self.assertEqual(spans[0]["q_start_pos"], 0)
+            self.assertEqual(spans[0]["kv_start_pos"], 0)
+        # 非die节点(timer gate/mem/comm)一律无 spec。
+        for node in nodes:
+            if node["type"] != COMP_NODE:
+                self.assertIsNone(node["compute"].get("die_op_spec")
+                                  if isinstance(node.get("compute"), dict)
+                                  else None, node["name"])
+        # legacy 对拍:collective(bytes/pg)与 COMP 总量全等。
+        builder_legacy = self._emit_prefill(die=False)
+        def comp_total(builder):
+            return sum(
+                node["compute"]["num_ops"] for node in
+                _rank_nodes(builder, 0) if node["type"] == COMP_NODE)
+        self.assertEqual(comp_total(builder), comp_total(builder_legacy))
+        def collectives(builder):
+            return [
+                (node["name"], node["coll"]["bytes"], node["coll"]["pg_name"])
+                for node in _rank_nodes(builder, 0) if node["coll"]["bytes"]]
+        self.assertEqual(collectives(builder), collectives(builder_legacy))
+
+    def test_die_collectives_and_markers_unchanged(self):
+        """collective 不变量 + marker op_role(契约 §7 裁定 3/8)。"""
+        builder_die, result_die = self._emit_train(die=True)
+        builder_legacy, result_legacy = self._emit_train(die=False)
+
+        def collectives(builder):
+            return [
+                (node["name"], node["coll"]["bytes"], node["coll"]["pg_name"])
+                for node in _rank_nodes(builder, 2) if node["coll"]["bytes"]]
+
+        # 两个 All-Reduce + end barrier 的名字/bytes/pg 与 legacy 全等
+        # (融合不改 collective 位置/数量/参与者/bytes)。
+        self.assertEqual(collectives(builder_die), collectives(builder_legacy))
+        # watch 承载节点身份不变:exit 标记仍是列车体后、end barrier 前
+        # 的最后一个真实 COMP 节点(融合少发 5 个体节点,标记绝对 id 相应
+        # 前移——身份/挂点不变,不比绝对 id)。
+        for builder, result in ((builder_die, result_die),
+                                (builder_legacy, result_legacy)):
+            nodes = _rank_nodes(builder, 2)
+            barrier_id = next(
+                node["id"] for node in nodes
+                if node["name"] == "batch_train_i1_1_end_barrier")
+            marker = nodes[result["exit_members"][REQUEST_A][2]]
+            self.assertEqual(marker["type"], COMP_NODE)
+            self.assertEqual(marker["name"],
+                             "batch_train_i1_1_exit_" + REQUEST_A)
+            self.assertLess(marker["id"], barrier_id)
+            self.assertEqual(
+                max(node["id"] for node in nodes
+                    if node["id"] < barrier_id
+                    and node["type"] == COMP_NODE),
+                marker["id"])
+        # 一切 comp(name,1,1) 微节点显式 control_marker;普通体节点
+        # 不写 op_role(schema 缺省 = compute)。
+        for node in _rank_nodes(builder_die, 2):
+            role = node["compute"].get("op_role")
+            if node["name"].endswith("_exit_" + REQUEST_A):
+                self.assertEqual(role, "control_marker", node["name"])
+            elif node["request_id"] == "batch_train_i1_1":
+                self.assertIsNone(role, node["name"])
+        # legacy 路径 marker 同样带 op_role(后端无关的节点身份标记)。
+        legacy_marker = next(
+            node for node in _rank_nodes(builder_legacy, 2)
+            if node["name"].endswith("_exit_" + REQUEST_A))
+        self.assertEqual(legacy_marker["compute"]["op_role"],
+                         "control_marker")
+
+    def test_scheduler_base_builds_and_injects_die_context(self):
+        """manifest -> DieModelContext -> 每批发射前注入构图器(唯一注入点)。"""
+        manifest = {
+            "requests": [],
+            "compute-cost-model": "die",
+            "die-model-config": str(self.resolved),
+        }
+        context = OnlineSchedulerBase._build_die_model_context(
+            manifest, self.config)
+        self.assertIsNotNone(context)
+        # legacy manifest(无键/roofline/replay)-> None(回归保护)。
+        for legacy_manifest in (
+                {"requests": []},
+                {"requests": [], "compute-cost-model": "roofline"},
+                {"requests": [], "compute-cost-model": "replay"}):
+            self.assertIsNone(OnlineSchedulerBase._build_die_model_context(
+                legacy_manifest, self.config))
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            OnlineSchedulerBase._build_die_model_context(
+                {"requests": [], "compute-cost-model": "quantum"},
+                self.config)
+        # 注入点:_begin_graph_batch 在 run_variant_policy 之前注入。
+        scheduler = SimpleNamespace(
+            die_model_context=context,
+            graph=GraphBatchBuilder(self.config))
+        OnlineSchedulerBase._begin_graph_batch(scheduler)
+        self.assertIs(scheduler.graph.die_context, context)
 
 
 if __name__ == "__main__":

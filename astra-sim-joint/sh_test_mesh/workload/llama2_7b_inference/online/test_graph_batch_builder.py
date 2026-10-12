@@ -565,5 +565,261 @@ class NextPlanLifecycleTest(unittest.TestCase):
                 self._completion_plan(REQUEST_A, queue_index=0))
 
 
+def _make_die_context():
+    """die 发射语境测试替身（不经 manifest；与 test_die_model_adapter 的
+    构造器同源字段）。"""
+    from online.die_model_adapter import DieModelContext
+    return DieModelContext(
+        profile="mesh_die_v1",
+        die_config_path="/nonexistent/resolved_die_model.json",
+        config_hash="cd" * 32,
+        dtype="bf16",
+        model_dims={
+            "hidden": 64, "ffn": 128, "vocab": 256,
+            "mlp_variant": "gelu", "norm_type": "layernorm",
+            "position_encoding": "none", "num_q_heads": 8,
+            "num_kv_heads": 8, "head_dim": 8,
+        },
+        num_q_heads=8,
+        num_kv_heads=8,
+        ffn_size=128,
+        vocab_size=256,
+    )
+
+
+class DieBackendEmissionTest(unittest.TestCase):
+    """die 后端发射（第一期）：守恒（legacy/die 同列车对拍）、spec 附着、
+    融合、层段化、D10 tail span 子集、marker op_role、调度器注入。"""
+
+    def setUp(self) -> None:
+        self.config = _make_config()
+
+    def _emit_train(self, die: bool, train_id="batch_train_i1_1"):
+        builder = GraphBatchBuilder(self.config)
+        if die:
+            builder.set_die_context(_make_die_context())
+        builder.begin_batch()
+        joiners = [_joiner_plan(REQUEST_B, 40)]
+        spans = [(1, 101), (1, 102), (1, 103), (1, 41), (1, 42)]
+        plan = _train_plan(
+            train_id, spans, iterations=2, joiners=joiners,
+            exits=(REQUEST_A,), prefill_start={"request_id": REQUEST_A},
+            first_chunk={"request_id": REQUEST_A})
+        result = builder.emit_iteration_train(plan)
+        return builder, result
+
+    def test_die_emission_conserves_totals_and_collectives(self):
+        """同列车 legacy/die 两态对拍：COMP num_ops/tensor_size 总量与全部
+        集体 (name, bytes, pg) 逐项相等；体节点 13+2 -> 8+2（两条链融合）；
+        每个体节点附 die_op_spec 且 runtime_ns == 0。"""
+        legacy, _ = self._emit_train(die=False, train_id="t_legacy")
+        die, _ = self._emit_train(die=True, train_id="t_die")
+
+        def comp_totals(builder, train_id):
+            ops = sizes = 0
+            body = 0
+            for node in builder.batch["nodes"]:
+                if node["request_id"] != train_id:
+                    continue
+                if node["type"] != COMP_NODE:
+                    continue  # 集体/标记（body 口径只数 COMP 体节点）
+                ops += node["compute"]["num_ops"]
+                sizes += node["compute"]["tensor_size"]
+                body += 1
+            return ops, sizes, body
+
+        legacy_ops, legacy_sizes, legacy_body = comp_totals(legacy, "t_legacy")
+        die_ops, die_sizes, die_body = comp_totals(die, "t_die")
+        self.assertGreater(legacy_ops, 0)
+        self.assertEqual(die_ops, legacy_ops, "num_ops must be conserved")
+        self.assertEqual(die_sizes, legacy_sizes,
+                         "tensor_size must be conserved")
+        # 两 rank 的体 COMP：legacy 每 rank 13+2，die 每 rank 8+2（两条
+        # 纯本地链融合）。
+        self.assertEqual(legacy_body, 2 * 15,
+                         "legacy body = 13 categories + tail per rank")
+        self.assertEqual(die_body, 2 * 10,
+                         "die body = 8 groups + tail per rank")
+
+        def collectives(builder):
+            return sorted(
+                (node["name"], node["coll"]["bytes"], node["coll"]["pg_name"])
+                for node in builder.batch["nodes"]
+                if node["type"] == 3)  # COMM_COLL_NODE
+        self.assertEqual(collectives(die), collectives(legacy),
+                         "collective positions/names/bytes must be identical")
+
+        spec_nodes = [
+            node for node in die.batch["nodes"]
+            if node["request_id"] == "t_die" and "die_op_spec" in
+            node["compute"]]
+        self.assertEqual(len(spec_nodes), die_body)
+        for node in spec_nodes:
+            self.assertEqual(node["compute"]["runtime_ns"], 0)
+            spec = node["compute"]["die_op_spec"]
+            self.assertEqual(spec["schema_version"], 1)
+            # 列车 spans 的绝对位置进 spec（展开 5 个 span；decode
+            # stage；v5 紧凑 run 下 wire 形态为混合 [span|run] 记录）。
+            from die_model_adapter import expanded_span_count
+            self.assertEqual(expanded_span_count(spec["spans"]), 5)
+            self.assertEqual(spec["phase"], "decode")
+            self.assertEqual(spec["tp_slice"]["tensor_parallel"], 2)
+        # 融合名在位（attention_region/ffn_region 各一）。
+        names = [node["name"] for node in spec_nodes]
+        self.assertTrue(any(n.endswith("attention_region") for n in names))
+        self.assertTrue(any(n.endswith("ffn_region") for n in names))
+
+    def test_die_markers_carry_control_marker_role(self):
+        """全部 comp(1,1) 微标记显式 op_role=control_marker（契约 §7 裁定
+        8）；两后端共用同一标记发射（legacy 态也带属性，惰性无害）。"""
+        builder, result = self._emit_train(die=False)
+        marker_ids = set()
+        for members in (result["exit_members"],):
+            for rank_map in members.values():
+                marker_ids.update(rank_map.values())
+        markers = [node for node in builder.batch["nodes"]
+                   if node["id"] in marker_ids]
+        self.assertTrue(markers)
+        for node in markers:
+            self.assertEqual(node["compute"].get("op_role"),
+                             "control_marker")
+            self.assertNotIn("die_op_spec", node["compute"])
+
+    def test_layer_segmented_die_specs_sum_to_whole(self):
+        """层段化发射（C15 语义）：[0,1)+[1,2) 两段 die spec 的 num_ops/
+        tensor_size 之和 == 整段 [0,2) 单次发射；spec.layer_count 如实 =
+        段宽（1/1 vs 2）；层段标签进节点名。"""
+        from generate_trace import TraceBuilder, transformer_pass_aggregated
+
+        spans = [(64, 64), (1, 65)]
+        common = dict(
+            pass_spans=spans, layers=2, hidden_size=64, ffn_size=128,
+            tensor_parallel=2, pg_name="tp", vocab_size=256,
+            bytes_per_elem=2, num_heads=8, tensor_parallel_rank=0,
+            mlp_variant="gelu", weight_passes=1)
+
+        def emit(layer_start, layer_end, include_output=True):
+            from online.graph_batch_builder import OnlineTraceBuilder as OTB
+            otb = OTB(0, remote_operand_loads=False)
+            ctx = _make_die_context()
+            ctx.begin_emission(
+                phase="prefill", tensor_parallel=2, tensor_parallel_rank=0,
+                span_namespace="seg", pass_spans=spans)
+            transformer_pass_aggregated(
+                otb, phase="seg", layer_start=layer_start,
+                layer_end=layer_end, include_output=include_output,
+                die_ctx=ctx, **common)
+            return otb
+
+        whole = emit(0, 2)
+        first = emit(0, 1, include_output=False)
+        second = emit(1, 2)
+
+        def totals(emitter_builder):
+            ops = sizes = 0
+            for node in emitter_builder.nodes:
+                ops += node["compute"]["num_ops"]
+                sizes += node["compute"]["tensor_size"]
+            return ops, sizes
+
+        whole_ops, whole_sizes = totals(whole)
+        split_ops = totals(first)[0] + totals(second)[0]
+        split_sizes = totals(first)[1] + totals(second)[1]
+        self.assertEqual(split_ops, whole_ops)
+        self.assertEqual(split_sizes, whole_sizes)
+        # 层宽如实：whole 层类别 spec layer_count=2；first 段 = 1。
+        whole_layer = [
+            node["compute"]["die_op_spec"]["layer_count"]
+            for node in whole.nodes
+            if "die_op_spec" in node["compute"]
+            and node["name"].endswith("_mlp_residual_add")]
+        self.assertEqual(whole_layer, [2])
+        first_layer = [
+            node["compute"]["die_op_spec"]["layer_count"]
+            for node in first.nodes
+            if "die_op_spec" in node["compute"]
+            and node["name"].endswith("_mlp_residual_add")]
+        self.assertEqual(first_layer, [1])
+        # include_output=False 的段无 tail 节点。
+        self.assertFalse(any(
+            "_all_passes_" in node["name"]
+            for node in first.nodes))
+        self.assertTrue(any(
+            "_all_passes_" in node["name"] for node in second.nodes))
+
+    def test_suppressed_spans_excluded_from_die_tail_spec(self):
+        """D10 静默重建：被抑制 span 不进 tail（final_norm/logits）spec 的
+        spans 集合；体类别 spec 仍含全部 span（重建的计算是真实的）。"""
+        from generate_trace import transformer_pass_aggregated
+        from online.graph_batch_builder import OnlineTraceBuilder as OTB
+
+        spans = [(64, 64), (2048, 2048)]  # span[1] = D10 重建
+        ctx = _make_die_context()
+        ctx.begin_emission(
+            phase="prefill", tensor_parallel=2, tensor_parallel_rank=0,
+            span_namespace="sup", pass_spans=spans)
+        otb = OTB(0, remote_operand_loads=False)
+        transformer_pass_aggregated(
+            otb, phase="sup", pass_spans=spans, layers=2, hidden_size=64,
+            ffn_size=128, tensor_parallel=2, pg_name="tp", vocab_size=256,
+            bytes_per_elem=2, num_heads=8, tensor_parallel_rank=0,
+            mlp_variant="gelu", weight_passes=1,
+            suppress_output_span_indices=(1,), die_ctx=ctx)
+        tail_specs = [
+            node["compute"]["die_op_spec"]
+            for node in otb.nodes
+            if "die_op_spec" in node["compute"]
+            and "_all_passes_" in node["name"]]
+        self.assertEqual(len(tail_specs), 2)
+        for spec in tail_specs:
+            self.assertEqual(len(spec["spans"]), 1)
+            self.assertEqual(spec["spans"][0]["q_tokens"], 64)
+        body_specs = [
+            node["compute"]["die_op_spec"]
+            for node in otb.nodes
+            if "die_op_spec" in node["compute"]
+            and "_all_layers_" in node["name"]]
+        self.assertTrue(body_specs)
+        for spec in body_specs:
+            self.assertEqual(len(spec["spans"]), 2)
+
+    def test_scheduler_base_builds_and_injects_die_context(self):
+        """OnlineSchedulerBase：manifest compute-cost-model=die 构造语境并
+        注入构图器；legacy manifest 保持 None（发射逐字节不变的门）。"""
+        from online.online_scheduler_base import OnlineSchedulerBase
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            resolved = Path(tmp) / "resolved_die_model.json"
+            resolved.write_text("{}", encoding="utf-8")
+
+            class _Cfg:
+                bytes_per_elem = 2
+                mlp_variant = "gelu"
+                hidden_size = 64
+                num_heads = 8
+                ffn_size = 128
+                vocab_size = 256
+                position_encoding = "none"
+                system_config = None
+
+            legacy_ctx = OnlineSchedulerBase._build_die_model_context(
+                {"requests": []}, _Cfg())
+            self.assertIsNone(legacy_ctx)
+            die_ctx = OnlineSchedulerBase._build_die_model_context(
+                {"compute-cost-model": "die",
+                 "die-model-config": str(resolved)}, _Cfg())
+            self.assertIsNotNone(die_ctx)
+            self.assertEqual(die_ctx.model_dims["num_q_heads"], 8)
+
+            # 注入点：_begin_graph_batch 把语境 set 进构图器。
+            scheduler = OnlineSchedulerBase.__new__(OnlineSchedulerBase)
+            scheduler.graph = GraphBatchBuilder(self.config)
+            scheduler.die_model_context = die_ctx
+            scheduler._begin_graph_batch()
+            self.assertIs(scheduler.graph.die_context, die_ctx)
+
+
 if __name__ == "__main__":
     unittest.main()

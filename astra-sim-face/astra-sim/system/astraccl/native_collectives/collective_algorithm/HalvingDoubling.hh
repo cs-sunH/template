@@ -29,7 +29,7 @@ class HalvingDoubling : public Algorithm {
     void reduce();
     bool iteratable();
     virtual int get_non_zero_latency_packets();
-    void insert_packet(Callable* sender);
+    void insert_packet();
     bool ready();
     void exit();
 
@@ -41,15 +41,10 @@ class HalvingDoubling : public Algorithm {
     int curr_sender;
     int nodes_in_ring;
     int stream_count;
-    int max_count;
-    int remained_packets_per_max_count;
-    int remained_packets_per_message;
     int parallel_reduce;
-    InjectionPolicy injection_policy;
     std::list<MyPacket> packets;
     bool toggle;
     long free_packets;
-    long total_packets_received;
     uint64_t msg_size;
     bool processed;
     bool send_back;

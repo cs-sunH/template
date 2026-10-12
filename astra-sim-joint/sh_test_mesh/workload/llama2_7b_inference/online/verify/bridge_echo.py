@@ -12,6 +12,12 @@ parse_graph_batch 单次结构化解析,未知顶层键 fail-closed,故回显里
 直接对 request_<seq>.json(原子发布后)与 build_request_json 输出比对,
 不再借道响应回显。commit ack 到达时把 ack dict 追加为 ack_receipt 的
 一行(逐行 JSON),C++ 侧据此断言 ack 通知到达且幂等(重复 seq 只落一行)。
+C5-era schema-2(2026-10-07): parse_graph_batch 的 T6 规则把 schema_version/
+pipeline_descriptors/kernel_contract 升为响应必需键 —— 本 echo 夹具补齐
+schema-2 最小合法形态:空 pipeline_descriptors 数组(回显节点无 pipeline
+anchor,锚点/描述符一致性检查对空/空自然成立)与九字段 kernel_contract
+(与生产 default 预设同形;首个响应冻结进 workload 后续响应必须相同,
+echo 固定返回本静态合同即满足"首提交后不可变"校验)。
 """
 
 import json
@@ -20,6 +26,22 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from decision_bridge import BridgeServer  # noqa: E402
+
+
+# Frozen schema-2 kernel contract (minimal legal form; identical on every
+# response so the workload's freeze-on-first-commit equality check holds).
+_KERNEL_CONTRACT = {
+    "projection_abi_version": 1,
+    "descriptor_version": 1,
+    "pipeline_protocol_version": 1,
+    "model_version": "v6-compact-window-20261005",
+    "timer_whitelist_version": "timer-whitelist-v1-20261005",
+    "window_tile_limit": 1,
+    "window_local_error_ppm": 10000,
+    "window_refine_margin_ppm": 20000,
+    "prediction_config_sha256":
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+}
 
 
 def _echo_node(request_id, node_id, name):
@@ -42,6 +64,10 @@ def _echo_node(request_id, node_id, name):
 
 
 def main():
+    if len(sys.argv) != 3:
+        print("usage: python3 bridge_echo.py <bridge_dir> <ack_receipt>",
+              file=sys.stderr)
+        return 2
     bridge_dir = sys.argv[1]
     ack_receipt = sys.argv[2]
 
@@ -49,8 +75,11 @@ def main():
         arrivals = request.get("arrivals") or [{}]
         request_id = arrivals[0].get("request_id", "s0_r0")
         return {
+            "schema_version": 2,
             "batch_id": request["delivery_sequence"],
             "source_delivery_sequence": request["delivery_sequence"],
+            "pipeline_descriptors": [],
+            "kernel_contract": _KERNEL_CONTRACT,
             "nodes": [_echo_node(request_id, 0, "echo_node_1"),
                       _echo_node(request_id, 1, "echo_node_2")],
             "parent_edges": [{"rank": 0, "kind": "data", "from": 0, "to": 1}],

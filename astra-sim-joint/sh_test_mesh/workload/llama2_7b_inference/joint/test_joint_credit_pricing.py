@@ -1,29 +1,22 @@
 #!/usr/bin/env python3
-"""test_joint_credit_pricing.py -- remote-read 决策计价分阶段关键路径的
-手算锚点单测（规格书 §5，2026-09-25；前身 §4.3.1 credit 交错流锚）。
+"""test_joint_credit_pricing.py -- remote-read 决策计价 D09 有限字节
+双缓冲闭式的手算锚点单测（v2.0 §12/式 14/15/附录 A.1，2026-09-26；
+前身 §4.3.1 credit 交错流锚与规格书 §5 分阶段合成）。
 
-计价合同（分阶段关键路径，旧"后缀恢复全量串在 prefill 计算之前"的
-max(history_prep, eviction) + first_credit + max(stream, compute) 合成
-废除、无开关可选项）：
+计价合同（双缓冲闭式，旧"首 credit + max(余量流, 计算)"合成废除）：
 
-* prefill_stage = prefix_first_credit
-                  + max(prefix_remaining_stream, suffix_restore,
-                        prefill_compute)
-  decode_stage  = decode_first_credit
-                  + max(decode_remaining_stream, decode_compute)
-  cost = target_wait + eviction_wait + prefill_stage + decode_stage
-         + merge
-  ——prefill 前缀读流与后缀池恢复同准入 frontier 并行分叉、prefill 计
-  算按层段随数据到达推进（无全局 barrier）；decode 只对 home 前缀新
-  发 credit 读。阶段量经 notes 四键披露（remote_read_prefill_ns /
-  remote_read_decode_ns / suffix_restore_ns /
-  prefill_pipeline_overlap_ns）；K 与执行侧切片同源
-  （remote_credit_block_size 单一裁决点，两腿共用同一 K）；
-* 旧 breakdown 字段保持日志兼容口径：remote_read_ns 恒为合并流
-  （read_passes 全程、时延单计）全流总时延，remote_read_first_credit_ns
-  / remote_read_stream_ns 仍为该合并流的全局 credit 拆分——不再进关
-  键路径；不变量：K >= read_passes（单 credit）时 first_credit_ns ==
-  remote_read_ns、remaining_stream_ns == 0。
+* 读流按配置字节 tile 连续切块（首块发射约束、两块暂存、尾块 A.1 显
+  式处理）；prefill 腿消费池 = prefill 计算、decode 腿消费池 = decode
+  计算（按字节份额均匀分摊，§12.3 等大等服时间近似）；
+* D02 递推 + D03 统一时间轴（2026-09-26）：prefill 首前向 =
+  estimate_first_forward(start_ns=Q, ready_space_ns=A, ready_data=决策
+  相对绝对量——读流腿决策时刻发射、与排队重叠)；decode_stage =
+  decode_leg_闭式（自首前向后发射）；cost = prefill 首前向 + decode 腿
+  + merge（target_wait 为观测字段、不前置相加——D03）；
+* 旧 breakdown 字段保持日志兼容口径：remote_read_ns 恒为合并流全流
+  总时延，remote_read_first_credit_ns / remote_read_stream_ns 为首
+  tile / 其余流送的审计拆分——不再进关键路径；不变量：流字节 ≤ 一个
+  tile 时 first_credit_ns == remote_read_ns、stream == 0。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_joint_credit_pricing.py
@@ -38,9 +31,15 @@ for _p in (_HERE, _PARENT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from joint.joint_config import remote_credit_block_size  # noqa: E402
+from joint.joint_config import (  # noqa: E402
+    prefill_remote_read_scan_passes,
+    remote_read_exec_tile_tokens,
+    resolve_remote_read_tile_tokens,
+)
 from joint.joint_cost_model import (  # noqa: E402
     ACTION_REMOTE,
+    _double_buffer_recurrence_ns,
+    remote_read_double_buffer_ns,
     InstanceLoadView,
     JointCostModel,
     JointHardwareRates,
@@ -101,236 +100,307 @@ def _anchor_loads():
 def _remote(model, session=None, request=None):
     session = session if session is not None else _session()
     request = request if request is not None else _request()
-    return model.estimate_action(
+    return model.estimate_P_with_continuation(
         session=session, request=request, instance_index=1,
         action=ACTION_REMOTE, remote_enabled=True)
 
 
-# ---- 手算锚（C4 金值重推导，2026-09-22；rates：B_link = 10 B/ns、
+# ---- 手算锚（D09 重推导，2026-09-26；rates：B_link = 10 B/ns、
 # B_HBM = 100 B/ns、单跳时延 10 ns、流注册表空、u_port = 0（离线
-# 口径——port_registry 未注入））。对旧金值（3286/3356/2070/422/
-# 1648）的公式变更来源逐项列明：
-#   1. C1 三腿 min（F1 冻结）：读流 wall = startup + 跳数×时延
-#      + max(noc_stream, home_read, exec_write)，逐 shard 取 max——
-#      TP 并行不再按"聚合字节 ÷ 单链路率"串行放大；
-#   2. A1' 并集瓶颈除数（§4.3 补遗）：2 个 TP shard 共链 (0→1) →
-#      divisor_multi 并集除数 = 2、noc 有效率 = 10/2 = 5 B/ns；字节
-#      均衡 + 空链路下逐 shard 3000/(10/2)=600 与旧聚合 6000/10=600
-#      同 wall（桥接锚——CopyCompositePricingTest 的闭式仍逐位可用）；
-#   3. D1 读放大因果（C1 步骤 2b）：远读基数 = 仅远端基础历史
-#      (1000,1000)/rank，input/decode 增量本地读、不入远读基数
-#      （旧口径基数 = 终态上下文 2060 B）；read_passes = prefill 遍数
-#      + decode 步数 = 1 + 10 = 11（A2' 缺省单遍计入基数，§4.3 补遗
-#      ——本卡核验执行器无 prefill 分块重扫、缺省单遍即真值）；
-#   4. C3 上下文依赖 + A4' 补价（C2 rider）：本夹具 compute =
-#      50×1 + 10×2 = 70 不变（C3 改 decode 上下文依赖计价，本夹具
-#      参数下同值）；kind="read" 增执行端 HBM 写腿 11000/100 = 110
-#      < noc 腿 2200（u_exec = 0 时写腿与源端读腿同值、不触 max）。
-# decode 增长逐 rank = 25*10//50 = 5（入空间足迹与 merge 增量）；
-# remote_read_ns：逐 shard 字节 = 1000×11 = 11000，noc 腿 = 11000/5
-# = 2200、端点腿各 110 → max = 2200，wall = 10 + 2200 = 2210；
-# compute_ns = 70；merge：increments = (30,30)、并集除数 2 → noc
-# = 30/5 = 6、wall = 16（与旧值 16 逐位一致——桥接锚），反向腿
-# (1000,1000) → 10 + 200 = 210 → merge_ns = min(16, 210) = 16。
+# 口径——port_registry 未注入））。保留基座：C1 三腿 min（F1）、A1'
+# 并集瓶颈除数 = 2（noc 有效率 5 B/ns）、D1 读放大因果（基数 = 仅远
+# 端基础历史 (1000,1000)/rank，input/decode 增量本地读）、C3/A4'
+# compute 与执行端写腿；merge 手算 16 不变。
+# D09 tile 口径（逐 rank 求值取 max，§12.3）：kv_token_bytes 惰性派生
+# = history 1000//100 = 10 B/token；tile auto = 256 token = 2560
+# B/shard；rank 流 = 基础 1000 B/rank × 遍数。
+# remote_read_ns：逐 shard 11000 B → noc 腿 11000/5 = 2200 → wall =
+# 10 + 2200 = 2210（全流审计，不变）；compute_ns = 50×1 + 10×2 = 70。
+# 审计拆分：首 tile = min(2560, 11000) = 2560 → 10 + 2560/5 = 522；
+# 其余流送 = 8440/5 = 1688。
 ANCHOR_TARGET_WAIT = 1200
 ANCHOR_COMPUTE_NS = 70
 ANCHOR_REMOTE_READ_NS = 2210
 ANCHOR_MERGE_NS = 16
-# credit(auto) K = max(1, ceil(11/8)) = 2：credit1 逐 shard 2000 B →
-# noc = 2000/5 = 400 → first = 10 + 400 = 410；其余流送逐 shard
-# 9000 B → noc = 1800 → stream = 1800（纯流送段，无 startup/时延）。
-ANCHOR_K = 2
-ANCHOR_FIRST_CREDIT_NS = 410
-ANCHOR_STREAM_NS = 1800
-# 分阶段关键路径（LOCAL 基 suffix_restore = 0）：prefill 腿 = 1 遍
-# （1000 B/rank）→ leg = 10 + 1000/5 = 210、first = 210（K=2 ≥ 1 遍
-# 全覆盖）、remaining = 0；decode 腿 = 10 遍（10000 B/rank）→ leg =
-# 10 + 10000/5 = 2010、first = 10 + 2000/5 = 410、remaining = 8000/5
-# = 1600。计算分量 prefill = 50×1.0 = 50、decode = 10×2.0 = 20。
-# prefill_stage = 210 + max(0, 0, 50) = 260；decode_stage = 410 +
-# max(1600, 20) = 2010 ⇒ cost = 1200 + 0 + 260 + 2010 + 16 = 3486。
-ANCHOR_PREFILL_LEG_NS = 210
-ANCHOR_DECODE_LEG_NS = 2010
-# 逐腿 credit 拆分（同一 K = 2）：prefill 腿 1 遍全进首块 → first 210、
-# remaining 0；decode 腿首块 2 遍 → first 410、其余 8 遍纯流送 1600。
-ANCHOR_PREFILL_FIRST_NS = 210
-ANCHOR_PREFILL_REMAINING_NS = 0
-ANCHOR_DECODE_FIRST_NS = 410
-ANCHOR_DECODE_REMAINING_NS = 1600
+ANCHOR_TILE_TOKENS = 256
+ANCHOR_FIRST_TILE_NS = 522
+ANCHOR_STREAM_NS = 1688
+# prefill 审计腿（1 遍、rank 流 1000 < tile 2560 → m=0 纯尾块）：
+# tail_x = 10 + 1000/5 = 210、tail_c = int(50 × 1000/2000) = 25 →
+# F = 235（notes 审计披露，不进关键路径）。
+# decode 腿（修复轮三 H1 逐 pass 重切，2026-09-27：full_tiles =
+# passes×⌈tokens/tile⌉ = 10×⌈100/256⌉ = 10 整块/rank——每 pass 尾块
+# 并入整块服务 tail=0，不再跨 pass 合并）：x = latency+tile_bytes/bw
+# = 10+2560/5 = 522、c = int(20×2560/(2×10×2560)) = 1 < x；闭式
+# T_j = T_{j-1}+x → F = x+c+9x = 522+1+4698 = 5221（旧连续链 m=3+尾
+# 2320 口径 = 2042——逐 pass 重切消除尾块合并低估，只增不减）。
+# D02 逐层就绪递推（式 12/13，2026-09-26）：LOCAL 基 = 全 4 层由读流
+# 供给；末遍 tile 覆盖偏移 = 1000×(g+1)//4 = 250/500/750/1000，j=1
+# （单尾块事务）→ 各层就绪 = A + 210 = 210（A = 0：容量无缺口）。
+# D03 统一时间轴（2026-09-26）：读流腿决策时刻发射、与排队重叠——
+# 到达 210 ⊆ Q = 1200 排空视界被真实吸收；F_0 = Q ⇒ F_L =
+# 1200+13+13+12+12 = 1250（递推仍保留零 Q 时的到达后计算——D02 零载
+# 锚 260 不变）；repeat 段自 F_L 后发射 ⇒ cost = 1250 + 5221 + 16 =
+# 6487（旧串行前置 3518 双计排队×读流重叠 210——v2.0 §8.3"Q 只门控
+# 计算"）。
+ANCHOR_PREFILL_LEG_NS = 235
+ANCHOR_DECODE_LEG_NS = 5221
+ANCHOR_PREFILL_FIRST_FORWARD_NS = 1250
+ANCHOR_STAGED_COST = 6487
 ANCHOR_PREFILL_COMPUTE_NS = 50
 ANCHOR_DECODE_COMPUTE_NS = 20
-ANCHOR_STAGED_COST = 3486
-# 单块退化值（K = read_passes = 11）：全局拆分 first == 全流时延
-# 2210、stream == 0；分阶段逐腿同退化——prefill_first = 210、
-# decode_first = 10 + 10000/5 = 2010、两腿 remaining = 0 ⇒
-# prefill_stage = 210 + 50 = 260、decode_stage = 2010 + 20 = 2030
-# ⇒ cost = 1200 + 260 + 2030 + 16 = 3506。
-ANCHOR_SINGLE_CREDIT_COST = 3506
+# 显式 tile_bytes = 500（50 token → 500 B/shard）：decode rank 流
+# 10000 → m=20 无尾块：tile_c = int(20×500/20000) = 0（份额 < 1 截断）
+# → F = 110 + 0 + 19×110 = 2200；prefill 审计腿 m=2：tile_c =
+# int(50×500/2000) = 12 → F = 110 + 12 + 110 = 232（审计）。
+# D02 递推：层偏移 250/500/750/1000 → tile 索引 j = 1,1,2,2；到达
+# T_1 = A+110 = 110、T_2 = 220（通道串行、决策相对绝对量）。D03：
+# F_0 = Q = 1200（到达 ⊆ 排空视界被吸收）⇒ F_L = 1200+13+13+12+12
+# = 1250 ⇒ dynamic event cost = 1250 + 2201 + 16 = 3467（旧串行前置
+# 排队×读流重叠 194）。
+EXPLICIT_TILE_COST = 3467
+EXPLICIT_TILE_FIRST_FORWARD_NS = 1250
 
 
-# ======================================================= 流水式手算锚 ==
+# ======================================================= 双缓冲闭式锚 ==
 
-class PipelinePricingAnchorTest(unittest.TestCase):
-    """分阶段关键路径手算锚：auto K（流送段主导）与 compute-bound 两
-    分支。"""
+class DoubleBufferClosedFormAnchorTest(unittest.TestCase):
+    """D09 双缓冲闭式手算锚：尾块腿（prefill 单 tile）与多 tile 腿
+    （decode m=7 + 尾块 A.1）。"""
 
-    def test_auto_k_stream_bound_cost_by_hand(self):
+    def test_auto_tile_stream_bound_cost_by_hand(self):
         candidate = _remote(_model(_anchor_loads()))
         self.assertTrue(candidate.applicable)
-        # 全链手算（分阶段）：1200 + 0 + (210 + max(0, 0, 50)) + (410 +
-        # max(1600, 20)) + 16 = 3486。LOCAL 基无后缀恢复项（suffix_
-        # restore = 0）；decode 腿流送段主导（1600 > 20）⇒ decode 计算
-        # 段被其余读流隐藏；prefill 腿 K=2 ≥ 1 遍全覆盖 ⇒ remaining = 0、
-        # prefill 计算 50 暴露在首 credit 之后（旧合并流口径下 compute
-        # 70 全被 stream 1800 吸收——分阶段后 prefill/decode 计算各归
-        # 所属阶段）。
+        # 全链手算（D02 递推 + D03 时间轴）：1250 + 2042 + 16 = 3308
+        # （读流到达 210 与排队 1200 重叠——旧串行前置 3518 双计）。
         self.assertEqual(candidate.cost_ns, ANCHOR_STAGED_COST)
         breakdown = candidate.breakdown
-        # 全局拆分披露 = 手算值（日志兼容口径）；remote_read_ns 仍为合
-        # 并流全流总时延。
+        # 全局审计拆分 = 手算值；remote_read_ns 仍为全流总时延。
         self.assertEqual(
-            breakdown.remote_read_first_credit_ns, ANCHOR_FIRST_CREDIT_NS)
+            breakdown.remote_read_first_credit_ns, ANCHOR_FIRST_TILE_NS)
         self.assertEqual(breakdown.remote_read_stream_ns, ANCHOR_STREAM_NS)
         self.assertEqual(breakdown.remote_read_ns, ANCHOR_REMOTE_READ_NS)
         self.assertEqual(breakdown.compute_ns, ANCHOR_COMPUTE_NS)
         self.assertEqual(breakdown.merge_ns, ANCHOR_MERGE_NS)
         self.assertEqual(breakdown.target_wait_ns, ANCHOR_TARGET_WAIT)
         self.assertIn("remote_read_passes=11", breakdown.notes)
-        self.assertIn(f"remote_credit_k={ANCHOR_K}", breakdown.notes)
-        # 阶段量 notes 披露（规格书 §5 四键）与手算值逐位一致。
+        self.assertIn(
+            f"remote_read_tile_tokens={ANCHOR_TILE_TOKENS}",
+            breakdown.notes)
+        # 阶段量 notes 披露与手算值逐位一致（审计腿 + 递推首前向）。
         self.assertIn(
             f"remote_read_prefill_ns={ANCHOR_PREFILL_LEG_NS}",
             breakdown.notes)
         self.assertIn(
             f"remote_read_decode_ns={ANCHOR_DECODE_LEG_NS}",
             breakdown.notes)
+        self.assertIn(
+            "prefill_first_forward_ns="
+            f"{ANCHOR_PREFILL_FIRST_FORWARD_NS}",
+            breakdown.notes)
         self.assertIn("suffix_restore_ns=0", breakdown.notes)
         self.assertIn("prefill_pipeline_overlap_ns=0", breakdown.notes)
-        # 合成式逐位：cost = target + eviction + prefill_stage +
-        # decode_stage + merge（LOCAL 基 eviction = 0、suffix_restore =
-        # 0）；prefill_stage = first + max(remaining, suffix, compute)、
-        # decode_stage = first + max(remaining, compute)。
-        prefill_stage = ANCHOR_PREFILL_FIRST_NS + max(
-            ANCHOR_PREFILL_REMAINING_NS, 0, ANCHOR_PREFILL_COMPUTE_NS)
-        decode_stage = ANCHOR_DECODE_FIRST_NS + max(
-            ANCHOR_DECODE_REMAINING_NS, ANCHOR_DECODE_COMPUTE_NS)
+        # 合成式逐位（D03）：cost = prefill 首前向（含 Q 门）+ decode
+        # 腿相对量 + merge；target_wait 为观测字段（值 = Q，不进合成
+        # ——其与读流到达的重叠已被递推吸收）；递推保留单尾块到达
+        # （210）之后的全部 prefill 计算——旧 max 合成只付字节份额
+        # tail_c = 25、低估 25 ns（D02 零载锚保留该性质）。
         self.assertEqual(
-            candidate.cost_ns - breakdown.target_wait_ns
-            - breakdown.eviction_wait_ns - breakdown.merge_ns,
-            prefill_stage + decode_stage)
-        # 分阶段流水恒 ≤ 单块退化数值（3506）。
-        self.assertLess(candidate.cost_ns, ANCHOR_SINGLE_CREDIT_COST)
+            candidate.cost_ns - breakdown.merge_ns,
+            ANCHOR_PREFILL_FIRST_FORWARD_NS + ANCHOR_DECODE_LEG_NS)
+        self.assertEqual(breakdown.target_wait_ns, ANCHOR_TARGET_WAIT)
+        self.assertLess(
+            candidate.cost_ns,
+            ANCHOR_TARGET_WAIT + 260 + ANCHOR_DECODE_LEG_NS
+            + ANCHOR_MERGE_NS)
+        self.assertGreater(
+            ANCHOR_PREFILL_FIRST_FORWARD_NS, ANCHOR_PREFILL_LEG_NS)
 
-    def test_compute_bound_takes_max_compute(self):
-        # prefill/decode 计算分量各自在所属阶段取 max：decode 速率放大
-        # （2 → 50 ns/token）+ 小历史（200 B）。手算（C4 重推导）：远读
-        # 基数 = (100,100)/rank × read_passes 11 → 逐 shard 1100 B，noc
-        # 腿 = 1100/5 = 220（并集除数 2）、端点腿各 11 → remote_read =
-        # 10 + 220 = 230；compute = 50 + 500 = 550（prefill 50、decode
-        # 500）；K = 2 → prefill 腿 1 遍全覆盖：leg = first = 10 +
-        # 100/5 = 30、remaining = 0 → prefill_stage = 30 + 50 = 80；
-        # decode 腿 first = 10 + 200/5 = 50、remaining = 800/5 = 160 →
-        # decode_stage = 50 + max(160, 500) = 550；merge：forward =
-        # 10 + 30/5 = 16、reverse = 10 + 100/5 = 30 → merge_ns = 16 ⇒
-        # cost = 0 + 0 + 80 + 550 + 16 = 646。
+    def test_explicit_tile_bytes_multi_tile_hand(self):
+        # 显式 tile = 500 B（50 token × 10 B/token）：decode 腿 20 个
+        # 完整 tile/rank 无尾块（x=110；20 ns compute floor 以最大余数
+        # 分配给 20 个 tile，各 1 ns，故 F = 110+19×110+1 = 2201）；
+        # prefill 审计腿 2 个完整 tile/rank
+        # （c=12；跨 rank 余数守恒后 F = 233）。
+        # 修复轮三 H1 例外锚（不变）：tokens=100 整除 tile=50 token
+        # （每 pass 恰 2 整块、无每 pass 尾块）⇒ 逐 pass 重切
+        # passes×⌈tokens/tile⌉ = 10×2 = 20 与旧连续链 ⌈10000/500⌉ = 20
+        # 逐 pass 重切仍保持字节守恒；compute floor 的余数不再被丢弃。
+        # D02 递推：tile 索引 j = 1,1,2,2、到达 110/220（通道串行、
+        # 决策相对）；D03：到达 ⊆ Q 排空视界被吸收 → F_L = 1250
+        # （第二对层等到 220 后仍各付整段份额的性质由 D02 零载锚保留
+        # ——此处递推同样不吸收到达后计算，只是门值 ≤ Q）。
+        model = _model(_anchor_loads(), remote_read_tile_bytes="500")
+        candidate = _remote(model)
+        self.assertIn("remote_read_tile_tokens=50",
+                      candidate.breakdown.notes)
+        self.assertIn("remote_read_decode_ns=2201",
+                      candidate.breakdown.notes)
+        self.assertIn("remote_read_prefill_ns=233",
+                      candidate.breakdown.notes)
+        self.assertIn(
+            f"prefill_first_forward_ns={EXPLICIT_TILE_FIRST_FORWARD_NS}",
+            candidate.breakdown.notes)
+        self.assertEqual(candidate.cost_ns, EXPLICIT_TILE_COST)
+
+    def test_compute_bound_first_tile_transfer_exposed(self):
+        # decode 速率放大（2 → 50 ns/token）+ 小历史（(100,100)、
+        # kv_token_bytes = 1 → tile = 256 B）：修复轮三 H1 逐 pass 重
+        # 切（full_tiles = passes×⌈tokens/tile⌉ = 10×⌈100/256⌉ = 10 整
+        # 块/rank、每 pass 尾块并入整块服务 tail=0）：重切后流总量 =
+        # 10×256 = 2560 B/rank → tile_c = int(500×256/5120) = 25、
+        # tile_x = 10+⌈256/5⌉ = 62 ≥ c；闭式 T_j = T_{j-1}+x →
+        # F = x+c+9x = 62+25+558 = 645（旧连续链 m=3+尾 232、x<c 口径
+        # = 312——重切后 c 份额随块数摊薄、块数×10，只增不减）；
+        # prefill 审计尾块腿 = 30+25 = 55（1 遍连续链 = 逐 pass，不动）。
+        # D02 递推：单尾块事务到达 = 0+30，全 4 层就绪 = 30 →
+        # F_L = 30 + 50 = 80（整段 prefill 计算在到达后支付，不再按
+        # 字节份额缩水）⇒ cost = 80 + 645 + 16 = 741。
         model = _model(
             {0: _load(0, 0), 1: _load(1, 0)}, decode_ns_per_token=50.0)
         candidate = _remote(model, session=_session(history_bytes=(100, 100)))
         breakdown = candidate.breakdown
         self.assertEqual(breakdown.compute_ns, 550)
-        self.assertEqual(breakdown.remote_read_first_credit_ns, 50)
-        self.assertEqual(breakdown.remote_read_stream_ns, 180)
-        self.assertIn("remote_read_prefill_ns=30", breakdown.notes)
-        self.assertIn("remote_read_decode_ns=210", breakdown.notes)
-        # 合成式逐位：prefill_stage = 30 + max(0, 0, 50)、decode_stage
-        # = 50 + max(160, 500)。
+        self.assertIn("remote_read_prefill_ns=55", breakdown.notes)
+        self.assertIn("remote_read_decode_ns=645", breakdown.notes)
+        self.assertIn("prefill_first_forward_ns=80", breakdown.notes)
+        # D03 合成恒等式（Q = A = 0 退化锚）：cost = 首前向 + decode
+        # 腿相对量 + merge；target_wait/eviction_wait 观测位恒 0。
+        # W3（v4-projection）：decode 腿相对量来自事件世界——逐 tile
+        # 完成取整（闭式的每 tile int(x) 向上取整在事件侧只对总完成
+        # 时刻取整：x = 61.2 × 10 块 ⇒ 闭式 10×62 + 25 = 645、事件
+        # ⌈612⌉ + 25 = 637，差 = 逐 tile 取整累积，物理关系不变）。
         self.assertEqual(
-            candidate.cost_ns - breakdown.target_wait_ns
-            - breakdown.eviction_wait_ns - breakdown.merge_ns,
-            30 + max(0, 0, 50) + 50 + max(160, 500))
-        self.assertEqual(candidate.cost_ns, 646)
+            candidate.cost_ns - breakdown.merge_ns,
+            80 + 637)
+        self.assertEqual(breakdown.target_wait_ns, 0)
+        self.assertEqual(breakdown.eviction_wait_ns, 0)
+        # W3（事件侧完成取整）：741 − 8（逐 tile 取整累积）= 733。
+        self.assertEqual(candidate.cost_ns, 733)
 
-    def test_default_k_equals_explicit_auto(self):
-        # 缺省 remote_credit_iters 与显式 "auto" 同夹具逐位相等。
+    def test_default_tile_config_equals_explicit_auto(self):
+        # 缺省 remote_read_tile_bytes 与显式 "auto" 同夹具逐位相等。
         default = _remote(_model(_anchor_loads()))
         explicit = _remote(_model(
-            _anchor_loads(), remote_credit_iters="auto"))
+            _anchor_loads(), remote_read_tile_bytes="auto"))
         self.assertEqual(default.cost_ns, explicit.cost_ns)
 
 
-# ================================================== 单块退化等价锚 ==
+# ================================================== 配置裁决点锚 ==
 
-class SingleCreditDegenerateTest(unittest.TestCase):
-    """K >= read_passes（单 credit）⇒ 合并流全局拆分退化为 first ==
-    remote_read_ns、stream == 0；分阶段逐腿同退化（首块 = 整腿、
-    remaining = 0）。"""
+class TileConfigAdjudicationTest(unittest.TestCase):
+    """tile 解析/固定执行 tile/扫描次数闭式的单一裁决点锚。"""
 
-    def test_explicit_k_equals_steps_degenerates(self):
-        candidate = _remote(_model(
-            _anchor_loads(), remote_credit_iters="11"))  # K = read_passes
-        self.assertTrue(candidate.applicable)
-        self.assertEqual(candidate.cost_ns, ANCHOR_SINGLE_CREDIT_COST)
-        breakdown = candidate.breakdown
-        # 合并流不变量落地：first_credit == 全流时延、stream == 0。
-        self.assertEqual(
-            breakdown.remote_read_first_credit_ns, ANCHOR_REMOTE_READ_NS)
-        self.assertEqual(breakdown.remote_read_stream_ns, 0)
-        self.assertIn("remote_credit_k=11", breakdown.notes)
-        # 分阶段逐腿退化：prefill 腿（1 遍）全进首块 = 整腿 210、
-        # decode 腿（10 遍）全进首块 = 整腿 2010、两腿 remaining = 0
-        # ⇒ prefill_stage = 210 + 50 = 260、decode_stage = 2010 + 20
-        # = 2030（decode 计算不再被流送吸收——单块下无其余流送段）。
-        self.assertIn(
-            f"remote_read_prefill_ns={ANCHOR_PREFILL_LEG_NS}",
-            breakdown.notes)
-        self.assertIn(
-            f"remote_read_decode_ns={ANCHOR_DECODE_LEG_NS}",
-            breakdown.notes)
-        self.assertEqual(
-            candidate.cost_ns - breakdown.target_wait_ns
-            - breakdown.eviction_wait_ns - breakdown.merge_ns,
-            (ANCHOR_PREFILL_FIRST_NS + ANCHOR_PREFILL_COMPUTE_NS)
-            + (ANCHOR_DECODE_LEG_NS + ANCHOR_DECODE_COMPUTE_NS))
+    def test_resolve_aligns_down_to_token_granularity(self):
+        self.assertEqual(resolve_remote_read_tile_tokens("auto", 10), 256)
+        self.assertEqual(resolve_remote_read_tile_tokens("1000", 10), 100)
+        # 向下对齐：1001 B @ 10 B/token → 100 token（非 101）。
+        self.assertEqual(resolve_remote_read_tile_tokens("1001", 10), 100)
 
-    def test_explicit_k_clamped_to_steps(self):
-        # 显式 K = 100 > 步数 11 → 钳到 11（单块退化锚的另一面）；
-        # remote_credit_block_size 对显式值与步数独立钳位（100, 10）
-        # → 10 仍成立（配置函数单查锚，步数参数与本夹具无关）。
-        self.assertEqual(remote_credit_block_size("100", 10), 10)
-        candidate = _remote(_model(
-            _anchor_loads(), remote_credit_iters="100"))
-        self.assertIn("remote_credit_k=11", candidate.breakdown.notes)
-        self.assertEqual(candidate.cost_ns, ANCHOR_SINGLE_CREDIT_COST)
+    def test_resolve_rejects_sub_token_tile(self):
+        from joint.joint_config import JointConfigError
+        with self.assertRaises(JointConfigError):
+            resolve_remote_read_tile_tokens("9", 10)
+
+    def test_exec_tile_stays_configured(self):
+        # 执行 tile 恒 = 配置值（修复轮二 2026-09-27：不随基础区间放
+        # 大——放宽使每块暂存随历史长度无界增长，正中 v2.0 §17.1 不做
+        # 清单"为减少仿真事件把容量/缓冲暗改无限"；base_tokens 仅校
+        # 验非负，每 pass tile 数 = ⌈base/tile⌉ 可 >2，由逐 tile lag-2
+        # 双缓冲释放链承载 ≤2 块暂存不变量）。
+        self.assertEqual(remote_read_exec_tile_tokens(256, 100), 256)
+        self.assertEqual(remote_read_exec_tile_tokens(256, 1000), 256)
+        self.assertEqual(remote_read_exec_tile_tokens(64, 1000), 64)
+        # 非法输入仍 fail-closed（0/负 tile 或负 base）。
+        from joint.joint_config import JointConfigError
+        with self.assertRaises(JointConfigError):
+            remote_read_exec_tile_tokens(0, 1000)
+        with self.assertRaises(JointConfigError):
+            remote_read_exec_tile_tokens(-1, 1000)
+        with self.assertRaises(JointConfigError):
+            remote_read_exec_tile_tokens(256, -1)
+
+    def test_scan_passes_closed_form(self):
+        # 式(11) + §13.3：Σν = a⌈q_c/q_t⌉ + 1_{b>0}⌈b/q_t⌉。
+        self.assertEqual(prefill_remote_read_scan_passes(0, 512, 128), 0)
+        self.assertEqual(prefill_remote_read_scan_passes(128, 512, 128), 1)
+        self.assertEqual(prefill_remote_read_scan_passes(512, 512, 128), 4)
+        # 1000 = 1×512 + 488：Σν = 4 + ⌈488/128⌉ = 4 + 4 = 8。
+        self.assertEqual(prefill_remote_read_scan_passes(1000, 512, 128), 8)
+        # 1024 = 2×512：Σν = 2×4 = 8（无尾 chunk）。
+        self.assertEqual(prefill_remote_read_scan_passes(1024, 512, 128), 8)
 
 
-# ==================================================== 自适应 K 边界 ==
+# ================================================== 闭式 vs 式(14) 对照 ==
 
-class AdaptiveBlockSizeTest(unittest.TestCase):
-    """auto K = max(1, ceil(S/8)) 边界 + 计价 notes 披露。"""
+class ClosedFormVsRecurrenceTest(unittest.TestCase):
+    """闭式（式 15/A.1）与逐块递推（式 14 直译）的一致性对照（A.3 检查
+    的确定性采样版——双缓冲完整块/含尾块两分支）。"""
 
-    def test_auto_k_formula_boundaries(self):
-        for steps, expected_k in ((1, 1), (8, 1), (9, 2), (100, 13)):
-            self.assertEqual(
-                remote_credit_block_size("auto", steps), expected_k)
+    def _expected_recurrence(self, tile_x, tile_c, full, tail_frac):
+        tile_bytes = 1000
+        stream = full * tile_bytes + int(tile_bytes * tail_frac)
+        transfers = [float(tile_x)] * full
+        consumptions = [float(tile_c)] * full
+        if tail_frac:
+            transfers.append(tile_x * tail_frac)
+            consumptions.append(tile_c * tail_frac)
+        t_prev2 = None
+        t_prev = transfers[0]
+        a_1 = max(0, t_prev)
+        f_prev = a_1 + consumptions[0]
+        for j in range(1, len(transfers)):
+            if j == 1:
+                t_j = a_1 + transfers[1]
+            else:
+                t_j = max(t_prev, t_prev2) + transfers[j]
+            f_j = max(t_j, f_prev) + consumptions[j]
+            t_prev2, t_prev, f_prev = t_prev, t_j, f_j
+        return int(f_prev)
 
-    def test_pricing_notes_disclose_adaptive_k(self):
-        # D1 后 read_passes = prefill 缺省单遍 1 + decode 步数 →
-        # auto K = max(1, ceil(read_passes/8))：decode=1 → passes 2 →
-        # K=1；decode=8 → 9 → 2；decode=9 → 10 → 2；decode=100 →
-        # 101 → 13。
-        for decode, expected_k in ((1, 1), (8, 2), (9, 2), (100, 13)):
-            model = _model(_anchor_loads())
-            candidate = _remote(model, request=_request(decode=decode))
-            self.assertTrue(candidate.applicable, decode)
-            self.assertIn(
-                f"remote_credit_k={expected_k}",
-                candidate.breakdown.notes, decode)
+    def test_full_tiles_only_matches_recurrence(self):
+        for m in (1, 2, 3, 7, 16):
+            for x, c in ((522, 2), (110, 120), (61, 64)):
+                self.assertEqual(
+                    remote_read_double_buffer_ns(
+                        tile_x_ns=x, tile_c_ns=c, full_tiles=m),
+                    self._expected_recurrence(x, c, m, 0),
+                    (m, x, c))
+
+    def test_tail_block_matches_recurrence(self):
+        for m in (0, 1, 2, 5):
+            for tail_frac in (0.25, 0.5, 0.9):
+                self.assertEqual(
+                    remote_read_double_buffer_ns(
+                        tile_x_ns=100, tile_c_ns=40, full_tiles=m,
+                        tail_x_ns=int(100 * tail_frac),
+                        tail_c_ns=int(40 * tail_frac)),
+                    self._expected_recurrence(
+                        100, 40, m, tail_frac),
+                    (m, tail_frac))
+
+    def test_recurrence_reference_helper_agrees(self):
+        # 模块内参照递推（式 14 直译）与闭式在整除/含尾块两形态一致。
+        for m in (1, 3, 9):
+            closed = remote_read_double_buffer_ns(
+                tile_x_ns=70, tile_c_ns=30, full_tiles=m)
+            rec = _double_buffer_recurrence_ns(
+                tile_x_ns=70, tile_c_ns=30, tile_bytes=1000,
+                stream_bytes=m * 1000)
+            self.assertEqual(closed, rec, m)
+        closed = remote_read_double_buffer_ns(
+            tile_x_ns=70, tile_c_ns=30, full_tiles=3,
+            tail_x_ns=35, tail_c_ns=15)
+        rec = _double_buffer_recurrence_ns(
+            tile_x_ns=70, tile_c_ns=30, tile_bytes=1000,
+            stream_bytes=3 * 1000 + 500)
+        self.assertEqual(closed, rec)
 
 
 # ================================================ 非 remote 动作隔离 ==
 
 class NonRemoteActionsUnaffectedTest(unittest.TestCase):
-    """credit 拆分仅存在于 remote-read 候选（其余动作审计字段恒 0）。"""
+    """tile 拆分仅存在于 remote-read 候选（其余动作审计字段恒 0）。"""
 
     def test_stay_recompute_copy_have_zero_credit_split(self):
         model = _model(_anchor_loads())
@@ -342,7 +412,7 @@ class NonRemoteActionsUnaffectedTest(unittest.TestCase):
             ("copy", 1, away_session),           # 历史在实例 0、目标 1
         )
         for action, instance, session in cases:
-            candidate = model.estimate_action(
+            candidate = model.estimate_P_with_continuation(
                 session=session, request=_request(),
                 instance_index=instance, action=action,
                 remote_enabled=True)

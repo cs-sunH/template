@@ -12,8 +12,9 @@ turn-0 rows submitted in CSV row order as the bounded window discovers them
 -- is preserved byte-for-byte so the new calendar reader's (alarm_time,
 queue_index) fire sequence can be compared against it on the same input. The
 audit_completion family was removed (it now lives in the live
-WindowedTraceReader.hh); nothing else was changed. NEVER use this class in
-production code.
+WindowedTraceReader.hh), and the read-only statistics accessors, report(),
+and notify_consumed() were trimmed (2026-09-27: the equivalence test only
+drives construction + pump()). NEVER use this class in production code.
 ******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_LEGACYORACLEWINDOWEDTRACEREADER_HH
@@ -23,7 +24,6 @@ production code.
 #include <cstdint>
 #include <fstream>
 #include <map>
-#include <ostream>
 #include <string>
 #include <unordered_set>
 
@@ -57,45 +57,6 @@ class LegacyOracleWindowedTraceReader {
     /// reaches high_water (or EOF). Returns false once EOF was reached.
     bool pump();
 
-    /// Simulation thread only (arrival hook): mark the row with queue index
-    /// `queue_index` as consumed (its arrival alarm fired).
-    void notify_consumed(int64_t queue_index);
-
-    /// Total data rows read (including rejected ones).
-    size_t rows_read() const { return rows_read_; }
-    /// Data-row counter (queue indices are 0..data_rows()-1). After EOF this
-    /// equals the file's total data-row count (the run-end completion
-    /// assertion target: 1177 for the 20.csv first-30-seconds input).
-    uint64_t data_rows() const { return data_rows_; }
-    /// Backport fix (2026-08-16): turn-0 data rows (arrival column
-    /// non-empty), read by read_one_row. The accepted-request accounting
-    /// invariant of the run-end completion audit (accepted + dropped ==
-    /// turn-0 rows: every turn-0 row was either submitted to the service
-    /// or rejected out-of-window; turn>0 rows arrive via the future-alarm
-    /// path and are covered by the completed == total - dropped check).
-    uint64_t turn0_data_rows() const { return turn0_rows_; }
-    /// True once the file was fully read.
-    bool eof() const { return eof_; }
-    /// Turn-0 rows rejected because arrival > max_arrival_ns.
-    size_t rejected_out_of_range() const { return rejected_out_of_range_; }
-    /// The whole-file data-row count. Equals data_rows() once EOF was
-    /// reached (consume-at-reject guarantees EOF under any explicit
-    /// window). The run-end completion audit denominator (backport fix).
-    uint64_t total_data_rows() const { return data_rows_; }
-    /// Number of pump calls that actually read at least one row.
-    size_t read_pumps() const { return read_pumps_; }
-    /// Accumulated wall time spent reading/parsing rows.
-    uint64_t io_read_ns() const { return io_read_ns_; }
-    /// Peak un-consumed row count inside the window.
-    size_t peak_window_occupancy() const { return peak_occupancy_; }
-    /// Exact current count of rows whose arrival has not fired.
-    size_t current_window_occupancy() const { return outstanding_rows_.size(); }
-    size_t high_water() const { return high_water_; }
-
-    /// One [online] windowed reader: ... line (rows, pumps, occupancy peak,
-    /// io ns, throughput rows/s, late arrivals, rejected).
-    void report(std::ostream& os) const;
-
   private:
     std::ifstream file_;
     RequestIngress& ingress_;
@@ -107,20 +68,12 @@ class LegacyOracleWindowedTraceReader {
     // Exact rows read but not yet consumed. Size is the window occupancy and
     // is therefore bounded by high_water (or explicitly unbounded when 0).
     std::unordered_set<int64_t> outstanding_rows_;
-    size_t rows_read_ = 0;
-    size_t rejected_out_of_range_ = 0;
-    size_t read_pumps_ = 0;
-    size_t peak_occupancy_ = 0;
-    uint64_t io_read_ns_ = 0;
     // Previous CSV row per session, for the AFTER_REQUEST metrics
     // registration of turn>0 rows (mirrors the phase-1 loader).
     std::map<std::string, int64_t> last_queue_index_by_session_;
 
     size_t occupancy() const;
     void read_one_row();
-
-    // Turn-0 rows (arrival non-empty): read by read_one_row.
-    uint64_t turn0_rows_ = 0;
 };
 
 }  // namespace ExecutionDriven

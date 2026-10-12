@@ -6,7 +6,6 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/collective_algorithm/HalvingDoubling.hh"
 
 #include <cmath>
-#include <iostream>
 #include <string>
 
 #include "astra-sim/common/Logging.hh"
@@ -31,7 +30,6 @@ HalvingDoubling::HalvingDoubling(ComType type,
                        std::to_string(nodes_in_ring));
     }
     this->parallel_reduce = 1;
-    this->total_packets_received = 0;
     this->free_packets = 0;
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
@@ -48,13 +46,6 @@ HalvingDoubling::HalvingDoubling(ComType type,
     default:
         stream_count = log2(nodes_in_ring);
     }
-    if (type == ComType::All_Gather) {
-        max_count = 0;
-    } else {
-        max_count = log2(nodes_in_ring);
-    }
-    remained_packets_per_message = 1;
-    remained_packets_per_max_count = 1;
     switch (type) {
     case ComType::All_Reduce:
         this->final_data_size = data_size;
@@ -91,7 +82,11 @@ HalvingDoubling::HalvingDoubling(ComType type,
 }
 
 int HalvingDoubling::get_non_zero_latency_packets() {
-    return log2(nodes_in_ring) - 1 * parallel_reduce;
+    // Per parallel_reduce lane: 1 zero-latency (local) packet plus
+    // log2(nodes_in_ring) - 1 non-zero-latency hops. Parenthesize the
+    // subtraction: the old `log2(...) - 1 * parallel_reduce` bound `1 *`
+    // first and silently computed log2(...) - parallel_reduce instead.
+    return (log2(nodes_in_ring) - 1) * parallel_reduce;
 }
 
 RingTopology::Direction HalvingDoubling::specify_direction() {
@@ -113,11 +108,10 @@ void HalvingDoubling::run(EventType event, CallData* data) {
         ready();
         iteratable();
     } else if (event == EventType::PacketReceived) {
-        total_packets_received++;
-        insert_packet(nullptr);
+        insert_packet();
     } else if (event == EventType::StreamInit) {
         for (int i = 0; i < parallel_reduce; i++) {
-            insert_packet(nullptr);
+            insert_packet();
         }
     }
 }
@@ -135,43 +129,30 @@ void HalvingDoubling::release_packets() {
 }
 
 void HalvingDoubling::process_stream_count() {
-    if (remained_packets_per_message > 0) {
-        remained_packets_per_message--;
-    }
-    if (remained_packets_per_message == 0 && stream_count > 0) {
+    // remained_packets_per_message was a relic: initialized to 1 and reset to
+    // 1 on every pass, so each call here simply drains one stream.
+    if (stream_count > 0) {
         stream_count--;
-        if (stream_count > 0) {
-            remained_packets_per_message = 1;
-        }
-    }
-    if (remained_packets_per_message == 0 && stream_count == 0 &&
-        stream->state != StreamState::Dead) {
-        stream->changeState(StreamState::Zombie);
     }
 }
 
 void HalvingDoubling::process_max_count() {
-    if (remained_packets_per_max_count > 0) {
-        remained_packets_per_max_count--;
-    }
-    if (remained_packets_per_max_count == 0) {
-        max_count--;
-        release_packets();
-        remained_packets_per_max_count = 1;
+    // remained_packets_per_max_count was a relic: always 1 at entry, so every
+    // call released exactly one packet and advanced the recursion below.
+    release_packets();
+    rank_offset *= offset_multiplier;
+    msg_size /= offset_multiplier;
+    if (rank_offset == nodes_in_ring && comType == ComType::All_Reduce) {
+        offset_multiplier = 0.5;
         rank_offset *= offset_multiplier;
         msg_size /= offset_multiplier;
-        if (rank_offset == nodes_in_ring && comType == ComType::All_Reduce) {
-            offset_multiplier = 0.5;
-            rank_offset *= offset_multiplier;
-            msg_size /= offset_multiplier;
-        }
-        curr_receiver = id;
-        RingTopology::Direction direction = specify_direction();
-        for (int i = 0; i < rank_offset; i++) {
-            curr_receiver = ((RingTopology*)logical_topo)
-                                ->get_receiver(curr_receiver, direction);
-            curr_sender = curr_receiver;
-        }
+    }
+    curr_receiver = id;
+    RingTopology::Direction direction = specify_direction();
+    for (int i = 0; i < rank_offset; i++) {
+        curr_receiver = ((RingTopology*)logical_topo)
+                            ->get_receiver(curr_receiver, direction);
+        curr_sender = curr_receiver;
     }
 }
 
@@ -188,25 +169,22 @@ void HalvingDoubling::reduce() {
 }
 
 bool HalvingDoubling::iteratable() {
-    if (stream_count == 0 &&
-        free_packets == (parallel_reduce * 1)) {  // && not_delivered==0
+    if (stream_count == 0 && free_packets == (parallel_reduce * 1)) {
         exit();
         return false;
     }
     return true;
 }
 
-void HalvingDoubling::insert_packet(Callable* sender) {
+void HalvingDoubling::insert_packet() {
     if (zero_latency_packets == 0 && non_zero_latency_packets == 0) {
         zero_latency_packets = parallel_reduce * 1;
-        non_zero_latency_packets =
-            get_non_zero_latency_packets();  //(nodes_in_ring-1)*parallel_reduce*1;
+        non_zero_latency_packets = get_non_zero_latency_packets();
         toggle = !toggle;
     }
     if (zero_latency_packets > 0) {
-        packets.push_back(MyPacket(
-            msg_size, stream->current_queue_id, curr_sender,
-            curr_receiver));  // vnet Must be changed for alltoall topology
+        packets.push_back(
+            MyPacket(msg_size, curr_sender, curr_receiver));
         processed = false;
         send_back = false;
         NPU_to_MA = true;
@@ -214,9 +192,8 @@ void HalvingDoubling::insert_packet(Callable* sender) {
         zero_latency_packets--;
         return;
     } else if (non_zero_latency_packets > 0) {
-        packets.push_back(MyPacket(
-            msg_size, stream->current_queue_id, curr_sender,
-            curr_receiver));  // vnet Must be changed for alltoall topology
+        packets.push_back(
+            MyPacket(msg_size, curr_sender, curr_receiver));
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
             processed = true;
@@ -250,22 +227,20 @@ bool HalvingDoubling::ready() {
     snd_req.dstRank = packet.preferred_dest;
     snd_req.tag = stream->stream_id;
     snd_req.reqType = UINT8;
-    snd_req.vnet = this->stream->current_queue_id;
     stream->owner->front_end_sim_send(
         0, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_dest,
         stream->stream_id, &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE,
         &Sys::handleEvent,
-        nullptr);  // stream_id+(packet.preferred_dest*50)
+        nullptr);
     sim_request rcv_req;
-    rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
         stream, stream->owner->id, EventType::PacketReceived,
-        packet.preferred_vnet, stream->stream_id);
+        stream->current_queue_id, stream->stream_id);
     stream->owner->front_end_sim_recv(
         0, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_src,
         stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,
         &Sys::handleEvent,
-        ehd);  // stream_id+(owner->id*50)
+        ehd);
     reduce();
     return true;
 }

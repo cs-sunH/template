@@ -54,11 +54,13 @@ is green).
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include <astra-network-analytical/common/EventQueue.h>
 
 using namespace AstraSim::ExecutionDriven;
@@ -86,14 +88,18 @@ const char* kCsvHeader =
     "session_arrival_time_ns,inter_request_interval_ns";
 
 std::string make_csv(const std::string& path) {
-    std::ofstream out(path);
-    out << kCsvHeader << "\n";
+    // M-16(2026-09-30):provenance 门 REQUIRED——经共享 helper 写出,
+    // CSV 与 sidecar 同一次落盘;本夹具是 7 列 legacy 形态,显式传入
+    // 自己的表头(统计只依赖数据行字段位次,sidecar 仍逐字节匹配)。
+    std::vector<std::string> rows;
     for (int row = 0; row < 30; ++row) {
         const uint64_t arrival =
             1000 + static_cast<uint64_t>(row / 10) * 1000;  // 3 batches
-        out << "s" << row << ",0,req_" << row << ",100,10," << arrival
-            << ",0\n";
+        rows.push_back("s" + std::to_string(row) + ",0,req_" +
+                       std::to_string(row) + ",100,10," +
+                       std::to_string(arrival) + ",0");
     }
+    FixtureProvenance::write_queue_fixture(path, rows, kCsvHeader);
     return path;
 }
 

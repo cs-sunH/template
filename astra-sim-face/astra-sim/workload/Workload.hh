@@ -14,6 +14,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CommunicatorGroup.hh"
 #include "astra-sim/workload/execution_driven/ExecutionMode.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
+#include "astra-sim/workload/DieModelAdapter.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/Statistics.hh"
@@ -66,7 +67,6 @@ class Workload : public Callable {
     void issue_recv_comm(const ExecutionDriven::NodeView& node);
     void skip_invalid(const ExecutionDriven::NodeView& node);
     void call(EventType event, CallData* data);
-    void fire();
 
     // stats
     void report();
@@ -80,6 +80,13 @@ class Workload : public Callable {
     // Multi-user local-HBM bandwidth contention (hbm-bandwidth-contention):
     // one fluid model per rank; null in the legacy closed-form mode.
     std::unique_ptr<LocalHbmBandwidthModel> local_hbm_bandwidth_model;
+    // Die backend (stage B): one adapter per rank, constructed only under
+    // compute-cost-model=die (its constructor fail-closes without the Sys
+    // die runtime). DECLARED AFTER local_hbm_bandwidth_model on purpose:
+    // members destruct in reverse order, so the adapter (and its live
+    // DieExecutions, which must drop their pending HBM die jobs) unwinds
+    // while the fluid model is still alive.
+    std::unique_ptr<DieModelAdapter> die_adapter_;
     std::unordered_map<int, uint64_t> collective_comm_node_id_map;
     std::unordered_map<int, DataSet*> collective_comm_wrapper_map;
     bool is_finished;
@@ -89,8 +96,6 @@ class Workload : public Callable {
     // injected at Sys creation (NodeStore-backed implementation in step 1-4).
     ExecutionDriven::ExecutionMode execution_mode_;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
-    // Path-2 removal (2026-08-18): the replay-clock scope flag was deleted
-    // with the replay route; strategy mode always keeps real physics.
 
     // LocalHbmBandwidthModel completion callback (re-entrant, fired from the
     // model's transition event): COMP jobs take the plain generic completion
@@ -99,6 +104,33 @@ class Workload : public Callable {
     // ownership of wlhd.
     void on_local_hbm_job_complete(WorkloadLayerHandlerData* wlhd,
                                    LocalHbmBandwidthModel::JobKind kind);
+
+    // Body shared by every generic (wlhd) node completion: node release /
+    // stats / metrics / terminal record / dependency release / static-mode
+    // auto-advance.  Extracted from Workload::call's generic branch so the
+    // LocalHbmBandwidthModel callback can complete COMP nodes through the
+    // exact same path.  (The completion-event parameter was removed: the
+    // network-bandwidth statistics it used to feed were deleted as
+    // write-only dead state.)  Public since stage B: the DieExecution of a
+    // die-backend COMP node finishes through this same single exit (contract
+    // §7.3; the HBM-delivered completions already ran it from
+    // on_local_hbm_job_complete).
+    void finish_generic_node(uint64_t node_id);
+
+    // Die backend (stage B, contract §7.6): fill the utilization fields of
+    // the node's statistics state ahead of finish_generic_node -- compact
+    // OnlineStatisticsState in online service mode (including the
+    // die-only vector_utilization), the legacy OperatorStatistics record
+    // otherwise. Must run BEFORE the generic completion consumes them.
+    void record_die_utilizations(uint64_t node_id,
+                                 double compute_utilization,
+                                 double memory_utilization,
+                                 double vector_utilization);
+
+    // Die backend adapter accessor (stage B; null off the die backend).
+    DieModelAdapter* die_model_adapter() {
+        return die_adapter_.get();
+    }
 
   private:
     // R4-14: cached "workload" logger -- fetched once in the constructor;
@@ -126,15 +158,19 @@ class Workload : public Callable {
                                     Tick end_time);
     void mark_online_terminal_or_fail(uint64_t node_id);
 
-    // Body shared by every generic (wlhd) node completion: node release /
-    // stats / metrics / terminal record / dependency release / static-mode
-    // auto-advance.  Extracted from Workload::call's generic branch so the
-    // LocalHbmBandwidthModel callback can complete COMP nodes through the
-    // exact same path.  event is the completion event the caller observed
-    // (PacketSent/PacketReceived for p2p network completions, General
-    // otherwise; the network-bandwidth statistics it used to feed were
-    // removed as write-only dead state).
-    void finish_generic_node(uint64_t node_id, EventType event);
+    // Static-run final end authority (report / sim_notify_finished /
+    // is_finished), extracted from Workload::call's tail so the
+    // LocalHbmBandwidthModel-delivered completions (which finish nodes
+    // through finish_generic_node without re-entering Workload::call) also
+    // finalize the run. Idempotent via the is_finished guard; a no-op in
+    // online mode (the ServiceCoordinator owns the online end authority).
+    void maybe_finalize_static_run();
+
+    // Die-backend COMP dispatch (contract §7.3 frozen order): timer -> cpu
+    // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
+    // fail-closed throw. Reached only under
+    // sys->compute_cost_model == ComputeCostModel::Die.
+    void issue_die_comp(const ExecutionDriven::NodeView& node);
 
     // Two-event join for p2p comm nodes with an HBM endpoint job: the node
     // completes exactly once, when both the network-side callback and the
@@ -143,10 +179,22 @@ class Workload : public Callable {
     struct HbmCommJoin {
         bool network_done = false;
         bool hbm_done = false;
-        EventType completion_event = EventType::General;
     };
     std::unordered_map<uint64_t, HbmCommJoin> hbm_comm_join_;
     void maybe_complete_hbm_joined_comm(uint64_t node_id);
+
+    // Static auto-advance re-entrancy guard: issue() can synchronously
+    // complete nodes (zero-byte collectives complete inside set_notifier;
+    // the HBM model harvests finished jobs inside issue_compute), and every
+    // completion re-enters issue_dep_free_nodes from inside its own
+    // for_each_dep_free snapshot iteration. The nested call must not take
+    // nodes out of the stale outer snapshot (the outer loop would revisit
+    // them and double-take); it only flags a rerun, and the outermost call
+    // re-snapshots until a full pass completes without synchronous
+    // completions. Online mode never nests (its completion paths are
+    // Static-gated), so the guard is idle there.
+    bool issuing_dep_free_ = false;
+    bool issue_dep_free_rerun_needed_ = false;
 };
 
 }  // namespace AstraSim

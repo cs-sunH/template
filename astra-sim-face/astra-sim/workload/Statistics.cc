@@ -63,7 +63,7 @@ void Statistics::record_start(std::shared_ptr<Chakra::ETFeederNode> node,
     const NodeId& node_id = node->id();
     const auto type = OperatorStatistics::get_operator_type(node);
     operator_statistics[node_id] =
-        OperatorStatistics(node_id, start_time, type);
+        OperatorStatistics(start_time, type);
 }
 
 void Statistics::record_end(std::shared_ptr<Chakra::ETFeederNode> node,
@@ -90,7 +90,7 @@ void Statistics::record_start(const ExecutionDriven::NodeView& node,
     }
     const auto type = OperatorStatistics::get_operator_type(node);
     operator_statistics[node_id] =
-        OperatorStatistics(node_id, start_time, type);
+        OperatorStatistics(start_time, type);
     if (type == OperatorStatistics::OperatorType::GPU) {
         note_online_gpu_start(node_id, start_time);
     }
@@ -187,7 +187,9 @@ void Statistics::complete_online_service_operator(
         note_online_gpu_end(node.global_id, end_time);
     }
 
-    state.end_time = end_time;
+    // end_time write removed (D3, 2026-09-28): the compact
+    // OnlineStatisticsState field had no terminal reader (wall_time /
+    // roofline / the GPU integrator consume the local end_time directly).
     state.completed = true;
     if (end_time > wall_time) {
         wall_time = end_time;
@@ -195,7 +197,8 @@ void Statistics::complete_online_service_operator(
     online_compaction_active_ = true;
     add_online_roofline_contribution(type, state.start_time, end_time,
                                      state.compute_utilization,
-                                     state.memory_utilization);
+                                     state.memory_utilization,
+                                     state.vector_utilization);
     if (is_gpu && end_time > state.start_time) {
         online_gpu_newest_retired_end_ =
             std::max(online_gpu_newest_retired_end_, end_time);
@@ -215,15 +218,6 @@ void Statistics::ensure_legacy_post_processing_supported() const {
                    "cannot consume compact online-service statistics; use the "
                    "online metrics finalization path instead");
     std::exit(EXIT_FAILURE);
-}
-
-Tick Statistics::get_type_time(
-    OperatorStatistics::OperatorType type) const {
-    const auto it = this->type_time.find(type);
-    if (it == this->type_time.end()) {
-        return 0;
-    }
-    return it->second;
 }
 
 Tick Statistics::calculate_type_time_in_window(
@@ -284,6 +278,8 @@ Statistics::calculate_roofline_utilization_in_window(
             online_compute_utilization_weighted_sum_.value();
         result.memory_utilization_weighted_sum =
             online_memory_utilization_weighted_sum_.value();
+        result.vector_utilization_weighted_sum =
+            online_vector_utilization_weighted_sum_.value();
         result.total_comp_time = online_total_comp_time_;
         return result;
     }
@@ -505,7 +501,8 @@ void Statistics::add_online_roofline_contribution(
     Tick start_time,
     Tick end_time,
     const std::optional<double>& compute_utilization,
-    const std::optional<double>& memory_utilization) {
+    const std::optional<double>& memory_utilization,
+    const std::optional<double>& vector_utilization) {
     if ((type != OperatorStatistics::OperatorType::CPU &&
          type != OperatorStatistics::OperatorType::GPU) ||
         end_time <= start_time) {
@@ -521,6 +518,11 @@ void Statistics::add_online_roofline_contribution(
         online_memory_utilization_weighted_sum_.add(
             rounded_online_weighted_utilization(memory_utilization.value(),
                                                 duration, "memory"));
+    }
+    if (vector_utilization.has_value()) {
+        online_vector_utilization_weighted_sum_.add(
+            rounded_online_weighted_utilization(vector_utilization.value(),
+                                                duration, "vector"));
     }
     add_online_total_comp_time(duration);
     online_roofline_newest_retired_end_ =
@@ -662,6 +664,13 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         stat_node_type = Statistics::OperatorStatistics::OperatorType::COMM;
         break;
     case ChakraNodeType::INVALID_NODE:
+    case ChakraNodeType::METADATA_NODE:
+        // Metadata nodes route through issue_metadata -> skip_invalid in
+        // Workload::issue, but record_start runs for every issued node
+        // before that dispatch. Classify them INVALID here exactly like the
+        // NodeView overload below; letting METADATA fall into the default
+        // branch would return an uninitialized OperatorType in Release
+        // builds (and abort on a supported node type).
         stat_node_type = Statistics::OperatorStatistics::OperatorType::INVALID;
         break;
     default:
@@ -753,7 +762,6 @@ Tick Statistics::_calculateTotalRuntimeFromIntervals(
     Tick total_runtime = 0;
     Tick merged_start = sorted_intervals[0].first;
     Tick merged_end = sorted_intervals[0].second;
-    const auto& logger = LoggerFactory::get_logger("statistics");
 
     for (const auto& [start, end] : sorted_intervals) {
         if (start <= merged_end) {

@@ -52,7 +52,15 @@ enum class HwResClass {
 HwResClass classify_hw_resource(const uint64_t kind_value,
                                 const bool is_cpu_op,
                                 const bool is_timer_op,
-                                const bool is_local_hbm_kv_restore) {
+                                const bool is_local_hbm_kv_restore,
+                                const bool is_pipeline_anchor = false) {
+    // Joint remote-read structural anchors carry a physical NodeStore slot
+    // but consume no COMP, COMM, or HBM capacity. Their actual endpoint
+    // traffic is issued as a separate ready work item through the original
+    // COMM/HBM gates.
+    if (is_pipeline_anchor) {
+        return HwResClass::NoOp;
+    }
     if (is_timer_op) {
         return HwResClass::NoOp;
     }
@@ -175,7 +183,16 @@ void occupy_class(HardwareResource& hr,
             }
             return;
         case HwResClass::Cpu:
-            assert(hr.num_in_flight_cpu_ops == 0);
+            // Fail-closed (C1-5 discipline, NDEBUG-independent): in online
+            // mode node-id retention is off, so this counter check is the
+            // primary double-occupy guard and must survive Release builds.
+            if (hr.num_in_flight_cpu_ops != 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical("HardwareResource CPU double-occupy: sys.id={} "
+                               "node={}",
+                               hr.sys_id, node_id);
+                std::abort();
+            }
             ++hr.num_in_flight_cpu_ops;
             if (hr.retain_node_ids_) {
                 ensure_unique_node_id(hr.cpu_ops_node, cls, hr.sys_id,
@@ -183,13 +200,18 @@ void occupy_class(HardwareResource& hr,
             }
             return;
         case HwResClass::GpuComp:
-            // The static ET path keeps its legacy single-slot debug assert;
+            // The static ET path keeps its legacy single-slot constraint;
             // the online NodeView path stays a plain count (Step 1-8
             // root-cause #3: concurrent online COMP occupancy is a
             // supported state, serialized in production only by the
             // is_available gate in Workload::issue_dep_free_nodes).
-            if (static_et_path) {
-                assert(hr.num_in_flight_gpu_comp_ops == 0);
+            if (static_et_path &&
+                hr.num_in_flight_gpu_comp_ops != 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical("HardwareResource static-ET GPU-comp "
+                               "double-occupy: sys.id={} node={}",
+                               hr.sys_id, node_id);
+                std::abort();
             }
             ++hr.num_in_flight_gpu_comp_ops;
             if (hr.retain_node_ids_) {
@@ -245,7 +267,13 @@ void release_class(HardwareResource& hr,
                 hr.retain_node_ids_ ? &hr.cpu_ops_node : nullptr, cls,
                 hr.sys_id, node_id);
             --hr.num_in_flight_cpu_ops;
-            assert(hr.num_in_flight_cpu_ops == 0);
+            if (hr.num_in_flight_cpu_ops != 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical("HardwareResource CPU release residual: "
+                               "sys.id={} node={}",
+                               hr.sys_id, node_id);
+                std::abort();
+            }
             if (hr.retain_node_ids_) {
                 hr.cpu_ops_node.erase(node_id);
             }
@@ -256,8 +284,12 @@ void release_class(HardwareResource& hr,
                 hr.retain_node_ids_ ? &hr.gpu_ops_node : nullptr, cls,
                 hr.sys_id, node_id);
             --hr.num_in_flight_gpu_comp_ops;
-            if (static_et_path) {
-                assert(hr.num_in_flight_gpu_comp_ops == 0);
+            if (static_et_path && hr.num_in_flight_gpu_comp_ops != 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical("HardwareResource static-ET GPU-comp release "
+                               "residual: sys.id={} node={}",
+                               hr.sys_id, node_id);
+                std::abort();
             }
             if (hr.retain_node_ids_) {
                 hr.gpu_ops_node.erase(node_id);
@@ -367,7 +399,10 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
                  classify_hw_resource(static_cast<uint64_t>(node.kind),
                                       node.is_cpu_op,
                                       node.is_timer_op,
-                                      node.mem.is_local_hbm_kv_restore),
+                                      node.mem.is_local_hbm_kv_restore,
+                                      node.compute.exec_role ==
+                                          ExecutionDriven::ComputeExecRole::
+                                              RemoteReadPipelineAnchor),
                  node.global_id,
                  /*static_et_path=*/false);
 }
@@ -377,7 +412,10 @@ void HardwareResource::release(const ExecutionDriven::NodeView& node) {
                   classify_hw_resource(static_cast<uint64_t>(node.kind),
                                        node.is_cpu_op,
                                        node.is_timer_op,
-                                       node.mem.is_local_hbm_kv_restore),
+                                       node.mem.is_local_hbm_kv_restore,
+                                       node.compute.exec_role ==
+                                           ExecutionDriven::ComputeExecRole::
+                                               RemoteReadPipelineAnchor),
                   node.global_id,
                   /*static_et_path=*/false);
 }
@@ -388,5 +426,8 @@ bool HardwareResource::is_available(const ExecutionDriven::NodeView& node) const
         classify_hw_resource(static_cast<uint64_t>(node.kind),
                              node.is_cpu_op,
                              node.is_timer_op,
-                             node.mem.is_local_hbm_kv_restore));
+                             node.mem.is_local_hbm_kv_restore,
+                             node.compute.exec_role ==
+                                 ExecutionDriven::ComputeExecRole::
+                                     RemoteReadPipelineAnchor));
 }

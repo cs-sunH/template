@@ -3,8 +3,12 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
+// <cstdio>/<cstdlib> restored (2026-10-01): the sim_send null-handler hard
+// abort below reports through stdio and exits via std::abort.
 #include "congestion_aware/CongestionAwareNetworkApi.hh"
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace AstraSim;
 using namespace AstraSimAnalyticalCongestionAware;
@@ -20,12 +24,6 @@ void CongestionAwareNetworkApi::set_topology(
 
     // move topology
     CongestionAwareNetworkApi::topology = std::move(topology_ptr);
-
-    // set topology-related values
-    CongestionAwareNetworkApi::dims_count =
-        CongestionAwareNetworkApi::topology->get_dims_count();
-    CongestionAwareNetworkApi::bandwidth_per_dim =
-        CongestionAwareNetworkApi::topology->get_bandwidth_per_dim();
 }
 
 void CongestionAwareNetworkApi::set_fluid_scheduler(
@@ -47,6 +45,19 @@ int CongestionAwareNetworkApi::sim_send(void* const buffer,
                                         sim_request* const request,
                                         void (*msg_handler)(void*),
                                         void* const fun_arg) {
+    // Null-handler hard abort (fix (2026-10-01), ported from the face repo):
+    // sim_recv rejects a null handler with std::abort (a registered null
+    // callback would fire as a call through nullptr); sim_send's only
+    // defense used to be Event's assert, which Release builds compile out.
+    // Same contract, same failure mode, same channel.
+    if (msg_handler == nullptr) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/congestion_aware) sim_send called "
+                     "with a null msg_handler (tag=%d dst=%d count=%llu); "
+                     "the completion callback would invoke nullptr\n",
+                     tag, dst, static_cast<unsigned long long>(count));
+        std::abort();
+    }
     // query chunk id
     const auto src = sim_comm_get_rank();
     const auto chunk_id =

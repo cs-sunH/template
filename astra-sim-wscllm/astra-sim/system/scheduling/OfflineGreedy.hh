@@ -49,6 +49,9 @@ class OfflineGreedyScheduleJournal {
                         std::vector<int> schedule,
                         uint64_t chunk_size,
                         size_t expected_consumers);
+    // Test-only observability: production code only uses publish/consume.
+    // These two accessors exist for the OfflineGreedyScheduleJournal
+    // regression test's assertions.
     static size_t pending_entry_count();
     static void reset();
 
@@ -74,6 +77,9 @@ class OfflineGreedy {
     std::vector<int> dim_size;
     OfflineGreedy(Sys* sys);
     void reset_loads();
+    // The historical inter_dim_scheduling parameter was always
+    // OfflineGreedy here (Sys only routes into this scheduler under that
+    // mode); it was removed as an always-true branch (2026-09-30).
     std::vector<int> get_chunk_scheduling(
         int64_t communicator_namespace,
         long long chunk_id,
@@ -81,7 +87,6 @@ class OfflineGreedy {
         uint64_t& remaining_data_size,
         uint64_t recommended_chunk_size,
         std::vector<bool>& dimensions_involved,
-        InterDimensionScheduling inter_dim_scheduling,
         ComType comm_type);
     uint64_t get_chunk_size_from_elapsed_time(double elapsed_time,
                                               DimElapsedTime dim,

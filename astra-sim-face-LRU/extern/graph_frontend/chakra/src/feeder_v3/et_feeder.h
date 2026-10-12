@@ -32,7 +32,7 @@ class ETFeeder {
  public:
   ChakraGlobalMetadata global_metadata;
   ETFeeder(const std::string& file_path)
-      : chakra_file(file_path, std::ios::binary | std::ios::in | std::ios::app),
+      : chakra_file(file_path, std::ios::binary | std::ios::in),
         _feeder_id(_feeder_id_cnt++),
         dependancy_resolver(RESOLVE_DATA_DEPS, RESOLVE_CTRL_DEPS) {
     if (!chakra_file.is_open())
@@ -42,7 +42,7 @@ class ETFeeder {
   }
 
   ~ETFeeder() {
-    // no explict cache release. Will be kicked-out natually.
+    // no explicit cache release. Will be kicked out naturally.
     index_map.clear();
     chakra_file.close();
   }

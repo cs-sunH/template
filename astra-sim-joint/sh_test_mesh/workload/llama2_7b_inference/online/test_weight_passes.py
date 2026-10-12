@@ -38,11 +38,14 @@ class _RecordingBuilder:
         self.comp_nodes = []
         self.all_reduces = []
 
-    def comp(self, name, num_ops, tensor_size, remote_read_size=0):
+    def comp(self, name, num_ops, tensor_size, remote_read_size=0,
+             *, die_spec=None, op_role=None):
         self.comp_nodes.append({
             "name": name, "num_ops": num_ops,
             "tensor_size": tensor_size,
             "remote_read": remote_read_size,
+            "die_spec": die_spec,
+            "op_role": op_role,
         })
 
     def all_reduce(self, name, comm_size, pg_name):
@@ -67,6 +70,7 @@ def _run(spans, **overrides):
     builder = _RecordingBuilder()
     transformer_pass_aggregated(builder, phase="test", pass_spans=spans,
                                 **{**KWARGS, **overrides})
+    # die 分支不 return spans 数（legacy 相同）；_run 只消费节点记录。
     totals = {}
     for node in builder.comp_nodes:
         category = node["name"].rsplit("_", 1)[-1]
@@ -243,3 +247,139 @@ def test_weight_passes_validation_fail_closed():
             continue
         raise AssertionError(
             f"weight_passes={bad} must fail closed (spans=2)")
+
+
+# ---------------------------------------------------------------------------
+# die 后端（第一期）：同 span 的 legacy/die 发射守恒 + spec 口径。
+# ---------------------------------------------------------------------------
+
+
+def _make_die_context():
+    from die_model_adapter import DieModelContext
+    return DieModelContext(
+        profile="mesh_die_v1",
+        die_config_path="/nonexistent/resolved_die_model.json",
+        config_hash="ef" * 32,
+        dtype="bf16",
+        model_dims={
+            "hidden": 4096, "ffn": 11008, "vocab": 32000,
+            "mlp_variant": "swiglu", "norm_type": "rmsnorm",
+            "position_encoding": "rope", "num_q_heads": 32,
+            "num_kv_heads": 32, "head_dim": 128,
+        },
+        num_q_heads=32, num_kv_heads=32, ffn_size=11008, vocab_size=32000)
+
+
+def _run_die(spans, **overrides):
+    from generate_trace import transformer_pass_aggregated as tpa
+    builder = _RecordingBuilder()
+    die_ctx = _make_die_context()
+    # 发射语境的 phase 是列车 stage 语义（prefill/decode）；测试用 decode
+    # （节点命名 phase 形参仍为 "test"，互不影响）。
+    die_ctx.begin_emission(
+        phase="decode", tensor_parallel=KWARGS["tensor_parallel"],
+        tensor_parallel_rank=KWARGS["tensor_parallel_rank"],
+        span_namespace="test", pass_spans=spans)
+    tpa(builder, phase="test", pass_spans=spans,
+        die_ctx=die_ctx, **{**KWARGS, **overrides})
+    return builder
+
+
+def _spec_layers_in_category(builder, suffix):
+    for node in builder.comp_nodes:
+        if node["name"].endswith(suffix) and node["die_spec"] is not None:
+            return node["die_spec"]["layer_count"], node["die_spec"][
+                "weight_passes"], len(node["die_spec"]["spans"])
+    raise AssertionError(f"no die node ends with {suffix!r}")
+
+
+def test_die_emission_conserves_totals_vs_legacy():
+    """同 spans/weight_passes 的 die 与 legacy 发射：逐类别 num_ops/
+    tensor_size/remote_read 总量与 AllReduce 字节逐字节相等（融合组 =
+    成分之和）。"""
+    spans = [(1, 33), (1, 34), (512, 900), (7, 120)]
+    legacy_totals, legacy_ar = _run(spans, weight_passes=2)
+    die_builder = _run_die(spans, weight_passes=2)
+    die_totals = {}
+    for node in die_builder.comp_nodes:
+        name = node["name"]
+        if "_all_layers_" in name:
+            category = name.split("_all_layers_", 1)[1]
+            # 融合组名（attention_region/ffn_region）不对应 legacy 类别键
+            # ——按成分分解：融合组的总量在守恒对拍中按"层类合计"核对。
+            category = "LAYER_AGG"
+        elif "_all_passes_" in name:
+            category = "pass_" + name.split("_all_passes_", 1)[1]
+        else:
+            category = "LAYER_AGG"
+        die_totals.setdefault(category, [0, 0, 0])
+        die_totals[category][0] += node["num_ops"]
+        die_totals[category][1] += node["tensor_size"]
+        die_totals[category][2] += node["remote_read"]
+    die_ar = sum(node["bytes"] for node in die_builder.all_reduces)
+
+    legacy_layer = [0, 0, 0]
+    for category, totals in legacy_totals.items():
+        if category.startswith("pass_"):
+            assert die_totals[category] == totals, category
+        else:
+            for i in range(3):
+                legacy_layer[i] += totals[i]
+    assert die_totals["LAYER_AGG"] == legacy_layer, (
+        f"layer totals diverged: {die_totals['LAYER_AGG']} != {legacy_layer}")
+    assert die_ar == legacy_ar
+
+
+def test_die_spec_carries_weight_passes_and_full_layer_count():
+    """spec 的 layer_count=全模层数（全区间发射）、weight_passes 如实、
+    spans 绝对位置与平铺表一致。"""
+    spans = [(1, 33), (512, 900), (1, 901)]
+    builder = _run_die(spans, weight_passes=3)
+    layers, passes, span_count = _spec_layers_in_category(
+        builder, "_mlp_residual_add")
+    assert layers == 32
+    assert passes == 3
+    assert span_count == 3
+    tail_layers, tail_passes, tail_spans = _spec_layers_in_category(
+        builder, "_all_passes_logits_projection")
+    assert tail_layers == 1
+    assert tail_passes == 3
+    assert tail_spans == 3
+    # 绝对位置恒等式（q_start = kv - tokens, kv_start = 0）。
+    # v5 紧凑 run：spec.spans 为混合 [span|run]，先规范展开再逐项断言。
+    from die_model_adapter import expand_span_records
+    for node in builder.comp_nodes:
+        if node["die_spec"] is None:
+            continue
+        expanded = expand_span_records(node["die_spec"]["spans"])
+        assert len(expanded) == len(spans)
+        for index, span in enumerate(expanded):
+            tokens, kv = spans[index]
+            assert span["q_tokens"] == tokens
+            assert span["kv_tokens"] == kv
+            assert span["q_start_pos"] == kv - tokens
+            assert span["kv_start_pos"] == 0
+
+
+def test_die_b2_b1_weight_bytes_equal():
+    """陷阱 1 防护在 die 分支同样成立：B=2 与 B=1 同迭代（同
+    weight_passes=1）的 tensor 总量差 = 第二成员的逐 span 激活/KV 分量
+    （权重零增量；参考公式与 A0 静态夹具同源）。"""
+    b1 = _run_die([(1, 100)], weight_passes=1)
+    b2 = _run_die([(1, 100), (1, 100)], weight_passes=1)
+
+    def tensor_sum(builder):
+        return sum(node["tensor_size"] for node in builder.comp_nodes)
+
+    member_activation = sum(
+        parts[1]
+        for parts in _reference_activation_parts([(1, 100)]).values())
+    # 层类参考按单 span 计；发射侧对层类乘 layers、tail 不乘——激活
+    # 参考须按同口径折叠（层类 ×32，pass_ 类 ×1）。
+    folded = 0
+    for category, parts in _reference_activation_parts([(1, 100)]).items():
+        factor = 1 if category.startswith("pass_") else 32
+        folded += parts[1] * factor
+    assert tensor_sum(b2) - tensor_sum(b1) == folded, (
+        f"B=2 - B=1 = {tensor_sum(b2) - tensor_sum(b1)}, "
+        f"member activation = {folded} (weights must not double)")

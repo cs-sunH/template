@@ -26,7 +26,6 @@ problem (总体方案 §5.4).
 #define EXECUTION_DRIVEN_REQUESTINGRESS_HH
 
 #include <cassert>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -86,6 +85,9 @@ enum class IngressCommandKind { Submit, CloseInput, EndOfFile, Error };
 struct IngressCommand {
     IngressCommandKind kind = IngressCommandKind::Submit;
     RequestEnvelope envelope;
+    // M5: the calendar reader had to park this entry on ingress backpressure
+    // at least once before it drained; its clamp is a capacity artifact.
+    bool backpressure_deferred = false;
 };
 
 class RequestIngress {
@@ -158,7 +160,8 @@ class RequestIngress {
     /// frozen late-arrival policy, unchanged. Simulation-thread report point.
     size_t late_arrival_count() const {
         return late_static_submit_ + late_external_stream_ +
-               late_future_alarm_rounding_ + t0_boundary_clamp_;
+               late_future_alarm_rounding_ + t0_boundary_clamp_ +
+               late_static_submit_backpressure_;
     }
     /// P0 fix (2026-08-30): late-arrival clamp counters SPLIT by producer
     /// path. late_static_submit_ counts Submit-path clamps of
@@ -168,6 +171,14 @@ class RequestIngress {
     /// so ANY such clamp means the reader discovered the row too late -- the
     /// defect this fix eradicates -- and the run-end gate fail-closes on it.
     size_t late_static_submit_count() const { return late_static_submit_; }
+    /// M5: Submit-path clamps of StaticCsv envelopes whose entry was parked
+    /// by ingress backpressure at least once (the bounded queue was full
+    /// when the reader offered it). A capacity artifact of the bounded
+    /// queue, not reader lateness: disclosed separately and EXEMPT from the
+    /// run-end static-arrival gate, exactly like t0_boundary_clamp_.
+    size_t late_static_submit_backpressure_count() const {
+        return late_static_submit_backpressure_;
+    }
     /// Submit-path clamps of RequestSource::ExternalStream envelopes (the
     /// command-FIFO producer / fixtures may legitimately run late; no gate).
     size_t late_external_stream_count() const { return late_external_stream_; }
@@ -219,16 +230,6 @@ class RequestIngress {
     /// observed since construction. Thread-safe.
     size_t peak_command_occupancy() const;
 
-    /// One-shot future-arrival queue-index entries currently retained.  In
-    /// the windowed reader path this is bounded by the unconsumed row window,
-    /// rather than growing with all CSV rows seen during the run.
-    size_t pending_queue_index_count() const;
-
-    /// Number of request ids reserved by successfully scheduled future alarms
-    /// which have not reached arrival_cb() yet. This stays proportional to
-    /// outstanding future alarms, not to committed batches or all requests.
-    size_t scheduled_future_arrival_count() const;
-
   private:
     struct ArrivalAlarmArg {
         RequestIngress* ingress;
@@ -265,6 +266,8 @@ class RequestIngress {
     // P0 fix (2026-08-30): late-arrival clamp counters split by producer
     // path (see the public accessors above for the exact semantics).
     size_t late_static_submit_ = 0;
+    // M5: see late_static_submit_backpressure_count(). Guarded by mtx_.
+    size_t late_static_submit_backpressure_ = 0;
     size_t late_external_stream_ = 0;
     size_t late_future_alarm_rounding_ = 0;
     size_t t0_boundary_clamp_ = 0;

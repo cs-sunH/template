@@ -46,7 +46,8 @@ class LifecycleHandler:
     def __init__(self):
         self.next_ids = {}  # rank -> 下一个 json node id
         self.pending_decode = {}  # request_id -> bool(prefill 已发、decode 未发)
-        self.delivery_count = 0
+        # (2026-09-30) N 死代码清理:原 delivery_count 只写不读,删除
+        # (wakeup_guard fixture 的同名属性有读者,不在清理之列)。
 
     def _next_id(self, rank):
         nid = self.next_ids.get(rank, 1)
@@ -73,7 +74,6 @@ class LifecycleHandler:
         }
 
     def __call__(self, request):
-        self.delivery_count += 1
         seq = request.get("delivery_sequence", -1)
         tick = request.get("tick", -1)
         reasons = request.get("reasons", [])
@@ -140,9 +140,9 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     server = BridgeServer(args.bridge_dir)
-    result = server.serve_forever(LifecycleHandler())
-    if result != 0:
-        raise RuntimeError("serve_forever returned {}".format(result))
+    server.serve_forever(LifecycleHandler())
+    # (2026-10-01 死分支清理)serve_forever 仅在 EOF 时返回 0,错误路径
+    # 均经 _fail/sys.exit 非零退出——"非零返回值"分支不可达,已删。
     print("[fixture] run end: EOF from C++; fixture service exit 0",
           flush=True)
     return 0

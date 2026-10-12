@@ -44,7 +44,6 @@ class _FixtureConfig:
     npus_count = 1
     remote_operand_loads = False
     inference_groups = ()
-    prefill_chunk_size = 1
 
 
 class _MemoryScheduler(OnlineSchedulerBase):
@@ -124,8 +123,6 @@ def _assert_after_ack(scheduler, seq: int) -> None:
         raise RuntimeError("delivery {} retained its scheduler batch after ack".format(seq))
     if scheduler.graph.batch is not None:
         raise RuntimeError("delivery {} retained its graph batch after ack".format(seq))
-    if getattr(scheduler.graph, "batch_first_step", False):
-        raise RuntimeError("delivery {} retained graph first-step state after ack".format(seq))
     for rank, builder in scheduler.graph.builders.items():
         if builder.nodes or builder.edges:
             raise RuntimeError(
@@ -191,7 +188,6 @@ def main() -> int:
     scheduler = _MemoryScheduler(
         manifest={"requests": _LazyRequests(request_count)},
         config=_FixtureConfig(),
-        mode="memory_fixture",
         profile_sink=_discard_row,
         online_stats_sink=_discard_row,
     )

@@ -62,17 +62,12 @@ const Statistics::OperatorStatistics& Statistics::get_operator_statistics(
     return operator_statistics.at(node_id);
 }
 
-const std::unordered_map<NodeId, Statistics::OperatorStatistics>& Statistics::
-    get_operator_statistics() const {
-    return operator_statistics;
-}
-
 void Statistics::record_start(std::shared_ptr<Chakra::ETFeederNode> node,
                               Tick start_time) {
     const NodeId& node_id = node->id();
     const auto type = OperatorStatistics::get_operator_type(node);
     operator_statistics[node_id] =
-        OperatorStatistics(node_id, start_time, type);
+        OperatorStatistics(start_time, type);
 }
 
 void Statistics::record_end(std::shared_ptr<Chakra::ETFeederNode> node,
@@ -99,7 +94,7 @@ void Statistics::record_start(const ExecutionDriven::NodeView& node,
     }
     const auto type = OperatorStatistics::get_operator_type(node);
     operator_statistics[node_id] =
-        OperatorStatistics(node_id, start_time, type);
+        OperatorStatistics(start_time, type);
     if (type == OperatorStatistics::OperatorType::GPU) {
         note_online_gpu_start(node_id, start_time);
     }
@@ -204,7 +199,8 @@ void Statistics::complete_online_service_operator(
     online_compaction_active_ = true;
     add_online_roofline_contribution(type, state.start_time, end_time,
                                      state.compute_utilization,
-                                     state.memory_utilization);
+                                     state.memory_utilization,
+                                     state.vector_utilization);
     if (is_gpu && end_time > state.start_time) {
         online_gpu_newest_retired_end_ =
             std::max(online_gpu_newest_retired_end_, end_time);
@@ -293,6 +289,8 @@ Statistics::calculate_roofline_utilization_in_window(
             online_compute_utilization_weighted_sum_.value();
         result.memory_utilization_weighted_sum =
             online_memory_utilization_weighted_sum_.value();
+        result.vector_utilization_weighted_sum =
+            online_vector_utilization_weighted_sum_.value();
         result.total_comp_time = online_total_comp_time_;
         return result;
     }
@@ -514,7 +512,8 @@ void Statistics::add_online_roofline_contribution(
     Tick start_time,
     Tick end_time,
     const std::optional<double>& compute_utilization,
-    const std::optional<double>& memory_utilization) {
+    const std::optional<double>& memory_utilization,
+    const std::optional<double>& vector_utilization) {
     if ((type != OperatorStatistics::OperatorType::CPU &&
          type != OperatorStatistics::OperatorType::GPU) ||
         end_time <= start_time) {
@@ -530,6 +529,13 @@ void Statistics::add_online_roofline_contribution(
         online_memory_utilization_weighted_sum_.add(
             rounded_online_weighted_utilization(memory_utilization.value(),
                                                 duration, "memory"));
+    }
+    if (vector_utilization.has_value()) {
+        // Die-backend-only aggregate (contract §7.6); unset for every legacy
+        // backend, so legacy runs keep identical accumulator behavior.
+        online_vector_utilization_weighted_sum_.add(
+            rounded_online_weighted_utilization(vector_utilization.value(),
+                                                duration, "vector"));
     }
     add_online_total_comp_time(duration);
     online_roofline_newest_retired_end_ =
@@ -684,7 +690,10 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         LoggerFactory::get_logger("statistics")
             ->critical("Invalid node_type, node.id={}, node.type={}",
                        node->id(), static_cast<uint64_t>(node->type()));
-        assert(false);
+        // Release builds strip assert(): returning would hand back an
+        // UNINITIALIZED OperatorType. Exit here, same as the file's other
+        // guards (2026-10-01 audit).
+        std::exit(EXIT_FAILURE);
     }
     return stat_node_type;
 }
@@ -718,7 +727,9 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         LoggerFactory::get_logger("statistics")
             ->critical("Invalid node kind, node.id={}, node.kind={}",
                        node.global_id, static_cast<int>(node.kind));
-        assert(false);
+        // Release builds strip assert(): returning would hand back an
+        // UNINITIALIZED OperatorType. Exit here (2026-10-01 audit).
+        std::exit(EXIT_FAILURE);
     }
     return stat_node_type;
 }
@@ -767,8 +778,6 @@ Tick Statistics::_calculateTotalRuntimeFromIntervals(
     Tick total_runtime = 0;
     Tick merged_start = sorted_intervals[0].first;
     Tick merged_end = sorted_intervals[0].second;
-    const auto& logger = LoggerFactory::get_logger("statistics");
-
     for (const auto& [start, end] : sorted_intervals) {
         if (start <= merged_end) {
             merged_end = std::max(merged_end, end);

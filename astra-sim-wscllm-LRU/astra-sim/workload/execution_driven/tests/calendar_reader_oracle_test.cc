@@ -15,7 +15,13 @@ argument (WindowedTraceReader.hh item 4): EventQueue fires a shared tick's
 EventList in insertion order; the old unbounded arm inserts turn-0 alarms
 in ROW order, the calendar arm in (arrival, queue_index) order, and within
 an equal-alarm group those orders coincide (queue_index ascending), so the
-sequences must match on ANY well-formed input -- including inputs whose
+sequences match on any well-formed input OUTSIDE the single
+counter-example family of WindowedTraceReader.hh item 4 (scope correction
+2026-09-27): a tick-1 alarm group that MIXES arrival==0 rows (clamped to
+tick 1) with genuine arrival==1 rows whose file order interleaves them --
+that one group's members may be ordered differently between the arms
+(same member set, same tick 1; the test does not construct that family).
+Within scope this includes inputs whose
 turn-0 arrivals are non-monotonic in file order (the full TraceLab queue),
 where the old BOUNDED arm was defective (491 clamped Submits on the real
 run) while the old UNBOUNDED arm was merely wasteful.
@@ -48,6 +54,7 @@ AstraSim_Analytical_Congestion_Aware_CalendarOracleTest.
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
 #include "astra-sim/workload/execution_driven/tests/LegacyOracleWindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include "common/EventQueue.h"
 
 using namespace AstraSim::ExecutionDriven;
@@ -73,7 +80,7 @@ struct FireRecord {
 // the (tick, queue_index) sequence in real fire order through the arrival
 // hook (the hook runs inside RequestIngress::arrival_cb at the alarm tick).
 template <typename Reader>
-std::vector<FireRecord> run_arm(const std::string& csv, RequestIngress& ingress,
+std::vector<FireRecord> run_arm(RequestIngress& ingress,
                                 EventQueue& eq, Reader& reader) {
     std::vector<FireRecord> seq;
     ingress.set_arrival_hook([&](const RequestEnvelope& env) {
@@ -98,7 +105,7 @@ std::vector<FireRecord> run_legacy_arm(const std::string& csv) {
     // control arm; the constructor default is 128 = bounded, which would
     // clamp the real-queue argv[1] comparison into a false failure).
     LegacyOracleWindowedTraceReader reader(csv, ingress, 0);
-    return run_arm(csv, ingress, eq, reader);
+    return run_arm(ingress, eq, reader);
 }
 
 void compare_arms(const std::string& csv, const char* label) {
@@ -110,7 +117,7 @@ void compare_arms(const std::string& csv, const char* label) {
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
     WindowedTraceReader reader(csv, ingress);
-    const std::vector<FireRecord> calendar = run_arm(csv, ingress, eq, reader);
+    const std::vector<FireRecord> calendar = run_arm(ingress, eq, reader);
 
     std::printf("[oracle:%s] turn-0 fire sequence length: legacy=%zu "
                 "calendar=%zu\n",
@@ -159,34 +166,49 @@ void compare_arms(const std::string& csv, const char* label) {
                 (unsigned long long)prov.turn0_arrival_min_ns,
                 (unsigned long long)prov.turn0_arrival_max_ns,
                 (unsigned long long)prov.turn0_adjacent_inversions);
-    std::printf("[oracle:%s] PASS: sequences identical (%zu arrivals), "
-                "late_static_submit=0, gate ok\n",
-                label, calendar.size());
+    if (g_ok) {
+        std::printf("[oracle:%s] PASS: sequences identical (%zu arrivals), "
+                    "late_static_submit=0, gate ok\n",
+                    label, calendar.size());
+    } else {
+        std::fprintf(stderr, "[oracle:%s] FAIL: see messages above\n", label);
+    }
 }
 
 // Synthetic hermetic fixture: out-of-order turn-0 across session blocks,
-// a same-tick group, an arrival==0 row, multi-turn blocks.
+// a same-tick group, an arrival==0 row, multi-turn blocks, plus (M11,
+// 2026-09-29) a '#' comment row -- both arms must skip it at the same
+// classification point so the rows after it keep aligned queue_index
+// numbering (the fire sequence below asserts the post-skip indices).
+// M-16(2026-09-30):provenance 门 REQUIRED——经共享 helper 写出,CSV 与
+// sidecar 同一次落盘(helper 对 '#' 行的统计跳过与本仓 reader 的 M11
+// 契约对齐),字节布局与原逐行写完全一致。
 void write_synthetic(const std::string& csv) {
-    std::ofstream out(csv);
-    out << "session_id,turn_index,request_id,prefill_length,decode_length,"
-           "session_arrival_time_ns,inter_request_interval_ns,description\n";
-    // File-order turn-0 arrivals: 500, 100, 300, 300, 0, 700  (blocks
-    // contiguous, arrivals wildly non-monotonic).
-    out << "s0,0,s0_r0,100,50,500,,d\n";
-    out << "s0,1,s0_r1,100,50,,90,d\n";
-    out << "s1,0,s1_r0,100,50,100,,d\n";
-    out << "s2,0,s2_r0,100,50,300,,d\n";
-    out << "s2,1,s2_r1,100,50,,50,d\n";
-    out << "s3,0,s3_r0,100,50,300,,d\n";
-    out << "s4,0,s4_r0,100,50,0,,d\n";
-    out << "s5,0,s5_r0,100,50,700,,d\n";
+    FixtureProvenance::write_queue_fixture(csv, {
+        // File-order turn-0 arrivals (ns, %1000 gate): 500000, 100000,
+        // 300000, 300000, 0, 700000  (blocks contiguous, arrivals wildly
+        // non-monotonic).
+        "s0,0,s0_r0,100,50,500000,,d",
+        "s0,1,s0_r1,100,50,,90000,d",
+        // '#' comment row (request_id starts with '#'): skipped by both
+        // arms before queue_index numbering -- it must consume no queue
+        // index.
+        "note,note,#materializer annotation row",
+        "s1,0,s1_r0,100,50,100000,,d",
+        "s2,0,s2_r0,100,50,300000,,d",
+        "s2,1,s2_r1,100,50,,50000,d",
+        "s3,0,s3_r0,100,50,300000,,d",
+        "s4,0,s4_r0,100,50,0,,d",
+        "s5,0,s5_r0,100,50,700000,,d",
+    });
 }
 
 }  // namespace
 
 int main(int argc, char* argv[]) {
     if (argc > 1) {
-        // Real queue (e.g. the full 22,816-row TraceLab queue).
+        // Real queue (e.g. the full 22,816-row TraceLab queue). M-16 起
+        // 物化队列必须自带 provenance sidecar,门在真输入上同样生效。
         compare_arms(argv[1], argv[1]);
     } else {
         const std::string csv =
@@ -195,6 +217,7 @@ int main(int argc, char* argv[]) {
         write_synthetic(csv);
         compare_arms(csv, "synthetic");
         std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
     }
     if (!g_ok) {
         std::fprintf(stderr,

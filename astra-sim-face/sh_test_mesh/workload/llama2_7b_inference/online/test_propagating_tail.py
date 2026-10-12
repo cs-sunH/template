@@ -243,11 +243,18 @@ def test_fail_closed_kv_provisional_over_limit():
 
 
 def test_env_limit_override_applies_to_delivery_sources():
-    os.environ["SH_PROPAGATING_TAIL_LIMIT"] = "3"
+    # R5-S5(2026-09-29):外部预置的 SH_PROPAGATING_TAIL_LIMIT 先保存、
+    # 结束后原样恢复——旧写法无脑覆盖 + 无条件 del,吞掉运维预置的
+    # 逃生门值并向外泄漏测试污染。
+    saved_limit = os.environ.pop("SH_PROPAGATING_TAIL_LIMIT", None)
     try:
+        os.environ["SH_PROPAGATING_TAIL_LIMIT"] = "3"
         s = _scheduler()
     finally:
-        del os.environ["SH_PROPAGATING_TAIL_LIMIT"]
+        if saved_limit is None:
+            os.environ.pop("SH_PROPAGATING_TAIL_LIMIT", None)
+        else:
+            os.environ["SH_PROPAGATING_TAIL_LIMIT"] = saved_limit
     snapshot = s.propagating_tail.snapshot()
     assert snapshot[_PROPAGATING_TAIL_SOURCE_DELIVERY]["limit"] == 3
     assert snapshot[_PROPAGATING_TAIL_SOURCE_KV]["limit"] == 3

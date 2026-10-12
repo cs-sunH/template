@@ -215,14 +215,24 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   void enable_transaction_log(const std::string& bridge_dir,
                               const std::string& run_id);
 
+  // ---- 逐端口 PortStats 生产导出（rm-backend-D1，2026-09-27） ----
+  // 正常 run 末（is_drained() 通过后、后端析构前）由 main 调用一次，把
+  // 逐端口最终 PortStats 落盘为 <directory>/remote_memory_port_stats.json
+  // ——区间积分观测面自此具备生产消费通道，不再只有测试经 port_stats()
+  // 直读与 sensing 的逐事务 jsonl。不新增配置键/开关：目录沿用既有
+  // bridge_dir 产物位置；无端口（NO_MEMORY_EXPANSION 端态）或 directory
+  // 为空时不建任何文件，维持 NO 档零 bridge 残留口径。快照经只读
+  // assemble_port_stats 组装：不推进、不结算、不改变任何后端状态。
+  void dump_port_stats(const std::string& directory) const;
+
   // §3.3：全局变迁事件 payload。只带注册时的全局 generation 序号；
   // 不保存 PortJob*、迭代器或任何端口数据。正常派发在 call() 入口释放
   // payload 并清空已出队句柄；取消与析构经 register_event_cancellable 的
   // deleter（release_transition_payload）释放；陈旧 generation 路径同样
   // 先释放 payload 再按无操作处理。
   // 访问性注记（2026-09-25）：payload 类型 public 化，供 nway 测试 S13 经
-  // call() 注入陈旧 generation（取代旧 #define private public seam）；
-  // 两个状态成员保持 private，只读经下方访问器。
+  // call() 注入陈旧 generation；两个状态成员保持 private，只读经下方
+  // 访问器。
   class TransitionEventData : public AstraSim::CallData {
    public:
     explicit TransitionEventData(uint64_t generation_value)
@@ -308,7 +318,9 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   // 巨大 bytes、巨大并发、浮点残差、溢出及 NaN 均 fail-closed，不得变成
   // 无限事件、NaN 延迟或零步死循环。
   static double require_positive_finite(double value, const char* what);
-  static double checked_add_ns(double base, double delta, const char* what);
+  // 有限性加法守恒：操作数既可为 ns 时间量亦可为字节量（端口活跃流聚合
+  // 剩余字节），命名不带量纲（原 checked_add_ns，M5-08 澄清，2026-09-26）。
+  static double checked_add_finite(double base, double delta, const char* what);
   // ceil + Tick 可表示范围检查；拒绝 NaN/inf/超出 Tick 上界。
   static AstraSim::Tick ceil_ns_to_tick(double ns, const char* what);
 
@@ -360,7 +372,11 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   PortStatsAccumulator& stats_for(std::size_t port_index);
   // 落账进行中的流完成时刻并清记录，返回该时刻的完成流数（无则 0）。
   std::size_t flush_redistribution_moment(PortStatsAccumulator& acc);
-  // 汇总单端口快照：累计器字段 + 实时作业状态推导的流数/等待计数。
+  // 重分判定谓词：flush 落账与只读快照外推共用（M5-02 修复，2026-09-26），
+  // 防止两处口径分叉。
+  static bool moment_is_redistribution(const StreamCompletionMoment& m);
+  // 汇总单端口快照：累计器字段 + 实时作业状态推导的流数/等待计数；未落账
+  // 的流完成时刻按 flush 同一谓词外推进快照（不改写累计器）。
   PortStats assemble_port_stats(std::size_t port_index) const;
 
   // ---- 逐事务明细写状态（§5.1 阶段 3 第二步；口径见 enable_transaction_log） ----

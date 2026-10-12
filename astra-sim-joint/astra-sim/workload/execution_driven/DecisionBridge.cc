@@ -28,6 +28,8 @@ The static binary never constructs a bridge (zero impact on the baseline).
 #include <cstring>
 #include <fstream>
 #include <poll.h>
+#include <set>
+#include <vector>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -54,7 +56,16 @@ std::string reason_name(const DecisionReason reason) {
         case DecisionReason::REQUEST_COMPLETE:
             return "REQUEST_COMPLETE";
     }
-    return "UNKNOWN";
+    // Dead-code cleanup (2026-09-29): the switch is exhaustive over
+    // DecisionReason; the old trailing `return "UNKNOWN";` was unreachable
+    // and existed only to pacify -Wreturn-type. An out-of-enum value is a
+    // programming error: fail loud instead of printing a bogus reason name
+    // into the request JSON (same idiom as bridge_fatal).
+    std::fprintf(stderr,
+                 "[Error] (execution_driven/bridge) reason_name: unreachable "
+                 "reason value %d\n",
+                 static_cast<int>(reason));
+    std::abort();
 }
 
 // Recursive mkdir(2) loop (no std::filesystem dependency).
@@ -99,23 +110,60 @@ nlohmann::json read_json_file(const std::string& path) {
     if (!in) {
         throw std::runtime_error("cannot open " + path);
     }
+    // Strict JSON load (same as the wscllm bridge): istream operator>>
+    // parses in NON-strict mode -- it silently consumes the FIRST JSON
+    // value and leaves trailing bytes unread, and the DOM build last-wins
+    // on duplicate object keys. These files are machine-written by paired
+    // tooling, so trailing content or a duplicate key is producer
+    // corruption, not a legal shape. json::parse in its default strict
+    // mode rejects trailing bytes outright; the stateful parse callback
+    // rejects a repeated key inside one object.
+    struct KeyGuard {
+        std::vector<std::set<std::string>> stack;
+        std::string duplicate;
+        bool operator()(int, nlohmann::json::parse_event_t event,
+                        nlohmann::json& parsed) {
+            using EVT = nlohmann::json::parse_event_t;
+            if (event == EVT::object_start) {
+                stack.emplace_back();
+            } else if (event == EVT::key) {
+                if (!stack.back().insert(parsed.get<std::string>()).second) {
+                    duplicate = parsed.get<std::string>();
+                }
+            } else if (event == EVT::object_end && !stack.empty()) {
+                stack.pop_back();
+            }
+            return true;  // observe only; never discard subtree
+        }
+    } guard;
     nlohmann::json value;
-    in >> value;
-    if (in.bad()) {
-        throw std::runtime_error("corrupt JSON in " + path);
+    try {
+        value = nlohmann::json::parse(in, guard);
+    } catch (const nlohmann::json::exception& e) {
+        throw std::runtime_error("corrupt JSON in " + path + ": " + e.what());
+    }
+    if (!guard.duplicate.empty()) {
+        throw std::runtime_error("duplicate JSON key \"" + guard.duplicate +
+                                 "\" in " + path);
     }
     return value;
 }
 
 // poll() helper: 0 = timeout, 1 = readable (POLLIN or POLLHUP), -1 = error.
-// timeout_ms == 0 means wait forever.
+// timeout_ms == 0 means wait forever. L9 (2026-09-29): EINTR retries the
+// poll instead of surfacing as a fatal channel error -- a signal
+// interruption is not a bridge failure (the timeout restarts on the retry;
+// the bound stays a liveness bound, not an exact deadline).
 int wait_readable(int fd, int timeout_ms) {
     struct pollfd pfd;
     pfd.fd = fd;
     pfd.events = POLLIN | POLLHUP;
     pfd.revents = 0;
     const int ms = (timeout_ms == 0) ? -1 : timeout_ms;
-    const int r = ::poll(&pfd, 1, ms);
+    int r;
+    do {
+        r = ::poll(&pfd, 1, ms);
+    } while (r < 0 && errno == EINTR);
     if (r == 0) {
         return 0;
     }
@@ -140,6 +188,15 @@ nlohmann::json build_request_json(const StateDelta& delta) {
     // Step 1-11: the explicit T->T+1 deferral record (0 = same-tick delivery).
     req["deferred_from_tick"] = delta.deferred_from_tick;
     req["reasons"] = nlohmann::json::array();
+    // W1 (joint work ledger): the mailbox-local event sequence, additive and
+    // parallel to reasons[] (index i of event_seqs is the seq of the event
+    // reasons[i]). Preserves the intra-epoch event order on the wire: the
+    // mailbox assigns push-order seqs at drain time, so (delivery_sequence,
+    // event_seq) is a stable identity for the epoch's decision events. The
+    // reasons[] order itself was already frozen (mailbox drain order), so
+    // this array is a pure additive disclosure -- old peers that ignore it
+    // parse identically.
+    req["event_seqs"] = nlohmann::json::array();
     req["arrivals"] = nlohmann::json::array();
     req["completed_groups"] = nlohmann::json::array();
     // Phase 4 (v1): per-node terminal facts since the previous delivery.
@@ -205,6 +262,7 @@ nlohmann::json build_request_json(const StateDelta& delta) {
     req["ledger_summary"] = {{"injected_unfinished", std::move(injected)}};
     for (const auto& ev : delta.events) {
         req["reasons"].push_back(reason_name(ev.reason));
+        req["event_seqs"].push_back(ev.seq);
         switch (ev.reason) {
             case DecisionReason::ARRIVAL: {
                 nlohmann::json a;
@@ -427,8 +485,8 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
                          "delivery_sequence=" +
                          std::to_string(seq) + ")");
         }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            continue;  // spurious wake: re-enter the poll
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            continue;  // spurious wake or signal interruption: re-enter poll
         }
         bridge_fatal("read resp_notify.fifo: " +
                      std::string(std::strerror(errno)));
@@ -450,7 +508,16 @@ void FileDecisionBridge::notify_python() {
     ::sigemptyset(&ignore_action.sa_mask);
     ::sigaction(SIGPIPE, &ignore_action, &old_action);
     const char byte = '\n';
-    const ssize_t n = ::write(req_notify_fd_, &byte, 1);
+    // L9 (2026-09-29): EINTR/EAGAIN retry the 1-byte doorbell write instead
+    // of failing the bridge -- a signal interruption (or a transiently full
+    // FIFO buffer under the 1:1 backpressure contract) is retryable, not a
+    // dead peer. The channel is one byte per round trip, so the retry
+    // cannot spin in practice.
+    ssize_t n;
+    do {
+        n = ::write(req_notify_fd_, &byte, 1);
+    } while (n < 0 &&
+             (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK));
     ::sigaction(SIGPIPE, &old_action, nullptr);
     if (n < 0) {
         if (errno == EPIPE) {
@@ -473,6 +540,328 @@ void FileDecisionBridge::set_link_telemetry_provider(
     link_telemetry_provider_ = std::move(provider);
 }
 
+void FileDecisionBridge::set_work_ledger_provider(
+    WorkLedgerProvider provider) {
+    // W1: same startup-only contract as the telemetry provider.
+    if (stats_.roundtrip_count > 0) {
+        bridge_fatal("set_work_ledger_provider after the first delivery "
+                     "(the request schema cannot change mid-run)");
+    }
+    work_ledger_provider_ = std::move(provider);
+}
+
+// ------------------------------------------------- W1 work-ledger diff --
+
+namespace {
+
+// One section's entries flattened to (work_id -> entry copy). Copies, not
+// pointers: the blocks are read out of temporaries (state.value(...) returns
+// by value), so a pointer map would dangle at the end of each loop
+// iteration.
+using WorkKeyedMap = std::map<std::string, nlohmann::json>;
+
+WorkKeyedMap index_section(const nlohmann::json& array) {
+    WorkKeyedMap indexed;
+    if (array.is_array()) {
+        for (const auto& entry : array) {
+            if (entry.is_object() && entry.contains("work_id")) {
+                indexed.emplace(entry.at("work_id").get<std::string>(),
+                                entry);
+            }
+        }
+    }
+    return indexed;
+}
+
+// Flatten the four sections of a state frame. Sections without per-key
+// identity (noc links, slot counters) are intentionally NOT diffed -- they
+// are gauge-style facts re-exported with every full frame, not lifecycle
+// works.
+struct StateIndex {
+    WorkKeyedMap nodes;
+    WorkKeyedMap hbm;
+    WorkKeyedMap pool;
+    WorkKeyedMap flows;
+};
+
+StateIndex index_state(const nlohmann::json& state) {
+    StateIndex index;
+    if (!state.is_object()) {
+        return index;
+    }
+    // nodes / hbm: per-rank blocks; pool: per-port blocks.
+    for (const char* const section : {"nodes", "hbm", "pool"}) {
+        const auto section_it = state.find(section);
+        if (section_it == state.end() || !section_it->is_array()) {
+            continue;
+        }
+        for (const auto& block : *section_it) {
+            for (const char* const key : {"nodes", "jobs"}) {
+                const auto it = block.find(key);
+                if (it == block.end()) {
+                    continue;
+                }
+                for (const auto& entry : *it) {
+                    if (entry.is_object() && entry.contains("work_id")) {
+                        WorkKeyedMap& target =
+                            section[0] == 'n' ? index.nodes
+                            : section[0] == 'h' ? index.hbm
+                                                : index.pool;
+                        target.emplace(entry.at("work_id").get<std::string>(),
+                                       entry);
+                    }
+                }
+            }
+        }
+    }
+    const auto noc = state.find("noc");
+    if (noc != state.end() && noc->is_object()) {
+        const auto flows = noc->find("flows");
+        if (flows != noc->end()) {
+            index.flows = index_section(*flows);
+        }
+    }
+    return index;
+}
+
+nlohmann::json make_event_id(const uint64_t delivery_sequence,
+                             const uint64_t tick, uint64_t& next_seq) {
+    return nlohmann::json{
+        {"tick", tick},
+        {"delivery_sequence", delivery_sequence},
+        {"producer", "work_ledger_diff"},
+        {"local_seq", next_seq++},
+    };
+}
+
+nlohmann::json make_event(const std::string& kind, const std::string& work_id,
+                          const uint64_t tick, const uint64_t delivery_sequence,
+                          uint64_t& next_seq, nlohmann::json extra) {
+    nlohmann::json event = nlohmann::json{
+        {"event_id", make_event_id(delivery_sequence, tick, next_seq)},
+        {"kind", kind},
+        {"work_id", work_id},
+        {"tick", tick},
+    };
+    event.merge_patch(std::move(extra));
+    return event;
+}
+
+// Stable identity facts plus the authoritative residual a first-seen
+// resource leg carries (the Python ledger builds its WorkIdentity and
+// remaining state from these fields).
+nlohmann::json commit_payload(const nlohmann::json& entry) {
+    nlohmann::json payload;
+    // NOTE: "kind" (the node kind name) is deliberately NOT carried -- the
+    // event-level "kind" discriminator is the lifecycle kind and must not
+    // be shadowed by the payload merge; the operation name travels as
+    // "operation".
+    static const char* const kCarry[] = {
+        "request_id", "stage", "generation", "rank", "node_id", "operation",
+        "leg", "num_ops", "bytes", "runtime_ns", "tensor_size",
+        "total_bytes", "dependencies", "parents", "service_unit", "route",
+        "flow_id", "port_index", "issue_seq", "state",
+        // Resource legs may first enter the delta after they have already
+        // received service.  Keep the backend's authoritative residual in
+        // the commit itself; carrying only the static total silently turns
+        // a mid-flight first sighting into a stale upper bound on Python.
+        "remaining_ops", "remaining_bytes", "remaining_latency_ns",
+        "total_latency_ns"};
+    for (const char* key : kCarry) {
+        const auto it = entry.find(key);
+        if (it != entry.end()) {
+            payload[key] = *it;
+        }
+    }
+    nlohmann::json total = nlohmann::json::object();
+    if (entry.contains("num_ops")) {
+        total["ops"] = entry.at("num_ops");
+    }
+    if (entry.contains("bytes")) {
+        total["bytes"] = entry.at("bytes");
+    } else if (entry.contains("total_bytes")) {
+        total["bytes"] = entry.at("total_bytes");
+    }
+    if (entry.contains("total_latency_ns")) {
+        total["latency_ns"] = entry.at("total_latency_ns");
+    } else if (entry.contains("runtime_ns")) {
+        total["latency_ns"] = entry.at("runtime_ns");
+    }
+    if (!total.empty()) {
+        payload["total"] = std::move(total);
+    }
+    return payload;
+}
+
+// One section's diff. `compact_out` non-null selects the compact node
+// encoding (see DecisionBridge.hh); lifecycle changes land in the four
+// lists and only progress events keep the full envelope.
+struct CompactOut {
+    nlohmann::json* commits = nullptr;
+    nlohmann::json* issues = nullptr;
+    nlohmann::json* completions = nullptr;
+    nlohmann::json* vanished = nullptr;
+};
+
+void diff_one_section(const WorkKeyedMap& prev, const WorkKeyedMap& cur,
+                      const uint64_t tick, const uint64_t delivery_sequence,
+                      uint64_t& next_seq, nlohmann::json& events,
+                      const CompactOut& compact_out = CompactOut{}) {
+    static const char* const kProgressFields[] = {
+        "remaining_ops", "remaining_bytes", "remaining_latency_ns"};
+    const bool compact = compact_out.commits != nullptr;
+    for (const auto& cur_item : cur) {
+        const std::string& work_id = cur_item.first;
+        const nlohmann::json& cur_entry = cur_item.second;
+        const auto prev_it = prev.find(work_id);
+        if (prev_it == prev.end()) {
+            // New work: commit, then replay the current lifecycle flags.
+            if (compact) {
+                compact_out.commits->push_back(cur_entry);
+                ++next_seq;
+                continue;
+            }
+            nlohmann::json payload = commit_payload(cur_entry);
+            const bool issued = cur_entry.value("issued", false);
+            const bool finished = cur_entry.value("finished", false);
+            if (!payload.contains("state")) {
+                payload["state"] = finished ? "completed"
+                                             : (issued ? "issued"
+                                                       : "committed");
+            }
+            events.push_back(make_event("commit", work_id, tick,
+                                        delivery_sequence, next_seq,
+                                        std::move(payload)));
+            continue;
+        }
+        const nlohmann::json& prev_entry = prev_it->second;
+        if (cur_entry.value("issued", false) &&
+            !prev_entry.value("issued", false)) {
+            if (compact) {
+                compact_out.issues->push_back(work_id);
+                ++next_seq;
+            } else {
+                events.push_back(make_event("issue", work_id, tick,
+                                            delivery_sequence, next_seq,
+                                            nlohmann::json::object()));
+            }
+        }
+        for (const char* field : kProgressFields) {
+            const auto cur_it = cur_entry.find(field);
+            const auto prev_it2 = prev_entry.find(field);
+            if (cur_it == cur_entry.end() || prev_it2 == prev_entry.end()) {
+                continue;
+            }
+            const double served =
+                prev_it2->get<double>() - cur_it->get<double>();
+            if (served > 0.5e-9) {
+                const std::string dim =
+                    std::string(field) == "remaining_ops" ? "ops"
+                    : std::string(field) == "remaining_bytes" ? "bytes"
+                                                              : "latency_ns";
+                // Keep the producer's current residual beside the derived
+                // delta.  A consumer can reconcile the subtraction against
+                // the backend's tick-end value and avoid turning a rounded
+                // diff into a silently different ledger remainder.
+                nlohmann::json progress_payload = {
+                    {"delta_served", nlohmann::json{{dim, served}}}};
+                progress_payload[field] = *cur_it;
+                events.push_back(make_event(
+                    "progress", work_id, tick, delivery_sequence, next_seq,
+                    std::move(progress_payload)));
+            }
+        }
+        if (cur_entry.value("finished", false) &&
+            !prev_entry.value("finished", false)) {
+            if (compact) {
+                compact_out.completions->push_back(work_id);
+                ++next_seq;
+            } else {
+                events.push_back(make_event("completion", work_id, tick,
+                                            delivery_sequence, next_seq,
+                                            nlohmann::json::object()));
+            }
+        }
+    }
+    for (const auto& prev_item : prev) {
+        const std::string& work_id = prev_item.first;
+        const nlohmann::json& prev_entry = prev_item.second;
+        if (cur.find(work_id) != cur.end()) {
+            continue;
+        }
+        // Vanished: NodeStore GC collected a finished node / the resource
+        // model completed a job. Emit the missing terminal transitions.
+        if (compact) {
+            compact_out.vanished->push_back(work_id);
+            // The Python side deterministically expands every vanished id
+            // into completion + release (completion idempotent on an
+            // already-completed work), so the counter consumes exactly 2.
+            next_seq += 2;
+            continue;
+        }
+        if (!prev_entry.value("finished", false)) {
+            events.push_back(make_event("completion", work_id, tick,
+                                        delivery_sequence, next_seq,
+                                        nlohmann::json::object()));
+        }
+        events.push_back(make_event("ack", work_id, tick, delivery_sequence,
+                                    next_seq, nlohmann::json::object()));
+        events.push_back(make_event("release", work_id, tick,
+                                    delivery_sequence, next_seq,
+                                    nlohmann::json::object()));
+    }
+}
+
+}  // namespace
+
+WorkLedgerDiff diff_work_ledger_states(const nlohmann::json& prev_state,
+                                       const nlohmann::json& cur_state,
+                                       const uint64_t delivery_sequence,
+                                       const uint64_t tick,
+                                       uint64_t& next_local_seq) {
+    const StateIndex prev = index_state(prev_state);
+    const StateIndex cur = index_state(cur_state);
+    WorkLedgerDiff result;
+    result.events = nlohmann::json::array();
+    nlohmann::json node_commits = nlohmann::json::array();
+    nlohmann::json node_issues = nlohmann::json::array();
+    nlohmann::json node_completions = nlohmann::json::array();
+    nlohmann::json node_vanished = nlohmann::json::array();
+    CompactOut compact_out{&node_commits, &node_issues, &node_completions,
+                           &node_vanished};
+    diff_one_section(prev.nodes, cur.nodes, tick, delivery_sequence,
+                     next_local_seq, result.events, compact_out);
+    diff_one_section(prev.hbm, cur.hbm, tick, delivery_sequence,
+                     next_local_seq, result.events);
+    diff_one_section(prev.pool, cur.pool, tick, delivery_sequence,
+                     next_local_seq, result.events);
+    diff_one_section(prev.flows, cur.flows, tick, delivery_sequence,
+                     next_local_seq, result.events);
+    const bool any_compact = !node_commits.empty() || !node_issues.empty() ||
+                             !node_completions.empty() ||
+                             !node_vanished.empty();
+    if (any_compact) {
+        const uint64_t total_compact = node_commits.size() +
+                                       node_issues.size() +
+                                       node_completions.size() +
+                                       2 * node_vanished.size();
+        // The nodes section runs FIRST, so the compact entries consumed
+        // seqs [base, base+total_compact) and the leg/progress events
+        // consumed [base+total_compact, counter): subtract BOTH tails.
+        result.compact = nlohmann::json{
+            {"node_commits", std::move(node_commits)},
+            {"node_issues", std::move(node_issues)},
+            {"node_completions", std::move(node_completions)},
+            {"node_vanished", std::move(node_vanished)},
+            {"seq_base", next_local_seq - total_compact -
+                             result.events.size()},
+        };
+    } else {
+        result.compact = nlohmann::json();
+    }
+    return result;
+}
+
 GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // Phase 6 (方案 §9.1): bridge_ns -- the full blocking round trip from the
     // C++ side (write request + notify + wait for Python + read response).
@@ -490,6 +879,13 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     nlohmann::json request = build_request_json(delta);
     if (link_telemetry_provider_) {
         request["link_telemetry"] = link_telemetry_provider_(delta);
+    }
+    // W1 (joint work ledger): attach the additive top-level `work_ledger`
+    // object when the provider is installed (sibling of link_telemetry and
+    // ledger_summary; never occupies the v0 snapshot reserved slot). The
+    // provider runs exactly once per delivery epoch (1:1 backpressure).
+    if (work_ledger_provider_) {
+        request["work_ledger"] = work_ledger_provider_(delta);
     }
     write_file_atomic(request_path(seq), request);
     // Defect-B fix: ensure BOTH long-lived channel ends exist (lazy for
@@ -512,12 +908,27 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
     }
-    if (resp.value("schema_version", -1) != kDecisionBridgeSchemaVersion) {
+    // (2026-10-01 审查修复) 三处字段读取显式类型判定：nlohmann value()
+    // 对"键在场但类型不符"抛 type_error.302（非返回缺省）——此三处在
+    // parse_graph_batch 的 try/catch 之前执行，裸异常击穿本文件"每个
+    // 协议违反打印一行 [Error] 再 abort"的通道契约（无诊断 terminate）。
+    if (!resp.contains("schema_version") ||
+        !resp["schema_version"].is_number_integer()) {
+        bridge_fatal("response schema_version missing or not an integer "
+                     "for delivery_sequence=" + std::to_string(seq));
+    }
+    if (resp["schema_version"].get<int>() != kDecisionBridgeSchemaVersion) {
         bridge_fatal("response schema_version mismatch for delivery_sequence=" +
                      std::to_string(seq));
     }
+    if (!resp.contains("source_delivery_sequence") ||
+        !resp["source_delivery_sequence"].is_number_unsigned()) {
+        bridge_fatal("response source_delivery_sequence missing or not an "
+                     "unsigned integer for delivery_sequence=" +
+                     std::to_string(seq));
+    }
     const uint64_t source_seq =
-        resp.value("source_delivery_sequence", uint64_t(-1));
+        resp["source_delivery_sequence"].get<uint64_t>();
     if (source_seq != seq) {
         bridge_fatal("response source_delivery_sequence=" +
                      std::to_string(source_seq) + " != request seq=" +
@@ -528,7 +939,12 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // failure aborts with the Python error message, never with a misleading
     // structural diagnostic -- the _fail skeleton carries all-empty arrays
     // and would parse cleanly anyway.
-    const std::string error = resp.value("error", std::string());
+    if (resp.contains("error") && !resp["error"].is_string()) {
+        bridge_fatal("response error field is not a string for "
+                     "delivery_sequence=" + std::to_string(seq));
+    }
+    const std::string error =
+        resp.contains("error") ? resp["error"].get<std::string>() : "";
     if (!error.empty()) {
         bridge_fatal("Python decision failed for delivery_sequence=" +
                      std::to_string(seq) + ": " + error);

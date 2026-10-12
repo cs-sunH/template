@@ -34,6 +34,7 @@ import copy
 import json
 import os
 import sys
+from pathlib import Path
 
 _ONLINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -68,7 +69,7 @@ def _snapshot(scheduler, sink):
         "online_log_rows": scheduler.online_log_count,
         "emitted_by_delivery": len(scheduler._emitted_by_delivery),
         "ack_watermark": (scheduler._acked_through, tuple(sorted(scheduler._acked_out_of_order))),
-        "kv_events": len(scheduler.kv_manager.events),
+        "kv_events": len(scheduler.kv_manager.events_since(0)),
         "kv_events_emitted": scheduler._kv_events_emitted,
         # 阶段 5 §8.2:provisional KV 账本也纳入幂等快照(重放不重复入账,
         # fail-closed 尝试不污染;ack 流把暂存条目逐笔转入 committed 层)。
@@ -101,7 +102,10 @@ def main(argv=None) -> int:
     with open(manifest_path, "r", encoding="utf-8") as source:
         manifest = json.load(source)
     if args.config:
-        config = load_face_trace_config(args.config)
+        # args.config 是 str;loader 签名是 Path(默认参数 CONFIG_CSV_PATH 亦
+        # 为 Path),裸传 str 会在 .exists() 处崩溃——统一转 Path
+        # (与 online_service.py 同款修复)。
+        config = load_face_trace_config(Path(args.config))
     else:
         config = load_face_trace_config()
 
@@ -111,6 +115,12 @@ def main(argv=None) -> int:
 
     sink = _CountingDigestSink()
     graph = GraphBatchBuilder(config)
+    # M11/R5-S1(2026-09-29):本夹具逐 delta 双喂、收尾才批量 ack——未确认
+    # 交付数(_emitted_by_delivery / _provisional_kv_actions)随全量输入
+    # 增长,不受生产桥单在途背压窗口(默认上限 8 = 8x 窗口)约束;构造前
+    # 显式调大,否则第 9 笔交付即 fail-closed RuntimeError。环境变量
+    # SH_PROPAGATING_TAIL_LIMIT 显式设置时仍最优先(逃生门语义不变)。
+    FaceOnlineScheduler.propagating_tail_delivery_limit = 4096
     # B3(2026-08-23):本夹具逐 delta 双喂,是重放路径的唯一常规触发者——
     # 显式开启防御性深拷缓存(生产 online_service 走默认引用缓存)。
     scheduler = FaceOnlineScheduler(

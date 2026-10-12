@@ -62,6 +62,11 @@ class CommonNetworkApi : public AstraNetworkAPI {
      */
     [[nodiscard]] timespec_t sim_get_time() override;
 
+    /// The analytical backend merges same-tick events only inside its invoke
+    /// pass (EventQueue::in_invoke_context); see AstraNetworkAPI for the
+    /// contract and Sys::try_register_event for the consumer.
+    [[nodiscard]] bool backend_in_invoke_context() const override;
+
     /**
      * Implement sim_schedule of AstraNetworkAPI.
      */

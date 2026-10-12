@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -116,14 +117,25 @@ class BoundedSorterTests(unittest.TestCase):
                 os.environ.pop("SH_SLO_SORT_CHUNK", None)
 
     def test_spill_files_cleaned_up(self):
-        sorter = BoundedSorter(chunk_size=2)
-        for value in range(50):
-            sorter.add(value)
-        consumed = list(sorter.sorted_iter())
-        self.assertEqual(consumed, list(range(50)))
-        leftovers = list(Path(tempfile.gettempdir()).glob(
-            "slo_bounded_sort_*"))
-        self.assertEqual(leftovers, [])
+        # E1(2026-09-28): 改查本测试的私有隔离目录——原实现 glob 全局
+        # tempfile.gettempdir(),多仓并行/并发测试下他进程的
+        # slo_bounded_sort_* 残留（或尚未结束的并发 spill）必然造成假红。
+        # 经 tempfile.tempdir 定点重定向（不改生产代码;套件单线程,还原
+        # 于 finally）。清理契约保持可红:sorted_iter 后隔离目录残留任何
+        # spill 文件仍然失败。
+        with tempfile.TemporaryDirectory() as isolated:
+            old_tempdir = tempfile.tempdir
+            tempfile.tempdir = isolated
+            try:
+                sorter = BoundedSorter(chunk_size=2)
+                for value in range(50):
+                    sorter.add(value)
+                consumed = list(sorter.sorted_iter())
+                self.assertEqual(consumed, list(range(50)))
+            finally:
+                tempfile.tempdir = old_tempdir
+            leftovers = list(Path(isolated).glob("slo_bounded_sort_*"))
+            self.assertEqual(leftovers, [])
 
 
 class PercentileManyTests(unittest.TestCase):
@@ -433,43 +445,47 @@ def run_old_chain_replica(run_dir: Path) -> int:
 
 
 def run_new_chain(run_dir: Path) -> int:
+    # bash 收到的两个路径参数须 POSIX 形态：Windows 反斜杠路径会被 bash
+    # 按转义解释（rc 127 假红）；Linux 上 as_posix() == str()，行为不变。
     proc = subprocess.run(
-        ["bash", str(SLO_TOOLS_DIR.parent / "run_scripts" /
-                     "run_slo_postprocess.sh"), str(run_dir)],
+        ["bash",
+         (SLO_TOOLS_DIR.parent / "run_scripts" / "run_slo_postprocess.sh")
+         .as_posix(), run_dir.as_posix()],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return proc.returncode
 
 
+@unittest.skipIf(shutil.which("bash") is None or sys.platform == "win32",
+                 "run_slo_postprocess.sh needs a POSIX bash on PATH and is "
+                 "not supported on win32 (E1 2026-09-28: the bare "
+                 "`which bash` gate still ran the win32 suite red)")
 class DriverParityTests(unittest.TestCase):
     """合成 sh_1.0 fixture：旧链复刻 vs 当前链（单遍 driver）逐字节。"""
 
     def _compare(self, tag: str, mutate=None, expect_rc: int = 0):
         run_dir = build_sh10_run_dir()
-        try:
-            if mutate is not None:
-                mutate(run_dir)
-            rc_old = run_old_chain_replica(run_dir)
-            self.assertEqual(rc_old, expect_rc)
-            old_out = run_dir.parent / f"{tag}_old_out"
-            _snapshot(run_dir, old_out)
-            _clear_slo_products(run_dir)
-            rc_new = run_new_chain(run_dir)
-            self.assertEqual(rc_new, expect_rc)
-            new_out = run_dir.parent / f"{tag}_new_out"
-            _snapshot(run_dir, new_out)
-            diffs = []
-            for name in sorted(set(os.listdir(old_out))
-                               | set(os.listdir(new_out))):
-                old_bytes = ((old_out / name).read_bytes()
-                             if (old_out / name).is_file() else None)
-                new_bytes = ((new_out / name).read_bytes()
-                             if (new_out / name).is_file() else None)
-                if old_bytes != new_bytes:
-                    diffs.append(name)
-            self.assertEqual(diffs, [], f"产物字节差: {diffs}")
-            return old_out, new_out
-        finally:
-            pass
+        if mutate is not None:
+            mutate(run_dir)
+        rc_old = run_old_chain_replica(run_dir)
+        self.assertEqual(rc_old, expect_rc)
+        old_out = run_dir.parent / f"{tag}_old_out"
+        _snapshot(run_dir, old_out)
+        _clear_slo_products(run_dir)
+        rc_new = run_new_chain(run_dir)
+        self.assertEqual(rc_new, expect_rc)
+        new_out = run_dir.parent / f"{tag}_new_out"
+        _snapshot(run_dir, new_out)
+        diffs = []
+        for name in sorted(set(os.listdir(old_out))
+                           | set(os.listdir(new_out))):
+            old_bytes = ((old_out / name).read_bytes()
+                         if (old_out / name).is_file() else None)
+            new_bytes = ((new_out / name).read_bytes()
+                         if (new_out / name).is_file() else None)
+            if old_bytes != new_bytes:
+                diffs.append(name)
+        self.assertEqual(diffs, [], f"产物字节差: {diffs}")
+        return old_out, new_out
 
     def test_happy_path_byte_identical(self):
         old_out, _ = self._compare("happy")
@@ -481,10 +497,112 @@ class DriverParityTests(unittest.TestCase):
         self._compare("g3", lambda rd: (rd / "request_metrics.csv").unlink())
 
     def test_failure_token_manifest_missing(self):
-        # 仅 hbm_watermark 失败（exit=3 链语义：整链 rc=1 + FAIL 条目）。
+        # 仅 hbm_watermark 失败（缺 token manifest 的 fail-closed exit=2
+        # 链语义：整链 rc=1 + FAIL 条目；exit=3 仅容量违规层）。
         def mutate(rd):
             (rd / "manifest.json").unlink()
         self._compare("notoken", mutate, expect_rc=1)
+
+
+class DriverSinkOrderRedLineTest(unittest.TestCase):
+    """红线 R8（sink 次序固定，slo_postprocess_driver sinks 列表声明）：
+    decision-log 派发次序恒为 kv → load → hop → watermark（watermark 注入
+    session_hint 必须最后）。
+
+    E1（2026-09-28）补可红断言：parity 字节对拍对次序不敏感——watermark
+    注入的 session_hint 键其余 sink 不读，重排 sinks 列表不改变任何产物
+    字节（旧断言面全绿放行）。此探针经 patch Sink.guard 观测进程内真实
+    派发次序（prepare/逐记录 consume/finalize 三段各成一组同序块），
+    任何次序重排在此必红。"""
+
+    EXPECTED_ORDER = (
+        "kv_cache_adapter.py", "load_imbalance.py",
+        "hopbytes.py", "hbm_watermark.py")
+
+    def test_decision_log_dispatch_order_is_fixed(self):
+        from unittest import mock
+        import slo_postprocess_driver as driver
+        run_dir = build_sh10_run_dir()
+        observed = []
+        original_guard = driver.Sink.guard
+
+        def guard(self, body):
+            if self.alive:
+                observed.append(self.label)
+            return original_guard(self, body)
+
+        with mock.patch.object(driver.Sink, "guard", guard):
+            self.assertEqual(driver.run(run_dir), 0)
+        self.assertTrue(observed, "driver 未派发任何 sink 步骤")
+        block = len(self.EXPECTED_ORDER)
+        self.assertEqual(observed[:block], list(self.EXPECTED_ORDER),
+                         "sink 派发次序违反红线 R8（kv→load→hop→watermark）")
+        self.assertEqual(
+            len(observed) % block, 0,
+            f"派发步数 {len(observed)} 非 {block} 的整数倍（次序块破损）")
+        for index in range(0, len(observed), block):
+            self.assertEqual(
+                observed[index:index + block], list(self.EXPECTED_ORDER),
+                f"第 {index // block} 个次序块违反红线 R8: "
+                f"{observed[index:index + block]}")
+
+
+class DriverReadErrorFailClosedTests(unittest.TestCase):
+    """P2-16（2026-09-28）：decision-log 坏字节（UnicodeDecodeError）不得
+    裸 traceback 崩溃整个后处理进程——共享迭代器把 INPUT_READ_ERRORS 转
+    fail-closed（各存活 sink 以同一错误死亡 rc=2 → FAIL 记录落盘），进程
+    退出码按既定折叠口径（非 3 失败 → 1）。旧行为：逃逸成裸 traceback、
+    FAIL 记录丢失、run_slo_postprocess.sh 把 rc=1 误解释。"""
+
+    def test_bad_utf8_decision_log_fail_closed_no_crash(self):
+        run_dir = build_sh10_run_dir()
+        log = run_dir / "results" / "online_decision_log.jsonl"
+        log.write_bytes(log.read_bytes() + b"\xff\xfe corrupt \x80\n")
+        proc = subprocess.run(
+            [sys.executable,
+             str(SLO_TOOLS_DIR / "slo_postprocess_driver.py"),
+             run_dir.as_posix()],
+            capture_output=True, text=True)
+        # 折叠口径（A5-1）：非 EXIT_VIOLATION 失败 → 进程 rc=1（既定）。
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        # 不再裸 traceback；错误以 FAIL-CLOSED 文案可达。
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertIn("FAIL-CLOSED", proc.stderr)
+        # FAIL 记录不再丢失：死亡 sink 的 rc=2 步骤落 FAIL 标记。
+        fail_marker = run_dir / "slo_postprocess.FAIL"
+        self.assertTrue(fail_marker.is_file(), "FAIL 标记未落盘")
+        self.assertIn("exit=2", fail_marker.read_text(encoding="utf-8"))
+
+    def test_bad_gzip_tail_restore_step_fails_closed(self):
+        # F2_PY（2026-09-29）RV5-F1：步执行壳（run_step/Sink.guard）补接
+        # P2-16 的 INPUT_READ_ERRORS 臂。真实构造（非 mock）：合法 gzip
+        # 成员（[METRIC] 行在前一成员内，G1/G2 早停门可过）+ 坏 deflate
+        # 尾成员——restore 步整读 cpp.log.gz 时在步体内撞上读取错误。
+        # 旧行为：except Exception 臂 → 步 exit=1 + Python Traceback，
+        # 与独立 CLI run_main 的 FAIL-CLOSED exit=2 自钉契约失真（triage
+        # 无法从 FAIL 标记区分"输入损坏"与"工具崩溃"）；新行为：与共享
+        # decision-log 迭代器同文案同 rc=2。
+        import gzip as _gzip
+        run_dir = build_sh10_run_dir()
+        payload = (run_dir / "cpp.log").read_bytes()
+        (run_dir / "cpp.log").unlink()
+        with open(run_dir / "cpp.log.gz", "wb") as handle:
+            handle.write(_gzip.compress(payload))
+            # 第二个成员：合法 gzip 头 + 垃圾 deflate 流（坏尾形态）。
+            handle.write(b"\x1f\x8b\x08\x00" + b"\xde\xad\xbe\xef" * 16)
+        proc = subprocess.run(
+            [sys.executable,
+             str(SLO_TOOLS_DIR / "slo_postprocess_driver.py"),
+             run_dir.as_posix()],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertIn("FAIL-CLOSED", proc.stderr)
+        fail_marker = run_dir / "slo_postprocess.FAIL"
+        self.assertTrue(fail_marker.is_file(), "FAIL 标记未落盘")
+        marker = fail_marker.read_text(encoding="utf-8")
+        self.assertIn("restore_decomposition.py (detail=full) (exit=2)",
+                      marker)
 
 
 if __name__ == "__main__":

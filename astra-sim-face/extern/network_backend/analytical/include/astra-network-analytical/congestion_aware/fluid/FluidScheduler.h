@@ -48,19 +48,16 @@ class FluidScheduler {
      * node emitted from a tick-end callback or the deferred drain would insert
      * a current_time EventList into the main queue and trip the EventQueue
      * strict-increase assert on the next proceed(). Online drivers must enable
-     * deferred mode; the static path stays in the legacy mode (default), which
-     * is byte-for-byte the pre-extension behavior.
+     * deferred mode; the legacy flush arm (default) is only exercised when
+     * the backend/ED tests drive the scheduler directly (the old static
+     * binary was removed on 2026-08-18) and stays byte-for-byte the
+     * pre-extension behavior.
      */
     void set_deferred_flush_mode(bool enabled) noexcept;
 
     void mark_event_loop_started() noexcept;
     void handle_service_wakeup(uint64_t generation) noexcept;
     void handle_tail_arrival(FlowId flow_id) noexcept;
-
-    [[nodiscard]] uint64_t get_active_flow_count() const noexcept;
-    [[nodiscard]] uint64_t get_active_route_memberships() const noexcept;
-    [[nodiscard]] uint64_t get_total_started_flows() const noexcept;
-    [[nodiscard]] uint64_t get_total_completed_flows() const noexcept;
 
     /// -------------------------------------------------------------------
     /// WP6 NoC link observer (SLO pipeline B2, /tmp/slo_wps/plans/
@@ -87,16 +84,6 @@ class FluidScheduler {
     /// output failure.
     using LinkObserverBucketVisitor = bool (*)(void*, uint64_t, LinkId, uint64_t);
 
-    /// Bounded-residency accounting exposed for the focused observer test.
-    /// spool_record_count is on-disk logical history, never resident rows.
-    struct LinkObserverStorage {
-        size_t resident_bucket_entries;
-        size_t resident_bucket_capacity;
-        size_t active_link_count;
-        uint64_t spool_record_count;
-        bool spool_open;
-    };
-
     void enable_link_observer(uint64_t link_bucket_ns) noexcept;
 
     /// Bucket length actually in effect (echoed into every link record).
@@ -113,8 +100,6 @@ class FluidScheduler {
 
     [[nodiscard]] const std::vector<LinkObserverTotals>&
     link_observer_totals() const noexcept;
-
-    [[nodiscard]] LinkObserverStorage link_observer_storage() const noexcept;
 
     /// Free the integration arrays after the records were emitted (RSS
     /// discipline; the observer stays disabled afterwards).
@@ -185,6 +170,10 @@ class FluidScheduler {
         NetworkAnalytical::EventTime lhs, NetworkAnalytical::EventTime rhs) const noexcept;
 
     std::shared_ptr<NetworkAnalytical::EventQueue> event_queue;
+    /// Owning flow table. Elements are addressed by raw pointer from the
+    /// non-cancellable tail-arrival events (element pointers survive rehash;
+    /// erased only by handle_tail_arrival). Destruction requires event-queue
+    /// quiescence -- see ~FluidScheduler for the lifetime invariant.
     std::unordered_map<FlowId, FluidFlow> flows_by_id;
     std::vector<FluidLinkState> link_states;
     std::vector<PendingFlowStart> pending_starts;
@@ -203,7 +192,9 @@ class FluidScheduler {
 
     uint64_t active_flow_count;
     uint64_t active_route_memberships;
-    uint64_t total_started_flows;
+    // (2026-09-30) total_started_flows removed: the counter was write-only
+    // in this repo (the joint repo's work-ledger reader does not exist
+    // here).
     uint64_t total_completed_flows;
     uint64_t max_active_flows;
     uint64_t max_route_memberships;

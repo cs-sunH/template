@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 #include "astra-sim/system/SendPacketEventHandlerData.hh"
+#include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/astraccl/custom_collectives/CustomAlgorithm.hh"
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
@@ -18,14 +19,13 @@ using namespace Chakra;
 
 typedef ChakraProtoMsg::NodeType ChakraNodeType;
 
-CustomAlgorithm::CustomAlgorithm(std::string et_filename, int id, int pos_in_comm, CommunicatorGroup* comm_group) : Algorithm() {
+CustomAlgorithm::CustomAlgorithm(std::string et_filename, int pos_in_comm, CommunicatorGroup* comm_group) : Algorithm() {
     try {
         et_filename = et_filename + "." + to_string(pos_in_comm) + ".et";
         this->et_filename = et_filename;
         this->et_feeder = new Chakra::FeederV3::ETFeeder(et_filename);
         this->comm_group = comm_group;
-    } catch (const std::runtime_error& e) {
-        // TODO(jinsun): Solve.
+    } catch (const std::exception& e) {
         auto logger = AstraSim::LoggerFactory::get_logger("system::astraccl::custom_collectives");
         logger->error("Error: Cannot access et file for collective algorithm: \n'" + et_filename + "'.\n"
                      "Please adjust the system JSON file, and keep in mind the path to the et file is relative to the working directory.\n"
@@ -33,7 +33,6 @@ CustomAlgorithm::CustomAlgorithm(std::string et_filename, int id, int pos_in_com
                      "We will find a way to avoid this issue in the future.");
         std::exit(1);
     }
-    this->id = id;
 }
 
 CustomAlgorithm::~CustomAlgorithm() {
@@ -67,6 +66,17 @@ void CustomAlgorithm::issue(shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
         sim_request snd_req;
         int dst_rank = convert_algo_rank_to_real_rank(node->comm_dst(),
                                                       node->id());
+        if (dst_rank == this->stream->owner->id) {
+            // Fail closed on self-send (ported from the face-LRU 2026-09-29
+            // audit): a send to the issuing rank itself would register a
+            // completion that can never be matched by the network (or
+            // silently change timing), so refuse it here, after the
+            // algorithm rank has been mapped to the real NPU id.
+            Sys::sys_panic(
+                "CustomAlgorithm: ET node " + std::to_string(node->id()) +
+                " requests COMM_SEND to the issuing rank itself (self-send, "
+                "src == dst == " + std::to_string(dst_rank) + ")");
+        }
         snd_req.srcRank = node->comm_src(this->stream->owner->id);
         snd_req.dstRank = dst_rank;
         snd_req.reqType = UINT8;
@@ -77,9 +87,9 @@ void CustomAlgorithm::issue(shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
         sehd->event = EventType::PacketSent;
         stream->owner->front_end_sim_send(
             0, Sys::dummy_data,
-            // Note that we're using the comm size as hardcoded in the Impl
-            // Chakra et, ed through the comm. api, and ignore the comm.size fed
-            // in the workload chakra et. TODO: fix.
+            // Note: the comm size is hardcoded in the Impl's Chakra ET and
+            // passed through the comm API; the comm size fed in the workload
+            // Chakra ET is ignored here.
             node->comm_size(), UINT8, dst_rank, node->comm_tag(),
             &snd_req, Sys::FrontEndSendRecvType::NATIVE, &Sys::handleEvent,
             sehd);
@@ -87,6 +97,14 @@ void CustomAlgorithm::issue(shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
         sim_request rcv_req;
         int src_rank = convert_algo_rank_to_real_rank(node->comm_src(),
                                                       node->id());
+        if (src_rank == this->stream->owner->id) {
+            // Fail closed on self-recv (ported from the face-LRU 2026-09-29
+            // audit), mirroring the COMM_SEND guard above.
+            Sys::sys_panic(
+                "CustomAlgorithm: ET node " + std::to_string(node->id()) +
+                " requests COMM_RECV from the issuing rank itself (self-send, "
+                "src == dst == " + std::to_string(src_rank) + ")");
+        }
         RecvPacketEventHandlerData* rcehd = new RecvPacketEventHandlerData;
         rcehd->wlhd = new WorkloadLayerHandlerData;
         rcehd->wlhd->node_id = node->id();
@@ -108,6 +126,19 @@ void CustomAlgorithm::issue(shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
             runtime = node->runtime() * 1000;
         }
         stream->owner->register_event(this, EventType::General, wlhd, runtime);
+    } else {
+        // Fail closed (ported from the face-LRU 2026-09-29 audit):
+        // take_node() above already moved this node into the dependency
+        // resolver's ongoing set, but for any node type this class cannot
+        // execute (e.g. the phantom INVALID_NODE(0), METADATA_NODE(1),
+        // MEM_LOAD_NODE(2), MEM_STORE_NODE(3), COMM_COLL_NODE(7)) no event
+        // would ever be registered, finish_node() would never fire, and
+        // the algorithm would hang forever below exit()'s
+        // "ongoing empty && free empty" condition without any diagnostic.
+        Sys::sys_panic(
+            "CustomAlgorithm: ET node " + std::to_string(node->id()) +
+            " has unexecutable type " + std::to_string(static_cast<int>(type)) +
+            " (supported: COMP_NODE=4, COMM_SEND_NODE=5, COMM_RECV_NODE=6)");
     }
 }
 

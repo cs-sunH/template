@@ -16,6 +16,7 @@ LICENSE file in the root directory of this source tree.
 #include <json/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <stdlib.h>
 #include <unistd.h>
@@ -53,6 +54,13 @@ void record_node_terminal(
 // Strict communicator-group key parsing: '7x' previously became 7 and an
 // out-of-range id escaped as an uncaught std::out_of_range. Fail loudly with
 // the offending key instead (wl-1of1#2).
+// Group ids must also be positive (matching the generator, which rejects
+// pg_id <= 0): key "0" would build a group no ET node can ever reach
+// (extract_comm_group special-cases pg_name "0" as the default all-rank
+// group without a table lookup), and a negative id yields a negative
+// stream-id band base that folds outside the COLLECTIVE tag window. The
+// set_id-side guard was a bare assert compiled out of release builds until
+// 2026-10-01, when it was upgraded to a Release-active sys_panic.
 int parse_comm_group_id_strict(const std::string& comm_group_name) {
     try {
         size_t pos = 0;
@@ -61,6 +69,13 @@ int parse_comm_group_id_strict(const std::string& comm_group_name) {
             LoggerFactory::get_logger("workload")
                 ->critical("invalid communicator group key '{}' (trailing "
                            "characters)",
+                           comm_group_name);
+            exit(EXIT_FAILURE);
+        }
+        if (comm_group_id <= 0) {
+            LoggerFactory::get_logger("workload")
+                ->critical("invalid communicator group key '{}' (group ids "
+                           "must be positive integers)",
                            comm_group_name);
             exit(EXIT_FAILURE);
         }
@@ -121,8 +136,10 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                 this->et_feeder, sys->id);
     }
     this->comm_groups.clear();
-    // TODO: parametrize the number of available hardware resources
-    this->hw_resource = new HardwareResource(1, sys->id, execution_mode);
+    // Known limitation: the per-rank hardware resource model is never
+    // parametrized -- one NPU, giving one in-flight slot per resource class
+    // (CPU / GPU compute / GPU comm, see HardwareResource::occupy).
+    this->hw_resource = new HardwareResource(sys->id, execution_mode);
     this->local_mem_usage_tracker =
         std::make_unique<LocalMemUsageTracker>(sys->id);
     // Multi-user local-HBM bandwidth contention: one fluid model per rank
@@ -147,6 +164,14 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                        "bound)");
         exit(EXIT_FAILURE);
     }
+    // Stage B (die backend): the per-rank adapter owns the live
+    // DieExecutions and the Sys-owned plan cache handle. Constructed only
+    // under compute-cost-model=die (the adapter fail-closes without the
+    // Sys die runtime, which initialize_sys guarantees when the backend is
+    // selected).
+    if (this->sys->compute_cost_model == ComputeCostModel::Die) {
+        this->die_adapter_ = std::make_unique<DieModelAdapter>(this);
+    }
     initialize_comm_groups(comm_group_filename);
     this->stats = new Statistics(this);
     if (this->execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
@@ -157,7 +182,25 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
 }
 
 Workload::~Workload() {
+    // Stage B teardown FIRST: every live DieExecution cancels its pending
+    // event and drops its pending HBM die job while all collaborators (the
+    // fluid model, the graph source) are still alive (design doc §6.3: no
+    // leak, no double completion, no dangling callbacks).
+    if (this->die_adapter_ != nullptr) {
+        this->die_adapter_->shutdown();
+    }
+
     comm_groups.clear();
+
+    // R1-C3 fix: collective DataSets whose CollectiveCommunicationFinished
+    // callback never ran (online-mode early termination, exception unwind)
+    // stayed in this map and leaked. The normal path always erases its entry
+    // before deleting, so this only sees never-completed wrappers.
+    for (auto& kv : collective_comm_wrapper_map) {
+        delete kv.second;
+    }
+    collective_comm_wrapper_map.clear();
+    collective_comm_node_id_map.clear();
 
     if (this->et_feeder != nullptr) {
         delete this->et_feeder;
@@ -215,8 +258,12 @@ void Workload::mark_online_terminal_or_fail(uint64_t node_id) {
 }
 
 void Workload::initialize_comm_groups(string comm_group_filename) {
-    // communicator group input file is not given
-    if (comm_group_filename.find("empty") != std::string::npos) {
+    // communicator group input file is not given. Exact-equality sentinel
+    // (same rule as the Logging.cc log-path sentinels and the cxxopts
+    // default "empty"): the old substring match silently zeroed the
+    // comm groups and skipped the existence check for ANY path containing
+    // "empty" (e.g. a directory named empty_run/).
+    if (comm_group_filename == "empty") {
         comm_groups.clear();
         return;
     }
@@ -224,41 +271,107 @@ void Workload::initialize_comm_groups(string comm_group_filename) {
     ifstream inFile;
     json j;
     inFile.open(comm_group_filename);
-    inFile >> j;
+    // S6 fix (2026-09-28): fail-closed config loading. The bare
+    // `inFile >> j` had two failure shapes: an unopenable file failed OPEN
+    // (j stayed null, the loop below silently ran zero iterations -- the run
+    // proceeded with no comm groups), and a malformed file threw an
+    // uncaught nlohmann parse_error (terminate). Both now exit through the
+    // repo's standard config-load shape with the file path and the reason.
+    if (!inFile.is_open()) {
+        workload_logger_->critical("cannot open communicator group file: {}",
+                                   comm_group_filename);
+        std::exit(EXIT_FAILURE);
+    }
+    try {
+        inFile >> j;
+    } catch (const std::exception& e) {
+        workload_logger_->critical(
+            "failed to parse communicator group file {}: {}",
+            comm_group_filename, e.what());
+        std::exit(EXIT_FAILURE);
+    }
+
+    // R2-3 fix (2026-09-28): gate the top level on objectness before the
+    // loop -- it.key() below (and in the catch) throws json::invalid_iterator
+    // when iterating a non-object, which used to escape the Workload and Sys
+    // constructors as an uncaught exception -> terminate.
+    if (!j.is_object()) {
+        workload_logger_->critical(
+            "communicator group file {} must contain a JSON object mapping "
+            "group names to rank arrays or {{ranks, dimensions}} objects",
+            comm_group_filename);
+        std::exit(EXIT_FAILURE);
+    }
 
     for (json::iterator it = j.begin(); it != j.end(); ++it) {
-        std::string comm_group_name = it.key();
-        int comm_group_id = parse_comm_group_id_strict(comm_group_name);
+        // R2-3 fix (2026-09-28): entry-level type errors inside the loop
+        // body (a missing "ranks" key -> json::out_of_range, wrong-typed
+        // rank/dimension elements -> json::type_error, the explicit shape
+        // throw below, and a throwing CommunicatorGroup constructor) used to
+        // escape through the Workload and Sys constructors (no try on that
+        // chain) -> terminate, without the structured critical line the S6
+        // fix introduced for the file-level failures. Route them through the
+        // same fail-closed shape. Reading it.key() in the catch is safe: the
+        // objectness gate above guarantees an object iterator.
+        try {
+            std::string comm_group_name = it.key();
+            int comm_group_id = parse_comm_group_id_strict(comm_group_name);
 
-        std::vector<int> involved_NPUs;
-        std::vector<int> dimension_sizes;
-        if (it.value().is_array()) {
-            involved_NPUs = it.value().get<std::vector<int>>();
-        } else if (it.value().is_object()) {
-            involved_NPUs =
-                it.value().at("ranks").get<std::vector<int>>();
-            if (it.value().contains("dimensions")) {
-                dimension_sizes = it.value()
-                                      .at("dimensions")
-                                      .get<std::vector<int>>();
+            std::vector<int> involved_NPUs;
+            std::vector<int> dimension_sizes;
+            if (it.value().is_array()) {
+                involved_NPUs = it.value().get<std::vector<int>>();
+            } else if (it.value().is_object()) {
+                involved_NPUs =
+                    it.value().at("ranks").get<std::vector<int>>();
+                if (it.value().contains("dimensions")) {
+                    dimension_sizes = it.value()
+                                          .at("dimensions")
+                                          .get<std::vector<int>>();
+                }
+            } else {
+                throw std::runtime_error(
+                    "Communicator group must be a rank array or an object "
+                    "with ranks and dimensions");
             }
-        } else {
-            throw std::runtime_error(
-                "Communicator group must be a rank array or an object with "
-                "ranks and dimensions");
-        }
 
-        comm_groups[comm_group_id] = std::make_shared<CommunicatorGroup>(
-            comm_group_id, involved_NPUs, sys, dimension_sizes);
+            comm_groups[comm_group_id] = std::make_shared<CommunicatorGroup>(
+                comm_group_id, involved_NPUs, sys, dimension_sizes);
+        } catch (const std::exception& e) {
+            workload_logger_->critical(
+                "invalid communicator group entry '{}' in {}: {}",
+                it.key(), comm_group_filename, e.what());
+            std::exit(EXIT_FAILURE);
+        }
     }
 }
 
 void Workload::issue_pytorch_pg_metadata(
     const ExecutionDriven::NodeView& node) {
+    // Ordering contract (R2-HN3): within one committed graph batch, every pg
+    // metadata node that declares a group is committed before the first
+    // collective node that references it -- the builder always emits
+    // declaration nodes ahead of their consumers and the committer preserves
+    // that order, so extract_comm_group never sees a reference whose
+    // declaration is still pending inside the same batch (that shape would
+    // fail closed there with "communicator group not found").
     // For read comm groups from torch, might overwrite previous.
     std::string pg_info = node.inputs_values;
     if (pg_info.empty()) {
         return;
+    }
+    // Fail closed on malformed payloads: the pg metadata is carried as an
+    // inner JSON array wrapped in two quote characters on each side, so a
+    // shorter inputs_values cannot hold one. substr(2, size - 4) on such
+    // input would either throw std::out_of_range (size < 2, uncaught ->
+    // terminate) or silently underflow the count (2 <= size < 4); reject
+    // it with a structured error instead of crashing or failing open.
+    if (pg_info.size() < 4) {
+        workload_logger_->critical(
+            "malformed pg metadata on node {}: inputs_values is {} bytes, "
+            "too short for the wrapped pg payload (expected \"'...'\")",
+            node.global_id, pg_info.size());
+        std::exit(EXIT_FAILURE);
     }
     pg_info = pg_info.substr(2, pg_info.size() - 4);
 
@@ -276,47 +389,99 @@ void Workload::issue_pytorch_pg_metadata(
                 }
             }
 
-            int32_t pgNameInt = std::stoi(pgName);
+            // Same strict parse as initialize_comm_groups (S-C1): "7x"
+            // must not silently collapse to id 7 and displace a
+            // file-defined group; non-positive ids are rejected as well.
+            const int32_t pgNameInt = parse_comm_group_id_strict(pgName);
+            // Same key==id convention as initialize_comm_groups: the map key
+            // is the raw pg name (extract_comm_group looks groups up by that
+            // name) and the group id equals the key, so the dedup below
+            // genuinely recognizes a same-key group whether it was read from
+            // the comm-group file or registered by an earlier metadata node.
+            // The previous id=pgNameInt+1 offset made the id check always
+            // fail for file-initialized groups (id==key), letting metadata
+            // silently replace them and discard their cached comm_plans.
             auto existing = this->comm_groups.find(pgNameInt);
             if (existing != this->comm_groups.end() && existing->second &&
-                existing->second->get_id() == pgNameInt + 1 &&
+                existing->second->get_id() == pgNameInt &&
                 existing->second->matches_definition(involved_NPUs)) {
                 continue;
             }
-            // To ensure pgName > 0
+            // R9-A1 fix (2026-09-29): a same-key group with a DIFFERENT
+            // definition used to be silently replaced here. The dedup
+            // predicate compares dimensions too, and the pg metadata payload
+            // carries no dimensions, so it always missed a file-defined
+            // shaped group (this repo's only shaped-group producer) and the
+            // unshaped metadata group displaced it along with its cached
+            // comm_plans -- a silent behavior change for every collective on
+            // that group. Same key + different definition is a configuration
+            // contradiction: fail closed instead of silently displacing.
+            if (existing != this->comm_groups.end() && existing->second &&
+                existing->second->get_id() == pgNameInt) {
+                workload_logger_->critical(
+                    "pg metadata on node {} redefines communicator group {} "
+                    "with a different definition than the registered one "
+                    "(file-defined shaped groups cannot be displaced by "
+                    "unshaped pg metadata)",
+                    node.global_id, pgNameInt);
+                std::exit(EXIT_FAILURE);
+            }
             auto cg = std::make_shared<CommunicatorGroup>(
-                pgNameInt + 1, involved_NPUs, sys);
+                pgNameInt, involved_NPUs, sys);
             this->comm_groups[pgNameInt] = cg;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Error parsing or processing JSON: " << e.what()
-                  << std::endl;
+        // S6 fix (2026-09-28): the former catch-only-cerr failed OPEN -- a
+        // malformed pg metadata payload left the previous/stale group state
+        // in place and the run continued. The function's own header comment
+        // (and the short-payload guard above) already promise fail-closed;
+        // make the parse/processing errors honor it the same way.
+        workload_logger_->critical("malformed pg metadata on node {}: {}",
+                                   node.global_id, e.what());
+        std::exit(EXIT_FAILURE);
     }
 }
 
 void Workload::issue_dep_free_nodes() {
-    // Step 1-4: iterate the GraphSource free views (ascending id, byte-exact
-    // order of the pre-phase-1 std::set copy). Static auto-advance only --
-    // call() gates this behind the execution mode; online mode issues only
-    // through the post-commit deferred path (steps 1-6/1-11), which calls
-    // this function directly per rank.
-    graph_source_->for_each_dep_free([&](const auto& nv) {
-        if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-            // Step 1-8: online availability check on the NodeView
-            // (et_node is nullptr in online mode). Strategy mode keeps the
-            // real serialized physics (path-2 removal 2026-08-18: the
-            // replay-only concurrent calibrated-COMP bypass was deleted with
-            // the replay route).
-            if (hw_resource->is_available(nv)) {
-                issue(nv);
+    // H1 fix (2026-09-29): a synchronous completion inside issue() (zero-byte
+    // collective -> DataSet(0) fires set_notifier inline; HBM harvest inside
+    // issue_compute) re-enters this function while the outer
+    // graph_source_->for_each_dep_free snapshot iteration is still running.
+    // The nested pass used to issue (take_node) siblings that the stale
+    // outer snapshot would visit later, and the outer revisit then
+    // double-took a node -> runtime_error -> terminate. The guard defers the
+    // nested pass to a fresh snapshot taken after the outer pass finishes.
+    if (issuing_dep_free_) {
+        issue_dep_free_rerun_needed_ = true;
+        return;
+    }
+    issuing_dep_free_ = true;
+    do {
+        issue_dep_free_rerun_needed_ = false;
+        // Step 1-4: iterate the GraphSource free views (ascending id,
+        // byte-exact order of the pre-phase-1 std::set copy). Static
+        // auto-advance only -- call() gates this behind the execution mode;
+        // online mode issues only through the post-commit deferred path
+        // (steps 1-6/1-11), which calls this function directly per rank.
+        graph_source_->for_each_dep_free([&](const auto& nv) {
+            if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
+                // Step 1-8: online availability check on the NodeView
+                // (et_node is nullptr in online mode). Strategy mode keeps the
+                // real serialized physics (path-2 removal 2026-08-18: the
+                // replay-only concurrent calibrated-COMP bypass was deleted with
+                // the replay route).
+                if (hw_resource->is_available(nv)) {
+                    issue(nv);
+                }
+            } else {
+                auto node = graph_source_->et_node(nv.global_id);
+                if (hw_resource->is_available(node)) {
+                    issue(nv);
+                }
             }
-        } else {
-            auto node = graph_source_->et_node(nv.global_id);
-            if (hw_resource->is_available(node)) {
-                issue(nv);
-            }
-        }
-    });
+        });
+    } while (issue_dep_free_rerun_needed_);
+    issuing_dep_free_ = false;
 }
 
 void Workload::issue(const ExecutionDriven::NodeView& node) {
@@ -374,7 +539,12 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
                 "MEM_LOAD/MEM_STORE nodes require the remote memory "
                 "backend, which this repository removes (A.2, 2026-09-05)");
         } else if (node.node_type == ChakraNodeType::COMP_NODE) {
-            if (!this->sys->roofline_enabled) {
+            if (sys->compute_cost_model == ComputeCostModel::Die) {
+                // Die backend (stage B, contract §7.3): the frozen dispatch
+                // order lives in issue_die_comp; the legacy roofline/fluid
+                // path below is unreachable under this backend.
+                issue_die_comp(node);
+            } else if (!this->sys->roofline_enabled) {
                 issue_replay(node);
             } else {
                 if (node.is_cpu_op) {
@@ -403,7 +573,10 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
 }
 
 void Workload::issue_metadata(const ExecutionDriven::NodeView& node) {
-    // TODO: someway to identify this metadata node is a pytorch pg node
+    // Known limitation: the ET format carries no marker identifying a
+    // METADATA_NODE as a PyTorch process-group record, so every metadata
+    // node is speculatively handed to issue_pytorch_pg_metadata (which
+    // tolerates that and returns early on empty inputs_values).
     issue_pytorch_pg_metadata(node);
     this->skip_invalid(node);  // for proper dependancy resolving
 }
@@ -413,8 +586,9 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
     wlhd->node_id = node.global_id;
     uint64_t runtime = 1ul;
     if (node.compute.runtime_ns != 0ul) {
-        // chakra runtimes are in microseconds and the GraphSource adapter
-        // already converted them into nanoseconds
+        // runtime_ns is always consumed in nanoseconds: the GraphSource
+        // adapter converts chakra micros at parse time (view_of), and the
+        // online GraphBatch carries planner durations directly in ns
         runtime = node.compute.runtime_ns;
     }
     if (!node.is_cpu_op) {
@@ -423,7 +597,74 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
     sys->register_event(this, EventType::General, wlhd, runtime);
 }
 
+void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
+    // Contract §7.3 dispatch order (frozen 2026-10-03): is_timer_op -> old
+    // timer path; is_cpu_op -> issue_replay; op_role=control_marker -> the
+    // legacy micro-job semantics verbatim; die_spec -> DieModelAdapter
+    // (runtime_ns must be 0); anything else -> fail-closed. The legacy
+    // roofline closed form is NEVER reachable under the die backend.
+    if (node.is_timer_op) {
+        issue_replay(node);
+        return;
+    }
+    if (node.is_cpu_op) {
+        issue_replay(node);
+        return;
+    }
+    if (node.compute.die_spec != nullptr && node.compute.runtime_ns != 0) {
+        // The GraphBatch parser already rejects this combination (N12 /
+        // contract §2); reaching it here means a producer that bypassed the
+        // parser (e.g. a static ET view). Fail closed instead of letting a
+        // calibrated runtime silently bypass the die execution.
+        throw std::runtime_error(
+            "die backend requires runtime_ns == 0 on nodes carrying a "
+            "die_op_spec (node " +
+            std::to_string(node.global_id) + ")");
+    }
+    if (node.compute.op_role == ExecutionDriven::OpRole::ControlMarker) {
+        // Legacy micro-job semantics, byte-for-byte (contract §7.3): with
+        // the HBM fluid model the marker drains a (1 op, 1 byte) COMP job
+        // (the model's own latency phase included); without it a 1 ns
+        // event. No die macro-group launch, no plan, no PE/VEC stages.
+        WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
+        wlhd->node_id = node.global_id;
+        if (local_hbm_bandwidth_model != nullptr) {
+            local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+        } else {
+            hw_resource->tics_gpu_ops += 1;
+            sys->register_event(this, EventType::General, wlhd, 1);
+        }
+        return;
+    }
+    if (node.compute.die_spec == nullptr) {
+        // Contract §2/§7.3: a real COMP without a die_op_spec is a
+        // generator defect -- never a silent roofline/replay fallback.
+        throw std::runtime_error(
+            "die backend requires die_op_spec on real COMP node " +
+            std::to_string(node.global_id) +
+            " (op_role=compute without a spec; refusing to fall back to "
+            "roofline or replay)");
+    }
+    // Compatibility statistics only (contract §2): num_ops/tensor_size stay
+    // visible to the metric side-band; the die execution never charges them
+    // as a second cost source.
+    if (MetricCollector::instance().enabled()) {
+        MetricCollector::instance().on_compute_issue(
+            sys->id, node.compute.num_ops, node.compute.tensor_size);
+    }
+    die_adapter_->issue_die(node);
+}
+
 void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
+    if (sys->compute_cost_model == ComputeCostModel::Die) {
+        // Stage B red line (design doc §6.4): the die backend must not run
+        // the legacy closed-form roofline / fluid COMP path -- reaching here
+        // means the COMP dispatch order regressed.
+        throw std::runtime_error(
+            "Workload::issue_comp (legacy roofline path) must never run "
+            "under the die compute-cost-model backend");
+    }
+
     if (!this->sys->roofline_enabled) {
         throw std::runtime_error(
             "Roofline model is not enabled for non-replay comp");
@@ -457,6 +698,16 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         return;
     }
 
+    // (2026-09-30, R2 audit) Reject the unsupported remote-operand load
+    // BEFORE allocating wlhd: the old order leaked the handler on this
+    // throw path (process terminates anyway, but the leak-free discipline
+    // costs nothing when the check simply moves up).
+    if (node.compute.has_remote_weight_bytes) {
+        throw std::runtime_error(
+            "remote operand pipeline loads are not supported in this "
+            "repository (no remote memory backend)");
+    }
+
     WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
     wlhd->node_id = node.global_id;
 
@@ -487,20 +738,28 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     }
     double elapsed_time = compute_elapsed_time;
 
-    if (node.compute.has_remote_weight_bytes) {
-        throw std::runtime_error(
-            "remote operand pipeline loads are not supported in this "
-            "repository (no remote memory backend)");
+    // R5-Q5 fix: elapsed_time comes from user data divided by configured
+    // rates; a pathological configuration (tiny but positive peak_perf) can
+    // push elapsed_time * 1e9 outside the uint64 range, where the floating
+    // -> integer conversion is UB. Anything >= 1e18 ns (~31.7 simulated
+    // years) cannot be a real run; fail closed instead.
+    const double runtime_ns = elapsed_time * 1e9;
+    if (!std::isfinite(runtime_ns) || runtime_ns >= 1e18) {
+        workload_logger_->critical(
+            "computed comp runtime {} ns is not representable (elapsed_time "
+            "{} s); check peak-perf/local-mem-bw and the node's num_ops",
+            runtime_ns, elapsed_time);
+        exit(EXIT_FAILURE);
     }
-
-    uint64_t runtime = static_cast<uint64_t>(elapsed_time * 1e9);  // sec -> ns
+    uint64_t runtime = static_cast<uint64_t>(runtime_ns);  // sec -> ns
     // Step 1-8: online execution-driven calibration. The online GraphBatch
     // (graph_batch_builder.py) carries planner-LUT-aligned durations so the
     // engine timeline is order-isomorphic to the Python decision sequence
-    // (fail-closed order consumption). The static .et
-    // path never sets runtime_ns (duration_micros=0, parsed as 0) and keeps
-    // the roofline above -- byte-for-byte preserved. Same honor pattern as
-    // issue_replay's runtime_ns branch.
+    // (fail-closed order consumption). Static .et nodes get runtime_ns
+    // through the same view_of micros->ns conversion (traces without
+    // duration_micros parse it as 0), so they keep the roofline above --
+    // byte-for-byte preserved. Same honor pattern as issue_replay's
+    // runtime_ns branch.
     if (node.compute.runtime_ns != 0ul) {
         runtime = node.compute.runtime_ns;
     }
@@ -518,9 +777,9 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         local_hbm_bandwidth_model->issue_compute(
             node_num_ops, node_tensor_size, wlhd);
     } else {
-        if (!node.is_cpu_op) {
-            hw_resource->tics_gpu_ops += runtime;
-        }
+        // (2026-09-30) is_cpu_op threw at function entry, so this arm is
+        // always a GPU op -- the old conditional was dead.
+        hw_resource->tics_gpu_ops += runtime;
         // A zero runtime (roofline elapsed < 1ns and no calibrated
         // runtime_ns) would register a same-tick event and break the event
         // queue's strict-increase invariant; degrade to 1ns (exedrv-1of3#4).
@@ -608,8 +867,11 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     const auto comm_type =
         static_cast<ChakraCollectiveCommType>(node.coll.comm_type);
     const auto comm_size = node.coll.bytes;
-    // TODO: comm_tag? which is used to distinguish two different collective in
-    // same pg
+    // Known limitation: the ET collective comm_tag (used upstream to tell
+    // apart two collectives of the same type inside one process group) is
+    // not parsed into CollAttrs and is ignored on this path -- only
+    // comm_priority participates in collective scheduling here. p2p
+    // send/recv do honor their comm.tag.
     const auto comm_priority = node.coll.priority;  // default 0u
 
     if (comm_type == ChakraCollectiveCommType::ALL_REDUCE) {
@@ -641,22 +903,24 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
         collective_comm_wrapper_map[fp->my_id] = fp;
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else if (comm_type == ChakraCollectiveCommType::BROADCAST) {
-        // TODO: implement broadcast, for now just replay
+        // Known limitation: BROADCAST has no collective implementation in
+        // this repository -- it is modeled as a rank-local timing-only
+        // replay: a single-stream DataSet completes after the node's
+        // recorded runtime in nanoseconds (default 1 ns) without any
+        // network or communicator interaction.
         uint64_t runtime = 1ul;
         if (node.compute.runtime_ns != 0ul) {
-            // chakra runtimes are in microseconds and the GraphSource adapter
-            // already converted them into nanoseconds
+            // Same nanosecond contract as issue_replay: the adapter converts
+            // chakra micros at parse time (NodeStore view_of, BROADCAST case)
             runtime = node.compute.runtime_ns;
         }
         DataSet* fp = new DataSet(1);
         fp->retain_communicator_group(comm_group_owner);
-        fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
         collective_comm_node_id_map[fp->my_id] = node.global_id;
         collective_comm_wrapper_map[fp->my_id] = fp;
-        sys->register_event(fp, EventType::General, nullptr,
-                            // chakra runtimes are in microseconds and we
-                            // should convert it into nanoseconds
-                            runtime);
+        // runtime is already in nanoseconds (the GraphSource adapter
+        // converted the chakra micros at parse time).
+        sys->register_event(fp, EventType::General, nullptr, runtime);
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else {
         throw std::runtime_error("Unsupported collective comm type");
@@ -684,8 +948,7 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
         // network-only completion path.
         WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
         hbm_wlhd->node_id = node.global_id;
-        hbm_comm_join_[node.global_id] =
-            HbmCommJoin{false, false, EventType::PacketSent};
+        hbm_comm_join_[node.global_id] = HbmCommJoin{false, false};
         local_hbm_bandwidth_model->issue_comm_read(size, hbm_wlhd);
     }
 
@@ -722,12 +985,18 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
         // entry instead of completing the node outright.
         WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
         hbm_wlhd->node_id = node.global_id;
-        hbm_comm_join_[node.global_id] =
-            HbmCommJoin{false, false, EventType::PacketReceived};
+        hbm_comm_join_[node.global_id] = HbmCommJoin{false, false};
         local_hbm_bandwidth_model->issue_comm_write(size, hbm_wlhd);
     }
 
     sim_request rcv_req;
+    // (2026-10-01) mirror the send side's explicit fields: the analytical
+    // backends never dereference the request, but the rendezvous protocol
+    // path copies the whole struct (reading srcRank/dstRank) and an
+    // uninitialized pass-by-value would leak garbage into that copy.
+    rcv_req.srcRank = src;
+    rcv_req.dstRank = dst;
+    rcv_req.reqType = UINT8;
     RecvPacketEventHandlerData* rcehd = new RecvPacketEventHandlerData;
     rcehd->wlhd = new WorkloadLayerHandlerData;
     rcehd->wlhd->node_id = node.global_id;
@@ -753,6 +1022,14 @@ void Workload::skip_invalid(const ExecutionDriven::NodeView& node) {
                          ExecutionDriven::NodeTerminalStatus::Skipped, &node);
     // Step 1-4: the GraphSource is the sole dependency-state owner.
     graph_source_->finish_node(node_id);
+    // (2026-09-30, R2 audit) finish_node may release CHILD nodes into the
+    // free set, and this run sits inside the for_each_dep_free value
+    // snapshot: without the rerun flag a pass consisting solely of skipped
+    // nodes (a pure metadata chain) leaves the children in the free set with
+    // no event ever scheduling another pass -- a static-mode stall. Online
+    // mode is unaffected in practice (the online protocol carries no
+    // metadata/INVALID nodes, and the deferred issue pass re-drains anyway).
+    issue_dep_free_rerun_needed_ = true;
     auto logger = workload_logger_;
     // C4 (2026-08-28): gate the per-node debug format behind trace_enabled
     // (same pattern as issue()) -- with trace off the format string and
@@ -840,7 +1117,7 @@ void Workload::call(EventType event, CallData* data) {
             }
             mark_online_terminal_or_fail(node_id);
             hw_resource->release(*nv);
-        complete_online_statistics(*nv, Sys::boostedTick());
+            complete_online_statistics(*nv, Sys::boostedTick());
             // R2 anchor fast path: online-only branch (the static else below
             // is untouched and stays unconditional); nv points into the
             // NodeStore record the registration hook set the flags on.
@@ -920,44 +1197,21 @@ void Workload::call(EventType event, CallData* data) {
                 delete wlhd;
                 maybe_complete_hbm_joined_comm(joined_node_id);
             } else {
-                finish_generic_node(wlhd->node_id, event);
+                finish_generic_node(wlhd->node_id);
                 delete wlhd;
             }
         }
     }
 
-    // Final end authority (方案 §4 步骤 1-2 操作 3): in online mode this
-    // side effect is disabled -- a temporarily empty graph must never end the
-    // online simulation and drop later injections. The end authority belongs
-    // exclusively to the ServiceCoordinator (总体方案 §5.5). The static path
-    // keeps the pre-phase-1 behavior byte-for-byte.
-    if (execution_mode_ != ExecutionDriven::ExecutionMode::Online) {
-        // Step 1-4: static_all_done (free empty && ongoing empty) comes from
-        // the GraphSource -- the sole dependency-state owner.
-        if ((graph_source_->static_all_done()) &&
-            (hw_resource->num_in_flight_cpu_ops == 0) &&
-            (hw_resource->num_in_flight_gpu_comp_ops == 0) &&
-            (hw_resource->num_in_flight_gpu_comm_ops == 0) &&
-            // Local-HBM contention: a still-active local-HBM job always
-            // belongs to a node that has not completed, so the slot counters
-            // above already cover it; the explicit has_active_jobs() check
-            // is a belt-and-braces guard -- a drained resolver with pending
-            // endpoint jobs must keep waiting for the model's completion
-            // callbacks (they re-enter Workload::call and finish the nodes).
-            (local_hbm_bandwidth_model == nullptr ||
-             !local_hbm_bandwidth_model->has_active_jobs())) {
-            report();
-            sys->comm_NI->sim_notify_finished();
-            is_finished = true;
-        }
-    }
+    // Final end authority (M3-1): shared by every completion route --
+    // collective / bare-General completions finalize here, while generic and
+    // LocalHbmBandwidthModel-delivered completions finalize inside
+    // finish_generic_node (the is_finished guard makes this second check a
+    // no-op on those paths).
+    maybe_finalize_static_run();
 }
 
-void Workload::fire() {
-    call(EventType::General, NULL);
-}
-
-void Workload::finish_generic_node(uint64_t node_id, EventType event) {
+void Workload::finish_generic_node(uint64_t node_id) {
     // Extracted verbatim from the former generic wlhd branch of
     // Workload::call: node release / stats / metrics / terminal record /
     // dependency release / static-mode auto-advance.  Shared by the plain
@@ -1027,6 +1281,55 @@ void Workload::finish_generic_node(uint64_t node_id, EventType event) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Static) {
         issue_dep_free_nodes();
     }
+    // M3-1: HBM-delivered completions (the LocalHbmBandwidthModel COMP
+    // callback and the HBM side of a joined p2p comm) finish the node here
+    // without re-entering Workload::call, so the static run-final check must
+    // also run on this path -- otherwise a run whose last completion is
+    // HBM-delivered would never report()/notify finished. Runs whose last
+    // completion goes through Workload::call already finalize in its tail;
+    // the is_finished guard keeps exactly one finalization.
+    maybe_finalize_static_run();
+}
+
+void Workload::maybe_finalize_static_run() {
+    // Final end authority (方案 §4 步骤 1-2 操作 3): in online mode this
+    // side effect is disabled -- a temporarily empty graph must never end the
+    // online simulation and drop later injections. The end authority belongs
+    // exclusively to the ServiceCoordinator (总体方案 §5.5).
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online ||
+        is_finished) {
+        return;
+    }
+    // Step 1-4: static_all_done (free empty && ongoing empty) comes from
+    // the GraphSource -- the sole dependency-state owner.
+    if ((graph_source_->static_all_done()) &&
+        (hw_resource->num_in_flight_cpu_ops == 0) &&
+        (hw_resource->num_in_flight_gpu_comp_ops == 0) &&
+        (hw_resource->num_in_flight_gpu_comm_ops == 0) &&
+        // Local-HBM contention: a still-active local-HBM job always
+        // belongs to a node that has not completed, so the slot counters
+        // above already cover it; the explicit has_active_jobs() check
+        // is a belt-and-braces guard -- a drained resolver with pending
+        // endpoint jobs must keep waiting for the model's completion
+        // callbacks (they finish the nodes directly through
+        // finish_generic_node, which re-runs this same check).
+        (local_hbm_bandwidth_model == nullptr ||
+         !local_hbm_bandwidth_model->has_active_jobs()) &&
+        // Stage B (die backend), mirror of the M3-1 note above: a
+        // DieExecution completes its node through finish_generic_node
+        // WITHOUT re-entering Workload::call, and its internal HBM jobs
+        // complete through the DieExecution sink (never through the
+        // Workload), so a still-executing outer COMP is only visible
+        // here through the adapter's live-execution set. A drained
+        // resolver must keep waiting for the machine's Done (design doc
+        // §6.3 lifecycle red line: is_finished/drain checks must include
+        // not-yet-finished DieExecutions).
+        (die_adapter_ == nullptr ||
+         !die_adapter_->has_active_die_executions())) {
+        report();
+        sys->comm_NI->sim_notify_finished();
+        is_finished = true;
+    }
 }
 
 void Workload::maybe_complete_hbm_joined_comm(uint64_t node_id) {
@@ -1037,12 +1340,11 @@ void Workload::maybe_complete_hbm_joined_comm(uint64_t node_id) {
     if (!(it->second.network_done && it->second.hbm_done)) {
         return;  // still waiting for the other side
     }
-    const EventType completion_event = it->second.completion_event;
     // Erase BEFORE completing: the completion re-enters the issue path
     // (static auto-advance) and any re-entrant lookup for this node must
     // observe an already-fired join.
     hbm_comm_join_.erase(it);
-    finish_generic_node(node_id, completion_event);
+    finish_generic_node(node_id);
 }
 
 void Workload::on_local_hbm_job_complete(
@@ -1066,8 +1368,30 @@ void Workload::on_local_hbm_job_complete(
     }
     // COMP job: single-event completion, same path as the closed-form
     // register_event route.
-    finish_generic_node(node_id, EventType::General);
+    finish_generic_node(node_id);
     delete wlhd;
+}
+
+void Workload::record_die_utilizations(const uint64_t node_id,
+                                       const double compute_utilization,
+                                       const double memory_utilization,
+                                       const double vector_utilization) {
+    // Contract §7.6: the die-only vector_utilization lives on the compact
+    // OnlineStatisticsState; the legacy OperatorStatistics record (static ET
+    // and history-preserving microbenchmarks) has no vector field, so only
+    // compute/memory cross over there.
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
+        !stats->online_history_preserved()) {
+        ExecutionDriven::OnlineStatisticsState& state =
+            online_statistics_state_or_fail(node_id);
+        state.compute_utilization = compute_utilization;
+        state.memory_utilization = memory_utilization;
+        state.vector_utilization = vector_utilization;
+        return;
+    }
+    auto& op_stat = this->stats->get_operator_statistics(node_id);
+    op_stat.compute_utilization = compute_utilization;
+    op_stat.memory_utilization = memory_utilization;
 }
 
 void Workload::report() {
@@ -1075,9 +1399,17 @@ void Workload::report() {
     // before emitting any report output so this path cannot report zeros.
     stats->ensure_legacy_post_processing_supported();
     Tick curr_tick = Sys::boostedTick();
+    // Under replay_only every node type is replayed through issue_replay, so
+    // GPU COMM nodes also accumulate tics_gpu_ops while COMP and COMM occupy
+    // independent single-slot resources and can overlap in time; the sum can
+    // then exceed the wall clock and the unsigned subtraction below would
+    // wrap to ~1.8e19. Clamp the exposed-communication figure at zero; when
+    // tics_gpu_ops <= curr_tick the printed value is unchanged.
+    const Tick gpu_ops_ticks = hw_resource->tics_gpu_ops;
     workload_logger_
         ->info("sys[{}] finished, {} cycles, exposed communication {} cycles.",
-               sys->id, curr_tick, curr_tick - hw_resource->tics_gpu_ops);
+               sys->id, curr_tick,
+               gpu_ops_ticks < curr_tick ? curr_tick - gpu_ops_ticks : 0);
     stats->post_processing();
     stats->report();
     if (this->sys->track_local_mem) {

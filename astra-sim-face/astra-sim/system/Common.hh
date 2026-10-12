@@ -14,7 +14,6 @@ namespace AstraSim {
 typedef unsigned long long Tick;
 
 constexpr uint64_t CLOCK_PERIOD = 1;           // 1ns
-constexpr uint64_t FREQ = 1000 * 1000 * 1000;  // 1GHz
 
 enum time_type_e { NS };
 
@@ -26,18 +25,15 @@ struct timespec_t {
 };
 
 struct sim_request {
-    uint32_t srcRank;
-    uint32_t dstRank;
-    uint32_t tag;
-    req_type_e reqType;
-    uint64_t reqCount;
-    uint32_t vnet;
-    uint32_t layerNum;
-};
-
-class MetaData {
-  public:
-    timespec_t timestamp;
+    // Default member initializers: the rendezvous path copies this struct by
+    // value and reads every field, while several issue paths only fill part
+    // of it (issue_recv_comm filled none) -- the uninitialized copies were
+    // formal UB read by rendezvous_sim_send/recv even though the current
+    // analytical backend never consumes the payload.
+    uint32_t srcRank = 0;
+    uint32_t dstRank = 0;
+    uint32_t tag = 0;
+    req_type_e reqType = UINT8;
 };
 
 enum class ComType {
@@ -50,7 +46,7 @@ enum class ComType {
 
 enum class CollectiveOptimization { Baseline = 0, LocalBWAware };
 
-enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT, None };
+enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT };
 
 enum class IntraDimensionScheduling {
     FIFO = 0,
@@ -65,17 +61,10 @@ enum class InterDimensionScheduling {
     OfflineGreedy
 };
 
-enum class InjectionPolicy { Normal };
-
-enum class BusType { Both = 0, Shared, Mem };
-
 enum class StreamState {
     Created = 0,
-    Transferring,
     Ready,
-    Executing,
-    Zombie,
-    Dead
+    Executing
 };
 
 enum class EventType {

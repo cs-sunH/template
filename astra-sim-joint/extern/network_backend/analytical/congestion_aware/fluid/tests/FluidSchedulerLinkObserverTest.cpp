@@ -135,6 +135,32 @@ void start_delayed_flow(void* const context) {
     delayed->scheduler->start_flow(delayed->bytes, delayed->route, no_op, nullptr);
 }
 
+struct DelayedStartWithProgress {
+    FluidScheduler* scheduler;
+    std::shared_ptr<const FluidRoute> route;
+    uint64_t bytes;
+    bool* saw_integrated_old_rate;
+};
+
+void start_after_checking_old_rate(void* const context) {
+    std::unique_ptr<DelayedStartWithProgress> delayed(
+        static_cast<DelayedStartWithProgress*>(context));
+    const auto flows = delayed->scheduler->flow_snapshot();
+    *delayed->saw_integrated_old_rate = flows.size() == 1 &&
+        std::abs(flows.front().remaining_bytes - 8.5L) < 1.0e-12L &&
+        std::abs(flows.front().current_rate_Bpns - 0.5L) < 1.0e-12L;
+    delayed->scheduler->start_flow(delayed->bytes, delayed->route,
+                                   no_op, nullptr);
+}
+
+struct ResourceMutationRecord {
+    bool before;
+    EventTime tick;
+    std::vector<LinkId> links;
+    uint64_t version0;
+    uint64_t version1;
+};
+
 struct CompletionCounter {
     uint64_t count = 0;
 };
@@ -385,11 +411,83 @@ void run_bounded_storage_test() {
             "anonymous spool cleanup");
 }
 
+void run_resource_version_test() {
+    auto event_queue = std::make_shared<EventQueue>();
+    FluidScheduler scheduler(event_queue, two_links(), 8, 16, 1024);
+    auto shared_route = std::make_shared<FluidRoute>();
+    shared_route->link_ids = {0, 1};
+    shared_route->propagation_latency_ns = 7;
+    auto contended_route = std::make_shared<FluidRoute>();
+    contended_route->link_ids = {0};
+    contended_route->propagation_latency_ns = 0;
+
+    std::vector<ResourceMutationRecord> records;
+    const uint64_t observer = scheduler.add_link_resource_mutation_observer(
+        [&scheduler, &records](const bool before, const EventTime tick,
+                               const std::vector<LinkId>& links) {
+            records.push_back({before, tick, links,
+                scheduler.link_resource_version(0),
+                scheduler.link_resource_version(1)});
+        });
+    require(scheduler.link_resource_version(0) == 0 &&
+                scheduler.link_resource_version(1) == 0,
+            "NoC link versions begin at zero");
+
+    scheduler.start_flow(10, shared_route, no_op, nullptr);
+    scheduler.flush_pending_starts();
+    require(scheduler.link_resource_version(0) == 1 &&
+                scheduler.link_resource_version(1) == 1,
+            "first start commits one version on each traversed link");
+
+    scheduler.mark_event_loop_started();
+    bool saw_integrated_old_rate = false;
+    auto* const delayed = new DelayedStartWithProgress{
+        &scheduler, contended_route, 4, &saw_integrated_old_rate};
+    event_queue->schedule_event(3, start_after_checking_old_rate, delayed);
+    while (!event_queue->finished()) {
+        event_queue->proceed();
+    }
+    require(saw_integrated_old_rate,
+            "new flow starts only after the previous flow is integrated at old rate");
+    require(records.size() == 8,
+            "two starts and two service completions emit ordered before/after hooks");
+    require(records[0].before && !records[1].before &&
+                records[0].tick == 0 && records[1].tick == 0 &&
+                records[0].links == std::vector<LinkId>({0, 1}) &&
+                records[1].links == std::vector<LinkId>({0, 1}) &&
+                records[0].version0 == 0 && records[0].version1 == 0 &&
+                records[1].version0 == 1 && records[1].version1 == 1,
+            "initial membership publishes versions after old-state hook");
+    require(records[2].before && !records[3].before &&
+                records[2].tick == 3 && records[3].tick == 3 &&
+                records[2].links == std::vector<LinkId>({0, 1}) &&
+                records[3].links == std::vector<LinkId>({0}) &&
+                records[2].version0 == 1 && records[2].version1 == 1 &&
+                records[3].version0 == 2 && records[3].version1 == 1,
+            "join integrates the old rate first and versions only changed links");
+    require(records[4].before && !records[5].before &&
+                records[4].tick == 11 && records[5].tick == 11 &&
+                records[4].version0 == 2 && records[4].version1 == 1 &&
+                records[5].version0 == 3 && records[5].version1 == 1,
+            "service completion removes link membership before publishing its version");
+    require(records[6].before && !records[7].before &&
+                records[6].tick == 20 && records[7].tick == 20 &&
+                records[6].version0 == 3 && records[6].version1 == 1 &&
+                records[7].version0 == 4 && records[7].version1 == 2,
+            "last service completion versions both links before propagation tails");
+    require(scheduler.get_total_completed_flows() == 2 &&
+                scheduler.link_resource_version(0) == 4 &&
+                scheduler.link_resource_version(1) == 2,
+            "tail arrivals complete physical flows without further link versions");
+    scheduler.remove_link_resource_mutation_observer(observer);
+}
+
 }  // namespace
 
 int main() {
     run_tail_rehash_lifetime_test();
     run_equivalence_test();
     run_bounded_storage_test();
+    run_resource_version_test();
     return EXIT_SUCCESS;
 }

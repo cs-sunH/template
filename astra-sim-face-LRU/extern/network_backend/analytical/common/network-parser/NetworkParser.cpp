@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/NetworkParser.h"
 #include <cassert>
+#include <cmath>
+#include <cstddef>
 #include <iostream>
 
 using namespace NetworkAnalytical;
@@ -26,8 +28,11 @@ NetworkParser::NetworkParser(const std::string& path) noexcept
 
         // parse network configs
         parse_network_config_yml(network_config);
-    } catch (const YAML::BadFile& e) {
-        // loading network config file failed
+    } catch (const YAML::Exception& e) {
+        // loading or parsing the network config file failed: covers both
+        // BadFile (file open failure) and ParserException (malformed YAML
+        // syntax); any YAML error escaping this noexcept constructor would
+        // otherwise std::terminate without a diagnostic
         std::cerr << "[Error] (network/analytical) " << e.what() << std::endl;
         std::exit(-1);
     }
@@ -202,11 +207,17 @@ void NetworkParser::check_validity() const noexcept {
         }
     }
 
-    // bandwidths should be all positive
-    for (const auto& bandwidth : bandwidth_per_dim) {
-        if (bandwidth <= 0) {
-            std::cerr << "[Error] (network/analytical) " << "bandwidth (" << bandwidth << ") should be larger than 0"
-                      << std::endl;
+    // bandwidths should be positive and finite. NaN and +inf must be
+    // rejected explicitly: every `<= 0` comparison with NaN is false, so a
+    // NaN value would slip through, become the link capacity and then never
+    // constrain the fluid scheduler's std::min(new_rate, share) share
+    // computation -- silently disabling congestion control for that
+    // dimension (fail-open). +inf hides behind the same comparison.
+    for (std::size_t dim = 0; dim < bandwidth_per_dim.size(); ++dim) {
+        const auto& bandwidth = bandwidth_per_dim[dim];
+        if (!std::isfinite(bandwidth) || bandwidth <= 0) {
+            std::cerr << "[Error] (network/analytical) " << "bandwidth (" << bandwidth << ") of dimension "
+                      << dim << " should be a finite value larger than 0" << std::endl;
             std::exit(-1);
         }
     }

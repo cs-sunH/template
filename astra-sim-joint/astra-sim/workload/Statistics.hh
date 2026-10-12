@@ -36,26 +36,19 @@ class Statistics {
         // is_cpu_op, CommSend/CommRecv/CommCollective -> COMM, else INVALID.
         static OperatorType get_operator_type(
             const ExecutionDriven::NodeView& node);
-        OperatorStatistics(NodeId node_id,
-                           Tick start_time,
-                           Tick end_time,
-                           OperatorType type)
-            : node_id(node_id),
-              start_time(start_time),
-              end_time(end_time),
-              type(type) {}
-        OperatorStatistics(NodeId node_id, Tick start_time, OperatorType type)
-            : node_id(node_id),
-              start_time(start_time),
+        // R1-DC7/R1-DC8 port (2026-09-30, from the face repo): the
+        // four-argument constructor had zero callers repo-wide and the
+        // node_id member was a dead store (the id only ever lives in the
+        // operator_statistics map key); both removed.
+        OperatorStatistics(Tick start_time, OperatorType type)
+            : start_time(start_time),
               end_time(INVALID_TICK),
               type(type) {}
         OperatorStatistics()
-            : node_id(UINT64_MAX),
-              start_time(INVALID_TICK),
+            : start_time(INVALID_TICK),
               end_time(INVALID_TICK),
               type(OperatorType::INVALID) {}
 
-        NodeId node_id;
         Tick start_time;
         Tick end_time;
         OperatorType type;
@@ -77,9 +70,6 @@ class Statistics {
     OperatorStatistics& get_operator_statistics(NodeId node_id);
 
     const OperatorStatistics& get_operator_statistics(NodeId node_id) const;
-
-    const std::unordered_map<NodeId, OperatorStatistics>&
-    get_operator_statistics() const;
 
     void record_start(std::shared_ptr<Chakra::ETFeederNode> node,
                       Tick start_time);
@@ -130,6 +120,12 @@ class Statistics {
     struct WindowedRooflineUtilization {
         double compute_utilization_weighted_sum = 0;
         double memory_utilization_weighted_sum = 0;
+        // Die-backend-only field (joint rollout stage 1, contract §7.6):
+        // eq-ops / (vector peak * elapsed), aggregated with the same
+        // duration weighting and the same exact accumulator as the two sums
+        // above. Zero for every legacy backend (no producer ever set the
+        // field).
+        double vector_utilization_weighted_sum = 0;
         // Includes the same 1ns guard as extract_utilizations().
         Tick total_comp_time = 1ul;
     };
@@ -207,7 +203,9 @@ class Statistics {
         Tick start_time,
         Tick end_time,
         const std::optional<double>& compute_utilization,
-        const std::optional<double>& memory_utilization);
+        const std::optional<double>& memory_utilization,
+        const std::optional<double>& vector_utilization =
+            std::nullopt);
     void add_online_total_comp_time(Tick duration);
     void require_online_compacted_full_window(Tick window_start,
                                               Tick window_end,
@@ -251,6 +249,10 @@ class Statistics {
     bool online_history_preserved_ = false;
     OnlineExactDoubleSum online_compute_utilization_weighted_sum_;
     OnlineExactDoubleSum online_memory_utilization_weighted_sum_;
+    // Die backend (joint rollout stage 1, contract §7.6): vector (eq-op)
+    // utilization aggregate, same exact-accumulator discipline as the two
+    // above.
+    OnlineExactDoubleSum online_vector_utilization_weighted_sum_;
     Tick online_total_comp_time_ = 1ul;
     Tick online_roofline_newest_retired_end_ = 0;
 

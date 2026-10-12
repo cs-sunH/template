@@ -307,7 +307,11 @@ void write_system_json(const std::string& path, double remote_bw,
     j["local-mem-bw"] = 1640.0;
     j["local-mem-latency"] = 100;
     j["remote-mem-bw"] = remote_bw;
-    j["remote-mem-latency"] = remote_latency_ns;
+    // Latency fields are integer ns by the 3.11 strict-parse contract
+    // (parse_latency_ns_field rejects a JSON float); every caller passes an
+    // integral value, so store it as an integer.
+    j["remote-mem-latency"] =
+        static_cast<long long>(remote_latency_ns);
     write_text(path, j.dump(2) + "\n");
 }
 
@@ -426,6 +430,14 @@ struct ScenarioSpec {
     int num_ranks = 0;
     std::vector<std::vector<MemNodeSpec>> per_rank_nodes;
     bool telemetry = false;  // enable §5.1 transaction-detail JSONL
+    bool observe_port_mutations = false;
+};
+
+struct PortMutationRecord {
+    bool before = false;
+    std::size_t port_index = 0;
+    double time_ns = 0.0;
+    uint64_t version = 0;
 };
 
 struct RunOutput {
@@ -436,6 +448,8 @@ struct RunOutput {
     std::string bridge_dir;
     uint64_t total_issued = 0;
     uint64_t total_completed = 0;
+    std::vector<PortMutationRecord> port_mutations;
+    std::vector<uint64_t> port_versions;
 };
 
 RunOutput run_scenario(const ScenarioSpec& spec) {
@@ -501,6 +515,15 @@ RunOutput run_scenario(const ScenarioSpec& spec) {
     // audit on destruction) outlives every Sys.
     const auto memory_api =
         std::make_unique<AnalyticalRemoteMemory>(remote_memory_configuration);
+    std::vector<PortMutationRecord> port_mutations;
+    uint64_t port_mutation_observer = 0;
+    if (spec.observe_port_mutations) {
+        port_mutation_observer = memory_api->add_port_resource_mutation_observer(
+            [&port_mutations](const bool before, const std::size_t port,
+                              const double time_ns, const uint64_t version) {
+                port_mutations.push_back({before, port, time_ns, version});
+            });
+    }
     if (spec.telemetry) {
         memory_api->enable_transaction_telemetry(dir,
                                                  "port-nway-" + spec.name);
@@ -539,9 +562,16 @@ RunOutput run_scenario(const ScenarioSpec& spec) {
         out.total_issued += snap.issued_count;
         out.total_completed += snap.completed_count;
         out.ports.push_back(snap);
+        out.port_versions.push_back(memory_api->port_resource_version(p));
     }
+    out.port_mutations = port_mutations;
     out.drained = memory_api->is_drained();
     out.bridge_dir = dir;
+
+    if (port_mutation_observer != 0) {
+        memory_api->remove_port_resource_mutation_observer(
+            port_mutation_observer);
+    }
 
     for (auto it : systems) {
         delete it;
@@ -1060,6 +1090,50 @@ void scenario_s9() {
         "[remote_port_nway_test] S9 dual-zero/same-Tick keep-rule PASS\n");
 }
 
+// ---- S11: authoritative remote-port version ordering ---------------------
+// Two same-Tick jobs enter the latency set, join streaming together at t=2,
+// and exhaust together at t=4. Port versions change once per issue and once
+// per same-instant streaming membership batch; completion delivery itself
+// does not create another port-service mutation.
+void scenario_s11_port_resource_versions() {
+    ScenarioSpec spec;
+    spec.name = "s11_port_resource_versions";
+    spec.memory_type = "PER_NPU_MEMORY_EXPANSION";
+    spec.bw = 6.0;
+    spec.latency_ns = 2.0;
+    spec.npu_ids = {0};
+    spec.num_ranks = 1;
+    spec.observe_port_mutations = true;
+    spec.per_rank_nodes = {{{0, 6, {}, false}, {1, 6, {}, false}}};
+
+    const RunOutput out = run_scenario(spec);
+    expect_eq_u64(out.port_mutations.size(), 8,
+                  "S11 two issues plus join/complete batches emit paired hooks");
+    const auto& m = out.port_mutations;
+    const auto check_pair = [&m](const std::size_t index, const double time,
+                                 const uint64_t before_version,
+                                 const uint64_t after_version) {
+        return m[index].before && !m[index + 1].before &&
+               m[index].port_index == 0 && m[index + 1].port_index == 0 &&
+               std::abs(m[index].time_ns - time) < 1.0e-9 &&
+               std::abs(m[index + 1].time_ns - time) < 1.0e-9 &&
+               m[index].version == before_version &&
+               m[index + 1].version == after_version;
+    };
+    expect_true(check_pair(0, 0.0, 0, 1) &&
+                    check_pair(2, 0.0, 1, 2),
+                "S11 issue hooks expose old then incremented version");
+    expect_true(check_pair(4, 2.0, 2, 3),
+                "S11 same-instant latency joins publish one service version");
+    expect_true(check_pair(6, 4.0, 3, 4),
+                "S11 same-instant exhaustion publishes before completion callbacks");
+    expect_eq_u64(out.port_versions.at(0), 4,
+                  "S11 settled port version counts issue/join/exhaust only");
+    expect_true(out.drained, "S11 port is drained after callback delivery");
+    expect_port_conserved(out.ports.at(0), spec.bw, "S11 port0");
+    std::printf("[remote_port_nway_test] S11 port resource versions PASS\n");
+}
+
 //****************************************************************************
 // S10: fail-closed children.  The backend enforces its invariants with
 // exit(1) (never exceptions: Sys::call_events swallows std::exception), so
@@ -1437,9 +1511,11 @@ int main(int argc, char* argv[]) {
     run_scenario_isolated("s7", &scenario_s7);
     run_scenario_isolated("s8", &scenario_s8);
     run_scenario_isolated("s9", &scenario_s9);
+    run_scenario_isolated("s11_port_resource_versions",
+                          &scenario_s11_port_resource_versions);
 
     std::printf(
-        "[remote_port_nway_test] ALL PASS (precision suite: S1..S10, "
+        "[remote_port_nway_test] ALL PASS (precision suite: S1..S11, "
         "PER_NPU/PER_NODE/MEMORY_POOL, anchors 300 | 90/120/140/150 | "
         "1B fluid 1/6 ns)\n");
     return 0;

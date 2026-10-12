@@ -31,13 +31,18 @@ class MemBus {
            bool attach);
     ~MemBus();
 
+    // Contract: `bytes` is only consumed on the modelled path
+    // (model_shared_bus && Transmition::Usual, routed through
+    // LogGP::request_read). Every other combination registers a fixed
+    // latency (10 ticks when Fast, communication_delay otherwise) and
+    // ignores the size.
     void send_from_NPU_to_MA(Transmition transmition,
-                             int bytes,
+                             uint64_t bytes,
                              bool processed,
                              bool send_back,
                              Callable* callable);
     void send_from_MA_to_NPU(Transmition transmition,
-                             int bytes,
+                             uint64_t bytes,
                              bool processed,
                              bool send_back,
                              Callable* callable);

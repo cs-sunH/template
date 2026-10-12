@@ -13,8 +13,10 @@ CLI:
      on_commit_ack=scheduler.on_commit_ack)——阻塞读 req_notify.fifo,
      零 polling;决策异常 => error response + exit 1(fail-closed);
   4. EOF(C++ 关闭写端)= 运行结束:verify_run_end + 日志消费完整性校验,
-     并把 graph_batch_digests.jsonl / online_decision_log.jsonl 写入
-     bridge_dir(每次 GraphBatch 产出顺带写 digest 行;决策行同批追加)。
+     并把 online_decision_log.jsonl 写入 bridge_dir(决策行随批流式追加)。
+     graph_batch_digests.jsonl 缺省关(SH_GRAPH_DIGESTS=1 恢复恒写;每次
+     GraphBatch 产出顺带写一行 digest,C2/D2 2026-08-28 起默认旁路——
+     digest 行是纯审计产物且每批全量二次序列化,SCHED-10 文档同步)。
 
 strategy 模式(步骤 1-9 的 WscLlmOnlineScheduler):真实策略(关感知)在
 在线骨架中运行,决策日志逐批写 online_decision_log.jsonl(决策由策略实时产出)。
@@ -111,8 +113,9 @@ class _JsonlSink:
             self._open()
 
     def _open(self) -> None:
-        # 覆盖旧文件(上一轮运行的残留)。
-        self._output = open(self.path, "w", encoding="utf-8")
+        # 覆盖旧文件(上一轮运行的残留)。newline="":逐行 JSON 审计流的
+        # 换行契约固定为单字节 LF(禁用 Windows 文本模式的 \n→\r\n 翻译)。
+        self._output = open(self.path, "w", encoding="utf-8", newline="")
 
     def __call__(self, row: dict) -> None:
         if self._output is None:
@@ -206,7 +209,7 @@ def main(argv=None) -> int:
     # 进 .partial 暂存、结束期两遍合并)。
     sensing_query_sink = _JsonlSink(
         os.path.join(args.bridge_dir, SENSING_QUERY_LOG_NAME),
-        eager=args.sensing) if args.sensing else None
+        eager=True) if args.sensing else None
     online_stats_sink = _JsonlSink(
         os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME))
     # 步骤 1-9:真实策略(关感知,默认);决策日志逐批写 online_decision_log.jsonl。
@@ -272,9 +275,9 @@ def main(argv=None) -> int:
 
     # 运行结束校验(fail-closed):
     scheduler.verify_run_end()
-    # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
-    # full_scan_entries 恒为 0)——主变体 M3 起已在 build_graph_batch 逐行
-    # 流式写出(profile_sink 为 _JsonlSink/_NullSink,永不走结束一次性写出)。
+    # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关)
+    # ——主变体 M3 起已在 build_graph_batch 逐行流式写出(profile_sink 为
+    # _JsonlSink/_NullSink,永不走结束一次性写出)。
     # 阶段 6 §9.1:online_stats.jsonl -- 分项计数器统一采集(Python 侧)。
     # 每已应用交付一行(合并桥接层每 request 服务时间) + 一行汇总。
     # B3(2026-08-28):主变体行已流式写入 .partial(未合并 processing_ns),
@@ -302,7 +305,9 @@ def main(argv=None) -> int:
         "handler_calls": bridge_stats["handler_calls"],
     }
     # D4 (2026-09-05): passive 逐出深缺口计数(观测项)——主变体的
-    # kv_manager 提供(deep_gap_events;fail-closed 缺失即 0 的兜底取值)。
+    # kv_manager 提供。SCHED-10(2026-09-28)用词修正:键缺失取 0 的兜底
+    # 是静默缺省(fail-open 观测旁路),不是 fail-closed——观测项允许缺
+    # 省不阻断,与通道/协议层的 fail-closed 语义无关。
     kv_manager = getattr(scheduler, "kv_manager", None)
     if kv_manager is not None:
         summary_row["kv_deep_gap_events"] = int(
@@ -344,7 +349,8 @@ def main(argv=None) -> int:
                     processing["seq"]))
 
     online_stats_sink.close()
-    with open(stats_path, "w", encoding="utf-8") as output:
+    # newline="":逐行 JSON 换行契约固定 LF(与 _JsonlSink 同口径)。
+    with open(stats_path, "w", encoding="utf-8", newline="") as output:
         for row in _merged_stat_rows():
             output.write(json.dumps(row, sort_keys=True) + "\n")
         output.write(json.dumps(summary_row, sort_keys=True) + "\n")
@@ -353,9 +359,10 @@ def main(argv=None) -> int:
     server.discard_per_request_stats()
 
     # online_decision_log / train_ledger:主变体已由 _JsonlSink 逐行落盘
-    # (M3),无需结束兜底写出。
-    # 拼 batch 列车台账(§7.3 不变量断言输入;每次列车/整段发射一行;
-    # §3.6 PD 分离:D 侧行 = 迭代列车,P 侧行 = 退化纯 prefill 列车)。
+    # (M3),无需结束兜底写出(SCHED-10:原此处悬挂的"拼 batch 列车台账"
+    # 注释描述的是 train_ledger 的行语义,与本 sensing 分支无关,删——
+    # 行语义见 WscLlmOnlineScheduler._emit_train_ledger_row 与
+    # _emit_prefill 的台账行注释)。
     if args.sensing:
         # 阶段 3:分层账本导出(结束总账核对与差异报告输入;感知关闭的
         # 正式跑不经过这里)。B3:sensing_query_log 已流式落盘,不再结束

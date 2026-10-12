@@ -21,7 +21,6 @@ from face_scheduler import (  # noqa: E402
     FaceModel,
     FaceRooflineEstimate,
     InstanceTaskLoadSnapshot,
-    KVAllocator,
     KVCapacityError,
     KVCacheManager,
     KVTransfer,
@@ -133,6 +132,19 @@ def _write_synthetic_inputs() -> Path:
         encoding="utf-8",
     )
     return queue_path
+
+
+def _skip_without_die_cost_library() -> None:
+    """checked-in 硬件带 die 节时配置加载需要 libdie_model_cabi.so（契约
+    §7 裁定 1 发现序 fail-closed）；库不可发现则 SkipTest（与 tests/
+    test_config_resolver.DieHardwareTests 的守卫同款语义）。"""
+    try:
+        from config_resolver import discover_cabi_library
+        discover_cabi_library()
+    except ImportError:
+        raise
+    except RuntimeError as error:
+        raise unittest.SkipTest(str(error))
 
 
 def load_checked_in_fixture_config() -> object:
@@ -1041,24 +1053,30 @@ class FaceSchedulerTests(unittest.TestCase):
 
 
 
-    def test_default_config_uses_hbm160_edge_pool_and_one_million_reserve(self) -> None:
+    def test_default_config_uses_die_backend_and_one_million_reserve(self) -> None:
+        # die 推广第一期（2026-10-03）：checked-in 硬件默认切换为 die 节
+        # （0.75/large/800/4x1/512 裁定点）+ validation-die-64g 容量档 +
+        # die 系统模板。加载链需要 libdie_model_cabi.so（resolver 经
+        # ctypes 取派生值，fail-closed）——库不可发现且 checked-in 硬件
+        # 带 die 节时 SkipTest（裸仓在集成构建出 .so 前是合法中间态）。
+        _skip_without_die_cost_library()
         config = load_checked_in_fixture_config()
         self.assertEqual(
             config.hardware.local_hbm_capacity_bytes,
-            160 * 1024**3,
+            64_000_000_000,
         )
-        self.assertIn("160 GiB", config.hardware.label)
+        self.assertIn("die-derived", config.hardware.label)
         self.assertEqual(
             config.hardware_config.name,
             "face_case5_config_c.json",
         )
         self.assertEqual(
             config.hardware_capacity_profile,
-            "validation-160gib",
+            "validation-die-64g",
         )
         self.assertEqual(
             config.system_template.name,
-            "llama2_7b_roofline_template.json",
+            "llama2_7b_die_template.json",
         )
         self.assertEqual(
             config.system_config.name,
@@ -1095,13 +1113,25 @@ class FaceSchedulerTests(unittest.TestCase):
         )
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
+        # die 后端三键（契约 §3.2）：compute-cost-model/die-model-profile
+        # 来自 die 模板，die-model-config 是 resolver 注入的 managed 绝对
+        # 路径（指向 resolved_die_model.json）。
+        self.assertEqual(system_raw["compute-cost-model"], "die")
+        self.assertEqual(system_raw["die-model-profile"], "mesh_die_v1")
+        self.assertIn("die-model-config", system_raw)
+        self.assertTrue(
+            Path(system_raw["die-model-config"]).is_absolute())
+        self.assertTrue(Path(system_raw["die-model-config"]).is_file())
+        self.assertNotIn("roofline-enabled", system_raw)
+        # §3.4 回流：local-mem-bw/peak-perf = die 派生值（1640.0 GB/s 与
+        # legacy 硬件严格连续；1492.05 TFLOPS = PE_peak_die）。
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
+        self.assertEqual(system_raw["peak-perf"], 1492.05)
         # P11 死键清除回归钉（2026-09-23）：local-mem-capacity-bytes
         # 写入链已退役（C++ 零读者），system.json 不再含该键。
         self.assertNotIn("local-mem-capacity-bytes", system_raw)
         self.assertEqual(system_raw["remote-mem-bw"], 512)
         self.assertEqual(system_raw["remote-mem-latency"], 100)
-        self.assertEqual(system_raw["peak-perf"], 261.12)
         self.assertEqual(system_raw["hbm-kv-restore-bandwidth-sharing"], 1)
 
     def test_kv_eviction_mode_key_rejected(self) -> None:
@@ -1734,38 +1764,6 @@ class FaceSchedulerTests(unittest.TestCase):
             manager.mark_complete(session_id, index)
             manager.retire_terminal_session(session_id, index, f"{session_id}_r0")
             self.assertEqual(manager.session_ids, ())
-
-    def test_kv_local_first_offload_updates_and_release_restores_weight(self) -> None:
-        _, topology = line_topology()
-        graph = WeightedInstanceGraph(topology)
-        allocator = KVAllocator(topology, graph, model_weight_bytes=0)
-        allocation = allocator.allocate(
-            request_id="r0",
-            decode_instance_index=0,
-            candidate_indices=(0, 1, 2),
-            total_bytes=250,
-        )
-        self.assertEqual(
-            [(piece.instance_index, piece.bytes) for piece in allocation.pieces],
-            [(0, 200), (1, 50)],
-        )
-        self.assertEqual(graph.edge_weight(0, 1), 2)
-        allocator.release(allocation)
-        self.assertEqual(graph.edge_weight(0, 1), 1)
-        self.assertEqual(tuple(allocator.remaining_capacity), (200, 200, 200))
-
-        # At equal weighted distance, prefer the instance with more remaining
-        # HBM before using config order.
-        graph2 = WeightedInstanceGraph(topology)
-        allocator2 = KVAllocator(topology, graph2, model_weight_bytes=0)
-        allocator2.remaining_capacity[:] = [100, 0, 150]
-        allocation2 = allocator2.allocate(
-            request_id="r1",
-            decode_instance_index=1,
-            candidate_indices=(0, 1, 2),
-            total_bytes=120,
-        )
-        self.assertEqual(allocation2.pieces[0].instance_index, 2)
 
 
 

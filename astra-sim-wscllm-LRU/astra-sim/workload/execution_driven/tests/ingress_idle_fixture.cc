@@ -34,14 +34,27 @@ Scenarios (方案 §4 步骤 1-2 操作 6, amended step 1-10):
      child, draining an Error command must abort (SIGABRT); the parent
      asserts the child died by signal (NOT by a clean exit -- the old
      silent-close behavior would have exited 0).
+  7. Transition-hook coverage: set_transition_hook observes EVERY state
+     transition -- 48 full IDLE -> ACTIVE -> IDLE cycles (2 transitions
+     each) plus the closing DRAINING and FINISHED pair
+     (hook_count == 2*48 + 2); there is no bounded polling log anymore.
   8. Close-vs-Submit race: close and one producer contend on the same ingress
      mutex. The Submit is either accepted before close and fully drained, or
      rejected after close; every later Submit is rejected and no command is
      left behind at the finished exit.
+  9. FP1 (2026-09-01, sync-A16 batch P) checked-deadline bounds:
+     checked_wait_deadline rejects 0 / negative / non-finite /
+     beyond-duration::max / sub-tick / near-time_point::max values, arms
+     legal ones, and wait_for_work_until consumes a pending wakeup only on
+     an actual wake (a timeout keeps the signal pending).
 
-Expected state-transition log across all scenarios: 2 (scenario 1), 4
-(scenario 2), 2 (scenario 3), 2 (scenario 4; the log records the NEW state
-of each transition, initial IDLE is not an entry).
+Expected state-transition log per scenario: each scenario constructs its OWN
+Fixture (own ServiceCoordinator + transition hook), so the assertions below
+run against that scenario's local log: 2 (scenario 1), 4 (scenario 2),
+2 (scenario 3), 2 (scenario 4; the log records the NEW state of each
+transition, initial IDLE is not an entry). Scenarios 5/6/8/9 make no
+transition-log assertions; scenario 7 counts transitions on its own
+coordinator-local hook counter.
 
 Build: registered in the CMake build (face M12② same fix) as target
   AstraSim_Analytical_Congestion_Aware_IngressIdleTest in
@@ -96,20 +109,40 @@ using namespace NetworkAnalytical;
 
 namespace {
 
+// Thread-safe transition recorder: transitions may fire on the main loop
+// thread or on a producer thread (mark_input_closed), so the hook records
+// under its own mutex.
+struct TransitionRecorder {
+    mutable std::mutex mtx;
+    std::vector<ServiceState> nexts;
+
+    void record(ServiceState next) {
+        std::lock_guard<std::mutex> lock(mtx);
+        nexts.push_back(next);
+    }
+    std::vector<ServiceState> snapshot() const {
+        std::lock_guard<std::mutex> lock(mtx);
+        return nexts;
+    }
+};
+
 struct Fixture {
     EventQueue eq;
     DecisionMailbox mailbox;
     ServiceCoordinator svc;
     RequestIngress ingress;
     std::vector<EventTime> arrival_ticks;
-    std::vector<ServiceState> scenario1_transitions;
-    std::vector<ServiceState> scenario2_transitions;
-    std::vector<ServiceState> scenario3_transitions;
+    TransitionRecorder transitions;
 
     // Step 1-6: the ingress now deposits ARRIVAL into the mailbox (the
     // fixture never drains it -- the mailbox is a pure sink here, and the
     // fixture has no tick-end gate).
-    Fixture() { ingress.bind(&eq, &mailbox, &svc); }
+    Fixture() {
+        ingress.bind(&eq, &mailbox, &svc);
+        svc.set_transition_hook([this](ServiceState, ServiceState next) {
+            transitions.record(next);
+        });
+    }
 };
 
 void run_loop(Fixture& f) {
@@ -145,10 +178,10 @@ void scenario1_no_requests(Fixture& f) {
     producer.join();
 
     FIXTURE_CHECK(f.svc.state() == ServiceState::FINISHED);
-    FIXTURE_CHECK(f.svc.transition_log().size() == 2);
-    FIXTURE_CHECK(f.svc.transition_log()[0] == ServiceState::DRAINING);
-    FIXTURE_CHECK(f.svc.transition_log()[1] == ServiceState::FINISHED);
-    f.scenario1_transitions = f.svc.transition_log();
+    const std::vector<ServiceState> recorded = f.transitions.snapshot();
+    FIXTURE_CHECK(recorded.size() == 2);
+    FIXTURE_CHECK(recorded[0] == ServiceState::DRAINING);
+    FIXTURE_CHECK(recorded[1] == ServiceState::FINISHED);
 
     std::printf("[fixture] scenario 1 PASS: IDLE -> DRAINING -> FINISHED "
                 "(no busy wait, no premature exit)\n");
@@ -202,10 +235,10 @@ void scenario3_close_at_startup_with_preloaded_queue(Fixture& f) {
     // immediately (no request accepted yet), and the preloaded requests run
     // to completion while DRAINING -- "不再接受新 request,等待已接受 request
     // 全部完成后才结束" per 合同②/总体方案 §5.5 -- then FINISHED.
-    FIXTURE_CHECK(f.svc.transition_log().size() == 2);
-    FIXTURE_CHECK(f.svc.transition_log()[0] == ServiceState::DRAINING);
-    FIXTURE_CHECK(f.svc.transition_log()[1] == ServiceState::FINISHED);
-    f.scenario3_transitions = f.svc.transition_log();
+    const std::vector<ServiceState> recorded = f.transitions.snapshot();
+    FIXTURE_CHECK(recorded.size() == 2);
+    FIXTURE_CHECK(recorded[0] == ServiceState::DRAINING);
+    FIXTURE_CHECK(recorded[1] == ServiceState::FINISHED);
 
     std::printf("[fixture] scenario 3 PASS: close-at-startup + preloaded "
                 "2 requests processed (accepted=2, completed=2), no drop\n");
@@ -230,9 +263,10 @@ void scenario4_eof_command(Fixture& f) {
     run_loop(f);
 
     FIXTURE_CHECK(f.svc.state() == ServiceState::FINISHED);
-    FIXTURE_CHECK(f.svc.transition_log().size() == 2);
-    FIXTURE_CHECK(f.svc.transition_log()[0] == ServiceState::DRAINING);
-    FIXTURE_CHECK(f.svc.transition_log()[1] == ServiceState::FINISHED);
+    const std::vector<ServiceState> recorded4 = f.transitions.snapshot();
+    FIXTURE_CHECK(recorded4.size() == 2);
+    FIXTURE_CHECK(recorded4[0] == ServiceState::DRAINING);
+    FIXTURE_CHECK(recorded4[1] == ServiceState::FINISHED);
     FIXTURE_CHECK(f.svc.input_closed());
     FIXTURE_CHECK(f.svc.input_close_reason() == InputCloseReason::EndOfFile);
 
@@ -306,14 +340,66 @@ void scenario6_error_command_aborts() {
     }
 }
 
-void scenario7_transition_log_is_bounded() {
+void scenario6b_submit_identity_gate_aborts() {
+    // F1-CPP C1-8 同款移植(2026-09-30):drain 侧进程级 Submit 身份门。
+    // 空 request_id 与跨通道重复 request_id 一律 fail-closed SIGABRT
+    // (与 scenario 6 同款 fork 隔离)——此前 --command-fifo/直接
+    // enqueue_command 的生产者无任何门,重复 id 会把下游指标身份图
+    // last-wins 污染且 run 可能全绿。
+    struct Case {
+        const char* what;
+        const char* first_id;
+        const char* second_id;
+    };
+    const Case cases[] = {
+        {"empty request_id", "", "x"},
+        {"duplicate Submit request_id", "dup_r0", "dup_r0"},
+    };
+    for (const Case& c : cases) {
+        const pid_t pid = fork();
+        if (pid == 0) {
+            Fixture f;
+            IngressCommand first;
+            first.kind = IngressCommandKind::Submit;
+            first.envelope.session_id = "s0";
+            first.envelope.request_id = c.first_id;
+            first.envelope.arrival_world_ns = 1000;
+            IngressCommand second = first;
+            second.envelope.request_id = c.second_id;
+            if (!f.ingress.enqueue_command(first) ||
+                !f.ingress.enqueue_command(second)) {
+                _exit(42);  // never reached; distinguishable from SIGABRT
+            }
+            f.ingress.drain_commands();  // must abort on the bad identity
+            _exit(43);  // silent-gate regression would land here
+        }
+        FIXTURE_CHECK(pid > 0);
+        int status = 0;
+        pid_t w = -1;
+        while ((w = waitpid(pid, &status, 0)) < 0 && errno == EINTR) {
+        }
+        FIXTURE_CHECK(w == pid);
+        if (WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT) {
+            std::printf("[fixture] scenario 6b PASS: %s aborts fail-closed "
+                        "(SIGABRT)\n",
+                        c.what);
+        } else {
+            std::fprintf(stderr,
+                         "[fixture] FAIL: scenario 6b (%s) expected "
+                         "SIGABRT, got status=%d\n",
+                         c.what, status);
+            std::abort();
+        }
+    }
+}
+
+void scenario7_transition_hook_observes_every_transition() {
     ServiceCoordinator svc;
     uint64_t hook_count = 0;
     svc.set_transition_hook(
         [&hook_count](ServiceState, ServiceState) { ++hook_count; });
 
-    constexpr uint64_t cycles =
-        ServiceCoordinator::kTransitionLogCapacity / 2 + 16;
+    constexpr uint64_t cycles = 48;
     for (uint64_t i = 0; i < cycles; ++i) {
         svc.on_command_accepted();
         svc.on_alarm_scheduled();
@@ -321,22 +407,19 @@ void scenario7_transition_log_is_bounded() {
         svc.on_request_completed();
     }
     svc.mark_input_closed();
+    // M4 fix (2026-09-29): the direct close defers the FINISHED evaluation
+    // to the ingress drain tail (note_input_drained). This scenario drives
+    // a bare coordinator with no ingress, so it completes the deferred
+    // evaluation explicitly -- the same call the drain tail makes on every
+    // real run once the closed queue is empty.
+    svc.note_input_drained();
 
     const uint64_t transitions = cycles * 2 + 2;
     FIXTURE_CHECK(svc.finished());
-    FIXTURE_CHECK(svc.transition_log().size() ==
-           ServiceCoordinator::kTransitionLogCapacity);
-    FIXTURE_CHECK(svc.transition_log_dropped() ==
-           transitions - ServiceCoordinator::kTransitionLogCapacity);
     FIXTURE_CHECK(hook_count == transitions);
-    for (std::size_t i = 0; i < svc.transition_log().size(); ++i) {
-        FIXTURE_CHECK(svc.transition_log()[i] ==
-               (i % 2 == 0 ? ServiceState::ACTIVE : ServiceState::IDLE));
-    }
 
-    std::printf("[fixture] scenario 7 PASS: transition memory is capped at "
-                "%zu entries while hook observed all %llu transitions\n",
-                ServiceCoordinator::kTransitionLogCapacity,
+    std::printf("[fixture] scenario 7 PASS: hook observed all %llu "
+                "transitions (no bounded polling log exists anymore)\n",
                 static_cast<unsigned long long>(transitions));
 }
 
@@ -436,11 +519,19 @@ void scenario2_inject_at_ticks(Fixture& f) {
         c2.envelope.arrival_world_ns = 2000;
         FIXTURE_CHECK(f.ingress.enqueue_command(c2));
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         // step 1-10: with the input still open, both requests have drained
         // long ago (alarms at 1000/2000) and the service is back to IDLE --
-        // the five-state migration IDLE -> ACTIVE -> IDLE is observable
-        // before the close.
+        // the IDLE return is awaited on the mutex-protected counters with a
+        // bounded deadline instead of a fixed sleep (F-04: a fixed 150ms
+        // sleep is not a scheduling guarantee on a loaded host).
+        const auto idle_deadline = std::chrono::steady_clock::now() +
+                                   std::chrono::seconds(5);
+        while (f.svc.completed_request_count() < 2 &&
+               std::chrono::steady_clock::now() < idle_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        FIXTURE_CHECK(f.svc.completed_request_count() == 2);
         FIXTURE_CHECK(f.svc.state() == ServiceState::IDLE);
         f.ingress.mark_input_closed();
     });
@@ -454,12 +545,12 @@ void scenario2_inject_at_ticks(Fixture& f) {
     // alarms fired at exactly the injected ticks, from an otherwise empty
     // queue: no dependency on any rank being idle
     FIXTURE_CHECK(f.arrival_ticks == std::vector<EventTime>({1000, 2000}));
-    FIXTURE_CHECK(f.svc.transition_log().size() == 4);
-    FIXTURE_CHECK(f.svc.transition_log()[0] == ServiceState::ACTIVE);
-    FIXTURE_CHECK(f.svc.transition_log()[1] == ServiceState::IDLE);
-    FIXTURE_CHECK(f.svc.transition_log()[2] == ServiceState::DRAINING);
-    FIXTURE_CHECK(f.svc.transition_log()[3] == ServiceState::FINISHED);
-    f.scenario2_transitions = f.svc.transition_log();
+    const std::vector<ServiceState> recorded2 = f.transitions.snapshot();
+    FIXTURE_CHECK(recorded2.size() == 4);
+    FIXTURE_CHECK(recorded2[0] == ServiceState::ACTIVE);
+    FIXTURE_CHECK(recorded2[1] == ServiceState::IDLE);
+    FIXTURE_CHECK(recorded2[2] == ServiceState::DRAINING);
+    FIXTURE_CHECK(recorded2[3] == ServiceState::FINISHED);
 
     std::printf("[fixture] scenario 2 PASS: IDLE -> ACTIVE -> IDLE -> "
                 "DRAINING -> FINISHED; alarms at exactly 1000/2000\n");
@@ -551,7 +642,8 @@ int main() {
     }
     scenario5_overflow_audit();
     scenario6_error_command_aborts();
-    scenario7_transition_log_is_bounded();
+    scenario6b_submit_identity_gate_aborts();
+    scenario7_transition_hook_observes_every_transition();
     scenario8_close_submit_race_is_linearized();
     scenario9_checked_deadline_bounds();
     std::printf("[fixture] ALL PASS: 10 state transitions logged "

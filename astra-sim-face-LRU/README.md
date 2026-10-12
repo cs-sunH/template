@@ -34,8 +34,12 @@ HBM。NPU 数量禁止单独配置，恒等于行 × 列；芯粒按 row-major �
 ### B. NoC（片上网络）
 
 晶圆内部芯粒间的互连：非环绕二维 mesh 上相邻芯粒间的有向链路（die-to-die），
-链路带宽与每跳时延取硬件配置 `d2d` 的值（多跳逐跳累计），XY（维序）确定性路由，逐跳
-store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（拥塞感知）。C++ 侧由
+链路带宽与每跳时延取硬件配置 `d2d` 的值（每跳时延沿路由**一次累计**），XY（维序）
+确定性路由。传输为**流体流水线**模型（`transmission-mode` 仅支持
+`fluid-pipelined`）：一条流以整条路由的**瓶颈速率**连续传输（逐链路速率 =
+链路带宽 ÷ 该链路并发流数，跨链路取最小值），共用链路的多条流按带宽**连续均分**
+（无逐跳 store-and-forward、无 FIFO 串行队列）；全部字节传毕后一次性追加各跳
+时延之和作为尾抵达完成时刻。C++ 侧由
 分析型网络后端实现（`extern/network_backend/analytical/congestion_aware/`），Python
 规划层有同一语义的确定性 XY 路由函数。注意：这是分析级模型，不建模路由器微架构
 （crossbar / VC / credit），也不做 cycle-accurate 仿真。
@@ -45,9 +49,13 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
 挂载在 NoC 上的**每一个单元**即一颗芯粒。代码与配置中统一称 **NPU**（或 rank），
 权威映射为"一个 FACE 物理计算 die = 一个 ASTRA-sim NPU"。每颗芯粒包含：
 
-- **计算单元**：峰值算力取硬件配置 `compute` 的值，算子以 Roofline 模型计时执行；
+- **计算单元**：生产后端为 **die 内成本模型**（硬件配置 `die` 节派生核网几何/
+  PE/向量峰值/片内 NoC，`astra-sim/workload/DieExecution` 按 DiePlan 的
+  PE/VEC/NOC/MEM 资源阶段驱动真算子执行，见 H 节）；显式 legacy 后端
+  （roofline / replay）保留旧 Roofline 闭式计时；
 - **本地 HBM**（KV 热层）：带宽 / 时延 / 容量取硬件配置 `local-hbm` 的值（容量按
-  profile 档位选择），作为**多用户共享带宽资源**仿真（见 G 节）；
+  profile 档位选择；die 节下带宽取派生值、容量档须与派生容量对齐），作为
+  **多用户共享带宽资源**仿真（见 G 节）；
 - **网络接口（路由端口）**：mesh 上的一个 Device，经有向链路连接其在 mesh 中的物理邻居；
 - **远端内存端口**（仅边缘芯粒拥有，且仅在启用远端内存扩展的配置中生效，见 D）：
   与片外统一内存池直连的中转通道，对应物理系统中的 SerDes 等片外互连。
@@ -117,7 +125,7 @@ prefill 与 decode 不分池。
 
 | 仓库 | 实例组织 | 请求→实例映射策略 | KV 驻留与恢复 | 远端内存池 |
 |---|---|---|---|---|
-| **astra-sim-face-LRU（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射（与 astra-sim-face 逐行一致）：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die Roofline 增量代价 | 两态（LOCAL/REMOTE）；单阶段完整 session LRU 逐出（整体外迁、允许过量释放）；恢复＝全量远端回迁（RECOMPUTE 已删除） | 启用（全部边缘芯粒挂端口） |
+| **astra-sim-face-LRU（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射（与 astra-sim-face 逐行一致）：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die 增量代价（生产 die oracle / legacy Roofline 公式，见 H 节） | 两态（LOCAL/REMOTE）；单阶段完整 session LRU 逐出（整体外迁、允许过量释放）；恢复＝全量远端回迁（RECOMPUTE 已删除） | 启用（全部边缘芯粒挂端口） |
 | astra-sim-face | 统一实例（P+D 同实例） | FACE 原始映射（同上） | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 不支持（机制已整体移除） |
 | astra-sim-wscllm | PD 分离（Prefill-only + Decode-only 分区） | prefill 选排队请求最少；decode 用静态一跳 P→D 映射 | RESIDENT/EVICTED 两态；LRU 逐出；恢复＝重算（跨实例历史走 NoC 迁移） | 未启用（NO_MEMORY_EXPANSION） |
 | astra-sim-wscllm-LRU | PD 分离（同 wscllm） | wscllm 原始映射（静态 P/D 分区 + 最小排队 + 静态路由钉死，逐行保留） | 完整本地/完整远端二态；session 级单阶段完整 LRU 逐出（整体外迁、允许过量释放，无 PARTIAL 运行态）；恢复＝远端池全量回迁（与本仓同一内核族） | 启用 |
@@ -155,7 +163,8 @@ fixture 服务（same_tick_milestone / wakeup_guard / lifecycle）原先发射�
 真实硬件中每颗芯粒的本地 HBM 是共享资源：同一时刻的所有访存流量竞争同一份带宽。
 本仓用每 rank 一个 `LocalHbmBandwidthModel`（`astra-sim/workload/LocalHbmBandwidthModel.{hh,cc}`，
 2026-09-06 改造随远端内存底座自 sh_2.0 同步为 **6 类作业** N-way 版：COMP /
-COMM_READ / COMM_WRITE + RESTORE / POOL_READ / POOL_WRITE）建模，
+COMM_READ / COMM_WRITE + RESTORE / POOL_READ / POOL_WRITE；**2026-10-03 die 内
+仿真器批增第 7 类 DIE_COMPUTE 服务量作业**，见下）建模，
 system.json 键 `hbm-bandwidth-contention`
 （bool，代码默认 true；置 0 完全回退旧行为——COMP 走 Roofline 闭式公式、comm 不计 HBM；
 `local-mem-bw <= 0` 时自动视为 false，防零速率卡死）；另设 legacy 键
@@ -163,18 +172,20 @@ system.json 键 `hbm-bandwidth-contention`
 仅该键开启时，模型退化为 sh_2.0 历史 A/B 基线——"1 个 COMP + 1 个 restore" 50/50
 均分（无 comm/pool 作业入模）；两键全关则不建模型（COMP 走 Roofline 闭式、restore 走
 hbm_dma 单槽闭式计时）。
-参与竞争的流量四类：
+参与竞争的流量五类：
 
-1. **COMP 节点（Roofline 计算访存）**：bytes = tensor_size（读写在同一标量上合并计费），
+1. **COMP 节点（legacy 后端的 Roofline 计算访存）**：bytes = tensor_size（读写在同一标量上合并计费），
    FLOPs 按 peak-perf 并行排空，两者都排空才算完成（单用户时保持 Roofline
    max(计算, 访存) 语义）。若 ET 带**非 0 校准 runtime**（在线 LUT 时钟路径）则不进流体
    模型、保持校准时长——本仓 trace 的 COMP 无 runtime，实际总走流体路径；该分支为在线
-   LUT 兼容保留。
+   LUT 兼容保留。**die 后端下真计算不走本类**（见第 5 类）；控制 marker 微作业仍走本类
+   的 (1 op, 1 byte) 形态（旧微作业语义原样保留）。
 2. **NoC p2p 通信的数据端点**：发送方 rank 的 HBM **读**（COMM_READ）+ 接收方 rank 的
    HBM **写**（COMM_WRITE）（bytes = comm 字节数）。多跳路径途经的中间芯粒**不占 HBM**
    （路由器直通——网络后端本来只在端点计费，模型与此对齐）。节点完成 = join(网络侧完成
    回调, 本端 HBM 作业完成)，两事件都到齐才触发，且恰好触发一次。ET comm 节点可用布尔
    属性 `hbm-charge`（默认 true）让该端点退出计费；bytes == 0 不建作业；1B ACK 照常计。
+   远端 KV 传输（跨实例回迁/迁移的 kv_send/kv_recv）即本类——die 后端下计费照旧。
 3. **KV restore DMA（RESTORE）**：远端回迁的目标端 `local_hbm_kv_restore` 节点
    （节点级属性 `is_local_hbm_kv_restore: true`）——restore 落 HBM 的唯一数据计费；
    一 rank 同时至多一个在飞 restore（hbm_dma 单槽），带宽分享开关见上。
@@ -183,22 +194,97 @@ hbm_dma 单槽闭式计时）。
    （远端端口腿为 2026-09-24 起的并发流体计时，见 §D 端口代价模型；非直连
    链路的数据由 comm_send 承担、边缘侧过路 `hbm-charge:false` 零计费，
    见 §1.1 计费地图）。
+5. **die 后端内部内存阶段（DIE_COMPUTE，2026-10-03 die 批新增）**：DieExecution 的每个
+   MemoryRequest 一个作业；**排空量 = service_units = 实际字节 / 类别效率系数 η**
+   （访问低效折算为占用的服务时间），**实际字节推进 = 服务量 × η**（side-band 分列，
+   绝不回填 tensor_size/D2D/pool payload）；**无 FLOPs 腿、无 latency 相**
+   （local_mem_latency 由 DieExecution 每外层节点至多一次一次性 TIMER 收取）；
+   完成回调直接交还 DieExecution（**不进 Workload**，绝不伪装外层 COMP 完成）。
+   上述六类旧种类的仲裁行为逐字节不变（新种类的加入只通过均分分母 N 生效）。
+   `hbm-bandwidth-contention=0`（die 下）时 DieExecution 按满速率自驱内存腿
+   （service_units/B 的 TIMER，结果注明未模拟双方争用），通信/restore/pool 侧沿用
+   旧开关语义。
 
 仲裁规则：某 rank 同时有 N 个 HBM 用户 → 各得 full_rate/N **严格均分**；任一作业完成
 立即释放并把带宽重分配给剩余用户（事件驱动重分配，无固定时间片）。带宽直接用配置值
 `local-mem-bw`（读写共享同一总线、共享总带宽的**单一标量**，不区分读写方向，也无
-峰值/持续带宽之分）；`local-mem-latency` 按 sh_2.0 惯例在每个作业启动时计一次。
+峰值/持续带宽之分；die 后端下由 resolver 从库派生写入正值，未显式写本键时恢复文档
+缺省"开"）；`local-mem-latency` 按 sh_2.0 惯例在每个（非 DIE）作业启动时计一次。
 TP 集合通信（PacketBundle 3x 路径）**不在**本模型范围内，行为不变。
 
 指标层新增 `type=local_hbm` 导出（每 rank 一条，`[METRIC]` 行）：HBM busy_ns、按类别
 served bytes（compute / comm_read / comm_write，SH2 扩展字段 restore_bytes_served /
 pool_read_bytes_served / pool_write_bytes_served、hbm_shared_ns、
 local_hbm_restore_bytes_issued）、峰值并发作业数、均分重分配事件数、
-真实 HBM 利用率（busy_ns / 墙钟窗口）；旧指标键（rank_compute 的 dram_bw_util 等）语义
-不变。数值断言级验证见
+真实 HBM 利用率（busy_ns / 墙钟窗口）；die 批起另有两列
+`die_service_units_served` / `die_actual_bytes_served`（排空服务量与实际字节分列；
+die 流量绝不混入 compute_bytes_served 等字节域计数）；旧指标键（rank_compute 的
+dram_bw_util 等）语义不变。数值断言级验证见
 `astra-sim/workload/execution_driven/tests/local_hbm_bandwidth_model_test.cc`
-（本仓自研 ET 静态版：1/3 → 1/2 → 全速的均分序列、join 两序、单次触发）与
-`local_hbm_model_test.cc`（6 作业模型权威数值测试，575 行，自 sh_2.0 随迁）。
+（本仓自研 ET 静态版：1/3 → 1/2 → 全速的均分序列、join 两序、单次触发）、
+`local_hbm_model_test.cc`（6 作业模型权威数值测试，575 行，自 sh_2.0 随迁）与
+`local_hbm_die_memory_test.cc`（die 批：DIE 服务量排空/两列分列/取消语义/与
+COMM_READ 同池均分序列）。
+
+### H. 计算成本后端（die 生产 / roofline / replay legacy）与 die 配置链（2026-10-03 die 内仿真器批）
+
+本仓与 face 基础仓共用同一份 `extern/die_model` 成本库（**字节一致 vendoring**，五仓
+同版本），本地计算的真算子执行与 Python 侧预测估值全部来自该库；本仓的
+LOCAL/REMOTE LRU、pool/restore、远端 KV 传输与 `hbm-charge` 计费**原样保留**。
+
+**三后端**（system.json `compute-cost-model` 键选择，与 resolver 双层 fail-closed）：
+
+| 后端 | 取值 | 语义 |
+|---|---|---|
+| **die（生产）** | `die` | 真 COMP 节点必须携带 `die_op_spec`（契约 §2 schema；缺失即 throw，绝不静默回退）；DieModelAdapter 编译/缓存不可变 DiePlan，DieExecution 按 PE/VEC/NOC/MEM 资源阶段驱动；内存阶段经本仓 HBM 仲裁器以 **DIE_COMPUTE 服务量作业**参与 N-way 均分（见 G 节第 5 类，与 RESTORE/POOL/COMM 同池） |
+| roofline（显式 legacy） | `roofline` | 等价 `roofline-enabled=1`：旧 Roofline 闭式 + 流体 COMP 路径，供回归 |
+| replay（显式 legacy） | `replay` | 旧无 roofline 分发（issue_replay 语义） |
+
+无 `compute-cost-model` 键且 `roofline-enabled=1` → 旧 roofline 兼容态（既有模板/回归
+可达）；`die` 与 `roofline-enabled=1` / `replay-only=1` 并存即冲突矩阵报错。
+**die 后端 COMP 分发序**（`Workload::issue_die_comp`，冻结）：timer op → 旧 timer 路径；
+cpu op → replay；`op_role=control_marker`（first_token/drain/exit/sentinel/join/pstart 等
+`comp(name,1,1)` 微节点，生成侧显式标注）→ 旧微作业语义逐字节保留；有 die_spec →
+DieModelAdapter；真 COMP 缺 spec → throw。
+
+**配置链五步**：硬件 JSON `die` 节（六参数，本仓默认点 large/0.75MB SRAM/800mm²/
+NoC 512bit/HBM 4×1 单侧；与 `compute` 节互斥，remote-memory 节正交保留）→
+`config_resolver` 经 ctypes 调 `libdie_model_cabi.so` 派生（核网 35×35=1225、PE 1492.05
+TFLOPS、B=1640 GB/s 与旧硬件**严格连续**、容量 64 GB；Python 零派生公式）→
+物化 `resolved_die_model.json`（runtime_config 四小件同目录）+ system.json 注入
+`compute-cost-model`/`die-model-profile`/`die-model-config`（managed 绝对路径）+
+容量档硬校验（die 节下 profile bytes 必须等于派生容量，本仓 die 对齐档
+`validation-die-64g`）→ `plan_materializer` 把两键写进 manifest.json /
+metrics_manifest.json → Python 侧 `online_scheduler_base` 构造发射语境
+（`DieModelContext`，region 融合：qk+scale+softmax+av→attention_region、
+up+act+down→ffn_region）+ `face_online_scheduler`/`online_service` 构造
+**ctypes 同源 oracle**（`select_decode_instance` 本地计算成本换 die 孤立估值，
+候选/评分/tie-break/KV/LRU 规则不动；FACE 的 `p_context_tokens` 恢复语义如实
+进 spec spans）。
+
+**.so 发现序**（两消费方同约定：`config_resolver.py` 与 `online/die_model_oracle.py`）：
+env `DIE_MODEL_CABI_PATH` → 仓内
+`build/astra_analytical/build_congestion_aware/lib/`（再退 `bin/`）→
+**fail-closed**（绝不静默回退 roofline）。裸仓无 .so 时 die 用例按库可用性门 skip
+（legacy 回归全绿）；集成构建后恒放行。
+
+**die 利用率三口径**（契约 §7.6；`type=rank_compute` 记录新键
+`active_kernel_die_{compute,memory,vector}_util`，门控=compute-cost-model=die，
+roofline 键 legacy 门控不动）：compute = PE FLOP/(PE_peak_die×elapsed)、
+memory = 实际字节/(B_mem×elapsed)、vector = eqops/(V_peak×elapsed)；
+metrics_postprocess 管线级断言 die run 每 rank 三键非 null 且 ∈[0,1+ε]。
+
+**性能注记**：die 计划编译有真实开销（大 prefill 形状占主导）——构建务必
+`-DCMAKE_BUILD_TYPE=Release`（无优化形态慢约一个量级）；计划缓存为进程级共享
+（同一 resolved 硬件的全部 Sys 共享一份 LRU 4096）。本仓 1s die 冒烟 wall 见
+`/tmp/die_build/rollout_face_lru/REPORT.md` 的性能观察段。
+
+**本仓 vs face 基础仓的 die 适配差异**（红线级保留）：LOCAL/REMOTE LRU 会话 KV
+（`session_lru_tiered`）不改为 base 的逻辑删除；restore/pool/远端 KV 传输/
+`hbm-charge`/`hbm-access-mode` 计费照旧；runtime 物化四小件（多
+`remote_memory.json`）；`face_scheduler` 的 `p_context_tokens`（恢复后 prefill
+attention 覆盖历史 KV）在 die spec 中如实携带（prefill span 的 kv =
+p_context_tokens、q_start = 历史长度）；六类旧 HBM 作业种类行为逐字节不变。
 
 ## 1. 本仓是什么
 
@@ -278,9 +364,16 @@ prefill 准入 `prepare_history`、decode 准入 `move_prefill_to_decode`、容�
 | remote_load（回迁） | [1B control/arm] → edge `mem_load`（仅池端口流体计时）→ edge `comm_send`（`hbm_charge=false`）→ target `comm_recv`（`hbm_charge=false`，目标写由 restore 承担）→ target `local_hbm_kv_restore`（节点级 `is_local_hbm_kv_restore=true`）＝RESTORE 唯一数据计费 |
 | noc_migrate（LOCAL 跨实例 / decode P→D 交接） | face 既有 1000 类 p2p 配对迁移，两端正常 COMM_READ/COMM_WRITE 计费 |
 
-KV 传输 tag 由 `TransferTagAllocator` 从 **10,000,000** 起单调分配（错开既有
-`queue_index*10000+{1000,1900,3000}` 段）；新节点命名避开 `first_token` /
-`batch_train_` C++ 名字锚点子串。
+KV 传输 tag 由 `TransferTagAllocator` 从 **10,000,000** 起单调分配
+（对 queue_index<1000 错开既有 `queue_index*10000+{1000,1900,3000}` 段；
+≥1000 的值域重叠为 generate_face_trace.py 内已登记的潜伏项——C++ 不以
+comm_tag 配对，无时序影响）；新节点命名避开 `first_token` /
+`batch_train_` C++ 名字锚点段（P1-6 修复起锚点按精确命名段匹配：
+`_first_token_` / `_kv_send_rank` / `_kv_recv_rank` /
+`_kv_transfer_action`；request_id/session_id 内嵌保留子串
+`kv`/`first_token`/`_join_`/`_pstart_` 及 `batch_train_` 前缀（request_id）
+由调度器加载侧 fail-closed 拒绝——2026-10-01 补齐后三段，防 C++ 起始
+锚点/哨兵通道被 manifest id 误击）。
 
 **逐出与推理并行（旁路支链，2026-09-13）**：四处逐出发射点（准入 history
 逐出 / prefill 增长逐出 / 列车头 joiner decode 逐出 / blocked admission
@@ -308,7 +401,12 @@ store，每会话至多一条登记），回迁发射统一入口（REMOTE 全�
 发射前查表补边：同缘直接挂同 rank data_dep、跨缘经 1B p2p 中继承载时序
 （桥拒绝跨 rank 直边）；恢复链在等齐在飞 store 后才落位，恢复完成前不可
 消费；terminal 会话回收登记。懒处理：store 早已物理完成时补边即刻满足、
-零额外时延。
+零额外时延。**决策→发射窗口门（2026-10-01 补丁）**：decode 侧逐出的
+决策时点与物理发射时点（joiner 列车头）分离，该窗口内被逐会话下一 turn
+的回迁若先发射会绕过查表（池读先于池写）——构图器另登记"已决策未发射"
+计数（`pending_store_decisions`），调度器准入门对 REMOTE 态且存在未发射
+store 的会话推迟准入（纯推迟、无 mutation，dirty 门保证发射后重试）；
+发射侧核销计数，运行终态两张登记表非空即 fail-closed（verify_run_end）。
 
 **瞬态双占用窗口口径**：容量权威在 Python 台账、**决策时刻**记账（本仓既有
 语义，逐出策略/准入/`capacity_violations` 口径均不变，C++ 无容量强制）；
@@ -361,13 +459,18 @@ cd <本仓根>
 #    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../extern/network_backend/analytical backend_build)
 #    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../astra-sim/network_frontend/analytical frontend_build)
 #    EOF
-cmake -S build/astra_analytical -B build/astra_analytical/build_congestion_aware -DBUILDTARGET=congestion_aware -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON
+cmake -S build/astra_analytical -B build/astra_analytical/build_congestion_aware -DBUILDTARGET=congestion_aware -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/astra_analytical/build_congestion_aware -j
+#    （Release 注记，2026-10-03 die 批：默认全量构建已含 extern/die_model 的
+#    die_model / die_model_cabi 目标，.so 落 build_congestion_aware/lib/ 即
+#    §H 发现序仓内路径；die 后端的计划编译在无优化形态下慢约一个量级，
+#    正式跑务必带 -DCMAKE_BUILD_TYPE=Release。）
 
-# ② 物化输入（唯一允许源 = agent-traces/tracelab/astra_compute_20.csv 前 2 秒，
-#    arrival_time < 30e9 ns；物化器：derive_20_first_30_seconds.py）
+# ② 物化输入（唯一允许源 = agent-traces/tracelab/astra_compute_20.csv 前 1 秒，
+#    arrival_time < 1e9 ns；物化器：derive_20_first_30_seconds.py；
+#    2026-09-29 起冒烟窗口规范 1 秒——Agents.md 冒烟测试与仿真效率规范同源）
 #    产物放 sh_test_mesh/workload/llama2_7b_inference/traces/，
-#    并把 trace_config.csv 第 12 行 request_queue_csv 指向它
+#    并把 trace_config.csv 的 config,request_queue_csv 行指向它
 #    （裸仓交付态该指针为占位串；kv_cache_policy=session_lru_tiered 为本仓
 #    交付态值且为唯一合法值，无需改动）
 #    物化器 CLI：[source] [queue] [sidecar] [window_ns] [arrival_scale]；
@@ -389,7 +492,11 @@ bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <绝对�
 
 # ⑤ 指标后处理 + ④对账
 bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
-#    （在线 runner 已自动后处理：raw/normalized_metrics.csv；full 档额外产
+#    （归档后注意：run 成功经 archive_run_outputs.sh 瘦身后 run_dir 内
+#    cpp.log 已压缩为 cpp.log.gz，常态仅余 metrics.log——归档后的手动
+#    重算请改喂 <run_dir>/metrics.log（metrics_postprocess 的 .gz 回退
+#    .gz 回退已落地,可直接喂 cpp.log.gz）；在线 runner
+#    已自动后处理：raw/normalized_metrics.csv；full 档额外产
 #    request_metrics.csv——逐请求冻结 29 列，与 manifest 按 queue_index/
 #    request_id fail-closed 连接；summary/off 档不产该文件，原因写
 #    postprocess.log）
@@ -405,7 +512,9 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 #    per_request/hbm_watermark 三件=hbm_intervals（权威 RLE）+hbm_plot_series（行预算绘图，旧 hbm_watermark_series 已退役）+hbm_watermark_instances、cache_events+kv_hit_states、
 #    slo_warmup.json；P1/2026-08-30 起 hbm_watermark 按四层可信度分级：run_dir 含
 #    results/kv_delta_journal.jsonl 时走 journal 权威重放，含 checksum 证书为
-#    per_rank_total_hbm_certified 层——正式逐 rank 容量判决、违规 exit 3；缺
+#    per_rank_total_hbm_certified 层——正式逐 rank 容量判决、违规 exit 3
+#    （F11/2026-09-26 起 driver 整体退出码透传 3；自动链 warn 口径下体现为
+#    slo_postprocess.FAIL 标记 + runner 透传 exit 3（2026-09-30 起 run_slo_postprocess.sh 原样透传 driver 的 rc=3）；缺
 #    journal 的旧 run 为 upper_bound_only 上界层，超限只诊断不认证、exit 0），
 #    一律不传分桶/聚合参数（粗化留给下游画图脚本）；
 #    非 full 档依赖 request_metrics.csv 的子命令按设计跳过并写说明；
@@ -414,7 +523,8 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 #    strict=失败即 runner 非零退出。runner 同时把 per-request manifest
 #    （metrics_manifest.json/manifest.json）拷入 run_dir 根（P2）——run_dir
 #    自包含，与仓还原状态解耦
-python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py（--bridge-dir/--manifest，详见其 --help）
+# 对账工具（独立调用，按需执行；--bridge-dir/--manifest 详见其 --help）
+python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py
 
 # ⑥ 一键清空测试记录 + 编译产物（还原裸仓库 = 无物化输入 + 无 build/）
 bash sh_test_mesh/run_scripts/clean_test_records.sh      # 清物化输入/运行产物/缓存（含 trace_config 指针回占位）
@@ -439,7 +549,10 @@ summary——优先级 env `SH_METRICS_DETAIL` > 本仓
 `detail_level`（off|summary|full）；env 与 json 均非法/缺失时 fail-closed
 立即退出。full 档后处理额外产出逐请求 `request_metrics.csv`（列集冻结，
 后续工作包只填 NA 占位不加列；request_type/prefix_len 由物化链路从
-canonical sidecar 透传进 manifest.json）。
+canonical sidecar 透传进 manifest.json）。full 档门禁（F5/2026-09-26）：
+init 声明 `input_requests>0` 而日志无任何 type=request 记录（截断日志）由
+静默放行改为 PostprocessError fail-closed 非零退出；每轮另发一条信息性
+stdout 行 `{"consistency_summary": …}`（纯信息、无门禁语义、不改退出码）。
 
 SLO 观测层（B2 起，WP6/WP8/WP9-C++）：`metrics_manifest.json` 新增 `slo_sampling`
 节（`watermark_period_ns`/`link_bucket_ns`/`provisional`；plan_materializer 从
@@ -455,10 +568,11 @@ watermark 5,000,000 ns / link_bucket 20,000,000 ns），null/缺失时回退文�
   注明原因（既有现状，真实水位线由离线脚本从 ledger.jsonl 重放补充）。
 - `link_bucket` / `link_total`（WP6，FluidScheduler 只读积分，不改流推进）：
   每桶 max/total bytes 与 mesh 边界链路峰值、每链路 total_bytes/active_ns。
-  开关 env `ASTRA_LINK_OBSERVER`（metrics≠off 且值≠0 时启用，设 0 关闭；off 档
-  零工作零记录，关时不注册任何回调）。
+  开关 env `ASTRA_LINK_OBSERVER`（仅显式字符串 "0" 关闭；未设或任何其它
+  值=启用——runner 缺省导出 0 关闭；off 档零工作零记录，关时不注册任何
+  回调）。
 - request 记录新增 `first_token_ns`（WP9 事件码 8：python 侧首 token 标记节点
-  名含 `first_token`，C++ 按 (request_id, rank) 注册 complete 边锚点、跨 rank
+  名携带 `_first_token_` 段，C++ 按 (request_id, rank) 注册 complete 边锚点、跨 rank
   取 min tick；无事件输出 null 并注明；不变量 arrival ≤ first_token ≤ completion、
   decode_length==1 的相等不变量已按 WP9_CONTRACT §6（2026-08-27 主控裁
   决）放宽：code 8 跨 rank 取 min、completion（code 4）取 max，TP 斜台使二者
@@ -531,7 +645,7 @@ watermark 5,000,000 ns / link_bucket 20,000,000 ns），null/缺失时回退文�
   - **换算权威**：W_bytes/KV_bytes 用本仓
     `face_scheduler.estimate_model_weight_bytes` /
     `kv_cache_bytes_for_tokens`（trace_config.csv 参数：swiglu →
-    13476831232 / 524288 B/token，test_face_scheduler.py:301 冻结），
+    13476831232 / 524288 B/token，test_face_scheduler.py（load_checked_in_config） 冻结），
     不另行编造。
   - **运行内 CSV 保持 NA**（ledger 归档前不可得，instructions 记
     `proxy_unavailable:no_train_ledger(results/)`）；对归档 run 离线
@@ -578,18 +692,28 @@ OnlineCli 在线家族解析）：
 - **calendar reader（P0 turn-0 late-discovery fix，2026-08-30，对齐 wscllm）**：
   CSV 队列经一次 64 KiB 分块流式索引遍（fail-closed 结构校验：session 块
   连续、块首 turn-0、块内 turn 严格 +1、turn>0 行 arrival 必空）+ 溯源边车
-  门（`<queue>.provenance.json` 存在即逐字段比对，任一不匹配零 Submit 前
-  `[Error]` 退出）+ turn-0 到达日历（按 `(arrival, queue_index)` 稳定排序
+  门（`<queue>.provenance.json` 必填：缺失或与索引复算字段任一不匹配，零
+  Submit 前 `[Error]` 退出——2026-10-07 起缺席从"存在才比对"改为
+  fail-closed，对齐 wscllm-LRU 2026-09-30 M-16 修复）+ turn-0 到达日历（按 `(arrival, queue_index)` 稳定排序
   提交）读取——turn-0 提交序与文件位置彻底解耦，非单调输入下
   `late_static_submit=0`，run-end 输出 arrival audit 行并以
   `late_static_submit==0 且逐行 ingress_delay==0（t=0 边界行除外）` 为正式
-  门禁（fail 则非零退出）。
+  门禁（fail 则非零退出）。**M5 修复（2026-09-29）**：因 ingress 背压
+  （4096 容量队列停满）被停泊后时钟推进才排干的 turn-0 提交，其钳制是
+  容量伪影而非读入器迟到——现单独计入 `late_static_submit_backpressure`
+  （arrival audit 行披露、`capacity_backpressure` 行级来源标注）并**豁免于
+  门禁**；只有读入器自身迟发现（首个 pump 即晚于声明到达、无背压参与）
+  仍计 `late_static_submit` 并 fail 门禁（windowed_trace_reader_test part Q
+  双向钉住）。
 - **--request-window-rows 死旋钮已清除（2026-09-05，A.4）**：该 advisory
   旋钮（2026-08-30 P0 turn-0 fix 后 calendar reader 按 arrival 序提交，窗口
   值不约束读取与提交，不改变任何行为）已从本仓彻底移除——OnlineCli 解析/
   选项成员、main_online 调用实参、runner 的 `SH_REQUEST_WINDOW_ROWS` 透传
-  一并删除；WindowedTraceReader 的 high_water 缺省 128 仅留作 reader 内部
-  advisory 记录，无 CLI 暴露口。**本仓不设 C++ 启动 span 预检/拒绝门**。
+  一并删除；`high_water`（缺省 128）机制随窗口读取器一并移除，现仅存于
+  旧版 oracle 测试副本
+  `astra-sim/workload/execution_driven/tests/LegacyOracleWindowedTraceReader`，
+  生产 WindowedTraceReader 无任何窗口/水位概念、无 CLI 暴露口。**本仓不设
+  C++ 启动 span 预检/拒绝门**。
   plan_materializer 的
   manifest.json 仍持久化 `max_same_session_span`/`span_session_id`/
   `span_row_range`/`span_row_range_convention`，仅作 provenance 审计
@@ -605,7 +729,7 @@ OnlineCli 在线家族解析）：
   不可同时为空）；③Error 终止路径（fail-closed）先于停泊发生。**未来重构
   若打破 pump 后置 drain 次序或 calendar 完整性不变量，必须重做可达性
   分析**，在此之前不引入该分支。停泊兜底统一交 `--idle-watchdog-s`
-  （含任何未来未知停滞形态）；12 字段 `parking_diagnostics` 报文保留
+  （含任何未来未知停滞形态）；11 字段 `parking_diagnostics` 报文保留
   （`window_occupancy` 在本仓语义=已提交未触发 turn-0 计数）。
 - `--idle-watchdog-s <秒>`：墙钟停泊看门狗，缺省 `1.0`=武装（2026-09-05：
   静默楔死 ~1s 即 fail-closed abort，不再无声挂死；官方 CSV run 到达全量
@@ -613,8 +737,10 @@ OnlineCli 在线家族解析）：
   原无界契约——IDLE fixture 等刻意长停车场景必须显式传 `0`）；开时停泊点
   墙钟超时即同款诊断 fatal
   （`--idle-` 前缀同受家族未知旗标硬错保护）。
-  **FP1（2026-09-01，sync-A16 批次P）**：数值合同冻结——token 不得含任何
-  空白或符号字符（拒 `" +1"`/`" -1"`）；判界唯一顺序为 `==0` 接受（=关）
+  **FP1（2026-09-01，sync-A16 批次P；词法合同 2026-09-26 ed-bridge-C4 放宽）**：
+  数值合同冻结——token 任意位置不得含空白字符；符号字符仅在**首位置**拒
+  （拒 `" +1"`/`" -1"`；内部符号如 `"1e+3"` 合法）；判界唯一顺序为 `==0`
+  接受（=关）
   → `(0,1e-9)` 拒（"低于时钟分辨率"，常量
   `kMinIdleWatchdogSeconds=1e-9`）→ `>1e9` 拒（平台上限，常量
   `kMaxIdleWatchdogSeconds=1e9`，两端点本身接受）；ERANGE 上下溢均拒。
@@ -639,9 +765,11 @@ OnlineCli 在线家族解析）：
 
 - **env `SH_ARCHIVE_RUN`**（默认 `1` 开）：成功 run 结束后 runner 自动调
   `sh_test_mesh/run_scripts/archive_run_outputs.sh <run_dir>` 做产物瘦身归档：
-  抽 `[METRIC]` 行 → `metrics.log`（常驻）；新运行的桥请求只追加到
-  `results/request_journal.jsonl`，不再生成海量 `request_*.json` inode；仅为
-  兼容旧运行，若发现旧散装请求才归入 `bridge_requests.tar.gz`。`cpp.log` →
+  抽 `[METRIC]` 行 → `metrics.log`（常驻；metrics-detail=off 档 C++ 侧不产出
+  `[METRIC]`，归档按"未产出"豁免——不落 metrics.log、不判失败；其余档位
+  cpp.log 在场而零 `[METRIC]` 行按残缺 run 硬 FAIL 拒绝归档）。新运行的桥
+  请求只追加到 `results/request_journal.jsonl`，不再生成海量
+  `request_*.json` inode。`cpp.log` →
   `cpp.log.gz`（pigz 优先）；results/ 非必需 jsonl →
   `results_extra.tar.gz`。**常驻保留集**：三个 metrics CSV、metrics.log、
   python.log、postprocess.log、`results/request_journal.jsonl`、
@@ -649,7 +777,11 @@ OnlineCli 在线家族解析）：
   `results/online_stats.jsonl`、`results/profile.jsonl`（后三者存在时）、
   `results/train_ledger.jsonl`、`results/ledger.jsonl`、
   `results/sensing_query_log.jsonl`（仅 sensing 跑产生，对账输入，strategy 跑
-  保留集不受影响）、campaign_provenance.json、
+  保留集不受影响）、`results/remote_memory_transactions.jsonl`（仅 sensing
+  跑产生）、`results/kv_delta_journal.jsonl` +
+  `results/kv_delta_journal_checksum.json`（阶段 2 权威逐 rank delta 账本与
+  run 末守恒证书，hbm_watermark certified 容量判决输入）、
+  campaign_provenance.json、
   P2 拷入的 `metrics_manifest.json`/`manifest.json`、
   P3 自动 SLO 提取产物（`slo_*.csv`、`slo_*.json`、`cache_events.csv`、
   `kv_hit_states.csv`、`slo_postprocess.log`、`slo_postprocess.FAIL` 若有）。
@@ -674,6 +806,22 @@ OnlineCli 在线家族解析）：
   同项 D3：在线模式 `hbm_watermark` 逐桶行（全零序列，权威源是
   slo_tools/hbm_watermark.py 的 ledger 重放）不再发射；per-rank
   `hbm_watermark_summary` 保留（含 flat-zero 注记）。
+- **env `ASTRA_SIM_ONLINE_COMPLETED_NODES`**（默认不设，2026-09-26 补登记）：
+  C++ `DecisionMailbox` 的 `CompletedFactAccumulator` 取值仅两种合法形态——
+  不设=累计器路径（缺省，省内存省工作）；`=exact`=精确模式（保留冻结逐节点
+  完成集，属 oracle/专项审计档，整体 5–8× 墙钟 + 20–37 GiB RSS，禁上全量，
+  见仓外工作区开关清单文档）；其它取值启动即抛错 fail-closed
+  （`DecisionMailbox.cc（completed_nodes_exact_from_env）`，env 解析段与 F 仓同款）。
+- **env `SH_QUEUE_AGG_VERIFY`（debug 旋钮，非基线开关）**：
+  face_online_scheduler 的 qp 聚合影子对账（置 1 时逐决策边界以全量重算
+  比对增量维护的 remaining_chunks，fail-closed）；默认关。
+- **env `SH_PROPAGATING_TAIL_LIMIT`（研究旋钮）**：
+  online_scheduler_base 在途尾部观测器的上限覆盖（缺省见
+  test_propagating_tail.py；超限 fail-closed 报错）。
+- **env `SH_FIFO_WAIT_S` / `SH_EXIT_WAIT_S`**（runner 内部预算，2026-10-01
+  补登记）：前者缺省 60 s——runner 等待 C++ 建好两个桥 FIFO 的墙钟预算
+  （`0` = 无界等待逃生口）；后者缺省 3600 s（fixture 120 s）——run 结束后
+  收割 C++/Python 进程的等待上限，超时即 SIGTERM→SIGKILL 清杀。
 - **C3 桥字节压缩**：Python 侧桥响应 `json.dump` 改紧凑分隔符、C++ 侧
   响应数组改 move——JSON 语义不变，通道字节显著缩小（channel_bytes 等
   桥统计随之变小，属诊断白名单）。
@@ -706,18 +854,31 @@ OnlineCli 在线家族解析）：
 ## 4. 机制回归 fixtures
 
 `run_online_idle_fixture.sh`（IDLE 五态生命周期）、`run_online_wakeup_guard_fixture.sh`、
-`run_online_same_tick_milestone.sh`、`bridge_race_stress_repro.sh`——机制层健康自检。
+`run_online_same_tick_milestone.sh`——机制层健康自检；`bridge_race_stress_repro.sh`
+为旧协议竞态复现器（在 /tmp 复刻 2026-08-16 双向长连接修复前的握手时序，
+PASS = 观察到旧竞态复现，不构建、不运行当前仓代码，仅作历史机制对照，非健康自检）。
 另有 C++ 聚焦单测（target 注册于 `astra-sim/network_frontend/analytical/CMakeLists.txt`，
 随 §2 ① 构建树编译，可执行文件落在 `build/astra_analytical/build_congestion_aware/bin/`，
 无参数直跑；2026-08-29 新增两项，多仓同构；2026-09 -LRU 改造再随迁两项；
-2026-09-24 SerDes 片外链路并发化改造新增三项远端端口测试，见下）：
+2026-09-24 SerDes 片外链路并发化改造新增三项远端端口测试，见下；
+**2026-10-03 die 内仿真器批新增三项 die 前端测试**）：
 `..._AlarmCancellationTest`（可取消 alarm
 链路：bucket 清空时 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、
 legacy 后端回退 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot
 node bucket 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、
-sizeof 编译期锁定）、`..._LocalHbmTest`（本仓自研 ET 静态版 HBM 模型测试，保留）、
+sizeof 编译期锁定——die 批起 OnlineNode 布局锚 384→424，ComputeAttrs 增
+OpRole+die_spec、OnlineStatisticsState 增 vector_utilization，mirror 断言自动携带）、
+`..._LocalHbmTest`（本仓自研 ET 静态版 HBM 模型测试，保留）、
 `..._LocalHbmModelTest`（6 作业模型权威数值测试，575 行，2026-09 改造自 sh_2.0 随迁：
-RESTORE/POOL_READ/POOL_WRITE 泳道与 N-way 均分序列的逐数值断言）等。
+RESTORE/POOL_READ/POOL_WRITE 泳道与 N-way 均分序列的逐数值断言）等，
+以及 die 批三项：`..._DieModelAdapterTest`（die 后端分发：后端解析/冲突矩阵
+fork 探针、die_spec→adapter→finish_generic_node 恰一次、control_marker 旧微作业、
+缺 spec fail-closed throw、parser runtime_ns 冲突、利用率三口径聚合对账）、
+`..._DieExecutionLifecycleTest`（Timer/Memory 混合计划端到端、一次性
+local_mem_latency 外部死区、contention=0 自驱 vs 独立满速 oracle、contention=1 仲裁、
+槽位占用/释放、单 terminal、在飞拆除）、`..._LocalHbmDieMemoryTest`
+（DIE_COMPUTE 服务量作业：均分排空序列、sink 完成时刻、actual/service 两列分列、
+坏请求拒绝、cancel_die_jobs_of 拆除；与 COMM_READ 同池竞争）。
 
 SerDes 片外链路并发化新增远端端口测试（方案阶段 5.1/5.3/5.4，2026-09-24；
 源文件 `astra-sim/workload/execution_driven/tests/remote_port_{nway,online_gate,static_gate}_test.cc`）：
@@ -745,8 +906,7 @@ LRU 逐 victim 恰一笔全量 remote_store、逐笔重查水位在首个覆盖�
 过量释放不 raise、活跃/触发会话保护、平局按 session_id、耗尽 admission_blocked
 不 raise、传输边缘端口/全量层域/单 victim 单 record）、
 `test_face_kv_incremental_invariants.py`（两态增量账本不变量 + PARTIAL 不可达
-fail-closed 证明）、`online/test_whole_session_no_partial_outputs.py`（规格6
-输出门禁：新产物无 partial/suffix 词汇域、evict_full 恒全量域）、
+fail-closed 证明）、
 `online/test_graph_batch_builder.py` 的 `KVTransferBillingNailTest`（remote_store/
 remote_load/noc_migrate 逐节点 HBM 计费键钉子）与远端恢复会话列车统一聚合体专项。
 
@@ -758,10 +918,30 @@ remote_load/noc_migrate 逐节点 HBM 计费键钉子）与远端恢复会话列
 - `sh_test_mesh/run_scripts/`：全部 runner 脚本
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
 - `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_postprocess_driver.py`（A4 单遍合并驱动，run_slo_postprocess.sh 链内使用；工具 CLI 不变）+ `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值）+ tests；纯离线只读，详见目录内 README.md）
-- `sh_test_mesh/tests/` + workload 根 + online/：pytest（session 级 Tiered-LRU
-  改造后基线（2026-09-25 实测）：tests/ 48 + workload 根 35（test_face_scheduler
-  25 / kv_incremental_invariants 4 / tiered_eviction_sequence 6）+ online/ 75
-  （另 7 subtests）= **158 passed**，`SH_STRICT_KV_INVARIANTS=1` 下同绿；
+- `sh_test_mesh/tests/` + workload 根 + online/：全量回归入口
+  `tests/run_all.sh`（收编 19 个测试文件；session 级 Tiered-LRU
+  改造后基线（2026-09-26 实测复核：两轮 run_all.sh 实跑 19/19 文件全绿，
+  1 例幻影登记 online/test_whole_session_no_partial_outputs.py 已剔除
+  ——该文件全仓无实体）：
+  tests/ 70 + workload 根 45（test_face_scheduler
+  23 / kv_incremental_invariants 4 / tiered_eviction_sequence 6 /
+  **test_die_model_oracle 12（die 批新增）**）+ online/ 97
+  （unittest 62 + pytest 15 + **test_die_model_adapter 20（die 批新增）**）
+  + slo_tools/tests 136（见下条）=
+  **347 passed + 1 skipped**（2026-10-03 die 内仿真器批后实测口径；
+  die 批增量 = tests/ 的 config_resolver DieHardwareTests 12 例 +
+  test_metrics_contract 的 DieUtilizationPipelineContractTests 9 例 +
+  workload 根 test_die_model_oracle 12 例 + online/test_die_model_adapter
+  20 例；die 用例按 .so 库可用性门 skip（裸仓无 build 时 316 passed +
+  23 skipped，legacy 回归全绿；集成构建后恒放行，见 §H 发现序）。
+  旧数 295（2026-10-01 修复批口径）不含 die 批 44 例；
+  此前 286/288 两组旧数均有
+  漏计——slo_tools/tests 实为 136 例、face_scheduler 实为 23 例；修复批
+  新增 config_resolver 非对称维度序钉子、admission_liveness 的 store
+  决策→发射窗口门专项、store_restore_ordering 的决策计数生命周期专项；
+  另 test_hbm_watermark 的 fixture 可移植性修复使全 40 例可在 Windows
+  开发机本地执行）（四分量合计，与 tests/run_all.sh 头注口径一致），
+  `SH_STRICT_KV_INVARIANTS=1` 下同绿；
   2026-08-22 拼 batch 改造新增 online/test_weight_passes.py(4) +
   online/test_train_machinery.py(9) + online/test_graph_batch_builder.py(7)；
   2026-08-29 内存根治续作新增 online/test_propagating_tail.py(8)；
@@ -770,15 +950,17 @@ remote_load/noc_migrate 逐节点 HBM 计费键钉子）与远端恢复会话列
   test_eviction_side_branch_structure.py(7) + test_store_restore_ordering.py(5)；
   2026-09-25 session 级 Tiered-LRU 改造重写 tiered_eviction_sequence(6) /
   kv_incremental_invariants(4) / store_restore_ordering(5) / admission_liveness
-  的恢复专项等，新增 online/test_whole_session_no_partial_outputs.py(1) 输出门禁）
-- `sh_test_mesh/slo_tools/tests/`：120 例（B4 后 34→38 watermark / 总 114→120）；
-  其中 3 例（driver_parity ×2 + load_imbalance 手算例）为**改前基线既有失败**
-  ——原 face 仓与 sh_2.0 仓同样失败（环境性/共享基线问题），与 -LRU 改造无关
+  的恢复专项等）
+- `sh_test_mesh/slo_tools/tests/`：136 例（2026-10-01 复核实数；此前注记的 128 为漏计；B4 后 34→38 watermark，
+  2026-09-26 修复批再扩至 128）；历史注记：曾 3 例（driver_parity ×2 +
+  load_imbalance 手算例）为改前基线既有失败（原 face 仓与 sh_2.0 仓同样失败，
+  环境性/共享基线问题）——已由 2026-09-26 修复批处理，现测全绿（仅
+  hbm_watermark 的 JournalParityRealTests 因仓外 fixture 缺失自动 skip，非失败）
 
 ## 6. 边界与纪律
 
-- 仿真输入唯一允许源 = astra_compute_20.csv 前 2 秒（更早的用户指示曾临时
-  授权过更大窗口；以当下指示为准）。
+- 仿真输入唯一允许源 = astra_compute_20.csv 前 1 秒（2026-09-29 起冒烟窗口
+  规范 1 秒；更早曾为 2 秒/30 秒，以当下指示与 Agents.md 冒烟规范为准）。
 - 缺失输入一律 fail-closed（generate 桩/materializer/runner/GEN_MATCH 均实测 exit=1）。
 - FACE 映射文件 `face_scheduler.py`（Prefill/Decode 选点）为保留对象，**勿改**
   （-LRU 改造全程零改动，diff 可证）；`session_kv_manager.py` 为两态 KV 内核
@@ -804,10 +986,15 @@ DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/�
   只读一次）、decode 与 prefill chunk 混拼（每迭代 ≤1 chunk，FCFS 队列头，
   chunk 之间不互拼）、批成员只在列车边界变化。每实例状态机：qp（FCFS
   prefill 队列）/ active_decode（批成员表）/ pending_decode_ready（KV 就绪
-  待加入）/ in_flight_train（唯一在飞列车，冻结成员快照 + membership_digest；
+  待加入）/ in_flight_train（唯一在飞列车，冻结成员快照；核销按
+  train_id 路由 + signal_set 集合匹配，membership_digest 死字段已随
+  2026-10-01 清理删除）；
   busy 门 = "一个列车在飞"）。列车终点 = 队列头 prefill drain（剩余 chunk 数，
-  先验）或全部 decode 工作耗尽；交付默认 T_max=8（2026-08-22 §7.4 A2 对拍裁决：无上限 TTFT -67.3%、16 仍 -19.1%、8 全指标 ≤1.3%——"固定为使位移 ≤5% 的最大值"，原则 1 优先于节点数；SH_TRAIN_MAX_ITER 可覆盖，0=不设限；截断且无自然标记的列车发哨兵标记承载完成信号）（SH_TRAIN_MAX_ITER 正整数 =
-  上限，截断列车无自然标记时发射哨兵标记承载完成信号）。
+  先验）或全部 decode 工作耗尽；交付默认 T_max=8（2026-08-22 §7.4 A2 对拍
+  裁决：无上限 TTFT -67.3%、16 仍 -19.1%、8 全指标 ≤1.3%——"固定为使位移
+  ≤5% 的最大值"，原则 1 优先于节点数；SH_TRAIN_MAX_ITER 正整数 = 每列车
+  至多 N 个迭代，0 = 不设限；截断且无自然标记的列车发哨兵标记承载完成
+  信号）。
 - 决策边界与仓内路由：`_on_arrival` 按离线同款选择键选 prefill 实例入 FCFS
   队列；`_on_prefill_drain` 以全局 9 实例快照经加权图候选 + Roofline per-die
   代价动态选择 decode 实例（统一实例，P/D 可同可异；批口径适配 =
@@ -849,7 +1036,10 @@ DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/�
   `batch_train_i*_*_end_barrier`（替代每请求一个）+ 列车体后、barrier 前的
   drain/exit/哨兵标记节点（承载 PREFILL_DRAIN / DECODE_COMPLETION watch，
   C++ watch fire 自动同时推 DECODE_COMPLETION + REQUEST_COMPLETE）+ join/
-  pstart 起始标记（指标锚点）；准入动作以 TP 组 `*_history_tp_ready_barrier`
+  pstart 起始标记（指标锚点，P1-1 修复起为 C++ prefill_start/decode_start
+  起始锚点的唯一注册源——按精确命名段 `_pstart_`/`_join_` 注册、min-tick
+  跨批聚合；此前 first-of-group 语义恒被 dep-free 准入门/屏障抢先，队列
+  等待被系统性吸入阶段窗口）；准入动作以 TP 组 `*_history_tp_ready_barrier`
   收尾。列车台账 train_ledger.jsonl 每次发射一行（§7.3 不变量断言输入，
   runner 归档至 results/）。
 - C++ 机制层批节点适配（拼 batch，2026-08-22）：GraphBatchCommitter 的
@@ -861,8 +1051,8 @@ DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/�
   列车 / 混合 drain+exit 标记 + 哨兵探针）。
 - 折入 turn-0 前缀的输入口径 + 运行时 KV 账本：请求队列为唯一仿真输入，
   turn-0 源前缀折入该行 prefill_length（队列口径不变，
-  `traces/derive_20_first_30_seconds.py:14-16`）；manifest 仅携带队列派生的
-  history_tokens_before 推导值（`plan_materializer.py:61-88`）；会话 KV 的
+  `traces/derive_20_first_30_seconds.py（模块 docstring）`）；manifest 仅携带队列派生的
+  history_tokens_before 推导值（`plan_materializer.py（materialize_runtime_configs）`）；会话 KV 的
   规模/位置由运行时两态账本（`SessionKVCacheManager`）动态维护
   （`face_online_scheduler.py`；`session_kv_manager.py`）：LOCAL 驻留命中直接
   复用、跨实例整份 NoC 迁移、REMOTE 全量回迁——**RECOMPUTE 已从历史路径
@@ -870,14 +1060,14 @@ DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/�
 - long double 时间精度适配：大 ns 级首达偏移超出 IEEE-754 double 精确整数
   范围（2^53）时，分析网络适配层返回 ASTRA-sim 时间以 `long double` 保持
   64 位事件时间精确，避免完成回调与事件映射键错位 1 ns
-  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc:71-81`）。
+  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc（sim_get_time 的 long double 换算）`）。
 - WP9 首 token 首步批拆分（2026-08-26，`SH_FIRST_TOKEN_SPLIT`，B4 起
   缺省 "0" 关——60s 决策等价门-2 失败退回 proxy，见 §3.3；显式 "1"
   开启，关闭后构图/决策/账本产物与上线前逐字节一致）：含 debut 成员
   （decode_tokens_consumed==0 的本交付 joiner）且迭代数 ≥2 的列车拆两批发射
   ——首步批 = 全体成员第 1 个 span/chunk + joiner 迁移/起始标记（weight_
   passes=1）+ 多 token debut 的 first_token 标记（事件码 8，metrics_schema
-  `EVENT_FIRST_TOKEN_COMPLETE`，节点名含 `first_token` 子串供 C++ 锚点取
+  `EVENT_FIRST_TOKEN_COMPLETE`，节点名携带 `_first_token_` 段供 C++ 锚点取
   min tick）+ 批命名空间唤醒标记（`batch_train_<id>_first_step`，哨兵同款
   watch 通道，fire 后调度器无操作吞掉并在下一决策边界冲余量批）；余量批 =
   剩余 span/chunk（weight_passes=iterations-1）+ drain/exit/哨兵标记 + end

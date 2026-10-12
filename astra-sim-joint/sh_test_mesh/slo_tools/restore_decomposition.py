@@ -82,9 +82,15 @@ def scan_metric_anchors_requests(cpp_log: Path
         if rtype == "memory_anchor":
             subject = record.get("subject_id")
             tick = record.get("tick_ns")
-            if not isinstance(subject, int) or not isinstance(tick, int):
-                fail(f"{cpp_log}: memory_anchor 记录缺整数 subject_id/"
-                     f"tick_ns（{record}）")
+            # bool 是 int 子类须显式排除；subject_id（queue_index）与
+            # tick_ns 均不允许负值（负锚点归属错请求/参与 min 运算直接
+            # 污染 restore_start）。批次 D 镜像，2026-09-30。
+            if isinstance(subject, bool) or not isinstance(subject, int) \
+                    or subject < 0 or isinstance(tick, bool) \
+                    or not isinstance(tick, int) or tick < 0:
+                fail(f"{cpp_log}: memory_anchor 记录 subject_id/tick_ns 必须为"
+                     f"非负整数（实得 subject_id={subject!r}, "
+                     f"tick_ns={tick!r}；{record}）")
             anchors.setdefault(subject, []).append(tick)
         elif rtype == "request":
             queue_index = record.get("queue_index")
@@ -164,6 +170,12 @@ def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
             "exposed_restore_stall_ns": exposed,
             "hidden_ratio": ratio,
         })
+    # 孤儿锚点（subject_id 无对应 request 记录）被丢弃时必须留痕：请求侧
+    # NA 已有 n_no_anchor_na 计数，锚点侧静默消失会让两侧对不上账。
+    # （R6-U8，2026-09-29 face 移植）
+    n_orphan_anchor_records = sum(
+        len(ticks) for subject, ticks in anchors.items()
+        if subject not in requests)
     summary = {
         "n_requests": len(rows),
         "n_with_anchors": sum(1 for r in rows
@@ -171,6 +183,7 @@ def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
         "n_no_anchor_na": n_no_anchor,
         "n_missing_prefill_boundary_na": n_no_boundary,
         "n_zero_restore_duration_na_ratio": n_zero_duration,
+        "n_orphan_anchor_records_dropped": n_orphan_anchor_records,
         "formula_source": "主规格 §3.2（A 类固定公式，逐字符实现）",
         "anchor_semantics": "restore_start=min(anchor ticks), "
                             "restore_complete=max(anchor ticks), "

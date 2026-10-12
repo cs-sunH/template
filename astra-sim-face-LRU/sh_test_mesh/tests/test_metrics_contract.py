@@ -4,6 +4,7 @@ import copy
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -13,6 +14,11 @@ if str(_WORKLOAD_DIR) not in sys.path:
 
 import metrics_schema as ms
 import metrics_postprocess as mp
+
+_SLO_TOOLS_DIR = _WORKLOAD_DIR.parents[1] / "slo_tools"
+if str(_SLO_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SLO_TOOLS_DIR))
+import slo_common  # noqa: E402
 
 
 _CONFIG_PATH = _WORKLOAD_DIR / "metrics_config.json"
@@ -558,8 +564,11 @@ class MetricsConfigTests(unittest.TestCase):
         self.assertEqual(
             config["memory"],
             {
+                # (2026-10-01) projection 值与 metrics_schema 的权威常量
+                # CHIPLET_PROJECTION_METHOD 对齐(原 "equal_striping" 是
+                # 无消费者的占位副本,口径分歧会在未来接线时静默分叉)。
                 "chiplets_per_npu": 4,
-                "projection": "equal_striping",
+                "projection": "measurement_only_equal_striping",
                 "wasted_definition": "capacity_minus_weight_minus_resident_kv",
             },
         )
@@ -664,19 +673,45 @@ class FirstTokenAndRequestMetricsContractTests(unittest.TestCase):
     def test_terminal_status_enum(self) -> None:
         # Closed enum written into the terminal_status column: no other
         # value may appear in request_metrics.csv terminal_status cells.
+        # P1-3 fix: this used to compare test-local constants against
+        # identical literals and pinned nothing.  It now pins BOTH
+        # production surfaces -- the postprocess writer constants (the
+        # only values the writer can emit) and the slo_tools validator's
+        # frozen five-value superset -- and their subset relation.
         self.assertIn("terminal_status", mp.REQUEST_METRICS_COLUMNS)
-        self.assertEqual(self.TERMINAL_STATUS_VALUES, ("completed", "failed"))
+        writer_values = {
+            mp.TERMINAL_STATUS_COMPLETED,
+            mp.TERMINAL_STATUS_FAILED,
+        }
+        self.assertEqual(writer_values, {"completed", "failed"})
+        self.assertEqual(
+            slo_common.TERMINAL_STATUSES,
+            frozenset(
+                {"completed", "rejected", "dropped", "timed_out", "failed"}),
+        )
+        self.assertTrue(
+            writer_values <= set(slo_common.TERMINAL_STATUSES))
 
     def test_first_token_source_enum(self) -> None:
         # Closed enum per the main spec: exactly exact /
         # train_interpolated plus the NA placeholder; "train_interpolated"
         # is reserved for the work package that produces it -- until then
-        # the cell carries the NA token.
+        # the cell carries the NA token.  P1-3 fix: pins the writer
+        # constants and the validator's frozen set (the old assertion
+        # compared test-local constants against identical literals).
         self.assertIn("first_token_source", mp.REQUEST_METRICS_COLUMNS)
+        writer_values = {
+            mp.FIRST_TOKEN_SOURCE_EXACT,
+            mp.FIRST_TOKEN_SOURCE_TRAIN_INTERPOLATED,
+            mp.NA,
+        }
+        self.assertEqual(writer_values, {"exact", "train_interpolated", "NA"})
         self.assertEqual(
-            self.FIRST_TOKEN_SOURCE_VALUES,
-            ("exact", "train_interpolated", "NA"),
+            slo_common.FIRST_TOKEN_SOURCES,
+            frozenset({"exact", "train_interpolated", "NA"}),
         )
+        self.assertTrue(
+            writer_values <= set(slo_common.FIRST_TOKEN_SOURCES))
 
     def test_na_semantics(self) -> None:
         # NA = "field not yet produced by the owning work package"; it is
@@ -694,6 +729,153 @@ class FirstTokenAndRequestMetricsContractTests(unittest.TestCase):
             int(self.NA_SENTINEL)
         with self.assertRaises(ValueError):
             float(self.NA_SENTINEL)
+
+class DieUtilizationPipelineContractTests(unittest.TestCase):
+    """Stage E2: die-backend active_kernel_die_* triplet pipeline gate.
+
+    A run declaring the die compute backend must carry, on every
+    type=rank_compute record, the three utilization values non-null and
+    within [0, 1+eps]; the only legal null is the collector's no-comp-nodes
+    note.  Legacy runs (no declaration / not-die note) are not asserted.
+    """
+
+    @staticmethod
+    def _die_record(rank: int, *, compute=0.5, memory=0.25, vector=0.125,
+                    note=None) -> dict:
+        record = {
+            "type": "rank_compute",
+            "schema": 1,
+            "rank": rank,
+            "active_kernel_die_compute_util": compute,
+            "active_kernel_die_memory_util": memory,
+            "active_kernel_die_vector_util": vector,
+        }
+        if note is not None:
+            record["active_kernel_die_note"] = note
+        return record
+
+    def _run_in_dir(self, tmp: str, *, metrics_manifest: "dict | None",
+                    records: "list[dict]") -> "mp.Run":
+        run_dir = Path(tmp) / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if metrics_manifest is not None:
+            (run_dir / "metrics_manifest.json").write_text(
+                json.dumps(metrics_manifest), encoding="utf-8")
+        log = run_dir / "cpp.log"
+        # face-LRU adaptation: this repo's _load_manifest_sidecars reads the
+        # manifest location from the init record's manifest_path (the
+        # production init record carries it), so the fixture spells it out.
+        lines = [json.dumps({"schema": 1, "type": "init", "run_id": "die-run",
+                             "detail_level": "summary",
+                             "manifest_path": str(run_dir / "metrics_manifest.json")})]
+        lines += [json.dumps(r) for r in records]
+        log.write_text(
+            "".join("[METRIC] " + line + "\n" for line in lines),
+            encoding="utf-8")
+        runs = mp._parse_logs([log])
+        self.assertEqual(len(runs), 1)
+        return runs[0]
+
+    def test_valid_die_triplet_passes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="die_util_ok_") as tmp:
+            run = self._run_in_dir(
+                tmp,
+                metrics_manifest={"schema_version": 1,
+                                  "compute-cost-model": "die"},
+                records=[self._die_record(0),
+                         self._die_record(1, compute=0.0, memory=1.0,
+                                          vector=1.0 + 1e-9)])
+            mp._check_die_utilization_records([run])  # must not raise
+
+    def test_null_with_no_comp_nodes_note_passes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="die_util_note_") as tmp:
+            run = self._run_in_dir(
+                tmp,
+                metrics_manifest={"compute-cost-model": "die"},
+                records=[self._die_record(
+                    0, compute=None, memory=None, vector=None,
+                    note="unavailable: no comp nodes in the utilization "
+                         "window")])
+            mp._check_die_utilization_records([run])  # must not raise
+
+    def test_null_with_unknown_note_fails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="die_util_badnote_") as tmp:
+            run = self._run_in_dir(
+                tmp,
+                metrics_manifest={"compute-cost-model": "die"},
+                records=[self._die_record(0, vector=None,
+                                          note="unavailable: something else")])
+            with self.assertRaises(mp.PostprocessError):
+                mp._check_die_utilization_records([run])
+
+    def test_out_of_range_fails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="die_util_range_") as tmp:
+            run = self._run_in_dir(
+                tmp,
+                metrics_manifest={"compute-cost-model": "die"},
+                records=[self._die_record(0, compute=1.5)])
+            with self.assertRaises(mp.PostprocessError):
+                mp._check_die_utilization_records([run])
+
+    def test_non_numeric_fails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="die_util_type_") as tmp:
+            run = self._run_in_dir(
+                tmp,
+                metrics_manifest={"compute-cost-model": "die"},
+                records=[self._die_record(0, memory="0.5")])
+            with self.assertRaises(mp.PostprocessError):
+                mp._check_die_utilization_records([run])
+
+    def test_die_run_without_rank_compute_records_fails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="die_util_empty_") as tmp:
+            run = self._run_in_dir(
+                tmp,
+                metrics_manifest={"compute-cost-model": "die"},
+                records=[])
+            with self.assertRaises(mp.PostprocessError):
+                mp._check_die_utilization_records([run])
+
+    def test_legacy_run_is_not_asserted(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="die_util_legacy_") as tmp:
+            run = self._run_in_dir(
+                tmp,
+                metrics_manifest={},
+                records=[self._die_record(
+                    0, compute=None, memory=None, vector=None,
+                    note="unavailable: compute-cost-model is not die")])
+            mp._check_die_utilization_records([run])  # must not raise
+
+    def test_service_manifest_declaration_enforced(self) -> None:
+        # metrics_manifest without the key, service manifest.json declaring
+        # die (the stage-C service manifest path).
+        with tempfile.TemporaryDirectory(prefix="die_util_svc_") as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir(parents=True)
+            (run_dir / "metrics_manifest.json").write_text("{}", encoding="utf-8")
+            (run_dir / "manifest.json").write_text(
+                json.dumps({"compute-cost-model": "die"}), encoding="utf-8")
+            log = run_dir / "cpp.log"
+            lines = [json.dumps({"schema": 1, "type": "init",
+                                 "run_id": "svc-die",
+                                 "detail_level": "summary",
+                                 "manifest_path": str(run_dir / "metrics_manifest.json")}),
+                     json.dumps(self._die_record(0, compute=2.0))]
+            log.write_text(
+                "".join("[METRIC] " + line + "\n" for line in lines),
+                encoding="utf-8")
+            runs = mp._parse_logs([log])
+            with self.assertRaises(mp.PostprocessError):
+                mp._check_die_utilization_records(runs)
+
+    def test_record_inference_when_no_manifest_declares(self) -> None:
+        # No manifest declaration at all: the records themselves identify a
+        # die run (non-null die utils) and must be range-checked.
+        with tempfile.TemporaryDirectory(prefix="die_util_infer_") as tmp:
+            run = self._run_in_dir(
+                tmp, metrics_manifest=None,
+                records=[self._die_record(0, compute=-0.75)])
+            with self.assertRaises(mp.PostprocessError):
+                mp._check_die_utilization_records([run])
 
 
 if __name__ == "__main__":

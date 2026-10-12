@@ -14,8 +14,7 @@ Ring::Ring(ComType type,
            int id,
            RingTopology* ring_topology,
            uint64_t data_size,
-           RingTopology::Direction direction,
-           InjectionPolicy injection_policy)
+           RingTopology::Direction direction)
     : Algorithm() {
     this->comType = type;
     this->id = id;
@@ -26,7 +25,6 @@ Ring::Ring(ComType type,
     this->curr_receiver = ring_topology->get_receiver(id, direction);
     this->curr_sender = ring_topology->get_sender(id, direction);
     this->parallel_reduce = 1;
-    this->injection_policy = injection_policy;
     this->total_packets_received = 0;
     this->free_packets = 0;
     this->zero_latency_packets = 0;
@@ -41,27 +39,16 @@ Ring::Ring(ComType type,
     case ComType::All_Reduce:
         stream_count = 2 * (nodes_in_ring - 1);
         break;
-    case ComType::All_to_All:
-        this->stream_count = ((nodes_in_ring - 1) * nodes_in_ring) / 2;
-        switch (injection_policy) {
-        case InjectionPolicy::Normal:
-            this->parallel_reduce = 1;
-            break;
-        default:
-            this->parallel_reduce = 1;
-            break;
-        }
-        break;
+    // (2026-10-01) the All_to_All arm is removed: this algorithm class is
+    // only instantiated for Ring/OneRing implementations, whose whitelist
+    // (CollectiveImplLookup, re-checked per phase by
+    // ensure_native_impl_supports) admits AR/AG/RS only. An All_to_All
+    // collective always builds the AllToAll class, whose constructor sets
+    // stream_count itself -- the former N(N-1)/2 value here was computed and
+    // unconditionally overwritten before first use.
     default:
         stream_count = nodes_in_ring - 1;
     }
-    if (type == ComType::All_to_All || type == ComType::All_Gather) {
-        max_count = 0;
-    } else {
-        max_count = nodes_in_ring - 1;
-    }
-    remained_packets_per_message = 1;
-    remained_packets_per_max_count = 1;
     switch (type) {
     case ComType::All_Reduce:
         this->final_data_size = data_size;
@@ -94,10 +81,10 @@ void Ring::run(EventType event, CallData* data) {
         iteratable();
     } else if (event == EventType::PacketReceived) {
         total_packets_received++;
-        insert_packet(nullptr);
+        insert_packet();
     } else if (event == EventType::StreamInit) {
         for (int i = 0; i < parallel_reduce; i++) {
-            insert_packet(nullptr);
+            insert_packet();
         }
     }
 }
@@ -115,30 +102,17 @@ void Ring::release_packets() {
 }
 
 void Ring::process_stream_count() {
-    if (remained_packets_per_message > 0) {
-        remained_packets_per_message--;
-    }
-    if (remained_packets_per_message == 0 && stream_count > 0) {
+    // remained_packets_per_message was a relic: initialized to 1 and reset to
+    // 1 on every pass, so each call here simply drains one stream.
+    if (stream_count > 0) {
         stream_count--;
-        if (stream_count > 0) {
-            remained_packets_per_message = 1;
-        }
-    }
-    if (remained_packets_per_message == 0 && stream_count == 0 &&
-        stream->state != StreamState::Dead) {
-        stream->changeState(StreamState::Zombie);
     }
 }
 
 void Ring::process_max_count() {
-    if (remained_packets_per_max_count > 0) {
-        remained_packets_per_max_count--;
-    }
-    if (remained_packets_per_max_count == 0) {
-        max_count--;
-        release_packets();
-        remained_packets_per_max_count = 1;
-    }
+    // remained_packets_per_max_count was a relic: always 1 at entry, so every
+    // call released exactly one packet.
+    release_packets();
 }
 
 void Ring::reduce() {
@@ -156,25 +130,21 @@ void Ring::reduce() {
 }
 
 bool Ring::iteratable() {
-    if (stream_count == 0 &&
-        free_packets == (parallel_reduce * 1)) {  // && not_delivered==0
+    if (stream_count == 0 && free_packets == (parallel_reduce * 1)) {
         exit();
         return false;
     }
     return true;
 }
 
-void Ring::insert_packet(Callable* sender) {
+void Ring::insert_packet() {
     if (zero_latency_packets == 0 && non_zero_latency_packets == 0) {
         zero_latency_packets = parallel_reduce * 1;
-        non_zero_latency_packets =
-            get_non_zero_latency_packets();  //(nodes_in_ring-1)*parallel_reduce*1;
+        non_zero_latency_packets = get_non_zero_latency_packets();
         toggle = !toggle;
     }
     if (zero_latency_packets > 0) {
-        packets.push_back(MyPacket(
-            stream->current_queue_id, curr_sender,
-            curr_receiver));  // vnet Must be changed for alltoall topology
+        packets.push_back(MyPacket(curr_sender, curr_receiver));
         processed = false;
         send_back = false;
         NPU_to_MA = true;
@@ -182,9 +152,7 @@ void Ring::insert_packet(Callable* sender) {
         zero_latency_packets--;
         return;
     } else if (non_zero_latency_packets > 0) {
-        packets.push_back(MyPacket(
-            stream->current_queue_id, curr_sender,
-            curr_receiver));  // vnet Must be changed for alltoall topology
+        packets.push_back(MyPacket(curr_sender, curr_receiver));
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
             processed = true;
@@ -218,22 +186,20 @@ bool Ring::ready() {
     snd_req.dstRank = packet.preferred_dest;
     snd_req.tag = stream->stream_id;
     snd_req.reqType = UINT8;
-    snd_req.vnet = this->stream->current_queue_id;
     stream->owner->front_end_sim_send(
         0, Sys::dummy_data, msg_size, UINT8, packet.preferred_dest,
         stream->stream_id, &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE,
         &Sys::handleEvent,
-        nullptr);  // stream_id+(packet.preferred_dest*50)
+        nullptr);
     sim_request rcv_req;
-    rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
         stream, stream->owner->id, EventType::PacketReceived,
-        packet.preferred_vnet, stream->stream_id);
+        stream->current_queue_id, stream->stream_id);
     stream->owner->front_end_sim_recv(
         0, Sys::dummy_data, msg_size, UINT8, packet.preferred_src,
         stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,
         &Sys::handleEvent,
-        ehd);  // stream_id+(owner->id*50)
+        ehd);
     reduce();
     return true;
 }

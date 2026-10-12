@@ -26,20 +26,11 @@ namespace ExecutionDriven {
 
 namespace {
 
+// Family membership is judged by the shared metadata table in OnlineCli.hh
+// (kOnlineFamilyPrefixes); the prefix list is no longer mirrored here so
+// the parser and main_online.cc's argv strip cannot drift apart.
 bool is_online_family(const std::string& token) {
-    return token.rfind("--request-", 0) == 0 || token.rfind("--bridge-", 0) == 0 ||
-           token.rfind("--close-", 0) == 0 || token.rfind("--online-", 0) == 0 ||
-           token.rfind("--command-", 0) == 0 || token.rfind("--sensing-", 0) == 0 ||
-           // P0-2 (2026-08-31, 总文档 §4 P0-2.3): the --idle- family
-           // (--idle-watchdog-s). Without this prefix the shared parser
-           // would silently swallow a typo'd --idle-* flag (the header
-           // contract: the online family is parsed fail-closed here).
-           token.rfind("--idle-", 0) == 0 ||
-           // C6 (WP2 link telemetry, joint 遥测改造): the --link- family
-           // (--link-telemetry). Same fail-closed rule as --idle-: a
-           // typo'd --link-* token must hard-error here, never pass
-           // silently to the shared parser.
-           token.rfind("--link-", 0) == 0;
+    return is_online_family_token(token);
 }
 
 // FP1 (2026-09-01, sync-A16 batch P; contract E25): the frozen unsigned
@@ -204,6 +195,15 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 value = argv[++i];
             }
+            // R1-B-L2 port (2026-09-30): an explicitly empty inline value
+            // ("--request-queue-csv=") used to be stored as "" and
+            // downgraded to "absent" -- a silent zero-request IDLE run.
+            // All three path options reject the empty spelling here.
+            if (value.empty()) {
+                error = "option " + name +
+                        " requires a non-empty value";
+                return false;
+            }
             if (name == "--bridge-dir") {
                 bridge_dir = value;
             } else if (name == "--request-queue-csv") {
@@ -341,6 +341,37 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
 
     if (mode.empty()) {
         error = "missing required option --online-mode";
+        return false;
+    }
+    // C3 fix (2026-09-28, ported from the wscllm CLI): --close-input and
+    // --command-fifo are mutually exclusive. With a FIFO the input-close
+    // signaling belongs to the producer's CloseInput/EndOfFile commands;
+    // --close-input closes the gate immediately at startup, so the FIFO
+    // channel is dead on arrival and the run finishes as a seemingly
+    // healthy ZERO-request run.
+    if (close_input && !command_fifo.empty()) {
+        error =
+            "--close-input and --command-fifo are mutually exclusive: "
+            "--close-input would close the input gate at startup, making "
+            "the FIFO producer channel dead (a zero-request run that exits "
+            "green). Let the producer signal CloseInput/EndOfFile over the "
+            "FIFO instead";
+        return false;
+    }
+    // 3.16 fix (2026-09-29, same as the wscllm CLI): --request-queue-csv
+    // and --command-fifo are mutually exclusive too. The CSV arm installs
+    // the arrival hooks and owns the ingress queue-index domain -- a FIFO
+    // Submit envelope carries no CSV queue index, so the combination died
+    // on the first FIFO Submit deep inside the reader's accounting.
+    // Reject the combination at the parse boundary where both flags are
+    // visible.
+    if (!request_queue_csv.empty() && !command_fifo.empty()) {
+        error =
+            "--request-queue-csv and --command-fifo are mutually exclusive: "
+            "the CSV path owns the ingress arrival hooks and the queue-index "
+            "domain, while FIFO Submit envelopes arrive with no CSV queue "
+            "index (the combination aborted on the first FIFO Submit). Pick "
+            "one input channel";
         return false;
     }
     if (!request_queue_csv.empty()) {

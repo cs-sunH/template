@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "congestion_aware/CongestionAwareNetworkApi.hh"
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace AstraSim;
 using namespace AstraSimAnalyticalCongestionAware;
@@ -47,6 +49,19 @@ int CongestionAwareNetworkApi::sim_send(void* const buffer,
                                         sim_request* const request,
                                         void (*msg_handler)(void*),
                                         void* const fun_arg) {
+    // Null-handler hard abort (2026-09-30): sim_recv rejects a null handler
+    // with std::abort (a registered null callback would fire as a call
+    // through nullptr); sim_send's only defense used to be Event's
+    // assert, which Release builds compile out. Same contract, same
+    // failure mode, same channel.
+    if (msg_handler == nullptr) {
+        std::fprintf(stderr,
+                     "[Error] (analytical/congestion_aware) sim_send called "
+                     "with a null msg_handler (tag=%d dst=%d count=%llu); "
+                     "the completion callback would invoke nullptr\n",
+                     tag, dst, static_cast<unsigned long long>(count));
+        std::abort();
+    }
     // query chunk id
     const auto src = sim_comm_get_rank();
     const auto chunk_id =

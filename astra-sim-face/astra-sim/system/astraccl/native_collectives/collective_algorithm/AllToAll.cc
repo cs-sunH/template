@@ -12,9 +12,22 @@ AllToAll::AllToAll(ComType type,
                    int id,
                    RingTopology* allToAllTopology,
                    uint64_t data_size,
-                   RingTopology::Direction direction,
-                   InjectionPolicy injection_policy)
-    : Ring(type, id, allToAllTopology, data_size, direction, injection_policy) {
+                   RingTopology::Direction direction)
+    : Ring(type, id, allToAllTopology, data_size, direction) {
+    if (nodes_in_ring == 1) {
+        // Fail-closed: with a single node this algorithm injects zero packets
+        // (parallel_reduce == 0), so no network leg ever fires and the stream
+        // can never reach iteratable()/exit() -- it would hang silently.
+        // Unreachable through Sys::generate_collective, whose phase-
+        // construction loops skip size-1 dimensions (single-node groups are
+        // expected to go through Sys and be skipped there); guard against any
+        // future call site that forgets that skip.
+        Sys::sys_panic(
+            "AllToAll constructed on a single-node ring: this algorithm cannot "
+            "terminate with nodes_in_ring == 1. Single-node dimension groups "
+            "must be skipped at phase construction in Sys (see "
+            "Sys::generate_collective), never handed to AllToAll.");
+    }
     this->middle_point = nodes_in_ring - 1;
     if (window == -1) {
         parallel_reduce = nodes_in_ring - 1;
@@ -44,38 +57,31 @@ void AllToAll::run(EventType event, CallData* data) {
 
     } else if (event == EventType::PacketReceived) {
         total_packets_received++;
-        insert_packet(nullptr);
+        insert_packet();
 
     } else if (event == EventType::StreamInit) {
         for (int i = 0; i < parallel_reduce; i++) {
-            insert_packet(nullptr);
+            insert_packet();
         }
     }
 }
 
 void AllToAll::process_max_count() {
-    if (remained_packets_per_max_count > 0) {
-        remained_packets_per_max_count--;
-    }
-
-    if (remained_packets_per_max_count == 0) {
-        max_count--;
-        release_packets();
-        remained_packets_per_max_count = 1;
-
+    // remained_packets_per_max_count was a relic: always 1 at entry, so every
+    // call released exactly one packet and advanced the ring position below.
+    release_packets();
+    curr_receiver = ((RingTopology*)logical_topo)
+                        ->get_receiver(curr_receiver, direction);
+    if (curr_receiver == id) {
         curr_receiver = ((RingTopology*)logical_topo)
                             ->get_receiver(curr_receiver, direction);
-        if (curr_receiver == id) {
-            curr_receiver = ((RingTopology*)logical_topo)
-                                ->get_receiver(curr_receiver, direction);
-        }
+    }
 
-        curr_sender =
-            ((RingTopology*)logical_topo)->get_sender(curr_sender, direction);
-        if (curr_sender == id) {
-            curr_sender = ((RingTopology*)logical_topo)
-                              ->get_sender(curr_sender, direction);
-        }
+    curr_sender =
+        ((RingTopology*)logical_topo)->get_sender(curr_sender, direction);
+    if (curr_sender == id) {
+        curr_sender = ((RingTopology*)logical_topo)
+                          ->get_sender(curr_sender, direction);
     }
 }
 

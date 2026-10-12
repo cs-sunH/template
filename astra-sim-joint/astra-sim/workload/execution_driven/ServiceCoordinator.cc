@@ -13,6 +13,8 @@ fully-drained ACTIVE returns to IDLE while the input stays open (合同②
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -27,7 +29,16 @@ void ServiceCoordinator::on_command_accepted() {
 
 void ServiceCoordinator::on_request_arrived() {
     std::lock_guard<std::mutex> lock(mtx_);
-    assert(pending_alarm_count_ > 0);
+    // (2026-10-01 R3 审查修复) Release(NDEBUG) 剥离 assert 后双重触发
+    // 会回绕 uint64 计数并污染 finished 判定——同 NodeStore/
+    // RequestIngest 的 C1-5/F1-CPP 无条件 fail-closed 纪律。
+    if (pending_alarm_count_ == 0) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/ServiceCoordinator) "
+                     "on_request_arrived with no pending alarm (double "
+                     "trigger or unsynchronized delivery");
+        std::abort();
+    }
     --pending_alarm_count_;
     ++active_request_count_;
     if (state_ == ServiceState::IDLE) {
@@ -37,7 +48,14 @@ void ServiceCoordinator::on_request_arrived() {
 
 void ServiceCoordinator::on_request_completed() {
     std::lock_guard<std::mutex> lock(mtx_);
-    assert(active_request_count_ > 0);
+    // (同上) NDEBUG-proof 下溢守卫。
+    if (active_request_count_ == 0) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/ServiceCoordinator) "
+                     "on_request_completed with no active request (double "
+                     "trigger or unsynchronized completion");
+        std::abort();
+    }
     --active_request_count_;
     ++completed_request_count_;
     maybe_finish();
@@ -62,9 +80,27 @@ void ServiceCoordinator::mark_input_closed(const InputCloseReason reason) {
     } else if (state_ == ServiceState::ACTIVE) {
         set_state(ServiceState::DRAINING);
     }
-    maybe_finish();
+    // M4 fix (2026-09-29): do NOT evaluate maybe_finish() here. At a
+    // producer-linearized close the bounded ingress queue routinely holds
+    // every Submit (the --close-input startup path queues the whole turn-0
+    // calendar before the first drain), so all three counters are still
+    // zero and the old immediate evaluation stamped FINISHED for a service
+    // that had not even accepted its first request -- the state_ label then
+    // sat at FINISHED for the whole run and the lifecycle transition log
+    // went silent. The FINISHED evaluation moves to note_input_drained(),
+    // called by the ingress drain once the closed queue is empty.
+    finish_after_drain_ = true;
     wakeup_pending_ = true;
     work_cv_.notify_one();
+}
+
+void ServiceCoordinator::note_input_drained() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (input_open_ || !finish_after_drain_) {
+        return;  // input still open, or nothing deferred (already drained)
+    }
+    finish_after_drain_ = false;
+    maybe_finish();
 }
 
 InputCloseReason ServiceCoordinator::input_close_reason() const {
@@ -168,15 +204,6 @@ void ServiceCoordinator::signal_work() {
     work_cv_.notify_one();
 }
 
-const std::vector<ServiceState>& ServiceCoordinator::transition_log() const {
-    return transition_log_;
-}
-
-uint64_t ServiceCoordinator::transition_log_dropped() const {
-    std::lock_guard<std::mutex> lock(mtx_);
-    return transition_log_dropped_;
-}
-
 void ServiceCoordinator::set_transition_hook(StateTransitionHook hook) {
     std::lock_guard<std::mutex> lock(mtx_);
     transition_hook_ = std::move(hook);
@@ -206,11 +233,10 @@ void ServiceCoordinator::set_state(const ServiceState next) {
     // caller holds mtx_
     const ServiceState prev = state_;
     state_ = next;
-    if (transition_log_.size() < kTransitionLogCapacity) {
-        transition_log_.push_back(next);
-    } else {
-        ++transition_log_dropped_;
-    }
+    // (The bounded transition_log_ prefix buffer that used to be written
+    // here was removed with the 2026-10-01 dead-code audit: neither it nor
+    // its accessors had any reader -- the wall-timestamp lifecycle log the
+    // online entry prints goes through the transition hook below.)
     if (transition_hook_) {
         // Contract: the hook must not call back into the coordinator (it is
         // invoked with mtx_ held); the online entry uses it to print the

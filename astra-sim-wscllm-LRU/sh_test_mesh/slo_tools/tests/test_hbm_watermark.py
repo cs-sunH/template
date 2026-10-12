@@ -69,10 +69,16 @@ def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
     """
     results = run_dir / "results"
     results.mkdir(parents=True, exist_ok=True)
+    # init 行经 json.dumps 序列化（范本 synthetic.write_cpp_log）：Windows
+    # 路径含反斜杠时不得用 '%s' 直插 JSON 字符串字面量（\T 等序列会被
+    # 当转义解读，init 行损坏）。
+    init = {
+        "type": "init", "repo_variant": repo_variant,
+        "manifest_path": str(run_dir / "metrics_manifest.json"),
+        "detail_level": "summary", "schema_version": 1,
+    }
     (run_dir / "cpp.log").write_text(
-        '[METRIC] {"type":"init","repo_variant":"%s",'
-        '"manifest_path":"%s","detail_level":"summary","schema_version":1}\n'
-        % (repo_variant, run_dir / "metrics_manifest.json"),
+        "[METRIC] " + json.dumps(init, sort_keys=True) + "\n",
         encoding="utf-8")
     with (results / "online_decision_log.jsonl").open(
             "w", encoding="utf-8") as handle:
@@ -141,8 +147,11 @@ def write_journal(run_dir: Path, rows: list[dict],
     import hashlib
     payload = "".join(json.dumps(row, sort_keys=True) + "\n"
                       for row in rows)
-    (results / "kv_delta_journal.jsonl").write_text(payload,
-                                                    encoding="utf-8")
+    # newline=""：禁止平台翻译 \n→\r\n（Windows）——journal 读取侧按二进制
+    # 求 sha256，文本模式写盘会让 "auto" 证书在任何平台都 LD 不一致。
+    with (results / "kv_delta_journal.jsonl").open(
+            "w", newline="", encoding="utf-8") as handle:
+        handle.write(payload)
     if checksum is None:
         (results / "kv_delta_journal_checksum.json").unlink(missing_ok=True)
         return
@@ -218,10 +227,21 @@ def token_row(request_id: str, session_id: str, history: int, prefill: int,
             "final_context_tokens": final}
 
 
+def _next_seq() -> int:
+    """修复批次 A（HBM-03）：合成决策记录共用一个 seq 计数器，按生产
+    契约（decision_bridge 每记录自增）严格递增——各 builder 不再各持
+    计数器产生重复/回退 seq。"""
+    _next_seq.counter += 1
+    return _next_seq.counter
+
+
+_next_seq.counter = 0
+
+
 def prefill_record(request_id: str, tick: int, instance: int = 0,
                    decision: dict | None = None) -> dict:
     return {"kind": "prefill", "request_id": request_id, "priority": 0,
-            "seq": prefill_record.next_seq, "tick": tick,
+            "seq": _next_seq(), "tick": tick,
             "decision": {"prefill_instance_index": instance,
                          "history_action": "NO_HISTORY",
                          "history_transfer_bytes": 0,
@@ -232,40 +252,27 @@ def prefill_record(request_id: str, tick: int, instance: int = 0,
                          "effective_prefill_tokens": 1, **(decision or {})}}
 
 
-prefill_record.next_seq = 1
-
-
 def decode_record(request_id: str, tick: int, instance: int = 0,
                   decision: dict | None = None) -> dict:
-    decode_record.next_seq += 1
     return {"kind": "decode", "request_id": request_id, "priority": 0,
-            "seq": decode_record.next_seq, "tick": tick,
+            "seq": _next_seq(), "tick": tick,
             "decision": {"decode_instance_index": instance,
                          "prefill_decode_transfer": None,
                          **(decision or {})}}
 
 
-decode_record.next_seq = 1
-
-
 def completion_record(request_id: str, tick: int,
                       decision: dict | None = None) -> dict:
-    completion_record.next_seq += 1
     return {"kind": "completion", "request_id": request_id, "priority": 0,
-            "seq": completion_record.next_seq, "tick": tick,
+            "seq": _next_seq(), "tick": tick,
             "decision": {"completion_evictions": [],
                          "kv_instance_after_completion": 0,
                          "kv_state_after_completion": "RESIDENT",
                          **(decision or {})}}
 
 
-completion_record.next_seq = 1
-
-
 def reset_seq() -> None:
-    prefill_record.next_seq = 1
-    decode_record.next_seq = 1
-    completion_record.next_seq = 1
+    _next_seq.counter = 0
 
 
 def base_handcalc_records() -> tuple[list[dict], list[dict]]:
@@ -426,24 +433,21 @@ class PerRepoSemanticsTests(unittest.TestCase):
             decode_record("s_r0", 10),
             completion_record("s_r0", 20),
             # 下一轮：local_hit（同实例复用），total_bytes=f(2)=200 信息量。
-            {"kind": "prefill", "request_id": "s_r1", "priority": 0,
-             "seq": 4, "tick": 30,
-             "decision": {"prefill_instance_index": 0,
-                          "admission_time_ns": 30,
-                          "history_transfer": {
-                              "kind": "local_hit", "phase": "history",
-                              "reason": "history_local_reuse",
-                              "session_id": "s", "shards": [],
-                              "source_instance_index": 0,
-                              "target_instance_index": 0,
-                              "total_bytes": 200},
-                          "history_evictions": [], "prefill_evictions": []}},
+            prefill_record("s_r1", 30, instance=0, decision={
+                "admission_time_ns": 30,
+                "history_transfer": {
+                    "kind": "local_hit", "phase": "history",
+                    "reason": "history_local_reuse",
+                    "session_id": "s", "shards": [],
+                    "source_instance_index": 0,
+                    "target_instance_index": 0,
+                    "total_bytes": 200},
+                "history_evictions": [], "prefill_evictions": []}),
             decode_record("s_r1", 40,
                           decision={"prefill_decode_transfer": None,
                                     "decode_evictions": []}),
             completion_record("s_r1", 50),
         ]
-        records[3]["decision"]["prefill_instance_index"] = 0
         tokens = [token_row("s_r0", "s", 0, 1, 2),
                   token_row("s_r1", "s", 2, 3, 3)]
         run_dir = make_run_dir("s1hit")
@@ -613,7 +617,9 @@ class PerRepoSemanticsTests(unittest.TestCase):
 
         legacy 解析证据：sh_2.0 只读仓的两段式产物（suffix_half 逐出 +
         prefix/suffix 分段迁移）仍可被逐段对账；新运行（-LRU 仓）不产生
-        该形状，本用例保留为兼容证据。
+        该形状，本用例保留为兼容证据。G7-5（2026-09-26）移除 0.5 半层
+        比值放行后，两段恢复的 ratio 0.5 按 restore_bytes_mismatch 计
+        诊断（重放占用/对账数学不变，见下方断言）。
 
         手算：B turn0 f(1)=100@t5(i1) → f(2)=200@t6；completion@t7 自身
         suffix 逐出 100（i1 余 100）；turn1@t30 跨实例迁 i0：prefix
@@ -680,7 +686,14 @@ class PerRepoSemanticsTests(unittest.TestCase):
         self.assertEqual(summary["actions"]["restore_move"], 1)
         self.assertEqual(summary["actions"]["restore_local_add"], 1)
         self.assertEqual(summary["actions"]["restore_prefix_reconciled"], 0)
-        self.assertEqual(sum(summary["anomalies"].values()), 0)
+        # G7-5（2026-09-26）移除 0.5 半层比值放行残片后：legacy 两段
+        # （各 0.5）恢复按 restore_bytes_mismatch 计诊断（重放占用数学
+        # 不变），其余异常仍须为零。
+        self.assertEqual(
+            summary["anomalies"]["restore_bytes_mismatch"], 2)
+        self.assertEqual(
+            {k: v for k, v in summary["anomalies"].items() if v},
+            {"restore_bytes_mismatch": 2})
         self.assertEqual(summary["restore_bytes_ratio_histogram"]
                          .get("0.500"), 2)
         self.assertEqual(summary["instances"]["0"]
@@ -765,13 +778,14 @@ class FailClosedTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("不在跟踪态", proc.stderr)
 
-    def test_negative_occupancy_fails(self):
-        """多扣（会话跟踪实例与实际占用错位）→ 负占用 fail-closed。
+    def test_local_hit_location_mismatch_with_occupancy_fails(self):
+        """HBM-05：local_hit 谎报位置且会话仍持有驻留 → 矛盾点拒绝。
 
-        构造：A 驻留实例 0；下一轮 prefill 决策谎报 LOCAL_HIT 到实例 1
-        （local_hit_location_mismatch），会话归属改到 1 而 bytes 仍挂在
-        实例 0 的占用上；随后 completion 从实例 1 逐出 A 全量 → 实例 1
-        占用转负 → 结构错拒绝输出。
+        构造：A 驻留实例 0（100B）；下一轮 prefill 决策谎报 LOCAL_HIT 到
+        实例 1。旧行为只记 anomaly 并把会话归属改到 1、bytes 仍挂在实例
+        0（幻影占用），直到后续逐出在实例 1 打出负占用才暴露（结构缺口
+        ——无后续事件则幻影占用静默入产物）；现行为在位置矛盾且占用未
+        转移处 fail-closed（无驻留时仅记 anomaly 照常放行，另测）。
         """
         reset_seq()
         records = [
@@ -800,7 +814,42 @@ class FailClosedTests(unittest.TestCase):
                       records=records, token_requests=tokens)
         proc = run_tool(run_dir)
         self.assertEqual(proc.returncode, 2)
-        self.assertIn("负占用", proc.stderr)
+        self.assertIn("位置矛盾", proc.stderr)
+
+    def test_local_hit_location_mismatch_without_occupancy_allowed(self):
+        """HBM-05 对偶面：跨实例 local_hit 但会话无跟踪驻留（bytes==0）
+        → 不构成占用矛盾，仅记 anomaly 照常转移归属。"""
+        reset_seq()
+        records = [
+            prefill_record("sB_r0", 0, instance=0),
+            decode_record("sB_r0", 10, instance=0),
+            # 终态整体逐出：跟踪 bytes 清零、实例清空。
+            completion_record("sB_r0", 20, decision={
+                "completion_evictions": [{
+                    "time_ns": 20, "phase": "completion",
+                    "reason": "synthetic", "trigger_request_id": "sB_r0",
+                    "victim_session_id": "sB", "victim_instance_index": 0,
+                    "victim_last_completion_ns": 10,
+                    "context_tokens": 1, "shard_bytes": [100]}]}),
+            prefill_record("sB_r1", 30, instance=1, decision={
+                "history_action": "LOCAL_HIT",
+                "history_cache_state_before": "RESIDENT",
+                "history_transfer_bytes": 0,
+                "history_source_instance_index": 0,
+                "effective_prefill_tokens": 1}),
+            decode_record("sB_r1", 40, instance=1),
+            completion_record("sB_r1", 50),
+        ]
+        tokens = [token_row("sB_r0", "sB", 0, 1, 1),
+                  token_row("sB_r1", "sB", 1, 1, 1)]
+        run_dir = make_run_dir("fc4b")
+        write_fixture(run_dir, repo_variant="astra-sim-face",
+                      records=records, token_requests=tokens)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(summary["anomalies"]["local_hit_location_mismatch"],
+                         1)
 
     def test_unknown_repo_variant_fails(self):
         records, tokens = base_handcalc_records()
@@ -1563,6 +1612,113 @@ class WscllmTieredUpgradeTests(unittest.TestCase):
         self.assertEqual(summary["instances"]["0"]["peak_occupancy_bytes"],
                          260)
 
+    def test_report_only_late_arriving_whole_eviction_not_partial(self):
+        """py-slo-E2 晚到时序回归（2026-09-26）：净额准入重试把整体逐出
+        条目累积到 victim 下一轮 restore+grow 之后的行上——旧判定
+        ``0 < bytes < 跟踪 bytes`` 拿条目旧代 bytes 对 victim 新代际跟踪
+        值比较恒真，把整体逐出误计为 partial（违反"partial_evictions 新
+        运行恒 0"契约，纯内存重放实证复现=1）。层域判定下全层 [0,32)
+        整体会话逐出恒不判 partial。
+
+        手算（layers=32/hidden=50/bytes_per_elem=1 → COEF=3200）：
+        s0_r0 f(1)=3200@t0(i0) → PD move → f(2)=6400@t10(i1)；s1_r0
+        f(2)=6400@t30(i0) → PD move → f(3)=9600@t40(i1)；s0_r1@t50：
+        location=remote_memory 对账核销 s0 旧代 6400@i1（i1→3200）+
+        remote_load 只增 6400@i0 + grow 0（跟踪已 6400）；@t60 PD move
+        6400（i0→0 / i1→9600+6400=16000）+ grow f(4)=12800 → i1=22400、
+        跟踪 s0=12800。晚到条目@t70（整体逐出 6400，层域 [0,32)）：
+        旧 bytes 判定 0<6400<12800 恒真误判 partial；层域判定恒 0。
+        """
+        reset_seq()
+        pd_move = lambda total, src, tgt: {  # noqa: E731
+            "kind": "noc_migrate",
+            "reason": "prefill_decode_instance_migrate",
+            "session_id": None, "trigger_request_id": None,
+            "total_bytes": total, "source_instance_index": src,
+            "target_instance_index": tgt, "layer_start": 0, "layer_end": 32}
+        evict_row = lambda session, total, src: {  # noqa: E731
+            "kind": "remote_store",
+            "reason": "static_decode_final_kv_reservation_session:"
+                      "layers0-32",
+            "session_id": session, "total_bytes": total,
+            "source_instance_index": src, "target_instance_index": None,
+            "layer_start": 0, "layer_end": 32}
+        records = [
+            prefill_record("s0_r0", 0, instance=0, decision={
+                "history_action": "NO_HISTORY",
+                "history_location_before": None,
+                "history_transfers": [],
+                "history_evictions": [], "prefill_evictions": [],
+                "admission_evictions": [], "decode_target_evictions": []}),
+            decode_record("s0_r0", 10, instance=1, decision={
+                "prefill_decode_transfer": pd_move(3200, 0, 1),
+                "decode_evictions": [], "decode_target_evictions": []}),
+            completion_record("s0_r0", 20),
+            prefill_record("s1_r0", 30, instance=0, decision={
+                "history_action": "NO_HISTORY",
+                "history_location_before": None,
+                "history_transfers": [],
+                "history_evictions": [], "prefill_evictions": [],
+                "admission_evictions": [], "decode_target_evictions": []}),
+            decode_record("s1_r0", 40, instance=1, decision={
+                "prefill_decode_transfer": pd_move(6400, 0, 1),
+                "decode_evictions": [], "decode_target_evictions": []}),
+            completion_record("s1_r0", 45),
+            prefill_record("s0_r1", 50, instance=0, decision={
+                "history_action": "REMOTE_RESTORE",
+                "history_location_before": "remote_memory",
+                "history_location_before_instance_index": None,
+                "history_resident_prefix_layers": 0,
+                "history_transfer_bytes": 6400,
+                "history_transfers": [{
+                    "kind": "remote_load", "reason": "history_remote_restore",
+                    "session_id": "s0", "total_bytes": 6400,
+                    "source_instance_index": None,
+                    "target_instance_index": 0,
+                    "layer_start": 0, "layer_end": 32}],
+                "history_evictions": [], "prefill_evictions": [],
+                "admission_evictions": [], "decode_target_evictions": []}),
+            decode_record("s0_r1", 60, instance=1, decision={
+                "prefill_decode_transfer": pd_move(6400, 0, 1),
+                "decode_evictions": [], "decode_target_evictions": []}),
+            # 晚到条目：victim s0 已在 @t50/@t60 恢复并长到 f(4)=12800，
+            # 其整体逐出（6400@admission t30）此刻才随 completion 行到达。
+            completion_record("s0_r1", 70, decision={
+                "completion_evictions": [evict_row("s0", 6400, 1)]}),
+        ]
+        tokens = [token_row("s0_r0", "s0", 0, 1, 2),
+                  token_row("s1_r0", "s1", 0, 2, 3),
+                  token_row("s0_r1", "s0", 2, 2, 4)]
+        tokens[2]["turn_index"] = 1
+        run_dir = make_run_dir("wlate")
+        write_fixture(run_dir, repo_variant="astra-sim-wscllm",
+                      records=records, token_requests=tokens,
+                      npu_bytes=100_000)
+        # 层域判定需要真实模型层数（L=32，条目层域 [0,32) = 全量）。
+        (run_dir / "trace_config.csv").write_text(
+            "kind,key,value,group_name,pg_name,ranks,description\n"
+            "config,layers,32,,,,synthetic\n"
+            "config,hidden_size,50,,,,synthetic\n"
+            "config,bytes_per_elem,1,,,,synthetic\n"
+            "config,local_hbm_capacity_profile,test-64b,,,,synthetic\n",
+            encoding="utf-8")
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(summary["eviction_coverage"], "full_reconciled")
+        actions = summary["actions"]
+        self.assertEqual(actions["evictions"], 1)
+        self.assertEqual(actions["evict_bytes"], 6400)
+        # 契约：新运行整体逐出恒不计 partial（层域全量 [0,32)）——旧
+        # bytes 判定在此场景误计 1。
+        self.assertEqual(actions["partial_evictions"], 0)
+        self.assertEqual(actions["silent_evictions_reconciled"], 1)
+        self.assertEqual({k: v for k, v in summary["anomalies"].items()
+                          if v}, {})
+        instances = summary["instances"]
+        self.assertEqual(instances["1"]["peak_occupancy_bytes"], 22400)
+        self.assertEqual(instances["1"]["evict_bytes"], 6400)
+
 
 class JournalSchemaV2Tests(unittest.TestCase):
     """B4（-LRU wscllm，2026-09-07）：journal 行 schema v2（B2 remote 列）
@@ -1682,6 +1838,199 @@ class JournalSchemaV2Tests(unittest.TestCase):
                          "per_rank_total_hbm_certified")
         self.assertEqual(
             summary["journal_replay"]["per_rank_final"]["0"]["remote"], 0)
+
+
+class JournalIntegrityHardeningTests(unittest.TestCase):
+    """修复批次 A（2026-09-26）fail-closed 回归面。
+
+    HBM-01 证书缺必需项（sha256/line_count/ranks）不得 certified；
+    HBM-02 sequence 必须从 0 连续；HBM-03 决策记录 seq 类型/非负/单调；
+    HBM-04 restore 列表非 dict 成员拒绝；HBM-06 空白 journal 行拒绝；
+    HBM-07 transaction_id 非法类型拒绝；M6-04 恢复 bytes 超 f(history)
+    拒绝（session.bytes 不允许对账转负）。
+    """
+
+    def _fixture_with_checksum(self, tag: str, rows: list[dict],
+                               checksum: dict) -> Path:
+        records, tokens = base_handcalc_records()
+        run_dir = make_run_dir(tag)
+        write_fixture(run_dir, repo_variant="astra-sim-wscllm",
+                      records=records, token_requests=tokens,
+                      model_rows=True)
+        write_journal(run_dir, rows, checksum)
+        return run_dir
+
+    # -- HBM-01：仅五项 checks 为真的伪造证书，缺任一必需项即不 certified -
+
+    def _certified_journal(self):
+        rows = [
+            journal_row(0, 0, 0, 0, 1000, d_weight=300),
+            journal_row(1, 0, 1, 0, 1000, d_weight=200),
+            journal_row(2, 10, 0, 0, 1000, weight=300, d_resident=400),
+            journal_row(3, 20, 1, 0, 1000, weight=200, d_resident=300),
+            journal_row(4, 30, 0, 0, 1000, weight=300, resident=400,
+                        d_resident=-400, cause="terminal_session_retire"),
+            journal_row(5, 30, 1, 0, 1000, weight=200, resident=300,
+                        d_resident=-300, cause="terminal_session_retire"),
+        ]
+        ranks_final = {
+            "0": {"capacity_bytes": 1000, "weight": 300, "resident": 0,
+                  "reserved": 0, "physical": 300},
+            "1": {"capacity_bytes": 1000, "weight": 200, "resident": 0,
+                  "reserved": 0, "physical": 200},
+        }
+        return rows, ranks_final
+
+    def _assert_not_certified(self, tag: str, mutate, marker: str) -> None:
+        rows, ranks_final = self._certified_journal()
+        checksum = default_checksum(rows, ranks_final)
+        mutate(checksum)  # 五项 checks 仍全 true，仅毁掉一个必需项
+        assert all(checksum["checks"].values())
+        run_dir = self._fixture_with_checksum(tag, rows, checksum)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(summary["trust_tier"], "lifecycle_replay_exact")
+        self.assertIn(marker, proc.stderr)
+
+    def test_hbm01_missing_sha256_not_certified(self):
+        self._assert_not_certified(
+            "hbm01sha", lambda c: c.pop("sha256"), "缺合法 sha256")
+
+    def test_hbm01_wrong_type_sha256_not_certified(self):
+        self._assert_not_certified(
+            "hbm01shabad", lambda c: c.__setitem__("sha256", 12345),
+            "缺合法 sha256")
+
+    def test_hbm01_missing_line_count_not_certified(self):
+        self._assert_not_certified(
+            "hbm01lc", lambda c: c.pop("line_count"), "缺整数 line_count")
+
+    def test_hbm01_missing_ranks_not_certified(self):
+        self._assert_not_certified(
+            "hbm01ranks", lambda c: c.pop("ranks"), "缺非空 ranks")
+
+    # -- HBM-02：sequence 断链（删行）拒绝 --------------------------------
+
+    def test_hbm02_sequence_gap_fails_closed(self):
+        rows = [
+            journal_row(0, 0, 0, 0, 1000, d_weight=300),
+            # 删行伪造：sequence 0 → 2（缺 1）。
+            journal_row(2, 10, 0, 0, 1000, weight=300, d_resident=100),
+        ]
+        run_dir = self._fixture_with_checksum("hbm02gap", rows, None)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("sequence 不连续", proc.stderr)
+
+    def test_hbm02_sequence_not_starting_at_zero_fails(self):
+        rows = [journal_row(1, 0, 0, 0, 1000, d_weight=300)]
+        run_dir = self._fixture_with_checksum("hbm02base", rows, None)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("sequence 不连续", proc.stderr)
+
+    # -- HBM-06：空白 journal 行两入口统一为拒绝 --------------------------
+
+    def test_hbm06_blank_journal_line_fails_closed(self):
+        records, tokens = base_handcalc_records()
+        run_dir = make_run_dir("hbm06blank")
+        write_fixture(run_dir, repo_variant="astra-sim-wscllm",
+                      records=records, token_requests=tokens,
+                      model_rows=True)
+        results = run_dir / "results"
+        payload = (json.dumps(journal_row(0, 0, 0, 0, 1000, d_weight=300),
+                              sort_keys=True) + "\n"
+                   + "\n"
+                   + json.dumps(journal_row(1, 10, 0, 0, 1000, weight=300,
+                                            d_resident=100),
+                                sort_keys=True) + "\n")
+        with (results / "kv_delta_journal.jsonl").open(
+                "w", newline="", encoding="utf-8") as handle:
+            handle.write(payload)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("空白行", proc.stderr)
+
+    # -- HBM-07：transaction_id 非法类型统一拒绝 --------------------------
+
+    def test_hbm07_bad_transaction_id_fails_closed(self):
+        for index, bad in enumerate(("7", -1, True, None)):
+            rows = [journal_row(0, 0, 0, 0, 1000, d_weight=300)]
+            rows[0]["transaction_id"] = bad
+            run_dir = self._fixture_with_checksum(
+                f"hbm07tid{index}", rows, None)
+            proc = run_tool(run_dir)
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("transaction_id", proc.stderr)
+
+    # -- HBM-03：决策记录 seq 类型/非负/单调 -------------------------------
+
+    def _scan_fixture(self, tag: str, mutate) -> subprocess.CompletedProcess:
+        records, tokens = base_handcalc_records()
+        mutate(records)
+        run_dir = make_run_dir(tag)
+        write_fixture(run_dir, repo_variant="astra-sim-face",
+                      records=records, token_requests=tokens)
+        return run_tool(run_dir)
+
+    def test_hbm03_missing_seq_fails_closed(self):
+        def mutate(records):
+            for record in records:
+                record.pop("seq", None)
+        proc = self._scan_fixture("hbm03miss", mutate)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("seq", proc.stderr)
+
+    def test_hbm03_negative_seq_fails_closed(self):
+        def mutate(records):
+            records[0]["seq"] = -5
+        proc = self._scan_fixture("hbm03neg", mutate)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("seq", proc.stderr)
+
+    def test_hbm03_regressing_seq_fails_closed(self):
+        def mutate(records):
+            records[3]["seq"] = 2  # 前三条已到 seq=3
+        proc = self._scan_fixture("hbm03regr", mutate)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("seq 回退/重复", proc.stderr)
+
+    # -- HBM-04：restore 列表非 dict 成员拒绝（单元级） ---------------------
+
+    def test_hbm04_non_dict_restore_row_fails(self):
+        mapping = {"restore": {"restore_list_field": "history_transfers",
+                               "location_field": "history_location_before"}}
+        record = {"tick": 5, "session_hint": "s0",
+                  "decision": {"history_transfers": [
+                      {"kind": "remote_load", "total_bytes": 100},
+                      "corrupt-row"]}}
+        with self.assertRaises(SloToolError):
+            hw._prefill_restore_actions(record, mapping, "where")
+
+    # -- M6-04：恢复 bytes 超 f(history) 边界拒绝 --------------------------
+
+    def test_m6_04_restore_bytes_exceed_expected_fails(self):
+        """nbytes > expected 时旧实现会把 session.bytes 对账成负值继续
+        参与守恒——现于边界处 fail-closed（suffix 不可能大于整体）。"""
+        reset_seq()
+        records = [
+            prefill_record("sC_r0", 0, instance=0, decision={
+                "history_action": "NOC_MIGRATE",
+                "history_cache_state_before": "EVICTED",
+                "history_transfer_bytes": 300,  # > f(history=1)=100
+                "history_source_instance_index": 0,
+                "effective_prefill_tokens": 1}),
+            decode_record("sC_r0", 10, instance=0),
+            completion_record("sC_r0", 20),
+        ]
+        tokens = [token_row("sC_r0", "sC", 1, 1, 1)]
+        run_dir = make_run_dir("m604")
+        write_fixture(run_dir, repo_variant="astra-sim-face",
+                      records=records, token_requests=tokens)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("f(history)", proc.stderr)
 
 
 if __name__ == "__main__":

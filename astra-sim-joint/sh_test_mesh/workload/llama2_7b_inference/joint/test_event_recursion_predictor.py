@@ -17,7 +17,9 @@
   6. 重试复核断言口径（§5.5 末段）：同一拆分重交 + 保护/合法性复核；
   7. η/γ 因果更新规则（θ/α/τ/首样本初始化/无效样本拒绝/缺可分离样本
      保持原估计并标记不可观测）；
-  8. R/D 方向用例：长历史短输入、带宽高低、竞争升降各 ≥1 例。
+  8. R/D 方向用例：长历史短输入、带宽高低、竞争升降各 ≥1 例；
+  9. D15 诊断记录压缩：``keep_all_traces`` 只变记录不变所选 k、关闭态
+     不保留 O(L²) trace 项、请求总延迟 = 末层完成时刻差（累计偏移单列）。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_event_recursion_predictor.py   （或 pytest 同路径）
@@ -41,7 +43,6 @@ from joint.event_recursion_predictor import (  # noqa: E402
     EventRecursionError,
     INVALIDATE_INTERVAL_RELEASED,
     INVALIDATE_LAYER_IN_USE,
-    KHidePrediction,
     LayerRecursionPredictor,
     PREDICTOR_SOURCE_ANALYTIC_FALLBACK,
     PREDICTOR_SOURCE_RECURSION,
@@ -251,8 +252,9 @@ class DeadlinePinningTests(unittest.TestCase):
         deadlines_big, trace_big = run(4000)
         self.assertEqual(deadlines_small, deadlines_big)  # 期限钉死
         self.assertGreater(
-            trace_big.compute_slowdown_ns, trace_small.compute_slowdown_ns)
-        self.assertGreater(trace_big.compute_slowdown_ns, 0)
+            trace_big.cumulative_layer_offset_ns,
+            trace_small.cumulative_layer_offset_ns)
+        self.assertGreater(trace_big.cumulative_layer_offset_ns, 0)
         # k=0 下减速单列且可行性判定用 R̂ vs 钉死 D̂（首层 R̂>0=D̂_1）。
         self.assertFalse(trace_small.feasible)
 
@@ -260,7 +262,114 @@ class DeadlinePinningTests(unittest.TestCase):
         predictor = _uniform_case(4, 100, c_ns=100, memory_bytes=500)
         deadlines, reference = predictor.reference_deadlines()
         trace_full = predictor._trace_for_k(4, deadlines, reference)
-        self.assertEqual(trace_full.compute_slowdown_ns, 0)
+        self.assertEqual(trace_full.cumulative_layer_offset_ns, 0)
+        self.assertEqual(trace_full.end_to_end_slowdown_ns, 0)
+
+
+class DiagnosticRecordControlTests(unittest.TestCase):
+    """D15（2026-09-26，v2.0 C08）：E 诊断记录压缩——``keep_all_traces``
+    诊断控制只变记录、不变所选 k；关闭态多 k 枚举不保留 O(L²) 项；
+    请求总延迟 = 最终完成时刻差（``end_to_end_slowdown_ns``），逐层偏
+    移之和（``cumulative_layer_offset_ns``）只是累计审计口径。"""
+
+    def test_keep_all_traces_off_does_not_change_decision(self):
+        # 关闭详细记录 = 只变记录：k_hide / source / statuses /
+        # analytic_min_k / selected_trace（含逐层 timings）逐位一致。
+        def uniform(layers, r_ns, c_ns=1000.0):
+            legs = tuple(
+                RestoreGroupLeg(
+                    j, j + 1, (int(r_ns * 1000.0),), (("pool:0", "port:0"),))
+                for j in range(layers))
+            segs = tuple(
+                ComputeLayerSegment(
+                    ell, (c_ns,), (0,), ("port:0",))
+                for ell in range(1, layers + 1))
+            return LayerRecursionPredictor(
+                ResourceSnapshot(
+                    peak_bytes_per_ns={"pool:0": 1000.0, "port:0": 1000.0}),
+                legs, segs, 0)
+
+        for r_ns in (500, 2000, 4000):
+            predictor = uniform(32, r_ns)
+            keep = predictor.predict_k_hide(keep_all_traces=True)
+            slim = predictor.predict_k_hide()
+            self.assertEqual(keep.k_hide, slim.k_hide, f"r={r_ns}")
+            self.assertEqual(keep.source, slim.source)
+            self.assertEqual(keep.statuses, slim.statuses)
+            self.assertEqual(keep.analytic_min_k, slim.analytic_min_k)
+            self.assertEqual(keep.selected_trace, slim.selected_trace)
+        # 剪枝关闭（全枚举）两态同样同决策。
+        predictor = uniform(32, 2000)
+        keep = predictor.predict_k_hide(
+            prune_from_analytic=False, keep_all_traces=True)
+        slim = predictor.predict_k_hide(prune_from_analytic=False)
+        self.assertEqual(keep.k_hide, slim.k_hide)
+        self.assertEqual(keep.selected_trace, slim.selected_trace)
+
+    def test_slim_mode_does_not_retain_o_l2_traces(self):
+        # 多 k 枚举（全枚举 0..17，18 个 k）：关闭态 all_traces 为空——
+        # 落选 k 的逐层 timings 随枚举即弃（不保留 O(L²) 项）；诊断态
+        # 才逐 k 保留完整 trace 供抽检/审计。
+        predictor = _uniform_case(32, 2000)
+        slim = predictor.predict_k_hide(prune_from_analytic=False)
+        self.assertEqual(slim.all_traces, ())
+        keep = predictor.predict_k_hide(
+            prune_from_analytic=False, keep_all_traces=True)
+        self.assertEqual(len(keep.all_traces), 18)
+        self.assertEqual([t.k for t in keep.all_traces], list(range(18)))
+        self.assertTrue(
+            all(len(t.timings) == 32 for t in keep.all_traces))
+        # 选中 trace 两态都保留完整逐层 timings（O(L) 披露面不变）。
+        self.assertEqual(len(slim.selected_trace.timings), 32)
+
+    def test_end_to_end_uses_final_completion_not_offset_sum(self):
+        # 验收钉：早期 10 ns 停顿不得作为请求总延迟重复加 L 次。仅层 1
+        # 恢复带 10ns 字节，停顿沿 prev_sync 链传遍 4 层——每层消费偏移
+        # 10ns ⇒ 累计口径 4×10=40；末层完成 410 vs reference 400 ⇒
+        # 总延迟口径只计一次 = 10。
+        legs = (
+            RestoreGroupLeg(0, 1, (10_000,), (("pool:0", "port:0"),)),
+            RestoreGroupLeg(1, 2, (0,), (("pool:0", "port:0"),)),
+            RestoreGroupLeg(2, 3, (0,), (("pool:0", "port:0"),)),
+            RestoreGroupLeg(3, 4, (0,), (("pool:0", "port:0"),)),
+        )
+        segments = tuple(
+            ComputeLayerSegment(ell, (100.0,), (0,), ("port:0",))
+            for ell in range(1, 5))
+        snapshot = ResourceSnapshot(
+            peak_bytes_per_ns={"pool:0": 1000.0, "port:0": 1000.0})
+        predictor = LayerRecursionPredictor(snapshot, legs, segments, 0)
+        deadlines, reference = predictor.reference_deadlines()
+        trace0 = predictor._trace_for_k(0, deadlines, reference)
+        self.assertEqual(trace0.cumulative_layer_offset_ns, 40)
+        self.assertEqual(trace0.end_to_end_slowdown_ns, 10)
+        self.assertEqual(
+            [t.consumption_ns for t in trace0.timings],
+            [110, 210, 310, 410])
+        # 逐层偏移 = 消费完成 − reference 消费完成（每层恰 10 ⇒ 累计 40）。
+        self.assertEqual(
+            [t.consumption_ns - reference[t.layer] for t in trace0.timings],
+            [10, 10, 10, 10])
+        # 公共入口同口径（全枚举保留 k=0 诊断 trace；选中 k=1 的减速为
+        # 零——停顿层驻留后无候选流过，不产生偏移）。
+        result = predictor.predict_k_hide(
+            prune_from_analytic=False, keep_all_traces=True)
+        self.assertEqual(result.k_hide, 1)
+        self.assertEqual(result.all_traces[0].k, 0)
+        self.assertEqual(result.all_traces[0].cumulative_layer_offset_ns, 40)
+        self.assertEqual(result.all_traces[0].end_to_end_slowdown_ns, 10)
+        self.assertEqual(result.selected_trace.cumulative_layer_offset_ns, 0)
+        self.assertEqual(result.selected_trace.end_to_end_slowdown_ns, 0)
+
+    def test_as_dict_discloses_both_slowdown_accounts(self):
+        # 披露面双口径：as_dict 携带累计指标与终点差两个字段。
+        result = _uniform_case(4, 0, c_ns=100).predict_k_hide()
+        payload = result.as_dict()
+        self.assertEqual(
+            payload["selected_trace"]["end_to_end_slowdown_ns"], 0)
+        self.assertEqual(
+            payload["selected_trace"]["cumulative_layer_offset_ns"], 0)
+        self.assertNotIn("compute_slowdown_ns", payload["selected_trace"])
 
 
 class WritebackDirectionTests(unittest.TestCase):

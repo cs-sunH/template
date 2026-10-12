@@ -6,9 +6,15 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/Sys.hh"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <memory>
+#include <set>
 #include <utility>
 
 #include "astra-sim/common/Logging.hh"
@@ -26,13 +32,13 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/StreamBaseline.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
 #include "astra-sim/system/astraccl/CollectiveImpl.hh"
-#include "astra-sim/system/astraccl/custom_collectives/CustomAlgorithm.hh"
 #include "astra-sim/system/astraccl/native_collectives/collective_algorithm/AllToAll.hh"
 #include "astra-sim/system/astraccl/native_collectives/collective_algorithm/DoubleBinaryTreeAllReduce.hh"
 #include "astra-sim/system/astraccl/native_collectives/collective_algorithm/HalvingDoubling.hh"
 #include "astra-sim/system/astraccl/native_collectives/collective_algorithm/Ring.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/BasicLogicalTopology.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
+#include "DieModel.hh"
 #include <json/json.hpp>
 
 using namespace std;
@@ -162,6 +168,9 @@ Sys::Sys(int id,
     this->roofline_enabled = false;
     this->peak_perf = 0;
     this->roofline = nullptr;
+    this->compute_cost_model = ComputeCostModel::LegacyDefault;
+    this->die_runtime = nullptr;
+    this->die_model_config_path = "";
 
     this->remote_mem = remote_mem;
     this->remote_mem->set_sys(id, this);
@@ -210,6 +219,31 @@ Sys::Sys(int id,
     // scheduler
     this->physical_dims = physical_dims;
     this->queues_per_dim = queues_per_dim;
+    // The loop below indexes physical_dims by queues_per_dim positions; a
+    // shorter physical_dims vector read out of bounds here, and an empty
+    // queues_per_dim dereferenced queues_per_dim[0] below. The only caller
+    // passes valid equal-length vectors, so this is a pure defensive bound
+    // -- fail closed with a named message instead.
+    if (queues_per_dim.empty()) {
+        sys_panic("queues_per_dim must not be empty");
+    }
+    for (const int level_count : queues_per_dim) {
+        // A zero (or negative) entry would SIGFPE the
+        // active_chunks-per-dimension division below and make
+        // QueueLevelHandler hand out negative queue ids (the old
+        // queue_id *= -1 hot-fix silently flipped them to +1).
+        if (level_count < 1) {
+            sys_panic("queues_per_dim entries must be >= 1 (got " +
+                      std::to_string(level_count) +
+                      "; check --num-queues-per-dim / the system "
+                      "configuration)");
+        }
+    }
+    if (physical_dims.size() < queues_per_dim.size()) {
+        sys_panic("physical_dims (" + std::to_string(physical_dims.size()) +
+                  ") is shorter than queues_per_dim (" +
+                  std::to_string(queues_per_dim.size()) + ")");
+    }
     int element = 0;
     this->total_nodes = 1;
     for (uint64_t current_dim = 0; current_dim < queues_per_dim.size();
@@ -271,8 +305,6 @@ Sys::~Sys() {
         delete this->roofline;
     }
 
-    all_sys[id] = nullptr;
-
     for (auto lt : logical_topologies) {
         delete lt.second;
     }
@@ -293,7 +325,15 @@ Sys::~Sys() {
 
     if (workload != nullptr) {
         delete workload;
+        workload = nullptr;
     }
+
+    // Workload teardown may still consult the global simulation clock while
+    // DieExecution drops its pending HBM jobs. Keep this Sys reachable until
+    // those callbacks, observers, and their model state are fully destroyed;
+    // stale outer alarms are separately guarded by handleEvent() once this
+    // slot is cleared.
+    all_sys[id] = nullptr;
 
     bool shouldExit = true;
     for (auto& a : all_sys) {
@@ -308,6 +348,98 @@ Sys::~Sys() {
     }
 }
 
+namespace {
+
+// 3.11 strict latency parse (ported from the wscllm Sys): nlohmann converts
+// the JSON value lexically, so a negative literal (-100) reinterpreted as
+// uint64_t became ~1.8e19 ns -- downstream arithmetic wrapped the event
+// clock (roofline closed form now+runtime) or re-scheduled fluid transfer
+// events into the past until the watchdog killed the run, neither of which
+// names the field. Fail at the boundary with the field name instead.
+uint64_t parse_latency_ns_field(const json& j,
+                                const char* key,
+                                const string& config_name) {
+    const auto& value = j[key];
+    if (!value.is_number_integer() && !value.is_number_unsigned()) {
+        Sys::sys_panic(std::string(key) +
+                       " must be a non-negative integer number of ns in '" +
+                       config_name + "'");
+    }
+    const int64_t parsed = value.get<int64_t>();
+    if (parsed < 0 || parsed > (static_cast<int64_t>(1) << 62)) {
+        Sys::sys_panic(std::string(key) +
+                       " out of domain [0, 2^62] ns (got " +
+                       std::to_string(parsed) + " in '" + config_name + "')");
+    }
+    return static_cast<uint64_t>(parsed);
+}
+
+// R7-B port (2026-09-30, from the face repo): strict readers for the
+// remaining numeric system.json keys. The implicit nlohmann conversions
+// silently truncated fractional values, let negatives produce negative
+// event deltas (strict-increase abort far from the key), and accepted
+// out-of-domain scheduling constants (active-chunks-per-dimension <= 0
+// makes queue_threshold <= 0 so no stream is ever initialized -- a rootless
+// lost-wakeup stall). Both readers fail closed naming the key.
+double parse_non_negative_number_field(const json& j,
+                                       const char* key,
+                                       const string& config_name) {
+    const auto& value = j[key];
+    if (!value.is_number()) {
+        Sys::sys_panic(std::string(key) +
+                       " must be a number in '" + config_name + "'");
+    }
+    const double parsed = value.get<double>();
+    if (!std::isfinite(parsed) || parsed < 0.0) {
+        Sys::sys_panic(std::string(key) +
+                       " must be a finite non-negative number in '" +
+                       config_name + "' (got " + value.dump() + ")");
+    }
+    return parsed;
+}
+
+int parse_non_negative_int_field(const json& j,
+                                 const char* key,
+                                 const string& config_name,
+                                 int minimum) {
+    const auto& value = j[key];
+    if (!value.is_number_integer() && !value.is_number_unsigned()) {
+        Sys::sys_panic(std::string(key) +
+                       " must be an integer in '" + config_name + "'");
+    }
+    const int64_t parsed = value.get<int64_t>();
+    if (parsed < minimum || parsed > std::numeric_limits<int>::max()) {
+        Sys::sys_panic(std::string(key) + " out of domain [" +
+                       std::to_string(minimum) + ", int-max] in '" +
+                       config_name + "' (got " + value.dump() + ")");
+    }
+    return static_cast<int>(parsed);
+}
+
+// Process-level die plan-cache registry (joint rollout stage 1): one shared
+// LRU PlanCache per resolved hardware summary. compile() is a pure function
+// and a DiePlan is immutable, so every Sys running the same die hardware
+// shares its compiled plans instead of recompiling identical
+// plan_cache_keys per rank (design doc §8.5: "计划可以缓存"). The
+// simulation is single-threaded (one event loop drives all Sys), so the
+// registry needs no lock; if a multi-threaded runtime is ever introduced,
+// guard this function and the shared DieModel::PlanCache with a mutex.
+std::shared_ptr<DieModel::PlanCache> shared_die_plan_cache(
+    const DieModel::Hardware& hw) {
+    static std::map<std::string, std::shared_ptr<DieModel::PlanCache>>
+        registry;
+    const std::string key = DieModel::plan_cache_hardware_key(hw);
+    auto it = registry.find(key);
+    if (it == registry.end()) {
+        it = registry
+                 .emplace(key, std::make_shared<DieModel::PlanCache>(4096))
+                 .first;
+    }
+    return it->second;
+}
+
+}  // namespace
+
 bool Sys::initialize_sys(string name) {
     ifstream inFile;
     inFile.open(name);
@@ -319,8 +451,32 @@ bool Sys::initialize_sys(string name) {
         exit(1);
     }
 
+    // Fail-closed configuration parsing (same channel as every other fatal
+    // configuration path, same structure as the wscllm Sys): nlohmann
+    // throws parse_error for a malformed file and type_error for a field
+    // of the wrong JSON type. Neither may escape as an uncaught exception
+    // from inside the Sys constructor.
     json j;
-    inFile >> j;
+    try {
+        inFile >> j;
+        initialize_sys_fields(j, name);
+    } catch (const json::exception& e) {
+        sys_panic("system configuration '" + name +
+                  "' failed to parse (malformed JSON or a field of the "
+                  "wrong JSON type): " +
+                  e.what());
+    }
+    inFile.close();
+    // Die backend (joint rollout stage 1, contract §3.2): resolve the
+    // compute-cost backend AFTER the whole key-walk so the conflict matrix
+    // sees the fully parsed roofline-enabled / replay-only / peak-perf /
+    // local-mem-bw state; the die hardware load happens inside for an
+    // explicit compute-cost-model=die.
+    resolve_compute_cost_backend(j, name);
+    return true;
+}
+
+void Sys::initialize_sys_fields(const json& j, const string& name) {
     if (j.contains("scheduling-policy")) {
         string inp_scheduling_policy = j["scheduling-policy"];
         if (inp_scheduling_policy == "LIFO") {
@@ -354,25 +510,28 @@ bool Sys::initialize_sys(string name) {
         }
     }
     if (j.contains("local-reduction-delay")) {
-        local_reduction_delay = j["local-reduction-delay"];
+        local_reduction_delay = parse_non_negative_int_field(
+            j, "local-reduction-delay", name, 0);
     }
     if (j.contains("active-chunks-per-dimension")) {
-        active_chunks_per_dimension = j["active-chunks-per-dimension"];
+        active_chunks_per_dimension = parse_non_negative_int_field(
+            j, "active-chunks-per-dimension", name, 1);
     }
     if (j.contains("L")) {
-        inp_L = j["L"];
+        inp_L = parse_non_negative_number_field(j, "L", name);
     }
     if (j.contains("o")) {
-        inp_o = j["o"];
+        inp_o = parse_non_negative_number_field(j, "o", name);
     }
     if (j.contains("g")) {
-        inp_g = j["g"];
+        inp_g = parse_non_negative_number_field(j, "g", name);
     }
     if (j.contains("G")) {
-        inp_G = j["G"];
+        inp_G = parse_non_negative_number_field(j, "G", name);
     }
     if (j.contains("endpoint-delay")) {
-        communication_delay = j["endpoint-delay"];
+        communication_delay = parse_non_negative_int_field(
+            j, "endpoint-delay", name, 0);
         communication_delay = communication_delay * injection_scale;
     }
     if (j.contains("model-shared-bus")) {
@@ -397,14 +556,26 @@ bool Sys::initialize_sys(string name) {
         local_mem_bw = local_mem_bw * 1000000000;  // GB/sec
     }
     if (j.contains("local-mem-latency")) {
-        local_mem_latency = j["local-mem-latency"];  // ns
+        // Strict latency parse (3.11, ported from the wscllm Sys): nlohmann
+        // converts the JSON value lexically, so a negative literal (-100)
+        // reinterpreted as uint64_t became ~1.8e19 ns -- the roofline
+        // closed-form path computed now+runtime with it, wrapped the event
+        // clock, and tripped the EventQueue strict-increase abort (whose
+        // message does not name this field); on the fluid HBM path the
+        // same value re-scheduled transfer events into the past until the
+        // watchdog killed the run. Fail here, at the boundary, naming the
+        // field.
+        local_mem_latency = parse_latency_ns_field(j, "local-mem-latency",
+                                                   name);
     }
     if (j.contains("remote-mem-bw")) {
         remote_mem_bw = j["remote-mem-bw"];
         remote_mem_bw = remote_mem_bw * 1000000000;  // GB/sec
     }
     if (j.contains("remote-mem-latency")) {
-        remote_mem_latency = j["remote-mem-latency"];  // ns
+        // Same wraparound exposure as local-mem-latency above.
+        remote_mem_latency = parse_latency_ns_field(j, "remote-mem-latency",
+                                                    name);
     }
     if (j.contains("pipeline-tile-fraction")) {
         pipeline_tile_fraction = j["pipeline-tile-fraction"];
@@ -444,33 +615,56 @@ bool Sys::initialize_sys(string name) {
         hbm_bandwidth_contention = false;
     }
     if (j.contains("roofline-enabled")) {
-        if (j["roofline-enabled"] != 0) {
-            roofline_enabled = true;
+        // Boolean/integer strict parsing (same fix as the wscllm Sys):
+        // nlohmann's cross-type `!= 0` treated a JSON `false` as enabled
+        // (fail-open).
+        const auto& roofline_flag = j["roofline-enabled"];
+        if (roofline_flag.is_boolean()) {
+            roofline_enabled = roofline_flag.get<bool>();
+        } else if (roofline_flag.is_number_integer() ||
+                   roofline_flag.is_number_unsigned()) {
+            roofline_enabled = roofline_flag.get<int64_t>() != 0;
+        } else {
+            sys_panic("roofline-enabled must be boolean or integer");
+        }
+        if (roofline_enabled) {
             roofline = new Roofline(local_mem_bw, peak_perf);
         }
     }
     this->trace_enabled = false;
     if (j.contains("trace-enabled")) {
-        if (j["trace-enabled"] != 0) {
-            this->trace_enabled = true;
+        const auto& trace_flag = j["trace-enabled"];
+        if (trace_flag.is_boolean()) {
+            this->trace_enabled = trace_flag.get<bool>();
+        } else if (trace_flag.is_number_integer() ||
+                   trace_flag.is_number_unsigned()) {
+            this->trace_enabled = trace_flag.get<int64_t>() != 0;
         } else {
-            this->trace_enabled = false;
+            sys_panic("trace-enabled must be boolean or integer");
         }
     }
     this->replay_only = false;
     if (j.contains("replay-only")) {
-        if (j["replay-only"] != 0) {
-            this->replay_only = true;
+        const auto& replay_flag = j["replay-only"];
+        if (replay_flag.is_boolean()) {
+            this->replay_only = replay_flag.get<bool>();
+        } else if (replay_flag.is_number_integer() ||
+                   replay_flag.is_number_unsigned()) {
+            this->replay_only = replay_flag.get<int64_t>() != 0;
         } else {
-            this->replay_only = false;
+            sys_panic("replay-only must be boolean or integer");
         }
     }
     this->track_local_mem = false;
     if (j.contains("track-local-mem")) {
-        if (j["track-local-mem"] != 0) {
-        this->track_local_mem = true;
+        const auto& track_flag = j["track-local-mem"];
+        if (track_flag.is_boolean()) {
+            this->track_local_mem = track_flag.get<bool>();
+        } else if (track_flag.is_number_integer() ||
+                   track_flag.is_number_unsigned()) {
+            this->track_local_mem = track_flag.get<int64_t>() != 0;
         } else {
-        this->track_local_mem = false;
+            sys_panic("track-local-mem must be boolean or integer");
         }
     }
 
@@ -479,11 +673,280 @@ bool Sys::initialize_sys(string name) {
         this->local_mem_trace_filename = j["local-mem-trace-filename"];
     }
 
+    // Unknown-key gate (3.12, 2026-09-29, same as the wscllm Sys): this
+    // reader only consumed known keys and silently ignored everything
+    // else, so a typo'd template key fell back to the built-in default and
+    // the feature silently turned off with zero diagnostics -- fail-open
+    // at the last line of defense. The hardware json side already enforces
+    // an exact-key whitelist (_require_exact_keys in the resolver); this
+    // is the matching gate for the system side. The retired
+    // *-implementation-custom keys are listed as known so they keep their
+    // specific reject_retired_custom_key diagnosis inside
+    // setup_collective_impl_from_config (called right after this gate)
+    // instead of the generic unknown-key message. Keep this set in sync
+    // with _KNOWN_SYSTEM_TEMPLATE_KEYS in sh_test_mesh/config_resolver.py.
+    static const std::set<std::string> known_system_keys = {
+        "scheduling-policy",
+        "collective-optimization",
+        "local-reduction-delay",
+        "active-chunks-per-dimension",
+        "L",
+        "o",
+        "g",
+        "G",
+        "endpoint-delay",
+        "model-shared-bus",
+        "preferred-dataset-splits",
+        "peak-perf",
+        "local-mem-bw",
+        "local-mem-latency",
+        "remote-mem-bw",
+        "remote-mem-latency",
+        "pipeline-tile-fraction",
+        "hbm-kv-restore-bandwidth-sharing",
+        "hbm-bandwidth-contention",
+        "roofline-enabled",
+        "trace-enabled",
+        "replay-only",
+        "track-local-mem",
+        "local-mem-trace-filename",
+        "compute-cost-model",
+        "die-model-profile",
+        "die-model-config",
+        "all-reduce-implementation",
+        "reduce-scatter-implementation",
+        "all-gather-implementation",
+        "all-to-all-implementation",
+        // retired keys: known, but rejected with their own message below.
+        "all-reduce-implementation-custom",
+        "all-gather-implementation-custom",
+        "reduce-scatter-implementation-custom",
+        "all-to-all-implementation-custom",
+        "per-node-custom-implementation",
+    };
+    std::string unknown_keys;
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (known_system_keys.count(it.key()) == 0) {
+            if (!unknown_keys.empty()) {
+                unknown_keys += ", ";
+            }
+            unknown_keys += "\"" + it.key() + "\"";
+        }
+    }
+    if (!unknown_keys.empty()) {
+        sys_panic("system configuration '" + name +
+                  "' contains unknown key(s): " + unknown_keys +
+                  " (a typo'd key used to silently fall back to the default "
+                  "value and disable the intended feature)");
+    }
     collective_impl_lookup->setup_collective_impl_from_config(j);
-
-    inFile.close();
-    return true;
 }
+
+void Sys::resolve_compute_cost_backend(const json& j, const string& name) {
+    // Compute cost backend resolution (joint rollout stage 1; contract §3.2
+    // conflict matrix, fail-closed on every branch -- field parse order must
+    // never select a backend silently). Runs after the whole key-walk.
+    const bool explicit_present = j.contains("compute-cost-model");
+    ComputeCostModel explicit_model = ComputeCostModel::LegacyDefault;
+    if (explicit_present) {
+        if (!j["compute-cost-model"].is_string()) {
+            sys_panic(
+                "system config key 'compute-cost-model' must be a string");
+        }
+        const string model = j["compute-cost-model"];
+        if (model == "die") {
+            explicit_model = ComputeCostModel::Die;
+        } else if (model == "roofline") {
+            explicit_model = ComputeCostModel::Roofline;
+        } else if (model == "replay") {
+            explicit_model = ComputeCostModel::Replay;
+        } else {
+            sys_panic("unknown value for compute-cost-model in sys input "
+                      "file: '" +
+                      model +
+                      "' (legal: die | roofline | replay)");
+        }
+    }
+    const bool profile_present = j.contains("die-model-profile");
+    string profile;
+    if (profile_present) {
+        if (!j["die-model-profile"].is_string()) {
+            sys_panic(
+                "system config key 'die-model-profile' must be a string");
+        }
+        profile = j["die-model-profile"];
+        if (profile != "mesh_die_v1" && profile != "tx8_reference_v1") {
+            sys_panic("unknown value for die-model-profile in sys input "
+                      "file: '" +
+                      profile + "' (legal: mesh_die_v1 | tx8_reference_v1)");
+        }
+    }
+    const bool config_explicit_present = j.contains("die-model-config");
+    string config_path;
+    if (config_explicit_present) {
+        if (!j["die-model-config"].is_string()) {
+            sys_panic(
+                "system config key 'die-model-config' must be a string");
+        }
+        config_path = j["die-model-config"];
+    }
+
+    if (explicit_present && explicit_model == ComputeCostModel::Die) {
+        if (roofline_enabled) {
+            sys_panic("system config conflict: compute-cost-model=die is "
+                      "incompatible with roofline-enabled=1 (contract 3.2)");
+        }
+        if (replay_only) {
+            sys_panic("system config conflict: compute-cost-model=die is "
+                      "incompatible with replay-only=1 (contract 3.2)");
+        }
+        initialize_die_backend(name, config_explicit_present, config_path,
+                               profile_present, profile,
+                               j.contains("peak-perf"),
+                               j.contains("local-mem-bw"),
+                               j.contains("hbm-bandwidth-contention"));
+    } else if (explicit_present &&
+               explicit_model == ComputeCostModel::Roofline) {
+        // Explicit legacy roofline backend: same dispatch state as the
+        // historical roofline-enabled=1 configuration.
+        compute_cost_model = ComputeCostModel::Roofline;
+        if (!roofline_enabled) {
+            roofline_enabled = true;
+            roofline = new Roofline(local_mem_bw, peak_perf);
+        }
+    } else if (explicit_present) {
+        // Explicit replay backend: the legacy no-roofline dispatch
+        // (COMP nodes run through issue_replay semantics).
+        compute_cost_model = ComputeCostModel::Replay;
+        if (profile_present || config_explicit_present) {
+            LoggerFactory::get_logger("system")->warn(
+                "system config file {} carries die-model keys but "
+                "compute-cost-model is not 'die'; they are ignored",
+                name);
+        }
+    } else {
+        // No compute-cost-model key: backward-compatible dispatch. The die
+        // keys never select the die backend on their own.
+        compute_cost_model = roofline_enabled
+            ? ComputeCostModel::Roofline
+            : ComputeCostModel::LegacyDefault;
+        if (profile_present || config_explicit_present) {
+            LoggerFactory::get_logger("system")->warn(
+                "system config file {} carries die-model keys but no "
+                "compute-cost-model=die; they are ignored",
+                name);
+        }
+    }
+}
+
+void Sys::initialize_die_backend(
+    const std::string& system_config_path,
+    const bool explicit_config_present,
+    const std::string& explicit_config_path,
+    const bool profile_present,
+    const std::string& profile,
+    const bool peak_perf_key_present,
+    const bool local_mem_bw_key_present,
+    const bool hbm_contention_key_present) {
+    compute_cost_model = ComputeCostModel::Die;
+
+    // Resolve the die-model-config path (contract §3.2): the explicit key,
+    // else resolved_die_model.json next to the system.json being parsed.
+    string path = explicit_config_path;
+    if (path.empty()) {
+        const std::filesystem::path base(system_config_path);
+        path = (base.parent_path() / "resolved_die_model.json").string();
+    }
+    die_model_config_path = path;
+
+    // Fail-closed load: the file must exist and parse.
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        sys_panic("die backend requires die-model-config: cannot open " +
+                  path + (explicit_config_present
+                              ? " (from the die-model-config key)"
+                              : " (default: resolved_die_model.json next to "
+                                "the system config)"));
+    }
+    json die_cfg;
+    try {
+        in >> die_cfg;
+    } catch (const std::exception& e) {
+        sys_panic("failed to parse die-model-config file " + path + ": " +
+                  e.what());
+    }
+
+    DieModel::Hardware hw;
+    try {
+        hw = DieModel::make_hardware(die_cfg);
+    } catch (const std::exception& e) {
+        LoggerFactory::get_logger("system")->critical(
+            "die-model-config file {} rejected by the die cost library: {}",
+            path, e.what());
+        exit(1);
+    }
+
+    // Profile cross-check: the resolved file's own profile is what the cost
+    // library runs with; an explicit system.json die-model-profile that
+    // disagrees is a resolver/Config regression -- fail closed.
+    if (profile_present && profile != DieModel::to_string(hw.profile)) {
+        sys_panic("system config die-model-profile '" + profile +
+                  "' disagrees with the profile of " + path + " ('" +
+                  DieModel::to_string(hw.profile) + "')");
+    }
+
+    // Derived-scalar consistency (contract §3.4): explicit peak-perf /
+    // local-mem-bw must equal the library-derived PE_peak_die /
+    // hbm_bandwidth_bytes -- the resolver guarantees this, so a mismatch is
+    // a broken resolver or a hand-edited config and is refused (never
+    // silently resolved to either side). Missing keys are filled FROM the
+    // library so the legacy consumers (statistics denominators, the HBM
+    // fluid model) keep working under the die backend.
+    const auto same_scalar = [](const double a, const double b) {
+        const double scale = std::max(1.0, std::max(std::abs(a), std::abs(b)));
+        return std::abs(a - b) <= 1e-9 * scale;
+    };
+    const double derived_peak_flop_s = hw.pe_peak_die;
+    const double derived_mem_bw_bytes_s = hw.hbm_bandwidth_bytes;
+    if (peak_perf_key_present &&
+        !same_scalar(peak_perf, derived_peak_flop_s)) {
+        sys_panic("system config peak-perf (" + std::to_string(peak_perf) +
+                  " FLOP/s) disagrees with the die-model-config derived "
+                  "PE_peak_die (" +
+                  std::to_string(derived_peak_flop_s) + " FLOP/s, from " +
+                  path + "); the resolver must keep the two identical");
+    }
+    if (local_mem_bw_key_present &&
+        !same_scalar(local_mem_bw, derived_mem_bw_bytes_s)) {
+        sys_panic("system config local-mem-bw (" +
+                  std::to_string(local_mem_bw) +
+                  " byte/s) disagrees with the die-model-config derived "
+                  "hbm_bandwidth_bytes (" +
+                  std::to_string(derived_mem_bw_bytes_s) + " byte/s, from " +
+                  path + "); the resolver must keep the two identical");
+    }
+    if (!peak_perf_key_present) {
+        peak_perf = derived_peak_flop_s;
+    }
+    if (!local_mem_bw_key_present) {
+        local_mem_bw = derived_mem_bw_bytes_s;
+        // The key-walk's local_mem_bw <= 0 auto-disable of the HBM fluid
+        // model ran before this fill; when the user spelled neither
+        // local-mem-bw nor hbm-bandwidth-contention, restore the documented
+        // default (contention on) so the die backend arbitrates memory as
+        // designed instead of silently running the contention-off arm.
+        // (This repository defaults hbm_bandwidth_contention to true in the
+        // constructor; the auto-disable only fired on the unfilled zero.)
+        if (!hbm_contention_key_present && local_mem_bw > 0) {
+            hbm_bandwidth_contention = true;
+        }
+    }
+
+    die_runtime = std::make_unique<DieModelRuntime>(std::move(hw));
+}
+
+Sys::DieModelRuntime::DieModelRuntime(DieModel::Hardware hww)
+    : hardware(std::move(hww)), plan_cache(shared_die_plan_cache(hardware)) {}
 
 Tick Sys::boostedTick() {
     Sys* ts = all_sys[0];
@@ -561,6 +1024,21 @@ SystemEventHandle Sys::register_event_cancellable(
     CallData* callData,
     Tick delta_cycles,
     EventDataCancellationCallback cancellation_callback) {
+    // Fail-closed on delta==0 (latent-trap guard, same as the wscllm Sys):
+    // the outer alarm goes through the backend's cancellable schedule,
+    // which clamps a delta==0 request to +1 ns OUTSIDE invoke context and
+    // merges at current_time INSIDE it -- two different instants -- while
+    // this Sys-side bucket is keyed at boostedTick()+delta unconditionally.
+    // A delta==0 caller therefore got an alarm and an event bucket on two
+    // different calendars (orphaned events, silently dropped wakeups)
+    // depending on which context the call ran in. The only caller clamps
+    // to >= 1 already, so the guard costs nothing today and turns the
+    // ambiguous request into a named error instead.
+    if (delta_cycles == 0) {
+        sys_panic("register_event_cancellable requires delta >= 1 ns (a "
+                  "delta of 0 is ambiguous across invoke contexts and was "
+                  "never a supported request)");
+    }
     if (next_cancellable_event_id == 0) {
         sys_panic("cancellable system event id space exhausted");
     }
@@ -628,6 +1106,18 @@ void Sys::try_register_event(Callable* callable,
                              EventType event,
                              CallData* callData,
                              Tick& delta_cycles) {
+    // H3 (face-LRU audit, 2026-09-29, mirrored to joint): a delta==0
+    // registration outside the backend's invoke pass hits the EventQueue's
+    // same-tick guard and exits the whole run. Online tick-end / deferred
+    // commits issue collectives on this path, and a communication_delay
+    // truncated to 0 by a fractional injection scale (legal CLI combo, e.g.
+    // endpoint-delay 10 with --injection-scale 0.05) makes the first
+    // collective packet fatal with a message unrelated to its cause.
+    // Same-tick merging stays byte-exact inside the invoke pass (static
+    // dispatch), so only the forbidden context defers to the next tick.
+    if (delta_cycles == 0 && !comm_NI->backend_in_invoke_context()) {
+        delta_cycles = 1;
+    }
     auto event_time = Sys::boostedTick() + delta_cycles;
     auto [event_list_it, should_schedule] = event_queue.try_emplace(event_time);
     event_list_it->second.events.push_back(
@@ -664,9 +1154,11 @@ void Sys::handleEvent(void* arg) {
             all_sys[id]->call_events();
         }
         delete ehd;
-    } else if ((event == EventType::NPU_to_MA) ||
-               (event == EventType::MA_to_NPU)) {
-        all_sys[id]->call_events();
+        // (The NPU_to_MA / MA_to_NPU arm that used to live here had no
+        // producer: MemBus routes through register_event's CallEvents
+        // channel, and unlike the arm above it lacked both the delete of
+        // the handler data and the all_sys bounds guard -- removed with the
+        // 2026-10-01 dead-code audit.)
     } else if (event == EventType::RendezvousSend) {
         RendezvousSendData* rsd = (RendezvousSendData*)ehd;
         rsd->send.call(EventType::General, nullptr);
@@ -687,12 +1179,11 @@ void Sys::handleEvent(void* arg) {
         RecvPacketEventHandlerData* rcehd = (RecvPacketEventHandlerData*)ehd;
         if (rcehd->workload) {
             rcehd->workload->call(event, rcehd->wlhd);
+        } else if (rcehd->callable) {
+            rcehd->callable->call(event, rcehd->wlhd);
         }
         if (rcehd->owner) {
             rcehd->owner->consume(rcehd);
-        }
-        if (rcehd->custom_algorithm) {
-            rcehd->custom_algorithm->call(event, rcehd->wlhd);
         }
         delete rcehd;
     } else if (event == EventType::PacketSent) {
@@ -724,7 +1215,27 @@ DataSet* Sys::generate_all_reduce(uint64_t size,
                                   uint64_t workload_node_id) {
     if (communicator_group == nullptr) {
         vector<CollectiveImpl*> implementation_per_dimension;
-        implementation_per_dimension = collective_impl_lookup->get_collective_impl(ComType::All_Reduce, workload_node_id);
+        // (2026-10-01 R3 审查修复) 与 CommunicatorGroup 的 M2 fail-
+        // closed 纪律对称：裸 throw 会被 call_events 的 catch 吞
+        // 成一条 critical，发起节点已 take/occupy 却永不完成
+        // （run 静默不完整收场）。缺 *-implementation 键的
+        // system.json 在此点名退出。
+        try {
+            implementation_per_dimension =
+                collective_impl_lookup->get_collective_impl(
+                    ComType::All_Reduce, workload_node_id);
+        } catch (const std::exception& e) {
+            LoggerFactory::get_logger("system::Sys")
+                ->critical(
+                    "######### Exiting because the collective "
+                    "implementation lookup failed (com_type=", 
+                    static_cast<int>(ComType::All_Reduce), 
+                    ", workload_node_id=", workload_node_id, 
+                    ", communicator_group=<null> -- check the "
+                    "*-implementation keys in the system "
+                    "configuration): ", e.what(), " #########");
+            std::exit(1);
+        }
         return generate_collective(size, logical_topologies["AllReduce"],
                                    implementation_per_dimension,
                                    involved_dimensions, ComType::All_Reduce,
@@ -746,7 +1257,27 @@ DataSet* Sys::generate_all_to_all(uint64_t size,
                                   uint64_t workload_node_id) {
     if (communicator_group == nullptr) {
         vector<CollectiveImpl*> implementation_per_dimension;
-        implementation_per_dimension = collective_impl_lookup->get_collective_impl(ComType::All_to_All, workload_node_id);
+        // (2026-10-01 R3 审查修复) 与 CommunicatorGroup 的 M2 fail-
+        // closed 纪律对称：裸 throw 会被 call_events 的 catch 吞
+        // 成一条 critical，发起节点已 take/occupy 却永不完成
+        // （run 静默不完整收场）。缺 *-implementation 键的
+        // system.json 在此点名退出。
+        try {
+            implementation_per_dimension =
+                collective_impl_lookup->get_collective_impl(
+                    ComType::All_to_All, workload_node_id);
+        } catch (const std::exception& e) {
+            LoggerFactory::get_logger("system::Sys")
+                ->critical(
+                    "######### Exiting because the collective "
+                    "implementation lookup failed (com_type=", 
+                    static_cast<int>(ComType::All_to_All), 
+                    ", workload_node_id=", workload_node_id, 
+                    ", communicator_group=<null> -- check the "
+                    "*-implementation keys in the system "
+                    "configuration): ", e.what(), " #########");
+            std::exit(1);
+        }
         return generate_collective(size, logical_topologies["AllToAll"],
                                    implementation_per_dimension,
                                    involved_dimensions, ComType::All_to_All,
@@ -768,7 +1299,27 @@ DataSet* Sys::generate_all_gather(uint64_t size,
                                   uint64_t workload_node_id) {
     if (communicator_group == nullptr) {
         vector<CollectiveImpl*> implementation_per_dimension;
-        implementation_per_dimension = collective_impl_lookup->get_collective_impl(ComType::All_Gather, workload_node_id);
+        // (2026-10-01 R3 审查修复) 与 CommunicatorGroup 的 M2 fail-
+        // closed 纪律对称：裸 throw 会被 call_events 的 catch 吞
+        // 成一条 critical，发起节点已 take/occupy 却永不完成
+        // （run 静默不完整收场）。缺 *-implementation 键的
+        // system.json 在此点名退出。
+        try {
+            implementation_per_dimension =
+                collective_impl_lookup->get_collective_impl(
+                    ComType::All_Gather, workload_node_id);
+        } catch (const std::exception& e) {
+            LoggerFactory::get_logger("system::Sys")
+                ->critical(
+                    "######### Exiting because the collective "
+                    "implementation lookup failed (com_type=", 
+                    static_cast<int>(ComType::All_Gather), 
+                    ", workload_node_id=", workload_node_id, 
+                    ", communicator_group=<null> -- check the "
+                    "*-implementation keys in the system "
+                    "configuration): ", e.what(), " #########");
+            std::exit(1);
+        }
         return generate_collective(size, logical_topologies["AllGather"],
                                    implementation_per_dimension,
                                    involved_dimensions, ComType::All_Gather,
@@ -790,7 +1341,27 @@ DataSet* Sys::generate_reduce_scatter(uint64_t size,
                                       uint64_t workload_node_id) {
     if (communicator_group == nullptr) {
         vector<CollectiveImpl*> implementation_per_dimension;
-        implementation_per_dimension = collective_impl_lookup->get_collective_impl(ComType::Reduce_Scatter, workload_node_id);
+        // (2026-10-01 R3 审查修复) 与 CommunicatorGroup 的 M2 fail-
+        // closed 纪律对称：裸 throw 会被 call_events 的 catch 吞
+        // 成一条 critical，发起节点已 take/occupy 却永不完成
+        // （run 静默不完整收场）。缺 *-implementation 键的
+        // system.json 在此点名退出。
+        try {
+            implementation_per_dimension =
+                collective_impl_lookup->get_collective_impl(
+                    ComType::Reduce_Scatter, workload_node_id);
+        } catch (const std::exception& e) {
+            LoggerFactory::get_logger("system::Sys")
+                ->critical(
+                    "######### Exiting because the collective "
+                    "implementation lookup failed (com_type=", 
+                    static_cast<int>(ComType::Reduce_Scatter), 
+                    ", workload_node_id=", workload_node_id, 
+                    ", communicator_group=<null> -- check the "
+                    "*-implementation keys in the system "
+                    "configuration): ", e.what(), " #########");
+            std::exit(1);
+        }
         return generate_collective(size, logical_topologies["ReduceScatter"],
                                    implementation_per_dimension,
                                    involved_dimensions, ComType::Reduce_Scatter,
@@ -817,41 +1388,61 @@ DataSet* Sys::generate_collective(
     // Therefore, we also do not need the 'preferred-dataset-splits' value from the system JSON input.
     // However, this variable is intertwined deeply in this function so that we cannot remove it for now.
     // Therefore, we have to keep that value in the JSON input. TODO: Refactor and remove.
+    // H2 (face-LRU audit, 2026-09-29, mirrored to joint): everything below
+    // indexes dimensions_involved with dim_mapper[dim] for dim < topology's
+    // logical dimension count. The legacy ET default is a 4x-true list
+    // (NodeStore), which reads fine only while the topology has at most 4
+    // dimensions -- a 5+-dimensional collective (or a hand-written short
+    // list) would otherwise index vector<bool> past the end, and the garbage
+    // bit read decides whether a dimension is silently skipped. A longer
+    // list stays tolerated (byte-exact with the legacy default); only a
+    // short one is fatal.
+    const int logical_dims = topology->get_num_of_dimensions();
+    if (static_cast<int>(dimensions_involved.size()) < logical_dims) {
+        LoggerFactory::get_logger("system::Sys")
+            ->critical(
+                "######### Exiting because dimensions_involved has {} "
+                "entries but the collective topology has {} logical "
+                "dimensions (sys.id={}) #########",
+                dimensions_involved.size(), logical_dims, id);
+        std::exit(1);
+    }
+    // A zero-size collective cannot be split into streams: ceil(0/chunk) = 0
+    // streams would leave the DataSet unfinished forever (the notifier
+    // never fires) and the non-All_Gather path in determine_chunk_size
+    // would inflate size back up to splits * total_nodes and time the
+    // empty collective as real traffic. Fail closed instead (2026-10-01
+    // audit, same as the wscllm Sys).
+    if (size == 0) {
+        sys_panic("collective data size must be positive");
+    }
     uint64_t chunk_size = determine_chunk_size(size, collective_type);
+    if (chunk_size == 0) {
+        sys_panic("collective chunk size must be positive");
+    }
     int streams = ceil(((double)size) / chunk_size);
     uint64_t remain_size;
     DataSet* dataset = new DataSet(streams);
     int pri = get_priority(explicit_priority);
     int count = 0;
-    if (implementation_per_dimension[0]->type == CollectiveImplType::CustomCollectiveImpl) {
-        // For custom collective, we create a single stream covering the entire data size,
-        // and ignore all the logic below.
-        int pos_in_comm = id;
-        if (communicator_group != nullptr) {
-            pos_in_comm = communicator_group->get_position_in_group();
-        }
-        CollectivePhase phase = generate_collective_phase(
-            collective_type,
-            nullptr,
-            size,
-            // We use the variable queue_id to encode the position of this rank in the communication.
-            pos_in_comm,
-            // Below three are default values.
-            RingTopology::Direction::Clockwise,
-            InjectionPolicy::Normal,
-            implementation_per_dimension[0],
-            communicator_group);
-        list<CollectivePhase> vect;
-        vect.push_back(phase);
-        int stream_id = num_streams++;
-        if (communicator_group != nullptr) {
-            stream_id = communicator_group->num_streams++;
-        }
-        StreamBaseline* newStream =
-            new StreamBaseline(this, dataset, stream_id, vect, pri);
-        newStream->current_queue_id = -1;
-        insert_into_ready_list(newStream);
-        return dataset;
+
+    // H4 (R7-A) defense in depth (ported from the face repo, 2026-09-30):
+    // every dim loop below indexes the queue levels (built from the
+    // PHYSICAL dimension count) with this topology's dimension ids. A
+    // topology with more dimensions than physical queue levels (e.g. a
+    // hand-written shaped comm group) used to read those tables out of
+    // bounds. The group constructor rejects the same shape at load time and
+    // the dimensions_involved length is checked by the earlier H2 gate
+    // above; this is the fail-loud backstop at the point of use.
+    if (static_cast<size_t>(topology->get_num_of_dimensions()) >
+        vLevels->levels.size()) {
+        sys_panic(
+            "collective topology has " +
+            std::to_string(topology->get_num_of_dimensions()) +
+            " dimensions but the physical queue levels only cover " +
+            std::to_string(vLevels->levels.size()) +
+            " physical dimensions; issuing would index the queue levels out "
+            "of bounds");
     }
 
     while (size > 0) {
@@ -1005,7 +1596,16 @@ DataSet* Sys::generate_collective(
             newStream->current_queue_id = -1;
             insert_into_ready_list(newStream);
         } else {
+            // Zero-phase collective (every dimension is a singleton or not
+            // involved -- e.g. a 1-rank communicator group): no stream is
+            // ever created, so the dataset's notifier would never fire and
+            // the requesting workload node would hang forever with zero
+            // diagnostics (2026-10-01 audit: dataset->active has no reader
+            // anywhere; the deactivation path was a silent hang). Complete
+            // the dataset immediately instead -- nothing to communicate.
             dataset->active = false;
+            dataset->total_streams = 0;
+            dataset->notify_stream_finished(nullptr);
             break;
         }
     }
@@ -1053,10 +1653,6 @@ CollectivePhase Sys::generate_collective_phase(
                                                (RingTopology*)topology,
                                                data_size));
         return vn;
-    } else if (collective_impl->type == CollectiveImplType::CustomCollectiveImpl) {
-        string filename = ((CustomCollectiveImpl*)collective_impl)->filename;
-        CollectivePhase vn(this, 0, new CustomAlgorithm(filename, id, queue_id, comm_group));
-        return vn;
     } else {
         LoggerFactory::get_logger("system")->critical(
             "Error: No known collective implementation for collective phase");
@@ -1078,6 +1674,14 @@ uint64_t Sys::determine_chunk_size(uint64_t& size, ComType type) {
             "shipped configurations use 6).");
     }
     uint64_t chunk_size = size / preferred_dataset_splits;
+    if (type == ComType::All_Gather && chunk_size == 0) {
+        // An All_Gather payload smaller than 'preferred-dataset-splits'
+        // divides into zero-size chunks; ceil(size/0) would then overflow
+        // the stream count (UB) and the emit loop would never decrement
+        // size. Fall back to one chunk covering the whole size (2026-10-01
+        // audit, same as the wscllm Sys).
+        return size;
+    }
     // We want the collective size to have minimum size, otherwise, there is a
     // possibility of size overflow due to further dividing it to more
     // fine-grained messages
@@ -1136,7 +1740,10 @@ void Sys::ask_for_schedule(int max) {
         min = static_cast<uint64_t>(max);
     }
     for (auto& sys : all_sys) {
-        if (sys->ready_list.size() == 0 ||
+        // R1-D-L4 port (2026-09-30): a null slot (torn-down rank) makes the
+        // all-rank front scan unevaluable; the all-or-nothing contract
+        // returns instead of dereferencing it.
+        if (sys == nullptr || sys->ready_list.size() == 0 ||
             sys->ready_list.front()->stream_id != top) {
             return;
         }
@@ -1180,17 +1787,12 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     if (stream->steps_finished == 1) {
         first_phase_streams--;
     }
-    if (stream->steps_finished != 0 && stream->net_message_counter != 0) {
-        // Guard: a phase with no received network messages leaves the
-        // trailing latency accumulator at 0; dividing by a zero counter
-        // would turn it into NaN.
-        stream->net_message_latency.back() /= stream->net_message_counter;
-    }
+    // The write-only per-stream network-statistic accumulation was removed
+    // (face-LRU audit 2026-09-29 mirrored to joint); nothing ever read it.
     if (stream->my_current_phase.algorithm != nullptr) {
         delete stream->my_current_phase.algorithm;
     }
     if (stream->phases_to_go.size() == 0) {
-        stream->take_bus_stats_average();
         stream->dataset->notify_stream_finished((StreamStat*)stream);
     }
     if (stream->current_queue_id >= 0 && stream->my_current_phase.enabled) {
@@ -1226,11 +1828,9 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     stream->my_current_phase = vi;
     stream->phases_to_go.pop_front();
     stream->initialized = false;
-    stream->last_phase_change = Sys::boostedTick();
     stream->total_packets_sent = 0;
 
-    stream->net_message_latency.push_back(0);
-    stream->net_message_counter = 0;
+    // (net_message accumulator init removed with the dead statistic chain.)
 
     if (stream->my_current_phase.enabled) {
         insert_stream(&active_Streams[stream->current_queue_id], stream);
@@ -1275,6 +1875,37 @@ int Sys::front_end_sim_send(Tick delay,
     }
 }
 
+int Sys::front_end_sim_send_correlated(
+    Tick delay,
+    void* buffer,
+    uint64_t count,
+    int type,
+    int dst,
+    int tag,
+    sim_request* request,
+    Sys::FrontEndSendRecvType send_type,
+    void (*msg_handler)(void* fun_arg),
+    void* fun_arg,
+    const AstraNetworkAPI::LogicalFlowKey& key) {
+    if (send_type == Sys::FrontEndSendRecvType::NATIVE) {
+        tag = tag % (Sys::FrontEndSendRecvType::COLLECTIVE -
+                     Sys::FrontEndSendRecvType::NATIVE) +
+              Sys::FrontEndSendRecvType::NATIVE;
+    } else if (send_type == Sys::FrontEndSendRecvType::COLLECTIVE) {
+        tag = tag % (Sys::FrontEndSendRecvType::RENDEZVOUS -
+                     Sys::FrontEndSendRecvType::COLLECTIVE) +
+              Sys::FrontEndSendRecvType::COLLECTIVE;
+    } else {
+        sys_panic("A type of RENDZVOUS should never issued in frontend");
+    }
+    if (rendezvous_enabled) {
+        return rendezvous_sim_send(delay, buffer, count, type, dst, tag,
+                                   request, msg_handler, fun_arg, key);
+    }
+    return sim_send_correlated(delay, buffer, count, type, dst, tag, request,
+                               msg_handler, fun_arg, key);
+}
+
 int Sys::front_end_sim_recv(Tick delay,
                             void* buffer,
                             uint64_t count,
@@ -1313,14 +1944,17 @@ int Sys::rendezvous_sim_send(Tick delay,
                              int tag,
                              sim_request* request,
                              void (*msg_handler)(void* fun_arg),
-                             void* fun_arg) {
+                             void* fun_arg,
+                             std::optional<AstraNetworkAPI::LogicalFlowKey>
+                                 logical_key) {
     if (tag >= Sys::FrontEndSendRecvType::RENDEZVOUS) {
         sys_panic("tag is bigger than RENDEZVOUS_COMM_TAG_OFFSET, \
         which means it might be mistakenly used as a rendezvous tag.");
     }
     RendezvousSendData* rsd =
         new RendezvousSendData(id, this, buffer, count, type, dst, tag,
-                               *request, msg_handler, fun_arg);
+                               *request, msg_handler, fun_arg,
+                               std::move(logical_key));
     sim_request newReq = *request;
     uint64_t rendevouz_size = 8192;
     newReq.dstRank = request->srcRank;
@@ -1328,8 +1962,16 @@ int Sys::rendezvous_sim_send(Tick delay,
     newReq.reqCount = rendevouz_size;
     int newTag = tag + Sys::FrontEndSendRecvType::RENDEZVOUS;
     newReq.tag = newTag;
-    sim_recv(delay, buffer, rendevouz_size, type, dst, newTag, &newReq,
-             &Sys::handleEvent, rsd);
+    // M2 fix (ported from the face repo, 2026-09-30): the handshake is a
+    // fixed 8192-byte control transfer that used to point straight at the
+    // caller's message buffer, so any backend that really delivers into a
+    // receive buffer would overflow a message smaller than 8192 bytes.
+    // Neither shipped backend dereferences handshake bytes (control-only
+    // transfer, single-threaded event loop); do not resize the user buffer
+    // to 8192 -- the handshake size is part of the modeled timing.
+    static uint8_t handshake_buffer[8192];
+    sim_recv(delay, handshake_buffer, rendevouz_size, type, dst, newTag,
+             &newReq, &Sys::handleEvent, rsd);
     return 1;
 }
 
@@ -1356,8 +1998,11 @@ int Sys::rendezvous_sim_recv(Tick delay,
     newReq.reqCount = rendevouz_size;
     int newTag = tag + Sys::FrontEndSendRecvType::RENDEZVOUS;
     newReq.tag = newTag;
-    sim_send(delay, buffer, rendevouz_size, type, src, newTag, &newReq,
-             &Sys::handleEvent, rrd);
+    // M2 fix: see rendezvous_sim_send (shared handshake buffer, not the
+    // caller's payload buffer).
+    static uint8_t handshake_buffer_recv[8192];
+    sim_send(delay, handshake_buffer_recv, rendevouz_size, type, src, newTag,
+             &newReq, &Sys::handleEvent, rrd);
     return 1;
 }
 
@@ -1378,6 +2023,29 @@ int Sys::sim_send(Tick delay,
                                              tag, *request, msg_handler,
                                              fun_arg, true),
                            EventType::General, nullptr, delay);
+    }
+    return 1;
+}
+
+int Sys::sim_send_correlated(
+    Tick delay,
+    void* buffer,
+    uint64_t count,
+    int type,
+    int dst,
+    int tag,
+    sim_request* request,
+    void (*msg_handler)(void* fun_arg),
+    void* fun_arg,
+    const AstraNetworkAPI::LogicalFlowKey& key) {
+    if (delay == 0) {
+        comm_NI->sim_send_correlated(buffer, count, type, dst, tag, request,
+                                     msg_handler, fun_arg, key);
+    } else {
+        try_register_event(
+            new SimSendCaller(this, buffer, count, type, dst, tag, *request,
+                              msg_handler, fun_arg, true, key),
+            EventType::General, nullptr, delay);
     }
     return 1;
 }

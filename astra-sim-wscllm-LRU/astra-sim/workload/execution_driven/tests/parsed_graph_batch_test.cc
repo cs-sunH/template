@@ -13,7 +13,7 @@ matrix of the frozen rule families:
           touched_ranks);
   N1-N15  node rules (exact 13-key set, field typing/domains, compute/comm/
           coll sub-object key sets, integer overflow, negatives,
-          tag/priority <= UINT32_MAX, hbm_charge/involved_dim shapes);
+          tag/priority <= INT_MAX, hbm_charge/involved_dim shapes);
   E1-E4   parent-edge rules (exact key set, rank domain, kind == "data",
           no self-loop);
   W1-W4   watch rules (exact key set, identity fields, decimal member rank
@@ -27,8 +27,9 @@ matrix of the frozen rule families:
           statuses preserved in raw order);
   O3      unicode passthrough (no validation, byte-exact std::string);
   O4      the frozen error skeleton parses cleanly and carries the error;
-  O5/O6   no size cap; >UINT64 integer literals fail closed (nlohmann
-          stores them as double -> not is_number_integer).
+  O5      no size cap; >UINT64 integer literals fail closed via the
+          typed getters (nlohmann stores them as double -> not
+          is_number_integer).
 
 Positive controls: a max-shape response (all 7 node types, every optional
 field, a cross-batch parent edge, a full watch, an alarm with queue_index,
@@ -46,6 +47,7 @@ Exit code 0 on ALL PASS.
 
 #include <json/json.hpp>
 
+#include "DieTypes.hh"
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 using namespace AstraSim::ExecutionDriven;
@@ -124,6 +126,45 @@ nlohmann::json compute_full() {
             {"hbm_access_mode", 1}};
 }
 
+
+// Stage B (die backend, contract §2): a legal die_op_spec object. Unsigned
+// literals on purpose (the strict spec parser requires is_number_unsigned,
+// which nlohmann text parsing always provides; in-test construction with
+// plain ints would store signed and be rejected).
+nlohmann::json valid_die_op_spec() {
+    nlohmann::json span;
+    span["request_id"] = "r1";
+    span["q_tokens"] = 8u;
+    span["kv_tokens"] = 128u;
+    span["q_start_pos"] = 0u;
+    span["kv_start_pos"] = 0u;
+    nlohmann::json spec;
+    spec["schema_version"] = 1u;
+    spec["op_kind"] = "norm";
+    spec["phase"] = "prefill";
+    spec["dtype"] = "bf16";
+    spec["model_dims"] = {{"hidden", 4096u},
+                          {"ffn", 14336u},
+                          {"vocab", 152064u},
+                          {"mlp_variant", "swiglu"},
+                          {"norm_type", "rmsnorm"},
+                          {"position_encoding", "rope"},
+                          {"num_q_heads", 32u},
+                          {"num_kv_heads", 8u},
+                          {"head_dim", 128u}};
+    spec["tp_slice"] = {{"tensor_parallel", 1u},
+                        {"tensor_parallel_rank", 0u},
+                        {"q_heads_local", 32u},
+                        {"kv_heads_local", 8u},
+                        {"ffn_local", 14336u},
+                        {"vocab_local", 152064u}};
+    spec["spans"] = nlohmann::json::array({span});
+    spec["layer_count"] = 1u;
+    spec["weight_passes"] = 1u;
+    spec["kv_access"] = {{"identity", "local"}};
+    spec["fusion_policy"] = "auto";
+    return spec;
+}
 nlohmann::json node_json(int rank, uint64_t id, int type,
                          const std::string& name) {
     return {{"rank", rank},
@@ -159,15 +200,14 @@ nlohmann::json max_shape_response() {
             node["name"] = "recv";
         }
         if (type == 5 || type == 6) {
+            // src/dst 0 == this node's rank: endpoint ownership (src == rank
+            // for 5 / dst == rank for 6) is a PREFLIGHT rule; parse must not
+            // duplicate it.
             node["comm"] = {{"bytes", 100},
                             {"src", 0},
                             {"dst", 0},
                             {"tag", 9},
                             {"hbm_charge", false}};
-            // endpoint ownership (src == rank for 5 / dst == rank for 6)
-            // is a PREFLIGHT rule; parse must not duplicate it.
-            node["comm"]["src"] = 0;
-            node["comm"]["dst"] = 0;
         }
         // sh_2.0-specific optional node key: exercise the true branch on the
         // type-2 MEM_LOAD node (the only producer that emits it).
@@ -349,13 +389,15 @@ void test_node_rules() {
         nlohmann::json resp = base;
         resp["nodes"][0]["id"] = -1;
         expect_parse_error(resp, "N4: negative id", "negative");
-        // uint64 max is a legal PARSE value (the committer treats it as the
-        // missing/invalid sentinel downstream -- unchanged semantics).
+        // A near-max id (18446744073709551515 == UINT64_MAX-100) is a legal
+        // PARSE value (the committer's missing/invalid sentinel downstream
+        // is UINT64_MAX itself, which this value deliberately avoids --
+        // unchanged semantics).
         resp["nodes"][0]["id"] = 18446744073709551515ULL;
         const ParsedGraphBatch parsed =
-            parse_ok(resp, "N4: uint64 max id parses");
+            parse_ok(resp, "N4: near-max id (UINT64_MAX-100) parses");
         expect(parsed.nodes[0].json_id == 18446744073709551515ULL,
-               "N4: uint64 max id round-trips");
+               "N4: near-max id (UINT64_MAX-100) round-trips");
     }
     {  // N5: type domain
         nlohmann::json resp = base;
@@ -420,6 +462,116 @@ void test_node_rules() {
         expect_parse_error(resp, "N12: hbm_access_mode string",
                            "hbm_access_mode");
     }
+    {  // N12/die (stage B, contract §2): op_role + die_op_spec extensions.
+        using OpRole = AstraSim::ExecutionDriven::OpRole;
+        // Accept: op_role=control_marker parses to the enum.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "control_marker";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role control_marker accepted");
+            expect(parsed.nodes[0].node.compute.op_role ==
+                       OpRole::ControlMarker,
+                   "N12: op_role control_marker -> enum");
+            expect(parsed.nodes[0].node.compute.die_spec == nullptr,
+                   "N12: op_role alone leaves die_spec null");
+        }
+        // Accept: op_role=compute is the explicit default spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "compute";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role compute accepted");
+            expect(parsed.nodes[0].node.compute.op_role == OpRole::Compute,
+                   "N12: op_role compute -> enum");
+        }
+        // Accept: die_op_spec with runtime_ns == 0 parses the immutable
+        // spec (DieModel::parse_die_op_spec ran without error).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: die_op_spec accepted");
+            expect(parsed.nodes[0].node.compute.die_spec != nullptr,
+                   "N12: die_op_spec -> shared spec");
+            expect(parsed.nodes[0].node.compute.die_spec->op_kind ==
+                       DieModel::OpKind::Norm,
+                   "N12: parsed spec carries op_kind norm");
+        }
+        // Reject: unknown op_role spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "marker";
+            expect_parse_error(resp, "N12: op_role unknown spelling",
+                               "op_role");
+        }
+        // Reject: op_role must be a string.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = 1;
+            expect_parse_error(resp, "N12: op_role int", "not a string");
+        }
+        // Reject: die_op_spec + runtime_ns != 0 (contract §2 conflict rule:
+        // a calibrated runtime must never silently bypass the die plan).
+        {
+            nlohmann::json resp = base;  // compute_full carries runtime_ns
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            expect_parse_error(resp, "N12: die_op_spec with runtime_ns",
+                               "runtime_ns == 0");
+        }
+        // Reject: die_op_spec must be an object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = "norm";
+            expect_parse_error(resp, "N12: die_op_spec string",
+                               "die_op_spec is not an object");
+        }
+        // Reject: an inner spec violation surfaces as a ParseError carrying
+        // the original library message (here: an unknown key inside the
+        // spec object).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["surprise"] = 1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec unknown inner key",
+                               "die_op_spec rejected");
+        }
+        // Reject: a missing required key inside the spec object (spans).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec.erase("spans");
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec missing spans",
+                               "die_op_spec rejected");
+        }
+        // Reject: an enum misspelling inside the spec object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["op_kind"] = "normalize";
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec bad op_kind",
+                               "die_op_spec rejected");
+        }
+        // Reject: a signed integer inside the spec object (the strict
+        // spec parser requires unsigned storage).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["layer_count"] = -1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec negative layer_count",
+                               "die_op_spec rejected");
+        }
+    }
     {  // N13: comm key set / domains
         nlohmann::json resp = base;
         resp["nodes"][0]["comm"].erase("tag");
@@ -429,7 +581,32 @@ void test_node_rules() {
         expect_parse_error(resp, "N13: comm unknown key", "extra");
         resp = base;
         resp["nodes"][0]["comm"]["tag"] = 4294967296ULL;  // 2^32
-        expect_parse_error(resp, "N13: tag > UINT32_MAX", "tag out of range");
+        expect_parse_error(resp, "N13: tag > INT_MAX", "tag out of range");
+        resp = base;
+        // 2^31 is inside the old UINT32_MAX bound but truncates to a
+        // negative int at the Sys::front_end_sim_send/recv `int` parameter;
+        // the tightened parse gate must reject it too.
+        resp["nodes"][0]["comm"]["tag"] = 2147483648ULL;  // 2^31
+        expect_parse_error(resp, "N13: tag > INT_MAX", "tag out of range");
+        resp = base;
+        // [5e8, 2^31) is representable as int, but Sys folds every NATIVE
+        // tag modulo 5e8 -- such a tag would silently alias another
+        // stream's tag space; the parse-boundary ceiling gate must reject
+        // it (boundary-E1's parse-layer landing point, restored 2026-10-01).
+        resp["nodes"][0]["comm"]["tag"] = 500000000ULL;
+        expect_parse_error(resp, "N13: tag >= 5e8 NATIVE ceiling",
+                           "window ceiling");
+        resp = base;
+        // 5e8-1 is the last legal allocator-segment tag and must parse.
+        resp["nodes"][0]["comm"]["tag"] = 499999999ULL;
+        try {
+            parse_graph_batch(resp, 3);
+        } catch (const std::exception& exc) {
+            std::fprintf(stderr,
+                         "[parsed_graph_batch_test] tag 499999999 must "
+                         "parse, got: %s\n", exc.what());
+            g_ok = false;
+        }
         resp = base;
         resp["nodes"][0]["comm"]["hbm_charge"] = 0;
         expect_parse_error(resp, "N13: hbm_charge int", "hbm_charge");
@@ -442,8 +619,16 @@ void test_node_rules() {
         resp["nodes"][0]["coll"]["root"] = 1;
         expect_parse_error(resp, "N14: coll unknown key", "root");
         resp = base;
-        resp["nodes"][0]["coll"]["priority"] = 4294967296ULL;
-        expect_parse_error(resp, "N14: priority > UINT32_MAX",
+        resp["nodes"][0]["coll"]["priority"] = 4294967296ULL;  // 2^32
+        expect_parse_error(resp, "N14: priority > INT_MAX",
+                           "priority out of range");
+        resp = base;
+        // 2^31 is inside the old UINT32_MAX bound but turns negative in the
+        // int explicit_priority parameter of the Sys::generate_* ->
+        // get_priority chain; the tightened parse gate must reject it too
+        // (same family as the N13 tag rule).
+        resp["nodes"][0]["coll"]["priority"] = 2147483648ULL;  // 2^31
+        expect_parse_error(resp, "N14: priority > INT_MAX",
                            "priority out of range");
         resp = base;
         resp["nodes"][0]["coll"]["involved_dim"] =
@@ -463,11 +648,12 @@ void test_node_rules() {
         expect(parsed.nodes[0].node.coll.involved_dim.empty(),
                "N14: absent involved_dim -> empty vector");
     }
-    {  // O6: >UINT64 integer literal becomes a double -> fail closed
+    {  // typed getters: >UINT64 integer literal becomes a double ->
+       // fail closed
         nlohmann::json resp = base;
         resp["nodes"][0]["compute"]["num_ops"] =
             nlohmann::json::parse("18446744073709551616");  // 2^64
-        expect_parse_error(resp, "O6: num_ops > UINT64_MAX",
+        expect_parse_error(resp, "num_ops > UINT64_MAX",
                            "not an integer");
     }
 }
@@ -788,6 +974,59 @@ void test_max_shape_round_trip() {
     expect(parsed.error.empty(), "P: no error on the happy path");
 }
 
+// K (C-3, 2026-09-30): is_kv_route_transfer_leg -- the code-7 memory-anchor
+// predicate. The old find("kv") substring heuristic also matched the
+// aggregated "..._attention_qkv_projection" comp node emitted later in the
+// same request context, so every request's anchor landed on the qkv compute
+// tick. The predicate must accept ONLY the exact emission-contract suffixes
+// of this repo (_recv_kv / _target_hbm_write_kv) and reject everything else,
+// including "kv" embedded mid-name (user data is loader-guarded, M-27, but
+// the suffix match itself must not widen).
+void test_kv_route_transfer_leg_predicate() {
+    OnlineNode leg;
+    leg.kind = NodeKind::CommRecv;
+    leg.name = "q0001_s1_turn1_r1_history_transfer_action000_s_shard0_recv_kv";
+    expect(is_kv_route_transfer_leg(leg), "K: noc-migrate recv_kv leg matches");
+
+    OnlineNode restore_write;
+    restore_write.kind = NodeKind::MemLoad;
+    restore_write.name = "q0001_s1_turn1_r1_history_transfer_action000_s_shard1_target_hbm_write_kv";
+    expect(is_kv_route_transfer_leg(restore_write),
+           "K: restore target_hbm_write_kv leg matches");
+
+    OnlineNode qkv_polluter;
+    qkv_polluter.kind = NodeKind::Compute;
+    qkv_polluter.name =
+        "q0001_s1_turn1_r1_current_prefill_request_aggregated_all_layers_"
+        "attention_qkv_projection";
+    expect(!is_kv_route_transfer_leg(qkv_polluter),
+           "K: qkv comp node must NOT match (C-3 pollution regression)");
+
+    OnlineNode joiner_route;
+    joiner_route.kind = NodeKind::CommSend;
+    joiner_route.name = "q0001_s1_turn0_r0_prefill_to_decode_xfer_send_rank5_to_rank1";
+    expect(!is_kv_route_transfer_leg(joiner_route),
+           "K: joiner transfer route carries no kv leg");
+
+    OnlineNode kv_mid_name;
+    kv_mid_name.kind = NodeKind::CommRecv;
+    kv_mid_name.name = "prefix_kv_middle_tail";
+    expect(!is_kv_route_transfer_leg(kv_mid_name),
+           "K: kv substring mid-name is not a leg (suffix-exact)");
+
+    OnlineNode plain;
+    plain.kind = NodeKind::MemStore;
+    plain.name = "q0001_s1_turn1_r1_decode_evictions_action000_s_shard0_remote_store";
+    expect(!is_kv_route_transfer_leg(plain),
+           "K: store branch mem_store is not a transfer-arrival leg");
+
+    OnlineNode bare_suffix;
+    bare_suffix.kind = NodeKind::MemLoad;
+    bare_suffix.name = "_target_hbm_write_kv";
+    expect(is_kv_route_transfer_leg(bare_suffix),
+           "K: exact-suffix name still matches (no prefix required)");
+}
+
 }  // namespace
 
 int main() {
@@ -798,6 +1037,7 @@ int main() {
     test_alarm_rules();
     test_opaque_and_order_rules();
     test_max_shape_round_trip();
+    test_kv_route_transfer_leg_predicate();
     if (g_ok) {
         std::printf("[parsed_graph_batch_test] ALL PASS\n");
         return 0;

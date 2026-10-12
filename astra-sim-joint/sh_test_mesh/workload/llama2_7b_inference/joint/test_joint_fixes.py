@@ -11,7 +11,7 @@
     落账）→ k=0 落 REMOTE 归并（永不失败）；重复 merge 版本键。
   - N3'：容量类异常类型化（KVCapacityError 携带已提交逐出）；合同类
     异常不被类型化吞掉。
-  - M3：跨实例 decode 预约移动 fail-closed。
+  - D18：P→D 边界预约移动事务（同址 no-op/跨实例换址/容量失败保留继续态）。
   - R14（调度器侧）：停滞登记/唤醒键/死锁守卫（__new__ 壳夹具）。
   - R3'：驱逐等待定价区分逐出可解/深缺口（活跃剩余负载峰值）。
   - R15-2/P3：ServiceFactors α 时间衰减公式 + 同时刻汇总 + 拒绝样本。
@@ -50,9 +50,10 @@ from joint.joint_cost_model import (  # noqa: E402
     JointHardwareRates,
     LinkFlowRegistry,
     ServiceFactors,
-    SessionKVView,
-    RequestView,
-    _pool_transfer_ns,
+)
+from joint.capacity_summary import (  # noqa: E402
+    PHASE_DECODE,
+    PhaseFootprint,
 )
 
 
@@ -142,6 +143,9 @@ class PartialRemoteReadReservationTest(unittest.TestCase):
         _make_partial(kv, tokens=20)
         _seed(kv, "target_hog", 1, 10, 10, "human")
         kv._sessions["target_hog"].active = True
+        # D11：白盒改 active 后同步重索引容量摘要（生产路径经
+        # mark_complete/prepare_prefill 的咽喉点自动维护）。
+        kv._refresh_capacity_summary(("target_hog",))
         remaining = tuple(s.remaining_bytes for s in kv.hbm_snapshots(1))
         if remaining != (target_free_per_rank, target_free_per_rank):
             raise AssertionError(
@@ -236,7 +240,11 @@ class PartialRemoteReadReservationTest(unittest.TestCase):
 
 
 class RecomputeAtHomeSemanticsTest(unittest.TestCase):
-    """R13/N9：recompute@home = 驻留前缀保持权威 + 缺失后缀物化。"""
+    """R13/N9 本地事务骨架 + D10 空间口径（v2.0 §6.2，2026-09-26）：
+    recompute@home = 驻留字节不清零、不建工作副本；缺失后缀 prepare
+    入账 = 重建上下文的空间占位（**空间复用，非计算口径**——完整 H+U
+    重放不依赖旧 KV，"只重算缺失层"折算已取消，重算量由调度器折入
+    span：整份 H + input、span 基 0）。"""
 
     def test_recompute_at_partial_home_materializes_suffix_only(self):
         kv = _manager()
@@ -313,6 +321,7 @@ class MergeV2CapacityFallbackTest(unittest.TestCase):
         _seed(kv, "s", 0, 10, 10, "human")
         _seed(kv, "hog", 0, 300, 10, "human")
         kv._sessions["hog"].active = True  # 不可逐的活跃占用
+        kv._refresh_capacity_summary(("hog",))  # D11 白盒重索引
         kv.prepare_prefill(
             session_id="s", target_instance_index=1,
             history_tokens=10, trigger_request_id="t1", action="copy")
@@ -354,6 +363,7 @@ class TypedCapacityErrorsTest(unittest.TestCase):
         _seed(kv, "s", 0, 10, 10, "human")
         _seed(kv, "hog", 0, 300, 10, "human")
         kv._sessions["hog"].active = True
+        kv._refresh_capacity_summary(("hog",))  # D11 白盒重索引
         with self.assertRaises(KVCapacityError):
             kv.reserve_request_capacity(
                 request_id="r9", session_id="s",
@@ -370,14 +380,91 @@ class TypedCapacityErrorsTest(unittest.TestCase):
                 final_context_tokens=10)
         self.assertNotIsInstance(ctx.exception, KVCapacityError)
 
-    def test_m3_cross_instance_reservation_move_fails_closed(self):
+    def test_d18_boundary_reservation_move_transaction(self):
+        """D18（C15 重设计，2026-09-26）→ D20 事务面（2026-09-26）：
+        P→D 边界预约移动从"同实例 no-op + 跨实例 raise"的 M3 钉死形态，
+        经 D18 重设计为真实阶段事务，再由 D20 升级为幂等 epoch 的跨阶段
+        预约事务（``commit_stage_reservation_transaction``，v2.0
+        §14.5/§16.4）——两段式 move/revert 调用口已整体替换（直接替换，
+        无开关并存），本钉测沿原语义断言面重写：
+
+        - 同实例 = 纯 resize 事务（原地继续是合法终态，式 1c 平局优
+          先；足迹不变时零逐出零释放）；
+        - 跨实例 = 目标实例按 D 阶段足迹先 _ensure_capacity，成功后
+          原子换址（占用视图/指标锚单点生效）；
+        - 容量失败 = KVCapacityError 且预约留在源实例、epoch 不在案
+          （§16.4：改变方案提交失败且无不可逆工作时保留继续方案）。"""
         kv = _manager()
         kv.reserve_request_capacity(
             request_id="r1", session_id="s1", instance_index=0,
             final_context_tokens=10)
-        with self.assertRaises(RuntimeError):
-            kv.move_request_capacity_reservation(
-                request_id="r1", target_instance_index=1)
+        # 工作副本物化（边界真实形态：驻留 10 token = basis 足迹）。
+        kv.prepare_prefill(
+            session_id="s1", target_instance_index=0,
+            history_tokens=0, trigger_request_id="r1")
+        kv.expand_prefill(
+            session_id="s1", instance_index=0, context_tokens=10,
+            trigger_request_id="r1", reservation_request_id="r1")
+        # 同实例：原地继续 = 纯 resize 事务（stay 足迹 = 准入足迹，
+        # 零逐出零释放、无不可逆工作）。
+        txn_stay = kv.commit_stage_reservation_transaction(
+            request_id="r1", target_instance_index=0, stage_action="stay",
+            stage_epoch=1, history_tokens=0, input_tokens=10)
+        self.assertEqual(txn_stay.target_instance_index, 0)
+        self.assertEqual(txn_stay.evictions, ())
+        self.assertEqual(txn_stay.released_shard_bytes, (0,) * kv.tp_degree)
+        self.assertFalse(txn_stay.irreversible)
+        self.assertFalse(txn_stay.aborted)
+        # 跨实例：换址成功 + 占用视图随新实例（源实例零残留预约字节）。
+        txn_move = kv.commit_stage_reservation_transaction(
+            request_id="r1", target_instance_index=1, stage_action="stay",
+            stage_epoch=2, history_tokens=0, input_tokens=10)
+        self.assertEqual(txn_move.source_instance_index, 0)
+        self.assertEqual(txn_move.target_instance_index, 1)
+        self.assertFalse(txn_move.irreversible)  # 足迹已由准入预扣
+        self.assertEqual(kv._reservations["r1"].instance_index, 1)
+        self.assertEqual(
+            tuple(kv._reserved_bytes_by_tp_rank(0)),
+            (0,) * kv.tp_degree)
+        self.assertEqual(
+            tuple(kv._reserved_bytes_by_tp_rank(1)),
+            kv_cache_shard_bytes_for_tokens(kv.model, 10, kv.tp_degree))
+        # 同 epoch 重复提交（重复 P 完成通知的等价直连）：原子重放回执，
+        # 不产生第二份换址。
+        replay = kv.commit_stage_reservation_transaction(
+            request_id="r1", target_instance_index=1, stage_action="stay",
+            stage_epoch=2, history_tokens=0, input_tokens=10)
+        self.assertIs(replay, txn_move)
+        # epoch 回退/冲突重放 fail-closed。
+        with self.assertRaises(ValueError):
+            kv.commit_stage_reservation_transaction(
+                request_id="r1", target_instance_index=0,
+                stage_action="stay", stage_epoch=1,
+                history_tokens=0, input_tokens=10)
+
+    def test_d18_boundary_reservation_move_capacity_failure_keeps_source(self):
+        """目标容量不足（活跃会话占位 = 非合法 victim 的深缺口）→
+        KVCapacityError 且原预约留在源实例、epoch 不在案（可换状态后
+        同 epoch 重评）——继续方案保持合法。"""
+        kv = _manager(capacity_bytes=100_000)
+        # 实例 1 驻留 ACTIVE 会话（未 mark_complete，非合法 victim）。
+        kv.prepare_prefill(
+            session_id="hog", target_instance_index=1,
+            history_tokens=0, trigger_request_id="hog")
+        kv.expand_prefill(
+            session_id="hog", instance_index=1, context_tokens=690,
+            trigger_request_id="hog")
+        kv.reserve_request_capacity(
+            request_id="r1", session_id="s1", instance_index=0,
+            final_context_tokens=10)
+        with self.assertRaises(KVCapacityError):
+            kv.commit_stage_reservation_transaction(
+                request_id="r1", target_instance_index=1,
+                stage_action="stay", stage_epoch=1,
+                history_tokens=0, input_tokens=10)
+        self.assertEqual(kv._reservations["r1"].instance_index, 0)
+        self.assertIsNone(kv.last_stage_transaction("r1"))
+        self.assertNotIn("r1", kv._stage_epochs)
 
 
 # ============================================================ R15 模型 ==
@@ -407,69 +494,145 @@ def _load(remaining=(10**9, 10**9), reclaimable=None, active_ns=0):
             reclaimable if reclaimable is not None else remaining))
 
 
-class EvictionWaitPricingTest(unittest.TestCase):
-    """R3'：深缺口按活跃剩余负载峰值计价。"""
+class SpaceAvailablePricingTest(unittest.TestCase):
+    """D11（v2.0 §14，2026-09-27）：分阶段足迹 × 容量驱逐摘要 θ 份额
+    消费 → 空间可用时刻 A = max(写回完成, 活跃排空)——驱逐决策时刻
+    发射（旁路支链）、写回与排队重叠（D03 接口结论不变）。旧单向量
+    聚合口径（R3' ``_space_available_ns_estimate``，再前身
+    ``_eviction_wait_estimate``）随摘要计价退役：预计写回 = θ·脏向量
+    （θ 由最重缺口 rank 决定、TP 耦合同比例），不是缺口全量。
+    ``capacity_summary`` 缺席的夹具退 reclaimable 单桶合成锚。"""
 
-    def test_deep_gap_uses_active_load(self):
-        model = _model(_load(remaining=(100, 100), reclaimable=(100, 100),
-                             active_ns=10**7))
+    def test_deep_gap_uses_active_drain(self):
+        # 缺口 (400,400)、单桶 R=(100,100)：θ=1、预计脏释放 (100,100)
+        # → 写回 100+100/5=120；残量 300 → capacity_wait_uncertain；
+        # A = max(120, 10^7) = 10^7（活跃排空主导）。
+        model = _model(_load())
         notes = []
-        wait = model._eviction_wait_estimate(
+        space_ready = model._space_ready_ns_estimate(
             _load(remaining=(100, 100), reclaimable=(100, 100),
                   active_ns=10**7),
-            (500, 500), notes, instance_index=0)
-        self.assertGreaterEqual(wait, 10**7)
-        self.assertIn("execution_growth_deep_gap_unresolved", notes)
+            PhaseFootprint.single(PHASE_DECODE, (500, 500)), notes,
+            instance_index=0)
+        self.assertGreaterEqual(space_ready, 10**7)
+        self.assertIn("execution_growth_capacity_wait_uncertain", notes)
+        self.assertNotIn("execution_growth_deep_gap_unresolved", notes)
 
     def test_shallow_gap_uses_pool_writeback(self):
+        # 缺口 (400,400)、单桶 R=(10^9,10^9)：θ=400/10^9、预计脏释放
+        # = θ·R = (400,400)（份额恰覆盖缺口）→ D04 逐 shard 写回：
+        # 每 rank 独立池端口（除数 1）→ wall = 100 时延 +
+        # max(400/5, 400/100) = 180；无残量 → 无不确定注记。
         load = _load(remaining=(100, 100), reclaimable=(10**9, 10**9),
                      active_ns=10**9)
         model = _model(_load())
         notes = []
-        wait = model._eviction_wait_estimate(
-            load, (500, 500), notes, instance_index=0)
-        self.assertEqual(
-            wait,
-            _pool_transfer_ns(total_bytes=400, divisor=1,
-                              rates=model.rates))
-        self.assertNotIn("execution_growth_deep_gap_unresolved", notes)
+        space_ready = model._space_ready_ns_estimate(
+            load,
+            PhaseFootprint.single(PHASE_DECODE, (500, 500)), notes,
+            instance_index=0)
+        self.assertEqual(space_ready, 100 + 400 // 5)
+        self.assertNotIn("execution_growth_capacity_wait_uncertain", notes)
+
+    def test_deep_gap_takes_writeback_drain_max(self):
+        # A = max(写回, 排空) —— 排空 < 写回时 A = 写回（深缺口注记
+        # 仍在：两事实分列）。缺口 (400,400)、R=(100,100)：θ=1、预计
+        # 脏释放 (100,100)（不是缺口全量 400——耦合释放按桶份额）→
+        # 写回 = 100 时延 + 100/5 = 120，活跃排空 50 ⇒ A = 120。
+        model = _model(_load())
+        notes = []
+        space_ready = model._space_ready_ns_estimate(
+            _load(remaining=(100, 100), reclaimable=(100, 100),
+                  active_ns=50),
+            PhaseFootprint.single(PHASE_DECODE, (500, 500)), notes,
+            instance_index=0)
+        self.assertEqual(space_ready, 100 + 100 // 5)
+        self.assertIn("execution_growth_capacity_wait_uncertain", notes)
+
+    def test_writeback_composition_values_in_notes(self):
+        # M4：写回估计的构成值随注记落盘（零 schema 变更——notes 恒
+        # str 列表）——D11 起为摘要估计构成值：gap_bytes=400（最重缺
+        # 口）、beyond_reclaim=全桶消费后残量（400−θ·R = 100）、
+        # pool_divisor=1。
+        model = _model(_load())
+        notes = []
+        model._space_ready_ns_estimate(
+            _load(remaining=(100, 100), reclaimable=(300, 300)),
+            PhaseFootprint.single(PHASE_DECODE, (500, 500)), notes,
+            instance_index=0)
+        self.assertIn(
+            "execution_growth_eviction_writeback_composition"
+            "(gap_bytes=400,beyond_reclaim=100,pool_divisor=1)",
+            notes)
+        # 深缺口路径注记与构成值共存（两事实分列）。
+        notes_deep = []
+        model._space_ready_ns_estimate(
+            _load(remaining=(100, 100), reclaimable=(300, 300),
+                  active_ns=10**7),
+            PhaseFootprint.single(PHASE_DECODE, (500, 500)), notes_deep,
+            instance_index=0)
+        self.assertIn(
+            "execution_growth_eviction_writeback_composition"
+            "(gap_bytes=400,beyond_reclaim=100,pool_divisor=1)",
+            notes_deep)
+        self.assertIn("execution_growth_capacity_wait_uncertain", notes_deep)
 
 
 class ServiceFactorsAlphaTest(unittest.TestCase):
-    """R15-2/P3：α = 1 − exp(−Δt/τ)；同时刻汇总；非法样本拒绝。"""
+    """D14（v2.0 §9.2）：固定 1/16 EWMA 平滑效率 η（首样本同规则、自
+    η=1 出发），因子 = 1/η_new；同时刻汇总；非法样本拒绝；亚 roofline
+    样本记异常跳过。"""
 
-    def test_time_decay_and_first_sample(self):
+    def test_fixed_coef_ewma_from_first_sample(self):
         factors = ServiceFactors()
         factors.observe_prefill(
-            actual_ns=100, base_ns=100, service_ns=100, tick_ns=1000)
+            actual_ns=100, base_ns=100, tick_ns=1000)
         factors.flush()
-        self.assertEqual(factors.prefill_factor, 1.0)  # 首样本直接初始化
+        # 首样本也按同一更新规则（不再直接初始化）：
+        # 15/16·1 + 1/16·1 = 1（样本恰在 roofline 上不动）。
+        self.assertEqual(factors.prefill_factor, 1.0)
+        self.assertEqual(factors.updates["prefill_factor"], 1)
         factors.observe_prefill(
-            actual_ns=300, base_ns=100, service_ns=100, tick_ns=2000)
+            actual_ns=300, base_ns=100, tick_ns=2000)
         factors.flush()
-        # Δt=1000, τ=100 → α = 1-exp(-10) ≈ 0.9999546；
-        # value = (1-α)·1.0 + α·3.0 ≈ 2.99991。
-        alpha = 1 - 4.5399929762484854e-5
-        expected = (1 - alpha) * 1.0 + alpha * 3.0
-        self.assertAlmostEqual(factors.prefill_factor, expected, places=9)
+        # 固定系数（Δt 不再进入系数）：η_sample = 1/3，
+        # η = 15/16 + 1/48 = 23/24，因子 = 24/23。
+        self.assertAlmostEqual(factors.prefill_factor, 24.0 / 23.0,
+                               places=12)
+        self.assertEqual(factors.updates["prefill_factor"], 2)
 
     def test_same_tick_samples_aggregate(self):
         factors = ServiceFactors()
         factors.observe_decode(
-            actual_ns=100, base_ns=100, service_ns=100, tick_ns=5)
+            actual_ns=100, base_ns=100, tick_ns=5)
         factors.observe_decode(
-            actual_ns=300, base_ns=100, service_ns=100, tick_ns=5)
+            actual_ns=300, base_ns=100, tick_ns=5)
         factors.flush()
-        # 同时刻先汇总：Σactual/Σbase = 400/200 = 2.0（一条更新）。
-        self.assertEqual(factors.decode_factor, 2.0)
+        # 同时刻先汇总：η_sample = Σbase/Σactual = 200/400 = 1/2
+        # （一条更新）；η = 15/16 + 1/32 = 31/32，因子 = 32/31。
+        self.assertAlmostEqual(factors.decode_factor, 32.0 / 31.0,
+                               places=12)
         self.assertEqual(factors.updates["decode_factor"], 1)
+
+    def test_sub_roofline_sample_anomalous_skipped(self):
+        # D14：0 < η_sample ≤ 1 有效窗口（除数口径 ratio ≥ 1）外的
+        # 亚 roofline 样本（实测快于 roofline）= 记录异常并跳过，
+        # 不钳位、不更新（prefill/decode 亦适用）。
+        factors = ServiceFactors()
+        factors.observe_decode(
+            actual_ns=100, base_ns=200, tick_ns=1)
+        factors.flush()
+        self.assertEqual(factors.decode_factor, 1.0)
+        self.assertNotIn("decode_factor", factors.updates)
+        self.assertEqual(factors.anomalous.get("decode_factor"), 1)
+        self.assertNotIn("decode_factor", factors.rejected)
 
     def test_invalid_samples_rejected(self):
         factors = ServiceFactors()
         factors.observe_prefill(
-            actual_ns=0, base_ns=100, service_ns=100, tick_ns=1)
+            actual_ns=0, base_ns=100, tick_ns=1)
         factors.observe_prefill(
-            actual_ns=100, base_ns=0, service_ns=100, tick_ns=1)
+            actual_ns=100, base_ns=0, tick_ns=1)
         self.assertEqual(factors.rejected["prefill_factor"], 2)
         self.assertEqual(factors.prefill_factor, 1.0)
 
@@ -519,7 +682,7 @@ class DecodeStallMachineryTest(unittest.TestCase):
         scheduler.kv_manager = _manager()
         scheduler._kv_ledger_epoch = 0
         scheduler._stalled_by_instance = {}
-        scheduler._batch = None
+        scheduler._batch = {"tick": 0}
         scheduler.online_log_count = 0
         scheduler.decision_log_sink = None
         scheduler.online_log_rows = []

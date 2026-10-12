@@ -25,9 +25,18 @@ using namespace Analytical;
 using json = nlohmann::json;
 
 namespace {
+// fix2（2026-10-11，回移植 face 血统 2026-09-28）：完成/守卫容差的 t~0
+// 时间地板——实际松弛随端口时钟增长（fl(clock + remaining/rate) 的舍入
+// 误差 ~ ulp(clock)），固定绝对容差在大时钟下必然误杀（L1 双 panic 实证）。
+constexpr double kTimeEpsNs = 1e-9;
 // 残余 clamp 的明确容差边界（§3.2）：字节残余不超过该绝对值视为浮点残差并
 // clamp 为 0；超过即 fail-closed 终止，绝不静默吞掉可观服务量。
 constexpr double kByteClampTolerance = 1e-6;
+// 流耗尽 clamp 的端口时钟相对阈值系数（rm-backend-E1，2026-09-27）：剩余
+// 服务时间低于 port_time 的该数目 ulp 时，完成投影在 double 中平坦化，
+// 以该数目 ulp 折算的字节量与绝对容差一并构成耗尽判据（同源推导见
+// advance_port_continuous 内注释）。
+constexpr double kFlatStreamClockUlps = 4.0;
 // 连续子步循环的防死进程硬上限：每次迭代至少迁移一个作业状态或推进时间，
 // 迭代数以作业数线性为界，超界即 invariant 失败。
 constexpr std::size_t kSubstepGuardSlack = 16;
@@ -179,6 +188,14 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
       exit(1);
     }
     remote_mem_bw_bytes_per_ns_ = j["remote-mem-bw"].get<double>();
+    // Unit convention (RB-01, 2026-10-01): this remote_memory.json key is
+    // consumed HERE as a RAW bytes-per-ns value (no conversion). The
+    // system.json key of the SAME NAME carries the same source number
+    // (config_resolver.py writes one value into both files) but is
+    // consumed by Sys.cc as decimal GB/s (x1e9 -> B/s). The identity
+    // GB/s == B/ns (10^9 decimal) is what keeps both consumers correct
+    // off one source value -- the two generated files must never be
+    // edited independently.
   }
 
   if (mem_type_ != NO_MEMORY_EXPANSION &&
@@ -232,6 +249,11 @@ void AnalyticalRemoteMemory::issue(
     Sys::sys_panic("AnalyticalRemoteMemory::issue received a null wlhd");
   }
   // §3.3：每次外部 issue 先把所有端口推进到当前整数 Tick，再更新作业集。
+  // 冗余推进注记（2026-10-01 审查）：enqueue_job 末尾的
+  // replan_transition_event() 内部会对同一 Tick 再 advance_all_ports 一次；
+  // 此时 elapsed == 0，逐端口 advance_port_continuous 是无副作用的幂等
+  // 调用。两处推进各有职责：这里保证"作业集更新前"的端口服务被记账，
+  // replan 处则统一覆盖其它（未经本函数的）变更路径，故都保留。
   advance_all_ports(Sys::boostedTick());
   const std::size_t port_index = resolve_port_index(wlhd->sys_id);
   enqueue_job(ports_[port_index], tensor_size, wlhd);
@@ -247,6 +269,11 @@ void AnalyticalRemoteMemory::call(AstraSim::EventType type, CallData* data) {
   auto* payload = static_cast<TransitionEventData*>(data);
   const uint64_t generation = payload->generation;
   delete payload;
+  // R2-4 登记注记(2026-09-30 审查,注释级不改码):生产路径"取消必先行"
+  // 保证派发事件的 generation 恒匹配,此处无条件清空跟踪是安全的;但经
+  // 本公共 call() seam 直接注入陈旧 payload(仅 remote_port_nway_test
+  // S13 的白盒路径)会清掉仍在队列中的当前代事件跟踪——S13 断言锁定的
+  // 即此行为。若未来要把清空收进 generation 守卫,须同步改 S13 断言。
   transition_event_handle_.reset();
   transition_event_pending_ = false;
 
@@ -298,13 +325,19 @@ void AnalyticalRemoteMemory::shutdown() {
   // §3.4：提前 shutdown——unique_ptr 统一删除全部未交付 wlhd（含双零定时
   // 作业）；只清理后端自有 cookie，不触碰 Workload 的 HBM join cookie。
   // 端口状态整体清空（§3.4 口径）：流体状态与 PortStats 累计器一并清零
-  // （未落账的流完成时刻记录随累计器丢弃，不产生半结算快照）。
+  // （累计器先落账完结再清零，不产生半结算快照）。
   for (PortState& port : ports_) {
     port.jobs.clear();
     port.next_issue_sequence = 0;
     port.active_stream_count = 0;
     port.active_stream_bytes_remaining = 0.0;
     port.port_time_ns = 0.0;
+  }
+  // M5-02 修复（2026-09-26）：清零前先把各端口未落账的流完成时刻按 §5.1
+  // flush 完结，使“丢弃累计器”成为一笔已完结账目的显式边界，而非静默
+  // 吞掉运行末边界的欠账（flush 结果随后随累计器一并清零）。
+  for (PortStatsAccumulator& acc : port_stats_) {
+    flush_redistribution_moment(acc);
   }
   port_stats_.clear();
   if (transaction_log_.is_open()) {
@@ -380,7 +413,7 @@ void AnalyticalRemoteMemory::enqueue_job(
   job.issue_tick = Sys::boostedTick();
   const double issue_ns = static_cast<double>(job.issue_tick) * kTickNs;
   job.latency_ready_ns =
-      checked_add_ns(issue_ns, remote_mem_latency_ns_, "latency_ready_ns");
+      checked_add_finite(issue_ns, remote_mem_latency_ns_, "latency_ready_ns");
 
   if (tensor_size == 0 && remote_mem_latency_ns_ == 0.0) {
     // §3.2：bytes=0 且 latency=0 → 独立一次性定时作业：精确延 1ns 异步
@@ -388,7 +421,7 @@ void AnalyticalRemoteMemory::enqueue_job(
     // 的明确语义变更）。
     job.state = PortJobState::kDualZeroTimer;
     job.fluid_finish_ns =
-        checked_add_ns(issue_ns, kDualZeroDelayNs, "dual-zero deadline");
+        checked_add_finite(issue_ns, kDualZeroDelayNs, "dual-zero deadline");
     job.callback_tick =
         ceil_ns_to_tick(job.fluid_finish_ns, "dual-zero callback tick");
   }
@@ -417,7 +450,11 @@ void AnalyticalRemoteMemory::replan_transition_event() {
   }
   const Tick now = Sys::boostedTick();
   // 重排全局最近 deadline 前先把各端口推进到当前 Tick（§3.3），不因另一
-  // 端口触发事件而丢失期间服务。
+  // 端口触发事件而丢失期间服务。幂等性（2026-10-01 审查注记）：部分调用
+  // 方（issue、handle_transition_event 的前置推进）刚对同一 Tick 推进过，
+  // 这里的第二次推进 elapsed == 0、无副作用；但 replan 也可能被未经前置
+  // 推进的路径调用，因此该推进不可删——同 Tick 重入时零长子步仅在恰好
+  // 就绪的 latency 作业上迁移状态，语义与单次推进等价。
   advance_all_ports(now);
   const double next_ns = compute_global_next_event_ns();
 
@@ -467,11 +504,27 @@ void AnalyticalRemoteMemory::replan_transition_event() {
   }
   ++transition_generation_;
   auto* payload = new TransitionEventData(transition_generation_);
+  // 深度审查 M-1（2026-09-30）：target==now 的零延迟事件仅当 Sys 正在派发
+  // 当前 Tick 的事件桶时合法——register_event_cancellable 会把事件追加进
+  // 本桶、同一轮 call_events 内收割；其余上下文（tick-end / 派发外补挂）
+  // 零延迟事件会在同刻再开一个无人派发的新桶，违反事件队列严格递增——
+  // Debug 下 proceed() 断言中止，Release（NDEBUG）下同 tick 二次 tick-end，
+  // 决策 epoch 静默错乱。触发面：remote-mem-latency 缺省 0 且正字节作业
+  // 的 latency_ready_ns 恰等于当前 Tick（或完成投影被浮点吸收）。与姊妹
+  // 仓 face-LRU arm_transition_event 同款：非法上下文推迟 1 tick（
+  // ceil 语义保证 deadline 命名 Tick 必收割该 deadline 的作业，收割后
+  // compute_global_next_event_ns 严格大于 now，推迟不会形成同刻死循环）。
+  Tick delta = target - now;
+  if (delta == 0 &&
+      (!event_host_sys_->dispatching_events ||
+       event_host_sys_->dispatching_event_time != now)) {
+    delta = 1;
+  }
   transition_event_handle_ = event_host_sys_->register_event_cancellable(
       this,
       EventType::General,
       payload,
-      target - now,
+      delta,
       &AnalyticalRemoteMemory::release_transition_payload);
   if (!transition_event_handle_.valid()) {
     release_transition_payload(payload);
@@ -479,6 +532,13 @@ void AnalyticalRemoteMemory::replan_transition_event() {
   }
   transition_event_pending_ = true;
   transition_event_tick_ = target;
+  // R2-4 登记注记(2026-09-30 审查,注释级不改码):上方的 1-tick 推迟在
+  // "非派发上下文 + 零延迟端口 + 极小字节流被平坦化 clamp 完成"的叠加
+  // 角落会使实际触发落在 target+1,而 transition_event_tick_ 记录的是
+  // 推迟前目标——该角落需要 remote-mem-latency==0 且事务字节 <= 4ε·P·
+  // rate(生产配置 100ns 延迟、KB 级事务下不可达);若未来出现
+  // "delivered later than its callback tick" panic,应先排查该 flatten+
+  // 推迟叠加,而非守恒破坏。
 }
 
 double AnalyticalRemoteMemory::compute_global_next_event_ns() const {
@@ -609,14 +669,40 @@ void AnalyticalRemoteMemory::advance_port_continuous(
           elapsed * remote_mem_bw_bytes_per_ns_ /
               static_cast<double>(streams_before),
           "per-stream served bytes");
-      served = share * static_cast<double>(streams_before);
+      // fix2（2026-10-11，回移植 face 血统 2026-09-28 serve_interval）：
+      // 逐流扣减上限 min(remaining, share)。boundary 取自全体自投影最小值
+      // 时，fl(port_time+ttf)-port_time 的舍入可使 share 超出最小 remaining
+      // 达 ulp(port_time)×bw/N（大时钟下字节级；L1 双 panic 实证）——上限
+      // 扣除使该良性浮点残差在结构上不可能产生负 remaining，字节精确守恒；
+      // 真实超扣（超出缩放容差）仍 fail-closed（overservice 守卫，算术与
+      // FL 逐字一致：tol = rate×(kTimeEpsNs + 4ε×interval_end) + 字节地板）。
+      const double per_stream_rate =
+          remote_mem_bw_bytes_per_ns_ / static_cast<double>(streams_before);
+      const double fp_slack_ns =
+          kFlatStreamClockUlps * std::numeric_limits<double>::epsilon() *
+          std::max(boundary, 1.0);
+      const double overservice_tolerance =
+          per_stream_rate * (kTimeEpsNs + fp_slack_ns) + kByteClampTolerance;
+      for (PortJob* job : served_streams) {
+        const double raw_served = share;
+        const double deducted = std::min(job->remaining_bytes, raw_served);
+        job->remaining_bytes -= deducted;
+        served += deducted;
+        if (raw_served - deducted > overservice_tolerance) {
+          Sys::sys_panic("remote port bandwidth overservice beyond the "
+                         "scaled byte tolerance");
+        }
+      }
       if (!std::isfinite(served)) {
         Sys::sys_panic("substep served bytes overflowed");
       }
-      const double agg_floor = -kByteClampTolerance *
-          static_cast<double>(streams_before);
+      // 聚合下限同法缩放（Σ逐流舍入链 ≤ bw×4ε×boundary；绝对项为 t~0
+      // 地板）——替换旧固定 -1e-6×N 下限（大时钟误杀面之一）。
+      const double agg_tolerance =
+          remote_mem_bw_bytes_per_ns_ * (kTimeEpsNs + fp_slack_ns) +
+          kByteClampTolerance * static_cast<double>(streams_before);
       port.active_stream_bytes_remaining -= served;
-      if (port.active_stream_bytes_remaining < agg_floor) {
+      if (port.active_stream_bytes_remaining < -agg_tolerance) {
         Sys::sys_panic("port served more bytes than active streams held");
       }
     }
@@ -635,7 +721,7 @@ void AnalyticalRemoteMemory::advance_port_continuous(
         job.state = PortJobState::kActiveStream;
         job.remaining_bytes = static_cast<double>(job.tensor_size);
         port.active_stream_count += 1;
-        port.active_stream_bytes_remaining = checked_add_ns(
+        port.active_stream_bytes_remaining = checked_add_finite(
             port.active_stream_bytes_remaining,
             job.remaining_bytes,
             "active stream bytes");
@@ -652,15 +738,36 @@ void AnalyticalRemoteMemory::advance_port_continuous(
     // 远大于容差），不可能在本边界耗尽。同刻耗尽的流整批离开活跃集合
     // （不计入新分母），幸存流自下一子步起立即按新 N 重分。小于 1ns 的
     // 正传输在此以 double 子步完成，callback 落在其 ceil Tick。
+    // rm-backend-E1（2026-09-27）：耗尽判据在绝对容差外补“端口时钟相对
+    // 容差”。幸存流的完成投影 port_time+ttf（ttf=remaining/rate）在
+    // ttf < ½ulp(port_time) 时于 double 中平坦化为 port_time 本身，产生
+    // 零长无服务子步：share 恒 0、残余不落入绝对容差即永不耗尽，子步
+    // 循环零进展直至 guard 误杀合法负载。本阈值与平坦化条件同源——
+    // remaining ≤ kFlatStreamClockUlps·ε·port_time·rate ⟺ ttf ≤ 同数目
+    // ulp(port_time)（ulp(x)∈(εx/2, εx]），故任何可平坦化的残余必当轮
+    // clamp 完成、循环以状态迁移推进；判据放行的服务量 ≤ 数个端口时钟
+    // ulp，物理上不可分辨。乘积非有限（极端配置）时回退绝对容差。
+    double stream_clamp_tolerance = kByteClampTolerance;
+    if (streams_before > 0) {
+      const double clamp_per_stream_rate = require_positive_finite(
+          remote_mem_bw_bytes_per_ns_ / static_cast<double>(streams_before),
+          "stream clamp per-stream rate");
+      const double clock_relative_tolerance =
+          kFlatStreamClockUlps * numeric_limits<double>::epsilon() *
+          port.port_time_ns * clamp_per_stream_rate;
+      if (std::isfinite(clock_relative_tolerance) &&
+          clock_relative_tolerance > stream_clamp_tolerance) {
+        stream_clamp_tolerance = clock_relative_tolerance;
+      }
+    }
     for (PortJob* job : served_streams) {
       if (job->state != PortJobState::kActiveStream) {
         continue;
       }
-      if (streams_before > 0) {
-        job->remaining_bytes -= share;
-      }
-      if (job->remaining_bytes <= kByteClampTolerance) {
-        if (job->remaining_bytes < -kByteClampTolerance) {
+      // fix2：逐流扣减已在上面的上限扣除块完成（min(remaining, share)），
+      // 此处仅做耗尽 clamp——不再二次扣减。
+      if (job->remaining_bytes <= stream_clamp_tolerance) {
+        if (job->remaining_bytes < -stream_clamp_tolerance) {
           Sys::sys_panic("stream remainder fell beyond clamp tolerance");
         }
         // clamp 的明确容差边界：零化前把真实残余（含微小负值）从端口
@@ -681,9 +788,9 @@ void AnalyticalRemoteMemory::advance_port_continuous(
     }
 
     if (port.port_time_ns >= to_ns) {
-      // 已推进到目标时刻。若恰在 to_ns 还有就绪/耗尽（boundary == to_ns
-      // 的那一轮已处理），下一轮只会得到零长空转——由下一轮的
-      // boundary < port_time 判据自然终止。
+      // 已推进到目标时刻，循环就此终止。恰在 to_ns 的 latency 就绪与
+      // 流耗尽已在 boundary == to_ns 的本轮内处理完毕（join 与 clamp
+      // 均先于本判据执行），不存在“下一轮”。
       break;
     }
   }
@@ -773,10 +880,12 @@ double AnalyticalRemoteMemory::require_positive_finite(
   return value;
 }
 
-double AnalyticalRemoteMemory::checked_add_ns(
+double AnalyticalRemoteMemory::checked_add_finite(
     double base,
     double delta,
     const char* what) {
+  // 有限性守卫：操作数既可能是 ns 时间量，也可能是字节量（如端口活跃流
+  // 聚合剩余字节），故命名与报错文案不带量纲（M5-08 澄清，2026-09-26）。
   if (!std::isfinite(base) || !std::isfinite(delta)) {
     Sys::sys_panic(
         string("remote-memory numeric invariant violated (") + what +
@@ -786,7 +895,7 @@ double AnalyticalRemoteMemory::checked_add_ns(
   if (!std::isfinite(sum)) {
     Sys::sys_panic(
         string("remote-memory numeric invariant violated (") + what +
-        "): time addition overflowed");
+        "): addition overflowed");
   }
   return sum;
 }
@@ -829,17 +938,24 @@ void AnalyticalRemoteMemory::on_stats_issue(
   }
 }
 
+bool AnalyticalRemoteMemory::moment_is_redistribution(
+    const StreamCompletionMoment& m) {
+  // §5.1 重分判定：仅当仍有幸存流（N - c >= 1）且其份额改变
+  // （N + j - c != N，即 j != c）才计——新流加入恰补齐分母（j == c）或
+  // 无幸存流（N == c）都不是重分。flush 落账与只读快照外推共用本谓词。
+  return m.interval_streams > m.completions && m.joins != m.completions;
+}
+
 std::size_t AnalyticalRemoteMemory::flush_redistribution_moment(
     PortStatsAccumulator& acc) {
   // §5.1：redistribution_events 按“连续服务子步的流完成时刻”计。同一时刻
-  // 多流同时结束只计一次；仅当仍有幸存流（N - c >= 1）且其份额改变
-  // （N + j - c != N，即 j != c）才计——新流加入恰补齐分母（j == c）或无
-  // 幸存流（N == c）都不是重分。新流加入本身另列 new_stream_joins。
+  // 多流同时结束只计一次；判定谓词见 moment_is_redistribution。新流加入
+  // 本身另列 new_stream_joins。
   StreamCompletionMoment& m = acc.moment;
   if (!m.active) {
     return 0;
   }
-  if (m.interval_streams > m.completions && m.joins != m.completions) {
+  if (moment_is_redistribution(m)) {
     acc.totals.redistribution_events += 1;
   }
   const std::size_t completions = m.completions;
@@ -951,11 +1067,25 @@ AnalyticalRemoteMemory::assemble_port_stats(std::size_t port_index) const {
   PortStats snapshot;
   if (port_index < port_stats_.size()) {
     snapshot = port_stats_[port_index].totals;
+    // M5-02 修复（2026-09-26）：[H3] 只记录流完成时刻，落账推迟到下一
+    // [H2] 结算点；观测发生在其后时（典型：run 末 port_stats()），把未
+    // 落账时刻按 flush 同一谓词外推进只读快照，补齐运行末边界
+    // redistribution_events（至多 1）与 new_stream_joins（该边界新增流
+    // 数）的欠计。外推不改写累计器——本方法保持只读、不推进、不结算。
+    const StreamCompletionMoment& m = port_stats_[port_index].moment;
+    if (m.active) {
+      if (moment_is_redistribution(m)) {
+        snapshot.redistribution_events += 1;
+      }
+      snapshot.new_stream_joins += m.joins;
+    }
   }
   const PortState& port = ports_[port_index];
-  // 流数取端口实时活跃流数：该计数只在子步转换处变化，在一切外部可
-  // 观测点与最近一次 [H2] 区间结算值一致（每次 issue/事件派发均以
-  // replan 前的全端口推进收尾）。
+  // 流数取端口实时活跃流数：该计数只在子步转换处变化，是端口的实时
+  // 事实源。注意它不必与最近一次 [H2] 区间结算值一致：子步边界处的
+  // latency 就绪（含 latency=0 事务）在本区间 [H2] 结算之后、下一
+  // [H2] 结算之前加入传输集合，该窗口内实时值可比最近结算值大——
+  // 快照如实取实时值，不做结算值回填。
   snapshot.streaming_count = port.active_stream_count;
   // §5.1：等待计数由实时作业状态推导——后端自身作业状态是唯一端口事实源；
   // 不维护独立 pending 记录，旧 FIFO 账本键名不回归。
@@ -981,6 +1111,58 @@ AnalyticalRemoteMemory::PortStats AnalyticalRemoteMemory::port_stats(
     std::size_t port_index) const {
   // 只读快照：不推进、不结算、不改变任何后端状态。
   return assemble_port_stats(port_index);
+}
+
+void AnalyticalRemoteMemory::dump_port_stats(const std::string& directory)
+    const {
+  // rm-backend-D1（2026-09-27）：PortStats 区间积分观测面的生产导出通道。
+  // 调用时点为正常 run 末（is_drained() 通过后），导出的是守恒终态；
+  // 字段面与 PortStats 注释（§5.1）一致，值经只读快照组装，不推进、
+  // 不结算、不改变任何后端状态。无端口（NO_MEMORY_EXPANSION 端态）或
+  // directory 为空时不建文件（NO 档零 bridge 残留）；文件写入失败按
+  // 数值边界同款纪律 fail-closed。
+  if (directory.empty() || ports_.empty()) {
+    return;
+  }
+  json dump;
+  dump["schema"] = 1;
+  dump["type"] = "remote_memory_port_stats";
+  dump["port_count"] = ports_.size();
+  json port_rows = json::array();
+  for (std::size_t i = 0; i < ports_.size(); ++i) {
+    const PortStats snapshot = assemble_port_stats(i);
+    json row;
+    row["port_index"] = i;
+    row["issued_count"] = snapshot.issued_count;
+    row["completed_count"] = snapshot.completed_count;
+    row["issued_bytes"] = snapshot.issued_bytes;
+    row["completed_bytes"] = snapshot.completed_bytes;
+    row["in_flight_count"] = snapshot.in_flight_count;
+    row["peak_in_flight"] = snapshot.peak_in_flight;
+    row["streaming_count"] = snapshot.streaming_count;
+    row["peak_streaming"] = snapshot.peak_streaming;
+    row["latency_waiting_count"] = snapshot.latency_waiting_count;
+    row["completion_waiting_count"] = snapshot.completion_waiting_count;
+    row["redistribution_events"] = snapshot.redistribution_events;
+    row["new_stream_joins"] = snapshot.new_stream_joins;
+    row["port_busy_ns"] = snapshot.port_busy_ns;
+    row["shared_busy_ns"] = snapshot.shared_busy_ns;
+    row["bytes_served"] = snapshot.bytes_served;
+    port_rows.push_back(row);
+  }
+  dump["ports"] = port_rows;
+  ofstream out(directory + "/remote_memory_port_stats.json",
+               ios::out | ios::trunc);
+  if (!out.is_open()) {
+    Sys::sys_panic("failed to open remote-memory port stats dump under: " +
+                   directory);
+  }
+  out << dump.dump() << '\n';
+  out.flush();
+  if (!out) {
+    Sys::sys_panic("failed to write remote-memory port stats dump under: " +
+                   directory);
+  }
 }
 
 // ---- 逐事务明细流式写出（§5.1 阶段 3 第二步；schema 见 .hh） ----

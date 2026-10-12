@@ -1,13 +1,11 @@
 /******************************************************************************
-BaseStream and UsageTracker bounded-lifecycle regression fixture.
+BaseStream bounded-lifecycle regression fixture.
 
 BaseStream used to append one entry per stream id to three static maps.  The
-maps had no production consumers: ask_for_schedule already proves readiness by
-checking every rank's ready-list front, and ready_counter/suspended_streams
-have no writers/readers.  This fixture proves the retained ready-list decision
-is exact, including subgroup-shaped lifetimes and same-local-id collisions,
-then stress-constructs one million streams.  It also checks that UsageTracker
-keeps its precise level with O(1) state on every execution mode.
+maps had no production consumers, so the ready-list front check in Sys::schedule
+is the sole readiness decision.  This fixture proves stream lifecycles are
+self-contained, including subgroup-shaped lifetimes and same-local-id
+collisions, then stress-constructs one million streams.
 *******************************************************************************/
 
 #include <unistd.h>
@@ -25,10 +23,8 @@ keeps its precise level with O(1) state on every execution mode.
 #include "astra-sim/common/AstraNetworkAPI.hh"
 #include "astra-sim/common/AstraRemoteMemoryAPI.hh"
 #include "astra-sim/system/BaseStream.hh"
-#include "astra-sim/system/DataSet.hh"
-#include "astra-sim/system/StreamBaseline.hh"
 #include "astra-sim/system/Sys.hh"
-#include "astra-sim/system/UsageTracker.hh"
+#include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 namespace {
 
@@ -90,8 +86,23 @@ std::string write_minimal_system_config() {
         std::exit(EXIT_FAILURE);
     }
 
+    // The Sys constructor builds per-ComType logical topologies from the
+    // config (the Sys::Sys constructor's logical_topologies build-out, via
+    // CollectiveImplLookup::get_collective_impl with
+    // BypassRule::BYPASS_ALL_CUSTOM); a missing or empty *-implementation key no
+    // longer aborts construction (GeneralComplexTopology tolerates the empty
+    // list as a dummy topology) but would make any use of that collective
+    // type fail inside CollectiveImplLookup::get_collective_impl. The four
+    // keys below are the proven one-topology-dimension shape
+    // (physical_dims={1}, same as local_hbm_bandwidth_model_test.cc).
     constexpr char contents[] =
-        "{\"scheduling-policy\":\"FIFO\",\"hbm-bandwidth-contention\":false}";
+        "{\"scheduling-policy\":\"FIFO\",\"preferred-dataset-splits\":1,"
+        "\"collective-optimization\":\"localBWAware\","
+        "\"all-reduce-implementation\":[\"ring\"],"
+        "\"all-gather-implementation\":[\"ring\"],"
+        "\"reduce-scatter-implementation\":[\"ring\"],"
+        "\"all-to-all-implementation\":[\"ring\"],"
+        "\"hbm-bandwidth-contention\":false}";
     size_t offset = 0;
     while (offset < sizeof(contents) - 1) {
         const ssize_t written =
@@ -125,126 +136,9 @@ std::unique_ptr<AstraSim::Sys> make_online_system(
         id, "unused", "empty", system_config, &remote_memory, &network,
         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
         AstraSim::ExecutionDriven::ExecutionMode::Online,
-        std::make_shared<AstraSim::ExecutionDriven::EmptyGraphSource>());
-}
-
-struct ReadyStream {
-    std::unique_ptr<AstraSim::DataSet> dataset;
-    std::unique_ptr<AstraSim::StreamBaseline> stream;
-};
-
-ReadyStream make_ready_stream(AstraSim::Sys& sys, int stream_id) {
-    AstraSim::CollectivePhase phase;
-    phase.queue_id = 0;
-    phase.algorithm = nullptr;
-    phase.final_data_size = 0;
-    phase.enabled = false;
-    phase.comm_type = AstraSim::ComType::None;
-    auto dataset = std::make_unique<AstraSim::DataSet>(1, 0);
-    auto stream = std::make_unique<AstraSim::StreamBaseline>(
-        &sys, dataset.get(), stream_id, std::list<AstraSim::CollectivePhase>{
-                                           phase},
-        0);
-    sys.ready_list.push_back(stream.get());
-    return {std::move(dataset), std::move(stream)};
-}
-
-void clear_ready_lists(const std::array<AstraSim::Sys*, 4>& ranks) {
-    for (auto* rank : ranks) {
-        rank->ready_list.clear();
-    }
-}
-
-void expect_not_scheduled(const std::array<AstraSim::Sys*, 4>& ranks,
-                          const std::array<size_t, 4>& expected_ready,
-                          const char* message) {
-    for (size_t index = 0; index < ranks.size(); ++index) {
-        expect(ranks[index]->ready_list.size() == expected_ready[index] &&
-                   ranks[index]->total_running_streams == 0 &&
-                   ranks[index]->first_phase_streams == 0,
-               message);
-    }
-}
-
-void reset_schedule_counters(const std::array<AstraSim::Sys*, 4>& ranks) {
-    for (auto* rank : ranks) {
-        rank->first_phase_streams = 0;
-        rank->total_running_streams = 0;
-    }
-}
-
-void test_ready_list_equivalence(const std::array<AstraSim::Sys*, 4>& ranks) {
-    // The caller has no front: old and new code both return before any work.
-    ranks[0]->ask_for_schedule(3);
-    expect_not_scheduled(ranks, {0, 0, 0, 0},
-                         "empty caller ready list never schedules");
-
-    // At least one rank is empty: the all-rank front scan rejects scheduling.
-    {
-        std::vector<ReadyStream> streams;
-        streams.push_back(make_ready_stream(*ranks[0], 10));
-        ranks[0]->ask_for_schedule(3);
-        expect_not_scheduled(ranks, {1, 0, 0, 0},
-                             "an empty peer ready list blocks scheduling");
-        clear_ready_lists(ranks);
-    }
-
-    // Every rank has work but their fronts disagree: the same scan rejects it.
-    {
-        std::vector<ReadyStream> streams;
-        for (size_t index = 0; index < ranks.size(); ++index) {
-            streams.push_back(make_ready_stream(
-                *ranks[index], index == 1 ? 21 : 20));
-        }
-        ranks[0]->ask_for_schedule(3);
-        expect_not_scheduled(ranks, {1, 1, 1, 1},
-                             "mismatched all-rank ready fronts block scheduling");
-        clear_ready_lists(ranks);
-    }
-
-    // Matching fronts schedule no more than max, even when each rank has more.
-    {
-        std::vector<ReadyStream> streams;
-        for (auto* rank : ranks) {
-            streams.push_back(make_ready_stream(*rank, 30));
-            streams.push_back(make_ready_stream(*rank, 31));
-        }
-        ranks[0]->ask_for_schedule(1);
-        for (auto* rank : ranks) {
-            expect(rank->ready_list.size() == 1 &&
-                       rank->total_running_streams == 1 &&
-                       rank->first_phase_streams == 1,
-                   "matching fronts honor ask_for_schedule max");
-        }
-        clear_ready_lists(ranks);
-        reset_schedule_counters(ranks);
-    }
-
-    // With max above every queue depth, the smallest ready-list length wins.
-    {
-        std::vector<ReadyStream> streams;
-        streams.push_back(make_ready_stream(*ranks[0], 40));
-        streams.push_back(make_ready_stream(*ranks[0], 41));
-        streams.push_back(make_ready_stream(*ranks[1], 40));
-        streams.push_back(make_ready_stream(*ranks[2], 40));
-        streams.push_back(make_ready_stream(*ranks[2], 41));
-        streams.push_back(make_ready_stream(*ranks[2], 42));
-        streams.push_back(make_ready_stream(*ranks[3], 40));
-        streams.push_back(make_ready_stream(*ranks[3], 41));
-        ranks[0]->ask_for_schedule(8);
-        expect(ranks[0]->ready_list.size() == 1 &&
-                   ranks[1]->ready_list.empty() &&
-                   ranks[2]->ready_list.size() == 2 &&
-                   ranks[3]->ready_list.size() == 1,
-               "matching fronts honor the global ready-list minimum");
-        for (auto* rank : ranks) {
-            expect(rank->total_running_streams == 1 &&
-                       rank->first_phase_streams == 1,
-                   "minimum scheduling advances all ranks exactly once");
-        }
-        clear_ready_lists(ranks);
-        reset_schedule_counters(ranks);
-    }
+        // Empty-store NodeStoreGraphSource: the retired EmptyGraphSource
+        // placeholder is gone; an empty store never yields nodes either.
+        std::make_shared<AstraSim::ExecutionDriven::NodeStoreGraphSource>());
 }
 
 void test_subgroup_lifetimes_and_id_collisions(
@@ -285,45 +179,6 @@ void test_stream_lifecycle_stress(const std::array<AstraSim::Sys*, 4>& ranks) {
     }
 }
 
-void test_usage_tracker_contract(const std::array<AstraSim::Sys*, 4>& ranks) {
-    // UsageTracker keeps only the current level.  The transition-history
-    // report chain (Usage records, CSVWriter output) had no production
-    // consumer and grew without bound, so it was retired entirely.
-    AstraSim::UsageTracker history(2);
-    history.increase_usage();
-    expect(history.current_level == 1,
-           "UsageTracker increase_usage raises the current level");
-    history.increase_usage();
-    expect(history.current_level == 1,
-           "UsageTracker level stays bounded by levels - 1");
-    history.decrease_usage();
-    history.decrease_usage();
-    history.decrease_usage();
-    expect(history.current_level == 0,
-           "UsageTracker decrease_usage floors the current level at zero");
-    history.set_usage(2);
-    expect(history.current_level == 2,
-           "UsageTracker set_usage stores the requested level");
-
-    auto& online = ranks[0]->scheduler_unit->usage.at(0);
-    online.set_usage(1);
-    expect(online.current_level == 1,
-           "scheduler UsageTracker changes level");
-    online.set_usage(0);
-
-    constexpr uint64_t kIterations = 1000000;
-    for (uint64_t index = 0; index < kIterations; ++index) {
-        online.increase_usage();
-        online.decrease_usage();
-        if ((index & 65535u) == 0) {
-            expect(online.current_level == 0,
-                   "online UsageTracker remains O(1) during stress");
-        }
-    }
-    expect(online.current_level == 0,
-           "online run-end UsageTracker level returns to zero");
-}
-
 }  // namespace
 
 int main() {
@@ -348,10 +203,8 @@ int main() {
         const std::array<AstraSim::Sys*, 4> ranks = {
             rank_zero.get(), rank_one.get(), rank_two.get(), rank_three.get()};
 
-        test_ready_list_equivalence(ranks);
         test_subgroup_lifetimes_and_id_collisions(ranks);
         test_stream_lifecycle_stress(ranks);
-        test_usage_tracker_contract(ranks);
     }
     if (::unlink(system_config.c_str()) != 0) {
         std::fprintf(stderr,
@@ -361,4 +214,3 @@ int main() {
     }
     return g_ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
- 

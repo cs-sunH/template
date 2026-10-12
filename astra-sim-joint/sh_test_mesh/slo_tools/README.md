@@ -68,7 +68,7 @@ P11 死键清除起本仓删除 10 个零消费者 campaign 档案键——五�
 | 脚本 | WP | 输入（run_dir 内） | 输出（`-o`，缺省写 run_dir 下同名文件；`-` = stdout） |
 |---|---|---|---|
 | `slo_stats.py e2e-stats` | WP3 | request_metrics.csv | slo_e2e_stats.csv：P50/P99 主档（`--extra-pct 90,95` 附录档）；整数纳秒、先分位后转单位（nearest-rank，与 C++ MetricCollector 同法） |
-| `slo_stats.py violation` | WP3 | request_metrics.csv + `--t-isolated` CSV + manifest α | slo_violation.json：`Deadline(r)=α×T_isolated(bucket(r))`；violation_rate=分子/分母（分母=全部终态 completed+rejected+dropped+timed_out+failed）；**proxy 字段显式断言拒绝**（输入带 first_token_ns/first_token_source 即 fail-closed） |
+| `slo_stats.py violation` | WP3 | request_metrics.csv + `--t-isolated` CSV + manifest α | slo_violation.json：`Deadline(r)=α×T_isolated(bucket(r))`；violation_rate 的分母包含全部预定请求（completed/rejected/dropped/timed_out/failed/not_arrived/in_flight）；同时报告 completion_rate、未到达数与在途数；**proxy 字段显式断言拒绝**（输入带 first_token_ns/first_token_source 即 fail-closed） |
 | `slo_stats.py bucket-stats` | WP3 | 同上 | slo_bucket_stats.csv：长度分桶 + slowdown=E2E/T_isolated(bucket) |
 | `slo_stats.py session` | WP3 | request_metrics.csv + per-request manifest | slo_session.csv：T_session=末轮 completion−首轮 arrival−Σ(human+tool)，P50/P95 打 stderr；human/tool 均未透传 → NA 行+计数（互斥缺侧按 0） |
 | `slo_stats.py backlog` | WP3 | request_metrics.csv | slo_backlog.csv：arrival(+1)/completion(−1) 事件重建在途请求数时序（同刻先减后加；`--bucket-ns` 可分桶取 max） |
@@ -119,10 +119,11 @@ H/I/F 分列）；**无 n\* = d′/(d−ρ) 式**；对拍是诊断不是验收�
 δ_adm 终冻同值同域 ns）；敏感性臂 `domain_delta_sensitivity_multipliers`
 （{1,2,4}×σ̂）为 A3' 强制修订——撤销 δ=0 空转对拍臂，σ̂ 三级链（观测
 |pred−measured| p50 → 冷启动 merge 腿量级锚点）见 estimate_sigma_hat。
-预测 `joint_cost_ns` 的终点是 merge_done：有 merge 流时与决策日志的
-`merge_done.tick` 配对；无 merge 流时用 `completion.tick`，服务响应时延
-另列。completion 披露了 merge 字节而缺 merge_done 行时，实测误差为 NA
-并告警，避免把提前的 service_done 当作结算终点压低 σ̂。
+预测 `joint_cost_ns` 的终点是 settle_done，服务响应时延另列。结算策略与
+历史模式从 `bridge/joint_mechanism_manifest.json` 的 `prediction` 节读取；
+现代 run 的 consolidate/distributed 都必须有有效结算事件，缺失或逆序证据
+保持 NA。仅缺现代 manifest 的旧 consolidate 日志允许 merge_done 的等价
+映射或零载荷 completion 同刻回退，不能把 service 终点冒充实际结算。
 home 迁移轨迹：completion 行（决策时刻）+ kv_delta_journal（结算时刻，
 两源不混）——journal 已随 run 末 ledger 侧车序列化（`kv_delta_journal`
 第四键，F3 2026-09-22 修复批），本工具按四层可信度分级消费：

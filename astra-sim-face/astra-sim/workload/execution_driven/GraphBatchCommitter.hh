@@ -7,7 +7,8 @@ Atomic GraphBatch commit (方案 §8.1/§8.2).
 
 The tick-end commit is a two-phase protocol:
 
-  Phase A -- validate(delta, batch): the FULL pre-commit checklist (方案 §8.1
+  Phase A -- full pre-commit validation (validate_impl, run through
+  validate_and_commit): the FULL pre-commit checklist (方案 §8.1
   Phase A). PURE: no NodeStore node, no watch registration, no ingress
   alarm, no issue pass, no counter and no tracking-set mutation happens
   while validating, and NONE happens on a validation failure. The official
@@ -50,11 +51,21 @@ violations):
   [watch]   request_id non-empty; stage in {prefill, decode}; members
             non-empty and all in THIS batch; statuses subset of
             {Success, Skipped}; identity (request_id, stage, generation)
-            unique in batch; (request_id, stage) coverage: the node-stage
-            set EQUALS the watch-stage set; eligibility (delta facts first):
-            prefill -> the request is in-flight (arrived at this or an
-            earlier epoch, not yet completed), decode -> the request's
-            prefill has drained at this or an earlier epoch.
+            unique in batch; (request_id, stage) coverage is ONE-WAY
+            (拼 batch 适配 2026-08-22, sh_1.0 同款规则): every watch's
+            (request_id, stage) must be covered by a node of this batch
+            (an uncovered watch is always a bug), but a batch MAY carry
+            node-stage pairs with no watch of their own -- iterative-train
+            shared/joiner/admission nodes and the batch_train_* sentinel
+            namespace have no per-request watches; eligibility (delta
+            facts first): prefill -> the request is in-flight (arrived at
+            this or an earlier epoch, not yet completed), decode -> the
+            request's prefill has drained at this or an earlier epoch;
+            batch_train_* sentinel watches require stage=prefill (a decode
+            sentinel would fire REQUEST_COMPLETE accounting for a batch
+            namespace id that never arrived -- enforced in the mandatory
+            liveness preflight since 2026-09-26, not only in full
+            validation).
   [assign]  entries are objects with request_id / prefill_instance_index /
             decode_instance_index (opaque to C++; Python-authoritative).
   [kv]      entries are objects with event_type / trigger_request_id
@@ -189,13 +200,6 @@ class GraphBatchCommitter {
         }
     }
 
-    /// Phase A (pure). Returns an error description on ANY violation; the
-    /// committer state (stores, watches, counters, tracking) is untouched.
-    /// Throws only on a malformed batch entry (type errors are converted to
-    /// the returned error instead; the throw path is defensive only).
-    std::optional<std::string> validate(const StateDelta& delta,
-                                        const GraphBatch& batch) const;
-
     struct ValidateAndCommitResult {
         std::optional<std::string> error;
         uint64_t validation_ns = 0;
@@ -230,18 +234,6 @@ class GraphBatchCommitter {
     std::optional<uint64_t> resolve_store_id(int rank,
                                              uint64_t json_id) const;
 
-    /// Test/diagnostic view of the fixed metadata footprint: exactly one
-    /// RankAffine slot per configured rank, independent of node count.
-    size_t rank_affine_count() const { return rank_affines_.size(); }
-
-    /// Phase-5 in-flight request tracking (queries for fixtures/diagnostics).
-    const std::set<std::string>& in_flight_requests() const {
-        return in_flight_;
-    }
-    const std::set<std::string>& prefill_drained_requests() const {
-        return prefill_drained_;
-    }
-
     const Counters& counters() const { return counters_; }
 
     /// One-line run-end counter report ("[online] phase-5 commit counters:").
@@ -266,7 +258,7 @@ class GraphBatchCommitter {
     friend struct GraphBatchCommitterTestAccess;
     /// Delta facts first: arrivals -> in-flight; PREFILL_DRAIN ->
     /// prefill-drained; REQUEST_COMPLETE -> removed from both. Used on local
-    /// copies by validate() and on the real sets by commit().
+    /// copies by validate_impl() and on the real sets by commit().
     static void apply_delta_facts(const StateDelta& delta,
                                   std::set<std::string>& in_flight,
                                   std::set<std::string>& prefill_drained);
@@ -297,8 +289,9 @@ class GraphBatchCommitter {
     std::optional<std::string> validate_affine_drift() const;
     std::optional<std::string> validate_json_id_stream(
         const GraphBatch& batch,
-        std::vector<int>* touched_ranks = nullptr) const;
-    /// Production-safe subset of validation.  Unlike validate(), this checks
+        std::vector<int>* touched_ranks) const;
+    /// Production-safe subset of validation.  Unlike the full validate_impl()
+    /// checklist, this checks
     /// only invariants whose violation can permanently strand a node, watch,
     /// callback, collective, or request-accounting record.  It is pure and
     /// runs unconditionally at the start of commit().

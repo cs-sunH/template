@@ -17,7 +17,8 @@ struct ActiveFlowRef {
 };
 
 struct FluidLinkState {
-    LinkId link_id;
+    // (The former `LinkId link_id` field was write-only: the vector index in
+    // FluidScheduler::link_states is the link identity everywhere.)
     NetworkAnalytical::Bandwidth capacity_Bpns;
     std::vector<ActiveFlowRef> active_flows;
 };

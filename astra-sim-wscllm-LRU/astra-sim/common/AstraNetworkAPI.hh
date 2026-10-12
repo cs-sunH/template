@@ -12,7 +12,10 @@ namespace AstraSim {
 
 class AstraNetworkAPI {
   public:
-    enum class BackendType { NotSpecified = 0, Garnet, NS3, Analytical };
+    // (BackendType and get_backend_type() were removed with the unreachable
+    // upstream Garnet backend -- the only conceivable production value here
+    // was the analytical backend, and the enum's only consumer was an
+    // always-true comparison in QueueLevelHandler.)
 
     /**
      * Opaque identity for one opt-in cancellable backend alarm.
@@ -74,6 +77,20 @@ class AstraNetworkAPI {
                               void* fun_arg) = 0;
 
     /**
+     * Whether the backend is currently inside its event-invoke pass.
+     *
+     * The analytical backend merges same-tick events only inside the invoke
+     * pass and fails closed on a same-tick schedule from any other context
+     * (tick-end / deferred handlers).  Sys consults this before registering a
+     * delta==0 event so that a delay collapsed to zero by configuration
+     * (e.g. communication_delay truncated by a fractional injection scale)
+     * defers to the next tick there instead of killing the run, while static
+     * dispatch keeps its byte-exact same-tick merge semantics.  Backends
+     * without the notion report true (upstream behavior: merge allowed).
+     */
+    virtual bool backend_in_invoke_context() const { return true; }
+
+    /**
      * Schedule an alarm that an opt-in frontend may later remove.
      *
      * Non-analytical and fake backends retain their legacy behavior: schedule
@@ -98,17 +115,8 @@ class AstraNetworkAPI {
         return false;
     }
 
-    virtual BackendType get_backend_type() {
-        return BackendType::NotSpecified;
-    };
-
     virtual int sim_comm_get_rank() {
         return rank;
-    };
-
-    virtual int sim_comm_set_rank(int rank) {
-        this->rank = rank;
-        return this->rank;
     };
 
     virtual timespec_t sim_get_time() = 0;
@@ -116,14 +124,6 @@ class AstraNetworkAPI {
     virtual double get_BW_at_dimension(int dim) {
         return -1;
     };
-
-    // Notifies that the workload for this rank has finished. 
-    // Note that we have one network handler per rank. 
-    // Therefore, when implementing this function, the network handler must 
-    // find a way to concur that all ranks have finished their workloads.
-    virtual void sim_notify_finished(){
-        return;
-    }
 
     int rank;
 

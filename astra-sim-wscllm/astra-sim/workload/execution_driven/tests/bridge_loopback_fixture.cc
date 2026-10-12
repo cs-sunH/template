@@ -5,14 +5,21 @@ LICENSE file in the root directory of this source tree.
 bridge_loopback_fixture.cc -- phase-1 step 1-7 FileDecisionBridge loopback.
 
 Scenarios (方案 §4 步骤 1-7 操作 4):
+  completed_nodes wire: production keeps the schema field but transfers no
+     per-node records (the compact accumulator serializes []); exact audit
+     mode (ASTRA_SIM_ONLINE_COMPLETED_NODES=exact) retains the frozen
+     legacy per-node schema and a materially larger payload
+     (completed_node_serialization).
   A. Round-trip (main process): two StateDeltas covering all four phase-1
      reasons (ARRIVAL / PREFILL_DRAIN / DECODE_COMPLETION /
      REQUEST_COMPLETE) are delivered through a real FileDecisionBridge to
-     online/verify/bridge_echo.py; the echo reflects the full request back
-     into response["echo_of_request"], so the fixture asserts field-level
-     round-trip fidelity (echo == build_request_json(delta)) plus the
-     fixed nodes/parent_edges/watches/assignments/kv_actions arrays and
-     batch_id/source_delivery_sequence. Then commit acks are sent twice for
+     online/verify/bridge_echo.py. Under the C1 structural-parse contract
+     the response carries the frozen schema only -- a top-level
+     "echo_of_request" key is now UNKNOWN and must fail closed (part F
+     pins that abort) -- so round-trip fidelity is asserted through the
+     TYPED batch instead: the fixed nodes/parent_edges/watches/
+     assignments/kv_actions arrays and batch_id/source_delivery_sequence
+     must arrive intact. Then commit acks are sent twice for
      the same seq (idempotency: Python must ignore the duplicate) and the
      echo's receipt file must contain exactly one line per seq. At scope
      end the bridge closes req_notify -> Python sees EOF -> exits 0.
@@ -20,9 +27,13 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
      bridge whose Python side reads the request and exits WITHOUT writing a
      response; the resp_notify read gets EOF and the child must abort
      (SIGABRT) with the "Python side crashed" message.
-  C. Timeout (forked child): the child uses timeout_ms=1000 against a
-     Python side that never opens resp_notify; the poll must time out and
-     the child must abort (SIGABRT) with the timeout message.
+  C. No-response (forked child): the child uses timeout_ms=1000 against a
+     Python side that never opens resp_notify; the death verdict comes from
+     the long-connection EOF-retry path instead -- the pre-first-byte EOF
+     (POLLHUP + read()==0 on the writerless FIFO) is retried for the
+     response-writer startup grace (kRespWriterStartupGraceMs=10000ms,
+     DecisionBridge.cc) and outlives the 1s poll timeout, after which the
+     child must abort (SIGABRT).
   D. Genuine peer death under the long-lived protocol (defect-B fix,
      2026-08-16): Python completes exchange 1 then SIGKILLs itself; the
      C++ lifetime read end must abort with "long-lived resp_notify write
@@ -31,6 +42,12 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
   E. 1:1 response-byte invariant (defect-B fix guard): a Python writing
      two bytes for one delivery must trip "more than one response byte in
      flight" (backpressure contract) instead of shifting the exchanges.
+  F. Malformed-response regressions (C1, 2026-08-29): a response that is
+     not JSON / misses schema_version / carries an unknown top-level key
+     must fail closed through the SAME bridge_fatal channel as every other
+     protocol violation -- one "[Error] (execution_driven/bridge)" line on
+     stderr + SIGABRT, with the response file kept for post-mortem
+     (test_malformed_response_abort_messages).
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -124,6 +141,21 @@ bool file_exists(const std::string& path) {
     return in.good();
 }
 
+// The audit mode is fixed at construction through the documented environment
+// path (ASTRA_SIM_ONLINE_COMPLETED_NODES); these helpers keep the fixture
+// independent of an inherited environment and restore it right after.
+CompletedFactAccumulator make_compact_accumulator() {
+    ::unsetenv("ASTRA_SIM_ONLINE_COMPLETED_NODES");
+    return CompletedFactAccumulator();
+}
+
+CompletedFactAccumulator make_exact_accumulator() {
+    ::setenv("ASTRA_SIM_ONLINE_COMPLETED_NODES", "exact", 1);
+    CompletedFactAccumulator acc;
+    ::unsetenv("ASTRA_SIM_ONLINE_COMPLETED_NODES");
+    return acc;
+}
+
 // -------------------------------------------------- completed_nodes wire --
 // Production keeps the schema field but transfers no per-node records. Exact
 // audit mode retains the frozen legacy records and is intentionally much larger.
@@ -131,8 +163,7 @@ void completed_node_serialization() {
     const int success = static_cast<int>(NodeTerminalStatus::Success);
     const int skipped = static_cast<int>(NodeTerminalStatus::Skipped);
 
-    CompletedFactAccumulator compact;
-    compact.set_exact_mode(false);
+    CompletedFactAccumulator compact = make_compact_accumulator();
     compact.record(/*rank=*/1, /*node_id=*/11, "compact", "decode",
                    /*generation=*/1, /*tick=*/101, success);
     const StateDelta compact_delta = build_state_delta_v1(
@@ -143,8 +174,7 @@ void completed_node_serialization() {
                compact_request["completed_nodes"].empty(),
            "completed_nodes: production accumulator serializes []");
 
-    CompletedFactAccumulator exact;
-    exact.set_exact_mode(true);
+    CompletedFactAccumulator exact = make_exact_accumulator();
     for (uint64_t i = 0; i < 8; ++i) {
         exact.record(/*rank=*/static_cast<int>(i % 2),
                      /*node_id=*/9000 + i, "exact-request", "decode",
@@ -204,8 +234,9 @@ void round_trip(const std::string& echo_script) {
         prefill_ev.generation = 0;
         prefill_ev.payload.watch_member_count = 5;
 
-        const StateDelta delta1 =
-            build_state_delta({arrival_ev, prefill_ev}, 94835000, 0);
+        const StateDelta delta1 = build_state_delta_v1(
+            {arrival_ev, prefill_ev}, 94835000, 0,
+            /*deferred_from_tick=*/0, {}, {});
 
         const GraphBatch batch1 = bridge.deliver_and_receive(delta1);
 
@@ -311,15 +342,16 @@ void round_trip(const std::string& echo_script) {
         complete_ev.request_id = "s0_r0";
         complete_ev.generation = 1;
 
-        const StateDelta delta2 =
-            build_state_delta({decode_ev, complete_ev}, 94835010, 1);
+        const StateDelta delta2 = build_state_delta_v1(
+            {decode_ev, complete_ev}, 94835010, 1,
+            /*deferred_from_tick=*/0, {}, {});
 
         const GraphBatch batch2 = bridge.deliver_and_receive(delta2);
         expect(batch2.source_delivery_sequence == 1 && batch2.batch_id == 1,
-               "B: batch echoes seq 1");
+               "A: batch echoes seq 1");
         // Phase-7 §10.3: response consumed and deleted (see part A).
         expect(!file_exists(bridge_dir + "/response_1.json"),
-               "B: response_1.json consumed and deleted (phase-7 §10.3)");
+               "A: response_1.json consumed and deleted (phase-7 §10.3)");
 
         // --- commit acks: seq 0, seq 1, then a DUPLICATE seq 0 ---
         bridge.send_commit_ack(/*batch_id=*/0, /*delivery_seq=*/0, true);
@@ -373,8 +405,8 @@ void crash_scenario(const std::string& root) {
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
-    const StateDelta delta =
-        build_state_delta({arrival_ev}, 12345, 0);
+    const StateDelta delta = build_state_delta_v1(
+        {arrival_ev}, 12345, 0, /*deferred_from_tick=*/0, {}, {});
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: crash scenario "
                          "did not abort\n");
@@ -382,7 +414,9 @@ void crash_scenario(const std::string& root) {
 }
 
 // ---------------------------------------------------------------- Part C --
-// Python never responds -> poll timeout -> C++ aborts.
+// Python never responds -> pre-first-byte EOF retries exhaust the
+// kRespWriterStartupGraceMs startup grace (~10s, DecisionBridge.cc) ->
+// C++ aborts with the timeout message.
 const char* kSleepScript =
     "import os,sys,time\n"
     "d=sys.argv[1]\n"
@@ -406,8 +440,8 @@ void timeout_scenario(const std::string& root) {
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
-    const StateDelta delta =
-        build_state_delta({arrival_ev}, 12345, 0);
+    const StateDelta delta = build_state_delta_v1(
+        {arrival_ev}, 12345, 0, /*deferred_from_tick=*/0, {}, {});
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: timeout scenario "
                          "did not abort\n");
@@ -522,11 +556,13 @@ void kill_scenario(const std::string& root) {
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
-    const StateDelta delta1 = build_state_delta({arrival_ev}, 12345, 0);
+    const StateDelta delta1 = build_state_delta_v1(
+        {arrival_ev}, 12345, 0, /*deferred_from_tick=*/0, {}, {});
     (void)bridge.deliver_and_receive(delta1);  // exchange 1 completes
     bridge.send_commit_ack(0, 0, true);
     arrival_ev.request_id = "s0_r1";
-    const StateDelta delta2 = build_state_delta({arrival_ev}, 12346, 1);
+    const StateDelta delta2 = build_state_delta_v1(
+        {arrival_ev}, 12346, 1, /*deferred_from_tick=*/0, {}, {});
     (void)bridge.deliver_and_receive(delta2);  // must abort inside (peer dead)
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: kill scenario "
                          "did not abort\n");
@@ -565,7 +601,8 @@ void two_byte_scenario(const std::string& root) {
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
-    const StateDelta delta = build_state_delta({arrival_ev}, 12345, 0);
+    const StateDelta delta = build_state_delta_v1(
+        {arrival_ev}, 12345, 0, /*deferred_from_tick=*/0, {}, {});
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: two-byte scenario "
                          "did not abort\n");
@@ -653,8 +690,8 @@ void test_malformed_response_abort_messages() {
             arrival_ev.reason = DecisionReason::ARRIVAL;
             arrival_ev.request_id = "s0_r0";
             arrival_ev.payload.arrival_world_ns = 1;
-            const StateDelta delta =
-                build_state_delta({arrival_ev}, 12345, 0);
+            const StateDelta delta = build_state_delta_v1(
+                {arrival_ev}, 12345, 0, /*deferred_from_tick=*/0, {}, {});
             (void)bridge.deliver_and_receive(delta);  // aborts inside
             _exit(2);
         }

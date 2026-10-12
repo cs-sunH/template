@@ -10,10 +10,16 @@ The tick-end commit is a two-phase protocol:
   Phase A -- validate(delta, batch): the FULL pre-commit checklist (方案 §8.1
   Phase A). PURE: no NodeStore node, no watch registration, no ingress
   alarm, no issue pass, no counter and no tracking-set mutation happens
-  while validating, and NONE happens on a validation failure. The official
-  path (ed_commit_cb in main_online.cc) treats a validation failure as a
-  fail-closed abort; the phase-5 fixture (tests/graph_batch_committer_test.cc)
-  asserts the zero side-effect property directly.
+  while validating, and NONE happens on a validation failure. One
+  deliberate physical exception (no observable effect): validation reuses
+  this committer's fixed O(num_ranks) json-id stamp scratch vectors
+  (json_id_seen_stamp_by_rank_ et al.) instead of allocating per batch --
+  slots are re-stamped from a fresh epoch counter on every validation, so
+  the scratch carries no cross-batch validation state and all committed
+  state stays untouched. The official path (ed_commit_cb in main_online.cc)
+  treats a validation failure as a fail-closed abort; the phase-5 fixture
+  (tests/graph_batch_committer_test.cc) asserts the zero side-effect
+  property directly.
 
   Phase B -- commit(delta, batch): applies the delta facts to the in-flight
   request tracking, then adds the batch's nodes (persistent per-rank affine
@@ -37,10 +43,15 @@ violations):
             {prefill, decode}; generation == stage (prefill 0 / decode 1);
             compute/comm/coll well-typed; type-7 collective bytes > 0 (also a
             mandatory cheap commit preflight when full validation is off);
-            comm src/dst/tag range checks are
+            type-7 collective comm_type must have a real completion path --
+            BROADCAST (comm_type 5) is rejected outright at the commit
+            boundary (the execution-driven path implements no broadcast
+            collective); comm src/dst/tag range checks are
             scoped to the comm-typed nodes (5/6) -- send node rank ==
             comm.src, recv node rank == comm.dst (non-comm nodes carry the
-            comm defaults in real data and an empty comm in fixtures).
+            comm defaults in real data and an empty comm in fixtures) and
+            their comm.bytes must be positive (a zero-byte flow exits the
+            analytical fluid backend).
   [edge]    kind == "data"; from != to; from resolves (this batch, an
             earlier batch's store id, or -- M2 node GC, 2026-08-23 -- an id
             in the rank's exact committed range; cross-batch
@@ -50,11 +61,19 @@ violations):
   [watch]   request_id non-empty; stage in {prefill, decode}; members
             non-empty and all in THIS batch; statuses subset of
             {Success, Skipped}; identity (request_id, stage, generation)
-            unique in batch; (request_id, stage) coverage: the node-stage
-            set EQUALS the watch-stage set; eligibility (delta facts first):
-            prefill -> the request is in-flight (arrived at this or an
-            earlier epoch, not yet completed), decode -> the request's
-            prefill has drained at this or an earlier epoch.
+            unique in batch; (request_id, stage) coverage (sh_2.0
+            multi-segment emission extension, NOT an EQUALS rule): every
+            watch's (request, stage) must be covered by this batch's nodes
+            (watch coverage is a subset of the node-stage set), while a
+            node-only segment is admitted when the stage boundary has
+            already passed (decode: the request's prefill has drained, or
+            the request completed this epoch; prefill: the request is
+            in-flight) or the id belongs to the "batch_train_" batch
+            namespace; eligibility (delta facts first; "batch_train_"
+            namespace sentinel watches bypass): prefill -> the request is
+            in-flight (arrived at this or an earlier epoch, not yet
+            completed), decode -> the request's prefill has drained at
+            this or an earlier epoch.
   [assign]  entries are objects with request_id / prefill_instance_index /
             decode_instance_index (opaque to C++; Python-authoritative).
   [kv]      entries are objects with event_type / trigger_request_id
@@ -136,7 +155,18 @@ class GraphBatchCommitter {
         // Returning nullopt means missing/inconsistent metadata and fails a
         // collective batch closed before any commit state changes. Batches
         // without collective nodes do not require the callback.
-        std::function<std::optional<std::vector<int>>(
+        // Returns (members, declared dimension count). The declared
+        // dimension count is the preflight's yardstick for coll.involved_dim
+        // (2026-09-27; corrected 2026-09-29): a size mismatch can no longer
+        // index Sys::generate_collective out of bounds -- the N14 parser
+        // contract there pads a short involved_dim with true up to the
+        // topology's dimension count. The real hazard is semantic, not an
+        // OOB: a batch whose involved_dim length disagrees with the
+        // Workloads' declared dimension count would silently execute on
+        // padded "all dimensions involved" semantics instead of the
+        // declared ones, so the preflight fails it closed before any
+        // commit state changes.
+        std::function<std::optional<std::pair<std::vector<int>, size_t>>(
             const std::string& pg_name,
             const std::vector<int>& participant_ranks)>
             communicator_members_for_pg;
@@ -151,8 +181,7 @@ class GraphBatchCommitter {
         // the run-end diagnostics. Internal default OFF: the phase fixtures
         // construct their Context explicitly and keep the pre-M2 behavior
         // (including the memory profile) -- main_online passes true
-        // unconditionally (the B.3 cleanup (2026-09-05) removed the
-        // --online-node-gc CLI arm).
+        // unconditionally.
         bool node_gc = false;
     };
 
@@ -188,13 +217,6 @@ class GraphBatchCommitter {
             }
         }
     }
-
-    /// Phase A (pure). Returns an error description on ANY violation; the
-    /// committer state (stores, watches, counters, tracking) is untouched.
-    /// Throws only on a malformed batch entry (type errors are converted to
-    /// the returned error instead; the throw path is defensive only).
-    std::optional<std::string> validate(const StateDelta& delta,
-                                        const GraphBatch& batch) const;
 
     struct ValidateAndCommitResult {
         std::optional<std::string> error;
@@ -266,7 +288,7 @@ class GraphBatchCommitter {
     friend struct GraphBatchCommitterTestAccess;
     /// Delta facts first: arrivals -> in-flight; PREFILL_DRAIN ->
     /// prefill-drained; REQUEST_COMPLETE -> removed from both. Used on local
-    /// copies by validate() and on the real sets by commit().
+    /// copies by validate_impl() and on the real sets by commit().
     static void apply_delta_facts(const StateDelta& delta,
                                   std::set<std::string>& in_flight,
                                   std::set<std::string>& prefill_drained);
@@ -298,7 +320,8 @@ class GraphBatchCommitter {
     std::optional<std::string> validate_json_id_stream(
         const GraphBatch& batch,
         std::vector<int>* touched_ranks = nullptr) const;
-    /// Production-safe subset of validation. Unlike validate(), this checks
+    /// Production-safe subset of validation. Unlike validate_impl(), this
+    /// checks
     /// only invariants whose violation can permanently strand a node, watch,
     /// callback, collective, or request-accounting record. It is pure and
     /// runs unconditionally at the start of commit().

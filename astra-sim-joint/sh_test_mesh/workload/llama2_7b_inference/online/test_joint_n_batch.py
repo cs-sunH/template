@@ -12,8 +12,8 @@
   N2（生产2）流数除数叠加候选——旧流并发两口径取大 + 候选恒叠加；
   N3（生产3）仅流数遥测保留——零速率窗不丢流数、A9' 剪除并集；
   N4（生产4）prefill 基数生产同形——chunk 切分 + 累计 context roofline
-        （SH 同形对拍、JCM fn 消费；recompute 的 history 由 JCM 内部按
-        驻留二分——O1 后调用方传语义值，"recompute 0 基"表述已失实）；
+        （SH 同形对拍、JCM fn 消费；recompute 的 history 恒 0——D10
+        完整 H+U 重放、span 基 0，取代 O1 驻留二分口径）；
   N5（生产5）+ N12 上一轮 merge 尾门纯度排除 + 生产列车核销路径
         （γ 经 _observe_service_factors 离开冷启动）。
 
@@ -256,13 +256,14 @@ class FlowOnlyTelemetryRetentionTest(unittest.TestCase):
             link_flow_counts={(0, 1): 2.0})
         report = view_both.disclosure()
         self.assertEqual(report["flow_count_links"], 1)
-        self.assertEqual(report["legacy_rate_divisor_links"], 0)
+        self.assertEqual(report["unknown_flow_count_links"], 0)
         view_legacy = registry.with_effective_rates(
             {(1, 2): 5.0}, link_capacity_bytes_per_ns=10.0)
         report_legacy = view_legacy.disclosure()
         self.assertEqual(report_legacy["flow_count_links"], 0)
-        # 旧二进制缺 active_flows ⇒ capacity/速率旧口径降级可辨认。
-        self.assertEqual(report_legacy["legacy_rate_divisor_links"], 1)
+        # 旧二进制缺 active_flows ⇒ 流数显式未知可辨认（D13：除数退
+        # 在册流近似，不再 capacity/速率冒充）。
+        self.assertEqual(report_legacy["unknown_flow_count_links"], 1)
 
 
 # ==================================================== 4. N4（生产4）==
@@ -319,34 +320,39 @@ class PrefillShapedBaseTest(unittest.TestCase):
         linear_model = _model(rates=_rates(noc=10.0, hbm=1e9))
         shaped_model = dataclasses.replace(
             linear_model,
-            prefill_task_load_ns_fn=lambda tokens, history: (
+            # D06 契约：接受 hbm_share_divisor 关键字（值不随份额缩放
+            # ——本测只对照 fn/线性注入差）。
+            prefill_task_load_ns_fn=lambda tokens, history,
+            hbm_share_divisor=1: (
                 1000 + tokens + history))
         kwargs = dict(session=_session(), request=_request(),
                       instance_index=1, action=ACTION_COPY,
                       remote_enabled=True)
-        linear = linear_model.estimate_action(**kwargs).cost_ns
-        shaped = shaped_model.estimate_action(**kwargs).cost_ns
+        linear = linear_model.estimate_P_with_continuation(**kwargs).cost_ns
+        shaped = shaped_model.estimate_P_with_continuation(**kwargs).cost_ns
         # copy：prefill_tokens = 50（input）、history = 100（session 视
         # 图）；因子冷启动 1.0 ⇒ 差 = fn(50,100) − 50×1.0 = 1100。
         self.assertEqual(shaped - linear, 1100)
 
         seen = {}
 
-        def recording_fn(tokens, history):
+        def recording_fn(tokens, history, hbm_share_divisor=1):
             seen["tokens"] = tokens
             seen["history"] = history
+            seen["hbm_share_divisor"] = hbm_share_divisor
             return 5000
 
         recompute_model = dataclasses.replace(
             linear_model, prefill_task_load_ns_fn=recording_fn)
-        candidate = recompute_model.estimate_action(
+        candidate = recompute_model.estimate_P_with_continuation(
             session=_session(missing=(1000, 1000)), request=_request(),
             instance_index=1, action="recompute", remote_enabled=True)
         self.assertTrue(candidate.applicable)
-        # R13：recompute 跨实例物化副本 0 基——history 恒传 0；tokens
-        # = input + missing 折算（> 50）。
+        # D10（v2.0 §6.2）：recompute 全口径 0 基（完整 H+U 重放自 0
+        # 物化工作副本，取代 R13 跨实例 0 基 + 驻留 H 基二分）——
+        # history 恒传 0；tokens = input + 整份 H（缺失层折算取消）。
         self.assertEqual(seen["history"], 0)
-        self.assertGreater(seen["tokens"], 50)
+        self.assertEqual(seen["tokens"], 50 + 100)
 
 
 # ============================================= 5. N5 + N12（生产5/回归）==
@@ -354,11 +360,17 @@ class PrefillShapedBaseTest(unittest.TestCase):
 class MergeTailGatePurityTest(unittest.TestCase):
     """N5：上一轮 merge 尾门（R11(ii)）hold 下一轮列车物理计算 ⇒ span
     混入门等待；纯度排除。N12：走 _observe_service_factors 生产核销
-    路径（修前 M4 测试只手工喂因子 + 文本钉）。"""
+    路径（修前 M4 测试只手工喂因子 + 文本钉）。§8.1 单账本（2026-09-30
+    修复）：入样点 = 统一 recorder；face γ = 只读发布视图（同一样本
+    不再二次更新——旧时间衰减桥接连亚 roofline 样本都照收初始化，正
+    是单账本要消除的规则漂移）。"""
 
     @staticmethod
-    def _run(merge_tail_gated: bool):
-        from joint.event_recursion_predictor import ServiceFactorGroup
+    def _run(merge_tail_gated: bool, finalize_tick: int = 200):
+        from joint.history_estimator import (
+            PredictionParams, ServiceSampleRecorder)
+        from joint.event_recursion_predictor import (
+            PublishedServiceFactorGroup)
         scheduler = Sh30OnlineScheduler.__new__(Sh30OnlineScheduler)
         scheduler.hardware = _hardware()
         scheduler.model = _face_model()
@@ -366,8 +378,17 @@ class MergeTailGatePurityTest(unittest.TestCase):
         scheduler._prefill_task_cache = {}
         scheduler._task_load_cache_capacity = 64
         scheduler._joint_factors = ServiceFactors()
+        # 纯度门跨请求 HBM 在册流查询直达 _hbm_ports——替身补设（F6：
+        # 漏设 = AttributeError，登记查询静默丢失已不可能）。
+        from joint.hbm_port_flow_registry import HbmPortFlowRegistry
+        scheduler._hbm_ports = HbmPortFlowRegistry()
+        # §8.1：样本唯一更新点 = 统一 recorder；γ 通道挂同一账本的发
+        # 布视图（同款真件——发布值随纯样本入样/排除的语义可断言）。
+        scheduler._joint_service_samples = ServiceSampleRecorder(
+            PredictionParams())
         scheduler.kv_manager = SimpleNamespace(
-            service_factors=ServiceFactorGroup())
+            service_factors=PublishedServiceFactorGroup(
+                scheduler._joint_service_samples))
         scheduler.runtime_by_request_id = {
             "r1": SimpleNamespace(
                 joint_span_base_context=0, prefill_tokens_completed=0)}
@@ -378,25 +399,40 @@ class MergeTailGatePurityTest(unittest.TestCase):
             "had_joiners": False, "suffix_gated": False,
             "history_transfer_gated": False,
             "merge_tail_gated": merge_tail_gated}
-        scheduler._observe_service_factors(state, train, 200)
+        scheduler._observe_service_factors(state, train, finalize_tick)
         return scheduler
 
-    def test_ungated_train_feeds_both_factor_channels(self):
-        scheduler = self._run(merge_tail_gated=False)
-        # span = 200−100 = 100、base = roofline(8, context 8) > 0 ⇒
-        # JCM 因子（_pending 缓冲在案）与 face γ 双通道入样（N12 生产
-        # 路径——修前 M4 测试只手工喂因子 + 文本钉）。
+    def test_ungated_train_feeds_unified_ledger_and_published_gamma(self):
+        # 纯列车（无门控）核销：样本入统一 recorder（_pending 缓冲在
+        # 案）。span 取 2×roofline 基数（D14 有效窗口 0<η≤1——旧口径
+        # span=100 < roofline(8, context 8)=1882 属亚 roofline 异常样
+        # 本，新单账本规则记 anomalous 跳过、不进 η；正路径用 2× 基数
+        # 断言发布值离开冷启动）。
+        base_ns = estimate_prefill_task_load_ns(
+            _hardware(), _face_model(),
+            instance_size=_topology().instances[0].size,
+            chunk_tokens=8, context_tokens=8)
+        scheduler = self._run(
+            merge_tail_gated=False, finalize_tick=100 + 2 * base_ns)
         self.assertIn(
-            "prefill_factor", scheduler._joint_factors._pending)
+            ("prefill", 100 + 2 * base_ns),
+            scheduler._joint_service_samples._pending)
+        scheduler._joint_service_samples.flush()
+        self.assertEqual(
+            scheduler._joint_service_samples.updates.get("prefill"), 1)
+        # face γ 发布视图读同一账本：离开冷启动、发布因子 = 1/η > 1.0
+        # （N12 生产路径语义保持——修前 M4 测试只手工喂因子 + 文本钉）。
         self.assertFalse(
             scheduler.kv_manager.service_factors.cold_start)
-        self.assertNotEqual(
+        self.assertGreater(
             scheduler.kv_manager.service_factors.value("prefill"), 1.0)
 
     def test_merge_tail_gated_train_excluded(self):
         scheduler = self._run(merge_tail_gated=True)
-        self.assertNotIn(
-            "prefill_factor", scheduler._joint_factors._pending)
+        self.assertEqual(
+            scheduler._joint_service_samples.updates.get("prefill", 0), 0)
+        self.assertEqual(
+            scheduler._joint_service_samples._pending, {})
         self.assertTrue(scheduler.kv_manager.service_factors.cold_start)
         self.assertEqual(
             scheduler.kv_manager.service_factors.value("prefill"), 1.0)

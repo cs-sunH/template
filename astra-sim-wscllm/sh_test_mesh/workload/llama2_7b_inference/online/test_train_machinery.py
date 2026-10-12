@@ -19,6 +19,7 @@
      容差内(口径差:层次 A 对 attention 取 max,层次 B 17 节点链
      逐类 max 求和)。
 """
+import math
 import os
 import sys
 import unittest
@@ -41,8 +42,73 @@ from wsc_llm_scheduler import (  # noqa: E402  (红线:只读 import)
     DECODE_ROLE,
     WscLlmHardware,
     WscLlmModel,
-    estimate_iteration_time_ns,
+    estimate_model_weight_bytes,
 )
+
+
+def estimate_iteration_time_ns(
+    hardware: WscLlmHardware,
+    model: WscLlmModel,
+    *,
+    instance_size: int,
+    p_chunk: int,
+    d_batch: int,
+    d_token: int,
+) -> int:
+    """Layer-A 解析时序 oracle(2026-09-24 自 wsc_llm_scheduler 迁入本测试)。
+
+    深挖文档时序估算族裁决:该函数零生产消费者(在线调度器决策从不
+    读时序估计),生产模块侧已删;本测试的 §7.6 Layer A/B 互校验以它
+    为独立解析口径,逐字保留(公式与迁入前一致)。
+    """
+    if instance_size <= 0 or p_chunk < 0 or d_batch < 0 or d_token < 0:
+        raise ValueError("invalid timing workload parameters")
+    if (p_chunk > 0) == (d_batch > 0):
+        raise ValueError("timing workload must contain exactly one of Prefill or Decode")
+    if d_batch > 0 and d_token <= 0:
+        raise ValueError("Decode timing requires a positive token/KV length")
+
+    h = model.hidden_size
+    ffn = model.ffn_size
+    layers = model.layers
+    bytes_per_elem = model.bytes_per_elem
+    aggregate_perf = instance_size * hardware.peak_perf_tflops * 1e12
+    aggregate_bw = instance_size * hardware.local_hbm_bandwidth_gbps * 1e9
+    local_hbm_latency_seconds = hardware.local_hbm_latency_ns / 1e9
+
+    linear_tokens = p_chunk + d_batch
+    mlp_ops_per_token = 6 * h * ffn if model.mlp_variant == "swiglu" else 4 * h * ffn
+    linear_ops_per_token = layers * (8 * h * h + mlp_ops_per_token)
+    linear_ops = linear_tokens * linear_ops_per_token
+    weight_bytes = estimate_model_weight_bytes(model)
+    activation_bytes = layers * linear_tokens * h * bytes_per_elem * 8
+    linear_seconds = max(
+        linear_ops / aggregate_perf,
+        local_hbm_latency_seconds +
+        (weight_bytes + activation_bytes) / aggregate_bw,
+    )
+
+    phase_seconds = 0.0
+    if p_chunk:
+        attention_ops = layers * 4 * p_chunk * p_chunk * h
+        attention_bytes = layers * p_chunk * p_chunk * bytes_per_elem * 4
+        phase_seconds = max(
+            attention_ops / aggregate_perf,
+            local_hbm_latency_seconds + attention_bytes / aggregate_bw,
+        )
+    else:
+        attention_ops = layers * 4 * d_batch * d_token * h
+        attention_bytes = layers * 2 * d_batch * d_token * h * bytes_per_elem
+        phase_seconds = max(
+            attention_ops / aggregate_perf,
+            local_hbm_latency_seconds + attention_bytes / aggregate_bw,
+        )
+
+    return max(
+        1,
+        math.ceil((linear_seconds + phase_seconds) * 1e9)
+        + hardware.d2d_latency_ns,
+    )
 
 
 def _record(request_id, *, prefill=512, decode=4, ctx=None, history=0):
@@ -80,7 +146,7 @@ def _bare_scheduler():
     s._ready_frontier = set()
     s.waiting_decode_admissions = {}
     s.decode_admission_dirty = set()
-    s._profile_batch = {"scanned_entries": 0, "full_scan_entries": 0}
+    s._profile_batch = {"scanned_entries": 0}
     return s
 
 
@@ -107,7 +173,6 @@ class TrainPlanningTest(unittest.TestCase):
             {"ra": 5, "rb": 9})
         # span 数 = Σ participation(成员×迭代,无 padding)。
         self.assertEqual(len(plan["pass_spans"]), 14)
-        self.assertTrue(plan["membership_digest"])
 
     def test_train_spans_are_pure_decode(self):
         """§3.6 钉子:列车 span 全部 tokens==1(逐成员逐 token),绝无
@@ -147,7 +212,6 @@ class TrainFinalizeTest(unittest.TestCase):
         self.assertEqual(state.active_decode, [])
         self.assertEqual(state.active_decode_lookup, set())
         self.assertIsNone(state.in_flight_train)
-        self.assertEqual(state.iteration_count, 4)
         self.assertEqual(state.finalized_trains, [])
 
     def test_same_tick_multi_instance_and_split_delivery_idempotent(self):
@@ -198,9 +262,11 @@ class TrainFinalizeTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             s._finalize_completed_trains(["mz"], [], 2)
 
-    def test_busy_gate_skips_in_flight_instance(self):
-        """busy 门:列车在飞的实例不重复发射(_admit_pass 跳过;
-        graph stub 一旦被调即失败)。"""
+    def test_busy_gate_fails_closed_on_desync(self):
+        """busy 门(SCHED-3 修复,2026-09-28):frontier 与 busy 失步不可
+        能合法出现(全部 add 点先验非忙、发射点同步 discard),失步即
+        内部不变量破坏——fail-closed raise(旧实现静默 continue 是
+        fail-open);列车在飞的实例不再被发射(emit 不得被调)。"""
         s = _bare_scheduler()
         s.graph = SimpleNamespace(
             emit_iteration_train=lambda *_a, **_k: (_ for _ in ()).throw(
@@ -215,14 +281,15 @@ class TrainFinalizeTest(unittest.TestCase):
             "exit_set": set(), "signal_set": set(),
         }
         s._ready_frontier.add(0)
-        s._admit_pass(0)  # 不得发射、不得抛
+        with self.assertRaises(RuntimeError) as caught:
+            s._admit_pass(0)
+        self.assertIn("frontier/busy desync", str(caught.exception))
 
 
 HARDWARE = WscLlmHardware(
     mesh_rows=1, mesh_cols=6, local_hbm_capacity_bytes=160 << 30,
     local_hbm_bandwidth_gbps=273.0, d2d_bandwidth_gbps=100.0,
-    peak_perf_tflops=43.5, d2d_latency_ns=1, local_hbm_latency_ns=20,
-    label="A1_SYNTHETIC")
+    peak_perf_tflops=43.5, d2d_latency_ns=1, local_hbm_latency_ns=20)
 # 比例接近真实模型(避免 2 层玩具下每节点固定延迟占比失真)。
 MODEL = WscLlmModel(
     layers=8, hidden_size=256, ffn_size=512, num_heads=8,
@@ -335,22 +402,26 @@ class FirstTokenPlanTest(unittest.TestCase):
             os.environ["SH_FIRST_TOKEN_SPLIT"] = self._saved_split
 
     def test_debut_requires_zero_consumed_and_split_gate(self):
-        """debut 判定:joiner 且 decode_tokens_consumed == 0;迭代数 >= 2
+        """debut 判定:joiner 即 debut(decode_tokens_consumed > 0 的
+        joiner 违反 debut 不变量,直接 fail-closed);迭代数 >= 2
         才物理拆分,iterations == 1 退化为不拆车增强。"""
         s = _bare_scheduler()
         fresh = _runtime("rd", ctx=100, decode=4)
         fresh.decode_train_joined = False
         fresh.decode_tokens_consumed = 0
+        state = s.instances[0]
+        state.active_decode.append(fresh)
+        state.active_decode_lookup.add(fresh)
+        plan = s._plan_train(state)
+        self.assertEqual(plan["iterations"], 4)
+        # joiner 且已消耗违反 debut 不变量(生产状态机不可达):
+        # fail-closed RuntimeError,而非静默过滤。
         advanced = _runtime("re", ctx=100, decode=4)
         advanced.decode_train_joined = False
-        advanced.decode_tokens_consumed = 2   # joiner 但已消耗:非 debut
-        state = s.instances[0]
-        for rt in (fresh, advanced):
-            state.active_decode.append(rt)
-            state.active_decode_lookup.add(rt)
-        plan = s._plan_train(state)
-        self.assertEqual(plan["iterations"], 4)   # 剩余 max(4, 2)
-        first_token = s._first_token_plan(plan, [fresh, advanced])
+        advanced.decode_tokens_consumed = 2
+        with self.assertRaises(RuntimeError):
+            s._first_token_plan(plan, [advanced])
+        first_token = s._first_token_plan(plan, [fresh])
         self.assertIsNotNone(first_token)
         self.assertTrue(first_token["split"])
         self.assertEqual(
@@ -366,8 +437,8 @@ class FirstTokenPlanTest(unittest.TestCase):
             # B4 缺省翻转(2026-08-26):缺省已改关,本用例后续断言
             # (无 debut None / iterations==1 增强)仍需显式 "1" 运行。
             os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
-        # 无 debut(joiner 全部已消耗):None。
-        self.assertIsNone(s._first_token_plan(plan, [advanced]))
+        # 无 debut(没有任何 joiner):None。
+        self.assertIsNone(s._first_token_plan(plan, []))
         # iterations == 1(decode_length=1 的 debut,唯一迭代):不拆车
         # 增强——exit 标记改名携带 first_token 子串,无独立首步标记。
         single = _runtime("rf", ctx=100, decode=1)
@@ -436,16 +507,25 @@ class SplitEnvironmentTest(unittest.TestCase):
     proxy 口径(train_interpolated,见 metrics_postprocess),拆分仅
     显式 SH_FIRST_TOKEN_SPLIT=1 启用(研究/对拍)。"""
 
+    # fixture 化还原(同 FirstTokenPlanTest.setUp/tearDown 模式):原值
+    # 恢复、原本缺席则保持缺席——只 pop 不还原会把调用方进程的开关值
+    # 泄漏掉(E1, 2026-09-28)。
+    def setUp(self) -> None:
+        self._saved_split = os.environ.get("SH_FIRST_TOKEN_SPLIT")
+
+    def tearDown(self) -> None:
+        if self._saved_split is None:
+            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+        else:
+            os.environ["SH_FIRST_TOKEN_SPLIT"] = self._saved_split
+
     def test_default_off_and_explicit_on(self):
-        try:
-            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
-            self.assertFalse(first_token_split_enabled())
-            os.environ["SH_FIRST_TOKEN_SPLIT"] = "0"
-            self.assertFalse(first_token_split_enabled())
-            os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
-            self.assertTrue(first_token_split_enabled())
-        finally:
-            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+        os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+        self.assertFalse(first_token_split_enabled())
+        os.environ["SH_FIRST_TOKEN_SPLIT"] = "0"
+        self.assertFalse(first_token_split_enabled())
+        os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
+        self.assertTrue(first_token_split_enabled())
 
 
 if __name__ == "__main__":

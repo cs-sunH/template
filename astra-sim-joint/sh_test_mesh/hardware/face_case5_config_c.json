@@ -6,7 +6,10 @@
   "mesh": {
     "rows": 9,
     "columns": 6,
-    "topology-by-network-dimension": ["Line", "Line"]
+    "topology-by-network-dimension": [
+      "Line",
+      "Line"
+    ]
   },
   "local-hbm": {
     "bandwidth-gbps": 1640.0,
@@ -21,6 +24,11 @@
         "bytes": 171798691840,
         "label": "160 GiB validation extension",
         "note": "Validation-only capacity extension for workloads that require 160 GiB of local HBM per NPU."
+      },
+      "validation-die-64g": {
+        "bytes": 64000000000,
+        "label": "64 GB die-derived validation capacity",
+        "note": "Die-backend aligned capacity: exactly the HBM capacity derived by the die cost library from the die node (4 x 16 GB), required by config_resolver when the die node is present."
       }
     }
   },
@@ -35,16 +43,21 @@
     "npu-selection": "mesh-boundary",
     "logical-pool": "unified-kv-cache-pool"
   },
-  "compute": {
-    "peak-perf-tflops": 261.12
-  },
   "notes": [
     "The physical mesh is row-major with 9 rows and 6 columns.",
     "The analytical network lists dimensions as columns then rows.",
-    "Peak compute is an explicit WSC-LLM comparison-group-C fallback because the FACE Case 5 peak is unpublished.",
-    "D2D latency is modeled as a per-hop adjacent-link latency.",
+    "The die node (die rollout stage 1, 2026-10-03) replaces compute.peak-perf-tflops: peak compute, local-mem bandwidth and capacity are derived by the shared die cost library (mutually exclusive with a compute node). Point ruling (same as the face reference): large cores / 0.75 MB SRAM / 800 mm2 / NoC 512 bit / HBM 4x1 keeps the derived bandwidth strictly continuous with the legacy 1640 GB/s; validation-die-64g mirrors the derived 64 GB capacity, the legacy paper-64gib/validation-160gib entries remain for other uses but fail the die capacity alignment.",
+    "D2D latency is modeled as a per-hop adjacent-link latency. It is independent of the on-die noc-width-bits.",
     "The remote-memory pool is attached to every physical mesh-boundary NPU.",
     "The 512 GB/s remote-memory bandwidth and 100 ns latency are shared simulator assumptions.",
     "The capacity profile describes local HBM placement per NPU."
-  ]
+  ],
+  "die": {
+    "sram-mb-per-core": 0.75,
+    "core-type": "large",
+    "compute-area-mm2": 800,
+    "hbm-per-side": 4,
+    "hbm-sides": 1,
+    "noc-width-bits": 512
+  }
 }

@@ -13,6 +13,13 @@ LABEL maintainer="Jinsun Yoo <jinsun@gatech.edu>"
 
 ### ================== System Setups ======================
 ## Install System Dependencies
+## python3.11 availability (verified 2026-09-26, review infra-9): the package
+## exists for ubuntu:22.04 (jammy) in component universe, pocket -updates
+## (3.11.0~rc1-1~22.04; Launchpad getPublishedBinaries). The official
+## ubuntu:22.04 image ships with universe enabled and the `apt -y update`
+## below refreshes the index, so this apt line builds as-is (no PPA needed).
+## Note: the venv created below uses the image-default `python3` (3.10);
+## python3.11 is installed for explicit `python3.11` callers only.
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt -y update
 RUN apt -y install \
@@ -24,7 +31,7 @@ RUN apt -y install \
     python3.11 python3-pip python3-venv \
     graphviz
 
-## Create Python venv: Required for Python 3.11
+## Create Python venv (uses image-default python3 = 3.10; see note above)
 RUN python3 -m venv /opt/venv/astra-sim
 ENV PATH="/opt/venv/astra-sim/bin:$PATH"
 RUN pip3 install --upgrade pip
@@ -33,6 +40,11 @@ RUN pip3 install --upgrade pip
 ENV PYTHONPATH="/app/astra-sim"
 
 # STG dependencies
+# pytest is intentionally NOT preinstalled (lean runtime image). The Python
+# test-suite's bare pytest-style function cases (e.g.
+# sh_test_mesh/workload/llama2_7b_inference/online/test_propagating_tail.py,
+# 8 cases) are invisible to stdlib unittest discover — install pytest on
+# demand inside the container before running those:  pip install pytest
 RUN pip3 install numpy sympy graphviz pandas
 ### ======================================================
 

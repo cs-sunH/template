@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""decision_bridge.py -- Python 端 FileDecisionBridge 协议 v0 (方案 §4 步骤 1-7).
+"""decision_bridge.py -- Python 端 FileDecisionBridge 协议 v1 (方案 §4 步骤 1-7).
 
 桥接目录 <bridge_dir>/ 由 C++ 先建好(含 req_notify.fifo / resp_notify.fifo,
 "先建 FIFO 再启动双方")。serve_forever 阻塞在 req_notify.fifo 的 read 上
@@ -10,7 +10,9 @@ request 处理: 读 request_<seq>.json(原子发布: 临时文件+rename,不会�
 半截) -> handler(request) -> 写 response_<seq>.json(原子) -> 往
 resp_notify.fifo 写 1 字节(C++ 长连接读端 poll)。handler 抛异常或协议
 错误 => 写带 error 字段的 response、通知 C++、以非 0 退出(fail-closed,
-stderr 留痕);C++ 读到 error 即 abort。C++ 端崩溃/结束 => req_notify.fifo
+stderr 留痕);C++ 读到 error 即 abort。commit_ack 通道的失败落下一个
+必然被读取的槽位 response_<ack_seq+1>(P2-18: ack seq 的 response 槽位
+已被 C++ 消费关闭,写回去永不可达)。C++ 端崩溃/结束 => req_notify.fifo
 写端关闭 => read 返回 EOF => serve_forever 返回 0;resp_notify 写端
 BrokenPipe(C++ 常开读端关闭,运行中途) => BridgePipeError fail-closed
 退出(缺陷 B 修复 2026-08-16:resp 通道双侧长连接,消除按交换开/关握手
@@ -47,7 +49,13 @@ _RESPONSE_FIELDS = (
     "watches",
     "assignments",
     "kv_actions",
-    # 阶段 5 §8.2:touched ranks 集合(缺省 [];online scheduler 总是显式给出)。
+    # future_alarms 与 _fail 错误骨架对齐(C++ 侧容忍缺省,真实 scheduler
+    # 恒显式给出;缺省补 [] 使两套必含字段清单一致)。
+    "future_alarms",
+    # 阶段 5 §8.2:touched ranks 集合。SCHED-10(2026-09-28)注释修正:该
+    # 字段不参与下方 setdefault 缺省(_handle_request 对它 continue)——
+    # 缺席 = C++ 自算 touched ranks 且不校验声明值;online scheduler 总是
+    # 显式给出,fixture 可缺席。原"(缺省 [])"与代码相反。
     "touched_ranks",
 )
 
@@ -67,7 +75,9 @@ def _write_json_atomic(path, payload):
     断电极端场景 fail-closed(整轮重跑,与 campaign 实操一致)。
     """
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as target:
+    # newline="":禁用平台换行翻译,保证发布的 JSON 字节与 dumps 输出
+    # 逐字节一致(同 request journal 的 LF 契约)。
+    with open(tmp, "w", encoding="utf-8", newline="") as target:
         # C3(2026-08-28):紧凑分隔符(separators=(",", ":"))——JSON 语义
         # 不变(C++ 侧 nlohmann 解析空白不敏感),通道字节显著缩小
         # (响应数组占大头;省 I/O 与 C++ 读侧拷贝)。
@@ -121,15 +131,15 @@ class _BoundedSequenceTracker:
 
 
 class BridgeServer:
-    """协议 v0 的 Python 端;用法:
+    """协议 v1 的 Python 端;用法:
 
         server = BridgeServer(bridge_dir)
         server.serve_forever(handler, on_commit_ack=None)
 
     handler(request: dict) -> dict 返回 GraphBatch dict(schema_version/
     batch_id/source_delivery_sequence/nodes/parent_edges/watches/assignments/
-    kv_actions 会被补全缺省)。on_commit_ack(ack: dict) 在收到 commit ack
-    时被调用(provisional 账本 finalize 的挂接点,阶段 3/4 使用)。
+    kv_actions/future_alarms 会被补全缺省)。on_commit_ack(ack: dict) 在收到
+    commit ack 时被调用(provisional 账本 finalize 的挂接点,阶段 3/4 使用)。
     """
 
     def __init__(self, bridge_dir, *, canonical_request_producer=False):
@@ -166,19 +176,25 @@ class BridgeServer:
         # 因而成功 run 只有单一 journal,异常 run 的未 flush 尾部也有界。
         self._request_journal = open(
             os.path.join(bridge_dir, REQUEST_JOURNAL_NAME),
-            "w", encoding="utf-8", buffering=1024 * 1024)
+            # newline="":逐行 JSON 的换行契约固定为单字节 LF,禁用平台
+            # 换行翻译(Windows 文本模式会把 \n 转成 \r\n,污染 C++/校验
+            # 夹具按字节读取的行分隔符)。
+            "w", encoding="utf-8", newline="", buffering=1024 * 1024)
         self._pending_request_paths = []
         self._processing_stats_path = os.path.join(
             bridge_dir, _PROCESSING_STATS_PARTIAL_NAME)
         self._processing_stats_stream = open(
             self._processing_stats_path,
-            "w", encoding="utf-8", buffering=1024 * 1024)
+            "w", encoding="utf-8", newline="", buffering=1024 * 1024)
 
     # ------------------------------------------------------------- helpers --
 
     def stats(self):
-        """阶段 6 §9.1:桥接通道分项汇总(Python 视角)。含每 request 服务
-        时间行列表(per_request),供 online_stats.jsonl 合并。"""
+        """阶段 6 §9.1:桥接通道分项汇总(Python 视角):gil_wait_ns /
+        channel_bytes / forced_flush_count / handler_calls 四键。
+        (2026-10-01 更正:旧 docstring 声称含 per_request 行列表——该数据
+        不在本汇总内,经独立的 per_request_stats() 流式读取,由
+        online_service.py 合并进 online_stats.jsonl。)"""
         return dict(self._stats)
 
     def per_request_stats(self):
@@ -238,6 +254,10 @@ class BridgeServer:
         """
         reqs = []
         acks = []
+        # SCHED-9(2026-09-28):probe 循环自 next_seq 起,contains(seq) =
+        # seq < next_seq 恒 False,原"if not contains"守卫恒真,删。旧 seq
+        # 的过滤仍由 listdir 回退路径的 contains 守卫承担(那条是活过滤:
+        # journal 未回收的散装 request 尾部 seq < next_seq)。
         req_probe = self._request_sequences.next_seq
         while True:
             probe = os.path.join(
@@ -245,8 +265,7 @@ class BridgeServer:
                 _REQUEST_PREFIX + str(req_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if not self._request_sequences.contains(req_probe):
-                reqs.append(req_probe)
+            reqs.append(req_probe)
             req_probe += 1
         ack_probe = self._ack_sequences.next_seq
         while True:
@@ -255,8 +274,7 @@ class BridgeServer:
                 _ACK_PREFIX + str(ack_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if not self._ack_sequences.contains(ack_probe):
-                acks.append(ack_probe)
+            acks.append(ack_probe)
             ack_probe += 1
         if reqs or acks:
             return sorted(reqs), sorted(acks)
@@ -300,7 +318,13 @@ class BridgeServer:
     def _handle_request(self, seq, handler):
         t0 = time.monotonic_ns()
         path = os.path.join(self.bridge_dir, _REQUEST_PREFIX + str(seq) + _JSON_SUFFIX)
-        self._request_sequences.validate_new(seq)
+        # SCHED-9(2026-09-28):重复 seq 幂等忽略(模块头协议规则"旧 seq
+        # 重复幂等忽略")——尊重 validate_new 的重复判定并提前返回,不得
+        # 二次调用 handler/二次记账。当前调用图不可达(_new_files 的 probe
+        # 自 next_seq 起、listdir 回退滤 contains,处理即 mark 推进),本
+        # 分支钉住协议方向:真到达时不再走"静默重复处理"的旧错误方向。
+        if not self._request_sequences.validate_new(seq):
+            return
         try:
             with open(path, "r", encoding="utf-8") as source:
                 raw_request = source.read()
@@ -358,7 +382,10 @@ class BridgeServer:
 
     def _handle_ack(self, seq, on_commit_ack):
         path = os.path.join(self.bridge_dir, _ACK_PREFIX + str(seq) + _JSON_SUFFIX)
-        self._ack_sequences.validate_new(seq)
+        # SCHED-9:同 _handle_request——重复 ack seq 幂等忽略(当前调用图
+        # 不可达,分支钉住协议方向,防静默重复落账)。
+        if not self._ack_sequences.validate_new(seq):
+            return
         try:
             ack = _read_json_atomic(path)
         except (OSError, ValueError) as exc:
@@ -379,7 +406,13 @@ class BridgeServer:
             pass  # 尽力删除;失败不阻断(下一轮 _new_files 不再列出它)
 
     def _fail(self, seq, message):
-        """写带 error 字段的 response、通知 C++、非 0 退出(fail-closed)。"""
+        """写带 error 字段的 response、通知 C++、非 0 退出(fail-closed)。
+
+        seq 语义 = **C++ 下一步必然读取的 response 槽位**。request 通道
+        失败时即当前 req_seq(C++ 正阻塞在 wait_response_byte(seq) 上)。
+        commit_ack 通道不适用本槽位(ack_<K> 在场 = response_<K> 已被 C++
+        消费并 unlink)——ack 失败走 _fail_after_ack(P2-18)。
+        """
         # 缺陷 B 修复配套:F1 现场 python.log 0 字节、无可诊断性——_fail 现在
         # 先在 stderr 留痕(错误路径的证据行),再走 fail-closed 收尾。
         print("decision_bridge: fail-closed at seq {}: {}".format(
@@ -400,6 +433,52 @@ class BridgeServer:
         try:
             _write_json_atomic(
                 os.path.join(self.bridge_dir, _RESPONSE_PREFIX + str(seq) + _JSON_SUFFIX),
+                response)
+            self._notify_response()
+        except OSError:
+            pass  # 已尽力;以非 0 退出为准
+        sys.exit(1)
+
+    def _fail_after_ack(self, ack_seq, message):
+        """ack 处理失败的 fail-closed——P2-18(2026-09-28) 修复"错误永不可达"。
+
+        机理: ack_<K> 在场 = C++ 已完整消费 response_<K> 并 unlink
+        (backpressure 契约: C++ 先读 response 再发 commit_ack),其 response
+        槽位已关闭。把 error 写到 response_<K> 永不可达;而注入的 notify
+        字节反被 C++ 当作下一笔交付(K+1)的就绪信号——C++ 醒来读不到
+        response_<K+1>,以指向错误序号的 "response missing or corrupt"
+        abort,真实错误丢失(旧分支注释自述"不让 C++ 只靠 FIFO EPIPE/超时
+        兜底",机制本身失效)。
+
+        修复: 按 C++ deliver_and_receive 的消费序(wait_response_byte(K+1)
+        → read response_<K+1> → 先校验 source_delivery_sequence==K+1、
+        error 非空即 bridge_fatal),把 error 落到下一个必然被读取的槽位
+        response_<ack_seq+1>(先原子写文件、后发 notify 字节——C++ 醒来即
+        读到携带真实错误的 response,确定性 abort;该响应不进入结构提交,
+        source_delivery_sequence=K+1 仅为槽位路由)。若 K 为最后一笔交付,
+        C++ 无 K+1 读取点、正常收尾——本进程仍以非 0 退出,runner 以
+        PY_EXIT 判失败(python.log 留真实错误),两侧均不会误报成功。
+        """
+        print("decision_bridge: fail-closed at ack seq {} (error routed to "
+              "next response slot {}): {}".format(
+                  ack_seq, ack_seq + 1, message), file=sys.stderr)
+        response = {
+            "schema_version": SCHEMA_VERSION,
+            "batch_id": 0,
+            "source_delivery_sequence": ack_seq + 1,
+            "nodes": [],
+            "parent_edges": [],
+            "watches": [],
+            "assignments": [],
+            "kv_actions": [],
+            "future_alarms": [],
+            "touched_ranks": [],
+            "error": message,
+        }
+        try:
+            _write_json_atomic(
+                os.path.join(self.bridge_dir, _RESPONSE_PREFIX
+                             + str(ack_seq + 1) + _JSON_SUFFIX),
                 response)
             self._notify_response()
         except OSError:
@@ -442,7 +521,18 @@ class BridgeServer:
                     try:
                         self._handle_ack(ack_seq, on_commit_ack)
                     except BridgeError as exc:
-                        self._fail(ack_seq, "ack {}: {}".format(ack_seq, exc))
+                        # P2-18: ack_<K> 的 response 槽位已被 C++ 消费关闭,
+                        # error 落到下一个必被读取的槽位 K+1(见
+                        # _fail_after_ack;写到 K 永不可达)。
+                        self._fail_after_ack(
+                            ack_seq, "ack {}: {}".format(ack_seq, exc))
+                    except Exception as exc:  # noqa: BLE001 -- ack 应用异常
+                        # 与 request 通道对称:on_commit_ack 抛出的非桥异常也
+                        # 携带结构化 error fail-closed——经下一 response 槽位
+                        # (K+1)送达 C++,不让 C++ 侧只靠 FIFO EPIPE/超时兜底
+                        # (P2-18: 旧实现写已消费的槽位 K,错误永不可达)。
+                        self._fail_after_ack(
+                            ack_seq, "{}: {}".format(type(exc).__name__, exc))
                 for req_seq in reqs:
                     try:
                         self._handle_request(req_seq, handler)

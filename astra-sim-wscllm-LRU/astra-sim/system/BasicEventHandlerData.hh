@@ -17,7 +17,9 @@ class BasicEventHandlerData : public CallData {
     BasicEventHandlerData(int sys_id, EventType event);
 
     int sys_id;
-    EventType event;
+    // NSDMI: the default constructor below never assigns this member, so a
+    // default-built handler must not carry an indeterminate enum value.
+    EventType event = EventType::CallEvents;
 };
 
 }  // namespace AstraSim

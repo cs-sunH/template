@@ -28,6 +28,8 @@ The static binary never constructs a bridge (zero impact on the baseline).
 #include <cstring>
 #include <fstream>
 #include <poll.h>
+#include <set>
+#include <vector>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -54,7 +56,16 @@ std::string reason_name(const DecisionReason reason) {
         case DecisionReason::REQUEST_COMPLETE:
             return "REQUEST_COMPLETE";
     }
-    return "UNKNOWN";
+    // Dead-code cleanup (2026-09-29): the switch is exhaustive over
+    // DecisionReason; the old trailing `return "UNKNOWN";` was unreachable
+    // and existed only to pacify -Wreturn-type. An out-of-enum value is a
+    // programming error: fail loud instead of printing a bogus reason name
+    // into the request JSON (same idiom as bridge_fatal).
+    std::fprintf(stderr,
+                 "[Error] (execution_driven/bridge) reason_name: unreachable "
+                 "reason value %d\n",
+                 static_cast<int>(reason));
+    std::abort();
 }
 
 // Recursive mkdir(2) loop (no std::filesystem dependency).
@@ -99,23 +110,61 @@ nlohmann::json read_json_file(const std::string& path) {
     if (!in) {
         throw std::runtime_error("cannot open " + path);
     }
+    // Strict JSON load (2026-09-30, ported from the joint repo
+    // DecisionBridge.cc read_json_file): istream operator>> parses in
+    // NON-strict mode -- it silently consumes the FIRST JSON value and
+    // leaves trailing bytes unread, and the DOM build last-wins on
+    // duplicate object keys. These files are machine-written by paired
+    // tooling, so trailing content or a duplicate key is producer
+    // corruption, not a legal shape. json::parse in its default strict
+    // mode rejects trailing bytes outright; the stateful parse callback
+    // rejects a repeated key inside one object.
+    struct KeyGuard {
+        std::vector<std::set<std::string>> stack;
+        std::string duplicate;
+        bool operator()(int, nlohmann::json::parse_event_t event,
+                        nlohmann::json& parsed) {
+            using EVT = nlohmann::json::parse_event_t;
+            if (event == EVT::object_start) {
+                stack.emplace_back();
+            } else if (event == EVT::key) {
+                if (!stack.back().insert(parsed.get<std::string>()).second) {
+                    duplicate = parsed.get<std::string>();
+                }
+            } else if (event == EVT::object_end && !stack.empty()) {
+                stack.pop_back();
+            }
+            return true;  // observe only; never discard subtree
+        }
+    } guard;
     nlohmann::json value;
-    in >> value;
-    if (in.bad()) {
-        throw std::runtime_error("corrupt JSON in " + path);
+    try {
+        value = nlohmann::json::parse(in, guard);
+    } catch (const nlohmann::json::exception& e) {
+        throw std::runtime_error("corrupt JSON in " + path + ": " + e.what());
+    }
+    if (!guard.duplicate.empty()) {
+        throw std::runtime_error("duplicate JSON key \"" + guard.duplicate +
+                                 "\" in " + path);
     }
     return value;
 }
 
 // poll() helper: 0 = timeout, 1 = readable (POLLIN or POLLHUP), -1 = error.
-// timeout_ms == 0 means wait forever.
+// timeout_ms == 0 means wait forever. L9 (2026-09-29): EINTR retries the
+// poll instead of surfacing as a fatal channel error -- a signal
+// interruption is not a bridge failure (the timeout restarts on the retry;
+// the bound stays a liveness bound, not an exact deadline).
 int wait_readable(int fd, int timeout_ms) {
     struct pollfd pfd;
     pfd.fd = fd;
     pfd.events = POLLIN | POLLHUP;
     pfd.revents = 0;
     const int ms = (timeout_ms == 0) ? -1 : timeout_ms;
-    const int r = ::poll(&pfd, 1, ms);
+    int r;
+    do {
+        r = ::poll(&pfd, 1, ms);
+    } while (r < 0 && errno == EINTR);
     if (r == 0) {
         return 0;
     }
@@ -339,6 +388,40 @@ void FileDecisionBridge::write_file_atomic(const std::string& path,
 }
 
 void FileDecisionBridge::open_notify() {
+    // Defect-B fix (2026-08-16): open the resp_notify READ end once and hold
+    // it for the bridge lifetime (mirrors the req write end below). A
+    // nonblocking read open of a FIFO succeeds immediately, writer or not;
+    // Python opens its lifetime write end at serve_forever startup, so the
+    // two sides pair without a handshake. Per-exchange open/close on this
+    // channel is what raced: a fresh read fd registered in poll exactly
+    // when the writer's 1->0 close transition landed with an empty buffer
+    // woke with POLLHUP/read()==0 (the false "Python side crashed", F1) and
+    // the mirror race EPIPE'd Python's write (F7-style handshake wedges).
+    // With both fds long-lived there are no mid-run writer/reader
+    // transitions at all: EOF on this fd can only be the peer process
+    // dying.
+    //
+    // ed-bridge-E1 (2026-09-30, same-batch pair with decision_bridge.py):
+    // this read end now opens BEFORE the req write-end retry loop below.
+    // Open-order principle: every blocking FIFO open must be satisfiable by
+    // an end its peer opens UNCONDITIONALLY (without first waiting on this
+    // process). The old order (req write retry first, resp read second)
+    // left a startup window against a peer that opens its resp WRITE end
+    // before its req READ end: the peer blocks on resp_notify (no reader
+    // yet) while this side spins in the ENXIO loop waiting for exactly that
+    // peer's req reader -- a mutual wait that only the bridge timeout
+    // aborts. Opening the read end first removes the window for either
+    // peer open order: the O_RDONLY|O_NONBLOCK open never waits, so the
+    // peer's resp write open always has its reader, and only the req
+    // channel then rendezvous-blocks, which is the one wait both sides
+    // already handle (retry here, blocking open on the Python side).
+    if (resp_notify_fd_ < 0) {
+        const std::string path = bridge_dir_ + "/resp_notify.fifo";
+        resp_notify_fd_ = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
+        if (resp_notify_fd_ < 0) {
+            bridge_fatal("open " + path + ": " + std::strerror(errno));
+        }
+    }
     if (req_notify_fd_ < 0) {
         // O_WRONLY|O_NONBLOCK on a FIFO with no reader fails with ENXIO, so
         // retry until the Python reader's blocking open lands (bounded by
@@ -362,25 +445,6 @@ void FileDecisionBridge::open_notify() {
                 bridge_fatal("timeout waiting for Python to open " + path);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    }
-    // Defect-B fix (2026-08-16): open the resp_notify READ end once and hold
-    // it for the bridge lifetime (mirrors the req write end above). A
-    // nonblocking read open of a FIFO succeeds immediately, writer or not;
-    // Python opens its lifetime write end right after its req read end open
-    // (decision_bridge.py serve_forever), so the two sides pair without a
-    // handshake. Per-exchange open/close on this channel is what raced: a
-    // fresh read fd registered in poll exactly when the writer's 1->0 close
-    // transition landed with an empty buffer woke with POLLHUP/read()==0
-    // (the false "Python side crashed", F1) and the mirror race EPIPE'd
-    // Python's write (F7-style handshake wedges). With both fds long-lived
-    // there are no mid-run writer/reader transitions at all: EOF on this fd
-    // can only be the peer process dying.
-    if (resp_notify_fd_ < 0) {
-        const std::string path = bridge_dir_ + "/resp_notify.fifo";
-        resp_notify_fd_ = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
-        if (resp_notify_fd_ < 0) {
-            bridge_fatal("open " + path + ": " + std::strerror(errno));
         }
     }
 }
@@ -430,8 +494,8 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
                          "delivery_sequence=" +
                          std::to_string(seq) + ")");
         }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            continue;  // spurious wake: re-enter the poll
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            continue;  // spurious wake or signal interruption: re-enter poll
         }
         bridge_fatal("read resp_notify.fifo: " +
                      std::string(std::strerror(errno)));
@@ -446,14 +510,29 @@ void FileDecisionBridge::notify_python() {
     }
     // Ignore SIGPIPE around the write so a dead Python surfaces as EPIPE
     // (fail-closed message) instead of silently killing the simulator.
+    // (2026-10-01) Preinitialize old_action to SIG_DFL semantics: if the
+    // first sigaction failed, restoring an uninitialized struct would be
+    // UB (unreachable with a legal SIGPIPE request, but the restore below
+    // reads old_action unconditionally).
     struct sigaction old_action;
     struct sigaction ignore_action;
+    std::memset(&old_action, 0, sizeof(old_action));
+    old_action.sa_handler = SIG_DFL;
     std::memset(&ignore_action, 0, sizeof(ignore_action));
     ignore_action.sa_handler = SIG_IGN;
     ::sigemptyset(&ignore_action.sa_mask);
     ::sigaction(SIGPIPE, &ignore_action, &old_action);
     const char byte = '\n';
-    const ssize_t n = ::write(req_notify_fd_, &byte, 1);
+    // L9 (2026-09-29): EINTR/EAGAIN retry the 1-byte doorbell write instead
+    // of failing the bridge -- a signal interruption (or a transiently full
+    // FIFO buffer under the 1:1 backpressure contract) is retryable, not a
+    // dead peer. The channel is one byte per round trip, so the retry
+    // cannot spin in practice.
+    ssize_t n;
+    do {
+        n = ::write(req_notify_fd_, &byte, 1);
+    } while (n < 0 &&
+             (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK));
     ::sigaction(SIGPIPE, &old_action, nullptr);
     if (n < 0) {
         if (errno == EPIPE) {
@@ -475,8 +554,11 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // fixtures that never call open_notify(); the official entry calls it at
     // startup). The req write open below retries until Python's req reader
     // lands, so by the time notify_python() writes the doorbell Python's
-    // serve loop is guaranteed running (its resp write end open follows its
-    // req read end open -- decision_bridge.py).
+    // serve loop is guaranteed running. ed-bridge-E1 (2026-09-30): the
+    // resp read end now opens first inside open_notify, so this guarantee
+    // holds for EITHER Python-side open order (decision_bridge.py opens its
+    // lifetime resp write end without ever waiting on this process's req
+    // channel).
     notify_python();
     // Wait for the response byte on the LIFETIME read end (defect-B fix):
     // no per-exchange open/close handshake anymore; read()==0 can only be
@@ -560,11 +642,15 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // B1 (2026-08-23): the response's channel_bytes contribution is the
     // REAL on-disk file size (stat, taken before the unlink below). The
     // previous resp.dump().size() re-serialized the whole response just to
-    // count bytes and reported the compact-dump length, which is NOT the
-    // byte count that crossed the channel (the Python side writes spaced
-    // json.dump files; the request side already counts exact body bytes at
-    // write_file_atomic). Statistical field only (allowed-diff category):
-    // the value shifts slightly upward to the true bridged bytes.
+    // count bytes. The response file is Python-owned and C++ never
+    // re-serializes it, so the stat is the authoritative byte count that
+    // crossed the channel. (Comment fix 2026-09-30: the old rationale --
+    // "Python writes spaced json.dump, so the file is larger than the
+    // compact dump" -- is stale; Python now writes compact JSON
+    // (json.dumps separators=(",",":")) like write_file_atomic here, but
+    // the stat-based rule is serializer-independent and unchanged.) The
+    // request side already counts exact body bytes at write_file_atomic.
+    // Statistical field only (allowed-diff category).
     struct stat response_stat {};
     if (::stat(response_path(seq).c_str(), &response_stat) != 0) {
         bridge_fatal("stat response " + response_path(seq) + ": " +

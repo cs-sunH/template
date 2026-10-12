@@ -28,7 +28,10 @@ test -- no network simulation, no baseline artifacts touched:
           by the B.3 cleanup (2026-09-05) -- collection always on): quiescent-point
           collection of finished childless nodes, parent retention while a
           child is unfinished, dead-parent no-op onto erased ids, and the
-          gc-off (default) pre-M2 never-erase behavior.
+          gc-off (default) pre-M2 never-erase behavior. "Always on" refers
+          to the committer path, which enables collection explicitly; a
+          bare NodeStore keeps GC off by default, which is the arm this
+          fixture drives directly.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_NodeStoreTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -77,7 +80,7 @@ bool contains(const std::vector<uint64_t>& ids, uint64_t id) {
 // NodeStore unit semantics.
 void test_node_store() {
     NodeStore store;
-    expect(store.empty(), "A: empty() initially true");
+    expect(store.retained_count() == 0, "A: store initially empty");
     expect(store.pending_count() == 0, "A: pending_count() initially 0");
 
     OnlineNode n;
@@ -88,7 +91,7 @@ void test_node_store() {
     expect(id1 == 1 && id2 == 2, "A: add_node assigns 1, 2");
     expect(store.next_auto_id() == 3,
            "A: next_auto_id exposes the following automatic id");
-    expect(!store.empty(), "A: non-empty after adds");
+    expect(store.retained_count() == 2, "A: non-empty after adds");
     expect(store.pending_count() == 2, "A: pending_count() == 2");
     expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2}),
            "A: both nodes free, ascending");
@@ -149,8 +152,10 @@ void test_node_store() {
     expect(contains(store.resolve_free_nodes(), idd),
            "A: edge to finished parent does not block child");
 
-    // DepKind is accepted and stored per edge (all resolve identically in
-    // the first version; documented in NodeStore.hh).
+    // DepKind is accepted but currently IGNORED, not stored per edge: all
+    // kinds resolve identically as plain precedence in the first version
+    // (the parameter only reserves the signature for the later fence
+    // upgrade; documented in NodeStore.hh).
     OnlineNode fence_a;
     fence_a.name = "fence-a";
     OnlineNode fence_b;
@@ -164,8 +169,9 @@ void test_node_store() {
     expect(contains(store.resolve_free_nodes(), fb),
            "A: Enabled edge releases on finish");
 
-    // 7 nodes stored so far (1, 2, 7, 3=idc, 4=idd, 5=fa, 6=fb);
-    // finished so far: 1, 3, 5 -> 4 pending.
+    // 7 nodes stored so far (1, 2, 7, 8=idc, 9=idd, 10=fa, 11=fb --
+    // the explicit global_id 7 advanced the automatic stream to 8);
+    // finished so far: 1, 8, 10 -> 4 pending.
     expect(store.pending_count() == 4, "A: pending_count() == 4");
     store.finish_node(2);
     store.finish_node(7);

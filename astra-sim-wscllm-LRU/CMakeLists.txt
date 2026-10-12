@@ -20,9 +20,7 @@ endif()
 # Setup project
 project(AstraSim)
 
-# Build only the vendored dependency targets needed by the simulator. Keeping
-# yaml-cpp in-tree makes a clean checkout reproducible without a configure-time
-# network download.
+# Build only the vendored dependency targets needed by the simulator.
 set(FMT_DOC OFF CACHE BOOL "" FORCE)
 set(FMT_TEST OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/fmt")
@@ -38,10 +36,19 @@ set(SPDLOG_BUILD_TESTS_HO OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/spdlog")
 
+# Keeping yaml-cpp in-tree makes a clean checkout reproducible without a
+# configure-time network download.
 set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/yaml-cpp")
+
+# die-internal cost model library (die内仿真器设计文档 §8.1; vendored
+# byte-identical with the face reference implementation). Builds the
+# die_model static library, the die_model_cabi shared target and their unit
+# tests; the target is linked into AstraSim below so the runtime stages can
+# adopt it incrementally.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/die_model")
 
 
 # Find Protobuf
@@ -58,7 +65,9 @@ else()
 endif()
 
 # Files to compile
-file(GLOB srcs
+# H1(2026-09-30): CONFIGURE_DEPENDS 与另两份 CMakeLists(前端/后端)
+# 同款——裸 GLOB 的新增 .cc 对增量构建不可见(链接错/行为陈旧、零诊断)。
+file(GLOB srcs CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/*.cc"
@@ -81,6 +90,9 @@ add_library(AstraSim STATIC ${srcs})
 target_link_libraries(AstraSim PUBLIC fmt::fmt)
 target_link_libraries(AstraSim PUBLIC spdlog::spdlog)
 target_link_libraries(AstraSim PUBLIC yaml-cpp)
+# PUBLIC: AstraSim consumers see extern/die_model/include (DieModel.hh) and
+# the shared extern/helper nlohmann/json include via die_model's interface.
+target_link_libraries(AstraSim PUBLIC die_model)
 
 # Same as above.
 if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")
@@ -113,10 +125,14 @@ set_target_properties(AstraSim
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
 )
 
+# Enable testing unconditionally at top-level scope (F2/TEST-01 scope fix,
+# 2026-09-26): add_test() registrations in this tree must never depend on a
+# build option being ON.
+enable_testing()
+
 option(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST
        "Build the communicator-scoped OfflineGreedy schedule journal test" ON)
 if(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST)
-    enable_testing()
     add_executable(AstraSim_OfflineGreedyScheduleJournalTest
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/OfflineGreedyScheduleJournalTest.cc)
     target_link_libraries(AstraSim_OfflineGreedyScheduleJournalTest

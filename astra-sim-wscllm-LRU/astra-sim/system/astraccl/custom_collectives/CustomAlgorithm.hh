@@ -35,7 +35,7 @@ namespace AstraSim {
  */
 class CustomAlgorithm : public Algorithm {
   public:
-    CustomAlgorithm(std::string et_filename, int id, int pos_in_comm, CommunicatorGroup* comm_group);
+    CustomAlgorithm(std::string et_filename, int pos_in_comm, CommunicatorGroup* comm_group);
     virtual ~CustomAlgorithm();
 
     // Runs the collective algorithm. This function is only called once to start
@@ -58,8 +58,6 @@ class CustomAlgorithm : public Algorithm {
     void issue(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
     void issue_dep_free_nodes();
 
-    // Rank Id
-    int id;
     // ET Feeder for the Chakra ET for this specific communication & rank.
     // This is separate from the ET Feeder in the Workload layer, which is used
     // to traverse the whole workload Chakra ET.

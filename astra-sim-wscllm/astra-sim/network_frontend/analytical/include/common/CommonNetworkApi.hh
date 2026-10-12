@@ -15,11 +15,16 @@ LICENSE file in the root directory of this source tree.
 #include <memory>
 #include <vector>
 
-using namespace AstraSim;
-using namespace AstraSimAnalytical;
-using namespace NetworkAnalytical;
-
+// The using-directives live INSIDE this header's own namespace (network-F10
+// fix, former file-top globals): a header-scope `using namespace` leaked
+// three namespaces into every includer's global scope. Scoped here, the
+// names resolve for this header's own declarations exactly as before, but
+// the pollution no longer spreads; every .cc that includes this header
+// already declares its own file-scope using-directives.
 namespace AstraSimAnalytical {
+
+using namespace AstraSim;
+using namespace NetworkAnalytical;
 
 /**
  * CommonNetworkApi implements common AstraNetworkAPI interface

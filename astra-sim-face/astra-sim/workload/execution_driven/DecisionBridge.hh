@@ -33,6 +33,20 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
     1:1 with deliveries (backpressure: one in-flight epoch at a time).
   - seq == delivery_sequence (monotonic epoch number), so request /
     response / commit_ack file names for one epoch all share the same seq.
+  - The commit-ack channel is ONE-WAY (frozen contract): send_commit_ack
+    writes commit_ack_<seq>.json and notifies, and C++ waits for and reads
+    NO ack response -- response_<seq> was already consumed and unlinked
+    inside deliver_and_receive before an ack of that epoch can exist, so
+    there is nothing left for an ack to reply into. A Python-side failure
+    while handling an ack therefore travels ONLY as Python's non-zero
+    exit: C++'s lifetime resp_notify read end hits EOF and C++ aborts
+    with the peer-death message. No ack-response wait may be added.
+  - Error semantics: a Python exception (or protocol failure) during the
+    DELIVERY exchange => response WITH the error field set, notify, then
+    Python exits non-zero; C++ reads the error field from response_<seq>
+    and aborts (fail-closed). An ack-path failure can never travel back
+    this way (see the one-way ack rule above) -- writing a response at
+    the ack's seq would produce a file no one ever reads.
   - Request fields:  {schema_version, delivery_sequence, delivery_epoch,
     tick, deferred_from_tick, reasons[], arrivals[], completed_groups[],
     completed_nodes[], affected_ranks[], snapshot_handle,
@@ -54,9 +68,6 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
     request_id, session_id, turn_index, prefill_length, decode_length,
     inter_request_interval_ns}} -- the committer schedules these through
     RequestIngress::schedule_future_arrival inside the commit.
-  - Error semantics: a Python exception (or protocol failure) => response
-    WITH the error field set, notify, then Python exits non-zero; C++
-    reads the error and aborts (fail-closed).
   - Python crash detection (defect-B fix semantics): EOF (zero bytes) on
     the LIFETIME resp_notify read end, or EPIPE on the req_notify write,
     means the Python process is gone -> C++ aborts with a clear message.
@@ -130,11 +141,16 @@ class DecisionBridge {
     /// Notify Python that the batch with batch_id (epoch seq) was
     /// committed. Python's provisional ledger finalizes on this ack
     /// (step-1-6 pseudocode; the ledger itself lands with step 1-8/1-9).
+    /// Fire-and-forget by contract: writes commit_ack_<seq>.json and
+    /// notifies, and waits for NO response (the one-way ack rule in the
+    /// protocol block above). A Python-side ack failure can therefore
+    /// only surface as Python's non-zero exit (EOF => peer-death abort
+    /// on the next delivery), never as a readable error response.
     virtual void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
                                  bool success) = 0;
 };
 
-/// File-implementation of the v0 protocol (blocking FIFOs, atomic JSON
+/// File-implementation of the v1 protocol (blocking FIFOs, atomic JSON
 /// files, fail-closed error/crash/timeout semantics). timeout_ms == 0
 /// waits forever (the phase-1 default).
 /// C1 (2026-08-29): num_ranks feeds parse_graph_batch's rank-domain checks

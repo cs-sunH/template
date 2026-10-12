@@ -23,6 +23,10 @@
         完成/尾标记三侧）+ remote-read PARTIAL 基可行性分类口径同步
         N1(a) 解除 + quota_oneshot_overflow 计入 run 级配额指标 +
         base_location 空串 fail-closed + 失实 docstring/头注释订正钉。
+  M2（2026-09-26 消融矩阵前置）：动作掩码 JOINT_ALLOWED_ACTIONS 的
+        _classify_physical_feasibility 第二过滤点回归——掩码动作不进
+        物理可行性判定集；掩码剔除唯一物理可行动作 ⇒ structural_
+        infeasible（候选集上限不是强制，fail-closed）。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 online/test_joint_o_batch.py   （或 pytest 同路径）
@@ -63,7 +67,7 @@ from test_joint_quota_integration import (  # noqa: E402
 class O2QuotaEvictionFootprintEnrollmentTest(unittest.TestCase):
     """O2：判据时刻本请求的逐出足迹**不可知**（history_evictions 由准入
     事务产出——受害选择依赖执行期 KV 账本，不做试探性事务即不可前瞻；
-    事务成功才在 :4449 落账，而判据在事务前 :2705 执行）⇒ 判据 demand
+    事务成功才落账，而判据在事务前执行）⇒ 判据 demand
     只含主流程足迹（读流/merge 预留的 per-link max 语义由 N1 批钉死，
     本任务不动判据）。事故链（探针实证）：判据 PASS → 支链 #evict 先入
     册占掉末槽 → 主流程 #readplan 入册 FAIL → LinkQuotaError → 调用方
@@ -271,8 +275,10 @@ class O3MergeTailGateExpansionTest(unittest.TestCase):
         self.assertFalse(plan["merge_tail_gated"])
 
     def test_gated_decode_train_excluded_from_factor_channels(self):
-        # 生产核销路径：门控列车的 emit→核销 span 不进 JCM 因子与 face
-        # γ（修前 decode 分支无 merge_tail_gated 排除 ⇒ 污染样本入样）。
+        # 生产核销路径：门控列车的 emit→核销 span 不进统一服务样本账本
+        # 与 face γ（修前 decode 分支无 merge_tail_gated 排除 ⇒ 污染样
+        # 本入样）。§8.1 单账本（2026-09-30 修复）：唯一入样点 = 统一
+        # recorder——门控列车在本分支前早退，账本零触碰。
         def mutate(s):
             s._pending_merge_alarms["batch_train_merge_r_x"] = {
                 "request_id": "r_x", "instance_index": 0,
@@ -280,15 +286,20 @@ class O3MergeTailGateExpansionTest(unittest.TestCase):
         s, state, plan = self._emit_pure_decode_train(mutate)
         self.assertTrue(plan["merge_tail_gated"])
         s._observe_service_factors(state, plan, 200)
-        self.assertNotIn("decode_factor", s._joint_factors._pending)
+        recorder = getattr(s, "_joint_service_samples", None)
+        self.assertTrue(
+            recorder is None
+            or (not recorder.updates and not recorder._pending))
         self.assertTrue(s.kv_manager.service_factors.cold_start)
 
     def test_ungated_decode_train_feeds_factor_channels(self):
-        # 对照组：无门控 ⇒ 纯 decode 样本正常入样（排除不是无条件丢弃）。
+        # 对照组：无门控 ⇒ 纯 decode 样本正常入统一 recorder（排除不
+        # 是无条件丢弃；同刻汇总缓冲键 = (类别, tick)）。
         s, state, plan = self._emit_pure_decode_train(lambda s: None)
         self.assertFalse(plan["merge_tail_gated"])
         s._observe_service_factors(state, plan, 200)
-        self.assertIn("decode_factor", s._joint_factors._pending)
+        self.assertIn(
+            ("decode", 200), s._joint_service_samples._pending)
 
 
 # ===================================================== 任务 3（O6①）==
@@ -609,13 +620,14 @@ class O7CoverageDecisionDegradationKeysTest(unittest.TestCase):
             "telemetry_degradation"]
 
     def test_legacy_binary_fallback_visible(self):
-        # 旧二进制：全样本无 active_flows ⇒ 速率条目无流数配套。
+        # 旧二进制：全样本无 active_flows ⇒ 速率条目无流数配套——
+        # D13：流数显式未知（除数退在册流近似，无 capacity/速率回退）。
         self._ingest([
             self._sample(0),
             self._sample(1),
         ])
         block = self._degradation()
-        self.assertEqual(block["legacy_rate_divisor_entries"], 2)
+        self.assertEqual(block["unknown_flow_count_entries"], 2)
         self.assertEqual(block["flow_count_only_entries"], 0)
         self.assertEqual(block["zero_rate_samples_dropped"], 0)
 
@@ -624,7 +636,7 @@ class O7CoverageDecisionDegradationKeysTest(unittest.TestCase):
         self._ingest([self._sample(0, served=0, active=500, flows=2.0)])
         block = self._degradation()
         self.assertEqual(block["flow_count_only_entries"], 1)
-        self.assertEqual(block["legacy_rate_divisor_entries"], 0)
+        self.assertEqual(block["unknown_flow_count_entries"], 0)
         self.assertEqual(block["zero_rate_samples_dropped"], 1)
 
     def test_clean_full_coverage_no_degradation(self):
@@ -634,7 +646,7 @@ class O7CoverageDecisionDegradationKeysTest(unittest.TestCase):
             self._sample(1, flows=2.0),
         ])
         block = self._degradation()
-        self.assertEqual(block["legacy_rate_divisor_entries"], 0)
+        self.assertEqual(block["unknown_flow_count_entries"], 0)
         self.assertEqual(block["flow_count_only_entries"], 0)
         self.assertEqual(block["zero_rate_samples_dropped"], 0)
 
@@ -696,6 +708,11 @@ class EvictionWatchSettlementTest(unittest.TestCase):
         scheduler._joint_flows = _RecordingOwnerRegistry()
         scheduler._pool_ports = _RecordingOwnerRegistry()
         scheduler._hbm_ports = _RecordingOwnerRegistry()
+        # M4：_on_eviction_watch 落 kv_eviction_done 披露行——替身对齐
+        # 决策日志初值（F6 销账先例：替身漏设 = AttributeError）。
+        scheduler.online_log_count = 0
+        scheduler.decision_log_sink = None
+        scheduler.online_log_rows = []
         return scheduler
 
     def test_each_eviction_watch_releases_only_its_own_handle(self):
@@ -787,7 +804,10 @@ class O10RunEndZeroLedgerAssertionTest(unittest.TestCase):
         scheduler._joint_flows = LinkFlowRegistry()
         scheduler.kv_manager = SimpleNamespace(
             tp_degree=2, _sessions={},
-            assert_final_state=lambda: None)
+            assert_final_state=lambda: None,
+            # D09/D20：run 尾暂存 lease 零在册审计（替身恒空账——零账
+            # 断言不误报；F6 教义：接口直达，替身补齐）。
+            staging_leases=lambda: ())
         return scheduler
 
     def test_clean_run_passes(self):
@@ -892,20 +912,52 @@ class O10CreditArmsResidueFailClosedTest(unittest.TestCase):
             model_layers=2, layer_start=0, layer_end=2,
             resident_prefix_layers_before=2,
             resident_prefix_layers_after=2)
-        return ((2, transfer),)
+        # compact 发射要求尾块序列携带冻结 planner tile 区间（生产
+        # 由切片规划器附加 pipeline_tile_runs——单 tile 8B 流送轴）。
+        class _CompactTailBlocks(list):
+            def __init__(self, blocks, runs):
+                super().__init__(blocks)
+                self.pipeline_tile_runs = tuple(runs)
+
+        runs = [{
+            "first_tile": 2, "tile_count": 2,
+            "pass_or_window_ordinal": 1, "source_ordinal": 0,
+            "source_key": "instance:0:layers:0-2",
+            "layer_start": 0, "layer_end": 2,
+            "axis_unit": "stream_bytes", "total_units": 16,
+            "units_per_tile": 8, "tail_units": 8,
+            "shards": [{
+                "global_shard_ordinal": 0, "source_rank": 0,
+                "target_rank": 2, "total_data_bytes": 16,
+                "bytes_per_unit": 1, "noc_path": (0, 1, 2),}],
+        }]
+        # 块 2（即时旁挂，arms 登记）+ 块 3（待发账本登记——残留检
+        # 查的载体）。
+        return _CompactTailBlocks(((2, transfer), (3, transfer)), runs)
 
     def test_registration_rejects_stale_ledger(self):
         builder = self._builder()
         member_plan = {
             "request_id": "r9", "session_id": "s1",
-            "turn_index": 0, "queue_index": 0}
+            "turn_index": 0, "queue_index": 0,
+            # compact 发射的身份种子面（plan_dict 生产同构：decode 阶
+            # generation=1；owner 覆盖源/目标两侧 rank）。
+            "pipeline_identity_seeds": tuple({
+                "request_id": "r9", "stage": "decode",
+                "generation": 1, "stage_epoch": 0, "rank": rank,
+                "staging_allocation_id": 1,
+            } for rank in (0, 2))}
         blocks = self._tail_blocks()
+        # compact 发射的 builder 上下文（生产 _set_context 同构：请求
+        # r9 的 decode 阶段、generation=1——逐 rank builder 设置）。
+        builder._set_context(member_plan, "decode", 1)
         builder._emit_credit_stream_tail(
             member_plan, blocks, stage="remote_credit")
         self.assertIn("r9", builder._credit_arms)
         # 前序列车尾标记未结清（残留）⇒ 再登记 fail-closed（修前
-        # setdefault 静默吞并旧账）。
-        with self.assertRaisesRegex(RuntimeError, "still holds blocks"):
+        # setdefault 静默吞并旧账；compact 发射的信息面 = 待发 tile
+        # 账本）。
+        with self.assertRaisesRegex(RuntimeError, "still holds tiles"):
             builder._emit_credit_stream_tail(
                 member_plan, blocks, stage="remote_credit")
 
@@ -1004,6 +1056,79 @@ class O12PhysicalFeasibilityRemoteReadPartialTest(unittest.TestCase):
         self.assertNotIn("remote-read", calls)
 
 
+class M2ActionMaskPhysicalFeasibilityTest(unittest.TestCase):
+    """M2（2026-09-26 消融矩阵前置）：_classify_physical_feasibility 与
+    动作掩码 JOINT_ALLOWED_ACTIONS 同步剔除（第二过滤点，易漏）——
+    掩码动作不进物理可行性判定集，与 JCM applicable_actions 尾部过滤
+    同源同开关位（allowed_action_set）；掩码把唯一物理可行动作剔除时
+    按 structural_infeasible 上报（候选集上限不是强制：不可行动作不能
+    rescue 可行性）。"""
+
+    def _scheduler_with_mask(self, allowed_actions):
+        # 与 O12 夹具同款（动作记录器 + 全可行替身），注入掩码配置。
+        from joint.joint_config import JointMechanismConfig
+        scheduler = _scheduler()
+        scheduler.joint_config = JointMechanismConfig(
+            category_mode="typed", scheduler_mode="joint",
+            layer_policy="adaptive", remote_actions="on",
+            allowed_actions=allowed_actions)
+        calls = []
+
+        def _feasible(**kwargs):
+            calls.append(kwargs["action"])
+            return [True, True, True, True]
+
+        scheduler.kv_manager = SimpleNamespace(
+            tp_degree=2, _sessions={},
+            request_hbm_eventually_feasible_instances=_feasible)
+        return scheduler, calls
+
+    def _local_session_view(self):
+        from joint.joint_cost_model import SessionKVView
+        return SessionKVView(
+            session_id="s1", home_instance=1, resident_instance=1,
+            location="local_hbm", history_tokens=100,
+            resident_prefix_layers=4,
+            history_bytes_by_tp_rank=(400, 400),
+            missing_bytes_by_tp_rank=(0, 0))
+
+    def test_default_all_actions_judged(self):
+        # 缺省 "all"：四动作全进判定集（零漂移）。
+        scheduler, calls = self._scheduler_with_mask("all")
+        structural, _detail = scheduler._classify_physical_feasibility(
+            _make_runtime("r9"), self._local_session_view())
+        self.assertFalse(structural)
+        self.assertEqual(
+            calls, ["stay", "recompute", "copy", "remote-read"])
+
+    def test_masked_action_excluded_from_judgment_set(self):
+        # 掩码 {stay,recompute}：copy/remote-read 不进判定集（即便替身
+        # 判其物理可行）——与计价侧剔除同开关位。
+        scheduler, calls = self._scheduler_with_mask("stay,recompute")
+        scheduler._classify_physical_feasibility(
+            _make_runtime("r9"), self._local_session_view())
+        self.assertEqual(calls, ["stay", "recompute"])
+
+    def test_mask_excluding_only_feasible_action_reports_structural(self):
+        # 掩码把唯一物理可行动作剔除 ⇒ structural_infeasible（候选集
+        # 上限不是强制；fail-closed 非容量拒绝）。替身返回值 = 逐实例
+        # 可行性（copy@0 物理可行，但 copy/remote-read 均被掩码剔除，
+        # 判定集只剩 stay/recompute——两实例皆不可行）。
+        scheduler, calls = self._scheduler_with_mask("stay,recompute")
+
+        def _only_copy_feasible(**kwargs):
+            calls.append(kwargs["action"])
+            return [kwargs["action"] == "copy", False]
+
+        scheduler.kv_manager.request_hbm_eventually_feasible_instances = (
+            _only_copy_feasible)
+        structural, detail = scheduler._classify_physical_feasibility(
+            _make_runtime("r9"), self._local_session_view())
+        self.assertEqual(calls, ["stay", "recompute"])
+        self.assertTrue(structural)
+        self.assertEqual(detail, [])
+
+
 class O12OneshotOverflowRunMetricsTest(unittest.TestCase):
     """O12：quota_oneshot_overflow 事件计入 run 级配额指标
     （joint_decision_metrics 行 quota_events.oneshot_overflows）。"""
@@ -1078,23 +1203,28 @@ class O14JointSessionViewBaseLocationTest(unittest.TestCase):
 
 
 class O12DocstringCorrectionTextPinTest(unittest.TestCase):
-    """O10-e/O10-f：失实 docstring/头注释的订正钉——JCM 已内部按
-    _resident_here 二分 recompute 的 history，"调用方传 history=0"
-    旧表述不得残留。"""
+    """O10-e/O10-f 订正钉 + D10 语义跟钉（v2.0 §6.2，2026-09-26）：
+    recompute span 基恒 0（完整 H+U 重放）取代 O1 驻留二分——失实
+    docstring/头注释不得残留旧二分语义或"调用方传 history=0"表述。"""
 
     def test_prefill_total_load_docstring_current_semantics(self):
         doc = Sh30OnlineScheduler._joint_prefill_total_load_ns.__doc__
-        self.assertIn("_resident_here", doc)
+        # D10：注入点语义 = recompute 恒 0 基（取代 _resident_here
+        # 二分）；旧"调用方传 history=0"失实表述不得残留。
+        self.assertIn("D10", doc)
+        self.assertIn("span 基恒 0", doc)
+        self.assertNotIn("_resident_here", doc)
         self.assertNotIn("调用方传 history=0", doc)
 
     def test_n_batch_header_comment_current_semantics(self):
         path = os.path.join(_ONLINE_DIR, "test_joint_n_batch.py")
         with open(path, encoding="utf-8") as handle:
             header = handle.read(3000)
-        # 旧失实搭配（"JCM fn 消费、recompute 0 基"）不得残留；订正注记
-        # 在案（"驻留二分"）。
+        # 旧失实搭配（"JCM fn 消费、recompute 0 基"）不得残留；D10
+        # 订正注记在案（"取代 O1 驻留二分口径"）。
         self.assertNotIn("JCM fn 消费、recompute 0 基", header)
-        self.assertIn("驻留二分", header)
+        self.assertIn("D10", header)
+        self.assertIn("取代 O1 驻留二分口径", header)
 
 
 if __name__ == "__main__":  # pragma: no cover

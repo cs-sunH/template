@@ -43,6 +43,19 @@ set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/yaml-cpp")
 
+# die-internal cost model library (die内仿真器设计文档 §8.1; joint rollout
+# stage 1, vendored byte-identical with the face reference). Builds the
+# die_model static library, the die_model_cabi shared C ABI target (consumed
+# by sh_test_mesh/config_resolver.py through ctypes) and the library unit
+# tests; the target is linked into AstraSim below so the runtime stages can
+# adopt it incrementally.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/die_model")
+
+# Native joint dual-ledger receiver (joint加速改造 v4): the shared C ABI
+# target libjoint_ledger_cabi.so is consumed by the Python facade
+# (sh_test_mesh/.../joint/native_ledger.py via ctypes).
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/joint_ledger")
+
 
 # Find Protobuf
 # TODO: We want to use the advanced semantics 'protobuf CONFIG REQUIRED'.
@@ -51,6 +64,10 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/yaml-cpp")
 # Therefore, enable 'protobuf CONFIG REQUIRED' only when we are building in Docker.
 # TODO: Find a better way to detect if protobuf has been compiled by source, OR
 # find a way to enable 'protobuf CONFIG REQUIRED' regardless of how protubuf was installed.
+# R5-F7 note (ported from the face repo, 2026-09-30): the comparison is a
+# case-sensitive exact match on the string "True". Intuitive spellings
+# ("true", "TRUE", "1") silently take the system-protobuf branch instead of
+# erroring -- set exactly PROTOBUF_FROM_SOURCE=True or unset it.
 if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")
     find_package(protobuf CONFIG REQUIRED)
 else()
@@ -58,7 +75,9 @@ else()
 endif()
 
 # Files to compile
-file(GLOB srcs
+# L24(2026-09-29 审查修复):GLOB 加 CONFIGURE_DEPENDS——增删源文件后不再
+# 依赖手工重跑 cmake 才能被发现(对齐 face-LRU 仓同位置修复)。
+file(GLOB srcs CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/*.cc"
@@ -66,13 +85,43 @@ file(GLOB srcs
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/logical_topology/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/collective_algorithm/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/custom_collectives/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/memory/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/common/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/third_party/utils/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/feeder_v3/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/remote_memory_backend/analytical/*.cc")
+
+# Compact joint pipeline algebra is a single core library shared by the
+# simulator and native projection ABI. Keep these sources out of both the
+# root source glob and the analytical frontend's execution-driven glob so an
+# executable never receives duplicate definitions.
+set(joint_pipeline_core_sources
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/PipelineDescriptor.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/PipelineKernel.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/NativeProjection.cc")
+list(REMOVE_ITEM srcs ${joint_pipeline_core_sources})
+add_library(joint_pipeline_core STATIC ${joint_pipeline_core_sources})
+target_include_directories(joint_pipeline_core
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/extern/helper")
+set_target_properties(joint_pipeline_core PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+target_link_libraries(joint_pipeline_core PUBLIC die_model)
+target_compile_options(joint_pipeline_core PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>)
+
+set(joint_projection_api_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/NativeProjectionCApi.cc")
+list(REMOVE_ITEM srcs ${joint_projection_api_source})
+add_library(joint_projection SHARED ${joint_projection_api_source})
+target_link_libraries(joint_projection PRIVATE joint_pipeline_core)
+target_include_directories(joint_projection PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(joint_projection PRIVATE JOINT_PROJECTION_BUILD)
+set_target_properties(joint_projection PROPERTIES
+    OUTPUT_NAME joint_projection
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # Compile AstraSim Library
 add_library(AstraSim STATIC ${srcs})
@@ -81,6 +130,10 @@ add_library(AstraSim STATIC ${srcs})
 target_link_libraries(AstraSim PUBLIC fmt::fmt)
 target_link_libraries(AstraSim PUBLIC spdlog::spdlog)
 target_link_libraries(AstraSim PUBLIC yaml-cpp)
+# PUBLIC: AstraSim consumers see extern/die_model/include (DieModel.hh) and
+# the shared extern/helper nlohmann/json include via die_model's interface.
+target_link_libraries(AstraSim PUBLIC die_model)
+target_link_libraries(AstraSim PUBLIC joint_pipeline_core)
 
 # Same as above.
 if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")
@@ -112,3 +165,48 @@ set_target_properties(AstraSim
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
 )
+
+# CTest entry point (die rollout stage 1): this repository's default
+# configure historically had zero ctest entries (regression runs drive the
+# test binaries directly by path, per README §6), so no root-level
+# enable_testing() existed. The vendored extern/die_model registers its own
+# library tests and the die backend registers its three hermetic frontend
+# fixtures through add_test(); enable_testing() here (after the vendored
+# add_subdirectory() blocks, same ordering discipline as the die_model
+# CMakeLists note) makes both visible to a plain `ctest` run from the build
+# tree without touching the explicit-binary regression convention.
+enable_testing()
+
+# Pure compact-descriptor parser/algebra fixture (no system or network runtime).
+add_executable(JointPipelineDescriptorTest
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/tests/pipeline_descriptor_test.cc")
+target_link_libraries(JointPipelineDescriptorTest PRIVATE joint_pipeline_core)
+target_compile_options(JointPipelineDescriptorTest PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>)
+set_target_properties(JointPipelineDescriptorTest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_test(NAME JointPipelineDescriptorTest COMMAND JointPipelineDescriptorTest)
+
+# Bounded integer window operator and mutation/invalidation counters. This is
+# deliberately linked to the same immutable descriptor/kernel library used by
+# NativeProjection and the online runtime.
+add_executable(JointPipelineWindowTest
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/tests/pipeline_window_test.cc")
+target_link_libraries(JointPipelineWindowTest PRIVATE joint_pipeline_core)
+target_compile_options(JointPipelineWindowTest PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>)
+set_target_properties(JointPipelineWindowTest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_test(NAME JointPipelineWindowTest COMMAND JointPipelineWindowTest)
+
+# C-ABI integration fixture covers context creation, explicit ownership,
+# fail-closed validation and copied thread/context error lifetime.
+add_executable(NativeProjectionCApiTest
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/tests/native_projection_c_api_test.cc")
+target_link_libraries(NativeProjectionCApiTest PRIVATE joint_projection)
+target_include_directories(NativeProjectionCApiTest PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/extern/helper")
+set_target_properties(NativeProjectionCApiTest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_test(NAME NativeProjectionCApiTest COMMAND NativeProjectionCApiTest)

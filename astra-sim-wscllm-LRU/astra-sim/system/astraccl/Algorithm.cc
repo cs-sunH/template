@@ -7,9 +7,16 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
-Algorithm::Algorithm() {
-    enabled = true;
-}
+// Every member is initialized here: CollectivePhase's constructor copies
+// final_data_size/comm_type/enabled unconditionally at phase-creation time,
+// so leaving any of them uninitialized would be an undefined-value read.
+Algorithm::Algorithm()
+    : stream(nullptr),
+      logical_topo(nullptr),
+      data_size(0),
+      final_data_size(0),
+      comType(ComType::None),
+      enabled(true) {}
 
 void Algorithm::init(BaseStream* stream) {
     this->stream = stream;

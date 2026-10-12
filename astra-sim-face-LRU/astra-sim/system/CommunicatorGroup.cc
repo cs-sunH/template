@@ -6,10 +6,14 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CommunicatorGroup.hh"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 
+#include "astra-sim/common/Logging.hh"
+
 #include "astra-sim/system/CollectivePlan.hh"
+#include "astra-sim/system/QueueLevels.hh"
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
 
@@ -64,6 +68,44 @@ CommunicatorGroup::CommunicatorGroup(int comm_group_id,
     this->generator = generator;
     this->dimension_sizes = dimension_sizes;
 
+    // involved_NPUs domain validation (sync-cpp-E5, 2026-09-30, ported from
+    // the joint repo): the rank list is trusted input from comm_group.json /
+    // pg metadata. An out-of-range rank used to escape to the backend's
+    // fluid route (remote crash) and a duplicated rank silently collapsed
+    // two ring positions onto one node (self-ring / hang). Both are always
+    // configuration errors.
+    // Fail closed, not throw (M2, face-LRU audit 2026-09-29): every
+    // construction site sits on an issue path (the file loader inside the
+    // Workload build, or the pytorch pg metadata path), so a thrown
+    // invalid_argument either terminates without diagnostics or gets
+    // swallowed by Sys::call_events and strands the issuing node.
+    if (involved_NPUs.empty()) {
+        LoggerFactory::get_logger("system::CommunicatorGroup")
+            ->critical("######### Exiting because a communicator group must "
+                       "list at least one rank #########");
+        std::exit(1);
+    }
+    {
+        std::vector<int> seen = involved_NPUs;
+        std::sort(seen.begin(), seen.end());
+        if (std::adjacent_find(seen.begin(), seen.end()) != seen.end()) {
+            LoggerFactory::get_logger("system::CommunicatorGroup")
+                ->critical("######### Exiting because communicator group "
+                           "ranks contain duplicates #########");
+            std::exit(1);
+        }
+        for (int rank : involved_NPUs) {
+            if (rank < 0 || rank >= generator->total_nodes) {
+                LoggerFactory::get_logger("system::CommunicatorGroup")
+                    ->critical("######### Exiting because communicator group "
+                               "rank {} is outside the cluster range [0, {}) "
+                               "#########",
+                               rank, generator->total_nodes);
+                std::exit(1);
+            }
+        }
+    }
+
     if (!dimension_sizes.empty()) {
         int expected_group_size = 1;
         for (int size : dimension_sizes) {
@@ -74,8 +116,17 @@ CommunicatorGroup::CommunicatorGroup(int comm_group_id,
             expected_group_size *= size;
         }
         if (expected_group_size != static_cast<int>(involved_NPUs.size())) {
-            throw std::invalid_argument(
-                "Communicator dimension sizes do not match rank-map size");
+            // Fail closed (M2): every construction site sits on an issue
+            // path (file loader inside the Workload build, or the pytorch pg
+            // metadata path), so a thrown invalid_argument either terminates
+            // without diagnostics or gets swallowed by Sys::call_events and
+            // strands the issuing node.
+            LoggerFactory::get_logger("system::CommunicatorGroup")
+                ->critical("######### Exiting because communicator "
+                           "dimension sizes do not match rank-map size "
+                           "({} != {}) #########",
+                           expected_group_size, involved_NPUs.size());
+            std::exit(1);
         }
     }
     // Communicator rank order is semantic: custom-collective ET file suffixes
@@ -95,15 +146,31 @@ CommunicatorGroup::~CommunicatorGroup() {
 
 void CommunicatorGroup::set_id(int id) {
     // id 0 is reserved for the default comm group, which is all ranks.
-    // CTRL+F "default communication group"
-    assert(id > 0);
+    // CTRL+F "default communication group". Fail closed (not assert): these
+    // constructors run on issue paths where a thrown/compiled-out check
+    // would either strand the issuing node or pass silently in Release.
+    if (id <= 0) {
+        LoggerFactory::get_logger("system::CommunicatorGroup")
+            ->critical("######### Exiting because comm group id must be "
+                       "positive (got {}) #########",
+                       id);
+        std::exit(1);
+    }
     this->id = id;
     // Each comm group owns the disjoint stream-id block [id*1e6, (id+1)*1e6).
-    // Refuse absurdly large ids instead of wrapping around via signed
-    // overflow once id*1e6 exceeds INT_MAX.
-    if (id > std::numeric_limits<int>::max() / 1000000) {
-        throw std::invalid_argument(
-            "comm group id too large: its stream-id block would overflow");
+    // Collective tags are folded into [COLLECTIVE, RENDEZVOUS) via
+    // `tag % 5e8`, so any block base at or beyond 5e8 (id >= 500) wraps into
+    // another group's tag space and cross-group tag collisions deliver
+    // streams to the wrong group; and past INT_MAX/1e6 the block itself
+    // overflows. Refuse both instead of failing silently.
+    if (id >= 500 ||
+        id > std::numeric_limits<int>::max() / 1000000) {
+        LoggerFactory::get_logger("system::CommunicatorGroup")
+            ->critical("######### Exiting because comm group id {} exceeds "
+                       "the 500-group tag-space bound (its stream-id block "
+                       "would wrap or overflow) #########",
+                       id);
+        std::exit(1);
     }
     this->num_streams = id * 1000000;
 }
@@ -116,24 +183,74 @@ bool CommunicatorGroup::matches_definition(
 }
 
 CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64_t workload_node_id) {
-    if (comm_plans.find(comm_type) != comm_plans.end()) {
-        return comm_plans[comm_type];
+    // C1: resolve the implementation set for THIS workload node first and
+    // cache per (ComType, implementation set).  The lookup gives
+    // per-workload-node custom mappings priority, so caching per ComType
+    // alone pinned every later same-type collective of this group to the
+    // first node's algorithm.
+    std::vector<CollectiveImpl*> looked_up_impls;
+    try {
+        looked_up_impls = generator->collective_impl_lookup->get_collective_impl(
+            comm_type, workload_node_id);
+    } catch (const std::exception& e) {
+        // M2 (face-LRU audit, 2026-09-29): this runs on the collective issue
+        // path -- static under Sys::call_events (which swallows the throw and
+        // strands the issuing node) or online inside the deferred commit (and
+        // an escape would unwind through proceed_to_next_vnet_baseline,
+        // leaking the stream and its queue slot). A missing/unresolvable
+        // implementation registration is a configuration fatality: report it
+        // and exit.
+        LoggerFactory::get_logger("system::CommunicatorGroup")
+            ->critical("######### Exiting because the collective "
+                       "implementation lookup failed (com_type={}, "
+                       "workload_node_id={}): {} #########",
+                       static_cast<int>(comm_type), workload_node_id, e.what());
+        std::exit(1);
+    }
+    const CommunicatorGroup::PlanImplKey plan_key{
+        looked_up_impls.begin(), looked_up_impls.end()};
+    const auto cached =
+        comm_plans.find({comm_type, plan_key});
+    if (cached != comm_plans.end()) {
+        return cached->second;
     }
 
     if (!dimension_sizes.empty()) {
-        std::vector<CollectiveImpl*> collective_implementation =
-            generator->collective_impl_lookup->get_collective_impl(
-                comm_type, workload_node_id);
+        // H1 (face-LRU audit, 2026-09-29): Sys::generate_collective indexes
+        // the physical queue levels with this shape's logical dimension
+        // index, so a shaped communicator declaring more dimensions than the
+        // physical system reads past vLevels->levels (UB: garbage queue_id,
+        // silent map growth or crash). Same fail-closed discipline as the
+        // whole-cluster path's GeneralComplexTopology implementation-count
+        // check.
+        const int physical_dims = generator->vLevels->num_levels();
+        if (static_cast<int>(dimension_sizes.size()) > physical_dims) {
+            LoggerFactory::get_logger("system::CommunicatorGroup")
+                ->critical("######### Exiting because a shaped communicator "
+                           "declares {} dimensions but the physical system "
+                           "has only {} queue levels #########",
+                           dimension_sizes.size(), physical_dims);
+            std::exit(1);
+        }
+        std::vector<CollectiveImpl*> collective_implementation = looked_up_impls;
         if (collective_implementation.size() != dimension_sizes.size()) {
-            throw std::runtime_error(
-                "A shaped communicator requires one native collective "
-                "implementation per communicator dimension");
+            LoggerFactory::get_logger("system::CommunicatorGroup")
+                ->critical("######### Exiting because a shaped communicator "
+                           "requires one native collective implementation per "
+                           "communicator dimension ({} impls vs {} "
+                           "dimensions) #########",
+                           collective_implementation.size(),
+                           dimension_sizes.size());
+            std::exit(1);
         }
         for (auto* implementation : collective_implementation) {
             if (implementation->type != CollectiveImplType::Ring) {
-                throw std::runtime_error(
-                    "Shaped communicators currently support ring as the "
-                    "per-dimension native collective implementation");
+                LoggerFactory::get_logger("system::CommunicatorGroup")
+                    ->critical("######### Exiting because shaped "
+                               "communicators currently support ring as the "
+                               "per-dimension native collective "
+                               "implementation #########");
+                std::exit(1);
             }
         }
 
@@ -141,19 +258,21 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             generator->id, involved_NPUs, dimension_sizes,
             collective_implementation);
         std::vector<bool> dimensions_involved(dimension_sizes.size(), true);
-        comm_plans[comm_type] = new CollectivePlan(
+        CollectivePlan* plan = new CollectivePlan(
             logical_topology, collective_implementation, dimensions_involved,
             true, false);
-        return comm_plans[comm_type];
+        comm_plans[{comm_type, plan_key}] = plan;
+        return plan;
     } else if (static_cast<uint64_t>(generator->total_nodes) == involved_NPUs.size()) {
         LogicalTopology* logical_topology =
             generator->get_logical_topology(comm_type);
-        std::vector<CollectiveImpl*> collective_implementation =
-            generator->collective_impl_lookup->get_collective_impl(comm_type, workload_node_id);
+        std::vector<CollectiveImpl*> collective_implementation = looked_up_impls;
         if (collective_implementation.empty()) {
-            throw std::runtime_error(
-                "No collective implementation registered for a whole-cluster "
-                "communicator");
+            LoggerFactory::get_logger("system::CommunicatorGroup")
+                ->critical("######### Exiting because no collective "
+                           "implementation is registered for a whole-cluster "
+                           "communicator #########");
+            std::exit(1);
         }
         // One involvement flag per logical dimension actually handed to
         // Sys::generate_collective, which indexes dimensions_involved with
@@ -163,17 +282,19 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
         std::vector<bool> dimensions_involved(
             logical_topology->get_num_of_dimensions(), true);
         bool should_be_removed = false;
-        comm_plans[comm_type] =
+        CollectivePlan* plan =
             new CollectivePlan(logical_topology, collective_implementation,
                                dimensions_involved, should_be_removed, false);
-        return comm_plans[comm_type];
+        comm_plans[{comm_type, plan_key}] = plan;
+        return plan;
     } else {
-        std::vector<CollectiveImpl*> collective_implementation =
-            generator->collective_impl_lookup->get_collective_impl(comm_type, workload_node_id);
+        std::vector<CollectiveImpl*> collective_implementation = looked_up_impls;
         if (collective_implementation.empty()) {
-            throw std::runtime_error(
-                "No collective implementation registered for a sub-cluster "
-                "communicator");
+            LoggerFactory::get_logger("system::CommunicatorGroup")
+                ->critical("######### Exiting because no collective "
+                           "implementation is registered for a sub-cluster "
+                           "communicator #########");
+            std::exit(1);
         }
         if (collective_implementation.size() > 1) {
             // This means that everything fell through and we got a native collective that is multi-dimensional.
@@ -194,11 +315,13 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
                 // a BinaryTree (type-confused memory access), so fail closed
                 // here instead; only a whole-cluster or shaped communicator
                 // can serve double-binary-tree.
-                throw std::runtime_error(
-                    "Sub-cluster communicators currently support only "
-                    "ring-compatible native collective implementations; "
-                    "double-binary-tree requires a whole-cluster "
-                    "communicator");
+                LoggerFactory::get_logger("system::CommunicatorGroup")
+                    ->critical("######### Exiting because sub-cluster "
+                               "communicators currently support only "
+                               "ring-compatible native collective "
+                               "implementations; double-binary-tree requires "
+                               "a whole-cluster communicator #########");
+                std::exit(1);
             }
             // The lookup registry owns and shares this implementation across
             // all comm groups, while the plan below deletes its
@@ -213,10 +336,11 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             RingTopology::Dimension::Local, generator->id, involved_NPUs);
         std::vector<bool> dimensions_involved(1, true);
         bool should_be_removed = true;
-        comm_plans[comm_type] =
+        CollectivePlan* plan =
             new CollectivePlan(logical_topology, collective_implementation,
                                dimensions_involved, should_be_removed, true);
-        return comm_plans[comm_type];
+        comm_plans[{comm_type, plan_key}] = plan;
+        return plan;
     }
     assert(false);
     return nullptr;

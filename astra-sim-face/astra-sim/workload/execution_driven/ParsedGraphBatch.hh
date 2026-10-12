@@ -25,8 +25,12 @@ kv_actions / future_alarms keep the ARRAY ORDER (the Python emission order).
 Store-id assignment order, issue order, Kahn inputs and anchor first/last
 selection all derive from it -- the parser NEVER sorts, dedups or filters
 these vectors. Watch members keep the JSON object key order (nlohmann
-objects iterate keys ascending, i.e. the decimal rank-string sort the
-producer emitted). Watch statuses are stored in raw array order with
+objects iterate keys ascending -- LEXICOGRAPHIC string order, i.e. the
+rank-string sort the producer emitted; with mixed digit widths such as
+"2" vs "10" that is NOT numeric rank order. R6-V3: every current
+consumer set-ifies the members, so no behavior depends on the key order;
+treat this note as an emission-order statement, not a numeric-order
+freeze). Watch statuses are stored in raw array order with
 duplicates preserved (<= 2 distinct values exist; consumers build the same
 std::set they built from the DOM).
 
@@ -54,8 +58,8 @@ other bridge protocol violation):
      sub-object key sets (required + allowed), integer-overflow rejection
      (a JSON integer literal > UINT64_MAX parses as a double and fails
      is_number_integer), negative-value rejection, tag/priority <=
-     UINT32_MAX. MEM-node liveness (tensor_size > 0 AND a configured
-     remote-memory port) stays in the preflight -- it needs Context.
+     UINT32_MAX. (face carries no MEM-node contract, so no MEM liveness
+     rule exists here.)
   E1..E4 edge rules: exact key set {rank, from, to, kind}, rank domain,
      non-negative endpoints, kind == "data", from != to. Endpoint
      RESOLUTION (this batch vs committed history) stays in preflight.
@@ -113,8 +117,10 @@ class ParseError : public std::runtime_error {
 };
 
 /// NodeKind for a raw ChakraProtoMsg::NodeType value (1..7); Invalid outside.
-/// Shared by the parser and (pre-C1) the commit assembly; kept here so the
-/// typed parse and the committer can never disagree on the mapping.
+/// Parser-internal mapping (2026-10-01 comment fix: pre-C1 the commit
+/// assembly shared it; since C1 the committer consumes the typed parse
+/// directly and has no caller left -- the "can never disagree" claim
+/// described a sharing that no longer exists).
 inline NodeKind node_kind_from_type(uint64_t type) {
     switch (type) {
         case 1:

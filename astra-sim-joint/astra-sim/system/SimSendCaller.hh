@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CallData.hh"
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/Sys.hh"
+#include <optional>
 
 namespace AstraSim {
 
@@ -23,6 +24,7 @@ class SimSendCaller : public Callable {
     void (*msg_handler)(void* fun_arg);
     void* fun_arg;
     bool should_cleanup;
+    std::optional<AstraNetworkAPI::LogicalFlowKey> logical_key;
     void call(EventType type, CallData* data);
     Sys* sys;
     SimSendCaller(Sys* sys,
@@ -34,7 +36,9 @@ class SimSendCaller : public Callable {
                   sim_request request,
                   void (*msg_handler)(void* fun_arg),
                   void* fun_arg,
-                  bool should_cleanup);
+                  bool should_cleanup,
+                  std::optional<AstraNetworkAPI::LogicalFlowKey>
+                      logical_key = std::nullopt);
 };
 
 }  // namespace AstraSim

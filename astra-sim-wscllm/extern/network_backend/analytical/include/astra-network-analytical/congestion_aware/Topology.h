@@ -27,9 +27,11 @@ class Topology {
     Topology() noexcept;
 
     /**
-     * Construct the route from src to dest.
-     * Route is a list of devices (pointers) that the chunk should traverse,
-     * including the src and dest devices themselves.
+     * Compute the route from src to dest.
+     * Route is the ordered list of devices (pointers) along the path,
+     * including the src and dest devices themselves; under the fluid model
+     * a flow advances along this route progressively (no discrete chunk
+     * traversal).
      *
      * e.g., route(0, 3) = [0, 5, 7, 2, 3]
      *
@@ -55,22 +57,14 @@ class Topology {
     [[nodiscard]] int get_npus_count() const noexcept;
 
     /**
-     * Get the number of devices in the topology.
-     * Device includes non-NPU devices such as switches.
-     *
-     * @return number of devices in the topology
-     */
-    [[nodiscard]] int get_devices_count() const noexcept;
-
-    /**
      * Get the number of directed links in the topology.
      *
      * @return number of directed links
      *
      * Dead accessor (2026-09 deep-dive): zero callers in this repo, which
      * makes the whole Topology::get_links_count -> Device::get_links_count
-     * counting chain unreachable; kept unchanged from the face backend for
-     * cross-repo parity.
+     * counting chain unreachable. Retained by repo decision (2026-09-27,
+     * infra-D2 annotation route; the three sister repos deleted it).
      */
     [[nodiscard]] int get_links_count() const noexcept;
 

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """graph_batch_builder.py -- 在线 GraphBatch 构图器(方案 §4 步骤 1-8 操作 4)。
 
+历史蓝本对照注记:文中 `sh_2.0 蓝本` 指已删档的 sh_2.0 仓 face 系蓝本文件,
+注记只保留文件级/符号级引用,历史行号已按工作区注释规范移除,现行对应
+关系以注记写明的符号/行为描述为准。
+
 阶段 1 最关键的对齐点:复用共享发射原语的节点结构。per-request 发射
 (generate_face_trace.py 模块级函数)由
 助手函数组成(_emit_control_trigger / _paired_transfer /
@@ -17,8 +21,9 @@ sh_1.0 定型版为母本,face 发射原语适配):层次 B 从"请求级大段�
 "实例迭代级列车"——decode 互拼、decode 与 prefill chunk 混拼、chunk 之间
 不拼、批成员只在迭代(列车)边界变化。strategy 路径的两段发射:
   - 准入动作(emit_admission_batch)= 到达/interval timer gates + history
-    迁移(NOC_MIGRATE)或 control 触发链 + history readiness 屏障;prefill
-    主体(recompute 段 + 当前段 chunk)不再在此发射——移入实例迭代列车;
+    迁移(NOC_MIGRATE)或 control 触发链 + REMOTE_RESTORE 全量恢复链
+    (remote_load,恢复完成前不可消费)+ history readiness 屏障;prefill
+    主体(当前段 chunk)不再在此发射——移入实例迭代列车;
   - 迭代列车(emit_iteration_train)= joiner 的 prefill→decode 迁移(3000
     类 paired transfer,face 统一实例同实例时零节点)+ join/pstart 起始
     标记(指标锚点)+ 折叠列车体(成员×迭代 span,weight_passes = 迭代数:
@@ -28,7 +33,8 @@ sh_1.0 定型版为母本,face 发射原语适配):层次 B 从"请求级大段�
     turn 的 interval gate after_node_id 来源。
 
 在线语义差异(刻意,注释标注):
-  - timer gate 始终发射节点(结构保留)但 runtime_ns=0:到达时间由 C++ 的
+  - timer gate 结构保留;duration_ns==0 → 不发射节点(非零时长才发射
+    runtime_ns=0 的 gate 节点):到达时间由 C++ 的
     arrival alarm(future_alarms)替代,gate 不再等待——保持时长会双重等待;
   - watch 锚点(拼 batch 改造起由列车标记承载):PREFILL_DRAIN = drain 标记
     节点(列车体后、end barrier 前),DECODE_COMPLETION/REQUEST_COMPLETE =
@@ -38,6 +44,7 @@ sh_1.0 定型版为母本,face 发射原语适配):层次 B 从"请求级大段�
 
 import os
 import sys
+from typing import Optional  # noqa: E402
 
 # --------------------------------------------------------------------------
 # import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置与
@@ -66,6 +73,7 @@ from generate_face_trace import (  # noqa: E402
     TransferTriggerGate,
     _emit_control_trigger,
     _emit_kv_transfer,
+    _frontier_neutral,
     _paired_transfer,
     kv_cache_bytes_for_tokens,
     sanitize_node_prefix,
@@ -207,26 +215,62 @@ class OnlineTraceBuilder:
     def _uint64(value: int) -> int:
         return max(1, int(value))
 
+    @staticmethod
+    def _node_index(value: int) -> int:
+        """图节点/边端点标量(节点 id、comm src/dst/tag)契约:非负整数
+        (0 = 首节点/rank 0,合法,故不能复用 _uint64 的正数契约)。
+
+        与 _uint64 同 fail-closed 极:bool 是 int 子类型,显式拒绝;浮点/
+        字符串等非法输入结构化拒绝而非 int() 裸强转静默截断(3.7→3、
+        接串、int(True)→1)。合法发射路径的 id/rank/tag 恒为 int,不受
+        影响。"""
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                "graph node index must be a non-negative integer, got "
+                "{!r}".format(value))
+        return value
+
     def arm_timer_gate(self, timer_node_id) -> None:
         if timer_node_id is not None:
-            self.pending_extra_dependencies.append(int(timer_node_id))
+            checked = self._node_index(timer_node_id)
+            # T4 前向断言（死锁真修 方案①，2026-10-11，自 WL 同构移植）：
+            # arm 目标必须已在本 rank 发射（发射序号空间 = 节点 id =
+            # next_id 单调）。违反即 raise、无白名单；若命中既有合法 arm，
+            # 停工报作者裁决。
+            if checked >= self.next_id:
+                raise RuntimeError(
+                    "arm_timer_gate target {} was never emitted on rank {} "
+                    "(next_id={}): gate edges must point at earlier-emitted "
+                    "nodes (T4)".format(checked, self.rank, self.next_id))
+            self.pending_extra_dependencies.append(checked)
 
     def arm_dependency(self, node_id) -> None:
-        """B3(2026-09-06,sh :224-226):同 rank 通用依赖挂载(跨批次边——
+        """B3(2026-09-06,sh_2.0 蓝本):同 rank 通用依赖挂载(跨批次边——
         经持久 (rank,id) 解析;跨 rank 依赖边被桥拒绝,跨实例时由发射侧
         1B p2p 承载时序)。"""
 
         if node_id is not None:
-            self.pending_extra_dependencies.append(int(node_id))
+            checked = self._node_index(node_id)
+            # T4 前向断言（死锁真修 方案①，2026-10-11，自 WL 同构移植）：
+            # 显式依赖边只允许指向更早发射的同 rank 节点（发射序号 =
+            # 节点 id）。违反即 raise、无白名单；若命中既有合法 arm，
+            # 停工报作者裁决。
+            if checked >= self.next_id:
+                raise RuntimeError(
+                    "arm_dependency target {} was never emitted on rank {} "
+                    "(next_id={}): explicit dependency edges must point at "
+                    "earlier-emitted nodes (T4)".format(
+                        checked, self.rank, self.next_id))
+            self.pending_extra_dependencies.append(checked)
 
     def chain_checkpoint(self):
-        """B3(2026-09-06,sh :228-229):并行分支起点快照(previous_id +
+        """B3(2026-09-06,sh_2.0 蓝本):并行分支起点快照(previous_id +
         未消费的 pending 依赖)。"""
 
         return self.previous_id, tuple(self.pending_extra_dependencies)
 
     def restore_chain(self, checkpoint) -> None:
-        """B3(2026-09-06,sh :231-233):恢复链快照——恢复分支悬挂后,主链
+        """B3(2026-09-06,sh_2.0 蓝本):恢复链快照——恢复分支悬挂后,主链
         (以及后续列车体)不受其阻塞。"""
 
         self.previous_id, dependencies = checkpoint
@@ -246,11 +290,20 @@ class OnlineTraceBuilder:
         到达时刻/interval 的等待由 C++ arrival alarm(future_alarms)承担——
         gate 只保留结构与依赖,保持时长会双重
         等待(见步骤 1-8 设计分析)。
+        L15(2026-09-29):放宽 %1000 整微秒校验为 ns 粒度合法。该 duration
+        不进节点(runtime_ns=0、不存储),C++ 消费端
+        (GraphBatchCommitter/ParsedGraphBatch)只经 0 跳过判定读它,且
+        到达等待由 arrival alarm 按 ns 承担。上限对齐 C++ u64 解析域。
+        (2026-10-01 R2 论据修正:官方装载链——generate_trace.py 的
+        load_request_queue 与 C++ WindowedTraceReader——对两字段恒强制
+        1000ns 网格,本放宽仅服务非 CSV/构造配置输入的防御面,并非官方
+        输入的固有属性。)
         """
-        if duration_ns < 0 or duration_ns % 1000 != 0:
+        if duration_ns < 0 or duration_ns > 0xFFFFFFFFFFFFFFFF:
             raise ValueError(
-                "timer duration must be a non-negative whole number of microseconds"
-            )
+                "timer duration must be a non-negative integer within the "
+                "C++ uint64 domain: got {} for node '{}'".format(
+                    duration_ns, name))
         if duration_ns == 0:
             return after_node_id
         node = {
@@ -282,7 +335,7 @@ class OnlineTraceBuilder:
 
     def mem_store(self, name: str, tensor_size: int,
                   hbm_access_mode: int = 0) -> None:
-        """B3(2026-09-06,sh :283-289):MEM_STORE 原语。``hbm_access_mode``
+        """B3(2026-09-06,sh_2.0 蓝本):MEM_STORE 原语。``hbm_access_mode``
         进 compute 键(在线 snake 键与离线 kebab ET attr 同义;仅真值发射,
         absent = 无本地 HBM 访问)。"""
 
@@ -293,7 +346,7 @@ class OnlineTraceBuilder:
 
     def mem_load(self, name: str, tensor_size: int,
                  hbm_access_mode: int = 0) -> None:
-        """B3(2026-09-06,sh :291-296):MEM_LOAD 原语(remote_load 链的边缘
+        """B3(2026-09-06,sh_2.0 蓝本):MEM_LOAD 原语(remote_load 链的边缘
         池 FIFO 读,默认零本地 HBM 计费)。"""
 
         node = self._new_node(name, MEM_LOAD_NODE)
@@ -302,7 +355,7 @@ class OnlineTraceBuilder:
             node["compute"]["hbm_access_mode"] = int(hbm_access_mode)
 
     def local_hbm_kv_restore(self, name: str, tensor_size: int) -> None:
-        """B3(2026-09-06,sh :298-302):目标 HBM DMA 写(RESTORE,可与推理
+        """B3(2026-09-06,sh_2.0 蓝本):目标 HBM DMA 写(RESTORE,可与推理
         计算重叠)。节点级可选键 ``is_local_hbm_kv_restore`` 仅真值发射
         (契约 §2:absent == false)——恢复不得退化为普通 mem_load。"""
 
@@ -311,10 +364,30 @@ class OnlineTraceBuilder:
         node["is_local_hbm_kv_restore"] = True
 
     def comp(self, name: str, num_ops: int, tensor_size: int,
-             remote_read_size: int = 0) -> None:
+             remote_read_size: int = 0, *,
+             die_spec: dict = None, op_role: str = None) -> None:
+        """COMP 节点发射(阶段 C 扩展,契约 §2 compute 键集;
+        face-LRU 随迁 2026-10-03)。
+
+        die_spec 非 None 时附 compute.die_op_spec(dict;die 后端执行该
+        节点,runtime_ns 保持缺省 0——die_op_spec 存在 ⇒ runtime_ns 必为
+        0);op_role 缺省 "compute"(不写键,schema 缺省即 compute),仅
+        marker/哨兵显式写 "control_marker"(契约 §7 裁定 8)。"""
         node = self._new_node(name, COMP_NODE)
         node["compute"]["num_ops"] = self._uint64(num_ops)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
+        if op_role is not None:
+            if op_role not in ("compute", "control_marker"):
+                raise ValueError(
+                    "op_role must be 'compute' or 'control_marker', got "
+                    "{!r}".format(op_role))
+            node["compute"]["op_role"] = op_role
+        if die_spec is not None:
+            if node["compute"]["runtime_ns"] != 0:
+                raise ValueError(
+                    "die_op_spec requires runtime_ns == 0 (contract "
+                    "section 2)")
+            node["compute"]["die_op_spec"] = die_spec
         if self.remote_operand_loads and remote_read_size:
             node["compute"]["remote_weight_bytes"] = self._uint64(remote_read_size)
 
@@ -334,7 +407,7 @@ class OnlineTraceBuilder:
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
         if not hbm_charge:
-            # B3(sh :320-332):直通流量不建本端 HBM 作业(默认 true=发送端
+            # B3(sh_2.0 蓝本):直通流量不建本端 HBM 作业(默认 true=发送端
             # HBM 读,absent = charged;契约 §12.5 计费三险之一)。
             node["comm"]["hbm_charge"] = False
 
@@ -350,7 +423,7 @@ class OnlineTraceBuilder:
 
 
 class _HistorySnapshot:
-    """B3(sh :351-358):history_location_before 的轻量重建——face 的
+    """B3(sh_2.0 蓝本):history_location_before 的轻量重建——face 的
     strategy 路径直接携带 SessionKVSnapshot 对象(字段同名),本类仅供
     dict 形状(决策日志回放)的重建路径使用。"""
 
@@ -361,49 +434,35 @@ class _HistorySnapshot:
 
 
 def kv_transfer_from_log(record) -> KVTransfer:
-    """B3(sh :361-396):从 KVTransfer dict 重建对象;strategy 路径传入的
-    已是 KVTransfer 对象(face_online_scheduler 只读复用),原样返回。"""
+    """B3(sh_2.0 蓝本)入口规约(2026-10-01 收敛):strategy 路径传入的
+    恒为 KVTransfer 对象(face_online_scheduler 的 plan 字典逐字段携带
+    对象本身,不做序列化),原样返回;dict 重建分支已随回放变体
+    (2026-08-18 删除)成为死代码移除——非对象输入按 fail-closed 拒绝,
+    防未来调用方误以为存在 dict 输入面。"""
     if isinstance(record, KVTransfer):
         return record
-    return KVTransfer(
-        kind=record["kind"],
-        phase=record["phase"],
-        reason=record["reason"],
-        session_id=record["session_id"],
-        trigger_request_id=record["trigger_request_id"],
-        source_instance_index=record["source_instance_index"],
-        target_instance_index=record["target_instance_index"],
-        total_bytes=record["total_bytes"],
-        shards=tuple(
-            KVTransferShard(
-                source_rank=shard["source_rank"],
-                target_rank=shard["target_rank"],
-                edge_rank=shard["edge_rank"],
-                bytes=shard["bytes"],
-                noc_path=tuple(shard["noc_path"]),
-                layer_start=shard["layer_start"],
-                layer_end=shard["layer_end"],
-            )
-            for shard in record.get("shards", ())
-        ),
-        model_layers=record["model_layers"],
-        layer_start=record["layer_start"],
-        layer_end=record["layer_end"],
-        resident_prefix_layers_before=record["resident_prefix_layers_before"],
-        resident_prefix_layers_after=record["resident_prefix_layers_after"],
-    )
+    raise TypeError(
+        "kv transfer plan entries must be KVTransfer objects, got "
+        "{!r}".format(type(record).__name__))
 
 
 def history_snapshot_from_log(plan: dict):
-    """B3(sh :399-422):重建 history_location_before。face 的 plan
+    """B3(sh_2.0 蓝本):重建 history_location_before。face 的 plan
     ["history_location_before"] 直接是 SessionKVSnapshot 对象(字段同名,
-    strategy 模式,live 路径),原样返回;dict 形状按三字段重建——仅供
-    旧决策日志(legacy old-log-only)回放解析,新运行不再产生
-    partial_hbm_remote 位置,该推断分支对旧产物只读。"""
+    strategy 模式,live 路径),原样返回;决策日志回放形状(同键为位置
+    字符串,log_decision 序列化契约,同伴键 history_location_before_
+    instance_index / history_resident_prefix_layers 在场)按三字段重建;
+    split-key 形状(history_location_before_location)为旧产物
+    (legacy old-log-only)只读解析,新运行不再产生 partial_hbm_remote
+    位置。2026-09-26 类型二义修复:字符串此前落入恒等分支原样返回,
+    调用方 .location AttributeError。"""
     snapshot = plan.get("history_location_before")
-    if snapshot is not None and not isinstance(snapshot, dict):
+    if isinstance(snapshot, str):
+        location = snapshot
+    elif snapshot is not None and not isinstance(snapshot, dict):
         return snapshot
-    location = plan.get("history_location_before_location")
+    else:
+        location = plan.get("history_location_before_location")
     if location is None:
         return None
     transfer = plan.get("history_transfer")
@@ -426,6 +485,13 @@ class GraphBatchBuilder:
 
     def __init__(self, config):
         self.config = config
+        # die 后端发射语境(阶段 C;face-LRU 随迁 2026-10-03;None =
+        # legacy)。online_service.py 构造本构图器时不感知 backend——语境由
+        # OnlineSchedulerBase 从 manifest 的 compute-cost-model/
+        # die-model-config 键构造后在每批发射前经 set_die_context 注入
+        # (online_scheduler_base._begin_graph_batch;manifest 是 backend 的
+        # 唯一声明源,契约 §7 裁定 2/7)。
+        self.die_context = None
         # strategy 模式保持物理跨 request 链。
         self.builders = {
             rank: OnlineTraceBuilder(
@@ -437,7 +503,7 @@ class GraphBatchBuilder:
         # completion_gates 只保存下一同 session turn 尚未消费的 interval
         # gate 来源；turn>0 admission 或 terminal completion 后即释放。
         self.completion_gates = {}
-        # ---- B3(2026-09-06,sh :439-461):两态 KV 发射账本(session 级
+        # ---- B3(2026-09-06,sh_2.0 蓝本):两态 KV 发射账本(session 级
         # Tiered-LRU 后 location 值域收敛 {local_hbm, remote_memory},
         # note_request_complete 值域校验同口径)----
         # 跨请求 history location 链(face 适配:face 的 interval gates 在
@@ -446,7 +512,7 @@ class GraphBatchBuilder:
         self.pending_request_by_session = {}
         self.deferred_session_locations = {}
         # request_id -> {"seg1": {rank: node_id|None}, "seg2": {rank: node_id|None}}
-        # 列车块末账本(sh :443-449;post-barrier 口径):seg1 = drain 列车
+        # 列车块末账本(sh_2.0 蓝本;post-barrier 口径):seg1 = drain 列车
         # barrier(joiner decode_evictions 触发门),seg2 = 退出列车 barrier
         # (completion_gates 的同源口径)。
         self._block_ends = {}
@@ -459,11 +525,25 @@ class GraphBatchBuilder:
         # store,每会话同至多一条登记(restore 读全区间须等齐);回迁发射
         # 时消费清除,terminal session 回收时清除。
         self.pending_store_tails = {}
+        # B4 决策→发射窗口补丁(2026-10-01):session_id -> 已决策未发射的
+        # remote_store 笔数。decode 侧逐出(move_prefill_to_decode /
+        # grow_decode)的决策时点(sync_pending_history_after_evictions)
+        # 与物理发射时点(joiner 列车头 _emit_decode_evictions)天然分离;
+        # 该窗口内被逐会话下一 turn 的全量回迁若先发射,会绕过
+        # pending_store_tails 补边(查表为空)造成池读先于池写。调度器在
+        # 准入前经 has_pending_store_decision 查询本表推迟回迁(见
+        # face_online_scheduler 的 _try_admit_prefill 门);发射侧
+        # (_register_store_tails)逐笔核销。
+        self.pending_store_decisions = {}
         # 每 request 的 action_sequence 账本(节点名含 _action{seq:03d}_,
         # 跨该 request 的全部 transfer 递增——保证节点名跨 request 逐字节
         # 稳定)。
         self._action_sequence = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
+
+    def set_die_context(self, die_context) -> None:
+        """注入 die 发射语境(幂等;None 恢复 legacy 发射)。"""
+        self.die_context = die_context
 
     # ------------------------------------------------------------- 批次 --
 
@@ -546,9 +626,10 @@ class GraphBatchBuilder:
     def emit_admission_batch(self, request_plan: dict) -> None:
         """发射 request 的准入动作(ARRIVAL 边界;拼 batch 改造,2026-08-22):
         到达/interval timer gates + history 迁移(NOC_MIGRATE paired transfer)
-        或 control 触发链 + history readiness 屏障。
+        或 control 触发链 + REMOTE_RESTORE 全量恢复链(remote_load,恢复
+        完成前不可消费)+ history readiness 屏障。
 
-        prefill 主体(recompute 段 + 当前段 chunk 序列)与 PREFILL_DRAIN
+        prefill 主体(当前段 chunk 序列)与 PREFILL_DRAIN
         watch 不再在此发射——移入实例迭代列车(emit_iteration_train 的折叠
         体与 drain 标记);本方法无 watch 返回值(调度器在列车发射处注册)。
         [根因 #5 裁决,strategy 死锁修复统一(2026-08-19)] 的无条件 frontier
@@ -590,7 +671,7 @@ class GraphBatchBuilder:
                             "split": False 时仅做不拆车的标记增强——多
                             token debut 成员在列车体后挂 first_token 标记,
                             decode_length=1 的 debut 成员其 exit 标记改名
-                            _exit_first_token_(C++ 名字子串锚点);"split":
+                            _exit_first_token_(C++ "_first_token_" 段锚点);"split":
                             True 时本方法拒绝,阶段 1/2 经 emit_train_
                             first_step / emit_train_remainder 发射
 
@@ -638,7 +719,7 @@ class GraphBatchBuilder:
         (face 3000 类 paired transfer,整列发射时本就先于列车体)与
         join/pstart 起始标记(挂点语义与整列发射完全一致)。列车体以
         weight_passes=1 折叠(权重恰读一次),体后挂各多 token debut 成员
-        的 first_token 标记节点(1-op COMP,名字含 "first_token" 子串——
+        的 first_token 标记节点(1-op COMP,名字携带 "_first_token_" 段——
         C++ 锚点按名字子串注册 code 8,取每 rank min tick);decode_length
         =1 的 debut 不另挂标记(其余量批 exit 标记改名携带 first_token
         子串,同节点双锚点)。
@@ -716,15 +797,17 @@ class GraphBatchBuilder:
 
         拆分时整段归首步批(face 迁移/起始标记锚定的迭代位置在第 1 迭代
         内,语义不变);发射序与整列发射逐节点一致。
-        B3(2026-09-06,sh :702-761):joiner 的 decode_evictions(remote_store
+        B3(2026-09-06,sh_2.0 蓝本):joiner 的 decode_evictions(remote_store
         链)先于迁移发射,触发门 = 该成员 drain 列车的 post-barrier 块末
         (runtime.drain_block_ends,调度器随 plan 传入)。"""
         group = self.group_by_index[train_plan["instance_index"]]
         train_id = train_plan["train_id"]
 
-        # ---- joiner 段(上下文 (joiner, decode, 1) = decode_start 指标
-        #      锚点) ----
+        # ---- joiner 段(上下文 (joiner, decode, 1);decode_start 锚点 =
+        #      下方 _join_ 起始标记,C++ 按精确命名段注册,逐出旁路分支
+        #      节点不参与锚点) ----
         joiners = list(train_plan.get("joiners", ()))
+        joiner_xfer_routes: dict[str, list] = {}
         for joiner in joiners:
             self._set_context(joiner, "decode", 1)
             decode_evictions = [
@@ -755,7 +838,10 @@ class GraphBatchBuilder:
                             trigger_gate=decode_eviction_trigger))
 
                 self._emit_side_branch(_emit_decode_evictions)
-            _paired_transfer(
+            # C5 落账（方案①）：迁移数据面中立化后 recv 节点 id 随 route
+            # 返回，join 标记显式 arm——decode 计算严格在 KV 迁移到达
+            # 之后，排序语义从链位改为显式边。
+            joiner_xfer_routes[joiner["request_id"]] = _paired_transfer(
                 config=self.config, builders=self.builders,
                 queue_index=joiner["queue_index"], category=3000,
                 name="{}_prefill_to_decode_kv".format(_prefix_of(joiner)),
@@ -769,11 +855,25 @@ class GraphBatchBuilder:
 
         # ---- 起始标记节点(指标锚点;§3.5:decode_start = 请求加入后
         #      第一个迭代所在列车节点;prefill_start = 请求首个 chunk
-        #      所在列车的首节点。joiner 迁移零节点(face 统一实例)时这是
-        #      唯一锚点;迁移有节点时 min-tick 语义取更早者,不冲突) ----
+        #      所在列车的首节点。C++ 按精确命名段 "_join_"/"_pstart_"
+        #      注册起始锚点(min-tick 跨批聚合),此前 first-of-group 语义
+        #      恒被 dep-free 准入门/屏障抢先,队列等待被吸入阶段窗口——
+        #      标记节点是唯一起始锚点来源。joiner 迁移零节点(face 统一
+        #      实例)时这是唯一锚点)
+        #      C5（死锁真修 方案①，2026-10-11，自 WL 同构移植）：迁移
+        #      数据面中立化后主链不再携带 xfer recv，join 标记显式
+        #      arm xfer recv 节点 id（route 落账 recv_node_id）。 ----
         for joiner in joiners:
             self._set_context(joiner, "decode", 1)
+            xfer_routes = joiner_xfer_routes.get(joiner["request_id"], ())
+            xfer_recv_by_rank = {
+                int(route["target_rank"]): route["recv_node_id"]
+                for route in xfer_routes
+            }
             for rank in group.ranks:
+                xfer_recv_id = xfer_recv_by_rank.get(rank)
+                if xfer_recv_id is not None:
+                    self.builders[rank].arm_dependency(xfer_recv_id)
                 self._emit_train_marker(
                     rank, "{}_join_{}".format(
                         train_id, sanitize_node_prefix(
@@ -805,6 +905,22 @@ class GraphBatchBuilder:
             builder.set_context(train_id, stage, generation)
         tensor_parallel = len(group.ranks)
         for relative_rank, rank in enumerate(group.ranks):
+            die_ctx = None
+            if self.die_context is not None:
+                # die 后端(阶段 C;face-LRU 随迁 2026-10-03):按 rank 写入
+                # 发射语境(phase = 列车 stage,TP = 实例 rank 数,span 记录
+                # 带绝对位置——derive_span_records 按 span 恒等式还原),
+                # 列车体经 transformer_pass_aggregated 的 die 分支附
+                # die_op_spec 并做 §7.2 region 融合;legacy 时 die_ctx=None,
+                # 发射逐字节不变。
+                self.die_context.begin_emission(
+                    phase=stage,
+                    tensor_parallel=tensor_parallel,
+                    tensor_parallel_rank=relative_rank,
+                    span_namespace=train_id,
+                    pass_spans=pass_spans,
+                )
+                die_ctx = self.die_context
             transformer_pass_aggregated(
                 self.builders[rank],
                 phase=train_id,
@@ -820,14 +936,16 @@ class GraphBatchBuilder:
                 num_heads=self.config.num_heads,
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
+                die_ctx=die_ctx,
             )
 
     def _emit_first_token_markers(self, train_plan: dict,
                                   debut_members) -> dict:
         """WP9 first_token 标记节点(debut 成员各自挂;每 rank 1 个
-        1-op COMP 小节点,名字含 "first_token" 子串,C++ 按 (request_id,
-        rank) 取 min tick 收 code 8 事件)。锚定位置 = 该成员链条在所在
-        批内列车体后的末节点(共享折叠体 ⇒ 各 debut 标记顺序挂体后)。"""
+        1-op COMP 小节点,名字携带精确命名段 "_first_token_",C++ 按
+        (request_id, rank) 取 min tick 收 code 8 事件)。锚定位置 = 该成员
+        链条在所在批内列车体后的末节点(共享折叠体 ⇒ 各 debut 标记顺序
+        挂体后)。"""
         train_id = train_plan["train_id"]
         group = self.group_by_index[train_plan["instance_index"]]
         members = {}
@@ -931,7 +1049,7 @@ class GraphBatchBuilder:
         # ---- completion_gates 账本:exit 成员所在列车的 end barrier 即
         #      下一同 session turn 的 interval gate after_node_id(face
         #      旧 decode end barrier 的同款口径)----
-        # B3(sh :948-956):post-barrier 块末账本(五仓一致口径)——drain
+        # B3(sh_2.0 蓝本):post-barrier 块末账本(五仓一致口径)——drain
         # 成员写 seg1(joiner decode_evictions 触发门),exit 成员写 seg2
         # (completion 段触发门口径;face 的 completion 路径零逐出,seg2 由
         # completion_gates 同源承载,此处仅为账本对齐与 REQUEST_COMPLETE
@@ -954,8 +1072,14 @@ class GraphBatchBuilder:
         }
 
     def _emit_train_marker(self, rank: int, name: str) -> int:
-        """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。"""
-        self.builders[rank].comp(name, 1, 1)
+        """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。
+
+        契约 §7 裁定 8(阶段 C 随迁):一切 comp(name,1,1) 微节点
+        (first_token/drain/exit/sentinel/join/pstart/wakeup 等 marker)
+        一律显式 op_role="control_marker"——不靠"数值很小"识别(设计文档
+        §7.3);legacy 后端下该属性惰性(C++ 分发保持旧微作业语义,
+        裁定 3)。"""
+        self.builders[rank].comp(name, 1, 1, op_role="control_marker")
         return self.builders[rank].previous_id
 
     def _set_context(self, request_plan: dict, stage: str,
@@ -968,16 +1092,19 @@ class GraphBatchBuilder:
         """释放 terminal session 不会再被下一 turn 消费的完成门。"""
         self.completion_gates.pop(session_id, None)
         # terminal completion:该 session 不会再有下一 turn 消费 deferred
-        # location 链(sh _emit_completion :1321-1325 同款回收)。
+        # location 链(sh_2.0 蓝本 _emit_completion 同款回收)。
         self.deferred_session_locations.pop(session_id, None)
         self.pending_request_by_session.pop(session_id, None)
         # B4:terminal session 不会再有回迁消费在飞 store 尾部登记
-        # (与 kv_manager.retire_terminal_session 同点位,不发传输)。
+        # (与 kv_manager.retire_terminal_session 同点位,不发传输);
+        # 决策计数同步回收(terminal 会话不会再有下一 turn,其未发射的
+        # store 决策也不会再被准入门等待)。
         self.pending_store_tails.pop(session_id, None)
+        self.pending_store_decisions.pop(session_id, None)
 
     def note_request_complete(self, session_id: str, following_request_id,
                               completion_location: str) -> None:
-        """B3(sh ``_emit_completion`` :1341-1355 的 face 适配):REQUEST_COMPLETE
+        """B3(sh_2.0 蓝本 _emit_completion 的 face 适配):REQUEST_COMPLETE
         边界登记下一 turn 的 pending location 链。
 
         face 的 interval gates 在下一 turn 准入时发射(不同于 sh 在完成时
@@ -1002,7 +1129,7 @@ class GraphBatchBuilder:
         self._action_sequence.pop(request_id, None)
 
     def sync_pending_history_after_evictions(self, transfers) -> None:
-        """B3(sh :1253-1260,历史事故修复版):决策时点补偿——KV 变更点返回
+        """B3(sh_2.0 蓝本,历史事故修复版):决策时点补偿——KV 变更点返回
         的逐出转移立即镜像到 pending location 链(face:经
         deferred_session_locations 承载,见 note_request_complete)。
         唯一标记路径(发射侧不重复标记;多级逐出乱序时重复标记会把门
@@ -1011,9 +1138,21 @@ class GraphBatchBuilder:
             transfer = kv_transfer_from_log(transfer)
             if transfer.kind == "remote_store":
                 self._mark_pending_history_store(transfer)
+                # B4 决策→发射窗口:同点位登记"已决策未发射"计数,发射侧
+                # (_register_store_tails)核销;decode 侧逐出的发射滞后于
+                # 决策,窗口内该会话的回迁准入被调度器推迟(防池读先于
+                # 池写)。blocked/准入路径决策与发射同交付,净零。
+                count = self.pending_store_decisions.get(
+                    transfer.session_id, 0)
+                self.pending_store_decisions[transfer.session_id] = count + 1
+
+    def has_pending_store_decision(self, session_id: str) -> bool:
+        """该会话是否存在"已决策未发射"的 remote_store(见
+        pending_store_decisions 注册处注释)。调度器准入门查询。"""
+        return self.pending_store_decisions.get(session_id, 0) > 0
 
     def _mark_pending_history_store(self, transfer: KVTransfer) -> None:
-        # 与共享 history-gate 账本一致(sh :1262-1292;turn-0 deferred 通道
+        # 与共享 history-gate 账本一致(sh_2.0 蓝本;turn-0 deferred 通道
         # 保留:in-flight turn-0 request 的 session key 无 pending 门,
         # 逐出标记推迟到 session 完成时结算)。Session-level Tiered-LRU:
         # remote_store 恒为整体外迁(resident_prefix_layers_after == 0),
@@ -1057,11 +1196,18 @@ class GraphBatchBuilder:
 
     def _emit_plan_transfer(self, request_plan: dict, transfer: KVTransfer,
                             stage: str, *, gate=None,
-                            trigger_gate=None) -> dict:
-        """B3(sh :990-1017):发射一个 KV 迁移动作(准入/列车 joiner/阻塞
+                            trigger_gate=None,
+                            extra_arm_ids: Optional[dict] = None) -> dict:
+        """B3(sh_2.0 蓝本):发射一个 KV 迁移动作(准入/列车 joiner/阻塞
         逐出段共用;action 序号跨该 request 的全部段共享,保证 canonical
         命名稳定)。发射侧不重复标记 pending 门(决策时点同步是唯一标记
-        路径)。"""
+        路径)。注意:需要产生 C++ code-7 传输锚点的发射段(恢复链等),
+        stage 名必须携带精确命名段 "_kv_transfer_action"
+        (main_online.cc 锚点登记契约,见恢复链调用点注释)。
+        extra_arm_ids（死锁真修 方案①,2026-10-11，自 WL 同构移植）:
+        store→restore 补偿边的显式传参形态 {rank: [节点 id]}——remote_load
+        链在对应 rank 的首节点显式 arm（中立化后不再经主链 pending 消
+        费）。"""
         prefix = _prefix_of(request_plan)
         action_name = (
             "{}_{}_action{:03d}_{}_{}".format(
@@ -1080,6 +1226,7 @@ class GraphBatchBuilder:
             pending_gate=gate,
             trigger_gate=trigger_gate,
             transfer_anchor_sink=None,
+            extra_arm_ids=extra_arm_ids,
         )
 
     def _next_action_sequence(self, request_plan: dict) -> int:
@@ -1105,34 +1252,59 @@ class GraphBatchBuilder:
             entries.append((
                 int(shard["edge_rank"]), int(store_node_id),
                 shard.get("source_ack_node_id")))
+        # B4 决策→发射窗口:一笔整体 store 物理落发射,核销一笔决策计数
+        # (下限截断到 0:直发路径——测试/未来不经 sync 的发射——不构成
+        # 失配,登记表只承载"已决策未发射"的净计数,门语义只依赖 >0)。
+        # 纵深防御注记(2026-10-01 R2 审计):该计数是单向的——只拦
+        # "已决策未发射",不拦"未决策发射/同笔双发"(后者会同时双倍登记
+        # tails 且计数静默归零,verify_run_end 双空断言无法显影)。当前
+        # 生产 4 个 sync 点与 4 个发射点 1:1 对称、每 transfer 恰发一次,
+        # 不可达;若未来重构发射账本,须补"发射笔数 == 决策笔数"对账。
+        remaining = self.pending_store_decisions.get(
+            record["session_id"], 0) - 1
+        if remaining > 0:
+            self.pending_store_decisions[record["session_id"]] = remaining
+        else:
+            self.pending_store_decisions.pop(record["session_id"], None)
 
     def _arm_pending_store_tails(self, session_id, name_prefix,
-                                 restore_shards) -> None:
+                                 restore_shards) -> dict:
         """B4(主方案 §3.3):回迁发射统一入口的 store→restore 补边。
 
         逐出支链悬空后,"同会话逐出池写先于其下一轮池读"的链序传递性
-        失效——回迁链发射前按登记表补显式依赖(懒处理:store 早已物理
+        失效——回迁发射前按登记表补显式依赖(懒处理:store 早已物理
         完成时依赖边即刻满足,无额外时延):
-          - 同缘:arm_dependency(store 的边缘 mem_store id)——同 rank
-            显式 data_dep 合法(跨批次经持久 (rank,id) 解析),由回迁链
-            在该边缘 rank 上的首个节点(mem_load 或其前 1B request)
-            消费,经串行链传递到 mem_load;
+          - 同缘:显式依赖(store 的边缘 mem_store id)按 rank 收集进返
+            回表,由 remote_load 链该 rank 的首节点(mem_load 或其前 1B
+            request)消费（死锁真修 方案① 2026-10-11：数据面中立化后主
+            链 pending 不再由传输链消费——预 arm 契约改为显式传参，排序
+            语义不变）；
           - 跨缘:复用 _emit_transfer_trigger 的 1B p2p 中继模式——store
             边缘 arm 后发 1B(其 data_dep 挂 store 的 mem_store 同 rank
-            节点),restore 边缘收 1B,mem_load 经串行链排其后(桥拒绝
-            跨 rank 直边,1B p2p 是协议内唯一合法时序载体);同
+            节点),restore 边缘收 1B,mem_load 经显式 arm 排其后(桥拒绝
+            跨 rank 直边,1B p2p 是协议内唯一合法时序载体);relay recv
+            中立化（C7），其节点 id 同法进返回表；同
             (store 边缘 → restore 边缘) 多笔 store 共用一条中继(send
             节点一次消费全部 armed 依赖)。
         Session-level Tiered-LRU 下逐出恒为单笔整体 store,每会话至多
-        一条登记——本方法把该会话登记整体消费后清除。"""
-        tails = self.pending_store_tails.pop(session_id, None)
+        一条登记——本方法把该会话登记整体消费后清除。返回
+        {rank: [节点 id]} 显式 arm 表（随回迁发射传参）。"""
+        restore_arms: dict[int, list[int]] = {}
+        tails = self.pending_store_tails.get(session_id)
         if not tails:
-            return
+            return restore_arms
         restore_edges = []
         for shard in restore_shards:
             edge_rank = int(shard.edge_rank)
             if edge_rank not in restore_edges:
                 restore_edges.append(edge_rank)
+        if not restore_edges:
+            # fail-closed(2026-10-01):有在飞 store 登记而回迁链零边缘
+            # 分片——静默弹掉登记会让补偿丢失且不可恢复。正常运行不可达
+            # (REMOTE 恒全量多 shard),防御端点。
+            raise RuntimeError(
+                "store->restore compensation found no restore edge "
+                "shards for session {}".format(session_id))
         same_edge_tails = {}
         relay_tails = {}
         for edge_rank, store_node_id, _source_ack in tails:
@@ -1141,24 +1313,51 @@ class GraphBatchBuilder:
                     store_node_id)
             else:
                 relay_tails.setdefault(edge_rank, []).append(store_node_id)
-        for edge_rank, store_node_ids in same_edge_tails.items():
-            for store_node_id in store_node_ids:
-                self.builders[edge_rank].arm_dependency(store_node_id)
         for store_edge, store_node_ids in relay_tails.items():
             for restore_edge in restore_edges:
                 relay_tag = self._tag_allocator.take()
-                for store_node_id in store_node_ids:
-                    self.builders[store_edge].arm_dependency(store_node_id)
-                self.builders[store_edge].comm_send(
-                    "{}_store_relay_edge{}_to_edge{}".format(
-                        name_prefix, store_edge, restore_edge),
-                    src=store_edge, dst=restore_edge, comm_size=1,
-                    comm_tag=relay_tag)
-                self.builders[restore_edge].comm_recv(
-                    "{}_store_relay_arrival_edge{}_to_edge{}".format(
-                        name_prefix, store_edge, restore_edge),
-                    src=store_edge, dst=restore_edge, comm_size=1,
-                    comm_tag=relay_tag)
+
+                # 2026-10-11 死锁真修(裁决8,自 WL 移植):relay send 只是 1B
+                # 排序信号、无主链消费者,不得吃主链 frontier——否则实例末趟
+                # 列车被传递性钉死在在飞逐出 store 之后,与集合通信/gpu_comm
+                # 槽闭成四方环。包进 _emit_side_branch(fork/restore)。
+                def _emit_relay_send(store_edge=store_edge,
+                                     store_node_ids=store_node_ids,
+                                     restore_edge=restore_edge,
+                                     relay_tag=relay_tag):
+                    for store_node_id in store_node_ids:
+                        self.builders[store_edge].arm_dependency(store_node_id)
+                    self.builders[store_edge].comm_send(
+                        "{}_store_relay_edge{}_to_edge{}".format(
+                            name_prefix, store_edge, restore_edge),
+                        src=store_edge, dst=restore_edge, comm_size=1,
+                        comm_tag=relay_tag)
+                self._emit_side_branch(_emit_relay_send)
+                # C7（死锁真修 方案①，2026-10-11，自 WL 同构移植）：relay
+                # recv 同为簿记节点,中立化不占主链 frontier;restore 链首
+                # 节点显式 arm 本 id（随返回表传参，由 remote_load 链该
+                # rank 首节点消费）——"池写先于池读"的跨缘排序从链位改
+                # 为显式边。
+                relay_recv_id = _frontier_neutral(
+                    self.builders[restore_edge],
+                    lambda store_edge=store_edge, restore_edge=restore_edge,
+                           relay_tag=relay_tag:
+                        self.builders[restore_edge].comm_recv(
+                            "{}_store_relay_arrival_edge{}_to_edge{}".format(
+                                name_prefix, store_edge, restore_edge),
+                            src=store_edge, dst=restore_edge, comm_size=1,
+                            comm_tag=relay_tag))
+                restore_arms.setdefault(restore_edge, []).append(
+                    relay_recv_id)
+        # 同缘 arm 后收集（ relay 先发射：其 recv 节点在回缘 rank 上，
+        # 中立化后由 restore 链首节点显式 arm 消费——同"先于回迁链"语
+        # 义；同缘 arm 恰落在回迁链首节点上,不被中继 recv 抢先消费）。
+        for edge_rank, store_node_ids in same_edge_tails.items():
+            for store_node_id in store_node_ids:
+                restore_arms.setdefault(edge_rank, []).append(store_node_id)
+        # 消费即弹出(幂等:其余路径对空表 early-return,不会到达这里)。
+        self.pending_store_tails.pop(session_id, None)
+        return restore_arms
 
     def _emit_admission_actions(self, request_plan: dict) -> None:
         """发射在线请求的准入动作:到达/interval gates、history 逐出
@@ -1250,14 +1449,14 @@ class GraphBatchBuilder:
         if history_before is not None and pending_gate.location not in (
                 history_before.location, "new_session"):
             # pending location(经 remote_store 折算的 completion 链)必须
-            # 与计划一致(sh :1074-1082 同款校验,收敛为统一 mismatch
+            # 与计划一致(sh_2.0 蓝本 同款校验,收敛为统一 mismatch
             # raise——session 级 Tiered-LRU 下无 partial 折算特例)。
             raise RuntimeError(
                 "history gate location {!r} does not match planned location "
                 "{!r}".format(
                     pending_gate.location, history_before.location))
 
-        # ---- history 逐出(触发门 = 到达/interval gate;sh :1084-1092) ----
+        # ---- history 逐出(触发门 = 到达/interval gate;sh_2.0 蓝本) ----
         history_eviction_trigger = TransferTriggerGate(
             control_instance_index=pending_gate.source_instance_index,
             node_gates=pending_gate.timer_gates,
@@ -1288,6 +1487,13 @@ class GraphBatchBuilder:
         )
         history_transfer = history_transfers[0] if history_transfers else None
 
+        # C4 历史到达账本（死锁真修 方案①，2026-10-11，自 WL 同构移植）：
+        # 数据面中立化后传输节点不再位于主链，就绪屏障改显式 arm 各
+        # rank 的历史到达节点（remote_load = restore 完成；NOC_MIGRATE =
+        # paired data recv；跨实例时序 control recv）——"恢复完成前不能
+        # 消费历史 KV"的排序语义从链位改为显式边，强度不变。
+        history_arrival_ids: dict[int, list[int]] = {}
+
         if history_action in (NO_HISTORY, LOCAL_HIT, NOC_MIGRATE):
             # face 既有路径原样保留(策略 §1.4:LOCAL 跨实例整份 NoC 迁移 =
             # face 1000 类路径;时序依赖经 control trigger 跨实例 1B 承载)。
@@ -1304,8 +1510,9 @@ class GraphBatchBuilder:
                     raise RuntimeError("NoC history action has no source")
                 source_group = self.group_by_index[source_index]
                 migration_timers = control_timers
+                control_recv_ids = {}
                 if source_group.name != control_group.name:
-                    _emit_control_trigger(
+                    control_recv_ids = _emit_control_trigger(
                         builders=builders,
                         queue_index=request_plan["queue_index"],
                         name="{}_history_source_control".format(prefix),
@@ -1315,17 +1522,30 @@ class GraphBatchBuilder:
                     )
                     migration_timers = {
                         rank: None for rank in source_group.ranks}
-                _paired_transfer(
+                # 时序承载显式化（方案①）：control recv 中立化后不再位于
+                # 源组主链，迁移数据 send 显式 arm 本 id（原链位序改显式
+                # 边，排序语义不变）。
+                extra_send_arm_ids = {
+                    rank: [recv_id]
+                    for rank, recv_id in control_recv_ids.items()
+                } or None
+                xfer_routes = _paired_transfer(
                     config=config, builders=builders,
                     queue_index=request_plan["queue_index"], category=1000,
                     name="{}_history_kv".format(prefix),
                     source_group=source_group, target_group=prefill_group,
                     total_bytes=request_plan["history_transfer_bytes"],
                     timer_gates=migration_timers,
+                    extra_send_arm_ids=extra_send_arm_ids,
                 )
+                for route in xfer_routes:
+                    arrival_id = route.get("recv_node_id")
+                    if arrival_id is not None:
+                        history_arrival_ids.setdefault(
+                            int(route["target_rank"]), []).append(arrival_id)
             else:
                 # LOCAL_HIT:时序依赖经 control trigger(同组 arm / 跨组 1B)。
-                _emit_control_trigger(
+                control_recv_ids = _emit_control_trigger(
                     builders=builders,
                     queue_index=request_plan["queue_index"],
                     name="{}_interval_control".format(prefix),
@@ -1333,6 +1553,9 @@ class GraphBatchBuilder:
                     target_group=prefill_group,
                     timer_gates=control_timers,
                 )
+                for rank, recv_id in control_recv_ids.items():
+                    history_arrival_ids.setdefault(int(rank), []).append(
+                        recv_id)
         else:
             # 恢复路径(remote_load 族):session 级 Tiered-LRU 下唯一恢复
             # 动作 = REMOTE_RESTORE 单笔全量回迁(partial 后缀恢复/两段链
@@ -1364,17 +1587,40 @@ class GraphBatchBuilder:
                 NO_HISTORY, LOCAL_HIT, NOC_MIGRATE):
             # 全量远端恢复(REMOTE_RESTORE):remote_load 链挂 pending
             # gate(interval/到达 gates 为控制源),随后共享 readiness
-            # 屏障(sh :1133-1135)。
+            # 屏障(sh_2.0 蓝本)。
             # B4(store→restore 前递依赖):回迁发射前查表补边——同会话
             # 在飞 store 支链的边缘 mem_store 完成门挂到本回迁链(同缘
-            # 直挂 / 跨缘 1B 中继),防池读先于池写。
-            self._arm_pending_store_tails(
+            # 直挂 / 跨缘 1B 中继),防池读先于池写。方案①（2026-10-11）：
+            # 补边改显式传参（extra_arm_ids），由 remote_load 链首节点
+            # 显式 arm——中立化后主链 pending 不再被传输链消费。
+            restore_arms = self._arm_pending_store_tails(
                 request_plan["session_id"], prefix,
                 history_transfer.shards)
-            self._emit_plan_transfer(
-                request_plan, history_transfer, "history_transfer",
-                gate=pending_gate)
+            # R2 py-slo-E1 修复(2026-09-26):stage 名必须携带精确命名段
+            # "_kv_transfer_action"——C++ main_online.cc register_online_
+            # metrics_anchors 仅对名字含该段的节点登记 last_transfer 传输
+            # 锚点(code-7 memory anchor 的唯一生产来源;P1-6 修复起由旧
+            # find("kv") 子串启发式收紧为精确段);tiered-LRU 唯一远端恢复
+            # 链(REMOTE_RESTORE 单笔全量 remote_load)旧名
+            # "{prefix}_history_transfer_actionNNN_*" 不含该段,恢复锚点
+            # 永不发射,WP5 restore 三段分解全 NA 或退化伪 stall。改名为
+            # "{prefix}_history_kv_transfer_actionNNN_*";节点后缀
+            # (_shardN_remote_load 等)不变,下游均按后缀/mark 过滤。
+            transfer_records = self._emit_plan_transfer(
+                request_plan, history_transfer, "history_kv_transfer",
+                gate=pending_gate, extra_arm_ids=restore_arms)
+            # C4：restore 完成节点 = 就绪屏障显式 arm 目标，按 rank 落账。
+            for shard_record in transfer_records.get("shards", ()):
+                for rank, node_id in (shard_record.get(
+                        "history_arrival_node_ids") or {}).items():
+                    history_arrival_ids.setdefault(int(rank), []).append(
+                        node_id)
+        # readiness 屏障（既有命名与位置）——恢复完成前不能消费历史 KV。
+        # C4（方案①）：历史传输中立化后屏障不再经链位等数据，改显式
+        # arm 各 rank 的数据到达节点（无传输分支保持原门消费路径）。
         for rank in prefill_group.ranks:
+            for arrival_id in history_arrival_ids.get(rank, ()):
+                builders[rank].arm_dependency(arrival_id)
             builders[rank].all_reduce(
                 "{}_history_tp_ready_barrier".format(prefix), 1,
                 prefill_group.pg_name)

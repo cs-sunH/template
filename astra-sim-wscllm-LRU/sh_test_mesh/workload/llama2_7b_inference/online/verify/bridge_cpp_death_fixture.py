@@ -9,13 +9,15 @@ BridgePipeError fail-closed 退出 + stderr 留痕(修复 F1 现场 python.log
 fd 语义(与真实现相同的通道操作序列):
   1. req 写端 O_WRONLY|O_NONBLOCK 重试至真实侧读端就绪(同 open_notify);
   2. resp 读端 O_RDONLY|O_NONBLOCK 常开(同 open_notify 的缺陷 B 修复);
-  3. 写 request_1.json + 门铃、request_2.json + 门铃;
+  3. 写 request_0.json + 门铃、request_1.json + 门铃(协议 0 基严格单调,
+     与 bridge_streaming_fixture 同口径——旧版从 1 起会被请求通道的
+     序号守卫首笔即拒,BrokenPipe 目标路径不可达);
   4. 保活 ~1.5s(让真实侧完成第 1 笔交付的字节写);
   5. 关闭两个 fd 并 _exit(0) = 模拟 C++ 进程中途死亡。
 
-父进程 = 真实 BridgeServer + echo handler。期望:处理第 2 笔交付时 resp
-写端 BrokenPipe => serve_forever 的 BridgePipeError 分支打印
-"C++ side is gone" 到 stderr 并 sys.exit(1)。外层 runner 断言退出码 1
+父进程 = 真实 BridgeServer + echo handler。期望:处理第 2 笔交付
+(seq=1)时 resp 写端 BrokenPipe => serve_forever 的 BridgePipeError 分支
+打印 "C++ side is gone" 到 stderr 并 sys.exit(1)。外层 runner 断言退出码 1
 且 stderr 含该字样。
 
 用法(由 run_bridge_cpp_death_fixture.sh 调用):
@@ -81,21 +83,21 @@ def fake_cpp_child(bridge_dir):
                 raise
             time.sleep(0.02)
     rfd = os.open(resp_fifo, os.O_RDONLY | os.O_NONBLOCK)
-    # 交换 1: request 文件 + 门铃;等真实侧写出 response_1.json 并完成
+    # 交换 1: request 文件 + 门铃;等真实侧写出 response_0.json 并完成
     # 字节写(留 0.3s 余量),模拟一次完整交付。
     _write_json_atomic(
-        os.path.join(bridge_dir, "request_1.json"), _request(1))
+        os.path.join(bridge_dir, "request_0.json"), _request(0))
     os.write(wfd, b"\n")
-    resp1 = os.path.join(bridge_dir, "response_1.json")
+    resp0 = os.path.join(bridge_dir, "response_0.json")
     deadline = time.time() + 10.0
-    while not os.path.exists(resp1) and time.time() < deadline:
+    while not os.path.exists(resp0) and time.time() < deadline:
         time.sleep(0.02)
     time.sleep(0.3)
     # 交换 2: request 文件 + 门铃后【立即】死亡 —— 真实侧的门铃 2 处理
     # (读文件/写 response/写通知字节)至少要一次文件 I/O,死亡必先于
     # 其通知字节落地 => BrokenPipe。
     _write_json_atomic(
-        os.path.join(bridge_dir, "request_2.json"), _request(2))
+        os.path.join(bridge_dir, "request_1.json"), _request(1))
     os.write(wfd, b"\n")
     os.close(wfd)
     os.close(rfd)

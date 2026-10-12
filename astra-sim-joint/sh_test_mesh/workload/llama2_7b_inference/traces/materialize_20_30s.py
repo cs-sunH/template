@@ -33,6 +33,18 @@ Simulation-input constraint (user directive 2026-08-15): ONLY
 `arrival_time < 30,000,000,000 ns` are permitted. No other csv, no longer
 window.
 
+Non-grid fail-closed publication gate (2026-09-29, report 3.14): the
+materializer refuses to publish a timing value the Python loader would
+reject.  At scale == 1.0 the turn-0 ``session_arrival_time_ns`` goes out
+UNQUANTIZED, so BOTH published timing columns are gated before the row is
+written: a session_arrival_time_ns / inter_request_interval_ns that is not
+a multiple of 1000 ns aborts with the source line and value (the loader
+rejects the whole queue on it while the C++ reader accepts it -- a
+three-port divergence).  Source timing fields (arrival_time, human_time,
+tool_time) are parsed with the strict ASCII-digits-only lexicon (sign,
+whitespace, underscore separators and Unicode digits abort with the source
+line).
+
 Derivation rules (frozen 3-minute lineage, template_back/history/20_3mins;
 single pass, folded queue + canonical digest from one traversal):
   1. window: a session is included iff its first row's arrival_time < 30e9;
@@ -93,11 +105,34 @@ DIGEST_HEADER = [
 ]
 
 
-def _gap_ns(human_time, tool_time):
-    h = (human_time or "").strip()
-    t = (tool_time or "").strip()
+def _parse_nonnegative_ns(field, text, line_num):
+    """Report 3.14 fix (2026-09-29): strict parse for source timing fields
+    (absolute arrivals and human/tool gap waits).  Python's int() silently
+    accepts "+1", " 1", "1_0" and Unicode digits, and a negative arrival
+    even publishes verbatim at scale == 1.0; the loader
+    (generate_trace.load_request_queue) and the C++ reader enforce plain
+    ASCII digits only, so a malformed timing value aborts the authoritative
+    materializer with the offending source line instead of publishing a
+    queue the downstream ports disagree on."""
+    if not text or any(not ("0" <= character <= "9") for character in text):
+        raise SystemExit(
+            "source line %d: %s=%r: timing fields must be non-negative "
+            "integers written as plain ASCII digits (the strict lexicon "
+            "shared by generate_trace.load_request_queue and the C++ "
+            "reader); queue NOT materialized" % (line_num, field, text))
+    return int(text)
+
+
+def _gap_ns(human_time, tool_time, line_num):
+    """Strict non-negative gap of one source row (report 3.14, 2026-09-29):
+    no strip(), so a whitespace-wrapped value is rejected by the strict
+    lexicon instead of being silently accepted."""
+    h = human_time or ""
+    t = tool_time or ""
     raw = h if h else (t if t else "")
-    return int(raw) if raw else 0
+    if not raw:
+        return 0
+    return _parse_nonnegative_ns("human_time/tool_time", raw, line_num)
 
 
 def _next_trigger_type(human_time, tool_time, is_last_row):
@@ -173,7 +208,9 @@ def _scaled_session_ns(arrival, scale):
 
 
 def _iter_sessions(reader):
-    """Yield one contiguous source session at a time (source-order contract)."""
+    """Yield one contiguous source session at a time (source-order contract).
+    Each row travels with its 1-based source line number (reader.line_num)
+    so the fail-closed gates below can point at the offending source line."""
     current_sid = None
     current_rows = []
     for row in reader:
@@ -184,7 +221,7 @@ def _iter_sessions(reader):
             yield current_sid, current_rows
             current_sid = sid
             current_rows = []
-        current_rows.append(row)
+        current_rows.append((reader.line_num, row))
     if current_sid is not None:
         yield current_sid, current_rows
 
@@ -247,8 +284,14 @@ def queue_provenance(queue_path, generator_version):
         if not header_seen:
             header_seen = True
             return
-        data_rows += 1
         fields = line.split(b",")
+        # '#' comment rows (request_id cell starts with '#') are skipped by
+        # the C++ index pass (L13) and do not count as data rows; mirror
+        # that here so a hand-edited queue with comment rows cannot make
+        # the sidecar's data_rows disagree with the reader.
+        if len(fields) > 2 and fields[2][:1] == b"#":
+            return
+        data_rows += 1
         session = fields[0]
         arrival_text = fields[5] if len(fields) > 5 else b""
         if session != current_session:
@@ -321,23 +364,34 @@ def _materialize(src, out_queue, out_digest, window_ns, arrival_scale):
     turn0_prefix_rows = 0
     t0_grid_snapped = 0
     max_total = 0
-    with open(src, newline="") as source, \
-            open(out_queue, "w", newline="") as queue_output, \
-            open(out_digest, "w", newline="") as digest_output:
+    with open(src, newline="", encoding="utf-8") as source, \
+            open(out_queue + ".tmp", "w", newline="",
+                 encoding="utf-8") as queue_output, \
+            open(out_digest + ".tmp", "w", newline="",
+                 encoding="utf-8") as digest_output:
+        # R5-S3（2026-09-29 face 移植）：三处文本 open() 补 encoding=
+        # "utf-8"（缺省随 locale 漂移）。R3-J2（2026-09-29 face 移植）：
+        # 队列/canonical digest 先写 .tmp、流式结束后 os.replace 原子发布
+        # （对齐仓内既有原子写范式）——并发读者/C++ 门禁绝不读到半截
+        # 产物；provenance sidecar 同款。
         queue_writer = csv.writer(queue_output)
         digest_writer = csv.writer(digest_output)
         queue_writer.writerow(QUEUE_HEADER)
         digest_writer.writerow(DIGEST_HEADER)
         for sid, srows in _iter_sessions(csv.DictReader(source)):
-            first_arrival = int(srows[0]["arrival_time"])
+            first_line_num, first_row = srows[0]
+            first_arrival = _parse_nonnegative_ns(
+                "arrival_time", first_row["arrival_time"], first_line_num)
             if first_arrival >= window_ns:
                 continue
             session_count += 1
             arrival = first_arrival
-            for turn, r in enumerate(srows):
+            for turn, entry in enumerate(srows):
+                line_num, r = entry
                 if turn > 0:
-                    prev = srows[turn - 1]
-                    arrival += _gap_ns(prev["human_time"], prev["tool_time"])
+                    prev_line_num, prev = srows[turn - 1]
+                    arrival += _gap_ns(
+                        prev["human_time"], prev["tool_time"], prev_line_num)
                     if arrival >= window_ns:
                         break
                 rid = "%s_request_%d" % (sid, turn)
@@ -358,17 +412,59 @@ def _materialize(src, out_queue, out_digest, window_ns, arrival_scale):
                 else:
                     session_ns = ""
                     interval_ns = str(_gap_ns(
-                        srows[turn - 1]["human_time"],
-                        srows[turn - 1]["tool_time"]))
+                        srows[turn - 1][1]["human_time"],
+                        srows[turn - 1][1]["tool_time"],
+                        srows[turn - 1][0]))
+                # Report 3.14 fix (2026-09-29): fail-closed non-grid gate.
+                # The Python loader (generate_trace.load_request_queue)
+                # rejects the WHOLE queue on timing % 1000 != 0 while the
+                # C++ reader accepts it, so publishing a non-grid timing
+                # value is a three-port divergence.  Unlike the wscllm
+                # derive script (which quantizes every turn-0 arrival), this
+                # materializer publishes turn-0 arrivals UNQUANTIZED at
+                # scale == 1.0, so BOTH published timing columns can leave
+                # the 1000 ns grid and both are gated here before the row is
+                # written.
+                off_grid = None
+                if session_ns and int(session_ns) % ARRIVAL_GRID_NS != 0:
+                    off_grid = "session_arrival_time_ns %s" % session_ns
+                elif interval_ns and \
+                        int(interval_ns) % ARRIVAL_GRID_NS != 0:
+                    off_grid = (
+                        "inter_request_interval_ns %s (the human_time/"
+                        "tool_time wait of the previous row)" % interval_ns)
+                if off_grid is not None:
+                    raise SystemExit(
+                        "source line %d: %s is not a multiple of %d ns: the "
+                        "Python loader (generate_trace.load_request_queue) "
+                        "rejects the whole queue on a non-grid timing value; "
+                        "queue NOT materialized"
+                        % (line_num, off_grid, ARRIVAL_GRID_NS))
                 trigger_type = _next_trigger_type(
                     r["human_time"], r["tool_time"],
                     is_last_row=(turn == len(srows) - 1),
                 )
+                if window_ns == WINDOW_NS:
+                    row_description = (
+                        "compute_20 first-30-seconds window; turn-0 prefix "
+                        "folded into prefill_length (recompute caliber)")
+                else:
+                    # R3-J6（2026-09-29 face 移植）：非整秒窗口不再截断
+                    # 描述——旧写法恒写 "first-30-seconds"（window_ns 可
+                    # 配而描述硬编码 30），描述与实际窗口不符。整秒仍产
+                    # 整数标签；非整秒用最短精确小数（%g）。
+                    if window_ns % 1_000_000_000 == 0:
+                        window_label = str(window_ns // 1_000_000_000)
+                    else:
+                        window_label = "%g" % (window_ns / 1_000_000_000)
+                    row_description = (
+                        "compute_20 first-%s-seconds window; turn-0 prefix "
+                        "folded into prefill_length (recompute caliber)"
+                        % window_label)
                 queue_writer.writerow([
                     sid, turn, rid, prefill, r["decode_length"], session_ns,
                     interval_ns, trigger_type,
-                    "compute_20 first-30-seconds window; turn-0 prefix folded "
-                    "into prefill_length (recompute caliber)",
+                    row_description,
                 ])
                 digest = hashlib.sha256(
                     ("%s|%d|%d|%d" %
@@ -379,6 +475,11 @@ def _materialize(src, out_queue, out_digest, window_ns, arrival_scale):
                 ])
                 request_count += 1
                 decode_length_sum += int(r["decode_length"])
+
+    # R3-J2（2026-09-29 face 移植）：流式结束即原子发布（并发读者/C++
+    # 门禁绝不读到半截产物）；md5/ provenance 均在发布后的终版上计算。
+    os.replace(out_queue + ".tmp", out_queue)
+    os.replace(out_digest + ".tmp", out_digest)
 
     src_md5 = _md5_file(src)
     queue_md5 = _md5_file(out_queue)
@@ -393,9 +494,12 @@ def _materialize(src, out_queue, out_digest, window_ns, arrival_scale):
     )
     provenance = queue_provenance(out_queue, generator_version)
     provenance_path = out_queue + ".provenance.json"
-    with open(provenance_path, "w", encoding="utf-8") as pout:
+    # R3-J2: provenance sidecar 原子发布（临时文件 + os.replace）——
+    # C++ 门禁按它 fail-closed，绝不读到半截 JSON。
+    with open(provenance_path + ".tmp", "w", encoding="utf-8") as pout:
         json.dump(provenance, pout, indent=2, sort_keys=True)
         pout.write("\n")
+    os.replace(provenance_path + ".tmp", provenance_path)
 
     print("source=%s" % src)
     print("source_md5=%s" % src_md5)
@@ -412,7 +516,8 @@ def _materialize(src, out_queue, out_digest, window_ns, arrival_scale):
           % (t0_grid_snapped, arrival_scale, ARRIVAL_GRID_NS))
     print("turn0_prefix_gt0_rows=%d max_input_tokens_total=%d" % (turn0_prefix_rows, max_total))
     print("average_decode_length=%s"
-          % (decode_length_sum / float(request_count)))
+          % (decode_length_sum / float(request_count)
+             if request_count else "n/a (zero-request window)"))
     print("provenance: " + json.dumps(
         {k: provenance[k] for k in (
             "csv_fnv1a64", "csv_bytes", "data_rows", "sessions",
@@ -420,7 +525,7 @@ def _materialize(src, out_queue, out_digest, window_ns, arrival_scale):
             "turn0_adjacent_inversions", "session_blocks_contiguous")},
         sort_keys=True))
     print("provenance sidecar: %s" % provenance_path)
-    print("[next-steps] 1) trace_config.csv:12 request_queue_csv -> %s" % out_queue)
+    print("[next-steps] 1) trace_config.csv request_queue_csv -> %s" % out_queue)
 
 
 if __name__ == "__main__":

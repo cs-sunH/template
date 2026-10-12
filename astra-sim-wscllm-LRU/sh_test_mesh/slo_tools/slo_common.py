@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""SLO 离线后处理工具集——共享框架（五仓逐字节相同）。
+"""SLO 离线后处理工具集——共享框架。
+
+同步基线注记（2026-09-26）：本模块与 face/wscllm 家族同名脚本已按仓分叉，
+不再跨仓逐字节相同；跨仓同步义务仅覆盖各工具显式标注"逐字拷贝/同步义务"
+的函数节，其余以本仓注记为准。
 
 本模块集中存放 slo_tools 各脚本共用的框架代码：
 
@@ -25,6 +29,7 @@ import os
 import pickle
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional, Sequence
 
@@ -32,7 +37,6 @@ from typing import Any, Iterable, Iterator, Optional, Sequence
 # 退出码与错误
 # ---------------------------------------------------------------------------
 
-EXIT_OK = 0
 EXIT_FAIL_CLOSED = 2  # 输入缺失/格式错/参数未推导 → 明确报错后非零退出
 
 
@@ -44,12 +48,49 @@ def fail(message: str) -> None:
     raise SloToolError(message)
 
 
+# fail-closed 读取错误通道（P2-16）：坏 UTF-8/IO/CSV/gzip 类错误与
+# SloToolError 同出口（EXIT_FAIL_CLOSED=2），不再逃逸成裸 traceback +
+# 退出码 1（退出码纪律：test_slo_contract 钉死 fail-closed=2）。覆盖面：
+# UnicodeDecodeError（坏字节）；OSError（缺文件/权限；gzip.BadGzipFile
+# 是其子类）；csv.Error（结构坏行）；EOFError（截断 gzip）；zlib.error
+# （坏 deflate 流）。
+INPUT_READ_ERRORS = (UnicodeDecodeError, OSError, csv.Error, EOFError,
+                     zlib.error)
+
+
+def _reject_json_constant(token: str) -> None:
+    fail(f"JSON 含非有限常量字面量 {token}——NaN/Infinity 不进入本工具链"
+         f"（fail-closed）")
+
+
+def load_json_strict(text: str, where: str) -> Any:
+    """json.loads 的 fail-closed 变体：NaN/Infinity/-Infinity 字面量一律拒绝。
+
+    标准库 json 默认接受这三个字面量（解析为 float('nan')/inf），而本
+    工具链的数值门（如分桶边界严格递增）在 NaN 上比较恒 False，会静默
+    放行并错桶/失真——凡来自外部文件的 JSON 一律经本入口装载。其余解析
+    错误与 json.loads 同语义，统一转 SloToolError。
+    """
+    try:
+        return json.loads(text, parse_constant=_reject_json_constant)
+    except json.JSONDecodeError as exc:
+        fail(f"{where}: 非法 JSON（{exc}）")
+
+
 def run_main(main_fn) -> int:
-    """统一入口：SloToolError → stderr + EXIT_FAIL_CLOSED。"""
+    """统一入口：SloToolError → stderr + EXIT_FAIL_CLOSED。
+
+    坏 UTF-8/IO/CSV/gzip 读取错误（INPUT_READ_ERRORS）并入同一
+    fail-closed 出口，不再裸 traceback + 退出码 1。
+    """
     try:
         return main_fn()
     except SloToolError as exc:
         print(f"[slo-tools] FAIL-CLOSED: {exc}", file=sys.stderr)
+        return EXIT_FAIL_CLOSED
+    except INPUT_READ_ERRORS as exc:
+        print(f"[slo-tools] FAIL-CLOSED: 输入读取失败"
+              f"（{type(exc).__name__}）：{exc}", file=sys.stderr)
         return EXIT_FAIL_CLOSED
 
 
@@ -72,13 +113,21 @@ def load_slo_manifest(path: Optional[Path] = None) -> dict:
             f"SLO 参数清单不存在：{manifest_path}（--manifest 可显式指定；"
             f"仓内默认位置 sh_test_mesh/slo_tools/{SLO_MANIFEST_FILENAME}）")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        fail(f"SLO 参数清单不是合法 JSON：{manifest_path}: {exc}")
-    if manifest.get("schema_version") != 1:
+        # 经 load_json_strict 装载——NaN/Infinity 字面量在 parse 层即
+        # 拒绝（分桶边界等数值参数不能带非有限值进来）。
+        manifest = load_json_strict(manifest_path.read_text(encoding="utf-8"),
+                                    str(manifest_path))
+    except OSError as exc:
+        fail(f"SLO 参数清单不可读：{manifest_path}: {exc}")
+    # bool/float 冒充门（2026-10-01 对齐 D2）：{True} == {1}、{1.0} == {1}
+    # 在集合/相等比较下恒真，schema_version=true 或 1.0 曾按 1 放行——
+    # 要求字面 int 且拒 bool。
+    schema_value = manifest.get("schema_version")
+    if (isinstance(schema_value, bool) or not isinstance(schema_value, int)
+            or schema_value != 1):
         fail(
             f"SLO 参数清单 schema_version 必须为 1，实得 "
-            f"{manifest.get('schema_version')!r}（{manifest_path}）")
+            f"{schema_value!r}（{manifest_path}）")
     if not isinstance(manifest.get("params"), dict):
         fail(f"SLO 参数清单缺少 params 对象：{manifest_path}")
     return manifest
@@ -145,6 +194,20 @@ def require_bucket_edges(manifest: dict) -> tuple[list[float], list[float]]:
             fail(f"bucket_percentiles.{name} 必须为长度>=2 的数值数组（含首尾哨兵）")
         if any(isinstance(e, bool) or not isinstance(e, (int, float)) for e in edges):
             fail(f"bucket_percentiles.{name} 含非数值元素")
+        # INPUT-01：先拒 NaN/Inf 再做单调检查——NaN 参与比较恒为假，
+        # 会绕过下面的严格递增断言并使 bucket_index 失去定义。
+        # （2026-10-01 对齐加固）int 边界不受 isinstance(e, float) 门覆
+        # 盖，但巨整数（如 10**400）转 float 即 OverflowError——逐条做
+        # isfinite(float(edge)) 并把溢出按非有限处理，fail-closed 出口
+        # 而非裸栈。
+        for edge in edges:
+            try:
+                finite = math.isfinite(float(edge))
+            except (OverflowError, ValueError):
+                finite = False
+            if not finite:
+                fail(f"bucket_percentiles.{name} 含非有限数值"
+                     f"（NaN/Inf，实得 {edge!r}）")
         if any(b <= a for a, b in zip(edges, edges[1:])):
             fail(f"bucket_percentiles.{name} 必须严格递增")
     return list(prefill_edges), list(decode_edges)
@@ -153,11 +216,12 @@ def require_bucket_edges(manifest: dict) -> tuple[list[float], list[float]]:
 def bucket_index(edges: Sequence[float], x: float) -> int:
     """interior edges 为各左桶闭上界，末桶无上限。
 
-    桶 i（非末桶）覆盖 edges[i] <= x <= edges[i+1]——interior 边界值归左桶
-    （如 decode edges [1,91,489,1785,32000] 下 91→桶 0、92→桶 1、
-    1785→桶 2、1786→桶 3；prefill [1,415,2361,16470,950002] 下 415→桶 0）；
-    末桶吸收一切越界值（x > edges[-1] 不再 fail-closed，归末桶）；
-    x < edges[0] 仍报错。
+    右闭归左桶：桶 i（非首非末）覆盖 (edges[i], edges[i+1]]——interior
+    边界值归左桶（如 decode edges [1,91,489,1785,32000] 下 91→桶 0、
+    92→桶 1、1785→桶 2、1786→桶 3；prefill [1,415,2361,16470,950002] 下
+    415→桶 0）；首桶含左端下哨兵（[edges[0], edges[1]]，x < edges[0] 仍
+    报错）；末桶吸收一切越界值（x > edges[-1] 不再 fail-closed，归末桶，
+    故末桶展示为 (edges[-1], +inf)）。
 
     2026-09-05 口径裁决：与 campaign_common.BucketGrid（interior bounds
     为各桶闭上界、末桶延伸至 +inf）完全等价；edges 数组值一律未变，
@@ -166,6 +230,25 @@ def bucket_index(edges: Sequence[float], x: float) -> int:
     """
     if len(edges) < 2:
         fail("分桶边界至少需要两个哨兵值")
+    # 入口自防护（2026-10-01 对齐）：任何边界/输入不可转成有限数值
+    # （NaN/Inf/巨整数溢出）即 fail-closed——手写二分在 NaN 边界上比较
+    # 恒 False 会静默错桶；即便调用方绕过 require_bucket_edges 直调本
+    # 函数（如契约测试），非有限边界也进不来。
+    for edge in edges:
+        try:
+            finite = math.isfinite(float(edge))
+        except (TypeError, ValueError, OverflowError):
+            finite = False
+        if not finite:
+            fail(f"分桶边界含非有限数值（NaN/Inf，实得 {edge!r}）——"
+                 f"拒绝分桶（fail-closed）")
+    try:
+        x_finite = math.isfinite(float(x))
+    except (TypeError, ValueError, OverflowError):
+        x_finite = False
+    if not x_finite:
+        fail(f"分桶输入长度非有限数值（NaN/Inf，实得 {x!r}）——"
+             f"拒绝分桶（fail-closed）")
     if x < edges[0]:
         fail(f"长度 {x} 小于分桶边界下哨兵 {edges[0]}——"
              f"分桶边界与数据不匹配（边界以 manifest 冻结值为准）")
@@ -212,11 +295,21 @@ def is_na(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.strip() == NA)
 
 
+def _reject_underscore_literal(text: str, value: Any, field: str,
+                               where: str) -> None:
+    """PEP 515 门：int() 接受 "1_000" 下划线字面量——本工具链的输入是
+    CSV/JSON 序列化整数，不应含下划线；放行会静默改值，一律拒绝。"""
+    if "_" in text:
+        fail(f"{where}: 字段 {field} 含下划线字面量（实得 {value!r}）"
+             f"——整数序列化不允许")
+
+
 def parse_ns(value: Any, field: str, where: str) -> Optional[int]:
     """整数纳秒解析：'NA'→None；其余必须为非负整数（fail-closed）。"""
     if is_na(value):
         return None
     text = str(value).strip()
+    _reject_underscore_literal(text, value, field, where)
     try:
         number = int(text, 10)
     except ValueError:
@@ -230,6 +323,7 @@ def parse_int(value: Any, field: str, where: str) -> Optional[int]:
     if is_na(value):
         return None
     text = str(value).strip()
+    _reject_underscore_literal(text, value, field, where)
     try:
         return int(text, 10)
     except ValueError:
@@ -241,9 +335,15 @@ def parse_float(value: Any, field: str, where: str) -> Optional[float]:
         return None
     text = str(value).strip()
     try:
-        return float(text)
+        number = float(text)
     except ValueError:
         fail(f"{where}: 字段 {field} 不是数值也不是 'NA'（实得 {value!r}）")
+    if not math.isfinite(number):
+        # INPUT-01：NaN/Inf 一律拒绝——NaN 参与任何比较恒为假，会绕过
+        # 下游单调性/阈值检查并使统计失义。
+        fail(f"{where}: 字段 {field} 为 NaN/Inf（实得 {value!r}）——浮点"
+             f"数值必须是有限值")
+    return number
 
 
 def read_request_metrics(path: Path) -> Iterator[dict[str, str]]:
@@ -321,6 +421,9 @@ def validated_request_rows(records: Iterable[dict[str, str]],
         queue_index = parse_int(record.get("queue_index"), "queue_index", where)
         if queue_index is None:
             fail(f"{where}: queue_index 不允许为 NA")
+        if queue_index < 0:
+            # INPUT-02：负索引不得通过查重并污染分母。
+            fail(f"{where}: queue_index 为负（{queue_index}）——索引非负")
         status = record.get("terminal_status", "")
         if status not in TERMINAL_STATUSES:
             fail(f"{where}: terminal_status 非法（{status!r}），合法值 "
@@ -346,6 +449,10 @@ def validated_request_rows(records: Iterable[dict[str, str]],
             record.get("hidden_ratio"), "hidden_ratio", where)
         record["turn_index"] = parse_int(
             record.get("turn_index"), "turn_index", where)
+        if record["turn_index"] is not None and record["turn_index"] < 0:
+            # INPUT-02：负 turn 索引改变会话内轮序/分母，拒绝。
+            fail(f"{where}: turn_index 为负（{record['turn_index']}）——"
+                 f"索引非负")
         record["_queue_index"] = queue_index
         typed.append(record)
         if queue_index in seen:
@@ -360,9 +467,6 @@ def validated_request_rows(records: Iterable[dict[str, str]],
 # ---------------------------------------------------------------------------
 # 统计原语（整数纳秒、先分位后转单位）
 # ---------------------------------------------------------------------------
-
-PERCENTILE_METHOD = "nearest_rank"
-
 
 def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
     """nearest-rank 分位：index = ceil(p*N) - 1（与 C++ MetricCollector
@@ -388,7 +492,10 @@ def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
 #   * 排序期驻留 = 恰一个未满 chunk（<=C 元素）+ spill 文件句柄；归并期
 #     额外持有每路 spill 的有界读缓冲（heapq.merge 惰性迭代，不整读）；
 #   * spill 文件 = pickle 序列化的已排序 chunk，落在系统临时目录，
-#     sorted_iter 耗尽后删除（进程退出兜底再删一次）；
+#     sorted_iter 耗尽或被关闭（含半消费后放弃）时删除——删除仅发生在
+#     归并生成器收尾：先显式 close 各路 spill 生成器（with 块借
+#     GeneratorExit 确定性释放文件句柄）再 unlink，半消费路径不留悬置
+#     句柄；无"进程退出兜底再删一次"机制（注释如实化，勿再声称）；
 #   * 只用于纯整数/整数元组的全序排序（比较语义与 sorted() 逐元素相同，
 #     外部归并输出序列 ≡ sorted()；相等元素不可区分 ⇒ 无稳定性可见差）。
 #   * 需要稳定序（比较键并列时按输入序）的调用方必须自带单调序号列
@@ -436,7 +543,11 @@ class BoundedSorter:
         os.close(fd)
         path = Path(name)
         with path.open("wb") as handle:
-            pickle.dump(self._buffer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            # R2-F6（2026-09-29 joint 修正，2026-09-30 本仓同步）：逐条
+            # dump（非整块列表一次 dump）：归并期才能逐条 load，单路
+            # spill 同一时刻只驻留一个元素（内存合同，见文件头注）。
+            for item in self._buffer:
+                pickle.dump(item, handle, protocol=pickle.HIGHEST_PROTOCOL)
         self._spills.append(path)
         self._buffer = []
 
@@ -445,7 +556,9 @@ class BoundedSorter:
         with path.open("rb") as handle:
             while True:
                 try:
-                    yield from pickle.load(handle)
+                    # R2-F6：逐条 load：每次 next() 只反序列化一个元素，
+                    # heapq.merge 各路各持一个元素，不整读 chunk。
+                    yield pickle.load(handle)
                 except EOFError:
                     break
 
@@ -461,6 +574,13 @@ class BoundedSorter:
             try:
                 yield from heapq.merge(*iters)
             finally:
+                # 半消费（消费方 break/islice/生成器被 GC）时先显式 close
+                # 各路 spill 生成器：其 with 块借 GeneratorExit 确定性释放
+                # 文件句柄，再统一 unlink——否则句柄悬置到 GC，句柄打开
+                # 期间的 unlink 在强制文件锁平台（Windows）上失败并泄漏
+                # 全部 spill 文件。
+                for spill_iter in iters:
+                    spill_iter.close()
                 for path in spills:
                     try:
                         path.unlink()
@@ -514,7 +634,9 @@ def nearest_rank_percentile_many(values: Sequence[int],
             current = next(ordered)
             cursor += 1
         results[i] = current
-    assert all(value is not None for value in results)
+    # （2026-10-01）index ≤ n-1 保证游标覆盖每个目标，results 无 None；
+    # 保留过滤仅为防御（原伴随 assert 在 python -O 下被剥除后反而成静默
+    # 缩短结果列的暗坑，已删）。
     return [value for value in results if value is not None]  # type: ignore[ruff]
 
 
@@ -567,10 +689,11 @@ def iter_jsonl(path: Path) -> Iterator[dict]:
             line = line.strip()
             if not line:
                 continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                fail(f"{path}:{lineno}: 非法 JSON（{exc}）")
+            # 经 load_json_strict 装载，NaN/Infinity 字面量行即拒绝
+            # （SloToolError，与非法 JSON 同款 fail-closed）；坏 UTF-8
+            # 字节以 UnicodeDecodeError 冒泡 → run_main/driver 的
+            # INPUT_READ_ERRORS 通道 fail-closed（exit 2）。
+            record = load_json_strict(line, f"{path}:{lineno}")
             if not isinstance(record, dict):
                 fail(f"{path}:{lineno}: JSONL 行必须是对象")
             yield record
@@ -598,10 +721,8 @@ def read_cpp_metric_records(cpp_log: Path) -> Iterator[dict]:
             if not stripped.startswith("[METRIC] "):
                 continue
             payload = stripped[len("[METRIC] "):].strip()
-            try:
-                record = json.loads(payload)
-            except json.JSONDecodeError as exc:
-                fail(f"{cpp_log}:{lineno}: [METRIC] 行 JSON 非法（{exc}）")
+            # 经 load_json_strict 装载，NaN/Infinity 字面量行即拒绝。
+            record = load_json_strict(payload, f"{cpp_log}:{lineno}")
             if not isinstance(record, dict):
                 fail(f"{cpp_log}:{lineno}: [METRIC] 行必须是 JSON 对象")
             yield record
@@ -655,9 +776,11 @@ def load_request_manifest(run_dir: Path,
     for candidate in candidates:
         if candidate.is_file():
             try:
-                data = json.loads(candidate.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                fail(f"per-request manifest 非法 JSON：{candidate}: {exc}")
+                text = candidate.read_text(encoding="utf-8")
+            except OSError as exc:
+                fail(f"per-request manifest 不可读：{candidate}: {exc}")
+            # 经 load_json_strict 装载，NaN/Infinity 字面量在 parse 层拒绝。
+            data = load_json_strict(text, str(candidate))
             if not isinstance(data, dict):
                 fail(f"per-request manifest 必须是对象：{candidate}")
             return data
@@ -672,7 +795,12 @@ def manifest_requests(manifest: dict) -> list[dict]:
     requests = manifest.get("requests")
     if not isinstance(requests, list):
         fail("per-request manifest 缺 requests 数组")
-    return [r for r in requests if isinstance(r, dict)]
+    for index, entry in enumerate(requests):
+        if not isinstance(entry, dict):
+            # INPUT-03：非对象条目不得静默过滤——坏请求会缩小统计总体。
+            fail(f"per-request manifest requests[{index}] 必须是对象"
+                 f"（实得 {type(entry).__name__}）")
+    return requests
 
 
 # ---------------------------------------------------------------------------

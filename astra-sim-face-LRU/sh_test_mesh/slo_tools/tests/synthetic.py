@@ -1,13 +1,16 @@
 """合成 run_dir fixture 构造器（T0/T2 测试共用）。
 
-所有样本为手算可验的合成数据（仿真侧 fixture 留待 B3 批次真实运行后
-补充）；本模块只落临时目录，不触碰仓内任何已有文件。
+所有样本为手算可验的合成数据（仿真侧 golden fixture 由
+tests/run_golden_live.py 的真实运行落盘，不再依赖 B3 批次等待）；
+本模块只落临时目录，不触碰仓内任何已有文件。
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import atexit
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Sequence
@@ -19,6 +22,7 @@ from slo_common import REQUEST_METRICS_COLUMNS  # noqa: E402
 
 def make_run_dir(tag: str) -> Path:
     root = Path(tempfile.mkdtemp(prefix=f"slo_t_{tag}_"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
     return root
 
 
@@ -108,7 +112,8 @@ def write_jsonl(run_dir: Path, name: str,
 
 
 def write_slo_manifest(root: Path, params: dict) -> Path:
-    """带值的测试用 slo_params_manifest.json（生产仓内清单 value=null）。"""
+    """测试用 slo_params_manifest.json：以仓内清单（B4b 起 value 已填）
+    为底本，仅覆写给定参数；value=None 用于合成"未推导"态。"""
     base = json.loads(
         (Path(__file__).resolve().parent.parent /
          "slo_params_manifest.json").read_text(encoding="utf-8"))

@@ -62,6 +62,15 @@ using json = nlohmann::json;
 // per the rule below.  If a different toolchain changes the numeric
 // value while the mirror assert still holds, update the number and re-prove
 // -- that failure mode is protective, not an equivalence break.
+// (2026-10-03, die backend rollout stage 1) ComputeAttrs grew by OpRole
+// (enum) + the shared_ptr<const DieModel::DieOpSpec> die_spec, and
+// OnlineStatisticsState grew the die-only vector_utilization optional; the
+// mirror embeds those REAL types (not hand-copied fields), so the
+// sizeof(OnlineNode) == sizeof(mirror) contract automatically carries the
+// new layout and keeps proving exactly one thing: the two metric anchor
+// flags still ride in the bool tail padding (no growth beyond the
+// underlying members). The numeric anchor below was re-proven with the new
+// members on this toolchain per the same rule.
 // ---------------------------------------------------------------------------
 struct OnlineNodePreR2Mirror {
     uint64_t global_id = 0;
@@ -86,7 +95,12 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodePreR2Mirror),
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 400,
+// (2026-10-07, joint-accel refactor) member types grew through the
+// execution-driven refactor (this target was never in any prior build
+// scope, so the anchor went stale unobserved); mirror assert above
+// still passes (real member types embedded), anchor re-proven per the
+// documented rule: 440 -> 488 on this toolchain.
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 488,
               "OnlineNode layout anchor for this toolchain (see the mirror "
               "assert above for the ABI-agnostic bound)");
 

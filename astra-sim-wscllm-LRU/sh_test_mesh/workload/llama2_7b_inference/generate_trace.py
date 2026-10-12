@@ -7,6 +7,7 @@ not serialize business Chakra ET files.
 """
 
 import csv
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,10 +32,13 @@ from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E
     COMM_RECV_NODE,
     COMM_SEND_NODE,
     COMP_NODE,
-    MEM_LOAD_NODE,
-    MEM_STORE_NODE,
     AttributeProto as ChakraAttr,
     BoolList,
+    # MEM_LOAD_NODE/MEM_STORE_NODE：本文件已不再使用（TraceBuilder 的
+    # mem_store/mem_load 死方法删除，2026-10-01），但
+    # online/graph_batch_builder.py 经本模块再导出消费——保留再导出。
+    MEM_LOAD_NODE,
+    MEM_STORE_NODE,
     Node as ChakraNode,
 )
 
@@ -62,21 +66,31 @@ class RequestSpec:
     inter_request_interval_ns: Optional[int]
 
 
+def _require_ascii_digits(value: str, key: str) -> None:
+    """词法对齐（2026-10-01 移植 D3）：C++ WindowedTraceReader 的数值
+    字段解析只接受非空 ASCII 数字串——无符号、无空白、无下划线分隔、无
+    Unicode 数字。Python 的 int() 每一项都更宽（int('+1')/int(' 1')/
+    int('1_0')/int('١٢٣') 全部可解析），物化器/loader 收下的队列可能
+    到 C++ 运行期才 fail-closed。两端共享同一冻结严格词法，解析期即拒
+    并给出违规形状。"""
+    if not value or any(not ("0" <= character <= "9") for character in value):
+        raise ValueError(
+            f"{key} must be a non-negative integer written as plain ASCII "
+            f"digits (the C++ reader's strict lexicon), got {value!r}"
+        )
+
+
 def parse_int(value: str, key: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"config key {key} must be an integer, got {value!r}") from exc
+    _require_ascii_digits(value, key)
+    parsed = int(value)
     if parsed <= 0:
         raise ValueError(f"config key {key} must be positive, got {parsed}")
     return parsed
 
 
 def parse_nonnegative_int(value: str, key: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"{key} must be an integer, got {value!r}") from exc
+    _require_ascii_digits(value, key)
+    parsed = int(value)
     if parsed < 0:
         raise ValueError(f"{key} must be non-negative, got {parsed}")
     return parsed
@@ -92,10 +106,8 @@ def parse_bool(value: str, key: str) -> bool:
 
 
 def parse_rank_id(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"rank id must be an integer, got {value!r}") from exc
+    _require_ascii_digits(value, "rank id")
+    parsed = int(value)
     if parsed < 0:
         raise ValueError(f"rank id must be non-negative, got {parsed}")
     return parsed
@@ -128,13 +140,34 @@ def clean_csv_row(row: dict[str, Optional[str]]) -> dict[str, str]:
     return {(key or "").strip(): (value or "").strip() for key, value in row.items()}
 
 
-def parse_request_length(row: dict[str, str], key: str, aliases: tuple[str, ...]) -> int:
-    for column in (key, *aliases):
-        value = row.get(column, "")
-        if value:
-            return parse_int(value, column)
-    allowed = ", ".join((key, *aliases))
-    raise ValueError(f"request queue row is missing one of: {allowed}")
+def parse_request_length(row: dict[str, str], key: str) -> int:
+    # 列名在 load_request_queue 中强制恰等于 REQUEST_QUEUE_COLUMNS，历史
+    # 别名（prompt_length/prefill/decode）永不可达（2026-09-26 审查清理）。
+    value = row.get(key, "")
+    if value:
+        return parse_int(value, key)
+    raise ValueError(f"request queue row is missing: {key}")
+
+
+# C++ 名字锚点的保留子串(M-27,2026-09-30;与 C-3 精确后缀匹配配套的
+# loader 侧防线):code-8 first_token 标记按名字子串注册、code-7 KV 传输
+# 腿按精确后缀匹配——用户 session_id/request_id 混入这些子串会进入锚点
+# 命名空间(如 "my_kv_session" 命中传输腿后缀、"first_token" 污染 code-8
+# min-tick),发射契约(节点名不含 first_token/kv 子串)也随之失效。
+# loader 生成期 fail-closed。词表归属注记(2026-10-01):本防线只在
+# Python loader;C++ WindowedTraceReader 无 kv/first_token 保留门
+# (另经 request_id 唯一性/非空门与 batch_train_ 前缀门独立设防),
+# 防线为单端 Python 侧。
+_RESERVED_ANCHOR_SUBSTRINGS = ("kv", "first_token")
+
+
+def _reject_reserved_anchor_substrings(value: str, field: str,
+                                       line_number: int) -> None:
+    for substring in _RESERVED_ANCHOR_SUBSTRINGS:
+        if substring in value:
+            raise ValueError(
+                f"request queue line {line_number} {field} {value!r} contains "
+                f"reserved C++ anchor substring {substring!r}")
 
 
 def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
@@ -142,10 +175,32 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
         raise FileNotFoundError(f"request queue CSV not found: {queue_csv}")
 
     requests: list[RequestSpec] = []
-    with queue_csv.open(newline="", encoding="utf-8-sig") as queue_file:
+    # C++ 读者(WindowedTraceReader)同款会话块结构不变量的 loader 侧
+    # fail-closed 镜像:session 块连续(会话 id 消失后不得重现)/块内
+    # turn_index 严格 +1 递增(自 0 起,顺带唯一化 turn-0)/turn-0 每会话
+    # 至多一行。此前 Python 侧比 C++ 读者宽松,违规输入在 loader 静默
+    # 通过、到 C++ 读取期才 fail-closed,报错远离根因。
+    current_session: Optional[str] = None
+    seen_sessions: set[str] = set()
+    expected_next_turn = 0
+    with queue_csv.open(newline="", encoding="utf-8") as queue_file:
         reader = csv.DictReader(queue_file)
         if reader.fieldnames is None:
             raise ValueError(f"request queue CSV is empty: {queue_csv}")
+        if reader.fieldnames and reader.fieldnames[0].startswith("﻿"):
+            # BOM 拒绝（2026-10-01 移植）：原 utf-8-sig open 在此静默吞
+            # BOM，而 C++ WindowedTraceReader 按原始字节比对表头并对
+            # BOM fail-closed——loader 必须以点名失配的消息拒绝同一形
+            # 状（此前：Python 链成功、C++ 启动期才炸）。
+            raise ValueError(
+                f"request queue CSV {queue_csv} starts with a UTF-8 BOM: "
+                "the C++ reader byte-compares the header and cannot read "
+                "this file; re-save without BOM"
+            )
+        # 表头比对（R2 复核口径更正）：C++ 门对每个表头列名做 trim 后
+        # 逐一与冻结列名比对（trim_header_name，容忍列名周围空白与单个
+        # 行尾 CR）；本端逐列 strip 与该 trim 语义等价——两端接受同一
+        # 表头形状（数据行字段两端都不 trim，此前如此、保持不变）。
         columns = tuple((column or "").strip() for column in reader.fieldnames)
         if columns != REQUEST_QUEUE_COLUMNS:
             raise ValueError(
@@ -154,17 +209,78 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
             )
 
         for line_number, raw_row in enumerate(reader, start=2):
+            # 行宽门(D1,2026-09-30):与 C++ WindowedTraceReader 的 M8
+            # 逐行字段数门对齐——超宽行多余字段落入 DictReader 的
+            # restkey(None)、欠宽行缺失字段为 None,旧行为经 clean_csv_
+            # row 的 `key or ""`/`value or ""` 静默归并丢弃,违规输入在
+            # Python 物化链全部成功后到 C++ 启动期才 fail-closed(报错
+            # 远离根因)。同时拒绝字段值含逗号:RFC 引号内逗号 Python
+            # 解析合法,C++ 逐位置逗号计数会 fatal。
+            if None in raw_row or any(
+                    value is None for value in raw_row.values()):
+                raise ValueError(
+                    f"request queue line {line_number}: field count "
+                    f"does not match the 8-column header (torn or "
+                    f"over-wide row)")
             row = clean_csv_row(raw_row)
+            for column, value in row.items():
+                if "," in value:
+                    raise ValueError(
+                        f"request queue line {line_number}: field "
+                        f"{column!r} contains a comma — the C++ reader "
+                        f"parses by comma position (fail-closed)")
             session_id = row.get("session_id", "")
-            request_id = row.get("request_id", "") or f"request_{len(requests)}"
+            # 空 request_id 拒绝（2026-10-01 移植，C++ C3 身份门的镜像）
+            # ：此前为空字段合成 f"request_{len(requests)}"——两端身份分
+            # 叉：C++ 侧对同一行 abort，合成 id 在指标/账本对账链所对照
+            # 的 CSV 里不存在。
+            request_id = row.get("request_id", "")
+            if not request_id:
+                raise ValueError(
+                    f"request queue line {line_number} is missing "
+                    "request_id (the C++ WindowedTraceReader fail-closes "
+                    "on an empty request_id; the loader no longer "
+                    "synthesizes one)")
             if request_id.startswith("#"):
-                continue
+                # '#' 行（R2 复核口径更正）：C++ 读者在 data_rows++ 之前
+                # 跳过 '#' 行（M11 分类点，不占 queue index），derive 的
+                # provenance 扫描同款跳过；本 loader 选择更保守的一端
+                # ——直接拒绝任何 '#'-prefixed request_id（生产物化器不产
+                # '#' 行，三端口径：loader 拒绝最紧、C++/derive 跳过为
+                # 防御死路径）。
+                raise ValueError(
+                    f"request queue line {line_number}: request_id "
+                    f"{request_id!r} looks like a '#' comment line, but "
+                    "the request-queue schema has no comment syntax "
+                    "(rejecting any '#'-prefixed request_id is this "
+                    "loader's stricter conservative choice)")
             if not session_id:
                 raise ValueError(f"request queue line {line_number} is missing session_id")
+            _reject_reserved_anchor_substrings(
+                session_id, "session_id", line_number)
+            _reject_reserved_anchor_substrings(
+                request_id, "request_id", line_number)
             turn_index_text = row.get("turn_index", "")
             if not turn_index_text:
                 raise ValueError(f"request queue line {line_number} is missing turn_index")
             turn_index = parse_nonnegative_int(turn_index_text, "turn_index")
+            if session_id != current_session:
+                if session_id in seen_sessions:
+                    raise ValueError(
+                        f"request queue line {line_number}: session block is "
+                        f"not contiguous: session_id {session_id!r} reappears"
+                    )
+                seen_sessions.add(session_id)
+                current_session = session_id
+                expected_next_turn = 0
+            if turn_index != expected_next_turn:
+                raise ValueError(
+                    f"request queue line {line_number}: turn_index must "
+                    f"increase by exactly 1 within a session block: "
+                    f"session_id {session_id!r} has turn_index {turn_index}, "
+                    f"expected {expected_next_turn}"
+                )
+            expected_next_turn += 1
             session_arrival_text = row.get("session_arrival_time_ns", "")
             inter_request_interval_text = row.get("inter_request_interval_ns", "")
             if turn_index == 0:
@@ -202,16 +318,16 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
                 if session_arrival_time_ns is not None
                 else inter_request_interval_ns
             )
+            # 1000 ns 整数倍为双侧契约内的产能限制（fail-closed、可诊断）:
+            # 引擎 tick=1ns 本可表达任意 ns 粒度,但全链 timing 口径钉在整微
+            # 秒网格(与 online graph_batch_builder.timer_gate 同式);引入亚
+            # 微秒间隔负载前需双侧同步放宽。
             if timing_ns is None or timing_ns % 1000 != 0:
                 raise ValueError(
                     f"request queue line {line_number} timing must be divisible by 1000 ns"
                 )
-            prefill_length = parse_request_length(
-                row,
-                "prefill_length",
-                ("prompt_length", "prefill"),
-            )
-            decode_length = parse_request_length(row, "decode_length", ("decode",))
+            prefill_length = parse_request_length(row, "prefill_length")
+            decode_length = parse_request_length(row, "decode_length")
             requests.append(
                 RequestSpec(
                     session_id=session_id,
@@ -246,10 +362,14 @@ class TraceBuilder:
     """离线 Chakra ET 每-rank 构图器。
 
     2026-09-25 审计登记:本仓生产链已无本类实例化点(在线侧用
-    OnlineTraceBuilder,离线物化经 materializer 合成);现存消费者仅
-    generate_wsc_llm_trace 发射函数的 ``builders: dict[int, TraceBuilder]``
-    类型注解与单测实例化(test_wsc_llm_scheduler)。保留本类以维持该注解
-    契约与单测替身,不另立口径。
+    OnlineTraceBuilder,离线物化经 materializer 合成);现存消费者仅单测
+    替身(test_wsc_llm_scheduler)。2026-09-26 修正(py-metrics-C3):原
+    "保留本类以维持 generate_wsc_llm_trace 的 ``builders: dict[int,
+    TraceBuilder]`` 注解契约"的说法不成立——该发射面实际调用
+    ``comm_recv(hbm_charge=)``/``mem_store(hbm_access_mode=)``/
+    ``local_hbm_kv_restore()``,本类签名均不接受,真实契约只在
+    OnlineTraceBuilder;该注解已改指 OnlineTraceBuilder,本类仅为单测
+    替身保留。
     """
 
     def __init__(
@@ -302,49 +422,10 @@ class TraceBuilder:
             self.nodes.append(node)
         self.node_count += 1
 
-    def arm_timer_gate(self, timer_node_id: Optional[int]) -> None:
-        if timer_node_id is not None:
-            self.pending_extra_dependencies.append(timer_node_id)
-
-    def timer_gate(
-        self,
-        name: str,
-        duration_ns: int,
-        *,
-        after_node_id: Optional[int] = None,
-    ) -> Optional[int]:
-        if duration_ns < 0 or duration_ns % 1000 != 0:
-            raise ValueError(
-                "timer duration must be a non-negative whole number of microseconds"
-            )
-        if duration_ns == 0:
-            return after_node_id
-
-        node = ChakraNode()
-        node.id = self.next_id
-        self.next_id += 1
-        node.name = name
-        node.type = COMP_NODE
-        node.attr.extend([
-            ChakraAttr(name="is_cpu_op", bool_val=True),
-            ChakraAttr(name="is_timer_op", bool_val=True),
-        ])
-        if after_node_id is not None:
-            node.data_deps.append(after_node_id)
-        node.duration_micros = duration_ns // 1000
-        self._commit_node(node)
-        return node.id
-
-    def mem_store(self, name: str, tensor_size: int) -> None:
-        node = self._new_node(name, MEM_STORE_NODE)
-        node.attr.append(self._uint64_attr("tensor_size", tensor_size))
-        self._commit_node(node)
-
-    def mem_load(self, name: str, tensor_size: int) -> None:
-        node = self._new_node(name, MEM_LOAD_NODE)
-        node.attr.append(self._uint64_attr("tensor_size", tensor_size))
-        self._commit_node(node)
-
+    # （2026-10-01 清除）原 arm_timer_gate / timer_gate / mem_store /
+    # mem_load 四方法在本类上零调用（运行时全部走 OnlineTraceBuilder 的
+    # 同名方法；本类唯一消费者 test_wsc_llm_scheduler 只用 comp/
+    # all_reduce/transformer_pass）——死方法删除，防误用。
     def comp(
         self,
         name: str,
@@ -658,10 +739,8 @@ def transformer_pass_aggregated(
     num_heads: Optional[int] = None,
     tensor_parallel_rank: int = 0,
     mlp_variant: str = "gelu",
-    layer_start: int = 0,
-    layer_end: Optional[int] = None,
-    include_output: bool = True,
     weight_passes: Optional[int] = None,
+    die_ctx=None,
 ) -> int:
     """Fold repeated Transformer passes into 17 aggregate Chakra nodes.
 
@@ -680,17 +759,14 @@ def transformer_pass_aggregated(
     iterations with B decode members carries k+B spans but reads the weights
     only k times (once per iteration, shared by all batch members; 权重只读
     一次 per iteration).  Activation / KV / AllReduce bytes stay per-span
-    exact regardless of ``weight_passes``.  Layer-range calls keep the
-    default: one span over a layer slice is exactly one weight-reading pass
-    of that slice.
+    exact regardless of ``weight_passes``.
 
-    ``layer_start``/``layer_end``/``include_output`` (B3, 2026-09-06;照抄
-    sh_2.0 同名参数语义): pass 只覆盖 ``[layer_start, layer_end)`` 层段
-    (缺省全层,节点名与字节口径与历史逐字节一致——全层时 layer_label
-    恒为 ``all_layers``、层数乘子为 ``layers``)。任意层段调用的字节总量
-    与单次全层调用逐项守恒:激活/KV/
-    AllReduce/权重分量按 active_layers 比例分列,输出头(final norm +
-    logits)仅由 ``include_output=True`` 的末段承载恰一次。
+    ``die_ctx``(阶段 C):die 后端发射语境(online/die_model_adapter.
+    DieModelContext;调用方已按列车/TP/rank 调过 begin_emission)。None =
+    legacy 路径,发射逐字节与历史一致;非 None 时每类 COMP 附 die_op_spec
+    (spans 带绝对位置),可融合纯本地链经 compile_regions 编译成
+    attention_region / ffn_region(num_ops/tensor_size 兼容统计 = 各成分
+    之和,collective 位置/数量/bytes 不变)。
     """
 
     spans = tuple(pass_spans)
@@ -698,16 +774,6 @@ def transformer_pass_aggregated(
         raise ValueError("pass_spans must contain at least one Transformer pass")
     if layers <= 0:
         raise ValueError("layers must be positive")
-    if layer_end is None:
-        layer_end = layers
-    if not 0 <= layer_start < layer_end <= layers:
-        raise ValueError("Transformer layer range is outside the model")
-    active_layers = layer_end - layer_start
-    layer_label = (
-        "all_layers"
-        if layer_start == 0 and layer_end == layers
-        else f"layers{layer_start:02d}_{layer_end - 1:02d}"
-    )
     if hidden_size <= 0 or ffn_size <= 0 or tensor_parallel <= 0:
         raise ValueError("model dimensions and tensor_parallel must be positive")
     if vocab_size <= 0 or bytes_per_elem <= 0:
@@ -926,13 +992,38 @@ def transformer_pass_aggregated(
     logits[1] += logits_weight_bytes * weight_passes
     logits[2] += logits_weight_bytes * weight_passes
 
+    if die_ctx is not None:
+        # die 后端(阶段 C,契约 §2/§7.2):同一份 layer_totals / tail 账本,
+        # 经 die 语境做生成期 region 编译后发射(每类或融合组附
+        # die_op_spec,spans 带绝对位置)。legacy 分支(die_ctx is None)
+        # 保持逐字节不变。
+        _emit_die_aggregated(
+            builder,
+            die_ctx,
+            phase=phase,
+            spans=spans,
+            layers=layers,
+            weight_passes=weight_passes,
+            layer_totals=layer_totals,
+            attention_collective_bytes=attention_collective_bytes,
+            mlp_collective_bytes=mlp_collective_bytes,
+            final_layernorm=final_layernorm,
+            logits=logits,
+            category_names=category_names,
+            final_norm_name=final_norm_name,
+            pg_name=pg_name,
+            tensor_parallel=tensor_parallel,
+            tensor_parallel_rank=tensor_parallel_rank,
+        )
+        return len(spans)
+
     def aggregate_comp(category_name: str) -> None:
         ops, tensor_size, remote_read = layer_totals[category_name]
         builder.comp(
-            f"{phase}_{layer_label}_{category_name}",
-            ops * active_layers,
-            tensor_size * active_layers,
-            remote_read * active_layers,
+            f"{phase}_all_layers_{category_name}",
+            ops * layers,
+            tensor_size * layers,
+            remote_read * layers,
         )
 
     aggregate_comp(attention_norm_name)
@@ -943,8 +1034,8 @@ def transformer_pass_aggregated(
     aggregate_comp("attention_av_matmul")
     aggregate_comp("attention_output_projection")
     builder.all_reduce(
-        f"{phase}_{layer_label}_attention_all_reduce",
-        attention_collective_bytes * active_layers,
+        f"{phase}_all_layers_attention_all_reduce",
+        attention_collective_bytes * layers,
         pg_name,
     )
     aggregate_comp("attention_residual_add")
@@ -953,15 +1044,11 @@ def transformer_pass_aggregated(
     aggregate_comp(mlp_activation_name)
     aggregate_comp("mlp_down_projection")
     builder.all_reduce(
-        f"{phase}_{layer_label}_mlp_all_reduce",
-        mlp_collective_bytes * active_layers,
+        f"{phase}_all_layers_mlp_all_reduce",
+        mlp_collective_bytes * layers,
         pg_name,
     )
     aggregate_comp("mlp_residual_add")
-    if not include_output:
-        # 层段拆分的前段(prefix):输出头由携带 include_output=True 的
-        # 末段承载恰一次(字节守恒的组成段)。
-        return len(spans)
     builder.comp(
         f"{phase}_all_passes_{final_norm_name}",
         final_layernorm[0],
@@ -975,6 +1062,120 @@ def transformer_pass_aggregated(
         logits[2],
     )
     return len(spans)
+
+
+def _emit_die_aggregated(
+    builder: TraceBuilder,
+    die_ctx,
+    *,
+    phase: str,
+    spans: tuple[tuple[int, int], ...],
+    layers: int,
+    weight_passes: int,
+    layer_totals: dict[str, list[int]],
+    attention_collective_bytes: int,
+    mlp_collective_bytes: int,
+    final_layernorm: list[int],
+    logits: list[int],
+    category_names: tuple[str, ...],
+    final_norm_name: str,
+    pg_name: str,
+    tensor_parallel: int,
+    tensor_parallel_rank: int,
+) -> None:
+    """die 后端的聚合发射(阶段 C;transformer_pass_aggregated 的 die 分支)。
+
+    与 legacy 发射共用同一份 layer_totals / tail / collective 账本(字节
+    守恒);差异仅在:
+
+      - 每个发射组附 die_op_spec(契约 §2 schema;spans 带绝对位置,
+        layer_count/weight_passes 如实传递,num_ops/tensor_size 照旧发射
+        作兼容统计,die 后端不把它们当第二份收费来源);
+      - 13 类层类别先经 die_ctx.compile_regions 做 §7.2 纯本地链融合
+        (qk+scale_mask+softmax+av -> attention_region;mlp_up+
+        activation+down -> ffn_region);融合组的 num_ops/tensor_size/
+        remote_read = 各成分之和(×layers 口径与 legacy 一致);
+      - 两个 All-Reduce 的位置/bytes 与 legacy 完全一致(边界类别
+        attention_output_projection / mlp_down_projection 之后,融合
+        不移动 collective)。
+
+    阻断/同质事实(§7.2 融合条件,逐项来自本发射骨架的真实结构):
+    聚合列车体是严格线性链(previous_id 单前驱,无 pending 额外依赖),
+    链内无外部分支消费者(external_consumers=False);通信边界仅存在于
+    attention_output_projection 与 mlp_down_projection 之后(boundary_
+    after=True,二者分别是各自融合链之外/链尾,链内无边界);无 KV gate
+    与提交边界(gate 在 admission/列车边界,由调度器侧发射)。identity
+    携带 TP/rank/layers/span 集合供 compile_regions 做同质复核。
+    """
+    if len(die_ctx.span_records) != len(spans):
+        raise ValueError(
+            "die context span records ({} spans) disagree with the "
+            "aggregated pass spans ({}); call begin_emission with the "
+            "same pass_spans".format(len(die_ctx.span_records), len(spans)))
+    identity = {
+        "tp": tensor_parallel,
+        "rank": tensor_parallel_rank,
+        "layer": layers,
+        "span_set": spans,
+    }
+    records = []
+    for category in category_names:
+        ops, tensor_size, remote_read = layer_totals[category]
+        records.append({
+            "name": f"{phase}_all_layers_{category}",
+            "category": category,
+            "op_kind": die_ctx.op_kind_of(category),
+            "num_ops": ops * layers,
+            "tensor_size": tensor_size * layers,
+            "remote_read": remote_read * layers,
+            "layer_count": layers,
+            "weight_passes": weight_passes,
+            "external_consumers": False,
+            "boundary_after": category in (
+                "attention_output_projection", "mlp_down_projection"),
+            "identity": dict(identity),
+        })
+    for group in die_ctx.compile_regions(records):
+        builder.comp(
+            group["name"],
+            group["num_ops"],
+            group["tensor_size"],
+            group["remote_read"],
+            die_spec=die_ctx.build_spec(
+                group["op_kind"],
+                layer_count=group["layer_count"],
+                weight_passes=group["weight_passes"],
+                fusion_policy="auto" if group["fused"] else "none",
+            ),
+        )
+        if "attention_output_projection" in group["member_categories"]:
+            builder.all_reduce(
+                f"{phase}_all_layers_attention_all_reduce",
+                attention_collective_bytes * layers,
+                pg_name,
+            )
+        elif "mlp_down_projection" in group["member_categories"]:
+            builder.all_reduce(
+                f"{phase}_all_layers_mlp_all_reduce",
+                mlp_collective_bytes * layers,
+                pg_name,
+            )
+    for category, totals, layer_count in (
+        (final_norm_name, final_layernorm, 1),
+        ("logits_projection", logits, 1),
+    ):
+        builder.comp(
+            f"{phase}_all_passes_{category}",
+            totals[0],
+            totals[1],
+            totals[2],
+            die_spec=die_ctx.build_spec(
+                die_ctx.op_kind_of(category),
+                layer_count=layer_count,
+                weight_passes=weight_passes,
+                fusion_policy="none",
+            ),
+        )
 
 
 def sanitize_node_prefix(value: str) -> str:

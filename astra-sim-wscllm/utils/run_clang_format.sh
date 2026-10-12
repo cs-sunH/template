@@ -16,7 +16,7 @@ PROJECT_DIR="${SCRIPT_DIR:?}/.."
 echo "[ASTRA-sim] Formatting Codebase..."
 echo ""
 
-# format everything inside `src` directory
+# format everything inside the astra-sim directory
 find "${PROJECT_DIR:?}"/astra-sim \( -name "*.cc" -o -name "*.hh" \) -exec \
     clang-format -style=file -i {} \;
 

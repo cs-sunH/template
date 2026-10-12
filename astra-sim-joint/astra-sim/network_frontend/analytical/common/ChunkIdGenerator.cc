@@ -54,10 +54,13 @@ int ChunkIdGenerator::create_send_chunk_id(
         entry = chunk_id_map.emplace(key, ChunkIdGeneratorEntry()).first;
     }
 
-    // increment id and return
+    // Chunk ids are 0-based (chunk_id_generator_test contract): hand out the
+    // current id, then advance the counter (the counter starts at 0 under
+    // the uint64 + INT32_MAX cap guard).
+    const int chunk_id = entry->second.get_send_id();
     entry->second.increment_send_id();
     entry->second.increment_outstanding();
-    return entry->second.get_send_id();
+    return chunk_id;
 }
 
 int ChunkIdGenerator::create_recv_chunk_id(
@@ -81,9 +84,11 @@ int ChunkIdGenerator::create_recv_chunk_id(
         entry = chunk_id_map.emplace(key, ChunkIdGeneratorEntry()).first;
     }
 
-    // if key exists, increment send id and return
+    // Same 0-based contract as the send side: hand out the current id, then
+    // advance the counter.
+    const int chunk_id = entry->second.get_recv_id();
     entry->second.increment_recv_id();
-    return entry->second.get_recv_id();
+    return chunk_id;
 }
 
 void ChunkIdGenerator::complete(const int tag,

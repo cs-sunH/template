@@ -11,9 +11,9 @@ DoubleBinaryTreeTopology::DoubleBinaryTreeTopology(int id,
                                                    int total_tree_nodes,
                                                    int start,
                                                    int stride) {
-    DBMAX = new BinaryTree(id, BinaryTree::TreeType::RootMax, total_tree_nodes,
+    DBMAX = new BinaryTree(BinaryTree::TreeType::RootMax, total_tree_nodes,
                            start, stride);
-    DBMIN = new BinaryTree(id, BinaryTree::TreeType::RootMin, total_tree_nodes,
+    DBMIN = new BinaryTree(BinaryTree::TreeType::RootMin, total_tree_nodes,
                            start, stride);
     this->counter = 0;
 }

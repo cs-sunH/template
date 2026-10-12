@@ -13,12 +13,14 @@
   * driver parity：合成 sh_1.0 run_dir 上，"旧链复刻"（9 个工具子命令
     串行 + run_slo_postprocess.sh 原日志语义）vs 当前
     run_slo_postprocess.sh（内部走 slo_postprocess_driver.py 单遍）——
-    13 个 SLO 产物 + slo_postprocess.log 逐字节一致；含 G3（缺
-    request_metrics）与失败路径（缺 token manifest）变体。P1（2026-
-    08-30）起 hbm_watermark 产物集 = slo_hbm_intervals.csv（权威 RLE）
-    + slo_hbm_plot_series.csv（行预算绘图，旧 slo_hbm_watermark_
-    series.csv 退役）+ slo_hbm_watermark_instances.csv；无 journal 的
-    fixture 恒 upper_bound_only 层（超限只诊断、exit 0）。
+    13 个 SLO 产物 + slo_postprocess.log 逐字节一致（slo_postprocess.FAIL
+    仅失败路径出现在产物集，白名单另列）；含 G3（缺 request_metrics）、
+    失败路径（缺 token manifest）与 probe 审计行（hbm finish stderr
+    流道）变体。P1（2026-08-30）起 hbm_watermark 产物集 =
+    slo_hbm_intervals.csv（权威 RLE）+ slo_hbm_plot_series.csv（行预算
+    绘图，旧 slo_hbm_watermark_series.csv 退役）+
+    slo_hbm_watermark_instances.csv；无 journal 的 fixture 恒
+    upper_bound_only 层（超限只诊断、exit 0）。
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,6 +58,18 @@ SLO_PRODUCTS = (
     "slo_hbm_watermark_instances.csv",
     "slo_postprocess.log", "slo_postprocess.FAIL",
 )
+
+# 对拍枚举的已知输入文件（run_dir 顶层 fixture，非工具产物；py-slo-tests-3
+# 2026-09-26：对拍改为产物目录枚举制，输入以外的新顶层文件一律视为
+# 产物参与对拍，未在 SLO_PRODUCTS 登记的需显式豁免并注明理由）。
+KNOWN_PARITY_INPUTS = frozenset({
+    "cpp.log", "metrics.log", "cpp.log.gz",
+    "request_metrics.csv", "metrics_manifest.json", "manifest.json",
+    "trace_config.csv",
+})
+# 显式豁免清单：已知且有意不参与字节对拍的产物（当前为空——占位以固化
+# "新产物必须显式登记"机制；豁免时注明理由）。
+EXEMPT_PRODUCTS: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -116,14 +131,18 @@ class BoundedSorterTests(unittest.TestCase):
                 os.environ.pop("SH_SLO_SORT_CHUNK", None)
 
     def test_spill_files_cleaned_up(self):
+        # py-slo-tests-14（2026-09-26）：/tmp 全局共享，并行运行的其它
+        # BoundedSorter 进程可能正持有同前缀 spill——直接 glob 断言空会
+        # 误报。改为断言"本测试运行期间无新增残留"（快照差集）。
+        before = set(Path(tempfile.gettempdir()).glob("slo_bounded_sort_*"))
         sorter = BoundedSorter(chunk_size=2)
         for value in range(50):
             sorter.add(value)
         consumed = list(sorter.sorted_iter())
         self.assertEqual(consumed, list(range(50)))
-        leftovers = list(Path(tempfile.gettempdir()).glob(
-            "slo_bounded_sort_*"))
-        self.assertEqual(leftovers, [])
+        leftovers = (set(Path(tempfile.gettempdir()).glob(
+            "slo_bounded_sort_*")) - before)
+        self.assertEqual(leftovers, set())
 
 
 class PercentileManyTests(unittest.TestCase):
@@ -268,8 +287,16 @@ def build_sh10_run_dir() -> Path:
          "seq": 5, "tick": 20_000_001_200, "decision": {
              "decode_instance_index": 1,
              "prefill_decode_transfer": pd_transfer}},
+        # 2026-09-28 probe 行用例：hbm finish 的 admission_probe 审计行
+        # 必须走 stderr（driver Sink 只接管 stderr）才能与旧链
+        # slo_postprocess.log 行序逐字节一致——本行令两条链都打印该审计
+        # 行，行序差在此对拍暴露（旧实现走 stdout 时 driver 链该行漂出
+        # wm 步块）。
+        {"kind": "decode_admission_probe",
+         "request_id": "session_B_request_0",
+         "seq": 6, "tick": 20_000_001_250, "decision": {}},
         {"kind": "completion", "request_id": "session_B_request_0",
-         "seq": 6, "tick": 20_000_001_300, "decision": {"completion_evictions": []}},
+         "seq": 7, "tick": 20_000_001_300, "decision": {"completion_evictions": []}},
     ]
     (results / "online_decision_log.jsonl").write_text(
         "".join(json.dumps(record, sort_keys=True) + "\n"
@@ -308,19 +335,38 @@ def _clear_slo_products(run_dir: Path) -> None:
             path.unlink()
 
 
-def _snapshot(run_dir: Path, target: Path) -> None:
-    # 目标目录先清空（历史运行的陈旧产物会让 diff 出现幽灵差异——
-    # SLO_PRODUCTS 产物名变更后尤其如此）。
+def _produced_products(run_dir: Path) -> set[str]:
+    """枚举 run_dir 顶层实际产出的 SLO 产物（py-slo-tests-3：目录枚举制，
+    新增/改名产物自动进入对拍，不再依赖固定白名单）。"""
+    return {
+        path.name for path in run_dir.iterdir()
+        if path.is_file() and path.name not in KNOWN_PARITY_INPUTS
+    }
+
+
+def _snapshot(run_dir: Path, target: Path) -> set[str]:
+    """拷贝 run_dir 全部产出产物到 target，返回产物名集合。
+
+    目标目录先清空（历史运行的陈旧产物会让 diff 出现幽灵差异）。产物
+    集合按目录枚举；清单外新产物必须显式登记（SLO_PRODUCTS 或
+    EXEMPT_PRODUCTS 并注明理由），否则在此报错——防白名单静默漏收。
+    """
     if target.is_dir():
         for stale in target.iterdir():
             if stale.is_file():
                 stale.unlink()
     target.mkdir(parents=True, exist_ok=True)
-    for name in SLO_PRODUCTS:
+    produced = _produced_products(run_dir)
+    unregistered = produced - set(SLO_PRODUCTS) - set(EXEMPT_PRODUCTS)
+    if unregistered:
+        raise AssertionError(
+            f"未登记的新 SLO 产物 {sorted(unregistered)}"
+            f"——请更新 test_driver_parity.SLO_PRODUCTS 或"
+            f" EXEMPT_PRODUCTS（并注明豁免理由）")
+    for name in produced:
         path = run_dir / name
-        if path.is_file():
-            data = path.read_bytes()
-            (target / name).write_bytes(data)
+        (target / name).write_bytes(path.read_bytes())
+    return produced
 
 
 def _count_metric_lines(source: Path) -> int:
@@ -442,48 +488,79 @@ def run_new_chain(run_dir: Path) -> int:
     return proc.returncode
 
 
+def windows_store_python3_stub() -> bool:
+    """R2-F7：精确识别"仅 Windows Store python3 stub"环境。
+
+    run_slo_postprocess.sh 经 PATH 调 ``python3``；Windows 商店别名
+    stub（WindowsApps 下的 python3.exe）不执行脚本，新链产物全缺、
+    对拍因纯环境原因假红。仅当 win32 且 PATH 上解析到的 python3 落在
+    WindowsApps 别名目录时成立（真实 CPython/WSL/POSIX 恒 False，
+    不跳过）。
+    """
+    if sys.platform != "win32":
+        return False
+    resolved = shutil.which("python3")
+    return bool(resolved) and "windowsapps" in resolved.lower()
+
+
 class DriverParityTests(unittest.TestCase):
     """合成 sh_1.0 fixture：旧链复刻 vs 当前链（单遍 driver）逐字节。"""
 
     def _compare(self, tag: str, mutate=None, expect_rc: int = 0):
         run_dir = build_sh10_run_dir()
-        try:
-            if mutate is not None:
-                mutate(run_dir)
-            rc_old = run_old_chain_replica(run_dir)
-            self.assertEqual(rc_old, expect_rc)
-            old_out = run_dir.parent / f"{tag}_old_out"
-            _snapshot(run_dir, old_out)
-            _clear_slo_products(run_dir)
-            rc_new = run_new_chain(run_dir)
-            self.assertEqual(rc_new, expect_rc)
-            new_out = run_dir.parent / f"{tag}_new_out"
-            _snapshot(run_dir, new_out)
-            diffs = []
-            for name in sorted(set(os.listdir(old_out))
-                               | set(os.listdir(new_out))):
-                old_bytes = ((old_out / name).read_bytes()
-                             if (old_out / name).is_file() else None)
-                new_bytes = ((new_out / name).read_bytes()
-                             if (new_out / name).is_file() else None)
-                if old_bytes != new_bytes:
-                    diffs.append(name)
-            self.assertEqual(diffs, [], f"产物字节差: {diffs}")
-            return old_out, new_out
-        finally:
-            pass
+        if mutate is not None:
+            mutate(run_dir)
+        rc_old = run_old_chain_replica(run_dir)
+        self.assertEqual(rc_old, expect_rc)
+        old_out = run_dir.parent / f"{tag}_old_out"
+        old_products = _snapshot(run_dir, old_out)
+        _clear_slo_products(run_dir)
+        rc_new = run_new_chain(run_dir)
+        self.assertEqual(rc_new, expect_rc)
+        new_out = run_dir.parent / f"{tag}_new_out"
+        new_products = _snapshot(run_dir, new_out)
+        # py-slo-tests-3（2026-09-26）：产物清单本身也参与对拍——新链
+        # 多产/漏产（含白名单外新产物）在这里显式暴露，而非被吞掉。
+        self.assertEqual(new_products, old_products,
+                         f"产物清单不一致: old={sorted(old_products)} "
+                         f"new={sorted(new_products)}")
+        diffs = []
+        for name in sorted(set(os.listdir(old_out))
+                           | set(os.listdir(new_out))):
+            old_bytes = ((old_out / name).read_bytes()
+                         if (old_out / name).is_file() else None)
+            new_bytes = ((new_out / name).read_bytes()
+                         if (new_out / name).is_file() else None)
+            if old_bytes != new_bytes:
+                diffs.append(name)
+        self.assertEqual(diffs, [], f"产物字节差: {diffs}")
+        return old_out, new_out
 
+    @unittest.skipIf(
+        windows_store_python3_stub(),
+        "Windows Store python3 stub shadows PATH python3 (new chain runs "
+        "run_slo_postprocess.sh which invokes python3) — environment-"
+        "only failure, skipped (R2-F7)")
     def test_happy_path_byte_identical(self):
         old_out, _ = self._compare("happy")
         produced = sorted(os.listdir(old_out))
         self.assertEqual(produced, sorted(list(SLO_PRODUCTS[:13])
                                           + ["slo_postprocess.log"]))
 
+    @unittest.skipIf(
+        windows_store_python3_stub(),
+        "Windows Store python3 stub shadows PATH python3 — environment-"
+        "only failure, skipped (R2-F7)")
     def test_g3_missing_request_metrics(self):
         self._compare("g3", lambda rd: (rd / "request_metrics.csv").unlink())
 
+    @unittest.skipIf(
+        windows_store_python3_stub(),
+        "Windows Store python3 stub shadows PATH python3 — environment-"
+        "only failure, skipped (R2-F7)")
     def test_failure_token_manifest_missing(self):
-        # 仅 hbm_watermark 失败（exit=3 链语义：整链 rc=1 + FAIL 条目）。
+        # 仅 hbm_watermark 失败（缺文件 fail-closed exit=2 → 整链 rc=1
+        # + FAIL 条目；exit=3 仅 certified 层容量违规）。
         def mutate(rd):
             (rd / "manifest.json").unlink()
         self._compare("notoken", mutate, expect_rc=1)

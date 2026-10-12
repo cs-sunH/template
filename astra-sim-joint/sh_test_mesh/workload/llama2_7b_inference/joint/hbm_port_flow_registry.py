@@ -20,17 +20,25 @@ owner 沿用 SH 既有 owner 字符串约定（``rid``、``rid#decode``、
 noc_migrate 逐 shard 登记**两个端点端口**——源端口（home 读腿）恒有；
 目标端口（exec 写腿）对 copy 留存写 / merge 落点写 / remote-read
 credit 到达写（A4' 补价后计价与执行同腿型，PROVENANCE §20.1）恒有；
-中间跳 rank 不触碰端点 HBM、不登记。池路径（remote_load/
-remote_store）不经本表（F3：池端口口径由 _PoolPortRegistry 独占）。
+D04（2026-09-26，v2.0 C11）起 pool 路径端点同样入表——remote_load
+登记 noc_path 末端**目标 HBM 写端点**、remote_store 登记 noc_path
+首端**源 HBM 读端点**（edge 侧是池端口、非 rank HBM；F3 旧豁免废
+除，候选池腿式 (7) 端点除数自此看见在途池流）；中间跳 rank 不触碰
+端点 HBM、不登记。池端口本身（edge rank 的池事务占用）仍由 SH
+_PoolPortRegistry 独占（计价侧经 ``pool_edge_flows_fn`` 注入 JCM）。
 
 保真边界披露（F4，PROVENANCE 落字）：u_port 不含权重/激活读——短上下
 文权重受限区间端口模型系统性乐观；KV-bound 区间（remote 相关区间）
 近似正确。端口无遥测，注册表即执行器（遥测校正登记为可选后续）。
+
+D06（2026-09-27，v2.0 §9.1 式(6)）：候选阶段的临时 HBM 占用走
+``CandidateStageHbmShare`` 只读叠加视图（本文件尾部）——在册工作仍
+由本表独家描述，候选占用另加、不写本表（不污染真实登记）。
 """
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 
 
 class HbmPortFlowError(ValueError):
@@ -144,3 +152,92 @@ class HbmPortFlowRegistry:
             self._counts[port_id] = count
         else:
             self._counts.pop(port_id, None)
+
+
+class CandidateStageHbmShareError(ValueError):
+    """fail-closed：候选阶段份额视图的非法占用计数。"""
+
+
+class CandidateStageHbmShare:
+    """D06（2026-09-27，v2.0 §9.1 式(6)）：单候选阶段的 HBM 端口份额
+    视图（**预测专用、只读叠加**）。
+
+    式(6)：同一端口上计算读取、copy 写入、pool 恢复写入和 remote 暂存
+    读写必须出现在同一个分母中——μ_e = η_e·B_e/(m_e + k_e)，其中
+    m_e = 在册后台流（活跃 decode + 在册传输/远读，仍由
+    ``HbmPortFlowRegistry`` 独家描述），k_e = **本候选阶段**实际并发
+    的候选逻辑流数（计算读一条流——同一计算流先后读权重和 KV 不拆成
+    多条流；传输腿按通道/缓冲协议的并发界计数，串行通道上的排队层组
+    不重复计）。本候选临时占用**另加、不污染真实登记**：视图从不调用
+    register/unregister，真实登记表仍只由执行事件驱动；阶段结束后只有
+    本预测视图失效，真实状态不变。
+
+    口径（与 ``HbmPortFlowRegistry.divisor`` 的"消费方显式 +1"约定
+    同族）：
+
+    * ``divisor(port)`` = m_e + (k_e − 1)——原样传给既有计价原语
+      （``_shard_endpoint_divisors`` → ``_shard_leg_ns`` 的 u+1、
+      ``_pool_transfer_ns_shards`` 的 u_port+1），每条候选流即得
+      B/(m_e + k_e) 同款份额（k_e = 1 的端口退化为旧口径 m_e+1，
+      零漂移）；
+    * ``stage_denominator(port)`` = m_e + k_e——本地算子求值器的
+      HBM 份额（``hbm_share_divisor``，roofline 带宽项同分母）；
+    * 不在占用映射内的端口 k_e = 1（该端口上至多本候选的一条流）。
+
+    端口占用映射 fail-closed：k_e 必须为正整数（一条在册候选流至少
+    计 1），非法输入即抛 ``CandidateStageHbmShareError``。
+    """
+
+    def __init__(
+        self,
+        port_registry: Optional["HbmPortFlowRegistry"],
+        candidate_flows_by_port: Optional[Mapping[int, int]] = None,
+    ) -> None:
+        self._registry = port_registry
+        self._candidate: dict[int, int] = {}
+        if candidate_flows_by_port is not None:
+            for port_id, flows in candidate_flows_by_port.items():
+                if isinstance(flows, bool) or not isinstance(flows, int):
+                    raise CandidateStageHbmShareError(
+                        "candidate stage flows must be int, got "
+                        f"{flows!r} for port {port_id!r}")
+                if flows < 1:
+                    raise CandidateStageHbmShareError(
+                        "candidate stage flows must be >= 1, got "
+                        f"{flows} for port {port_id!r}")
+                self._candidate[int(port_id)] = int(flows)
+
+    # ------------------------------------------------------------ 查询 --
+    def candidate_flows(self, port_id: int) -> int:
+        """k_e：本候选阶段在该端口上的并发逻辑流数（缺省 1）。"""
+        return self._candidate.get(int(port_id), 1)
+
+    def registered_divisor(self, port_id: int) -> int:
+        """m_e：在册后台流数（活跃 decode + 在册传输/远读）——纯真实
+        登记视图，与候选占用无关（未注入注册表 = 0，离线/单测口径）。"""
+        if self._registry is None:
+            return 0
+        return max(0, int(self._registry.divisor(port_id)))
+
+    def divisor(self, port_id: int) -> int:
+        """m_e + (k_e − 1)——消费方显式 +1 口径（原语兼容位）。"""
+        return self.registered_divisor(port_id) + (
+            self.candidate_flows(port_id) - 1)
+
+    def stage_denominator(self, port_id: int) -> int:
+        """m_e + k_e——式(6) 完整分母（本地算子求值器 HBM 份额）。"""
+        return self.registered_divisor(port_id) + self.candidate_flows(
+            port_id)
+
+    def snapshot(self) -> dict:
+        """份额快照（决策日志/审计；含在册分解与候选占用，只读）。"""
+        ports = set(self._candidate)
+        if self._registry is not None:
+            ports.update(int(port) for port in self._registry.snapshot())
+        return {
+            port_id: {
+                "u_port_registered": self.registered_divisor(port_id),
+                "candidate_stage_flows": self.candidate_flows(port_id),
+                "stage_denominator": self.stage_denominator(port_id),
+            }
+            for port_id in sorted(ports)}

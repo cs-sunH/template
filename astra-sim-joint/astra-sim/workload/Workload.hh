@@ -6,14 +6,18 @@ LICENSE file in the root directory of this source tree.
 #ifndef __WORKLOAD_HH__
 #define __WORKLOAD_HH__
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/CommunicatorGroup.hh"
 #include "astra-sim/workload/execution_driven/ExecutionMode.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
+#include "astra-sim/workload/DieModelAdapter.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
@@ -29,9 +33,30 @@ class Sys;
 class DataSet;
 class LocalHbmBandwidthModel;
 class WorkloadLayerHandlerData;
+namespace ExecutionDriven {
+class RemoteReadExecutor;
+class PipelineKernelContract;
+}
 
 class Workload : public Callable {
   public:
+    struct DepFreeIssueTiming {
+        uint64_t snapshot_ns = 0;
+        uint64_t issue_ns = 0;
+        uint64_t snapshot_passes = 0;
+        uint64_t snapshot_full_fills = 0;
+        uint64_t snapshot_reuse_hits = 0;
+        uint64_t candidates = 0;
+        uint64_t issue_calls = 0;
+        uint64_t node_view_materializations = 0;  // ID-snapshot value copies
+        // F (2026-10-11): current-anchor candidates actually visited by the
+        // three-way merge (ordinary vector / current anchors / virtual
+        // endpoints). Future anchors are never visited, so `candidates` no
+        // longer includes them -- this counter plus the executor's
+        // anchor_resource_queries are the benefit evidence.
+        uint64_t anchor_candidate_visits = 0;
+    };
+
     // execution_mode/graph_source: step-1-2 execution-mode factory
     // (ExecutionMode.hh). Static default keeps the legacy call sites and the
     // byte-for-byte static behavior unchanged.
@@ -56,6 +81,23 @@ class Workload : public Callable {
     // only where the static-path consumers (HardwareResource / Statistics /
     // local_mem tracker) still need it.
     void issue_dep_free_nodes();
+    void set_remote_read_executor(
+        ExecutionDriven::RemoteReadExecutor* executor);
+    void set_pipeline_kernel_contract(
+        std::shared_ptr<const ExecutionDriven::PipelineKernelContract> contract);
+    [[nodiscard]] std::shared_ptr<const ExecutionDriven::PipelineKernelContract>
+    pipeline_kernel_contract() const;
+    using LedgerTransitionObserver = std::function<void(
+        const std::string& kind, const ExecutionDriven::NodeView& node)>;
+    void set_ledger_transition_observer(LedgerTransitionObserver observer) {
+        ledger_transition_observer_ = std::move(observer);
+    }
+    [[nodiscard]] bool requires_pipeline_kernel_contract() const {
+        return execution_mode_ == ExecutionDriven::ExecutionMode::Online;
+    }
+    [[nodiscard]] const DepFreeIssueTiming& dep_free_issue_timing() const {
+        return dep_free_issue_timing_;
+    }
     void issue(const ExecutionDriven::NodeView& node);
     void issue_metadata(const ExecutionDriven::NodeView& node);
     void issue_replay(const ExecutionDriven::NodeView& node);
@@ -64,6 +106,18 @@ class Workload : public Callable {
     // #18): routed from issue() when node.mem.is_local_hbm_kv_restore.
     void issue_local_hbm_kv_restore(const ExecutionDriven::NodeView& node);
     void issue_comp(const ExecutionDriven::NodeView& node);
+    /// Issue an execution-driven virtual body marker using the same COMP
+    /// cost-model branch and completion sink as an ordinary 1-op/1-byte
+    /// control_marker node. The supplied WorkloadLayerHandlerData is consumed
+    /// by the selected model; Workload::call forwards its pipeline sink.
+    void issue_pipeline_control_marker(
+        const ExecutionDriven::NodeView& node,
+        WorkloadLayerHandlerData* completion_cookie);
+    // Die-backend COMP dispatch (contract §7.3 frozen order): timer -> cpu
+    // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
+    // fail-closed. Reached only under
+    // sys->compute_cost_model == ComputeCostModel::Die.
+    void issue_die_comp(const ExecutionDriven::NodeView& node);
     void issue_comm(const ExecutionDriven::NodeView& node);
     void issue_coll_comm(const ExecutionDriven::NodeView& node);
     void issue_send_comm(const ExecutionDriven::NodeView& node);
@@ -74,6 +128,32 @@ class Workload : public Callable {
 
     // stats
     void report();
+
+    // The shared wlhd-branch terminal body (release / stats / metrics /
+    // node-terminal record / dependency release / static auto-advance).
+    // Public since the die backend rollout (stage 1): the DieExecution of a
+    // die-backend COMP node finishes through this same single exit (contract
+    // §7.3) -- this repository's shared body takes the triggering event
+    // alongside the node id (the LocalHbmBandwidthModel completions reach it
+    // through Workload::call / the N-way join with EventType::General).
+    void finish_general_node(uint64_t node_id, EventType event);
+
+    // Die backend (joint rollout stage 1, contract §7.6): fill the
+    // utilization fields of the node's statistics state ahead of
+    // finish_general_node -- compact OnlineStatisticsState in online
+    // service mode (including the die-only vector_utilization), the legacy
+    // OperatorStatistics record otherwise. Must run BEFORE the generic
+    // completion consumes them.
+    void record_die_utilizations(uint64_t node_id,
+                                 double compute_utilization,
+                                 double memory_utilization,
+                                 double vector_utilization);
+
+    // Die backend adapter accessor (rollout stage 1; null off the die
+    // backend).
+    DieModelAdapter* die_model_adapter() {
+        return die_adapter_.get();
+    }
 
     // 方案 §3.4 normal-end audit: number of nodes with an armed (half-fired)
     // HBM endpoint join. Zero at a normal end; > 0 means a node whose port /
@@ -91,6 +171,13 @@ class Workload : public Callable {
     Statistics* stats;
     std::unique_ptr<LocalMemUsageTracker> local_mem_usage_tracker;
     std::unique_ptr<LocalHbmBandwidthModel> local_hbm_bandwidth_model;
+    // Die backend (rollout stage 1): one adapter per rank, constructed only
+    // under compute-cost-model=die (its constructor fail-closes without the
+    // Sys die runtime). DECLARED AFTER local_hbm_bandwidth_model on purpose:
+    // members destruct in reverse order, so the adapter (and its live
+    // DieExecutions, which must drop their pending HBM die jobs) unwinds
+    // while the fluid model is still alive.
+    std::unique_ptr<DieModelAdapter> die_adapter_;
     std::unordered_map<int, uint64_t> collective_comm_node_id_map;
     std::unordered_map<int, DataSet*> collective_comm_wrapper_map;
     bool is_finished;
@@ -100,10 +187,18 @@ class Workload : public Callable {
     // injected at Sys creation (NodeStore-backed implementation in step 1-4).
     ExecutionDriven::ExecutionMode execution_mode_;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
+    // Non-owning online-only executor; main_online owns it through physical
+    // quiescence, alongside the shared TileTransportAdapter.
+    ExecutionDriven::RemoteReadExecutor* remote_read_executor_ = nullptr;
+    std::shared_ptr<const ExecutionDriven::PipelineKernelContract>
+        pipeline_kernel_contract_;
+    LedgerTransitionObserver ledger_transition_observer_;
     // Path-2 removal (2026-08-18): the replay-clock scope flag was deleted
     // with the replay route; strategy mode always keeps real physics.
 
   private:
+    friend struct WorkloadTestAccess;
+
     // R4-14: cached "workload" logger -- fetched once in the constructor;
     // the registry returns the same logger object per name for the process
     // lifetime, so member reuse is behavior-equivalent (and skips the
@@ -128,6 +223,8 @@ class Workload : public Callable {
     void complete_online_statistics(const ExecutionDriven::NodeView& node,
                                     Tick end_time);
     void mark_online_terminal_or_fail(uint64_t node_id);
+    void publish_ledger_transition(
+        const char* kind, const ExecutionDriven::NodeView& node) const;
 
     // ---------------------------------------------------------------
     // N-way HBM contention endpoint join (system key
@@ -169,20 +266,56 @@ class Workload : public Callable {
     // terminal completion ran). The caller must then skip the normal
     // terminal path.
     bool consume_hbm_join_event(WorkloadLayerHandlerData* wlhd);
-    // The shared wlhd-branch terminal body (release / stats / metrics /
-    // node-terminal record / dependency release / static auto-advance).
-    void finish_general_node(uint64_t node_id, EventType event);
 
     std::unordered_map<uint64_t, HbmJoinState> hbm_join_pending_;
+    // Static auto-advance re-entrancy guard (H1/R1-C1 port, 2026-09-30):
+    // issue() can synchronously complete nodes (zero-byte collectives fire
+    // set_notifier inline; the HBM model harvests finished jobs inside its
+    // issue path), and every completion re-enters issue_dep_free_nodes from
+    // inside its own for_each_dep_free snapshot iteration. The nested call
+    // must not take nodes out of the stale outer snapshot (the outer loop
+    // would revisit them and double-take); it only flags a rerun, and the
+    // outermost call re-snapshots until a full pass completes without
+    // synchronous completions. Online mode never nests (its completion
+    // paths are Static-gated), so the guard is idle there.
+    bool issuing_dep_free_ = false;
+    bool issue_dep_free_rerun_needed_ = false;
+    // Reused online ready-batch snapshot. Its complete ascending contents are
+    // captured before issue() can run a synchronous completion callback; such
+    // callbacks may add ready ids, which belong to the next pass. Across
+    // separate calls the vector is reused only while its NodeStore source and
+    // ready-set generation still match.
+    // F (2026-10-11): the online pass fills this vector with the ORDINARY
+    // (non-anchor-role) free ids through
+    // GraphSource::fill_dep_free_ordinary_id_snapshot; anchor-role ids are
+    // enumerated dynamically from the executor's current-anchor set instead,
+    // so they never enter this snapshot. Non-NodeStore/derived sources keep
+    // their default = full id snapshot through the same vector.
+    std::vector<uint64_t> dep_free_issue_snapshot_ids_;
+    std::vector<ExecutionDriven::NodeView> dep_free_issue_snapshot_views_;
+    // The ID vector remains a snapshot of the NodeStore's ordered free set.
+    // Reuse it only while both its source identity and ready-set generation
+    // still match; UINT64_MAX deliberately disables reuse after generation
+    // saturation.
+    std::weak_ptr<ExecutionDriven::GraphSource>
+        dep_free_issue_snapshot_source_;
+    uint64_t dep_free_issue_snapshot_version_ = 0;
+    bool dep_free_issue_snapshot_valid_ = false;
+    DepFreeIssueTiming dep_free_issue_timing_;
     // Fail-closed fire-after guard (R8-7): identity of the most recently
-    // fired join's local-HBM side (cookie + node id). The pending entry is
-    // erased at fire so the map stays bounded by in-flight joins, so this
+    // fired join's local-HBM side (cookie value + node id). The pending entry
+    // is erased at fire so the map stays bounded by in-flight joins, so this
     // single-slot record is what an already-fired HBM-side cookie is
     // checked against (constant memory; a re-delivery arriving only after
     // further joins fired falls back to the ordinary terminal path as
     // before -- the same-side live-join guard below catches the
     // double-fire while the join is still pending).
-    WorkloadLayerHandlerData* last_fired_hbm_side_wlhd_ = nullptr;
+    // Store the callback cookie as an integer after the HBM-side object is
+    // delivered and deleted. Retaining a pointer to that object would leave
+    // a dangling pointer in the fire-after guard; a later allocation could
+    // reuse the address and turn an unrelated callback into a false
+    // double-fire match.
+    std::uintptr_t last_fired_hbm_side_cookie_ = 0;
     uint64_t last_fired_hbm_join_node_ = 0;
 };
 

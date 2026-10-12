@@ -1,3 +1,8 @@
+/******************************************************************************
+This source code is licensed under the MIT license found in the
+LICENSE file in the root directory of this source tree.
+*******************************************************************************/
+
 #ifndef __COLLECTIVEIMPLLOOKUP_HH__
 #define __COLLECTIVEIMPLLOOKUP_HH__
 
@@ -6,8 +11,6 @@
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/astraccl/CollectiveImpl.hh"
 
-using json = nlohmann::json;
-
 namespace AstraSim {
 
 // The GeneralComplexTopology class is needed when native algorithm is chosen.
@@ -15,28 +18,31 @@ namespace AstraSim {
 // Therefore, set some enumerations to define bypassing rules.
 enum class BypassRule {
     NO_BYPASS = 0,
-    BYPASS_ALL_CUSTOM, // Bypass priority 1 and 2. below. Look only at native algorithm.
+    BYPASS_ALL_CUSTOM, // Bypass custom priority tiers and look only at native
+                       // algorithms; an empty native table yields an empty
+                       // result instead of an error.
 };
 
 /*
- * CollectiveImplLookup decides which algorithm to use for the given collective operation.
- * We use the algorithms in the following order:
- * 1. If the user specifies which custom algorithm to use for a specific operation, use it.
- * 2. If the user specifies a custom algorithm to use for all operations of that collective (e.g. all AllReduce, etc.), use it.
- * 3. Finally, use the native algorithm for that collective specified by the user. (Traditional algorithm specification)
- */
-
-/*
- * TODO: There is currently no safeguard to prevent a case where the custom algorithm's size does not fit the communication group
- * (Whether there is no commgroup specified, defaulting to all ranks, one big commgroup that includes all ranks, or a smaller commgroup).
+ * CollectiveImplLookup decides which algorithm to use for the given collective
+ * operation. Only native algorithm specifications ("ring", "direct[N]", ...)
+ * remain: the custom collectives / ET feeder path was retired together with
+ * the offline static arm (2026-09-27). Configuring any of the retired custom
+ * keys ("all-reduce/all-gather/reduce-scatter/all-to-all-implementation-custom",
+ * "per-node-custom-implementation") fails closed at parse time.
  */
 class CollectiveImplLookup {
     public:
         CollectiveImplLookup(int rank_);
+        // The map below owns the CollectiveImpl objects it points to; free
+        // them here so per-rank lookups do not leak for the process lifetime.
+        ~CollectiveImplLookup();
 
-        void setup_collective_impl_from_config(json j);
+        void setup_collective_impl_from_config(nlohmann::json j);
 
-        // Notes on `workload_node_id`: Ctrl+F for [operation specific custom collective].
+        // `workload_node_id` is retained in the signature for call-site
+        // compatibility (it no longer selects anything: the per-node custom
+        // tier it used to address was removed with the custom path).
         std::vector<CollectiveImpl*> get_collective_impl(
             ComType comm_type,
             uint64_t workload_node_id,
@@ -44,22 +50,10 @@ class CollectiveImplLookup {
         );
 
     private:
-        // Map from Chakra node id (integer) to a custom algorithm identifier/filepath.
-        // Populated from YAML file. The filename is specified in the system input with the key "per-node-custom-implementation".
-        std::map<int, CollectiveImpl*> per_node_custom_impl;
-
-        // Map from Collective Type to a custom algorithm to be applied
-        // on all collective of that type, unless overridden by per node configuration.
-        // The filename of the Chakra ET for the specific custom algorithm is specified in the system input with the key "all-reduce-implementation-custom".
-        std::map<ComType, CollectiveImpl*> global_custom_impl_per_coll;
-
         // Map from Collective Type to a vector of native algorithms, where
         // each element in the vector corresponds to a dimension.
-        // To be applied only if no custom algorithm is specified.
         // The algorithm for each dimension is specified in the system input with the key "all-reduce-implementation".
         std::map<ComType, std::vector<CollectiveImpl*>> native_impl_per_coll_dim;
-
-        int rank;
 };
 
 } // namespace AstraSim

@@ -13,7 +13,6 @@ high_water un-consumed rows per pump instead of one full pass.
 #include "astra-sim/workload/execution_driven/tests/LegacyOracleWindowedTraceReader.hh"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -23,17 +22,6 @@ high_water un-consumed rows per pump instead of one full pass.
 
 namespace AstraSim {
 namespace ExecutionDriven {
-
-namespace {
-
-uint64_t now_ns() {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
-}
-
-}  // namespace
 
 LegacyOracleWindowedTraceReader::LegacyOracleWindowedTraceReader(const std::string& csv_path,
                                          RequestIngress& ingress,
@@ -154,16 +142,11 @@ void LegacyOracleWindowedTraceReader::read_one_row() {
         // Turn>0 row: the future_alarm path schedules this arrival from the
         // REQUEST_COMPLETE commit. Never submit it directly.
         ingress_.register_queue_index(request_id, queue_index);
-        ++rows_read_;
         return;
     }
-    // Turn-0 row (arrival column non-empty): counted separately for the
-    // run-end accepted-accounting invariant (accepted + dropped == turn-0
-    // rows; backport fix 2026-08-16).
-    ++turn0_rows_;
+    // Turn-0 row (arrival column non-empty).
     const uint64_t arrival_ns = std::stoull(arrival_s);
     env.arrival_world_ns = arrival_ns;
-    ++rows_read_;
     if (max_arrival_ns_ > 0 && arrival_ns > max_arrival_ns_) {
         // Phase-7 §10.4: simulation-out-of-range rejection (EXPLICIT window
         // only; default 0 = unbounded, backport fix 2026-08-16 对比报告
@@ -173,9 +156,7 @@ void LegacyOracleWindowedTraceReader::read_one_row() {
         // The rejected row is retired from the window right here: it will
         // never fire an arrival alarm, so leaving it outstanding would pin
         // the window occupancy at high_water and stall pump() before EOF.
-        // The run-end completion audit fail-closes on any nonzero count
-        // (the drop is visible, never silent).
-        ++rejected_out_of_range_;
+        // The drop is visible, never silent.
         outstanding_rows_.erase(queue_index);
         return;
     }
@@ -194,52 +175,12 @@ bool LegacyOracleWindowedTraceReader::pump() {
     if (eof_) {
         return false;
     }
-    const uint64_t start = now_ns();
-    bool read_any = false;
     // high_water_ == 0 = unbounded (the full-pass control arm of the
     // phase-7 §10.4 window benchmark): one pump reads the whole file.
     while (!eof_ && (high_water_ == 0 || occupancy() < high_water_)) {
         read_one_row();
-        read_any = true;
-    }
-    io_read_ns_ += now_ns() - start;
-    if (read_any) {
-        ++read_pumps_;
-    }
-    if (occupancy() > peak_occupancy_) {
-        peak_occupancy_ = occupancy();
     }
     return !eof_;
-}
-
-void LegacyOracleWindowedTraceReader::notify_consumed(const int64_t queue_index) {
-    // Duplicate notifications for an already-consumed row are harmless; an
-    // unknown future index is fail-closed because it would corrupt the window
-    // bound. Older fixture notifications may repeat a retired row.
-    if (queue_index >= static_cast<int64_t>(rows_read_)) {
-        std::cerr << "[Error] (execution_driven/windowed_reader) consumed "
-                     "queue index was never read: "
-                  << queue_index << " rows_read=" << rows_read_ << std::endl;
-        std::abort();
-    }
-    outstanding_rows_.erase(queue_index);
-}
-
-void LegacyOracleWindowedTraceReader::report(std::ostream& os) const {
-    os << "[online] windowed reader: high_water=" << high_water_
-       << " max_arrival_ns=" << max_arrival_ns_
-       << (max_arrival_ns_ == 0 ? " (unbounded)" : "") << " rows=" << rows_read_
-       << " total_rows=" << total_data_rows()
-       << " turn0_rows=" << turn0_data_rows() << " rejected_out_of_range="
-       << rejected_out_of_range_ << " read_pumps=" << read_pumps_
-       << " peak_window_occupancy=" << peak_occupancy_
-       << " io_read_ns=" << io_read_ns_;
-    if (io_read_ns_ > 0) {
-        os << " read_throughput_rows_per_s="
-           << (static_cast<double>(rows_read_) * 1e9 /
-               static_cast<double>(io_read_ns_));
-    }
-    os << std::endl;
 }
 
 }  // namespace ExecutionDriven

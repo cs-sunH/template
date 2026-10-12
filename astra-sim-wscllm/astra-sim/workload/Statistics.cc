@@ -2,7 +2,6 @@
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/Workload.hh"
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -50,35 +49,11 @@ void checked_add_online_tick(Tick& total, Tick value, const char* consumer) {
 
 }  // namespace
 
-Statistics::Statistics(Workload* workload) : workload(workload) {}
+Statistics::Statistics() = default;
 
 Statistics::OperatorStatistics& Statistics::get_operator_statistics(
     NodeId node_id) {
     return operator_statistics.at(node_id);
-}
-
-const Statistics::OperatorStatistics& Statistics::get_operator_statistics(
-    NodeId node_id) const {
-    return operator_statistics.at(node_id);
-}
-
-void Statistics::record_start(std::shared_ptr<Chakra::ETFeederNode> node,
-                              Tick start_time) {
-    const NodeId& node_id = node->id();
-    const auto type = OperatorStatistics::get_operator_type(node);
-    operator_statistics[node_id] =
-        OperatorStatistics(node_id, start_time, type);
-}
-
-void Statistics::record_end(std::shared_ptr<Chakra::ETFeederNode> node,
-                            Tick end_time) {
-    const NodeId& node_id = node->id();
-    this->get_operator_statistics(node_id).end_time = end_time;
-    // Fix (2026-08-28): running max so get_wall_time() is valid before
-    // post_processing() (online finalize reads it; see Statistics.hh).
-    if (end_time > this->wall_time) {
-        this->wall_time = end_time;
-    }
 }
 
 // ---------------------------------------------------------- NodeView (step 1-8)
@@ -93,8 +68,7 @@ void Statistics::record_start(const ExecutionDriven::NodeView& node,
         std::exit(EXIT_FAILURE);
     }
     const auto type = OperatorStatistics::get_operator_type(node);
-    operator_statistics[node_id] =
-        OperatorStatistics(node_id, start_time, type);
+    operator_statistics[node_id] = OperatorStatistics(start_time, type);
     if (type == OperatorStatistics::OperatorType::GPU) {
         note_online_gpu_start(node_id, start_time);
     }
@@ -117,8 +91,8 @@ void Statistics::record_end(const ExecutionDriven::NodeView& node,
         stat.type == OperatorStatistics::OperatorType::GPU) {
         note_online_gpu_end(node_id, end_time);
     }
-    // Fix (2026-08-28): running max so get_wall_time() is valid before
-    // post_processing() (online finalize reads it; see Statistics.hh).
+    // Fix (2026-08-28): running max so get_wall_time() is valid at
+    // finalize time (online finalize reads it; see Statistics.hh).
     if (end_time > this->wall_time) {
         this->wall_time = end_time;
     }
@@ -145,7 +119,6 @@ void Statistics::record_online_service_start(
     const auto type = OperatorStatistics::get_operator_type(node);
     state.start_time = start_time;
     state.started = true;
-    online_compact_statistics_recorded_ = true;
     state.is_gpu = type == OperatorStatistics::OperatorType::GPU;
     if (state.is_gpu) {
         note_online_gpu_start(node.global_id, start_time);
@@ -191,7 +164,9 @@ void Statistics::complete_online_service_operator(
         note_online_gpu_end(node.global_id, end_time);
     }
 
-    state.end_time = end_time;
+    // Compact-mode completion folds the terminal duration immediately into
+    // the streaming aggregators below; no per-node end-time snapshot is
+    // retained (the former write-only end_time member is gone).
     state.completed = true;
     if (end_time > wall_time) {
         wall_time = end_time;
@@ -199,7 +174,8 @@ void Statistics::complete_online_service_operator(
     online_compaction_active_ = true;
     add_online_roofline_contribution(type, state.start_time, end_time,
                                      state.compute_utilization,
-                                     state.memory_utilization);
+                                     state.memory_utilization,
+                                     state.vector_utilization);
     if (is_gpu && end_time > state.start_time) {
         online_gpu_newest_retired_end_ =
             std::max(online_gpu_newest_retired_end_, end_time);
@@ -208,26 +184,6 @@ void Statistics::complete_online_service_operator(
 
 Tick Statistics::get_wall_time() const {
     return this->wall_time;
-}
-
-void Statistics::ensure_legacy_post_processing_supported() const {
-    if (!online_compact_statistics_recorded_ && !online_compaction_active_) {
-        return;
-    }
-    LoggerFactory::get_logger("statistics")
-        ->critical("Legacy Statistics::post_processing()/Workload::report() "
-                   "cannot consume compact online-service statistics; use the "
-                   "online metrics finalization path instead");
-    std::exit(EXIT_FAILURE);
-}
-
-Tick Statistics::get_type_time(
-    OperatorStatistics::OperatorType type) const {
-    const auto it = this->type_time.find(type);
-    if (it == this->type_time.end()) {
-        return 0;
-    }
-    return it->second;
 }
 
 Tick Statistics::calculate_type_time_in_window(
@@ -288,6 +244,8 @@ Statistics::calculate_roofline_utilization_in_window(
             online_compute_utilization_weighted_sum_.value();
         result.memory_utilization_weighted_sum =
             online_memory_utilization_weighted_sum_.value();
+        result.vector_utilization_weighted_sum =
+            online_vector_utilization_weighted_sum_.value();
         result.total_comp_time = online_total_comp_time_;
         return result;
     }
@@ -330,33 +288,14 @@ Statistics::calculate_roofline_utilization_in_window(
         result.memory_utilization_weighted_sum = memory_sum.value();
         return result;
     }
-    WindowedRooflineUtilization result;
-    for (const auto& [node_id, stat] : operator_statistics) {
-        if (stat.type != OperatorStatistics::OperatorType::CPU &&
-            stat.type != OperatorStatistics::OperatorType::GPU) {
-            continue;
-        }
-        if (stat.end_time == OperatorStatistics::INVALID_TICK ||
-            stat.end_time <= stat.start_time) {
-            continue;
-        }
-        const Tick clipped_start = std::max(stat.start_time, window_start);
-        const Tick clipped_end = std::min(stat.end_time, window_end);
-        if (clipped_end <= clipped_start) {
-            continue;
-        }
-        const Tick duration = clipped_end - clipped_start;
-        if (stat.compute_utilization.has_value()) {
-            result.compute_utilization_weighted_sum +=
-                stat.compute_utilization.value() * duration;
-        }
-        if (stat.memory_utilization.has_value()) {
-            result.memory_utilization_weighted_sum +=
-                stat.memory_utilization.value() * duration;
-        }
-        result.total_comp_time += duration;
-    }
-    return result;
+    // Unreachable: Workload configures every Statistics it constructs before
+    // issuing the first node (and the regression tests configure theirs the
+    // same way), so online_mode_configured_ is always true by query time.
+    // The former legacy double-precision tail was dead from there.
+    LoggerFactory::get_logger("statistics")
+        ->critical("roofline window query on a Statistics whose online mode "
+                   "was never configured");
+    std::exit(EXIT_FAILURE);
 }
 
 void Statistics::OnlineExactDoubleSum::add(double rounded_value) {
@@ -509,7 +448,8 @@ void Statistics::add_online_roofline_contribution(
     Tick start_time,
     Tick end_time,
     const std::optional<double>& compute_utilization,
-    const std::optional<double>& memory_utilization) {
+    const std::optional<double>& memory_utilization,
+    const std::optional<double>& vector_utilization) {
     if ((type != OperatorStatistics::OperatorType::CPU &&
          type != OperatorStatistics::OperatorType::GPU) ||
         end_time <= start_time) {
@@ -525,6 +465,11 @@ void Statistics::add_online_roofline_contribution(
         online_memory_utilization_weighted_sum_.add(
             rounded_online_weighted_utilization(memory_utilization.value(),
                                                 duration, "memory"));
+    }
+    if (vector_utilization.has_value()) {
+        online_vector_utilization_weighted_sum_.add(
+            rounded_online_weighted_utilization(vector_utilization.value(),
+                                                duration, "vector"));
     }
     add_online_total_comp_time(duration);
     online_roofline_newest_retired_end_ =
@@ -645,55 +590,12 @@ void Statistics::require_online_compacted_full_window(
 }
 
 Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
-    get_operator_type(const std::shared_ptr<Chakra::ETFeederNode> node) {
-    const auto& node_type = node->type();
-    // Fix (2026-09-25, workload-F1): METADATA_NODE used to fall to the
-    // default arm, where -DNDEBUG compiled the assert out and the
-    // uninitialized stat_node_type was returned (UB; the garbage type then
-    // entered operator_statistics). It now maps to INVALID, mirroring the
-    // NodeView overload below (NodeKind::Metadata -> INVALID). Intentional
-    // deviation from the frozen static byte-exact baseline, same spirit as
-    // the 2026-09-24 face A.2 alignment: static traces carrying metadata
-    // nodes (Workload::issue dispatches them at issue_metadata) previously
-    // recorded an undefined operator type in Release builds.
-    Statistics::OperatorStatistics::OperatorType stat_node_type =
-        Statistics::OperatorStatistics::OperatorType::INVALID;
-    switch (node_type) {
-    case ChakraNodeType::MEM_LOAD_NODE:
-    case ChakraNodeType::MEM_STORE_NODE:
-        stat_node_type =
-            Statistics::OperatorStatistics::OperatorType::REMOTE_MEM;
-        break;
-    case ChakraNodeType::COMP_NODE:
-        stat_node_type =
-            node->is_cpu_op()
-                ? Statistics::OperatorStatistics::OperatorType::CPU
-                : Statistics::OperatorStatistics::OperatorType::GPU;
-        break;
-    case ChakraNodeType::COMM_COLL_NODE:
-    case ChakraNodeType::COMM_SEND_NODE:
-    case ChakraNodeType::COMM_RECV_NODE:
-        stat_node_type = Statistics::OperatorStatistics::OperatorType::COMM;
-        break;
-    case ChakraNodeType::INVALID_NODE:
-    case ChakraNodeType::METADATA_NODE:
-        stat_node_type = Statistics::OperatorStatistics::OperatorType::INVALID;
-        break;
-    default:
-        LoggerFactory::get_logger("statistics")
-            ->critical("Invalid node_type, node.id={}, node.type={}",
-                       node->id(), static_cast<uint64_t>(node->type()));
-        // Fail closed instead of returning the uninitialized enum (NDEBUG
-        // no longer has an assert to catch this).
-        std::exit(EXIT_FAILURE);
-    }
-    return stat_node_type;
-}
-
-Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
     get_operator_type(const ExecutionDriven::NodeView& node) {
     using ExecutionDriven::NodeKind;
-    Statistics::OperatorStatistics::OperatorType stat_node_type;
+    // Initialize before any switch arm so a future NodeKind can never
+    // return an uninitialized enum (UB) in -DNDEBUG builds.
+    Statistics::OperatorStatistics::OperatorType stat_node_type =
+        Statistics::OperatorStatistics::OperatorType::INVALID;
     switch (node.kind) {
     case NodeKind::MemLoad:
     case NodeKind::MemStore:
@@ -719,42 +621,10 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         LoggerFactory::get_logger("statistics")
             ->critical("Invalid node kind, node.id={}, node.kind={}",
                        node.global_id, static_cast<int>(node.kind));
-        assert(false);
+        // Fail closed (NDEBUG no longer has an assert to catch this).
+        std::exit(EXIT_FAILURE);
     }
     return stat_node_type;
-}
-
-void Statistics::extract_type_time() {
-    std::unordered_map<OperatorStatistics::OperatorType,
-                       std::vector<std::pair<Tick, Tick>>>
-        interval_map;
-    for (const auto& [node_id, stat] : operator_statistics) {
-        interval_map[stat.type].push_back({stat.start_time, stat.end_time});
-    }
-
-    this->type_time.clear();
-    for (const auto& [type, intervals] : interval_map) {
-        this->type_time[type] = _calculateTotalRuntimeFromIntervals(intervals);
-    }
-}
-
-void Statistics::extract_comp_comm_overlap() {
-    const auto comp_it =
-        this->type_time.find(OperatorStatistics::OperatorType::GPU);
-    const auto comm_it =
-        this->type_time.find(OperatorStatistics::OperatorType::COMM);
-    const bool has_comp = comp_it != this->type_time.end();
-    const bool has_comm = comm_it != this->type_time.end();
-    if (!has_comp || !has_comm) {
-        this->comp_comm_overlap = 0;
-        return;
-    }
-    const Tick comp_comm_time = comp_it->second + comm_it->second;
-    Tick overlap = 0;
-    if (comp_comm_time > this->wall_time) {
-        overlap = comp_comm_time - this->wall_time;
-    }
-    this->comp_comm_overlap = overlap;
 }
 
 Tick Statistics::_calculateTotalRuntimeFromIntervals(
@@ -768,7 +638,6 @@ Tick Statistics::_calculateTotalRuntimeFromIntervals(
     Tick total_runtime = 0;
     Tick merged_start = sorted_intervals[0].first;
     Tick merged_end = sorted_intervals[0].second;
-    const auto& logger = LoggerFactory::get_logger("statistics");
 
     for (const auto& [start, end] : sorted_intervals) {
         if (start <= merged_end) {
@@ -781,120 +650,4 @@ Tick Statistics::_calculateTotalRuntimeFromIntervals(
     }
     total_runtime += merged_end - merged_start;
     return total_runtime;
-}
-
-void Statistics::report(std::shared_ptr<spdlog::logger> logger) const {
-    const auto& sys_id = workload->sys->id;
-    logger->info("sys[{}], Wall time: {}", sys_id, this->wall_time);
-    for (const auto& [type, time] : this->type_time) {
-        switch (type) {
-        case OperatorStatistics::OperatorType::CPU:
-            logger->info("sys[{}], CPU time: {}", sys_id, time);
-            break;
-        case OperatorStatistics::OperatorType::GPU:
-            logger->info("sys[{}], GPU time: {}", sys_id, time);
-            break;
-        case OperatorStatistics::OperatorType::COMM:
-            logger->info("sys[{}], Comm time: {}", sys_id, time);
-            break;
-        case OperatorStatistics::OperatorType::REMOTE_MEM:
-            logger->info("sys[{}], Remote mem time: {}", sys_id, time);
-            break;
-        case OperatorStatistics::OperatorType::INVALID:
-            logger->info("sys[{}], Invalid time: {}", sys_id, time);
-            break;
-        }
-    }
-    if (this->comp_comm_overlap > 0) {
-        logger->info("sys[{}], Total compute-communication overlap: {}", sys_id,
-                     this->comp_comm_overlap);
-    }
-
-    // only report utilization statistics when roofline is enabled
-    if (workload->sys->roofline_enabled) {
-        logger->info("sys[{}], Compute bound percentage: {:.3f}%", sys_id,
-                     this->compute_bound_percentage_ * 100);
-        logger->info("sys[{}], Average compute utilization: {:.3f}%", sys_id,
-                     this->average_compute_utilization_ * 100);
-        logger->info("sys[{}], Average memory utilization: {:.3f}%", sys_id,
-                     this->average_memory_utilization_ * 100);
-        logger->info("sys[{}], Average operation intensity: {:.3f}", sys_id,
-                     this->average_operation_intensity_);
-    }
-}
-
-void Statistics::report() const {
-    report(LoggerFactory::get_logger("statistics"));
-}
-
-void Statistics::extract_utilizations() {
-    Tick total_compute_bound_time = 0;
-    double total_compute_utilization = 0;
-    double total_memory_utilization = 0;
-    double total_operation_intensity = 0;
-    Tick total_compute_time = 1ul;  // To avoid division by zero
-
-    for (const auto& [node_id, stat] : operator_statistics) {
-        if (stat.type == OperatorStatistics::OperatorType::CPU ||
-            stat.type == OperatorStatistics::OperatorType::GPU) {
-            Tick duration = stat.end_time - stat.start_time;
-
-            if (stat.is_memory_bound.has_value() &&
-                !stat.is_memory_bound.value()) {
-                total_compute_bound_time += duration;
-            }
-
-            if (stat.compute_utilization.has_value()) {
-                total_compute_utilization +=
-                    stat.compute_utilization.value() * duration;
-            }
-
-            if (stat.memory_utilization.has_value()) {
-                total_memory_utilization +=
-                    stat.memory_utilization.value() * duration;
-            }
-
-            if (stat.operation_intensity.has_value()) {
-                total_operation_intensity +=
-                    stat.operation_intensity.value() * duration;
-            }
-
-            total_compute_time += duration;
-        }
-    }
-
-    this->compute_bound_percentage_ =
-        static_cast<double>(total_compute_bound_time) / total_compute_time;
-    this->average_compute_utilization_ =
-        total_compute_utilization / total_compute_time;
-    this->average_memory_utilization_ =
-        total_memory_utilization / total_compute_time;
-    this->average_operation_intensity_ =
-        total_operation_intensity / total_compute_time;
-}
-
-void Statistics::post_processing() {
-    ensure_legacy_post_processing_supported();
-    const auto& logger = LoggerFactory::get_logger("statistics");
-    logger->info("sys[{}]. Post statistics processing start.",
-                 this->workload->sys->id);
-
-    this->wall_time = 0;
-    for (const auto& [node_id, stat] : operator_statistics) {
-        if (stat.end_time == Statistics::OperatorStatistics::INVALID_TICK) {
-            logger->critical("Node {} did not finish, start_time={}", node_id,
-                             stat.start_time);
-            exit(EXIT_FAILURE);
-        } else {
-            this->wall_time = std::max(this->wall_time, stat.end_time);
-        }
-    }
-    extract_type_time();
-    if (workload->sys->roofline_enabled) {
-        extract_utilizations();
-    }
-    extract_comp_comm_overlap();
-
-    logger->info("sys[{}]. Post statistics processing end.",
-                 this->workload->sys->id);
 }

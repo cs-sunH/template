@@ -7,7 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 #include <algorithm>
 #include <cassert>
-#include <iostream>
+#include <cstdlib>
 #include <iterator>
 
 #include "astra-sim/common/Logging.hh"
@@ -31,6 +31,63 @@ GeneralComplexTopology::GeneralComplexTopology(
             std::to_string(collective_impl.size()) +
             ") exceeds dimension count (" + std::to_string(dimension_size.size()) +
             ")");
+    }
+    // R7-C fix (2026-09-29): a non-empty implementation list SHORTER than the
+    // dimension count used to build a truncated topology covering only the
+    // first C dimensions -- whole-cluster collectives silently ran on part of
+    // the cluster (coverage halved, latency halved) with zero warnings. An
+    // empty list stays legal: it is the "this collective type is not used"
+    // shape from the lookup's bypass path.
+    //
+    // Exemption: a SINGLE OneRing/OneDirect/OneHalvingDoubling implementation
+    // is legal with any dimension count. The one* family below builds one
+    // ring spanning all npus_count = prod(dimension_size) nodes and
+    // early-returns, so one implementation covers the whole cluster by
+    // construction (early-return semantics, not truncation). Any other
+    // under-supplied list (including a one* implementation mixed with more
+    // implementations that the early return would silently discard) still
+    // fails closed.
+    //
+    // (2026-10-01) closure: the mixed-one* shape also includes lists whose
+    // LENGTH equals the dimension count. The guard below only rejected
+    // shorter lists, so ["ring","oneRing"] passed and stuffed the
+    // whole-cluster ring into the dim-1 slot (every collective then ran
+    // 63-remote-node rings instead of 7-node column rings), and
+    // ["oneRing","ring"] passed and silently discarded impl[1] via the early
+    // return. A one* implementation is now legal ONLY as the single element
+    // of a size-1 list, exactly what the comment above always claimed.
+    const auto is_one_impl = [](const CollectiveImpl* impl) {
+        return impl->type == CollectiveImplType::OneRing ||
+               impl->type == CollectiveImplType::OneDirect ||
+               impl->type == CollectiveImplType::OneHalvingDoubling;
+    };
+    if (collective_impl.size() > 1) {
+        for (const CollectiveImpl* impl : collective_impl) {
+            if (is_one_impl(impl)) {
+                Sys::sys_panic(
+                    "GeneralComplexTopology: a oneRing/oneDirect/"
+                    "oneHalvingDoubling implementation is only legal as the "
+                    "single element of the implementation list (it covers "
+                    "the whole cluster via early return); mixing it with "
+                    "other implementations would silently discard them");
+            }
+        }
+    }
+    const bool one_impl_covers_cluster =
+        collective_impl.size() == 1 && is_one_impl(collective_impl[0]);
+    if (!collective_impl.empty() && !one_impl_covers_cluster &&
+        collective_impl.size() < dimension_size.size()) {
+        Sys::sys_panic(
+            "GeneralComplexTopology: collective implementation count (" +
+            std::to_string(collective_impl.size()) +
+            ") is smaller than dimension count (" +
+            std::to_string(dimension_size.size()) +
+            "): every physical dimension needs one collective "
+            "implementation, otherwise collectives would silently cover "
+            "only the first " + std::to_string(collective_impl.size()) +
+            " dimension(s). (Exception: a single oneRing/oneDirect/"
+            "oneHalvingDoubling implementation is legal -- it covers the "
+            "whole cluster by itself.)");
     }
     for (uint64_t dim = 0; dim < collective_impl.size(); dim++) {
         if (collective_impl[dim]->type == CollectiveImplType::Ring ||
@@ -167,17 +224,29 @@ int GeneralComplexTopology::get_num_of_dimensions() {
 }
 
 int GeneralComplexTopology::get_num_of_nodes_in_dimension(int dimension) {
+    // (2026-09-30) Release-active guard: the old critical-log + assert pair
+    // compiled the assert out of Release builds and then indexed out of
+    // bounds anyway. Fail closed instead (same discipline as the ctor's
+    // hard checks).
     if (static_cast<uint64_t>(dimension) >= dimension_topology.size()) {
         LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
             ->critical("dim: {} requested! but max dim is {}", dimension,
                        dimension_topology.size() - 1);
+        std::exit(EXIT_FAILURE);
     }
-    assert(static_cast<uint64_t>(dimension) < dimension_topology.size());
     return dimension_topology[dimension]->get_num_of_nodes_in_dimension(0);
 }
 
 BasicLogicalTopology* GeneralComplexTopology::get_basic_topology_at_dimension(
     int dimension, ComType type) {
+    // (2026-09-30) Same release-active bounds guard as the sibling accessor
+    // (this one previously had no check at all).
+    if (static_cast<uint64_t>(dimension) >= dimension_topology.size()) {
+        LoggerFactory::get_logger("system::topology::GeneralComplexTopology")
+            ->critical("get_basic_topology_at_dimension: dim {} but max dim {}",
+                       dimension, dimension_topology.size() - 1);
+        std::exit(EXIT_FAILURE);
+    }
     return dimension_topology[dimension]->get_basic_topology_at_dimension(0,
                                                                           type);
 }

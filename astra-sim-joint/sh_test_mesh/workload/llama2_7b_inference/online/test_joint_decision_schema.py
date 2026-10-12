@@ -56,12 +56,16 @@ from joint.joint_cost_model import (  # noqa: E402
     CausalHorizonEstimator,
     JointHardwareRates,
     LinkFlowRegistry,
+    MASK_INAPPLICABLE_REASON,
     RequestView,
     ServiceFactors,
     SessionKVView,
 )
 from joint.joint_scheduler import select_instance_and_action  # noqa: E402
-from joint.joint_config import parse_joint_config  # noqa: E402
+from joint.joint_config import (  # noqa: E402
+    MODEL_SEMANTICS_VERSION,
+    parse_joint_config,
+)
 from joint.hbm_port_flow_registry import (  # noqa: E402  F6 销账替身对齐
     HbmPortFlowRegistry,
 )
@@ -96,6 +100,11 @@ class _GraphStub:
     def __init__(self) -> None:
         self.synced = []
         self.admission_plans = []
+        # 生产 _pipeline_identity_provider 直访 graph.pipeline_identity_
+        # allocator（真 GraphBatchBuilder 自带；替身挂真分配器——与
+        # test_prefill_remote_read_scheduler._GraphStub 同款壳模式）。
+        from joint.pipeline_identity import PipelineIdentityAllocator
+        self.pipeline_identity_allocator = PipelineIdentityAllocator()
 
     def sync_pending_history_after_evictions(self, transfers):
         self.synced.append(transfers)
@@ -145,7 +154,7 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     scheduler.kv_manager = KVCacheManager(scheduler.topology, model)
     scheduler.p_chunk = 512
     scheduler._joint_horizon = CausalHorizonEstimator(
-        cold_start_default_tokens=1)
+        cold_start_default_forward_steps=1)
     scheduler._joint_flows = LinkFlowRegistry()
     scheduler._pool_ports = _PoolPortRegistry()
     # 对齐 __init__ 初值（F6 销账：软门已删，替身漏设 = AttributeError；
@@ -170,6 +179,11 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     scheduler._link_telemetry_rates = {}
     # M1：C8 遥测状态 __init__ 同款（时间加权活跃流数）。
     scheduler._link_telemetry_flow_counts = {}  # C8 遥测状态 __init__ 同款
+    # ACC（验收纪律第 3 类，v2.0 §19.3）：预测器开销账本 __init__ 同款
+    # 初值（F6 销账口径：_account_decision_wall 直加——替身漏设 =
+    # AttributeError）。
+    from joint.predictor_cost_accounting import PredictorCostAccounting
+    scheduler.predictor_cost = PredictorCostAccounting()
     scheduler._telemetry_last_tick_ns = 0
     # C11 决策时延埋点账本（对齐 __init__ 初值，F6 销账：软门已删，
     # _account_decision_wall 直加——替身漏设 = AttributeError）。
@@ -184,6 +198,7 @@ def _make_scheduler() -> Sh30OnlineScheduler:
         "stay": 0, "copy": 0, "remote-read": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
+        "recompute_forced_action_mask": 0,
         "recompute_forced_quota_deferred": 0,
         "recompute_forced_evicted_permanent": 0,
     }
@@ -269,12 +284,33 @@ class JointDecisionSchemaFullPathTest(unittest.TestCase):
         for key in ("joint_mode", "joint_action", "joint_instance_index",
                     "joint_cost_ns", "candidates", "contention_coverage"):
             self.assertIn(key, decision)
+        # D17：公式版本 + 决策阶段/纪元 + 两阶段配对随行披露。
+        self.assertEqual(decision["model_semantics_version"],
+                         MODEL_SEMANTICS_VERSION)
+        self.assertEqual(decision["decision_stage"], "P")
+        self.assertEqual(decision["decision_epoch"], 0)
+        self.assertEqual(decision["prefill_instance"],
+                         decision["joint_instance_index"])
+        self.assertEqual(decision["decode_instance"],
+                         decision["joint_instance_index"])
+        self.assertEqual(decision["prefill_action"],
+                         decision["joint_action"])
+        self.assertEqual(
+            decision["decode_action"],
+            "remote-read" if decision["joint_action"] == "remote-read"
+            else "stay")
+        self.assertFalse(decision["is_continuation"])
+        self.assertEqual(decision["estimated_decode_tokens"],
+                         decision["estimated_remaining_decode_steps"])
         candidates = decision["candidates"]
         self.assertEqual(len(candidates), 2 * len(ACTION_ORDER))
         for candidate in candidates:
             self.assertIn("hops", candidate)
             self.assertIsInstance(candidate["hops"], int)
             self.assertIn("breakdown", candidate)
+            # D17：非执行候选真值槽位恒 None（NA）。
+            self.assertIn("measured", candidate)
+            self.assertIsNone(candidate["measured"])
             if candidate["applicable"]:
                 # 字段存在性与可解析性（值可为 None——物化在 C2）。
                 self.assertIsInstance(candidate["breakdown"], dict)
@@ -285,12 +321,48 @@ class JointDecisionSchemaFullPathTest(unittest.TestCase):
                     value = candidate["breakdown"][name]
                     if name == "notes":
                         self.assertIsInstance(value, list)
+                    elif name in ("projection_stats",
+                                  "capacity_theta_prediction"):
+                        # §5.1/§5.6/§5.5 交付面（2026-09-30 修复）：
+                        # 结构化披露块为 JSON 映射（_jsonify 递归保留
+                        # dict；round-trip 由 JSON 可解析性判据覆盖）。
+                        self.assertIsInstance(value, dict)
                     else:
-                        self.assertTrue(value is None
-                                        or isinstance(value, int))
+                        self.assertTrue(
+                            value is None
+                            or isinstance(value, (int, str, bool, list)),
+                            f"unexpected type for {name}: {type(value)}")
                 # 冗余断言位：候选级 hops 与 breakdown.hops 同值。
                 self.assertEqual(
                     candidate["hops"], candidate["breakdown"]["hops"])
+                # D17：预测里程碑为决策相对轴非负整数，序有序
+                # （next_token ≤ service_done ≤ merge_done）。
+                for key in ("predicted_next_token_done",
+                            "predicted_service_done",
+                            "predicted_merge_done"):
+                    self.assertIsInstance(candidate["breakdown"][key], int)
+                    self.assertGreaterEqual(
+                        candidate["breakdown"][key], 0)
+                self.assertLessEqual(
+                    candidate["breakdown"]["predicted_next_token_done"],
+                    candidate["breakdown"]["predicted_service_done"])
+                self.assertLessEqual(
+                    candidate["breakdown"]["predicted_service_done"],
+                    candidate["breakdown"]["predicted_merge_done"])
+                # D17：公式版本逐候选同源；阶段自描述 P；配对同实例。
+                self.assertEqual(
+                    candidate["breakdown"]["model_semantics_version"],
+                    MODEL_SEMANTICS_VERSION)
+                self.assertEqual(
+                    candidate["breakdown"]["decision_stage"], "P")
+                self.assertEqual(
+                    candidate["breakdown"]["decode_instance"],
+                    candidate["instance_index"])
+                self.assertEqual(
+                    candidate["breakdown"]["prefill_instance"],
+                    candidate["instance_index"])
+                self.assertEqual(
+                    len(candidate["breakdown"]["phase_space_bytes"]), 4)
             else:
                 self.assertIsNone(candidate["breakdown"])
                 self.assertIsInstance(
@@ -365,8 +437,7 @@ class JointDecisionSchemaHistoryTest(unittest.TestCase):
     def _real_record(self):
         session_view = _history_session_view()
         request_view = _history_request_view()
-        cost_model = self.scheduler._joint_cost_model(
-            0, decode_context_tokens=1024 + 64, decode_average_length=1)
+        cost_model = self.scheduler._joint_cost_model(0)
         record = select_instance_and_action(
             mode=self.scheduler._joint_mode,
             cost_model=cost_model,
@@ -435,11 +506,26 @@ class JointDecisionSchemaFreezeTest(unittest.TestCase):
 
     def test_frozen_field_list_matches_jcm_breakdown_declaration(self):
         """SH 冻结字段序与 JCM ActionCostBreakdown 声明逐一同名（防
-        字段漂移；全 11 字段）。"""
+        字段漂移；C5 全 11 字段 + D17 扩展 17 字段 + §5.1/§5.6/§5.5 交
+        付面 3 字段 = 31）。"""
         declared = tuple(ActionCostBreakdown.__dataclass_fields__)
-        self.assertEqual(len(_JOINT_BREAKDOWN_LOG_FIELDS), 11)
+        self.assertEqual(len(_JOINT_BREAKDOWN_LOG_FIELDS), 31)
         self.assertEqual(sorted(_JOINT_BREAKDOWN_LOG_FIELDS),
                          sorted(declared))
+        # D17 扩展字段确在册（公式版本/决策阶段/预测里程碑/布局/义务/
+        # 分阶段空间/暂存峰值/近似状态）。
+        for name in ("model_semantics_version", "decision_stage",
+                     "decision_epoch", "prefill_instance", "decode_instance",
+                     "prefill_action", "decode_action", "is_continuation",
+                     "estimated_remaining_decode_steps",
+                     "predicted_next_token_done", "predicted_service_done",
+                     "predicted_merge_done", "interval_layout",
+                     "inherited_obligation_ids", "phase_space_bytes",
+                     "staging_buffer_peak_bytes", "approximations",
+                     # §5.1/§5.6/§5.5 交付面（cfg2 计算量组持久出口）。
+                     "projection_stats", "background_delays",
+                     "capacity_theta_prediction"):
+            self.assertIn(name, _JOINT_BREAKDOWN_LOG_FIELDS)
 
     def _record_with_chosen(self, *, chosen_action, applicable_actions):
         """合成 SelectionRecord：控制适用动作集与选中动作（分位语义
@@ -557,7 +643,8 @@ class JointDecisionSchemaFreezeTest(unittest.TestCase):
         for row in forced_rows:
             reason = row["recompute_selection"]["forced_reason"]
             self.assertIn(reason, (
-                "no_history", "quota_deferred", "evicted_permanent"))
+                "no_history", "action_mask", "quota_deferred",
+                "evicted_permanent"))
             by_reason[reason] = by_reason.get(reason, 0) + 1
         self.assertEqual(by_reason,
                          {"no_history": 1, "evicted_permanent": 1})
@@ -565,6 +652,136 @@ class JointDecisionSchemaFreezeTest(unittest.TestCase):
         self.assertEqual(elected + len(forced_rows), len(rows))
         # 两口径不得混报：elected ≠ 全体 recompute 行数（forced 在场）。
         self.assertNotEqual(elected, len(rows))
+
+
+class ActionMaskForcedSemanticsTest(unittest.TestCase):
+    """M2（2026-09-26 消融矩阵前置）：``{recompute}`` 臂的 forced 语义。
+
+    动作掩码 JOINT_ALLOWED_ACTIONS 把候选集上限压到 {recompute} 时，
+    recompute 选中是**臂设计使然而非驱逐事实**——forced_reason 必须
+    记 action_mask，不得误报 evicted_permanent 污染 elected/forced 分
+    位计数（枚举扩一值：no_history > action_mask > quota_deferred >
+    evicted_permanent，单一裁决点 _recompute_selection_tier）。"""
+
+    def _record(self, *, applicable_actions, reasons=None):
+        """合成 SelectionRecord：控制适用动作集与逐动作不可行理由
+        （掩码理由由 JCM 产出 = MASK_INAPPLICABLE_REASON）。"""
+        reasons = reasons or {}
+        candidates = []
+        for instance_index in (0, 1):
+            for action in ACTION_ORDER:
+                applicable = action in applicable_actions
+                candidates.append(ActionCandidate(
+                    instance_index=instance_index, action=action,
+                    applicable=applicable,
+                    inapplicable_reason=(
+                        None if applicable
+                        else reasons.get(action, "synthetic_inapplicable")),
+                    cost_ns=(42 if applicable else None),
+                    breakdown=(ActionCostBreakdown(
+                        target_wait_ns=1, history_prep_ns=2,
+                        eviction_wait_ns=3, compute_ns=4,
+                        remote_read_ns=5, merge_ns=6,
+                        contention_divisor=1, hops=0, notes=("synthetic",),
+                        remote_read_first_credit_ns=0,
+                        remote_read_stream_ns=0)
+                        if applicable else None)))
+        chosen = next(candidate for candidate in candidates
+                      if candidate.action == "recompute"
+                      and candidate.instance_index == 0)
+        return SimpleNamespace(chosen=chosen, candidates=tuple(candidates))
+
+    @staticmethod
+    def _audit(record, history_tokens):
+        session_view = SimpleNamespace(history_tokens=history_tokens)
+        cost_model = SimpleNamespace(
+            loads={0: SimpleNamespace(
+                instance_index=0, queued_task_load_ns=0,
+                running_task_load_ns=0, active_decode_task_load_ns=0,
+                hbm_remaining_bytes_by_tp_rank=(0,),
+                reclaimable_bytes_by_tp_rank=(0,))})
+        scheduler = _make_scheduler()
+        return scheduler._joint_decision_audit_fields(
+            record, cost_model, session_view, {})
+
+    def test_mask_collapsed_arm_reports_action_mask_not_evicted(self):
+        # {recompute} 臂（history>0、quota off）：forced 归臂设计
+        # （action_mask），修前会误报 evicted_permanent。
+        mask_reason = {
+            "stay": MASK_INAPPLICABLE_REASON,
+            "copy": MASK_INAPPLICABLE_REASON,
+            "remote-read": MASK_INAPPLICABLE_REASON}
+        record = self._record(
+            applicable_actions={"recompute"}, reasons=mask_reason)
+        audit = self._audit(record, history_tokens=512)
+        self.assertEqual(audit["recompute_selection"],
+                         {"tier": "forced", "forced_reason": "action_mask"})
+
+    def test_no_history_still_precedes_mask(self):
+        # 物理成因优先：掩码压塌 ∧ history==0 ⇒ no_history（掩码无关）。
+        mask_reason = {
+            "stay": MASK_INAPPLICABLE_REASON,
+            "copy": MASK_INAPPLICABLE_REASON,
+            "remote-read": MASK_INAPPLICABLE_REASON}
+        record = self._record(
+            applicable_actions={"recompute"}, reasons=mask_reason)
+        audit = self._audit(record, history_tokens=0)
+        self.assertEqual(audit["recompute_selection"],
+                         {"tier": "forced", "forced_reason": "no_history"})
+
+    def test_mask_precedes_quota_when_both_collapsed(self):
+        # 掩码是配置级候选集上限（被掩候选根本不进配额判据）——掩码与
+        # 配额同时在场时归因 action_mask。
+        reasons = {
+            "stay": MASK_INAPPLICABLE_REASON,
+            "copy": "quota_link: link=(0,1) remaining=0",
+            "remote-read": MASK_INAPPLICABLE_REASON}
+        record = self._record(applicable_actions={"recompute"},
+                              reasons=reasons)
+        audit = self._audit(record, history_tokens=512)
+        self.assertEqual(audit["recompute_selection"],
+                         {"tier": "forced", "forced_reason": "action_mask"})
+
+    def test_quota_only_collapse_keeps_quota_deferred(self):
+        # 零漂移回归：无掩码理由的配额压塌仍记 quota_deferred。
+        reasons = {
+            "stay": "history not resident at target",
+            "copy": "quota_link: link=(0,1) remaining=0",
+            "remote-read": "quota_port: port parity gate"}
+        record = self._record(applicable_actions={"recompute"},
+                              reasons=reasons)
+        audit = self._audit(record, history_tokens=512)
+        self.assertEqual(
+            audit["recompute_selection"],
+            {"tier": "forced", "forced_reason": "quota_deferred"})
+
+    def test_mask_not_collapsed_stays_elected(self):
+        # 掩码在场但候选集未压塌（stay 仍适用）⇒ elected 语义不变。
+        reasons = {"copy": MASK_INAPPLICABLE_REASON,
+                   "remote-read": MASK_INAPPLICABLE_REASON}
+        record = self._record(applicable_actions={"stay", "recompute"},
+                              reasons=reasons)
+        audit = self._audit(record, history_tokens=512)
+        self.assertEqual(audit["recompute_selection"],
+                         {"tier": "elected", "forced_reason": None})
+
+    def test_mask_forced_count_lands_in_dedicated_key(self):
+        # 计数语义：掩码压塌的 forced 选中落 recompute_forced_action_
+        # mask 专键（与 __init__ 计数表枚举同步），不混入 elected。
+        scheduler = _make_scheduler()
+        mask_reason = {
+            "stay": MASK_INAPPLICABLE_REASON,
+            "copy": MASK_INAPPLICABLE_REASON,
+            "remote-read": MASK_INAPPLICABLE_REASON}
+        record = self._record(
+            applicable_actions={"recompute"}, reasons=mask_reason)
+        session_view = SimpleNamespace(history_tokens=512)
+        scheduler._note_action_selection(
+            "recompute", record.candidates, session_view)
+        counts = scheduler._joint_action_selection_counts
+        self.assertEqual(counts["recompute_forced_action_mask"], 1)
+        self.assertEqual(counts["recompute_elected"], 0)
+        self.assertEqual(counts["recompute_forced_evicted_permanent"], 0)
 
 
 if __name__ == "__main__":

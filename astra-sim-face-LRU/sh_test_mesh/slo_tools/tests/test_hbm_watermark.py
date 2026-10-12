@@ -39,6 +39,8 @@ import csv
 import json
 import subprocess
 import sys
+import atexit
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,7 +57,9 @@ CAPACITY_PER_INSTANCE = 6000  # 1000 B/NPU × 6 NPU
 
 
 def make_run_dir(tag: str) -> Path:
-    return Path(tempfile.mkdtemp(prefix=f"slo_hbm_{tag}_"))
+    d = Path(tempfile.mkdtemp(prefix=f"slo_hbm_{tag}_"))
+    atexit.register(shutil.rmtree, d, ignore_errors=True)
+    return d
 
 
 def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
@@ -71,10 +75,18 @@ def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
     """
     results = run_dir / "results"
     results.mkdir(parents=True, exist_ok=True)
+    # (2026-10-01 可移植性)init 行改 json.dumps 构造:% 裸拼会把含反斜杠
+    # 的 Windows 路径直接嵌进 JSON(反斜杠+U/A 等成非法转义),工具在
+    # read_init_record 即 fail-closed 退出,35/40 例在本平台假红。
+    init_record = {
+        "type": "init",
+        "repo_variant": repo_variant,
+        "manifest_path": str(run_dir / "metrics_manifest.json"),
+        "detail_level": "summary",
+        "schema_version": 1,
+    }
     (run_dir / "cpp.log").write_text(
-        '[METRIC] {"type":"init","repo_variant":"%s",'
-        '"manifest_path":"%s","detail_level":"summary","schema_version":1}\n'
-        % (repo_variant, run_dir / "metrics_manifest.json"),
+        "[METRIC] " + json.dumps(init_record) + "\n",
         encoding="utf-8")
     with (results / "online_decision_log.jsonl").open(
             "w", encoding="utf-8") as handle:
@@ -143,8 +155,12 @@ def write_journal(run_dir: Path, rows: list[dict],
     import hashlib
     payload = "".join(json.dumps(row, sort_keys=True) + "\n"
                       for row in rows)
-    (results / "kv_delta_journal.jsonl").write_text(payload,
-                                                    encoding="utf-8")
+    # (2026-10-01 可移植性)newline="":文本模式默认把 LF 翻译成 CRLF,
+    # 工具按原始字节重放算 sha256,与证书(对 LF-only payload 计算)必不
+    # 符;与 open_output 的既有做法一致,按字节原样落盘。
+    with (results / "kv_delta_journal.jsonl").open(
+            "w", encoding="utf-8", newline="") as handle:
+        handle.write(payload)
     if checksum is None:
         (results / "kv_delta_journal_checksum.json").unlink(missing_ok=True)
         return
@@ -152,8 +168,9 @@ def write_journal(run_dir: Path, rows: list[dict],
         checksum = dict(checksum)
         checksum["sha256"] = hashlib.sha256(
             payload.encode("utf-8")).hexdigest()
-    (results / "kv_delta_journal_checksum.json").write_text(
-        json.dumps(checksum), encoding="utf-8")
+    with (results / "kv_delta_journal_checksum.json").open(
+            "w", encoding="utf-8", newline="") as handle:
+        handle.write(json.dumps(checksum))
 
 
 def journal_row(sequence: int, tick: int, rank: int, instance: int,
@@ -161,7 +178,11 @@ def journal_row(sequence: int, tick: int, rank: int, instance: int,
                 reserved: int = 0, d_weight: int = 0, d_resident: int = 0,
                 d_reserved: int = 0, cause: str = "synthetic",
                 transaction_id: int = 0) -> dict:
-    """合成 journal 行（before/after 由 delta 推导）。"""
+    """合成 journal 行（before/after 由 delta 推导）。
+
+    reserved/d_reserved/transaction_id 与生产 journal 字段面对齐而保留；
+    本文件的合成行恒用默认值 0（无保留配额/事务序号场景）。
+    """
     return {
         "schema_version": 1, "sequence": sequence,
         "transaction_id": transaction_id, "planner_time_ns": tick,
@@ -311,14 +332,20 @@ class HandCalcReplayTests(unittest.TestCase):
         self.assertFalse(summary["occupancy_valid"])
         self.assertEqual(summary["violation_check"],
                          "diagnostic_upper_bound_only")
+        # M17（2026-09-29）：认证层显式披露——本仓自产 run 无 journal
+        # 生产者，certification_layer 恒 upper_bound_only。
+        self.assertEqual(summary["certification_layer"], "upper_bound_only")
         # 手算：占用时间线 t0=100（A f(1)），t10=200（A 长到 f(2)），
         # t30 = 200 − 40（A 部分逐出）+ 100（B f(1)）= 260。
         self.assertEqual(summary["violation_events"], 0)
         self.assertEqual(summary["coef_bytes_per_token"], COEF)
         self.assertEqual(summary["capacity_bytes_per_instance"],
                          CAPACITY_PER_INSTANCE)
-        self.assertEqual(summary["total_evict_events"], 1)
-        self.assertEqual(summary["total_evict_bytes"], 40)
+        # L18（2026-09-29）：顶层逐出计数改名 _upper_bound（来源 =
+        # decision-log 重放对照列，journal 权威路径下不混用）。
+        self.assertEqual(summary["total_evict_events_upper_bound"], 1)
+        self.assertEqual(summary["total_evict_bytes_upper_bound"], 40)
+        self.assertIn("eviction_counters_source", summary)
         self.assertEqual(summary["actions"]["partial_evictions"], 1)
         instance = summary["instances"]["0"]
         self.assertEqual(instance["peak_occupancy_bytes"], 260)
@@ -749,30 +776,32 @@ class FailClosedTests(unittest.TestCase):
     def test_negative_occupancy_fails(self):
         """多扣（会话跟踪实例与实际占用错位）→ 负占用 fail-closed。
 
-        构造：A 驻留实例 0；下一轮 prefill 决策谎报 LOCAL_HIT 到实例 1
-        （local_hit_location_mismatch），会话归属改到 1 而 bytes 仍挂在
-        实例 0 的占用上；随后 completion 从实例 1 逐出 A 全量 → 实例 1
-        占用转负 → 结构错拒绝输出。
+        构造（2026-09-30 随 R6-U3/R6-U4 移植适配重写）：旧构造经
+        prefill 侧 local_hit_location_mismatch 制造"归属到 1、占用滞留
+        0"的分裂——R6-U4 占用随迁修复后该形态被治愈（分裂不再产生）。
+        现改用 decode 侧 0 字节跨实例交割制造同型错位（R6-U3 的原始
+        幽灵占用形态）：A 驻留实例 0；a_r0 的 decode 决策报 local_hit
+        段到实例 1（bytes=0 的跨实例 move：归属切到 1、占用滞留 0，
+        留 move_bytes_mismatch 计数）；随后 a_r1 的 decode 从实例 1
+        noc_migrate 全量 100 → 实例 1 占用转负 → 结构错拒绝输出。
         """
         reset_seq()
         records = [
             prefill_record("sA_r0", 0, instance=0),
-            decode_record("sA_r0", 10, instance=0),
-            completion_record("sA_r0", 20),
+            decode_record("sA_r0", 10, instance=1, decision={
+                "prefill_decode_transfer": [{
+                    "kind": "local_hit", "total_bytes": 100,
+                    "source_instance_index": 0}]}),
             prefill_record("sA_r1", 30, instance=1, decision={
                 "history_action": "LOCAL_HIT",
                 "history_cache_state_before": "RESIDENT",
                 "history_transfer_bytes": 0,
-                "history_source_instance_index": 0,
+                "history_source_instance_index": 1,
                 "effective_prefill_tokens": 1}),
-            decode_record("sA_r1", 40, instance=1),
-            completion_record("sA_r1", 50, decision={
-                "completion_evictions": [{
-                    "time_ns": 50, "phase": "completion",
-                    "reason": "synthetic", "trigger_request_id": "sA_r1",
-                    "victim_session_id": "sA", "victim_instance_index": 1,
-                    "victim_last_completion_ns": 20,
-                    "context_tokens": 1, "shard_bytes": [100]}]}),
+            decode_record("sA_r1", 40, instance=0, decision={
+                "prefill_decode_transfer": [{
+                    "kind": "noc_migrate", "total_bytes": 100,
+                    "source_instance_index": 1}]}),
         ]
         tokens = [token_row("sA_r0", "sA", 0, 1, 1),
                   token_row("sA_r1", "sA", 1, 1, 1)]
@@ -1007,6 +1036,36 @@ class TrustTierJournalTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("sha256", proc.stderr)
 
+    def test_incomplete_per_rank_terminal_field_fails_closed(self):
+        """F11-E1（2026-09-26）：per-rank 终态字段缺失/类型异常与
+        line_count/ranks 缺失同口径显式 fail——不得静默跳过比对后仍以
+        不完整证书升 certified 层。"""
+        rows = [journal_row(0, 0, 0, 0, 1000, d_weight=300)]
+        base = {"capacity_bytes": 1000, "weight": 300,
+                "resident": 0, "reserved": 0, "physical": 300}
+        # 缺字段：删去 reserved。
+        missing = {k: v for k, v in base.items() if k != "reserved"}
+        checksum = default_checksum(rows, {"0": missing})
+        run_dir = self._fixture_with_journal("incomplete", rows, checksum)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("字段不完整", proc.stderr)
+        # 类型异常：weight 记成字符串。
+        anomalous = dict(base, weight="300")
+        checksum = default_checksum(rows, {"0": anomalous})
+        run_dir = self._fixture_with_journal("badtype", rows, checksum)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("字段不完整", proc.stderr)
+        # capacity_bytes 缺失同口径。
+        missing_cap = {k: v for k, v in base.items()
+                       if k != "capacity_bytes"}
+        checksum = default_checksum(rows, {"0": missing_cap})
+        run_dir = self._fixture_with_journal("nocap", rows, checksum)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("字段不完整", proc.stderr)
+
     def test_journal_chain_break_fails_closed(self):
         rows = [
             journal_row(0, 0, 0, 0, 1000, d_weight=300),
@@ -1088,6 +1147,7 @@ class JournalParityRealTests(unittest.TestCase):
     @unittest.skipUnless(FIXTURE.is_dir(), "phase2 journal fixture 缺失")
     def test_real_journal_certified_and_matches_checksum(self):
         out = Path(tempfile.mkdtemp(prefix="slo_hbm_parity_"))
+        atexit.register(shutil.rmtree, out, ignore_errors=True)
         proc = subprocess.run(
             [sys.executable, str(SLO_TOOLS_DIR / "hbm_watermark.py"),
              str(self.FIXTURE), "--json", str(out / "summary.json"),
@@ -1631,7 +1691,9 @@ class AdmissionProbeSkipTests(unittest.TestCase):
     @staticmethod
     def _probe_record(request_id: str, tick: int, kind: str) -> dict:
         return {
-            "seq": -1,  # write_fixture 按行序重排 seq
+            "seq": -1,  # write_fixture 按传入行序原样落盘、seq 保留 -1
+                       # （probe 观测行不占决策序号；fixture 的 prefill/
+                       #  decode/completion 计数器也不为其自增）。
             "tick": tick,
             "priority": 0,
             "kind": kind,

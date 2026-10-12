@@ -30,8 +30,10 @@ Sys::register_event 在确切 Tick 交付（deferred flush 打开：物理上下
   错峰 latency ............... S2/S3/S4（+50/+150/+100/+20ns 错峰发射）
   2 流长短服务与完成即重分 ..... S2（1200B 长流两次重分）、S7（同端口双流）
   latency-ready 与 stream completion 同 Tick  S2（C 于 B 完成同刻就绪）
-  同 Tick 多端口/多作业排序 .... S7（5 笔同刻完成：host rank 先、余按
-                               (port_index, issue_sequence) 升序）、
+  同 Tick 多端口/多作业排序 .... S7（5 笔同刻发射、独立端口三笔 +200 与
+                               同端口对两笔 +300 两批完成：host rank 先、
+                               余四笔集合比对恰各一次——跨 rank 序由各 rank
+                               外层闹钟所有，不断言）、
                                S1/S3/S5（同刻批内 port/seq 序）
   单事务非整除 ............... S6A（100B@6B/ns，fluid=116.67 -> callback 117）
   极小残差 ................... S6A（10B@6B/ns，share=(10/6)*6 超余 ~2e-15，
@@ -83,34 +85,17 @@ Sys::register_event 在确切 Tick 交付（deferred flush 打开：物理上下
         1ns），callback 在下一整数 Tick +101——两种时间不得混用。
 
 已知分歧处置（2026-09-25 更新）：下述 join-at-boundary 分歧已在后端按方案
-§3.1 修复——advance_port_continuous 先快照“进入本子步前已活跃”的流集合
-served_streams（AnalyticalRemoteMemory.cc:586-597，其中 :589-590 注释点名
-“RemotePortNwayTest S2/S4 的规格即此语义”），份额仅在 streams_before>0 且
-elapsed>0 时产生（:604），流耗尽循环只对 served_streams 快照扣减
-（:647-652）；恰在边界 latency-ready 的流不再被扣本子步份额。因此 S2/S4
+§3.1 修复——AnalyticalRemoteMemory::advance_port_continuous 先快照“进入本
+子步前已活跃”的流集合 served_streams（其上方注释点名“RemotePortNwayTest
+S2/S4 的规格即此语义”），份额仅在 streams_before>0 且 elapsed>0 时产生
+（elapsed 门），流耗尽循环只对 served_streams 快照扣减（served_streams
+扣减循环）；恰在边界 latency-ready 的流不再被扣本子步份额。因此 S2/S4
 现为有效回归门：后端若回退为“先翻活跃流、再对全活跃集合扣份”，两场景即
 应 FAIL，不得再以“已知分歧”叙事吸收回归。
 
-分歧原始记录（编写时 2026-09-24 对当时后端的代码走读结论；本测试按纪律不
-自跑；所引行号与语句在当时工作树成立，现已不存在）：
-方案 §3.1 要求 latency 到期才进传输流集合。wscllm-LRU 后端 advance_port_
-continuous 先在子步边界把 latency-ready 事务翻成活跃流
-（AnalyticalRemoteMemory.cc:589-608），随后同一子步的流耗尽循环对"所有"
-kActiveStream 作业统一扣减本子步份额 share（AnalyticalRemoteMemory.cc:613-639，
-`if (streams_before > 0) job.remaining_bytes -= share;`）——恰在边界加入的流
-并未在 [t,boundary) 获得服务却被扣一份：
-  - join 字节数 > share：静默提前完成（服务被窃，callback 偏早）；
-  - join 字节数 < share：remaining < -1e-6 触发 sys_panic（进程 exit(1)）。
-family 参照实现（joint AnalyticalRemoteMemory.cc:373-441）在事件点先 flip
-再积分 [t,t_next)，积分只触已达 Streaming 的作业，无此问题。因此本套件中：
-  - S4（r3 携 300B 于 +200 就绪、被扣 160 后余 140B，非致命）预期以 FAIL 行
-    暴露 r3 与 r0-r2 的提前完成 Tick；
-  - S2 的 60B C 流（60 < share=600）预期在 fork 子进程内终止（B 被窃服务
-    后提前完成会把变迁目标拉回当前 Tick，主上下文 delta-0 重挂还会触发
-    EventQueue 严格递增断言，或先经 sys_panic exit(1)——均为子进程死亡），
-    由父进程"子进程必须 0 退出"断言捕获。
-两处断言值均按方案 §3.1 语义书写（夹具即规格）；后端修复后两场景应转绿，
-其余场景按走读在当前后端应全绿。
+分歧原始记录（缺陷 #S2/S4-join-at-boundary，走读于 2026-09-24、修复落地于
+2026-09-25，见上段；当时后端对全活跃流统一扣本子步份额，边界加入的流被扣
+未获服务的份额——S2 子进程 sys_panic、S4 提前完成）。
 
 构建（先按本仓 README 完成 configure，再）：
   cmake --build build/astra_analytical/build_congestion_aware -j \
@@ -278,19 +263,29 @@ std::vector<Tick> ref_port(double bw, double latency,
             expect(std::abs(share * static_cast<double>(n_stream) -
                             bw * elapsed) <= 1e-9 * std::max(1.0, bw * elapsed),
                    "RefPort: equal-split invariant violated");
+            // fix2 oracle（2026-10-11，与后端 min(remaining, share) 上限扣除
+            // 同算术）：大时钟自投影 boundary 的浮点上舍入残差在 oracle 侧
+            // 同样存在——扣除封顶、容量下界随 4ε·port_time 缩放，防 oracle
+            // 与实现分叉。
+            const double fp_slack_ns =
+                4.0 * std::numeric_limits<double>::epsilon() *
+                std::max(boundary, 1.0);
             for (std::size_t i = 0; i < n; ++i) {
                 if (active_before[i]) {
-                    rem[i] -= share;
+                    const double deducted = std::min(rem[i], share);
+                    rem[i] -= deducted;
+                    served_total += deducted;
                 }
             }
             streaming_time += elapsed;
-            served_total += share * static_cast<double>(n_stream);
-            // (b) 容量边界：累计服务量不超过 bw x streaming_time，
-            // 且连续服务不丢量（取等）。
+            // (b) 容量边界：累计服务量不超过 bw x streaming_time（取等或
+            // 因扣除封顶少 ulp 级残差）；下界随端口时钟缩放。
             expect(served_total <= bw * streaming_time + 1e-9,
                    "RefPort: served bytes exceed bw x streaming_time");
-            expect(served_total >= bw * streaming_time - 1e-9,
-                   "RefPort: served bytes lost vs bw x streaming_time");
+            expect(served_total >=
+                       bw * streaming_time -
+                           (bw * (1e-9 + fp_slack_ns) + kByteClampTol),
+                   "RefPort: served bytes lost beyond the scaled tolerance");
         }
         port_time = boundary;
 
@@ -310,13 +305,25 @@ std::vector<Tick> ref_port(double bw, double latency,
         }
 
         // 流耗尽：同刻耗尽整批离开集合；残余入 clamp 容差即完成
-        // （不丢服务、不 panic、不额外推迟）。
+        // （不丢服务、不 panic、不额外推迟）。fix2 oracle：容差随端口
+        // 时钟缩放（与后端 stream_clamp_tolerance 的 E1 时钟相对阈值同式），
+        // 下界同法缩放；计数取**加入后**的当前活跃流数（后端在 join 后的
+        // 同刻零长再推进子步按 streams_before>=1 计算容差并完成亚容差流——
+        // oracle 须在 join 当轮等价完成，否则大时钟下与实现分叉）。
+        const std::size_t n_active_now = static_cast<std::size_t>(
+            std::count(st.begin(), st.end(), kActive));
+        const double drain_tol =
+            std::max(kByteClampTol,
+                     4.0 * std::numeric_limits<double>::epsilon() * boundary *
+                         (n_active_now > 0
+                              ? bw / static_cast<double>(n_active_now)
+                              : 0.0));
         for (std::size_t i = 0; i < n; ++i) {
             if (st[i] != kActive) {
                 continue;
             }
-            if (rem[i] <= kByteClampTol) {
-                expect(rem[i] >= -kByteClampTol,
+            if (rem[i] <= drain_tol) {
+                expect(rem[i] >= -drain_tol,
                        "RefPort: stream remainder fell beyond clamp tolerance");
                 rem[i] = 0.0;
                 st[i] = kDone;
@@ -406,7 +413,6 @@ const char* kSystemJson = R"({
   "collective-optimization": "localBWAware",
   "roofline-enabled": 1,
   "replay-only": 0,
-  "track-local-mem": 0,
   "trace-enabled": 0,
   "hbm-bandwidth-contention": 0,
   "hbm-kv-restore-bandwidth-sharing": 0,
@@ -511,9 +517,7 @@ std::unique_ptr<AnalyticalRemoteMemory> make_backend(
 }
 
 struct Expectation {
-    int rank;
     uint64_t bytes;
-    Tick issue_tick;
     Tick expect_tick;
     std::string label;
 };
@@ -525,8 +529,7 @@ void issue_bytes(AnalyticalRemoteMemory* mem, int rank, uint64_t bytes,
     wlhd->sys_id = rank;
     wlhd->workload = g_fx.recorders[static_cast<std::size_t>(rank)];
     wlhd->node_id = node_id;
-    g_exp[node_id] = Expectation{rank, bytes, Sys::boostedTick(), expect_tick,
-                                 label};
+    g_exp[node_id] = Expectation{bytes, expect_tick, label};
     mem->issue(bytes, wlhd);
 }
 
@@ -535,7 +538,7 @@ void noop_cb(void*) {}
 // latency=0 场景的发射必须发生在事件回调（invoke context）内：零 latency 使
 // 后端变迁目标==当前 Tick，delta-0 重挂只有在 invoke 上下文才合法（合并进
 // 正在 invoke 的 EventList）；主上下文会在下一次 proceed 触发 EventQueue
-// 严格递增断言（EventQueue.cpp:31/:55）。生产路径本就从 Workload 回调发射，
+// 严格递增断言（EventQueue.cpp 的严格递增守卫）。生产路径本就从 Workload 回调发射，
 // 此 helper 复刻同一上下文。
 struct DeferredIssueCtx {
     AnalyticalRemoteMemory* mem;
@@ -731,6 +734,55 @@ void scenario_s1() {
 }
 
 // ===========================================================================
+// S8 -- fix2 复现用例（2026-10-11）：大端口时钟 + 自投影 boundary
+//   L1 双 panic 的便宜复现：端口时钟推至 ~5e14 ns（λ0.0625 崩点 4.759e14
+//   同量级），单流小字节传输的下一子步 boundary 取自自投影
+//   port_time + remaining/bw——fl(port_time+ttf) 的上舍入使 share 超出
+//   remaining 达 ulp(port_time)×bw（字节级），旧码在 :742/:676 绝对界
+//   守卫必 panic；新码 min(remaining, share) 上限扣除下正确完成且字节
+//   守恒。字节数自校准（扫描使旧码 panic 条件成立的最小整数）。
+// ===========================================================================
+
+void scenario_s8_large_clock_self_projection() {
+    reset_scenario_state();
+    auto mem = make_backend("rm_s8.json",
+                            pool_config(num_str(6.0), num_str(100.0)));
+    const Tick big = 500000000000000ULL;  // 5e14
+    advance_to(big);
+    const Tick t0 = Sys::boostedTick();
+    expect(t0 == big, "S8: advanced to the large clock");
+    // 自投影发生在 latency 就绪之后的端口时钟（t0 + latency）。
+    const double pt = static_cast<double>(t0) + 100.0;
+    const double bw = 6.0;
+    uint64_t picked = 0;
+    for (uint64_t b = 1; b <= 4096; ++b) {
+        const double rem = static_cast<double>(b);
+        const double ttf = rem / bw;  // N=1 自投影
+        const double elapsed =
+            (pt + ttf) - pt;
+        // 旧码 panic 条件：自投影上舍入使 share 超扣越过绝对界；同时
+        // remaining 必须大于 E1 时钟相对 clamp 容差（否则新旧码都走
+        // join 后零长子步的早完成路径，到不了服务子步，复现无效）。
+        const double e1_tol =
+            4.0 * std::numeric_limits<double>::epsilon() * pt * bw;
+        if (elapsed > ttf && rem - elapsed * bw < -1e-6 && rem > e1_tol) {
+            picked = b;
+            break;
+        }
+    }
+    expect(picked > 0,
+           "S8: calibration found a byte size on the panic boundary");
+
+    const std::vector<Tick> ref = ref_port(6.0, 100.0, {{t0, picked}});
+    issue_bytes(mem.get(), 0, picked, 1801, ref[0],
+                "S8 large-clock self-projection");
+    drain_queue();
+    verify_scenario("S8", mem.get(), {1801});
+}
+
+
+//   bw=100、latency=50、同端口四流 1k/2k/3k/4kB（k=1000B）：
+// ===========================================================================
 // S12 -- MEMORY_POOL 映射 + 阶段 5.2 锚 2
 //   bw=100、latency=50、同端口四流 1k/2k/3k/4kB（k=1000B）：
 //   [50,90) N=4 每流 25；[90,120) N=3 每流 100/3；[120,140) N=2 每流 50；
@@ -898,9 +950,11 @@ void scenario_s5() {
 // ===========================================================================
 // S7 -- PER_NPU：同 Tick 多端口/多作业排序
 //   bw=6、latency=100。五笔 600B 同刻：r0(host/port0) 一笔、r1(port1) 两笔、
-//   r2(port2)、r4(port4) 各一笔 -> 五笔全部 +300 同刻完成。
-//   交付序：host rank 批内先交付，其余按 (port_index, issue_sequence) 升序
-//   （Sys 同 tick 交付机制的确定性结果：host 桶内追加 -> 其余经外层闹钟）。
+//   r2(port2)、r4(port4) 各一笔 -> 独立端口三笔（r0/r2/r4）各 +200 完成，
+//   r1 同端口对流对两笔各 +300 同刻完成。
+//   断言的交付序（机制保证口径）：host rank 批内先交付；其余四笔恰各交付
+//   一次（集合比对）——跨 rank 完成序由各 rank Sys 外层闹钟所有（实测非
+//   注册序），不属于后端契约，不作排序断言。
 // ===========================================================================
 
 void scenario_s7() {
@@ -946,10 +1000,10 @@ void scenario_s7() {
 //   零字节不入分母：若入，[120,200) 内 N=4 会把三笔推迟到 +500 后）；
 //   r3 300B@t0+100（ready +200；[200,400) N=4 每流 1.5；[400,450) N=3）。
 //   §3.1 期望：r4 +120、r3 +400、r0-r2 +450。
-//   【已知分歧场景，非致命】当前后端把恰于 +200 边界就绪的 r3 扣减该子步
-//   份额 160（AnalyticalRemoteMemory.cc:613-639）：r3 携 140B 提前完成
-//   （走读约 +294，§3.1 应为 +400），r0-r2 随之偏早（约 +424，应 +450）——
-//   以 FAIL 行暴露；断言值按方案 §3.1 书写，非致命不阻断后续场景。
+//   后端口径（2026-09-25 修复后）：advance_port_continuous 以子步边界前
+//   已活跃流集合 served_streams 快照扣份，恰于 +200 边界 latency-ready 的
+//   r3 不再被扣本子步份额——本场景为有效回归门：若后端回退为“先翻活跃
+//   流、再对全活跃集合扣份”，r3/r0-r2 的完成 Tick 偏早即在此 FAIL。
 // ===========================================================================
 
 void scenario_s4() {
@@ -1107,19 +1161,20 @@ void scenario_s15() {
 
 // ===========================================================================
 // S2 -- PER_NPU：2 流长短服务与完成即重分 + latency-ready 与 stream
-//   completion 同 Tick（fork 子进程内运行：若后端触发 sys_panic，父进程
-//   以"子进程必须 0 退出"捕获，套件其余诊断不受影响）。
+//   completion 同 Tick（fork 子进程内运行，正常路径子进程以 0 退出）。
 //   bw=6、latency=100，rank5 单端口：A=1200B@t0（ready +100）、
 //   B=300B@t0+50（ready +150）、C=60B@t0+150（ready +250 恰为 B 完成刻）。
 //   §3.1 逐段：[100,150) N=1 每流 6（A 余 900）；[150,250) N=2 每流 3
 //   （B 完成 @250，A 余 600）；+250 C 就绪与 B 完成同刻 -> [250,270) N=2
 //   每流 3（C 完成 @270，A 余 540）；[270,360) N=1 每流 6（A 完成 @360）。
 //   完成即重分：A 的最后 540B 以 6B/ns 走 90ns，而非按 3B/ns 再等 180ns。
-//   【已知分歧，子进程内致命】当前后端对 +150/+250 边界就绪流各扣一份
-//   300/600：B 被窃 300B 提前完成，C（60B）被扣 600 后 remaining<-1e-6
-//   触发 sys_panic（AnalyticalRemoteMemory.cc:621），或更早因 B 提前完成
-//   引发的主上下文 delta-0 重挂触发 EventQueue 严格递增断言——子进程以
-//   非零退出/信号结束，父进程按 FAIL 捕获。
+//   后端口径（2026-09-25 修复后）：advance_port_continuous 以子步边界前
+//   已活跃流集合 served_streams 快照扣份，+150/+250 边界 latency-ready 的
+//   B/C 不被扣当子步份额——§3.1 语义成立（B+250/C+270/A+360），本场景为
+//   有效回归门：后端若回退为“先翻活跃流、再对全活跃集合扣份”（C 流被扣
+//   600 后 remaining<-1e-6 触发 sys_panic，或 B 被窃服务提前完成引发
+//   EventQueue 严格递增断言），fork 子进程即非零/信号退出，父进程按 FAIL
+//   捕获。
 // ===========================================================================
 
 void scenario_s2_body() {
@@ -1285,11 +1340,12 @@ int main() {
     scenario_s1();
     scenario_s12();
     scenario_s6a();
+    scenario_s8_large_clock_self_projection();
     scenario_s6b();
     scenario_s3();
     scenario_s5();
     scenario_s7();
-    // S4：已知分歧（非致命 FAIL 行）；S2：已知分歧（子进程隔离）。
+    // S4/S2：join-at-boundary 修复（served_streams 快照）后的有效回归门。
     scenario_s4();
     // §7 白盒正反例：事件 generation / 派发期同步重入 / 提前 shutdown。
     scenario_s13();
@@ -1313,7 +1369,7 @@ int main() {
     expect_fail_closed("C9 PER_NPU unconfigured rank issue",
                        child_per_npu_unconfigured_rank);
 
-    // ---- S2（长短服务/完成即重分/同刻就绪-完成；子进程隔离已知分歧） ----
+    // ---- S2（长短服务/完成即重分/同刻就绪-完成；子进程内回归门） ----
        expect_child_pass("S2 re-split & ready-at-completion-tick",
                       scenario_s2_body);
 

@@ -6,7 +6,6 @@ LICENSE file in the root directory of this source tree.
 #ifndef __RING_TOPOLOGY_HH__
 #define __RING_TOPOLOGY_HH__
 
-#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -38,7 +37,6 @@ class RingTopology : public BasicLogicalTopology {
 
     std::string name;
     int id;
-    int offset;
     int total_nodes_in_ring;
     int index_in_ring;
     Dimension dimension;

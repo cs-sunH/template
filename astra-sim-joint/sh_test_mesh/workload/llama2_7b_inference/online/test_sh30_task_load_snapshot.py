@@ -16,8 +16,9 @@ fraction=1.0 全量剩余）"假设作废，改为 decode_tokens_consumed 闭式
   1. 在飞列车覆盖队列头全部剩余 chunk ⇒ total 与纯排队态逐位相等
      （恰计一次的核心回归）；
   2. 组合态（在飞 r0 + 排队 r1）queued/running 分量各自与对照实例一致；
-  3. active_decode 分量不受实例有无在飞列车影响，且随 decode_tokens_
-     consumed 闭式推进单调下降（迭代级剩余量）。
+  3. active_decode 分量不受实例有无在飞列车影响，标定 = 条件剩余估计
+     器（N14，§8.2/A08：E[N−d|N>d] 下限 1）——支持域内随 decode_tokens_
+     consumed 单调下降、超支持域保正剩余（不截零）。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 online/test_sh30_task_load_snapshot.py   （或 pytest 同路径）
@@ -91,7 +92,7 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     # 既有期望值全部保持）。
     from joint.joint_cost_model import CausalHorizonEstimator
     scheduler._joint_horizon = CausalHorizonEstimator(
-        cold_start_default_tokens=10)
+        cold_start_default_forward_steps=10)
     scheduler._prefill_task_cache = {}
     # 改法A（decode 估算全参 memo）：_task_load_snapshot 的 active_decode 段
     # 改读 _decode_task_load_ns_cached，脚手架同步装配其缓存字典。
@@ -234,9 +235,26 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
             snap_without.active_decode_task_load_ns)
 
     def test_active_decode_iteration_level_closed_form(self):
-        """场景 3b（新口径归因）：active_decode 剩余量随 decode_tokens_
-        consumed 闭式推进单调下降（迭代级剩余量，替代原 generated=0
-        全量剩余的不可分假设）；推进量 = ADL 上限内的剩余迭代。"""
+        """场景 3b（N14 条件化归因，§8.2/A08/W6）：active_decode 剩余量
+        = 条件剩余步（E[N−d|N>d]，下限 1；P 准入/D 边界同款估计器）折算
+        ——观测支持域内随 decode_tokens_consumed 单调下降；**已消费超过
+        完成样本最大值的活跃请求回固定正尾先验，仍保持正剩余**（不再
+        "均值减进度截零"估为零步）。"""
+        # session 级完成样本（≥ 成熟门槛）：全部 8 前向步 ⇒
+        # fresh(d=0) 条件剩余 = 8；advanced(d=5) 条件剩余 = 3；
+        # exhausted(d=12 ≥ max_observed=8) 超观测支持域 ⇒ 固定正尾先验
+        # （PredictionParams.cold_start_forward_steps，正剩余）。
+        from joint.history_estimator import (
+            ConditionalRemainingLengthEstimator)
+        from joint.prediction_config import PredictionParams
+        history = self.scheduler._joint_length_history_or_default()
+        self.assertIsInstance(
+            history, ConditionalRemainingLengthEstimator)
+        params = PredictionParams()
+        for _ in range(params.history_min_mature_samples):
+            for session_id in ("d0_session", "d1_session", "d2_session"):
+                history.observe_completed(
+                    session_id=session_id, completed_forward_steps=8)
         fresh = _make_runtime("d0", decode_length=8)
         advanced = _make_runtime("d1", decode_length=8)
         advanced.decode_tokens_consumed = 5
@@ -249,16 +267,16 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
         self.assertGreater(
             snap_fresh.active_decode_task_load_ns,
             snap_advanced.active_decode_task_load_ns,
-            "closed-form remaining load must shrink as "
-            "decode_tokens_consumed advances")
-        # ADL=10：fresh 剩 10 个迭代估价、advanced 剩 5 个——两者的
-        # active 分量都为正（advanced 仍有剩余，不归零）。
-        self.assertGreater(snap_advanced.active_decode_task_load_ns, 0)
+            "conditional remaining load must shrink as "
+            "decode_tokens_consumed advances within the observed "
+            "support")
+        # exhausted（d=12 超完成样本最大值 8）：正尾先验保正剩余——
+        # §8.2"不能把仍活跃请求估为零步"（旧均值减进度截零口径已废）。
         exhausted = _make_runtime("d2", decode_length=8)
-        exhausted.decode_tokens_consumed = 12  # 超过 ADL：估价剩余为 0
+        exhausted.decode_tokens_consumed = 12
         snap_exhausted = self.scheduler._task_load_snapshot(
             _make_state(index=0, active_decode=(exhausted,)), 0)
-        self.assertEqual(snap_exhausted.active_decode_task_load_ns, 0)
+        self.assertGreater(snap_exhausted.active_decode_task_load_ns, 0)
 
 
 class SnapshotEpochCacheTest(unittest.TestCase):
@@ -321,9 +339,14 @@ class BoundedTaskLoadMemoTest(unittest.TestCase):
         self.scheduler._task_load_cache_capacity = 2
 
     def test_prefill_hit_and_fifo_eviction_preserve_exact_value(self):
-        a = dict(instance_size=2, chunk_tokens=512, context_tokens=512)
-        b = dict(instance_size=2, chunk_tokens=512, context_tokens=768)
-        c = dict(instance_size=2, chunk_tokens=512, context_tokens=1024)
+        # D06（2026-09-27）：memo key 含 hbm_share_divisor（第 4 位）——
+        # 不同候选阶段份额的求值不串缓存；缺省 1 = 独占带宽口径。
+        a = dict(instance_size=2, chunk_tokens=512, context_tokens=512,
+                 hbm_share_divisor=1)
+        b = dict(instance_size=2, chunk_tokens=512, context_tokens=768,
+                 hbm_share_divisor=1)
+        c = dict(instance_size=2, chunk_tokens=512, context_tokens=1024,
+                 hbm_share_divisor=1)
         expected = {
             tuple(args.values()): estimate_prefill_task_load_ns(
                 self.scheduler.hardware, self.scheduler.model, **args)
@@ -350,15 +373,17 @@ class BoundedTaskLoadMemoTest(unittest.TestCase):
         )
 
     def test_decode_hit_and_fifo_eviction_preserve_exact_value(self):
+        # D08：decode memo key 扩 ``hbm_share_divisor``（缺省 1 = 独占
+        # 带宽——份额化求值不与独占口径串缓存；键形随附，值语义不变）。
         a = dict(instance_size=2, current_context_tokens=512,
                  generated_tokens=0, average_decode_length=10.0,
-                 running_step_fraction_remaining=1.0)
+                 running_step_fraction_remaining=1.0, hbm_share_divisor=1)
         b = dict(instance_size=2, current_context_tokens=513,
                  generated_tokens=1, average_decode_length=10.0,
-                 running_step_fraction_remaining=1.0)
+                 running_step_fraction_remaining=1.0, hbm_share_divisor=1)
         c = dict(instance_size=2, current_context_tokens=514,
                  generated_tokens=2, average_decode_length=10.0,
-                 running_step_fraction_remaining=1.0)
+                 running_step_fraction_remaining=1.0, hbm_share_divisor=1)
         expected = {
             tuple(args.values()): estimate_decode_remaining_task_load_ns(
                 self.scheduler.hardware, self.scheduler.model, **args)

@@ -15,7 +15,6 @@ if str(MODULE_DIR) not in sys.path:
 from face_scheduler import FaceHardware, FaceInstanceSpec, FaceModel, build_instances  # noqa: E402
 from session_kv_manager import (  # noqa: E402
     SessionKVCacheManager,
-    kv_cache_shard_bytes_for_tokens,
 )
 
 
@@ -40,7 +39,6 @@ class IncrementalInvariantTests(unittest.TestCase):
     def test_incremental_and_strict_mutations_stay_equivalent(self) -> None:
         fast = _manager(False)
         strict = _manager(True)
-        required = kv_cache_shard_bytes_for_tokens(fast.model, 4, fast.tp_degree)
 
         def invoke(name: str, *args: object, **kwargs: object) -> None:
             with mock.patch.object(
@@ -58,7 +56,7 @@ class IncrementalInvariantTests(unittest.TestCase):
             fast._check_invariants()
             strict._check_invariants()
             self.assertEqual(fast.hbm_snapshots(), strict.hbm_snapshots())
-            self.assertEqual(fast.events, strict.events)
+            self.assertEqual(fast.events_since(0), strict.events_since(0))
 
         invoke(
             "prepare_history",
@@ -69,16 +67,7 @@ class IncrementalInvariantTests(unittest.TestCase):
             "request",
             required_context_tokens=4,
         )
-        invoke(
-            "reserve_request_capacity",
-            "request",
-            "session",
-            0,
-            required,
-            0,
-        )
         invoke("grow_prefill", "session", 4, 1, "request")
-        invoke("release_request_capacity", "request")
         invoke(
             "move_prefill_to_decode",
             "session",

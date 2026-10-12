@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""SLO 离线后处理工具集——共享框架（五仓逐字节相同）。
+"""SLO 离线后处理工具集——共享框架（同源变体族；各仓存在登记的
+预期差异，勿跨仓直接覆盖同步）。
 
 本模块集中存放 slo_tools 各脚本共用的框架代码：
 
@@ -32,7 +33,6 @@ from typing import Any, Iterable, Iterator, Optional, Sequence
 # 退出码与错误
 # ---------------------------------------------------------------------------
 
-EXIT_OK = 0
 EXIT_FAIL_CLOSED = 2  # 输入缺失/格式错/参数未推导 → 明确报错后非零退出
 
 
@@ -153,7 +153,8 @@ def require_bucket_edges(manifest: dict) -> tuple[list[float], list[float]]:
 def bucket_index(edges: Sequence[float], x: float) -> int:
     """interior edges 为各左桶闭上界，末桶无上限。
 
-    桶 i（非末桶）覆盖 edges[i] <= x <= edges[i+1]——interior 边界值归左桶
+    桶 i（非末桶）覆盖 edges[i] < x <= edges[i+1]（左开右闭）——interior
+    边界值归左桶
     （如 decode edges [1,91,489,1785,32000] 下 91→桶 0、92→桶 1、
     1785→桶 2、1786→桶 3；prefill [1,415,2361,16470,950002] 下 415→桶 0）；
     末桶吸收一切越界值（x > edges[-1] 不再 fail-closed，归末桶）；
@@ -197,8 +198,14 @@ REQUEST_METRICS_COLUMNS: tuple[str, ...] = (
 
 REQUEST_METRICS_FILENAME = "request_metrics.csv"
 
-TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {"completed", "rejected", "dropped", "timed_out", "failed"})
+# A4-9（2026-09-26）：terminal_status 权威枚举口径统一。request 级
+# 词表恰好是 {"completed", "failed"}——由 metrics_postprocess 从 C++
+# 收集器的 completed 布尔派生（failed 覆盖旧词表里 rejected/dropped/
+# timed_out 的全部情形，见 metrics_postprocess._request_metric_rows），
+# 与 tests/test_metrics_contract.py 的 TERMINAL_STATUS_VALUES 冻结一致。
+# 节点级 NodeTerminalStatus{Success, Skipped}（C++ int 枚举）是另一层，
+# 与本词表无交集。fail-closed：消费侧拒绝任何超出口径的值。
+TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "failed"})
 REQUEST_TYPES: frozenset[str] = frozenset({"human", "tool", "unknown"})
 KV_HIT_STATES: frozenset[str] = frozenset(
     {"full", "partial", "miss", "no_history", "not_supported"})
@@ -213,10 +220,21 @@ def is_na(value: Any) -> bool:
 
 
 def parse_ns(value: Any, field: str, where: str) -> Optional[int]:
-    """整数纳秒解析：'NA'→None；其余必须为非负整数（fail-closed）。"""
+    """整数纳秒解析：'NA'→None；其余必须为非负整数（fail-closed）。
+
+    bool 与下划线字面量一律拒绝：int("1_000", 10) 会把 "1_000" 静默
+    收成 1000，bool 经 str() 变 "True" 且类型化调用面（manifest JSON）
+    下 True 按整数 1 参与算术——两者都不是产物的合法字面量口径。
+    """
+    if isinstance(value, bool):
+        fail(f"{where}: 字段 {field} 为布尔值（{value!r}）——整数纳秒"
+             f"不允许 bool")
     if is_na(value):
         return None
     text = str(value).strip()
+    if "_" in text:
+        fail(f"{where}: 字段 {field} 含下划线字面量（实得 {value!r}）"
+             f"——只接受十进制整数字面量")
     try:
         number = int(text, 10)
     except ValueError:
@@ -227,9 +245,15 @@ def parse_ns(value: Any, field: str, where: str) -> Optional[int]:
 
 
 def parse_int(value: Any, field: str, where: str) -> Optional[int]:
+    """整数解析：'NA'→None；拒绝 bool/下划线字面量（口径同 parse_ns）。"""
+    if isinstance(value, bool):
+        fail(f"{where}: 字段 {field} 为布尔值（{value!r}）——整数不允许 bool")
     if is_na(value):
         return None
     text = str(value).strip()
+    if "_" in text:
+        fail(f"{where}: 字段 {field} 含下划线字面量（实得 {value!r}）"
+             f"——只接受十进制整数字面量")
     try:
         return int(text, 10)
     except ValueError:
@@ -346,7 +370,6 @@ def validated_request_rows(records: Iterable[dict[str, str]],
             record.get("hidden_ratio"), "hidden_ratio", where)
         record["turn_index"] = parse_int(
             record.get("turn_index"), "turn_index", where)
-        record["_queue_index"] = queue_index
         typed.append(record)
         if queue_index in seen:
             dup = True
@@ -384,23 +407,42 @@ def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
 #   * chunk 容量 C = env SH_SLO_SORT_CHUNK（缺省 65536 元素；<=0 按 1 计）；
 #   * 排序期驻留 = 恰一个未满 chunk（<=C 元素）+ spill 文件句柄；归并期
 #     额外持有每路 spill 的有界读缓冲（heapq.merge 惰性迭代，不整读）；
-#   * spill 文件 = pickle 序列化的已排序 chunk，落在系统临时目录，
-#     sorted_iter 耗尽后删除（进程退出兜底再删一次）；
+#   * spill 文件 = 已排序 chunk 的逐条 pickle 流（逐元素 dump；归并期
+#     逐元素 load，单路只驻留一个元素，不整读 chunk），落在系统临时目录，
+#     sorted_iter 耗尽后删除；提前中断（消费方 break/islice）经 _merged
+#     的 finally 同样确定性删除。无进程退出兜底——消费方既不耗尽也不
+#     close 迭代器而直接弃置时，残片留待系统临时目录清理；
 #   * 只用于纯整数/整数元组的全序排序（比较语义与 sorted() 逐元素相同，
 #     外部归并输出序列 ≡ sorted()；相等元素不可区分 ⇒ 无稳定性可见差）。
 #   * 需要稳定序（比较键并列时按输入序）的调用方必须自带单调序号列
-#     （如 (tick, seq, payload)）——见 slo_stats/hbm_watermark 接入点。
+#     （如 (tick, seq, payload)）——见 slo_stats 接入点（backlog 重建 /
+#     e2e 分位；hbm_watermark 不经本通道）。
 SORT_CHUNK_ENV = "SH_SLO_SORT_CHUNK"
 SORT_CHUNK_DEFAULT = 65536
 
 
 def bounded_sort_chunk_size() -> int:
     raw = os.environ.get(SORT_CHUNK_ENV, "")
+    if not raw:
+        return SORT_CHUNK_DEFAULT
+    # 调优旋钮（非数据通道）：非法值回退默认但必须留痕——静默回退会让
+    # "设了不生效"不可诊断（下划线字面量与 parse_ns/parse_int 同口径，
+    # int("1_000", 10) 会静默收成 1000）。
+    if "_" in raw:
+        print(f"[slo-common] 警告：{SORT_CHUNK_ENV} 含下划线字面量"
+              f"（{raw!r}）——回退默认 {SORT_CHUNK_DEFAULT}", file=sys.stderr)
+        return SORT_CHUNK_DEFAULT
     try:
-        size = int(raw) if raw else SORT_CHUNK_DEFAULT
+        size = int(raw, 10)
     except ValueError:
-        size = SORT_CHUNK_DEFAULT
-    return size if size > 0 else 1
+        print(f"[slo-common] 警告：{SORT_CHUNK_ENV} 非整数（{raw!r}）"
+              f"——回退默认 {SORT_CHUNK_DEFAULT}", file=sys.stderr)
+        return SORT_CHUNK_DEFAULT
+    if size <= 0:
+        print(f"[slo-common] 警告：{SORT_CHUNK_ENV} 非正（{raw!r}）——"
+              f"按 1 计（每 chunk 一元素，强制 spill 路径）", file=sys.stderr)
+        return 1
+    return size
 
 
 class BoundedSorter:
@@ -433,7 +475,10 @@ class BoundedSorter:
         os.close(fd)
         path = Path(name)
         with path.open("wb") as handle:
-            pickle.dump(self._buffer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            # 逐条 dump（非整块列表一次 dump）：归并期才能逐条 load，
+            # 单路 spill 同一时刻只驻留一个元素（内存合同，见文件头注）。
+            for item in self._buffer:
+                pickle.dump(item, handle, protocol=pickle.HIGHEST_PROTOCOL)
         self._spills.append(path)
         self._buffer = []
 
@@ -442,7 +487,9 @@ class BoundedSorter:
         with path.open("rb") as handle:
             while True:
                 try:
-                    yield from pickle.load(handle)
+                    # 逐条 load：每次 next() 只反序列化一个元素，
+                    # heapq.merge 各路各持一个元素，不整读 chunk。
+                    yield pickle.load(handle)
                 except EOFError:
                     break
 
@@ -459,6 +506,12 @@ class BoundedSorter:
             try:
                 yield from heapq.merge(*iters)
             finally:
+                # 提前中断（消费方 break/islice）时先显式 close 各路
+                # spill 生成器：其 with 块借 GeneratorExit 确定性释放文件
+                # 句柄，再统一 unlink（否则句柄悬置到 GC，句柄打开期间
+                # 的 unlink 在强制文件锁平台上会失败留下残片）。
+                for spill_iter in iters:
+                    spill_iter.close()
                 for path in spills:
                     try:
                         path.unlink()
@@ -551,17 +604,24 @@ def resolve_cpp_metric_log(run_dir: Path) -> Path:
 def iter_jsonl(path: Path) -> Iterator[dict]:
     require_file(path, f"JSONL 文件")
     with path.open(encoding="utf-8") as handle:
-        for lineno, line in enumerate(handle, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                fail(f"{path}:{lineno}: 非法 JSON（{exc}）")
-            if not isinstance(record, dict):
-                fail(f"{path}:{lineno}: JSONL 行必须是对象")
-            yield record
+        try:
+            for lineno, line in enumerate(handle, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    fail(f"{path}:{lineno}: 非法 JSON（{exc}）")
+                if not isinstance(record, dict):
+                    fail(f"{path}:{lineno}: JSONL 行必须是对象")
+                yield record
+        except (UnicodeDecodeError, OSError) as exc:
+            # 读取层异常（坏编码/IO 错误）与 JSON 损坏同走 fail-closed：
+            # 裸 UnicodeDecodeError/OSError 会绕过 SloToolError 通道以
+            # 退出码 1 崩出（driver 共享迭代器场景下还会吞掉各 sink 的
+            # 同错广播留痕，R7-F1）。
+            fail(f"{path}: 读取失败（{exc!r}）")
 
 
 def read_cpp_metric_records(cpp_log: Path) -> Iterator[dict]:
@@ -620,6 +680,18 @@ def load_request_manifest(run_dir: Path,
 
     优先级：--request-manifest 显式 > run_dir/metrics_manifest.json >
     cpp.log init 行 manifest_path 指向的 generated 副本。
+
+    口径登记（2026-10-01 NEW-1）：生产链的 metrics_manifest.json
+    （plan_materializer._derive_metrics_requests）**不携带** WP2 透传的
+    human_time_ns/tool_time_ns——该透传只写进物化器的 manifest.json，而
+    SLO 链（driver request_manifest=None → 本函数）没有任何路径读到它。
+    故真实 ③④ run 的 session 步每个 turn 都命中"透传字段整体缺席"分支：
+    slo_session.csv 的 t_session_ns 恒 NA（Σ(human+tool) 无从累加），
+    [slo-stats] session 恒无 P50/P95（生产态死路）。步骤仍返回 0 是**有意
+    口径**：缺透传字段不构成失败（缺失如实记入 missing_field_count/
+    missing_fields_sample，不猜不炸）。要得到非 NA 的 T_session 需
+    --request-manifest 显式指向含 human/tool 字段的 manifest（如物化器
+    产出的 manifest.json）。
     """
     candidates: list[Path] = []
     if explicit is not None:
@@ -646,9 +718,10 @@ def load_request_manifest(run_dir: Path,
             return data
     fail(
         f"找不到 per-request manifest（尝试：{[str(c) for c in candidates]}）——"
-        f"用 --request-manifest 指定（metrics_manifest.json，含 requests[]."
-        f"session_id/turn_index/arrival 及 WP2 透传的 human_time_ns/"
-        f"tool_time_ns）")
+        f"用 --request-manifest 指定（含 requests[].session_id/turn_index/"
+        f"arrival；注意 WP2 的 human_time_ns/tool_time_ns 生产链 "
+        f"metrics_manifest.json 不携带，仅显式传入含该字段的 manifest 时 "
+        f"session 步可得非 NA——见 load_request_manifest 口径登记）")
 
 
 def manifest_requests(manifest: dict) -> list[dict]:

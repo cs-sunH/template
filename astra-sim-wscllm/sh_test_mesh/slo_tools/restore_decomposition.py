@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""WP5 restore 三段分解（五仓逐字节相同，标准库实现）。
+"""WP5 restore 三段分解（同源变体族；本仓自 2026-09-05 A.5 起存在 README
+登记的预期差异，标准库实现）。
 
 输入 = cpp.log（full 档；经 slo_common.resolve_cpp_metric_log 统一回退：
 cpp.log → metrics.log → cpp.log.gz，归档后的 run_dir 同样可用）：``[METRIC]``
 行中的
   * type=memory_anchor 记录（subject_id=queue_index, rank, node_id,
-    tick_ns；由 C++ 侧 KV transfer 锚点注册——main_online.cc 的
-    last_transfer（名字含 "kv" 的最后节点）→ MetricCollector 事件码 7）；
+    tick_ns；由 C++ 侧 KV 迁移腿锚点注册——main_online.cc 经
+    is_kv_route_transfer_leg 谓词只接受 CommSend/CommRecv 的
+    _history_kv/_prefill_to_decode_kv 迁移腿节点（A1 批 2026-09-28 收口：
+    旧"名字含 kv 的最后节点"口径会被 qkv 计算节点抢锚、turn-0 凭空产
+    锚），→ MetricCollector 事件码 7）；
   * type=request 记录（prefill_start_ns/prefill_end_ns 等请求边界）。
+
+消费端核实（P1-1 关联，D2 2026-09-28）：锚点选择收口发生在 C++ 生产者
+侧，本工具按 subject_id 逐请求取 min/max 的消费语义不变，无需配套改动；
+仅在此同步生产端语义描述。
 
 每请求：
   restore_start_ns    = min(锚点 tick)   （逐请求归属：subject_id→请求）
@@ -82,14 +90,26 @@ def scan_metric_anchors_requests(cpp_log: Path
         if rtype == "memory_anchor":
             subject = record.get("subject_id")
             tick = record.get("tick_ns")
-            if not isinstance(subject, int) or not isinstance(tick, int):
-                fail(f"{cpp_log}: memory_anchor 记录缺整数 subject_id/"
+            # D2 修复（2026-09-28）：isinstance 同样放过 bool（True 冒充
+            # 1）且旧门不拒负值——bool 会在 anchors dict 里与整数
+            # queue_index 撞键、负 tick 会污染 min/max 与三段分解。tick_ns
+            # 与 subject_id 均要求非 bool 非负整数（fail-closed）。
+            if (isinstance(subject, bool) or not isinstance(subject, int)
+                    or subject < 0
+                    or isinstance(tick, bool) or not isinstance(tick, int)
+                    or tick < 0):
+                fail(f"{cpp_log}: memory_anchor 记录缺非负整数 subject_id/"
                      f"tick_ns（{record}）")
             anchors.setdefault(subject, []).append(tick)
         elif rtype == "request":
             queue_index = record.get("queue_index")
-            if not isinstance(queue_index, int):
-                fail(f"{cpp_log}: request 记录缺整数 queue_index（{record}）")
+            # (2026-10-01) bool 排除与负值拒绝,与上文 memory_anchor 的
+            # subject_id/tick 门同款:isinstance(True, int) 为真,且 True == 1
+            # 会与真实 queue_index=1 撞 dict 键(last-wins 覆盖)。
+            if (isinstance(queue_index, bool) or not isinstance(queue_index, int)
+                    or queue_index < 0):
+                fail(f"{cpp_log}: request 记录缺非负整数 queue_index"
+                     f"（{record}）")
             requests[queue_index] = {
                 "queue_index": queue_index,
                 "request_id": record.get("request_id"),

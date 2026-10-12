@@ -7,13 +7,12 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/common/Logging.hh"
 
 #include <cstdlib>
-#include <iostream>
 
 using namespace std;
 using namespace AstraSim;
 
 BinaryTree::BinaryTree(
-    int id, TreeType tree_type, int total_tree_nodes, int start, int stride)
+    TreeType tree_type, int total_tree_nodes, int start, int stride)
     : BasicLogicalTopology() {
     if (total_tree_nodes < 1 ||
         (total_tree_nodes & (total_tree_nodes - 1)) != 0) {
@@ -25,10 +24,13 @@ BinaryTree::BinaryTree(
         std::exit(1);
     }
     this->total_tree_nodes = total_tree_nodes;
-    this->start = start;
-    this->tree_type = tree_type;
     this->stride = stride;
-    tree = new Node(-1, nullptr, nullptr, nullptr);
+    // Construction-local subtree root: build_tree inserts every node
+    // (root included) into node_list, which owns and destroys them, so no
+    // member is needed after the ctor returns. The start counter is a local
+    // copy for the same reason (build_tree mutates it while walking).
+    Node* tree = new Node(-1, nullptr, nullptr, nullptr);
+    int start_cursor = start;
     int depth = 1;
     int tmp = total_tree_nodes;
     while (tmp > 1) {
@@ -40,7 +42,7 @@ BinaryTree::BinaryTree(
     } else {
         tree->left_child = initialize_tree(depth - 1, tree);
     }
-    build_tree(tree);
+    build_tree(tree, start_cursor);
 }
 
 BinaryTree::~BinaryTree() {
@@ -58,15 +60,15 @@ Node* BinaryTree::initialize_tree(int depth, Node* parent) {
     return tmp;
 }
 
-void BinaryTree::build_tree(Node* node) {
+void BinaryTree::build_tree(Node* node, int& start_counter) {
     if (node->left_child != nullptr) {
-        build_tree(node->left_child);
+        build_tree(node->left_child, start_counter);
     }
-    node->id = start;
-    node_list[start] = node;
-    start += stride;
+    node->id = start_counter;
+    node_list[start_counter] = node;
+    start_counter += stride;
     if (node->right_child != nullptr) {
-        build_tree(node->right_child);
+        build_tree(node->right_child, start_counter);
     }
     return;
 }

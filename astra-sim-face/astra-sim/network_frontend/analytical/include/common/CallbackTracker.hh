@@ -8,6 +8,8 @@ LICENSE file in the root directory of this source tree.
 #include "common/CallbackTrackerEntry.hh"
 #include "common/ChunkIdGenerator.hh"
 #include <map>
+#include <tuple>
+#include <vector>
 
 namespace AstraSimAnalytical {
 
@@ -17,8 +19,6 @@ namespace AstraSimAnalytical {
  */
 class CallbackTracker {
   public:
-    /// Key = (tag, src, dest, chunk_size, chunk_id)
-    using Key = std::tuple<int, int, int, ChunkSize, int>;
     CallbackTracker() noexcept;
 
     /**
@@ -71,10 +71,20 @@ class CallbackTracker {
                    ChunkSize chunk_size,
                    int chunk_id) noexcept;
 
+    /// Run-end residual audit accessors: entry count and up to max_samples
+    /// keys still resident in the tracker. A quiescent run end should have
+    /// drained every entry (each completion pops its entry); any resident
+    /// entry is an anomaly worth reporting. Callers own the warn decision.
+    [[nodiscard]] size_t size() const noexcept;
+    /// Not noexcept: returns a freshly allocated vector.
+    [[nodiscard]] std::vector<std::tuple<int, int, int, ChunkSize, int>>
+    resident_key_samples(size_t max_samples) const;
+
   private:
     /// map from (tag, src, dest, chunk_size, chunk_id) tuple to
     /// CallbackTrackerEntry
-    std::map<Key, CallbackTrackerEntry> tracker;
+    std::map<std::tuple<int, int, int, ChunkSize, int>, CallbackTrackerEntry>
+        tracker;
 };
 
 }  // namespace AstraSimAnalytical

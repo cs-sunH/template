@@ -15,14 +15,19 @@ request_metrics.csv / online_decision_log / train_ledger / kv_cache_adapter
      queue_ns≈占位者 prefill；分解和恒等；load_imbalance.py 输出与
      独立手算重建（admission=prefill tick、instance=decode_instance、
      drain=train_ledger exits tick、桶长=manifest）一致。
-  G3 单 session 两轮 human/tool：T_session = turn0.e2e + interval +
-     turn1.e2e（到达=父完成+interval 闭环恒等）；request_type 逐行透传；
+  G3 单 session 两轮 human/tool：session span = turn0.e2e + interval +
+     turn1.e2e（到达=父完成+interval 闭环恒等；该 span = slo_stats
+     cmd_session 的 T_session + Σ(human+tool)，两者口径勿混淆）；
+     request_type 逐行透传；
      第二轮 kv_hit_state 由 decision history_action 手推并与
      kv_cache_adapter --reconcile 输出一致。
   G4 已知 restore：迷你 3 轮 session 若产生 history NOC_MIGRATE 锚点
-     （memory_anchor code7），对锚点请求核对三段和 = 总 restore 时长；
-     无锚点则打印 FALLBACK_G4（改用 t3_full_off_split 真实锚点核对，
-     由调用方执行）。
+     （memory_anchor code7），对锚点请求核对三段和 = 总 restore 时长
+     ——仅锚点窗与 prefill 窗重叠或更早（rs≤pe）的形态；窗整体落在
+     prefill 结束后的 rs>pe 形态（行内判别 pre=hidden=0，如 turn-0
+     prefill→decode 迁移腿）属规格登记的非恒等形态（各指标测试建议.md
+     §B），豁免并记 note，全部豁免时同 FALLBACK_G4；无锚点则打印
+     FALLBACK_G4（改用 t3_full_off_split 真实锚点核对，由调用方执行）。
 
 Usage: python3 run_golden_live.py <repo_root> --work-dir DIR
 退出码 0 = 全过；非 0 = 有断言失败（stderr 列明细）。
@@ -32,12 +37,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import importlib.util
 import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 QUEUE_COLUMNS = [
@@ -53,7 +62,6 @@ SIDECAR_COLUMNS = [
     "request_type",
 ]
 REQUEST_METRICS_RELPATH = "request_metrics.csv"
-PLACEHOLDER_REL = "llama2_7b_inference/request_queue_placeholder.csv"
 
 
 class GoldenCheckError(AssertionError):
@@ -73,6 +81,32 @@ def write_csv(path: Path, columns: list[str], rows: list[dict]) -> None:
             writer.writerow({key: row.get(key, "") for key in columns})
 
 
+def write_provenance_sidecar(repo: Path, queue_path: Path) -> None:
+    """为 golden 队列写 <queue>.provenance.json（P1 门对齐）。
+
+    C++ WindowedTraceReader 的 provenance 门（P1，2026-09-28）对每个
+    队列 CSV fail-closed 地要求同名 .provenance.json 边车，缺失即视同
+    截断输入、在首个 Submit 前拒绝提交。golden live 此前只写 8 列 CSV，
+    四个场景自 P1 起启动即 reader_fatal。统计算法零复制：直接复用权威
+    物化器 traces/derive_20_first_30_seconds.py 的 queue_provenance
+    （与 C++ 索引遍逐字节同口径，含 CSV writer 的 CRLF 字节）。
+    """
+    derive_path = (
+        repo / "sh_test_mesh/workload/llama2_7b_inference/traces"
+        / "derive_20_first_30_seconds.py")
+    spec = importlib.util.spec_from_file_location(
+        "derive_20_first_30_seconds", derive_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    provenance = module.queue_provenance(
+        str(queue_path), "run_golden_live.py hand-crafted golden queue")
+    sidecar = Path(str(queue_path) + ".provenance.json")
+    with sidecar.open("w", encoding="utf-8") as handle:
+        json.dump(provenance, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
 def set_pointer(trace_config: Path, rel_queue: str) -> None:
     lines = trace_config.read_text(encoding="utf-8").splitlines(keepends=True)
     out = []
@@ -83,6 +117,32 @@ def set_pointer(trace_config: Path, rel_queue: str) -> None:
             line = ",".join(parts) + ("\n" if line.endswith("\n") else "")
         out.append(line)
     trace_config.write_text("".join(out), encoding="utf-8")
+
+
+def pointer_backup_path(trace_config: Path) -> Path:
+    """仓内 trace_config 的进程级可靠备份文件（/tmp 固定名，报告 3.18.2）。
+
+    固定名 = 路径 sha256 前缀：同仓多次运行命中同一备份名，启动残留检测
+    才有判据；不同仓（姊妹仓）路径不同互不冲突。二进制字节复制，恢复时
+    原样写回（不经过 newline 翻译，CRLF 盘也保真）。
+    """
+    digest = hashlib.sha256(str(trace_config).encode("utf-8")).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"golden_live_trace_config_{digest}.bak"
+
+
+def backup_pointer(trace_config: Path) -> Path:
+    """运行前先把原始 trace_config 字节复制到固定名备份。"""
+    backup = pointer_backup_path(trace_config)
+    backup.write_bytes(trace_config.read_bytes())
+    return backup
+
+
+def restore_pointer(trace_config: Path) -> None:
+    """从备份恢复原始 trace_config 字节并删除备份（幂等）。"""
+    backup = pointer_backup_path(trace_config)
+    if backup.is_file():
+        trace_config.write_bytes(backup.read_bytes())
+        backup.unlink()
 
 
 def instance_count(repo_root: Path) -> tuple[int, int]:
@@ -343,54 +403,70 @@ def scenario_g2(run_dir: Path, notes: list[str], expected_overflow: int,
           "G2: incomplete requests")
     for row in rows:
         assert_row_identity(row, f"G2.{row['queue_index']}", notes)
-    decisions = read_jsonl(run_dir / "results/online_decision_log.jsonl")
-    prefill_inst = {}
-    for entry in decisions:
-        if entry.get("kind") == "prefill":
-            prefill_inst[entry["request_id"]] = entry["decision"].get(
-                "prefill_instance_index")
-    arrival = to_int(rows[0]["arrival_ns"])
-    queued = [r for r in rows if to_int(r["queue_ns"]) > 0]
-    notes.append(
-        f"G2: {len(rows)} requests, overflow expected {expected_overflow}, "
-        f"queued observed {len(queued)}")
-    check(len(queued) >= 1, "G2: no request queued (burst insufficient)")
-    # For each queued request, the occupying earlier request on the same
-    # instance must have finished prefill before this one starts, and the
-    # queue time must approximate one occupying prefill span.
-    ratios = []
-    by_inst: dict[int, list[dict]] = {}
-    for row in rows:
-        inst = prefill_inst.get(row["request_id"])
-        by_inst.setdefault(inst, []).append(row)
-    for row in queued:
-        inst = prefill_inst.get(row["request_id"])
-        start = to_int(row["arrival_ns"]) + to_int(row["queue_ns"])
-        earlier = [r for r in by_inst.get(inst, [])
-                   if to_int(r["prefill_start_ns"]) < start and r is not row]
-        check(earlier, f"G2: queued {row['request_id']} has no earlier "
-                       f"same-instance request")
-        occupier = max(earlier, key=lambda r: to_int(r["prefill_start_ns"]))
-        occ_prefill_end = to_int(occupier["prefill_end_ns"])
-        check(occ_prefill_end <= start,
-              f"G2: {row['request_id']} started {start} before occupier "
-              f"{occupier['request_id']} prefill end {occ_prefill_end}")
-        ratio = to_int(row["queue_ns"]) / max(
-            occ_prefill_end - to_int(occupier["arrival_ns"]), 1)
-        ratios.append(ratio)
+    try:
+        decisions = read_jsonl(run_dir / "results/online_decision_log.jsonl")
+        prefill_inst = {}
+        for entry in decisions:
+            if entry.get("kind") == "prefill":
+                prefill_inst[entry["request_id"]] = entry["decision"].get(
+                    "prefill_instance_index")
+        arrival = to_int(rows[0]["arrival_ns"])
+        queued = [r for r in rows if to_int(r["queue_ns"]) > 0]
         notes.append(
-            f"G2: {row['request_id']} (inst {inst}) queue_ns="
-            f"{row['queue_ns']} vs occupier {occupier['request_id']} "
-            f"prefill_end-arrival={occ_prefill_end - to_int(occupier['arrival_ns'])} "
-            f"ratio={ratio:.3f}")
-    check(all(0.5 <= ratio <= 2.0 for ratio in ratios),
-          f"G2: queue_ns vs occupier prefill ratio out of [0.5,2.0]: {ratios}")
-    load_imbalance_handcheck(run_dir, notes, manifest_path)
+            f"G2: {len(rows)} requests, overflow expected {expected_overflow}, "
+            f"queued observed {len(queued)}")
+        check(len(queued) >= expected_overflow,
+              f"G2: queued {len(queued)} < expected overflow "
+              f"{expected_overflow} (burst insufficient)")
+        # For each queued request, the occupying earlier request on the same
+        # instance must have finished prefill before this one starts, and the
+        # queue time must approximate one occupying prefill span.
+        ratios = []
+        by_inst: dict[int, list[dict]] = {}
+        for row in rows:
+            inst = prefill_inst.get(row["request_id"])
+            by_inst.setdefault(inst, []).append(row)
+        for row in queued:
+            inst = prefill_inst.get(row["request_id"])
+            start = to_int(row["arrival_ns"]) + to_int(row["queue_ns"])
+            earlier = [r for r in by_inst.get(inst, [])
+                       if to_int(r["prefill_start_ns"]) < start and r is not row]
+            check(earlier, f"G2: queued {row['request_id']} has no earlier "
+                           f"same-instance request")
+            occupier = max(earlier, key=lambda r: to_int(r["prefill_start_ns"]))
+            occ_prefill_end = to_int(occupier["prefill_end_ns"])
+            check(occ_prefill_end <= start,
+                  f"G2: {row['request_id']} started {start} before occupier "
+                  f"{occupier['request_id']} prefill end {occ_prefill_end}")
+            ratio = to_int(row["queue_ns"]) / max(
+                occ_prefill_end - to_int(occupier["arrival_ns"]), 1)
+            ratios.append(ratio)
+            notes.append(
+                f"G2: {row['request_id']} (inst {inst}) queue_ns="
+                f"{row['queue_ns']} vs occupier {occupier['request_id']} "
+                f"prefill_end-arrival={occ_prefill_end - to_int(occupier['arrival_ns'])} "
+                f"ratio={ratio:.3f}")
+        check(all(0.5 <= ratio <= 2.0 for ratio in ratios),
+              f"G2: queue_ns vs occupier prefill ratio out of [0.5,2.0]: {ratios}")
+        load_imbalance_handcheck(run_dir, notes, manifest_path)
 
+
+    except GoldenCheckError:
+        raise
+    except Exception as error:  # noqa: BLE001 -- normalize to scenario
+        raise GoldenCheckError(
+            f"G2 hand-check internal error: {error!r}") from error
 
 def load_imbalance_handcheck(run_dir: Path, notes: list[str],
                              manifest_path: Path) -> None:
-    """Independent rebuild of the WP7 integral vs slo_tools/load_imbalance."""
+    """Independent rebuild of the WP7 integral vs slo_tools/load_imbalance.
+
+    R4-4 (2026-09-30): bare exceptions from the hand arithmetic (e.g.
+    min() over an empty span list) used to escape past the scenario-level
+    (GoldenCheckError, CalledProcessError) catch -- one 残缺 scenario killed
+    the whole golden entry with a traceback and no report. They are
+    normalized at the scenario_g2 call site (this helper runs inside its
+    try/except-Exception wrapper)."""
     slo_tools = Path(__file__).resolve().parents[1]
     json_out = run_dir / "golden_li.json"
     subprocess.run(
@@ -472,7 +548,7 @@ def scenario_g3(run_dir: Path, notes: list[str]) -> None:
     span = to_int(turn1["completion_ns"]) - to_int(turn0["arrival_ns"])
     check(span == t_session,
           f"G3: session span {span} != e2e0+interval+e2e1 {t_session}")
-    notes.append(f"G3: T_session={span} = {to_int(turn0['e2e_ns'])} + "
+    notes.append(f"G3: session_span={span} = {to_int(turn0['e2e_ns'])} + "
                  f"{interval} + {to_int(turn1['e2e_ns'])} (hand OK)")
     assert_first_token(turn0, "G3.turn0", notes)
     assert_first_token(turn1, "G3.turn1", notes)
@@ -518,18 +594,36 @@ def scenario_g4(run_dir: Path, notes: list[str]) -> bool:
         notes.append("G4: no anchored restore request in mini scenario -> "
                      "FALLBACK_G4 (use t3_full_off_split anchors)")
         return False
+    checked = 0
     for row in anchored:
         total = to_int(row["restore_complete_ns"]) - to_int(
             row["restore_start_ns"])
         seg_sum = (to_int(row["pre_prefill_restore_ns"])
                    + to_int(row["hidden_restore_ns"])
                    + to_int(row["exposed_restore_stall_ns"]))
+        # 规格登记的非恒等形态（experiment/各指标测试建议.md §B）：A 类
+        # 公式的 exposed 段不夹锚点窗，锚点窗整体落在 prefill 结束之后
+        # （rs>pe）时三段和 = rc−pe ≠ rc−rs——行内判别为 pre 与 hidden
+        # 同 0（turn-0 的 prefill→decode 迁移腿即此形）。公式按 §2.2
+        # 红线冻结不改，本层对此形态豁免恒等断言、只记 note。
+        if (to_int(row["pre_prefill_restore_ns"]) == 0
+                and to_int(row["hidden_restore_ns"]) == 0):
+            notes.append(
+                f"G4: {row['request_id']} anchor window entirely after "
+                f"prefill (pre=hidden=0, spec-documented rs>pe shape): "
+                f"identity exempt (seg_sum={seg_sum}, window={total})")
+            continue
         check(seg_sum == total,
               f"G4: {row['request_id']} segments {seg_sum} != restore total "
               f"{total}")
         notes.append(
             f"G4: {row['request_id']} three segments {seg_sum} == restore "
             f"total {total} (hand OK)")
+        checked += 1
+    if checked == 0:
+        notes.append("G4: every anchored row is the spec-documented rs>pe "
+                     "shape; no identity asserted -> FALLBACK_G4")
+        return False
     return True
 
 
@@ -552,11 +646,35 @@ def main() -> int:
     repo = args.repo_root.resolve()
     manifest_path = (args.manifest or Path(__file__).resolve().parents[1]
                      / "slo_params_manifest.json")
-    repo = args.repo_root.resolve()
     wl = repo / "sh_test_mesh/workload/llama2_7b_inference"
     traces = wl / "traces"
     work = args.work_dir
     work.mkdir(parents=True, exist_ok=True)
+    # 报告 3.18.2（2026-09-29）：就地改写仓内 trace_config.csv 的进程级
+    # 可靠化。启动即检测上次运行可能未还原的残留备份（SIGKILL/断电路径
+    # finally 与信号处理器都救不回来）——发现即拒绝运行（fail-closed），
+    # 给出手工恢复命令；SIGINT/SIGTERM/SIGHUP → raise SystemExit 交由
+    # 下方 finally 统一还原；正常路径 finally 从固定名备份字节级还原。
+    trace_config = wl / "trace_config.csv"
+    backup = pointer_backup_path(trace_config)
+    if backup.is_file():
+        print(f"[golden] FAIL-CLOSED: 检测到上次运行残留的 trace_config "
+              f"备份：{backup}\n"
+              f"[golden] 仓内配置可能仍指向 golden 队列（上次运行未正常"
+              f"还原）。请先手工恢复再重跑：\n"
+              f"  cp '{backup}' '{trace_config}' && rm '{backup}'",
+              file=sys.stderr)
+        return 2
+
+    def _raise_exit(signum, _frame):
+        # 信号路径还原：转成 SystemExit 让 main 的 finally 执行恢复。
+        raise SystemExit(128 + signum)
+
+    for sig_name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        sig_num = getattr(signal, sig_name, None)
+        if sig_num is not None:
+            signal.signal(sig_num, _raise_exit)
+    backup_pointer(trace_config)
     prefill_instances, _total = instance_count(repo)
     scenarios = {
         "golden_g1": g1_rows(),
@@ -572,6 +690,7 @@ def main() -> int:
             queue_path = traces / f"{name}_request_queue_recompute.csv"
             sidecar_path = traces / f"{name}_canonical_sidecar.csv"
             write_csv(queue_path, QUEUE_COLUMNS, queue_rows)
+            write_provenance_sidecar(repo, queue_path)
             write_csv(sidecar_path, SIDECAR_COLUMNS, sidecar_rows)
             rel = (f"llama2_7b_inference/traces/{queue_path.name}")
             try:
@@ -584,7 +703,14 @@ def main() -> int:
                 elif name == "golden_g3":
                     scenario_g3(run_dir, notes)
                 else:
-                    scenario_g4(run_dir, notes)
+                    # py-slo-tests-1（2026-09-26）：接收 scenario_g4 返回值——
+                    # 无锚点回退（False）未执行任何断言，标 FALLBACK_G4 而非
+                    # PASS（状态不再失真；不计失败，t3_full_off_split 锚点
+                    # 核对按 docstring 由调用方执行）。
+                    if not scenario_g4(run_dir, notes):
+                        status[name] = "FALLBACK_G4"
+                        print(f"[golden] {name}: FALLBACK_G4")
+                        continue
                 status[name] = "PASS"
                 print(f"[golden] {name}: PASS")
             except (GoldenCheckError, subprocess.CalledProcessError) as error:
@@ -592,8 +718,23 @@ def main() -> int:
                 failures.append(f"{name}: {error}")
                 print(f"[golden] {name}: FAIL: {error}", file=sys.stderr)
     finally:
-        # Restore the neutral pointer whatever happened.
-        set_pointer(wl / "trace_config.csv", PLACEHOLDER_REL)
+        # 从固定名备份字节级还原仓内 trace_config（旧实现只靠 finally 把
+        # 指针写回 placeholder——SIGKILL/断电后仓内配置永久指向 golden
+        # 队列，污染仓库；现备份/还原 + 信号处理器 + 启动残留检测三重
+        # 覆盖，restore_pointer 幂等，还原后删除备份）。
+        restore_pointer(trace_config)
+        # R4-4b (2026-09-30): the golden_* scratch triples (queue / canonical
+        # sidecar / provenance) written into the in-repo traces/ dir used to
+        # linger after the run -- a leftover queue carries a VALID provenance
+        # sidecar and could be mistaken for a real materialized input. Remove
+        # them here alongside the pointer restore.
+        for stale_golden in traces.glob("golden_g*_request_queue_recompute.csv"):
+            stale_golden.unlink(missing_ok=True)
+            Path(str(stale_golden) + ".provenance.json").unlink(missing_ok=True)
+            stale_golden.with_name(
+                stale_golden.name.replace(
+                    "_request_queue_recompute.csv", "_canonical_sidecar.csv")
+            ).unlink(missing_ok=True)
         for stale in list((repo / "sh_test_mesh/generated").glob(
                 "llama2_7b_inference_54npus_*")) + \
                 list((repo / "sh_test_mesh/generated").glob(

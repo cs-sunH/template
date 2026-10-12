@@ -32,19 +32,14 @@ namespace {
 }
 
 // ---- typed getters (strict; the old .value(key, default) silently
-// defaulted absent keys and let type mismatches explode downstream) ----
-
-const nlohmann::json& field(const nlohmann::json& obj, const char* key,
-                            const std::string& where) {
-    const auto it = obj.find(key);
-    if (it == obj.end()) {
-        fail(where + ": missing field \"" + key + "\"");
-    }
-    return *it;
-}
+// defaulted absent keys and let type mismatches explode downstream).
+// (2026-10-01 dead-code removal: a `field()` existence-lookup helper sat
+// here with zero callers -- after the C1 key-set whitelist every accessor
+// reaches its keys through the allowed/required set checks, so the helper
+// was unreachable from the start.) ----
 
 // Unsigned integer: rejects floats (incl. >UINT64 integer literals, which
-// nlohmann stores as double -- rule O6), negative values, bools and strings.
+// nlohmann stores as double), negative values, bools and strings.
 uint64_t get_uint(const nlohmann::json& value, const std::string& key,
                   const std::string& where) {
     if (!value.is_number_integer()) {
@@ -206,20 +201,23 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
              " does not match stage " + node.stage);
     }
 
-    // N12: compute -- required {num_ops, tensor_size, runtime_ns}; optional
-    // {remote_weight_bytes}. (wscllm repo note vs the sh_1.0 original: this
-    // repo has no MEM_LOAD/MEM_STORE remote-pool nodes, so ComputeAttrs
-    // carries no hbm_access_mode field and the key is NOT in the allowed
-    // set -- a response carrying it fails closed as an unknown key, the
-    // same tight-schema posture the wscllm builder has always had: it
-    // never writes the key.)
+    // N12: compute -- required {num_ops, tensor_size, runtime_ns};
+    // optional {op_role, die_op_spec} (die backend, contract §2).
+    // (wscllm repo note vs the sh_1.0 original: this repo has no
+    // MEM_LOAD/MEM_STORE remote-pool nodes, so ComputeAttrs carries no
+    // hbm_access_mode field and the key is NOT in the allowed set -- a
+    // response carrying it fails closed as an unknown key, the same
+    // tight-schema posture the wscllm builder has always had: it never
+    // writes the key. remote_weight_bytes stays in the allowed set only so
+    // its presence gets the dedicated unsupported-key diagnosis below
+    // instead of the generic unknown-key one.)
     const nlohmann::json& compute = node_json["compute"];
     if (!compute.is_object()) {
         fail(where + ": compute is not an object");
     }
     check_key_set(compute,
                   {"num_ops", "tensor_size", "runtime_ns",
-                   "remote_weight_bytes"},
+                   "remote_weight_bytes", "op_role", "die_op_spec"},
                   {"num_ops", "tensor_size", "runtime_ns"},
                   where + ".compute");
     node.compute.num_ops = get_uint(compute["num_ops"], "num_ops",
@@ -228,11 +226,53 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
                                         where + ".compute");
     node.compute.runtime_ns = get_uint(compute["runtime_ns"], "runtime_ns",
                                        where + ".compute");
+    if (compute.contains("op_role")) {
+        const std::string op_role =
+            get_string(compute["op_role"], "op_role", where + ".compute");
+        if (op_role == "compute") {
+            node.compute.op_role = OpRole::Compute;
+        } else if (op_role == "control_marker") {
+            node.compute.op_role = OpRole::ControlMarker;
+        } else {
+            fail(where + ": compute.op_role \"" + op_role +
+                 "\" is not one of compute|control_marker");
+        }
+    }
+    if (compute.contains("die_op_spec")) {
+        // Contract §2 conflict rule: a die-spec node must not carry a
+        // calibrated runtime (a non-zero runtime_ns would silently bypass
+        // the die execution and must fail closed at parse time, not at
+        // issue time).
+        if (node.compute.runtime_ns != 0) {
+            fail(where + ": compute.die_op_spec requires runtime_ns == 0 "
+                        "(die nodes execute the compiled plan, never a "
+                        "calibrated runtime)");
+        }
+        const nlohmann::json& spec_json = compute["die_op_spec"];
+        if (!spec_json.is_object()) {
+            fail(where + ": compute.die_op_spec is not an object");
+        }
+        try {
+            node.compute.die_spec = DieModel::parse_die_op_spec(spec_json);
+        } catch (const ParseError&) {
+            throw;
+        } catch (const std::exception& e) {
+            fail(where + ": compute.die_op_spec rejected: " + e.what());
+        }
+    }
     if (compute.contains("remote_weight_bytes")) {
-        node.compute.has_remote_weight_bytes = true;
-        node.compute.remote_weight_bytes =
-            get_uint(compute["remote_weight_bytes"], "remote_weight_bytes",
-                     where + ".compute");
+        // 3.2 fix (2026-09-29): this key used to be parse-legal and only
+        // fail at first issue (Workload's remote-operand leg throws for
+        // this repo -- it has no remote weight pool), so a stray key in a
+        // trace_config aborted the whole simulation mid-run with a
+        // diagnosis far from the shape that caused it. Fail here, at the
+        // parse boundary, where the batch and node are still nameable.
+        // (The tight-schema posture above already rejects the
+        // hbm_access_mode cousin; this arm closes the remaining
+        // accepted-but-unsupported shape.)
+        fail(where + ".compute: remote_weight_bytes is not supported by "
+                    "this repo (no remote weight pool; the key aborts at "
+                    "first issue) -- remove it from the trace");
     }
 
     // N13: comm -- required {bytes, src, dst, tag}; optional {hbm_charge}.
@@ -248,6 +288,20 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
     const uint64_t tag = get_uint(comm["tag"], "tag", where + ".comm");
     if (tag > kUint32Max) {
         fail(where + ": comm tag out of range: " + std::to_string(tag));
+    }
+    // 4.1 tag-domain gate (2026-09-29): the front-end send path panics on
+    // any tag at or beyond the NATIVE window ceiling (Sys::COLLECTIVE =
+    // 5e8 -- the modulo remap there would fold into another stream's tag
+    // space). The old parse bound (uint32 max) admitted tags up to
+    // qi*10000+... with queue_index ≈ 429496, so an oversized queue
+    // aborted the run mid-flight with a diagnosis far from the node.
+    // Enforce the same ceiling here, at the parse boundary.
+    if (tag >= 500000000ULL) {
+        fail(where + ": comm tag " + std::to_string(tag) +
+             " is at or beyond the NATIVE front-end window ceiling "
+             "(500000000) -- the p2p tag domain is "
+             "queue_index*10000+category+rank, so queue_index must stay "
+             "below 50000");
     }
     node.comm.tag = static_cast<uint32_t>(tag);
     if (comm.contains("hbm_charge")) {
@@ -346,31 +400,37 @@ ParsedWatch parse_watch(const nlohmann::json& watch_json, size_t index,
     }
 
     // W3: members -- non-empty object; keys are decimal rank strings
-    // (std::stoi + no trailing characters, the pre-C1 rule exactly), values
-    // are non-negative integer json ids. Insertion order == JSON object key
-    // order == the producer's ascending rank-string order.
+    // (strictly [0-9]+: the producer emits str(int) keys, and std::stoi
+    // would silently accept leading whitespace and a +/- sign, a wider
+    // input class than the rule text), values are non-negative integer
+    // json ids. Insertion order == JSON object key order (nlohmann sorts
+    // object keys LEXICOGRAPHICALLY -- "10" before "2" at rank >= 10;
+    // consumers never assume numeric order).
     const nlohmann::json& members = watch_json["members"];
     if (!members.is_object() || members.empty()) {
         fail(where + ": empty/absent members");
     }
     watch.members.reserve(members.size());
     for (const auto& entry : members.items()) {
+        const std::string& key = entry.key();
+        if (key.empty() ||
+            key.find_first_not_of("0123456789") != std::string::npos) {
+            fail(where + ": unparsable member rank: " + key);
+        }
+        // 10+ decimal digits cannot fit int (old stoi raised out_of_range);
+        // reject before accumulating so the manual parse cannot overflow
+        // when num_ranks == -1 skips the domain check.
+        if (key.size() > 9) {
+            fail(where + ": unparsable member rank: " + key);
+        }
         int rank = 0;
-        try {
-            size_t parsed_chars = 0;
-            rank = std::stoi(entry.key(), &parsed_chars);
-            if (parsed_chars != entry.key().size()) {
-                fail(where + ": unparsable member rank: " + entry.key());
-            }
-        } catch (const ParseError&) {
-            throw;
-        } catch (const std::exception&) {
-            fail(where + ": unparsable member rank: " + entry.key());
+        for (const char digit : key) {
+            rank = rank * 10 + (digit - '0');
         }
         check_rank_domain(rank, num_ranks, where);
         watch.members.push_back(
             ParsedWatchMember{rank,
-                              get_uint(entry.value(), "members[" + entry.key() +
+                              get_uint(entry.value(), "members[" + key +
                                                           "]",
                                        where)});
     }
@@ -439,6 +499,36 @@ ParsedAlarm parse_alarm(const nlohmann::json& alarm_json, size_t index) {
     alarm.envelope.decode_length =
         get_uint(envelope["decode_length"], "decode_length",
                  where + ".envelope");
+    // D3 positive-length lexicon (4.6 fix, 2026-09-29): the CSV reader and
+    // the FIFO Submit port reject zero-length requests; this arm silently
+    // admitted them (a zero-length envelope entered the queue the other
+    // two ports refuse).
+    if (alarm.envelope.prefill_length == 0 ||
+        alarm.envelope.decode_length == 0) {
+        fail(where + ": envelope prefill_length/decode_length must be "
+             "positive (zero-length requests are rejected by the "
+             "materializer, the Python loader, and the CSV reader alike)");
+    }
+    // Reserved-token gate (4.2 fix, same lexicon as the CSV reader and the
+    // FIFO Submit port): "first_token" is the WP9 node-name anchor
+    // substring and the graph builder embeds the sanitized ids in every
+    // regular node name.
+    if (alarm.envelope.session_id.find("first_token") != std::string::npos ||
+        alarm.envelope.request_id.find("first_token") != std::string::npos) {
+        fail(where + ": envelope session_id/request_id must not contain "
+             "the reserved marker token \"first_token\"");
+    }
+    // Reserved-prefix gate (same input-port discipline): a "batch_train_"
+    // request_id belongs to the train-sentinel namespace the mechanism
+    // layer treats as reserved (watches pinned to prefill, eligibility
+    // checks skipped, PREFILL_DRAIN excluded from prefill_drained), so a
+    // real request with that id would bypass fail-closed validation. The
+    // CSV reader rejects the prefix at its own port; this FIFO Submit
+    // alarm envelope port fails closed identically.
+    if (alarm.envelope.request_id.rfind("batch_train_", 0) == 0) {
+        fail(where + ": envelope request_id must not use the reserved "
+             "\"batch_train_\" prefix (train-sentinel namespace)");
+    }
     alarm.envelope.inter_request_interval_ns = get_uint(
         envelope["inter_request_interval_ns"], "inter_request_interval_ns",
         where + ".envelope");

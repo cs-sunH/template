@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import json
 import math
 import os
@@ -71,6 +72,34 @@ def write_csv(path: Path, columns: list[str], rows: list[dict]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row.get(key, "") for key in columns})
+
+
+def write_provenance_sidecar(repo: Path, queue_path: Path) -> None:
+    """为 golden 队列写 <queue>.provenance.json（本仓 M-16 门对齐，与
+    face-LRU 仓 run_golden_live 同款修复，2026-10-07）。
+
+    C++ WindowedTraceReader 的 provenance 门（M-16，2026-09-30 起缺席
+    即 fail-closed）对每个队列 CSV fail-closed 地要求同名
+    .provenance.json 边车，缺失即视同截断输入、在首个 Submit 前拒绝
+    提交。golden live 此前只写 8 列 CSV，四个场景自本门落地起启动即
+    reader_fatal。统计算法零复制：直接复用权威物化器
+    traces/derive_20_first_30_seconds.py 的 queue_provenance（与
+    C++ 索引遍逐字节同口径，含 CSV writer 的 CRLF 字节与 '#' 注释行
+    跳过）。"""
+    derive_path = (
+        repo / "sh_test_mesh/workload/llama2_7b_inference/traces"
+        / "derive_20_first_30_seconds.py")
+    spec = importlib.util.spec_from_file_location(
+        "derive_20_first_30_seconds", derive_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    provenance = module.queue_provenance(
+        str(queue_path), "run_golden_live.py hand-crafted golden queue")
+    sidecar = Path(str(queue_path) + ".provenance.json")
+    with sidecar.open("w", encoding="utf-8") as handle:
+        json.dump(provenance, handle, indent=2, sort_keys=True)
+        handle.write("\n")
 
 
 def set_pointer(trace_config: Path, rel_queue: str) -> None:
@@ -142,6 +171,41 @@ def read_jsonl(path: Path) -> list[dict]:
             if line:
                 rows.append(json.loads(line))
     return rows
+
+
+# 仓 workload 的 trace_config.csv（load_imbalance/hbm_watermark 候选链的
+# 仓级兜底；本脚本目录 = <repo>/sh_test_mesh/slo_tools/tests）。
+REPO_WORKLOAD_TRACE_CONFIG = (
+    Path(__file__).resolve().parents[2] / "workload"
+    / "llama2_7b_inference" / "trace_config.csv")
+
+
+def count_configured_instances(run_dir: Path) -> int:
+    """配置实例总数 = trace_config.csv 的 inference_group 组行数。
+
+    独立复刻 hbm_watermark.resolve_trace_config_path 的候选链（run_dir/
+    trace_config.csv > .snapshot > 仓 workload 同名文件），不导入 slo_
+    tools 模块（本脚本是 sanctioned 独立例外，保持零仓内依赖）。
+    """
+    candidate = None
+    for name in ("trace_config.csv", "trace_config.csv.snapshot"):
+        if (run_dir / name).is_file():
+            candidate = run_dir / name
+            break
+    if candidate is None:
+        candidate = REPO_WORKLOAD_TRACE_CONFIG
+    check(candidate.is_file(),
+          f"G2: trace_config.csv not found (tried run_dir and "
+          f"{REPO_WORKLOAD_TRACE_CONFIG})")
+    count = 0
+    with candidate.open(encoding="utf-8", newline="") as handle:
+        for row in csv.reader(handle):
+            if row and row[0] == "inference_group":
+                count += 1
+    check(count > 0,
+          f"G2: no inference_group rows in {candidate} — configured "
+          f"instance count unavailable")
+    return count
 
 
 def to_int(value) -> int:
@@ -349,12 +413,15 @@ def scenario_g2(run_dir: Path, notes: list[str], expected_overflow: int,
         if entry.get("kind") == "prefill":
             prefill_inst[entry["request_id"]] = entry["decision"].get(
                 "prefill_instance_index")
-    arrival = to_int(rows[0]["arrival_ns"])
     queued = [r for r in rows if to_int(r["queue_ns"]) > 0]
+    # 同刻突发（请求数 = prefill 实例数 + expected_overflow）：恰有
+    # expected_overflow 个请求排队——溢出数进真实断言，不再只进日志。
+    check(len(queued) == expected_overflow,
+          f"G2: queued {len(queued)} != expected overflow "
+          f"{expected_overflow}")
     notes.append(
-        f"G2: {len(rows)} requests, overflow expected {expected_overflow}, "
-        f"queued observed {len(queued)}")
-    check(len(queued) >= 1, "G2: no request queued (burst insufficient)")
+        f"G2: {len(rows)} requests, overflow queued {len(queued)}/"
+        f"{expected_overflow} as expected")
     # For each queued request, the occupying earlier request on the same
     # instance must have finished prefill before this one starts, and the
     # queue time must approximate one occupying prefill span.
@@ -425,20 +492,27 @@ def load_imbalance_handcheck(run_dir: Path, notes: list[str],
     t0 = min(span[1] for span in spans)
     t1 = max(span[2] for span in spans)
     horizon = t1 - t0
-    n_buckets = max(1, math.ceil(horizon / bucket_ns))
-    # Count-based bucketing mirroring the tool's rounding convention.
-    covered: dict[int, int] = {}
+    # METRIC-01 mirror (2026-09-26, denominator source 2026-09-29): the
+    # tool integrates the exact time-proportional overlap (no
+    # covered-bucket rounding) and computes CV over ALL configured
+    # instances (idle instances contribute bbar=0), with the configured
+    # count sourced from the trace_config.csv inference_group row count —
+    # same chain as hbm_watermark.count_configured_instances (request
+    # manifest prefill_ranks is the per-instance rank count, NOT the
+    # instance count; idle instances never appear in the decision log so
+    # log-derived counts are also wrong).
+    metrics_manifest = run_dir / "metrics_manifest.json"
+    check(metrics_manifest.is_file(),
+          "G2: metrics_manifest.json missing — expected normal plan "
+          "materializer output")
+    npus = count_configured_instances(run_dir)
     for inst, adm, dr in spans:
-        counts = covered.setdefault(inst, 0)
-        first = max(0, int((adm - t0) // bucket_ns))
-        last = min(n_buckets, int((dr - t0) // bucket_ns) + 1)
-        for b in range(first, last):
-            bucket_start = t0 + b * bucket_ns
-            bucket_end = bucket_start + bucket_ns
-            if dr > bucket_start and adm < bucket_end:
-                counts += 1
-        covered[inst] = counts
-    means = [covered[inst] * bucket_ns / horizon for inst in covered]
+        check(0 <= inst < npus,
+              f"G2: interval instance {inst} outside configured [0,{npus})")
+    busy: dict[int, int] = {}
+    for inst, adm, dr in spans:
+        busy[inst] = busy.get(inst, 0) + (dr - adm)
+    means = [busy.get(inst, 0) / horizon for inst in range(npus)]
     mean = sum(means) / len(means)
     var = sum((m - mean) ** 2 for m in means) / len(means)
     cv = math.sqrt(var) / mean
@@ -531,6 +605,24 @@ def scenario_g4(run_dir: Path, notes: list[str]) -> bool:
         notes.append("G4: no anchored restore request in mini scenario -> "
                      "FALLBACK_G4 (use t3_full_off_split anchors)")
         return False
+    # G4 防线(py-slo-E1,2026-09-26):REMOTE_RESTORE 请求的还原锚点必须
+    # 落在 prefill_end 之前/当时——restore 锚点晚于 prefill_end 说明窗口
+    # 取自 P→D joiner 迁移等伪锚点(WP5 三段分解整体失真),fail-closed。
+    if str(slo_tools) not in sys.path:
+        sys.path.insert(0, str(slo_tools))
+    import restore_decomposition
+    decisions = read_jsonl(run_dir / "results/online_decision_log.jsonl")
+    remote_restore_ids = {
+        entry["request_id"] for entry in decisions
+        if entry.get("kind") == "prefill"
+        and entry.get("decision", {}).get("history_action") == "REMOTE_RESTORE"
+    }
+    _, request_bounds = restore_decomposition.scan_metric_anchors_requests(
+        restore_decomposition.resolve_cpp_metric_log(run_dir))
+    prefill_end_by_id = {
+        info.get("request_id"): info["prefill_end"]
+        for info in request_bounds.values()
+    }
     for row in anchored:
         total = to_int(row["restore_complete_ns"]) - to_int(
             row["restore_start_ns"])
@@ -540,6 +632,13 @@ def scenario_g4(run_dir: Path, notes: list[str]) -> bool:
         check(seg_sum == total,
               f"G4: {row['request_id']} segments {seg_sum} != restore total "
               f"{total}")
+        if row["request_id"] in remote_restore_ids:
+            prefill_end = prefill_end_by_id.get(row["request_id"])
+            check(prefill_end is not None
+                  and to_int(row["restore_complete_ns"]) <= prefill_end,
+                  f"G4: REMOTE_RESTORE {row['request_id']} restore anchor "
+                  f"{row['restore_complete_ns']} exceeds prefill_end "
+                  f"{prefill_end} (pseudo anchor?)")
         notes.append(
             f"G4: {row['request_id']} three segments {seg_sum} == restore "
             f"total {total} (hand OK)")
@@ -584,6 +683,7 @@ def main() -> int:
             queue_path = traces / f"{name}_request_queue_recompute.csv"
             sidecar_path = traces / f"{name}_canonical_sidecar.csv"
             write_csv(queue_path, QUEUE_COLUMNS, queue_rows)
+            write_provenance_sidecar(repo, queue_path)
             write_csv(sidecar_path, SIDECAR_COLUMNS, sidecar_rows)
             rel = (f"llama2_7b_inference/traces/{queue_path.name}")
             try:
@@ -608,6 +708,17 @@ def main() -> int:
         # 异常（OSError/KeyError/…）会穿出循环——恢复放 finally，仓内
         # trace_config.csv 不得遗留指向 golden 队列（M30）。
         set_pointer(wl / "trace_config.csv", PLACEHOLDER_REL)
+        # golden_* 三件套清理（与 face-LRU 仓 run_golden_live 同款，
+        # 2026-10-07）：golden_* 草稿（队列 / canonical sidecar /
+        # provenance）写在仓内 traces/——遗留队列带着 VALID provenance
+        # 边车，会被误当成真实物化输入。随指针还原一并删除。
+        for stale_golden in traces.glob("golden_g*_request_queue_recompute.csv"):
+            stale_golden.unlink(missing_ok=True)
+            Path(str(stale_golden) + ".provenance.json").unlink(missing_ok=True)
+            stale_golden.with_name(
+                stale_golden.name.replace(
+                    "_request_queue_recompute.csv", "_canonical_sidecar.csv")
+            ).unlink(missing_ok=True)
         for stale in list((repo / "sh_test_mesh/generated").glob(
                 "llama2_7b_inference_54npus_*")) + \
                 list((repo / "sh_test_mesh/generated").glob(

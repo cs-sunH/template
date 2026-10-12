@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/MemBus.hh"
 
 #include "astra-sim/system/LogGP.hh"
+#include "astra-sim/system/SharedBusStat.hh"
 #include "astra-sim/system/Sys.hh"
 
 using namespace std;
@@ -29,7 +30,11 @@ MemBus::MemBus(string side1,
     this->model_shared_bus = model_shared_bus;
     this->communication_delay = communication_delay;
     if (attach) {
-        NPU_side->attach_mem_bus(sys, L, o, g, 0.0038, model_shared_bus,
+        // The inner NPU<->MEM bus honors the same system-configured G as the
+        // outer sides: the former literal 0.0038 ignored inp_G and made the
+        // shared-bus inner serialization delay unconfigurable (the outer
+        // LogGP sides always used the constructor's G).
+        NPU_side->attach_mem_bus(sys, L, o, g, G, model_shared_bus,
                                  communication_delay);
     }
 }
@@ -40,7 +45,7 @@ MemBus::~MemBus() {
 }
 
 void MemBus::send_from_NPU_to_MA(MemBus::Transmition transmition,
-                                 int bytes,
+                                 uint64_t bytes,
                                  bool processed,
                                  bool send_back,
                                  Callable* callable) {
@@ -48,15 +53,13 @@ void MemBus::send_from_NPU_to_MA(MemBus::Transmition transmition,
         NPU_side->request_read(bytes, processed, send_back, callable);
     } else {
         if (transmition == Transmition::Fast) {
-            SharedBusStat* ss = new SharedBusStat(BusType::Shared, 0, 10, 0, 0);
-            ss->sys_id = sys->id;
-            ss->event = EventType::NPU_to_MA;
+            // Payload identity only: the Sys event map entry already carries
+            // the event type, and no consumer reads the SharedBusStat fields
+            // (the shell class note in SharedBusStat.hh).
+            SharedBusStat* ss = new SharedBusStat();
             sys->register_event(callable, EventType::NPU_to_MA, ss, 10);
         } else {
-            SharedBusStat* ss = new SharedBusStat(BusType::Shared, 0,
-                                                  communication_delay, 0, 0);
-            ss->sys_id = sys->id;
-            ss->event = EventType::NPU_to_MA;
+            SharedBusStat* ss = new SharedBusStat();
             sys->register_event(callable, EventType::NPU_to_MA, ss,
                                 communication_delay);
         }
@@ -64,7 +67,7 @@ void MemBus::send_from_NPU_to_MA(MemBus::Transmition transmition,
 }
 
 void MemBus::send_from_MA_to_NPU(MemBus::Transmition transmition,
-                                 int bytes,
+                                 uint64_t bytes,
                                  bool processed,
                                  bool send_back,
                                  Callable* callable) {
@@ -72,15 +75,13 @@ void MemBus::send_from_MA_to_NPU(MemBus::Transmition transmition,
         MA_side->request_read(bytes, processed, send_back, callable);
     } else {
         if (transmition == Transmition::Fast) {
-            SharedBusStat* ss = new SharedBusStat(BusType::Shared, 0, 10, 0, 0);
-            ss->sys_id = sys->id;
-            ss->event = EventType::MA_to_NPU;
+            // Payload identity only: the Sys event map entry already carries
+            // the event type, and no consumer reads the SharedBusStat fields
+            // (the shell class note in SharedBusStat.hh).
+            SharedBusStat* ss = new SharedBusStat();
             sys->register_event(callable, EventType::MA_to_NPU, ss, 10);
         } else {
-            SharedBusStat* ss = new SharedBusStat(BusType::Shared, 0,
-                                                  communication_delay, 0, 0);
-            ss->sys_id = sys->id;
-            ss->event = EventType::MA_to_NPU;
+            SharedBusStat* ss = new SharedBusStat();
             sys->register_event(callable, EventType::MA_to_NPU, ss,
                                 communication_delay);
         }

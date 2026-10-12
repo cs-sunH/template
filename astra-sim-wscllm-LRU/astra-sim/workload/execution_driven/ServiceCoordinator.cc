@@ -11,8 +11,9 @@ fully-drained ACTIVE returns to IDLE while the input stays open (合同②
 
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 
-#include <cassert>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -27,7 +28,15 @@ void ServiceCoordinator::on_command_accepted() {
 
 void ServiceCoordinator::on_request_arrived() {
     std::lock_guard<std::mutex> lock(mtx_);
-    assert(pending_alarm_count_ > 0);
+    // G1-2: Release builds (-DNDEBUG) compiled the old assert away and let
+    // this unsigned decrement wrap around on an unbalanced arrival; the
+    // guard is runtime and stays in every build.
+    if (pending_alarm_count_ == 0) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/service_coordinator) "
+                     "on_request_arrived with no pending alarm\n");
+        std::abort();
+    }
     --pending_alarm_count_;
     ++active_request_count_;
     if (state_ == ServiceState::IDLE) {
@@ -37,7 +46,13 @@ void ServiceCoordinator::on_request_arrived() {
 
 void ServiceCoordinator::on_request_completed() {
     std::lock_guard<std::mutex> lock(mtx_);
-    assert(active_request_count_ > 0);
+    // G1-2: same Release-underflow guard as on_request_arrived above.
+    if (active_request_count_ == 0) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/service_coordinator) "
+                     "on_request_completed with no active request\n");
+        std::abort();
+    }
     --active_request_count_;
     ++completed_request_count_;
     maybe_finish();
@@ -54,17 +69,45 @@ void ServiceCoordinator::mark_input_closed(const InputCloseReason reason) {
     // (the hook below may read it back on the same thread only via the
     // state queries; the audit queries input_close_reason()/input_closed()
     // after the run).
-    input_close_reason_ = reason;
-    input_open_ = false;
+    // G1-7: first-terminal-state protection -- the audit must see the FIRST
+    // close source, not whichever terminal call ran last (e.g. a queued
+    // CloseInput/EndOfFile command draining after a direct close used to
+    // overwrite the recorded reason; RequestIngress only gates its own
+    // direct path with closed_, not the per-command drain). Post-first-close
+    // transitions stay idempotent (DRAINING only from IDLE/ACTIVE;
+    // maybe_finish guarded), so only the sticky reason record changes.
+    if (input_open_) {
+        input_close_reason_ = reason;
+        input_open_ = false;
+    }
     if (state_ == ServiceState::IDLE) {
         // no request was ever accepted: close straight into draining
         set_state(ServiceState::DRAINING);
     } else if (state_ == ServiceState::ACTIVE) {
         set_state(ServiceState::DRAINING);
     }
-    maybe_finish();
+    // M4 fix (2026-09-29): do NOT evaluate maybe_finish() here. At a
+    // producer-linearized close the bounded ingress queue routinely holds
+    // every Submit (the --close-input startup path queues the whole turn-0
+    // calendar before the first drain), so all three counters are still
+    // zero and the old immediate evaluation stamped FINISHED for a service
+    // that had not even accepted its first request -- the state_ label then
+    // sat at FINISHED for the whole run and the lifecycle transition log
+    // went silent (M-11). The FINISHED evaluation moves to
+    // note_input_drained(), called by the ingress drain once the closed
+    // queue is empty.
+    finish_after_drain_ = true;
     wakeup_pending_ = true;
     work_cv_.notify_one();
+}
+
+void ServiceCoordinator::note_input_drained() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (input_open_ || !finish_after_drain_) {
+        return;  // input still open, or nothing deferred (already drained)
+    }
+    finish_after_drain_ = false;
+    maybe_finish();
 }
 
 InputCloseReason ServiceCoordinator::input_close_reason() const {
@@ -108,7 +151,7 @@ bool ServiceCoordinator::checked_wait_deadline(
     if (!std::isfinite(timeout_s) || timeout_s <= 0.0) {
         return false;
     }
-    // Low-fix (wscllm-LRU 深挖 low, old ServiceCoordinator.cc:123): the
+    // Low-fix (wscllm-LRU 深挖 low, 修复前版本的秒域上界守卫（已删）): the
     // old guard compared SECONDS directly against the tick-domain
     // duration::max() count (nanoseconds on this platform -- ~1e9x too
     // wide), so oversized values were only rejected by the float->int
@@ -171,15 +214,6 @@ void ServiceCoordinator::signal_work() {
     work_cv_.notify_one();
 }
 
-const std::vector<ServiceState>& ServiceCoordinator::transition_log() const {
-    return transition_log_;
-}
-
-uint64_t ServiceCoordinator::transition_log_dropped() const {
-    std::lock_guard<std::mutex> lock(mtx_);
-    return transition_log_dropped_;
-}
-
 void ServiceCoordinator::set_transition_hook(StateTransitionHook hook) {
     std::lock_guard<std::mutex> lock(mtx_);
     transition_hook_ = std::move(hook);
@@ -209,11 +243,6 @@ void ServiceCoordinator::set_state(const ServiceState next) {
     // caller holds mtx_
     const ServiceState prev = state_;
     state_ = next;
-    if (transition_log_.size() < kTransitionLogCapacity) {
-        transition_log_.push_back(next);
-    } else {
-        ++transition_log_dropped_;
-    }
     if (transition_hook_) {
         // Contract: the hook must not call back into the coordinator (it is
         // invoked with mtx_ held); the online entry uses it to print the
@@ -237,9 +266,11 @@ void ServiceCoordinator::maybe_finish() {
     // accepted/active request has drained (active==0, no pending alarm or
     // fence) -- the service returns to IDLE and keeps waiting for the next
     // external injection (IDLE --ACTIVE--> ... --complete--> IDLE). The
-    // official runners close the input at startup, so this branch is
-    // unreachable there (input_open_ is false); it is the IDLE fixture's
-    // contract.
+    // official online entry closes the input at startup only for no-CSV /
+    // already-EOF inputs; a finite CSV run linearizes the close at the
+    // calendar-EOF boundary mid-run (main_online.cc), so this branch IS
+    // reachable on official runs (e.g. the drain gap before that close)
+    // and remains the IDLE fixture's contract.
     if (input_open_ && active_request_count_ == 0 &&
         pending_alarm_count_ == 0 && state_ == ServiceState::ACTIVE) {
         set_state(ServiceState::IDLE);

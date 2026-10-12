@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import io
 import json
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_DIR = Path(__file__).resolve().parent
@@ -17,28 +19,33 @@ if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
 from session_kv_manager import SessionKVCacheManager  # noqa: E402
+import wsc_llm_scheduler as wsc_llm_scheduler_module  # noqa: E402
 from wsc_llm_scheduler import (  # noqa: E402
     DECODE_ROLE,
+    MAX_EQUIVALENT_SHORTEST_PATHS,
+    MAX_ROUTE_CANDIDATE_COMBINATIONS,
     PREFILL_ROLE,
     InstanceGraph,
     PrefillQueueSnapshot,
     WscLlmHardware,
     WscLlmInstanceSpec,
     WscLlmModel,
+    WscLlmTopology,
     build_instances,
     build_static_pd_mapping,
     estimate_model_weight_bytes,
+    kv_cache_bytes_for_tokens,
+    rank_coordinates,
     select_prefill_instance,
 )
 from generate_wsc_llm_trace import (  # noqa: E402
+    SUPPORTED_CONFIG_KEYS,
     load_wsc_llm_trace_config,
-    select_first_session_requests,
 )
 from generate_trace import (  # noqa: E402
     COMM_COLL_NODE,
     COMP_NODE,
     REMOTE_WEIGHT_ATTR,
-    RequestSpec,
     TraceBuilder,
     shard_extent,
     transformer_pass,
@@ -105,20 +112,24 @@ REQUEST_QUEUE_HEADER = (
 )
 # 8 个 turn-0 槽位 + 2 个 turn>0 槽位(槽位口径与 legacy 在线测试共用;
 # turn-0 行必须带 session_arrival_time_ns,turn>0 行必须带 interval)。
+# 行序合规:session 块连续 + 块内 turn 严格 +1(2026-09-30 起 loader 按
+# C++ 读者同款结构不变量 fail-closed,夹具数据同步改为合规形态)。
 SYNTHETIC_QUEUE_ROWS = (
     ("fixture_s0", "0", "fixture_s0_r0", "100", "5", "0", "", "synthetic fixture"),
+    ("fixture_s0", "1", "fixture_s0_r1", "50", "4", "", "1000", "synthetic fixture"),
     ("fixture_s1", "0", "fixture_s1_r0", "200", "6", "0", "", "synthetic fixture"),
+    ("fixture_s1", "1", "fixture_s1_r1", "60", "5", "", "2000", "synthetic fixture"),
     ("fixture_s2", "0", "fixture_s2_r0", "300", "7", "0", "", "synthetic fixture"),
     ("fixture_s3", "0", "fixture_s3_r0", "400", "8", "0", "", "synthetic fixture"),
     ("fixture_s4", "0", "fixture_s4_r0", "500", "9", "0", "", "synthetic fixture"),
     ("fixture_s5", "0", "fixture_s5_r0", "600", "10", "0", "", "synthetic fixture"),
     ("fixture_s6", "0", "fixture_s6_r0", "700", "11", "0", "", "synthetic fixture"),
     ("fixture_s7", "0", "fixture_s7_r0", "800", "12", "0", "", "synthetic fixture"),
-    ("fixture_s0", "1", "fixture_s0_r1", "50", "4", "", "1000", "synthetic fixture"),
-    ("fixture_s1", "1", "fixture_s1_r1", "60", "5", "", "2000", "synthetic fixture"),
 )
 
 _FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="wscllm_test_fixture_")
+# 模块级临时目录随进程退出显式清理,不留 /tmp 残留。
+atexit.register(_FIXTURE_DIR.cleanup)
 
 
 def _write_synthetic_queue(path: Path) -> None:
@@ -202,44 +213,6 @@ def checked_in_topology() -> tuple[object, object]:
 
 
 class WscLlmSchedulerTests(unittest.TestCase):
-    @staticmethod
-    def _request(
-        session_id: str,
-        turn_index: int,
-        request_id: str,
-    ) -> RequestSpec:
-        return RequestSpec(
-            session_id=session_id,
-            turn_index=turn_index,
-            request_id=request_id,
-            prefill_length=10 + turn_index,
-            decode_length=2 + turn_index,
-            session_arrival_time_ns=0 if turn_index == 0 else None,
-            inter_request_interval_ns=None if turn_index == 0 else 1000,
-        )
-
-    def test_first_n_session_selection_keeps_all_source_rows(self) -> None:
-        requests = (
-            self._request("s0", 0, "s0r0"),
-            self._request("s1", 0, "s1r0"),
-            self._request("s0", 1, "s0r1"),
-            self._request("s2", 0, "s2r0"),
-            self._request("s1", 1, "s1r1"),
-        )
-        selected, session_ids = select_first_session_requests(requests, 2)
-        self.assertEqual(session_ids, ("s0", "s1"))
-        self.assertEqual(
-            tuple(request.request_id for request in selected),
-            ("s0r0", "s1r0", "s0r1", "s1r1"),
-        )
-        all_requests, all_sessions = select_first_session_requests(requests, 0)
-        self.assertEqual(all_requests, requests)
-        self.assertEqual(all_sessions, ("s0", "s1", "s2"))
-        with self.assertRaises(ValueError):
-            select_first_session_requests(requests, 4)
-        with self.assertRaises(ValueError):
-            select_first_session_requests(requests, -1)
-
     def test_checked_in_config_is_request_neutral_and_fails_closed_without_input(self) -> None:
         """checked-in 配置 = request-neutral(占位队列路径,不绑定任何默认
         request 队列)+ 缺失输入 fail-closed + 配置字段语义(拓扑/角色/模型/
@@ -251,18 +224,27 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual((config.hardware.mesh_rows, config.hardware.mesh_cols), (9, 6))
         self.assertEqual(config.hardware.d2d_latency_ns, 5)
         self.assertEqual(config.hardware.local_hbm_latency_ns, 100)
-        self.assertEqual(config.hardware.local_hbm_capacity_bytes, 160 * 1024**3)
+        # die 后端(2026-10-03):checked-in 硬件切 die 节后容量 = 库派生
+        # HBM 容量(64 GB,validation-die-64g 对齐;旧 160 GiB 断言随
+        # validation-160gib 一同退居 legacy 臂)。
+        self.assertEqual(config.hardware.local_hbm_capacity_bytes, 64000000000)
         self.assertEqual(config.hardware_config.name, "face_case5_config_c.json")
-        self.assertEqual(config.hardware_capacity_profile, "validation-160gib")
+        # die 后端(2026-10-03):profile 随 die 节容量对齐切换。
+        self.assertEqual(config.hardware_capacity_profile, "validation-die-64g")
         self.assertEqual(config.system_config.name, "system.json")
         self.assertEqual(config.network_config.name, "network.yml")
         self.assertEqual(config.comm_group_config.name, "comm_group.json")
-        self.assertEqual(config.remote_memory_config.name, "remote_memory.json")
+        # S3-5:remote_memory_config 镜像字段已删;物化产物断言改经
+        # runtime_config 目录(system/network/comm_group 同目录物化)。
+        self.assertTrue(
+            config.system_config.with_name("remote_memory.json").is_file())
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
         self.assertEqual(system_raw["remote-mem-bw"], 512)
-        self.assertEqual(system_raw["peak-perf"], 261.12)
+        # die 后端(2026-10-03):peak-perf 由 die 库派生回流(1492.05
+        # TFLOPS;旧 compute.peak-perf-tflops=261.12 随 compute 节退役)。
+        self.assertEqual(system_raw["peak-perf"], 1492.05)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)
         self.assertEqual(tuple(group.ranks for group in config.inference_groups), EXPECTED_RANKS)
@@ -283,23 +265,28 @@ class WscLlmSchedulerTests(unittest.TestCase):
             ),
             (32, 4096, 11008, 32, 32000),
         )
-        self.assertEqual(config.request_queue_session_limit, 0)
         self.assertEqual(config.trace_granularity, "request_aggregated")
         self.assertEqual(config.prefill_chunk_size, 512)
-        # B3(2026-09-06):checked-in 交付值换 session_lru_tiered(三态
+        # B3(2026-09-06):checked-in 交付值换 session_lru_tiered(二态
         # 冷热管理;trace_config.csv 的 kv_cache_policy 行是本批次交付物)。
         self.assertEqual(config.kv_cache_policy, "session_lru_tiered")
-        self.assertEqual(config.kv_reserve_context_tokens, 1_000_000)
-        self.assertFalse(config.record_planning_iterations)
+        # S3-5:kv_reserve_context_tokens/record_planning_iterations 等
+        # 零生产读者 dataclass 字段已删(断言改落在权威 CSV 文本上)。
+        # kv_reserve_context_tokens 键保留为 SLO 观测口径
+        # (slo_tools/hbm_watermark.py 直读本 CSV,交付值 1_000_000);
+        # record_planning_iterations 键随 S3-5 退役(行已删)。
+        checked_in_config_text = (MODULE_DIR / "trace_config.csv").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "config,kv_reserve_context_tokens,1000000",
+            checked_in_config_text,
+        )
+        self.assertNotIn(
+            "record_planning_iterations", checked_in_config_text)
         # request-neutral:合成 fixture 队列的计数只反映 fixture 自身,不依赖
         # 任何真实 trace 数据(裸仓库不物化输入,见方案 §3 步骤 0-1)。
-        self.assertEqual(config.source_request_count, len(SYNTHETIC_QUEUE_ROWS))
-        self.assertEqual(config.source_session_count, 8)
         self.assertEqual(len(config.request_queue), len(SYNTHETIC_QUEUE_ROWS))
-        self.assertEqual(
-            config.selected_session_ids,
-            tuple(f"fixture_s{index}" for index in range(8)),
-        )
         # checked-in 配置本体 = request-neutral:request_queue_csv 是占位路径。
         checked_in_text = (MODULE_DIR / "trace_config.csv").read_text(encoding="utf-8")
         queue_line = next(
@@ -321,11 +308,37 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(exit_context.exception.code, 1)
         self.assertIn("missing request queue", stderr.getvalue())
 
+    def test_checked_in_config_keys_all_supported(self) -> None:
+        """C-1 守卫(2026-09-30):checked-in trace_config.csv 的全部
+        config 行键 ∈ SUPPORTED_CONFIG_KEYS——逐键点名的退役键测试漏新
+        退役键(曾漏 output_prefix,裸仓交付态全部入口在 loader 处炸),
+        全量枚举守卫把"交付键域 = loader 白名单"钉成不变量。"""
+        unsupported = []
+        for raw_line in (MODULE_DIR / "trace_config.csv").read_text(
+            encoding="utf-8"
+        ).splitlines():
+            if not raw_line.strip() or raw_line.startswith("kind,"):
+                continue
+            columns = raw_line.split(",")
+            if columns[0] != "config":
+                continue  # inference_group 行不属 config 键域
+            key = columns[1]
+            if key not in SUPPORTED_CONFIG_KEYS:
+                unsupported.append(key)
+        self.assertEqual(
+            unsupported,
+            [],
+            "checked-in trace_config.csv carries config keys outside "
+            "SUPPORTED_CONFIG_KEYS (retired keys must be removed from the "
+            "CSV, not just from the loader)",
+        )
+
     def test_kv_eviction_mode_key_rejected(self) -> None:
         """主动驱逐已物理清除(2026-09-05):loader 对 kv_eviction_mode 键
         恢复"未知键 fail-closed 拒绝"——残留该行的旧配置不得静默忽略,
         更不可能借此复活水位逐出路径。"""
-        with self.assertRaisesRegex(ValueError, "unsupported config key"):
+        with self.assertRaisesRegex(
+                ValueError, "unsupported config key 'kv_eviction_mode'"):
             load_config_variant(
                 "eviction_mode_key_rejected",
                 lambda line: (
@@ -338,8 +351,8 @@ class WscLlmSchedulerTests(unittest.TestCase):
 
     def test_completion_retains_kv_without_watermark(self) -> None:
         """完成路径零逐出(主动驱逐已物理清除):mark_complete 返回空元组、
-        retain_complete 事件保留(D3),会话保持 LOCAL(B2 三态)——逐出
-        唯一路径 = 准入期 ensure_physical_fit 两段式按需逐出。"""
+        retain_complete 事件保留(D3),会话保持 LOCAL(B2 二态)——逐出
+        唯一路径 = 准入期 ensure_physical_fit 单阶段整体逐出。"""
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
         hardware = WscLlmHardware(1, 2, 300, 1.0, 1.0, 1.0, 0, 0)
         topology = build_instances(
@@ -368,6 +381,27 @@ class WscLlmSchedulerTests(unittest.TestCase):
             [event.event_type for event in manager.events],
             ["no_history", "retain_complete"],
         )
+
+    def test_pg_name_guard_is_int_normalized(self) -> None:
+        """pg_name 零值守卫 int 规范化(Minor 2026-09-30):零值与非规范
+        十进制字形("00"/" 1"/"+1"/非整数串)一律拒绝,规范正整数放行
+        ——字面量 =="0" 守卫曾放行 "00"("00" 经 int 亦为 0,且与 "0"
+        异形同 id、绕开 duplicate pg_name 查重)。"""
+        hardware = WscLlmHardware(1, 2, 300, 1.0, 1.0, 1.0, 0, 0)
+        for bad in ("0", "00", "-1", " 1", "+1", "1.5", "abc"):
+            with self.assertRaisesRegex(ValueError, "pg_name"):
+                build_instances(
+                    hardware,
+                    (WscLlmInstanceSpec("d", bad, (0,), DECODE_ROLE),),
+                )
+        topology = build_instances(
+            hardware,
+            (
+                WscLlmInstanceSpec("d", "1", (0,), DECODE_ROLE),
+                WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
+            ),
+        )
+        self.assertEqual(len(topology.instances), 2)
 
     def test_passive_only_admission_pressure_evicts_whole_lru_sessions(self) -> None:
         """被动逐出唯一路径 = 准入期 ensure_physical_fit 单阶段整体 LRU
@@ -588,7 +622,17 @@ class WscLlmSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(select_prefill_instance(tied_out_of_order), 1)
 
-    def test_manager_deletes_multiple_lru_victims_but_not_active_kv(self) -> None:
+    def test_manager_deletes_multiple_lru_victims_in_one_pool_snapshot(self) -> None:
+        """一次准入逐出多个已完成 LRU 受害者,且整池快照恰好取一次。
+
+        2026-10-01 审查更名(原名 `..._but_not_active_kv` 名称漂移):本用例
+        中 a、b 在逐出发生前均已 ``mark_complete``,场内并无 active 会话;
+        "活跃会话不被驱逐"由本文件
+        ``test_passive_only_exhausted_candidates_increment_deep_gap_events``
+        与 test_tiered_eviction_sequence.py 的
+        ``test_active_residency_counts_into_fit_feasibility`` 锁定。
+        """
+
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
         hardware = WscLlmHardware(1, 2, 400, 1.0, 1.0, 1.0, 0, 0)
         topology = build_instances(
@@ -985,6 +1029,90 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertFalse(builder.nodes)
         self.assertEqual([node.name for node in streamed], ["first", "second"])
         self.assertEqual(tuple(streamed[1].data_deps), (streamed[0].id,))
+
+
+class RouteEnumerationBoundTests(unittest.TestCase):
+    """SCHED-01(2026-09-26):最短路物化与候选笛卡尔积的 fail-closed 上界。
+
+    等价最短路多的网格/对抗拓扑会组合爆炸;上界内结果必须不变(既有
+    static-route 钉子测试继续覆盖合法布局)。"""
+
+    @staticmethod
+    def _grid_topology(rows: int, cols: int, decode_ranks) -> WscLlmTopology:
+        """rows×cols 网格,每实例 1 个 NPU;decode_ranks 为 Decode 实例,
+        其余为 Prefill(中心优先约束由 build_instances 自行校验)。"""
+        decode_ranks = frozenset(decode_ranks)
+        specs = tuple(
+            WscLlmInstanceSpec(
+                name=f"n{index}",
+                pg_name=str(index + 1),
+                ranks=(index,),
+                phase_role=DECODE_ROLE if index in decode_ranks else PREFILL_ROLE,
+            )
+            for index in range(rows * cols)
+        )
+        return build_instances(
+            WscLlmHardware(rows, cols, 100, 1.0, 1.0, 1.0, 0, 0), specs)
+
+    def test_path_materialization_bound_fails_closed(self) -> None:
+        """8×8 实例网格对角点间等价最短路 C(14,7)=3432 > 上界:递归物化
+        在超界即结构化报错,而非无界消耗 CPU/内存。"""
+        topology = self._grid_topology(
+            8, 8, decode_ranks=set(range(64)) - {0, 7, 56, 63})
+        graph = InstanceGraph(topology)
+        with self.assertRaisesRegex(ValueError, "route enumeration bound"):
+            graph.all_shortest_paths(0, 63)
+
+    def test_combination_bound_fails_closed_and_default_bounds_are_inert(self) -> None:
+        """候选组合上界:收紧到 1 时,多候选拓扑(2×2 网格,每 prefill 有
+        2 个最近 decode 候选,组合数 4)fail-closed;缺省上界下同一拓扑
+        正常产出映射(上界内结果不变)。"""
+        topology = self._grid_topology(2, 2, decode_ranks=(0, 3))
+        with mock.patch.object(
+                wsc_llm_scheduler_module,
+                "MAX_ROUTE_CANDIDATE_COMBINATIONS", 1):
+            with self.assertRaisesRegex(
+                    ValueError, "candidate combinations"):
+                build_static_pd_mapping(topology)
+        mapping = build_static_pd_mapping(topology)
+        self.assertEqual(len(mapping.routes), 2)
+        self.assertEqual(mapping.total_hops, 2)
+
+        # 路径物化上界同样由常量控制:收紧到 1 时 2×2 对角(2 条等价
+        # 最短路)即报错,而相邻对(1 条)不受影响。
+        graph = InstanceGraph(topology)
+        with mock.patch.object(
+                wsc_llm_scheduler_module,
+                "MAX_EQUIVALENT_SHORTEST_PATHS", 1):
+            with self.assertRaisesRegex(ValueError, "route enumeration bound"):
+                graph.all_shortest_paths(0, 3)
+            self.assertEqual(
+                graph.all_shortest_paths(0, 1), ((0, 1),))
+        self.assertEqual(
+            graph.shortest_distance(0, 3), 2)
+        self.assertGreater(MAX_EQUIVALENT_SHORTEST_PATHS, 1)
+        self.assertGreater(MAX_ROUTE_CANDIDATE_COMBINATIONS, 1)
+
+
+class InputScalarValidationTests(unittest.TestCase):
+    """ONLINE-05(2026-09-26):标量入口的类型/范围收紧(bool 是 int 子
+    类型,显式拒绝;浮点/字符串不得经 int() 静默截断混入算术或拓扑查找)。"""
+
+    def test_kv_cache_bytes_for_tokens_requires_non_negative_int(self) -> None:
+        model = WscLlmModel(2, 8, 16, 2, 32, 2, "gelu")
+        self.assertEqual(kv_cache_bytes_for_tokens(model, 0), 0)
+        self.assertEqual(kv_cache_bytes_for_tokens(model, 3), 2 * 2 * 3 * 8 * 2)
+        for bad in (-1, True, False, 1.5, "8", None):
+            with self.assertRaises(ValueError):
+                kv_cache_bytes_for_tokens(model, bad)
+
+    def test_rank_coordinates_requires_in_range_int(self) -> None:
+        hardware = WscLlmHardware(2, 3, 100, 1.0, 1.0, 1.0, 0, 0)
+        self.assertEqual(rank_coordinates(hardware, 0), (0, 0))
+        self.assertEqual(rank_coordinates(hardware, 5), (1, 2))
+        for bad_rank in (-1, 6, True, 2.5, "3", None):
+            with self.assertRaises(ValueError):
+                rank_coordinates(hardware, bad_rank)
 
 
 if __name__ == "__main__":

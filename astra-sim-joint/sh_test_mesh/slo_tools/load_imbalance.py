@@ -30,7 +30,6 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -88,6 +87,12 @@ def li_consume_decision(record: dict, repo_variant: str, state: dict) -> None:
             fail(f"请求 {request_id} 的 decode 决策缺整数 "
                  f"decode_instance_index（逐仓字段映射失效？repo="
                  f"{repo_variant}）")
+        # extra-find（2026-09-29，R7-F9 同型查重面，face 移植）：同文件
+        # prefill 分支与 completion 分支均对重复 fail-closed，decode 分支
+        # 原先静默后者覆盖——补齐"恰一次"不变量（与 hbm_watermark
+        # seen_kinds 同口径）。
+        if request_id in decode_instances:
+            fail(f"请求 {request_id} 出现多次 decode 决策（应恰一次）")
         decode_instances[request_id] = instance
     elif kind == "completion":
         completions = state["completions"]
@@ -145,8 +150,15 @@ def li_assemble_intervals(state: dict, drains: dict,
     skipped_no_drain = []
     skipped_bad_order = []
     instance_mismatch = 0
-    for request_id, admission in sorted(admissions.items()):
+    # 遍历域 = admission ∪ decode 两源并集（批次 D 镜像，2026-09-30）：
+    # 只遍历 admissions 会把"无 prefill 准入却有 decode 决策"的请求整行
+    # 静默消失（区间缺一角、分位/积分分母失真）——显式进跳过清单留痕。
+    for request_id in sorted(set(admissions) | set(decode_instances)):
+        admission = admissions.get(request_id)
         instance = decode_instances.get(request_id)
+        if admission is None:
+            skipped_no_admission.append(request_id)
+            continue
         drain = drains.get(request_id)
         if instance is None:
             skipped_no_decode.append(request_id)
@@ -180,7 +192,8 @@ def li_assemble_intervals(state: dict, drains: dict,
         print(f"[load-imbalance] 跳过 WP9 first_step 账本行: "
               f"{skipped_first_step_rows} 行（发射边界记录，非终态 drain）",
               file=sys.stderr)
-    for label, skipped in (("无 decode 决策", skipped_no_decode),
+    for label, skipped in (("无 prefill 准入", skipped_no_admission),
+                           ("无 decode 决策", skipped_no_decode),
                            ("无 drain 记录", skipped_no_drain),
                            ("drain 早于 admission", skipped_bad_order)):
         if skipped:
@@ -208,20 +221,18 @@ def collect_intervals(run_dir: Path, repo_variant: str) -> list[dict]:
     return li_assemble_intervals(state, drains, skipped_first_step_rows)
 
 
-def _interval_covered_buckets(admission_ns: int, drain_ns: int,
-                              span_start: int, bucket_ns: int,
-                              n_buckets: int) -> int:
-    """单区间 [admission, drain) 对 sum(series) 的桶贡献数（O(1)）。
+def _interval_covered_ns(admission_ns: int, drain_ns: int) -> int:
+    """单区间 [admission, drain) 的精确重叠时长（半开区间测度，O(1)）。
 
-    与逐桶累加逐语句等价：admission < bucket_end(b) ⟺ b >= first；
-    drain > bucket_start(b) ⟺ b < last 或（b == last 且 drain 不落桶边界）。
+    L19（2026-09-29，积压语义修正）：积压 = 在途请求对时间的积分
+    （spec §1.5-A 时间平均 b̄_i = Σ(桶内积压×桶长)/总跨度的精确值）。
+    桶格是对时间轴的划分，区间对桶格的"按比例分摊重叠时长"之和恒等于
+    区间长度本身——精确端点处理退化为 O(1) 长度积分，无需物化桶格。
+    旧实现按"重叠桶计数×桶长"聚合，把部分重叠的边缘桶整桶计入：请求
+    时长 ≪ bucket_ns 时每请求虚增至多一整桶，CV 退化为"每实例请求数"
+    的度量。零长度区间 [a,a) 恒贡献 0。
     """
-    first = (admission_ns - span_start) // bucket_ns
-    last = (drain_ns - span_start) // bucket_ns
-    hi = last - 1 if (drain_ns - span_start) % bucket_ns == 0 else last
-    lo = max(0, first)
-    hi = min(n_buckets - 1, hi)
-    return hi - lo + 1 if hi >= lo else 0
+    return drain_ns - admission_ns if drain_ns > admission_ns else 0
 
 
 def instance_timeavg_backlog(intervals: list[dict], bucket_ns: int,
@@ -229,35 +240,33 @@ def instance_timeavg_backlog(intervals: list[dict], bucket_ns: int,
                              ) -> dict[int, tuple[float, int]]:
     """各 instance 积压 → 时间平均积压（返回 instance -> (b̄, n_req)）。
 
-    桶 j 覆盖 [span_start + j*bucket, +bucket)；请求区间对桶的覆盖按
-    时间重叠 >0 计入（区间端点闭开 [admission, drain)）。
+    b̄_i = Σ_区间 [drain−admission] / 总跨度（L19 精确积分；bucket_ns
+    不再进入取值——旧桶计数近似对部分重叠桶整桶计入、虚增积压，精确
+    端点处理下桶格划分对积分无贡献；bucket_ns 保留为登记参数继续读取/
+    校验/输出，供跨 run 网格对账）。
 
     2026-08-30 爆内存根治：原实现为每实例预分配 ``[0] * n_buckets``
     稠密分桶序列并逐桶累加，稠密序列的唯一消费方式是
     ``sum(series) * bucket_ns``（Σ桶计数×桶长）。全量 tracelab 跨度
     2.7e15 ns ÷ 1ms 桶 = 每实例 27 亿桶 × 9 实例 ≈ 182 GiB，曾把
-    80GB VM 拖入全局 OOM。现改为 O(1) 区间算术（_interval_covered_buckets
-    逐语句等价推导见其 docstring），每实例只持一个整数累加器，
+    80GB VM 拖入全局 OOM。2026-09-29 起改为每区间 O(1) 精确长度积分
+    （_interval_covered_ns），每实例只持一个整数累加器，
     内存 O(区间数)，与时间跨度/桶长彻底解耦。
     """
-    n_buckets = max(1, math.ceil((span_end - span_start) / bucket_ns))
-    covered_buckets: dict[int, int] = {}
+    covered_ns_by_instance: dict[int, int] = {}
     counts: dict[int, int] = {}
     for interval in intervals:
         instance = interval["instance"]
-        covered_buckets[instance] = covered_buckets.get(instance, 0) + \
-            _interval_covered_buckets(interval["admission_ns"],
-                                      interval["drain_ns"], span_start,
-                                      bucket_ns, n_buckets)
+        covered_ns_by_instance[instance] = \
+            covered_ns_by_instance.get(instance, 0) + \
+            _interval_covered_ns(interval["admission_ns"],
+                                 interval["drain_ns"])
         counts[instance] = counts.get(instance, 0) + 1
     result: dict[int, tuple[float, int]] = {}
     total = span_end - span_start
     if total <= 0:
         fail("load_imbalance：时间跨度为 0，无法做时间平均")
-    for instance, covered in covered_buckets.items():
-        covered_ns = covered * bucket_ns
-        # 末桶可能被 span 截断：按实际桶数×桶长覆盖，误差 ≤1 桶（记录于
-        # 输出的 bucket_ns/span，供交叉核对）。
+    for instance, covered_ns in covered_ns_by_instance.items():
         result[instance] = (covered_ns / total, counts[instance])
     return result
 

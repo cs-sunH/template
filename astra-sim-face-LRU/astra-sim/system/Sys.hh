@@ -7,6 +7,8 @@ LICENSE file in the root directory of this source tree.
 #define __SYSTEM_HH__
 
 #include <chrono>
+#include <memory>
+#include <string>
 
 #include "astra-sim/common/AstraNetworkAPI.hh"
 #include "astra-sim/common/AstraRemoteMemoryAPI.hh"
@@ -19,6 +21,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/CollectiveImplLookup.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "DieTypes.hh"
 
 namespace AstraSim {
 
@@ -29,6 +32,14 @@ class QueueLevels;
 class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
+
+// Compute cost backend selector (die内仿真器 stage B; design doc §8.2,
+// contract §3.2; face-LRU rollout 2026-10-03). The system.json key
+// "compute-cost-model" carries the string spelling ("die" | "roofline" |
+// "replay"); absent key keeps LegacyDefault, which -- for backward
+// compatibility -- still means the pre-stage-B dispatch (roofline only when
+// roofline-enabled=1).
+enum class ComputeCostModel { LegacyDefault, Roofline, Replay, Die };
 
 namespace ExecutionDriven {
 class GraphSource;
@@ -64,10 +75,11 @@ class Sys : public Callable {
     // Constructor / Destructor
     // -------------------------------------------------
     // execution_mode/graph_source: step-1-2 execution-mode factory
-    // (ExecutionMode.hh / GraphSource.hh). The Static default keeps the
-    // legacy main.cc call site and the byte-for-byte static behavior
-    // unchanged; Online mode never constructs the ETFeeder and never
-    // requires .et files.
+    // (ExecutionMode.hh / GraphSource.hh). The defaults serve the test
+    // fixtures and the library-internal construction points (the legacy
+    // main.cc call site has been deleted) and keep the byte-for-byte
+    // static behavior unchanged; Online mode never constructs the ETFeeder
+    // and never requires .et files.
     Sys(int id,
         std::string workload_configuration,
         std::string comm_group_configuration,
@@ -77,7 +89,9 @@ class Sys : public Callable {
         std::vector<int> physical_dims,
         std::vector<int> queues_per_dim,
         double injection_scale,
-        double /*comm_scale*/,  // kept for call-site compat; member had no readers
+        // comm_scale member was removed (zero readers); the CLI argument is
+        // kept unnamed for call-site compat (9 out-of-tree constructor calls).
+        double /*comm_scale*/,
         bool rendezvous_enabled,
         ExecutionDriven::ExecutionMode execution_mode =
             ExecutionDriven::ExecutionMode::Static,
@@ -89,6 +103,25 @@ class Sys : public Callable {
     // ------------------------------------------------------------
     void initialize_sys(std::string name);
     //---------------------------------------------------------------------------
+
+  private:
+    // Stage B (die backend; contract §3.2/§3.3; face-LRU rollout 2026-10-03):
+    // loads + validates the resolved die model config through
+    // DieModel::make_hardware, enforces the derived-scalar consistency of
+    // peak-perf/local-mem-bw, fills the missing ones from the library, and
+    // installs die_runtime. Every failure path exits (fail-closed). Called
+    // from initialize_sys after the whole key-walk, only for an explicit
+    // compute-cost-model=die.
+    void initialize_die_backend(const std::string& system_config_path,
+                                bool explicit_config_present,
+                                const std::string& explicit_config_path,
+                                bool profile_present,
+                                const std::string& profile,
+                                bool peak_perf_key_present,
+                                bool local_mem_bw_key_present,
+                                bool hbm_contention_key_present);
+
+  public:
 
     // Helper Functions
     // ---------------------------------------------------------
@@ -267,7 +300,7 @@ class Sys : public Callable {
                  void* fun_arg);
     //---------------------------------------------------------------------------
 
-    static std::vector<Sys*> all_sys;  // vector of all Sys objects
+    static std::vector<Sys*> all_sys;
 
     int id;
 
@@ -282,6 +315,41 @@ class Sys : public Callable {
     bool roofline_enabled;
     double peak_perf;
     Roofline* roofline;
+
+    // Compute cost backend (stage B; see the ComputeCostModel enum above).
+    // Parsed from the system.json "compute-cost-model" key with the contract
+    // §3.2 conflict matrix enforced fail-closed in Sys::initialize_sys.
+    ComputeCostModel compute_cost_model = ComputeCostModel::LegacyDefault;
+
+    // Die backend runtime aggregate (stage B): the validated die hardware
+    // (loaded from die-model-config, a resolved_die_model.json produced by
+    // the resolver through the cost library) plus the plan cache (LRU 4096;
+    // design doc §8.5 -- "执行句柄不入缓存", only immutable plans are
+    // cached). Null unless compute_cost_model == Die. Declared AFTER the
+    // workload pointer it feeds: the Workload (and its DieModelAdapter /
+    // live DieExecutions holding shared_ptr<const DiePlan>) is destroyed in
+    // ~Sys's body, before this member unwinds.
+    //
+    // Stage E2: the PlanCache is PROCESS-LEVEL SHARED across every Sys of
+    // the same resolved hardware (one registry entry per
+    // plan_cache_hardware_key). compile() is a pure function and a DiePlan
+    // is immutable, so ranks compiling the same (spec, hardware) pair --
+    // which always produces the same plan_cache_key -- can safely reuse each
+    // other's plans; per-Sys caches forced every Sys to recompile identical
+    // keys (54 Sys in the 54-NPU topology). Sharing does not change hit
+    // semantics: the key already contains every distinguishing field.
+    // The simulation is single-threaded (one event loop drives all Sys), so
+    // the registry and the shared cache carry no lock; if a multi-threaded
+    // runtime is ever introduced, guard both with a mutex.
+    struct DieModelRuntime {
+        DieModel::Hardware hardware;
+        std::shared_ptr<DieModel::PlanCache> plan_cache;
+        explicit DieModelRuntime(DieModel::Hardware hw);
+    };
+    std::unique_ptr<DieModelRuntime> die_runtime;
+    // Resolved die-model-config path (diagnostics only; empty off the die
+    // backend).
+    std::string die_model_config_path;
 
     // memory
     bool track_local_mem;
@@ -322,7 +390,11 @@ class Sys : public Callable {
     QueueLevels* vLevels;
     int active_chunks_per_dimension;
     int priority_counter;
-    uint64_t pending_events;
+    // (2026-10-01 复核后保留) 在途 CallEvents 计数:生产路径只写不读,
+    // 但 alarm_cancellation_test 以它作可取消 alarm 链路的对账 oracle
+    // (注册/派发/取消三点收支)——删除会破坏该测试的构建,保留并注明
+    // 其消费者;纯诊断用途,不进入任何门控判定。
+    uint64_t pending_events = 0;
     int preferred_dataset_splits;
     int concurrent_streams;
     int active_first_phase;

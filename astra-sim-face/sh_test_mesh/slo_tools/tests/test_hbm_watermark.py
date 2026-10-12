@@ -9,8 +9,9 @@
   * trace_config：layers=1、hidden_size=50、bytes_per_elem=1 →
     COEF = 2·1·50·1 = 100 B/token（实例合计）；
   * hardware 容量档 test-64b = 1000 B/NPU × prefill_ranks 6 = 6000 B/实例；
-  * slo_params_manifest：watermark_sample_period_ns = 10 ns（B4 未推导的
-    生产 manifest 保持 null → 5,000,000 ns 临时锚点，另有专测）；
+  * slo_params_manifest：watermark_sample_period_ns = 10 ns（py-slo-tests-
+    11 修正：生产 manifest 已推导为 5,000,000 ns，不再是 null；合成夹具
+    取 10 ns 便于手算，null→临时锚点降级另有专测）；
     watermark_series_row_budget = 5,000,000（P1-④ 绘图行预算，另有小预算
     专测）。
 
@@ -72,7 +73,8 @@ def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
     (run_dir / "cpp.log").write_text(
         '[METRIC] {"type":"init","repo_variant":"%s",'
         '"manifest_path":"%s","detail_level":"summary","schema_version":1}\n'
-        % (repo_variant, run_dir / "metrics_manifest.json"),
+        % (repo_variant,
+           (run_dir / "metrics_manifest.json").as_posix()),
         encoding="utf-8")
     with (results / "online_decision_log.jsonl").open(
             "w", encoding="utf-8") as handle:
@@ -135,14 +137,19 @@ def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
 
 def write_journal(run_dir: Path, rows: list[dict],
                   checksum: dict | None = None) -> None:
-    """落合成 kv_delta_journal.jsonl（+可选 checksum json）。"""
+    """落合成 kv_delta_journal.jsonl（+可选 checksum json）。
+
+    journal 本体用二进制写（R2-F1）：文本写在换行翻译平台（Windows）会
+    把 \n 翻成 \r\n，与 "auto" 模式按 LF 计算的 sha256 必然不符——字节
+    级固定，跨平台断言一致。
+    """
     results = run_dir / "results"
     results.mkdir(parents=True, exist_ok=True)
     import hashlib
     payload = "".join(json.dumps(row, sort_keys=True) + "\n"
                       for row in rows)
-    (results / "kv_delta_journal.jsonl").write_text(payload,
-                                                    encoding="utf-8")
+    (results / "kv_delta_journal.jsonl").write_bytes(
+        payload.encode("utf-8"))
     if checksum is None:
         (results / "kv_delta_journal_checksum.json").unlink(missing_ok=True)
         return
@@ -356,6 +363,61 @@ class HandCalcReplayTests(unittest.TestCase):
         self.assertEqual(int(intervals[2]["occupancy_end_bytes"]), 260)
         self.assertEqual(int(intervals[2]["occupancy_peak_in_interval_bytes"]),
                          260)
+
+    def test_face_eviction_time_ns_regression_clamped(self):
+        """B2：逐出条目 time_ns（物理执行时刻）早于实例已有变点 tick →
+        变点钳制到实例末尾 tick，字节账仍计入该钳制时刻（跨阻塞 attempt
+        累积语义；fixture 的 time_ns 恒等记录 tick 不覆盖本路径）。
+
+        手算：A 100B@t0 → 200B@t10；B@t30 携带 time_ns=5 的部分逐出 40B
+        （早于 t10 变点）。钳制后变点 = {0,10,30}，t10 行 200−40=160 且
+        逐出 1 次/40B 并入该行；面积 = 100×10 + 160×20 = 4200 → 均值
+        4200/30 = 140（钳制前回退插入会产生负面积切片、均值 4000/30≈
+        133.33、区间 [10,5) 倒挂）。
+        """
+        reset_seq()
+        records = [
+            prefill_record("session_A_request_0", 0),
+            decode_record("session_A_request_0", 10),
+            completion_record("session_A_request_0", 20),
+            prefill_record("session_B_request_0", 30, decision={
+                "admission_evictions": [{
+                    "time_ns": 5, "phase": "prefill", "reason": "synthetic",
+                    "trigger_request_id": "session_B_request_0",
+                    "victim_session_id": "session_A",
+                    "victim_instance_index": 0,
+                    "victim_last_completion_ns": 20, "context_tokens": 2,
+                    "shard_bytes": [40]}]}),
+            decode_record("session_B_request_0", 40),
+            completion_record("session_B_request_0", 50),
+        ]
+        tokens = [
+            token_row("session_A_request_0", "session_A", 0, 1, 2),
+            token_row("session_B_request_0", "session_B", 0, 1, 1),
+        ]
+        run_dir = make_run_dir("face_b2")
+        write_fixture(run_dir, repo_variant="astra-sim-face",
+                      records=records, token_requests=tokens)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(summary["total_evict_events"], 1)
+        self.assertEqual(summary["total_evict_bytes"], 40)
+        instance = summary["instances"]["0"]
+        self.assertEqual(instance["peak_occupancy_bytes"], 260)
+        self.assertEqual(instance["residual_occupancy_bytes"], 260)
+        self.assertEqual(instance["duration_ns"], 30)
+        self.assertAlmostEqual(instance["mean_occupancy_bytes"],
+                               4200 / 30, places=6)
+        # RLE 变点流单调：无 t5 行，逐出字节并入钳制时刻 t10 的变点行。
+        with (run_dir / "intervals.csv").open(newline="") as handle:
+            intervals = list(csv.DictReader(handle))
+        starts = [int(r["interval_start_ns"]) for r in intervals]
+        self.assertEqual(starts, sorted(starts))
+        self.assertEqual(starts, [0, 10, 30])
+        self.assertEqual(int(intervals[1]["occupancy_end_bytes"]), 160)
+        self.assertEqual(intervals[1]["evict_events"], "1")
+        self.assertEqual(intervals[1]["evict_bytes"], "40")
 
     def test_violation_upper_bound_only_diagnostic_no_exit3(self):
         """P1-①：无 journal 的超限 run → 诊断报告 + 退出码 0（不再 exit 3）。
@@ -712,6 +774,23 @@ class FailClosedTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("token manifest", proc.stderr)
 
+    def test_orphan_checksum_without_journal_fails(self):
+        """B12（2026-09-28）：checksum 在场而 journal 缺失=证书孤儿，
+        fail-closed 退出码 2，不得静默伪装成旧 run 降级 upper_bound_only。"""
+        records, tokens = base_handcalc_records()
+        run_dir = make_run_dir("fc_orphan_cert")
+        write_fixture(run_dir, repo_variant="astra-sim-face",
+                      records=records, token_requests=tokens)
+        results = run_dir / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        (results / "kv_delta_journal_checksum.json").write_text(
+            json.dumps({"schema_version": 1, "sha256": "0" * 64,
+                        "line_count": 0, "checks": {}, "ranks": {}}),
+            encoding="utf-8")
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("证书孤儿", proc.stderr)
+
     def test_duplicate_prefill_decision_fails(self):
         records, tokens = base_handcalc_records()
         records.append(dict(records[0], seq=99))
@@ -744,13 +823,31 @@ class FailClosedTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("不在跟踪态", proc.stderr)
 
-    def test_negative_occupancy_fails(self):
-        """多扣（会话跟踪实例与实际占用错位）→ 负占用 fail-closed。
+    def test_negative_occupancy_guard_fails_unit(self):
+        """负占用守卫（多扣 → 结构错拒绝输出）由重放基元直接钉住。
 
-        构造：A 驻留实例 0；下一轮 prefill 决策谎报 LOCAL_HIT 到实例 1
-        （local_hit_location_mismatch），会话归属改到 1 而 bytes 仍挂在
-        实例 0 的占用上；随后 completion 从实例 1 逐出 A 全量 → 实例 1
-        占用转负 → 结构错拒绝输出。
+        R6-U4 修复后，LOCAL_HIT source≠target（账本谎报位置）路径已在
+        上游随迁占用、不再借末段负占用崩溃兜底（见
+        test_local_hit_relocation_keeps_occupancy_consistent）；守卫本身
+        仍须对任何多扣保持 fail-closed。
+        """
+        replay = hw.WatermarkReplay(COEF, None)
+        replay._apply(0, 0, 50)
+        with self.assertRaises(SloToolError) as ctx:
+            replay._apply(1, 0, -100)
+        self.assertIn("负占用", str(ctx.exception))
+
+    def test_local_hit_relocation_keeps_occupancy_consistent(self):
+        """R6-U4：LOCAL_HIT source≠target（账本谎报位置）→ 会话归属切换
+        时占用随迁——instances 占用与 instance 指向保持一致，不再出现
+        "占用滞留 source + 指向 target"的跟踪态分裂（旧分裂在此场景的
+        唯一可见症状是末段 completion 逐出把实例 1 占用打成负数崩溃）；
+        位置矛盾由 local_hit_location_mismatch + restore_occupancy_
+        relocated 计数留痕。
+
+        手算（COEF=100）：A +100@t0（实例0）→ decode grow 零增量；
+        LOCAL_HIT@t30 谎报目标实例 1 → 100B 随迁（实例0 归零、实例1
+        100B）；completion@t50 逐出 A 100B → 实例1 归零。
         """
         reset_seq()
         records = [
@@ -778,8 +875,62 @@ class FailClosedTests(unittest.TestCase):
         write_fixture(run_dir, repo_variant="astra-sim-face",
                       records=records, token_requests=tokens)
         proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(
+            summary["anomalies"]["local_hit_location_mismatch"], 1)
+        self.assertEqual(
+            summary["actions"]["restore_occupancy_relocated"], 1)
+        self.assertEqual(
+            summary["actions"]["restore_occupancy_relocated_bytes"], 100)
+        # 占用账目一致：迁移后实例0 归零、逐出后实例1 归零（无幽灵滞留）。
+        self.assertEqual(
+            summary["instances"]["0"]["residual_occupancy_bytes"], 0)
+        self.assertEqual(
+            summary["instances"]["1"]["residual_occupancy_bytes"], 0)
+        self.assertEqual(summary["total_evict_events"], 1)
+        self.assertEqual(summary["total_evict_bytes"], 100)
+
+    def test_restore_cross_instance_over_deduction_fails(self):
+        """B3：restore 跨实例搬移 bytes 超过会话跟踪 bytes → fail-closed。
+
+        构造（账本与跟踪态不一致、且源实例另有他人份额兜底 → 不触发负
+        占用）：A 驻留实例 0，被落盘部分逐出 50B（跟踪余 50B）；B 驻留
+        实例 0（100B）。A 下轮 prefill 谎报 NOC_MIGRATE 全量 100B（=f(1)，
+        ratio 1.0，比例对账零 anomaly）从实例 0 搬往实例 1——无守卫时差额
+        50B 从 B 的份额静默扣掉、零 fail 零 anomaly。
+        """
+        reset_seq()
+        records = [
+            prefill_record("sA_r0", 0, instance=0),
+            decode_record("sA_r0", 10, instance=0),
+            completion_record("sA_r0", 20),
+            prefill_record("sB_r0", 30, instance=0, decision={
+                "admission_evictions": [{
+                    "time_ns": 30, "phase": "prefill", "reason": "synthetic",
+                    "trigger_request_id": "sB_r0",
+                    "victim_session_id": "sA", "victim_instance_index": 0,
+                    "victim_last_completion_ns": 20, "context_tokens": 1,
+                    "shard_bytes": [50]}]}),
+            decode_record("sB_r0", 40, instance=0),
+            completion_record("sB_r0", 50),
+            prefill_record("sA_r1", 60, instance=1, decision={
+                "history_action": "NOC_MIGRATE",
+                "history_transfer_bytes": 100,
+                "history_source_instance_index": 0,
+                "effective_prefill_tokens": 1}),
+            decode_record("sA_r1", 70, instance=1),
+            completion_record("sA_r1", 80),
+        ]
+        tokens = [token_row("sA_r0", "sA", 0, 1, 1),
+                  token_row("sB_r0", "sB", 0, 1, 1),
+                  token_row("sA_r1", "sA", 1, 1, 1)]
+        run_dir = make_run_dir("fc4b")
+        write_fixture(run_dir, repo_variant="astra-sim-face",
+                      records=records, token_requests=tokens)
+        proc = run_tool(run_dir)
         self.assertEqual(proc.returncode, 2)
-        self.assertIn("负占用", proc.stderr)
+        self.assertIn("restore 跨实例搬移", proc.stderr)
 
     def test_unknown_repo_variant_fails(self):
         records, tokens = base_handcalc_records()
@@ -1045,7 +1196,8 @@ class TrustTierJournalTests(unittest.TestCase):
         run_dir = self._fixture_with_journal(
             "hard", rows, default_checksum(rows, ranks_final),
             npu_bytes=10000)
-        # num_heads=3（基础 fixture 为 2）：三 KV rank 权重不均。
+        # num_heads=5（基础 fixture 为 2；2026-10-01 注释修正：此前误写
+        # 3）：前五 rank 各持 1 头，三 KV rank 权重不均。
         (run_dir / "trace_config.csv").write_text(
             "kind,key,value,group_name,pg_name,ranks,description\n"
             "config,layers,1,,,,synthetic\n"
@@ -1077,11 +1229,74 @@ class TrustTierJournalTests(unittest.TestCase):
 
 
 class JournalParityRealTests(unittest.TestCase):
-    """对拍 /var/tmp/phase2_journal/runs/on_2s 的真 journal+checksum（V1）。"""
+    """journal+checksum 逐字段对拍。
+
+    py-slo-tests-2（2026-09-26）：新增仓内合成夹具对拍（test_synthetic_，
+    常规套件必跑）——本类原先唯一对拍测试依赖仓外绝对路径
+    /var/tmp/phase2_journal/runs/on_2s，夹具缺失即永久 skip、对拍从未在
+    常规套件中执行过。仓外真 run 对拍保留为可选增强（夹具在场才执行，
+    skip 理由显式注明）。
+    """
 
     FIXTURE = Path("/var/tmp/phase2_journal/runs/on_2s")
 
-    @unittest.skipUnless(FIXTURE.is_dir(), "phase2 journal fixture 缺失")
+    def test_synthetic_journal_parity_matches_checksum(self):
+        # 仓内合成 journal+checksum 对拍：certified 判决 + 行数/sha256/
+        # 逐 rank 终态（weight/resident/reserved/capacity）四字段全等 +
+        # run 末守恒 + 对照列在场。断言结构与真 run 版一致。
+        rows = [
+            journal_row(0, 0, 0, 0, 1000, d_weight=300),
+            journal_row(1, 0, 1, 0, 1000, d_weight=200),
+            journal_row(2, 10, 0, 0, 1000, weight=300, d_resident=400),
+            journal_row(3, 20, 1, 0, 1000, weight=200, d_resident=300),
+            journal_row(4, 30, 0, 0, 1000, weight=300, resident=400,
+                        d_resident=-400, cause="terminal_session_retire"),
+            journal_row(5, 30, 1, 0, 1000, weight=200, resident=300,
+                        d_resident=-300, cause="terminal_session_retire"),
+        ]
+        ranks_final = {
+            "0": {"capacity_bytes": 1000, "weight": 300, "resident": 0,
+                  "reserved": 0, "physical": 300},
+            "1": {"capacity_bytes": 1000, "weight": 200, "resident": 0,
+                  "reserved": 0, "physical": 200},
+        }
+        checksum = default_checksum(rows, ranks_final)
+        records, tokens = base_handcalc_records()
+        run_dir = make_run_dir("synparity")
+        write_fixture(run_dir, repo_variant="astra-sim-wscllm",
+                      records=records, token_requests=tokens,
+                      model_rows=True)
+        write_journal(run_dir, rows, checksum)
+        # write_journal 将 sha256="auto" 解析为真值后落盘——对拍以落盘
+        # 后的 checksum json 为准（与真 run 版逐字段同构）。
+        checksum_on_disk = json.loads(
+            (run_dir / "results" / "kv_delta_journal_checksum.json")
+            .read_text())
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(summary["trust_tier"],
+                         "per_rank_total_hbm_certified")
+        self.assertEqual(summary["violation_events"], 0)
+        journal = summary["journal_replay"]
+        self.assertEqual(journal["rows"], checksum_on_disk["line_count"])
+        self.assertEqual(journal["sha256"], checksum_on_disk["sha256"])
+        for rank_key, expected in checksum_on_disk["ranks"].items():
+            final = journal["per_rank_final"][rank_key]
+            self.assertEqual(final["weight"], expected["weight"])
+            self.assertEqual(final["resident"], expected["resident"])
+            self.assertEqual(final["reserved"], expected["reserved"])
+            self.assertEqual(final["capacity_bytes"],
+                             expected["capacity_bytes"])
+        self.assertTrue(all(v["resident"] == 0 and v["reserved"] == 0
+                            and v["physical"] == v["weight"]
+                            for v in journal["per_rank_final"].values()))
+        self.assertIn("decision_log_upper_bound_comparison", summary)
+
+    @unittest.skipUnless(FIXTURE.is_dir(),
+                         "仓外 phase2 真跑夹具缺失（可选增强；合成对拍"
+                         "见 test_synthetic_journal_parity_matches_"
+                         "checksum，常规套件必跑）")
     def test_real_journal_certified_and_matches_checksum(self):
         out = Path(tempfile.mkdtemp(prefix="slo_hbm_parity_"))
         proc = subprocess.run(
@@ -1221,7 +1436,15 @@ class EventStreamStatsTests(unittest.TestCase):
                             f"bucket={bucket_ns} {field}")
 
     def test_intervals_lossless_reconstruction(self):
-        """intervals.csv → 任意桶长序列恢复 == 直接产出的 plot_series。"""
+        """intervals.csv（RLE 权威）无损承载手算变点，B=10 桶行与独立
+        手算对照序列全等。
+
+        py-slo-tests-13（2026-09-26 去循环）：旧实现把 intervals 读回后
+        再喂给生产同一个 bucket_row_sweep 与 series.csv 对拍——两侧同走
+        一个函数，该函数本身算错时两侧一致、检不出。现改为两侧都与
+        独立手算对照（变点序列 + B=10 桶行字面量）比对，不经过任何被
+        测生产函数。
+        """
         records, tokens = base_handcalc_records()
         run_dir = make_run_dir("rle")
         write_fixture(run_dir, repo_variant="astra-sim-face",
@@ -1229,35 +1452,45 @@ class EventStreamStatsTests(unittest.TestCase):
         proc = run_tool(run_dir)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         summary = json.loads((run_dir / "summary.json").read_text())
-        origin = summary["plot_series"]["bucket_origin_ns"]
-        span_end = summary["span_end_ns"]
-        # 读回 intervals.csv，重建 B=10 桶行，与 plot_series 全等。
-        by_unit = {}
+        self.assertEqual(summary["plot_series"]["bucket_origin_ns"], 0)
+        self.assertEqual(summary["span_end_ns"], 30)
+        # 手算变点（手算场景：t0 0→100、t10 100→200、t30 200→260 且
+        # 逐出 1 事件/40B；t20/t40/t50 无 KV 动作不成变点）：
+        hand_intervals = [
+            (0, 0, 100, 100, 0, 0),
+            (10, 100, 200, 200, 0, 0),
+            (30, 200, 260, 260, 1, 40),
+        ]
+        # 手算 B=10、origin=0 桶行（bucket_end 未钳制，末桶 30+10=40；
+        # 桶 2 无事件 → 占用保持段 200）：
+        hand_series = [
+            (0, 0, 0, 10, 100, 100, 0, 0),
+            (0, 1, 10, 20, 200, 200, 0, 0),
+            (0, 2, 20, 30, 200, 200, 0, 0),
+            (0, 3, 30, 40, 260, 260, 1, 40),
+        ]
+        intervals = []
         with (run_dir / "intervals.csv").open(newline="") as handle:
             for row in csv.DictReader(handle):
-                by_unit.setdefault(int(row["instance_index"]), []).append(
-                    (int(row["interval_start_ns"]),
+                intervals.append(
+                    (int(row["instance_index"]),
+                     int(row["interval_start_ns"]),
                      int(row["occupancy_start_bytes"]),
                      int(row["occupancy_end_bytes"]),
                      int(row["occupancy_peak_in_interval_bytes"]),
                      int(row["evict_events"]),
                      int(row["evict_bytes"])))
-        expected_rows = []
+        self.assertEqual([row[1:] for row in intervals], hand_intervals)
+        series = []
         with (run_dir / "series.csv").open(newline="") as handle:
             for row in csv.DictReader(handle):
-                expected_rows.append(
+                series.append(
                     (int(row["instance_index"]), int(row["bucket_index"]),
                      int(row["bucket_start_ns"]), int(row["bucket_end_ns"]),
                      int(row["occupancy_end_bytes"]),
                      int(row["occupancy_peak_in_bucket_bytes"]),
                      int(row["evict_events"]), int(row["evict_bytes"])))
-        rebuilt = []
-        for instance, change_points in sorted(by_unit.items()):
-            for row in hw.bucket_row_sweep(
-                    lambda items=change_points: iter(items), origin,
-                    span_end, 10):
-                rebuilt.append((instance,) + row)
-        self.assertEqual(rebuilt, sorted(expected_rows))
+        self.assertEqual(series, hand_series)
 
     def test_row_budget_bounds_dense_rows(self):
         """小行预算：B_eff 放粗（或拒绝稠密），行数 ≤ 预算。"""
@@ -1371,13 +1604,16 @@ class EvictBytesCoverageTests(unittest.TestCase):
 class AdmissionProbeSkipTests(unittest.TestCase):
     """P0-1/P1 probe 观测行适配（收尾批 2026-09-01）：
     decode_admission_probe / prefill_admission_probe 行跳过且计数审计
-    （stdout 打印"跳过 N 条"，不静默）；其余未知 kind 依旧 fail-closed。
+    （stderr 打印"跳过 N 条"，不静默；2026-09-28 起 stderr 流道与
+    kv_cache_adapter 同型审计行统一——driver Sink 只接管 stderr，走
+    stdout 会令 slo_postprocess.log 行序偏离旧链）；其余未知 kind 依旧
+    fail-closed。
     """
 
     @staticmethod
     def _probe_record(request_id: str, tick: int, kind: str) -> dict:
         return {
-            "seq": -1,  # write_fixture 按行序重排 seq
+            "seq": -1,  # 占位值；重放按文件序，seq 仅出现在错误文本
             "tick": tick,
             "priority": 0,
             "kind": kind,
@@ -1394,7 +1630,11 @@ class AdmissionProbeSkipTests(unittest.TestCase):
 
     def test_probe_rows_skipped_with_audit_line(self):
         records, tokens = base_handcalc_records()
-        # 在合法三件套之间插入 2 条 probe 观测行(tick 单调)。
+        # 在合法记录流中插入 2 条 probe 观测行。注意（py-slo-tests-12
+        # 修正）：插入位置按序号取，tick=35 的 probe 按插入位置落在
+        # tick20（completion_A）与 tick30（prefill_B）之间——文件序并非
+        # tick 单调；probe 行在重放记账前被整体跳过、不参与 tick 账目，
+        # 这正是本用例覆盖的容错路径（重放照常 rc=0）。
         records.insert(1, self._probe_record(
             "session_A_request_0", 5, "decode_admission_probe"))
         records.insert(4, self._probe_record(
@@ -1404,7 +1644,10 @@ class AdmissionProbeSkipTests(unittest.TestCase):
                       records=records, token_requests=tokens)
         proc = run_tool(run_dir)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("跳过 2 条 admission_probe 观测行", proc.stdout)
+        # 2026-09-28 流道统一：审计行走 stderr（原 stdout），与
+        # kv_cache_adapter 同型、保 driver/旧链日志行序一致。
+        self.assertIn("跳过 2 条 admission_probe 观测行", proc.stderr)
+        self.assertNotIn("admission_probe 观测行", proc.stdout)
         # 无 probe 行时不打印审计行(噪声零增量)——基线场景自证。
         records2, tokens2 = base_handcalc_records()
         run_dir2 = make_run_dir("probe2")
@@ -1412,6 +1655,7 @@ class AdmissionProbeSkipTests(unittest.TestCase):
                       records=records2, token_requests=tokens2)
         proc2 = run_tool(run_dir2)
         self.assertEqual(proc2.returncode, 0, proc2.stderr)
+        self.assertNotIn("admission_probe 观测行", proc2.stderr)
         self.assertNotIn("admission_probe 观测行", proc2.stdout)
 
     def test_unknown_kind_still_fail_closed(self):

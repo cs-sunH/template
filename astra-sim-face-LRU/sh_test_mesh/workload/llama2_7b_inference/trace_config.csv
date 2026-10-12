@@ -5,20 +5,17 @@ config,ffn_size,11008,,,,LLaMA 2 7B SwiGLU intermediate size
 config,num_heads,32,,,,LLaMA 2 7B attention head count
 config,vocab_size,32000,,,,LLaMA 2 tokenizer vocabulary size
 config,bytes_per_elem,2,,,,Element size in bytes
-config,model_name,llama2_7b,,,,Meta LLaMA 2 7B inference model
 config,mlp_variant,swiglu,,,,LLaMA gated SwiGLU MLP with RMSNorm
-config,output_prefix,llama2_7b_inference,,,,Trace file prefix
-config,output_dir,,,,,Leave empty for derived sh_test generated path
-config,request_queue_csv,llama2_7b_inference/request_queue_placeholder.csv,,,,request-neutral: 由调用方物化输入后指定;正式入口缺失输入 fail-closed(物化规则见 traces/derive_20_first_30_seconds.py 模块 docstring)
+config,request_queue_csv,llama2_7b_inference/request_queue_placeholder.csv,,,,smoke: 1s window materialized by derive_20_first_30_seconds.py
 config,request_queue_session_limit,0,,,,Use every session in the normalized three-minute queue
 config,trace_granularity,request_aggregated,,,,Preserve request-level work totals while compressing repeated layer/chunk/token invocations
 config,prefill_chunk_size,512,,,,Fixed Prefill and history-recompute chunk size in tokens
 config,kv_cache_policy,session_lru_tiered,,,,Three-state session KV (LOCAL/PARTIAL/REMOTE) with two-stage LRU tiered eviction and remote-pool restore (B3 deliverable)
 config,kv_reserve_context_tokens,1000000,,,,Per physical TP rank reserve for one decimal-million-token KV cache
-config,record_planning_iterations,false,,,,Keep only bounded planning summaries for the full workload
 config,hardware_config,hardware/face_case5_config_c.json,,,,Single authoritative FACE Case 5 hardware source for this repository
-config,local_hbm_capacity_profile,validation-160gib,,,,Required profile: 160 GiB/NPU can hold the exact 1M KV reserve
-config,system_template,system/llama2_7b_roofline_template.json,,,,Hardware-free ASTRA-sim system template; runtime hardware fields are derived automatically
+config,local_hbm_capacity_profile,validation-die-64g,,,,Die-backend aligned profile: bytes exactly equal to the die-derived HBM capacity (config_resolver hard-checks the alignment when the hardware die node is present)
+config,system_template,system/llama2_7b_die_template.json,,,,Hardware-free ASTRA-sim system template for the die compute backend; runtime hardware fields are derived automatically
+config,position_encoding,rope,,,,Model uses rotary position embeddings; new Q/K rotation is folded into the qkv_rope shell (absent key defaults to none for backward compatibility)
 config,remote_operand_loads,false,,,,Weights are already resident in NPU local memory; do not model startup or remote loads
 inference_group,,,face_instance_0_rows_3_5_cols_2_3_tp6,1,"20-21,26-27,32-33",Unified Prefill+Decode center instance covering rows 3 through 5 and columns 2 through 3
 inference_group,,,face_instance_1_rows_0_2_cols_2_3_tp6,2,"2-3,8-9,14-15",Unified Prefill+Decode north instance covering rows 0 through 2 and columns 2 through 3

@@ -18,10 +18,6 @@ class ETFeederNode {
   bool has_attr(const std::string& attr_name) const;
 
   const ChakraAttr get_attr_msg(const std::string& attr_name) const;
-  bool get_attr_msg(const std::string& attr_name, const ChakraAttr** attr)
-      const;
-
-  ChakraAttr::ValueCase get_attr_type(const ChakraAttr& attr) const;
 
   template <typename T>
   T get_attr(

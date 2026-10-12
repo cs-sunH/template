@@ -19,26 +19,27 @@ RUN apt -y install \
     coreutils wget vim git \
     gcc g++ clang-format \
     make cmake \
-    libboost-dev libboost-program-options-dev \
-    openmpi-bin openmpi-doc libopenmpi-dev \
-    python3.11 python3-pip python3-venv \
-    graphviz
+    python3.11 python3-pip python3-venv
 
-## Create Python venv: Required for Python 3.11
+## Create Python venv (P3-3.9 E2 comment fix: the venv is created from the
+## plain `python3` below -- Ubuntu 22.04 default interpreter, i.e. 3.10 --,
+## NOT from the python3.11 package installed above; python3.11 is only an
+## alternative interpreter, the venv does not use it)
 RUN python3 -m venv /opt/venv/astra-sim
 ENV PATH="/opt/venv/astra-sim/bin:$PATH"
 RUN pip3 install --upgrade pip
 
-## Add astra-sim to PYTHONPATH
-ENV PYTHONPATH="/app/astra-sim"
-
-# STG dependencies
-RUN pip3 install numpy sympy graphviz pandas
+# Python tooling in this repo (sh_test_mesh/**, tests/, utils/) is
+# standard-library only: no MPI/Boost in the C++ tree and no scientific
+# wheels anywhere, so the upstream openmpi/libboost/graphviz apt picks,
+# the numpy/sympy/graphviz/pandas installs and the no-op
+# PYTHONPATH=/app/astra-sim are not needed (2026-09-27 residue cleanup).
 ### ======================================================
 
 
 ### ====== Abseil Installation: Protobuf Dependency ======
 ## Download Abseil 20240722.0 (Latest LTS as of 10/31/2024)
+## Version-standard coupling: with Protobuf 29.0 below this is the last version pair that still builds as C++14; bumping either ARG requires raising -DCMAKE_CXX_STANDARD below in the same change.
 ARG ABSL_VER=20240722.0
 
 # Download source
@@ -60,6 +61,7 @@ ENV absl_DIR="/opt/abseil-cpp-${ABSL_VER}/install"
 
 ### ============= Protobuf Installation ==================
 ## Download Protobuf 29.0 (=v5.29.0, latest stable version as of Feb/01/2025)
+## Version-standard coupling: with Abseil 20240722.0 above this is the last version pair that still builds as C++14 (protobuf 30+ hard-requires C++17); bumping either ARG requires raising -DCMAKE_CXX_STANDARD below in the same change.
 ARG PROTOBUF_VER=29.0
 
 # Download source

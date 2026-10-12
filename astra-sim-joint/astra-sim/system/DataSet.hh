@@ -30,7 +30,14 @@ class DataSet : public Callable, public StreamStat {
         std::shared_ptr<CommunicatorGroup> communicator_group);
     void notify_stream_finished(StreamStat* data);
     void call(EventType event, CallData* data);
-    bool is_finished();
+
+  private:
+    // One-shot completion delivery; also invoked by set_notifier when the
+    // dataset is already finished (zero-phase collective completed before
+    // the caller installed the notifier).
+    void fire_notifier_once();
+
+  public:
 
     static int id_auto_increment;
     int my_id;

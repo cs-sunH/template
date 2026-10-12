@@ -6,6 +6,10 @@ LICENSE file in the root directory of this source tree.
 #ifndef __SYSTEM_HH__
 #define __SYSTEM_HH__
 
+#include <fstream>
+#include <memory>
+#include <string>
+
 #include "astra-sim/common/AstraNetworkAPI.hh"
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/CollectivePhase.hh"
@@ -16,6 +20,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/CollectiveImplLookup.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "DieTypes.hh"
 
 namespace AstraSim {
 
@@ -27,6 +32,13 @@ class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
 class OfflineGreedy;
+
+// Compute cost backend selector (die内仿真器 rollout; design doc §8.2,
+// contract §3.2). The system.json key "compute-cost-model" carries the
+// string spelling ("die" | "roofline" | "replay"); absent key keeps
+// LegacyDefault, which -- for backward compatibility -- still means the
+// pre-die dispatch (roofline only when roofline-enabled=1).
+enum class ComputeCostModel { LegacyDefault, Roofline, Replay, Die };
 
 namespace ExecutionDriven {
 class GraphSource;
@@ -45,7 +57,7 @@ class Sys : public Callable {
                       int queue_threshold);
         void notify_stream_added(int vnet);
         void notify_stream_added_into_ready_list();
-        void notify_stream_removed(int vnet, Tick running_time);
+        void notify_stream_removed(int vnet);
 
         Sys* sys;
         int max_running_streams;
@@ -62,9 +74,10 @@ class Sys : public Callable {
     // Constructor / Destructor
     // -------------------------------------------------
     // execution_mode/graph_source: step-1-2 execution-mode factory
-    // (ExecutionMode.hh / GraphSource.hh). The Static default keeps the
-    // legacy main.cc call site and the byte-for-byte static behavior
-    // unchanged; Online mode never constructs the ETFeeder and never
+    // (ExecutionMode.hh / GraphSource.hh). The Static default only keeps
+    // legacy call sites compiling: the offline static path is retired in
+    // this repository and the Workload constructor fails closed on
+    // Static; Online mode never constructs the ETFeeder and never
     // requires .et files.
     Sys(int id,
         std::string workload_configuration,
@@ -77,7 +90,7 @@ class Sys : public Callable {
         double comm_scale,
         bool rendezvous_enabled,
         ExecutionDriven::ExecutionMode execution_mode =
-            ExecutionDriven::ExecutionMode::Static,
+            ExecutionDriven::ExecutionMode::Online,
         std::shared_ptr<ExecutionDriven::GraphSource> graph_source = nullptr);
     ~Sys();
     //---------------------------------------------------------------------------
@@ -85,7 +98,30 @@ class Sys : public Callable {
     // Intialization
     // ------------------------------------------------------------
     bool initialize_sys(std::string name);
+    // Body of initialize_sys, wrapped in its JSON fail-closed guard. Throws
+    // only json::exception (translated to sys_panic by the caller).
+    void initialize_sys_fields(const std::string& name,
+                               std::ifstream& inFile);
     //---------------------------------------------------------------------------
+
+  private:
+    // Die backend (wscllm rollout of the die内仿真器; design doc §8.2,
+    // contract §3.2): loads + validates the resolved die model config
+    // through DieModel::make_hardware, enforces the derived-scalar
+    // consistency of peak-perf/local-mem-bw, fills the missing ones from
+    // the library, and installs die_runtime. Every failure path exits
+    // (fail-closed). Called from initialize_sys_fields after the whole
+    // key-walk, only for an explicit compute-cost-model=die.
+    void initialize_die_backend(const std::string& system_config_path,
+                                bool explicit_config_present,
+                                const std::string& explicit_config_path,
+                                bool profile_present,
+                                const std::string& profile,
+                                bool peak_perf_key_present,
+                                bool local_mem_bw_key_present,
+                                bool hbm_contention_key_present);
+
+  public:
 
     // Helper Functions
     // ---------------------------------------------------------
@@ -95,6 +131,8 @@ class Sys : public Callable {
 
     // Simulation Loop
     // ----------------------------------------------------------
+    // Logging-only vestige of the upstream loop-control method: it does not
+    // terminate anything (the only caller is ~Sys announcing teardown).
     void exit_sim_loop(std::string msg);
     //---------------------------------------------------------------------------
 
@@ -110,6 +148,11 @@ class Sys : public Callable {
     // caller that supplies a cancellation callback transfers only the
     // pending-payload cleanup to Sys; after the event is popped, its normal
     // Callable::call path keeps the pre-existing ownership contract.
+    // A cancellable event carrying a non-null CallData MUST supply a
+    // cancellation callback: cancellation bypasses the normal dispatch
+    // chain that would otherwise free the payload, so register_event_cancellable
+    // fails closed on the (null callback, non-null payload) combination
+    // instead of leaking the payload on every cancel_event.
     using EventDataCancellationCallback = void (*)(CallData*);
     [[nodiscard]] SystemEventHandle register_event_cancellable(
         Callable* callable,
@@ -133,11 +176,16 @@ class Sys : public Callable {
     // Collective Communication Primitives
     // --------------------------------------
 
-    // [operation specific custom collective]
-    // We want to designate different collective algorithms for different collective operations.
-    // To do that, when determining which collective algorithm to use, the system layer needs to know
-    // which operator (i.e. Chakra node) it is trying to simulate (so that it can look up the algorithm)
-    // Therefore, we provide the id of the Chakra node to use as a lookup key.
+    // [operation specific collective selection -- RETIRED mechanism,
+    // 2026-10-01 note]
+    // The comment below used to describe the operation-specific CUSTOM
+    // collective lookup (different Chakra operators selecting different
+    // custom algorithms by node id). That path is retired: the custom
+    // collectives / ET feeder route was removed repo-wide, and
+    // CollectiveImplLookup no longer selects anything by workload node id
+    // (see CollectiveImplLookup.hh). The workload_node_id parameter
+    // survives on these signatures purely for call-site compatibility; it
+    // is ignored by the native implementations.
     DataSet* generate_all_reduce(uint64_t size,
                                  std::vector<bool> involved_dimensions,
                                  CommunicatorGroup* communicator_group,
@@ -166,12 +214,14 @@ class Sys : public Callable {
         ComType collective_type,
         int explicit_priority,
         CommunicatorGroup* communicator_group);
+    // `comm_group` is retained in the signature for call-site compatibility
+    // (it used to carry the rank position for the retired custom collective
+    // algorithms; native algorithms never consumed it).
     CollectivePhase generate_collective_phase(ComType collective_type,
                                               BasicLogicalTopology* topology,
                                               uint64_t data_size,
                                               int queue_id,
                                               RingTopology::Direction direction,
-                                              InjectionPolicy injection_policy,
                                               CollectiveImpl* collective_impl,
                                               CommunicatorGroup* comm_group = nullptr);
     //---------------------------------------------------------------------------
@@ -182,6 +232,10 @@ class Sys : public Callable {
     int get_priority(int explicit_priority);
     void insert_into_ready_list(BaseStream* stream);
     void insert_stream(std::list<BaseStream*>* queue, BaseStream* baseStream);
+    // Test-only entry point: production code schedules through
+    // SchedulerUnit::notify_stream_added* instead. Kept for the
+    // system_history_lifecycle regression test, which drives the scheduler
+    // directly through this method.
     void ask_for_schedule(int max);
     void schedule(int num);
     void proceed_to_next_vnet_baseline(StreamBaseline* stream);
@@ -268,25 +322,54 @@ class Sys : public Callable {
     static std::vector<Sys*> all_sys;  // vector of all Sys objects
 
     int id;
-    bool initialized;
 
     // workload
     Workload* workload;
 
     // step-1-2 execution-mode factory state (see constructor comment).
     ExecutionDriven::ExecutionMode execution_mode_ =
-        ExecutionDriven::ExecutionMode::Static;
+        ExecutionDriven::ExecutionMode::Online;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
-    // step-1-8 replay-clock scope (main ruling 2026-08-15): true only for
-    // --online-mode replay; strategy mode keeps real physics (false).
     // roofline model
     bool roofline_enabled;
     double peak_perf;
     Roofline* roofline;
 
+    // Compute cost backend (see the ComputeCostModel enum above). Parsed
+    // from the system.json "compute-cost-model" key with the contract §3.2
+    // conflict matrix enforced fail-closed in Sys::initialize_sys_fields.
+    ComputeCostModel compute_cost_model = ComputeCostModel::LegacyDefault;
+
+    // Die backend runtime aggregate: the validated die hardware (loaded
+    // from die-model-config, a resolved_die_model.json produced by the
+    // resolver through the cost library) plus the plan cache (LRU 4096;
+    // design doc §8.5 -- "执行句柄不入缓存", only immutable plans are
+    // cached). Null unless compute_cost_model == Die. Declared AFTER the
+    // workload pointer it feeds: the Workload (and its DieModelAdapter /
+    // live DieExecutions holding shared_ptr<const DiePlan>) is destroyed in
+    // ~Sys's body, before this member unwinds.
+    //
+    // The PlanCache is PROCESS-LEVEL SHARED across every Sys of the same
+    // resolved hardware (one registry entry per plan_cache_hardware_key).
+    // compile() is a pure function and a DiePlan is immutable, so ranks
+    // compiling the same (spec, hardware) pair -- which always produces the
+    // same plan_cache_key -- can safely reuse each other's plans; per-Sys
+    // caches forced every Sys to recompile identical keys. Sharing does not
+    // change hit semantics: the key already contains every distinguishing
+    // field. The simulation is single-threaded (one event loop drives all
+    // Sys), so the registry and the shared cache carry no lock; if a
+    // multi-threaded runtime is ever introduced, guard both with a mutex.
+    struct DieModelRuntime {
+        DieModel::Hardware hardware;
+        std::shared_ptr<DieModel::PlanCache> plan_cache;
+        explicit DieModelRuntime(DieModel::Hardware hw);
+    };
+    std::unique_ptr<DieModelRuntime> die_runtime;
+    // Resolved die-model-config path (diagnostics only; empty off the die
+    // backend).
+    std::string die_model_config_path;
+
     // memory
-    bool track_local_mem;
-    std::string local_mem_trace_filename;
     double local_mem_bw;
     uint64_t local_mem_latency;
     // Multi-user local-HBM bandwidth contention (system config key
@@ -311,7 +394,6 @@ class Sys : public Callable {
 
     // network
     AstraNetworkAPI* comm_NI;
-    double comm_scale;
     bool rendezvous_enabled;
 
     // scheduler
@@ -323,11 +405,11 @@ class Sys : public Callable {
     int round_robin_inter_dimension_scheduler;
     int active_chunks_per_dimension;
     int priority_counter;
+    // Test-only observability: production code only increments/decrements
+    // this counter; the assertions that read it live in the regression tests
+    // (e.g. alarm_cancellation_test.cc).
     uint64_t pending_events;
     int preferred_dataset_splits;
-    int concurrent_streams;
-    int active_first_phase;
-    int max_running;
 
     // for supporting LIFO
     std::list<BaseStream*> ready_list;
@@ -335,7 +417,6 @@ class Sys : public Callable {
     int first_phase_streams;
     int total_running_streams;
     std::map<int, std::list<BaseStream*>> active_Streams;
-    std::map<int, std::list<int>> stream_priorities;
 
     struct ScheduledEvent {
         Callable* callable;
@@ -355,7 +436,6 @@ class Sys : public Callable {
     int total_nodes;
 
     std::vector<int> physical_dims;
-    std::vector<int> queues_per_dim;
 
     // collective communication
     CollectiveImplLookup* collective_impl_lookup;

@@ -53,7 +53,7 @@ from wsc_llm_scheduler import (  # noqa: E402  (只读 import)
 )
 
 
-def _eviction(victim_instance_index, trigger_request_id, time_ns=1_000):
+def _eviction(victim_instance_index, trigger_request_id):
     """remote_store 逐出桩(source_instance_index = 受害实例;整体逐出
     形态:层域 [0, L)、本地驻留清零)。"""
     return KVTransfer(
@@ -165,8 +165,11 @@ def _scheduler(hardware):
     scheduler.decision_log_sink = None
     # B3(2026-09-06):发射账本镜像 no-op(sync_pending_history_after_
     # evictions;逐出序列化断言不受影响)。
+    # C-2/M-25(2026-09-30):预占逐出决策时点就近发射入口——桩挂 no-op
+    # (本文件不驱动 _try_admit_prefill 发射路径,防御性补桩)。
     scheduler.graph = SimpleNamespace(
         sync_pending_history_after_evictions=lambda transfers: None,
+        emit_decode_eviction_actions=lambda *args, **kwargs: None,
         emit_iteration_train=lambda plan: {
             "exit_members": {
                 member["request_id"]: [member["request_id"]]
@@ -182,7 +185,7 @@ class DecodeDecisionDictTest(unittest.TestCase):
         self.scheduler = _scheduler(_hardware())
 
     def test_serializes_decode_target_evictions(self):
-        e = _eviction(0, "session_0_request_0", time_ns=1_500)
+        e = _eviction(0, "session_0_request_0")
         rt = _runtime("session_0_request_0")
         rt.decode_target_evictions = (e,)
         decision = self.scheduler._decode_decision_dict(
@@ -236,8 +239,8 @@ class EmitTrainSerializationTest(unittest.TestCase):
     def test_emit_train_snapshots_then_clears(self):
         scheduler = _scheduler(_hardware())
         rt = _runtime("session_0_request_0")
-        e1 = _eviction(1, "session_0_request_0", time_ns=1_000)
-        e2 = _eviction(0, "session_0_request_0", time_ns=2_000)
+        e1 = _eviction(1, "session_0_request_0")
+        e2 = _eviction(0, "session_0_request_0")
         rt.decode_target_evictions = (e1, e2)
         rt.prefill_decode_transfer = _transfer()
         state = scheduler.instances[0]

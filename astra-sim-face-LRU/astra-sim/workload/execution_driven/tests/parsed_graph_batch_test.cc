@@ -8,10 +8,12 @@ Covers the one-shot structural parse of one GraphBatch response
 (parse_graph_batch, ParsedGraphBatch.hh) across the full malformed-protocol
 matrix of the frozen rule families:
 
-  T1-T8   top level (schema_version, source_delivery_sequence, batch_id,
-          error, the six optional arrays, unknown keys, array typing,
-          touched_ranks);
-  N1-N15  node rules (exact 13-key set, field typing/domains, compute/comm/
+  T0-T2   top level: non-object documents (T0), schema_version (T1),
+          source_delivery_sequence (T2);
+  T4-T8   batch_id, bare-bones/absent arrays, unknown top-level keys,
+          array typing, touched_ranks (no T3 case exists: the top-level
+          "error" field is exercised positively by O4 only);
+  N1-N14  node rules (exact 13-key set, field typing/domains, compute/comm/
           coll sub-object key sets, integer overflow, negatives,
           tag/priority <= UINT32_MAX, hbm_charge/involved_dim shapes);
   E1-E4   parent-edge rules (exact key set, rank domain, kind == "data",
@@ -27,8 +29,9 @@ matrix of the frozen rule families:
           statuses preserved in raw order);
   O3      unicode passthrough (no validation, byte-exact std::string);
   O4      the frozen error skeleton parses cleanly and carries the error;
-  O5/O6   no size cap; >UINT64 integer literals fail closed (nlohmann
-          stores them as double -> not is_number_integer).
+  O6      >UINT64 integer literals fail closed (nlohmann stores them as
+          double -> not is_number_integer). No O5/size-cap case exists:
+          parse_graph_batch has no size-cap branch.
 
 Positive controls: a max-shape response (all 7 node types, every optional
 field, a cross-batch parent edge, a full watch, an alarm with queue_index,
@@ -46,6 +49,7 @@ Exit code 0 on ALL PASS.
 
 #include <json/json.hpp>
 
+#include "DieTypes.hh"
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 using namespace AstraSim::ExecutionDriven;
@@ -122,6 +126,45 @@ nlohmann::json compute_full() {
             {"runtime_ns", 12345},           //  NOTE of the old DOM path)
             {"remote_weight_bytes", 777},
             {"hbm_access_mode", 1}};
+}
+
+// Stage B (die backend, contract §2): a legal die_op_spec object. Unsigned
+// literals on purpose (the strict spec parser requires is_number_unsigned,
+// which nlohmann text parsing always provides; in-test construction with
+// plain ints would store signed and be rejected).
+nlohmann::json valid_die_op_spec() {
+    nlohmann::json span;
+    span["request_id"] = "r1";
+    span["q_tokens"] = 8u;
+    span["kv_tokens"] = 128u;
+    span["q_start_pos"] = 0u;
+    span["kv_start_pos"] = 0u;
+    nlohmann::json spec;
+    spec["schema_version"] = 1u;
+    spec["op_kind"] = "norm";
+    spec["phase"] = "prefill";
+    spec["dtype"] = "bf16";
+    spec["model_dims"] = {{"hidden", 4096u},
+                          {"ffn", 14336u},
+                          {"vocab", 152064u},
+                          {"mlp_variant", "swiglu"},
+                          {"norm_type", "rmsnorm"},
+                          {"position_encoding", "rope"},
+                          {"num_q_heads", 32u},
+                          {"num_kv_heads", 8u},
+                          {"head_dim", 128u}};
+    spec["tp_slice"] = {{"tensor_parallel", 1u},
+                        {"tensor_parallel_rank", 0u},
+                        {"q_heads_local", 32u},
+                        {"kv_heads_local", 8u},
+                        {"ffn_local", 14336u},
+                        {"vocab_local", 152064u}};
+    spec["spans"] = nlohmann::json::array({span});
+    spec["layer_count"] = 1u;
+    spec["weight_passes"] = 1u;
+    spec["kv_access"] = {{"identity", "local"}};
+    spec["fusion_policy"] = "auto";
+    return spec;
 }
 
 nlohmann::json node_json(int rank, uint64_t id, int type,
@@ -342,8 +385,14 @@ void test_node_rules() {
         resp["nodes"][0]["rank"] = 99;
         const ParsedGraphBatch parsed =
             parse_ok(resp, "N3: num_ranks -1 disables domain", -1);
-        expect(parsed.nodes[0].node.rank == 99,
-               "N3: num_ranks -1 tolerates rank 99");
+        // parse_ok is non-aborting; guard the subscript against a parse
+        // regression emptying the node vector (operator[] UB).
+        if (parsed.nodes.empty()) {
+            expect(false, "N3: positive control lost its node");
+        } else {
+            expect(parsed.nodes[0].node.rank == 99,
+                   "N3: num_ranks -1 tolerates rank 99");
+        }
     }
     {  // N4: id domain
         nlohmann::json resp = base;
@@ -354,8 +403,12 @@ void test_node_rules() {
         resp["nodes"][0]["id"] = 18446744073709551615ULL;
         const ParsedGraphBatch parsed =
             parse_ok(resp, "N4: uint64 max id parses");
-        expect(parsed.nodes[0].json_id == 18446744073709551615ULL,
-               "N4: uint64 max id round-trips");
+        if (parsed.nodes.empty()) {
+            expect(false, "N4: positive control lost its node");
+        } else {
+            expect(parsed.nodes[0].json_id == 18446744073709551615ULL,
+                   "N4: uint64 max id round-trips");
+        }
     }
     {  // N5: type domain
         nlohmann::json resp = base;
@@ -417,6 +470,117 @@ void test_node_rules() {
         expect_parse_error(resp, "N12: hbm_access_mode string",
                            "hbm_access_mode");
     }
+    {  // N12/die (stage B, contract §2; face-LRU rollout 2026-10-03):
+       // op_role + die_op_spec extensions.
+        using OpRole = AstraSim::ExecutionDriven::OpRole;
+        // Accept: op_role=control_marker parses to the enum.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "control_marker";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role control_marker accepted");
+            expect(parsed.nodes[0].node.compute.op_role ==
+                       OpRole::ControlMarker,
+                   "N12: op_role control_marker -> enum");
+            expect(parsed.nodes[0].node.compute.die_spec == nullptr,
+                   "N12: op_role alone leaves die_spec null");
+        }
+        // Accept: op_role=compute is the explicit default spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "compute";
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: op_role compute accepted");
+            expect(parsed.nodes[0].node.compute.op_role == OpRole::Compute,
+                   "N12: op_role compute -> enum");
+        }
+        // Accept: die_op_spec with runtime_ns == 0 parses the immutable
+        // spec (DieModel::parse_die_op_spec ran without error).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: die_op_spec accepted");
+            expect(parsed.nodes[0].node.compute.die_spec != nullptr,
+                   "N12: die_op_spec -> shared spec");
+            expect(parsed.nodes[0].node.compute.die_spec->op_kind ==
+                       DieModel::OpKind::Norm,
+                   "N12: parsed spec carries op_kind norm");
+        }
+        // Reject: unknown op_role spelling.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = "marker";
+            expect_parse_error(resp, "N12: op_role unknown spelling",
+                               "op_role");
+        }
+        // Reject: op_role must be a string.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["op_role"] = 1;
+            expect_parse_error(resp, "N12: op_role int", "not a string");
+        }
+        // Reject: die_op_spec + runtime_ns != 0 (contract §2 conflict rule:
+        // a calibrated runtime must never silently bypass the die plan).
+        {
+            nlohmann::json resp = base;  // compute_full carries runtime_ns
+            resp["nodes"][0]["compute"]["die_op_spec"] = valid_die_op_spec();
+            expect_parse_error(resp, "N12: die_op_spec with runtime_ns",
+                               "runtime_ns == 0");
+        }
+        // Reject: die_op_spec must be an object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_op_spec"] = "norm";
+            expect_parse_error(resp, "N12: die_op_spec string",
+                               "die_op_spec is not an object");
+        }
+        // Reject: an inner spec violation surfaces as a ParseError carrying
+        // the original library message (here: an unknown key inside the
+        // spec object).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["surprise"] = 1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec unknown inner key",
+                               "die_op_spec rejected");
+        }
+        // Reject: a missing required key inside the spec object (spans).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec.erase("spans");
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec missing spans",
+                               "die_op_spec rejected");
+        }
+        // Reject: an enum misspelling inside the spec object.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["op_kind"] = "normalize";
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec bad op_kind",
+                               "die_op_spec rejected");
+        }
+        // Reject: a signed integer inside the spec object (the strict
+        // spec parser requires unsigned storage).
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            nlohmann::json spec = valid_die_op_spec();
+            spec["layer_count"] = -1;
+            resp["nodes"][0]["compute"]["die_op_spec"] = spec;
+            expect_parse_error(resp, "N12: die_op_spec negative layer_count",
+                               "die_op_spec rejected");
+        }
+    }
     {  // N13: comm key set / domains
         nlohmann::json resp = base;
         resp["nodes"][0]["comm"].erase("tag");
@@ -457,8 +621,12 @@ void test_node_rules() {
         resp["nodes"][0]["coll"].erase("involved_dim");
         const ParsedGraphBatch parsed =
             parse_ok(resp, "N14: involved_dim absent");
-        expect(parsed.nodes[0].node.coll.involved_dim.empty(),
-               "N14: absent involved_dim -> empty vector");
+        if (parsed.nodes.empty()) {
+            expect(false, "N14: positive control lost its node");
+        } else {
+            expect(parsed.nodes[0].node.coll.involved_dim.empty(),
+                   "N14: absent involved_dim -> empty vector");
+        }
     }
     {  // O6: >UINT64 integer literal becomes a double -> fail closed
         nlohmann::json resp = base;
@@ -644,11 +812,17 @@ void test_opaque_and_order_rules() {
         resp["touched_ranks"] = nlohmann::json::array({2, 0, 1});
         const ParsedGraphBatch parsed =
             parse_ok(resp, "O1: interleaved ranks");
-        expect(parsed.nodes.size() == 4, "O1: four nodes parsed");
-        expect(parsed.nodes[0].node.rank == 2 && parsed.nodes[0].json_id == 0 &&
-               parsed.nodes[1].node.rank == 0 && parsed.nodes[1].json_id == 5 &&
-               parsed.nodes[2].node.rank == 1 && parsed.nodes[3].node.rank == 0,
-               "O1: node vector keeps the array order verbatim");
+        if (parsed.nodes.size() != 4) {
+            expect(false, "O1: four nodes parsed");
+        } else {
+            expect(parsed.nodes[0].node.rank == 2 &&
+                       parsed.nodes[0].json_id == 0 &&
+                       parsed.nodes[1].node.rank == 0 &&
+                       parsed.nodes[1].json_id == 5 &&
+                       parsed.nodes[2].node.rank == 1 &&
+                       parsed.nodes[3].node.rank == 0,
+                   "O1: node vector keeps the array order verbatim");
+        }
         expect(parsed.touched_ranks == std::vector<int>({2, 0, 1}),
                "O1: touched_ranks keeps the declared order");
     }
@@ -660,16 +834,21 @@ void test_opaque_and_order_rules() {
             nlohmann::json::array({"Skipped", "Success", "Skipped"});
         const ParsedGraphBatch parsed =
             parse_ok(resp, "O1: member/status order");
-        const ParsedWatch& watch = parsed.watches[0];
-        expect(watch.members.size() == 3 &&
-                   watch.members[0].rank == 0 && watch.members[0].json_id == 7 &&
-                   watch.members[1].rank == 1 && watch.members[2].rank == 2,
-               "O1: members follow the JSON object key order (ascending)");
-        expect(watch.statuses.size() == 3 &&
-                   watch.statuses[0] == NodeTerminalStatus::Skipped &&
-                   watch.statuses[1] == NodeTerminalStatus::Success &&
-                   watch.statuses[2] == NodeTerminalStatus::Skipped,
-               "O1: statuses keep the raw array order (duplicates kept)");
+        if (parsed.watches.empty()) {
+            expect(false, "O1: member/status positive control lost its watch");
+        } else {
+            const ParsedWatch& watch = parsed.watches[0];
+            expect(watch.members.size() == 3 &&
+                       watch.members[0].rank == 0 &&
+                       watch.members[0].json_id == 7 &&
+                       watch.members[1].rank == 1 && watch.members[2].rank == 2,
+                   "O1: members follow the JSON object key order (ascending)");
+            expect(watch.statuses.size() == 3 &&
+                       watch.statuses[0] == NodeTerminalStatus::Skipped &&
+                       watch.statuses[1] == NodeTerminalStatus::Success &&
+                       watch.statuses[2] == NodeTerminalStatus::Skipped,
+                   "O1: statuses keep the raw array order (duplicates kept)");
+        }
     }
     {  // O3: unicode passthrough (no validation either way)
         nlohmann::json resp = max_shape_response();
@@ -677,9 +856,13 @@ void test_opaque_and_order_rules() {
         resp["nodes"][0]["request_id"] = "req_中文_1";
         const ParsedGraphBatch parsed =
             parse_ok(resp, "O3: unicode passthrough");
-        expect(parsed.nodes[0].node.name == "r0_计hdr_α" &&
-                   parsed.nodes[0].node.request_id == "req_中文_1",
-               "O3: non-ASCII strings pass through byte-exact");
+        if (parsed.nodes.empty()) {
+            expect(false, "O3: unicode positive control lost its node");
+        } else {
+            expect(parsed.nodes[0].node.name == "r0_计hdr_α" &&
+                       parsed.nodes[0].node.request_id == "req_中文_1",
+                   "O3: non-ASCII strings pass through byte-exact");
+        }
     }
     {  // O4: the frozen error skeleton parses cleanly, error carried
         nlohmann::json resp;
@@ -707,7 +890,13 @@ void test_max_shape_round_trip() {
 
     expect(parsed.batch_id == 42 && parsed.source_delivery_sequence == 42,
            "P: header fields round-trip");
-    expect(parsed.nodes.size() == 7, "P: seven nodes");
+    // The whole remainder of this positive control indexes nodes[0..6]:
+    // guard the exact size (parse_ok is non-aborting, a truncated vector
+    // would make the subscripts UB on top of the failure).
+    if (parsed.nodes.size() != 7) {
+        expect(false, "P: seven nodes");
+        return;
+    }
     expect(parsed.nodes[0].node.rank == 0 && parsed.nodes[0].json_id == 0 &&
                parsed.nodes[0].node.node_type == 1 &&
                parsed.nodes[0].node.kind == NodeKind::Metadata,

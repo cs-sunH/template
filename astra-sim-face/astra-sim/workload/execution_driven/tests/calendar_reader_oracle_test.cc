@@ -32,6 +32,14 @@ assertions run on the real input; the provenance stats are printed so the
 run record can quote them (turn0 count, file-order adjacent inversions,
 arrival min/max).
 
+Ingress capacity (review 2026-09-26 cpp-ed-tests-a-4): each arm constructs
+its RequestIngress with an oversized command queue so one unbounded pump
+never hits the 4096-command production default (which would fail the
+legacy arm's enqueue or park the calendar arm's cursor mid-calendar and
+truncate the comparison). The real 22,816-row TraceLab queue carries 496
+turn-0 rows and fits the production default, but the oracle must not
+depend on that ratio.
+
 Build: the CMake target
 AstraSim_Analytical_Congestion_Aware_CalendarOracleTest.
 *******************************************************************************/
@@ -48,6 +56,7 @@ AstraSim_Analytical_Congestion_Aware_CalendarOracleTest.
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
 #include "astra-sim/workload/execution_driven/tests/LegacyOracleWindowedTraceReader.hh"
+#include "astra-sim/workload/execution_driven/tests/fixture_provenance_sidecar.hh"
 #include "common/EventQueue.h"
 
 using namespace AstraSim::ExecutionDriven;
@@ -73,7 +82,7 @@ struct FireRecord {
 // the (tick, queue_index) sequence in real fire order through the arrival
 // hook (the hook runs inside RequestIngress::arrival_cb at the alarm tick).
 template <typename Reader>
-std::vector<FireRecord> run_arm(const std::string& csv, RequestIngress& ingress,
+std::vector<FireRecord> run_arm(RequestIngress& ingress,
                                 EventQueue& eq, Reader& reader) {
     std::vector<FireRecord> seq;
     ingress.set_arrival_hook([&](const RequestEnvelope& env) {
@@ -91,14 +100,15 @@ std::vector<FireRecord> run_legacy_arm(const std::string& csv) {
     EventQueue eq;
     DecisionMailbox mailbox;
     ServiceCoordinator svc;
-    RequestIngress ingress;
+    // Oversized command queue: see the ingress-capacity note in the header.
+    RequestIngress ingress(/*capacity=*/1u << 20);
     ingress.bind(&eq, &mailbox, &svc);
     // UNBOUNDED arm: explicit high_water=0 reads the whole file in one pump
     // and queues every turn-0 Submit in ROW order (the pre-P0 full-pass
     // control arm; the constructor default is 128 = bounded, which would
     // clamp the real-queue argv[1] comparison into a false failure).
     LegacyOracleWindowedTraceReader reader(csv, ingress, 0);
-    return run_arm(csv, ingress, eq, reader);
+    return run_arm(ingress, eq, reader);
 }
 
 void compare_arms(const std::string& csv, const char* label) {
@@ -107,10 +117,13 @@ void compare_arms(const std::string& csv, const char* label) {
     EventQueue eq;
     DecisionMailbox mailbox;
     ServiceCoordinator svc;
-    RequestIngress ingress;
+    // Oversized command queue: see the ingress-capacity note in the header
+    // (a full production-default queue parks the calendar cursor and
+    // truncates this arm without a second pump).
+    RequestIngress ingress(/*capacity=*/1u << 20);
     ingress.bind(&eq, &mailbox, &svc);
     WindowedTraceReader reader(csv, ingress);
-    const std::vector<FireRecord> calendar = run_arm(csv, ingress, eq, reader);
+    const std::vector<FireRecord> calendar = run_arm(ingress, eq, reader);
 
     std::printf("[oracle:%s] turn-0 fire sequence length: legacy=%zu "
                 "calendar=%zu\n",
@@ -150,15 +163,9 @@ void compare_arms(const std::string& csv, const char* label) {
         }
     }
     expect(discovered_zero, "calendar arm: every turn-0 discovered at tick 0");
-    const auto& prov = reader.provenance();
-    std::printf("[oracle:%s] provenance: data_rows=%llu sessions=%llu "
-                "turn0=%llu arrival[min=%llu max=%llu] inversions=%llu\n",
-                label, (unsigned long long)prov.data_rows,
-                (unsigned long long)prov.sessions,
-                (unsigned long long)prov.turn0_count,
-                (unsigned long long)prov.turn0_arrival_min_ns,
-                (unsigned long long)prov.turn0_arrival_max_ns,
-                (unsigned long long)prov.turn0_adjacent_inversions);
+    std::printf("[oracle:%s] rows: total=%llu turn0=%llu\n",
+                label, (unsigned long long)reader.total_data_rows(),
+                (unsigned long long)reader.turn0_data_rows());
     std::printf("[oracle:%s] PASS: sequences identical (%zu arrivals), "
                 "late_static_submit=0, gate ok\n",
                 label, calendar.size());
@@ -167,19 +174,24 @@ void compare_arms(const std::string& csv, const char* label) {
 // Synthetic hermetic fixture: out-of-order turn-0 across session blocks,
 // a same-tick group, an arrival==0 row, multi-turn blocks.
 void write_synthetic(const std::string& csv) {
-    std::ofstream out(csv);
-    out << "session_id,turn_index,request_id,prefill_length,decode_length,"
-           "session_arrival_time_ns,inter_request_interval_ns,description\n";
-    // File-order turn-0 arrivals: 500, 100, 300, 300, 0, 700  (blocks
-    // contiguous, arrivals wildly non-monotonic).
-    out << "s0,0,s0_r0,100,50,500,,d\n";
-    out << "s0,1,s0_r1,100,50,,90,d\n";
-    out << "s1,0,s1_r0,100,50,100,,d\n";
-    out << "s2,0,s2_r0,100,50,300,,d\n";
-    out << "s2,1,s2_r1,100,50,,50,d\n";
-    out << "s3,0,s3_r0,100,50,300,,d\n";
-    out << "s4,0,s4_r0,100,50,0,,d\n";
-    out << "s5,0,s5_r0,100,50,700,,d\n";
+    // P1 fix (2026-09-28, ported to this repo 2026-10-07): the provenance
+    // gate is fail-closed on an absent sidecar, so the synthetic fixture
+    // ships its matching record too (written by the shared helper; raw
+    // rows identical to before).
+    FixtureProvenance::write_queue_fixture(
+        csv,
+        {
+            // File-order turn-0 arrivals: 500, 100, 300, 300, 0, 700
+            // (blocks contiguous, arrivals wildly non-monotonic).
+            "s0,0,s0_r0,100,50,500,,d",
+            "s0,1,s0_r1,100,50,,90,d",
+            "s1,0,s1_r0,100,50,100,,d",
+            "s2,0,s2_r0,100,50,300,,d",
+            "s2,1,s2_r1,100,50,,50,d",
+            "s3,0,s3_r0,100,50,300,,d",
+            "s4,0,s4_r0,100,50,0,,d",
+            "s5,0,s5_r0,100,50,700,,d",
+        });
 }
 
 }  // namespace
@@ -195,6 +207,7 @@ int main(int argc, char* argv[]) {
         write_synthetic(csv);
         compare_arms(csv, "synthetic");
         std::remove(csv.c_str());
+        std::remove((csv + ".provenance.json").c_str());
     }
     if (!g_ok) {
         std::fprintf(stderr,

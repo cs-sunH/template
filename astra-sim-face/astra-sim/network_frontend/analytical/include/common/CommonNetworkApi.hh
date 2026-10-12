@@ -36,18 +36,21 @@ class CommonNetworkApi : public AstraNetworkAPI {
         std::shared_ptr<EventQueue> event_queue_ptr) noexcept;
 
     /**
-     * Get the reference to the callback tracker.
-     *
-     * @return reference to the callback tracker
-     */
-    static CallbackTracker& get_callback_tracker() noexcept;
-
-    /**
-     * Callback to be invoked when a chunk arrives its destination.
+     * Callback to be invoked when a chunk arrives at its destination.
      *
      * @param args arguments of the callback function
      */
     static void process_chunk_arrival(void* args) noexcept;
+
+    /**
+     * Run-end residual audit (warn-only): reports ChunkIdGenerator keys and
+     * CallbackTracker entries still resident at a quiescent run end, with
+     * counts and a few key samples. Never aborts -- a resident key can be a
+     * legal truncated-window shape, unlike the mid-run invariant breaks.
+     * The online main calls this once on its shutdown path.
+     * Not noexcept: allocates (sample vectors, formatted key strings).
+     */
+    static void audit_run_end_residuals();
 
     /**
      * Constructor.
@@ -61,6 +64,13 @@ class CommonNetworkApi : public AstraNetworkAPI {
      * Implement sim_get_time of AstraNetworkAPI.
      */
     [[nodiscard]] timespec_t sim_get_time() override;
+
+    /**
+     * Implement backend_in_invoke_context of AstraNetworkAPI (H3): the
+     * analytical backend merges a zero-delay registration into the current
+     * tick only inside its own invoke pass.
+     */
+    [[nodiscard]] bool backend_in_invoke_context() const override;
 
     /**
      * Implement sim_schedule of AstraNetworkAPI.

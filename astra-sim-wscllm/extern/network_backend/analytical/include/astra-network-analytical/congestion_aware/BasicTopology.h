@@ -41,20 +41,23 @@ class BasicTopology : public Topology {
      * @return type of the basic topology
      *
      * Dead accessor (2026-09 deep-dive): zero callers in this repo, leaving
-     * basic_topology_type below write-only; kept unchanged from the face
-     * backend for cross-repo parity.
+     * basic_topology_type below write-only. Retained by repo decision
+     * (2026-09-27, infra-D2: annotation route -- the three sister repos
+     * deleted this cluster, so deletion here would be its own port; note
+     * that Ring/Switch never assign basic_topology_type, so a future
+     * caller of this accessor on them would assert).
      */
     [[nodiscard]] TopologyBuildingBlock get_basic_topology_type() const noexcept;
 
   protected:
     /// bandwidth of each link (write-only: assigned in the constructors, no
-    /// reader in this repo -- registered 2026-09 deep-dive, kept for face
-    /// cross-repo parity)
+    /// reader in this repo -- registered 2026-09 deep-dive, retained by the
+    /// 2026-09-27 infra-D2 annotation-route decision)
     Bandwidth bandwidth;
 
     /// latency of each link (write-only: assigned in the constructors, no
-    /// reader in this repo -- registered 2026-09 deep-dive, kept for face
-    /// cross-repo parity)
+    /// reader in this repo -- registered 2026-09 deep-dive, retained by the
+    /// 2026-09-27 infra-D2 annotation-route decision)
     Latency latency;
 
     /// basic topology type (write-only: set by the concrete topologies, only

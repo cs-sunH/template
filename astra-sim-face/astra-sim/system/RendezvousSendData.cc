@@ -18,13 +18,5 @@ RendezvousSendData::RendezvousSendData(int sys_id,
                                        void (*msg_handler)(void* fun_arg),
                                        void* fun_arg)
     : BasicEventHandlerData(sys_id, EventType::RendezvousSend),
-      send(sys,
-           buffer,
-           count,
-           type,
-           dst,
-           tag,
-           request,
-           msg_handler,
-           fun_arg,
-           false) {}
+      send(sys, buffer, count, type, dst, tag, request, msg_handler,
+           fun_arg) {}

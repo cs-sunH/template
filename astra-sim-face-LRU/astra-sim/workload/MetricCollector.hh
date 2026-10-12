@@ -19,7 +19,7 @@ LICENSE file in the root directory of this source tree.
 
 #include <json/json.hpp>
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 
 namespace AstraSim {
 
@@ -63,8 +63,11 @@ class MetricCollector {
     }
 
     // Sparse boundary events. Only nodes listed in the manifest (static) or
-    // dynamically registered (online) ever match; all other nodes cost two
-    // failed hash lookups. R2 one-shot semantics (2026-08-29): a matched
+    // dynamically registered (online) ever match. Cost is mode-dependent
+    // (2026-10-01 wording): the static path pays two failed hash lookups
+    // per node; online mode consults the NodeView's sparse anchor flag at
+    // the call gate, so unanchored nodes (the overwhelming majority) skip
+    // the lookups entirely. R2 one-shot semantics (2026-08-29): a matched
     // node bucket is applied in full (a bucket can carry several events,
     // e.g. a code-4 + code-7 watch tail) and then ERASED immediately; an
     // empty rank bucket is erased too. Each (rank, node) edge fires at most
@@ -95,10 +98,14 @@ class MetricCollector {
     //   - online_register_ranks: the watch member sets (prefill/decode);
     //   - online_register_node_anchor: for every (rank, request, stage)
     //     group the FIRST node is the start anchor (issue event) and the
-    //     LAST is the end anchor (complete event); transfer nodes of the
-    //     KV routes (node names contain "kv") register the memory anchor
-    //     (code 7) on the last transfer node of each (request, rank) --
-    //     the offline doc-sec.4.3 semantics.
+    //     LAST is the end anchor (complete event); KV-route transfer nodes
+    //     -- recognized by the exact naming segments _kv_send_rank /
+    //     _kv_recv_rank / _kv_transfer_action, NOT a "kv" substring match
+    //     (the substring heuristic was removed as P1-6; see the
+    //     transfer-anchor collection in main_online.cc's batch-commit
+    //     anchor walk) -- register the memory anchor (code 7) on the last
+    //     transfer node of each (request, rank) -- the offline
+    //     doc-sec.4.3 semantics.
     // Registration is idempotent: re-registering an existing (request,
     // rank, node, event) is a no-op, and re-registering a request updates
     // only missing fields (the online CSV data is authoritative for
@@ -266,7 +273,6 @@ class MetricCollector {
     };
 
     struct IterationMetricState {
-        int64_t benchmark_point_id = -1;
         std::optional<Tick> iteration_start;
         std::optional<Tick> iteration_end;
         std::set<int> start_ranks_seen;
@@ -323,7 +329,6 @@ class MetricCollector {
         int64_t weight_delta_bytes = 0;
         int64_t resident_kv_delta_bytes = 0;
         int64_t reserved_kv_delta_bytes = 0;
-        std::string cause;
     };
 
     // Observed request stage boundaries, stored during the finalize request
@@ -370,7 +375,6 @@ class MetricCollector {
         // Same integral from the pre-existing direct delta loop, kept for
         // the <=1% timeavg cross-check (A-class criterion).
         unsigned __int128 direct_resident_area = 0;
-        unsigned __int128 direct_committed_area = 0;
         uint64_t capacity_violations = 0;
         uint64_t sample_count = 0;
         bool capacity_known = false;
@@ -506,6 +510,10 @@ class MetricCollector {
     std::unordered_map<int, RankMetricState> rank_states_;
 
     uint64_t dropped_events_ = 0;
+    // (2026-10-01) A2 release residue: anchor buckets erased at
+    // REQUEST_COMPLETE before firing; disclosed in the finalize
+    // consistency record (see online_release_request_anchors).
+    uint64_t anchors_released_unfired_ = 0;
     std::vector<std::string> consistency_violations_;
     bool finalized_ = false;
 
