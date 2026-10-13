@@ -42,5 +42,21 @@
       "status": "passed",
       "files": 10
     }
-  }
+  },
+  "github_code_checkpoint": {
+    "branch": "codex/die-handoff-20261013",
+    "commit": "ac6fc4cd4b9e9577297ead16fb74e61b1d691b0b",
+    "pr_url": "https://github.com/cs-sunH/template/pull/1",
+    "pr_number": 1,
+    "pr_state": "MERGED",
+    "main_code_merge_sha": "6206491620ea841cb976f09585248d3e84223510",
+    "ancestor_and_tree_verified": true,
+    "documentation_workflow_run": 38362816057,
+    "documentation_workflow_conclusion": "success",
+    "readiness": "NOT READY FOR HANDOFF",
+    "reason": "default all-target build and engineering acceptance are blocked; checkpoint is preserved for the documented minimal repair"
+  },
+  "whitespace_check_notes": [
+    "CSV CRLF and cabi.py trailing blank line reported; original bytes preserved"
+  ]
 }

@@ -18,6 +18,7 @@
 - 交接前 fetch/fast-forward 到 `8462229`，保留远端新增的 AGENTS/PROJECT/HANDOFF/RELAY_PROMPT 和交接检查 workflow。
 - 同步前保存全部 **106 个**修改/新增文件的 SHA-256，同步后逐文件一致，没有丢失或覆盖原实现。清单：[preserved-work.json](evidence/handoff-20261013/preserved-work.json)。
 - 实际交付 SHA、PR、合并和最终远端验证见 Handoff Notes，不以基线 SHA 冒充交付 SHA。
+- 代码检查点已合并并核验于 `6206491620ea841cb976f09585248d3e84223510`；此 SHA 是可独立验证的代码锚点，后续仅补充交接文字，不冒充已修复构建。
 
 ## Completed
 
@@ -174,4 +175,16 @@ GCC `__int128`/部分 JSON reference 警告保留，不能以 syntax/link 成功
 
 原有效代码/测试/校准脚本全部保留，子代理已停止；没有继续修 benchmark/算子/适配。`.gitignore` 中 `work/` 隔离 scratch，凭据、编译产物和大型备份不入库。
 
-代码提交、PR、合并和 main 实际验证将于 GitHub 操作完成后补入本节。**当前发布尚未完成，不能写成已合并。** 后续同步成功也不自动取消 Current Status 的测试阻塞；下一账号先执行上述最小修复。
+### 已核验的 GitHub 保存结果
+
+- 代码工作分支：`codex/die-handoff-20261013`。
+- 代码 Commit：`ac6fc4cd4b9e9577297ead16fb74e61b1d691b0b`，保存 122 个变更文件（含原 106 个实现修改和交接证据）。
+- 代码 PR：[cs-sunH/template#1](https://github.com/cs-sunH/template/pull/1)，状态 **MERGED**，合入 `main` 的 SHA：`6206491620ea841cb976f09585248d3e84223510`。
+- GitHub 合并时间：2026-10-13 15:28:30（Asia/Shanghai）。PR 查询返回 merged=true/closed；fetch 后确认上述 merge SHA 与远端 main 一致，且代码 Commit 是其祖先；merge tree 与代码检查点无差异。
+- GitHub `die Codex Handoff Check` PR 运行 `38362816057` 已 `completed/success`；该检查仅验证文档结构，不替代失败的默认构建或未运行的工程测试。
+- 本节的合并事实在分支 `codex/die-handoff-20261013-record` 以纯文档补充保存，未修改仿真器源码。当前文档自身最终 SHA 应从最新 main 的 Git 元数据读取，避免把尚不存在的自身 commit/merge SHA 编造写进文件。
+- 最终工作区/远端核验命令：`git fetch origin main`；`git merge-base --is-ancestor ac6fc4cd4b9e9577297ead16fb74e61b1d691b0b origin/main`；核对 `git rev-parse HEAD`/`origin/main` 和 `git status --short`。
+
+**保存的代码检查点已经合入 main，但按接力协议仍为 NOT READY FOR HANDOFF，因为默认构建和工程验收阻塞尚未解决。** 不得据此直接运行架构性能实验或宣称五仓正常。下一账号按 Next Step 只修 benchmark 编译定义，再更新测试和接棒状态。
+
+补充：`git diff --cached --check` 对 CSV 的标准 CRLF 行尾与 `validation/cabi.py` 末尾空行发出 whitespace 提示；原字节已保留，没有借交接修改生成器或业务格式。源码通过凭据模式检查，未提交编译产物、令牌或临时备份。
