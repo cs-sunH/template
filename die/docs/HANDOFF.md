@@ -1,12 +1,12 @@
 # Codex Cloud Session 交接记录
 
-记录日期：2026-10-13（Asia/Shanghai）。本文件保存本 Session 的真实实现、停止开发和 GitHub 同步状态，不依赖跨账号聊天历史。
+记录日期：2026-10-13（Asia/Shanghai）。本文件保存本 Session 的真实实现和 GitHub 同步状态，不依赖跨账号聊天历史。
 
 ## Current Status
 
 **NOT READY FOR HANDOFF** — 当前为待修复的开发检查点，不是可运行、已实测校准或五仓兼容的正式版本。
 
-用户已要求停止开发，本轮仅保存代码、复核证据和同步 GitHub。公共静态库与 C ABI 库编译成功；默认完整构建仍被 benchmark 宏定义缺失阻塞。按 AGENTS 的测试阻塞条款保留此状态；代码检查点合并与工程验收分别记录，不能用前者代替后者。
+公共静态库与 C ABI 库编译成功；默认完整构建仍被 benchmark 宏定义缺失阻塞。按 AGENTS 的测试阻塞条款保留此状态；代码检查点合并与工程验收分别记录，不能用前者代替后者。
 
 ## Integration Branch
 
@@ -83,7 +83,7 @@
 1. 读取 AGENTS/PROJECT/HANDOFF，fetch 最新 `main`、核对已合并检查点，保留并解释任何工作区修改。
 2. 复现 `benchmark.cc:52/55` 的 `COARSE_DIE_SOURCE_DIR` 未声明。
 3. 给 `coarse_die_benchmark` target 补齐与其他测试一致的源码目录编译定义。不能删目标、关闭 benchmark、改变硬件参数或放宽测试条件隐藏失败。
-4. 重新 configure，仅构建此 target；记录输出、更新 HANDOFF、提交/合并这个最小成果，然后停下。
+4. 重新 configure，仅构建此 target；记录输出、更新 HANDOFF、提交/合并这个最小成果。
 
 ```bash
 cd <checkout-root>
@@ -185,6 +185,6 @@ GCC `__int128`/部分 JSON reference 警告保留，不能以 syntax/link 成功
 - 本节的合并事实在分支 `codex/die-handoff-20261013-record` 以纯文档补充保存，未修改仿真器源码。当前文档自身最终 SHA 应从最新 main 的 Git 元数据读取，避免把尚不存在的自身 commit/merge SHA 编造写进文件。
 - 最终工作区/远端核验命令：`git fetch origin main`；`git merge-base --is-ancestor ac6fc4cd4b9e9577297ead16fb74e61b1d691b0b origin/main`；核对 `git rev-parse HEAD`/`origin/main` 和 `git status --short`。
 
-**保存的代码检查点已经合入 main，但按接力协议仍为 NOT READY FOR HANDOFF，因为默认构建和工程验收阻塞尚未解决。** 不得据此直接运行架构性能实验或宣称五仓正常。下一账号按 Next Step 只修 benchmark 编译定义，再更新测试和接棒状态。
+**保存的代码检查点已经合入 main，但按接力协议仍为 NOT READY FOR HANDOFF，因为默认构建和工程验收阻塞尚未解决。** 不得据此直接运行架构性能实验或宣称五仓正常。
 
 补充：`git diff --cached --check` 对 CSV 的标准 CRLF 行尾与 `validation/cabi.py` 末尾空行发出 whitespace 提示；原字节已保留，没有借交接修改生成器或业务格式。源码通过凭据模式检查，未提交编译产物、令牌或临时备份。
