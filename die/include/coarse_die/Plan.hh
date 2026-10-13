@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <json/json.hpp>
@@ -18,11 +19,28 @@ struct Activity {
     std::array<double,resource_count> work{};
     std::array<std::array<std::uint64_t,2>,2> hbm_bytes{};
     std::uint64_t int4_ops = 0, vec_eqops = 0;
+    // Weighted equivalent work can be fractional. Keep the whole part exact
+    // for existing integer Plans; a nonzero remainder uses Plan schema v3.
+    long double vec_eqops_fraction = 0;
     double canonical_q = 1, private_time_s = 0;
     // Fractions of each activity's [0,1] progress alter buffer occupancy.
     // Zero means that the activity does not touch this buffer.
     std::array<double,2> credit_delta{};
 };
+
+inline long double planned_vec_eqops(const Activity& activity) {
+    const long double whole = static_cast<long double>(activity.vec_eqops);
+    const long double result = whole + activity.vec_eqops_fraction;
+    if (activity.vec_eqops_fraction != 0 &&
+        result - whole != activity.vec_eqops_fraction)
+        throw std::overflow_error("overflow: fractional Vec work is lost in runtime scalar precision");
+    return result;
+}
+
+// Canonical exact dyadic representation, independent of decimal formatting.
+// A nonzero fraction is an odd significand times 2^exponent, in (0,1).
+nlohmann::json equivalent_fraction_to_json(long double fraction);
+long double equivalent_fraction_from_json(const nlohmann::json& fraction);
 
 // The fairness normalization is a canonical logical quantity, not the sum of
 // physical path work (which may include D/eta or multiple routed hops).
@@ -53,6 +71,12 @@ struct Plan {
     std::vector<Epoch> epochs;
     std::uint64_t launch_ns = 0;
 };
+inline bool has_fractional_work(const Plan& plan) {
+    for (const auto& epoch : plan.epochs)
+        for (const auto& activity : epoch.activities)
+            if (activity.vec_eqops_fraction != 0) return true;
+    return false;
+}
 std::shared_ptr<const Plan> compile(const Hardware&, const nlohmann::json& task);
 nlohmann::json estimate_alone(const Hardware&, const Plan&);
 std::string stable_hash(const std::string& text);

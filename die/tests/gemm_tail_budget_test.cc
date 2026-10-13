@@ -80,8 +80,8 @@ struct TileWork {
 };
 
 // Direct tile ledger used only by this compiler-facing test. It independently
-// enumerates actual M/N tile extents and applies the existing integer-truncated
-// conversion coefficients used by Mapping.cc's Vec-op ledger.
+// enumerates actual M/N tile extents and applies the declared real
+// conversion coefficients independently of the production ledger.
 TileWork tile_work(const Accounting& a, u64 m, u64 n,
                    bool include_weight_conversion) {
   const long double mn = static_cast<long double>(m) * n;
@@ -208,10 +208,8 @@ Accounting accounting_for(const Hardware& hw, const json& task,
   a.p_vec = hw.derived.at("core").at("P_vec_per_core_ops_per_s").get<double>();
   a.eta_pe = hw.input.at("performance_profile").at("eta_pe").get<double>();
   a.eta_vec = hw.input.at("performance_profile").at("eta_vec").get<double>();
-  const u64 quant = static_cast<u64>(hw.input.at("performance_profile")
-                                         .value("kappa_quant_eqops", 4.0));
-  const u64 accumulator = static_cast<u64>(hw.input.at("performance_profile")
-                                              .value("kappa_acc_convert_eqops", 2.0));
+  const double quant = hw.input.at("performance_profile").value("kappa_quant_eqops", 4.0);
+  const double accumulator = hw.input.at("performance_profile").value("kappa_acc_convert_eqops", 2.0);
   const std::string execution_dtype = a.int4_path ? "int4" : "fp32";
   if (a.a_dtype != execution_dtype)
     a.a_coeff = a.int4_path || a.a_dtype == "int4" ? quant : 1;
@@ -219,7 +217,7 @@ Accounting accounting_for(const Hardware& hw, const json& task,
     a.w_coeff = a.int4_path || a.w_dtype == "int4" ? quant : 1;
   if (a.int4_path) a.acc_coeff = accumulator;
   if (a.o_dtype != "fp32")
-    a.output_coeff = a.int4_path && a.o_dtype == "int4" ? quant : 1;
+    a.output_coeff = a.o_dtype == "int4" ? quant : 1;
   return a;
 }
 
@@ -238,7 +236,7 @@ void verify_compiled_candidate(const Hardware& hw, const json& task,
 
   long double gate_work = 0;
   u128 activity_pe_ops = 0;
-  u128 activity_vec_ops = 0;
+  long double activity_vec_ops = 0;
   // Activity work values are already the aggregate quantities distributed by
   // append_epoch. repeat_count is audit metadata and must not be multiplied.
   for (const auto& epoch : plan.epochs) {
@@ -246,7 +244,7 @@ void verify_compiled_candidate(const Hardware& hw, const json& task,
       if (activity.role != Role::Compute) continue;
       gate_work += activity.work[COMPUTE_GATE];
       activity_pe_ops += activity.int4_ops;
-      activity_vec_ops += activity.vec_eqops;
+      activity_vec_ops += planned_vec_eqops(activity);
     }
   }
   const auto close = [](long double actual, long double wanted) {
@@ -261,11 +259,10 @@ void verify_compiled_candidate(const Hardware& hw, const json& task,
     throw std::runtime_error(message.str());
   }
   if (activity_pe_ops != static_cast<u128>(expected.pe_ops) ||
-      activity_vec_ops != static_cast<u128>(expected.vec_ops) ||
+      activity_vec_ops != expected.vec_ops ||
       plan.summary.at("executed_int4_ops").get<u64>() !=
           static_cast<u64>(expected.pe_ops) ||
-      plan.summary.at("vec_equivalent_ops").get<u64>() !=
-          static_cast<u64>(expected.vec_ops)) {
+      plan.summary.at("vec_equivalent_ops").get<long double>() != expected.vec_ops) {
     throw std::runtime_error(label + " op ledger changed with gate budget update");
   }
   const u128 matrix_ops = static_cast<u128>(2) * accounting.M *
@@ -295,25 +292,32 @@ void compiled_gemm_tail_budgets_match_independent_cohorts() {
   bool saw_os = false, saw_wr = false, saw_m_tail = false;
   bool saw_n_tail = false, saw_k_tail = false, saw_fp32 = false;
   for (const u64 cores : {1ULL, 2ULL, 4ULL}) {
-    const Hardware hw = hardware_with_cores(cores);
-    for (const json& task : {
-             gemm_task("int4_matrix_vec_fp32_assumed_v1", "bf16", "bf16", "int4"),
-             gemm_task("fp32_vec_matrix_assumed_v1", "bf16", "int4", "int4")}) {
-      const auto plans = detail::enumerate_mappings(hw, task);
-      require(!plans.empty(), "GEMM enumeration produced no compiled candidates");
-      for (const auto& plan : plans) {
-        verify_compiled_candidate(hw, task, *plan);
-        const u64 tm = plan->summary.at("tm").get<u64>();
-        const u64 tn = plan->summary.at("tn").get<u64>();
-        const u64 tk = plan->summary.at("tk").get<u64>();
-        saw_os = saw_os || plan->summary.at("dataflow_id") == "output_stationary_v2";
-        saw_wr = saw_wr || plan->summary.at("dataflow_id") == "weight_resident_v2";
-        saw_m_tail = saw_m_tail || 17 % tm != 0;
-        saw_n_tail = saw_n_tail || 65 % tn != 0;
-        saw_k_tail = saw_k_tail || 65 % tk != 0;
-        saw_fp32 = saw_fp32 || task.at("execution_profile") ==
-                                   "fp32_vec_matrix_assumed_v1";
-        ++candidates_checked;
+    for (const bool fractional : {false,true}) {
+      auto config = hardware_with_cores(cores).input;
+      if (fractional) {
+        config["performance_profile"]["kappa_quant_eqops"] = 1.25;
+        config["performance_profile"]["kappa_acc_convert_eqops"] = 0.75;
+      }
+      const Hardware hw = resolve_hardware(config);
+      for (const json& task : {
+               gemm_task("int4_matrix_vec_fp32_assumed_v1", "bf16", "bf16", "int4"),
+               gemm_task("fp32_vec_matrix_assumed_v1", "bf16", "int4", "int4")}) {
+        const auto plans = detail::enumerate_mappings(hw, task);
+        require(!plans.empty(), "GEMM enumeration produced no compiled candidates");
+        for (const auto& plan : plans) {
+          verify_compiled_candidate(hw, task, *plan);
+          const u64 tm = plan->summary.at("tm").get<u64>();
+          const u64 tn = plan->summary.at("tn").get<u64>();
+          const u64 tk = plan->summary.at("tk").get<u64>();
+          saw_os = saw_os || plan->summary.at("dataflow_id") == "output_stationary_v2";
+          saw_wr = saw_wr || plan->summary.at("dataflow_id") == "weight_resident_v2";
+          saw_m_tail = saw_m_tail || 17 % tm != 0;
+          saw_n_tail = saw_n_tail || 65 % tn != 0;
+          saw_k_tail = saw_k_tail || 65 % tk != 0;
+          saw_fp32 = saw_fp32 || task.at("execution_profile") ==
+                                     "fp32_vec_matrix_assumed_v1";
+          ++candidates_checked;
+        }
       }
     }
   }

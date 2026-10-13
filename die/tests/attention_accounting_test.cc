@@ -327,7 +327,7 @@ void int4_packing_is_per_head_and_per_tile() {
   require(summary_u64(native, "int4_input_bytes") == 84,
           "native INT4 compute input count preserves every per-head nibble tail");
   require(summary_u64(native, "executed_int4_ops") == 720 &&
-              summary_u64(native, "vec_equivalent_ops") == 1044,
+              summary_u64(native, "vec_equivalent_ops") == 1152,
           "native INT4 matrix, accumulator, softmax, and output conversion work is closed");
   require(summary_u64(native, "logical_tensor_bytes") == 72,
           "logical INT4 Q/K/V/O tensors are packed once per source head");

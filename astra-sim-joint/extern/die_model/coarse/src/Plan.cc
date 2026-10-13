@@ -166,6 +166,7 @@ double require_finite_nonnegative(const nlohmann::json& j,
 }
 
 nlohmann::json make_payload(const Plan& plan) {
+  bool fractional = false;
   nlohmann::json epochs = nlohmann::json::array();
   for (const Epoch& epoch : plan.epochs) {
     nlohmann::json activities = nlohmann::json::array();
@@ -186,6 +187,10 @@ nlohmann::json make_payload(const Plan& plan) {
           {"canonical_q", activity.canonical_q},
           {"private_time_s", activity.private_time_s},
           {"credit_delta", {activity.credit_delta[0], activity.credit_delta[1]}}});
+      if (activity.vec_eqops_fraction != 0.0) {
+        activities.back()["vec_eqops_fraction"] = equivalent_fraction_to_json(activity.vec_eqops_fraction);
+        fractional = true;
+      }
     }
     epochs.push_back({
         {"name", epoch.name},
@@ -194,7 +199,7 @@ nlohmann::json make_payload(const Plan& plan) {
         {"credit_capacity", {epoch.credit_capacity[0], epoch.credit_capacity[1]}},
         {"repeat_count", epoch.repeat_count}});
   }
-  return {{"schema", "coarse_die_plan_v2"},
+  return {{"schema", fractional ? "coarse_die_plan_v3" : "coarse_die_plan_v2"},
           {"task", plan.task},
           {"summary", plan.summary},
           {"hardware_fingerprint", plan.hardware_fingerprint},
@@ -236,6 +241,13 @@ void validate_plan(const Plan& plan) {
       if (!ids.insert(activity.id).second) {
         throw std::invalid_argument(ap + ".id: duplicate activity id");
       }
+      if (!std::isfinite(activity.vec_eqops_fraction) ||
+          activity.vec_eqops_fraction < 0.0 || activity.vec_eqops_fraction >= 1.0 ||
+          (activity.vec_eqops == std::numeric_limits<std::uint64_t>::max() &&
+           activity.vec_eqops_fraction != 0.0)) {
+        throw std::invalid_argument(ap + ".vec_eqops_fraction: expected a remainder in [0,1) within uint64 work range");
+      }
+      (void)planned_vec_eqops(activity);
       for (std::size_t r = 0; r < resource_count; ++r) {
         if (!std::isfinite(activity.work[r]) || activity.work[r] < 0.0) {
           throw std::invalid_argument(ap + ".work: expected finite non-negative values");
@@ -260,6 +272,42 @@ void validate_plan(const Plan& plan) {
 
 std::string stable_hash(const std::string& text) { return sha256(text); }
 
+nlohmann::json equivalent_fraction_to_json(long double fraction) {
+  static_assert(std::numeric_limits<long double>::radix == 2 &&
+                std::numeric_limits<long double>::digits <= 64,
+                "fractional work requires a binary scalar with at most 64 significand bits");
+  if (!std::isfinite(fraction) || fraction <= 0 || fraction >= 1)
+    throw std::invalid_argument("plan.vec_eqops_fraction: expected a fraction in (0,1)");
+  int exponent = 0;
+  const long double mantissa = std::frexp(fraction, &exponent);
+  constexpr int digits = std::numeric_limits<long double>::digits;
+  std::uint64_t significand = static_cast<std::uint64_t>(std::ldexp(mantissa,digits));
+  exponent -= digits;
+  while ((significand & 1) == 0) { significand >>= 1; ++exponent; }
+  return {{"significand",significand},{"exponent",exponent}};
+}
+
+long double equivalent_fraction_from_json(const nlohmann::json& value) {
+  reject_unknown(value,{"significand","exponent"},"plan.vec_eqops_fraction");
+  const auto significand=require_u64(require_member(value,"significand","fraction"),"fraction.significand");
+  const auto& raw_exponent=require_member(value,"exponent","fraction");
+  if (!raw_exponent.is_number_integer())
+    throw std::invalid_argument("plan.vec_eqops_fraction.exponent: expected integer");
+  // Parse before narrowing so malicious large exponents never wrap.
+  if (raw_exponent.is_number_unsigned() && raw_exponent.get<std::uint64_t>() > 0)
+    throw std::invalid_argument("plan.vec_eqops_fraction.exponent: must be negative");
+  const auto exponent=raw_exponent.get<std::int64_t>();
+  constexpr int smallest=std::numeric_limits<long double>::min_exponent-
+                         std::numeric_limits<long double>::digits;
+  if (!significand || (significand & 1)==0 || exponent < smallest || exponent >= 0)
+    throw std::invalid_argument("plan.vec_eqops_fraction: invalid canonical dyadic value");
+  const long double fraction=std::ldexp(static_cast<long double>(significand),static_cast<int>(exponent));
+  if (!std::isfinite(fraction) || fraction <= 0 || fraction >= 1 ||
+      equivalent_fraction_to_json(fraction) != value)
+    throw std::invalid_argument("plan.vec_eqops_fraction: unrepresentable or noncanonical fraction");
+  return fraction;
+}
+
 nlohmann::json plan_to_json(const Plan& plan) {
   validate_plan(plan);
   nlohmann::json payload = make_payload(plan);
@@ -277,9 +325,11 @@ std::shared_ptr<const Plan> plan_from_json(const nlohmann::json& j) {
                  "launch_ns", "epochs", "fingerprint"},
                 "plan");
   const auto schema = require_member(j, "schema", "plan");
-  if (!schema.is_string() || schema.get<std::string>() != "coarse_die_plan_v2") {
-    throw std::invalid_argument("plan.schema: expected coarse_die_plan_v2");
+  if (!schema.is_string() || (schema.get<std::string>() != "coarse_die_plan_v2" &&
+                             schema.get<std::string>() != "coarse_die_plan_v3")) {
+    throw std::invalid_argument("plan.schema: expected coarse_die_plan_v2 or coarse_die_plan_v3");
   }
+  const bool fractional_schema = schema.get<std::string>() == "coarse_die_plan_v3";
   auto plan = std::make_shared<Plan>();
   plan->task = require_member(j, "task", "plan");
   plan->summary = require_member(j, "summary", "plan");
@@ -315,7 +365,7 @@ std::shared_ptr<const Plan> plan_from_json(const nlohmann::json& j) {
     for (std::size_t ai = 0; ai < activities.size(); ++ai) {
       const std::string ap = ep + ".activities[" + std::to_string(ai) + "]";
       const auto& ja = activities[ai];
-      reject_unknown(ja, {"id", "role", "work", "hbm_bytes", "int4_ops", "vec_eqops", "canonical_q", "private_time_s", "credit_delta"}, ap);
+      reject_unknown(ja, {"id", "role", "work", "hbm_bytes", "int4_ops", "vec_eqops", "vec_eqops_fraction", "canonical_q", "private_time_s", "credit_delta"}, ap);
       Activity activity;
       activity.id = require_u64(require_member(ja, "id", ap), ap + ".id");
       activity.role = parse_role(require_member(ja, "role", ap), ap + ".role");
@@ -339,6 +389,12 @@ std::shared_ptr<const Plan> plan_from_json(const nlohmann::json& j) {
       }
       activity.int4_ops = require_u64(require_member(ja, "int4_ops", ap), ap + ".int4_ops");
       activity.vec_eqops = require_u64(require_member(ja, "vec_eqops", ap), ap + ".vec_eqops");
+      if (ja.contains("vec_eqops_fraction")) {
+        if (!fractional_schema) throw std::invalid_argument(ap + ": fractional work requires Plan schema v3");
+        activity.vec_eqops_fraction = equivalent_fraction_from_json(ja.at("vec_eqops_fraction"));
+        if (activity.vec_eqops_fraction == 0.0)
+          throw std::invalid_argument(ap + ": zero fractional remainder must be omitted");
+      }
       activity.canonical_q = require_finite_nonnegative(require_member(ja, "canonical_q", ap), ap + ".canonical_q");
       activity.private_time_s = require_finite_nonnegative(require_member(ja, "private_time_s", ap), ap + ".private_time_s");
       const auto& delta = require_member(ja, "credit_delta", ap);

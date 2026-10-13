@@ -1,0 +1,10 @@
+Retained pre-GMP run note:
+
+bounded_lifecycle: exact rational multiplication overflow
+
+The earlier implementation used fixed-width __int128 rational arithmetic. It
+failed on exact rational multiplication overflow and its captured
+prototype.txt output is partial, not a completed test. The current source has
+been converted to GMP-backed exact rationals; that source has not yet been
+compiled or run while the parent performance probe is active. Do not infer
+validation of the current source from the old executable or prototype.txt.
