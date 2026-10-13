@@ -1,0 +1,115 @@
+[  9%] Building CXX object CMakeFiles/coarse_die.dir/src/Hardware.cc.o
+[  9%] Building CXX object CMakeFiles/coarse_die.dir/src/Plan.cc.o
+/workspace/template/die/src/Plan.cc: In function ‘std::shared_ptr<const coarse_die::Plan> coarse_die::plan_from_json(const nlohmann::json&)’:
+/workspace/template/die/src/Plan.cc:286:15: warning: possibly dangling reference to a temporary [-Wdangling-reference]
+  286 |   const auto& hfp = require_member(j, "hardware_fingerprint", "plan");
+      |               ^~~
+/workspace/template/die/src/Plan.cc:286:35: note: the temporary was destroyed at the end of the full expression ‘coarse_die::{anonymous}::require_member((* & j), ((const char*)"hardware_fingerprint"), std::__cxx11::basic_string<char>(((const char*)"plan"), std::allocator<char>()))’
+  286 |   const auto& hfp = require_member(j, "hardware_fingerprint", "plan");
+      |                     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/workspace/template/die/src/Plan.cc:290:15: warning: possibly dangling reference to a temporary [-Wdangling-reference]
+  290 |   const auto& epoch_array = require_member(j, "epochs", "plan");
+      |               ^~~~~~~~~~~
+/workspace/template/die/src/Plan.cc:290:43: note: the temporary was destroyed at the end of the full expression ‘coarse_die::{anonymous}::require_member((* & j), ((const char*)"epochs"), std::__cxx11::basic_string<char>(((const char*)"plan"), std::allocator<char>()))’
+  290 |   const auto& epoch_array = require_member(j, "epochs", "plan");
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+/workspace/template/die/src/Plan.cc:355:15: warning: possibly dangling reference to a temporary [-Wdangling-reference]
+  355 |   const auto& fingerprint = require_member(j, "fingerprint", "plan");
+      |               ^~~~~~~~~~~
+/workspace/template/die/src/Plan.cc:355:43: note: the temporary was destroyed at the end of the full expression ‘coarse_die::{anonymous}::require_member((* & j), ((const char*)"fingerprint"), std::__cxx11::basic_string<char>(((const char*)"plan"), std::allocator<char>()))’
+  355 |   const auto& fingerprint = require_member(j, "fingerprint", "plan");
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~
+[ 13%] Building CXX object CMakeFiles/coarse_die.dir/src/Compiler.cc.o
+/workspace/template/die/src/Compiler.cc:21:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   21 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+/workspace/template/die/src/Compiler.cc: In function ‘nlohmann::json coarse_die::{anonymous}::normalize_new_task(const nlohmann::json&, const coarse_die::Hardware&)’:
+/workspace/template/die/src/Compiler.cc:326:15: warning: possibly dangling reference to a temporary [-Wdangling-reference]
+  326 |   const auto& shape_raw = required(raw, "tensor_shapes", "task");
+      |               ^~~~~~~~~
+/workspace/template/die/src/Compiler.cc:326:35: note: the temporary was destroyed at the end of the full expression ‘coarse_die::{anonymous}::required((* & raw), ((const char*)"tensor_shapes"), std::__cxx11::basic_string<char>(((const char*)"task"), std::allocator<char>()))’
+  326 |   const auto& shape_raw = required(raw, "tensor_shapes", "task");
+      |                           ~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[ 18%] Building CXX object CMakeFiles/coarse_die.dir/src/Mapping.cc.o
+/workspace/template/die/src/Mapping.cc:21:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   21 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+/workspace/template/die/src/Mapping.cc: In function ‘std::pair<__int128 unsigned, __int128 unsigned> coarse_die::detail::{anonymous}::prefix_slots_one(const Span&, u64, u64)’:
+/workspace/template/die/src/Mapping.cc:278:9: warning: ISO C++ does not support ‘__int128’ for ‘base’ [-Wpedantic]
+  278 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |         ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:278:37: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  278 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |                                     ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:278:67: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  278 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |                                                                   ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:282:11: warning: ISO C++ does not support ‘__int128’ for ‘first_reach’ [-Wpedantic]
+  282 |     const __int128 first_reach = base + static_cast<__int128>(r + 1) * tq;
+      |           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:282:53: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  282 |     const __int128 first_reach = base + static_cast<__int128>(r + 1) * tq;
+      |                                                     ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:285:13: warning: ISO C++ does not support ‘__int128’ for ‘numerator’ [-Wpedantic]
+  285 |       const __int128 numerator = 1 - first_reach;
+      |             ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:286:66: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  286 |       first_positive = static_cast<u64>((numerator + static_cast<__int128>(stride) - 1) / static_cast<__int128>(stride));
+      |                                                                  ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:286:103: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  286 |       first_positive = static_cast<u64>((numerator + static_cast<__int128>(stride) - 1) / static_cast<__int128>(stride));
+      |                                                                                                       ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:290:11: warning: ISO C++ does not support ‘__int128’ for ‘positive_reach’ [-Wpedantic]
+  290 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:290:63: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  290 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |                                                               ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:290:103: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  290 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |                                                                                                       ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:304:11: warning: ISO C++ does not support ‘__int128’ for ‘reach’ [-Wpedantic]
+  304 |     const __int128 reach = base + s.q;
+      |           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:312:11: warning: ISO C++ does not support ‘__int128’ for ‘reach’ [-Wpedantic]
+  312 |     const __int128 reach = base + s.q;
+      |           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc: In function ‘void coarse_die::detail::{anonymous}::push_epoch(coarse_die::Plan&, const coarse_die::Hardware&, Flow, Flow, Flow, u64, u64, u64, u64, double, double, const std::string&)’:
+/workspace/template/die/src/Mapping.cc:683:3: warning: this ‘if’ clause does not guard... [-Wmisleading-indentation]
+  683 |   if(has(l))epoch.activities.push_back(l);if(has(c))epoch.activities.push_back(c);if(has(s))epoch.activities.push_back(s);
+      |   ^~
+/workspace/template/die/src/Mapping.cc:683:43: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the ‘if’
+  683 |   if(has(l))epoch.activities.push_back(l);if(has(c))epoch.activities.push_back(c);if(has(s))epoch.activities.push_back(s);
+      |                                           ^~
+/workspace/template/die/src/Mapping.cc: In function ‘std::vector<std::shared_ptr<coarse_die::Plan> > coarse_die::detail::{anonymous}::enumerate_gemm(const coarse_die::Hardware&, const nlohmann::json&, const Topology&, u64, u64, u64)’:
+/workspace/template/die/src/Mapping.cc:923:13: warning: unused variable ‘ncore’ [-Wunused-variable]
+  923 |   const u64 ncore=du(hw,"die","core_count");
+      |             ^~~~~
+/workspace/template/die/src/Mapping.cc: In function ‘std::vector<std::shared_ptr<coarse_die::Plan> > coarse_die::detail::enumerate_mappings(const coarse_die::Hardware&, const nlohmann::json&)’:
+/workspace/template/die/src/Mapping.cc:1146:70: warning: unused variable ‘Tk’ [-Wunused-variable]
+ 1146 |         const u64 Th=ceildiv(H,th),Tf=ceildiv(F,tf),Tm=ceildiv(M,tm),Tk=ceildiv(H,tk);
+      |                                                                      ^~
+/workspace/template/die/src/Mapping.cc: At global scope:
+/workspace/template/die/src/Mapping.cc:482:36: warning: ‘std::pair<long double, long double> coarse_die::detail::{anonymous}::route_moments(const Topology&, const AxisDist&, u64, bool)’ defined but not used [-Wunused-function]
+  482 | std::pair<long double,long double> route_moments(const Topology& topo,
+      |                                    ^~~~~~~~~~~~~
+/workspace/template/die/src/Mapping.cc:323:6: warning: ‘coarse_die::detail::{anonymous}::u128 coarse_die::detail::{anonymous}::attention_slots(const std::vector<Span>&, u64, u64)’ defined but not used [-Wunused-function]
+  323 | u128 attention_slots(const std::vector<Span>& spans, u64 tq, u64 tk) {
+      |      ^~~~~~~~~~~~~~~
+[ 22%] Building CXX object CMakeFiles/coarse_die.dir/src/Execution.cc.o
+[ 27%] Linking CXX static library libcoarse_die.a
+[ 27%] Built target coarse_die
+[ 31%] Building CXX object CMakeFiles/coarse_die_cabi.dir/src/Capi.cc.o
+[ 36%] Building CXX object CMakeFiles/coarse_die_benchmark.dir/tests/benchmark.cc.o
+/workspace/template/die/tests/benchmark.cc:52:36: error: ‘COARSE_DIE_SOURCE_DIR’ was not declared in this scope
+   52 |   std::string config = std::string(COARSE_DIE_SOURCE_DIR) +
+      |                                    ^~~~~~~~~~~~~~~~~~~~~
+/workspace/template/die/tests/benchmark.cc:55:19: error: ‘COARSE_DIE_SOURCE_DIR’ was not declared in this scope
+   55 |       std::string(COARSE_DIE_SOURCE_DIR) + "/tests/fixtures/gemm_medium.json";
+      |                   ^~~~~~~~~~~~~~~~~~~~~
+gmake[2]: *** [CMakeFiles/coarse_die_benchmark.dir/build.make:79: CMakeFiles/coarse_die_benchmark.dir/tests/benchmark.cc.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:373: CMakeFiles/coarse_die_benchmark.dir/all] Error 2
+gmake[1]: *** Waiting for unfinished jobs....
+[ 40%] Linking CXX shared library lib/libcoarse_die_cabi.so
+[ 40%] Built target coarse_die_cabi
+gmake: *** [Makefile:101: all] Error 2

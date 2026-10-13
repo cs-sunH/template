@@ -123,6 +123,16 @@ class LocalHbmBandwidthModel : public Callable {
     void call(EventType type, CallData* data) override;
 
     bool has_active_jobs() const;
+    void record_coarse_die_hbm_bytes(double read_bytes, double write_bytes) {
+        coarse_die_read_served_ += read_bytes;
+        coarse_die_write_served_ += write_bytes;
+    }
+    double coarse_die_read_bytes_served() const { return coarse_die_read_served_; }
+    double coarse_die_write_bytes_served() const { return coarse_die_write_served_; }
+    double coarse_restore_bytes_served() const { return coarse_restore_served_; }
+    double coarse_pool_read_bytes_served() const { return coarse_pool_read_served_; }
+    double coarse_pool_write_bytes_served() const { return coarse_pool_write_served_; }
+
 
     // Die backend teardown helper: drop every pending DIE_COMPUTE job of
     // `sink` WITHOUT firing its callback (the owning DieExecution is going
@@ -331,6 +341,15 @@ class LocalHbmBandwidthModel : public Callable {
     // counted slot since the 2026-09-25 copy-pipelining change) and share
     // the pool through this model's N-way equal split.
     std::vector<Job> jobs;
+    double coarse_comm_read_served_ = 0.0;
+    double coarse_comm_write_served_ = 0.0;
+    double coarse_restore_served_ = 0.0;
+    double coarse_pool_read_served_ = 0.0;
+    double coarse_pool_write_served_ = 0.0;
+    double coarse_die_read_served_ = 0.0;
+    double coarse_die_write_served_ = 0.0;
+    std::map<uint64_t, WorkloadLayerHandlerData*> coarse_jobs_;
+
     Tick last_update_tick;
     uint64_t event_generation;
     // Backend job identity sequence (see Job::issue_seq): assigned at

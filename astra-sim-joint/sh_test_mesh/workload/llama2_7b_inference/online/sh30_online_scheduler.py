@@ -1356,6 +1356,12 @@ class _JointDiePlanProvider:
     def _descriptor(self, *, phase, spans, layer_count, weight_passes,
                     tensor_parallel_rank, kv_identity, service_factor,
                     route, label):
+        if self._ctx.profile == "coarse_die_v2":
+            raise RuntimeError(
+                "unsupported_projection_state: coarse_die_v2 cannot be "
+                "projected through the legacy scalar die-plan snapshot; "
+                "live v2 export/import and private Runtime overlay are "
+                "required")
         from joint.die_plan_projection import (
             DiePlanDescriptor, ScaledDieExecution,
         )

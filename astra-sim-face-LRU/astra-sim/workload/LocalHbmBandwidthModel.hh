@@ -102,6 +102,16 @@ class LocalHbmBandwidthModel : public Callable {
     void call(EventType type, CallData* data) override;
 
     bool has_active_jobs() const;
+    void record_coarse_die_hbm_bytes(double read_bytes, double write_bytes) {
+        coarse_die_read_served_ += read_bytes;
+        coarse_die_write_served_ += write_bytes;
+    }
+    double coarse_die_read_bytes_served() const { return coarse_die_read_served_; }
+    double coarse_die_write_bytes_served() const { return coarse_die_write_served_; }
+    double coarse_restore_bytes_served() const { return coarse_restore_served_; }
+    double coarse_pool_read_bytes_served() const { return coarse_pool_read_served_; }
+    double coarse_pool_write_bytes_served() const { return coarse_pool_write_served_; }
+
 
     // DeadEnd-census diagnostic only (2026-10-11, ported from WL): one
     // stderr line per in-flight job plus the transition-prediction state
@@ -226,6 +236,15 @@ class LocalHbmBandwidthModel : public Callable {
     // hbm_dma slot still structurally guarantees at most one in-flight
     // restore per rank.
     std::vector<Job> jobs;
+    double coarse_comm_read_served_ = 0.0;
+    double coarse_comm_write_served_ = 0.0;
+    double coarse_restore_served_ = 0.0;
+    double coarse_pool_read_served_ = 0.0;
+    double coarse_pool_write_served_ = 0.0;
+    double coarse_die_read_served_ = 0.0;
+    double coarse_die_write_served_ = 0.0;
+    std::map<uint64_t, WorkloadLayerHandlerData*> coarse_jobs_;
+
     Tick last_update_tick;
     uint64_t event_generation;
     SystemEventHandle scheduled_transition_event;

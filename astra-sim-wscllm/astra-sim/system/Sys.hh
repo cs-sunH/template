@@ -27,6 +27,7 @@ namespace AstraSim {
 class BaseStream;
 class StreamBaseline;
 class DataSet;
+class CoarseDieRuntime;
 class QueueLevels;
 class Workload;
 class LogicalTopology;
@@ -365,6 +366,11 @@ class Sys : public Callable {
         explicit DieModelRuntime(DieModel::Hardware hw);
     };
     std::unique_ptr<DieModelRuntime> die_runtime;
+    // Independent coarse_die_v2 backend. Its Sys-clock driver owns one
+    // Runtime per rank and shares it between COMP plans and every local-HBM
+    // endpoint. Null for legacy mesh_die_v1/tx8_reference_v1 runs.
+    std::unique_ptr<CoarseDieRuntime> coarse_die_runtime;
+    std::string die_model_profile;
     // Resolved die-model-config path (diagnostics only; empty off the die
     // backend).
     std::string die_model_config_path;

@@ -39,6 +39,7 @@ reverse index (步骤 1-5).
 #include <vector>
 
 #include "DieTypes.hh"
+#include <json/json.hpp>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -80,6 +81,7 @@ struct ComputeAttrs {
     // JSON payload into every short-lived view (design doc §8.3).
     OpRole op_role = OpRole::Compute;
     std::shared_ptr<const DieModel::DieOpSpec> die_spec;
+    std::shared_ptr<const nlohmann::json> die_task_json;
 };
 
 /// Point-to-point comm attributes (issue_send_comm / issue_recv_comm).

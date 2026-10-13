@@ -60,6 +60,8 @@ _SUPPORTED_TOPOLOGIES = frozenset({"Line", "Mesh"})
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CABI_LIBRARY_NAME = "libdie_model_cabi.so"
 _CABI_LIBRARY_ENV = "DIE_MODEL_CABI_PATH"
+_COARSE_CABI_LIBRARY_NAME = "libcoarse_die_cabi.so"
+_COARSE_CABI_LIBRARY_ENV = "DIE_COARSE_CABI_PATH"
 _DIE_NODE_KEYS = frozenset(
     {
         "sram-mb-per-core",
@@ -160,6 +162,62 @@ def derive_die_hardware(die_node: dict[str, Any]) -> dict[str, Any]:
         library.die_destroy_model(model)
 
 
+def derive_coarse_die_hardware(config: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a complete coarse_die_v2 descriptor through its own C ABI."""
+    candidates: list[Path] = []
+    env_value = os.environ.get(_COARSE_CABI_LIBRARY_ENV)
+    if env_value:
+        candidates.append(Path(env_value))
+    build = _REPO_ROOT / "build" / "astra_analytical" / "build_congestion_aware"
+    candidates.extend((build / "lib" / _COARSE_CABI_LIBRARY_NAME,
+                       build / "bin" / _COARSE_CABI_LIBRARY_NAME))
+    library_path = next((path for path in candidates if path.is_file()), None)
+    if library_path is None:
+        raise ValueError(
+            "coarse_die_v2 descriptor requires libcoarse_die_cabi.so; "
+            f"build it or set {_COARSE_CABI_LIBRARY_ENV}")
+    library = ctypes.CDLL(str(library_path))
+    library.die_coarse_create_model_v2.argtypes = [
+        ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
+    library.die_coarse_create_model_v2.restype = ctypes.c_int
+    library.die_coarse_hardware_summary_v2.argtypes = [ctypes.c_uint64]
+    library.die_coarse_hardware_summary_v2.restype = ctypes.c_void_p
+    library.die_coarse_free_result_v2.argtypes = [ctypes.c_void_p]
+    library.die_coarse_free_result_v2.restype = None
+    library.die_coarse_destroy_model_v2.argtypes = [ctypes.c_uint64]
+    library.die_coarse_destroy_model_v2.restype = ctypes.c_int
+    library.die_coarse_last_error_v2.argtypes = []
+    library.die_coarse_last_error_v2.restype = ctypes.c_char_p
+    model = ctypes.c_uint64()
+    status = library.die_coarse_create_model_v2(
+        json.dumps(config, sort_keys=True).encode("utf-8"), ctypes.byref(model))
+    if status != 0 or not model.value:
+        error = library.die_coarse_last_error_v2()
+        detail = error.decode("utf-8", "replace") if error else ""
+        raise ValueError(
+            "coarse_die_v2 hardware descriptor rejected by shared library: "
+            + detail)
+    try:
+        result = library.die_coarse_hardware_summary_v2(model.value)
+        if not result:
+            error = library.die_coarse_last_error_v2()
+            detail = error.decode("utf-8", "replace") if error else ""
+            raise ValueError("coarse hardware summary failed: " + detail)
+        try:
+            summary = json.loads(ctypes.string_at(result).decode("utf-8"))
+        finally:
+            library.die_coarse_free_result_v2(result)
+        # The C ABI names the payload ``derived_hardware``; the config
+        # resolver's stable Python contract exposes this block as ``derived``
+        # (matching the v1 summary shape) while keeping every original field.
+        if isinstance(summary, dict) and "derived" not in summary:
+            summary["derived"] = summary.get("derived_hardware")
+        return summary
+    finally:
+        library.die_coarse_destroy_model_v2(model.value)
+
+
+
 def _validate_die_node_structure(die: dict[str, Any]) -> None:
     """die 节六键的结构检查(键集/基础类型/枚举;值域由库校验)。"""
     context = "Hardware configuration.die"
@@ -256,7 +314,7 @@ class ResolvedHardware:
     remote_memory_bandwidth_gbps: float
     remote_memory_latency_ns: int | None
     remote_memory_npu_selection: str | None
-    peak_perf_tflops: float
+    peak_perf_tflops: Optional[float]
     metadata: dict[str, object]
     # 阶段 C(die 后端,契约 §3.1/§3.3;face-LRU 随迁 2026-10-03):die 节
     # 存在时非 None——die 六参数原文 + 库派生摘要(derived 全字段);
@@ -265,6 +323,7 @@ class ResolvedHardware:
     # compute 节。本仓的 remote-memory/pool 字段与 die 节正交,照常装载。
     die_node: Optional[dict[str, Any]] = None
     die_summary: Optional[dict[str, Any]] = None
+    coarse_die_config: Optional[dict[str, Any]] = None
 
     @property
     def die_derived(self) -> Optional[dict[str, Any]]:
@@ -274,9 +333,11 @@ class ResolvedHardware:
 
     @property
     def die_profile(self) -> str:
+        if self.coarse_die_config is not None:
+            return "coarse_die_v2"
         if self.die_summary is None:
             return ""
-        return str(self.die_summary.get("profile", ""))
+        return str(self.die_summary.get("profile", self.die_summary.get("schema", "")))
 
     @property
     def npus_count(self) -> int:
@@ -391,7 +452,7 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
     }
     actual_top_level = set(data)
     missing_top_level = _required_top_level - actual_top_level
-    extra_top_level = actual_top_level - _required_top_level - {"compute", "die"}
+    extra_top_level = actual_top_level - _required_top_level - {"compute", "die", "coarse-die"}
     if missing_top_level or extra_top_level:
         details = []
         if missing_top_level:
@@ -505,12 +566,13 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
     # 并存即报错(新后端不得静默沿用旧算力);二者全无同样报错。本仓的
     # remote-memory/pool 节与计算描述正交,不受影响。
     die_node = data.get("die")
+    coarse_die_config = data.get("coarse-die")
     compute_node = data.get("compute")
-    if die_node is not None and compute_node is not None:
+    if sum(value is not None for value in
+           (die_node, coarse_die_config, compute_node)) > 1:
         raise ValueError(
-            "Hardware configuration must not declare both 'die' and "
-            "'compute.peak-perf-tflops' (mutually exclusive compute "
-            "descriptions, contract section 3.1)")
+            "Hardware configuration must declare at most one of 'die', "
+            "'coarse-die', or 'compute.peak-perf-tflops'")
     die_summary: Optional[dict[str, Any]] = None
     if die_node is not None:
         if not isinstance(die_node, dict):
@@ -539,6 +601,32 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
                 "section 3.4)")
         peak_perf = derived_peak
         local_bandwidth = derived_bandwidth
+    elif coarse_die_config is not None:
+        if not isinstance(coarse_die_config, dict):
+            raise ValueError("Hardware configuration.coarse-die must be an object")
+        if coarse_die_config.get("schema") != "coarse_die_v2":
+            raise ValueError(
+                "Hardware configuration.coarse-die.schema must be 'coarse_die_v2'")
+        die_summary = derive_coarse_die_hardware(coarse_die_config)
+        derived = die_summary.get("derived") or {}
+        try:
+            hw_summary = derived["hardware_summary"]
+            derived_capacity = int(hw_summary["hbm_capacity_bytes"])
+            row_rates = [float(value) for value in hw_summary["hbm_row_peak_Bps"]]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "coarse_die_v2 library returned incomplete typed hardware "
+                f"fields: {derived!r}") from error
+        if len(row_rates) != 2 or any(rate <= 0 for rate in row_rates):
+            raise ValueError(
+                "coarse_die_v2 hardware summary must carry two positive HBM row rates")
+        if capacity != derived_capacity:
+            raise ValueError(
+                f"Capacity profile {capacity_profile!r}.bytes ({capacity}) "
+                "does not match coarse_die_v2 per-die HBM capacity "
+                f"({derived_capacity})")
+        peak_perf = None
+        local_bandwidth = sum(row_rates) / 1e9
     elif compute_node is not None:
         if not isinstance(compute_node, dict):
             raise ValueError("Hardware configuration.compute must be an object")
@@ -576,6 +664,7 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         metadata=metadata,
         die_node=(dict(die_node) if die_node is not None else None),
         die_summary=die_summary,
+        coarse_die_config=(dict(coarse_die_config) if coarse_die_config is not None else None),
     )
 
 
@@ -740,11 +829,23 @@ def materialize_runtime_configs(
     system["remote-mem-bw"] = hardware.remote_memory_bandwidth_gbps
     if "remote-mem-latency" in remote_memory:
         system["remote-mem-latency"] = remote_memory["remote-mem-latency"]
-    system["peak-perf"] = hardware.peak_perf_tflops
+    if hardware.peak_perf_tflops is not None:
+        system["peak-perf"] = hardware.peak_perf_tflops
 
     destination = Path(output_dir)
     die_model_path: Optional[Path] = None
-    if hardware.die_summary is not None:
+    if hardware.coarse_die_config is not None:
+        if system.get("compute-cost-model") != "die":
+            raise ValueError("coarse_die_v2 requires compute-cost-model='die'")
+        if system.get("die-model-profile") != "coarse_die_v2":
+            raise ValueError("coarse_die_v2 requires die-model-profile='coarse_die_v2'")
+        if system.get("roofline-enabled"):
+            raise ValueError("coarse_die_v2 conflicts with roofline-enabled=1")
+        die_model_path = destination / "resolved_die_model.json"
+        _write_text_atomically(
+            die_model_path, _serialize_json(hardware.coarse_die_config))
+        system["die-model-config"] = str(die_model_path.resolve())
+    elif hardware.die_summary is not None:
         # 阶段 C(die 后端,契约 §3.2/§3.3):resolved_die_model.json 落
         # runtime_config 目录(库的 §3.3 摘要原文,可被 make_hardware
         # round-trip);system.json 注入 die-model-config(绝对路径,

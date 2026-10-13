@@ -252,12 +252,24 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
         if (!spec_json.is_object()) {
             fail(where + ": compute.die_op_spec is not an object");
         }
-        try {
-            node.compute.die_spec = DieModel::parse_die_op_spec(spec_json);
-        } catch (const ParseError&) {
-            throw;
-        } catch (const std::exception& e) {
-            fail(where + ": compute.die_op_spec rejected: " + e.what());
+        node.compute.die_task_json =
+            std::make_shared<const nlohmann::json>(spec_json);
+        // Keep the legacy parsed form for mesh_die_v1. A new coarse task
+        // descriptor has no legacy schema_version and is validated by the
+        // single coarse_die_v2 compiler at issue/oracle time. In both cases
+        // the original JSON survives unchanged in NodeStore.
+        if (!spec_json.contains("schema_version")) {
+            if (!spec_json.contains("op_kind")) {
+                fail(where + ": compute.die_op_spec is missing op_kind");
+            }
+        } else {
+            try {
+                node.compute.die_spec = DieModel::parse_die_op_spec(spec_json);
+            } catch (const ParseError&) {
+                throw;
+            } catch (const std::exception& e) {
+                fail(where + ": compute.die_op_spec rejected: " + e.what());
+            }
         }
     }
     if (compute.contains("remote_weight_bytes")) {

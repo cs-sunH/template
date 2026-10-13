@@ -534,7 +534,9 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         issue_replay(node);
         return;
     }
-    if (node.compute.die_spec != nullptr && node.compute.runtime_ns != 0) {
+    if ((node.compute.die_spec != nullptr ||
+         node.compute.die_task_json != nullptr) &&
+        node.compute.runtime_ns != 0) {
         // The GraphBatch parser already rejects this combination (N12 /
         // contract §2); reaching it here means a producer that bypassed
         // the parser. Fail closed instead of letting a calibrated runtime
@@ -561,7 +563,9 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         }
         return;
     }
-    if (node.compute.die_spec == nullptr) {
+    if (node.compute.die_spec == nullptr &&
+        (sys->coarse_die_runtime == nullptr ||
+         node.compute.die_task_json == nullptr)) {
         // Contract §2/§7.3: a real COMP without a die_op_spec is a
         // generator defect -- never a silent roofline/replay fallback.
         throw std::runtime_error(

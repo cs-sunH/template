@@ -37,7 +37,9 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/scheduling/OfflineGreedy.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/BasicLogicalTopology.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
+#include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "DieModel.hh"
+#include "coarse_die/Hardware.hh"
 #include <json/json.hpp>
 
 using namespace std;
@@ -198,6 +200,8 @@ Sys::Sys(int id,
     this->roofline = nullptr;
     this->compute_cost_model = ComputeCostModel::LegacyDefault;
     this->die_runtime = nullptr;
+    this->coarse_die_runtime = nullptr;
+    this->die_model_profile = "";
     this->die_model_config_path = "";
 
     this->local_mem_bw = 0;
@@ -821,11 +825,13 @@ void Sys::initialize_sys_fields(const string& name, ifstream& inFile) {
                 "system config key 'die-model-profile' must be a string");
         }
         die_model_profile = j["die-model-profile"];
+        this->die_model_profile = die_model_profile;
         if (die_model_profile != "mesh_die_v1" &&
-            die_model_profile != "tx8_reference_v1") {
+            die_model_profile != "tx8_reference_v1" &&
+            die_model_profile != "coarse_die_v2") {
             sys_panic("unknown value for die-model-profile in sys input "
                       "file: '" + die_model_profile + "' (legal: "
-                      "mesh_die_v1 | tx8_reference_v1)");
+                      "mesh_die_v1 | tx8_reference_v1 | coarse_die_v2)");
         }
     }
     die_model_config_explicit_present = j.contains("die-model-config");
@@ -996,6 +1002,51 @@ void Sys::initialize_die_backend(
     } catch (const std::exception& e) {
         sys_panic("failed to parse die-model-config file " + path + ": " +
                   e.what());
+    }
+
+    // coarse_die_v2 has an independent resolved-descriptor schema and
+    // shared event runtime. It must be selected explicitly and never enters
+    // the old scalar DieModel/roofline machine.
+    if (profile == "coarse_die_v2") {
+        if (!profile_present || die_cfg.value("schema", string()) !=
+                                    "coarse_die_v2") {
+            sys_panic(
+                "coarse_die_v2 requires an explicit die-model-profile and a "
+                "coarse_die_v2 resolved descriptor at " + path);
+        }
+        if (hbm_contention_key_present && !hbm_bandwidth_contention) {
+            sys_panic(
+                "coarse_die_v2 requires shared local HBM service for COMP "
+                "and endpoint traffic; hbm-bandwidth-contention=0 is not "
+                "supported");
+        }
+        coarse_die::Hardware coarse_hw;
+        try {
+            coarse_hw = coarse_die::resolve_hardware(die_cfg);
+        } catch (const std::exception& e) {
+            LoggerFactory::get_logger("system")->critical(
+                "coarse_die_v2 descriptor {} rejected: {}", path, e.what());
+            exit(1);
+        }
+        coarse_die_runtime = std::make_unique<CoarseDieRuntime>(
+            this, std::move(coarse_hw));
+        die_runtime.reset();
+        die_model_profile = "coarse_die_v2";
+        // Keep the legacy scalar slot only as a compatibility report value;
+        // v2 scheduling reads the two typed row rates from Hardware.
+        if (!local_mem_bw_key_present) {
+            local_mem_bw = coarse_die_runtime->hardware().rates[
+                               coarse_die::HBM0] +
+                           coarse_die_runtime->hardware().rates[
+                               coarse_die::HBM1];
+        }
+        hbm_bandwidth_contention = true;
+        return;
+    }
+    if (profile_present && profile != "mesh_die_v1" &&
+        profile != "tx8_reference_v1") {
+        sys_panic("legacy DieModel cannot load die-model-profile '" + profile +
+                  "'");
     }
 
     DieModel::Hardware hw;
