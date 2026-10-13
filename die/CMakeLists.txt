@@ -35,5 +35,8 @@ if(COARSE_DIE_BUILD_TESTS)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark.cc")
     add_executable(coarse_die_benchmark tests/benchmark.cc)
     target_link_libraries(coarse_die_benchmark PRIVATE coarse_die)
+    target_compile_definitions(coarse_die_benchmark PRIVATE
+      COARSE_DIE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+      COARSE_DIE_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
   endif()
 endif()
