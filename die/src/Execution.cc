@@ -52,6 +52,95 @@ std::string role_name(Role role) {
   return "unknown";
 }
 
+constexpr std::array<const char*, served_category_count> kServedCategoryNames = {
+    "comp", "comm_send", "comm_recv", "restore", "pool", "die"};
+
+std::string decimal_measure(long double value);
+
+ServedCategory plan_served_category(const Plan& plan) {
+  const auto& task = plan.task;
+  if (!task.is_object() ||
+      task.value("schema", std::string()) != "coarse_die_endpoint_v2") {
+    if (plan.summary.is_object() &&
+        plan.summary.value("kind", std::string()) == "endpoint") {
+      throw std::runtime_error(
+          "invalid_endpoint: endpoint plan is missing its canonical endpoint task");
+    }
+    return ServedCategory::Comp;
+  }
+  if (!task.contains("endpoint") || !task.at("endpoint").is_object()) {
+    throw std::runtime_error(
+        "invalid_endpoint: endpoint plan is missing its canonical endpoint task");
+  }
+  const auto& endpoint = task.at("endpoint");
+  const std::string owner_kind = endpoint.at("owner_kind").get<std::string>();
+  if (owner_kind == "comm") {
+    const std::string direction = endpoint.at("direction").get<std::string>();
+    if (direction == "read") return ServedCategory::CommSend;
+    if (direction == "write") return ServedCategory::CommRecv;
+    throw std::runtime_error(
+        "invalid_endpoint: COMM owner direction must be read or write");
+  }
+  if (owner_kind == "restore") return ServedCategory::Restore;
+  if (owner_kind == "pool") return ServedCategory::Pool;
+  if (owner_kind == "die") return ServedCategory::Die;
+  throw std::runtime_error("invalid_endpoint: unsupported owner_kind in runtime plan");
+}
+
+nlohmann::json hbm_matrix_json(
+    const std::array<std::array<long double, 2>, 2>& matrix,
+    bool exact) {
+  nlohmann::json result = nlohmann::json::array();
+  for (std::size_t row = 0; row < 2; ++row) {
+    nlohmann::json directions = nlohmann::json::array();
+    for (std::size_t direction = 0; direction < 2; ++direction) {
+      directions.push_back(exact
+          ? nlohmann::json(decimal_measure(matrix[row][direction]))
+          : nlohmann::json(static_cast<double>(matrix[row][direction])));
+    }
+    result.push_back(std::move(directions));
+  }
+  return result;
+}
+
+nlohmann::json served_categories_snapshot_json(
+    const std::array<ServedCounters, served_category_count>& counters) {
+  nlohmann::json result = nlohmann::json::object();
+  for (std::size_t index = 0; index < served_category_count; ++index) {
+    const ServedCounters& item = counters[index];
+    result[kServedCategoryNames[index]] = {
+        {"hbm_served_bytes_by_row_direction_exact",
+         hbm_matrix_json(item.hbm_bytes, true)},
+        {"int4_ops_exact_decimal", decimal_measure(item.int4_ops)},
+        {"vec_eqops_exact_decimal", decimal_measure(item.vec_eqops)}};
+  }
+  return result;
+}
+
+nlohmann::json hardware_raw_denominators(const Hardware& hardware) {
+  nlohmann::json result = {
+      {"hardware_fingerprint", hardware.fingerprint},
+      {"peak_int4_ops_per_s", nullptr},
+      {"peak_vec_fp32_eq_ops_per_s", nullptr},
+      {"hbm_row_peak_Bps", nullptr}};
+  const auto found = hardware.derived.find("hardware_summary");
+  if (found == hardware.derived.end() || !found->is_object()) return result;
+  const auto& raw = *found;
+  for (const char* key : {"peak_int4_ops_per_s",
+                          "peak_vec_fp32_eq_ops_per_s"}) {
+    const auto value = raw.find(key);
+    if (value != raw.end() && value->is_number()) result[key] = *value;
+  }
+  const auto rows = raw.find("hbm_row_peak_Bps");
+  if (rows != raw.end() && rows->is_array() && rows->size() == 2) {
+    result["hbm_row_peak_Bps"] = *rows;
+  }
+  result["available"] = result.at("peak_int4_ops_per_s").is_number() &&
+                         result.at("peak_vec_fp32_eq_ops_per_s").is_number() &&
+                         result.at("hbm_row_peak_Bps").is_array();
+  return result;
+}
+
 std::string long_double_text(long double value) {
   std::ostringstream stream;
   stream << std::setprecision(std::numeric_limits<long double>::max_digits10)
@@ -281,6 +370,7 @@ struct EndpointSpec {
   std::string path_class;
   std::uint64_t physical_bytes = 0;
   std::array<double, 2> row_fraction{0.5, 0.5};
+  bool uniform_default = true;
   double eta_hbm = 1.0;
   bool has_hbm = false;
   bool has_route = false;
@@ -361,6 +451,7 @@ EndpointSpec parse_endpoint(const nlohmann::json& endpoint, const Hardware& hard
   result.join_token = endpoint.value("join_token", nlohmann::json());
 
   if (endpoint.contains("row_fraction")) {
+    result.uniform_default = false;
     const auto& fractions = endpoint.at("row_fraction");
     if (!fractions.is_array() || fractions.size() != 2) {
       throw std::invalid_argument("invalid_endpoint: row_fraction must have two values");
@@ -441,7 +532,7 @@ EndpointSpec parse_endpoint(const nlohmann::json& endpoint, const Hardware& hard
 
 std::uint64_t row_bytes(std::uint64_t total, double fraction);
 
-Activity endpoint_activity(const EndpointSpec& spec) {
+Activity endpoint_activity(const EndpointSpec& spec, bool legacy_uniform = false) {
   Activity activity;
   activity.id = spec.endpoint_id;
   activity.role = Role::Endpoint;
@@ -452,7 +543,9 @@ Activity endpoint_activity(const EndpointSpec& spec) {
   activity.private_time_s = 0.0;
   const std::size_t direction_index = spec.direction == "read" ? 0 : 1;
   if (spec.has_hbm) {
-    const std::uint64_t row0 = row_bytes(spec.physical_bytes, spec.row_fraction[0]);
+    const std::uint64_t row0 = spec.uniform_default && !legacy_uniform
+        ? spec.physical_bytes / 2 + spec.physical_bytes % 2
+        : row_bytes(spec.physical_bytes, spec.row_fraction[0]);
     const std::uint64_t row1 = spec.physical_bytes - row0;
     const std::array<std::uint64_t, 2> bytes{row0, row1};
     for (std::size_t row = 0; row < 2; ++row) {
@@ -689,16 +782,21 @@ std::string Owner::key() const {
          std::to_string(generation);
 }
 
-Runtime::Runtime(Hardware hardware) : hardware_(std::move(hardware)) {
-  validate_hardware(hardware_);
-  capacities_ = hardware_.rates;
+Runtime::Runtime(Hardware hardware)
+    : Runtime(std::make_shared<const Hardware>(std::move(hardware))) {}
+
+Runtime::Runtime(std::shared_ptr<const Hardware> hardware)
+    : hardware_(std::move(hardware)) {
+  if (!hardware_) throw std::invalid_argument("invalid_hardware: null shared hardware");
+  validate_hardware(*hardware_);
+  capacities_ = hardware_->rates;
 }
 
 std::uint64_t Runtime::submit(std::shared_ptr<const Plan> plan, Owner owner,
                               std::uint64_t now_ns) {
   if (!plan) throw std::invalid_argument("invalid_plan: null plan");
   if (owner.generation == 0) throw std::invalid_argument("invalid_owner: generation must be positive");
-  validate_plan(hardware_, *plan);
+  validate_plan(*hardware_, *plan);
   if (now_ns < now_ns_) throw std::invalid_argument("invalid_time: submit time moved backwards");
   if (plan->launch_ns > std::numeric_limits<std::uint64_t>::max() - now_ns) {
     throw std::overflow_error("overflow: ready time exceeds uint64");
@@ -712,6 +810,7 @@ std::uint64_t Runtime::submit(std::shared_ptr<const Plan> plan, Owner owner,
   execution.issue_ns = now_ns;
   execution.ready_ns = now_ns + plan->launch_ns;
   execution.owner = owner;
+  execution.served_category = plan_served_category(*plan);
   execution.plan = std::move(plan);
   execution.epoch = 0;
   for (std::size_t epoch = 0; epoch < execution.plan->epochs.size(); ++epoch) {
@@ -733,7 +832,7 @@ std::uint64_t Runtime::submit(std::shared_ptr<const Plan> plan, Owner owner,
 std::uint64_t Runtime::submit_endpoint(const nlohmann::json& endpoint_json,
                                        Owner owner, std::uint64_t now_ns) {
   if (owner.generation == 0) throw std::invalid_argument("invalid_owner: generation must be positive");
-  const EndpointSpec spec = parse_endpoint(endpoint_json, hardware_);
+  const EndpointSpec spec = parse_endpoint(endpoint_json, *hardware_);
   if (endpoint_registry_.count(spec.endpoint_id) != 0) {
     throw std::invalid_argument("duplicate_endpoint_id: endpoint_id is already live in this runtime");
   }
@@ -754,17 +853,21 @@ std::uint64_t Runtime::submit_endpoint(const nlohmann::json& endpoint_json,
                    {"path_class", spec.path_class},
                    {"physical_bytes", spec.physical_bytes},
                    {"row_fraction", {spec.row_fraction[0], spec.row_fraction[1]}},
+                   {"allocation_evidence", spec.uniform_default ? "uniform_default" : "explicit_row_fraction"},
                    {"eta_hbm", spec.has_hbm ? nlohmann::json(spec.eta_hbm) : nlohmann::json(nullptr)},
                    {"route_charged", spec.has_route},
                    {"internal_route", spec.internal_route},
                    {"join_token", spec.join_token}};
-  plan->fingerprint = stable_hash(plan->task.dump());
-  plan->hardware_fingerprint = hardware_.fingerprint;
+  plan->hardware_fingerprint = hardware_->fingerprint;
   plan->launch_ns = 0;
   Epoch epoch;
   epoch.name = "endpoint";
   epoch.activities.push_back(activity);
   plan->epochs.push_back(std::move(epoch));
+  // Snapshot serialization validates the same canonical payload hash used by
+  // compiled Plans. Hashing only task JSON made endpoint plans impossible to
+  // import after export, even though their runtime state was complete.
+  plan->fingerprint = plan_to_json(*plan).at("fingerprint").get<std::string>();
 
   const std::uint64_t handle = submit(plan, owner, now_ns);
   endpoint_registry_.emplace(spec.endpoint_id, spec.transaction_id);
@@ -790,6 +893,8 @@ void Runtime::settle() {
       }
       const Epoch& epoch = execution.plan->epochs[execution.epoch];
       execution.credit_capacity = epoch.credit_capacity;
+      ServedCounters& categorized = served_by_category_[
+          static_cast<std::size_t>(execution.served_category)];
       if (execution.epoch == 0 && execution.activities.empty()) {
         execution.credit = epoch.credit_initial;
       }
@@ -807,16 +912,19 @@ void Runtime::settle() {
               live.hbm_served[row][direction] = planned;
               execution.hbm_served[row][direction] += correction;
               hbm_served_[row][direction] += correction;
+              categorized.hbm_bytes[row][direction] += correction;
             }
           }
           const long double int4_correction =
               static_cast<long double>(live.definition.int4_ops) - live.int4_served;
           live.int4_served = live.definition.int4_ops;
           execution.int4_served += int4_correction;
+          categorized.int4_ops += int4_correction;
           const long double vec_correction =
               static_cast<long double>(live.definition.vec_eqops) - live.vec_served;
           live.vec_served = live.definition.vec_eqops;
           execution.vec_served += vec_correction;
+          categorized.vec_eqops += vec_correction;
           live.done = true;
           live.rate = 0.0;
           continue;
@@ -890,6 +998,30 @@ void Runtime::allocate() {
   if (refs.size() > 96) {
     for (Ref& ref : refs) ref.live->rate = 0.0;
     throw std::runtime_error("numerical_failure: active activity count exceeds 3x32 solver bound");
+  }
+  if (refs.size() == 1) {
+    // The one-variable max-min LP has an exact closed solution: its sole
+    // activity receives the smallest physical/private bound, unless a signed
+    // credit boundary blocks that direction. This is the same feasible set
+    // as the general solver, without allocating a simplex tableau.
+    Ref& ref=refs.front();
+    const auto& activity=ref.live->definition;
+    double rate=std::numeric_limits<double>::infinity();
+    for(std::size_t r=0;r<resource_count;++r)
+      if(activity.work[r]>0.0)rate=std::min(rate,capacities_[r]/activity.work[r]);
+    if(activity.private_time_s>0.0)rate=std::min(rate,1.0/activity.private_time_s);
+    for(std::size_t b=0;b<2;++b) {
+      const double tolerance=kCreditTolerance*std::max(1.0,ref.execution->credit_capacity[b]);
+      const double credit=ref.execution->credit[b];
+      if((credit<=tolerance&&activity.credit_delta[b]<0.0)||
+         (credit>=ref.execution->credit_capacity[b]-tolerance&&activity.credit_delta[b]>0.0))
+        rate=0.0;
+    }
+    if(!std::isfinite(rate)||rate<0.0)
+      throw std::runtime_error("numerical_failure: activity has no finite progress rate bound");
+    ref.live->rate=rate;
+    ref.live->alpha=rate>0.0?1.0:0.0;
+    return;
   }
   std::sort(refs.begin(), refs.end(), [](const Ref& lhs, const Ref& rhs) {
     return std::tie(lhs.first_resource, lhs.execution->owner.node_id,
@@ -1012,6 +1144,8 @@ void Runtime::allocate() {
     }
 
     double z_scale = std::numeric_limits<double>::infinity();
+    std::vector<double> variable_scale(count, 1.0);
+    bool has_positive_upper_bound = false;
     for (std::size_t i = 0; i < count; ++i) {
       if (excluded[i]) continue;
       double upper_x = std::numeric_limits<double>::infinity();
@@ -1031,17 +1165,43 @@ void Runtime::allocate() {
       if (!std::isfinite(upper_x) || upper_x < 0.0) {
         failure("activity has no finite canonical service bound");
       }
-      z_scale = std::min(z_scale, upper_x / refs[i].alpha);
+      if (upper_x > 0.0) {
+        has_positive_upper_bound = true;
+        const double activity_scale = upper_x / refs[i].alpha;
+        if (!std::isfinite(activity_scale)) failure("fairness scale is nonfinite");
+        z_scale = std::min(z_scale, activity_scale);
+      }
     }
+    if (!has_positive_upper_bound) z_scale = 1.0;
     if (!std::isfinite(z_scale) || z_scale < 0.0) {
       failure("fairness scale is nonfinite");
     }
-    if (z_scale == 0.0) z_scale = 1.0;
+
+    // Scale each canonical service variable by its share at a normalized
+    // fairness level: x_i = alpha_i*z_scale*y_i. Then the LP tier constraint
+    // is simply y_i >= z. In particular, activities of one owner with very
+    // different Q retain the same progress scale in their signed-credit
+    // rows; scaling by each activity's independent capacity made those rows
+    // ill-conditioned and admitted small inward rates at a credit boundary.
+    for (std::size_t i = 0; i < count; ++i) {
+      if (excluded[i]) continue;
+      variable_scale[i] = refs[i].alpha * z_scale;
+      if (!std::isfinite(variable_scale[i]) || variable_scale[i] <= 0.0) {
+        failure("fairness variable scale is outside simplex precision");
+      }
+    }
+
+    std::vector<Constraint> normalized_base = base;
+    for (Constraint& row : normalized_base) {
+      for (std::size_t i = 0; i < count; ++i) {
+        row.a[i] *= variable_scale[i];
+      }
+    }
 
     bool restart_with_fewer_activities = false;
     while (std::any_of(frozen.begin(), frozen.end(), [](bool value) { return !value; })) {
       if (++total_tiers > count * 2) failure("lexicographic max-min exceeded activity bound");
-      std::vector<Constraint> rows = base;
+      std::vector<Constraint> rows = normalized_base;
       std::vector<std::size_t> minimum_rows(count, std::numeric_limits<std::size_t>::max());
       for (std::size_t i = 0; i < count; ++i) {
         if (excluded[i]) {
@@ -1058,14 +1218,14 @@ void Runtime::allocate() {
         } else {
           Constraint minimum{std::vector<double>(count + 1, 0.0), 0.0};
           minimum.a[i] = -1.0;
-          minimum.a[count] = refs[i].alpha * z_scale;
+          minimum.a[count] = 1.0;
           minimum_rows[i] = rows.size();
           rows.push_back(std::move(minimum));
         }
       }
 
       // Base rows were built with count columns. Add the shared tier variable.
-      for (std::size_t r = 0; r < base.size(); ++r) rows[r].a.resize(count + 1, 0.0);
+      for (std::size_t r = 0; r < normalized_base.size(); ++r) rows[r].a.resize(count + 1, 0.0);
       std::vector<double> objective(count + 1, 0.0);
       objective[count] = 1.0;
       const LpResult tier = solve_lp(rows, objective);
@@ -1089,7 +1249,7 @@ void Runtime::allocate() {
       if (freeze_indices.empty()) {
         // A degenerate optimal dual can hide a forced minimum. Check each
         // activity against the same feasible minimum face, in stable order.
-        std::vector<Constraint> face = base;
+        std::vector<Constraint> face = normalized_base;
         for (std::size_t i = 0; i < count; ++i) {
           if (excluded[i]) {
             Constraint upper{std::vector<double>(count, 0.0), 0.0};
@@ -1103,7 +1263,7 @@ void Runtime::allocate() {
             lower.a[i] = -1.0;
             face.push_back(std::move(lower));
           } else {
-            Constraint minimum{std::vector<double>(count, 0.0), -refs[i].alpha * z};
+            Constraint minimum{std::vector<double>(count, 0.0), -normalized_z};
             minimum.a[i] = -1.0;
             face.push_back(std::move(minimum));
           }
@@ -1117,7 +1277,7 @@ void Runtime::allocate() {
           if (individual.status != LpStatus::Optimal || individual.primal.size() != count) {
             failure("lexicographic bottleneck identification LP failed");
           }
-          const double floor = refs[i].alpha * z;
+          const double floor = normalized_z;
           const double tolerance = 1.0e-8 * std::max(1.0e-12, std::abs(floor));
           if (individual.primal[i] <= floor + tolerance) freeze_indices.push_back(i);
         }
@@ -1139,7 +1299,7 @@ void Runtime::allocate() {
       }
       for (std::size_t i : freeze_indices) {
         frozen[i] = true;
-        solved[i] = refs[i].alpha * z;
+        solved[i] = normalized_z;
       }
     }
     if (restart_with_fewer_activities) continue;
@@ -1151,7 +1311,7 @@ void Runtime::allocate() {
         continue;
       }
       if (!std::isfinite(solved[i]) || solved[i] < -1.0e-10) failure("nonfinite lexicographic solution");
-      refs[i].live->rate = std::max(0.0, solved[i]) / refs[i].q;
+      refs[i].live->rate = std::max(0.0, solved[i] * variable_scale[i]) / refs[i].q;
       refs[i].live->alpha = refs[i].alpha;
     }
     return;
@@ -1174,6 +1334,8 @@ void Runtime::integrate(long double delta_ns) {
   for (auto& [handle, execution] : executions_) {
     (void)handle;
     if (execution.terminal || exact_ns_ + kTimeEpsilonNs < execution.ready_ns) continue;
+    ServedCounters& categorized = served_by_category_[
+        static_cast<std::size_t>(execution.served_category)];
     for (LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
       long double delta_progress = static_cast<long double>(live.rate) * seconds;
@@ -1192,6 +1354,7 @@ void Runtime::integrate(long double delta_ns) {
           live.hbm_served[row][direction] += served;
           execution.hbm_served[row][direction] += served;
           hbm_served_[row][direction] += served;
+          categorized.hbm_bytes[row][direction] += served;
         }
       }
       const long double served_int4 = static_cast<long double>(live.definition.int4_ops) * delta_progress;
@@ -1200,6 +1363,8 @@ void Runtime::integrate(long double delta_ns) {
       live.vec_served += served_vec;
       execution.int4_served += served_int4;
       execution.vec_served += served_vec;
+      categorized.int4_ops += served_int4;
+      categorized.vec_eqops += served_vec;
 
       for (std::size_t resource = 0; resource < resource_count; ++resource) {
         if (live.definition.work[resource] <= 0.0) continue;
@@ -1375,10 +1540,10 @@ void Runtime::update_capacity(std::size_t resource, double rate,
                               std::uint64_t now_ns) {
   if (resource >= resource_count) throw std::invalid_argument("invalid_resource: index outside [0,12]");
   if (!std::isfinite(rate) || rate < 0.0) throw std::invalid_argument("invalid_capacity: rate must be finite and nonnegative");
-  if (rate > hardware_.rates[resource]) {
+  if (rate > hardware_->rates[resource]) {
     throw std::invalid_argument("invalid_capacity: rate exceeds the hardware peak for this resource");
   }
-  if (!resource_enabled(hardware_, resource) && rate != 0.0) {
+  if (!resource_enabled(*hardware_, resource) && rate != 0.0) {
     throw std::invalid_argument("invalid_capacity: cannot enable a hardware-disabled resource");
   }
   if (now_ns < now_ns_) throw std::invalid_argument("invalid_time: capacity update moved backwards");
@@ -1546,6 +1711,16 @@ nlohmann::json Runtime::query_progress(std::uint64_t handle) const {
           {"cancelled", execution.cancelled}};
 }
 
+std::optional<std::uint64_t> Runtime::terminal_finish_ns(
+    std::uint64_t handle) const {
+  const auto found = executions_.find(handle);
+  if (found == executions_.end()) {
+    throw std::out_of_range("stale_handle: unknown execution handle");
+  }
+  if (!found->second.terminal) return std::nullopt;
+  return found->second.finish_ns;
+}
+
 nlohmann::json Runtime::counters() const {
   std::set<std::string> active_owners;
   std::set<std::string> hbm_owners;
@@ -1584,6 +1759,19 @@ nlohmann::json Runtime::counters() const {
     hbm_served.push_back(std::move(direction));
     hbm_served_exact.push_back(std::move(direction_exact));
   }
+  nlohmann::json served_by_category = nlohmann::json::object();
+  for (std::size_t index = 0; index < served_category_count; ++index) {
+    const ServedCounters& item = served_by_category_[index];
+    served_by_category[kServedCategoryNames[index]] = {
+        {"hbm_served_bytes_by_row_direction",
+         hbm_matrix_json(item.hbm_bytes, false)},
+        {"hbm_served_bytes_by_row_direction_exact",
+         hbm_matrix_json(item.hbm_bytes, true)},
+        {"int4_ops", static_cast<double>(item.int4_ops)},
+        {"int4_ops_exact_decimal", decimal_measure(item.int4_ops)},
+        {"vec_eqops", static_cast<double>(item.vec_eqops)},
+        {"vec_eqops_exact_decimal", decimal_measure(item.vec_eqops)}};
+  }
   return {{"now_ns", now_ns_},
           {"capacity", resource_array_json(capacities_)},
           {"allocation_updates", allocation_updates_},
@@ -1605,6 +1793,20 @@ nlohmann::json Runtime::counters() const {
           {"hbm_served_bytes_by_row_direction", hbm_served},
           {"hbm_served_bytes_by_row_direction_exact", hbm_served_exact},
           {"hbm_direction_order", {"read", "write"}},
+          {"hardware_raw", hardware_raw_denominators(*hardware_)},
+          {"served_by_category", std::move(served_by_category)},
+          {"accounting_history_complete", accounting_history_complete_},
+          {"typed_totals_history_complete", accounting_history_complete_},
+          {"served_category_totals_semantics",
+           accounting_history_complete_
+               ? "complete_lifetime_totals"
+               : "known_lower_bound_history_incomplete"},
+          {"legacy_unclassified_hbm_bytes_by_row_direction",
+           hbm_matrix_json(legacy_unclassified_hbm_, false)},
+          {"legacy_unclassified_hbm_bytes_by_row_direction_exact",
+           hbm_matrix_json(legacy_unclassified_hbm_, true)},
+          {"legacy_unclassified_typed_totals_unknown",
+           !accounting_history_complete_},
           {"endpoint_registry_size", endpoint_registry_.size()},
           {"transaction_registry_size", transaction_owners_.size()},
           {"runtime_generation", generation_}};
@@ -1675,9 +1877,9 @@ nlohmann::json Runtime::export_snapshot() const {
     }
     global_hbm_served.push_back(std::move(directions));
   }
-  return {{"schema", "coarse_die_snapshot_v2"},
-          {"snapshot_version", 2},
-          {"hardware_fingerprint", hardware_.fingerprint},
+  return {{"schema", "coarse_die_snapshot_v3"},
+          {"snapshot_version", 3},
+          {"hardware_fingerprint", hardware_->fingerprint},
           {"now_ns", now_ns_},
           {"exact_ns", long_double_text(exact_ns_)},
           {"next_handle", next_handle_},
@@ -1690,7 +1892,15 @@ nlohmann::json Runtime::export_snapshot() const {
                       {"compute_busy_ns", long_double_text(compute_busy_ns_)},
                       {"row_busy_ns", {long_double_text(row_busy_ns_[0]), long_double_text(row_busy_ns_[1])}},
                       {"row_shared_ns", {long_double_text(row_shared_ns_[0]), long_double_text(row_shared_ns_[1])}},
-                      {"hbm_served", global_hbm_served}}},
+                      {"hbm_served", global_hbm_served},
+                      {"served_by_category",
+                       served_categories_snapshot_json(served_by_category_)},
+                      {"legacy_unclassified_hbm",
+                       hbm_matrix_json(legacy_unclassified_hbm_, true)},
+                      {"accounting_history_complete",
+                       accounting_history_complete_},
+                      {"typed_totals_history_complete",
+                       accounting_history_complete_}}},
           {"executions", std::move(executions)},
           {"endpoint_registry", std::move(endpoint_registry)},
           {"transaction_owners", std::move(transactions)},
@@ -1701,9 +1911,15 @@ nlohmann::json Runtime::export_snapshot() const {
 std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
                                                   const nlohmann::json& snapshot) {
   validate_hardware(hardware);
-  if (!snapshot.is_object() || snapshot.value("schema", std::string()) != "coarse_die_snapshot_v2" ||
-      snapshot.value("snapshot_version", 0U) != 2U) {
-    throw std::invalid_argument("incompatible_schema: expected coarse_die_snapshot_v2");
+  const bool legacy_v2_snapshot = snapshot.is_object() &&
+      snapshot.value("schema", std::string()) == "coarse_die_snapshot_v2" &&
+      snapshot.value("snapshot_version", 0U) == 2U;
+  const bool categorized_v3_snapshot = snapshot.is_object() &&
+      snapshot.value("schema", std::string()) == "coarse_die_snapshot_v3" &&
+      snapshot.value("snapshot_version", 0U) == 3U;
+  if (!legacy_v2_snapshot && !categorized_v3_snapshot) {
+    throw std::invalid_argument(
+        "incompatible_schema: expected coarse_die_snapshot_v3 or legacy coarse_die_snapshot_v2");
   }
   if (snapshot.value("hardware_fingerprint", std::string()) != hardware.fingerprint) {
     throw std::invalid_argument("incompatible_fingerprint: snapshot hardware fingerprint mismatch");
@@ -1768,6 +1984,64 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     }
   }
 
+  auto parse_hbm_matrix = [&](const nlohmann::json& value,
+                              const std::string& field) {
+    std::array<std::array<long double, 2>, 2> matrix{};
+    if (!value.is_array() || value.size() != 2) {
+      throw std::invalid_argument("invalid_snapshot: " + field + " must have two rows");
+    }
+    for (std::size_t row = 0; row < 2; ++row) {
+      if (!value.at(row).is_array() || value.at(row).size() != 2) {
+        throw std::invalid_argument("invalid_snapshot: " + field + " row shape");
+      }
+      for (std::size_t direction = 0; direction < 2; ++direction) {
+        matrix[row][direction] = parse_long_double(
+            value.at(row).at(direction), field.c_str());
+      }
+    }
+    return matrix;
+  };
+
+  if (categorized_v3_snapshot) {
+    const auto& categorized = stats.at("served_by_category");
+    if (!categorized.is_object()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: served_by_category must be an object");
+    }
+    for (std::size_t index = 0; index < served_category_count; ++index) {
+      const auto& item = categorized.at(kServedCategoryNames[index]);
+      ServedCounters& target = runtime->served_by_category_[index];
+      target.hbm_bytes = parse_hbm_matrix(
+          item.at("hbm_served_bytes_by_row_direction_exact"),
+          std::string("stats.served_by_category.") +
+              kServedCategoryNames[index] + ".hbm_served_bytes_by_row_direction_exact");
+      target.int4_ops = parse_long_double(
+          item.at("int4_ops_exact_decimal"), "stats.served_by_category.int4_ops");
+      target.vec_eqops = parse_long_double(
+          item.at("vec_eqops_exact_decimal"), "stats.served_by_category.vec_eqops");
+      if (index != static_cast<std::size_t>(ServedCategory::Comp) &&
+          (target.int4_ops != 0.0L || target.vec_eqops != 0.0L)) {
+        throw std::invalid_argument(
+            "invalid_snapshot: endpoint category carries COMP operations");
+      }
+    }
+    runtime->legacy_unclassified_hbm_ = parse_hbm_matrix(
+        stats.at("legacy_unclassified_hbm"),
+        "stats.legacy_unclassified_hbm");
+    if (!stats.at("accounting_history_complete").is_boolean() ||
+        !stats.at("typed_totals_history_complete").is_boolean()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: accounting completeness markers must be boolean");
+    }
+    runtime->accounting_history_complete_ =
+        stats.at("accounting_history_complete").get<bool>();
+    if (stats.at("typed_totals_history_complete").get<bool>() !=
+        runtime->accounting_history_complete_) {
+      throw std::invalid_argument(
+          "invalid_snapshot: typed and overall accounting completeness differ");
+    }
+  }
+
   const auto& execution_values = snapshot.at("executions");
   if (!execution_values.is_array()) throw std::invalid_argument("invalid_snapshot: executions must be array");
   for (const auto& value : execution_values) {
@@ -1785,6 +2059,7 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     execution.finish_ns = value.at("finish_ns").is_null() ? 0 : parse_u64(value.at("finish_ns"), "execution.finish_ns");
     execution.owner = parse_owner(value.at("owner"));
     execution.plan = std::move(plan);
+    execution.served_category = plan_served_category(*execution.plan);
     execution.epoch = value.at("epoch_index").get<std::size_t>();
     execution.terminal = value.at("terminal").get<bool>();
     execution.cancelled = value.at("cancelled").get<bool>();
@@ -1965,7 +2240,17 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
         execution.plan->epochs.front().activities.size() != 1) {
       throw std::invalid_argument("invalid_snapshot: endpoint plan structure is inconsistent");
     }
-    const Activity expected_activity = endpoint_activity(endpoint_spec);
+    const auto evidence = execution.plan->summary.find("allocation_evidence");
+    // Prior v2 snapshots used floor(total/2) for an implicit uniform split.
+    // Preserve their frozen work on import; new endpoint plans carry evidence
+    // and use the design's row0 remainder rule.
+    const bool legacy_uniform = evidence == execution.plan->summary.end();
+    if (!legacy_uniform && (!evidence->is_string() ||
+        evidence->get<std::string>() != (endpoint_spec.uniform_default
+            ? "uniform_default" : "explicit_row_fraction"))) {
+      throw std::invalid_argument("invalid_snapshot: endpoint allocation evidence differs from endpoint JSON");
+    }
+    const Activity expected_activity = endpoint_activity(endpoint_spec, legacy_uniform);
     const Activity& actual_activity = execution.plan->epochs.front().activities.front();
     if (actual_activity.id != expected_activity.id || actual_activity.role != Role::Endpoint ||
         actual_activity.hbm_bytes != expected_activity.hbm_bytes ||
@@ -2010,6 +2295,94 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     if (record == runtime->transaction_owners_.end() || record->second.second != refs ||
         !same_owner(record->second.first, expected_owners.at(transaction))) {
       throw std::invalid_argument("invalid_snapshot: transaction registry ownership/refcount mismatch");
+    }
+  }
+
+  std::array<ServedCounters, served_category_count> retained_execution_totals{};
+  for (const auto& [handle, execution] : runtime->executions_) {
+    (void)handle;
+    ServedCounters& target = retained_execution_totals[
+        static_cast<std::size_t>(execution.served_category)];
+    for (std::size_t row = 0; row < 2; ++row) {
+      for (std::size_t direction = 0; direction < 2; ++direction) {
+        target.hbm_bytes[row][direction] +=
+            execution.hbm_served[row][direction];
+      }
+    }
+    target.int4_ops += execution.int4_served;
+    target.vec_eqops += execution.vec_served;
+  }
+
+  constexpr long double kCounterTolerance = 1.0e-10L;
+  const auto close_enough = [](long double left, long double right) {
+    return std::abs(left - right) <= kCounterTolerance *
+        std::max({1.0L, std::abs(left), std::abs(right)});
+  };
+  if (legacy_v2_snapshot) {
+    // v2 did not persist category totals. Recover only work still represented
+    // by execution records; preserve the remainder of the old global HBM
+    // counters as explicitly unclassified history. Typed totals for destroyed
+    // work cannot be recovered and stay marked incomplete.
+    runtime->served_by_category_ = retained_execution_totals;
+    runtime->accounting_history_complete_ = false;
+    for (std::size_t row = 0; row < 2; ++row) {
+      for (std::size_t direction = 0; direction < 2; ++direction) {
+        long double known = 0.0L;
+        for (const ServedCounters& item : retained_execution_totals) {
+          known += item.hbm_bytes[row][direction];
+        }
+        const long double total = runtime->hbm_served_[row][direction];
+        const long double unknown = total - known;
+        if (unknown < -kCounterTolerance * std::max(1.0L, total)) {
+          throw std::invalid_argument(
+              "invalid_snapshot: legacy HBM total is below retained execution work");
+        }
+        runtime->legacy_unclassified_hbm_[row][direction] =
+            std::max(0.0L, unknown);
+      }
+    }
+  } else {
+    long double unclassified_hbm_total = 0.0L;
+    for (std::size_t row = 0; row < 2; ++row) {
+      for (std::size_t direction = 0; direction < 2; ++direction) {
+        long double categorized_total = 0.0L;
+        for (std::size_t index = 0; index < served_category_count; ++index) {
+          const long double actual = runtime->served_by_category_[index]
+                                         .hbm_bytes[row][direction];
+          const long double retained = retained_execution_totals[index]
+                                          .hbm_bytes[row][direction];
+          if (actual + kCounterTolerance * std::max(1.0L, retained) <
+              retained) {
+            throw std::invalid_argument(
+                "invalid_snapshot: categorized HBM total is below retained executions");
+          }
+          categorized_total += actual;
+        }
+        const long double unclassified =
+            runtime->legacy_unclassified_hbm_[row][direction];
+        if (!close_enough(categorized_total + unclassified,
+                          runtime->hbm_served_[row][direction])) {
+          throw std::invalid_argument(
+              "invalid_snapshot: categorized and unclassified HBM totals do not conserve global served bytes");
+        }
+        unclassified_hbm_total += unclassified;
+      }
+    }
+    for (std::size_t index = 0; index < served_category_count; ++index) {
+      const ServedCounters& actual = runtime->served_by_category_[index];
+      const ServedCounters& retained = retained_execution_totals[index];
+      if (actual.int4_ops + kCounterTolerance *
+              std::max(1.0L, retained.int4_ops) < retained.int4_ops ||
+          actual.vec_eqops + kCounterTolerance *
+              std::max(1.0L, retained.vec_eqops) < retained.vec_eqops) {
+        throw std::invalid_argument(
+            "invalid_snapshot: categorized operation total is below retained executions");
+      }
+    }
+    if (runtime->accounting_history_complete_ &&
+        unclassified_hbm_total > kCounterTolerance) {
+      throw std::invalid_argument(
+          "invalid_snapshot: complete accounting history has unclassified HBM bytes");
     }
   }
 
@@ -2072,19 +2445,26 @@ std::vector<std::uint64_t> Runtime::execution_handles() const {
   return result;
 }
 
-nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
-  const nlohmann::json serialized_plan = plan_to_json(plan);
-  auto shared_plan = std::make_shared<const Plan>(plan);
-  Runtime runtime(hardware);
+namespace {
+
+struct StandaloneEstimateRun {
+  std::uint64_t finish_ns = 0;
+  nlohmann::json progress;
+  nlohmann::json runtime_counters;
+};
+
+StandaloneEstimateRun drive_standalone_estimate(
+    std::shared_ptr<const Hardware> hardware,
+    std::shared_ptr<const Plan> plan, bool capture_report) {
+  Runtime runtime(std::move(hardware));
   Owner owner;
   owner.request_id = 1;
   owner.node_id = 1;
   owner.execution_id = 1;
   owner.generation = 1;
-  const std::uint64_t handle = runtime.submit(std::move(shared_plan), owner, 0);
-  nlohmann::json progress = runtime.query_progress(handle);
+  const std::uint64_t handle = runtime.submit(std::move(plan), owner, 0);
   std::size_t event_guard = 0;
-  while (progress.at("state").get<std::string>() != "finished") {
+  while (!runtime.drained()) {
     const auto next = runtime.next_event();
     if (!next) {
       throw std::runtime_error("invalid_hardware: standalone plan has no positive service rate");
@@ -2093,12 +2473,57 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
       throw std::runtime_error("numerical_failure: next_event did not advance time");
     }
     runtime.advance_to(*next);
-    progress = runtime.query_progress(handle);
     if (++event_guard > kMaxAdvanceEvents) {
       throw std::runtime_error("numerical_failure: estimate_alone exceeded event budget");
     }
   }
-  const std::uint64_t finish = parse_u64(progress.at("finish_ns"), "finish_ns");
+
+  // Read the terminal time without constructing the large public progress
+  // object. Candidate ranking needs only this typed value; public standalone
+  // estimates still collect the full report once.
+  const auto finish = runtime.terminal_finish_ns(handle);
+  if (!finish) {
+    throw std::runtime_error(
+        "numerical_failure: standalone plan drained without finishing");
+  }
+  StandaloneEstimateRun result;
+  result.finish_ns = *finish;
+  if (capture_report) {
+    result.progress = runtime.query_progress(handle);
+    if (result.progress.at("state").get<std::string>() != "finished" ||
+        parse_u64(result.progress.at("finish_ns"), "finish_ns") != *finish) {
+      throw std::runtime_error(
+          "numerical_failure: standalone terminal report is inconsistent");
+    }
+    result.runtime_counters = runtime.counters();
+  }
+  return result;
+}
+
+}  // namespace
+
+namespace detail {
+
+std::uint64_t estimate_latency_ns(const Hardware& hardware,
+                                  std::shared_ptr<const Plan> plan) {
+  return estimate_latency_ns(std::make_shared<const Hardware>(hardware),
+                             std::move(plan));
+}
+
+std::uint64_t estimate_latency_ns(std::shared_ptr<const Hardware> hardware,
+                                  std::shared_ptr<const Plan> plan) {
+  return drive_standalone_estimate(std::move(hardware), std::move(plan), false)
+      .finish_ns;
+}
+
+}  // namespace detail
+
+nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
+  const nlohmann::json serialized_plan = plan_to_json(plan);
+  auto shared_plan = std::make_shared<const Plan>(plan);
+  StandaloneEstimateRun estimate = drive_standalone_estimate(
+      std::make_shared<const Hardware>(hardware), std::move(shared_plan), true);
+  const std::uint64_t finish = estimate.finish_ns;
   nlohmann::json result = plan.summary.is_object() ? plan.summary : nlohmann::json::object();
   result["status"] = "ok_assumed";
   result["estimated_latency_ns"] = finish;
@@ -2197,8 +2622,8 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
   result["resource_domains"] = std::move(resource_domains);
   result["domain_capacities"] = std::move(capacity_vector);
   result["domain_work"] = std::move(work_vector);
-  result["execution"] = std::move(progress);
-  result["runtime_counters"] = runtime.counters();
+  result["execution"] = std::move(estimate.progress);
+  result["runtime_counters"] = std::move(estimate.runtime_counters);
   return result;
 }
 

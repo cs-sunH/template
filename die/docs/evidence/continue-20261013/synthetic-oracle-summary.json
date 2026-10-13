@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "evidence_scope": "synthetic_grouped_runtime",
+  "status": "failed",
+  "oracle_self_check": "passed",
+  "coarse_library_granularity": "not_run",
+  "granularity_validation": "not_run",
+  "selected_minimum_E": null,
+  "runtime_grouped_granularity": "failed",
+  "runtime_grouped_minimum_E": null,
+  "runtime_grouped_levels": {
+    "5": {
+      "passed_every_scenario": false,
+      "compared_scenarios": 13,
+      "max_completion_relative_error": 0.09716251074806533,
+      "max_hbm_busy_relative_error": 3.386442641946698,
+      "max_shared_hbm_relative_error": 54.96312883435583,
+      "runtime_internal_events_total": 289,
+      "runtime_host_wall_ns_total": 30275350,
+      "runtime_host_cpu_ns_total": 30254000
+    },
+    "8": {
+      "passed_every_scenario": false,
+      "compared_scenarios": 13,
+      "max_completion_relative_error": 0.0945829750644884,
+      "max_hbm_busy_relative_error": 3.386442641946698,
+      "max_shared_hbm_relative_error": 55.67531554759945,
+      "runtime_internal_events_total": 430,
+      "runtime_host_wall_ns_total": 56061209,
+      "runtime_host_cpu_ns_total": 56071000
+    },
+    "16": {
+      "passed_every_scenario": false,
+      "compared_scenarios": 13,
+      "max_completion_relative_error": 0.06969301385438037,
+      "max_hbm_busy_relative_error": 3.386442641946698,
+      "max_shared_hbm_relative_error": 55.20986662888299,
+      "runtime_internal_events_total": 904,
+      "runtime_host_wall_ns_total": 210709954,
+      "runtime_host_cpu_ns_total": 210702000
+    }
+  },
+  "notes": [
+    "E=16 retains one record per discrete consumption wave and is the Python oracle reference partition",
+    "the oracle uses event-driven wave readiness and finite input/output slots",
+    "this is model-to-model evidence only and does not validate silicon rates",
+    "oracle self-check does not certify or claim the public C++ library granularity",
+    "the 3%/5% budgets are frozen from design documentation",
+    "public C++ Runtime measurements use manually assembled grouped-wave Plans; compiled operator templates remain unvalidated"
+  ]
+}

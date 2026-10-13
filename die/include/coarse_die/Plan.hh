@@ -58,4 +58,14 @@ nlohmann::json estimate_alone(const Hardware&, const Plan&);
 std::string stable_hash(const std::string& text);
 nlohmann::json plan_to_json(const Plan&);
 std::shared_ptr<const Plan> plan_from_json(const nlohmann::json&);
+
+namespace detail {
+// Candidate-ranking driver for an already compiled, canonically fingerprinted
+// Plan. Runtime::submit still validates hardware identity and physical work;
+// this path avoids building the public standalone estimate report.
+std::uint64_t estimate_latency_ns(const Hardware&,
+                                  std::shared_ptr<const Plan> plan);
+std::uint64_t estimate_latency_ns(std::shared_ptr<const Hardware> hardware,
+                                  std::shared_ptr<const Plan> plan);
+}
 }

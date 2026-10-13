@@ -4,7 +4,7 @@
 
 - GitHub：`cs-sunH/template`；公共仿真源 `die/`；共享集成基线 `main`。
 - 两个独立 Codex Cloud 账号按 AGENTS 接力，以已合并代码与 HANDOFF 为共享状态，不共享原始 Session。
-- 原用户需求包含五仓薄适配（wscllm、wscllm-LRU、face、face-LRU、joint），本检查点保存其未完成跨目录原型；后续修改仍须说明必要性并验证各仓业务差异。
+- 原用户需求包含五仓薄适配（wscllm、wscllm-LRU、face、face-LRU、joint），接入按公共源验证、固定版本发布、逐仓构建及业务回归推进；跨目录修改须说明必要性并验证各仓业务差异。
 
 ## 项目目标
 
@@ -14,15 +14,15 @@
 
 TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作为目标 INT4/HBM3E 的独立实测训练集。source/cache、reference、粒度、目标硬件、五仓工程证据分别报告。
 
-本轮交付是未完成开发检查点与可复核交接文档。
+持续开发以有意义的验证检查点同步 GitHub，不按阶段结束自动停工。检查点同步不等于模型精度或五仓工程验收。
 
 ## 当前代码与运行方式
 
 - 硬件 `die/src/Hardware.cc`；计划/任务/映射 `Plan.cc`、`Compiler.cc`、`Mapping.cc`；执行 `Execution.cc`；ABI `Capi.cc`。
 - 接口在 `die/include/coarse_die/`；配置、工具、测试分别在 `configs/`、`tools/`、`tests/`。
 - 依赖 C++17、CMake、Python3 和 vendored `astra-sim-wscllm/extern/helper/json/json.hpp`；TX8 工具仅 Python 标准库。
-- 本 Session 已验证 `source /workspace/cloud-setup/activate.sh`，此路径不保证跨账号存在，下一环境应核实真实工具安装。
-- `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release` 配置有效；当前默认完整构建因 benchmark 宏缺失失败。README 的目标运行命令不等于已验收。
+- 下一环境应核实真实工具安装。本环境 CMake 在 `work/tooling/cmake/data/bin/`，Protobuf 3.21.12 安装在 `work/deps/protobuf/`；这些忽略目录不是跨账号依赖交付。
+- `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release` 是公共库入口；benchmark 宏缺失已修复。实际最新构建/CTest 状态以 HANDOFF 为准。
 - 独立 Runtime/hardware_search 和 TX8 审计的真实命令、日志与结果在 HANDOFF 与 `docs/evidence/`。
 
 ## 验收标准
@@ -41,9 +41,10 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-本轮分支 `codex/die-handoff-20261013`。
+当前工作分支 `codex/die-continue-20261013`；共享集成分支仍为 `main`。
 
 ## 重要决定及变更记录
 
 - 2026-10-13：建立 AGENTS/PROJECT/HANDOFF/RELAY_PROMPT 与文档 workflow；保留原流程初始化事实。
 - 2026-10-13：本 Session 保存 coarse v2 公共源、五仓原型、两项 TX8 条件参数；默认构建阻塞、校准边界和下一最小任务已记录，未宣称工程完成。
+- 2026-10-13 持续开发：恢复默认构建、signed credit 和端点快照，扩充 GEMM/FFN/Attention 独立计数测试，优化候选 Runtime 驱动；边界逻辑量、物理流量、保守槽位容量与粒度证据仍分别报告。手工 grouped-wave Runtime 的 oracle 结果不能给实际编译模板颁发证书。

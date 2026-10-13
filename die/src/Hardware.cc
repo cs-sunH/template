@@ -914,7 +914,7 @@ Hardware resolve_hardware(const nlohmann::json& input) {
                    {"L0_mm", l0},
                    {"P_int4_per_core_ops_per_s", pInt4},
                    {"P_vec_per_core_ops_per_s", pVec},
-                   {"sram_bytes_per_core", sramBytesPerCore},
+                   {"sram_bytes_per_core", static_cast<std::uint64_t>(sramBytesPerCore)},
                    {"N_core", coreCount}};
   Json dieDerived{{"geometry_candidate", arch.geometryCandidate},
                   {"minimum_width_mm", minW},

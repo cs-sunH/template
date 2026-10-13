@@ -360,6 +360,7 @@ def main() -> int:
     report: dict[str, Any] = {
         "schema_version": 1,
         "oracle": "independent_discrete_consumption_wave_v1",
+        "evidence_scope": "synthetic_grouped_runtime",
         "status": "oracle_self_check" if selected is not None else "failed",
         "oracle_self_check": "passed" if selected is not None else "failed",
         "coarse_library_granularity": "not_run",
@@ -509,15 +510,14 @@ def main() -> int:
                         chosen_library = min(passing_library) if passing_library else None
                         granularity_status = "passed" if chosen_library is not None else "failed"
                         report["status"] = granularity_status
-                        report["coarse_library_granularity"] = granularity_status
-                        report["granularity_validation"] = granularity_status
-                        report["selected_minimum_E"] = chosen_library
-                        report["coarse_library_levels"] = level_results
-                        report["coarse_library_missing_scenarios"] = missing
-                        report["coarse_library_runtime_status"] = runtime_payload.get("status")
-                        report["coarse_library_runtime_measurement_count"] = len(actual_rows)
+                        report["runtime_grouped_granularity"] = granularity_status
+                        report["runtime_grouped_minimum_E"] = chosen_library
+                        report["runtime_grouped_levels"] = level_results
+                        report["runtime_grouped_missing_scenarios"] = missing
+                        report["runtime_grouped_measurement_status"] = runtime_payload.get("status")
+                        report["runtime_grouped_measurement_count"] = len(actual_rows)
                         report["notes"].append(
-                            "public C++ Runtime measurements are compared to independent Python event-oracle grouped-wave outcomes")
+                            "public C++ Runtime measurements use manually assembled grouped-wave Plans; compiled operator templates remain unvalidated")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"oracle status={report['status']} library_granularity={report['coarse_library_granularity']} "

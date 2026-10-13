@@ -1,0 +1,21 @@
+[ 14%] Built target coarse_die
+[ 16%] Building CXX object CMakeFiles/coarse_compiled_gemm_oracle_driver.dir/tests/compiled_gemm_oracle_driver.cc.o
+[ 21%] Built target coarse_die_cabi
+[ 26%] Built target coarse_die_benchmark
+[ 30%] Built target coarse_source_golden_test
+[ 35%] Built target coarse_hardware_search_test
+[ 40%] Built target coarse_compile_execution_test
+[ 45%] Built target coarse_compiler_credit_test
+[ 50%] Built target coarse_operator_accounting_test
+[ 54%] Built target coarse_gemm_accounting_test
+[ 59%] Built target coarse_fused_ffn_accounting_test
+[ 64%] Built target coarse_attention_accounting_test
+[ 69%] Built target coarse_endpoint_allocation_test
+[ 73%] Built target coarse_runtime_credit_scale_test
+[ 78%] Built target coarse_runtime_counters_test
+[ 83%] Built target coarse_estimate_driver_test
+[ 88%] Built target coarse_runtime_semantics_test
+[ 92%] Built target coarse_oracle_granularity_test
+[ 97%] Built target coarse_capi_lifecycle_test
+[100%] Linking CXX executable coarse_compiled_gemm_oracle_driver
+[100%] Built target coarse_compiled_gemm_oracle_driver

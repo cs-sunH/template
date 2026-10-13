@@ -320,12 +320,18 @@ nlohmann::json normalize_new_task(const nlohmann::json& raw,
   reject_unknown(raw, {"schema", "op_kind", "region_ops", "phase", "tensor_shapes", "spans", "tp_slice", "storage_dtype", "execution_profile", "layer_instances", "weight_passes", "fusion_policy", "residency", "readiness_scope", "graph_identity", "causal", "math", "execution_profile_id"}, "task");
   if (raw.contains("schema") && string_value(raw.at("schema"), "task.schema") != "coarse_die_task_v2") fail("task.schema", "expected coarse_die_task_v2");
   if (raw.contains("region_ops")) fail("task.region_ops", "untyped region_ops are unsupported; provide a supported op_kind/typed region");
-  const std::string op = string_value(required(raw, "op_kind", "task"), "task.op_kind");
+  const std::string raw_op = string_value(required(raw, "op_kind", "task"), "task.op_kind");
+  const std::string op = raw_op == "swiglu" ? "ffn_region" : raw_op;
   const std::string phase = raw.contains("phase") ? string_value(raw.at("phase"), "task.phase") : "prefill";
   if (phase != "prefill" && phase != "decode" && phase != "kv_recompute") fail("task.phase", "unsupported phase \"" + phase + "\"");
   const auto& shape_raw = required(raw, "tensor_shapes", "task");
   if (!shape_raw.is_object()) fail("task.tensor_shapes", "expected object");
   nlohmann::json shapes = shape_raw;
+  if (raw_op == "swiglu") {
+    if (shapes.contains("mlp_variant") && shapes.at("mlp_variant") != "swiglu")
+      fail("task.tensor_shapes.mlp_variant", "conflicts with op_kind=swiglu");
+    shapes["mlp_variant"] = "swiglu";
+  }
   const auto get_alias = [&](const char* primary, const char* fallback, u64 default_value) -> u64 {
     if (shapes.contains(primary)) return uint_value(shapes.at(primary), std::string("task.tensor_shapes.") + primary, primary[0] == 'm' && std::string(primary) == "m" ? true : false);
     if (fallback && shapes.contains(fallback)) return uint_value(shapes.at(fallback), std::string("task.tensor_shapes.") + fallback, false);
@@ -389,24 +395,6 @@ nlohmann::json normalize_task(const Hardware& hardware,
   return normalize_new_task(task, hardware);
 }
 
-u64 latency_ns(const nlohmann::json& estimate) {
-  if (!estimate.is_object()) fail("estimate_alone", "expected an object result");
-  auto it = estimate.find("estimated_latency_ns");
-  if (it == estimate.end()) it = estimate.find("finish_ns");
-  if (it == estimate.end()) fail("estimate_alone", "result is missing estimated_latency_ns");
-  if (it->is_number_unsigned()) return it->get<u64>();
-  if (it->is_number_integer()) {
-    const auto value = it->get<std::int64_t>();
-    if (value >= 0) return static_cast<u64>(value);
-  }
-  if (it->is_number_float()) {
-    const double value = it->get<double>();
-    if (!std::isfinite(value) || value < 0 || value > static_cast<double>(std::numeric_limits<u64>::max())) fail("estimate_alone.estimated_latency_ns", "invalid latency");
-    return static_cast<u64>(std::ceil(value));
-  }
-  fail("estimate_alone.estimated_latency_ns", "expected non-negative ns");
-}
-
 u64 summary_u64(const Plan& plan, const char* key) {
   const auto it = plan.summary.find(key);
   if (it == plan.summary.end()) return 0;
@@ -429,6 +417,7 @@ std::shared_ptr<const Plan> compile(const Hardware& hardware,
     fail("compile", "unsupported_workspace: no feasible fixed mapping candidate");
   }
   if (candidates.size() > 256) fail("compile", "candidate set exceeds fixed upper bound 256");
+  const auto immutable_hardware = std::make_shared<const Hardware>(hardware);
 
   struct Ranked {
     std::shared_ptr<Plan> plan;
@@ -442,17 +431,19 @@ std::shared_ptr<const Plan> compile(const Hardware& hardware,
   std::vector<Ranked> ranked;
   ranked.reserve(candidates.size());
   for (auto& candidate : candidates) {
-    candidate->task = normalized;
-    candidate->hardware_fingerprint = hardware.fingerprint.empty()
+    // Mapping builders already seal the complete normalized Plan. Reuse that
+    // identity for the actual Runtime trial; silently rewriting builder
+    // inputs here would mask a broken compiler boundary.
+    const std::string expected_hardware = hardware.fingerprint.empty()
         ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
-    candidate->fingerprint.clear();
-    candidate->fingerprint = plan_to_json(*candidate).at("fingerprint").get<std::string>();
-    const nlohmann::json estimate = estimate_alone(hardware, *candidate);
-    const u64 latency = latency_ns(estimate);
+    if(candidate->task != normalized || candidate->hardware_fingerprint != expected_hardware ||
+       candidate->fingerprint.empty())
+      fail("compile", "invalid_plan: mapping candidate identity is incomplete");
+    const u64 latency = detail::estimate_latency_ns(immutable_hardware, candidate);
     candidate->summary["estimated_latency_ns"] = latency;
-    candidate->summary["alone_estimate_status"] = estimate.value("status", std::string("estimated"));
-    candidate->fingerprint.clear();
-    candidate->fingerprint = plan_to_json(*candidate).at("fingerprint").get<std::string>();
+    candidate->summary["alone_estimate_status"] = "ok_assumed";
+    // These are still private mutable builders. Seal only the winner after
+    // ranking; losing candidates never escape or enter a cache/runtime again.
     Ranked r;
     r.plan = candidate;
     r.latency = latency;
