@@ -86,6 +86,11 @@ struct ComputeAttrs {
     // JSON payload into every short-lived view (design doc §8.3).
     OpRole op_role = OpRole::Compute;
     std::shared_ptr<const DieModel::DieOpSpec> die_spec;
+    // Preserve the complete source descriptor alongside the legacy parsed
+    // view. coarse_die_v2 compiles the original JSON so spans, TP ownership,
+    // storage precision, readiness and future schema additions are never
+    // reconstructed from num_ops/tensor_size or a lossy typed projection.
+    std::shared_ptr<const nlohmann::json> die_task_json;
 };
 
 /// Point-to-point comm attributes (issue_send_comm / issue_recv_comm).

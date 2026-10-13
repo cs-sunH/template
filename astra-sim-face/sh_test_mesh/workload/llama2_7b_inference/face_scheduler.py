@@ -92,6 +92,20 @@ def die_derived_face_hardware(
     调用方不经过本函数(回归保护:仍从 hardware JSON 读)。
     """
     derived = cost_oracle.hardware_summary().get("derived")
+    if cost_oracle.coarse:
+        typed = (derived or {}).get("hardware_summary", {})
+        row_rates = typed.get("hbm_row_peak_Bps")
+        peak_int4 = typed.get("peak_int4_ops_per_s")
+        if (not isinstance(row_rates, list) or len(row_rates) != 2
+                or peak_int4 is None):
+            raise RuntimeError(
+                "coarse_die_v2 hardware summary is missing typed compute/HBM "
+                "peaks")
+        return replace(
+            hardware,
+            peak_perf_tflops=float(peak_int4) / 1e12,
+            local_hbm_bandwidth_gbps=sum(map(float, row_rates)) / 1e9,
+        )
     if not derived or "pe_peak_tflops" not in derived \
             or "hbm_bandwidth_bytes" not in derived:
         raise RuntimeError(

@@ -1,0 +1,638 @@
+[
+  {
+    "path": ".gitignore",
+    "status": " M",
+    "size": 1183,
+    "sha256": "9eb91000f71575b45f9d96abba9d290fc42c2eaf7eda0ffa9c4559099d9c12f5"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/system/Sys.cc",
+    "status": " M",
+    "size": 91545,
+    "sha256": "93da6aeb714ab851c3fccc1d5134b30c550600d4406aaf3865007d38e8c508f9"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/system/Sys.hh",
+    "status": " M",
+    "size": 19202,
+    "sha256": "9305a5345a4e07988fab16af144277277334dbd196d9760122c06316749ed3bb"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/DieModelAdapter.cc",
+    "status": " M",
+    "size": 8687,
+    "sha256": "d31497606f386c5c4564ef42ee3e5ee13b8b268a1724aa0ce2de0a54d48491bb"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/DieModelAdapter.hh",
+    "status": " M",
+    "size": 3199,
+    "sha256": "f8d423db3992e69e8afc8834210504c84d30101c8aa5dd1af4be5c981cdfd977"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/LocalHbmBandwidthModel.cc",
+    "status": " M",
+    "size": 30290,
+    "sha256": "17b823d58024b131b1fb76f88033560396d7a6398c62f972ad58b804ff5603f4"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/LocalHbmBandwidthModel.hh",
+    "status": " M",
+    "size": 12047,
+    "sha256": "dc97c934a0dcd54c73111ee56686526a4aa4a919965887aa219570331acfd715"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/Workload.cc",
+    "status": " M",
+    "size": 87653,
+    "sha256": "41e8e9c52ea75871aab2c26a33bb1a606959c267cbd50758bb38813bc3c04386"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/execution_driven/GraphSource.hh",
+    "status": " M",
+    "size": 12411,
+    "sha256": "432ecc65de6dc3c50728779d6761e8893cb771280209887711adf5796b9e77e6"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc",
+    "status": " M",
+    "size": 29013,
+    "sha256": "4007e94c1fdf3c6e67427fe8830e058656e4fe2438dda85fbd0362a7ac691f47"
+  },
+  {
+    "path": "astra-sim-face-LRU/sh_test_mesh/config_resolver.py",
+    "status": " M",
+    "size": 40344,
+    "sha256": "f9de0510728238b70f4b514e525934a0d202b1e7f97ff121f7a7011e4b5a0602"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/system/Sys.cc",
+    "status": " M",
+    "size": 107213,
+    "sha256": "8c970cf7e7cc0a4c36bdaaf5f060cb731a321e92a9e1b12b40d60ae071f6d498"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/system/Sys.hh",
+    "status": " M",
+    "size": 19200,
+    "sha256": "516d6348bb5ac28caba6035493fdcd09a7e59654af5ce0d6b58da0592b69359f"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/DieModelAdapter.cc",
+    "status": " M",
+    "size": 8232,
+    "sha256": "d33b39372d9b08d079bd91e436b9b938b6bbeaa461f6c51f760686b15b305785"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/DieModelAdapter.hh",
+    "status": " M",
+    "size": 2933,
+    "sha256": "3e40d407fa5158deb0af4b175bb9d29265d77e61675da82b9a903d1672f3b81b"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/LocalHbmBandwidthModel.cc",
+    "status": " M",
+    "size": 24875,
+    "sha256": "1278a48a89625cac2571bceedd63ea2baed48e15a082bf9e83de058135042ac2"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/LocalHbmBandwidthModel.hh",
+    "status": " M",
+    "size": 10264,
+    "sha256": "404e104bd6ff0965b66b71e4fd40f99df9029a29a71dcae074801916a5ac8440"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/Workload.cc",
+    "status": " M",
+    "size": 70173,
+    "sha256": "2e795f1eb409f562ad21b84593c823ec2a43bc38a51bf5d32e449a70033470a0"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/execution_driven/GraphSource.hh",
+    "status": " M",
+    "size": 11803,
+    "sha256": "cb26a6534615111eb6bab0cbf9ddea5a5984543181f950ffca48367c84bd51fd"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/execution_driven/ParsedGraphBatch.cc",
+    "status": " M",
+    "size": 29146,
+    "sha256": "01b357550bfc7f916003a0f025ed85dfd481ce86c69cefea4cfcf63fed9cff8f"
+  },
+  {
+    "path": "astra-sim-face/sh_test_mesh/config_resolver.py",
+    "status": " M",
+    "size": 33800,
+    "sha256": "bfc50e9f7af5bddd4bb2a3158a6abc52942534a9969ab530e462d08c9d8c4c8a"
+  },
+  {
+    "path": "astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/face_scheduler.py",
+    "status": " M",
+    "size": 30242,
+    "sha256": "a88b008dabc6990151eb26ed99036e7b87bf8d4a3a1337cbd2bbc8e6f5a812cf"
+  },
+  {
+    "path": "astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py",
+    "status": " M",
+    "size": 19281,
+    "sha256": "7645031e275cc44e602e11901c9b4a1b157f5eb1f7ece92c8182495bfc215176"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/system/Sys.cc",
+    "status": " M",
+    "size": 90948,
+    "sha256": "554bf12d968135c3519a0d688b14a57ee94781da40b6304affd891482bfa9192"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/system/Sys.hh",
+    "status": " M",
+    "size": 20596,
+    "sha256": "2f678ec9f6d4cffa6fdd8c74637db2911542d62b61147884739937b3a2a6d89e"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/DieModelAdapter.cc",
+    "status": " M",
+    "size": 8250,
+    "sha256": "4fda16d04a71ab5fe81e9f2897dfffcfaa161762a627b5b0c38d448ca0c501cf"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/DieModelAdapter.hh",
+    "status": " M",
+    "size": 2948,
+    "sha256": "6c0f1f684e12d10df57b8b5b59e7a4928ae7724c0711b2e4dba660b77fa0673e"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/LocalHbmBandwidthModel.cc",
+    "status": " M",
+    "size": 36649,
+    "sha256": "2686e4b535504f917e20f9a05f4bde5172d58794c6fee123e8cab1392e7b24d3"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/LocalHbmBandwidthModel.hh",
+    "status": " M",
+    "size": 18266,
+    "sha256": "8a5c8cd0e8dcf0c557a522ffda8d12555bb54b668458c0d3b06abf84fa7a89d7"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/Workload.cc",
+    "status": " M",
+    "size": 103820,
+    "sha256": "55d1593bf02bfb78bc01477053c003411b373711237c7179af952e5164ff7af4"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/execution_driven/GraphSource.hh",
+    "status": " M",
+    "size": 14695,
+    "sha256": "bc456956aec6174e4d1c204b29c04c01c416afdd538d7ea1a9815b422d8eeaa4"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/execution_driven/ParsedGraphBatch.cc",
+    "status": " M",
+    "size": 40867,
+    "sha256": "c582741b993886daa8fae952f7a7eb961b9e17463982055ab6e47211bfb6486f"
+  },
+  {
+    "path": "astra-sim-joint/sh_test_mesh/config_resolver.py",
+    "status": " M",
+    "size": 38079,
+    "sha256": "6ba76e35236f3ed9b9f989247ebfd1404d432b61ba514fc1f6f5b9d7d3078c26"
+  },
+  {
+    "path": "astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py",
+    "status": " M",
+    "size": 724731,
+    "sha256": "d4dc947addf2451e68b0e4ae0f022f83c676ab6b2a5d5caa8f80ddb551d20094"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/system/Sys.cc",
+    "status": " M",
+    "size": 106527,
+    "sha256": "b3d050bf9a68803953dd5a9b6ba208aea75f7ad33885ba64d4b080b79a48bdad"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/system/Sys.hh",
+    "status": " M",
+    "size": 18554,
+    "sha256": "7f0239bddafc833f63fb2d1fe0601b35f31dda263d1f8ca93eb203de4bec92cc"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc",
+    "status": " M",
+    "size": 8732,
+    "sha256": "64501bfdcefe3ae72a856b51799f44d0cdf1ff35e7f19ff8fc92993a42f9847d"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.hh",
+    "status": " M",
+    "size": 3183,
+    "sha256": "e8804dcbd4a70bfe143c7f9c825a357967a0bbcd7205b413c297b3ead4055ef3"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/LocalHbmBandwidthModel.cc",
+    "status": " M",
+    "size": 32161,
+    "sha256": "253666ccce6d48f6027f1fdabe43e2392a2d79049245cb71e8193c617b659dbc"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/LocalHbmBandwidthModel.hh",
+    "status": " M",
+    "size": 12703,
+    "sha256": "70bbf8026a4519f0e6efdd9d65211ac1d3a199ab3fd0a5416466906ec08f3fbb"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc",
+    "status": " M",
+    "size": 69069,
+    "sha256": "0d01109304956ae46e510214f2a9731428b733b1bfccebbaeedfc35a4bcb028e"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphSource.hh",
+    "status": " M",
+    "size": 10109,
+    "sha256": "faaed281c67d4d5cbec909f035f0590dbdc634ee08dec8afaa27e481b5e6dfa9"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc",
+    "status": " M",
+    "size": 30531,
+    "sha256": "f958ee62aff49c05c416f7bd5196c260abe6c26a502ff93d166e3fb08ca50719"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/sh_test_mesh/config_resolver.py",
+    "status": " M",
+    "size": 47995,
+    "sha256": "2cdf740a4cfb9598059c76f9073e390c5e6e3b12cddb67025d224bacdc73c917"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/system/Sys.cc",
+    "status": " M",
+    "size": 109599,
+    "sha256": "fccc9f972166f9311f7f73be4f4c3345f5fa72050db294478d3b003b7f3a0292"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/system/Sys.hh",
+    "status": " M",
+    "size": 20236,
+    "sha256": "27881ba28437a31ca0ce502bf937036edeab81edd0331b20d04ef11d7ec799fe"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/DieModelAdapter.cc",
+    "status": " M",
+    "size": 8250,
+    "sha256": "4fda16d04a71ab5fe81e9f2897dfffcfaa161762a627b5b0c38d448ca0c501cf"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/DieModelAdapter.hh",
+    "status": " M",
+    "size": 2948,
+    "sha256": "6c0f1f684e12d10df57b8b5b59e7a4928ae7724c0711b2e4dba660b77fa0673e"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/LocalHbmBandwidthModel.cc",
+    "status": " M",
+    "size": 25554,
+    "sha256": "a56e8b7853997c001289c4a283c36e33042d2a7c37ee572809d1d4042bee2eb5"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/LocalHbmBandwidthModel.hh",
+    "status": " M",
+    "size": 11167,
+    "sha256": "83015f7cb9ed042c8a6f710f2b266baa562c9081f0ecbe710c071fa1197359e0"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/Workload.cc",
+    "status": " M",
+    "size": 58199,
+    "sha256": "5b922992166745089efba0177cf86c0245d61c00dca6bef45114e5c90ce9505c"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/execution_driven/GraphSource.hh",
+    "status": " M",
+    "size": 10188,
+    "sha256": "da6b17a711762d71308b653acfc1b1a5c1525b00f5b7f4822b04dbca2dfc6802"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/execution_driven/ParsedGraphBatch.cc",
+    "status": " M",
+    "size": 31581,
+    "sha256": "7a976173c6fdabb7ff76f166f2af5837f45e226821d923ab76e556682e441d57"
+  },
+  {
+    "path": "astra-sim-wscllm/sh_test_mesh/config_resolver.py",
+    "status": " M",
+    "size": 39456,
+    "sha256": "2d63f9ebfe5d77746c4f2a28ccb67f6354806e4ce5781dc01651528b971cffec"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/CoarseDieRuntime.cc",
+    "status": "??",
+    "size": 8227,
+    "sha256": "03484b35d611ee30030aec9a769e9a983c8438caa3596a0e74c5fade4643c83d"
+  },
+  {
+    "path": "astra-sim-face-LRU/astra-sim/workload/CoarseDieRuntime.hh",
+    "status": "??",
+    "size": 2764,
+    "sha256": "b77d7fddeb4caf9bf56eeb08480d18ff8bf2bc1633c684e815366f1125cc16a5"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/CoarseDieRuntime.cc",
+    "status": "??",
+    "size": 8227,
+    "sha256": "03484b35d611ee30030aec9a769e9a983c8438caa3596a0e74c5fade4643c83d"
+  },
+  {
+    "path": "astra-sim-face/astra-sim/workload/CoarseDieRuntime.hh",
+    "status": "??",
+    "size": 2764,
+    "sha256": "b77d7fddeb4caf9bf56eeb08480d18ff8bf2bc1633c684e815366f1125cc16a5"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/CoarseDieRuntime.cc",
+    "status": "??",
+    "size": 8227,
+    "sha256": "03484b35d611ee30030aec9a769e9a983c8438caa3596a0e74c5fade4643c83d"
+  },
+  {
+    "path": "astra-sim-joint/astra-sim/workload/CoarseDieRuntime.hh",
+    "status": "??",
+    "size": 2764,
+    "sha256": "b77d7fddeb4caf9bf56eeb08480d18ff8bf2bc1633c684e815366f1125cc16a5"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/CoarseDieRuntime.cc",
+    "status": "??",
+    "size": 8227,
+    "sha256": "03484b35d611ee30030aec9a769e9a983c8438caa3596a0e74c5fade4643c83d"
+  },
+  {
+    "path": "astra-sim-wscllm-LRU/astra-sim/workload/CoarseDieRuntime.hh",
+    "status": "??",
+    "size": 2764,
+    "sha256": "b77d7fddeb4caf9bf56eeb08480d18ff8bf2bc1633c684e815366f1125cc16a5"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/CoarseDieRuntime.cc",
+    "status": "??",
+    "size": 8227,
+    "sha256": "03484b35d611ee30030aec9a769e9a983c8438caa3596a0e74c5fade4643c83d"
+  },
+  {
+    "path": "astra-sim-wscllm/astra-sim/workload/CoarseDieRuntime.hh",
+    "status": "??",
+    "size": 2764,
+    "sha256": "b77d7fddeb4caf9bf56eeb08480d18ff8bf2bc1633c684e815366f1125cc16a5"
+  },
+  {
+    "path": "die/CMakeLists.txt",
+    "status": "??",
+    "size": 2155,
+    "sha256": "2d4c6e82f19ae5129c9c8e11e30d6d7545a8941f6971ea171c583f64c6332ab5"
+  },
+  {
+    "path": "die/README.md",
+    "status": "??",
+    "size": 5628,
+    "sha256": "a01e8e366dfb58fc95c20712afad62cf191c3eca76f686361908a71dc1da92f2"
+  },
+  {
+    "path": "die/calibration/per_operator.csv",
+    "status": "??",
+    "size": 4308,
+    "sha256": "76507c86029135bc477e5a8e6dc3b178e99b917b47384dfc72f7a0e99528ce73"
+  },
+  {
+    "path": "die/calibration/report.md",
+    "status": "??",
+    "size": 6430,
+    "sha256": "6d089c7b4e18539f50bacb844bbe1cc94e61d221cb45459a634ab86fe1e8ba33"
+  },
+  {
+    "path": "die/calibration/tx8_samples.json",
+    "status": "??",
+    "size": 36539,
+    "sha256": "7a0c5ea7e6ae1d98c8244a7bcd2f07cedd6a95282dc8204b7d7fd35940471f45"
+  },
+  {
+    "path": "die/configs/VERSION",
+    "status": "??",
+    "size": 18,
+    "sha256": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220"
+  },
+  {
+    "path": "die/configs/calibration_tx8.json",
+    "status": "??",
+    "size": 6926,
+    "sha256": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698"
+  },
+  {
+    "path": "die/configs/core64.json",
+    "status": "??",
+    "size": 12638,
+    "sha256": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af"
+  },
+  {
+    "path": "die/configs/engineering_prior.json",
+    "status": "??",
+    "size": 5970,
+    "sha256": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f"
+  },
+  {
+    "path": "die/configs/example_hardware.json",
+    "status": "??",
+    "size": 3173,
+    "sha256": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+  },
+  {
+    "path": "die/configs/example_tasks.json",
+    "status": "??",
+    "size": 6035,
+    "sha256": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+  },
+  {
+    "path": "die/docs/implementation.md",
+    "status": "??",
+    "size": 26376,
+    "sha256": "f4459e35e075e26c33e1afbbae9cd62a3a227b8e06af5c8ef677a177144f8b6e"
+  },
+  {
+    "path": "die/include/coarse_die/Capi.h",
+    "status": "??",
+    "size": 3563,
+    "sha256": "52dab6731caaa6c80fdd1ff168c207d9fd63f7b56a2ba076437de7a1b624b61b"
+  },
+  {
+    "path": "die/include/coarse_die/Execution.hh",
+    "status": "??",
+    "size": 2734,
+    "sha256": "ce12f7cf844ef10024078c2e74cadc1685a2740f3684d61ec4326196b0921389"
+  },
+  {
+    "path": "die/include/coarse_die/Hardware.hh",
+    "status": "??",
+    "size": 378,
+    "sha256": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8"
+  },
+  {
+    "path": "die/include/coarse_die/Memory.hh",
+    "status": "??",
+    "size": 2192,
+    "sha256": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d"
+  },
+  {
+    "path": "die/include/coarse_die/Plan.hh",
+    "status": "??",
+    "size": 2415,
+    "sha256": "5ffd0330144896006c14ba49df4de9d9474d7c84d36e8953f844a1ee1a38ac3d"
+  },
+  {
+    "path": "die/src/Capi.cc",
+    "status": "??",
+    "size": 15852,
+    "sha256": "89b1d7b80e8d21928842252672d50fb0447bd1eb3f9b5a33c951c56ee216b4f1"
+  },
+  {
+    "path": "die/src/Compiler.cc",
+    "status": "??",
+    "size": 29055,
+    "sha256": "2f3b5c532692c77e3231945c5d1289b20a6e236ab2b85f5955ca6e033a2d215b"
+  },
+  {
+    "path": "die/src/Execution.cc",
+    "status": "??",
+    "size": 102543,
+    "sha256": "1be7507083685210622f86d3e27e064714a4fd94d3ab229a8bb3643c74d455b0"
+  },
+  {
+    "path": "die/src/Hardware.cc",
+    "status": "??",
+    "size": 55737,
+    "sha256": "5e82b5e19b0823a9b9dd111e4ae35b98b123dace4efe60b49974ae07b7a83a43"
+  },
+  {
+    "path": "die/src/Mapping.cc",
+    "status": "??",
+    "size": 70508,
+    "sha256": "4c0c30f9dc93ef080cc11a6cb8efbd03b15e811af443494eabe151a86bf11dc7"
+  },
+  {
+    "path": "die/src/Plan.cc",
+    "status": "??",
+    "size": 15980,
+    "sha256": "cc750ff9a51e5c7aeb7aeabdc6f79f24f7c6234f38c99e64a6c65a70a7ce1db3"
+  },
+  {
+    "path": "die/tests/benchmark.cc",
+    "status": "??",
+    "size": 8306,
+    "sha256": "5f5cca0c4560a0add9ae9614651f9afcf1a4fecc6ac04d1b0ab0b1071091d2f5"
+  },
+  {
+    "path": "die/tests/capi_lifecycle_test.cc",
+    "status": "??",
+    "size": 3123,
+    "sha256": "d9bcbfb7dc734c5700a37cfdc0cda8b4a272a7b1c4244eac3b8de866e611a601"
+  },
+  {
+    "path": "die/tests/compile_execution_test.cc",
+    "status": "??",
+    "size": 12789,
+    "sha256": "ddf07fe38101236c0095743c1ee7e549eb2783bac66cc8bd3e9cf3f30f7f5bc7"
+  },
+  {
+    "path": "die/tests/fixtures/coarse_die_v2.json",
+    "status": "??",
+    "size": 2818,
+    "sha256": "9f3f4e24e690181af1875c60ed561124701759bea97da827abe3b3b06c8d9f3b"
+  },
+  {
+    "path": "die/tests/fixtures/discrete_wave_scenarios.json",
+    "status": "??",
+    "size": 56260,
+    "sha256": "a2027d8b26c4057f89064002d836f3f933f275d49c59307ac8d53311f47082be"
+  },
+  {
+    "path": "die/tests/fixtures/gemm_medium.json",
+    "status": "??",
+    "size": 260,
+    "sha256": "846fe90f7ceac25bb242ba5e07f1ba4f8d5934b7b0a8067d463b7839211522ef"
+  },
+  {
+    "path": "die/tests/hardware_search_test.cc",
+    "status": "??",
+    "size": 8689,
+    "sha256": "e578c3da6fe2a757816bf93e9f28c206420cd3b0798656d7070e2315c81e2e87"
+  },
+  {
+    "path": "die/tests/oracle_granularity_test.cc",
+    "status": "??",
+    "size": 10187,
+    "sha256": "f785a6f1f31d55225fde8e2004b7c68682b07bd101c6d495eab0e5f10817c550"
+  },
+  {
+    "path": "die/tests/runtime_semantics_test.cc",
+    "status": "??",
+    "size": 14479,
+    "sha256": "d87ffebd5d6633bd5b303d0013658ff2dc4d66664388bb66bad0f00640368a17"
+  },
+  {
+    "path": "die/tests/source_golden_test.cc",
+    "status": "??",
+    "size": 14036,
+    "sha256": "ace5478c30563c62d6b3f607f2c4f6e7ab1af00bd59586bd5697232fb3772111"
+  },
+  {
+    "path": "die/tests/test_support.hh",
+    "status": "??",
+    "size": 4570,
+    "sha256": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11"
+  },
+  {
+    "path": "die/tools/benchmark.py",
+    "status": "??",
+    "size": 6490,
+    "sha256": "5f747a44dd01e207629e77a5237232ca821f5829a5f93083dbfe6d626d314307"
+  },
+  {
+    "path": "die/tools/calibrate_tx8.py",
+    "status": "??",
+    "size": 36574,
+    "sha256": "846062b493e639ea92ab66050efb4af2fd2ce597afa3375eaf798dd471f09138"
+  },
+  {
+    "path": "die/tools/estimate.py",
+    "status": "??",
+    "size": 8588,
+    "sha256": "7f30da9a9c576d9190c72bf010ddb89a6727e1437070d209b0d90ce735d387ac"
+  },
+  {
+    "path": "die/tools/sensitivity.py",
+    "status": "??",
+    "size": 14728,
+    "sha256": "86ee6063160976a32cae1250313783b4b3044554ba575675a51439b47a5781fc"
+  },
+  {
+    "path": "die/tools/sync_repositories.py",
+    "status": "??",
+    "size": 3175,
+    "sha256": "45da8c00ed5f72344437f490f35e39397ffc455dce8d3e8795e48a45e21e4585"
+  },
+  {
+    "path": "die/tools/validate.py",
+    "status": "??",
+    "size": 9529,
+    "sha256": "975f936ceff5261802d6eddad5f2c0ec9550b5897164debae6351d1e16d88f6d"
+  },
+  {
+    "path": "die/validation/cabi.py",
+    "status": "??",
+    "size": 11244,
+    "sha256": "2af22b989595b24d0b97ca8e27ca527db8b6c51f802ad7c2f0ec2e4d436469f7"
+  },
+  {
+    "path": "die/validation/discrete_oracle.py",
+    "status": "??",
+    "size": 26008,
+    "sha256": "9146a70aa8d2065d38f9a141432ea7426df82b1775854bac463bca8de1390ae5"
+  }
+]

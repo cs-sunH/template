@@ -1,0 +1,2240 @@
+{
+  "schema_version": 1,
+  "scenario_count": 13,
+  "waves_per_request": 16,
+  "scenarios": [
+    {
+      "shape": "single",
+      "phase_offset_s": 0.0,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 700,
+              "compute_ops": 5,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 10,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1500,
+              "compute_ops": 5,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 10,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1600,
+              "compute_ops": 15,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 5,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 10,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 10,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 5,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 10,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 5,
+              "store_bytes": 800
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "balanced",
+      "phase_offset_s": 0.0,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 700,
+              "compute_ops": 5,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 10,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1500,
+              "compute_ops": 5,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 10,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1600,
+              "compute_ops": 15,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 5,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 10,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 10,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 5,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 10,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 5,
+              "store_bytes": 800
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 700,
+              "compute_ops": 12,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 6,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 9,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 12,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 6,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 9,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 12,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 6,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 9,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 12,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 9,
+              "store_bytes": 1200
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "balanced",
+      "phase_offset_s": 0.37,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 700,
+              "compute_ops": 5,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 10,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1500,
+              "compute_ops": 5,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 10,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1600,
+              "compute_ops": 15,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 5,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 10,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 10,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 5,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 10,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 5,
+              "store_bytes": 800
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 0.37,
+          "waves": [
+            {
+              "load_bytes": 700,
+              "compute_ops": 12,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 6,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 9,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 12,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 6,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 9,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 12,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 6,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 9,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 12,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 9,
+              "store_bytes": 1200
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "balanced",
+      "phase_offset_s": 1.2,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 700,
+              "compute_ops": 5,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 10,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1500,
+              "compute_ops": 5,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 10,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1600,
+              "compute_ops": 15,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 5,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 10,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 10,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 5,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 10,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 5,
+              "store_bytes": 800
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 1.2,
+          "waves": [
+            {
+              "load_bytes": 700,
+              "compute_ops": 12,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 6,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 9,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 12,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 6,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 9,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 12,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 6,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 9,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 12,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 9,
+              "store_bytes": 1200
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "compute_long_memory_short",
+      "phase_offset_s": 0.0,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 280,
+              "compute_ops": 12.5,
+              "store_bytes": 120
+            },
+            {
+              "load_bytes": 560,
+              "compute_ops": 25.0,
+              "store_bytes": 160
+            },
+            {
+              "load_bytes": 320,
+              "compute_ops": 37.5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 12.5,
+              "store_bytes": 240
+            },
+            {
+              "load_bytes": 360,
+              "compute_ops": 25.0,
+              "store_bytes": 280
+            },
+            {
+              "load_bytes": 640,
+              "compute_ops": 37.5,
+              "store_bytes": 320
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 12.5,
+              "store_bytes": 360
+            },
+            {
+              "load_bytes": 160,
+              "compute_ops": 25.0,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 440,
+              "compute_ops": 37.5,
+              "store_bytes": 440
+            },
+            {
+              "load_bytes": 200,
+              "compute_ops": 12.5,
+              "store_bytes": 80
+            },
+            {
+              "load_bytes": 480,
+              "compute_ops": 25.0,
+              "store_bytes": 120
+            },
+            {
+              "load_bytes": 240,
+              "compute_ops": 37.5,
+              "store_bytes": 160
+            },
+            {
+              "load_bytes": 520,
+              "compute_ops": 12.5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 280,
+              "compute_ops": 25.0,
+              "store_bytes": 240
+            },
+            {
+              "load_bytes": 560,
+              "compute_ops": 37.5,
+              "store_bytes": 280
+            },
+            {
+              "load_bytes": 320,
+              "compute_ops": 12.5,
+              "store_bytes": 320
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 315,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 270
+            },
+            {
+              "load_bytes": 225,
+              "compute_ops": 33.0,
+              "store_bytes": 180
+            },
+            {
+              "load_bytes": 135,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 495
+            },
+            {
+              "load_bytes": 540,
+              "compute_ops": 19.8,
+              "store_bytes": 405
+            },
+            {
+              "load_bytes": 450,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 315
+            },
+            {
+              "load_bytes": 360,
+              "compute_ops": 33.0,
+              "store_bytes": 225
+            },
+            {
+              "load_bytes": 270,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 540
+            },
+            {
+              "load_bytes": 180,
+              "compute_ops": 19.8,
+              "store_bytes": 450
+            },
+            {
+              "load_bytes": 585,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 360
+            },
+            {
+              "load_bytes": 495,
+              "compute_ops": 33.0,
+              "store_bytes": 270
+            },
+            {
+              "load_bytes": 405,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 180
+            },
+            {
+              "load_bytes": 315,
+              "compute_ops": 19.8,
+              "store_bytes": 495
+            },
+            {
+              "load_bytes": 225,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 405
+            },
+            {
+              "load_bytes": 135,
+              "compute_ops": 33.0,
+              "store_bytes": 315
+            },
+            {
+              "load_bytes": 540,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 225
+            },
+            {
+              "load_bytes": 450,
+              "compute_ops": 19.8,
+              "store_bytes": 540
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "compute_long_memory_short",
+      "phase_offset_s": 0.37,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 280,
+              "compute_ops": 12.5,
+              "store_bytes": 120
+            },
+            {
+              "load_bytes": 560,
+              "compute_ops": 25.0,
+              "store_bytes": 160
+            },
+            {
+              "load_bytes": 320,
+              "compute_ops": 37.5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 12.5,
+              "store_bytes": 240
+            },
+            {
+              "load_bytes": 360,
+              "compute_ops": 25.0,
+              "store_bytes": 280
+            },
+            {
+              "load_bytes": 640,
+              "compute_ops": 37.5,
+              "store_bytes": 320
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 12.5,
+              "store_bytes": 360
+            },
+            {
+              "load_bytes": 160,
+              "compute_ops": 25.0,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 440,
+              "compute_ops": 37.5,
+              "store_bytes": 440
+            },
+            {
+              "load_bytes": 200,
+              "compute_ops": 12.5,
+              "store_bytes": 80
+            },
+            {
+              "load_bytes": 480,
+              "compute_ops": 25.0,
+              "store_bytes": 120
+            },
+            {
+              "load_bytes": 240,
+              "compute_ops": 37.5,
+              "store_bytes": 160
+            },
+            {
+              "load_bytes": 520,
+              "compute_ops": 12.5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 280,
+              "compute_ops": 25.0,
+              "store_bytes": 240
+            },
+            {
+              "load_bytes": 560,
+              "compute_ops": 37.5,
+              "store_bytes": 280
+            },
+            {
+              "load_bytes": 320,
+              "compute_ops": 12.5,
+              "store_bytes": 320
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 0.37,
+          "waves": [
+            {
+              "load_bytes": 315,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 270
+            },
+            {
+              "load_bytes": 225,
+              "compute_ops": 33.0,
+              "store_bytes": 180
+            },
+            {
+              "load_bytes": 135,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 495
+            },
+            {
+              "load_bytes": 540,
+              "compute_ops": 19.8,
+              "store_bytes": 405
+            },
+            {
+              "load_bytes": 450,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 315
+            },
+            {
+              "load_bytes": 360,
+              "compute_ops": 33.0,
+              "store_bytes": 225
+            },
+            {
+              "load_bytes": 270,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 540
+            },
+            {
+              "load_bytes": 180,
+              "compute_ops": 19.8,
+              "store_bytes": 450
+            },
+            {
+              "load_bytes": 585,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 360
+            },
+            {
+              "load_bytes": 495,
+              "compute_ops": 33.0,
+              "store_bytes": 270
+            },
+            {
+              "load_bytes": 405,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 180
+            },
+            {
+              "load_bytes": 315,
+              "compute_ops": 19.8,
+              "store_bytes": 495
+            },
+            {
+              "load_bytes": 225,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 405
+            },
+            {
+              "load_bytes": 135,
+              "compute_ops": 33.0,
+              "store_bytes": 315
+            },
+            {
+              "load_bytes": 540,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 225
+            },
+            {
+              "load_bytes": 450,
+              "compute_ops": 19.8,
+              "store_bytes": 540
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "compute_long_memory_short",
+      "phase_offset_s": 1.2,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 280,
+              "compute_ops": 12.5,
+              "store_bytes": 120
+            },
+            {
+              "load_bytes": 560,
+              "compute_ops": 25.0,
+              "store_bytes": 160
+            },
+            {
+              "load_bytes": 320,
+              "compute_ops": 37.5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 12.5,
+              "store_bytes": 240
+            },
+            {
+              "load_bytes": 360,
+              "compute_ops": 25.0,
+              "store_bytes": 280
+            },
+            {
+              "load_bytes": 640,
+              "compute_ops": 37.5,
+              "store_bytes": 320
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 12.5,
+              "store_bytes": 360
+            },
+            {
+              "load_bytes": 160,
+              "compute_ops": 25.0,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 440,
+              "compute_ops": 37.5,
+              "store_bytes": 440
+            },
+            {
+              "load_bytes": 200,
+              "compute_ops": 12.5,
+              "store_bytes": 80
+            },
+            {
+              "load_bytes": 480,
+              "compute_ops": 25.0,
+              "store_bytes": 120
+            },
+            {
+              "load_bytes": 240,
+              "compute_ops": 37.5,
+              "store_bytes": 160
+            },
+            {
+              "load_bytes": 520,
+              "compute_ops": 12.5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 280,
+              "compute_ops": 25.0,
+              "store_bytes": 240
+            },
+            {
+              "load_bytes": 560,
+              "compute_ops": 37.5,
+              "store_bytes": 280
+            },
+            {
+              "load_bytes": 320,
+              "compute_ops": 12.5,
+              "store_bytes": 320
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 1.2,
+          "waves": [
+            {
+              "load_bytes": 315,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 270
+            },
+            {
+              "load_bytes": 225,
+              "compute_ops": 33.0,
+              "store_bytes": 180
+            },
+            {
+              "load_bytes": 135,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 495
+            },
+            {
+              "load_bytes": 540,
+              "compute_ops": 19.8,
+              "store_bytes": 405
+            },
+            {
+              "load_bytes": 450,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 315
+            },
+            {
+              "load_bytes": 360,
+              "compute_ops": 33.0,
+              "store_bytes": 225
+            },
+            {
+              "load_bytes": 270,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 540
+            },
+            {
+              "load_bytes": 180,
+              "compute_ops": 19.8,
+              "store_bytes": 450
+            },
+            {
+              "load_bytes": 585,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 360
+            },
+            {
+              "load_bytes": 495,
+              "compute_ops": 33.0,
+              "store_bytes": 270
+            },
+            {
+              "load_bytes": 405,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 180
+            },
+            {
+              "load_bytes": 315,
+              "compute_ops": 19.8,
+              "store_bytes": 495
+            },
+            {
+              "load_bytes": 225,
+              "compute_ops": 26.400000000000002,
+              "store_bytes": 405
+            },
+            {
+              "load_bytes": 135,
+              "compute_ops": 33.0,
+              "store_bytes": 315
+            },
+            {
+              "load_bytes": 540,
+              "compute_ops": 13.200000000000001,
+              "store_bytes": 225
+            },
+            {
+              "load_bytes": 450,
+              "compute_ops": 19.8,
+              "store_bytes": 540
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "memory_long_compute_short",
+      "phase_offset_s": 0.0,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 1540,
+              "compute_ops": 2.0,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 3080,
+              "compute_ops": 4.0,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1760,
+              "compute_ops": 6.0,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 3300,
+              "compute_ops": 2.0,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 1980,
+              "compute_ops": 4.0,
+              "store_bytes": 1400
+            },
+            {
+              "load_bytes": 3520,
+              "compute_ops": 6.0,
+              "store_bytes": 1600
+            },
+            {
+              "load_bytes": 2200,
+              "compute_ops": 2.0,
+              "store_bytes": 1800
+            },
+            {
+              "load_bytes": 880,
+              "compute_ops": 4.0,
+              "store_bytes": 2000
+            },
+            {
+              "load_bytes": 2420,
+              "compute_ops": 6.0,
+              "store_bytes": 2200
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 2.0,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 2640,
+              "compute_ops": 4.0,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1320,
+              "compute_ops": 6.0,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 2860,
+              "compute_ops": 2.0,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1540,
+              "compute_ops": 4.0,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 3080,
+              "compute_ops": 6.0,
+              "store_bytes": 1400
+            },
+            {
+              "load_bytes": 1760,
+              "compute_ops": 2.0,
+              "store_bytes": 1600
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 1680,
+              "compute_ops": 5.4,
+              "store_bytes": 1260
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6.75,
+              "store_bytes": 840
+            },
+            {
+              "load_bytes": 720,
+              "compute_ops": 2.7,
+              "store_bytes": 2310
+            },
+            {
+              "load_bytes": 2880,
+              "compute_ops": 4.05,
+              "store_bytes": 1890
+            },
+            {
+              "load_bytes": 2400,
+              "compute_ops": 5.4,
+              "store_bytes": 1470
+            },
+            {
+              "load_bytes": 1920,
+              "compute_ops": 6.75,
+              "store_bytes": 1050
+            },
+            {
+              "load_bytes": 1440,
+              "compute_ops": 2.7,
+              "store_bytes": 2520
+            },
+            {
+              "load_bytes": 960,
+              "compute_ops": 4.05,
+              "store_bytes": 2100
+            },
+            {
+              "load_bytes": 3120,
+              "compute_ops": 5.4,
+              "store_bytes": 1680
+            },
+            {
+              "load_bytes": 2640,
+              "compute_ops": 6.75,
+              "store_bytes": 1260
+            },
+            {
+              "load_bytes": 2160,
+              "compute_ops": 2.7,
+              "store_bytes": 840
+            },
+            {
+              "load_bytes": 1680,
+              "compute_ops": 4.05,
+              "store_bytes": 2310
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 5.4,
+              "store_bytes": 1890
+            },
+            {
+              "load_bytes": 720,
+              "compute_ops": 6.75,
+              "store_bytes": 1470
+            },
+            {
+              "load_bytes": 2880,
+              "compute_ops": 2.7,
+              "store_bytes": 1050
+            },
+            {
+              "load_bytes": 2400,
+              "compute_ops": 4.05,
+              "store_bytes": 2520
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "memory_long_compute_short",
+      "phase_offset_s": 0.37,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 1540,
+              "compute_ops": 2.0,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 3080,
+              "compute_ops": 4.0,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1760,
+              "compute_ops": 6.0,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 3300,
+              "compute_ops": 2.0,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 1980,
+              "compute_ops": 4.0,
+              "store_bytes": 1400
+            },
+            {
+              "load_bytes": 3520,
+              "compute_ops": 6.0,
+              "store_bytes": 1600
+            },
+            {
+              "load_bytes": 2200,
+              "compute_ops": 2.0,
+              "store_bytes": 1800
+            },
+            {
+              "load_bytes": 880,
+              "compute_ops": 4.0,
+              "store_bytes": 2000
+            },
+            {
+              "load_bytes": 2420,
+              "compute_ops": 6.0,
+              "store_bytes": 2200
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 2.0,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 2640,
+              "compute_ops": 4.0,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1320,
+              "compute_ops": 6.0,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 2860,
+              "compute_ops": 2.0,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1540,
+              "compute_ops": 4.0,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 3080,
+              "compute_ops": 6.0,
+              "store_bytes": 1400
+            },
+            {
+              "load_bytes": 1760,
+              "compute_ops": 2.0,
+              "store_bytes": 1600
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 0.37,
+          "waves": [
+            {
+              "load_bytes": 1680,
+              "compute_ops": 5.4,
+              "store_bytes": 1260
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6.75,
+              "store_bytes": 840
+            },
+            {
+              "load_bytes": 720,
+              "compute_ops": 2.7,
+              "store_bytes": 2310
+            },
+            {
+              "load_bytes": 2880,
+              "compute_ops": 4.05,
+              "store_bytes": 1890
+            },
+            {
+              "load_bytes": 2400,
+              "compute_ops": 5.4,
+              "store_bytes": 1470
+            },
+            {
+              "load_bytes": 1920,
+              "compute_ops": 6.75,
+              "store_bytes": 1050
+            },
+            {
+              "load_bytes": 1440,
+              "compute_ops": 2.7,
+              "store_bytes": 2520
+            },
+            {
+              "load_bytes": 960,
+              "compute_ops": 4.05,
+              "store_bytes": 2100
+            },
+            {
+              "load_bytes": 3120,
+              "compute_ops": 5.4,
+              "store_bytes": 1680
+            },
+            {
+              "load_bytes": 2640,
+              "compute_ops": 6.75,
+              "store_bytes": 1260
+            },
+            {
+              "load_bytes": 2160,
+              "compute_ops": 2.7,
+              "store_bytes": 840
+            },
+            {
+              "load_bytes": 1680,
+              "compute_ops": 4.05,
+              "store_bytes": 2310
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 5.4,
+              "store_bytes": 1890
+            },
+            {
+              "load_bytes": 720,
+              "compute_ops": 6.75,
+              "store_bytes": 1470
+            },
+            {
+              "load_bytes": 2880,
+              "compute_ops": 2.7,
+              "store_bytes": 1050
+            },
+            {
+              "load_bytes": 2400,
+              "compute_ops": 4.05,
+              "store_bytes": 2520
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "memory_long_compute_short",
+      "phase_offset_s": 1.2,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 1540,
+              "compute_ops": 2.0,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 3080,
+              "compute_ops": 4.0,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1760,
+              "compute_ops": 6.0,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 3300,
+              "compute_ops": 2.0,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 1980,
+              "compute_ops": 4.0,
+              "store_bytes": 1400
+            },
+            {
+              "load_bytes": 3520,
+              "compute_ops": 6.0,
+              "store_bytes": 1600
+            },
+            {
+              "load_bytes": 2200,
+              "compute_ops": 2.0,
+              "store_bytes": 1800
+            },
+            {
+              "load_bytes": 880,
+              "compute_ops": 4.0,
+              "store_bytes": 2000
+            },
+            {
+              "load_bytes": 2420,
+              "compute_ops": 6.0,
+              "store_bytes": 2200
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 2.0,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 2640,
+              "compute_ops": 4.0,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1320,
+              "compute_ops": 6.0,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 2860,
+              "compute_ops": 2.0,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1540,
+              "compute_ops": 4.0,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 3080,
+              "compute_ops": 6.0,
+              "store_bytes": 1400
+            },
+            {
+              "load_bytes": 1760,
+              "compute_ops": 2.0,
+              "store_bytes": 1600
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 1.2,
+          "waves": [
+            {
+              "load_bytes": 1680,
+              "compute_ops": 5.4,
+              "store_bytes": 1260
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6.75,
+              "store_bytes": 840
+            },
+            {
+              "load_bytes": 720,
+              "compute_ops": 2.7,
+              "store_bytes": 2310
+            },
+            {
+              "load_bytes": 2880,
+              "compute_ops": 4.05,
+              "store_bytes": 1890
+            },
+            {
+              "load_bytes": 2400,
+              "compute_ops": 5.4,
+              "store_bytes": 1470
+            },
+            {
+              "load_bytes": 1920,
+              "compute_ops": 6.75,
+              "store_bytes": 1050
+            },
+            {
+              "load_bytes": 1440,
+              "compute_ops": 2.7,
+              "store_bytes": 2520
+            },
+            {
+              "load_bytes": 960,
+              "compute_ops": 4.05,
+              "store_bytes": 2100
+            },
+            {
+              "load_bytes": 3120,
+              "compute_ops": 5.4,
+              "store_bytes": 1680
+            },
+            {
+              "load_bytes": 2640,
+              "compute_ops": 6.75,
+              "store_bytes": 1260
+            },
+            {
+              "load_bytes": 2160,
+              "compute_ops": 2.7,
+              "store_bytes": 840
+            },
+            {
+              "load_bytes": 1680,
+              "compute_ops": 4.05,
+              "store_bytes": 2310
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 5.4,
+              "store_bytes": 1890
+            },
+            {
+              "load_bytes": 720,
+              "compute_ops": 6.75,
+              "store_bytes": 1470
+            },
+            {
+              "load_bytes": 2880,
+              "compute_ops": 2.7,
+              "store_bytes": 1050
+            },
+            {
+              "load_bytes": 2400,
+              "compute_ops": 4.05,
+              "store_bytes": 2520
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "restore_burst",
+      "phase_offset_s": 0.0,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 1890,
+              "compute_ops": 5,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 3780,
+              "compute_ops": 10,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 2160,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 4050,
+              "compute_ops": 5,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 10,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1600,
+              "compute_ops": 15,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 5,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 10,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 10,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 5,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 10,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 5,
+              "store_bytes": 800
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 1750,
+              "compute_ops": 12,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1250,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 750,
+              "compute_ops": 6,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 3000,
+              "compute_ops": 9,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 12,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 6,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 9,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 12,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 6,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 9,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 12,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 9,
+              "store_bytes": 1200
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "restore_burst",
+      "phase_offset_s": 0.37,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 1890,
+              "compute_ops": 5,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 3780,
+              "compute_ops": 10,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 2160,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 4050,
+              "compute_ops": 5,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 10,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1600,
+              "compute_ops": 15,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 5,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 10,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 10,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 5,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 10,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 5,
+              "store_bytes": 800
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 0.37,
+          "waves": [
+            {
+              "load_bytes": 1750,
+              "compute_ops": 12,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1250,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 750,
+              "compute_ops": 6,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 3000,
+              "compute_ops": 9,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 12,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 6,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 9,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 12,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 6,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 9,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 12,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 9,
+              "store_bytes": 1200
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "restore_burst",
+      "phase_offset_s": 1.2,
+      "requests": [
+        {
+          "name": "A",
+          "arrival_s": 0.0,
+          "waves": [
+            {
+              "load_bytes": 1890,
+              "compute_ops": 5,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 3780,
+              "compute_ops": 10,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 2160,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 4050,
+              "compute_ops": 5,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 10,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1600,
+              "compute_ops": 15,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 5,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 10,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 5,
+              "store_bytes": 200
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 10,
+              "store_bytes": 300
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 5,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 10,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1400,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 5,
+              "store_bytes": 800
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "arrival_s": 1.2,
+          "waves": [
+            {
+              "load_bytes": 1750,
+              "compute_ops": 12,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 1250,
+              "compute_ops": 15,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 750,
+              "compute_ops": 6,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 3000,
+              "compute_ops": 9,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 12,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 800,
+              "compute_ops": 15,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 600,
+              "compute_ops": 6,
+              "store_bytes": 1200
+            },
+            {
+              "load_bytes": 400,
+              "compute_ops": 9,
+              "store_bytes": 1000
+            },
+            {
+              "load_bytes": 1300,
+              "compute_ops": 12,
+              "store_bytes": 800
+            },
+            {
+              "load_bytes": 1100,
+              "compute_ops": 15,
+              "store_bytes": 600
+            },
+            {
+              "load_bytes": 900,
+              "compute_ops": 6,
+              "store_bytes": 400
+            },
+            {
+              "load_bytes": 700,
+              "compute_ops": 9,
+              "store_bytes": 1100
+            },
+            {
+              "load_bytes": 500,
+              "compute_ops": 12,
+              "store_bytes": 900
+            },
+            {
+              "load_bytes": 300,
+              "compute_ops": 15,
+              "store_bytes": 700
+            },
+            {
+              "load_bytes": 1200,
+              "compute_ops": 6,
+              "store_bytes": 500
+            },
+            {
+              "load_bytes": 1000,
+              "compute_ops": 9,
+              "store_bytes": 1200
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "payload_scale_factor": 100,
+  "hbm_bytes_per_s": 1000.0,
+  "compute_ops_per_s": 8.0,
+  "input_slots": 2,
+  "output_slots": 2
+}

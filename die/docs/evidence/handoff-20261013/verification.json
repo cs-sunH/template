@@ -1,0 +1,46 @@
+{
+  "scope": "handoff verification only; no feature development",
+  "source_base": "84622293d1bfb8fa2021844ad55ab2a946d2ae81",
+  "branch": "codex/die-handoff-20261013",
+  "compiler": "g++ (Debian 14.2.0-19) 14.2.0",
+  "source_files_sha256": {
+    "die/src/Capi.cc": "89b1d7b80e8d21928842252672d50fb0447bd1eb3f9b5a33c951c56ee216b4f1",
+    "die/src/Compiler.cc": "2f3b5c532692c77e3231945c5d1289b20a6e236ab2b85f5955ca6e033a2d215b",
+    "die/src/Execution.cc": "1be7507083685210622f86d3e27e064714a4fd94d3ab229a8bb3643c74d455b0",
+    "die/src/Hardware.cc": "5e82b5e19b0823a9b9dd111e4ae35b98b123dace4efe60b49974ae07b7a83a43",
+    "die/src/Mapping.cc": "4c0c30f9dc93ef080cc11a6cb8efbd03b15e811af443494eabe151a86bf11dc7",
+    "die/src/Plan.cc": "cc750ff9a51e5c7aeb7aeabdc6f79f24f7c6234f38c99e64a6c65a70a7ce1db3",
+    "die/include/coarse_die/Capi.h": "52dab6731caaa6c80fdd1ff168c207d9fd63f7b56a2ba076437de7a1b624b61b",
+    "die/include/coarse_die/Execution.hh": "ce12f7cf844ef10024078c2e74cadc1685a2740f3684d61ec4326196b0921389",
+    "die/include/coarse_die/Hardware.hh": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+    "die/include/coarse_die/Memory.hh": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+    "die/include/coarse_die/Plan.hh": "5ffd0330144896006c14ba49df4de9d9474d7c84d36e8953f844a1ee1a38ac3d",
+    "die/tests/runtime_semantics_test.cc": "d87ffebd5d6633bd5b303d0013658ff2dc4d66664388bb66bad0f00640368a17",
+    "die/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+    "die/tests/hardware_search_test.cc": "e578c3da6fe2a757816bf93e9f28c206420cd3b0798656d7070e2315c81e2e87"
+  },
+  "checks": {
+    "runtime_semantics": "passed",
+    "hardware_search": "passed",
+    "tx8_cache_and_reference": "passed",
+    "cmake_configure": "passed",
+    "coarse_die_static_target": "compiled",
+    "coarse_die_cabi_shared_target": "compiled",
+    "cmake_all_targets": {
+      "status": "failed",
+      "exit_code": 2,
+      "reason": "coarse_die_benchmark lacks COARSE_DIE_SOURCE_DIR compile definition"
+    },
+    "full_ctest": "not_run",
+    "five_repository_integration": "not_run",
+    "hardware_heldout": "not_available",
+    "python_ast": {
+      "status": "passed",
+      "files": 16
+    },
+    "json_parse": {
+      "status": "passed",
+      "files": 10
+    }
+  }
+}

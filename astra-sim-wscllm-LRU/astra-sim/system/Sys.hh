@@ -27,6 +27,7 @@ class BaseStream;
 class StreamBaseline;
 class DataSet;
 class QueueLevels;
+class CoarseDieRuntime;
 class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
@@ -337,6 +338,8 @@ class Sys : public Callable {
         explicit DieModelRuntime(DieModel::Hardware hw);
     };
     std::unique_ptr<DieModelRuntime> die_runtime;
+    std::unique_ptr<CoarseDieRuntime> coarse_die_runtime;
+    std::string die_model_profile;
     // Resolved die-model-config path (diagnostics only; empty off the die
     // backend).
     std::string die_model_config_path;

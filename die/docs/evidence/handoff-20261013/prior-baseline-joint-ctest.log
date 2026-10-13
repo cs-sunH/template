@@ -1,0 +1,62 @@
+Internal ctest changing into directory: /workspace/template/astra-sim-joint/build/astra_analytical/build_congestion_aware
+Test project /workspace/template/astra-sim-joint/build/astra_analytical/build_congestion_aware
+      Start  1: JointPipelineDescriptorTest
+ 1/28 Test  #1: JointPipelineDescriptorTest ......................................   Passed    0.03 sec
+      Start  2: JointPipelineWindowTest
+ 2/28 Test  #2: JointPipelineWindowTest ..........................................   Passed    0.00 sec
+      Start  3: NativeProjectionCApiTest
+ 3/28 Test  #3: NativeProjectionCApiTest .........................................   Passed    0.01 sec
+      Start  4: tx8_reference_test
+ 4/28 Test  #4: tx8_reference_test ...............................................   Passed    0.00 sec
+      Start  5: hardware_test
+ 5/28 Test  #5: hardware_test ....................................................   Passed    0.00 sec
+      Start  6: spec_parse_test
+ 6/28 Test  #6: spec_parse_test ..................................................   Passed    0.00 sec
+      Start  7: configs_consistency_test
+ 7/28 Test  #7: configs_consistency_test .........................................   Passed    0.00 sec
+      Start  8: workload_test
+ 8/28 Test  #8: workload_test ....................................................   Passed    0.00 sec
+      Start  9: mapping_test
+ 9/28 Test  #9: mapping_test .....................................................   Passed    0.26 sec
+      Start 10: costmodel_test
+10/28 Test #10: costmodel_test ...................................................   Passed    0.22 sec
+      Start 11: tx8_compile_test
+11/28 Test #11: tx8_compile_test .................................................   Passed    0.00 sec
+      Start 12: execution_test
+12/28 Test #12: execution_test ...................................................   Passed    0.04 sec
+      Start 13: internal_slice_test
+13/28 Test #13: internal_slice_test ..............................................   Passed    0.00 sec
+      Start 14: internal_service_progress_test
+14/28 Test #14: internal_service_progress_test ...................................   Passed    0.00 sec
+      Start 15: selection_fuzz_test
+15/28 Test #15: selection_fuzz_test ..............................................   Passed   10.79 sec
+      Start 16: capi_test
+16/28 Test #16: capi_test ........................................................   Passed    0.02 sec
+      Start 17: json_scanner_test
+17/28 Test #17: json_scanner_test ................................................   Passed    0.00 sec
+      Start 18: ledger_types_test
+18/28 Test #18: ledger_types_test ................................................   Passed    0.00 sec
+      Start 19: pipeline_descriptor_port_test
+19/28 Test #19: pipeline_descriptor_port_test ....................................   Passed    0.01 sec
+      Start 20: work_ledger_core_test
+20/28 Test #20: work_ledger_core_test ............................................   Passed    0.00 sec
+      Start 21: envelope_reader_test
+21/28 Test #21: envelope_reader_test .............................................   Passed    0.03 sec
+      Start 22: dual_ledger_test
+22/28 Test #22: dual_ledger_test .................................................   Passed    0.04 sec
+      Start 23: joint_ledger_capi_test
+23/28 Test #23: joint_ledger_capi_test ...........................................   Passed    0.00 sec
+      Start 24: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+24/28 Test #24: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.02 sec
+      Start 25: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+25/28 Test #25: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...   Passed    0.01 sec
+      Start 26: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+26/28 Test #26: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.01 sec
+      Start 27: JointReadyIssueOrderTest
+27/28 Test #27: JointReadyIssueOrderTest .........................................   Passed    0.05 sec
+      Start 28: JointPipelineMutationTest
+28/28 Test #28: JointPipelineMutationTest ........................................   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 28
+
+Total Test time (real) =  11.65 sec

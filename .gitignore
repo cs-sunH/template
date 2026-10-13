@@ -1,5 +1,7 @@
 # ================= C++ 构建产物 =================
 build/
+# Task scratch files and isolated verification builds.
+work/
 # joint 仓根 lib/ 下的编译静态库（libAstraSim.a 等）
 astra-sim-joint/lib/
 

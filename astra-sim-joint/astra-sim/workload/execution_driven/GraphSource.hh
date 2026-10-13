@@ -41,6 +41,7 @@ reverse index (步骤 1-5).
 #include <vector>
 
 #include "DieTypes.hh"
+#include <json/json.hpp>
 
 namespace Chakra {
 namespace FeederV3 {
@@ -105,6 +106,7 @@ struct ComputeAttrs {
     ComputeExecRole exec_role = ComputeExecRole::Standard;
     PipelineAnchorAttrs pipeline_anchor;
     std::shared_ptr<const DieModel::DieOpSpec> die_spec;
+    std::shared_ptr<const nlohmann::json> die_task_json;
 };
 
 /// Memory-node attributes (issue_remote_mem / issue_local_hbm_kv_restore).

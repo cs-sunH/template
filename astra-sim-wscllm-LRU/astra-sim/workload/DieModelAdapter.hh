@@ -72,6 +72,7 @@ class DieModelAdapter {
     Workload* workload_;
     Sys* sys_;
     std::vector<std::unique_ptr<DieExecution>> active_;
+    std::map<uint64_t, uint64_t> coarse_active_;
 };
 
 }  // namespace AstraSim
