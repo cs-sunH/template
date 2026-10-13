@@ -128,6 +128,6 @@
 
 本轮未接到停止/交接指令；完成这个代码检查点后继续自主开发。不要继承上一轮文档里的“已停止”指令，不检测额度或自动切换账号。
 
-本检查点在 `codex/die-runtime-waves-20261013` 保存代码、tests、固定 vendor、失败 oracle、性能原始样本和研究。commit SHA 从 Git 元数据读取，避免编造本文件自身 SHA；PR 和实际合并状态待本轮同步后核对。推送/PR 未合并/远端未确认时 NOT READY FOR CODE HANDOFF；误差与全量业务验收独立保持 NOT ACCEPTED。
+本检查点源码/证据提交为 `c0f559a071505c7ea750530e1adb3c47238ffcf0`，已推送至 `codex/die-runtime-waves-20261013` 并建立 [PR #4](https://github.com/cs-sunH/template/pull/4)。该提交保存 tests、固定 vendor、失败 oracle、性能原始样本与研究；本文件后续 metadata commit SHA 从 Git 读取，避免编造自身 SHA。PR #4 创建时为 open，Actions run #21 正在执行；实际 merged/CI 状态与 merge SHA 以 GitHub 元数据和 fetch/ancestry 为准，合并采用 expected-head 检查。PR 未合并/远端未确认时 NOT READY FOR CODE HANDOFF；误差与全量业务验收独立保持 NOT ACCEPTED。
 
 下一账号仅在用户真正发出交接指令、代码与最新 HANDOFF 进入 main、远端 ancestry/digest 确认后接力。`.github/workflows/die-handoff-check.yml` 跑真实公共默认 build/CTest 与必需文档检查；本地成功不能代替尚未读取的 GitHub Actions 结果。工作目录中的依赖/二进制不跨账号共享，依据保存的源码/命令/真实证据直接接续 P0。
