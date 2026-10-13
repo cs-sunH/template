@@ -1,0 +1,245 @@
+{
+  "schema": "die_cache_lifecycle_checkpoint_v1",
+  "date": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "baseline_main_sha": "47079d88fcf3a8408743a282804cd2098dee8557",
+  "previous_pr": {
+    "number": 4,
+    "state": "merged",
+    "merge_sha": "47079d88fcf3a8408743a282804cd2098dee8557",
+    "actions_runs_21_and_23": "success; verified before merge"
+  },
+  "development_branch": "codex/die-bounded-lifecycle-20261013",
+  "source_digest": "05c3f91c59e4ac3d22b5147a12566d93902814aa77bbf3384a9b7a5468a9e755",
+  "published_files": 20,
+  "sync_check": "passed",
+  "public": {
+    "all_default_targets": "passed_incremental",
+    "ctest": {
+      "passed": 22,
+      "failed": 0,
+      "skipped": 0
+    },
+    "default_hash_and_summary": "7/7 unchanged",
+    "cache_response_boundary_test": "64MiB retained byte cap triggered by real unique GEMMs; 4096-count cap not independently triggered; malloc failure not fault-injected",
+    "binary_sha256": {
+      "libcoarse_die.a": "e0864d0eba1402a39654e572afc23a624a667fe7e04952a64486d99d6a560a9a",
+      "lib/libcoarse_die_cabi.so": "e5a385c7bf87de36b0220f75e0fd30e7ff692aae8150ce49d4184529e1af9a17",
+      "coarse_compiled_gemm_oracle_driver": "f7293bbc12a67313bb3abd1860fd33d414e10ff230dd2fd9b855cbe37baa8787"
+    }
+  },
+  "integration": {
+    "repositories": {
+      "astra-sim-wscllm": {
+        "requested_build_targets": [
+          "die_model_cabi",
+          "coarse_die_cabi"
+        ],
+        "build": "passed",
+        "implicit_core_dependency_units": [
+          "Plan.cc",
+          "Hardware.cc",
+          "Compiler.cc",
+          "Mapping.cc",
+          "Execution.cc",
+          "Capi.cc"
+        ],
+        "selected_ctest": {
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0
+        },
+        "explicit_abi_config_unittest": {
+          "passed": 20,
+          "failed": 0,
+          "skipped": 0
+        },
+        "scope": "ABI incremental build; existing selected CTest executables run; Online/AstraSim executables not rebuilt this phase"
+      },
+      "astra-sim-wscllm-LRU": {
+        "requested_build_targets": [
+          "die_model_cabi",
+          "coarse_die_cabi"
+        ],
+        "build": "passed",
+        "implicit_core_dependency_units": [
+          "Hardware.cc",
+          "Plan.cc",
+          "Compiler.cc",
+          "Mapping.cc",
+          "Execution.cc",
+          "Capi.cc"
+        ],
+        "selected_ctest": {
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0
+        },
+        "explicit_abi_config_unittest": {
+          "passed": 15,
+          "failed": 0,
+          "skipped": 0
+        },
+        "scope": "ABI incremental build; existing selected CTest executables run; Online/AstraSim executables not rebuilt this phase"
+      },
+      "astra-sim-face": {
+        "requested_build_targets": [
+          "die_model_cabi",
+          "coarse_die_cabi"
+        ],
+        "build": "passed",
+        "implicit_core_dependency_units": [
+          "Plan.cc",
+          "Hardware.cc",
+          "Compiler.cc",
+          "Mapping.cc",
+          "Execution.cc",
+          "Capi.cc"
+        ],
+        "selected_ctest": {
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0
+        },
+        "explicit_abi_config_unittest": {
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0
+        },
+        "scope": "ABI incremental build; existing selected CTest executables run; Online/AstraSim executables not rebuilt this phase"
+      },
+      "astra-sim-face-LRU": {
+        "requested_build_targets": [
+          "die_model_cabi",
+          "coarse_die_cabi"
+        ],
+        "build": "passed",
+        "implicit_core_dependency_units": [
+          "Plan.cc",
+          "Hardware.cc",
+          "Compiler.cc",
+          "Mapping.cc",
+          "Execution.cc",
+          "Capi.cc"
+        ],
+        "selected_ctest": {
+          "passed": 3,
+          "failed": 0,
+          "skipped": 0
+        },
+        "explicit_abi_config_unittest": {
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0
+        },
+        "scope": "ABI incremental build; existing selected CTest executables run; Online/AstraSim executables not rebuilt this phase"
+      },
+      "astra-sim-joint": {
+        "requested_build_targets": [
+          "die_model_cabi",
+          "coarse_die_cabi"
+        ],
+        "build": "passed",
+        "implicit_core_dependency_units": [
+          "Plan.cc",
+          "Hardware.cc",
+          "Compiler.cc",
+          "Mapping.cc",
+          "Execution.cc",
+          "Capi.cc"
+        ],
+        "selected_ctest": {
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0
+        },
+        "explicit_abi_config_unittest": {
+          "passed": 13,
+          "failed": 0,
+          "skipped": 0
+        },
+        "scope": "ABI incremental build; existing selected CTest executables run; Online/AstraSim executables not rebuilt this phase"
+      }
+    },
+    "selected_ctest_total": 17,
+    "explicit_abi_config_unittest_total": 83,
+    "previous_full_core_online_build": "preserved from e877 PR4 checkpoint; not claimed rerun for this CAPI-only phase"
+  },
+  "compiled_grouped_oracle": {
+    "status": "failed",
+    "exit_code": 1,
+    "raw_measurement_source": "previous real C++ driver raw JSON; unchanged Runtime binary this phase",
+    "canonical_Q_priority": "physical HBM payload, LOCAL, SRAM read+write, logical NoC, pure compute 1",
+    "compute_Q_this_fixture": "per-wave LOCAL bytes even with nonbinding capacity",
+    "legacy_equal_progress_comparisons": "preserved in report",
+    "limits": "solo3%/concurrent5% unchanged",
+    "production_E8_E16": "unavailable/not_run"
+  },
+  "allocator_reference_check": {
+    "actual_Runtime_cases": 12,
+    "rate_and_alpha": "passed",
+    "scope": "synthetic zero-credit allocations only"
+  },
+  "lifecycle_research": {
+    "scope": "scratch only; no production Runtime or GMP dependency change",
+    "root_rebuilt_small_fixture": "21 policy/arrival pairs completed; independent equal-progress and grouped LOCAL-Q 7/7 comparisons passed",
+    "scaled_solo": "R=1000000, Ntiles=2; 72 executed intervals; closed-form exact byte/ops/LOCAL/retire ledger passed; large wave oracle not expanded",
+    "scaled_two_offset": "R=1000 fail_closed at outer256; exact phase fractions grow to about16k bits; expanded event attempt interrupted, not passed",
+    "affine_cycle": "520 event intervals independently verified, 521 slot/lifecycle states, invariant-line/event-order contraction proof for offset1/20 full-MN segment only; root checker rerun passed",
+    "limitations": [
+      "full period needs520 expanded steps; no flat256 discovery proof",
+      "tail/external capacity/cancel/J32/13-domain production implementation not covered",
+      "FP32 row-prefix typo is harmless to exact-half row partition in this fixture only"
+    ],
+    "root_rebuilt_scaled_solo": "M7999985 N65 K4097; R1000000; 72 intervals, 999994 skipped output retirements; exact closed ledger passed; compile/source/binary/run provenance saved"
+  },
+  "performance": {
+    "samples_per_path_per_fixture": 30,
+    "cache_hit_p95_ns": [
+      10426.0,
+      14292.0,
+      18788.0
+    ],
+    "cache_hit_P95_20us_this_fixture_set": "passed",
+    "attention_P99": "above20us; raw retained",
+    "cold_128cubed_cpp_P95_ns": 3787634.0,
+    "cold_128cubed_cabi_miss_P95_ns": 3860504.0,
+    "cold_2ms": "unmet",
+    "runtime_J32": "not_run",
+    "scope": "same caller clock as original; response parse/serialize included; model create excluded; C++ controls not attributed to response caching"
+  },
+  "tools": {
+    "cmake": "4.4.4",
+    "gcc": "14.2.0",
+    "protobuf": "3.21.12"
+  },
+  "workspace_implementation": "design only, not implemented or tested",
+  "tx8": "unchanged frozen conditional reference and target priors; target holdout not_available",
+  "model_precision_acceptance": "not_accepted",
+  "log_sha256": {
+    "astra-sim-wscllm-ctest.txt": "f029b2544faffcf5840ec0cd5b6dfd36e8d08c07bc43a38fd89ce2fb0ed2a339",
+    "astra-sim-face-LRU-config-unittest.txt": "df3828587673ddf08fbf333b77bde22abeca0dc83c957e5be13795ef1467fa26",
+    "astra-sim-face-configure.txt": "825adde454f288e82ae4e23b50f1b564031967781a5ef6f747419dd2435b1c84",
+    "astra-sim-face-LRU-ctest.txt": "7b6b61e90ee72b69d26b77ff648de60fc20e51d1fb1b1642a49686ea46cc1021",
+    "astra-sim-joint-ctest.txt": "74a364d5386f5adffc0e9b97db52e7715ccd69723b04bbcb06346458967dcd71",
+    "astra-sim-face-LRU-configure.txt": "9fd307e6e5ef1d20f575845a3849a929480f4a92260fef09f7f8c66bf2f8e2fb",
+    "astra-sim-face-config-unittest.txt": "ddb1ae40930e72d70ee73587ddad51a0373a1529b531322e97a38d21f84d6cac",
+    "astra-sim-wscllm-build.txt": "4e8f10a1857cf2b46276af5493f82f1687af63f7f89bd1143e6d20fb1da7920d",
+    "astra-sim-joint-configure.txt": "4a6a620376cce1962303b801889ff7d63b8a917d8e707f34b377e1166ff5c101",
+    "astra-sim-wscllm-LRU-abi-build.txt": "0723bcb616b2bb2947305beb9d56467f54198128f2113fa310ebcc58a5caa1aa",
+    "astra-sim-wscllm-LRU-ctest.txt": "8c3b43d6202c1c44bc8371c8b23243ad5ca873f7d40731834bc61974bf4164e0",
+    "astra-sim-joint-build.txt": "8a79f60134676481b9be1276375518fc6223bee95e1b7ec955f6bb64613cbc9c",
+    "astra-sim-joint-config-unittest.txt": "6a2adc206b4e32dc86b60bee0e76a609fb5a7b38965b770c315a638ffcc31fa8",
+    "public-ctest.txt": "ba6b36d32df7b2febb8adf66882b1ba1092650eaaf9e48de4f2bd62d54415881",
+    "astra-sim-face-LRU-abi-build.txt": "eccb7b98353bbfd53e87294796f8e9fe006be463f8c7caf626827ec770595df4",
+    "astra-sim-face-abi-build.txt": "153fc27c2a945b099157f1c9fea445b01240e4548e55c95be24f5e61f8898061",
+    "astra-sim-wscllm-LRU-config-unittest.txt": "ac303bce7353011d4d0f1e89f68ac44078eb7b17c89773d98304d476d1cbb2d8",
+    "public-build.txt": "544d4a1f88497bd3724322baf99a8f74dbbd6086d7d852558281ce3e30d059c4",
+    "astra-sim-wscllm-config-unittest.txt": "7f1d5641e8b7a2b8423dfb53062cd9e4ab121685398275a8f25b34873a15b191",
+    "sync-check.txt": "0b16dfd51cfa10da36260c31ef0bac86cc9044165a4cab47f70ec0d39a4053d8",
+    "astra-sim-face-ctest.txt": "38d6c1c7bcea07b7c4c2631e2e2f666b3d466e8cfc8ac18eb5afd7bc90495432",
+    "astra-sim-wscllm-configure.txt": "7f175a914828d2cd2ee234b828aaacc9ddeb02a758207f7cdbc69ebc2febad71",
+    "public-configure.txt": "3ea0a1ffabde022a25861dfe3dda91409d2c31559e77e0777b6f52b00b13bc18",
+    "astra-sim-wscllm-LRU-configure.txt": "d44ca9f04c2fdb77dbd43d1c6f64103d6d6dcd815e9ff75620711992e38cad44"
+  }
+}

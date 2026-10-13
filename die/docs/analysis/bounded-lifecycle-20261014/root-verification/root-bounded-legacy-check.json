@@ -1,0 +1,165 @@
+{
+  "expected_per_owner": {
+    "local_bytes": 9636640,
+    "read_bytes": 7456540,
+    "vec_ops": 34619650,
+    "write_bytes": 16900
+  },
+  "fixture": {
+    "Tk": 65,
+    "Tm": 5,
+    "Tn": 2,
+    "tk": 64,
+    "tm": 16,
+    "tn": 64
+  },
+  "results": [
+    {
+      "arrivals_s": [
+        0.0
+      ],
+      "cycle_status": {
+        "equal_progress": "completed_and_equal",
+        "grouped_q_alpha_q1": "completed_and_equal",
+        "grouped_q_alpha_qlocal": "completed_and_equal"
+      },
+      "equal_progress_oracle_finish_s": {
+        "comp0": 0.2352908651817765
+      },
+      "equal_progress_oracle_hbm_busy_s": 0.07473439999999941,
+      "equal_progress_oracle_hbm_shared_s": 0.0,
+      "grouped_q_alpha_q1": "pure-compute toy policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "grouped_q_alpha_qlocal": "GEMM-local canonical-Q policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "scenario": "solo",
+      "status": "passed"
+    },
+    {
+      "arrivals_s": [
+        0.0,
+        0.0
+      ],
+      "cycle_status": {
+        "equal_progress": "completed_and_equal",
+        "grouped_q_alpha_q1": "completed_and_equal",
+        "grouped_q_alpha_qlocal": "completed_and_equal"
+      },
+      "equal_progress_oracle_finish_s": {
+        "comp0": 0.470581730363553,
+        "comp1": 0.470581730363553
+      },
+      "equal_progress_oracle_hbm_busy_s": 0.14946879999999882,
+      "equal_progress_oracle_hbm_shared_s": 0.14946879999999882,
+      "grouped_q_alpha_q1": "pure-compute toy policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "grouped_q_alpha_qlocal": "GEMM-local canonical-Q policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "scenario": "two_offset_0",
+      "status": "passed"
+    },
+    {
+      "arrivals_s": [
+        0.0,
+        0.05
+      ],
+      "cycle_status": {
+        "equal_progress": "completed_and_equal",
+        "grouped_q_alpha_q1": "completed_and_equal",
+        "grouped_q_alpha_qlocal": "completed_and_equal"
+      },
+      "equal_progress_oracle_finish_s": {
+        "comp0": 0.45628252319770085,
+        "comp1": 0.4565846451042712
+      },
+      "equal_progress_oracle_hbm_busy_s": 0.1494688000000025,
+      "equal_progress_oracle_hbm_shared_s": 0.0405982489455146,
+      "grouped_q_alpha_q1": "pure-compute toy policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "grouped_q_alpha_qlocal": "GEMM-local canonical-Q policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "scenario": "two_offset_005",
+      "status": "passed"
+    },
+    {
+      "arrivals_s": [
+        0.0,
+        0.14285714285714285
+      ],
+      "cycle_status": {
+        "equal_progress": "completed_and_equal",
+        "grouped_q_alpha_q1": "completed_and_equal",
+        "grouped_q_alpha_qlocal": "completed_and_equal"
+      },
+      "equal_progress_oracle_finish_s": {
+        "comp0": 0.3948341539744518,
+        "comp1": 0.4634985824054985
+      },
+      "equal_progress_oracle_hbm_busy_s": 0.1494688000000009,
+      "equal_progress_oracle_hbm_shared_s": 0.01999372685429403,
+      "grouped_q_alpha_q1": "pure-compute toy policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "grouped_q_alpha_qlocal": "GEMM-local canonical-Q policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "scenario": "two_offset_r_1_7",
+      "status": "passed"
+    },
+    {
+      "arrivals_s": [
+        0.0,
+        0.010309278350515464
+      ],
+      "cycle_status": {
+        "equal_progress": "completed_and_equal",
+        "grouped_q_alpha_q1": "completed_and_equal",
+        "grouped_q_alpha_qlocal": "completed_and_equal"
+      },
+      "equal_progress_oracle_finish_s": {
+        "comp0": 0.4668017085625176,
+        "comp1": 0.4668580704690868
+      },
+      "equal_progress_oracle_hbm_busy_s": 0.14946880000000015,
+      "equal_progress_oracle_hbm_shared_s": 0.04493367158912078,
+      "grouped_q_alpha_q1": "pure-compute toy policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "grouped_q_alpha_qlocal": "GEMM-local canonical-Q policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "scenario": "two_offset_r_1_97",
+      "status": "passed"
+    },
+    {
+      "arrivals_s": [
+        0.0,
+        0.13861386138613863
+      ],
+      "cycle_status": {
+        "equal_progress": "completed_and_equal",
+        "grouped_q_alpha_q1": "completed_and_equal",
+        "grouped_q_alpha_qlocal": "completed_and_equal"
+      },
+      "equal_progress_oracle_finish_s": {
+        "comp0": 0.3950376325375731,
+        "comp1": 0.46344093762424693
+      },
+      "equal_progress_oracle_hbm_busy_s": 0.14946880000000096,
+      "equal_progress_oracle_hbm_shared_s": 0.04259290069942942,
+      "grouped_q_alpha_q1": "pure-compute toy policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "grouped_q_alpha_qlocal": "GEMM-local canonical-Q policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "scenario": "two_offset_r_14_101",
+      "status": "passed"
+    },
+    {
+      "arrivals_s": [
+        0.0,
+        0.9381443298969072
+      ],
+      "cycle_status": {
+        "equal_progress": "completed_and_equal",
+        "grouped_q_alpha_q1": "completed_and_equal",
+        "grouped_q_alpha_qlocal": "completed_and_equal"
+      },
+      "equal_progress_oracle_finish_s": {
+        "comp0": 0.2352908651817765,
+        "comp1": 1.173435195078674
+      },
+      "equal_progress_oracle_hbm_busy_s": 0.1494688000000017,
+      "equal_progress_oracle_hbm_shared_s": 0.0,
+      "grouped_q_alpha_q1": "pure-compute toy policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "grouped_q_alpha_qlocal": "GEMM-local canonical-Q policy; event ledger is checked against wave oracle and cycle against event; LP probe is separate",
+      "scenario": "two_offset_r_91_97",
+      "status": "passed"
+    }
+  ],
+  "status": "passed",
+  "waves": 650
+}

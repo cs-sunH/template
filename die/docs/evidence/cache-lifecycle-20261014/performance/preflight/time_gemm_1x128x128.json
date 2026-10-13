@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/workspace/template/work/performance-cache-response/cabi_cache_probe",
+    "--config",
+    "/workspace/template/die/tests/fixtures/coarse_die_v2.json",
+    "--task",
+    "/workspace/template/work/performance-cache-response/fixtures/gemm_1x128x128.json",
+    "--samples",
+    "1",
+    "--output",
+    "/workspace/template/work/performance-cache-response/preflight/cabi_cache_gemm_1x128x128.json"
+  ],
+  "exit_code": 0,
+  "outer_elapsed_ns": 3798039,
+  "direct_child_user_cpu_seconds_delta": 0.0035859999999999998,
+  "direct_child_system_cpu_seconds_delta": 0.0,
+  "cumulative_children_max_rss_kib": 9344,
+  "rss_units": "KiB on Linux",
+  "scope_note": "outer process resource metadata; probe-internal caller timing is unchanged and is in raw JSON"
+}

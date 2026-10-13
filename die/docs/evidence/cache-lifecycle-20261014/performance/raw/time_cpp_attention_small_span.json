@@ -1,0 +1,27 @@
+{
+  "command": [
+    "python3",
+    "/workspace/template/die/tools/benchmark.py",
+    "--benchmark-bin",
+    "/workspace/template/work/build-die/coarse_die_benchmark",
+    "--config",
+    "/workspace/template/die/tests/fixtures/coarse_die_v2.json",
+    "--task",
+    "/workspace/template/work/performance-cache-response/fixtures/attention_small_span.json",
+    "--iterations",
+    "30",
+    "--owners",
+    "1",
+    "--output",
+    "/workspace/template/work/performance-cache-response/raw/cpp_compile_attention_small_span.json",
+    "--markdown",
+    "/workspace/template/work/performance-cache-response/raw/cpp_compile_attention_small_span.md"
+  ],
+  "exit_code": 0,
+  "outer_elapsed_ns": 73841708,
+  "direct_child_user_cpu_seconds_delta": 0.066064,
+  "direct_child_system_cpu_seconds_delta": 0.007519,
+  "cumulative_children_max_rss_kib": 13044,
+  "rss_units": "KiB on Linux",
+  "scope_note": "outer process resource metadata; probe-internal caller timing is unchanged and is in raw JSON"
+}

@@ -1,0 +1,52 @@
+{
+  "checker_status": "passed",
+  "completion_status": "completed",
+  "cycles": {
+    "scale_solo": {
+      "event_executed_events": 131000,
+      "executed_events": 72,
+      "inner_skipped_cycles": 357,
+      "max_inner_probes": 13,
+      "max_outer_probes": 6,
+      "max_progress_den_bits": 28,
+      "max_progress_num_bits": 26,
+      "max_rate_den_bits": 12,
+      "max_rate_num_bits": 27,
+      "outer_cached_cycle_hits": 1,
+      "outer_cycle_output_step": 2,
+      "outer_exact_cycles": 1,
+      "outer_rejected_key_repeats": 0,
+      "outer_skipped_cycles": 497,
+      "outer_skipped_outputs": 994,
+      "outer_unskippable_cycle_hits": 1,
+      "owner0_next_load": 65000,
+      "owner0_retired": 1000,
+      "status": "completed"
+    }
+  },
+  "expanded_wave_oracle": {
+    "ledger": {
+      "local": 1062143260,
+      "ops": 4252890850,
+      "read": 794326360,
+      "write": 2076100
+    },
+    "performed": true,
+    "wave_count": 65000
+  },
+  "fixture": {
+    "k": 4097,
+    "local": 1062143260,
+    "m": 7985,
+    "n": 65,
+    "ops": 4252890850,
+    "outputs": 1000,
+    "read": 794326360,
+    "tk": 64,
+    "tm": 16,
+    "tn": 64,
+    "waves": 65000,
+    "write": 2076100
+  },
+  "interpretation": "expanded-oracle and event comparison completed"
+}

@@ -1,0 +1,65 @@
+[ 11%] Built target coarse_die
+[ 14%] Building CXX object CMakeFiles/coarse_compiled_gemm_oracle_driver.dir/tests/compiled_gemm_oracle_driver.cc.o
+[ 16%] Built target coarse_die_cabi
+[ 18%] Building CXX object CMakeFiles/coarse_die_benchmark.dir/tests/benchmark.cc.o
+[ 20%] Linking CXX executable coarse_die_benchmark
+[ 20%] Built target coarse_die_benchmark
+[ 22%] Building CXX object CMakeFiles/coarse_source_golden_test.dir/tests/source_golden_test.cc.o
+[ 24%] Linking CXX executable coarse_compiled_gemm_oracle_driver
+[ 24%] Built target coarse_compiled_gemm_oracle_driver
+[ 25%] Building CXX object CMakeFiles/coarse_hardware_search_test.dir/tests/hardware_search_test.cc.o
+[ 27%] Linking CXX executable coarse_hardware_search_test
+[ 27%] Built target coarse_hardware_search_test
+[ 31%] Built target coarse_compile_execution_test
+[ 33%] Building CXX object CMakeFiles/coarse_compiler_credit_test.dir/tests/compiler_credit_test.cc.o
+[ 35%] Linking CXX executable coarse_source_golden_test
+[ 35%] Built target coarse_source_golden_test
+[ 37%] Building CXX object CMakeFiles/coarse_operator_accounting_test.dir/tests/operator_accounting_test.cc.o
+[ 38%] Linking CXX executable coarse_compiler_credit_test
+[ 38%] Built target coarse_compiler_credit_test
+[ 40%] Building CXX object CMakeFiles/coarse_gemm_accounting_test.dir/tests/gemm_accounting_test.cc.o
+[ 42%] Linking CXX executable coarse_operator_accounting_test
+[ 42%] Built target coarse_operator_accounting_test
+[ 44%] Building CXX object CMakeFiles/coarse_gemm_tail_budget_test.dir/tests/gemm_tail_budget_test.cc.o
+[ 46%] Linking CXX executable coarse_gemm_accounting_test
+[ 46%] Built target coarse_gemm_accounting_test
+[ 48%] Building CXX object CMakeFiles/coarse_task_schema_test.dir/tests/task_schema_test.cc.o
+[ 50%] Linking CXX executable coarse_gemm_tail_budget_test
+[ 50%] Built target coarse_gemm_tail_budget_test
+[ 51%] Building CXX object CMakeFiles/coarse_compact_batch_semantics_test.dir/tests/compact_batch_semantics_test.cc.o
+[ 53%] Linking CXX executable coarse_task_schema_test
+[ 53%] Built target coarse_task_schema_test
+[ 55%] Building CXX object CMakeFiles/coarse_equivalent_work_test.dir/tests/equivalent_work_test.cc.o
+[ 57%] Linking CXX executable coarse_equivalent_work_test
+[ 57%] Built target coarse_equivalent_work_test
+[ 61%] Built target coarse_fractional_work_test
+[ 62%] Building CXX object CMakeFiles/coarse_fused_ffn_accounting_test.dir/tests/fused_ffn_accounting_test.cc.o
+[ 64%] Linking CXX executable coarse_compact_batch_semantics_test
+[ 64%] Built target coarse_compact_batch_semantics_test
+[ 66%] Building CXX object CMakeFiles/coarse_attention_accounting_test.dir/tests/attention_accounting_test.cc.o
+[ 68%] Linking CXX executable coarse_fused_ffn_accounting_test
+[ 68%] Built target coarse_fused_ffn_accounting_test
+[ 70%] Building CXX object CMakeFiles/coarse_endpoint_allocation_test.dir/tests/endpoint_allocation_test.cc.o
+[ 72%] Linking CXX executable coarse_attention_accounting_test
+[ 72%] Built target coarse_attention_accounting_test
+[ 74%] Building CXX object CMakeFiles/coarse_runtime_credit_scale_test.dir/tests/runtime_credit_scale_test.cc.o
+[ 75%] Linking CXX executable coarse_endpoint_allocation_test
+[ 75%] Built target coarse_endpoint_allocation_test
+[ 77%] Building CXX object CMakeFiles/coarse_runtime_counters_test.dir/tests/runtime_counters_test.cc.o
+[ 79%] Linking CXX executable coarse_runtime_credit_scale_test
+[ 79%] Built target coarse_runtime_credit_scale_test
+[ 81%] Building CXX object CMakeFiles/coarse_estimate_driver_test.dir/tests/estimate_driver_test.cc.o
+[ 83%] Linking CXX executable coarse_runtime_counters_test
+[ 83%] Built target coarse_runtime_counters_test
+[ 85%] Building CXX object CMakeFiles/coarse_runtime_semantics_test.dir/tests/runtime_semantics_test.cc.o
+[ 87%] Linking CXX executable coarse_estimate_driver_test
+[ 87%] Built target coarse_estimate_driver_test
+[ 88%] Building CXX object CMakeFiles/coarse_oracle_granularity_test.dir/tests/oracle_granularity_test.cc.o
+[ 90%] Linking CXX executable coarse_runtime_semantics_test
+[ 90%] Built target coarse_runtime_semantics_test
+[ 92%] Building CXX object CMakeFiles/coarse_capi_lifecycle_test.dir/tests/capi_lifecycle_test.cc.o
+[ 94%] Linking CXX executable coarse_oracle_granularity_test
+[ 94%] Built target coarse_oracle_granularity_test
+[ 98%] Built target coarse_capi_cache_response_test
+[100%] Linking CXX executable coarse_capi_lifecycle_test
+[100%] Built target coarse_capi_lifecycle_test

@@ -1,0 +1,229 @@
+{
+  "schema": "astra_sim_abi_refresh_v1",
+  "date": "2026-10-13",
+  "workspace": "/workspace/template/work/integration-build",
+  "source_snapshot": {
+    "published_vendor_files": 20,
+    "digest_algorithm": "sha256",
+    "digest": "05c3f91c59e4ac3d22b5147a12566d93902814aa77bbf3384a9b7a5468a9e755",
+    "sync_status": "parent-reported canonical 20-file source sync",
+    "public_test_status": "22/22 passed (reported by parent)"
+  },
+  "tools": {
+    "cmake": "4.4.4",
+    "gcc": "GNU 14.2.0",
+    "gxx": "GNU 14.2.0",
+    "protoc": "libprotoc 3.21.12",
+    "protobuf_source_archive": "/workspace/template/work/deps/protobuf-v21.12.tar.gz",
+    "protobuf_sha256": "22fdaf641b31655d4b2297f9981fa5203b2866f8332d3c6333f6b0107bb320de",
+    "protobuf_install_prefix": "/workspace/template/work/deps/protobuf",
+    "protobuf_linkage": "static"
+  },
+  "build_environment": {
+    "PATH_prefix": [
+      "/workspace/template/work/tooling/cmake/data/bin",
+      "/workspace/template/work/deps/protobuf/bin"
+    ],
+    "CMAKE_PREFIX_PATH": "/workspace/template/work/deps/protobuf",
+    "PROTOBUF_FROM_SOURCE": "True"
+  },
+  "aggregate": {
+    "cmake_source": "/workspace/template/work/integration-build/aggregate/CMakeLists.txt",
+    "configure_script": "/workspace/template/work/integration-build/run-abi-refresh.sh",
+    "configure_arguments": {
+      "BUILDTARGET": "congestion_aware",
+      "NETWORK_BACKEND_BUILD_AS_LIBRARY": "ON",
+      "CMAKE_BUILD_TYPE": "Release",
+      "CMAKE_C_COMPILER": "gcc",
+      "CMAKE_CXX_COMPILER": "g++"
+    },
+    "build_tree_policy": "reused per-repository configured aggregate trees",
+    "command_template": "INTEGRATION_LOG_ROOT=/workspace/template/work/integration-build/cache-response-05c/logs bash /workspace/template/work/integration-build/run-abi-refresh.sh <repo-name>",
+    "build_targets_requested": [
+      "die_model_cabi",
+      "coarse_die_cabi"
+    ],
+    "build_parallelism": 2,
+    "selected_ctest_command_template": "/workspace/template/work/tooling/cmake/data/bin/ctest --test-dir /workspace/template/work/integration-build/build/<repo-name> -R 'DieModelAdapterTest|DieExecutionLifecycleTest|LocalHbmDieMemoryTest' --no-tests=error --output-on-failure"
+  },
+  "repositories": {
+    "astra-sim-wscllm-LRU": {
+      "configure": "passed",
+      "requested_abi_targets": {
+        "die_model_cabi": "passed_no_recompilation",
+        "coarse_die_cabi": "passed"
+      },
+      "incremental_build_command": "/workspace/template/work/tooling/cmake/data/bin/cmake --build /workspace/template/work/integration-build/build/astra-sim-wscllm-LRU --target die_model_cabi coarse_die_cabi -j 2",
+      "implicit_dependency_rebuild": {
+        "target": "coarse_die",
+        "core_translation_units_recompiled": [
+          "Plan.cc",
+          "Hardware.cc",
+          "Compiler.cc",
+          "Mapping.cc",
+          "Execution.cc"
+        ],
+        "abi_translation_units_recompiled": [
+          "Capi.cc"
+        ],
+        "note": "CMake recompiled these dependency translation units while building coarse_die_cabi; no Online or AstraSim executable/test build targets were requested."
+      },
+      "selected_ctest": {
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0,
+        "tests": [
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+            "status": "passed"
+          },
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+            "status": "passed"
+          },
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+            "status": "passed"
+          }
+        ],
+        "executables": "Existing configured CTest executables were run; this step did not build CTest targets."
+      },
+      "config_unittest": {
+        "passed": 15,
+        "failed": 0,
+        "skipped": 0,
+        "command": "env DIE_MODEL_CABI_PATH=<build>/lib/libdie_model_cabi.so DIE_COARSE_CABI_PATH=<build>/lib/libcoarse_die_cabi.so python3 -m unittest discover -s <repo>/sh_test_mesh/tests -p 'test_config_resolver*.py' -v"
+      },
+      "abi_library_sha256": {
+        "coarse_die_cabi": "e5a385c7bf87de36b0220f75e0fd30e7ff692aae8150ce49d4184529e1af9a17",
+        "die_model_cabi": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+      },
+      "logs": {
+        "configure": "cache-response-05c/logs/astra-sim-wscllm-LRU-configure.log",
+        "build": "cache-response-05c/logs/astra-sim-wscllm-LRU-abi-build.log",
+        "selected_ctest": "cache-response-05c/logs/astra-sim-wscllm-LRU-ctest.log",
+        "config_unittest": "cache-response-05c/logs/astra-sim-wscllm-LRU-config-unittest.log"
+      }
+    },
+    "astra-sim-face": {
+      "configure": "passed",
+      "requested_abi_targets": {
+        "die_model_cabi": "passed_no_recompilation",
+        "coarse_die_cabi": "passed"
+      },
+      "incremental_build_command": "/workspace/template/work/tooling/cmake/data/bin/cmake --build /workspace/template/work/integration-build/build/astra-sim-face --target die_model_cabi coarse_die_cabi -j 2",
+      "implicit_dependency_rebuild": {
+        "target": "coarse_die",
+        "core_translation_units_recompiled": [
+          "Plan.cc",
+          "Hardware.cc",
+          "Compiler.cc",
+          "Mapping.cc",
+          "Execution.cc"
+        ],
+        "abi_translation_units_recompiled": [
+          "Capi.cc"
+        ],
+        "note": "CMake recompiled these dependency translation units while building coarse_die_cabi; no Online or AstraSim executable/test build targets were requested."
+      },
+      "selected_ctest": {
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0,
+        "tests": [
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+            "status": "passed"
+          },
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+            "status": "passed"
+          },
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+            "status": "passed"
+          }
+        ],
+        "executables": "Existing configured CTest executables were run; this step did not build CTest targets."
+      },
+      "config_unittest": {
+        "passed": 18,
+        "failed": 0,
+        "skipped": 0,
+        "command": "env DIE_MODEL_CABI_PATH=<build>/lib/libdie_model_cabi.so DIE_COARSE_CABI_PATH=<build>/lib/libcoarse_die_cabi.so python3 -m unittest discover -s <repo>/sh_test_mesh/tests -p 'test_config_resolver*.py' -v"
+      },
+      "abi_library_sha256": {
+        "coarse_die_cabi": "e5a385c7bf87de36b0220f75e0fd30e7ff692aae8150ce49d4184529e1af9a17",
+        "die_model_cabi": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+      },
+      "logs": {
+        "configure": "cache-response-05c/logs/astra-sim-face-configure.log",
+        "build": "cache-response-05c/logs/astra-sim-face-abi-build.log",
+        "selected_ctest": "cache-response-05c/logs/astra-sim-face-ctest.log",
+        "config_unittest": "cache-response-05c/logs/astra-sim-face-config-unittest.log"
+      }
+    },
+    "astra-sim-face-LRU": {
+      "configure": "passed",
+      "requested_abi_targets": {
+        "die_model_cabi": "passed_no_recompilation",
+        "coarse_die_cabi": "passed"
+      },
+      "incremental_build_command": "/workspace/template/work/tooling/cmake/data/bin/cmake --build /workspace/template/work/integration-build/build/astra-sim-face-LRU --target die_model_cabi coarse_die_cabi -j 2",
+      "implicit_dependency_rebuild": {
+        "target": "coarse_die",
+        "core_translation_units_recompiled": [
+          "Plan.cc",
+          "Hardware.cc",
+          "Compiler.cc",
+          "Mapping.cc",
+          "Execution.cc"
+        ],
+        "abi_translation_units_recompiled": [
+          "Capi.cc"
+        ],
+        "note": "CMake recompiled these dependency translation units while building coarse_die_cabi; no Online or AstraSim executable/test build targets were requested."
+      },
+      "selected_ctest": {
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0,
+        "tests": [
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+            "status": "passed"
+          },
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+            "status": "passed"
+          },
+          {
+            "name": "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+            "status": "passed"
+          }
+        ],
+        "executables": "Existing configured CTest executables were run; this step did not build CTest targets."
+      },
+      "config_unittest": {
+        "passed": 17,
+        "failed": 0,
+        "skipped": 0,
+        "command": "env DIE_MODEL_CABI_PATH=<build>/lib/libdie_model_cabi.so DIE_COARSE_CABI_PATH=<build>/lib/libcoarse_die_cabi.so python3 -m unittest discover -s <repo>/sh_test_mesh/tests -p 'test_config_resolver*.py' -v"
+      },
+      "abi_library_sha256": {
+        "coarse_die_cabi": "e5a385c7bf87de36b0220f75e0fd30e7ff692aae8150ce49d4184529e1af9a17",
+        "die_model_cabi": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+      },
+      "logs": {
+        "configure": "cache-response-05c/logs/astra-sim-face-LRU-configure.log",
+        "build": "cache-response-05c/logs/astra-sim-face-LRU-abi-build.log",
+        "selected_ctest": "cache-response-05c/logs/astra-sim-face-LRU-ctest.log",
+        "config_unittest": "cache-response-05c/logs/astra-sim-face-LRU-config-unittest.log"
+      }
+    }
+  },
+  "nonfatal_build_warnings": [
+    "Compiler warning output is preserved in the ABI build logs, including -Wdangling-reference, -Wpedantic (__int128), -Wmisleading-indentation, and -Wunused-function diagnostics."
+  ],
+  "result_scope": "Three assigned repositories only. The two ABI targets were requested in each; CMake also recompiled five coarse_die core dependency translation units and the coarse_die_cabi Capi.cc translation unit. No Online/AstraSim executable targets were requested. Three selected existing CTest executables and the current ABI-backed config resolver unittest suite passed per repository. This is not a full CTest suite, complete five-repository build, or full business acceptance. Earlier verification JSON files were not modified."
+}

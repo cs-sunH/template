@@ -1,0 +1,26 @@
+{
+  "schema": "coarse_die_release_v2",
+  "source_digest": "05c3f91c59e4ac3d22b5147a12566d93902814aa77bbf3384a9b7a5468a9e755",
+  "files": {
+    "CMakeLists.txt": "1ea93a3188612c6c6f93eee002b4f0a15e9b5ee2b1f09214fd940bb8d1fb8059",
+    "include/coarse_die/Capi.h": "3304f5259350ec2a568930acc82428d25b3100c3886e798e820137c1c71af62e",
+    "include/coarse_die/Execution.hh": "3f1168eea865882473f94c22f755553622761e0eda6a43ba2a7f0e789559f51b",
+    "include/coarse_die/Hardware.hh": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+    "include/coarse_die/Memory.hh": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+    "include/coarse_die/Plan.hh": "f1662290899c970cc58ba34b73f839926253c0a1635c14b74c185f446c3d3e61",
+    "src/Capi.cc": "2b3cb646594ac3091749122dd4aa909b62abe8eb96be84c53670432ffd90e5ec",
+    "src/Compiler.cc": "3a4f7a520b3cf038be4249a17c084f52137af58a5dc4c4627e23ec9f179968a6",
+    "src/EquivalentWork.hh": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+    "src/Execution.cc": "d9b66c70f29ff96141b53f3ed2f5fd70c6385a815d97415c300d5de9f771e2a2",
+    "src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+    "src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+    "src/Mapping.cc": "2096d349feed976be9c177341525c2fc9edd3a1ae7e659917cb64fed77e1ed82",
+    "src/Plan.cc": "454305bd6424a487f9b1b0c229a4525d4d33a690c82ef0e7461e0983725c7ad0",
+    "configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+    "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+    "configs/core64.json": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+    "configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+    "configs/example_hardware.json": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+    "configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+  }
+}

@@ -4,22 +4,41 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <list>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <vector>
 
 namespace {
 using namespace coarse_die;
 using json = nlohmann::json;
 struct Model {
     Hardware hardware;
-    struct CacheEntry { std::shared_ptr<const Plan> plan; std::size_t bytes; std::list<std::string>::iterator recency; };
+    struct ResponseTemplate {
+        std::string plan_hash_json;
+        std::string summary_json;
+        bool fractional = false;
+    };
+    struct CacheEntry {
+        std::shared_ptr<const Plan> plan;
+        std::shared_ptr<const ResponseTemplate> response;
+        std::size_t bytes;
+        std::list<std::string>::iterator recency;
+    };
     std::map<std::string, CacheEntry> cache;
     std::list<std::string> lru;
     std::size_t cache_bytes=0;
+};
+struct CachedPlan {
+    std::shared_ptr<const Plan> plan;
+    std::shared_ptr<const Model::ResponseTemplate> response;
 };
 struct PlanRef { std::shared_ptr<Model> model; std::shared_ptr<const Plan> plan; };
 struct RuntimeRef { std::shared_ptr<Model> model; std::unique_ptr<Runtime> world; };
@@ -79,11 +98,18 @@ template<class F> int guarded(F f) {
     catch(const std::exception& e) { return fail(e); }
     catch(...) { std::runtime_error e("numerical_failure: unknown C++ exception"); return fail(e); }
 }
-char* output(const json& j) {
-    auto s=j.dump();
+char* output(std::string_view s) {
+    if(s.size()==std::numeric_limits<std::size_t>::max())
+        throw std::overflow_error("overflow: JSON result size");
     auto p=static_cast<char*>(std::malloc(s.size()+1));
     if(!p) throw std::bad_alloc();
-    std::memcpy(p,s.c_str(),s.size()+1); return p;
+    if(!s.empty()) std::memcpy(p,s.data(),s.size());
+    p[s.size()]='\0';
+    return p;
+}
+char* output(const json& j) {
+    const auto s=j.dump();
+    return output(std::string_view(s));
 }
 template<class F> const char* result(F f) {
     const char* out=nullptr;
@@ -99,39 +125,98 @@ void out_handle(DieHandle* out) {
     if(!out) throw std::invalid_argument("invalid_input: null output handle");
     *out=0;
 }
-std::shared_ptr<const Plan> cached(Model& m, const json& task) {
+void add_cache_bytes(std::size_t& total, std::size_t bytes) {
+    if(bytes>std::numeric_limits<std::size_t>::max()-total)
+        throw std::overflow_error("overflow: cache retained bytes");
+    total+=bytes;
+}
+void add_response_bytes(std::size_t& total, std::size_t bytes) {
+    if(bytes>std::numeric_limits<std::size_t>::max()-total)
+        throw std::overflow_error("overflow: C ABI batch response size");
+    total+=bytes;
+}
+std::size_t retained_string_capacity(const std::string& value) {
+    std::size_t result=value.capacity();
+    add_cache_bytes(result,1);
+    return result;
+}
+std::shared_ptr<const Model::ResponseTemplate> make_response_template(const Plan& plan) {
+    auto response=std::make_shared<Model::ResponseTemplate>();
+    response->plan_hash_json=json(plan.fingerprint).dump();
+    response->summary_json=plan.summary.dump();
+    response->fractional=has_fractional_work(plan);
+    return response;
+}
+std::size_t retained_response_template_bytes(const Model::ResponseTemplate& response) {
+    // Include the retained object/control-block allowance and every owned
+    // string's allocation capacity, including the NUL terminator.
+    std::size_t bytes=sizeof(Model::ResponseTemplate)+64;
+    add_cache_bytes(bytes,retained_string_capacity(response.plan_hash_json));
+    add_cache_bytes(bytes,retained_string_capacity(response.summary_json));
+    return bytes;
+}
+std::size_t retained_cache_entry_bytes(const Plan& plan, const std::string& key,
+                                       const Model::ResponseTemplate& response) {
+    std::size_t bytes=retained_plan_bytes(plan);
+    add_cache_bytes(bytes,key.size());
+    add_cache_bytes(bytes,sizeof(Model::CacheEntry)+512);
+    add_cache_bytes(bytes,retained_response_template_bytes(response));
+    return bytes;
+}
+CachedPlan cached(Model& m, const json& task) {
     auto key=stable_hash(m.hardware.fingerprint+task.dump());
     auto i=m.cache.find(key);
-    if(i!=m.cache.end()) { m.lru.splice(m.lru.begin(),m.lru,i->second.recency); return i->second.plan; }
+    if(i!=m.cache.end()) {
+        m.lru.splice(m.lru.begin(),m.lru,i->second.recency);
+        return {i->second.plan,i->second.response};
+    }
     auto p=compile(m.hardware,task);
-    std::size_t bytes=retained_plan_bytes(*p)+key.size()+512;
+    auto response=make_response_template(*p);
+    const std::size_t bytes=retained_cache_entry_bytes(*p,key,*response);
     if(bytes<=64u*1024u*1024u) {
         m.lru.push_front(key);
-        m.cache.emplace(key,Model::CacheEntry{p,bytes,m.lru.begin()});
-        m.cache_bytes+=bytes;
+        const auto recency=m.lru.begin();
+        std::map<std::string,Model::CacheEntry>::iterator inserted;
+        try {
+            auto result=m.cache.emplace(key,Model::CacheEntry{p,response,bytes,recency});
+            if(!result.second) {
+                m.lru.erase(recency);
+                m.lru.splice(m.lru.begin(),m.lru,result.first->second.recency);
+                return {result.first->second.plan,result.first->second.response};
+            }
+            inserted=result.first;
+        } catch(...) {
+            m.lru.erase(recency);
+            throw;
+        }
+        try {
+            add_cache_bytes(m.cache_bytes,bytes);
+        } catch(...) {
+            m.cache.erase(inserted);
+            m.lru.erase(recency);
+            throw;
+        }
         while(m.cache.size()>4096 || m.cache_bytes>64u*1024u*1024u) {
-            auto k=m.lru.back(); m.lru.pop_back();
-            auto e=m.cache.find(k); m.cache_bytes-=e->second.bytes; m.cache.erase(e);
+            auto victim=std::prev(m.lru.end());
+            auto e=m.cache.find(*victim);
+            if(e!=m.cache.end()) {
+                m.cache_bytes-=e->second.bytes;
+                m.cache.erase(e);
+            }
+            m.lru.erase(victim);
         }
     }
-    return p;
+    return {std::move(p),std::move(response)};
 }
-json batch(DieHandle model,const char* in,bool retain) {
+json estimate_batch(DieHandle model,const char* in) {
     auto m=require(models,model); auto b=parse(in);
     if(!b.contains("specs") || !b["specs"].is_array()) throw std::invalid_argument("invalid_input: specs must be an array");
     json rs=json::array(), es=json::array();
     // Each failure is isolated; successful siblings remain reviewable.
     for(const auto& task:b["specs"]) {
         try {
-            auto p=cached(*m,task);
-            if(retain) {
-                auto h=id(); plans.emplace(h,PlanRef{m,p});
-                rs.push_back({{"plan_handle",h},{"plan_hash",p->fingerprint},{"summary",p->summary}});
-                if(has_fractional_work(*p)) {
-                    rs.back()["plan_schema"]="coarse_die_plan_v3";
-                    rs.back()["equivalent_work_schema"]="dyadic_equivalent_work_v1";
-                }
-            } else rs.push_back(estimate_alone(m->hardware,*p));
+            const auto p=cached(*m,task).plan;
+            rs.push_back(estimate_alone(m->hardware,*p));
             es.push_back(nullptr);
         } catch(const std::exception& e) {
             std::string reason=e.what();
@@ -142,6 +227,129 @@ json batch(DieHandle model,const char* in,bool retain) {
     return {{"schema_version",2},{"results",rs},{"errors",es},
             {"cache_entries",m->cache.size()},{"cache_accounted_bytes",m->cache_bytes},
             {"cache_accounting","retained_container_capacities_with_allocator_allowances"}};
+}
+struct CompileBatchRow {
+    bool success=false;
+    std::shared_ptr<const Plan> plan;
+    std::shared_ptr<const Model::ResponseTemplate> response;
+    DieHandle plan_handle=0;
+    int status_code=0;
+    std::string reason;
+};
+void append_json_string(std::string& out, const std::string& value) {
+    out+=json(value).dump();
+}
+std::string compile_batch_text(Model& model, const char* input,
+                               std::vector<CompileBatchRow>& rows) {
+    const auto batch=parse(input);
+    if(!batch.contains("specs") || !batch["specs"].is_array())
+        throw std::invalid_argument("invalid_input: specs must be an array");
+    const auto& specs=batch["specs"];
+    rows.reserve(specs.size());
+    for(const auto& task:specs) {
+        CompileBatchRow row;
+        try {
+            auto value=cached(model,task);
+            row.plan_handle=id();
+            row.plan=std::move(value.plan);
+            row.response=std::move(value.response);
+            row.success=true;
+        } catch(const std::exception& e) {
+            row.plan.reset();
+            row.response.reset();
+            row.plan_handle=0;
+            row.reason=e.what();
+            row.status_code=code_for(row.reason);
+        }
+        rows.push_back(std::move(row));
+    }
+
+    std::size_t reserve=256;
+    for(const auto& row:rows) {
+        add_response_bytes(reserve,160);
+        if(row.success) {
+            add_response_bytes(reserve,row.response->summary_json.size());
+            add_response_bytes(reserve,row.response->plan_hash_json.size());
+        } else {
+            if(row.reason.size()>std::numeric_limits<std::size_t>::max()/6)
+                throw std::overflow_error("overflow: C ABI batch response size");
+            add_response_bytes(reserve,row.reason.size()*6);
+        }
+    }
+    std::string out;
+    out.reserve(reserve);
+    out+="{\"cache_accounted_bytes\":";
+    out+=std::to_string(model.cache_bytes);
+    out+=",\"cache_accounting\":\"retained_container_capacities_with_allocator_allowances\",\"cache_entries\":";
+    out+=std::to_string(model.cache.size());
+    out+=",\"errors\":[";
+    for(std::size_t i=0;i<rows.size();++i) {
+        if(i) out.push_back(',');
+        const auto& row=rows[i];
+        if(row.success) {
+            out+="null";
+        } else {
+            const auto colon=row.reason.find(':');
+            const std::string field_path=row.reason.substr(0,colon);
+            out+="{\"field_path\":";
+            append_json_string(out,field_path);
+            out+=",\"reason\":";
+            append_json_string(out,row.reason);
+            out+=",\"status_code\":";
+            out+=std::to_string(row.status_code);
+            out.push_back('}');
+        }
+    }
+    out.push_back(']');
+    out+=",\"results\":[";
+    for(std::size_t i=0;i<rows.size();++i) {
+        if(i) out.push_back(',');
+        const auto& row=rows[i];
+        if(!row.success) {
+            out+="null";
+            continue;
+        }
+        const auto& response=*row.response;
+        out.push_back('{');
+        if(response.fractional)
+            out+="\"equivalent_work_schema\":\"dyadic_equivalent_work_v1\",";
+        out+="\"plan_handle\":";
+        out+=std::to_string(row.plan_handle);
+        out+=",\"plan_hash\":";
+        out+=response.plan_hash_json;
+        if(response.fractional)
+            out+=",\"plan_schema\":\"coarse_die_plan_v3\"";
+        out+=",\"summary\":";
+        out+=response.summary_json;
+        out.push_back('}');
+    }
+    out+= "],\"schema_version\":2}";
+    return out;
+}
+const char* compile_batch_result(DieHandle model_handle,const char* input) {
+    char* returned=nullptr;
+    const int status=guarded([&] {
+        auto model=require(models,model_handle);
+        std::vector<CompileBatchRow> rows;
+        auto text=compile_batch_text(*model,input,rows);
+        std::unique_ptr<char,decltype(&std::free)> buffer(output(std::string_view(text)),&std::free);
+        std::vector<DieHandle> inserted;
+        inserted.reserve(rows.size());
+        try {
+            for(const auto& row:rows) {
+                if(!row.success) continue;
+                const auto result=plans.emplace(row.plan_handle,PlanRef{model,row.plan});
+                if(!result.second)
+                    throw std::logic_error("numerical_failure: duplicate plan handle");
+                inserted.push_back(row.plan_handle);
+            }
+        } catch(...) {
+            for(const auto handle:inserted) plans.erase(handle);
+            throw;
+        }
+        returned=buffer.release();
+    });
+    return status==DIE_OK?returned:nullptr;
 }
 }
 extern "C" {
@@ -156,8 +364,8 @@ const char* die_coarse_hardware_summary_v2(DieHandle h) {
     return result([&]{auto& m=require(models,h); return json{{"schema_version",2},{"input",m->hardware.input},
         {"derived_hardware",m->hardware.derived},{"hardware_fingerprint",m->hardware.fingerprint}};});
 }
-const char* die_coarse_compile_batch_v2(DieHandle m,const char* s) { return result([&]{return batch(m,s,true);}); }
-const char* die_coarse_estimate_batch_v2(DieHandle m,const char* s) { return result([&]{return batch(m,s,false);}); }
+const char* die_coarse_compile_batch_v2(DieHandle m,const char* s) { return compile_batch_result(m,s); }
+const char* die_coarse_estimate_batch_v2(DieHandle m,const char* s) { return result([&]{return estimate_batch(m,s);}); }
 int die_coarse_create_runtime_v2(DieHandle m,DieHandle* out) {
     return guarded([&]{out_handle(out); auto model=require(models,m); auto w=std::make_unique<Runtime>(model->hardware);
         auto h=id(); runtimes.emplace(h,RuntimeRef{model,std::move(w)}); *out=h;});

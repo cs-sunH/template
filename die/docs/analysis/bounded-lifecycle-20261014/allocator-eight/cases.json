@@ -1,0 +1,99 @@
+{
+  "schema": "scratch_runtime_grouped_q_alpha_cases_v1",
+  "notes": "Synthetic simultaneous activities; L/S canonical Q is physical HBM payload bytes, C canonical Q is 1. HBM service work equals physical bytes, eta=1. No signed-credit constraints are active.",
+  "cases": [
+    {
+      "name": "solo_three_stage_compute_then_hbm",
+      "capacity": {"COMPUTE_GATE": 1, "HBM0": 100, "HBM1": 100},
+      "activities": [
+        {"owner": 0, "id": 1, "stage": "L", "row0": 70, "row1": 30},
+        {"owner": 0, "id": 2, "stage": "C", "compute": 4, "private_time": 4},
+        {"owner": 0, "id": 3, "stage": "S", "row0": 20, "row1": 60}
+      ]
+    },
+    {
+      "name": "two_owner_compute_gate_first",
+      "capacity": {"COMPUTE_GATE": 1, "HBM0": 80, "HBM1": 100},
+      "activities": [
+        {"owner": 0, "id": 11, "stage": "L", "row0": 60, "row1": 40},
+        {"owner": 0, "id": 12, "stage": "C", "compute": 6, "private_time": 6},
+        {"owner": 0, "id": 13, "stage": "S", "row0": 20, "row1": 20},
+        {"owner": 1, "id": 14, "stage": "L", "row0": 40, "row1": 0},
+        {"owner": 1, "id": 15, "stage": "C", "compute": 12, "private_time": 12},
+        {"owner": 1, "id": 16, "stage": "S", "row0": 0, "row1": 60}
+      ]
+    },
+    {
+      "name": "same_owner_split_load_q_sum",
+      "capacity": {"COMPUTE_GATE": 1, "HBM0": 100, "HBM1": 80},
+      "activities": [
+        {"owner": 0, "id": 21, "stage": "L", "row0": 20, "row1": 0},
+        {"owner": 0, "id": 22, "stage": "L", "row0": 30, "row1": 0},
+        {"owner": 0, "id": 23, "stage": "C", "compute": 5, "private_time": 5},
+        {"owner": 1, "id": 24, "stage": "L", "row0": 0, "row1": 40},
+        {"owner": 1, "id": 25, "stage": "C", "compute": 8, "private_time": 8},
+        {"owner": 1, "id": 26, "stage": "S", "row0": 10, "row1": 0}
+      ]
+    },
+    {
+      "name": "symmetric_hbm_rows_tie",
+      "capacity": {"COMPUTE_GATE": 1, "HBM0": 50, "HBM1": 50},
+      "activities": [
+        {"owner": 0, "id": 31, "stage": "L", "row0": 50, "row1": 50},
+        {"owner": 0, "id": 32, "stage": "C", "compute": 8, "private_time": 8},
+        {"owner": 0, "id": 33, "stage": "S", "row0": 10, "row1": 10},
+        {"owner": 1, "id": 34, "stage": "L", "row0": 50, "row1": 50},
+        {"owner": 1, "id": 35, "stage": "C", "compute": 12, "private_time": 12},
+        {"owner": 1, "id": 36, "stage": "S", "row0": 10, "row1": 10}
+      ]
+    },
+    {
+      "name": "private_compute_caps",
+      "capacity": {"COMPUTE_GATE": 1000, "HBM0": 10000, "HBM1": 10000},
+      "activities": [
+        {"owner": 0, "id": 41, "stage": "L", "row0": 100, "row1": 0},
+        {"owner": 0, "id": 42, "stage": "C", "compute": 2, "private_time": "1/4"},
+        {"owner": 0, "id": 43, "stage": "S", "row0": 0, "row1": 100},
+        {"owner": 1, "id": 44, "stage": "L", "row0": 50, "row1": 0},
+        {"owner": 1, "id": 45, "stage": "C", "compute": 1, "private_time": "1/10"},
+        {"owner": 1, "id": 46, "stage": "S", "row0": 0, "row1": 50}
+      ]
+    },
+    {
+      "name": "compute_then_hbm1_tiers",
+      "capacity": {"COMPUTE_GATE": 1, "HBM0": 100, "HBM1": 50},
+      "activities": [
+        {"owner": 0, "id": 51, "stage": "L", "row0": 80, "row1": 20},
+        {"owner": 0, "id": 52, "stage": "C", "compute": 3, "private_time": 3},
+        {"owner": 0, "id": 53, "stage": "S", "row0": 50, "row1": 20},
+        {"owner": 1, "id": 54, "stage": "L", "row0": 20, "row1": 40},
+        {"owner": 1, "id": 55, "stage": "C", "compute": 7, "private_time": 7},
+        {"owner": 1, "id": 56, "stage": "S", "row0": 20, "row1": 60}
+      ]
+    },
+    {
+      "name": "hbm0_limited_stage",
+      "capacity": {"COMPUTE_GATE": 1, "HBM0": 10, "HBM1": 100},
+      "activities": [
+        {"owner": 0, "id": 61, "stage": "L", "row0": 20, "row1": 0},
+        {"owner": 0, "id": 62, "stage": "C", "compute": 1, "private_time": 1},
+        {"owner": 0, "id": 63, "stage": "S", "row0": 0, "row1": 30},
+        {"owner": 1, "id": 64, "stage": "L", "row0": 0, "row1": 40},
+        {"owner": 1, "id": 65, "stage": "C", "compute": 2, "private_time": 2},
+        {"owner": 1, "id": 66, "stage": "S", "row0": 0, "row1": 20}
+      ]
+    },
+    {
+      "name": "asymmetric_physical_q_all_stages",
+      "capacity": {"COMPUTE_GATE": 1, "HBM0": 70, "HBM1": 30},
+      "activities": [
+        {"owner": 0, "id": 71, "stage": "L", "row0": 150, "row1": 50},
+        {"owner": 0, "id": 72, "stage": "C", "compute": 5, "private_time": 5},
+        {"owner": 0, "id": 73, "stage": "S", "row0": 60, "row1": 40},
+        {"owner": 1, "id": 74, "stage": "L", "row0": 0, "row1": 40},
+        {"owner": 1, "id": 75, "stage": "C", "compute": 10, "private_time": 10},
+        {"owner": 1, "id": 76, "stage": "S", "row0": 20, "row1": 0}
+      ]
+    }
+  ]
+}

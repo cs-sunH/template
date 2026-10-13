@@ -1,0 +1,108 @@
+{
+  "cache_accounted_bytes": 18027,
+  "cache_entries": 1,
+  "cache_hit_validation": {
+    "bytes_after_miss": 18027,
+    "cache_entries_and_accounted_bytes_stable_on_second_call": true,
+    "entries_after_miss": 1,
+    "fresh_model_per_sample": true,
+    "implementation_evidence": "Capi.cc cached(): hash lookup returns retained Plan and moves LRU entry before compile() fallback",
+    "plan_hash": "d407bc5667b9bad7a7c56324fa1528a479f141100607f22af1898e5e66f41f9d",
+    "plan_hash_stable": true,
+    "returned_plan_handles_released": true,
+    "same_request_reused_within_model": true
+  },
+  "cold_cache_miss_compile_batch": {
+    "count": 1,
+    "max_ns": 918626.0,
+    "min_ns": 918626.0,
+    "p50_ns": 918626.0,
+    "p95_ns": 918626.0,
+    "samples_ns": [
+      918626.0
+    ]
+  },
+  "cold_plan_release": {
+    "count": 1,
+    "max_ns": 1202.0,
+    "min_ns": 1202.0,
+    "p50_ns": 1202.0,
+    "p95_ns": 1202.0,
+    "samples_ns": [
+      1202.0
+    ]
+  },
+  "compiler": "14.2.0",
+  "config_path": "/workspace/template/die/tests/fixtures/coarse_die_v2.json",
+  "cplusplus": 201703,
+  "create_model": {
+    "count": 1,
+    "max_ns": 553885.0,
+    "min_ns": 553885.0,
+    "p50_ns": 553885.0,
+    "p95_ns": 553885.0,
+    "samples_ns": [
+      553885.0
+    ]
+  },
+  "destroy_model": {
+    "count": 1,
+    "max_ns": 15223.0,
+    "min_ns": 15223.0,
+    "p50_ns": 15223.0,
+    "p95_ns": 15223.0,
+    "samples_ns": [
+      15223.0
+    ]
+  },
+  "hot_plan_release": {
+    "count": 1,
+    "max_ns": 301.0,
+    "min_ns": 301.0,
+    "p50_ns": 301.0,
+    "p95_ns": 301.0,
+    "samples_ns": [
+      301.0
+    ]
+  },
+  "max_rss_kib": 9344,
+  "plan_hash": "d407bc5667b9bad7a7c56324fa1528a479f141100607f22af1898e5e66f41f9d",
+  "raw_samples": [
+    {
+      "cache_bytes_after_hit": 18027,
+      "cache_bytes_after_miss": 18027,
+      "cache_entries_after_hit": 1,
+      "cache_entries_after_miss": 1,
+      "cold_cache_miss_compile_batch_ns": 918626.0,
+      "cold_plan_handle": 2,
+      "cold_plan_release_ns": 1202.0,
+      "create_model_ns": 553885.0,
+      "destroy_model_ns": 15223.0,
+      "hot_plan_handle": 3,
+      "hot_plan_release_ns": 301.0,
+      "plan_hash": "d407bc5667b9bad7a7c56324fa1528a479f141100607f22af1898e5e66f41f9d",
+      "same_task_cache_hit_compile_batch_ns": 11717.0,
+      "sample": 0
+    }
+  ],
+  "same_task_cache_hit_compile_batch": {
+    "count": 1,
+    "max_ns": 11717.0,
+    "min_ns": 11717.0,
+    "p50_ns": 11717.0,
+    "p95_ns": 11717.0,
+    "samples_ns": [
+      11717.0
+    ]
+  },
+  "samples": 1,
+  "status": "ok",
+  "task_path": "/workspace/template/work/performance-cache-response/fixtures/gemm_1x128x128.json",
+  "timing_scope": {
+    "cold_cache_miss_compile_batch_ns": "times only die_coarse_compile_batch_v2; includes C ABI request JSON parse, key creation, actual compile on fresh model cache, cache insert, response JSON dump/allocation; excludes caller request construction, result JSON parse/string copy/free, plan release",
+    "create_model_ns": "separate: includes C ABI model creation, config JSON parsing, and hardware resolution",
+    "release_destroy": "measured separately and excluded from compile timings",
+    "same_task_cache_hit_compile_batch_ns": "times only die_coarse_compile_batch_v2 for byte-identical request on same model; includes request parse, cache lookup/LRU touch, response dump/allocation; implementation returns cached Plan before compile() fallback; excludes caller request construction, result parse/string copy/free, handle release"
+  },
+  "tool": "work/performance-cache-response/cabi_cache_probe.cc"
+}

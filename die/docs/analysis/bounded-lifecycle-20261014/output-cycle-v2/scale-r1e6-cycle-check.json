@@ -1,0 +1,63 @@
+{
+  "cycles": {
+    "scale_solo": {
+      "executed_events": 3329,
+      "inner_skipped_cycles": 15104,
+      "max_inner_probes": 13,
+      "max_outer_probes": 256,
+      "max_progress_den_bits": 23,
+      "max_progress_num_bits": 15,
+      "max_rate_den_bits": 12,
+      "max_rate_num_bits": 22,
+      "outer_cached_cycle_hits": 254,
+      "outer_cycle_output_step": 1,
+      "outer_exact_cycles": 1,
+      "outer_rejected_key_repeats": 0,
+      "outer_skipped_cycles": 0,
+      "outer_skipped_outputs": 0,
+      "outer_unskippable_cycle_hits": 255,
+      "owner0_next_load": 16642,
+      "owner0_retired": 256,
+      "status": "fail_closed"
+    },
+    "scale_two_offset_005": {
+      "executed_events": 4617,
+      "inner_skipped_cycles": 7226,
+      "max_inner_probes": 20,
+      "max_outer_probes": 256,
+      "max_progress_den_bits": 2775,
+      "max_progress_num_bits": 2775,
+      "max_rate_den_bits": 21,
+      "max_rate_num_bits": 31,
+      "outer_cached_cycle_hits": 0,
+      "outer_cycle_output_step": 0,
+      "outer_exact_cycles": 0,
+      "outer_rejected_key_repeats": 0,
+      "outer_skipped_cycles": 0,
+      "outer_skipped_outputs": 0,
+      "outer_unskippable_cycle_hits": 0,
+      "owner0_next_load": 8382,
+      "owner0_retired": 128,
+      "status": "fail_closed"
+    }
+  },
+  "expanded_wave_oracle": {
+    "performed": false
+  },
+  "fixture": {
+    "k": 4097,
+    "local": 1837130735620,
+    "m": 15985,
+    "n": 63937,
+    "ops": 8374537951330,
+    "outputs": 1000000,
+    "read": 1309761736000,
+    "tk": 64,
+    "tm": 16,
+    "tn": 64,
+    "waves": 65000000,
+    "write": 4088131780
+  },
+  "interpretation": "no wave/event expansion; completed cycle totals checked by closed form, fail-closed prefixes remain partial",
+  "status": "passed"
+}
