@@ -1,0 +1,67 @@
+{
+  "status": "passed",
+  "cases": 12,
+  "results": [
+    {
+      "scenario": "solo_three_stage_compute_then_hbm",
+      "activity_count": 3,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "two_owner_compute_gate_first",
+      "activity_count": 6,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "same_owner_split_load_q_sum",
+      "activity_count": 6,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "symmetric_hbm_rows_tie",
+      "activity_count": 6,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "private_compute_caps",
+      "activity_count": 6,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "compute_then_hbm1_tiers",
+      "activity_count": 6,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "hbm0_limited_stage",
+      "activity_count": 6,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "asymmetric_physical_q_all_stages",
+      "activity_count": 6,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "local_precedes_sram_for_compute_q",
+      "activity_count": 2,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "sram_sum_is_fallback_q",
+      "activity_count": 2,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "hbm_payload_precedes_local_and_sram",
+      "activity_count": 4,
+      "rate_and_alpha": "passed"
+    },
+    {
+      "scenario": "zero_rate_hbm_activity_excluded_from_owner_denominator",
+      "activity_count": 3,
+      "rate_and_alpha": "passed"
+    }
+  ],
+  "scope": "saved synthetic Runtime rate/alpha queries; no signed credits or compiled lifecycle certificate"
+}

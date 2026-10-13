@@ -1,0 +1,39 @@
+{
+  "schema": "coarse_die_task_v2",
+  "op_kind": "attention",
+  "phase": "prefill",
+  "tensor_shapes": {
+    "q_heads": 4,
+    "kv_heads": 2,
+    "head_dim": 32
+  },
+  "spans": [
+    {
+      "q_tokens": 4,
+      "kv_tokens": 16,
+      "count": 1,
+      "q_start_pos": 12,
+      "kv_start_pos": 0
+    }
+  ],
+  "tp_slice": {
+    "q_heads_local": 4,
+    "kv_heads_local": 2,
+    "tensor_parallel": 1,
+    "tensor_parallel_rank": 0
+  },
+  "storage_dtype": {
+    "weights": "bf16",
+    "activations": "bf16",
+    "kv": "bf16",
+    "output": "bf16",
+    "parameters": "bf16",
+    "scores": "fp32",
+    "accumulator": "fp32"
+  },
+  "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+  "layer_instances": 1,
+  "weight_passes": 1,
+  "fusion_policy": "fused",
+  "causal": true
+}

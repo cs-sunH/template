@@ -1,0 +1,768 @@
+{
+  "affine_checker": {
+    "actual_command": "python3 derive_affine_cycle.py > affine-cycle-proof-console.json",
+    "inputs": [
+      {
+        "bytes": 271869,
+        "path": "affine-trace-complete-cycle.txt",
+        "present": true,
+        "sha256": "f1e3bda9cc163d50bff8f75188a999bcd61a237ca7f6648268c1b396e3e2729d"
+      },
+      {
+        "bytes": 806631,
+        "path": "scale-r1e6-cycle-trace.txt",
+        "present": true,
+        "sha256": "ebe083732caf2541f1b20828762f0c53078b2a0143b3ead4f44fc3b740fa5d76"
+      }
+    ],
+    "outputs": [
+      {
+        "bytes": 5498,
+        "path": "affine-cycle-proof.json",
+        "present": true,
+        "sha256": "7e59baf230ccdc0896ed57b16f6a9add3d33d251afcf3421439b265490cdf715"
+      },
+      {
+        "bytes": 5498,
+        "path": "affine-cycle-proof-console.json",
+        "present": true,
+        "sha256": "7e59baf230ccdc0896ed57b16f6a9add3d33d251afcf3421439b265490cdf715"
+      }
+    ],
+    "process_exit_code": 0,
+    "status": "passed exact Fraction assertions on saved trace; no C++ compile/run",
+    "working_directory": "work/audit-busy/bounded-lifecycle-prototype/output-cycle-v2-scale"
+  },
+  "binary_sha256_current": {
+    "affine_trace_r1e6": "bd39d13fd0d8ba27cccb7f935f3aab245de3d71935d8d7db982958b7ddcee8c1",
+    "scale_r1000": "383a143bba91e1b5ff6ef84373e07169d9bcccabe3e58c2219bf3aec7e7e2252",
+    "scale_r1e6": "9e00fe486d234681189a8f43f8b0aa96f79dc22bd6dcbfed962734ac8325fe04",
+    "scale_r1e6_n2": "188e3e449960def7a3859ef3701d6e4ca84d502293d066fdaaaf6171b6920fa3",
+    "scale_small_k_r1000": "9fadb29773383208e077c6c1bbb219cfd9806e206d2d4f211b346545cd1c6506",
+    "scale_small_k_r1000_current": "3724c225fec9445ff6c9a1960ad0ff9651ea60daf27389e10b1242abd9c49172"
+  },
+  "caveats": [
+    "Current source SHA is recorded, but source-at-build SHA and exact compiler argv were not saved; outputs establish fixture shapes, not cryptographic source linkage.",
+    "Checker JSON `passed` is the reported checker result; shell exit codes are not substituted with inferred zeroes.",
+    "Parent reported a two-owner event-expansion attempt interrupted after about two minutes with exit 130; no matching partial record/fixture command is retained here.",
+    "Current workspace binaries are listed by SHA, but no manifest proves which binary hash produced each historical output; binary_used_at_run_sha256 is therefore null."
+  ],
+  "command_capture": {
+    "documented_default_compile_command": {
+      "command": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic bounded_lifecycle.cpp -lgmpxx -lgmp -o bounded_lifecycle-v2-local",
+      "source": "README.md example; not a recorded scale build command"
+    },
+    "exact_scale_checker_commands_retained": false,
+    "exact_scale_compile_commands_retained": false,
+    "exact_scale_run_commands_retained": false,
+    "policy": "Actual commands and shell exit codes are null when no retained evidence exists; reconstructed argv is labeled and not presented as actual."
+  },
+  "directory": "work/audit-busy/bounded-lifecycle-prototype/output-cycle-v2-scale",
+  "interrupted_run": {
+    "binary": null,
+    "check": {
+      "actual_command": null,
+      "checker_process_exit_code": null,
+      "checker_reported_status": null,
+      "status": "not evidenced"
+    },
+    "compile": {
+      "actual_command": null,
+      "process_exit_code": null,
+      "status": "unknown; interrupted attempt is not linked to a retained binary"
+    },
+    "fixture_from_record": null,
+    "id": "two_owner_event_expansion_interrupted_after_about_120_seconds",
+    "notes": [
+      "No matching partial event-expansion output found in this directory; do not assign a fixture or binary without evidence."
+    ],
+    "original_records": [],
+    "run": {
+      "actual_shell_command": null,
+      "command_status": "unknown; no command or partial stdout retained here",
+      "duration_seconds_reported": 120,
+      "observed_status": "interrupted, not pass",
+      "process_exit_code": 130,
+      "status_source": "root task message"
+    },
+    "source": null
+  },
+  "runs": [
+    {
+      "binary_used_at_run_sha256": null,
+      "binary_used_at_run_status": "unknown; current binary artifact is hashed, but no run manifest links it to this output",
+      "check": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "checker_process_exit_code": null,
+        "checker_reported_status": "passed; expanded wave oracle and event/cycle comparison reported",
+        "checker_result": {
+          "bytes": 1264,
+          "path": "scale-r1000-solo-check.json",
+          "present": true,
+          "sha256": "2afea91eac4d834235eefa549e8d2f9385cf2aff975356d2c99d860ae5cb5847"
+        },
+        "reconstructed_argv_not_claimed_as_actual": [
+          "python3",
+          "check_scale_oracle.py",
+          "scale-r1000-solo-output.txt",
+          "expanded"
+        ]
+      },
+      "compile": {
+        "actual_command": null,
+        "actual_command_status": "unknown; exact scale compile line was not retained",
+        "candidate_full_command_not_claimed_as_actual": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -DFIXTURE_M=7985 -DFIXTURE_N=65 -DFIXTURE_K=4097 bounded_lifecycle.cpp -lgmpxx -lgmp -o scale_r1000",
+        "candidate_only_not_claimed_as_actual": "-DFIXTURE_M=7985 -DFIXTURE_N=65 -DFIXTURE_K=4097",
+        "process_exit_code": null,
+        "source_binary_linkage": "inferred from binary name, output fixture, and timestamps; not independently recorded"
+      },
+      "current_workspace_binary": {
+        "bytes": 142568,
+        "path": "scale_r1000",
+        "present": true,
+        "sha256": "383a143bba91e1b5ff6ef84373e07169d9bcccabe3e58c2219bf3aec7e7e2252"
+      },
+      "fixture_from_record": {
+        "K": 4097,
+        "M": 7985,
+        "N": 65,
+        "outputs": 1000,
+        "tk": 64,
+        "tm": 16,
+        "tn": 64,
+        "waves": 65000
+      },
+      "id": "r1000_solo_kfull_tail_event_and_cycle",
+      "notes": [
+        "Exact argv and process exit codes were not retained. `scale-r1000-output.txt` is an older separate record."
+      ],
+      "original_records": [
+        {
+          "bytes": 4096,
+          "path": "scale-r1000-output.txt",
+          "present": true,
+          "sha256": "67bf627195957bccc84cec501af40161082ea6062f84e83d86952082830ddfa0"
+        },
+        {
+          "bytes": 5559,
+          "path": "scale-r1000-solo-output.txt",
+          "present": true,
+          "sha256": "ac2c2018610e05aa4f4cde63dbd3798ed3d77817af5c9ddcd6e431db4839f418"
+        },
+        {
+          "bytes": 3064,
+          "path": "scale-r1000-solo-cycle-output.txt",
+          "present": true,
+          "sha256": "c6a090427343faea6b5a12afc230cdc93cac382979dd705c5f6311c8ab765e9d"
+        },
+        {
+          "bytes": 1264,
+          "path": "scale-r1000-solo-check.json",
+          "present": true,
+          "sha256": "2afea91eac4d834235eefa549e8d2f9385cf2aff975356d2c99d860ae5cb5847"
+        }
+      ],
+      "run": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "observed_solver_status": "completed (event and cycle records)",
+        "process_exit_code": null,
+        "reconstructed_argv_not_claimed_as_actual": [
+          "./scale_r1000",
+          "--scale"
+        ]
+      },
+      "source": {
+        "current_sha256": "d4946274673f31ec4b95729445945d45987f60ff2bc7c06f8f7a67a488fd105d",
+        "path": "bounded_lifecycle.cpp",
+        "sha256_at_compile": null,
+        "sha_at_compile_status": "unknown; no compiler manifest retained"
+      }
+    },
+    {
+      "binary_used_at_run_sha256": null,
+      "binary_used_at_run_status": "unknown; current binary artifact is hashed, but no run manifest links it to this output",
+      "check": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "checker_process_exit_code": null,
+        "checker_reported_status": "passed; fail-closed/closed-form consistency only",
+        "checker_result": {
+          "bytes": 931,
+          "path": "scale-r1000-two-cycle-check.json",
+          "present": true,
+          "sha256": "1424d9569976ead1bab8ccc4f1b346521aca4784c91db2a7047c9e0d7055f872"
+        },
+        "reconstructed_argv_not_claimed_as_actual": [
+          "python3",
+          "check_scale_oracle.py",
+          "scale-r1000-two-cycle-output.txt",
+          "closed"
+        ]
+      },
+      "compile": {
+        "actual_command": null,
+        "actual_command_status": "unknown; exact scale compile line was not retained",
+        "candidate_full_command_not_claimed_as_actual": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -DFIXTURE_M=7985 -DFIXTURE_N=65 -DFIXTURE_K=4097 bounded_lifecycle.cpp -lgmpxx -lgmp -o scale_r1000",
+        "candidate_only_not_claimed_as_actual": "-DFIXTURE_M=7985 -DFIXTURE_N=65 -DFIXTURE_K=4097",
+        "process_exit_code": null,
+        "source_binary_linkage": "inferred from binary name, output fixture, and timestamps; not independently recorded"
+      },
+      "current_workspace_binary": {
+        "bytes": 142568,
+        "path": "scale_r1000",
+        "present": true,
+        "sha256": "383a143bba91e1b5ff6ef84373e07169d9bcccabe3e58c2219bf3aec7e7e2252"
+      },
+      "fixture_from_record": {
+        "K": 4097,
+        "M": 7985,
+        "N": 65,
+        "offset": "1/20",
+        "outputs": 1000,
+        "owners": 2,
+        "tk": 64,
+        "tm": 16,
+        "tn": 64,
+        "waves": 65000
+      },
+      "id": "r1000_two_owner_offset_1_20_cycle_only",
+      "notes": [
+        "Not a completed two-owner cycle. Exact argv and process exit codes were not retained."
+      ],
+      "original_records": [
+        {
+          "bytes": 2615364,
+          "path": "scale-r1000-two-trace.txt",
+          "present": true,
+          "sha256": "2512f6358b389a301e265f73da0f61778d6d86e833a985806a076173d0b2f463"
+        },
+        {
+          "bytes": 71837,
+          "path": "scale-r1000-two-cycle-output.txt",
+          "present": true,
+          "sha256": "e9723722fa40b7bf419c276f2b3b6c835b2bcdb5c2d4989214fd7a1eae5a2597"
+        },
+        {
+          "bytes": 931,
+          "path": "scale-r1000-two-cycle-check.json",
+          "present": true,
+          "sha256": "1424d9569976ead1bab8ccc4f1b346521aca4784c91db2a7047c9e0d7055f872"
+        }
+      ],
+      "run": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "observed_solver_status": "fail_closed at outer probe cap 256; no exact joint repeat",
+        "process_exit_code": null,
+        "reconstructed_argv_not_claimed_as_actual": [
+          "./scale_r1000",
+          "--scale",
+          "--two-only",
+          "--cycle-only",
+          "--trace"
+        ]
+      },
+      "source": {
+        "current_sha256": "d4946274673f31ec4b95729445945d45987f60ff2bc7c06f8f7a67a488fd105d",
+        "path": "bounded_lifecycle.cpp",
+        "sha256_at_compile": null,
+        "sha_at_compile_status": "unknown; no compiler manifest retained"
+      }
+    },
+    {
+      "binary_used_at_run_sha256": null,
+      "binary_used_at_run_status": "unknown; current binary artifact is hashed, but no run manifest links it to this output",
+      "check": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "checker_process_exit_code": null,
+        "checker_reported_status": "passed; fail-closed prefixes/closed-form totals only",
+        "checker_result": {
+          "bytes": 1767,
+          "path": "scale-r1e6-cycle-check.json",
+          "present": true,
+          "sha256": "2209cad62010aa8193e7b859067ed3537adcf398905500fa91f3d557bcfc0f2b"
+        },
+        "reconstructed_argv_not_claimed_as_actual": [
+          "python3",
+          "check_scale_oracle.py",
+          "scale-r1e6-cycle-output.txt",
+          "closed"
+        ]
+      },
+      "compile": {
+        "actual_command": null,
+        "actual_command_status": "unknown; exact scale compile line was not retained",
+        "candidate_full_command_not_claimed_as_actual": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -DFIXTURE_M=15985 -DFIXTURE_N=63937 -DFIXTURE_K=4097 bounded_lifecycle.cpp -lgmpxx -lgmp -o scale_r1e6",
+        "candidate_only_not_claimed_as_actual": "-DFIXTURE_M=15985 -DFIXTURE_N=63937 -DFIXTURE_K=4097",
+        "process_exit_code": null,
+        "source_binary_linkage": "inferred from binary name, output fixture, and timestamps; not independently recorded"
+      },
+      "current_workspace_binary": {
+        "bytes": 142568,
+        "path": "scale_r1e6",
+        "present": true,
+        "sha256": "9e00fe486d234681189a8f43f8b0aa96f79dc22bd6dcbfed962734ac8325fe04"
+      },
+      "fixture_from_record": {
+        "K": 4097,
+        "M": 15985,
+        "N": 63937,
+        "outputs": 1000000,
+        "scenarios": [
+          {
+            "owners": 1,
+            "reason": "no_exact_joint_repeat_within_probe_limit",
+            "status": "fail_closed"
+          },
+          {
+            "offset": "1/20",
+            "owners": 2,
+            "reason": "no_exact_joint_repeat_within_probe_limit",
+            "status": "fail_closed"
+          }
+        ],
+        "tk": 64,
+        "tm": 16,
+        "tn": 64,
+        "waves": 65000000
+      },
+      "id": "r1e6_n1000_cycle_only_solo_and_two_owner",
+      "notes": [
+        "This --scale invocation emits both solo and two-owner scenarios, as recorded in the output.",
+        "Checker reports passed consistency for the completed closed-form portions and fail-closed prefixes; neither scenario completes all outputs.",
+        "Exact argv and process exit codes were not retained."
+      ],
+      "original_records": [
+        {
+          "bytes": 19199,
+          "path": "scale-r1e6-cycle-output.txt",
+          "present": true,
+          "sha256": "6e1617fc1afcc4514b1b120039bde130d8fad55b9ab64cf02c6a20dc84e9f67c"
+        },
+        {
+          "bytes": 806631,
+          "path": "scale-r1e6-cycle-trace.txt",
+          "present": true,
+          "sha256": "ebe083732caf2541f1b20828762f0c53078b2a0143b3ead4f44fc3b740fa5d76"
+        },
+        {
+          "bytes": 1767,
+          "path": "scale-r1e6-cycle-check.json",
+          "present": true,
+          "sha256": "2209cad62010aa8193e7b859067ed3537adcf398905500fa91f3d557bcfc0f2b"
+        }
+      ],
+      "run": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "observed_solver_status": "both scale_solo and scale_two_offset_005 fail_closed at outer probe cap 256",
+        "process_exit_code": null,
+        "reconstructed_argv_not_claimed_as_actual": [
+          "./scale_r1e6",
+          "--scale",
+          "--cycle-only",
+          "--trace"
+        ]
+      },
+      "source": {
+        "current_sha256": "d4946274673f31ec4b95729445945d45987f60ff2bc7c06f8f7a67a488fd105d",
+        "path": "bounded_lifecycle.cpp",
+        "sha256_at_compile": null,
+        "sha_at_compile_status": "unknown; no compiler manifest retained"
+      }
+    },
+    {
+      "binary_used_at_run_sha256": null,
+      "binary_used_at_run_status": "unknown; current binary artifact is hashed, but no run manifest links it to this output",
+      "check": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "checker_process_exit_code": null,
+        "checker_reported_status": "passed; closed-form totals, no expansion",
+        "checker_result": {
+          "bytes": 1209,
+          "path": "scale-r1e6-n2-cycle-check.json",
+          "present": true,
+          "sha256": "ba33aa18a573e75482fc4a92e4655f045e8308b009af267c5c4ce2f6c7d97beb"
+        },
+        "reconstructed_argv_not_claimed_as_actual": [
+          "python3",
+          "check_scale_oracle.py",
+          "scale-r1e6-n2-cycle-output.txt",
+          "closed"
+        ]
+      },
+      "compile": {
+        "actual_command": null,
+        "actual_command_status": "unknown; exact scale compile line was not retained",
+        "candidate_full_command_not_claimed_as_actual": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -DFIXTURE_M=7999985 -DFIXTURE_N=65 -DFIXTURE_K=4097 bounded_lifecycle.cpp -lgmpxx -lgmp -o scale_r1e6_n2",
+        "candidate_only_not_claimed_as_actual": "-DFIXTURE_M=7999985 -DFIXTURE_N=65 -DFIXTURE_K=4097",
+        "process_exit_code": null,
+        "source_binary_linkage": "inferred from binary name, output fixture, and timestamps; not independently recorded"
+      },
+      "current_workspace_binary": {
+        "bytes": 142568,
+        "path": "scale_r1e6_n2",
+        "present": true,
+        "sha256": "188e3e449960def7a3859ef3701d6e4ca84d502293d066fdaaaf6171b6920fa3"
+      },
+      "fixture_from_record": {
+        "K": 4097,
+        "M": 7999985,
+        "N": 65,
+        "outputs": 1000000,
+        "owners": 1,
+        "tk": 64,
+        "tm": 16,
+        "tn": 64,
+        "waves": 65000000
+      },
+      "id": "r1e6_solo_n2_cycle_only",
+      "notes": [
+        "No event or wave expansion was performed. Exact argv and process exit codes were not retained."
+      ],
+      "original_records": [
+        {
+          "bytes": 3227,
+          "path": "scale-r1e6-n2-cycle-output.txt",
+          "present": true,
+          "sha256": "84d63a0284f4f8508b66e0d104ef47e9eea5cf69425b0a54abaec94c37d162c8"
+        },
+        {
+          "bytes": 1209,
+          "path": "scale-r1e6-n2-cycle-check.json",
+          "present": true,
+          "sha256": "ba33aa18a573e75482fc4a92e4655f045e8308b009af267c5c4ce2f6c7d97beb"
+        }
+      ],
+      "run": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "observed_solver_status": "completed one million outputs by cycle skip",
+        "process_exit_code": null,
+        "reconstructed_argv_not_claimed_as_actual": [
+          "./scale_r1e6_n2",
+          "--scale",
+          "--solo-only",
+          "--cycle-only"
+        ]
+      },
+      "source": {
+        "current_sha256": "d4946274673f31ec4b95729445945d45987f60ff2bc7c06f8f7a67a488fd105d",
+        "path": "bounded_lifecycle.cpp",
+        "sha256_at_compile": null,
+        "sha_at_compile_status": "unknown; no compiler manifest retained"
+      }
+    },
+    {
+      "binary_used_at_run_sha256": null,
+      "binary_used_at_run_status": "unknown; current binary artifact is hashed, but no run manifest links it to this output",
+      "check": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "checker_process_exit_code": null,
+        "checker_reported_status": "passed; expanded 2000-wave oracle and event/cycle comparison",
+        "checker_result": {
+          "bytes": 980,
+          "path": "scale-small-k-r1000-check.json",
+          "present": true,
+          "sha256": "21d36d4974119830783245102cdb8f210b67080e81f9376279995a5b16de55c6"
+        },
+        "reconstructed_argv_not_claimed_as_actual": [
+          "python3",
+          "check_scale_oracle.py",
+          "scale-small-k-r1000-output.txt",
+          "expanded"
+        ]
+      },
+      "compile": {
+        "actual_command": null,
+        "actual_command_status": "unknown; exact scale compile line was not retained",
+        "candidate_full_command_not_claimed_as_actual": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -DFIXTURE_M=7985 -DFIXTURE_N=65 -DFIXTURE_K=65 bounded_lifecycle.cpp -lgmpxx -lgmp -o scale_small_k_r1000",
+        "candidate_only_not_claimed_as_actual": "-DFIXTURE_M=7985 -DFIXTURE_N=65 -DFIXTURE_K=65",
+        "process_exit_code": null,
+        "source_binary_linkage": "inferred from binary name, output fixture, and timestamps; not independently recorded"
+      },
+      "current_workspace_binary": {
+        "bytes": 142568,
+        "path": "scale_small_k_r1000",
+        "present": true,
+        "sha256": "9fadb29773383208e077c6c1bbb219cfd9806e206d2d4f211b346545cd1c6506"
+      },
+      "fixture_from_record": {
+        "K": 65,
+        "M": 7985,
+        "N": 65,
+        "outputs": 1000,
+        "owners": 1,
+        "tk": 64,
+        "tm": 16,
+        "tn": 64,
+        "waves": 2000
+      },
+      "id": "r1000_small_k2_event_and_cycle",
+      "notes": [
+        "Exact argv and process exit codes were not retained."
+      ],
+      "original_records": [
+        {
+          "bytes": 5433,
+          "path": "scale-small-k-r1000-output.txt",
+          "present": true,
+          "sha256": "d37d92a884f75c9a13f115196bb4f028db264808420ab3e237a7d066398c2985"
+        },
+        {
+          "bytes": 980,
+          "path": "scale-small-k-r1000-check.json",
+          "present": true,
+          "sha256": "21d36d4974119830783245102cdb8f210b67080e81f9376279995a5b16de55c6"
+        }
+      ],
+      "run": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "observed_solver_status": "completed event and cycle records",
+        "process_exit_code": null,
+        "reconstructed_argv_not_claimed_as_actual": [
+          "./scale_small_k_r1000",
+          "--scale",
+          "--solo-only"
+        ]
+      },
+      "source": {
+        "current_sha256": "d4946274673f31ec4b95729445945d45987f60ff2bc7c06f8f7a67a488fd105d",
+        "path": "bounded_lifecycle.cpp",
+        "sha256_at_compile": null,
+        "sha_at_compile_status": "unknown; no compiler manifest retained"
+      }
+    },
+    {
+      "binary_used_at_run_sha256": null,
+      "binary_used_at_run_status": "unknown; current binary artifact is hashed, but no run manifest links it to this output",
+      "check": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "checker_process_exit_code": null,
+        "checker_reported_status": "passed; expanded 2000-wave oracle and event/cycle comparison",
+        "checker_result": {
+          "bytes": 1244,
+          "path": "scale-small-k-r1000-current-check.json",
+          "present": true,
+          "sha256": "a3f71017c46d2e16985ae034b645c62b35b73c28a892e7207ed988c641e049c1"
+        },
+        "reconstructed_argv_not_claimed_as_actual": [
+          "python3",
+          "check_scale_oracle.py",
+          "scale-small-k-r1000-current-output.txt",
+          "expanded"
+        ]
+      },
+      "compile": {
+        "actual_command": null,
+        "actual_command_status": "unknown; exact scale compile line was not retained",
+        "candidate_full_command_not_claimed_as_actual": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -DFIXTURE_M=7985 -DFIXTURE_N=65 -DFIXTURE_K=65 bounded_lifecycle.cpp -lgmpxx -lgmp -o scale_small_k_r1000_current",
+        "candidate_only_not_claimed_as_actual": "-DFIXTURE_M=7985 -DFIXTURE_N=65 -DFIXTURE_K=65",
+        "process_exit_code": null,
+        "source_binary_linkage": "inferred from binary name, output fixture, and timestamps; not independently recorded"
+      },
+      "current_workspace_binary": {
+        "bytes": 142568,
+        "path": "scale_small_k_r1000_current",
+        "present": true,
+        "sha256": "3724c225fec9445ff6c9a1960ad0ff9651ea60daf27389e10b1242abd9c49172"
+      },
+      "fixture_from_record": {
+        "K": 65,
+        "M": 7985,
+        "N": 65,
+        "outputs": 1000,
+        "owners": 1,
+        "tk": 64,
+        "tm": 16,
+        "tn": 64,
+        "waves": 2000
+      },
+      "id": "r1000_small_k2_current_event_and_cycle",
+      "notes": [
+        "Exact argv and process exit codes were not retained."
+      ],
+      "original_records": [
+        {
+          "bytes": 5699,
+          "path": "scale-small-k-r1000-current-output.txt",
+          "present": true,
+          "sha256": "2e44d1382934d03dc272840ce3e9bdd8b0019538e2683aa17d2d36658b3f1a45"
+        },
+        {
+          "bytes": 1244,
+          "path": "scale-small-k-r1000-current-check.json",
+          "present": true,
+          "sha256": "a3f71017c46d2e16985ae034b645c62b35b73c28a892e7207ed988c641e049c1"
+        }
+      ],
+      "run": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "observed_solver_status": "completed event and cycle records",
+        "process_exit_code": null,
+        "reconstructed_argv_not_claimed_as_actual": [
+          "./scale_small_k_r1000_current",
+          "--scale",
+          "--solo-only"
+        ]
+      },
+      "source": {
+        "current_sha256": "d4946274673f31ec4b95729445945d45987f60ff2bc7c06f8f7a67a488fd105d",
+        "path": "bounded_lifecycle.cpp",
+        "sha256_at_compile": null,
+        "sha_at_compile_status": "unknown; no compiler manifest retained"
+      }
+    },
+    {
+      "binary_used_at_run_sha256": null,
+      "binary_used_at_run_status": "unknown; current binary artifact is hashed, but no run manifest links it to this output",
+      "check": null,
+      "compile": {
+        "actual_command": null,
+        "actual_command_status": "unknown; exact scale compile line was not retained",
+        "candidate_full_command_not_claimed_as_actual": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -DFIXTURE_M=15985 -DFIXTURE_N=63937 -DFIXTURE_K=4097 bounded_lifecycle_affine_trace.cpp -lgmpxx -lgmp -o affine_trace_r1e6",
+        "candidate_only_not_claimed_as_actual": "-DFIXTURE_M=15985 -DFIXTURE_N=63937 -DFIXTURE_K=4097",
+        "process_exit_code": null,
+        "source_binary_linkage": "inferred from binary name, output fixture, and timestamps; not independently recorded"
+      },
+      "current_workspace_binary": {
+        "bytes": 150896,
+        "path": "affine_trace_r1e6",
+        "present": true,
+        "sha256": "bd39d13fd0d8ba27cccb7f935f3aab245de3d71935d8d7db982958b7ddcee8c1"
+      },
+      "fixture_from_record": {
+        "K": 4097,
+        "M": 15985,
+        "N": 63937,
+        "offset": "1/20",
+        "outputs": 1000000,
+        "owners": 2,
+        "tk": 64,
+        "tm": 16,
+        "tn": 64,
+        "waves": 65000000
+      },
+      "id": "r1e6_two_owner_cycle_trace",
+      "notes": [
+        "This is a cycle detector output, not event-oracle completion. Exact argv/exit not retained."
+      ],
+      "original_records": [
+        {
+          "bytes": 69517,
+          "path": "affine-trace-output.txt",
+          "present": true,
+          "sha256": "6ff77a6a8a340523beb05ad7751888e6f73890b39ad69010d0484f1c51809192"
+        }
+      ],
+      "run": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "observed_solver_status": "cycle detector fail_closed at outer cap 256",
+        "process_exit_code": null,
+        "reconstructed_argv_not_claimed_as_actual": [
+          "./affine_trace_r1e6",
+          "--scale",
+          "--two-only",
+          "--cycle-only",
+          "--trace"
+        ]
+      },
+      "source": {
+        "current_sha256": "e450d1c40fc8b896863632df1fab3bb976cf32aa2001a40647d7f14bb51b6ef1",
+        "path": "bounded_lifecycle_affine_trace.cpp",
+        "sha256_at_compile": null,
+        "sha_at_compile_status": "unknown; no compiler manifest retained"
+      }
+    },
+    {
+      "binary_used_at_run_sha256": null,
+      "binary_used_at_run_status": "unknown; current binary artifact is hashed, but no run manifest links it to this output",
+      "check": null,
+      "compile": {
+        "actual_command": null,
+        "actual_command_status": "unknown; exact scale compile line was not retained",
+        "candidate_full_command_not_claimed_as_actual": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -DFIXTURE_M=15985 -DFIXTURE_N=63937 -DFIXTURE_K=4097 bounded_lifecycle_affine_trace.cpp -lgmpxx -lgmp -o affine_trace_r1e6",
+        "candidate_only_not_claimed_as_actual": "-DFIXTURE_M=15985 -DFIXTURE_N=63937 -DFIXTURE_K=4097",
+        "process_exit_code": null,
+        "source_binary_linkage": "inferred from binary name, output fixture, and timestamps; not independently recorded"
+      },
+      "current_workspace_binary": {
+        "bytes": 150896,
+        "path": "affine_trace_r1e6",
+        "present": true,
+        "sha256": "bd39d13fd0d8ba27cccb7f935f3aab245de3d71935d8d7db982958b7ddcee8c1"
+      },
+      "fixture_from_record": {
+        "K": 4097,
+        "M": 15985,
+        "N": 63937,
+        "offset": "1/20",
+        "outputs": 1000000,
+        "owners": 2,
+        "tk": 64,
+        "tm": 16,
+        "tn": 64,
+        "waves": 65000000
+      },
+      "id": "r1e6_two_owner_saved_event_prefix",
+      "notes": [
+        "Trace prefix intentionally records the probe-5\u21929 cycle segment. Exact command/exit not retained."
+      ],
+      "original_records": [
+        {
+          "bytes": 271869,
+          "path": "affine-trace-complete-cycle.txt",
+          "present": true,
+          "sha256": "f1e3bda9cc163d50bff8f75188a999bcd61a237ca7f6648268c1b396e3e2729d"
+        }
+      ],
+      "run": {
+        "actual_command_status": "unknown; shell command line was not retained",
+        "actual_shell_command": null,
+        "observed_solver_status": "trace_prefix; 1182 intervals, stopped at selected lifecycle boundary",
+        "process_exit_code": null,
+        "reconstructed_argv_not_claimed_as_actual": [
+          "./affine_trace_r1e6",
+          "--affine-trace-only"
+        ]
+      },
+      "source": {
+        "current_sha256": "e450d1c40fc8b896863632df1fab3bb976cf32aa2001a40647d7f14bb51b6ef1",
+        "path": "bounded_lifecycle_affine_trace.cpp",
+        "sha256_at_compile": null,
+        "sha_at_compile_status": "unknown; no compiler manifest retained"
+      }
+    }
+  ],
+  "schema_version": 1,
+  "scope": "scratch-only scale provenance; no compilation or long run performed while preparing this file",
+  "sources": {
+    "affine_trace_source": {
+      "current_sha256": "e450d1c40fc8b896863632df1fab3bb976cf32aa2001a40647d7f14bb51b6ef1",
+      "path": "bounded_lifecycle_affine_trace.cpp",
+      "sha256_at_build": "unknown"
+    },
+    "check_scale_oracle": {
+      "path": "check_scale_oracle.py",
+      "sha256": "61ea1150d75928d0ea2cd51d27894f4c9897578df488cbf6361cdf9ccacf231c"
+    },
+    "derive_affine_cycle": {
+      "path": "derive_affine_cycle.py",
+      "sha256": "e582f03f5474a07534ac40d0bdeb596168567ee2c0883fac0412cb8b6e8e711f"
+    },
+    "scale_source": {
+      "current_sha256": "d4946274673f31ec4b95729445945d45987f60ff2bc7c06f8f7a67a488fd105d",
+      "path": "bounded_lifecycle.cpp",
+      "sha256_at_build": "unknown"
+    }
+  }
+}

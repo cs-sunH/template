@@ -1,0 +1,167 @@
+{
+  "all_inequalities_hold_over_orbit_interval": true,
+  "all_simultaneous_completions_are_identity_ties": true,
+  "boundary_subspace_invariant": true,
+  "bounded_lifecycle_replay": {
+    "K_final_only_store_retirement": true,
+    "event_states_checked": 521,
+    "max_active_per_owner": 3,
+    "max_computed_queue_length": 0,
+    "max_input_slot_occupancy": 2,
+    "max_loaded_queue_length": 1,
+    "max_output_slot_occupancy": 1,
+    "newly_started_activities_have_zero_progress": true,
+    "next_load_shift_per_owner": 130,
+    "retired_output_shift_per_owner": 2,
+    "start_and_end_slots_queues_and_activity_match_modulo_wave_shift": true
+  },
+  "cycle_elapsed_time_affine": {
+    "intercept": "43498643214866702774924171/204936926558414922900000000",
+    "slope": "-10493508275415568/9382517447874157125"
+  },
+  "cycle_elapsed_time_at_fixed_point": "524416/2472125",
+  "cycle_start_orbit_interval": {
+    "hi": "317921483913953891933450891003571855541/1629703480392930105404480315562393600000",
+    "lo": "1645692165044367/15069183193600000"
+  },
+  "elapsed_time_497_formula": "497*T(x*) + u*(x0-x*)*(1-a^497)/(1-a)",
+  "elapsed_time_497_geometric_tail_bound": {
+    "bound": "|error from replacing (1-a^497) by 1| < 2^-1348 seconds",
+    "error_numerator_denominator_bits": [
+      19703,
+      21052
+    ],
+    "exact_a_497_lt_2^-1335_assertion": true,
+    "exact_abs_x0_minus_fixed_lt_1_over_8_assertion": true,
+    "exact_error_comparison": "Fraction(abs(T_slope*(x0-x*)*a**497/(1-a))) < Fraction(1, 2**1348)",
+    "exact_time_tail_prefactor_lt_2^-13_seconds_assertion": true
+  },
+  "elapsed_time_497_limit_approx": 105.42932536057724,
+  "elapsed_time_497_numerator_denominator_bits": [
+    21059,
+    21053
+  ],
+  "elapsed_time_497_unit": "seconds",
+  "event_basis_counts": {
+    "COMPUTE_GATE": 256,
+    "COMPUTE_GATE+HBM0+HBM1": 264
+  },
+  "event_deadline_inequalities_checked": 1310,
+  "event_order_feasible_interval": {
+    "hi": "244491137/1235600000",
+    "lo": "7514576096093/71249638400000"
+  },
+  "fixture": {
+    "K": 4097,
+    "Ktiles": 65,
+    "M": 15985,
+    "Mtiles": 1000,
+    "N": 63937,
+    "Ntiles": 1000,
+    "tk": 64,
+    "tm": 16,
+    "tn": 64
+  },
+  "fully_logged_interval_count": 520,
+  "independent_grouped_lp": {
+    "events_recomputed": 520,
+    "first_event_active_q": {
+      "0.1.195": "24576",
+      "1.0.135": "20480",
+      "1.1.134": "28672"
+    },
+    "first_event_owner_alpha_coordinate_q_owner_times_activity_rate": {
+      "0.1.195": "19777000",
+      "1.0.135": "240000000",
+      "1.1.134": "19777000"
+    },
+    "first_event_owner_q_sum": {
+      "0": "24576",
+      "1": "49152"
+    },
+    "maximum_progress_numerator_denominator_bits_in_event_trace": [
+      166,
+      167
+    ],
+    "maximum_rate_numerator_denominator_bits": [
+      31,
+      21
+    ],
+    "rate_q_and_basis_exact_match": true
+  },
+  "intervals_at_endpoint": 1182,
+  "intervals_before_probe5": 662,
+  "map_a_num_den_bits": [
+    40,
+    43
+  ],
+  "map_b_num_den_bits": [
+    71,
+    74
+  ],
+  "max_event_progress_prediction_error": "0",
+  "outputs_per_joint_cycle": 2,
+  "owner0_compute_boundary_line": {
+    "intercept": "415317/3800000",
+    "slope": "125/209"
+  },
+  "owner1_load_boundary_line": {
+    "intercept": "0",
+    "slope": "800000/217547"
+  },
+  "phase_a_power_497_bound": {
+    "a_power_numerator_denominator_bits": [
+      19579,
+      20914
+    ],
+    "bound": "a^497 < 2^-1335",
+    "exact_comparison": "Fraction(a)**497 < Fraction(1, 2**1335)"
+  },
+  "phase_after_497_formula": "x* + a^497*(x0-x*)",
+  "phase_after_497_numerator_denominator_bits": [
+    21038,
+    21041
+  ],
+  "phase_error_after_497_bound": {
+    "bound": "|x_497-x*| < 2^-1338",
+    "error_numerator_denominator_bits": [
+      19706,
+      21046
+    ],
+    "exact_comparison": "Fraction(abs(x497-x*)) < Fraction(1, 2**1338)"
+  },
+  "phase_fixed_point": "1645692165044367/15069183193600000",
+  "phase_map_composed_from_logged_event_steps": true,
+  "phase_progress_map": {
+    "intercept": "1648756992419734626143/17871299754010214400000",
+    "slope": "721607775625/4648818956544"
+  },
+  "phase_start": "317921483913953891933450891003571855541/1629703480392930105404480315562393600000",
+  "physical_capacities": {
+    "COMPUTE_GATE": "1",
+    "HBM0_bytes_per_second": "50000000",
+    "HBM1_bytes_per_second": "50000000"
+  },
+  "progress_domain_over_orbit_interval": {
+    "all_active_progress_in_closed_unit_interval": true,
+    "max_endpoint_value": "7138707897019462084223015814198457957902341/7152768575444570232620264105003345510400000",
+    "min_endpoint_value": "0"
+  },
+  "qualification": "Exact trace proof for this qlocal 2-owner offset-0.05 full M/N category segment. It does not establish arbitrary offsets, tail transitions, production capacity-change or cancellation handling.",
+  "sample_boundary_probes": [
+    "5",
+    "9",
+    "13"
+  ],
+  "simultaneous_completion_event_count": 4,
+  "simultaneous_extra_activity_count": 4,
+  "source_trace": "affine-trace-complete-cycle.txt",
+  "strict_margin_checks": {
+    "all_identity_ties_selected": true,
+    "all_nonselected_margins_strict_at_both_endpoints": true,
+    "nonselected_deadline_margin_minimum_at_orbit_endpoints": "14060678425108148397248290804887552497659/5453085325217179744957762253468769177600000000",
+    "selected_dt_minimum_at_orbit_endpoints": "1/312500"
+  },
+  "time_unit": "seconds (compute work is vec_ops / 158216000 ops/s; HBM work is bytes / 50000000 bytes/s)",
+  "wave_shift_per_owner_per_cycle": 130
+}

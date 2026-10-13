@@ -1,0 +1,1 @@
+Attempt 001 exited during environment collection before compiling the helper or launching any benchmark because `cmake` was not on PATH. No performance samples were produced. The runner now uses the bundled `work/tooling/cmake/data/bin/cmake` version, matching the archived baseline procedure. The failed log and partial environment capture are retained for audit.

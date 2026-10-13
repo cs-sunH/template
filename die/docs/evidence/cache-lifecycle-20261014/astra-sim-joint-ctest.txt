@@ -1,0 +1,17 @@
+environment: PATH=/workspace/template/work/tooling/cmake/data/bin:/workspace/template/work/deps/protobuf/bin:$PATH CMAKE_PREFIX_PATH=/workspace/template/work/deps/protobuf PROTOBUF_FROM_SOURCE=True
+command: /workspace/template/work/tooling/cmake/data/bin/ctest --test-dir /workspace/template/work/integration-build/build/astra-sim-joint -R DieModelAdapterTest\|DieExecutionLifecycleTest\|LocalHbmDieMemoryTest\|JointReadyIssueOrderTest\|JointPipelineMutationTest --no-tests=error --output-on-failure 
+Test project /workspace/template/work/integration-build/build/astra-sim-joint
+    Start 24: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+1/5 Test #24: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.01 sec
+    Start 25: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+2/5 Test #25: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...   Passed    0.01 sec
+    Start 26: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+3/5 Test #26: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.01 sec
+    Start 27: JointReadyIssueOrderTest
+4/5 Test #27: JointReadyIssueOrderTest .........................................   Passed    0.04 sec
+    Start 28: JointPipelineMutationTest
+5/5 Test #28: JointPipelineMutationTest ........................................   Passed    0.01 sec
+
+100% tests passed out of 5
+
+Total Test time (real) =   0.08 sec

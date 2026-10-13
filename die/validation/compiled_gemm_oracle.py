@@ -62,6 +62,9 @@ class Wave:
     vec_ops: int
     compute_work_s: float
     eta_hbm: float
+    # Canonical compute quantity remains LOCAL payload even when that physical
+    # domain is nonbinding. The legacy equal-progress allocator ignores Q.
+    compute_local_bytes: int = 0
 
     def resource_work(self) -> dict[str, list[float]]:
         load = [0.0] * len(RESOURCE_NAMES)
@@ -175,7 +178,8 @@ def make_waves(raw: dict[str, Any]) -> tuple[list[Wave], dict[str, Any]]:
             waves.append(Wave(q, k_tile, final_k,
                               (row0_read, row1_read),
                               (row0_write, row1_write), ops,
-                              ops / (p_vec * eta_vec), eta_hbm))
+                              ops / (p_vec * eta_vec), eta_hbm,
+                              read + 4 * m_elems * n_elems * (2 if k_tile else 1)))
             total_read += read
             total_write += write
             total_ops += ops
@@ -406,7 +410,8 @@ def fill_rates(active: list[Active], capacities: list[float]) -> list[float]:
 
 
 def discrete_oracle(waves: list[Wave], output_count: int,
-                    arrival_times: list[float], capacities: list[float]) -> dict[str, Any]:
+                    arrival_times: list[float], capacities: list[float], *,
+                    rate_allocator=None) -> dict[str, Any]:
     names = ["comp0"] if len(arrival_times) == 1 else ["comp0", "comp1"]
     requests = [Request(name, arrival, waves, output_count)
                 for name, arrival in zip(names, arrival_times)]
@@ -480,7 +485,8 @@ def discrete_oracle(waves: list[Wave], output_count: int,
             now = next_arrival
             continue
 
-        rates = fill_rates(active, capacities)
+        rates = (fill_rates(active, capacities) if rate_allocator is None
+                 else rate_allocator(active, capacities))
         completions: list[tuple[Request, str, int]] = []
         deltas = []
         for item, rate in zip(active, rates):

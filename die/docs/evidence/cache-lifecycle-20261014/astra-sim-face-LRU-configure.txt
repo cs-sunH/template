@@ -1,0 +1,9 @@
+environment: PATH=/workspace/template/work/tooling/cmake/data/bin:/workspace/template/work/deps/protobuf/bin:$PATH CMAKE_PREFIX_PATH=/workspace/template/work/deps/protobuf PROTOBUF_FROM_SOURCE=True
+command: /workspace/template/work/tooling/cmake/data/bin/cmake -S /workspace/template/work/integration-build/aggregate -B /workspace/template/work/integration-build/build/astra-sim-face-LRU -DASTRA_SIM_ROOT=/workspace/template/astra-sim-face-LRU -DBUILDTARGET=congestion_aware -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ 
+-- {fmt} version: 11.0.2
+-- Build type: Release
+-- Build spdlog: 1.14.1
+-- Build type: Release
+-- Configuring done (0.1s)
+-- Generating done (0.2s)
+-- Build files have been written to: /workspace/template/work/integration-build/build/astra-sim-face-LRU

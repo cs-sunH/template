@@ -1,0 +1,6 @@
+{
+  "hash_and_summary": "7/7 unchanged",
+  "previous_accounted_cache_bytes": 141094,
+  "current_accounted_cache_bytes": 164810,
+  "reason": "new retained escaped hash/summary response strings are accounted"
+}

@@ -1,0 +1,4 @@
+-- Found Python3: /opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3.12 (found version "3.12.14") found components: Interpreter
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: /workspace/template/work/build-die
