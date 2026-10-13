@@ -1,0 +1,51 @@
+name: die Codex Handoff Check
+
+on:
+  push:
+    paths:
+      - 'die/**'
+      - '.github/workflows/die-handoff-check.yml'
+  pull_request:
+    paths:
+      - 'die/**'
+      - '.github/workflows/die-handoff-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-handoff:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check required files and meaningful sections
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s die/AGENTS.md
+          test -s die/docs/PROJECT.md
+          test -s die/docs/HANDOFF.md
+          test -s die/docs/RELAY_PROMPT.md
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          text = Path("die/docs/HANDOFF.md").read_text(encoding="utf-8")
+          headings = [
+              "Current Status", "Integration Branch", "Last Verified Base",
+              "Completed", "Next Step", "Important Decisions",
+              "Files to Continue", "Tests", "Blocking Issues",
+              "Handoff Notes",
+          ]
+          for heading in headings:
+              match = re.search(
+                  rf"(?ms)^## {re.escape(heading)}\s*\n(.*?)(?=^## |\Z)",
+                  text,
+              )
+              if not match or not match.group(1).strip():
+                  raise SystemExit(f"Missing or empty HANDOFF section: {heading}")
+          print("die handoff files and sections validated")
+          PY
