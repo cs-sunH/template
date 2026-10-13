@@ -105,7 +105,7 @@ LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
             sys->coarse_die_runtime->cancel(entry.first,
                                              Sys::boostedTick(), false);
             if (entry.second != nullptr) {
-                workload->                delete entry.second;
+                delete entry.second;
             }
         }
         coarse_jobs_.clear();
@@ -404,6 +404,63 @@ void LocalHbmBandwidthModel::issue_job(
     uint64_t num_ops,
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
+    if (sys->coarse_die_runtime != nullptr) {
+        if (kind == JobKind::COMPUTE || kind == JobKind::DIE_COMPUTE) {
+            throw std::runtime_error(
+                "coarse_die_v2 COMP traffic must be owned by a typed plan, "
+                "not the legacy scalar HBM queue");
+        }
+        if (tensor_size == 0 || wlhd == nullptr) {
+            throw std::runtime_error(
+                "coarse_die_v2 local endpoint requires nonzero bytes and "
+                "handler data");
+        }
+        const bool read = kind == JobKind::COMM_READ || kind == JobKind::POOL_READ;
+        const bool is_comm = kind == JobKind::COMM_READ || kind == JobKind::COMM_WRITE;
+        const bool is_pool = kind == JobKind::POOL_READ || kind == JobKind::POOL_WRITE;
+        const uint64_t node_id = wlhd->node_id;
+        const std::string identity = std::to_string(sys->id) + ":" +
+            std::to_string(node_id) + ":" + std::to_string(static_cast<int>(kind));
+        coarse_die::Owner owner;
+        owner.request_id = coarse_endpoint_identity(std::to_string(node_id));
+        owner.node_id = node_id;
+        owner.execution_id = node_id;
+        owner.generation = 1;
+        const auto& performance =
+            sys->coarse_die_runtime->hardware().input.at("performance_profile");
+        const uint64_t endpoint_id = coarse_endpoint_identity(identity);
+        const uint64_t transaction_id = coarse_endpoint_identity(std::to_string(node_id));
+        nlohmann::json endpoint = {
+            {"endpoint_id", endpoint_id},
+            {"transaction_id", transaction_id},
+            {"owner_kind", is_comm ? "comm" : (is_pool ? "pool" : "restore")},
+            {"direction", read ? "read" : "write"},
+            {"physical_bytes", tensor_size},
+            {"path_class", read ? "hbm_to_edge" : "edge_to_hbm"},
+            {"eta_hbm", performance.at("eta_hbm_matrix")},
+            {"route", {{"internal_route", false}}},
+        };
+        const uint64_t handle = sys->coarse_die_runtime->submit_endpoint(
+            endpoint, owner,
+            [this, wlhd, kind](const uint64_t completed_handle,
+                               const nlohmann::json& progress) {
+                coarse_jobs_.erase(completed_handle);
+                if (progress.value("state", std::string()) == "cancelled") return;
+                const auto [read_bytes, write_bytes] =
+                    coarse_hbm_read_write_bytes(progress);
+                if (kind == JobKind::COMM_READ) coarse_comm_read_served_ += read_bytes;
+                else if (kind == JobKind::COMM_WRITE) coarse_comm_write_served_ += write_bytes;
+                else if (kind == JobKind::RESTORE) coarse_restore_served_ += write_bytes;
+                else if (kind == JobKind::POOL_READ) coarse_pool_read_served_ += read_bytes;
+                else if (kind == JobKind::POOL_WRITE) coarse_pool_write_served_ += write_bytes;
+                workload->call(EventType::General, wlhd);
+            });
+        if (!coarse_jobs_.emplace(handle, wlhd).second) {
+            sys->coarse_die_runtime->cancel(handle, Sys::boostedTick(), false);
+            throw std::runtime_error("coarse_die_v2 endpoint handle collision");
+        }
+        return;
+    }
     advance_to(Sys::boostedTick());
     if (tensor_size == 0) {
         // Zero-byte endpoints never create an HBM job (the Workload layer
@@ -511,63 +568,6 @@ void LocalHbmBandwidthModel::issue_die_memory(double service_units,
     }
     const double eta = actual_bytes / service_units;
 
-    if (sys->coarse_die_runtime != nullptr) {
-        if (kind == JobKind::COMPUTE || kind == JobKind::DIE_COMPUTE) {
-            throw std::runtime_error(
-                "coarse_die_v2 COMP traffic must be owned by a typed plan, "
-                "not the legacy scalar HBM queue");
-        }
-        if (tensor_size == 0 || wlhd == nullptr) {
-            throw std::runtime_error(
-                "coarse_die_v2 local endpoint requires nonzero bytes and "
-                "handler data");
-        }
-        const bool read = kind == JobKind::COMM_READ || kind == JobKind::POOL_READ;
-        const bool is_comm = kind == JobKind::COMM_READ || kind == JobKind::COMM_WRITE;
-        const bool is_pool = kind == JobKind::POOL_READ || kind == JobKind::POOL_WRITE;
-        const uint64_t node_id = wlhd->node_id;
-        const std::string identity = std::to_string(sys->id) + ":" +
-            std::to_string(node_id) + ":" + std::to_string(static_cast<int>(kind));
-        coarse_die::Owner owner;
-        owner.request_id = coarse_endpoint_identity(std::to_string(node_id));
-        owner.node_id = node_id;
-        owner.execution_id = node_id;
-        owner.generation = 1;
-        const auto& performance =
-            sys->coarse_die_runtime->hardware().input.at("performance_profile");
-        const uint64_t endpoint_id = coarse_endpoint_identity(identity);
-        const uint64_t transaction_id = coarse_endpoint_identity(std::to_string(node_id));
-        nlohmann::json endpoint = {
-            {"endpoint_id", endpoint_id},
-            {"transaction_id", transaction_id},
-            {"owner_kind", is_comm ? "comm" : (is_pool ? "pool" : "restore")},
-            {"direction", read ? "read" : "write"},
-            {"physical_bytes", tensor_size},
-            {"path_class", read ? "hbm_to_edge" : "edge_to_hbm"},
-            {"eta_hbm", performance.at("eta_hbm_matrix")},
-            {"route", {{"internal_route", false}}},
-        };
-        const uint64_t handle = sys->coarse_die_runtime->submit_endpoint(
-            endpoint, owner,
-            [this, wlhd, kind](const uint64_t completed_handle,
-                               const nlohmann::json& progress) {
-                coarse_jobs_.erase(completed_handle);
-                if (progress.value("state", std::string()) == "cancelled") return;
-                const auto [read_bytes, write_bytes] =
-                    coarse_hbm_read_write_bytes(progress);
-                if (kind == JobKind::COMM_READ) coarse_comm_read_served_ += read_bytes;
-                else if (kind == JobKind::COMM_WRITE) coarse_comm_write_served_ += write_bytes;
-                else if (kind == JobKind::RESTORE) coarse_restore_served_ += write_bytes;
-                else if (kind == JobKind::POOL_READ) coarse_pool_read_served_ += read_bytes;
-                else if (kind == JobKind::POOL_WRITE) coarse_pool_write_served_ += write_bytes;
-                workload->call(EventType::General, wlhd);
-            });
-        if (!coarse_jobs_.emplace(handle, wlhd).second) {
-            sys->coarse_die_runtime->cancel(handle, Sys::boostedTick(), false);
-            throw std::runtime_error("coarse_die_v2 endpoint handle collision");
-        }
-        return;
-    }
     const Tick now = Sys::boostedTick();
     advance_to(now);
     // Joining a set that still has any bandwidth user reshapes everyone's

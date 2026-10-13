@@ -1,0 +1,29 @@
+test_asymmetric_single_row_group_dimensions_not_transposed (test_config_resolver.ConfigResolverTests.test_asymmetric_single_row_group_dimensions_not_transposed)
+(2026-10-01) 非对称组钉住 dimensions 顺序 = [列数, 行数]。 ... ok
+test_authored_templates_do_not_duplicate_managed_hardware_fields (test_config_resolver.ConfigResolverTests.test_authored_templates_do_not_duplicate_managed_hardware_fields) ... ok
+test_materializes_runtime_files_from_repo_local_sources (test_config_resolver.ConfigResolverTests.test_materializes_runtime_files_from_repo_local_sources) ... ok
+test_rejects_duplicate_communicators_and_non_rectangular_groups (test_config_resolver.ConfigResolverTests.test_rejects_duplicate_communicators_and_non_rectangular_groups) ... ok
+test_resolves_values_and_profile_from_the_single_hardware_source (test_config_resolver.ConfigResolverTests.test_resolves_values_and_profile_from_the_single_hardware_source) ... ok
+test_die_and_compute_nodes_are_mutually_exclusive (test_config_resolver.DieHardwareTests.test_die_and_compute_nodes_are_mutually_exclusive) ... ok
+test_die_capacity_profile_must_match_derived_hbm (test_config_resolver.DieHardwareTests.test_die_capacity_profile_must_match_derived_hbm)
+契约 §3.4:die 节存在时 profile bytes 必须等于派生 HBM 容量。 ... ok
+test_die_derived_scalars_flow_into_resolved_hardware (test_config_resolver.DieHardwareTests.test_die_derived_scalars_flow_into_resolved_hardware)
+接受路径:派生标量回流(峰值算力/带宽/容量,§3.4 口径)。 ... ok
+test_die_hardware_with_foreign_cost_model_fails_closed (test_config_resolver.DieHardwareTests.test_die_hardware_with_foreign_cost_model_fails_closed) ... ok
+test_die_hardware_with_roofline_template_fails_closed (test_config_resolver.DieHardwareTests.test_die_hardware_with_roofline_template_fails_closed)
+契约 §3.2 冲突矩阵:die 硬件 + roofline-enabled 模板报错。 ... ok
+test_die_library_discovery_fails_closed (test_config_resolver.DieHardwareTests.test_die_library_discovery_fails_closed)
+契约 §7 裁定 1:库不可发现时 die 硬件 fail-closed(不回退)。 ... ok
+test_die_node_rejects_illegal_layout_via_cost_library (test_config_resolver.DieHardwareTests.test_die_node_rejects_illegal_layout_via_cost_library)
+(800, 2, 2) 不在合法布局表内(契约 §3.5):库内校验,报错透传。 ... ok
+test_die_node_rejects_illegal_noc_width_structurally (test_config_resolver.DieHardwareTests.test_die_node_rejects_illegal_noc_width_structurally) ... ok
+test_die_node_rejects_unknown_core_table_row_via_cost_library (test_config_resolver.DieHardwareTests.test_die_node_rejects_unknown_core_table_row_via_cost_library) ... ok
+test_die_node_requires_exactly_six_keys (test_config_resolver.DieHardwareTests.test_die_node_requires_exactly_six_keys) ... ok
+test_materializes_die_runtime_files_and_system_injection (test_config_resolver.DieHardwareTests.test_materializes_die_runtime_files_and_system_injection)
+resolved_die_model.json 落盘 + system.json 三键注入与冲突门。 ... ok
+test_neither_die_nor_compute_is_rejected (test_config_resolver.DieHardwareTests.test_neither_die_nor_compute_is_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.006s
+
+OK

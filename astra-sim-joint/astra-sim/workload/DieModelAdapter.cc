@@ -6,7 +6,9 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/DieModelAdapter.hh"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -19,6 +21,32 @@ LICENSE file in the root directory of this source tree.
 
 namespace AstraSim {
 namespace {
+
+class ScopedNanosecondTimer final {
+  public:
+    explicit ScopedNanosecondTimer(uint64_t& total_ns)
+        : total_ns_(total_ns), start_(std::chrono::steady_clock::now()) {}
+    ~ScopedNanosecondTimer() {
+        total_ns_ += static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start_)
+                .count());
+    }
+
+  private:
+    uint64_t& total_ns_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+uint64_t add_quality_counter(const uint64_t left, const uint64_t right,
+                             const char* const label) {
+    if (right > std::numeric_limits<uint64_t>::max() - left) {
+        throw std::runtime_error(std::string("DieModelAdapter ") + label +
+                                 " counter overflows uint64");
+    }
+    return left + right;
+}
+
 uint64_t stable_request_id(const std::string& value) {
     uint64_t hash = 14695981039346656037ull;
     for (unsigned char byte : value) {
@@ -44,8 +72,24 @@ DieModelAdapter::~DieModelAdapter() {
 }
 
 void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
+    IssueTiming& timing = mutable_cumulative_issue_timing();
+    ++timing.calls;
+    ScopedNanosecondTimer issue_timer(timing.total_issue_ns);
     purge_finished_executions();
+    const auto pipeline_contract = workload_->pipeline_kernel_contract();
     if (sys_->coarse_die_runtime != nullptr) {
+        if (workload_->requires_pipeline_kernel_contract() &&
+            pipeline_contract == nullptr) {
+            throw std::runtime_error(
+                "DieModelAdapter refuses an online DIE node before the first "
+                "valid GraphBatch freezes its PipelineKernelContract");
+        }
+        if (pipeline_contract != nullptr) {
+            throw std::runtime_error(
+                "coarse_die_v2 cannot execute a JOINT PipelineKernelContract: "
+                "there is no lossless conversion from the frozen pipeline "
+                "timing contract to a coarse_die_v2 plan");
+        }
         if (node.compute.die_task_json == nullptr) {
             throw std::runtime_error(
                 "coarse_die_v2 requires the preserved typed die task JSON on "
@@ -61,7 +105,7 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
         const uint64_t node_id = node.global_id;
         const uint64_t handle = sys_->coarse_die_runtime->submit_plan(
             plan, owner,
-            [this, node_id, plan](const uint64_t done_handle,
+            [this, node_id](const uint64_t done_handle,
                                   const nlohmann::json& progress) {
                 coarse_active_.erase(done_handle);
                 const auto state = progress.value("state", std::string());
@@ -77,7 +121,6 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
                 const double elapsed_s =
                     static_cast<double>(std::max<uint64_t>(elapsed_ns, 1)) /
                     1e9;
-                const auto& summary = plan->summary;
                 const auto& derived =
                     sys_->coarse_die_runtime->hardware_summary();
                 const auto& hw_summary = derived.at("hardware_summary");
@@ -89,12 +132,14 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
                     hw_summary.at("hbm_row_peak_Bps")[0].get<double>() +
                     hw_summary.at("hbm_row_peak_Bps")[1].get<double>();
                 const double int4_ops =
-                    summary.at("executed_matrix_ops").get<double>();
+                    progress.at("served").at("int4_ops").get<double>();
                 const double vec_ops =
-                    summary.at("vec_equivalent_ops").get<double>();
+                    progress.at("served").at("vec_eqops").get<double>();
                 const double hbm_bytes =
-                    summary.at("hbm_read_bytes_total").get<double>() +
-                    summary.at("hbm_write_bytes_total").get<double>();
+                    progress.at("hbm_served_bytes")[0][0].get<double>() +
+                    progress.at("hbm_served_bytes")[0][1].get<double>() +
+                    progress.at("hbm_served_bytes")[1][0].get<double>() +
+                    progress.at("hbm_served_bytes")[1][1].get<double>();
                 if (!(int4_peak > 0.0) || !(vec_peak > 0.0) ||
                     !(hbm_peak > 0.0) || !std::isfinite(int4_ops) ||
                     !std::isfinite(vec_ops) || !std::isfinite(hbm_bytes)) {
@@ -106,7 +151,7 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
                     node_id, int4_ops / (int4_peak * elapsed_s),
                     hbm_bytes / (hbm_peak * elapsed_s),
                     vec_ops / (vec_peak * elapsed_s));
-                workload_->finish_generic_node(node_id);
+                workload_->finish_general_node(node_id, EventType::General);
             });
         coarse_active_.emplace(handle, node_id);
         return;
@@ -120,38 +165,175 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
             " (op_role=compute without a spec is a generator/regression "
             "defect; refusing to fall back to roofline or replay)");
     }
+    if (workload_->requires_pipeline_kernel_contract() &&
+        pipeline_contract == nullptr) {
+        throw std::runtime_error(
+            "DieModelAdapter refuses an online DIE node before the first "
+            "valid GraphBatch freezes its PipelineKernelContract");
+    }
 
     Sys::DieModelRuntime& runtime = *sys_->die_runtime;
-    const std::string key =
-        DieModel::plan_cache_key(*node.compute.die_spec, runtime.hardware);
+    std::string key;
+    ++timing.plan_key_calls;
+    {
+        ScopedNanosecondTimer key_timer(timing.plan_key_ns);
+        key = DieModel::plan_cache_key(*node.compute.die_spec,
+                                       runtime.hardware);
+    }
+
+    ++timing.cache_get_calls;
     std::shared_ptr<const DieModel::DiePlan> plan =
-        runtime.plan_cache->get(key);
+        nullptr;
+    {
+        ScopedNanosecondTimer cache_get_timer(timing.cache_get_ns);
+        plan = runtime.plan_cache->get(key);
+    }
     if (plan == nullptr) {
+        ++timing.cache_misses;
         // compile() is a pure function (DieModelError on any mapping
         // violation); the immutable result enters the LRU cache, the
         // mutable execution handle never does (design doc §8.5).  Stage E2:
         // the cache is process-level shared across every Sys of the same
         // resolved hardware (see Sys.hh), so a rank reuses plans other
         // ranks compiled for the identical (spec, hardware) key.
-        plan = DieModel::compile(*node.compute.die_spec, runtime.hardware);
-        runtime.plan_cache->put(key, plan);
+        ++timing.compile_calls;
+        {
+            ScopedNanosecondTimer compile_timer(timing.compile_ns);
+            plan = DieModel::compile(*node.compute.die_spec,
+                                     runtime.hardware);
+        }
+        ++timing.cache_put_calls;
+        {
+            ScopedNanosecondTimer cache_put_timer(timing.cache_put_ns);
+            runtime.plan_cache->put(key, plan);
+        }
+    } else {
+        ++timing.cache_hits;
     }
 
-    WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
-    wlhd->node_id = node.global_id;
-    auto execution = std::make_unique<DieExecution>(
-        sys_, workload_, this, node.global_id, wlhd, plan);
-    DieExecution* const raw = execution.get();
-    active_.push_back(std::move(execution));
+    ++timing.setup_calls;
+    DieExecution* raw = nullptr;
+    {
+        ScopedNanosecondTimer setup_timer(timing.setup_ns);
+        WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
+        wlhd->sys_id = sys_->id;
+        wlhd->workload = workload_;
+        wlhd->node_id = node.global_id;
+        auto execution = std::make_unique<DieExecution>(
+            sys_, workload_, this, node.global_id, wlhd, plan,
+            pipeline_contract);
+        raw = execution.get();
+        active_.push_back(std::move(execution));
+    }
     // start() may complete the node synchronously (a zero-work plan reports
     // Done on the first action); the finished execution stays in active_
     // until the next purge.
-    raw->start();
+    ++timing.start_calls;
+    {
+        ScopedNanosecondTimer start_timer(timing.start_ns);
+        raw->start();
+    }
+}
+
+DieModelAdapter::IssueTiming&
+DieModelAdapter::mutable_cumulative_issue_timing() {
+    static IssueTiming timing;
+    return timing;
+}
+
+const DieModelAdapter::IssueTiming& DieModelAdapter::cumulative_issue_timing() {
+    return mutable_cumulative_issue_timing();
 }
 
 bool DieModelAdapter::has_active_die_executions() {
     purge_finished_executions();
     return !active_.empty() || !coarse_active_.empty();
+}
+
+nlohmann::json DieModelAdapter::window_quality_json() const {
+    uint64_t windows = completed_window_count_;
+    uint64_t refinements = completed_refinement_count_;
+    uint64_t prefix_bound = completed_local_prefix_bound_max_;
+    uint64_t logical_events = completed_logical_event_count_;
+    uint64_t physical_steps = completed_physical_step_count_;
+    uint64_t active_count = 0;
+    nlohmann::json active = nlohmann::json::array();
+    std::string unsupported = last_unsupported_reason_;
+    for (const auto& execution : active_) {
+        if (execution == nullptr || execution->finished()) continue;
+        const nlohmann::json quality = execution->window_quality_json();
+        windows = add_quality_counter(windows,
+            quality.value("window_count", uint64_t{0}), "window");
+        refinements = add_quality_counter(refinements,
+            quality.value("refinement_count", uint64_t{0}), "refinement");
+        prefix_bound = std::max(prefix_bound,
+            quality.value("local_prefix_bound_max", uint64_t{0}));
+        logical_events = add_quality_counter(logical_events,
+            quality.value("logical_event_count", uint64_t{0}), "logical event");
+        physical_steps = add_quality_counter(physical_steps,
+            quality.value("physical_step_count", uint64_t{0}), "physical step");
+        ++active_count;
+        const nlohmann::json reason = quality.value(
+            "unsupported_reason", nlohmann::json(nullptr));
+        if (!reason.is_null()) unsupported = reason.get<std::string>();
+        active.push_back({{"node_id", execution->node_id()},
+                          {"quality", quality}});
+    }
+    nlohmann::json result{{"approximation_profile",
+                           "typed_die_internal_timer_window_v1"},
+        {"window_count", windows}, {"refinement_count", refinements},
+        {"local_prefix_bound_max", prefix_bound},
+        {"logical_event_count", logical_events},
+        {"physical_step_count", physical_steps},
+        {"bound_kind", "local_prefix_service_ticks"},
+        {"fully_exact", windows == 0},
+        {"unsupported_reason", unsupported.empty()
+             ? nlohmann::json(nullptr) : nlohmann::json(unsupported)},
+        {"completed_execution_count", completed_execution_count_},
+        {"active_execution_count", active_count},
+        {"active_executions", std::move(active)}};
+    const auto contract = workload_ == nullptr
+        ? nullptr : workload_->pipeline_kernel_contract();
+    if (contract != nullptr) {
+        result["window_contract"] = {
+            {"model_version", contract->model_version()},
+            {"timer_whitelist_version", contract->timer_whitelist_version()},
+            {"window_tile_limit", contract->window_tile_limit()},
+            {"window_local_error_ppm", contract->window_local_error_ppm()},
+            {"window_refine_margin_ppm", contract->window_refine_margin_ppm()},
+            {"prediction_config_sha256", contract->prediction_config_sha256()}};
+    } else {
+        result["window_contract"] = nullptr;
+    }
+    return result;
+}
+
+void DieModelAdapter::note_execution_finished(
+    const DieExecution* execution) {
+    if (execution == nullptr) {
+        throw std::runtime_error(
+            "DieModelAdapter cannot record a null DIE execution");
+    }
+    const nlohmann::json quality = execution->window_quality_json();
+    completed_window_count_ = add_quality_counter(
+        completed_window_count_, quality.value("window_count", uint64_t{0}),
+        "window");
+    completed_refinement_count_ = add_quality_counter(
+        completed_refinement_count_,
+        quality.value("refinement_count", uint64_t{0}), "refinement");
+    completed_logical_event_count_ = add_quality_counter(
+        completed_logical_event_count_,
+        quality.value("logical_event_count", uint64_t{0}), "logical event");
+    completed_physical_step_count_ = add_quality_counter(
+        completed_physical_step_count_,
+        quality.value("physical_step_count", uint64_t{0}), "physical step");
+    completed_local_prefix_bound_max_ = std::max(
+        completed_local_prefix_bound_max_,
+        quality.value("local_prefix_bound_max", uint64_t{0}));
+    ++completed_execution_count_;
+    const nlohmann::json reason = quality.value(
+        "unsupported_reason", nlohmann::json(nullptr));
+    if (!reason.is_null()) last_unsupported_reason_ = reason.get<std::string>();
 }
 
 void DieModelAdapter::purge_finished_executions() {

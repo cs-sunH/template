@@ -1,0 +1,24 @@
+{
+  "schema": "coarse_die_release_v2",
+  "source_digest": "f3e07793a2a6ee7a68d751c242287a0616470402d10284cba97b36c98449f9b7",
+  "files": {
+    "CMakeLists.txt": "fb0b826a241f9e7e2291ff3fca71edf267921889f99f965355d65a35d6659914",
+    "include/coarse_die/Capi.h": "52dab6731caaa6c80fdd1ff168c207d9fd63f7b56a2ba076437de7a1b624b61b",
+    "include/coarse_die/Execution.hh": "3f1168eea865882473f94c22f755553622761e0eda6a43ba2a7f0e789559f51b",
+    "include/coarse_die/Hardware.hh": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+    "include/coarse_die/Memory.hh": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+    "include/coarse_die/Plan.hh": "be6ca7a1daed88a0781cac315066205964caa4e6f3c9b82838444e1e6259dfa0",
+    "src/Capi.cc": "89b1d7b80e8d21928842252672d50fb0447bd1eb3f9b5a33c951c56ee216b4f1",
+    "src/Compiler.cc": "141d7e6d243116d717eff3e4f58b3c01eabceb0bb88b50042e9f126533d09831",
+    "src/Execution.cc": "d3446ff0276ebd1713b659f591c2afd10688afe94930c0cffdc42af93df551ad",
+    "src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+    "src/Mapping.cc": "8114707842f29e962b674ae206d25997217c715b0bd29504fb5e1bee5a7d7cc1",
+    "src/Plan.cc": "cc750ff9a51e5c7aeb7aeabdc6f79f24f7c6234f38c99e64a6c65a70a7ce1db3",
+    "configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+    "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+    "configs/core64.json": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+    "configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+    "configs/example_hardware.json": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+    "configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+  }
+}

@@ -428,8 +428,6 @@ Sys::~Sys() {
         delete this->roofline;
     }
 
-    all_sys[id] = nullptr;
-
     for (auto lt : logical_topologies) {
         delete lt.second;
     }
@@ -450,7 +448,12 @@ Sys::~Sys() {
 
     if (workload != nullptr) {
         delete workload;
+        workload = nullptr;
     }
+
+    // Teardown cancels COMP and endpoint jobs at the current simulation
+    // clock. Keep this Sys reachable until Workload has drained them.
+    all_sys[id] = nullptr;
 
     if (collective_impl_lookup != nullptr) {
         delete collective_impl_lookup;
@@ -672,7 +675,11 @@ void Sys::initialize_sys(string name) {
                     "hbm-bandwidth-contention must be boolean or integer");
             }
         }
-        if (local_mem_bw <= 0) {
+        // coarse_die_v2 derives its HBM rows after this key walk. Preserve
+        // the user flag until its descriptor is loaded and validated.
+        if (local_mem_bw <= 0 &&
+            !(j.contains("die-model-profile") &&
+              j["die-model-profile"] == "coarse_die_v2")) {
             // No local HBM bandwidth to share: the N-way model cannot run.
             // Same graceful degradation for the KV-restore sharing flag (no
             // bandwidth to share over; configs with restore nodes are still

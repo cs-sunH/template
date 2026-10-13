@@ -106,7 +106,7 @@ LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
             sys->coarse_die_runtime->cancel(entry.first,
                                              Sys::boostedTick(), false);
             if (entry.second != nullptr) {
-                workload->                delete entry.second;
+                delete entry.second;
             }
         }
         coarse_jobs_.clear();

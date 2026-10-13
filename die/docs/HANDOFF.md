@@ -6,7 +6,7 @@
 
 **NOT READY FOR HANDOFF / 工程验收未完成**。默认构建阻塞已解除，公共库完整构建与 15/15 CTest 已通过，算子归账、运行时信用和快照形成新的验证检查点；真实编译模板粒度、启动/重复实例、五仓业务兼容仍未验收。
 
-公共库检查点与本文件一起保存；五仓正在实施的适配修改需下一集成检查点继续保存。下面 Completed 与 Tests 只对明确标明的范围有效，不能当作完整性能模型通过证明。接手前仍须核对远端 main 和本文件所属 Git 提交。
+公共库检查点 `ee8a48d5234862efbdffd64465648816091a30e3` 已 fast-forward 推送 main。本轮进一步保存五仓固定源、实际构建及选定业务夹具；完整兼容性仍须继续验证。下面 Completed 与 Tests 只对明确标明的范围有效，不能当作完整性能模型通过证明。接手前仍须核对远端 main 和本文件所属 Git 提交。
 
 ## Integration Branch
 
@@ -60,7 +60,17 @@
 
 五仓为 `astra-sim-{wscllm,wscllm-LRU,face,face-LRU,joint}`。上轮 Sys/coarse facade、adapter、HBM endpoint、typed graph、config resolver 原型全部保留。
 
-本轮已恢复 JOINT adapter 被原移植删除的 timing/window/pipeline/readiness 旧接口，并补齐各仓根 CMake 的 coarse 链接，保留 legacy die_model。跨目录修改来自五仓集成及原功能兼容要求。公共源尚待固定版本 vendor；这些改动尚未通过五仓真实构建/业务回归，不能宣称 legacy 或 coarse 模式正常。
+本轮已恢复 JOINT adapter 被原移植删除的 timing/window/pipeline/readiness 旧接口，保留 legacy die_model，并发布五仓完全一致的 18 文件公共源，digest `f3e07793a2a6ee7a68d751c242287a0616470402d10284cba97b36c98449f9b7`；`sync_repositories.py --check` 通过。跨目录修改来自五仓集成及原功能兼容要求。
+
+- 五仓当前 legacy/coarse C ABI targets 构建成功，配置诊断兼容旧消息，JOINT 不可达库测试的环境隔离已修正。五仓根 CMake 直接链接 coarse；Chakra `.proto` 自动生成至 build tree，clean checkout 不依赖未跟踪的生成源码。五仓实际 AstraSim 核心库与 Online target 均构建成功。
+- 修正 FACE/JOINT HBM 清理语法、FACE 不存在的 restore/pool enum 移植，以及 FACE-LRU endpoint 分支被放错函数的问题；缺失 `<map>` 头文件已补齐。
+- coarse facade 批完成回调按 handle 顺序全部排空，即使某回调抛异常也清理其余终态、恢复 dispatch 状态，再重抛首个异常；只读 `counters_at(now)` 在私有 Runtime 副本推进，不发外部回调或改变实跑。
+- 修正五仓 coarse 显式 contention=1 被旧零带宽 guard 误关闭的问题，显式 contention=0 仍拒绝。四仓 Sys 直到 Workload 取消端点任务后才从全局时钟表移除，避免销毁中的时钟 panic。
+- 五仓完成利用率读取实际 typed served INT4/Vec/HBM；wscllm MetricCollector 输出 active/cancelled/retired 的 rank 生命周期分类账本，DIE 与 COMM 的 HBM 分子只计一次，分母使用硬件原始双排峰值。旧统计 key 保留；旧队列 owner peak/redistribution 不能冒充 coarse 历史峰值，覆盖边界写入记录。
+- wscllm 真正 typed COMP+COMM fixture 验证部分服务取消、共享 HBM、无取消终态、过期事件 drain、完成 join/一次完成/GPU 槽释放、退休计数结算。取消前缀使用原 microbenchmark 节点历史策略；正常完成路径另用 service 策略，未放宽 service 禁止 live GPU 结算的保护。
+- JOINT 适配器 fixture 覆盖 callback-throw 清理、只读 partial counter 采样与取消；coarse+冻结 legacy pipeline contract 仍 fail-closed，不冒充已支持 coarse live projection。
+
+选定接入 CTest 共 17/17 通过（wscllm、wscllm-LRU、FACE、FACE-LRU 各 3，JOINT 5）；FACE-LRU 先发现未注册测试，补齐注册后真实跑到 3/3，不能采用空测试 exit=0。证据见 [integration-20261013/](evidence/integration-20261013/)。这些不是全量五仓业务验收。
 
 Portable Protobuf 3.21.12 已安装到忽略的 `work/deps/protobuf/`；源码固定 protobuf v21.12 tar SHA-256 `22fdaf641b31655d4b2297f9981fa5203b2866f8332d3c6333f6b0107bb320de`。wscllm aggregate 配置已成功，真正 AstraSim 编译仍待 vendor。接手环境须重新准备依赖，不假定 `work/` 已同步。
 
@@ -71,7 +81,7 @@ Portable Protobuf 3.21.12 已安装到忽略的 `work/deps/protobuf/`；源码�
 1. 当前公共库统一 build/15 个 CTest 已通过；同步此可复核检查点至 main，再继续下面的模型与集成工作，不重复已通过的账本测试。
 2. 运行真正 compile/enumerate 输出的 GEMM 与独立 K-wave 离散 oracle 对照，先覆盖 singleCore OS、tail、多个 K 与 output round、phase-offset 并发；当前 E=8/16 不可用时必须报告 unavailable，不能模拟一个未实现的升级。修 ready/retire 曲线、慢核 tail、WR 列组围栏后再申请粒度证据。
 3. 补齐 launch/setup 对真实区域实例的延迟、重复实例时序、fractional kappa、向量参数驻留及转换；保持候选数/epoch 上限，并用独立 ledger 验证。
-4. 用 `tools/sync_repositories.py` 发布全部五仓固定 digest，验证 source 一致，再以 wscllm COMP+COMM cancellation/join/typed metrics 为首个真实业务 fixture，随后逐仓验证 KV/LRU/pool/readiness/workspace 与 JOINT 专属路径。
+4. 五仓固定源与首个 wscllm COMP+COMM cancellation/join/typed metrics 已验证保存；继续逐仓补齐 KV/LRU/pool/readiness/workspace 增量准入/释放与 JOINT live coarse projection，保留原有保护和调度策略。公共源下一次修改后统一重发布 digest，并运行受影响的真实接入回归。
 5. 检查 cold compile、cache 查询、J<=32 LP、事件/CPU/RSS/Roofline 开销；有数据不足的目标参数继续冻结工程先验，已有 TX8 条件审计不重复无意义重跑。
 
 ## Important Decisions
@@ -84,6 +94,8 @@ Portable Protobuf 3.21.12 已安装到忽略的 `work/deps/protobuf/`；源码�
 6. 手工 grouped-wave Runtime 驱动只能证明其合成 fixture 的语义/误差；`discrete_oracle.py` 已将结果归入 `runtime_grouped_*`，编译模板 `granularity_validation` 保持 not_run。真实 compiled oracle 的结果另报。
 7. 缓存 4096 条/64MiB 是 retained-allocation 上限，不是 host RSS。known_local_world 不自动复制外部 network/pool；JOINT guard 只在真正的 live import/fork/join 实现并测试后移除。
 8. TX8 条件复现、目标校准、模型粒度、五仓工程、目标硬件留出是独立证据。无新可审计测量，不升级两个 reference 参数的解释。
+
+当前 §7.2 明确使用 active_cores 分母的保守 COMPUTE_GATE 占用，§17 把跨 kernel 独立 PE/Vec 并发列为扩展；保持该指定 profile，不把实验 `/Ncore` 解释直接替换进去。GEMM 按 §6.1/§13.1 保留最多 128 个候选；降序首可行 tk 只适用于 §6.5 融合 FFN。tail slowest-cohort 与向量参数驻留仍待修，scratch 推导不是编译器证书。
 
 ## Files to Continue
 
@@ -101,7 +113,8 @@ Portable Protobuf 3.21.12 已安装到忽略的 `work/deps/protobuf/`；源码�
 - 合成 grouped Runtime oracle 独立对照真实运行：E=5/8/16 均未满足全部门槛，最大完成误差约 9.72%/9.46%/6.97%，最大 HBM busy 相对误差约 3.39。对应 CTest 是 measurement driver，退出 0 不代表误差验收通过。
 - 真实编译 GEMM oracle 已构建并运行：singleCore OS/strictFP32，M=N=65/K=4097，tm16/tn64/tk64，R=10、Tk=65、650 个真实消费 wave；独立工作账本全部守恒，但 E5 独占完成误差 3.827%、HBM busy 124.951%，50ms phase-offset 并发第一任务完成误差约 16.67%、HBM busy 158.87%、shared busy 478.94%，因此 **failed**。生产 E8/16 不可用，保持 not_run；不拟造 theta、不改门槛。完整报告见 evidence。
 - 30 样本 128³ GEMM 探针在 shared-Hardware/typed-finish 改动后 cold/hot P95 约 2.23/2.11 ms；cold 2ms 目标尚未达到。这是单 shape 探针，不是正式全域开销验收。
-- 五仓配置仅 wscllm 完成；AstraSim 真实构建、业务/指标/cancellation 回归尚未运行。上轮 JOINT 28/28 CTest 与 72 tests+12 subtests 是旧二进制历史结果，不是当前回归。
+- 五仓实际核心库/Online 构建与选定 17/17 CTest 已运行；wscllm 新夹具的逐项输出保存。配置 unittest discovery 初次共 74：49 通过、25 跳过；随后构建五仓当前 legacy/coarse C ABI 并显式选择其路径，补跑共 **83/83 通过、无跳过**（JOINT class-level skip 原来隐藏了多个方法）。构建不是全部 targets/全量业务回归；上轮 JOINT 28/28 CTest 与 72 tests+12 subtests 仍是旧二进制历史结果。
+- 集成工具实际版本以 evidence/verification.json 为准（CMake 4.4.4、GCC 14.2.0、Protobuf 3.21.12）。父 aggregate mirror README 的三 subdirectory 布局，Release、congestion_aware、NETWORK_BACKEND_BUILD_AS_LIBRARY=ON；依赖/产物位于忽略的 work/，不依赖它们作为源码交付。
 - TX8 source/cache 审计复用上轮已通过且工作簿未变的证据；目标硬件留出仍 not_available。
 
 本环境可复用命令（工具路径须在新环境重新核实）：
@@ -120,7 +133,7 @@ python3 die/validation/discrete_oracle.py --runtime-driver work/benchmark-fix/co
 
 - 编译宏的 input/output rounds 不能代表 R*Tk 真实有限缓冲生命周期；tail 最慢核、WR 围栏、精确 full/tail routing 未闭环，真实编译 E5 fixture 已失败，E8/16 尚不可用，没有可用证书。
 - launch/setup 尚未收费；layers/passes 工作量倍数已修，真实重复实例时序未修；fractional kappa 仍有整数截断，向量缓存/转换与 partial/tail 分布须进一步验证。
-- 五仓固定源发布、typed MetricCollector、DIE HBM 总分子、workspace 增量准入/释放、GPU 槽一次完成、KV/LRU/network/pool 回归与 JOINT live projection 尚未验收。
+- 五仓固定源/真实构建、wscllm typed MetricCollector/DIE HBM 总分子及首个 COMP+COMM/GPU 槽夹具已验证；其他仓 coarse 业务、workspace 增量准入/释放、KV/LRU/network/pool 与 JOINT live projection 尚未验收。
 - TX8 不能辨识目标 INT4/Vec/HBM/NoC/SRAM/启动/转换/竞争，数据不足不是可通过修改拟合权重消除的问题。
 - cache/LP/J<=32/事件/RSS/Roofline 正式开销证据尚缺；单小 shape 探针不能覆盖全参数域。
 
@@ -128,6 +141,6 @@ python3 die/validation/discrete_oracle.py --runtime-driver work/benchmark-fix/co
 
 这是持续开发中的阶段文档，不是用户要求的完整交接。公共库检查点已经完成完整构建和 15/15 CTest 验证，真实编译 oracle 的失败结果一并保存；`.github/workflows/die-handoff-check.yml` 增加真正的默认构建和 CTest job，旧文档检查仍保留。
 
-本轮先以 `7e7d8a4` 推送 benchmark 小修复，再将本文件与完整公共库检查点一起提交。同步 main 使用非 force fast-forward；本文件所属提交的实际 SHA 从 Git 元数据读取，不能编造自身 SHA。五仓固定源发布和业务改动按下一有意义检查点保存，不以公共库测试代替五仓结果。旧 PR #1 是上轮历史事实，本轮不重复创建无必要 PR。
+本轮先以 `7e7d8a4` 推送 benchmark 小修复，再将本文件与完整公共库检查点一起提交。同步 main 使用非 force fast-forward；本文件所属提交的实际 SHA 从 Git 元数据读取，不能编造自身 SHA。本次五仓固定源与业务改动及实际证据一起提交并继续以非 force fast-forward 同步 main；不以公共库或选定夹具测试代替全量五仓结果。旧 PR #1 是上轮历史事实，本轮不重复创建无必要 PR。
 
 收到用户明确交接指令后，须完整更新本文件、保存所有有效成果、同步 GitHub，并核对工作区与远端；没有该指令时继续实施 Next Step。当前工程精度/五仓验收不足仍为 NOT READY，不能直接用于已验证的架构性能排序。

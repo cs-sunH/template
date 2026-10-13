@@ -40,6 +40,9 @@ class CoarseDieRuntime final : public Callable {
     void cancel(uint64_t handle, uint64_t now_ns, bool notify = false);
     nlohmann::json query_progress(uint64_t handle) const;
     nlohmann::json counters() const;
+    // Sample known die state without advancing the live event loop or
+    // dispatching graph/network callbacks. Time reversal is rejected.
+    nlohmann::json counters_at(uint64_t now_ns) const;
     nlohmann::json export_snapshot(uint64_t now_ns);
     const coarse_die::Hardware& hardware() const { return hardware_; }
     const nlohmann::json& hardware_summary() const { return hardware_.derived; }

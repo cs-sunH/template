@@ -636,6 +636,13 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     )
 
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest)
+
     # X8 (face-LRU audit, 2026-09-29): the eight executable targets below
     # had no RUNTIME_OUTPUT_DIRECTORY property, so their binaries landed in
     # the build-tree root instead of bin/ -- the README's run-from-bin

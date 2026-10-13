@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #ifndef __LOCAL_HBM_BANDWIDTH_MODEL_HH__
 #define __LOCAL_HBM_BANDWIDTH_MODEL_HH__
 
+#include <map>
 #include <array>
 #include <cstddef>
 #include <cstdint>

@@ -469,8 +469,9 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
     if sum(value is not None for value in
            (die_node, coarse_die_config, compute_node)) > 1:
         raise ValueError(
-            "Hardware configuration must declare at most one of 'die', "
-            "'coarse-die', or 'compute.peak-perf-tflops'")
+            "Hardware configuration must not declare both 'die' and "
+            "'compute.peak-perf-tflops', or combine either with 'coarse-die'; "
+            "these backends are mutually exclusive")
     die_summary: Optional[dict[str, Any]] = None
     if die_node is not None:
         if not isinstance(die_node, dict):

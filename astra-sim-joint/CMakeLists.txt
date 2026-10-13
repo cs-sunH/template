@@ -74,6 +74,23 @@ else()
     find_package(Protobuf REQUIRED)
 endif()
 
+# Generate Chakra bindings in the build tree. A clean checkout contains the
+# .proto source, not generated C++ files; use the selected Protobuf compiler
+# and rebuild when that schema changes.
+set(CHAKRA_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf")
+set(CHAKRA_PROTO_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/chakra")
+set(CHAKRA_PROTO_CC "${CHAKRA_PROTO_OUTPUT_DIR}/et_def.pb.cc")
+set(CHAKRA_PROTO_HH "${CHAKRA_PROTO_OUTPUT_DIR}/et_def.pb.h")
+file(MAKE_DIRECTORY "${CHAKRA_PROTO_OUTPUT_DIR}")
+add_custom_command(
+    OUTPUT "${CHAKRA_PROTO_CC}" "${CHAKRA_PROTO_HH}"
+    COMMAND protobuf::protoc
+        "--proto_path=${CHAKRA_PROTO_DIR}"
+        "--cpp_out=${CHAKRA_PROTO_OUTPUT_DIR}"
+        "${CHAKRA_PROTO_DIR}/et_def.proto"
+    DEPENDS "${CHAKRA_PROTO_DIR}/et_def.proto" protobuf::protoc
+    VERBATIM)
+
 # Files to compile
 # L24(2026-09-29 审查修复):GLOB 加 CONFIGURE_DEPENDS——增删源文件后不再
 # 依赖手工重跑 cmake 才能被发现(对齐 face-LRU 仓同位置修复)。
@@ -87,7 +104,6 @@ file(GLOB srcs CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/collective_algorithm/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/common/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/third_party/utils/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/feeder_v3/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/remote_memory_backend/analytical/*.cc")
 
@@ -124,7 +140,8 @@ set_target_properties(joint_projection PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # Compile AstraSim Library
-add_library(AstraSim STATIC ${srcs})
+add_library(AstraSim STATIC ${srcs} "${CHAKRA_PROTO_CC}" "${CHAKRA_PROTO_HH}")
+target_include_directories(AstraSim PUBLIC "${CHAKRA_PROTO_OUTPUT_DIR}")
 
 # Link libraries
 target_link_libraries(AstraSim PUBLIC fmt::fmt)
@@ -134,6 +151,9 @@ target_link_libraries(AstraSim PUBLIC yaml-cpp)
 # the shared extern/helper nlohmann/json include via die_model's interface.
 target_link_libraries(AstraSim PUBLIC die_model)
 target_link_libraries(AstraSim PUBLIC joint_pipeline_core)
+# Link the coarse_die_v2 C++ runtime while preserving die_model for explicit
+# legacy mesh_die_v1/tx8_reference_v1 profiles.
+target_link_libraries(AstraSim PUBLIC coarse_die)
 
 # Same as above.
 if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")

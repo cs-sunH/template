@@ -615,7 +615,11 @@ void Sys::initialize_sys_fields(const json& j, const string& name) {
                 "hbm-bandwidth-contention must be boolean or integer");
         }
     }
-    if (local_mem_bw <= 0) {
+    // coarse_die_v2 derives its HBM rows after this key walk. Preserve
+    // the user flag until its descriptor is loaded and validated.
+    if (local_mem_bw <= 0 &&
+        !(j.contains("die-model-profile") &&
+          j["die-model-profile"] == "coarse_die_v2")) {
         hbm_bandwidth_contention = false;
     }
     if (j.contains("roofline-enabled")) {

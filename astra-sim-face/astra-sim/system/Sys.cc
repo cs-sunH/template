@@ -406,8 +406,6 @@ Sys::~Sys() {
         delete this->roofline;
     }
 
-    all_sys[id] = nullptr;
-
     for (auto lt : logical_topologies) {
         delete lt.second;
     }
@@ -428,7 +426,12 @@ Sys::~Sys() {
 
     if (workload != nullptr) {
         delete workload;
+        workload = nullptr;
     }
+
+    // Teardown cancels COMP and endpoint jobs at the current simulation
+    // clock. Keep this Sys reachable until Workload has drained them.
+    all_sys[id] = nullptr;
 
     if (offline_greedy != nullptr) {
         delete offline_greedy;
@@ -709,7 +712,11 @@ bool Sys::initialize_sys(string name) {
             hbm_bandwidth_contention = parse_bool_or_int_flag(
                 j["hbm-bandwidth-contention"], "hbm-bandwidth-contention");
         }
-        if (this->local_mem_bw <= 0) {
+        // coarse_die_v2 derives its HBM rows after this key walk. Preserve
+        // the user flag until its descriptor is loaded and validated.
+        if (this->local_mem_bw <= 0 &&
+            !(j.contains("die-model-profile") &&
+              j["die-model-profile"] == "coarse_die_v2")) {
             this->hbm_bandwidth_contention = false;
         }
         if (j.contains("roofline-enabled")) {

@@ -61,7 +61,7 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
         const uint64_t node_id = node.global_id;
         const uint64_t handle = sys_->coarse_die_runtime->submit_plan(
             plan, owner,
-            [this, node_id, plan](const uint64_t done_handle,
+            [this, node_id](const uint64_t done_handle,
                                   const nlohmann::json& progress) {
                 coarse_active_.erase(done_handle);
                 const auto state = progress.value("state", std::string());
@@ -77,7 +77,6 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
                 const double elapsed_s =
                     static_cast<double>(std::max<uint64_t>(elapsed_ns, 1)) /
                     1e9;
-                const auto& summary = plan->summary;
                 const auto& derived =
                     sys_->coarse_die_runtime->hardware_summary();
                 const auto& hw_summary = derived.at("hardware_summary");
@@ -89,12 +88,14 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
                     hw_summary.at("hbm_row_peak_Bps")[0].get<double>() +
                     hw_summary.at("hbm_row_peak_Bps")[1].get<double>();
                 const double int4_ops =
-                    summary.at("executed_matrix_ops").get<double>();
+                    progress.at("served").at("int4_ops").get<double>();
                 const double vec_ops =
-                    summary.at("vec_equivalent_ops").get<double>();
+                    progress.at("served").at("vec_eqops").get<double>();
                 const double hbm_bytes =
-                    summary.at("hbm_read_bytes_total").get<double>() +
-                    summary.at("hbm_write_bytes_total").get<double>();
+                    progress.at("hbm_served_bytes")[0][0].get<double>() +
+                    progress.at("hbm_served_bytes")[0][1].get<double>() +
+                    progress.at("hbm_served_bytes")[1][0].get<double>() +
+                    progress.at("hbm_served_bytes")[1][1].get<double>();
                 if (!(int4_peak > 0.0) || !(vec_peak > 0.0) ||
                     !(hbm_peak > 0.0) || !std::isfinite(int4_ops) ||
                     !std::isfinite(vec_ops) || !std::isfinite(hbm_bytes)) {

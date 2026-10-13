@@ -48,6 +48,7 @@ Exit code 0 on ALL PASS.
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/Sys.hh"
+#include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "astra-sim/workload/DieModelAdapter.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Workload.hh"
@@ -285,6 +286,223 @@ std::string make_config_dir() {
         std::exit(EXIT_FAILURE);
     }
     return std::string(made);
+}
+
+std::string repo_vendor_coarse_hardware_path() {
+    std::filesystem::path source(__FILE__);
+    if (source.is_relative()) source = std::filesystem::absolute(source);
+    // __FILE__ -> tests -> execution_driven -> workload -> astra-sim -> repo.
+    for (unsigned parent = 0; parent < 5; ++parent) {
+        source = source.parent_path();
+    }
+    return (source / "extern/die_model/coarse/configs/example_hardware.json")
+        .string();
+}
+
+void write_coarse_system_config(const std::string& config_dir) {
+    std::ifstream hardware_in(repo_vendor_coarse_hardware_path());
+    if (!hardware_in.is_open()) {
+        std::fprintf(stderr,
+                     "[die_model_adapter_test] cannot open vendored coarse "
+                     "example_hardware.json at %s\n",
+                     repo_vendor_coarse_hardware_path().c_str());
+        std::exit(EXIT_FAILURE);
+    }
+    std::string hardware_json;
+    std::string line;
+    while (std::getline(hardware_in, line)) {
+        hardware_json += line;
+        hardware_json.push_back('\n');
+    }
+    const std::string resolved_path = config_dir + "/resolved_coarse.json";
+    write_text(resolved_path, hardware_json);
+    write_text(
+        config_dir + "/coarse_system.json",
+        nlohmann::json{{"scheduling-policy", "FIFO"},
+                       {"compute-cost-model", "die"},
+                       {"die-model-profile", "coarse_die_v2"},
+                       {"die-model-config", resolved_path},
+                       {"local-mem-latency", 100},
+                       {"trace-enabled", 0}}
+            .dump(2));
+}
+
+std::shared_ptr<const coarse_die::Plan> empty_coarse_plan(
+    const coarse_die::Hardware& hardware) {
+    auto plan = std::make_shared<coarse_die::Plan>();
+    plan->task = {{"schema", "coarse_die_task_v2"},
+                  {"op_kind", "dispatch_lifecycle_fixture"}};
+    plan->summary = {{"fixture", "instant_terminal"}};
+    plan->hardware_fingerprint = hardware.fingerprint;
+    // Runtime explicitly permits an empty epoch list as a zero-work plan.
+    // Fingerprint the complete canonical plan payload against the real
+    // vendor-example hardware; the fixture does not bypass plan validation.
+    plan->fingerprint = coarse_die::plan_to_json(*plan)
+                            .at("fingerprint")
+                            .get<std::string>();
+    return plan;
+}
+
+void test_coarse_dispatch_exceptions_and_contract(
+    const std::string& config_dir) {
+    write_coarse_system_config(config_dir);
+    Fixture fixture = make_fixture(config_dir, "coarse_system.json");
+    Sys& sys = *fixture.sys;
+    expect_true(sys.coarse_die_runtime != nullptr,
+                "E: JOINT Sys loads the vendored coarse_die_v2 hardware");
+
+    ExecutionDriven::NodeView coarse_node;
+    coarse_node.global_id = 90;
+    coarse_node.request_id = "coarse-contract-probe";
+    coarse_node.compute.die_task_json =
+        std::make_shared<const nlohmann::json>(
+            nlohmann::json{{"schema", "coarse_die_task_v2"},
+                           {"op_kind", "gemm"}});
+    bool rejected_contract = false;
+    try {
+        sys.workload->die_model_adapter()->issue_die(coarse_node);
+    } catch (const std::exception& error) {
+        rejected_contract =
+            std::string(error.what()).find(
+                "no lossless conversion from the frozen pipeline timing contract") !=
+            std::string::npos;
+    }
+    expect_true(rejected_contract,
+                "E: coarse_die_v2 fails closed instead of discarding a frozen "
+                "JOINT PipelineKernelContract");
+    expect_true(!sys.coarse_die_runtime->has_active_executions(),
+                "E: contract rejection happens before Runtime submission");
+
+    auto sampled_plan = std::make_shared<coarse_die::Plan>();
+    sampled_plan->task = {{"fixture", "counter_sampling"}};
+    sampled_plan->summary = {{"fixture", "counter_sampling"}};
+    sampled_plan->hardware_fingerprint =
+        sys.coarse_die_runtime->hardware().fingerprint;
+    coarse_die::Epoch sampled_epoch;
+    sampled_epoch.name = "known_state_sampling";
+    coarse_die::Activity sampled_activity;
+    sampled_activity.id = 1;
+    sampled_activity.role = coarse_die::Role::Compute;
+    sampled_activity.work[coarse_die::COMPUTE_GATE] = 1e-7;
+    sampled_activity.private_time_s = 1e-7;
+    sampled_activity.work[coarse_die::HBM0] = 1000;
+    sampled_activity.hbm_bytes[0][0] = 1000;
+    sampled_activity.int4_ops = 1000;
+    sampled_activity.vec_eqops = 2000;
+    sampled_epoch.activities.push_back(sampled_activity);
+    sampled_plan->epochs.push_back(sampled_epoch);
+    sampled_plan->fingerprint = coarse_die::plan_to_json(*sampled_plan)
+                                   .at("fingerprint").get<std::string>();
+    coarse_die::Owner sampled_owner;
+    sampled_owner.node_id = 104;
+    sampled_owner.execution_id = 4;
+    unsigned sampled_callbacks = 0;
+    const auto sample_issue = Sys::boostedTick();
+    const auto sampled_handle = sys.coarse_die_runtime->submit_plan(
+        sampled_plan, sampled_owner,
+        [&](uint64_t, const nlohmann::json&) { ++sampled_callbacks; });
+    const auto live_before = sys.coarse_die_runtime->query_progress(sampled_handle);
+    const auto counters_before = sys.coarse_die_runtime->counters();
+    const auto sampled = sys.coarse_die_runtime->counters_at(sample_issue + 25);
+    expect_true(std::abs(sampled.at("served_by_category").at("comp")
+                             .at("int4_ops").get<double>() - 250) < 1e-8 &&
+                    std::abs(sampled.at("served_by_category").at("comp")
+                             .at("vec_eqops").get<double>() - 500) < 1e-8,
+                "E: counter sampling integrates partial typed work between alarms");
+    expect_true(sys.coarse_die_runtime->query_progress(sampled_handle) == live_before &&
+                    sys.coarse_die_runtime->counters() == counters_before &&
+                    sampled_callbacks == 0,
+                "E: sampling leaves live progress, counters and callbacks unchanged");
+    const auto finished_sample = sys.coarse_die_runtime->counters_at(sample_issue + 100);
+    expect_true(finished_sample.at("served_by_category").at("comp")
+                    .at("int4_ops").get<double>() == 1000 && sampled_callbacks == 0,
+                "E: terminal private sampling does not dispatch graph callbacks");
+    sys.coarse_die_runtime->cancel(sampled_handle, sample_issue, false);
+
+    const auto plan = empty_coarse_plan(sys.coarse_die_runtime->hardware());
+    std::vector<uint64_t> callback_order;
+    std::vector<std::string> callback_states;
+    coarse_die::Owner first_owner;
+    first_owner.request_id = 1;
+    first_owner.node_id = 101;
+    first_owner.execution_id = 1;
+    first_owner.generation = 1;
+    const uint64_t first_handle = sys.coarse_die_runtime->submit_plan(
+        plan, first_owner,
+        [&](const uint64_t handle, const nlohmann::json& progress) {
+            callback_order.push_back(handle);
+            callback_states.push_back(progress.at("state").get<std::string>());
+            throw std::logic_error("first coarse callback failure");
+        });
+    coarse_die::Owner second_owner;
+    second_owner.request_id = 2;
+    second_owner.node_id = 102;
+    second_owner.execution_id = 2;
+    second_owner.generation = 1;
+    const uint64_t second_handle = sys.coarse_die_runtime->submit_plan(
+        plan, second_owner,
+        [&](const uint64_t handle, const nlohmann::json& progress) {
+            callback_order.push_back(handle);
+            callback_states.push_back(progress.at("state").get<std::string>());
+        });
+
+    bool rethrew_first = false;
+    try {
+        static_cast<void>(
+            sys.coarse_die_runtime->export_snapshot(Sys::boostedTick()));
+    } catch (const std::logic_error& error) {
+        rethrew_first =
+            std::string(error.what()) == "first coarse callback failure";
+    }
+    expect_true(rethrew_first,
+                "E: dispatch rethrows the first callback exception after drain");
+    expect_true(callback_order ==
+                    std::vector<uint64_t>{first_handle, second_handle},
+                "E: same-tick detached callbacks run once in handle order");
+    expect_true(callback_states ==
+                    std::vector<std::string>{"finished", "finished"},
+                "E: each callback receives its terminal progress snapshot");
+    expect_true(!sys.coarse_die_runtime->has_active_executions(),
+                "E: all same-tick completion entries are removed");
+    bool first_stale = false;
+    bool second_stale = false;
+    try {
+        static_cast<void>(sys.coarse_die_runtime->query_progress(first_handle));
+    } catch (const std::exception&) {
+        first_stale = true;
+    }
+    try {
+        static_cast<void>(sys.coarse_die_runtime->query_progress(second_handle));
+    } catch (const std::exception&) {
+        second_stale = true;
+    }
+    expect_true(first_stale && second_stale,
+                "E: all detached terminal handles are retired despite throw");
+
+    bool third_callback_fired = false;
+    coarse_die::Owner third_owner;
+    third_owner.request_id = 3;
+    third_owner.node_id = 103;
+    third_owner.execution_id = 3;
+    third_owner.generation = 1;
+    uint64_t third_handle = 0;
+    third_handle = sys.coarse_die_runtime->submit_plan(
+        plan, third_owner,
+        [&](const uint64_t handle, const nlohmann::json& progress) {
+            third_callback_fired =
+                handle == third_handle &&
+                progress.at("state").get<std::string>() == "finished";
+        });
+    try {
+        static_cast<void>(
+            sys.coarse_die_runtime->export_snapshot(Sys::boostedTick()));
+    } catch (const std::exception&) {
+        // This callback is expected to be successful; the assertion below
+        // makes an unexpected exception visible without skipping cleanup.
+    }
+    expect_true(third_callback_fired &&
+                    !sys.coarse_die_runtime->has_active_executions(),
+                "E: dispatching state resets and accepts a later completion");
 }
 
 // Child-probe helper for the fail-closed Sys configurations (sys_panic
@@ -619,6 +837,11 @@ int main() {
         expect_true(rejected,
                     "D: parser rejects die_op_spec with runtime_ns != 0");
     }
+
+    // E: coarse facade dispatch drains every ready callback after an
+    // exception, retires those handles, restores dispatching_, and JOINT
+    // refuses to discard its frozen pipeline timing contract.
+    test_coarse_dispatch_exceptions_and_contract(config_dir);
 
     std::error_code ec;
     std::filesystem::remove_all(config_dir, ec);

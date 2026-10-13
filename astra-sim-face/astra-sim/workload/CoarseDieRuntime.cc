@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <exception>
 
 #include "astra-sim/system/Sys.hh"
 
@@ -137,12 +138,22 @@ void CoarseDieRuntime::cancel(const uint64_t handle,
     if (!terminal_state(progress)) {
         runtime_.cancel(handle, now_ns);
     }
+    std::exception_ptr first_exception;
     if (notify) {
-        dispatch_terminal();
+        try {
+            dispatch_terminal();
+        } catch (...) {
+            first_exception = std::current_exception();
+        }
     } else {
         retire(handle);
     }
-    schedule_next();
+    try {
+        schedule_next();
+    } catch (...) {
+        if (!first_exception) first_exception = std::current_exception();
+    }
+    if (first_exception) std::rethrow_exception(first_exception);
 }
 
 nlohmann::json CoarseDieRuntime::query_progress(const uint64_t handle) const {
@@ -159,13 +170,33 @@ nlohmann::json CoarseDieRuntime::export_snapshot(uint64_t now_ns) {
             "coarse_die_v2 snapshot tick must match the active Sys decision tick");
     }
     runtime_.advance_to(now_ns);
-    dispatch_terminal();
-    schedule_next();
+    std::exception_ptr first_exception;
+    try {
+        dispatch_terminal();
+    } catch (...) {
+        first_exception = std::current_exception();
+    }
+    try {
+        schedule_next();
+    } catch (...) {
+        if (!first_exception) first_exception = std::current_exception();
+    }
+    if (first_exception) std::rethrow_exception(first_exception);
     return nlohmann::json{
         {"hardware_config", hardware_.input},
         {"runtime_snapshot", runtime_.export_snapshot()},
         {"exported_at_ns", now_ns},
     };
+}
+
+nlohmann::json CoarseDieRuntime::counters_at(const uint64_t now_ns) const {
+    // Runtime copies mutable execution/accounting state and shares only the
+    // immutable Hardware/Plans. The sample owns no external callbacks.
+    coarse_die::Runtime sampled(runtime_);
+    sampled.advance_to(now_ns);
+    nlohmann::json value = sampled.counters();
+    value.update(plan_cache_counters());
+    return value;
 }
 
 nlohmann::json CoarseDieRuntime::counters() const {
@@ -208,22 +239,51 @@ void CoarseDieRuntime::dispatch_terminal() {
         return;
     }
     dispatching_ = true;
-    std::vector<std::pair<uint64_t, Completion>> ready;
+    struct DispatchReset final {
+        explicit DispatchReset(bool& value_in) : value(value_in) {}
+        ~DispatchReset() { value = false; }
+        bool& value;
+    } reset(dispatching_);
+    struct ReadyCompletion final {
+        uint64_t handle;
+        Completion completion;
+        nlohmann::json progress;
+    };
+    std::exception_ptr first_exception;
+    std::vector<ReadyCompletion> ready;
+    ready.reserve(completion_.size());
     for (auto it = completion_.begin(); it != completion_.end();) {
-        const nlohmann::json progress = runtime_.query_progress(it->first);
+        nlohmann::json progress;
+        try {
+            progress = runtime_.query_progress(it->first);
+        } catch (...) {
+            if (!first_exception) first_exception = std::current_exception();
+            ++it;
+            continue;
+        }
         if (!terminal_state(progress)) {
             ++it;
             continue;
         }
-        ready.emplace_back(it->first, std::move(it->second));
+        ready.push_back(
+            ReadyCompletion{it->first, std::move(it->second),
+                            std::move(progress)});
         it = completion_.erase(it);
     }
     for (auto& entry : ready) {
-        const nlohmann::json progress = runtime_.query_progress(entry.first);
-        retire(entry.first);
-        entry.second(entry.first, progress);
+        try {
+            retire(entry.handle);
+        } catch (...) {
+            if (!first_exception) first_exception = std::current_exception();
+            continue;
+        }
+        try {
+            entry.completion(entry.handle, entry.progress);
+        } catch (...) {
+            if (!first_exception) first_exception = std::current_exception();
+        }
     }
-    dispatching_ = false;
+    if (first_exception) std::rethrow_exception(first_exception);
 }
 
 void CoarseDieRuntime::retire(const uint64_t handle) {
@@ -239,8 +299,18 @@ void CoarseDieRuntime::call(EventType, CallData* data_ptr) {
     }
     event_.reset();
     runtime_.advance_to(Sys::boostedTick());
-    dispatch_terminal();
-    schedule_next();
+    std::exception_ptr first_exception;
+    try {
+        dispatch_terminal();
+    } catch (...) {
+        first_exception = std::current_exception();
+    }
+    try {
+        schedule_next();
+    } catch (...) {
+        if (!first_exception) first_exception = std::current_exception();
+    }
+    if (first_exception) std::rethrow_exception(first_exception);
 }
 
 }  // namespace AstraSim

@@ -45,6 +45,9 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "astra-sim/workload/CoarseDieRuntime.hh"
+#include "astra-sim/workload/DieModelAdapter.hh"
+#include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 #include "DieModel.hh"
@@ -61,6 +64,7 @@ Exit code 0 on ALL PASS.
 #include <fstream>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -103,8 +107,14 @@ class FakeQueueNetworkApi final : public AstraNetworkAPI {
     explicit FakeQueueNetworkApi(std::shared_ptr<EventQueue> queue)
         : AstraNetworkAPI(0), queue_(std::move(queue)) {}
 
+    void complete_network_callbacks(bool enabled) {
+        complete_network_callbacks_ = enabled;
+    }
+
     int sim_send(void*, uint64_t, int, int, int, sim_request*,
-                 void (*)(void*), void*) override {
+                 void (*callback)(void*), void* data) override {
+        if (complete_network_callbacks_)
+            queue_->schedule_event(queue_->get_current_time() + 1, callback, data);
         return 0;
     }
 
@@ -135,6 +145,7 @@ class FakeQueueNetworkApi final : public AstraNetworkAPI {
 
   private:
     std::shared_ptr<EventQueue> queue_;
+    bool complete_network_callbacks_ = false;
 };
 
 const char* kDieNodeJson = R"({
@@ -269,10 +280,49 @@ void drain_queue(const std::shared_ptr<EventQueue>& queue) {
     }
 }
 
+std::vector<nlohmann::json> capture_metrics(Sys* sys, uint64_t end_tick) {
+    FILE* file = std::tmpfile();
+    if (file == nullptr) throw std::runtime_error("cannot capture metrics");
+    const int saved = dup(STDOUT_FILENO);
+    std::fflush(stdout);
+    if (saved < 0 || dup2(fileno(file), STDOUT_FILENO) < 0)
+        throw std::runtime_error("cannot redirect metrics");
+    try {
+        MetricCollector::instance().finalize({sys}, end_tick);
+    } catch (...) {
+        dup2(saved, STDOUT_FILENO);
+        close(saved);
+        std::fclose(file);
+        throw;
+    }
+    std::fflush(stdout);
+    dup2(saved, STDOUT_FILENO);
+    close(saved);
+    std::rewind(file);
+    std::string text;
+    char buffer[4096];
+    while (const auto n = std::fread(buffer, 1, sizeof(buffer), file))
+        text.append(buffer, n);
+    std::fclose(file);
+    std::vector<nlohmann::json> records;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line))
+        if (line.rfind("[METRIC] ", 0) == 0)
+            records.push_back(nlohmann::json::parse(line.substr(9)));
+    return records;
+}
+
 }  // namespace
 
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    LoggerFactory::init("empty", "off");
+    // Keep diagnostics visible while the metrics fixture captures stdout.
+    for (const auto* name : {"statistics", "system", "HardwareResource"}) {
+        LoggerFactory::get_logger(name)->sinks().push_back(
+            std::make_shared<spdlog::sinks::stderr_color_sink_mt>());
+    }
     CompletionObserver::instance().set_hook(tick_hook, nullptr);
 
     const std::string tmp_template = "/tmp/die_exec_test_XXXXXX";
@@ -442,6 +492,157 @@ int main() {
         expect_true(g_terminal_fires.count(25) == 0,
                     "E: teardown fires no completion for the in-flight "
                     "node (exactly-zero terminals)");
+    }
+
+    // F: typed COMP and a real COMM_SEND share one coarse Runtime. The
+    // fake network never completes; cancellation/teardown must retain the
+    // delivered prefix and must not publish an outer node completion.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        std::filesystem::path repo(__FILE__);
+        for (unsigned i = 0; i < 5; ++i) repo = repo.parent_path();
+        std::ifstream hardware_file(repo / "extern/die_model/coarse/configs/example_hardware.json");
+        nlohmann::json hardware;
+        hardware_file >> hardware;
+        write_text(config_dir + "/coarse_hardware.json", hardware.dump());
+        write_text(config_dir + "/coarse_system.json", nlohmann::json{
+            {"compute-cost-model", "die"}, {"die-model-profile", "coarse_die_v2"},
+            {"die-model-config", config_dir + "/coarse_hardware.json"},
+            {"hbm-bandwidth-contention", 1}}.dump());
+        Fixture fixture = make_fixture(config_dir, "coarse_system.json");
+        // Observe the cancellation prefix with the existing microbenchmark
+        // history policy; service finalization still rejects live GPU nodes.
+        fixture.sys->workload->stats->configure_online_history_preservation(true);
+        auto& bridge = *fixture.sys->coarse_die_runtime;
+        nlohmann::json task{{"op_kind", "gemm"},
+            {"tensor_shapes", {{"m", 128}, {"n", 128}, {"k", 128}}},
+            {"storage_dtype", "bf16"}};
+        const auto plan = bridge.compile(task);
+        OnlineNode comp;
+        comp.global_id = 40; comp.rank = 0; comp.kind = NodeKind::Compute;
+        comp.node_type = 4; comp.name = "coarse_comp";
+        comp.request_id = "r1"; comp.stage = "prefill";
+        comp.compute.die_task_json = std::make_shared<const nlohmann::json>(task);
+        fixture.source->store().add_node(comp);
+        OnlineNode comm;
+        comm.global_id = 41; comm.rank = 0; comm.kind = NodeKind::CommSend;
+        comm.node_type = 5; comm.name = "coarse_send";
+        comm.request_id = "r1"; comm.stage = "prefill";
+        comm.comm.bytes = 1ULL << 30; comm.comm.src = 0; comm.comm.dst = 0;
+        comm.comm.tag = 0; comm.comm.hbm_charge = true;
+        fixture.source->store().add_node(comm);
+        fixture.sys->workload->issue_dep_free_nodes();
+        nlohmann::json partial;
+        for (unsigned i = 0; i < 32 && !fixture.event_queue->finished(); ++i) {
+            fixture.event_queue->proceed();
+            partial = bridge.counters_at(Sys::boostedTick());
+            const double ops = partial["served_by_category"]["comp"]["int4_ops"].get<double>();
+            if (ops > 0 && ops < plan->summary["executed_int4_ops"].get<double>()) break;
+        }
+        const double delivered = partial["served_by_category"]["comp"]["int4_ops"].get<double>();
+        expect_true(delivered > 0 && delivered < plan->summary["executed_int4_ops"].get<double>(),
+                    "F: real typed COMP has positive partial INT4 service");
+        expect_true(partial["served_by_category"]["comm_send"]["hbm_served_bytes_by_row_direction"][0][0].get<double>() > 0 &&
+                    partial["hbm_shared_ns"].get<double>() > 0,
+                    "F: COMP and declared COMM source read share local HBM");
+        fixture.sys->workload->die_model_adapter()->shutdown();
+        const auto cancelled = bridge.counters_at(Sys::boostedTick());
+        expect_true(cancelled["served_by_category"]["comp"]["int4_ops"].get<double>() == delivered &&
+                    g_terminal_fires.count(40) == 0 && g_terminal_fires.count(41) == 0,
+                    "F: teardown cancellation preserves delivered work without graph terminals");
+        write_text(config_dir + "/coarse_manifest.json", nlohmann::json{
+            {"schema_version", 1}, {"repo_variant", "coarse-lifecycle-fixture"},
+            {"run_mode", "microbenchmark"}, {"run_id", "coarse-lifecycle-fixture"},
+            {"requests", nlohmann::json::array()},
+            {"node_events_by_rank", nlohmann::json::object()},
+            {"planner_memory_peaks", nlohmann::json::array()},
+            {"memory_actions", nlohmann::json::array()}}.dump());
+        MetricCollector::instance().initialize(config_dir + "/coarse_manifest.json", "summary");
+        const auto records = capture_metrics(fixture.sys.get(), Sys::boostedTick());
+        nlohmann::json rank_record, hbm_record;
+        for (const auto& record : records) {
+            if (record.value("type", std::string()) == "rank_compute") rank_record = record;
+            if (record.value("type", std::string()) == "local_hbm") hbm_record = record;
+        }
+        expect_true(!rank_record.is_null() && !hbm_record.is_null(),
+                    "F: MetricCollector emits coarse rank and HBM records");
+        if (!rank_record.is_null() && !hbm_record.is_null()) {
+            const auto& ledger = rank_record["coarse_die_runtime"];
+            expect_true(ledger["served_by_category"] == cancelled["served_by_category"] &&
+                        ledger["accounting_history_complete"] == true,
+                        "F: rank metrics retain cancelled partial typed service");
+            const auto& rows = cancelled["hbm_served_bytes_by_row_direction"];
+            const double total = rows[0][0].get<double>() + rows[0][1].get<double>() +
+                                 rows[1][0].get<double>() + rows[1][1].get<double>();
+            const auto& raw = cancelled["hardware_raw"]["hbm_row_peak_Bps"];
+            const double denominator = (raw[0].get<double>() + raw[1].get<double>()) *
+                                       (static_cast<double>(Sys::boostedTick()) / 1e9);
+            expect_true(std::abs(hbm_record["dram_bw_util_numerator_bytes"].get<double>() - total) < 1e-6 &&
+                        std::abs(hbm_record["dram_bw_util"].get<double>() - total / denominator) < 1e-12 &&
+                        hbm_record["compute_bytes_served"].get<double>() == 0,
+                        "F: total HBM numerator includes DIE and COMM once over raw peaks");
+        }
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires.count(40) == 0 && g_terminal_fires.count(41) == 0,
+                    "F: COMP plus COMM teardown drains stale alarms without callbacks");
+    }
+
+    // G: the normal service path joins a completed network callback with
+    // local HBM, retires both nodes once, and finalizes the lifetime ledger.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        Fixture fixture = make_fixture(config_dir, "coarse_system.json");
+        fixture.network_api->complete_network_callbacks(true);
+        auto& bridge = *fixture.sys->coarse_die_runtime;
+        nlohmann::json task{{"op_kind", "gemm"},
+            {"tensor_shapes", {{"m", 128}, {"n", 128}, {"k", 128}}},
+            {"storage_dtype", "bf16"}};
+        const auto plan = bridge.compile(task);
+        OnlineNode comp;
+        comp.global_id = 50; comp.rank = 0; comp.kind = NodeKind::Compute;
+        comp.node_type = 4; comp.name = "coarse_complete";
+        comp.request_id = "r1"; comp.stage = "prefill";
+        comp.compute.die_task_json = std::make_shared<const nlohmann::json>(task);
+        fixture.source->store().add_node(comp);
+        OnlineNode comm;
+        comm.global_id = 51; comm.rank = 0; comm.kind = NodeKind::CommSend;
+        comm.node_type = 5; comm.name = "coarse_complete_send";
+        comm.request_id = "r1"; comm.stage = "prefill";
+        comm.comm.bytes = 1ULL << 20; comm.comm.src = 0; comm.comm.dst = 0;
+        comm.comm.tag = 0; comm.comm.hbm_charge = true;
+        fixture.source->store().add_node(comm);
+        fixture.sys->workload->issue_dep_free_nodes();
+        drain_queue(fixture.event_queue);
+        const auto completed = bridge.counters_at(Sys::boostedTick());
+        expect_true(g_terminal_fires[50] == 1 && g_terminal_fires[51] == 1 &&
+                    fixture.sys->workload->hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                    !fixture.sys->workload->die_model_adapter()->has_active_die_executions(),
+                    "G: typed COMP and COMM join complete once and release the GPU");
+        const auto& categories = completed["served_by_category"];
+        expect_true(categories["comp"]["int4_ops"].get<double>() ==
+                        plan->summary["executed_int4_ops"].get<double>() &&
+                    categories["comm_send"]["hbm_served_bytes_by_row_direction"][0][0].get<double>() +
+                        categories["comm_send"]["hbm_served_bytes_by_row_direction"][1][0].get<double>() ==
+                        static_cast<double>(comm.comm.bytes),
+                    "G: retired COMP and COMM conserve their typed served work");
+        nlohmann::json manifest;
+        std::ifstream(config_dir + "/coarse_manifest.json") >> manifest;
+        manifest["run_mode"] = "service";
+        write_text(config_dir + "/coarse_manifest.json", manifest.dump());
+        MetricCollector::instance().initialize(config_dir + "/coarse_manifest.json", "summary");
+        const auto records = capture_metrics(fixture.sys.get(), Sys::boostedTick());
+        bool matched = false;
+        for (const auto& record : records)
+            if (record.value("type", std::string()) == "rank_compute")
+                matched = record["coarse_die_runtime"]["served_by_category"] == categories;
+        expect_true(matched, "G: normal service finalization retains retired coarse counters");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires[50] == 1 && g_terminal_fires[51] == 1,
+                    "G: completed teardown publishes no duplicate terminals");
     }
 
     std::error_code ec;

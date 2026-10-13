@@ -1,0 +1,8 @@
+[ 50%] Built target die_model
+[100%] Building CXX object astra_sim_build/extern/die_model/CMakeFiles/die_model_cabi.dir/src/Capi.cc.o
+[100%] Linking CXX shared library ../../../lib/libdie_model_cabi.so
+[100%] Built target die_model_cabi
+[ 50%] Built target coarse_die
+[ 50%] Building CXX object astra_sim_build/extern/die_model/coarse/CMakeFiles/coarse_die_cabi.dir/src/Capi.cc.o
+[100%] Linking CXX shared library ../../../../lib/libcoarse_die_cabi.so
+[100%] Built target coarse_die_cabi

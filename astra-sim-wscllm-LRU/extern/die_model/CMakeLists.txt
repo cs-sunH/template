@@ -98,3 +98,7 @@ add_test(NAME capi_test COMMAND capi_test)
 # (contract §1: JSON mirrors are checked against the code constants).
 target_compile_definitions(configs_consistency_test PRIVATE
     DIE_MODEL_CONFIGS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/configs")
+
+# Canonical coarse_die_v2 release (synced from template/die).
+set(COARSE_DIE_BUILD_TESTS OFF CACHE BOOL "Standalone tests live in template/die")
+add_subdirectory(coarse)

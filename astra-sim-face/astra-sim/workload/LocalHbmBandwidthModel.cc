@@ -101,7 +101,7 @@ LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
             sys->coarse_die_runtime->cancel(entry.first,
                                              Sys::boostedTick(), false);
             if (entry.second != nullptr) {
-                workload->                delete entry.second;
+                delete entry.second;
             }
         }
         coarse_jobs_.clear();
@@ -422,9 +422,11 @@ void LocalHbmBandwidthModel::issue_job(JobKind kind,
                 "coarse_die_v2 local endpoint requires nonzero bytes and "
                 "handler data");
         }
-        const bool read = kind == JobKind::COMM_READ || kind == JobKind::POOL_READ;
-        const bool is_comm = kind == JobKind::COMM_READ || kind == JobKind::COMM_WRITE;
-        const bool is_pool = kind == JobKind::POOL_READ || kind == JobKind::POOL_WRITE;
+        if (kind != JobKind::COMM_READ && kind != JobKind::COMM_WRITE) {
+            throw std::runtime_error(
+                "coarse_die_v2 FACE endpoints require COMM_READ or COMM_WRITE");
+        }
+        const bool read = kind == JobKind::COMM_READ;
         const uint64_t node_id = wlhd->node_id;
         const std::string identity = std::to_string(sys->id) + ":" +
             std::to_string(node_id) + ":" + std::to_string(static_cast<int>(kind));
@@ -440,7 +442,7 @@ void LocalHbmBandwidthModel::issue_job(JobKind kind,
         nlohmann::json endpoint = {
             {"endpoint_id", endpoint_id},
             {"transaction_id", transaction_id},
-            {"owner_kind", is_comm ? "comm" : (is_pool ? "pool" : "restore")},
+            {"owner_kind", "comm"},
             {"direction", read ? "read" : "write"},
             {"physical_bytes", bytes},
             {"path_class", read ? "hbm_to_edge" : "edge_to_hbm"},
@@ -457,9 +459,6 @@ void LocalHbmBandwidthModel::issue_job(JobKind kind,
                     coarse_hbm_read_write_bytes(progress);
                 if (kind == JobKind::COMM_READ) coarse_comm_read_served_ += read_bytes;
                 else if (kind == JobKind::COMM_WRITE) coarse_comm_write_served_ += write_bytes;
-                else if (kind == JobKind::RESTORE) coarse_restore_served_ += write_bytes;
-                else if (kind == JobKind::POOL_READ) coarse_pool_read_served_ += read_bytes;
-                else if (kind == JobKind::POOL_WRITE) coarse_pool_write_served_ += write_bytes;
                 workload->on_local_hbm_job_complete(wlhd, kind);
             });
         if (!coarse_jobs_.emplace(handle, wlhd).second) {
