@@ -50,3 +50,5 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 2026-10-13 持续开发：恢复默认构建、signed credit 和端点快照，扩充 GEMM/FFN/Attention 独立计数测试，优化候选 Runtime 驱动；边界逻辑量、物理流量、保守槽位容量与粒度证据仍分别报告。手工 grouped-wave Runtime 的 oracle 结果不能给实际编译模板颁发证书。
 
 - 2026-10-13 集成检查点：五仓统一发布 18 文件固定源，实际核心库/Online 构建和选定 17/17 CTest 通过；wscllm 新增 COMP+COMM cancellation/join/typed metrics 真实夹具。构建当前 ABI 后配置 83/83 pass、无跳过；全量业务、workspace/JOINT coarse projection 与模型精度仍未验收。
+
+- 2026-10-13 最终交接：用户明确要求停止，保存 GEMM slowest-cohort 预算和 typed task 校验，公共库 17/17 CTest；五仓最新 19 文件固定源。完整计划/失败 oracle/工程边界及关键 scratch 已写 HANDOFF 与 analysis，最终 GitHub 状态须核对交接 PR。

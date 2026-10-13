@@ -1,0 +1,219 @@
+[ 23%] Built target yaml-cpp
+[ 30%] Built target Analytical_Congestion_Aware
+[ 30%] Building CXX object astra_sim_build/extern/die_model/coarse/CMakeFiles/coarse_die.dir/src/Hardware.cc.o
+[ 30%] Building CXX object astra_sim_build/extern/die_model/coarse/CMakeFiles/coarse_die.dir/src/Plan.cc.o
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Plan.cc: In function ‘std::shared_ptr<const coarse_die::Plan> coarse_die::plan_from_json(const nlohmann::json&)’:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Plan.cc:286:15: warning: possibly dangling reference to a temporary [-Wdangling-reference]
+  286 |   const auto& hfp = require_member(j, "hardware_fingerprint", "plan");
+      |               ^~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Plan.cc:286:35: note: the temporary was destroyed at the end of the full expression ‘coarse_die::{anonymous}::require_member((* & j), ((const char*)"hardware_fingerprint"), std::__cxx11::basic_string<char>(((const char*)"plan"), std::allocator<char>()))’
+  286 |   const auto& hfp = require_member(j, "hardware_fingerprint", "plan");
+      |                     ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Plan.cc:290:15: warning: possibly dangling reference to a temporary [-Wdangling-reference]
+  290 |   const auto& epoch_array = require_member(j, "epochs", "plan");
+      |               ^~~~~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Plan.cc:290:43: note: the temporary was destroyed at the end of the full expression ‘coarse_die::{anonymous}::require_member((* & j), ((const char*)"epochs"), std::__cxx11::basic_string<char>(((const char*)"plan"), std::allocator<char>()))’
+  290 |   const auto& epoch_array = require_member(j, "epochs", "plan");
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Plan.cc:355:15: warning: possibly dangling reference to a temporary [-Wdangling-reference]
+  355 |   const auto& fingerprint = require_member(j, "fingerprint", "plan");
+      |               ^~~~~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Plan.cc:355:43: note: the temporary was destroyed at the end of the full expression ‘coarse_die::{anonymous}::require_member((* & j), ((const char*)"fingerprint"), std::__cxx11::basic_string<char>(((const char*)"plan"), std::allocator<char>()))’
+  355 |   const auto& fingerprint = require_member(j, "fingerprint", "plan");
+      |                             ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~
+[ 34%] Building CXX object astra_sim_build/extern/die_model/coarse/CMakeFiles/coarse_die.dir/src/Compiler.cc.o
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Compiler.cc:23:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   23 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Compiler.cc: In function ‘nlohmann::json coarse_die::{anonymous}::normalize_new_task(const nlohmann::json&, const coarse_die::Hardware&)’:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Compiler.cc:374:15: warning: possibly dangling reference to a temporary [-Wdangling-reference]
+  374 |   const auto& shape_raw = required(raw, "tensor_shapes", "task");
+      |               ^~~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Compiler.cc:374:35: note: the temporary was destroyed at the end of the full expression ‘coarse_die::{anonymous}::required((* & raw), ((const char*)"tensor_shapes"), std::__cxx11::basic_string<char>(((const char*)"task"), std::allocator<char>()))’
+  374 |   const auto& shape_raw = required(raw, "tensor_shapes", "task");
+      |                           ~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[ 34%] Building CXX object astra_sim_build/extern/die_model/coarse/CMakeFiles/coarse_die.dir/src/Mapping.cc.o
+In file included from /workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:2:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/GemmTailBudget.hh:27:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   27 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:22:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   22 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc: In function ‘std::pair<__int128 unsigned, __int128 unsigned> coarse_die::detail::{anonymous}::prefix_slots_one(const Span&, u64, u64)’:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:287:9: warning: ISO C++ does not support ‘__int128’ for ‘base’ [-Wpedantic]
+  287 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |         ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:287:37: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  287 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |                                     ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:287:67: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  287 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |                                                                   ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:291:11: warning: ISO C++ does not support ‘__int128’ for ‘first_reach’ [-Wpedantic]
+  291 |     const __int128 first_reach = base + static_cast<__int128>(r + 1) * tq;
+      |           ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:291:53: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  291 |     const __int128 first_reach = base + static_cast<__int128>(r + 1) * tq;
+      |                                                     ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:294:13: warning: ISO C++ does not support ‘__int128’ for ‘numerator’ [-Wpedantic]
+  294 |       const __int128 numerator = 1 - first_reach;
+      |             ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:295:66: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  295 |       first_positive = static_cast<u64>((numerator + static_cast<__int128>(stride) - 1) / static_cast<__int128>(stride));
+      |                                                                  ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:295:103: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  295 |       first_positive = static_cast<u64>((numerator + static_cast<__int128>(stride) - 1) / static_cast<__int128>(stride));
+      |                                                                                                       ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:299:11: warning: ISO C++ does not support ‘__int128’ for ‘positive_reach’ [-Wpedantic]
+  299 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |           ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:299:63: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  299 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |                                                               ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:299:103: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  299 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |                                                                                                       ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:313:11: warning: ISO C++ does not support ‘__int128’ for ‘reach’ [-Wpedantic]
+  313 |     const __int128 reach = base + s.q;
+      |           ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:321:11: warning: ISO C++ does not support ‘__int128’ for ‘reach’ [-Wpedantic]
+  321 |     const __int128 reach = base + s.q;
+      |           ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc: In function ‘void coarse_die::detail::{anonymous}::push_epoch(coarse_die::Plan&, const coarse_die::Hardware&, Flow, Flow, Flow, u64, u64, u64, u64, double, double, const std::string&)’:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:691:3: warning: this ‘if’ clause does not guard... [-Wmisleading-indentation]
+  691 |   if(has(l))epoch.activities.push_back(l);if(has(c))epoch.activities.push_back(c);if(has(s))epoch.activities.push_back(s);
+      |   ^~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:691:43: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the ‘if’
+  691 |   if(has(l))epoch.activities.push_back(l);if(has(c))epoch.activities.push_back(c);if(has(s))epoch.activities.push_back(s);
+      |                                           ^~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc: In function ‘std::vector<std::shared_ptr<coarse_die::Plan> > coarse_die::detail::{anonymous}::enumerate_gemm(const coarse_die::Hardware&, const nlohmann::json&, const Topology&, u64, u64, u64)’:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:984:13: warning: unused variable ‘ncore’ [-Wunused-variable]
+  984 |   const u64 ncore=du(hw,"die","core_count");
+      |             ^~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc: In lambda function:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1109:15: warning: ISO C++ does not support ‘__int128’ for ‘threshold’ [-Wpedantic]
+ 1109 |         const __int128 threshold=static_cast<__int128>(((s.kv-1)/tk)*tk+1)-
+      |               ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1109:46: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1109 |         const __int128 threshold=static_cast<__int128>(((s.kv-1)/tk)*tk+1)-
+      |                                              ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1110:26: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1110 |             (static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |                          ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1110:54: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1110 |             (static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |                                                      ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1117:59: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1117 |         const bool sat_tail=qtail&&threshold<=static_cast<__int128>(s.q);
+      |                                                           ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1126:15: warning: ISO C++ does not support ‘__int128’ for ‘threshold’ [-Wpedantic]
+ 1126 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |               ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1126:46: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1126 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |                                              ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1126:73: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1126 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |                                                                         ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1133:59: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1133 |         const bool sat_tail=qtail&&threshold<=static_cast<__int128>(s.q);
+      |                                                           ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc: In lambda function:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1154:15: warning: ISO C++ does not support ‘__int128’ for ‘threshold’ [-Wpedantic]
+ 1154 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |               ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1154:46: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1154 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |                                              ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1154:73: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1154 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |                                                                         ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1161:59: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1161 |         const bool sat_tail=qtail&&threshold<=static_cast<__int128>(s.q);
+      |                                                           ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1176:13: warning: ISO C++ does not support ‘__int128’ for ‘key_block_end’ [-Wpedantic]
+ 1176 |       const __int128 key_block_end=static_cast<__int128>(ceildiv(s.kv,tk)-1)*static_cast<__int128>(tk)+1;
+      |             ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1176:48: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1176 |       const __int128 key_block_end=static_cast<__int128>(ceildiv(s.kv,tk)-1)*static_cast<__int128>(tk)+1;
+      |                                                ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1176:90: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1176 |       const __int128 key_block_end=static_cast<__int128>(ceildiv(s.kv,tk)-1)*static_cast<__int128>(tk)+1;
+      |                                                                                          ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1177:13: warning: ISO C++ does not support ‘__int128’ for ‘threshold’ [-Wpedantic]
+ 1177 |       const __int128 threshold=key_block_end-(static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |             ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1177:59: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1177 |       const __int128 threshold=key_block_end-(static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |                                                           ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1177:87: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1177 |       const __int128 threshold=key_block_end-(static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |                                                                                       ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1185:56: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1185 |       const bool sat_tail=tail&&threshold<=static_cast<__int128>(s.q);
+      |                                                        ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1190:37: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1190 |       const u128 before=static_cast<__int128>(s.ks)>static_cast<__int128>(s.qs)
+      |                                     ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1190:65: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1190 |       const u128 before=static_cast<__int128>(s.ks)>static_cast<__int128>(s.qs)
+      |                                                                 ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1191:42: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1191 |           ?static_cast<u128>(static_cast<__int128>(s.ks)-static_cast<__int128>(s.qs)):0;
+      |                                          ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:1191:70: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1191 |           ?static_cast<u128>(static_cast<__int128>(s.ks)-static_cast<__int128>(s.qs)):0;
+      |                                                                      ^~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc: At global scope:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:490:36: warning: ‘std::pair<long double, long double> coarse_die::detail::{anonymous}::route_moments(const Topology&, const AxisDist&, u64, bool)’ defined but not used [-Wunused-function]
+  490 | std::pair<long double,long double> route_moments(const Topology& topo,
+      |                                    ^~~~~~~~~~~~~
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc:331:6: warning: ‘coarse_die::detail::{anonymous}::u128 coarse_die::detail::{anonymous}::attention_slots(const std::vector<Span>&, u64, u64)’ defined but not used [-Wunused-function]
+  331 | u128 attention_slots(const std::vector<Span>& spans, u64 tq, u64 tk) {
+      |      ^~~~~~~~~~~~~~~
+[ 34%] Building CXX object astra_sim_build/extern/die_model/coarse/CMakeFiles/coarse_die.dir/src/Execution.cc.o
+[ 34%] Linking CXX static library libcoarse_die.a
+[ 34%] Built target coarse_die
+[ 34%] Built target fmt
+[ 42%] Built target spdlog
+[ 46%] Built target die_model
+[ 46%] Building CXX object astra_sim_build/CMakeFiles/AstraSim.dir/astra-sim/system/Sys.cc.o
+[ 46%] Building CXX object astra_sim_build/CMakeFiles/AstraSim.dir/astra-sim/workload/CoarseDieRuntime.cc.o
+[ 46%] Building CXX object astra_sim_build/CMakeFiles/AstraSim.dir/astra-sim/workload/DieModelAdapter.cc.o
+[ 50%] Building CXX object astra_sim_build/CMakeFiles/AstraSim.dir/astra-sim/workload/LocalHbmBandwidthModel.cc.o
+[ 50%] Linking CXX static library ../lib/libAstraSim.a
+[ 88%] Built target AstraSim
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_Online
+[100%] Built target AstraSim_Analytical_Congestion_Aware_Online
+[ 22%] Built target yaml-cpp
+[ 29%] Built target Analytical_Congestion_Aware
+[ 33%] Built target coarse_die
+[ 33%] Built target fmt
+[ 40%] Built target spdlog
+[ 44%] Built target die_model
+[ 85%] Built target AstraSim
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+[ 23%] Built target yaml-cpp
+[ 30%] Built target Analytical_Congestion_Aware
+[ 34%] Built target coarse_die
+[ 34%] Built target fmt
+[ 42%] Built target spdlog
+[ 46%] Built target die_model
+[ 88%] Built target AstraSim
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[ 23%] Built target yaml-cpp
+[ 30%] Built target Analytical_Congestion_Aware
+[ 34%] Built target coarse_die
+[ 34%] Built target fmt
+[ 42%] Built target spdlog
+[ 46%] Built target die_model
+[ 88%] Built target AstraSim
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+[100%] Built target coarse_die
+[100%] Building CXX object astra_sim_build/extern/die_model/coarse/CMakeFiles/coarse_die_cabi.dir/src/Capi.cc.o
+[100%] Linking CXX shared library ../../../../lib/libcoarse_die_cabi.so
+[100%] Built target coarse_die_cabi

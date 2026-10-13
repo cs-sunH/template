@@ -1,0 +1,81 @@
+{
+  "schema": "coarse_die_final_handoff_v1",
+  "date": "2026-10-13",
+  "previous_shared_commit": "ac2ea4188359fa7760e9929c78c2df7cb92c5703",
+  "source_release": {
+    "schema": "coarse_die_release_v2",
+    "source_digest": "d9beb83c59d5cbeec90644f07b773787100facf427d9e4801508abe239700a0b",
+    "files": {
+      "CMakeLists.txt": "fb2fdcc513423a61c481cced4356a150d97adfacee89753d146ce27dfcca4625",
+      "include/coarse_die/Capi.h": "52dab6731caaa6c80fdd1ff168c207d9fd63f7b56a2ba076437de7a1b624b61b",
+      "include/coarse_die/Execution.hh": "3f1168eea865882473f94c22f755553622761e0eda6a43ba2a7f0e789559f51b",
+      "include/coarse_die/Hardware.hh": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+      "include/coarse_die/Memory.hh": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+      "include/coarse_die/Plan.hh": "be6ca7a1daed88a0781cac315066205964caa4e6f3c9b82838444e1e6259dfa0",
+      "src/Capi.cc": "89b1d7b80e8d21928842252672d50fb0447bd1eb3f9b5a33c951c56ee216b4f1",
+      "src/Compiler.cc": "a820118a5187972ab7e48ef1e099504b75ff2661e880eeff3dc72744236f012f",
+      "src/Execution.cc": "d3446ff0276ebd1713b659f591c2afd10688afe94930c0cffdc42af93df551ad",
+      "src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+      "src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+      "src/Mapping.cc": "24dbe2f1da1d17e27593b72d41ede72f5339a10ce69fc1d6a7cb952188dd25d3",
+      "src/Plan.cc": "cc750ff9a51e5c7aeb7aeabdc6f79f24f7c6234f38c99e64a6c65a70a7ce1db3",
+      "configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+      "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+      "configs/core64.json": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+      "configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+      "configs/example_hardware.json": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+      "configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+    }
+  },
+  "public_default_all_targets_build": "passed",
+  "public_ctest_passed": 17,
+  "repository_validation": {
+    "astra-sim-wscllm": {
+      "core_and_online_build": "passed",
+      "coarse_cabi_build": "passed",
+      "selected_ctest_passed": 3,
+      "config_unittest_passed": 20,
+      "config_unittest_skipped": 0,
+      "full_business_acceptance": "not_run"
+    },
+    "astra-sim-wscllm-LRU": {
+      "core_and_online_build": "passed",
+      "coarse_cabi_build": "passed",
+      "selected_ctest_passed": 3,
+      "config_unittest_passed": 15,
+      "config_unittest_skipped": 0,
+      "full_business_acceptance": "not_run"
+    },
+    "astra-sim-face": {
+      "core_and_online_build": "passed",
+      "coarse_cabi_build": "passed",
+      "selected_ctest_passed": 3,
+      "config_unittest_passed": 18,
+      "config_unittest_skipped": 0,
+      "full_business_acceptance": "not_run"
+    },
+    "astra-sim-face-LRU": {
+      "core_and_online_build": "passed",
+      "coarse_cabi_build": "passed",
+      "selected_ctest_passed": 3,
+      "config_unittest_passed": 17,
+      "config_unittest_skipped": 0,
+      "full_business_acceptance": "not_run"
+    },
+    "astra-sim-joint": {
+      "core_and_online_build": "passed",
+      "coarse_cabi_build": "passed",
+      "selected_ctest_passed": 5,
+      "config_unittest_passed": 13,
+      "config_unittest_skipped": 0,
+      "full_business_acceptance": "not_run"
+    }
+  },
+  "compiled_oracle_status": "failed",
+  "production_E8_E16": "not_run_unavailable",
+  "scratch_sanitizers": "agent_verified_independent_math_helper_only",
+  "production_sanitizers": "not_run",
+  "github_actions_status": "not_verified",
+  "configuration_environment": "Protobuf CONFIG prefix 3.21.12; same PATH/CMAKE_PREFIX_PATH/PROTOBUF_FROM_SOURCE=True during configure and build; current per-repository ABI paths explicitly selected in config tests",
+  "remaining_acceptance": "see HANDOFF.md and saved analysis README"
+}

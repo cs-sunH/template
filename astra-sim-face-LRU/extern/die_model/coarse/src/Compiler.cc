@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace coarse_die {
@@ -263,6 +265,20 @@ nlohmann::json normalize_old_spec(const nlohmann::json& spec,
   return normalized;
 }
 
+void check_uint_aliases(const nlohmann::json& object,
+                       std::initializer_list<const char*> keys,
+                       const std::string& path, bool allow_zero = false) {
+  bool present = false;
+  u64 value = 0;
+  for (const char* key : keys) {
+    if (!object.contains(key)) continue;
+    const u64 candidate = uint_value(object.at(key), path + "." + key, allow_zero);
+    if (present && candidate != value) fail(path, "conflicting integer aliases");
+    value = candidate;
+    present = true;
+  }
+}
+
 nlohmann::json normalize_new_spans(const nlohmann::json& raw) {
   const std::string path = "task.spans";
   if (!raw.is_array()) fail(path, "expected an array");
@@ -276,6 +292,8 @@ nlohmann::json normalize_new_spans(const nlohmann::json& raw) {
       reject_unknown(s, {"run", "batch", "request_id_prefix", "first_index"}, sp);
       const auto& run = required(s, "run", sp);
       reject_unknown(run, {"q_len", "q_tokens", "kv_len", "kv_tokens", "kv_first", "kv_stride", "q_start_pos", "kv_start_pos", "count"}, sp + ".run");
+      check_uint_aliases(run, {"q_len", "q_tokens"}, sp + ".run");
+      check_uint_aliases(run, {"kv_len", "kv_tokens", "kv_first"}, sp + ".run");
       const char* qkey = run.contains("q_len") ? "q_len" : "q_tokens";
       const char* kvkey = run.contains("kv_len") ? "kv_len" : (run.contains("kv_first") ? "kv_first" : "kv_tokens");
       const u64 q = uint_value(required(run, qkey, sp + ".run"), sp + ".run." + qkey, false);
@@ -295,6 +313,11 @@ nlohmann::json normalize_new_spans(const nlohmann::json& raw) {
       continue;
     }
     reject_unknown(s, {"batch", "q_len", "q_tokens", "kv_len", "kv_tokens", "q_start_pos", "query_start", "kv_start_pos", "kv_start", "count", "request_id"}, sp);
+    check_uint_aliases(s, {"q_len", "q_tokens"}, sp);
+    check_uint_aliases(s, {"kv_len", "kv_tokens"}, sp);
+    check_uint_aliases(s, {"q_start_pos", "query_start"}, sp, true);
+    check_uint_aliases(s, {"kv_start_pos", "kv_start"}, sp, true);
+    check_uint_aliases(s, {"batch", "count"}, sp);
     const char* qkey = s.contains("q_len") ? "q_len" : "q_tokens";
     const char* kvkey = s.contains("kv_len") ? "kv_len" : "kv_tokens";
     const u64 q = uint_value(required(s, qkey, sp), sp + "." + qkey, false);
@@ -315,6 +338,25 @@ nlohmann::json normalize_new_spans(const nlohmann::json& raw) {
   return spans;
 }
 
+void normalize_shape_alias(nlohmann::json& shapes, const char* canonical,
+                           std::initializer_list<const char*> aliases) {
+  bool present = false;
+  u64 value = 0;
+  for (const char* key : aliases) {
+    if (!shapes.contains(key)) continue;
+    const u64 candidate = uint_value(shapes.at(key),
+        std::string("task.tensor_shapes.") + key, false);
+    if (present && candidate != value)
+      fail(std::string("task.tensor_shapes.") + canonical,
+           "conflicting dimension aliases");
+    value = candidate;
+    present = true;
+  }
+  if (!present) return;
+  for (const char* key : aliases) shapes.erase(key);
+  shapes[canonical] = value;
+}
+
 nlohmann::json normalize_new_task(const nlohmann::json& raw,
                                   const Hardware& hardware) {
   reject_unknown(raw, {"schema", "op_kind", "region_ops", "phase", "tensor_shapes", "spans", "tp_slice", "storage_dtype", "execution_profile", "layer_instances", "weight_passes", "fusion_policy", "residency", "readiness_scope", "graph_identity", "causal", "math", "execution_profile_id"}, "task");
@@ -322,52 +364,98 @@ nlohmann::json normalize_new_task(const nlohmann::json& raw,
   if (raw.contains("region_ops")) fail("task.region_ops", "untyped region_ops are unsupported; provide a supported op_kind/typed region");
   const std::string raw_op = string_value(required(raw, "op_kind", "task"), "task.op_kind");
   const std::string op = raw_op == "swiglu" ? "ffn_region" : raw_op;
+  const std::set<std::string> supported_ops = {
+      "gemm", "norm", "residual", "mlp_activation", "scale_mask", "softmax",
+      "qkv_rope", "mlp_up", "mlp_down", "o_proj", "logits", "ffn_region",
+      "attention", "attention_region", "qk", "av"};
+  if (!supported_ops.count(op)) fail("task.op_kind", "unsupported operator \"" + op + "\"");
   const std::string phase = raw.contains("phase") ? string_value(raw.at("phase"), "task.phase") : "prefill";
   if (phase != "prefill" && phase != "decode" && phase != "kv_recompute") fail("task.phase", "unsupported phase \"" + phase + "\"");
   const auto& shape_raw = required(raw, "tensor_shapes", "task");
   if (!shape_raw.is_object()) fail("task.tensor_shapes", "expected object");
+  reject_unknown(shape_raw, {"m", "M", "n", "N", "k", "K", "hidden", "h",
+      "q_heads", "num_q_heads", "q_heads_local", "kv_heads", "num_kv_heads",
+      "kv_heads_local", "head_dim", "ffn", "ffn_local", "vocab", "vocab_local",
+      "norm_type", "mlp_variant", "position_encoding"}, "task.tensor_shapes");
   nlohmann::json shapes = shape_raw;
+  normalize_shape_alias(shapes, "m", {"m", "M"});
+  normalize_shape_alias(shapes, "n", {"n", "N"});
+  normalize_shape_alias(shapes, "k", {"k", "K"});
+  normalize_shape_alias(shapes, "hidden", {"hidden", "h"});
+  normalize_shape_alias(shapes, "q_heads", {"q_heads", "num_q_heads", "q_heads_local"});
+  normalize_shape_alias(shapes, "kv_heads", {"kv_heads", "num_kv_heads", "kv_heads_local"});
+  normalize_shape_alias(shapes, "ffn", {"ffn", "ffn_local"});
+  normalize_shape_alias(shapes, "vocab", {"vocab", "vocab_local"});
+  normalize_shape_alias(shapes, "head_dim", {"head_dim"});
   if (raw_op == "swiglu") {
     if (shapes.contains("mlp_variant") && shapes.at("mlp_variant") != "swiglu")
       fail("task.tensor_shapes.mlp_variant", "conflicts with op_kind=swiglu");
     shapes["mlp_variant"] = "swiglu";
   }
-  const auto get_alias = [&](const char* primary, const char* fallback, u64 default_value) -> u64 {
-    if (shapes.contains(primary)) return uint_value(shapes.at(primary), std::string("task.tensor_shapes.") + primary, primary[0] == 'm' && std::string(primary) == "m" ? true : false);
-    if (fallback && shapes.contains(fallback)) return uint_value(shapes.at(fallback), std::string("task.tensor_shapes.") + fallback, false);
-    return default_value;
-  };
   const u64 layers = raw.contains("layer_instances") ? uint_value(raw.at("layer_instances"), "task.layer_instances", false) : 1;
   const u64 passes = raw.contains("weight_passes") ? uint_value(raw.at("weight_passes"), "task.weight_passes", false) : 1;
   const std::string profile = raw.contains("execution_profile") ? string_value(raw.at("execution_profile"), "task.execution_profile") :
                               (raw.contains("execution_profile_id") ? string_value(raw.at("execution_profile_id"), "task.execution_profile_id") : inherited_execution_profile(hardware));
+  if (raw.contains("execution_profile_id") &&
+      string_value(raw.at("execution_profile_id"), "task.execution_profile_id") != profile)
+    fail("task.execution_profile", "conflicts with execution_profile_id");
   if (profile != "int4_matrix_vec_fp32_assumed_v1" && profile != "fp32_vec_matrix_assumed_v1") fail("task.execution_profile", "unsupported execution profile \"" + profile + "\"");
   nlohmann::json dtypes = raw.contains("storage_dtype") ? dtype_object(raw.at("storage_dtype"), "task.storage_dtype") : dtype_object("bf16", "task.storage_dtype");
   nlohmann::json tp = raw.contains("tp_slice") ? raw.at("tp_slice") : nlohmann::json::object();
-  if (!tp.is_object()) fail("task.tp_slice", "expected object");
-  const u64 qheads = get_alias("q_heads", "num_q_heads", 0);
-  const u64 kvheads = get_alias("kv_heads", "num_kv_heads", 0);
-  const u64 ffn = get_alias("ffn", "ffn_local", 0);
-  const u64 vocab = get_alias("vocab", "vocab_local", 0);
-  if (!tp.contains("q_heads_local") && qheads) tp["q_heads_local"] = qheads;
-  if (!tp.contains("kv_heads_local") && kvheads) tp["kv_heads_local"] = kvheads;
-  if (!tp.contains("ffn_local") && ffn) tp["ffn_local"] = ffn;
-  if (!tp.contains("vocab_local") && vocab) tp["vocab_local"] = vocab;
+  reject_unknown(tp, {"tensor_parallel", "tensor_parallel_rank", "q_heads_local",
+      "kv_heads_local", "ffn_local", "vocab_local"}, "task.tp_slice");
   for (const char* key : {"tensor_parallel", "tensor_parallel_rank", "q_heads_local", "kv_heads_local", "ffn_local", "vocab_local"}) {
-    if (tp.contains(key)) tp[key] = uint_value(tp.at(key), std::string("task.tp_slice.") + key, std::string(key) != "tensor_parallel_rank");
+    if (tp.contains(key)) tp[key] = uint_value(tp.at(key), std::string("task.tp_slice.") + key, std::string(key) != "tensor_parallel");
+  }
+  for (const auto& pair : {std::pair{"q_heads", "q_heads_local"},
+                          std::pair{"kv_heads", "kv_heads_local"},
+                          std::pair{"ffn", "ffn_local"},
+                          std::pair{"vocab", "vocab_local"}}) {
+    if (!shapes.contains(pair.first)) continue;
+    if (tp.contains(pair.second) && tp.at(pair.second) != shapes.at(pair.first))
+      fail(std::string("task.tp_slice.") + pair.second,
+           "must match the actual local tensor_shapes dimension");
+    tp[pair.second] = shapes.at(pair.first);
   }
   if (!tp.contains("tensor_parallel")) tp["tensor_parallel"] = 1;
   if (!tp.contains("tensor_parallel_rank")) tp["tensor_parallel_rank"] = 0;
   if (uint_value(tp.at("tensor_parallel"), "task.tp_slice.tensor_parallel", false) <= uint_value(tp.at("tensor_parallel_rank"), "task.tp_slice.tensor_parallel_rank")) fail("task.tp_slice", "tensor_parallel_rank must be less than tensor_parallel");
-  if (op == "gemm") {
-    const u64 m = get_alias("m", "M", 0);
-    const u64 n = get_alias("n", "N", 0);
-    const u64 k = get_alias("k", "K", 0);
-    if (m == 0 || n == 0 || k == 0) fail("task.tensor_shapes", "gemm requires positive m, n, and k");
-    shapes["m"] = m; shapes["n"] = n; shapes["k"] = k;
-  }
   const nlohmann::json spans = raw.contains("spans") ? normalize_new_spans(raw.at("spans")) : nlohmann::json::array();
   if ((op == "attention" || op == "attention_region" || op == "qk" || op == "av" || op == "scale_mask" || op == "softmax") && spans.empty()) fail("task.spans", "attention requires at least one span");
+  const bool row_op = op != "gemm" && op != "attention" &&
+      op != "attention_region" && op != "qk" && op != "av";
+  if (row_op && !spans.empty()) {
+    u128 rows = 0;
+    for (const auto& span : spans)
+      rows = checked_add(rows, checked_mul(span.at("q_tokens").get<u64>(),
+          span.at("count").get<u64>(), "task.spans query rows"), "task.spans query rows");
+    const u64 local_rows = u64_checked(rows, "task.spans query rows");
+    if (shapes.contains("m") && shapes.at("m") != local_rows)
+      fail("task.tensor_shapes.m", "must match the query rows declared by spans");
+    shapes["m"] = local_rows;
+  }
+  const auto need = [&](std::initializer_list<const char*> keys) {
+    for (const char* key : keys)
+      (void)uint_value(required(shapes, key, "task.tensor_shapes"),
+                       std::string("task.tensor_shapes.") + key, false);
+  };
+  if (op == "gemm") need({"m", "n", "k"});
+  else if (op == "norm" || op == "residual" || op == "o_proj") need({"m", "hidden"});
+  else if (op == "mlp_activation") need({"m", "ffn"});
+  else if (op == "mlp_up" || op == "mlp_down" || op == "ffn_region") need({"m", "hidden", "ffn"});
+  else if (op == "logits") need({"m", "hidden", "vocab"});
+  else if (op == "qkv_rope") need({"m", "hidden", "q_heads", "kv_heads", "head_dim"});
+  else if (op == "scale_mask" || op == "softmax") need({"q_heads"});
+  else need({"q_heads", "kv_heads", "head_dim"});
+  for (const auto& variant : {std::pair{"norm_type", std::set<std::string>{"rmsnorm", "layernorm"}},
+                             std::pair{"mlp_variant", std::set<std::string>{"swiglu", "gelu"}},
+                             std::pair{"position_encoding", std::set<std::string>{"rope", "none"}}}) {
+    if (shapes.contains(variant.first) &&
+        !variant.second.count(string_value(shapes.at(variant.first), std::string("task.tensor_shapes.") + variant.first)))
+      fail(std::string("task.tensor_shapes.") + variant.first, "unsupported variant");
+  }
+  if (raw.contains("causal") && !raw.at("causal").is_boolean())
+    fail("task.causal", "expected boolean");
   const std::string fusion = raw.contains("fusion_policy") ? string_value(raw.at("fusion_policy"), "task.fusion_policy") : "auto";
   if (fusion != "auto" && fusion != "none" && fusion != "materialized" && fusion != "fused") fail("task.fusion_policy", "unsupported fusion policy \"" + fusion + "\"");
   nlohmann::json normalized = {{"schema", "coarse_die_task_v2"}, {"op_kind", op}, {"phase", phase},

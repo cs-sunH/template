@@ -1,4 +1,5 @@
 #include "coarse_die/Plan.hh"
+#include "GemmTailBudget.hh"
 
 #include <algorithm>
 #include <array>
@@ -804,7 +805,47 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   m.int4ops = add128(m.int4ops,peops,"INT4 ops"); m.vecops = add128(m.vecops,vecops,"Vec eqops");
   // Quantization, accumulator and storage conversion are execution work;
   // the source GEMM graph has matrix operations, not these Vec operations.
-  const double comp_s = compute_time(hw,peops,vecops,active);
+  gemm_tail_budget::Input budget_input;
+  budget_input.M=M; budget_input.N=N; budget_input.K=K;
+  budget_input.tm=tm; budget_input.tn=tn; budget_input.tk=tk;
+  budget_input.ncore=ncore;
+  budget_input.dataflow=wr ? gemm_tail_budget::Dataflow::WeightResident
+                           : gemm_tail_budget::Dataflow::OutputStationary;
+  budget_input.matrix_path=int4_path ? gemm_tail_budget::MatrixPath::Int4PE
+                                     : gemm_tail_budget::MatrixPath::StrictFp32Vec;
+  budget_input.p_int4_per_core_ops_s=dd(hw,"core","P_int4_per_core_ops_per_s");
+  budget_input.p_vec_per_core_eqops_s=dd(hw,"core","P_vec_per_core_ops_per_s");
+  budget_input.eta_pe=eta(hw,"eta_pe");
+  budget_input.eta_vec=eta(hw,"eta_vec");
+  // Keep the current integer-truncated coefficients identical to vecops above;
+  // fractional kappa support must update the ledger and this budget together.
+  const auto quant_eqops=[&]() {
+    return static_cast<long double>(static_cast<u64>(perf(hw,"kappa_quant_eqops",4)));
+  };
+  if(convert_a) {
+    budget_input.a_input_conversion_eqops_per_element=int4_path || ad=="int4"
+        ? quant_eqops() : 1.0L;
+  }
+  if(convert_w) {
+    budget_input.w_input_conversion_eqops_per_element=int4_path || wd=="int4"
+        ? quant_eqops() : 1.0L;
+  }
+  if(int4_path)
+    budget_input.int32_acc_conversion_eqops_per_result=static_cast<long double>(
+        static_cast<u64>(perf(hw,"kappa_acc_convert_eqops",2)));
+  // The strict-FP32 ledger above currently charges every output cast at 1,
+  // including INT4 output. Change both places together when κ_quant is fixed.
+  if(od!="fp32") {
+    budget_input.output_cast_eqops_per_element=int4_path && od=="int4"
+        ? quant_eqops() : 1.0L;
+  }
+  const auto cohort_budget=gemm_tail_budget::calculate(budget_input);
+  // The cohort helper covers one MxNxK invocation; layers*passes is already
+  // represented in the operation ledger above and multiplies this duration
+  // exactly once here. The append_epoch macro distribution remains unchanged.
+  const long double total_compute_s=cohort_budget.serial_slowest_compute_gate_seconds*
+      static_cast<long double>(executions);
+  const double comp_s=as_double(total_compute_s,"GEMM cohort compute seconds");
 
   Flow load, compute, store;
   const double hbm_eta = eta(hw,"eta_hbm_matrix");
@@ -817,6 +858,8 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   add_bytes_work(store,SRAM_READ,c_total,"store SRAM reads");
   add_hbm(store,hw,topo,c_total,active,true,hbm_eta);
   const u128 rounds = wr ? mul128(ceildiv(tN,ncore),tM,"WR output rounds") : ceildiv(as_u64(mul128(tM,tN,"OS output tiles"),"OS output tiles"),ncore);
+  if(cohort_budget.output_round_count!=as_u64(rounds,"GEMM output rounds"))
+    fail("mapping_invariant: GEMM cohort budget output rounds disagree with scheduler");
   const u128 wave = mul128(rounds,tK,"GEMM consumption waves");
   append_epoch(plan,hw,std::move(load),std::move(compute),std::move(store),active,as_u64(rounds,"GEMM output rounds"),label);
   const u128 max_m = std::min(M,tm), max_n = std::min(N,tn), max_k = std::min(K,tk);
