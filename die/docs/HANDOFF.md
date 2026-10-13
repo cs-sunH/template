@@ -6,7 +6,7 @@
 
 **代码交接检查点齐全；工程精度/全量五仓验收未完成。** 最终公共库默认完整构建与 **17/17 CTest 通过**；当前最小任务的 GEMM 尾块预算与 typed task 校验已实现并测试，部分研究也已保存。独立 compiled K-wave oracle 仍 **failed**，没有可以用于已验证架构排序的粒度证书；启动/重复实例、向量驻留/转换、workspace 与部分五仓路径未验收。
 
-公共库 `ee8a48d5234862efbdffd64465648816091a30e3` 与五仓集成 `ac2ea4188359fa7760e9929c78c2df7cb92c5703` 已进入 main。最终源码、测试、审计与本文件一起保存到交接 PR。**只有该 PR 合入 main 且远端 SHA 经核对后，另一个账号才可从最新 main 安全接续开发**；这不等于工程验收通过。GitHub 实际 PR/SHA 见 Handoff Notes 和 Git 元数据。
+公共库 `ee8a48d5234862efbdffd64465648816091a30e3` 与五仓集成 `ac2ea4188359fa7760e9929c78c2df7cb92c5703` 已进入 main。最终源码提交 `37b13ac928d43b055d0b31ae28caf45d11763659`、测试、审计与本文件保存到交接 PR [#3](https://github.com/cs-sunH/template/pull/3)。**只有该 PR 合入 main 且远端 SHA 经核对后，另一个账号才可从最新 main 安全接续开发**；这不等于工程验收通过。GitHub 实际 PR/SHA 见 Handoff Notes 和 Git 元数据。
 
 ## Integration Branch
 
@@ -152,7 +152,9 @@ python3 die/validation/discrete_oracle.py --runtime-driver work/benchmark-fix/co
 
 用户已明确要求交接并停止。有效生产代码、测试、校准脚本、固定 vendor、失败 oracle 证据及关键未实施研究均保存；本 Session 不再启动新开发任务。`.github/workflows/die-handoff-check.yml` 包含真正的公共库默认 build/CTest；未获得 GitHub Actions 成功状态，不把本地测试冒充 CI。
 
-本轮已在 main 保存 `7e7d8a4` benchmark 修复、`ee8a48d5234862efbdffd64465648816091a30e3` 公共库、`ac2ea4188359fa7760e9929c78c2df7cb92c5703` 五仓集成。最终最小任务与本文件一起提交并创建交接 PR；不 force-push、不覆盖远端提交。PR 链接在获知编号后补入本节，合并后用 Git fetch/ancestry 核对；本文件所属完整提交 SHA 从 Git 元数据读取，避免编造自身 SHA。
+本轮已在 main 保存 `7e7d8a4` benchmark 修复、`ee8a48d5234862efbdffd64465648816091a30e3` 公共库、`ac2ea4188359fa7760e9929c78c2df7cb92c5703` 五仓集成。最终最小任务、所有保存的审计与本文件通过交接 PR [#3](https://github.com/cs-sunH/template/pull/3) 合入流程，源码提交为 `37b13ac928d43b055d0b31ae28caf45d11763659`，后续仅补 PR 元数据。创建时 PR 为 open，采用 expected-head SHA 的 merge 防止误合其他更新；实际 merged 状态与 merge SHA 以 PR 元数据和 Git fetch/ancestry 为准，不 force-push、不覆盖远端提交。本文件所属完整 SHA 从 Git 元数据读取，避免编造自身 SHA。
+
+**代码交接判定**：PR #3 显示 merged、远端 main 包含最终源码提交与本文件、19 文件 digest 一致时，本检查点 READY FOR CODE HANDOFF；工程精度/全量业务仍 NOT ACCEPTED。
 
 接手流程：从 GitHub 最新 main 创建新分支；读取 AGENTS/PROJECT/本文件与两份根设计；核对工作区干净、main 包含本交接 PR 和最终 19 文件 digest。复用通过的证据，直接按 Next Step 的 P0 开始；公共构建能复核，真实 oracle 失败是待解决的模型问题。代码可安全继续开发的条件与“模型精度验收通过”分开，未通过的工程不能用于已验证架构排序。
 
