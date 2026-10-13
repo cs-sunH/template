@@ -1,0 +1,26 @@
+[ 11%] Built target coarse_die
+[ 19%] Built target coarse_compiled_gemm_oracle_driver
+[ 19%] Built target coarse_die_cabi
+[ 23%] Built target coarse_die_benchmark
+[ 26%] Built target coarse_source_golden_test
+[ 30%] Built target coarse_hardware_search_test
+[ 34%] Built target coarse_compile_execution_test
+[ 38%] Built target coarse_compiler_credit_test
+[ 42%] Built target coarse_operator_accounting_test
+[ 46%] Built target coarse_gemm_accounting_test
+[ 50%] Built target coarse_gemm_tail_budget_test
+[ 57%] Built target coarse_compact_batch_semantics_test
+[ 57%] Built target coarse_task_schema_test
+[ 59%] Building CXX object CMakeFiles/coarse_equivalent_work_test.dir/tests/equivalent_work_test.cc.o
+[ 63%] Built target coarse_fractional_work_test
+[ 67%] Built target coarse_fused_ffn_accounting_test
+[ 71%] Built target coarse_attention_accounting_test
+[ 75%] Built target coarse_endpoint_allocation_test
+[ 78%] Built target coarse_runtime_credit_scale_test
+[ 82%] Built target coarse_runtime_counters_test
+[ 86%] Built target coarse_estimate_driver_test
+[ 90%] Built target coarse_runtime_semantics_test
+[ 94%] Built target coarse_oracle_granularity_test
+[ 98%] Built target coarse_capi_lifecycle_test
+[100%] Linking CXX executable coarse_equivalent_work_test
+[100%] Built target coarse_equivalent_work_test

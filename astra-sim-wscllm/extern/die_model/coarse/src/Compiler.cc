@@ -306,10 +306,18 @@ nlohmann::json normalize_new_spans(const nlohmann::json& raw) {
       require_range_end(qs, q, sp + ".run.q_start_pos");
       require_range_end(ks, kv, sp + ".run.kv_start_pos");
       if (static_cast<u128>(kv) + static_cast<u128>(count - 1) * stride > std::numeric_limits<u64>::max()) fail(sp + ".run", "kv length sequence overflows uint64");
-      spans.push_back({{"q_tokens", q}, {"kv_tokens", kv}, {"kv_stride", stride},
-                       {"count", u64_checked(checked_mul(count, batch, sp), sp)},
-                       {"q_start_pos", qs}, {"q_start_stride", stride},
-                       {"kv_start_pos", ks}, {"kv_start_stride", 0}});
+      if (static_cast<u128>(qs) + static_cast<u128>(count - 1) * stride + q - 1 >
+          std::numeric_limits<u64>::max()) fail(sp + ".run", "query position sequence overflows uint64");
+      (void)u64_checked(checked_mul(count, batch, sp + ".count"), sp + ".count");
+      nlohmann::json normalized = {{"q_tokens", q}, {"kv_tokens", kv}, {"kv_stride", stride},
+                                   {"count", count}, {"q_start_pos", qs},
+                                   {"q_start_stride", stride}, {"kv_start_pos", ks},
+                                   {"kv_start_stride", 0}};
+      // Keep the run's arithmetic progression intact. Batch repeats those
+      // same request shapes; it does not extend the KV/query position series.
+      // Omitting the default preserves existing batch=1 plan identities.
+      if (batch > 1) normalized["batch"] = batch;
+      spans.push_back(std::move(normalized));
       continue;
     }
     reject_unknown(s, {"batch", "q_len", "q_tokens", "kv_len", "kv_tokens", "q_start_pos", "query_start", "kv_start_pos", "kv_start", "count", "request_id"}, sp);
@@ -426,9 +434,13 @@ nlohmann::json normalize_new_task(const nlohmann::json& raw,
       op != "attention_region" && op != "qk" && op != "av";
   if (row_op && !spans.empty()) {
     u128 rows = 0;
-    for (const auto& span : spans)
-      rows = checked_add(rows, checked_mul(span.at("q_tokens").get<u64>(),
-          span.at("count").get<u64>(), "task.spans query rows"), "task.spans query rows");
+    for (const auto& span : spans) {
+      const u128 span_rows = checked_mul(span.at("q_tokens").get<u64>(),
+          span.at("count").get<u64>(), "task.spans query rows");
+      const u64 batch = span.contains("batch") ? span.at("batch").get<u64>() : 1;
+      rows = checked_add(rows, checked_mul(span_rows, batch,
+          "task.spans query rows"), "task.spans query rows");
+    }
     const u64 local_rows = u64_checked(rows, "task.spans query rows");
     if (shapes.contains("m") && shapes.at("m") != local_rows)
       fail("task.tensor_shapes.m", "must match the query rows declared by spans");

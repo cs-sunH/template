@@ -2,6 +2,8 @@
 
 这些文件是当前 Session 留下的独立推导、审计和诊断，供下个账号直接使用；除生产源码已经明确引用的尾块预算外，不代表相应功能已实现或验收。
 
+本目录记录上一轮交接时的历史状态。后续持续开发已实现 compact run 的独立 batch 语义、fractional κ 与 strict INT4 转换成本，并将真实 GEMM 尾块候选测试扩至 288 例；当前边界与验证见 `../../HANDOFF.md` 和 `../runtime-waves-20261013/`。以下“未实现”描述保留为当时审计事实，不能据此重复已通过的工作。
+
 - `task-schema-initial-audit.md` 是修改前审计。最终 `Compiler.cc` 已修复必需维度、别名、显式 rank=0、局部 shape/TP 一致性、算子/未知字段及 span alias 冲突；其余驻留/readiness、局部区间语义仍未实现。
 - `five-repo-workspace-audit.md` 保留 workspace 准入应发生在 take/occupy 之前、取消/释放和各仓业务差异的分析。当前只是审计，尚未接入 reservation。
 - `vector-budget-audit.md` 为参数 consumer-Core 复用、完整切片 fit、长行两遍输入和转换的公式建议；生产向量模板仍不完整。当前 profile 保留根设计 §7.2 的保守 active-Core COMPUTE_GATE，`/Ncore` 不是本轮新策略。

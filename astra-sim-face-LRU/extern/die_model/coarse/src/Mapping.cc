@@ -1,5 +1,6 @@
 #include "coarse_die/Plan.hh"
 #include "GemmTailBudget.hh"
+#include "EquivalentWork.hh"
 
 #include <algorithm>
 #include <array>
@@ -20,6 +21,7 @@ namespace {
 
 using u64 = std::uint64_t;
 using u128 = unsigned __int128;
+using EqWork = equivalent_work::Work;
 
 [[noreturn]] void fail(const std::string& message) {
   throw std::invalid_argument(message);
@@ -35,6 +37,40 @@ u128 mul128(u128 a, u128 b, const std::string& field) {
   constexpr u128 max = ~u128{0};
   if (a && b > max / a) fail("overflow: " + field);
   return a * b;
+}
+
+EqWork add128(const EqWork& a, const EqWork& b, const std::string&) {
+  return a + b;
+}
+
+EqWork weighted_ops(u128 elements, double coefficient, const std::string&) {
+  return EqWork::weighted(elements, coefficient);
+}
+
+nlohmann::json eqops_json(const EqWork& value) {
+  const u64 whole = value.checked_u64_whole();
+  if (value.integral()) return whole;
+  return static_cast<double>(value.as_long_double());
+}
+
+EqWork summary_eqops(const nlohmann::json& summary) {
+  if (summary.contains("vec_equivalent_ops_fraction"))
+    return EqWork::from_parts(summary.at("vec_equivalent_ops_whole").get<u64>(),
+                             equivalent_fraction_from_json(summary.at("vec_equivalent_ops_fraction")));
+  return EqWork(summary.at("vec_equivalent_ops").get<u64>());
+}
+
+void publish_eqops(nlohmann::json& summary, const EqWork& value) {
+  summary["vec_equivalent_ops"] = eqops_json(value);
+  if (!value.integral()) {
+    summary["equivalent_work_schema"] = "dyadic_equivalent_work_v1";
+    summary["vec_equivalent_ops_whole"] = value.checked_u64_whole();
+    summary["vec_equivalent_ops_fraction"] = equivalent_fraction_to_json(value.fraction());
+  } else {
+    summary.erase("equivalent_work_schema");
+    summary.erase("vec_equivalent_ops_whole");
+    summary.erase("vec_equivalent_ops_fraction");
+  }
 }
 
 u64 as_u64(u128 value, const std::string& field) {
@@ -164,7 +200,7 @@ double dd(const Hardware& hw, const char* group, const char* key,
 }
 
 struct Span {
-  u64 q = 0, kv = 0, count = 1;
+  u64 q = 0, kv = 0, count = 1, batch = 1;
   u64 qs = 0, ks = 0, kv_stride = 0, qs_stride = 0;
 };
 
@@ -175,9 +211,10 @@ std::vector<Span> spans_of(const nlohmann::json& task) {
   if (!it->is_array()) fail("task.spans must be an array");
   for (const auto& j : *it) {
     Span s{getu(j, "q_tokens"), getu(j, "kv_tokens"), getu(j, "count", 1),
+           getu(j, "batch", 1),
            getu(j, "q_start_pos"), getu(j, "kv_start_pos"),
            getu(j, "kv_stride"), getu(j, "q_start_stride")};
-    if (!s.q || !s.kv || !s.count) fail("task.spans: q_tokens, kv_tokens and count must be positive");
+    if (!s.q || !s.kv || !s.count || !s.batch) fail("task.spans: q_tokens, kv_tokens, count and batch must be positive");
     if (s.count > 1 && s.q != 1 &&
         !(s.kv >= s.q && s.ks == 0 && s.qs == s.kv - s.q && s.qs_stride == s.kv_stride))
       fail("unsupported_mapping: compact attention span progression is not a supported causal run");
@@ -330,7 +367,9 @@ std::pair<u128, u128> prefix_slots_one(const Span& s, u64 tq, u64 tk) {
 
 u128 attention_slots(const std::vector<Span>& spans, u64 tq, u64 tk) {
   u128 total = 0;
-  for (const auto& s : spans) total = add128(total, prefix_slots_one(s, tq, tk).first, "attention slots");
+  for (const auto& s : spans) total = add128(total,
+      mul128(prefix_slots_one(s, tq, tk).first, s.batch, "attention batch slots"),
+      "attention slots");
   return total;
 }
 
@@ -467,13 +506,15 @@ Topology topology(const Hardware& hw, u64 nx, u64 ny) {
 struct Flow {
   std::array<long double, resource_count> work{};
   std::array<std::array<u128, 2>, 2> hbm{};
-  u128 int4 = 0, vec = 0;
+  u128 int4 = 0;
+  EqWork vec;
   long double compute_s = 0;
   std::array<long double, 2> credit{};
 };
 
 struct Metrics {
-  u128 source_mops = 0, executed_mops = 0, source_vops = 0, vecops = 0;
+  u128 source_mops = 0, executed_mops = 0, source_vops = 0;
+  EqWork vecops;
   u128 int4ops = 0, int4bytes = 0, conversion_elements = 0;
   u128 hbm_read = 0, hbm_write = 0, logical = 0, workspace = 0;
   u128 sram_peak = 0, sram_read = 0, sram_write = 0, local = 0;
@@ -605,14 +646,14 @@ double eta(const Hardware& hw, const char* key) {
   return value;
 }
 
-double compute_time(const Hardware& hw, u128 int4ops, u128 vecops,
+double compute_time(const Hardware& hw, u128 int4ops, const EqWork& vecops,
                     u64 active) {
   const long double ppe = dd(hw, "core", "P_int4_per_core_ops_per_s");
   const long double pvec = dd(hw, "core", "P_vec_per_core_ops_per_s");
   if (!(ppe > 0) || !(pvec > 0) || !active) fail("invalid_hardware: compute rates must be positive");
   const long double tpe = static_cast<long double>(int4ops) /
       (ppe * active * eta(hw, "eta_pe"));
-  const long double tv = static_cast<long double>(vecops) /
+  const long double tv = vecops.as_long_double() /
       (pvec * active * eta(hw, "eta_vec"));
   return as_double(tpe + tv, "compute seconds");
 }
@@ -623,7 +664,8 @@ void seal_activity(Activity& a, Flow& f, const Hardware& hw, u64 active) {
     for (std::size_t dir = 0; dir < 2; ++dir)
       a.hbm_bytes[row][dir] = as_u64(f.hbm[row][dir], "activity HBM bytes");
   a.int4_ops = as_u64(f.int4, "activity INT4 ops");
-  a.vec_eqops = as_u64(f.vec, "activity Vec eqops");
+  a.vec_eqops = f.vec.checked_u64_whole();
+  a.vec_eqops_fraction = f.vec.fraction();
   a.private_time_s = as_double(f.compute_s, "activity private time");
   const double local_one_core = active ? hw.rates[LOCAL] *
       (static_cast<double>(active) / std::max<u64>(1, du(hw,"die","core_count",1))) : 0;
@@ -659,7 +701,7 @@ Flow scale_flow(const Flow& a,u64 count) {
   Flow r;
   for(std::size_t i=0;i<resource_count;++i) r.work[i]=a.work[i]*count;
   for(std::size_t row=0;row<2;++row)for(std::size_t dir=0;dir<2;++dir)r.hbm[row][dir]=mul128(a.hbm[row][dir],count,"repeated activity bytes");
-  r.int4=mul128(a.int4,count,"repeated INT4 ops");r.vec=mul128(a.vec,count,"repeated Vec ops");r.compute_s=a.compute_s*count;
+  r.int4=mul128(a.int4,count,"repeated INT4 ops");r.vec=a.vec.multiply(count);r.compute_s=a.compute_s*count;
   return r;
 }
 
@@ -668,11 +710,12 @@ std::pair<Flow,Flow> divide_flow(const Flow& a,u64 count) {
   Flow base;
   for(std::size_t i=0;i<resource_count;++i) base.work[i]=a.work[i]/count;
   for(std::size_t row=0;row<2;++row)for(std::size_t dir=0;dir<2;++dir)base.hbm[row][dir]=a.hbm[row][dir]/count;
-  base.int4=a.int4/count;base.vec=a.vec/count;base.compute_s=a.compute_s/count;
+  const auto vec_split=a.vec.divide(count);
+  base.int4=a.int4/count;base.vec=vec_split.first;base.compute_s=a.compute_s/count;
   Flow remainder;
   for(std::size_t i=0;i<resource_count;++i) remainder.work[i]=a.work[i]-base.work[i]*count;
   for(std::size_t row=0;row<2;++row)for(std::size_t dir=0;dir<2;++dir)remainder.hbm[row][dir]=a.hbm[row][dir]-base.hbm[row][dir]*count;
-  remainder.int4=a.int4-base.int4*count;remainder.vec=a.vec-base.vec*count;remainder.compute_s=a.compute_s-base.compute_s*count;
+  remainder.int4=a.int4-base.int4*count;remainder.vec=vec_split.second;remainder.compute_s=a.compute_s-base.compute_s*count;
   return {base,remainder};
 }
 
@@ -785,21 +828,21 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   const u128 local = add128(sram_r,sram_w,"LOCAL traffic");
   m.sram_read = add128(m.sram_read,add128(sram_r,c_total,"GEMM store SRAM read"),"SRAM reads"); m.sram_write = add128(m.sram_write,add128(sram_w,read_total,"GEMM load SRAM write"),"SRAM writes"); m.local = add128(m.local,local,"LOCAL traffic");
 
-  u128 vecops = 0;
+  EqWork vecops;
   u128 peops = 0;
   if (int4_path) {
     peops = layer_ops;
-    vecops = add128(vecops,mul128(conversions,static_cast<u64>(perf(hw,"kappa_quant_eqops",4)),"quant eqops"),"GEMM Vec ops");
+    vecops = add128(vecops,weighted_ops(conversions,perf(hw,"kappa_quant_eqops",4),"quant eqops"),"GEMM Vec ops");
     const u128 converted = mul128(mul128(mul128(M,N,"acc convert"),tK,"acc convert"),executions,"acc convert");
-    vecops = add128(vecops,mul128(converted,static_cast<u64>(perf(hw,"kappa_acc_convert_eqops",2)),"acc convert eqops"),"GEMM Vec ops");
+    vecops = add128(vecops,weighted_ops(converted,perf(hw,"kappa_acc_convert_eqops",2),"acc convert eqops"),"GEMM Vec ops");
     vecops = add128(vecops,mul128(mul128(mul128(M,N,"acc add"),tK-1,"acc add"),executions,"acc add"),"GEMM Vec ops");
-    if (od != "fp32") vecops = add128(vecops,mul128(output_cast_elements,od=="int4"?static_cast<u64>(perf(hw,"kappa_quant_eqops",4)):1,"output conversion"),"GEMM Vec ops");
+    if (od != "fp32") vecops = add128(vecops,weighted_ops(output_cast_elements,od=="int4"?perf(hw,"kappa_quant_eqops",4):1,"output conversion"),"GEMM Vec ops");
     m.conversion_elements=add128(m.conversion_elements,add128(add128(conversions,converted,"GEMM conversions"),output_cast_elements,"GEMM conversions"),"conversion elements");
   } else {
     // BF16/INT32 inputs are converted once per loaded tile. INT4 decoding
     // uses the explicit template cost; FP32 operands require no conversion.
-    vecops=add128(layer_ops,add128(mul128(quant_a_elems,ad=="int4"?static_cast<u64>(perf(hw,"kappa_quant_eqops",4)):1,"A FP32 conversion"),mul128(quant_w_elems,wd=="int4"?static_cast<u64>(perf(hw,"kappa_quant_eqops",4)):1,"W FP32 conversion"),"FP32 conversions"),"GEMM Vec ops");
-    vecops=add128(vecops,output_cast_elements,"output conversion");
+    vecops=add128(layer_ops,add128(weighted_ops(quant_a_elems,ad=="int4"?perf(hw,"kappa_quant_eqops",4):1,"A FP32 conversion"),weighted_ops(quant_w_elems,wd=="int4"?perf(hw,"kappa_quant_eqops",4):1,"W FP32 conversion"),"FP32 conversions"),"GEMM Vec ops");
+    vecops=add128(vecops,weighted_ops(output_cast_elements,od=="int4"?perf(hw,"kappa_quant_eqops",4):1,"output conversion"),"output conversion");
     m.conversion_elements=add128(m.conversion_elements,add128(conversions,output_cast_elements,"GEMM conversions"),"conversion elements");
   }
   m.int4ops = add128(m.int4ops,peops,"INT4 ops"); m.vecops = add128(m.vecops,vecops,"Vec eqops");
@@ -817,10 +860,9 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   budget_input.p_vec_per_core_eqops_s=dd(hw,"core","P_vec_per_core_ops_per_s");
   budget_input.eta_pe=eta(hw,"eta_pe");
   budget_input.eta_vec=eta(hw,"eta_vec");
-  // Keep the current integer-truncated coefficients identical to vecops above;
-  // fractional kappa support must update the ledger and this budget together.
+  // Use the same real coefficients for the action ledger and tail budget.
   const auto quant_eqops=[&]() {
-    return static_cast<long double>(static_cast<u64>(perf(hw,"kappa_quant_eqops",4)));
+    return static_cast<long double>(perf(hw,"kappa_quant_eqops",4));
   };
   if(convert_a) {
     budget_input.a_input_conversion_eqops_per_element=int4_path || ad=="int4"
@@ -832,11 +874,10 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   }
   if(int4_path)
     budget_input.int32_acc_conversion_eqops_per_result=static_cast<long double>(
-        static_cast<u64>(perf(hw,"kappa_acc_convert_eqops",2)));
-  // The strict-FP32 ledger above currently charges every output cast at 1,
-  // including INT4 output. Change both places together when κ_quant is fixed.
+        perf(hw,"kappa_acc_convert_eqops",2));
+  // INT4 output packing has the same cost on both matrix execution paths.
   if(od!="fp32") {
-    budget_input.output_cast_eqops_per_element=int4_path && od=="int4"
+    budget_input.output_cast_eqops_per_element=od=="int4"
         ? quant_eqops() : 1.0L;
   }
   const auto cohort_budget=gemm_tail_budget::calculate(budget_input);
@@ -890,7 +931,7 @@ void finalize_summary(Plan& p, const Metrics& m, const Hardware& hw) {
   p.summary["executed_int4_ops"] = as_u64(m.int4ops,"executed INT4 ops");
   p.summary["int4_input_bytes"] = as_u64(m.int4bytes,"INT4 input bytes");
   p.summary["source_vec_ops"] = as_u64(m.source_vops,"source Vec ops");
-  p.summary["vec_equivalent_ops"] = as_u64(m.vecops,"Vec eqops");
+  publish_eqops(p.summary,m.vecops);
   p.summary["conversion_elements"] = as_u64(m.conversion_elements,"conversion elements");
   p.summary["logical_tensor_bytes"] = as_u64(m.logical,"logical tensor bytes");
   p.summary["hbm_read_bytes_total"] = as_u64(m.hbm_read,"HBM read total");
@@ -1036,10 +1077,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
   const std::string accumulator_dtype=dtype(task,"accumulator","fp32");
   if(score_dtype!="fp32"||accumulator_dtype!="fp32")
     fail("unsupported_dtype: attention score and accumulator workspaces are fixed FP32");
-  const u128 kappa_quant=static_cast<u64>(perf(hw,"kappa_quant_eqops",4));
-  const u128 kappa_acc=static_cast<u64>(perf(hw,"kappa_acc_convert_eqops",2));
-  if(kappa_quant>std::numeric_limits<u64>::max()||kappa_acc>std::numeric_limits<u64>::max())
-    fail("overflow: attention conversion coefficient");
+  const double kappa_quant=perf(hw,"kappa_quant_eqops",4);
+  const double kappa_acc=perf(hw,"kappa_acc_convert_eqops",2);
   auto sum_kv_lengths=[](const Span& s)->u128 {
     return add128(mul128(s.count,s.kv,"attention KV span sum"),
         mul128(s.kv_stride,mul128(s.count,s.count-1,"attention KV span sum")/2,"attention KV span sum"),
@@ -1210,6 +1249,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
       const u128 kv_sum=sum_kv_lengths(s);
       const u128 qtiles=ceildiv(s.q,tq);
       const u128 all_kv_tiles=progression_tiles(s,tk).first;
+      const u128 batch_kv_tiles=mul128(all_kv_tiles,s.batch,"attention batch KV tiles");
+      const u128 request_count=mul128(s.count,s.batch,"attention batch requests");
       // Materialized score/primitive paths operate on the complete rectangle.
       // Only fused causal attention skips future KV blocks.
       const bool materialized=full||mode!="both";
@@ -1217,25 +1258,28 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
       if (materialized) { sl=mul128(s.q,kv_sum,"materialized attention score slots");pr=mul128(qtiles,kv_sum,"materialized attention KV reads"); }
       else if (causal) { sl=causal_stat.slots; pr=causal_stat.prefix; }
       else { sl=mul128(s.q,kv_sum,"noncausal score slots");pr=mul128(qtiles,kv_sum,"noncausal attention KV reads"); }
-      const u128 request_heads=mul128(s.count,qh,"attention heads");
-      const u128 score_slots=mul128(sl,qh,"attention score heads");
-      const u128 score_valid=mul128(valid_pairs(s,causal),qh,"attention valid heads");
+      const u128 request_heads=mul128(request_count,qh,"attention heads");
+      const u128 score_slots=mul128(mul128(sl,s.batch,"attention batch score slots"),qh,"attention score heads");
+      const u128 score_valid=mul128(mul128(valid_pairs(s,causal),s.batch,"attention batch valid pairs"),qh,"attention valid heads");
       const u128 query_count=mul128(s.q,request_heads,"query rows");
       output_tasks=add128(output_tasks,mul128(qtiles,request_heads,"attention output tasks"),"attention output tasks");
-      const u128 active_rows=causal&&!materialized?causal_stat.active_rows:mul128(s.q,s.count,"attention active rows");
+      const u128 active_rows_one=causal&&!materialized?causal_stat.active_rows:mul128(s.q,s.count,"attention active rows");
+      const u128 active_rows=mul128(active_rows_one,s.batch,"attention batch active rows");
       active_queryrows=add128(active_queryrows,mul128(active_rows,qh,"attention active rows"),"attention active rows");
-      const u128 row_blocks=causal&&!materialized?causal_stat.row_blocks:mul128(s.q,all_kv_tiles,"attention row/KV block visits");
-      const u128 tile_blocks=causal&&!materialized?causal_stat.blocks:mul128(qtiles,all_kv_tiles,"attention tile/KV block visits");
+      const u128 row_blocks_one=causal&&!materialized?causal_stat.row_blocks:mul128(s.q,all_kv_tiles,"attention row/KV block visits");
+      const u128 tile_blocks_one=causal&&!materialized?causal_stat.blocks:mul128(qtiles,all_kv_tiles,"attention tile/KV block visits");
+      const u128 row_blocks=mul128(row_blocks_one,s.batch,"attention batch row/KV block visits");
+      const u128 tile_blocks=mul128(tile_blocks_one,s.batch,"attention batch tile/KV block visits");
       row_block_visits=add128(row_block_visits,mul128(row_blocks,qh,"attention row/KV block visits"),"attention row/KV block visits");
       tile_block_visits=add128(tile_block_visits,mul128(tile_blocks,qh,"attention tile/KV block visits"),"attention tile/KV block visits");
       slots=add128(slots,score_slots,"attention slots");
       valid=add128(valid,score_valid,"valid score pairs");
       queryrows=add128(queryrows,query_count,"query rows");
-      prefixes=add128(prefixes,mul128(pr,qh,"GQA KV prefix reads"),"GQA KV prefix reads");
+      prefixes=add128(prefixes,mul128(mul128(pr,s.batch,"attention batch KV prefixes"),qh,"GQA KV prefix reads"),"GQA KV prefix reads");
 
       const u128 qtile_raw=tile_grid_bytes(s.q,tq,hd,hd,dtype_q);
       const u128 qtile_i4=tile_grid_bytes(s.q,tq,hd,hd,"int4");
-      const u128 q_reuses=materialized&&mode!="av"?all_kv_tiles:1;
+      const u128 q_reuses=materialized&&mode!="av"?batch_kv_tiles:1;
       const u128 q_head_copies=materialized&&mode!="av"?qh:request_heads;
       if(mode!="av"){
         const u128 qread=mul128(mul128(qtile_raw,q_head_copies,"attention Q bytes"),q_reuses,"attention Q rereads");
@@ -1253,41 +1297,41 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
       const u128 fused_v_raw=dtype_k=="int4"?
           (causal?packed_causal_prefix(s,tq,tk,hd,feature_tile,pr):mul128(packed_kv_grid(s,tk,hd,feature_tile),qtiles,"attention packed V rereads")):
           bytes(mul128(pr,hd,"fused V elements"),dtype_k);
-      const u128 full_k_read=mul128(mul128(full_k_raw,qtiles,"full K query tiles"),qh,"full K heads");
-      const u128 full_v_read=mul128(mul128(full_v_raw,qtiles,"full V query tiles"),qh,"full V heads");
-      const u128 fused_k_read=mul128(fused_k_raw,qh,"fused K heads");
-      const u128 fused_v_read=mul128(fused_v_raw,qh,"fused V heads");
+      const u128 full_k_read=mul128(mul128(mul128(full_k_raw,qtiles,"full K query tiles"),qh,"full K heads"),s.batch,"full K batch");
+      const u128 full_v_read=mul128(mul128(mul128(full_v_raw,qtiles,"full V query tiles"),qh,"full V heads"),s.batch,"full V batch");
+      const u128 fused_k_read=mul128(mul128(fused_k_raw,qh,"fused K heads"),s.batch,"fused K batch");
+      const u128 fused_v_read=mul128(mul128(fused_v_raw,qh,"fused V heads"),s.batch,"fused V batch");
       const u128 span_kread=mode=="av"?0:(materialized?full_k_read:fused_k_read);
       const u128 span_vread=mode=="qk"?0:(materialized?full_v_read:fused_v_read);
       qk_kbytes=add128(qk_kbytes,span_kread,"attention QK K reads");
       pv_vbytes=add128(pv_vbytes,span_vread,"attention PV V reads");
       kvbytes=add128(kvbytes,add128(span_kread,span_vread,"attention K/V reads"),"attention K/V reads");
-      if(mode!="av")k_quant_elements=add128(k_quant_elements,mul128(mul128(pr,hd,"attention K conversions"),qh,"attention K conversions"),"attention K conversions");
-      if(mode!="qk")v_quant_elements=add128(v_quant_elements,mul128(mul128(pr,hd,"attention V conversions"),qh,"attention V conversions"),"attention V conversions");
+      if(mode!="av")k_quant_elements=add128(k_quant_elements,mul128(mul128(mul128(pr,s.batch,"attention batch K prefixes"),hd,"attention K conversions"),qh,"attention K conversions"),"attention K conversions");
+      if(mode!="qk")v_quant_elements=add128(v_quant_elements,mul128(mul128(mul128(pr,s.batch,"attention batch V prefixes"),hd,"attention V conversions"),qh,"attention V conversions"),"attention V conversions");
       if(int4path){
         const u128 packed_k_one=causal&&!materialized?packed_causal_prefix(s,tq,tk,hd,hd,pr):mul128(packed_kv_grid(s,tk,hd,hd),qtiles,"attention packed K input");
         const u128 packed_v_one=causal&&!materialized?packed_causal_prefix(s,tq,tk,hd,feature_tile,pr):mul128(packed_kv_grid(s,tk,hd,feature_tile),qtiles,"attention packed V input");
         if(mode!="av"){
-          k_packed=add128(k_packed,mul128(packed_k_one,qh,"attention packed K heads"),"attention packed K");
+          k_packed=add128(k_packed,mul128(mul128(packed_k_one,qh,"attention packed K heads"),s.batch,"attention packed K batch"),"attention packed K");
         }
         if(mode!="qk"){
-          v_packed=add128(v_packed,mul128(packed_v_one,qh,"attention packed V heads"),"attention packed V");
+          v_packed=add128(v_packed,mul128(mul128(packed_v_one,qh,"attention packed V heads"),s.batch,"attention packed V batch"),"attention packed V");
         }
         if(dtype_q!="int4"&&mode!="av")q_scale_tiles=add128(q_scale_tiles,mul128(mul128(qtiles,q_head_copies,"attention Q scales"),q_reuses,"attention Q scale rereads"),"attention Q scales");
         if(dtype_k!="int4"&&mode!="av")k_scale_tiles=add128(k_scale_tiles,mul128(tile_blocks,qh,"attention K head scales"),"attention K scales");
         if(dtype_k!="int4"&&mode!="qk")v_scale_tiles=add128(v_scale_tiles,mul128(tile_blocks,qh,"attention V head scales"),"attention V scales");
       }
       if (mode!="qk")outbytes=add128(outbytes,mul128(tile_grid_bytes(s.q,tq,hd,hd,dtype_o),request_heads,"attention tiled output bytes"),"attention output bytes");
-      if(materialized&&mode=="av")av_probbytes=add128(av_probbytes,mul128(mul128(sl,4,"AV probability bytes"),qh,"AV probability bytes"),"AV probability bytes");
+      if(materialized&&mode=="av")av_probbytes=add128(av_probbytes,mul128(mul128(mul128(sl,s.batch,"AV batch score slots"),4,"AV probability bytes"),qh,"AV probability bytes"),"AV probability bytes");
 
       // Logical bytes are unique source tensors. Physical rereads, score
       // materialization, and conversion buffers stay in their own counters.
       const u128 qlogical=mul128(bytes(mul128(s.q,hd,"logical Q elements"),dtype_q),request_heads,"logical Q bytes");
-      const u128 kvlogical=mul128(sum_storage_tensor_bytes(s,hd,dtype_k),mul128(kvh,2,"logical KV tensors"),"logical KV bytes");
+      const u128 kvlogical=mul128(mul128(sum_storage_tensor_bytes(s,hd,dtype_k),s.batch,"logical KV batch"),mul128(kvh,2,"logical KV tensors"),"logical KV bytes");
       const u128 outlogical=mul128(bytes(mul128(s.q,hd,"logical output elements"),dtype_o),request_heads,"logical output bytes");
       if(mode=="both")logical=add128(logical,add128(add128(qlogical,kvlogical,"logical attention tensors"),outlogical,"logical attention tensors"),"logical attention tensors");
-      else if(mode=="qk")logical=add128(logical,add128(qlogical,mul128(bytes(sl,"fp32"),qh,"logical score bytes"),"logical QK tensors"),"logical QK tensors");
-      else logical=add128(logical,add128(add128(mul128(bytes(sl,"fp32"),qh,"logical probability bytes"),mul128(sum_storage_tensor_bytes(s,hd,dtype_k),kvh,"logical V bytes"),"logical AV tensors"),outlogical,"logical AV tensors"),"logical AV tensors");
+      else if(mode=="qk")logical=add128(logical,add128(qlogical,mul128(bytes(mul128(sl,s.batch,"logical score batch"),"fp32"),qh,"logical score bytes"),"logical QK tensors"),"logical QK tensors");
+      else logical=add128(logical,add128(add128(mul128(bytes(mul128(sl,s.batch,"logical probability batch"),"fp32"),qh,"logical probability bytes"),mul128(mul128(sum_storage_tensor_bytes(s,hd,dtype_k),s.batch,"logical V batch"),kvh,"logical V bytes"),"logical AV tensors"),outlogical,"logical AV tensors"),"logical AV tensors");
     }
     slots=mul128(slots,executions,"attention executions");
     valid=mul128(valid,executions,"attention source executions");
@@ -1340,8 +1384,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
     const u128 pv_acc_adds=int4path&&pv_acc_elements>pv_first?pv_acc_elements-pv_first:0;
     const u128 acc_adds=int4path?add128(qk_acc_adds,pv_acc_adds,"attention accumulator additions"):0;
     const u128 output_conversion=(mode=="qk"||dtype_o=="fp32")?0:mul128(queryrows,hd,"attention output conversions");
-    const u128 accumulator_vec_ops=int4path?add128(mul128(acc_convert_elements,static_cast<u64>(kappa_acc),"attention accumulator Vec ops"),acc_adds,"attention accumulator Vec ops"):0;
-    const u128 cast_vec_ops=output_conversion;
+    const EqWork accumulator_vec_ops=int4path?add128(weighted_ops(acc_convert_elements,kappa_acc,"attention accumulator Vec ops"),acc_adds,"attention accumulator Vec ops"):0;
+    const EqWork cast_vec_ops=weighted_ops(output_conversion,dtype_o=="int4"?kappa_quant:1,"attention output conversion");
     const u128 vector_matrix_ops=int4path?0:matops;
     auto input_conversion_count=[&](const std::string& dt,u128 elements)->u128 {
       return int4path?(dt=="int4"?0:elements):(dt=="fp32"?0:elements);
@@ -1351,13 +1395,17 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
     const u128 v_input_conversion=input_conversion_count(dtype_k,v_quant_elements);
     const u128 qk_input_conversion=add128(q_input_conversion,k_input_conversion,"attention QK input conversions");
     const u128 pv_input_conversion=v_input_conversion;
-    const u128 qk_quant_vec=int4path?mul128(qk_input_conversion,static_cast<u64>(kappa_quant),"attention QK quant Vec ops"):qk_input_conversion;
-    const u128 pv_quant_vec=int4path?mul128(pv_input_conversion,static_cast<u64>(kappa_quant),"attention PV quant Vec ops"):pv_input_conversion;
-    const u128 qk_acc_vec=int4path?add128(mul128(qk_acc_elements,static_cast<u64>(kappa_acc),"attention QK accumulator Vec ops"),qk_acc_adds,"attention QK accumulator Vec ops"):0;
-    const u128 pv_acc_vec=int4path?add128(mul128(pv_acc_elements,static_cast<u64>(kappa_acc),"attention PV accumulator Vec ops"),pv_acc_adds,"attention PV accumulator Vec ops"):0;
+    const EqWork qk_quant_vec=add128(
+        weighted_ops(q_input_conversion,int4path||dtype_q=="int4"?kappa_quant:1,"attention Q conversion"),
+        weighted_ops(k_input_conversion,int4path||dtype_k=="int4"?kappa_quant:1,"attention K conversion"),
+        "attention QK conversion Vec ops");
+    const EqWork pv_quant_vec=weighted_ops(pv_input_conversion,
+        int4path||dtype_k=="int4"?kappa_quant:1,"attention V conversion");
+    const EqWork qk_acc_vec=int4path?add128(weighted_ops(qk_acc_elements,kappa_acc,"attention QK accumulator Vec ops"),qk_acc_adds,"attention QK accumulator Vec ops"):0;
+    const EqWork pv_acc_vec=int4path?add128(weighted_ops(pv_acc_elements,kappa_acc,"attention PV accumulator Vec ops"),pv_acc_adds,"attention PV accumulator Vec ops"):0;
     const u128 conversion_elements=int4path?add128(add128(quant_input_elements,acc_convert_elements,"attention conversion elements"),output_conversion,"attention conversion elements"):add128(add128(qk_input_conversion,pv_input_conversion,"attention conversion elements"),output_conversion,"attention conversion elements");
     m.conversion_elements=conversion_elements;
-    const u128 input_conversion_ops=int4path?mul128(quant_input_elements,static_cast<u64>(kappa_quant),"attention quantization Vec ops"):add128(qk_input_conversion,pv_input_conversion,"attention input conversion Vec ops");
+    const EqWork input_conversion_ops=add128(qk_quant_vec,pv_quant_vec,"attention input conversion Vec ops");
     const bool staged_full=full||mode!="both";
     const u128 scoreb=mul128(slots,4,"score bytes");
     const u128 probb=mode=="qk"?0:((mode=="av"||staged_full)?mul128(slots,4,"probability bytes"):0);
@@ -1372,7 +1420,7 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
     const u128 pv_read=mode=="qk"?0:(mode=="av"?add128(pv_vbytes,mul128(av_probbytes,feature_tiles,"AV probability rereads"),"AV reads"):full_pv_read);
     const u128 pv_write=mode=="qk"?0:(staged_full&&mode=="both"?(cast_bytes?cast_bytes:outbytes):outbytes);
     const u128 cast_read=staged_full&&mode=="both"?cast_bytes:0;
-    const u128 cast_write=staged_full&&mode=="both"?outbytes:0;
+    const u128 cast_write=staged_full&&mode=="both"&&cast_bytes?outbytes:0;
     const u128 fused_read=staged_full?0:add128(qbytes,kvbytes,"fused attention reads");
     const u128 fused_write=staged_full?0:outbytes;
     const u128 totalread=staged_full&&mode=="both"?add128(add128(qk_read,soft_read,"full attention reads"),add128(pv_read,cast_read,"full attention reads"),"full attention reads"):
@@ -1386,7 +1434,7 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
     const u64 rounds=std::max<u64>(1,ceildiv(as_u64(output_tasks,"attention output tasks"),active));
     const u64 waves=as_u64(std::max<u128>(1,staged_full?add128(output_tasks,ceildiv(as_u64(slots,"attention score slots"),std::max<u64>(1,active*256)),"full attention waves"):row_block_visits),"attention waves");
     auto emit_stage=[&](const std::string& name,u128 read,u128 write,u128 c_read,u128 c_write,
-                        u128 i4,u128 vec,u64 use_active,u64 frames,double hbm_eta){
+                        u128 i4,EqWork vec,u64 use_active,u64 frames,double hbm_eta){
       Flow load,compute,store;
       add_hbm(load,hw,topo,read,use_active,false,hbm_eta);
       add_bytes_work(load,SRAM_WRITE,read,"attention load landing bytes");
@@ -1419,8 +1467,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
     const u128 pv_partial_bytes=int4path?mul128(pv_acc_elements,4,"attention PV INT32 partials"):0;
     const u128 qk_fp32_input_bytes=!int4path?mul128(qk_input_conversion,4,"attention QK FP32 conversion buffers"):0;
     const u128 pv_fp32_input_bytes=!int4path?mul128(pv_input_conversion,4,"attention PV FP32 conversion buffers"):0;
-    const u128 qk_vec=int4path?add128(qk_quant_vec,qk_acc_vec,"attention QK Vec ops"):add128(qk_ops,qk_input_conversion,"attention QK Vec ops");
-    const u128 pv_vec=int4path?add128(pv_quant_vec,pv_acc_vec,"attention PV Vec ops"):add128(pv_ops,pv_input_conversion,"attention PV Vec ops");
+    const EqWork qk_vec=int4path?add128(qk_quant_vec,qk_acc_vec,"attention QK Vec ops"):add128(qk_ops,qk_quant_vec,"attention QK Vec ops");
+    const EqWork pv_vec=int4path?add128(pv_quant_vec,pv_acc_vec,"attention PV Vec ops"):add128(pv_ops,pv_quant_vec,"attention PV Vec ops");
     const u128 soft_eq=eq;
     if(staged_full&&mode=="both"){
       // Full materialization is four ordered primitives. Each stage owns its
@@ -1455,8 +1503,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
           :add128(qk_fp32_input_bytes,pv_fp32_input_bytes,"fused FP32 conversion buffers");
       const u128 c_read=add128(add128(fused_read,converted_input_bytes,"fused converted matrix input reads"),add128(scale_bytes,add128(partial_bytes,add128(score_bytes,state_read,"fused scratch reads"),"fused scratch reads"),"fused scratch reads"),"fused compute reads");
       const u128 c_write=add128(add128(fused_write,converted_input_bytes,"fused converted matrix input writes"),add128(scale_bytes,add128(partial_bytes,add128(score_bytes,state_write,"fused scratch writes"),"fused scratch writes"),"fused scratch writes"),"fused compute writes");
-      const u128 vec=int4path?add128(add128(eq,input_conversion_ops,"fused quant Vec ops"),add128(accumulator_vec_ops,cast_vec_ops,"fused accumulator Vec ops"),"fused Vec ops"):
-          add128(add128(eq,vector_matrix_ops,"strict Vec attention ops"),add128(add128(qk_input_conversion,pv_input_conversion,"strict input conversions"),cast_vec_ops,"strict conversions"),"strict Vec attention ops");
+      const EqWork vec=int4path?add128(add128(eq,input_conversion_ops,"fused quant Vec ops"),add128(accumulator_vec_ops,cast_vec_ops,"fused accumulator Vec ops"),"fused Vec ops"):
+          add128(add128(eq,vector_matrix_ops,"strict Vec attention ops"),add128(input_conversion_ops,cast_vec_ops,"strict conversions"),"strict Vec attention ops");
       emit_stage("fused_attention",fused_read,fused_write,c_read,c_write,int4path?matops:0,vec,active,rounds,eta(hw,"eta_hbm_vector"));
       m.waves=waves;
     }
@@ -1515,7 +1563,10 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
         ?std::max(std::max(qk_peak,softmax_peak),std::max(pv_peak,cast_peak))
         :fused_peak;
     if(m.hbm_read!=totalread||m.hbm_write!=totalwrite)
-      fail("mapping_invariant: attention stage HBM bytes do not match its access ledger");
+      fail("mapping_invariant: attention stage HBM bytes do not match its access ledger: mode="+mode+
+           " full="+std::to_string(full)+" actual="+std::to_string(as_u64(m.hbm_read,"attention reads"))+"/"+
+           std::to_string(as_u64(m.hbm_write,"attention writes"))+" expected="+
+           std::to_string(as_u64(totalread,"attention reads"))+"/"+std::to_string(as_u64(totalwrite,"attention writes")));
     m.active_cores=std::max(m.active_cores,active);
     m.score_slots=slots;m.valid_pairs=valid;m.score_bytes=(mode=="qk"||(staged_full&&mode=="both"))?scoreb:0;m.probability_bytes=probb;
     m.logical=logical;
@@ -1586,7 +1637,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_mappings(
       const u64 heads=shape_u(task,"q_heads",1);
       for(const auto& s:spans_of(task)) {
         const u128 lengths=add128(mul128(s.kv,s.count,"score KV lengths"),mul128(s.kv_stride,mul128(s.count,s.count-1,"score KV progression")/2,"score KV progression"),"score KV lengths");
-        slots=add128(slots,mul128(mul128(s.q,lengths,"score rectangles"),heads,"score heads"),"score count");
+        const u128 span_slots=mul128(mul128(s.q,lengths,"score rectangles"),heads,"score heads");
+        slots=add128(slots,mul128(span_slots,s.batch,"score batch"),"score count");
       }
       count=slots;eq=mul128(op=="scale_mask"?2:10,count,"score Vec eqops");
       if(dtype(task,"scores","fp32")!="fp32")fail("unsupported_dtype: materialized score transforms require fp32");
@@ -1621,8 +1673,9 @@ std::vector<std::shared_ptr<Plan>> enumerate_mappings(
               epoch.activities[i].id=q->epochs.size()*3+i+1;
             q->epochs.push_back(std::move(epoch));
           }
-          for(const char* key:{"source_vec_ops","vec_equivalent_ops","hbm_read_bytes_total","hbm_write_bytes_total","sram_read_bytes","sram_write_bytes","local_bus_bytes","output_round_count","consumption_wave_count","wave_count"})
+          for(const char* key:{"source_vec_ops","hbm_read_bytes_total","hbm_write_bytes_total","sram_read_bytes","sram_write_bytes","local_bus_bytes","output_round_count","consumption_wave_count","wave_count"})
             q->summary[key]=as_u64(add128(getu(q->summary,key),getu(rope->summary,key),std::string("QKV/RoPE ")+key),std::string("QKV/RoPE ")+key);
+          publish_eqops(q->summary,summary_eqops(q->summary)+summary_eqops(rope->summary));
           // Q/K materialization is physical traffic inside this source region.
           // Its logical boundary adds only the cosine/sine parameter tensor.
           q->summary["logical_tensor_bytes"]=as_u64(add128(getu(q->summary,"logical_tensor_bytes"),parameters,"QKV/RoPE logical parameters"),"QKV/RoPE logical bytes");
@@ -1914,8 +1967,6 @@ std::vector<std::shared_ptr<Plan>> enumerate_mappings(
               output_bf16_conversion_elements,"FFN conversion elements");
           const u128 quant_conversion_elements=mul128(quant_conversions_one,executions,
                                                       "FFN quantization elements");
-          const u128 fp32_conversion_elements=mul128(fp32_conversions_one,executions,
-                                                      "FFN FP32 conversion elements");
           const u128 output_bf16_conversion_count=mul128(output_bf16_conversion_elements,
                                                           executions,
                                                           "FFN output conversion elements");
@@ -2076,14 +2127,14 @@ std::vector<std::shared_ptr<Plan>> enumerate_mappings(
           z.sram_write=add128(z.hbm_read,compute_sram_write,"FFN total SRAM writes");
           z.local=add128(compute_sram_read,compute_sram_write,"FFN LOCAL bytes");
 
-          u128 vecops=activation_ops;
+          EqWork vecops=activation_ops;
           if(i4) {
-            vecops=add128(vecops,mul128(quant_conversion_elements,
-                         static_cast<u64>(perf(hardware,"kappa_quant_eqops",4)),
+            vecops=add128(vecops,weighted_ops(quant_conversion_elements,
+                         perf(hardware,"kappa_quant_eqops",4),
                          "FFN quantization eqops"),"FFN Vec ops");
             const u128 partial_elements=updates;
-            vecops=add128(vecops,mul128(partial_elements,
-                         static_cast<u64>(perf(hardware,"kappa_acc_convert_eqops",2)),
+            vecops=add128(vecops,weighted_ops(partial_elements,
+                         perf(hardware,"kappa_acc_convert_eqops",2),
                          "FFN accumulator conversion eqops"),"FFN Vec ops");
             const u128 upgate_adds=mul128(mul128(mul128(2,mul128(M,F,
                                                   "FFN up/gate accumulator adds"),
@@ -2097,10 +2148,21 @@ std::vector<std::shared_ptr<Plan>> enumerate_mappings(
                          "FFN accumulator add eqops"),"FFN Vec ops");
           } else {
             vecops=add128(vecops,z.executed_mops,"FFN Vec matrix ops");
-            vecops=add128(vecops,fp32_conversion_elements,"FFN FP32 conversion Vec ops");
+            const u128 weight_fp32_elements_one=add128(upgate_fp32_elements_one,
+                down_fp32_elements_one,"FFN FP32 weight conversions");
+            const EqWork input_fp32_ops=weighted_ops(
+                mul128(input_fp32_elements_one,executions,"FFN FP32 input conversions"),
+                ad=="int4"?perf(hardware,"kappa_quant_eqops",4):1,
+                "FFN FP32 input decode ops");
+            const EqWork weight_fp32_ops=weighted_ops(
+                mul128(weight_fp32_elements_one,executions,"FFN FP32 weight conversions"),
+                wd=="int4"?perf(hardware,"kappa_quant_eqops",4):1,
+                "FFN FP32 weight decode ops");
+            vecops=add128(vecops,add128(input_fp32_ops,weight_fp32_ops,
+                "FFN FP32 conversions"),"FFN FP32 conversion Vec ops");
             if(od=="int4")
-              vecops=add128(vecops,mul128(quant_conversion_elements,
-                           static_cast<u64>(perf(hardware,"kappa_quant_eqops",4)),
+              vecops=add128(vecops,weighted_ops(quant_conversion_elements,
+                           perf(hardware,"kappa_quant_eqops",4),
                            "FFN output quantization eqops"),"FFN Vec ops");
           }
           vecops=add128(vecops,output_bf16_conversion_count,

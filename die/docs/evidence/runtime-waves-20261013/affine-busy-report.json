@@ -1,0 +1,1106 @@
+[
+  {
+    "actual_busy_s": 61.0,
+    "actual_finish_s": 81.0,
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 5,
+      "capacity": [
+        1.0,
+        1e+30,
+        1e+30,
+        1e+30,
+        1.0,
+        1e+30,
+        0.0,
+        0.0,
+        1e+30,
+        1e+30,
+        1e+30,
+        1e+30,
+        1e+30
+      ],
+      "compute_busy_ns": 80000000000.0,
+      "compute_busy_ns_exact": "79999999999.999998889863491058",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 61000000000.0,
+      "hbm_busy_ns_exact": "60999999999.99999634176492691",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          8.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "8",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 6,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 81000000000,
+      "row_busy_ns": [
+        61000000000.0,
+        0.0
+      ],
+      "row_busy_ns_exact": [
+        "60999999999.99999634176492691",
+        "0"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 5,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              8.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "8",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "event_advances": 4,
+    "exact_discrete_busy_s": 8,
+    "exact_discrete_finish_s": 81,
+    "waves": 8
+  },
+  {
+    "actual_busy_s": 621.0,
+    "actual_finish_s": 641.0,
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 5,
+      "capacity": [
+        1.0,
+        1e+30,
+        1e+30,
+        1e+30,
+        1.0,
+        1e+30,
+        0.0,
+        0.0,
+        1e+30,
+        1e+30,
+        1e+30,
+        1e+30,
+        1e+30
+      ],
+      "compute_busy_ns": 639999999999.9999,
+      "compute_busy_ns_exact": "639999999999.99990999698638916",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 621000000000.0,
+      "hbm_busy_ns_exact": "621000000000.000001728534698486",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          64.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "64",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 6,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 641000000000,
+      "row_busy_ns": [
+        621000000000.0,
+        0.0
+      ],
+      "row_busy_ns_exact": [
+        "621000000000.000001728534698486",
+        "0"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 5,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              64.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "64",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "event_advances": 4,
+    "exact_discrete_busy_s": 64,
+    "exact_discrete_finish_s": 641,
+    "waves": 64
+  },
+  {
+    "actual_busy_s": 40941.0,
+    "actual_finish_s": 40961.0,
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 5,
+      "capacity": [
+        1.0,
+        1e+30,
+        1e+30,
+        1e+30,
+        1.0,
+        1e+30,
+        0.0,
+        0.0,
+        1e+30,
+        1e+30,
+        1e+30,
+        1e+30,
+        1e+30
+      ],
+      "compute_busy_ns": 40960000000000.0,
+      "compute_busy_ns_exact": "40959999999999.999553680419921875",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 40941000000000.0,
+      "hbm_busy_ns_exact": "40941000000000.000034332275390625",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          4096.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "4096",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 6,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 40961000000000,
+      "row_busy_ns": [
+        40941000000000.0,
+        0.0
+      ],
+      "row_busy_ns_exact": [
+        "40941000000000.000034332275390625",
+        "0"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 5,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              4096.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "4096",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "event_advances": 4,
+    "exact_discrete_busy_s": 4096,
+    "exact_discrete_finish_s": 40961,
+    "waves": 4096
+  },
+  {
+    "actual_busy_s": 9999981.0,
+    "actual_finish_s": 10000001.0,
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 5,
+      "capacity": [
+        1.0,
+        1e+30,
+        1e+30,
+        1e+30,
+        1.0,
+        1e+30,
+        0.0,
+        0.0,
+        1e+30,
+        1e+30,
+        1e+30,
+        1e+30,
+        1e+30
+      ],
+      "compute_busy_ns": 1e+16,
+      "compute_busy_ns_exact": "10000000000000000",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 9.999981e+15,
+      "hbm_busy_ns_exact": "9999980999999999.638671875",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          1000000.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "1000000",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 6,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 10000001000000001,
+      "row_busy_ns": [
+        9.999981e+15,
+        0.0
+      ],
+      "row_busy_ns_exact": [
+        "9999980999999999.638671875",
+        "0"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 5,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              1000000.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "1000000",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "event_advances": 4,
+    "exact_discrete_busy_s": 1000000,
+    "exact_discrete_finish_s": 10000001,
+    "waves": 1000000
+  }
+]

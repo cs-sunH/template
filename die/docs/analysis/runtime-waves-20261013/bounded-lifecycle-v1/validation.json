@@ -1,0 +1,16 @@
+{
+  "schema": "bounded_lifecycle_scratch_v1_validation",
+  "status": "fixture_passed_not_production_certificate",
+  "compile_command": "g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic bounded_lifecycle.cpp -lgmpxx -lgmp -o <work>/validated-final-v1",
+  "source_sha256": "3ac9c1d8c9ef9ad5c87a8f44d17d8b68488b2ab41bcd67898f73ce40fae3447c",
+  "checker_sha256": "58e0171503f230d5bbb54dcaa90c93e0a733c3ef30091e34c8259bccd7eaf189",
+  "output_sha256": "9e85ba5aad1f9b2e6707be93ea10948a36f629c6a9675621e86b9a88c191700e",
+  "binary_sha256": "e1a05300f3944be3f034cb48f37fbe1186e43cc9aa8def06f584bfa0e0ac9f17",
+  "compile": "passed_no_diagnostics",
+  "execute": "passed",
+  "independent_equal_progress_oracle": "passed_solo_zero_offset_50ms_offset",
+  "grouped_policy": "event_vs_cycle_equal_only; no independent three-stage allocator certificate",
+  "guard_probe_cap_one": "fail_closed_after_one_step",
+  "overall_complexity": "O(R) at fixed Tk; no scalable production bound",
+  "production_model": "unchanged_failed"
+}

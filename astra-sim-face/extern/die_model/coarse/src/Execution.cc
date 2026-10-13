@@ -159,6 +159,11 @@ std::string decimal_measure(long double value) {
     if (!text.empty() && text.back() == '.') text.pop_back();
   }
   if (text.empty() || text == "-0") return "0";
+  // Preserve the existing short form when it is exact. Very small fractional
+  // work and extended-precision sums need enough digits to survive snapshots.
+  char* end = nullptr;
+  if (std::strtold(text.c_str(), &end) != value || !end || *end != '\0')
+    return long_double_text(value);
   return text;
 }
 
@@ -313,6 +318,13 @@ void validate_plan(const Hardware& hardware, const Plan& plan) {
       if (activity.private_time_s > 0.0 && !std::isfinite(1.0 / activity.private_time_s)) {
         throw std::invalid_argument("invalid_plan: private-time rate bound overflows");
       }
+      if (!std::isfinite(activity.vec_eqops_fraction) ||
+          activity.vec_eqops_fraction < 0.0 || activity.vec_eqops_fraction >= 1.0 ||
+          (activity.vec_eqops == std::numeric_limits<std::uint64_t>::max() &&
+           activity.vec_eqops_fraction != 0.0)) {
+        throw std::invalid_argument("invalid_plan: fractional Vec work must be a remainder in [0,1) within uint64 work range");
+      }
+      (void)planned_vec_eqops(activity);
       for (double delta : activity.credit_delta) {
         if (!std::isfinite(delta)) {
           throw std::invalid_argument("invalid_plan: credit_delta must be finite");
@@ -921,8 +933,8 @@ void Runtime::settle() {
           execution.int4_served += int4_correction;
           categorized.int4_ops += int4_correction;
           const long double vec_correction =
-              static_cast<long double>(live.definition.vec_eqops) - live.vec_served;
-          live.vec_served = live.definition.vec_eqops;
+              planned_vec_eqops(live.definition) - live.vec_served;
+          live.vec_served = planned_vec_eqops(live.definition);
           execution.vec_served += vec_correction;
           categorized.vec_eqops += vec_correction;
           live.done = true;
@@ -1358,7 +1370,7 @@ void Runtime::integrate(long double delta_ns) {
         }
       }
       const long double served_int4 = static_cast<long double>(live.definition.int4_ops) * delta_progress;
-      const long double served_vec = static_cast<long double>(live.definition.vec_eqops) * delta_progress;
+      const long double served_vec = planned_vec_eqops(live.definition) * delta_progress;
       live.int4_served += served_int4;
       live.vec_served += served_vec;
       execution.int4_served += served_int4;
@@ -1653,6 +1665,11 @@ nlohmann::json Runtime::query_progress(std::uint64_t handle) const {
                           {"vec_served_eqops_exact", decimal_measure(live.vec_served)},
                           {"credit_delta", live.definition.credit_delta},
                           {"done", live.done}});
+    if (live.definition.vec_eqops_fraction != 0.0) {
+      activities.back()["vec_eqops"] = decimal_measure(planned_vec_eqops(live.definition));
+      activities.back()["vec_eqops_whole"] = std::to_string(live.definition.vec_eqops);
+      activities.back()["vec_eqops_fraction"] = equivalent_fraction_to_json(live.definition.vec_eqops_fraction);
+    }
   }
   const std::string state = execution.cancelled ? "cancelled"
                            : execution.terminal ? "finished"
@@ -2130,8 +2147,8 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
       live.vec_served = parse_long_double(state.at("vec_served"), "activity.vec_served");
       const long double expected_int4 = live.done ? live.definition.int4_ops
           : static_cast<long double>(live.definition.int4_ops) * live.progress;
-      const long double expected_vec = live.done ? live.definition.vec_eqops
-          : static_cast<long double>(live.definition.vec_eqops) * live.progress;
+      const long double expected_vec = live.done ? planned_vec_eqops(live.definition)
+          : planned_vec_eqops(live.definition) * live.progress;
       if (std::abs(live.int4_served - expected_int4) > 2.0e-9L * std::max(1.0L, expected_int4) ||
           std::abs(live.vec_served - expected_vec) > 2.0e-9L * std::max(1.0L, expected_vec)) {
         throw std::invalid_argument("invalid_snapshot: activity operation counters differ from progress");
@@ -2567,7 +2584,7 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
       {"profile", profile_string("pipeline_profile")},
       {"status", "assumed"}};
   result["granularity_identity"] = {
-      {"schema", "coarse_die_plan_v2"},
+      {"schema", has_fractional_work(plan) ? "coarse_die_plan_v3" : "coarse_die_plan_v2"},
       {"epoch_count", plan.epochs.size()},
       {"activity_limit_per_epoch", 3},
       {"repeat_count_semantics", "audit_metadata_only"},
@@ -2575,6 +2592,10 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
       {"validation_status", "not_run"},
       {"heldout_status", "not_available"},
       {"ranking_status", "not_tested"}};
+  if (has_fractional_work(plan)) {
+    result["plan_schema"] = "coarse_die_plan_v3";
+    result["equivalent_work_schema"] = "dyadic_equivalent_work_v1";
+  }
   result["granularity_validation"] = "not_run";
   result["heldout_status"] = "not_available";
   result["ranking_status"] = "not_tested";

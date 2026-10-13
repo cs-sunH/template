@@ -26,6 +26,11 @@ typedef struct {
     uint64_t hbm_served_bytes[2][2];
     uint64_t int4_ops_served, vec_eqops_served;
 } DieCompletionV2;
+/* The fixed V2 activity/completion records represent integral equivalent work
+ * only and keep their original layout. Fractional work is represented by the
+ * versioned Plan V3 payload (whole + fractional remainder) and by the JSON
+ * progress/counter/snapshot APIs below; never round it into these V2 records.
+ * No exported function populates a DieActivityV2 or DieCompletionV2. */
 enum DieStatusV2 {
     DIE_OK=0, DIE_INVALID_INPUT=1, DIE_INVALID_HARDWARE=2,
     DIE_MISSING_TOPOLOGY=3, DIE_UNSUPPORTED=4, DIE_OVERFLOW=5,

@@ -127,6 +127,10 @@ json batch(DieHandle model,const char* in,bool retain) {
             if(retain) {
                 auto h=id(); plans.emplace(h,PlanRef{m,p});
                 rs.push_back({{"plan_handle",h},{"plan_hash",p->fingerprint},{"summary",p->summary}});
+                if(has_fractional_work(*p)) {
+                    rs.back()["plan_schema"]="coarse_die_plan_v3";
+                    rs.back()["equivalent_work_schema"]="dyadic_equivalent_work_v1";
+                }
             } else rs.push_back(estimate_alone(m->hardware,*p));
             es.push_back(nullptr);
         } catch(const std::exception& e) {
