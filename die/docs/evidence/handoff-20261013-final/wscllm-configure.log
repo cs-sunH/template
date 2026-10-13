@@ -1,0 +1,7 @@
+-- {fmt} version: 11.0.2
+-- Build type: Release
+-- Build spdlog: 1.14.1
+-- Build type: Release
+-- Configuring done (0.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: /workspace/template/work/wscllm-build/build_congestion_aware
