@@ -1,0 +1,8 @@
+Internal ctest changing into directory: /workspace/template/die/work/lru-workspace-envelope-20261014/build
+Test project /workspace/template/die/work/lru-workspace-envelope-20261014/build
+    Start 26: coarse_workspace_envelope_test
+1/1 Test #26: coarse_workspace_envelope_test ...   Passed    0.27 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.27 sec

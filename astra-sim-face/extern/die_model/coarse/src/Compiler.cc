@@ -508,6 +508,38 @@ std::string summary_string(const Plan& plan, const char* key) {
 
 }  // namespace
 
+WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
+                                              const nlohmann::json& task) {
+  const nlohmann::json normalized = normalize_task(hardware, task);
+  std::vector<std::shared_ptr<Plan>> candidates =
+      detail::enumerate_mappings_for_compile(hardware, normalized);
+  if (candidates.empty()) {
+    fail("compile", "unsupported_workspace: no feasible fixed mapping candidate");
+  }
+  if (candidates.size() > 256) fail("compile", "candidate set exceeds fixed upper bound 256");
+
+  const std::string expected_hardware = hardware.fingerprint.empty()
+      ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
+  u64 maximum = 0;
+  for (const auto& candidate : candidates) {
+    if (!candidate || candidate->task != normalized ||
+        candidate->hardware_fingerprint != expected_hardware) {
+      fail("compile", "invalid_plan: mapping candidate identity is incomplete");
+    }
+    maximum = std::max(maximum, hbm_workspace_peak_bytes(*candidate));
+  }
+
+  WorkspaceEnvelope result;
+  result.candidate_count = static_cast<u64>(candidates.size());
+  result.max_hbm_workspace_peak_bytes = maximum;
+  result.hardware_fingerprint = expected_hardware;
+  result.normalized_task_fingerprint = stable_hash(normalized.dump());
+  result.op_kind = normalized.at("op_kind").get<std::string>();
+  result.phase = normalized.at("phase").get<std::string>();
+  result.normalized_task = normalized;
+  return result;
+}
+
 std::shared_ptr<const Plan> compile(const Hardware& hardware,
                                    const nlohmann::json& task) {
   const nlohmann::json normalized = normalize_task(hardware, task);

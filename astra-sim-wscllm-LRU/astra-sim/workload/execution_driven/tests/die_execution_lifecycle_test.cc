@@ -1032,6 +1032,80 @@ int main() {
             comp.stage = "prefill";
             comp.compute.die_task_json =
                 std::make_shared<const nlohmann::json>(task);
+
+            // Separate pressure fixture: two independent positive-workspace
+            // Plans remain ready and blocked in one complete free-node pass.
+            // Add them in reverse id order to verify the snapshot's ascending
+            // traversal and that the diagnostic keeps the last observation.
+            Fixture pressure_fixture =
+                make_fixture(config_dir, "coarse_system.json", 2);
+            auto& pressure_workload = *pressure_fixture.sys->workload;
+            const auto pressure_plan =
+                pressure_fixture.sys->coarse_die_runtime->compile(task);
+            const uint64_t pressure_workspace_bytes =
+                coarse_die::hbm_workspace_peak_bytes(*pressure_plan);
+            OnlineNode pressure_last = comp;
+            pressure_last.global_id = 902;
+            pressure_last.name = "coarse_workspace_pressure_last";
+            OnlineNode pressure_first = comp;
+            pressure_first.global_id = 901;
+            pressure_first.name = "coarse_workspace_pressure_first";
+            pressure_fixture.source->store().add_node(pressure_last);
+            pressure_fixture.source->store().add_node(pressure_first);
+            install_workspace_snapshot(pressure_fixture.sys.get(),
+                                       pressure_workspace_bytes + 1, 2);
+            pressure_workload.issue_dep_free_nodes();
+            std::vector<uint64_t> pressure_free_ids;
+            pressure_fixture.source->store().fill_free_node_snapshot(
+                pressure_free_ids);
+            const auto pressure_diagnostic =
+                pressure_workload.blocked_workspace_plan_diagnostic();
+            const OnlineNode* const last_pressure_node =
+                pressure_fixture.source->store().node_ptr(902);
+            expect_true(pressure_workspace_bytes == workspace_bytes &&
+                            pressure_free_ids ==
+                                std::vector<uint64_t>{901, 902} &&
+                            pressure_diagnostic.has_blocked_plan &&
+                            pressure_diagnostic.blocked_plan_count == 2 &&
+                            pressure_diagnostic.node_id == 902 &&
+                            last_pressure_node != nullptr &&
+                            pressure_diagnostic.generation ==
+                                last_pressure_node->generation &&
+                            pressure_diagnostic.workspace_bytes ==
+                                pressure_workspace_bytes &&
+                            pressure_fixture.sys->workspace_admission
+                                    ->active_lease_count() == 0 &&
+                            pressure_workload.hw_resource
+                                    ->num_in_flight_gpu_comp_ops == 0 &&
+                            pressure_fixture.event_queue->finished() &&
+                            pressure_fixture.event_queue
+                                    ->scheduled_event_count() == 0 &&
+                            !pressure_fixture.event_queue->has_deferred_work(),
+                        "K: one issue pass records both independent blocked Plans and the ascending last observation without GPU, lease, or queue work");
+            pressure_fixture.event_queue->schedule_event(
+                101, no_op_event, nullptr);
+            pressure_fixture.event_queue->proceed();
+            pressure_free_ids.clear();
+            pressure_fixture.source->store().fill_free_node_snapshot(
+                pressure_free_ids);
+            expect_true(pressure_fixture.event_queue->finished() &&
+                            pressure_fixture.event_queue
+                                    ->scheduled_event_count() == 0 &&
+                            !pressure_fixture.event_queue->has_deferred_work() &&
+                            pressure_free_ids ==
+                                std::vector<uint64_t>{901, 902} &&
+                            pressure_workload.hw_resource
+                                    ->num_in_flight_gpu_comp_ops == 0 &&
+                            pressure_fixture.sys->workspace_admission
+                                    ->active_lease_count() == 0 &&
+                            pressure_workload
+                                    .blocked_workspace_plan_diagnostic()
+                                    .blocked_plan_count == 2 &&
+                            pressure_workload
+                                    .blocked_workspace_plan_diagnostic()
+                                    .node_id == 902,
+                        "K: real queue drains and both independent Plans remain blocked with last-pass evidence intact");
+
             fixture.source->store().add_node(comp);
 
             OnlineNode child;
@@ -1052,12 +1126,54 @@ int main() {
             workload.issue_dep_free_nodes();
             std::vector<uint64_t> free_ids;
             fixture.source->store().fill_free_node_snapshot(free_ids);
+            const auto blocked_plan =
+                workload.blocked_workspace_plan_diagnostic();
+            const auto blocked_workspace_state =
+                fixture.sys->workspace_admission->state();
+            const auto blocked_capacity =
+                fixture.sys->workspace_admission->capacity_snapshot_view();
             expect_true(fixture.sys->workspace_admission->active_lease_count() == 0 &&
                             workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
                             std::find(free_ids.begin(), free_ids.end(), 100) !=
                                 free_ids.end() &&
                             g_terminal_fires.count(100) == 0,
                         "K: blocked Plan stays free and consumes no GPU slot or lease");
+            expect_true(blocked_plan.has_blocked_plan &&
+                            blocked_plan.blocked_plan_count == 1 &&
+                            blocked_plan.node_id == 100 &&
+                            blocked_plan.generation == comp.generation &&
+                            blocked_plan.workspace_bytes == workspace_bytes &&
+                            fixture.sys->workspace_admission
+                                    ->has_capacity_snapshot() &&
+                            blocked_workspace_state.workspace_revision == 0 &&
+                            blocked_workspace_state.active_workspace_bytes == 0 &&
+                            blocked_capacity.workspace_revision == 0 &&
+                            blocked_capacity.capacity_bytes == workspace_bytes + 1 &&
+                            blocked_capacity.model_weight_bytes == 0 &&
+                            blocked_capacity.resident_kv_bytes == 2 &&
+                            blocked_capacity.reserved_request_bytes == 0,
+                        "K: diagnostic captures the last ready blocked Plan and authoritative rank capacity view");
+
+            // Reuse Case H's harmless queued event as a liveness-pressure
+            // probe: after it drains there is no physical or deferred work
+            // to wake a rank whose only ready COMP is workspace-blocked.
+            fixture.event_queue->schedule_event(101, no_op_event, nullptr);
+            expect_true(!fixture.event_queue->finished() &&
+                            fixture.event_queue->scheduled_event_count() == 1,
+                        "K: the no-op probe starts as real queued work");
+            fixture.event_queue->proceed();
+            free_ids.clear();
+            fixture.source->store().fill_free_node_snapshot(free_ids);
+            expect_true(fixture.event_queue->finished() &&
+                            !fixture.event_queue->has_deferred_work() &&
+                            fixture.event_queue->scheduled_event_count() == 0 &&
+                            std::find(free_ids.begin(), free_ids.end(), 100) !=
+                                free_ids.end() &&
+                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                            blocked_plan.has_blocked_plan &&
+                            workload.blocked_workspace_plan_diagnostic()
+                                    .workspace_bytes == workspace_bytes,
+                        "K: ready Plan remains blocked with GPU free after the real queue drains");
 
             install_workspace_snapshot(fixture.sys.get(),
                                        workspace_bytes + 1, 1);
@@ -1068,6 +1184,8 @@ int main() {
                             fixture.sys->workspace_admission
                                     ->active_workspace_bytes() == workspace_bytes &&
                             workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
+                            !workload.blocked_workspace_plan_diagnostic()
+                                 .has_blocked_plan &&
                             std::find(free_ids.begin(), free_ids.end(), 100) ==
                                 free_ids.end(),
                         "K: exact capacity acquires the lease before take/occupy");

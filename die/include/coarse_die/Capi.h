@@ -48,6 +48,9 @@ enum DieStatusV2 {
 uint32_t die_coarse_abi_version(void);
 int die_coarse_create_model_v2(const char*, DieHandle*);
 const char* die_coarse_hardware_summary_v2(DieHandle);
+/* Read-only compile-time workspace envelope over every fixed mapping
+ * candidate for one task; creates no Plan handle and does not touch cache. */
+const char* die_coarse_workspace_envelope_v2(DieHandle,const char*);
 /* {"specs":[task,...]}; results/errors are positional. compile_batch results
  * contain plan_handle, plan_hash, summary. release each returned plan handle. */
 const char* die_coarse_compile_batch_v2(DieHandle,const char*);

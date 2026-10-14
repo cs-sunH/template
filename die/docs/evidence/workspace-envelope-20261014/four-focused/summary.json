@@ -1,0 +1,12 @@
+{
+  "abi_targets_rebuilt_by_this_run": false,
+  "canonical_source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+  "focused_tests_expected": 18,
+  "focused_tests_passed": 18,
+  "joint_business_focused": "not_yet_ported",
+  "online_rebuilt_for_each_repository": true,
+  "repositories": 4,
+  "results": "work/workspace-envelope-20261014/four-focused/results.json",
+  "status": "passed",
+  "tracked_worktree_change_during_lru_build": "parallel Python workspace audit; excluded from C++/CMake source manifests"
+}

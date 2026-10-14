@@ -1,0 +1,16 @@
+test_attention_and_ffn_cover_all_real_mapping_candidates (test_die_workspace_envelope.CabiEnvelopeTests.test_attention_and_ffn_cover_all_real_mapping_candidates) ... ok
+test_context_manager_closes_single_model_and_close_is_idempotent (test_die_workspace_envelope.CabiEnvelopeTests.test_context_manager_closes_single_model_and_close_is_idempotent) ... ok
+test_dimension_and_span_aliases_normalize_to_same_identity (test_die_workspace_envelope.CabiEnvelopeTests.test_dimension_and_span_aliases_normalize_to_same_identity) ... ok
+test_invalid_spec_error_is_preserved_and_success_clears_it (test_die_workspace_envelope.CabiEnvelopeTests.test_invalid_spec_error_is_preserved_and_success_clears_it) ... ok
+test_legacy_typed_die_op_spec_returns_canonical_task (test_die_workspace_envelope.CabiEnvelopeTests.test_legacy_typed_die_op_spec_returns_canonical_task) ... ok
+test_response_u64_and_identity_checks_reject_tampering (test_die_workspace_envelope.CabiEnvelopeTests.test_response_u64_and_identity_checks_reject_tampering) ... ok
+test_u64_above_binary64_exact_range_stays_exact (test_die_workspace_envelope.CabiEnvelopeTests.test_u64_above_binary64_exact_range_stays_exact) ... ok
+test_u64_inputs_reject_bool_and_float (test_die_workspace_envelope.CabiEnvelopeTests.test_u64_inputs_reject_bool_and_float) ... ok
+test_environment_path_precedes_local_lib_and_bin_candidates (test_die_workspace_envelope.DiscoveryAndOwnershipTests.test_environment_path_precedes_local_lib_and_bin_candidates) ... ok
+test_explicit_archived_old_library_fails_closed_on_missing_symbol (test_die_workspace_envelope.DiscoveryAndOwnershipTests.test_explicit_archived_old_library_fails_closed_on_missing_symbol) ... ok
+test_owned_buffer_is_freed_when_decoding_raises (test_die_workspace_envelope.DiscoveryAndOwnershipTests.test_owned_buffer_is_freed_when_decoding_raises) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.214s
+
+OK

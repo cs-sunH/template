@@ -1,0 +1,43 @@
+[  4%] Built target coarse_die
+[  8%] Built target fmt
+[ 32%] Built target yaml-cpp
+[ 36%] Built target spdlog
+[ 40%] Built target die_model
+[ 48%] Built target Analytical_Congestion_Aware
+[ 48%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/CoarseDieRuntime.cc.o
+[ 48%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/Sys.cc.o
+[ 48%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/DieModelAdapter.cc.o
+[ 48%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/LocalHbmBandwidthModel.cc.o
+[ 52%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/MetricCollector.cc.o
+[ 52%] Linking CXX static library ../lib/libAstraSim.a
+[ 88%] Built target AstraSim
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+[  4%] Built target coarse_die
+[ 28%] Built target yaml-cpp
+[ 32%] Built target fmt
+[ 36%] Built target spdlog
+[ 40%] Built target die_model
+[ 48%] Built target Analytical_Congestion_Aware
+[ 88%] Built target AstraSim
+[ 88%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-wscllm/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc.o
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[  3%] Built target coarse_die
+[ 26%] Built target yaml-cpp
+[ 30%] Built target fmt
+[ 34%] Built target spdlog
+[ 38%] Built target die_model
+[ 46%] Built target Analytical_Congestion_Aware
+[ 84%] Built target AstraSim
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+[  4%] Built target coarse_die
+[ 28%] Built target yaml-cpp
+[ 32%] Built target fmt
+[ 36%] Built target spdlog
+[ 40%] Built target die_model
+[ 48%] Built target Analytical_Congestion_Aware
+[ 88%] Built target AstraSim
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_Online
+[100%] Built target AstraSim_Analytical_Congestion_Aware_Online

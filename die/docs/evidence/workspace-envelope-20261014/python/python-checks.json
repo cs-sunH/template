@@ -1,0 +1,54 @@
+{
+  "online": {
+    "modules": [
+      "online.test_admission_eviction_accumulation",
+      "online.test_admission_net_credit",
+      "online.test_bridge_seq_ascii_guard",
+      "online.test_decode_eviction_emission_timing",
+      "online.test_decode_eviction_serialization",
+      "online.test_die_model_adapter",
+      "online.test_die_workspace_envelope",
+      "online.test_eviction_side_branch_structure",
+      "online.test_forward_edge_invariant",
+      "online.test_graph_batch_builder",
+      "online.test_graph_batch_rank_ledger",
+      "online.test_kv_transfer_emission",
+      "online.test_ledger_reconcile_rules",
+      "online.test_propagating_tail",
+      "online.test_store_restore_ordering",
+      "online.test_train_machinery",
+      "online.test_transfer_frontier_neutral",
+      "online.test_weight_passes",
+      "online.test_workspace_admission_v2"
+    ],
+    "run": 155,
+    "passed": 154,
+    "failures": 0,
+    "errors": 0,
+    "skipped": [
+      [
+        "test_spec_json_round_trip_through_cost_library (online.test_die_model_adapter.BuildSpecTests.test_spec_json_round_trip_through_cost_library)",
+        "die_model_oracle unavailable"
+      ]
+    ],
+    "successful": true
+  },
+  "typed_config_scheduler": {
+    "modules": [
+      "test_wsc_llm_typed_hardware",
+      "test_config_resolver",
+      "test_wsc_llm_scheduler"
+    ],
+    "run": 44,
+    "passed": 44,
+    "failures": 0,
+    "errors": 0,
+    "skipped": [],
+    "successful": true
+  },
+  "schema": {
+    "path": "/workspace/template/astra-sim-wscllm-LRU/work/chakra-python-root/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py",
+    "sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b"
+  },
+  "runner_sha256": "9082f46dbc9dbe140b8d50720307555032d5c08d85d6e0048083eba2ba694164"
+}

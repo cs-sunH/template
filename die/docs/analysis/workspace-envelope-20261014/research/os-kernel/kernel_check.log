@@ -1,0 +1,162 @@
+{
+  "facts_sha256": {
+    "dense": "a5c41a4530d3d826df18b0142c6abb547ee0529bd54964138410116dcdcdfa3c",
+    "int4_converted_fractional": "667020d2ba8c32d1e9f3ff833acf634f0d4dea18ac10c120933cc79f8c9525aa",
+    "int4_converted_storage": "c4ef842e9d937f54287e143d65be3c1c1c4e8e85b167c6eb969c8677e2d39ca8",
+    "int4_native_small": "708d5231fbe8ecc53c0723860e5bb7ab0342ca40571a9c068dd5be03f92306e6",
+    "large_k": "20cee3d7aa39f03cfb255df022b8b360c4edf94d830cfbade4249fe74e6e15d9",
+    "large_outputs": "39c4232ac08d5cd6bf7baa42d8b0face2d26d10c0492720d6027252646330a07",
+    "output_pressure_k1_tiles128": "b3b2a53ef7c0b69db8ad289532ddb4e1c55bc16d76062334b23f73c7df3f2322",
+    "strict_small": "b02ac3792736d8a6c4983445979a6426740c5dc7e6887378ac1ab7b277825adb"
+  },
+  "fixed_rational_source_sha256": "f7f02d21b801a0f8f4dacacb56dac86d4b047d90f6dec8a58f818c4d24079272",
+  "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+  "kernel_header_sha256": "2276da8f8f17c69b19fef178b4076a5be4a35b5e6b07740cabc23edf5adc73f0",
+  "kernel_source_sha256": "3614bffb38f0339b1c904f2a36e91889457f33830618a102bba968ce142cb038",
+  "runs": [
+    {
+      "events": 28,
+      "fixture": "strict_small",
+      "independent_fraction_prefix": "passed",
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.019042169999011094
+    },
+    {
+      "events": 26,
+      "fixture": "int4_native_small",
+      "independent_fraction_prefix": "passed",
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.018973680000271997
+    },
+    {
+      "events": 28,
+      "fixture": "int4_converted_fractional",
+      "independent_fraction_prefix": "passed",
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.020182062999083428
+    },
+    {
+      "events": 28,
+      "fixture": "int4_converted_storage",
+      "independent_fraction_prefix": "passed",
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.022266167999987374
+    },
+    {
+      "events": 72,
+      "fixture": "dense",
+      "independent_fraction_prefix": "passed",
+      "scenario": "full",
+      "skipped_waves": "617",
+      "status": "passed",
+      "wall_seconds": 0.04150642999957199
+    },
+    {
+      "events": 20,
+      "fixture": "output_pressure_k1_tiles128",
+      "independent_fraction_prefix": "passed",
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.015429348999532522
+    },
+    {
+      "events": 72,
+      "fixture": "large_k",
+      "large_shape_oracle": "same exact Fraction model; no per-wave expansion",
+      "scenario": "full",
+      "skipped_outputs": "4",
+      "skipped_waves": "9999977",
+      "status": "passed",
+      "wall_seconds": 0.043051519998698495
+    },
+    {
+      "events": 72,
+      "fixture": "large_outputs",
+      "large_shape_oracle": "same exact Fraction model; no per-wave expansion",
+      "scenario": "full",
+      "skipped_outputs": "2000004",
+      "skipped_waves": "130000617",
+      "status": "passed",
+      "wall_seconds": 0.0430014769990521
+    },
+    {
+      "final_events": 29,
+      "fixture": "strict_small",
+      "independent_fraction_prefix": "passed",
+      "pause_events": 1,
+      "scenario": "integer-stop-resume",
+      "status": "passed",
+      "wall_seconds": 0.01970285499919555
+    },
+    {
+      "events_at_stops": [
+        3,
+        6
+      ],
+      "fixture": "strict_small",
+      "global_event_budget_preserved": true,
+      "independent_prefix": "passed",
+      "scenario": "pause-resume",
+      "status": "passed",
+      "total_events": 30,
+      "wall_seconds": 0.035802953998427256
+    },
+    {
+      "capacity_invalidations": 1,
+      "events_after_change": 6,
+      "events_before_change": 3,
+      "fixture": "strict_small",
+      "global_event_budget_preserved": true,
+      "reverse_stop_preserved_clock": true,
+      "scenario": "capacity-change-stop-resume",
+      "status": "passed",
+      "wall_seconds": 0.03572933499890496
+    },
+    {
+      "events_at_stops": [
+        31,
+        58
+      ],
+      "fixture": "large_k",
+      "global_event_budget_preserved": true,
+      "independent_prefix": "not expanded; exact Fraction resume comparison only",
+      "scenario": "pause-resume",
+      "status": "passed",
+      "total_events": 102,
+      "wall_seconds": 0.11822752700027195
+    },
+    {
+      "events_at_stops": [
+        31,
+        57
+      ],
+      "fixture": "large_outputs",
+      "global_event_budget_preserved": true,
+      "independent_prefix": "not expanded; exact Fraction resume comparison only",
+      "scenario": "pause-resume",
+      "status": "passed",
+      "total_events": 100,
+      "wall_seconds": 0.10555379500146955
+    },
+    {
+      "events": 256,
+      "fixture": "dense",
+      "result": "fail-closed exactly at global 256-event cap",
+      "scenario": "unpowered-cap-exhaustion",
+      "status": "failed_closed",
+      "wall_seconds": 0.11506975699921895
+    }
+  ],
+  "schema": "solo13_cpp_kernel_check_v1",
+  "scope": "scratch-only single-owner/core continuous exact-time kernel; no Runtime/C ABI/production certificate",
+  "status": "passed"
+}

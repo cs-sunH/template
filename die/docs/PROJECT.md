@@ -41,9 +41,11 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-当前持续开发分支 `codex/die-lru-workspace-v2-20261014`；共享分支 `main`。已fetch/ancestry确认 [PR #8](https://github.com/cs-sunH/template/pull/8) merged 的 main `e2dd5af7b61895a85b122c200606017bb741a004`。最新指令是持续自主开发，上轮 stop 仅限上轮 Session。当前LRU协议/lease/typedmetrics/官方8rank正常路径与OS solo13域外部边界研究见 HANDOFF 和对应evidence/analysis；生产timing、压力/history业务、其它三仓v2、性能及完整GQA输入仍未验收。
+当前持续开发分支 `codex/die-workspace-envelope-20261014`；共享分支 `main`。已fetch/ff到用户新JOINT导入的 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge928f053/source cef6790b/CI38552490061 success。新workspace API/client/optional manager floor及双Plan压力诊断已验证，canonical23五仓新digest e0b6fd…cbbf78。新活动JOINT目前只接纯库，业务coarse适配待按新实现移植，joint_old存档不改。用户已要求本轮GitHub交接后停止，所有有效研究/部分脚本已冻结保存。交付源 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc` 已推送，[交接 PR #10](https://github.com/cs-sunH/template/pull/10) 需merged并fetch核main含交接版后安全接棒。scheduler E与store/migration物理释放门、OS C++ solo13 scratch待下一Session继续；生产精度/性能、TX8目标heldout及完整GQA输入仍未验收。
 
 ## 重要决定及变更记录
+
+- 2026-10-14 workspace上界基础：一个task的全部Mapping候选由C++输出max exact u64，不改旧Plan identities；public30/30+62hash/summary全等、真实legacy240queries和生产ABI全等重放。LRU optional E默认0，fit取串行max(A,E)，永久E不可行fail、临时A可retry，不进KV/active/remote账；manager57与online154pass1skip/44通过。五仓ABI10build/config83、四仓Online/focused18通过；新main JOINT替换后仅纯库发布，旧业务结果不套用。scheduler E尚未激活，source-release门须早于KV容量复用。
 
 - 2026-10-14 LRU v2检查点：strict fullrank容量桥接与exact Plan lease落地，保持whole-session/remote/pool/history；typed硬件单位隔离；coarse指标/cancel与旧LRU字段兼容。最终CPP9/9、Python143pass1skip+44/44、实际8rankMHA官方Online0/0/0、124terminals、八个正workspace FFN Plan；bridge只采阶段末active0。LRU Ring2×2约束不放宽，GQA publicproducer尚缺。base/LRU prospectivePlan压力失活与store物理释放排序成为下一明确实现依赖。
 - 同检查点：actual13域facts exact solo powering/226外部stop前缀与resume/capacity对拍，standardC++256slot/768scratch primitive2247差分与sanitizer self-test通过，研究尚未进生产。naive256scratch与三个public-ns偏差诚实保留，原3%/5%门限不变；TX8无新fit/heldout/host证书。

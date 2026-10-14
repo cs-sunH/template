@@ -133,6 +133,17 @@ class WorkspaceAdmission final {
     bool has_capacity_snapshot() const { return has_capacity_snapshot_; }
     std::size_t active_lease_count() const { return active_.size(); }
 
+    /// Return the installed Python capacity fields without mutation. The
+    /// separate has_capacity_snapshot() bit is the authority indicator;
+    /// workspace_revision() is the current lease-ledger revision, while the
+    /// returned revision is the one echoed by the installed snapshot.
+    WorkspaceCapacityRank capacity_snapshot_view() const {
+        return WorkspaceCapacityRank{rank_, capacity_snapshot_revision_,
+                                     capacity_bytes_, model_weight_bytes_,
+                                     resident_kv_bytes_,
+                                     reserved_request_bytes_};
+    }
+
     WorkspaceRankState state() const {
         return WorkspaceRankState{rank_, workspace_revision_,
                                   active_workspace_bytes_};
@@ -245,6 +256,7 @@ class WorkspaceAdmission final {
     /// itself uses only scalar assignments and cannot fail.
     void install_capacity_snapshot_unchecked(
         const WorkspaceCapacityRank& snapshot) noexcept {
+        capacity_snapshot_revision_ = snapshot.workspace_revision;
         capacity_bytes_ = snapshot.capacity_bytes;
         model_weight_bytes_ = snapshot.model_weight_bytes;
         resident_kv_bytes_ = snapshot.resident_kv_bytes;
@@ -312,6 +324,7 @@ class WorkspaceAdmission final {
     uint64_t active_workspace_bytes_ = 0;
     uint64_t next_lease_id_ = 1;
     bool has_capacity_snapshot_ = false;
+    uint64_t capacity_snapshot_revision_ = 0;
     uint64_t capacity_bytes_ = 0;
     uint64_t model_weight_bytes_ = 0;
     uint64_t resident_kv_bytes_ = 0;

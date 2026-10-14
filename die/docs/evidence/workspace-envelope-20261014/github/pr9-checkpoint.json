@@ -1,0 +1,29 @@
+{
+  "schema": "github_checkpoint_v1",
+  "pr": {
+    "number": 9,
+    "url": "https://github.com/cs-sunH/template/pull/9",
+    "state": "closed",
+    "merged": true,
+    "source_sha": "cef6790bb37d4959d0340d1ec1010e461ffc19d5",
+    "merge_sha": "928f05309722869a8339918340aa953e3ea7c327"
+  },
+  "ci": [
+    {
+      "id": 38552490061,
+      "name": "die Codex Handoff Check",
+      "status": "completed",
+      "conclusion": "success",
+      "run_number": 44,
+      "jobs_url": "https://api.github.com/repos/cs-sunH/template/actions/runs/38552490061/jobs",
+      "logs_url": "https://api.github.com/repos/cs-sunH/template/actions/runs/38552490061/logs",
+      "workflow_id": 382919720
+    }
+  ],
+  "local_verification": {
+    "method": "git fetch origin main; git merge-base --is-ancestor source_sha origin/main; merge --ff-only; switch new development branch",
+    "verified_main_sha": "928f05309722869a8339918340aa953e3ea7c327",
+    "current_branch": "codex/die-workspace-envelope-20261014"
+  },
+  "semantics": "Actual PR/API/fetch facts. PR9 source and evidence are merged; development continues with new uncommitted envelope/pressure work."
+}

@@ -1,12 +1,30 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-14。已收到新的持续自主开发指令，撤销上轮 Session 的停工状态；当前工作仍在推进，并未收到本轮交接或停止指令。以下新增检查点与历史交接分别记录。
+记录日期：2026-10-14。用户已明确要求停止新开发、完成当前最小任务后迅速同步 GitHub 交接；所有子任务已冻结，无在途命令。合并 main 并核实后立即停止。本轮交接与历史记录分别列明。
 
 ## Current Status
 
-### 当前接续检查点：LRU workspace v2 / OS solo 13 域边界
+### 当前 workspace envelope / 准入基础检查点
 
-[PR #8](https://github.com/cs-sunH/template/pull/8) 已 merged；fetch/ancestry 核实 main `e2dd5af7b61895a85b122c200606017bb741a004` 包含源码 `a19057c9` 和最终检查记录 `df2f46d2`。当前工作分支 `codex/die-lru-workspace-v2-20261014`。以下是继续开发检查点，未收到本轮停止/交接指令，工程整体仍 **NOT ACCEPTED**。
+当前共享 main 已 fetch/ff 到 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge `928f053` 以及用户新增的 JOINT 更新。该外部提交只改变活动 `astra-sim-joint` 和存档 `astra-sim-joint_old`；没有覆盖 die/LRU WIP。活动 JOINT 已更换实现，旧 coarse 业务适配结果不能套用；存档目录本轮未修改。当前分支 `codex/die-workspace-envelope-20261014`，本阶段源码/证据提交 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc` 已推送，[交接 PR #10](https://github.com/cs-sunH/template/pull/10) 已创建。只有该PR merged且fetch/ancestry核实main包含本交接版之后安全接棒；此前 **NOT READY FOR HANDOFF**。GitHub事实见 `evidence/workspace-envelope-20261014/github/`。
+
+公共 `compile_workspace_envelope` / `die_coarse_workspace_envelope_v2` 已实现：同 normalization、真正 Mapping 候选向量的 max exact uint64 peak、task/hardware identity，沿原 owned-JSON/free/last_error ABI；不改 Plan layout、hash/summary、handles/cache。FFN enumeration仍可调用原内部子候选延迟估计，不能称完全没有内部estimate。公共 **30/30**、旧 **62/62** hash/完整summary全等。两份真实singleton MHA manifest的240个legacy v1查询 **224成功/16预期local_region拒绝**；新生产ABI重放全部response/error全等。上界含未选中mapping，不以selected Plan峰值替代。
+
+LRU新增纯stdlib ctypes客户端，真实ABI **11/11**。manager的optional immutable full-rank future floor `E`已实现，默认0；fit/reclaim/reservation extension使用 `max(A,E)`，永久E造成空实例不可行明确fail，临时A继续blocked/retry。`E`不进入active workspace/revision/KV/reservation/remote/journal。相关六suite **57/57**；root全online **154 passed/1 skipped**（可选oracle缺失）、typed/config/scheduler **44/44**。**scheduler尚未安装E**：finite-manifest coverage、actual Plan<=E核验及 remote_store/noc_migrate source-release顺序仍在继续，不能把manager基础称作压力修复完成。max只覆盖正常串行Compute gate，不覆盖绕过gate的direct并发调用。
+
+真实双ready正workspace Plan压测通过：count2、最后观测node902、两node仍free、GPU/lease/event/deferred均0，排空真实no-op后仍quiescent；仅bounded last-issue observations/census，无blind timer。完整Online closed-input fatal分支未实跑。四仓Online已重建且链接新static archive，focused **18/18**（base/FACE/FACE-LRU各3、LRU9）；本阶段未重跑生产Online E2E。
+
+canonical23五仓同步digest **`e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78`**；五仓两ABI全部构建、config **83/83无skip**。五份coarse CABI SHA **`7e9b9670b8c06c8600688acf6446acc5f112a97e83315a26ea8d554040cc5600`**；独立公共build SHA `b4778f…ea80d`分别记录。新JOINT只新增纯canonical库，legacy config13项不证明coarse业务端接入；环境override过早恢复的negative-test fixture修复，失败日志保留。重建/证据见 `analysis/workspace-envelope-20261014/` 和对应evidence；旧结果按原source/binary身份保留。
+
+OS scratch 已冻结并保存完整源码/facts/tests：未instrumented重建baseline full suite通过，身份在 `analysis/workspace-envelope-20261014/research/os-kernel/pre-profile/reconstructed_baseline_validation.json`（header bc21d044…/source affee811…/binary d4cf455…）；固定32类/3 LCS/2+2槽/global256 expanded events/exact guards，single-Core single-owner全部13域/PRIVATE/Q守恒、stop/resume/capacity和huge powering。它不是Runtime每solve256 LP pivot证书。后续profiler/reset源码未重跑full suite，benchmark仅large_outputs单样本smoke；n30/perf未跑。ASan/UBSan构建成功，但smoke因2^200先触发normalized rational超256而在stop-clamp预期assert失败，无sanitizer诊断，不能标sanitizer通过；细节/历史source-hash缺失与当前可重建baseline分开保存。当前public-ns rounding与多K full-output wait尚未证明，生产无改动。
+
+LRU source-release三文件**未应用patch**与realbuilder fixture已保存：baseline/prototype各41旧测试及5新fixture通过，OFF JSON字节全等；remote_store edge完成/nonedgeACK分别取source rank尾部，再挡目的KV写和普通COMP。GC仅源码审计，没有C++/Online验证，迁移自身source ACK释放覆盖待核，activation flag须先审阅。有限multi-request manifest envelope的 `generate_validate.py` 为**未执行草稿**，inputs/results为空，无E证书，已保存其HANDOFF，不可直接激活manager。两项在 `analysis/workspace-envelope-20261014/research/`。
+
+生产五aggregate epochs及E5仍未满足原3%/5%，E8/E16不可用；TX8/targetpriors冻结，没有新目标heldout或host预算pass。
+
+### 已合并 PR #9：LRU workspace v2 / OS solo 13 域边界
+
+[PR #8](https://github.com/cs-sunH/template/pull/8) 已 merged；fetch/ancestry 核实 main `e2dd5af7b61895a85b122c200606017bb741a004` 包含源码 `a19057c9` 和最终检查记录 `df2f46d2`。当时工作分支 `codex/die-lru-workspace-v2-20261014`。以下是已合并的历史检查点，未收到本轮停止/交接指令，工程整体仍 **NOT ACCEPTED**。
 
 LRU 已接通 Python scheduler/service/strict schema-2 bridge、C++ full-rank snapshot preflight/commit、真实 Plan 发射前 workspace lease 和一次释放，保留 whole-session LRU、remote_store/pool/history、旧 marker/join/回滚语义。typed hardware loader 保留 INT4 与 FP32-equivalent 独立速率、exact u64 capacity，拒绝把 typed peak 当 generic TFLOPS。LRU coarse metrics 补齐 typed/category/raw-denominator 及取消统计，并恢复原 `local_hbm.hbm_shared_definition` 与 `local_hbm_restore_bytes_issued`；issued 和 served 不混用。
 
@@ -49,12 +67,14 @@ canonical23文件digest `9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c4894
 
 ## Integration Branch
 
-- 当前共享集成分支：`main`；当前工作分支：`codex/die-lru-workspace-v2-20261014`；已同步基线为 PR #8 merge `e2dd5af7b61895a85b122c200606017bb741a004`。本检查点待提交/CI/实际merge核实，不能预写未来SHA；后续继续自主开发。以下 PR #6/#7 元数据为历史。
+- 当前共享集成分支：`main`；当前工作分支：`codex/die-workspace-envelope-20261014`；已fetch/ff的基线为用户JOINT更新 `fecf81c5574755209c5d58ecdb982843ff349042`，包含PR #9 merge及源`cef6790b`。本阶段workspace API/client/floor/诊断+五仓纯库发布及全部有效研究正在正式交接；同步后停止。以下旧PR元数据为历史。
 - 上轮 [PR #6](https://github.com/cs-sunH/template/pull/6) 已 merged，merge/main SHA 为 `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f`。上轮工作与失败证据原样保留。
 - 本轮源码、测试、研究、Online 证据与本 HANDOFF 一起提交为 `77af39781485af527339051b580f5250c93f004f`，目标 main 的 [PR #7](https://github.com/cs-sunH/template/pull/7)。源码 CI run 38525345962 两 jobs 均 success；真实 API 结果见本轮 `github.json`、`source-ci.json`。后续仅补交接元数据，不 force-push。最终 merge SHA/本元数据文件自身 commit 不提前猜测，从 PR/fetch 获取。
 - 下一账号 fetch 最新 main，核源码 ancestry、21 文件 source digest 和证据索引，再建独立工作分支。忽略目录 work/、工具/依赖/二进制不跨账号共享，保存的源码和命令可重建。
 
 ## Last Verified Base
+
+当前接续基线为实际fetched/ff main `fecf81c5574755209c5d58ecdb982843ff349042`，包含PR #9全部已验证源/证据及外部JOINT替换；干净提交后保留授权的新源WIP并创建新分支，无reset/覆盖其他成果。PR #9实跑源文件与binary identity依然按其原测量记录，不以本阶段新HEAD替代。
 
 当前已fetch并核实 PR #8 main `e2dd5af7b61895a85b122c200606017bb741a004` 的ancestry。LRU v2工作树是已解释的本轮修改；C++/Python源file hashes与实际binary/evidence分别保存，不能把基线HEAD当成dirty-tree编译源commit。根架构/设计/TX8未修改，原验证不重复或覆盖。
 
@@ -65,6 +85,8 @@ canonical23文件digest `9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c4894
 根两份设计文档/TX8 工作簿未修改。之前的 `evidence/handoff-runtime-20261014`、`analysis/handoff-runtime-20261014` 及更早证据保持原样。本轮新增证据在 `evidence/handoff-lifecycle-online-20261014`，可重建研究/实验源码在 `analysis/generated-lifecycle-20261014`；两树 ARTIFACTS.json 是保存文件的 SHA256 索引。
 
 ## Completed
+
+当前workspace API、LRU ctypes客户端/optional manager floor/双Plan压力census与canonical五仓库发布已验证。全部有效OS baseline与未验证profiler、source-release unapplied patch及未执行manifest草稿均已冻结保存，无有效部分因停工丢弃。测试范围和source/binary身份见顶部及workspace-envelope证据；新JOINT业务适配、scheduler安装E和store/migration释放顺序尚未完成。
 
 ### 当前 LRU v2 与 solo 边界检查点
 
@@ -136,7 +158,17 @@ target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta
 
 ## Next Step
 
-优先继续两个实际实现：①标准C++固定有理数solo13 bounded kernel复用actual class facts、cap256、外部stop与capacity invalidation，独立Fraction对拍后才审议Runtime/Plan/snapshot接入；②workspace blocked+queue quiescence压力test/明确census，随后compiler-derived phase envelope或exact pre-admission proposal，保留fit-only margin与evicted-store尾部释放排序。LRU多request/history/restore/取消窗口和真正GQA public输入接线仍需完成，之后推广FACE/FACE-LRU/JOINT，不以当前tiny验收全business。
+**交接后由下一Session执行，当前Session不再启动开发。** 按以下依赖继续，无需重新规划：
+
+1. 先fetch最新main，核本交接source commit及canonical23 digest e0b6…，只在新`astra-sim-joint`工作；`_old`仅历史参考，相关接口记录逐步搬到新目录，不以旧tree替代新实现或回用其测试pass。
+2. LRU先审阅/移植source-release patch，补noc_migrate自身source-release与C++ NodeStore GC/跨batch/真实Online验证，确认release早于下一目的KV写/restore/Compute且P-trigger无环；保持旧OFF字节和remote/pool/LRU策略。原builder/generator/service production尚未改，patch不是已完成修复。
+3. 再完成未执行manifest envelope草稿：实际finite多request/history/TP/capped/uncapped/split shapes全覆盖，只调C++公式；保存immutable identity/certificate，C++ actual Plan<=E检查，之后才能给scheduler安装已验manager floor。重跑真实workspace压力/恢复/重复delivery/取消，拒绝blindtimer和伪KV/remote扣账。
+4. OS从已重建baseline启动，先校对部分profiler/bench/sanitizer驱动，测cold/run-only/n30及固定width overflow域，保留失败；然后公共integer-ns与multiK full-output、offset双owner/multiCore/WR、snapshot/cancel、真正Runtime接线与E5/E8/E16独立3%/5%验收。不得将scratch72events或Fraction自对拍当生产证书。
+5. 延续base/LRU完整业务、GQA producer+所有KV/weights/TP消费者，FACE/FACE-LRU v2策略组合，再按fecf81c新JOINT的pipeline/projection/ledger合同做additive coarse接入。各仓保留自身policy/remote/pool/join，不复制旧JOINT覆盖。launch/setup/vector长行/residency等成本余项与性能随后依原设计补齐。
+6. TX8无新独立原始目标测量就保持下述reference/target先验；不能拟合架构常量或用BF16/DDR代替INT4/HBM目标。所有进度/失败/identity随有意义源码阶段同步，不重复已验证未改源的工作。
+
+
+优先完成compiler-derived finite-manifest E覆盖、C++ actual Plan bound检查和按source rank的remote_store/noc_migrate释放门，再将已验manager floor接到scheduler；新JOINT必须按fecf81c新实现做additive port，不恢复旧目录覆盖。当前manifest/store-release scratch尚在推进，未记生产pass。其次继续两个实际实现：①标准C++固定有理数solo13 bounded kernel复用actual class facts、cap256、外部stop与capacity invalidation，独立Fraction对拍后才审议Runtime/Plan/snapshot接入；②workspace blocked+queue quiescence压力test/明确census，随后compiler-derived phase envelope或exact pre-admission proposal，保留fit-only margin与evicted-store尾部释放排序。LRU多request/history/restore/取消窗口和真正GQA public输入接线仍需完成，之后推广FACE/FACE-LRU/JOINT，不以当前tiny验收全business。
 
 本轮先复用已接入的GemmOSGeometry/OS总账与single-Core resource facts，继续真实Runtime的bounded readiness/guard/外层return powering；同时推进LRU正式Online压力/恢复回归。离线逐消费夹具只供证据，不进入生产hot path。下面原优先级继续有效，已验证的foundation不重做。
 
@@ -150,6 +182,12 @@ target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta
 6. 无新独立测量时TX8reference/targetpriors保持冻结。遇新数据先验证粒度、dtype和测量来源/heldout，再谈可识别超参；架构源自变量/13物理域/候选覆盖继续按原文，不能借校准抵消缺失生命周期。
 
 ## Important Decisions
+
+本Session用户最后明确要求GitHub交接完成后立即停止；此前持续自主开发指令到此暂停。新JOINT目录是唯一活动集成目标，old记录仅供查阅/搬移。所有跨目录生产改动有明确必要性：五仓canonical发布、LRU准入基础/诊断、JOINT test环境隔离；未覆盖用户fecf81c任何新实现。
+
+
+- 新workspace API只界定一个task的所有mapping；phase/manifest envelope必须另证形状覆盖。串行COMP fit取max(A,E)，不把E伪装成实际lease；source-release ordering独立于compute上界，gate必须早于下一KV目的写/restore/migration，不能只挡首COMP。
+- main fecf81c活动JOINT新baseline与joint_old archive分开；只发布canonical纯库不等于业务适配。新增legacy config测试隔离修复不修改production resolver；旧JOINT结果保持历史。
 
 - LRU通信组遵守原RingTopology完整2×2几何；不以简化2rankfixture放宽guard。MHA旧输入按Q=KV处理，public GQA仍需独立完整model/config/weight/KV/TP/transfer/readiness接线；禁止只改单个Die spec伪装支持。
 - active workspace v2不是futurePlan需求证书。压力准入必须在KV/图mutation前拿到严格bound或实际Plan；phase margin仅fit hold，不记KV/remote/active。cold eviction逻辑减账不能替代MEM_STORE物理完成依赖，不能把同session store→restore边当全局释放barrier。
@@ -165,6 +203,10 @@ target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta
 
 ## Files to Continue
 
+- 冻结研究入口：`analysis/workspace-envelope-20261014/research/{README.md,os-kernel/HANDOFF.md,manifest-envelope/HANDOFF.md,store-release/report.md}`。源码/事实/partial bench/失败日志与哈希都随本交接交付；work/原路径和二进制不跨账号共享，依说明重建。
+
+- 新基础：`include/coarse_die/{Plan.hh,Capi.h}`、`src/{Compiler,Capi}.cc`、`tests/workspace_envelope_test.cc`；LRU `online/die_workspace_envelope.py`、`session_kv_manager.py`；重建及新JOINT/准入审计在`analysis/workspace-envelope-20261014/`。
+
 - 当前LRU：`astra-sim-wscllm-LRU/astra-sim/workload/{WorkspaceAdmission,DieModelAdapter,Workload,MetricCollector}`、Sys、execution_driven协议/committer与main_online；Python scheduler/service/bridge、typed hardware loader、最终新test。审计见`analysis/lru-workspace-v2-20261014/{workspace-demand-strategy,gqa-input-audit,liveness-pressure-proposal}.md`。
 - 当前OS重建：`analysis/os-solo-13-20261014/`含actualfacts Fraction model、stop checker及fixedwidth primitive/audit；匹配evidence tree记录所有输入/输出SHA，未进canonical源release。
 - 公共：`src/{Execution,Mapping,Compiler,Plan}.cc`、`src/GemmOSAccessCounter.hh`、`src/EquivalentWork.hh`；`tests/{gemm_os_access_counter,endpoint_allocation,runtime_owner_symmetry}_test.cc`、`tests/owner_lp_oracle_driver.cc`；`validation/owner_lp_oracle.py`、compiled/grouped oracle与真实driver。旧workspace/rollback/candidate tests继续保留。
@@ -174,6 +216,12 @@ target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta
 - 校准：`calibration/report.md`、reference configs、tools/calibrate_tx8.py；本轮无新生成数据。最新真实证据及GitHub身份入口：`evidence/handoff-lifecycle-online-20261014/README.md`、verification/github/source-ci JSON。
 
 ## Tests
+
+最终交接验证只复用已完成且未改源的真实运行；不为停工启动新开发测试。OS finalbaseline fullsuite通过；postbaseline instrumentation部分未验证，n30/perf未跑、sanitizer执行assert失败。source-release research legacy两侧41+新5/OFF bytegolden通过但无C++/Online；manifest草稿未运行。原始失败/有效部分保留。
+
+### 最新 workspace envelope source范围
+
+公共30/30、identity62/62；真实legacy queries224success/16expectedreject且生产ABI完整重放；Python客户端11、manager六suite57、online154pass1skip+typed/config/scheduler44；五仓ABI10build/config83无skip；四仓focused18/18/Online链接新core。所有旧/新binary分开。新JOINT业务/生产Online E2E不在本阶段范围，研究OS也不作为生产timingpass。完整命令、日志与失败保存在workspace-envelope evidence/analysis。
 
 ### 当前检查点实跑
 
@@ -199,7 +247,9 @@ target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta
 
 ## Blocking Issues
 
-- 当前base/LRU prospective workspace缺失及cold-store物理释放排序待实现/压力证明；8ranktiny只覆盖有限正常路径。LRU GQA producer尚缺，FACE/FACE-LRU/JOINT v2未推广；原各仓策略保留。
+交接代码已验范围与工程验收分开。source-release/finite证书/C++ bound assertion未接通前，LRU scheduler E仍关闭；新JOINT业务适配回退为待移植。OS profiler半完成、sanitizer smoke失败、host预算未测/未达标及原E5失败均不得写为通过。GitHub PR未merged/远端未核实前不能安全接棒。
+
+- 当前base/LRU prospective workspace生产接线及remote_store/noc_migrate物理释放排序待实现/压力证明；新API/client/manager floor仅已验基础；8ranktiny只覆盖有限正常路径。LRU GQA producer尚缺，FACE/FACE-LRU/JOINT v2未推广；原各仓策略保留。
 - 生产真实K readiness/final store/outputretire未闭环，finish/busy精度failed，双owner大场景256发现仍failedclosed；counter和研究尚未接入，不覆盖generaloffset/tail/multiCore/WR/外部cancel。
 - launch/setup/region instance、vector参数/长行转换/residency/readiness/TP仍缺；delay字段只兑现marker兼容，不把其当所有真实任务成本。
 - base tiny Online成功但多request/压力/旧业务全域未证；其它四仓workspace/restore/pool/FACE/JOINT及完整Online未验收，marker专属snapshot未单独测。
@@ -209,7 +259,7 @@ target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta
 
 ## Handoff Notes
 
-当前用户要求持续开发；本检查点保存验证过的LRU v2/metrics/真实Online及OS bounded研究后继续，没有本轮停止/交接。最终换账号时必须补齐在途C++kernel/pressure/envelope成果及实际GitHub状态，而不能把下面历史停工记录当成本轮指令。
+用户已发本轮停止/交接指令，所有agent与最小命令已冻结，无新开发任务。完整有效源码、测试、研究patch/草稿和失败证据已保存，GitHub交接执行中。源码交付 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc`、工作分支 `codex/die-workspace-envelope-20261014`、[PR #10](https://github.com/cs-sunH/template/pull/10) 的实际create结果已保存 `evidence/workspace-envelope-20261014/github/pr10-source.json`。本次仅补交接元数据，不继续开发、不force-push。最终merge SHA/本文件自身commit不预编；下一账号读取PR实时merged状态并fetch核main含源码2e3e029与本HANDOFF后安全接棒。交接完成后本Session立即停止，不执行Next Step。
 
 ### 历史 PR #7 正式交接记录
 

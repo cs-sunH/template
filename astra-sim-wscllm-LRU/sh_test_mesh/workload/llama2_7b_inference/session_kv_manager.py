@@ -43,6 +43,7 @@ from dataclasses import dataclass, replace
 import functools
 import json
 import os
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
@@ -696,6 +697,7 @@ class SessionKVCacheManager:
         *,
         edge_ranks: Optional[Sequence[int]] = None,
         strict_invariants: Optional[bool] = None,
+        prospective_workspace_bytes_by_rank: Optional[Mapping[int, int]] = None,
     ) -> None:
         if strict_invariants is not None and not isinstance(strict_invariants, bool):
             raise ValueError("strict_invariants must be a bool or None")
@@ -752,6 +754,57 @@ class SessionKVCacheManager:
                     model_weight_bytes=self.model_weight_bytes_by_tp_rank[relative_rank],
                 )
                 self._rank_states[rank] = state
+        if prospective_workspace_bytes_by_rank is None:
+            prospective_workspace = {
+                rank: 0 for rank in self._rank_states
+            }
+        else:
+            if not isinstance(prospective_workspace_bytes_by_rank, Mapping):
+                raise ValueError(
+                    "prospective workspace bytes must be a rank mapping"
+                )
+            for rank in prospective_workspace_bytes_by_rank:
+                self._require_workspace_uint64(
+                    rank, "prospective workspace rank"
+                )
+            expected_ranks = set(self._rank_states)
+            if set(prospective_workspace_bytes_by_rank) != expected_ranks:
+                raise ValueError(
+                    "prospective workspace ranks must exactly match topology "
+                    f"ranks {sorted(expected_ranks)}, got "
+                    f"{sorted(prospective_workspace_bytes_by_rank)}"
+                )
+            prospective_workspace = {}
+            for rank in sorted(expected_ranks):
+                margin = prospective_workspace_bytes_by_rank[rank]
+                self._require_workspace_uint64(
+                    margin, f"prospective workspace bytes for rank {rank}"
+                )
+                state = self._rank_states[rank]
+                self._require_workspace_uint64(
+                    state.capacity_bytes,
+                    f"capacity bytes for prospective workspace rank {rank}",
+                )
+                self._require_workspace_uint64(
+                    state.model_weight_bytes,
+                    f"model weight bytes for prospective workspace rank {rank}",
+                )
+                empty_available = (
+                    state.capacity_bytes - state.model_weight_bytes
+                )
+                if margin > empty_available:
+                    raise ValueError(
+                        "prospective workspace margin exceeds empty Python "
+                        f"HBM capacity on rank {rank}: workspace={margin}, "
+                        f"empty_available={empty_available}"
+                    )
+                prospective_workspace[rank] = margin
+        # This full-rank floor is immutable admission policy. It is neither
+        # an actual active lease nor KV state, so it is intentionally absent
+        # from the workspace revision maps, capacity snapshot, and KV journal.
+        self._prospective_workspace_bytes_by_rank = MappingProxyType(
+            prospective_workspace
+        )
         self._sessions: dict[str, SessionKVState] = {}
         self._reservations: dict[str, RequestCapacityReservation] = {}
         self._events: list[KVCacheEvent] = []
@@ -864,6 +917,11 @@ class SessionKVCacheManager:
     def rank_ids(self) -> tuple[int, ...]:
         """Stable sorted rank set used by the explicit workspace bridge."""
         return tuple(sorted(self._rank_states))
+
+    @property
+    def prospective_workspace_bytes_by_rank(self) -> Mapping[int, int]:
+        """Immutable full-rank floor for future serialized COMP workspace."""
+        return self._prospective_workspace_bytes_by_rank
 
     def set_external_workspace_view(
         self,
@@ -1061,10 +1119,13 @@ class SessionKVCacheManager:
         )
 
     def _fit_remaining(self, instance_index: int) -> tuple[int, ...]:
-        """KV headroom after the separately owned workspace hold."""
+        """KV headroom after max(actual and prospective workspace)."""
         return tuple(
             self._rank_states[rank].remaining_bytes
-            - self._external_workspace_bytes_by_rank[rank]
+            - max(
+                self._external_workspace_bytes_by_rank[rank],
+                self._prospective_workspace_bytes_by_rank[rank],
+            )
             for rank in self.topology.instance(instance_index).ranks
         )
 
@@ -2304,12 +2365,13 @@ class SessionKVCacheManager:
         victim is evicted whole (all layers, all TP shards) and the shortfall
         is rechecked after every single eviction.  Over-release is allowed:
         the loop stops at the first eviction after which the requirement
-        fits, never at an exact byte boundary. Fit includes the separately
-        owned external workspace hold. The eviction loop is entered only
+        fits, never at an exact byte boundary. Fit includes the larger of the
+        actual external workspace hold and the immutable prospective
+        workspace floor. The eviction loop is entered only
         when the requirement could still fit once every reclaimable session
         is evicted. Outstanding request reservations
         (``reserved_request_bytes``), active/protected residency, and the
-        workspace hold are not reclaimable by eviction and count into that
+        effective workspace margin are not reclaimable by eviction and count into that
         judgment.
         Callers pass the gross requirement on the
         first attempt and a vector net of the protected sessions' own
@@ -2325,9 +2387,12 @@ class SessionKVCacheManager:
         so a later absolute revision can retry it. Two contract violations
         still raise, and neither is capacity exhaustion: a shard vector that
         cannot fit an empty instance raises ``ValueError`` (no reclamation
-        could ever admit it), and a loop that returns success while the
-        requirement still does not fit raises ``RuntimeError`` (internal
-        accounting bug).
+        could ever admit it), as does a vector that cannot fit with the
+        immutable prospective floor even in an otherwise empty instance
+        (that floor has no revision event that could make a retry useful).
+        A larger temporary actual hold returns a workspace block. A loop
+        that returns success while the requirement still does not fit raises
+        ``RuntimeError`` (internal accounting bug).
         """
 
         required = _require_int_vector(required_shards, "required KV shard vector")
@@ -2371,7 +2436,14 @@ class SessionKVCacheManager:
             for rank in instance.ranks
         )
         workspace = tuple(
-            self._external_workspace_bytes_by_rank[rank]
+            max(
+                self._external_workspace_bytes_by_rank[rank],
+                self._prospective_workspace_bytes_by_rank[rank],
+            )
+            for rank in instance.ranks
+        )
+        prospective_workspace = tuple(
+            self._prospective_workspace_bytes_by_rank[rank]
             for rank in instance.ranks
         )
         impossible = tuple(
@@ -2385,6 +2457,27 @@ class SessionKVCacheManager:
                 if rank in impossible
             )
             raise ValueError(f"request cannot fit an empty instance: {details}")
+        impossible_with_prospective_workspace = tuple(
+            rank
+            for rank, needed, available, floor in zip(
+                instance.ranks, required, maximum, prospective_workspace
+            )
+            if needed > available - floor
+        )
+        if impossible_with_prospective_workspace:
+            details = ", ".join(
+                f"rank={rank}, required={needed}, "
+                f"empty_available_after_prospective_workspace="
+                f"{available - floor}"
+                for rank, needed, available, floor in zip(
+                    instance.ranks, required, maximum, prospective_workspace
+                )
+                if rank in impossible_with_prospective_workspace
+            )
+            raise ValueError(
+                "request cannot fit an empty instance after prospective "
+                f"workspace envelope: {details}"
+            )
         impossible_with_workspace = tuple(
             rank
             for rank, needed, available, held in zip(
@@ -2645,9 +2738,30 @@ class SessionKVCacheManager:
         )
         if len(extra) != self.tp_degree or any(value < 0 for value in extra):
             raise ValueError("reservation extension shard vector is invalid")
-        for rank, value in zip(
-            self.topology.instance(reservation.instance_index).ranks, extra
-        ):
+        ranks = self.topology.instance(reservation.instance_index).ranks
+        # Most callers use this only for the resident->reserved net-credit
+        # swap, whose total base usage is unchanged. Validate the complete
+        # post-extension state before mutation so direct growth cannot bypass
+        # either the actual workspace lease or the immutable future floor.
+        for rank, value in zip(ranks, extra):
+            state = self._rank_states[rank]
+            workspace_margin = max(
+                self._external_workspace_bytes_by_rank[rank],
+                self._prospective_workspace_bytes_by_rank[rank],
+            )
+            combined = state.used_bytes + value + workspace_margin
+            if combined > _UINT64_MAX:
+                raise ValueError(
+                    "reservation extension combined bytes exceed uint64 "
+                    f"on rank {rank}"
+                )
+            if combined > state.capacity_bytes:
+                raise ValueError(
+                    "reservation extension exceeds Python HBM capacity "
+                    f"after workspace margin on rank {rank}: "
+                    f"combined={combined}, capacity={state.capacity_bytes}"
+                )
+        for rank, value in zip(ranks, extra):
             self._rank_states[rank].reserved_request_bytes += value
         # frozen dataclass:replace 重建并重赋值(增量账本随后从新值刷新)。
         extended = replace(
