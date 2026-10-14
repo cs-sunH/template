@@ -4,6 +4,8 @@
 
 ## Current Status
 
+2026-10-15兼容性修复：WSCLLM 两仓的真实旧 typed parser 同时保留 raw task 和 legacy diagnostic，prepared coarse preflight 不再因 diagnostic 非空拒绝 canonical Compiler 支持的任务。真实 parser→prepare/256B lease→issue/同Plan Runtime→finish 完整回归各1/1 CTest通过；owner/task/bytes 防护保留。JOINT 新 `die_task`/旧 `die_op_spec` 的互斥 wire 约束不扩展。证据 `evidence/typed-spec-compat-20261015/`；FACE 在途代码不包含在此小修复检查点。
+
 2026-10-15最小任务检查点：新增 native Domain `update_capacity(resource, absolute_physical_rate, now_ns)`；先以空canonical Runtime预检，再结算旧速率与同tick终态/chain successor，最后调用公共Runtime更改物理速率。invalid输入不推进live域；共享COMP+endpoint减速/暂停/恢复、import/fork继续对拍与5ns完成边界后继15ns完成通过，最终native/window 4/4 CTest。公共数值模型、校准和sh30 guard不变；native world事件输入仍待接。证据在 `evidence/native-domain-capacity-20261015/`。用户最新要求最小任务后提交一次、随后继续，FACE在途改动不混入该提交。
 
 从远端 main `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，已核实包含 PR #11 merge `721ab833` 和源码 `60d18dc`。本轮分支 `codex/die-joint-runtime-20261014`，复用此前 Compiler/Mapping/Runtime、LRU finite-manifest margin/source-release、typed adapter 和 canonical23 发布基础；不重复已通过且未改的研究/业务范围。

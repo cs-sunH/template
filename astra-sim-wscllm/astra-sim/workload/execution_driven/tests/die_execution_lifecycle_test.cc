@@ -55,6 +55,7 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/WorkspaceAdmission.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
+#include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 #include "DieModel.hh"
 #include "coarse_die/Plan.hh"
 #include <astra-network-analytical/common/EventQueue.h>
@@ -236,6 +237,103 @@ OnlineNode make_die_node(uint64_t id, uint64_t layers) {
     node.generation = 0;
     node.compute.die_spec = parse_spec(layers);
     return node;
+}
+
+// Exact FACE emitter evidence from
+// work/face-workspace-port-20261014/python-astra-sim-face/emitter-evidence/actual-face-emitter.json,
+// nodes[1].compute.die_op_spec (source task retained verbatim; only GraphBatch rank/id are
+// adapted below for this one-rank Sys fixture).
+nlohmann::json face_emitter_ffn_spec_json() {
+    static const char* const raw_spec = R"json({
+  "schema_version": 1,
+  "op_kind": "ffn_region",
+  "phase": "decode",
+  "dtype": "bf16",
+  "model_dims": {
+    "hidden": 64,
+    "ffn": 128,
+    "vocab": 256,
+    "mlp_variant": "gelu",
+    "norm_type": "layernorm",
+    "position_encoding": "none",
+    "num_q_heads": 8,
+    "num_kv_heads": 8,
+    "head_dim": 8
+  },
+  "tp_slice": {
+    "tensor_parallel": 2,
+    "tensor_parallel_rank": 0,
+    "q_heads_local": 4,
+    "kv_heads_local": 4,
+    "ffn_local": 64,
+    "vocab_local": 128
+  },
+  "spans": [
+    {
+      "request_id": "batch_train_i1_1#s0",
+      "q_tokens": 1,
+      "kv_tokens": 1,
+      "q_start_pos": 0,
+      "kv_start_pos": 0
+    },
+    {
+      "request_id": "batch_train_i1_1#s1",
+      "q_tokens": 1,
+      "kv_tokens": 2,
+      "q_start_pos": 1,
+      "kv_start_pos": 0
+    }
+  ],
+  "layer_count": 2,
+  "weight_passes": 2,
+  "kv_access": {"identity": "local"},
+  "fusion_policy": "auto",
+  "provenance": "transformer_pass_aggregated",
+  "config_hash": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+})json";
+    return nlohmann::json::parse(raw_spec);
+}
+
+OnlineNode parse_face_emitter_ffn_node() {
+    const nlohmann::json raw_spec = face_emitter_ffn_spec_json();
+    nlohmann::json node{
+        {"rank", 0},
+        {"id", 7},
+        {"name", "batch_train_i1_1_all_layers_ffn_region"},
+        {"type", 4},
+        {"is_cpu_op", false},
+        {"is_timer_op", false},
+        {"inputs_values", ""},
+        {"request_id", "batch_train_i1_1"},
+        {"stage", "decode"},
+        {"generation", 1},
+        {"compute", {{"num_ops", 67584u},
+                      {"tensor_size", 68608u},
+                      {"runtime_ns", 0u},
+                      {"die_op_spec", raw_spec}}},
+        {"comm", {{"bytes", 0u}, {"src", 0}, {"dst", 0}, {"tag", 0u}}},
+        {"coll", {{"comm_type", 0u}, {"bytes", 0u}, {"priority", 0u},
+                   {"pg_name", ""}, {"involved_dim", nlohmann::json::array()}}}};
+    nlohmann::json response;
+    response["schema_version"] = 1u;
+    response["source_delivery_sequence"] = 1u;
+    response["nodes"] = nlohmann::json::array({node});
+
+    // This repo's real legacy GraphBatch parser retains the raw die_op_spec
+    // and parses its schema_version=1 diagnostic form independently.
+    const ParsedGraphBatch parsed = parse_graph_batch(response, 1, 1);
+    if (parsed.nodes.size() != 1 ||
+        parsed.nodes.front().node.compute.die_task_json == nullptr ||
+        parsed.nodes.front().node.compute.die_spec == nullptr ||
+        *parsed.nodes.front().node.compute.die_task_json != raw_spec) {
+        throw std::runtime_error(
+            "FACE emitter compatibility fixture did not parse both typed views");
+    }
+    OnlineNode result = parsed.nodes.front().node;
+    // NodeStore IDs are external GraphSource metadata, independent of the
+    // producer's per-rank JSON ID.
+    result.global_id = 907;
+    return result;
 }
 
 // Independent full-speed oracle for the same plan: the exact drive policy
@@ -461,6 +559,88 @@ void test_prepared_coarse_preflight(const std::string& config_dir) {
                     g_terminal_fires.count(comp.global_id) == 0,
                 "P: stale task payload with the same node/generation is rejected before take/occupy");
 
+    fixture.sys.reset();
+    drain_queue(fixture.event_queue);
+}
+
+void test_legacy_parsed_coarse_lifecycle(const std::string& config_dir) {
+    g_first_tick.clear();
+    g_terminal_fires.clear();
+    g_terminal_status.clear();
+    Fixture fixture = make_fixture(config_dir, "coarse_system.json");
+    const nlohmann::json raw_task = face_emitter_ffn_spec_json();
+    OnlineNode comp = parse_face_emitter_ffn_node();
+    fixture.source->store().add_node(comp);
+    const NodeView* const stored = fixture.source->lookup_ptr(comp.global_id);
+    if (stored == nullptr) {
+        expect_true(false, "O: parsed FACE emitter node is addressable in NodeStore");
+        return;
+    }
+
+    expect_true(stored->compute.die_task_json != nullptr &&
+                    stored->compute.die_spec != nullptr &&
+                    *stored->compute.die_task_json == raw_task &&
+                    stored->compute.die_spec->op_kind ==
+                        DieModel::OpKind::FfnRegion,
+                "O: real ParsedGraphBatch retains raw old FFN task and parsed legacy diagnostic");
+
+    install_workspace_snapshot(
+        fixture.sys.get(), std::numeric_limits<uint64_t>::max(), 0, 0);
+    DieModelAdapter& adapter = *fixture.sys->workload->die_model_adapter();
+    auto prepared = adapter.prepare_coarse_plan(*stored);
+    const auto prepared_plan = prepared.plan;
+    const std::string prepared_fingerprint = prepared_plan->fingerprint;
+    const uint64_t canonical_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*prepared_plan);
+    expect_true(prepared.task != nullptr && *prepared.task == raw_task &&
+                    prepared_fingerprint.size() == 64 &&
+                    canonical_bytes == 256,
+                "O: coarse prepare compiles the unchanged emitter task to its canonical 256-byte Plan");
+
+    auto admission = adapter.try_acquire_workspace(prepared);
+    const bool acquired = admission.status ==
+        WorkspaceAdmission::AcquireStatus::Acquired;
+    expect_true(acquired, "O: prepared canonical Plan acquires its workspace lease");
+    if (!acquired) return;
+
+    fixture.sys->workload->issue_prepared_coarse(
+        *stored, std::move(prepared), std::move(admission.lease));
+    expect_true(fixture.sys->workload->hw_resource
+                            ->num_in_flight_gpu_comp_ops == 1 &&
+                    fixture.sys->workspace_admission->active_lease_count() == 1 &&
+                    fixture.sys->workspace_admission->active_workspace_bytes() ==
+                        canonical_bytes,
+                "O: prepared issue occupies the GPU and holds the exact lease");
+
+    // At the current tick this exports the live Runtime identity without
+    // advancing simulated service; the accepted Runtime Plan must have the
+    // same canonical fingerprint as the exact Prepared Plan passed to issue.
+    const nlohmann::json live =
+        fixture.sys->coarse_die_runtime->export_snapshot(Sys::boostedTick());
+    const auto& executions = live.at("runtime_snapshot").at("executions");
+    const bool same_plan_executed = executions.size() == 1 &&
+        executions.front().at("plan").at("fingerprint") ==
+            prepared_fingerprint;
+    expect_true(same_plan_executed,
+                "O: Runtime accepted and runs the same canonical Plan prepared before acquire");
+
+    drain_queue(fixture.event_queue);
+    const auto served = fixture.sys->coarse_die_runtime->counters_at(
+        Sys::boostedTick()).at("served_by_category").at("comp");
+    expect_true(g_terminal_fires[comp.global_id] == 1 &&
+                    g_terminal_status[comp.global_id] ==
+                        static_cast<int>(NodeTerminalStatus::Success),
+                "O: parsed coarse COMP publishes one successful graph terminal");
+    expect_true(fixture.sys->workload->hw_resource
+                            ->num_in_flight_gpu_comp_ops == 0 &&
+                    fixture.sys->workspace_admission->active_lease_count() == 0 &&
+                    fixture.sys->workspace_admission->active_workspace_bytes() == 0 &&
+                    !adapter.has_active_die_executions() &&
+                    !fixture.sys->coarse_die_runtime->has_active_executions(),
+                "O: finish releases GPU occupancy, its workspace lease, and Runtime ownership");
+    expect_true(served.at("int4_ops").get<double>() > 0.0 &&
+                    served.at("vec_eqops").get<double>() > 0.0,
+                "O: Runtime served typed FFN work from the submitted Plan");
     fixture.sys.reset();
     drain_queue(fixture.event_queue);
 }
@@ -1483,6 +1663,7 @@ int main() {
     }
 
     test_prepared_coarse_preflight(config_dir);
+    test_legacy_parsed_coarse_lifecycle(config_dir);
 
     std::error_code ec;
     std::filesystem::remove_all(config_dir, ec);

@@ -1,0 +1,4 @@
+workdir: /workspace/template
+activation: source /workspace/cloud-setup/activate.sh
+build: cmake --build /workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/build --target AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest --parallel 2
+test: ctest --test-dir /workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/build -R '^AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest$' --output-on-failure

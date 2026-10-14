@@ -151,7 +151,7 @@ void DieModelAdapter::validate_prepared_coarse_plan(
     if (node.node_type != ChakraNodeType::COMP_NODE || node.is_timer_op ||
         node.is_cpu_op ||
         node.compute.op_role != ExecutionDriven::OpRole::Compute ||
-        node.compute.die_task_json == nullptr || node.compute.die_spec != nullptr) {
+        node.compute.die_task_json == nullptr) {
         throw std::runtime_error(
             "prepared coarse issue requires a typed GPU COMP node");
     }
