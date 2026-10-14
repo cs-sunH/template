@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -26,12 +27,16 @@ void require(bool condition, const std::string& message) {
   if (!condition) throw std::runtime_error(message);
 }
 
-Hardware test_hardware(double hbm0_rate = 1.0e9,
-                       double compute_rate = 0.0) {
+json test_hardware_config() {
   std::ifstream input(COARSE_DIE_HW_CONFIG, std::ios::binary);
   if (!input) throw std::runtime_error("cannot open canonical hardware fixture");
-  const json config = json::parse(std::string(
+  return json::parse(std::string(
       std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()));
+}
+
+Hardware test_hardware(double hbm0_rate = 1.0e9,
+                       double compute_rate = 0.0) {
+  const json config = test_hardware_config();
   Hardware hardware = coarse_die::resolve_hardware(config);
   hardware.rates[coarse_die::COMPUTE_GATE] = compute_rate;
   hardware.rates[coarse_die::HBM0] = hbm0_rate;
@@ -46,6 +51,10 @@ Hardware test_hardware(double hbm0_rate = 1.0e9,
     resources[i]["rate"] = hardware.rates[i];
   }
   return hardware;
+}
+
+Hardware canonical_test_hardware() {
+  return coarse_die::resolve_hardware(test_hardware_config());
 }
 
 Owner test_owner(std::uint64_t id) {
@@ -81,6 +90,50 @@ void require_bad_domain_snapshot(const json& snapshot,
     rejected = true;
   }
   require(rejected, message);
+}
+
+json local_sample(const Hardware& hardware, const json& runtime_snapshot,
+                  std::uint64_t live_runtime_now_ns) {
+  auto runtime = coarse_die::Runtime::import_snapshot(hardware,
+                                                       runtime_snapshot);
+  json bindings = json::array();
+  for (const std::uint64_t handle : runtime->execution_handles()) {
+    const json progress = runtime->query_progress(handle);
+    bindings.push_back(
+        {{"handle", handle},
+         {"owner", progress.at("owner")},
+         {"state_at_sample", progress.at("state")},
+         {"terminal_at_sample", progress.at("terminal")},
+         {"finish_ns_at_sample", progress.at("finish_ns")}});
+  }
+  return {{"schema", "coarse_die_local_sample_v1"},
+          {"rank", 0},
+          {"sampled_at_ns", runtime_snapshot.at("now_ns")},
+          {"live_runtime_now_ns", live_runtime_now_ns},
+          {"hardware_config", test_hardware_config()},
+          {"hardware_fingerprint", hardware.fingerprint},
+          {"runtime_snapshot", runtime_snapshot},
+          {"completion_bindings", std::move(bindings)},
+          {"scope", "rank_local_runtime_only"},
+          {"callbacks_dispatched", false},
+          {"production_world_import_supported", false}};
+}
+
+void require_bad_local_sample(
+    const json& sample, const Hardware& hardware,
+    const std::map<std::uint64_t, std::string>& handle_to_leg_id,
+    std::uint64_t expected_rank, const std::string& message) {
+  const json before = sample;
+  bool rejected = false;
+  try {
+    (void)NativeCoarseDieDomain::import_local_sample(
+        "hbm:0", std::make_shared<const Hardware>(hardware), expected_rank,
+        sample, handle_to_leg_id);
+  } catch (const std::exception&) {
+    rejected = true;
+  }
+  require(rejected, message);
+  require(sample == before, "failed local-sample import leaves input unchanged");
 }
 
 json endpoint_spec(std::uint64_t endpoint_id,
@@ -547,6 +600,266 @@ void wire_snapshot_preserves_cancelled_chain_and_pending_completion() {
           "cancelled wrapper completion survives import exactly once");
 }
 
+void local_sample_import_restores_active_plan_and_endpoint_bindings() {
+  const Hardware hardware = canonical_test_hardware();
+  NativeCoarseDieDomain source("hbm:0", hardware);
+  const Owner plan_owner = test_owner(201);
+  const Owner endpoint_owner = test_owner(202);
+  source.begin_plan_chain(
+      "source-plan",
+      {hbm_plan(hardware, 201, 1000000000000000ULL, "sample-plan")},
+      plan_owner, 0);
+  source.begin_endpoint(
+      "source-endpoint", endpoint_spec(2020, 2020, 1000000000000000ULL),
+      endpoint_owner, 0);
+  source.advance_to(1);
+
+  const json runtime_snapshot = source.export_runtime_snapshot();
+  const json sample = local_sample(hardware, runtime_snapshot, 0);
+  std::map<std::uint64_t, std::string> handle_to_leg_id;
+  for (const auto& execution : runtime_snapshot.at("executions")) {
+    const std::uint64_t handle = execution.at("handle").get<std::uint64_t>();
+    const bool endpoint =
+        execution.at("plan").at("task").value("schema", std::string()) ==
+        "coarse_die_endpoint_v2";
+    handle_to_leg_id.emplace(
+        handle, endpoint ? "external:opaque-endpoint-leg"
+                         : "external:opaque-plan-leg");
+  }
+  require(handle_to_leg_id.size() == 2,
+          "local sample fixture has one active Plan and one endpoint");
+  const json sample_before = sample;
+  auto imported = NativeCoarseDieDomain::import_local_sample(
+      "hbm:0", std::make_shared<const Hardware>(hardware), 0, sample,
+      handle_to_leg_id);
+  require(sample == sample_before,
+          "successful local-sample import leaves the source sample unchanged");
+  require(imported->export_runtime_snapshot() == runtime_snapshot,
+          "active handles reuse the canonical sampled Runtime without recompilation");
+  const json plan_progress =
+      imported->progress("external:opaque-plan-leg");
+  const json endpoint_progress =
+      imported->progress("external:opaque-endpoint-leg");
+  const std::uint64_t plan_handle = [&]() {
+    for (const auto& [handle, leg_id] : handle_to_leg_id) {
+      if (leg_id == "external:opaque-plan-leg") return handle;
+    }
+    throw std::runtime_error("explicit Plan leg mapping was lost");
+  }();
+  const std::uint64_t endpoint_handle = [&]() {
+    for (const auto& [handle, leg_id] : handle_to_leg_id) {
+      if (leg_id == "external:opaque-endpoint-leg") return handle;
+    }
+    throw std::runtime_error("explicit endpoint leg mapping was lost");
+  }();
+  require(plan_progress.at("owner") == owner_wire(plan_owner) &&
+              plan_progress.at("active_execution").at("handle") ==
+                  plan_handle &&
+              plan_progress.at("state") == "running",
+          "explicit external Plan leg preserves its sampled Owner and handle");
+  require(endpoint_progress.at("owner") == owner_wire(endpoint_owner) &&
+              endpoint_progress.at("active_execution").at("handle") ==
+                  endpoint_handle &&
+              endpoint_progress.at("state") == "running",
+          "explicit external endpoint leg preserves its sampled Owner and handle");
+  const json endpoint_bindings =
+      imported->export_snapshot().at("endpoint_bindings");
+  require(endpoint_bindings.at("endpoint_ids").size() == 1 &&
+              endpoint_bindings.at("endpoint_ids").at(0).at("leg_id") ==
+                  "external:opaque-endpoint-leg" &&
+              endpoint_bindings.at("transactions").at(0).at("live_endpoints") ==
+                  1,
+          "active endpoint registry and transaction reference are restored");
+
+  source.advance_to(7);
+  imported->advance_to(7);
+  json imported_plan_progress = imported->progress("external:opaque-plan-leg");
+  json source_plan_progress = source.progress("source-plan");
+  imported_plan_progress.erase("leg_id");
+  source_plan_progress.erase("leg_id");
+  json imported_endpoint_progress =
+      imported->progress("external:opaque-endpoint-leg");
+  json source_endpoint_progress = source.progress("source-endpoint");
+  imported_endpoint_progress.erase("leg_id");
+  source_endpoint_progress.erase("leg_id");
+  require(imported->export_runtime_snapshot() ==
+              source.export_runtime_snapshot() &&
+              imported_plan_progress == source_plan_progress &&
+              imported_endpoint_progress == source_endpoint_progress,
+          "imported active Plan and endpoint continue identically on copied Runtime state");
+}
+
+void local_sample_terminal_handle_becomes_one_pending_wrapper_completion() {
+  const Hardware hardware = canonical_test_hardware();
+  coarse_die::Runtime source(hardware);
+  const Owner owner = test_owner(203);
+  const std::uint64_t handle =
+      source.submit_endpoint(endpoint_spec(2030, 2030, 1), owner, 0);
+  const auto terminal_tick = source.next_event();
+  require(terminal_tick.has_value(),
+          "terminal sample fixture exposes the endpoint completion tick");
+  source.advance_to(*terminal_tick);
+  const json raw_progress = source.query_progress(handle);
+  require(raw_progress.at("terminal").get<bool>() &&
+              raw_progress.at("finish_ns") == *terminal_tick,
+          "source Runtime is sampled at the same tick as its terminal callback");
+  const json sample = local_sample(hardware, source.export_snapshot(), 0);
+  const std::map<std::uint64_t, std::string> mapping = {
+      {handle, "external:terminal-endpoint"}};
+  auto imported = NativeCoarseDieDomain::import_local_sample(
+      "hbm:0", std::make_shared<const Hardware>(hardware), 0, sample,
+      mapping);
+  const json snapshot = imported->export_snapshot();
+  require(snapshot.at("runtime").at("executions").empty() &&
+              snapshot.at("runtime").at("endpoint_registry").empty() &&
+              snapshot.at("runtime").at("transaction_owners").empty(),
+          "terminal handle is removed from the imported private Runtime copy");
+  require(snapshot.at("entries").size() == 1 &&
+              snapshot.at("entries").at(0).at("terminal").get<bool>() &&
+              snapshot.at("entries").at(0).at("handle").is_null() &&
+              snapshot.at("entries").at(0).at("last_progress").at("handle") ==
+                  handle &&
+              snapshot.at("entries").at(0).at("last_progress") == raw_progress,
+          "terminal endpoint is retained as exact wrapper progress with its original handle");
+  require(snapshot.at("completion_queue").size() == 1 &&
+              snapshot.at("completion_queue").at(0).at("leg_id") ==
+                  "external:terminal-endpoint" &&
+              snapshot.at("completion_queue").at(0).at("finish_ns") ==
+                  *terminal_tick,
+          "undispatched same-tick terminal becomes exactly one pending completion");
+  require(imported->take_completions().size() == 1 &&
+              imported->take_completions().empty(),
+          "sampled terminal completion is consumable exactly once");
+
+  coarse_die::Runtime tied_source(hardware);
+  const Owner tied_owner = test_owner(204);
+  const std::uint64_t lower_handle = tied_source.submit_endpoint(
+      endpoint_spec(2040, 2040, 1), tied_owner, 0);
+  const std::uint64_t higher_handle = tied_source.submit_endpoint(
+      endpoint_spec(2041, 2041, 1), tied_owner, 0);
+  const auto tied_tick = tied_source.next_event();
+  require(tied_tick.has_value(), "tied terminal fixture exposes a finish tick");
+  tied_source.advance_to(*tied_tick);
+  require(tied_source.query_progress(lower_handle).at("finish_ns") ==
+              tied_source.query_progress(higher_handle).at("finish_ns"),
+          "tied terminal fixture completes both handles at the same tick");
+  const json tied_sample =
+      local_sample(hardware, tied_source.export_snapshot(), 0);
+  const std::map<std::uint64_t, std::string> reversed_leg_names = {
+      {lower_handle, "z-external-leg"},
+      {higher_handle, "a-external-leg"}};
+  auto tied_import = NativeCoarseDieDomain::import_local_sample(
+      "hbm:0", std::make_shared<const Hardware>(hardware), 0, tied_sample,
+      reversed_leg_names);
+  const json tied_queue =
+      tied_import->export_snapshot().at("completion_queue");
+  require(tied_queue.size() == 2 &&
+              tied_queue.at(0).at("leg_id") == "z-external-leg" &&
+              tied_queue.at(1).at("leg_id") == "a-external-leg",
+          "same-tick imported callbacks retain ascending Runtime handle order, not leg-name order");
+}
+
+void local_sample_import_rejects_binding_and_identity_tampering() {
+  const Hardware hardware = canonical_test_hardware();
+  NativeCoarseDieDomain source("hbm:0", hardware);
+  source.begin_plan_chain("tamper-plan",
+                          {hbm_plan(hardware, 211, 1000000000000000ULL,
+                                    "tamper")},
+                          test_owner(211), 0);
+  source.begin_plan_chain("tamper-plan-2",
+                          {hbm_plan(hardware, 212, 1000000000000000ULL,
+                                    "tamper-2")},
+                          test_owner(212), 0);
+  source.advance_to(1);
+  const json runtime_snapshot = source.export_runtime_snapshot();
+  const json sample = local_sample(hardware, runtime_snapshot, 0);
+  const std::uint64_t first_handle = runtime_snapshot.at("executions")
+                                         .at(0).at("handle")
+                                         .get<std::uint64_t>();
+  const std::uint64_t second_handle = runtime_snapshot.at("executions")
+                                          .at(1).at("handle")
+                                          .get<std::uint64_t>();
+  const std::map<std::uint64_t, std::string> valid_mapping = {
+      {first_handle, "external:tamper-plan-a"},
+      {second_handle, "external:tamper-plan-b"}};
+
+  require_bad_local_sample(sample, hardware, {}, 0,
+                           "missing explicit handle-to-leg mapping is rejected");
+  require_bad_local_sample(sample, hardware,
+                           {{first_handle, "external:tamper-plan-a"},
+                            {99, "external:extra-leg"}},
+                           0, "extra explicit handle mapping is rejected");
+  require_bad_local_sample(sample, hardware,
+                           {{first_handle, "same-leg"},
+                            {second_handle, "same-leg"}},
+                           0, "duplicate explicit leg id is rejected");
+  require_bad_local_sample(sample, hardware,
+                           {{first_handle, ""},
+                            {second_handle, "external:tamper-plan-b"}},
+                           0, "empty explicit leg id is rejected");
+  require_bad_local_sample(sample, hardware, valid_mapping, 1,
+                           "sample rank mismatch is rejected");
+
+  json wrong_hardware = sample;
+  wrong_hardware["hardware_fingerprint"] = "sha256:wrong-hardware";
+  require_bad_local_sample(wrong_hardware, hardware, valid_mapping, 0,
+                           "tampered sample Hardware identity is rejected");
+  json wrong_hardware_config = sample;
+  wrong_hardware_config["hardware_config"]["performance_profile"]
+                       ["eta_hbm_matrix"] = 0.71;
+  require_bad_local_sample(wrong_hardware_config, hardware, valid_mapping, 0,
+                           "valid but different sampled hardware config is rejected");
+
+  json wrong_owner = sample;
+  wrong_owner["completion_bindings"][0]["owner"] = owner_wire(test_owner(999));
+  require_bad_local_sample(wrong_owner, hardware, valid_mapping, 0,
+                           "completion binding Owner mismatch is rejected");
+
+  json wrong_tick = sample;
+  wrong_tick["sampled_at_ns"] =
+      wrong_tick.at("sampled_at_ns").get<std::uint64_t>() + 1;
+  require_bad_local_sample(wrong_tick, hardware, valid_mapping, 0,
+                           "sample and Runtime tick mismatch is rejected");
+
+  json wrong_state = sample;
+  wrong_state["completion_bindings"][0]["state_at_sample"] = "finished";
+  require_bad_local_sample(wrong_state, hardware, valid_mapping, 0,
+                           "completion binding state mismatch is rejected");
+
+  json missing_completion = sample;
+  missing_completion["completion_bindings"].clear();
+  require_bad_local_sample(missing_completion, hardware, valid_mapping, 0,
+                           "missing completion binding is rejected");
+
+  json duplicate_completion = sample;
+  duplicate_completion["completion_bindings"].push_back(
+      duplicate_completion["completion_bindings"][0]);
+  require_bad_local_sample(duplicate_completion, hardware, valid_mapping, 0,
+                           "duplicate completion binding is rejected");
+
+  json dispatched_sample = sample;
+  dispatched_sample["callbacks_dispatched"] = true;
+  require_bad_local_sample(dispatched_sample, hardware, valid_mapping, 0,
+                           "sample after callback dispatch is rejected");
+
+  json terminal_sample = local_sample(hardware, [&]() {
+    coarse_die::Runtime terminal_runtime(hardware);
+    (void)terminal_runtime.submit_endpoint(endpoint_spec(2120, 2120, 1),
+                                           test_owner(212), 0);
+    const auto finish = terminal_runtime.next_event();
+    require(finish.has_value(), "terminal tamper fixture has a finish tick");
+    terminal_runtime.advance_to(*finish);
+    return terminal_runtime.export_snapshot();
+  }(), 0);
+  json wrong_terminal = terminal_sample;
+  wrong_terminal["completion_bindings"][0]["finish_ns_at_sample"] = 999;
+  const auto terminal_handle = terminal_sample.at("completion_bindings")
+                                   .at(0).at("handle").get<std::uint64_t>();
+  require_bad_local_sample(wrong_terminal, hardware,
+                           {{terminal_handle, "external:terminal"}}, 0,
+                           "terminal completion timestamp mismatch is rejected");
+}
+
 }  // namespace
 
 int main() {
@@ -565,6 +878,9 @@ int main() {
     wire_snapshot_import_rejects_unmatched_handles_and_mismatched_plans();
     wire_snapshot_import_rejects_binding_and_completion_tampering();
     wire_snapshot_preserves_cancelled_chain_and_pending_completion();
+    local_sample_import_restores_active_plan_and_endpoint_bindings();
+    local_sample_terminal_handle_becomes_one_pending_wrapper_completion();
+    local_sample_import_rejects_binding_and_identity_tampering();
     std::cout << "PASS native_coarse_die_domain_test\n";
     return 0;
   } catch (const std::exception& error) {

@@ -1,0 +1,42 @@
+{
+  "strict_runtime_wire_equal": false,
+  "runtime_except_four_busy_accumulators_equal": true,
+  "actual_completions": [
+    {
+      "cancelled": false,
+      "finish_ns": 2408,
+      "leg_id": "captured-comp:41"
+    },
+    {
+      "cancelled": false,
+      "finish_ns": 303318,
+      "leg_id": "captured-local-hbm:900"
+    }
+  ],
+  "ungraded_exact_busy_decimal_deltas": [
+    {
+      "path": "/stats/compute_busy_ns",
+      "source_decimal": "2.126785714285714609550e+03",
+      "replay_decimal": "2.126785714285714609773e+03",
+      "replay_minus_source_ns": "2.23E-16"
+    },
+    {
+      "path": "/stats/hbm_shared_ns",
+      "source_decimal": "4.155844155844155814461e+02",
+      "replay_decimal": "4.155844155844155813351e+02",
+      "replay_minus_source_ns": "-1.110E-16"
+    },
+    {
+      "path": "/stats/row_shared_ns/0",
+      "source_decimal": "4.155844155844155814461e+02",
+      "replay_decimal": "4.155844155844155813351e+02",
+      "replay_minus_source_ns": "-1.110E-16"
+    },
+    {
+      "path": "/stats/row_shared_ns/1",
+      "source_decimal": "4.155844155844155814461e+02",
+      "replay_decimal": "4.155844155844155813351e+02",
+      "replay_minus_source_ns": "-1.110E-16"
+    }
+  ]
+}

@@ -12,6 +12,8 @@
 
 当前新增实际 Sys 的 Runtime-copy 只读采样及 COMP/endpoint/lease ownership catalog；采样不推进 live Runtime、不 dispatch callback、不改变队列或容量账。提交前校验同 rank 外 ledger token、canonical workspace bytes 和 stale Prepared task。当前源码真实 Sys/DIE/HBM/native/window 8/8 CTest；重链 tiny legacy Online C++/Python 0/0、192/192 successful terminals。真实采样保留 tick1 的一个 COMP、一个 COMM_READ 和40960 workspace bytes；原 Sys 队列实际完成分别2408ns/303318ns。详见 `analysis/sys-local-sample-20261014/` 与对应 evidence；这仍不是完整生产 world import。
 
+只读采样源码检查点 `385641813de28a32b1c8f01314442e6a510a8b4e` 已正常进入 main，2026-10-14T17:38:43Z fetch/ancestry 实核。随后新增严格 local sample→NativeCoarseDieDomain 导入，显式 expected rank 和 handle→leg map；实际采样继续执行的2408ns/303318ns及served/整数/registry精确相等，四项累计浮点busy字符串有 ±1e-16ns级差值，**完整 Runtime wire 严格全等为 false**，没有容差掩盖。最终4/4 native/window+4/4真实库Python通过。WSCLLM 两仓同一lease保护已独立构建，生命周期CTest各1/1通过。此阶段证据见 local-sample-domain 与 ws-lease-hardening 包；FACE 两仓 admission/v2 bridge 正在实施，不能视为已完成验收。
+
 新 JOINT 的 wire 检查点 tiny legacy Online 再次 C++/Python exit0，192/192 terminals、1 request 完成；该次 C++ Online relink 后字节与前检查点相同，stage Python 源/新 projection 库逐文件 SHA 实核。当前 Sys 采样检查点 Online 已重新编译，二进制身份单列在 sys-local-sample evidence。真实 sh30 coarse-intended Online 的既存 provider guard 失败保留，没有删除 guard 或假装完整接入。新 native session 可从自己的活动 wire 恢复；生产 Sys/ledger、network/pool 所有权和 sh30 provider 尚未接通，`live_world_import_supported=false` 保留。
 
 生产 E5 的 finish/HBM busy 原 3%/5% 门槛仍失败，E8/E16 不可用；目标 raw/held-out 数据不可用，TX8 reference 和目标先验保持冻结；没有新的 host-overhead 通过证书。
@@ -59,7 +61,15 @@ coarse-only 修复三个实际调度边界：controlled integrate 抵达 fixed t
 
 WorkspaceAdmission 验证实际 ledger owner、live node/generation/id 和 exact bytes；Prepared 保留共享 immutable raw task 引用，并以公共 Plan accessor 校验 bytes/HW/identity。Workload 在 graph take/COMP occupy/stats 前执行 const preflight，adapter 在提交前复核，acquire 在容量 mutation 前拒绝不一致 Prepared。实际夹具覆盖所有 public key 碰撞的同 rank foreign token、错误 lease/Prepared bytes 和 stale task；旧 blocked/retry/cancel 流程保留。
 
-真实 tick1 partial sample、drained sample、terminal-before-callback sample 和原 Sys terminal ticks 已保存。8/8 CTest 与当前源重链 tiny legacy Online 0/0 通过；sample 的 native Domain 继续执行对拍仍待下一切片。另四仓仅做过差异调查：WSCLLM 两仓保护移植在途，FACE 两仓尚缺完整 admission/v2 handshake，不把 JOINT 结果外推给它们。
+真实 tick1 partial sample、drained sample、terminal-before-callback sample 和原 Sys terminal ticks 已保存。8/8 CTest 与该源重链 tiny legacy Online 0/0 通过。另四仓按实际差异推进：WSCLLM 两仓保护移植和独立生命周期验证已完成；FACE 两仓 admission/v2 handshake 在途，不把 JOINT 结果外推给它们。
+
+### 实际 local sample 导入及 WSCLLM lease 保护
+
+`NativeCoarseDieDomain::import_local_sample` 严格校验 schema/rank/clock/HW 和 Runtime/completion Owner/handle/lifecycle 双射，调用方必须完整显式给出唯一 leg ID。活动执行保留原 Plan、handle 和进度；副本已终态但外部 callback 待运行的 handle 先保留原 progress，再调用 canonical Runtime destroy，转换为一个待消费 completion。同 finish tick 的 pending terminal 保留 handle 顺序，不被 leg 名字排序改变。最后复用既有 Domain wire importer，不增加 timing/容量公式，不恢复生产 callback/graph/lease。
+
+真实已保存 Sys 样本对拍：COMP2408ns、endpoint303318ns与未触碰原队列完全一致；terminal sample在1ns只产生一次completion；最终所有served、registry、容量、clock及整数/event/generation字段相等。完整 raw wire 严格比较失败，仅compute_busy_ns +2.23e-16ns、hbm_shared_ns及两row_shared_ns -1.110e-16ns。原 live 从0ns积分，采样副本在1ns切分；记录确切Decimal差值，不把这四项计为严格通过、不修改生产数值或放宽精度门槛。第一严格探针exit2保留；最终portable runner仅对其余字段/实际terminal进行验收，busy四项明确ungraded。4/4 native/window、4/4 Python无skip通过，复现源码/脚本和证据在local-sample-domain-20261014。
+
+WSCLLM/base与LRU各自仅移植WorkspaceAdmission/Prepared/adapter/Workload preflight及原生命周期测试；LRU校验在清理blocked诊断之前。独立clean Release build各1项真实Sys生命周期CTest通过，直接二进制分别63/54个断言，包括原有blocked、capacity retry、live cancel和依赖释放及新增foreign ledger全键碰撞/错误bytes/stale task拒绝。未声称广泛suite、当前Online或其他仓业务已覆盖；身份与实际命令在ws-lease-hardening-20261014。
 
 ### E5 单因素诊断工具
 
@@ -72,7 +82,7 @@ WorkspaceAdmission 验证实际 ledger owner、live node/generation/id 和 exact
 以下按依赖继续，不是任务/阶段数量限制。
 
 1. 先把当前有效源码/证据同步远端并核实 main；若收到交接指令，保存全部有效在途成果和最终 GitHub 状态后停止。当前继续开发。
-2. wrapper/native session wire、真实 Sys 只读 local envelope 和 COMP/endpoint/lease catalogs 已完成，不重做。下一步用显式 handle→leg ID 把实际 sample 导入 NativeCoarseDieDomain，与未触碰的 Sys 队列对拍物理完成 tick/最终 counters；terminal-before-callback 只在私有域转换为待消费 completion。随后补 native-world 已知 cancel/capacity 事件及真实 graph/ledger 绑定回放；现有 `export_snapshot(now)` 仍禁止当只读接口复用。
+2. wrapper/native session wire、真实 Sys 只读 envelope/catalogs 和显式 sample→Domain 物理桥接已完成，不重做；四项busy严格差值保留。下一步补 native-world 已知 cancel/capacity 事件及真实 graph/ledger/lease绑定与活动leg回放，把生产输入映射接到既有native session，不能只删除sh30 guard；现有 `export_snapshot(now)` 仍禁止当只读接口复用。
 3. 审查新 JOINT PipelineKernel/WorkLedger/remote-read/pool 与网络腿唯一 local endpoint 所有权；不能把 scalar stream 直接塞进本地 Runtime或仅移除 guard。复用新 fresh-domain parity，再接 `_JointDiePlanProvider`/真实 sh30 typed emitter，同源名义查询和 candidate world。旧策略、virtual pipeline、pool、ledger/cancel 必须保留。
 4. 依据新 E5 axis 证据修必要 K/final-output readiness；复用 bounded OS geometry/per-K facts、有限 full/tail 类及简单稳定周期公式。先 solo/同步/offset，再 multiCore/WR；只在联合 owner/slot/LP 区域确证稳定时跳过，外部事件切段。不把重型 fixed-rational scratch 直接接生产，不逐 tile 展开，不重置 lifetime256 cap，不扩大3%/5%。
 5. LRU finite-manifest formal shape/span domination、真实容量极限 store/restore/migrate 压力和 closed-input 仍待补；base prospective margin 与 FACE/FACE-LRU workspace 桥接按原策略推进；完整 GQA producer 及其 KV/weights/TP/transfer/readiness 消费链仍缺。保留旧 source-release 顺序和 OFF wire。
@@ -85,6 +95,7 @@ WorkspaceAdmission 验证实际 ledger owner、live node/generation/id 和 exact
 - 顺序 layer/pass 不乘 temporary peak；compact span/batch 的当前物化集合语义保留。版本变化显式，旧证书不可复用。
 - future E 仍是 fit margin，`max(A,E)`，不计 active/KV/remote；actual Plan 超界在 mutation 前拒绝，正常串行 compute gate 是 max 而非 sum 的前提。source ACK/物理完成释放与容量复用排序独立保留。
 - fresh/query 与同冻结 native-session wire parity 均不是生产 Sys live snapshot/native integration 完成，也不证明目标性能。禁用 unsupported legacy active state 时显式错误，不能给 scalar ETA 假恢复；生产 live import guard 保留。
+- 实际 sample→Domain 仅恢复局部物理Runtime与pending completion；显式外部leg ID和expected rank，terminal清理复用canonical destroy。积分切分产生的四项busy Decimal差值单列ungraded，不用其余字段的严格相等冒充整份wire严格全等。
 - TX8 conditional reference：eta_compute_reference=0.9079551923877489、eta_vector_memory_reference=0.3411668292682927；Norm246us/FFN3363us 的身份与条件解释不变。目标 eta_pe/vec=.90、HBM=.70、SRAM=1、local/mesh/inject=.70、rho=.90、launch1000ns、memory_setup0、kappa_quant4/acc_convert2保持工程先验。
 
 ## Files to Continue
@@ -94,7 +105,7 @@ WorkspaceAdmission 验证实际 ledger owner、live node/generation/id 和 exact
 - Workspace：公共 Mapping/Capi 与 attention/workspace tests；LRU client/manifest/test；之前 finite-manifest/capacity/source-release 证据仍有效，但旧v1容量证书不适用于新v2查询。
 - OS：`die/src/{Mapping,Execution}.cc`、GemmOSGeometry/AccessCounter/ResourceFacts，compiled/grouped oracle/driver 和既有 bounded proofs；旧 scratch 仅按其限定覆盖复用。
 - 新证据入口：`analysis/{attention-workspace,native-local-projection,gemm-axis}-20261014/` 和对应 evidence；五仓 ABI/config 在 `evidence/five-abi-attention-20261014/`。
-- 当前 native wire：`analysis/native-world-snapshot-20261014/` 与对应 evidence；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/` 与对应 evidence。下一切片是 sample→Domain 物理继续对拍，不是重新实现采样。
+- 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
 
@@ -104,6 +115,7 @@ WorkspaceAdmission 验证实际 ledger owner、live node/generation/id 和 exact
 - 新 JOINT actual Online、joint_projection、双Die ABI、joint_ledger C ABI 均构建成功。NativeProjectionCApiTest、NativeCoarseProjectionTest、NativeCoarseDieDomainTest 3/3 pass；后加slot/join fixture增量test pass。真实两Die ABI的Python legacy+new native suite17/17，0skip。
 - 新 wire 最终 native/window4/4；独立新 build 重建并执行4/4 CTest+4/4 Python，0skip，两次 projection .so SHA相等。实际 legacy protocol+coarse facade18/18无skip；再次 tiny legacy Online 0/0、192/192成功。详见新 identity-and-results.json；未把 raw Runtime export 或两个同样 import 的 world 自对拍当原 source continuation 验证。
 - 新 Sys 只读采样检查点：真实 CoarseWorkspaceRuntime、DieModelAdapter、DieExecutionLifecycle、LocalHbmDieMemory 及四项 native/window 合8/8通过；实际样本 tick1/原队列2408ns/303318ns与无 live mutation 校验通过。当前源码 Online 重链并再次0/0、192/192成功；canonical23 check不变。source/binary SHA 和 ledger stale48 限制见 sys-local-sample evidence。
+- 实际sample→Domain最终4/4 native/window+真实库Python4/4无skip；portable actual Sys replay的完成时刻/served/整数/registry精确匹配，四项busy字符串不严格匹配，原始失败和Decimal差值完整保留。WSCLLM两仓独立真实生命周期各1/1通过、直接二进制63/54断言通过；没有在该阶段重跑其Online或广泛suite。FACE Python暂测与C++工作在途，最终验收另记。
 - 新JOINT tiny legacy Online C++0/Python0，1accepted/1completed、3delivery/3batch、192success terminals、0incomplete；coarse-intended Online在provider guard失败如实保留。当前服务只有strategy/Sh30入口，face/load-first也在策略选择前触发同一provider guard，故无合法非sh30 coarse Online旁路。JOINT config13/13无skip，与另四仓合83/83；focused adapter/workspace Python45/45无skip。
 - E5 utility 最终11项回归与独立 C++ target build通过；model-to-model precision仍failed，strict cumulative scalar equality/数值误差分别报告，不以Python自对拍当生产证书。
 - 未跑新的目标held-out、sanitizer、malloc fault、当前host预算或完整五仓业务。既存GCC __int128/JSON helper dangling-reference warnings保留：已读helper返回persistent JSON引用，未把警告直接断言成UB，也未声称完整内存安全审查。
@@ -112,7 +124,7 @@ WorkspaceAdmission 验证实际 ledger owner、live node/generation/id 和 exact
 
 工程验收缺口：sh30/完整native live world、network/pool/ledger/cancel回放，E5精度/最小有效E，真正容量压力/完整GQA/FACE桥接、成本余项和host预算。目标测量not_available。以上不应由merge、fixture或条件reference数字冒充通过。
 
-源码检查点 bb1677f、b83525c 已进入 main 并实核。后续 WIP 仍需按本协议验证、保存并同步；正式收到交接指令时，以最终共享 main 与本摘要为准。
+源码检查点 bb1677f、b83525c、3856418 已进入 main 并实核。后续 WIP 仍需按本协议验证、保存并同步；正式收到交接指令时，以最终共享 main 与本摘要为准。
 
 ## Handoff Notes
 

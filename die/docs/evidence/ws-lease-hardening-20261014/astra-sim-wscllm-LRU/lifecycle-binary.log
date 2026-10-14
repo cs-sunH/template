@@ -1,0 +1,55 @@
+A: GPU comp slot occupied at issue                                       -> PASS
+A: node terminal fires exactly once                                      -> PASS
+A: span >= isolated estimate + one-shot latency                          -> PASS
+A: span == oracle machine elapsed + exactly one 100 ns local_mem_latency charge -> PASS
+A: GPU comp slot released after Done                                     -> PASS
+A: adapter drains after Done                                             -> PASS
+B: node terminal fires exactly once                                      -> PASS
+B: span == oracle machine elapsed exactly (latency 0 -> no latency charge) -> PASS
+C: adapter reports an active execution mid-flight                        -> PASS
+C: GPU comp slot still occupied mid-flight                               -> PASS
+C: node terminal fires exactly once under contention                     -> PASS
+C: span >= isolated estimate + latency (equal share can only delay)      -> PASS
+C: adapter drains after Done under contention                            -> PASS
+C: die side-band records service AND actual bytes (separate columns)     -> PASS
+D: marker without the HBM model completes on the 1 ns event (legacy micro-job) -> PASS
+E: big node still in flight after partial pumping                        -> PASS
+E: teardown fires no completion for the in-flight node (exactly-zero terminals) -> PASS
+F: ordinary scalar COMPUTE remains rejected in coarse mode               -> PASS
+F: one-byte DIE endpoint waits its 100 ns startup delay                  -> PASS
+F: one marker byte is DIE-owned; COMP/COMM/RESTORE/POOL ledgers stay isolated -> PASS
+F: completed coarse marker teardown has no duplicate terminal            -> PASS
+G: live prefix getter is exact/read-only; stale and reverse samples fail closed -> PASS
+G: cancellation retains the exact partial DIE/compatibility prefix without graph completion -> PASS
+G: cancelled endpoint handle is stale after retirement                   -> PASS
+G: cancelled marker teardown does not publish a terminal                 -> PASS
+H: partially served marker is live before HBM facade teardown            -> PASS
+H: teardown retires the marker without losing its prefix or calling the graph -> PASS
+H: stale teardown alarms do not complete the marker                      -> PASS
+I: teardown runs between full service and queued marker/sibling callbacks -> PASS
+I: marker teardown retains both prefixes without dispatching its terminal sibling -> PASS
+I: sibling retires independently without publishing either callback      -> PASS
+I: stale teardown alarms do not publish completed markers                -> PASS
+K: zero coarse typed/category counters emit rank-scoped zero-window records -> PASS
+K: fixture Plan has positive transient workspace                         -> PASS
+K: one issue pass records both independent blocked Plans and the ascending last observation without GPU, lease, or queue work -> PASS
+K: real queue drains and both independent Plans remain blocked with last-pass evidence intact -> PASS
+K: blocked Plan stays free and consumes no GPU slot or lease             -> PASS
+K: diagnostic captures the last ready blocked Plan and authoritative rank capacity view -> PASS
+K: the no-op probe starts as real queued work                            -> PASS
+K: ready Plan remains blocked with GPU free after the real queue drains  -> PASS
+K: exact capacity acquires the lease before take/occupy                  -> PASS
+K: cancellation begins after real typed service                          -> PASS
+K: live cancellation records typed utilization, releases once, terminalizes Skipped, and frees its dependent node -> PASS
+K: cancelled COMP releases its dependent node normally                   -> PASS
+K: two-rank metrics preserve typed serving, category totals, windows, and one live cancellation -> PASS
+K: impossible Plan fails before take/occupy and leaves no lease          -> PASS
+K: teardown after cancellation does not duplicate terminals              -> PASS
+L: non-coarse local-HBM fields and values match the preserved LRU baseline -> PASS
+P: preflight fixture Plan has a positive workspace peak                  -> PASS
+P: noncanonical Prepared bytes fail before ledger mutation               -> PASS
+P: independent same-rank ledgers admit the same fixture key              -> PASS
+P: full-key collision from a foreign same-rank ledger is rejected before take/occupy -> PASS
+P: mismatched Plan/Prepared/lease byte count fails before take/occupy    -> PASS
+P: stale task payload with the same node/generation is rejected before take/occupy -> PASS
+[die_execution_lifecycle_test] ALL PASS

@@ -112,37 +112,79 @@ DieModelAdapter::PreparedCoarsePlan DieModelAdapter::prepare_coarse_plan(
     const uint64_t workspace_bytes =
         coarse_die::hbm_workspace_peak_bytes(*plan);
     return PreparedCoarsePlan{std::move(plan), workspace_bytes,
-                              node.global_id, node.generation};
+                              node.global_id, node.generation,
+                              node.compute.die_task_json};
 }
 
 WorkspaceAdmission::AcquireResult DieModelAdapter::try_acquire_workspace(
     const PreparedCoarsePlan& prepared) {
-    if (sys_->workspace_admission == nullptr || !prepared.plan) {
+    if (sys_ == nullptr || sys_->coarse_die_runtime == nullptr ||
+        sys_->workspace_admission == nullptr || !prepared.plan ||
+        !prepared.task) {
         throw std::runtime_error(
             "workspace acquisition requires a prepared coarse Plan");
     }
+    const uint64_t canonical_workspace_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
+    if (sys_->workspace_admission->rank() != sys_->id ||
+        prepared.workspace_bytes != canonical_workspace_bytes ||
+        prepared.plan->fingerprint.empty() ||
+        prepared.plan->hardware_fingerprint !=
+            sys_->coarse_die_runtime->hardware().fingerprint) {
+        throw std::runtime_error(
+            "prepared coarse Plan workspace or hardware identity is not canonical");
+    }
     return sys_->workspace_admission->try_acquire(
         prepared.node_id, prepared.generation, prepared.workspace_bytes);
+}
+
+void DieModelAdapter::validate_prepared_coarse_plan(
+    const ExecutionDriven::NodeView& node,
+    const PreparedCoarsePlan& prepared,
+    const WorkspaceAdmission::Lease& lease) const {
+    if (sys_ == nullptr || sys_->coarse_die_runtime == nullptr ||
+        sys_->workspace_admission == nullptr || !prepared.plan ||
+        !prepared.task || !lease.active()) {
+        throw std::runtime_error(
+            "coarse issue requires a live prepared Plan and workspace lease");
+    }
+    if (node.node_type != ChakraProtoMsg::COMP_NODE || node.is_timer_op ||
+        node.is_cpu_op ||
+        node.compute.op_role != ExecutionDriven::OpRole::Compute ||
+        node.compute.die_task_json == nullptr || node.compute.die_spec != nullptr) {
+        throw std::runtime_error(
+            "prepared coarse issue requires a typed GPU COMP node");
+    }
+    const uint64_t canonical_workspace_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
+    if (sys_->workspace_admission->rank() != sys_->id ||
+        prepared.node_id != node.global_id ||
+        prepared.generation != node.generation ||
+        *prepared.task != *node.compute.die_task_json ||
+        prepared.workspace_bytes != canonical_workspace_bytes ||
+        prepared.plan->fingerprint.empty() ||
+        prepared.plan->hardware_fingerprint !=
+            sys_->coarse_die_runtime->hardware().fingerprint ||
+        !sys_->workspace_admission->owns_lease(
+            lease, canonical_workspace_bytes)) {
+        throw std::runtime_error(
+            "prepared Plan/workspace lease identity or canonical workspace "
+            "does not match COMP node and rank ledger");
+    }
+    const auto& key = lease.key();
+    if (key.rank != sys_->id || key.node_id != node.global_id ||
+        key.generation != node.generation) {
+        throw std::runtime_error(
+            "workspace lease key differs from the prepared COMP identity");
+    }
 }
 
 void DieModelAdapter::issue_prepared_coarse_plan(
     const ExecutionDriven::NodeView& node,
     PreparedCoarsePlan prepared,
     WorkspaceAdmission::Lease lease) {
+    validate_prepared_coarse_plan(node, prepared, lease);
     purge_finished_executions();
-    if (sys_->coarse_die_runtime == nullptr ||
-        sys_->workspace_admission == nullptr || !prepared.plan ||
-        !lease.active()) {
-        throw std::runtime_error(
-            "coarse issue requires a live prepared Plan and workspace lease");
-    }
-    const auto& key = lease.key();
-    if (prepared.node_id != node.global_id ||
-        prepared.generation != node.generation || key.rank != sys_->id ||
-        key.node_id != node.global_id || key.generation != node.generation) {
-        throw std::runtime_error(
-            "prepared Plan/workspace lease identity does not match COMP node");
-    }
 
     coarse_die::Owner owner;
     owner.request_id = stable_request_id(node.request_id);

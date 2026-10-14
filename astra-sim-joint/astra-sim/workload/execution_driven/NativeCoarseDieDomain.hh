@@ -52,6 +52,14 @@ class NativeCoarseDieDomain {
       std::string resource_key,
       std::shared_ptr<const coarse_die::Hardware> hardware,
       const nlohmann::json& snapshot);
+  // Imports a read-only rank-local Runtime sample. The caller supplies the
+  // external leg identity for every sampled handle; this does not restore
+  // graph, lease, network, pool, or callback state.
+  static std::unique_ptr<NativeCoarseDieDomain> import_local_sample(
+      std::string resource_key,
+      std::shared_ptr<const coarse_die::Hardware> hardware,
+      std::uint64_t expected_rank, const nlohmann::json& sample,
+      const std::map<std::uint64_t, std::string>& handle_to_leg_id);
   // Raw Runtime-only diagnostic export. Use export_snapshot() when wrapper
   // chain and endpoint bindings must be preserved on the wire.
   nlohmann::json export_runtime_snapshot() const;

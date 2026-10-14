@@ -479,6 +479,10 @@ void Workload::issue_prepared_coarse(
     const ExecutionDriven::NodeView& node,
     DieModelAdapter::PreparedCoarsePlan prepared,
     WorkspaceAdmission::Lease lease) {
+    if (die_adapter_ == nullptr)
+        throw std::runtime_error("prepared coarse issue requires its die adapter");
+    // Reject a stale or foreign Plan/lease before graph take or GPU occupy.
+    die_adapter_->validate_prepared_coarse_plan(node, prepared, lease);
     issue_impl(node, &prepared, &lease);
 }
 

@@ -47,6 +47,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 重要决定及变更记录
 
+- 2026-10-14 实际sample桥接检查点：显式rank/handle→leg ID将真实只读Sys sample导入NativeCoarseDieDomain，canonical Runtime负责导入与terminal清理，pending completion恰好一次；实际COMP/transfer 2408ns/303318ns和served/整数/registry精确匹配。四项累计busy字符串有±1e-16ns级尾差，完整wire严格全等false，原始失败/Decimal差值保留，未放宽门槛或改变timing。最终native/window4/4+Python4/4无skip；WSCLLM两仓lease保护独立生命周期各1/1通过，保留blocked/retry/cancel。FACE admission/v2 bridge仍在途；局部桥接不等于production graph/ledger/network/pool/sh30完成。详见local-sample-domain与ws-lease-hardening证据。
+
 - 2026-10-14 真实 Sys 采样检查点：新增 Runtime-copy 只读 envelope 及实际 COMP/endpoint/lease catalogs，Workload 验证 handle 和权威 workspace ledger 双射；terminal-before-callback 副本可采样，live Runtime/队列/回调不变。提交前拒绝 foreign ledger token、错误 canonical bytes 和 stale Prepared task。当前源8/8 CTest、重链 tiny legacy Online 0/0且192/192成功；真实 sample tick1、原 Sys COMP/transfer 完成2408ns/303318ns。下一步用显式 handle→leg 绑定做实际 sample 的 Domain 继续对拍，完整 graph/ledger/network/pool/sh30 guard仍未接通；另四仓不外推通过。公共 mapping/timing、TX8和canonical23不变，详见sys-local-sample-20261014证据。
 
 - 2026-10-14 native wire 检查点：新 JOINT domain wrapper 与同冻结输入 native session 完整 snapshot/import，复用公共 Runtime v3；恢复后的 step/drain 与未导入 source 完整 inspect 全等。补齐 forecast 同 tick 前缀、fixed pending terminal、跨 gate 唤醒、zero-service child 和 Python barrier facade；4/4 native/window、独立 fresh build4/4+Python4/4、最终 ABI18/18无skip、tiny legacy Online再次0/0且192/192成功。这里只覆盖 native session，生产 Sys/ledger/network/pool/lease 与 sh30 guard未接通；现有 Sys export_snapshot有推进/回调副作用，下一步先加 Runtime-copy只读采样。公共 mapping/timing、TX8/target先验和canonical23 digest不变，E5精度仍failed。详见HANDOFF和native-world-snapshot-20261014证据。

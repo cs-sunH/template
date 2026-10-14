@@ -137,6 +137,17 @@ class WorkspaceAdmission final {
     bool has_capacity_snapshot() const { return has_capacity_snapshot_; }
     std::size_t active_lease_count() const { return active_.size(); }
 
+    /// Check token ownership and its exact live ledger record. Rank/id
+    /// equality alone cannot distinguish a token from another ledger.
+    bool owns_lease(const Lease& lease, const uint64_t workspace_bytes) const {
+        if (lease.owner_ != this || lease.key_.rank != rank_) return false;
+        const auto found = active_.find(
+            Identity{lease.key_.node_id, lease.key_.generation});
+        return found != active_.end() &&
+               found->second.lease_id == lease.key_.lease_id &&
+               found->second.workspace_bytes == workspace_bytes;
+    }
+
     /// Return the installed Python capacity fields without mutation. The
     /// separate has_capacity_snapshot() bit is the authority indicator;
     /// workspace_revision() is the current lease-ledger revision, while the

@@ -1221,6 +1221,297 @@ NativeCoarseDieDomain::import_snapshot(
   return result;
 }
 
+std::unique_ptr<NativeCoarseDieDomain>
+NativeCoarseDieDomain::import_local_sample(
+    std::string resource_key,
+    std::shared_ptr<const coarse_die::Hardware> hardware,
+    std::uint64_t expected_rank, const nlohmann::json& sample,
+    const std::map<std::uint64_t, std::string>& handle_to_leg_id) {
+  require_keys(sample,
+               {"schema", "rank", "sampled_at_ns", "live_runtime_now_ns",
+                "hardware_config", "hardware_fingerprint", "runtime_snapshot",
+                "completion_bindings", "scope", "callbacks_dispatched",
+                "production_world_import_supported"},
+               "local sample");
+  require_finite_json(sample, "local sample");
+  if (resource_key.empty() || !hardware ||
+      sample.at("schema") != "coarse_die_local_sample_v1" ||
+      parse_u64(sample.at("rank"), "sample.rank") != expected_rank ||
+      sample.at("scope") != "rank_local_runtime_only" ||
+      !sample.at("callbacks_dispatched").is_boolean() ||
+      sample.at("callbacks_dispatched").get<bool>() ||
+      !sample.at("production_world_import_supported").is_boolean() ||
+      sample.at("production_world_import_supported").get<bool>()) {
+    throw std::invalid_argument(
+        "invalid_local_sample: schema, rank, scope, or callback flags are incompatible");
+  }
+
+  const std::uint64_t sampled_at_ns =
+      parse_timestamp(sample.at("sampled_at_ns"), "sample.sampled_at_ns");
+  const std::uint64_t live_runtime_now_ns = parse_timestamp(
+      sample.at("live_runtime_now_ns"), "sample.live_runtime_now_ns");
+  if (live_runtime_now_ns > sampled_at_ns ||
+      !sample.at("hardware_fingerprint").is_string() ||
+      sample.at("hardware_fingerprint").get<std::string>() !=
+          hardware->fingerprint ||
+      !sample.at("hardware_config").is_object()) {
+    throw std::invalid_argument(
+        "incompatible_local_sample: tick or Hardware identity differs");
+  }
+  const coarse_die::Hardware sampled_hardware =
+      coarse_die::resolve_hardware(sample.at("hardware_config"));
+  if (sampled_hardware.fingerprint != hardware->fingerprint ||
+      sampled_hardware.derived != hardware->derived ||
+      sampled_hardware.rates != hardware->rates) {
+    throw std::invalid_argument(
+        "incompatible_local_sample: hardware_config resources differ");
+  }
+
+  const auto& runtime_wire = sample.at("runtime_snapshot");
+  if (!runtime_wire.is_object() ||
+      runtime_wire.value("schema", std::string()) !=
+          "coarse_die_snapshot_v3" ||
+      !runtime_wire.contains("now_ns") ||
+      parse_timestamp(runtime_wire.at("now_ns"),
+                      "sample.runtime_snapshot.now_ns") != sampled_at_ns ||
+      runtime_wire.value("hardware_fingerprint", std::string()) !=
+          hardware->fingerprint) {
+    throw std::invalid_argument(
+        "incompatible_local_sample: Runtime tick or Hardware differs from sample");
+  }
+
+  // Import the sampled Runtime first so its canonical parser validates the
+  // complete raw execution, Plan, Owner, counters, and endpoint registries.
+  // This temporary copy is also the authority for the binding state below.
+  auto sampled_runtime =
+      coarse_die::Runtime::import_snapshot(*hardware, runtime_wire);
+  const auto handles = sampled_runtime->execution_handles();
+  if (!sample.at("completion_bindings").is_array() ||
+      sample.at("completion_bindings").size() != handles.size() ||
+      handle_to_leg_id.size() != handles.size()) {
+    throw std::invalid_argument(
+        "invalid_local_sample: completion and leg bindings must cover every Runtime handle exactly once");
+  }
+
+  std::map<std::uint64_t, const nlohmann::json*> runtime_executions;
+  for (const auto& execution : runtime_wire.at("executions")) {
+    const std::uint64_t handle =
+        parse_u64(execution.at("handle"), "runtime.execution.handle");
+    if (!runtime_executions.emplace(handle, &execution).second) {
+      throw std::invalid_argument(
+          "invalid_local_sample: duplicate Runtime execution handle");
+    }
+  }
+
+  std::map<std::uint64_t, const nlohmann::json*> completion_bindings;
+  for (const auto& binding : sample.at("completion_bindings")) {
+    require_keys(binding,
+                 {"handle", "owner", "state_at_sample", "terminal_at_sample",
+                  "finish_ns_at_sample"},
+                 "local sample completion binding");
+    const std::uint64_t handle =
+        parse_u64(binding.at("handle"), "completion_binding.handle");
+    if (!completion_bindings.emplace(handle, &binding).second) {
+      throw std::invalid_argument(
+          "invalid_local_sample: duplicate completion binding handle");
+    }
+    const auto execution = runtime_executions.find(handle);
+    if (execution == runtime_executions.end()) {
+      throw std::invalid_argument(
+          "invalid_local_sample: completion binding references an unknown Runtime handle");
+    }
+    const coarse_die::Owner binding_owner = parse_owner(binding.at("owner"));
+    const coarse_die::Owner execution_owner =
+        parse_owner(execution->second->at("owner"));
+    const nlohmann::json active_progress =
+        sampled_runtime->query_progress(handle);
+    const bool terminal = execution->second->at("terminal").get<bool>();
+    const auto& binding_finish = binding.at("finish_ns_at_sample");
+    const auto& execution_finish = execution->second->at("finish_ns");
+    if (!same_owner(binding_owner, execution_owner) ||
+        !binding.at("state_at_sample").is_string() ||
+        binding.at("state_at_sample") != active_progress.at("state") ||
+        !binding.at("terminal_at_sample").is_boolean() ||
+        binding.at("terminal_at_sample").get<bool>() != terminal ||
+        (terminal &&
+         (binding_finish.is_null() || execution_finish.is_null() ||
+          parse_timestamp(binding_finish,
+                          "completion_binding.finish_ns_at_sample") !=
+              parse_timestamp(execution_finish,
+                              "runtime.execution.finish_ns") ||
+          active_progress.at("finish_ns") != binding_finish)) ||
+        (!terminal && (!binding_finish.is_null() || !execution_finish.is_null()))) {
+      throw std::invalid_argument(
+          "invalid_local_sample: completion binding Owner or lifecycle differs from Runtime");
+    }
+  }
+  if (completion_bindings.size() != handles.size()) {
+    throw std::invalid_argument(
+        "invalid_local_sample: completion bindings are not a Runtime-handle bijection");
+  }
+
+  std::map<std::string, nlohmann::json> domain_entries;
+  std::map<std::uint64_t, std::string> active_endpoint_ids;
+  std::map<std::uint64_t, EndpointTransactionOwner>
+      active_endpoint_transactions;
+  struct PendingSampleCompletion {
+    std::uint64_t handle = 0;
+    nlohmann::json wire;
+  };
+  std::vector<PendingSampleCompletion> pending_completions;
+
+  for (const std::uint64_t handle : handles) {
+    const auto mapping = handle_to_leg_id.find(handle);
+    const auto execution_it = runtime_executions.find(handle);
+    const auto binding_it = completion_bindings.find(handle);
+    if (mapping == handle_to_leg_id.end() ||
+        execution_it == runtime_executions.end() ||
+        binding_it == completion_bindings.end()) {
+      throw std::invalid_argument(
+          "invalid_local_sample: explicit handle-to-leg mapping is incomplete");
+    }
+    const std::string& leg_id = mapping->second;
+    require_leg_id(leg_id);
+    if (domain_entries.find(leg_id) != domain_entries.end()) {
+      throw std::invalid_argument(
+          "invalid_local_sample: explicit leg ids must be unique");
+    }
+
+    const auto& raw_execution = *execution_it->second;
+    const coarse_die::Owner owner = parse_owner(raw_execution.at("owner"));
+    const auto plan = coarse_die::plan_from_json(raw_execution.at("plan"));
+    if (!plan || plan->hardware_fingerprint != hardware->fingerprint ||
+        coarse_die::plan_to_json(*plan) != raw_execution.at("plan")) {
+      throw std::invalid_argument(
+          "invalid_local_sample: Runtime Plan is not canonical for this Hardware");
+    }
+    const bool endpoint_plan =
+        plan->task.is_object() &&
+        plan->task.value("schema", std::string()) ==
+            "coarse_die_endpoint_v2" &&
+        plan->task.contains("endpoint");
+    const bool terminal = raw_execution.at("terminal").get<bool>();
+    const bool cancelled = raw_execution.at("cancelled").get<bool>();
+    const nlohmann::json progress = sampled_runtime->query_progress(handle);
+
+    nlohmann::json entry = {
+        {"leg_id", leg_id},
+        {"kind", endpoint_plan ? "endpoint" : "plan_chain"},
+        {"owner", owner_json(owner)},
+        {"handle", terminal ? nlohmann::json(nullptr)
+                             : nlohmann::json(handle)},
+        {"terminal", terminal},
+        {"cancelled", cancelled},
+        {"finish_ns", terminal ? raw_execution.at("finish_ns")
+                                : nlohmann::json(nullptr)},
+        {"last_progress", terminal ? progress : nlohmann::json(nullptr)},
+        {"plan_index", 0},
+        {"completed_plan_progress", nlohmann::json::array()}};
+
+    if (endpoint_plan) {
+      const nlohmann::json endpoint = plan->task.at("endpoint");
+      const std::uint64_t endpoint_id = parse_u64(
+          endpoint.at("endpoint_id"), "endpoint.endpoint_id");
+      const std::uint64_t transaction_id = parse_u64(
+          endpoint.at("transaction_id"), "endpoint.transaction_id");
+      entry["endpoint"] = endpoint;
+      entry["endpoint_id"] = endpoint_id;
+      entry["transaction_id"] = transaction_id;
+      if (!terminal) {
+        if (!active_endpoint_ids.emplace(endpoint_id, leg_id).second) {
+          throw std::invalid_argument(
+              "invalid_local_sample: duplicate active endpoint id");
+        }
+        auto tx = active_endpoint_transactions.find(transaction_id);
+        if (tx == active_endpoint_transactions.end()) {
+          active_endpoint_transactions.emplace(
+              transaction_id, EndpointTransactionOwner{owner, 1});
+        } else if (!same_owner(tx->second.owner, owner) ||
+                   tx->second.live_endpoints ==
+                       std::numeric_limits<std::size_t>::max()) {
+          throw std::invalid_argument(
+              "invalid_local_sample: active transaction Owner/refcount is invalid");
+        } else {
+          ++tx->second.live_endpoints;
+        }
+      }
+    } else {
+      entry["plans"] = nlohmann::json::array({raw_execution.at("plan")});
+      if (terminal && !cancelled) {
+        entry["completed_plan_progress"].push_back(progress);
+      }
+    }
+
+    if (terminal) {
+      pending_completions.push_back(
+          {handle,
+           {{"leg_id", leg_id},
+            {"finish_ns", raw_execution.at("finish_ns")},
+            {"cancelled", cancelled}}});
+      // Reclaim only this private imported Runtime. Runtime owns the endpoint
+      // registry/refcount cleanup, while the copied progress above remains in
+      // the wrapper entry and the completion stays pending for the caller.
+      sampled_runtime->destroy_execution(handle);
+    }
+    domain_entries.emplace(leg_id, std::move(entry));
+  }
+
+  std::sort(pending_completions.begin(), pending_completions.end(),
+            [](const PendingSampleCompletion& left,
+               const PendingSampleCompletion& right) {
+              const auto left_finish =
+                  left.wire.at("finish_ns").get<std::uint64_t>();
+              const auto right_finish =
+                  right.wire.at("finish_ns").get<std::uint64_t>();
+              if (left_finish != right_finish) return left_finish < right_finish;
+              // Runtime::execution_handles() is in ascending handle order,
+              // matching the Sys callback ready-vector order for tied ticks.
+              return left.handle < right.handle;
+            });
+  nlohmann::json completion_queue = nlohmann::json::array();
+  for (const auto& completion : pending_completions) {
+    completion_queue.push_back(completion.wire);
+  }
+
+  nlohmann::json endpoint_ids_wire = nlohmann::json::array();
+  for (const auto& [endpoint_id, leg_id] : active_endpoint_ids) {
+    endpoint_ids_wire.push_back(
+        {{"endpoint_id", endpoint_id}, {"leg_id", leg_id}});
+  }
+  nlohmann::json transactions_wire = nlohmann::json::array();
+  nlohmann::json runtime_transactions_wire = nlohmann::json::array();
+  for (const auto& [transaction_id, record] : active_endpoint_transactions) {
+    transactions_wire.push_back(
+        {{"transaction_id", transaction_id},
+         {"owner", owner_json(record.owner)},
+         {"live_endpoints", record.live_endpoints}});
+    runtime_transactions_wire.push_back(
+        {{"transaction_id", transaction_id},
+         {"owner", owner_json(record.owner)},
+         {"refcount", record.live_endpoints}});
+  }
+  nlohmann::json entries_wire = nlohmann::json::array();
+  for (auto& [leg_id, entry] : domain_entries) {
+    (void)leg_id;
+    entries_wire.push_back(std::move(entry));
+  }
+
+  const nlohmann::json filtered_runtime = sampled_runtime->export_snapshot();
+  const nlohmann::json domain_snapshot = {
+      {"schema", kDomainSnapshotSchema},
+      {"snapshot_version", 1},
+      {"resource_key", resource_key},
+      {"hardware_fingerprint", hardware->fingerprint},
+      {"runtime", filtered_runtime},
+      {"entries", std::move(entries_wire)},
+      {"endpoint_bindings",
+       {{"endpoint_ids", std::move(endpoint_ids_wire)},
+        {"transactions", std::move(transactions_wire)}}},
+      {"completion_queue", std::move(completion_queue)}};
+  return import_snapshot(std::move(resource_key), std::move(hardware),
+                         domain_snapshot);
+}
+
 nlohmann::json NativeCoarseDieDomain::export_runtime_snapshot() const {
   return runtime_.export_snapshot();
 }

@@ -1,0 +1,119 @@
+{
+  "schema": "ws_lease_hardening_validation_v1",
+  "date": "2026-10-14",
+  "git_head": "385641813de28a32b1c8f01314442e6a510a8b4e",
+  "git_branch": "codex/die-joint-runtime-20261014",
+  "toolchain": {
+    "cmake": "3.31.10",
+    "gxx": "Debian 14.2.0-19",
+    "protoc": "libprotoc 3.21.12"
+  },
+  "scope": {
+    "repositories": [
+      "astra-sim-wscllm",
+      "astra-sim-wscllm-LRU"
+    ],
+    "modified_source_files_each": [
+      "WorkspaceAdmission.hh",
+      "DieModelAdapter.hh",
+      "DieModelAdapter.cc",
+      "Workload.cc",
+      "execution_driven/tests/die_execution_lifecycle_test.cc"
+    ],
+    "not_run": "No broad CTest suite, unrelated config regressions, face/JOINT builds, or workspace joint build; only the existing real Sys/Online DieExecutionLifecycle target in each branch was built and run.",
+    "production_effect": "Lease ownership is checked against the exact live ledger and byte count; Prepared retains the immutable source task pointer; canonical plan bytes/hardware and task identity validate before graph take/GPU occupy. LRU clears blocked diagnostics only after validation.",
+    "negative_fixtures": [
+      "same-rank foreign ledger with full rank/node/generation/lease_id key collision",
+      "noncanonical Prepared bytes rejected before ledger mutation",
+      "mismatched Plan/Prepared/lease bytes rejected before node take/GPU occupy",
+      "stale task payload on identical node/generation rejected before node take/GPU occupy"
+    ],
+    "preserved_flow_fixtures": [
+      "WSCLLM H blocked, capacity refresh retry, live cancel and dependency release",
+      "WSCLLM-LRU K blocked diagnostics, capacity refresh admission, live cancel and dependency release"
+    ]
+  },
+  "repositories": [
+    {
+      "repo": "astra-sim-wscllm",
+      "source_files_sha256": {
+        "astra-sim-wscllm/astra-sim/workload/WorkspaceAdmission.hh": "27133aac99020b9d3b2f8b8281655f05223cf6c215fab47dac9c2a033bbe4d2e",
+        "astra-sim-wscllm/astra-sim/workload/DieModelAdapter.hh": "50b3cd7d6c85f11275db225bfd7335b9f515690b94906ed69d868e2eb6a8134f",
+        "astra-sim-wscllm/astra-sim/workload/DieModelAdapter.cc": "5a24d0969e90754be3eef2916d8de98c92d2e1b0887cf5e2e9a1297292a95116",
+        "astra-sim-wscllm/astra-sim/workload/Workload.cc": "6d8e4922140d01194449af799fd13eb239e8f1df46f1c5365ab22e1353356321",
+        "astra-sim-wscllm/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc": "78ec49081e44e944d8148d510f48d5b2294ba3c5d43fe29b5e136ad68ffcbfa0"
+      },
+      "source_diff_sha256": "07af8cca4984643ad3252cda402abcf4606292212fb0626eb0a0e0a8eda221b1",
+      "build": {
+        "cmake_source": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/cmake-source",
+        "build_dir": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/build",
+        "workers": 2,
+        "target": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "configured": "PASS",
+        "built": "PASS",
+        "ctest": {
+          "command_log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/logs/lifecycle-test.log",
+          "result": "1/1 PASS"
+        },
+        "direct_run": {
+          "command_log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/logs/lifecycle-binary.log",
+          "exit": 0,
+          "assertions_passed": 63,
+          "new_preflight_assertions_passed": 6,
+          "all_pass_marker": true
+        },
+        "binary": {
+          "path": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/build/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+          "sha256": "9d85c4ded875085db8800ad494ef933e7b32c577bc7d5a7ce96bfe6f989c2a0f"
+        },
+        "logs": {
+          "configure.log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/logs/configure.log",
+          "build.log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/logs/build.log",
+          "lifecycle-test.log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/logs/lifecycle-test.log",
+          "lifecycle-binary.log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm/logs/lifecycle-binary.log"
+        }
+      }
+    },
+    {
+      "repo": "astra-sim-wscllm-LRU",
+      "source_files_sha256": {
+        "astra-sim-wscllm-LRU/astra-sim/workload/WorkspaceAdmission.hh": "604c59de9761d84686e4116e73a650f530c34185ce761adc606eaba50eddb83f",
+        "astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.hh": "fdb7744f206c772088d15fa23cc93487e582880d8ab2d626d3c6d8e346686c13",
+        "astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc": "5d21019308c3303fd35a93601a70c32bdcbd3eb8878c633432754ab43c4b58d5",
+        "astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc": "5905474daeeba13cee6cb94d6af2bfda66e6b725a5ea108f485a97abf534ce3b",
+        "astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc": "c2e24f86023c2a4ab3b8a00b448ef1e1d7a63780a88ffd413ec0b8741da6179a"
+      },
+      "source_diff_sha256": "567ef4a63683b8524f845997ccbf9c01fdcbaf55735fc1745b5606bb742ff3bb",
+      "build": {
+        "cmake_source": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/cmake-source",
+        "build_dir": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/build",
+        "workers": 2,
+        "target": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "configured": "PASS",
+        "built": "PASS",
+        "ctest": {
+          "command_log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/logs/lifecycle-test.log",
+          "result": "1/1 PASS"
+        },
+        "direct_run": {
+          "command_log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/logs/lifecycle-binary.log",
+          "exit": 0,
+          "assertions_passed": 54,
+          "new_preflight_assertions_passed": 6,
+          "all_pass_marker": true
+        },
+        "binary": {
+          "path": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/build/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+          "sha256": "d4ecc45f1a213a0f963bbad69f4d0bace687f10d2f17894ac80389d1067d129e"
+        },
+        "logs": {
+          "configure.log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/logs/configure.log",
+          "build.log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/logs/build.log",
+          "lifecycle-test.log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/logs/lifecycle-test.log",
+          "lifecycle-binary.log": "/workspace/template/work/ws-lease-hardening-20261014/astra-sim-wscllm-LRU/logs/lifecycle-binary.log"
+        }
+      }
+    }
+  ],
+  "commands_record": "/workspace/template/work/ws-lease-hardening-20261014/commands.txt"
+}

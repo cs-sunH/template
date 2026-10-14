@@ -308,6 +308,163 @@ void drain_queue(const std::shared_ptr<EventQueue>& queue) {
     }
 }
 
+void test_prepared_coarse_preflight(const std::string& config_dir) {
+    g_first_tick.clear();
+    g_terminal_fires.clear();
+    g_terminal_status.clear();
+    Fixture fixture = make_fixture(config_dir, "coarse_system.json");
+    const nlohmann::json task{{"op_kind", "ffn_region"},
+        {"tensor_shapes", {{"m", 64}, {"hidden", 128},
+                            {"ffn", 256}, {"mlp_variant", "swiglu"}}},
+        {"fusion_policy", "materialized"}, {"storage_dtype", "bf16"}};
+    OnlineNode comp;
+    comp.global_id = 900; comp.rank = 0; comp.generation = 7;
+    comp.kind = NodeKind::Compute; comp.node_type = 4;
+    comp.name = "coarse_preflight";
+    comp.request_id = "r-preflight"; comp.stage = "prefill";
+    comp.compute.die_task_json =
+        std::make_shared<const nlohmann::json>(task);
+    fixture.source->store().add_node(comp);
+    const NodeView* const stored = fixture.source->lookup_ptr(comp.global_id);
+    if (stored == nullptr) {
+        expect_true(false, "P: preflight fixture node is addressable");
+        return;
+    }
+
+    DieModelAdapter& adapter = *fixture.sys->workload->die_model_adapter();
+    const auto prepared = adapter.prepare_coarse_plan(*stored);
+    const uint64_t canonical_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
+    expect_true(canonical_bytes > 1,
+                "P: preflight fixture Plan has a positive workspace peak");
+    if (canonical_bytes <= 1) return;
+
+    install_workspace_snapshot(
+        fixture.sys.get(), std::numeric_limits<uint64_t>::max(), 0, 0);
+    auto wrong_bytes_prepared = prepared;
+    wrong_bytes_prepared.workspace_bytes = canonical_bytes - 1;
+    const uint64_t revision_before_wrong_acquire =
+        fixture.sys->workspace_admission->workspace_revision();
+    bool wrong_prepared_bytes_rejected = false;
+    try {
+        (void)adapter.try_acquire_workspace(wrong_bytes_prepared);
+    } catch (const std::runtime_error&) {
+        wrong_prepared_bytes_rejected = true;
+    }
+    expect_true(wrong_prepared_bytes_rejected &&
+                    fixture.sys->workspace_admission->active_lease_count() == 0 &&
+                    fixture.sys->workspace_admission->active_workspace_bytes() == 0 &&
+                    fixture.sys->workspace_admission->workspace_revision() ==
+                        revision_before_wrong_acquire,
+                "P: noncanonical Prepared bytes fail before ledger mutation");
+
+    WorkspaceAdmission& local_ledger = *fixture.sys->workspace_admission;
+    auto local = local_ledger.try_acquire(
+        comp.global_id, comp.generation, canonical_bytes);
+    WorkspaceAdmission foreign_ledger(fixture.sys->id);
+    const WorkspaceCapacityRank foreign_capacity{
+        fixture.sys->id, foreign_ledger.workspace_revision(),
+        std::numeric_limits<uint64_t>::max(), 0, 0, 0};
+    foreign_ledger.validate_capacity_snapshot(foreign_capacity);
+    foreign_ledger.install_capacity_snapshot_unchecked(foreign_capacity);
+    auto foreign = foreign_ledger.try_acquire(
+        comp.global_id, comp.generation, canonical_bytes);
+    const bool both_acquired =
+        local.status == WorkspaceAdmission::AcquireStatus::Acquired &&
+        foreign.status == WorkspaceAdmission::AcquireStatus::Acquired;
+    expect_true(both_acquired,
+                "P: independent same-rank ledgers admit the same fixture key");
+    if (!both_acquired) return;
+    const auto& local_key = local.lease.key();
+    const auto& foreign_key = foreign.lease.key();
+    const bool full_key_collision =
+        local_key.rank == foreign_key.rank &&
+        local_key.node_id == foreign_key.node_id &&
+        local_key.generation == foreign_key.generation &&
+        local_key.lease_id == foreign_key.lease_id;
+    bool foreign_rejected = false;
+    try {
+        fixture.sys->workload->issue_prepared_coarse(
+            *stored, prepared, std::move(foreign.lease));
+    } catch (const std::runtime_error&) {
+        foreign_rejected = true;
+    }
+    std::vector<uint64_t> free_ids;
+    fixture.source->store().fill_free_node_snapshot(free_ids);
+    expect_true(full_key_collision && foreign_rejected &&
+                    local_ledger.active_lease_count() == 1 &&
+                    local_ledger.active_workspace_bytes() == canonical_bytes &&
+                    foreign_ledger.active_lease_count() == 0 &&
+                    foreign_ledger.active_workspace_bytes() == 0 &&
+                    std::find(free_ids.begin(), free_ids.end(), comp.global_id) !=
+                        free_ids.end() &&
+                    fixture.sys->workload->hw_resource
+                            ->num_in_flight_gpu_comp_ops == 0 &&
+                    g_terminal_fires.count(comp.global_id) == 0,
+                "P: full-key collision from a foreign same-rank ledger is rejected before take/occupy");
+    local.lease.release();
+
+    install_workspace_snapshot(
+        fixture.sys.get(), std::numeric_limits<uint64_t>::max(), 0, 0);
+    auto short_lease = local_ledger.try_acquire(
+        comp.global_id, comp.generation, canonical_bytes - 1);
+    auto forged_bytes_prepared = prepared;
+    forged_bytes_prepared.workspace_bytes = canonical_bytes - 1;
+    bool forged_bytes_rejected = false;
+    if (short_lease.status == WorkspaceAdmission::AcquireStatus::Acquired) {
+        try {
+            fixture.sys->workload->issue_prepared_coarse(
+                *stored, forged_bytes_prepared, std::move(short_lease.lease));
+        } catch (const std::runtime_error&) {
+            forged_bytes_rejected = true;
+        }
+    }
+    free_ids.clear();
+    fixture.source->store().fill_free_node_snapshot(free_ids);
+    expect_true(forged_bytes_rejected &&
+                    local_ledger.active_lease_count() == 0 &&
+                    local_ledger.active_workspace_bytes() == 0 &&
+                    std::find(free_ids.begin(), free_ids.end(), comp.global_id) !=
+                        free_ids.end() &&
+                    fixture.sys->workload->hw_resource
+                            ->num_in_flight_gpu_comp_ops == 0 &&
+                    g_terminal_fires.count(comp.global_id) == 0,
+                "P: mismatched Plan/Prepared/lease byte count fails before take/occupy");
+
+    install_workspace_snapshot(
+        fixture.sys.get(), std::numeric_limits<uint64_t>::max(), 0, 0);
+    auto stale_task_lease = adapter.try_acquire_workspace(prepared);
+    bool stale_task_rejected = false;
+    if (stale_task_lease.status ==
+        WorkspaceAdmission::AcquireStatus::Acquired) {
+        NodeView stale_node = *stored;
+        nlohmann::json replacement = *stored->compute.die_task_json;
+        replacement["tensor_shapes"]["m"] = 65;
+        stale_node.compute.die_task_json =
+            std::make_shared<const nlohmann::json>(replacement);
+        try {
+            fixture.sys->workload->issue_prepared_coarse(
+                stale_node, prepared, std::move(stale_task_lease.lease));
+        } catch (const std::runtime_error&) {
+            stale_task_rejected = true;
+        }
+    }
+    free_ids.clear();
+    fixture.source->store().fill_free_node_snapshot(free_ids);
+    expect_true(stale_task_rejected &&
+                    local_ledger.active_lease_count() == 0 &&
+                    local_ledger.active_workspace_bytes() == 0 &&
+                    std::find(free_ids.begin(), free_ids.end(), comp.global_id) !=
+                        free_ids.end() &&
+                    fixture.sys->workload->hw_resource
+                            ->num_in_flight_gpu_comp_ops == 0 &&
+                    g_terminal_fires.count(comp.global_id) == 0,
+                "P: stale task payload with the same node/generation is rejected before take/occupy");
+
+    fixture.sys.reset();
+    drain_queue(fixture.event_queue);
+}
+
 void no_op_event(void*) {}
 
 long double marker_read_bytes(const nlohmann::json& progress) {
@@ -1324,6 +1481,8 @@ int main() {
             drain_queue(fixture.event_queue);
         }
     }
+
+    test_prepared_coarse_preflight(config_dir);
 
     std::error_code ec;
     std::filesystem::remove_all(config_dir, ec);
