@@ -6,7 +6,7 @@
 
 从远端 main `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，已核实包含 PR #11 merge `721ab833` 和源码 `60d18dc`。本轮分支 `codex/die-joint-runtime-20261014`，复用此前 Compiler/Mapping/Runtime、LRU finite-manifest margin/source-release、typed adapter 和 canonical23 发布基础；不重复已通过且未改的研究/业务范围。
 
-本检查点包含三项成果：修复 attention 顺序 layer/pass 的 workspace 峰值；为新 JOINT 增加真正使用公共 Runtime 的 native local-domain 投影片段；将 E5 编译后 oracle 工具扩为实际 shape 单因素探针。源码及证据正在整理提交，远端未核实前 **NOT READY FOR HANDOFF**。当前没有停止指令，检查点之后继续剩余依赖。
+本检查点包含三项成果：修复 attention 顺序 layer/pass 的 workspace 峰值；为新 JOINT 增加真正使用公共 Runtime 的 native local-domain 投影片段；将 E5 编译后 oracle 工具扩为实际 shape 单因素探针。源码及证据已提交 `bb1677f67074eec02a612ed7b99af2740187772d` 并正常快进推送至工作分支和共享 main；fetch/ancestry 实核 main 包含该源码。代码检查点已安全同步，工程整体仍 NOT ACCEPTED。当前没有停止指令，继续剩余依赖。GitHub事实见 `evidence/native-local-projection-20261014/github/remote-verification.json`。
 
 新 JOINT 的真实 tiny legacy Online 已 C++/Python exit0，192/192 terminals、1 request 完成。真实 sh30 coarse-intended Online 在 provider 的旧投影 guard 显式拒绝；保留失败，没有删除 guard 或假装完整接入。新 native bridge 只支持 fresh frozen local domains，完整 live graph/world wire import、network/pool 所有权和 sh30 provider 尚未接通。
 
@@ -85,7 +85,7 @@
 
 工程验收缺口：sh30/完整native live world、network/pool/ledger/cancel回放，E5精度/最小有效E，真正容量压力/完整GQA/FACE桥接、成本余项和host预算。目标测量not_available。以上不应由merge、fixture或条件reference数字冒充通过。
 
-当前源码尚在检查点提交/远端同步流程；只有源码与本交接摘要进入main并实核后才可安全跨账号接棒。
+源码检查点 bb1677f 已进入 main 并实核。后续 WIP 仍需按本协议验证、保存并同步；正式收到交接指令时，以最终共享 main 与本摘要为准。
 
 ## Handoff Notes
 
