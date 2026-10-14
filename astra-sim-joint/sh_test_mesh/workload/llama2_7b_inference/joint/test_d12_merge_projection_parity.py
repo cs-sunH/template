@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
-"""test_d12_merge_projection_parity.py -- D12 修复轮二：三位置 merge 的
-预测-执行平价（式(21) 投影 ↔ ``_merge_back_three_position`` 执行）。
+"""test_d12_merge_projection_parity.py -- D12 完整型布局下的
+merge 投影 ↔ 执行平价钉测。
 
-同一实时状态（真 KVCacheManager 夹具：增量型会话 + 边界事务 + decode
-增长）下，逐字段核对：
+原远读增量型三位置平价（H@home + U@i_P + growth@j 的保留量择优/
+逐源缺失腿）已随增量型布局族退役（D6：P ∈ {stay,copy,recompute}
+的 P 末工作副本恒完整型、D 末态 = 执行端完整并集直接作为结果位
+置）。本文件钉完整型家族的投影/执行双侧平价：
 
-* **目标/保留量**——``project_end_state`` 的位置保留量 == 账本实例字节；
-  ``merge_from_layout`` 的式(21) 目标（``merge_eq21_target`` notes）==
-  执行侧 ``last_merge_outcome`` 的 winner；
-* **逐源缺失区间/传输字节**——plan.legs（source→target + 逐 rank 字节）
-  == 执行侧 transfers 逐腿；payload == ``transferred_bytes``；
-* **通道义务**——腿的 ``source_holds_reference_until_ack`` 披露在场；
-* **去重**——重复副本（非权威）不增加 V：计价 legs 空/执行零传输，
-  双侧一致（complete_union / zero_byte_flip）；
-* **容量回退序列**——执行侧新增的 ``fallback_sequence`` 披露（主目标
-  失败 → 回退1 → 锁定，≤ ``m_end-1`` 次替代（W5 §7.3 推广））与
-  计价侧 ``capacity_fallback_order`` 同序；回退目标的审计替位计划
-  （``audit_alternate_targets``）与实际执行腿逐位一致。
+  1. **copy 末态零字节翻转**（P=copy@j、D=copy@j 两形态）：投影
+     ``merge_from_layout`` 判 complete_union@j、零腿零载荷；执行
+     ``merge_back`` 胜者 = j、零传输、终态守恒（home/旧源清零）；
+  2. **recompute 末态同样零翻转**：来源侧旧副本随重建物化释放
+     （重复副本不加 V——去重平价）；
+  3. **保留量/并集披露**：投影保留量 = 真账本逐实例字节（投影输入
+     与执行输入同源）。
 
-覆盖：两位置退化、三位置、去重（重复副本不加 V）、容量回退 ≤2 次。
-纯夹具测试（不跑仿真）。
+区间代数面（保留量择优/容量回退序/逐源腿）由
+test_d12_merge_three_position 以纯 ``project_end_state`` +
+``merge_from_layout`` 覆盖（该路径在三动作生产面不可达、
+merge 机制通用面保留，见执行方案 §1.2 保留红线与 A3 报告 D-1）。
+
+夹具自包含（2026-10-14 远读退役改写）：原 ``_increment_kv`` 来自
+online/test_c4_boundary_full_surface（随远读用例整删），本文件改
+本地完整型夹具——H 基础建 home，P=copy 到 i_P 物化 H+U 工作副本。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
-      python3 joint/test_d12_merge_projection_parity.py
+      python3 joint/test_d12_merge_projection_parity.py（或 pytest）
 """
 import os
 import sys
@@ -34,41 +37,98 @@ for _p in (_HERE, _WL):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from face_scheduler import kv_cache_shard_bytes_for_tokens  # noqa: E402
+from face_scheduler import (  # noqa: E402
+    FaceHardware,
+    FaceInstanceSpec,
+    KVCacheManager,
+    build_instances,
+    kv_cache_shard_bytes_for_tokens,
+)
 from joint.boundary_layout import (  # noqa: E402
     INTERVAL_ROLE_BASE,
-    INTERVAL_ROLE_INCREMENT,
     INTERVAL_ROLE_CONTEXT,
     BoundaryKvInterval,
 )
 from joint.joint_cost_model import (  # noqa: E402
-    MERGE_SELECTION_RETENTION_MAX,
+    MERGE_SELECTION_COMPLETE_UNION,
     project_end_state,
 )
-from joint.test_d18_boundary_decision import (  # noqa: E402
-    _loads3,
-    _model,
-)
-from online.test_c4_boundary_full_surface import (  # noqa: E402
-    HISTORY_TOKENS,
-    HOME_INSTANCE,
-    INPUT_TOKENS,
-    P_INSTANCE,
-    THIRD_INSTANCE,
-    _h_bytes,
-    _increment_kv,
-    _instance_bytes,
-    _three_hardware,
-    _u_bytes,
-)
+from joint.test_d12_merge_three_position import _loads3  # noqa: E402
+from joint.test_d18_boundary_decision import _model  # noqa: E402
+from joint.test_joint_mechanisms import _tiny_model  # noqa: E402
 
-GROWTH_TOKENS = 6            # decode 增长（token）
-MODEL_LAYERS = 4             # tiny model 层数（层字段 = 身份元数据）
+HISTORY_TOKENS = 96        # 基础历史 H（token）
+INPUT_TOKENS = 16          # 本轮输入 U（token）
+HOME_INSTANCE = 2          # 基础驻留实例（三实例几何）
+P_INSTANCE = 0             # i_P（P = copy 执行实例）
+THIRD_INSTANCE = 1         # 第三目标
+GROWTH_TOKENS = 6          # decode 增长（token）
+MODEL_LAYERS = 4           # tiny model 层数（层字段 = 身份元数据）
+
+
+def _three_hardware():
+    return FaceHardware(
+        mesh_rows=2, mesh_cols=3,
+        local_hbm_capacity_bytes=10 ** 9,
+        local_hbm_bandwidth_gbps=100.0, d2d_bandwidth_gbps=200.0,
+        peak_perf_tflops=1.0, d2d_latency_ns=0, local_hbm_latency_ns=0)
+
+
+def _three_topology(hardware):
+    """三实例几何（home=2 / i_P=0 / 第三目标=1；2×3 mesh 6 rank）。"""
+    return build_instances(hardware, (
+        FaceInstanceSpec("ins0", "1", (0, 3)),
+        FaceInstanceSpec("ins1", "2", (1, 4)),
+        FaceInstanceSpec("ins2", "3", (2, 5)),
+    ))
+
+
+def _instance_bytes(kv, instance_index):
+    return tuple(
+        kv._rank_states[rank].kv_cache_bytes
+        for rank in kv.topology.instance(instance_index).ranks)
+
+
+def _u_bytes(model, kv):
+    return kv_cache_shard_bytes_for_tokens(
+        model, INPUT_TOKENS, kv.tp_degree)
+
+
+def _h_bytes(model, kv):
+    return kv_cache_shard_bytes_for_tokens(
+        model, HISTORY_TOKENS, kv.tp_degree)
 
 
 def _bytes_for(kv, model, tokens):
     return tuple(int(value) for value in (
         kv_cache_shard_bytes_for_tokens(model, tokens, kv.tp_degree)))
+
+
+def _copy_kv():
+    """三实例真 KVCacheManager + 完整型会话（P = copy@i_P：H 基础在
+    home、H+U 工作副本物化在 i_P）——完整型边界事务的执行基底。"""
+    hardware = _three_hardware()
+    model = _tiny_model()
+    topology = _three_topology(hardware)
+    kv = KVCacheManager(topology, model)
+    # 基础历史先建立在 home（turn-0 语义），完成后作为下一轮基础。
+    kv.prepare_prefill(
+        session_id="s", target_instance_index=HOME_INSTANCE,
+        history_tokens=0, trigger_request_id="seed")
+    kv.expand_prefill(
+        session_id="s", instance_index=HOME_INSTANCE,
+        context_tokens=HISTORY_TOKENS, trigger_request_id="seed")
+    kv.mark_complete("s", 100)
+    # P = copy@i_P：工作副本 = H 基础整份 + U 增量（完整型）。
+    kv.prepare_prefill(
+        session_id="s", target_instance_index=P_INSTANCE,
+        history_tokens=HISTORY_TOKENS, trigger_request_id="r0",
+        action="copy")
+    kv.expand_prefill(
+        session_id="s", instance_index=P_INSTANCE,
+        context_tokens=HISTORY_TOKENS + INPUT_TOKENS,
+        trigger_request_id="r0")
+    return kv, model, topology
 
 
 def _interval(replica_id, role, holder, start, end, bytes_by_rank,
@@ -77,7 +137,7 @@ def _interval(replica_id, role, holder, start, end, bytes_by_rank,
         replica_id=replica_id, role=role, holder_instance=holder,
         authority=authority, token_start=start, token_end=end,
         layer_start=0, layer_end=MODEL_LAYERS,
-        bytes_by_tp_rank=tuple(int(v) for v in bytes_by_rank))
+        bytes_by_tp_rank=tuple(int(value) for value in bytes_by_rank))
 
 
 def _projection_end_state(model, kv, *, decode_instance, growth_tokens,
@@ -92,24 +152,6 @@ def _projection_end_state(model, kv, *, decode_instance, growth_tokens,
         logic_home=logic_home)
 
 
-def _assert_legs_parity(test, plan, transfers, transferred_bytes):
-    """逐源缺失区间/载荷平价：plan.legs ↔ 执行 transfers（逐腿
-    source→target + 字节），payload ↔ transferred_bytes；通道义务披露
-    在场（来源持引用直到载荷确认）。"""
-    plan_legs = sorted(
-        (leg.source_instance, leg.target_instance, leg.total_bytes)
-        for leg in plan.legs)
-    exec_legs = sorted(
-        (transfer.source_instance_index, transfer.target_instance_index,
-         transfer.total_bytes)
-        for transfer in transfers)
-    test.assertEqual(plan_legs, exec_legs)
-    for leg in plan.legs:
-        test.assertTrue(leg.source_holds_reference_until_ack)
-    test.assertEqual(
-        sum(leg.total_bytes for leg in plan.legs), transferred_bytes)
-
-
 def _assert_retention_matches_ledger(test, end_state, kv):
     """project_end_state 的保留量 == 真账本逐实例字节（投影输入与执行
     输入同源——平价的前提）。"""
@@ -119,131 +161,118 @@ def _assert_retention_matches_ledger(test, end_state, kv):
             _instance_bytes(kv, position.instance_index))
 
 
-class ThreePositionParityTest(unittest.TestCase):
-    """三位置（H@home + U@i_P + growth@j）：主目标成功路径的逐字段平价。"""
+class CompleteUnionCopyParityTest(unittest.TestCase):
+    """D=copy@第三目标：H_B 整份迁移到 j、growth 随后并入——末态 =
+    执行端完整并集（零翻转），投影/执行双侧平价。"""
 
-    def test_projection_matches_execution_target_legs_and_notes(self):
-        kv, model, topology = _increment_kv()
+    def test_projection_matches_execution_zero_flip(self):
+        kv, model, _topology = _copy_kv()
         kv.commit_boundary_decode_transition(
             session_id="s", p_instance_index=P_INSTANCE,
-            target_instance_index=THIRD_INSTANCE, action="remote-read",
+            target_instance_index=THIRD_INSTANCE, action="copy",
             history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
             trigger_request_id="r0")
         kv.expand_decode(
             session_id="s", instance_index=THIRD_INSTANCE,
-            final_context_tokens=GROWTH_TOKENS, trigger_request_id="r0")
-        session = kv._sessions["s"]
-        self.assertEqual(session.home_instance, HOME_INSTANCE)
-        # 投影：base H@home + U@i_P（权威）+ growth@j（project_end_state
-        # 生成）。
+            final_context_tokens=(
+                HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS),
+            trigger_request_id="r0")
+        union_bytes = _bytes_for(
+            kv, model, HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS)
+        # 投影（决策时点）：home 的旧基础副本（非权威）+ j 的完整并集
+        # （权威 context）；i_P 的旧副本已随整份迁移释放。
         intervals = (
             _interval("boundary_base", INTERVAL_ROLE_BASE, HOME_INSTANCE,
-                      0, HISTORY_TOKENS, _h_bytes(model, kv)),
-            _interval("boundary_increment", INTERVAL_ROLE_INCREMENT,
-                      P_INSTANCE, HISTORY_TOKENS,
-                      HISTORY_TOKENS + INPUT_TOKENS, _u_bytes(model, kv)),
+                      0, HISTORY_TOKENS, _h_bytes(model, kv),
+                      authority=False),
+            _interval("working_union", INTERVAL_ROLE_CONTEXT,
+                      THIRD_INSTANCE, 0,
+                      HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS,
+                      union_bytes),
         )
         end_state = _projection_end_state(
             model, kv, decode_instance=THIRD_INSTANCE,
-            growth_tokens=GROWTH_TOKENS,
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
+            growth_tokens=0,
+            history_tokens=(
+                HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS),
             intervals=intervals, logic_home=HOME_INSTANCE)
         _assert_retention_matches_ledger(self, end_state, kv)
+        self.assertEqual(end_state.complete_union_position, THIRD_INSTANCE)
         notes = []
         plan = _model(_loads3()).merge_from_layout(end_state, notes=notes)
-        # 执行：同状态 merge_back（三位置分支）。
         transfers = kv.merge_back(
             session_id="s", trigger_request_id="r0",
             new_tokens=INPUT_TOKENS + GROWTH_TOKENS)
         outcome = kv.last_merge_outcome
-        # 目标平价：H(96) > U(16) > growth(6)——保留量最大者 home。
-        self.assertEqual(plan.target_instance, HOME_INSTANCE)
-        self.assertEqual(outcome["winner_instance"], plan.target_instance)
+        # 双侧零载荷：完整并集直接作为结果位置（copy 零字节翻转）。
+        self.assertTrue(plan.complete_union)
+        self.assertEqual(plan.target_instance, THIRD_INSTANCE)
         self.assertEqual(
-            plan.selection_rule, MERGE_SELECTION_RETENTION_MAX)
-        self.assertIn(f"merge_eq21_target={HOME_INSTANCE}", notes)
-        self.assertIn(
-            f"merge_eq21_rule={MERGE_SELECTION_RETENTION_MAX}", notes)
-        # 保留量披露（偏好序首位的 home 及其 V）。
-        retention_notes = [note for note in notes
-                           if note.startswith("merge_eq21_retention=")]
-        self.assertEqual(len(retention_notes), 1)
-        self.assertTrue(retention_notes[0].startswith(
-            "merge_eq21_retention={}:{}".format(
-                HOME_INSTANCE, sum(_h_bytes(model, kv))) + ","))
-        # 逐源缺失区间/载荷平价 + 通道义务。
-        _assert_legs_parity(
-            self, plan, transfers, outcome["transferred_bytes"])
-        self.assertFalse(plan.complete_union)
-        self.assertFalse(outcome["zero_byte_flip"])
-        # 回退序列披露：主目标（home）一次成功即锁定。
-        sequence = outcome["fallback_sequence"]
-        self.assertEqual(
-            [(entry["step"], entry["target"], entry["outcome"])
-             for entry in sequence],
-            [(0, HOME_INSTANCE, "committed"),
-             (1, HOME_INSTANCE, "locked")])
-        # 主目标（home）的需求 = 缺失区间直和（U@i_P + growth@j，逐 rank）。
-        self.assertEqual(
-            sequence[0]["required"],
-            _sum_vectors(_u_bytes(model, kv),
-                         _bytes_for(kv, model, GROWTH_TOKENS)))
-        # 终态守恒：胜者持完整并集（H+U+G）。
-        final = _bytes_for(
-            kv, model,
-            HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS)
-        self.assertEqual(_instance_bytes(kv, HOME_INSTANCE), final)
+            plan.selection_rule, MERGE_SELECTION_COMPLETE_UNION)
+        self.assertEqual(plan.legs, ())
+        self.assertEqual(plan.payload_ns, 0)
+        self.assertIn("merge_v2_zero_byte_flip", notes)
+        self.assertEqual(transfers, ())
+        self.assertTrue(outcome["zero_byte_flip"])
+        self.assertEqual(outcome["winner_instance"], THIRD_INSTANCE)
+        self.assertEqual(outcome["transferred_bytes"], 0)
+        # 终态守恒：胜者持完整并集；home 旧副本/迁移源清零。
+        self.assertEqual(_instance_bytes(kv, THIRD_INSTANCE), union_bytes)
+        self.assertEqual(_instance_bytes(kv, HOME_INSTANCE), (0, 0))
         self.assertEqual(_instance_bytes(kv, P_INSTANCE), (0, 0))
-        self.assertEqual(_instance_bytes(kv, THIRD_INSTANCE), (0, 0))
 
 
-class TwoPositionDegenerateParityTest(unittest.TestCase):
-    """两位置退化（remote 原地继续：H@home + U+growth@i_P）——计价两
-    位置腿与执行两位置合并（少并多）逐位一致。"""
+class TwoPositionCopyParityTest(unittest.TestCase):
+    """两位置退化（copy 原地继续：H@home + H+U+growth@i_P）——
+    计价两位置 complete_union 与执行两位置零翻转一致。"""
 
     def test_two_position_projection_matches_merge_back(self):
-        kv, model, _topology = _increment_kv()
+        kv, model, _topology = _copy_kv()
         # j == i_P 原地继续（无边界事务）：working 增长到 U+G @i_P。
         kv.expand_decode(
             session_id="s", instance_index=P_INSTANCE,
-            final_context_tokens=INPUT_TOKENS + GROWTH_TOKENS,
+            final_context_tokens=(
+                HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS),
             trigger_request_id="r0")
-        working_bytes = _bytes_for(
-            kv, model, INPUT_TOKENS + GROWTH_TOKENS)
-        self.assertEqual(
-            _instance_bytes(kv, P_INSTANCE), working_bytes)
+        union_bytes = _bytes_for(
+            kv, model, HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS)
+        self.assertEqual(_instance_bytes(kv, P_INSTANCE), union_bytes)
         intervals = (
             _interval("boundary_base", INTERVAL_ROLE_BASE, HOME_INSTANCE,
-                      0, HISTORY_TOKENS, _h_bytes(model, kv)),
-            _interval("boundary_increment", INTERVAL_ROLE_INCREMENT,
-                      P_INSTANCE, HISTORY_TOKENS,
-                      HISTORY_TOKENS + INPUT_TOKENS, _u_bytes(model, kv)),
+                      0, HISTORY_TOKENS, _h_bytes(model, kv),
+                      authority=False),
+            _interval("working_union", INTERVAL_ROLE_CONTEXT, P_INSTANCE,
+                      0,
+                      HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS,
+                      union_bytes),
         )
         end_state = _projection_end_state(
             model, kv, decode_instance=P_INSTANCE,
-            growth_tokens=GROWTH_TOKENS,
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
+            growth_tokens=0,
+            history_tokens=(
+                HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS),
             intervals=intervals, logic_home=HOME_INSTANCE)
         _assert_retention_matches_ledger(self, end_state, kv)
-        self.assertEqual(len(end_state.positions), 2)
+        # 权威内容单位置（home 旧副本非权威、零贡献——去重口径）。
+        self.assertEqual(end_state.complete_union_position, P_INSTANCE)
         notes = []
         plan = _model(_loads3()).merge_from_layout(end_state, notes=notes)
         transfers = kv.merge_back(
             session_id="s", trigger_request_id="r0",
             new_tokens=INPUT_TOKENS + GROWTH_TOKENS)
         outcome = kv.last_merge_outcome
-        # 少并多：U+G(22) < H(96) → 目标 home（计价/执行/方向三口径）。
-        self.assertEqual(plan.target_instance, HOME_INSTANCE)
-        self.assertEqual(outcome["winner_instance"], HOME_INSTANCE)
-        self.assertEqual(outcome["direction"], "forward")
-        # 两位置分支的 outcome 不带 three_position 键（缺省即 False）。
-        self.assertFalse(outcome.get("three_position", False))
-        _assert_legs_parity(
-            self, plan, transfers, outcome["transferred_bytes"])
+        # 执行端完整并集 → 零翻转（计价/执行/胜者三口径一致）。
+        self.assertTrue(plan.complete_union)
+        self.assertEqual(plan.target_instance, P_INSTANCE)
+        self.assertEqual(transfers, ())
+        self.assertTrue(outcome["zero_byte_flip"])
+        self.assertEqual(outcome["winner_instance"], P_INSTANCE)
+        self.assertEqual(outcome["transferred_bytes"], 0)
         final = _bytes_for(
             kv, model,
             HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS)
-        self.assertEqual(_instance_bytes(kv, HOME_INSTANCE), final)
+        self.assertEqual(_instance_bytes(kv, P_INSTANCE), final)
+        self.assertEqual(_instance_bytes(kv, HOME_INSTANCE), (0, 0))
 
 
 class DuplicateReplicaParityTest(unittest.TestCase):
@@ -251,7 +280,7 @@ class DuplicateReplicaParityTest(unittest.TestCase):
     并集（权威），同实例 base 记录是重复副本（零贡献）。"""
 
     def test_duplicate_base_zero_payload_on_both_sides(self):
-        kv, model, _topology = _increment_kv()
+        kv, model, _topology = _copy_kv()
         kv.commit_boundary_decode_transition(
             session_id="s", p_instance_index=P_INSTANCE,
             target_instance_index=HOME_INSTANCE, action="recompute",
@@ -270,8 +299,7 @@ class DuplicateReplicaParityTest(unittest.TestCase):
         union_bytes = _bytes_for(
             kv, model, HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS)
         # 投影：重复 base 副本（非权威——重建副本为权威并集）+ 并集区间
-        # @home；U@i_P 来源侧在重建后释放（C5 语义：来源侧旧副本随重建
-        # 物化释放）。project_end_state 只收权威区间。
+        # @home；i_P 来源侧旧副本随重建物化释放。
         intervals = (
             _interval("boundary_base", INTERVAL_ROLE_BASE, HOME_INSTANCE,
                       0, HISTORY_TOKENS, _h_bytes(model, kv),
@@ -301,134 +329,13 @@ class DuplicateReplicaParityTest(unittest.TestCase):
         self.assertEqual(plan.payload_ns, 0)
         self.assertIn("merge_v2_zero_byte_flip", notes)
         self.assertEqual(transfers, ())
-        self.assertTrue(outcome["three_position"])
         self.assertTrue(outcome["zero_byte_flip"])
         self.assertEqual(outcome["winner_instance"], HOME_INSTANCE)
         self.assertEqual(outcome["transferred_bytes"], 0)
-        # 回退序列披露：完整并集零载荷 + 锁定。
-        self.assertEqual(
-            [(entry["step"], entry["target"], entry["outcome"])
-             for entry in outcome["fallback_sequence"]],
-            [(0, HOME_INSTANCE, "complete_union_zero_payload"),
-             (1, HOME_INSTANCE, "locked")])
-        # 终态：home = 并集；i_P 的 U 已释放。
+        # 终态：home = 并集；i_P 的旧副本已释放。
         self.assertEqual(_instance_bytes(kv, HOME_INSTANCE), union_bytes)
         self.assertEqual(_instance_bytes(kv, P_INSTANCE), (0, 0))
 
 
-class CapacityFallbackSequenceParityTest(unittest.TestCase):
-    """容量回退 ≤2 次的序列披露 + 与计价 capacity_fallback_order/审计
-    替位计划的平价。"""
-
-    def test_fallback_sequence_matches_projection_fallback_order(self):
-        kv, model, topology = _increment_kv()
-        hardware = _three_hardware()
-        kv.commit_boundary_decode_transition(
-            session_id="s", p_instance_index=P_INSTANCE,
-            target_instance_index=THIRD_INSTANCE, action="remote-read",
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            trigger_request_id="r0")
-        kv.expand_decode(
-            session_id="s", instance_index=THIRD_INSTANCE,
-            final_context_tokens=GROWTH_TOKENS, trigger_request_id="r0")
-        growth_bytes = _bytes_for(kv, model, GROWTH_TOKENS)
-        # 受保护 decoy 占满 home 余量：主目标（保留量最大的 home）容量
-        # 失败 → 式(21) 偏好序回退到次持有位置（i_P）。
-        per_rank_need = (
-            sum(_u_bytes(model, kv)) + sum(growth_bytes)) // kv.tp_degree
-        home_rank = topology.instance(HOME_INSTANCE).ranks[0]
-        free = kv._rank_states[home_rank].remaining_bytes
-        bpt = kv_cache_shard_bytes_for_tokens(model, 1, kv.tp_degree)[0]
-        decoy_tokens = max(1, (free - per_rank_need // 2) // bpt)
-        kv.prepare_prefill(
-            session_id="decoy", target_instance_index=HOME_INSTANCE,
-            history_tokens=0, trigger_request_id="d0")
-        kv.expand_prefill(
-            session_id="decoy", instance_index=HOME_INSTANCE,
-            context_tokens=decoy_tokens, trigger_request_id="d0")
-        self.assertLess(
-            kv._rank_states[home_rank].remaining_bytes, per_rank_need)
-        # 投影（决策时点）：主目标 home + 回退序（偏好序其余位置，
-        # ≤ m_end-1（W5 §7.3 推广）），并请求 i_P 的审计替位计划。
-        intervals = (
-            _interval("boundary_base", INTERVAL_ROLE_BASE, HOME_INSTANCE,
-                      0, HISTORY_TOKENS, _h_bytes(model, kv)),
-            _interval("boundary_increment", INTERVAL_ROLE_INCREMENT,
-                      P_INSTANCE, HISTORY_TOKENS,
-                      HISTORY_TOKENS + INPUT_TOKENS, _u_bytes(model, kv)),
-        )
-        end_state = _projection_end_state(
-            model, kv, decode_instance=THIRD_INSTANCE,
-            growth_tokens=GROWTH_TOKENS,
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            intervals=intervals, logic_home=HOME_INSTANCE)
-        notes = []
-        plan = _model(_loads3()).merge_from_layout(
-            end_state, notes=notes,
-            audit_alternate_targets=(P_INSTANCE,))
-        self.assertEqual(plan.target_instance, HOME_INSTANCE)
-        self.assertEqual(
-            plan.capacity_fallback_order,
-            (P_INSTANCE, THIRD_INSTANCE))
-        self.assertIn(
-            "merge_capacity_fallback_order={},{}".format(
-                P_INSTANCE, THIRD_INSTANCE), notes)
-        alternate = next(
-            item for item in plan.alternates
-            if item.target_instance == P_INSTANCE)
-        # 执行：home 失败 → 回退 i_P。
-        transfers = kv.merge_back(
-            session_id="s", trigger_request_id="r0",
-            new_tokens=INPUT_TOKENS + GROWTH_TOKENS)
-        outcome = kv.last_merge_outcome
-        self.assertEqual(outcome["winner_instance"], P_INSTANCE)
-        # 回退序列披露：主目标失败 → 回退1 成功 → 锁定；替代次数 ≤
-        # m_end-1（W5 §7.3 推广）。
-        sequence = outcome["fallback_sequence"]
-        attempts = [(entry["step"], entry["target"], entry["outcome"])
-                    for entry in sequence]
-        self.assertEqual(
-            attempts,
-            [(0, HOME_INSTANCE, "kv_capacity_error"),
-             (1, P_INSTANCE, "committed"),
-             (2, P_INSTANCE, "locked")])
-        failures = [entry for entry in sequence
-                    if entry["outcome"] == "kv_capacity_error"]
-        # W5（§7.3 重锚）：m_end-1 推广——失败替代数 ≤ 位置数-1
-        # （无常数上限；本夹具 3 位置 ⇒ ≤2）。
-        self.assertLessEqual(len(failures), 2)
-        # 披露元素形态：{step, target, required, outcome}（容量失败元素
-        # 另携 error 文本——原 KVCapacityError 文本不再只在异常里）。
-        for entry in sequence:
-            self.assertEqual(
-                set(entry) - {"error"},
-                {"step", "target", "required", "outcome"})
-            self.assertIsInstance(entry["required"], list)
-        for entry in failures:
-            self.assertIn("error", entry)
-            self.assertTrue(entry["error"])
-        # 尝试序与计价回退序同源：[主目标] + capacity_fallback_order 的
-        # 前缀。
-        executed_order = [entry["target"] for entry in sequence
-                          if entry["outcome"] != "locked"]
-        self.assertEqual(
-            executed_order,
-            [plan.target_instance]
-            + list(plan.capacity_fallback_order)[:len(executed_order) - 1])
-        # 回退目标（i_P）的实际执行腿与审计替位计划逐位平价——预测器
-        # 用同一目标次序即可重算执行结果。
-        _assert_legs_parity(
-            self, alternate, transfers, outcome["transferred_bytes"])
-        final = _bytes_for(
-            kv, model,
-            HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS)
-        self.assertEqual(_instance_bytes(kv, P_INSTANCE), final)
-        self.assertEqual(_instance_bytes(kv, THIRD_INSTANCE), (0, 0))
-
-
-def _sum_vectors(*vectors):
-    return [sum(values) for values in zip(*vectors)]
-
-
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     unittest.main()

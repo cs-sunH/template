@@ -4,23 +4,25 @@
 
 审查结论（修复轮二）："通用事务回滚证据不足"——drain 边界 try 块内若
 阶段预约事务（``commit_stage_reservation_transaction``：resize/transfer
-半边）已提交后再遇**非容量**异常，原 except 块只幂等注销 staging lease
-与阶段引用，预约不显式 abort——泄漏。本轮在通用异常路径补幂等回滚：
+半边）已提交后再遇**非容量**异常，原 except 块只幂等注销阶段引用，
+预约不显式 abort——泄漏。本轮在通用异常路径补幂等回滚：
+（原"幂等注销 staging lease"半边已随 2026-10-14 远读退役删除——
+KVStagingLease 全族退役，清理面缩为阶段引用 + 就绪队列成员两件套。）
 
 回滚矩阵（异常注入点 × 释放断言）：
 
   A. **换址半边已提交、物理迁移未落地**（注入 ``commit_boundary_
      decode_transition`` 抛 RuntimeError，选中 = 实例 1 的 copy 切换）
      → 显式 ``abort_stage_reservation_transaction``：epoch 结局记
-     aborted、预约换址回源实例、足迹恢复提交前快照；lease/引用/就绪
+     aborted、预约换址回源实例、足迹恢复提交前快照；引用/就绪
      队列成员全释放，无悬挂。
   A'. **同实例 resize 半边已提交**（同注入点，选中 = stay）→ 同路
      abort（纯 resize 的足迹恢复），幂等重放不双重恢复。
   B. **D_COMMITTED 之后**（注入 ``_emit_join_decision`` 抛错——物理
      工作已提交、abort 合同窗口已闭）→ **不伪造换址回退**（事务保持
-     已提交结局），但 lease/引用/成员仍全清理。
+     已提交结局），但引用/成员仍全清理。
   C. **事务提交前**（注入 ``_joint_boundary_cost_model`` 抛错）→ 无
-     在案事务可回滚（空放），引用/lease 照常释放——不误触发 abort。
+     在案事务可回滚（空放），引用照常释放——不误触发 abort。
 
 幂等性：A 注入后再次调用 abort（同 epoch/同源）原子重放 aborted 回执，
 不二次恢复/不抛错；重复 drain 通知走幂等门（无第二份回滚）。
@@ -45,13 +47,13 @@ from joint.test_d18_boundary_decision import (  # noqa: E402
 
 
 def _assert_trio_released(test, scheduler, kv, runtime):
-    """三件套释放断言：阶段引用、暂存 lease、就绪队列成员（无悬挂）。"""
+    """清理面释放断言：阶段引用 + 就绪队列成员（无悬挂）。原暂存
+    lease 断言半边已随 2026-10-14 远读退役删除（KVStagingLease 全族
+    退役，清理面缩为两件套——函数名保留既有导出）。"""
     # 阶段引用：runtime 句柄置空 + 会话引用集为空（幂等双保险）。
     test.assertIsNone(runtime.joint_stage_reference_id)
     test.assertEqual(
         kv.session_stage_references(runtime.session_id), ())
-    # 暂存 lease：无在册（替身断言手法 = 真实 KVCacheManager 查询面）。
-    test.assertIsNone(kv.staging_lease_for_request(runtime.request_id))
     # 就绪队列成员资格不悬挂（异常点晚于 append 时被回滚移除）。
     for state in scheduler.instances:
         test.assertNotIn(runtime, state.pending_decode_ready)
@@ -93,7 +95,7 @@ class SwitchTransitionFailureRollbackTest(unittest.TestCase):
         self.assertEqual(txn.target_instance_index, 0)  # aborted 回执 = 源
         reservation = kv._reservations["r0"]
         self.assertEqual(reservation.instance_index, 0)
-        # 三件套全释放（lease/引用/成员）。
+        # 清理面全释放（引用/成员）。
         _assert_trio_released(self, scheduler, kv, runtime)
 
     def test_abort_is_idempotent_under_repeated_rollback(self):
@@ -156,7 +158,7 @@ class PostCommitFailureTest(unittest.TestCase):
         # 此处 NotIn 即"未伪造回退"的可观测证明。
         self.assertNotIn("r0", kv._reservations)
         self.assertIsNone(kv.last_stage_transaction("r0"))
-        # lease/引用/成员照常清理（引用在 正常闭合，幂等空放）。
+        # 引用/成员照常清理（引用在正常闭合，幂等空放）。
         _assert_trio_released(self, scheduler, kv, runtime)
 
 

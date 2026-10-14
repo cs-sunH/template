@@ -80,6 +80,17 @@ set(DIE_MODEL_TESTS
     execution_test
     internal_slice_test
     internal_service_progress_test
+    # v11 Phase 4 (K2 epoch-keyed timer-window memo, 方案 §6.2): twin
+    # equivalence of memoized vs fresh query_internal_timer_window answers
+    # across [query -> mutate -> query -> ...] drive scripts, including an
+    # accepted pure-PE window and the preview-transaction invalidation.
+    k2_timer_window_memo_test
+    # v12 Phase 4 (K2 structural negative cache, 方案 §6.2): twin-oracle
+    # equivalence of the process-level (plan key, approx config fingerprint)
+    # keyed negative cache across plan families and full/2x/4x memory
+    # drives, the P_struct fire-face Sound check, fingerprint isolation and
+    # the master-switch / argument-validation guards.
+    k2_plan_negative_cache_test
     selection_fuzz_test)
 foreach(t IN LISTS DIE_MODEL_TESTS)
     add_executable(${t} "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}.cc")
@@ -100,7 +111,3 @@ add_test(NAME capi_test COMMAND capi_test)
 # (contract §1: JSON mirrors are checked against the code constants).
 target_compile_definitions(configs_consistency_test PRIVATE
     DIE_MODEL_CONFIGS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/configs")
-
-# Canonical coarse_die_v2 release (synced from template/die).
-set(COARSE_DIE_BUILD_TESTS OFF CACHE BOOL "Standalone tests live in template/die")
-add_subdirectory(coarse)

@@ -13,6 +13,15 @@ endif ()
 # Setup project
 project(Analytical)
 
+
+# Joint v7 event attribution: consume the cache option declared by the repo
+# root CMakeLists (option JOINT_EVENT_PROFILE). This assembly-added
+# directory does not inherit the root's directory scope, so the definition
+# must be applied here too. Diagnostic-only; never changes behavior.
+if(JOINT_EVENT_PROFILE)
+    add_compile_definitions(JOINT_V7_EVENT_PROFILE)
+endif()
+
 # Compilation target
 set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_aware)")
 # Fail closed on an illegal value: a bare if() over the legal names used to

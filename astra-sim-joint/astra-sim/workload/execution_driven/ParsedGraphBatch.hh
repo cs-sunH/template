@@ -8,7 +8,7 @@ The typed view of one GraphBatch response. C1 replaces the old "carry the
 nlohmann DOM across the bridge -> committer boundary and re-extract every
 field four times" pipeline (validate_impl walk, mandatory_liveness_preflight
 walk, commit_after_preflight B-1 assembly walk, anchor-registration walk)
-with ONE structural parse here: FileDecisionBridge::deliver_and_receive
+with ONE structural parse here: ShmDecisionBridge::deliver_and_receive
 parses the response document once into these PODs, and every downstream
 consumer (preflight, commit assembly, metrics anchors) reads typed fields.
 
@@ -35,8 +35,9 @@ std::set they built from the DOM).
 Fail-closed family (ParseError, caught by deliver_and_receive ->
 bridge_fatal -> stderr one line -> abort, exit code identical to every
 other bridge protocol violation):
-  T1 schema_version present and == 1 (type/value checked here; the bridge
-     also checks it first for message parity with the pre-C1 code);
+  T1 schema_version present and == kGraphBatchSchemaVersion (type/value
+     checked here; the bridge also checks it first for message parity with
+     the pre-C1 code);
   T2 source_delivery_sequence present and integer (equality with the
      request seq stays in the bridge, which knows the seq);
   T3 error, when present, is a string (non-empty aborts in the bridge
@@ -103,7 +104,7 @@ other bridge protocol violation):
 
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
-#include "astra-sim/workload/execution_driven/PipelineDescriptor.hh"
+#include "astra-sim/workload/execution_driven/PipelineKernelContract.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 
 namespace AstraSim {
@@ -194,7 +195,11 @@ struct ParsedKvAction {
 
 /// The typed GraphBatch. Aliased as GraphBatch in DecisionBridge.hh (the
 /// pre-C1 struct name survives so main_online/fixtures keep compiling);
-/// this is the canonical type.
+/// this is the canonical type. Schema 3 (D16, three-action retirement
+/// 2026-10-14): the retired remote-read descriptor array key is no
+/// longer parsed
+/// and reappearing on the wire fails closed; the immutable kernel_contract
+/// stays mandatory (D4).
 struct ParsedGraphBatch {
     uint64_t batch_id = 0;
     uint64_t source_delivery_sequence = 0;
@@ -204,8 +209,6 @@ struct ParsedGraphBatch {
     std::vector<ParsedAssignment> assignments;  // array order (counted)
     std::vector<ParsedKvAction> kv_actions;     // array order (counted)
     std::vector<ParsedAlarm> future_alarms;     // array order
-    std::vector<std::shared_ptr<const PipelineDescriptor>>
-        pipeline_descriptors;                   // array order, immutable
     std::shared_ptr<const PipelineKernelContract> kernel_contract;
     std::vector<int> touched_ranks;             // empty when absent
     bool has_touched_ranks = false;
@@ -213,8 +216,10 @@ struct ParsedGraphBatch {
 };
 
 /// Single bridge/GraphBatch wire version shared by the file bridge and the
-/// strict typed parser.
-inline constexpr int kGraphBatchSchemaVersion = 2;
+/// strict typed parser. Schema 3: the descriptor array key was deleted from
+/// the wire with the remote-read retirement (D16) -- old producers still
+/// emitting schema 2 fail closed on the version gate.
+inline constexpr int kGraphBatchSchemaVersion = 3;
 
 /// Parse one response DOM into the typed batch. num_ranks >= 0 enables the
 /// rank-domain checks (N3/E2/W3/T8); -1 skips them (legacy fixtures).

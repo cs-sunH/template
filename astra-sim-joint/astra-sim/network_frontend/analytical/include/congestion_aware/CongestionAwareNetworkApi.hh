@@ -8,7 +8,6 @@ LICENSE file in the root directory of this source tree.
 #include "common/CommonNetworkApi.hh"
 #include <astra-network-analytical/congestion_aware/fluid/FluidScheduler.h>
 #include <astra-network-analytical/congestion_aware/Topology.h>
-#include <functional>
 
 using namespace AstraSim;
 using namespace AstraSimAnalytical;
@@ -28,11 +27,6 @@ class CongestionAwareNetworkApi final : public CommonNetworkApi {
 
     static void set_fluid_scheduler(std::shared_ptr<FluidScheduler> scheduler) noexcept;
 
-    using FlowBoundCallback = std::function<void(
-        const AstraNetworkAPI::LogicalFlowKey&,
-        NetworkAnalyticalCongestionAware::FlowId)>;
-    static void set_flow_bound_callback(FlowBoundCallback callback);
-
     /**
      * Constructor.
      *
@@ -51,17 +45,6 @@ class CongestionAwareNetworkApi final : public CommonNetworkApi {
                  sim_request* request,
                  void (*msg_handler)(void* fun_arg),
                  void* fun_arg) override;
-
-    int sim_send_correlated(
-        void* buffer,
-        uint64_t count,
-        int type,
-        int dst,
-        int tag,
-        sim_request* request,
-        void (*msg_handler)(void* fun_arg),
-        void* fun_arg,
-        const AstraNetworkAPI::LogicalFlowKey& key) override;
 
     /// Additive wall-clock instrumentation for sim_send (measurement only):
     /// presend covers chunk-id generation + CallbackTracker lookup/insert +
@@ -84,14 +67,11 @@ class CongestionAwareNetworkApi final : public CommonNetworkApi {
                       int tag,
                       sim_request* request,
                       void (*msg_handler)(void* fun_arg),
-                      void* fun_arg,
-                      const AstraNetworkAPI::LogicalFlowKey* key);
-    static void install_flow_bound_callback();
+                      void* fun_arg);
     /// topology
     static std::shared_ptr<Topology> topology;
 
     static std::shared_ptr<FluidScheduler> fluid_scheduler;
-    static FlowBoundCallback flow_bound_callback_;
 
     /// instrumentation counters (see send_wall_stats())
     static SendWallStats send_wall_stats_;

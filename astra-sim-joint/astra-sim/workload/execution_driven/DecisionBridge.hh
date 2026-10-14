@@ -3,7 +3,8 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
-Interface + File implementation (方案 §4 步骤 1-7).
+Interface + shared-memory implementation (方案 §4 步骤 1-7; joint v11 §8
+保底: ShmFrameChannel carrier, no loose frame files).
 
 The C++ <-> Python decision channel of the Execution-Driven loop. The
 tick-end gate (ed_driver_tick_end) drains the DecisionMailbox into one
@@ -12,27 +13,51 @@ the scheduler's reply. This bridge is a DECISION channel, NOT a runtime
 request injection channel -- Producer -> C++ submit/close/EOF/error always
 go through the step-1-2 command queue and never touch req_notify.fifo.
 
-Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
+Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1;
+v11 §8 保底载体替换 -- shm frames instead of loose JSON files, byte-level
+semantics unchanged):
   - Wire: <run_dir>/bridge/ with req_notify.fifo / resp_notify.fifo
-    (mkfifo). FIFO open order: the bridge directory and both FIFOs are
-    created (ensure_bridge_dir) BEFORE either side starts.
-  - Request:  C++ writes request_<seq>.json (atomic: tmp + rename), then
-    writes ONE byte to req_notify.fifo. C++ holds the req_notify write end
-    open for the bridge's lifetime, so the Python reader blocks in read(1)
-    between notifications and only sees EOF when the run ends.
-  - Response: Python writes response_<seq>.json (atomic), then writes ONE
-    byte to resp_notify.fifo. Defect-B fix (2026-08-16): BOTH resp ends are
-    LONG-LIVED -- Python opens its write end once at serve_forever start
-    (pairs with C++'s read end from open_notify) and holds it until exit;
-    C++ polls its lifetime read end. The old per-exchange open/write/close
-    and open/poll/read/close handshake had an unfixable kernel race family
-    (POLLHUP+read()==0 false "crash" when a fresh read fd's poll_wait
-    caught the writer's close transition with an empty buffer; mirror-race
-    EPIPE on Python's write) -- with no mid-run fd transitions, read()==0
-    can only mean the peer process died, and byte count stays exactly
-    1:1 with deliveries (backpressure: one in-flight epoch at a time).
-  - seq == delivery_sequence (monotonic epoch number), so request /
-    response / commit_ack file names for one epoch all share the same seq.
+    (mkfifo), the audit journal files (request_journal.jsonl + the gz
+    sidecars, written by Python) and bridge_shm.json (the C++-written
+    pointer to this run's shm segments). FIFO open order: the bridge
+    directory, both FIFOs and the shm segments are created
+    (ensure_bridge_dir) BEFORE either side starts.
+  - Carrier: three POSIX-shm single-slot frame channels (ShmFrameChannel;
+    names inside bridge_shm.json): request (C++ -> Python), commit_ack
+    (C++ -> Python) and response (Python -> C++). A frame is
+    [u32 magic][u64 seq][u32 len][payload][u32 crc32] (little-endian,
+    IEEE crc32 over header||payload); payload bytes are EXACTLY the old
+    protocol's file bytes (request_<seq>.json / response_<seq>.json /
+    commit_ack_<seq>.json content; the work_ledger splice still happens in
+    C++ before the frame is published). Oversize/corrupt/crc mismatch are
+    protocol violations -> fail closed (same channel as every other
+    violation). The segments carry a startup generation; Python validates
+    it against bridge_shm.json, so a stale segment from a crashed previous
+    run can never be mistaken for this run's (cross-run pollution guard).
+    Doorbell synchronization: the FIFO byte written AFTER the full frame
+    publish is the reader's only wake-up -- no atomics are needed, and the
+    1:1 backpressure guarantees a published frame is never overwritten
+    before the peer consumed it.
+  - Request:  C++ publishes the request frame, then writes ONE byte to
+    req_notify.fifo. C++ holds the req_notify write end open for the
+    bridge's lifetime, so the Python reader blocks in read(1) between
+    notifications and only sees EOF when the run ends. Python journals the
+    request bytes (audit stream unchanged; the loose request_<seq>.json
+    files no longer exist).
+  - Response: Python publishes the response frame (bytes identical to the
+    old response_<seq>.json), then writes ONE byte to resp_notify.fifo.
+    Defect-B fix (2026-08-16): BOTH resp ends are LONG-LIVED -- Python
+    opens its write end once at serve_forever start (pairs with C++'s read
+    end from open_notify) and holds it until exit; C++ polls its lifetime
+    read end. With no mid-run fd transitions, read()==0 can only mean the
+    peer process died, and byte count stays exactly 1:1 with deliveries
+    (backpressure: one in-flight epoch at a time).
+  - seq == delivery_sequence (monotonic epoch number), so the request /
+    response / commit_ack frames of one epoch all share the same seq.
+    Request and ack sequences are tracked separately on Python (a commit
+    ack for epoch N can be pending while request N+1 is in flight; the
+    serve loop processes acks before requests, exactly like the old
+    file-scan wake).
   - Request fields:  {schema_version, delivery_sequence, delivery_epoch,
     tick, deferred_from_tick, reasons[], arrivals[], completed_groups[],
     completed_nodes[], affected_ranks[], snapshot_handle,
@@ -61,8 +86,8 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
     inter_request_interval_ns}} -- the committer schedules these through
     RequestIngress::schedule_future_arrival inside the commit.
   - Error semantics: a Python exception (or protocol failure) => response
-    WITH the error field set, notify, then Python exits non-zero; C++
-    reads the error and aborts (fail-closed).
+    frame WITH the error field set, notify, then Python exits non-zero;
+    C++ reads the error and aborts (fail-closed).
   - Python crash detection (defect-B fix semantics): EOF (zero bytes) on
     the LIFETIME resp_notify read end, or EPIPE on the req_notify write,
     means the Python process is gone -> C++ aborts with a clear message.
@@ -70,14 +95,21 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
     exist mid-run and cannot be mistaken for death. A poll timeout
     (timeout_ms > 0) aborts identically.
   - Duplicate seq idempotency: Python tracks processed request seqs and
-    ack seqs separately and ignores duplicates (files are atomic, so a
-    duplicate can only come from a retry).
-  - Backpressure: one in-flight request at most -- C++ never sends
-    request_<seq+1> before response_<seq> is consumed; a commit ack can be
-    sent right after the response (Python is back in read(1) by then).
+    ack seqs separately and ignores duplicates (a duplicate doorbell byte
+    finds the slot still holding the already-consumed seq and skips it --
+    the same ignore the loose-file contains() filter performed).
+  - Backpressure: one in-flight request at most -- C++ never publishes
+    request <seq+1> before the response <seq> frame is consumed; a commit
+    ack can be sent right after the response (Python is back in read(1) by
+    then).
   - Cleanup: ensure_bridge_dir removes stale request_*.json,
     response_*.json and commit_ack_*.json files (and *.tmp) from a previous
-    run before both sides start.
+    run and unlinks stale shm segments carrying this bridge dir's stem
+    prefix before creating the new generation; the bridge destructor
+    unlinks this run's segments (mappings held by a still-exiting Python
+    stay valid). A crashed C++ leaves the segments behind -- abort() runs
+    no destructors -- which doubles as the post-mortem evidence the old
+    fail-closed path's surviving response file provided.
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_DECISIONBRIDGE_HH
@@ -91,6 +123,7 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
+#include "astra-sim/workload/execution_driven/ShmFrameChannel.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -146,7 +179,13 @@ using LinkTelemetryProvider =
 /// commit/issue/progress/completion/ack/release with monotonic local_seq.
 /// The provider runs inside deliver_and_receive on the simulation thread,
 /// exactly once per delivery epoch (1:1 backpressure).
-using WorkLedgerProvider = std::function<nlohmann::json(const StateDelta&)>;
+// v6 compact round: the provider returns the encoded workledger-compact-v1
+// frame (deterministic bytes + the header facts the timing surface reads).
+struct WorkLedgerWirePayload {
+    std::string bytes;
+};
+using WorkLedgerProvider =
+    std::function<WorkLedgerWirePayload(const StateDelta&)>;
 
 /// C4 protocol-2 lifecycle publication hook. The caller assigns the one
 /// run-global logical sequence at the instant this callback is made. The
@@ -267,27 +306,31 @@ class DecisionBridge {
                                  bool success) = 0;
 };
 
-/// File-implementation of the v0 protocol (blocking FIFOs, atomic JSON
-/// files, fail-closed error/crash/timeout semantics). timeout_ms == 0
+/// Shared-memory implementation of the v1 protocol (blocking FIFO
+/// doorbells, single-slot shm frame channels, fail-closed error/crash/
+/// timeout semantics; joint v11 §8 保底 -- direct carrier replacement of
+/// the former file-based transport, no runtime switch). timeout_ms == 0
 /// waits forever (the phase-1 default).
 /// C1 (2026-08-29): num_ranks feeds parse_graph_batch's rank-domain checks
 /// (node/edge/watch-member/touched-rank ranges). -1 (the default) disables
 /// them for legacy fixtures; the official online main passes its NPU count.
-class FileDecisionBridge : public DecisionBridge {
+class ShmDecisionBridge : public DecisionBridge {
   public:
-    explicit FileDecisionBridge(std::string bridge_dir, int timeout_ms = 0,
-                                int num_ranks = -1);
-    ~FileDecisionBridge() override;
+    explicit ShmDecisionBridge(std::string bridge_dir, int timeout_ms = 0,
+                               int num_ranks = -1);
+    ~ShmDecisionBridge() override;
 
-    FileDecisionBridge(const FileDecisionBridge&) = delete;
-    FileDecisionBridge& operator=(const FileDecisionBridge&) = delete;
+    ShmDecisionBridge(const ShmDecisionBridge&) = delete;
+    ShmDecisionBridge& operator=(const ShmDecisionBridge&) = delete;
 
     GraphBatch deliver_and_receive(const StateDelta& delta) override;
     void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
                          bool success) override;
 
-    /// Create <bridge_dir>, both FIFOs and clean stale files. Must be
-    /// called BEFORE either side starts (FIFO open order rule).
+    /// Create <bridge_dir>, both FIFOs, the shm frame segments (fresh
+    /// generation; stale segments of this bridge dir are unlinked) and
+    /// bridge_shm.json, and clean stale loose frame files. Must be called
+    /// BEFORE either side starts (FIFO open order rule).
     static void ensure_bridge_dir(const std::string& bridge_dir);
 
     /// Open the req_notify write end and hold it for the run lifetime
@@ -300,7 +343,7 @@ class FileDecisionBridge : public DecisionBridge {
     ///
     /// Defect-B fix (2026-08-16, face主动测试错误分析.md 缺陷 B): this now
     /// ALSO opens the resp_notify READ end once and holds it for the bridge
-    /// lifetime (mirroring the req channel's long-lived design). The old
+    /// lifetime (mirrors the req channel's long-lived design). The old
     /// per-exchange open/poll/read/close handshake had an unfixable kernel
     /// race family (a fresh read fd whose poll_wait catches the writer's
     /// 1->0 close transition with an empty buffer wakes with POLLHUP and
@@ -312,7 +355,7 @@ class FileDecisionBridge : public DecisionBridge {
     void open_notify();
 
     /// C6 (WP2, --link-telemetry): install the link telemetry provider.
-    /// Once installed, every request_<seq>.json gains the top-level
+    /// Once installed, every request frame gains the top-level
     /// link_telemetry[] array (the provider's return value; see
     /// LinkTelemetryProvider). Never installed = the field is absent.
     /// Legal only before the first delivery (the main installs it at
@@ -321,8 +364,8 @@ class FileDecisionBridge : public DecisionBridge {
     void set_link_telemetry_provider(LinkTelemetryProvider provider);
 
     /// W1 (joint work ledger): install the work-ledger provider. Once
-    /// installed, every request_<seq>.json gains the top-level `work_ledger`
-    /// object (see WorkLedgerProvider). Never installed = the field is
+    /// installed, every request frame gains the top-level `work_ledger`
+    /// member (see WorkLedgerProvider). Never installed = the field is
     /// absent (legacy peer). Same startup-only contract as the telemetry
     /// provider. The two channels are independent: the ledger never gates on
     /// --link-telemetry and carries its own schema versions.
@@ -331,17 +374,16 @@ class FileDecisionBridge : public DecisionBridge {
     /// Phase-6 (方案 §9.1) per-run channel stats. Cumulative across the run;
     /// zero for bridges that never deliver. Measured from the C++ side:
     ///   - roundtrip_count / roundtrip_ns: deliver_and_receive calls and the
-    ///     cumulative wall ns of the full blocking round trip (write request
-    ///     + notify + wait for Python + read response);
-    ///   - channel_bytes: JSON payload bytes that crossed the channel
-    ///     (request_<seq>.json + response_<seq>.json + commit_ack_<seq>.json;
-    ///     B1 (2026-08-23): the request/ack sides count their own written
-    ///     body bytes, while the response side contributes the REAL on-disk
-    ///     response file size -- stat before the unlink, matching what the
-    ///     Python side actually wrote; DecisionBridge.cc for the details);
-    ///   - forced_flush_count: one per atomic JSON file write
-    ///     (write_file_atomic's out.flush(); 方案 §15: 正式日志无逐节点强制
-    ///     flush -- 该计数必须为 O(deliveries) 而非 O(nodes)).
+    ///     cumulative wall ns of the full blocking round trip (publish
+    ///     request frame + notify + wait for Python + read response frame);
+    ///   - channel_bytes: payload bytes that crossed the channels
+    ///     (request + response + commit_ack frame payloads -- exactly the
+    ///     byte counts the old file transport measured as written body
+    ///     bytes / on-disk file size; B1 2026-08-23 accounting preserved);
+    ///   - forced_flush_count: one per published frame on this side
+    ///     (request + commit_ack; 方案 §15: 正式日志无逐节点强制 flush --
+    ///     该计数必须为 O(deliveries) 而非 O(nodes)). One shm publish counts
+    ///     as one flush (the accounting surface of the old atomic write).
     struct Stats {
         uint64_t roundtrip_count = 0;
         uint64_t roundtrip_ns = 0;
@@ -356,15 +398,44 @@ class FileDecisionBridge : public DecisionBridge {
     /// One-line report ("[online] phase-6 stats counters:" continuation).
     std::string stats_report() const;
 
+    // -- shm transport facts (exposed for the in-process loopback tests;
+    //    production Python reads the same values from bridge_shm.json) --
+    /// The startup generation of this run's segments.
+    uint64_t shm_generation() const {
+        return shm_generation_;
+    }
+    /// Payload capacity of one frame slot.
+    uint64_t shm_slot_capacity() const {
+        return shm_slot_capacity_;
+    }
+    /// Segment names without the leading '/' (as written to
+    /// bridge_shm.json): request / commit-ack / response channels.
+    const std::string& shm_request_segment() const {
+        return shm_request_segment_;
+    }
+    const std::string& shm_commit_ack_segment() const {
+        return shm_commit_ack_segment_;
+    }
+    const std::string& shm_response_segment() const {
+        return shm_response_segment_;
+    }
+
   private:
-    std::string request_path(uint64_t seq) const;
-    std::string response_path(uint64_t seq) const;
-    std::string ack_path(uint64_t seq) const;
+    /// Create (fresh generation, stale segments unlinked) -- or leave
+    /// alone when already valid -- this bridge dir's segments and the
+    /// bridge_shm.json pointer. Static: holds no mappings on return
+    /// (segment unlinking belongs to the instance destructor only).
+    static void mint_bridge_shm_info(const std::string& bridge_dir);
+
+    /// Ensure the segments are minted (see mint_bridge_shm_info) and map
+    /// them into this bridge. Idempotent per instance; fail-closed on any
+    /// inconsistency.
+    void ensure_bridge_shm();
+
+    /// Publish the request frame; publish failures (oversize) fail closed.
+    void publish_request_frame(uint64_t seq, const std::string& body);
 
     void notify_python();  // one byte on req_notify.fifo (EPIPE => abort)
-    void write_file_atomic(const std::string& path,
-                           const nlohmann::json& payload) const;
-    /// Defect-B fix: poll + read exactly ONE byte off the long-lived
     /// resp_notify read end. read()==0 => Python's lifetime write end
     /// closed => genuine peer death. EAGAIN (spurious wake before the
     /// byte) re-enters the poll. Returns false only via bridge_fatal.
@@ -377,13 +448,25 @@ class FileDecisionBridge : public DecisionBridge {
     // Defect-B fix (2026-08-16): resp_notify read end, held open for the
     // run lifetime (see open_notify). -1 until open_notify/lazy open.
     int resp_notify_fd_ = -1;
-    // Mutable: write_file_atomic() is const (the phase-1 contract) but the
+    // Mutable: publish paths are const-clean (the phase-1 contract) but the
     // phase-6 channel accounting is a per-run observation, not bridge state.
     mutable Stats stats_;
     // C6 (WP2, --link-telemetry): empty = telemetry off (field omitted).
     LinkTelemetryProvider link_telemetry_provider_;
     // W1 (joint work ledger): empty = ledger off (field omitted).
     WorkLedgerProvider work_ledger_provider_;
+    // v11 §8 shm carrier: three single-slot frame channels + the segment
+    // identity (also published to Python via bridge_shm.json).
+    uint64_t shm_generation_ = 0;
+    uint64_t shm_slot_capacity_ = 0;
+    std::string shm_request_segment_;
+    std::string shm_commit_ack_segment_;
+    std::string shm_response_segment_;
+    ShmFrameChannel req_channel_;   // C++ -> Python (request frames)
+    ShmAckRing ack_channel_;        // C++ -> Python (commit-ack ring; the
+                                    // ack stream is not exchange-gated)
+    ShmFrameChannel resp_channel_;  // Python -> C++ (response frames)
+    bool shm_prepared_ = false;     // segments adopted/created + mapped
 };
 
 }  // namespace ExecutionDriven

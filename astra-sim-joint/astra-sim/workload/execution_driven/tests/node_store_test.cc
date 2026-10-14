@@ -49,6 +49,8 @@ Exit code 0 on ALL PASS.
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -63,75 +65,10 @@ struct NodeStoreTestAccess {
         uint64_t next_id = 0;
         size_t free_ids = 0;
         size_t nodes = 0;
-        size_t virtual_index_blocks = 0;
-        size_t virtual_progressions = 0;
-    };
-
-    struct SweepCounts {
-        uint64_t envelope_candidates = 0;
-        uint64_t exact_intersection_tests = 0;
-    };
-
-    struct QueryCounts {
-        bool result = false;
-        uint64_t reservation_binary_probes = 0;
-        uint64_t reservation_blocks_examined = 0;
-        uint64_t interval_tree_nodes_examined = 0;
-        uint64_t envelope_candidates = 0;
-        uint64_t exact_ap_tests = 0;
     };
 
     static StateCounts state_counts(const NodeStore& store) {
-        size_t progression_count = 0;
-        for (const auto& block : store.virtual_id_reservation_blocks_) {
-            progression_count += block.progressions.size();
-        }
-        return {store.next_id_, store.free_ids_.size(), store.nodes_.size(),
-                store.virtual_id_reservation_blocks_.size(),
-                progression_count};
-    }
-
-    static SweepCounts reserve_counted(
-        NodeStore& store, const uint64_t first_store_id, const uint64_t width,
-        const std::vector<NodeStore::VirtualIdProgression>& progressions) {
-        NodeStore::VirtualProgressionSweepWork work;
-        store.reserve_logical_id_span_impl(first_store_id, width,
-                                           progressions, &work);
-        return {work.envelope_candidates, work.exact_intersection_tests};
-    }
-
-    static QueryCounts point_query(const NodeStore& store,
-                                   const uint64_t node_id) {
-        NodeStore::VirtualIdQueryWork work;
-        const bool result = store.is_virtual_id_impl(node_id, &work);
-        return {result, work.reservation_binary_probes,
-                work.reservation_blocks_examined,
-                work.interval_tree_nodes_examined,
-                work.envelope_candidates, work.exact_ap_tests};
-    }
-
-    static QueryCounts virtual_progression_query(
-        const NodeStore& store, const uint64_t first_id,
-        const uint64_t count, const uint64_t stride) {
-        NodeStore::VirtualIdQueryWork work;
-        const bool result = store.is_virtual_id_progression_impl(
-            first_id, count, stride, &work);
-        return {result, work.reservation_binary_probes,
-                work.reservation_blocks_examined,
-                work.interval_tree_nodes_examined,
-                work.envelope_candidates, work.exact_ap_tests};
-    }
-
-    static QueryCounts nonvirtual_progression_query(
-        const NodeStore& store, const uint64_t first_id,
-        const uint64_t count, const uint64_t stride) {
-        NodeStore::VirtualIdQueryWork work;
-        const bool result = store.is_allocated_nonvirtual_progression_impl(
-            first_id, count, stride, &work);
-        return {result, work.reservation_binary_probes,
-                work.reservation_blocks_examined,
-                work.interval_tree_nodes_examined,
-                work.envelope_candidates, work.exact_ap_tests};
+        return {store.next_id_, store.free_ids_.size(), store.nodes_.size()};
     }
 };
 
@@ -336,563 +273,8 @@ void test_node_gc() {
     expect(store.gc_erased_count() == 3, "E: a + p + c erased in total");
 }
 
-// ---------------------------------------------------------------- Part G --
-// C0 logical-id reservation: virtual ranges advance the existing affine id
-// stream without manufacturing nodes or becoming completed dependency
-// parents.
-void test_virtual_id_ranges() {
-    NodeStore store;
-    OnlineNode node;
-    node.kind = NodeKind::Compute;
-    node.name = "before-hole";
-    expect(store.add_node(node) == 1, "G: first entity keeps id 1");
-    store.reserve_id_range(2, 3);
-    expect(store.next_auto_id() == 5,
-           "G: range reservation advances the existing id stream");
-    expect(store.is_virtual_id(2) && store.is_virtual_id(3) &&
-               store.is_virtual_id(4) && !store.is_virtual_id(1) &&
-               !store.is_virtual_id(5),
-           "G: virtual membership covers exactly the reserved interval");
-    expect(!store.erased(2),
-           "G: virtual ids are not treated as completed/GC-erased parents");
-    expect(store.node(2) == std::nullopt && store.pending_count() == 1,
-           "G: reservation creates no NodeStore records or pending nodes");
-
-    node.name = "after-hole";
-    expect(store.add_node(node) == 5,
-           "G: next ordinary entity follows the virtual interval");
-    bool rejected_virtual_edge = false;
-    try {
-        store.add_dependency(3, 5, DepKind::Data);
-    } catch (const std::invalid_argument&) {
-        rejected_virtual_edge = true;
-    }
-    expect(rejected_virtual_edge,
-           "G: virtual id cannot be used as a dependency endpoint");
-
-    bool rejected_non_frontier_range = false;
-    try {
-        store.reserve_id_range(7, 1);
-    } catch (const std::logic_error&) {
-        rejected_non_frontier_range = true;
-    }
-    expect(rejected_non_frontier_range,
-           "G: range reservation must preserve the affine frontier");
-}
-
-void test_sparse_virtual_id_span() {
-    NodeStore store;
-    OnlineNode node;
-    node.kind = NodeKind::Compute;
-    node.name = "before-sparse-span";
-    expect(store.add_node(node) == 1, "G2: first entity keeps id 1");
-
-    // The bounding intervals overlap ([3, 7] and [4, 8]), while their AP
-    // memberships are disjoint: {3, 5, 7} and {4, 8}.
-    store.reserve_logical_id_span(
-        2, 8, {{3, 3, 2}, {4, 2, 4}});
-    expect(store.next_auto_id() == 10,
-           "G2: reserving the whole span advances the affine frontier");
-    expect(store.is_virtual_id(3) && store.is_virtual_id(4) &&
-               store.is_virtual_id(5) && store.is_virtual_id(7) &&
-               store.is_virtual_id(8) && !store.is_virtual_id(2) &&
-               !store.is_virtual_id(6) && !store.is_virtual_id(9),
-           "G2: sparse AP holes preserve ordinary positions inside the span");
-    expect(!store.is_finished_or_erased(3) && !store.erased(3),
-           "G2: a sparse virtual ID is neither a node nor a completed parent");
-
-    for (const uint64_t id : {2, 6, 9}) {
-        node.global_id = id;
-        node.name = "physical-" + std::to_string(id);
-        expect(store.add_node(node) == id,
-               "G2: ordinary physical IDs can be inserted inside the reserved span");
-    }
-    expect(store.pending_count() == 4 && store.next_auto_id() == 10,
-           "G2: explicit physical IDs do not perturb the reserved span frontier");
-    expect(store.is_virtual_id_progression(3, 3, 2) &&
-               store.is_virtual_id_progression(7, 2, 1) &&
-               !store.is_virtual_id_progression(3, 4, 1),
-           "G2: virtual AP query proves sparse-union membership without expansion");
-    expect(store.is_allocated_nonvirtual_progression(2, 2, 4) &&
-               !store.is_allocated_nonvirtual_progression(2, 3, 2),
-           "G2: allocated nonvirtual AP query excludes virtual positions");
-    expect(store.count_finished_or_erased_nonvirtual_progression(2, 1, 4) == 0,
-           "G2: committed physical AP reports no finished members initially");
-    store.set_gc_enabled(true);
-    store.finish_node(2);
-    store.collect_garbage();
-    expect(store.is_allocated_nonvirtual_progression(2, 1, 1),
-           "G2: collected physical IDs remain allocated nonvirtual history");
-    expect(store.count_finished_or_erased_nonvirtual_progression(2, 1, 4) == 1,
-           "G2: erased physical AP members count as finished without expansion");
-
-    NodeStore invalid_overlap;
-    bool rejected_overlap = false;
-    try {
-        invalid_overlap.reserve_logical_id_span(
-            1, 10, {{2, 3, 4}, {6, 2, 4}});
-    } catch (const std::invalid_argument&) {
-        rejected_overlap = true;
-    }
-    expect(rejected_overlap && invalid_overlap.next_auto_id() == 1 &&
-               !invalid_overlap.is_virtual_id(2),
-           "G2: intersecting AP holes reject atomically before sparse reservation");
-
-    bool rejected_out_of_span = false;
-    try {
-        NodeStore invalid;
-        invalid.reserve_logical_id_span(1, 4, {{2, 2, 3}});
-    } catch (const std::invalid_argument&) {
-        rejected_out_of_span = true;
-    }
-    expect(rejected_out_of_span,
-           "G2: sparse AP terminal ID must remain inside the reserved span");
-}
-
-void test_virtual_progression_sweep_scales() {
-    for (const uint64_t progression_count : {uint64_t{8}, uint64_t{32},
-                                              uint64_t{128}}) {
-        NodeStore store;
-        std::vector<NodeStore::VirtualIdProgression> progressions;
-        progressions.reserve(static_cast<size_t>(progression_count));
-        for (uint64_t i = 0; i < progression_count; i += 2) {
-            const uint64_t base = 1 + (i / 2) * 8;
-            progressions.push_back({base, 2, 4});
-            progressions.push_back({base + 2, 2, 4});
-        }
-        const uint64_t span_width = progression_count * 4;
-        const auto work = NodeStoreTestAccess::reserve_counted(
-            store, 1, span_width, progressions);
-        expect(work.envelope_candidates == progression_count / 2 &&
-                   work.exact_intersection_tests == progression_count / 2 &&
-                   work.envelope_candidates <
-                       progression_count * (progression_count - 1) / 2 &&
-                   store.next_auto_id() == 1 + span_width,
-               "G2: NodeStore envelope sweep checks only active pairs at 8/32/128 ranges");
-        for (uint64_t i = 0; i < progression_count; i += 2) {
-            const uint64_t base = 1 + (i / 2) * 8;
-            expect(store.is_virtual_id_progression(base, 2, 4) &&
-                       store.is_virtual_id_progression(base + 2, 2, 4),
-                   "G2: swept interleaved APs remain reserved exactly");
-        }
-
-        NodeStore broad_envelopes;
-        std::vector<NodeStore::VirtualIdProgression> interleaved;
-        interleaved.reserve(static_cast<size_t>(progression_count));
-        for (uint64_t i = 0; i < progression_count; ++i) {
-            interleaved.push_back({1 + i, 2, progression_count});
-        }
-        const auto broad_work = NodeStoreTestAccess::reserve_counted(
-            broad_envelopes, 1, progression_count * 2, interleaved);
-        const uint64_t all_pairs =
-            progression_count * (progression_count - 1) / 2;
-        expect(broad_work.envelope_candidates == all_pairs &&
-                   broad_work.exact_intersection_tests == all_pairs,
-               "G2: same-envelope stride residues preserve quadratic exact worst case");
-    }
-}
-
-void test_virtual_id_query_index_scales_by_reservation() {
-    std::fprintf(stderr,
-                 "[node_store_test] G3 counters measure current indexed work; "
-                 "old flat-history scan cost is theoretical/uninstrumented\n");
-    for (const uint64_t history : {uint64_t{8}, uint64_t{32},
-                                   uint64_t{128}}) {
-        uint64_t binary_probe_bound = 0;
-        for (uint64_t remaining = history; remaining != 0;
-             remaining >>= 1) {
-            ++binary_probe_bound;
-        }
-        for (const uint64_t query_count : {uint64_t{4}, uint64_t{128}}) {
-            NodeStore store;
-            uint64_t first = 1;
-            for (uint64_t index = 0; index < history; ++index) {
-                store.reserve_logical_id_span(
-                    first, 8, {{first + 1, 2, 2}});
-                first += 8;
-            }
-            const uint64_t latest_first = first - 8;
-            const uint64_t latest_virtual_id = latest_first + 3;
-            const uint64_t latest_physical_ap_first = latest_first + 2;
-
-            NodeStoreTestAccess::QueryCounts point_totals;
-            NodeStoreTestAccess::QueryCounts virtual_ap_totals;
-            NodeStoreTestAccess::QueryCounts physical_ap_totals;
-            for (uint64_t query = 0; query < query_count; ++query) {
-                const auto point = NodeStoreTestAccess::point_query(
-                    store, latest_virtual_id);
-                const auto virtual_ap =
-                    NodeStoreTestAccess::virtual_progression_query(
-                        store, latest_first + 1, 2, 2);
-                // This AP's envelope crosses the virtual AP envelope, but
-                // its represented IDs occupy different stride residues.
-                const auto physical_ap =
-                    NodeStoreTestAccess::nonvirtual_progression_query(
-                        store, latest_physical_ap_first, 2, 4);
-                expect(point.result && virtual_ap.result && physical_ap.result,
-                       "G3: latest-span point and AP queries preserve exact membership");
-                point_totals.reservation_binary_probes +=
-                    point.reservation_binary_probes;
-                point_totals.reservation_blocks_examined +=
-                    point.reservation_blocks_examined;
-                point_totals.interval_tree_nodes_examined +=
-                    point.interval_tree_nodes_examined;
-                point_totals.envelope_candidates += point.envelope_candidates;
-                point_totals.exact_ap_tests += point.exact_ap_tests;
-                virtual_ap_totals.reservation_binary_probes +=
-                    virtual_ap.reservation_binary_probes;
-                virtual_ap_totals.reservation_blocks_examined +=
-                    virtual_ap.reservation_blocks_examined;
-                virtual_ap_totals.interval_tree_nodes_examined +=
-                    virtual_ap.interval_tree_nodes_examined;
-                virtual_ap_totals.envelope_candidates +=
-                    virtual_ap.envelope_candidates;
-                virtual_ap_totals.exact_ap_tests += virtual_ap.exact_ap_tests;
-                physical_ap_totals.reservation_binary_probes +=
-                    physical_ap.reservation_binary_probes;
-                physical_ap_totals.reservation_blocks_examined +=
-                    physical_ap.reservation_blocks_examined;
-                physical_ap_totals.interval_tree_nodes_examined +=
-                    physical_ap.interval_tree_nodes_examined;
-                physical_ap_totals.envelope_candidates +=
-                    physical_ap.envelope_candidates;
-                physical_ap_totals.exact_ap_tests += physical_ap.exact_ap_tests;
-            }
-            const uint64_t binary_bound =
-                query_count * binary_probe_bound;
-            expect(point_totals.reservation_binary_probes <= binary_bound &&
-                       point_totals.reservation_blocks_examined == query_count &&
-                       point_totals.interval_tree_nodes_examined == query_count &&
-                       point_totals.envelope_candidates == query_count &&
-                       point_totals.exact_ap_tests == query_count,
-                   "G3: point membership work depends on directory depth, not history length");
-            expect(virtual_ap_totals.reservation_binary_probes <= binary_bound &&
-                       virtual_ap_totals.reservation_blocks_examined == query_count &&
-                       virtual_ap_totals.interval_tree_nodes_examined ==
-                           query_count &&
-                       virtual_ap_totals.envelope_candidates == query_count &&
-                       virtual_ap_totals.exact_ap_tests == query_count,
-                   "G3: virtual AP coverage checks only the latest span's envelope candidate");
-            expect(physical_ap_totals.reservation_binary_probes <= binary_bound &&
-                       physical_ap_totals.reservation_blocks_examined == query_count &&
-                       physical_ap_totals.interval_tree_nodes_examined ==
-                           query_count &&
-                       physical_ap_totals.envelope_candidates == query_count &&
-                       physical_ap_totals.exact_ap_tests == query_count,
-                   "G3: nonvirtual AP checks exact residues after bounded envelope lookup");
-            std::fprintf(
-                stderr,
-                "[node_store_test] G3 H=%llu Q=%llu P=1 "
-                "point{bin=%llu blocks=%llu tree=%llu C=%llu exact=%llu} "
-                "virtual{bin=%llu blocks=%llu tree=%llu C=%llu exact=%llu} "
-                "nonvirtual{bin=%llu blocks=%llu tree=%llu C=%llu exact=%llu}\n",
-                static_cast<unsigned long long>(history),
-                static_cast<unsigned long long>(query_count),
-                static_cast<unsigned long long>(
-                    point_totals.reservation_binary_probes),
-                static_cast<unsigned long long>(
-                    point_totals.reservation_blocks_examined),
-                static_cast<unsigned long long>(
-                    point_totals.interval_tree_nodes_examined),
-                static_cast<unsigned long long>(
-                    point_totals.envelope_candidates),
-                static_cast<unsigned long long>(point_totals.exact_ap_tests),
-                static_cast<unsigned long long>(
-                    virtual_ap_totals.reservation_binary_probes),
-                static_cast<unsigned long long>(
-                    virtual_ap_totals.reservation_blocks_examined),
-                static_cast<unsigned long long>(
-                    virtual_ap_totals.interval_tree_nodes_examined),
-                static_cast<unsigned long long>(
-                    virtual_ap_totals.envelope_candidates),
-                static_cast<unsigned long long>(
-                    virtual_ap_totals.exact_ap_tests),
-                static_cast<unsigned long long>(
-                    physical_ap_totals.reservation_binary_probes),
-                static_cast<unsigned long long>(
-                    physical_ap_totals.reservation_blocks_examined),
-                static_cast<unsigned long long>(
-                    physical_ap_totals.interval_tree_nodes_examined),
-                static_cast<unsigned long long>(
-                    physical_ap_totals.envelope_candidates),
-                static_cast<unsigned long long>(
-                    physical_ap_totals.exact_ap_tests));
-        }
-    }
-}
-
-void test_virtual_id_interval_tree_exactness() {
-    for (const uint64_t progression_count : {uint64_t{8}, uint64_t{32},
-                                              uint64_t{128}}) {
-        NodeStore store;
-        const uint64_t first = 1;
-        const uint64_t stride = progression_count * 2;
-        std::vector<NodeStore::VirtualIdProgression> holes;
-        holes.reserve(static_cast<size_t>(progression_count));
-        for (uint64_t index = 0; index < progression_count; ++index) {
-            holes.push_back({first + index * 2, 3, stride});
-        }
-        store.reserve_logical_id_span(first, progression_count * 6, holes);
-
-        // Every hole envelope contains first + stride although only the first
-        // AP represents that exact ID. The candidate tree must return all
-        // overlapping envelopes and the exact AP test must choose correctly.
-        const auto point = NodeStoreTestAccess::point_query(
-            store, first + stride);
-        // This odd-residue point is inside every AP envelope but is not a
-        // member of any AP; the unsuccessful lookup must inspect all P
-        // envelope candidates before rejecting it.
-        const auto nonmember_point = NodeStoreTestAccess::point_query(
-            store, first + stride + 1);
-        const auto virtual_ap =
-            NodeStoreTestAccess::virtual_progression_query(
-                store, first, 3, stride);
-        // This nonvirtual AP also crosses all hole envelopes, but its residue
-        // differs from every reserved AP.
-        const auto physical_ap =
-            NodeStoreTestAccess::nonvirtual_progression_query(
-                store, first + 1, 3, stride);
-        expect(point.result && point.envelope_candidates >= 1 &&
-                   point.envelope_candidates <= progression_count &&
-                   point.exact_ap_tests == point.envelope_candidates,
-               "G3: overlapping AP envelopes do not hide the represented point");
-        expect(!nonmember_point.result &&
-                   nonmember_point.envelope_candidates == progression_count &&
-                   nonmember_point.exact_ap_tests == progression_count,
-               "G3: failed point lookup checks the full overlapping-envelope worst case");
-        expect(virtual_ap.result &&
-                   virtual_ap.envelope_candidates == progression_count &&
-                   virtual_ap.exact_ap_tests == progression_count,
-               "G3: AP-union coverage counts exact members without tile expansion");
-        expect(physical_ap.result &&
-                   physical_ap.envelope_candidates == progression_count &&
-                   physical_ap.exact_ap_tests == progression_count,
-               "G3: envelope overlap alone does not reject an allocated nonvirtual AP");
-        const auto counts = NodeStoreTestAccess::state_counts(store);
-        expect(counts.virtual_index_blocks == 1 &&
-                   counts.virtual_progressions == progression_count,
-               "G3: sparse index storage follows AP count, not represented ID count");
-    }
-
-    NodeStore nearest_first;
-    nearest_first.reserve_logical_id_span(
-        1, 40, {{10, 3, 10}, {15, 2, 20}});
-    const auto overlapping_envelopes =
-        NodeStoreTestAccess::point_query(nearest_first, 30);
-    expect(overlapping_envelopes.result &&
-               overlapping_envelopes.envelope_candidates == 2 &&
-               overlapping_envelopes.exact_ap_tests == 2 &&
-               nearest_first.is_virtual_id_progression(10, 3, 10) &&
-               !nearest_first.is_allocated_nonvirtual_progression(30, 1, 1),
-           "G3: nearest-first AP lookup still finds an earlier overlapping envelope");
-}
-
-void test_virtual_id_empty_blocks_and_reservation_atomicity() {
-    NodeStore empty_holes;
-    empty_holes.reserve_logical_id_span(1, 8, {});
-    const auto empty_counts = NodeStoreTestAccess::state_counts(empty_holes);
-    expect(empty_counts.virtual_index_blocks == 0 &&
-               empty_counts.virtual_progressions == 0 &&
-               !empty_holes.is_virtual_id(4) &&
-               !empty_holes.is_virtual_id_progression(1, 8, 1) &&
-               empty_holes.is_allocated_nonvirtual_progression(1, 8, 1),
-           "G3: empty virtual blocks remain allocated physical spans");
-
-    empty_holes.reserve_id_range(9, 4);
-    expect(empty_holes.is_virtual_id(9) &&
-               !empty_holes.is_virtual_id(8) &&
-               empty_holes.is_virtual_id_progression(9, 4, 1) &&
-               NodeStoreTestAccess::state_counts(empty_holes)
-                       .virtual_index_blocks == 1,
-           "G3: a later virtual span indexes after an unindexed physical span");
-
-    for (const uint64_t empty_span_count : {uint64_t{8}, uint64_t{32},
-                                            uint64_t{128}}) {
-        NodeStore physical_only;
-        uint64_t first = 1;
-        for (uint64_t index = 0; index < empty_span_count; ++index) {
-            physical_only.reserve_logical_id_span(first, 8, {});
-            first += 8;
-        }
-        const auto counts = NodeStoreTestAccess::state_counts(physical_only);
-        expect(counts.next_id == first && counts.virtual_index_blocks == 0 &&
-                   counts.virtual_progressions == 0 &&
-                   physical_only.is_allocated_nonvirtual_progression(
-                       1, empty_span_count * 8, 1) &&
-                   !physical_only.is_virtual_id(first - 1),
-               "G3: physical-only reservation history retains no virtual index blocks");
-    }
-
-    NodeStore store;
-    store.reserve_logical_id_span(1, 8, {{2, 2, 3}});
-    const auto before = NodeStoreTestAccess::state_counts(store);
-    bool rejected_overlap = false;
-    try {
-        store.reserve_logical_id_span(
-            9, 12, {{10, 3, 2}, {12, 2, 2}});
-    } catch (const std::invalid_argument&) {
-        rejected_overlap = true;
-    }
-    bool rejected_out_of_span = false;
-    try {
-        store.reserve_logical_id_span(9, 4, {{10, 2, 3}});
-    } catch (const std::invalid_argument&) {
-        rejected_out_of_span = true;
-    }
-    const auto after = NodeStoreTestAccess::state_counts(store);
-    expect(rejected_overlap && rejected_out_of_span &&
-               after.next_id == before.next_id &&
-               after.free_ids == before.free_ids &&
-               after.nodes == before.nodes &&
-               after.virtual_index_blocks == before.virtual_index_blocks &&
-               after.virtual_progressions == before.virtual_progressions &&
-               store.is_virtual_id(2) && !store.is_virtual_id(10),
-           "G3: later reservation validation failures publish no span or index state");
-}
-
-void test_virtual_id_queries_match_small_exhaustive_oracle() {
-    NodeStore store;
-    uint64_t first = 1;
-    for (uint64_t block = 0; block < 4; ++block) {
-        store.reserve_logical_id_span(first, 12, {{first + 2, 3, 4}});
-        first += 12;
-    }
-    const uint64_t frontier = store.next_auto_id();
-    std::vector<bool> virtual_ids(static_cast<size_t>(frontier + 2), false);
-    for (uint64_t block = 0; block < 4; ++block) {
-        const uint64_t span_first = 1 + block * 12;
-        for (uint64_t tile = 0; tile < 3; ++tile) {
-            virtual_ids[static_cast<size_t>(span_first + 2 + tile * 4)] = true;
-        }
-    }
-
-    for (uint64_t id = 0; id < frontier + 2; ++id) {
-        const bool expected = id < frontier &&
-            virtual_ids[static_cast<size_t>(id)];
-        expect(store.is_virtual_id(id) == expected,
-               "G3: point membership matches deterministic expanded oracle");
-    }
-    for (uint64_t first_id = 1; first_id <= frontier + 1; ++first_id) {
-        for (uint64_t stride = 1; stride <= 5; ++stride) {
-            for (uint64_t count = 1; count <= 5; ++count) {
-                const unsigned __int128 last =
-                    static_cast<unsigned __int128>(first_id) +
-                    static_cast<unsigned __int128>(stride) * (count - 1);
-                bool expected_all_virtual = last < frontier;
-                bool expected_no_virtual = last < frontier;
-                if (last < frontier) {
-                    for (uint64_t offset = 0; offset < count; ++offset) {
-                        const uint64_t id = first_id + offset * stride;
-                        const bool is_virtual =
-                            virtual_ids[static_cast<size_t>(id)];
-                        expected_all_virtual &= is_virtual;
-                        expected_no_virtual &= !is_virtual;
-                    }
-                }
-                expect(store.is_virtual_id_progression(
-                           first_id, count, stride) == expected_all_virtual,
-                       "G3: virtual AP coverage matches deterministic expanded oracle");
-                expect(store.is_allocated_nonvirtual_progression(
-                           first_id, count, stride) == expected_no_virtual,
-                       "G3: nonvirtual AP validation matches deterministic expanded oracle");
-            }
-        }
-    }
-}
-
-void test_virtual_progression_uint64_boundary() {
-    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
-    const uint64_t first_boundary_id = max_id - 4;
-    NodeStore store;
-
-    // One compact AP advances the allocator to the final four allocatable
-    // IDs without expanding the enormous prefix into records.
-    store.reserve_id_range(1, max_id - 5);
-    const auto before_failures = NodeStoreTestAccess::state_counts(store);
-    expect(before_failures.next_id == first_boundary_id &&
-               before_failures.free_ids == 0 && before_failures.nodes == 0 &&
-               store.is_virtual_id(max_id - 5),
-           "G2 boundary: compact prefix reaches the final four allocatable IDs");
-
-    const auto expect_boundary_rejection_is_atomic =
-        [&store, &before_failures, max_id,
-         first_boundary_id](const char* message) {
-            const auto after = NodeStoreTestAccess::state_counts(store);
-            expect(after.next_id == before_failures.next_id &&
-                       after.free_ids == before_failures.free_ids &&
-                       after.nodes == before_failures.nodes &&
-                       after.virtual_index_blocks ==
-                           before_failures.virtual_index_blocks &&
-                       after.virtual_progressions ==
-                           before_failures.virtual_progressions &&
-                       store.is_virtual_id(max_id - 5) &&
-                       !store.is_virtual_id(first_boundary_id),
-                   message);
-        };
-
-    bool rejected_span_overflow = false;
-    try {
-        store.reserve_logical_id_span(first_boundary_id, 5, {});
-    } catch (const std::invalid_argument&) {
-        rejected_span_overflow = true;
-    }
-    expect(rejected_span_overflow,
-           "G2 boundary: exclusive span end may not wrap past UINT64_MAX");
-    expect_boundary_rejection_is_atomic(
-        "G2 boundary: span-overflow rejection preserves allocator and store state");
-
-    bool rejected_terminal_max = false;
-    try {
-        store.reserve_logical_id_span(
-            first_boundary_id, 4, {{max_id - 3, 2, 3}});
-    } catch (const std::invalid_argument&) {
-        rejected_terminal_max = true;
-    }
-    expect(rejected_terminal_max,
-           "G2 boundary: a progression ending at UINT64_MAX is outside the allocatable span");
-    expect_boundary_rejection_is_atomic(
-        "G2 boundary: terminal-sentinel rejection preserves allocator and store state");
-
-    bool rejected_endpoint_touch = false;
-    try {
-        store.reserve_logical_id_span(
-            first_boundary_id, 4,
-            {{max_id - 4, 2, 3}, {max_id - 1, 1, 1}});
-    } catch (const std::invalid_argument&) {
-        rejected_endpoint_touch = true;
-    }
-    expect(rejected_endpoint_touch,
-           "G2 boundary: exact overlap at the final allocatable endpoint is rejected");
-    expect_boundary_rejection_is_atomic(
-        "G2 boundary: endpoint-overlap rejection preserves allocator and store state");
-
-    bool rejected_mixed_stride_collision = false;
-    try {
-        store.reserve_logical_id_span(
-            first_boundary_id, 4,
-            {{max_id - 4, 2, 3}, {max_id - 3, 2, 2}});
-    } catch (const std::invalid_argument&) {
-        rejected_mixed_stride_collision = true;
-    }
-    expect(rejected_mixed_stride_collision,
-           "G2 boundary: mixed-stride APs that meet at UINT64_MAX-1 are rejected");
-    expect_boundary_rejection_is_atomic(
-        "G2 boundary: mixed-stride rejection preserves allocator and store state");
-
-    const auto work = NodeStoreTestAccess::reserve_counted(
-        store, first_boundary_id, 4,
-        {{first_boundary_id, 2, 2}, {first_boundary_id + 1, 2, 2}});
-    expect(work.envelope_candidates == 1 &&
-               work.exact_intersection_tests == 1 &&
-               store.next_auto_id() == max_id &&
-               store.is_virtual_id_progression(first_boundary_id, 2, 2) &&
-               store.is_virtual_id_progression(first_boundary_id + 1, 2, 2) &&
-               store.is_virtual_id(max_id - 1),
-           "G2 boundary: disjoint interleaved APs reserve through UINT64_MAX-1 exactly");
-}
-
 // ---------------------------------------------------------------- Part B --
-// NodeStoreGraphSource delegation.
+// Store-backed GraphSource semantics.
 void test_node_store_graph_source() {
     NodeStoreGraphSource src;
     expect(src.dep_free_nodes().empty(), "B: empty source yields no nodes");
@@ -1029,6 +411,323 @@ void test_ready_issue_order_snapshot() {
            "F: next issue pass can capture a new ready batch");
     expect(next_batch == std::vector<uint64_t>({child}),
            "F: child released by multiple parents appears once next pass");
+}
+
+// ---------------------------------------------------------------- Part F2 --
+// v11 Phase 4 (issue-pass increment, 方案 §6.1) differential: the OLD
+// full-snapshot algorithm (fill_free_node_snapshot on every ready-set
+// generation change -- kept here as the ORACLE, exactly the pre-Phase-4
+// production path) versus the NEW delta-splice algorithm
+// (splice_free_node_snapshot, the production replacement). Two twin stores
+// receive the identical operation script (adds / dependency edges / takes /
+// finishes / external full-snapshot consumes / mid-pass issue callbacks);
+// after every pass the captured vectors AND the emitted issue sequences
+// must be element-for-element identical. The script deliberately covers:
+//   - insert/erase interleaves at arbitrary id positions,
+//   - ids skipped by the resource gate in earlier passes (they must stay
+//     in the vector and be re-examined -- the (a) requirement),
+//   - mid-pass new-ready inserts (they must NOT enter the current pass's
+//     vector -- they arrive through the delta on the NEXT pass),
+//   - the revived-id shape (free -> add_dependency removes -> parent
+//     finish re-inserts; erase-delta and insert-delta both carry the id),
+//   - external full-snapshot consumes that break the delta window (the
+//     splice must fall back to a full fill, never splice a stale window).
+void test_free_snapshot_splice_differential() {
+    // -- targeted hand-built sequence first -------------------------------
+    {
+        NodeStore oracle_store;
+        NodeStore live_store;
+        auto add_ordinary = [](NodeStore& store, uint64_t id) {
+            OnlineNode n;
+            n.global_id = id;
+            n.kind = NodeKind::Compute;
+            n.name = "f2-node";
+            store.add_node(n);
+        };
+        add_ordinary(oracle_store, 10);
+        add_ordinary(oracle_store, 20);
+        add_ordinary(oracle_store, 30);
+        add_ordinary(oracle_store, 40);
+        add_ordinary(live_store, 10);
+        add_ordinary(live_store, 20);
+        add_ordinary(live_store, 30);
+        add_ordinary(live_store, 40);
+
+        std::vector<uint64_t> oracle_vec;
+        std::vector<uint64_t> live_vec;
+        uint64_t oracle_recorded = 0;
+        uint64_t live_recorded = 0;
+        bool oracle_valid = false;
+        bool live_valid = false;
+        const auto refresh = [&](const char* stage) {
+            const uint64_t oracle_version = oracle_store.free_id_version();
+            const uint64_t live_version = live_store.free_id_version();
+            if (!oracle_valid || oracle_recorded != oracle_version) {
+                oracle_store.fill_free_node_snapshot(oracle_vec);
+                oracle_recorded = oracle_store.free_id_version();
+                oracle_valid = true;
+            }
+            if (!live_valid || live_recorded != live_version) {
+                if (live_valid && live_store.free_delta_window_base_version() ==
+                                      live_recorded) {
+                    live_store.splice_free_node_snapshot(live_vec);
+                } else {
+                    live_store.fill_free_node_snapshot(live_vec);
+                }
+                live_recorded = live_store.free_id_version();
+                live_valid = true;
+            }
+            expect(oracle_vec == live_vec, stage);
+        };
+
+        refresh("F2: initial captures agree {10,20,30,40}");
+        expect(oracle_vec == std::vector<uint64_t>({10, 20, 30, 40}),
+               "F2: initial capture holds every free id");
+
+        oracle_store.mark_issued(10);
+        live_store.mark_issued(10);
+        oracle_store.finish_node(30);
+        live_store.finish_node(30);
+        refresh("F2: after take+finish the splice agrees {20,40}");
+        expect(live_store.ready_set_stats().splice_calls == 1,
+               "F2: second capture really used the splice");
+
+        add_ordinary(oracle_store, 5);
+        add_ordinary(live_store, 5);
+        add_ordinary(oracle_store, 50);
+        add_ordinary(live_store, 50);
+        refresh("F2: below-cursor and above-cursor inserts splice in {5,20,40,50}");
+
+        // Revived-id shape: 20 unfinished parent, 5 currently free child.
+        oracle_store.add_dependency(20, 5, DepKind::Data);
+        live_store.add_dependency(20, 5, DepKind::Data);
+        refresh("F2: dependency removes the child from both vectors {20,40,50}");
+
+        oracle_store.finish_node(20);
+        live_store.finish_node(20);
+        refresh("F2: parent finish revives the child in both {5,40,50}");
+        expect(live_store.ready_set_stats().splice_calls == 4,
+               "F2: revive pass also spliced");
+
+        // Window break: a mutation, then an external full-snapshot consume
+        // that re-arms the live delta window at the NEW generation. The
+        // next capture must full-fill -- the window no longer starts at the
+        // vector's own generation, so splicing it would lose the mutation.
+        const uint64_t splices_before_break =
+            live_store.ready_set_stats().splice_calls;
+        const uint64_t fills_before_break =
+            live_store.ready_set_stats().snapshot_calls;
+        add_ordinary(oracle_store, 60);
+        add_ordinary(live_store, 60);
+        expect(!oracle_store.resolve_free_nodes().empty() &&
+                   !live_store.resolve_free_nodes().empty(),
+               "F2: external consume observes the same non-empty ready set");
+        const uint64_t fills_after_consume =
+            live_store.ready_set_stats().snapshot_calls;
+        refresh("F2: broken window falls back to the full fill {5,40,50,60}");
+        expect(live_store.ready_set_stats().splice_calls ==
+                   splices_before_break,
+               "F2: no splice across a consumed window");
+        expect(live_store.ready_set_stats().snapshot_calls ==
+                   fills_after_consume + 1,
+               "F2: the fallback ran exactly one full fill");
+    }
+
+    // -- randomized twin-store differential -------------------------------
+    {
+        std::mt19937 rng(20261014u);
+        NodeStore oracle_store;
+        NodeStore live_store;
+
+        // Explicit ids from a shuffled pool so later adds land above and
+        // below the walk cursor indiscriminately. Sized so the inter-pass
+        // adds AND the first-issue injects together cannot exhaust it
+        // within 240 passes (exhaustion would stall the version stream).
+        std::vector<uint64_t> pool(3000);
+        for (size_t i = 0; i < pool.size(); ++i) {
+            pool[i] = static_cast<uint64_t>(i + 1);
+        }
+        std::shuffle(pool.begin(), pool.end(), rng);
+        size_t pool_next = 0;
+
+        std::vector<uint64_t> known;  // ids added so far
+        const auto twin_add = [&](const bool /*unused_role*/) {
+            if (pool_next >= pool.size()) {
+                return uint64_t{0};
+            }
+            const uint64_t id = pool[pool_next++];
+            for (NodeStore* store : {&oracle_store, &live_store}) {
+                OnlineNode n;
+                n.global_id = id;
+                n.kind = NodeKind::Compute;
+                n.name = "f2-r-node";
+                store->add_node(n);
+            }
+            known.push_back(id);
+            return id;
+        };
+        // Fresh-window picker: prefer recently added ids for takes/finishes
+        // so the script keeps mutating real live state instead of stalling
+        // on long-issued ids (which would leave whole passes no-op).
+        const auto pick_fresh = [&]() {
+            if (known.empty()) {
+                return uint64_t{0};
+            }
+            const size_t window =
+                known.size() < 30 ? known.size() : 30;
+            return known[known.size() - 1 - rng() % window];
+        };
+        const auto pick_known = [&]() {
+            if (known.empty()) {
+                return uint64_t{0};
+            }
+            return known[rng() % known.size()];
+        };
+
+        std::vector<uint64_t> oracle_vec;
+        std::vector<uint64_t> live_vec;
+        uint64_t oracle_recorded = 0;
+        uint64_t live_recorded = 0;
+        bool oracle_valid = false;
+        bool live_valid = false;
+        uint64_t oracle_fills = 0;
+        uint64_t live_fills = 0;
+        uint64_t live_splices = 0;
+        uint64_t live_reuses = 0;
+
+        // Deterministic resource gate: on "closed" passes every 4th id is
+        // resource-blocked and must stay ready for a later pass.
+        const auto gate = [](const uint64_t pass, const uint64_t id) {
+            return (pass % 3 != 0) || (id % 4 != 0);
+        };
+        // First-issue callback bookkeeping (identical on both stores).
+        std::map<uint64_t, bool> issued_once;
+
+        for (uint64_t pass = 1; pass <= 240; ++pass) {
+            // Inter-pass mutations.
+            const uint32_t rounds = 1 + rng() % 6;
+            for (uint32_t r = 0; r < rounds; ++r) {
+                switch (rng() % 6) {
+                    case 0:
+                    case 1:
+                        twin_add(false);
+                        break;
+                    case 2: {
+                        const uint64_t parent = pick_known();
+                        const uint64_t child = pick_known();
+                        if (parent != 0 && child != 0 && parent != child) {
+                            oracle_store.add_dependency(parent, child,
+                                                        DepKind::Data);
+                            live_store.add_dependency(parent, child,
+                                                      DepKind::Data);
+                        }
+                        break;
+                    }
+                    case 3: {
+                        const uint64_t id = pick_fresh();
+                        if (id != 0) {
+                            oracle_store.mark_issued(id);
+                            live_store.mark_issued(id);
+                        }
+                        break;
+                    }
+                    case 4: {
+                        const uint64_t id = pick_fresh();
+                        if (id != 0) {
+                            oracle_store.finish_node(id);
+                            live_store.finish_node(id);
+                        }
+                        break;
+                    }
+                    case 5:
+                        // External full-snapshot consume on both twins.
+                        (void)oracle_store.resolve_free_nodes();
+                        (void)live_store.resolve_free_nodes();
+                        break;
+                }
+            }
+
+            // Capture: oracle = OLD algorithm (full fill on change), live =
+            // NEW algorithm (splice while the window starts at the vector's
+            // generation, full fill otherwise, reuse on no change).
+            const uint64_t oracle_version = oracle_store.free_id_version();
+            const uint64_t live_version = live_store.free_id_version();
+            if (!oracle_valid || oracle_recorded != oracle_version) {
+                oracle_store.fill_free_node_snapshot(oracle_vec);
+                oracle_recorded = oracle_store.free_id_version();
+                oracle_valid = true;
+                ++oracle_fills;
+            }
+            if (!live_valid || live_recorded != live_version) {
+                if (live_valid && live_store.free_delta_window_base_version() ==
+                                      live_recorded) {
+                    live_store.splice_free_node_snapshot(live_vec);
+                    ++live_splices;
+                } else {
+                    live_store.fill_free_node_snapshot(live_vec);
+                    ++live_fills;
+                }
+                live_recorded = live_store.free_id_version();
+                live_valid = true;
+            } else {
+                ++live_reuses;
+            }
+            expect(oracle_vec == live_vec,
+                   "F2-r: captured vectors agree before the walk");
+
+            // Emission loop (identical on both stores).
+            std::vector<uint64_t> oracle_issued;
+            std::vector<uint64_t> live_issued;
+            const auto walk = [&](NodeStore& store,
+                                  const std::vector<uint64_t>& snapshot,
+                                  std::vector<uint64_t>& issued) {
+                for (const uint64_t id : snapshot) {
+                    if (!store.is_free_id(id)) {
+                        continue;  // taken/finished mid-pass by a callback
+                    }
+                    if (!gate(pass, id)) {
+                        continue;  // resource-blocked: stays ready
+                    }
+                    issued.push_back(id);
+                    store.mark_issued(id);
+                    // Synchronous completion callback: finish releases
+                    // children (mid-pass new ready), and the first issue of
+                    // an id also injects one brand-new node (whose pool id
+                    // may sit below the walk cursor). twin_add mutates BOTH
+                    // twins with the same pool id so the states stay
+                    // identical; only the walking side observes it mid-pass,
+                    // the other side already holds its captured vector.
+                    store.finish_node(id);
+                    if (!issued_once[id]) {
+                        issued_once[id] = true;
+                        twin_add(false);
+                    }
+                }
+            };
+            walk(oracle_store, oracle_vec, oracle_issued);
+            walk(live_store, live_vec, live_issued);
+            expect(oracle_issued == live_issued,
+                   "F2-r: emitted issue sequences agree pass by pass");
+        }
+
+        expect(oracle_fills > 100, "F2-r: oracle exercised many fills");
+        expect(live_splices > 40 && live_fills > 4 && live_reuses > 4,
+               "F2-r: live side exercised splice, fallback fill, and reuse");
+        expect(oracle_vec == live_vec &&
+                   oracle_vec.size() ==
+                       oracle_store.resolve_free_nodes().size(),
+               "F2-r: final vectors agree and match the full free set");
+        expect(oracle_store.resolve_free_nodes() ==
+                   live_store.resolve_free_nodes(),
+               "F2-r: twin stores end in the identical full free set");
+        std::printf(
+            "PASS F2 differential: oracle_fills=%llu live_fills=%llu "
+            "live_splices=%llu live_reuses=%llu\n",
+            static_cast<unsigned long long>(oracle_fills),
+            static_cast<unsigned long long>(live_fills),
+            static_cast<unsigned long long>(live_splices),
+            static_cast<unsigned long long>(live_reuses));
+    }
 }
 
 // ---------------------------------------------------------------- Part D --
@@ -1250,16 +949,9 @@ int main(int argc, char* argv[]) {
 
     test_node_store();
     test_node_gc();
-    test_virtual_id_ranges();
-    test_sparse_virtual_id_span();
-    test_virtual_progression_sweep_scales();
-    test_virtual_id_query_index_scales_by_reservation();
-    test_virtual_id_interval_tree_exactness();
-    test_virtual_id_empty_blocks_and_reservation_atomicity();
-    test_virtual_id_queries_match_small_exhaustive_oracle();
-    test_virtual_progression_uint64_boundary();
     test_node_store_graph_source();
     test_ready_issue_order_snapshot();
+    test_free_snapshot_splice_differential();
     test_injected_unfinished_summary();
     if (et_path.empty()) {
         // R4-N1 port (2026-09-30, from the face repo): only part C needs

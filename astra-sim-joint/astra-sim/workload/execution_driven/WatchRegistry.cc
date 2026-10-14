@@ -10,6 +10,10 @@ Implementation (方案 §4 步骤 1-5).
 
 #include "common/EventQueue.h"
 
+#ifdef JOINT_V7_EVENT_PROFILE
+#include "common/EventProfile.h"
+#endif
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -299,6 +303,12 @@ void OnlineCompletionHookContext::configure_issue_passes(
     issue_pass_callback_context_ = callback_context;
     issue_pass_pending_.swap(pending);
     issue_pass_args_.swap(args);
+#ifdef JOINT_V7_EVENT_PROFILE
+    // Diagnostic-only deferred classification (v7 attribution).
+    NetworkAnalytical::EventProfile::register_known(
+        &OnlineCompletionHookContext::issue_pass_trampoline,
+        "watch_issue_pass");
+#endif
 }
 
 bool OnlineCompletionHookContext::schedule_issue_pass(const int rank) {

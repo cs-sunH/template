@@ -1,16 +1,17 @@
-"""action_work_graph.py -- W3：四动作预测工作图构造（2026-09-29）。
+"""action_work_graph.py -- W3：三动作预测工作图构造（2026-09-29）。
 
 设计依据：《joint仓库当下+历史修改方案》§5.2（工作图构造与预测范围）、
 §5.1a（逐资源服务语义——经 W2 ``resource_projection`` 内核兑现）、
-§6.2（四动作共同构造规则）、§6.3（A/B/C 例字节核账）、§7.1（两决策点
+§6.2（动作共同构造规则）、§6.3（A/B/C 例字节核账）、§7.1（两决策点
 独立）、§7.2（旧义务真实依赖）、§7.3（consolidate 结算）；W3 段
 （方案 §6.4）。盘点 inv_w23.md §2/§6.3/§6.4/§6.5。
 
 职责：从（目录投影布局 = SessionKVView / PDBoundaryView→BoundaryKVLayout）
-+（背景世界源 WorldSource）+（因果长度接口供给的剩余步数 n̂）构造四动作
-与参考接续的**预测工作图**，输出 ``resource_projection`` 的 WorkItem/
-TaskSpec 形态。**不提交真实图、不改真实 home/预约**（§7.1：P 参考接续
-只在预测副本；选中后仅提交 P 必需工作）。
++（背景世界源 WorldSource）+（因果长度接口供给的剩余步数 n̂）构造
+stay/recompute/copy 三动作与参考接续的**预测工作图**，输出
+``resource_projection`` 的 WorkItem/TaskSpec 形态。**不提交真实图、
+不改真实 home/预约**（§7.1：P 参考接续只在预测副本；选中后仅提交
+P 必需工作）。
 
 WorldSource 抽象（§5.2"所有候选共享快照"；§4.4"每次决策构造一个只读
 背景结构"）：
@@ -31,22 +32,11 @@ exec_write)`` 同字节过全资源）、``latency_ns`` ≡ 旧 λ（逐跳/池/
 latency 期不占分母）、ceil 出口同向；计算腿同时携带纯 FLOP 下限与 HBM
 字节工作，后者随事件活跃集动态重仲裁；Q = 计算腿 ready_at
 （式 13 F_0 = Q 的事件形态）；A（容量摘要 θ 估计，§5.5 估计义务）+
-prep_frontier → 定长 marker 腿门控写腿；TP = 逐层 ``BarrierSpec``；
-双缓冲 = ``buffer`` 准入门 + fill/consume 显式腿（释放 = consume 完成；
-首块发射约束 = fill[1] 依赖 fill[0]——闭式 A_1 = max(P, T_1) 的图形态）。
+prep_frontier → 定长 marker 腿门控写腿；TP = 逐层 ``BarrierSpec``。
 
 字节守恒锚（§6.3）：``decode_context_weighted_tokens``（式 18b）保留为
-核账闭式；``remote_effective_bytes = n̂ × Σmissing``、
-``copy_effective_bytes = Σmissing`` 经 audits 披露——这是有效载荷核账，
-不是完成时间公式。
-
-W10（§7.5/主文 §6.7/§10，2026-09-29）：``action="hybrid"`` +
-``copy_subset=L``——D 阶段按来源子集混合（L 持久 copy 腿＋R=S∖L credit
-读流，组合既有两链、无新协议位）；``enumerate_source_subset_plans``/
-``hybrid_support_status`` 承载主文 ``add_source_subset_plans_and_
-deduplicate``（端点 ∅/S 与纯动作去重、2^|S| 枚举数显式披露、超预算
-显式"不支持此扩展"）。仅 action_space=source_subset_hybrid 显式配置
-下进候选面（预测配置 W0 冻结轴）；缺省 pure_four 零漂移。
+核账闭式；``copy_effective_bytes = Σmissing`` 经 audits 披露——这是
+有效载荷核账，不是完成时间公式。
 """
 
 from __future__ import annotations
@@ -97,15 +87,6 @@ PROGRESS_SOURCE_DEGRADED = "degraded"
 #: 结算策略注记（W9，§7.4）：distributed settle 腿零载荷的 notes 披露键。
 SETTLEMENT_DISTRIBUTED_NOTE = (
     "settlement=distributed:directory-commit-no-merge-payload")
-
-#: W10 hybrid 扩展（§7.5/主文 §6.7）：日志标记与归因分离——hybrid 候选的
-#: notes/audits 恒带 ``hybrid=1``，收益不归因给纯四动作历史。
-HYBRID_NOTE_TAG = "hybrid=1"
-#: hybrid 扩展"不支持此扩展"的显式状态 reason（§7.5：超限不静默换别种
-#: "混合最优"——hybrid 候选面整体缺席，纯四动作完整参选不受影响）。
-HYBRID_UNSUPPORTED_REASON = (
-    "source subset hybrid not supported: effective remote source count "
-    "{} exceeds hybrid_max_remote_sources={}")
 
 
 def link_resource_key(source_rank: int, target_rank: int) -> str:
@@ -404,7 +385,7 @@ class LoadsWorldSource(WorldSource):
       每有向链路 n 条在册流 ⇒ n 条 unknown-ETA in-service 腿；
     * 池端口：``pool_edge_flows_fn(edge)`` 在册在途计数同上；
     * HBM rank：``hbm_port_registry.divisor(rank)``（活跃 decode 消费流
-      + 在册传输/远读流，不含候选）同上——load ns 台账**不**再造 HBM
+      + 在册传输流，不含候选）同上——load ns 台账**不**再造 HBM
       等价字节流（与 registry 双计；其计算阻塞由 Q 门 = 计算腿 ready_at
       承载，D19 等待接口拆分同口径）。
     """
@@ -992,7 +973,6 @@ AUDIT_NOTES = "notes"
 AUDIT_TARGET_WAIT = "target_wait_ns"
 AUDIT_HISTORY_PREP = "history_prep_ns"
 AUDIT_COMPUTE = "compute_ns"
-AUDIT_REMOTE_READ = "remote_read_ns"
 AUDIT_MERGE = "merge_ns"
 AUDIT_FIRST_FORWARD = "prefill_first_forward_ns"
 
@@ -1418,16 +1398,12 @@ def _pool_restore_leg_specs(
 class _GraphBuilder:
     """单候选图构造器（P/D 共用腿装配原语；audit 与事件图同源）。"""
 
-    def __init__(self, model, work_id: str, *, pipeline_identities=None):
+    def __init__(self, model, work_id: str):
         self.model = model
         self.work_id = work_id
         self.legs: List["TaskSpecLike"] = []
-        self.pipeline_descriptors: List[object] = []
-        self.pipeline_identities = {}
-        self._compact_pipeline_plans = {}
         # Logical WorkItem insertion position, kept separate from the
-        # completion tie-break ``TaskSpec.order``.  Compact pipeline ranges
-        # reserve spans here at their original emission points.
+        # completion tie-break ``TaskSpec.order``.
         self._next_registration_ordinal = 0
         self.resources: Dict[str, ResourceSpec] = {}
         self.gates: Dict[str, GateSpec] = {}
@@ -1435,104 +1411,10 @@ class _GraphBuilder:
         self.notes: List[str] = []
         self.audits: Dict[str, object] = {}
         self.approximations: List[str] = []
-        self.set_pipeline_identities(pipeline_identities)
 
     # ------------------------------------------------------------ 原语 --
     def note(self, text: str) -> None:
         self.notes.append(text)
-
-    def add_pipeline_descriptor(self, descriptor) -> None:
-        """Attach one immutable shared descriptor at its original domain point."""
-        if not callable(getattr(descriptor, "to_wire", None)):
-            raise TypeError("pipeline descriptor must expose immutable to_wire()")
-        self.pipeline_descriptors.append(descriptor)
-
-    def compact_pipeline_terminal_ids(self, *, stage=None) -> tuple[str, ...]:
-        """Return bounded terminal IDs for virtual chains not yet finalized."""
-        terminals = []
-        for plan in self._compact_pipeline_plans.values():
-            if stage is not None and plan.identity.stage != stage:
-                continue
-            terminals.extend(plan.terminal_ids())
-        return tuple(terminals)
-
-    def set_pipeline_identities(self, identities) -> None:
-        """Set explicit prospective identities for prediction descriptors.
-
-        Keys are ``(stage, target_rank)``.  The graph builder never derives
-        request, epoch, allocation, or segment identity from ``work_id``.
-        """
-        from joint.pipeline_descriptor import PipelineIdentity
-        normalized = {}
-        for key, identity in (identities or {}).items():
-            if (not isinstance(key, tuple) or len(key) != 2
-                    or key[0] not in ("prefill", "decode")
-                    or not isinstance(identity, PipelineIdentity)
-                    or identity.stage != key[0]
-                    or identity.rank != key[1]):
-                raise ActionWorkGraphError(
-                    "pipeline identity map must use (stage, target_rank) "
-                    "and matching PipelineIdentity values")
-            normalized[key] = identity
-        self.pipeline_identities = normalized
-
-    def begin_compact_remote_group(
-            self, tag: str, *, stage: str, rank_index: int,
-            exec_rank: int, owner_rank: int, pass_or_window_ordinal: int,
-            source_ordinal: int, source_key: str,
-            layer_start: int, layer_end: int, total_units: int,
-            units_per_tile: int, tile_count: int, tail_units: int,
-            source_rank: int, noc_path, route, latency_ns: int,
-            start_deps=()):
-        """Begin one structural source/pass group without per-tile objects."""
-        identity = self.pipeline_identities.get((stage, int(owner_rank)))
-        if identity is None:
-            return None
-        path = tuple(int(rank) for rank in noc_path)
-        if len(path) < 2 or path[-1] != int(owner_rank):
-            raise ActionWorkGraphError(
-                "compact descriptor owner must equal the physical NoC target")
-        from joint.compact_pipeline import CompactPipelinePlan
-        plan_key = (stage, int(exec_rank), tag)
-        plan = self._compact_pipeline_plans.get(plan_key)
-        if plan is None:
-            stream_kind = ("prefill_read_window" if stage == "prefill"
-                           else "decode_remote_credit")
-            gate_id = f"{self.work_id}#gate:{tag}:R{rank_index}"
-            plan = CompactPipelinePlan(
-                work_id=self.work_id, tag=tag, identity=identity,
-                stream_kind=stream_kind,
-                reserve_ordinals=self.reserve_registration_ordinals,
-                gate_id=gate_id, legacy_rank_index=int(rank_index))
-            self._compact_pipeline_plans[plan_key] = plan
-            self.gates.setdefault(gate_id, GateSpec(
-                gate_id=gate_id, kind="buffer", capacity_units=2))
-        elif plan.identity != identity:
-            raise ActionWorkGraphError(
-                "compact pipeline identity changed within a WorkItem")
-        self._register_route(route)
-        handle, ids = plan.begin_group(
-            pass_or_window_ordinal=pass_or_window_ordinal,
-            source_ordinal=source_ordinal, source_key=source_key,
-            layer_start=layer_start, layer_end=layer_end,
-            total_units=total_units, units_per_tile=units_per_tile,
-            tile_count=tile_count, tail_units=tail_units,
-            source_rank=source_rank, target_rank=owner_rank,
-            noc_path=path, route=route, latency_ns=latency_ns,
-            start_deps=start_deps)
-        return plan, handle, ids
-
-    def finish_compact_remote_group(
-            self, plan, handle, *, kind: str, route=(), group=None,
-            latency_first_ns: int = 0, latency_rest_ns: int = 0,
-            consume_deps=(), compute_share=None, hbm_share=None):
-        """Add one algebraic consume chain at the legacy emission point."""
-        return plan.add_consume(
-            handle, kind=kind, route=route, group=group,
-            latency_first_ns=latency_first_ns,
-            latency_rest_ns=latency_rest_ns,
-            consume_deps=consume_deps,
-            compute_share=compute_share, hbm_share=hbm_share)
 
     def add_resources(self, specs: Sequence[ResourceSpec]) -> None:
         for spec in specs:
@@ -1622,27 +1504,15 @@ class _GraphBuilder:
         self.legs.append(leg)
         return leg.leg_id
 
-    def buffer_gate(self, tag: str, slots: int = 2) -> str:
-        gate_id = f"{self.work_id}#gate:{tag}"
-        if gate_id not in self.gates:
-            self.gates[gate_id] = GateSpec(
-                gate_id=gate_id, kind="buffer", capacity_units=slots)
-        return gate_id
-
     def finish(self, *, service_excluded: Sequence[str] = ()) -> CandidateGraph:
-        for plan in self._compact_pipeline_plans.values():
-            self.add_pipeline_descriptor(plan.finish())
         service_ids = tuple(
             leg.leg_id for leg in self.legs
             if leg.leg_id not in set(service_excluded))
-        for descriptor in self.pipeline_descriptors:
-            service_ids += descriptor.projection_terminal_ids()
         work = WorkItem(
             work_id=self.work_id,
             legs=tuple(self.legs),
             is_candidate=True,
-            service_leg_ids=service_ids,
-            pipeline_descriptors=tuple(self.pipeline_descriptors))
+            service_leg_ids=service_ids)
         self.audits[AUDIT_NOTES] = tuple(self.notes)
         # (2026-10-01 R2 补正) merge_plan（MergePlan dataclass）与
         # obligation_works 同理不留在 CandidateGraph.audits（结构化对象
@@ -1703,140 +1573,6 @@ class _GraphBuilder:
                     self.model, paths_by_rank, rank_index),
                 deps=leg_deps, ready_at_ns=ready_at_ns)
         return per_rank
-
-    def fill_chain_legs(
-        self,
-        tag: str,
-        *,
-        route_by_rank: Mapping[int, Tuple[str, ...]],
-        fills_by_rank: Mapping[int, List[Tuple[int, int]]],
-        start_deps: Sequence[str],
-        routes_by_block: Optional[Mapping[int, Sequence[Tuple[str, ...]]]]
-        = None,
-    ) -> Dict[int, List[str]]:
-        """双缓冲 fill 链（块取得槽位；首块发射约束 fill[1] 依赖 fill[0]；
-        fill[j≥2] 依赖通道串行 + 槽位门）——§5.3 取得/填充事件。
-
-        ``routes_by_block[rank]`` = 逐块路由（多来源：来源边界排空 =
-        逐源 tile 链串接，块路由随源变化）；缺省用 ``route_by_rank``。"""
-        fill_ids_by_rank: Dict[int, List[str]] = {}
-        for rank_index in sorted(fills_by_rank):
-            fills = fills_by_rank[rank_index]
-            if not fills:
-                continue
-            block_routes = (
-                routes_by_block.get(rank_index)
-                if routes_by_block is not None else None)
-            gate = self.buffer_gate(f"{tag}:R{rank_index}", slots=2)
-            fill_ids: List[str] = []
-            for index, (block_bytes, latency_ns) in enumerate(fills):
-                deps = list(start_deps) if index == 0 else [
-                    fill_ids[index - 1]]
-                route = (
-                    block_routes[index] if block_routes is not None
-                    else route_by_rank[rank_index])
-                fill_ids.append(self.stream_leg(
-                    f"{tag}#R{rank_index}#F{index}",
-                    route=route,
-                    bytes_amount=int(block_bytes),
-                    latency_ns=int(latency_ns), deps=deps,
-                    acquires=(GateLease(gate),)))
-            fill_ids_by_rank[rank_index] = fill_ids
-        return fill_ids_by_rank
-
-    def consume_chain_legs(
-        self,
-        tag: str,
-        *,
-        fill_ids_by_rank: Mapping[int, List[str]],
-        consume_ns_by_rank: Mapping[int, Sequence[int]],
-        consume_routes_by_rank: Optional[Mapping[int, Sequence[str]]] = None,
-        consume_bytes_by_rank: Optional[Mapping[int, Sequence[int]]] = None,
-        consume_latency_ns_by_rank: Optional[
-            Mapping[int, Sequence[int]]] = None,
-        consume_deps: Sequence[str] = (),
-    ) -> Dict[int, List[str]]:
-        """双缓冲 consume 链（消费依赖到达 + 前消费完成；完成释放槽位
-        ——§5.3 消费/释放事件；慢消费经槽位门反压 fill）。
-
-        A consume chain may carry an HBM compute profile.  In that form the
-        pure duration and HBM bytes are attached to the same event leg so the
-        projection world re-arbitrates HBM at each boundary; the legacy fixed
-        form remains for zero-data protocol consumes.
-        """
-        consume_ids_by_rank: Dict[int, List[str]] = {}
-        for rank_index in sorted(fill_ids_by_rank):
-            fill_ids = list(fill_ids_by_rank[rank_index])
-            if not fill_ids:
-                continue
-            consumes = list(consume_ns_by_rank.get(rank_index, ()))
-            if len(consumes) < len(fill_ids):
-                consumes = consumes + [0] * (len(fill_ids) - len(consumes))
-            routes = (None if consume_routes_by_rank is None else
-                      tuple(consume_routes_by_rank.get(rank_index, ())))
-            byte_shares = (None if consume_bytes_by_rank is None else
-                           list(consume_bytes_by_rank.get(rank_index, ())))
-            latency_shares = (
-                None if consume_latency_ns_by_rank is None else
-                list(consume_latency_ns_by_rank.get(rank_index, ())))
-            gate = f"{self.work_id}#gate:{tag}:R{rank_index}"
-            consume_ids: List[str] = []
-            for index, consume_ns in enumerate(consumes):
-                deps = list(consume_deps) + [fill_ids[index]]
-                if index:
-                    deps.append(consume_ids[index - 1])
-                if routes is not None:
-                    bytes_amount = (int(byte_shares[index])
-                                    if byte_shares is not None
-                                    and index < len(byte_shares) else 0)
-                    consume_ids.append(self.compute_leg(
-                        f"{tag}#R{rank_index}#C{index}", route=routes,
-                        bytes_amount=bytes_amount,
-                        base_ns=float(consume_ns), group="decode",
-                        latency_ns=(int(latency_shares[index])
-                                    if latency_shares is not None
-                                    and index < len(latency_shares) else 0),
-                        deps=deps, releases=(GateLease(gate),)))
-                else:
-                    consume_ids.append(self.fixed_leg(
-                        f"{tag}#R{rank_index}#C{index}",
-                        float(consume_ns), deps=deps,
-                        releases=(GateLease(gate),)))
-            consume_ids_by_rank[rank_index] = consume_ids
-        return consume_ids_by_rank
-
-    def double_buffer_legs(
-        self,
-        tag: str,
-        *,
-        route_by_rank: Mapping[int, Tuple[str, ...]],
-        fills_by_rank: Mapping[int, List[Tuple[int, int]]],
-        consume_ns_by_rank: Mapping[int, Sequence[int]],
-        start_deps: Sequence[str],
-        consume_routes_by_rank: Optional[Mapping[int, Sequence[str]]] = None,
-        consume_bytes_by_rank: Optional[Mapping[int, Sequence[int]]] = None,
-        consume_latency_ns_by_rank: Optional[
-            Mapping[int, Sequence[int]]] = None,
-        consume_deps: Sequence[str] = (),
-    ) -> Dict[int, Tuple[List[str], List[str]]]:
-        """共享双缓冲读流族（fill/consume 链组合；协议见两个链方法）。
-
-        每 rank ``buffer`` 准入门 2 槽（≤2 块暂存恒成立——D09 锚）；
-        consume 时长 = byte-share int（旧闭式同源）。"""
-        fill_ids_by_rank = self.fill_chain_legs(
-            tag, route_by_rank=route_by_rank,
-            fills_by_rank=fills_by_rank, start_deps=start_deps)
-        consume_ids_by_rank = self.consume_chain_legs(
-            tag, fill_ids_by_rank=fill_ids_by_rank,
-            consume_ns_by_rank=consume_ns_by_rank,
-            consume_routes_by_rank=consume_routes_by_rank,
-            consume_bytes_by_rank=consume_bytes_by_rank,
-            consume_latency_ns_by_rank=consume_latency_ns_by_rank,
-            consume_deps=consume_deps)
-        return {
-            rank_index: (fill_ids_by_rank[rank_index],
-                         consume_ids_by_rank[rank_index])
-            for rank_index in fill_ids_by_rank}
 
     def settle_legs_from_plan(
         self,
@@ -1953,15 +1689,13 @@ def build_p_candidate(
     action: str,
     prep_frontier_ns: int = 0,
     prediction_config=None,
-    pipeline_identities=None,
 ) -> CandidateGraph:
     """P 阶段单候选预测工作图（§5.2：P 必要工作 + 默认 D 延续 π0 的
     参考接续 + consolidate 结算；**不提交真实图**）。
 
     参考接续（D18 语义的事件形态）：P 完成后按其预测布局原地运行 D——
-    copy/recompute 已物化不重搬（decode 腿本地读）、P remote 留下的源端
-    访问仍计入（decode credit fill/consume 腿）。结算 = service_done 后
-    物理 merge 载荷（``merge_from_layout`` 目标规则复用；m_end-1 回退）。
+    copy/recompute 已物化不重搬（decode 腿本地读）。结算 = service_done
+    后物理 merge 载荷（``merge_from_layout`` 目标规则复用；m_end-1 回退）。
 
     审计口径（C5 冻结 schema/notes 面）与旧解析路径同源：传输审计值经
     保留原语（``_transfer_ns_shards`` 族）求值；cost 与里程碑自事件世界
@@ -1970,22 +1704,17 @@ def build_p_candidate(
     from joint.joint_cost_model import (
         ACTION_COPY,
         ACTION_RECOMPUTE,
-        ACTION_REMOTE,
         ACTION_STAY,
         CandidatePathNocShare,
-        _byte_share_vector,
         _copy_handoff_chunk_bytes,
         _copy_handoff_layer_ranges,
-        _shard_stream_ns_shards,
         _split_ns_by_layer,
         _transfer_ns_shards,
         decode_context_weighted_tokens,
         estimate_first_forward,
-        remote_read_tile_arrival_ns,
     )
     from joint.capacity_summary import PhaseFootprint
     from joint.hbm_port_flow_registry import CandidateStageHbmShare
-    from joint.joint_config import remote_read_staging_bytes_per_rank
 
     distributed_settle = _settlement_is_distributed(prediction_config)
     load = model.loads.get(instance_index)
@@ -1995,9 +1724,7 @@ def build_p_candidate(
     tp = int(model.instance_tp_size)
     layers = int(model.model_layers)
     exec_ranks = model._exec_ranks(instance_index)
-    builder = _GraphBuilder(
-        model, f"P:{instance_index}:{action}",
-        pipeline_identities=pipeline_identities)
+    builder = _GraphBuilder(model, f"P:{instance_index}:{action}")
     builder.note("decision_stage=P")
 
     # ---- 1. 目标等待 Q（观测字段；计算门 = 首层计算腿 ready_at）。 ----
@@ -2018,21 +1745,9 @@ def build_p_candidate(
         (action == ACTION_STAY and any(session.missing_bytes_by_tp_rank))
         or (action == ACTION_COPY and (
             session.location == "remote_memory"
-            or any(session.missing_bytes_by_tp_rank)))
-        or (action == ACTION_REMOTE
-            and session.location == "partial_hbm_remote"
-            and any(session.missing_bytes_by_tp_rank)))
-    staging_per_rank = (
-        remote_read_staging_bytes_per_rank(
-            model._remote_read_exec_tile_tokens(
-                session, request,
-                window_tokens=model._remote_read_prefill_window_tokens(
-                    session, request)),
-            model._remote_read_kv_token_bytes(session, request))
-        if action == ACTION_REMOTE else 0)
+            or any(session.missing_bytes_by_tp_rank))))
     prepare_peak = tuple(
-        (int(missing) if has_pool_restore_footprint else 0)
-        + int(staging_per_rank)
+        int(missing) if has_pool_restore_footprint else 0
         for missing in session.missing_bytes_by_tp_rank)
     footprint = PhaseFootprint(
         prepare=prepare_peak, prefill=prefill_peak,
@@ -2055,20 +1770,13 @@ def build_p_candidate(
     # ---- 2a. 候选阶段 HBM 份额：静态视图**仅审计披露**（成本路径事件
     # 化——端点腿实际份额 = HBM 资源活跃集动态计数；冻结份额构造段退役，
     # 类留作静态诊断视图，inv_w23 §6.4）。 ----
-    prefill_scans = 0
-    decode_steps = 0
-    if action == ACTION_REMOTE:
-        prefill_scans, decode_steps = model._remote_read_passes(request)
-    read_passes = prefill_scans + decode_steps
     has_copy_write_leg = (
         action == ACTION_COPY
         and session.location != "remote_memory"
         and any(session.history_bytes_by_tp_rank))
     has_pool_restore_leg = has_pool_restore_footprint
-    has_remote_staging_leg = action == ACTION_REMOTE and read_passes > 0
     exec_stage_flows = (
-        1 + int(has_copy_write_leg) + int(has_pool_restore_leg)
-        + int(has_remote_staging_leg))
+        1 + int(has_copy_write_leg) + int(has_pool_restore_leg))
     stage_share = CandidateStageHbmShare(
         model.hbm_port_registry,
         {rank: exec_stage_flows for rank in exec_ranks})
@@ -2077,25 +1785,18 @@ def build_p_candidate(
         default=1)
     builder.note(
         "hbm_stage_share=exec_flows={}(compute+copy{}/pool{}"
-        "/staging{}),compute_denom={}".format(
+        "),compute_denom={}".format(
             exec_stage_flows, int(has_copy_write_leg),
-            int(has_pool_restore_leg), int(has_remote_staging_leg),
+            int(has_pool_restore_leg),
             compute_share_divisor))
 
     # ---- 3. 历史准备腿（依动作而异；§6.2 表——仅缺失区间的源读→路由
     # →目标写；不允许重传已有副本/提前释放源端）。 ----
     history_prep = 0
-    read_base_by_rank: tuple = ()
     rebuild_context_tokens = 0
-    first_credit_ns = 0
-    remaining_stream_ns = 0
-    prefill_leg_ns = 0
-    decode_leg_ns = 0
     copy_pool_suffix_ns = 0
     noc_share = None
-    shard_paths: tuple = ()
     data_gate: Dict[Tuple[int, int], str] = {}
-    tile_release_for_layer: Dict[Tuple[int, int], GateLease] = {}
     ready_by_layer: List[List[int]] = [[0] * tp for _ in range(layers)]
     route_path, hops = model._route(instance_index, session)
     candidate_paths = model._route_paths(instance_index, session)
@@ -2207,163 +1908,6 @@ def build_p_candidate(
         builder.note("rebuild_stage=prefill_replay")
         builder.note("rebuild_suppress_sampling=False")
         builder.note("rebuild_suppress_output=False")
-    elif action == ACTION_REMOTE:
-        missing = sum(session.missing_bytes_by_tp_rank)
-        if session.location == "partial_hbm_remote" and missing:
-            history_prep = model._pool_transfer_ns_by_rank(
-                instance_index, session.missing_bytes_by_tp_rank,
-                restore=True, hbm_port_registry=stage_share)
-            builder.note("pool_suffix_restore_hybrid")
-            per_rank = _emit_pool_legs(
-                session.missing_bytes_by_tp_rank, "poolsuffix")
-            first_missing_layer = min(
-                max(int(session.resident_prefix_layers), 0), layers)
-            _gate_layers(first_missing_layer, per_rank,
-                         prep_anchor + history_prep)
-        read_prefix_layers = (
-            min(max(int(session.resident_prefix_layers), 0), layers)
-            if session.location == "partial_hbm_remote" else layers)
-        if session.location == "partial_hbm_remote":
-            builder.note(
-                f"remote_read_prefix_layers={read_prefix_layers}")
-        read_base_by_rank = session.history_bytes_by_tp_rank
-        shard_paths = model._shard_paths(
-            candidate_paths, read_base_by_rank)
-        model._append_u_port_note(builder.notes, shard_paths)
-        builder.note(f"prefill_scan_passes={prefill_scans}")
-        builder.note(f"remote_read_passes={read_passes}")
-        remote_read_ns = 0
-        if read_passes:
-            noc_share = CandidatePathNocShare(
-                model._noc_registry,
-                _flowing_path_family_public(
-                    shard_paths, read_base_by_rank),
-                include_self=True)
-            remote_read_ns = _transfer_ns_shards(
-                model.rates, model._noc_registry, stage_share,
-                paths_by_rank=shard_paths,
-                bytes_by_rank=tuple(
-                    int(shard_bytes) * read_passes
-                    for shard_bytes in read_base_by_rank),
-                include_self=True, kind="read", noc_share=noc_share)
-        builder.audits[AUDIT_REMOTE_READ] = remote_read_ns
-        # -- prefill fill 腿（连续链切块；末遍 tile 门层 + buffer 释放）。
-        if prefill_scans > 0 and any(
-                int(v) for v in read_base_by_rank):
-            tile_tokens = model._remote_read_exec_tile_tokens(
-                session, request,
-                window_tokens=model._remote_read_prefill_window_tokens(
-                    session, request))
-            kv_token_bytes = model._remote_read_kv_token_bytes(
-                session, request)
-            tile_stream_bytes = kv_token_bytes * tile_tokens
-            prefill_supplies = model._remote_read_rank_supplies(
-                read_base_by_rank=read_base_by_rank,
-                leg_passes=prefill_scans,
-                shard_paths=shard_paths,
-                noc_share=noc_share,
-                tile_stream_bytes=tile_stream_bytes,
-                hbm_port_registry=stage_share)
-            fills_by_rank: Dict[int, List[Tuple[int, int]]] = {}
-            route_by_rank: Dict[int, Tuple[str, ...]] = {}
-            compact_fill_by_rank = {}
-            for rank_index, shard_bytes in enumerate(read_base_by_rank):
-                shard_bytes = int(shard_bytes)
-                if shard_bytes <= 0:
-                    continue
-                stream = shard_bytes * prefill_scans
-                full_tiles, tail_bytes = divmod(
-                    stream, tile_stream_bytes)
-                route = _link_route(
-                    model, shard_paths, rank_index,
-                    include_endpoints=True)
-                route_by_rank[rank_index] = route
-                hop = _hop_latency(model, shard_paths, rank_index)
-                path = (tuple(shard_paths[rank_index][0])
-                        if shard_paths[rank_index] else ())
-                has_prefill_identity = any(
-                    key[0] == "prefill" for key in builder.pipeline_identities)
-                if has_prefill_identity:
-                    if len(path) < 2 or not route:
-                        raise ActionWorkGraphError(
-                            "compact prefill descriptor requires an explicit "
-                            "source-to-target route")
-                    owner_rank = int(path[-1])
-                    if ("prefill", owner_rank) not in builder.pipeline_identities:
-                        raise ActionWorkGraphError(
-                            "compact prefill identity map is missing physical "
-                            "target rank {}".format(owner_rank))
-                    tile_count = int(full_tiles) + (1 if tail_bytes else 0)
-                    compact_fill_by_rank[rank_index] = (
-                        builder.begin_compact_remote_group(
-                            "pfstream", stage="prefill",
-                            rank_index=rank_index,
-                            exec_rank=int(exec_ranks[rank_index]),
-                            owner_rank=owner_rank,
-                            pass_or_window_ordinal=0,
-                            source_ordinal=0,
-                            source_key=str(path[0]),
-                            layer_start=0,
-                            layer_end=int(read_prefix_layers),
-                            total_units=int(stream),
-                            units_per_tile=int(tile_stream_bytes),
-                            tile_count=tile_count,
-                            tail_units=(int(tail_bytes) if tail_bytes
-                                        else int(tile_stream_bytes)),
-                            source_rank=int(path[0]),
-                            noc_path=path,
-                            route=route,
-                            latency_ns=hop,
-                            start_deps=[space_leg]))
-                else:
-                    blocks = [(tile_stream_bytes, hop)
-                              for _ in range(full_tiles)]
-                    if tail_bytes:
-                        blocks.append((tail_bytes, hop))
-                    fills_by_rank[rank_index] = blocks
-            if compact_fill_by_rank:
-                if fills_by_rank:
-                    raise ActionWorkGraphError(
-                        "compact prefill identity map is incomplete for active ranks")
-                fill_ids_by_rank = {
-                    rank_index: item[2]
-                    for rank_index, item in compact_fill_by_rank.items()}
-            else:
-                fill_ids_by_rank = builder.fill_chain_legs(
-                    "pfstream", route_by_rank=route_by_rank,
-                    fills_by_rank=fills_by_rank, start_deps=[space_leg])
-            # 末遍 tile → 层门映射（旧到达闭式同式：多遍取末遍保守）；
-            # 每 tile 的最末门层负责释放 buffer 槽（消费完成语义）。
-            for rank_index in fill_ids_by_rank:
-                fill_ids = fill_ids_by_rank[rank_index]
-                last_layer_of_fill: Dict[int, int] = {}
-                for layer_index in range(read_prefix_layers):
-                    shard_bytes = int(read_base_by_rank[rank_index])
-                    last_pass_offset = (
-                        shard_bytes * (prefill_scans - 1)
-                        + shard_bytes * (layer_index + 1)
-                        // read_prefix_layers)
-                    tile_index = -(-last_pass_offset // int(
-                        tile_stream_bytes))
-                    if 1 <= tile_index <= len(fill_ids):
-                        data_gate[(layer_index, rank_index)] = (
-                            fill_ids[tile_index - 1])
-                        last_layer_of_fill[tile_index - 1] = layer_index
-                # 审计就绪行（tile 到达闭式——里程碑披露）。
-                full_tiles, tile_x, tail_x = prefill_supplies[rank_index]
-                for layer_index in range(read_prefix_layers):
-                    shard_bytes = int(read_base_by_rank[rank_index])
-                    last_pass_offset = (
-                        shard_bytes * (prefill_scans - 1)
-                        + shard_bytes * (layer_index + 1)
-                        // read_prefix_layers)
-                    tile_index = -(-last_pass_offset // int(
-                        tile_stream_bytes))
-                    ready_by_layer[layer_index][rank_index] = (
-                        remote_read_tile_arrival_ns(
-                            index=tile_index, full_tiles=full_tiles,
-                            tile_x_ns=tile_x, tail_x_ns=tail_x,
-                            start_ns=prep_anchor))
     else:  # pragma: no cover - ACTION_ORDER 封闭
         raise ActionWorkGraphError(f"unknown action {action!r}")
 
@@ -2465,12 +2009,11 @@ def build_p_candidate(
     # §9.6 第 2/3 条：die 后端的逐层腿优先携带该层的 DiePlanDescriptor
     # （协议推进；聚合 bytes/base_ns 退役为 0）；供给器声明聚合规景时
     # 逐层量走**逐层 DieOpSpec 估值**（prefill_layer_profile——每层
-    # layer_count=1 的同源估算，不按 pure-time 比例分摊聚合量）。credit
-    # 门体块的 KV 经暂存到达（kv_identity=staged，与执行侧发射同区分）。
+    # layer_count=1 的同源估算，不按 pure-time 比例分摊聚合量）。
     pf_die_plans = _die_prefill_layer_descriptors(
         model, input_tokens=prefill_tokens, history_tokens=history_base,
         exec_ranks=exec_ranks, service_factor=service_factor,
-        kv_identity=("staged" if action == ACTION_REMOTE else "local"))
+        kv_identity="local")
     if _die_provider is not None and pf_die_plans is None:
         pure_by_layer, units_by_layer = _die_provider.prefill_layer_profile(
             prefill_tokens, history_base)
@@ -2537,278 +2080,35 @@ def build_p_candidate(
     decode_service_deps = [last_barrier, space_leg]
     decode_compute_deps = list(decode_service_deps)
 
-    # ---- 4b. remote 消费腿（prefill tile 的 byte-share 消费）与 decode
-    # credit 腿（逐 pass 重切、整块服务——执行切片同规则）。 ----
-    if action == ACTION_REMOTE and read_passes:
-        tile_tokens = model._remote_read_exec_tile_tokens(
-            session, request,
-            window_tokens=model._remote_read_prefill_window_tokens(
-                session, request))
-        kv_token_bytes = model._remote_read_kv_token_bytes(session, request)
-        tile_stream_bytes = kv_token_bytes * tile_tokens
-        decode_per_pass_full_tiles = max(
-            (-(-int(shard_bytes // kv_token_bytes) // tile_tokens)
-             for shard_bytes in read_base_by_rank),
-            default=0)
-        first_tile_bytes_by_rank = tuple(
-            min(tile_stream_bytes, int(shard_bytes) * read_passes)
-            for shard_bytes in read_base_by_rank)
-        first_credit_ns = _transfer_ns_shards(
-            model.rates, model._noc_registry, stage_share,
-            paths_by_rank=shard_paths,
-            bytes_by_rank=first_tile_bytes_by_rank,
-            include_self=True, kind="read", noc_share=noc_share)
-        remaining_stream_ns = _shard_stream_ns_shards(
-            model.rates, model._noc_registry, stage_share,
-            paths_by_rank=shard_paths,
-            bytes_by_rank=tuple(
-                max(0, int(shard_bytes) * read_passes - int(first_tile))
-                for shard_bytes, first_tile in zip(
-                    read_base_by_rank, first_tile_bytes_by_rank)),
-            include_self=True, kind="read", noc_share=noc_share)
-        builder.note(f"remote_read_tile_tokens={tile_tokens}")
-        tile_x_ns = _transfer_ns_shards(
-            model.rates, model._noc_registry, stage_share,
-            paths_by_rank=shard_paths,
-            bytes_by_rank=tuple(
-                tile_stream_bytes for _ in read_base_by_rank),
-            include_self=True, kind="read", noc_share=noc_share)
-        if prefill_scans > 0 and any(
-                int(v) for v in read_base_by_rank):
-            # prefill 消费链：**到达即释放**（零时长 consume）——计算本体
-            # 在逐层计算腿（Q 门/TP barrier/层份额），此处不重复计价；
-            # 旧到达闭式同口径（层门 = 纯串行链到达、不反压）。登记近似
-            # "prefill_fill_no_backpressure"；decode credit 腿保持真实
-            # byte-share 消费反压（D09 协议）。
-            builder.approximations.append("prefill_fill_no_backpressure")
-            if compact_fill_by_rank:
-                for rank_index in sorted(compact_fill_by_rank):
-                    plan, handle, _fill_ids = compact_fill_by_rank[rank_index]
-                    builder.finish_compact_remote_group(
-                        plan, handle, kind="fixed")
-            else:
-                builder.consume_chain_legs(
-                    "pfstream",
-                    fill_ids_by_rank=fill_ids_by_rank,
-                    consume_ns_by_rank={
-                        rank_index: [0] * len(fill_ids)
-                        for rank_index, fill_ids
-                        in fill_ids_by_rank.items()})
-            prefill_leg_ns = model._remote_double_buffer_leg_ns(
-                read_base_by_rank=read_base_by_rank,
-                shard_paths=shard_paths,
-                noc_share=noc_share,
-                tile_stream_bytes=tile_stream_bytes,
-                leg_passes=prefill_scans,
-                leg_compute_ns=prefill_compute_ns,
-                notes=builder.notes,
-                note_prefix="prefill_tile",
-                tile_x_ns=tile_x_ns,
-                hbm_port_registry=stage_share)
-        if decode_steps > 0 and any(
-                int(v) for v in read_base_by_rank):
-            recut_full = max(1, decode_per_pass_full_tiles) * int(
-                decode_steps)
-            route_by_rank = {
-                rank_index: _link_route(
-                    model, shard_paths, rank_index, include_endpoints=True)
-                for rank_index, shard_bytes
-                in enumerate(read_base_by_rank)
-                if int(shard_bytes) > 0}
-            hop_base = {
-                rank_index: _hop_latency(model, shard_paths, rank_index)
-                for rank_index in route_by_rank}
-            compact_decode = {}
-            decode_owner_by_rank = {}
-            for rank_index in route_by_rank:
-                path = (tuple(shard_paths[rank_index][0])
-                        if shard_paths[rank_index] else ())
-                if len(path) < 2:
-                    raise ActionWorkGraphError(
-                        "compact decode descriptor requires an explicit "
-                        "source-to-target route")
-                owner_rank = int(path[-1])
-                decode_owner_by_rank[rank_index] = owner_rank
-                compact_decode[rank_index] = builder.pipeline_identities.get(
-                    ("decode", owner_rank))
-            has_decode_identity = any(
-                key[0] == "decode" for key in builder.pipeline_identities)
-            if has_decode_identity and not all(compact_decode.values()):
-                raise ActionWorkGraphError(
-                    "compact continuation identity map is incomplete for "
-                    "physical target ranks")
-            if compact_decode and all(compact_decode.values()):
-                total_tiles = recut_full * len(route_by_rank)
-                share_offset = 0
-                compact_chains = {}
-                for rank_index in route_by_rank:
-                    path = (tuple(shard_paths[rank_index][0])
-                            if shard_paths[rank_index] else ())
-                    if (not path or not route_by_rank[rank_index]
-                            or int(path[-1]) != decode_owner_by_rank[rank_index]):
-                        raise ActionWorkGraphError(
-                            "compact decode descriptor requires an explicit "
-                            "source-to-target route")
-                    plan_result = builder.begin_compact_remote_group(
-                        "dcstream", stage="decode", rank_index=rank_index,
-                        exec_rank=int(exec_ranks[rank_index]),
-                        owner_rank=decode_owner_by_rank[rank_index],
-                        pass_or_window_ordinal=0, source_ordinal=0,
-                        source_key=str(path[0]), layer_start=0,
-                        layer_end=int(layers),
-                        total_units=recut_full * int(tile_stream_bytes),
-                        units_per_tile=int(tile_stream_bytes),
-                        tile_count=recut_full,
-                        tail_units=int(tile_stream_bytes),
-                        source_rank=int(path[0]), noc_path=path,
-                        route=route_by_rank[rank_index],
-                        latency_ns=hop_base[rank_index],
-                        start_deps=decode_service_deps)
-                    if plan_result is None:
-                        raise ActionWorkGraphError(
-                            "compact decode identity map is incomplete")
-                    plan, handle, _fill_ids = plan_result
-                    compact_chains[rank_index] = (plan, handle, share_offset)
-                    share_offset += recut_full
-                for rank_index in route_by_rank:
-                    plan, handle, share_offset = compact_chains[rank_index]
-                    share_compute = {
-                        "rule": "quotient_remainder_earliest_global_indices",
-                        "total_units": int(decode_compute_ns),
-                        "total_tiles": total_tiles,
-                        "share_index_first": share_offset,
-                        "tile_bytes": int(tile_stream_bytes),
-                    }
-                    share_hbm = {
-                        "rule": "quotient_remainder_earliest_global_indices",
-                        "total_units": int(decode_service_field),
-                        "total_tiles": total_tiles,
-                        "share_index_first": share_offset,
-                        "tile_bytes": int(tile_stream_bytes),
-                    }
-                    builder.finish_compact_remote_group(
-                        plan, handle, kind="compute",
-                        route=(hbm_resource_key(exec_ranks[rank_index]),),
-                        group="decode", latency_first_ns=decode_startup_ns,
-                        consume_deps=decode_compute_deps,
-                        compute_share=share_compute, hbm_share=share_hbm)
-                decode_double = {
-                    rank_index: ((), ()) for rank_index in compact_chains}
-            else:
-                stream_total = sum(
-                    recut_full * tile_stream_bytes
-                    for shard_bytes in read_base_by_rank
-                    if int(shard_bytes) > 0)
-                tile_counts = [tile_stream_bytes] * (
-                    recut_full * len([v for v in read_base_by_rank
-                                      if int(v) > 0]))
-                compute_shares = _byte_share_vector(
-                    decode_compute_ns, tile_counts, stream_total)
-                # §9.6：consume 链聚合服务场——die 后端 = service_units
-                # （×decode_factor；协议腿之外的聚合规景，按流比例切分）。
-                hbm_shares = _byte_share_vector(
-                    decode_service_field, tile_counts, stream_total)
-                compute_by_rank = {}
-                hbm_by_rank = {}
-                share_offset = 0
-                for rank_index in route_by_rank:
-                    compute_by_rank[rank_index] = compute_shares[
-                        share_offset:share_offset + recut_full]
-                    hbm_by_rank[rank_index] = hbm_shares[
-                        share_offset:share_offset + recut_full]
-                    share_offset += recut_full
-                decode_double = builder.double_buffer_legs(
-                    "dcstream",
-                    route_by_rank=route_by_rank,
-                    fills_by_rank={
-                        rank_index: [
-                            (tile_stream_bytes, hop_base[rank_index])]
-                        * recut_full
-                        for rank_index in route_by_rank},
-                    consume_ns_by_rank=compute_by_rank,
-                    consume_routes_by_rank={
-                        rank_index: (
-                            hbm_resource_key(exec_ranks[rank_index]),)
-                        for rank_index in route_by_rank},
-                    consume_bytes_by_rank=hbm_by_rank,
-                    consume_latency_ns_by_rank={
-                        rank_index: [decode_startup_ns]
-                        + [0] * (recut_full - 1)
-                        for rank_index in route_by_rank},
-                    consume_deps=decode_compute_deps,
-                    start_deps=decode_service_deps)
-            decode_leg_ns = model._remote_double_buffer_leg_ns(
-                read_base_by_rank=read_base_by_rank,
-                shard_paths=shard_paths,
-                noc_share=noc_share,
-                tile_stream_bytes=tile_stream_bytes,
-                leg_passes=decode_steps,
-                leg_compute_ns=decode_compute_ns,
-                notes=builder.notes,
-                note_prefix="decode_tile",
-                tile_x_ns=tile_x_ns,
-                start_ns=int(audit_first_forward),
-                hbm_port_registry=stage_share,
-                per_pass_full_tiles=decode_per_pass_full_tiles)
-            builder.note(
-                "remote_read_decode_ns={}".format(
-                    int(decode_leg_ns - audit_first_forward)))
-        else:
-            # 零步数 / 零基础流退化：裸 decode 计算链（与旧 max 支路同
-            # 守恒）；披露键保持（C5 冻结 notes 面）。
-            dec_die_plans = _die_decode_descriptors(
-                model, steps=decode_steps_count,
-                base_context_tokens=decode_ctx_base,
-                exec_ranks=model._exec_ranks(instance_index),
-                service_factor=decode_factor, kv_identity="staged")
-            for rank_index in range(tp):
-                builder.compute_leg(
-                    f"dec#R{rank_index}",
-                    route=(hbm_resource_key(
-                        model._exec_ranks(instance_index)[rank_index]),),
-                    bytes_amount=(
-                        0 if dec_die_plans is not None
-                        else decode_hbm_bytes),
-                    base_ns=(
-                        0.0 if dec_die_plans is not None
-                        else float(decode_compute_ns)),
-                    group="decode",
-                    latency_ns=decode_startup_ns,
-                    deps=decode_compute_deps,
-                    die_plan=(
-                        None if dec_die_plans is None
-                        else dec_die_plans[rank_index]))
-            builder.note(f"remote_read_decode_ns={decode_compute_ns}")
-    else:
-        dec_die_plans = _die_decode_descriptors(
-            model, steps=decode_steps_count,
-            base_context_tokens=decode_ctx_base,
-            exec_ranks=model._exec_ranks(instance_index),
-            service_factor=decode_factor, kv_identity="local")
-        for rank_index in range(tp):
-            builder.compute_leg(
-                f"dec#R{rank_index}",
-                route=(hbm_resource_key(
-                    model._exec_ranks(instance_index)[rank_index]),),
-                bytes_amount=(
-                    0 if dec_die_plans is not None
-                    else decode_hbm_bytes),
-                base_ns=(
-                    0.0 if dec_die_plans is not None
-                    else float(decode_compute_ns)),
-                group="decode",
-                latency_ns=decode_startup_ns,
-                deps=decode_compute_deps,
-                die_plan=(
-                    None if dec_die_plans is None
-                    else dec_die_plans[rank_index]))
+    # ---- 4b. decode 服务腿（本地 KV 读：裸 decode 计算链）。 ----
+    # §9.6 第 2 条：die 后端的 dec 腿携带地平线 DiePlanDescriptor（协议
+    # 推进；本地 KV = local——与执行侧发射同区分）。
+    dec_die_plans = _die_decode_descriptors(
+        model, steps=decode_steps_count,
+        base_context_tokens=decode_ctx_base,
+        exec_ranks=model._exec_ranks(instance_index),
+        service_factor=decode_factor, kv_identity="local")
+    for rank_index in range(tp):
+        builder.compute_leg(
+            f"dec#R{rank_index}",
+            route=(hbm_resource_key(
+                model._exec_ranks(instance_index)[rank_index]),),
+            bytes_amount=(
+                0 if dec_die_plans is not None
+                else decode_hbm_bytes),
+            base_ns=(
+                0.0 if dec_die_plans is not None
+                else float(decode_compute_ns)),
+            group="decode",
+            latency_ns=decode_startup_ns,
+            deps=decode_compute_deps,
+            die_plan=(
+                None if dec_die_plans is None
+                else dec_die_plans[rank_index]))
 
     service_deps_for_settle = [
         leg_id for leg_id in builder.leg_ids()
-        if leg_id.startswith(f"{builder.work_id}#dcstream")
-        or leg_id.startswith(f"{builder.work_id}#dec")]
-    service_deps_for_settle.extend(
-        builder.compact_pipeline_terminal_ids(stage="decode"))
+        if leg_id.startswith(f"{builder.work_id}#dec")]
     controller_leg = builder.fixed_leg(
         "controller", float(prefill_controller_ns + decode_controller_ns),
         deps=service_deps_for_settle or [last_barrier])
@@ -2830,7 +2130,7 @@ def build_p_candidate(
             builder.note("merge_in_place")
         else:
             _settle_p_merge(
-                builder, model, session, request, instance_index, action,
+                builder, model, session, request, instance_index,
                 decode_growth_ranks)
             plan = builder.audits.get("merge_plan")
             merge_ns = int(plan.merge_ns) if plan is not None else 0
@@ -2838,15 +2138,6 @@ def build_p_candidate(
     # ---- 6. 审计装配（cost/里程碑自事件世界——见 JCM 两入口）。 ----
     settle_ids = builder.settle_legs_from_plan(
         plan, service_deps=service_deps_for_settle or [last_barrier])
-    if action == ACTION_REMOTE:
-        suffix_restore_ns = history_prep
-        prefill_pipeline_overlap_ns = (
-            prefill_leg_ns + suffix_restore_ns
-            - max(prefill_leg_ns, suffix_restore_ns))
-        builder.note(f"remote_read_prefill_ns={prefill_leg_ns}")
-        builder.note(f"suffix_restore_ns={suffix_restore_ns}")
-        builder.note(
-            f"prefill_pipeline_overlap_ns={prefill_pipeline_overlap_ns}")
     builder.note(
         "prep_issue_frontier=P_prep_at_target_frontier"
         f"(+{prep_frontier_ns}ns)"
@@ -2859,29 +2150,21 @@ def build_p_candidate(
         AUDIT_COMPUTE: compute_ns,
         AUDIT_MERGE: merge_ns,
         "eviction_wait_ns": int(space_ready),
-        "remote_read_first_credit_ns": first_credit_ns,
-        "remote_read_stream_ns": remaining_stream_ns,
-        "remote_read_ns": builder.audits.get(AUDIT_REMOTE_READ, 0),
         "contention_divisor": divisor,
         "hops": int(hops),
         AUDIT_FIRST_FORWARD: int(audit_first_forward),
-        "decode_leg_span_ns": (
-            int(decode_leg_ns - audit_first_forward)
-            if action == ACTION_REMOTE and decode_leg_ns
-            else int(decode_compute_ns)),
+        "decode_leg_span_ns": int(decode_compute_ns),
         "phase_space_bytes": tuple(
             tuple(int(value) for value in phase)
             for phase in (footprint.prepare, footprint.prefill,
                           footprint.decode, footprint.merge)),
-        "staging_buffer_peak_bytes": int(staging_per_rank) * int(tp),
         "interval_layout": _session_layout_audit(session, request),
         "inherited_obligation_ids": (),
         "estimated_remaining_decode_steps": decode_steps_count,
         "prefill_instance": int(instance_index),
         "decode_instance": int(instance_index),
         "prefill_action": action,
-        "decode_action": (
-            ACTION_REMOTE if action == ACTION_REMOTE else ACTION_STAY),
+        "decode_action": ACTION_STAY,
         "is_continuation": False,
         "decision_stage": "P",
         "decision_epoch": 0,
@@ -2892,10 +2175,6 @@ def build_p_candidate(
         "decode_controller_latency_ns": int(decode_controller_ns),
         "control_latency_ns": int(
             prefill_controller_ns + decode_controller_ns),
-        "remote_effective_bytes": (
-            decode_steps_count * sum(
-                int(v) for v in read_base_by_rank)
-            if action == ACTION_REMOTE else 0),
         "copy_effective_bytes": (
             sum(int(v) for v in session.missing_bytes_by_tp_rank)
             if action == ACTION_COPY else 0),
@@ -2904,81 +2183,47 @@ def build_p_candidate(
 
 
 def _settle_p_merge(builder, model, session, request, instance_index,
-                    action, decode_growth_ranks) -> None:
+                    decode_growth_ranks) -> None:
     """P 入口轮末布局投影 + merge 计划（旧 end_state 构造同式）。"""
-    from joint.boundary_layout import BoundaryKvInterval
-    from joint.joint_cost_model import (
-        ACTION_REMOTE,
+    from joint.boundary_layout import (
         INTERVAL_ROLE_BASE,
         INTERVAL_ROLE_CONTEXT,
-        INTERVAL_ROLE_INCREMENT,
-        project_end_state,
+        BoundaryKvInterval,
     )
+    from joint.joint_cost_model import project_end_state
     increments_by_rank = tuple(
         int(input_bytes) + int(growth)
         for input_bytes, growth in zip(
             request.input_kv_bytes_by_tp_rank, decode_growth_ranks))
     logic_home = int(session.home_instance)
     history_tokens = max(0, int(session.history_tokens))
-    if action == ACTION_REMOTE:
-        if session.location == "partial_hbm_remote":
-            exec_retained_by_rank = tuple(
-                int(missing) + int(increment)
-                for missing, increment in zip(
-                    session.missing_bytes_by_tp_rank, increments_by_rank))
-        else:
-            exec_retained_by_rank = increments_by_rank
-        home_retained_by_rank = tuple(
-            int(v) for v in session.history_bytes_by_tp_rank)
-        end_state = project_end_state(
-            intervals=(
-                BoundaryKvInterval(
-                    replica_id="p_merge_base", role=INTERVAL_ROLE_BASE,
-                    holder_instance=logic_home, authority=True,
-                    token_start=0, token_end=history_tokens,
-                    layer_start=0, layer_end=0,
-                    bytes_by_tp_rank=home_retained_by_rank),
-                BoundaryKvInterval(
-                    replica_id="p_merge_increment",
-                    role=INTERVAL_ROLE_INCREMENT,
-                    holder_instance=int(instance_index), authority=True,
-                    token_start=history_tokens,
-                    token_end=(history_tokens
-                               + max(0, int(request.input_tokens))
-                               + max(0, int(
-                                   request.estimated_decode_tokens))),
-                    layer_start=0, layer_end=0,
-                    bytes_by_tp_rank=exec_retained_by_rank),
-            ),
-            decode_instance=int(instance_index), logic_home=logic_home)
-    else:
-        union_by_rank = tuple(
-            int(base) + int(increment)
-            for base, increment in zip(
-                session.history_bytes_by_tp_rank, increments_by_rank))
-        end_state = project_end_state(
-            intervals=(
-                BoundaryKvInterval(
-                    replica_id="p_merge_base", role=INTERVAL_ROLE_BASE,
-                    holder_instance=logic_home, authority=False,
-                    token_start=0,
-                    token_end=max(0, int(session.history_tokens)),
-                    layer_start=0, layer_end=0,
-                    bytes_by_tp_rank=tuple(
-                        int(value) for value
-                        in session.history_bytes_by_tp_rank)),
-                BoundaryKvInterval(
-                    replica_id="p_merge_union", role=INTERVAL_ROLE_CONTEXT,
-                    holder_instance=int(instance_index), authority=True,
-                    token_start=0,
-                    token_end=(max(0, int(session.history_tokens))
-                               + max(0, int(request.input_tokens))
-                               + max(0, int(
-                                   request.estimated_decode_tokens))),
-                    layer_start=0, layer_end=0,
-                    bytes_by_tp_rank=union_by_rank),
-            ),
-            decode_instance=int(instance_index), logic_home=logic_home)
+    union_by_rank = tuple(
+        int(base) + int(increment)
+        for base, increment in zip(
+            session.history_bytes_by_tp_rank, increments_by_rank))
+    end_state = project_end_state(
+        intervals=(
+            BoundaryKvInterval(
+                replica_id="p_merge_base", role=INTERVAL_ROLE_BASE,
+                holder_instance=logic_home, authority=False,
+                token_start=0,
+                token_end=max(0, int(session.history_tokens)),
+                layer_start=0, layer_end=0,
+                bytes_by_tp_rank=tuple(
+                    int(value) for value
+                    in session.history_bytes_by_tp_rank)),
+            BoundaryKvInterval(
+                replica_id="p_merge_union", role=INTERVAL_ROLE_CONTEXT,
+                holder_instance=int(instance_index), authority=True,
+                token_start=0,
+                token_end=(max(0, int(session.history_tokens))
+                           + max(0, int(request.input_tokens))
+                           + max(0, int(
+                               request.estimated_decode_tokens))),
+                layer_start=0, layer_end=0,
+                bytes_by_tp_rank=union_by_rank),
+        ),
+        decode_instance=int(instance_index), logic_home=logic_home)
     plan = model.merge_from_layout(end_state, notes=builder.notes)
     builder.audits["merge_plan"] = plan
 
@@ -2988,128 +2233,6 @@ def _session_layout_audit(session, request) -> tuple:
     from joint.joint_cost_model import _session_interval_layout
     return _session_interval_layout(session, request)
 
-
-# ------------------------------------------------- W10 子集枚举与去重 --
-
-#: 一个子集方案的端点去重标记：``pure``（端点 ≡ 纯动作候选，不重复
-#: 计价）、``proper``（真子集 = hybrid 候选）。
-SUBSET_ROLE_PURE = "pure"
-SUBSET_ROLE_PROPER = "proper"
-
-
-@dataclass(frozen=True)
-class SourceSubsetPlan:
-    """主文 §10 ``add_source_subset_plans_and_deduplicate`` 的单子集输出。
-
-    * ``copy_sources``/``remote_sources``：L 与 R = S∖L（frozenset[int]）；
-    * ``role``：端点（L=∅ ≡ remote-read、L=S ≡ copy）标 ``pure`` 并在
-      ``pure_action`` 给出等价纯动作身份（复用纯动作候选，不重复计价）；
-      真子集标 ``proper``；
-    * ``order_key``：子集字典序（确定序——平局键确定性）。
-    """
-
-    copy_sources: frozenset
-    remote_sources: frozenset
-    role: str
-    pure_action: Optional[str] = None
-
-    @property
-    def order_key(self) -> tuple:
-        return tuple(sorted(self.copy_sources))
-
-
-@dataclass(frozen=True)
-class HybridSupportStatus:
-    """hybrid 扩展对一个 (boundary, instance) 的支持状态（§7.5 预算面）。
-
-    ``supported=False`` = 显式"不支持此扩展"（|S| 超预算）——调用方不得
-    静默换成别种"混合最优"；``source_count``/``enumeration_count`` 为
-    2^|S| 枚举数的显式披露（不宣称常数复杂度）。
-    """
-
-    supported: bool
-    reason: Optional[str]
-    source_count: int
-    enumeration_count: int
-    proper_subset_count: int
-
-
-def effective_remote_sources(layout, instance_index: int) -> Tuple[int, ...]:
-    """目标 j 的有效远端来源集合 S（§6.7 ``S_j``）。
-
-    目录/布局 ``query_sources`` 口径：``missing_intervals_for(j)`` 的
-    权威 holder 去重——目标已持有有效副本的区间（本地已有）与已在向 j
-    传输的区间（义务去重）都不进 S。升序确定序。
-    """
-    holders = {
-        int(interval.holder_instance)
-        for interval in layout.missing_intervals_for(int(instance_index))
-        if interval.total_bytes() > 0}
-    return tuple(sorted(holders))
-
-
-def hybrid_support_status(
-    layout, instance_index: int, prediction_config,
-) -> HybridSupportStatus:
-    """子集预算门（§7.5）：|S| > ``hybrid_max_remote_sources`` ⇒ 显式
-    "不支持此扩展"（模型不支持状态，非候选级不适用）。"""
-    sources = effective_remote_sources(layout, instance_index)
-    enumeration = 2 ** len(sources)
-    budget = 4
-    if prediction_config is not None:
-        budget = int(prediction_config.params.hybrid_max_remote_sources)
-    proper = (2 ** len(sources) - 2) if len(sources) >= 1 else 0
-    if len(sources) > budget:
-        return HybridSupportStatus(
-            supported=False,
-            reason=HYBRID_UNSUPPORTED_REASON.format(
-                len(sources), budget),
-            source_count=len(sources),
-            enumeration_count=enumeration,
-            proper_subset_count=proper)
-    return HybridSupportStatus(
-        supported=True, reason=None, source_count=len(sources),
-        enumeration_count=enumeration, proper_subset_count=proper)
-
-
-def enumerate_source_subset_plans(
-    layout, instance_index: int,
-) -> Tuple[SourceSubsetPlan, ...]:
-    """全部 2^|S| 子集方案（端点标记去重；真子集按字典序）。
-
-    |S| < 2 ⇒ 空元组（完整族单源等无真子集形态——枚举空、非错误）；
-    预算门由 ``hybrid_support_status`` 单独裁决（本函数不做静默截断）。
-    """
-    sources = effective_remote_sources(layout, instance_index)
-    if len(sources) < 2:
-        return ()
-    from joint.joint_config import ACTION_HYBRID  # noqa: F401  (身份常量)
-    from joint.joint_cost_model import ACTION_COPY, ACTION_REMOTE
-    plans: List[SourceSubsetPlan] = []
-    full = frozenset(sources)
-    for mask in range(1 << len(sources)):
-        subset = frozenset(
-            sources[index] for index in range(len(sources))
-            if mask & (1 << index))
-        if not subset:
-            plans.append(SourceSubsetPlan(
-                copy_sources=frozenset(), remote_sources=full,
-                role=SUBSET_ROLE_PURE, pure_action=ACTION_REMOTE))
-        elif subset == full:
-            plans.append(SourceSubsetPlan(
-                copy_sources=full, remote_sources=frozenset(),
-                role=SUBSET_ROLE_PURE, pure_action=ACTION_COPY))
-        else:
-            plans.append(SourceSubsetPlan(
-                copy_sources=subset,
-                remote_sources=full - subset,
-                role=SUBSET_ROLE_PROPER))
-    # 确定序：端点在前（∅, S），真子集字典序——枚举完备且可复现。
-    proper = sorted(
-        (plan for plan in plans if plan.role == SUBSET_ROLE_PROPER),
-        key=lambda plan: plan.order_key)
-    pure = [plan for plan in plans if plan.role == SUBSET_ROLE_PURE]
-    return tuple(pure + proper)
 
 
 # ------------------------------------------------------------ D 图构造 --
@@ -3124,18 +2247,8 @@ def build_d_candidate(
     inherited_obligation_ids: Sequence[str] = (),
     obligation_resolver: Optional[Callable[[str], ObligationView]] = None,
     prediction_config=None,
-    copy_subset: frozenset = frozenset(),
-    pipeline_identities=None,
 ) -> CandidateGraph:
     """D 边界单候选剩余预测工作图（式 1b：Ĉ_B(j,a) 自 t_B 起）。
-
-    W10（§7.5/主文 §6.7/§10）：``action="hybrid"`` + ``copy_subset=L``
-    构造混合候选图——L 的区间走持久 copy 腿、其余 R=S∖L 走 credit 读流
-    （共享 ≤2 tile 缓冲协议不变）。**端点（L=∅/L=S）构造合法**（与纯
-    remote/copy 图逐字段一致的组合形态——V10 端点等价断言的构造基），
-    但选择/计价/执行面去重：选择器只加真子集、``estimate_D_hybrid_
-    remaining`` 对端点判不适用、执行面端点 fail-closed（复用纯动作候选，
-    不重复计价）。组合既有两链，无新协议位。
 
     计费纪律（v2.0 §2.3/§16.3 验收红线）：
 
@@ -3143,8 +2256,8 @@ def build_d_candidate(
       （continuation 零准备腿）；未完的**已提交义务**经实例负载视图与
       继承义务解析照常占资源（§7.2：未完 P 义务参竞争、门控 settle；
       已完 P 零腿）。
-    * **D 新迁移不回填 P 期重叠**——迁移/credit 腿自 train_join =
-      max(Q, A) 起（随加入列车发射），与 D 等待不重叠。
+    * **D 新迁移不回填 P 期重叠**——迁移腿自 train_join = max(Q, A) 起
+      （随加入列车发射），与 D 等待不重叠。
     * 控制延迟（§7.1）：执行图目前只承诺披露的零延迟控制节点；变更新增
       交接（handoff_control_rule）仍为空并登记，不能在预测图中虚构执行。
     """
@@ -3155,21 +2268,13 @@ def build_d_candidate(
     )
     from joint.joint_cost_model import (
         ACTION_COPY,
-        ACTION_REMOTE,
         ACTION_RECOMPUTE,
         ACTION_STAY,
         CandidatePathNocShare,
-        _byte_share_vector,
         _transfer_ns_shards,
         decode_context_weighted_tokens,
     )
     from joint.capacity_summary import PhaseFootprint
-    from joint.hbm_port_flow_registry import CandidateStageHbmShare
-    from joint.joint_config import (
-        remote_read_exec_tile_tokens,
-        remote_read_staging_bytes_per_rank,
-        resolve_remote_read_tile_tokens,
-    )
 
     distributed_settle = _settlement_is_distributed(prediction_config)
     load = model.loads.get(instance_index)
@@ -3179,37 +2284,15 @@ def build_d_candidate(
     tp = int(model.instance_tp_size)
     layers = int(model.model_layers)
     exec_ranks = model._exec_ranks(instance_index)
-    increment = boundary.is_increment_layout()
     at_p = instance_index == boundary.p_instance_index
-    is_continuation = at_p and action == (
-        ACTION_REMOTE if increment else ACTION_STAY)
+    # 增量型边界布局族已退役（布局恒完整型）：P 实例上的原地接续动作
+    # 恒为 stay。
+    is_continuation = at_p and action == ACTION_STAY
     layout = BoundaryKVLayout.from_boundary(boundary)
     missing = layout.missing_intervals_for(instance_index)
     has_missing = any(interval.total_bytes() > 0 for interval in missing)
-    # ---- W10 hybrid 计划（action="hybrid"）：L ⊆ S 校验 + L/R 分割
-    # （端点 L=∅/L=S 构造合法——与纯动作图逐字段一致；选择/计价/执行
-    # 面去重）。 ----
-    hybrid_copy_intervals: Tuple = ()
-    hybrid_remote_intervals: Tuple = ()
-    if action == "hybrid":
-        sources = effective_remote_sources(layout, instance_index)
-        copy_subset = frozenset(int(s) for s in copy_subset)
-        if not copy_subset <= frozenset(sources):
-            raise ActionWorkGraphError(
-                f"hybrid copy_subset {sorted(copy_subset)} must be a "
-                f"subset of effective remote sources {list(sources)}")
-        hybrid_copy_intervals = tuple(
-            interval for interval in missing
-            if interval.total_bytes() > 0
-            and int(interval.holder_instance) in copy_subset)
-        hybrid_remote_intervals = tuple(
-            interval for interval in missing
-            if interval.total_bytes() > 0
-            and int(interval.holder_instance) not in copy_subset)
     wait_kind = boundary_wait_kind(instance_index, boundary.p_instance_index)
-    builder = _GraphBuilder(
-        model, f"D:{instance_index}:{action}",
-        pipeline_identities=pipeline_identities)
+    builder = _GraphBuilder(model, f"D:{instance_index}:{action}")
     builder.note("boundary_stage=D")
     builder.note("decision_stage=D")
     builder.note(f"p_instance_index={boundary.p_instance_index}")
@@ -3221,9 +2304,7 @@ def build_d_candidate(
     builder.note(
         "boundary_on_chip_locations="
         + ",".join(str(index) for index in layout.on_chip_locations()))
-    source = (
-        boundary.home_instance if increment
-        else boundary.p_instance_index)
+    source = boundary.p_instance_index
     _path, hops = model.route_fn(source, instance_index)
 
     # ---- Q（D19 等待接口拆分：原地接续 running+active / 新接纳全账）
@@ -3281,42 +2362,8 @@ def build_d_candidate(
     else:
         growth_ranks = tuple(
             kv_token_bytes * steps for _ in range(tp))
-    # D06 收口审计面（legacy 同源）：decode 阶段静态份额视图 k_e = 计算
-    # 读 + credit 暂存 = 2——**仅审计披露**（decode_tile x notes 位）。
-    # 事件世界实际份额 = HBM 资源活跃集动态计数；计算腿的纯 FLOP 下限
-    # 与 HBM 字节工作由 TASK_KIND_COMPUTE 同时投影，前者不冒充带宽份额。
-    decode_stage_share = CandidateStageHbmShare(
-        model.hbm_port_registry,
-        {rank: 2 for rank in exec_ranks})
 
     # ---- 空间准备（C4 足迹按动作族逐区间派生；A = θ 估计义务）。 ----
-    staging_per_rank = 0
-    remote_union_tokens = 0
-    leg_kv_token_bytes = kv_token_bytes
-    if action == ACTION_REMOTE and has_missing:
-        leg_kv_token_bytes = model._remote_read_leg_kv_token_bytes(
-            boundary, kv_token_bytes)
-        remote_union_tokens = sum(interval.tokens for interval in missing)
-        tile_tokens = resolve_remote_read_tile_tokens(
-            model.remote_read_tile_bytes, leg_kv_token_bytes)
-        exec_tile_tokens = remote_read_exec_tile_tokens(
-            tile_tokens, max(0, int(remote_union_tokens)))
-        staging_per_rank = remote_read_staging_bytes_per_rank(
-            exec_tile_tokens, leg_kv_token_bytes)
-    elif action == "hybrid" and hybrid_remote_intervals:
-        # W10：暂存基数为**远读子集并集**（R 区间——copy 腿物化后本地
-        # 读不走共享缓冲；≤2 tile 协议不变；端点 L=S 无读流 ⇒ 零暂存，
-        # 与纯 copy 的 prepare 逐字段一致）。
-        leg_kv_token_bytes = model._remote_read_leg_kv_token_bytes(
-            boundary, kv_token_bytes)
-        remote_union_tokens = sum(
-            interval.tokens for interval in hybrid_remote_intervals)
-        tile_tokens = resolve_remote_read_tile_tokens(
-            model.remote_read_tile_bytes, leg_kv_token_bytes)
-        exec_tile_tokens = remote_read_exec_tile_tokens(
-            tile_tokens, max(0, int(remote_union_tokens)))
-        staging_per_rank = remote_read_staging_bytes_per_rank(
-            exec_tile_tokens, leg_kv_token_bytes)
     if action == ACTION_RECOMPUTE:
         hb_by_rank = boundary.working_context_bytes()
         retained_totals = [0] * len(hb_by_rank)
@@ -3328,39 +2375,15 @@ def build_d_candidate(
         prepare_peak = tuple(
             max(0, int(hb) - retained)
             for hb, retained in zip(hb_by_rank, retained_totals))
-    elif action == "hybrid":
-        # W10 部分复制不免费：prepare = L 区间持久 copy 字节 + R 读流
-        # 暂存 + 增量族 working 项（i_P ∈ R 时 U 留 i_P——纯 remote 同款
-        # 冻结口径；i_P ∈ L 时 U 已并入 copy 字节，不重复计）。
-        hybrid_copy_totals = [0] * tp
-        for interval in hybrid_copy_intervals:
-            for rank, value in enumerate(interval.bytes_by_tp_rank):
-                hybrid_copy_totals[rank] += int(value)
-        working_term = (
-            boundary.working_bytes_by_tp_rank
-            if increment and int(boundary.p_instance_index)
-            not in copy_subset
-            else tuple(0 for _ in range(tp)))
-        prepare_peak = tuple(
-            int(copy_value) + int(work_value) + staging_per_rank
-            for copy_value, work_value in zip(
-                hybrid_copy_totals, working_term))
     elif action == ACTION_COPY and has_missing:
         copy_bytes = layout.copy_bytes_by_rank_for(
             instance_index, tp)
-        prepare_peak = tuple(
-            int(value) + staging_per_rank for value in copy_bytes)
-    elif action == ACTION_REMOTE and increment:
+        prepare_peak = tuple(int(value) for value in copy_bytes)
+    elif not at_p:
         working = boundary.working_bytes_by_tp_rank
-        prepare_peak = tuple(
-            int(work) + staging_per_rank for work in working)
-    elif increment or not at_p:
-        working = boundary.working_bytes_by_tp_rank
-        prepare_peak = tuple(
-            int(work) + staging_per_rank for work in working)
+        prepare_peak = tuple(int(work) for work in working)
     else:
-        prepare_peak = tuple(
-            staging_per_rank for _ in growth_ranks)
+        prepare_peak = tuple(0 for _ in growth_ranks)
     decode_peak = tuple(
         prepare + growth for prepare, growth in zip(
             prepare_peak, growth_ranks))
@@ -3392,21 +2415,15 @@ def build_d_candidate(
     history_prep = 0
     rebuild_ns = 0
     noc_shares: List[CandidatePathNocShare] = []
-    decode_fill_ids_by_rank: Dict[int, List[str]] = {}
-    route_by_rank: Dict[int, Tuple[str, ...]] = {}
     move_done_legs: List[str] = [join_leg]
-    if (action == ACTION_COPY or action == "hybrid") and has_missing:
+    if action == ACTION_COPY and has_missing:
         copy_leg_count = 0
         prior_chain: Dict[int, str] = {}
-        hybrid_copy_bytes_total = 0
         for holder, interval in layout.copy_plan_for(instance_index):
-            if action == "hybrid" and int(holder) not in copy_subset:
-                continue    # W10：仅 L 子集走持久 copy 腿（R 走读流）
             leg_bytes = interval.bytes_by_tp_rank
             if not any(int(value) for value in leg_bytes):
                 continue
             copy_leg_count += 1
-            hybrid_copy_bytes_total += sum(int(v) for v in leg_bytes)
             leg_paths = model._shard_paths(
                 model._route_paths_pair(holder, instance_index), leg_bytes)
             leg_share = CandidatePathNocShare(
@@ -3430,15 +2447,12 @@ def build_d_candidate(
             move_done_legs = list(per_rank.values()) or move_done_legs
         builder.note(
             "boundary_move_bytes={}".format(
-                sum(layout.copy_bytes_by_rank_for(instance_index, tp))
-                if action == ACTION_COPY else hybrid_copy_bytes_total))
+                sum(layout.copy_bytes_by_rank_for(instance_index, tp))))
         builder.note(f"boundary_copy_legs={copy_leg_count}")
         builder.note(
             "boundary_copy_sources="
             + ",".join(str(holder) for holder, _interval
-                       in layout.copy_plan_for(instance_index)
-                       if (action == ACTION_COPY
-                           or int(holder) in copy_subset)))
+                       in layout.copy_plan_for(instance_index)))
     elif action == ACTION_RECOMPUTE:
         rebuild_tokens = max(0, int(boundary.history_tokens))
         if rebuild_tokens > 0:
@@ -3504,369 +2518,17 @@ def build_d_candidate(
     # once per layer/tile.
     decode_compute_deps = list(move_done_legs)
 
-    # ---- remote-read credit 腿（C4 多源：n̂_B 遍 × 目标缺少的基础
-    # 区间并集；逐来源分组、来源边界排空、共享一对有限缓冲）。W10
-    # hybrid：读流基数 = **远读子集 R**（L 已物化本地读，不占共享缓冲）。----
-    decode_leg_ns = 0
-    remote_read_ns = 0
-    base_by_rank: tuple = ()
-    if (action == ACTION_REMOTE or action == "hybrid") and has_missing:
-        credit_intervals = (
-            missing if action == ACTION_REMOTE
-            else hybrid_remote_intervals)
-        if action == ACTION_REMOTE:
-            base_by_rank = layout.remote_bytes_by_rank_for(
-                instance_index, tp)
-        else:
-            remote_totals = [0] * tp
-            for interval in hybrid_remote_intervals:
-                for rank, value in enumerate(interval.bytes_by_tp_rank):
-                    remote_totals[rank] += int(value)
-            base_by_rank = tuple(remote_totals)
-        passes = steps
-        holder_bytes: Dict[int, List[int]] = {}
-        for interval in credit_intervals:
-            totals = holder_bytes.setdefault(
-                int(interval.holder_instance), [0] * tp)
-            for rank, value in enumerate(interval.bytes_by_tp_rank):
-                totals[rank] += int(value)
-        holder_tokens: Dict[int, int] = {}
-        for interval in credit_intervals:
-            holder = int(interval.holder_instance)
-            holder_tokens[holder] = (
-                holder_tokens.get(holder, 0) + int(interval.tokens))
-        leg_params = []
-        holder_tokens_list: List[int] = []
-        for holder in sorted(holder_bytes):
-            leg_bytes = tuple(holder_bytes[holder])
-            shard_paths_leg = model._shard_paths(
-                model._route_paths_pair(holder, instance_index), leg_bytes)
-            credit_share = CandidatePathNocShare(
-                model._noc_registry,
-                _flowing_path_family_public(shard_paths_leg, leg_bytes),
-                include_self=True)
-            noc_shares.append(credit_share)
-            leg_params.append((shard_paths_leg, leg_bytes, credit_share))
-            holder_tokens_list.append(int(holder_tokens[holder]))
-            remote_read_ns += _transfer_ns_shards(
-                model.rates, model._noc_registry,
-                model.hbm_port_registry,
-                paths_by_rank=shard_paths_leg,
-                bytes_by_rank=tuple(
-                    int(rank_bytes) * passes for rank_bytes in leg_bytes),
-                include_self=True, kind="read", noc_share=credit_share)
-        tile_stream_bytes = leg_kv_token_bytes * (
-            remote_read_exec_tile_tokens(
-                resolve_remote_read_tile_tokens(
-                    model.remote_read_tile_bytes, leg_kv_token_bytes),
-                max(0, int(remote_union_tokens)))
-            if leg_kv_token_bytes else 0)
-        if tile_stream_bytes <= 0:
-            tile_stream_bytes = max(1, leg_kv_token_bytes)
-        tile_tokens_cfg = resolve_remote_read_tile_tokens(
-            model.remote_read_tile_bytes, leg_kv_token_bytes)
-        per_pass_tiles = max(1, sum(
-            -(-tokens // tile_tokens_cfg)
-            for tokens in holder_tokens.values()))
-        if passes > 0 and any(int(v) for v in base_by_rank):
-            # 先按实际结构建立 bounded source/pass groups。tile 数只作为
-            # range 参数参与代数，绝不构造 per-tile block/route/share 列表。
-            compact_groups_by_rank = {}
-            required_owner_ranks = set()
-            for rank_index, rank_bytes in enumerate(base_by_rank):
-                if int(rank_bytes) <= 0:
-                    continue
-                for shard_paths_leg, leg_bytes, _share in leg_params:
-                    if int(leg_bytes[rank_index]) <= 0:
-                        continue
-                    path = (tuple(shard_paths_leg[rank_index][0])
-                            if shard_paths_leg[rank_index] else ())
-                    if len(path) < 2:
-                        raise ActionWorkGraphError(
-                            "compact decode descriptor requires an explicit "
-                            "source-to-target route")
-                    required_owner_ranks.add(int(path[-1]))
-            has_decode_identity = any(
-                key[0] == "decode" for key in builder.pipeline_identities)
-            missing_owner_ranks = required_owner_ranks - {
-                key[1] for key in builder.pipeline_identities
-                if key[0] == "decode"}
-            if has_decode_identity and missing_owner_ranks:
-                raise ActionWorkGraphError(
-                    "compact decode identity map is missing physical target "
-                    "ranks {}".format(sorted(missing_owner_ranks)))
-            compact_mode = bool(has_decode_identity)
-            if compact_mode:
-                total_tiles = 0
-                for rank_index, rank_bytes in enumerate(base_by_rank):
-                    if int(rank_bytes) <= 0:
-                        continue
-                    rank_groups = []
-                    for pass_index in range(passes):
-                        for source_position, (shard_paths_leg, leg_bytes,
-                                              _share) in enumerate(leg_params):
-                            if int(leg_bytes[rank_index]) <= 0:
-                                continue
-                            source_tokens = holder_tokens_list[source_position]
-                            source_tiles = max(
-                                1, -(-int(source_tokens)
-                                     // int(tile_tokens_cfg)))
-                            path = (tuple(shard_paths_leg[rank_index][0])
-                                    if shard_paths_leg[rank_index] else ())
-                            route = _link_route(
-                                model, shard_paths_leg, rank_index,
-                                include_endpoints=True)
-                            if not path or not route:
-                                raise ActionWorkGraphError(
-                                    "compact decode descriptor requires an "
-                                    "explicit source-to-target route")
-                            rank_groups.append({
-                                "pass": pass_index,
-                                "source": source_position,
-                                "source_key": str(path[0]),
-                                "owner_rank": int(path[-1]),
-                                "count": source_tiles,
-                                "path": path,
-                                "route": route,
-                                "latency": _hop_latency(
-                                    model, shard_paths_leg, rank_index),
-                            })
-                            total_tiles += source_tiles
-                    compact_groups_by_rank[rank_index] = rank_groups
-                compact_fill_handles = {}
-                for rank_index in sorted(compact_groups_by_rank):
-                    handles = []
-                    for group in compact_groups_by_rank[rank_index]:
-                        result = builder.begin_compact_remote_group(
-                            "dcstream", stage="decode",
-                            rank_index=rank_index,
-                            exec_rank=int(exec_ranks[rank_index]),
-                            owner_rank=group["owner_rank"],
-                            pass_or_window_ordinal=group["pass"],
-                            source_ordinal=group["source"],
-                            source_key=group["source_key"],
-                            layer_start=0, layer_end=int(model.model_layers),
-                            total_units=(group["count"]
-                                         * int(tile_stream_bytes)),
-                            units_per_tile=int(tile_stream_bytes),
-                            tile_count=group["count"],
-                            tail_units=int(tile_stream_bytes),
-                            source_rank=int(group["path"][0]),
-                            noc_path=group["path"], route=group["route"],
-                            latency_ns=group["latency"],
-                            start_deps=[join_leg])
-                        if result is None:
-                            raise ActionWorkGraphError(
-                                "compact decode identity map is incomplete")
-                        handles.append((result[0], result[1],
-                                        result[2], group))
-                    compact_fill_handles[rank_index] = handles
-                    total_count = sum(group["count"] for group in
-                                      compact_groups_by_rank[rank_index])
-                    from joint.compact_pipeline import VirtualLegIds
-                    decode_fill_ids_by_rank[rank_index] = VirtualLegIds(
-                        f"{builder.work_id}#dcstream#R{rank_index}#F",
-                        0, total_count)
-                share_offset = 0
-                for rank_index in sorted(compact_fill_handles):
-                    for group_position, (plan, handle, _fill_ids,
-                                         group) in enumerate(
-                                             compact_fill_handles[rank_index]):
-                        share_compute = {
-                            "rule": "quotient_remainder_earliest_global_indices",
-                            "total_units": int(decode_compute_ns),
-                            "total_tiles": total_tiles,
-                            "share_index_first": share_offset,
-                            "tile_bytes": int(tile_stream_bytes),
-                        }
-                        share_hbm = {
-                            "rule": "quotient_remainder_earliest_global_indices",
-                            "total_units": int(decode_service_field),
-                            "total_tiles": total_tiles,
-                            "share_index_first": share_offset,
-                            "tile_bytes": int(tile_stream_bytes),
-                        }
-                        builder.finish_compact_remote_group(
-                            plan, handle, kind="compute",
-                            route=(hbm_resource_key(
-                                exec_ranks[rank_index]),),
-                            group="decode",
-                            latency_first_ns=(decode_startup_ns
-                                              if group_position == 0 else 0),
-                            compute_share=share_compute,
-                            hbm_share=share_hbm)
-                        share_offset += group["count"]
-            else:
-                # 兼容未提供 prospective identity 的测试参考路径；线上
-                # compact mode 由 scheduler 明确传入 identities。
-                merged_fills: Dict[int, List[Tuple[int, int]]] = {}
-                block_routes_by_rank: Dict[int, List[Tuple[str, ...]]] = {}
-                for rank_index, rank_bytes in enumerate(base_by_rank):
-                    if int(rank_bytes) <= 0:
-                        continue
-                    blocks: List[Tuple[int, int]] = []
-                    block_routes: List[Tuple[str, ...]] = []
-                    for _pass_index in range(passes):
-                        for source_position, (shard_paths_leg, leg_bytes,
-                                              _share) in enumerate(leg_params):
-                            if int(leg_bytes[rank_index]) <= 0:
-                                continue
-                            source_tokens = holder_tokens_list[source_position]
-                            source_tiles = max(
-                                1, -(-int(source_tokens)
-                                     // int(tile_tokens_cfg)))
-                            for _tile in range(source_tiles):
-                                block_routes.append(_link_route(
-                                    model, shard_paths_leg, rank_index,
-                                    include_endpoints=True))
-                                blocks.append((
-                                    tile_stream_bytes,
-                                    _hop_latency(model, shard_paths_leg,
-                                                 rank_index)))
-                    merged_fills[rank_index] = blocks
-                    block_routes_by_rank[rank_index] = block_routes
-                stream_total = sum(
-                    len(blocks) * tile_stream_bytes
-                    for blocks in merged_fills.values())
-                tile_counts = [
-                    tile_stream_bytes
-                    for blocks in merged_fills.values()
-                    for _block in blocks]
-                compute_shares = _byte_share_vector(
-                    decode_compute_ns, tile_counts, stream_total)
-                # §9.6：consume 链聚合服务场——die 后端为 service_units
-                # （×decode_factor；按整体字节序的 q/r 份额）。
-                hbm_shares = _byte_share_vector(
-                    decode_service_field, tile_counts, stream_total)
-                decode_fill_ids_by_rank = builder.fill_chain_legs(
-                    "dcstream",
-                    route_by_rank={
-                        rank_index: block_routes_by_rank[rank_index][0]
-                        for rank_index in merged_fills},
-                    fills_by_rank=merged_fills,
-                    start_deps=[join_leg],
-                    routes_by_block=block_routes_by_rank)
-                compute_by_rank = {}
-                hbm_by_rank = {}
-                share_offset = 0
-                for rank_index, blocks in merged_fills.items():
-                    block_count = len(blocks)
-                    compute_by_rank[rank_index] = compute_shares[
-                        share_offset:share_offset + block_count]
-                    hbm_by_rank[rank_index] = hbm_shares[
-                        share_offset:share_offset + block_count]
-                    share_offset += block_count
-                builder.consume_chain_legs(
-                    "dcstream",
-                    fill_ids_by_rank=decode_fill_ids_by_rank,
-                    consume_ns_by_rank=compute_by_rank,
-                    consume_routes_by_rank={
-                        rank_index: (
-                            hbm_resource_key(exec_ranks[rank_index]),)
-                        for rank_index in merged_fills},
-                    consume_bytes_by_rank=hbm_by_rank,
-                    consume_latency_ns_by_rank={
-                        rank_index: [decode_startup_ns]
-                        + [0] * (len(blocks) - 1)
-                        for rank_index, blocks in merged_fills.items()})
-            # 审计：decode 腿闭式（单源逐 pass 重切 / 多源最坏源折叠）。
-            tile_x_ns = 0
-            for shard_paths_leg, leg_bytes, credit_share in leg_params:
-                for rank_index in range(len(base_by_rank)):
-                    if int(leg_bytes[rank_index]) <= 0:
-                        continue
-                    tile_x_ns = max(tile_x_ns, _transfer_ns_shards(
-                        model.rates, model._noc_registry,
-                        decode_stage_share,
-                        paths_by_rank=(shard_paths_leg[rank_index],),
-                        bytes_by_rank=(int(tile_stream_bytes),),
-                        include_self=True, kind="read",
-                        noc_share=credit_share))
-            leg_full_tiles = per_pass_tiles * passes
-            supplies = tuple(
-                (leg_full_tiles, tile_x_ns, 0)
-                if int(rank_bytes) > 0 else (0, 0, 0)
-                for rank_bytes in base_by_rank)
-            decode_leg_ns = model._remote_double_buffer_leg_from_supplies(
-                supplies=supplies,
-                stream_by_rank=tuple(
-                    int(leg_full_tiles) * int(tile_stream_bytes)
-                    if int(rank_bytes) > 0 else 0
-                    for rank_bytes in base_by_rank),
-                leg_passes=passes,
-                tile_stream_bytes=tile_stream_bytes,
-                leg_compute_ns=decode_compute_ns,
-                notes=builder.notes,
-                note_prefix="decode_tile",
-                tile_x_ns=tile_x_ns,
-                start_ns=train_join_ns)
-            builder.note(
-                "boundary_remote_sources="
-                + ",".join(str(holder) for holder in sorted(holder_bytes)))
-            builder.note(
-                "boundary_remote_union_bytes="
-                f"{sum(int(v) for v in base_by_rank)}")
-
-    # ---- W10 hybrid 身份与预算披露（日志标记/归因分离；§7.5 复杂度
-    # 声明——2^|S| 枚举数显式记录，不宣称常数）。 ----
-    if action == "hybrid":
-        _status = hybrid_support_status(layout, instance_index,
-                                        prediction_config)
-        builder.note(HYBRID_NOTE_TAG)
-        builder.note(
-            "hybrid_copy_sources="
-            + ",".join(str(s) for s in sorted(copy_subset)))
-        builder.note(
-            "hybrid_remote_sources="
-            + ",".join(str(s) for s in sorted(
-                effective_remote_sources(layout, instance_index))
-                if s not in copy_subset))
-        builder.note(f"hybrid_effective_source_count={_status.source_count}")
-        builder.note(
-            "hybrid_subset_enumeration={}".format(
-                _status.enumeration_count))
-
-    # ---- decode 服务腿（非 remote / 零基础流退化：裸 n̂_B 步计算链）。 ----
+    # ---- decode 服务腿（本地 KV 读：裸 n̂_B 步计算链）。 ----
     # §9.6 第 2 条：die 后端的 dec 腿携带地平线 DiePlanDescriptor（协议
-    # 推进；credit 门体块 = staged，本地 KV = local——与执行侧发射同区分）。
-    dec_die_plans_staged = _die_decode_descriptors(
-        model, steps=steps, base_context_tokens=int(boundary.history_tokens),
+    # 推进；本地 KV = local——与执行侧发射同区分）。
+    dec_die_plans_local = _die_decode_descriptors(
+        model, steps=steps,
+        base_context_tokens=int(boundary.history_tokens),
         exec_ranks=exec_ranks, service_factor=decode_factor,
-        kv_identity="staged")
-    if _die_provider is not None and dec_die_plans_staged is None:
+        kv_identity="local")
+    if _die_provider is not None and dec_die_plans_local is None:
         builder.note("die_decode_leg=aggregate_service_estimate")
-    dec_die_plans_local = (
-        dec_die_plans_staged if dec_die_plans_staged is None
-        else _die_decode_descriptors(
-            model, steps=steps,
-            base_context_tokens=int(boundary.history_tokens),
-            exec_ranks=exec_ranks, service_factor=decode_factor,
-            kv_identity="local"))
-    if (action == ACTION_REMOTE
-            or action == "hybrid") and decode_fill_ids_by_rank:
-        builder.note(f"decode_tile_leg_start_ns={train_join_ns}")
-        builder.note(
-            "remote_read_decode_ns={}".format(
-                int(decode_leg_ns - train_join_ns)))
-    elif action == ACTION_REMOTE:
-        for rank_index in range(tp):
-            move_done_legs.append(builder.compute_leg(
-                f"dec#R{rank_index}",
-                route=(hbm_resource_key(exec_ranks[rank_index]),),
-                bytes_amount=(
-                    0 if dec_die_plans_staged is not None
-                    else decode_service_field),
-                base_ns=(
-                    0.0 if dec_die_plans_staged is not None
-                    else float(decode_compute_ns)),
-                group="decode",
-                latency_ns=decode_startup_ns,
-                deps=[join_leg],
-                die_plan=(
-                    None if dec_die_plans_staged is None
-                    else dec_die_plans_staged[rank_index])))
-        builder.note(f"remote_read_decode_ns={decode_compute_ns}")
-    elif action == ACTION_RECOMPUTE:
+    if action == ACTION_RECOMPUTE:
         for rank_index in range(tp):
             builder.compute_leg(
                 f"dec#R{rank_index}",
@@ -3903,10 +2565,7 @@ def build_d_candidate(
                     else dec_die_plans_local[rank_index]))
     decode_service_deps_for_controller = [
         leg_id for leg_id in builder.leg_ids()
-        if leg_id.startswith(f"{builder.work_id}#dcstream")
-        or leg_id.startswith(f"{builder.work_id}#dec")]
-    decode_service_deps_for_controller.extend(
-        builder.compact_pipeline_terminal_ids(stage="decode"))
+        if leg_id.startswith(f"{builder.work_id}#dec")]
     controller_leg = builder.fixed_leg(
         "controller", float(control_latency_ns),
         deps=(decode_service_deps_for_controller or move_done_legs))
@@ -3928,12 +2587,6 @@ def build_d_candidate(
         if action == ACTION_COPY:
             migrated_ids = tuple(
                 interval.replica_id for interval in missing)
-        elif action == "hybrid":
-            # W10：仅 L 子集区间权威迁 j（R 留源端照旧远读）——轮末
-            # merge 只搬目标缺少的 R 区间（部分迁移集合合法：
-            # project_end_state 逐区间裁决权威归属）。
-            migrated_ids = tuple(
-                interval.replica_id for interval in hybrid_copy_intervals)
         elif action == ACTION_RECOMPUTE:
             migrated_ids = tuple(
                 interval.replica_id for interval in layout.intervals)
@@ -3995,10 +2648,7 @@ def build_d_candidate(
 
     service_deps_for_settle = [
         leg_id for leg_id in builder.leg_ids()
-        if leg_id.startswith(f"{builder.work_id}#dcstream")
-        or leg_id.startswith(f"{builder.work_id}#dec")] or move_done_legs
-    service_deps_for_settle.extend(
-        builder.compact_pipeline_terminal_ids(stage="decode"))
+        if leg_id.startswith(f"{builder.work_id}#dec")] or move_done_legs
     service_deps_for_settle.append(controller_leg)
     settle_ids = builder.settle_legs_from_plan(
         plan,
@@ -4018,7 +2668,6 @@ def build_d_candidate(
         AUDIT_TARGET_WAIT: int(target_wait),
         AUDIT_HISTORY_PREP: history_prep,
         AUDIT_COMPUTE: int(decode_compute_ns + rebuild_ns),
-        AUDIT_REMOTE_READ: remote_read_ns,
         AUDIT_MERGE: merge_ns,
         "eviction_wait_ns": int(space_ready),
         "contention_divisor": divisor,
@@ -4036,7 +2685,6 @@ def build_d_candidate(
             tuple(int(value) for value in phase)
             for phase in (footprint.prepare, footprint.prefill,
                           footprint.decode, footprint.merge)),
-        "staging_buffer_peak_bytes": int(staging_per_rank) * len(growth_ranks),
         "is_continuation": bool(is_continuation),
         "estimated_remaining_decode_steps": int(steps),
         "prefill_instance": int(boundary.p_instance_index),
@@ -4051,19 +2699,10 @@ def build_d_candidate(
         "decode_controller_latency_ns": int(decode_controller_ns),
         "rebuild_hbm_latency_ns": int(rebuild_startup_ns),
         "rebuild_controller_latency_ns": int(rebuild_controller_ns),
-        "remote_effective_bytes": (
-            steps * sum(int(v) for v in base_by_rank)
-            if action in (ACTION_REMOTE, "hybrid") else 0),
         "copy_effective_bytes": (
             sum(int(v) for v in layout.copy_bytes_by_rank_for(
                 instance_index, tp))
-            if action == ACTION_COPY else
-            sum(int(value)
-                for interval in hybrid_copy_intervals
-                for value in interval.bytes_by_tp_rank)
-            if action == "hybrid" else 0),
-        "hybrid_copy_subset": (
-            tuple(sorted(copy_subset)) if action == "hybrid" else ()),
+            if action == ACTION_COPY else 0),
         "obligation_works": tuple(obligation_works),
     })
     return builder.finish(service_excluded=settle_ids)

@@ -33,7 +33,6 @@ for _p in (_HERE, _PARENT):
 
 from joint.joint_cost_model import (  # noqa: E402
     ACTION_COPY,
-    ACTION_REMOTE,
     ACTION_STAY,
     InstanceLoadView,
     JointCostModel,
@@ -116,7 +115,7 @@ class PPrepFrontierAlignmentTest(unittest.TestCase):
             missing=(1000, 1000), location="partial_hbm_remote", prefix=2)
         return model.estimate_P_with_continuation(
             session=session, request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True,
+            action=ACTION_STAY,
             prep_frontier_ns=prep_frontier_ns)
 
     def test_busy_target_pool_restore_starts_after_frontier(self):
@@ -156,7 +155,7 @@ class PPrepFrontierAlignmentTest(unittest.TestCase):
                                prefix=4)
             return model.estimate_P_with_continuation(
                 session=session, request=_request(), instance_index=1,
-                action=ACTION_COPY, remote_enabled=True,
+                action=ACTION_COPY,
                 prep_frontier_ns=prep_frontier_ns)
 
         idle = candidate(0)
@@ -169,27 +168,6 @@ class PPrepFrontierAlignmentTest(unittest.TestCase):
             FRONTIER_NS,
             "copy handoff chain head must start at max(A, frontier)")
 
-    def test_busy_remote_read_stream_shifts(self):
-        # remote-read：前缀读流 tile 到达闭式 start_ns = max(A,
-        # frontier)——忙目标首前向递推迟后、成本 ≥ 空闲（腿在关键
-        # 路径上时差额 > 0）。
-        def candidate(prep_frontier_ns=0):
-            model = _model({0: _load(0), 1: _load(1)})
-            session = _session(
-                home=0, resident=0, history_bytes=(40000, 40000),
-                location="local_hbm", prefix=4)
-            return model.estimate_P_with_continuation(
-                session=session, request=_request(), instance_index=1,
-                action=ACTION_REMOTE, remote_enabled=True,
-                prep_frontier_ns=prep_frontier_ns)
-
-        idle = candidate(0)
-        busy = candidate(FRONTIER_NS)
-        self.assertTrue(idle.applicable and busy.applicable)
-        self.assertGreater(busy.cost_ns, idle.cost_ns,
-                           "remote read stream anchored at the target "
-                           "frontier must delay the busy-target timeline")
-
     def test_queue_only_target_keeps_decision_epoch(self):
         # 排队（Q>0）不推 frontier：frontier 是发射门（在飞列车），排队
         # 工作物理在准备之后的列车里——Q=5000、frontier=0 时准备仍自决
@@ -198,7 +176,7 @@ class PPrepFrontierAlignmentTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=_session(home=1, resident=1),
             request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         self.assertIn("prep_issue_frontier=P_prep_at_decision_epoch",
                       candidate.breakdown.notes)
 
@@ -405,7 +383,7 @@ class FrontierEmissionOrderReconciliationTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=busy_session,
             request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True,
+            action=ACTION_STAY,
             prep_frontier_ns=busy_frontier)
         self.assertTrue(candidate.applicable)
         # 预测器消费的锚 = 调度器快照值（逐字节同值，非近似）。
@@ -419,7 +397,7 @@ class FrontierEmissionOrderReconciliationTest(unittest.TestCase):
         idle = model.estimate_P_with_continuation(
             session=busy_session,
             request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True,
+            action=ACTION_STAY,
             prep_frontier_ns=0)
         self.assertEqual(
             candidate.cost_ns - idle.cost_ns, busy_frontier,

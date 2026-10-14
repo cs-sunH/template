@@ -284,18 +284,11 @@ class SuffixRestoreLedgerTests(unittest.TestCase):
         self.assertEqual(journal.issued_bytes_by_rank(), expected_total)
         journal.assert_conservation()
 
-    def test_remote_read_partial_suffix_grouped(self):
-        _before, transfers, _evictions = self.manager.prepare_prefill(
-            session_id="s", target_instance_index=1,
-            history_tokens=100, trigger_request_id="r1",
-            action="remote-read")
-        restore_transfers = [
-            t for t in transfers if t.kind == "remote_load"]
-        self.assertEqual(len(restore_transfers), 1)   # [8,16) 单组锚
-        self.assertEqual(restore_transfers[0].restore_group, 0)
-        self.assertEqual(
-            restore_transfers[0].reason,
-            "history_suffix_pool_restore_working_copy")
+    # （原 test_remote_read_partial_suffix_grouped（remote-read 准入的
+    # 池恢复分组锚）已随 2026-10-14 远读退役删除：remote-read 准入分支
+    # 删除后该形态不可构造；PARTIAL 池恢复分组语义由
+    # test_stay_partial_prepares_grouped_restore 与
+    # test_multi_group_prepares_consumption_order_groups 钉住。）
 
     def test_settle_at_drain_and_double_settle_fails(self):
         _before, _transfers, _evictions = self.manager.prepare_prefill(

@@ -60,10 +60,8 @@ from joint.link_quota import (  # noqa: E402
     AIMD_SIGNAL_COMFORT,
     AIMD_SIGNAL_HOLD,
     AIMD_SIGNAL_SHRINK,
-    FLOW_ELASTIC,
     FLOW_LIFETIME_EWMA_ALPHA,
     FLOW_ONESHOT,
-    FLOW_REALTIME,
     MERGE_DIRECTION_FORWARD,
     MERGE_DIRECTION_REVERSE,
     QUOTA_AIMD,
@@ -101,7 +99,7 @@ def _tracker(mode=QUOTA_AIMD, noc=_B_NOC, hbm=_B_HBM, **kwargs):
 
 
 class _SyntheticLinkLoad:
-    """合成闭环链路负载（零发射范式）：深需求实时流 + 寿命结算 +
+    """合成闭环链路负载（零发射范式）：深需求 oneshot 流 + 寿命结算 +
     服务遥测。
 
     每 tick 事件序：补足准入（深需求 = 永有等待者）→ 结算到期流
@@ -132,8 +130,8 @@ class _SyntheticLinkLoad:
         while True:
             owner = f"syn{self.seq}#decode#0"
             verdict = self.t.admit_flow(
-                owner=owner, flow_class=FLOW_REALTIME, links=[self.link],
-                port_id=self.port, r_hat_kv_bytes_per_ns=self.r_hat,
+                owner=owner, flow_class=FLOW_ONESHOT, links=[self.link],
+                port_id=self.port,
                 now_ns=self.now)
             if not verdict.admitted:
                 return
@@ -178,12 +176,11 @@ class ArrivalBurstScenarioTest(unittest.TestCase):
     """剧本 1：到达突发——(c) 突发点不过饱和 + 同 tick 零 dt 采样。"""
 
     def test_link_burst_never_oversaturates(self):
-        # 8 笔实时流同 tick 挤同一链路：准入封顶在突发点逐笔成立。
+        # 8 笔 oneshot 流同 tick 挤同一链路：准入封顶在突发点逐笔成立。
         t = _tracker(mode=QUOTA_STATIC)          # Q_init = 2
         verdicts = [t.admit_flow(
-            owner=f"burst{i}#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=5,
-            r_hat_kv_bytes_per_ns=1.0) for i in range(8)]
+            owner=f"burst{i}#decode#0", flow_class=FLOW_ONESHOT,
+            links=[(0, 1)], port_id=5) for i in range(8)]
         for i in range(len(verdicts)):
             # (c) 逐笔不变式：占用+预留 ≤ Q（准入原子，无超饱和点）。
             self.assertLessEqual(
@@ -199,37 +196,13 @@ class ArrivalBurstScenarioTest(unittest.TestCase):
             self.assertEqual(v.remaining, 0)
         self.assertEqual(t.link_occupancy((0, 1)), 2)
 
-    def test_port_burst_respects_parity_headroom(self):
-        # 平价门突发：每笔已准入满足 B/(u+1) >= r̂（B=100、r̂=40 →
-        # headroom=2）；链路各用独立链路避免先触链路门。
-        t = _tracker(mode=QUOTA_STATIC)
-        admitted = 0
-        for i in range(6):
-            v = t.admit_flow(
-                owner=f"pb{i}#decode#0", flow_class=FLOW_REALTIME,
-                links=[(i, i + 1)], port_id=9,
-                r_hat_kv_bytes_per_ns=40.0)
-            if v.admitted:
-                admitted += 1
-                self.assertLessEqual(t.port_enrolled(9), 2)
-            else:
-                self.assertEqual(v.wait_reason, WAIT_QUOTA_PORT)
-        self.assertEqual(admitted, 2)
-        # 负载视图突发注入（u_port_base）同样被 headroom 封顶。
-        v = t.admit_flow(
-            owner="pbx#decode#0", flow_class=FLOW_REALTIME,
-            links=[(9, 10)], port_id=9, r_hat_kv_bytes_per_ns=40.0,
-            u_port_base=3)
-        self.assertFalse(v.admitted)
-        self.assertEqual(v.wait_reason, WAIT_QUOTA_PORT)
-
     def test_burst_mixed_with_merge_reserves_stays_capped(self):
         # 突发混合：1 实时流 + 4 merge 预留挤同一链路——链路与 bulk
         # 侧封顶逐笔成立，失败预留零登记（原子性）。
         t = _tracker(mode=QUOTA_STATIC)
         self.assertTrue(t.admit_flow(
-            owner="f0#decode#0", flow_class=FLOW_REALTIME, links=[(0, 1)],
-            port_id=5, r_hat_kv_bytes_per_ns=1.0).admitted)
+            owner="f0#decode#0", flow_class=FLOW_ONESHOT, links=[(0, 1)],
+            port_id=5).admitted)
         verdicts = [t.reserve_merge(
             f"rid-{i}", links_forward=[(0, 1)], links_reverse=[(1, 0)],
             port_forward=7, port_reverse=8) for i in range(4)]
@@ -247,9 +220,8 @@ class ArrivalBurstScenarioTest(unittest.TestCase):
     def test_same_tick_telemetry_samples_have_zero_dt(self):
         # 同 tick 两次遥测采样：dt=0，comfort streak 不重复累计。
         t = _tracker()
-        t.admit_flow(owner="z#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(0, 1)], port_id=5,
-                     r_hat_kv_bytes_per_ns=_R_KV, now_ns=0)
+        t.admit_flow(owner="z#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(0, 1)], port_id=5, now_ns=0)
         t.release_flow("z#decode#0", now_ns=1000)   # EWMA=1000 → T=10000
         obs1 = t.observe_telemetry(2000, {(0, 1): 240.0}, _R_KV)
         obs2 = t.observe_telemetry(2000, {(0, 1): 240.0}, _R_KV)
@@ -272,7 +244,7 @@ class LongTrainScenarioTest(unittest.TestCase):
         t = _tracker()                              # aimd, Q_init = 2
         for owner in ("trainA#readplan", "trainB#readplan"):
             self.assertTrue(t.admit_flow(
-                owner=owner, flow_class=FLOW_ELASTIC, links=[(0, 1)],
+                owner=owner, flow_class=FLOW_ONESHOT, links=[(0, 1)],
                 port_id=5, now_ns=0).admitted)
         obs = t.observe_telemetry(1000, {(0, 1): 8.0}, _R_KV)   # 8 < 10
         record = obs["links"]["(0, 1)"]
@@ -284,42 +256,32 @@ class LongTrainScenarioTest(unittest.TestCase):
         self.assertEqual(t.link_occupancy((0, 1)), 2)
         self.assertEqual(t.link_remaining((0, 1)), -1)
         v = t.admit_flow(
-            owner="new#decode#0", flow_class=FLOW_REALTIME, links=[(0, 1)],
-            port_id=5, r_hat_kv_bytes_per_ns=_R_KV, now_ns=1000)
+            owner="new#decode#0", flow_class=FLOW_ONESHOT, links=[(0, 1)],
+            port_id=5, now_ns=1000)
         self.assertFalse(v.admitted)
         self.assertEqual(v.wait_reason, WAIT_QUOTA_LINK)
         self.assertEqual(v.remaining, -1)
         deferred = quota_deferred_requeue(
-            "req-1", {"remote-read": v}, t.quota_retry_key())
+            "req-1", {"copy": v}, t.quota_retry_key())
         self.assertTrue(deferred.requeue)            # 永不 raise
-        # 端口平价门与 N_bulk 在 aimd 下常开（不随链路 Q 收缩）。
+        # N_bulk 在 aimd 下常开（不随链路 Q 收缩；端口平价门已随远读
+        # 流退役删除，D9）。
         self.assertEqual(t.n_bulk, t.q_init)
-        self.assertTrue(t.admit_flow(
-            owner="pp#decode#0", flow_class=FLOW_REALTIME,
-            links=[(9, 10)], port_id=6,
-            r_hat_kv_bytes_per_ns=60.0, now_ns=1000).admitted)   # 100 ≥ 60
-        vp = t.admit_flow(
-            owner="pp2#decode#0", flow_class=FLOW_REALTIME,
-            links=[(9, 11)], port_id=6,
-            r_hat_kv_bytes_per_ns=60.0, now_ns=1000)
-        self.assertFalse(vp.admitted)                # u=1: 50 < 60
-        self.assertEqual(vp.wait_reason, WAIT_QUOTA_PORT)
         # 列车排空：余量恢复正、准入恢复——收缩不逐出、不塌陷（(a)）。
         t.release_flow("trainA#readplan", now_ns=6000)
         t.release_flow("trainB#readplan", now_ns=6000)
         self.assertEqual(t.link_remaining((0, 1)), 1)
         self.assertTrue(t.admit_flow(
-            owner="new#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=5, r_hat_kv_bytes_per_ns=_R_KV,
+            owner="new#decode#0", flow_class=FLOW_ONESHOT,
+            links=[(0, 1)], port_id=5,
             now_ns=6000).admitted)
 
     def test_shrink_floor_at_quota_one_records_event_without_adjustment(self):
         t = _tracker()
         # 供一个寿命样本（走旁链路，不占被测链路）使 T_expand 有定义
         # ——comfort 分支才累计 streak（冷启动下 comfort 不累计）。
-        t.admit_flow(owner="svc#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(9, 10)], port_id=6,
-                     r_hat_kv_bytes_per_ns=_R_KV, now_ns=0)
+        t.admit_flow(owner="svc#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(9, 10)], port_id=6, now_ns=0)
         t.release_flow("svc#decode#0", now_ns=1000)   # EWMA=1000
         t.observe_telemetry(1000, {(0, 1): 8.0}, _R_KV)   # shrink 2 → 1
         epoch_before = t.quota_retry_key()
@@ -339,16 +301,14 @@ class LongTrainScenarioTest(unittest.TestCase):
     def test_flow_lifetime_ewma_feeds_expand_timescale(self):
         t = _tracker()
         self.assertIsNone(t.t_expand_ns)             # 冷启动
-        t.admit_flow(owner="a#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(0, 1)], port_id=5,
-                     r_hat_kv_bytes_per_ns=_R_KV, now_ns=0)
+        t.admit_flow(owner="a#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(0, 1)], port_id=5, now_ns=0)
         t.release_flow("a#decode#0", now_ns=6000)
         self.assertEqual(t.flow_lifetime_ewma_ns, 6000.0)
         self.assertEqual(t.flow_lifetime_samples, 1)
         self.assertEqual(t.t_expand_ns, AIMD_EXPAND_K * 6000.0)
-        t.admit_flow(owner="b#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(0, 1)], port_id=5,
-                     r_hat_kv_bytes_per_ns=_R_KV, now_ns=0)
+        t.admit_flow(owner="b#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(0, 1)], port_id=5, now_ns=0)
         t.release_flow("b#decode#0", now_ns=7000)
         # EWMA = 7/8·6000 + 1/8·7000 = 6125（α=1/8 冻结平滑）。
         self.assertAlmostEqual(t.flow_lifetime_ewma_ns, 6125.0, places=9)
@@ -356,15 +316,13 @@ class LongTrainScenarioTest(unittest.TestCase):
     def test_lifetime_sample_edge_rules(self):
         t = _tracker()
         # admit 无时标 + release 带时标 → 无样本（配对须两端带时标）。
-        t.admit_flow(owner="x#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(0, 1)], port_id=5,
-                     r_hat_kv_bytes_per_ns=_R_KV)
+        t.admit_flow(owner="x#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(0, 1)], port_id=5)
         t.release_flow("x#decode#0", now_ns=500)
         self.assertEqual(t.flow_lifetime_samples, 0)
         # 零寿命（同时刻准入/释放）= 非正服务时长，不计样本。
-        t.admit_flow(owner="y#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(0, 1)], port_id=5,
-                     r_hat_kv_bytes_per_ns=_R_KV, now_ns=500)
+        t.admit_flow(owner="y#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(0, 1)], port_id=5, now_ns=500)
         t.release_flow("y#decode#0", now_ns=500)
         self.assertEqual(t.flow_lifetime_samples, 0)
         self.assertIsNone(t.t_expand_ns)             # 仍冷启动
@@ -378,9 +336,8 @@ class LongTrainScenarioTest(unittest.TestCase):
             t.observe_telemetry(-1, {(0, 1): 240.0}, _R_KV)
         with self.assertRaises(LinkQuotaError):
             t.observe_telemetry(True, {(0, 1): 240.0}, _R_KV)
-        t.admit_flow(owner="c#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(0, 1)], port_id=5,
-                     r_hat_kv_bytes_per_ns=_R_KV, now_ns=100)
+        t.admit_flow(owner="c#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(0, 1)], port_id=5, now_ns=100)
         with self.assertRaises(LinkQuotaError):
             t.release_flow("c#decode#0", now_ns=50)   # release 早于 admit
         # 钟纪律失败不污染簿记：流仍在册，正常时标释放可行。
@@ -466,9 +423,8 @@ class MergeStampedeScenarioTest(unittest.TestCase):
             self.assertLessEqual(
                 t.link_reserved((0, 1)) + t.link_occupancy((0, 1)),
                 t.q_init)
-        v = t.admit_flow(owner="r#decode#0", flow_class=FLOW_REALTIME,
-                         links=[(0, 1)], port_id=5,
-                         r_hat_kv_bytes_per_ns=1.0)
+        v = t.admit_flow(owner="r#decode#0", flow_class=FLOW_ONESHOT,
+                         links=[(0, 1)], port_id=5)
         self.assertFalse(v.admitted)
         # 写回流 settle 归还 → 预留可行 → 再释放一条后实时流可行。
         t.release_flow("w0#writeback")
@@ -477,8 +433,8 @@ class MergeStampedeScenarioTest(unittest.TestCase):
             port_forward=7, port_reverse=8).admitted)
         t.release_flow("w1#writeback")
         self.assertTrue(t.admit_flow(
-            owner="r#decode#0", flow_class=FLOW_REALTIME, links=[(0, 1)],
-            port_id=5, r_hat_kv_bytes_per_ns=1.0).admitted)
+            owner="r#decode#0", flow_class=FLOW_ONESHOT, links=[(0, 1)],
+            port_id=5).admitted)
         # 挤兑下的双释放/未知释放 fail-closed（配对纪律不因挤兑放松）。
         t.release_merge("m-1")
         with self.assertRaises(LinkQuotaError):
@@ -581,9 +537,8 @@ class EwmaQuotaCouplingScenarioTest(unittest.TestCase):
         self.assertEqual(t.link_quota((0, 1)), t.q_init)
         # 首个寿命样本（5000）落地 → T_expand = 50000 定义；streak
         # 自 0 重新累计，恰在连续舒适 ≥ 50000 后扩张。
-        t.admit_flow(owner="cs#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(0, 1)], port_id=5,
-                     r_hat_kv_bytes_per_ns=_R_KV, now_ns=0)
+        t.admit_flow(owner="cs#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(0, 1)], port_id=5, now_ns=0)
         t.release_flow("cs#decode#0", now_ns=5000)
         self.assertEqual(t.t_expand_ns, 50000.0)
         expanded_at = None
@@ -709,17 +664,17 @@ class DeferredRetryChainScenarioTest(unittest.TestCase):
         t = _tracker()                          # aimd, Q_init = 2
         for owner in ("a#decode#0", "b#decode#0"):
             self.assertTrue(t.admit_flow(
-                owner=owner, flow_class=FLOW_REALTIME, links=[(0, 1)],
-                port_id=5, r_hat_kv_bytes_per_ns=_R_KV, now_ns=0).admitted)
+                owner=owner, flow_class=FLOW_ONESHOT, links=[(0, 1)],
+                port_id=5, now_ns=0).admitted)
         # 突发第 3 笔 → quota_deferred；失败准入不 bump（无虚假唤醒）。
         epoch0 = t.quota_retry_key()[0]
         v = t.admit_flow(
-            owner="c#decode#0", flow_class=FLOW_REALTIME, links=[(0, 1)],
-            port_id=5, r_hat_kv_bytes_per_ns=_R_KV, now_ns=0)
+            owner="c#decode#0", flow_class=FLOW_ONESHOT, links=[(0, 1)],
+            port_id=5, now_ns=0)
         self.assertFalse(v.admitted)
         self.assertEqual(t.quota_retry_key()[0], epoch0)
         deferred = quota_deferred_requeue(
-            "req-c", {"remote-read": v}, t.quota_retry_key(),
+            "req-c", {"copy": v}, t.quota_retry_key(),
             base_retry_key=(3, ((0, 17),)))
         self.assertTrue(deferred.requeue)            # 永不 raise
         self.assertEqual(deferred.retry_key, (3, ((0, 17),), epoch0))
@@ -730,8 +685,8 @@ class DeferredRetryChainScenarioTest(unittest.TestCase):
         self.assertNotEqual(deferred.retry_key[-1],
                             t.quota_retry_key()[0])
         self.assertTrue(t.admit_flow(
-            owner="c#decode#0", flow_class=FLOW_REALTIME, links=[(0, 1)],
-            port_id=5, r_hat_kv_bytes_per_ns=_R_KV, now_ns=1000).admitted)
+            owner="c#decode#0", flow_class=FLOW_ONESHOT, links=[(0, 1)],
+            port_id=5, now_ns=1000).admitted)
         self.assertEqual(t.quota_retry_key()[0], epoch0 + 1)   # 准入不 bump
         # 释放 → 预留（不 bump）→ 挤兑第 2 笔 deferred → 裁决/释放
         # 各恰 +1，且释放唤醒后 retry 预留可行。
@@ -765,21 +720,24 @@ class DeferredRetryChainScenarioTest(unittest.TestCase):
     def test_requeue_never_raises_and_classifies_wait_reasons(self):
         t = _tracker()
         for owner in ("a#decode#0", "b#decode#0"):
-            t.admit_flow(owner=owner, flow_class=FLOW_REALTIME,
-                         links=[(0, 1)], port_id=5,
-                         r_hat_kv_bytes_per_ns=_R_KV)
+            t.admit_flow(owner=owner, flow_class=FLOW_ONESHOT,
+                         links=[(0, 1)], port_id=5)
         link_deferred = t.admit_flow(
-            owner="L#decode#0", flow_class=FLOW_REALTIME, links=[(0, 1)],
-            port_id=5, r_hat_kv_bytes_per_ns=_R_KV)
-        port_deferred = t.admit_flow(
-            owner="P#decode#0", flow_class=FLOW_REALTIME, links=[(5, 6)],
-            port_id=5, r_hat_kv_bytes_per_ns=95.0)   # u=2: 100/3 < 95
+            owner="L#decode#0", flow_class=FLOW_ONESHOT, links=[(0, 1)],
+            port_id=5)
+        # 端口类等待的现存产源 = merge bulk 名额耗尽（平价门已随远读
+        # 流退役删除，D9）：两笔预留吃满端口 5 后第三笔拒。
+        for i in range(2):
+            self.assertTrue(t.reserve_merge(
+                f"rid-{i}", links_forward=[(5, 6)], port_forward=5).admitted)
+        port_deferred = t.reserve_merge(
+            "rid-2", links_forward=[(7, 8)], port_forward=5)
         self.assertFalse(link_deferred.admitted)
         self.assertFalse(port_deferred.admitted)
         try:
             deferred = quota_deferred_requeue(
-                "req-1", {"remote-read": link_deferred,
-                          "copy": port_deferred}, t.quota_retry_key())
+                "req-1", {"copy": link_deferred,
+                          "recompute": port_deferred}, t.quota_retry_key())
         except Exception:  # noqa: BLE001 - 永不 raise 合同
             self.fail("quota_deferred_requeue must never raise")
         self.assertTrue(deferred.requeue)

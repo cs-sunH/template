@@ -392,7 +392,7 @@ def main(argv=None) -> int:
     # 完整 manifest。
     del manifest
 
-    # Official peer is FileDecisionBridge: request files are exactly
+    # Official peer is ShmDecisionBridge: request frame payloads are exactly
     # nlohmann::json::dump() bytes (compact, no trailing newline).
     def _timing_row_source():
         # 扇出 stash 取走即弃(单槽;严格顺序协议下一 request 恰一行)。

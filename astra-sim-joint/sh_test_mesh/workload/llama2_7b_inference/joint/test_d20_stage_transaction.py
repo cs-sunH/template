@@ -163,8 +163,8 @@ class StageReferenceProtectionTest(unittest.TestCase):
 class StageTransactionCommitTest(unittest.TestCase):
     """D20 跨阶段预约事务（§14.5）：transfer/resize/幂等 epoch。
 
-    夹具基元：实例 0 驻留 base_tokens token LOCAL 基（远读语义下的
-    基础历史），r1 预约落在实例 1（执行端）——每 rank 每 token KV =
+    夹具基元：实例 0 驻留 base_tokens token LOCAL 基（基础历史），
+    r1 预约落在实例 1（执行端）——每 rank 每 token KV =
     128 B。事务足迹按显式 history/input 推导（事务面是候选无关的
     协议基础设施，动作适用性 policing 在 JCM）。
     """
@@ -181,14 +181,14 @@ class StageTransactionCommitTest(unittest.TestCase):
         return kv
 
     def test_cross_instance_transfer_rebases_to_stage_footprint(self):
-        """跨实例切换 + resize（40 tok 完整承诺 → 20 tok 远读承诺）：
+        """跨实例切换 + resize（40 tok 完整承诺 → 20 tok D 阶段承诺）：
         目标只按 D 阶段新承诺 T+E（式 20a 缺口），占用视图随换址原子
         迁移（无双份、无丢失），承诺记录重定基到 D 阶段足迹。"""
         kv = self._prepared(reserve_instance=0)
         txn = kv.commit_stage_reservation_transaction(
             request_id="r1", target_instance_index=1,
-            stage_action="remote-read", stage_epoch=1,
-            history_tokens=20, input_tokens=20)
+            stage_action="copy", stage_epoch=1,
+            history_tokens=20, input_tokens=0)
         self.assertEqual(txn.source_instance_index, 0)
         self.assertEqual(txn.target_instance_index, 1)
         self.assertEqual(txn.released_shard_bytes, (0, 0))
@@ -202,14 +202,14 @@ class StageTransactionCommitTest(unittest.TestCase):
             tuple(kv._reserved_bytes_by_tp_rank(1)),
             _token_shards(kv, 20))
         self.assertEqual(kv._reservations["r1"].final_context_tokens, 20)
-        self.assertEqual(kv._reservations["r1"].action, "remote-read")
+        self.assertEqual(kv._reservations["r1"].action, "copy")
 
     def test_in_place_growth_prepares_real_gap(self):
-        """远读承诺（20 tok input 基数 @实例 1）原地转完整接续（40 tok
-        = H_B）：增长半边对缺口 T+E 真实准备（式 20a），released 为
+        """copy 承诺（20 tok 基数 @实例 1）原地转完整接续（40 tok =
+        H_B）：增长半边对缺口 T+E 真实准备（式 20a），released 为
         零、逐出为零（余量充足）。"""
-        kv = self._prepared(action="remote-read", base_tokens=20,
-                            final_tokens=40)
+        kv = self._prepared(action="copy", base_tokens=20,
+                            final_tokens=20)
         self.assertEqual(
             tuple(kv._reserved_bytes_by_tp_rank(1)),
             _token_shards(kv, 20))
@@ -224,30 +224,6 @@ class StageTransactionCommitTest(unittest.TestCase):
         self.assertFalse(txn.irreversible)
         self.assertFalse(txn.aborted)
 
-    def test_shrink_releases_unused_staging_commitment(self):
-        """缩小组件释放未被物理工作占用的旧承诺（D09 暂存）：远读承诺
-        （20 tok 基数 + 8192 B/rank 暂存）切到完整 stay 足迹（60 tok）
-        ——暂存分量随事务释放（released = 旧申索 − 新申索 = 3072）。"""
-        kv = self._prepared(
-            action="remote-read", base_tokens=40, final_tokens=60,
-            remote_read_tile_tokens=32, remote_read_kv_token_bytes=128)
-        reservation = kv._reservations["r1"]
-        self.assertEqual(
-            reservation.staging_shard_bytes, (2 * 32 * 128,) * 2)
-        txn = kv.commit_stage_reservation_transaction(
-            request_id="r1", target_instance_index=1, stage_action="stay",
-            stage_epoch=1, history_tokens=40, input_tokens=20)
-        old_claim = _token_shards(kv, 20)[0] + 2 * 32 * 128
-        new_claim = _token_shards(kv, 60)[0]
-        self.assertEqual(
-            txn.released_shard_bytes,
-            (old_claim - new_claim,) * kv.tp_degree)
-        self.assertEqual(
-            txn.reserved_shard_bytes, _token_shards(kv, 60))
-        # 暂存字段随 resize 清账（bytes 与 tile tokens 同生同灭）。
-        self.assertEqual(kv._reservations["r1"].staging_shard_bytes, ())
-        self.assertEqual(kv._reservations["r1"].staging_tile_tokens, 0)
-
     def test_resize_below_own_resident_fails_closed(self):
         """缩到自有驻留之下不是合法承诺（驻留字节仍在账）——fail-
         closed，事务不落账、预约原样。"""
@@ -255,8 +231,8 @@ class StageTransactionCommitTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "below its own resident"):
             kv.commit_stage_reservation_transaction(
                 request_id="r1", target_instance_index=0,
-                stage_action="remote-read", stage_epoch=1,
-                history_tokens=20, input_tokens=20)
+                stage_action="copy", stage_epoch=1,
+                history_tokens=20, input_tokens=0)
         self.assertIsNone(kv.last_stage_transaction("r1"))
         self.assertEqual(kv._reservations["r1"].final_context_tokens, 40)
         self.assertEqual(kv._reservations["r1"].action, None)
@@ -701,13 +677,13 @@ class W5TransactionExtensionTest(unittest.TestCase):
         scheduler, kv, runtime = self._drain_shell()
         obligations = (
             InheritedObligation(
-                obligation_id="r0#readplan", kind="remote_read_plan",
+                obligation_id="r0#copyhandoff", kind="copy_handoff",
                 receiver_instance=0),
         )
         resolver = scheduler._joint_obligation_resolver(obligations)
         self.assertIsNotNone(resolver)
-        view = resolver("r0#readplan")
-        self.assertEqual(view.kind, "remote_read_plan")
+        view = resolver("r0#copyhandoff")
+        self.assertEqual(view.kind, "copy_handoff")
         self.assertTrue(view.gate_settle)
         self.assertFalse(view.done)
         self.assertIsNone(scheduler._joint_obligation_resolver(()))

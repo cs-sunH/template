@@ -34,7 +34,6 @@ class DataSet;
 class LocalHbmBandwidthModel;
 class WorkloadLayerHandlerData;
 namespace ExecutionDriven {
-class RemoteReadExecutor;
 class PipelineKernelContract;
 }
 
@@ -46,15 +45,14 @@ class Workload : public Callable {
         uint64_t snapshot_passes = 0;
         uint64_t snapshot_full_fills = 0;
         uint64_t snapshot_reuse_hits = 0;
+        // v11 Phase 4 (issue-pass increment, 方案 §6.1): snapshots rebuilt
+        // by splicing the NodeStore's since-snapshot delta onto the cached
+        // vector instead of rewalking the whole ordered set. Same result,
+        // lower cost; reported separately so full fills stay honest.
+        uint64_t snapshot_splices = 0;
         uint64_t candidates = 0;
         uint64_t issue_calls = 0;
         uint64_t node_view_materializations = 0;  // ID-snapshot value copies
-        // F (2026-10-11): current-anchor candidates actually visited by the
-        // three-way merge (ordinary vector / current anchors / virtual
-        // endpoints). Future anchors are never visited, so `candidates` no
-        // longer includes them -- this counter plus the executor's
-        // anchor_resource_queries are the benefit evidence.
-        uint64_t anchor_candidate_visits = 0;
     };
 
     // execution_mode/graph_source: step-1-2 execution-mode factory
@@ -81,8 +79,6 @@ class Workload : public Callable {
     // only where the static-path consumers (HardwareResource / Statistics /
     // local_mem tracker) still need it.
     void issue_dep_free_nodes();
-    void set_remote_read_executor(
-        ExecutionDriven::RemoteReadExecutor* executor);
     void set_pipeline_kernel_contract(
         std::shared_ptr<const ExecutionDriven::PipelineKernelContract> contract);
     [[nodiscard]] std::shared_ptr<const ExecutionDriven::PipelineKernelContract>
@@ -106,13 +102,6 @@ class Workload : public Callable {
     // #18): routed from issue() when node.mem.is_local_hbm_kv_restore.
     void issue_local_hbm_kv_restore(const ExecutionDriven::NodeView& node);
     void issue_comp(const ExecutionDriven::NodeView& node);
-    /// Issue an execution-driven virtual body marker using the same COMP
-    /// cost-model branch and completion sink as an ordinary 1-op/1-byte
-    /// control_marker node. The supplied WorkloadLayerHandlerData is consumed
-    /// by the selected model; Workload::call forwards its pipeline sink.
-    void issue_pipeline_control_marker(
-        const ExecutionDriven::NodeView& node,
-        WorkloadLayerHandlerData* completion_cookie);
     // Die-backend COMP dispatch (contract §7.3 frozen order): timer -> cpu
     // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
     // fail-closed. Reached only under
@@ -124,6 +113,12 @@ class Workload : public Callable {
     void issue_recv_comm(const ExecutionDriven::NodeView& node);
     void skip_invalid(const ExecutionDriven::NodeView& node);
     void call(EventType event, CallData* data);
+
+    // Diagnostic-only dispatch label (v7 event attribution); see Callable.
+    [[nodiscard]] const char* profile_dispatch_label() const noexcept override {
+        return "workload_call";
+    }
+
     void fire();
 
     // stats
@@ -187,9 +182,6 @@ class Workload : public Callable {
     // injected at Sys creation (NodeStore-backed implementation in step 1-4).
     ExecutionDriven::ExecutionMode execution_mode_;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
-    // Non-owning online-only executor; main_online owns it through physical
-    // quiescence, alongside the shared TileTransportAdapter.
-    ExecutionDriven::RemoteReadExecutor* remote_read_executor_ = nullptr;
     std::shared_ptr<const ExecutionDriven::PipelineKernelContract>
         pipeline_kernel_contract_;
     LedgerTransitionObserver ledger_transition_observer_;
@@ -285,12 +277,6 @@ class Workload : public Callable {
     // callbacks may add ready ids, which belong to the next pass. Across
     // separate calls the vector is reused only while its NodeStore source and
     // ready-set generation still match.
-    // F (2026-10-11): the online pass fills this vector with the ORDINARY
-    // (non-anchor-role) free ids through
-    // GraphSource::fill_dep_free_ordinary_id_snapshot; anchor-role ids are
-    // enumerated dynamically from the executor's current-anchor set instead,
-    // so they never enter this snapshot. Non-NodeStore/derived sources keep
-    // their default = full id snapshot through the same vector.
     std::vector<uint64_t> dep_free_issue_snapshot_ids_;
     std::vector<ExecutionDriven::NodeView> dep_free_issue_snapshot_views_;
     // The ID vector remains a snapshot of the NodeStore's ordered free set.

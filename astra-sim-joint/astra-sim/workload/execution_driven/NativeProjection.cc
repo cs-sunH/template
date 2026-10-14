@@ -4,7 +4,7 @@ Native exact-projection input contract and world implementation.
 
 #include "astra-sim/workload/execution_driven/NativeProjection.hh"
 
-#include "astra-sim/workload/execution_driven/PipelineDescriptor.hh"
+#include "astra-sim/workload/execution_driven/PipelineKernelContract.hh"
 #include "astra-sim/workload/execution_driven/PipelineKernel.hh"
 #include "DieModel.hh"
 
@@ -86,7 +86,6 @@ struct NativeProjectionWorkSpec final {
     bool is_candidate = false;
     bool has_service_leg_ids = false;
     std::vector<std::string> service_leg_ids;
-    std::vector<std::shared_ptr<const PipelineDescriptor>> pipeline_descriptors;
 };
 
 struct NativeProjectionResource final {
@@ -263,13 +262,8 @@ void validate_projection_input_shape(const Json& input) {
     auto validate_work = [&](const Json& work, const std::string& path,
                              int expected_candidate) {
         object(work, path, {"work_id", "legs", "ready_at_ns",
-                            "depends_on_work", "is_candidate", "service_leg_ids"},
-               {"pipeline_descriptors"});
-        bool has_descriptors = false;
-        if (work.contains("pipeline_descriptors")) {
-            array(work.at("pipeline_descriptors"), path + ".pipeline_descriptors");
-            has_descriptors = !work.at("pipeline_descriptors").empty();
-        }
+                            "depends_on_work", "is_candidate",
+                            "service_leg_ids"});
         string_value(work.at("work_id"), path + ".work_id");
         (void)uint_value(work.at("ready_at_ns"), path + ".ready_at_ns");
         if (!work.at("is_candidate").is_boolean() ||
@@ -278,8 +272,8 @@ void validate_projection_input_shape(const Json& input) {
             fail(path + ".is_candidate", "candidate flag mismatch");
         }
         array(work.at("legs"), path + ".legs");
-        if (work.at("legs").empty() && !has_descriptors) {
-            fail(path + ".legs", "empty legs require pipeline_descriptors");
+        if (work.at("legs").empty()) {
+            fail(path + ".legs", "empty legs");
         }
         array(work.at("depends_on_work"), path + ".depends_on_work");
         if (!work.at("service_leg_ids").is_null()) array(work.at("service_leg_ids"), path + ".service_leg_ids");
@@ -339,12 +333,6 @@ void validate_projection_input_shape(const Json& input) {
                 !leg.at("registration_ordinal").is_null()) {
                 (void)uint_value(leg.at("registration_ordinal"),
                                  lp + ".registration_ordinal");
-            }
-            if (has_descriptors &&
-                (!leg.contains("registration_ordinal") ||
-                 leg.at("registration_ordinal").is_null())) {
-                fail(lp + ".registration_ordinal",
-                     "descriptor-bearing work requires ordinary-leg registration ordinals");
             }
         }
     };
@@ -604,21 +592,8 @@ NativeProjectionWorkSpec parse_work_spec(const Json& wire,
                                          const std::string& path,
                                          int expected_candidate) {
     object(wire, path, {"work_id", "legs", "ready_at_ns", "depends_on_work",
-        "is_candidate", "service_leg_ids"}, {"pipeline_descriptors"});
+        "is_candidate", "service_leg_ids"});
     NativeProjectionWorkSpec result;
-    if (wire.contains("pipeline_descriptors")) {
-        array(wire.at("pipeline_descriptors"), path + ".pipeline_descriptors");
-        result.pipeline_descriptors.reserve(wire.at("pipeline_descriptors").size());
-        for (size_t i = 0; i < wire.at("pipeline_descriptors").size(); ++i) {
-            try {
-                result.pipeline_descriptors.push_back(PipelineDescriptor::parse(
-                    wire.at("pipeline_descriptors")[i]));
-            } catch (const std::exception& error) {
-                fail(path + ".pipeline_descriptors[" + std::to_string(i) + "]",
-                     error.what());
-            }
-        }
-    }
     result.work_id = string_value(wire.at("work_id"), path + ".work_id");
     result.ready_at_ns = uint_value(wire.at("ready_at_ns"), path + ".ready_at_ns");
     if (!wire.at("is_candidate").is_boolean() ||
@@ -635,8 +610,8 @@ NativeProjectionWorkSpec parse_work_spec(const Json& wire,
             wire.at("service_leg_ids"), path + ".service_leg_ids");
     }
     array(wire.at("legs"), path + ".legs");
-    if (wire.at("legs").empty() && result.pipeline_descriptors.empty()) {
-        fail(path + ".legs", "empty legs require pipeline_descriptors");
+    if (wire.at("legs").empty()) {
+        fail(path + ".legs", "empty legs");
     }
     result.legs.reserve(wire.at("legs").size());
     for (size_t i = 0; i < wire.at("legs").size(); ++i) {
@@ -1295,15 +1270,9 @@ class NativeDieExecution final {
 
 struct RuntimeLeg final {
     const NativeProjectionLegSpec* spec = nullptr;
-    // Compact pipeline legs own only their current materialized spec. Ordinary
-    // work specs point into the immutable parsed input.
-    std::unique_ptr<NativeProjectionLegSpec> owned_spec;
     std::string work_id;
     bool has_registration_ordinal = false;
     uint64_t registration_ordinal = 0;
-    struct RuntimePipelineChain* pipeline_chain = nullptr;
-    bool pipeline_fill = false;
-    uint64_t pipeline_local_index = 0;
     int state = kPending;
     double remaining_bytes = 0.0;
     double remaining_duration = 0.0;
@@ -1322,30 +1291,6 @@ struct RuntimeLeg final {
     bool die_timer_has_window_plan = false;
     PipelineWindowPlan die_timer_window_plan;
     DieModel::InternalServiceWindowToken die_timer_window_token;
-};
-
-struct RuntimePipelineChain final {
-    const PipelineProjectionChain* spec = nullptr;
-    std::shared_ptr<const PipelineDescriptor> descriptor;
-    std::string work_id;
-    uint64_t generated_count = 0;
-    uint64_t completed_fill_count = 0;
-    uint64_t completed_consume_count = 0;
-    bool has_terminal_consume_completion = false;
-    uint64_t terminal_consume_completion = 0;
-    RuntimeLeg* initial_fill = nullptr;
-    RuntimeLeg* initial_consume = nullptr;
-};
-
-struct VirtualPrefixBinding final {
-    RuntimePipelineChain* chain = nullptr;
-    bool is_fill = false;
-};
-
-struct VirtualIdRef final {
-    RuntimePipelineChain* chain = nullptr;
-    bool is_fill = false;
-    uint64_t local_index = 0;
 };
 
 struct RuntimeGate final {
@@ -1386,12 +1331,6 @@ struct FinishTimes final {
     double completion = 0.0;
 };
 
-struct OrderProgression final {
-    uint64_t first = 0;
-    uint64_t stride = 1;
-    uint64_t count = 0;
-};
-
 struct NativeBlockPipelineState final {
     double now_ns = 0.0;
     double rate_bns = 0.0;
@@ -1409,50 +1348,6 @@ struct NativeBlockPipelinePlan final {
     double finish = 0.0;
 };
 
-__int128 projection_extended_gcd(__int128 a, __int128 b,
-                                 __int128* x, __int128* y) {
-    if (b == 0) { *x = 1; *y = 0; return a; }
-    __int128 next_x = 0, next_y = 0;
-    const __int128 gcd = projection_extended_gcd(b, a % b, &next_x, &next_y);
-    *x = next_y;
-    *y = next_x - (a / b) * next_y;
-    return gcd;
-}
-
-bool order_progressions_intersect(const OrderProgression& a,
-                                  const OrderProgression& b) {
-    if (a.count == 0 || b.count == 0) return false;
-    const unsigned __int128 a_last = static_cast<unsigned __int128>(a.first) +
-        static_cast<unsigned __int128>(a.stride) * (a.count - 1);
-    const unsigned __int128 b_last = static_cast<unsigned __int128>(b.first) +
-        static_cast<unsigned __int128>(b.stride) * (b.count - 1);
-    const unsigned __int128 low = std::max<unsigned __int128>(a.first, b.first);
-    const unsigned __int128 high = std::min(a_last, b_last);
-    if (low > high) return false;
-    const uint64_t gcd = std::gcd(a.stride, b.stride);
-    const __int128 delta = static_cast<__int128>(b.first) - a.first;
-    if (delta % gcd != 0) return false;
-    const uint64_t modulus = b.stride / gcd;
-    uint64_t k = 0;
-    if (modulus != 1) {
-        __int128 inverse = 0, ignored = 0;
-        projection_extended_gcd(a.stride / gcd, modulus, &inverse, &ignored);
-        __int128 residue = ((delta / gcd) * inverse) % modulus;
-        if (residue < 0) residue += modulus;
-        k = static_cast<uint64_t>(residue);
-    }
-    const unsigned __int128 period =
-        static_cast<unsigned __int128>(a.stride / gcd) * b.stride;
-    unsigned __int128 first =
-        static_cast<unsigned __int128>(a.first) +
-        static_cast<unsigned __int128>(a.stride) * k;
-    first %= period;
-    if (first < low) {
-        const unsigned __int128 distance = low - first;
-        first += ((distance + period - 1) / period) * period;
-    }
-    return first <= high;
-}
 
 class NativeProjectionWorld final {
   public:
@@ -1656,19 +1551,11 @@ class NativeProjectionWorld final {
         if (work->has_service_leg_ids) {
             for (const auto& leg_id : work->service_leg_ids) {
                 const auto it = legs_.find(leg_id);
-                if (it != legs_.end()) {
-                    if (!it->second->has_completion) return std::nullopt;
-                    times.push_back(it->second->completion);
-                    continue;
+                if (it == legs_.end()) {
+                    fail(id, "service_leg_ids contains an unknown leg");
                 }
-                const auto virtual_ref = find_virtual_ref(leg_id);
-                if (!virtual_ref || virtual_ref->is_fill ||
-                    virtual_ref->local_index + 1 != virtual_ref->chain->spec->tile_count) {
-                    fail(id, "service_leg_ids contains an unknown or nonterminal virtual leg");
-                }
-                const auto* chain = virtual_ref->chain;
-                if (!chain->has_terminal_consume_completion) return std::nullopt;
-                times.push_back(chain->terminal_consume_completion);
+                if (!it->second->has_completion) return std::nullopt;
+                times.push_back(it->second->completion);
             }
         } else {
             return work_completion(id);
@@ -1715,47 +1602,6 @@ class NativeProjectionWorld final {
             }
             lines.push_back(std::move(line));
         }
-        for (const auto& entry : legs_) {
-            const auto* leg = entry.second.get();
-            if (leg->pipeline_chain == nullptr || leg->work_id != work_id ||
-                leg->state == kDone) continue;
-            const auto& spec = *leg->spec;
-            std::string line = spec.leg_id + ": ";
-            if (leg->state == kPending) {
-                line += "waiting deps [";
-                auto deps = spec.deps;
-                std::sort(deps.begin(), deps.end());
-                for (size_t i = 0; i < deps.size(); ++i) {
-                    if (i) line += ", ";
-                    line += deps[i];
-                }
-                line += "]";
-            } else if (leg->state == kGateWait) {
-                line += "gate wait [";
-                for (size_t i = 0; i < spec.acquires.size(); ++i) {
-                    if (i) line += ", ";
-                    const auto& lease = spec.acquires[i];
-                    const auto& gate = gates_.at(lease.gate_id);
-                    line += "'" + lease.gate_id + "(" + std::to_string(gate.occupied) +
-                            "/" + std::to_string(gate.spec->capacity_units) + ")'";
-                }
-                line += "]";
-            } else if (leg->state == kTimer) {
-                line += "ready_at " + (spec.has_ready_at
-                    ? std::to_string(spec.ready_at_ns) : std::string("work-level"));
-            } else if (leg->state == kLatency) {
-                line += "job latency " + std::to_string(spec.latency_ns) + "ns";
-            } else if (leg->state == kActive) {
-                line += "in service";
-            }
-            lines.push_back(std::move(line));
-        }
-        for (const auto& chain : pipeline_chains_) {
-            if (chain->work_id == work_id && chain->generated_count < chain->spec->tile_count) {
-                lines.push_back(chain->spec->fill.leg_id_prefix + "<cursor>: waiting for tile " +
-                                std::to_string(chain->generated_count));
-            }
-        }
         return lines;
     }
 
@@ -1766,34 +1612,6 @@ class NativeProjectionWorld final {
         }
         Json leg_views = Json::object();
         for (const auto* leg : leg_order_) {
-            const int64_t order = leg->spec->has_order ? leg->spec->order : 0;
-            leg_views[leg->spec->leg_id] = {
-                {"work_id", leg->work_id},
-                {"state", state_name(leg->state)},
-                {"remaining_bytes", leg->remaining_bytes},
-                {"remaining_duration_ns", leg->remaining_duration},
-                {"completion_ns", leg->has_completion ? Json(leg->completion) : Json(nullptr)},
-                {"order_key", Json::array({order, leg->spec->leg_id})},
-                {"die_actual_bytes_total", leg->die_actual_bytes_total},
-                {"die_service_units_total", leg->die_service_units_total}};
-        }
-        Json pipeline_cursors = Json::array();
-        for (const auto& chain : pipeline_chains_) {
-            pipeline_cursors.push_back({
-                {"work_id", chain->work_id},
-                {"segment_id", chain->descriptor->identity().segment_id},
-                {"group_ordinal", chain->spec->group_ordinal},
-                {"rank", chain->spec->rank},
-                {"tile_count", chain->spec->tile_count},
-                {"generated_count", chain->generated_count},
-                {"completed_fill_count", chain->completed_fill_count},
-                {"completed_consume_count", chain->completed_consume_count},
-                {"terminal_consume_completion_ns", chain->has_terminal_consume_completion
-                    ? Json(chain->terminal_consume_completion) : Json(nullptr)}});
-        }
-        for (const auto& entry : legs_) {
-            const auto* leg = entry.second.get();
-            if (leg->pipeline_chain == nullptr) continue;
             const int64_t order = leg->spec->has_order ? leg->spec->order : 0;
             leg_views[leg->spec->leg_id] = {
                 {"work_id", leg->work_id},
@@ -1837,7 +1655,6 @@ class NativeProjectionWorld final {
                     {"work_done_at", std::move(done)},
                     {"work_remaining", work_remaining_},
                     {"legs", std::move(leg_views)},
-                    {"pipeline_cursors", std::move(pipeline_cursors)},
                     {"gates", std::move(gate_views)},
                     {"barriers", std::move(barrier_views)},
                     {"cost_disclosure", cost_disclosure()}};
@@ -1919,8 +1736,6 @@ class NativeProjectionWorld final {
     std::map<std::string, RuntimeGate> gates_;
     std::map<std::string, RuntimeBarrier> barriers_;
     std::map<std::string, std::unique_ptr<RuntimeLeg>> legs_;
-    std::vector<std::unique_ptr<RuntimePipelineChain>> pipeline_chains_;
-    std::map<std::string, std::vector<VirtualPrefixBinding>> virtual_prefixes_;
     std::vector<RuntimeLeg*> active_legs_; // exact activation/insertion order
     std::vector<RuntimeLeg*> leg_order_;   // original work/leg registration order
     std::map<std::string, std::set<std::string>> active_by_resource_;
@@ -2048,22 +1863,7 @@ class NativeProjectionWorld final {
         wire_dependencies();
         check_acyclic();
         for (const auto& work : input_.background_works) {
-            std::vector<RuntimeLeg*> initial = work_legs_.at(work.work_id);
-            if (!work.pipeline_descriptors.empty()) {
-                for (const auto& chain : pipeline_chains_) {
-                    if (chain->work_id != work.work_id) continue;
-                    if (chain->initial_fill) initial.push_back(chain->initial_fill);
-                    if (chain->initial_consume) initial.push_back(chain->initial_consume);
-                }
-                std::sort(initial.begin(), initial.end(), [](const auto* a, const auto* b) {
-                    if (!a->has_registration_ordinal || !b->has_registration_ordinal) {
-                        fail("pipeline registration", "missing registration_ordinal");
-                    }
-                    return std::tie(a->registration_ordinal, a->spec->leg_id) <
-                           std::tie(b->registration_ordinal, b->spec->leg_id);
-                });
-            }
-            for (auto* leg : initial) {
+            for (auto* leg : work_legs_.at(work.work_id)) {
                 if (leg->spec->in_service) enter_service(leg);
                 else if (deps_remaining_.at(leg->spec->leg_id) == 0) on_deps_satisfied(leg);
             }
@@ -2071,48 +1871,6 @@ class NativeProjectionWorld final {
         for (const auto tick : input_.forecast_arrival_placeholders_ns) {
             push(static_cast<double>(tick), 3, "forecast", 3, "");
         }
-    }
-
-    std::string pipeline_leg_id(const RuntimePipelineChain& chain,
-                                bool is_fill, uint64_t local_index) const {
-        if (is_fill) {
-            return chain.spec->fill.leg_id_prefix +
-                std::to_string(chain.spec->fill.first_index + local_index);
-        }
-        return chain.spec->consume.leg_id_prefix +
-            std::to_string(chain.spec->consume.first_index + local_index);
-    }
-
-    std::optional<VirtualIdRef> find_virtual_ref(const std::string& id) const {
-        std::optional<VirtualIdRef> result;
-        for (const auto& prefix_entry : virtual_prefixes_) {
-            const auto& prefix = prefix_entry.first;
-            if (id.size() <= prefix.size() || id.compare(0, prefix.size(), prefix) != 0) continue;
-            const auto suffix = id.substr(prefix.size());
-            uint64_t index = 0;
-            for (const auto ch : suffix) {
-                if (ch < '0' || ch > '9') { index = std::numeric_limits<uint64_t>::max(); break; }
-                const uint64_t digit = static_cast<uint64_t>(ch - '0');
-                if (index > (std::numeric_limits<uint64_t>::max() - digit) / 10) {
-                    index = std::numeric_limits<uint64_t>::max();
-                    break;
-                }
-                index = index * 10 + digit;
-            }
-            if (index == std::numeric_limits<uint64_t>::max() ||
-                std::to_string(index) != suffix) continue;
-            for (const auto& binding : prefix_entry.second) {
-                const uint64_t first_index = binding.is_fill
-                    ? binding.chain->spec->fill.first_index
-                    : binding.chain->spec->consume.first_index;
-                if (index < first_index ||
-                    index - first_index >= binding.chain->spec->tile_count) continue;
-                if (result.has_value()) fail(id, "ambiguous compact virtual leg ID");
-                result = VirtualIdRef{binding.chain, binding.is_fill,
-                                      index - first_index};
-            }
-        }
-        return result;
     }
 
     bool node_is_completed(const std::string& id) const {
@@ -2125,19 +1883,9 @@ class NativeProjectionWorld final {
         if (barrier != barriers_.end()) return barrier->second.has_passed_at;
         const auto leg = legs_.find(id);
         if (leg != legs_.end()) {
-            if (leg->second->pipeline_chain != nullptr) {
-                const auto* chain = leg->second->pipeline_chain;
-                return leg->second->pipeline_fill
-                    ? leg->second->pipeline_local_index < chain->completed_fill_count
-                    : leg->second->pipeline_local_index < chain->completed_consume_count;
-            }
             return leg->second->state == kDone && leg->second->has_completion;
         }
-        const auto virtual_ref = find_virtual_ref(id);
-        if (!virtual_ref) return false;
-        return virtual_ref->is_fill
-            ? virtual_ref->local_index < virtual_ref->chain->completed_fill_count
-            : virtual_ref->local_index < virtual_ref->chain->completed_consume_count;
+        return false;
     }
 
     void register_leg_dependencies(RuntimeLeg* leg) {
@@ -2156,7 +1904,7 @@ class NativeProjectionWorld final {
             const bool known_work_node = work_node &&
                 work_legs_.count(dep.substr(std::char_traits<char>::length(kWorkNodePrefix)));
             const bool known = legs_.count(dep) || barriers_.count(dep) ||
-                               find_virtual_ref(dep).has_value() || known_work_node;
+                               known_work_node;
             if (!known) fail(leg->spec->leg_id, "unknown dependency " + dep);
             if (work_node && !known_work_node) {
                 fail(leg->spec->leg_id, "unknown work dependency " + dep);
@@ -2168,130 +1916,6 @@ class NativeProjectionWorld final {
             ++count;
         }
         deps_remaining_[leg->spec->leg_id] = count;
-    }
-
-    uint64_t projection_share_at(const PipelineProjectionShare& share,
-                                 uint64_t local_index) const {
-        const uint64_t global_index = share.share_index_first + local_index;
-        const uint64_t quotient = share.total_units / share.total_tiles;
-        const uint64_t remainder = share.total_units % share.total_tiles;
-        return quotient + (global_index < remainder ? 1 : 0);
-    }
-
-    RuntimeLeg* create_pipeline_leg(RuntimePipelineChain* chain,
-                                    bool is_fill, uint64_t local_index) {
-        const auto& projection = *chain->spec;
-        if (local_index >= projection.tile_count) fail(chain->work_id, "pipeline tile index outside chain");
-        auto owned_spec = std::make_unique<NativeProjectionLegSpec>();
-        auto& spec = *owned_spec;
-        spec.leg_id = pipeline_leg_id(*chain, is_fill, local_index);
-        spec.kind = is_fill ? "stream" : projection.consume.kind;
-        spec.route = is_fill ? projection.fill.route : projection.consume.route;
-        spec.group = is_fill ? std::string() : projection.consume.group;
-        spec.latency_ns = is_fill ? projection.fill.latency_ns :
-            (local_index == 0 ? projection.consume.latency_first_ns
-                              : projection.consume.latency_rest_ns);
-        if (is_fill) {
-            const auto group = std::find_if(
-                chain->descriptor->groups().begin(),
-                chain->descriptor->groups().end(),
-                [&](const auto& candidate) {
-                    return candidate.group_ordinal == projection.group_ordinal;
-                });
-            if (group == chain->descriptor->groups().end()) {
-                fail(chain->work_id, "pipeline fill references missing group");
-            }
-            const auto& axis = group->tile_axis;
-            const unsigned __int128 consumed_units =
-                static_cast<unsigned __int128>(axis.units_per_tile) * local_index;
-            if (consumed_units >= axis.total_units) {
-                fail(chain->work_id, "pipeline fill tile begins beyond group extent");
-            }
-            const uint64_t remaining_units = axis.total_units -
-                static_cast<uint64_t>(consumed_units);
-            spec.bytes_amount = std::min(projection.fill.bytes_per_tile,
-                                         remaining_units);
-            spec.acquires.push_back({projection.fill.gate_id, 1});
-            if (local_index == 0) spec.deps = projection.fill.start_deps;
-            else spec.deps.push_back(pipeline_leg_id(*chain, true, local_index - 1));
-        } else {
-            if (projection.consume.kind == "compute") {
-                if (!projection.consume.has_compute_share || !projection.consume.has_hbm_share) {
-                    fail(chain->work_id, "compute chain is missing byte-share vectors");
-                }
-                spec.bytes_amount = static_cast<uint64_t>(projection_share_at(
-                    projection.consume.hbm_share, local_index));
-                spec.base_ns = static_cast<double>(projection_share_at(
-                    projection.consume.compute_share, local_index));
-            }
-            spec.deps = projection.consume.consume_deps;
-            spec.deps.push_back(pipeline_leg_id(*chain, true, local_index));
-            if (local_index == 0) {
-                spec.deps.insert(spec.deps.end(),
-                    projection.consume.consume_start_deps.begin(),
-                    projection.consume.consume_start_deps.end());
-            } else {
-                spec.deps.push_back(pipeline_leg_id(*chain, false, local_index - 1));
-            }
-            spec.releases.push_back({projection.consume.gate_id, 1});
-        }
-        const bool has_completion_order = is_fill
-            ? projection.fill.has_completion_order_first
-            : projection.consume.has_completion_order_first;
-        const int64_t completion_order_first = is_fill
-            ? projection.fill.completion_order_first
-            : projection.consume.completion_order_first;
-        const int64_t completion_order_stride = is_fill
-            ? projection.fill.completion_order_stride
-            : projection.consume.completion_order_stride;
-        spec.has_order = has_completion_order;
-        if (has_completion_order) {
-            const __int128 order = static_cast<__int128>(completion_order_first) +
-                static_cast<__int128>(completion_order_stride) * local_index;
-            if (order < std::numeric_limits<int64_t>::min() ||
-                order > std::numeric_limits<int64_t>::max()) {
-                fail(spec.leg_id, "completion-order value overflows int64");
-            }
-            spec.order = static_cast<int64_t>(order);
-        }
-        spec.has_registration_ordinal = true;
-        spec.registration_ordinal = is_fill
-            ? projection.fill.fill_order_first + local_index * projection.fill.fill_order_stride
-            : projection.consume.consume_order_first + local_index * projection.consume.consume_order_stride;
-
-        if (legs_.count(spec.leg_id)) fail(spec.leg_id, "duplicate pipeline logical leg ID");
-        auto leg = std::make_unique<RuntimeLeg>();
-        leg->owned_spec = std::move(owned_spec);
-        leg->spec = leg->owned_spec.get();
-        leg->work_id = chain->work_id;
-        leg->has_registration_ordinal = true;
-        leg->registration_ordinal = spec.registration_ordinal;
-        leg->pipeline_chain = chain;
-        leg->pipeline_fill = is_fill;
-        leg->pipeline_local_index = local_index;
-        leg->remaining_bytes = static_cast<double>(spec.bytes_amount);
-        if (spec.kind == "fixed") leg->remaining_duration = spec.duration_ns;
-        else if (spec.kind == "compute") leg->remaining_duration = spec.base_ns * gamma_of(spec.group);
-        auto* raw = leg.get();
-        legs_.emplace(spec.leg_id, std::move(leg));
-        deps_remaining_.emplace(spec.leg_id, 0);
-        if (dependencies_wired_) register_leg_dependencies(raw);
-        return raw;
-    }
-
-    void materialize_pipeline_pair(RuntimePipelineChain* chain,
-                                   uint64_t local_index) {
-        if (local_index != chain->generated_count ||
-            local_index >= chain->spec->tile_count) {
-            fail(chain->work_id, "pipeline cursor generated out of sequence");
-        }
-        auto* fill = create_pipeline_leg(chain, true, local_index);
-        auto* consume = create_pipeline_leg(chain, false, local_index);
-        if (local_index == 0) {
-            chain->initial_fill = fill;
-            chain->initial_consume = consume;
-        }
-        ++chain->generated_count;
     }
 
     void register_work(const NativeProjectionWorkSpec& work,
@@ -2333,89 +1957,7 @@ class NativeProjectionWorld final {
             deps_remaining_.emplace(spec.leg_id, 0);
         }
 
-        uint64_t logical_count = static_cast<uint64_t>(work.legs.size());
-        for (const auto& descriptor : work.pipeline_descriptors) {
-            if (!descriptor) fail(work.work_id, "null pipeline descriptor");
-            for (const auto& projection : descriptor->projection().chains) {
-                for (const auto& route : projection.fill.route) {
-                    if (!resources_.count(route)) fail(work.work_id, "unknown pipeline fill resource " + route);
-                }
-                for (const auto& route : projection.consume.route) {
-                    if (!resources_.count(route)) fail(work.work_id, "unknown pipeline consume resource " + route);
-                }
-                const auto gate = gates_.find(projection.fill.gate_id);
-                if (gate == gates_.end()) fail(work.work_id, "unknown projection gate " + projection.fill.gate_id);
-                if (gate->second.spec->capacity_units != projection.fill.gate_capacity) {
-                    fail(work.work_id, "projection gate capacity disagrees with input gate");
-                }
-                if (projection.fill.gate_id != projection.consume.gate_id) {
-                    fail(work.work_id, "fill and consume gate IDs disagree");
-                }
-                if (projection.tile_count > std::numeric_limits<uint64_t>::max() / 2 ||
-                    logical_count > std::numeric_limits<uint64_t>::max() - projection.tile_count * 2) {
-                    fail(work.work_id, "pipeline logical leg count overflows uint64");
-                }
-                logical_count += projection.tile_count * 2;
-                auto chain = std::make_unique<RuntimePipelineChain>();
-                chain->spec = &projection;
-                chain->descriptor = descriptor;
-                chain->work_id = work.work_id;
-                auto* raw_chain = chain.get();
-                pipeline_chains_.push_back(std::move(chain));
-                virtual_prefixes_[projection.fill.leg_id_prefix].push_back({raw_chain, true});
-                virtual_prefixes_[projection.consume.leg_id_prefix].push_back({raw_chain, false});
-            }
-        }
-        std::vector<OrderProgression> work_registration_orders;
-        std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> work_id_ranges;
-        for (const auto& chain : pipeline_chains_) {
-            if (chain->work_id != work.work_id) continue;
-            const auto add_range = [&](const PipelineProjectionFill& item) {
-                work_id_ranges.push_back({item.leg_id_prefix,
-                    {item.first_index, item.first_index + chain->spec->tile_count}});
-            };
-            add_range(chain->spec->fill);
-            work_id_ranges.push_back({chain->spec->consume.leg_id_prefix,
-                {chain->spec->consume.first_index,
-                 chain->spec->consume.first_index + chain->spec->tile_count}});
-            work_registration_orders.push_back({chain->spec->fill.fill_order_first,
-                chain->spec->fill.fill_order_stride, chain->spec->tile_count});
-            work_registration_orders.push_back({chain->spec->consume.consume_order_first,
-                chain->spec->consume.consume_order_stride, chain->spec->tile_count});
-        }
-        for (size_t i = 0; i < work_id_ranges.size(); ++i) {
-            for (size_t j = i + 1; j < work_id_ranges.size(); ++j) {
-                const auto& a = work_id_ranges[i];
-                const auto& b = work_id_ranges[j];
-                if (a.first == b.first &&
-                    a.second.first < b.second.second && b.second.first < a.second.second) {
-                    fail(work.work_id, "compact virtual leg ID ranges overlap across descriptors");
-                }
-                const auto digit_extension = [](const std::string& short_prefix,
-                                                const std::string& long_prefix) {
-                    if (long_prefix.size() <= short_prefix.size() ||
-                        long_prefix.compare(0, short_prefix.size(), short_prefix) != 0) {
-                        return false;
-                    }
-                    for (size_t k = short_prefix.size(); k < long_prefix.size(); ++k) {
-                        if (long_prefix[k] < '0' || long_prefix[k] > '9') return false;
-                    }
-                    return true;
-                };
-                if (a.first != b.first &&
-                    (digit_extension(a.first, b.first) || digit_extension(b.first, a.first))) {
-                    fail(work.work_id, "compact virtual leg ID prefixes have ambiguous decimal suffixes");
-                }
-            }
-        }
-        for (size_t i = 0; i < work_registration_orders.size(); ++i) {
-            for (size_t j = i + 1; j < work_registration_orders.size(); ++j) {
-                if (order_progressions_intersect(work_registration_orders[i],
-                                                 work_registration_orders[j])) {
-                    fail(work.work_id, "compact registration ordinals overlap across descriptors");
-                }
-            }
-        }
+        const uint64_t logical_count = static_cast<uint64_t>(work.legs.size());
         work_legs_.emplace(work.work_id, std::move(stored));
         work_specs_.emplace(work.work_id, &work);
         if (logical_count == 0) fail(work.work_id, "work has no logical legs");
@@ -2425,45 +1967,6 @@ class NativeProjectionWorld final {
         work_max_completion_.emplace(work.work_id, 0);
         work_done_at_.emplace(work.work_id, std::nullopt);
         deps_remaining_.emplace(std::string(kWorkNodePrefix) + work.work_id, 0);
-
-        for (const auto& chain : pipeline_chains_) {
-            if (chain->work_id == work.work_id) materialize_pipeline_pair(chain.get(), 0);
-        }
-        if (!work.pipeline_descriptors.empty()) {
-            std::set<uint64_t> ordinary_ordinals;
-            for (const auto* leg : work_legs_.at(work.work_id)) {
-                if (!leg->has_registration_ordinal) {
-                    fail(work.work_id, "descriptor-bearing ordinary leg lacks registration_ordinal");
-                }
-                if (!ordinary_ordinals.insert(leg->registration_ordinal).second) {
-                    fail(work.work_id, "ordinary registration ordinals overlap");
-                }
-            }
-            for (const auto& chain : pipeline_chains_) {
-                if (chain->work_id != work.work_id) continue;
-                const auto overlaps_ordinary = [&](uint64_t first, uint64_t stride) {
-                    for (const auto ordinal : ordinary_ordinals) {
-                        if (ordinal < first) continue;
-                        const auto delta = ordinal - first;
-                        if (delta % stride == 0 && delta / stride < chain->spec->tile_count) {
-                            return true;
-                        }
-                    }
-                    return false;
-                };
-                if (overlaps_ordinary(chain->spec->fill.fill_order_first,
-                                      chain->spec->fill.fill_order_stride) ||
-                    overlaps_ordinary(chain->spec->consume.consume_order_first,
-                                      chain->spec->consume.consume_order_stride)) {
-                    fail(work.work_id, "ordinary and compact pipeline registration ordinals overlap");
-                }
-            }
-        }
-        for (const auto* leg : work_legs_.at(work.work_id)) {
-            if (find_virtual_ref(leg->spec->leg_id)) {
-                fail(work.work_id, "ordinary leg ID aliases a compact virtual pipeline ID");
-            }
-        }
     }
 
     void wire_dependencies() {
@@ -2493,19 +1996,6 @@ class NativeProjectionWorld final {
 
     void check_acyclic() const {
         auto indegree = deps_remaining_;
-        // Future compact IDs are represented arithmetically. Their internal
-        // chain order is acyclic by construction; exclude those incoming
-        // edges from this bounded static/work-level cycle pass.
-        for (const auto& entry : dependents_) {
-            if (!find_virtual_ref(entry.first) || legs_.count(entry.first)) continue;
-            for (const auto& target : entry.second) {
-                const auto degree = indegree.find(target);
-                if (degree == indegree.end() || degree->second == 0) {
-                    fail(target, "dependency counter underflow in compact cycle check");
-                }
-                --degree->second;
-            }
-        }
         std::vector<std::string> queue;
         for (const auto& entry : indegree) if (entry.second == 0) queue.push_back(entry.first);
         size_t visited = 0;
@@ -3076,38 +2566,11 @@ class NativeProjectionWorld final {
         leg->completion = ceil_ns(time_ns);
         const std::string completed_id = leg->spec->leg_id;
         const std::string completed_work_id = leg->work_id;
-        RuntimePipelineChain* pipeline_chain = leg->pipeline_chain;
-        const bool pipeline_fill = leg->pipeline_fill;
-        const uint64_t pipeline_index = leg->pipeline_local_index;
         for (const auto& lease : leg->spec->releases) {
             auto& gate = gates_.at(lease.gate_id);
             if (gate.occupied < lease.units) fail(gate.spec->gate_id, "released below zero");
             gate.occupied -= lease.units;
             wake_gate_waiters(gate);
-        }
-        if (pipeline_chain != nullptr) {
-            if (pipeline_fill) {
-                if (pipeline_index != pipeline_chain->completed_fill_count) {
-                    fail(completed_id, "fill cursor completed out of sequence");
-                }
-                // Register the next tile's dependency while this predecessor
-                // is still logically uncompleted. signal_dependents() below
-                // then wakes it in the same lexical callback order as the
-                // original fully materialized graph.
-                if (pipeline_index + 1 < pipeline_chain->spec->tile_count) {
-                    materialize_pipeline_pair(pipeline_chain, pipeline_index + 1);
-                }
-                ++pipeline_chain->completed_fill_count;
-            } else {
-                if (pipeline_index != pipeline_chain->completed_consume_count) {
-                    fail(completed_id, "consume cursor completed out of sequence");
-                }
-                ++pipeline_chain->completed_consume_count;
-                if (pipeline_index + 1 == pipeline_chain->spec->tile_count) {
-                    pipeline_chain->has_terminal_consume_completion = true;
-                    pipeline_chain->terminal_consume_completion = leg->completion;
-                }
-            }
         }
         if (leg->spec->has_signal_barrier) {
             auto& barrier = barriers_.at(leg->spec->signals_barrier);
@@ -3128,11 +2591,6 @@ class NativeProjectionWorld final {
         if (remaining == 0) {
             work_done_at_[completed_work_id] = work_max_completion_.at(completed_work_id);
             signal_dependents(std::string(kWorkNodePrefix) + completed_work_id);
-        }
-        if (pipeline_chain != nullptr) {
-            dependents_.erase(completed_id);
-            deps_remaining_.erase(completed_id);
-            legs_.erase(completed_id);
         }
     }
 
@@ -3238,64 +2696,6 @@ class NativeProjectionWorld final {
     }
 };
 
-uint64_t projection_share_units_in_chain(
-    const PipelineProjectionShare& share, const uint64_t tile_count,
-    const std::string& path) {
-    const unsigned __int128 end =
-        static_cast<unsigned __int128>(share.share_index_first) + tile_count;
-    if (tile_count == 0 || end > share.total_tiles) {
-        fail(path, "chain share range is outside total_tiles");
-    }
-    const uint64_t quotient = share.total_units / share.total_tiles;
-    const uint64_t remainder = share.total_units % share.total_tiles;
-    const unsigned __int128 base =
-        static_cast<unsigned __int128>(quotient) * tile_count;
-    const uint64_t overlap_start = std::min(share.share_index_first, remainder);
-    const uint64_t overlap_end = std::min(
-        static_cast<uint64_t>(end), remainder);
-    const uint64_t remainder_units = overlap_end > overlap_start
-        ? overlap_end - overlap_start : 0;
-    const unsigned __int128 total = base + remainder_units;
-    if (total > std::numeric_limits<uint64_t>::max()) {
-        fail(path, "chain share sum exceeds uint64");
-    }
-    return static_cast<uint64_t>(total);
-}
-
-uint64_t projection_fill_bytes_in_chain(
-    const PipelineDescriptor& descriptor,
-    const PipelineProjectionChain& chain) {
-    const auto group = std::find_if(
-        descriptor.groups().begin(), descriptor.groups().end(),
-        [&](const auto& candidate) {
-            return candidate.group_ordinal == chain.group_ordinal;
-        });
-    if (group == descriptor.groups().end()) {
-        fail("focus_bytes", "pipeline chain references missing group");
-    }
-    if (chain.tile_count == 0 || chain.tile_count != group->tile_axis.tile_count) {
-        fail("focus_bytes", "pipeline chain tile count disagrees with group axis");
-    }
-    const auto& axis = group->tile_axis;
-    const unsigned __int128 prior_units =
-        static_cast<unsigned __int128>(axis.units_per_tile) *
-        (chain.tile_count - 1);
-    if (prior_units > axis.total_units) {
-        fail("focus_bytes", "pipeline group tile extent is inconsistent");
-    }
-    const uint64_t tail_remaining = axis.total_units -
-        static_cast<uint64_t>(prior_units);
-    const uint64_t tail_bytes = std::min(
-        chain.fill.bytes_per_tile, tail_remaining);
-    const unsigned __int128 total =
-        static_cast<unsigned __int128>(chain.fill.bytes_per_tile) *
-            (chain.tile_count - 1) + tail_bytes;
-    if (total > std::numeric_limits<uint64_t>::max()) {
-        fail("focus_bytes", "pipeline fill total exceeds uint64");
-    }
-    return static_cast<uint64_t>(total);
-}
-
 }  // namespace
 
 namespace {
@@ -3321,68 +2721,17 @@ ClosureSummary compute_closure(const NativeProjectionInput& input,
     std::map<std::string, std::set<std::string>> barrier_to_works;
     std::map<std::string, std::set<std::string>> dep_edges;
     std::map<std::string, std::string> leg_to_work;
-    struct VirtualOwner final { std::string prefix, work_id; uint64_t first, count; };
-    std::vector<VirtualOwner> virtual_owners;
-    std::vector<std::pair<std::string, std::string>> compact_dependencies;
     std::set<std::string> candidate_ids;
     for (const auto* work : works) {
         for (const auto& leg : work->legs) leg_to_work[leg.leg_id] = work->work_id;
-        for (const auto& descriptor : work->pipeline_descriptors) {
-            for (const auto& chain : descriptor->projection().chains) {
-                virtual_owners.push_back({chain.fill.leg_id_prefix, work->work_id,
-                    chain.fill.first_index, chain.tile_count});
-                virtual_owners.push_back({chain.consume.leg_id_prefix, work->work_id,
-                    chain.consume.first_index, chain.tile_count});
-                for (const auto& key : chain.fill.route) resource_to_works[key].insert(work->work_id);
-                for (const auto& key : chain.consume.route) resource_to_works[key].insert(work->work_id);
-                gate_to_works[chain.fill.gate_id].insert(work->work_id);
-                for (const auto& dep : chain.fill.start_deps) {
-                    compact_dependencies.emplace_back(work->work_id, dep);
-                }
-                for (const auto& dep : chain.consume.consume_deps) {
-                    compact_dependencies.emplace_back(work->work_id, dep);
-                }
-                for (const auto& dep : chain.consume.consume_start_deps) {
-                    compact_dependencies.emplace_back(work->work_id, dep);
-                }
-            }
-        }
     }
     for (const auto& work : candidates) candidate_ids.insert(work.work_id);
-    const auto virtual_owner = [&](const std::string& id) -> std::optional<std::string> {
-        std::optional<std::string> owner;
-        for (const auto& range : virtual_owners) {
-            if (id.size() <= range.prefix.size() ||
-                id.compare(0, range.prefix.size(), range.prefix) != 0) continue;
-            const auto suffix = id.substr(range.prefix.size());
-            uint64_t index = 0;
-            bool valid = !suffix.empty();
-            for (char ch : suffix) {
-                if (ch < '0' || ch > '9') { valid = false; break; }
-                const uint64_t digit = static_cast<uint64_t>(ch - '0');
-                if (index > (std::numeric_limits<uint64_t>::max() - digit) / 10) {
-                    valid = false; break;
-                }
-                index = index * 10 + digit;
-            }
-            if (!valid || std::to_string(index) != suffix || index < range.first ||
-                index - range.first >= range.count) continue;
-            if (owner && *owner != range.work_id) {
-                fail(id, "compact dependency resolves to multiple work owners");
-            }
-            owner = range.work_id;
-        }
-        return owner;
-    };
     const auto add_dependency_edge = [&](const std::string& work_id,
                                          const std::string& dep) {
         auto other = leg_to_work.find(dep);
         if (other != leg_to_work.end()) {
             dep_edges[work_id].insert(other->second);
             dep_edges[other->second].insert(work_id);
-        } else if (const auto compact_owner = virtual_owner(dep)) {
-            dep_edges[work_id].insert(*compact_owner);
-            dep_edges[*compact_owner].insert(work_id);
         } else if (has_prefix(dep, kWorkNodePrefix)) {
             const auto target = dep.substr(std::char_traits<char>::length(kWorkNodePrefix));
             dep_edges[work_id].insert(target);
@@ -3400,9 +2749,6 @@ ClosureSummary compute_closure(const NativeProjectionInput& input,
             for (const auto& dep : leg.deps) {
                 add_dependency_edge(work->work_id, dep);
             }
-        }
-        for (const auto& compact : compact_dependencies) {
-            if (compact.first == work->work_id) add_dependency_edge(work->work_id, compact.second);
         }
         for (const auto& dep : work->depends_on_work) {
             dep_edges[work->work_id].insert(dep);
@@ -3427,13 +2773,6 @@ ClosureSummary compute_closure(const NativeProjectionInput& input,
             }
         }
     }
-    for (const auto& compact : compact_dependencies) {
-        if (candidate_ids.count(compact.first)) {
-            for (const auto& barrier : input.barriers) {
-                if (barrier.barrier_id == compact.second) barriers.insert(compact.second);
-            }
-        }
-    }
     bool changed = true;
     while (changed) {
         changed = false;
@@ -3444,13 +2783,6 @@ ClosureSummary compute_closure(const NativeProjectionInput& input,
                 for (const auto& lease : leg.acquires) changed |= gates.insert(lease.gate_id).second;
                 for (const auto& lease : leg.releases) changed |= gates.insert(lease.gate_id).second;
                 if (leg.has_signal_barrier) changed |= barriers.insert(leg.signals_barrier).second;
-            }
-            for (const auto& descriptor : work->pipeline_descriptors) {
-                for (const auto& chain : descriptor->projection().chains) {
-                    for (const auto& key : chain.fill.route) changed |= out.resources.insert(key).second;
-                    for (const auto& key : chain.consume.route) changed |= out.resources.insert(key).second;
-                    changed |= gates.insert(chain.fill.gate_id).second;
-                }
             }
         }
         auto add_index = [&](const auto& index, const std::set<std::string>& closed) {
@@ -3811,17 +3143,6 @@ nlohmann::json NativeProjection::project(
         if (work.work_id == focus_id) {
             for (const auto& leg : work.legs) {
                 add_focus_bytes(leg.bytes_amount);
-            }
-            for (const auto& descriptor : work.pipeline_descriptors) {
-                for (const auto& chain : descriptor->projection().chains) {
-                    add_focus_bytes(projection_fill_bytes_in_chain(
-                        *descriptor, chain));
-                    if (chain.consume.has_hbm_share) {
-                        add_focus_bytes(projection_share_units_in_chain(
-                            chain.consume.hbm_share, chain.tile_count,
-                            "focus_bytes.hbm_share"));
-                    }
-                }
             }
         }
     }

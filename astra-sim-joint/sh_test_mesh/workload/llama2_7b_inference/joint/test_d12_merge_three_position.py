@@ -14,7 +14,7 @@
      划不变）；两个权威区间内容交叠 fail-closed；
   4. **P 阶段 action 不覆盖真实 D 末态** —— copy/recompute 末态 =
      执行端完整并集 → 直接作为结果位置（零载荷），不因 home 更大
-     搬回 home；remote 末态按两侧保留量定目标，与 action 名无关；
+     搬回 home；
   5. **平局次序：边界逻辑 home → D 实例 → 编号**（式(21)）；
   6. **容量回退** —— 同一"保留量降序＋固定平局"次序，至多两次替
      代检查；**不搜索目标速度最优**（替代目标更廉也不改变选择，
@@ -38,11 +38,10 @@ for _p in (_HERE, _WL):
 from joint.boundary_layout import (  # noqa: E402
     INTERVAL_ROLE_BASE,
     INTERVAL_ROLE_CONTEXT,
-    INTERVAL_ROLE_INCREMENT,
+    INTERVAL_ROLE_GROWTH,
     BoundaryKvInterval,
 )
 from joint.joint_cost_model import (  # noqa: E402
-    ACTION_REMOTE,
     MERGE_SELECTION_COMPLETE_UNION,
     MERGE_SELECTION_RETENTION_MAX,
     JointCostError,
@@ -51,13 +50,11 @@ from joint.joint_cost_model import (  # noqa: E402
 from joint.test_d18_boundary_decision import (  # noqa: E402
     KV_TOKEN_BYTES,
     _complete_boundary,
-    _increment_boundary,
     _loads,
-    _loads3,
     _model,
 )
 
-U_BYTES = KV_TOKEN_BYTES * 40         # 增量区间（40 token）/rank
+U_BYTES = KV_TOKEN_BYTES * 40         # 新增区间（40 token）/rank
 GROWTH_BYTES = KV_TOKEN_BYTES * 8     # decode 增长（8 token）/rank
 
 
@@ -68,6 +65,19 @@ def _interval(replica_id, holder, start, end, bytes_by_rank,
         authority=authority, token_start=start, token_end=end,
         layer_start=0, layer_end=0,
         bytes_by_tp_rank=tuple(int(value) for value in bytes_by_rank))
+
+
+def _loads3():
+    """三实例负载视图（区间代数构造需要三位置几何）。"""
+    from joint.joint_cost_model import InstanceLoadView
+    return {
+        index: InstanceLoadView(
+            instance_index=index, queued_task_load_ns=0,
+            running_task_load_ns=0, active_decode_task_load_ns=0,
+            hbm_remaining_bytes_by_tp_rank=(10 ** 9, 10 ** 9),
+            reclaimable_bytes_by_tp_rank=(10 ** 9, 10 ** 9))
+        for index in range(3)
+    }
 
 
 # ------------------------------------------------------------- 式(21) --
@@ -83,7 +93,7 @@ class Eq21TargetSelectionTest(unittest.TestCase):
             intervals=(
                 _interval("base", 0, 0, 100, (1000, 1000)),
                 _interval("increment", 1, 100, 150, (1500, 1500),
-                          role=INTERVAL_ROLE_INCREMENT),
+                          role=INTERVAL_ROLE_GROWTH),
             ),
             decode_instance=1, logic_home=0)
         self.assertEqual(end_state.complete_union_position, None)
@@ -105,7 +115,7 @@ class Eq21TargetSelectionTest(unittest.TestCase):
             intervals=(
                 _interval("base", 0, 0, 100, (1000, 1000)),
                 _interval("increment", 1, 100, 200, (1000, 1000),
-                          role=INTERVAL_ROLE_INCREMENT),
+                          role=INTERVAL_ROLE_GROWTH),
             ),
             decode_instance=1, logic_home=0)
         plan = _model(_loads2()).merge_from_layout(end_state, notes=[])
@@ -179,7 +189,7 @@ class OrderIndependenceTest(unittest.TestCase):
     def test_plan_invariant_under_interval_input_order(self):
         base = _interval("base", 2, 0, 100, (1000, 1000))
         increment = _interval("increment", 0, 100, 140, (300, 300),
-                              role=INTERVAL_ROLE_INCREMENT)
+                              role=INTERVAL_ROLE_GROWTH)
         growth = (200, 200)
         reference = None
         for intervals in (
@@ -237,7 +247,7 @@ class DedupTest(unittest.TestCase):
     def test_duplicate_replica_does_not_increase_v(self):
         base = _interval("base", 2, 0, 100, (1000, 1000))
         increment = _interval("increment", 0, 100, 140, (300, 300),
-                              role=INTERVAL_ROLE_INCREMENT)
+                              role=INTERVAL_ROLE_GROWTH)
         clean = project_end_state(
             intervals=(base, increment), decode_instance=1,
             logic_home=2)
@@ -281,7 +291,7 @@ class AuthorityMigrationTest(unittest.TestCase):
             intervals=(
                 _interval("base", 2, 0, 100, (1000, 1000)),
                 _interval("increment", 0, 100, 140, (300, 300),
-                          role=INTERVAL_ROLE_INCREMENT),
+                          role=INTERVAL_ROLE_GROWTH),
             ),
             decode_instance=1,
             migrated_interval_ids=("increment",),
@@ -308,7 +318,7 @@ class CapacityFallbackTest(unittest.TestCase):
             intervals=(
                 _interval("base", 0, 0, 100, (1000, 1000)),
                 _interval("increment", 1, 100, 150, (1500, 1500),
-                          role=INTERVAL_ROLE_INCREMENT),
+                          role=INTERVAL_ROLE_GROWTH),
             ),
             decode_instance=1, logic_home=0)
         plan = _model(_loads2()).merge_from_layout(end_state, notes=[])
@@ -332,7 +342,7 @@ class CapacityFallbackTest(unittest.TestCase):
             intervals=(
                 _interval("base", 0, 0, 100, (3000, 3000)),
                 _interval("increment", 1, 100, 140, (500, 500),
-                          role=INTERVAL_ROLE_INCREMENT),
+                          role=INTERVAL_ROLE_GROWTH),
             ),
             decode_instance=1, logic_home=0)
         # home=0 空间紧张（仅 100 B/rank），exec=1 充裕：按速度搜索
@@ -382,7 +392,7 @@ class MergePlanSurfaceTest(unittest.TestCase):
             intervals=(
                 _interval("base", 0, 0, 100, (1000, 1000)),
                 _interval("increment", 1, 100, 150, (1500, 1500),
-                          role=INTERVAL_ROLE_INCREMENT),
+                          role=INTERVAL_ROLE_GROWTH),
             ),
             decode_instance=1, logic_home=0)
         notes: list = []
@@ -442,7 +452,7 @@ class EndStateOverridesActionNameTest(unittest.TestCase):
                 history_tokens_before=50, estimated_decode_tokens=10,
                 horizon_source="run_online_mean",
                 input_kv_bytes_by_tp_rank=(500, 500)),
-            instance_index=1, action="copy", remote_enabled=True)
+            instance_index=1, action="copy")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.merge_ns, 0)
         self.assertIn("merge_v2_zero_byte_flip", candidate.breakdown.notes)
@@ -450,100 +460,16 @@ class EndStateOverridesActionNameTest(unittest.TestCase):
             "merge_eq21_rule=" + MERGE_SELECTION_COMPLETE_UNION,
             candidate.breakdown.notes)
 
-    def test_remote_direction_follows_end_state_retention(self):
-        """remote 末态按两侧保留量定目标：home 6000 ≥ exec 增量 3000 →
-        前向（目标 home），载荷 = exec 保留量整份——与 action 名无关，
-        只看投影末态。"""
-        from joint.joint_cost_model import SessionKVView, RequestView
-        model = _model(_loads2())
-        candidate = model.estimate_P_with_continuation(
-            session=SessionKVView(
-                session_id="s", home_instance=0, resident_instance=0,
-                location="local_hbm", history_tokens=50,
-                resident_prefix_layers=4,
-                history_bytes_by_tp_rank=(3000, 3000),
-                missing_bytes_by_tp_rank=(0, 0)),
-            request=RequestView(
-                request_id="r", session_id="s", input_tokens=5,
-                history_tokens_before=50, estimated_decode_tokens=10,
-                horizon_source="run_online_mean",
-                input_kv_bytes_by_tp_rank=(500, 500)),
-            instance_index=1, action=ACTION_REMOTE, remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        # exec 保留 = input 500 + 增长 500×10//5 = 1500/rank；home
-        # 3000 ≥ 1500 → 目标 home，载荷 = 3000/rank 总量。
-        self.assertIn("merge_eq21_target=0", candidate.breakdown.notes)
-        self.assertIn("merge_v2_direction=forward",
-                      candidate.breakdown.notes)
-        payload_note = next(
-            note for note in candidate.breakdown.notes
-            if note.startswith("merge_leg[0]=1->0:bytes="))
-        self.assertEqual(
-            int(payload_note.split("bytes=")[1].split(",")[0]), 3000)
-
 
 class DBoundaryEq21IntegrationTest(unittest.TestCase):
     """D 边界结算集成：三实例几何下的式(21) 目标与 ω_B 平局。"""
-
-    def test_increment_switch_merges_to_retention_max(self):
-        """增量型切换（j=1≠i_P=0，home=2；C4 纯多源远读——U 不随迁）：
-        末态三位置 {home: base, i_P: U, j: growth}；base 最大 → 目标
-        home=2，两个真实来源（U、growth）都并入 home。"""
-        boundary = _increment_boundary()
-        model = _model(_loads3())
-        candidate = model.estimate_D_remaining(
-            boundary=boundary, instance_index=1, action=ACTION_REMOTE,
-            remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        notes = candidate.breakdown.notes
-        # V_home = 12800/rank ≥ V_iP = 5120 ≥ V_j = 1024 → 目标 home。
-        self.assertIn("merge_eq21_target=2", notes)
-        base_bytes = 2 * (KV_TOKEN_BYTES * 100)
-        self.assertIn(
-            f"merge_eq21_retention=2:{base_bytes},0:{2 * U_BYTES},"
-            f"1:{2 * GROWTH_BYTES}", notes)
-        # 两真实来源（i_P 的 U、j 的 growth）都并入 home。
-        self.assertTrue(any(
-            note.startswith(f"merge_leg[0]=0->2:bytes={2 * U_BYTES},")
-            for note in notes))
-        self.assertTrue(any(
-            note.startswith(f"merge_leg[1]=1->2:bytes={2 * GROWTH_BYTES},")
-            for note in notes))
-
-    def test_boundary_logic_home_decides_tie_over_base_holder(self):
-        """ω_B（边界逻辑 home）≠ 物理基础驻留实例：保留量平局时
-        ω_B 优先于 base holder 与 D 实例（式(21) 平局首位；D-BI 分
-        立场端到端穿透；C4 纯多源末态 = {home: base, i_P: U, j: G}）。
-
-        构造：base 字节 = U 字节（等量平局、均大于 growth）→ 平局位
-        置 {home(2), i_P(0)}。logic_home_instance=0 → 目标翻转给
-        ω_B=0；缺省（None → 退回 base holder=2）→ 目标 home=2。"""
-        tie_bytes = (U_BYTES, U_BYTES)
-        model = _model(_loads3())
-        tie_boundary = _increment_boundary(
-            base_bytes_by_tp_rank=tie_bytes,
-            logic_home_instance=0)
-        candidate = model.estimate_D_remaining(
-            boundary=tie_boundary, instance_index=1, action=ACTION_REMOTE,
-            remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        self.assertIn("merge_eq21_target=0", candidate.breakdown.notes)
-        # 缺省 ω_B：平局退回物理 base holder（两位置既定"同量留原 home"）。
-        default_boundary = _increment_boundary(
-            base_bytes_by_tp_rank=tie_bytes)
-        default_candidate = model.estimate_D_remaining(
-            boundary=default_boundary, instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True)
-        self.assertTrue(default_candidate.applicable)
-        self.assertIn("merge_eq21_target=2", default_candidate.breakdown.notes)
 
     def test_complete_boundary_copy_zero_payload(self):
         """完整型 copy@j：j 持并集 → 直接作为结果位置，零载荷。"""
         boundary = _complete_boundary(p_instance_index=0)
         model = _model(_loads())
         candidate = model.estimate_D_remaining(
-            boundary=boundary, instance_index=1, action="copy",
-            remote_enabled=True)
+            boundary=boundary, instance_index=1, action="copy")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.merge_ns, 0)
         self.assertIn("merge_v2_zero_byte_flip", candidate.breakdown.notes)
@@ -572,7 +498,7 @@ def _three_position_state():
         intervals=(
             _interval("base", 2, 0, 100, (1000, 1000)),
             _interval("increment", 0, 100, 140, (300, 300),
-                      role=INTERVAL_ROLE_INCREMENT),
+                      role=INTERVAL_ROLE_GROWTH),
             _interval("growth", 1, 140, 220, (600, 600),
                       role=INTERVAL_ROLE_CONTEXT),
         ),

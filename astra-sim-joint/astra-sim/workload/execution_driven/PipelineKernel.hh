@@ -1,6 +1,9 @@
 /******************************************************************************
-Checked algebra for compact remote-read ranges. All tile queries are lazy;
-memory use is O(shards), never O(total virtual tiles).
+Bounded integer window algebra for the die compute backend's timer-window
+approximation (D4, three-action retirement 2026-10-14: the descriptor/tile
+half of this kernel retired with the remote-read mechanism; this file keeps
+the window algebra plus the PipelineKernelContract implementation migrated
+from the former PipelineDescriptor.cc).
 ******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_PIPELINE_KERNEL_HH
@@ -10,7 +13,7 @@ memory use is O(shards), never O(total virtual tiles).
 #include <string>
 #include <vector>
 
-#include "astra-sim/workload/execution_driven/PipelineDescriptor.hh"
+#include "astra-sim/workload/execution_driven/PipelineKernelContract.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -79,20 +82,6 @@ class PipelineWindowController final {
 
 class PipelineKernel final {
   public:
-    /// local_tile_ordinal is zero-based; returned global ordinal is one-based.
-    static PipelineTile tile(const PipelineDescriptor& descriptor,
-                             uint64_t group_ordinal,
-                             uint64_t local_tile_ordinal);
-
-    /// Sum data bytes for the whole group without enumerating its tiles.
-    static uint64_t total_data_bytes(const PipelineDescriptor& descriptor,
-                                     uint64_t group_ordinal);
-
-    /// Sum the first count tiles without enumerating all preceding tiles.
-    static uint64_t prefix_data_bytes(const PipelineDescriptor& descriptor,
-                                      uint64_t group_ordinal,
-                                      uint64_t count);
-
     /// Construct a bounded precision plan. Hardware minima are per logical
     /// slice; an empty vector means no additional floor beyond the exact
     /// service already present in the input. effective_limit must be one of

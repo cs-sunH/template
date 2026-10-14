@@ -50,9 +50,7 @@ from joint.link_quota import (  # noqa: E402
     AIMD_SIGNAL_COMFORT,
     AIMD_SIGNAL_SHRINK,
     DELTA_ADM_INITIAL_NS,
-    FLOW_ELASTIC,
     FLOW_ONESHOT,
-    FLOW_REALTIME,
     MERGE_DIRECTION_FORWARD,
     MERGE_DIRECTION_REVERSE,
     MERGE_RESERVE_OWNER_TEMPLATE,
@@ -65,12 +63,9 @@ from joint.link_quota import (  # noqa: E402
     WAIT_QUOTA_PORT,
     LinkQuotaError,
     LinkQuotaTracker,
-    challenger_flips,
     derive_q_init,
     derive_rho_eff,
     extend_retry_key,
-    port_parity_admits,
-    port_parity_headroom,
     quota_deferred_requeue,
     reachable_domain,
 )
@@ -129,183 +124,6 @@ class QuotaDerivationTest(unittest.TestCase):
         self.assertEqual(QUOTA_MODES, ("off", "static", "aimd"))
 
 
-# ======================================================== 端口平价门 ==
-
-
-class PortParityGateTest(unittest.TestCase):
-    """B_HBM/(u_port+1) >= r_hat_KV；端口无 max(1,.) 保底（忙端口即 0）。"""
-
-    def test_admits_when_rate_sufficient(self):
-        # B=100, r̂=50：u_port=1 → 100/2 = 50 >= 50（边界含等号）。
-        self.assertTrue(port_parity_admits(100.0, 0, 50.0))
-        self.assertTrue(port_parity_admits(100.0, 1, 50.0))
-        self.assertFalse(port_parity_admits(100.0, 2, 50.0))
-
-    def test_busy_port_admits_nothing_no_floor(self):
-        # 忙端口即 0：u_port 高到分母压平带宽 → 全拒；无任何保底名额。
-        self.assertFalse(port_parity_admits(100.0, 100, 50.0))
-        # r̂ > B：即使 u_port=0 也无准入（对比链路侧 max(1,.) 下限）。
-        self.assertFalse(port_parity_admits(100.0, 0, 150.0))
-
-    def test_headroom_counts_remaining_realtime_slots(self):
-        # k_max = floor(B/r̂) − u：u=0/r̂=50 → k=2（B/2=50 含边界）。
-        self.assertEqual(port_parity_headroom(100.0, 0, 50.0), 2)
-        self.assertEqual(port_parity_headroom(100.0, 1, 50.0), 1)
-        self.assertEqual(port_parity_headroom(100.0, 0, 10.0), 10)
-        self.assertEqual(port_parity_headroom(100.0, 0, 150.0), 0)
-
-    def test_invalid_parity_inputs_fail_closed(self):
-        with self.assertRaises(LinkQuotaError):
-            port_parity_admits(100.0, -1, 50.0)
-        with self.assertRaises(LinkQuotaError):
-            port_parity_admits(0.0, 0, 50.0)
-        with self.assertRaises(LinkQuotaError):
-            port_parity_admits(100.0, 0, 0.0)
-
-
-# ======================================================= 三类流判据 ==
-
-
-class RealtimeFlowTest(unittest.TestCase):
-    """实时流（decode remote-read 读流）：链路门 + 端口平价门。"""
-
-    def setUp(self):
-        # noc=4, hbm=2 → rho=2 → Q_init=2（小数值派生，同源公式）。
-        self.t = _tracker(noc=4.0, hbm=2.0)
-        self.assertEqual(self.t.q_init, 2)
-
-    def test_link_gate_fills_then_defers(self):
-        v1 = self.t.admit_flow(
-            owner="r1#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=0, r_hat_kv_bytes_per_ns=0.5)
-        v2 = self.t.admit_flow(
-            owner="r2#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=0, r_hat_kv_bytes_per_ns=0.5)
-        self.assertTrue(v1.admitted and v2.admitted)
-        v3 = self.t.admit_flow(
-            owner="r3#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=0, r_hat_kv_bytes_per_ns=0.5)
-        self.assertFalse(v3.admitted)
-        self.assertEqual(v3.wait_reason, WAIT_QUOTA_LINK)
-        self.assertEqual(v3.resource_kind, "link")
-        self.assertEqual(v3.remaining, 0)
-        # inapplicable_reason 注明资源种类与余量（实例不掩码——裁决只
-        # 标动作，无异常抛出）。
-        self.assertIn("quota_link", v3.inapplicable_reason)
-        self.assertIn("remaining=0", v3.inapplicable_reason)
-
-    def test_parity_gate_defers_with_quota_port(self):
-        # hbm=2.0, r̂=1.5：u=0 → 2.0/1 = 2.0 >= 1.5 过；u=1 → 1.0 < 1.5 拒。
-        v1 = self.t.admit_flow(
-            owner="r1#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=5, r_hat_kv_bytes_per_ns=1.5)
-        self.assertTrue(v1.admitted)
-        v2 = self.t.admit_flow(
-            owner="r2#decode#0", flow_class=FLOW_REALTIME,
-            links=[(1, 2)], port_id=5, r_hat_kv_bytes_per_ns=1.5)
-        self.assertFalse(v2.admitted)
-        self.assertEqual(v2.wait_reason, WAIT_QUOTA_PORT)
-        self.assertEqual(v2.resource_kind, "port")
-
-    def test_u_port_base_from_load_view_tightens_gate(self):
-        # 外部活跃 decode 消费流（负载视图）计入分母：u_port_base=1 时
-        # 首条实时流即被平价门拒（忙端口即 0）。
-        v = self.t.admit_flow(
-            owner="r1#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=5, r_hat_kv_bytes_per_ns=1.5,
-            u_port_base=1)
-        self.assertFalse(v.admitted)
-        self.assertEqual(v.wait_reason, WAIT_QUOTA_PORT)
-
-    def test_realtime_requires_r_hat(self):
-        with self.assertRaises(LinkQuotaError):
-            self.t.admit_flow(
-                owner="r1#decode#0", flow_class=FLOW_REALTIME,
-                links=[(0, 1)], port_id=5)
-
-    def test_atomic_no_partial_enrollment_on_failure(self):
-        # 链路 (0,1) 已满、链路 (1,2) 空：跨两链路的流整体不借——
-        # 两条链路都不得残留登记。
-        for owner in ("a#decode#0", "b#decode#0"):
-            self.assertTrue(self.t.admit_flow(
-                owner=owner, flow_class=FLOW_REALTIME,
-                links=[(0, 1)], port_id=0,
-                r_hat_kv_bytes_per_ns=0.1).admitted)
-        v = self.t.admit_flow(
-            owner="c#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1), (1, 2)], port_id=9,
-            r_hat_kv_bytes_per_ns=0.1)
-        self.assertFalse(v.admitted)
-        self.assertEqual(self.t.link_occupancy((1, 2)), 0)
-        self.assertEqual(self.t.port_enrolled(9), 0)
-
-    def test_duplicate_owner_fails_closed(self):
-        self.assertTrue(self.t.admit_flow(
-            owner="r1#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=0, r_hat_kv_bytes_per_ns=0.5).admitted)
-        with self.assertRaises(LinkQuotaError):
-            self.t.admit_flow(
-                owner="r1#decode#0", flow_class=FLOW_REALTIME,
-                links=[(2, 3)], port_id=1, r_hat_kv_bytes_per_ns=0.5)
-
-
-class ElasticFlowTest(unittest.TestCase):
-    """弹性流（remote-read prefill 首遍读流）：并发上限 ≤ Q，不套平价门。"""
-
-    def setUp(self):
-        self.t = _tracker(noc=4.0, hbm=2.0)   # Q_init = 2
-        self.assertEqual(self.t.q_init, 2)
-
-    def test_admitted_even_when_parity_would_fail(self):
-        # r̂=1.5 下平价门在 u=1 即拒（见 RealtimeFlowTest）；弹性流无
-        # r̂ 输入也不套平价门——两条照过（并发上限内）。
-        for owner in ("r1#readplan", "r2#readplan"):
-            v = self.t.admit_flow(
-                owner=owner, flow_class=FLOW_ELASTIC,
-                links=[(owner == "r1#readplan") and (0, 1) or (1, 2)],
-                port_id=5)
-            self.assertTrue(v.admitted)
-
-    def test_concurrency_cap_defers(self):
-        for i, owner in enumerate(("r1#readplan", "r2#readplan")):
-            self.assertTrue(self.t.admit_flow(
-                owner=owner, flow_class=FLOW_ELASTIC,
-                links=[(i, i + 1)], port_id=5).admitted)
-        v = self.t.admit_flow(
-            owner="r3#readplan", flow_class=FLOW_ELASTIC,
-            links=[(9, 10)], port_id=5)
-        self.assertFalse(v.admitted)
-        self.assertEqual(v.wait_reason, WAIT_QUOTA_PORT)
-        self.assertEqual(v.resource_kind, "port")
-        self.assertIn("concurrency", v.inapplicable_reason)
-        self.assertIn("cap Q_init=2", v.inapplicable_reason)
-
-    def test_elastic_counts_into_u_port_for_later_realtime(self):
-        # 弹性流端口入 u_port：占用平价门分母，收紧后续实时流。
-        self.assertTrue(self.t.admit_flow(
-            owner="r1#readplan", flow_class=FLOW_ELASTIC,
-            links=[(0, 1)], port_id=5).admitted)
-        # hbm=2.0, r̂=1.5：u_port = 0(外部) + 1(弹性在册) → 1.0 < 1.5 拒。
-        v = self.t.admit_flow(
-            owner="r2#decode#0", flow_class=FLOW_REALTIME,
-            links=[(1, 2)], port_id=5, r_hat_kv_bytes_per_ns=1.5)
-        self.assertFalse(v.admitted)
-        self.assertEqual(v.wait_reason, WAIT_QUOTA_PORT)
-        self.assertEqual(self.t.port_parity_headroom(
-            5, r_hat_kv_bytes_per_ns=1.5), 0)
-
-    def test_elastic_still_gated_by_link_quota(self):
-        for i, owner in enumerate(("r1#readplan", "r2#readplan")):
-            self.assertTrue(self.t.admit_flow(
-                owner=owner, flow_class=FLOW_ELASTIC,
-                links=[(0, 1)], port_id=i).admitted)
-        v = self.t.admit_flow(
-            owner="r3#readplan", flow_class=FLOW_ELASTIC,
-            links=[(0, 1)], port_id=9)
-        self.assertFalse(v.admitted)
-        self.assertEqual(v.wait_reason, WAIT_QUOTA_LINK)
-
-
 class OneshotFlowTest(unittest.TestCase):
     """一次性传输（copy/merge/逐出写回/池恢复）：全额计价、无端口门、
     链路计数入占用；端口在册收紧后续实时流（D4 通用治理同等纳入）。"""
@@ -313,21 +131,20 @@ class OneshotFlowTest(unittest.TestCase):
     def setUp(self):
         self.t = _tracker(noc=4.0, hbm=2.0)   # Q_init = 2
 
-    def test_no_port_gate_but_enrolls_into_u_port(self):
-        # hbm=2.0, r̂=1.5 下两条在册即拒平价；oneshot 无门、三条照过
-        # （并发上限只约束 elastic 类）。
+    def test_no_port_gate_but_enrolls_into_port_registry(self):
+        # oneshot 无端口门（远读平价门已退役，D9）、照常在册端口登记
+        # （披露面）；并发上限只约束 merge bulk 名额。
         for i in range(3):
             v = self.t.admit_flow(
                 owner=f"victim{i}#writeback", flow_class=FLOW_ONESHOT,
                 links=[(i, i + 1)], port_id=5)
             self.assertTrue(v.admitted)
         self.assertEqual(self.t.port_enrolled_by_class(5)[FLOW_ONESHOT], 3)
-        # 在册收紧后续实时流：u_port=3 → 2.0/4 = 0.5 < 1.5 拒。
+        # 登记不影响后续 oneshot 准入（无门；链路门只看链路信用）。
         v = self.t.admit_flow(
-            owner="r1#decode#0", flow_class=FLOW_REALTIME,
-            links=[(9, 10)], port_id=5, r_hat_kv_bytes_per_ns=1.5)
-        self.assertFalse(v.admitted)
-        self.assertEqual(v.wait_reason, WAIT_QUOTA_PORT)
+            owner="r1#decode#0", flow_class=FLOW_ONESHOT,
+            links=[(9, 10)], port_id=5)
+        self.assertTrue(v.admitted)
 
     def test_link_side_counted_into_occupancy(self):
         for owner in ("a#copy", "b#copy"):
@@ -438,9 +255,8 @@ class MergeReservePairingTest(unittest.TestCase):
     def test_reserve_deferred_when_link_credit_exhausted(self):
         for owner in ("a#decode#0", "b#decode#0"):
             self.assertTrue(self.t.admit_flow(
-                owner=owner, flow_class=FLOW_REALTIME,
-                links=[(0, 1)], port_id=0,
-                r_hat_kv_bytes_per_ns=0.1).admitted)
+                owner=owner, flow_class=FLOW_ONESHOT,
+                links=[(0, 1)], port_id=0).admitted)
         v = self.t.reserve_merge(
             "rid-1", links_forward=[(0, 1)], links_reverse=[(1, 0)],
             port_forward=7, port_reverse=3)
@@ -499,7 +315,7 @@ class MergeBorrowLedgerInvariantTest(unittest.TestCase):
     def _tracker_with_rid_flow(self):
         t = _tracker(noc=4.0, hbm=2.0)          # Q_init = 2
         self.assertTrue(t.admit_flow(
-            owner="rid-1#readplan", flow_class=FLOW_ELASTIC,
+            owner="rid-1#readplan", flow_class=FLOW_ONESHOT,
             links=[(0, 1)], port_id=5, now_ns=0).admitted)
         return t
 
@@ -588,17 +404,15 @@ class DeferredRetryKeyTest(unittest.TestCase):
     def test_epoch_stable_without_release(self):
         before = self.t.quota_retry_key()
         self.assertTrue(self.t.admit_flow(
-            owner="a#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=0,
-            r_hat_kv_bytes_per_ns=0.1).admitted)
+            owner="a#decode#0", flow_class=FLOW_ONESHOT,
+            links=[(0, 1)], port_id=0).admitted)
         # 准入本身不 bump（键变化须对应"信用可得性变化"= 释放侧事件）。
         self.assertEqual(self.t.quota_retry_key(), before)
 
     def test_flow_settle_bumps_epoch(self):
         self.assertTrue(self.t.admit_flow(
-            owner="a#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=0,
-            r_hat_kv_bytes_per_ns=0.1).admitted)
+            owner="a#decode#0", flow_class=FLOW_ONESHOT,
+            links=[(0, 1)], port_id=0).admitted)
         before = self.t.quota_retry_key()
         self.t.release_flow("a#decode#0")
         self.assertNotEqual(self.t.quota_retry_key(), before)
@@ -633,65 +447,11 @@ class DeferredRetryKeyTest(unittest.TestCase):
 
 
 class DeltaAdmFlipBandTest(unittest.TestCase):
-    """δ_adm 近平局带：挑战动作须胜在册动作族 >= δ_adm 才翻转（D5）。"""
+    """δ_adm 冻结值与 tracker 共享开关（D5；challenger_flips 谓词已随
+    远读挑战者退役删除——无生产调用点，A2 报告）。"""
 
     def test_initial_value_frozen_at_zero(self):
         self.assertEqual(DELTA_ADM_INITIAL_NS, 0)
-
-    def test_band_requires_margin_at_least_delta(self):
-        # K8（2026-09-23）：原 546/548 两行同断言重复（"边界含等号"注释
-        # 挂在重复行上）——改为边界等号 + 边界内/外三态实钉。
-        self.assertTrue(challenger_flips(90, 100, delta_adm_ns=10))   # margin=10=δ 含等号
-        self.assertFalse(challenger_flips(91, 100, delta_adm_ns=10))  # margin=9<δ
-        self.assertTrue(challenger_flips(89, 100, delta_adm_ns=10))   # margin=11>δ
-        self.assertTrue(challenger_flips(0, 100, delta_adm_ns=100))   # margin=100
-
-    def test_zero_delta_is_open_gate_composing_with_argmin(self):
-        # δ=0（冻结初值）时谓词恒开（margin >= 0）；与既有
-        # (cost_ns, order_key) argmin 比较组合后零行为变更——平局由
-        # order_key 裁决，不借初值夹带翻转语义。
-        # F4（复审修复）：原期望式 ``incumbent - challenger >= 0`` 与
-        # challenger_flips 实现裁决式同源（恒真恒等，零效）——改为写死
-        # 查表，期望值逐对手工推导：语义 = 挑战者不贵于在册
-        # （challenger <= incumbent）才允许翻转。
-        # (challenger, incumbent, expected_flip)
-        # 90 < 100：挑战者更便宜 → 翻转 → True
-        # 100 == 100：平局边界（δ=0 含等号；平局终裁归 argmin 的
-        #   order_key）→ True
-        # 110 > 100：挑战者更贵 → 拒翻转 → False
-        # 0 == 0：零成本平局边界 → True
-        # 100 > 90：更贵（反向）→ False
-        # 0 < 100：全幅胜出 → True
-        table = ((90, 100, True), (100, 100, True), (110, 100, False),
-                 (0, 0, True), (100, 90, False), (0, 100, True))
-        for challenger, incumbent, expected in table:
-            self.assertIs(
-                challenger_flips(challenger, incumbent, 0), expected,
-                (challenger, incumbent))
-
-    def test_composition_with_argmin_at_zero_delta_matches_plain_argmin(self):
-        candidates = [("stay", 100), ("remote-read", 90), ("copy", 100),
-                      ("recompute", 120)]
-        order = {name: i for i, (name, _) in enumerate(candidates)}
-        plain = min(candidates, key=lambda c: (c[1], order[c[0]]))
-        incumbent = plain
-        for name, cost in candidates:
-            standard_prefers = (cost, order[name]) < (
-                incumbent[1], order[incumbent[0]])
-            flips = standard_prefers and challenger_flips(
-                cost, incumbent[1], DELTA_ADM_INITIAL_NS)
-            if flips:
-                incumbent = (name, cost)
-        self.assertEqual(incumbent, plain)   # 组合裁决 ≡ 纯 argmin
-
-    def test_nonzero_band_keeps_incumbent_on_near_tie(self):
-        # δ=25：挑战者只胜 10 不足翻转；胜 30 翻转。
-        self.assertFalse(challenger_flips(90, 100, delta_adm_ns=25))
-        self.assertTrue(challenger_flips(70, 100, delta_adm_ns=25))
-
-    def test_negative_delta_fails_closed(self):
-        with self.assertRaises(LinkQuotaError):
-            challenger_flips(90, 100, delta_adm_ns=-1)
 
     def test_tracker_carries_shared_switch_value(self):
         # 位于共享决策路径、内部对照臂同开关：单一 δ_adm 值经 tracker
@@ -715,12 +475,11 @@ class QuotaDeferredRequeueTest(unittest.TestCase):
     def _exhausted_verdicts(self):
         t = _tracker(noc=4.0, hbm=2.0)
         for owner in ("a#decode#0", "b#decode#0"):
-            t.admit_flow(owner=owner, flow_class=FLOW_REALTIME,
-                         links=[(0, 1)], port_id=0,
-                         r_hat_kv_bytes_per_ns=0.1)
+            t.admit_flow(owner=owner, flow_class=FLOW_ONESHOT,
+                         links=[(0, 1)], port_id=0)
         verdicts = {}
-        for action, links in (("remote-read", [(0, 1)]),
-                              ("copy", [(0, 1)])):
+        for action, links in (("copy", [(0, 1)]),
+                              ("recompute", [(0, 1)])):
             verdicts[action] = t.admit_flow(
                 owner=f"r#{action}", flow_class=FLOW_ONESHOT, links=links,
                 port_id=0)
@@ -748,21 +507,23 @@ class QuotaDeferredRequeueTest(unittest.TestCase):
         self.assertEqual(deferred.wait_reason, WAIT_QUOTA_LINK)
         self.assertEqual(
             deferred.retry_key, (3, ((0, 17),), t.quota_retry_key()[0]))
-        for action in ("remote-read", "copy"):
+        for action in ("copy", "recompute"):
             self.assertIn("quota_link", 
                           deferred.inapplicable_reasons[action])
 
-    def test_wait_reason_reports_port_when_port_scarse(self):
+    def test_wait_reason_reports_port_when_port_scarce(self):
+        # 端口稀缺等待现存产源 = merge bulk 名额（N_bulk = Q_init = 2）：
+        # 两笔预留吃满端口 5 的 bulk 后第三笔拒（quota_port）。
         t = _tracker(noc=4.0, hbm=2.0)
         for i in range(2):
-            t.admit_flow(owner=f"e{i}#readplan", flow_class=FLOW_ELASTIC,
-                         links=[(i, i + 1)], port_id=5)
-        verdict = t.admit_flow(
-            owner="r#decode#0", flow_class=FLOW_ELASTIC,
-            links=[(9, 10)], port_id=5)
+            self.assertTrue(t.reserve_merge(
+                f"rid-{i}", links_forward=[(i, i + 1)],
+                port_forward=5).admitted)
+        verdict = t.reserve_merge(
+            "rid-2", links_forward=[(9, 10)], port_forward=5)
         self.assertFalse(verdict.admitted)
         deferred = quota_deferred_requeue(
-            "req-2", {"remote-read": verdict}, t.quota_retry_key())
+            "req-2", {"copy": verdict}, t.quota_retry_key())
         self.assertEqual(deferred.wait_reason, WAIT_QUOTA_PORT)
 
     def test_release_reopens_admission_and_bumps_key(self):
@@ -780,11 +541,11 @@ class QuotaDeferredRequeueTest(unittest.TestCase):
     def test_admitted_verdict_input_fails_closed(self):
         t = _tracker(noc=4.0, hbm=2.0)
         admitted = t.admit_flow(
-            owner="a#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=0, r_hat_kv_bytes_per_ns=0.1)
+            owner="a#decode#0", flow_class=FLOW_ONESHOT,
+            links=[(0, 1)], port_id=0)
         with self.assertRaises(LinkQuotaError):
             quota_deferred_requeue(
-                "req-1", {"remote-read": admitted}, t.quota_retry_key())
+                "req-1", {"copy": admitted}, t.quota_retry_key())
 
     def test_empty_verdicts_defensive_requeue(self):
         t = _tracker()
@@ -803,9 +564,8 @@ class QuotaModeTest(unittest.TestCase):
         t = _tracker(mode=QUOTA_OFF, noc=4.0, hbm=2.0)
         for i in range(5):   # 远超 Q=2：off 模式全部放行
             v = t.admit_flow(
-                owner=f"a{i}#decode#0", flow_class=FLOW_REALTIME,
-                links=[(0, 1)], port_id=0,
-                r_hat_kv_bytes_per_ns=1.9)
+                owner=f"a{i}#decode#0", flow_class=FLOW_ONESHOT,
+                links=[(0, 1)], port_id=0)
             self.assertTrue(v.admitted)
         # 簿记照记：释放配对语义与模式无关。
         self.assertEqual(t.link_occupancy((0, 1)), 5)
@@ -833,28 +593,24 @@ class QuotaModeTest(unittest.TestCase):
         t = _tracker(mode=QUOTA_AIMD, noc=4.0, hbm=2.0)
         for owner in ("a#decode#0", "b#decode#0"):
             self.assertTrue(t.admit_flow(
-                owner=owner, flow_class=FLOW_REALTIME,
-                links=[(0, 1)], port_id=0,
-                r_hat_kv_bytes_per_ns=0.1).admitted)
+                owner=owner, flow_class=FLOW_ONESHOT,
+                links=[(0, 1)], port_id=0).admitted)
         t.set_link_quota((0, 1), 1)
         self.assertEqual(t.link_occupancy((0, 1)), 2)   # 不逐出
         self.assertEqual(t.link_remaining((0, 1)), -1)
-        v = t.admit_flow(owner="c#decode#0", flow_class=FLOW_REALTIME,
-                         links=[(0, 1)], port_id=0,
-                         r_hat_kv_bytes_per_ns=0.1)
+        v = t.admit_flow(owner="c#decode#0", flow_class=FLOW_ONESHOT,
+                         links=[(0, 1)], port_id=0)
         self.assertFalse(v.admitted)
         t.release_flow("a#decode#0")
         self.assertEqual(t.link_remaining((0, 1)), 0)
         self.assertFalse(t.admit_flow(
-            owner="c#decode#0", flow_class=FLOW_REALTIME,
-            links=[(0, 1)], port_id=0,
-            r_hat_kv_bytes_per_ns=0.1).admitted)
+            owner="c#decode#0", flow_class=FLOW_ONESHOT,
+            links=[(0, 1)], port_id=0).admitted)
 
     def test_snapshot_discloses_link_and_port_state(self):
         t = _tracker(noc=4.0, hbm=2.0)
-        t.admit_flow(owner="a#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(0, 1)], port_id=5,
-                     r_hat_kv_bytes_per_ns=0.5)
+        t.admit_flow(owner="a#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(0, 1)], port_id=5)
         t.reserve_merge("rid-1", links_forward=[(0, 1)], port_forward=5)
         snap = t.snapshot()
         link = snap["links"]["(0, 1)"]
@@ -862,7 +618,7 @@ class QuotaModeTest(unittest.TestCase):
         self.assertEqual(link["reserved"], 1)
         self.assertEqual(link["remaining"], 0)
         port = snap["ports"]["5"]
-        self.assertEqual(port["enrolled_by_class"][FLOW_REALTIME], 1)
+        self.assertEqual(port["enrolled_by_class"][FLOW_ONESHOT], 1)
         self.assertEqual(port["bulk_used"], 1)
         self.assertEqual(port["n_bulk"], 2)
 
@@ -884,9 +640,8 @@ class AimdExpansionFreezeTest(unittest.TestCase):
         # 旁链路喂一个寿命样本 1000 → EWMA=1000 → T_expand=10000。
         t = _tracker(mode=QUOTA_AIMD, noc=240.0, hbm=100.0)
         self.assertEqual(t.q_init, 2)
-        t.admit_flow(owner="svc#decode#0", flow_class=FLOW_REALTIME,
-                     links=[(9, 10)], port_id=6,
-                     r_hat_kv_bytes_per_ns=10.0, now_ns=0)
+        t.admit_flow(owner="svc#decode#0", flow_class=FLOW_ONESHOT,
+                     links=[(9, 10)], port_id=6, now_ns=0)
         t.release_flow("svc#decode#0", now_ns=1000)
         self.assertEqual(t.t_expand_ns, 10000.0)
         return t
@@ -1037,9 +792,8 @@ class ReachableDomainTest(unittest.TestCase):
             link_has_credit=lambda edge: t.link_remaining(edge) > 0)
         self.assertEqual(full_domain, frozenset({0, 1, 2}))
         for owner in ("a#decode#0", "b#decode#0"):
-            t.admit_flow(owner=owner, flow_class=FLOW_REALTIME,
-                         links=[(0, 1)], port_id=0,
-                         r_hat_kv_bytes_per_ns=0.1)
+            t.admit_flow(owner=owner, flow_class=FLOW_ONESHOT,
+                         links=[(0, 1)], port_id=0)
         shrunk = reachable_domain(
             0, {0: [1], 1: [2]},
             link_has_credit=lambda edge: t.link_remaining(edge) > 0)
@@ -1056,7 +810,7 @@ class ReachableDomainTest(unittest.TestCase):
 
 class JointConfigQuotaModeTest(unittest.TestCase):
     """开关解析：off/static/aimd 合法、非法 fail-closed、缺省 off（F7）、
-    manifest 含键、与 combo 正交（仿 remote_actions 独立解析模式）。"""
+    manifest 含键、与 combo 正交（独立解析模式）。"""
 
     def test_default_is_off(self):
         config = parse_joint_config({})
@@ -1080,7 +834,7 @@ class JointConfigQuotaModeTest(unittest.TestCase):
         with self.assertRaises(JointConfigError):
             JointMechanismConfig(
                 category_mode="typed", scheduler_mode="joint",
-                layer_policy="adaptive", remote_actions="on",
+                layer_policy="adaptive",
                 quota_mode="sometimes")
 
     def test_manifest_carries_quota_mode(self):
@@ -1101,16 +855,14 @@ class JointConfigQuotaModeTest(unittest.TestCase):
         self.assertNotIn("JOINT_QUOTA_MODE", manifest["source_env"])
 
     def test_orthogonal_to_combo_and_mechanism_switches(self):
-        # 配额与三机制/remote 正交：可与 combo 预设及其余开关共存，
+        # 配额与三机制正交：可与 combo 预设及其余开关共存，
         # 不触发预设-显式互斥（互斥只覆盖三机制开关）。
         config = parse_joint_config({
             "JOINT_ABLATION_COMBO": "TJE",
             "JOINT_QUOTA_MODE": "static",
-            "JOINT_REMOTE_ACTIONS": "off",
         })
         self.assertEqual(config.combo, "TJE")
         self.assertEqual(config.quota_mode, "static")
-        self.assertFalse(config.remote_enabled)
         # 缺省三机制语义不受配额开关影响。
         self.assertEqual(
             (config.category_mode, config.scheduler_mode,

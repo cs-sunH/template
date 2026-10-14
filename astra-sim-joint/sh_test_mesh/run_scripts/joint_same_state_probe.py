@@ -172,7 +172,7 @@ ONESHOT_POLICY_VALUE = "p-continuation"
 
 # 与 joint/joint_config.ALL_ACTIONS 同源的规范序（run_scripts 工具不 import
 # workload 代码，保持独立可运行；若全集扩容以 joint_config 为准）。
-ALL_ACTIONS = ("stay", "recompute", "copy", "remote-read")
+ALL_ACTIONS = ("stay", "recompute", "copy")
 
 DEFAULT_EVIDENCE_ROOT = Path("/home/sunhao/joint_fix_round_20260927/probe")
 DEFAULT_SOURCE_CSV = Path(
@@ -785,8 +785,8 @@ def boundary_state_cert(record: dict, stage: str) -> dict:
     只含**强制前状态字段**（不含 chosen 与选择派生观测量——2026-09-29
     受控运行实证：``boundary_wait_kind`` 由 ``f(selected, i_P)`` 计算、
     ``stage_work`` 携带所选动作的 rebuild 腿、D 行 ``seq`` 为发射时点序号
-    且被选择依赖的旁行（如 staging_lease_acquire）移位，三者均随强制分
-    支变化，非同状态前提的判据——不入证书）；逐字段原值可比较，digest
+    且被选择依赖的旁行（如配额配对披露行）移位，三者均随强制分支
+    变化，非同状态前提的判据——不入证书）；逐字段原值可比较，digest
     仅披露形态。必需字段缺失时不能签发证书，双方同缺也不构成证据。"""
     decision = record.get("decision") or {}
     if stage == "P":
@@ -2619,8 +2619,8 @@ ONE_SHOT_CALIBER_NOTE = (
     "两 run 同 trace 同参数，仅差 JOINT_BOUNDARY_POLICY（两阶段参照不设、"
     "一次映射臂 p-continuation）。指标来源：D 改点率/同址改动作率/交接字"
     "节 = 两阶段参照 run 决策日志逐请求派生（D 行选择经 P 行 "
-    "joint_instance_index 联表、延续形态 = (P实例, P=remote-read ? "
-    "remote-read : stay)）；E2E/完成率/首 token 间隔 = 各 run "
+    "joint_instance_index 联表、延续形态 = (P实例, stay)——三动作下 p-"
+    "continuation 恒本地延续）；E2E/完成率/首 token 间隔 = 各 run "
     "request_metrics.csv 真实事件字段；控制开销 = results/online_stats."
     "jsonl predictor_cost（P/D 分列）。现行日志无第二 token 事件——次 "
     "token 间隔真值 NA，不以均值/预测冒充。")
@@ -2767,8 +2767,8 @@ def _one_shot_comparison(plan: dict):
                 f"{rid}: P 边界行缺 joint_instance_index/selected_action"
                 "——延续形态无法派生")
             continue
-        continuation_action = (
-            "remote-read" if p_action == "remote-read" else "stay")
+        # 三动作下 p-continuation 恒本地延续（stay）。
+        continuation_action = "stay"
         changed = (d.get("chosen_instance") != p_instance
                    or d.get("chosen_action") != continuation_action)
         if changed:
@@ -2777,7 +2777,7 @@ def _one_shot_comparison(plan: dict):
                 same_instance_action_change += 1
 
     # —— 一次映射臂不变量核对（实例位/动作位均按实测记录对账，
-    # 非"按构造 0"标签——动作位偏差（base fold 等场景）如实披露）——
+    # 非"按构造 0"标签——动作位偏差场景如实披露）——
     oneshot_d_rows = 0
     oneshot_policy_rows = 0
     oneshot_at_p = 0
@@ -2816,8 +2816,8 @@ def _one_shot_comparison(plan: dict):
         action_ok = False
         if d.get("chosen_action") is not None and p_action is not None:
             oneshot_action_verifiable += 1
-            continuation_action = (
-                "remote-read" if p_action == "remote-read" else "stay")
+            # 三动作下延续形态恒 stay（同上）。
+            continuation_action = "stay"
             action_ok = d.get("chosen_action") == continuation_action
             if action_ok:
                 oneshot_action_match += 1
@@ -2836,7 +2836,7 @@ def _one_shot_comparison(plan: dict):
             "一次映射臂 D 动作位实测对账："
             f"{oneshot_action_verifiable - oneshot_action_match}"
             f"/{oneshot_action_verifiable} 行 chosen_action ≠ 派生延续"
-            "形态（base fold 等场景如实披露，非按构造断言 0）")
+            "形态（动作位偏差场景如实披露，非按构造断言 0）")
     if p_face_drift:
         notes.append(
             "P 面选择漂移（对照降级披露，不影响 D 面语义核对）: "
@@ -3625,7 +3625,7 @@ def cmd_selftest(args) -> int:
             _boundary_record("session_9_request_8", 2000, [
                 {"action": "recompute", "applicable": True, "cost_ns": 5,
                  "measured": None, "instance_index": 0},
-                {"action": "remote-read", "applicable": True, "cost_ns": 9,
+                {"action": "copy", "applicable": True, "cost_ns": 9,
                  "measured": None, "instance_index": 0}],
                 selected="recompute"),
             _completion_records("session_9_request_8", 2010),  # actual 10
@@ -3678,7 +3678,7 @@ def cmd_selftest(args) -> int:
             ("session_9_request_9", "stay"): 60,
             ("session_9_request_9", "copy"): 50,  # merge_done 晚于 completion
             ("session_9_request_8", "recompute"): 10,
-            ("session_9_request_8", "remote-read"): 30,
+            ("session_9_request_8", "copy"): 30,
         }
         for target in plan["targets"]:
             for arm in target["arms"]:
@@ -3697,7 +3697,7 @@ def cmd_selftest(args) -> int:
                             rid, target["boundary_tick"] + delta,
                             merge_done_tick=(
                                 target["boundary_tick"] + delta + 5
-                                if action in ("copy", "remote-read")
+                                if action == "copy"
                                 else None)),
                     ])
 
@@ -3786,8 +3786,8 @@ def cmd_selftest(args) -> int:
         # 回放臂 + 宿主开销聚合
         # ============================================================
         # r3: P@500 preds stay=20/copy=10 → 基线选 copy（=entry pin）；
-        #     D@900 preds stay=40/rr=30 → 基线选 remote-read。
-        # r5: P@700 preds recompute=5/rr=9 → 选 recompute（pin）；
+        #     D@900 preds stay=40/copy=30 → 基线选 copy。
+        # r5: P@700 preds recompute=5/copy=9 → 选 recompute（pin）；
         #     D@1100 preds copy=8/recompute=12 → 选 copy。
         baseline2 = tmp / "baseline2_run"
 
@@ -3811,13 +3811,13 @@ def cmd_selftest(args) -> int:
             900,
             [{"action": "stay", "applicable": True, "cost_ns": 40,
               "measured": None, "instance_index": 0},
-             {"action": "remote-read", "applicable": True, "cost_ns": 30,
+             {"action": "copy", "applicable": True, "cost_ns": 30,
               "measured": None, "instance_index": 2}],
-            "remote-read") + _faces(
+            "copy") + _faces(
             "session_7_request_5", 700,
             [{"action": "recompute", "applicable": True, "cost_ns": 5,
               "measured": None, "instance_index": 0},
-             {"action": "remote-read", "applicable": True, "cost_ns": 9,
+             {"action": "copy", "applicable": True, "cost_ns": 9,
               "measured": None, "instance_index": 0}],
             "recompute",
             1100,
@@ -3847,7 +3847,7 @@ def cmd_selftest(args) -> int:
         ck(plan2["total_commands"] == 8, plan2["total_commands"])
         t3 = plan2["targets"][0]
         ck(t3["boundaries"]["P"]["selected"] == "copy", t3["boundaries"])
-        ck(t3["boundaries"]["D"]["applicable"] == ["stay", "remote-read"],
+        ck(t3["boundaries"]["D"]["applicable"] == ["stay", "copy"],
            t3["boundaries"])
         arms_by_family = {a["arm_family"]: a for a in t3["arms"]}
         ck(arms_by_family["entry"]["stage"] == "P", arms_by_family)
@@ -3890,7 +3890,7 @@ def cmd_selftest(args) -> int:
         script2 = (plan2_path.parent / "probe_commands.sh").read_text(
             encoding="utf-8")
         ck(f"{FORCE_ENTRY_ACTION_ENV}=copy" in script2, script2)
-        ck(f"{FORCE_ACTION_ENV}=remote-read" in script2, script2)
+        ck(f"{FORCE_ACTION_ENV}=copy" in script2, script2)
         ck("replay_load_first" in script2
            and f"{REPLAY_MODE_ENV}=load-first" in script2, script2)
         # 互斥合同脚本级钉测：任一逐臂调用行不得同时出现两 ACTION env
@@ -3902,20 +3902,20 @@ def cmd_selftest(args) -> int:
                 ck(f"{FORCE_ENTRY_ACTION_ENV}=" not in line, line)
 
         # —— 合成各臂 run 日志 ——
-        # 下面两表是 completion 偏移（delta）；merge 动作（copy/
-        # remote-read）另有 merge_done = delta+5，completion_delta 口径
-        # 实测值 = delta+5（同场景 1 的 merge_done 口径钉测）。
-        # entry 臂实测：r3 stay=60/copy=75；r5 recompute=10/rr=35。
-        # boundary 臂实测：r3 stay=60/rr=75；r5 copy=90/recompute=110。
+        # 下面两表是 completion 偏移（delta）；merge 动作（copy）另有
+        # merge_done = delta+5，completion_delta 口径实测值 = delta+5
+        # （同场景 1 的 merge_done 口径钉测）。
+        # entry 臂实测：r3 stay=60/copy=75；r5 recompute=10/copy=35。
+        # boundary 臂实测：r3 stay=60/copy=75；r5 copy=90/recompute=110。
         entry_deltas = {
             ("session_7_request_3", "stay"): 60,
             ("session_7_request_3", "copy"): 70,
             ("session_7_request_5", "recompute"): 10,
-            ("session_7_request_5", "remote-read"): 30,
+            ("session_7_request_5", "copy"): 30,
         }
         boundary_deltas = {
             ("session_7_request_3", "stay"): 60,
-            ("session_7_request_3", "remote-read"): 70,
+            ("session_7_request_3", "copy"): 70,
             ("session_7_request_5", "copy"): 85,
             ("session_7_request_5", "recompute"): 110,
         }
@@ -3939,7 +3939,7 @@ def cmd_selftest(args) -> int:
                                 rid, base_tick + delta,
                                 merge_done_tick=(
                                     base_tick + delta + 5
-                                    if action in ("copy", "remote-read")
+                                    if action == "copy"
                                     else None))]
                     else:
                         base_tick = d_face["tick"]
@@ -3961,7 +3961,7 @@ def cmd_selftest(args) -> int:
                                 rid, base_tick + delta,
                                 merge_done_tick=(
                                     base_tick + delta + 5
-                                    if action in ("copy", "remote-read")
+                                    if action == "copy"
                                     else None))]
                     _write_log(Path(run["run_dir"]), records)
         # 回放臂 + 基线：最小日志（completion 齐全即可计时）。
@@ -3990,15 +3990,15 @@ def cmd_selftest(args) -> int:
         by_key = {(r["request_id"], r["arm_family"]): r for r in arm_recs}
         b3 = by_key[("session_7_request_3", "boundary")]
         ck(b3["stage"] == "D" and b3["entry_pin"] == "copy", b3)
-        ck(b3["entry_pin_match"] == {"stay": True, "remote-read": True},
+        ck(b3["entry_pin_match"] == {"stay": True, "copy": True},
            b3["entry_pin_match"])
-        ck(b3["actuals"] == {"stay": 60, "remote-read": 75}, b3["actuals"])
-        # D preds stay=40 / rr=30 → argmin remote-read；actual(rr)=75，
+        ck(b3["actuals"] == {"stay": 60, "copy": 75}, b3["actuals"])
+        # D preds stay=40 / copy=30 → argmin copy；actual(copy)=75，
         # min(actual)=60 → 损失 15；排序 1 对全逆；top-1 不一致。
         ck(b3["selection_loss_ns"] == 15, b3)
         ck(b3["pairwise_discordant"] == 1 and b3["pairwise_total"] == 1, b3)
         ck(b3["top1_match"] is False, b3)
-        ck(b3["errors_ns"] == {"stay": 40 - 60, "remote-read": 30 - 75},
+        ck(b3["errors_ns"] == {"stay": 40 - 60, "copy": 30 - 75},
            b3["errors_ns"])
         ck(b3["argmin_matches_baseline_chosen"] is True, b3)
         ck(b3["status"] == "ok", b3["status"])
@@ -4093,7 +4093,7 @@ def cmd_selftest(args) -> int:
             _boundary_record("session_7_request_3", d_tick, [
                 {"action": "stay", "applicable": True, "cost_ns": 40,
                  "measured": None, "instance_index": 0},
-                {"action": "remote-read", "applicable": True, "cost_ns": 30,
+                {"action": "copy", "applicable": True, "cost_ns": 30,
                  "measured": None, "instance_index": 2}],
                 selected="stay", stage="D"),
             _completion_records("session_7_request_3", d_tick + 60),
@@ -4137,9 +4137,9 @@ def cmd_selftest(args) -> int:
                 _boundary_record("session_5_request_1", 380, [
                     {"action": "stay", "applicable": True, "cost_ns": 40,
                      "measured": None, "instance_index": 0},
-                    {"action": "remote-read", "applicable": True,
+                    {"action": "copy", "applicable": True,
                      "cost_ns": 30, "measured": None, "instance_index": 2}],
-                    selected="remote-read", stage="D"),
+                    selected="copy", stage="D"),
                 _completion_records("session_5_request_1", 430),
             ]
             if row_version is not None:
@@ -4323,24 +4323,23 @@ def cmd_selftest(args) -> int:
         ck(ONESHOT_POLICY_ENV not in pair["twophase_run"]["env"], pair)
 
         # —— 成对 run 夹具：同 P 面、D 面分叉（两阶段真选择 vs 一次映射
-        # 延续形态；r3 一次映射臂动作位偏差 = base fold 形态，实测披露
-        # 不报错）——
+        # 延续形态；r3 一次映射臂动作位偏差形态，实测披露不报错）——
         # (rid, p_tick, p_sel, p_inst, d_tick, d_sel, d_inst, shards)
         twophase_rows = [
             ("session_4_request_1", 100, "copy", 1, 500, "copy", 0,
              [{"bytes": 128}]),  # 两阶段改点：跨实例 copy ≠ 延续 stay@1
-            ("session_4_request_2", 200, "remote-read", 0, 600,
-             "remote-read", 0, [{"bytes": 64}]),  # 按延续形态提交
+            ("session_4_request_2", 200, "copy", 0, 600, "copy", 0,
+             [{"bytes": 64}]),  # 同址动作位改点：copy ≠ 延续 stay@0
             ("session_4_request_3", 300, "stay", 0, 700, "stay", 0,
-             None),
+             None),  # 按延续形态提交（stay@0）
         ]
         oneshot_rows = [
             ("session_4_request_1", 100, "copy", 1, 500, "stay", 1,
-             None),  # 延续形态 stay@1（完整型）
-            ("session_4_request_2", 200, "remote-read", 0, 600,
-             "remote-read", 0, None),  # 延续形态 remote-read@0（增量型）
+             None),  # 延续形态 stay@1
+            ("session_4_request_2", 200, "copy", 0, 600, "stay", 0,
+             None),  # 延续形态 stay@0
             ("session_4_request_3", 300, "stay", 0, 700, "copy", 0,
-             None),  # 动作位偏差（base fold 形态）
+             None),  # 动作位偏差形态
         ]
         _write_pair_run(Path(pair["twophase_run"]["run_dir"]),
                         twophase_rows, policy=None)
@@ -4364,22 +4363,22 @@ def cmd_selftest(args) -> int:
         ck(one_shot["oneshot_d_rows"] == 3
            and one_shot["oneshot_disclosure_rows"] == 3, one_shot)
         ck(one_shot["d_requests"] == 3
-           and one_shot["re_point_requests"] == 1, one_shot)
+           and one_shot["re_point_requests"] == 2, one_shot)
         # 动作位实测对账底数：2/3 行 chosen_action 与派生延续形态一致
-        #（r3 base fold 偏差如实计数，不报错）。
+        #（r3 动作位偏差如实计数，不报错）。
         ck(one_shot["oneshot_action_match"] == 2
            and one_shot["oneshot_action_verifiable"] == 3, one_shot)
         ck(one_shot["oneshot_re_point_requests"] == 1, one_shot)
         ck(one_shot["oneshot_same_instance_action_change"] == 1, one_shot)
         metrics4 = {row["metric"]: row for row in one_shot["metrics"]}
         r1 = metrics4["D 改点率（最终 (instance,action) ≠ 延续形态）"]
-        ck(r1["twophase"] == "0.333333"
+        ck(r1["twophase"] == "0.666667"
            and r1["oneshot"] == "1（实测核对 2/3 一致）", r1)
         r2 = metrics4["同址改动作率（instance 不变 action 变）"]
-        ck(r2["twophase"] == "0.0"
+        ck(r2["twophase"] == "0.333333"
            and r2["oneshot"] == "1（实测核对动作位 2/3 一致）", r2)
         r3 = metrics4["D 边界改点请求数 / D 边界请求数"]
-        ck(r3["twophase"] == "1/3" and r3["oneshot"] == "1/3", r3)
+        ck(r3["twophase"] == "2/3" and r3["oneshot"] == "1/3", r3)
         rh = metrics4["交接字节（P→D 迁移腿，决策日志 shards 聚合）"]
         ck(rh["twophase"] == "192" and rh["oneshot"] == "0"
            and rh["delta"] == -192, rh)
@@ -4402,7 +4401,7 @@ def cmd_selftest(args) -> int:
         ck("## 一次映射 vs 两阶段闭环对照" in summary_md, summary_md[:400])
         ck("twophase_reference" in summary_md
            and "oneshot_p_continuation" in summary_md, summary_md[:800])
-        ck("| D 改点率（最终 (instance,action) ≠ 延续形态） | 0.333333 |"
+        ck("| D 改点率（最终 (instance,action) ≠ 延续形态） | 0.666667 |"
            " 1（实测核对 2/3 一致） | NA |" in summary_md, summary_md)
         ck("动作位实测对账" in summary_md, summary_md)
 

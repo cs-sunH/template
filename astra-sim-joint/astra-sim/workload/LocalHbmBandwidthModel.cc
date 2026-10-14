@@ -1,21 +1,22 @@
 /******************************************************************************
-This source code is licensed under the MIT license found in the
-LICENSE file in the root directory of this source tree.
+This source code is licensed under the MIT license found in the root directory
+of this source tree.
 *******************************************************************************/
 
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
 #include "astra-sim/workload/FailClosed.hh"
-#include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Workload.hh"
 
@@ -23,61 +24,6 @@ using namespace AstraSim;
 
 namespace {
 constexpr double kEpsilon = 1e-9;
-
-std::pair<double, double> coarse_hbm_read_write_bytes(
-    const nlohmann::json& progress) {
-    const nlohmann::json matrix = progress.value(
-        "hbm_served_bytes_exact",
-        progress.value("hbm_served_bytes", nlohmann::json::array()));
-    if (!matrix.is_array() || matrix.size() != 2) {
-        throw std::runtime_error(
-            "coarse_die_v2 progress is missing the 2x2 HBM served matrix");
-    }
-    long double read_bytes = 0.0L;
-    long double write_bytes = 0.0L;
-    for (const auto& row : matrix) {
-        if (!row.is_array() || row.size() != 2) {
-            throw std::runtime_error(
-                "coarse_die_v2 HBM served matrix row is malformed");
-        }
-        auto as_number = [](const nlohmann::json& value) -> long double {
-            if (value.is_string()) {
-                const std::string exact = value.get<std::string>();
-                size_t consumed = 0;
-                const long double parsed = std::stold(exact, &consumed);
-                if (consumed != exact.size() || !std::isfinite(parsed) ||
-                    parsed < 0.0L) {
-                    throw std::runtime_error(
-                        "coarse_die_v2 HBM served byte string is invalid");
-                }
-                return parsed;
-            }
-            if (value.is_number()) {
-                const long double parsed = value.get<long double>();
-                if (!std::isfinite(parsed) || parsed < 0.0L) {
-                    throw std::runtime_error(
-                        "coarse_die_v2 HBM served byte value is invalid");
-                }
-                return parsed;
-            }
-            throw std::runtime_error(
-                "coarse_die_v2 HBM served byte is neither number nor string");
-        };
-        read_bytes += as_number(row[0]);
-        write_bytes += as_number(row[1]);
-    }
-    return {static_cast<double>(read_bytes), static_cast<double>(write_bytes)};
-}
-
-uint64_t coarse_endpoint_identity(const std::string& value) {
-    uint64_t hash = 14695981039346656037ull;
-    for (unsigned char byte : value) {
-        hash ^= byte;
-        hash *= 1099511628211ull;
-    }
-    return hash == 0 ? 1 : hash;
-}
-
 }
 
 LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
@@ -89,73 +35,26 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
     if (sys == nullptr || workload == nullptr) {
         throw std::invalid_argument("local HBM model requires Sys and Workload");
     }
-    if (sys->coarse_die_runtime == nullptr &&
-        (!std::isfinite(sys->local_mem_bw) ||
-         !std::isfinite(sys->peak_perf) || sys->local_mem_bw <= 0 ||
-         sys->peak_perf <= 0)) {
+    if (!std::isfinite(sys->local_mem_bw) ||
+        !std::isfinite(sys->peak_perf) || sys->local_mem_bw <= 0 ||
+        sys->peak_perf <= 0) {
         throw std::invalid_argument(
             "local HBM sharing requires positive finite bandwidth and peak "
             "compute");
     }
 }
 
-double LocalHbmBandwidthModel::compute_bytes_served() const {
-    double served = this->bytes_served_by_kind_[kind_index(JobKind::COMPUTE)] +
-        coarse_control_marker_bytes_served_;
-    if (sys == nullptr || sys->coarse_die_runtime == nullptr) {
-        return served;
-    }
-
-    const uint64_t now_ns = Sys::boostedTick();
-    for (const auto& entry : coarse_jobs_) {
-        if (entry.second.kind != JobKind::CONTROL_MARKER) continue;
-        const auto progress =
-            sys->coarse_die_runtime->query_progress_at(entry.first, now_ns);
-        const auto [read_bytes, ignored_write_bytes] =
-            coarse_hbm_read_write_bytes(progress);
-        (void)ignored_write_bytes;
-        served += read_bytes;
-    }
-    return served;
-}
-
 LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
     cancel_scheduled_transition();
-    if (sys != nullptr && sys->coarse_die_runtime != nullptr) {
-        while (!coarse_jobs_.empty()) {
-            const uint64_t handle = coarse_jobs_.begin()->first;
-            const CoarseJob job = coarse_jobs_.begin()->second;
-            if (job.kind == JobKind::CONTROL_MARKER) {
-                // Sample this handle without advancing the live event loop,
-                // then retire only this execution. A callback dispatch here
-                // could publish an already-finished marker (or a sibling
-                // endpoint) while Workload is being torn down.
-                const uint64_t now_ns = Sys::boostedTick();
-                const auto progress =
-                    sys->coarse_die_runtime->query_progress_at(handle, now_ns);
-                const auto [read_bytes, ignored_write_bytes] =
-                    coarse_hbm_read_write_bytes(progress);
-                (void)ignored_write_bytes;
-                coarse_control_marker_bytes_served_ += read_bytes;
-                sys->coarse_die_runtime->cancel(handle, now_ns, false);
-                if (job.wlhd != nullptr) {
-                    delete job.wlhd;
-                }
-                coarse_jobs_.erase(handle);
-            } else {
-                sys->coarse_die_runtime->cancel(handle, Sys::boostedTick(),
-                                                 false);
-                delete job.wlhd;
-                coarse_jobs_.erase(handle);
-            }
-        }
-    }
-
     // A normal completion transfers each cookie to Workload::call(), but an
     // early shutdown can destroy the model while jobs are still queued. The
     // model owns those outstanding cookies until that callback, so release
     // them after cancelling the only event that could have delivered one.
-    for (Job& job : jobs) {
+    for (size_t slot = 0; slot < jobs_.size(); ++slot) {
+        if (slot_alive_[slot] == 0) {
+            continue;
+        }
+        Job& job = jobs_[slot];
         delete job.wlhd;
         job.wlhd = nullptr;
         // DIE_COMPUTE payloads have no WorkloadLayerHandlerData; the model
@@ -164,11 +63,26 @@ LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
         delete job.die_data;
         job.die_data = nullptr;
     }
-    jobs.clear();
+    jobs_.clear();
 }
 
 bool LocalHbmBandwidthModel::has_active_jobs() const {
-    return !jobs.empty() || !coarse_jobs_.empty();
+    return live_job_count_ > 0;
+}
+
+size_t LocalHbmBandwidthModel::resource_observer_count() const noexcept {
+    size_t count = 0;
+    for (const ObserverEntry& entry : resource_observers_) {
+        if (entry.id != 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+size_t LocalHbmBandwidthModel::resource_observer_tombstone_count()
+    const noexcept {
+    return resource_observers_.size() - resource_observer_count();
 }
 
 LocalHbmBandwidthModel::MutationObserverId
@@ -179,25 +93,113 @@ LocalHbmBandwidthModel::add_resource_mutation_observer(
         throw std::invalid_argument("invalid or exhausted HBM mutation observer");
     }
     const MutationObserverId id = next_observer_id_++;
-    resource_observers_.push_back(ObserverEntry{id, std::move(observer)});
+    resource_observers_.push_back(ObserverEntry{id, 0, std::move(observer)});
     return id;
 }
 
 void LocalHbmBandwidthModel::remove_resource_mutation_observer(
     const MutationObserverId observer_id) noexcept {
-    resource_observers_.erase(
-        std::remove_if(resource_observers_.begin(), resource_observers_.end(),
-            [observer_id](const ObserverEntry& entry) {
-                return entry.id == observer_id;
-            }),
-        resource_observers_.end());
+    for (auto it = resource_observers_.begin();
+         it != resource_observers_.end(); ++it) {
+        if (it->id != observer_id) {
+            continue;
+        }
+        if (observer_pass_depth_ == 0) {
+            // No pass is iterating: drop the entry outright (the old
+            // copy-based dispatch made a removal between passes invisible
+            // to every later pass; erasing now reproduces that exactly).
+            resource_observers_.erase(it);
+        } else {
+            // A pass is active. Tombstone: passes that started BEFORE this
+            // removal still visit the entry (their snapshot copy included
+            // it); passes that start later skip it via dead_pass. The
+            // callback object stays alive until compaction so those
+            // in-flight visits remain legal.
+            it->id = 0;
+            it->dead_pass = observer_pass_serial_;
+            observers_compaction_pending_ = true;
+        }
+        return;
+    }
+}
+
+void LocalHbmBandwidthModel::compact_observers() {
+    if (!observers_compaction_pending_) {
+        return;
+    }
+    // v8 reclamation fix: compact IN PLACE. The pass guard invokes this from
+    // its destructor (outermost pass end -- including exception unwind), so
+    // the compaction must not allocate: only noexcept move-assignments and
+    // tail destruction happen here. Stable order is preserved.
+    static_assert(
+        std::is_nothrow_move_assignable<ObserverEntry>::value,
+        "observer compaction move must be noexcept (guard destructor)");
+    size_t write = 0;
+    for (size_t read = 0; read < resource_observers_.size(); ++read) {
+        if (resource_observers_[read].id != 0) {
+            if (write != read) {
+                resource_observers_[write] =
+                    std::move(resource_observers_[read]);
+            }
+            ++write;
+        }
+    }
+    resource_observers_.erase(resource_observers_.begin() +
+                                  static_cast<std::ptrdiff_t>(write),
+                              resource_observers_.end());
+    observers_compaction_pending_ = false;
+}
+
+namespace {
+// (The pass guard itself is a private nested class of the model -- nested
+// classes reach the private compaction boundary; see the header.)
+}  // namespace
+
+LocalHbmBandwidthModel::ObserverPassGuard::ObserverPassGuard(
+    LocalHbmBandwidthModel& model) noexcept : model_(model) {
+    ++model_.observer_pass_depth_;
+}
+
+LocalHbmBandwidthModel::ObserverPassGuard::~ObserverPassGuard() {
+    if (--model_.observer_pass_depth_ == 0) {
+        // v8 reclamation fix: the OUTERMOST pass owns the compaction
+        // boundary. At this point no pass is iterating (nested passes
+        // already unwound), so tombstoned entries -- whose captured state
+        // must merely outlive the passes that could still visit them --
+        // can be destroyed exactly here. This mirrors the old per-notify
+        // copy, which released its captured objects at the same
+        // outermost-pass end. compact_observers() is allocation free, so
+        // this stays legal during exception unwinding.
+        model_.compact_observers();
+    }
+}
+
+void LocalHbmBandwidthModel::dispatch_mutation_observers(
+    const bool before_change, const Tick now, const uint64_t version) {
+    // Snapshot dispatch (v7): each pass captures its own element bound and
+    // serial. Entries appended after the bound are not visited (matching
+    // the old per-notify vector copy); tombstoned entries are visited only
+    // by passes that started before their removal (dead_pass >= my serial
+    // means the removal happened at or after this pass started, so this
+    // pass's snapshot still held the entry).
+    const uint64_t my_serial = ++observer_pass_serial_;
+    ObserverPassGuard depth_guard(*this);
+    const size_t bound = resource_observers_.size();
+    for (size_t i = 0; i < bound; ++i) {
+        ObserverEntry& entry = resource_observers_[i];
+        if (entry.id == 0 && entry.dead_pass < my_serial) {
+            continue;  // removed before this pass started
+        }
+        entry.callback(before_change, now, version);
+    }
+    // v8 reclamation fix: compaction moved to the pass guard -- it fires
+    // when the OUTERMOST pass ends (depth back to zero, including the
+    // exception-unwind path). Checking the depth here, while this pass's
+    // own guard is still alive, could never observe zero.
 }
 
 void LocalHbmBandwidthModel::notify_resource_mutation_before(const Tick now) {
-    const auto observers = resource_observers_;
-    for (const ObserverEntry& entry : observers) {
-        entry.callback(true, now, resource_version_);
-    }
+    dispatch_mutation_observers(true, now, resource_version_);
 }
 
 void LocalHbmBandwidthModel::publish_resource_mutation(const Tick now) {
@@ -205,23 +207,55 @@ void LocalHbmBandwidthModel::publish_resource_mutation(const Tick now) {
         fail_closed("local HBM resource version overflows uint64");
     }
     ++resource_version_;
-    const auto observers = resource_observers_;
-    for (const ObserverEntry& entry : observers) {
-        entry.callback(false, now, resource_version_);
+    dispatch_mutation_observers(false, now, resource_version_);
+}
+
+bool LocalHbmBandwidthModel::phase_erase(std::vector<size_t>& members,
+                                         const size_t slot) {
+    const auto it = std::lower_bound(members.begin(), members.end(), slot);
+    if (it != members.end() && *it == slot) {
+        members.erase(it);
+        return true;
+    }
+    return false;
+}
+
+void LocalHbmBandwidthModel::phase_insert(std::vector<size_t>& members,
+                                          const size_t slot) {
+    members.insert(
+        std::lower_bound(members.begin(), members.end(), slot),
+        slot);
+}
+
+void LocalHbmBandwidthModel::register_job_phase(Job& job) {
+    const size_t slot = job.slot;
+    if (job.memory_latency_ns > kEpsilon) {
+        phase_insert(latency_members_, slot);
+    } else if (remaining_drain(job) > kEpsilon) {
+        phase_insert(stream_members_, slot);
+    }
+    if (remaining_drain(job) > kEpsilon) {
+        ++drain_pending_count_;
+    }
+    if (job.kind == JobKind::COMPUTE) {
+        phase_insert(compute_members_, slot);
+    }
+    if (complete(job)) {
+        mark_completion_candidate(job);
     }
 }
 
-std::vector<size_t> LocalHbmBandwidthModel::active_streamer_membership() const {
-    std::vector<size_t> active;
-    active.reserve(jobs.size());
-    for (size_t i = 0; i < jobs.size(); ++i) {
-        const Job& job = jobs[i];
-        if (job.memory_latency_ns <= kEpsilon &&
-            remaining_drain(job) > kEpsilon) {
-            active.push_back(i);
-        }
+void LocalHbmBandwidthModel::unregister_job_phase(const size_t slot) {
+    phase_erase(latency_members_, slot);
+    phase_erase(stream_members_, slot);
+    phase_erase(compute_members_, slot);
+}
+
+void LocalHbmBandwidthModel::mark_completion_candidate(Job& job) {
+    if (!job.in_candidates) {
+        job.in_candidates = true;
+        phase_insert(completion_candidates_, job.slot);
     }
-    return active;
 }
 
 double LocalHbmBandwidthModel::remaining_drain(const Job& job) {
@@ -241,8 +275,12 @@ LocalHbmBandwidthModel::job_snapshot() {
     // than the last HBM transition.
     advance_to(Sys::boostedTick());
     std::vector<JobSnapshotEntry> snapshot;
-    snapshot.reserve(jobs.size());
-    for (const Job& job : jobs) {
+    snapshot.reserve(live_job_count_);
+    for (size_t slot = 0; slot < jobs_.size(); ++slot) {
+        if (slot_alive_[slot] == 0) {
+            continue;
+        }
+        const Job& job = jobs_[slot];
         if (job.kind == JobKind::DIE_COMPUTE) {
             // Internal memory stage of a still-running outer die COMP node:
             // no wlhd, no ledger node identity -- excluded by contract (see
@@ -296,7 +334,13 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
     if (elapsed_ns <= 0) {
         return;
     }
-    const std::vector<size_t> members_before = active_streamer_membership();
+    // v7: the active-streamer membership "before" set is implicit. The old
+    // implementation captured it as an index vector and compared an "after"
+    // vector at the end; only the comparison OUTCOME drives the
+    // notify/publish decisions below, and it flips exactly when a latency
+    // job crosses into streaming or a streamer's drain crosses out. Those
+    // crossings are recorded where they happen.
+    bool membership_changed = false;
     const bool predicted_boundary = has_next_transition_tick_ &&
         next_transition_changes_membership_ && now >= next_transition_tick_;
     if (predicted_boundary) {
@@ -307,42 +351,45 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
     // fluid (Roofline max(compute, memory) semantics), for every COMPUTE
     // job regardless of how many jobs share the bus.
     const double compute_rate_ops_per_ns = sys->peak_perf / 1e9;
-    for (Job& job : jobs) {
-        if (job.kind == JobKind::COMPUTE) {
-            job.remaining_ops = std::max(
-                0.0,
-                job.remaining_ops -
-                    compute_rate_ops_per_ns * elapsed_ns);
+    for (const size_t slot : compute_members_) {
+        Job& job = jobs_[slot];
+        const double ops_before = job.remaining_ops;
+        job.remaining_ops = std::max(
+            0.0,
+            job.remaining_ops -
+                compute_rate_ops_per_ns * elapsed_ns);
+        if (ops_before > kEpsilon && job.remaining_ops <= kEpsilon) {
+            // Ops crossed the completion window: the job may now satisfy
+            // complete(); queue it for the next detach.
+            mark_completion_candidate(job);
         }
     }
 
     const double full_rate_bytes_per_ns = sys->local_mem_bw / 1e9;
     double remaining_ns = elapsed_ns;
-    std::vector<Job*> bandwidth_users;
     while (remaining_ns > kEpsilon) {
-        // Reuse this call-local scratch vector across fractional boundaries.
-        // Clear and refill it before latency is updated so each substep keeps
-        // the same captured bandwidth membership as the original interval.
-        bandwidth_users.clear();
+        // v7: bandwidth users are the maintained streaming list (latency
+        // done, drain above tolerance) in slot order, so the min scans and
+        // the serve/apply loops below keep the original issue-order float
+        // sequence. The old call-local scratch vector is gone; the list IS
+        // the membership.
         double step_ns = remaining_ns;
-        for (Job& job : jobs) {
-            if (job.memory_latency_ns > kEpsilon) {
-                step_ns = std::min(step_ns, job.memory_latency_ns);
-            } else if (remaining_drain(job) > kEpsilon) {
-                bandwidth_users.push_back(&job);
-            }
+        for (const size_t slot : latency_members_) {
+            const Job& job = jobs_[slot];
+            step_ns = std::min(step_ns, job.memory_latency_ns);
         }
 
         // N-way strict equal split: every byte-streaming job receives
         // full_rate / N where N is the number of concurrent streamers.
-        const double per_user_rate = bandwidth_users.empty()
+        const double per_user_rate = stream_members_.empty()
             ? 0.0
             : full_rate_bytes_per_ns /
-                static_cast<double>(bandwidth_users.size());
+                static_cast<double>(stream_members_.size());
         if (per_user_rate > 0) {
-            for (const Job* job : bandwidth_users) {
+            for (const size_t slot : stream_members_) {
+                const Job& job = jobs_[slot];
                 step_ns = std::min(
-                    step_ns, remaining_drain(*job) / per_user_rate);
+                    step_ns, remaining_drain(job) / per_user_rate);
             }
         }
 
@@ -354,10 +401,23 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
             // forever and create one transition per nanosecond.  Clamp every
             // quantity that can complete within the time tolerance, then
             // recompute rates without consuming measurable simulation time.
+            // (v7: this is the rare numerical-residue path; it still scans
+            // the live slots -- the hot substep path above is the one that
+            // must not.)
             bool clamped_residue = false;
-            for (Job& job : jobs) {
+            std::vector<size_t> clamp_drained;
+            for (size_t slot = 0; slot < jobs_.size(); ++slot) {
+                if (slot_alive_[slot] == 0) {
+                    continue;
+                }
+                Job& job = jobs_[slot];
                 if (job.memory_latency_ns > 0 &&
                     job.memory_latency_ns <= kEpsilon) {
+                    // Zeroing a sub-tolerance latency changes no phase
+                    // membership (the job is already past the latency gate)
+                    // and no completion predicate (memory_done already
+                    // treats <= epsilon as done); it only exports 0 instead
+                    // of the residue.
                     job.memory_latency_ns = 0;
                     clamped_residue = true;
                 }
@@ -365,23 +425,40 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                     job.remaining_bytes <= kEpsilon) {
                     job.remaining_bytes = 0;
                     clamped_residue = true;
+                    mark_completion_candidate(job);
                 }
                 if (job.remaining_service > 0 &&
                     job.remaining_service <= kEpsilon) {
                     job.remaining_service = 0;
                     clamped_residue = true;
+                    clamp_drained.push_back(slot);
+                    mark_completion_candidate(job);
                 }
             }
             if (per_user_rate > 0) {
-                for (Job* job : bandwidth_users) {
-                    if (remaining_drain(*job) / per_user_rate <= kEpsilon) {
-                        if (job->kind == JobKind::DIE_COMPUTE) {
-                            job->remaining_service = 0;
+                std::vector<size_t> user_clamp_drained;
+                for (const size_t slot : stream_members_) {
+                    Job& job = jobs_[slot];
+                    if (remaining_drain(job) / per_user_rate <= kEpsilon) {
+                        if (job.kind == JobKind::DIE_COMPUTE) {
+                            job.remaining_service = 0;
                         } else {
-                            job->remaining_bytes = 0;
+                            job.remaining_bytes = 0;
                         }
                         clamped_residue = true;
+                        user_clamp_drained.push_back(slot);
+                        mark_completion_candidate(job);
                     }
+                }
+                for (const size_t slot : user_clamp_drained) {
+                    if (phase_erase(stream_members_, slot)) {
+                        membership_changed = true;
+                    }
+                }
+            }
+            for (const size_t slot : clamp_drained) {
+                if (phase_erase(stream_members_, slot)) {
+                    membership_changed = true;
                 }
             }
             if (!clamped_residue) {
@@ -390,34 +467,59 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
             continue;
         }
 
-        for (Job& job : jobs) {
-            if (job.memory_latency_ns > kEpsilon) {
-                job.memory_latency_ns =
-                    std::max(0.0, job.memory_latency_ns - step_ns);
+        // Per-substep apply: value updates iterate the phase lists captured
+        // for THIS substep; membership transitions (latency expiry, drain
+        // completion) are recorded and committed after the serve/side-band
+        // loops. The old implementation had the same effect by rescanning
+        // every job per substep: within a substep the user set is frozen
+        // (a job that expires or drains in this substep was still a member
+        // for its serve and side-band accounting), and the next substep
+        // sees the updated membership.
+        std::vector<size_t> latency_expired;
+        std::vector<size_t> stream_drained;
+        for (const size_t slot : latency_members_) {
+            Job& job = jobs_[slot];
+            const double latency_before = job.memory_latency_ns;
+            job.memory_latency_ns =
+                std::max(0.0, job.memory_latency_ns - step_ns);
+            if (latency_before > kEpsilon &&
+                job.memory_latency_ns <= kEpsilon) {
+                latency_expired.push_back(slot);
             }
         }
-        for (Job* job : bandwidth_users) {
+        for (const size_t slot : stream_members_) {
+            Job& job = jobs_[slot];
             const double served = per_user_rate * step_ns;
-            if (job->kind == JobKind::DIE_COMPUTE) {
+            const double drain_before = remaining_drain(job);
+            if (job.kind == JobKind::DIE_COMPUTE) {
                 // Contract §7.4: service units are drained; the actual-byte
                 // advance is served * eta and is bookkeeping only.
-                job->remaining_service =
-                    std::max(0.0, job->remaining_service - served);
+                job.remaining_service =
+                    std::max(0.0, job.remaining_service - served);
             } else {
-                job->remaining_bytes =
-                    std::max(0.0, job->remaining_bytes - served);
+                job.remaining_bytes =
+                    std::max(0.0, job.remaining_bytes - served);
+            }
+            if (drain_before > kEpsilon && remaining_drain(job) <= kEpsilon) {
+                stream_drained.push_back(slot);
             }
         }
         // Read-only side-band accumulation (doc sec.9.4): reuse the step_ns
         // and per_user_rate already computed above.  These counters must not
-        // change any value used for the next transition.
-        if (!bandwidth_users.empty()) {
+        // change any value used for the next transition.  The iteration
+        // order (stream list = slot order = issue order) preserves the
+        // historical accumulation order, including the per-job eta factor
+        // of die_actual_bytes_served_.  Like the historical bandwidth_users
+        // scratch vector, the list still holds jobs that drained to zero in
+        // THIS substep -- they were members for this substep's accounting.
+        if (!stream_members_.empty()) {
             this->hbm_busy_ns_ += step_ns;
-            if (bandwidth_users.size() > 1) {
+            if (stream_members_.size() > 1) {
                 this->hbm_shared_ns_ += step_ns;
             }
-            for (const Job* job : bandwidth_users) {
-                if (job->kind == JobKind::DIE_COMPUTE) {
+            for (const size_t slot : stream_members_) {
+                const Job& job = jobs_[slot];
+                if (job.kind == JobKind::DIE_COMPUTE) {
                     // Die side-band (kept separate from the per-kind byte
                     // array): service units drained + actual bytes advanced
                     // (= service * eta). Neither ever feeds a byte-based
@@ -425,18 +527,33 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                     this->die_service_units_served_ +=
                         per_user_rate * step_ns;
                     this->die_actual_bytes_served_ +=
-                        per_user_rate * step_ns * job->service_eta;
+                        per_user_rate * step_ns * job.service_eta;
                     continue;
                 }
-                this->bytes_served_by_kind_[kind_index(job->kind)] +=
+                this->bytes_served_by_kind_[kind_index(job.kind)] +=
                     per_user_rate * step_ns;
             }
+        }
+        // Commit the membership transitions recorded above.
+        for (const size_t slot : latency_expired) {
+            phase_erase(latency_members_, slot);
+            Job& job = jobs_[slot];
+            if (remaining_drain(job) > kEpsilon) {
+                phase_insert(stream_members_, slot);
+                membership_changed = true;
+            }
+            mark_completion_candidate(job);
+        }
+        for (const size_t slot : stream_drained) {
+            phase_erase(stream_members_, slot);
+            --drain_pending_count_;
+            membership_changed = true;
+            mark_completion_candidate(jobs_[slot]);
         }
         remaining_ns -= step_ns;
     }
     last_update_tick = now;
-    const std::vector<size_t> members_after = active_streamer_membership();
-    if (members_before != members_after) {
+    if (membership_changed) {
         if (!predicted_boundary) {
             // This can occur when a read-only snapshot advances over a
             // transition whose event callback has not run yet. The model
@@ -470,18 +587,15 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
         return;
     }
 
-    size_t bandwidth_user_count = 0;
+    size_t bandwidth_user_count = stream_members_.size();
     double next_ns = std::numeric_limits<double>::infinity();
     double next_membership_ns = std::numeric_limits<double>::infinity();
-    for (const Job& job : jobs) {
-        if (job.memory_latency_ns > kEpsilon) {
-            next_ns = std::min(next_ns, job.memory_latency_ns);
-            if (remaining_drain(job) > kEpsilon) {
-                next_membership_ns =
-                    std::min(next_membership_ns, job.memory_latency_ns);
-            }
-        } else if (remaining_drain(job) > kEpsilon) {
-            ++bandwidth_user_count;
+    for (const size_t slot : latency_members_) {
+        const Job& job = jobs_[slot];
+        next_ns = std::min(next_ns, job.memory_latency_ns);
+        if (remaining_drain(job) > kEpsilon) {
+            next_membership_ns =
+                std::min(next_membership_ns, job.memory_latency_ns);
         }
     }
 
@@ -491,14 +605,10 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
         : full_rate_bytes_per_ns /
             static_cast<double>(bandwidth_user_count);
     if (per_user_rate > 0) {
-        // The first pass above counts eligible jobs while preserving the
-        // latency/terminal checks. Rescan in original job order to apply the
-        // same per-user division and minimum updates without allocating a
-        // pointer vector; this remains O(number of jobs).
-        for (const Job& job : jobs) {
-            if (job.memory_latency_ns > kEpsilon) {
-                continue;
-            }
+        // Stream members in slot order (issue order), applying the same
+        // per-user division and minimum updates as the historical scan.
+        for (const size_t slot : stream_members_) {
+            const Job& job = jobs_[slot];
             const double drain = remaining_drain(job);
             if (!(drain > kEpsilon)) {
                 continue;
@@ -512,7 +622,8 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
     // A COMPUTE job whose HBM side is already done may still be streaming
     // FLOPs; its ops completion is a transition of its own.
     const double compute_rate_ops_per_ns = sys->peak_perf / 1e9;
-    for (const Job& job : jobs) {
+    for (const size_t slot : compute_members_) {
+        const Job& job = jobs_[slot];
         if (job.kind == JobKind::COMPUTE && memory_done(job) &&
             job.remaining_ops > kEpsilon) {
             next_ns = std::min(
@@ -555,90 +666,6 @@ void LocalHbmBandwidthModel::issue_job(
     std::function<void()> transfer_completion,
     int transfer_sys_id,
     uint64_t transfer_node_id) {
-    if (sys->coarse_die_runtime != nullptr) {
-        if (kind == JobKind::COMPUTE || kind == JobKind::DIE_COMPUTE) {
-            throw std::runtime_error(
-                "coarse_die_v2 COMP traffic must be owned by a typed plan, "
-                "not the legacy scalar HBM queue");
-        }
-        if (tensor_size == 0) {
-            throw std::runtime_error(
-                "coarse_die_v2 local endpoint requires nonzero bytes");
-        }
-        const bool control_marker = kind == JobKind::CONTROL_MARKER;
-        const bool read = kind == JobKind::COMM_READ ||
-            kind == JobKind::POOL_READ || control_marker;
-        const bool is_comm = kind == JobKind::COMM_READ || kind == JobKind::COMM_WRITE;
-        const bool is_pool = kind == JobKind::POOL_READ || kind == JobKind::POOL_WRITE;
-        const int owner_sys = transfer_completion ? transfer_sys_id : sys->id;
-        const uint64_t owner_node = transfer_completion ? transfer_node_id :
-            (wlhd != nullptr ? wlhd->node_id : 0);
-        if (owner_node == 0 && wlhd == nullptr && !transfer_completion) {
-            throw std::runtime_error("coarse_die_v2 endpoint has no node owner");
-        }
-        const std::string identity = std::to_string(owner_sys) + ":" +
-            std::to_string(owner_node) + ":" + std::to_string(static_cast<int>(kind));
-        coarse_die::Owner owner;
-        owner.request_id = coarse_endpoint_identity(std::to_string(owner_node));
-        owner.node_id = owner_node;
-        owner.execution_id = owner_node;
-        owner.generation = 1;
-        const auto& performance =
-            sys->coarse_die_runtime->hardware().input.at("performance_profile");
-        const uint64_t endpoint_id = coarse_endpoint_identity(identity);
-        const uint64_t transaction_id = coarse_endpoint_identity(std::to_string(owner_node));
-        nlohmann::json endpoint = {
-            {"endpoint_id", endpoint_id},
-            {"transaction_id", transaction_id},
-            {"owner_kind", control_marker ? "die" :
-                (is_comm ? "comm" : (is_pool ? "pool" : "restore"))},
-            {"direction", read ? "read" : "write"},
-            {"physical_bytes", tensor_size},
-            {"path_class", read ? "hbm_to_edge" : "edge_to_hbm"},
-            {"eta_hbm", performance.at("eta_hbm_matrix")},
-            {"route", {{"internal_route", false}}},
-        };
-        if (control_marker) {
-            endpoint["initial_delay_ns"] = sys->local_mem_latency;
-        }
-        const uint64_t handle = sys->coarse_die_runtime->submit_endpoint(
-            endpoint, owner,
-            [this, kind, wlhd, transfer_completion = std::move(transfer_completion)](
-                const uint64_t completed_handle, const nlohmann::json& progress) mutable {
-                coarse_jobs_.erase(completed_handle);
-                const bool cancelled =
-                    progress.value("state", std::string()) == "cancelled";
-                if (kind == JobKind::CONTROL_MARKER) {
-                    const auto [read_bytes, ignored_write_bytes] =
-                        coarse_hbm_read_write_bytes(progress);
-                    (void)ignored_write_bytes;
-                    // Keep marker bytes visible through the legacy COMP
-                    // compatibility getter without marking them as typed
-                    // Compute work or communication traffic.
-                    coarse_control_marker_bytes_served_ += read_bytes;
-                }
-                if (cancelled) {
-                    if (kind == JobKind::CONTROL_MARKER && wlhd != nullptr) {
-                        delete wlhd;
-                    }
-                    return;
-                }
-                const auto [read_bytes, write_bytes] =
-                    coarse_hbm_read_write_bytes(progress);
-                if (kind == JobKind::COMM_READ) coarse_comm_read_served_ += read_bytes;
-                else if (kind == JobKind::COMM_WRITE) coarse_comm_write_served_ += write_bytes;
-                else if (kind == JobKind::RESTORE) coarse_restore_served_ += write_bytes;
-                else if (kind == JobKind::POOL_READ) coarse_pool_read_served_ += read_bytes;
-                else if (kind == JobKind::POOL_WRITE) coarse_pool_write_served_ += write_bytes;
-                if (transfer_completion) transfer_completion();
-                else if (wlhd != nullptr) workload->call(EventType::General, wlhd);
-            });
-        if (!coarse_jobs_.emplace(handle, CoarseJob{wlhd, kind}).second) {
-            sys->coarse_die_runtime->cancel(handle, Sys::boostedTick(), false);
-            throw std::runtime_error("coarse_die_v2 endpoint handle collision");
-        }
-        return;
-    }
     advance_to(Sys::boostedTick());
     if (tensor_size == 0) {
         // Zero-byte endpoints never create an HBM job (the Workload layer
@@ -662,9 +689,9 @@ void LocalHbmBandwidthModel::issue_job(
     // Definition-aligned counting: a join counts only when at least one
     // remaining LIVE bandwidth user exists whose share the join reshapes.
     const bool joins_active_jobs =
-        !jobs.empty() && has_bandwidth_user(jobs);
+        live_job_count_ > 0 && drain_pending_count_ > 0;
     notify_resource_mutation_before(Sys::boostedTick());
-    jobs.push_back(Job{
+    Job job{
         kind,
         wlhd,
         static_cast<double>(num_ops),
@@ -682,11 +709,16 @@ void LocalHbmBandwidthModel::issue_job(
         transfer_sys_id,
         transfer_node_id,
         next_issue_seq_,
-    });
+        jobs_.size(),
+        false};
+    jobs_.push_back(std::move(job));
+    slot_alive_.push_back(1);
+    ++live_job_count_;
     ++next_issue_seq_;
+    register_job_phase(jobs_.back());
     publish_resource_mutation(Sys::boostedTick());
-    if (jobs.size() > peak_concurrent_jobs_) {
-        peak_concurrent_jobs_ = static_cast<uint64_t>(jobs.size());
+    if (live_job_count_ > peak_concurrent_jobs_) {
+        peak_concurrent_jobs_ = static_cast<uint64_t>(live_job_count_);
     }
     if (joins_active_jobs) {
         // Every new streamer immediately dilutes the equal split for the
@@ -701,15 +733,6 @@ void LocalHbmBandwidthModel::issue_compute(
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
     issue_job(JobKind::COMPUTE, num_ops, tensor_size, wlhd);
-}
-
-void LocalHbmBandwidthModel::issue_control_marker(
-    WorkloadLayerHandlerData* wlhd) {
-    if (sys->coarse_die_runtime == nullptr) {
-        issue_compute(1, 1, wlhd);
-        return;
-    }
-    issue_job(JobKind::CONTROL_MARKER, 0, 1, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_restore(
@@ -786,13 +809,13 @@ void LocalHbmBandwidthModel::issue_die_memory(double service_units,
         // Same-tick zombie detach as issue_job: a job fully served by
         // advance_to() but not yet detached must not inflate the membership
         // counters against this new DIE job.
-        const std::vector<Job> zombies = detach_completed_jobs();
-        for (const Job& job : zombies) {
+        const std::vector<Job> completed = detach_completed_jobs();
+        for (const Job& job : completed) {
             on_job_complete(job, now);
         }
     }
     const bool joins_active_jobs =
-        !jobs.empty() && has_bandwidth_user(jobs);
+        live_job_count_ > 0 && drain_pending_count_ > 0;
     notify_resource_mutation_before(now);
     Job job{};
     job.kind = JobKind::DIE_COMPUTE;
@@ -808,10 +831,16 @@ void LocalHbmBandwidthModel::issue_die_memory(double service_units,
     job.service_eta = eta;
     job.die_sink = sink;
     job.die_data = data;
-    jobs.push_back(std::move(job));
+    job.issue_seq = next_issue_seq_;
+    job.slot = jobs_.size();
+    jobs_.push_back(std::move(job));
+    slot_alive_.push_back(1);
+    ++live_job_count_;
+    ++next_issue_seq_;
+    register_job_phase(jobs_.back());
     publish_resource_mutation(now);
-    if (jobs.size() > peak_concurrent_jobs_) {
-        peak_concurrent_jobs_ = static_cast<uint64_t>(jobs.size());
+    if (live_job_count_ > peak_concurrent_jobs_) {
+        peak_concurrent_jobs_ = static_cast<uint64_t>(live_job_count_);
     }
     if (joins_active_jobs) {
         ++redistribution_events_;
@@ -826,25 +855,49 @@ void LocalHbmBandwidthModel::cancel_die_jobs_of(Callable* sink) {
     // path; callbacks for the sink being destroyed are reclaimed below.
     advance_to(now);
     const std::vector<Job> completed = detach_completed_jobs();
-    const auto matching = std::find_if(jobs.begin(), jobs.end(),
-        [sink](const Job& job) {
-            return job.kind == JobKind::DIE_COMPUTE && job.die_sink == sink;
-        });
-    if (matching != jobs.end()) {
+    bool has_match = false;
+    for (size_t slot = 0; slot < jobs_.size(); ++slot) {
+        if (slot_alive_[slot] == 0) {
+            continue;
+        }
+        const Job& job = jobs_[slot];
+        if (job.kind == JobKind::DIE_COMPUTE && job.die_sink == sink) {
+            has_match = true;
+            break;
+        }
+    }
+    if (has_match) {
         notify_resource_mutation_before(now);
     }
     bool removed = false;
-    for (auto it = jobs.begin(); it != jobs.end();) {
-        if (it->kind == JobKind::DIE_COMPUTE && it->die_sink == sink) {
-            delete it->die_data;
-            it->die_data = nullptr;
-            it = jobs.erase(it);
+    for (size_t slot = 0; slot < jobs_.size(); ++slot) {
+        if (slot_alive_[slot] == 0) {
+            continue;
+        }
+        Job& job = jobs_[slot];
+        if (job.kind == JobKind::DIE_COMPUTE && job.die_sink == sink) {
+            delete job.die_data;
+            job.die_data = nullptr;
+            if (remaining_drain(job) > kEpsilon) {
+                --drain_pending_count_;
+            }
+            job.in_candidates = false;
+            unregister_job_phase(slot);
+            slot_alive_[slot] = 0;
+            --live_job_count_;
+            ++dead_slot_count_;
             removed = true;
-        } else {
-            ++it;
         }
     }
     if (removed) {
+        completion_candidates_.erase(
+            std::remove_if(completion_candidates_.begin(),
+                           completion_candidates_.end(),
+                           [this](const size_t slot) {
+                               return slot >= slot_alive_.size() ||
+                                      slot_alive_[slot] == 0;
+                           }),
+            completion_candidates_.end());
         publish_resource_mutation(now);
     }
     for (const Job& job : completed) {
@@ -857,9 +910,11 @@ void LocalHbmBandwidthModel::cancel_die_jobs_of(Callable* sink) {
     // A wiped job may have been the next transition's reason; re-arm the
     // prediction for whatever remains (a no-op when nothing is left).
     schedule_next_transition();
+    maybe_compact_slots();
 }
 
 void LocalHbmBandwidthModel::call(EventType, CallData* data) {
+    ++transition_event_count_;
     TransitionData* transition = static_cast<TransitionData*>(data);
     const uint64_t generation = transition->generation;
     delete transition;
@@ -874,19 +929,39 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
 
     const Tick now = Sys::boostedTick();
     advance_to(now);
-    const bool has_completed = std::any_of(jobs.begin(), jobs.end(),
-        [](const Job& job) { return complete(job); });
+    // v7: only completion candidates (jobs whose quantities landed at a
+    // boundary since the last detach) can satisfy complete(); the old
+    // any_of scan over the whole vector visits exactly the same jobs.
+    std::vector<size_t> candidates = std::move(completion_candidates_);
+    completion_candidates_.clear();
+    bool has_completed = false;
+    for (const size_t slot : candidates) {
+        if (slot_alive_[slot] != 0 && complete(jobs_[slot])) {
+            has_completed = true;
+            break;
+        }
+    }
     if (has_completed) {
         notify_resource_mutation_before(now);
     }
     std::vector<Job> completed;
-    for (auto it = jobs.begin(); it != jobs.end();) {
-        if (complete(*it)) {
-            completed.push_back(std::move(*it));
-            it = jobs.erase(it);
-        } else {
-            ++it;
+    for (const size_t slot : candidates) {
+        if (slot_alive_[slot] == 0) {
+            continue;
         }
+        Job& job = jobs_[slot];
+        job.in_candidates = false;
+        if (!complete(job)) {
+            continue;
+        }
+        completed.push_back(std::move(job));
+        slot_alive_[slot] = 0;
+        --live_job_count_;
+        ++dead_slot_count_;
+        if (remaining_drain(completed.back()) > kEpsilon) {
+            --drain_pending_count_;
+        }
+        unregister_job_phase(slot);
     }
     if (!completed.empty()) {
         publish_resource_mutation(now);
@@ -897,7 +972,7 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
     // full_rate/(N-k)); the batch counts ONCE regardless of how many jobs
     // completed together (previously each completed job counted separately,
     // diverging from the other four repos).
-    if (!completed.empty() && has_bandwidth_user(jobs)) {
+    if (!completed.empty() && drain_pending_count_ > 0) {
         ++redistribution_events_;
     }
 
@@ -912,43 +987,91 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
     if (event_generation == generation) {
         schedule_next_transition();
     }
-}
-
-bool LocalHbmBandwidthModel::has_bandwidth_user(
-    const std::vector<Job>& jobs) {
-    // A job in its latency phase (memory_latency_ns > 0) or a fully served
-    // zombie (drained quantity == 0, not yet detached) contributes no
-    // bandwidth demand: an equal-share recomputation over such a set
-    // reshapes nobody's share and must not count as a redistribution.
-    for (const Job& job : jobs) {
-        if (remaining_drain(job) > kEpsilon) {
-            return true;
-        }
-    }
-    return false;
+    maybe_compact_slots();
 }
 
 std::vector<LocalHbmBandwidthModel::Job>
 LocalHbmBandwidthModel::detach_completed_jobs() {
     // 4.2 zombie fix (same as the wscllm model): see issue_job.
-    const bool has_completed = std::any_of(jobs.begin(), jobs.end(),
-        [](const Job& job) { return complete(job); });
+    std::vector<size_t> candidates = std::move(completion_candidates_);
+    completion_candidates_.clear();
+    bool has_completed = false;
+    for (const size_t slot : candidates) {
+        if (slot_alive_[slot] != 0 && complete(jobs_[slot])) {
+            has_completed = true;
+            break;
+        }
+    }
     if (has_completed) {
         notify_resource_mutation_before(Sys::boostedTick());
     }
     std::vector<Job> completed;
-    for (auto it = jobs.begin(); it != jobs.end();) {
-        if (complete(*it)) {
-            completed.push_back(std::move(*it));
-            it = jobs.erase(it);
-        } else {
-            ++it;
+    for (const size_t slot : candidates) {
+        if (slot_alive_[slot] == 0) {
+            continue;
         }
+        Job& job = jobs_[slot];
+        job.in_candidates = false;
+        if (!complete(job)) {
+            continue;
+        }
+        completed.push_back(std::move(job));
+        slot_alive_[slot] = 0;
+        --live_job_count_;
+        ++dead_slot_count_;
+        if (remaining_drain(completed.back()) > kEpsilon) {
+            --drain_pending_count_;
+        }
+        unregister_job_phase(slot);
     }
     if (!completed.empty()) {
         publish_resource_mutation(Sys::boostedTick());
     }
     return completed;
+}
+
+void LocalHbmBandwidthModel::maybe_compact_slots() {
+    // Bulk dead-slot reclamation at a safe point (no observer pass active,
+    // advance_to not running, no iteration in flight). Order-preserving:
+    // every per-job apply loop keeps the original issue order afterwards.
+    if (dead_slot_count_ < 16 || dead_slot_count_ < live_job_count_) {
+        return;
+    }
+    std::vector<Job> alive;
+    std::vector<uint8_t> alive_flags;
+    alive.reserve(live_job_count_);
+    alive_flags.reserve(live_job_count_);
+    for (size_t slot = 0; slot < jobs_.size(); ++slot) {
+        if (slot_alive_[slot] == 0) {
+            continue;
+        }
+        alive.push_back(std::move(jobs_[slot]));
+        alive_flags.push_back(1);
+    }
+    jobs_.swap(alive);
+    slot_alive_.swap(alive_flags);
+    dead_slot_count_ = 0;
+    latency_members_.clear();
+    stream_members_.clear();
+    compute_members_.clear();
+    completion_candidates_.clear();
+    for (size_t slot = 0; slot < jobs_.size(); ++slot) {
+        Job& job = jobs_[slot];
+        job.slot = slot;
+        const bool was_candidate = job.in_candidates;
+        job.in_candidates = false;
+        if (job.memory_latency_ns > kEpsilon) {
+            phase_insert(latency_members_, slot);
+        } else if (remaining_drain(job) > kEpsilon) {
+            phase_insert(stream_members_, slot);
+        }
+        if (job.kind == JobKind::COMPUTE) {
+            phase_insert(compute_members_, slot);
+        }
+        if (was_candidate || complete(job)) {
+            mark_completion_candidate(job);
+        }
+    }
 }
 
 void LocalHbmBandwidthModel::on_job_complete(const Job& job,

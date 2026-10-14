@@ -720,7 +720,7 @@ class ProductionWiringTest(unittest.TestCase):
                 layer_start=0, layer_end=kv.model.layers))
         candidate = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=0,
-            action="stay", remote_enabled=True)
+            action="stay")
         self.assertTrue(candidate.applicable)
         # D11 披露面：分阶段峰值 + 摘要 θ 消费注记随候选落盘。
         notes = candidate.breakdown.notes

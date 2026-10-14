@@ -55,7 +55,6 @@ from joint.test_d18_boundary_decision import (  # noqa: E402
     _complete_boundary,
     _complete_costs,
     _drain_ready_scheduler,
-    _increment_boundary,
     _loads as d_loads,
     _model as d_model,
 )
@@ -83,7 +82,7 @@ class _MaskedCountingModel(_CountingModel):
     allowed_actions = None
 
     def estimate_D_remaining(self, *, boundary, instance_index, action,
-                             remote_enabled, **_d17_disclosure):
+                             **_disclosure):
         if (self.allowed_actions is not None
                 and action not in self.allowed_actions):
             return ActionCandidate(
@@ -91,9 +90,8 @@ class _MaskedCountingModel(_CountingModel):
                 applicable=False,
                 inapplicable_reason=MASK_INAPPLICABLE_REASON, cost_ns=None)
         return super().estimate_D_remaining(
-            boundary=boundary, instance_index=instance_index,
-            action=action, remote_enabled=remote_enabled,
-            **_d17_disclosure)
+            boundary=boundary, instance_index=instance_index, action=action,
+            **_disclosure)
 
 
 class C1MaskedBoundarySelectionTest(unittest.TestCase):
@@ -110,8 +108,7 @@ class C1MaskedBoundarySelectionTest(unittest.TestCase):
             allowed_actions=config.allowed_action_set)
         p = select_instance_and_action(
             mode=config.scheduler_mode, cost_model=p_model,
-            session=_session(home=0, resident=1), request=_request(),
-            remote_enabled=True)
+            session=_session(home=0, resident=1), request=_request())
         self.assertEqual(
             (p.chosen.instance_index, p.chosen.action), (0, "recompute"))
         d_model_inst = d_model(d_loads())
@@ -121,8 +118,8 @@ class C1MaskedBoundarySelectionTest(unittest.TestCase):
             boundary=_complete_boundary(
                 p_instance_index=p.chosen.instance_index,
                 p_action=p.chosen.action),
-            remote_enabled=True)
-        # 允许面内选择：不出面（stay/remote-read 被掩码剔除）。
+            )
+        # 允许面内选择：不出面（stay 被掩码剔除）。
         self.assertIn(record.chosen.action, ("copy", "recompute"))
         self.assertFalse(record.chosen.is_continuation)
         self.assertTrue(record.diagnostics["continuation_masked_out"])
@@ -150,17 +147,16 @@ class C1MaskedBoundarySelectionTest(unittest.TestCase):
             mode=config.scheduler_mode, cost_model=d_model_inst,
             boundary=_complete_boundary(p_instance_index=0,
                                         p_action="recompute"),
-            remote_enabled=True)
+            )
         self.assertEqual(record.chosen.action, "recompute")
         self.assertTrue(record.chosen.applicable)
         self.assertIsNotNone(record.chosen.cost_ns)
         self.assertTrue(record.diagnostics["continuation_masked_out"])
-        # 允许面外动作（stay/copy/remote-read）逐个掩码剔除留痕；物理
-        # 上本就不可用的组合保留物理理由（M2 模板：掩码只覆盖可用者
-        # ——stay@i_P 物理可用 ⇒ 掩码串；copy@i_P/remote@i_P 物理不可
-        # 用 ⇒ 物理串）。
+        # 允许面外动作（stay/copy）逐个掩码剔除留痕；物理上本就不可用
+        # 的组合保留物理理由（M2 模板：掩码只覆盖可用者——stay@i_P 物理
+        # 可用 ⇒ 掩码串；copy@i_P 物理不可用 ⇒ 物理串）。
         mask_expected = {
-            (0, "stay"), (1, "copy"), (1, "remote-read"),
+            (0, "stay"), (1, "copy"),
         }
         for candidate in record.candidates:
             if candidate.action != "recompute":
@@ -178,16 +174,17 @@ class C1MaskedBoundarySelectionTest(unittest.TestCase):
             self):
         """掩码把允许面整体剔空 → 明确的 no-applicable-under-mask
         fail-closed 错误（不许空序列 min()；不误报 continuation 丢失）。
-        C4 后 recompute 恒适用，空面形态 = 剔除 recompute 且增量型边界
-        上 stay 物理不适用（如 {stay} 掩码 × 增量型布局）。"""
-        config = _config("stay")
-        d_model_inst = d_model(d_loads())
+        空面形态 = 单实例几何 × {copy} 掩码：stay/recompute 被掩码剔
+        除、copy@i_P 在完整型布局下物理退化（无缺失区间）——允许面
+        整体为空（远读退役前以增量型边界构造该形态，现以单实例 copy
+        退化构造）。"""
+        config = _config("copy")
+        d_model_inst = d_model({0: d_loads()[0]})
         d_model_inst.allowed_actions = config.allowed_action_set
         with self.assertRaises(JointSchedulerError) as caught:
             select_decode_target_and_action(
                 mode=config.scheduler_mode, cost_model=d_model_inst,
-                boundary=_increment_boundary(),
-                remote_enabled=True)
+                boundary=_complete_boundary(p_instance_index=0))
         message = str(caught.exception)
         self.assertIn("no applicable candidate", message)
         self.assertIn("JOINT_ALLOWED_ACTIONS mask", message)
@@ -203,7 +200,7 @@ class C1MaskedBoundarySelectionTest(unittest.TestCase):
         with self.assertRaises(JointSchedulerError) as caught:
             select_decode_target_and_action(
                 mode="joint", cost_model=model,
-                boundary=_complete_boundary(), remote_enabled=True)
+                boundary=_complete_boundary(), )
         self.assertIn("lost the in-place continuation record",
                       str(caught.exception))
 
@@ -216,17 +213,15 @@ class C1MaskedBoundarySelectionTest(unittest.TestCase):
             (0, "stay"): (100, True),
             (0, "recompute"): None,
             (0, "copy"): (100, False),
-            (0, "remote-read"): None,
             (1, "stay"): None,
             (1, "recompute"): None,
             (1, "copy"): (100, False),
-            (1, "remote-read"): None,
         }
         model = _MaskedCountingModel(costs)
         model.allowed_actions = frozenset({"copy"})
         record = select_decode_target_and_action(
             mode="joint", cost_model=model,
-            boundary=_complete_boundary(), remote_enabled=True)
+            boundary=_complete_boundary(), )
         self.assertEqual(record.chosen.instance_index, 0)
         self.assertEqual(record.chosen.action, "copy")
         self.assertFalse(record.chosen.is_continuation)
@@ -263,8 +258,7 @@ class C1OnlineBoundarySafetyTest(unittest.TestCase):
             allowed_actions=config.allowed_action_set)
         p = select_instance_and_action(
             mode=config.scheduler_mode, cost_model=p_model,
-            session=_session(home=0, resident=1), request=_request(),
-            remote_enabled=True)
+            session=_session(home=0, resident=1), request=_request())
         self.assertEqual(
             (p.chosen.instance_index, p.chosen.action), (0, "recompute"))
         # 边界腿：真 drain。

@@ -39,9 +39,12 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/BasicLogicalTopology.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
 #include "DieModel.hh"
-#include "astra-sim/workload/CoarseDieRuntime.hh"
-#include "coarse_die/Hardware.hh"
 #include <json/json.hpp>
+
+#ifdef JOINT_V7_EVENT_PROFILE
+#include "common/EventProfile.h"
+using namespace NetworkAnalytical::EventProfile;
+#endif
 
 using namespace std;
 using namespace Chakra;
@@ -157,6 +160,14 @@ Sys::Sys(int id,
     this->execution_mode_ = execution_mode;
     this->graph_source_ = std::move(graph_source);
 
+#ifdef JOINT_V7_EVENT_PROFILE
+    // Diagnostic-only classification registration (v7 attribution): every
+    // backend outer alarm of this Sys family dispatches through
+    // Sys::handleEvent. Idempotent across the 54 Sys instances.
+    NetworkAnalytical::EventProfile::register_known(&Sys::handleEvent,
+                                                    "sys_outer");
+#endif
+
     if ((id + 1) > this->all_sys.size()) {
         this->all_sys.resize(id + 1);
     }
@@ -172,8 +183,6 @@ Sys::Sys(int id,
     this->roofline = nullptr;
     this->compute_cost_model = ComputeCostModel::LegacyDefault;
     this->die_runtime = nullptr;
-    this->coarse_die_runtime = nullptr;
-    this->die_model_profile = "";
     this->die_model_config_path = "";
 
     this->remote_mem = remote_mem;
@@ -615,11 +624,7 @@ void Sys::initialize_sys_fields(const json& j, const string& name) {
                 "hbm-bandwidth-contention must be boolean or integer");
         }
     }
-    // coarse_die_v2 derives its HBM rows after this key walk. Preserve
-    // the user flag until its descriptor is loaded and validated.
-    if (local_mem_bw <= 0 &&
-        !(j.contains("die-model-profile") &&
-          j["die-model-profile"] == "coarse_die_v2")) {
+    if (local_mem_bw <= 0) {
         hbm_bandwidth_contention = false;
     }
     if (j.contains("roofline-enabled")) {
@@ -783,12 +788,10 @@ void Sys::resolve_compute_cost_backend(const json& j, const string& name) {
                 "system config key 'die-model-profile' must be a string");
         }
         profile = j["die-model-profile"];
-        this->die_model_profile = profile;
-        if (profile != "mesh_die_v1" && profile != "tx8_reference_v1" &&
-            profile != "coarse_die_v2") {
+        if (profile != "mesh_die_v1" && profile != "tx8_reference_v1") {
             sys_panic("unknown value for die-model-profile in sys input "
                       "file: '" +
-                      profile + "' (legal: mesh_die_v1 | tx8_reference_v1 | coarse_die_v2)");
+                      profile + "' (legal: mesh_die_v1 | tx8_reference_v1)");
         }
     }
     const bool config_explicit_present = j.contains("die-model-config");
@@ -884,48 +887,6 @@ void Sys::initialize_die_backend(
     } catch (const std::exception& e) {
         sys_panic("failed to parse die-model-config file " + path + ": " +
                   e.what());
-    }
-
-    // coarse_die_v2 is a separate typed backend. COMP plans and all local
-    // HBM endpoint traffic are submitted to the same per-rank Runtime.
-    if (profile == "coarse_die_v2") {
-        if (!profile_present || die_cfg.value("schema", string()) !=
-                                    "coarse_die_v2") {
-            sys_panic(
-                "coarse_die_v2 requires an explicit die-model-profile and a "
-                "coarse_die_v2 resolved descriptor at " + path);
-        }
-        if (hbm_contention_key_present && !hbm_bandwidth_contention) {
-            sys_panic(
-                "coarse_die_v2 requires shared local HBM service for COMP "
-                "and endpoint traffic; hbm-bandwidth-contention=0 is not "
-                "supported");
-        }
-        coarse_die::Hardware coarse_hw;
-        try {
-            coarse_hw = coarse_die::resolve_hardware(die_cfg);
-        } catch (const std::exception& e) {
-            LoggerFactory::get_logger("system")->critical(
-                "coarse_die_v2 descriptor {} rejected: {}", path, e.what());
-            exit(1);
-        }
-        coarse_die_runtime = std::make_unique<CoarseDieRuntime>(
-            this, std::move(coarse_hw));
-        die_runtime.reset();
-        die_model_profile = "coarse_die_v2";
-        if (!local_mem_bw_key_present) {
-            local_mem_bw = coarse_die_runtime->hardware().rates[
-                               coarse_die::HBM0] +
-                           coarse_die_runtime->hardware().rates[
-                               coarse_die::HBM1];
-        }
-        hbm_bandwidth_contention = true;
-        return;
-    }
-    if (profile_present && profile != "mesh_die_v1" &&
-        profile != "tx8_reference_v1") {
-        sys_panic("legacy DieModel cannot load die-model-profile '" + profile +
-                  "'");
     }
 
     DieModel::Hardware hw;
@@ -1050,6 +1011,14 @@ void Sys::call_events() {
         // current callback is executing with.
         ScheduledEvent callable = std::move(scheduled_events.front());
         scheduled_events.pop_front();
+#ifdef JOINT_V7_EVENT_PROFILE
+        // Diagnostic-only classification (v7 attribution): label + owner
+        // histogram per Callable. Compiled out in production builds.
+        const char* profile_label =
+            callable.callable->profile_dispatch_label();
+        Slot* profile_slot = find_slot(state().sys, profile_label);
+        const uint64_t profile_t0 = now_ns();
+#endif
         try {
             pending_events--;
             callable.callable->call(callable.event, callable.call_data);
@@ -1058,6 +1027,9 @@ void Sys::call_events() {
             logger->critical("warning! a callable is removed before call {}",
                              e.what());
         }
+#ifdef JOINT_V7_EVENT_PROFILE
+        close_slot(profile_slot, callable.callable, profile_t0);
+#endif
     }
     dispatching_events = false;
     event_queue.erase(event_list_it);
@@ -1927,37 +1899,6 @@ int Sys::front_end_sim_send(Tick delay,
     }
 }
 
-int Sys::front_end_sim_send_correlated(
-    Tick delay,
-    void* buffer,
-    uint64_t count,
-    int type,
-    int dst,
-    int tag,
-    sim_request* request,
-    Sys::FrontEndSendRecvType send_type,
-    void (*msg_handler)(void* fun_arg),
-    void* fun_arg,
-    const AstraNetworkAPI::LogicalFlowKey& key) {
-    if (send_type == Sys::FrontEndSendRecvType::NATIVE) {
-        tag = tag % (Sys::FrontEndSendRecvType::COLLECTIVE -
-                     Sys::FrontEndSendRecvType::NATIVE) +
-              Sys::FrontEndSendRecvType::NATIVE;
-    } else if (send_type == Sys::FrontEndSendRecvType::COLLECTIVE) {
-        tag = tag % (Sys::FrontEndSendRecvType::RENDEZVOUS -
-                     Sys::FrontEndSendRecvType::COLLECTIVE) +
-              Sys::FrontEndSendRecvType::COLLECTIVE;
-    } else {
-        sys_panic("A type of RENDZVOUS should never issued in frontend");
-    }
-    if (rendezvous_enabled) {
-        return rendezvous_sim_send(delay, buffer, count, type, dst, tag,
-                                   request, msg_handler, fun_arg, key);
-    }
-    return sim_send_correlated(delay, buffer, count, type, dst, tag, request,
-                               msg_handler, fun_arg, key);
-}
-
 int Sys::front_end_sim_recv(Tick delay,
                             void* buffer,
                             uint64_t count,
@@ -1996,17 +1937,14 @@ int Sys::rendezvous_sim_send(Tick delay,
                              int tag,
                              sim_request* request,
                              void (*msg_handler)(void* fun_arg),
-                             void* fun_arg,
-                             std::optional<AstraNetworkAPI::LogicalFlowKey>
-                                 logical_key) {
+                             void* fun_arg) {
     if (tag >= Sys::FrontEndSendRecvType::RENDEZVOUS) {
         sys_panic("tag is bigger than RENDEZVOUS_COMM_TAG_OFFSET, \
         which means it might be mistakenly used as a rendezvous tag.");
     }
     RendezvousSendData* rsd =
         new RendezvousSendData(id, this, buffer, count, type, dst, tag,
-                               *request, msg_handler, fun_arg,
-                               std::move(logical_key));
+                               *request, msg_handler, fun_arg);
     sim_request newReq = *request;
     uint64_t rendevouz_size = 8192;
     newReq.dstRank = request->srcRank;
@@ -2075,29 +2013,6 @@ int Sys::sim_send(Tick delay,
                                              tag, *request, msg_handler,
                                              fun_arg, true),
                            EventType::General, nullptr, delay);
-    }
-    return 1;
-}
-
-int Sys::sim_send_correlated(
-    Tick delay,
-    void* buffer,
-    uint64_t count,
-    int type,
-    int dst,
-    int tag,
-    sim_request* request,
-    void (*msg_handler)(void* fun_arg),
-    void* fun_arg,
-    const AstraNetworkAPI::LogicalFlowKey& key) {
-    if (delay == 0) {
-        comm_NI->sim_send_correlated(buffer, count, type, dst, tag, request,
-                                     msg_handler, fun_arg, key);
-    } else {
-        try_register_event(
-            new SimSendCaller(this, buffer, count, type, dst, tag, *request,
-                              msg_handler, fun_arg, true, key),
-            EventType::General, nullptr, delay);
     }
     return 1;
 }

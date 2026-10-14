@@ -70,7 +70,7 @@ class PerPathDecouplingTest(unittest.TestCase):
             _rates(), registry, None,
             paths_by_rank=((PATH_A,), (PATH_B,)),
             bytes_by_rank=(100, 200),
-            include_self=True, kind="read")
+            include_self=True, kind="copy")
         self.assertEqual(wall, 40)
         self.assertLess(wall, 80)   # 旧并集口径的减速值（不再发生）
 
@@ -84,7 +84,7 @@ class PerPathDecouplingTest(unittest.TestCase):
             _rates(), registry, None,
             paths_by_rank=((PATH_A,), (PATH_B,)),
             bytes_by_rank=(100, 300),
-            include_self=True, kind="read")
+            include_self=True, kind="copy")
         # A = 100·(2+1)/10 = 30；B = 300·1/10 = 30 → wall = 30
         # （旧并集除数 3 作用到 B：300·3/10 = 90）。
         self.assertEqual(wall, 30)
@@ -98,13 +98,13 @@ class PerPathDecouplingTest(unittest.TestCase):
         wall = _transfer_ns_shards(
             _rates(), registry, None,
             paths_by_rank=paths, bytes_by_rank=(60,) * 6,
-            include_self=True, kind="read")
+            include_self=True, kind="copy")
         self.assertEqual(wall, 36)
         # include_self=False：候选份额剥离 → 除数回落 1。
         wall_no_self = _transfer_ns_shards(
             _rates(), registry, None,
             paths_by_rank=paths, bytes_by_rank=(60,) * 6,
-            include_self=False, kind="read")
+            include_self=False, kind="copy")
         self.assertEqual(wall_no_self, 6)
 
     def test_zero_byte_shard_not_in_share_family(self):
@@ -117,7 +117,7 @@ class PerPathDecouplingTest(unittest.TestCase):
             _rates(), registry, None,
             paths_by_rank=((PATH_A,), (PATH_A,)),
             bytes_by_rank=(6000, 0),
-            include_self=True, kind="read")
+            include_self=True, kind="copy")
         self.assertEqual(wall, 600)
 
 
@@ -138,7 +138,7 @@ class TelemetryPerPathTest(unittest.TestCase):
             _rates(), view, None,
             paths_by_rank=((PATH_A,), (PATH_B,)),
             bytes_by_rank=(100, 200),
-            include_self=True, kind="read", noc_share=share)
+            include_self=True, kind="copy", noc_share=share)
         # A = 100·6/10 = 60；B = 200/10 = 20 → wall = 60。
         self.assertEqual(wall, 60)
 

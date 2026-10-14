@@ -30,6 +30,12 @@ class MemMovRequest : public Callable, public SharedBusStat {
     }
     void call(EventType event, CallData* data);
 
+    // Diagnostic-only dispatch label (v7 event attribution); see Callable.
+    [[nodiscard]] const char* profile_dispatch_label() const noexcept override {
+        return "mem_mov";
+    }
+
+
     uint64_t size;
     int latency;
     Callable* callable;

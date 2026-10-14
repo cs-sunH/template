@@ -57,7 +57,7 @@ Analytical_Congestion_Aware). Exit code 0 on ALL PASS.
 #include "astra-sim/workload/Workload.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
-#include "astra-sim/workload/execution_driven/PipelineDescriptor.hh"
+#include "astra-sim/workload/execution_driven/PipelineKernelContract.hh"
 #include "astra-sim/workload/execution_driven/PipelineKernel.hh"
 #include "DieModel.hh"
 #include "congestion_aware/Link.h"

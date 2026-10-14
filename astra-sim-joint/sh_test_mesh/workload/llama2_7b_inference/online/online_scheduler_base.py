@@ -32,7 +32,7 @@ import sys
 import tempfile
 import time
 
-SCHEMA_VERSION = 2  # GraphBatch / bridge wire schema v2 (2026-10-05)
+SCHEMA_VERSION = 3  # GraphBatch / bridge wire schema v3 (2026-10-14 远读退役：pipeline_descriptors 键删除，与 C++ kGraphBatchSchemaVersion 同步)
 
 # W1(2026-09-29):因果运行账本 import 路径引导(与 sh30 同款:本文件位于
 # online/,joint 包在上一级)。路径只做 import 用途。
@@ -59,7 +59,7 @@ _PROPAGATING_TAIL_SOURCE_DELIVERY = "delivery_start"  # _emitted_by_delivery(未
 _PROPAGATING_TAIL_SOURCE_KV = "kv_provisional"        # _provisional_kv_actions(未确认)
 
 # delivery 类来源(delivery_start / kv_provisional)默认上限推导:
-# FileDecisionBridge v0 背压 = 一轮至多 1 个在途 request(C++ 不收到
+# ShmDecisionBridge v1 背压 = 一轮至多 1 个在途 request(C++ 不收到
 # response 不发下一个;见 decision_bridge.py 协议头),ack 序列严格 +1
 # 单调(_BoundedSequenceTracker),故最大合法未确认交付数 = 1。默认上限
 # 取 8 = 8x 合法窗口,余量覆盖:响应文件原子发布与 ack 文件写入之间的
@@ -594,24 +594,8 @@ class OnlineSchedulerBase:
         delivery_sequence = self._batch["delivery_sequence"]
         graph_batch = self._graph_batch()
         touched_ranks = self._sorted_touched_ranks(graph_batch)
-        # C1 actual publication ordering: descriptor ordinals commit and the
-        # strict wire conversion happens BEFORE this batch is assembled,
-        # digested, or reported.  finalize_pipeline_identities appends the
-        # finished descriptors to the builder accumulator; running it after
-        # the digest would publish a batch whose content_sha256 and
-        # pipeline_descriptor_count miss the very descriptors it carries.
-        graph = getattr(self, "graph", None)
-        finalize_pipeline_identities = getattr(
-            graph, "finalize_pipeline_identities", None)
-        if callable(finalize_pipeline_identities):
-            finalize_pipeline_identities()
-        # The immutable descriptor objects are converted to strict wire JSON
-        # by GraphBatchBuilder at the original emission point. Keep an empty
-        # array for batches without a remote-read pipeline; the run contract
-        # is mandatory regardless, so native/runtime values cannot diverge.
-        pipeline_descriptors = graph_batch.get("pipeline_descriptors", [])
-        if not isinstance(pipeline_descriptors, list):
-            raise TypeError("pipeline_descriptors must be a list")
+        # D4：kernel_contract 由每批无条件发射（die 计算后端的 window
+        # 契约——三动作下仍无条件发射），native/runtime 值不得分叉。
         from joint.prediction_config import make_pipeline_kernel_contract
         kernel_contract = make_pipeline_kernel_contract(
             self._joint_prediction_config)
@@ -628,7 +612,6 @@ class OnlineSchedulerBase:
             # 阶段 5 §8.2:touched ranks 集合(本批节点 rank 升序去重;零节点
             # 批 = []);由构图收集时的精确 rank 账本给出，C++ 仍会校验。
             "touched_ranks": touched_ranks,
-            "pipeline_descriptors": pipeline_descriptors,
             "kernel_contract": kernel_contract,
         }
         # 阶段 5 §8.2:本批 kv_actions 先入 provisional 暂存区(非空才记账),
@@ -1271,7 +1254,6 @@ class OnlineSchedulerBase:
             {
                 "nodes": batch["nodes"],
                 "parent_edges": batch["parent_edges"],
-                "pipeline_descriptors": batch["pipeline_descriptors"],
                 "kernel_contract": batch["kernel_contract"],
             },
             sort_keys=True,
@@ -1287,7 +1269,6 @@ class OnlineSchedulerBase:
             "tick": self._batch["tick"],
             "reasons": self._batch["reasons"],
             "node_count": len(batch["nodes"]),
-            "pipeline_descriptor_count": len(batch["pipeline_descriptors"]),
             "edge_count": len(batch["parent_edges"]),
             "watch_count": len(batch["watches"]),
             "future_alarm_count": len(batch["future_alarms"]),

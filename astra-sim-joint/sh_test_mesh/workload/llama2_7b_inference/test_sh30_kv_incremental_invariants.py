@@ -50,8 +50,9 @@ class IncrementalInvariantTests(unittest.TestCase):
         fixes.py 钉测覆盖）；本用例沿同实例生命周期覆盖
         commit_stage_reservation_transaction / move_prefill_to_decode
         的原地分支，跨实例轮换仍走 merge v2 腿（2026-09-17：PARTIAL
-        混合 remote-read 反向翻转 + REMOTE 基 copy 就地转正）。语义意
-        图（增量/严格不变量在**全部合法变更面**上等价）不变。"""
+        池恢复 + REMOTE 基 copy 就地转正；2026-10-14 远读退役：原
+        remote-read 混合形态改写为 PARTIAL 基 copy 池恢复形态）。语义
+        意图（增量/严格不变量在**全部合法变更面**上等价）不变。"""
         fast = _manager(False)
         strict = _manager(True)
 
@@ -153,10 +154,12 @@ class IncrementalInvariantTests(unittest.TestCase):
             trigger_request_id="next",
         )
         invoke("mark_complete", "session", 5, "human")
-        # ---- merge v2（少并多，2026-09-17）：混合形态 + 翻转腿。 ----
-        # 再截半层 → PARTIAL p=1；remote-read 混合形态（后缀池恢复热 KV）
-        # + 增量 expand；merge v2 反向（H < S+I）：基础前缀 NoC 搬 exec、
-        # home 侧释放、home 迁移到 exec——全程增量/严格审计等价。
+        # ---- merge v2（少并多，2026-09-17）：PARTIAL 池恢复 + 翻转。 ----
+        # 再截半层 → PARTIAL p=1；copy@exec 池恢复形态（后缀
+        # remote_load 热回 + 前缀 working copy）；merge v2 反向零字节
+        # 翻转：完整并集在 exec、home 侧前缀释放、home 迁移到 exec
+        # ——全程增量/严格审计等价（2026-10-14 远读退役：原
+        # remote-read 增量混合形态不可构造，同面改写）。
         with mock.patch.object(
             fast,
             "_check_invariants",
@@ -184,13 +187,13 @@ class IncrementalInvariantTests(unittest.TestCase):
             target_instance_index=1,
             history_tokens=5,
             trigger_request_id="hybrid",
-            action="remote-read",
+            action="copy",
         )
         invoke(
             "expand_prefill",
             session_id="session",
             instance_index=1,
-            context_tokens=1,
+            context_tokens=6,
             trigger_request_id="hybrid",
             reservation_request_id="hybrid",
         )
@@ -204,7 +207,7 @@ class IncrementalInvariantTests(unittest.TestCase):
                          strict.last_merge_outcome)
         self.assertEqual(
             fast.last_merge_outcome["direction"], "reverse")
-        self.assertFalse(fast.last_merge_outcome["zero_byte_flip"])
+        self.assertTrue(fast.last_merge_outcome["zero_byte_flip"])
         self.assertEqual(fast.last_merge_outcome["winner_instance"], 1)
         self.assertTrue(fast.last_merge_outcome["home_flipped"])
         verify()
@@ -409,40 +412,11 @@ class IncrementalInvariantTests(unittest.TestCase):
         fast.assert_final_state()
         strict.assert_final_state()
 
-    def test_remote_read_merge_forward_targets_base_instance(self) -> None:
-        """D-BI 回归（forward 腿）：remote-read 基础在他侧时，少并多
-        forward 的传输目标/胜者是物理基础驻留实例，随后 ``home := 胜者``
-        迁移 home（I7），终态审计全绿。"""
-        fast = _manager(False)
-        fast.prepare_prefill(
-            session_id="session", target_instance_index=0,
-            history_tokens=0, trigger_request_id="turn0")
-        fast.expand_prefill(
-            session_id="session", instance_index=0, context_tokens=4,
-            trigger_request_id="turn0")
-        fast.move_prefill_to_decode(
-            session_id="session", target_instance_index=1,
-            trigger_request_id="turn0")
-        fast.expand_decode(
-            session_id="session", instance_index=1, final_context_tokens=5,
-            trigger_request_id="turn0")
-        fast.merge_back(session_id="session", trigger_request_id="turn0",
-                        new_tokens=1)
-        fast.prepare_prefill(
-            session_id="session", target_instance_index=0,
-            history_tokens=5, trigger_request_id="turn1",
-            action="remote-read")
-        fast.expand_prefill(
-            session_id="session", instance_index=0, context_tokens=1,
-            trigger_request_id="turn1")
-        fast.merge_back(session_id="session", trigger_request_id="turn1",
-                        new_tokens=1)
-        self.assertEqual(fast.last_merge_outcome["direction"], "forward")
-        self.assertEqual(fast.last_merge_outcome["winner_instance"], 1)
-        self.assertTrue(fast.last_merge_outcome["home_flipped"])
-        self.assertEqual(fast._sessions["session"].home_instance, 1)
-        fast.mark_complete("session", 6, "human")
-        fast.assert_final_state()
+    # （原 test_remote_read_merge_forward_targets_base_instance（D-BI
+    # forward 腿回归）已随 2026-10-14 远读退役删除：forward 真实迁移腿
+    # 的承载形态 = remote-read 增量布局的分裂末态，三动作下合并恒
+    # stay/in_place/零字节翻转（D8）；reverse 腿与基础贡献跟随语义由
+    # test_base_contribution_follows_physical_base_instance 钉住。）
 
 
 if __name__ == "__main__":

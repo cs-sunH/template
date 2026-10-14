@@ -41,7 +41,7 @@ std::string snapshot() {
         {"forecast_arrival_placeholders_ns", nlohmann::json::array()}};
     nlohmann::json contract{{"projection_abi_version", 1},
         {"descriptor_version", 1}, {"pipeline_protocol_version", 1},
-        {"model_version", "v6-compact-window-20261005"},
+        {"model_version", "v7-three-actions-20261014"},
         {"timer_whitelist_version", "timer-whitelist-v1-20261005"},
         {"window_tile_limit", 1}, {"window_local_error_ppm", 10000},
         {"window_refine_margin_ppm", 20000},

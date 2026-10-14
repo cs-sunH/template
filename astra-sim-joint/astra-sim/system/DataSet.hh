@@ -31,6 +31,12 @@ class DataSet : public Callable, public StreamStat {
     void notify_stream_finished(StreamStat* data);
     void call(EventType event, CallData* data);
 
+    // Diagnostic-only dispatch label (v7 event attribution); see Callable.
+    [[nodiscard]] const char* profile_dispatch_label() const noexcept override {
+        return "dataset";
+    }
+
+
   private:
     // One-shot completion delivery; also invoked by set_notifier when the
     // dataset is already finished (zero-phase collective completed before

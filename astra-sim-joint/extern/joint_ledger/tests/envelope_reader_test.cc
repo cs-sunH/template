@@ -62,12 +62,14 @@ struct SelectorView {
 bool python_equal(const Json& left, const Json& right);
 std::string canonical_json_dumps(const Json& value);
 std::string sha256_hex(const std::string& bytes);
-Json parse_v4_slot_patches(Json value, const std::string& path,
-                           const DescriptorView& descriptors,
-                           const SelectorView& selector_indexes);
-Json parse_credit_patches(Json value, const std::string& path);
-Json parse_obligation_patches(Json value, const std::string& path,
-                              const DescriptorView& descriptors);
+std::vector<SlotPatch> parse_v4_slot_patches(
+    const Json& value, const std::string& path,
+    const DescriptorView& descriptors, const SelectorView& selector_indexes);
+std::vector<CreditPatch> parse_credit_patches(const Json& value,
+                                              const std::string& path);
+std::vector<ObligationPatch> parse_obligation_patches(
+    const Json& value, const std::string& path,
+    const DescriptorView& descriptors);
 
 }  // namespace rowport
 }  // namespace jointledger
@@ -790,18 +792,24 @@ void run_descriptor_dependent_tests() {
         const ParsedEnvelope parsed =
             parse_ok(descriptor_envelope(Json::array({row})));
         check(parsed.pipeline_runs.size() == 1, "one run");
-        const Json& parsed_row = parsed.pipeline_runs[0];
-        check(parsed_row["endpoint_run_index"] == u(0), "run index");
-        check(parsed_row["endpoint_leg_index"] == u(0), "leg index");
-        check(parsed_row["endpoint_ordinal"] == u(0), "endpoint ordinal");
-        check(parsed_row["endpoint_store_id"] == u(52), "store id");
-        check(parsed_row["_selected_global_tile_ordinal"] == u(1),
+        const jointledger::PipelineRun& parsed_row = parsed.pipeline_runs[0];
+        check(parsed_row.has_endpoint_run_index
+                  && parsed_row.endpoint_run_index == 0, "run index");
+        check(parsed_row.has_endpoint_leg_index
+                  && parsed_row.endpoint_leg_index == 0, "leg index");
+        check(parsed_row.has_endpoint_ordinal
+                  && parsed_row.endpoint_ordinal == 0, "endpoint ordinal");
+        check(parsed_row.has_endpoint_store_id
+                  && parsed_row.endpoint_store_id == 52, "store id");
+        check(parsed_row.has_selected_global_tile_ordinal
+                  && parsed_row.selected_global_tile_ordinal == 1,
               "selected tile");
-        check(parsed_row["_selected_shard_tile"]["data_bytes"] == u(2)
-                  && parsed_row["_selected_shard_tile"]["emit_endpoint"]
-                      == true,
+        check(parsed_row.has_selected_shard_tile
+                  && parsed_row.selected_shard_tile.data_bytes == 2
+                  && parsed_row.selected_shard_tile.emit_endpoint,
               "selected shard tile");
-        check(parsed_row["transition_kind"] == "tile_issue", "transition");
+        check(parsed_row.transition_kind
+                  == jointledger::TransitionKind::TileIssue, "transition");
     }
     // 55: endpoint fields must be all null or all present.
     {
@@ -856,7 +864,7 @@ void run_descriptor_dependent_tests() {
     {
         const ParsedEnvelope parsed = parse_ok(descriptor_envelope(
             Json::array({run_row(Json{{"transition_kind", "consume_done"}})})));
-        check(parsed.pipeline_runs[0]["endpoint_selector"].is_null(),
+        check(!parsed.pipeline_runs[0].have_selector,
               "consume_done without selector");
     }
     // 63: resource-bounded endpoint quantity matches the descriptor tile.
@@ -938,12 +946,13 @@ void run_descriptor_dependent_tests() {
             {"predecessor_consumed_count", u(0)},
             {"operations", Json::array({Json{{"op", "initialize"},
                                              {"slot_generation", u(1)}}})}}});
-        const Json parsed = parse_v4_slot_patches(patches, "slot_patches",
+        const auto parsed = parse_v4_slot_patches(patches, "slot_patches",
                                                   no_descriptors,
                                                   no_indexes);
-        check(parsed[0]["form"] == "target_delta", "target_delta form");
-        check(parsed[0]["key"][0] == kDomain && parsed[0]["key"][1] == "target"
-                  && parsed[0]["key"][4] == u(0), "target_delta key array");
+        check(parsed[0].is_target_delta, "target_delta form");
+        check(parsed[0].key.domain == kDomain && !parsed[0].key.role_source
+                  && parsed[0].key.slot_index == 0,
+              "target_delta key array");
     }
     {
         Json patches = Json::array({Json{
@@ -964,14 +973,15 @@ void run_descriptor_dependent_tests() {
                                      {"consume_run_index", u(0)}}},
                       {"add_shards", Json::array({u(0), u(1)})},
                       {"cleared", false}}})}}});
-        const Json parsed = parse_v4_slot_patches(patches, "slot_patches",
+        const auto parsed = parse_v4_slot_patches(patches, "slot_patches",
                                                   no_descriptors,
                                                   no_indexes);
-        check(parsed[0]["operations"][0]["op"] == "claim"
-                  && parsed[0]["operations"][0]["target_shards"].size() == 1,
+        check(parsed[0].operations[0].op
+                  == jointledger::TargetOp::Op::Claim
+                  && parsed[0].operations[0].target_shards.size() == 1,
               "claim op");
-        check(parsed[0]["operations"][1]["cause"]["terminal_store_id"]
-                  == u(70), "consume op");
+        check(parsed[0].operations[1].terminal_store_id == 70,
+              "consume op");
     }
     {
         auto bad_ops = [&](Json operations) {
@@ -1026,10 +1036,12 @@ void run_descriptor_dependent_tests() {
             {"before", nullptr}, {"after", source_slot_row(1)}}});
         const ParsedEnvelope parsed =
             parse_ok(descriptor_envelope(Json::array({row})));
-        const Json& patch = parsed.pipeline_runs[0]["slot_patches"][0];
-        check(patch[0] == "source", "source patch tag");
-        check(patch[1][2] == u(0) && patch[1][4] == u(0), "source key");
-        check(patch[3]["owner"]["segment_id"] == kSegment, "owner row");
+        const jointledger::SlotPatch& patch =
+            parsed.pipeline_runs[0].slot_patches[0];
+        check(!patch.is_target_delta, "source patch tag");
+        check(patch.key.rank == 0 && patch.key.slot_index == 0,
+              "source key");
+        check(patch.after->owner->segment_id == kSegment, "owner row");
     }
     {
         Json bad_slot = source_slot_row(1);
@@ -1074,12 +1086,14 @@ void run_descriptor_dependent_tests() {
                                      {"shard_ordinal", u(0)},
                                      {"capacity", u(2)}, {"available", u(1)},
                                      {"outstanding_ack_count", u(0)}};
-        const Json parsed = parse_credit_patches(
+        const auto parsed = parse_credit_patches(
             Json::array({Json{{"before", nullptr}, {"after", credit_row}}}),
             "credit_patches");
-        check(parsed[0][0][0] == kDomain && parsed[0][0][1] == u(0),
+        check(parsed[0].key.domain == kDomain
+                  && parsed[0].key.source_rank == 0,
               "credit key");
-        check(parsed[0][1].is_null() && parsed[0][2]["capacity"] == u(2),
+        check(!parsed[0].before.has_value()
+                  && parsed[0].after->capacity == 2,
               "credit before/after");
         check_throws([&] {
             parse_credit_patches(
@@ -1150,10 +1164,10 @@ void run_descriptor_dependent_tests() {
             Json::array({Json{{"before", nullptr}, {"after", obligation}}});
         const ParsedEnvelope parsed_env =
             parse_ok(descriptor_envelope(Json::array({row})));
-        check(parsed_env.pipeline_runs[0]["obligation_patches"][0][0]
-                  == "o1", "obligation key");
-        check(parsed_env.pipeline_runs[0]["obligation_patches"][0][2]
-                  ["remaining_endpoint_count"] == u(2),
+        check(parsed_env.pipeline_runs[0].obligation_patches[0]
+                  .obligation_id == "o1", "obligation key");
+        check(parsed_env.pipeline_runs[0].obligation_patches[0]
+                  .after->remaining_endpoint_count == 2,
               "obligation after row");
     }
     // 78-84: cursor patches.
@@ -1161,11 +1175,12 @@ void run_descriptor_dependent_tests() {
         const ParsedEnvelope parsed = parse_ok(
             descriptor_envelope(Json::array(), Json::array({cursor_patch(1)})));
         check(parsed.cursor_patches.size() == 1, "one cursor patch");
-        const Json& patch = parsed.cursor_patches[0];
-        check(patch["segment_id"] == kSegment && patch["retired"] == false,
+        const jointledger::CursorPatch& patch = parsed.cursor_patches[0];
+        check(patch.segment_id == kSegment && patch.retired == false,
               "cursor patch header");
-        check(patch["runs"][0][0] == u(1), "cursor run index");
-        check(patch["runs"][0][1]["next_store_id"] == u(55),
+        check(patch.runs[0].first == 1, "cursor run index");
+        check(patch.runs[0].second->has_next_store
+                  && patch.runs[0].second->next_store_id == 55,
               "cursor next store");
     }
     {
@@ -1177,8 +1192,8 @@ void run_descriptor_dependent_tests() {
     {
         const ParsedEnvelope parsed = parse_ok(descriptor_envelope(
             Json::array(), Json::array({cursor_patch(0, true)})));
-        check(parsed.cursor_patches[0]["runs"].size() == 2
-                  && parsed.cursor_patches[0]["retired"] == true,
+        check(parsed.cursor_patches[0].runs.size() == 2
+                  && parsed.cursor_patches[0].retired == true,
               "retired tombstones");
     }
     {

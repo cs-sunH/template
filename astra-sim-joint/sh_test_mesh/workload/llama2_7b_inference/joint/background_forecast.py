@@ -195,7 +195,9 @@ class ForecastFacts:
 def default_facts_from_model(model) -> ForecastFacts:
     """从 JCM（或同形 duck-typed 夹具）提取模板事实。
 
-    缺关键事实（如 ``remote_read_kv_token_bytes`` 未注入）→
+    KV 字节基准与 acceptance 同口径：``kv_cache_shard_bytes_for_tokens(
+    model, 1, tp)[0]``（单 token 全层 KV 的首 rank 分片）派生——不再
+    读已退役的远读注入字段。缺关键事实（如模型 KV 字节维度不可得）→
     ``ForecastFactsError`` → 调用方按 template_uncovered 回退（缺项不
     假设，§9.2）。纯计算与 HBM 工作量直接消费共同工作图的 profile
     接口，不能把已经含 HBM 时间的服务模板再次当纯计算时间。
@@ -207,11 +209,24 @@ def default_facts_from_model(model) -> ForecastFacts:
         model._resolved_prediction_config().params.forecast_context_tokens
         if hasattr(model, "_resolved_prediction_config") else
         PredictionParams().forecast_context_tokens)
-    kv_bytes = getattr(model, "remote_read_kv_token_bytes", None)
+    instance_tp_size = int(getattr(model, "instance_tp_size", 0))
+    try:
+        from face_scheduler import kv_cache_shard_bytes_for_tokens
+        kv_shards = kv_cache_shard_bytes_for_tokens(
+            model, 1, instance_tp_size)
+        kv_bytes = int(kv_shards[0]) if kv_shards else 0
+    except ForecastFactsError:
+        raise
+    except Exception as exc:
+        raise ForecastFactsError(
+            "kv_token_bytes_per_rank unavailable: "
+            "kv_cache_shard_bytes_for_tokens derivation failed "
+            f"(template uncovered): {exc}") from exc
     if not kv_bytes:
         raise ForecastFactsError(
-            "kv_token_bytes_per_rank unavailable: model.remote_read_"
-            "kv_token_bytes not injected (template uncovered)")
+            "kv_token_bytes_per_rank unavailable: "
+            "kv_cache_shard_bytes_for_tokens returned no shard bytes "
+            "(template uncovered)")
     decode_fn = getattr(model, "decode_compute_profile", None)
     prefill_fn = getattr(model, "prefill_compute_profile", None)
     if not callable(decode_fn) or not callable(prefill_fn):

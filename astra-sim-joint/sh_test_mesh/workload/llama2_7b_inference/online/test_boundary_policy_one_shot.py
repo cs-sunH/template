@@ -10,8 +10,8 @@
   （决策行无新键）；唯一合法非缺省值 ``p-continuation`` = 一次映射对照
   臂——D 边界不做二次全候选重估，直接按 P 准入
   ``estimate_P_with_continuation`` 披露的默认延续形态提交（decode_
-  instance = prefill_instance、完整型默认延续 = stay@i_P / 增量型
-  （P=remote-read）= remote-read@i_P）；非法值/空值 fail-closed；
+  instance = prefill_instance、默认延续恒 stay@i_P——2026-10-14 远读
+  退役后增量型布局族删除，延续单族化）；非法值/空值 fail-closed；
 * 生效时 D 决策行以专用披露键 ``boundary_policy`` 披露（off 时键缺席
   = 行与既有钉测逐位一致）；candidates 空（无候选遍历）、cost_ns 真值
   NA（不虚构候选代价）；
@@ -363,127 +363,11 @@ class PContinuationOneShotTest(unittest.TestCase):
         self.assertEqual(runtime.joint_stage, "D_RUNNING")
 
 
-# --------------------------------------------- 增量型（P=remote-read）臂 --
-
-HISTORY_TOKENS = 96        # 增量型基础区间 H（home 实例）
-INPUT_TOKENS = 16          # 增量型 U（i_P 工作副本）
-HOME_INSTANCE = 2          # 三实例几何的权威基础驻留实例
-P_INSTANCE = 0             # i_P（P = remote-read 执行实例）
-
-
-def _three_instance_topology(hardware):
-    return build_instances(hardware, (
-        FaceInstanceSpec("ins0", "1", (0, 3)),
-        FaceInstanceSpec("ins1", "2", (1, 4)),
-        FaceInstanceSpec("ins2", "3", (2, 5)),
-    ))
-
-
-def _three_hardware():
-    return FaceHardware(
-        mesh_rows=2, mesh_cols=3,
-        local_hbm_capacity_bytes=10 ** 9,
-        local_hbm_bandwidth_gbps=100.0, d2d_bandwidth_gbps=200.0,
-        peak_perf_tflops=1.0, d2d_latency_ns=0, local_hbm_latency_ns=0)
-
-
-def _increment_drain_shell(config_env=None, decode_length=8):
-    """增量型一次映射全链路基底（真 KVCacheManager + 真 drain 链）：
-    基础历史 H 在 home=实例 2（turn-0），P = remote-read@实例 0（U 增量
-    工作副本）——三实例几何同 test_c4 边界事务夹具。"""
-    hardware = _three_hardware()
-    model = _tiny_model()
-    topology = _three_instance_topology(hardware)
-    kv = KVCacheManager(topology, model)
-    kv.prepare_prefill(
-        session_id="r0_session", target_instance_index=HOME_INSTANCE,
-        history_tokens=0, trigger_request_id="seed")
-    kv.expand_prefill(
-        session_id="r0_session", instance_index=HOME_INSTANCE,
-        context_tokens=HISTORY_TOKENS, trigger_request_id="seed")
-    kv.mark_complete("r0_session", 100)
-    scheduler = _decision_shell(kv, hardware=hardware, model=model,
-                                topology=topology)
-    scheduler.graph = _TrainGraphStub()
-    scheduler.next_request = {}
-    scheduler._runtime_index = {}
-    scheduler.runtimes = [None]
-    scheduler.completed_requests = 0
-    scheduler.config = SimpleNamespace(request_queue=[
-        SimpleNamespace(next_trigger_type="human",
-                        inter_request_interval_ns=1000)])
-    scheduler.train_ledger_rows = []
-    scheduler.train_ledger_sink = None
-    scheduler._batch["watches"] = []
-    scheduler._batch["tick"] = 2000
-    scheduler._train_max_iter = 0
-    scheduler._train_instance_index = {}
-    scheduler._pending_eviction_watches = {}
-    scheduler.online_log_count = 0
-    scheduler.decision_log_sink = None
-    scheduler._stalled_by_instance = {}
-    scheduler._pending_merge_alarms = {}
-    runtime = _make_runtime(
-        "r0", prefill_context_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-        decode_length=decode_length, history_tokens_before=HISTORY_TOKENS)
-    scheduler.runtime_by_request_id["r0"] = runtime
-    scheduler.next_request["r0"] = None
-    scheduler._runtime_index["r0"] = 0
-    scheduler.runtimes.append(runtime)
-    kv.reserve_request_capacity(
-        request_id="r0", session_id=runtime.session_id,
-        instance_index=P_INSTANCE,
-        final_context_tokens=HISTORY_TOKENS + INPUT_TOKENS)
-    kv.prepare_prefill(
-        session_id=runtime.session_id, target_instance_index=P_INSTANCE,
-        history_tokens=HISTORY_TOKENS, trigger_request_id="r0",
-        action="remote-read")
-    kv.expand_prefill(
-        session_id=runtime.session_id, instance_index=P_INSTANCE,
-        context_tokens=INPUT_TOKENS, trigger_request_id="r0")
-    runtime.prefill_instance_index = P_INSTANCE
-    runtime.joint_stage = "P_RUNNING"
-    scheduler.instances[P_INSTANCE].qp.append(runtime)
-    runtime.queued_chunk_load_ns = 0
-    config = parse_joint_config(config_env or {})
-    scheduler.joint_config = config
-    scheduler._joint_mode = config.scheduler_mode
-    runtime.joint_action = "remote-read"
-    return scheduler, kv, runtime
-
-
-class PContinuationIncrementRemoteTest(unittest.TestCase):
-    """增量型（P=remote-read）一次映射：延续动作 = remote-read@i_P，
-    沿用 P 入口已建的 credit plan 延续分支（无 U 迁移腿）。"""
-
-    def test_increment_one_shot_continues_remote_at_p_instance(self):
-        scheduler, kv, runtime = _increment_drain_shell(
-            config_env={BOUNDARY_POLICY_ENV: "p-continuation"})
-        scheduler._on_prefill_drain("r0", 1000)
-        self.assertEqual(runtime.joint_stage, "D_COMMITTED")
-        # D 实例恒等于 P 实例；延续动作 = remote-read（增量型默认延续）。
-        self.assertEqual(runtime.decode_instance_index, P_INSTANCE)
-        self.assertEqual(runtime.completion_instance_index, P_INSTANCE)
-        self.assertEqual(runtime.joint_decode_action, "remote-read")
-        self.assertTrue(runtime.joint_decode_is_continuation)
-        # P 入口已建的读计划延续分支照常建立（同一冻结点）。
-        self.assertIsNotNone(runtime.remote_read_credit_plan)
-        plan = runtime.remote_read_credit_plan
-        self.assertEqual(plan["exec_instance"], P_INSTANCE)
-        self.assertEqual(plan["home_instance"], HOME_INSTANCE)
-        # 决策记录：专用披露键 + 无候选遍历 + 无回退。
-        boundary = runtime.boundary_decision
-        self.assertEqual(boundary["boundary_policy"], "p-continuation")
-        self.assertEqual(boundary["chosen_instance_index"], P_INSTANCE)
-        self.assertIsNone(boundary["cost_ns"])
-        self.assertEqual(boundary["candidates"], [])
-        self.assertFalse(boundary["fallback"])
-        # 会话：无 U 迁移（工作副本仍为 i_P 的增量形态、base 记录在
-        # home 不变——纯远读不搬运）。
-        session = kv._sessions[runtime.session_id]
-        self.assertEqual(session.instance_index, P_INSTANCE)
-        self.assertIsNotNone(session.working_kind)
-        self.assertEqual(session.base_instance_index, HOME_INSTANCE)
+# ------------------------------- （原增量型 P=remote-read 一次映射臂）--
+# （原 _increment_drain_shell 与 PContinuationIncrementRemoteTest 已随
+# 2026-10-14 远读退役删除：增量型布局只能由 remote-read 准入产生，三
+# 动作下 p-continuation 延续恒 stay@i_P，完整型一次映射语义由上方
+# PContinuationOneShotTest 承接。）
 
 
 # ------------------------------------------------------- 已知终止不动 --

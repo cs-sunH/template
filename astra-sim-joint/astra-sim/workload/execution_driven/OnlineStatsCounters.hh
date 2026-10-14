@@ -20,7 +20,7 @@ counters 结构,由在线 driver context 持有(main_online.cc),运行结束随
     查询)的累计墙钟 ns 与计算次数(每个有决策工作的 tick-end gate 一次,
     感知关闭时为空查询,耗时为 0 量级)。
 
-桥接往返/通道字节/强制 flush 由 FileDecisionBridge::Stats 持有(见
+桥接往返/通道字节/强制 flush 由 ShmDecisionBridge::Stats 持有(见
 DecisionBridge.hh)——往返计时与 JSON 字节属于桥接层自身的职责。
 *******************************************************************************/
 

@@ -150,7 +150,7 @@ class SnapshotContentTest(unittest.TestCase):
         self.assertEqual(snapshot["backend_events"], {
             "batches": 2, "nodes": 5, "parent_edges": 3,
             "watches": 2, "future_alarms": 1})
-        # 候选面宽度逐阶段披露（4N→8N 逐决策证据）。
+        # 候选面宽度逐阶段披露（合成输入的逐决策证据）。
         self.assertEqual(
             snapshot["decision_stages"]["P"]["candidates_max"], 8)
         self.assertEqual(
@@ -179,7 +179,7 @@ class Sh30WiringSmokeTest(unittest.TestCase):
         # 边界二次决策样本恰一（D 阶段），候选面 = 4 动作 × 2 实例。
         d_stage = after["decision_stages"]["D"]
         self.assertEqual(d_stage["count"], 1)
-        self.assertEqual(d_stage["candidates_max"], 8)
+        self.assertEqual(d_stage["candidates_max"], 6)
         self.assertGreater(d_stage["total_ns"], 0)
         # 容量摘要查询费样本恰一（_joint_cost_model 构造器单点）。
         self.assertEqual(after["summary_maintenance"]["count"], 1)

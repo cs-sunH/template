@@ -985,7 +985,7 @@ class TestBaseWiring(unittest.TestCase):
     def _delta(self, seq, tick, work_ledger=None, *,
                handle_kind="work_ledger_v4"):
         delta = {
-            "schema_version": 2,
+            "schema_version": 3,
             "delivery_sequence": seq,
             "delivery_epoch": seq,
             "tick": tick,

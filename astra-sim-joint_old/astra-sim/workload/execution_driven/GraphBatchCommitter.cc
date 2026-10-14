@@ -1,0 +1,2478 @@
+/******************************************************************************
+This source code is licensed under the MIT license found in the
+LICENSE file in the root directory of this source tree.
+
+GraphBatchCommitter -- execution-driven mechanism layer (sh30 (wscllm-blueprint) phase 5).
+Two-phase atomic GraphBatch commit (方案 §8.1/§8.2): Phase A validate()
+(run the full checklist, touch nothing) then Phase B commit() (add nodes,
+edges, watches, alarms, issue the touched ranks, update counters).
+
+The validation rules are the empirical contract of the real 20.csv
+first-30s runs -- every rule in the header comment was verified against
+strategy (3531 batches) and replay (3491 batches) with zero violations.
+*******************************************************************************/
+
+#include "astra-sim/workload/execution_driven/GraphBatchCommitter.hh"
+
+#include "astra-sim/workload/execution_driven/NodeStore.hh"
+#include "astra-sim/workload/execution_driven/RequestIngress.hh"
+#include "astra-sim/workload/execution_driven/WatchRegistry.hh"
+
+#include <algorithm>
+#include <chrono>
+#include <iomanip>
+#include <limits>
+#include <map>
+#include <numeric>
+#include <sstream>
+#include <stdexcept>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace AstraSim {
+namespace ExecutionDriven {
+
+using LogicalIdSpan = GraphBatchLogicalIdSpan;
+
+namespace {
+
+// C1 (2026-08-29): node_kind_from_type moved to ParsedGraphBatch.hh (the
+// parser and the committer must share ONE mapping); stage_generation stays
+// (the preflight/validate generation rule + validate_impl diagnostic
+// formatter). The S1 shared empty-object stand-ins are gone with the DOM
+// walks -- every consumer reads typed fields now.
+
+uint64_t stage_generation(const std::string& stage) {
+    // Callers reject invalid stages first.  SH3's completion tail carries on
+    // from decode, so prefill is the sole generation-0 stage.
+    return stage == "prefill" ? 0 : 1;
+}
+
+constexpr size_t kNoPreflightEdge = std::numeric_limits<size_t>::max();
+
+struct P2pKey {
+    int src = -1;
+    int dst = -1;
+    int64_t tag = -1;
+    uint64_t bytes = 0;
+
+    bool operator==(const P2pKey& other) const {
+        return src == other.src && dst == other.dst && tag == other.tag &&
+               bytes == other.bytes;
+    }
+};
+
+struct P2pKeyHash {
+    size_t operator()(const P2pKey& key) const noexcept {
+        size_t result = std::hash<int>{}(key.src);
+        const auto combine = [&result](const size_t value) {
+            result ^= value + 0x9e3779b9U + (result << 6U) + (result >> 2U);
+        };
+        combine(std::hash<int>{}(key.dst));
+        combine(std::hash<int64_t>{}(key.tag));
+        combine(std::hash<uint64_t>{}(key.bytes));
+        return result;
+    }
+};
+
+struct CollectiveKey {
+    std::string pg_name;
+    std::string name;
+
+    bool operator==(const CollectiveKey& other) const {
+        return pg_name == other.pg_name && name == other.name;
+    }
+};
+
+struct CollectiveKeyHash {
+    size_t operator()(const CollectiveKey& key) const noexcept {
+        size_t result = std::hash<std::string>{}(key.pg_name);
+        result ^= std::hash<std::string>{}(key.name) + 0x9e3779b9U +
+                  (result << 6U) + (result >> 2U);
+        return result;
+    }
+};
+
+struct ParentPublicationKey {
+    int rank = -1;
+    uint64_t child_json_id = 0;
+
+    bool operator==(const ParentPublicationKey& other) const {
+        return rank == other.rank && child_json_id == other.child_json_id;
+    }
+};
+
+struct ParentPublicationKeyHash {
+    size_t operator()(const ParentPublicationKey& key) const noexcept {
+        size_t result = std::hash<int>{}(key.rank);
+        result ^= std::hash<uint64_t>{}(key.child_json_id) + 0x9e3779b9U +
+                  (result << 6U) + (result >> 2U);
+        return result;
+    }
+};
+
+struct WatchIdentity {
+    std::string request_id;
+    std::string stage;
+    uint64_t generation = 0;
+
+    bool operator==(const WatchIdentity& other) const {
+        return request_id == other.request_id && stage == other.stage &&
+               generation == other.generation;
+    }
+};
+
+struct WatchIdentityHash {
+    size_t operator()(const WatchIdentity& key) const noexcept {
+        size_t result = std::hash<std::string>{}(key.request_id);
+        result ^= std::hash<std::string>{}(key.stage) + 0x9e3779b9U +
+                  (result << 6U) + (result >> 2U);
+        result ^= std::hash<uint64_t>{}(key.generation) + 0x9e3779b9U +
+                  (result << 6U) + (result >> 2U);
+        return result;
+    }
+};
+
+struct PreflightEdge {
+    size_t to = 0;
+    size_t next = kNoPreflightEdge;
+};
+
+// C1: the per-rank preflight graph references the parsed nodes instead of
+// the response DOM (which no longer exists past deliver_and_receive).
+struct PreflightRankGraph {
+    std::unordered_map<uint64_t, size_t> node_index_by_json_id;
+    std::vector<const ParsedNode*> nodes;
+    std::vector<size_t> indegree;
+    std::vector<size_t> first_edge;
+    std::vector<PreflightEdge> edges;
+};
+
+bool logical_id_span_last(const LogicalIdSpan& span, uint64_t* last) {
+    if (last == nullptr || span.count == 0 || span.stride == 0) {
+        return false;
+    }
+    const uint64_t steps = span.count - 1;
+    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
+    if (steps != 0 && span.stride > (max_id - span.json_first) / steps) {
+        return false;
+    }
+    *last = span.json_first + steps * span.stride;
+    return *last < max_id;
+}
+
+bool logical_id_span_contains(const LogicalIdSpan& span,
+                              const uint64_t json_id) {
+    if (json_id < span.json_first || span.count == 0 || span.stride == 0) {
+        return false;
+    }
+    const uint64_t delta = json_id - span.json_first;
+    return delta % span.stride == 0 && delta / span.stride < span.count;
+}
+
+using SignedWide = __int128_t;
+using UnsignedWide = __uint128_t;
+
+uint64_t modular_inverse(uint64_t value, uint64_t modulus) {
+    SignedWide old_r = static_cast<SignedWide>(value);
+    SignedWide r = static_cast<SignedWide>(modulus);
+    SignedWide old_s = 1;
+    SignedWide s = 0;
+    while (r != 0) {
+        const SignedWide quotient = old_r / r;
+        const SignedWide next_r = old_r - quotient * r;
+        old_r = r;
+        r = next_r;
+        const SignedWide next_s = old_s - quotient * s;
+        old_s = s;
+        s = next_s;
+    }
+    if (old_r != 1) {
+        throw std::logic_error("modular inverse requested for non-coprime values");
+    }
+    old_s %= static_cast<SignedWide>(modulus);
+    if (old_s < 0) {
+        old_s += static_cast<SignedWide>(modulus);
+    }
+    return static_cast<uint64_t>(old_s);
+}
+
+bool logical_id_spans_intersect(const LogicalIdSpan& left,
+                                const LogicalIdSpan& right) {
+    uint64_t left_last = 0;
+    uint64_t right_last = 0;
+    if (!logical_id_span_last(left, &left_last) ||
+        !logical_id_span_last(right, &right_last)) {
+        return true;  // malformed arithmetic fails closed as an overlap
+    }
+    const uint64_t low = std::max(left.json_first, right.json_first);
+    const uint64_t high = std::min(left_last, right_last);
+    if (low > high) {
+        return false;
+    }
+    const uint64_t divisor = std::gcd(left.stride, right.stride);
+    const SignedWide difference = static_cast<SignedWide>(right.json_first) -
+        static_cast<SignedWide>(left.json_first);
+    if (difference % static_cast<SignedWide>(divisor) != 0) {
+        return false;
+    }
+    const uint64_t right_modulus = right.stride / divisor;
+    uint64_t multiplier = 0;
+    if (right_modulus != 1) {
+        const uint64_t left_reduced = (left.stride / divisor) % right_modulus;
+        const SignedWide reduced_difference =
+            difference / static_cast<SignedWide>(divisor);
+        SignedWide normalized = reduced_difference %
+            static_cast<SignedWide>(right_modulus);
+        if (normalized < 0) {
+            normalized += static_cast<SignedWide>(right_modulus);
+        }
+        const uint64_t inverse = modular_inverse(left_reduced, right_modulus);
+        multiplier = static_cast<uint64_t>(
+            (static_cast<UnsignedWide>(normalized) * inverse) % right_modulus);
+    }
+    const UnsignedWide period = static_cast<UnsignedWide>(left.stride) *
+        right_modulus;
+    UnsignedWide first = static_cast<UnsignedWide>(left.json_first) +
+        static_cast<UnsignedWide>(left.stride) * multiplier;
+    first %= period;
+    if (first < low) {
+        const UnsignedWide delta = static_cast<UnsignedWide>(low) - first;
+        const UnsignedWide periods = delta / period +
+            static_cast<UnsignedWide>(delta % period != 0);
+        first += periods * period;
+    }
+    return first <= high;
+}
+
+std::optional<std::string> collect_logical_id_spans(
+    const GraphBatch& batch, const int num_ranks,
+    std::vector<LogicalIdSpan>& spans,
+    uint64_t* const collected_spans = nullptr) {
+    spans.clear();
+    spans.reserve(batch.nodes.size() + batch.pipeline_descriptors.size() * 2);
+    for (size_t index = 0; index < batch.nodes.size(); ++index) {
+        const ParsedNode& parsed = batch.nodes[index];
+        if (parsed.node.rank < 0 || parsed.node.rank >= num_ranks) {
+            return "node[" + std::to_string(index) +
+                   "] rank out of range: " + std::to_string(parsed.node.rank);
+        }
+        if (parsed.json_id == std::numeric_limits<uint64_t>::max()) {
+            return "node[" + std::to_string(index) + "] missing/invalid id";
+        }
+        spans.push_back(LogicalIdSpan{parsed.node.rank, parsed.json_id, 1, 1,
+                                      &parsed});
+        if (collected_spans != nullptr) {
+            ++*collected_spans;
+        }
+    }
+    for (size_t descriptor_index = 0;
+         descriptor_index < batch.pipeline_descriptors.size();
+         ++descriptor_index) {
+        const auto& descriptor = batch.pipeline_descriptors[descriptor_index];
+        if (!descriptor) {
+            return "pipeline_descriptors[" +
+                   std::to_string(descriptor_index) + "] is null";
+        }
+        if (descriptor->endpoint_runs().empty() ||
+            descriptor->anchors().empty()) {
+            return "pipeline_descriptors[" +
+                std::to_string(descriptor_index) +
+                "] is prediction-only and cannot be committed for execution";
+        }
+        const int identity_rank = descriptor->identity().rank;
+        if (identity_rank < 0 || identity_rank >= num_ranks) {
+            return "pipeline_descriptors[" +
+                   std::to_string(descriptor_index) +
+                   "] identity rank out of range";
+        }
+        for (const auto& range : descriptor->logical_id_ranges()) {
+            if (range.rank < 0 || range.rank >= num_ranks) {
+                return "pipeline_descriptors[" +
+                       std::to_string(descriptor_index) +
+                       "] logical id range rank out of range";
+            }
+            const LogicalIdSpan span{range.rank, range.first_json_id,
+                                     range.count, range.stride, nullptr};
+            uint64_t last = 0;
+            if (range.count == 0 || range.stride == 0 ||
+                !logical_id_span_last(span, &last)) {
+                return "pipeline_descriptors[" +
+                       std::to_string(descriptor_index) +
+                       "] logical id progression is empty or overflows";
+            }
+            spans.push_back(LogicalIdSpan{range.rank, range.first_json_id,
+                                          range.count, range.stride, nullptr});
+            if (collected_spans != nullptr) {
+                ++*collected_spans;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+bool is_descriptor_virtual_id(const GraphBatch& batch, const int rank,
+                              const uint64_t json_id) {
+    for (const auto& descriptor : batch.pipeline_descriptors) {
+        if (!descriptor) {
+            continue;
+        }
+        for (const auto& range : descriptor->logical_id_ranges()) {
+            if (range.rank == rank && logical_id_span_contains(
+                    LogicalIdSpan{range.rank, range.first_json_id,
+                                  range.count, range.stride, nullptr},
+                    json_id)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+struct P2pCounts {
+    uint64_t sends = 0;
+    uint64_t recvs = 0;
+};
+
+struct CollectiveParticipants {
+    std::unordered_map<int, uint32_t> count_by_rank;
+    bool has_signature = false;
+    uint64_t comm_type = 0;
+    uint64_t bytes = 0;
+    uint32_t priority = 0;
+    // issue_coll_comm() passes this vector into every collective generator;
+    // it selects the participating topology dimensions and therefore must be
+    // identical for every rank in one logical collective operation.
+    std::vector<bool> involved_dims;
+};
+
+struct RequestFacts {
+    bool in_flight = false;
+    bool prefill_drained = false;
+};
+
+bool collective_comm_type_has_completion_path(const uint64_t comm_type) {
+    // Workload::issue_coll_comm() implements exactly these Chakra enum values.
+    // Any other value reaches its unsupported-collective throw after the node
+    // has already been taken from a NodeStore, so it is liveness-critical when
+    // full validation is off.
+    switch (comm_type) {
+        case 0:  // ALL_REDUCE
+        case 2:  // ALL_GATHER
+        case 5:  // BROADCAST
+        case 6:  // ALL_TO_ALL
+        case 7:  // REDUCE_SCATTER
+            return true;
+        default:
+            return false;
+    }
+}
+
+}  // namespace
+
+std::optional<std::string> GraphBatchCommitter::validate_rank_id_intersections(
+    const int rank, const std::vector<const LogicalIdSpan*>& progressions,
+    const std::vector<uint64_t>& physical_ids, IdPreflightWork* const work) {
+    // Ordinary IDs are points. Scan only points in each AP's inclusive
+    // envelope, but inspect every such point: checking only lower_bound(first)
+    // can miss a later AP member after an earlier non-member point.
+    for (const LogicalIdSpan* span : progressions) {
+        uint64_t last = 0;
+        if (span == nullptr || span->rank != rank ||
+            !logical_id_span_last(*span, &last)) {
+            return "logical-id progression arithmetic failed on rank " +
+                std::to_string(rank);
+        }
+        auto physical = std::lower_bound(
+            physical_ids.begin(), physical_ids.end(), span->json_first);
+        for (; physical != physical_ids.end() && *physical <= last;
+             ++physical) {
+            if (work != nullptr) {
+                ++work->physical_points_examined;
+            }
+            if (logical_id_span_contains(*span, *physical)) {
+                return "ordinary node JSON ID " + std::to_string(*physical) +
+                    " overlaps a virtual endpoint progression on rank " +
+                    std::to_string(rank);
+            }
+        }
+    }
+
+    struct BoundedProgression {
+        const LogicalIdSpan* span = nullptr;
+        uint64_t last = 0;
+    };
+    std::vector<BoundedProgression> ordered;
+    ordered.reserve(progressions.size());
+    for (size_t i = 0; i < progressions.size(); ++i) {
+        const LogicalIdSpan* span = progressions[i];
+        uint64_t last = 0;
+        if (span == nullptr || span->rank != rank ||
+            !logical_id_span_last(*span, &last)) {
+            return "logical-id progression arithmetic failed on rank " +
+                std::to_string(rank);
+        }
+        ordered.push_back({span, last});
+    }
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const BoundedProgression& left,
+                        const BoundedProgression& right) {
+                         return left.span->json_first <
+                             right.span->json_first;
+                     });
+
+    // A closed-interval sweep. Every active progression's last ID is >= this
+    // first ID, so its envelope overlaps the current one and the unchanged
+    // exact AP predicate remains authoritative (including stride holes).
+    // The map expires ranges in O(log P); iterating active ranges costs O(K),
+    // which is quadratic only when K itself is quadratic.
+    std::map<uint64_t, std::vector<size_t>> expires_at;
+    std::set<size_t> active;
+    for (size_t current_index = 0; current_index < ordered.size();
+         ++current_index) {
+        const auto& current = ordered[current_index];
+        while (!expires_at.empty() &&
+               expires_at.begin()->first < current.span->json_first) {
+            for (const size_t expired : expires_at.begin()->second) {
+                active.erase(expired);
+            }
+            expires_at.erase(expires_at.begin());
+        }
+        for (const size_t active_index : active) {
+            if (work != nullptr) {
+                ++work->pair_envelope_candidates;
+                ++work->exact_pair_tests;
+            }
+            if (logical_id_spans_intersect(
+                    *ordered[active_index].span, *current.span)) {
+                return "virtual endpoint progressions overlap on rank " +
+                    std::to_string(rank);
+            }
+        }
+        active.insert(current_index);
+        expires_at[current.last].push_back(current_index);
+    }
+    return std::nullopt;
+}
+
+
+void GraphBatchCommitter::apply_delta_facts(
+    const StateDelta& delta, std::set<std::string>& in_flight,
+    std::set<std::string>& prefill_drained) {
+    for (const auto& ev : delta.events) {
+        switch (ev.reason) {
+            case DecisionReason::ARRIVAL:
+                in_flight.insert(ev.request_id);
+                break;
+            case DecisionReason::PREFILL_DRAIN:
+                // M3 fix (2026-09-29): batch_train_ sentinel/wakeup fires
+                // arrive as PREFILL_DRAIN but NEVER as REQUEST_COMPLETE
+                // (prefill-stage fires push that reason only), so an insert
+                // here was permanent -- prefill_drained_ grew one entry per
+                // train for the whole run (unbounded). No read path consults
+                // a batch_train_ entry (every eligibility check bypasses the
+                // batch namespace), so skipping the insert is
+                // behavior-neutral and re-bounds the set by real requests.
+                if (ev.request_id.rfind("batch_train_", 0) != 0) {
+                    prefill_drained.insert(ev.request_id);
+                }
+                break;
+            case DecisionReason::REQUEST_COMPLETE:
+                in_flight.erase(ev.request_id);
+                prefill_drained.erase(ev.request_id);
+                break;
+            case DecisionReason::DECODE_COMPLETION:
+                // No tracking change (decode completion alone never ends a
+                // request).
+                break;
+        }
+    }
+}
+
+std::optional<std::string> GraphBatchCommitter::validate_affine_drift() const {
+    if (ctx_.num_ranks < 0) {
+        return "negative GraphBatchCommitter rank count";
+    }
+    if (ctx_.graph_sources == nullptr) {
+        return "GraphBatchCommitter has no graph sources";
+    }
+    const size_t rank_count = static_cast<size_t>(ctx_.num_ranks);
+    if (ctx_.graph_sources->size() < rank_count) {
+        return "GraphBatchCommitter graph source count " +
+               std::to_string(ctx_.graph_sources->size()) +
+               " is below num_ranks " + std::to_string(ctx_.num_ranks);
+    }
+    if (rank_affines_.size() != rank_count) {
+        return "GraphBatchCommitter affine metadata has wrong rank count";
+    }
+    for (size_t rank = 0; rank < rank_count; ++rank) {
+        const auto& source = (*ctx_.graph_sources)[rank];
+        if (!source) {
+            return "GraphBatchCommitter has null graph source for rank " +
+                   std::to_string(rank);
+        }
+        const RankAffine& affine = rank_affines_[rank];
+        if (!affine.initialized) {
+            continue;
+        }
+        const uint64_t actual_next = source->store().next_auto_id();
+        if (actual_next != affine.store_next) {
+            return "NodeStore automatic id stream drift (rank=" +
+                   std::to_string(rank) + " expected_next=" +
+                   std::to_string(affine.store_next) + " actual_next=" +
+                   std::to_string(actual_next) + ")";
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
+    const GraphBatch& batch, std::vector<int>* const touched_ranks,
+    std::vector<int>* const issue_ranks,
+    IdPreflightWork* const work) const {
+    // The producer's per-rank logical stream contains ordinary NodeStore
+    // records and descriptor-owned virtual endpoint holes. Merge those spans
+    // and require one exact contiguous prefix before any state is mutated.
+    // The physical touched_ranks contract remains based on nodes; the issue
+    // pass also includes ranks that own virtual ranges.
+    if (touched_ranks != nullptr) {
+        touched_ranks->clear();
+    }
+    if (issue_ranks != nullptr) {
+        issue_ranks->clear();
+    }
+    if (!batch.kernel_contract) {
+        return "GraphBatch has no immutable kernel_contract";
+    }
+    if (frozen_kernel_contract_ &&
+        *frozen_kernel_contract_ != *batch.kernel_contract) {
+        return "GraphBatch kernel_contract differs from the run-frozen contract";
+    }
+
+    std::vector<LogicalIdSpan> spans;
+    if (const auto span_error =
+            collect_logical_id_spans(batch, ctx_.num_ranks, spans, nullptr)) {
+        return span_error;
+    }
+
+    uint64_t stream_stamp = json_id_stream_stamp_ + 1;
+    if (stream_stamp == 0) {
+        std::fill(json_id_seen_stamp_by_rank_.begin(),
+                  json_id_seen_stamp_by_rank_.end(), uint64_t{0});
+        stream_stamp = 1;
+    }
+    json_id_stream_stamp_ = stream_stamp;
+    std::set<int> physical_ranks;
+    std::set<int> all_issue_ranks;
+    std::vector<std::vector<const LogicalIdSpan*>> spans_by_rank(
+        static_cast<size_t>(ctx_.num_ranks));
+    std::vector<std::vector<uint64_t>> physical_ids_by_rank(
+        static_cast<size_t>(ctx_.num_ranks));
+    uint64_t node_index = 0;
+    for (const auto& parsed : batch.nodes) {
+        const uint64_t type = parsed.node.node_type;
+        if (type == 7 && parsed.node.coll.bytes == 0) {
+            return "node[" + std::to_string(node_index) +
+                   "] collective bytes must be positive";
+        }
+        if ((type == 5 || type == 6) && parsed.node.comm.bytes == 0) {
+            return "node[" + std::to_string(node_index) +
+                   "] p2p (type " + std::to_string(type) +
+                   ") bytes must be positive";
+        }
+        physical_ranks.insert(parsed.node.rank);
+        ++node_index;
+    }
+    for (const auto& span : spans) {
+        spans_by_rank[static_cast<size_t>(span.rank)].push_back(&span);
+        // Signature 5 (2026-10-06 ruling): the producer declares
+        // touched_ranks as ordinary-node ranks UNION the compact virtual
+        // endpoint ranks, so the computed contract must include the ranks
+        // that own descriptor endpoint holes (e.g. the i_P source ranks of
+        // a multi-source decode stream whose only presence on that rank is
+        // virtual legs).
+        physical_ranks.insert(span.rank);
+        if (span.physical_node != nullptr) {
+            physical_ids_by_rank[static_cast<size_t>(span.rank)].push_back(
+                span.json_first);
+        }
+    }
+
+    for (int rank = 0; rank < ctx_.num_ranks; ++rank) {
+        const auto& rank_spans = spans_by_rank[static_cast<size_t>(rank)];
+        if (rank_spans.empty()) {
+            continue;
+        }
+        uint64_t first = std::numeric_limits<uint64_t>::max();
+        uint64_t last = 0;
+        UnsignedWide cardinality = 0;
+        for (const LogicalIdSpan* span : rank_spans) {
+            uint64_t span_last = 0;
+            if (span == nullptr || !logical_id_span_last(*span, &span_last)) {
+                return "logical-id progression arithmetic failed on rank " +
+                    std::to_string(rank);
+            }
+            first = std::min(first, span->json_first);
+            last = std::max(last, span_last);
+            cardinality += span->count;
+            all_issue_ranks.insert(rank);
+        }
+        const uint64_t expected =
+            json_id_seen_stamp_by_rank_[rank] == stream_stamp
+                ? json_id_expected_by_rank_[rank]
+                : (rank_affines_[rank].initialized
+                       ? rank_affines_[rank].json_next
+                       : first);
+        if (first != expected) {
+            return "logical-id stream on rank " + std::to_string(rank) +
+                " starts at " + std::to_string(first) +
+                " but expected " + std::to_string(expected);
+        }
+        if (last == std::numeric_limits<uint64_t>::max()) {
+            return "logical-id stream end overflows on rank " +
+                std::to_string(rank);
+        }
+        const uint64_t end = last + 1;
+
+        // Physical IDs are points. Sort them once to reject duplicates and
+        // test membership in each descriptor AP without expanding any hole.
+        auto& physical_ids = physical_ids_by_rank[static_cast<size_t>(rank)];
+        std::sort(physical_ids.begin(), physical_ids.end());
+        for (size_t i = 1; i < physical_ids.size(); ++i) {
+            if (physical_ids[i - 1] == physical_ids[i]) {
+                return "duplicate ordinary node JSON ID " +
+                    std::to_string(physical_ids[i]) + " on rank " +
+                    std::to_string(rank);
+            }
+        }
+        std::vector<const LogicalIdSpan*> progressions;
+        progressions.reserve(rank_spans.size());
+        for (const LogicalIdSpan* span : rank_spans) {
+            if (span->physical_node != nullptr) {
+                continue;
+            }
+            progressions.push_back(span);
+        }
+        if (const auto overlap_error = validate_rank_id_intersections(
+                rank, progressions, physical_ids, work)) {
+            return overlap_error;
+        }
+        const UnsignedWide width =
+            static_cast<UnsignedWide>(end) - expected;
+        if (cardinality != width) {
+            return "ordinary IDs plus virtual endpoint progressions do not "
+                "cover one exact logical span on rank " +
+                std::to_string(rank) + " (width=" +
+                std::to_string(end - expected) + ")";
+        }
+        const uint64_t store_first =
+            (*ctx_.graph_sources)[rank]->store().next_auto_id();
+        const uint64_t max_id = std::numeric_limits<uint64_t>::max();
+        if (store_first >= max_id || end - expected > max_id - store_first) {
+            return "logical-id span exhausts NodeStore IDs on rank " +
+                std::to_string(rank);
+        }
+        json_id_seen_stamp_by_rank_[rank] = stream_stamp;
+        json_id_expected_by_rank_[rank] = end;
+    }
+    if (touched_ranks != nullptr) {
+        touched_ranks->assign(physical_ranks.begin(), physical_ranks.end());
+    }
+    if (issue_ranks != nullptr) {
+        issue_ranks->assign(all_issue_ranks.begin(), all_issue_ranks.end());
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
+    const StateDelta& delta, const GraphBatch& batch) const {
+    // This is deliberately independent of validate(): production can skip
+    // that exhaustive diagnostic pass, but it must never commit a batch
+    // that can strand graph nodes, stage watches, p2p callbacks, collectives,
+    // or request accounting.  Every container below is local; no fact set,
+    // NodeStore, WatchRegistry, ingress queue, counter, or affine record is
+    // changed until this returns success.
+    const auto fail = [](const std::string& reason)
+        -> std::optional<std::string> {
+        return std::string("mandatory liveness preflight: ") + reason;
+    };
+
+    if (!batch.pipeline_descriptors.empty() &&
+        (!ctx_.prepare_pipeline_batch || !ctx_.commit_pipeline_batch)) {
+        return fail("pipeline descriptors require both prepare and commit hooks");
+    }
+
+    try {
+        // Apply this delta's facts in a compact overlay rather than copying the
+        // whole live-request sets.  The result is exactly apply_delta_facts()
+        // for every request mentioned by the delta, while untouched requests
+        // read straight from the committer's immutable sets.
+        std::unordered_map<std::string, RequestFacts> facts_after_delta;
+        facts_after_delta.reserve(delta.events.size());
+        for (const auto& event : delta.events) {
+            auto facts_it = facts_after_delta.find(event.request_id);
+            if (facts_it == facts_after_delta.end()) {
+                facts_it =
+                    facts_after_delta
+                        .emplace(event.request_id,
+                                 RequestFacts{in_flight_.count(event.request_id) !=
+                                                  0,
+                                              prefill_drained_.count(
+                                                  event.request_id) != 0})
+                        .first;
+            }
+            switch (event.reason) {
+                case DecisionReason::ARRIVAL:
+                    facts_it->second.in_flight = true;
+                    break;
+                case DecisionReason::PREFILL_DRAIN:
+                    facts_it->second.prefill_drained = true;
+                    break;
+                case DecisionReason::REQUEST_COMPLETE:
+                    facts_it->second.in_flight = false;
+                    facts_it->second.prefill_drained = false;
+                    break;
+                case DecisionReason::DECODE_COMPLETION:
+                    break;
+            }
+        }
+        const auto request_facts =
+            [this, &facts_after_delta](const std::string& request_id) {
+                const auto facts_it = facts_after_delta.find(request_id);
+                if (facts_it != facts_after_delta.end()) {
+                    return facts_it->second;
+                }
+                return RequestFacts{in_flight_.count(request_id) != 0,
+                                    prefill_drained_.count(request_id) != 0};
+            };
+
+        // Build one compact id->index graph per rank.  C1 (2026-08-29): the
+        // nodes are the parsed typed entries (referenced, not copied), and
+        // each in-batch edge becomes one flat adjacency-list record; that
+        // keeps the normal path amortized O(nodes + edges + watches) without
+        // one heap allocation per node. The structural shape guarantees the
+        // old JSON-is_object/is_boolean lookups used to provide -- the typed
+        // reads below are the same rules against the parsed fields.
+        std::unordered_map<int, PreflightRankGraph> rank_graphs;
+        rank_graphs.reserve(std::min(
+            batch.nodes.size(), static_cast<size_t>(std::max(ctx_.num_ranks, 0))));
+        std::unordered_map<P2pKey, P2pCounts, P2pKeyHash> p2p_counts;
+        p2p_counts.reserve(batch.nodes.size());
+        std::unordered_map<CollectiveKey, CollectiveParticipants,
+                           CollectiveKeyHash>
+            collective_participants;
+        collective_participants.reserve(batch.nodes.size());
+
+        uint64_t node_index = 0;
+        for (const auto& parsed : batch.nodes) {
+            const int rank = parsed.node.rank;
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] rank out of range: " + std::to_string(rank));
+            }
+            const uint64_t json_id = parsed.json_id;
+            if (json_id == uint64_t(-1)) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] missing/invalid id");
+            }
+
+            PreflightRankGraph& graph = rank_graphs[rank];
+            const auto inserted = graph.node_index_by_json_id.emplace(
+                json_id, graph.nodes.size());
+            if (!inserted.second) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] duplicate id " + std::to_string(json_id) +
+                            " on rank " + std::to_string(rank));
+            }
+            graph.nodes.push_back(&parsed);
+            graph.indegree.push_back(0);
+            graph.first_edge.push_back(kNoPreflightEdge);
+
+            const OnlineNode& node = parsed.node;
+            const uint64_t type = node.node_type;
+            if (type < 1 || type > 7) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] type out of range: " +
+                            std::to_string(type));
+            }
+            if (node.name.empty()) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] empty name");
+            }
+            const bool is_cpu_op = node.is_cpu_op;
+            const std::string& request_id = node.request_id;
+            if (request_id.empty()) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] empty request_id");
+            }
+            const std::string& stage = node.stage;
+            if (stage != "prefill" && stage != "decode" &&
+                stage != "completion") {
+                return fail("node[" + std::to_string(node_index) +
+                            "] invalid stage: " + stage);
+            }
+            const uint64_t generation = node.generation;
+            // sh_3.0 has three emission boundaries: prefill is generation 0;
+            // both decode and its completion tail are generation 1.  Keep
+            // this production-mandatory rule identical to validate() and the
+            // Python GraphBatchBuilder contract.
+            const uint64_t expected_generation = stage_generation(stage);
+            if (generation != expected_generation) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] generation " + std::to_string(generation) +
+                            " does not match stage " + stage);
+            }
+
+            // C1 (2026-08-29): the compute/mem/comm/coll sub-object shapes
+            // and every field's JSON typing were validated once by
+            // parse_graph_batch (sh_3.0's optional "mem" sub-object included
+            // -- the old walk re-read it here through .value() stand-ins to
+            // guard the Phase-B OnlineNode assembly); this pass reads the
+            // typed attrs directly and commit() can no longer see a
+            // malformed JSON value after partial mutation.
+            const uint64_t coll_comm_type = node.coll.comm_type;
+            const uint64_t coll_bytes = node.coll.bytes;
+            const uint32_t coll_priority = node.coll.priority;
+            const std::vector<bool>& coll_involved_dims =
+                node.coll.involved_dim;
+            if (type == 5 || type == 6) {
+                if (is_cpu_op) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] comm node cannot be is_cpu_op");
+                }
+                const int src = node.comm.src;
+                const int dst = node.comm.dst;
+                const uint64_t tag = node.comm.tag;
+                const uint64_t bytes = node.comm.bytes;
+                // comm.tag is uint32_t (GraphSource.hh CommAttrs), so no
+                // widened upper-bound check can ever fire here (deep-review
+                // 2026-09: the old tag > uint32max leg was dead); only the
+                // src/dst legs are live.
+                if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
+                    dst >= ctx_.num_ranks) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p src/dst out of range");
+                }
+                if ((type == 5 && src != rank) ||
+                    (type == 6 && dst != rank)) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p endpoint rank does not match node rank");
+                }
+                // M-9 p2p self-loop guard, mirrored into the production
+                // preflight (2026-10-01 audit: it existed only in the
+                // full-validate path, which the official runner disables --
+                // SH_ONLINE_VALIDATE defaults to 0, so a self-loop rode the
+                // zero-hop fluid route to a late exit far from the root
+                // cause; same message as the validate_impl mirror).
+                if (src == dst) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p self-loop (src == dst == " +
+                                std::to_string(src) + ")");
+                }
+                P2pCounts& counts =
+                    p2p_counts[P2pKey{src, dst,
+                                      static_cast<int64_t>(tag), bytes}];
+                if (type == 5) {
+                    ++counts.sends;
+                } else {
+                    ++counts.recvs;
+                }
+            } else if (type == 7) {
+                if (is_cpu_op) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] comm node cannot be is_cpu_op");
+                }
+                const std::string& pg_name = node.coll.pg_name;
+                const std::string& name = node.name;
+                if (pg_name.empty()) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] collective with empty pg_name");
+                }
+                if (name.empty()) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] collective with empty operation name");
+                }
+                if (coll_bytes == 0) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] collective bytes must be positive");
+                }
+                if (!collective_comm_type_has_completion_path(coll_comm_type)) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] unsupported collective comm_type " +
+                                std::to_string(coll_comm_type));
+                }
+                CollectiveParticipants& participants =
+                    collective_participants[CollectiveKey{pg_name, name}];
+                if (!participants.has_signature) {
+                    participants.has_signature = true;
+                    participants.comm_type = coll_comm_type;
+                    participants.bytes = coll_bytes;
+                    participants.priority = coll_priority;
+                    participants.involved_dims = coll_involved_dims;
+                } else if (participants.comm_type != coll_comm_type ||
+                           participants.bytes != coll_bytes ||
+                           participants.priority != coll_priority ||
+                           participants.involved_dims != coll_involved_dims) {
+                    return fail("collective operation " + name +
+                                " of pg_name " + pg_name +
+                                " has inconsistent comm_type/bytes/priority/"
+                                "involved_dim signature on rank " +
+                                std::to_string(rank));
+                }
+                ++participants.count_by_rank[rank];
+            }
+            ++node_index;
+        }
+
+        // Parent edges are structural prerequisites for a meaningful cycle
+        // check.  Keep these checks mandatory as well: otherwise commit()
+        // could add all nodes before discovering an unresolved edge.
+        // C1: typed reads; the shape checks (object/kind/endpoint types)
+        // are parse-layer rules now.
+        uint64_t edge_index = 0;
+        for (const auto& edge_entry : batch.parent_edges) {
+            const int rank = edge_entry.rank;
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                return fail("parent_edge[" + std::to_string(edge_index) +
+                            "] rank out of range: " + std::to_string(rank));
+            }
+            const uint64_t from = edge_entry.from_json;
+            const uint64_t to = edge_entry.to_json;
+            if (from == to) {
+                return fail("parent_edge[" + std::to_string(edge_index) +
+                            "] self-loop on rank " + std::to_string(rank));
+            }
+
+            const auto graph_it = rank_graphs.find(rank);
+            if (graph_it == rank_graphs.end()) {
+                return fail("parent_edge[" + std::to_string(edge_index) +
+                            "] child (rank=" + std::to_string(rank) +
+                            " to=" + std::to_string(to) +
+                            ") not a node of this batch");
+            }
+            PreflightRankGraph& graph = graph_it->second;
+            const auto child_it = graph.node_index_by_json_id.find(to);
+            if (child_it == graph.node_index_by_json_id.end()) {
+                return fail("parent_edge[" + std::to_string(edge_index) +
+                            "] child (rank=" + std::to_string(rank) +
+                            " to=" + std::to_string(to) +
+                            ") not a node of this batch");
+            }
+            const auto parent_it = graph.node_index_by_json_id.find(from);
+            if (parent_it != graph.node_index_by_json_id.end()) {
+                graph.edges.push_back(
+                    PreflightEdge{child_it->second,
+                                  graph.first_edge[parent_it->second]});
+                graph.first_edge[parent_it->second] = graph.edges.size() - 1;
+                ++graph.indegree[child_it->second];
+            } else {
+                if (is_descriptor_virtual_id(batch, rank, from)) {
+                    return fail("parent_edge[" +
+                                std::to_string(edge_index) +
+                                "] parent references a virtual endpoint id");
+                }
+                const auto parent_store_id = resolve_store_id(rank, from);
+                if (!parent_store_id.has_value()) {
+                    return fail("parent_edge[" + std::to_string(edge_index) +
+                                "] parent (rank=" + std::to_string(rank) +
+                                " from=" + std::to_string(from) +
+                                ") unresolved");
+                }
+                if ((*ctx_.graph_sources)[rank]->store().is_virtual_id(
+                        *parent_store_id)) {
+                    return fail("parent_edge[" +
+                                std::to_string(edge_index) +
+                                "] parent resolves to a reserved virtual id");
+                }
+                if ((*ctx_.graph_sources)[rank]->store().erased(
+                        *parent_store_id) &&
+                    !ctx_.node_gc) {
+                    return fail("parent_edge[" + std::to_string(edge_index) +
+                                "] parent (rank=" + std::to_string(rank) +
+                                " from=" + std::to_string(from) +
+                                ") is erased while node GC is disabled");
+                }
+            }
+            ++edge_index;
+        }
+
+        // Kahn's algorithm over the flat per-rank adjacency lists rejects
+        // every in-batch cycle before any new node reaches a NodeStore.
+        for (auto& rank_entry : rank_graphs) {
+            const int rank = rank_entry.first;
+            PreflightRankGraph& graph = rank_entry.second;
+            std::vector<size_t> ready;
+            ready.reserve(graph.nodes.size());
+            for (size_t index = 0; index < graph.indegree.size(); ++index) {
+                if (graph.indegree[index] == 0) {
+                    ready.push_back(index);
+                }
+            }
+            size_t visited = 0;
+            while (!ready.empty()) {
+                const size_t current = ready.back();
+                ready.pop_back();
+                ++visited;
+                for (size_t edge = graph.first_edge[current];
+                     edge != kNoPreflightEdge; edge = graph.edges[edge].next) {
+                    const size_t child = graph.edges[edge].to;
+                    if (--graph.indegree[child] == 0) {
+                        ready.push_back(child);
+                    }
+                }
+            }
+            if (visited != graph.nodes.size()) {
+                return fail("cycle among the in-batch parent edges of rank " +
+                            std::to_string(rank));
+            }
+        }
+
+        for (const auto& entry : p2p_counts) {
+            if (entry.second.sends != entry.second.recvs) {
+                const P2pKey& key = entry.first;
+                return fail("p2p tuple (src=" + std::to_string(key.src) +
+                            " dst=" + std::to_string(key.dst) +
+                            " tag=" + std::to_string(key.tag) +
+                            " bytes=" + std::to_string(key.bytes) +
+                            ") send/recv multiplicity mismatch (send=" +
+                            std::to_string(entry.second.sends) + " recv=" +
+                            std::to_string(entry.second.recvs) + ")");
+            }
+        }
+
+        // A collective can complete only if each participant posts exactly one
+        // matching operation and that participant set is the declared process
+        // group, not merely the batch's self-reported rank union.
+        for (const auto& entry : collective_participants) {
+            const CollectiveKey& key = entry.first;
+            const CollectiveParticipants& participants = entry.second;
+            std::vector<int> participant_ranks;
+            participant_ranks.reserve(participants.count_by_rank.size());
+            for (const auto& participant : participants.count_by_rank) {
+                if (participant.second != 1) {
+                    return fail("collective operation " + key.name +
+                                " of pg_name " + key.pg_name + " has " +
+                                std::to_string(participant.second) +
+                                " participants on rank " +
+                                std::to_string(participant.first) +
+                                " (expected exactly one)");
+                }
+                participant_ranks.push_back(participant.first);
+            }
+            std::sort(participant_ranks.begin(), participant_ranks.end());
+            if (!ctx_.communicator_members_for_pg) {
+                return fail("collective operation " + key.name +
+                            " of pg_name " + key.pg_name +
+                            " cannot verify declared membership: resolver "
+                            "is unavailable");
+            }
+            const auto declared_members = ctx_.communicator_members_for_pg(
+                key.pg_name, participant_ranks);
+            if (!declared_members.has_value()) {
+                return fail("collective operation " + key.name +
+                            " of pg_name " + key.pg_name +
+                            " has missing or inconsistent declared membership");
+            }
+            std::unordered_set<int> declared_rank_set;
+            declared_rank_set.reserve(declared_members->size());
+            for (const int declared_rank : *declared_members) {
+                if (declared_rank < 0 || declared_rank >= ctx_.num_ranks) {
+                    return fail("collective pg_name " + key.pg_name +
+                                " declares an out-of-range rank " +
+                                std::to_string(declared_rank));
+                }
+                if (!declared_rank_set.insert(declared_rank).second) {
+                    return fail("collective pg_name " + key.pg_name +
+                                " declares rank " +
+                                std::to_string(declared_rank) + " more than once");
+                }
+            }
+            if (declared_rank_set.empty() ||
+                declared_rank_set.size() != participant_ranks.size()) {
+                return fail("collective operation " + key.name +
+                            " of pg_name " + key.pg_name +
+                            " participant ranks do not exactly match declared "
+                            "communicator membership");
+            }
+            for (const int participant_rank : participant_ranks) {
+                if (declared_rank_set.count(participant_rank) == 0) {
+                    return fail("collective operation " + key.name +
+                                " of pg_name " + key.pg_name +
+                                " participant ranks do not exactly match declared "
+                                "communicator membership");
+                }
+            }
+        }
+
+        std::unordered_set<WatchIdentity, WatchIdentityHash> watch_identities;
+        watch_identities.reserve(batch.watches.size());
+        uint64_t watch_index = 0;
+        for (const auto& watch : batch.watches) {
+            const std::string& request_id = watch.request_id;
+            if (request_id.empty()) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] empty request_id");
+            }
+            const std::string& stage = watch.stage;
+            if (stage != "prefill" && stage != "decode") {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] invalid stage: " + stage);
+            }
+            const uint64_t generation = watch.generation;
+            const uint64_t expected_generation = stage_generation(stage);
+            if (generation != expected_generation) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] generation " + std::to_string(generation) +
+                            " does not match stage " + stage);
+            }
+            if (!watch_identities
+                     .insert(WatchIdentity{request_id, stage, generation})
+                     .second) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] duplicate identity (request_id, stage, "
+                            "generation) in the batch");
+            }
+
+            if (watch.members.empty()) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] empty/absent members");
+            }
+            // C1: members keep the JSON object key order (rank-string
+            // ascending) -- the same iteration order the DOM walk saw.
+            for (const auto& member : watch.members) {
+                const int rank = member.rank;
+                const uint64_t member_id = member.json_id;
+                if (rank < 0 || rank >= ctx_.num_ranks) {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] member rank out of range: " +
+                                std::to_string(rank));
+                }
+                const auto graph_it = rank_graphs.find(rank);
+                if (graph_it == rank_graphs.end()) {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] member (rank=" + std::to_string(rank) +
+                                " id=" + std::to_string(member_id) +
+                                ") is not a node of this batch");
+                }
+                const auto member_node_it =
+                    graph_it->second.node_index_by_json_id.find(member_id);
+                if (member_node_it ==
+                    graph_it->second.node_index_by_json_id.end()) {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] member (rank=" + std::to_string(rank) +
+                                " id=" + std::to_string(member_id) +
+                                ") is not a node of this batch");
+                }
+                const OnlineNode& member_node =
+                    graph_it->second.nodes[member_node_it->second]->node;
+                if (member_node.request_id != request_id ||
+                    member_node.stage != stage ||
+                    member_node.generation != generation) {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] member (rank=" + std::to_string(rank) +
+                                " id=" + std::to_string(member_id) +
+                                ") does not match watch request/stage/generation");
+                }
+            }
+            if (watch.statuses.empty()) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] empty/absent statuses");
+            }
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // M3 defense (2026-09-29): the cross-layer contract fixes
+                // every batch_train_ watch to the PREFILL stage (all Python
+                // sentinel/wakeup emission points hardcode stage=prefill).
+                // A decode-stage sentinel fire maps to REQUEST_COMPLETE in
+                // main_online's stage->reason boundary and would underflow
+                // the ServiceCoordinator completion accounting (abort with
+                // a misleading "completion with no active request"
+                // message). Reject the batch here so the contract violation
+                // surfaces as a GraphBatch validation failure instead.
+                if (stage != "prefill") {
+                    return fail("sentinel watch[" +
+                                std::to_string(watch_index) +
+                                "] for train " + request_id +
+                                " carries stage \"" + stage +
+                                "\"; batch_train_ watches are fixed to the "
+                                "prefill stage by the cross-layer contract "
+                                "(a decode-stage sentinel fire would push "
+                                "REQUEST_COMPLETE and corrupt the service "
+                                "completion accounting)");
+                }
+            } else {
+                const RequestFacts facts = request_facts(request_id);
+                if (stage == "prefill" && !facts.in_flight) {
+                    return fail("prefill watch[" + std::to_string(watch_index) +
+                                "] for request " + request_id +
+                                " not in-flight at this epoch");
+                }
+                if (stage == "decode" && !facts.prefill_drained) {
+                    return fail("decode watch[" + std::to_string(watch_index) +
+                                "] for request " + request_id +
+                                " whose prefill has not drained at this epoch");
+                }
+            }
+            ++watch_index;
+        }
+
+        std::unordered_set<std::string> alarm_ids;
+        alarm_ids.reserve(batch.future_alarms.size());
+        std::vector<RequestEnvelope> future_arrival_envelopes;
+        future_arrival_envelopes.reserve(batch.future_alarms.size());
+        uint64_t alarm_index = 0;
+        for (const auto& alarm : batch.future_alarms) {
+            const uint64_t arrival = alarm.arrival_world_ns;
+            if (arrival < delta.tick) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] past arrival_world_ns " +
+                            std::to_string(arrival) + " < delta tick " +
+                            std::to_string(delta.tick));
+            }
+            const RequestEnvelope& envelope = alarm.envelope;
+            const std::string& request_id = envelope.request_id;
+            if (request_id.empty()) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] empty envelope request_id");
+            }
+            if (!alarm_ids.insert(request_id).second) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] duplicate request_id " + request_id +
+                            " in the batch");
+            }
+            if (request_facts(request_id).in_flight) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] for already in-flight request " + request_id);
+            }
+            if (envelope.session_id.empty()) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] empty envelope session_id");
+            }
+            if (envelope.turn_index < 0) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] negative envelope turn_index");
+            }
+            if (envelope.queue_index < -1) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] invalid envelope queue_index " +
+                            std::to_string(envelope.queue_index));
+            }
+            RequestEnvelope future_envelope = envelope;
+            future_envelope.arrival_world_ns = arrival;
+            future_arrival_envelopes.push_back(std::move(future_envelope));
+            ++alarm_index;
+        }
+        if (!future_arrival_envelopes.empty()) {
+            if (ctx_.ingress == nullptr) {
+                return fail("future arrivals require a RequestIngress");
+            }
+            if (const auto ingress_error =
+                    ctx_.ingress->validate_future_arrivals(
+                        future_arrival_envelopes)) {
+                return fail("future arrivals cannot be scheduled: " +
+                            *ingress_error);
+            }
+        }
+    } catch (const std::exception& exc) {
+        return fail(std::string("malformed batch entry: ") + exc.what());
+    }
+    return std::nullopt;
+}
+
+std::optional<uint64_t> GraphBatchCommitter::resolve_store_id(
+    const int rank, const uint64_t json_id) const {
+    if (rank < 0 || rank >= static_cast<int>(rank_affines_.size())) {
+        return std::nullopt;
+    }
+    const RankAffine& affine = rank_affines_[rank];
+    if (!affine.initialized || json_id < affine.json_first ||
+        json_id >= affine.json_next) {
+        return std::nullopt;
+    }
+    return affine.store_first + (json_id - affine.json_first);
+}
+
+std::optional<uint64_t>
+GraphBatchCommitter::CandidateIdPreview::resolve(
+    const int rank, const uint64_t json_id) const {
+    if (work_ != nullptr) {
+        ++work_->lookups;
+    }
+    if (committer_ == nullptr || rank < 0 ||
+        static_cast<size_t>(rank) >= rank_domains_.size()) {
+        return std::nullopt;
+    }
+    if (work_ != nullptr) {
+        ++work_->rank_row_probes;
+    }
+
+    const RankDomain& domain = rank_domains_[static_cast<size_t>(rank)];
+    if (!domain.source_valid) {
+        return std::nullopt;
+    }
+    if (const auto committed = committer_->resolve_store_id(rank, json_id)) {
+        return committed;
+    }
+    if (!candidate_spans_valid_ || !domain.candidate_domain_valid ||
+        !domain.has_candidate_domain || json_id < domain.domain_first ||
+        json_id >= domain.domain_end) {
+        return std::nullopt;
+    }
+    const uint64_t offset = json_id - domain.domain_first;
+    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
+    if (offset > max_id - domain.next_store_id) {
+        return std::nullopt;
+    }
+    return domain.next_store_id + offset;
+}
+
+GraphBatchCommitter::CandidateIdPreview
+GraphBatchCommitter::candidate_id_preview(const GraphBatch& batch) const {
+    return candidate_id_preview_impl(batch, nullptr);
+}
+
+GraphBatchCommitter::CandidateIdPreview
+GraphBatchCommitter::candidate_id_preview_impl(
+    const GraphBatch& batch, CandidateIdPreview::Work* const work) const {
+    CandidateIdPreview preview;
+    preview.committer_ = this;
+    preview.work_ = work;
+    preview.rank_domains_.resize(rank_affines_.size());
+
+    for (size_t rank = 0; rank < preview.rank_domains_.size(); ++rank) {
+        if (work != nullptr) {
+            ++work->rank_rows_initialized;
+        }
+        if (ctx_.graph_sources == nullptr ||
+            rank >= ctx_.graph_sources->size() ||
+            !(*ctx_.graph_sources)[rank]) {
+            continue;
+        }
+        auto& domain = preview.rank_domains_[rank];
+        domain.source_valid = true;
+        domain.next_store_id =
+            (*ctx_.graph_sources)[rank]->store().next_auto_id();
+    }
+    if (ctx_.graph_sources == nullptr) {
+        return preview;
+    }
+
+    std::vector<LogicalIdSpan> spans;
+    if (collect_logical_id_spans(
+            batch, ctx_.num_ranks, spans,
+            work == nullptr ? nullptr : &work->collected_spans)) {
+        return preview;
+    }
+    preview.candidate_spans_valid_ = true;
+
+    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
+    for (const LogicalIdSpan& span : spans) {
+        if (work != nullptr) {
+            ++work->candidate_spans_examined;
+        }
+        if (span.rank < 0 ||
+            static_cast<size_t>(span.rank) >= preview.rank_domains_.size()) {
+            continue;
+        }
+        auto& domain = preview.rank_domains_[static_cast<size_t>(span.rank)];
+        uint64_t last = 0;
+        if (!logical_id_span_last(span, &last) || last == max_id) {
+            domain.candidate_domain_valid = false;
+            continue;
+        }
+        if (!domain.has_candidate_domain) {
+            domain.has_candidate_domain = true;
+            domain.domain_first = span.json_first;
+            domain.domain_end = last + 1;
+        } else {
+            domain.domain_first = std::min(domain.domain_first, span.json_first);
+            domain.domain_end = std::max(domain.domain_end, last + 1);
+        }
+    }
+    return preview;
+}
+
+void GraphBatchCommitter::record_affine_node(const int rank,
+                                             const uint64_t json_id,
+                                             const uint64_t store_id) {
+    record_affine_range(rank, json_id, store_id, 1);
+}
+
+void GraphBatchCommitter::record_affine_range(const int rank,
+                                               const uint64_t json_first,
+                                               const uint64_t store_first,
+                                               const uint64_t count) {
+    if (rank < 0 || rank >= static_cast<int>(rank_affines_.size())) {
+        throw std::runtime_error("commit: rank out of range for affine record");
+    }
+    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
+    if (count == 0 || json_first >= max_id || store_first >= max_id ||
+        count > max_id - json_first || count > max_id - store_first) {
+        throw std::runtime_error("commit: cannot advance saturated id stream");
+    }
+    const uint64_t json_next = json_first + count;
+    const uint64_t store_next = store_first + count;
+    RankAffine& affine = rank_affines_[rank];
+    if (!affine.initialized) {
+        affine.initialized = true;
+        affine.json_first = json_first;
+        affine.json_next = json_next;
+        affine.store_first = store_first;
+        affine.store_next = store_next;
+        return;
+    }
+    if (json_first != affine.json_next || store_first != affine.store_next) {
+        throw std::runtime_error(
+            "commit: affine stream mismatch after successful preflight "
+            "(rank=" + std::to_string(rank) + " json_first=" +
+            std::to_string(json_first) + " expected_json=" +
+            std::to_string(affine.json_next) + " store_id=" +
+            std::to_string(store_first) + " expected_store=" +
+            std::to_string(affine.store_next) + ")");
+    }
+    affine.json_next = json_next;
+    affine.store_next = store_next;
+}
+
+std::vector<int> GraphBatchCommitter::compute_touched_ranks(
+    const GraphBatch& batch, const int num_ranks) {
+    std::set<int> ranks;
+    for (const auto& parsed : batch.nodes) {
+        const int rank = parsed.node.rank;
+        if (rank >= 0 && rank < num_ranks) {
+            ranks.insert(rank);
+        }
+    }
+    return std::vector<int>(ranks.begin(), ranks.end());
+}
+
+std::optional<std::string> GraphBatchCommitter::validate_impl(
+    const StateDelta& delta, const GraphBatch& batch,
+    std::vector<int>* const json_id_touched_ranks,
+    std::vector<int>* const issue_ranks) const {
+    try {
+        // A committed rank owns an exact affine mapping onto the NodeStore's
+        // automatic id stream. Check it before every semantic rule; this is a
+        // read-only fail-closed diagnostic and validate() remains pure.
+        if (auto drift_error = validate_affine_drift()) {
+            return drift_error;
+        }
+
+        // ---- delta facts first: the batch is validated against the state
+        //      AFTER this epoch's arrivals/completions (the commit applies
+        //      the same facts before adding anything). Local copies only --
+        //      validate() touches no committer state. ----
+        std::set<std::string> in_flight = in_flight_;
+        std::set<std::string> prefill_drained = prefill_drained_;
+        apply_delta_facts(delta, in_flight, prefill_drained);
+
+        // ---- [epoch] ----
+        if (batch.batch_id != delta.delivery_sequence) {
+            return "batch_id " + std::to_string(batch.batch_id) +
+                   " != delivery_sequence " +
+                   std::to_string(delta.delivery_sequence);
+        }
+        if (batch.source_delivery_sequence != delta.delivery_sequence) {
+            return "source_delivery_sequence " +
+                   std::to_string(batch.source_delivery_sequence) +
+                   " != delivery_sequence " +
+                   std::to_string(delta.delivery_sequence);
+        }
+        if (!batch.error.empty()) {
+            return "batch carries an error field: " + batch.error;
+        }
+        if (auto id_error = validate_json_id_stream(
+                batch, json_id_touched_ranks, issue_ranks)) {
+            return id_error;
+        }
+
+        // ---- [node] structural pass (C1: typed reads; the JSON-shape half
+        //      of each rule moved to parse_graph_batch, the domain/semantic
+        //      half stays here) ----
+        std::unordered_map<int, std::set<uint64_t>> batch_ids;
+        std::set<std::pair<std::string, std::string>> node_stages;
+        std::set<int> touched;
+        uint64_t node_count = 0;
+        uint64_t node_index = 0;
+        for (const auto& parsed : batch.nodes) {
+            const int rank = parsed.node.rank;
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                return "node[" + std::to_string(node_index) +
+                       "] rank out of range: " + std::to_string(rank);
+            }
+            const uint64_t id = parsed.json_id;
+            if (id == uint64_t(-1)) {
+                return "node[" + std::to_string(node_index) +
+                       "] missing/invalid id";
+            }
+            if (!batch_ids[rank].insert(id).second) {
+                return "node[" + std::to_string(node_index) +
+                       "] duplicate id " + std::to_string(id) + " on rank " +
+                       std::to_string(rank);
+            }
+            const OnlineNode& node = parsed.node;
+            const uint64_t type = node.node_type;
+            if (type < 1 || type > 7) {
+                return "node[" + std::to_string(node_index) +
+                       "] type out of range: " + std::to_string(type);
+            }
+            if (node.name.empty()) {
+                return "node[" + std::to_string(node_index) +
+                       "] empty name";
+            }
+            const std::string& request_id = node.request_id;
+            if (request_id.empty()) {
+                return "node[" + std::to_string(node_index) +
+                       "] empty request_id";
+            }
+            const std::string& stage = node.stage;
+            // sh_3.0: "completion" = the third emission boundary (contract ①)
+            if (stage != "prefill" && stage != "decode"
+                && stage != "completion") {
+                return "node[" + std::to_string(node_index) +
+                       "] invalid stage: " + stage;
+            }
+            const uint64_t generation = node.generation;
+            const uint64_t expected_generation = stage_generation(stage);
+            if (generation != expected_generation) {
+                return "node[" + std::to_string(node_index) +
+                       "] generation " + std::to_string(generation) +
+                       " does not match stage " + stage + " (expected " +
+                       std::to_string(stage_generation(stage)) + ")";
+            }
+            // C1 (2026-08-29): the compute/mem/comm/coll sub-object shape
+            // and every field's JSON typing were validated once by
+            // parse_graph_batch (sh_3.0's optional "mem" sub-object included
+            // -- the old S1 stand-in rebinds are gone); this pass reads the
+            // typed attrs directly.
+            // The src/dst range checks are scoped to the comm-typed
+            // nodes (types 5/6) -- the ONLY nodes whose comm fields are
+            // semantically load-bearing. Real batches carry the comm
+            // defaults (src=0/dst=0/tag=0) on every node and pass
+            // trivially; the same-tick milestone fixture emits compute/
+            // metadata nodes with the comm defaults and stays legal
+            // (empirical contract: send node comm.src == node.rank, recv
+            // node comm.dst == node.rank -- rank-ownership is already
+            // type-scoped below).
+            if (type == 5 || type == 6) {
+                const int src = node.comm.src;
+                const int dst = node.comm.dst;
+                if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
+                    dst >= ctx_.num_ranks) {
+                    return "node[" + std::to_string(node_index) +
+                           "] comm src/dst out of range: src=" +
+                           std::to_string(src) +
+                           " dst=" + std::to_string(dst);
+                }
+                if (type == 5 && src != rank) {
+                    return "node[" + std::to_string(node_index) +
+                           "] send node rank " + std::to_string(rank) +
+                           " != comm.src " + std::to_string(src);
+                }
+                if (type == 6 && dst != rank) {
+                    return "node[" + std::to_string(node_index) +
+                           "] recv node rank " + std::to_string(rank) +
+                           " != comm.dst " + std::to_string(dst);
+                }
+                // M-9 fail-closed(镜像注释见 mandatory_liveness_preflight
+                // 的 p2p self-loop 处)。
+                if (src == dst) {
+                    return "node[" + std::to_string(node_index) +
+                           "] p2p self-loop (src == dst == " +
+                           std::to_string(src) + ")";
+                }
+            }
+            // A zero-byte collective has no completion path in the
+            // analytical backend: AllGather reaches 0/0 chunking, while
+            // other types may synthesize nonzero work. Reject it before
+            // commit so no GPU resource, DataSet, or wrapper can be pinned.
+            if (type == 7 && node.coll.bytes == 0) {
+                return "node[" + std::to_string(node_index) +
+                       "] collective bytes must be positive";
+            }
+            // R2-E2 port (2026-09-30): same early rejection for a zero-byte
+            // p2p -- the fluid backend's start_flow exits on it, far from
+            // the root cause.
+            if ((type == 5 || type == 6) && node.comm.bytes == 0) {
+                return "node[" + std::to_string(node_index) +
+                       "] p2p (type " + std::to_string(type) +
+                       ") bytes must be positive";
+            }
+            if (node.coll.pg_name.empty() && type == 7) {
+                return "node[" + std::to_string(node_index) +
+                       "] collective with empty pg_name";
+            }
+            node_stages.insert({request_id, stage});
+            touched.insert(rank);
+            ++node_count;
+            ++node_index;
+        }
+
+        // Signature 5 (2026-10-06 ruling): the producer declares
+        // touched_ranks as ordinary-node ranks UNION the compact virtual
+        // endpoint ranks, so the computed set must include the ranks that
+        // own descriptor endpoint holes (e.g. the i_P source ranks of a
+        // multi-source decode stream whose only presence on that rank is
+        // virtual legs).
+        for (const auto& descriptor : batch.pipeline_descriptors) {
+            for (const auto& range : descriptor->logical_id_ranges()) {
+                touched.insert(range.rank);
+            }
+            for (const auto& run : descriptor->endpoint_runs()) {
+                touched.insert(run.rank);
+            }
+        }
+
+        // ---- [edge] structural pass (collect in-batch edges per rank for
+        //      the cycle check; the child endpoint must be a node of THIS
+        //      batch, the parent endpoint may be a node of an EARLIER batch
+        //      -- the persistent per-rank affine json-id translation). ----
+        std::unordered_map<int, std::vector<std::pair<uint64_t, uint64_t>>>
+            in_batch_edges;
+        uint64_t edge_index = 0;
+        for (const auto& edge_entry : batch.parent_edges) {
+            const int rank = edge_entry.rank;
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                return "parent_edge[" + std::to_string(edge_index) +
+                       "] rank out of range: " + std::to_string(rank);
+            }
+            const uint64_t from = edge_entry.from_json;
+            const uint64_t to = edge_entry.to_json;
+            if (from == to) {
+                return "parent_edge[" + std::to_string(edge_index) +
+                       "] self-loop on rank " + std::to_string(rank);
+            }
+            const bool from_in_batch = batch_ids[rank].count(from) > 0;
+            const auto from_store_id =
+                from_in_batch ? std::optional<uint64_t>()
+                              : resolve_store_id(rank, from);
+            if (!from_in_batch && !from_store_id.has_value()) {
+                return "parent_edge[" + std::to_string(edge_index) +
+                       "] parent (rank=" + std::to_string(rank) + " from=" +
+                       std::to_string(from) + ") unresolved";
+            }
+            if (from_store_id.has_value() &&
+                (*ctx_.graph_sources)[rank]->store().erased(*from_store_id) &&
+                !ctx_.node_gc) {
+                return "parent_edge[" + std::to_string(edge_index) +
+                       "] parent (rank=" + std::to_string(rank) + " from=" +
+                       std::to_string(from) +
+                       ") is erased while node GC is disabled";
+            }
+            if (batch_ids[rank].count(to) == 0) {
+                return "parent_edge[" + std::to_string(edge_index) +
+                       "] child (rank=" + std::to_string(rank) + " to=" +
+                       std::to_string(to) +
+                       ") not a node of this batch";
+            }
+            if (from_in_batch) {
+                in_batch_edges[rank].push_back({from, to});
+            }
+            ++edge_index;
+        }
+
+        // ---- [cycle] per-rank Kahn over the in-batch edges ----
+        for (const auto& rank_entry : batch_ids) {
+            const int rank = rank_entry.first;
+            std::unordered_map<uint64_t, std::vector<uint64_t>> adj;
+            std::unordered_map<uint64_t, uint64_t> indeg;
+            // S1 (2026-08-23): pre-size the Kahn scratch maps (capacity
+            // only; iteration order and results unchanged).
+            adj.reserve(rank_entry.second.size());
+            indeg.reserve(rank_entry.second.size());
+            for (const uint64_t id : rank_entry.second) {
+                adj[id];
+                indeg[id] = 0;
+            }
+            for (const auto& edge : in_batch_edges[rank]) {
+                adj[edge.first].push_back(edge.second);
+                indeg[edge.second] += 1;
+            }
+            std::vector<uint64_t> queue;
+            for (const auto& entry : indeg) {
+                if (entry.second == 0) {
+                    queue.push_back(entry.first);
+                }
+            }
+            uint64_t visited = 0;
+            while (!queue.empty()) {
+                const uint64_t cur = queue.back();
+                queue.pop_back();
+                ++visited;
+                for (const uint64_t child : adj[cur]) {
+                    if (--indeg[child] == 0) {
+                        queue.push_back(child);
+                    }
+                }
+            }
+            if (visited != rank_entry.second.size()) {
+                return "cycle among the in-batch parent edges of rank " +
+                       std::to_string(rank);
+            }
+        }
+
+        // ---- [comm] send/recv pairing + collective group completeness ----
+        std::map<std::tuple<int, int, int64_t>, std::pair<bool, bool>> pairs;
+        std::map<std::pair<std::string, std::string>, std::set<int>>
+            coll_groups;
+        std::map<std::string, std::set<int>> pg_ranks;
+        for (const auto& parsed : batch.nodes) {
+            const int rank = parsed.node.rank;
+            const uint64_t type = parsed.node.node_type;
+            if (type == 5 || type == 6) {
+                const auto key = std::make_tuple(
+                    parsed.node.comm.src, parsed.node.comm.dst,
+                    static_cast<int64_t>(parsed.node.comm.tag));
+                if (type == 5) {
+                    pairs[key].first = true;
+                } else {
+                    pairs[key].second = true;
+                }
+            } else if (type == 7) {
+                const std::string& pg = parsed.node.coll.pg_name;
+                const std::string& name = parsed.node.name;
+                coll_groups[{pg, name}].insert(rank);
+                pg_ranks[pg].insert(rank);
+            }
+        }
+        for (const auto& entry : pairs) {
+            if (!entry.second.first || !entry.second.second) {
+                return "send/recv pair (src=" +
+                       std::to_string(std::get<0>(entry.first)) + " dst=" +
+                       std::to_string(std::get<1>(entry.first)) + " tag=" +
+                       std::to_string(std::get<2>(entry.first)) +
+                       ") incomplete within the batch";
+            }
+        }
+        for (const auto& entry : coll_groups) {
+            const std::string& pg = entry.first.first;
+            if (entry.second != pg_ranks[pg]) {
+                return "collective group " + entry.first.second +
+                       " of pg_name " + pg +
+                       " incomplete within the batch (group ranks differ "
+                       "from the batch's " +
+                       pg + " collective ranks -- a split collective fails "
+                            "closed)";
+            }
+        }
+
+        // ---- [watch] structural + coverage + eligibility ----
+        std::set<std::pair<std::string, std::string>> watch_stages;
+        std::set<std::tuple<std::string, std::string, uint64_t>>
+            watch_identities;
+        uint64_t watch_index = 0;
+        for (const auto& watch : batch.watches) {
+            const std::string& request_id = watch.request_id;
+            if (request_id.empty()) {
+                return "watch[" + std::to_string(watch_index) +
+                       "] empty request_id";
+            }
+            const std::string& stage = watch.stage;
+            if (stage != "prefill" && stage != "decode") {
+                return "watch[" + std::to_string(watch_index) +
+                       "] invalid stage: " + stage;
+            }
+            const uint64_t generation = watch.generation;
+            const uint64_t expected_generation =
+                stage == "prefill" ? 0 : 1;
+            if (generation != expected_generation) {
+                return "watch[" + std::to_string(watch_index) +
+                       "] generation " + std::to_string(generation) +
+                       " does not match stage " + stage;
+            }
+            if (!watch_identities
+                     .insert({request_id, stage, generation})
+                     .second) {
+                return "watch[" + std::to_string(watch_index) +
+                       "] duplicate identity (request_id, stage, generation) "
+                       "in the batch";
+            }
+            watch_stages.insert({request_id, stage});
+            // C1: typed members keep the JSON key order (rank ascending).
+            if (watch.members.empty()) {
+                return "watch[" + std::to_string(watch_index) +
+                       "] empty/absent members";
+            }
+            for (const auto& member : watch.members) {
+                const int rank = member.rank;
+                if (rank < 0 || rank >= ctx_.num_ranks) {
+                    return "watch[" + std::to_string(watch_index) +
+                           "] member rank out of range: " +
+                           std::to_string(rank);
+                }
+                const uint64_t member_id = member.json_id;
+                if (batch_ids[rank].count(member_id) == 0) {
+                    return "watch[" + std::to_string(watch_index) +
+                           "] member (rank=" + std::to_string(rank) + " id=" +
+                           std::to_string(member_id) +
+                           ") is not a node of this batch";
+                }
+            }
+            if (watch.statuses.empty()) {
+                return "watch[" + std::to_string(watch_index) +
+                       "] empty/absent statuses";
+            }
+            // eligibility (against the delta-facts-first tracking state).
+            // 拼 batch 适配(2026-08-22,照母本 sh_1.0 阶段 0 定型版):列车
+            // 哨兵 watch(request_id = "batch_train_..." 批命名空间,§3.1
+            // "批节点归属 + watch 侧成员表"的哨兵形态)不对应任何单请求,
+            // 绕过 in-flight/prefill-drained 资格检查——其成员是哨兵标记
+            // 节点,fire 后事件经四类 reason 通道送回 Python 侧按 train_id
+            // 核销。
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // M3 defense (2026-09-29): mandatory-preflight twin of the
+                // full-validation rule above -- the batch_train_ namespace is
+                // fixed to the prefill stage (a decode-stage sentinel fire
+                // would push REQUEST_COMPLETE and corrupt the service
+                // completion accounting). Runs on EVERY commit path,
+                // including --online-validate=0.
+                if (stage != "prefill") {
+                    return "watch[" + std::to_string(watch_index) +
+                           "] sentinel/train watch " + request_id +
+                           " carries stage \"" + stage +
+                           "\"; batch_train_ watches are fixed to the "
+                           "prefill stage by the cross-layer contract";
+                }
+                // batch sentinel: train-scoped, no request eligibility.
+            } else if (stage == "prefill") {
+                if (in_flight.count(request_id) == 0) {
+                    return "prefill watch[" + std::to_string(watch_index) +
+                           "] for request " + request_id +
+                           " not in-flight at this epoch (the request must "
+                           "have arrived at this or an earlier delivery)";
+                }
+            } else {
+                if (prefill_drained.count(request_id) == 0) {
+                    return "decode watch[" + std::to_string(watch_index) +
+                           "] for request " + request_id +
+                           " whose prefill has not drained at this or an "
+                           "earlier epoch";
+                }
+            }
+            ++watch_index;
+        }
+        // sh_3.0 third emission boundary (contract ①) + 拼 batch 适配
+        // (2026-08-22): the coverage rule is one-directional here. Every
+        // watch's (request_id, stage) must be covered by this batch's nodes
+        // (an uncovered watch is always a bug), but a batch may carry nodes
+        // whose (request_id, stage) has no new watch -- the sh_3.0 completion
+        // batch (completion_evictions + next-turn interval gates, stage
+        // "completion") AND, since the iteration-train port, the admission
+        // batch (KV actions only; the PREFILL_DRAIN watch lives on the train
+        // drain marker) and the train batch itself (shared body nodes in the
+        // "batch_train_..." namespace + join/pstart anchor markers carry no
+        // decision watch; only drain/exit markers do). The former strict
+        // reverse direction (with the completion-stage exception, contract
+        // ①/⑤) is subsumed by the one-directional rule; deviation mirrored
+        // from the sh_1.0 stage-0 committer relaxation (设计文档 §3.1.2).
+        for (const auto& entry : watch_stages) {
+            if (node_stages.count(entry) == 0) {
+                return "watch (request_id, stage) {" + entry.first + "," +
+                       entry.second +
+                       "} has no node coverage in this batch";
+            }
+        }
+
+        // ---- [assign] (opaque; structural only -- S1/S2 are parse-layer
+        //      rules now; these typed reads are the same belt-and-suspenders
+        //      domain checks against a post-parse mutation) ----
+        uint64_t assign_index = 0;
+        for (const auto& assignment : batch.assignments) {
+            if (assignment.request_id.empty()) {
+                return "assignment[" + std::to_string(assign_index) +
+                       "] empty request_id";
+            }
+            if (assignment.prefill_instance_index < 0 ||
+                assignment.decode_instance_index < 0) {
+                return "assignment[" + std::to_string(assign_index) +
+                       "] negative instance index";
+            }
+            ++assign_index;
+        }
+
+        // ---- [kv] (opaque to C++; the Python provisional ledger is the
+        //      authority -- structural only) ----
+        uint64_t kv_index = 0;
+        for (const auto& action : batch.kv_actions) {
+            if (action.event_type.empty() ||
+                action.trigger_request_id.empty()) {
+                return "kv_action[" + std::to_string(kv_index) +
+                       "] missing event_type/trigger_request_id";
+            }
+            ++kv_index;
+        }
+
+        // ---- [alarm] ----
+        std::set<std::string> alarm_ids;
+        uint64_t alarm_index = 0;
+        for (const auto& alarm : batch.future_alarms) {
+            const uint64_t arrival = alarm.arrival_world_ns;
+            if (arrival < delta.tick) {
+                return "future_alarm[" + std::to_string(alarm_index) +
+                       "] past arrival_world_ns " +
+                       std::to_string(arrival) + " < delta tick " +
+                       std::to_string(delta.tick);
+            }
+            const RequestEnvelope& envelope = alarm.envelope;
+            const std::string& request_id = envelope.request_id;
+            if (request_id.empty()) {
+                return "future_alarm[" + std::to_string(alarm_index) +
+                       "] empty envelope request_id";
+            }
+            if (!alarm_ids.insert(request_id).second) {
+                return "future_alarm[" + std::to_string(alarm_index) +
+                       "] duplicate request_id " + request_id +
+                       " in the batch";
+            }
+            if (in_flight.count(request_id) != 0) {
+                return "future_alarm[" + std::to_string(alarm_index) +
+                       "] for already in-flight request " + request_id;
+            }
+            if (envelope.session_id.empty()) {
+                return "future_alarm[" + std::to_string(alarm_index) +
+                       "] empty envelope session_id";
+            }
+            if (envelope.turn_index < 0) {
+                return "future_alarm[" + std::to_string(alarm_index) +
+                       "] negative envelope turn_index";
+            }
+            ++alarm_index;
+        }
+
+        // ---- [touched] Python-computed touched_ranks must agree with the
+        //      batch's node rank set (sorted unique) ----
+        if (batch.has_touched_ranks) {
+            const std::vector<int>& declared = batch.touched_ranks;
+            for (const int rank : declared) {
+                if (rank < 0 || rank >= ctx_.num_ranks) {
+                    return "touched_ranks rank out of range: " +
+                           std::to_string(rank);
+                }
+            }
+            if (!std::is_sorted(declared.begin(), declared.end()) ||
+                std::adjacent_find(declared.begin(), declared.end()) !=
+                    declared.end()) {
+                return "touched_ranks not sorted unique";
+            }
+            // S1 (2026-08-23): reuse this validate pass's own touched set
+            // instead of re-walking batch.nodes through
+            // compute_touched_ranks(): by this point every node has an
+            // in-range rank (fail-closed in the node pass above), so the
+            // sorted-unique rank sets are identical by construction.
+            const std::vector<int> computed(touched.begin(), touched.end());
+            if (declared != computed) {
+                std::ostringstream os;
+                os << "touched_ranks mismatch: declared [";
+                for (size_t i = 0; i < declared.size(); ++i) {
+                    if (i) os << ",";
+                    os << declared[i];
+                }
+                os << "] computed [";
+                for (size_t i = 0; i < computed.size(); ++i) {
+                    if (i) os << ",";
+                    os << computed[i];
+                }
+                os << "]";
+                return os.str();
+            }
+        }
+
+        // Keep the full validator's rich diagnostics above, then apply the
+        // production-mandatory liveness subset as well. This extends full
+        // validation with multiplicity-aware p2p matching, per-member watch
+        // generation matching, and declared (not batch-inferred) collective
+        // membership without weakening any established diagnosis.
+        if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
+            return liveness_error;
+        }
+
+        return std::nullopt;
+    } catch (const std::exception& exc) {
+        // Malformed entry types surface as nlohmann type errors; convert to
+        // a validation error (fail-closed, zero state mutation).
+        return std::string("malformed batch entry: ") + exc.what();
+    }
+}
+
+std::optional<std::string> GraphBatchCommitter::validate(
+    const StateDelta& delta, const GraphBatch& batch) const {
+    return validate_impl(delta, batch, nullptr);
+}
+
+GraphBatchCommitter::ValidateAndCommitResult
+GraphBatchCommitter::validate_and_commit(const StateDelta& delta,
+                                         const GraphBatch& batch) {
+    ValidateAndCommitResult result;
+    if (validation_commit_in_progress_) {
+        result.error =
+            "validate_and_commit reentered while a validation commit is active";
+        return result;
+    }
+
+    // Phase A and B stay in one call so no mutable gap exists between them.
+    // Reuse the rank-bounded scratch allocated by the constructor; callbacks
+    // reached by validation must not overwrite it with a nested commit.
+    validation_commit_in_progress_ = true;
+    try {
+        commit_touched_ranks_.clear();
+        const auto validation_t0 = std::chrono::steady_clock::now();
+        const auto validation_error =
+            validate_impl(delta, batch, &commit_touched_ranks_,
+                          &commit_issue_ranks_);
+        result.validation_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - validation_t0)
+                .count());
+        if (validation_error.has_value()) {
+            result.error = validation_error;
+            validation_commit_in_progress_ = false;
+            return result;
+        }
+        std::shared_ptr<void> pipeline_plan;
+        if (!batch.pipeline_descriptors.empty()) {
+            try {
+                pipeline_plan =
+                    ctx_.prepare_pipeline_batch(batch, *this);
+            } catch (const std::exception& exc) {
+                result.error = std::string("pipeline prepare failed: ") +
+                               exc.what();
+                validation_commit_in_progress_ = false;
+                return result;
+            }
+            if (!pipeline_plan) {
+                result.error =
+                    "pipeline prepare failed: returned an empty plan";
+                validation_commit_in_progress_ = false;
+                return result;
+            }
+        }
+        commit_after_preflight(delta, batch, commit_issue_ranks_,
+                               std::move(pipeline_plan));
+        validation_commit_in_progress_ = false;
+        return result;
+    } catch (...) {
+        validation_commit_in_progress_ = false;
+        throw;
+    }
+}
+
+void GraphBatchCommitter::commit(const StateDelta& delta,
+                                 const GraphBatch& batch) {
+    if (validation_commit_in_progress_) {
+        throw std::runtime_error(
+            "commit reentered while validate_and_commit owns preflight scratch");
+    }
+    // Production may skip the expensive semantic validator. The producer's
+    // bounded contiguous-id contract, the zero-byte collective safety rule,
+    // and the NodeStore affine stream are still mandatory. They are checked
+    // before any delta, NodeStore or affine state change, so a failure has
+    // zero commit side effects.
+    if (auto drift_error = validate_affine_drift()) {
+        throw std::runtime_error("commit preflight: " + *drift_error);
+    }
+    if (auto id_error = validate_json_id_stream(
+            batch, &commit_touched_ranks_, &commit_issue_ranks_)) {
+        throw std::runtime_error("commit preflight: " + *id_error);
+    }
+    if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
+        throw std::runtime_error("commit preflight: " + *liveness_error);
+    }
+    std::shared_ptr<void> pipeline_plan;
+    if (!batch.pipeline_descriptors.empty()) {
+        try {
+            pipeline_plan = ctx_.prepare_pipeline_batch(batch, *this);
+        } catch (const std::exception& exc) {
+            throw std::runtime_error(std::string("pipeline prepare failed: ") +
+                                     exc.what());
+        }
+        if (!pipeline_plan) {
+            throw std::runtime_error(
+                "pipeline prepare failed: returned an empty plan");
+        }
+    }
+
+    commit_after_preflight(delta, batch, commit_issue_ranks_,
+                           std::move(pipeline_plan));
+}
+
+void GraphBatchCommitter::commit_after_preflight(
+    const StateDelta& delta, const GraphBatch& batch,
+    const std::vector<int>& issue_ranks,
+    std::shared_ptr<void> pipeline_plan) {
+
+    // ---- delta facts first (the same facts validate() used) ----
+    apply_delta_facts(delta, in_flight_, prefill_drained_);
+
+    // ---- Phase B-1: nodes (per-rank affine json id -> store id).
+    //      C1 (2026-08-29): the OnlineNode was ALREADY assembled once by
+    //      parse_graph_batch (every field's type/domain was validated there,
+    //      with explicit uint64 extraction -- the old NOTE about value()'s
+    //      int-default truncation is now structurally impossible; sh_3.0's
+    //      mem sub-object rides along in the typed MemAttrs). This loop is
+    //      a copy + store insert + affine advance; nothing here can throw
+    //      on the JSON shape anymore, so the B-1 half-commit window only
+    //      opens on mechanism bugs, never on data shape. ----
+    uint64_t node_count = 0;
+    std::vector<LogicalIdSpan> logical_spans;
+    if (const auto span_error =
+            collect_logical_id_spans(batch, ctx_.num_ranks, logical_spans,
+                                     nullptr)) {
+        throw std::runtime_error("commit invariant: " + *span_error);
+    }
+    std::vector<std::vector<const LogicalIdSpan*>> spans_by_rank(
+        static_cast<size_t>(ctx_.num_ranks));
+    std::vector<std::vector<const ParsedNode*>> nodes_by_rank(
+        static_cast<size_t>(ctx_.num_ranks));
+    for (const auto& span : logical_spans) {
+        spans_by_rank[static_cast<size_t>(span.rank)].push_back(&span);
+        if (span.physical_node != nullptr) {
+            nodes_by_rank[static_cast<size_t>(span.rank)].push_back(
+                span.physical_node);
+        }
+    }
+    parent_publication_work_ = {};
+    {
+        // The commit-event publisher needs each inserted node's ordered
+        // parent list. Build that projection once, preserving the source edge
+        // order and multiplicity inside each value. The map itself is never
+        // iterated, so its hash order cannot affect node publication order.
+        std::unordered_map<ParentPublicationKey, std::vector<uint64_t>,
+                           ParentPublicationKeyHash>
+            parent_json_ids_by_child;
+        if (ctx_.publish_node_transition) {
+            parent_json_ids_by_child.reserve(batch.parent_edges.size());
+            for (const auto& edge : batch.parent_edges) {
+                parent_json_ids_by_child[
+                    ParentPublicationKey{edge.rank, edge.to_json}]
+                    .push_back(edge.from_json);
+                ++parent_publication_work_.indexed_edges;
+            }
+        }
+
+        for (int rank = 0; rank < ctx_.num_ranks; ++rank) {
+            const auto& rank_spans = spans_by_rank[static_cast<size_t>(rank)];
+            if (rank_spans.empty()) {
+                continue;
+            }
+            uint64_t json_first = std::numeric_limits<uint64_t>::max();
+            uint64_t json_last = 0;
+            for (const LogicalIdSpan* span : rank_spans) {
+                uint64_t last = 0;
+                if (span == nullptr || !logical_id_span_last(*span, &last)) {
+                    throw std::runtime_error(
+                        "commit invariant: malformed logical-id progression");
+                }
+                json_first = std::min(json_first, span->json_first);
+                json_last = std::max(json_last, last);
+            }
+            if (json_first == std::numeric_limits<uint64_t>::max() ||
+                json_last == std::numeric_limits<uint64_t>::max()) {
+                throw std::runtime_error(
+                    "commit invariant: logical-id domain overflows");
+            }
+            const uint64_t width = json_last - json_first + 1;
+            NodeStore& store = (*ctx_.graph_sources)[rank]->store();
+            const uint64_t store_first = store.next_auto_id();
+            std::vector<NodeStore::VirtualIdProgression> virtual_progressions;
+            for (const LogicalIdSpan* span : rank_spans) {
+                if (span->physical_node != nullptr) {
+                    continue;
+                }
+                const uint64_t offset = span->json_first - json_first;
+                if (offset > std::numeric_limits<uint64_t>::max() - store_first) {
+                    throw std::runtime_error(
+                        "commit invariant: virtual store-id mapping overflows");
+                }
+                virtual_progressions.push_back(NodeStore::VirtualIdProgression{
+                    store_first + offset, span->count, span->stride});
+            }
+            store.reserve_logical_id_span(store_first, width,
+                                          virtual_progressions);
+
+            auto& rank_nodes = nodes_by_rank[static_cast<size_t>(rank)];
+            std::vector<std::pair<const ParsedNode*, uint64_t>> inserted_nodes;
+            inserted_nodes.reserve(rank_nodes.size());
+            std::sort(rank_nodes.begin(), rank_nodes.end(),
+                      [](const ParsedNode* left, const ParsedNode* right) {
+                          return left->json_id < right->json_id;
+                      });
+            for (const ParsedNode* parsed : rank_nodes) {
+                const uint64_t offset = parsed->json_id - json_first;
+                if (offset > std::numeric_limits<uint64_t>::max() - store_first) {
+                    throw std::runtime_error(
+                        "commit invariant: ordinary store-id mapping overflows");
+                }
+                OnlineNode node = parsed->node;
+                node.global_id = store_first + offset;
+                const uint64_t inserted_id = store.add_node(std::move(node));
+                if (inserted_id != store_first + offset) {
+                    throw std::runtime_error(
+                        "commit invariant: NodeStore changed explicit affine ID");
+                }
+                inserted_nodes.emplace_back(parsed, inserted_id);
+                ++node_count;
+            }
+            record_affine_range(rank, json_first, store_first, width);
+            // All same-rank records now exist, so commit events can carry the
+            // exact original parent IDs while retaining the old deterministic
+            // rank/JSON insertion order in the shared C4 publisher.
+            if (ctx_.publish_node_transition) {
+                for (const auto& inserted : inserted_nodes) {
+                    const ParsedNode* parsed = inserted.first;
+                    if (parsed->node.compute.exec_role ==
+                        ComputeExecRole::RemoteReadPipelineAnchor) {
+                        continue;
+                    }
+                    ++parent_publication_work_.node_lookups;
+                    std::vector<uint64_t> parents;
+                    const auto parent_it = parent_json_ids_by_child.find(
+                        ParentPublicationKey{rank, parsed->json_id});
+                    if (parent_it != parent_json_ids_by_child.end()) {
+                        parents.reserve(parent_it->second.size());
+                        for (const uint64_t parent_json_id : parent_it->second) {
+                            const auto parent_id =
+                                resolve_store_id(rank, parent_json_id);
+                            if (!parent_id.has_value() ||
+                                (*ctx_.graph_sources)[rank]->store()
+                                    .is_virtual_id(*parent_id)) {
+                                throw std::runtime_error(
+                                    "commit event parent does not resolve to a physical node");
+                            }
+                            parents.push_back(*parent_id);
+                            ++parent_publication_work_.resolved_parents;
+                        }
+                    }
+                    ctx_.publish_node_transition("commit", rank,
+                                                 inserted.second, parsed->node,
+                                                 parents);
+                }
+            }
+        }
+    }
+
+    // The first accepted batch freezes all execution-kernel parameters,
+    // including batches with no descriptors. The equality check ran in pure
+    // preflight above, before any request/node/watch mutation.
+    if (!frozen_kernel_contract_) {
+        frozen_kernel_contract_ = batch.kernel_contract;
+    }
+    if (ctx_.commit_kernel_contract) {
+        ctx_.commit_kernel_contract(frozen_kernel_contract_);
+    }
+
+    // ---- Phase B-1.5: side-band metrics anchor hook (phase-7 §10.3). The
+    //      anchors must bind to the STORE ids (what on_node_issue /
+    //      on_node_complete observe) -- NodeStore hands out store ids
+    //      starting at 1 while the online graph's json ids start at 0, so
+    //      registering with the json ids off-by-ones every anchor (the id-0
+    //      start anchors would never fire at all). The caller's hook resolves
+    //      only the ids it needs through this committer's affine mapping and
+    //      must register BEFORE the issue pass below lets any nodes run.
+    if (ctx_.metrics_anchor_hook) {
+        ctx_.metrics_anchor_hook(batch, *this);
+    }
+
+    // ---- Phase B-2: parent_edges -> add_dependency (Data kind).
+    //      C1: typed edges; kind == "data" is parse-layer-guaranteed. ----
+    for (const auto& edge : batch.parent_edges) {
+        const int rank = edge.rank;
+        const uint64_t from = edge.from_json;
+        const uint64_t to = edge.to_json;
+        if (rank < 0 || rank >= ctx_.num_ranks) {
+            throw std::runtime_error(
+                "commit: parent edge rank out of range: " +
+                std::to_string(rank));
+        }
+        const auto from_store_id = resolve_store_id(rank, from);
+        const auto to_store_id = resolve_store_id(rank, to);
+        if (!to_store_id.has_value()) {
+            throw std::runtime_error(
+                "commit: parent edge references an unknown node id "
+                "(rank=" + std::to_string(rank) +
+                " from=" + std::to_string(from) +
+                " to=" + std::to_string(to) + ")");
+        }
+        NodeStore& store = (*ctx_.graph_sources)[rank]->store();
+        if (!from_store_id.has_value()) {
+            throw std::runtime_error(
+                "commit: parent edge references an unknown node id "
+                "(rank=" + std::to_string(rank) +
+                " from=" + std::to_string(from) +
+                " to=" + std::to_string(to) + ")");
+        }
+        if (store.is_virtual_id(*from_store_id) ||
+            store.is_virtual_id(*to_store_id)) {
+            throw std::runtime_error(
+                "commit: parent edge references a virtual endpoint id");
+        }
+        if (store.erased(*from_store_id)) {
+            // A translated absent parent is exactly a collected, finished
+            // parent. NodeStore never reuses ids, so the dependency is a
+            // no-op only under the committer-owned GC mode.
+            if (ctx_.node_gc) {
+                continue;
+            }
+            throw std::runtime_error(
+                "commit: translated parent is erased while node GC is "
+                "disabled (rank=" + std::to_string(rank) +
+                " from=" + std::to_string(from) + ")");
+        }
+        if (store.erased(*to_store_id)) {
+            throw std::runtime_error(
+                "commit: translated child is erased (rank=" +
+                std::to_string(rank) + " to=" + std::to_string(to) + ")");
+        }
+        store.add_dependency(
+            *from_store_id, *to_store_id, DepKind::Data);
+    }
+
+    // ---- Phase B-3: register watches (member ids translated to store
+    //      ids; C1: typed members in JSON key order, statuses from the
+    //      parse-layer enum -- the "unknown status" throw is structurally
+    //      gone). ----
+    uint64_t created_watch_count = 0;
+    for (const auto& watch : batch.watches) {
+        const std::string& request_id = watch.request_id;
+        const std::string& stage = watch.stage;
+        const uint64_t generation = watch.generation;
+        std::set<CompletionKey> members;
+        for (const auto& member : watch.members) {
+            const int rank = member.rank;
+            const uint64_t json_id = member.json_id;
+            const auto store_id = resolve_store_id(rank, json_id);
+            if (!store_id.has_value()) {
+                throw std::runtime_error(
+                    "commit: watch member references an unknown node id "
+                    "(rank=" + std::to_string(rank) +
+                    " id=" + std::to_string(json_id) + ")");
+            }
+            const NodeStore& store = (*ctx_.graph_sources)[rank]->store();
+            if (store.is_virtual_id(*store_id)) {
+                throw std::runtime_error(
+                    "commit: watch member resolves to a virtual endpoint id "
+                    "(rank=" + std::to_string(rank) +
+                    " id=" + std::to_string(json_id) + ")");
+            }
+            if (store.erased(*store_id)) {
+                throw std::runtime_error(
+                    "commit: watch member resolves to an erased node "
+                    "(rank=" + std::to_string(rank) +
+                    " id=" + std::to_string(json_id) + ")");
+            }
+            members.insert(CompletionKey{rank, *store_id, generation});
+        }
+        std::set<NodeTerminalStatus> statuses;
+        for (const auto status : watch.statuses) {
+            statuses.insert(status);
+        }
+        bool created = false;
+        ctx_.watch_registry->register_stage_watch(
+            request_id, stage, generation, std::move(members),
+            std::move(statuses), &created);
+        // Minor③(2026-09-30,wscllm-LRU 批次C 同款镜像):total_watches 只
+        // 统计真正创建的 watch——被吞的跨批重复身份不再计入。
+        if (created) {
+            ++created_watch_count;
+        }
+    }
+
+    // ---- Phase B-4: schedule future arrival alarms ----
+    for (const auto& alarm : batch.future_alarms) {
+        RequestEnvelope envelope = alarm.envelope;
+        envelope.arrival_world_ns = alarm.arrival_world_ns;
+        ctx_.ingress->schedule_future_arrival(envelope);
+    }
+
+    // Install the fully prepared descriptors, cursors, and physical-anchor
+    // bindings only after graph/watch/alarm construction succeeds and before
+    // any dep-free issue pass can observe their start anchors.
+    if (pipeline_plan) {
+        ctx_.commit_pipeline_batch(std::move(pipeline_plan), batch, *this);
+    }
+
+    // ---- Phase B-5: issue pass over ranks touched by physical nodes or
+    //      virtual endpoint ranges. Ranks outside this merged set cannot gain
+    //      a new ready item in this commit; completion callbacks schedule the
+    //      usual deferred per-rank passes for later frontiers. ----
+    for (const int rank : issue_ranks) {
+        ctx_.issue_rank(rank);
+    }
+
+    // ---- counters ----
+    ++counters_.graph_batch_count;
+    if (node_count == 1) {
+        ++counters_.single_node_bridge_count;
+    }
+    counters_.total_nodes += node_count;
+    counters_.max_nodes_per_batch =
+        std::max(counters_.max_nodes_per_batch, node_count);
+    counters_.total_watches += created_watch_count;
+    counters_.total_assignments += batch.assignments.size();
+    counters_.total_kv_actions += batch.kv_actions.size();
+    counters_.total_future_alarms += batch.future_alarms.size();
+
+    // ---- M2 node GC (2026-08-23; A1 amortization 2026-08-28):
+    //      quiescent-point collection, amortized. The issue pass above has
+    //      fully returned (no Workload callback holds a NodeView pointer),
+    //      and any deferred issue passes it scheduled run later and only
+    //      ever touch free -- i.e. unfinished -- nodes, so erasing finished
+    //      childless nodes here is invisible to every holder (see
+    //      NodeStore::collect_garbage). A1: the tail only counts the
+    //      pending candidates (O(#ranks)) and drains once
+    //      >= kGcAmortizeThreshold have accumulated since the last
+    //      collection -- the pre-A1 drain-every-commit is what caused the
+    //      light-load wall regression. No-op (structurally absent) when
+    //      node_gc is off. ----
+    if (ctx_.node_gc) {
+        size_t pending = 0;
+        for (const auto& source : *ctx_.graph_sources) {
+            pending += source->store().pending_gc_count();
+        }
+        if (pending >= kGcAmortizeThreshold) {
+            collect_node_garbage();
+        }
+    }
+}
+
+void GraphBatchCommitter::finalize_node_garbage() {
+    // A1 (2026-08-28): run-end forced drain -- the amortized commit tails
+    // may leave up to kGcAmortizeThreshold candidates uncollected (plus the
+    // post-final-delivery tail nodes that finish after the last commit);
+    // draining here once makes the run-end retained-count diagnostics report
+    // the true in-flight window. No-op when node_gc is off.
+    if (ctx_.node_gc) {
+        collect_node_garbage();
+    }
+}
+
+void GraphBatchCommitter::collect_node_garbage() {
+    // M2 (2026-08-23): end-of-commit quiescent-point collection. The affine
+    // metadata deliberately survives: it is one fixed record per rank and
+    // still translates an erased committed parent to its non-reused store id.
+    for (auto& source : *ctx_.graph_sources) {
+        source->store().collect_garbage();
+    }
+}
+
+std::string GraphBatchCommitter::counters_report() const {
+    std::ostringstream os;
+    os << "graph_batch_count=" << counters_.graph_batch_count
+       << " single_node_bridge_count=" << counters_.single_node_bridge_count
+       << " total_nodes=" << counters_.total_nodes << " avg_nodes_per_batch=";
+    if (counters_.graph_batch_count > 0) {
+        os << std::fixed << std::setprecision(2)
+           << static_cast<double>(counters_.total_nodes) /
+                  static_cast<double>(counters_.graph_batch_count);
+    } else {
+        os << "0";
+    }
+    os << " max_nodes_per_batch=" << counters_.max_nodes_per_batch
+       << " total_watches=" << counters_.total_watches
+       << " total_assignments=" << counters_.total_assignments
+       << " total_kv_actions=" << counters_.total_kv_actions
+       << " total_future_alarms=" << counters_.total_future_alarms;
+    return os.str();
+}
+
+}  // namespace ExecutionDriven
+}  // namespace AstraSim

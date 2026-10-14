@@ -94,7 +94,7 @@ nlohmann::json empty_kernel_contract() {
     return {{"projection_abi_version", 1},
             {"descriptor_version", 1},
             {"pipeline_protocol_version", 1},
-            {"model_version", "v6-compact-window-20261005"},
+            {"model_version", "v7-three-actions-20261014"},
             {"timer_whitelist_version", "timer-whitelist-v1-20261005"},
             {"window_tile_limit", 1},
             {"window_local_error_ppm", 10000},
@@ -206,10 +206,9 @@ nlohmann::json node_json(int rank, uint64_t id, int type,
 // watch, an alarm carrying queue_index, touched_ranks.
 nlohmann::json max_shape_response() {
     nlohmann::json resp;
-    resp["schema_version"] = 2;
+    resp["schema_version"] = 3;
     resp["batch_id"] = 42;
     resp["source_delivery_sequence"] = 42;
-    resp["pipeline_descriptors"] = nlohmann::json::array();
     resp["kernel_contract"] = empty_kernel_contract();
     nlohmann::json nodes = nlohmann::json::array();
     for (int type = 1; type <= 7; ++type) {
@@ -281,7 +280,7 @@ void test_top_level_rules() {
     {  // T1: wrong value
         nlohmann::json resp = base;
         resp["schema_version"] = 1;
-        expect_parse_error(resp, "T1: schema_version != 2", "schema_version");
+        expect_parse_error(resp, "T1: schema_version != 3", "schema_version");
     }
     {  // T1: wrong type
         nlohmann::json resp = base;
@@ -307,9 +306,8 @@ void test_top_level_rules() {
     }
     {  // T5: all six arrays optional == empty
         nlohmann::json resp;
-        resp["schema_version"] = 2;
+        resp["schema_version"] = 3;
         resp["source_delivery_sequence"] = 7;
-        resp["pipeline_descriptors"] = nlohmann::json::array();
         resp["kernel_contract"] = empty_kernel_contract();
         const ParsedGraphBatch parsed =
             parse_ok(resp, "T5: bare-bones response");
@@ -890,10 +888,9 @@ void test_opaque_and_order_rules() {
     }
     {  // O4: the frozen error skeleton parses cleanly, error carried
         nlohmann::json resp;
-        resp["schema_version"] = 2;
+        resp["schema_version"] = 3;
         resp["batch_id"] = 5;
         resp["source_delivery_sequence"] = 5;
-        resp["pipeline_descriptors"] = nlohmann::json::array();
         resp["kernel_contract"] = empty_kernel_contract();
         resp["nodes"] = nlohmann::json::array();
         resp["parent_edges"] = nlohmann::json::array();

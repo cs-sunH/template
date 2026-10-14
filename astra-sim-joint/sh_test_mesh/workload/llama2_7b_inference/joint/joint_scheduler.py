@@ -8,12 +8,12 @@
 四模式（同一候选枚举与计费，只换选择规则）：
 
 * ``joint``（J-on）：同一队列发射决策点比较全部 instance ×
-  stay/recompute/copy/remote-read 的 ``cost``（到 merge_done 终点的
+  stay/recompute/copy 的 ``cost``（到 merge_done 终点的
   预测完成时间——F11 口径：预测终点恒 merge_done，service_done 作
   服务指标另行分报），取最小。候选评估只读——不为每个候选实际驱逐。
 * ``load-first``（J-off，八组合固定参照）：先在**全部 instance**（无
   容量/边缘/距离掩码——HBM 容量只影响动作计费中的驱逐等待，不做准
-  入过滤）按在线任务负载（ns 服务台账）选 instance，再在该位置对四
+  入过滤）按在线任务负载（ns 服务台账）选 instance，再在该位置对三
   动作取最小代价。
 * ``affinity-first``（J 边际比较第二参照，不进八组合）：有可复用历史
   时优先选择其逻辑 home；无历史或无唯一 home 时回退 load-first。选定
@@ -36,8 +36,7 @@
   永不掩码**——本臂是本模块唯一的实例掩码分支。
 
 平局与 tie 序：固定 ``(instance_index, ACTION_ORDER)`` 确定序（事前
-定义，不按事后输赢调整）。remote on/off 是正交能力开关：off 仅从候
-选动作集中移除 remote-read，全部 instance、其余动作与生命周期不变。
+定义，不按事后输赢调整）。
 动作掩码 ``JOINT_ALLOWED_ACTIONS``（M2，2026-09-26 消融矩阵前置）是
 **候选集上限不是强制**：命中掩码的动作在进入本模块前已由 JCM
 ``applicable_actions`` 尾部剔除（掩码命中且原本可用 ⇒ "action
@@ -45,7 +44,7 @@ excluded by JOINT_ALLOWED_ACTIONS mask"），本模块枚举循环与
 candidates 形状不变、四模式共用同一上限；recompute 不豁免——掩码
 剔除 recompute 致零适用时维持 fail-closed（下方各 raise，非容量拒
 绝；臂预设恒含 recompute：recompute-only={recompute}+load-first、
-always-copy={copy,recompute}、always-remote={remote-read,recompute}）。
+always-copy={copy,recompute}）。
 
 本模块只做选择与记录；发射/驱逐提交/合并事务由在线调度器与
 KVCacheManager 执行（§7 模块边界：scheduler 管选择与事务提交，
@@ -84,7 +83,6 @@ from joint.joint_config import (
 )
 from joint.joint_cost_model import (
     ACTION_ORDER,
-    ACTION_REMOTE,
     ACTION_STAY,
     ActionCandidate,
     JointCostModel,
@@ -104,11 +102,7 @@ class JointSchedulerError(ValueError):
 
 
 def _candidate_id(candidate: ActionCandidate) -> str:
-    suffix = ""
-    if candidate.action == "hybrid":
-        suffix = ":" + ",".join(str(item)
-                                 for item in sorted(candidate.copy_subset))
-    return f"{candidate.instance_index}:{candidate.action}{suffix}"
+    return f"{candidate.instance_index}:{candidate.action}"
 
 
 def _candidate_evaluation(candidate: ActionCandidate) -> dict:
@@ -230,14 +224,12 @@ class SelectionRecord:
     chosen: ActionCandidate
     candidates: tuple[ActionCandidate, ...]
     instance_rule_note: str
-    remote_enabled: bool
     tie_break_note: str = ""
     diagnostics: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
             "mode": self.mode,
-            "remote_enabled": self.remote_enabled,
             "chosen": {
                 "instance_index": self.chosen.instance_index,
                 "action": self.chosen.action,
@@ -263,7 +255,7 @@ def _best_at_instance(
     candidates: Sequence[ActionCandidate],
     instance_index: int,
 ) -> tuple[Optional[ActionCandidate], str]:
-    """单实例内四动作择优（确定 tie 序：ACTION_ORDER）。"""
+    """单实例内三动作择优（确定 tie 序：ACTION_ORDER）。"""
     applicable = [
         candidate for candidate in candidates
         if candidate.instance_index == instance_index
@@ -317,9 +309,7 @@ def select_instance_and_action(
     cost_model: JointCostModel,
     session: SessionKVView,
     request,
-    remote_enabled: bool,
     prep_frontier_by_instance=None,
-    pipeline_identity_provider=None,
 ) -> SelectionRecord:
     """发射点选择：枚举全候选 -> 按模式选择 -> 返回完整记录。
 
@@ -327,7 +317,7 @@ def select_instance_and_action(
     decode_length/final_context_tokens）。枚举阶段对每个 (instance,
     action) 调用 ``estimate_P_with_continuation``（只读，不修改任何账本或事件队列）。
 
-    D01（2026-09-26）：全实例×四动作枚举与初始平局序
+    D01（2026-09-26）：全实例×三动作枚举与初始平局序
     ``(cost, (instance_index, ACTION_ORDER))`` 保留不变（joint 主臂
     argmin，C07 现状）；记录 ``diagnostics["decision_stage"]="P"``。
 
@@ -345,26 +335,14 @@ def select_instance_and_action(
     candidates: list[ActionCandidate] = []
     for instance_index in instance_indices:
         for action in ACTION_ORDER:
-            pipeline_identities = (
-                pipeline_identity_provider(
-                    "P", instance_index, action, context=session)
-                if pipeline_identity_provider is not None else None)
-            if (pipeline_identity_provider is not None
-                    and action == ACTION_REMOTE
-                    and not pipeline_identities):
-                raise JointSchedulerError(
-                    "production P remote-read candidate lacks explicit "
-                    "pipeline identities")
             candidates.append(cost_model.estimate_P_with_continuation(
                 session=session,
                 request=request,
                 instance_index=instance_index,
                 action=action,
-                remote_enabled=remote_enabled,
                 prep_frontier_ns=int(
                     (prep_frontier_by_instance or {}).get(
                         instance_index, 0)),
-                pipeline_identities=pipeline_identities,
             ))
 
     candidates, arbitration = _projection_arbitrate(
@@ -395,7 +373,6 @@ def select_instance_and_action(
             chosen=best,
             candidates=tuple(candidates),
             instance_rule_note="joint instance x action argmin",
-            remote_enabled=remote_enabled,
             tie_break_note=(
                 f"tie among {len(ties) + 1} at cost {best.cost_ns}ns -> "
                 "(instance_index, action order)" if ties else ""),
@@ -519,7 +496,6 @@ def select_instance_and_action(
         chosen=best,
         candidates=tuple(candidates),
         instance_rule_note=note,
-        remote_enabled=remote_enabled,
         tie_break_note=action_note,
         diagnostics=_selection_diagnostics(
             {"decision_stage": "P",
@@ -533,10 +509,8 @@ def select_decode_target_and_action(
     mode: str,
     cost_model: JointCostModel,
     boundary: PDBoundaryView,
-    remote_enabled: bool,
     decision_epoch: int = 0,
     inherited_obligation_ids: Sequence[str] = (),
-    pipeline_identity_provider=None,
 ) -> SelectionRecord:
     """P→D 边界二次选择（D18，v2.0 §2.3/§2.5/§16.2/§17）。
 
@@ -545,13 +519,13 @@ def select_decode_target_and_action(
     道，逐候选透传进 breakdown schema——不计入计价、不改变任何候选
     成本与选择。
 
-    **恰好一次全遍历**：全部 instance × 四动作调 ``estimate_D_remaining``
+    **恰好一次全遍历**：全部 instance × 三动作调 ``estimate_D_remaining``
     （真实边界快照 S_B、共同 n̂_B、继承义务在负载视图内），随后
     ``boundary_order_key`` 一次 argmin——平局键 = ``(cost, 非继续标记,
     instance_index, action_order)``，**式(1c)：只有改变方案的完整预测
     剩余成本严格小于原地继续时才切换；成本相同优先继续**。原地继续
     x0 归并在对应的 (i_P, action) 记录上（``is_continuation=True``），
-    不作第五动作（v2.0 §2.4）。
+    不作第四动作（v2.0 §2.4）。
 
     与初始遍历（``select_instance_and_action``）的关系：每请求正常恰
     两次全候选遍历（§17"成功路径通常只进行 P、D 两次全候选遍历"）；
@@ -563,9 +537,10 @@ def select_decode_target_and_action(
     不做无意义的 D 选点——v2.0 §2.3/§16.4）。
 
     M2 掩码与 continuation 红线（掩码感知裁定：掩码是候选集上限不是
-    强制）：原地继续 x0 归并在 (i_P, 默认延续动作) 记录上——完整型
-    stay、增量型 remote-read。延续动作属允许面（无掩码或掩码放行）
-    时，该记录缺席 = 边界视图与候选面不一致（结构性缺陷，
+    强制）：原地继续 x0 归并在 (i_P, 默认延续动作 stay) 记录上——
+    P 末工作副本恒为完整型布局（增量型布局族已随 remote-read 动作
+    退役删除，默认延续恒 stay@i_P）。延续动作属允许面（无掩码或掩码
+    放行）时，该记录缺席 = 边界视图与候选面不一致（结构性缺陷，
     fail-closed 不变）；延续动作被掩码剔除时，其缺席是掩码上限的合
     法结果——在允许面内正常选择，平局键退化为
     ``(cost, instance_index, action_order)``（无继续候选可优先），
@@ -582,80 +557,23 @@ def select_decode_target_and_action(
     candidates: list[ActionCandidate] = []
     for instance_index in instance_indices:
         for action in ACTION_ORDER:
-            pipeline_identities = (
-                pipeline_identity_provider(
-                    "D", instance_index, action, context=boundary)
-                if pipeline_identity_provider is not None else None)
-            if (pipeline_identity_provider is not None
-                    and action == ACTION_REMOTE
-                    and not pipeline_identities):
-                raise JointSchedulerError(
-                    "production D remote-read candidate lacks explicit "
-                    "pipeline identities")
             candidates.append(cost_model.estimate_D_remaining(
                 boundary=boundary,
                 instance_index=instance_index,
                 action=action,
-                remote_enabled=remote_enabled,
                 decision_epoch=decision_epoch,
                 inherited_obligation_ids=inherited_obligation_ids,
-                pipeline_identities=pipeline_identities,
             ))
-    # ---- W10 hybrid 子集候选（主文 §10 ``add_source_subset_plans_and_
-    # deduplicate``：仅 D 阶段、仅 action_space=source_subset_hybrid 显式
-    # 配置；基础四动作仍完整参选）。端点 ∅/S 与纯 remote/copy 去重——
-    # 只加真子集；超预算 = 显式"不支持此扩展"（不静默换别种混合最优），
-    # diagnostics 披露预算/枚举数。----
-    hybrid_diagnostics: dict = {}
-    if getattr(cost_model, "hybrid_action_space_enabled",
-               lambda: False)():
-        from joint.action_work_graph import SUBSET_ROLE_PROPER
-        unsupported = []
-        for instance_index in instance_indices:
-            status = cost_model.hybrid_support_status(
-                boundary=boundary, instance_index=instance_index)
-            if not status.supported:
-                unsupported.append({
-                    "instance_index": instance_index,
-                    "reason": status.reason,
-                    "source_count": status.source_count,
-                    "enumeration_count": status.enumeration_count,
-                })
-                continue
-            for plan in cost_model.enumerate_hybrid_subsets(
-                    boundary=boundary, instance_index=instance_index):
-                if plan.role != SUBSET_ROLE_PROPER:
-                    continue    # 端点去重：纯动作候选已在上方完整参选
-                pipeline_identities = (
-                    pipeline_identity_provider(
-                        "D", instance_index, "hybrid", plan.copy_sources,
-                        context=boundary)
-                    if pipeline_identity_provider is not None else None)
-                if pipeline_identity_provider is not None and not pipeline_identities:
-                    raise JointSchedulerError(
-                        "production D hybrid remote-read candidate lacks "
-                        "explicit pipeline identities")
-                candidates.append(cost_model.estimate_D_hybrid_remaining(
-                    boundary=boundary,
-                    instance_index=instance_index,
-                    copy_subset=plan.copy_sources,
-                    remote_enabled=remote_enabled,
-                    decision_epoch=decision_epoch,
-                    inherited_obligation_ids=inherited_obligation_ids,
-                    pipeline_identities=pipeline_identities,
-                ))
-        if unsupported:
-            hybrid_diagnostics["hybrid_unsupported"] = unsupported
     candidates, arbitration = _projection_arbitrate(
         cost_model, candidates, boundary=True)
     applicable = [
         candidate for candidate in candidates
         if candidate.applicable and candidate.cost_ns is not None
     ]
-    # 掩码感知红线判据：延续动作是否被 JOINT_ALLOWED_ACTIONS 剔除
-    # （``getattr`` 兼容选择器存根——真实 JCM 恒有该属性，None=无掩码）。
-    continuation_action = (
-        ACTION_REMOTE if boundary.is_increment_layout() else ACTION_STAY)
+    # 掩码感知红线判据：延续动作（恒 stay@i_P——完整型布局单族）是否
+    # 被 JOINT_ALLOWED_ACTIONS 剔除（``getattr`` 兼容选择器存根——真实
+    # JCM 恒有该属性，None=无掩码）。
+    continuation_action = ACTION_STAY
     allowed_actions = getattr(cost_model, "allowed_actions", None)
     continuation_masked = (
         allowed_actions is not None
@@ -707,7 +625,6 @@ def select_decode_target_and_action(
                 "boundary instance x action argmin; continuation x0 "
                 "merged into (i_P, action) records; continuation "
                 "mask-excluded (M2 upper bound, not a mandate)"),
-            remote_enabled=remote_enabled,
             tie_break_note=tie_note,
             diagnostics=_selection_diagnostics({
                 "decision_stage": "D",
@@ -719,7 +636,6 @@ def select_decode_target_and_action(
                 "continuation_action": continuation_action,
                 "continuation_cost_ns": None,
                 "continuation_masked_out": True,
-                **hybrid_diagnostics,
             }, arbitration, best),
         )
     if not continuation_records:
@@ -751,7 +667,6 @@ def select_decode_target_and_action(
         instance_rule_note=(
             "boundary instance x action argmin; continuation x0 merged "
             "into (i_P, action) records"),
-        remote_enabled=remote_enabled,
         tie_break_note=(
             f"tie among {len(ties) + 1} at cost {best.cost_ns}ns -> "
             "(cost, non-continuation, instance, action order)"
@@ -764,7 +679,5 @@ def select_decode_target_and_action(
             "decode_steps": int(boundary.decode_steps),
             "is_continuation": bool(best.is_continuation),
             "continuation_cost_ns": continuation_records[0].cost_ns,
-            # W10：hybrid 扩展面披露（pure_four 缺省恒空——零漂移）。
-            **hybrid_diagnostics,
         }, arbitration, best),
     )

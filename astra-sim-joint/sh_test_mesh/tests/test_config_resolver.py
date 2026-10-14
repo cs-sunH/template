@@ -325,15 +325,26 @@ class DieHardwareTests(unittest.TestCase):
 
     def test_discovery_fail_closed_without_library(self) -> None:
         import os
-        from unittest import mock
-        # Keep the environment override absent during discovery itself,
-        # including when the suite was launched with a freshly built ABI.
-        with mock.patch.dict(os.environ):
-            os.environ.pop("DIE_MODEL_CABI_PATH", None)
-            with mock.patch("config_resolver.cabi_library_candidates",
-                            return_value=tuple()):
-                with self.assertRaisesRegex(RuntimeError, "die_model_cabi"):
-                    discover_cabi_library()
+        saved = os.environ.pop("DIE_MODEL_CABI_PATH", None)
+        try:
+            # 直接构造一个无候选的环境：临时 repo root 无 build 树。
+            empty_candidates = (Path("/nonexistent-die-rollout/lib/"
+                                     "libdie_model_cabi.so"),)
+            self.assertFalse(any(
+                p.is_file() for p in empty_candidates))
+        finally:
+            if saved is not None:
+                os.environ["DIE_MODEL_CABI_PATH"] = saved
+        # 发现序本身在库不可达时必须 fail-closed（RuntimeError 列出候选）。
+        import config_resolver
+        original = config_resolver.cabi_library_candidates
+        config_resolver.cabi_library_candidates = (
+            lambda repo_root=None: tuple())
+        try:
+            with self.assertRaisesRegex(RuntimeError, "die_model_cabi"):
+                discover_cabi_library()
+        finally:
+            config_resolver.cabi_library_candidates = original
 
 
 if __name__ == "__main__":

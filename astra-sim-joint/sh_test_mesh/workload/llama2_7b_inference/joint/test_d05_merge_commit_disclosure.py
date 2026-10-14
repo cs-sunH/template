@@ -27,9 +27,7 @@ for _p in (_HERE, _WL):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from joint.boundary_layout import (  # noqa: E402
-    INTERVAL_ROLE_INCREMENT,
-)
+from joint.boundary_layout import INTERVAL_ROLE_GROWTH  # noqa: E402
 from joint.joint_cost_model import MergePlan, project_end_state  # noqa: E402
 from joint.test_d12_merge_three_position import _interval  # noqa: E402
 from joint.test_d18_boundary_decision import _loads, _model  # noqa: E402
@@ -42,7 +40,7 @@ def _two_position_end_state():
         intervals=(
             _interval("base", 0, 0, 100, (1000, 1000)),
             _interval("increment", 1, 100, 150, (1500, 1500),
-                      role=INTERVAL_ROLE_INCREMENT),
+                      role=INTERVAL_ROLE_GROWTH),
         ),
         decode_instance=1, logic_home=0)
 
@@ -88,7 +86,7 @@ class D05MergeCommitDisclosureTest(unittest.TestCase):
                 _interval("base", 1, 0, 100, (1000, 1000),
                           role=INTERVAL_ROLE_BASE),
                 _interval("increment", 1, 100, 150, (1500, 1500),
-                          role=INTERVAL_ROLE_INCREMENT),
+                          role=INTERVAL_ROLE_GROWTH),
             ),
             decode_instance=1, logic_home=0)
         notes = []

@@ -220,6 +220,29 @@ std::int64_t json_int_value(const Json& v) {
     return v.get<std::int64_t>();
 }
 
+// Typed number cell of a validated JSON number (ints are non-negative in
+// every validated amount domain).
+WireNum wire_num_of(const Json& v) {
+    if (v.is_null()) return WireNum::null_num();
+    if (v.is_number_float()) return WireNum::of_double(v.get<double>());
+    if (v.is_number_unsigned()) {
+        return WireNum::of_uint(v.get<std::uint64_t>());
+    }
+    const std::int64_t value = v.get<std::int64_t>();
+    if (value < 0) {
+        throw LedgerError("typed number is outside its non-negative domain");
+    }
+    return WireNum::of_uint(static_cast<std::uint64_t>(value));
+}
+
+WireAmount wire_amount_of(const Json& amount) {
+    WireAmount out;
+    out.ops = wire_num_of(amount["ops"]);
+    out.bytes = wire_num_of(amount["bytes"]);
+    out.latency_ns = wire_num_of(amount["latency_ns"]);
+    return out;
+}
+
 // Python numeric comparison for sort keys / ordering checks: every component
 // of the ported sort keys is a validated string or number, so mixed kinds
 // cannot occur (Python would raise TypeError there).
@@ -925,11 +948,13 @@ Json expected_endpoint_amount(const PipelineDescriptor& descriptor,
     return out;
 }
 
+}  // namespace
+
 // --------------------------------------------------------- slot rows ------
 
-Json parse_slot_row(const Json& raw, const std::string& p,
-                    const DescriptorView& descriptors,
-                    const SelectorView& selector_indexes) {
+SlotRow parse_slot_row(const Json& raw, const std::string& p,
+                       const DescriptorView& descriptors,
+                       const SelectorView& selector_indexes) {
     const Json& row = read_mapping(raw, p);
     require_exact_keys(row, p, slot_keys());
     const std::string domain = read_string(row["buffer_domain_id"],
@@ -988,10 +1013,11 @@ Json parse_slot_row(const Json& raw, const std::string& p,
     if (occupied == owner_wire.is_null()) {
         throw LedgerError(p + ".owner must be nonnull iff occupied");
     }
+    std::optional<SlotOwner> owner;
     if (!owner_wire.is_null()) {
-        const Json& owner = read_mapping(owner_wire, p + ".owner");
-        require_exact_keys(owner, p + ".owner", owner_keys());
-        const std::string segment = read_string(owner["segment_id"],
+        const Json& owner_json = read_mapping(owner_wire, p + ".owner");
+        require_exact_keys(owner_json, p + ".owner", owner_keys());
+        const std::string segment = read_string(owner_json["segment_id"],
                                                 p + ".owner.segment_id");
         const DescriptorPtr* found = descriptors.find(segment);
         if (found == nullptr) {
@@ -1001,11 +1027,12 @@ Json parse_slot_row(const Json& raw, const std::string& p,
         const PipelineDescriptor& descriptor = **found;
         const PipelineIdentity& ident = descriptor.identity;
         const std::uint64_t pipeline_generation = read_uint(
-            owner["pipeline_generation"], p + ".owner.pipeline_generation");
-        const std::uint64_t stage_epoch = read_uint(owner["stage_epoch"],
-                                                    p + ".owner.stage_epoch");
+            owner_json["pipeline_generation"],
+            p + ".owner.pipeline_generation");
+        const std::uint64_t stage_epoch = read_uint(
+            owner_json["stage_epoch"], p + ".owner.stage_epoch");
         const std::uint64_t allocation = read_uint(
-            owner["staging_allocation_id"],
+            owner_json["staging_allocation_id"],
             p + ".owner.staging_allocation_id");
         if (domain != ident.buffer_domain_id
                 || pipeline_generation != ident.generation
@@ -1015,9 +1042,9 @@ Json parse_slot_row(const Json& raw, const std::string& p,
                 p + ".owner disagrees with immutable descriptor identity");
         }
         const std::uint64_t group_ordinal = read_uint(
-            owner["group_ordinal"], p + ".owner.group_ordinal");
-        const std::uint64_t tile_ordinal = read_uint(owner["tile_ordinal"],
-                                                     p + ".owner.tile_ordinal");
+            owner_json["group_ordinal"], p + ".owner.group_ordinal");
+        const std::uint64_t tile_ordinal = read_uint(
+            owner_json["tile_ordinal"], p + ".owner.tile_ordinal");
         SelectorIndex storage;
         const SelectorIndex* selector_index = resolve_selector_index(
             selector_indexes, segment, descriptor, storage);
@@ -1080,6 +1107,8 @@ Json parse_slot_row(const Json& raw, const std::string& p,
                 }
             }
         }
+        owner = SlotOwner{segment, pipeline_generation, stage_epoch,
+                          allocation, group_ordinal, tile_ordinal};
     }
     if (consumed != !consumed_targets.empty()) {
         throw LedgerError(p + ".consumed must match consumed target shards");
@@ -1094,93 +1123,58 @@ Json parse_slot_row(const Json& raw, const std::string& p,
     if (occupied && role_target && targets.empty()) {
         throw LedgerError(p + " occupied target slot needs consumption authority");
     }
-    Json parsed = row;  // dict(row)
-    Json targets_json = Json::array();
-    for (const std::uint64_t value : targets) targets_json.push_back(value);
-    Json consumed_json = Json::array();
-    for (const std::uint64_t value : consumed_targets) {
-        consumed_json.push_back(value);
-    }
-    parsed["target_shards_to_consume"] = std::move(targets_json);
-    parsed["consumed_target_shards"] = std::move(consumed_json);
+    SlotRow parsed;
+    parsed.domain = domain;
+    parsed.role_source = role_source;
+    parsed.rank = rank;
+    parsed.has_shard = shard.has_value();
+    parsed.shard = shard.value_or(0);
+    parsed.slot_index = slot_index;
+    parsed.occupied = occupied;
+    parsed.owner = std::move(owner);
+    parsed.consumed = consumed;
+    parsed.target_shards_to_consume = std::move(targets);
+    parsed.consumed_target_shards = std::move(consumed_targets);
     return parsed;
 }
 
-Json slot_key_of(const Json& row) {
-    return Json::array({row["buffer_domain_id"], row["role"], row["rank"],
-                        row["shard_ordinal"], row["slot_index"]});
+SlotKey slot_key_of(const SlotRow& row) {
+    SlotKey key;
+    key.domain = row.domain;
+    key.role_source = row.role_source;
+    key.rank = row.rank;
+    key.shard = row.has_shard
+        ? static_cast<std::int64_t>(row.shard) : std::int64_t(-1);
+    key.slot_index = row.slot_index;
+    return key;
 }
 
-Json slot_sort_key_of(const Json& key) {
-    Json shard = key[3].is_null() ? Json(std::int64_t(-1)) : key[3];
-    return Json::array({key[0], key[1], key[2], std::move(shard), key[4]});
-}
+namespace {
 
-// pipeline_ledger.py _parse_row_patches, specialized per row kind.  The
-// returned JSON is the downstream representation [[key, before, after], ...].
-Json parse_row_patches(
-    const Json& value, const std::string& path,
-    const std::function<Json(const Json&, const std::string&)>& parse_row,
-    const std::function<Json(const Json&)>& key_of,
-    const std::function<Json(const Json&)>& sort_key_of) {
-    if (!value.is_array()) throw LedgerError(path + " must be an array");
-    Json parsed = Json::array();
-    bool has_previous = false;
-    Json previous_sort;
-    for (std::size_t index = 0; index < value.size(); ++index) {
-        const std::string p = path_index(path, index);
-        const Json& raw = value[index];
-        const Json& patch = read_mapping(raw, p);
-        require_exact_keys(patch, p, patch_keys());
-        const Json& before_raw = patch["before"];
-        const Json& after_raw = patch["after"];
-        if (before_raw.is_null() && after_raw.is_null()) {
-            throw LedgerError(p + " cannot have both before and after null");
-        }
-        Json before;
-        Json after;
-        if (!before_raw.is_null()) {
-            before = parse_row(before_raw, p + ".before");
-        }
-        if (!after_raw.is_null()) {
-            after = parse_row(after_raw, p + ".after");
-        }
-        Json key;
-        if (!before.is_null() && !after.is_null()) {
-            const Json before_key = key_of(before);
-            const Json after_key = key_of(after);
-            if (!python_equal(before_key, after_key)) {
-                throw LedgerError(p + " changes a row's stable key");
-            }
-            if (typed_equal(before, after)) {
-                throw LedgerError(p + " is a no-op patch");
-            }
-            key = before_key;
-        } else {
-            key = key_of(before.is_null() ? after : before);
-        }
-        const Json sort_key = sort_key_of(key);
-        if (has_previous && json_tuple_cmp(sort_key, previous_sort) <= 0) {
-            throw LedgerError(path + " must be sorted and duplicate-free");
-        }
-        has_previous = true;
-        previous_sort = sort_key;
-        parsed.push_back(Json::array({key, before, after}));
+// Sorted-unique walk shared by the patch streams.
+template <class K>
+void require_sorted_advance(const std::string& path, const K& key,
+                            bool& has_previous, K& previous) {
+    if (has_previous && !(previous < key)) {
+        throw LedgerError(path + " must be sorted and duplicate-free");
     }
-    return parsed;
+    has_previous = true;
+    previous = key;
 }
 
 }  // namespace
 
 // --------------------------------------------------- slot patch union -----
 
-Json parse_v4_slot_patches(Json value, const std::string& path,
+std::vector<SlotPatch> parse_v4_slot_patches(const Json& value,
+                           const std::string& path,
                            const DescriptorView& descriptors,
                            const SelectorView& selector_indexes) {
     if (!value.is_array()) throw LedgerError(path + " must be an array");
-    Json out = Json::array();
+    std::vector<SlotPatch> out;
+    out.reserve(value.size());
     bool has_previous = false;
-    Json previous_sort;
+    SlotKey previous_sort;
     for (std::size_t index = 0; index < value.size(); ++index) {
         const std::string p = path_index(path, index);
         const Json& raw = value[index];
@@ -1190,8 +1184,7 @@ Json parse_v4_slot_patches(Json value, const std::string& path,
             is_target_delta = form != raw.end() && form->is_string()
                 && form->get_ref<const std::string&>() == "target_delta";
         }
-        Json item;
-        Json sort_key;
+        SlotPatch item;
         if (is_target_delta) {
             const Json& delta = read_mapping(raw, p);
             require_exact_keys(delta, p, target_delta_keys());
@@ -1224,7 +1217,8 @@ Json parse_v4_slot_patches(Json value, const std::string& path,
             if (!operations_wire.is_array()) {
                 throw LedgerError(p + ".operations must be an array");
             }
-            Json operations = Json::array();
+            std::vector<TargetOp> operations;
+            operations.reserve(operations_wire.size());
             for (std::size_t op_index = 0; op_index < operations_wire.size();
                  ++op_index) {
                 const std::string q = p + ".operations["
@@ -1241,13 +1235,13 @@ Json parse_v4_slot_patches(Json value, const std::string& path,
                 const std::uint64_t generation = generation_field == raw_op.end()
                     ? read_uint(Json(), q + ".slot_generation")
                     : read_uint(*generation_field, q + ".slot_generation");
-                Json operation = Json::object();
+                TargetOp operation;
+                operation.slot_generation = generation;
                 if (op_kind == "initialize") {
                     static const std::vector<const char*> allowed = {
                         "op", "slot_generation"};
                     require_exact_keys(raw_op, q, allowed);
-                    operation["op"] = op_kind;
-                    operation["slot_generation"] = generation;
+                    operation.op = TargetOp::Op::Initialize;
                 } else if (op_kind == "claim") {
                     static const std::vector<const char*> allowed = {
                         "op", "slot_generation", "owner", "target_shards"};
@@ -1255,37 +1249,42 @@ Json parse_v4_slot_patches(Json value, const std::string& path,
                     const Json& owner_raw = read_mapping(raw_op["owner"],
                                                          q + ".owner");
                     require_exact_keys(owner_raw, q + ".owner", owner_keys());
-                    Json owner = owner_raw;
-                    owner["segment_id"] = read_string(owner_raw["segment_id"],
-                                                      q + ".owner.segment_id");
+                    const std::string owner_segment = read_string(
+                        owner_raw["segment_id"], q + ".owner.segment_id");
+                    SlotOwner owner;
+                    owner.segment_id = owner_segment;
                     static const char* owner_uints[] = {
                         "pipeline_generation", "stage_epoch",
                         "staging_allocation_id", "group_ordinal",
                         "tile_ordinal"};
-                    for (const char* field : owner_uints) {
-                        owner[field] = read_uint(owner_raw[field],
-                                                 q + ".owner." + field);
+                    std::uint64_t values[5] = {0, 0, 0, 0, 0};
+                    for (int i = 0; i < 5; ++i) {
+                        values[i] = read_uint(owner_raw[owner_uints[i]],
+                                              q + ".owner." + owner_uints[i]);
                     }
+                    owner.pipeline_generation = values[0];
+                    owner.stage_epoch = values[1];
+                    owner.staging_allocation_id = values[2];
+                    owner.group_ordinal = values[3];
+                    owner.tile_ordinal = values[4];
                     const Json& shards_wire = raw_op["target_shards"];
                     if (!shards_wire.is_array()) {
                         throw LedgerError(q + ".target_shards must be an array");
                     }
-                    Json target_shards = Json::array();
+                    std::vector<std::uint64_t> target_shards;
                     for (std::size_t i = 0; i < shards_wire.size(); ++i) {
                         target_shards.push_back(read_uint(
                             shards_wire[i], q + ".target_shards[]"));
                     }
                     for (std::size_t i = 1; i < target_shards.size(); ++i) {
-                        if (json_int_value(target_shards[i - 1])
-                                >= json_int_value(target_shards[i])) {
+                        if (target_shards[i - 1] >= target_shards[i]) {
                             throw LedgerError(
                                 q + ".target_shards must be sorted unique");
                         }
                     }
-                    operation["op"] = op_kind;
-                    operation["slot_generation"] = generation;
-                    operation["owner"] = std::move(owner);
-                    operation["target_shards"] = std::move(target_shards);
+                    operation.op = TargetOp::Op::Claim;
+                    operation.owner = std::move(owner);
+                    operation.target_shards = std::move(target_shards);
                 } else if (op_kind == "consume") {
                     static const std::vector<const char*> allowed = {
                         "op", "slot_generation", "cause", "add_shards",
@@ -1297,44 +1296,43 @@ Json parse_v4_slot_patches(Json value, const std::string& path,
                         "terminal_rank", "terminal_store_id",
                         "consume_run_index"};
                     require_exact_keys(cause_row, q + ".cause", cause_keys);
-                    Json cause = Json::object();
-                    cause["terminal_rank"] = read_rank(
+                    const std::uint64_t terminal_rank = read_rank(
                         cause_row["terminal_rank"], q + ".cause.terminal_rank");
-                    cause["terminal_store_id"] = read_uint(
+                    const std::uint64_t terminal_store_id = read_uint(
                         cause_row["terminal_store_id"],
                         q + ".cause.terminal_store_id");
-                    cause["consume_run_index"] = read_uint(
+                    const std::uint64_t consume_run_index = read_uint(
                         cause_row["consume_run_index"],
                         q + ".cause.consume_run_index");
                     const Json& additions_wire = raw_op["add_shards"];
                     if (!additions_wire.is_array()) {
                         throw LedgerError(q + ".add_shards must be an array");
                     }
-                    Json additions = Json::array();
+                    std::vector<std::uint64_t> additions;
                     for (std::size_t i = 0; i < additions_wire.size(); ++i) {
                         additions.push_back(read_uint(additions_wire[i],
                                                       q + ".add_shards[]"));
                     }
                     for (std::size_t i = 1; i < additions.size(); ++i) {
-                        if (json_int_value(additions[i - 1])
-                                >= json_int_value(additions[i])) {
+                        if (additions[i - 1] >= additions[i]) {
                             throw LedgerError(
                                 q + ".add_shards must be sorted unique");
                         }
                     }
-                    operation["op"] = op_kind;
-                    operation["slot_generation"] = generation;
-                    operation["cause"] = std::move(cause);
-                    operation["add_shards"] = std::move(additions);
-                    operation["cleared"] = read_bool(raw_op["cleared"],
-                                                     q + ".cleared");
+                    operation.op = TargetOp::Op::Consume;
+                    operation.terminal_rank = terminal_rank;
+                    operation.terminal_store_id = terminal_store_id;
+                    operation.consume_run_index = consume_run_index;
+                    operation.add_shards = std::move(additions);
+                    operation.cleared = read_bool(raw_op["cleared"],
+                                                  q + ".cleared");
                 } else if (op_kind == "request_close_clear"
                            || op_kind == "erase") {
                     static const std::vector<const char*> allowed = {
                         "op", "slot_generation"};
                     require_exact_keys(raw_op, q, allowed);
-                    operation["op"] = op_kind;
-                    operation["slot_generation"] = generation;
+                    operation.op = op_kind == "erase"
+                        ? TargetOp::Op::Erase : TargetOp::Op::RequestCloseClear;
                 } else {
                     throw LedgerError(q + ".op is unknown");
                 }
@@ -1343,42 +1341,66 @@ Json parse_v4_slot_patches(Json value, const std::string& path,
             if (operations.empty()) {
                 throw LedgerError(p + ".operations must be nonempty");
             }
-            item = Json::object();
-            item["form"] = "target_delta";
-            item["key"] = Json::array({domain, role, rank, nullptr, slot_index});
-            item["before_slot_generation"] = before_generation;
-            item["predecessor_logical_seq"] = predecessor_seq;
-            item["predecessor_consumed_count"] = predecessor_count;
-            item["operations"] = std::move(operations);
-            sort_key = Json::array({domain, role, rank, std::int64_t(-1),
-                                    slot_index});
+            item.is_target_delta = true;
+            item.key.domain = domain;
+            item.key.role_source = false;  // role == "target"
+            item.key.rank = rank;
+            item.key.shard = -1;
+            item.key.slot_index = slot_index;
+            item.before_slot_generation = before_generation;
+            item.predecessor_logical_seq = predecessor_seq;
+            item.predecessor_consumed_count = predecessor_count;
+            item.operations = std::move(operations);
         } else {
-            const Json patch = parse_row_patches(
-                Json::array({raw}), p,
-                [&](const Json& row_value, const std::string& q) {
-                    return parse_slot_row(row_value, q, descriptors,
-                                          selector_indexes);
-                },
-                slot_key_of, slot_sort_key_of)[0];
-            const Json& key = patch[0];
-            const Json& before = patch[1];
-            const Json& after = patch[2];
-            const bool before_bad = !before.is_null()
-                && before["role"].get_ref<const std::string&>() != "source";
-            const bool after_bad = !after.is_null()
-                && after["role"].get_ref<const std::string&>() != "source";
-            if (before_bad || after_bad) {
+            // Source quad: exactly one [before/after] patch object.
+            const Json& patch = read_mapping(raw, p);
+            require_exact_keys(patch, p, patch_keys());
+            const Json& before_raw = patch["before"];
+            const Json& after_raw = patch["after"];
+            if (before_raw.is_null() && after_raw.is_null()) {
+                throw LedgerError(p + " cannot have both before and after null");
+            }
+            std::optional<SlotRow> before;
+            std::optional<SlotRow> after;
+            if (!before_raw.is_null()) {
+                before = parse_slot_row(before_raw, p + ".before", descriptors,
+                                        selector_indexes);
+            }
+            if (!after_raw.is_null()) {
+                after = parse_slot_row(after_raw, p + ".after", descriptors,
+                                       selector_indexes);
+            }
+            if (before && after) {
+                if (!(slot_key_of(*before) == slot_key_of(*after))) {
+                    throw LedgerError(p + " changes a row's stable key");
+                }
+                if (typed_equal(before_raw, after_raw)) {
+                    throw LedgerError(p + " is a no-op patch");
+                }
+            }
+            const SlotRow& identity = before ? *before : *after;
+            if (!identity.role_source) {
                 throw LedgerError(
                     p + " v4 target slots must use target_delta form");
             }
-            item = Json::array({"source", key, before, after});
-            sort_key = slot_sort_key_of(key);
+            if (before && !before->role_source) {
+                throw LedgerError(
+                    p + " v4 target slots must use target_delta form");
+            }
+            if (after && !after->role_source) {
+                throw LedgerError(
+                    p + " v4 target slots must use target_delta form");
+            }
+            item.is_target_delta = false;
+            item.key = slot_key_of(identity);
+            item.before = std::move(before);
+            item.after = std::move(after);
         }
-        if (has_previous && json_tuple_cmp(sort_key, previous_sort) <= 0) {
+        if (has_previous && !(previous_sort < item.key)) {
             throw LedgerError(path + " must be sorted and duplicate-free");
         }
         has_previous = true;
-        previous_sort = sort_key;
+        previous_sort = item.key;
         out.push_back(std::move(item));
     }
     return out;
@@ -1388,7 +1410,7 @@ Json parse_v4_slot_patches(Json value, const std::string& path,
 
 namespace {
 
-Json parse_credit_row(const Json& raw, const std::string& p) {
+CreditRow parse_credit_row(const Json& raw, const std::string& p) {
     const Json& row = read_mapping(raw, p);
     require_exact_keys(row, p, credit_keys());
     const std::uint64_t capacity = read_uint(row["capacity"], p + ".capacity");
@@ -1396,35 +1418,78 @@ Json parse_credit_row(const Json& raw, const std::string& p) {
     if (capacity != 2 || available > capacity) {
         throw LedgerError(p + " requires capacity=2 and available in [0,2]");
     }
-    Json parsed = row;
-    parsed["buffer_domain_id"] = read_string(row["buffer_domain_id"],
-                                             p + ".buffer_domain_id");
-    parsed["source_rank"] = read_rank(row["source_rank"], p + ".source_rank");
-    parsed["shard_ordinal"] = read_uint(row["shard_ordinal"],
-                                        p + ".shard_ordinal");
-    parsed["outstanding_ack_count"] = read_uint(
+    CreditRow parsed;
+    parsed.domain = read_string(row["buffer_domain_id"],
+                                p + ".buffer_domain_id");
+    parsed.source_rank = read_rank(row["source_rank"], p + ".source_rank");
+    parsed.shard = read_uint(row["shard_ordinal"], p + ".shard_ordinal");
+    parsed.capacity = capacity;
+    parsed.available = available;
+    parsed.outstanding_ack_count = read_uint(
         row["outstanding_ack_count"], p + ".outstanding_ack_count");
     return parsed;
 }
 
 }  // namespace
 
-Json parse_credit_patches(Json value, const std::string& path) {
-    return parse_row_patches(
-        value, path, parse_credit_row,
-        [](const Json& row) {
-            return Json::array({row["buffer_domain_id"], row["source_rank"],
-                                row["shard_ordinal"]});
-        },
-        [](const Json& key) { return key; });
+std::vector<CreditPatch> parse_credit_patches(const Json& value,
+                                              const std::string& path) {
+    if (!value.is_array()) throw LedgerError(path + " must be an array");
+    std::vector<CreditPatch> parsed;
+    parsed.reserve(value.size());
+    bool has_previous = false;
+    CreditKey previous;
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        const std::string p = path_index(path, index);
+        const Json& raw = value[index];
+        const Json& patch = read_mapping(raw, p);
+        require_exact_keys(patch, p, patch_keys());
+        const Json& before_raw = patch["before"];
+        const Json& after_raw = patch["after"];
+        if (before_raw.is_null() && after_raw.is_null()) {
+            throw LedgerError(p + " cannot have both before and after null");
+        }
+        std::optional<CreditRow> before;
+        std::optional<CreditRow> after;
+        if (!before_raw.is_null()) {
+            before = parse_credit_row(before_raw, p + ".before");
+        }
+        if (!after_raw.is_null()) {
+            after = parse_credit_row(after_raw, p + ".after");
+        }
+        CreditKey key;
+        if (before && after) {
+            if (before->domain != after->domain
+                    || before->source_rank != after->source_rank
+                    || before->shard != after->shard) {
+                throw LedgerError(p + " changes a row's stable key");
+            }
+            if (typed_equal(before_raw, after_raw)) {
+                throw LedgerError(p + " is a no-op patch");
+            }
+            key = CreditKey{before->domain, before->source_rank,
+                            before->shard};
+        } else {
+            const CreditRow& identity = before ? *before : *after;
+            key = CreditKey{identity.domain, identity.source_rank,
+                            identity.shard};
+        }
+        require_sorted_advance(path, key, has_previous, previous);
+        CreditPatch out;
+        out.key = key;
+        out.before = std::move(before);
+        out.after = std::move(after);
+        parsed.push_back(std::move(out));
+    }
+    return parsed;
 }
 
 // ---------------------------------------------------- obligation rows -----
 
 namespace {
 
-Json parse_obligation_row(const Json& raw, const std::string& p,
-                          const DescriptorView& descriptors) {
+ObligationRow parse_obligation_row(const Json& raw, const std::string& p,
+                                   const DescriptorView& descriptors) {
     const Json& row = read_mapping(raw, p);
     require_exact_keys(row, p, obligation_keys());
     const std::string segment = read_string(row["segment_id"],
@@ -1435,33 +1500,80 @@ Json parse_obligation_row(const Json& raw, const std::string& p,
     const std::uint64_t count = read_uint(row["remaining_endpoint_count"],
                                           p + ".remaining_endpoint_count");
     const Json& state = row["state"];
-    const bool state_ok = state.is_string()
-        && (state.get_ref<const std::string&>() == "pending"
-            || state.get_ref<const std::string&>() == "active");
-    if (count == 0 || !state_ok) {
+    const bool state_active = state.is_string()
+        && state.get_ref<const std::string&>() == "active";
+    const bool state_pending = state.is_string()
+        && state.get_ref<const std::string&>() == "pending";
+    if (count == 0 || (!state_pending && !state_active)) {
         throw LedgerError(
             p + " must be pending/active with positive remaining count");
     }
-    Json parsed = row;
-    parsed["obligation_id"] = read_string(row["obligation_id"],
-                                          p + ".obligation_id");
-    parsed["rank"] = read_rank(row["rank"], p + ".rank");
-    parsed["first_store_id"] = read_uint(row["first_store_id"],
-                                         p + ".first_store_id");
+    ObligationRow parsed;
+    parsed.obligation_id = read_string(row["obligation_id"],
+                                       p + ".obligation_id");
+    parsed.segment_id = segment;
+    parsed.rank = read_rank(row["rank"], p + ".rank");
+    parsed.first_store_id = read_uint(row["first_store_id"],
+                                      p + ".first_store_id");
+    parsed.remaining_endpoint_count = count;
+    parsed.state = state_active ? ObligationState::Active
+                                : ObligationState::Pending;
     return parsed;
 }
 
 }  // namespace
 
-Json parse_obligation_patches(Json value, const std::string& path,
-                              const DescriptorView& descriptors) {
-    return parse_row_patches(
-        value, path,
-        [&](const Json& row_value, const std::string& q) {
-            return parse_obligation_row(row_value, q, descriptors);
-        },
-        [](const Json& row) { return row["obligation_id"]; },
-        [](const Json& key) { return Json::array({key}); });
+std::vector<ObligationPatch> parse_obligation_patches(
+        const Json& value, const std::string& path,
+        const DescriptorView& descriptors) {
+    if (!value.is_array()) throw LedgerError(path + " must be an array");
+    std::vector<ObligationPatch> parsed;
+    parsed.reserve(value.size());
+    bool has_previous = false;
+    std::string previous;
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        const std::string p = path_index(path, index);
+        const Json& raw = value[index];
+        const Json& patch = read_mapping(raw, p);
+        require_exact_keys(patch, p, patch_keys());
+        const Json& before_raw = patch["before"];
+        const Json& after_raw = patch["after"];
+        if (before_raw.is_null() && after_raw.is_null()) {
+            throw LedgerError(p + " cannot have both before and after null");
+        }
+        std::optional<ObligationRow> before;
+        std::optional<ObligationRow> after;
+        if (!before_raw.is_null()) {
+            before = parse_obligation_row(before_raw, p + ".before",
+                                          descriptors);
+        }
+        if (!after_raw.is_null()) {
+            after = parse_obligation_row(after_raw, p + ".after", descriptors);
+        }
+        std::string key;
+        if (before && after) {
+            if (before->obligation_id != after->obligation_id) {
+                throw LedgerError(p + " changes a row's stable key");
+            }
+            if (typed_equal(before_raw, after_raw)) {
+                throw LedgerError(p + " is a no-op patch");
+            }
+            key = before->obligation_id;
+        } else {
+            key = (before ? *before : *after).obligation_id;
+        }
+        if (has_previous && !(previous < key)) {
+            throw LedgerError(path + " must be sorted and duplicate-free");
+        }
+        has_previous = true;
+        previous = key;
+        ObligationPatch out;
+        out.obligation_id = key;
+        out.before = std::move(before);
+        out.after = std::move(after);
+        parsed.push_back(std::move(out));
+    }
+    return parsed;
 }
 
 // ------------------------------------------------------ cursor patches ----
@@ -1478,10 +1590,11 @@ bool completed_range_contains(const std::vector<std::pair<
     return ordinal < candidate.second;
 }
 
-Json parse_cursor_patch_run(const Json& raw_run, const std::string& path,
-                            const PipelineDescriptor& descriptor,
-                            const std::string& segment,
-                            std::uint64_t run_index) {
+CursorRun parse_cursor_patch_run(const Json& raw_run,
+                                 const std::string& path,
+                                 const PipelineDescriptor& descriptor,
+                                 const std::string& segment,
+                                 std::uint64_t run_index) {
     const Json& run = read_mapping(raw_run, path);
     require_exact_keys(run, path, cursor_run_keys());
     const PipelineEndpointRun& expected =
@@ -1533,9 +1646,9 @@ Json parse_cursor_patch_run(const Json& raw_run, const std::string& path,
     }
     const std::optional<std::uint64_t> expected_parent =
         expected.initial_parent_json_id.has_value()
-        ? std::optional<std::uint64_t>(
-            *expected.initial_parent_json_id + 1)
-        : std::nullopt;
+            ? std::optional<std::uint64_t>(
+                *expected.initial_parent_json_id + 1)
+            : std::nullopt;
     if (initial_parent != expected_parent) {
         throw LedgerError(
             path + ".initial_parent_store_id disagrees with descriptor");
@@ -1550,6 +1663,7 @@ Json parse_cursor_patch_run(const Json& raw_run, const std::string& path,
     }
     std::uint64_t out_of_order_count = 0;
     std::optional<std::uint64_t> last_end;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> ooo;
     for (std::size_t index = 0; index < ooo_wire.size(); ++index) {
         const std::string p = path + ".completed_out_of_order["
             + std::to_string(index) + "]";
@@ -1569,6 +1683,7 @@ Json parse_cursor_patch_run(const Json& raw_run, const std::string& path,
         last_end = end;
         out_of_order_count += end - begin;
         completed_ranges.emplace_back(begin, end);
+        ooo.emplace_back(begin, end);
     }
     if (completed + out_of_order_count + cancelled + remaining
             != total_count) {
@@ -1580,7 +1695,8 @@ Json parse_cursor_patch_run(const Json& raw_run, const std::string& path,
     if (!endpoints_wire.is_array()) {
         throw LedgerError(path + ".active_endpoints must be an array");
     }
-    Json parsed_endpoints = Json::array();
+    std::vector<ActiveEndpoint> parsed_endpoints;
+    parsed_endpoints.reserve(endpoints_wire.size());
     std::set<std::uint64_t> seen_store_ids;
     std::set<std::uint64_t> seen_transfer_ids;
     for (std::size_t index = 0; index < endpoints_wire.size(); ++index) {
@@ -1604,9 +1720,11 @@ Json parse_cursor_patch_run(const Json& raw_run, const std::string& path,
         if (!seen_transfer_ids.insert(transfer_id).second) {
             throw LedgerError(path + " duplicates active transfer_id");
         }
-        read_nullable_uint(item["flow_id"], p + ".flow_id");
-        read_bool(item["network_done"], p + ".network_done");
-        read_bool(item["hbm_done"], p + ".hbm_done");
+        const std::optional<std::uint64_t> flow = read_nullable_uint(
+            item["flow_id"], p + ".flow_id");
+        const bool network_done = read_bool(item["network_done"],
+                                            p + ".network_done");
+        const bool hbm_done = read_bool(item["hbm_done"], p + ".hbm_done");
         const std::int64_t local_tile = static_cast<std::int64_t>(
             active_tile - expected.first_tile);
         const auto shard_position_it = std::find(
@@ -1671,7 +1789,21 @@ Json parse_cursor_patch_run(const Json& raw_run, const std::string& path,
                     p + " maps to an inactive stream-bytes endpoint");
             }
         }
-        parsed_endpoints.push_back(item);
+        ActiveEndpoint typed;
+        typed.ordinal = ordinal;
+        typed.store_id = store_id;
+        typed.tile_ordinal = active_tile;
+        typed.shard_ordinal = active_shard;
+        typed.endpoint = endpoint;
+        typed.transfer_id = transfer_id;
+        typed.flow_bound = flow.has_value();
+        typed.flow_id = flow.value_or(0);
+        typed.network_done = network_done;
+        typed.hbm_done = hbm_done;
+        typed.owner = SlotOwner{
+            segment, ident.generation, ident.stage_epoch,
+            ident.staging_allocation_id, expected.group_ordinal, active_tile};
+        parsed_endpoints.push_back(std::move(typed));
     }
     if (in_flight != !endpoints_wire.empty()) {
         throw LedgerError(path + ".in_flight must match active_endpoints");
@@ -1696,17 +1828,32 @@ Json parse_cursor_patch_run(const Json& raw_run, const std::string& path,
                 path + ".next_store_id disagrees with cursor position");
         }
     }
-    Json parsed_run = run;
-    parsed_run["completed_out_of_order"] = ooo_wire;
-    parsed_run["active_endpoints"] = std::move(parsed_endpoints);
+    CursorRun parsed_run;
+    parsed_run.rank = rank;
+    parsed_run.group_ordinal = group;
+    parsed_run.first_tile = first_tile;
+    parsed_run.tile_count = tile_count;
+    parsed_run.completed_endpoint_count = completed;
+    parsed_run.cancelled_endpoint_count = cancelled;
+    parsed_run.remaining_endpoint_count = remaining;
+    parsed_run.in_flight = in_flight;
+    parsed_run.has_next_store = next_store.has_value();
+    parsed_run.next_store_id = next_store.value_or(0);
+    parsed_run.tile_offset = tile_offset;
+    parsed_run.shard_index = shard_index;
+    parsed_run.leg_index = leg_index;
+    parsed_run.has_initial_parent = initial_parent.has_value();
+    parsed_run.initial_parent_store_id = initial_parent.value_or(0);
+    parsed_run.completed_out_of_order = std::move(ooo);
+    parsed_run.active_endpoints = std::move(parsed_endpoints);
     return parsed_run;
 }
 
 }  // namespace
 
-Json parse_cursor_patch_one(Json raw, const std::string& p,
-                            const DescriptorView& descriptors,
-                            CursorSegmentCursor* cursor) {
+CursorPatch parse_cursor_patch_one(const Json& raw, const std::string& p,
+                                   const DescriptorView& descriptors,
+                                   CursorSegmentCursor* cursor) {
     const Json& patch = read_mapping(raw, p);
     static const std::vector<const char*> patch_key_set = {
         "segment_id", "cursor_version", "retired", "runs"};
@@ -1725,7 +1872,8 @@ Json parse_cursor_patch_one(Json raw, const std::string& p,
     if (!run_rows.is_array()) {
         throw LedgerError(p + ".runs must be an array");
     }
-    Json parsed_runs = Json::array();
+    std::vector<std::pair<std::uint64_t, std::optional<CursorRun>>> parsed_runs;
+    parsed_runs.reserve(run_rows.size());
     std::optional<std::uint64_t> previous_index;
     static const std::vector<const char*> run_item_keys = {
         "run_index", "value"};
@@ -1739,19 +1887,17 @@ Json parse_cursor_patch_one(Json raw, const std::string& p,
             throw LedgerError(q + ".run_index exceeds descriptor runs");
         }
         const Json& raw_value = item["value"];
-        Json parsed_value;
-        if (raw_value.is_null()) {
-            parsed_value = nullptr;
-        } else {
+        std::optional<CursorRun> parsed_value;
+        if (!raw_value.is_null()) {
             parsed_value = parse_cursor_patch_run(raw_value, q + ".value",
                                                   descriptor, segment,
                                                   ordinal);
         }
-        if (parsed_value.is_null() && !retired) {
+        if (!parsed_value.has_value() && !retired) {
             throw LedgerError(
                 q + ".value may be null only during descriptor retirement");
         }
-        if (!parsed_value.is_null() && retired) {
+        if (parsed_value.has_value() && retired) {
             throw LedgerError(
                 q + ".value must be null on descriptor retirement");
         }
@@ -1759,21 +1905,18 @@ Json parse_cursor_patch_one(Json raw, const std::string& p,
             throw LedgerError(p + ".runs must be sorted and duplicate-free");
         }
         previous_index = ordinal;
-        parsed_runs.push_back(Json::array({ordinal, std::move(parsed_value)}));
+        parsed_runs.emplace_back(ordinal, std::move(parsed_value));
     }
     if (retired) {
         const std::uint64_t total = descriptor.endpoint_runs.size();
         bool tombstoned = parsed_runs.size() == total;
         if (tombstoned && !parsed_runs.empty()) {
-            const std::uint64_t first = static_cast<std::uint64_t>(
-                json_int_value(parsed_runs[0][0]));
-            const std::uint64_t last = static_cast<std::uint64_t>(
-                json_int_value(parsed_runs[parsed_runs.size() - 1][0]));
-            tombstoned = first == 0 && last == total - 1;
+            tombstoned = parsed_runs.front().first == 0
+                && parsed_runs.back().first == total - 1;
         }
         if (tombstoned) {
-            for (const Json& entry : parsed_runs) {
-                if (!entry[1].is_null()) tombstoned = false;
+            for (const auto& entry : parsed_runs) {
+                if (entry.second.has_value()) tombstoned = false;
             }
         }
         if (!tombstoned) {
@@ -1786,21 +1929,21 @@ Json parse_cursor_patch_one(Json raw, const std::string& p,
     }
     cursor->has_previous = true;
     cursor->previous_segment = segment;
-    Json out = Json::object();
-    out["segment_id"] = segment;
-    out["cursor_version"] = version;
-    out["retired"] = retired;
-    out["runs"] = std::move(parsed_runs);
+    CursorPatch out;
+    out.segment_id = segment;
+    out.cursor_version = version;
+    out.retired = retired;
+    out.runs = std::move(parsed_runs);
     return out;
 }
 
 // ------------------------------------------------------------- runs -------
 
-Json parse_one_pipeline_run(Json raw, const std::string& p,
-                            const std::string& section_path,
-                            const DescriptorView& descriptors,
-                            const SelectorView& selector_indexes,
-                            RunSeqCursor* cursor) {
+PipelineRun parse_one_pipeline_run(const Json& raw, const std::string& p,
+                                  const std::string& section_path,
+                                  const DescriptorView& descriptors,
+                                  const SelectorView& selector_indexes,
+                                  RunSeqCursor* cursor) {
     const Json& row = read_mapping(raw, p);
     require_exact_keys(row, p, run_keys());
     const std::uint64_t seq = read_uint(row["first_logical_seq"],
@@ -1819,6 +1962,8 @@ Json parse_one_pipeline_run(Json raw, const std::string& p,
                     sizeof kTransitions / sizeof kTransitions[0])) {
         throw LedgerError(p + ".transition_kind is unknown");
     }
+    const std::string transition_kind =
+        transition.get_ref<const std::string&>();
     const std::string segment = read_string(row["descriptor_segment_id"],
                                             p + ".descriptor_segment_id");
     const DescriptorPtr* descriptor_ptr = descriptors.find(segment);
@@ -1844,8 +1989,6 @@ Json parse_one_pipeline_run(Json raw, const std::string& p,
     }
     bool have_selector = false;
     SelectorResolution resolution;
-    std::uint64_t tile_first = 0;
-    std::uint64_t shard_first = 0;
     std::uint64_t rank_first = 0;
     std::optional<std::uint64_t> endpoint_ordinal;
     std::optional<std::uint64_t> selected_global_ordinal;
@@ -1881,8 +2024,10 @@ Json parse_one_pipeline_run(Json raw, const std::string& p,
         rank_first = read_rank(row["rank_first"], p + ".rank_first");
         resolution = resolve_selector(descriptor, selector_mapping,
                                       *selector_index, rank_first);
-        tile_first = read_uint(row["tile_first"], p + ".tile_first");
-        shard_first = read_uint(row["shard_first"], p + ".shard_first");
+        const std::uint64_t tile_first = read_uint(row["tile_first"],
+                                                   p + ".tile_first");
+        const std::uint64_t shard_first = read_uint(row["shard_first"],
+                                                    p + ".shard_first");
         if (tile_first != resolution.tile || shard_first != resolution.shard
                 || rank_first
                     != descriptor.endpoint_runs[resolution.run_index].rank) {
@@ -1939,6 +2084,16 @@ Json parse_one_pipeline_run(Json raw, const std::string& p,
             && !in_strings(resource_leg, kResourceLegs,
                            sizeof kResourceLegs / sizeof kResourceLegs[0])) {
         throw LedgerError(p + ".resource_leg is unknown");
+    }
+    ResourceLeg leg = ResourceLeg::None;
+    if (!resource_leg.is_null()) {
+        const std::string& leg_text =
+            resource_leg.get_ref<const std::string&>();
+        leg = leg_text == "endpoint" ? ResourceLeg::Endpoint
+            : leg_text == "body_marker" ? ResourceLeg::BodyMarker
+            : leg_text == "noc" ? ResourceLeg::Noc
+            : leg_text == "hbm:COMM_READ" ? ResourceLeg::HbmCommRead
+            : ResourceLeg::HbmCommWrite;
     }
     const std::uint64_t tick = read_uint(row["tick_first"], p + ".tick_first");
     if (read_uint(row["tick_stride"], p + ".tick_stride") != 0) {
@@ -2021,20 +2176,13 @@ Json parse_one_pipeline_run(Json raw, const std::string& p,
                 p + ".resource_leg disagrees with descriptor endpoint kind");
         }
     }
-    // The wire row is a discarded temporary (EnvelopeReader dispatch passes
-    // it by value): move the three patch arrays into their parsers instead
-    // of re-copying each subtree. All scalar reads from `row` are complete
-    // by this point.
-    Json slot_patches = parse_v4_slot_patches(
-        std::move(raw["slot_patches"]), p + ".slot_patches", descriptors,
+    std::vector<SlotPatch> slot_patches = parse_v4_slot_patches(
+        row["slot_patches"], p + ".slot_patches", descriptors,
         selector_indexes);
-    Json credit_patches = parse_credit_patches(
-        std::move(raw["credit_patches"]), p + ".credit_patches");
-    Json obligation_patches = parse_obligation_patches(
-        std::move(raw["obligation_patches"]), p + ".obligation_patches",
-        descriptors);
-    const std::string transition_kind =
-        transition.get_ref<const std::string&>();
+    std::vector<CreditPatch> credit_patches = parse_credit_patches(
+        row["credit_patches"], p + ".credit_patches");
+    std::vector<ObligationPatch> obligation_patches = parse_obligation_patches(
+        row["obligation_patches"], p + ".obligation_patches", descriptors);
     const bool descriptor_level =
         transition_kind == "descriptor_commit"
         || transition_kind == "service_done"
@@ -2052,11 +2200,11 @@ Json parse_one_pipeline_run(Json raw, const std::string& p,
             p + " endpoint_done transition requires a concrete selector");
     }
     if (transition_kind != "descriptor_commit"
-            && transition_kind != "service_done"
-            && transition_kind != "request_close"
-            && transition_kind != "settle_done"
-            && transition_kind != "descriptor_retire"
-            && !have_selector && transition_kind != "consume_done") {
+        && transition_kind != "service_done"
+        && transition_kind != "request_close"
+        && transition_kind != "settle_done"
+        && transition_kind != "descriptor_retire"
+        && !have_selector && transition_kind != "consume_done") {
         throw LedgerError(
             p + " endpoint transition requires a concrete selector");
     }
@@ -2074,51 +2222,58 @@ Json parse_one_pipeline_run(Json raw, const std::string& p,
     }
     cursor->has_previous = true;
     cursor->previous_seq = seq;
-    Json parsed = Json::object();
-    parsed["first_logical_seq"] = seq;
-    parsed["descriptor_segment_id"] = segment;
-    parsed["transition_kind"] = transition_kind;
+    PipelineRun parsed;
+    parsed.first_logical_seq = seq;
+    parsed.descriptor_segment_id = segment;
+    parsed.transition_kind = transition_kind_from_name(transition_kind);
+    parsed.have_selector = have_selector;
     if (have_selector) {
-        parsed["endpoint_selector"] = selector;
-    } else {
-        parsed["endpoint_selector"] = nullptr;
+        parsed.endpoint_selector.group_ordinal = resolution.group;
+        parsed.endpoint_selector.tile_ordinal = resolution.tile;
+        parsed.endpoint_selector.shard_ordinal = resolution.shard;
+        parsed.endpoint_selector.endpoint = resolution.endpoint;
+        parsed.selector_rank = rank_first;
+        parsed.has_endpoint_run_index = true;
+        parsed.endpoint_run_index = resolution.run_index;
+        parsed.has_endpoint_leg_index = true;
+        parsed.endpoint_leg_index = resolution.leg_index;
+        parsed.has_endpoint_store_id = endpoint_store_id.has_value();
+        parsed.endpoint_store_id = endpoint_store_id.value_or(0);
     }
-    parsed["endpoint_run_index"] = have_selector
-        ? Json(resolution.run_index) : Json();
-    parsed["endpoint_leg_index"] = have_selector
-        ? Json(resolution.leg_index) : Json();
-    parsed["endpoint_ordinal"] = endpoint_ordinal.has_value()
-        ? Json(*endpoint_ordinal) : Json();
-    parsed["_selected_global_tile_ordinal"] = selected_global_ordinal
-        .has_value() ? Json(*selected_global_ordinal) : Json();
+    parsed.resource_leg = leg;
+    parsed.has_endpoint_ordinal = endpoint_ordinal.has_value();
+    parsed.endpoint_ordinal = endpoint_ordinal.value_or(0);
+    parsed.has_selected_global_tile_ordinal =
+        selected_global_ordinal.has_value();
+    parsed.selected_global_tile_ordinal = selected_global_ordinal.value_or(0);
     if (selected_shard_facts.has_value()) {
-        Json tile = Json::object();
-        tile["shard_ordinal"] = selected_shard_facts->shard_ordinal;
-        tile["source_rank"] = selected_shard_facts->source_rank;
-        tile["target_rank"] = selected_shard_facts->target_rank;
-        tile["data_bytes"] = selected_shard_facts->data_bytes;
-        tile["emit_endpoint"] = selected_shard_facts->emit_endpoint;
-        parsed["_selected_shard_tile"] = std::move(tile);
-    } else {
-        parsed["_selected_shard_tile"] = nullptr;
+        parsed.has_selected_shard_tile = true;
+        parsed.selected_shard_tile.shard_ordinal =
+            selected_shard_facts->shard_ordinal;
+        parsed.selected_shard_tile.source_rank =
+            selected_shard_facts->source_rank;
+        parsed.selected_shard_tile.target_rank =
+            selected_shard_facts->target_rank;
+        parsed.selected_shard_tile.data_bytes =
+            selected_shard_facts->data_bytes;
+        parsed.selected_shard_tile.emit_endpoint =
+            selected_shard_facts->emit_endpoint;
     }
-    parsed["endpoint_store_id"] = endpoint_store_id.has_value()
-        ? Json(*endpoint_store_id) : Json();
-    parsed["slot_patches"] = std::move(slot_patches);
-    parsed["credit_patches"] = std::move(credit_patches);
-    parsed["obligation_patches"] = std::move(obligation_patches);
-    parsed["tick_first"] = tick;
-    parsed["cursor_version_start"] = cv0;
-    parsed["cursor_version_end"] = cv1;
+    parsed.slot_patches = std::move(slot_patches);
+    parsed.credit_patches = std::move(credit_patches);
+    parsed.obligation_patches = std::move(obligation_patches);
+    parsed.tick_first = tick;
+    parsed.cursor_version_start = cv0;
+    parsed.cursor_version_end = cv1;
     return parsed;
 }
 
 // --------------------------------------------------------- resources ------
 
-Json parse_resource_row(Json raw, const std::string& p,
-                        const DescriptorView& descriptors,
-                        const SelectorView& selector_indexes,
-                        std::optional<ResourceSortKey>* previous) {
+ResourceRow parse_resource_row(const Json& raw, const std::string& p,
+                               const DescriptorView& descriptors,
+                               const SelectorView& selector_indexes,
+                               std::optional<ResourceSortKey>* previous) {
     static const std::map<std::string, std::vector<const char*>> extras = {
         {"noc_flow", {"flow_id", "current_rate_Bpns",
                       "last_rate_update_time"}},
@@ -2171,8 +2326,10 @@ Json parse_resource_row(Json raw, const std::string& p,
     read_uint(row["generation"], p + ".generation");
     const std::uint64_t rank = read_rank(row["rank"], p + ".rank");
     const std::uint64_t node_id = read_uint(row["node_id"], p + ".node_id");
-    read_uint(row["as_of_tick"], p + ".as_of_tick");
-    read_nullable_uint(row["issued_tick"], p + ".issued_tick");
+    const std::uint64_t as_of_tick = read_uint(row["as_of_tick"],
+                                               p + ".as_of_tick");
+    const std::optional<std::uint64_t> issued_tick = read_nullable_uint(
+        row["issued_tick"], p + ".issued_tick");
     if (row["progress_source"] != Json("authoritative")) {
         throw LedgerError(p + ".progress_source must be authoritative");
     }
@@ -2182,8 +2339,10 @@ Json parse_resource_row(Json raw, const std::string& p,
     if (!route_wire.is_array()) {
         throw LedgerError(p + ".route must be an array");
     }
+    std::vector<std::uint64_t> route;
     for (std::size_t j = 0; j < route_wire.size(); ++j) {
-        read_uint(route_wire[j], p + ".route[" + std::to_string(j) + "]");
+        route.push_back(read_uint(route_wire[j],
+                                  p + ".route[" + std::to_string(j) + "]"));
     }
     const Json& segment = row["descriptor_segment_id"];
     const Json& selector = row["endpoint_selector"];
@@ -2281,8 +2440,12 @@ Json parse_resource_row(Json raw, const std::string& p,
             }
         }
     }
+    ResourceRow typed;
+    typed.kind = kind == "noc_flow" ? ResourceKind::NocFlow
+        : kind == "hbm_job" ? ResourceKind::HbmJob : ResourceKind::PoolJob;
     if (kind == "noc_flow") {
-        const std::uint64_t flow_id = read_uint(row["flow_id"], p + ".flow_id");
+        const std::uint64_t flow_id = read_uint(row["flow_id"],
+                                                p + ".flow_id");
         if (row["leg"] != Json("noc:" + std::to_string(flow_id))) {
             throw LedgerError(
                 p + ".leg must identify its original flow_id");
@@ -2295,6 +2458,10 @@ Json parse_resource_row(Json raw, const std::string& p,
                 p + " unattributed NoC identity must preserve noc/empty-stage/"
                    "flow-id form");
         }
+        typed.flow_id = flow_id;
+        typed.current_rate_Bpns = wire_num_of(row["current_rate_Bpns"]);
+        typed.last_rate_update_time = wire_num_of(
+            row["last_rate_update_time"]);
         read_finite_nonnegative(row["current_rate_Bpns"],
                                 p + ".current_rate_Bpns");
         read_finite_nonnegative(row["last_rate_update_time"],
@@ -2306,6 +2473,7 @@ Json parse_resource_row(Json raw, const std::string& p,
         }
     } else if (kind == "hbm_job") {
         read_string(row["kind"], p + ".kind");
+        typed.job_kind = row["kind"].get_ref<const std::string&>();
         const std::string& leg = row["leg"].get_ref<const std::string&>();
         if (python_equal(row["request_id"], Json("external_background"))
                 && row["stage"].get_ref<const std::string&>().empty()
@@ -2346,12 +2514,11 @@ Json parse_resource_row(Json raw, const std::string& p,
                        "hbm_external:{rank}#{issue_seq} with the row's own "
                        "rank and a positive backend issue_seq");
             }
-        } else if (row["leg"]
-                != Json("hbm:" + row["kind"].get_ref<const std::string&>())) {
+        } else if (row["leg"] != Json("hbm:" + typed.job_kind)) {
             throw LedgerError(
                 p + ".leg must identify its HBM job kind");
         }
-        read_uint(row["start_tick"], p + ".start_tick");
+        typed.start_tick = read_uint(row["start_tick"], p + ".start_tick");
     } else {
         const std::uint64_t port = read_uint(row["port_index"],
                                              p + ".port_index");
@@ -2362,6 +2529,9 @@ Json parse_resource_row(Json raw, const std::string& p,
             throw LedgerError(
                 p + ".leg must identify its original pool job");
         }
+        typed.port_index = port;
+        typed.issue_seq = issue_seq;
+        typed.latency_ready_ns = wire_num_of(row["latency_ready_ns"]);
         read_finite_nonnegative(row["latency_ready_ns"],
                                 p + ".latency_ready_ns");
     }
@@ -2377,6 +2547,40 @@ Json parse_resource_row(Json raw, const std::string& p,
             throw LedgerError(p + " remaining " + dim + " exceeds total");
         }
     }
+    typed.work_id = row["work_id"].get_ref<const std::string&>();
+    typed.request_id = row["request_id"].get_ref<const std::string&>();
+    typed.stage = row["stage"].get_ref<const std::string&>();
+    typed.generation = read_uint(row["generation"], p + ".generation");
+    typed.rank = rank;
+    typed.node_id = node_id;
+    typed.operation = row["operation"].get_ref<const std::string&>();
+    typed.leg = row["leg"].get_ref<const std::string&>();
+    typed.state = state.get_ref<const std::string&>();
+    typed.total = wire_amount_of(total);
+    typed.remaining = wire_amount_of(remaining);
+    typed.route = std::move(route);
+    typed.as_of_tick = as_of_tick;
+    typed.has_issued_tick = issued_tick.has_value();
+    typed.issued_tick = issued_tick.value_or(0);
+    typed.bound = bound;
+    if (bound) {
+        typed.descriptor_segment_id =
+            segment.get_ref<const std::string&>();
+        const Json& selector_mapping = read_mapping(
+            selector, p + ".endpoint_selector");
+        typed.has_endpoint_selector = true;
+        typed.endpoint_selector.group_ordinal = read_uint(
+            selector_mapping["group_ordinal"],
+            p + ".endpoint_selector.group_ordinal");
+        typed.endpoint_selector.tile_ordinal = read_uint(
+            selector_mapping["tile_ordinal"],
+            p + ".endpoint_selector.tile_ordinal");
+        typed.endpoint_selector.shard_ordinal = read_uint(
+            selector_mapping["shard_ordinal"],
+            p + ".endpoint_selector.shard_ordinal");
+        typed.endpoint_selector.endpoint = read_string(
+            selector_mapping["endpoint"], p + ".endpoint_selector.endpoint");
+    }
     const ResourceSortKey sort_key = std::make_tuple(
         segment.is_null() ? std::string() : segment
             .get_ref<const std::string&>(),
@@ -2385,7 +2589,7 @@ Json parse_resource_row(Json raw, const std::string& p,
         throw LedgerError("active_resources must be sorted and duplicate-free");
     }
     *previous = sort_key;
-    return row;
+    return typed;
 }
 
 }  // namespace rowport

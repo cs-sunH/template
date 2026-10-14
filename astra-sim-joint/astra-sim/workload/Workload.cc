@@ -16,8 +16,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
-#include "astra-sim/workload/execution_driven/PipelineDescriptor.hh"
-#include "astra-sim/workload/execution_driven/RemoteReadExecutor.hh"
+#include "astra-sim/workload/execution_driven/PipelineKernelContract.hh"
 #include <json/json.hpp>
 
 #include <algorithm>
@@ -439,12 +438,6 @@ void Workload::issue_dep_free_nodes() {
         // issue callbacks from injecting a newly-ready child into the current
         // batch. The ET fallback obtains the same vector that its default
         // for_each_dep_free implementation previously traversed.
-        // F (dynamic ordered current physical anchor candidate set,
-        // 2026-10-11): the online id snapshot is now the ORDINARY
-        // (non-anchor-role) free set -- anchor-role ids are enumerated from
-        // the executor's current-anchor set inside the merge loop instead of
-        // being copied here. Derived/non-NodeStore sources keep their
-        // existing default: the full id snapshot through the same call.
         ExecutionDriven::NodeStoreGraphSource* node_store_source = nullptr;
         if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
             graph_source_ != nullptr &&
@@ -474,24 +467,47 @@ void Workload::issue_dep_free_nodes() {
         if (can_reuse_id_snapshot) {
             has_id_snapshot = true;
             ++dep_free_issue_timing_.snapshot_reuse_hits;
+        } else if (node_store_source != nullptr &&
+                   dep_free_issue_snapshot_valid_ &&
+                   cached_snapshot_source != nullptr &&
+                   cached_snapshot_source.get() == graph_source_.get() &&
+                   node_store_source->store().snapshot_reuse_eligible() &&
+                   dep_free_issue_snapshot_version_ !=
+                       std::numeric_limits<uint64_t>::max() &&
+                   ready_version != std::numeric_limits<uint64_t>::max() &&
+                   node_store_source->store()
+                           .free_delta_window_base_version() ==
+                       dep_free_issue_snapshot_version_) {
+            // v11 Phase 4 (issue-pass increment, 方案 §6.1): the ready-set
+            // generation moved past the cached vector, but the store's
+            // since-snapshot delta window still starts exactly at the
+            // vector's own generation (nobody consumed the deltas in
+            // between) and the vector still belongs to this very source.
+            // Splice the delta onto the cached vector instead of rewalking
+            // the whole ordered set -- the result is element-for-element
+            // the vector fill_free_node_snapshot would produce (proof:
+            // NodeStore::splice_free_node_snapshot), so the walk below and
+            // every gate observe an identical snapshot. The splice keeps
+            // the caller's vector untouched on a throw (strong guarantee),
+            // and only the final bookkeeping runs after success, mirroring
+            // the fill's tag protocol below.
+            node_store_source->store().splice_free_node_snapshot(
+                dep_free_issue_snapshot_ids_);
+            ++dep_free_issue_timing_.snapshot_splices;
+            dep_free_issue_snapshot_version_ = ready_version;
+            has_id_snapshot = true;
         } else {
             // Invalidate before calling the source so a false return or an
             // exception cannot leave a stale vector tagged as current.
             dep_free_issue_snapshot_valid_ = false;
             dep_free_issue_snapshot_source_.reset();
-            // Only the EXACT NodeStore source takes the ordinary partition
-            // fill (its anchors are enumerated from the executor's
-            // current-anchor set). A derived source that overrides the full
-            // fill (false/throwing/flipping contract fixtures) keeps the
-            // original full-snapshot virtual call, so its overrides still
-            // engage unchanged; non-NodeStore sources are on the same
-            // compatibility path as before.
+            // A derived source that overrides the full fill (false/throwing/
+            // flipping contract fixtures) and non-NodeStore sources keep the
+            // original full-snapshot virtual call, so their overrides still
+            // engage unchanged.
             has_id_snapshot =
-                node_store_source != nullptr
-                    ? graph_source_->fill_dep_free_ordinary_id_snapshot(
-                          dep_free_issue_snapshot_ids_)
-                    : graph_source_->fill_dep_free_id_snapshot(
-                          dep_free_issue_snapshot_ids_);
+                graph_source_->fill_dep_free_id_snapshot(
+                    dep_free_issue_snapshot_ids_);
             if (has_id_snapshot) {
                 ++dep_free_issue_timing_.snapshot_full_fills;
                 if (node_store_source != nullptr) {
@@ -534,13 +550,6 @@ void Workload::issue_dep_free_nodes() {
                 membership_snapshot_proof_active = true;
             }
         }
-        std::vector<ExecutionDriven::RemoteReadExecutor::ReadyEndpoint>
-            virtual_ready_snapshot;
-        if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-            remote_read_executor_ != nullptr) {
-            virtual_ready_snapshot =
-                remote_read_executor_->ready_virtual_endpoints(sys->id);
-        }
         const auto snapshot_end = SteadyClock::now();
         dep_free_issue_timing_.snapshot_ns += static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -550,19 +559,14 @@ void Workload::issue_dep_free_nodes() {
         dep_free_issue_timing_.candidates +=
             has_id_snapshot ? dep_free_issue_snapshot_ids_.size()
                             : dep_free_issue_snapshot_views_.size();
-        dep_free_issue_timing_.candidates += virtual_ready_snapshot.size();
-        // F (2026-10-11): visited current-anchor candidates are added to
-        // `candidates` after the walk (they are no longer pre-counted from
-        // a ready-set snapshot; future anchors never appear at all).
-        uint64_t anchor_visits_this_pass = 0;
 
         const auto issue_start = SteadyClock::now();
         auto issue_if_available = [&](const auto& nv) {
             if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
                 // Step 1-8: online availability check on the NodeView
                 // (et_node is nullptr in online mode). Strategy mode keeps the
-                // real serialized physics (path-2 removal 2026-08-18 deleted the
-                // replay-only concurrent calibrated-COMP bypass).
+                // real serialized physics (path-2 removal 2026-08-18 deleted
+                // the replay-only concurrent calibrated-COMP bypass).
                 if (hw_resource->is_available(nv)) {
                     issue(nv);
                     return true;
@@ -607,9 +611,9 @@ void Workload::issue_dep_free_nodes() {
                         store.free_id_version() ==
                             membership_snapshot_version) {
                         // No callback or mutable operation can run between
-                        // this test and lookup_ptr. A prior issue or virtual
-                        // dispatch that changed the source/set is detected on
-                        // the next candidate and keeps this proof disabled.
+                        // this test and lookup_ptr. A prior issue that
+                        // changed the source/set is detected on the next
+                        // candidate and keeps this proof disabled.
                         return true;
                     }
                 }
@@ -619,143 +623,7 @@ void Workload::issue_dep_free_nodes() {
         };
         uint64_t issue_calls = 0;
         if (has_id_snapshot) {
-            // F (2026-10-11) three-way merge: ordinary physical vector /
-            // dynamically fetched current anchors / virtual endpoints, all
-            // ascending by store_id. The anchor stream is NOT materialized:
-            // every iteration asks the executor for the smallest current
-            // anchor id past the walk's last visited id (refreshed at the
-            // TOP of each iteration, i.e. AFTER the previous step's issue
-            // callbacks), so anchors whose run cursor has not reached them
-            // are never enumerated (the old full-snapshot path visited and
-            // coordinate-rejected them). A chain A->B in one run still
-            // works in-round: issue(A) synchronously advances the run
-            // cursor (erase A / insert B into the executor's current set),
-            // and the next refresh returns B because B > last visited.
-            size_t physical_index = 0;
-            size_t virtual_index = 0;
-            // The walk's last visited id, updated for EVERY processed
-            // candidate (ordinary / virtual / anchor, issued or not). The
-            // anchor stream resumes from it, so an anchor that becomes
-            // current only after the walk already moved past its id is not
-            // revisited in this pass -- it waits for the rerun/deferred
-            // pass, exactly like the old snapshot walk's no-revisit rule.
-            uint64_t walk_last_visited = 0;
-            uint64_t anchor_next = 0;
-            bool anchor_next_valid = false;
-            const bool anchor_stream_active =
-                execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-                remote_read_executor_ != nullptr;
-            const auto refresh_anchor_next = [&]() {
-                anchor_next_valid =
-                    anchor_stream_active &&
-                    remote_read_executor_->next_current_anchor_id(
-                        static_cast<uint64_t>(sys->id), walk_last_visited,
-                        &anchor_next);
-            };
-            while (true) {
-                refresh_anchor_next();
-                const uint64_t physical_next =
-                    physical_index < dep_free_issue_snapshot_ids_.size()
-                        ? dep_free_issue_snapshot_ids_[physical_index]
-                        : std::numeric_limits<uint64_t>::max();
-                const uint64_t virtual_next =
-                    virtual_index < virtual_ready_snapshot.size()
-                        ? virtual_ready_snapshot[virtual_index].store_id
-                        : std::numeric_limits<uint64_t>::max();
-                const uint64_t anchor_candidate =
-                    anchor_next_valid ? anchor_next
-                                      : std::numeric_limits<uint64_t>::max();
-                if (physical_next == std::numeric_limits<uint64_t>::max() &&
-                    virtual_next == std::numeric_limits<uint64_t>::max() &&
-                    !anchor_next_valid) {
-                    break;
-                }
-                if (anchor_candidate < physical_next &&
-                    anchor_candidate < virtual_next) {
-                    // Current-anchor candidate (gate 1: the executor's set
-                    // already proves the run cursor points at it). Advance
-                    // the walk FIRST so the id is never revisited even if
-                    // the gates below reject it.
-                    walk_last_visited = anchor_candidate;
-                    ++anchor_visits_this_pass;
-                    // Gate 2: current ready-set membership (the id may have
-                    // been taken/finished by an earlier candidate's
-                    // synchronous callback). The exact-NodeStore path uses
-                    // its ordered set; a compatibility source keeps the old
-                    // generic membership recheck.
-                    const bool anchor_still_free =
-                        node_store_source != nullptr
-                            ? node_store_source->store().is_free_id(
-                                  anchor_candidate)
-                            : graph_source_->is_dep_free_member(
-                                  anchor_candidate);
-                    if (!anchor_still_free) {
-                        continue;
-                    }
-                    // Gate 3: fixed pass membership -- ids that entered the
-                    // free set after this pass's snapshot fill belong to the
-                    // next pass (the same rule the ordinary vector gets
-                    // from the snapshot itself). The fill drained the
-                    // delta, and it stays empty on the version-unchanged
-                    // snapshot-reuse path.
-                    if (node_store_source != nullptr) {
-                        const auto& delta =
-                            node_store_source->store()
-                                .free_delta_since_snapshot();
-                        if (std::binary_search(delta.begin(), delta.end(),
-                                               anchor_candidate)) {
-                            continue;
-                        }
-                    }
-                    const auto* const current = graph_source_->lookup_ptr(
-                        anchor_candidate);
-                    if (current == nullptr) {
-                        continue;
-                    }
-                    if (current->compute.exec_role ==
-                        ExecutionDriven::ComputeExecRole::
-                            RemoteReadPipelineAnchor) {
-                        ExecutionDriven::NodeView resource_view;
-                        // Anchor binding, dependency, protocol and slot
-                        // validation only read executor/NodeStore state and
-                        // construct a separate resource view; they do not
-                        // issue the anchor or run a completion callback.
-                        // This full preflight (including the current-id
-                        // recheck inside) runs for every visited candidate
-                        // exactly as before.
-                        if (!remote_read_executor_->resource_view_for_anchor(
-                                *current, &resource_view)) {
-                            continue;
-                        }
-                        if (issue_online_candidate_if_available(*current,
-                                                                resource_view)) {
-                            ++issue_calls;
-                        }
-                        continue;
-                    }
-                    // A non-anchor node registered as a physical endpoint
-                    // binding cannot happen (registration validates the
-                    // anchor role); fail closed rather than issuing it as
-                    // an ordinary node outside the snapshot contract.
-                    fail_closed(
-                        "current-anchor candidate lacks its anchor exec role");
-                }
-                const bool issue_virtual = virtual_next < physical_next;
-                if (issue_virtual) {
-                    const auto& candidate =
-                        virtual_ready_snapshot[virtual_index++];
-                    walk_last_visited = candidate.store_id;
-                    if (hw_resource->is_available(candidate.resource_node) &&
-                        remote_read_executor_->dispatch_virtual_endpoint(
-                            sys->id, candidate.store_id)) {
-                        ++issue_calls;
-                    }
-                    continue;
-                }
-
-                const uint64_t node_id =
-                    dep_free_issue_snapshot_ids_[physical_index++];
-                walk_last_visited = node_id;
+            for (const uint64_t node_id : dep_free_issue_snapshot_ids_) {
                 if (!is_current_snapshot_member(node_id)) {
                     continue;
                 }
@@ -764,27 +632,7 @@ void Workload::issue_dep_free_nodes() {
                     continue;
                 }
                 if (execution_mode_ ==
-                        ExecutionDriven::ExecutionMode::Online &&
-                    current->compute.exec_role ==
-                        ExecutionDriven::ComputeExecRole::
-                            RemoteReadPipelineAnchor) {
-                    // Compatibility path: a non-NodeStore source's default
-                    // ordinary fill is the FULL id snapshot, so anchors can
-                    // still arrive through the vector. Keep the original
-                    // anchor gate for them (an online store source filters
-                    // anchors out of the vector and never reaches this).
-                    ExecutionDriven::NodeView resource_view;
-                    if (remote_read_executor_ == nullptr ||
-                        !remote_read_executor_->resource_view_for_anchor(
-                            *current, &resource_view)) {
-                        continue;
-                    }
-                    if (issue_online_candidate_if_available(*current,
-                                                            resource_view)) {
-                        ++issue_calls;
-                    }
-                } else if (execution_mode_ ==
-                           ExecutionDriven::ExecutionMode::Online) {
+                        ExecutionDriven::ExecutionMode::Online) {
                     if (issue_online_candidate_if_available(*current,
                                                             *current)) {
                         ++issue_calls;
@@ -811,20 +659,9 @@ void Workload::issue_dep_free_nodes() {
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 issue_end - issue_start)
                 .count());
-        dep_free_issue_timing_.candidates += anchor_visits_this_pass;
-        dep_free_issue_timing_.anchor_candidate_visits += anchor_visits_this_pass;
         dep_free_issue_timing_.issue_calls += issue_calls;
     } while (issue_dep_free_rerun_needed_);
     issuing_dep_free_ = false;
-}
-
-void Workload::set_remote_read_executor(
-    ExecutionDriven::RemoteReadExecutor* executor) {
-    if (execution_mode_ != ExecutionDriven::ExecutionMode::Online ||
-        executor == nullptr || remote_read_executor_ != nullptr) {
-        fail_closed("invalid online RemoteReadExecutor attachment");
-    }
-    remote_read_executor_ = executor;
 }
 
 void Workload::set_pipeline_kernel_contract(
@@ -848,19 +685,13 @@ Workload::pipeline_kernel_contract() const {
 void Workload::publish_ledger_transition(
     const char* kind, const ExecutionDriven::NodeView& node) const {
     if (execution_mode_ != ExecutionDriven::ExecutionMode::Online ||
-        ledger_transition_observer_ == nullptr || kind == nullptr ||
-        node.compute.exec_role ==
-            ExecutionDriven::ComputeExecRole::RemoteReadPipelineAnchor) {
+        ledger_transition_observer_ == nullptr || kind == nullptr) {
         return;
     }
     ledger_transition_observer_(kind, node);
 }
 
 void Workload::issue(const ExecutionDriven::NodeView& node) {
-    const bool pipeline_anchor =
-        execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        node.compute.exec_role ==
-            ExecutionDriven::ComputeExecRole::RemoteReadPipelineAnchor;
     auto logger = workload_logger_;
     if (sys->trace_enabled) {
         logger->debug("issue,sys->id={}, tick={}, node->id={}, "
@@ -876,13 +707,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
     // the NodeView overloads.
     std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node = nullptr;
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-        // A physical GraphBatch anchor is a zero-cost structural placeholder.
-        // Its mapped COMM/COMP operation occupies the ordinary hardware gate
-        // in TileTransportAdapter::submit after the combined-ready check.
-        // Occupying the placeholder here would charge a second resource slot.
-        if (!pipeline_anchor) {
-            this->hw_resource->occupy(node);
-        }
+        this->hw_resource->occupy(node);
         // stats->record_end will be called in Workload::call
         start_online_statistics(node, Sys::boostedTick());
     } else {
@@ -905,22 +730,12 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
         MetricCollector::instance().on_node_issue(sys->id, node.global_id,
                                                   Sys::boostedTick());
     }
-    if (this->sys->track_local_mem && !pipeline_anchor) {
+    if (this->sys->track_local_mem) {
         this->local_mem_usage_tracker->recordStart(et_node,
                                                    Sys::boostedTick());
     }
-    // The v2 ledger records the ordinary logical node at its actual issue
-    // point. Structural endpoint anchors are proxies; their charged work is
-    // published by RemoteReadExecutor when the mapped endpoint is issued.
+    // The v2 ledger records the logical node at its actual issue point.
     publish_ledger_transition("issue", node);
-    if (pipeline_anchor) {
-        if (remote_read_executor_ == nullptr ||
-            !remote_read_executor_->dispatch_anchor(node)) {
-            fail_closed("physical pipeline anchor reached Workload without a "
-                        "ready executor endpoint");
-        }
-        return;
-    }
     if (sys->replay_only) {
         issue_replay(node);
     } else {
@@ -1094,88 +909,6 @@ void Workload::issue_local_hbm_kv_restore(
     sys->register_event(this, EventType::General, wlhd, runtime);
 }
 
-void Workload::issue_pipeline_control_marker(
-    const ExecutionDriven::NodeView& node,
-    WorkloadLayerHandlerData* completion_cookie) {
-    if (execution_mode_ != ExecutionDriven::ExecutionMode::Online ||
-        completion_cookie == nullptr ||
-        completion_cookie->pipeline_sink == nullptr ||
-        node.rank != sys->id || node.kind != ExecutionDriven::NodeKind::Compute ||
-        node.compute.op_role != ExecutionDriven::OpRole::ControlMarker ||
-        node.compute.num_ops != 1 || node.compute.tensor_size != 1) {
-        delete completion_cookie;
-        fail_closed("invalid virtual 1-op/1-byte pipeline control marker");
-    }
-    completion_cookie->sys_id = sys->id;
-    completion_cookie->workload = this;
-    completion_cookie->node_id = node.global_id;
-
-    const bool die_backend =
-        sys->compute_cost_model == ComputeCostModel::Die;
-    const bool replay_branch = sys->replay_only ||
-        (die_backend && (node.is_timer_op || node.is_cpu_op)) ||
-        (!die_backend && (!sys->roofline_enabled || node.is_cpu_op));
-    if (replay_branch) {
-        const uint64_t runtime = node.compute.runtime_ns != 0
-            ? node.compute.runtime_ns : uint64_t{1};
-        if (!node.is_cpu_op) hw_resource->tics_gpu_ops += runtime;
-        sys->register_event(this, EventType::General, completion_cookie, runtime);
-        return;
-    }
-
-    uint64_t roofline_runtime = 1;
-    if (!die_backend) {
-        // issue_comp evaluates/validates the roofline even when the HBM
-        // contention model later owns the actual 1-op/1-byte duration.
-        // Preserve that dispatch contract before choosing the completion
-        // backend below.
-        if (sys->roofline == nullptr) {
-            delete completion_cookie;
-            fail_closed("roofline control marker has no roofline model");
-        }
-        const double perf = sys->roofline->get_perf(1.0);
-        if (!std::isfinite(perf) || perf <= 0.0) {
-            delete completion_cookie;
-            fail_closed("roofline control marker has degenerate performance");
-        }
-        double compute_elapsed = 1.0 / perf;
-        if (sys->local_mem_latency > 0) {
-            const double compute_only = 1.0 / sys->peak_perf;
-            const double memory_elapsed =
-                static_cast<double>(sys->local_mem_latency) / 1e9 +
-                1.0 / sys->local_mem_bw;
-            compute_elapsed = std::max(compute_only, memory_elapsed);
-        }
-        const double runtime_ns_f = compute_elapsed * 1e9;
-        if (!std::isfinite(runtime_ns_f) || runtime_ns_f >= 1e18) {
-            delete completion_cookie;
-            fail_closed("roofline control marker runtime is not representable");
-        }
-        roofline_runtime = static_cast<uint64_t>(runtime_ns_f);
-        if (node.compute.runtime_ns != 0) {
-            roofline_runtime = node.compute.runtime_ns;
-        }
-    }
-
-    if (local_hbm_bandwidth_model != nullptr &&
-        (die_backend || node.compute.runtime_ns == 0)) {
-        // This is the exact legacy marker branch for both Die and roofline
-        // execution: a 1-op/1-byte COMPUTE fluid job, paid through the real
-        // HBM latency/share model, with completion forwarded to the owning
-        // transport sink by Workload::call.
-        if (sys->coarse_die_runtime != nullptr) {
-            local_hbm_bandwidth_model->issue_control_marker(completion_cookie);
-        } else {
-            local_hbm_bandwidth_model->issue_compute(1, 1, completion_cookie);
-        }
-        return;
-    }
-
-    const uint64_t runtime = die_backend ? uint64_t{1} : roofline_runtime;
-    if (!node.is_cpu_op) hw_resource->tics_gpu_ops += runtime;
-    sys->register_event(this, EventType::General, completion_cookie, runtime);
-}
-
 void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
     // Contract §7.3 dispatch order (frozen 2026-10-03): is_timer_op -> old
     // timer path; is_cpu_op -> issue_replay; op_role=control_marker -> the
@@ -1193,9 +926,7 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         issue_replay(node);
         return;
     }
-    if ((node.compute.die_spec != nullptr ||
-         node.compute.die_task_json != nullptr) &&
-        node.compute.runtime_ns != 0) {
+    if (node.compute.die_spec != nullptr && node.compute.runtime_ns != 0) {
         // The GraphBatch parser already rejects this combination (N12 /
         // contract §2); reaching it here means a producer that bypassed the
         // parser (e.g. a static ET view). Fail closed instead of letting a
@@ -1217,20 +948,14 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         wlhd->workload = this;
         wlhd->node_id = node.global_id;
         if (local_hbm_bandwidth_model != nullptr) {
-            if (sys->coarse_die_runtime != nullptr) {
-                local_hbm_bandwidth_model->issue_control_marker(wlhd);
-            } else {
-                local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
-            }
+            local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
         } else {
             hw_resource->tics_gpu_ops += 1;
             sys->register_event(this, EventType::General, wlhd, 1);
         }
         return;
     }
-    if (node.compute.die_spec == nullptr &&
-        (sys->coarse_die_runtime == nullptr ||
-         node.compute.die_task_json == nullptr)) {
+    if (node.compute.die_spec == nullptr) {
         // Contract §2/§7.3: a real COMP without a die_op_spec is a
         // generator defect -- never a silent roofline/replay fallback.
         fail_closed(
@@ -1711,12 +1436,7 @@ void Workload::finish_general_node(uint64_t node_id, EventType event) {
                         nv->name.c_str(), nv->node_type);
         }
         mark_online_terminal_or_fail(node_id);
-        const bool pipeline_anchor =
-            nv->compute.exec_role ==
-            ExecutionDriven::ComputeExecRole::RemoteReadPipelineAnchor;
-        if (!pipeline_anchor) {
-            hw_resource->release(*nv);
-        }
+        hw_resource->release(*nv);
         complete_online_statistics(*nv, Sys::boostedTick());
         // R2 anchor fast path: online-only branch (the static else below
         // is untouched and stays unconditional); nv points into the
@@ -1753,9 +1473,7 @@ void Workload::finish_general_node(uint64_t node_id, EventType event) {
     // (odd IO list, malformed size string, missing inputs/outputs attr)
     // would strand the bookkeeping and end the run silently incomplete.
     // Same convention as issue_comp.
-    if (this->sys->track_local_mem &&
-        (nv == nullptr || nv->compute.exec_role !=
-                              ExecutionDriven::ComputeExecRole::RemoteReadPipelineAnchor)) {
+    if (this->sys->track_local_mem) {
         try {
             this->local_mem_usage_tracker->recordEnd(node,
                                                      Sys::boostedTick());
@@ -1779,10 +1497,6 @@ void Workload::finish_general_node(uint64_t node_id, EventType event) {
                          ExecutionDriven::NodeTerminalStatus::Success, nv);
     graph_source_->finish_node(node_id);
     if (nv != nullptr) publish_ledger_transition("release", *nv);
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        remote_read_executor_ != nullptr) {
-        remote_read_executor_->notify_node_completed(sys->id, node_id);
-    }
     // Static auto-advance only (see collective branch above).
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Static) {
         issue_dep_free_nodes();
@@ -1988,16 +1702,6 @@ void Workload::call(EventType event, CallData* data) {
             issue_dep_free_nodes();
         } else {
             WorkloadLayerHandlerData* wlhd = (WorkloadLayerHandlerData*)data;
-            if (wlhd->pipeline_sink != nullptr) {
-                // A compact pipeline control marker borrows the legacy
-                // Workload HBM COMPUTE job, but its logical endpoint is a
-                // virtual hole rather than a NodeStore node. Transfer the
-                // cookie exactly once to its owning transport/executor.
-                Callable* const sink = wlhd->pipeline_sink;
-                wlhd->pipeline_sink = nullptr;
-                sink->call(event, data);
-                return;
-            }
             // N-way HBM contention join: a charged comm/pool node delivers
             // two wlhd-carrying completions (network/port side and HBM
             // side). Only after both fired does the node terminal path run

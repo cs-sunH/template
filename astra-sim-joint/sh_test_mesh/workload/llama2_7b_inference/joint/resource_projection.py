@@ -484,10 +484,6 @@ class WorkItem:
     depends_on_work: Tuple[str, ...] = ()
     is_candidate: bool = False
     service_leg_ids: Optional[Tuple[str, ...]] = None
-    # Compact logical pipelines remain a single immutable descriptor attached
-    # to the WorkItem.  The reference Python event world intentionally does not
-    # expand or execute these native-only ranges.
-    pipeline_descriptors: Tuple[object, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.work_id, str) or not self.work_id.strip():
@@ -497,64 +493,20 @@ class WorkItem:
                 or self.ready_at_ns < 0):
             raise ResourceProjectionError(
                 f"work {self.work_id!r} ready_at_ns must be int >= 0")
-        if not isinstance(self.legs, tuple) or not all(
-                isinstance(leg, TaskSpec) for leg in self.legs):
+        if (not isinstance(self.legs, tuple) or not all(
+                isinstance(leg, TaskSpec) for leg in self.legs)):
             raise ResourceProjectionError(
                 f"work {self.work_id!r} legs must be a tuple of TaskSpec "
                 "(单腿也须尾逗号成组——裸 TaskSpec 迭代会以 TypeError 逃逸)")
-        if (not isinstance(self.pipeline_descriptors, tuple)
-                or any(not callable(getattr(item, "to_wire", None))
-                       for item in self.pipeline_descriptors)):
+        if not self.legs:
             raise ResourceProjectionError(
-                f"work {self.work_id!r} pipeline_descriptors must be a tuple "
-                "of immutable PipelineDescriptor values")
-        if not self.legs and not self.pipeline_descriptors:
-            raise ResourceProjectionError(
-                f"work {self.work_id!r} must have a leg or pipeline descriptor")
+                f"work {self.work_id!r} must have a leg")
         seen: Set[str] = set()
         for leg in self.legs:
             if leg.leg_id in seen:
                 raise ResourceProjectionError(
                     f"work {self.work_id!r} duplicate leg {leg.leg_id!r}")
             seen.add(leg.leg_id)
-        virtual_service_ids: Set[str] = set()
-        if self.pipeline_descriptors:
-            # Registration ordinals merge ordinary legs with virtual fill and
-            # consume ranges.  Check arithmetic progressions without building
-            # a per-tile ID/ordinal table.
-            from joint.pipeline_descriptor import _progressions_intersect
-            progressions = []
-            ordinary_ordinals = []
-            for leg in self.legs:
-                ordinal = leg.registration_ordinal
-                if ordinal is None:
-                    raise ResourceProjectionError(
-                        f"work {self.work_id!r} with compact pipelines needs "
-                        f"registration_ordinal on ordinary leg {leg.leg_id!r}")
-                ordinary_ordinals.append(ordinal)
-            if len(set(ordinary_ordinals)) != len(ordinary_ordinals):
-                raise ResourceProjectionError(
-                    f"work {self.work_id!r} ordinary registration ordinals collide")
-            for descriptor in self.pipeline_descriptors:
-                virtual_service_ids.update(
-                    descriptor.projection_terminal_ids())
-                for chain in descriptor.projection.chains:
-                    progressions.extend((
-                        (0, chain.fill.fill_order_first,
-                         chain.fill.fill_order_stride, chain.tile_count),
-                        (0, chain.consume.consume_order_first,
-                         chain.consume.consume_order_stride, chain.tile_count),
-                    ))
-            for index, left in enumerate(progressions):
-                for right in progressions[index + 1:]:
-                    if _progressions_intersect(left, right):
-                        raise ResourceProjectionError(
-                            f"work {self.work_id!r} virtual registration ranges collide")
-                for ordinal in ordinary_ordinals:
-                    if _progressions_intersect((0, ordinal, 1, 1), left):
-                        raise ResourceProjectionError(
-                            f"work {self.work_id!r} ordinary registration ordinal "
-                            f"{ordinal} overlaps a virtual pipeline leg")
         if any(not isinstance(dep, str) or not dep.strip()
                for dep in self.depends_on_work):
             raise ResourceProjectionError(
@@ -573,15 +525,11 @@ class WorkItem:
             if len(set(self.service_leg_ids)) != len(self.service_leg_ids):
                 raise ResourceProjectionError(
                     f"work {self.work_id!r} has duplicate service legs")
-            unknown = set(self.service_leg_ids) - seen - virtual_service_ids
+            unknown = set(self.service_leg_ids) - seen
             if unknown:
                 raise ResourceProjectionError(
                     f"work {self.work_id!r} service_leg_ids unknown: "
                     f"{sorted(unknown)}")
-            if (not self.legs and self.service_leg_ids
-                    and not virtual_service_ids):
-                raise ResourceProjectionError(
-                    f"descriptor-only work {self.work_id!r} cannot name concrete service legs")
 
 
 @dataclass(frozen=True)

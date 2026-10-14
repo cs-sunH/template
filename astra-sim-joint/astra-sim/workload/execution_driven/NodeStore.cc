@@ -25,118 +25,6 @@ Implementation (方案 §4 步骤 1-4).
 namespace AstraSim {
 namespace ExecutionDriven {
 
-namespace {
-
-uint64_t gcd_u64(uint64_t a, uint64_t b) {
-    while (b != 0) {
-        const uint64_t r = a % b;
-        a = b;
-        b = r;
-    }
-    return a;
-}
-
-uint64_t modular_inverse_u64(uint64_t a, uint64_t modulus) {
-    __int128 t = 0;
-    __int128 next_t = 1;
-    __int128 r = modulus;
-    __int128 next_r = a % modulus;
-    while (next_r != 0) {
-        const __int128 q = r / next_r;
-        const __int128 old_t = t;
-        t = next_t;
-        next_t = old_t - q * next_t;
-        const __int128 old_r = r;
-        r = next_r;
-        next_r = old_r - q * next_r;
-    }
-    if (r != 1) throw std::logic_error("NodeStore modular inverse failure");
-    t %= static_cast<__int128>(modulus);
-    if (t < 0) t += modulus;
-    return static_cast<uint64_t>(t);
-}
-
-bool virtual_progressions_intersect(
-    const NodeStore::VirtualIdProgression& a,
-    const NodeStore::VirtualIdProgression& b) {
-    const unsigned __int128 a_last =
-        static_cast<unsigned __int128>(a.first_id) +
-        static_cast<unsigned __int128>(a.stride) * (a.count - 1);
-    const unsigned __int128 b_last =
-        static_cast<unsigned __int128>(b.first_id) +
-        static_cast<unsigned __int128>(b.stride) * (b.count - 1);
-    const unsigned __int128 low = std::max(a.first_id, b.first_id);
-    const unsigned __int128 high = std::min(a_last, b_last);
-    if (low > high) return false;
-
-    const uint64_t gcd = gcd_u64(a.stride, b.stride);
-    const __int128 delta = static_cast<__int128>(b.first_id) -
-                           static_cast<__int128>(a.first_id);
-    if (delta % static_cast<__int128>(gcd) != 0) return false;
-    const uint64_t modulus = b.stride / gcd;
-    uint64_t k = 0;
-    if (modulus > 1) {
-        __int128 reduced = (delta / static_cast<__int128>(gcd)) %
-                           static_cast<__int128>(modulus);
-        if (reduced < 0) reduced += modulus;
-        const uint64_t inverse = modular_inverse_u64(a.stride / gcd, modulus);
-        k = static_cast<uint64_t>(
-            (static_cast<unsigned __int128>(reduced) * inverse) % modulus);
-    }
-    const unsigned __int128 period =
-        static_cast<unsigned __int128>(a.stride / gcd) * b.stride;
-    unsigned __int128 first =
-        static_cast<unsigned __int128>(a.first_id) +
-        static_cast<unsigned __int128>(a.stride) * k;
-    if (first < low) {
-        const unsigned __int128 gap = low - first;
-        first += (gap / period + (gap % period != 0 ? 1 : 0)) * period;
-    }
-    return first <= high;
-}
-
-unsigned __int128 virtual_progression_intersection_count(
-    const NodeStore::VirtualIdProgression& a,
-    const NodeStore::VirtualIdProgression& b) {
-    const unsigned __int128 a_last =
-        static_cast<unsigned __int128>(a.first_id) +
-        static_cast<unsigned __int128>(a.stride) * (a.count - 1);
-    const unsigned __int128 b_last =
-        static_cast<unsigned __int128>(b.first_id) +
-        static_cast<unsigned __int128>(b.stride) * (b.count - 1);
-    const unsigned __int128 low = std::max(a.first_id, b.first_id);
-    const unsigned __int128 high = std::min(a_last, b_last);
-    if (low > high) return 0;
-
-    const uint64_t gcd = gcd_u64(a.stride, b.stride);
-    const __int128 delta = static_cast<__int128>(b.first_id) -
-                           static_cast<__int128>(a.first_id);
-    if (delta % static_cast<__int128>(gcd) != 0) return 0;
-    const uint64_t modulus = b.stride / gcd;
-    uint64_t k = 0;
-    if (modulus > 1) {
-        __int128 reduced = (delta / static_cast<__int128>(gcd)) %
-                           static_cast<__int128>(modulus);
-        if (reduced < 0) reduced += modulus;
-        const uint64_t inverse = modular_inverse_u64(a.stride / gcd, modulus);
-        k = static_cast<uint64_t>(
-            (static_cast<unsigned __int128>(reduced) * inverse) % modulus);
-    }
-    const unsigned __int128 period =
-        static_cast<unsigned __int128>(a.stride / gcd) * b.stride;
-    unsigned __int128 first =
-        static_cast<unsigned __int128>(a.first_id) +
-        static_cast<unsigned __int128>(a.stride) * k;
-    if (first < low) {
-        const unsigned __int128 gap = low - first;
-        first += (gap / period + (gap % period != 0 ? 1 : 0)) * period;
-    }
-    if (first > high) return 0;
-    return (high - first) / period + 1;
-}
-
-}  // namespace
-
 // ---------------------------------------------------------------------------
 // NodeStore
 // ---------------------------------------------------------------------------
@@ -168,13 +56,6 @@ uint64_t NodeStore::add_node(OnlineNode node) {
         next_id_after = std::max(next_id_, node.global_id + 1);
     }
     node.global_id = assigned_id;
-    if (is_virtual_id(assigned_id)) {
-        std::fprintf(stderr,
-                     "[Error] (execution_driven/node_store) add_node: "
-                     "global_id %llu is a reserved virtual id\n",
-                     static_cast<unsigned long long>(assigned_id));
-        std::abort();
-    }
     const auto [it, inserted] =
         nodes_.emplace(assigned_id, NodeRecord{std::move(node)});
     if (!inserted) {
@@ -187,418 +68,13 @@ uint64_t NodeStore::add_node(OnlineNode node) {
     next_id_ = next_id_after;
     if (it->second.unresolved_parents == 0) {
         free_ids_.insert(assigned_id);
-        record_free_id_insert(
-            assigned_id,
-            it->second.node.compute.exec_role ==
-                ComputeExecRole::RemoteReadPipelineAnchor);
+        record_free_id_insert(assigned_id);
     }
     return assigned_id;
 }
 
-void NodeStore::reserve_logical_id_span(
-    const uint64_t first_store_id, const uint64_t width,
-    const std::vector<VirtualIdProgression>& virtual_progressions) {
-    reserve_logical_id_span_impl(first_store_id, width, virtual_progressions,
-                                 nullptr);
-}
-
-void NodeStore::reserve_logical_id_span_impl(
-    const uint64_t first_store_id, const uint64_t width,
-    const std::vector<VirtualIdProgression>& virtual_progressions,
-    VirtualProgressionSweepWork* const work) {
-    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
-    if (width == 0 || first_store_id == 0 || first_store_id >= max_id ||
-        width > max_id - first_store_id) {
-        throw std::invalid_argument(
-            "NodeStore::reserve_logical_id_span requires a non-empty, "
-            "non-overflowing span in the allocatable id domain");
-    }
-    if (first_store_id != next_id_) {
-        throw std::logic_error(
-            "NodeStore::reserve_logical_id_span must begin at next_auto_id "
-            "(first_id=" + std::to_string(first_store_id) +
-            ", next_auto_id=" + std::to_string(next_id_) + ")");
-    }
-
-    const uint64_t end_exclusive = first_store_id + width;
-    std::vector<VirtualIdProgression> ordered = virtual_progressions;
-    std::sort(ordered.begin(), ordered.end(),
-              [](const auto& a, const auto& b) {
-                  return a.first_id < b.first_id;
-              });
-    std::map<uint64_t, std::vector<size_t>> expires_at;
-    std::set<size_t> active;
-    for (size_t i = 0; i < ordered.size(); ++i) {
-        const auto& progression = ordered[i];
-        if (progression.count == 0 || progression.stride == 0 ||
-            progression.first_id < first_store_id ||
-            progression.first_id >= end_exclusive) {
-            throw std::invalid_argument(
-                "NodeStore virtual progression must be non-empty and start "
-                "inside the reserved logical span");
-        }
-        const unsigned __int128 last =
-            static_cast<unsigned __int128>(progression.first_id) +
-            static_cast<unsigned __int128>(progression.stride) *
-                (progression.count - 1);
-        if (last >= end_exclusive) {
-            throw std::invalid_argument(
-                "NodeStore virtual progression exceeds reserved logical span");
-        }
-
-        // Inclusive-envelope sweep. Expiring only last < first preserves
-        // endpoint contact as a candidate; the exact AP predicate decides
-        // whether represented IDs actually intersect.
-        while (!expires_at.empty() &&
-               expires_at.begin()->first < progression.first_id) {
-            for (const size_t expired : expires_at.begin()->second) {
-                active.erase(expired);
-            }
-            expires_at.erase(expires_at.begin());
-        }
-        for (const size_t active_index : active) {
-            if (work != nullptr) {
-                ++work->envelope_candidates;
-                ++work->exact_intersection_tests;
-            }
-            if (virtual_progressions_intersect(ordered[active_index],
-                                               progression)) {
-                throw std::invalid_argument(
-                    "NodeStore virtual progressions overlap");
-            }
-        }
-        active.insert(i);
-        expires_at[static_cast<uint64_t>(last)].push_back(i);
-    }
-
-    if (!ordered.empty()) {
-        VirtualIdReservationBlock block;
-        block.first_id = first_store_id;
-        block.end_exclusive = end_exclusive;
-        block.progressions = std::move(ordered);
-        block.interval_nodes.reserve(block.progressions.size());
-        std::vector<size_t> progression_indexes;
-        progression_indexes.reserve(block.progressions.size());
-        for (size_t index = 0; index < block.progressions.size(); ++index) {
-            progression_indexes.push_back(index);
-        }
-        block.interval_root = build_virtual_id_interval_tree(
-            block, std::move(progression_indexes));
-
-        // Physical-only reservations add no virtual membership metadata.
-        // The allocation frontier still advances below, while queries over
-        // any resulting gap remain false unless a later span has holes.
-        virtual_id_reservation_blocks_.push_back(std::move(block));
-    }
-
-    // Do not reserve `history + incoming` on every commit: that exact-growth
-    // pattern recopies the full reservation directory on every append. The
-    // vector's geometric growth is amortized, and all new block/tree storage
-    // has already been constructed off to the side before this publication.
-    next_id_ = end_exclusive;
-}
-
-size_t NodeStore::build_virtual_id_interval_tree(
-    VirtualIdReservationBlock& block,
-    std::vector<size_t> progression_indexes) {
-    if (progression_indexes.empty()) return kNoVirtualIntervalNode;
-
-    std::vector<uint64_t> midpoints;
-    midpoints.reserve(progression_indexes.size());
-    for (const size_t index : progression_indexes) {
-        const auto& progression = block.progressions[index];
-        const unsigned __int128 last =
-            static_cast<unsigned __int128>(progression.first_id) +
-            static_cast<unsigned __int128>(progression.stride) *
-                (progression.count - 1);
-        if (last > std::numeric_limits<uint64_t>::max()) {
-            throw std::logic_error(
-                "validated virtual AP endpoint exceeds uint64_t");
-        }
-        const uint64_t last_id = static_cast<uint64_t>(last);
-        midpoints.push_back(
-            progression.first_id + (last_id - progression.first_id) / 2);
-    }
-    const auto median = midpoints.begin() + midpoints.size() / 2;
-    std::nth_element(midpoints.begin(), median, midpoints.end());
-    const uint64_t center = *median;
-
-    std::vector<size_t> left_indexes;
-    std::vector<size_t> right_indexes;
-    std::vector<size_t> center_indexes;
-    left_indexes.reserve(progression_indexes.size() / 2);
-    right_indexes.reserve(progression_indexes.size() / 2);
-    uint64_t min_first = std::numeric_limits<uint64_t>::max();
-    uint64_t max_last = 0;
-    for (const size_t index : progression_indexes) {
-        const auto& progression = block.progressions[index];
-        const unsigned __int128 last =
-            static_cast<unsigned __int128>(progression.first_id) +
-            static_cast<unsigned __int128>(progression.stride) *
-                (progression.count - 1);
-        const uint64_t last_id = static_cast<uint64_t>(last);
-        min_first = std::min(min_first, progression.first_id);
-        max_last = std::max(max_last, last_id);
-        if (last_id < center) {
-            left_indexes.push_back(index);
-        } else if (progression.first_id > center) {
-            right_indexes.push_back(index);
-        } else {
-            center_indexes.push_back(index);
-        }
-    }
-    if (center_indexes.empty()) {
-        throw std::logic_error(
-            "virtual AP interval-tree median has no center interval");
-    }
-
-    std::sort(center_indexes.begin(), center_indexes.end(),
-              [&block](const size_t left, const size_t right) {
-                  const auto& a = block.progressions[left];
-                  const auto& b = block.progressions[right];
-                  return a.first_id < b.first_id ||
-                      (a.first_id == b.first_id && left < right);
-              });
-    std::vector<size_t> by_last = center_indexes;
-    std::sort(by_last.begin(), by_last.end(),
-              [&block](const size_t left, const size_t right) {
-                  const auto& a = block.progressions[left];
-                  const auto& b = block.progressions[right];
-                  const uint64_t a_last = static_cast<uint64_t>(
-                      static_cast<unsigned __int128>(a.first_id) +
-                      static_cast<unsigned __int128>(a.stride) *
-                          (a.count - 1));
-                  const uint64_t b_last = static_cast<uint64_t>(
-                      static_cast<unsigned __int128>(b.first_id) +
-                      static_cast<unsigned __int128>(b.stride) *
-                          (b.count - 1));
-                  return a_last > b_last ||
-                      (a_last == b_last && left < right);
-              });
-
-    VirtualIdIntervalNode node;
-    node.center = center;
-    node.min_first = min_first;
-    node.max_last = max_last;
-    node.by_first = std::move(center_indexes);
-    node.by_last = std::move(by_last);
-    const size_t node_index = block.interval_nodes.size();
-    block.interval_nodes.push_back(std::move(node));
-    const size_t left = build_virtual_id_interval_tree(
-        block, std::move(left_indexes));
-    const size_t right = build_virtual_id_interval_tree(
-        block, std::move(right_indexes));
-    block.interval_nodes[node_index].left = left;
-    block.interval_nodes[node_index].right = right;
-    return node_index;
-}
-
-void NodeStore::reserve_id_range(const uint64_t first_id,
-                                 const uint64_t count) {
-    reserve_logical_id_span(first_id, count, {{first_id, count, 1}});
-}
-
-bool NodeStore::is_virtual_id(const uint64_t node_id) const {
-    return is_virtual_id_impl(node_id, nullptr);
-}
-
-bool NodeStore::is_virtual_id_progression(const uint64_t first_id,
-                                          const uint64_t count,
-                                          const uint64_t stride) const {
-    return is_virtual_id_progression_impl(first_id, count, stride, nullptr);
-}
-
-bool NodeStore::is_allocated_nonvirtual_progression(
-    const uint64_t first_id, const uint64_t count,
-    const uint64_t stride) const {
-    return is_allocated_nonvirtual_progression_impl(
-        first_id, count, stride, nullptr);
-}
-
-template <typename Visitor>
-bool NodeStore::visit_virtual_id_block_candidates(
-    const VirtualIdReservationBlock& block, const uint64_t first_id,
-    const uint64_t last_id, VirtualIdQueryWork* const work,
-    Visitor&& visitor) {
-    if (block.interval_root == kNoVirtualIntervalNode) return false;
-    const auto visit_node = [&](const auto& self,
-                                const size_t node_index) -> bool {
-        if (node_index == kNoVirtualIntervalNode) return false;
-        if (work != nullptr) ++work->interval_tree_nodes_examined;
-        const VirtualIdIntervalNode& node = block.interval_nodes[node_index];
-        if (node.min_first > last_id || node.max_last < first_id) {
-            return false;
-        }
-        const auto visit_progression = [&](const size_t progression_index) {
-            const VirtualIdProgression& progression =
-                block.progressions[progression_index];
-            const unsigned __int128 last =
-                static_cast<unsigned __int128>(progression.first_id) +
-                static_cast<unsigned __int128>(progression.stride) *
-                    (progression.count - 1);
-            if (work != nullptr) {
-                ++work->envelope_candidates;
-                ++work->exact_ap_tests;
-            }
-            return visitor(progression, static_cast<uint64_t>(last));
-        };
-
-        if (last_id < node.center) {
-            for (const size_t progression_index : node.by_first) {
-                const auto& progression =
-                    block.progressions[progression_index];
-                if (progression.first_id > last_id) break;
-                if (visit_progression(progression_index)) return true;
-            }
-            return self(self, node.left);
-        }
-        if (first_id > node.center) {
-            for (const size_t progression_index : node.by_last) {
-                const auto& progression =
-                    block.progressions[progression_index];
-                const unsigned __int128 last =
-                    static_cast<unsigned __int128>(progression.first_id) +
-                    static_cast<unsigned __int128>(progression.stride) *
-                        (progression.count - 1);
-                if (last < first_id) break;
-                if (visit_progression(progression_index)) return true;
-            }
-            return self(self, node.right);
-        }
-
-        for (const size_t progression_index : node.by_first) {
-            if (visit_progression(progression_index)) return true;
-        }
-        return self(self, node.left) || self(self, node.right);
-    };
-    return visit_node(visit_node, block.interval_root);
-}
-
-template <typename Visitor>
-bool NodeStore::visit_virtual_id_candidates(
-    const uint64_t first_id, const uint64_t last_id,
-    VirtualIdQueryWork* const work, Visitor&& visitor) const {
-    size_t low = 0;
-    size_t high = virtual_id_reservation_blocks_.size();
-    while (low < high) {
-        const size_t middle = low + (high - low) / 2;
-        if (work != nullptr) ++work->reservation_binary_probes;
-        if (virtual_id_reservation_blocks_[middle].end_exclusive <= first_id) {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    for (size_t index = low;
-         index < virtual_id_reservation_blocks_.size() &&
-             virtual_id_reservation_blocks_[index].first_id <= last_id;
-         ++index) {
-        if (work != nullptr) ++work->reservation_blocks_examined;
-        if (visit_virtual_id_block_candidates(
-                virtual_id_reservation_blocks_[index], first_id, last_id,
-                work, visitor)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool NodeStore::is_virtual_id_impl(const uint64_t node_id,
-                                   VirtualIdQueryWork* const work) const {
-    size_t low = 0;
-    size_t high = virtual_id_reservation_blocks_.size();
-    while (low < high) {
-        const size_t middle = low + (high - low) / 2;
-        if (work != nullptr) ++work->reservation_binary_probes;
-        if (virtual_id_reservation_blocks_[middle].first_id <= node_id) {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    if (low == 0) return false;
-    const VirtualIdReservationBlock& block =
-        virtual_id_reservation_blocks_[low - 1];
-    if (node_id < block.first_id || node_id >= block.end_exclusive) {
-        return false;
-    }
-    if (work != nullptr) ++work->reservation_blocks_examined;
-
-    bool found = false;
-    visit_virtual_id_block_candidates(
-        block, node_id, node_id, work,
-        [&](const VirtualIdProgression& progression, const uint64_t) {
-            if (node_id < progression.first_id) return false;
-            const uint64_t delta = node_id - progression.first_id;
-            found = delta % progression.stride == 0 &&
-                delta / progression.stride < progression.count;
-            return found;
-        });
-    return found;
-}
-
-bool NodeStore::is_virtual_id_progression_impl(
-    const uint64_t first_id, const uint64_t count, const uint64_t stride,
-    VirtualIdQueryWork* const work) const {
-    if (first_id == 0 || count == 0 || stride == 0) return false;
-    const unsigned __int128 last = static_cast<unsigned __int128>(first_id) +
-        static_cast<unsigned __int128>(stride) * (count - 1);
-    if (last >= next_id_) return false;
-    const VirtualIdProgression query{first_id, count, stride};
-    unsigned __int128 covered = 0;
-    bool overcovered = false;
-    visit_virtual_id_candidates(first_id, static_cast<uint64_t>(last), work,
-        [&](const VirtualIdProgression& hole, const uint64_t) {
-            covered += virtual_progression_intersection_count(query, hole);
-            overcovered = covered > count;
-            return overcovered;
-        });
-    return !overcovered && covered == count;
-}
-
-bool NodeStore::is_allocated_nonvirtual_progression_impl(
-    const uint64_t first_id, const uint64_t count, const uint64_t stride,
-    VirtualIdQueryWork* const work) const {
-    if (first_id == 0 || count == 0 || stride == 0) return false;
-    const unsigned __int128 last = static_cast<unsigned __int128>(first_id) +
-        static_cast<unsigned __int128>(stride) * (count - 1);
-    if (last >= next_id_) return false;
-    const VirtualIdProgression query{first_id, count, stride};
-    bool intersects = false;
-    visit_virtual_id_candidates(first_id, static_cast<uint64_t>(last), work,
-        [&](const VirtualIdProgression& hole, const uint64_t) {
-            intersects = virtual_progressions_intersect(query, hole);
-            return intersects;
-        });
-    return !intersects;
-}
-
-uint64_t NodeStore::count_finished_or_erased_nonvirtual_progression(
-    const uint64_t first_id, const uint64_t count,
-    const uint64_t stride) const {
-    if (!is_allocated_nonvirtual_progression(first_id, count, stride)) {
-        throw std::invalid_argument(
-            "NodeStore finished-count requires an allocated nonvirtual AP");
-    }
-    uint64_t unfinished = 0;
-    for (const auto& entry : nodes_) {
-        const uint64_t node_id = entry.first;
-        if (node_id < first_id) continue;
-        const uint64_t delta = node_id - first_id;
-        if (delta % stride == 0 && delta / stride < count &&
-            !entry.second.finished) {
-            ++unfinished;
-        }
-    }
-    if (unfinished > count) {
-        throw std::logic_error(
-            "NodeStore retained unfinished count exceeds the AP cardinality");
-    }
-    return count - unfinished;
-}
-
 bool NodeStore::is_finished_or_erased(const uint64_t node_id) const {
-    if (node_id == 0 || node_id >= next_id_ || is_virtual_id(node_id)) return false;
+    if (node_id == 0 || node_id >= next_id_) return false;
     const auto found = nodes_.find(node_id);
     return found == nodes_.end() || found->second.finished;
 }
@@ -609,10 +85,6 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
     // stored per edge for the later fence upgrade (步骤 1-5 note forbids
     // building the general fence early). Dead-parent edges are tolerated:
     // a parent that already finished no longer blocks the child.
-    if (is_virtual_id(parent) || is_virtual_id(child)) {
-        throw std::invalid_argument(
-            "NodeStore::add_dependency cannot reference a virtual id");
-    }
     auto child_it = nodes_.find(child);
     if (child_it == nodes_.end()) {
         return;  // unknown child: edge cannot be recorded
@@ -657,8 +129,7 @@ const std::vector<uint64_t>& NodeStore::free_delta_since_snapshot() const {
     return free_delta_snapshot_cache_;
 }
 
-void NodeStore::record_free_id_insert(const uint64_t node_id,
-                                       const bool is_anchor) {
+void NodeStore::record_free_id_insert(const uint64_t node_id) {
     ++ready_set_stats_.free_insert_updates;
     ++ready_set_stats_.delta_set_insert_calls;
     // Advance the generation before the potentially allocating delta-set
@@ -666,15 +137,6 @@ void NodeStore::record_free_id_insert(const uint64_t node_id,
     // bookkeeping throws, a Workload snapshot must still be invalidated.
     if (free_id_version_ != std::numeric_limits<uint64_t>::max()) {
         ++free_id_version_;
-    }
-    // F (2026-10-11): route into the role partition. Both partitions are
-    // plain ordered sets, so the union stays exactly free_ids_ (the insert
-    // was already made by the caller) and any partition mutation still
-    // bumps the same free_id_version_ above.
-    if (is_anchor) {
-        free_anchor_ids_.insert(node_id);
-    } else {
-        free_ordinary_ids_.insert(node_id);
     }
     if (free_delta_ids_.insert(node_id).second) {
         ++ready_set_stats_.delta_insertions;
@@ -689,15 +151,17 @@ void NodeStore::record_free_id_erase(const uint64_t node_id) {
     if (free_id_version_ != std::numeric_limits<uint64_t>::max()) {
         ++free_id_version_;
     }
-    // F: idempotent dual-partition erase -- take/finish paths do not need
-    // the node's role (the record may even be gone), and set::erase on a
-    // missing key is a no-op.
-    free_ordinary_ids_.erase(node_id);
-    free_anchor_ids_.erase(node_id);
     if (free_delta_ids_.erase(node_id) != 0) {
         // The id was freed and re-taken before any snapshot consumed it.
         ++ready_set_stats_.delta_erasures;
         free_delta_snapshot_cache_valid_ = false;
+    } else {
+        // v11 Phase 4: the id was not a pending insert, so it may be a
+        // member of a caller-held snapshot vector -- record it for the
+        // splice. Erases of ids that no snapshot ever captured are
+        // harmless spurious entries (the splice set-difference simply
+        // never matches them).
+        free_erase_delta_ids_.insert(node_id);
     }
 }
 
@@ -711,29 +175,82 @@ void NodeStore::fill_free_node_snapshot(std::vector<uint64_t>& out) const {
         static_cast<uint64_t>(free_ids_.size());
     out.assign(free_ids_.begin(), free_ids_.end());
     free_delta_ids_.clear();
+    free_erase_delta_ids_.clear();
     free_delta_snapshot_cache_.clear();
     free_delta_snapshot_cache_valid_ = true;
+    free_delta_window_base_version_ = free_id_version_;
 }
 
-void NodeStore::fill_free_ordinary_id_snapshot(
-    std::vector<uint64_t>& out) const {
-    // F (2026-10-11): same caller-owned-snapshot contract as
-    // fill_free_node_snapshot, sourced from the ordinary partition only.
-    // This fill consumes the same since-snapshot delta (the delta answers
-    // "which ids became free after the pass's fixed member set was
-    // captured", regardless of which snapshot kind captured it), so the
-    // anchor gate can reject ids that entered the free set mid-pass.
-    ++ready_set_stats_.ordinary_snapshot_calls;
-    ready_set_stats_.ordinary_snapshot_ids_copied +=
-        static_cast<uint64_t>(free_ordinary_ids_.size());
-    out.assign(free_ordinary_ids_.begin(), free_ordinary_ids_.end());
+bool NodeStore::splice_free_node_snapshot(
+    std::vector<uint64_t>& inout) const {
+    // v11 Phase 4 (issue-pass increment, 方案 §6.1). Equivalence argument in
+    // NodeStore.hh at the declaration. Implementation notes:
+    //   - D_ins materializes ascending from the ordered delta set.
+    //   - The merge runs into a scratch buffer and swaps at the end, so
+    //     `inout` keeps its previous exact content if any allocation
+    //     throws (strong guarantee -- the caller's validity tags may keep
+    //     describing it across the exception).
+    //   - Both deltas are consumed and the window re-armed at the current
+    //     generation, exactly like a full fill.
+    std::vector<uint64_t> inserts(free_delta_ids_.begin(),
+                                  free_delta_ids_.end());
+    std::vector<uint64_t> erases(free_erase_delta_ids_.begin(),
+                                 free_erase_delta_ids_.end());
+
+    std::vector<uint64_t> merged;
+    merged.reserve(inout.size() + inserts.size());
+    size_t base_index = 0;
+    size_t erase_index = 0;
+    size_t insert_index = 0;
+    const uint64_t kSentinel = std::numeric_limits<uint64_t>::max();
+    while (base_index < inout.size() || insert_index < inserts.size()) {
+        if (base_index < inout.size() && erase_index < erases.size()) {
+            if (erases[erase_index] == inout[base_index]) {
+                // Erased-not-reinserted base member: drop it. (If it was
+                // reinserted later, the insert stream re-adds it at its
+                // live-sorted position.)
+                ++base_index;
+                ++erase_index;
+                continue;
+            }
+            if (erases[erase_index] < inout[base_index]) {
+                // Spurious erase entry (the id never entered this vector
+                // -- e.g. a no-op partition erase). It can never match any
+                // remaining base element either.
+                ++erase_index;
+                continue;
+            }
+        }
+        const uint64_t base_next =
+            base_index < inout.size() ? inout[base_index] : kSentinel;
+        const uint64_t insert_next =
+            insert_index < inserts.size() ? inserts[insert_index] : kSentinel;
+        if (base_next < insert_next) {
+            merged.push_back(base_next);
+            ++base_index;
+        } else if (insert_next < base_next) {
+            merged.push_back(insert_next);
+            ++insert_index;
+        } else {
+            // Erased-then-reinserted id: the insert stream (live
+            // membership) wins and the id is emitted exactly once.
+            merged.push_back(insert_next);
+            ++base_index;
+            ++insert_index;
+        }
+    }
+    ++ready_set_stats_.splice_calls;
+    ready_set_stats_.splice_delta_ids +=
+        static_cast<uint64_t>(inserts.size() + erases.size());
+    ready_set_stats_.splice_ids_written +=
+        static_cast<uint64_t>(merged.size());
+    inout.swap(merged);
     free_delta_ids_.clear();
+    free_erase_delta_ids_.clear();
     free_delta_snapshot_cache_.clear();
     free_delta_snapshot_cache_valid_ = true;
-}
-
-bool NodeStore::is_free_anchor_id(const uint64_t node_id) const {
-    return free_anchor_ids_.find(node_id) != free_anchor_ids_.end();
+    free_delta_window_base_version_ = free_id_version_;
+    return true;
 }
 
 void NodeStore::mark_issued(uint64_t node_id) {
@@ -773,10 +290,7 @@ void NodeStore::finish_node(uint64_t node_id) {
         }
         if (--child_it->second.unresolved_parents == 0) {
             free_ids_.insert(child);
-            record_free_id_insert(
-                child,
-                child_it->second.node.compute.exec_role ==
-                    ComputeExecRole::RemoteReadPipelineAnchor);
+            record_free_id_insert(child);
         }
     }
     // M2 node GC (2026-08-23): a finished node with no unfinished children
@@ -937,10 +451,8 @@ void NodeStore::collect_garbage() {
 
 bool NodeStore::erased(uint64_t node_id) const {
     // M2: absent == collected for committed store ids (see header). Used by
-    // the committer's store_ids_ prune pass only. A descriptor-reserved
-    // virtual id is neither a live entity nor a completed/GC-erased parent;
-    // callers must check is_virtual_id() and reject it as a graph reference.
-    return !is_virtual_id(node_id) && nodes_.find(node_id) == nodes_.end();
+    // the committer's store_ids_ prune pass only.
+    return nodes_.find(node_id) == nodes_.end();
 }
 
 RankInjectedSummary NodeStore::injected_unfinished_summary(int rank) const {
@@ -1138,21 +650,8 @@ bool NodeStoreGraphSource::fill_dep_free_id_snapshot(
     return true;
 }
 
-bool NodeStoreGraphSource::fill_dep_free_ordinary_id_snapshot(
-    std::vector<uint64_t>& out) {
-    // F (2026-10-11): the online issue pass's physical vector is the
-    // ordinary partition; anchors are enumerated through the executor's
-    // current-anchor set instead of this snapshot.
-    store_.fill_free_ordinary_id_snapshot(out);
-    return true;
-}
-
 bool NodeStoreGraphSource::is_dep_free_member(const uint64_t node_id) {
     return store_.is_free_id(node_id);
-}
-
-bool NodeStoreGraphSource::is_finished_or_erased(const uint64_t node_id) {
-    return store_.is_finished_or_erased(node_id);
 }
 
 void NodeStoreGraphSource::for_each_dep_free(

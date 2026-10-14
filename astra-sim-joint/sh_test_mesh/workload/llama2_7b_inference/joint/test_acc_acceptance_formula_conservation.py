@@ -14,7 +14,7 @@
   | 单跳/多跳                  | test_d04 far/near restore by hops                     | — |
   | 共享/独立池端口            | test_d04 SharedVsIndependentPoolPortTest              | — |
   | copy 层间迟到              | test_d02 FirstForwardRecurrenceTest 110ns late layer | — |
-  | remote 双缓冲多来源/尾块   | test_d09（双缓冲/尾块）+ test_d19 第三目标两来源       | — |
+  | remote 双缓冲多来源/尾块   | （已随远读退役删除，2026-10-14）                      | — |
   | 长上下文 / 短/长 decode    | test_d08 long/short context decode differs            | — |
   | 干净/脏驱逐                | test_d11 clean/dirty split + atom counts              | — |
   | source 引用保护            | test_d20 StageReferenceProtectionTest                 | — |
@@ -26,7 +26,7 @@ P→D 专项（§19.1 第二段）逐条核对映射：
 
   | 专项条目                        | 既有看护                          | 本文件 |
   |--------------------------------|-----------------------------------|--------|
-  | 1 原地 remote 不变成本地 hit     | test_d19 InPlaceRemoteNotLocalHit | — |
+  | 1 原地 remote 不变成本地 hit     | （已随远读退役删除）              | — |
   | 2 回 home 仅补 U                | test_d19 HomeCopyFillsOnlyU       | — |
   | 3 第三目标来源齐全               | test_d19 ThirdTargetTwoSource     | — |
   | 4 D recompute 不重复输出/采样    | test_d19 DRecomputeSilentRebuild  | — |
@@ -162,19 +162,16 @@ class TPUnevenAndHeadReplicationTest(unittest.TestCase):
 
         # rank1 缺口 6,656 B：活跃工作排空前无合法释放 → 深缺口等待。
         short = _model(loads((10 ** 9, 512))).estimate_D_remaining(
-            boundary=boundary, instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            boundary=boundary, instance_index=0, action=ACTION_STAY)
         self.assertGreater(short.breakdown.eviction_wait_ns, 0)
         # rank1 恰被覆盖（7,168 = 128×56）：零等待——缺口逐 rank 判定。
         covered = _model(loads((10 ** 9, KV_TOKEN_BYTES * 56))
                          ).estimate_D_remaining(
-            boundary=boundary, instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            boundary=boundary, instance_index=0, action=ACTION_STAY)
         self.assertEqual(covered.breakdown.eviction_wait_ns, 0)
         # 镜像（缺口在 rank0）同样真实——真值在向量，不在单侧。
         mirrored = _model(loads((512, 10 ** 9))).estimate_D_remaining(
-            boundary=boundary, instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            boundary=boundary, instance_index=0, action=ACTION_STAY)
         self.assertGreater(mirrored.breakdown.eviction_wait_ns, 0)
 
 
@@ -283,10 +280,10 @@ class ControlCostSmallGainMigrationTest(unittest.TestCase):
         model = _model(_loads())
         continuation = model.estimate_D_remaining(
             boundary=_complete_boundary(), instance_index=0,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         switch = model.estimate_D_remaining(
             boundary=_complete_boundary(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertEqual(continuation.breakdown.history_prep_ns, 0)
         self.assertEqual(
             switch.cost_ns - continuation.cost_ns,
@@ -298,8 +295,8 @@ class ControlCostSmallGainMigrationTest(unittest.TestCase):
         仍选继续——小收益迁移不再合算。
 
         C4 完整动作面：本例钉 copy 迁移腿的控制费用经济学，允许面掩
-        成 {stay,copy}（recompute/remote 的竞争属完整面的正常经济学，
-        非控制费用机制的观测对象）。"""
+        成 {stay,copy}（recompute 的竞争属完整面的正常经济学，非控
+        制费用机制的观测对象）。"""
         loads = _loads(active=(3_000, 1_000))
         model = _model(loads)
         model.allowed_actions = frozenset({"stay", "copy"})
@@ -310,10 +307,10 @@ class ControlCostSmallGainMigrationTest(unittest.TestCase):
         # 逐项自证：毛收益为正且小于切换-only 费用。
         switch = model.estimate_D_remaining(
             boundary=_complete_boundary(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         continuation = model.estimate_D_remaining(
             boundary=_complete_boundary(), instance_index=0,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         gross_gain = 3_000 - 1_000
         self.assertGreater(gross_gain, 0)
         self.assertGreater(
@@ -335,8 +332,7 @@ class ControlCostSmallGainMigrationTest(unittest.TestCase):
 def _selector(model):
     from joint.joint_scheduler import select_decode_target_and_action
     return select_decode_target_and_action(
-        mode="joint", cost_model=model, boundary=_complete_boundary(),
-        remote_enabled=True)
+        mode="joint", cost_model=model, boundary=_complete_boundary())
 
 
 # ---------------------------------------------- P→D 专项第 10 / 12 条 --

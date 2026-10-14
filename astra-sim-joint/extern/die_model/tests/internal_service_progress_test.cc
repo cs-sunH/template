@@ -1,10 +1,15 @@
 #include "DieModel.hh"
 
+#include <atomic>
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -682,7 +687,538 @@ void test_same_end_timer_batch_compacts_once_and_preserves_boundary() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// v9 preview-transaction coverage: production-like big-frontier fixtures,
+// attribution-counter calibration, the scale ladder and the allocation
+// failure sweep. The counter checks are engine-version-agnostic (SFINAE,
+// the hbm_tail_component_test caliber) so the same file runs against the
+// pre-v9 engine for BASE/WORK A/B.
+
+// Root PE wave 1 + B bulk PE stages (wave W, deps=root) + one MEM stage of
+// wave W chained wave-by-wave on bulk stage 0 (dep lag 0). Driving to the
+// all-scheduled state leaves a B*W-entry events frontier; every subsequent
+// preview walks exactly ONE timer boundary and stops at the next memory
+// issue -- the production tail shape (T/E~1, small per-call touch).
+std::shared_ptr<const DieModel::DiePlan> events_heavy_frontier_plan(
+    const std::uint64_t bulk_stages, const std::uint64_t waves) {
+  const auto hw = die_test::hw_default();
+  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  auto data = std::make_shared<DieModel::DiePlanData>();
+  data->spec = std::make_shared<const DieModel::DieOpSpec>(
+      die_test::spec_of(DieModel::OpKind::LocalRegion,
+                        DieModel::Phase::Prefill, 4, 4, 0, 0));
+  data->hardware = hw;
+
+  DieModel::DieStage root;
+  root.label = "frontier-root";
+  root.resource = DieModel::StageResource::PE;
+  root.wave_repeat = 1;
+  root.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
+  data->stages.push_back(root);
+
+  for (std::uint64_t b = 0; b < bulk_stages; ++b) {
+    DieModel::DieStage pe;
+    pe.label = "frontier-bulk-pe";
+    pe.resource = DieModel::StageResource::PE;
+    pe.wave_repeat = waves;
+    pe.deps.emplace_back(0, DieModel::DieStageDep::kAllDep);
+    pe.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
+    data->stages.push_back(pe);
+  }
+
+  DieModel::DieStage mem;
+  mem.label = "frontier-drain-mem";
+  mem.resource = DieModel::StageResource::MEM;
+  mem.wave_repeat = waves;
+  mem.mem.actual_bytes = 64.0;
+  mem.mem.service_units = 64.0;
+  mem.deps.emplace_back(1, 0);  // mem wave j follows bulk-stage-0 wave j
+  data->stages.push_back(mem);
+  return std::make_shared<const DieModel::DiePlan>(std::move(data));
+}
+
+// Root PE wave 1 + a MEM gate (deps=root, smallest ready key) + B bulk PE
+// stages (deps=root). After the root completes, the gate issues immediately
+// and the strict pop discipline leaves the WHOLE B*W heap untouched: the
+// preview-hottest entry shape (huge heap, zero-touch walk).
+std::shared_ptr<const DieModel::DiePlan> heap_heavy_frontier_plan(
+    const std::uint64_t bulk_stages, const std::uint64_t waves) {
+  const auto hw = die_test::hw_default();
+  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  auto data = std::make_shared<DieModel::DiePlanData>();
+  data->spec = std::make_shared<const DieModel::DieOpSpec>(
+      die_test::spec_of(DieModel::OpKind::LocalRegion,
+                        DieModel::Phase::Prefill, 4, 4, 0, 0));
+  data->hardware = hw;
+
+  DieModel::DieStage root;
+  root.label = "heap-frontier-root";
+  root.resource = DieModel::StageResource::PE;
+  root.wave_repeat = 1;
+  root.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
+  data->stages.push_back(root);
+
+  DieModel::DieStage gate;
+  gate.label = "heap-frontier-gate";
+  gate.resource = DieModel::StageResource::MEM;
+  gate.mem.actual_bytes = 64.0;
+  gate.mem.service_units = 64.0;
+  gate.deps.emplace_back(0, DieModel::DieStageDep::kAllDep);
+  data->stages.push_back(gate);
+
+  for (std::uint64_t b = 0; b < bulk_stages; ++b) {
+    DieModel::DieStage pe;
+    pe.label = "heap-frontier-bulk-pe";
+    pe.resource = DieModel::StageResource::PE;
+    pe.wave_repeat = waves;
+    pe.deps.emplace_back(0, DieModel::DieStageDep::kAllDep);
+    pe.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
+    data->stages.push_back(pe);
+  }
+  return std::make_shared<const DieModel::DiePlan>(std::move(data));
+}
+
+// Drives an events-heavy execution to the "all bulk waves scheduled, first
+// boundary pending" state (the preview entry point of every ladder cycle).
+void drive_to_events_heavy_state(DieModel::Execution& execution) {
+  const auto first = execution.next_action();
+  expect(first.kind == DieModel::ExecutionAction::Kind::Timer,
+         "events-heavy fixture begins with the root Timer");
+  execution.advance_time(first.ns);
+  const auto second = execution.next_action();
+  expect(second.kind == DieModel::ExecutionAction::Kind::Timer,
+         "events-heavy fixture reaches the first bulk boundary Timer");
+}
+
+
+// Version-agnostic counter fetch: fills the local mirror only on engines
+// exposing preview_counters(); the pre-v9 engine reports valid=false (its
+// copy-counting F getter stays available directly for prints).
+struct V9Counters {
+  std::uint64_t calls = 0, walk_timers = 0, undo_entries = 0;
+  std::uint64_t frontier_entries = 0, j_entries = 0;
+  std::uint64_t s_heap_total = 0, s_events_total = 0;
+  std::uint64_t s_future_starts_total = 0, s_active_ids_total = 0;
+  std::uint64_t s_heap_max = 0, s_events_max = 0;
+  std::uint64_t exit_memory = 0, exit_done = 0, exit_exception = 0;
+  bool valid = false;
+};
+template <typename E>
+auto v9_fetch_counters(const E& e, int)
+    -> decltype(e.preview_counters(), V9Counters{}) {
+  const auto c = e.preview_counters();
+  V9Counters v;
+  v.calls = c.calls; v.walk_timers = c.walk_timers;
+  v.undo_entries = c.undo_entries; v.frontier_entries = c.frontier_entries;
+  v.j_entries = c.j_entries; v.s_heap_total = c.s_heap_total;
+  v.s_events_total = c.s_events_total;
+  v.s_future_starts_total = c.s_future_starts_total;
+  v.s_active_ids_total = c.s_active_ids_total;
+  v.s_heap_max = c.s_heap_max; v.s_events_max = c.s_events_max;
+  v.exit_memory = c.exit_memory; v.exit_done = c.exit_done;
+  v.exit_exception = c.exit_exception;
+  v.valid = true;
+  return v;
+}
+template <typename E>
+V9Counters v9_fetch_counters(const E&, long) { return V9Counters{}; }
+
+// v9 counter assertions, compiled only against engines exposing
+// preview_counters() (SFINAE; the pre-v9 engine takes the long overload).
+template <typename E>
+auto v9_counter_checks(const E& execution, const int cycles,
+                       const std::uint64_t analytic_s_events_entry,
+                       const int)
+    -> decltype(execution.preview_counters(), void()) {
+  const auto c = execution.preview_counters();
+  expect(c.calls == static_cast<std::uint64_t>(cycles),
+         "v9 counters: E equals the actual preview call count");
+  expect(c.frontier_entries == 0 && c.copy_bytes == 0,
+         "v9 counters: the transactional walk copies no frontier entries");
+  expect(c.active_scan_entries == 0,
+         "v9 counters: the transactional walk scans no active ids");
+  expect(c.exit_memory == static_cast<std::uint64_t>(cycles) &&
+             c.exit_done == 0 && c.exit_exception == 0,
+         "v9 counters: every ladder cycle exits at the memory boundary");
+  // The mechanism bound: J must track the touched heap paths (a small
+  // multiple of the per-cycle touch), NOT the B*W entry frontier.
+  expect(c.j_entries <= 64 * static_cast<std::uint64_t>(cycles) + 16,
+         "v9 counters: J is bounded by the touched paths, not S");
+  expect(c.s_events_total >= analytic_s_events_entry,
+         "v9 counters: the events S total covers every sampled entry size");
+  expect(c.s_events_max >= analytic_s_events_entry / 2,
+         "v9 counters: the events S max reflects the big frontier");
+}
+template <typename E>
+void v9_counter_checks(const E&, int, std::uint64_t, long) {}
+
+void test_preview_counter_calibration() {
+  using namespace DieModel;
+  Execution execution(repeated_pe_then_mem_plan());
+  const auto action = execution.next_action();
+  expect(action.kind == ExecutionAction::Kind::Timer,
+         "calibration fixture begins with a Timer");
+  const TimerStretchPreview preview =
+      execution.preview_consecutive_internal_timers();
+  expect(preview.timer_action_count == 2 && preview.reaches_memory_request,
+         "calibration preview merges the two PE timers up to memory");
+  // Hand-computed exact attribution for this fixture: E=1, T=2, U = 2
+  // (first PE completion) + 3 (second completion + its unresolved edge) + 1
+  // (the memory issue's StartNs) = 6; S sampled at entry: heap 0, events 2,
+  // future_starts 1, active_ids 1. (Counter mirror only exists on the v9
+  // engine; the pre-v9 BASE keeps its copy-counting caliber.)
+  const auto counters = v9_fetch_counters(execution, 0);
+  if (counters.valid) {
+    expect(counters.calls == 1, "calibration E");
+    expect(counters.walk_timers == 2, "calibration T");
+    expect(counters.undo_entries == 6, "calibration U (unified exit)");
+    expect(counters.frontier_entries == 0, "calibration F structurally zero");
+    expect(counters.s_heap_total == 0 && counters.s_events_total == 2 &&
+               counters.s_future_starts_total == 1 &&
+               counters.s_active_ids_total == 1,
+           "calibration per-container S totals");
+    expect(counters.exit_memory == 1 && counters.exit_done == 0 &&
+               counters.exit_exception == 0,
+           "calibration exit category");
+  }
+}
+
+void test_big_frontier_preview_semantics() {
+  using namespace DieModel;
+  constexpr std::uint64_t kBulk = 2;
+  constexpr std::uint64_t kWaves = 512;
+  // Heap-heavy entry: the gate blocks the drain with the whole ready heap.
+  {
+    Execution blocked(heap_heavy_frontier_plan(kBulk, kWaves));
+    const auto first = blocked.next_action();
+    blocked.advance_time(first.ns);
+    const auto gate = blocked.next_action();
+    expect(gate.kind == ExecutionAction::Kind::MemoryRequest &&
+               gate.stage_id == 1,
+           "heap-heavy fixture blocks on the gate memory issue");
+    const auto before = blocked.export_progress();
+    const TimerStretchPreview preview =
+        blocked.preview_consecutive_internal_timers();
+    expect(preview.timer_action_count == 0 &&
+               preview.reaches_memory_request &&
+               preview.external_delay_ns == 0,
+           "heap-heavy preview exits immediately at the outstanding memory");
+    expect(same_progress(before, blocked.export_progress()),
+           "heap-heavy preview restores the complete authoritative state");
+    blocked.complete_memory(gate.stage_id);
+    const auto after_gate = blocked.next_action();
+    expect(after_gate.kind == ExecutionAction::Kind::Timer,
+           "heap-heavy execution continues legally after the preview");
+  }
+  // Events-heavy walk: every cycle previews exactly one boundary ahead,
+  // advances for real, completes the memory and repeats; a twin execution
+  // driven WITHOUT previews must agree at every step.
+  {
+    Execution previewed(events_heavy_frontier_plan(kBulk, kWaves));
+    Execution reference(events_heavy_frontier_plan(kBulk, kWaves));
+    drive_to_events_heavy_state(previewed);
+    drive_to_events_heavy_state(reference);
+    expect(same_progress(previewed.export_progress(),
+                         reference.export_progress()),
+           "events-heavy twins agree at the preview entry state");
+    for (std::uint64_t cycle = 0; cycle < 6; ++cycle) {
+      const auto before = previewed.export_progress();
+      const TimerStretchPreview preview =
+          previewed.preview_consecutive_internal_timers();
+      expect(preview.timer_action_count == 1 &&
+                 preview.reaches_memory_request && !preview.reaches_done,
+             "events-heavy preview walks exactly one boundary to memory");
+      expect(same_progress(before, previewed.export_progress()),
+             "events-heavy preview restores the full state every cycle");
+      previewed.advance_time(preview.external_delay_ns);
+      reference.advance_time(preview.external_delay_ns);
+      const auto memory = previewed.next_action();
+      const auto reference_memory = reference.next_action();
+      expect(memory.kind == ExecutionAction::Kind::MemoryRequest &&
+                 memory.stage_id == reference_memory.stage_id &&
+                 memory.ns == reference_memory.ns,
+             "events-heavy previewed and plain drives issue the same memory");
+      previewed.complete_memory(memory.stage_id);
+      reference.complete_memory(reference_memory.stage_id);
+      expect(same_progress(previewed.export_progress(),
+                           reference.export_progress()),
+             "events-heavy twins stay identical across the whole cycle");
+    }
+  }
+}
+
+void test_preview_scale_ladder() {
+  using namespace DieModel;
+  struct Rung {
+    std::uint64_t bulk;
+    std::uint64_t waves;
+  };
+  const Rung rungs[] = {{2, 4096}, {2, 16384}, {2, 65536}};
+  // events-heavy: S grows, per-cycle touch stays one boundary + one issue.
+  for (const Rung& rung : rungs) {
+    const std::uint64_t frontier = rung.bulk * rung.waves;
+    Execution execution(events_heavy_frontier_plan(rung.bulk, rung.waves));
+    drive_to_events_heavy_state(execution);
+    constexpr int kCycles = 8;
+    std::vector<std::uint64_t> preview_ns(kCycles, 0);
+    for (int k = 0; k < kCycles; ++k) {
+      const auto t0 = std::chrono::steady_clock::now();
+      const TimerStretchPreview preview =
+          execution.preview_consecutive_internal_timers();
+      const auto t1 = std::chrono::steady_clock::now();
+      preview_ns[k] = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0)
+              .count());
+      expect(preview.timer_action_count == 1 &&
+                 preview.reaches_memory_request,
+             "ladder cycle shape stays one boundary to memory");
+      execution.advance_time(preview.external_delay_ns);
+      const auto memory = execution.next_action();
+      expect(memory.kind == ExecutionAction::Kind::MemoryRequest,
+             "ladder cycle reaches the memory boundary for real");
+      execution.complete_memory(memory.stage_id);
+    }
+    std::sort(preview_ns.begin(), preview_ns.end());
+    const std::uint64_t median = preview_ns[kCycles / 2];
+    const auto counters = v9_fetch_counters(execution, 0);
+    std::printf(
+        "[V9LADDER] s_events=%llu cycles=%d median_preview_ns=%llu "
+        "t_per_cycle=1 j_entries=%llu f_entries=%llu\n",
+        static_cast<unsigned long long>(frontier), kCycles,
+        static_cast<unsigned long long>(median),
+        static_cast<unsigned long long>(counters.valid ? counters.j_entries : 0),
+        static_cast<unsigned long long>(execution.preview_frontier_entries()));
+    v9_counter_checks(execution, kCycles, frontier, 0);
+  }
+  // heap-heavy: S_heap grows, the walk touches nothing at all.
+  for (const Rung& rung : rungs) {
+    const std::uint64_t frontier = rung.bulk * rung.waves;
+    Execution execution(heap_heavy_frontier_plan(rung.bulk, rung.waves));
+    const auto first = execution.next_action();
+    execution.advance_time(first.ns);
+    const auto gate = execution.next_action();
+    expect(gate.kind == ExecutionAction::Kind::MemoryRequest,
+           "heap-heavy ladder rung blocks on the gate");
+    const auto t0 = std::chrono::steady_clock::now();
+    const TimerStretchPreview preview =
+        execution.preview_consecutive_internal_timers();
+    const auto t1 = std::chrono::steady_clock::now();
+    const std::uint64_t ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0)
+            .count());
+    expect(preview.timer_action_count == 0 &&
+               preview.reaches_memory_request,
+           "heap-heavy ladder preview is a zero-walk memory exit");
+    const auto counters = v9_fetch_counters(execution, 0);
+    std::printf(
+        "[V9LADDER_HEAP] s_heap=%llu preview_ns=%llu j_entries=%llu "
+        "f_entries=%llu\n",
+        static_cast<unsigned long long>(frontier),
+        static_cast<unsigned long long>(ns),
+        static_cast<unsigned long long>(counters.valid ? counters.j_entries : 0),
+        static_cast<unsigned long long>(execution.preview_frontier_entries()));
+    execution.complete_memory(gate.stage_id);
+    expect(execution.next_action().kind == ExecutionAction::Kind::Timer,
+           "heap-heavy ladder continues legally after the preview");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Allocation-failure sweep: the test binary's global operator new arms a
+// countdown; every failing budget index must leave the execution exactly at
+// its pristine state and legally continuable (v9 plan §6: the journal
+// reserve / heap growth / dense-write + event-push failure points).
+
+namespace alloc_fault {
+std::atomic<long> g_budget{-1};  // -1: disarmed
+bool g_armed = false;
+}  // namespace alloc_fault
+
+void test_preview_allocation_failure_rollback() {
+  using namespace DieModel;
+  const auto plan = events_heavy_frontier_plan(4, 16);
+  std::size_t threw_count = 0;
+  std::size_t succeeded_count = 0;
+  for (long budget = 0; budget <= 48; ++budget) {
+    Execution execution(plan);
+    drive_to_events_heavy_state(execution);
+    const auto pristine = execution.export_progress();
+    alloc_fault::g_budget = budget;
+    alloc_fault::g_armed = true;
+    bool threw = false;
+    try {
+      static_cast<void>(execution.preview_consecutive_internal_timers());
+    } catch (const std::bad_alloc&) {
+      threw = true;
+    }
+    alloc_fault::g_armed = false;
+    alloc_fault::g_budget = -1;
+    threw ? ++threw_count : ++succeeded_count;
+    expect(same_progress(pristine, execution.export_progress()),
+           "allocation-failure sweep: state is exactly restored");
+    // Legal continuation after any failure point: a twin execution driven
+    // without any preview must agree step by step afterwards.
+    Execution reference(plan);
+    drive_to_events_heavy_state(reference);
+    execution.advance_time(1);
+    reference.advance_time(1);
+    expect(same_progress(execution.export_progress(),
+                         reference.export_progress()),
+           "allocation-failure sweep: the engine continues identically");
+  }
+  expect(threw_count > 0 && succeeded_count > 0,
+         "allocation-failure sweep covers both failure and success paths");
+  std::printf("[V9ALLOCSWEEP] budgets=49 threw=%zu succeeded=%zu\n",
+              threw_count, succeeded_count);
+}
+
+// ---------------------------------------------------------------------------
+// v9 real-spec complete-loop component: one REAL production-shaped spec
+// (qk prefill with the first-1s trace's prefill volume) recompiled from the
+// canonical spec+hardware through the same compile() the production adapter
+// uses, then driven to Done via the legal action protocol with a preview
+// before every Timer advance (the DieExecution drive-loop pattern). The
+// [V9REALLOOP] lines are the A/B caliber: BASE pays the frontier copy per
+// preview, the v9 transactional engine pays only the touched paths.
+nlohmann::json v9_real_spec_json() {
+  nlohmann::json span;
+  span["request_id"] = "r1";
+  span["q_tokens"] = 61550u;
+  span["kv_tokens"] = 61550u;
+  span["q_start_pos"] = 0u;
+  span["kv_start_pos"] = 0u;
+  nlohmann::json spec;
+  spec["schema_version"] = 1u;
+  spec["op_kind"] = "qk";
+  spec["phase"] = "prefill";
+  spec["dtype"] = "bf16";
+  spec["model_dims"] = {{"hidden", 4096u},
+                        {"ffn", 14336u},
+                        {"vocab", 152064u},
+                        {"mlp_variant", "swiglu"},
+                        {"norm_type", "rmsnorm"},
+                        {"position_encoding", "rope"},
+                        {"num_q_heads", 32u},
+                        {"num_kv_heads", 8u},
+                        {"head_dim", 128u}};
+  spec["tp_slice"] = {{"tensor_parallel", 1u},
+                      {"tensor_parallel_rank", 0u},
+                      {"q_heads_local", 32u},
+                      {"kv_heads_local", 8u},
+                      {"ffn_local", 14336u},
+                      {"vocab_local", 152064u}};
+  spec["spans"] = nlohmann::json::array({span});
+  spec["layer_count"] = 32u;
+  spec["weight_passes"] = 1u;
+  spec["kv_access"] = {{"identity", "local"}};
+  spec["fusion_policy"] = "auto";
+  return spec;
+}
+
+// Engine-version-agnostic accounting line: the pre-v9 engine reports its
+// copied-entry total through preview_frontier_entries() (both engines
+// expose that getter); only the v9 engine exposes the full counter block.
+template <typename E>
+auto v9_realloop_counter_line(const E& execution, const std::uint64_t e,
+                              int)
+    -> decltype(execution.preview_counters(), std::string()) {
+  const auto c = execution.preview_counters();
+  std::ostringstream out;
+  out << "avgF=" << (e == 0 ? 0 : (c.s_heap_total + c.s_events_total +
+                                   c.s_future_starts_total +
+                                   c.s_active_ids_total) / e)
+      << " j_entries=" << c.j_entries
+      << " f_entries=" << c.frontier_entries;
+  return out.str();
+}
+template <typename E>
+std::string v9_realloop_counter_line(const E& execution, const std::uint64_t,
+                                     long) {
+  std::ostringstream out;
+  out << "avgF=" << execution.preview_frontier_entries() << "(copies) "
+      << "j_entries=n/a f_entries=" << execution.preview_frontier_entries();
+  return out.str();
+}
+
+void test_real_spec_complete_loop_timing() {
+  using namespace DieModel;
+  const auto t_compile0 = std::chrono::steady_clock::now();
+  const auto spec = parse_die_op_spec(v9_real_spec_json());
+  const auto plan = compile(*spec, die_test::hw_default());
+  const auto t_compile1 = std::chrono::steady_clock::now();
+  std::uint64_t instances = 0;
+  for (const auto& s : plan->stages()) instances += s.wave_repeat;
+
+  const auto t_drive0 = std::chrono::steady_clock::now();
+  Execution machine(plan);
+  std::uint64_t previews = 0;
+  std::uint64_t preview_ns_total = 0;
+  for (long guard = 0; guard < 4000000; ++guard) {
+    const auto a = machine.next_action();
+    if (a.kind == ExecutionAction::Kind::Done) break;
+    if (a.kind == ExecutionAction::Kind::Timer) {
+      const auto p0 = std::chrono::steady_clock::now();
+      const TimerStretchPreview preview =
+          machine.preview_consecutive_internal_timers();
+      const auto p1 = std::chrono::steady_clock::now();
+      preview_ns_total += static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(p1 - p0)
+              .count());
+      expect(preview.reaches_memory_request || preview.reaches_done,
+             "real-spec loop preview always stops at a real boundary");
+      ++previews;
+      machine.advance_time(a.ns);
+    } else {
+      machine.complete_memory(a.stage_id);
+    }
+  }
+  const auto t_drive1 = std::chrono::steady_clock::now();
+  expect(machine.finished(), "real-spec loop drives the real plan to Done");
+  expect(previews == machine.preview_calls(),
+         "real-spec loop preview count matches the engine counter");
+  const std::uint64_t compile_ms =
+      static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(t_compile1 -
+                                                                t_compile0)
+              .count());
+  const std::uint64_t drive_ns = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(t_drive1 - t_drive0)
+          .count());
+  std::printf(
+      "[V9REALLOOP] instances=%llu compile_ms=%llu drive_ns=%llu "
+      "previews=%llu preview_ns=%llu avg_preview_ns=%.1f %s\n",
+      static_cast<unsigned long long>(instances),
+      static_cast<unsigned long long>(compile_ms),
+      static_cast<unsigned long long>(drive_ns),
+      static_cast<unsigned long long>(previews),
+      static_cast<unsigned long long>(preview_ns_total),
+      previews == 0 ? 0.0 : static_cast<double>(preview_ns_total) /
+                                 static_cast<double>(previews),
+      v9_realloop_counter_line(machine, previews, 0).c_str());
+}
+
 }  // namespace
+
+// Test-facility allocation countdown (see test_preview_allocation_failure_
+// rollback): replaces this binary's operator new so real bad_alloc fires at
+// the transaction's actual failure points. Never armed outside the sweep.
+void* operator new(std::size_t n) {
+  if (alloc_fault::g_armed) {
+    if (alloc_fault::g_budget.fetch_sub(1, std::memory_order_relaxed) <= 0) {
+      throw std::bad_alloc();
+    }
+  }
+  void* p = std::malloc(n == 0 ? 1 : n);
+  if (p == nullptr) {
+    throw std::bad_alloc();
+  }
+  return p;
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void* operator new[](std::size_t n) { return operator new(n); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 int main() {
   test_partial_progress_and_stale_tokens();
@@ -693,6 +1229,11 @@ int main() {
   test_bounded_window_query_and_sequential_service_cursor();
   test_window_query_stops_at_mixed_future_action();
   test_same_end_timer_batch_compacts_once_and_preserves_boundary();
+  test_preview_counter_calibration();
+  test_big_frontier_preview_semantics();
+  test_preview_scale_ladder();
+  test_preview_allocation_failure_rollback();
+  test_real_spec_complete_loop_timing();
   if (failures != 0) {
     std::cerr << "[internal_service_progress_test] " << failures
               << " failure(s)\n";

@@ -183,7 +183,7 @@ class QuotaRejectedKeepsCostTest(unittest.TestCase):
 
         from sh30_online_scheduler import Sh30OnlineScheduler
         candidate = _Cand(
-            action="remote-read", applicable=True, cost_ns=1234,
+            action="copy", applicable=True, cost_ns=1234,
             breakdown="b", instance_index=1)
         verdict = SimpleNamespace(
             admitted=False, inapplicable_reason="quota_link: remaining=0")
@@ -291,12 +291,15 @@ class ZeroByteShardNoHopLatencyTest(unittest.TestCase):
         # + 10 hop + ⌈1/10⌉=1 stream（D17 腿服务向上取整）⇒ 11；
         # rank1 零字节十跳修前 10×10=100 抬高 wall、修后免 hop 且零字
         # 节腿严格为 0 ⇒ wall=11（修前本测试得 100）。
+        # （2026-10-14 远读退役：kind 取值域缩 ("copy","merge")——原
+        # "read" 腿计价分支已删，本构造换 "copy" 同形承载零字节 shard
+        # 免 hop 语义。）
         wall = _transfer_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=(((0, 6),),
                            ((0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),)),
             bytes_by_rank=(1, 0),
-            include_self=True, kind="read")
+            include_self=True, kind="copy")
         self.assertEqual(wall, 11)
 
 

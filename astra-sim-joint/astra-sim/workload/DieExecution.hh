@@ -79,6 +79,12 @@ class DieExecution final : public Callable {
     /// the LocalHbmBandwidthModel DIE_COMPUTE sink).
     void call(EventType type, CallData* data) override;
 
+    // Diagnostic-only dispatch label (v7 event attribution); see Callable.
+    [[nodiscard]] const char* profile_dispatch_label() const noexcept override {
+        return "die_timer_memory";
+    }
+
+
     bool finished() const { return finished_; }
     uint64_t node_id() const { return node_id_; }
     /// Internal machine clock (ns) accumulated so far.

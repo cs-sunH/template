@@ -10,15 +10,16 @@
 * E 规格：k_hide 解析例（L=32/c=1ms/q=0 → r=0.5/2/4ms ⇒ 1/17/25）、
   minimal_layer_groups 最少完整层组、adaptive 目标外→目标内两扫描、
   未来信息隔离（估计器只随真实观测更新）；
-* J 选择：joint 全候选 argmin / load-first 与 affinity-first 顺序参照、
-  remote off 仅移除 remote-read 候选；M2 动作掩码
-  JOINT_ALLOWED_ACTIONS（2026-09-26 消融矩阵前置）= 候选集上限不是
-  强制：解析链、四臂行为、与 remote_enabled 交集、零适用 fail-closed；
+* J 选择：joint 全候选 argmin / load-first 与 affinity-first 顺序参照；
+  M2 动作掩码 JOINT_ALLOWED_ACTIONS（2026-09-26 消融矩阵前置）=
+  候选集上限不是强制：解析链、臂行为、零适用 fail-closed；
 * home/merge：copy 异地执行不改 home、merge_back 增量恰好归并一次、
-  工作副本释放无双份驻留、recompute 增量归并、remote-read 工作副本
-  仅承载新增量；
+  工作副本释放无双份驻留、recompute 增量归并；
 * 八组合：同一实现内以配置切换出全部八组合（category_mode ×
   scheduler_mode × layer_policy 与 §7.1 表一致）。
+
+2026-10-14 远读退役同步：remote 开关链/掩码×remote_enabled 交叠/
+remote-read 工作副本用例删除；候选面断言 4N→3N。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_joint_mechanisms.py
@@ -103,10 +104,10 @@ class JointConfigParseTest(unittest.TestCase):
         config = parse_joint_config({})
         self.assertEqual(
             (config.category_mode, config.scheduler_mode,
-             config.layer_policy, config.remote_actions),
-            ("typed", "joint", "adaptive", "on"))
+             config.layer_policy),
+            ("typed", "joint", "adaptive"))
         self.assertTrue(config.t_enabled and config.j_enabled
-                        and config.e_enabled and config.remote_enabled)
+                        and config.e_enabled)
 
     def test_combo_preset_parses(self):
         for combo in COMBO_NAMES:
@@ -122,13 +123,11 @@ class JointConfigParseTest(unittest.TestCase):
             "JOINT_CATEGORY_MODE": "lru",
             "JOINT_SCHEDULER_MODE": "affinity-first",
             "JOINT_LAYER_POLICY": "legacy_half",
-            "JOINT_REMOTE_ACTIONS": "off",
         })
         self.assertEqual(config.combo, None)
         self.assertFalse(config.t_enabled)
         self.assertFalse(config.j_enabled)
         self.assertFalse(config.e_enabled)
-        self.assertFalse(config.remote_enabled)
 
     def test_invalid_values_fail_closed(self):
         for env in (
@@ -136,12 +135,8 @@ class JointConfigParseTest(unittest.TestCase):
             {"JOINT_CATEGORY_MODE": "TYPED"},
             {"JOINT_SCHEDULER_MODE": "load_first"},
             {"JOINT_LAYER_POLICY": "half"},
-            {"JOINT_REMOTE_ACTIONS": "1"},
             {"JOINT_CATEGORY_MODE": " typed"},
             {"JOINT_SCHEDULER_MODE": ""},
-            {"JOINT_REMOTE_READ_PARTIAL": "maybe"},
-            {"JOINT_REMOTE_READ_PARTIAL": "ON"},
-            {"JOINT_REMOTE_READ_PARTIAL": " on"},
             # M2 动作掩码：未知动作名 / 大小写 / 空白 / 悬挂逗号 / 空值
             # 一律 fail-closed（数值合同同 SH30_ABLATION 风格）。
             {"JOINT_ALLOWED_ACTIONS": "recompute,nowrap"},
@@ -149,29 +144,28 @@ class JointConfigParseTest(unittest.TestCase):
             {"JOINT_ALLOWED_ACTIONS": " stay"},
             {"JOINT_ALLOWED_ACTIONS": "stay,"},
             {"JOINT_ALLOWED_ACTIONS": ""},
+            {"JOINT_ALLOWED_ACTIONS": "remote-read,recompute"},
         ):
             with self.assertRaises(JointConfigError, msg=repr(env)):
                 parse_joint_config(env)
 
-    def test_remote_read_partial_switch_chain(self):
-        """需求①开关全链路（kimi 收尾批 2026-09-17）：env→parse→属性→
-        manifest→来源登记。"""
-        default = parse_joint_config({})
-        self.assertEqual(default.remote_read_partial, "on")
-        self.assertTrue(default.remote_read_partial_enabled)
-        self.assertNotIn(
-            "JOINT_REMOTE_READ_PARTIAL", default.manifest_dict()["source_env"])
-        off = parse_joint_config({"JOINT_REMOTE_READ_PARTIAL": "off"})
-        self.assertEqual(off.remote_read_partial, "off")
-        self.assertFalse(off.remote_read_partial_enabled)
-        manifest = off.manifest_dict()
-        self.assertEqual(manifest["remote_read_partial"], "off")
-        self.assertEqual(
-            manifest["source_env"]["JOINT_REMOTE_READ_PARTIAL"], "off")
+    def test_retired_remote_env_keys_fail_closed(self):
+        """远读退役键（D2）：任何显式值（含旧合法值）一律报错退出。"""
+        for env in (
+            {"JOINT_REMOTE_ACTIONS": "on"},
+            {"JOINT_REMOTE_ACTIONS": "off"},
+            {"JOINT_REMOTE_ACTIONS": "1"},
+            {"JOINT_REMOTE_READ_TILE_BYTES": "auto"},
+            {"JOINT_REMOTE_READ_PARTIAL": "maybe"},
+            {"JOINT_REMOTE_READ_PARTIAL": "ON"},
+            {"JOINT_REMOTE_READ_PARTIAL": " on"},
+        ):
+            with self.assertRaises(JointConfigError, msg=repr(env)):
+                parse_joint_config(env)
 
     def test_allowed_actions_switch_chain(self):
-        """M2 动作掩码全链路（仿 remote_read_partial 开关链）：env→
-        parse→属性→manifest→来源登记→派生放行集。"""
+        """M2 动作掩码全链路：env→parse→属性→manifest→来源登记→
+        派生放行集。"""
         default = parse_joint_config({})
         self.assertEqual(default.allowed_actions, "all")
         self.assertEqual(default.allowed_action_set, frozenset(ALL_ACTIONS))
@@ -192,14 +186,13 @@ class JointConfigParseTest(unittest.TestCase):
         with self.assertRaises(JointConfigError):
             JointMechanismConfig(
                 category_mode="typed", scheduler_mode="joint",
-                layer_policy="adaptive", remote_actions="on",
+                layer_policy="adaptive",
                 allowed_actions="recompute,bogus")
 
     def test_manifest_carries_merge_semantics_v2(self):
         """合并语义版本机读键（§4.5 字面；裁定④：恒单值、非开关——旧
         机制已物理删除，无候选档位）。"""
-        for env in ({}, {"JOINT_REMOTE_READ_PARTIAL": "off"},
-                    {"JOINT_ABLATION_COMBO": "none"}):
+        for env in ({}, {"JOINT_ABLATION_COMBO": "none"}):
             manifest = parse_joint_config(env).manifest_dict()
             self.assertEqual(manifest["merge_semantics"], "v2")
 
@@ -583,7 +576,7 @@ def _route(source, target):
     return ((source, target), 1)
 
 
-def _cost_model(loads, *, remote_enabled_partner=False, allowed_actions=None):
+def _cost_model(loads, *, allowed_actions=None):
     rates = JointHardwareRates.from_gbps(
         noc_link_gbps=10.0, pool_port_gbps=5.0, local_hbm_gbps=100.0,
         d2d_latency_ns=10, pool_latency_ns=100)
@@ -620,7 +613,7 @@ def _request(input_tokens=50, decode_estimate=10):
 
 
 class JointSelectionTest(unittest.TestCase):
-    """§7.1：joint / load-first / affinity-first 三模式与 remote 开关。"""
+    """§7.1：joint / load-first / affinity-first 三模式。"""
 
     def test_joint_picks_global_argmin_over_all_instances(self):
         # 实例 1 空闲且历史驻留（stay 适用、零历史搬运）→ 全局最优。
@@ -628,18 +621,18 @@ class JointSelectionTest(unittest.TestCase):
         session = _session(home=0, resident=1)
         record = select_instance_and_action(
             mode="joint", cost_model=_cost_model(loads), session=session,
-            request=_request(), remote_enabled=True)
+            request=_request())
         self.assertEqual(record.chosen.instance_index, 1)
         self.assertEqual(record.chosen.action, "stay")
-        # 全候选枚举：每实例 4 动作。
-        self.assertEqual(len(record.candidates), 8)
+        # 全候选枚举：每实例 3 动作。
+        self.assertEqual(len(record.candidates), 6)
 
     def test_load_first_picks_min_load_instance_then_action(self):
         loads = {0: _load(0, 100), 1: _load(1, 5000)}
         session = _session(home=0, resident=1)
         record = select_instance_and_action(
             mode="load-first", cost_model=_cost_model(loads),
-            session=session, request=_request(), remote_enabled=True)
+            session=session, request=_request())
         # 负载序先定实例 0（尽管历史驻留 1），再在该位置选动作。
         self.assertEqual(record.chosen.instance_index, 0)
         self.assertNotEqual(record.chosen.action, "stay")
@@ -650,7 +643,7 @@ class JointSelectionTest(unittest.TestCase):
         session = _session(home=1, resident=1)
         record = select_instance_and_action(
             mode="affinity-first", cost_model=_cost_model(loads),
-            session=session, request=_request(), remote_enabled=True)
+            session=session, request=_request())
         self.assertEqual(record.chosen.instance_index, 1)
         # 无 home（新会话）回退 load-first。
         fresh = SessionKVView(
@@ -659,32 +652,8 @@ class JointSelectionTest(unittest.TestCase):
             history_bytes_by_tp_rank=(0, 0), missing_bytes_by_tp_rank=(0, 0))
         record = select_instance_and_action(
             mode="affinity-first", cost_model=_cost_model(loads),
-            session=fresh, request=_request(), remote_enabled=True)
+            session=fresh, request=_request())
         self.assertEqual(record.chosen.instance_index, 1)
-
-    def test_remote_off_only_removes_remote_candidates(self):
-        loads = {0: _load(0, 0), 1: _load(1, 0)}
-        session = _session(home=1, resident=1)
-        for remote_enabled in (True, False):
-            record = select_instance_and_action(
-                mode="joint", cost_model=_cost_model(loads),
-                session=session, request=_request(),
-                remote_enabled=remote_enabled)
-            remote_candidates = [
-                candidate for candidate in record.candidates
-                if candidate.action == "remote-read"]
-            if remote_enabled:
-                self.assertTrue(any(
-                    candidate.applicable
-                    for candidate in remote_candidates))
-            else:
-                self.assertFalse(any(
-                    candidate.applicable
-                    for candidate in remote_candidates))
-                # 其余动作不受影响。
-                self.assertTrue(any(
-                    candidate.applicable and candidate.action == "recompute"
-                    for candidate in record.candidates))
 
     def test_stay_inapplicable_when_history_not_resident(self):
         loads = {0: _load(0, 0)}
@@ -692,12 +661,10 @@ class JointSelectionTest(unittest.TestCase):
         applicability = dict(zip(
             ACTION_ORDER,
             model.applicable_actions(
-                _session(home=0, resident=1), _request(), 0,
-                remote_enabled=True)))
+                _session(home=0, resident=1), _request(), 0)))
         self.assertFalse(applicability["stay"][0])
         self.assertTrue(applicability["recompute"][0])
         self.assertTrue(applicability["copy"][0])
-        self.assertTrue(applicability["remote-read"][0])
 
     def test_new_session_only_stay_and_recompute(self):
         loads = {0: _load(0, 0)}
@@ -708,12 +675,10 @@ class JointSelectionTest(unittest.TestCase):
             history_bytes_by_tp_rank=(0, 0), missing_bytes_by_tp_rank=(0, 0))
         applicability = dict(zip(
             ACTION_ORDER,
-            model.applicable_actions(
-                fresh, _request(), 0, remote_enabled=True)))
+            model.applicable_actions(fresh, _request(), 0)))
         self.assertTrue(applicability["stay"][0])       # turn-0 本地建立
         self.assertTrue(applicability["recompute"][0])
         self.assertFalse(applicability["copy"][0])
-        self.assertFalse(applicability["remote-read"][0])
 
     def test_tie_break_is_deterministic(self):
         loads = {0: _load(0, 0), 1: _load(1, 0)}
@@ -724,7 +689,7 @@ class JointSelectionTest(unittest.TestCase):
         records = [
             select_instance_and_action(
                 mode="joint", cost_model=_cost_model(loads),
-                session=fresh, request=_request(), remote_enabled=True)
+                session=fresh, request=_request())
             for _ in range(3)]
         chosen = [(r.chosen.instance_index, r.chosen.action)
                   for r in records]
@@ -737,28 +702,26 @@ class JointSelectionTest(unittest.TestCase):
 class AllowedActionsMaskTest(unittest.TestCase):
     """M2（2026-09-26 消融矩阵前置）：动作掩码 JOINT_ALLOWED_ACTIONS。
 
-    语义裁定钉子：掩码是**候选集上限不是强制**；与 remote_enabled 取
-    交集；臂预设恒含 recompute（recompute-only={recompute}+load-first、
-    always-copy={copy,recompute}、always-remote={remote-read,recompute}）；
+    语义裁定钉子：掩码是**候选集上限不是强制**；臂预设恒含 recompute
+    （recompute-only={recompute}+load-first、always-copy={copy,recompute}）；
     掩码剔除 recompute 致零适用维持 fail-closed（JointSchedulerError，
-    非容量拒绝）。仿 remote off 适用性表（test_remote_off_only_removes_
-    remote_candidates）逐候选断言。"""
+    非容量拒绝）。逐候选断言仿适用性表口径。"""
 
     def test_mask_is_candidate_upper_bound_not_mandate(self):
         # 候选集上限：掩码命中（= 掩码外）且原本可用的动作统一改判
-        # MASK_INAPPLICABLE_REASON，原本就不可用的保留原物理/开关理由；
-        # recompute 不被误伤；枚举形状不变（每实例 4 动作）。
+        # MASK_INAPPLICABLE_REASON，原本就不可用的保留原物理理由；
+        # recompute 不被误伤；枚举形状不变（每实例 3 动作）。
         loads = {0: _load(0, 0), 1: _load(1, 0)}
         session = _session(home=1, resident=1)
         unmasked = select_instance_and_action(
             mode="joint", cost_model=_cost_model(loads), session=session,
-            request=_request(), remote_enabled=True)
+            request=_request())
         record = select_instance_and_action(
             mode="joint",
             cost_model=_cost_model(loads, allowed_actions=frozenset(
                 {"recompute"})),
-            session=session, request=_request(), remote_enabled=True)
-        self.assertEqual(len(record.candidates), 8)   # 形状不变
+            session=session, request=_request())
+        self.assertEqual(len(record.candidates), 6)   # 形状不变
         baseline = {
             (c.instance_index, c.action): c for c in unmasked.candidates}
         for candidate in record.candidates:
@@ -775,45 +738,20 @@ class AllowedActionsMaskTest(unittest.TestCase):
                     candidate.inapplicable_reason,
                     MASK_INAPPLICABLE_REASON, str(base))
             else:
-                # 原本就不可用：保留更具体的物理/开关理由。
+                # 原本就不可用：保留更具体的物理理由。
                 self.assertEqual(
                     candidate.inapplicable_reason,
                     base.inapplicable_reason)
         self.assertEqual(record.chosen.action, "recompute")
 
-    def test_mask_intersects_remote_enabled(self):
-        # 交集语义：掩码放行 remote-read 而能力开关关 ⇒ 仍是
-        # "remote actions disabled"（原物理/开关理由优先保留，不被掩码
-        # 理由覆盖）；能力开而掩码拒 ⇒ 掩码理由。
-        loads = {0: _load(0, 0), 1: _load(1, 5000)}
-        session = _session(home=1, resident=1)
-        model = _cost_model(
-            loads, allowed_actions=frozenset(
-                {"stay", "recompute", "copy", "remote-read"}))
-        applicability = dict(zip(
-            ACTION_ORDER, model.applicable_actions(
-                session, _request(), 0, remote_enabled=False)))
-        self.assertFalse(applicability["remote-read"][0])
-        self.assertEqual(applicability["remote-read"][1],
-                         "remote actions disabled")
-        model = _cost_model(loads, allowed_actions=frozenset({"recompute"}))
-        applicability = dict(zip(
-            ACTION_ORDER, model.applicable_actions(
-                session, _request(), 0, remote_enabled=True)))
-        self.assertFalse(applicability["remote-read"][0])
-        self.assertEqual(applicability["remote-read"][1],
-                         MASK_INAPPLICABLE_REASON)
-
     def test_arm_presets_always_include_recompute(self):
-        # 三臂预设恒含 recompute；掩码是上限不是强制——各臂仍按代价
+        # 两臂预设恒含 recompute；掩码是上限不是强制——各臂仍按代价
         # argmin 在放行集内选择（load-first 先选点再选动作）。
         loads = {0: _load(0, 0), 1: _load(1, 5000)}
         session = _session(home=0, resident=1)
         arms = (
             ("recompute-only", frozenset({"recompute"}), "load-first"),
             ("always-copy", frozenset({"copy", "recompute"}), "joint"),
-            ("always-remote",
-             frozenset({"remote-read", "recompute"}), "joint"),
         )
         for name, allowed, mode in arms:
             self.assertIn(
@@ -821,7 +759,7 @@ class AllowedActionsMaskTest(unittest.TestCase):
             record = select_instance_and_action(
                 mode=mode,
                 cost_model=_cost_model(loads, allowed_actions=allowed),
-                session=session, request=_request(), remote_enabled=True)
+                session=session, request=_request())
             self.assertIn(
                 record.chosen.action, allowed,
                 f"{name}: chosen must respect the mask upper bound")
@@ -840,7 +778,7 @@ class AllowedActionsMaskTest(unittest.TestCase):
             with self.assertRaisesRegex(JointSchedulerError, mode):
                 select_instance_and_action(
                     mode=mode, cost_model=model, session=fresh,
-                    request=_request(), remote_enabled=True)
+                    request=_request())
 
 
 # ======================================================== home / merge ==
@@ -924,32 +862,6 @@ class HomeMergeSemanticsTest(unittest.TestCase):
         self.assertEqual(merged.location, kv.LOCAL_HBM)
         kv.mark_complete("s", 20, "human")
 
-    def test_remote_read_working_copy_holds_increments_only(self):
-        kv = self._manager()
-        _seed(kv, "s", 0, 10, 10, "human")
-        kv.prepare_prefill(
-            session_id="s", target_instance_index=1,
-            history_tokens=10, trigger_request_id="t1",
-            action="remote-read")
-        working = kv.session_snapshot("s")
-        self.assertEqual(working.working_kind, "remote-read")
-        # 工作副本从 0 起步：仅新增 token 的 KV 驻留执行端。
-        self.assertEqual(working.context_tokens, 0)
-        base_bytes = kv_cache_shard_bytes_for_layer_range(
-            kv.model, 10, kv.tp_degree, layer_start=0,
-            layer_end=kv.model.layers)
-        used = [snapshot.kv_cache_bytes for snapshot in kv.hbm_snapshots()]
-        self.assertEqual(tuple(used[:2]), tuple(base_bytes))  # home 基础不动
-        kv.expand_prefill(
-            session_id="s", instance_index=1, context_tokens=5,
-            trigger_request_id="t1")
-        kv.merge_back(
-            session_id="s", trigger_request_id="t1", new_tokens=5)
-        merged = kv.session_snapshot("s")
-        self.assertEqual(merged.context_tokens, 15)
-        self.assertEqual(merged.instance_index, 0)
-        kv.mark_complete("s", 20, "human")
-
     def test_stay_completes_without_merge_traffic(self):
         kv = self._manager()
         _seed(kv, "s", 0, 10, 10, "human")
@@ -1006,7 +918,7 @@ class EightCombinationIntegrationTest(unittest.TestCase):
             record = select_instance_and_action(
                 mode=scheduler, cost_model=_cost_model(loads),
                 session=_session(home=0, resident=1),
-                request=_request(), remote_enabled=True)
+                request=_request())
             self.assertIsNotNone(record.chosen)
         # 八组合产生恰好 8 个不同开关三元组（覆盖 §7.1 表全行）。
         self.assertEqual(len(seen_modes), 8)

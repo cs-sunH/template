@@ -218,6 +218,9 @@ class CompileRegionsTests(unittest.TestCase):
              "attention_softmax", "attention_av_matmul"])
         self.assertEqual(attention["num_ops"], 40)
         self.assertEqual(attention["tensor_size"], 80)
+        # remote_read = 权重远载字节（generate_trace 真值路径，保留
+        # 红线 §1.2 第 2 条）；调度器侧供给点已随远读退役删除，该键在
+        # echo/loopback 形态下可缺席（见 test_records_without_remote_read）。
         self.assertEqual(attention["remote_read"], 20)
         self.assertTrue(attention["name"].endswith("attention_region"))
         ffn = fused[1]
@@ -225,6 +228,25 @@ class CompileRegionsTests(unittest.TestCase):
             ffn["member_categories"],
             ["mlp_gate_up_projection", "mlp_swiglu", "mlp_down_projection"])
         self.assertTrue(ffn["name"].endswith("ffn_region"))
+
+    def test_records_without_remote_read_key_fuse_and_sum_zero(self) -> None:
+        # 2026-10-14 远读退役 D-2 口径：sh30 供给点删除后，echo/loopback
+        # 路径的 spec 记录不含 remote_read 键——compile_regions 容错读
+        # （node.get("remote_read", 0)），融合不受影响、合计为 0。
+        categories = [
+            "attention_qk_matmul", "attention_scale_mask",
+            "attention_softmax", "attention_av_matmul",
+        ]
+        records = [_spec_record(c) for c in categories]
+        for record in records:
+            del record["remote_read"]
+        groups = compile_regions(records)
+        fused = [g for g in groups if g["fused"]]
+        self.assertEqual(len(fused), 1)
+        self.assertEqual(fused[0]["remote_read"], 0)
+        # 非融合组同款容错（缺席键 → 0）。
+        singles = compile_regions(records[:1])
+        self.assertEqual(singles[0]["remote_read"], 0)
 
     def test_boundary_inside_chain_blocks_fusion(self) -> None:
         records = [
@@ -325,13 +347,16 @@ class BuildSpecTests(unittest.TestCase):
         self.assertEqual(len(spec["config_hash"]), 64)
 
     def test_kv_identity_staged_annotation(self) -> None:
+        # 2026-10-14 远读退役：kv_access.identity 词表缩为 {"local"}
+        # （"staged"/"remote_ready" 死值删除，KV_IDENTITIES 单值）——
+        # 旧 "staged" 注解用例改为钉退役后的 fail-closed 面。
         ctx = _make_ctx()
         ctx.begin_emission(
             phase="decode", tensor_parallel=1, tensor_parallel_rank=0,
             span_namespace="t", pass_spans=[(1, 8)])
-        spec = ctx.build_spec(
-            "qk", layer_count=1, weight_passes=1, kv_identity="staged")
-        self.assertEqual(spec["kv_access"], {"identity": "staged"})
+        with self.assertRaisesRegex(ValueError, "kv_access.identity"):
+            ctx.build_spec(
+                "qk", layer_count=1, weight_passes=1, kv_identity="staged")
 
     def test_bad_kv_identity_fails(self) -> None:
         ctx = _make_ctx()
@@ -381,7 +406,7 @@ class SpecThroughCostLibraryTests(unittest.TestCase):
                 ("ffn_region", 8, 3), ("o_proj", 8, 3), ("logits", 1, 3)):
             specs.append(ctx.build_spec(
                 op_kind, layer_count=layers, weight_passes=passes,
-                kv_identity="staged" if op_kind == "logits" else "local"))
+                kv_identity="local"))
         library = ctypes.CDLL(str(discover_cabi_library()))
         library.die_estimate_batch.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
         library.die_estimate_batch.restype = ctypes.c_void_p

@@ -1,12 +1,16 @@
 /******************************************************************************
-Checked lazy algebra over compact pipeline ranges.
+Bounded integer window algebra for the die timer-window approximation, plus
+the PipelineKernelContract implementation (D4: migrated from the former
+PipelineDescriptor.cc when the remote-read tile descriptors were retired).
 ******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/PipelineKernel.hh"
 
 #include <algorithm>
 #include <limits>
+#include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace AstraSim {
@@ -17,18 +21,8 @@ namespace {
     throw std::invalid_argument(std::string("pipeline kernel: ") + message);
 }
 
-uint64_t add_checked(uint64_t a, uint64_t b) {
-    if (b > std::numeric_limits<uint64_t>::max() - a) {
-        fail("uint64 addition overflow");
-    }
-    return a + b;
-}
-
-uint64_t mul_checked(uint64_t a, uint64_t b) {
-    if (a != 0 && b > std::numeric_limits<uint64_t>::max() / a) {
-        fail("uint64 multiplication overflow");
-    }
-    return a * b;
+[[noreturn]] void fail(const std::string& path, const std::string& reason) {
+    throw std::invalid_argument("pipeline kernel " + path + ": " + reason);
 }
 
 bool valid_window_limit(uint32_t limit) {
@@ -50,101 +44,129 @@ uint32_t greatest_window_level(uint32_t limit) {
     return 1;
 }
 
-const PipelineGroup& find_group(const PipelineDescriptor& descriptor,
-                                uint64_t group_ordinal) {
-    const auto& groups = descriptor.groups();
-    const auto it = std::lower_bound(
-        groups.begin(), groups.end(), group_ordinal,
-        [](const PipelineGroup& group, uint64_t ordinal) {
-            return group.group_ordinal < ordinal;
-        });
-    if (it == groups.end() || it->group_ordinal != group_ordinal) {
-        fail("unknown group ordinal");
+void require_exact_keys(const nlohmann::json& value, const std::string& path,
+                        const std::set<std::string>& required) {
+    if (!value.is_object()) fail(path, "expected object");
+    for (const auto& key : required) {
+        if (value.find(key) == value.end()) {
+            fail(path, "missing key '" + key + "'");
+        }
     }
-    return *it;
+    for (auto it = value.begin(); it != value.end(); ++it) {
+        if (required.count(it.key()) == 0) {
+            fail(path, "unknown key '" + it.key() + "'");
+        }
+    }
+}
+
+uint64_t get_u64(const nlohmann::json& value, const std::string& path) {
+    if (value.is_number_unsigned()) return value.get<uint64_t>();
+    if (!value.is_number_integer()) fail(path, "expected unsigned integer");
+    const int64_t signed_value = value.get<int64_t>();
+    if (signed_value < 0) fail(path, "must be nonnegative");
+    return static_cast<uint64_t>(signed_value);
+}
+
+uint32_t get_u32(const nlohmann::json& value, const std::string& path) {
+    const uint64_t parsed = get_u64(value, path);
+    if (parsed > std::numeric_limits<uint32_t>::max()) {
+        fail(path, "exceeds uint32");
+    }
+    return static_cast<uint32_t>(parsed);
+}
+
+std::string get_nonempty_string(const nlohmann::json& value,
+                                const std::string& path) {
+    if (!value.is_string()) fail(path, "expected string");
+    auto parsed = value.get<std::string>();
+    if (parsed.empty()) fail(path, "must not be empty");
+    return parsed;
 }
 
 }  // namespace
 
-PipelineTile PipelineKernel::tile(const PipelineDescriptor& descriptor,
-                                  uint64_t group_ordinal,
-                                  uint64_t local_tile_ordinal) {
-    const auto& group = find_group(descriptor, group_ordinal);
-    const auto& axis = group.tile_axis;
-    if (local_tile_ordinal >= axis.tile_count) {
-        fail("local tile ordinal is outside the group");
-    }
-    const uint64_t unit_offset = mul_checked(local_tile_ordinal,
-                                             axis.units_per_tile);
-    if (unit_offset >= axis.total_units) {
-        fail("tile unit offset is outside the group");
-    }
-    PipelineTile result;
-    result.global_tile_ordinal =
-        add_checked(axis.global_tile_first, local_tile_ordinal);
-    result.units = std::min(axis.units_per_tile, axis.total_units - unit_offset);
-    result.shards.reserve(group.shards.size());
-    for (const auto& shard : group.shards) {
-        PipelineShardTile piece;
-        piece.shard_ordinal = shard.shard_ordinal;
-        piece.source_rank = shard.source_rank;
-        piece.target_rank = shard.target_rank;
-        if (axis.unit == PipelineTileUnit::SourceTokens) {
-            piece.data_bytes = mul_checked(shard.bytes_per_unit, result.units);
-            if (piece.data_bytes > shard.total_data_bytes) {
-                fail("source-token shard tile exceeds declared total bytes");
-            }
-            piece.emit_endpoint = piece.data_bytes != 0;
-        } else {
-            // A stream-bytes group uses a shared union tile axis. A shorter
-            // shard contributes no physical endpoint after its byte range is
-            // exhausted; other shards continue on the same logical tile axis.
-            const uint64_t remaining = unit_offset >= shard.total_data_bytes
-                                           ? 0
-                                           : shard.total_data_bytes - unit_offset;
-            piece.data_bytes = std::min(result.units, remaining);
-            piece.emit_endpoint = piece.data_bytes != 0;
-        }
-        result.data_bytes_total = add_checked(result.data_bytes_total,
-                                              piece.data_bytes);
-        result.shards.push_back(piece);
-    }
+PipelineKernelContract::PipelineKernelContract(
+    uint32_t projection_abi_version, uint32_t descriptor_version,
+    uint32_t pipeline_protocol_version, std::string model_version,
+    std::string timer_whitelist_version, uint32_t window_tile_limit,
+    uint32_t window_local_error_ppm, uint32_t window_refine_margin_ppm,
+    std::string prediction_config_sha256)
+    : projection_abi_version_(projection_abi_version),
+      descriptor_version_(descriptor_version),
+      pipeline_protocol_version_(pipeline_protocol_version),
+      model_version_(std::move(model_version)),
+      timer_whitelist_version_(std::move(timer_whitelist_version)),
+      window_tile_limit_(window_tile_limit),
+      window_local_error_ppm_(window_local_error_ppm),
+      window_refine_margin_ppm_(window_refine_margin_ppm),
+      prediction_config_sha256_(std::move(prediction_config_sha256)) {}
+
+std::shared_ptr<const PipelineKernelContract> PipelineKernelContract::parse(
+    const nlohmann::json& wire) {
+    const std::string path = "kernel_contract";
+    require_exact_keys(wire, path,
+                       {"projection_abi_version", "descriptor_version",
+                        "pipeline_protocol_version", "model_version",
+                        "timer_whitelist_version", "window_tile_limit",
+                        "window_local_error_ppm", "window_refine_margin_ppm",
+                        "prediction_config_sha256"});
+    auto result = std::shared_ptr<const PipelineKernelContract>(
+        new PipelineKernelContract(
+            get_u32(wire.at("projection_abi_version"), path + ".projection_abi_version"),
+            get_u32(wire.at("descriptor_version"), path + ".descriptor_version"),
+            get_u32(wire.at("pipeline_protocol_version"), path + ".pipeline_protocol_version"),
+            get_nonempty_string(wire.at("model_version"), path + ".model_version"),
+            get_nonempty_string(wire.at("timer_whitelist_version"),
+                                path + ".timer_whitelist_version"),
+            get_u32(wire.at("window_tile_limit"), path + ".window_tile_limit"),
+            get_u32(wire.at("window_local_error_ppm"), path + ".window_local_error_ppm"),
+            get_u32(wire.at("window_refine_margin_ppm"), path + ".window_refine_margin_ppm"),
+            get_nonempty_string(wire.at("prediction_config_sha256"),
+                                path + ".prediction_config_sha256")));
+    result->validate();
     return result;
 }
 
-uint64_t PipelineKernel::total_data_bytes(const PipelineDescriptor& descriptor,
-                                          uint64_t group_ordinal) {
-    const auto& group = find_group(descriptor, group_ordinal);
-    uint64_t total = 0;
-    for (const auto& shard : group.shards) {
-        total = add_checked(total, shard.total_data_bytes);
+void PipelineKernelContract::validate() const {
+    if (projection_abi_version_ != kProjectionAbiVersion ||
+        descriptor_version_ != kDescriptorVersion ||
+        pipeline_protocol_version_ != kPipelineProtocolVersion ||
+        model_version_ != kModelVersion ||
+        timer_whitelist_version_ != kTimerWhitelistVersion) {
+        fail("kernel_contract", "unsupported ABI/model/protocol/whitelist version");
     }
-    return total;
+    if (window_tile_limit_ != 1 && window_tile_limit_ != 2 &&
+        window_tile_limit_ != 4 && window_tile_limit_ != 8) {
+        fail("kernel_contract.window_tile_limit", "must be one of 1, 2, 4, 8");
+    }
+    if (window_local_error_ppm_ > 10000) {
+        fail("kernel_contract.window_local_error_ppm", "must be in [0, 10000]");
+    }
+    if (window_refine_margin_ppm_ > 1000000) {
+        fail("kernel_contract.window_refine_margin_ppm", "must be in [0, 1000000]");
+    }
+    if (prediction_config_sha256_.size() != 64 ||
+        !std::all_of(prediction_config_sha256_.begin(),
+                     prediction_config_sha256_.end(),
+                     [](unsigned char c) {
+                         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+                     })) {
+        fail("kernel_contract.prediction_config_sha256",
+             "must be 64 lowercase hexadecimal characters");
+    }
 }
 
-uint64_t PipelineKernel::prefix_data_bytes(const PipelineDescriptor& descriptor,
-                                           uint64_t group_ordinal,
-                                           uint64_t count) {
-    const auto& group = find_group(descriptor, group_ordinal);
-    const auto& axis = group.tile_axis;
-    if (count > axis.tile_count) {
-        fail("prefix count exceeds group tile count");
-    }
-    if (count == 0) return 0;
-    const uint64_t prefix_units =
-        std::min(axis.total_units, mul_checked(count, axis.units_per_tile));
-    uint64_t total = 0;
-    for (const auto& shard : group.shards) {
-        const uint64_t shard_bytes =
-            axis.unit == PipelineTileUnit::SourceTokens
-                ? mul_checked(prefix_units, shard.bytes_per_unit)
-                : std::min(prefix_units, shard.total_data_bytes);
-        if (shard_bytes > shard.total_data_bytes) {
-            fail("prefix shard bytes exceed declared total");
-        }
-        total = add_checked(total, shard_bytes);
-    }
-    return total;
+bool PipelineKernelContract::operator==(
+    const PipelineKernelContract& other) const {
+    return projection_abi_version_ == other.projection_abi_version_ &&
+           descriptor_version_ == other.descriptor_version_ &&
+           pipeline_protocol_version_ == other.pipeline_protocol_version_ &&
+           model_version_ == other.model_version_ &&
+           timer_whitelist_version_ == other.timer_whitelist_version_ &&
+           window_tile_limit_ == other.window_tile_limit_ &&
+           window_local_error_ppm_ == other.window_local_error_ppm_ &&
+           window_refine_margin_ppm_ == other.window_refine_margin_ppm_ &&
+           prediction_config_sha256_ == other.prediction_config_sha256_;
 }
 
 PipelineWindowPlan PipelineKernel::plan_window(

@@ -38,7 +38,7 @@ def _candidate(instance, action, cost, *, quality=None, continuation=False):
     context = _Context()
     breakdown = ActionCostBreakdown(
         target_wait_ns=0, history_prep_ns=0, eviction_wait_ns=0,
-        compute_ns=cost, remote_read_ns=0, merge_ns=0,
+        compute_ns=cost, merge_ns=0,
         contention_divisor=1, hops=0,
         predicted_service_done=cost, predicted_merge_done=cost,
         projection_stats={"native_kernel": dict(quality or {})},
@@ -101,7 +101,7 @@ class WindowCandidateArbitrationTests(unittest.TestCase):
                 "window_count": 1, "fully_exact": False,
             }),
             ActionCandidate(
-                instance_index=1, action="remote-read", applicable=False,
+                instance_index=1, action="legacy-action", applicable=False,
                 inapplicable_reason="fixture inapplicable", cost_ns=None),
         ]
         model = _CostModel({

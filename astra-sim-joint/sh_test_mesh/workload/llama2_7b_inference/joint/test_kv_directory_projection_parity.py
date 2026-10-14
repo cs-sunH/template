@@ -4,8 +4,8 @@
 
 钉测面（《joint仓库当下+历史修改方案》§6.1/§12.1 W4 验收）：
 
-A. **投影等价**（硬门）：真实 KVCacheManager 驱动四动作全场景矩阵
-   （stay/copy/recompute/remote-read × LOCAL/PARTIAL/REMOTE 基 + 后缀/
+A. **投影等价**（硬门）：真实 KVCacheManager 驱动三动作全场景矩阵
+   （stay/copy/recompute × LOCAL/PARTIAL/REMOTE 基 + 后缀/
    整份逐出 + 边界来源转记 + 三位置结算），每个 checkpoint 后——
    1. 目录 capacity_projection ↔ rank 台账逐 rank 守恒（manager 内
       fail-closed 审计的显式复核）；
@@ -18,17 +18,8 @@ A. **投影等价**（硬门）：真实 KVCacheManager 驱动四动作全场景
       from_boundary` 产出的区间序列逐字段一致（role/holder/token/
       layer/bytes）。
    视图采样点 = 旧字段查询点（copy 交接 journal 已结算——与生产查询
-   时点同约束；journal 开放期的 base 字节两口径差异（journal 真值 vs
-   前缀公式）在 copy 场景单独按 journal 真值核对）。
-
-B. **退化等价**（硬门）：单源/双源输入下 `_joint_remote_read_credit_
-   plan` 的完整计划 dict（含 sources 序、tiles_per_pass、逐 shard 字节
-   向量、staging、total_bytes）在——
-   * 目录路径（真实 KVCacheManager，query_sources 迭代）与
-   * 旧两槽硬编码路径（同 session 挂 SimpleNamespace 替身触发
-     `_legacy_two_slot_remote_read_sources`）
-   ——逐键逐字节一致；三来源（>2）结构支持经目录合成第三来源验证
-   tiles_per_pass = 逐源 ⌈tokens_s/tile⌉ 之和的推广。
+   时点同约束）。（B 组退化等价与增量型边界视图已随远读退役删除，
+   2026-10-14——布局恒完整型单族，D6。）
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_kv_directory_projection_parity.py
@@ -168,38 +159,16 @@ def legacy_session_view_fields(kv, session_id):
 def legacy_boundary_view_fields(kv, session_id, *, p_index, p_action,
                                 history_tokens, decode_steps,
                                 kv_token_bytes):
+    """旧字段推导（完整型单族——P ∈ {stay,copy,recompute} 的工作副本
+    恒全量在 i_P；增量型布局族已随远读退役删除，D6）。"""
     session = kv._sessions[session_id]
-    tp = kv.tp_degree
     working = tuple(int(v) for v in session.shard_bytes)
-    if p_action == "remote-read":
-        if session.working_kind is not None:
-            base_tokens = session.base_history_tokens
-            base_prefix = session.base_resident_prefix_layers
-            base_instance = session.base_instance_index
-        else:
-            base_tokens = session.context_tokens
-            base_prefix = kv.model.layers
-            base_instance = session.instance_index
-        if (base_instance is None or base_tokens <= 0 or base_prefix <= 0):
-            base = tuple(0 for _ in range(tp))
-            base_tokens = 0
-        else:
-            base = tuple(
-                int(v) for v in kv_cache_shard_bytes_for_layer_range(
-                    kv.model, base_tokens, tp,
-                    layer_start=0, layer_end=base_prefix))
-    else:
-        base = tuple(0 for _ in range(tp))
-        base_tokens = history_tokens
-        base_instance = session.instance_index
-        base_prefix = kv.model.layers
     return dict(
-        session_id=session_id, home_instance=base_instance,
+        session_id=session_id, home_instance=session.instance_index,
         p_instance_index=p_index, p_action=p_action,
         history_tokens=history_tokens,
         working_bytes_by_tp_rank=working,
-        base_bytes_by_tp_rank=base,
-        decode_steps=decode_steps, base_tokens=int(base_tokens),
+        decode_steps=decode_steps,
         kv_token_bytes=int(kv_token_bytes),
         logic_home_instance=session.home_instance)
 
@@ -285,6 +254,8 @@ def directory_session_view_fields(kv, session_id):
 def directory_boundary_view_fields(kv, session_id, *, p_index, p_action,
                                    history_tokens, decode_steps,
                                    kv_token_bytes):
+    """目录投影（完整型单族——聚合主条目后与 legacy shard_bytes
+    对拍；base 投影支路已随增量族退役删除）。"""
     session = kv._sessions[session_id]
     entries = kv.kv_directory.entries_for_session(session_id)
     tp = kv.tp_degree
@@ -292,36 +263,17 @@ def directory_boundary_view_fields(kv, session_id, *, p_index, p_action,
         e for e in entries
         if e.role in (ROLE_WORKING, ROLE_RESIDENT) and e.is_on_chip()]
     assert primary, "primary entry missing in directory mirror"
-    # 2026-10-01 审查修复对齐：混合形态（remote-read × PARTIAL 基）的
-    # 工作副本拆 S/I 两条 WORKING 条目——聚合求和后与 legacy
-    # shard_bytes 对拍（线性守恒同式）。
     by_rank = [0] * tp
     for entry in primary:
         for rank, value in enumerate(entry.bytes_by_tp_rank):
             by_rank[rank] += int(value)
     working = tuple(by_rank)
-    if p_action == "remote-read":
-        base = [e for e in entries if e.role == ROLE_BASE and e.is_on_chip()]
-        if base:
-            entry = base[0]
-            base_bytes = entry.bytes_by_tp_rank
-            base_tokens = entry.content_key.token_end
-            base_instance = entry.holder
-        else:
-            base_bytes = tuple(0 for _ in range(tp))
-            base_tokens = 0
-            base_instance = None
-    else:
-        base_bytes = tuple(0 for _ in range(tp))
-        base_tokens = history_tokens
-        base_instance = primary[0].holder
     return dict(
-        session_id=session_id, home_instance=base_instance,
+        session_id=session_id, home_instance=primary[0].holder,
         p_instance_index=p_index, p_action=p_action,
         history_tokens=history_tokens,
         working_bytes_by_tp_rank=working,
-        base_bytes_by_tp_rank=base_bytes,
-        decode_steps=decode_steps, base_tokens=int(base_tokens),
+        decode_steps=decode_steps,
         kv_token_bytes=int(kv_token_bytes),
         logic_home_instance=session.home_instance)
 
@@ -494,80 +446,6 @@ class ProjectionParityTests(unittest.TestCase):
         self.assert_capacity_parity("recompute-merged")
         self.assert_session_view_parity("recompute-merged")
 
-    def test_remote_read_local_base_round(self):
-        _seed_history(self.kv, self.session_id, HOME, HISTORY_TOKENS)
-        self.kv.prepare_prefill(
-            session_id=self.session_id, target_instance_index=P_EXEC,
-            history_tokens=HISTORY_TOKENS,
-            trigger_request_id="r-rr", action="remote-read")
-        self.assert_capacity_parity("rr-admitted")
-        self.assert_session_view_parity("rr-admitted")
-        self.assert_boundary_view_parity(
-            p_index=P_EXEC, p_action="remote-read",
-            history_tokens=HISTORY_TOKENS, note="rr-open")
-        self.kv.expand_prefill(
-            session_id=self.session_id, instance_index=P_EXEC,
-            context_tokens=INPUT_TOKENS,
-            trigger_request_id="r-rr")
-        self.assert_session_view_parity("rr-grown")
-        # 边界多源远读（j≠i_P）：来源转记 → base@2 + boundary@0。
-        outcome_transfer, _evictions, outcome = (
-            self.kv.commit_boundary_decode_transition(
-                session_id=self.session_id, p_instance_index=P_EXEC,
-                target_instance_index=THIRD, action="remote-read",
-                history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-                trigger_request_id="r-rr"))
-        self.assertEqual(outcome["kind"], "remote_multi_source")
-        self.assert_capacity_parity("rr-boundary")
-        self.assert_session_view_parity("rr-boundary")
-        # 增量型边界视图（P 动作按 remote-read 族）投影等价。
-        self.assert_boundary_view_parity(
-            p_index=THIRD, p_action="remote-read",
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            note="rr-multi-source")
-        self.kv.expand_decode(
-            session_id=self.session_id, instance_index=THIRD,
-            final_context_tokens=DECODE_STEPS,
-            trigger_request_id="r-rr")
-        self.assert_session_view_parity("rr-decode")
-        self.kv.merge_back(
-            session_id=self.session_id, trigger_request_id="r-rr",
-            new_tokens=INPUT_TOKENS + DECODE_STEPS)
-        self.assert_capacity_parity("rr-merged")
-        self.assert_session_view_parity("rr-merged")
-
-    def test_remote_read_partial_base_hybrid_round(self):
-        """PARTIAL 基混合形态（D1 两口径）：后缀池恢复 + 增量。"""
-        _seed_history(self.kv, self.session_id, HOME, HISTORY_TOKENS)
-        _evict_to_partial(self.kv, self.session_id, "r-hybrid")
-        session = self.kv._sessions[self.session_id]
-        self.assertEqual(session.location, self.kv.PARTIAL_HBM_REMOTE)
-        # 池后缀条目在场（逐出不清 owner）。
-        pool = self.kv.kv_directory.query_pool_intervals(self.session_id)
-        self.assertEqual(len(pool), 1)
-        self.assertEqual(
-            pool[0].content_key.layer_range,
-            (PARTIAL_PREFIX, MODEL_LAYERS))
-        self.assert_session_view_parity("hybrid-partial-idle")
-        self.kv.prepare_prefill(
-            session_id=self.session_id, target_instance_index=P_EXEC,
-            history_tokens=HISTORY_TOKENS,
-            trigger_request_id="r-hybrid", action="remote-read")
-        self.assert_capacity_parity("hybrid-admitted")
-        self.assert_session_view_parity("hybrid-admitted")
-        self.assert_boundary_view_parity(
-            p_index=P_EXEC, p_action="remote-read",
-            history_tokens=HISTORY_TOKENS, note="hybrid")
-        self.kv.expand_prefill(
-            session_id=self.session_id, instance_index=P_EXEC,
-            context_tokens=INPUT_TOKENS, trigger_request_id="r-hybrid")
-        self.assert_session_view_parity("hybrid-grown")
-        self.kv.merge_back(
-            session_id=self.session_id, trigger_request_id="r-hybrid",
-            new_tokens=INPUT_TOKENS)
-        self.assert_capacity_parity("hybrid-merged")
-        self.assert_session_view_parity("hybrid-merged")
-
     def test_full_eviction_pool_backing(self):
         """整份逐出 → REMOTE（唯一内容在池，owner 记录保留）。"""
         _seed_history(self.kv, self.session_id, HOME, HISTORY_TOKENS)
@@ -659,159 +537,6 @@ def _runtime(session_id, *, decode=DECODE_STEPS, input_tokens=INPUT_TOKENS,
         history_tokens_before=HISTORY_TOKENS,
     )
     return rt
-
-
-class CreditPlanDegenerateEquivalenceTests(unittest.TestCase):
-    """B 组：单/双源 credit plan 目录路径 vs 旧两槽路径逐键一致（硬门）。"""
-
-    def _plan_pair(self, kv, session_id, exec_instance, *, decode=DECODE_STEPS):
-        """同 scheduler 同 session 的 A/B 对拍：目录路径 vs 替身路径。"""
-        scheduler = _credit_scheduler(kv)
-        runtime = _runtime(session_id, decode=decode)
-        real_manager = scheduler.kv_manager
-        session = kv._sessions[session_id]
-        with_directory = scheduler._joint_remote_read_credit_plan(
-            runtime, exec_instance)
-        # 替身触发旧两槽路径（SimpleNamespace 无 kv_directory 属性）。
-        scheduler.kv_manager = SimpleNamespace(
-            _sessions={session_id: session},
-            tp_degree=real_manager.tp_degree)
-        legacy = scheduler._joint_remote_read_credit_plan(
-            runtime, exec_instance)
-        scheduler.kv_manager = real_manager
-        return with_directory, legacy
-
-    def test_single_source_local_base(self):
-        kv = _manager()
-        _seed_history(kv, "s_rr", HOME, HISTORY_TOKENS)
-        kv.prepare_prefill(
-            session_id="s_rr", target_instance_index=P_EXEC,
-            history_tokens=HISTORY_TOKENS,
-            trigger_request_id="r-rr", action="remote-read")
-        kv.expand_prefill(
-            session_id="s_rr", instance_index=P_EXEC,
-            context_tokens=INPUT_TOKENS,
-            trigger_request_id="r-rr")
-        # 生产查询点 = D 边界提交后（原地继续 x0：exec == i_P，工作
-        # 副本条目在目标本地被排除——与旧两槽枚举同域）。
-        kv.commit_boundary_decode_transition(
-            session_id="s_rr", p_instance_index=P_EXEC,
-            target_instance_index=P_EXEC, action="remote-read",
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            trigger_request_id="r-rr")
-        with_directory, legacy = self._plan_pair(kv, "s_rr", P_EXEC)
-        self.assertIsNotNone(with_directory)
-        self.assertEqual(with_directory, legacy)
-        # 单源口径锚：tiles_per_pass = ⌈union/tile⌉；sources 恰 1。
-        self.assertEqual(len(with_directory["sources"]), 1)
-        self.assertEqual(
-            with_directory["sources"][0]["instance"], HOME)
-        tile = with_directory["tile_tokens"]
-        self.assertEqual(
-            with_directory["tiles_per_pass"],
-            -(-with_directory["base_tokens"] // tile))
-
-    def test_dual_source_after_boundary_transition(self):
-        kv = _manager()
-        _seed_history(kv, "s_rr2", HOME, HISTORY_TOKENS)
-        kv.prepare_prefill(
-            session_id="s_rr2", target_instance_index=P_EXEC,
-            history_tokens=HISTORY_TOKENS,
-            trigger_request_id="r-rr2", action="remote-read")
-        kv.expand_prefill(
-            session_id="s_rr2", instance_index=P_EXEC,
-            context_tokens=INPUT_TOKENS,
-            trigger_request_id="r-rr2")
-        kv.commit_boundary_decode_transition(
-            session_id="s_rr2", p_instance_index=P_EXEC,
-            target_instance_index=THIRD, action="remote-read",
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            trigger_request_id="r-rr2")
-        with_directory, legacy = self._plan_pair(kv, "s_rr2", THIRD)
-        self.assertIsNotNone(with_directory)
-        self.assertEqual(with_directory, legacy)
-        self.assertEqual(len(with_directory["sources"]), 2)
-        # 来源序 = base 先、boundary-source 后（冻结确定性序）。
-        self.assertEqual(
-            [entry["instance"] for entry in with_directory["sources"]],
-            [HOME, P_EXEC])
-        # tiles_per_pass = 逐源 ⌈tokens_s/tile⌉ 之和（源内尾块不跨源）。
-        tile = with_directory["tile_tokens"]
-        self.assertEqual(
-            with_directory["tiles_per_pass"],
-            sum(-(-entry["tokens"] // tile)
-                for entry in with_directory["sources"]))
-
-    def test_no_source_returns_none_both_paths(self):
-        kv = _manager()
-        _seed_history(kv, "s_rr3", HOME, HISTORY_TOKENS)
-        # REMOTE 基（整份逐出后 copy 池恢复）：无片上来源。
-        kv.mark_complete("s_rr3", completion_ns=1000)
-        session = kv._sessions["s_rr3"]
-        kv._evict_session(
-            session, phase="history", reason="test_parity",
-            trigger_request_id="r-evict")
-        kv.prepare_prefill(
-            session_id="s_rr3", target_instance_index=THIRD,
-            history_tokens=HISTORY_TOKENS,
-            trigger_request_id="r-rr3", action="remote-read")
-        with_directory, legacy = self._plan_pair(kv, "s_rr3", THIRD)
-        self.assertIsNone(with_directory)
-        self.assertIsNone(legacy)
-
-    def test_three_sources_structural_support(self):
-        """>2 来源（W9 形态）：目录合成第三来源 → 计划结构推广
-        （tiles_per_pass = 逐源 ⌈·⌉ 之和；无写死两槽分支）。"""
-        kv = _manager()
-        _seed_history(kv, "s_multi", HOME, HISTORY_TOKENS)
-        kv.prepare_prefill(
-            session_id="s_multi", target_instance_index=P_EXEC,
-            history_tokens=HISTORY_TOKENS,
-            trigger_request_id="r-multi", action="remote-read")
-        kv.expand_prefill(
-            session_id="s_multi", instance_index=P_EXEC,
-            context_tokens=INPUT_TOKENS,
-            trigger_request_id="r-multi")
-        kv.commit_boundary_decode_transition(
-            session_id="s_multi", p_instance_index=P_EXEC,
-            target_instance_index=THIRD, action="remote-read",
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            trigger_request_id="r-multi")
-        directory = kv.kv_directory
-        # 合成第三来源（跨轮多来源的 W9 形态：另一实例的边界源副本）。
-        extra = directory.register_entry(
-            session_id="s_multi", holder=3, role="boundary-source",
-            layer_start=0, layer_end=MODEL_LAYERS,
-            token_start=HISTORY_TOKENS + INPUT_TOKENS,
-            token_end=HISTORY_TOKENS + INPUT_TOKENS + 24,
-            bytes_by_tp_rank=kv_cache_shard_bytes_for_layer_range(
-                kv.model, 24, kv.tp_degree,
-                layer_start=0, layer_end=MODEL_LAYERS),
-            state="READY")
-        try:
-            scheduler = _credit_scheduler(kv)
-            plan = scheduler._joint_remote_read_credit_plan(
-                _runtime("s_multi"), THIRD)
-            self.assertIsNotNone(plan)
-            self.assertEqual(len(plan["sources"]), 3)
-            self.assertEqual(
-                [entry["instance"] for entry in plan["sources"]],
-                [HOME, P_EXEC, 3])
-            tile = plan["tile_tokens"]
-            self.assertEqual(
-                plan["tiles_per_pass"],
-                sum(-(-entry["tokens"] // tile)
-                    for entry in plan["sources"]))
-            self.assertEqual(
-                plan["total_bytes"],
-                sum(spec[2] for entry in plan["sources"]
-                    for spec in entry["specs"]) * plan["steps"])
-        finally:
-            directory.retire_entry(extra.entry_id, reason="parity-test")
-        # 退休后回到双源（镜像自愈不需要——本测试目录面直接收敛）。
-        plan = _credit_scheduler(kv)._joint_remote_read_credit_plan(
-            _runtime("s_multi"), THIRD)
-        self.assertEqual(len(plan["sources"]), 2)
 
 
 if __name__ == "__main__":

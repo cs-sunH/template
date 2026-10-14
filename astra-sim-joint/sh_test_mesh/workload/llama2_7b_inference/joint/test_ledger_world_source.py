@@ -227,8 +227,7 @@ class LedgerProjectionTest(unittest.TestCase):
                 # world. Exercise P/D and each action against the independent
                 # list-oracle context without running a projection simulation.
                 for phase in ("P", "D"):
-                    for action in (
-                            "stay", "recompute", "copy", "remote_read"):
+                    for action in ("stay", "recompute", "copy"):
                         tag = f"candidate:{phase}:{action}"
                         candidate = action_work_graph_module.CandidateGraph(
                             work=action_work_graph_module.WorkItem(
@@ -466,7 +465,7 @@ class LedgerProjectionTest(unittest.TestCase):
         self.assertEqual(fallback_membership_calls, 8)
 
         for phase in ("P", "D"):
-            for action in ("stay", "recompute", "copy", "remote_read"):
+            for action in ("stay", "recompute", "copy"):
                 tag = f"mixed-candidate:{phase}:{action}"
                 candidate = action_work_graph_module.CandidateGraph(
                     work=action_work_graph_module.WorkItem(
@@ -495,7 +494,7 @@ class LedgerProjectionTest(unittest.TestCase):
         # pipeline leg.  The authoritative frame replaces its stale amount,
         # while an unrelated request's flow remains on the same shared link.
         ledger = WorkLedger()
-        pipeline_identity = _leg_work(
+        pipeline_leg = _leg_work(
             "noc:0", request_id="r1", rank=0, node_id=3,
             remaining_bytes=900.0, route=(7,), total_bytes=1000.0)
         pipeline_hbm = _leg_work(
@@ -504,12 +503,12 @@ class LedgerProjectionTest(unittest.TestCase):
         cross_request_flow = _leg_work(
             "noc:0", request_id="noc", rank=0, node_id=4,
             remaining_bytes=400.0, route=(7,))
-        ledger._register_work(pipeline_identity)
+        ledger._register_work(pipeline_leg)
         ledger._register_work(pipeline_hbm)
         ledger._register_work(cross_request_flow)
         active_noc = {
             "resource_type": "noc_flow",
-            "work_id": pipeline_identity.work_id,
+            "work_id": pipeline_leg.work_id,
             "request_id": "r1", "stage": "decode", "generation": 0,
             "rank": 0, "node_id": 3, "operation": "comm_send",
             "leg": "noc:0", "state": "Active",
@@ -572,7 +571,7 @@ class LedgerProjectionTest(unittest.TestCase):
             item.work_id.removeprefix("bg-ledger:"): item.legs[0].remaining_bytes
             for item in projected.background_works
         }
-        self.assertEqual(remaining_by_work[pipeline_identity.work_id], 600.0)
+        self.assertEqual(remaining_by_work[pipeline_leg.work_id], 600.0)
         self.assertEqual(remaining_by_work[pipeline_hbm.work_id], 600.0)
         self.assertEqual(remaining_by_work[cross_request_flow.work_id], 400.0)
 
@@ -608,35 +607,45 @@ class JournalReplayFidelityTest(unittest.TestCase):
     """journal 重放保真（W1 §2 红线；A2 侧车实现）。"""
 
     def _run_bridge(self, bridge_dir, requests):
+        from bridge_shm import ensure_bridge_shm
         from decision_bridge import BridgeServer
+        # v11 §8: 帧载体替换为 shm——测试以 ensure_bridge_shm 充当 C++
+        # 生产端铸段,server 附着后逐帧驱动(_handle_request 收帧负载字节,
+        # 即旧 request_<seq>.json 的文件字节)。
+        ensure_bridge_shm(bridge_dir)
         active = {"canonical": None}
         server = BridgeServer(
             bridge_dir, canonical_request_producer=True,
             work_ledger_bytes_source=lambda _seq: (
                 active["canonical"],
                 {"snapshot_kind": "full", "event_watermark": None}))
+        server.open_transport()
         for seq, payload in enumerate(requests):
             active["canonical"] = json.dumps(
                 payload["work_ledger"], sort_keys=True, separators=(",", ":"),
                 ensure_ascii=False, allow_nan=False).encode("utf-8")
-            with open(os.path.join(bridge_dir, f"request_{seq}.json"),
-                      "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, separators=(",", ":"))
-            server._handle_request(seq, lambda _request, _segment: {
-                "pipeline_descriptors": [], "kernel_contract": {}})
+            server._handle_request(
+                seq, lambda _request, _segment: {
+                    "kernel_contract": {}},
+                json.dumps(payload, separators=(",", ":")).encode("utf-8"))
         server._close_audit_streams()
+        from bridge_shm import clean_stale_bridge_shm
+        clean_stale_bridge_shm(bridge_dir)
         return server
 
     def test_sidecar_roundtrip_rebuilds_identical_ledger_state(self):
         work_dir = tempfile.mkdtemp(prefix="wl_replay_")
         self.addCleanup(shutil.rmtree, work_dir, True)
+        from bridge_shm import ensure_bridge_shm
         from decision_bridge import BridgeServer
+        ensure_bridge_shm(work_dir)
         active = {"canonical": None}
         server = BridgeServer(
             work_dir, canonical_request_producer=True,
             work_ledger_bytes_source=lambda _seq: (
                 active["canonical"],
                 {"snapshot_kind": "full", "event_watermark": None}))
+        server.open_transport()
         # 首次v2 full + 后续v2 delta。嵌套子信封与外层delivery同号；
         # journal侧车必须逐字保存此inner contract，不得降回WorkLedger v1。
         work_id = "r1#decode:0:r0n1"
@@ -692,13 +701,13 @@ class JournalReplayFidelityTest(unittest.TestCase):
                 },
             })
         requests = [
-            {"schema_version": 2, "delivery_sequence": 0, "tick": 10,
+            {"schema_version": 3, "delivery_sequence": 0, "tick": 10,
              "reasons": [], "arrivals": [], "completed_nodes": [],
              "completed_groups": [], "affected_ranks": [],
              "event_seqs": [],
              "snapshot_handle": {"kind": "work_ledger_v3"},
              "work_ledger": full},
-            {"schema_version": 2, "delivery_sequence": 1, "tick": 50,
+            {"schema_version": 3, "delivery_sequence": 1, "tick": 50,
              "reasons": [], "arrivals": [], "completed_nodes": [],
              "completed_groups": [], "affected_ranks": [],
              "event_seqs": [],
@@ -714,6 +723,7 @@ class JournalReplayFidelityTest(unittest.TestCase):
                 snapshot_kind=payload["snapshot_kind"])
             prepared = pipeline_ledger.prepare_envelope(
                 payload, work_transaction=transaction)
+            transaction.finish(prepared.parsed.seq_end)
             transaction.commit(notify=False)
             pipeline_ledger.commit_prepared(prepared)
             transaction.notify()
@@ -722,17 +732,18 @@ class JournalReplayFidelityTest(unittest.TestCase):
         original = WorkLedger()
         original_pipeline = PipelineLedger()
         for seq, request in enumerate(requests):
-            path = os.path.join(work_dir, "request_{}.json".format(seq))
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump(request, handle)
             active["canonical"] = json.dumps(
                 request["work_ledger"], sort_keys=True,
                 separators=(",", ":"), ensure_ascii=False,
                 allow_nan=False).encode("utf-8")
-            server._handle_request(seq, lambda req, _segment: {
-                "pipeline_descriptors": [], "kernel_contract": {}})
+            server._handle_request(
+                seq, lambda req, _segment: {
+                    "kernel_contract": {}},
+                json.dumps(request, separators=(",", ":")).encode("utf-8"))
             apply_v3(original, original_pipeline, request)
         server._close_audit_streams()
+        from bridge_shm import clean_stale_bridge_shm
+        clean_stale_bridge_shm(work_dir)
 
         # journal 剥离核验：journal 行不携带 work_ledger，带 stripped 标记。
         journal_path = os.path.join(work_dir, "request_journal.jsonl")
@@ -770,7 +781,7 @@ class JournalReplayFidelityTest(unittest.TestCase):
         journal = os.path.join(work_dir, "request_journal.jsonl")
         with open(journal, "w", encoding="utf-8") as handle:
             handle.write(json.dumps({
-                "schema_version": 2, "delivery_sequence": 0, "tick": 1,
+                "schema_version": 3, "delivery_sequence": 0, "tick": 1,
                 "work_ledger_journal_stripped": {"snapshot_kind": "full"},
             }) + "\n")
         from bridge_request_journal import iter_request_records

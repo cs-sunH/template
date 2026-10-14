@@ -110,7 +110,6 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WatchRegistry.hh"
-#include "pipeline_descriptor_test_support.hh"
 
 using namespace AstraSim::ExecutionDriven;
 using namespace NetworkAnalytical;
@@ -121,12 +120,6 @@ namespace ExecutionDriven {
 // Test-only access to the fixed, rank-bounded preflight scratch.  Production
 // code exposes no mutable diagnostics for these implementation details.
 struct GraphBatchCommitterTestAccess {
-    struct IdSpanSpec {
-        uint64_t first = 0;
-        uint64_t count = 0;
-        uint64_t stride = 1;
-    };
-
     struct IdPreflightCounts {
         uint64_t pair_envelope_candidates = 0;
         uint64_t exact_pair_tests = 0;
@@ -207,33 +200,6 @@ struct GraphBatchCommitterTestAccess {
         return error;
     }
 
-    static std::optional<std::string> validate_rank_id_spans(
-        const int rank, const std::vector<IdSpanSpec>& specs,
-        std::vector<uint64_t> physical_ids,
-        IdPreflightCounts* const output = nullptr) {
-        std::vector<GraphBatchLogicalIdSpan> spans;
-        spans.reserve(specs.size());
-        for (const auto& spec : specs) {
-            spans.push_back({rank, spec.first, spec.count, spec.stride, nullptr});
-        }
-        std::vector<const GraphBatchLogicalIdSpan*> progressions;
-        progressions.reserve(spans.size());
-        for (const auto& span : spans) {
-            progressions.push_back(&span);
-        }
-        std::sort(physical_ids.begin(), physical_ids.end());
-        GraphBatchCommitter::IdPreflightWork work;
-        const auto error = GraphBatchCommitter::validate_rank_id_intersections(
-            rank, progressions, physical_ids,
-            output == nullptr ? nullptr : &work);
-        if (output != nullptr) {
-            output->pair_envelope_candidates = work.pair_envelope_candidates;
-            output->exact_pair_tests = work.exact_pair_tests;
-            output->physical_points_examined = work.physical_points_examined;
-        }
-        return error;
-    }
-
     static CandidatePreviewResult preview_candidate_ids(
         const GraphBatchCommitter& committer, const GraphBatch& batch,
         const std::vector<std::pair<int, uint64_t>>& queries) {
@@ -273,14 +239,13 @@ namespace {
 
 bool g_ok = true;
 
-void add_v2_protocol_header(nlohmann::json& resp) {
-    resp["schema_version"] = 2;
-    resp["pipeline_descriptors"] = nlohmann::json::array();
+void add_protocol_header(nlohmann::json& resp) {
+    resp["schema_version"] = 3;
     resp["kernel_contract"] = {
         {"projection_abi_version", 1},
         {"descriptor_version", 1},
         {"pipeline_protocol_version", 1},
-        {"model_version", "v6-compact-window-20261005"},
+        {"model_version", "v7-three-actions-20261014"},
         {"timer_whitelist_version", "timer-whitelist-v1-20261005"},
         {"window_tile_limit", 1},
         {"window_local_error_ppm", 10000},
@@ -455,22 +420,6 @@ nlohmann::json compute_node(int rank, uint64_t id, const std::string& req,
     };
 }
 
-nlohmann::json pipeline_anchor_node(const int rank, const uint64_t id,
-                                    const std::string& role,
-                                    const std::string& segment_id) {
-    return {
-        {"rank", rank}, {"id", id}, {"type", 4},
-        {"name", "pipeline_anchor_" + role},
-        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
-        {"request_id", "req-A"}, {"stage", "decode"}, {"generation", 1},
-        {"compute", {{"num_ops", 0}, {"tensor_size", 0}, {"runtime_ns", 0},
-                      {"exec_role", "remote_read_pipeline_anchor"},
-                      {"pipeline_anchor", {{"segment_id", segment_id},
-                                           {"role", role}}}}},
-        {"comm", comm_defaults()}, {"coll", coll_defaults()},
-    };
-}
-
 nlohmann::json comm_node(int rank, uint64_t id, int type, int src, int dst,
                          int tag) {
     return {
@@ -513,7 +462,7 @@ nlohmann::json prefill_watch(const std::string& request_id,
 // One batch node, parsed through the production path in isolation.
 ParsedNode parse_single_node(const nlohmann::json& node_json, int num_ranks) {
     nlohmann::json resp;
-    add_v2_protocol_header(resp);
+    add_protocol_header(resp);
     resp["source_delivery_sequence"] = 0;
     resp["nodes"] = nlohmann::json::array({node_json});
     return parse_graph_batch(resp, num_ranks).nodes.at(0);
@@ -537,78 +486,30 @@ std::optional<uint64_t> legacy_candidate_preview_oracle(
     if (const auto committed = committer.resolve_store_id(rank, json_id)) {
         return committed;
     }
-
-    struct Span {
-        int rank = -1;
-        uint64_t first = 0;
-        uint64_t count = 0;
-        uint64_t stride = 1;
-    };
-    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
-    const auto last_id = [max_id](const Span& span,
-                                  uint64_t* const last) {
-        if (last == nullptr || span.count == 0 || span.stride == 0) {
-            return false;
-        }
-        const uint64_t steps = span.count - 1;
-        if (steps != 0 && span.stride > (max_id - span.first) / steps) {
-            return false;
-        }
-        *last = span.first + steps * span.stride;
-        return *last < max_id;
-    };
-
-    std::vector<Span> spans;
-    spans.reserve(batch.nodes.size() + batch.pipeline_descriptors.size() * 2);
+    uint64_t domain_first = std::numeric_limits<uint64_t>::max();
+    uint64_t domain_end = 0;
     for (const ParsedNode& node : batch.nodes) {
         if (node.node.rank < 0 || node.node.rank >= num_ranks ||
-            node.json_id == max_id) {
+            node.json_id == std::numeric_limits<uint64_t>::max()) {
             return std::nullopt;
         }
-        spans.push_back({node.node.rank, node.json_id, 1, 1});
+        if (node.node.rank != rank) continue;
+        domain_first = std::min(domain_first, node.json_id);
+        domain_end = std::max(domain_end, node.json_id + 1);
     }
-    for (const auto& descriptor : batch.pipeline_descriptors) {
-        if (!descriptor || descriptor->endpoint_runs().empty() ||
-            descriptor->anchors().empty()) {
-            return std::nullopt;
-        }
-        const int identity_rank = descriptor->identity().rank;
-        if (identity_rank < 0 || identity_rank >= num_ranks) {
-            return std::nullopt;
-        }
-        for (const auto& range : descriptor->logical_id_ranges()) {
-            const Span span{range.rank, range.first_json_id,
-                            range.count, range.stride};
-            uint64_t last = 0;
-            if (range.rank < 0 || range.rank >= num_ranks ||
-                !last_id(span, &last)) {
-                return std::nullopt;
-            }
-            spans.push_back(span);
-        }
-    }
-
-    uint64_t next_store_id =
-        (*graph_sources)[static_cast<size_t>(rank)]->store().next_auto_id();
-    uint64_t domain_first = max_id;
-    uint64_t domain_end = 0;
-    for (const Span& span : spans) {
-        if (span.rank != rank) continue;
-        uint64_t last = 0;
-        if (!last_id(span, &last) || last == max_id) return std::nullopt;
-        domain_first = std::min(domain_first, span.first);
-        domain_end = std::max(domain_end, last + 1);
-    }
-    if (domain_first == max_id || json_id < domain_first ||
-        json_id >= domain_end) {
+    if (domain_first == std::numeric_limits<uint64_t>::max() ||
+        json_id < domain_first || json_id >= domain_end) {
         return std::nullopt;
     }
+    const uint64_t next_store_id =
+        (*graph_sources)[static_cast<size_t>(rank)]->store().next_auto_id();
     const uint64_t offset = json_id - domain_first;
-    if (offset > max_id - next_store_id) return std::nullopt;
+    if (offset > std::numeric_limits<uint64_t>::max() - next_store_id) {
+        return std::nullopt;
+    }
     return next_store_id + offset;
 }
 
-// A typed prefill/decode watch over explicit (rank, json id) members.
 ParsedWatch typed_watch(const std::string& request_id, const std::string& stage,
                         std::vector<ParsedWatchMember> members,
                         std::vector<NodeTerminalStatus> statuses) {
@@ -627,7 +528,7 @@ ParsedWatch typed_watch(const std::string& request_id, const std::string& stage,
 // members, one assignment, one kv action and one future alarm for r2.
 nlohmann::json baseline_response() {
     nlohmann::json resp;
-    add_v2_protocol_header(resp);
+    add_protocol_header(resp);
     resp["batch_id"] = 0;
     resp["source_delivery_sequence"] = 0;
     resp["nodes"] = nlohmann::json::array({
@@ -732,130 +633,19 @@ std::vector<uint64_t> expected_parent_store_ids(const int rank,
 // A response skeleton with only the header (every array absent == empty).
 nlohmann::json empty_response(uint64_t sequence) {
     nlohmann::json resp;
-    add_v2_protocol_header(resp);
+    add_protocol_header(resp);
     resp["batch_id"] = sequence;
     resp["source_delivery_sequence"] = sequence;
     resp["touched_ranks"] = nlohmann::json::array();
     return resp;
 }
 
-void test_rank_id_intersection_sweep() {
-    using SpanSpec = GraphBatchCommitterTestAccess::IdSpanSpec;
-    using Counts = GraphBatchCommitterTestAccess::IdPreflightCounts;
-
-    Counts counts;
-    auto error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-        0, {{1, 3, 2}, {2, 2, 2}}, {}, &counts);
-    expect(!error.has_value() && counts.pair_envelope_candidates == 1 &&
-               counts.exact_pair_tests == 1,
-           "ID sweep: interleaved AP holes with overlapping envelopes remain legal");
-
-    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-        0, {{1, 3, 2}, {3, 2, 2}}, {}, &counts);
-    expect(error.has_value() &&
-               error->find("virtual endpoint progressions overlap") !=
-                   std::string::npos,
-           "ID sweep: an exact AP collision is rejected");
-
-    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-        0, {{1, 3, 2}}, {2, 3, 4, 7}, &counts);
-    expect(error.has_value() && error->find("JSON ID 3 overlaps") !=
-               std::string::npos && counts.physical_points_examined == 2,
-           "ID sweep: scans past physical 2 and rejects later overlapping 3");
-
-    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
-    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-        0, {{max_id - 4, 2, 2}, {max_id - 3, 2, 2}}, {}, &counts);
-    expect(!error.has_value() && counts.pair_envelope_candidates == 1 &&
-               counts.exact_pair_tests == 1,
-           "ID sweep boundary: disjoint interleaved APs may end at UINT64_MAX-1");
-
-    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-        0, {{max_id - 4, 2, 3}, {max_id - 1, 1, 1}}, {}, &counts);
-    expect(error.has_value() &&
-               error->find("virtual endpoint progressions overlap") !=
-                   std::string::npos &&
-               counts.pair_envelope_candidates == 1 &&
-               counts.exact_pair_tests == 1,
-           "ID sweep boundary: closed-envelope endpoint contact at UINT64_MAX-1 is checked");
-
-    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-        0, {{max_id - 4, 2, 3}, {max_id - 3, 2, 2}}, {}, &counts);
-    expect(error.has_value() &&
-               error->find("virtual endpoint progressions overlap") !=
-                   std::string::npos &&
-               counts.pair_envelope_candidates == 1 &&
-               counts.exact_pair_tests == 1,
-           "ID sweep boundary: mixed-stride APs intersect exactly at UINT64_MAX-1");
-
-    error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-        0, {{max_id - 3, 2, 3}}, {}, &counts);
-    expect(error.has_value() &&
-               error->find("progression arithmetic failed") !=
-                   std::string::npos,
-           "ID sweep boundary: a progression whose terminal is UINT64_MAX is rejected");
-
-    for (const uint64_t span_count : {uint64_t{8}, uint64_t{32},
-                                      uint64_t{128}}) {
-        std::vector<SpanSpec> spans;
-        std::vector<uint64_t> physical_ids;
-        spans.reserve(static_cast<size_t>(span_count));
-        for (uint64_t i = 0; i < span_count; i += 2) {
-            const uint64_t base = 1 + (i / 2) * 8;
-            spans.push_back({base, 2, 4});
-            spans.push_back({base + 2, 2, 4});
-            physical_ids.push_back(base + 1);
-            physical_ids.push_back(base + 3);
-            physical_ids.push_back(base + 5);
-        }
-        error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-            0, spans, std::move(physical_ids), &counts);
-        expect(!error.has_value() &&
-                   counts.pair_envelope_candidates == span_count / 2 &&
-                   counts.exact_pair_tests == span_count / 2 &&
-                   counts.pair_envelope_candidates <
-                       span_count * (span_count - 1) / 2 &&
-                   counts.physical_points_examined == 2 * span_count,
-               "ID sweep: bounded pair and physical-point work at 8/32/128 spans");
-
-        spans.clear();
-        for (uint64_t i = 0; i < span_count; ++i) {
-            spans.push_back({1 + i, 2, span_count});
-        }
-        error = GraphBatchCommitterTestAccess::validate_rank_id_spans(
-            0, spans, {}, &counts);
-        const uint64_t all_pairs = span_count * (span_count - 1) / 2;
-        expect(!error.has_value() &&
-                   counts.pair_envelope_candidates == all_pairs &&
-                   counts.exact_pair_tests == all_pairs,
-               "ID sweep: overlapping envelopes retain exact quadratic worst-case behavior");
-    }
-}
-
 void test_ordinary_id_overlap_preflight_atomicity() {
     nlohmann::json response = empty_response(0);
-    auto descriptor = TestSupport::descriptor_wire();
-    const std::string segment_id =
-        descriptor.at("identity").at("segment_id").get<std::string>();
-    // The rank-0 endpoint run has a physical tile-1 anchor at 51 and virtual
-    // tile-2/tile-3 IDs {53, 55}. The real physical anchors at 51 and 54 are
-    // present so the production parser accepts the descriptor. The smallest
-    // point-scan reproducer then checks 54 before reaching colliding ID 55;
-    // ID 56 is missing from the otherwise cardinality-complete logical span
-    // [51, 57].
-    descriptor["logical_id_ranges"][0]["first_json_id"] = 53;
-    descriptor["logical_id_ranges"][0]["count"] = 2;
-    descriptor["logical_id_ranges"][0]["stride"] = 2;
-    descriptor["endpoint_runs"][0]["first_json_id"] = 51;
-    descriptor["endpoint_runs"][0]["tile_stride"] = 2;
-    response["pipeline_descriptors"] = nlohmann::json::array({descriptor});
     response["nodes"] = nlohmann::json::array({
-        pipeline_anchor_node(0, 51, "start", segment_id),
-        compute_node(0, 52, "r1", "prefill", "id-hole-52"),
-        compute_node(0, 54, "r1", "prefill", "id-hole-54"),
-        compute_node(0, 55, "r1", "prefill", "id-collision-55"),
-        compute_node(0, 57, "r1", "prefill", "id-hole-57"),
-        pipeline_anchor_node(1, 54, "frontier", segment_id),
+        compute_node(0, 52, "r1", "prefill", "dup-52-a"),
+        compute_node(0, 53, "r1", "prefill", "gap-53"),
+        compute_node(0, 53, "r1", "prefill", "dup-53-b"),
     });
     const GraphBatch batch = parse_batch(response);
     Fixture fixture;
@@ -863,10 +653,9 @@ void test_ordinary_id_overlap_preflight_atomicity() {
     const auto preflight_error = GraphBatchCommitterTestAccess::validate_id_stream(
         fixture.committer, batch, &work);
     expect(preflight_error.has_value() &&
-               preflight_error->find("ordinary node JSON ID 55 overlaps") !=
-                   std::string::npos &&
-               work.physical_points_examined == 2,
-           "ID atomicity: the descriptor preflight detects its later physical AP collision");
+               preflight_error->find("duplicate ordinary node JSON ID 53") !=
+                   std::string::npos,
+           "ID atomicity: the preflight detects a duplicate ordinary node id");
 
     StateDelta delta;
     delta.delivery_sequence = 0;
@@ -878,32 +667,21 @@ void test_ordinary_id_overlap_preflight_atomicity() {
         fixture.committer.commit(delta, batch);
     } catch (const std::runtime_error& error) {
         rejected = std::string(error.what()).find(
-                       "ordinary node JSON ID 55 overlaps") !=
+                       "duplicate ordinary node JSON ID 53") !=
                    std::string::npos;
     }
     expect(rejected && snapshot_of(fixture) == before &&
                fixture.sources[0]->store().next_auto_id() == 1 &&
                fixture.sources[1]->store().next_auto_id() == 1 &&
                fixture.sources[2]->store().next_auto_id() == 1,
-           "ID atomicity: duplicate/missing coverage fails before any store or commit state changes");
+           "ID atomicity: duplicate ids fail before any store or commit state changes");
 }
 
 void test_candidate_id_preview_build_and_lookup_scaling() {
     Fixture fixture;
-    // This is a pure preview-index test; parse the immutable descriptor itself
-    // and build typed rows directly. The parser's cross-batch physical-anchor
-    // linkage is exercised by the production-parsed overlap fixture.
-    const auto descriptor = PipelineDescriptor::parse(
-        TestSupport::descriptor_wire());
-
-    const std::vector<std::pair<uint64_t, uint64_t>> scales{
-        {8, 8}, {32, 8}, {128, 8}, {8, 32}, {8, 128}};
-    for (const auto& scale : scales) {
-        const uint64_t physical_rows = scale.first;
-        const uint64_t descriptor_rows = scale.second;
+    for (const uint64_t physical_rows : {uint64_t{8}, uint64_t{32},
+                                         uint64_t{128}}) {
         GraphBatch batch;
-        batch.pipeline_descriptors.assign(
-            static_cast<size_t>(descriptor_rows / 2), descriptor);
         for (uint64_t i = 0; i < physical_rows; ++i) {
             ParsedNode parsed;
             parsed.json_id = 1000 + 4 * i;
@@ -911,8 +689,8 @@ void test_candidate_id_preview_build_and_lookup_scaling() {
             batch.nodes.push_back(std::move(parsed));
         }
 
-        // Q stays fixed at four while physical V and compact descriptor P rows
-        // grow independently in the single batch-domain build.
+        // Q stays fixed at four while the physical V rows grow in the single
+        // batch-domain build.
         const std::vector<std::pair<int, uint64_t>> queries{
             {0, 1000}, {0, 1001}, {1, 55}, {1, 56}};
         const auto result = GraphBatchCommitterTestAccess::preview_candidate_ids(
@@ -920,15 +698,10 @@ void test_candidate_id_preview_build_and_lookup_scaling() {
         const auto production_preview =
             fixture.committer.candidate_id_preview(batch);
         expect(result.work.rank_rows_initialized == 3 &&
-                   result.work.collected_spans ==
-                       physical_rows + descriptor_rows &&
-                   result.work.candidate_spans_examined ==
-                       physical_rows + descriptor_rows &&
-                   result.work.collected_spans +
-                           result.work.candidate_spans_examined ==
-                       2 * (physical_rows + descriptor_rows) &&
+                   result.work.collected_spans == physical_rows &&
+                   result.work.candidate_spans_examined == physical_rows &&
                    result.work.lookups == 4 && result.work.rank_row_probes == 4,
-               "candidate preview: collection+fold visit 2(V+P), with four fixed lookups");
+               "candidate preview: collection+fold visit each physical row once, with four fixed lookups");
         expect(result.mapped_ids.size() == queries.size(),
                "candidate preview: all fixed-scale queries return one result");
         for (size_t i = 0; i < queries.size(); ++i) {
@@ -951,9 +724,6 @@ void test_candidate_id_preview_build_and_lookup_scaling() {
 
 void test_candidate_id_preview_fail_closed_and_boundaries() {
     Fixture fixture;
-    GraphBatch valid_descriptor_batch;
-    valid_descriptor_batch.pipeline_descriptors.push_back(
-        PipelineDescriptor::parse(TestSupport::descriptor_wire()));
     GraphBatch valid_batch;
     valid_batch.nodes.push_back(parse_single_node(
         compute_node(0, 100, "preview", "prefill", "preview-node"), 3));
@@ -970,43 +740,31 @@ void test_candidate_id_preview_fail_closed_and_boundaries() {
                "candidate preview: bad ranks and out-of-hull IDs match the legacy oracle");
     }
 
-    GraphBatch malformed_batch = valid_batch;
-    malformed_batch.pipeline_descriptors.push_back(nullptr);
-    const std::vector<std::pair<int, uint64_t>> malformed_queries{
+    const std::vector<std::pair<int, uint64_t>> committed_queries{
         {0, 100}, {0, 101}};
-    const auto malformed_result =
-        GraphBatchCommitterTestAccess::preview_candidate_ids(
-            fixture.committer, malformed_batch, malformed_queries);
-    for (size_t i = 0; i < malformed_queries.size(); ++i) {
-        expect(malformed_result.mapped_ids[i] == legacy_candidate_preview_oracle(
-                   fixture.committer, &fixture.sources, 3, malformed_batch,
-                   malformed_queries[i].first, malformed_queries[i].second),
-               "candidate preview: failed span collection rejects all new candidates");
-    }
-
     GraphBatchCommitterTestAccess::seed_affine_range(
         fixture.committer, 0, 100, 42, 1);
     const auto committed_priority =
         GraphBatchCommitterTestAccess::preview_candidate_ids(
-            fixture.committer, malformed_batch, malformed_queries);
+            fixture.committer, valid_batch, committed_queries);
     expect(committed_priority.mapped_ids[0] == uint64_t{42} &&
                !committed_priority.mapped_ids[1].has_value() &&
                committed_priority.mapped_ids[0] == legacy_candidate_preview_oracle(
-                   fixture.committer, &fixture.sources, 3, malformed_batch,
+                   fixture.committer, &fixture.sources, 3, valid_batch,
                    0, 100),
-           "candidate preview: committed affine IDs retain priority over malformed candidate spans");
+           "candidate preview: committed affine IDs retain priority over candidate spans");
 
     const auto saved_rank_source = fixture.sources[1];
     fixture.sources[1].reset();
     const std::vector<std::pair<int, uint64_t>> null_rank_source_query{{1, 55}};
     const auto null_rank_source =
         GraphBatchCommitterTestAccess::preview_candidate_ids(
-            fixture.committer, valid_descriptor_batch, null_rank_source_query);
+            fixture.committer, valid_batch, null_rank_source_query);
     expect(!null_rank_source.mapped_ids.front().has_value() &&
                null_rank_source.mapped_ids.front() ==
                    legacy_candidate_preview_oracle(
                        fixture.committer, &fixture.sources, 3,
-                       valid_descriptor_batch, 1, 55),
+                       valid_batch, 1, 55),
            "candidate preview: a null rank graph source fails closed");
     fixture.sources[1] = saved_rank_source;
 
@@ -2656,7 +2414,6 @@ void test_affine_metadata_under_million_node_pressure() {
 }  // namespace
 int main() {
     Fixture f;
-    test_rank_id_intersection_sweep();
     test_ordinary_id_overlap_preflight_atomicity();
     test_candidate_id_preview_build_and_lookup_scaling();
     test_candidate_id_preview_fail_closed_and_boundaries();

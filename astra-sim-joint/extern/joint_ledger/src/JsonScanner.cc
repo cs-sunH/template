@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "joint_ledger/CompactWire.hh"
 #include "joint_ledger/LedgerTypes.hh"
 
 namespace jointledger {
@@ -238,7 +239,17 @@ ScanResult scan_request(const char* data, std::size_t length) {
         }
         pos = skip_ws(data, length, pos + 1);
         const std::size_t value_start = pos;
-        const std::size_t value_end = skip_value(data, length, pos);
+        std::size_t value_end;
+        if (is_compact_frame(data + pos, length - pos)) {
+            // workledger-compact-v1 member: a self-delimiting binary blob
+            // (its u32 total length covers the whole frame).  The outer
+            // splice removes the member wholesale, so the remaining outer
+            // bytes stay a valid JSON object.
+            value_end = pos + compact_frame_length(data + pos,
+                                                   length - pos);
+        } else {
+            value_end = skip_value(data, length, pos);
+        }
         std::string name;
         if (key_needs_decode(data, name_start + 1, name_end - 1)) {
             name = decode_string(data, name_start + 1, name_end - 1);

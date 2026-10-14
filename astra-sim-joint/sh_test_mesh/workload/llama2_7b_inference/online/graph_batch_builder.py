@@ -13,10 +13,6 @@ sh_3.0 发射结构（拼 batch 改造，2026-08-22；原两段式（准入+pref
 decode 整段）的列车化重构，设计文档《层次 B Continuous Batching 改造》§3.2）：
   - 准入动作（ARRIVAL 边界，emit_admission_batch）= 到达/interval gate →
     history_evictions → history_transfer（含 partial 流水恢复全部节点）→
-    prefill remote-read 前缀读流旁挂分支（2026-09-25 规格书§三：与后缀
-    池恢复并行、同一准入 frontier 分叉，interval gate 触发链恰一次消费 +
-    数据 tile 随消费窗在列车头发射、双 tile 缓冲 lag-2 复用与
-    _prefill_read_window_tiles 体块覆盖账本）→
     prefill_evictions → prefill readiness barrier（结构性主链节点）；prefill 主体不再在此发射；
   - KV 逐出并行化（2026-09-13）：history/prefill/decode 三类逐出发射循环
     经 _emit_side_branch 包成旁路支链（fork 自各 rank 当前 frontier，触发门
@@ -55,6 +51,7 @@ decode 整段）的列车化重构，设计文档《层次 B Continuous Batching
 
 import os
 import sys
+from bisect import bisect_right
 from collections.abc import Sequence
 
 # --------------------------------------------------------------------------
@@ -62,10 +59,6 @@ from collections.abc import Sequence
 # 配置模块在上一级。路径只做 import 用途（红线：generate_face_trace.py /
 # face_scheduler.py 只读 import 与注释）。
 # --------------------------------------------------------------------------
-# v4 G-line: cache-miss sentinel for the per-batch pipeline-group identity
-# cache (a cached None result is a legitimate lookup outcome).
-_GROUP_MISS = object()
-
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
 for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
@@ -94,345 +87,6 @@ from generate_face_trace import (  # noqa: E402
     reconcile_pending_history_location,
     sanitize_node_prefix,
 )
-from joint.pipeline_identity import (  # noqa: E402
-    PipelineIdentityAllocator,
-    PipelineIdentitySeed,
-)
-from joint.compact_pipeline import PhysicalPipelineDraft  # noqa: E402
-
-
-class CreditGateRange:
-    """Lazy contiguous tile-gate run for one request.
-
-    The scheduler stores one range per request/body intersection instead of
-    one ``(request_id, tile)`` tuple per tile. Consumers that still need the
-    historical pairs can iterate this object; compact emitters can inspect
-    ``first_tile`` and ``count`` directly.
-    """
-
-    __slots__ = ("request_id", "first_tile", "count")
-
-    def __init__(self, request_id, first_tile, count):
-        if not isinstance(request_id, str) or not request_id:
-            raise ValueError("credit gate request_id must be nonempty")
-        if type(first_tile) is not int or first_tile <= 0:
-            raise ValueError("credit gate first_tile must be positive")
-        if type(count) is not int or count <= 0:
-            raise ValueError("credit gate count must be positive")
-        self.request_id = request_id
-        self.first_tile = first_tile
-        self.count = count
-
-    @property
-    def last_tile(self):
-        return self.first_tile + self.count - 1
-
-    def __len__(self):
-        return self.count
-
-    def __iter__(self):
-        for offset in range(self.count):
-            yield self.request_id, self.first_tile + offset
-
-    def __contains__(self, item):
-        if not isinstance(item, tuple) or len(item) != 2:
-            return False
-        request_id, tile = item
-        return (request_id == self.request_id
-                and type(tile) is int
-                and self.first_tile <= tile <= self.last_tile)
-
-    def __eq__(self, other):
-        if isinstance(other, CreditGateRange):
-            return (self.request_id, self.first_tile, self.count) == (
-                other.request_id, other.first_tile, other.count)
-        if isinstance(other, Sequence):
-            if len(other) != self.count:
-                return False
-            return all(pair == expected for pair, expected in zip(self, other))
-        return NotImplemented
-
-    def __repr__(self):
-        return (f"CreditGateRange({self.request_id!r}, "
-                f"{self.first_tile}, {self.count})")
-
-
-class CreditGateSet(Sequence):
-    """Immutable structural runs with a lazy flat-pair sequence view."""
-
-    __slots__ = ("ranges", "_count")
-
-    def __init__(self, ranges=()):
-        copied = tuple(ranges)
-        if any(not isinstance(run, CreditGateRange) for run in copied):
-            raise TypeError("CreditGateSet only stores CreditGateRange values")
-        self.ranges = copied
-        self._count = sum(len(run) for run in copied)
-
-    def __len__(self):
-        return self._count
-
-    def __iter__(self):
-        for run in self.ranges:
-            yield from run
-
-    def __getitem__(self, index):
-        if isinstance(index, slice):
-            start, stop, step = index.indices(self._count)
-            return tuple(self[i] for i in range(start, stop, step))
-        if type(index) is not int:
-            raise TypeError("credit gate index must be an integer")
-        if index < 0:
-            index += self._count
-        if not 0 <= index < self._count:
-            raise IndexError(index)
-        for run in self.ranges:
-            if index < len(run):
-                return run.request_id, run.first_tile + index
-            index -= len(run)
-        raise IndexError(index)
-
-    def request_ids(self):
-        return frozenset(run.request_id for run in self.ranges)
-
-    def contains(self, request_id, tile):
-        return any(run.request_id == request_id
-                   and run.first_tile <= tile <= run.last_tile
-                   for run in self.ranges)
-
-    def __eq__(self, other):
-        if isinstance(other, CreditGateSet):
-            return self.ranges == other.ranges
-        if isinstance(other, Sequence):
-            if len(other) != self._count:
-                return False
-            return all(pair == expected for pair, expected in zip(self, other))
-        return NotImplemented
-
-    def __repr__(self):
-        return f"CreditGateSet({self.ranges!r})"
-
-
-def _gate_runs(gates):
-    """Return compact runs for new plans and normalize legacy pair lists."""
-    if isinstance(gates, CreditGateSet):
-        return gates.ranges
-    result = []
-    for request_id, tile in gates or ():
-        if (result and result[-1].request_id == request_id
-                and result[-1].last_tile + 1 == tile):
-            prior = result.pop()
-            result.append(CreditGateRange(
-                request_id, prior.first_tile, prior.count + 1))
-        else:
-            result.append(CreditGateRange(request_id, tile, 1))
-    return tuple(result)
-
-
-def _iter_gate_pairs(gates):
-    if isinstance(gates, CreditGateSet):
-        yield from gates
-        return
-    yield from (gates or ())
-
-
-def _gate_request_ids(gates):
-    if isinstance(gates, CreditGateSet):
-        return gates.request_ids()
-    return frozenset(request_id for request_id, _tile in gates or ())
-
-
-def _gate_contains(gates, request_id, tile):
-    if isinstance(gates, CreditGateSet):
-        return gates.contains(request_id, tile)
-    return (request_id, tile) in (gates or ())
-
-
-def _clip_pipeline_tile_run(run, first_tile, tile_count):
-    """Make one structural source/pass extent for an emitted subrange."""
-    first_tile = int(first_tile)
-    tile_count = int(tile_count)
-    run_first = int(run["first_tile"])
-    run_stop = run_first + int(run["tile_count"])
-    if tile_count <= 0 or first_tile < run_first \
-            or first_tile + tile_count > run_stop:
-        raise ValueError("pipeline tile subrange lies outside its source run")
-    offset_units = (first_tile - run_first) * int(run["units_per_tile"])
-    width_units = tile_count * int(run["units_per_tile"])
-    clipped = dict(run)
-    clipped["first_tile"] = first_tile
-    clipped["tile_count"] = tile_count
-    if run["axis_unit"] == "source_tokens":
-        total_units = min(width_units,
-                          int(run["total_units"]) - offset_units)
-        clipped_shards = []
-        for shard in run["shards"]:
-            row = dict(shard)
-            row["total_data_bytes"] = (
-                total_units * int(row["bytes_per_unit"]))
-            clipped_shards.append(row)
-    else:
-        clipped_shards = []
-        shard_totals = []
-        for shard in run["shards"]:
-            row = dict(shard)
-            remaining = max(0, int(row["total_data_bytes"]) - offset_units)
-            total_bytes = min(width_units, remaining)
-            row["total_data_bytes"] = total_bytes
-            clipped_shards.append(row)
-            shard_totals.append(total_bytes)
-        total_units = min(width_units, max(shard_totals, default=0))
-    if total_units <= 0:
-        raise ValueError("pipeline emitted subrange carries no axis units")
-    tail_units = total_units - (tile_count - 1) * int(run["units_per_tile"])
-    if not 0 < tail_units <= int(run["units_per_tile"]):
-        raise ValueError("clipped pipeline tail units are inconsistent")
-    clipped["total_units"] = total_units
-    clipped["tail_units"] = tail_units
-    clipped["shards"] = tuple(clipped_shards)
-    return clipped
-
-
-def _pipeline_tile_run_segments(runs, first_tile, tile_count):
-    """Yield source/pass extents split only where the active shard set changes.
-
-    The group keeps the complete source/pass axis and all original shards.
-    These shorter intervals are endpoint/tag run ranges inside that shared
-    group; they do not create smaller groups or zero-byte endpoint slots.
-    """
-    first_tile = int(first_tile)
-    stop_tile = first_tile + int(tile_count)
-    cursor = first_tile
-    for run in runs:
-        run_first = int(run["first_tile"])
-        run_stop = run_first + int(run["tile_count"])
-        left = max(cursor, run_first)
-        right = min(stop_tile, run_stop)
-        if right <= left:
-            continue
-        if left != cursor:
-            raise RuntimeError(
-                "planner source/pass ranges do not cover emitted tiles")
-        units_per_tile = int(run["units_per_tile"])
-        shard_ends = []
-        for shard in run["shards"]:
-            if run["axis_unit"] == "source_tokens":
-                active_tiles = (
-                    -(-int(run["total_units"]) // units_per_tile)
-                    if int(shard["bytes_per_unit"]) > 0 else 0)
-            else:
-                total_bytes = int(shard["total_data_bytes"])
-                active_tiles = -(-total_bytes // units_per_tile) if total_bytes else 0
-            end_tile = run_first + active_tiles
-            if left < end_tile < right:
-                shard_ends.append(end_tile)
-        boundaries = [left, *sorted(set(shard_ends)), right]
-        for begin, end in zip(boundaries, boundaries[1:]):
-            active = []
-            for shard in run["shards"]:
-                if run["axis_unit"] == "source_tokens":
-                    has_bytes = int(shard["bytes_per_unit"]) > 0
-                    shard_end = run_first + (
-                        -(-int(run["total_units"]) // units_per_tile)
-                        if has_bytes else 0)
-                else:
-                    total_bytes = int(shard["total_data_bytes"])
-                    shard_end = run_first + (
-                        -(-total_bytes // units_per_tile) if total_bytes else 0)
-                if begin >= shard_end:
-                    continue
-                active.append(shard)
-            if not active:
-                raise RuntimeError("emitted planner extent has no active shards")
-            yield run, begin, end - begin, tuple(active)
-        cursor = right
-        if cursor == stop_tile:
-            break
-    if cursor != stop_tile:
-        raise RuntimeError("planner source/pass ranges ended before emission")
-
-
-def _active_shards_at(run, tile):
-    """Return the original-order shards with nonzero bytes at one global tile."""
-    tile = int(tile)
-    first = int(run["first_tile"])
-    units_per_tile = int(run["units_per_tile"])
-    offset = (tile - first) * units_per_tile
-    active = []
-    for shard in run["shards"]:
-        if run["axis_unit"] == "source_tokens":
-            has_data = int(shard["bytes_per_unit"]) > 0
-        else:
-            has_data = offset < int(shard["total_data_bytes"])
-        if has_data:
-            active.append(shard)
-    return tuple(active)
-
-
-def _paired_pipeline_tile_segments(runs, first_consumer_tile, tile_count,
-                                   *, lag=2):
-    """Split consumer/successor pairs at both structural and tail boundaries.
-
-    Each yielded range has one consumer source/pass group, one successor
-    source/pass group, and fixed active shard sets on both sides. The groups
-    themselves remain the full original planner extents.
-    """
-    first = int(first_consumer_tile)
-    stop = first + int(tile_count)
-    cursor = first
-    ordered = tuple(runs)
-    while cursor < stop:
-        consumer = next((run for run in ordered
-                         if int(run["first_tile"]) <= cursor <
-                         int(run["first_tile"]) + int(run["tile_count"])),
-                        None)
-        successor_tile = cursor + lag
-        successor = next((run for run in ordered
-                          if int(run["first_tile"]) <= successor_tile <
-                          int(run["first_tile"]) + int(run["tile_count"])),
-                         None)
-        if consumer is None or successor is None:
-            raise RuntimeError(
-                "planner ranges do not cover a consumer/successor pair")
-        consumer_stop = (int(consumer["first_tile"])
-                         + int(consumer["tile_count"]))
-        successor_stop = (int(successor["first_tile"])
-                          + int(successor["tile_count"]) - lag)
-        end = min(stop, consumer_stop, successor_stop)
-        consumer_units = int(consumer["units_per_tile"])
-        successor_units = int(successor["units_per_tile"])
-        for shard in consumer["shards"]:
-            if consumer["axis_unit"] == "source_tokens":
-                active_count = (-(-int(consumer["total_units"])
-                                 // consumer_units)
-                                if int(shard["bytes_per_unit"]) > 0 else 0)
-            else:
-                amount = int(shard["total_data_bytes"])
-                active_count = -(-amount // consumer_units) if amount else 0
-            shard_end = int(consumer["first_tile"]) + active_count
-            if cursor < shard_end < end:
-                end = shard_end
-        for shard in successor["shards"]:
-            if successor["axis_unit"] == "source_tokens":
-                active_count = (-(-int(successor["total_units"])
-                                 // successor_units)
-                                if int(shard["bytes_per_unit"]) > 0 else 0)
-            else:
-                amount = int(shard["total_data_bytes"])
-                active_count = -(-amount // successor_units) if amount else 0
-            shard_end = int(successor["first_tile"]) + active_count - lag
-            if cursor < shard_end < end:
-                end = shard_end
-        if end <= cursor:
-            raise RuntimeError("consumer/successor segmentation made no progress")
-        consumer_active = _active_shards_at(consumer, cursor)
-        successor_active = _active_shards_at(successor, cursor + lag)
-        if not consumer_active or not successor_active:
-            raise RuntimeError(
-                "consumer/successor extent contains a zero-byte tile")
-        yield (consumer, successor, cursor, end - cursor,
-               consumer_active, successor_active)
-        cursor = end
 
 def first_token_split_enabled() -> bool:
     """WP9 首步批拆分总开关（SH_FIRST_TOKEN_SPLIT，B4 起缺省 "0" 关）。
@@ -454,265 +108,151 @@ def first_token_split_enabled() -> bool:
     return os.environ.get("SH_FIRST_TOKEN_SPLIT", "0") == "1"
 
 
-class _CreditPendingRange:
-    """One lazy lag-2 tail range; no per-tile transfer/name dictionary."""
+class _VirtualEndpointLookup:
+    """Virtual-endpoint 成员资格的精确索引（v10，直接替换线性扫描）。
 
-    __slots__ = (
-        "blocks", "first_block", "count", "first_pending_offset",
-        "next_block", "action_base", "prefix", "stage", "session_id",
-        "kind")
+    规范存储仍是 OnlineTraceBuilder.virtual_endpoint_ranges（等差数列
+    (first, count, stride)，注册时追加或仅尾合并）。本索引保存其按 first
+    排序的副本与各 range last 的 max 线段树：查询先用 bisect 把候选截断为
+    first <= id 的前缀，再在线段树上剪枝下钻，只枚举 [first, last] 覆盖
+    候选 id 的 range 并做与旧线性扫描完全相同的模测试——O(log n + 覆盖
+    数)，不再每次全量重扫。语义与线性扫描逐输入等价（any-match 与枚举
+    顺序无关）；覆盖区间可任意重叠，正确性不依赖不相交或注册有序假设
+    （乱序插入走防御性全量重建，仅慢不错）。
 
-    def __init__(self, blocks, *, first_pending_offset, action_base,
-                 prefix, stage, session_id, kind):
-        self.blocks = blocks
-        self.first_block = int(blocks[0][0])
-        self.count = len(blocks)
-        self.first_pending_offset = int(first_pending_offset)
-        self.next_block = self.first_block + self.first_pending_offset
-        self.action_base = int(action_base)
-        self.prefix = prefix
-        self.stage = stage
-        self.session_id = session_id
-        self.kind = kind
+    sync() 从规范列表推导（追加新项 + 刷新尾项）；注册侧每次调用恰一次
+    变更，常规路径为 O(1) 摊还（树容量倍增重建摊还 O(1)）。
+    """
 
-    @property
-    def last_block(self):
-        return self.first_block + self.count - 1
-
-    @property
-    def pending_count(self):
-        return max(0, self.last_block - self.next_block + 1)
-
-    def has(self, block_index):
-        return self.next_block <= int(block_index) <= self.last_block
-
-    def take(self, block_index):
-        block_index = int(block_index)
-        if not self.has(block_index):
-            return None
-        if block_index != self.next_block:
-            raise RuntimeError(
-                "credit pending range released out of order: expected tile "
-                "{} but got {}".format(self.next_block, block_index))
-        offset = block_index - self.first_block
-        recorded_index, transfer = self.blocks[offset]
-        if recorded_index != block_index:
-            raise RuntimeError("credit pending range has a non-contiguous tile index")
-        name = (
-            f"{self.prefix}_{self.stage}_action"
-            f"{self.action_base + offset:03d}_"
-            f"{sanitize_node_prefix(self.session_id)}_{self.kind}")
-        self.next_block += 1
-        return transfer, name
-
-    def transfer_at(self, block_index):
-        block_index = int(block_index)
-        if not self.first_block <= block_index <= self.last_block:
-            raise IndexError(block_index)
-        recorded_index, transfer = self.blocks[block_index - self.first_block]
-        if recorded_index != block_index:
-            raise RuntimeError(
-                "credit pending range has a non-contiguous tile index")
-        return transfer
-
-    def segments(self, first_block, count):
-        """Return source/pass intersections without making tile objects."""
-        first_block = int(first_block)
-        count = int(count)
-        if count <= 0 or first_block != self.next_block:
-            raise RuntimeError(
-                "credit pending range segment must begin at its next tile")
-        if first_block + count - 1 > self.last_block:
-            raise RuntimeError("credit pending range segment exceeds its tail")
-        runs = getattr(self.blocks, "pipeline_tile_runs", ())
-        if not runs:
-            raise RuntimeError(
-                "compact credit release requires planner source/pass ranges")
-        return tuple((run, left, width, active)
-                     for run, left, width, active
-                     in _pipeline_tile_run_segments(runs, first_block, count))
-
-    def advance(self, count):
-        count = int(count)
-        if count <= 0 or self.next_block + count - 1 > self.last_block:
-            raise RuntimeError("invalid credit pending range advance")
-        self.next_block += count
-
-    def __bool__(self):
-        return self.pending_count > 0
-
-    def __iter__(self):
-        return iter(range(self.next_block, self.last_block + 1))
-
-    def __len__(self):
-        return self.pending_count
-
-    def describe_pending(self):
-        if not self.pending_count:
-            return "empty"
-        return "{}..{} ({} tiles)".format(
-            self.next_block, self.last_block, self.pending_count)
-
-
-class _CreditArmRange:
-    """Bounded data-recv anchors for a structural tile range."""
-
-    __slots__ = ("entries", "coverage", "mainline")
+    __slots__ = ("_entries", "_lasts", "_synced", "_tail", "_size", "_tree")
 
     def __init__(self):
-        self.entries = []
-        self.coverage = []
-        self.mainline = []
+        self._entries = []  # (first, count, stride) 按 first 有序的副本
+        self._synced = 0    # 已同步的规范列表长度
+        self._tail = None   # 已同步的规范尾项（检测尾合并）
+        self._size = 1      # 线段树容量（2 的幂，叶在 size..2*size-1）
+        self._tree = [-1] * 2
+        self._lasts = []    # 与 _entries 对齐的 last 数组（树叶源）
 
-    def add_extent(self, first_tile, tile_count, target_ranks):
-        first_tile = int(first_tile)
-        tile_count = int(tile_count)
-        ranks = tuple(sorted(set(int(rank) for rank in target_ranks)))
-        if first_tile <= 0 or tile_count <= 0 or not ranks:
-            raise ValueError("credit arm extent is invalid")
-        self.coverage.append((first_tile, first_tile + tile_count - 1, ranks))
+    # -- 同步（注册侧唯一入口） ------------------------------------------
 
-    def covers(self, first_tile, last_tile, rank):
-        first_tile = int(first_tile)
-        last_tile = int(last_tile)
-        rank = int(rank)
-        cursor = first_tile
-        for left, right, ranks in sorted(self.coverage):
-            if right < cursor or rank not in ranks:
-                continue
-            if left > cursor:
-                return False
-            cursor = max(cursor, right + 1)
-            if cursor > last_tile:
-                return True
-        return cursor > last_tile
+    def sync(self, ranges):
+        n = len(ranges)
+        if (n == self._synced and n > 0
+                and ranges[n - 1] != self._tail):
+            # 尾合并（长度不变、尾项变化）：first 不变（三个合并分支都
+            # 保留 prior_first），仅 count/stride 变化 -> 原位刷新该叶。
+            self._replace_entry(ranges[n - 1])
+        for i in range(self._synced, n):
+            self._insert_entry(ranges[i])
+        self._synced = n
+        self._tail = ranges[n - 1] if n else None
 
-    def add_mainline_extent(self, first_tile, tile_count, target_ranks):
-        first_tile = int(first_tile)
-        tile_count = int(tile_count)
-        ranks = tuple(sorted(set(int(rank) for rank in target_ranks)))
-        if first_tile <= 0 or tile_count <= 0 or not ranks:
-            raise ValueError("credit mainline extent is invalid")
-        self.mainline.append((first_tile, first_tile + tile_count - 1, ranks))
-
-    def mainline_covers(self, tile, rank):
-        tile = int(tile)
-        rank = int(rank)
-        return any(left <= tile <= right and rank in ranks
-                   for left, right, ranks in self.mainline)
-
-    def add(self, tile, per_rank):
-        tile = int(tile)
-        if tile <= 0 or not per_rank:
+    def _insert_entry(self, entry):
+        entries = self._entries
+        first = entry[0]
+        if not entries or first >= entries[-1][0]:
+            entries.append(entry)
+            self._append_leaf(first + (entry[1] - 1) * entry[2])
             return
-        normalized = {
-            int(rank): ((int(node_id),) if type(node_id) is int else
-                        tuple(int(item) for item in node_id))
-            for rank, node_id in per_rank.items()}
-        for index, (prior_tile, prior) in enumerate(self.entries):
-            if prior_tile == tile:
-                merged = dict(prior)
-                for rank, node_ids in normalized.items():
-                    merged[rank] = tuple(dict.fromkeys(
-                        (*merged.get(rank, ()), *node_ids)))
-                self.entries[index] = (tile, merged)
-                return
-        self.entries.append((tile, normalized))
+        # 防御路径：乱序插入（当前注册方不产生，但正确性不依赖它）。
+        position = bisect_right(entries, first, key=lambda item: item[0])
+        entries.insert(position, entry)
+        self._rebuild()
 
-    def get(self, tile):
-        tile = int(tile)
-        for entry_tile, per_rank in reversed(self.entries):
-            if entry_tile == tile:
-                return {rank: (nodes[0] if len(nodes) == 1 else nodes)
-                        for rank, nodes in per_rank.items()}
-        return None
+    def _replace_entry(self, entry):
+        entries = self._entries
+        # 尾合并保留 first：按 first 定位（有并列时取任一即可，成员资格
+        # 与并列内部顺序无关）。
+        position = bisect_right(entries, entry[0], key=lambda item: item[0])
+        if position and entries[position - 1][0] == entry[0]:
+            position -= 1
+            entries[position] = entry
+            self._update_leaf(position, entry[0] + (entry[1] - 1) * entry[2])
+            return
+        # 防御：按 first 找不到原位（合并分支保证 first 不变，不应发生）。
+        # 先落规范项再全量重建，保证不丢更新。
+        entries.append(entry)
+        self._rebuild()
 
-    def dependencies(self, first_tile, last_tile):
-        first_tile = int(first_tile)
-        last_tile = int(last_tile)
-        result = {}
-        for tile, per_rank in self.entries:
-            if first_tile <= tile <= last_tile:
-                for rank, node_ids in per_rank.items():
-                    result.setdefault(int(rank), []).extend(node_ids)
-        return {rank: tuple(dict.fromkeys(node_ids))
-                for rank, node_ids in result.items()}
+    # -- 线段树 -----------------------------------------------------------
 
-    def __bool__(self):
-        return bool(self.entries)
+    def _append_leaf(self, last):
+        self._lasts.append(last)
+        leaves = len(self._lasts)
+        if leaves > self._size:
+            self._rebuild()
+            return
+        self._update_leaf(leaves - 1, last)
 
-    def __iter__(self):
-        return (tile for tile, _per_rank in self.entries)
+    def _update_leaf(self, leaf_index, last):
+        node = self._size + leaf_index
+        tree = self._tree
+        if tree[node] == last:
+            self._lasts[leaf_index] = last
+            return
+        self._lasts[leaf_index] = last
+        tree[node] = last
+        node //= 2
+        while node:
+            left = tree[2 * node]
+            right = tree[2 * node + 1]
+            new_max = left if left >= right else right
+            if tree[node] == new_max:
+                break
+            tree[node] = new_max
+            node //= 2
 
-    def __len__(self):
-        return len(self.entries)
+    def _rebuild(self):
+        entries = self._entries
+        n = len(entries)
+        size = 1
+        while size < max(n, 1):
+            size *= 2
+        tree = [-1] * (2 * size)
+        lasts = []
+        for leaf, (first, count, stride) in enumerate(entries):
+            last = first + (count - 1) * stride
+            lasts.append(last)
+            tree[size + leaf] = last
+        for node in range(size - 1, 0, -1):
+            left = tree[2 * node]
+            right = tree[2 * node + 1]
+            tree[node] = left if left >= right else right
+        self._size = size
+        self._tree = tree
+        self._lasts = lasts
 
-    def describe(self):
-        if not self.entries:
-            return "empty"
-        return "{}..{} ({} bounded anchors)".format(
-            min(tile for tile, _map in self.entries),
-            max(tile for tile, _map in self.entries), len(self.entries))
+    # -- 查询 -------------------------------------------------------------
 
-
-class _IndexedTransferBlocks:
-    """Lazy `(block_number, transfer)` range over a transfer sequence."""
-
-    __slots__ = ("transfers", "first_offset", "first_block", "count",
-                 "pipeline_tile_runs")
-
-    def __init__(self, transfers, *, first_offset, first_block):
-        self.transfers = transfers
-        self.first_offset = int(first_offset)
-        self.first_block = int(first_block)
-        self.count = max(0, len(transfers) - self.first_offset)
-        self.pipeline_tile_runs = tuple(
-            dict(run) for run in getattr(transfers,
-                                         "pipeline_tile_runs", ()))
-
-    def __len__(self):
-        return self.count
-
-    def __getitem__(self, index):
-        if isinstance(index, slice):
-            start, stop, step = index.indices(self.count)
-            return tuple(self[i] for i in range(start, stop, step))
-        index = int(index)
-        if index < 0:
-            index += self.count
-        if not 0 <= index < self.count:
-            raise IndexError(index)
-        return self.first_block + index, self.transfers[self.first_offset + index]
-
-    def __iter__(self):
-        for index in range(self.count):
-            yield self[index]
-
-
-class _TransferPayloadSequence:
-    """O(1) adapter for transfer streams with or without numbered entries."""
-
-    __slots__ = ("source", "pipeline_tile_runs")
-
-    def __init__(self, source):
-        self.source = source
-        self.pipeline_tile_runs = tuple(
-            dict(run) for run in getattr(source, "pipeline_tile_runs", ()))
-
-    def __len__(self):
-        return len(self.source)
-
-    def __getitem__(self, index):
-        value = self.source[index]
-        if (isinstance(value, tuple) and len(value) == 2
-                and type(value[0]) is int
-                and hasattr(value[1], "shards")):
-            return value[1]
-        return value
-
-    def __iter__(self):
-        for index in range(len(self)):
-            yield self[index]
+    def covering_entries(self, node_id):
+        """枚举 [first, last] 覆盖 node_id 的 (first, count, stride)。"""
+        entries = self._entries
+        if not entries or node_id < 0:
+            # 注册校验 first_id >= 0，负 id 不可能命中任何 range（与旧
+            # 线性扫描的 delta >= 0 分支等价）。
+            return
+        hi = bisect_right(entries, node_id, key=lambda item: item[0])
+        if hi == 0:
+            return  # 没有任何 first <= node_id 的 range
+        tree = self._tree
+        size = self._size
+        # 栈元素 (node, leaf_lo, leaf_span)：整枝剪除条件为
+        #   leaf_lo >= hi        （该子树全部 first > node_id）
+        #   tree[node] < node_id （该子树全部 last < node_id）
+        stack = [(1, 0, size)]
+        while stack:
+            node, lo, span = stack.pop()
+            if lo >= hi or tree[node] < node_id:
+                continue
+            if node >= size:
+                # 叶：tree[leaf] >= node_id 且 leaf < hi，即 first <=
+                # node_id <= last 恰为覆盖候选。
+                yield entries[node - size]
+                continue
+            half = span // 2
+            stack.append((2 * node, lo, half))
+            stack.append((2 * node + 1, lo + half, half))
 
 
 class OnlineTraceBuilder:
@@ -745,12 +285,12 @@ class OnlineTraceBuilder:
         self.nodes = []   # 本 rank 尚未交付的节点 dict（发射序）
         self.edges = []   # 本 rank 尚未交付的 parent edges
         self.node_count = 0
-        # Logical IDs occupied by compact remote-read endpoints.  These IDs
-        # are represented by descriptor runs, not ordinary node payloads;
-        # any later ordinary parent must therefore land on a structural
-        # physical anchor instead of one of these holes.
-        # Sparse affine holes, not a Python set of one ID per tile.
+        # Logical IDs reserved as virtual endpoints (no current emitters;
+        # the membership guard in _new_node stays as generic ID-space
+        # defense).
         self.virtual_endpoint_ranges = []
+        # v10: 精确成员资格索引（与规范列表同步，见 _VirtualEndpointLookup）。
+        self._virtual_endpoint_lookup = _VirtualEndpointLookup()
         # 当前 request-stage 反向索引上下文（每次 per-request 发射前设置）。
         self.request_id = ""
         self.stage = ""
@@ -842,9 +382,14 @@ class OnlineTraceBuilder:
         if node_id is None:
             return False
         node_id = int(node_id)
-        for first, count, stride in self.virtual_endpoint_ranges:
+        if not self.virtual_endpoint_ranges:
+            return False
+        # v10: 只枚举区间覆盖 node_id 的等差数列并做与旧线性扫描完全相同
+        # 的模测试（any-match 与枚举顺序无关），不再每次全量重扫。
+        for first, count, stride in \
+                self._virtual_endpoint_lookup.covering_entries(node_id):
             delta = node_id - first
-            if delta >= 0 and delta % stride == 0 and delta // stride < count:
+            if delta % stride == 0 and delta // stride < count:
                 return True
         return False
 
@@ -864,17 +409,21 @@ class OnlineTraceBuilder:
             if count == 1 and prior_count == 1 and first_id > prior_first:
                 self.virtual_endpoint_ranges[-1] = (
                     prior_first, 2, first_id - prior_first)
+                self._virtual_endpoint_lookup.sync(self.virtual_endpoint_ranges)
                 return
             if (prior_count == 1 and first_id > prior_first
                     and first_id == expected):
                 self.virtual_endpoint_ranges[-1] = (
                     prior_first, 2, first_id - prior_first)
+                self._virtual_endpoint_lookup.sync(self.virtual_endpoint_ranges)
                 return
             if (first_id == expected and stride == prior_stride):
                 self.virtual_endpoint_ranges[-1] = (
                     prior_first, prior_count + count, prior_stride)
+                self._virtual_endpoint_lookup.sync(self.virtual_endpoint_ranges)
                 return
         self.virtual_endpoint_ranges.append((first_id, count, stride))
+        self._virtual_endpoint_lookup.sync(self.virtual_endpoint_ranges)
 
     def reserve_endpoint_extent(self, count: int) -> int:
         """Reserve a contiguous logical ID extent without per-ID objects.
@@ -895,90 +444,6 @@ class OnlineTraceBuilder:
         """Compatibility helper for a singleton endpoint extent."""
         node_id = self.reserve_endpoint_extent(1)
         self.mark_virtual_endpoint_progression(node_id, 1, 1)
-        return node_id
-
-    def emit_reserved_pipeline_anchor(self, name: str, *, segment_id: str,
-                                      role: str, node_id: int,
-                                      legacy_context: dict) -> int:
-        """Materialize an anchor at an already reserved ID without advancing
-        the rank allocator a second time.
-        """
-        if role not in ("start", "frontier"):
-            raise ValueError("pipeline physical anchor role must be start/frontier")
-        if (type(node_id) is not int or node_id < 0
-                or node_id >= self.next_id):
-            raise ValueError("pipeline anchor ID must be inside a reserved extent")
-        context = dict(legacy_context)
-        if set(context) != {"request_id", "stage", "generation"}:
-            raise ValueError("pipeline anchor legacy context has invalid keys")
-        node = {
-            "rank": self.rank,
-            "id": node_id,
-            "name": name,
-            "type": COMP_NODE,
-            "is_cpu_op": False,
-            "is_timer_op": False,
-            "inputs_values": "",
-            "request_id": context["request_id"],
-            "stage": context["stage"],
-            "generation": context["generation"],
-            "compute": {
-                "num_ops": 0, "tensor_size": 0, "runtime_ns": 0,
-                "exec_role": "remote_read_pipeline_anchor",
-                "pipeline_anchor": {"segment_id": segment_id,
-                                    "role": role},
-            },
-            "mem": {"tensor_size": 0, "is_local_hbm_kv_restore": False,
-                    "hbm_access_mode": 0},
-            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0,
-                     "hbm_charge": True},
-            "coll": {"comm_type": 0, "bytes": 0, "priority": 0,
-                     "pg_name": "", "involved_dim": []},
-        }
-        self.nodes.append(node)
-        return node_id
-
-    def emit_pipeline_anchor(self, name: str, *, segment_id: str,
-                             role: str) -> int:
-        """Materialize a zero-cost COMP at one endpoint slot selected as an
-        execution frontier.  The descriptor dispatches the original endpoint
-        (including body-marker cost) through this structural node.
-        """
-        if role not in ("start", "frontier"):
-            raise ValueError("pipeline physical anchor role must be start/frontier")
-        node = {
-            "rank": self.rank,
-            "id": self.next_id,
-            "name": name,
-            "type": COMP_NODE,
-            "is_cpu_op": False,
-            "is_timer_op": False,
-            "inputs_values": "",
-            "request_id": self.request_id,
-            "stage": self.stage,
-            "generation": self.generation,
-            "compute": {
-                "num_ops": 0, "tensor_size": 0, "runtime_ns": 0,
-                "exec_role": "remote_read_pipeline_anchor",
-                "pipeline_anchor": {"segment_id": segment_id,
-                                    "role": role},
-            },
-            "mem": {"tensor_size": 0, "is_local_hbm_kv_restore": False,
-                    "hbm_access_mode": 0},
-            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0,
-                     "hbm_charge": True},
-            "coll": {"comm_type": 0, "bytes": 0, "priority": 0,
-                     "pg_name": "", "involved_dim": []},
-        }
-        node_id = self.next_id
-        # The endpoint's causal parents live in the descriptor and are gated
-        # by RemoteReadExecutor.  A normal parent edge here could illegally
-        # target a sparse virtual endpoint.
-        self.pending_extra_dependencies.clear()
-        self.next_id += 1
-        self.previous_id = node_id
-        self.nodes.append(node)
-        self.node_count += 1
         return node_id
 
     @staticmethod
@@ -1155,21 +620,6 @@ class GraphBatchBuilder:
 
     def __init__(self, config, *, digest_sink=None):
         self.config = config
-        # Run-scoped candidate/emission descriptor identity allocator. Candidate
-        # graphs only preview ordinals; an accepted physical GraphBatch commits
-        # them at its finalized publication point.
-        self.pipeline_identity_allocator = PipelineIdentityAllocator()
-        # Compact physical descriptor state is bounded to the current
-        # publication batch. OnlineTraceBuilder retains virtual membership as
-        # per-rank affine progressions rather than one ID per tile.
-        self._pipeline_drafts = {}
-        self._pipeline_credit_slots = {}
-        # v4 G-line: per-batch identity cache for _physical_pipeline_group
-        # (repeated same-(plan, stage, owner, run) credit-tile lookups skip
-        # rebuilding the content key; objects live through the batch).
-        self._pipeline_group_ids = {}
-        self._pipeline_plan_by_request = {}
-        self._pipeline_start_reserved = set()
         # die 后端发射语境（第一期；None = legacy）。online_service.py 构造
         # 本构图器时不感知 backend——语境由 OnlineSchedulerBase 从 manifest
         # 的 compute-cost-model/die-model-config 键构造后在每批发射前经
@@ -1216,28 +666,10 @@ class GraphBatchBuilder:
         # 消费（_arm_pending_store_edges），会话终结时清除（_emit_completion
         # 的 terminal 分支）。
         self.pending_store_tails = {}
-        # remote-read credit（唯一执行口径）：request_id ->
-        # {切片块号 b: {rank: 该 rank 上块 b 的 recv 完成门节点 id}}——
-        # 旁挂支链发射的尾块（块 2..M）流式到达语义的 body 依赖账本
-        # （_suffix_body_arms 同款手法：支链登记、体块消费点 arm）。列车
-        # 尾标记发射时清账（每列车恰一次——整列/余量批同路径）。
-        self._credit_arms = {}
-        # D09 有限字节双缓冲（2026-09-26，v2.0 §12）：request_id ->
-        # {tile 块号 b: (KVTransfer, action_name)}——切片块 3..M 的待发
-        # 账本。块 t 的生产受缓冲复用释放门约束（消费后归还 credit）：
-        # 块 t 的旁挂支链在**消费块 t-2 的体块发射点**才发射（fork =
-        # 该体块末节点 = 消费锚；exec 侧 tile recv 挂直接父边、home 侧
-        # 经释放 ack tag 配对承载跨 rank 因果）——慢计算不导致源端无限
-        # 泵出，任意时刻远读暂存 ≤2 块。列车头只发射块 2（第二缓冲并
-        # 行预取）；体发射逐块释放；尾标记结清（残留 fail-closed）。
-        # request_id -> one lazy lag-2 range (not a per-tile dict). The range
-        # points at a bounded source plan and computes transfer/action names
-        # only when a consumed tile releases its successor.
-        self._credit_pending_tiles = {}
         # C13 copy 逐 chunk 交接（2026-09-22，设计文档 §2.3 四步协议）：
         # request_id -> {交接块号 c: {rank: 该 rank 上块 c 的 recv 完成
         # 门节点 id}}——准入批发射的尾块（块 1..M-1）旁挂支链，流式到达
-        # 语义与 _credit_arms 同款；含首 chunk 的列车体按消费顺序逐块
+        # 含首 chunk 的列车体按消费顺序逐块
         # arm（I2 门并集同源），块 0 在准入主链（readiness barrier 只等
         # 它——不设"先整份搬运后计算"串行段）。列车体发射时消费（joiner
         # 恰一次），残留即 fail-closed。
@@ -1252,12 +684,6 @@ class GraphBatchBuilder:
         # release dependency = noc_migration_ack_recv；FS 账本侧的逐块
         # home 释放即以此为到达事实锚）。completion 批弹出（审计面）。
         self._copy_handoff_release_anchors = {}
-        # D09 prefill 远读逐 tile 读流（2026-09-27）：request_id -> 本列车
-        # 读流窗口已登记的 tile 序号集（列车头窗口发射处登记、列车体门
-        # 并集覆盖检查 + 列车尾结清弹出；残留 = 窗口发射/消费链破损，
-        # fail-closed）。tile 物理节点与完成门复用 decode credit 的
-        # _credit_arms/_credit_pending_tiles 账本（同一双缓冲释放协议）。
-        self._prefill_read_window_tiles = {}
         # D10 静默重建落执行图（v2.0 §6.2，2026-09-27）：本列车在飞发射
         # 的静默重建 span 欠账（span 值 → 待匹配数）——joiner plan 携带
         # joint_suppress_output=True + joint_prefill_stage="context_rebuild"
@@ -1291,7 +717,6 @@ class GraphBatchBuilder:
         self.batch = {
             "nodes": [],
             "parent_edges": [],
-            "pipeline_descriptors": [],
             # Private exact ledger: _collect already knows the source rank of
             # every appended node, so downstream GraphBatch metadata need not
             # rescan the complete node payload.
@@ -1302,1890 +727,6 @@ class GraphBatchBuilder:
             "future_alarms": [],
         }
         self.batch_first_step = False
-        self._pipeline_identity_seeds = []
-        self._pipeline_identity_seed_by_key = {}
-        self._pipeline_identity_preview = {}
-        self._pipeline_identity_finalized = False
-        self._pipeline_drafts = {}
-        self._pipeline_credit_slots = {}
-        self._pipeline_group_ids = {}
-        self._pipeline_plan_by_request = {}
-        self._pipeline_start_reserved = set()
-
-    def pipeline_identity_for(self, request_plan: dict, stage: str,
-                              rank: int):
-        """Preview the explicit actual-emission seed for one owner rank.
-
-        The request plan carries stage epoch and allocation IDs from the
-        scheduler's live lease. Previewing is side-effect free; the ordinal
-        advances only from finalize_pipeline_identities after the enclosing
-        GraphBatch is completely built.
-        """
-        if stage not in ("prefill", "decode"):
-            raise ValueError("pipeline stage must be prefill or decode")
-        matching = [
-            row for row in request_plan.get("pipeline_identity_seeds", ())
-            if row.get("stage") == stage and int(row.get("rank", -1)) == int(rank)
-        ]
-        if len(matching) != 1:
-            raise RuntimeError(
-                "actual remote-read emission requires exactly one explicit "
-                f"{stage} identity seed for rank {rank}")
-        row = matching[0]
-        seed = PipelineIdentitySeed(
-            request_id=str(row["request_id"]),
-            stage=str(row["stage"]),
-            generation=row["generation"],
-            stage_epoch=row["stage_epoch"],
-            rank=row["rank"],
-            staging_allocation_id=row["staging_allocation_id"],
-        )
-        key = (seed.request_id, seed.stage, seed.generation,
-               seed.stage_epoch, seed.rank)
-        prior = self._pipeline_identity_seed_by_key.get(key)
-        if prior is not None and prior != seed:
-            raise RuntimeError(
-                "one pipeline identity key carries multiple staging "
-                "allocation IDs in a GraphBatch")
-        if prior is None:
-            self._pipeline_identity_seed_by_key[key] = seed
-            self._pipeline_identity_seeds.append(seed)
-            identities = self.pipeline_identity_allocator.preview_batch(
-                self._pipeline_identity_seeds)
-            self._pipeline_identity_preview = {
-                (item.request_id, item.stage, item.generation,
-                 item.stage_epoch, item.rank): item
-                for item in identities}
-        return self._pipeline_identity_preview[key]
-
-    def finalize_pipeline_identities(self) -> None:
-        """Commit actual descriptor ordinals once the GraphBatch is finalized."""
-        if self._pipeline_identity_finalized:
-            return
-        committed = self.pipeline_identity_allocator.commit_batch(
-            self._pipeline_identity_seeds)
-        expected = tuple(
-            self._pipeline_identity_preview[
-                (seed.request_id, seed.stage, seed.generation,
-                 seed.stage_epoch, seed.rank)]
-            for seed in self._pipeline_identity_seeds)
-        if committed != expected:
-            raise RuntimeError(
-                "pipeline identity preview changed before GraphBatch "
-                "finalization")
-        for draft in self._pipeline_drafts.values():
-            self.batch["pipeline_descriptors"].append(
-                draft.finish().to_wire())
-        self._pipeline_identity_finalized = True
-
-    def _physical_pipeline_draft(self, request_plan, stream_stage, owner_rank):
-        stream_kind = ("prefill_read_window" if stream_stage == "prefill_read"
-                       else "decode_remote_credit")
-        identity_stage = "prefill" if stream_stage == "prefill_read" else "decode"
-        identity = self.pipeline_identity_for(
-            request_plan, identity_stage, owner_rank)
-        key = identity.segment_id
-        draft = self._pipeline_drafts.get(key)
-        if draft is None:
-            draft = PhysicalPipelineDraft(
-                identity=identity, stream_kind=stream_kind)
-            self._pipeline_drafts[key] = draft
-        elif draft.stream_kind != stream_kind:
-            raise RuntimeError("one pipeline identity changed physical stream kind")
-        return key, draft
-
-    def _physical_pipeline_group(self, request_plan, stream_stage,
-                                 owner_rank, tile_run):
-        """Get/create the complete rank-local source/pass group.
-
-        v4 G-line: an identity-keyed per-batch cache fronts the content-key
-        rebuild (the shard filter + key tuple dominate repeated credit-tile
-        release lookups).  request_plan/tile_run live for the whole batch, so
-        id() keys are stable; the cache resets in begin_batch.  Construction
-        lives in _physical_pipeline_group_build.
-        """
-        identity_key = (
-            id(request_plan), stream_stage, int(owner_rank), id(tile_run))
-        cached = self._pipeline_group_ids.get(identity_key, _GROUP_MISS)
-        if cached is not _GROUP_MISS:
-            return cached
-        slot = self._physical_pipeline_group_build(
-            request_plan, stream_stage, owner_rank, tile_run)
-        self._pipeline_group_ids[identity_key] = slot
-        return slot
-
-    def _physical_pipeline_group_build(self, request_plan, stream_stage,
-                                       owner_rank, tile_run):
-        """Original rank-local source/pass group construction.
-
-        Short-shard tails split endpoint/tag runs only. The descriptor group
-        retains the planner's original shared tile axis and every shard routed
-        to this owner, including shards that become inactive before the axis
-        ends.
-        """
-        segment_id, draft = self._physical_pipeline_draft(
-            request_plan, stream_stage, owner_rank)
-        shards = tuple(
-            dict(shard) for shard in tile_run["shards"]
-            if int(shard["target_rank"]) == int(owner_rank))
-        if not shards:
-            return None
-        # Group identity follows the source/pass boundary, not the release
-        # call that happened to expose a portion of this range.
-        group_key = (
-            segment_id, int(tile_run["pass_or_window_ordinal"]),
-            int(tile_run["source_ordinal"]), str(tile_run["source_key"]),
-            int(tile_run["first_tile"]), int(tile_run["tile_count"]),
-            int(tile_run["layer_start"]), int(tile_run["layer_end"]),
-            str(tile_run["axis_unit"]), int(tile_run["total_units"]),
-            int(tile_run["units_per_tile"]), int(tile_run["tail_units"]),
-            tuple((int(shard["global_shard_ordinal"]),
-                   int(shard["source_rank"]), int(shard["target_rank"]),
-                   int(shard.get("total_data_bytes", -1)),
-                   int(shard.get("bytes_per_unit", -1)),
-                   tuple(int(rank) for rank in shard["noc_path"]))
-                  for shard in shards),
-        )
-        slot = self._pipeline_credit_slots.get(group_key)
-        if slot is not None:
-            return slot
-        total_bytes = tuple(
-            (int(tile_run["total_units"]) * int(shard["bytes_per_unit"])
-             if tile_run["axis_unit"] == "source_tokens"
-             else int(shard["total_data_bytes"]))
-            for shard in shards)
-        bytes_per_unit = tuple(
-            int(shard.get("bytes_per_unit", 1)) for shard in shards)
-        group_ordinal = draft.add_group_range(
-            pass_or_window_ordinal=int(tile_run["pass_or_window_ordinal"]),
-            source_ordinal=int(tile_run["source_ordinal"]),
-            source_key=str(tile_run["source_key"]),
-            layer_start=int(tile_run["layer_start"]),
-            layer_end=int(tile_run["layer_end"]),
-            global_tile_first=int(tile_run["first_tile"]),
-            tile_count=int(tile_run["tile_count"]),
-            axis_unit=str(tile_run["axis_unit"]),
-            total_units=int(tile_run["total_units"]),
-            units_per_tile=int(tile_run["units_per_tile"]),
-            tail_units=int(tile_run["tail_units"]),
-            owner_shards=shards,
-            shard_total_bytes=total_bytes,
-            shard_bytes_per_unit=bytes_per_unit)
-        slot = {
-            "segment_id": segment_id,
-            "draft": draft,
-            "group_ordinal": group_ordinal,
-            "identity_rank": int(owner_rank),
-            "tile_run": dict(tile_run),
-            "owner_shards": shards,
-            "global_to_local_shard": {
-                int(shard["global_shard_ordinal"]): local
-                for local, shard in enumerate(shards)},
-        }
-        self._pipeline_credit_slots[group_key] = slot
-        return slot
-
-    def _emit_compact_credit_extent(
-            self, member_plan, clipped_run, transfer, *, stage,
-            release_anchor, first_tile, tile_count, parent_by_rank=None):
-        """Bulk-reserve one fixed-shard source/pass endpoint extent.
-
-        This is called only at an old emission point (immediate tail or one
-        body release point). The range has already been split at planner and
-        per-shard short-tail boundaries, so each represented tile has the
-        same endpoint/tag shape. No tile payloads or endpoint dictionaries
-        are retained.
-        """
-        request_id = member_plan["request_id"]
-        first_tile = int(first_tile)
-        tile_count = int(tile_count)
-        if tile_count <= 0:
-            raise ValueError("compact credit extent must be nonempty")
-        shards = tuple(clipped_run["shards"])
-        if not shards:
-            raise RuntimeError("compact credit extent has no active shards")
-        expected_shards = tuple(transfer.shards)
-        if len(expected_shards) != len(shards):
-            raise RuntimeError(
-                "planner active-shard extent disagrees with its first tile")
-        for expected, planned in zip(expected_shards, shards):
-            units = min(int(clipped_run["units_per_tile"]),
-                        int(clipped_run["total_units"]))
-            expected_bytes = (
-                units * int(planned["bytes_per_unit"])
-                if clipped_run["axis_unit"] == "source_tokens"
-                else min(int(clipped_run["units_per_tile"]),
-                         int(planned["total_data_bytes"])))
-            if (int(expected.source_rank) != int(planned["source_rank"])
-                    or int(expected.target_rank) != int(planned["target_rank"])
-                    or tuple(int(rank) for rank in expected.noc_path)
-                    != tuple(int(rank) for rank in planned["noc_path"])
-                    or int(expected.bytes) != expected_bytes):
-                raise RuntimeError(
-                    "planner structural extent does not match the legacy "
-                    "first transfer payload")
-
-        stream_stage = "prefill_read" if stage == "prefill_read" else "remote_credit"
-        owner_ranks = tuple(dict.fromkeys(
-            int(shard["target_rank"]) for shard in shards))
-        slots = {
-            owner: self._physical_pipeline_group(
-                member_plan, stream_stage, owner, clipped_run)
-            for owner in owner_ranks}
-        if any(slot is None for slot in slots.values()):
-            raise RuntimeError("compact credit owner group was not created")
-
-        tag_per_shard = 3 if release_anchor else 2
-        tag_count = tile_count * len(shards) * tag_per_shard
-        first_tag, emission_ordinal = self.tag_allocator.reserve_with_ordinal(
-            tag_count)
-        rank_events = {}
-        tile_events = []
-        if release_anchor:
-            endpoint_pattern = (
-                ("release_ack_send", 0), ("release_ack_recv", 0),
-                ("data_send", 1), ("data_recv", 1),
-                ("fill_ack_send", 2), ("fill_ack_recv", 2),
-            )
-        else:
-            endpoint_pattern = (
-                ("data_send", 0), ("data_recv", 0),
-                ("fill_ack_send", 1), ("fill_ack_recv", 1),
-            )
-        for global_shard_index, shard in enumerate(shards):
-            for endpoint, tag_in_shard in endpoint_pattern:
-                source_side = endpoint in (
-                    "data_send", "fill_ack_recv", "release_ack_recv")
-                rank = int(shard["source_rank"] if source_side
-                           else shard["target_rank"])
-                event = {
-                    "global_shard_index": global_shard_index,
-                    "endpoint": endpoint,
-                    "rank": rank,
-                    "tag_in_shard": tag_in_shard,
-                }
-                tile_events.append(event)
-                rank_events.setdefault(rank, []).append(event)
-
-        captured_context = {
-            rank: {
-                "request_id": builder.request_id,
-                "stage": builder.stage,
-                "generation": builder.generation,
-            }
-            for rank, builder in self.builders.items()}
-        if parent_by_rank is None:
-            parent_by_rank = {
-                rank: self.builders[rank].previous_id
-                for rank in rank_events}
-        else:
-            parent_by_rank = {
-                rank: parent_by_rank.get(rank, self.builders[rank].previous_id)
-                for rank in rank_events}
-
-        rank_bases = {}
-        for rank, events in rank_events.items():
-            rank_bases[rank] = self.builders[rank].reserve_endpoint_extent(
-                tile_count * len(events))
-            self.batch["_touched_ranks"].add(int(rank))
-
-        # One original TransferTagAllocator take() span is shared by all
-        # owner descriptors. The local group/shard mapping differs, while the
-        # allocation identity and global tag formula stay common.
-        for owner, slot in slots.items():
-            slot["draft"].add_tag_allocation_reference(
-                allocator_scope_id="graph-batch-transfer-tags-v1",
-                emission_ordinal=emission_ordinal,
-                first_tag=first_tag,
-                count=tag_count,
-                group_ordinal=slot["group_ordinal"],
-                first_tile=1,
-                tile_count=tile_count,
-                first_shard=0,
-                shard_count=len(slot["owner_shards"]))
-
-        recv_anchors = {}
-        owner_local_by_global = {
-            owner: slot["global_to_local_shard"]
-            for owner, slot in slots.items()}
-        event_position = {
-            (event["rank"], event["global_shard_index"], event["endpoint"]): pos
-            for rank, events in rank_events.items()
-            for pos, event in enumerate(events)}
-        descriptor_hole_starts = {
-            owner: len(slot["draft"]._holes) for owner, slot in slots.items()}
-        descriptor_anchor_starts = {
-            owner: len(slot["draft"].anchors) for owner, slot in slots.items()}
-
-        # Plan the bounded anchor exceptions before registering dependency
-        # kinds, because a parent that lands on one of these slots is an
-        # ordinary physical terminal while other endpoint parents are holes.
-        anchor_specs_by_event = {}
-        for owner, slot in slots.items():
-            owner_events = [event for event in tile_events
-                            if int(shards[event["global_shard_index"]]["target_rank"])
-                            == owner]
-            start_event = owner_events[0]
-            start_global_shard = start_event["global_shard_index"]
-            start_local_shard = owner_local_by_global[owner][
-                int(shards[start_global_shard]["global_shard_ordinal"])]
-            anchor_specs_by_event.setdefault(
-                (owner, start_global_shard, start_event["endpoint"]), []).append(
-                    (1, start_local_shard, "start"))
-            for global_shard_index, shard in enumerate(shards):
-                if int(shard["target_rank"]) != owner:
-                    continue
-                local_shard = owner_local_by_global[owner][
-                    int(shard["global_shard_ordinal"])]
-                recv_tiles = (range(1, tile_count + 1) if tile_count <= 2
-                              else range(tile_count - 1, tile_count + 1))
-                for local_tile in recv_tiles:
-                    anchor_specs_by_event.setdefault(
-                        (owner, global_shard_index, "data_recv"), []).append(
-                            (local_tile, local_shard, "frontier"))
-                    event_pos = event_position[(
-                        int(shard["target_rank"]), global_shard_index,
-                        "data_recv")]
-                    node_id = (rank_bases[int(shard["target_rank"])]
-                               + (local_tile - 1)
-                               * len(rank_events[int(shard["target_rank"])])
-                               + event_pos)
-                    recv_anchors.setdefault(local_tile, {}).setdefault(
-                        owner, []).append(node_id)
-
-        planned_anchor_ids = set()
-        for (owner, global_shard_index, endpoint), specifications in \
-                anchor_specs_by_event.items():
-            rank = next(event["rank"] for event in tile_events
-                        if event["global_shard_index"] == global_shard_index
-                        and event["endpoint"] == endpoint)
-            local_shard = owner_local_by_global[owner][
-                int(shards[global_shard_index]["global_shard_ordinal"])]
-            pos = event_position[(rank, global_shard_index, endpoint)]
-            for local_tile, _shard_ordinal, _role in specifications:
-                planned_anchor_ids.add((
-                    rank, rank_bases[rank]
-                    + (local_tile - 1) * len(rank_events[rank]) + pos))
-
-        # The start selector is the first endpoint slot emitted for this
-        # owner-domain group. The final two data_recv slots per source shard
-        # remain bounded body frontiers; intermediate endpoints are holes.
-        for owner, slot in slots.items():
-            draft = slot["draft"]
-            for event in tile_events:
-                global_shard_index = event["global_shard_index"]
-                shard = shards[global_shard_index]
-                if int(shard["target_rank"]) != owner:
-                    continue
-                local_shard = owner_local_by_global[owner][
-                    int(shard["global_shard_ordinal"])]
-                rank = event["rank"]
-                pos = event_position[(rank, global_shard_index,
-                                      event["endpoint"])]
-                anchor_exceptions = []
-                specifications = anchor_specs_by_event.get(
-                    (owner, global_shard_index, event["endpoint"]), ())
-                for anchor_tile, anchor_shard, role in specifications:
-                    if role == "start" and slot["segment_id"] in \
-                            self._pipeline_start_reserved:
-                        continue
-                    anchor_exceptions.append((
-                        anchor_tile, anchor_shard, event["endpoint"], role))
-                run = {
-                    "rank": rank,
-                    "group_ordinal": slot["group_ordinal"],
-                    "first_tile": 1,
-                    "tile_count": tile_count,
-                    "shard_ordinals": [local_shard],
-                    "first_json_id": rank_bases[rank] + pos,
-                    "tile_stride": len(rank_events[rank]),
-                    "shard_stride": 1,
-                    "initial_parent_json_id": None,
-                    "legacy_context": dict(captured_context[rank]),
-                    "legs": [{
-                        "endpoint": event["endpoint"],
-                        "json_offset": 0,
-                        "tag_emission_ordinal": emission_ordinal,
-                        "tag_offset": (
-                            global_shard_index * tag_per_shard
-                            + event["tag_in_shard"]),
-                        "tag_tile_stride": len(shards) * tag_per_shard,
-                        "tag_shard_stride": tag_per_shard,
-                    }],
-                }
-                parent = (parent_by_rank[rank] if pos == 0 else
-                          rank_bases[rank] + pos - 1)
-                run["initial_parent_json_id"] = parent
-                run_index = draft.add_endpoint_run(
-                    run, anchor_exceptions=anchor_exceptions)
-                if parent is not None:
-                    if pos == 0:
-                        dep_first = int(parent)
-                        dep_stride = 0
-                    else:
-                        dep_first = rank_bases[rank] + pos - 1
-                        dep_stride = len(rank_events[rank])
-                    parent_is_anchor = (rank, dep_first) in planned_anchor_ids
-                    parent_virtual = (
-                        False if parent_is_anchor else
-                        (self.builders[rank].is_virtual_endpoint(dep_first)
-                         if pos == 0 else True))
-                    draft.add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": slot["group_ordinal"],
-                        "first_tile": 1,
-                        "tile_count": tile_count,
-                        "shard_ordinals": [local_shard],
-                        "endpoint": event["endpoint"],
-                        "dependency_kind": (
-                            "virtual_endpoint_terminal"
-                            if parent_virtual else "ordinary_node_terminal"),
-                        "first_dependency_json_id": dep_first,
-                        "dependency_tile_stride": dep_stride,
-                        "dependency_shard_stride": 0,
-                    })
-            if slot["segment_id"] not in self._pipeline_start_reserved:
-                self._pipeline_start_reserved.add(slot["segment_id"])
-
-        # Add sparse endpoint membership only after all run anchor exceptions
-        # are known. This makes ordinary builders reject any accidental edge
-        # to an unmaterialized endpoint before the next ordinary node emits.
-        for owner, slot in slots.items():
-            draft = slot["draft"]
-            for hole in draft._holes[descriptor_hole_starts[owner]:]:
-                self.builders[int(hole["rank"])].mark_virtual_endpoint_progression(
-                    int(hole["first_json_id"]), int(hole["count"]),
-                    int(hole["stride"]))
-        seen_anchor_keys = set()
-        for owner, slot in slots.items():
-            for anchor in slot["draft"].anchors[
-                    descriptor_anchor_starts[owner]:]:
-                key = (owner, anchor["rank"], anchor["node_id"])
-                if key in seen_anchor_keys:
-                    continue
-                seen_anchor_keys.add(key)
-                builder = self.builders[int(anchor["rank"])]
-                draft = slot["draft"]
-                selector = anchor["selector"]
-                context = None
-                for run in draft.endpoint_runs:
-                    if (run["group_ordinal"] == selector.get("group_ordinal")
-                            and run["rank"] == anchor["rank"]
-                            and run["first_tile"] <= selector.get("tile_ordinal", 0)
-                            < run["first_tile"] + run["tile_count"]
-                            and selector.get("shard_ordinal")
-                            in run["shard_ordinals"]
-                            and any(leg["endpoint"] == selector.get("endpoint")
-                                    for leg in run["legs"])):
-                        context = run["legacy_context"]
-                        break
-                if context is None:
-                    raise RuntimeError(
-                        "pipeline anchor has no matching endpoint context")
-                builder.emit_reserved_pipeline_anchor(
-                    "{}_pipeline_{}_{}_{}".format(
-                        sanitize_node_prefix(request_id), stage,
-                        anchor["role"], anchor["node_id"]),
-                    segment_id=str(slot["segment_id"]),
-                    role=anchor["role"], node_id=int(anchor["node_id"]),
-                    legacy_context=context)
-
-        arm_range = self._credit_arms.setdefault(
-            request_id, _CreditArmRange())
-        for local_tile, per_rank in recv_anchors.items():
-            arm_range.add(first_tile + local_tile - 1, per_rank)
-        return {
-            "first_tag": first_tag,
-            "emission_ordinal": emission_ordinal,
-            "tile_count": tile_count,
-            "rank_bases": rank_bases,
-            "slots": slots,
-        }
-
-    def _emit_compact_initial_range(
-            self, member_plan, tile_run, transfer, active_shards, *, stage,
-            first_tile, tile_count, parent_by_rank=None):
-        """Bulk emit an un-released source/pass range at its real emit point."""
-        request_id = member_plan["request_id"]
-        first_tile = int(first_tile)
-        tile_count = int(tile_count)
-        active_shards = tuple(active_shards)
-        if tile_count <= 0 or not active_shards:
-            raise ValueError("initial compact extent must contain active tiles")
-        first_offset = ((first_tile - int(tile_run["first_tile"]))
-                        * int(tile_run["units_per_tile"]))
-        units = min(int(tile_run["units_per_tile"]),
-                    int(tile_run["total_units"]) - first_offset)
-        expected = []
-        for shard in active_shards:
-            if tile_run["axis_unit"] == "source_tokens":
-                amount = units * int(shard["bytes_per_unit"])
-            else:
-                amount = max(0, min(
-                    int(shard["total_data_bytes"]), first_offset + units)
-                    - first_offset)
-            if amount:
-                expected.append((int(shard["source_rank"]),
-                                 int(shard["target_rank"]),
-                                 tuple(int(rank) for rank in shard["noc_path"]),
-                                 amount))
-        actual = [(int(shard.source_rank), int(shard.target_rank),
-                   tuple(int(rank) for rank in shard.noc_path),
-                   int(shard.bytes)) for shard in transfer.shards]
-        if expected != actual:
-            raise RuntimeError(
-                "compact initial range disagrees with its frozen transfer "
-                "factory at the first tile")
-
-        stream_stage = "prefill_read" if stage == "prefill_read" else "remote_credit"
-        owner_ranks = tuple(dict.fromkeys(
-            int(shard["target_rank"]) for shard in active_shards))
-        slots = {
-            owner: self._physical_pipeline_group(
-                member_plan, stream_stage, owner, tile_run)
-            for owner in owner_ranks}
-        local_first = first_tile - int(tile_run["first_tile"]) + 1
-        tag_per_shard = 2
-        tag_count = tile_count * len(active_shards) * tag_per_shard
-        first_tag, emission_ordinal = self.tag_allocator.reserve_with_ordinal(
-            tag_count)
-        endpoint_pattern = (
-            ("data_send", 0), ("data_recv", 0),
-            ("fill_ack_send", 1), ("fill_ack_recv", 1),
-        )
-        events = []
-        active_index = {}
-        for index, shard in enumerate(active_shards):
-            global_ordinal = int(shard["global_shard_ordinal"])
-            active_index[global_ordinal] = index
-            owner = int(shard["target_rank"])
-            slot = slots[owner]
-            local_shard = slot["global_to_local_shard"][global_ordinal]
-            for endpoint, tag_stage in endpoint_pattern:
-                source_side = endpoint in ("data_send", "fill_ack_recv")
-                rank = int(shard["source_rank"] if source_side
-                           else shard["target_rank"])
-                events.append({
-                    "rank": rank, "owner": owner, "endpoint": endpoint,
-                    "tag_stage": tag_stage, "shard": shard,
-                    "local_shard": local_shard, "slot": slot,
-                })
-        events_by_rank = {}
-        positions = {}
-        for event in events:
-            rank = int(event["rank"])
-            positions[id(event)] = len(events_by_rank.setdefault(rank, []))
-            events_by_rank[rank].append(event)
-        checkpoint = {rank: builder.previous_id
-                      for rank, builder in self.builders.items()}
-        if parent_by_rank is None:
-            parent_by_rank = checkpoint
-        else:
-            parent_by_rank = {
-                rank: parent_by_rank.get(rank, checkpoint[rank])
-                for rank in events_by_rank}
-        for rank in events_by_rank:
-            if self.builders[rank].pending_extra_dependencies:
-                raise RuntimeError(
-                    "compact initial range encountered unconsumed ordinary "
-                    "dependencies")
-
-        rank_bases = {}
-        cycles = {}
-        for rank, rank_events in events_by_rank.items():
-            cycles[rank] = len(rank_events)
-            rank_bases[rank] = self.builders[rank].reserve_endpoint_extent(
-                tile_count * len(rank_events))
-            self.batch["_touched_ranks"].add(rank)
-        for owner, slot in slots.items():
-            slot["draft"].add_tag_allocation_reference(
-                allocator_scope_id="graph-batch-transfer-tags-v1",
-                emission_ordinal=emission_ordinal,
-                first_tag=first_tag, count=tag_count,
-                group_ordinal=slot["group_ordinal"],
-                first_tile=local_first, tile_count=tile_count,
-                first_shard=0, shard_count=len(slot["owner_shards"]))
-
-        anchor_specs = {}
-        planned_anchor_ids = set()
-        for owner, slot in slots.items():
-            owner_events = [event for event in events
-                            if int(event["owner"]) == owner]
-            if not owner_events:
-                raise RuntimeError("owner group has no emitted endpoint")
-            if slot["segment_id"] not in self._pipeline_start_reserved:
-                event = owner_events[0]
-                pos = positions[id(event)]
-                node_id = rank_bases[int(event["rank"])] + pos
-                anchor_specs.setdefault(id(event), []).append(
-                    (local_first, int(event["local_shard"]),
-                     event["endpoint"], "start"))
-                planned_anchor_ids.add((int(event["rank"]), node_id))
-            for event in owner_events:
-                if event["endpoint"] != "data_recv":
-                    continue
-                rank = int(event["rank"])
-                pos = positions[id(event)]
-                for local_tile in range(max(0, tile_count - 2), tile_count):
-                    node_id = rank_bases[rank] + local_tile * cycles[rank] + pos
-                    anchor_specs.setdefault(id(event), []).append(
-                        (local_first + local_tile,
-                         int(event["local_shard"]), event["endpoint"],
-                         "frontier"))
-                    planned_anchor_ids.add((rank, node_id))
-
-        # Preserve the exact old rank-chain tail at this emission point for
-        # ordinary nodes that follow the transfer (for example P's pstart
-        # marker). The tail can be an ACK endpoint, so retain that one bounded
-        # terminal per physical rank even when it is not a data_recv frontier.
-        terminal_by_rank = {}
-        for event in events:
-            terminal_by_rank[int(event["rank"])] = event
-        for rank, event in terminal_by_rank.items():
-            pos = positions[id(event)]
-            node_id = (rank_bases[rank]
-                       + (tile_count - 1) * cycles[rank] + pos)
-            anchor_specs.setdefault(id(event), []).append(
-                (local_first + tile_count - 1,
-                 int(event["local_shard"]), event["endpoint"], "frontier"))
-            planned_anchor_ids.add((rank, node_id))
-
-        hole_starts = {id(slot["draft"]): len(slot["draft"]._holes)
-                       for slot in slots.values()}
-        anchor_starts = {id(slot["draft"]): len(slot["draft"].anchors)
-                         for slot in slots.values()}
-        for event in events:
-            slot = event["slot"]
-            rank = int(event["rank"])
-            pos = positions[id(event)]
-            cycle = cycles[rank]
-            parent = (int(parent_by_rank[rank]) if pos == 0
-                      and parent_by_rank[rank] is not None
-                      else (None if pos == 0 else rank_bases[rank] + pos - 1))
-            active_pos = active_index[
-                int(event["shard"]["global_shard_ordinal"])]
-            tag_offset = active_pos * tag_per_shard + int(event["tag_stage"])
-            run = {
-                "rank": rank,
-                "group_ordinal": int(slot["group_ordinal"]),
-                "first_tile": local_first,
-                "tile_count": tile_count,
-                "shard_ordinals": [int(event["local_shard"])],
-                "first_json_id": rank_bases[rank] + pos,
-                "tile_stride": cycle,
-                "shard_stride": 1,
-                "initial_parent_json_id": parent,
-                "legacy_context": {
-                    "request_id": self.builders[rank].request_id,
-                    "stage": self.builders[rank].stage,
-                    "generation": self.builders[rank].generation,
-                },
-                "legs": [{
-                    "endpoint": event["endpoint"], "json_offset": 0,
-                    "tag_emission_ordinal": emission_ordinal,
-                    "tag_offset": tag_offset,
-                    "tag_tile_stride": len(active_shards) * tag_per_shard,
-                    "tag_shard_stride": 1,
-                }],
-            }
-            slot["draft"].add_endpoint_run(
-                run, anchor_exceptions=anchor_specs.get(id(event), ()))
-            if pos == 0 and tile_count > 1:
-                # The first emitted tile inherits the old chain checkpoint,
-                # which may legitimately be empty. Every later tile starts
-                # from the previous rank-local cycle tail in either case.
-                if parent is not None:
-                    checkpoint_kind = (
-                        "virtual_endpoint_terminal"
-                        if self.builders[rank].is_virtual_endpoint(parent)
-                        else "ordinary_node_terminal")
-                    slot["draft"].add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": local_first,
-                        "tile_count": 1,
-                        "shard_ordinals": [int(event["local_shard"])],
-                        "endpoint": event["endpoint"],
-                        "dependency_kind": checkpoint_kind,
-                        "first_dependency_json_id": int(parent),
-                        "dependency_tile_stride": 0,
-                        "dependency_shard_stride": 0,
-                    })
-                slot["draft"].add_endpoint_dependency_run({
-                    "rank": rank,
-                    "group_ordinal": int(slot["group_ordinal"]),
-                    "first_tile": local_first + 1,
-                    "tile_count": tile_count - 1,
-                    "shard_ordinals": [int(event["local_shard"])],
-                    "endpoint": event["endpoint"],
-                    "dependency_kind": "virtual_endpoint_terminal",
-                    "first_dependency_json_id": rank_bases[rank] + cycle - 1,
-                    "dependency_tile_stride": cycle,
-                    "dependency_shard_stride": 0,
-                })
-                continue
-            if parent is not None:
-                if pos == 0:
-                    dep_first = parent
-                    dep_stride = 0
-                else:
-                    dep_first = rank_bases[rank] + pos - 1
-                    dep_stride = cycle
-                exceptional = set()
-                if dep_stride:
-                    for anchor_rank, anchor_id in planned_anchor_ids:
-                        if anchor_rank == rank and anchor_id >= dep_first:
-                            delta = anchor_id - dep_first
-                            if delta % dep_stride == 0:
-                                offset = delta // dep_stride
-                                if offset < tile_count:
-                                    exceptional.add(offset)
-                default_kind = (
-                    "virtual_endpoint_terminal" if pos
-                    else ("virtual_endpoint_terminal"
-                          if self.builders[rank].is_virtual_endpoint(parent)
-                          else "ordinary_node_terminal"))
-                if pos == 0 and tile_count > 1:
-                    checkpoint_kind = default_kind
-                    slot["draft"].add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": local_first,
-                        "tile_count": 1,
-                        "shard_ordinals": [int(event["local_shard"])],
-                        "endpoint": event["endpoint"],
-                        "dependency_kind": checkpoint_kind,
-                        "first_dependency_json_id": dep_first,
-                        "dependency_tile_stride": 0,
-                        "dependency_shard_stride": 0,
-                    })
-                    slot["draft"].add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": local_first + 1,
-                        "tile_count": tile_count - 1,
-                        "shard_ordinals": [int(event["local_shard"])],
-                        "endpoint": event["endpoint"],
-                        "dependency_kind": "virtual_endpoint_terminal",
-                        "first_dependency_json_id": (
-                            rank_bases[rank] + cycle - 1),
-                        "dependency_tile_stride": cycle,
-                        "dependency_shard_stride": 0,
-                    })
-                    continue
-                cursor = 0
-                for offset in sorted(exceptional):
-                    if offset > cursor:
-                        slot["draft"].add_endpoint_dependency_run({
-                            "rank": rank,
-                            "group_ordinal": int(slot["group_ordinal"]),
-                            "first_tile": local_first + cursor,
-                            "tile_count": offset - cursor,
-                            "shard_ordinals": [int(event["local_shard"])],
-                            "endpoint": event["endpoint"],
-                            "dependency_kind": default_kind,
-                            "first_dependency_json_id": dep_first
-                                + cursor * dep_stride,
-                            "dependency_tile_stride": dep_stride,
-                            "dependency_shard_stride": 0,
-                        })
-                    slot["draft"].add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": local_first + offset,
-                        "tile_count": 1,
-                        "shard_ordinals": [int(event["local_shard"])],
-                        "endpoint": event["endpoint"],
-                        "dependency_kind": "ordinary_node_terminal",
-                        "first_dependency_json_id": dep_first
-                            + offset * dep_stride,
-                        "dependency_tile_stride": 0,
-                        "dependency_shard_stride": 0,
-                    })
-                    cursor = offset + 1
-                if cursor < tile_count:
-                    slot["draft"].add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": local_first + cursor,
-                        "tile_count": tile_count - cursor,
-                        "shard_ordinals": [int(event["local_shard"])],
-                        "endpoint": event["endpoint"],
-                        "dependency_kind": default_kind,
-                        "first_dependency_json_id": dep_first
-                            + cursor * dep_stride,
-                        "dependency_tile_stride": dep_stride,
-                        "dependency_shard_stride": 0,
-                    })
-
-        for slot in slots.values():
-            draft = slot["draft"]
-            for hole in draft._holes[hole_starts[id(draft)]:]:
-                self.builders[int(hole["rank"])].mark_virtual_endpoint_progression(
-                    int(hole["first_json_id"]), int(hole["count"]),
-                    int(hole["stride"]))
-        anchors_to_emit = []
-        seen = set()
-        for slot in slots.values():
-            draft = slot["draft"]
-            for anchor in draft.anchors[anchor_starts[id(draft)]:]:
-                key = (anchor["rank"], anchor["node_id"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                selector = anchor["selector"]
-                context = next((run["legacy_context"]
-                                for run in draft.endpoint_runs
-                                if run["group_ordinal"]
-                                    == selector.get("group_ordinal")
-                                and run["rank"] == anchor["rank"]
-                                and run["first_tile"]
-                                    <= selector.get("tile_ordinal", 0)
-                                    < run["first_tile"] + run["tile_count"]
-                                and selector.get("shard_ordinal")
-                                    in run["shard_ordinals"]
-                                and any(leg["endpoint"]
-                                        == selector.get("endpoint")
-                                        for leg in run["legs"])), None)
-                if context is None:
-                    raise RuntimeError("compact anchor has no endpoint context")
-                anchors_to_emit.append((anchor, context, slot["segment_id"]))
-        anchors_to_emit.sort(key=lambda item: (item[0]["rank"], item[0]["node_id"]))
-        for anchor, context, segment_id in anchors_to_emit:
-            self.builders[int(anchor["rank"])].emit_reserved_pipeline_anchor(
-                "{}_pipeline_{}_{}_{}".format(
-                    sanitize_node_prefix(request_id), stage,
-                    anchor["role"], anchor["node_id"]),
-                segment_id=str(segment_id), role=anchor["role"],
-                node_id=int(anchor["node_id"]), legacy_context=context)
-        for rank in rank_bases:
-            self.builders[rank].previous_id = (
-                rank_bases[rank] + tile_count * cycles[rank] - 1)
-
-        arm_range = self._credit_arms.setdefault(request_id, _CreditArmRange())
-        arm_range.add_extent(first_tile, tile_count, owner_ranks)
-        recv_anchors = {}
-        for event in events:
-            if event["endpoint"] != "data_recv":
-                continue
-            rank = int(event["rank"])
-            owner = int(event["owner"])
-            shard_ordinal = int(event["shard"]["global_shard_ordinal"])
-            pos = positions[id(event)]
-            for offset in range(max(0, tile_count - 2), tile_count):
-                node_id = rank_bases[rank] + offset * cycles[rank] + pos
-                per_owner = recv_anchors.setdefault(first_tile + offset, {})
-                prior = per_owner.get(owner)
-                if prior is None or shard_ordinal > prior[0]:
-                    per_owner[owner] = (shard_ordinal, node_id)
-        for tile, endpoints in recv_anchors.items():
-            per_owner = {owner: value[1]
-                         for owner, value in endpoints.items()}
-            arm_range.add(tile, per_owner)
-        for owner, slot in slots.items():
-            self._pipeline_start_reserved.add(slot["segment_id"])
-        return {
-            "first_tag": first_tag,
-            "emission_ordinal": emission_ordinal,
-            "tile_count": tile_count,
-            "rank_bases": rank_bases,
-            "cycle_by_rank": cycles,
-            "slots": slots,
-        }
-
-    def _emit_compact_cross_body_range(
-            self, request_id, pending, tile_run, first_tile, tile_count,
-            active_shards, stage):
-        """Bulk emit successor tiles forked from one completed body block.
-
-        Each tile's first endpoint keeps the same body-tail parent (stride 0);
-        rank-local endpoint chains remain inside that tile. The range is only
-        widened across gates that share this original body emission point.
-        """
-        request_plan = self._pipeline_plan_by_request.get(request_id)
-        if request_plan is None:
-            raise RuntimeError(
-                "compact cross-body release has no explicit pipeline identity seed")
-        first_tile = int(first_tile)
-        tile_count = int(tile_count)
-        active_shards = tuple(active_shards)
-        if tile_count <= 0 or not active_shards:
-            raise ValueError("cross-body compact extent must be nonempty")
-        stream_stage = pending.stage
-        if stream_stage not in ("prefill_read", "remote_credit"):
-            raise RuntimeError("unknown compact credit stream stage")
-
-        first_transfer = pending.transfer_at(first_tile)
-        first_offset = ((first_tile - int(tile_run["first_tile"]))
-                        * int(tile_run["units_per_tile"]))
-        units = min(int(tile_run["units_per_tile"]),
-                    int(tile_run["total_units"]) - first_offset)
-        expected = []
-        for shard in active_shards:
-            if tile_run["axis_unit"] == "source_tokens":
-                amount = units * int(shard["bytes_per_unit"])
-            else:
-                amount = max(0, min(
-                    int(shard["total_data_bytes"]), first_offset + units)
-                    - first_offset)
-            if amount:
-                expected.append((int(shard["source_rank"]),
-                                 int(shard["target_rank"]),
-                                 tuple(int(rank) for rank in shard["noc_path"]),
-                                 amount))
-        actual = [(int(shard.source_rank), int(shard.target_rank),
-                   tuple(int(rank) for rank in shard.noc_path),
-                   int(shard.bytes)) for shard in first_transfer.shards]
-        if actual != expected:
-            raise RuntimeError(
-                "compact cross-body range disagrees with its frozen transfer "
-                "factory at the first tile")
-
-        owner_ranks = tuple(dict.fromkeys(
-            int(shard["target_rank"]) for shard in active_shards))
-        slots = {
-            owner: self._physical_pipeline_group(
-                request_plan, stream_stage, owner, tile_run)
-            for owner in owner_ranks}
-        if any(slot is None for slot in slots.values()):
-            raise RuntimeError("cross-body range has an empty owner group")
-        for slot in slots.values():
-            slot["identity_rank"] = int(slot["draft"].identity.rank)
-
-        release_pattern = (
-            ("release_ack_send", 0), ("release_ack_recv", 0),
-            ("data_send", 1), ("data_recv", 1),
-            ("fill_ack_send", 2), ("fill_ack_recv", 2),
-        )
-        active_position = {
-            int(shard["global_shard_ordinal"]): index
-            for index, shard in enumerate(active_shards)}
-        events = []
-        for shard in active_shards:
-            owner = int(shard["target_rank"])
-            slot = slots[owner]
-            ordinal = int(shard["global_shard_ordinal"])
-            local_shard = slot["global_to_local_shard"][ordinal]
-            for endpoint, tag_stage in release_pattern:
-                source_side = endpoint in (
-                    "release_ack_recv", "data_send", "fill_ack_recv")
-                rank = int(shard["source_rank"] if source_side else
-                           shard["target_rank"])
-                events.append({
-                    "rank": rank, "owner": owner,
-                    "endpoint": endpoint, "tag_stage": tag_stage,
-                    "shard": shard, "local_shard": local_shard,
-                    "slot": slot,
-                })
-        events_by_rank = {}
-        positions = {}
-        for event in events:
-            rank = int(event["rank"])
-            positions[id(event)] = len(events_by_rank.setdefault(rank, []))
-            events_by_rank[rank].append(event)
-        if not events_by_rank:
-            raise RuntimeError("cross-body compact event cycle is empty")
-
-        checkpoints = {rank: builder.previous_id
-                       for rank, builder in self.builders.items()}
-        if any(self.builders[rank].pending_extra_dependencies
-               for rank in events_by_rank):
-            raise RuntimeError(
-                "cross-body compact range encountered unconsumed ordinary "
-                "dependencies before a fork")
-        rank_bases = {}
-        cycles = {}
-        for rank, rank_events in events_by_rank.items():
-            cycles[rank] = len(rank_events)
-            rank_bases[rank] = self.builders[rank].reserve_endpoint_extent(
-                tile_count * cycles[rank])
-            self.batch["_touched_ranks"].add(rank)
-
-        tag_count = tile_count * 3 * len(active_shards)
-        first_tag, emission_ordinal = self.tag_allocator.reserve_with_ordinal(
-            tag_count)
-        local_first = first_tile - int(tile_run["first_tile"]) + 1
-        for owner, slot in slots.items():
-            slot["draft"].add_tag_allocation_reference(
-                allocator_scope_id="graph-batch-transfer-tags-v1",
-                emission_ordinal=emission_ordinal,
-                first_tag=first_tag, count=tag_count,
-                group_ordinal=slot["group_ordinal"],
-                first_tile=local_first, tile_count=tile_count,
-                first_shard=0, shard_count=len(slot["owner_shards"]))
-
-        planned_anchor_ids = set()
-        anchor_specs = {}
-        for event in events:
-            if event["endpoint"] != "data_recv":
-                continue
-            rank = int(event["rank"])
-            pos = positions[id(event)]
-            for offset in range(max(0, tile_count - 2), tile_count):
-                node_id = rank_bases[rank] + offset * cycles[rank] + pos
-                anchor_specs.setdefault(id(event), []).append(
-                    (local_first + offset, int(event["local_shard"]),
-                     event["endpoint"], "frontier"))
-                planned_anchor_ids.add((rank, node_id))
-
-        for owner, slot in slots.items():
-            if slot["segment_id"] in self._pipeline_start_reserved:
-                continue
-            event = next((row for row in events
-                          if int(row["owner"]) == owner), None)
-            if event is None:
-                raise RuntimeError("cross-body owner has no endpoint")
-            rank = int(event["rank"])
-            pos = positions[id(event)]
-            node_id = rank_bases[rank] + pos
-            anchor_specs.setdefault(id(event), []).append(
-                (local_first, int(event["local_shard"]),
-                 event["endpoint"], "start"))
-            planned_anchor_ids.add((rank, node_id))
-
-        hole_starts = {id(slot["draft"]): len(slot["draft"]._holes)
-                       for slot in slots.values()}
-        anchor_starts = {id(slot["draft"]): len(slot["draft"].anchors)
-                         for slot in slots.values()}
-        for event in events:
-            slot = event["slot"]
-            rank = int(event["rank"])
-            pos = positions[id(event)]
-            cycle = cycles[rank]
-            parent = (rank_bases[rank] + pos - 1 if pos
-                      else checkpoints[rank])
-            active_index = active_position[
-                int(event["shard"]["global_shard_ordinal"])]
-            run = {
-                "rank": rank,
-                "group_ordinal": int(slot["group_ordinal"]),
-                "first_tile": local_first,
-                "tile_count": tile_count,
-                "shard_ordinals": [int(event["local_shard"])],
-                "first_json_id": rank_bases[rank] + pos,
-                "tile_stride": cycle,
-                "shard_stride": 1,
-                "initial_parent_json_id": parent,
-                "legacy_context": {
-                    "request_id": self.builders[rank].request_id,
-                    "stage": self.builders[rank].stage,
-                    "generation": self.builders[rank].generation,
-                },
-                "legs": [{
-                    "endpoint": event["endpoint"], "json_offset": 0,
-                    "tag_emission_ordinal": emission_ordinal,
-                    "tag_offset": active_index * 3
-                    + int(event["tag_stage"]),
-                    "tag_tile_stride": 3 * len(active_shards),
-                    "tag_shard_stride": 1,
-                }],
-            }
-            slot["draft"].add_endpoint_run(
-                run, anchor_exceptions=anchor_specs.get(id(event), ()))
-
-            if pos:
-                dep_first = rank_bases[rank] + pos - 1
-                dep_stride = cycle
-                default_kind = "virtual_endpoint_terminal"
-            else:
-                dep_first = checkpoints[rank]
-                dep_stride = 0
-                if dep_first is None:
-                    continue
-                default_kind = (
-                    "virtual_endpoint_terminal"
-                    if self.builders[rank].is_virtual_endpoint(dep_first)
-                    else "ordinary_node_terminal")
-            exceptional = set()
-            if dep_stride:
-                for anchor_rank, anchor_id in planned_anchor_ids:
-                    if anchor_rank != rank or anchor_id < dep_first:
-                        continue
-                    delta = anchor_id - dep_first
-                    if delta % dep_stride == 0:
-                        offset = delta // dep_stride
-                        if offset < tile_count:
-                            exceptional.add(offset)
-            cursor = 0
-            for offset in sorted(exceptional):
-                if offset > cursor:
-                    slot["draft"].add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": local_first + cursor,
-                        "tile_count": offset - cursor,
-                        "shard_ordinals": [int(event["local_shard"])],
-                        "endpoint": event["endpoint"],
-                        "dependency_kind": default_kind,
-                        "first_dependency_json_id": dep_first
-                            + cursor * dep_stride,
-                        "dependency_tile_stride": dep_stride,
-                        "dependency_shard_stride": 0,
-                    })
-                slot["draft"].add_endpoint_dependency_run({
-                    "rank": rank,
-                    "group_ordinal": int(slot["group_ordinal"]),
-                    "first_tile": local_first + offset,
-                    "tile_count": 1,
-                    "shard_ordinals": [int(event["local_shard"])],
-                    "endpoint": event["endpoint"],
-                    "dependency_kind": "ordinary_node_terminal",
-                    "first_dependency_json_id": dep_first
-                        + offset * dep_stride,
-                    "dependency_tile_stride": 0,
-                    "dependency_shard_stride": 0,
-                })
-                cursor = offset + 1
-            if cursor < tile_count:
-                slot["draft"].add_endpoint_dependency_run({
-                    "rank": rank,
-                    "group_ordinal": int(slot["group_ordinal"]),
-                    "first_tile": local_first + cursor,
-                    "tile_count": tile_count - cursor,
-                    "shard_ordinals": [int(event["local_shard"])],
-                    "endpoint": event["endpoint"],
-                    "dependency_kind": default_kind,
-                    "first_dependency_json_id": dep_first + cursor * dep_stride,
-                    "dependency_tile_stride": dep_stride,
-                    "dependency_shard_stride": 0,
-                })
-
-        for slot in slots.values():
-            draft = slot["draft"]
-            for hole in draft._holes[hole_starts[id(draft)]:]:
-                self.builders[int(hole["rank"])].mark_virtual_endpoint_progression(
-                    int(hole["first_json_id"]), int(hole["count"]),
-                    int(hole["stride"]))
-        anchors_to_emit = []
-        seen = set()
-        for slot in slots.values():
-            draft = slot["draft"]
-            for anchor in draft.anchors[anchor_starts[id(draft)]:]:
-                key = (anchor["rank"], anchor["node_id"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                selector = anchor["selector"]
-                context = next((run["legacy_context"]
-                                for run in draft.endpoint_runs
-                                if run["group_ordinal"]
-                                    == selector.get("group_ordinal")
-                                and run["rank"] == anchor["rank"]
-                                and run["first_tile"]
-                                    <= selector.get("tile_ordinal", 0)
-                                    < run["first_tile"] + run["tile_count"]
-                                and selector.get("shard_ordinal")
-                                    in run["shard_ordinals"]
-                                and any(leg["endpoint"]
-                                        == selector.get("endpoint")
-                                        for leg in run["legs"])), None)
-                if context is None:
-                    raise RuntimeError(
-                        "cross-body anchor has no matching endpoint context")
-                anchors_to_emit.append((anchor, context, slot["segment_id"]))
-        anchors_to_emit.sort(key=lambda item: (item[0]["rank"],
-                                               item[0]["node_id"]))
-        for anchor, context, segment_id in anchors_to_emit:
-            self.builders[int(anchor["rank"])].emit_reserved_pipeline_anchor(
-                "{}_pipeline_frontier_{}".format(
-                    sanitize_node_prefix(request_id), anchor["node_id"]),
-                segment_id=str(segment_id), role=anchor["role"],
-                node_id=int(anchor["node_id"]), legacy_context=context)
-
-        arm_range = self._credit_arms.setdefault(request_id, _CreditArmRange())
-        arm_range.add_extent(first_tile, tile_count, owner_ranks)
-        recv_anchors = {}
-        for event in events:
-            if event["endpoint"] != "data_recv":
-                continue
-            rank = int(event["rank"])
-            owner = int(event["owner"])
-            shard_ordinal = int(event["shard"]["global_shard_ordinal"])
-            pos = positions[id(event)]
-            for offset in range(max(0, tile_count - 2), tile_count):
-                global_tile = first_tile + offset
-                node_id = rank_bases[rank] + offset * cycles[rank] + pos
-                per_owner = recv_anchors.setdefault(global_tile, {})
-                prior = per_owner.get(owner)
-                if prior is None or shard_ordinal > prior[0]:
-                    per_owner[owner] = (shard_ordinal, node_id)
-        for global_tile, endpoints in recv_anchors.items():
-            arm_range.add(global_tile, {
-                owner: value[1] for owner, value in endpoints.items()})
-        self._pipeline_start_reserved.update(
-            slot["segment_id"] for slot in slots.values())
-        return {"first_tag": first_tag, "emission_ordinal": emission_ordinal,
-                "rank_bases": rank_bases, "cycle_by_rank": cycles}
-
-    @staticmethod
-    def _endpoint_run_reference(slot, global_tile, global_shard_ordinal,
-                                endpoint):
-        """Resolve one prior endpoint through the bounded run table."""
-        local_tile = (int(global_tile)
-                      - int(slot["tile_run"]["first_tile"]) + 1)
-        local_shard = slot["global_to_local_shard"].get(
-            int(global_shard_ordinal))
-        if local_shard is None:
-            raise RuntimeError("endpoint reference shard is outside owner group")
-        draft = slot["draft"]
-        group_ordinal = int(slot["group_ordinal"])
-        for run_index in range(len(draft.endpoint_runs) - 1, -1, -1):
-            run = draft.endpoint_runs[run_index]
-            if (run["group_ordinal"] != group_ordinal
-                    or run["rank"] != int(slot["identity_rank"])
-                    or local_tile < run["first_tile"]
-                    or local_tile >= run["first_tile"] + run["tile_count"]
-                    or local_shard not in run["shard_ordinals"]):
-                continue
-            leg = next((leg for leg in run["legs"]
-                        if leg["endpoint"] == endpoint), None)
-            if leg is None:
-                continue
-            local_index = run["shard_ordinals"].index(local_shard)
-            node_id = (run["first_json_id"]
-                       + (local_tile - run["first_tile"])
-                       * run["tile_stride"]
-                       + local_index * run["shard_stride"]
-                       + leg["json_offset"])
-            anchor = any(item["rank"] == run["rank"]
-                         and item["node_id"] == node_id
-                         for item in draft.anchors)
-            return {
-                "node_id": node_id,
-                "tile_stride": run["tile_stride"],
-                "run_first_tile": run["first_tile"],
-                "run_tile_count": run["tile_count"],
-                "anchor": anchor,
-            }
-        raise RuntimeError(
-            "same-body marker has no prior compact data_recv run for "
-            f"tile {global_tile}, shard {global_shard_ordinal}")
-
-    def _emit_compact_same_body_range(
-            self, request_id, pending, consumer_run, successor_run,
-            first_consumer_tile, tile_count, consumer_shards,
-            successor_shards, stage):
-        """Emit one bounded same-body marker/release range.
-
-        The event cycle is the legacy order for one consumer/successor pair:
-        one charged body marker per target rank, then the successor's six
-        communication endpoints per active shard. IDs follow each rank's
-        exact cycle; transfer tags follow the active global shard order.
-        """
-        request_plan = self._pipeline_plan_by_request.get(request_id)
-        if request_plan is None:
-            raise RuntimeError(
-                "compact same-body release has no explicit pipeline identity seed")
-        first_consumer_tile = int(first_consumer_tile)
-        tile_count = int(tile_count)
-        if tile_count <= 0:
-            raise ValueError("same-body compact extent must be nonempty")
-        lag = 2
-        first_successor_tile = first_consumer_tile + lag
-        stream_stage = pending.stage
-        if stream_stage not in ("prefill_read", "remote_credit"):
-            raise RuntimeError("unknown compact credit stream stage")
-
-        consumer_active = tuple(consumer_shards)
-        successor_active = tuple(successor_shards)
-        consumer_targets = tuple(sorted({int(row["target_rank"])
-                                         for row in consumer_active}))
-        successor_owners = tuple(sorted({int(row["target_rank"])
-                                         for row in successor_active}))
-        if not consumer_targets or not successor_owners:
-            raise RuntimeError("same-body pair has an empty active owner set")
-
-        consumer_slots = {
-            owner: self._physical_pipeline_group(
-                request_plan, stream_stage, owner, consumer_run)
-            for owner in consumer_targets}
-        successor_slots = {
-            owner: self._physical_pipeline_group(
-                request_plan, stream_stage, owner, successor_run)
-            for owner in successor_owners}
-        slots = {}
-        for slot in (*consumer_slots.values(), *successor_slots.values()):
-            slots[slot["segment_id"]] = slot
-        if any(slot is None for slot in slots.values()):
-            raise RuntimeError("same-body compact range has no owner group")
-        for slot in (*consumer_slots.values(), *successor_slots.values()):
-            slot["identity_rank"] = int(slot["draft"].identity.rank)
-
-        # Confirm the first successor still matches the authoritative legacy
-        # transfer factory. The remaining tiles are represented by the shared
-        # planner axis and per-shard byte caps, not materialized objects.
-        first_transfer = pending.transfer_at(first_successor_tile)
-        successor_offset = ((first_successor_tile
-                             - int(successor_run["first_tile"]))
-                            * int(successor_run["units_per_tile"]))
-        successor_units = min(
-            int(successor_run["units_per_tile"]),
-            int(successor_run["total_units"]) - successor_offset)
-        expected = []
-        for shard in successor_active:
-            if successor_run["axis_unit"] == "source_tokens":
-                amount = successor_units * int(shard["bytes_per_unit"])
-            else:
-                amount = max(0, min(
-                    int(shard["total_data_bytes"]),
-                    successor_offset + successor_units) - successor_offset)
-            if amount:
-                expected.append((int(shard["source_rank"]),
-                                 int(shard["target_rank"]),
-                                 tuple(int(rank) for rank in shard["noc_path"]),
-                                 amount))
-        actual = [(int(shard.source_rank), int(shard.target_rank),
-                   tuple(int(rank) for rank in shard.noc_path),
-                   int(shard.bytes)) for shard in first_transfer.shards]
-        if actual != expected:
-            raise RuntimeError(
-                "compact same-body range disagrees with its frozen transfer "
-                "factory at the first successor tile")
-
-        # Rank-local cycle: all main-chain consumer markers first, followed by
-        # each active successor shard in its original global order.
-        events = []
-        marker_event_by_owner = {}
-        for owner in consumer_targets:
-            slot = consumer_slots[owner]
-            local_candidates = [
-                row for row in consumer_active
-                if int(row["target_rank"]) == owner]
-            canonical = min(
-                local_candidates,
-                key=lambda row: int(row["global_shard_ordinal"]))
-            local_shard = slot["global_to_local_shard"][
-                int(canonical["global_shard_ordinal"])]
-            event = {
-                "kind": "marker", "owner": owner, "rank": owner,
-                "endpoint": "body_marker", "shard": canonical,
-                "local_shard": local_shard, "slot": slot,
-            }
-            events.append(event)
-            marker_event_by_owner[owner] = event
-
-        release_pattern = (
-            ("release_ack_send", 0), ("release_ack_recv", 0),
-            ("data_send", 1), ("data_recv", 1),
-            ("fill_ack_send", 2), ("fill_ack_recv", 2),
-        )
-        active_position = {}
-        for active_index, shard in enumerate(successor_active):
-            ordinal = int(shard["global_shard_ordinal"])
-            active_position[ordinal] = active_index
-            owner = int(shard["target_rank"])
-            slot = successor_slots[owner]
-            local_shard = slot["global_to_local_shard"][ordinal]
-            for endpoint, tag_stage in release_pattern:
-                source_side = endpoint in (
-                    "release_ack_recv", "data_send", "fill_ack_recv")
-                rank = int(shard["source_rank"] if source_side else
-                           shard["target_rank"])
-                events.append({
-                    "kind": "release", "owner": owner, "rank": rank,
-                    "endpoint": endpoint, "shard": shard,
-                    "local_shard": local_shard, "slot": slot,
-                    "tag_stage": tag_stage,
-                })
-
-        events_by_rank = {}
-        event_positions = {}
-        for event in events:
-            rank = int(event["rank"])
-            event_positions[id(event)] = len(events_by_rank.setdefault(rank, []))
-            events_by_rank[rank].append(event)
-        if not events_by_rank:
-            raise RuntimeError("same-body compact event cycle is empty")
-
-        checkpoint_by_rank = {
-            rank: builder.previous_id for rank, builder in self.builders.items()
-        }
-        pending_by_rank = {
-            rank: tuple(builder.pending_extra_dependencies)
-            for rank, builder in self.builders.items() if events_by_rank.get(rank)
-        }
-        if any(pending_by_rank.values()):
-            raise RuntimeError(
-                "same-body compact range encountered unconsumed ordinary "
-                "dependencies before a marker cycle")
-
-        rank_bases = {}
-        cycle_by_rank = {}
-        for rank, rank_events in events_by_rank.items():
-            cycle = len(rank_events)
-            cycle_by_rank[rank] = cycle
-            rank_bases[rank] = self.builders[rank].reserve_endpoint_extent(
-                tile_count * cycle)
-            self.batch["_touched_ranks"].add(rank)
-
-        tag_count = tile_count * 3 * len(successor_active)
-        first_tag, emission_ordinal = self.tag_allocator.reserve_with_ordinal(
-            tag_count)
-        first_successor_local = (
-            first_successor_tile - int(successor_run["first_tile"]) + 1)
-        for owner, slot in successor_slots.items():
-            slot["draft"].add_tag_allocation_reference(
-                allocator_scope_id="graph-batch-transfer-tags-v1",
-                emission_ordinal=emission_ordinal,
-                first_tag=first_tag, count=tag_count,
-                group_ordinal=slot["group_ordinal"],
-                first_tile=first_successor_local,
-                tile_count=tile_count, first_shard=0,
-                shard_count=len(slot["owner_shards"]))
-
-        planned_anchor_ids = set()
-        anchor_specs = {}
-        # A marker is a physical frontier only at this body range's final
-        # tile. It remains one charged synthetic microjob in execution.
-        for owner, event in marker_event_by_owner.items():
-            rank = int(event["rank"])
-            pos = event_positions[id(event)]
-            tile_local = (first_consumer_tile
-                          - int(consumer_run["first_tile"]) + tile_count)
-            node_id = rank_bases[rank] + (tile_count - 1) * cycle_by_rank[rank] + pos
-            anchor_specs.setdefault(id(event), []).append(
-                (tile_local, int(event["local_shard"]),
-                 event["endpoint"], "frontier"))
-            planned_anchor_ids.add((rank, node_id))
-
-        # Data-recv tails are the bounded ordinary frontiers used by later
-        # body dependencies. Each active target shard keeps at most two.
-        for event in events:
-            if event["kind"] != "release" or event["endpoint"] != "data_recv":
-                continue
-            rank = int(event["rank"])
-            pos = event_positions[id(event)]
-            for tile_offset in range(max(0, tile_count - 2), tile_count):
-                tile_local = first_successor_local + tile_offset
-                node_id = rank_bases[rank] + tile_offset * cycle_by_rank[rank] + pos
-                anchor_specs.setdefault(id(event), []).append(
-                    (tile_local, int(event["local_shard"]),
-                     event["endpoint"], "frontier"))
-                planned_anchor_ids.add((rank, node_id))
-
-        # The first charged successor endpoint starts a descriptor domain if
-        # an earlier extent has not already installed its start anchor.
-        first_release_event_by_owner = {}
-        for event in events:
-            if event["kind"] == "release":
-                first_release_event_by_owner.setdefault(int(event["owner"]), event)
-        for owner, slot in successor_slots.items():
-            if slot["segment_id"] in self._pipeline_start_reserved:
-                continue
-            event = first_release_event_by_owner.get(owner)
-            if event is None:
-                raise RuntimeError("successor owner has no physical endpoint")
-            pos = event_positions[id(event)]
-            rank = int(event["rank"])
-            node_id = rank_bases[rank] + pos
-            tile_local = first_successor_local
-            anchor_specs.setdefault(id(event), []).append(
-                (tile_local, int(event["local_shard"]),
-                 event["endpoint"], "start"))
-            planned_anchor_ids.add((rank, node_id))
-
-        # Preserve the main-chain checkpoint before endpoint runs are emitted.
-        marker_first_id = {
-            owner: rank_bases[owner]
-            + event_positions[id(event)]
-            for owner, event in marker_event_by_owner.items()}
-
-        hole_starts = {
-            id(slot["draft"]): len(slot["draft"]._holes)
-            for slot in slots.values()}
-        anchor_starts = {
-            id(slot["draft"]): len(slot["draft"].anchors)
-            for slot in slots.values()}
-        for event in events:
-            slot = event["slot"]
-            rank = int(event["rank"])
-            pos = event_positions[id(event)]
-            cycle = cycle_by_rank[rank]
-            if event["kind"] == "marker":
-                local_first = (first_consumer_tile
-                               - int(consumer_run["first_tile"]) + 1)
-                group_local_shard = int(event["local_shard"])
-                initial_parent = checkpoint_by_rank[rank]
-                legs = [{
-                    "endpoint": "body_marker", "json_offset": 0,
-                    "tag_emission_ordinal": None, "tag_offset": None,
-                    "tag_tile_stride": None, "tag_shard_stride": None,
-                }]
-            else:
-                local_first = first_successor_local
-                group_local_shard = int(event["local_shard"])
-                if pos:
-                    initial_parent = rank_bases[rank] + pos - 1
-                elif rank in marker_first_id:
-                    initial_parent = marker_first_id[rank]
-                else:
-                    initial_parent = checkpoint_by_rank[rank]
-                active_index = active_position[
-                    int(event["shard"]["global_shard_ordinal"])]
-                tag_offset = active_index * 3 + int(event["tag_stage"])
-                legs = [{
-                    "endpoint": event["endpoint"], "json_offset": 0,
-                    "tag_emission_ordinal": emission_ordinal,
-                    "tag_offset": tag_offset,
-                    "tag_tile_stride": 3 * len(successor_active),
-                    "tag_shard_stride": 1,
-                }]
-            run = {
-                "rank": rank,
-                "group_ordinal": int(slot["group_ordinal"]),
-                "first_tile": local_first,
-                "tile_count": tile_count,
-                "shard_ordinals": [group_local_shard],
-                "first_json_id": rank_bases[rank] + pos,
-                "tile_stride": cycle,
-                "shard_stride": 1,
-                "initial_parent_json_id": initial_parent,
-                "legacy_context": {
-                    "request_id": self.builders[rank].request_id,
-                    "stage": self.builders[rank].stage,
-                    "generation": self.builders[rank].generation,
-                },
-                "legs": legs,
-            }
-            run_index = slot["draft"].add_endpoint_run(
-                run, anchor_exceptions=anchor_specs.get(id(event), ()))
-            event["run_index"] = run_index
-
-            def add_dependency_pieces(*, first_tile, count, first_id, stride,
-                                      default_kind, shard=group_local_shard,
-                                      endpoint=event["endpoint"],
-                                      slot=slot, rank=rank):
-                if count <= 0:
-                    return
-                exceptional = set()
-                if stride:
-                    lo = int(first_id)
-                    for anchor_rank, anchor_id in planned_anchor_ids:
-                        if anchor_rank != rank or anchor_id < lo:
-                            continue
-                        delta = anchor_id - lo
-                        if delta % int(stride) == 0:
-                            index = delta // int(stride)
-                            if index < count:
-                                exceptional.add(index)
-                cursor = 0
-                for index in sorted(exceptional):
-                    if index > cursor:
-                        slot["draft"].add_endpoint_dependency_run({
-                            "rank": rank,
-                            "group_ordinal": int(slot["group_ordinal"]),
-                            "first_tile": int(first_tile) + cursor,
-                            "tile_count": index - cursor,
-                            "shard_ordinals": [int(shard)],
-                            "endpoint": endpoint,
-                            "dependency_kind": default_kind,
-                            "first_dependency_json_id": int(first_id)
-                                + cursor * int(stride),
-                            "dependency_tile_stride": int(stride),
-                            "dependency_shard_stride": 0,
-                        })
-                    slot["draft"].add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": int(first_tile) + index,
-                        "tile_count": 1,
-                        "shard_ordinals": [int(shard)],
-                        "endpoint": endpoint,
-                        "dependency_kind": "ordinary_node_terminal",
-                        "first_dependency_json_id": int(first_id)
-                            + index * int(stride),
-                        "dependency_tile_stride": 0,
-                        "dependency_shard_stride": 0,
-                    })
-                    cursor = index + 1
-                if cursor < count:
-                    slot["draft"].add_endpoint_dependency_run({
-                        "rank": rank,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": int(first_tile) + cursor,
-                        "tile_count": count - cursor,
-                        "shard_ordinals": [int(shard)],
-                        "endpoint": endpoint,
-                        "dependency_kind": default_kind,
-                        "first_dependency_json_id": int(first_id)
-                            + cursor * int(stride),
-                        "dependency_tile_stride": int(stride),
-                        "dependency_shard_stride": 0,
-                    })
-
-            if event["kind"] == "marker":
-                checkpoint = checkpoint_by_rank[rank]
-                if checkpoint is not None:
-                    checkpoint_kind = (
-                        "virtual_endpoint_terminal"
-                        if self.builders[rank].is_virtual_endpoint(checkpoint)
-                        else "ordinary_node_terminal")
-                    add_dependency_pieces(
-                        first_tile=local_first, count=1,
-                        first_id=checkpoint, stride=0,
-                        default_kind=checkpoint_kind)
-                if tile_count > 1:
-                    add_dependency_pieces(
-                        first_tile=local_first + 1, count=tile_count - 1,
-                        first_id=rank_bases[rank] + pos,
-                        stride=cycle,
-                        default_kind="virtual_endpoint_terminal")
-
-                # The first main-chain tile has no receive gate in the old
-                # builder. Later markers carry one recv parent per owner rank;
-                # keep that bounded terminal relation without inventing it
-                # for tile 1.
-                recv_offset = max(0, 2 - first_consumer_tile)
-                recv_count = tile_count - recv_offset
-                if recv_count > 0:
-                    owner_shards = [
-                        row for row in consumer_active
-                        if int(row["target_rank"]) == int(event["owner"])]
-                    recv_shard = max(
-                        owner_shards,
-                        key=lambda row: int(row["global_shard_ordinal"]))
-                    recv_slot = consumer_slots[int(event["owner"])]
-                    consumer_local_first = (
-                        first_consumer_tile + recv_offset
-                        - int(consumer_run["first_tile"]) + 1)
-                    recv_local = recv_slot["global_to_local_shard"][
-                        int(recv_shard["global_shard_ordinal"])]
-                    matching_recv_run = next(
-                        run for run in reversed(
-                            recv_slot["draft"].endpoint_runs)
-                        if run["group_ordinal"] == recv_slot["group_ordinal"]
-                        and run["rank"] == rank
-                        and run["first_tile"] <= consumer_local_first
-                        and consumer_local_first + recv_count - 1
-                            < run["first_tile"] + run["tile_count"]
-                        and recv_local in run["shard_ordinals"]
-                        and any(leg["endpoint"] == "data_recv"
-                                for leg in run["legs"]))
-                    recv_leg = next(
-                        leg for leg in matching_recv_run["legs"]
-                        if leg["endpoint"] == "data_recv")
-                    recv_run_shard_index = (
-                        matching_recv_run["shard_ordinals"].index(recv_local))
-                    recv_first_id = (
-                        matching_recv_run["first_json_id"]
-                        + (consumer_local_first
-                           - matching_recv_run["first_tile"])
-                        * matching_recv_run["tile_stride"]
-                        + recv_run_shard_index
-                        * matching_recv_run["shard_stride"]
-                        + recv_leg["json_offset"])
-                    anchor_offsets = set()
-                    for anchor in recv_slot["draft"].anchors:
-                        selector = anchor["selector"]
-                        if (anchor["rank"] == rank
-                                and selector.get("group_ordinal")
-                                    == recv_slot["group_ordinal"]
-                                and selector.get("endpoint") == "data_recv"
-                                and selector.get("shard_ordinal")
-                                    == recv_local):
-                            offset = selector.get("tile_ordinal", 0) \
-                                - consumer_local_first
-                            if 0 <= offset < recv_count:
-                                anchor_offsets.add(offset)
-                    cursor = 0
-                    for offset in sorted(anchor_offsets):
-                        if offset > cursor:
-                            slot["draft"].add_endpoint_dependency_run({
-                                "rank": rank,
-                                "group_ordinal": int(slot["group_ordinal"]),
-                                "first_tile": local_first + recv_offset + cursor,
-                                "tile_count": offset - cursor,
-                                "shard_ordinals": [group_local_shard],
-                                "endpoint": "body_marker",
-                                "dependency_kind": "virtual_endpoint_terminal",
-                                "first_dependency_json_id": recv_first_id
-                                    + cursor * matching_recv_run["tile_stride"],
-                                "dependency_tile_stride": (
-                                    matching_recv_run["tile_stride"]),
-                                "dependency_shard_stride": 0,
-                            })
-                        slot["draft"].add_endpoint_dependency_run({
-                            "rank": rank,
-                            "group_ordinal": int(slot["group_ordinal"]),
-                            "first_tile": local_first + recv_offset + offset,
-                            "tile_count": 1,
-                            "shard_ordinals": [group_local_shard],
-                            "endpoint": "body_marker",
-                            "dependency_kind": "ordinary_node_terminal",
-                            "first_dependency_json_id": recv_first_id
-                                + offset * matching_recv_run["tile_stride"],
-                            "dependency_tile_stride": 0,
-                            "dependency_shard_stride": 0,
-                        })
-                        cursor = offset + 1
-                    if cursor < recv_count:
-                        slot["draft"].add_endpoint_dependency_run({
-                            "rank": rank,
-                            "group_ordinal": int(slot["group_ordinal"]),
-                            "first_tile": local_first + recv_offset + cursor,
-                            "tile_count": recv_count - cursor,
-                            "shard_ordinals": [group_local_shard],
-                            "endpoint": "body_marker",
-                            "dependency_kind": "virtual_endpoint_terminal",
-                            "first_dependency_json_id": recv_first_id
-                                + cursor * matching_recv_run["tile_stride"],
-                            "dependency_tile_stride": (
-                                matching_recv_run["tile_stride"]),
-                            "dependency_shard_stride": 0,
-                        })
-
-                # All local target shards share the one owner-rank marker as
-                # their consume terminal. The final marker is physical; the
-                # prefix markers remain virtual endpoint terminals.
-                local_consumer_shards = sorted(
-                    consumer_slots[int(event["owner"])]
-                    ["global_to_local_shard"][
-                        int(row["global_shard_ordinal"])]
-                    for row in consumer_active
-                    if int(row["target_rank"]) == int(event["owner"]))
-                completion_slot = consumer_slots[int(event["owner"])]
-                if tile_count > 1:
-                    completion_slot["draft"].add_consume_completion_run({
-                        "rank": int(event["owner"]),
-                        "group_ordinal": int(completion_slot["group_ordinal"]),
-                        "first_tile": local_first,
-                        "tile_count": tile_count - 1,
-                        "shard_ordinals": local_consumer_shards,
-                        "dependency_kind": "virtual_endpoint_terminal",
-                        "first_dependency_json_id": marker_first_id[
-                            int(event["owner"])],
-                        "dependency_tile_stride": cycle_by_rank[
-                            int(event["owner"])],
-                        "dependency_shard_stride": 0,
-                    })
-                completion_slot["draft"].add_consume_completion_run({
-                    "rank": int(event["owner"]),
-                    "group_ordinal": int(completion_slot["group_ordinal"]),
-                    "first_tile": local_first + tile_count - 1,
-                    "tile_count": 1,
-                    "shard_ordinals": local_consumer_shards,
-                    "dependency_kind": "ordinary_node_terminal",
-                    "first_dependency_json_id": marker_first_id[
-                        int(event["owner"])]
-                        + (tile_count - 1) * cycle_by_rank[
-                            int(event["owner"])],
-                    "dependency_tile_stride": 0,
-                    "dependency_shard_stride": 0,
-                })
-            elif pos:
-                add_dependency_pieces(
-                    first_tile=local_first, count=tile_count,
-                    first_id=rank_bases[rank] + pos - 1,
-                    stride=cycle,
-                    default_kind="virtual_endpoint_terminal")
-            elif rank in marker_first_id:
-                add_dependency_pieces(
-                    first_tile=local_first, count=tile_count,
-                    first_id=marker_first_id[rank], stride=cycle,
-                    default_kind="virtual_endpoint_terminal")
-            else:
-                checkpoint = checkpoint_by_rank[rank]
-                if checkpoint is not None:
-                    kind = ("virtual_endpoint_terminal"
-                            if self.builders[rank].is_virtual_endpoint(checkpoint)
-                            else "ordinary_node_terminal")
-                    add_dependency_pieces(
-                        first_tile=local_first, count=tile_count,
-                        first_id=checkpoint, stride=0,
-                        default_kind=kind)
-
-        # Register sparse holes only after the bounded physical exceptions
-        # have been determined for every owner descriptor.
-        for slot in slots.values():
-            draft = slot["draft"]
-            start = hole_starts[id(draft)]
-            for hole in draft._holes[start:]:
-                self.builders[int(hole["rank"])].mark_virtual_endpoint_progression(
-                    int(hole["first_json_id"]), int(hole["count"]),
-                    int(hole["stride"]))
-
-        # Materialize only the named bounded anchors, in each rank's original
-        # ID order. Their payload is zero-cost; native endpoint execution
-        # retains the old COMM/marker charge through the selector.
-        anchors_to_emit = []
-        seen_anchors = set()
-        for slot in slots.values():
-            draft = slot["draft"]
-            for anchor in draft.anchors[anchor_starts[id(draft)]:]:
-                key = (anchor["rank"], anchor["node_id"])
-                if key in seen_anchors:
-                    continue
-                seen_anchors.add(key)
-                context = None
-                selector = anchor["selector"]
-                for run in draft.endpoint_runs:
-                    if (run["group_ordinal"] == selector.get("group_ordinal")
-                            and run["rank"] == anchor["rank"]
-                            and run["first_tile"] <= selector.get("tile_ordinal", 0)
-                            < run["first_tile"] + run["tile_count"]
-                            and selector.get("shard_ordinal")
-                            in run["shard_ordinals"]
-                            and any(leg["endpoint"] == selector.get("endpoint")
-                                    for leg in run["legs"])):
-                        context = run["legacy_context"]
-                        break
-                if context is None:
-                    raise RuntimeError("pipeline anchor has no matching emitted run")
-                anchors_to_emit.append((anchor, context, slot["segment_id"]))
-        anchors_to_emit.sort(key=lambda item: (item[0]["rank"], item[0]["node_id"]))
-        for anchor, context, segment_id in anchors_to_emit:
-            self.builders[int(anchor["rank"])].emit_reserved_pipeline_anchor(
-                "{}_pipeline_frontier_{}".format(
-                    sanitize_node_prefix(request_id), anchor["node_id"]),
-                segment_id=str(segment_id), role=anchor["role"],
-                node_id=int(anchor["node_id"]), legacy_context=context)
-
-        # Keep the main chain at the last marker per owner; release endpoints
-        # are side branches and must never become the body tail.
-        for rank, checkpoint in checkpoint_by_rank.items():
-            if rank in marker_first_id:
-                marker_event = marker_event_by_owner[rank]
-                pos = event_positions[id(marker_event)]
-                self.builders[rank].previous_id = (
-                    rank_bases[rank]
-                    + (tile_count - 1) * cycle_by_rank[rank] + pos)
-            elif rank in events_by_rank:
-                self.builders[rank].previous_id = checkpoint
-
-        arm_range = self._credit_arms.setdefault(request_id, _CreditArmRange())
-        arm_range.add_extent(first_successor_tile, tile_count, successor_owners)
-        arm_range.add_mainline_extent(
-            first_consumer_tile, tile_count, consumer_targets)
-        recv_anchors = {}
-        for event in events:
-            if event["kind"] != "release" or event["endpoint"] != "data_recv":
-                continue
-            owner = int(event["owner"])
-            rank = int(event["rank"])
-            shard_ordinal = int(event["shard"]["global_shard_ordinal"])
-            pos = event_positions[id(event)]
-            for tile_offset in range(max(0, tile_count - 2), tile_count):
-                global_tile = first_successor_tile + tile_offset
-                node_id = rank_bases[rank] + tile_offset * cycle_by_rank[rank] + pos
-                per_owner = recv_anchors.setdefault(global_tile, {})
-                prior = per_owner.get(owner)
-                if prior is None or shard_ordinal > prior[0]:
-                    per_owner[owner] = (shard_ordinal, node_id)
-        for global_tile, endpoints in recv_anchors.items():
-            per_owner = {owner: value[1]
-                         for owner, value in endpoints.items()}
-            arm_range.add(global_tile, per_owner)
-
-        for owner, slot in successor_slots.items():
-            if slot["segment_id"] not in self._pipeline_start_reserved:
-                self._pipeline_start_reserved.add(slot["segment_id"])
-        return {
-            "tile_count": tile_count,
-            "rank_bases": rank_bases,
-            "cycle_by_rank": cycle_by_rank,
-            "first_tag": first_tag,
-            "emission_ordinal": emission_ordinal,
-        }
 
     def _collect(self, marker: dict) -> None:
         # R6-2（2026-09-14）：逐秩边审计**代码内默认常开**（SH_EDGE_AUDIT=0
@@ -3327,51 +868,14 @@ class GraphBatchBuilder:
         # 标记前全量核销，见 _open/_consume/_close_rebuild_output_
         # suppression）。
         self._open_rebuild_output_suppression(train_plan)
-        credit_blocks = (train_plan.get("remote_credit") or {}).get(
-            "body_blocks")
-        prefill_read_blocks = (
-            train_plan.get("prefill_read") or {}).get("body_blocks")
-        if credit_blocks is not None and prefill_read_blocks is not None:
-            # 修复轮三 R4（2026-09-28）：跨请求并存（decode 成员 credit
-            # 切片 + 队头 prefill 前缀读窗）合法且可达（argmin 正常路径
-            # 即可命中）——两体块源同为逐迭代块、同一 pass_spans 划分、
-            # 同一 (rid, 块号) 门账本（_credit_arms/_credit_pending_tiles
-            # 逐请求键），按迭代合并为单体块序列（门 = 并集，I2 同款纪
-            # 律）。"一请求同一阶段至多一条远读流" 的互斥语义收窄到请
-            # 求粒度：同一请求同时贡献两源 = 计划形态破损，fail-closed
-            # （先验于列车头发射——破损计划不得产出任何图节点）。
-            overlap = (
-                 set().union(*(
-                     _gate_request_ids(block["gates"])
-                     for block in credit_blocks))
-                & set().union(*(
-                    _gate_request_ids(block["gates"])
-                    for block in prefill_read_blocks)))
-            if overlap:
-                raise RuntimeError(
-                    "request(s) {} carry both decode remote-credit slices "
-                    "and a prefill remote-read window in one train (a "
-                    "request streams at most one remote read per "
-                    "stage)".format(sorted(overlap)))
-            credit_blocks = self._merge_remote_read_body_blocks(
-                credit_blocks, prefill_read_blocks)
         eviction_watches = self._emit_train_head(train_plan)
         copy_blocks, copy_armed = self._copy_handoff_body_blocks(
             train_plan, list(train_plan["pass_spans"]))
-        if (credit_blocks is not None or prefill_read_blocks is not None
-                ) and copy_blocks is not None:
-            raise RuntimeError(
-                "train carries both remote-read body blocks and copy "
-                "handoff arms -- a request is either remote-read or copy; "
-                "mixed block splitting is unsupported (fail-closed)")
         self._emit_train_body(
             train_plan, list(train_plan["pass_spans"]),
             int(train_plan["iterations"]),
             first_chunk_member=train_plan.get("first_chunk_member"),
-            credit_blocks=(credit_blocks if credit_blocks is not None
-                           else (prefill_read_blocks
-                                 if prefill_read_blocks is not None
-                                 else copy_blocks)))
+            gated_blocks=copy_blocks)
         if copy_armed:
             # C13：交接尾块门账本随体发射消费（joiner 恰一次）；残留尾块
             # 未被任何体块 arm = 切分/发射 bug，fail-closed。K6：层区间
@@ -3389,7 +893,6 @@ class GraphBatchBuilder:
                     "outrun the migration stream)")
         # 规格书§三.8：前缀读流组门账本的列车尾检查（首 chunk 成员的
         # 账本必须已被体消费；未消费 fail-closed）。
-        self._assert_prefill_read_arms_consumed(train_plan)
         # D10：重建 span 全量核销（声明了抑制而未进体 = 计划/发射布局
         # 失配，fail-closed）。
         self._close_rebuild_output_suppression()
@@ -3397,43 +900,6 @@ class GraphBatchBuilder:
         result["eviction_watches"] = eviction_watches
         self._collect(marker)
         return result
-
-    @staticmethod
-    def _merge_remote_read_body_blocks(credit_blocks, read_blocks):
-        """R4（2026-09-28）：decode credit 体块与 prefill 远读窗体块的
-        逐迭代合并（跨请求并存列车，见 emit_iteration_train）。
-
-        两源块序列同为 1..iterations 逐迭代一块（weight_passes=1、span
-        同源于 pass_spans 平铺）：span 取 credit 块（`_train_span_iterations`
-        的成员步进映射 = 权威口径——成员第 s 步 span 恰落迭代 s，与该成
-        员 tile pass 归属对齐），gates 取并集（(rid, 块号) 逐请求键，两
-        源请求集已验证不相交，无重复门）。迭代界失配 = 计划形态漂移，
-        fail-closed。"""
-        if len(credit_blocks) != len(read_blocks):
-            raise RuntimeError(
-                "remote-read body block streams cover different iteration "
-                "counts ({} credit blocks vs {} prefill-read window "
-                "blocks) -- train composition drifted".format(
-                    len(credit_blocks), len(read_blocks)))
-        merged = []
-        for credit_block, read_block in zip(credit_blocks, read_blocks):
-            span = (credit_block["start_iter"], credit_block["end_iter"])
-            if span != (read_block["start_iter"], read_block["end_iter"]):
-                raise RuntimeError(
-                    "remote-read body block streams disagree on iteration "
-                    "coverage (credit {} vs prefill-read {}) -- train "
-                    "composition drifted".format(span, (
-                        read_block["start_iter"], read_block["end_iter"])))
-            merged.append({
-                "start_iter": credit_block["start_iter"],
-                "end_iter": credit_block["end_iter"],
-                "weight_passes": 1,
-                "spans": credit_block["spans"],
-                "gates": CreditGateSet(
-                    _gate_runs(credit_block["gates"])
-                    + _gate_runs(read_block["gates"])),
-            })
-        return merged
 
     def emit_train_first_step(self, train_plan: dict) -> dict:
         """WP9 首步批发射（2026-08-26；拆分阶段 1）。
@@ -3473,14 +939,6 @@ class GraphBatchBuilder:
             raise RuntimeError(
                 "WP9 first-step split trains with pending copy handoff "
                 "arms are unsupported (whole-train body gating required)")
-        if train_plan.get("prefill_read"):
-            # D09：首步拆分同样不支持 prefill 远读窗口体门控（整列发射
-            # 才是逐 tile 消费驱动发射的载体；SH_FIRST_TOKEN_SPLIT 缺省
-            # 关，与 copy 同款 fail-closed 纪律）。
-            raise RuntimeError(
-                "WP9 first-step split trains with a prefill remote-read "
-                "window are unsupported (whole-train body gating "
-                "required)")
         # D10：首步拆分不支持静默重建 span（重建段属整列体的前置工作
         # 量，拆两批会把 H_B 重放误当首步迭代——调度侧已降级不拆车，
         # 此处防御 fail-closed）。开账后即查（首步批无抑制面）。
@@ -3493,11 +951,7 @@ class GraphBatchBuilder:
         eviction_watches = self._emit_train_head(train_plan)
         self._emit_train_body(
             train_plan, list(first_token["first_spans"]), 1,
-            first_chunk_member=train_plan.get("first_chunk_member"),
-            credit_blocks=first_token.get("first_body_blocks"))
-        # 规格书§三.8：首步批消费前缀读流组门（首 chunk 恒在首步批）——
-        # 尾检查钉"首步已消费、余量批不重复消费"。
-        self._assert_prefill_read_arms_consumed(train_plan)
+            first_chunk_member=train_plan.get("first_chunk_member"))
         # D10：首步批账本核销（拆分列车禁重建 span，此处恒空——防御性
         # 成对开/关，破损即暴露）。
         self._close_rebuild_output_suppression()
@@ -3548,12 +1002,7 @@ class GraphBatchBuilder:
         marker = self._mark()
         self._emit_train_body(
             train_plan, list(first_token["rest_spans"]),
-            int(train_plan["iterations"]) - 1,
-            credit_blocks=first_token.get("rest_body_blocks"))
-        # 规格书§三.8：余量批不重复消费前缀读流组门（体不传
-        # first_chunk_member）——尾检查在首步批已消费时恒通过；残留 =
-        # 首步批未消费，fail-closed。
-        self._assert_prefill_read_arms_consumed(train_plan)
+            int(train_plan["iterations"]) - 1)
         self._close_rebuild_output_suppression()
         result = self._emit_train_tail_markers(train_plan, first_token)
         self._collect(marker)
@@ -3567,28 +1016,6 @@ class GraphBatchBuilder:
         instance_index = train_plan["instance_index"]
         group = self.group_by_index[instance_index]
         train_id = train_plan["train_id"]
-
-        # Validate the previous train's bounded arm/pending ledgers before
-        # this train emits any side tail. Within one train the tail is allowed
-        # to precede its head, so this check belongs at the transaction entry,
-        # not in the per-head emitter.
-        credit_owners = {
-            row["request_id"] for row in train_plan.get("joiners", ())
-            if (row.get("remote_credit_tail")
-                or row.get("remote_credit_head"))}
-        credit_owners.update(
-            member["plan"]["request_id"]
-            for member in (train_plan.get("remote_credit") or {}).get(
-                "continuations", ()))
-        prefill_window = train_plan.get("prefill_read")
-        if prefill_window is not None:
-            credit_owners.add(prefill_window["request_id"])
-        for request_id in credit_owners:
-            if (request_id in self._credit_arms
-                    or request_id in self._credit_pending_tiles):
-                raise RuntimeError(
-                    "remote-read head for {} encountered an unsettled prior "
-                    "train ledger".format(request_id))
 
         # ---- joiner 迁移（触发门 = 该成员 drain 列车的 post-barrier
         #      块末；上下文 (joiner, decode, 1) = decode_start 指标锚点） ----
@@ -3660,19 +1087,6 @@ class GraphBatchBuilder:
                         "owner_request_id": joiner["request_id"],
                         "branch": "decode_joiner",
                         "members": members})
-            # remote-read credit 首列车（唯一执行口径）：切片
-            # 块 2..M 旁挂支链（D2 发射序 = checkpoint → 支链尾块 →
-            # restore → 块 1 上主链——restore_chain 会把主链回滚到
-            # checkpoint（:246-248 回滚语义），块 1 先发射会被回滚抹掉，
-            # 次序不可反）。尾块 recv 完成门入 _credit_arms 账本，由
-            # 对应体块首节点 arm 消费（块 b ← 门 b，I2）。
-            credit_tail = joiner.get("remote_credit_tail") or ()
-            if credit_tail:
-                def emit_joiner_credit_tail(
-                        joiner=joiner, credit_tail=credit_tail) -> None:
-                    self._emit_credit_stream_tail(
-                        joiner, credit_tail, stage="remote_credit")
-                self._emit_side_branch(emit_joiner_credit_tail)
             pd_transfer = joiner.get("prefill_decode_transfer")
             if pd_transfer is None:
                 raise RuntimeError(
@@ -3684,45 +1098,7 @@ class GraphBatchBuilder:
                 pd_transfer if isinstance(pd_transfer, tuple)
                 else (pd_transfer,))
             for transfer in pd_transfers:
-                if (joiner.get("remote_credit_head") is not None
-                        and transfer == joiner.get("remote_credit_head")):
-                    self._emit_credit_head_transfer(
-                        joiner, transfer, stage="remote_credit",
-                        pipeline_tile_runs=joiner.get(
-                            "remote_credit_pipeline_tile_runs"))
-                else:
-                    emit_transfer(transfer, "prefill_decode_transfer")
-
-        # ---- remote-read credit 续列车（T2+ 续坐成员，D7 新发射槽位）：
-        #      本列车切片块 1 上主链（发射序先于列车体；无 barrier——
-        #      per-rank 链序保证先行，§4.1 v3：与 T1 的形态区别仅缺
-        #      barrier），块 2..M 旁挂 + arm 门，与 T1 同构。上下文
-        #      (member, decode, 1) 与 joiner 槽位同构。 ----
-        for member in ((train_plan.get("remote_credit") or {}).get(
-                "continuations") or ()):
-            member_plan = member["plan"]
-            self._set_context(member_plan, "decode", 1)
-            tail = member.get("tail") or ()
-            if tail:
-                def emit_cont_credit_tail(
-                        member_plan=member_plan, tail=tail) -> None:
-                    self._emit_credit_stream_tail(
-                        member_plan, tail, stage="remote_credit")
-                self._emit_side_branch(emit_cont_credit_tail)
-            self._emit_credit_head_transfer(
-                member_plan, member["block1"],
-                pipeline_tile_runs=member.get("pipeline_tile_runs"))
-
-        # ---- D09 prefill 远读逐 tile 窗口（2026-09-27）：本列车消费窗
-        #      （逐 chunk 迭代）的读流 tile 在列车头发射——tile 1 上主链
-        #      （发射序先于列车体；链序保证先行，§4.1 v3 与 decode 续列
-        #      车同构），tile 2 即时旁挂、tile 3+ 记待发账本（缓冲复用
-        #      释放门 = 消费体块发射点，_emit_credit_stream_tail 同款）。
-        #      窗口 tile 登记账本供列车体门并集覆盖检查（fail-closed）。
-        #      跨列车 lag-2 由链序承载（本列车头节点在前列车体之后）。
-        prefill_read = train_plan.get("prefill_read")
-        if prefill_read:
-            self._emit_prefill_read_window(prefill_read)
+                emit_transfer(transfer, "prefill_decode_transfer")
 
         # ---- 共享 readiness barrier（仅在有 joiner 时发射；无 joiner 的
         #      列车成员 KV 已就绪，无需再栅栏） ----
@@ -3755,32 +1131,28 @@ class GraphBatchBuilder:
     def _emit_train_body(self, train_plan: dict, pass_spans,
                          weight_passes: int, *,
                          first_chunk_member=None,
-                         credit_blocks=None) -> None:
+                         gated_blocks=None) -> None:
         """折叠列车体（17 类聚合节点；weight_passes = 权重读取次数）。
 
         拆分时首步批传首步 span 组 + weight_passes=1（含队列头首 chunk
         与 partial 恢复 suffix 门挂接），余量批传余量组 + iterations-1；
         两批激活/KV/AR 字节按 span 求和与整列一致。
 
-        remote-read credit 体块化（唯一执行口径，
-        credit_blocks 非 None 时）：体按块切分发射——每体块一次
-        transformer_pass_aggregated（块内 spans 子集 + 块迭代数的
-        weight_passes；跨块求和与整列一致），首节点额外依赖 = 覆盖
-        该块迭代区间的全部 remote-read 成员切片块完成门之并集（I2，
-        经 _credit_arms 账本逐 rank arm；块 b 不得依赖后续块）。suffix
-        恢复门挂首块（首 chunk 恒在首个体块）。credit_blocks=None =
-        本列车无 remote-credit 参与，单段发射路径与 v1 逐字节一致。
+        copy 交接体块化（gated_blocks 非 None 时）：体按块切分发射——
+        每体块一次 transformer_pass_aggregated（块内 spans 子集 + 块
+        迭代数的 weight_passes；跨块求和与整列一致），首节点额外依赖 =
+        覆盖该块迭代区间的全部交接尾块完成门之并集（I2，经
+        _copy_handoff_arms 账本逐 rank arm；块 b 不得依赖后续块）。
+        suffix 恢复门挂首块（首 chunk 恒在首个体块）。gated_blocks=None
+        = 本列车无 copy 交接参与，单段发射路径与 v1 逐字节一致。
 
         多块集体节点命名（A6' 修复，2026-09-22）：C++ commit 预检按
         (pg_name, 节点名) 计集体参与者——同名集体在单 rank 出现 N 次
         即 N participants（期望恰 1），auto-K 多块（M>1）下 8 个体块
         同用 train_id 作 phase 会使 ``{train_id}_all_layers_*_all_
         reduce`` 同名 8 份、预检拒批（C4b 首次后端受控执行暴露）。
-        规则与 C13 copy 体块 ``_cb{k}``` 后缀同款：无显式 phase 的
-        credit 体块（remote-read 路径，SH 规划侧不带 phase 键）在
-        M>1 时逐块挂 ``{train_id}_rcb{b}`` 唯一后缀；M=1 不加后缀
-        ——K≥S 单块 = v1 等价锚逐字节不变（I3a）。copy 体块自带
-        phase（_copy_handoff_body_blocks）不受影响。"""
+        规则与 C13 copy 体块 ``_cb{k}`` 后缀同款：copy 体块自带
+        phase（_copy_handoff_body_blocks），原样透传。"""
         instance_index = train_plan["instance_index"]
         group = self.group_by_index[instance_index]
         train_id = train_plan["train_id"]
@@ -3798,10 +1170,6 @@ class GraphBatchBuilder:
                 first_chunk_member["request_id"], None)
             restore_arms = self._suffix_restore_arms.pop(
                 first_chunk_member["request_id"], None)
-            # D09 prefill 远读逐 tile（2026-09-27）：前缀读流门不再经组
-            # 账本——窗口 tile 复用 _credit_arms（列车头登记、体块按
-            # gates 消费、列车尾结清）；本处只保留旧组账本的成对登记
-            # 检查废除（账本已删）。
             if suffix_arms and restore_arms:
                 raise RuntimeError(
                     "train head carries both legacy whole-suffix arms and "
@@ -3841,7 +1209,7 @@ class GraphBatchBuilder:
                       die_kv_identity="local") -> None:
             """单次聚合体发射漏斗（每 rank 一调）。
 
-            入口 block/credit/readiness gate 的依赖语义不变（arm_dependency
+            入口 block/readiness gate 的依赖语义不变（arm_dependency
             照旧）；die 后端（第一期）在此按本次发射的 spans/TP/rank 调
             begin_emission 写入发射语境（span 记录带绝对位置——
             derive_span_records 按本仓 span 恒等式还原），并把层区间/
@@ -3888,9 +1256,7 @@ class GraphBatchBuilder:
         def emit_layer_segmented(spans, passes, phase=None,
                                  suppress_indices=None):
             """C15+K6：含首 chunk 计算体的逐层段发射（设计方案 §5.1 逐层
-            恢复与 prefill 重叠；2026-09-23 扩展至 copy 交接尾块；2026-09-27
-            起 prefill remote-read 前缀门改逐 tile 体块门——组层段废除，
-            前缀数据就绪由逐 chunk 体块的窗口 tile 门承担（D09））。
+            恢复与 prefill 重叠；2026-09-23 扩展至 copy 交接尾块）。
 
             层段 = [0, 首段起点) 的热前缀段（无门——copy 块 0 在准入主链
             /restore 前的零 KV 层区间）＋各 copy 交接尾块层段（逐 rank 等
@@ -4006,7 +1372,7 @@ class GraphBatchBuilder:
                         extra_gates_by_rank=gates,
                         suppress_output_span_indices=suppress_indices)
 
-        if credit_blocks is None:
+        if gated_blocks is None:
             if restore_arms is None:
                 suppress_indices = self._consume_rebuild_output_suppression(
                     pass_spans)
@@ -4019,34 +1385,18 @@ class GraphBatchBuilder:
             emit_layer_segmented(pass_spans, weight_passes)
             return
         # K6（P1-③）：copy 交接尾块层区间在场 ⇒ 首体块走层段化发射
-        # （段边界与逐 rank 门见 emit_layer_segmented）；remote-credit
-        # 体块（无 layers 账本）路径不变。
+        # （段边界与逐 rank 门见 emit_layer_segmented）。
         copy_gate_request_id = (first_chunk_member or {}).get("request_id")
         copy_tail_layers = (
             self._copy_handoff_layers.get(copy_gate_request_id)
             if copy_gate_request_id is not None else None)
-        multi_credit_blocks = len(credit_blocks) > 1
-        for position, block in enumerate(credit_blocks):
+        for position, block in enumerate(gated_blocks):
             if not block["spans"]:
                 raise RuntimeError(
-                    "credit body block [{},{}] has no spans".format(
+                    "gated body block [{},{}] has no spans".format(
                         block["start_iter"], block["end_iter"]))
-            # A6'：无显式 phase 的 credit 体块在多块形态下逐块挂唯一
-            # phase 后缀（同名集体节点单 rank 8 participants 预检拒批
-            # 的修复面；单块不加——v1 等价锚逐字节不变）。copy 体块
-            # 自带 phase（_cb{k}），原样透传。
+            # copy 体块自带 phase（_cb{k}），原样透传。
             block_phase = block.get("phase")
-            if block_phase is None and multi_credit_blocks:
-                block_phase = "{}_rcb{}".format(train_id, position + 1)
-            # D09 修复轮二（逐 tile 流水消费）：同体块 lag-2 后继（b+2
-            # 同属本块门集——tiles_per_pass > 2 的窗内/块内 tile）在本块
-            # 计算节点**之前**的逐 tile 消费 marker 点释放——tile t 消费
-            # → 槽位释放 → tile t+2 可入，任意时刻每 rank 暂存占用 ≤2
-            # tile 的不变量在 N>2 时仍成立（marker 链 = 本块计算对逐
-            # tile 数据的流水接收序；跨块后继仍锚定体块末节点，慢计算
-            # 不导致源端越过下一消费窗无限泵出）。N ≤ 2 时无同块后继，
-            # 发射逐字节与旧协议一致（I3a/I2/D2 锚不变）。
-            self._release_intra_block_credit_tiles(block)
             # D10 静默重建：重建 span 随其成员首迭代入首体块——逐块消费
             # 抑制账本（块间 spans 不相交，总和恰一次）。
             block_suppress_indices = (
@@ -4057,349 +1407,45 @@ class GraphBatchBuilder:
             for rank in group.ranks:
                 if position == 0 and suffix_arms:
                     self.builders[rank].arm_dependency(suffix_arms[rank])
-                for gate_request_id, block_index in _iter_gate_pairs(
-                        block["gates"]):
+                for gate_request_id, block_index in block["gates"]:
                     if segment_first_block and copy_tail_layers:
                         # K6：首体块的 copy 尾块门由层段发射逐段精确
                         # arm（块粒度 arm 与段门并存 = 同门双重依赖，
                         # 冗余且掩盖段边界语义）。
                         continue
-                    if block_index < 2 and not (
-                            self._copy_handoff_arms.get(
-                                gate_request_id, {}).get(block_index)):
-                        # 切片块 1 无旁挂门：主链先行性承担（T1 经
-                        # barrier、T2+ 经 per-rank 链序，§4.1）。C13 copy
-                        # 交接尾块从 1 起编号（块 0 在准入主链）——copy 门
-                        # 的块 1 有旁挂支链，须正常 arm。
-                        continue
-                    arm_map = self._credit_arms.get(gate_request_id)
-                    if arm_map is None:
-                        arm_map = self._copy_handoff_arms.get(
-                            gate_request_id, {}).get(block_index)
-                    if arm_map is None:
-                        # 尾块发射恒先于体（_emit_train_head 先于
-                        # _emit_train_body；copy 尾块在准入批发射）——门
-                        # 账本整块缺失只可能是 bug（尾块未发射/未登记/
-                        # 块号错位），fail-closed（2026-09-17 交付后复核
-                        # 硬化；C13 copy 同款）。
+                    per_rank_gates = self._copy_handoff_arms.get(
+                        gate_request_id, {}).get(block_index)
+                    if per_rank_gates is None:
+                        # 尾块发射恒先于体（copy 尾块在准入批发射）——
+                        # 门账本整块缺失只可能是 bug（尾块未发射/未登记/
+                        # 块号错位），fail-closed。
                         raise RuntimeError(
-                            "credit arm ledger is missing block {} of "
+                            "copy handoff arm ledger is missing block {} of "
                             "request {} (tail emission must precede the "
                             "train body)".format(
                                 block_index, gate_request_id))
-                    if isinstance(arm_map, _CreditArmRange):
-                        if arm_map.mainline_covers(block_index, rank):
-                            # Same-body virtual consumers are chained through
-                            # their bounded marker frontier; only the final
-                            # two receive slots need explicit body edges.
-                            continue
-                        per_rank_gates = arm_map.get(block_index)
-                    else:
-                        per_rank_gates = arm_map
-                    if per_rank_gates is None:
-                        raise RuntimeError(
-                            "credit arm ledger has no bounded receive anchor "
-                            f"for block {block_index} rank {rank}")
                     gate_node = per_rank_gates.get(rank)
                     if gate_node is not None:
                         # 该 rank 有 shard 才有 recv 门；零字节 rank 与
                         # v1 同口径跳过（无数据即无到达可等）。
                         self.builders[rank].arm_dependency(gate_node)
             if segment_first_block:
-                # C15+K6+§三.6 组合形态：首块（覆盖迭代 1 = 首 chunk）按
-                # 层段切分发射——恢复组门/copy 尾块门/前缀读流组门逐段挂
-                # （见 emit_layer_segmented）；块 ≥ 1 原样（其迭代的层消
-                # 费已被首块各段门传递覆盖：块 1+ 的 spans 计算晚于首块
-                # 全部层段完成 ⇒ 晚于全部尾块/恢复组/前缀组——既有
-                # per-block 门成为冗余无害保险）。
+                # C15+K6 组合形态：首块（覆盖迭代 1 = 首 chunk）按层段
+                # 切分发射——恢复组门/copy 尾块门逐段挂（见
+                # emit_layer_segmented）；块 ≥ 1 原样（其迭代的层消费已
+                # 被首块各段门传递覆盖，既有 per-block 门成为冗余无害
+                # 保险）。
                 emit_layer_segmented(
                     block["spans"], block["weight_passes"],
                     phase=block_phase,
                     suppress_indices=block_suppress_indices)
-                self._record_credit_body_consumptions(block)
-                self._release_credit_pending_tiles(block)
                 continue
             for relative_rank, rank in enumerate(group.ranks):
                 emit_pass(
                     block["spans"], block["weight_passes"],
                     rank, relative_rank,
                     phase=block_phase,
-                    suppress_output_span_indices=block_suppress_indices,
-                    # die spec 注记（第一期）：remote-read credit 体块的
-                    # KV 前缀经 D09 双缓冲暂存到达——kv_access.identity
-                    # 如实标 staged（库内无成本语义，只进缓存键/报表）。
-                    die_kv_identity="staged")
-            self._record_credit_body_consumptions(block)
-            # D09 缓冲复用释放门：本体块消费其 gates 列出的全部切片块
-            # （fork = 本体块末节点 = 消费锚）——块 t-2 的消费在此归还
-            # 暂存缓冲，块 t 的旁挂支链此刻才发射（生产等消费）。
-            self._release_credit_pending_tiles(block)
-
-    def _record_credit_body_consumptions(self, block):
-        """Bind non-marker tile consumption to the ordinary body tail.
-
-        Same-body consumers already have explicit marker terminal runs. Other
-        active target shards are consumed by this block's last task on their
-        owner rank. The range is split only at shard tails and marker bounds.
-        """
-        for gate in _gate_runs(block.get("gates") or ()):
-            request_id = gate.request_id
-            arm_range = self._credit_arms.get(request_id)
-            if not isinstance(arm_range, _CreditArmRange):
-                continue
-            slots = [slot for slot in self._pipeline_credit_slots.values()
-                     if slot["draft"].identity.request_id == request_id]
-            if not slots:
-                continue
-            for slot in slots:
-                owner = int(slot["draft"].identity.rank)
-                tile_run = slot["tile_run"]
-                global_first = int(tile_run["first_tile"])
-                global_last = global_first + int(tile_run["tile_count"]) - 1
-                first = max(gate.first_tile, global_first)
-                last = min(gate.last_tile, global_last)
-                if first > last:
-                    continue
-                body_terminal = self.builders[owner].previous_id
-                if body_terminal is None:
-                    raise RuntimeError(
-                        "remote-read consumer body has no owner-rank tail")
-
-                active_ends = []
-                for local_shard, shard in enumerate(slot["owner_shards"]):
-                    if tile_run["axis_unit"] == "source_tokens":
-                        active_count = (int(tile_run["tile_count"])
-                                        if int(shard["bytes_per_unit"]) > 0
-                                        else 0)
-                    else:
-                        amount = int(shard["total_data_bytes"])
-                        units = int(tile_run["units_per_tile"])
-                        active_count = ((amount + units - 1) // units
-                                        if amount else 0)
-                    if active_count:
-                        active_ends.append((
-                            local_shard,
-                            min(global_last, global_first + active_count - 1)))
-                boundaries = {first, last + 1}
-                for _local, active_last in active_ends:
-                    if first <= active_last < last:
-                        boundaries.add(active_last + 1)
-                marker_ranges = []
-                for left, right, ranks in arm_range.mainline:
-                    if owner not in ranks or right < first or left > last:
-                        continue
-                    marker_ranges.append((max(first, left), min(last, right)))
-                    boundaries.add(max(first, left))
-                    boundaries.add(min(last, right) + 1)
-                sorted_boundaries = sorted(boundaries)
-                for begin, stop in zip(sorted_boundaries,
-                                       sorted_boundaries[1:]):
-                    if begin >= stop:
-                        continue
-                    end = stop - 1
-                    if any(left <= begin <= right
-                           for left, right in marker_ranges):
-                        continue
-                    local_shards = [
-                        local for local, active_last in active_ends
-                        if active_last >= end]
-                    if not local_shards:
-                        continue
-                    slot["draft"].add_consume_completion_run({
-                        "rank": owner,
-                        "group_ordinal": int(slot["group_ordinal"]),
-                        "first_tile": begin - global_first + 1,
-                        "tile_count": stop - begin,
-                        "shard_ordinals": local_shards,
-                        "dependency_kind": "ordinary_node_terminal",
-                        "first_dependency_json_id": int(body_terminal),
-                        "dependency_tile_stride": 0,
-                        "dependency_shard_stride": 0,
-                    })
-
-    def _release_intra_block_credit_tiles(self, block) -> None:
-        """D09 修复轮二：同体块内 lag-2 后继 tile 的逐 tile 消费释放。
-
-        tiles_per_pass（或 prefill 消费窗 tile 数）> 2 时，tile b 与
-        b+2 同属一个消费体块——"b+2 生产等 b 消费"的锚不能再是体块末
-        节点（计算节点等全部 tile 到达才发射，锚回自身即死锁）。本方法
-        在体块计算节点之前逐 tile 发射**消费 marker**（每 tile 每
-        target rank 一个 1-op COMP 节点，armed 该 tile 的 per-rank recv
-        完成门——tile 1 主链链序天然先行，无旁挂门可 arm），marker 即
-        tile 的流水消费锚：tile 数据已被本块计算队列接收、缓冲槽位归
-        还。b+2 的旁挂支链从 marker fork（经 _emit_released_credit_tile
-        的释放 ack 对），后继 tile 的 recv/门登记照常。
-
-        消费 marker 无物理服务（1 op）：体块计算节点仍 armed 本块全部
-        tile 的 recv 门（数据就绪不变量不动）；下一消费窗的首两 tile
-        仍由体块末节点释放（跨块后继 = 慢计算停泵面，保守耦合保持）。
-        """
-        gates = block.get("gates") or ()
-        for gate in _gate_runs(gates):
-            gate_request_id = gate.request_id
-            pending = self._credit_pending_tiles.get(gate_request_id)
-            if pending is None or not isinstance(pending, _CreditPendingRange):
-                continue
-            successor = pending.next_block
-            consumer = successor - 2
-            if not (gate.first_tile <= consumer <= gate.last_tile
-                    and gate.first_tile <= successor <= gate.last_tile
-                    and pending.has(successor)):
-                continue
-            maximum = min(gate.last_tile - successor + 1,
-                          pending.last_block - successor + 1)
-            runs = getattr(pending.blocks, "pipeline_tile_runs", ())
-            if not runs:
-                raise RuntimeError(
-                    "same-body compact release requires planner source/pass ranges")
-            for (consumer_run, successor_run, first_consumer, width,
-                 consumer_shards, successor_shards) in \
-                    _paired_pipeline_tile_segments(
-                        runs, consumer, maximum, lag=2):
-                offset = 0
-                while offset < width:
-                    pair_first = first_consumer + offset
-                    if pair_first != pending.next_block - 2:
-                        raise RuntimeError(
-                            "same-body pair cursor changed during range emission")
-                    available = self._consumer_recv_run_remaining(
-                        gate_request_id, pending.stage, consumer_run,
-                        pair_first, consumer_shards)
-                    piece = min(width - offset, available)
-                    if piece <= 0:
-                        raise RuntimeError(
-                            "same-body range has no prior affine receive run")
-                    self._emit_compact_same_body_range(
-                        gate_request_id, pending, consumer_run, successor_run,
-                        pair_first, piece, consumer_shards,
-                        successor_shards, pending.stage)
-                    pending.advance(piece)
-                    offset += piece
-            if not pending:
-                self._credit_pending_tiles.pop(gate_request_id, None)
-
-    def _consumer_recv_run_remaining(
-            self, request_id, stage, tile_run, global_tile, active_shards):
-        """Bound a marker range by prior data-recv runs at the real emit points."""
-        request_plan = self._pipeline_plan_by_request.get(request_id)
-        if request_plan is None:
-            raise RuntimeError(
-                "same-body receive lookup has no pipeline identity seed")
-        remaining = None
-        by_owner = {}
-        for shard in active_shards:
-            owner = int(shard["target_rank"])
-            prior = by_owner.get(owner)
-            if (prior is None or int(shard["global_shard_ordinal"])
-                    > int(prior["global_shard_ordinal"])):
-                by_owner[owner] = shard
-        for owner, shard in by_owner.items():
-            slot = self._physical_pipeline_group(
-                request_plan, stage, owner, tile_run)
-            local_tile = (int(global_tile)
-                          - int(tile_run["first_tile"]) + 1)
-            local_shard = slot["global_to_local_shard"].get(
-                int(shard["global_shard_ordinal"]))
-            match = None
-            for run in reversed(slot["draft"].endpoint_runs):
-                if (run["group_ordinal"] == slot["group_ordinal"]
-                        and run["rank"] == owner
-                        and run["first_tile"] <= local_tile
-                        < run["first_tile"] + run["tile_count"]
-                        and local_shard in run["shard_ordinals"]
-                        and any(leg["endpoint"] == "data_recv"
-                                for leg in run["legs"])):
-                    match = run
-                    break
-            if match is None:
-                raise RuntimeError(
-                    "same-body consumer has no prior compact data_recv run "
-                    f"for rank {owner}, tile {global_tile}")
-            width = (int(match["first_tile"]) + int(match["tile_count"])
-                     - local_tile)
-            remaining = width if remaining is None else min(remaining, width)
-        if remaining is None:
-            raise RuntimeError("same-body consumer has no active target rank")
-        return remaining
-
-    def _emit_credit_consume_marker_and_release(
-            self, request_id: str, block_index: int, transfer,
-            action_name: str) -> None:
-        """单 tile 消费 marker + lag-2 后继支链发射（体块计算节点前）。
-
-        marker 名携带请求与 tile 序（批内唯一）；exec 侧 marker armed
-        tile ``block_index`` 的 per-rank recv 门（账本缺失 = 发射/登记
-        链破损，fail-closed——tile 1 主链形态例外，合法无旁挂门）。"""
-        recv_map = self._credit_arms.get(request_id, {}).get(block_index)
-        marker_ranks = sorted({
-            shard.target_rank for shard in transfer.shards})
-        if recv_map is None and block_index >= 2:
-            raise RuntimeError(
-                "credit consume marker for tile {} of request {} has no "
-                "registered recv gates (tail emission must precede the "
-                "train body)".format(block_index, request_id))
-        for rank in marker_ranks:
-            gate = (recv_map or {}).get(rank)
-            if gate is not None:
-                self.builders[rank].arm_dependency(gate)
-            # op_role=control_marker（契约 §7 裁定 8）：tile 消费 marker 是
-            # comp(1,1) 微节点——die 后端下保持旧微作业语义，不走 die plan。
-            self.builders[rank].comp(
-                "{}_credit{}_consumed_rank{}".format(
-                    sanitize_node_prefix(request_id), block_index, rank),
-                1, 1, op_role="control_marker")
-        if not marker_ranks:
-            raise RuntimeError(
-                "credit consume marker for tile {} of request {} has no "
-                "shard target ranks (empty tile transfer)".format(
-                    block_index, request_id))
-
-        def emit_released(
-                request_id=request_id, block_index=block_index,
-                transfer=transfer, action_name=action_name):
-            member_plan = {"request_id": request_id}
-            self._emit_released_credit_tile(
-                member_plan, block_index + 2, transfer, action_name)
-
-        self._emit_side_branch(emit_released)
-
-    def _release_credit_pending_tiles(self, block) -> None:
-        """D09：体块消费锚处的待发 tile 释放发射（生产/消费门真实缓冲
-        复用依赖）。本体块 gates 列出的每个 (rid, 块号 b) 消费完成后，
-        块 b+2（若在待发账本）经 _emit_side_branch 发射——fork = 本体块
-        末节点；exec 侧 data_recv 挂消费锚父边、home 侧 data_send 被
-        释放 ack 栅栏（跨 rank 因果由 tag 配对承载）。同体块 lag-2 后继
-        已在 _release_intra_block_credit_tiles（marker 点）提前释放，
-        此处只剩跨体块后继（下一消费窗首两 tile——慢计算停泵面）。"""
-        for gate in _gate_runs(block["gates"]):
-            gate_request_id = gate.request_id
-            pending = self._credit_pending_tiles.get(gate_request_id)
-            if pending is None or not isinstance(pending, _CreditPendingRange):
-                continue
-            successor = pending.next_block
-            consumer = successor - 2
-            if not (gate.first_tile <= consumer <= gate.last_tile
-                    and pending.has(successor)):
-                continue
-            # Same-body markers have already advanced every successor whose
-            # consumer and successor both belong to this body block. The
-            # remaining prefix is released from the shared body-tail fork.
-            count = min(gate.last_tile - consumer + 1,
-                        pending.last_block - successor + 1)
-            segments = pending.segments(successor, count)
-            for tile_run, first_tile, width, active_shards in segments:
-                def emit_released_range(
-                        gate_request_id=gate_request_id,
-                        pending=pending, tile_run=tile_run,
-                        first_tile=first_tile, width=width,
-                        active_shards=active_shards, stage=pending.stage):
-                    self._emit_compact_cross_body_range(
-                        gate_request_id, pending, tile_run, first_tile, width,
-                        active_shards, stage)
-                self._emit_side_branch(emit_released_range)
-                pending.advance(width)
-            if not pending:
-                self._credit_pending_tiles.pop(gate_request_id, None)
+                    suppress_output_span_indices=block_suppress_indices)
 
     def _rebuild_suppressed_request_ids(self, train_plan: dict) -> set:
         """D10 静默重建（v2.0 §6.2）：本列车声明输出抑制的 joiner 请求
@@ -4588,65 +1634,6 @@ class GraphBatchBuilder:
             self._block_ends.setdefault(member["request_id"], {})[
                 "seg2"] = dict(block_ends)
 
-        # remote-read credit（D09 字节 tile）：清本列车的 arm 账本与待发
-        # tile 账本——尾标记每列车恰发射一次（整列发射/余量批同路径），
-        # 此刻全部体块消费点均已发射、全部待发 tile 已在消费锚体块点
-        # 释放（末体块消费末块 tile ⇒ 无残留）；下一列车该请求的切片在
-        # 列车头重新登记（块号从 2 起重用，不残留陈旧门）。O10④：本
-        # 列车发射过尾块（remote_credit_tail 非空）的请求在 pop 点必须
-        # 有账本——发射登记与尾标记结清同列车成对出现，缺失 = 发射/
-        # 记账链破损，fail-closed；单块切片无尾块（账本合法缺席，pop
-        # 空放）。待发 tile 残留 = 释放链破损，同 fail-closed。
-        credit_plan = train_plan.get("remote_credit") or {}
-        expected_arm_owners = set()
-        for joiner in train_plan.get("joiners") or ():
-            if joiner.get("remote_credit_tail"):
-                expected_arm_owners.add(joiner["request_id"])
-        for member in credit_plan.get("continuations") or ():
-            if member.get("tail"):
-                expected_arm_owners.add(member["plan"]["request_id"])
-        for request_id in credit_plan.get("request_ids") or ():
-            leftover_arms = self._credit_arms.pop(request_id, None)
-            if request_id in expected_arm_owners and leftover_arms is None:
-                raise RuntimeError(
-                    "credit arm ledger for {} is missing at train "
-                    "tail-marker settlement although this train emitted "
-                    "its credit tail blocks (emission/bookkeeping chain "
-                    "broken)".format(request_id))
-            leftover_pending = self._credit_pending_tiles.pop(
-                request_id, None)
-            if leftover_pending:
-                raise RuntimeError(
-                    "credit pending tiles {} for request {} were never "
-                    "released by a consuming body block (buffer-reuse "
-                    "release chain broken)".format(
-                        leftover_pending.describe_pending(), request_id))
-
-        # D09 prefill 远读逐 tile（2026-09-27）：本列车远读窗口的待发/
-        # 门账本同款结清——窗口 tile 全部经体块门覆盖（_assert_prefill_
-        # read_arms_consumed 已查）且无残留待发 tile（释放链闭合）；登
-        #记账本弹空供下一列车窗口重登记。零 tile 窗口（防御）无账本。
-        prefill_read_request = (
-            train_plan.get("prefill_read") or {}).get("request_id")
-        if prefill_read_request is not None:
-            leftover_window = self._prefill_read_window_tiles.pop(
-                prefill_read_request, None)
-            if leftover_window:
-                if self._credit_pending_tiles.pop(
-                        prefill_read_request, None):
-                    raise RuntimeError(
-                        "prefill remote-read pending tiles for request "
-                        "{} were never released by a consuming body "
-                        "block (buffer-reuse release chain "
-                        "broken)".format(prefill_read_request))
-                if self._credit_arms.pop(prefill_read_request, None) is None \
-                        and len(leftover_window) > 1:
-                    raise RuntimeError(
-                        "prefill remote-read window ledger for request {} "
-                        "was settled without any registered tile arms "
-                        "(emission/bookkeeping chain broken)".format(
-                            prefill_read_request))
-
         return {
             "drain_members": drain_members,
             "exit_members": exit_members,
@@ -4664,238 +1651,7 @@ class GraphBatchBuilder:
         self.builders[rank].comp(name, 1, 1, op_role="control_marker")
         return self.builders[rank].previous_id
 
-    # ---------------------------------- remote-read credit 发射（v2）--
-
-    def _emit_credit_stream_tail(self, member_plan, blocks, *, stage) -> None:
-        """remote-read credit 尾块（切片块 2..M）的发射与登记（D09 有限
-        字节双缓冲，经 _emit_side_branch 包裹调用——分支首节点 parent
-        = fork frontier，分支不 join）：
-
-        - 块 2（第二缓冲）即时旁挂发射：首节点 parent = fork frontier
-          （与块 1 主链并行预取——两缓冲初始皆空，块 2 无释放依赖）；
-        - 块 3..M 记入 ``_credit_pending_tiles`` 待发账本（名字在头部
-          预分配，保证 action 序号稳定）：块 t 的生产受缓冲复用释放门
-          约束（消费后归还 credit）——由**消费块 t-2 的体块发射点**
-          经 ``_emit_released_credit_tile`` 延迟发射（fork = 该体块末
-          节点 = 消费锚；慢计算不导致源端无限泵出，任意时刻远读暂存
-          ≤2 块）；
-        - 即时块 2 的逐 rank recv 完成门记入 _credit_arms[rid][2]，由
-          覆盖其迭代区间的体块 arm 消费（I2）；延迟块的 recv 门在其
-          发射点登记，消费点必然更晚（块 t 在消费块 t-2 的逐 tile
-          marker/体块末才发射，同块后继经 marker 链保序——修复轮二起
-          tiles_per_pass 可 >2，lag-2 恒成立）。
-
-        blocks = ((块号 b, KVTransfer), ...)——块号为切片内绝对序
-        （体块门规格按同一块号引用）。M=1 时无尾块（调度器不置
-        remote_credit_tail），切片块 1 走主链路径。"""
-        request_id = member_plan["request_id"]
-        self._pipeline_plan_by_request[request_id] = member_plan
-        # A joiner tail side branch may be emitted before its main-chain head
-        # transfer. That is one structural train, so the first range can be
-        # the tail itself. Stale-arm detection belongs to the head emitter;
-        # the pending-range check below still rejects an unclosed prior train.
-        if request_id in self._credit_pending_tiles:
-            pending = self._credit_pending_tiles[request_id]
-            raise RuntimeError(
-                "credit pending-tile ledger for {} still holds tiles {} "
-                "from a previous train (tail-marker settlement missed "
-                "this request -- bookkeeping bug)".format(
-                    request_id, pending.describe_pending()))
-        block_count = len(blocks)
-        if block_count == 0:
-            return
-        first_block, first_transfer = blocks[0]
-        prefix = _prefix_of(member_plan)
-        action_state = self._action_seq.setdefault(request_id, [0])
-        action_base = action_state[0]
-        # Reserve the exact old action sequence interval at the original tail
-        # emission point. Future names are derived from ordinals on demand;
-        # no named_blocks/action_name array is retained.
-        action_state[0] = action_base + block_count
-        first_pending_offset = 0
-        if first_block < 3:
-            immediate_count = min(block_count, 3 - first_block)
-            runs = getattr(blocks, "pipeline_tile_runs", ())
-            if not runs:
-                raise RuntimeError(
-                    "compact credit head requires frozen planner tile ranges")
-            immediate_segments = _pipeline_tile_run_segments(
-                runs, first_block, immediate_count)
-            emitted_tiles = 0
-            for tile_run, segment_first, width, active_shards in immediate_segments:
-                if segment_first >= 3:
-                    break
-                width = min(width, 3 - segment_first)
-                if width <= 0:
-                    continue
-                tile_offset = segment_first - first_block
-                block_index, transfer = blocks[tile_offset]
-                if block_index != segment_first:
-                    raise RuntimeError(
-                        "credit tail block range is not contiguous")
-                if width != 1:
-                    raise RuntimeError(
-                        "the legacy immediate credit window is at most one "
-                        "tile; planner segmentation widened it")
-                self._emit_compact_initial_range(
-                    member_plan, tile_run, transfer, active_shards,
-                    stage=stage, first_tile=segment_first,
-                    tile_count=width)
-                emitted_tiles += width
-            if emitted_tiles != immediate_count:
-                raise RuntimeError(
-                    "compact immediate credit range did not cover its "
-                    "legacy emission extent")
-            first_pending_offset = immediate_count
-        if first_pending_offset < block_count:
-            pending = _CreditPendingRange(
-                blocks, first_pending_offset=first_pending_offset,
-                action_base=action_base, prefix=prefix, stage=stage,
-                session_id=first_transfer.session_id,
-                kind=first_transfer.kind)
-            self._credit_pending_tiles[request_id] = pending
-
-    def _emit_immediate_credit_tile(
-            self, member_plan, block_index, transfer, action_name) -> None:
-        """无释放依赖的 credit tile（块 2）旁挂发射：结构 = 旧并行支链
-        形态（块间无边、fork 主链 frontier；块内 ack_recv ← 本块 send、
-        ack_send ← 本块 recv，跨 rank 因果由 tag 配对承载）。"""
-        request_id = member_plan["request_id"]
-        per_rank = self._emit_credit_tile_shards(
-            block_index, transfer, action_name, release_anchor=False)
-        self._credit_arms.setdefault(request_id, {})[block_index] = per_rank
-
-    def _emit_released_credit_tile(
-            self, member_plan, block_index, transfer, action_name) -> None:
-        """缓冲复用释放门下的 credit tile（块 ≥ 3）发射（D09）：调用点
-        = 消费块 (block_index - 2) 的体块发射完成处（本方法整体经
-        _emit_side_branch 包裹——fork = 该体块末节点，主链不被扰动）。
-
-        逐 shard 新形态：
-        - exec 侧：释放 ack_send（1B，tag τ，parent = fork = 消费锚）
-          → 本块 data_recv（链序随 ack_send 后；真正的到达因果由 tag
-          配对承载）——data_recv 的直接父边锚定"缓冲已归还"；
-        - home 侧：释放 ack_recv（tag τ）→ 本块 data_send（链序）——
-          源端泵出被释放 ack 栅栏（慢计算 ⇒ 源端停泵）；
-        - 到达 ack 沿旧形态（ack_send ← data_recv / ack_recv ← 链序）。
-        块的逐 rank data_recv 完成门入 _credit_arms[rid][b]。"""
-        request_id = member_plan["request_id"]
-        per_rank = self._emit_credit_tile_shards(
-            block_index, transfer, action_name, release_anchor=True)
-        self._credit_arms.setdefault(request_id, {})[block_index] = per_rank
-
-    def _emit_credit_tile_shards(
-            self, block_index, transfer, action_name, *,
-            release_anchor: bool) -> dict:
-        """单个 credit tile 的逐 shard 物理发射（release_anchor=True 时
-        前置缓冲释放 ack 对——D09 生产/消费门真实缓冲复用依赖）。返回
-        逐 target rank 的 data_recv 完成门表。"""
-        per_rank = {}
-        for shard_index, shard in enumerate(transfer.shards):
-            if release_anchor:
-                release_tag = self.tag_allocator.take()
-                # exec 侧：释放 ack_send 挂 fork（消费锚）——信号 =
-                # "块 b-2 已消费、缓冲归还"，先于本块 data_recv（链序）。
-                self.builders[shard.target_rank].comm_send(
-                    f"{action_name}_shard{shard_index}"
-                    f"_credit{block_index}_release_to_rank{shard.source_rank}",
-                    src=shard.target_rank, dst=shard.source_rank,
-                    comm_size=1, comm_tag=release_tag)
-                # home 侧：释放 ack_recv（tag 配对）→ data_send 栅栏。
-                self.builders[shard.source_rank].comm_recv(
-                    f"{action_name}_shard{shard_index}"
-                    f"_credit{block_index}_release_from_rank{shard.target_rank}",
-                    src=shard.target_rank, dst=shard.source_rank,
-                    comm_size=1, comm_tag=release_tag)
-            data_tag = self.tag_allocator.take()
-            self.builders[shard.source_rank].comm_send(
-                f"{action_name}_shard{shard_index}"
-                f"_credit{block_index}_send",
-                src=shard.source_rank, dst=shard.target_rank,
-                comm_size=shard.bytes, comm_tag=data_tag)
-            self.builders[shard.target_rank].comm_recv(
-                f"{action_name}_shard{shard_index}"
-                f"_credit{block_index}_recv",
-                src=shard.source_rank, dst=shard.target_rank,
-                comm_size=shard.bytes, comm_tag=data_tag)
-            recv_node = self.builders[shard.target_rank].previous_id
-            if recv_node is None:
-                raise RuntimeError(
-                    "credit stream recv did not generate a node")
-            per_rank[shard.target_rank] = recv_node
-            ack_tag = self.tag_allocator.take()
-            self.builders[shard.target_rank].comm_send(
-                f"{action_name}_shard{shard_index}"
-                f"_credit{block_index}_ack_to_rank{shard.source_rank}",
-                src=shard.target_rank, dst=shard.source_rank,
-                comm_size=1, comm_tag=ack_tag)
-            self.builders[shard.source_rank].comm_recv(
-                f"{action_name}_shard{shard_index}"
-                f"_credit{block_index}_ack_from_rank{shard.target_rank}",
-                src=shard.target_rank, dst=shard.source_rank,
-                comm_size=1, comm_tag=ack_tag)
-        return per_rank
-
-    def _emit_prefill_read_window(self, prefill_read: dict) -> None:
-        """D09 prefill 远读逐 tile 窗口发射（2026-09-27）：本列车消费窗
-        （逐 chunk 迭代）的读流 tile——tile 1 上主链（发射序先于列车体，
-        链序保证先行）、tile 2 即时旁挂、tile 3+ 记 ``_credit_pending_
-        tiles`` 待发账本（块 t 的生产受缓冲复用释放门约束：由消费块
-        t-2 的体块发射点经 ``_emit_released_credit_tile`` 延迟发射——
-        tile i+2 生产等 tile i 消费完成，慢计算不导致源端无限泵出，
-        任意时刻远读暂存 ≤2 tile）。完成门与待发账本与 decode credit
-        共用（_credit_arms/_credit_pending_tiles 同一协议）；窗口 tile
-        序号集登记 ``_prefill_read_window_tiles``（列车体门并集覆盖检
-        查 + 列车尾结清）。
-
-        prefill_read 字段（调度器 _plan_train 冻结）：
-          request_id / plan（_prefix_of 所需的请求 plan dict 子集）/
-          tiles = ((tile 序号 1..M, KVTransfer), ...)——列车内窗口
-          展平序；body_blocks 由 _emit_train_body 经 credit_blocks 槽位
-          消费（gates = (rid, tile) 对）。"""
-        request_id = prefill_read["request_id"]
-        member_plan = prefill_read["plan"]
-        self._pipeline_plan_by_request[request_id] = member_plan
-        tiles = prefill_read.get("tiles")
-        tile_count = 0 if tiles is None else len(tiles)
-        if tile_count == 0:
-            raise RuntimeError(
-                "prefill remote-read window for request {} carries no "
-                "tiles (a consuming train must be preceded by its window "
-                "plan)".format(request_id))
-        if request_id in self._prefill_read_window_tiles:
-            raise RuntimeError(
-                "prefill remote-read window ledger for {} still holds "
-                "tiles {} from a previous train (tail-marker settlement "
-                "missed this request)".format(
-                    request_id,
-                    "{}..{} ({} tiles)".format(
-                        self._prefill_read_window_tiles[request_id].start,
-                        self._prefill_read_window_tiles[request_id].stop - 1,
-                        len(self._prefill_read_window_tiles[request_id]))))
-        self._prefill_read_window_tiles[request_id] = range(1, tile_count + 1)
-        self._set_context(member_plan, "prefill", 0)
-        # tile 1 上主链（首块数据先于列车体到达的链序保证；与 decode
-        # 续列车块 1 同构——无 barrier，per-rank 链序承担先行性）。
-        transfer_tiles = _TransferPayloadSequence(tiles)
-        first_tile = tiles[0]
-        if (isinstance(first_tile, tuple) and len(first_tile) == 2
-                and type(first_tile[0]) is int
-                and first_tile[0] != 1):
-            raise RuntimeError(
-                "prefill remote-read window must begin at tile 1")
-        self._emit_credit_head_transfer(
-            member_plan, transfer_tiles[0], stage="prefill_read",
-            pipeline_tile_runs=getattr(
-                tiles, "pipeline_tile_runs", ()))
-        if tile_count > 1:
-            tail_blocks = _IndexedTransferBlocks(
-                transfer_tiles, first_offset=1, first_block=2)
-            def emit_prefill_read_tail(
-                    member_plan=member_plan, tail_blocks=tail_blocks):
-                self._emit_credit_stream_tail(
-                    member_plan, tail_blocks, stage="prefill_read")
-            self._emit_side_branch(emit_prefill_read_tail)
+    # ------------------------------------------------ C13 copy 交接尾块 --
 
     def _emit_copy_handoff_tail(self, member_plan, chunks, *,
                                 pending_gate=None) -> None:
@@ -5040,45 +1796,6 @@ class GraphBatchBuilder:
         return any(request_id in self._copy_handoff_arms
                    for request_id in request_ids)
 
-    def _assert_prefill_read_arms_consumed(self, train_plan) -> None:
-        """D09 prefill 远读逐 tile（2026-09-27）：本列车载有远读窗口时，
-        窗口登记的 tile 序号集必须恰被体块门并集覆盖——欠覆盖 = 读流
-        tile 无消费门（数据到达不被计算等待，时序乐观），过覆盖 = 门引
-        用未登记 tile（账本错位）；两端 fail-closed。非远读列车无账本，
-        恒通过。"""
-        prefill_read = train_plan.get("prefill_read") or {}
-        request_id = prefill_read.get("request_id")
-        if request_id is None:
-            return
-        registered = self._prefill_read_window_tiles.get(request_id)
-        if not registered:
-            # 无登记 = 本列车无远读窗口（窗口在后续列车）或窗口零 tile
-            # （零字节流）：恒通过；残留由列车尾结清与完成批检查兜底。
-            return
-        expected_tile = 1
-        for block in prefill_read.get("body_blocks") or ():
-            for gate_request_id, tile_index in _iter_gate_pairs(
-                    block["gates"]):
-                if gate_request_id != request_id:
-                    raise RuntimeError(
-                        "prefill remote-read body block gates reference "
-                        f"another request {gate_request_id!r} under "
-                        f"window owner {request_id!r}")
-                if tile_index != expected_tile:
-                    raise RuntimeError(
-                        "prefill remote-read body tiles for request {} are "
-                        "not a contiguous single-use prefix (expected {}, "
-                        "got {})".format(
-                            request_id, expected_tile, tile_index))
-                expected_tile += 1
-        if expected_tile - 1 != len(registered):
-            raise RuntimeError(
-                "prefill remote-read window tiles for request {} were not "
-                "exactly covered by the train body gates (registered {} vs "
-                "covered {}) -- the per-tile read stream must gate exactly "
-                "the blocks that consume it".format(
-                    request_id, len(registered), expected_tile - 1))
-
     def _copy_handoff_body_blocks(self, train_plan, pass_spans):
         """C13：含首 chunk 列车体的逐块就绪门控切分（消费顺序映射）。
 
@@ -5173,46 +1890,10 @@ class GraphBatchBuilder:
                 # 块唯一 phase 标签：同列车多体块的聚合节点/集体节点不
                 # 可重名（C++ commit 预检按名字对集体做跨 rank 签名一
                 # 致性校验——同块内逐 rank 字节一致，跨块字节不同，重
-                # 名即误配；remote-credit 多块在现行 auto-K 下恒单块，
-                # 本后缀是首个真实多块路径的必要区分）。
+                # 名即误配）。
                 "phase": f"{train_plan['train_id']}_cb{block_position}",
             })
         return blocks, (request_id,)
-
-    def _emit_credit_head_transfer(
-            self, member_plan, transfer, *, stage: str = "remote_credit",
-            pipeline_tile_runs=None,
-    ) -> dict:
-        """remote-read 切片块 1 的主链发射（exec 实例 per-rank 链序保
-        证其先于列车体；无 barrier；decode 续列车与 prefill 远读窗口
-        tile 1 共用——``stage`` 区分命名/登记身份）。发射走 v1 同一
-        _emit_kv_transfer noc_migrate 路径，命名经 _action_seq 闭包
-        （与 joiner pd_transfer 同款手法）。"""
-        request_id = member_plan["request_id"]
-        self._pipeline_plan_by_request[request_id] = member_plan
-        runs = tuple(pipeline_tile_runs or ())
-        if not runs:
-            raise RuntimeError(
-                "remote-read head requires its frozen planner tile ranges")
-        run = next((row for row in runs
-                    if int(row["first_tile"]) <= 1
-                    < int(row["first_tile"]) + int(row["tile_count"])),
-                   None)
-        if run is None:
-            raise RuntimeError(
-                "remote-read planner ranges do not contain head tile 1")
-        active = _active_shards_at(run, 1)
-        action_state = self._action_seq.setdefault(request_id, [0])
-        action_sequence = action_state[0]
-        action_state[0] = action_sequence + 1
-        emitted = self._emit_compact_initial_range(
-            member_plan, run, transfer, active, stage=stage,
-            first_tile=1, tile_count=1)
-        return {
-            "sequence_stage": stage,
-            "action_sequence": action_sequence,
-            "pipeline_extent": emitted,
-        }
 
     def emit_completion_batch(self, request_plan: dict, *,
                               block_end_stage: str = "seg2") -> dict:
@@ -5263,52 +1944,6 @@ class GraphBatchBuilder:
                 "train body".format(
                     request_plan["request_id"],
                     [arm[0] for arm in leftover_restore_arms]))
-        # O10④：credit arm 账本残留 = 请求完成而其切片尾块门账本未被
-        # 列车尾标记结清（发射/切分 bug）——fail-closed（C13 copy /
-        # C15 restore 同款纪律；单块切片无尾块，账本合法缺席）。D09：
-        # 待发 tile 账本残留 = 缓冲复用释放链破损，同 fail-closed。
-        leftover_credit_arms = self._credit_arms.pop(
-            request_plan["request_id"], None)
-        if leftover_credit_arms:
-            raise RuntimeError(
-                "request {} completed with unconsumed credit arms "
-                "{} -- the credit tail stream was never gated into a "
-                "train body".format(
-                    request_plan["request_id"],
-                    sorted(leftover_credit_arms)))
-        leftover_credit_pending = self._credit_pending_tiles.pop(
-            request_plan["request_id"], None)
-        if leftover_credit_pending:
-            raise RuntimeError(
-                "request {} completed with unreleased credit tiles {} -- "
-                "the buffer-reuse release chain was never anchored into a "
-                "train body".format(
-                    request_plan["request_id"],
-                    leftover_credit_pending.describe_pending()))
-        # D09 prefill 远读逐 tile（2026-09-27）：窗口 tile 登记账本残留 =
-        # 请求完成而其读流窗口从未被列车体门覆盖（发射/切分 bug）——
-        # fail-closed（C13 copy / C15 restore 同款纪律；非远读请求无账本，
-        # pop 空放）。
-        leftover_window_tiles = self._prefill_read_window_tiles.pop(
-            request_plan["request_id"], None)
-        if leftover_window_tiles:
-            if isinstance(leftover_window_tiles, range):
-                window_extent = (leftover_window_tiles.start,
-                                 leftover_window_tiles.stop - 1,
-                                 len(leftover_window_tiles))
-            else:
-                tile_ids = tuple(sorted(leftover_window_tiles))
-                window_extent = (
-                    tile_ids[0] if tile_ids else 0,
-                    tile_ids[-1] if tile_ids else 0,
-                    len(tile_ids))
-            raise RuntimeError(
-                "request {} completed with unconsumed prefill remote-read "
-                "window tiles {} -- the prefix read stream was never gated "
-                "into a train body".format(
-                    request_plan["request_id"],
-                    "{}..{} ({} tiles)".format(
-                        *window_extent)))
         return merge_info
 
     def _set_context(self, request_plan: dict, stage: str,
@@ -5570,8 +2205,7 @@ class GraphBatchBuilder:
         §4.2.4 层区间交集选择性消费：restore 传输区间
         [transfer.layer_start, transfer.layer_end)；匹配条目 = 区间有
         交集（max(ls1,ls2) < min(le1,le2)）的全部条目；只移除匹配条目，
-        未匹配保留在 pending_store_tails 供后续消费者（新增消费者 =
-        PARTIAL remote-read 后缀恢复 [p, L)）。行为保持注记：现有全部
+        未匹配保留在 pending_store_tails 供后续消费者。行为保持注记：现有全部
         逐出池写层区间恒为后缀形 [k,L)，现有消费者区间（REMOTE 全量
         [0,L) / copy 后缀 [p,L)）与之恒有交集 ⇒ 交集选择性消费与旧
         pop-all 在现行模式下行为等价，硬化属防御性改造，零时间线扰动。
@@ -5897,7 +2531,7 @@ class GraphBatchBuilder:
         suffix_ready_nodes_by_rank = {}
 
         # ---- history_transfers（joint：stay 单笔 / copy 前缀 NoC+后缀池
-        #      恢复两笔 / recompute 与 remote-read 零搬运）----
+        #      恢复两笔 / recompute 零搬运）----
         joint_action = request_plan.get("joint_action", "stay")
         if "history_transfers" in request_plan:
             history_transfers = tuple(
@@ -5938,15 +2572,6 @@ class GraphBatchBuilder:
                 transfer.kind == "remote_load"
                 and getattr(transfer, "restore_group", None) is not None)
 
-        # 规格书§三.1（2026-09-25 prefill remote-read 前缀读流；D09 逐
-        # tile 化 2026-09-27）：独立于 history_transfers 的前缀读流计划
-        # （调度器 plan_dict 新字段）——home 驻留前缀 [0, p) 的逐窗×tile
-        # noc_migrate 瞬时读流（stream_only，不物化入容量账本）。准入批
-        # 只消费触发链；数据 tile 随消费窗口在列车头/体发射。PARTIAL 基
-        # 与后缀池恢复两腿并行、共享同一准入 frontier；LOCAL 基 = 全层
-        # [0, L) 读流（history_transfers 恒空）。旧 plan 形态无该键 → None。
-        prefill_read_plan = request_plan.get("prefill_remote_read_plan")
-
         if copy_handoff_tail or restore_group_transfers:
             main_history_transfers = tuple(
                 transfer for transfer in history_transfers
@@ -5970,24 +2595,7 @@ class GraphBatchBuilder:
             == request_plan["prefill_instance_index"])
 
         if not history_transfers:
-            if joint_action == "remote-read":
-                # remote-read（LOCAL 基——history_transfers 恒空）：本批
-                # 无历史搬运主链节点（旧口径此处 pass = interval/arrival
-                # gate 从未被消费 + 前缀层计算无数据门，2026-09-25 规格
-                # 书§三.2 废除）。前缀读流由下方独立旁挂分支发射：gate
-                # 的触发消费、home→exec 层组读流均在分支内完成（前缀
-                # 计算的层段门由列车体消费 recv 完成门承担）；gate 结构
-                # 性重建（跨实例轮换 → 本轮 prefill 实例）已在 gate 段
-                # 经 R5 _rebuild_interval_gate_on_target 完成。decode 相
-                # 的 home 前缀 credit 读流仍经 joiner 动作发射（drain
-                # 边界），与本批无交集。
-                if prefill_read_plan is None:
-                    raise RuntimeError(
-                        "remote-read admission without its prefill prefix "
-                        "read plan (plan_prefill_remote_read_transfers "
-                        f"must supply it; request "
-                        f"{request_plan['request_id']!r})")
-            elif joint_action == "recompute":
+            if joint_action == "recompute":
                 # 重算历史在执行期物化——本批无历史搬运节点。D10
                 # （v2.0 §6.2，2026-09-26）：物化 = 完整 H+U 重放（全形
                 # 态 span 基 0、重建基数 = 整份已保存上下文，旧缺失层折
@@ -6043,36 +2651,13 @@ class GraphBatchBuilder:
                 # C13：交接尾块支链（fork 顺序 = 头块主链发射之后；分支
                 # 不 join——readiness barrier 不等尾块，列车体逐块 arm 消
                 # 费）。home 侧 send 链全速泵出，exec 侧 recv 链流式到达
-                # （与 _emit_credit_stream_tail 同款拓扑）；ack 链尾随整
+                # 流式到达；ack 链尾随整
                 # 条数据链（source release dependency 挂点）。
                 def emit_copy_handoff_branch(
                         tail=copy_handoff_tail, gate=pending_gate):
                     self._emit_copy_handoff_tail(
                         request_plan, tail, pending_gate=gate)
                 self._emit_side_branch(emit_copy_handoff_branch)
-
-        # ---- prefill remote-read 前缀读流旁挂分支（规格书§三.1-§三.3，
-        #      2026-09-25；D09 逐 tile 化 2026-09-27）：准入批只发射读流
-        #      触发链（恰一次消费 interval/arrival gate，1B relay）；数据
-        #      tile 随消费窗口（逐 chunk 迭代体块）在各 prefill 列车头/
-        #      体发射——消费驱动逐 tile 发射 + 双缓冲释放链（tile i+2 生
-        #      产等 tile i 消费完成），不整轮预建事件（v2.0 §17.1）。
-        if prefill_read_plan is not None:
-            if joint_action != "remote-read":
-                raise RuntimeError(
-                    "prefill remote-read prefix stream requires "
-                    f"joint_action 'remote-read' (got {joint_action!r}; "
-                    f"request {request_plan['request_id']!r})")
-            self._emit_prefill_remote_read_branch(
-                request_plan, prefill_read_plan, pending_gate)
-        elif joint_action == "remote-read":
-            # PLAN 形态破损 fail-closed：remote-read 必有前缀读流（LOCAL
-            # 基全层 / PARTIAL 基前缀 [0, p)；plan_prefill_remote_read_
-            # transfers 的适用性合同保证非空）。
-            raise RuntimeError(
-                "remote-read admission without its prefill prefix read "
-                "plan (plan_prefill_remote_read_transfers must supply "
-                f"it; request {request_plan['request_id']!r})")
 
         # ---- prefill_evictions（KV 逐出并行化 2026-09-13：旁路支链化，
         #      无触发门；fork 时可能存在主链 armed 依赖（turn-0 arrival
@@ -6285,7 +2870,7 @@ class GraphBatchBuilder:
                 suffix_ready_nodes_by_rank)
         else:
             if restore_group_transfers:
-                # C15：跨实例后缀逐组恢复（copy/remote-read 工作副本的
+                # C15：跨实例后缀逐组恢复（copy 工作副本的
                 # 池恢复后缀）——主链迁移腿发射后旁挂支链逐组流水发射
                 # （fork 点 = 主链迁移后的 frontier；分支不 join——
                 # readiness barrier 只等主链，计算不等整段后缀恢复）。
@@ -6374,130 +2959,6 @@ class GraphBatchBuilder:
             int(group_transfer.layer_end),
             gates_by_rank,
         )
-
-    def _emit_prefill_remote_read_branch(
-            self, request_plan: dict, read_plan, pending_gate) -> None:
-        """prefill remote-read 前缀读流旁挂分支（规格书§三.1-§三.3，
-        2026-09-25；D09 逐 tile 化 2026-09-27）：准入批发射**读流触发链**
-        （恰一次消费 interval/arrival gate），数据 tile 不在本分支——
-        逐 tile send/recv 与双缓冲释放链随**消费窗口**（逐 chunk 迭代）
-        在各 prefill 列车头/体发射（消费驱动，不整轮预建；窗口 tile 复
-        用 decode credit 的 _credit_arms/_credit_pending_tiles 账本）。
-
-        合同复检（fail-closed；D16 有界模板修复轮二）：读计划快照携带
-        O(窗数) 模板参数（不物化整轮 tile 列表）——本分支核验模板级合
-        同：窗/tile 计数非退化、home/exec 端点与 history location 一致、
-        会话归属、前缀层界 = 驻留前缀、TP 相对位保持；逐 tile 结构不变
-        量（noc_migrate/stream_only/read_tile 身份连续唯一）由物化器
-        ``prefill_read_window_tiles`` 钉测承担（构造同源，见
-        face_scheduler）。触发门实例 = 本轮 prefill（exec）实例。"""
-        request_id = request_plan["request_id"]
-        exec_instance = request_plan["prefill_instance_index"]
-        window_count = int(read_plan.get("window_count") or 0)
-        tiles_by_window = tuple(read_plan.get("tiles_by_window") or ())
-        if (window_count <= 0
-                or len(tiles_by_window) != window_count
-                or any(int(count) <= 0 for count in tiles_by_window)):
-            raise RuntimeError(
-                "prefill remote-read admission requires a non-degenerate "
-                "window template (request {!r}; windows={} "
-                "tiles_by_window={!r})".format(
-                    request_id, window_count, tiles_by_window))
-        home_instance = int(read_plan["home_instance"])
-        plan_session_id = read_plan.get("session_id")
-        if plan_session_id != request_plan["session_id"]:
-            raise RuntimeError(
-                "prefill remote-read plan belongs to another session "
-                f"({plan_session_id!r}; request {request_id!r})")
-        history_before = request_plan.get("history_location_before")
-        if history_before is None:
-            raise RuntimeError(
-                "prefill remote-read requires a history location "
-                f"snapshot (request {request_id!r})")
-        if history_before.instance_index != home_instance:
-            raise RuntimeError(
-                "prefill remote-read prefix stream home instance "
-                f"{home_instance} does not match the history location "
-                f"instance {history_before.instance_index} (request "
-                f"{request_id!r})")
-        if history_before.location == "local_hbm":
-            expected_prefix_end = self.config.layers
-        elif history_before.location == "partial_hbm_remote":
-            expected_prefix_end = history_before.resident_prefix_layers
-        else:
-            raise RuntimeError(
-                "prefill remote-read requires a LOCAL/PARTIAL base "
-                "history location (got "
-                f"{history_before.location!r}; request {request_id!r})")
-        if int(read_plan["read_prefix_layers"]) != expected_prefix_end:
-            raise RuntimeError(
-                "prefill remote-read template prefix "
-                f"[0, {read_plan['read_prefix_layers']}) does not match "
-                f"the resident prefix [0, {expected_prefix_end})")
-        exec_group = self.group_by_index[exec_instance]
-        home_group = self.group_by_index[home_instance]
-        if len(exec_group.ranks) != len(home_group.ranks):
-            raise RuntimeError(
-                "prefill remote-read requires equal TP sizes")
-        source_ranks = tuple(read_plan.get("source_ranks") or ())
-        target_ranks = tuple(read_plan.get("target_ranks") or ())
-        if (len(source_ranks) != len(home_group.ranks)
-                or len(target_ranks) != len(exec_group.ranks)
-                or any(
-                    home_group.ranks.index(source_rank)
-                    != exec_group.ranks.index(target_rank)
-                    for source_rank, target_rank in zip(
-                        source_ranks, target_ranks))):
-            raise RuntimeError(
-                "prefill remote-read template does not preserve relative "
-                "TP rank (home ranks {} -> exec ranks {})".format(
-                    source_ranks, target_ranks))
-        if pending_gate.source_instance_index != exec_instance:
-            raise RuntimeError(
-                "prefill remote-read trigger gate is not on the prefill "
-                f"instance (gate source {pending_gate.source_instance_index},"
-                f" prefill {exec_instance}; the interval/arrival gate "
-                "rebuild must precede the prefix read stream)")
-        prefix = _prefix_of(request_plan)
-        # §三.3：跨实例触发门构造——control = 本轮 prefill（exec）实例，
-        # node_gates = 重建后的 exec 实例 timer gates（同实例退化时即原
-        # arrival gate；exec != home 恒成立，1B relay 恒走跨实例路径）。
-        # 首窗 tile 1 的 home send 链序后随 home trigger recv（触发链 =
-        # 读流的启动因果，不设"全流到达才计算"栅栏）。
-        trigger_gate = TransferTriggerGate(
-            control_instance_index=exec_instance,
-            node_gates=pending_gate.timer_gates,
-        )
-
-        def emit_prefill_read_trigger() -> None:
-            # 触发链（恰一次消费 interval/arrival gate）：每个出现数据
-            # shard 的相对位 rank 对，exec timer gate arm 后经
-            # _emit_transfer_trigger 同款 1B relay 触发 home。零字节相对
-            # 位守卫为 fail-closed raise（模板缺任一 rank 的扫描字节即
-            # raise，非静默跳过）。数据位 = 模板逐 rank 单扫描字节
-            # （D16：不物化 tile 列表即可判定位）。
-            data_relative_indexes = {
-                relative_index
-                for relative_index, scan_shard_bytes in enumerate(
-                    read_plan.get("base_scans_shards") or ())
-                if scan_shard_bytes > 0}
-            if len(data_relative_indexes) != len(source_ranks):
-                raise RuntimeError(
-                    "prefill remote-read template lacks its per-rank scan "
-                    "byte vector (request {!r})".format(request_id))
-            for relative_index in sorted(data_relative_indexes):
-                _emit_transfer_trigger(
-                    builders=self.builders,
-                    group_by_index=self.group_by_index,
-                    tag_allocator=self.tag_allocator,
-                    trigger_gate=trigger_gate,
-                    relative_index=relative_index,
-                    source_rank=home_group.ranks[relative_index],
-                    action_name=f"{prefix}_prefill_read",
-                    shard_index=relative_index,
-                )
-
-        self._emit_side_branch(emit_prefill_read_trigger)
 
     def _emit_completion(self, request_plan: dict, *,
                          block_end_stage: str = "seg2") -> None:

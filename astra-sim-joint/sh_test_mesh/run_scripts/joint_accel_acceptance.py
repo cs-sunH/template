@@ -54,8 +54,8 @@ PERCENTILE_P = 0.95
 FIXTURE_STATE_VERSION = "execution-fixture-v1-20261006"
 FIXTURE_TAPE_VERSION = "execution-event-tape-v1-20261006"
 FIXTURE_RESULT_VERSION = "execution-result-v1-20261006"
-PYTHON_RUNTIME_ASSET_VERSION = "joint-accel-python-runtime-v1-20261006"
-PLANNER_STATE_VERSION = "joint-accel-planner-state-v1-20261006"
+PYTHON_RUNTIME_ASSET_VERSION = "joint-accel-python-runtime-v2-20261014"
+PLANNER_STATE_VERSION = "joint-accel-planner-state-v2-20261014"
 IMPLEMENTATION_SOURCE_INVENTORY_VERSION = "joint-accel-implementation-source-v1-20261006"
 FIXTURE_EVENT_KINDS = ("graph_commit", "external_resource", "request_complete")
 RAW_FRAME_AUDIT_KIND = "raw_v2_frame"
@@ -80,7 +80,7 @@ GATE_PARENTS: dict[str, tuple[str, ...]] = {
     "G-F1": ("G-F0",), "G-F2": ("G-E0",),
 }
 GATE_STATUSES = {"PASS", "FAIL", "INCOMPLETE", "INSUFFICIENT_EVIDENCE"}
-VALID_ACTIONS = {"stay", "recompute", "copy", "remote-read"}
+VALID_ACTIONS = {"stay", "recompute", "copy"}
 PRICEABLE_SCENARIO_IDS = tuple(f"M{value:02d}" for value in PRICEABLE_SCENARIOS)
 SUPPORTED_SCENARIO_IDS = tuple(f"M{value:02d}" for value in range(1, 17))
 BUILD_WRAPPER = """cmake_minimum_required(VERSION 3.22)
@@ -560,7 +560,7 @@ def validate_kernel_contract(value: Any, *, expected_sha256: str | None = None,
     if contract["pipeline_protocol_version"] != 1 or type(contract["pipeline_protocol_version"]) is not int:
         raise AcceptanceError("unsupported pipeline protocol version", EXIT_FAIL,
                               "kernel_contract_mismatch")
-    if contract["model_version"] != "v6-compact-window-20261005":
+    if contract["model_version"] != "v7-three-actions-20261014":
         raise AcceptanceError("unsupported projection model version", EXIT_FAIL,
                               "kernel_contract_mismatch")
     if contract["timer_whitelist_version"] != "timer-whitelist-v1-20261005":
@@ -792,7 +792,7 @@ def validate_fixture_state(value: Any, state_path: Path) -> dict[str, Any]:
                               "fixture_schema_invalid")
     _require_int(state["seed"], "fixture seed")
     if state["fixed_action"] not in VALID_ACTIONS:
-        raise AcceptanceError("fixture fixed_action is outside the frozen four actions",
+        raise AcceptanceError("fixture fixed_action is outside the frozen three actions",
                               EXIT_FAIL, "fixture_schema_invalid")
     causal = _require_object(state["causal_input"], "causal_input")
     if causal.get("focus_stage") not in ("P", "D"):
@@ -984,12 +984,10 @@ def validate_fixture_state(value: Any, state_path: Path) -> dict[str, Any]:
     joint_config = _require_object(runtime_value["joint_config"],
                                    "Python runtime asset.joint_config")
     _require_exact_keys(joint_config, {"category_mode", "scheduler_mode", "layer_policy",
-                                       "remote_actions", "remote_read_tile_bytes",
-                                       "remote_read_partial", "allowed_actions", "quota_mode",
+                                       "allowed_actions", "quota_mode",
                                        "boundary_policy", "combo"},
                         "Python runtime asset.joint_config")
-    for field in ("category_mode", "scheduler_mode", "layer_policy", "remote_actions",
-                  "remote_read_tile_bytes", "remote_read_partial", "allowed_actions",
+    for field in ("category_mode", "scheduler_mode", "layer_policy", "allowed_actions",
                   "quota_mode", "boundary_policy"):
         if not isinstance(joint_config[field], str):
             raise AcceptanceError(f"Python runtime joint_config.{field} must be a string",
@@ -1035,12 +1033,12 @@ def _validate_planner_state(value: Any, *, stage: str,
     stage_input = _require_object(planner["stage_input"], f"{path}.stage_input")
     if stage == "P":
         stage_keys = {"kind", "session_view", "request_view",
-                      "prep_frontier_by_instance", "remote_enabled"}
+                      "prep_frontier_by_instance"}
     else:
         stage_keys = {"kind", "boundary_view", "runtime_state", "decision_epoch",
-                      "inherited_obligation_ids", "remote_enabled"}
+                      "inherited_obligation_ids"}
     _require_exact_keys(stage_input, stage_keys, f"{path}.stage_input")
-    if stage_input["kind"] != stage or type(stage_input["remote_enabled"]) is not bool:
+    if stage_input["kind"] != stage:
         raise AcceptanceError(f"{path}.stage_input does not match boundary stage",
                               EXIT_FAIL, "planner_state_stage_mismatch")
     if stage == "P":
@@ -1054,9 +1052,7 @@ def _validate_planner_state(value: Any, *, stage: str,
                                   f"{path}.stage_input.request_view")
         _require_exact_keys(request, {"request_id", "session_id", "input_tokens",
                                       "history_tokens_before", "estimated_decode_tokens",
-                                      "horizon_source", "input_kv_bytes_by_tp_rank",
-                                      "prefill_scan_passes", "prefill_chunk_tokens",
-                                      "query_tile_tokens"},
+                                      "horizon_source", "input_kv_bytes_by_tp_rank"},
                             f"{path}.stage_input.request_view")
         if (request["session_id"] != session["session_id"]
                 or not isinstance(request["request_id"], str)
@@ -1070,22 +1066,21 @@ def _validate_planner_state(value: Any, *, stage: str,
                                         f"{path}.stage_input.boundary_view")
         _require_exact_keys(boundary_view, {"session_id", "home_instance", "p_instance_index",
                                             "p_action", "history_tokens",
-                                            "working_bytes_by_tp_rank", "base_bytes_by_tp_rank",
-                                            "decode_steps", "base_tokens", "kv_token_bytes",
-                                            "logic_home_instance", "kv_token_bytes_by_tp_rank",
-                                            "working_intervals"},
+                                            "working_bytes_by_tp_rank",
+                                            "decode_steps", "kv_token_bytes",
+                                            "logic_home_instance", "kv_token_bytes_by_tp_rank"},
                             f"{path}.stage_input.boundary_view")
         runtime_state = _require_object(stage_input["runtime_state"],
                                         f"{path}.stage_input.runtime_state")
         _require_exact_keys(runtime_state, {"terminated", "first_token", "obligations",
-                                            "working_layers", "base_layers"},
+                                            "working_layers"},
                             f"{path}.stage_input.runtime_state")
         first_token = _require_object(runtime_state["first_token"],
                                       f"{path}.stage_input.runtime_state.first_token")
         _require_exact_keys(first_token, {"issued", "consumed", "rng_advances",
                                           "rebuild_sampling_suppressed"},
                             f"{path}.stage_input.runtime_state.first_token")
-        for field in ("working_layers", "base_layers", "obligations"):
+        for field in ("working_layers", "obligations"):
             if not isinstance(runtime_state[field], list):
                 raise AcceptanceError(f"{path}.stage_input.runtime_state.{field} must be an array",
                                       EXIT_FAIL, "planner_state_schema_invalid")
@@ -1095,17 +1090,6 @@ def _validate_planner_state(value: Any, *, stage: str,
             _require_exact_keys(obligation, {"obligation_id", "kind", "receiver_instance",
                                              "replica_id", "summary"},
                                 f"{path}.stage_input.runtime_state.obligations[{index}]")
-        intervals = boundary_view["working_intervals"]
-        if not isinstance(intervals, list):
-            raise AcceptanceError(f"{path}.stage_input.boundary_view.working_intervals must be an array",
-                                  EXIT_FAIL, "planner_state_schema_invalid")
-        for index, interval_value in enumerate(intervals):
-            interval = _require_object(interval_value,
-                                       f"{path}.stage_input.boundary_view.working_intervals[{index}]")
-            _require_exact_keys(interval, {"replica_id", "role", "holder_instance",
-                                           "authority", "token_start", "token_end",
-                                           "layer_start", "layer_end", "bytes_by_tp_rank"},
-                                f"{path}.stage_input.boundary_view.working_intervals[{index}]")
         _require_int(stage_input["decision_epoch"], f"{path}.stage_input.decision_epoch")
         if not isinstance(stage_input["inherited_obligation_ids"], list):
             raise AcceptanceError(f"{path}.stage_input.inherited_obligation_ids must be an array",
@@ -1278,8 +1262,8 @@ def _validate_event_payload(kind: str, payload: dict[str, Any], path: str) -> No
                             f"{path}.payload")
         batch = _require_object(payload["batch"], f"{path}.payload.batch")
         schema_version = batch.get("schema_version")
-        if type(schema_version) is not int or schema_version != 2:
-            raise AcceptanceError(f"{path}.payload.batch must be an actual schema-2 batch",
+        if type(schema_version) is not int or schema_version != 3:
+            raise AcceptanceError(f"{path}.payload.batch must be an actual schema-3 batch",
                                   EXIT_FAIL, "event_tape_schema_invalid")
         if not isinstance(payload["decision_events"], list):
             raise AcceptanceError(f"{path}.payload.decision_events must be an array",
@@ -1311,15 +1295,6 @@ def _validate_event_payload(kind: str, payload: dict[str, Any], path: str) -> No
                     f"{path}.payload.amount.kind must be COMM_READ or COMM_WRITE",
                     EXIT_FAIL, "event_tape_schema_invalid")
             _require_int(amount["bytes"], f"{path}.payload.amount.bytes")
-        elif resource == "remote_port" and mutation == "join":
-            target = _require_object(payload["target"], f"{path}.payload.target")
-            _require_exact_keys(target, {"edge_rank", "port_index"}, f"{path}.payload.target")
-            amount = _require_object(payload["amount"], f"{path}.payload.amount")
-            _require_exact_keys(amount, {"bytes", "latency_ns"}, f"{path}.payload.amount")
-            _require_int(target["edge_rank"], f"{path}.payload.target.edge_rank")
-            _require_int(target["port_index"], f"{path}.payload.target.port_index")
-            _require_int(amount["bytes"], f"{path}.payload.amount.bytes")
-            _require_int(amount["latency_ns"], f"{path}.payload.amount.latency_ns")
         else:
             raise AcceptanceError(
                 f"{path}.payload resource/mutation {resource!r}/{mutation!r} has no "
@@ -2186,11 +2161,10 @@ def compare_projection_evaluation(
                                     f"candidate {candidate_id}.work_item")
         _require_exact_keys(work_item, {"work_id", "legs", "ready_at_ns",
                                         "depends_on_work", "is_candidate",
-                                        "service_leg_ids", "pipeline_descriptors"},
+                                        "service_leg_ids"},
                             f"candidate {candidate_id}.work_item")
         if (not isinstance(work_item["work_id"], str) or not work_item["work_id"]
                 or not isinstance(work_item["legs"], list)
-                or not isinstance(work_item["pipeline_descriptors"], list)
                 or work_item["is_candidate"] is not True):
             raise AcceptanceError(f"candidate {candidate_id} work_item is not typed candidate work",
                                   EXIT_FAIL, "candidate_result_schema_invalid")
@@ -2880,19 +2854,15 @@ def build_campaign_plan(root: Path, *, source_root: Path,
 
 
 def _find_execution_fixture(root: Path, explicit: Path | None) -> Path | None:
+    # 2026-10-14 远读退役：JointPipelineExecutionFixture（唯一执行器，仅驱动
+    # descriptor 执行）已随 remote-read 机制删除。capture 及其下游
+    # tune/holdout/performance 度量链保持结构但在无执行器下 fail-closed；
+    # 复跑 campaign 前需先接三动作执行器（PROVENANCE 退役登记节登记项）。
     if explicit is not None:
         path = explicit.expanduser().resolve()
         if not path.is_file() or not os.access(path, os.X_OK):
             raise AcceptanceError(f"execution fixture is not an executable file: {path}")
         return path
-    candidates = [
-        root / "packages/cpp-core/build/congestion_aware/bin/JointPipelineExecutionFixture",
-        root / "packages/cpp-core/build/congestion_aware/bin/AstraSim_Analytical_JointPipelineExecutionFixture",
-        root / "packages/cpp-core/build/congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_JointPipelineExecutionFixture",
-    ]
-    for path in candidates:
-        if path.is_file() and os.access(path, os.X_OK):
-            return path.resolve()
     return None
 
 
@@ -2998,13 +2968,14 @@ def command_capture(root: Path, *, source_root: Path | None,
         result["reason_code"] = "capture_parent_gates_missing"
         result["missing"] = [f"parent gate {gate}" for gate in missing_parents]
         if binary is None:
-            result["missing"].append("C++ JointPipelineExecutionFixture target executable")
+            result["missing"].append("C++ execution fixture executable (retired with remote-read 2026-10-14; "
+                                     "re-point to a three-action executor before capture campaigns)")
         if not cases:
             result["missing"].append("real cold state/events under inputs/cold-fixtures/<case>/")
     elif binary is None:
         result["reason_code"] = "execution_fixture_target_missing"
         result["missing"] = [
-            "C++ JointPipelineExecutionFixture target executable",
+            "C++ execution fixture executable (retired with remote-read 2026-10-14)",
             "real cold state/events under inputs/cold-fixtures/<case>/",
         ]
     elif not cases:

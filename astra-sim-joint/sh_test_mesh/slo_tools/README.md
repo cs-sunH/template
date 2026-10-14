@@ -79,7 +79,7 @@ P11 死键清除起本仓删除 10 个零消费者 campaign 档案键——五�
 | `restore_decomposition.py` | WP5 | cpp.log（**full 档**：type=memory_anchor + type=request） | slo_restore_decomposition.csv：restore_start=min(锚点)/restore_complete=max(锚点)（按 subject_id=queue_index 逐请求归属）→ §3.2 固定公式三段+hidden_ratio；无锚点请求四推导字段全 NA+计数 |
 | `kv_cache_adapter.py` | WP4 | results/online_decision_log.jsonl + per-request manifest | cache_events.csv（action_id,request_id,start_ns,end_ns,bytes,source,target,cause）+ kv_hit_states.csv（full/partial/miss/no_history/not_supported + 证据列）+ 命中率双分母；`--reconcile` 与 native 逐项对账（以 native 为准，不一致 exit≠0） |
 | `hopbytes.py` | — | results/online_decision_log.jsonl | slo_hopbytes_total.csv + slo_hopbytes_per_request.csv：Hop-Bytes=Σ bytes×noc_hops（只聚合产物中真实携带 hops 字段的记录；无覆盖仓输出 coverage=0 并标注 TODO_*） |
-| `domain_metrics.py`（C16，joint 专属条件步） | WP6b | results/online_decision_log.jsonl（joint_admission/completion 行，C5 schema）+ per-request/plan manifest + trace_config.csv + hardware json + manifest(domain_delta_adm_ns/domain_delta_sensitivity_multipliers) | slo_domain_requests.csv（三口径逐请求：D_feed/D_econ(δ=0)/实际选择 + 边界对拍 + H/I/F 静态参考组件）+ slo_domain_instances.csv（逐 (请求,实例)：双域同图数据/内外等值线差值/方向/瓶颈段/配额域派生 0/1 列与 port_* port_snapshot 实测值）+ slo_domain_summary.json（四动作计数 recompute elected/forced 分列、|D|/hop 分位/方向半径方差/约束不满足原因、预测/实测差、δ∈{σ̂,2σ̂,4σ̂} 离线敏感性重定价（A3'：δ_adm=0 空转对拍臂已撤销）、home 迁移轨迹（completion 披露 + kv_delta_journal 结算权威层——sidecar 第四键已序列化并由本工具四层分级消费，F3 2026-09-22）、ε/δ 口径登记与叙事纪律注释）；**无 joint_admission 行的 run 完全静默跳过**（四仓共链零扰动） |
+| `domain_metrics.py`（C16，joint 专属条件步） | WP6b | results/online_decision_log.jsonl（joint_admission/completion 行，C5 schema）+ per-request/plan manifest + trace_config.csv + hardware json + manifest(domain_delta_adm_ns/domain_delta_sensitivity_multipliers) | slo_domain_requests.csv（三口径逐请求：D_feed/D_econ(δ=0)/实际选择 + 边界对拍 + H/I 逐请求 KV 字节组件）+ slo_domain_instances.csv（逐 (请求,实例)：双域同图数据/内外等值线差值/方向/瓶颈段/配额域派生 0/1 列与 port_* port_snapshot 实测值）+ slo_domain_summary.json（三动作计数 recompute elected/forced 分列、|D|/hop 分位/方向半径方差/约束不满足原因、预测/实测差、δ∈{σ̂,2σ̂,4σ̂} 离线敏感性重定价（A3'：δ_adm=0 空转对拍臂已撤销）、home 迁移轨迹（completion 披露 + kv_delta_journal 结算权威层——sidecar 第四键已序列化并由本工具四层分级消费，F3 2026-09-22）、ε/δ 口径登记与叙事纪律注释）；**无 joint_admission 行的 run 完全静默跳过**（四仓共链零扰动） |
 
 `slo_common.py` 为共享框架（manifest 装载、request_metrics.csv 冻结列序
 校验、NA 语义、nearest-rank 分位、repo_variant 自动识别），不含逐仓语义。
@@ -91,30 +91,32 @@ checkout 的配置，以免历史结果随仓内配置变动而漂移。
 
 ## domain_metrics.py —— 局部统一内存域三口径（C16/WP6b，2026-09-22；joint）
 
+**2026-10-14 远读动作退役重收缩**：挑战者动作由远读候选重指派为 copy，
+替代族 = stay/recompute——三口径框架保留、逐口径动作分族重收缩。
+
 设计文档《joint机制改造方案_局部统一内存域》§5.1-§5.3 的测量工具化：
-三类观测**必须分开**（F13）——D_feed（预测供给，remote-read 候选
+三类观测**必须分开**（F13）——D_feed（预测供给，copy 挑战者候选
 applicable 的实例集，逐成员标注本地参考与性能容忍度）/ D_econ（预测经济，
-C_alt* = min 遍历**全部实例的适用非 remote 动作（必含 copy）**，
-D_econ = {e: C_remote(e) ≤ C_alt*+δ}；同位置动作比较另报、口径单列）/
-实际选择与 measured（在线只有最终 (e,a)；四动作计数 recompute 仅 elected、
+C_alt* = min 遍历**全部实例的适用替代动作（stay/recompute）**，
+D_econ = {e: C_copy(e) ≤ C_alt*+δ}；同位置动作比较另报、口径单列）/
+实际选择与 measured（在线只有最终 (e,a)；三动作计数 recompute 仅 elected、
 forced(no_history/quota_deferred/evicted_permanent 三成因，K7-① 扩枚举)
 单列，§19.2 两口径不得混报；独立同
 状态 measured 集合不在本产物=C4b 受控测量，如实标 NA 不与预测混合）。
 派生：|D|、hop 分位、方向分布（分方向半径方差）、瓶颈资源（breakdown
-六段 argmax）、约束不满足原因、预测/实测差异；双域同图数据（D_econ
+五段 argmax）、约束不满足原因、预测/实测差异；双域同图数据（D_econ
 等值线 vs 配额准入域——**两域之差即配额作用量**；N6 口径消歧：
-quota_admissible/quota_admissible_remote 列 = **配额前结构域**（候选
+quota_admissible 列 = **配额前结构域**（候选
 applicable ∨ quota_ 前缀不可行理由派生，"移除配额后结构可行"），
-实际配额准入域 = remote_applicable/applicable 列，配额前成本等值线
-输入 = remote_cost_pre_quota_ns 列，run 级配额作用量 =
+实际配额准入域 = challenger_applicable/applicable 列，配额前成本等值线
+输入 = challenger_cost_pre_quota_ns 列，run 级配额作用量 =
 quota_counterfactual_flips（K7/P2-11 2026-09-23：C11 后
 inapplicable_reason 可导出，恒 NA 的 WP3 前注记废止；port_snapshot/
 flow_snapshot 实测值 C11 已接通——quota-on 臂有数值、off 态 NA 保持，
-"仍为 C5 冻结 NA 占位"系过时表述 N13 订正）；内等值线（C_remote=C_stay_ref）/外等值线（C_remote=C_alt*）
+"仍为 C5 冻结 NA 占位"系过时表述 N13 订正）；内等值线（C_copy=C_stay_ref）/外等值线（C_copy=C_alt*）
 逐 (请求,实例) 导出。边界对拍纪律：d≤ρ 锚点**仅历史扫描项平价**；
-remote/copy 分界**不设单变量理论线**（V_copy≈[H+I+b_c−F]+/V_remote≈
-[I+b_r−F]+ 仅容量静态参考，b_c/b_r 未随 schema 披露 → 锚点 NA、组件
-H/I/F 分列）；**无 n\* = d′/(d−ρ) 式**；对拍是诊断不是验收（偏差本身
+挑战者/local 分界**不设单变量理论线**；**无 n\* = d′/(d−ρ) 式**；
+对拍是诊断不是验收（偏差本身
 是模型诊断结果）。δ 主臂 = manifest `domain_delta_adm_ns`（0，与在线
 δ_adm 终冻同值同域 ns）；敏感性臂 `domain_delta_sensitivity_multipliers`
 （{1,2,4}×σ̂）为 A3' 强制修订——撤销 δ=0 空转对拍臂，σ̂ 三级链（观测

@@ -53,7 +53,6 @@ from joint.hbm_port_flow_registry import (  # noqa: E402
 )
 from joint.joint_cost_model import (  # noqa: E402
     ACTION_COPY,
-    ACTION_REMOTE,
     ACTION_STAY,
     InstanceLoadView,
     JointCostModel,
@@ -92,14 +91,12 @@ def _session(home=0, resident=0, history_bytes=(1000, 1000),
         missing_bytes_by_tp_rank=missing)
 
 
-def _request(input_tokens=50, decode=3, input_bytes=(5000, 5000),
-             prefill_scan_passes=None):
+def _request(input_tokens=50, decode=3, input_bytes=(5000, 5000)):
     return RequestView(
         request_id="r", session_id="s", input_tokens=input_tokens,
         history_tokens_before=100, estimated_decode_tokens=decode,
         horizon_source="session_online_mean",
-        input_kv_bytes_by_tp_rank=input_bytes,
-        prefill_scan_passes=prefill_scan_passes)
+        input_kv_bytes_by_tp_rank=input_bytes)
 
 
 def _disjoint_paths(source, target):
@@ -317,7 +314,7 @@ class OperatorEvaluatorShareTest(unittest.TestCase):
 
 
 class StageShareSameDenominatorTest(unittest.TestCase):
-    """同一端口上计算读/copy 写/pool 恢复写/remote 暂存写同分母。"""
+    """同一端口上计算读/copy 写/pool 恢复写同分母。"""
 
     EXEC_BYTES_PER_RANK = 8000  # 交接/暂存/恢复字节（disjoint 逐 rank）
 
@@ -329,14 +326,13 @@ class StageShareSameDenominatorTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=_session(resident=1,
                              history_bytes=(self.EXEC_BYTES_PER_RANK,) * 2),
-            request=_request(), instance_index=0, action=ACTION_COPY,
-            remote_enabled=True)
+            request=_request(), instance_index=0, action=ACTION_COPY)
         self.assertTrue(candidate.applicable)
         self.assertEqual(
             candidate.breakdown.history_prep_ns,
             self.EXEC_BYTES_PER_RANK // (10 // 2))
         self.assertIn(
-            "hbm_stage_share=exec_flows=2(compute+copy1/pool0/staging0)"
+            "hbm_stage_share=exec_flows=2(compute+copy1/pool0)"
             ",compute_denom=2",
             candidate.breakdown.notes)
 
@@ -348,8 +344,7 @@ class StageShareSameDenominatorTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=_session(location="partial_hbm_remote",
                              missing=(self.EXEC_BYTES_PER_RANK,) * 2),
-            request=_request(), instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            request=_request(), instance_index=0, action=ACTION_STAY)
         self.assertTrue(candidate.applicable)
         self.assertIn("partial_suffix_pool_restore",
                       candidate.breakdown.notes)
@@ -357,7 +352,7 @@ class StageShareSameDenominatorTest(unittest.TestCase):
             candidate.breakdown.history_prep_ns,
             100 + self.EXEC_BYTES_PER_RANK // (10 // 2))
         self.assertIn(
-            "hbm_stage_share=exec_flows=2(compute+copy0/pool1/staging0)"
+            "hbm_stage_share=exec_flows=2(compute+copy0/pool1)"
             ",compute_denom=2",
             candidate.breakdown.notes)
 
@@ -370,26 +365,10 @@ class StageShareSameDenominatorTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=_session(resident=1,
                              history_bytes=(self.EXEC_BYTES_PER_RANK,) * 2),
-            request=_request(), instance_index=0, action=ACTION_COPY,
-            remote_enabled=True)
+            request=_request(), instance_index=0, action=ACTION_COPY)
         self.assertEqual(
             candidate.breakdown.history_prep_ns,
             self.EXEC_BYTES_PER_RANK // (10 // 5))
-
-    def test_remote_staging_write_leg_shares_denominator_with_compute(self):
-        # remote：暂存写腿（kind="read" 第三腿）与计算读同分母——
-        # m=0、k=2（计算读 + 暂存写）⇒ 全流 wall = 8000×passes/(10/2)。
-        model = _model(rates=_rates(noc=1e6, hbm=10.0))
-        candidate = model.estimate_P_with_continuation(
-            session=_session(resident=1,
-                             history_bytes=(self.EXEC_BYTES_PER_RANK,) * 2),
-            request=_request(decode=3), instance_index=0,
-            action=ACTION_REMOTE, remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        self.assertIn("remote_read_passes=4", candidate.breakdown.notes)
-        self.assertEqual(
-            candidate.breakdown.remote_read_ns,
-            (self.EXEC_BYTES_PER_RANK * 4) // (10 // 2))
 
     def test_compute_receives_exclusive_profile_input(self):
         # P/D 计算腿使用纯计算下限 + HBM 字节工作；HBM 资源竞争由事件
@@ -405,8 +384,7 @@ class StageShareSameDenominatorTest(unittest.TestCase):
         model = _model(port_registry=registry, prefill_fn=fn)
         stay = model.estimate_P_with_continuation(
             session=_session(resident=1, history_bytes=(0, 0)),
-            request=_request(), instance_index=1, action=ACTION_STAY,
-            remote_enabled=True)
+            request=_request(), instance_index=1, action=ACTION_STAY)
         self.assertEqual(seen["share"], 1)
         model2 = _model(port_registry=registry,
                         rates=_rates(noc=1e6, hbm=10.0),
@@ -414,8 +392,7 @@ class StageShareSameDenominatorTest(unittest.TestCase):
         copy_c = model2.estimate_P_with_continuation(
             session=_session(resident=1,
                              history_bytes=(self.EXEC_BYTES_PER_RANK,) * 2),
-            request=_request(), instance_index=0, action=ACTION_COPY,
-            remote_enabled=True)
+            request=_request(), instance_index=0, action=ACTION_COPY)
         self.assertEqual(seen["share"], 1)
         # 传输审计位仍按 legacy 静态视图 m+k（=6）披露（C5 冻结 notes
         # 面；事件世界的实际份额 = 活跃集动态计数 m+候选写流）。
@@ -435,8 +412,7 @@ class StageShareSameDenominatorTest(unittest.TestCase):
         model = _model(prefill_fn=fn)
         model.estimate_P_with_continuation(
             session=_session(resident=1, history_bytes=(0, 0)),
-            request=_request(), instance_index=1, action=ACTION_STAY,
-            remote_enabled=True)
+            request=_request(), instance_index=1, action=ACTION_STAY)
         self.assertEqual(seen["share"], 1)
 
     def test_recompute_single_flow_share_with_background_m(self):
@@ -452,8 +428,7 @@ class StageShareSameDenominatorTest(unittest.TestCase):
         model = _model(port_registry=registry, prefill_fn=fn)
         candidate = model.estimate_P_with_continuation(
             session=_session(resident=0, history_bytes=(0, 0)),
-            request=_request(), instance_index=0, action="recompute",
-            remote_enabled=True)
+            request=_request(), instance_index=0, action="recompute")
         self.assertEqual(seen["share"], 1)
 
 
@@ -490,20 +465,17 @@ class AcceptanceBoundTest(unittest.TestCase):
             rates=_rates(noc=1e9, hbm=1e9),
             prefill_fn=fn).estimate_P_with_continuation(
             session=_session(resident=1, history_bytes=(0, 0)),
-            request=_request(), instance_index=1, action=ACTION_STAY,
-            remote_enabled=True)
+            request=_request(), instance_index=1, action=ACTION_STAY)
         fast_copy = _model(
             rates=_rates(noc=1e9, hbm=1e9),
             prefill_fn=fn).estimate_P_with_continuation(
             session=_session(resident=1, history_bytes=(8, 8)),
-            request=_request(), instance_index=0, action=ACTION_COPY,
-            remote_enabled=True)
+            request=_request(), instance_index=0, action=ACTION_COPY)
         slow_copy = _model(
             rates=_rates(noc=1e9, hbm=0.001),
             prefill_fn=fn).estimate_P_with_continuation(
             session=_session(resident=1, history_bytes=(8, 8)),
-            request=_request(), instance_index=0, action=ACTION_COPY,
-            remote_enabled=True)
+            request=_request(), instance_index=0, action=ACTION_COPY)
         self.assertIn("prefill_first_forward_ns=5000", stay.breakdown.notes)
         # 快交接：交接隐藏在计算内（首前向 = 计算段 + 1 ns 取整墙钟）。
         self.assertIn(
@@ -543,11 +515,9 @@ class StageScopeAnchorTest(unittest.TestCase):
             session_id="s", home_instance=0, p_instance_index=1,
             p_action=ACTION_COPY, history_tokens=100,
             working_bytes_by_tp_rank=(self._working(), self._working()),
-            base_bytes_by_tp_rank=(0, 0),
             decode_steps=4, kv_token_bytes=100)
         candidate = model.estimate_D_remaining(
-            boundary=boundary, instance_index=0, action=ACTION_COPY,
-            remote_enabled=True)
+            boundary=boundary, instance_index=0, action=ACTION_COPY)
         self.assertTrue(candidate.applicable)
         self.assertEqual(
             candidate.breakdown.history_prep_ns,
@@ -567,279 +537,18 @@ class StageScopeAnchorTest(unittest.TestCase):
         fixtures = (
             (ACTION_COPY, _session(resident=1,
                                    history_bytes=(8000, 8000)), 0),
-            (ACTION_REMOTE, _session(
-                resident=1, history_bytes=(8000, 8000)), 0),
             (ACTION_STAY, _session(
                 location="partial_hbm_remote", missing=(8000, 8000)), 0),
         )
         for action, session, target in fixtures:
             candidate = model.estimate_P_with_continuation(
                 session=session, request=_request(), instance_index=target,
-                action=action, remote_enabled=True)
+                action=action)
             self.assertTrue(candidate.applicable, msg=action)
         self.assertEqual(
             (registry.snapshot(), registry.leaked_owners(),
              registry.has_registrations),
             before)
-
-
-# ==================== 6. F6 修复轮三：P 入口双缓冲腿走阶段份额 ==
-
-
-class RemoteLegStageShareAnchorTest(unittest.TestCase):
-    """P 入口 remote 双缓冲腿（审计 notes 键 remote_read_prefill_ns /
-    remote_read_decode_ns）与合并流腿/逐层到达表同走候选阶段 HBM 份额
-    （修复轮三 F6：修复前腿内供给基元/tile x 回退走裸注册表，与
-    remote_read_ns 的 m+k 分母失配）。
-
-    夹具 = HBM 瓶颈域（B_HBM = 8 B/ns ≪ B_link = 1000 B/ns——NoC 腿
-    可忽略、份额放大在腿值中直接可观测；d2d 时延 10 ns、池时延
-    100 ns；loads 零排队）。基座与 test_joint_credit_pricing 锚族同
-    构：history (1000,1000)/rank、input (25,25)、decode=10、layers=4、
-    prefill 1.0/decode 2.0 ns/token ⇒ kv_token_bytes = 10、tile =
-    256 token = 2560 B/shard、passes = 1+10 = 11；resident=1 →
-    target=0 不相交路径：候选 exec_ranks = 端口 {0,1}（阶段份额 k=2
-    = 计算读 + 暂存写登记于此 = 目标 exec 端口）、home 端口 = {2,3}
-    （份额视图未登记，k 缺省 1）。
-
-    手算复核式（离线 m=0，denom = m+k = 2 → exec 率 8/2 = 4 B/ns）：
-      x = 10 + max(2560/1000, home 2560/8, exec 2560/4) = 10+640 = 650
-      prefill（1 遍、流 1000 → 纯尾块）：tail_x = 10+max(1,125,250)
-        = 260、tail_c = int(50×1000/2000) = 25 → 285
-      decode（修复轮三 H1 逐 pass 重切：full_tiles = passes ×
-        ⌈tokens/tile⌉ = 10 × ⌈100/256⌉ = 10 整块/rank、每 pass 尾块
-        并入整块服务 tail=0；x = latency+tile_bytes/bw = 650、tile_c
-        = int(20×2560/(2×10×2560)) = 1 < x；闭式 T_j = T_{j-1}+x →
-        F = x+c+9x = 650+1+5850 = 6501）（旧连续链 3 整+1 尾 = 2542
-        ——逐 pass 重切消除跨 pass 尾块合并的低估，只增不减）
-      审计同分母：first_credit = 10+640 = 650 == x、stream = 8440/2
-        = 2110、remote_read_ns = 2760
-    m_e=2（_registry_all_ports(2)，denom = 2+2 = 4 → exec 率 2）：
-      x = 10+1280 = 1290；tail_x = 10+max(1,250,500) = 510 → 535；
-      tile_c = 1 < x、F = 1290+1+9×1290 = 12901（旧 5042——同上只增
-      不减）；first_credit = 1290 == x、stream = 8440/2 = 4220、
-      remote_read_ns = 5510。
-    """
-
-    @staticmethod
-    def _note_value(breakdown, key):
-        prefix = key + "="
-        for note in breakdown.notes:
-            if note.startswith(prefix):
-                return int(note[len(prefix):])
-        raise AssertionError(f"missing disclosure note {key!r}")
-
-    @classmethod
-    def _remote_candidate(cls, registry=None):
-        model = _model(port_registry=registry,
-                       rates=_rates(noc=1000.0, hbm=8.0, lat=10))
-        return model.estimate_P_with_continuation(
-            session=_session(resident=1),
-            request=_request(decode=10, input_bytes=(25, 25)),
-            instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
-
-    def test_offline_legs_follow_stage_share(self):
-        # 离线默认（无注册表 → m=0、k=2）：腿值锚 285/6501（decode 腿
-        # 修复轮三 H1 逐 pass 重切新锚 6501，旧连续链口径 2542——只增
-        # 不减；修复前裸注册表口径为 260/2132——份额不进腿）。
-        candidate = self._remote_candidate()
-        self.assertTrue(candidate.applicable)
-        notes = candidate.breakdown.notes
-        self.assertEqual(
-            self._note_value(candidate.breakdown, "remote_read_prefill_ns"),
-            285)
-        self.assertEqual(
-            self._note_value(candidate.breakdown, "remote_read_decode_ns"),
-            6501)
-        self.assertIn("remote_read_passes=11", notes)
-        # 同分母一致性：腿内 tile x（notes 披露位）== 合并流审计首
-        # tile 服务（remote_read_first_credit_ns）——腿键与 remote_
-        # read_ns 同一 m+k 分母；且审计分解恒等 first+stream == 全流。
-        decode_note = next(
-            n for n in notes if n.startswith("decode_tile_tiles="))
-        decode_x = int(decode_note.split("_x=")[1].split("_c=")[0])
-        self.assertEqual(decode_x, 650)
-        self.assertEqual(
-            candidate.breakdown.remote_read_first_credit_ns, decode_x)
-        self.assertEqual(
-            candidate.breakdown.remote_read_first_credit_ns
-            + candidate.breakdown.remote_read_stream_ns,
-            candidate.breakdown.remote_read_ns)
-        self.assertEqual(candidate.breakdown.remote_read_ns, 2760)
-
-    def test_registered_decode_share_scales_legs(self):
-        # 注入 registry m_e=2：目标端口分母 = m+k = 4 → 腿 535/12901
-        # （x 翻倍 650 → 1290，HBM 瓶颈域内份额放大逐位可观测；decode
-        # 腿为 H1 逐 pass 重切新锚 12901，旧连续链口径 5042——只增不
-        # 减）。
-        candidate = self._remote_candidate(registry=_registry_all_ports(2))
-        self.assertTrue(candidate.applicable)
-        notes = candidate.breakdown.notes
-        self.assertIn(
-            "hbm_stage_share=exec_flows=2(compute+copy0/pool0/staging1)"
-            ",compute_denom=4", notes)
-        self.assertEqual(
-            self._note_value(candidate.breakdown, "remote_read_prefill_ns"),
-            535)
-        self.assertEqual(
-            self._note_value(candidate.breakdown, "remote_read_decode_ns"),
-            12901)
-        decode_note = next(
-            n for n in notes if n.startswith("decode_tile_tiles="))
-        self.assertEqual(int(decode_note.split("_x=")[1].split("_c=")[0]),
-                         1290)
-        self.assertEqual(
-            candidate.breakdown.remote_read_first_credit_ns, 1290)
-        self.assertEqual(
-            candidate.breakdown.remote_read_first_credit_ns
-            + candidate.breakdown.remote_read_stream_ns,
-            candidate.breakdown.remote_read_ns)
-        self.assertEqual(candidate.breakdown.remote_read_ns, 5510)
-
-
-# ============== 7. D06 收口（2026-09-28）：D 边界 credit 腿同分母 ==
-
-
-class DboundaryCreditLegStageShareTest(unittest.TestCase):
-    """D 边界 remote 候选的 decode credit 暂存腿（双缓冲闭式的供给基元
-    /tile x）与同阶段 decode 计算读同端口同分母 m_e+2（式(6) 收口，
-    2026-09-28）。
-
-    修复前：单源腿调 ``_remote_double_buffer_leg_ns`` 不传
-    ``hbm_port_registry``（裸注册表 m_e+1；离线无注册表时独占 = 1），
-    多源 tile x 求值同走裸注册表——与同端口同阶段并发的 decode 计算
-    （decode_share k_e=2 → 分母 m_e+2）失配：闭式 start_ns =
-    move_done_ns 意味着暂存供给与 decode 计算同端口并发，暂存腿偏快
-    ⇒ remote D 边界候选偏乐观。修复后调用方保留 decode 阶段静态审计
-    份额；实际 HBM 竞争由事件世界按活跃集重算。
-
-    夹具 = HBM 瓶颈域（noc=1e6 ≫ hbm=10 B/ns——exec 写腿主导，份额
-    放大在 tile x 中逐位可观测；离线口径 = 无注册表、无求值器）：
-    完整型边界（working (8000,8000)/rank、kv_token_bytes=100 → 每源
-    100 token、tile auto = 256 token = 25600 B/shard、decode_steps=4
-    → 4 pass；source = p_instance=1 → target=0：exec 端口 = {0,1} =
-    阶段份额 k_e=2 登记位、home 端口 = {2,3} 未登记 k 缺省 1）。
-
-    手算复核式（tile x = 25600/(10/分母)，NoC 腿 0.26 ns 与 home 读腿
-    （分母 ≤ m+1）均被 exec 写腿遮蔽）：
-      离线（m=0）：分母 = m_e+k_e = 2 → x = 5120（修复前独占口径 2560）
-      m_e=2（_registry_all_ports(2)）：分母 = m_e+k_e = 4 → x = 10240
-        （修复前裸注册表 m_e+1 = 3 → 7680）
-      decode profile callback 收到 hbm_share_divisor=1，表示独占 profile
-        输入；tile x 的静态审计分母仍为 m_e+k_e = 4，实际计算 HBM 流与
-        credit 流在事件世界共享活跃集。
-    多源形态（增量型两来源：base@home=2 + working@p=1，目标 0）同
-    分母：tile 恒 25600 B（tile 与来源数无关），x 逐位同单源锚。
-    """
-
-    TILE_STREAM_BYTES = 25600   # 256 token × 100 B/(rank·token)
-    HBM_BNS = 10.0              # local_hbm_gbps=10.0 = 10 B/ns
-
-    @staticmethod
-    def _boundary():
-        return PDBoundaryView(
-            session_id="s", home_instance=0, p_instance_index=1,
-            p_action=ACTION_COPY, history_tokens=100,
-            working_bytes_by_tp_rank=(8000, 8000),
-            base_bytes_by_tp_rank=(0, 0),
-            decode_steps=4, kv_token_bytes=100)
-
-    @staticmethod
-    def _multi_source_boundary():
-        # 增量型（p_action=REMOTE）：base 驻 home=2、working 驻
-        # p_instance=1，目标 0 ⇒ 两来源各一缺失区间。
-        return PDBoundaryView(
-            session_id="s", home_instance=2, p_instance_index=1,
-            p_action=ACTION_REMOTE, history_tokens=90,
-            working_bytes_by_tp_rank=(4000, 4000),
-            base_bytes_by_tp_rank=(4000, 4000),
-            base_tokens=50, decode_steps=4, kv_token_bytes=100)
-
-    @classmethod
-    def _decode_tile_x(cls, breakdown):
-        note = next(n for n in breakdown.notes
-                    if n.startswith("decode_tile_tiles="))
-        return int(note.split("_x=")[1].split("_c=")[0])
-
-    @classmethod
-    def _note_starts(cls, breakdown, prefix):
-        return next(n for n in breakdown.notes if n.startswith(prefix))
-
-    def _remote_candidate(self, registry=None, decode_fn=None,
-                          boundary=None):
-        model = _model(port_registry=registry,
-                       rates=_rates(noc=1e6, hbm=10.0),
-                       decode_fn=decode_fn)
-        candidate = model.estimate_D_remaining(
-            boundary=boundary if boundary is not None
-            else self._boundary(),
-            instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        return candidate
-
-    def test_offline_credit_leg_counts_own_staging_flow(self):
-        # 离线（无注册表）：exec 写腿分母 = m_e+k_e = 0+2 = 2——暂存写
-        # 与（假想的）计算读共享端口，修复前独占口径 x = 2560。
-        candidate = self._remote_candidate()
-        self.assertEqual(
-            self._decode_tile_x(candidate.breakdown),
-            int(self.TILE_STREAM_BYTES / (self.HBM_BNS / 2)))
-
-    def test_registered_credit_leg_denominator_is_stage_denominator(self):
-        # 注入 m_e=2：exec 写腿分母 = m_e+k_e = 4（非裸注册表 m_e+1=3
-        # ——修复前 x = 7680）；tile x = 25600/(10/4) = 10240。
-        candidate = self._remote_candidate(registry=_registry_all_ports(2))
-        self.assertEqual(
-            self._decode_tile_x(candidate.breakdown),
-            int(self.TILE_STREAM_BYTES / (self.HBM_BNS / 4)))
-        self.assertEqual(self._decode_tile_x(candidate.breakdown), 10240)
-
-    def test_credit_leg_shares_denominator_with_decode_compute(self):
-        # decode profile callback 使用 divisor=1 的独占输入；decode 与
-        # credit HBM 腿共享动态活跃集，tile x 仍是 legacy 静态审计视图
-        # m_e+k_e（=4）。
-        seen = {}
-
-        def decode_fn(context_tokens, *, hbm_share_divisor=1):
-            seen["share"] = hbm_share_divisor
-            return context_tokens * 10
-
-        candidate = self._remote_candidate(
-            registry=_registry_all_ports(2), decode_fn=decode_fn)
-        self.assertEqual(seen["share"], 1)
-        self.assertTrue(any(
-            note.startswith("decode_ctx_exact=base=100,steps=4,")
-            for note in candidate.breakdown.notes),
-            candidate.breakdown.notes)
-        # 审计腿 x 仍按 legacy 静态视图分母 4 披露（m_e 2 + k_e 2）。
-        self.assertEqual(
-            self._decode_tile_x(candidate.breakdown),
-            int(self.TILE_STREAM_BYTES / (self.HBM_BNS / 4)))
-
-    def test_multi_source_credit_leg_follows_stage_share(self):
-        # 多源（增量型两来源）：tile x 逐 (rank, 来源) 求值同走 decode
-        # 阶段冻结份额——x = 25600/(10/4) = 10240（修复前裸注册表
-        # 7680）；tile 与来源数无关（恒配置值），分母逐位同单源锚。
-        candidate = self._remote_candidate(
-            registry=_registry_all_ports(2),
-            boundary=self._multi_source_boundary())
-        notes = candidate.breakdown.notes
-        self.assertIn("boundary_remote_sources=1,2", notes)
-        self.assertEqual(
-            self._decode_tile_x(candidate.breakdown),
-            int(self.TILE_STREAM_BYTES / (self.HBM_BNS / 4)))
-
-    def test_multi_source_offline_counts_own_staging_flow(self):
-        # 多源离线（无注册表）：分母 = 0+2 = 2（修复前独占 2560）——
-        # 离线口径与 P 入口离线腿（test_offline_legs_follow_stage_
-        # share）同族：阶段份额视图不依赖求值器注入。
-        candidate = self._remote_candidate(
-            boundary=self._multi_source_boundary())
-        self.assertIn("boundary_remote_sources=1,2",
-                      candidate.breakdown.notes)
-        self.assertEqual(
-            self._decode_tile_x(candidate.breakdown),
-            int(self.TILE_STREAM_BYTES / (self.HBM_BNS / 2)))
 
 
 if __name__ == "__main__":

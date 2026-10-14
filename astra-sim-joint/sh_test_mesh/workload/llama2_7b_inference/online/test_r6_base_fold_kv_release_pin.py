@@ -3,27 +3,23 @@
 支（j==base 驻留实例）的 base 物理字节零载荷释放（2026-09-27）。
 
 背景（stageR5/repro_kv_drift_merge.py sweep 复现，修复前后逐字相同）：
-D=remote-read 落到 base 驻留实例时 ``remote_read_base_fold`` 折叠分支
-把会话账本清成完整上下文（full_shards）并复位 base_*，但 base 前缀的
-物理字节滞留在 base 驻留实例上——P=recompute 全量重建形态下 i_P 侧
-工作副本持完整 token 域（⊇ base 域），base 字节是重复副本，必须就地
-零载荷释放。修复前 fail-closed：
+D 落到 base 驻留实例时折叠分支把会话账本清成完整上下文（full_shards）
+并复位 base_*，但 base 前缀的物理字节滞留在 base 驻留实例上——工作
+副本持完整 token 域（⊇ base 域）时 base 字节是重复副本，必须就地零载
+荷释放。修复前 fail-closed：
 
 ``RuntimeError: rank 2 KV accounting mismatch: state=53248, expected=28672``
 
 （state = base 24576 ＋ 全史 28672，expected = 全史；sweep 等比形态。）
 
 修复面（face_scheduler.py ``commit_boundary_decode_transition``）：
-  1. ``remote_read_base_fold`` 分支：无 journal 且工作副本 token 域覆
-     盖基础域（[0,ctx) ⊇ [0,base_history)、驻留层 ⊇ 基础驻留层）时，
-     对 ``complete_copy_base_fold`` 的 boundary_copy_base_fold_release
-     科目对称补零载荷释放（cause=boundary_remote_read_base_fold_release）；
-  2. 同族第三处 ``increment_copy_home_u_only`` 分支（D=copy@base、
-     working_kind=remote-read）同科目缺对称释放——同式补齐
-     （cause=boundary_copy_home_u_fold_release）。
-  释放按覆盖门控：增量形态（P=remote-read 产线工作副本仅持 U，
-  ctx < base_history）base 字节是全史组成部分，**不得释放**（base＋U
-  直和恰为 full_shards）——钉测含不越权释放的回归锚。
+  ``complete_copy_base_fold`` 的 boundary_copy_base_fold_release 科目
+  零载荷释放重复 base 副本。
+  （2026-10-14 远读退役：原 ``remote_read_base_fold`` 折叠分支与
+  ``increment_copy_home_u_only``（D=copy@base、working_kind=remote-read
+  增量形态）两族用例已删除——增量布局只能由 remote-read 准入产生；
+  保留 complete 型 copy 折叠族：journal 形态与 complete_copy_base_fold
+  回归锚。）
 
 被钉语义（修复后）：
   * 折叠后物理(base 驻留实例) ≡ 账本 full_shards（无 stranded 字节、
@@ -131,85 +127,12 @@ def _drive_full_chain(kv, *, p_action, p_ctx, d_action):
     return kv._sessions["s"], outcome
 
 
-class RemoteReadBaseFoldReleasePin(unittest.TestCase):
-    """R6 主缺口钉测：P=recompute 全量重建 → D=remote-read@base 驻留
-    实例——base 重复副本零载荷释放，账本 ≡ 物理（修复前
-    state=53248 对 expected=28672 fail-closed）。"""
-
-    def test_base_fold_releases_duplicate_base_full_copy(self):
-        kv = _build_turn0()
-        session, outcome = _drive_full_chain(
-            kv, p_action="recompute",
-            p_ctx=HISTORY_TOKENS + INPUT_TOKENS, d_action="remote-read")
-        self.assertEqual(outcome["kind"], "remote_read_base_fold")
-        total_tokens = HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS
-        full_shards = kv_cache_shard_bytes_for_tokens(
-            kv.model, total_tokens, kv.tp_degree)
-        # 折叠落点 = base 驻留实例，merge 后恰持全史；其余实例零滞留
-        # （修复前 base 前缀字节 stranded 在 base 驻留实例）。
-        self.assertEqual(
-            _instance_bytes(kv, BASE_INSTANCE),
-            tuple(int(v) for v in full_shards))
-        self.assertEqual(_instance_bytes(kv, P_INSTANCE), (0, 0))
-        # 会话账本终态：折叠族口径（上下文 = 全史、字节 = full_shards、
-        # base_*/working_kind 全清）。
-        self.assertEqual(session.context_tokens, total_tokens)
-        self.assertEqual(
-            tuple(int(v) for v in session.shard_bytes),
-            tuple(int(v) for v in full_shards))
-        self.assertIsNone(session.working_kind)
-        self.assertIsNone(session.base_instance_index)
-        self.assertEqual(session.base_history_tokens, 0)
-        # 全程"账本字节 ≡ 物理字节"：全量 strict + 增量通道双绿。
-        kv._check_invariants()
-        kv._check_invariants_after_mutation(session_ids=("s",))
-
-    def test_incremental_base_fold_keeps_base_bytes(self):
-        """覆盖门控回归锚：产线增量形态（P=remote-read 工作副本仅持 U，
-        ctx < base_history）base 字节是全史组成部分——折叠**不释放**
-        （base＋U 直和恰为 full_shards）；修复若越权释放则此处
-        under-count 必红。"""
-        kv = _build_turn0()
-        session, outcome = _drive_full_chain(
-            kv, p_action="remote-read", p_ctx=INPUT_TOKENS,
-            d_action="remote-read")
-        self.assertEqual(outcome["kind"], "remote_read_base_fold")
-        total_tokens = HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS
-        full_shards = kv_cache_shard_bytes_for_tokens(
-            kv.model, total_tokens, kv.tp_degree)
-        self.assertEqual(
-            _instance_bytes(kv, BASE_INSTANCE),
-            tuple(int(v) for v in full_shards))
-        self.assertEqual(_instance_bytes(kv, P_INSTANCE), (0, 0))
-        self.assertEqual(session.context_tokens, total_tokens)
-        kv._check_invariants()
-        kv._check_invariants_after_mutation(session_ids=("s",))
-
-
-class CopyHomeUFoldReleasePin(unittest.TestCase):
-    """同族第三处钉测：increment_copy_home_u_only（D=copy@base、
-    working_kind=remote-read、工作副本持全量 token 域）——同科目对称
-    释放（修复前同 state=53248 对 expected=28672 断裂）。产线今日的
-    P=remote-read 工作副本为 U 域（上一用例回归锚不越权释放）；本用
-    例钉全量域契约面（sweep 判定面同形态）。"""
-
-    def test_copy_home_u_fold_releases_duplicate_base(self):
-        kv = _build_turn0()
-        session, outcome = _drive_full_chain(
-            kv, p_action="remote-read",
-            p_ctx=HISTORY_TOKENS + INPUT_TOKENS, d_action="copy")
-        self.assertEqual(outcome["kind"], "increment_copy_home_u_only")
-        total_tokens = HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS
-        full_shards = kv_cache_shard_bytes_for_tokens(
-            kv.model, total_tokens, kv.tp_degree)
-        self.assertEqual(
-            _instance_bytes(kv, BASE_INSTANCE),
-            tuple(int(v) for v in full_shards))
-        self.assertEqual(_instance_bytes(kv, P_INSTANCE), (0, 0))
-        self.assertIsNone(session.working_kind)
-        self.assertIsNone(session.base_instance_index)
-        kv._check_invariants()
-        kv._check_invariants_after_mutation(session_ids=("s",))
+# （原 RemoteReadBaseFoldReleasePin 两用例（D=remote-read@base 折叠的
+# 重复 base 零载荷释放 + 增量形态不越权释放门控）与
+# CopyHomeUFoldReleasePin（increment_copy_home_u_only 同科目）已随
+# 2026-10-14 远读退役删除：增量布局（P=remote-read 工作副本仅持 U）
+# 三动作下不可构造；complete 型 copy 折叠族的零载荷释放语义由下方
+# FoldFamilyRegressionPin 钉住。）
 
 
 class FoldFamilyRegressionPin(unittest.TestCase):
@@ -217,11 +140,13 @@ class FoldFamilyRegressionPin(unittest.TestCase):
     complete_copy_base_fold（R4 修复面）在 R6 改动后行为不变。"""
 
     def test_copy_handoff_journal_fold_unchanged(self):
+        # （2026-10-14 远读退役：D 折叠动作由 remote-read 换 copy——
+        # journal 形态的折叠闭合语义不变。）
         kv = _build_turn0()
         session, outcome = _drive_full_chain(
             kv, p_action="copy",
-            p_ctx=HISTORY_TOKENS + INPUT_TOKENS, d_action="remote-read")
-        self.assertEqual(outcome["kind"], "remote_read_base_fold")
+            p_ctx=HISTORY_TOKENS + INPUT_TOKENS, d_action="copy")
+        self.assertEqual(outcome["kind"], "complete_copy_base_fold")
         total_tokens = HISTORY_TOKENS + INPUT_TOKENS + GROWTH_TOKENS
         full_shards = kv_cache_shard_bytes_for_tokens(
             kv.model, total_tokens, kv.tp_degree)

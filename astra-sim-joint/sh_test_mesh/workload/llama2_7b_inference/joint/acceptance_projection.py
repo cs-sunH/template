@@ -6,8 +6,8 @@
 
 * **只读 exporter**：从真实在线对象（sh30 scheduler 运行时构造的
   ``JointCostModel`` 与调度器注册表/账本）导出
-  ``joint-accel-planner-state-v1-20261006`` planner_state、
-  ``joint-accel-python-runtime-v1-20261006`` runtime asset 与 boundary
+  ``joint-accel-planner-state-v2-20261014`` planner_state、
+  ``joint-accel-python-runtime-v2-20261014`` runtime asset 与 boundary
   所需的 data-only JSON。导出过程只读，不修改任何在线状态。
 * **acceptance-only hydrator**：按原构造器（FaceModel/FaceHardware/
   RemoteMemoryConfig/InferenceGroup/JointMechanismConfig/
@@ -39,11 +39,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from joint.joint_config import MODEL_SEMANTICS_VERSION
+
 DTO_VERSION = "projection-evaluation-v1-20261006"
-PLANNER_STATE_VERSION = "joint-accel-planner-state-v1-20261006"
-RUNTIME_ASSET_VERSION = "joint-accel-python-runtime-v1-20261006"
+PLANNER_STATE_VERSION = "joint-accel-planner-state-v2-20261014"
+RUNTIME_ASSET_VERSION = "joint-accel-python-runtime-v2-20261014"
+#: 无外生生成器的固定 identity 尾随当前模型语义版本（语义升版即换源，
+#: 不手工维护第二份字面串）。
 NO_EXOGENOUS_GENERATOR_IDENTITY = (
-    "no-exogenous-generator/v6-compact-window-20261005")
+    f"no-exogenous-generator/{MODEL_SEMANTICS_VERSION}")
 BOUNDARY_SIX_DOMAINS = (
     "work_ledger", "resources", "directory", "capacity",
     "obligations", "history")
@@ -227,9 +231,6 @@ def export_runtime_asset(scheduler) -> dict:
             "category_mode": str(joint_config.category_mode),
             "scheduler_mode": str(joint_config.scheduler_mode),
             "layer_policy": str(joint_config.layer_policy),
-            "remote_actions": str(joint_config.remote_actions),
-            "remote_read_tile_bytes": str(joint_config.remote_read_tile_bytes),
-            "remote_read_partial": str(joint_config.remote_read_partial),
             "allowed_actions": str(joint_config.allowed_actions),
             "quota_mode": str(joint_config.quota_mode),
             "boundary_policy": str(joint_config.boundary_policy),
@@ -416,7 +417,7 @@ def export_forecast_generator(
     """forecast_generator 严格三键（§19.1）。
 
     无外生生成器时 identity 固定 ``no-exogenous-generator/
-    v6-compact-window-20261005``、generator_inputs 为空 mapping。
+    <MODEL_SEMANTICS_VERSION>``、generator_inputs 为空 mapping。
     """
     identity = (
         generator_identity
@@ -444,13 +445,12 @@ def export_forecast_generator(
 def export_planner_state_P(
         scheduler, cost_model, *, session, request,
         prep_frontier_by_instance: Optional[Mapping[int, int]],
-        remote_enabled: bool,
         context_tokens: int,
         horizon_tokens: int,
         generator_identity: Optional[str] = None,
         generator_inputs: Optional[Mapping[str, Any]] = None,
 ) -> dict:
-    """P 边界 planner_state（joint-accel-planner-state-v1-20261006）。"""
+    """P 边界 planner_state（joint-accel-planner-state-v2-20261014）。"""
     prep = {
         str(int(index)): int(value)
         for index, value in (prep_frontier_by_instance or {}).items()}
@@ -483,12 +483,8 @@ def export_planner_state_P(
                 "input_kv_bytes_by_tp_rank": [
                     int(value)
                     for value in request.input_kv_bytes_by_tp_rank],
-                "prefill_scan_passes": request.prefill_scan_passes,
-                "prefill_chunk_tokens": request.prefill_chunk_tokens,
-                "query_tile_tokens": request.query_tile_tokens,
             },
             "prep_frontier_by_instance": prep,
-            "remote_enabled": bool(remote_enabled),
         },
         "instance_loads": [
             export_instance_load_view(load)
@@ -507,7 +503,6 @@ def export_planner_state_D(
         runtime_state: Mapping[str, Any],
         decision_epoch: int,
         inherited_obligation_ids: Sequence[str],
-        remote_enabled: bool,
         context_tokens: int,
         horizon_tokens: int,
         generator_identity: Optional[str] = None,
@@ -537,20 +532,13 @@ def export_planner_state_D(
                 "working_bytes_by_tp_rank": [
                     int(value)
                     for value in boundary_view.working_bytes_by_tp_rank],
-                "base_bytes_by_tp_rank": [
-                    int(value)
-                    for value in boundary_view.base_bytes_by_tp_rank],
                 "decode_steps": int(boundary_view.decode_steps),
-                "base_tokens": int(boundary_view.base_tokens),
                 "kv_token_bytes": boundary_view.kv_token_bytes,
                 "logic_home_instance": boundary_view.logic_home_instance,
                 "kv_token_bytes_by_tp_rank": (
                     None if boundary_view.kv_token_bytes_by_tp_rank is None
                     else [int(value) for value in
                           boundary_view.kv_token_bytes_by_tp_rank]),
-                "working_intervals": [
-                    list(interval) for interval in
-                    boundary_view.working_intervals],
             },
             "runtime_state": {
                 "terminated": bool(runtime_state.get("terminated", False)),
@@ -565,12 +553,10 @@ def export_planner_state_D(
                 "obligations": obligations,
                 "working_layers": _jsonify(
                     runtime_state.get("working_layers")),
-                "base_layers": _jsonify(runtime_state.get("base_layers")),
             },
             "decision_epoch": int(decision_epoch),
             "inherited_obligation_ids": [
                 str(item) for item in inherited_obligation_ids],
-            "remote_enabled": bool(remote_enabled),
         },
         "instance_loads": [
             export_instance_load_view(load)
@@ -830,10 +816,6 @@ def hydrate_runtime_asset(asset: Mapping[str, Any],
         category_mode=str(config_fields["category_mode"]),
         scheduler_mode=str(config_fields["scheduler_mode"]),
         layer_policy=str(config_fields["layer_policy"]),
-        remote_actions=str(config_fields["remote_actions"]),
-        remote_read_tile_bytes=str(
-            config_fields["remote_read_tile_bytes"]),
-        remote_read_partial=str(config_fields["remote_read_partial"]),
         allowed_actions=str(config_fields["allowed_actions"]),
         quota_mode=str(config_fields["quota_mode"]),
         boundary_policy=str(config_fields["boundary_policy"]),
@@ -1049,9 +1031,6 @@ def hydrate_request_view(stage_input: Mapping[str, Any]):
         horizon_source=str(fields["horizon_source"]),
         input_kv_bytes_by_tp_rank=tuple(
             int(value) for value in fields["input_kv_bytes_by_tp_rank"]),
-        prefill_scan_passes=fields.get("prefill_scan_passes"),
-        prefill_chunk_tokens=fields.get("prefill_chunk_tokens"),
-        query_tile_tokens=fields.get("query_tile_tokens"),
     )
 
 
@@ -1066,19 +1045,13 @@ def hydrate_boundary_view(stage_input: Mapping[str, Any]):
         history_tokens=int(fields["history_tokens"]),
         working_bytes_by_tp_rank=tuple(
             int(value) for value in fields["working_bytes_by_tp_rank"]),
-        base_bytes_by_tp_rank=tuple(
-            int(value) for value in fields["base_bytes_by_tp_rank"]),
         decode_steps=int(fields["decode_steps"]),
-        base_tokens=int(fields.get("base_tokens", 0)),
         kv_token_bytes=fields.get("kv_token_bytes"),
         logic_home_instance=fields.get("logic_home_instance"),
         kv_token_bytes_by_tp_rank=(
             None if fields.get("kv_token_bytes_by_tp_rank") is None
             else tuple(int(value) for value in
                       fields["kv_token_bytes_by_tp_rank"])),
-        working_intervals=tuple(
-            tuple(interval) for interval in fields.get(
-                "working_intervals", ())),
     )
 
 
@@ -1278,11 +1251,6 @@ def build_acceptance_cost_model(
             topology.instance(index).ranks),
         pool_edge_flows_fn=pool_ports.count,
         hbm_port_registry=hbm_ports,
-        remote_read_tile_bytes=runtime.joint_config.remote_read_tile_bytes,
-        remote_read_kv_token_bytes=(
-            kv_cache_shard_bytes_for_tokens(model, 1, instance_size)[0]),
-        remote_read_partial=(
-            runtime.joint_config.remote_read_partial_enabled),
         allowed_actions=runtime.joint_config.allowed_action_set,
         prediction_config=prediction_config,
         native_projection_library=native_library,
@@ -1529,7 +1497,6 @@ def evaluate_boundary(boundary, prediction_config, *, library_path,
     """
     import tempfile
 
-    from joint.joint_config import MODEL_SEMANTICS_VERSION
     from joint.prediction_config import (
         make_pipeline_kernel_contract,
         require_prediction_config,
@@ -1626,8 +1593,6 @@ def evaluate_boundary(boundary, prediction_config, *, library_path,
                     cost_model=cost_model,
                     session=session,
                     request=request,
-                    remote_enabled=bool(
-                        stage_input.get("remote_enabled", True)),
                     prep_frontier_by_instance=prep)
             else:
                 boundary_view = hydrate_boundary_view(stage_input)
@@ -1639,8 +1604,6 @@ def evaluate_boundary(boundary, prediction_config, *, library_path,
                     mode=mode,
                     cost_model=cost_model,
                     boundary=boundary_view,
-                    remote_enabled=bool(
-                        stage_input.get("remote_enabled", True)),
                     decision_epoch=int(
                         stage_input.get("decision_epoch", 0)),
                     inherited_obligation_ids=tuple(
@@ -2167,10 +2130,6 @@ def _derive_cold_planner_state_P(
     决策 payload 的 prefill_length）；缺省（无事件带/无事实）退化为
     ctx 全量输入的无基冷首形态（真实冷首请求，零适用/不适用如实）。"""
     from face_scheduler import kv_cache_shard_bytes_for_tokens
-    from joint.joint_config import (
-        REMOTE_READ_QUERY_TILE_TOKENS,
-        prefill_remote_read_scan_passes,
-    )
     seeded = _seeded_session_ids(shell)
     session_id = (
         seeded[0] if seeded else f"session:{request_id}")
@@ -2181,8 +2140,6 @@ def _derive_cold_planner_state_P(
     horizon_tokens = int(causal_metadata["horizon_tokens"])
     input_kv_shards = kv_cache_shard_bytes_for_tokens(
         runtime.model, input_tokens, runtime.kv_manager.tp_degree)
-    prefill_scan_passes = prefill_remote_read_scan_passes(
-        input_tokens, runtime.p_chunk, REMOTE_READ_QUERY_TILE_TOKENS)
     session_fields = {
         "session_id": session_view.session_id,
         "home_instance": session_view.home_instance,
@@ -2204,9 +2161,6 @@ def _derive_cold_planner_state_P(
         "horizon_source": "cold_start_default",
         "input_kv_bytes_by_tp_rank": [
             int(value) for value in input_kv_shards],
-        "prefill_scan_passes": prefill_scan_passes,
-        "prefill_chunk_tokens": int(runtime.p_chunk),
-        "query_tile_tokens": int(REMOTE_READ_QUERY_TILE_TOKENS),
     }
     return {
         "version": PLANNER_STATE_VERSION,
@@ -2215,7 +2169,6 @@ def _derive_cold_planner_state_P(
             "session_view": session_fields,
             "request_view": request_fields,
             "prep_frontier_by_instance": {},
-            "remote_enabled": bool(runtime.joint_config.remote_enabled),
         },
         "instance_loads": [
             export_instance_load_view(load)
@@ -2235,9 +2188,7 @@ def _derive_cold_planner_state_D(
     前缀（同一 result 中先行 P 边界 + 已重放 ledger）构造。
 
     完整型 P 前缀（stay/copy/recompute）：工作副本 = H_B 全量逐 rank 字节
-    （模型派生），基础恒空。增量型（P=remote-read）需要 U/基础区间拆分，
-    冷 fixture 状态不携带——按 §19.1 保持 state_mismatch/INCOMPLETE 语义，
-    不伪造。
+    （模型派生），基础恒空（增量型布局族已随远读退役）。
 
     多边界递进（主 agent 指令 2026-10-06）：后续 D 边界（同一 decode 相
     的后续列车提交）以首 D 边界的布局为已提交事实（边界事务恰一次），
@@ -2249,42 +2200,19 @@ def _derive_cold_planner_state_D(
     ``prior_d_planner`` 在场时校验布局一致性后仅刷新以上三项。"""
     from face_scheduler import kv_cache_shard_bytes_for_tokens
     p_action = preceding_boundary.get("fixed_action")
-    increment_layout = p_action == "remote-read"
-    if p_action not in ("stay", "recompute", "copy", "remote-read"):
+    if p_action not in ("stay", "recompute", "copy"):
         raise AcceptanceProjectionIncomplete(
             f"cold D planner derivation requires a known P prefix action; "
             f"got {p_action!r} (state_mismatch semantics, nothing "
             "fabricated)")
     input_tokens = 0
-    if increment_layout:
-        # 增量型（多边界任务补全，2026-10-06）：U = 本轮输入 token 数，
-        # 取自 P graph_commit 批的已提交事实——首 D 批 decode 读流
-        # descriptor 的 tile 轴 total_units 是基础区间 token 数（H），
-        # 工作副本 U = 边界 history_tokens − H。这里 H 直接采用
-        # causal context（冷夹具的 base 区间基数）；U 需要真实输入量，
-        # 由调用方（canonicalize 从 tape 的 arrival 决策事件 payload
-        # prefill_length）供给——纯已提交事实，不虚构。
-        input_tokens = int(pipeline_view.get("_cold_input_tokens", 0))
-        if input_tokens <= 0:
-            raise AcceptanceProjectionIncomplete(
-                "cold D planner derivation for the increment layout "
-                "(P=remote-read) requires the P turn's committed input "
-                "token count; it is not present in the raw frames — "
-                "the canonicalizer reads it from the event tape's "
-                "arrival decision payload (prefill_length); state_"
-                "mismatch semantics, nothing fabricated")
     p_instance = _resolve_instance_index(
         runtime, preceding_boundary["fixed_instance_id"])
     context = int(causal_metadata["context_tokens"])
     horizon = int(causal_metadata["horizon_tokens"])
     total_context = context + input_tokens
     working = kv_cache_shard_bytes_for_tokens(
-        runtime.model,
-        (input_tokens if increment_layout else context),
-        runtime.kv_manager.tp_degree)
-    base = (kv_cache_shard_bytes_for_tokens(
         runtime.model, context, runtime.kv_manager.tp_degree)
-        if increment_layout else None)
     token_bytes = kv_cache_shard_bytes_for_tokens(
         runtime.model, 1, runtime.kv_manager.tp_degree)
     tp = len(working)
@@ -2300,22 +2228,16 @@ def _derive_cold_planner_state_D(
         "p_action": p_action,
         "history_tokens": total_context,
         "working_bytes_by_tp_rank": [int(value) for value in working],
-        "base_bytes_by_tp_rank": (
-            [0] * tp if base is None
-            else [int(value) for value in base]),
         "decode_steps": horizon,
-        "base_tokens": context,
         "kv_token_bytes": int(token_bytes[0]),
         "logic_home_instance": None,
         "kv_token_bytes_by_tp_rank": [
             int(value) for value in token_bytes],
-        "working_intervals": [],
     }
     if prior_d_planner is not None:
         prior_view = prior_d_planner["stage_input"]["boundary_view"]
         for key in ("p_instance_index", "p_action", "history_tokens",
-                    "base_tokens", "working_bytes_by_tp_rank",
-                    "base_bytes_by_tp_rank"):
+                    "working_bytes_by_tp_rank"):
             if boundary_fields[key] != prior_view.get(key):
                 raise AcceptanceProjectionIncomplete(
                     f"multi-boundary D derivation: committed layout fact "
@@ -2340,7 +2262,6 @@ def _derive_cold_planner_state_D(
         },
         "obligations": [],
         "working_layers": [],
-        "base_layers": [],
     }
     return {
         "version": PLANNER_STATE_VERSION,
@@ -2350,7 +2271,6 @@ def _derive_cold_planner_state_D(
             "runtime_state": runtime_state_fields,
             "decision_epoch": int(decision_epoch),
             "inherited_obligation_ids": inherited,
-            "remote_enabled": bool(runtime.joint_config.remote_enabled),
         },
         "instance_loads": [
             export_instance_load_view(load)

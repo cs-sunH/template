@@ -292,9 +292,10 @@ class ZeroByteLegSerialChainTest(unittest.TestCase):
 # ============================================ 5. K5（JCM 计价四件）==
 
 class MergeDirectionMirrorTest(unittest.TestCase):
-    """K5（P1-④）：方向判据 = 字节比大小镜像物化侧（F15 平局含等号取
-    forward），不再取 min（test_home_wait_in_forward_formula 已重钉非平局
-    形态——本类补平局钉）。"""
+    """K5（P1-④）：方向判据镜像物化侧。（2026-10-14 远读退役改写：原
+    exact-tie→forward 平局钉随增量布局族删除——三动作下 exec 物化完整
+    并集 ⇒ 合并恒零字节翻转（D8/D-1：byte_le 方向裁决腿不可达）；本类
+    改钉完整并集合并的披露面。）"""
 
     def test_exact_tie_selects_forward(self):
         model = _model({0: _load(), 1: _load()})
@@ -304,32 +305,31 @@ class MergeDirectionMirrorTest(unittest.TestCase):
                 missing=(500, 500), location="partial_hbm_remote",
                 prefix=3),
             # input_bytes=(2500,2500) ⇒ exec_retained = missing(500)+input
-            # = (3000,3000) 与 history 相等 ⇒ 平局 → forward（物化同判据）。
+            # = (3000,3000) 与 history 相等（原平局构造保持）⇒ copy 物化
+            # 完整并集 ⇒ 零字节翻转（式 21 完整并集规则披露）。
             request=_request_view(
                 input_tokens=5, decode=0, input_bytes=(2500, 2500)),
-            instance_index=1, action="remote-read", remote_enabled=True)
+            instance_index=1, action="copy")
+        self.assertTrue(candidate.applicable)
         notes = candidate.breakdown.notes
-        self.assertIn("merge_v2_direction=forward", notes)
-        self.assertIn("merge_v2_direction_rule=byte_le_tie_forward", notes)
-        # 平局前向被选中：merge_ns = 前向腿值（notes 里两腿都披露）。
-        forward_note = next(
-            note for note in notes
-            if note.startswith("merge_v2_forward_ns="))
-        self.assertEqual(
-            candidate.breakdown.merge_ns, int(forward_note.split("=")[1]))
+        self.assertIn("merge_v2_zero_byte_flip", notes)
+        self.assertIn("merge_eq21_rule=eq21_complete_union", notes)
+        # 完整并集合并 = 零载荷：merge 腿零计价。
+        self.assertEqual(candidate.breakdown.merge_ns, 0)
 
 
 class ReverseLegOwnPathTest(unittest.TestCase):
-    """K5（P2-1）：反向腿沿自身方向（home→exec）计价——前向边上的他流
-    抬前向腿、不抬反向腿。"""
+    """K5（P2-1，2026-10-14 远读退役改写）：copy 交接腿沿自身方向
+    （home→exec）计价——反向边上的他流不抬交接腿。（原 merge 反向腿
+    用例随增量布局族删除；方向特异性由 copy 交接腿承载，正向证据在对
+    偶类 ForwardLegContendedByBackgroundTest。）"""
 
-    def _reverse_ns(self, with_background):
+    @staticmethod
+    def _handoff_walls(background_edge):
         from joint.joint_cost_model import LinkFlowRegistry
         flows = LinkFlowRegistry()
-        if with_background:
-            # 背景 he 流：驻在 exec→home 有向边（前向腿路径，rank 链
-            # (1,0) 单跳）。register_path 逐 shard 完整链路序列登记。
-            flows.register_path((1, 0), owner="f-bg")
+        if background_edge is not None:
+            flows.register_path(background_edge, owner="f-bg")
         model = _model({0: _load(), 1: _load()}, flows=flows)
         candidate = model.estimate_P_with_continuation(
             session=_session_view(
@@ -338,17 +338,18 @@ class ReverseLegOwnPathTest(unittest.TestCase):
                 prefix=3),
             request=_request_view(input_tokens=5, decode=0,
                                   input_bytes=(5, 5)),
-            instance_index=1, action="remote-read", remote_enabled=True)
-        notes = candidate.breakdown.notes
-        reverse_note = next(
-            note for note in notes
-            if note.startswith("merge_v2_reverse_ns="))
-        return int(reverse_note.split("=")[1])
+            instance_index=1, action="copy")
+        walls_note = next(
+            note for note in candidate.breakdown.notes
+            if note.startswith("copy_handoff_chunk_walls="))
+        return int(walls_note.split("=")[1])
 
     def test_background_on_forward_edge_does_not_raise_reverse_leg(self):
-        clean = self._reverse_ns(with_background=False)
-        contended = self._reverse_ns(with_background=True)
-        self.assertEqual(clean, contended)
+        # 交接腿路径 = home→exec 有向边 (0,1)；背景流驻反向边 (1,0)
+        # 不抬交接腿墙（清洁态与反向边污染态同值）。
+        clean = self._handoff_walls(None)
+        opposite_edge = self._handoff_walls((1, 0))
+        self.assertEqual(clean, opposite_edge)
 
 
 class EmptyReclaimableDeepGapTest(unittest.TestCase):
@@ -419,7 +420,7 @@ class DeepGapAbsoluteDrainTest(unittest.TestCase):
         request = _request_view()
         candidate = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=1,
-            action="stay", remote_enabled=True)
+            action="stay")
         self.assertTrue(candidate.applicable)
         self.assertEqual(
             candidate.breakdown.target_wait_ns, 12 * 10**6)
@@ -487,8 +488,7 @@ class QuotaDeferredTierTest(unittest.TestCase):
     def test_quota_collapse_labeled_quota_deferred(self):
         tier = self._tier([
             self._candidate("stay", False, "history not resident at target"),
-            self._candidate("copy", False, "no history to copy"),
-            self._candidate("remote-read", False,
+            self._candidate("copy", False,
                             "quota_link: link=(0,1) remaining=0"),
             self._candidate("recompute", True)], history_tokens=50)
         self.assertEqual(tier["tier"], "forced")
@@ -498,15 +498,14 @@ class QuotaDeferredTierTest(unittest.TestCase):
         tier = self._tier([
             self._candidate("stay", False, "history not resident at target"),
             self._candidate("copy", False, "no history to copy"),
-            self._candidate("remote-read", False, "remote disabled"),
             self._candidate("recompute", True)], history_tokens=50)
         self.assertEqual(tier["forced_reason"], "evicted_permanent")
 
     def test_first_turn_still_no_history(self):
         tier = self._tier([
             self._candidate("recompute", True),
-            self._candidate("remote-read", False,
-                            "quota_port: slots exhausted")],
+            self._candidate("copy", False,
+                            "quota_link: link=(0,1) remaining=0")],
             history_tokens=0)
         self.assertEqual(tier["forced_reason"], "no_history")
 
@@ -522,15 +521,15 @@ class AimdGapNotCreditedTest(unittest.TestCase):
     计入 quiet_ns（调用序号衔接才计），streak 不重置。"""
 
     def setUp(self):
-        # noc=240/hbm=100（稳定夹具同参数）：r̂=10 端口平价可入
-        #（(u+1)×10 ≤ 100）。寿命样本 EWMA=1000 ⇒ T_expand=10000。
+        # noc=240/hbm=100（稳定夹具同参数）。寿命样本 EWMA=1000 ⇒
+        # T_expand=10000（端口平价门已随远读流类退役——oneshot 单流类
+        # 无端口门）。
         self.t = LinkQuotaTracker(
             mode="aimd", noc_link_bytes_per_ns=240.0,
             local_hbm_bytes_per_ns=100.0, delta_adm_ns=0)
         self.t.admit_flow(
-            owner="svc#decode#0", flow_class="realtime",
-            links=[(9, 10)], port_id=6,
-            r_hat_kv_bytes_per_ns=10.0, now_ns=0)
+            owner="svc#decode#0", flow_class="oneshot",
+            links=[(9, 10)], port_id=6, now_ns=0)
         self.t.release_flow("svc#decode#0", now_ns=1000)
         self.comfort = 12.0   # >= 1.2 × r_KV=10
         self.r_hat = 10.0
@@ -607,7 +606,7 @@ class QuotaAdmissibleFlagTest(unittest.TestCase):
     def test_quota_blocked_counts_as_structurally_feasible(self):
         from domain_metrics import _quota_admissible_flag
         per_instance = {
-            "remote-read": {
+            "copy": {
                 "applicable": False,
                 "reason": "quota_link: link=(0,1) remaining=0"},
             "stay": {

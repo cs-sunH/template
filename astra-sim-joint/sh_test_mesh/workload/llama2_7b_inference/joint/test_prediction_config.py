@@ -25,8 +25,6 @@ import unittest
 from pathlib import Path
 
 from joint.prediction_config import (
-    ACTION_SPACE_PURE_FOUR,
-    ACTION_SPACE_SOURCE_SUBSET_HYBRID,
     ENV_JOINT_PREDICTION_CONFIG,
     FUTURE_DEMAND_NONE,
     FUTURE_DEMAND_RECENT,
@@ -35,7 +33,6 @@ from joint.prediction_config import (
     HISTORY_USE_SHADOW,
     HISTORY_USE_VALIDATED,
     JointPredictionConfig,
-    MULTI_SOURCE_ORDERED_SHARED_DOUBLE_BUFFER,
     PREDICTION_CONFIG_SCHEMA_VERSION,
     PROJECTION_MODE_FROZEN_DIAGNOSTIC,
     PROJECTION_MODE_KNOWN_WORK,
@@ -88,10 +85,6 @@ class DefaultConfigTest(unittest.TestCase):
         self.assertEqual(cfg.history_use, HISTORY_USE_SHADOW)
         self.assertEqual(cfg.stage_policy, STAGE_POLICY_TWO_STAGE)
         self.assertEqual(cfg.settlement_policy, SETTLEMENT_CONSOLIDATE)
-        self.assertEqual(cfg.action_space, ACTION_SPACE_PURE_FOUR)
-        self.assertEqual(
-            cfg.multi_source_protocol,
-            MULTI_SOURCE_ORDERED_SHARED_DOUBLE_BUFFER)
         self.assertIsNone(cfg.frozen_diagnostic)
 
     def test_env_unset_returns_default(self):
@@ -149,10 +142,6 @@ class AxisDomainTest(unittest.TestCase):
         with self.assertRaises(PredictionConfigError):
             JointPredictionConfig(stage_policy="causal_lookahead")
 
-    def test_parallel_multi_source_rejected_no_alias(self):
-        with self.assertRaises(PredictionConfigError):
-            JointPredictionConfig(multi_source_protocol="parallel_pairs")
-
     def test_history_use_domain(self):
         self.assertEqual(
             JointPredictionConfig(history_use=HISTORY_USE_VALIDATED)
@@ -160,17 +149,12 @@ class AxisDomainTest(unittest.TestCase):
         with self.assertRaises(PredictionConfigError):
             JointPredictionConfig(history_use="auto")
 
-    def test_settlement_and_action_space_domains(self):
+    def test_settlement_domain(self):
         cfg = JointPredictionConfig(
-            settlement_policy=SETTLEMENT_DISTRIBUTED,
-            action_space=ACTION_SPACE_SOURCE_SUBSET_HYBRID)
+            settlement_policy=SETTLEMENT_DISTRIBUTED)
         self.assertEqual(cfg.settlement_policy, SETTLEMENT_DISTRIBUTED)
-        self.assertEqual(
-            cfg.action_space, ACTION_SPACE_SOURCE_SUBSET_HYBRID)
         with self.assertRaises(PredictionConfigError):
             JointPredictionConfig(settlement_policy="hybrid_free")
-        with self.assertRaises(PredictionConfigError):
-            JointPredictionConfig(action_space="arbitrary_block_layout")
 
 
 class FrozenDiagnosticSpecTest(unittest.TestCase):
@@ -285,10 +269,6 @@ class PredictionParamsTest(unittest.TestCase):
         with self.assertRaises(PredictionConfigError):
             PredictionParams(service_efficiency_init=0.0)
 
-    def test_hybrid_budget_at_least_two(self):
-        with self.assertRaises(PredictionConfigError):
-            PredictionParams(hybrid_max_remote_sources=1)
-
 
 class FileLoadingTest(unittest.TestCase):
     def _payload(self, **overrides):
@@ -370,29 +350,26 @@ class ShippedPresetsTest(unittest.TestCase):
         expected = {
             "default.json": (
                 PROJECTION_MODE_KNOWN_WORK, FUTURE_DEMAND_NONE,
-                SETTLEMENT_CONSOLIDATE, ACTION_SPACE_PURE_FOUR),
+                SETTLEMENT_CONSOLIDATE),
             "arm_a_frozen.json": (
                 PROJECTION_MODE_FROZEN_DIAGNOSTIC, FUTURE_DEMAND_NONE,
-                SETTLEMENT_CONSOLIDATE, ACTION_SPACE_PURE_FOUR),
+                SETTLEMENT_CONSOLIDATE),
             "arm_c_recent.json": (
                 PROJECTION_MODE_KNOWN_WORK, FUTURE_DEMAND_RECENT,
-                SETTLEMENT_CONSOLIDATE, ACTION_SPACE_PURE_FOUR),
+                SETTLEMENT_CONSOLIDATE),
             "arm_d_reverting.json": (
                 PROJECTION_MODE_KNOWN_WORK, FUTURE_DEMAND_REVERTING,
-                SETTLEMENT_CONSOLIDATE, ACTION_SPACE_PURE_FOUR),
+                SETTLEMENT_CONSOLIDATE),
             "distributed.json": (
                 PROJECTION_MODE_KNOWN_WORK, FUTURE_DEMAND_NONE,
-                SETTLEMENT_DISTRIBUTED, ACTION_SPACE_PURE_FOUR),
-            "hybrid.json": (
-                PROJECTION_MODE_KNOWN_WORK, FUTURE_DEMAND_NONE,
-                SETTLEMENT_CONSOLIDATE, ACTION_SPACE_SOURCE_SUBSET_HYBRID),
+                SETTLEMENT_DISTRIBUTED),
         }
         for name, wanted in expected.items():
             payload = json.loads(
                 (_PRESETS / name).read_text(encoding="utf-8"))
             cfg = from_mapping(payload)
             got = (cfg.projection_mode, cfg.future_demand_mode,
-                   cfg.settlement_policy, cfg.action_space)
+                   cfg.settlement_policy)
             self.assertEqual(got, wanted, name)
             # manifest 披露完整性（回退后的实际模式 + 版本）。
             manifest = cfg.manifest_dict()

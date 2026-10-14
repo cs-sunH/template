@@ -152,7 +152,7 @@ def _candidate(instance_index, action, *, applicable=True, cost_ns=1000,
 def _record(candidates, chosen):
     return SelectionRecord(
         mode="joint", chosen=chosen, candidates=tuple(candidates),
-        instance_rule_note="test", remote_enabled=True)
+        instance_rule_note="test")
 
 
 def _two_instance_surface():
@@ -161,9 +161,9 @@ def _two_instance_surface():
     stay0 = _candidate(0, "stay", cost_ns=500, is_continuation=True)
     copy0 = _candidate(0, "copy", cost_ns=400)
     copy1 = _candidate(1, "copy", cost_ns=300)
-    remote1 = _candidate(1, "remote-read", applicable=False,
-                         reason="no remote source")
-    return _record([stay0, copy0, copy1, remote1], chosen=copy1)
+    recompute1 = _candidate(1, "recompute", applicable=False,
+                            reason="no history to rebuild")
+    return _record([stay0, copy0, copy1, recompute1], chosen=copy1)
 
 
 class ForceBoundaryTargetUnitTest(unittest.TestCase):
@@ -225,14 +225,14 @@ class ForceBoundaryTargetUnitTest(unittest.TestCase):
         self.assertIn("silently re-select", message)
 
     def test_inapplicable_pair_fails_closed_with_reason(self):
-        # (1, remote-read) 在候选面但不适用：显式失败并携带理由。
+        # (1, recompute) 在候选面但不适用：显式失败并携带理由。
         record = _two_instance_surface()
-        scheduler = self._scheduler(instance=1, action="remote-read")
+        scheduler = self._scheduler(instance=1, action="recompute")
         with self.assertRaises(RuntimeError) as ctx:
             scheduler._apply_forced_boundary_choice(
                 record, "r0", DECISION_STAGE_D)
         message = str(ctx.exception)
-        self.assertIn("no remote source", message)
+        self.assertIn("no history to rebuild", message)
         self.assertIn(FORCE_BOUNDARY_TARGET_ENV, message)
 
     def test_action_absent_at_instance_fails_closed(self):
@@ -304,7 +304,7 @@ class BoundaryPolicyOneShotEnvCompatTest(unittest.TestCase):
     def test_action_universe_stable(self):
         self.assertEqual(
             ALL_ACTIONS,
-            ("stay", "recompute", "copy", "remote-read"))
+            ("stay", "recompute", "copy"))
 
 
 # ----------------------------------------------- D 入口全链（真决策行）--

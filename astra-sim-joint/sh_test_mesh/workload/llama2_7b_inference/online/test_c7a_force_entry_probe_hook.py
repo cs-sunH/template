@@ -105,7 +105,7 @@ class ForceEntryEnvParseTest(unittest.TestCase):
         self.assertEqual(FORCE_ENTRY_ACTION_ENV, "JOINT_FORCE_ENTRY_ACTION")
         self.assertEqual(
             sorted(ALL_ACTIONS),
-            ["copy", "recompute", "remote-read", "stay"])
+            ["copy", "recompute", "stay"])
 
 
 # --------------------------------------------------------- 裁决点（单元）--
@@ -123,7 +123,7 @@ def _candidate(instance_index, action, *, applicable=True, cost_ns=1000,
 def _record(candidates, chosen):
     return SelectionRecord(
         mode="joint", chosen=chosen, candidates=tuple(candidates),
-        instance_rule_note="test", remote_enabled=True)
+        instance_rule_note="test")
 
 
 class ForceEntryChoiceUnitTest(unittest.TestCase):
@@ -139,12 +139,10 @@ class ForceEntryChoiceUnitTest(unittest.TestCase):
         stay0 = _candidate(0, "stay", cost_ns=500)
         copy0 = _candidate(0, "copy", cost_ns=400)
         copy1 = _candidate(1, "copy", cost_ns=900)
-        remote1 = _candidate(1, "remote-read", applicable=False,
-                             reason="no remote source")
         recompute1 = _candidate(1, "recompute", applicable=False,
                                 reason="mask excluded")
         return _record(
-            [stay0, copy0, copy1, remote1, recompute1], chosen=stay0)
+            [stay0, copy0, copy1, recompute1], chosen=stay0)
 
     def test_off_returns_record_untouched(self):
         # 未武装（类级缺省）与请求不匹配：原 record 对象原样返回、无
@@ -178,13 +176,13 @@ class ForceEntryChoiceUnitTest(unittest.TestCase):
 
     def test_outside_surface_fails_closed_with_reasons(self):
         record = self._surface()
-        scheduler = self._scheduler(action="remote-read")
+        scheduler = self._scheduler(action="recompute")
         with self.assertRaises(RuntimeError) as ctx:
             scheduler._apply_forced_entry_choice(record, "r0")
         message = str(ctx.exception)
         self.assertIn(FORCE_ENTRY_ACTION_ENV, message)
         self.assertIn("applicable surface", message)
-        self.assertIn("no remote source", message)
+        self.assertIn("mask excluded", message)
         # 候选面完全没有的动作（无逐候选理由）同拒。
         scheduler2 = self._scheduler(action="stay")
         record2 = _record([_candidate(0, "copy", cost_ns=10)], chosen=None)

@@ -15,13 +15,12 @@
     不再触发 timer_gate 整 µs 校验崩溃）。
   - K6：deep_gap 台账落账边界——可恢复容量失败不落账，异常携带逐
     rank 缺口；确认终态（守卫）才提交。
-  - M1：三态分类按适用动作集合过滤（remote off / PARTIAL 不再被
-    remote-read 的 input-only 足迹掩盖为暂时不可行）。
+  - M1：三态分类按适用动作集合过滤（远读退役后三动作宇宙；
+    结构性不可行不被更小足迹掩盖）。
   - M3：CausalHorizonEstimator 版本 + session→run→冷启动优先级
     （覆盖缺口补专项单测）。
-  - N1(a) 覆盖缺口：remote-read 适用性收窄单测。
   - 用例 G 对照组：base LOCAL stay vs recompute@home 终态等价。
-  - M5：ServiceFactors 样本纯度排除 remote-read decode 列车与
+  - M5：ServiceFactors 样本纯度排除门控列车与
     门控传输首 chunk prefill 列车。
   - 终审-中1/中2：水印 merge 第三方 victim 逐出入账 + joint 重放
     fail-closed 硬化（未知 kind/非整数 bytes/缺实例索引）。
@@ -246,7 +245,7 @@ class MergeIncrementPricingTest(unittest.TestCase):
         request = _request_view()          # input 500/rank，decode 增长 1000/rank
         candidate = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.merge_ns, 0)
         self.assertIn("merge_v2_zero_byte_flip",
@@ -260,11 +259,11 @@ class MergeIncrementPricingTest(unittest.TestCase):
         small = _model(loads).estimate_P_with_continuation(
             session=_session_view(history_bytes=(1000, 1000)),
             request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         big = _model(loads).estimate_P_with_continuation(
             session=_session_view(history_bytes=(5000, 5000)),
             request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertEqual(
             small.breakdown.merge_ns, big.breakdown.merge_ns,
             "merge 段不得随基础历史字节膨胀（零字节翻转口径）")
@@ -320,17 +319,15 @@ class IntervalGateRebuildFloorTest(unittest.TestCase):
 # =========================================================== M1 三态分类 ==
 
 class ClassifierActionFilterTest(unittest.TestCase):
-    """M1：三态分类按适用动作集合过滤——remote-read 在 remote-off 或
-    PARTIAL 基时不参与判定，结构性不可行不被掩盖。"""
+    """M1：三态分类按适用动作集合过滤（远读退役后动作宇宙 =
+    stay/recompute/copy——remote 开关与 remote_read_partial 消融已随
+    远读退役删除）。"""
 
-    def _scheduler(self, remote_enabled):
+    def _scheduler(self):
         from online.sh30_online_scheduler import Sh30OnlineScheduler
         scheduler = Sh30OnlineScheduler.__new__(Sh30OnlineScheduler)
         scheduler.kv_manager = _manager(capacity_bytes=100_000)
         scheduler.joint_config = SimpleNamespace(
-            remote_enabled=remote_enabled,
-            # O12：分类器直读消融开关（F6 无软门），夹具显式供值。
-            remote_read_partial_enabled=True,
             # M2（2026-09-26）：分类器第二过滤点直读掩码放行集，夹具
             # 显式供全集（本类不测掩码面——M2ActionMaskPhysical
             # FeasibilityTest 另钉）。
@@ -353,11 +350,12 @@ class ClassifierActionFilterTest(unittest.TestCase):
             history_bytes_by_tp_rank=(1, 1),
             missing_bytes_by_tp_rank=(0, 0))
 
-    def test_remote_off_unmasks_structural_infeasibility(self):
-        """整份放不下 + remote off → 结构性不可行（旧代码会被 remote-read
-        的 input-only 足迹掩盖为暂时不可行）。tiny：128 B/token/rank、
-        权重 11,392 B/rank；final 800 需 ≈102 KB/rank > free ≈88 KB。"""
-        scheduler = self._scheduler(remote_enabled=False)
+    def test_structural_infeasibility_not_masked(self):
+        """整份放不下 → 结构性不可行不被掩盖（旧代码会被 remote-read
+        的 input-only 足迹掩盖为暂时不可行——远读退役后三动作的最小
+        足迹同样放不下：final 800 需 ≈102 KB/rank > free ≈88 KB）。
+        tiny：128 B/token/rank、权重 11,392 B/rank。"""
+        scheduler = self._scheduler()
         _seed(scheduler.kv_manager, "s", 0, 400, 10, "human")
         runtime = _runtime("r9", session_id="s")
         runtime.joint_input_tokens = 400
@@ -367,29 +365,6 @@ class ClassifierActionFilterTest(unittest.TestCase):
                 runtime, session_view))
         self.assertTrue(structural)
         self.assertFalse(any("remote-read" in line for line in detail))
-
-    def test_remote_on_partial_base_excludes_remote_read(self):
-        """PARTIAL 基 remote-read 参与判定（O12 改钉，2026-09-23）。
-
-        原断言（"PARTAL 基即使 remote on 也不参与判定"）钉的是 N1(a)
-        解除（2026-09-17《部分层逐出kv管理改造分析方案》需求①）之前
-        的旧口径；解除后 JCM action_applicability（joint_cost_model.py
-       ）与 O12 修复后的分类器都把 PARTIAL 基 remote-read
-        列为合法适用动作（后缀池恢复物化＋前缀读流）。M1 设计前提
-        "按适用动作集合过滤"不变，变的是适用集合本身。本用例场景
-        （final 800 整份放不下）下 remote-read 的 input-only 足迹可行
-        ⇒ 不再是结构性不可行，且 detail 含 remote-read 组合。"""
-        scheduler = self._scheduler(remote_enabled=True)
-        kv = scheduler.kv_manager
-        _make_partial(kv, tokens=400)
-        runtime = _runtime("r9", session_id="s")
-        runtime.joint_input_tokens = 400
-        session_view = self._session_view(kv, "s")
-        self.assertEqual(session_view.location, "partial_hbm_remote")
-        structural, detail = scheduler._classify_physical_feasibility(
-            runtime, session_view)
-        self.assertFalse(structural)
-        self.assertTrue(any("remote-read" in line for line in detail))
 
 
 # ============================================ M3 时域估计器 + 覆盖缺口 ==
@@ -442,72 +417,6 @@ class CausalHorizonEstimatorTest(unittest.TestCase):
             scheduler._task_load_snapshot(state, 0)
 
 
-class RemoteReadApplicabilityTest(unittest.TestCase):
-    """N1(a) 解除（2026-09-17 需求①）：remote-read 适用性 = LOCAL 基
-    （不变锚）＋ PARTIAL 基混合形态（缺省放开；JOINT_REMOTE_READ_PARTIAL
-    =off 消融时拒）；REMOTE 基仍拒（无主 session，裁定③走池恢复/重算
-    就地转正）。
-    金样留档（改造前口径）：PARTIAL 基拒绝理由
-    "suffix not directly readable at home"。"""
-
-    def test_partial_base_applicable_by_default(self):
-        import dataclasses
-        model = _model({0: _load(), 1: _load()})
-        request = _request_view()
-        actions = dict(zip(
-            ("stay", "recompute", "copy", "remote-read"),
-            model.applicable_actions(
-                _session_view(location="partial_hbm_remote"), request, 1,
-                remote_enabled=True)))
-        self.assertTrue(actions["remote-read"][0])
-        self.assertIsNone(actions["remote-read"][1])
-        self.assertTrue(dataclasses.replace(
-            model, remote_read_partial=True).applicable_actions(
-                _session_view(location="partial_hbm_remote"), request, 1,
-                remote_enabled=True)[3][0])
-
-    def test_partial_base_rejected_when_ablation_off(self):
-        import dataclasses
-        model = dataclasses.replace(
-            _model({0: _load(), 1: _load()}), remote_read_partial=False)
-        actions = dict(zip(
-            ("stay", "recompute", "copy", "remote-read"),
-            model.applicable_actions(
-                _session_view(location="partial_hbm_remote"),
-                _request_view(), 1, remote_enabled=True)))
-        self.assertFalse(actions["remote-read"][0])
-        self.assertEqual(
-            actions["remote-read"][1],
-            "remote-read for partial sessions disabled")
-        # LOCAL 基不受该消融开关影响。
-        local = dict(zip(
-            ("stay", "recompute", "copy", "remote-read"),
-            model.applicable_actions(
-                _session_view(location="local_hbm"), _request_view(), 1,
-                remote_enabled=True)))
-        self.assertTrue(local["remote-read"][0])
-
-    def test_remote_base_still_rejected(self):
-        model = _model({0: _load(), 1: _load()})
-        actions = dict(zip(
-            ("stay", "recompute", "copy", "remote-read"),
-            model.applicable_actions(
-                _session_view(location="remote_memory"), _request_view(), 1,
-                remote_enabled=True)))
-        self.assertFalse(actions["remote-read"][0])
-        self.assertEqual(actions["remote-read"][1],
-                         "no resident remote history")
-
-    def test_local_base_applicable_unchanged(self):
-        model = _model({0: _load(), 1: _load()})
-        local = dict(zip(
-            ("stay", "recompute", "copy", "remote-read"),
-            model.applicable_actions(
-                _session_view(location="local_hbm"), _request_view(), 1,
-                remote_enabled=True)))
-        self.assertTrue(local["remote-read"][0])
-
-
 class RecomputeAtHomeControlTest(unittest.TestCase):
     """用例 G 对照组：base LOCAL 的 stay 与 recompute@home 终态等价
     （同驻留、同字节、无传输、无工作副本）。"""
@@ -542,8 +451,8 @@ class RecomputeAtHomeControlTest(unittest.TestCase):
 # ================================================== M5 ServiceFactors 纯度 ==
 
 class ServiceFactorPurityTest(unittest.TestCase):
-    """M5：remote-read decode 列车（读流门控）与门控传输首 chunk
-    prefill 列车不进样本。"""
+    """M5：门控传输首 chunk prefill 列车不进样本（远读读流门控列车
+    已随远读退役删除）。"""
 
     def _scheduler(self):
         from online.sh30_online_scheduler import (
@@ -572,32 +481,6 @@ class ServiceFactorPurityTest(unittest.TestCase):
             PredictionParams())
         scheduler.runtime_by_request_id = {}
         return scheduler
-
-    def test_remote_read_decode_train_excluded(self):
-        scheduler = self._scheduler()
-        state = scheduler.instances[0] if hasattr(
-            scheduler, "instances") else None
-        from online.sh30_online_scheduler import _OnlineInstanceState
-        state = _OnlineInstanceState(index=0)
-        remote_runtime = _runtime("r0", joint_action="remote-read")
-        scheduler.runtime_by_request_id["r0"] = remote_runtime
-        train = {
-            "emit_tick": 100, "prefill_chunk_tokens": (),
-            "members": [("r0", 2)], "had_joiners": False,
-        }
-        scheduler._observe_service_factors(state, train, 200)
-        self.assertEqual(scheduler._joint_service_samples.updates.get(
-            "decode", 0), 0)
-        # 同型列车但成员为 stay → 收样（flush 后可见）。span 取
-        # 2×roofline 基数（2 步共 1554ns）——D14 有效样本窗口
-        # 0<η≤1（除数口径 ratio ≥ 1）要求 span ≥ base，亚 roofline
-        # 样本会被记异常跳过、不再进 updates。
-        scheduler.runtime_by_request_id["r0"] = _runtime(
-            "r0", joint_action="stay")
-        scheduler._observe_service_factors(state, train, 100 + 2 * 1554)
-        scheduler._joint_service_samples.flush()
-        self.assertEqual(scheduler._joint_service_samples.updates.get(
-            "decode", 0), 1)
 
     def test_transfer_gated_prefill_train_excluded(self):
         scheduler = self._scheduler()
@@ -849,7 +732,7 @@ class RemoteBaseMergePricingTest(unittest.TestCase):
         request = _request_view()
         candidate = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.merge_ns, 0)
         self.assertIn("merge_in_place", candidate.breakdown.notes)
@@ -863,7 +746,7 @@ class RemoteBaseMergePricingTest(unittest.TestCase):
         model = _model({0: _load(), 1: _load()})
         candidate = model.estimate_P_with_continuation(
             session=_session_view(), request=_request_view(),
-            instance_index=1, action="copy", remote_enabled=True)
+            instance_index=1, action="copy")
         self.assertEqual(candidate.breakdown.merge_ns, 0)
         self.assertIn("merge_v2_zero_byte_flip",
                       candidate.breakdown.notes)
@@ -1092,7 +975,7 @@ class RemoteBaseAtHomeMergePricingTest(unittest.TestCase):
             missing_bytes_by_tp_rank=(5000, 5000))
         candidate = model.estimate_P_with_continuation(
             session=session, request=_request_view(),
-            instance_index=0, action="copy", remote_enabled=True)
+            instance_index=0, action="copy")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.merge_ns, 0)
         self.assertIn("merge_in_place", candidate.breakdown.notes)

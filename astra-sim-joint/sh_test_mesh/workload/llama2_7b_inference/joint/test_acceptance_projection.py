@@ -189,10 +189,6 @@ def _proof_prediction_config() -> JointPredictionConfig:
 
 def _build_views(scheduler):
     """生产配方构造 session/request 视图（_try_admit_request 同款）。"""
-    from joint.joint_config import (
-        REMOTE_READ_QUERY_TILE_TOKENS,
-        prefill_remote_read_scan_passes,
-    )
     session_view = scheduler._joint_session_view(SESSION_ID)
     _conditional = scheduler._joint_conditional_estimate(
         _RuntimeProbe(SESSION_ID))
@@ -200,8 +196,6 @@ def _build_views(scheduler):
     horizon_source = "conditional:" + _conditional.source
     input_kv_shards = kv_cache_shard_bytes_for_tokens(
         scheduler.model, INPUT_TOKENS, scheduler.kv_manager.tp_degree)
-    prefill_scan_passes = prefill_remote_read_scan_passes(
-        INPUT_TOKENS, scheduler.p_chunk, REMOTE_READ_QUERY_TILE_TOKENS)
     request_view = RequestView(
         request_id=REQUEST_ID,
         session_id=SESSION_ID,
@@ -210,9 +204,6 @@ def _build_views(scheduler):
         estimated_decode_tokens=estimated_decode,
         horizon_source=horizon_source,
         input_kv_bytes_by_tp_rank=tuple(input_kv_shards),
-        prefill_scan_passes=prefill_scan_passes,
-        prefill_chunk_tokens=scheduler.p_chunk,
-        query_tile_tokens=REMOTE_READ_QUERY_TILE_TOKENS,
     )
     return session_view, request_view
 
@@ -238,8 +229,7 @@ def _in_process_decision(scheduler):
         mode=scheduler._joint_mode,
         cost_model=cost_model,
         session=session_view,
-        request=request_view,
-        remote_enabled=True)
+        request=request_view)
     return record, cost_model, session_view, request_view
 
 
@@ -266,7 +256,6 @@ def _reference_snapshot(record) -> dict:
         "approx_results": arbitration.get("approx_results") or [],
         "exact_results": arbitration.get("exact_results") or [],
         "mode": record.mode,
-        "remote_enabled": record.remote_enabled,
     }
 
 
@@ -322,7 +311,6 @@ class BoundedRealPBoundaryProofTest(unittest.TestCase):
             session=session_view,
             request=request_view,
             prep_frontier_by_instance=None,
-            remote_enabled=True,
             context_tokens=metadata["context_tokens"],
             horizon_tokens=metadata["horizon_tokens"])
         runtime_asset = ap.export_runtime_asset(scheduler)
@@ -429,7 +417,6 @@ class BoundedRealPBoundaryProofTest(unittest.TestCase):
         planner_state = ap.export_planner_state_P(
             scheduler, cost_model, session=session_view,
             request=request_view, prep_frontier_by_instance=None,
-            remote_enabled=True,
             context_tokens=metadata["context_tokens"],
             horizon_tokens=metadata["horizon_tokens"])
         boundary = ap.export_boundary(
@@ -463,7 +450,7 @@ class BoundedRealPBoundaryProofTest(unittest.TestCase):
             ["context_tokens", "generator_inputs", "horizon_tokens"])
         self.assertEqual(
             generator["identity"],
-            "no-exogenous-generator/v6-compact-window-20261005")
+            "no-exogenous-generator/v7-three-actions-20261014")
         self.assertEqual(generator["causal_inputs"]["generator_inputs"], {})
         self.assertEqual(
             sorted(dto["arbitration"]),
@@ -501,7 +488,7 @@ class BoundedRealPBoundaryProofTest(unittest.TestCase):
         planner_state = ap.export_planner_state_P(
             scheduler, cost_model, session=session_view,
             request=request_view, prep_frontier_by_instance=None,
-            remote_enabled=True, context_tokens=0, horizon_tokens=1)
+            context_tokens=0, horizon_tokens=1)
         boundary = ap.export_boundary(
             scheduler, cost_model, request_id=REQUEST_ID, stage="P",
             boundary_ordinal=0, tick_ns=0, fixed_instance_id=None,
@@ -855,7 +842,7 @@ def _raw_result(frames, *, p_instance="ins0", p_action="stay",
         "kernel_contract": {
             "projection_abi_version": 1, "descriptor_version": 1,
             "pipeline_protocol_version": 1,
-            "model_version": "v6-compact-window-20261005",
+            "model_version": "v7-three-actions-20261014",
             "timer_whitelist_version": "timer-whitelist-v1-20261005",
             "window_tile_limit": 1, "window_local_error_ppm": 10000,
             "window_refine_margin_ppm": 20000,
@@ -1111,7 +1098,7 @@ class RetainedV4OfflineDispatchTest(unittest.TestCase):
                     {"snapshot_kind": frame.get("snapshot_kind"),
                      "event_watermark": None}))
             request = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "delivery_sequence": 0,
                 "tick": 5,
                 "reasons": [],
@@ -1125,14 +1112,20 @@ class RetainedV4OfflineDispatchTest(unittest.TestCase):
                     "kind": "work_ledger_v4"},
                 "work_ledger": frame,
             }
-            Path(temp, "request_0.json").write_text(
-                json.dumps(request, separators=(",", ":")),
-                encoding="utf-8")
+            # v11 §8: 帧载体已替换为 shm——测试以 ensure_bridge_shm 充当
+            # C++ 生产端铸段;帧负载字节 = 旧 request_0.json 的文件字节。
+            from online.bridge_shm import ensure_bridge_shm
+            ensure_bridge_shm(temp)
+            server.open_transport()
             try:
-                server._handle_request(0, lambda _request, _segment: {
-                    "pipeline_descriptors": [], "kernel_contract": {}})
+                server._handle_request(
+                    0, lambda _request, _segment: {
+                        "kernel_contract": {}},
+                    json.dumps(request, separators=(",", ":")).encode("utf-8"))
             finally:
                 server._close_audit_streams()
+                from online.bridge_shm import clean_stale_bridge_shm
+                clean_stale_bridge_shm(temp)
 
             records = list(iter_request_records(
                 temp, attach_work_ledger=True))

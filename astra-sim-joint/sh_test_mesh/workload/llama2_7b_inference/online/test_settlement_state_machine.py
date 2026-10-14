@@ -174,10 +174,9 @@ class SettlementStateMachineTest(unittest.TestCase):
             retire_terminal_session=lambda *a, **k: None,
             kv_delta_find=lambda rid: {"seq": 0},
             kv_delta_journal_rows=lambda: [],
-            release_staging_lease=lambda *a, **k: None,
-            # _release_staging_lease 先查在册 lease 再注销（无在册
-            # lease 恒 None，与幂等空放配套）。
-            staging_lease_for_request=lambda request_id: None,
+            # （原 release_staging_lease/staging_lease_for_request 替身
+            # 已随 2026-10-14 远读退役删除：KVStagingLease 全族退役，
+            # 完成路径不再触达该接口。）
             _sessions={},
         )
         scheduler._complete_requests(["r0"], 5000,

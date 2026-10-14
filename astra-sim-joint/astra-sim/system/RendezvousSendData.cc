@@ -16,10 +16,7 @@ RendezvousSendData::RendezvousSendData(int sys_id,
                                        int tag,
                                        sim_request request,
                                        void (*msg_handler)(void* fun_arg),
-                                       void* fun_arg,
-                                       std::optional<
-                                           AstraNetworkAPI::LogicalFlowKey>
-                                           logical_key)
+                                       void* fun_arg)
     : BasicEventHandlerData(sys_id, EventType::RendezvousSend),
       send(sys,
            buffer,
@@ -30,5 +27,4 @@ RendezvousSendData::RendezvousSendData(int sys_id,
            request,
            msg_handler,
            fun_arg,
-           false,
-           std::move(logical_key)) {}
+           false) {}

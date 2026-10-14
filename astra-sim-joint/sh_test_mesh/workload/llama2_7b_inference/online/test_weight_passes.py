@@ -12,6 +12,11 @@ weight_passes 权重口径单测(拼 batch 改造,2026-08-22;不跑仿真;
   3. 激活/KV/AllReduce 字节按成员-迭代逐 span 恒等(与 weight_passes
      无关);
   4. weight_passes 越界(> span 数 / 非正)fail-closed。
+
+remote_read 口径(2026-10-14 远读退役 D-2 裁定):本文件的 remote_read
+断言锚定**权重远载字节**(generate_trace 真值供给,保留红线 §1.2 第
+2 条;trace_config 现值 remote_operand_loads=false ⇒ 缺省恒 0)——
+该统计键与已退役的 remote-read 执行流无关,调度器侧供给点已删。
 """
 
 import os

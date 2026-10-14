@@ -96,18 +96,18 @@ struct CursorSegmentCursor {
 using ResourceSortKey = std::tuple<std::string, std::uint64_t,
                                    std::uint64_t, std::string, std::string>;
 
-Json parse_one_pipeline_run(Json raw, const std::string& p,
-                            const std::string& section_path,
-                            const DescriptorView& descriptors,
-                            const SelectorView& selector_indexes,
-                            RunSeqCursor* cursor);
-Json parse_cursor_patch_one(Json raw, const std::string& p,
-                            const DescriptorView& descriptors,
-                            CursorSegmentCursor* cursor);
-Json parse_resource_row(Json raw, const std::string& p,
-                        const DescriptorView& descriptors,
-                        const SelectorView& selector_indexes,
-                        std::optional<ResourceSortKey>* previous);
+PipelineRun parse_one_pipeline_run(const Json& raw, const std::string& p,
+                                  const std::string& section_path,
+                                  const DescriptorView& descriptors,
+                                  const SelectorView& selector_indexes,
+                                  RunSeqCursor* cursor);
+CursorPatch parse_cursor_patch_one(const Json& raw, const std::string& p,
+                                   const DescriptorView& descriptors,
+                                   CursorSegmentCursor* cursor);
+ResourceRow parse_resource_row(const Json& raw, const std::string& p,
+                               const DescriptorView& descriptors,
+                               const SelectorView& selector_indexes,
+                               std::optional<ResourceSortKey>* previous);
 
 }  // namespace rowport
 
@@ -1108,9 +1108,9 @@ private:
     std::unordered_map<std::string, DependencyIndex> dependency_additions_;
     std::vector<std::pair<std::uint64_t, NodeEvent>> node_events_;
     std::vector<DeferredTickCheck> deferred_tick_checks_;
-    std::vector<Json> runs_;
-    std::vector<Json> cursor_patches_;
-    std::vector<Json> resources_;
+    std::vector<PipelineRun> runs_;
+    std::vector<CursorPatch> cursor_patches_;
+    std::vector<ResourceRow> resources_;
     std::vector<std::pair<std::string, Json>> pending_runs_;
     std::vector<std::pair<std::string, Json>> pending_cursor_;
     std::vector<std::pair<std::string, Json>> pending_resources_;

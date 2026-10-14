@@ -1,0 +1,84 @@
+{
+  "schema-version": 1,
+  "slug": "face_case5_config_c_stress",
+  "label": "C / FACE Case 5 capacity-stress fixture",
+  "paper-case": "FACE Case 5 (500 mm^2 compute die, 4 HBM2E chiplets)",
+  "mesh": {
+    "rows": 9,
+    "columns": 6,
+    "topology-by-network-dimension": [
+      "Line",
+      "Line"
+    ]
+  },
+  "local-hbm": {
+    "bandwidth-gbps": 1640.0,
+    "latency-ns": 100,
+    "capacity-profiles": {
+      "stress-24gib": {
+        "bytes": 25769803776,
+        "label": "24 GiB capacity-stress fixture",
+        "note": "R16 validation-only tier (measured 2026-09-15, 10 s window): zero PARTIAL-x-copy hits (119 copy rows, 1 merge self-degrade, run GREEN rc=0) -- below the composite-hit band; kept as the lower boundary datum (fixture criterion 2 fails here; the earlier 'forces suffix eviction pressure' wording was a pre-calibration guess, fifth-review round replaced it with the measured outcome)."
+      },
+      "stress-26gib": {
+        "bytes": 27917287424,
+        "label": "26 GiB capacity-stress fixture",
+        "note": "R16 validation-only tier (measured 2026-09-15, 10 s window): 1 PARTIAL-x-copy hit + 1 coupled merge degrade, deep_gap clear -- full fixture criteria PASS (same outcome band as 28 GiB; the 10 s hit band is 26-28 GiB, with 24 GiB and 29+ GiB at zero)."
+      },
+      "stress-28gib": {
+        "bytes": 30064771072,
+        "label": "28 GiB capacity-stress fixture",
+        "note": "R16 validation-only tier: max single-session context ~11.7 GiB/rank (524288 B/token whole-instance at TP=6) admissible with wide margin; pressure on this tier comes from sticky-home skew plus copy working-copy double residency."
+      },
+      "stress-29gib": {
+        "bytes": 31138512896,
+        "label": "29 GiB capacity-stress fixture",
+        "note": "R16 calibration datum: zero PARTIAL-x-copy hits in the 10 s window (PARTIAL formation channel falls just short) -- the boundary between 28 GiB (1 hit, 1 coupled merge degrade) and 30 GiB (zero hits)."
+      },
+      "stress-30gib": {
+        "bytes": 32212254720,
+        "label": "30 GiB capacity-stress fixture",
+        "note": "R16 validation-only tier above the PARTIAL-formation threshold of the 10 s window."
+      },
+      "stress-32gib": {
+        "bytes": 34359738368,
+        "label": "32 GiB capacity-stress fixture",
+        "note": "R16 validation-only light tier for regression comparison."
+      },
+      "stress-44gib": {
+        "bytes": 47244640256,
+        "label": "44 GiB capacity-stress fixture",
+        "note": "R16 mid-range gate tier (ladder L3, ~2000-request window): ~1.95x aggregate oversubscription (~86 GiB/rank aggregate demand). Calibrated outcome: beyond the liveness envelope for this window (un-settled in-flight requests, rc=134) -- retained as the upper boundary datum."
+      },
+      "stress-96gib": {
+        "bytes": 103079215104,
+        "label": "96 GiB capacity-stress fixture",
+        "note": "R16 mid-range gate tier (ladder L3, ~2000-request window): ~0.90x aggregate oversubscription (hot-instance skew + copy double residency still crosses the admission-eviction line; 48 PARTIAL-x-copy hits; 5 marginal 1-2-layer merge self-degrades)."
+      },
+      "stress-128gib": {
+        "bytes": 137438953472,
+        "label": "128 GiB capacity-stress fixture",
+        "note": "R16 mid-range gate tier (ladder L3, ~2000-request window): ~0.67x aggregate oversubscription -- full fixture criteria PASS (PARTIAL-x-copy > 0 with both ledgers clear)."
+      }
+    }
+  },
+  "d2d": {
+    "bandwidth-gbps": 4050.0,
+    "latency-ns": 5
+  },
+  "remote-memory": {
+    "memory-type": "PER_NPU_MEMORY_EXPANSION",
+    "bandwidth-gbps": 512.0,
+    "latency-ns": 100,
+    "npu-selection": "mesh-boundary",
+    "logical-pool": "unified-kv-cache-pool"
+  },
+  "compute": {
+    "peak-perf-tflops": 261.12
+  },
+  "notes": [
+    "Capacity-stress twin of face_case5_config_c.json: every non-capacity field is byte-identical (bandwidths, latencies, mesh, pool).",
+    "Only for validation fixtures (R16-4-7 / ladder L2-L3); production runs keep the authoritative face_case5_config_c.json.",
+    "The capacity tiers are sized against the astra_compute_20.csv 10 s / 150 s windows using 524288 B/token whole-instance KV (2(K+V) x hidden 4096 x 2 B x 32 layers; 143636-token max session ~11.7 GiB/rank at TP=6, ~16 GiB/rank 9-instance aggregate at 10 s, ~86 GiB/rank at 150 s). Aggregate ratios are under-subscribed on the passing tiers: pressure comes from sticky-home skew and copy working-copy double residency, not aggregate shortage. (2026-09-15 self-review correction: an earlier draft of these notes double-counted the K+V factor.)"
+  ]
+}

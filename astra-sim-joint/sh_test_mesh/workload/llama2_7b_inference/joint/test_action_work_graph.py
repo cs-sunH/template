@@ -6,13 +6,13 @@
 
 * **四动作节点集**（§6.2 表）：stay（本地零传输/PARTIAL 池后缀恢复腿）、
   copy（缺失区间 NoC chunk 腿 + 池后缀/整份池恢复；不重传已有副本）、
-  remote-read（fill/consume 腿族 + 2 槽 buffer 门 + 首块发射约束）、
+  copy（NoC 前缀 chunk 腿 + 池后缀恢复腿）、
   recompute（无传输腿，重建进计算段）；
-* **A/B/C 例字节核账**（§6.3 表）：remote_effective = n̂×Σmissing、
+* **B 例字节核账**（§6.3 表）：copy_effective = Σmissing（一次性）、
   copy_effective = Σmissing（有效载荷核账非完成时间公式）；
   ``decode_context_weighted_tokens`` 式(18b) 守恒闭式保留；
 * **参考接续**（§5.2/§7.1）：P copy/recompute 已物化不重搬（decode 腿
-  本地、无第二次搬运腿）、P remote 留下的源端访问仍计入（decode
+  本地、无第二次搬运腿）、
   fill/consume）；**不提交真实图**（图仅预测副本——构造无任何注册表/
   账本副作用）；
 * **控制/阶段延迟节点**（§7.1）：hardware profile 的 HBM startup 只附着
@@ -52,7 +52,6 @@ from joint.hbm_port_flow_registry import HbmPortFlowRegistry  # noqa: E402
 from joint.joint_cost_model import (  # noqa: E402
     ACTION_COPY,
     ACTION_RECOMPUTE,
-    ACTION_REMOTE,
     ACTION_STAY,
     InstanceLoadView,
     JointCostModel,
@@ -154,18 +153,13 @@ def _p_graph(model, action, *, session=None, request=None, config=None):
         else JointPredictionConfig())
 
 
-def _boundary(kind="complete"):
+def _boundary():
+    """完整型边界（布局恒完整型单族——增量型已随远读退役删除，D6）。"""
     values = dict(
         session_id="s", home_instance=0, p_instance_index=0,
         p_action="stay", history_tokens=100,
         working_bytes_by_tp_rank=(KV_TOKEN_BYTES * 100,) * 2,
-        base_bytes_by_tp_rank=(0, 0), decode_steps=8,
-        base_tokens=100, kv_token_bytes=KV_TOKEN_BYTES)
-    if kind == "increment":
-        values.update(
-            home_instance=2, p_action="remote-read",
-            working_bytes_by_tp_rank=(KV_TOKEN_BYTES * 40,) * 2,
-            base_bytes_by_tp_rank=(KV_TOKEN_BYTES * 100,) * 2)
+        decode_steps=8, kv_token_bytes=KV_TOKEN_BYTES)
     return PDBoundaryView(**values)
 
 
@@ -186,7 +180,7 @@ def _tags(graph):
     return [leg.leg_id.split("#", 1)[1] for leg in graph.work.legs]
 
 
-# ==================================================== 四动作节点集 ==
+# ==================================================== 三动作节点集 ==
 
 
 class ActionNodeSetTest(unittest.TestCase):
@@ -237,30 +231,6 @@ class ActionNodeSetTest(unittest.TestCase):
         for leg in chunk_legs:
             self.assertTrue(leg.deps)
 
-    def test_remote_read_has_double_buffer_legs(self):
-        graph = _p_graph(_model(), ACTION_REMOTE)
-        fills = [leg for leg in graph.work.legs if "#F" in leg.leg_id]
-        consumes = [leg for leg in graph.work.legs if "#C" in leg.leg_id]
-        self.assertTrue(fills)
-        self.assertEqual(len(fills), len(consumes))
-        # 2 槽 buffer 准入门（≤2 块暂存恒成立——D09 锚）。
-        buffer_gates = [g for g in graph.gates if g.kind == "buffer"]
-        self.assertTrue(buffer_gates)
-        for gate in buffer_gates:
-            self.assertEqual(gate.capacity_units, 2)
-        # fill 取槽 / consume 释放（慢消费不无限泵出）。
-        self.assertTrue(all(leg.acquires for leg in fills))
-        self.assertTrue(all(leg.releases for leg in consumes))
-        # 首块发射约束：fill[1] 依赖 fill[0]（A_1 = max(P, T_1)）。
-        by_rank = {}
-        for leg in fills:
-            rank = leg.leg_id.split("#R")[1][0]
-            by_rank.setdefault(rank, []).append(leg)
-        for legs in by_rank.values():
-            ordered = sorted(legs, key=lambda l: l.leg_id)
-            if len(ordered) > 1:
-                self.assertIn(ordered[0].leg_id, ordered[1].deps)
-
     def test_recompute_has_no_transfer_legs(self):
         graph = _p_graph(_model(), ACTION_RECOMPUTE)
         self.assertEqual(
@@ -274,41 +244,14 @@ class ActionNodeSetTest(unittest.TestCase):
 
 
 class ABCByteAccountingTest(unittest.TestCase):
-    """§6.3 表：remote/copy 有效载荷核账 + 式(18b) 守恒闭式。"""
-
-    def test_remote_effective_is_steps_times_missing_union(self):
-        # A 例（D 实例 = A）：remote 的外部片上来源 = B 的输入 KV；
-        # remote_effective = n̂ × Σmissing（每 D 步读一遍远端基础）。
-        graph = _d_graph(_model(), ACTION_REMOTE,
-                         boundary=_boundary("complete"))
-        base_total = sum(_boundary("complete").working_bytes_by_tp_rank)
-        self.assertEqual(graph.audits["remote_effective_bytes"],
-                         8 * base_total)
+    """§6.3 表：copy 有效载荷核账 + 式(18b) 守恒闭式。"""
 
     def test_copy_effective_is_missing_union_once(self):
         # B 例（D 实例 = B）：copy 的新增持久字节 = A→B 的缺失区间
-        # （一次性搬运，Σmissing——非 n̂ 倍）。
+        # （一次性搬运，Σmissing）。
         graph = _d_graph(_model(), ACTION_COPY)
-        base_total = sum(_boundary("complete").working_bytes_by_tp_rank)
+        base_total = sum(_boundary().working_bytes_by_tp_rank)
         self.assertEqual(graph.audits["copy_effective_bytes"], base_total)
-        remote = _d_graph(_model(), ACTION_REMOTE)
-        self.assertEqual(
-            remote.audits["remote_effective_bytes"],
-            8 * graph.audits["copy_effective_bytes"])
-
-    def test_multi_source_c_reads_both_real_sources(self):
-        # C 例（D 实例 = C）：增量型两真实来源（A 历史 + B 输入），
-        # 逐区间逐遍读、不漏任一来源。
-        graph = _d_graph(_model(), ACTION_REMOTE,
-                         boundary=_boundary("increment"))
-        notes = graph.audits["notes"]
-        self.assertIn("boundary_remote_sources=0,2", notes)
-        union = (KV_TOKEN_BYTES * 100 + KV_TOKEN_BYTES * 40) * 2
-        self.assertEqual(
-            int(next(n for n in notes
-                     if n.startswith("boundary_remote_union_bytes="))
-                .split("=")[1]),
-            union)
 
     def test_decode_context_weighted_tokens_conservation(self):
         # 式(18b) 整数闭式（守恒锚，不经任何折叠/事件近似）。
@@ -338,18 +281,11 @@ class ReferenceContinuationTest(unittest.TestCase):
         self.assertFalse(any(
             "#F" in leg.leg_id for leg in graph.work.legs))
 
-    def test_remote_continuation_keeps_source_access(self):
-        # P=remote：decode 延续远读同一区间（credit fill/consume 腿
-        # 在场——"P remote 留下的多源访问仍计入参考 D"）。
-        graph = _p_graph(_model(), ACTION_REMOTE)
-        self.assertTrue(any(
-            "#dcstream" in leg.leg_id for leg in graph.work.legs))
-
     def test_graph_construction_has_no_registry_side_effect(self):
         registry = LinkFlowRegistry()
         model = _model(link_registry=registry)
         _p_graph(model, ACTION_COPY)
-        _d_graph(model, ACTION_REMOTE)
+        _d_graph(model, ACTION_COPY)
         self.assertEqual(registry.snapshot(), {})   # 不提交真实图
 
 
@@ -395,7 +331,7 @@ class ComputeProfileConservationTest(unittest.TestCase):
         request = _request()
         base = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         base_graph = _p_graph(model, ACTION_STAY,
                               session=session, request=request)
         base_work = tuple(
@@ -408,7 +344,7 @@ class ComputeProfileConservationTest(unittest.TestCase):
         model.decode_latency_profile_fn = lambda _context: (17, 19)
         delayed = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         delayed_graph = _p_graph(model, ACTION_STAY,
                                  session=session, request=request)
         delayed_work = tuple(
@@ -451,8 +387,7 @@ class ControlLatencyNodeTest(unittest.TestCase):
     def test_zero_control_latency_is_borne_by_all_d_candidates(self):
         # 零控制延迟仍在所有 D 候选中以显式零节点披露。
         config = JointPredictionConfig(params=PredictionParams())
-        for action in (ACTION_STAY, ACTION_COPY, ACTION_REMOTE,
-                       ACTION_RECOMPUTE):
+        for action in (ACTION_STAY, ACTION_COPY, ACTION_RECOMPUTE):
             graph = _d_graph(_model(), action, config=config,
                              boundary=_boundary())
             leg = self._ctrl_leg(graph)
@@ -590,7 +525,7 @@ class InheritedObligationTest(unittest.TestCase):
             # 时刻仍在飞（4000 B 会在 decode 段内早早完成——测不出门控）。
             "ob-live": ObligationView(
                 obligation_id="ob-live", kind="committed_transfer",
-                source_instance=2, target_instance=1,
+                source_instance=0, target_instance=1,
                 remaining_bytes_by_tp_rank=(3_000_000, 3_000_000),
                 gate_settle=True, done=done),
         }
@@ -600,16 +535,16 @@ class InheritedObligationTest(unittest.TestCase):
         model = _model()
         base = model.estimate_D_remaining(
             boundary=_boundary(), instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True)
+            action=ACTION_COPY)
         model.obligation_resolver = self._resolver(done=False)
         live = model.estimate_D_remaining(
             boundary=_boundary(), instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True,
+            action=ACTION_COPY,
             inherited_obligation_ids=("ob-live",))
         self.assertGreater(live.cost_ns, base.cost_ns)
         graph = build_d_candidate(
             model, boundary=_boundary(), instance_index=1,
-            action=ACTION_REMOTE,
+            action=ACTION_COPY,
             inherited_obligation_ids=("ob-live",),
             obligation_resolver=self._resolver(done=False),
             prediction_config=JointPredictionConfig())
@@ -622,11 +557,11 @@ class InheritedObligationTest(unittest.TestCase):
         model = _model()
         base = model.estimate_D_remaining(
             boundary=_boundary(), instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True)
+            action=ACTION_COPY)
         model.obligation_resolver = self._resolver(done=True)
         settled = model.estimate_D_remaining(
             boundary=_boundary(), instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True,
+            action=ACTION_COPY,
             inherited_obligation_ids=("ob-live",))
         self.assertEqual(settled.cost_ns, base.cost_ns)
 
@@ -635,7 +570,7 @@ class InheritedObligationTest(unittest.TestCase):
         model = _model()
         candidate = model.estimate_D_remaining(
             boundary=_boundary(), instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True,
+            action=ACTION_COPY,
             inherited_obligation_ids=("ob-x",))
         self.assertEqual(
             candidate.breakdown.inherited_obligation_ids, ("ob-x",))

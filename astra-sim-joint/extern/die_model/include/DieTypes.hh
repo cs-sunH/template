@@ -770,6 +770,119 @@ struct InternalTimerWindowInfo {
   std::vector<InternalTemplateSliceEntry> slices;
 };
 
+// ---------------------------------------------------------------------------
+// v12 Phase 4 (方案 §6.2): process-level STRUCTURAL NEGATIVE cache for
+// query_internal_timer_window.
+//
+// Unlike the v11 epoch-keyed memo (same layer as the queried state), this
+// cache is keyed ONLY by (plan cache key, window-approximation config
+// fingerprint) and therefore crosses Execution instances and run states.
+// That is only Sound for a rejection whose COMPLETE return value -- the
+// reason string included -- is provably identical in EVERY reachable state
+// of EVERY Execution of the plan. The Phase 4 audit
+// (docs/PHASE4_K2_CACHE_DESIGN.md) established:
+//
+//   1. The window growth ring (Execution.cc, "safe_count" loop) can never
+//      turn supported=false: every ring break only TRUNCATES the window to
+//      >=1 slice and the query still returns supported=true. Structural
+//      growth-ring predicates therefore prove nothing about acceptance.
+//   2. Every other rejection reason is a function of the live scheduler
+//      state (finished / mem_outstanding / frontier composition /
+//      next_mem_issue_at, the last one externally driven through
+//      complete_memory), except for the class of plans that are finished
+//      AT CONSTRUCTION: total==0, or every instance is a zero-duration
+//      internal stage with no MEM/MEM_NOC instance (the §6.4 synchronous
+//      zero-time rule drains the whole DAG inside the constructor's run()).
+//      For exactly those plans the reachable state set is the singleton
+//      {finished} and the query provably always returns
+//      {supported=false, reason="execution-finished"}.
+//
+// P_struct(plan) below names that class; Execution computes it once from the
+// immutable flattened arrays and gates BOTH the probe and the write below,
+// so a hit can never change an accept/reject result or its reason
+// (supported=true is never stored). The production fire-face is effectively
+// empty (production plans always carry positive launch/compute/memory
+// durations); the delivered value is the audited, fingerprint-keyed,
+// Sound-by-construction wiring plus the test hooks.
+
+namespace k2_window_approx_config {
+
+// Compile-time REGISTRATION of the current production window-approximation
+// configuration (v12 §11.1 frozen values: tile limit 2 ("K2"), local error
+// 0 ppm ("ppm0"), refine margin 20000 ppm ("margin20000")). The runtime
+// authority for these values is PipelineKernelContract on the astra-sim side
+// (ExecutionDriven/PipelineDescriptor.hh); die_model is the LOWER layer of
+// that dependency and cannot reach it, so the current production values are
+// registered here as a compile-time table. A future arm that changes the
+// production configuration MUST either update this table or inject a
+// distinct fingerprint through
+// K2TimerWindowNegativeCache::set_config_fingerprint (entries under
+// different fingerprints are mutually invisible; exact and approx modes can
+// never share a conclusion).
+inline constexpr std::uint32_t kFingerprintSchemaVersion = 1;
+inline constexpr std::uint32_t kWindowTileLimit = 2;
+inline constexpr std::uint32_t kWindowLocalErrorPpm = 0;
+inline constexpr std::uint32_t kWindowRefineMarginPpm = 20000;
+
+inline std::string production_fingerprint() {
+  return "k2win-neg-schema" + std::to_string(kFingerprintSchemaVersion) +
+         "|tile_limit=" + std::to_string(kWindowTileLimit) +
+         "|local_error_ppm=" + std::to_string(kWindowLocalErrorPpm) +
+         "|refine_margin_ppm=" + std::to_string(kWindowRefineMarginPpm);
+}
+
+}  // namespace k2_window_approx_config
+
+// LRU negative-conclusion cache (the PlanCache caliber: single-driver
+// process, no locking; entries are values copied in and out). The config
+// fingerprint is part of every entry key, so switching fingerprints never
+// serves a foreign-configuration conclusion and old entries stay available
+// when the fingerprint switches back.
+class K2TimerWindowNegativeCache {
+ public:
+  explicit K2TimerWindowNegativeCache(
+      std::size_t capacity = 4096,
+      std::string config_fingerprint =
+          k2_window_approx_config::production_fingerprint());
+
+  // Extension point / test hook (see k2_window_approx_config above).
+  void set_config_fingerprint(std::string fingerprint);
+  const std::string& config_fingerprint() const { return fingerprint_; }
+
+  // Master switch for the whole negative-cache path (Execution consults it
+  // only when enabled). Default: enabled.
+  void set_enabled(bool enabled) { enabled_ = enabled; }
+  bool enabled() const { return enabled_; }
+
+  void clear();
+  std::size_t size() const;  // total entries across all fingerprints used
+
+  // Probe/insert under the CURRENT config fingerprint; find() promotes the
+  // entry to the LRU front like PlanCache::get. Execution only ever inserts
+  // rejections of P_struct plans (see the audit note above).
+  std::optional<InternalTimerWindowInfo> find(
+      const std::string& plan_cache_key) const;
+  void insert(const std::string& plan_cache_key,
+              InternalTimerWindowInfo rejection);
+
+ private:
+  std::string entry_key(const std::string& plan_cache_key) const;
+
+  std::size_t capacity_;
+  bool enabled_ = true;
+  std::string fingerprint_;
+  mutable std::list<std::pair<std::string, InternalTimerWindowInfo>> lru_;
+  mutable std::unordered_map<
+      std::string,
+      std::list<std::pair<std::string, InternalTimerWindowInfo>>::iterator>
+      index_;
+};
+
+// The process-level instance every Execution consults (function-local
+// static: initialized on first use; the library's single-driver contract
+// makes an unsynchronized singleton the same caliber as PlanCache).
+K2TimerWindowNegativeCache& k2_timer_window_negative_cache();
+
 struct ExecutionProgress {
   struct StageCount {
     std::uint32_t stage_id = 0;
@@ -813,6 +926,39 @@ struct TimerStretchPreview {
   bool reaches_done = false;
 };
 
+/// Always-on preview attribution counters (integer diagnostics only; they
+/// never affect scheduling or the action protocol). E/T keep the v8 caliber;
+/// U is unified across every exit path (including exceptions). Since the v9
+/// transactional restructure the walk takes no frontier copy at all, so the
+/// copy measures F/copy_bytes are structurally zero and the entry frontier
+/// sizes are reported separately as the four S_* totals/maxima.
+struct PreviewCounters {
+  std::uint64_t calls = 0;             // E: entry attempts
+  std::uint64_t walk_timers = 0;       // T: walked timer boundaries
+  std::uint64_t undo_entries = 0;      // U: dense undo records (all exits)
+  std::uint64_t frontier_entries = 0;  // F: copied frontier entries (0)
+  std::uint64_t j_entries = 0;         // J: heap/events undo records
+  std::uint64_t s_heap_total = 0;
+  std::uint64_t s_events_total = 0;
+  std::uint64_t s_future_starts_total = 0;
+  std::uint64_t s_active_ids_total = 0;
+  std::uint64_t s_heap_max = 0;
+  std::uint64_t s_events_max = 0;
+  std::uint64_t s_future_starts_max = 0;
+  std::uint64_t s_active_ids_max = 0;
+  std::uint64_t copy_bytes = 0;           // frontier snapshot bytes (0)
+  std::uint64_t active_scan_entries = 0;  // active-id scans in preview (0)
+  std::uint64_t undo_peak = 0;
+  std::uint64_t journal_peak = 0;
+  std::uint64_t exit_memory = 0;
+  std::uint64_t exit_done = 0;
+  std::uint64_t exit_exception = 0;
+  std::uint64_t heap_growth_events = 0;
+  std::uint64_t heap_growth_moves = 0;
+  std::uint64_t events_growth_events = 0;
+  std::uint64_t events_growth_moves = 0;
+};
+
 class Execution {
  public:
   // Throws DieModelError on a null/empty plan or a cyclic stage DAG.
@@ -831,8 +977,13 @@ class Execution {
   ExecutionAction next_action();
 
   /// Read-only equivalent of the legacy contiguous-Timer coalescing walk.
-  /// It executes only on a bounded clone of the current scheduler state; the
-  /// caller still advances the real machine when the returned delay expires.
+  /// It runs a journal-based transaction on the authoritative scheduler
+  /// state: heap/events writes are undone in reverse, the dense per-run
+  /// arrays roll back through the undo log, the scalar cursor is restored
+  /// from an entry snapshot, and the derived frontiers (future_starts /
+  /// active_ids) are not maintained during the walk because no scheduling
+  /// decision or return-value component reads them. The caller still
+  /// advances the real machine when the returned delay expires.
   TimerStretchPreview preview_consecutive_internal_timers() const;
 
   // Advances the internal clock by ns (delta, uint64 ns) and completes every
@@ -889,9 +1040,37 @@ class Execution {
   // finished()).
   std::uint64_t elapsed_ns() const;
 
+  /// v8/v9 preview attribution counters (always-on diagnostics, the
+  /// active_id_* caliber): E calls, T walked timer boundaries, U journaled
+  /// dense writes (v9: unified across all exits), F frontier entries copied
+  /// at entry (structurally zero since v9).
+  std::uint64_t preview_calls() const;
+  std::uint64_t preview_walk_timers() const;
+  std::uint64_t preview_undo_entries() const;
+  std::uint64_t preview_frontier_entries() const;
+
+  /// Full v9 preview attribution snapshot (PreviewCounters): E/T/U/F plus
+  /// J, the four per-container S totals/maxima, undo/journal peaks, exit
+  /// categories and transaction capacity-growth counts.
+  PreviewCounters preview_counters() const;
+
  private:
   friend struct ExecutionTestAccess;
   std::uint64_t template_key_computations_for_test() const;
+  // v11 Phase 4 (K2 memo): hit/miss counters of the epoch-keyed
+  // query_internal_timer_window memo, exposed only through the test-access
+  // friend so fixtures can prove the memo actually engaged (a twin-execution
+  // equality check would pass vacuously with the memo silently disabled).
+  std::uint64_t timer_window_memo_hits_for_test() const;
+  std::uint64_t timer_window_memo_misses_for_test() const;
+
+  // v12 Phase 4 (K2 structural negative cache, 方案 §6.2): engagement
+  // counters and the P_struct verdict of this Execution's plan, exposed only
+  // through the test-access friend so fixtures can prove the negative cache
+  // actually fired (and, for realistic plans, actually did NOT).
+  std::uint64_t negative_cache_hits_for_test() const;
+  std::uint64_t negative_cache_writes_for_test() const;
+  bool structural_negative_for_test() const;
 
   struct Impl;
   // Held by value to keep the header free of scheduling internals; defined

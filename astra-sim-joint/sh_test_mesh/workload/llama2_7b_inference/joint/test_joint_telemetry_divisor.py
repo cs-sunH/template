@@ -19,7 +19,7 @@ N2/M1/N3 复核口径 + O 批补漏（O7③/O10③）的零后端单测。
      fail-closed；
   4. 冻结交接接口（C8 联合冻结 kwarg 名）：``link_telemetry_rates =
     {link_id: 实测有效速率(B/ns)}`` 传入 JointCostModel 构造——None/
-    空字典 = 零漂移（与无字段构造同值），遥测在链路上抬升 remote 计
+    空字典 = 零漂移（与无字段构造同值），遥测在链路上抬升 copy 计
     价、breakdown 披露位保守取整；整型 LinkId 键端点无关消费（速率
     查询/披露计数，不参与端点合并），畸形键 fail-closed；
   5. M1 流数口径与混合形态（O7③，A19'(g)③）：``link_flow_counts``
@@ -46,7 +46,7 @@ for _p in (_HERE, _PARENT):
         sys.path.insert(0, _p)
 
 from joint.joint_cost_model import (  # noqa: E402
-    ACTION_REMOTE,
+    ACTION_COPY,
     InstanceLoadView,
     JointCostError,
     JointCostModel,
@@ -84,14 +84,12 @@ def _session(home=0, resident=0, history_bytes=(1000, 1000),
         missing_bytes_by_tp_rank=missing)
 
 
-def _request(input_tokens=50, decode=10, input_bytes=(25, 25),
-             prefill_scan_passes=None):
+def _request(input_tokens=50, decode=10, input_bytes=(25, 25)):
     return RequestView(
         request_id="r", session_id="s", input_tokens=input_tokens,
         history_tokens_before=100, estimated_decode_tokens=decode,
         horizon_source="session_online_mean",
-        input_kv_bytes_by_tp_rank=input_bytes,
-        prefill_scan_passes=prefill_scan_passes)
+        input_kv_bytes_by_tp_rank=input_bytes)
 
 
 def _disjoint_paths(source, target):
@@ -444,11 +442,11 @@ class ModelTelemetryWiringTest(unittest.TestCase):
     """冻结交接接口：{link_id: 实测速率} 入构造；None/空 = 零漂移。"""
 
     @staticmethod
-    def _remote_candidate(model):
+    def _copy_candidate(model):
         return model.estimate_P_with_continuation(
             session=_session(history_bytes=(1000, 1000)),
             request=_request(decode=3), instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True)
+            action=ACTION_COPY)
 
     @staticmethod
     def _price_face(breakdown):
@@ -471,29 +469,28 @@ class ModelTelemetryWiringTest(unittest.TestCase):
 
     def test_none_and_empty_dict_zero_drift(self):
         # 无遥测 = 原 Registry 模型：None、空字典、缺省三态同值。
-        base = self._remote_candidate(_model()).breakdown
-        none_case = self._remote_candidate(
+        base = self._copy_candidate(_model()).breakdown
+        none_case = self._copy_candidate(
             _model(link_telemetry_rates=None)).breakdown
-        empty_case = self._remote_candidate(
+        empty_case = self._copy_candidate(
             _model(link_telemetry_rates={})).breakdown
         self.assertEqual(self._price_face(base), self._price_face(none_case))
         self.assertEqual(self._price_face(base), self._price_face(empty_case))
         self.assertEqual(base.contention_divisor, 1)
 
-    def test_telemetry_lifts_remote_pricing(self):
+    def test_telemetry_lifts_copy_pricing(self):
         # resident=0 → instance=1 的逐 rank 路径 ((0,2),(1,3))；对
         # (0,2) 喂遥测流数 2 → N2 叠加口径该路径 noc 腿除数 = 旧流 2
-        # + 候选 1 = 3、remote_read_ns 三倍；breakdown 披露位保守取整
-        # = 3。（D13：遥测除数走流数口径。）
+        # + 候选 1 = 3、copy 前缀腿（noc 主导）三倍；breakdown 披露位
+        # 保守取整 = 3。（D13：遥测除数走流数口径。）
         rates = _rates(noc=10.0, lat=0)
-        base = self._remote_candidate(_model(rates=rates)).breakdown
-        lifted = self._remote_candidate(_model(
+        base = self._copy_candidate(_model(rates=rates)).breakdown
+        lifted = self._copy_candidate(_model(
             link_telemetry_flow_counts={(0, 2): 2.0}, rates=rates)).breakdown
         self.assertEqual(base.contention_divisor, 1)
         self.assertEqual(lifted.contention_divisor, 3)
         self.assertEqual(
-            lifted.remote_read_ns - base.remote_read_ns,
-            2 * base.remote_read_ns)
+            lifted.history_prep_ns, 3 * base.history_prep_ns)
 
     def test_rate_only_telemetry_no_longer_lifts_pricing(self):
         # D13 验收钉测（缺流数不由"总吞吐满载"推断单流）：速率-only
@@ -501,10 +498,10 @@ class ModelTelemetryWiringTest(unittest.TestCase):
         # 与无遥测基逐位一致（旧 capacity/速率回退会把 contention 抬
         # 到 3）；披露面 unknown_flow_count_links = 1 可辨认。
         rates = _rates(noc=10.0, lat=0)
-        base = self._remote_candidate(_model(rates=rates))
+        base = self._copy_candidate(_model(rates=rates))
         rate_only_model = _model(
             link_telemetry_rates={(0, 2): 5.0}, rates=rates)
-        rate_only = self._remote_candidate(rate_only_model)
+        rate_only = self._copy_candidate(rate_only_model)
         self.assertEqual(
             self._price_face(rate_only.breakdown),
             self._price_face(base.breakdown))
@@ -526,8 +523,8 @@ class ModelTelemetryWiringTest(unittest.TestCase):
         # （{int LinkId: B/ns}，dataclass 软门自动接通）——构造成功、
         # 计价零漂移（整型键不参与端点合并）、opaque 条目披露可见。
         rates = _rates(noc=10.0, lat=0)
-        base = self._remote_candidate(_model(rates=rates)).breakdown
-        fed = self._remote_candidate(_model(
+        base = self._copy_candidate(_model(rates=rates)).breakdown
+        fed = self._copy_candidate(_model(
             link_telemetry_rates={17: 5.0, 23: 10.0 / 3.0},
             rates=rates)).breakdown
         self.assertEqual(self._price_face(base), self._price_face(fed))
@@ -543,12 +540,12 @@ class ModelTelemetryWiringTest(unittest.TestCase):
         rates = _rates(noc=10.0, lat=0)
         model = _model(
             link_telemetry_flow_counts={(0, 2): 2.5}, rates=rates)
-        lifted = self._remote_candidate(model).breakdown
+        lifted = self._copy_candidate(model).breakdown
         self.assertEqual(lifted.contention_divisor, 4)
         # 计价腿仍是 3.5 除数：bytes/有效速率 与 3.5 除数解析一致
-        # （1000 B/rank × 4 遍 = 4000 B；4000/(10/3.5)=1400 ns；TP
-        # 并行取 max → 两 rank 同值，wall = 1400）。
-        self.assertEqual(lifted.remote_read_ns, 1400)
+        # （1000 B/rank；1000/(10/3.5)=350 ns；TP 并行取 max → 两
+        # rank 同值，copy 前缀腿 wall = 350）。
+        self.assertEqual(lifted.history_prep_ns, 350)
 
 
 # ======================================== 3. collective_coverage 条件 ==

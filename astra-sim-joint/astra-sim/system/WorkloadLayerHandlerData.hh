@@ -28,9 +28,6 @@ class WorkloadLayerHandlerData : public BasicEventHandlerData, public MetaData {
     int sys_id = -1;
     Workload* workload = nullptr;
     uint64_t node_id = 0;
-    /// Optional descriptor-transport sink. Workload::call transfers ownership
-    /// of this cookie to the sink instead of looking up node_id.
-    Callable* pipeline_sink = nullptr;
     WorkloadLayerHandlerData();
 };
 

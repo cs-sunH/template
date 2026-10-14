@@ -44,28 +44,20 @@ strict V4 target-slot delta 协议（schema/protocol 4、`bridge-v4-20261011`、
 | 机制 | 开关 | on 语义 | off 共同替代（§7.1） |
 | --- | --- | --- | --- |
 | **T** 工具/人类区分 | `category_mode=typed` | SH 严格类别逐出：合法 victim 先 human 类后 tool 类，类内 `(last_completion_ns, session_id)` FIFO；human 层未耗尽且缺口未满足不得动 tool | `lru`：同一合法 victim 集合上的类型无关 LRU（单遍），其余流程不变 |
-| **J** 联合决策 | `scheduler_mode=joint` | 全 instance 候选（无容量/边缘/距离掩码），发射点联合选择 instance × stay/recompute/copy/remote-read | `load-first`：先按在线负载（ns 服务台账）在全部 instance 选点，再在该位置选 KV 动作；`affinity-first`（home 优先、缺省回退 load-first）为 J 边际比较第二参照，不进八组合；`face_static`（C17）= 静态距离对照臂（policy variant，不进八组合、不冒称完整 FACE，强制 quota-off——F7 唯一耦合例外） |
+| **J** 联合决策 | `scheduler_mode=joint` | 全 instance 候选（无容量/边缘/距离掩码），发射点联合选择 instance × stay/recompute/copy（2026-10-14 起三动作——第四动作 remote-read 已随远读机制整体退役，登记见仓根 `PROVENANCE.md` 退役批登记节） | `load-first`：先按在线负载（ns 服务台账）在全部 instance 选点，再在该位置选 KV 动作；`affinity-first`（home 优先、缺省回退 load-first）为 J 边际比较第二参照，不进八组合；`face_static`（C17）= 静态距离对照臂（policy variant，不进八组合、不冒称完整 FACE，强制 quota-off——F7 唯一耦合例外） |
 | **E** 自适应层数逐出 | `layer_policy=adaptive` | 按层消费期限公式计算最小热前缀 `k_hide` 软目标（§5.2），释放时目标外后缀→目标内后缀两次扫描 | `minimal_layer_groups`：同一合法对象排序下按逐 rank 缺口释放最少完整层组；`legacy_half` 为原半层逻辑回归对照，不是 E-off |
 
-**remote on/off**（`remote_actions=on|off`）是与三机制正交的能力消融
-开关：off 仅从候选动作集中移除 remote-read，全部 instance、其余动作、
-驱逐、合并与生命周期不变；单独记录，不与 T/J/E 合并。remote-read 的
-执行口径为**有限字节双缓冲 tile 流唯一机制**（2026-09-26 D09 协议升级，
-v2.0 设计 §12；每 rank 两块真实 HBM 暂存，tile 生产受缓冲复用释放门
-约束——消费后归还 credit，任意时刻远读暂存 ≤2 块；**tile 恒 = 执行
-配置值固定**（2026-09-27 修复轮二 D09：废除旧按基础区间的
-max(tile,⌈base/2⌉) 放大——每 pass/窗 tile 数 = ⌈base/tile⌉ 可 >2，
-逐 tile lag-2 流水消费，暂存 = 2×配置 tile×kv_token_bytes 恒定）；
-tile 字节经
-`JOINT_REMOTE_READ_TILE_BYTES`（`auto`=协议固定 256 token | 显式正整
-数字节，按一个 token KV 粒度向下对齐、<1 token fail-closed）调节，
-见 §3"remote-read 执行流"行；旧步数块大小 K 机制与
-`JOINT_REMOTE_CREDIT_ITERS` 键已退役——旧键出现即启动失败）。**PARTIAL 基适用面消融**（2026-09-17《部分层逐出kv管理改造
-分析方案》需求①）：`JOINT_REMOTE_READ_PARTIAL=on|off`（缺省 on）——
-on 时 PARTIAL 基（前缀驻留 home＋后缀在池）进 remote-read 候选（混合
-形态：准入相后缀池恢复物化＋decode 相前缀层 [0,p) credit 读流）；off
-只把 PARTIAL 基的 remote-read 移出候选集（copy/recompute 照常参与比较，
-与 `remote_actions` 同一消融模式，非旧机制回归档）。
+**remote-read（远读）机制已整体退役（2026-10-14）**：联合决策动作空间
+由 stay/recompute/copy/remote-read 四动作收缩为 **stay/recompute/copy
+三动作**，远读执行链（P 准入前缀读流、`rid#readplan` 承诺账本、远读暂存
+lease、D 边界 decode credit 腿、C++ `RemoteReadExecutor`/
+`TileTransportAdapter` 与 pipeline descriptor tile 流水协议）、W10 hybrid
+动作空间扩展、增量型 P→D 边界布局族及 D09/D07 全部协议设施随之下线；
+旧开关 `JOINT_REMOTE_ACTIONS`/`JOINT_REMOTE_READ_TILE_BYTES`/
+`JOINT_REMOTE_READ_PARTIAL`（及更早的 `JOINT_REMOTE_CREDIT_ITERS`）并入
+`_RETIRED_ENV_KEYS` fail-closed——任何显式值即启动失败。删除范围、版本
+升版与被取代章节清单见仓根 `PROVENANCE.md` 顶部退役批登记节；历史验收
+记录（§3 状态表日期化行、§2.9/§7.1 历史沿革注）按原文保留。
 
 ### 1.1 八组合固定映射（§7.1 硬性要求，2026-09-13 裁定）
 
@@ -94,14 +86,11 @@ JOINT_ABLATION_COMBO=TJE   # 或 none/T/J/E/TJ/TE/JE
 JOINT_CATEGORY_MODE=typed|lru
 JOINT_SCHEDULER_MODE=joint|load-first|affinity-first|face_static
 JOINT_LAYER_POLICY=adaptive|legacy_half|minimal_layer_groups
-JOINT_REMOTE_ACTIONS=on|off          # 缺省 on
-JOINT_REMOTE_READ_PARTIAL=on|off     # PARTIAL 基 remote-read 消融（缺省 on）
-JOINT_ALLOWED_ACTIONS=all|stay,recompute,copy,remote-read 的逗号子集
+JOINT_ALLOWED_ACTIONS=all|stay,recompute,copy 的逗号子集
                                      # 动作掩码（M2，缺省 all）——候选集
                                      # 上限不是强制：掩码外动作从适用集
-                                     # 剔除（与 remote 能力开关取交集）；
-                                     # 臂预设恒含 recompute；剔除 recompute
-                                     # 致零适用维持 fail-closed
+                                     # 剔除；臂预设恒含 recompute；剔除
+                                     # recompute 致零适用维持 fail-closed
 # 与三机制/combo 正交的治理与遥测开关（C6–C11；缺省 off/未设）
 JOINT_QUOTA_MODE=off|static|aimd     # 通用流量治理（aimd ⇒ 自动注入
                                       # --link-telemetry，F7 耦合）
@@ -138,7 +127,7 @@ env 获得，即 §8.3 #9 哨兵配置）。推荐经 `joint_runner.py` 起跑�
 
 ```bash
 python3 sh_test_mesh/run_scripts/joint_runner.py <run_dir> <request_csv> \
-    --combo TJE            # 或 --category/--scheduler/--layer/--remote 显式开关
+    --combo TJE            # 或 --category/--scheduler/--layer 显式开关
     [--quota off|static|aimd]   # 通用流量治理（C11，缺省 off；aimd 自动
                                 # 注入 --link-telemetry——F7 耦合）
 ```
@@ -175,7 +164,7 @@ sh_test_mesh/workload/llama2_7b_inference/
 │   │                             #      + 遥测 divisor_effective/C7 三件
 │   │                             #      （W3/v4-projection 起两入口内部 =
 │   │                             #       事件前推，见下机制表 W3 行）
-│   ├── action_work_graph.py      #   W3：四动作预测工作图构造器（P 参考
+│   ├── action_work_graph.py      #   W3：三动作预测工作图构造器（P 参考
 │   │                             #      接续/结算/控制延迟/继承义务）
 │   │                             #      + WorldSource 背景世界源
 │   ├── resource_projection.py    #   W2：公共资源事件前推内核（事件队列
@@ -209,7 +198,7 @@ sh_test_mesh/workload/llama2_7b_inference/
 │   │                             #      （模型语义/快照/bridge/目录/
 │   │                             #      预测配置/日志——fail-closed）
 │   ├── boundary_layout.py        #   D19：D 候选专用边界视图——区间布局
-│   │                             #      （远读/copy 只数目标缺少部分）
+│   │                             #      （copy 只数目标缺少部分）
 │   │                             #      + StageWork 阶段工作 + 等待接口
 │   │                             #      拆分（原地接续/新接纳）
 │   ├── capacity_summary.py       #   D11：分阶段足迹 PhaseFootprint + 容量
@@ -229,8 +218,7 @@ sh_test_mesh/workload/llama2_7b_inference/
 │                                 #   + kv_delta_journal 披露 + 逐组恢复
 └── online/
     ├── sh30_online_scheduler.py  # joint 准入（替换三段式）+ 因果 decode
-    │                             #   增长 + 完成合并 + remote 读流
-    │                             #   + #readplan 预登记核销 + 配额准入
+    │                             #   增长 + 完成合并 + 配额准入
     │                             #   + 遥测 ingest/AIMD + 到达合同
     ├── graph_batch_builder.py    # 多传输准入（copy 前缀+后缀）/merge 发射
     │                             #   + copy 块级交接 + 逐层段就绪门控
@@ -251,14 +239,13 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
   偏离 home，跨实例工作副本事务另持 `base_instance_index`（准备相快照
   的物理基础驻留实例）——守恒审计、merge 的基础侧台账/传输端点、以及
   P→D 边界视图（`PDBoundaryView.home_instance`＝源端；D18/D19 的原地
-  继续适用性、远读/合并计价与 decode credit 读流端点）一律按物理基础
+  继续适用性与合并计价端点）一律按物理基础
   所在核账，home 仅作 §2.1 标签与平局语义。
 * **执行与增长（§3.1）**：新 KV（prefill 输入 + 实际 decode）在执行
-  instance 产生；准入预约**动作感知足迹**（R1'：stay/copy/recompute
-  按 history+input 整份、LOCAL 基 remote-read 仅 input 增量；PARTIAL
-  基跨实例 remote-read 还须逐 rank 预约池恢复的历史后缀——输入 token
-  基数由 `joint_reservation_context_tokens` 统一，后缀单独记账并在物化
-  后抵扣；可行性/预约/物理可行性三处同口径；
+  instance 产生；准入预约**动作感知足迹**（R1'：三动作 stay/copy/
+  recompute 一律按 history+input 整份计——2026-10-14 远读退役后增量
+  预约口径随增量布局族一并删除，PARTIAL 基跨实例动作的后缀池恢复
+  预约仍逐 rank 记账并在物化后抵扣；可行性/预约/物理可行性三处同口径；
   无 PARTIAL 驻留钉扎：容量只影响所需字节与驱逐等待计价，不做候选
   掩码），decode 按列车核销的实际消费**因果增长**（每次增长经同一
   T+E 释放机制准备空间；容量不足时进入**停滞/唤醒**（R14）：会话
@@ -269,8 +256,7 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
   改造分析方案》需求②）**：`merge_back` 在完成处理时比较**两侧保留量**
   （基础侧 = 物理基础驻留实例（`base_instance_index`，2026-09-26 D-BI
   起可与逻辑 home 不同）的基础驻留前缀 H；exec 侧 = 工作副本 W——
-  remote-read LOCAL
-  基为增量 I、PARTIAL 混合形态为池恢复后缀 S＋增量 I、copy/recompute 为
+  copy/recompute 为
   并集），**小的整份 NoC 搬给大的**（省 D2D 流量；时机不变）；合并
   **零池写**（I6：恢复的 KV 按热 KV 处理、不执行完再踢出去——用户
   裁定），结果恒为**全层 LOCAL@胜者**、`home := 胜者`；copy/recompute
@@ -278,7 +264,7 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
   REMOTE 基 = 无主 session（裁定③）：就地保留（零传输零池写）、
   工作副本转正、home := exec（"远端服务一次后顺势回暖"）。空间准备只
   经统一 T+E 逐出（`_ensure_capacity`，胜者侧；零字节翻转/in_place
-  无需准备），remote-read 双向二选一兜底，**双侧深缺口才 fail-closed**
+  无需准备），**双侧深缺口才 fail-closed**
   （R4 自降级与 k=0 池归并兜底退役——"merge 永不失败"合同变更，热 KV
   裁定的必然推论；`merge_degrade_events` 台账冻结、新 run 恒空）；恰好
   归并一次由 `last_merged_request_id` 版本键断言保证（`mark_complete`
@@ -298,7 +284,8 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
   rank 串行链接续 + 池在途块 store 尾前递边；thinktime < merge 时长
   时（N2）merge 成本以"下一轮数据等待"留在会话闭环内（不逃出 E2E、
   等待窗口由 merge watch 交付解除）。
-* **动作语义（§2.2 表；四动作 = stay/recompute/copy/remote-read，全
+* **动作语义（§2.2 表；三动作 = stay/recompute/copy（2026-10-14 起——
+  第四动作 remote-read 已随远读机制退役），全
   候选逐 (instance, action) 对联合 argmin，实例永不掩码）**：
   stay=本地命中/部分恢复；copy=基础历史复制
   为工作副本（前缀 NoC + 缺失后缀池恢复）——**实现/测试锚点（R16，
@@ -331,52 +318,29 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
   D 边界静默重建执行面已接线（2026-09-27 修正轮 C4——rebuild span/
   首 token 恰一次/核销物化+预约注销全链路，掩码臂真实执行验证，见
   D18 行登记），两语义不混用）三方同源：runtime、决策日志、plan_dict
-  （构图器））；
-  remote-read=基础历史
-  留 home，执行端驻留新增量 KV——**混合形态（N1(a) 解除，2026-09-17
-  需求①）＋ 前缀读流分两段接力（2026-09-25 prefill remote-read 分阶
-  段）**：LOCAL 基 = 基础全层留 home、执行端仅增量驻留（prefill 期前
-  缀读流覆盖全层 [0,L)，history_transfers 恒空）；PARTIAL 基 = 后缀层
-  [p,L) 准入相从池**恢复物化**到执行实例（热 KV，复用 copy 池腿原语/
-  发射/前递补边/空间准备）＋ 前缀层 [0,p) 读流直接用（不先复制再计
-  算）——准入相 prefill 前缀读流（`plan_prefill_remote_read_transfers`
-  纯规划——**2026-09-27 修复轮二 D16 起返回 O(窗数) 有界模板**：不整轮
-  物化窗×tile 列表，逐窗 tile 由 `prefill_read_window_tiles` 在消费点
-  物化、builder 复检为模板级；图侧旁挂分支逐层段门控；瞬时 staging 不
-  入容量账本；P 决策行披露 `prefill_remote_read_summary` 有界聚合键）与
-  decode 相 credit 读流两段接力（同一条前缀读流不得同时登记为 prefill
-  流与 decode 流，§二.5）；REMOTE 基仍拒（无主，走池
-  恢复/重算就地转正）；适用面消融 `JOINT_REMOTE_READ_PARTIAL=off` 时
-  PARTIAL 基照旧不进候选。
+  （构图器））。（第四动作 remote-read 及其混合形态/前缀读流语义已随
+  2026-10-14 远读退役整段删除，历史描述见 PROVENANCE 退役批登记节。）
 * **链路遥测（C6–C8，2026-09-22；D13 修订 2026-09-27）**：C++ 在线旗
   标 `--link-telemetry` 每决策 epoch 在桥请求顶层携带 `link_telemetry[]`
   逐链路窗口差分；SH 侧 `_ingest_link_telemetry` 解析（整型 LinkId →
   端点 (src,dst) 键换算）喂 JCM `divisor_effective`（max(注册在册流,
   遥测时间加权流数) 合并；D13 起速率样本只作观测/披露通道，速率-only
   链路 = 流数显式未知——除数退在册流近似，不再以 capacity/速率冒充
-  流数）与 AIMD；remote-read 准入以 `rid#readplan` 预登记读流承诺
-  （est 账本；**2026-09-25 起准入相注册表零登记**——prefill 期间注册
-  表上的远读流 = `rid#prefill_read` 前缀读流实流本身：准入登记 NoC
-  路径 + home 读/exec 写双端点 HBM 端口、prefill drain 释放，逐 shard
-  单代表流折叠；同一条前缀读流不得同时登记为 prefill 流与 decode
-  流），完整 credit 块数只用于时域对账，`#readplan` 注册表半边自
-  drain 对账（`_reconcile_readplan_at_drain`）起按每条 TP shard 路径
-  登记一条未来代表流；当前列车发射时由该列车的实际代表流接管，
-  列车完成后按剩余工作恢复未来流，不把串行块误计为并发流；
-  drain 真计划冻结处对账核销（`readplan_reconcile` 差值行）+ 完成边界
-  残差清结（`readplan_settle`）+ run 末泄漏审计；同 tick 读流承诺对
-  第二笔决策可见（互见性）；collective_coverage 翻转条件（全程开启 ∧
+  流数）与 AIMD（`rid#readplan` 读流承诺账本与 `#prefill_read` 前缀
+  读流登记已随 2026-10-14 远读退役删除）；collective_coverage 翻转
+  条件（全程开启 ∧
   逐 epoch 窗口无空洞）入 manifest 与决策行。
 * **配额机制（C9–C11，2026-09-22，缺省 off）**：`JOINT_QUOTA_MODE`
   = off|static|aimd（三开关之一，与三机制/combo 正交）。链路 ∪ 实例
   HBM 端口的**动作级准入**（逐候选判据、实例永不掩码；全动作不可行 ⇒
   `quota_deferred` 回队，等待行 `wait_reason ∈ {capacity, quota_link,
   quota_port}` 三分）；static = 固定预算（链路 `Q_init =
-  max(1,⌊ρ_eff⌋)` 逐配置派生、端口平价门 `B_HBM/(u_port+1) ≥ r̂_KV`、
-  merge bulk 名额 N_bulk=Q_init）；aimd = static 基础上遥测驱动的 AIMD
+  max(1,⌊ρ_eff⌋)` 逐配置派生、merge bulk 名额 N_bulk=Q_init——
+  realtime/elastic 流类与端口平价门已随 2026-10-14 远读退役删除，
+  在册流类恒 FLOW_ONESHOT）；aimd = static 基础上遥测驱动的 AIMD
   动态调整（F7：aimd ⇒ 发射层自动注入 `--link-telemetry`，不存在
-  "aimd+无遥测"合法启动路径）；流生命周期借还配对审计（remote-read
-  读流 + merge 预留 `#merge-reserve`，service_done 裁决释放败者侧 /
+  "aimd+无遥测"合法启动路径）；流生命周期借还配对审计（merge
+  预留 `#merge-reserve`，service_done 裁决释放败者侧 /
   merge_done 闭合门后释放胜者侧）；δ_adm=0（A3' 终冻，与 argmin 合取
   恒等）。off 臂决策序列与 off 前逐字节同（F7 零漂移实证）。
 * **逐出（§4/§5.6）**：T 定类别/对象序（`eviction_class_order`），E
@@ -385,21 +349,24 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
   fail-closed 沿用基底 D4（准入/merge/decode 语境按 N3' 类型化
   `KVCapacityError` 分别转延迟/自降级/停滞，合同类异常原样上抛）。
 
-### 2.9 紧凑管线与稀疏账本协议（2026-10-09 v2 施工）
+### 2.9 紧凑管线与稀疏账本协议（2026-10-09 v2 施工；版本表随 2026-10-14 远读退役更新）
 
-各接口独立版本化。当前 work-ledger envelope 直接使用 v3；未知版本及旧
-v2 envelope 在生产入口拒绝。文件中的 `WorkLedgerV2*` 类名和
+各接口独立版本化（下表为 2026-10-14 三动作终态）。未知版本及旧
+envelope 在生产入口拒绝。文件中的 `WorkLedgerV2*` 类名和
 `raw_v2_frame` 测试审计标签沿用原名称，不表示保留生产 v2 解码通路。
 
 | 层 | 版本 |
 |---|---|
-| 外层 decision bridge schema | 2；`snapshot_handle.kind=work_ledger_v3` |
-| work-ledger envelope schema / protocol | 3 / 3；`bridge-v3-20261009`、`workledger-v3-20261009` |
-| GraphBatch schema | 2（含 `pipeline_descriptors` + 必需 `kernel_contract`） |
-| descriptor | 1（`PipelineDescriptor` typed wire） |
+| 外层 decision bridge schema | 4；`bridge-v4-20261011`，`snapshot_handle.kind=work_ledger_v4` |
+| work-ledger envelope schema / protocol | 4 / 4；`workledger-v4-20261011`（D11 最小联动档：pipeline 行恒 0 行、0 行帧合法） |
+| GraphBatch schema | 3（必需 `kernel_contract`；`pipeline_descriptors` 键已随 2026-10-14 远读退役删除——恒不再出现，出现即 fail-closed） |
+| descriptor | **已退役**（2026-10-14：`PipelineDescriptor` typed wire 整体删除；其原尾部的 `PipelineKernelContract` 迁出为独立头 `astra-sim/workload/execution_driven/PipelineKernelContract.hh` 保留，die 计算后端 window 契约） |
 | native ABI | 1（`jproj_*` stateful C ABI） |
-| prediction config | `predcfg-v3-20261005` |
-| 模型语义 | `v6-compact-window-20261005`（本轮不改变物理/策略/精度语义） |
+| prediction config | `predcfg-v4-20261014`（action_space / multi_source_protocol 两轴删除） |
+| 模型语义 | `v7-three-actions-20261014`（三动作终态；与 v6 及以前不可比） |
+| planner-state | `joint-accel-planner-state-v2-20261014` |
+| python runtime asset | `joint-accel-python-runtime-v2-20261014` |
+| 决策日志 / 快照 schema | `declog-v3-20261014` / `snapshot-v3-20261014` |
 
 流水 transition 的 `slot_patches`、`credit_patches`、`obligation_patches`
 仅携带实际触及行的 `{before, after}`；null 明确表示创建/删除。不可变
@@ -673,7 +640,7 @@ MainWall现输出既有fluid五桶及EventQueue.proceed的累计已完成调用�
 | T 开关（typed/lru） | 已实现＋单测验证 | 类别严格序、满足即停、未知类别 fallback 披露 |
 | E：minimal_layer_groups / legacy_half | 已实现＋单测验证 | legacy 与基底逐字节等价（既有测试回归通过） |
 | E：adaptive（k_hide） | **已实现＋单测验证（2026-09-22 C15：运行期事件递推预测器 = adaptive 正式在线实现，F12 三态闭合）** | 解析例 1/17/25 两径一致；递推预测器（`joint/event_recursion_predictor.py`）：统一 N-way 均分时间线（与 C1 每路径份额 / C2 u_port 同源口径；D13 起 C1 并集 divisor_multi 退役）、写回×恢复两方向同推演仲裁、恢复写腿×计算 memory 腿同端口仲裁、候选自致减速单列不回移期限、剪枝两条钉死（逐 rank 逐腿独享速率串行累计下界；D̂ 钉在无候选恢复流量的消费开始时刻，prune vs 全枚举 50 例一致）、未知 ETA/解析不可用保守全 L + 披露；η/γ 因果更新入口 `observe_valid_service_sample`（混合等待默认不可观测；§8.1 单账本 2026-09-30 修复：sh30 joint 装配经 `service_factor_source` 注入后 γ/η 改读 W6 统一服务样本估计器的只读发布值 `PublishedServiceFactorGroup`，`observe_valid_service` 在该装配 fail-loud、M4 时间衰减桥接退役；standalone 装配保持本更新通道——生产无喂入点恒冷启动 1.0）；adaptive_decisions 披露侧车（source/statuses/divisor/stall/η/γ；M4 2026-09-26 起行携可选 `at_ns`——SH 在线面经 `_ensure_capacity` 链路传 tick，缺省 None 保确定性测试） |
-| J：选择与代价模型 | 已实现＋单测验证 | 解析近似代价（关键路径合成、因果时域估计）；**在线反馈通道已接线（R15，2026-09-14）**：链路流登记表按逐 shard 全路径登记/完成事件注销（F-B 登记足迹；**D13 起计价经 `CandidatePathNocShare` 每资源/每路径服务视图消费**——旧并集聚合除数退役）、池端口仲裁份额（含 E 内核 r_j，P1）、ServiceFactors EWMA（D14 改 v2.0 §9.2 冻结固定系数 1/16——首样本同规则自 1.0 出发，0<η_sample≤1 窗口外样本记异常跳过；2026-10-03 起 transfer 时间因子经 WorldContext 转为 NoC 链路 η=1/transfer_factor，正式 P/D 前推统一消费；流数竞争仍由资源仲裁承担；§8.1 单账本 2026-09-30 修复：纯列车服务样本唯一更新点 = W6 `ServiceSampleRecorder`，prefill/decode 因子生产值 = `ServiceFactors.unified_source` 发布视图在 flush（JCM 构造点）刷新的只读发布值，`observe_prefill`/`observe_decode` 在发布模式 fail-loud（对拍期双账本并行退役）；样本纯度排除 joiner 迁移/partial 恢复/copy 门控传输/remote-read 读流列车——复审 M5）；decode 负载标定在线化（N12：session 均值 → run 均值 → 冷启动 32 前向步（v2.0 式(4) 冻结先验，D14；每会话 (count,sum) 常数空间存储），全 trace 均值常数不再进决策输入；估计器版本入快照缓存失效键——复审 M3）；merge 段增量计价（复审 K4：input + 因果 decode 增长，不随基础历史膨胀；REMOTE 基走池端口口径——自查 C）；准入重试键 = KV 纪元 ⊕ 失败候选集纪元（复审 M2，R2.5 口径）；无 oracle（`RequestView` 结构性不接受 decode_length/final_context_tokens）；**D01 选择器保留与阶段扩展（2026-09-26）**：全实例×四动作 argmin 与初始平局序 `(cost, (instance_index, ACTION_ORDER))` **保留不变**（v2.0 C07 现状即无组合搜索，不重写新优化器）；估价器"阶段参数与当前布局参数"落点 = 两阶段入口 `estimate_P_with_continuation`（P 阶段，布局 = 决策时点 SessionKVView）与 `estimate_D_remaining`（D 边界，布局 = PDBoundaryView→BoundaryKVLayout，D18/D19 已落）；两阶段候选 notes 以同键 `decision_stage=P`/`decision_stage=D` 自描述决策阶段（D18 的 `boundary_stage=D` 披露位保留）、两阶段 SelectionRecord `diagnostics["decision_stage"]`（"P"/"D"）随记录落盘——两个时刻的全部实例×动作审计项逐候选可辨阶段；每阶段恰 4N 候选记录、每请求两次线性遍历（初始候选零 D 估价，无 16N² 组合枚举）、继续标记恒归并在 (i_P, action) 记录不作第五动作（式 1c 平局键见 D18 行）。**零新增开关**。单测：`joint/test_d01_selector_stage.py`（12 用例：初始平局序/4N×2 遍历计数/继续归并/边界平局键键形/阶段披露） |
+| J：选择与代价模型 | 已实现＋单测验证 | 解析近似代价（关键路径合成、因果时域估计）；**在线反馈通道已接线（R15，2026-09-14）**：链路流登记表按逐 shard 全路径登记/完成事件注销（F-B 登记足迹；**D13 起计价经 `CandidatePathNocShare` 每资源/每路径服务视图消费**——旧并集聚合除数退役）、池端口仲裁份额（含 E 内核 r_j，P1）、ServiceFactors EWMA（D14 改 v2.0 §9.2 冻结固定系数 1/16——首样本同规则自 1.0 出发，0<η_sample≤1 窗口外样本记异常跳过；2026-10-03 起 transfer 时间因子经 WorldContext 转为 NoC 链路 η=1/transfer_factor，正式 P/D 前推统一消费；流数竞争仍由资源仲裁承担；§8.1 单账本 2026-09-30 修复：纯列车服务样本唯一更新点 = W6 `ServiceSampleRecorder`，prefill/decode 因子生产值 = `ServiceFactors.unified_source` 发布视图在 flush（JCM 构造点）刷新的只读发布值，`observe_prefill`/`observe_decode` 在发布模式 fail-loud（对拍期双账本并行退役）；样本纯度排除 joiner 迁移/partial 恢复/copy 门控传输（remote-read 读流列车排除项已随 2026-10-14 远读退役删除）——复审 M5）；decode 负载标定在线化（N12：session 均值 → run 均值 → 冷启动 32 前向步（v2.0 式(4) 冻结先验，D14；每会话 (count,sum) 常数空间存储），全 trace 均值常数不再进决策输入；估计器版本入快照缓存失效键——复审 M3）；merge 段增量计价（复审 K4：input + 因果 decode 增长，不随基础历史膨胀；REMOTE 基走池端口口径——自查 C）；准入重试键 = KV 纪元 ⊕ 失败候选集纪元（复审 M2，R2.5 口径）；无 oracle（`RequestView` 结构性不接受 decode_length/final_context_tokens）；**D01 选择器保留与阶段扩展（2026-09-26）**：全实例×三动作 argmin（2026-10-14 远读退役起；原四动作）与初始平局序 `(cost, (instance_index, ACTION_ORDER))` **保留不变**（v2.0 C07 现状即无组合搜索，不重写新优化器）；估价器"阶段参数与当前布局参数"落点 = 两阶段入口 `estimate_P_with_continuation`（P 阶段，布局 = 决策时点 SessionKVView）与 `estimate_D_remaining`（D 边界，布局 = PDBoundaryView→BoundaryKVLayout，D18/D19 已落）；两阶段候选 notes 以同键 `decision_stage=P`/`decision_stage=D` 自描述决策阶段（D18 的 `boundary_stage=D` 披露位保留）、两阶段 SelectionRecord `diagnostics["decision_stage"]`（"P"/"D"）随记录落盘——两个时刻的全部实例×动作审计项逐候选可辨阶段；每阶段恰 3N 候选记录（2026-10-14 远读退役起；原 4N）、每请求两次线性遍历（初始候选零 D 估价，无 9N² 组合枚举）、继续标记恒归并在 (i_P, action) 记录不作第五动作（式 1c 平局键见 D18 行）。**零新增开关**。单测：`joint/test_d01_selector_stage.py`（2026-10-14 远读退役后 9 用例：初始平局序/3N×2 遍历计数/继续归并/边界平局键键形/阶段披露） |
 | 逐层数据/空间就绪递推（D02，2026-09-26） | **已实现＋单测验证** | `estimate_P_with_continuation` 的"历史准备—计算—关键路径合成"三段改为 v2.0 式(12)/(13) 逐层就绪递推（计价修改；不声称全局 P/D 组合最优、不声称未测低开销）：一次性传输按 式(12) 供给链只写它**真实消费的层**的 `ready_data` 门——copy handoff chunk 通道内按层消费序串行（逐 chunk 逐 rank 链 `R_{k,r} = max(R_{k-1,r}, A_dest, S_source) + X_{k,r}`，`copy_handoff_chunk_walls` notes 披露链壁）、池恢复只门控缺失后缀层 [p,L)（stay-PARTIAL/copy-PARTIAL/remote-PARTIAL 同口径；与 NoC 前缀不同通道并行，§11.1）、remote tile 到达与 `_double_buffer_recurrence_ns` 的通道串行 T 序列逐位同源（`remote_read_tile_arrival_ns` 闭式，多遍扫描取末遍=保守）；聚合 prefill 计算按固定层数均分（余数前置、总和守恒）为固定数量算子段，式(13) 递推 = 新增纯算术 **`estimate_first_forward`**（前/后段=0——层数据门覆盖整段份额，投影前段重叠属未建模保守项登记；O(L) 不随 token/tile/步数增长）；repeat 段统一入口 = 新增纯算术 **`estimate_repeat_segment`**（零供给退化为纯计算链；`_remote_double_buffer_leg_ns` 委托之，值逐位不变——D09 手算锚不漂移）。**验收（v2.0 §11.3）**：110 ns 例（第二层晚到 100、计算 10 ⇒ max(1,100)+10）通过；prefill 结束前所有需要层就绪；旧整体 max 合成三种形态（`first_credit + max(remaining_stream, compute)`、`max(尾 chunk 流, 计算)`、`max(prefill 腿闭式, suffix_restore)`）全部废除、无开关——数据到达后的计算不再被吸收（旧口径吸收量为登记的预测低估）。零门控动作（stay-LOCAL/recompute）递推 = 整段计算（守恒锚，逐位不变）；target_wait/eviction 串行前置口径已随 **D03 统一时间轴（2026-09-26）**废除（见下行）；`estimate_D_remaining` 组合式已随 D03 改为 `max(Q, A) + 准备腿`（迁移/credit 腿自加入列车发射）。审计披露：C5 冻结字段不动；notes 增 `prefill_first_forward_ns`（递推结果），`copy_handoff_first_chunk_ns` 语义保留、`copy_handoff_remaining_stream_ns` 由 `copy_handoff_chunk_walls`（逐 chunk 链壁列表）替代。**零新增开关**。单测：`joint/test_d02_layer_readiness_recurrence.py`（20 用例：110 ns 例/整体 max 对照/式 13 三段门/零门控守恒/逐 rank max/到达闭式 vs T 递推网格/repeat 段锚/copy 末 chunk 到达后计算保留/TP 偏斜传播/stay 池后缀仅门控消费层/池速率单路径穿透）+ 重推导锚 `joint/test_joint_credit_pricing.py`（D02 递推手算，D03 时间轴后 3308/3466/407）、`joint/test_joint_remote_read_staged_path.py`（2776/2420/2754/4406）、`joint/test_joint_shard_pricing.py`（copy 204） |
 | Q/驱逐/准备统一时间轴（D03，2026-09-26） | **已实现＋单测验证** | `target_wait_ns` 降级为**观测字段**（C5 冻结 breakdown 位保留；不声称全局 P/D 组合最优、不声称未测低开销），不再被所有动作机械前置相加——Q 只门控计算（式(13) 首层 `F_0 = Q`，经 `estimate_first_forward(start_ns=Q)` 折入递推）；空间可用时刻 **A** 成为相对本次决策的接口（`_space_available_ns_estimate`，取代旧 `_eviction_wait_estimate` 时长串行前置与 K5 `covered_wait_ns` 抵扣；**D11 起该接口升级为 `_space_ready_ns_estimate` 分阶段足迹形态——见 D11 行**——`A = max(写回完成, 深缺口活跃排空 running+active)` 绝对量，无串行加法即无被覆盖分量双计）：式(12) `A_dest` 门控全部目标写腿（copy chunk 链/池恢复/tile 暂存流自 A 起发射）、式(13) `A^work` 门控计算投影。**发射 frontier 核对（验收红线——不能仅改预测器制造不存在的重叠）**：P 准入三腿在真实执行侧均**决策时刻**发射——`reserve_request_capacity`/`prepare_prefill`/prefill 前缀读流规划以 `at_ns=now` 提交、流表准入相登记、请求其后才入队（sh30_online_scheduler 准入链），构图中 chunk 0 在准入主链、尾块旁挂支链流式到达（graph_batch_builder，无"先整份搬运后计算"串行段）——故 P 准备腿自 0 起估、与排队重叠是真实执行顺序；D 边界**迁移/credit 腿随加入列车发射**（pending_decode_ready → 下一列车，"迁移腿在加入列车才发射，此刻零字节移动"）——自 `max(Q, A)` 起估、不与 D 等待重叠（不虚构）；**边界逐出**（阶段预约事务＋换址半边）决策时刻旁路支链即时——A 自决策时刻起、与 D 等待重叠（真实）。旧 `Q + max(history_prep, eviction_wait)`（D 入口）与 `frontier = Q + eviction_wait` 前置（P 入口）废除、无开关——旧 max 把依赖驱逐后才能写目标的腿提前到尚无空间时刻、串行前置把与排队/写回的真实重叠双重计费。**验收（v2.0 §22-D03）**：Q=100、空间和准备在计算前已可用的例子不再重复支付准备时间（restore 500/Q 100 ⇒ cost 544，旧串行 644）；依赖驱逐后才能写目标时不早于 A（restore ready = A+500 = 802，非 max 形态 500）。merge 腿容量准备在 merge 控制点才发射（无更早真实 frontier）——串行保留不重叠。notes 披露：`space_ready_ns`（A）、`prep_issue_frontier`（各腿发射 frontier 说明）。**零新增开关**。单测：`joint/test_d03_unified_timeline.py`（10 用例：Q 观测字段守恒锚/发射 frontier 披露/Q×恢复重叠/copy 链排队吸收/A_dest 门控/深缺口绝对排空/D 写回×等待重叠/D 深缺口无双计/D 迁移腿不虚构重叠/D 迁移写等空间）＋改锚 `joint/test_joint_credit_pricing.py`（3308/3466/407）、`joint/test_joint_fixes.py`（A 接口组件锚）、`online/test_joint_k_batch.py`（深缺口绝对排空）、`joint/test_joint_remote_read_staged_path.py`（4406 退化锚口径） |
 | merge 目标 HBM 写腿（D05，2026-09-27） | **已实现＋单测验证** | `_shard_leg_ns` 的目标写腿条件自"仅 read/copy/staging"扩为四 kind 全量在——kind="merge" 同付**源读＋正确方向 NoC＋目标 HBM 写**三腿 max（v2.0 C02/§15.2 式 22"每次 payload 仍包含源 HBM 读、正确方向 NoC、目标 HBM 写"；计价修改：不声称全局 P/D 组合最优、不声称未测低开销）。与执行侧同腿型：sh30 `_register_transfer_flows` 对 noc_migrate 恒登记双 HBM 端点（目标端口 exec 写腿对 merge 落点写恒有）、`hbm_port_flow_registry` 模块注记同面——旧"merge 无 exec 写腿"计价（C1 期落字）与执行腿型失配废除，**无开关可选项**（直接替换规范）。落点空间准备是另一前驱：仍由调用方空间接口单列计价（home/exec_merge 前缀；D03 期 `_space_available_ns_estimate`，**D11 起升级为 `_space_ready_ns_estimate` 分阶段足迹形态——见 D11 行**），容量充足不令写腿消失——写腿是带宽服务、空间等待是容量前驱，两者正交。目标端口除数 = 各自方向路径末端 rank（正反向独立路线集合不变，K5 口径）。**控制确认（metadata/commit 段，式 22 T^commit）**：本协议真实存在的确认 = 图侧 merge 尾标记节点（每 decode rank 1 op/1 B COMP，链在本 rank merge 传输链后）——零载荷字节、无 NoC 流，服务时间低于整数 ns 粒度且无独立服务率来源 ⇒ 不虚构控制字节时间；其结构位置（提交在载荷之后、整轮串行殿后）已由 merge 段合成式如实保留，真实控制载荷协议若引入须在该段补计。link_quota δ_adm 冻结值 0 注记同步（合并腿改三腿 max 后"I/有效带宽" ≤ 已计价合并腿，正 δ_adm 仍属重复计费，C10 决议不变）。**验收（joint修改文档 D05）**：目标 HBM 慢 NoC 快时 merge 反映目标写瓶颈（原语层 600→2400、估计层 merge_ns=3600 且 reverse 披露 15000）；容量充足不令该项消失（双侧 10^9 空闲、无 home/exec_merge_eviction_writeback_est 注记而写腿在场）。**零新增开关**。单测：`joint/test_joint_shard_pricing.py::MergeTargetWriteLegTest`（3 用例）；既有金样全部未漂——成因：既有夹具 hbm=1e9 快于 noc 或 port_registry=None（u=0 时写腿与源读腿同值不改 max）。
@@ -685,7 +652,7 @@ MainWall现输出既有fluid五桶及EventQueue.proceed的累计已完成调用�
 | 每路径资源份额，去掉吞吐倒推流数（D13，2026-09-27） | **已实现＋单测验证** | `CandidatePathNocShare`（joint/joint_cost_model.py，小型只读**每资源/每路径** NoC 服务视图，与 D06 `CandidateStageHbmShare` 同族）替换单个全局并集瓶颈除数 `priced_divisor`：每条 shard 路径独立求值其实际经过链路的份额 = max(注册在册流, 遥测时间加权流数) + 候选自身经该链路份数（include_self 可剥离）——**单路径拥塞不错误减速无关路径**；零字节 shard 不进自身份额族、共链自身重叠计费保留；链路/路径两级 memo 使同路径/阶段的查询共用结果（E4 去重的每路径形态）。消费点全覆盖：`_transfer_ns_shards`/`_shard_stream_ns_shards`/`_pool_transfer_ns_shards`（`noc_divisor` 参数位改 `noc_share`）、P 入口 copy/remote 主计价腿、D 边界迁移/credit 腿、chunk 链与逐 rank 供给基元；`_union_noc_divisor` 删除；breakdown 冻结字段 `contention_divisor` 改披露视图最坏路径除数（ceil，保守侧）、stay/recompute 无计价腿维持单次注册表调用。**删除 capacity/rate 冒充流数回退**（v2.0 §9.2 不做清单）：`TelemetryLinkFlowView` 遥测腿收紧为流数口径——速率-only 链路 = 流数**显式未知**，除数退在册流近似；`measured_effective_rate` 保留观测/披露通道；披露键 `legacy_rate_divisor_links` → `unknown_flow_count_links`（SH 镜像 `telemetry_degradation.legacy_rate_divisor_entries` → `unknown_flow_count_entries`）；流数优先与旧流 max 去重保留（不重计）。**复用在线逐 shard 路由身份**（C11）：路径族 = `route_paths_fn`（与 `_register_transfer_flows` 的 shard.noc_path 同一 `deterministic_xy_route` 源），链路键与注册表同空间。**零新增开关**；不声称全局 P/D 组合最优、不声称未测低开销。单测：`joint/test_d13_path_share.py`（12 用例：路径解耦手算锚/原语内部构造/共链自身重叠/零字节过滤/遥测流数只抬覆盖路径/旧流与候选不重计/速率-only 显式未知/register_path 路由身份复用/只读快照/memo 共用/披露形态）+ `joint/test_joint_telemetry_divisor.py`（D13 语义重钉：流数口径除数/未知披露/整型 LinkId fail-closed/速率-only 不抬计价）+ `joint/test_hbm_port_flow_registry.py` E4（remote/copy divisor_multi 调用 1→0 严格下降、stay/recompute 单次保留） |
 | 决策 schema、传输取整与语义版本（D17，2026-09-27） | **已实现＋单测验证** | 受控验证批的 schema/取整/版本身份（v2.0 §18/D17；零新增开关）。**版本身份**：常量 `MODEL_SEMANTICS_VERSION`（joint_config，现值 `v3.2-2phase-20260928`——2026-09-28 D06 式(6) D 边界 credit 腿同分母收口升版，前代 `v3.1-2phase-20260927` = 2026-09-27 修复轮二、`v3-2phase-20260927` = 两阶段边界首版；本修订含 D09 tile 固定化/D16 有界模板/D10 静默重建执行图/D03 frontier 对齐/D17 遥测基准取整等，remote-read 族成本与执行时序相对前代有系统性变化）随 run manifest（`manifest_dict` 键 `model_semantics_version`）与逐条决策日志（`joint_admission`/`decode` 行及 `boundary_decision` 记录）落盘——**语义改变必须升级该版本号，旧实验不自动代表新模型，旧结果文件与旧 SHA 原样保留、不重命名为新协议结果**。**schema 扩展**：`ActionCostBreakdown` 由 C5 冻结 11 字段扩至 28 字段（公式版本、决策阶段/纪元、两阶段实例/动作配对、继续标记、剩余前向、预测里程碑 `predicted_next_token_done`/`predicted_service_done`/`predicted_merge_done`、当前区间布局、继承义务 ID、分阶段峰值空间、暂存峰值、近似状态；全部带缺省=直接构造夹具零漂移）；`_JOINT_BREAKDOWN_LOG_FIELDS` 同步扩 28、嵌套元组递归转 list（JSON 可重建）；决策行新增公式版本/阶段/纪元/两阶段配对/剩余前向键与逐候选 `measured` 真值槽位（未执行候选恒 NA——§19.2，真值只来自受控同状态执行，不用预测值冒充实测）；`estimate_D_remaining`/`select_decode_target_and_action` 新增 kw-only 纯披露参数 `decision_epoch`/`inherited_obligation_ids`（不计价、不改选择）。**取整口径**：传输函数带宽服务项由 `int(bytes/rate)` 向下截断改为**向上取整**（`_transfer_ns`/`_shard_leg_ns`/`_pool_transfer_ns_shards` 及 `_transfer_ns_shards`/`_shard_stream_ns_shards`；恰整除零漂移），零字节无事务严格为 0（F1 启动固定成本契约不变）。验收：可从日志重建一次候选计算的公式版本、输入来源、字节/空间与关键等待。单测：`joint/test_d17_schema_version_rounding.py`（20 用例）+ `online/test_joint_decision_schema.py`（冻结锚 28 字段重钉与决策行 D17 键）+ 改锚 `joint/test_d03_unified_timeline.py`/`test_d06_hbm_stage_share.py`/`test_d08_context_growth_fold.py`/`test_d18_boundary_decision.py`/`test_joint_shard_pricing.py`/`test_joint_credit_pricing.py`/`test_hbm_port_flow_registry.py`/`online/test_joint_m_batch.py`（旧截断数值锚按 D17 取整口径重钉，不按旧数值逐位一致阻止语义修正） |
 | home/merge 账本事务 | **merge v2 已实现＋单测验证（2026-09-17 需求②）** | 少并多方向裁决（两侧保留量比大小、小侧整份搬大侧——min 双向计价与物化同判据）；零池写（I6：merge 事务不产生本会话 remote_store）；结果恒全层 LOCAL@胜者、home 迁移胜者（全仓第二个 home 赋值点）；copy/recompute 反向零字节翻转（零传输、无空间准备）；REMOTE 基就地保留（裁定③）；空间准备只走统一 T+E `_ensure_capacity`（R4 自降级/k=0 池归并兜底**退役**——双侧深缺口才 fail-closed，合同变更登记 PROVENANCE；`merge_degrade_events` 冻结、新 run 恒空）；版本键恰好一次（R4/N9 沿用）+ 到达合同 = service_done 锚 + 依赖门控（C3b，见 §2）；容量缺口台账落账边界 = 确认终态（K6 沿用；run 末导 `joint_kv_ledgers.json` 侧车含 deep_gap 台账）；decode 停滞死锁守卫与逐列车增长逐出三路进图不变（自查 A/D） |
-| remote-read 执行流 | **已实现（D09 有限字节双缓冲 tile 流＋prefill 前缀读流分阶段，唯一执行口径）＋单测验证（2026-09-26 协议升级）** | 读流按**字节 tile** 切块（tile = 配置字节按一个 token KV 粒度向下对齐；`JOINT_REMOTE_READ_TILE_BYTES`：`auto`=协议固定 256 token／显式正整数字节，<1 token fail-closed——不能改成无限缓冲）；每 rank **两块真实 HBM 暂存**（含 K+V，`REMOTE_READ_STAGING_BUFFERS=2` 协议常量）：**tile 生产受缓冲复用释放门约束**——tile 2 头部旁挂预取（第二缓冲）、tile ≥3 由**消费 tile t-2 的体块发射点**经释放 ack（tag 配对跨 rank 因果）延迟发射（消费后归还 credit）：慢计算不导致源端无限泵出、**任意时刻远读暂存 ≤2 块**；首 tile 恒走 pd_transfer/主链发射路径；tile recv 完成门仍由对应体块 arm（I2 门并集；体块**逐迭代**切分、gates = 覆盖迭代的 tile 全集、tiles_per_pass = ⌈base/tile⌉ **可 >2**——`remote_read_exec_tile_tokens` 单一裁决点 **2026-09-27 修复轮二起 tile 恒 = 配置值固定**（废除旧 max(tile,⌈base/2⌉) 放大：放大使每块暂存字节随历史长度无界增长，违反 §17.1"不把容量/缓冲暗改无限"），逐 tile lag-2 流水消费——tile t 消费 → 槽位释放 → tile t+2 可入，任意时刻每 rank 暂存占用 ≤ 2×tile_bytes 在 N>2 时仍成立；tile/体块消费 1:1 对齐是释放链可表达的前提）；待发 tile 账本列车尾标记/completion 双重 fail-closed；跨列车缓冲复用由链序承接（tile 1 主链在前列车体后）。**M1′ 执行侧过读修正（式 18a）**：decode credit 每步读量 = 目标缺少的远端基础区间字节——输入/已生成 decode 增量的 KV 本地读、不过 NoC（旧"每步 base+input+decode 终态全上下文"过读口径废除，执行侧与 JCM 字节基数自此同口径）。**暂存真实预约**：每 rank 双缓冲 tile 字节随 remote-read 准入 `reserve_request_capacity` 提交（`KVCapacityReservation.staging_shard_bytes/staging_tile_tokens` 逐字段入账）——容量可行性/驱逐估计/占用视图计入、完成/异常注销（终态退休指标回冲对称），非宿主大数组冒充容量。**prefill 前缀读流扫描次数（式 11）**：`prefill_remote_read_scan_passes`（chunk/query tile 闭式，a⌈q_c/q_t⌉+1_{b>0}⌈b/q_t⌉）单一裁决点——执行侧逐组传输字节 × 扫描次数、JCM `RequestView.prefill_scan_passes` 同源同值。**D07（M1′ 计价侧，2026-09-27）**：`RequestView` 另携 chunk/query tile **kernel 模板身份**（`prefill_chunk_tokens`/`query_tile_tokens`，成对供给、正整数构造即校验）——JCM `_remote_read_passes` 自已知 U 与身份**闭式推导**扫描次数（不依赖外部传入的未说明数字；准入 RequestView 携 `p_chunk`×`REMOTE_READ_QUERY_TILE_TOKENS` 同一裁决点身份），执行侧供给值降级为**一致性校验对象**（与推导不一致 fail-closed 拒价）；JCM 字节基数仍为**基础历史 × 遍数**（式 18——输入/生成增量本地读、不跨 Mesh），decode 步数 = 因果时域估计不变。多 remote 成员同列车体块门取覆盖迭代 tile 并集（I2）；R15 逐切片键 `rid#decode#{j}` 登记/核销不变；R14 停滞成员跳过顺延（I2 联动）不变；WP9 first_token 拆分与体块化正交（首步批=迭代 1 体块、余量批逐迭代）。**v1"批量读流+readiness barrier 串行口径"与 2026-09-17"步数切块 K（`JOINT_REMOTE_CREDIT_ITERS`）"均已物理删除**（无开关可选项；旧 env 键任何显式值 fail-closed）。计价（2026-09-26 **双缓冲闭式**，v2.0 式 14/15/附录 A.1）：读流按执行协议 tile（D16 对齐后与执行切片同源）连续切块、首块发射约束（tile 2 于 tile 1 到达后发出、tile j≥3 于 tile j-2 消费后）、启动/逐跳时延按**每个实际事务块**计入 x；prefill 腿消费池 = prefill 计算、decode 腿消费池 = decode 计算（按字节份额均匀分摊——§12.3 等大等服近似）；关键路径合成自 D02（2026-09-26，v2.0 式(12)/(13) 逐层数据/空间就绪递推）改为逐层递推：一次性传输（prefill 读流 tile 到达/池恢复）只门控其真实消费的层区间（PARTIAL 基前缀 [0,p) 等 tile 到达、后缀 [p,L) 等池恢复，LOCAL 基全层等 tile 到达），prefill 计算按固定层数均分（余数前置、总和守恒）为固定数量算子段，`prefill 首前向 = estimate_first_forward`（式 13 递推——数据晚到层之后的计算由递推保留，§11.3 的 110 ns 例通过；纯算术，O(L)）、`repeat 段 = decode 腿闭式（estimate_repeat_segment 统一入口，自首前向完成后发射）`、`cost = prefill 首前向 + repeat 段 + merge`——**D03 统一时间轴（2026-09-26）**：`start_ns = Q`（target_wait 只门控计算）、`ready_space_ns = A`、tile 到达/池恢复等目标写腿 `A_dest = A` 自决策时刻发射并与排队重叠（`Q + A + 腿`串行前置废除、无开关；旧"首 credit + max(余量流, 计算)"与阶段级 `max(prefill 腿闭式, suffix_restore)` 合成同废；零门控动作递推退化为整段计算——守恒锚）。腿闭式值转审计披露（`remote_read_prefill_ns`/`remote_read_decode_ns` notes 键口径不变），递推结果经 `prefill_first_forward_ns` notes 键披露；计价 tile = 执行切片/暂存 = 同一裁决点的执行 tile（**D16 对齐面收口，2026-09-26**：闭式事务切块与执行切片同一裁决点 `remote_read_exec_tile_tokens`，§12.2"执行器与预测器必须采用相同规则"——旧"计价按配置 tile、执行按放宽 tile"的两侧粒度差登记项废除；**2026-09-27 修复轮二 D09 tile 固定化**：该裁决点不再放宽，tile 恒 = 执行配置值、暂存 = 2×配置 tile 恒定——旧"窄基础区间放宽不激活"条款随之失效，D09 手算锚不漂移）。C5 冻结 breakdown 字段口径不动（`remote_read_first_credit_ns`/`remote_read_stream_ns` 转为首 tile/其余流送的审计拆分、不进关键路径），阶段量经 notes 四键披露 `remote_read_prefill_ns`/`remote_read_decode_ns`/`suffix_restore_ns`/`prefill_pipeline_overlap_ns`；**空间足迹（F14 改宗）**：remote-read 足迹 = input 增量（PARTIAL 另加池恢复后缀）+ 双缓冲暂存真实字节（与预约同源）；**适用面 = LOCAL 基＋PARTIAL 基混合形态（需求①，`JOINT_REMOTE_READ_PARTIAL` 消融）；REMOTE 基仍拒**。单测：`joint/test_d09_remote_read_double_buffer.py`（验收四条：≤2 暂存/停泵/1·2·尾块·跨列车守恒/真实预约）+ `online/test_remote_credit_stream.py`（tile 结构/释放链/I1/R15）+ `online/test_remote_credit_multiblock.py`（预检谓词/命名）+ `joint/test_joint_credit_pricing.py`（闭式手算锚/式 14 对照/配置裁决点）+ `joint/test_joint_remote_read_staged_path.py`（PARTIAL 分阶段闭式锚）+ prefill 分阶段五件（2026-09-25，`online/test_prefill_remote_read_{manager,graph,lifecycle,scheduler}.py` + `joint/test_joint_remote_read_staged_path.py`）+ `online/test_d16_runtime_linkage_bounded_backend.py`（D16 2026-09-26：对齐面收口＋后端有界性——折叠体节点数与迭代数无关/待发 tile 延迟生成与残留 fail-closed/合并止于 T_max·drain·末工作迭代/模拟 HBM 状态形状 token 无关/credit tile 四事件时间闭合）+ `joint/test_d07_remote_scan_derivation.py`（D07 2026-09-27：模板身份闭式推导/供给值一致性校验 fail-closed/身份合法性/多 chunk 增长·tile 一致·增量不跨 Mesh 验收三条） |
+| remote-read 执行流（D09/D07） | **已退役（2026-10-14 远读退役）** | 整条执行链（有限字节双缓冲 tile 流、prefill 前缀读流分阶段、`rid#readplan` 承诺账本、远读暂存 lease、decode credit 腿、D07 模板身份闭式）随 remote-read 动作整体删除，无开关保留档；删除范围与被取代章节见仓根 `PROVENANCE.md` 顶部退役批登记节，历史验收原文见该节登记条目。 |
 | merge 物理流 | 已实现 | 完成批发射真实回传/池写回流 + merge 尾标记节点（watch 送达 = merge_done 事件侧，决策日志独立披露行——到达锚在 service_done，尾标记转为到达后依赖门控，C3b）；下一轮数据准备经 store-tail 前递补偿等待（合并成本进入下一轮数据等待；全部动作/八组合一致处理） |
 | 逐层恢复与 prefill 重叠 | **已实现＋单测验证＋真实路径对拍（2026-09-22 C15）** | 列车级保守门退役为**逐层段就绪门控**（`emit_layer_segmented`：热前缀段 + 各恢复组层段，段 i 只等组 i——跨段字节与整段单次发射逐位一致测试钉死）；restore_group 标记的后缀恢复腿组间并行发射（2026-09-25 P2-R2：组间无边互并发，每组只 arm 与本组层区间交集的 store 条目、每跨缘对恰一次共享 1B 中继、并集条目同批发射内消费——组 0 区间无匹配的 fail-closed raise 面不变；同实例 partial 分支 + 跨实例旁挂支链）、逐组逐 rank 目标 HBM 门；`rid#restore` 区间账本（issue/complete 守恒，drain/merge/mark_complete 三结算边界，双结算 fail-closed；M4 2026-09-26：issue/complete 事件携带可选 `at_ns`——SH 在线面传 tick，配对 = 恢复窗口下界；缺省 None 保确定性测试）；RESTORE_GROUP_LAYERS=8（≤8 层单组 = 旧单笔锚）；completion 残留门 fail-closed。真实路径对拍：stress 夹具 10s/270 请求 partial_copy_hits=78、restore 分解 270 行 hidden_ratio p50=0.9999（旧单笔口径保留为回归锚，非开关） |
 | 链路遥测三件（C6–C8） | **已实现＋单测验证＋真 run 对拍** | C++ `--link-telemetry` 每 epoch 导出链路合计字节、活跃时间及时间加权活跃流数 `active_flows`；JCM 计价与 AIMD 分母走**流数口径**（D13：合计速率只作 transfer_factor 观测/披露通道，速率-only 链路 = 流数显式未知——除数退在册流近似，不做 capacity/速率换算；混合缺失拒绝）。JCM `divisor_effective` 将时域 `#readplan` credit 账本与实际并发代表流分开：共享链上先按真正可同时在场的流登记，再和遥测流数合并；SH 侧 LinkId→端点键换算 + `#readplan` 预登记对账核销。既有 2s 窗流数与注册数相等，分叉形态由单测钉死；旧对拍覆盖率 100%、字节覆盖 99.99987%、漏计方向单向微欠（0 过计）、divisor 最大相对偏差 6e-8 仅描述原对拍窗。 |
@@ -693,23 +660,22 @@ MainWall现输出既有fluid五桶及EventQueue.proceed的累计已完成调用�
 | copy 块级交接（C13） | **已实现＋单测验证（23 用例）** | 前缀 NoC 迁移 K 对齐块化（`_cb{k}` 唯一相位键）+ 源端交接即释放（home 释放点前移）；尾块旁挂支链 2026-09-25 P1 起逐笔并行（块间无边、每块 fork 头块后主链 frontier，块内 ack 新形态 ack_recv_c←本块 send_c／ack_send_c←本块 recv_c，gate 逐块重 arm——旧 send 直连链/exec recv 顺序链/ack 链尾随的整段串行删除）；守恒科目 `#handoff`（交接重复量）/`#copy-stream`（一遍历史）入决策日志；`copy_handoff_events` 一行入 run 末 ledger 侧车（C11 落点） |
 | remote 完整结算与 kv_delta_journal（C14） | **已实现＋单测验证（14 用例）** | 完成检查清单七项逐项"机制在案⇔测试钉死"（源端结构保护双通道/保护解除时机 = merge+mark_complete 同 tick/少并多按两侧实际保留量/失败分支闭合）；`kv_delta_journal` merge_back 两出口恰一行（方向互斥/零字节翻转/传输字节/两侧保留量/home 迁移轨迹）+ `_on_merge_done` 闭合审计门（watch 交付 ⇔ journal 行，缺行 fail-closed）；C4b-FIX 补 remote-read auto-K 多块 credit 命名缺陷（`_rcb{b}` 后缀，5 用例 + 两族臂 exit 0） |
 | face_static 静态对照臂（C17） | **已实现＋单测验证（18 用例）** | `JOINT_SCHEDULER_MODE=face_static`（policy variant，不进八组合）：实例按 `hop ≤ floor(ρ)` 静态距离球掩码、球内逐实例择优；身份纪律（manifest `face_static_identity` 键：本文内部的静态距离变体、不冒称完整 FACE）；F7 唯一耦合例外——强制 `JOINT_QUOTA_MODE=off`（manifest 注记 `quota_forced_off`）；矩阵 `TJE_face_static` 臂常驻 |
-| P→D 边界二次决策（D18，2026-09-26） | **已实现＋单测验证** | **强制 P/D 同址废除**（原红线 #4 / `selected = state_index` 钉扎退役）：初始决策 = 式(1a) `estimate_P_with_continuation`——每候选估 P＋默认 D 延续 π0 的整轮、**只提交 P**（初始候选不做全 D 搜索）；真实 P 完成事件触发状态机 `P_COMPUTE_DONE -> D_DECISION_PENDING -> D_PLAN_SELECTED -> D_COMMITTED -> D_RUNNING`（单请求全阶段见 `joint_stage`，v2.0 §16.4）：以真实边界快照 `PDBoundaryView`（完整型/增量型两族布局）＋共同 n̂_B（式 4a，`CausalHorizonEstimator.estimate_boundary`）做**恰好一次全候选遍历** `estimate_D_remaining`（式 1b），原地继续 x0 恒为候选（归并在 (i_P, action) 记录，`is_continuation=true`，不作第五动作）且**平局优先**——平局键 `(cost, 非继续标记, instance_index, action_order)`（式 1c：只有严格更低成本才切换）；已完成 P 不重复收费、切换迁移腿是 t_B 后新工作不回填 P 期重叠；**已知终止直接结算不选 D**（`decode_length==0` 即首 token 满足停止条件的回放协议形态，`P_COMPUTE_DONE -> MERGE_PENDING`；无退出列车 → completion 触发门锚 drain 列车 seg1 块末，`emit_completion_batch block_end_stage="seg1"`——P 完成即本轮全部计算完成，语义精确）；D 提交（第一笔不可撤销操作=预约换址）后无第三次选点。执行侧配套：跨实例预约事务（C15 重设计；**2026-09-26 D20 起该两段式 `move_request_capacity_reservation`/`revert_...` 调用口整体退役替换为幂等 epoch 的 `commit_stage_reservation_transaction`/`abort_stage_reservation_transaction` 单一事务面——见 D20 行**；§16.4 提交失败回退继续态，`boundary_commit_fallback` 披露行）；`decode_hbm_feasible_instances` 死代码随钉扎删除；切换候选 = 完整型 copy 迁移（`move_prefill_to_decode` 真实 NoC 迁移）与增量型 remote-read 换执行实例（U 迁移＋基础区间继续远读）——**边界可选面曾为协议裁定的两族子集（2026-09-26 修缺登记），2026-09-27 修正轮 C4 已翻转为完整动作面**：边界 recompute（静默重建）/边界基材料化 copy（含增量@home 仅补 U、@i_P 基材料化、@第三目标两腿）/完整型多源 remote-read 的执行钩子全部接线（计价 `estimate_D_remaining` 补 recompute/copy/纯多源闭式、KV 账本 `commit_boundary_decode_transition`＋`_merge_back_three_position`、在线调度 drain 按动作分派＋rebuild span/首 token 恰一次、构图器多腿槽位），旧协议裁定串 `BOUNDARY_RULED_OUT_REBUILD/_BASE_MATERIALIZATION/_MULTI_SOURCE` 随之删除（适用面重写为区间缺失物理语义），掩码臂（`mask_recompute`/`mask_copy_recompute`/`mask_remote_recompute`）冒烟真实执行验证全 exit=0，钉测 `online/test_c4_boundary_full_surface.py`（13 用例，含 recompute+load-first 全链路）；同状态对照（验收纪律2）经 `run_scripts/joint_same_state_probe.py` 受控执行实测（不再真值 NA）；`select_decode_target_and_action` 边界规则为协议级（不随调度模式变体——J-off 臂差异只在初始选择）；决策行披露 `decision_stage`/`joint_decode_action`/`is_continuation`/`boundary_decision`（含 n̂_B 与全部边界候选代价）。单测：`joint/test_d18_boundary_decision.py`（2026-09-27 修正轮改写后 19 用例：沉没纪律/迁移新工作/候选面/不适用理由=物理语义钉测＋掩码×边界钉测（C1）/式 1c 平局与切换/恰好一次遍历/终止直结/继续提交）＋ `joint/test_joint_fixes.py` 预约事务钉测（换址/容量失败保留继续态）＋ `online/test_decision_route_serialization.py` noc_migrate 全链序列化 |
-| D 候选专用边界视图（D19，2026-09-26） | **已实现＋单测验证** | `joint/boundary_layout.py`（不反向 import JCM，单向依赖）：`BoundaryKVLayout`——从 `PDBoundaryView` 派生的区间级因果布局（完整型单 context 区间／增量型 base+increment 两区间、权威归属、片上位置 ≤3 界、继承义务表、首输出 pending token 与终止状态），逐目标派生 **D 远读只数对当前 j 实际在远端的基础区间（式 18a）、D copy 只补目标缺少部分**；`StageWork`——v2.0 §13.1 两决策点工作表接口（D 边界零新 U-prefill；D recompute = H_B **静默重建**不输出/不采样/不推进 RNG；长度入口归一为剩余前向 n̂_B；首 token 只消费一次——二次消费 fail-closed）。`estimate_D_remaining` 字节口径改由布局逐目标推导：原地 remote 远读基数 = 源端仍保留基础区间（**非本地 hit**）、切换候选准备腿 = 增量区间 U（非 H_B 全量）、残余远读 = 一次性准备落地后的实际远端区间；§6.5 纯两源口径（第三目标 copy 补 H+U、remote 反复读两个真实来源）与已承诺接收端排除（义务表 `committed_transfer` 命中即不再发送/复读）在布局接口给全并钉测——纯两源形态曾为边界可选面协议裁定运行时不可选，**2026-09-27 修正轮 C4 已接线**：完整型多源 remote-read（纯多源：并集基数×n̂_B、逐源路径族、并集流双缓冲闭式——单源与旧闭式逐位一致）与增量型 copy@第三目标（H+U 两腿）进入运行时可选面，`boundary_two_source_remote_bytes` 披露键随协议裁定串一并退役清理。**等待接口拆分**（§19.1 P→D 专项）：原地接续（j==i_P）等待基 = 在服流 running+active——**不重排队**，排队积压不再重压已有请求、也不再能翻转边界 argmin；新接纳（j≠i_P）等待基 = 目标全部在账负载——**不免费插队**（执行侧经 pending_decode_ready KV 就绪栅栏与busy 门进入，不进新请求队尾）。披露：候选 notes 增 `boundary_wait_kind`/`boundary_on_chip_locations`/`boundary_move_legs`/`boundary_copy_legs`（`boundary_two_source_remote_bytes` 纯两源披露键随 C4 执行接线与裁定串退役删除——多源/第三目标形态已可选，不再需要"纯两源逐遍字节"的旁路披露）；边界决策记录增 `stage_work`/`inherited_obligations`/`boundary_wait_kind`（decode 决策行透传，schema 前向兼容）。D19 不新增任何功能开关。受 D19 等待拆分影响的两处旧测**按新协议重写**（argmin 翻转机制自排队积压改在服负载）：`joint/test_d18_boundary_decision.py` 回退用例与 `online/test_decision_route_serialization.py` noc_migrate 用例。单测：`joint/test_d19_boundary_layout.py`（27 用例：§19.1 P→D 专项四态、D recompute 静默重建＋首 token 一次、等待接口拆分、区间纪律（≤3 位置/账本字节真值/已承诺接收端排除）、执行侧边界决策披露与成员入队面） |
-| 跨阶段预约事务、引用交接与边界构图（D20，2026-09-26） | **已实现＋单测验证** | v2.0 §14.5/§16.4 阶段事务面（第二批执行协议统一收口；**零新增开关**；D18 两段式 `move_request_capacity_reservation`/`revert_request_capacity_reservation_move` 调用口**整体退役替换**，无并存档）。**幂等 epoch**：runtime `joint_boundary_epoch`（每进入一次未提交边界 +1）= 阶段 idempotency key，同 (request, epoch) 重复提交原子重放回执（重复 P 完成通知/在途 ack 不产生第二份换址或逐出；同 epoch 冲突目标/动作与 epoch 回退 fail-closed；容量类失败 epoch 不在案——换状态后同 epoch 重评合法，§16.4）；重复 P_COMPUTE_DONE 通知在 drain 入口幂等忽略（`boundary_duplicate_ignored` 披露行）。**resize 半边（式 20a）**：`stage_reservation_footprint` 单源（与准入同套助手：动作感知 token 基数＋目标侧 PARTIAL 后缀＋D09 暂存）重推 D 阶段承诺，`required = max(0, 承诺 − own 驻留)` 真实 T+E；缩小释放未被物理工作占用的旧承诺分量（回执 `released_shard_bytes` 逐 rank 披露；D09 暂存随动作切换清账）；缩到自有驻留之下 fail-closed。**引用交接**：会话阶段引用 `acquire/release_stage_reference`——P 末尾到 D 提交期间本请求基础 KV **不进冷 victim 集合**（`_completed_resident_candidates` 与可回收视图同面排除；其他请求不停顿、无全系统栅栏）；D 目标预留与来源读计划建立后 P 阶段引用先于预约注销释放；引用未释放时注销预约 fail-closed（引用与预约不得双活/丢失）；release 幂等空放。**abort**：提交失败且无不可逆工作时保留继续方案——换址回退源实例＋足迹恢复提交前快照，epoch 结局记 aborted（重复 abort 重放；已提交逐出照常携带在回执，不丢账）。**运行态与完成归属**：runtime 新增 `completion_instance_index`（边界提交点锁定，完成信号按归属实例核销，缺归属 fail-closed）、`joint_stage_reference_id`、`joint_boundary_epoch`（plan_dict/决策行披露；边界决策记录增 `stage_epoch`/`stage_transaction`，schema 前向兼容）。**构图器守卫**：`_plan_and_emit_trains` 加入列车前先验全体成员阶段（仅 D_COMMITTED 可入——未定位置/动作的 D 永不入列车；拒绝原子性=不做任何账面变更），qp 队列头带 chunk 工作而处于 P 后阶段同样 fail-closed；选定成员迁移腿＋共享 readiness barrier 即目标第一步门（既有机制）。**边界可选面协议裁定（2026-09-26 修缺登记，2026-09-27 修正轮 C4 翻转）**：曾裁定为两族子集（完整型 {stay@i_P, copy@j≠i_P}、增量型 {remote-read@i_P, remote-read@j≠i_P}）——边界 recompute（静默重建）/边界基材料化/完整型多源引用交接候选保持运行时排除；修正轮 C4 已把上述形态的执行图钩子（目标第一步门/边界基材料化传输/多源引用交接）全部接入运行时协议，适用面重写为区间缺失物理语义、协议裁定串 `BOUNDARY_RULED_OUT_*` 删除（`test_boundary_surface_ruling_reasons` 钉测随面改写）；批次4 同状态对照（验收纪律2）经 `run_scripts/joint_same_state_probe.py` 受控执行（同状态强制钩子 `JOINT_FORCE_BOUNDARY_REQUEST/ACTION`），不再限于可选面子集；口径同面登记于 README 本四行（D10/D18/D19/D20）与实验总纲 §7.1。**验收清单"取消"幂等项的承载映射（同日登记）**：本仓回放协议无请求取消机制（无 EOS/取消事件侧，停止条件由 workload 脚本定义），"取消"语义由 (a) **已知终止直结**（`_joint_boundary_terminal`→`_settle_terminal_at_boundary`：`P_COMPUTE_DONE→MERGE_PENDING`，不选 D、边界当场闭合完成事务——首 token 已满足停止条件即无 D 可取消）与 (b) **幂等 release/abort 重放**（`release_stage_reference` 重复释放幂等空放＝"取消与提交竞合"安全面；`abort_stage_reservation_transaction` 同 epoch 重放 aborted 回执；重复 P_COMPUTE_DONE 通知 drain 入口幂等忽略）承载；钉测 = `test_terminal_settles_directly_without_d_selection`（test_d18）＋ `test_reference_release_is_idempotent`/`test_abort_reverses_flip_and_records_epoch_outcome`/`test_abort_without_committed_flip_is_idempotent_noop`/`test_duplicate_prefill_done_notification_is_idempotent`（test_d20）。单测：`joint/test_d20_stage_transaction.py`（19 用例）＋ `joint/test_joint_fixes.py` 预约事务钉测（换新 API）＋ `test_sh30_kv_incremental_invariants.py`（同实例事务轮换） |
-| 预测器自身开销统计接口＋验收清单补钉（ACC·验收纪律第 1/3 类，2026-09-27） | **已实现＋单测验证** | v2.0 §19.3 代码侧统计接口（**恒开、零新增开关**——§19.3 是验收必需项非可选机制）。**账本**：`joint/predictor_cost_accounting.py`——P 准入/D 边界两阶段决策墙时逐次样本（最近秩法 P50/P95/P99，整数纳秒确定性；`candidates_max` 候选面宽度供"4N→8N 不推定总仿真只慢固定倍数"的逐决策证据）、D11 容量驱逐摘要快照查询费样本（摘要维护费）、后端事件量（图批节点/边/watch/未来 alarm 四计数，经基类 `_note_backend_batch` no-op 钩子由 sh30 覆盖喂入——幂等重放在 sequence 门早退不重复计数）、run 末快照 `predictor_cost_snapshot`：预测器合计、宿主总占比（整数 ppm，宿主锚 = 调度器构造点）、峰值 RSS（`ru_maxrss`，Linux KiB→字节口径如实披露；无 resource 平台报 unavailable）、决策日志大小（`online_service` 在 `online_decision_log.jsonl` 落定后以文件字节回填，未产出 = None 不猜）——快照以 `predictor_cost` 键入 `online_stats.jsonl` 汇总行。宿主 Python 墙时 ≠ 真实片上决策时延（§19.3 末段），快照只供验收证据；首轮工程目标（两次决策额外宿主时间 ≲ 固定回放 10%）是待验证预算，本接口只供数不下结论。**验收清单逐项核对补钉（第 1 类）**：通用清单补 TP 不均匀/KV 头复制（式 2 整头不整除精确＋TP>头数 padding rank 零 KV 记账＋逐 rank 真值进边界空间等待）、实际增长超预测（管理器级：Z→O 转账不双计、超预约天花板 fail-closed、超材料化足迹真实 T+E 逐出）；P→D 专项补第 6 条（控制费用使小收益迁移不再合算——切换-only 迁移腿 2,570 ns 为控制费，毛收益 2,000<2,570 继续胜出/2,700>2,570 才切换，正控制对称钉）、第 10 条（第一笔新物理工作后不再次选点——提交后环境变化使 argmin 翻转，迟到重复 P_COMPUTE_DONE 仍幂等忽略、决策零改写；新请求同环境真实切换为正控制）、第 12 条（P 末尾不预发 D——初始预测含 D 而真实边界前零 decode 决策行/零就绪队列成员/归属未锁定）。其余清单项由既有钉测看护（逐项映射见 `joint/test_acc_acceptance_formula_conservation.py` 模块头）。单测：`joint/test_acc_acceptance_formula_conservation.py`（11 用例）＋ `joint/test_acc_predictor_cost_accounting.py`（10 用例：分位数学/空集/fail-closed 校验/快照字段完备/JSON 可序列化/sh30 接线冒烟） |
+| P→D 边界二次决策（D18，2026-09-26） | **已实现＋单测验证** | **强制 P/D 同址废除**（原红线 #4 / `selected = state_index` 钉扎退役）：初始决策 = 式(1a) `estimate_P_with_continuation`——每候选估 P＋默认 D 延续 π0 的整轮、**只提交 P**（初始候选不做全 D 搜索）；真实 P 完成事件触发状态机 `P_COMPUTE_DONE -> D_DECISION_PENDING -> D_PLAN_SELECTED -> D_COMMITTED -> D_RUNNING`（单请求全阶段见 `joint_stage`，v2.0 §16.4）：以真实边界快照 `PDBoundaryView`（恒完整型单族布局——2026-10-14 远读退役起，增量型族随 P=remote-read 消亡）＋共同 n̂_B（式 4a，`CausalHorizonEstimator.estimate_boundary`）做**恰好一次全候选遍历** `estimate_D_remaining`（式 1b），原地继续 x0 恒为候选（归并在 (i_P, action) 记录，`is_continuation=true`，不作第五动作）且**平局优先**——平局键 `(cost, 非继续标记, instance_index, action_order)`（式 1c：只有严格更低成本才切换）；已完成 P 不重复收费、切换迁移腿是 t_B 后新工作不回填 P 期重叠；**已知终止直接结算不选 D**（`decode_length==0` 即首 token 满足停止条件的回放协议形态，`P_COMPUTE_DONE -> MERGE_PENDING`；无退出列车 → completion 触发门锚 drain 列车 seg1 块末，`emit_completion_batch block_end_stage="seg1"`——P 完成即本轮全部计算完成，语义精确）；D 提交（第一笔不可撤销操作=预约换址）后无第三次选点。执行侧配套：跨实例预约事务（C15 重设计；**2026-09-26 D20 起该两段式 `move_request_capacity_reservation`/`revert_...` 调用口整体退役替换为幂等 epoch 的 `commit_stage_reservation_transaction`/`abort_stage_reservation_transaction` 单一事务面——见 D20 行**；§16.4 提交失败回退继续态，`boundary_commit_fallback` 披露行）；`decode_hbm_feasible_instances` 死代码随钉扎删除；切换候选 = copy 迁移（`move_prefill_to_decode` 真实 NoC 迁移；增量型 remote-read 换执行实例形态已随 2026-10-14 远读退役删除）——**边界可选面曾为协议裁定的两族子集（2026-09-26 修缺登记），2026-09-27 修正轮 C4 已翻转为完整动作面；2026-10-14 远读退役后恒完整型**：边界 recompute（静默重建）/边界基材料化 copy（@i_P 基材料化、@第三目标两腿）的执行钩子全部接线（多源 remote-read 钩子已随远读退役删除）（计价 `estimate_D_remaining` 补 recompute/copy/纯多源闭式、KV 账本 `commit_boundary_decode_transition`＋`_merge_back_three_position`、在线调度 drain 按动作分派＋rebuild span/首 token 恰一次、构图器多腿槽位），旧协议裁定串 `BOUNDARY_RULED_OUT_REBUILD/_BASE_MATERIALIZATION/_MULTI_SOURCE` 随之删除（适用面重写为区间缺失物理语义），掩码臂（`mask_recompute`/`mask_copy_recompute`；`mask_remote_recompute` 已随 2026-10-14 远读退役删除）冒烟真实执行验证全 exit=0，钉测 `online/test_c4_boundary_full_surface.py`（13 用例，含 recompute+load-first 全链路）；同状态对照（验收纪律2）经 `run_scripts/joint_same_state_probe.py` 受控执行实测（不再真值 NA）；`select_decode_target_and_action` 边界规则为协议级（不随调度模式变体——J-off 臂差异只在初始选择）；决策行披露 `decision_stage`/`joint_decode_action`/`is_continuation`/`boundary_decision`（含 n̂_B 与全部边界候选代价）。单测：`joint/test_d18_boundary_decision.py`（2026-09-27 修正轮改写后 19 用例：沉没纪律/迁移新工作/候选面/不适用理由=物理语义钉测＋掩码×边界钉测（C1）/式 1c 平局与切换/恰好一次遍历/终止直结/继续提交）＋ `joint/test_joint_fixes.py` 预约事务钉测（换址/容量失败保留继续态）＋ `online/test_decision_route_serialization.py` noc_migrate 全链序列化 |
+| D 候选专用边界视图（D19，2026-09-26） | **已实现＋单测验证** | `joint/boundary_layout.py`（不反向 import JCM，单向依赖）：`BoundaryKVLayout`——从 `PDBoundaryView` 派生的区间级因果布局（恒完整型单 context 区间——2026-10-14 远读退役起，增量型 base+increment 两区间族随 P=remote-read 消亡；权威归属、片上位置 ≤3 界、继承义务表、首输出 pending token 与终止状态），逐目标派生 **D copy 只补目标缺少部分**（D 远读只数远端基础区间的口径已随 2026-10-14 远读退役删除）；`StageWork`——v2.0 §13.1 两决策点工作表接口（D 边界零新 U-prefill；D recompute = H_B **静默重建**不输出/不采样/不推进 RNG；长度入口归一为剩余前向 n̂_B；首 token 只消费一次——二次消费 fail-closed）。`estimate_D_remaining` 字节口径改由布局逐目标推导（远读基数/增量区间 U/残余远读三项口径已随 2026-10-14 远读退役删除，现恒完整型）；第三目标 copy 补 H+U 与已承诺接收端排除（义务表 `committed_transfer` 命中即不再发送）在布局接口给全并钉测——多源 remote-read/增量型 copy@第三目标两形态曾于 2026-09-27 修正轮 C4 接入运行时可选面，**已随 2026-10-14 远读退役删除**（`boundary_two_source_remote_bytes` 披露键随协议裁定串一并退役清理）。**等待接口拆分**（§19.1 P→D 专项）：原地接续（j==i_P）等待基 = 在服流 running+active——**不重排队**，排队积压不再重压已有请求、也不再能翻转边界 argmin；新接纳（j≠i_P）等待基 = 目标全部在账负载——**不免费插队**（执行侧经 pending_decode_ready KV 就绪栅栏与busy 门进入，不进新请求队尾）。披露：候选 notes 增 `boundary_wait_kind`/`boundary_on_chip_locations`/`boundary_move_legs`/`boundary_copy_legs`（`boundary_two_source_remote_bytes` 纯两源披露键已随远读退役删除）；边界决策记录增 `stage_work`/`inherited_obligations`/`boundary_wait_kind`（decode 决策行透传，schema 前向兼容）。D19 不新增任何功能开关。受 D19 等待拆分影响的两处旧测**按新协议重写**（argmin 翻转机制自排队积压改在服负载）：`joint/test_d18_boundary_decision.py` 回退用例与 `online/test_decision_route_serialization.py` noc_migrate 用例。单测：`joint/test_d19_boundary_layout.py`（27 用例：§19.1 P→D 专项四态、D recompute 静默重建＋首 token 一次、等待接口拆分、区间纪律（≤3 位置/账本字节真值/已承诺接收端排除）、执行侧边界决策披露与成员入队面） |
+| 跨阶段预约事务、引用交接与边界构图（D20，2026-09-26） | **已实现＋单测验证** | v2.0 §14.5/§16.4 阶段事务面（第二批执行协议统一收口；**零新增开关**；D18 两段式 `move_request_capacity_reservation`/`revert_request_capacity_reservation_move` 调用口**整体退役替换**，无并存档）。**幂等 epoch**：runtime `joint_boundary_epoch`（每进入一次未提交边界 +1）= 阶段 idempotency key，同 (request, epoch) 重复提交原子重放回执（重复 P 完成通知/在途 ack 不产生第二份换址或逐出；同 epoch 冲突目标/动作与 epoch 回退 fail-closed；容量类失败 epoch 不在案——换状态后同 epoch 重评合法，§16.4）；重复 P_COMPUTE_DONE 通知在 drain 入口幂等忽略（`boundary_duplicate_ignored` 披露行）。**resize 半边（式 20a）**：`stage_reservation_footprint` 单源（与准入同套助手：动作感知 token 基数＋目标侧 PARTIAL 后缀；D09 暂存分量已随 2026-10-14 远读退役删除）重推 D 阶段承诺，`required = max(0, 承诺 − own 驻留)` 真实 T+E；缩小释放未被物理工作占用的旧承诺分量（回执 `released_shard_bytes` 逐 rank 披露；D09 暂存随动作切换清账）；缩到自有驻留之下 fail-closed。**引用交接**：会话阶段引用 `acquire/release_stage_reference`——P 末尾到 D 提交期间本请求基础 KV **不进冷 victim 集合**（`_completed_resident_candidates` 与可回收视图同面排除；其他请求不停顿、无全系统栅栏）；D 目标预留与来源读计划建立后 P 阶段引用先于预约注销释放；引用未释放时注销预约 fail-closed（引用与预约不得双活/丢失）；release 幂等空放。**abort**：提交失败且无不可逆工作时保留继续方案——换址回退源实例＋足迹恢复提交前快照，epoch 结局记 aborted（重复 abort 重放；已提交逐出照常携带在回执，不丢账）。**运行态与完成归属**：runtime 新增 `completion_instance_index`（边界提交点锁定，完成信号按归属实例核销，缺归属 fail-closed）、`joint_stage_reference_id`、`joint_boundary_epoch`（plan_dict/决策行披露；边界决策记录增 `stage_epoch`/`stage_transaction`，schema 前向兼容）。**构图器守卫**：`_plan_and_emit_trains` 加入列车前先验全体成员阶段（仅 D_COMMITTED 可入——未定位置/动作的 D 永不入列车；拒绝原子性=不做任何账面变更），qp 队列头带 chunk 工作而处于 P 后阶段同样 fail-closed；选定成员迁移腿＋共享 readiness barrier 即目标第一步门（既有机制）。**边界可选面协议裁定（2026-09-26 修缺登记，2026-09-27 修正轮 C4 翻转）**：曾裁定为两族子集（完整型 {stay@i_P, copy@j≠i_P}、增量型 {remote-read@i_P, remote-read@j≠i_P}——增量型族已随 2026-10-14 远读退役消亡，边界布局恒完整型）——边界 recompute（静默重建）/边界基材料化候选曾保持运行时排除；修正轮 C4 已把上述形态的执行图钩子（目标第一步门/边界基材料化传输）接入运行时协议（多源引用交接钩子已随远读退役删除），适用面重写为区间缺失物理语义、协议裁定串 `BOUNDARY_RULED_OUT_*` 删除（`test_boundary_surface_ruling_reasons` 钉测随面改写）；批次4 同状态对照（验收纪律2）经 `run_scripts/joint_same_state_probe.py` 受控执行（同状态强制钩子 `JOINT_FORCE_BOUNDARY_REQUEST/ACTION`），不再限于可选面子集；口径同面登记于 README 本四行（D10/D18/D19/D20）与实验总纲 §7.1。**验收清单"取消"幂等项的承载映射（同日登记）**：本仓回放协议无请求取消机制（无 EOS/取消事件侧，停止条件由 workload 脚本定义），"取消"语义由 (a) **已知终止直结**（`_joint_boundary_terminal`→`_settle_terminal_at_boundary`：`P_COMPUTE_DONE→MERGE_PENDING`，不选 D、边界当场闭合完成事务——首 token 已满足停止条件即无 D 可取消）与 (b) **幂等 release/abort 重放**（`release_stage_reference` 重复释放幂等空放＝"取消与提交竞合"安全面；`abort_stage_reservation_transaction` 同 epoch 重放 aborted 回执；重复 P_COMPUTE_DONE 通知 drain 入口幂等忽略）承载；钉测 = `test_terminal_settles_directly_without_d_selection`（test_d18）＋ `test_reference_release_is_idempotent`/`test_abort_reverses_flip_and_records_epoch_outcome`/`test_abort_without_committed_flip_is_idempotent_noop`/`test_duplicate_prefill_done_notification_is_idempotent`（test_d20）。单测：`joint/test_d20_stage_transaction.py`（19 用例）＋ `joint/test_joint_fixes.py` 预约事务钉测（换新 API）＋ `test_sh30_kv_incremental_invariants.py`（同实例事务轮换） |
+| 预测器自身开销统计接口＋验收清单补钉（ACC·验收纪律第 1/3 类，2026-09-27） | **已实现＋单测验证** | v2.0 §19.3 代码侧统计接口（**恒开、零新增开关**——§19.3 是验收必需项非可选机制）。**账本**：`joint/predictor_cost_accounting.py`——P 准入/D 边界两阶段决策墙时逐次样本（最近秩法 P50/P95/P99，整数纳秒确定性；`candidates_max` 候选面宽度供"3N→6N 不推定总仿真只慢固定倍数"的逐决策证据（2026-10-14 三动作终态；原 4N→8N））、D11 容量驱逐摘要快照查询费样本（摘要维护费）、后端事件量（图批节点/边/watch/未来 alarm 四计数，经基类 `_note_backend_batch` no-op 钩子由 sh30 覆盖喂入——幂等重放在 sequence 门早退不重复计数）、run 末快照 `predictor_cost_snapshot`：预测器合计、宿主总占比（整数 ppm，宿主锚 = 调度器构造点）、峰值 RSS（`ru_maxrss`，Linux KiB→字节口径如实披露；无 resource 平台报 unavailable）、决策日志大小（`online_service` 在 `online_decision_log.jsonl` 落定后以文件字节回填，未产出 = None 不猜）——快照以 `predictor_cost` 键入 `online_stats.jsonl` 汇总行。宿主 Python 墙时 ≠ 真实片上决策时延（§19.3 末段），快照只供验收证据；首轮工程目标（两次决策额外宿主时间 ≲ 固定回放 10%）是待验证预算，本接口只供数不下结论。**验收清单逐项核对补钉（第 1 类）**：通用清单补 TP 不均匀/KV 头复制（式 2 整头不整除精确＋TP>头数 padding rank 零 KV 记账＋逐 rank 真值进边界空间等待）、实际增长超预测（管理器级：Z→O 转账不双计、超预约天花板 fail-closed、超材料化足迹真实 T+E 逐出）；P→D 专项补第 6 条（控制费用使小收益迁移不再合算——切换-only 迁移腿 2,570 ns 为控制费，毛收益 2,000<2,570 继续胜出/2,700>2,570 才切换，正控制对称钉）、第 10 条（第一笔新物理工作后不再次选点——提交后环境变化使 argmin 翻转，迟到重复 P_COMPUTE_DONE 仍幂等忽略、决策零改写；新请求同环境真实切换为正控制）、第 12 条（P 末尾不预发 D——初始预测含 D 而真实边界前零 decode 决策行/零就绪队列成员/归属未锁定）。其余清单项由既有钉测看护（逐项映射见 `joint/test_acc_acceptance_formula_conservation.py` 模块头）。单测：`joint/test_acc_acceptance_formula_conservation.py`（11 用例）＋ `joint/test_acc_predictor_cost_accounting.py`（10 用例：分位数学/空集/fail-closed 校验/快照字段完备/JSON 可序列化/sh30 接线冒烟） |
 | 修复轮二（2026-09-27，独立审查 12 项"部分完成"判定的修复） | **已实现＋钉测**（集中门禁由并行车道执行，见 `~/joint_fix_round2_20260927/gates/`，本行不预填门禁结论） | **D09 固定字节双缓冲**：`remote_read_exec_tile_tokens` 放大废除（旧 max(tile,⌈base/2⌉)），tile = 配置值固定，每 pass/窗 tile 数 = ⌈base/tile⌉ 可 >2、逐 tile lag-2 流水消费，暂存 = 2×配置 tile×kv_token_bytes 恒定（§1/§3 remote-read 行已同面改写）。**D16 有界模板**：`plan_prefill_remote_read_transfers` 返回 O(窗数) 模板（不整轮物化窗×tile 列表）、逐窗 `prefill_read_window_tiles` 消费点物化、builder 复检改模板级；P 决策行新增 `prefill_remote_read_summary` 有界聚合披露键。**D10 静默重建执行图**：构图器消费 `joint_suppress_sampling/output`——重建 span 不进 final norm/logits 聚合输出位、不产生 debut first_token 观测、算子时间照常，首 token 只消费一次（`online/test_d10_silent_rebuild_execution.py`）。**D03 frontier 对齐**：P 准备腿起点 = 目标实例在飞列车剩余工作（sh30 `_prep_frontier_by_instance` 冻结快照，roofline 服务估计），不虚构"决策时刻发射"重叠；notes 键 `P_prep_at_target_frontier(+Nns)`/空闲保持 decision_epoch（`joint/test_d03_frontier_alignment.py`）。**D14 审计落定**：runtime.decode_length = D−1 前向步（首 token 由 P 末前向产出，§5.2），`observe_completed` 直收已是正确单位——换算需求经证据链审计取消（span 铁证＋dl=0 结算＋KV 增长对账，`joint/test_d14_forward_step_semantics.py` 钉死）。**D17 取整**：`observe_transfer_from_link_window` base_ns 向下取整改 ceil（基准时长不为少报方向截断；`joint/test_d17_rounding.py`）。**D19 边界视图填充**：`BoundaryKVLayout.terminated/first_token/obligations` 经 `BoundaryRuntimeStateEnvelope` 真实接线（在线侧物化），区间 layer_start/layer_end 填真实层覆盖（PARTIAL 基 = 驻留前缀层；`joint/test_d19_boundary_layout_population.py`）。**D20 预约回滚**：drain 边界异常路径显式 `abort_stage_reservation_transaction`（幂等 epoch；post-commit 物理落地窗口不伪造回退，留账随 fail-closed 终止收敛并披露；`online/test_d20_reservation_rollback.py`）。**D11/D17 D 边界容量审计**：D 边界决策行新增 `capacity_summary_view`（与 P 行同构造）＋ `capacity_ledger_by_tp_rank`（C/W/O/Z＋F 逐实例逐 rank 序列化）——仅凭日志可重算 D 阶段容量判断。**D12 平价与回退披露**：`joint/test_d12_merge_projection_parity.py` 预测-执行逐字段平价（三位置/退化/去重/容量回退 ≤2）；`last_merge_outcome` 新增 `fallback_sequence` 完整回退序列。**D05 披露**：merge 尾部 commit = 零时 watch 锚（核实无真实时长），计价不加幽灵段，notes 键 `merge_commit_anchor=zero_time_watch`（`joint/test_d05_merge_commit_disclosure.py`）。**D04 端点登记**：零距离池路径（noc_path<2）的 remote_load/remote_store HBM 端点补登记（与计价端点同覆盖；执行侧 `_register_transfer_flows` 的旧 `len(noc_path)≥2` 门漏登部分由修复轮三补全为无条件登记——见 §6 修复轮三注）。**测量钩子**：`JOINT_FORCE_ENTRY_ACTION`（与 `JOINT_FORCE_BOUNDARY_REQUEST` 成对武装 P 入口单点强制、与 `JOINT_FORCE_BOUNDARY_ACTION` 互斥、缺省 off＝行为逐字节不变，测量仪器——`online/test_c7a_force_entry_probe_hook.py`）；probe 工具 `joint_same_state_probe.py` 扩 entry/boundary/replay 三族臂＋式(24) 边界损失＋宿主开销 ≤10% 预算如实披露。**版本串升版 `v3.1-2phase-20260927`（前代 v3-2phase-20260927）：旧实验记录持旧版本串时不得重命名为新协议结果、不得自动充当新模型证据**（§3 D17 行同面） |
 | 域三口径度量（C16） | **已实现＋单测验证（现有 43 用例）** | `slo_tools/domain_metrics.py`：D_feed/D_econ/实际选择三口径分列（elected/forced 分列、measured=NA 如实标注）+ 派生指标（hop 分位/方向分布/瓶颈资源/内外等值线逐 (请求,实例) 导出）+ A3' δ 敏感性重定价（δ∈{σ̂,2σ̂,4σ̂} 离线诊断，σ̂ 三级链）+ home 迁移轨迹消费面；driver 五 sink 扇出、非 joint run 完全静默 |
 | 负载区间与运行输入快照（2026-09-24） | 已实现＋回归验证 | `load_imbalance.py` 对 joint 请求以决策日志 `completion.tick` 为实际完成端点；`train_ledger.exits` 只核对成员与实例，其 tick 为列车发射时刻。历史非 joint run 继续输出 `legacy_train_ledger_emit` 代理端点并显式标注。运行入口把生效的 `trace_config.csv` 与 hardware JSON 归档到 run_dir；`domain_metrics.py` 优先显式参数，其次用 run 本地快照或旧命名副本推导 ρ，缺 run 本地证据时给 NA 与告警，不读取当前 checkout 猜测历史硬件。 |
 | SLO 水印对 joint 的口径 | 已登记（joint 词表已扩，R12；**merge v2 重放已扩，2026-09-17**） | slo_tools 三工具已登记 astra-sim-joint；水印重放词表已扩 joint 专属事件（跨实例工作副本双驻留记账——SessionState base/working；决策行携带 joint_action/history_transfers/重算口径字段；完成行显式披露 `joint_working_copy` 真值——复审 K3）；**merge v2**：completion 行携带 `merge_direction` 走 v2 重放（forward=exec 工作副本搬 home／reverse=home 基础释放搬 exec 或零字节翻转／in_place=无主回暖就地转正；零池写断言——本会话 remote_store 即 fail；noc 源端与方向交叉校验；`joint_merge_forward/reverse/in_place/zero_byte_flip/home_migration` 计数；混合形态准入的池恢复后缀进期望工作副本基数），无该字段的旧日志走 legacy 分支（金样对照兼容）；**非账本披露行词表（2026-09-22 C19）**：`kv_eviction` 账本行之外，joint_admission 族 + `readplan_reconcile`/`readplan_settle`/`quota_oneshot_overflow`/`merge_done`/`link_telemetry_coverage`/`joint_decision_metrics` 披露行并入跳过词表（M4 2026-09-26 增补 `kv_eviction_done`——逐出尾标记完成披露行，跳过 = 零重放语义差）（run 级行 request_id 为空不误触 fail-closed；13 臂矩阵 postprocess 全净实证）；**2026-09-27 修正轮 W1–W5 词表扩展**：P→D 迁移重放（W1，`decode_instance_index != prefill_instance_index` 先按披露口径源扣/目标加再做 D 增长——修前 combo_T 重放负占用）、三位置 merge 形态（W2，`_joint_completion_three_position` 含 REMOTE 基 forward 胜者=source 与 rebuild×base==exec 重合豁免——W5）、staging lease 两阶段生命周期（W3，acquire/release 在册表＋run 末悬挂 fail-closed）、P→D 折叠清账（W4，迁移腿落点==base 槽按 W vs f(P) 恒等式二分：完整型 −base_bytes 释放/增量型并基零占用差）；16 臂水印后处理统一收口 ALL-STEPS-PASSED、b4 五臂复算绿（证据 ~/joint_fix_round_20260927/gates/g4_*.log）；决策日志重放仍为上界口径（逐 rank 判决需 kv_delta_journal 权威层——journal 已随 run 末 sidecar 序列化为第四键、`domain_metrics` 四层可信度分级已消费（settlement_full_join>partial>empty>decision_log_only；F3 修复批 2026-09-22），同 S3） |
 | 容量逐出的决策日志披露（R17，2026-09-17） | 已实现＋单测验证 | 旁路逐出咽喉点（`_emit_eviction_only_nodes`）在图发射后同 tick 落 `kind=kv_eviction` 决策行（decision.evictions 携带 `_transfer_summary` 条目）——覆盖 decode 增长逐出（成功/停滞/唤醒三路）与准入失败已提交逐出（潜伏位点：当批零触发——reserve 的 feasible 预检拦截在先 + prepare 受 R1' 预约不变量覆盖，R17-7 探针实证）；`prefill_evictions` 为结构性恒空死通道（准入预约覆盖全动作足迹，drain expand gap≡0），注释+单测钉死不新增空字段载运；转移摘要补序列化 `resident_prefix_layers_before/after` 与 `source_instance_index`（连锁不变量免重建 + victim 归位，R17-1d）；tick 守护 = 断言 `_batch` 在场（N4）。M4（2026-09-26）：行 decision 增 `watch_id` 配对键，逐出尾标记真实完成处（`_on_eviction_watch`）同键落 `kind=kv_eviction_done` 披露行——kv_eviction→kv_eviction_done tick 差 = 实际池写回时长（驱逐/恢复时间线测量执行侧真值）。工具侧配套：hbm_watermark 主循环 kind 门前拦截 kv_eviction（自担 tick 单调 + 逐条 `apply_evict` + 非空率哨兵）+ `_joint_prefill` fail-early 对称校验（prefill_shrink/discarded>0 fail-closed）+ (primary, base) 二元组前缀连锁不变量（R17-2/3/4）；hopbytes `collect_joint` 消费 kv_eviction 池写流（此前通道 2/3 系统性漏计）并移除 prefill_evictions 死读。历史 run 决策日志定格缺失、离线不可重建——水印三件套与可信 hopbytes 需带本修复重仿真（第三次错误处置，方案 v4） |
 | 远端端口并发后端（2026-09-24 SerDes 片外链路并发化） | 已实现＋C++ 夹具验证＋固定输入 A/B 恒等（**零池负载平凡一致性**，不证争用正确性） | 串行 FIFO 端口整体替换为并发流体端口（§7-D'；`AnalyticalRemoteMemory.{hh,cc}`）＋发射门控改造（远端 MEM 独立无上限计数槽、与 comm 槽解耦——comm/hbm_dma 槽 2026-09-25 起同为计数制无上限（PROVENANCE §45）、static 结束门计入远端 MEM、`NDEBUG` 无关的 occupy/release fatal 校验、析构未释放诊断）。夹具锚：`RemotePortNwayTest` S1–S10（300｜90/120/140/150ns｜1B 流体 1/6ns）＋16 端口×128 流压力（2048/2048、peak_streaming=128、redistribution=2032=16×127）；`RemotePortOnlineGateTest`/`RemotePortStaticGateTest`（同 rank 双 MEM 发射后 in_flight=2、peak_streaming=2、shared_busy_ns>0；MEM 与 COMM_SEND 门互不占用；static finish 等全部终结）；`HbmNwayTest` 重锚（contention ON/OFF）。sensing 开启时逐事务明细 `remote_memory_transactions.jsonl` 惰性落 `bridge_dir/`（首个完成事务才建文件；成功后 runner 搬 `results/` 并入归档常驻白名单；写失败 fail-closed FATAL）。固定输入 A/B（快照基线树 vs 本树）：决策/发射序列与全系统指标除宿主计时字段外逐字节恒等——窗口内池后端完成事务数为 0，属零池负载平凡一致性；Python 计价面与 C++ 零耦合，无重标定触发。证据 `/tmp/serdes-joint-work/`（gate_rerun.log 49 步全 PASS、precision_rerun.log、r4_*.log、stress_results.txt、pricing-audit.md） |
-| 三机制消融/外部对照实验 | 未运行（工具面已具备） | 仿真规模正式 campaign 仍属另行登记的实验任务（§8 第 6 步）。2026-09-27 修正轮已交付其工具面：16 臂冒烟矩阵（含三掩码臂）＋同状态 probe 工具（`run_scripts/joint_same_state_probe.py`，式(24) 选择损失受控实测，首轮 2 请求 6 候选 6/6 PASS）；**2026-09-27 修复轮二 probe 扩展**：entry/boundary/replay 三族臂（P 入口 `JOINT_FORCE_ENTRY_ACTION` 枚举/边界同状态对照/固定动作回放）＋式(24) 边界损失＋宿主开销 ≤10% 预算达成/未达成/数据不足如实披露——正式规模同状态 campaign 与四外部 baseline 仓对齐仍属修正轮之外 |
-| P→D 边界策略仪器开关 `JOINT_BOUNDARY_POLICY`（一次映射对照臂；验收纪律第 2 类，2026-09-28 审计整改批） | **已实现＋单测验证（`online/test_boundary_policy_one_shot.py` 23 用例）** | 取值域 {`off`,`p-continuation`}（定义源 `joint/joint_config.py` `BOUNDARY_POLICIES`），缺省 `off` = 两阶段闭环（D18 主语义）**行为零漂移**（off 时 D 决策行无 `boundary_policy` 披露键 = 行与既有钉测逐位一致）。`p-continuation` = **一次映射对照臂**（测量仪器，验收纪律第 2 类"一次映射 vs 两阶段闭环对照"专用；生产 run 不设）——D 边界不做二次全候选重估（跳过 `select_decode_target_and_action`，候选恒空列表、`cost_ns` 真值 NA 如实披露，ACC 照常记样本 candidates=0 供控制开销对照），直接按 P 准入 `estimate_P_with_continuation` 披露的默认延续形态提交：decode_instance = prefill_instance = i_P、完整型 = stay@i_P、增量型（P=remote-read）= remote-read@i_P（沿用 P 入口已建的同一 remote 读计划延续分支，不新造平行路径）；延续 = 原地继续无迁移腿，D 提交后的完成归属/构图器/merge 链路与两阶段延续分支完全同路（同一 commit 路径）；已知终止仍直结结算（`_joint_boundary_terminal`→`_settle_terminal_at_boundary`，不进一次映射分支）。**fail-closed**：非法值启动失败（`joint_config.__post_init__` 单一裁决点，env 与直接构造同面）；**与 probe 强制钩子 `JOINT_FORCE_BOUNDARY_ACTION`/`JOINT_FORCE_ENTRY_ACTION` 互斥武装**（同设 = 仪器二义，调度器启动失败——sh30 `_check_boundary_policy_instrument_conflict`；p-continuation 下边界钩子无候选面可强制）；p-continuation 要求 `JOINT_ALLOWED_ACTIONS` 掩码放行 stay（完整型 P 动作的默认延续恒 stay@i_P，掩码剔除 stay 即一次映射在边界提交掩码外动作、违反"掩码是候选集上限"合同，启动即拒）。生效 run 落 manifest 键 `boundary_policy`（`joint_mechanism_manifest.json`）＋ D 决策行专用披露键 `boundary_policy`（独立键，与 `forced_reason` 词表无冲突）。probe 配套：`run_scripts/joint_same_state_probe.py` one_shot_pair 成对臂（两阶段参照臂 run 目录 twophase_reference × 一次映射臂 run 目录 oneshot_p_continuation，同 trace 同参数仅差 env）＋一次映射 vs 两阶段闭环对照汇总段（D 改点率/同址改动作率/交接字节（P→D 迁移腿 shards 与 C13 copy_handoff 两口径）/E2E 均值/完成率/控制开销（predictor_cost decision_wall 与 D 阶段分列））。消费面：sh30 `BOUNDARY_POLICY_ENV`/`__init__` 裁决/D 边界单一裁决两形态/披露键/日志读取。单测：`online/test_boundary_policy_one_shot.py`（23 用例，含 off 零漂移/fail-closed 三裁决/披露键缺席面） |
+| 三机制消融/外部对照实验 | 未运行（工具面已具备） | 仿真规模正式 campaign 仍属另行登记的实验任务（§8 第 6 步）。2026-09-27 修正轮已交付其工具面：冒烟矩阵（交付时 16 臂含三掩码臂；2026-10-14 远读退役删除 `TJE_remote_off` 与 `mask_remote_recompute` 两臂后为 14 臂）＋同状态 probe 工具（`run_scripts/joint_same_state_probe.py`，式(24) 选择损失受控实测，首轮 2 请求 6 候选 6/6 PASS）；**2026-09-27 修复轮二 probe 扩展**：entry/boundary/replay 三族臂（P 入口 `JOINT_FORCE_ENTRY_ACTION` 枚举/边界同状态对照/固定动作回放）＋式(24) 边界损失＋宿主开销 ≤10% 预算达成/未达成/数据不足如实披露——正式规模同状态 campaign 与四外部 baseline 仓对齐仍属修正轮之外 |
+| P→D 边界策略仪器开关 `JOINT_BOUNDARY_POLICY`（一次映射对照臂；验收纪律第 2 类，2026-09-28 审计整改批） | **已实现＋单测验证（`online/test_boundary_policy_one_shot.py` 23 用例）** | 取值域 {`off`,`p-continuation`}（定义源 `joint/joint_config.py` `BOUNDARY_POLICIES`），缺省 `off` = 两阶段闭环（D18 主语义）**行为零漂移**（off 时 D 决策行无 `boundary_policy` 披露键 = 行与既有钉测逐位一致）。`p-continuation` = **一次映射对照臂**（测量仪器，验收纪律第 2 类"一次映射 vs 两阶段闭环对照"专用；生产 run 不设）——D 边界不做二次全候选重估（跳过 `select_decode_target_and_action`，候选恒空列表、`cost_ns` 真值 NA 如实披露，ACC 照常记样本 candidates=0 供控制开销对照），直接按 P 准入 `estimate_P_with_continuation` 披露的默认延续形态提交：decode_instance = prefill_instance = i_P、延续恒 stay@i_P（2026-10-14 远读退役起完整型单族；原增量型（P=remote-read）= remote-read@i_P 延续分支已随远读退役删除）；延续 = 原地继续无迁移腿，D 提交后的完成归属/构图器/merge 链路与两阶段延续分支完全同路（同一 commit 路径）；已知终止仍直结结算（`_joint_boundary_terminal`→`_settle_terminal_at_boundary`，不进一次映射分支）。**fail-closed**：非法值启动失败（`joint_config.__post_init__` 单一裁决点，env 与直接构造同面）；**与 probe 强制钩子 `JOINT_FORCE_BOUNDARY_ACTION`/`JOINT_FORCE_ENTRY_ACTION` 互斥武装**（同设 = 仪器二义，调度器启动失败——sh30 `_check_boundary_policy_instrument_conflict`；p-continuation 下边界钩子无候选面可强制）；p-continuation 要求 `JOINT_ALLOWED_ACTIONS` 掩码放行 stay（完整型 P 动作的默认延续恒 stay@i_P，掩码剔除 stay 即一次映射在边界提交掩码外动作、违反"掩码是候选集上限"合同，启动即拒）。生效 run 落 manifest 键 `boundary_policy`（`joint_mechanism_manifest.json`）＋ D 决策行专用披露键 `boundary_policy`（独立键，与 `forced_reason` 词表无冲突）。probe 配套：`run_scripts/joint_same_state_probe.py` one_shot_pair 成对臂（两阶段参照臂 run 目录 twophase_reference × 一次映射臂 run 目录 oneshot_p_continuation，同 trace 同参数仅差 env）＋一次映射 vs 两阶段闭环对照汇总段（D 改点率/同址改动作率/交接字节（P→D 迁移腿 shards 与 C13 copy_handoff 两口径）/E2E 均值/完成率/控制开销（predictor_cost decision_wall 与 D 阶段分列））。消费面：sh30 `BOUNDARY_POLICY_ENV`/`__init__` 裁决/D 边界单一裁决两形态/披露键/日志读取。单测：`online/test_boundary_policy_one_shot.py`（23 用例，含 off 零漂移/fail-closed 三裁决/披露键缺席面） |
 | **W5：阶段事务扩展、统一结算接线与账本正式计价（2026-09-29）** | **已实现＋单测验证** | ① 统一结算状态机（§7.4）：旧 `MERGE_PENDING→MERGE_COMMITTED→DONE` 抽象替换为 `SETTLE_PENDING→SETTLE_COMMITTED→SETTLE_DONE`（旧常量已删）；`SERVICE_DONE` 单独记录（completion 行 `service_done_ns` 键 + 闭环后继 alarm 仍锚 service_done+interval，future_alarms 语义不变）；三类结算事件 = service（completion 行）/物理 merge（merge_done 行+载荷披露）/settle（新 `kind="settle_done"` 行——零载荷同刻闭合、merge watch 交付闭合，事件序=物理 merge→settle）；`_joint_settlements` 结算账本（闭合即弹出）+ `verify_run_end` 残留 fail-closed；`distributed` 执行侧当时显式拒绝（与 W3 定价侧一致；W9 起两侧均切换为目录提交型实现）。② 事务扩展（§7.2）：提交点版本校验（`expected_versions`——目录事务版本+阶段纪元表；sh30 侧 KV 纪元复查；漂移=同 tick 竞争 → `KVStageVersionConflict`/回退继续方案+`failure_class` 分列披露）；**所有来源引用**经目录 `acquire_entry_reference`（执行 pin，D 提交点 acquire/settle 子协议提交前释放——源保护窗口=D 执行期）；A22 分记（`retained_obligations`：成功/aborted 回执均携带已提交 T+E 逐出的身份/逐 rank 字节，不取消不漏计）+ attempt 维度；consolidate 回退 m_end−1 推广（`MERGE_CAPACITY_FALLBACK_MAX=2` 删除，预测侧与执行侧 len(ordered) 循环同序）。③ W1 账本正式计价接线：sh30 `__init__` 显式转发 `work_ledger_sink`；`LedgerWorldSource` 实装（资源腿精确剩余量 in-service 腿 / issued-not-streaming 非 in-service 腿 / committed-not-issued 计数披露；**逐键降级**——账本无权威腿的键回退注册表计数，不静默空背景）；决策快照（`build_decision_snapshot`，versions 七键含 ledger）+ `world_ledger_world_source` 终态 manifest 披露；journal 重放保真（剥离字段改由 `request_journal_work_ledger.jsonl.gz` 侧车承载，`iter_request_records(attach_work_ledger=True)` 前缀重放账本状态与原跑一致）；预测 manifest 并入 joint_mechanism_manifest.json 的 prediction 节。④ W6 消费切换：P 准入与 D 边界正式 n̂ 切 `estimate_conditional`（同刻同实例同一规则/版本；horizon 保留诊断/先验），到达/完成/删失/服务样本四挂点接线（shadow）。⑤ §7.2 义务执行侧：`inherited_obligation_ids` 义务表 → JCM `obligation_resolver`（settle 门控语义）+ settle 闭合门（活账本核验）。控制延迟：提交点三重复查（版本/容量/源保护）+ `control_latency_ns`/`control_commit_recheck` 披露（真实时延推进需 C++ 定时事件——登记缺口，0=assumed-zero 不变）。单测：`online/test_settlement_state_machine.py`（7）+ `joint/test_ledger_world_source.py`（8，含 journal 重放保真）+ `joint/test_d20_stage_transaction.py` W5 扩展（5）+ slo_tools settle_done 消费（3）+ 重锚 d12×2/d18/d19/remote_settlement/k_batch/N9。⑥ G-B 冒烟性能接线（首次真实 trace 投影暴露）：`resource_projection` 的活跃集计数（`_active_members`）与 `_finishes`/`_integrate`/`_settle_completions`/`_assert_conservation` 的逐事件全腿扫描在真实 D 边界（~1.5K 腿 × ~49K 事件）为 O(步×腿²)——单边界决策实测 ~407s；改为**增量成员表**（`_active_by_resource` + `_active_legs`，在与旧扫描完全相同的资格变化点维护，读值逐位相同）后 ~9.3s（44x；纯性能变更，广覆盖 1973 全绿零漂移）。 |
 | **W7：新增需求预测、验证与回退（future_demand recent/reverting 注入，2026-09-29）** | **已实现＋单测验证** | 新增 `joint/background_forecast.py`（互斥类别 (new_session_first\|session_return × revealed_type) → 资源工作模板：prefill 逐层 fixed 腿＋逐层 TP barrier＋decode 聚合 compute 腿（HBM KV 增长字节流）＋decode TP barrier＋session_return 池恢复 stream 腿；参数从 W6 类别均值派生、缺样本回退冷启动 preset 且不确定标记携带）＋`joint/forecast_validation.py`（成熟恰一次差分回填/按预测距离准入 (mode,band)/固定回退链 no_samples→anomaly→expired→template_uncovered→budget_exceeded→distribution_shift→unvalidated_distance/开销账本）。确定性注入（§8.4 第一版）：序号阈值 θ=1.0 累计跨阈生成完整代表请求、桶内等距相位（无 RNG）、注入时刻经 W2 `forecast_arrival_placeholders_ns` 重仲裁、忙时照常注入（不推迟到空闲）；闭环返回约束（处理中 session 下一轮 ≥ service_done 下界）；候选共享同一情景（`WorldContext.forecast_works/placeholders/barriers` 新增缺省空字段＋`scenario_key` 快照缓存键含模式+统计版本；`none` 档逐字节零漂移）。接线（最小面）：sh30 `_joint_world_source` 包裹 `ForecastAugmentedWorldSource`（future_demand_mode≠none 且 J-on）＋成熟驱动挂点＋闭环下界；preset 新增 `forecast_*` 参数（§9.2 表落地，来源登记 EVIDENCE）。附带 W2 内核修复：`_integrate` dust 钳位对称化（roofline 腿字节侧正残尘曾致零进展死循环）。单测：`joint/test_future_demand_forecast.py`（21，V8 六组受控用例/互斥闭环/B-C-D 单变量/none 零漂移）＋`joint/test_forecast_validation.py`（16，成熟恰一次/距离准入/回退链/开销）＋`online/test_forecast_future_isolation.py`（5，2026-09-30 修复批补 §8.3 预测器与隐藏真值隔离端到端钉测：改写后继请求 manifest 隐藏 prefill_length/decode_length/inter_request_interval_ns、保持已揭示类型与交付时刻线不变 ⇒ ArrivalStatistics/estimate_conditional/build_plan 注入集逐字段不变，future_alarms envelope 反证相异）。 |
 | **W8：同状态探针、阶段对照与闭环实验工具（instance×action 精确强制＋状态一致硬证书＋service/settle 分采，2026-09-29）** | **已实现＋单测验证** | 方案 §11.3/§12.1 W8/§3.2 末段两项 probe 迁移点落地。**(1) instance×action 强制钩子**：新 env 对 `JOINT_FORCE_BOUNDARY_TARGET`/`JOINT_FORCE_ENTRY_TARGET`（值 `<instance_index>:<action>`，与 `JOINT_FORCE_BOUNDARY_REQUEST` 成对武装）——强制**恰好的 (instance, action) 候选**（指定组合不在候选面/不适用 ⇒ 显式 fail-closed 含同动作实例清单，**不静默重选实例**）；旧 per-action `*_ACTION` 对保留向后兼容但为弃用方向（同族 TARGET+ACTION 同设 fail-closed）；armed 决策行 `forced_by_probe` 携完整身份 {stage, hook, action, instance_index, is_continuation}；D 边界决策行新增 additive `state_versions` 披露（kv_ledger_epoch/directory_version/stage_epochs——`_joint_boundary_versions` 单一事实源）。单测 `online/test_w8_force_target_hook.py`（env 语法/五类互斥/精确匹配含非最低成本实例反证/越界面显式失败/state_versions 披露/D 入口全链）。**(2) probe 双维重构**：`aggregate_by_instance_action` 逐 (instance,action) 候选全量采集（旧 `aggregate_by_action` 每动作取最低成本实例的口径退役，`rollup_actions` 仅作展示兼容层）；`generate --granularity action|instance-action`（instance-action = 逐适用 (instance,action) 候选各一臂，TARGET env，run 目录 `<rid>__<stage>__i<inst>__<action>`）；summarize 双维面（predictions/actuals/rank 键 `i<inst>:<action>`）。**(3) 状态一致硬证书**（§11.3 一致性是硬门——原 predicted-drift note 软降级退役）：重放前缀在目标边界逐字段核验 tick/seq/冻结候选面（适用性/代价/继续标记/理由）/stage_epoch/state_versions/义务/stage_work/boundary_wait_kind/model_semantics_version（P 面另含 joint_instance/action、service_factors 摘要；rng_basis=deterministic-replay-no-host-rng 披露）；任一不匹配 ⇒ 该分支 `status=state_mismatch` **不纳入同状态损失样本**；`status=ok` 仅发给全字段匹配+强制生效+实测齐全的臂；`same_state_sample_coverage` 如实披露已测子集参照。**(4) service/settle 分采**：`service_end_tick` 的 max(completion,merge_done) 混称口径退役——`service_settle_ticks` 分列 service_done_ns/settle_done_ns（W5 settle 事件），consolidate 零载荷 settle==service 显式记录（zero_payload_settle），旧世代日志回落 legacy 口径如实披露，distributed 缺 settle 事件不得回退 completion=settle（`settle_missing_policy_distributed` 预留 W9 分支）；双指标 actual_service_done−common_decision_tick 与 actual_settle_done−common_decision_tick，**排序/式(24)损失以 settle 为准**。**(5) missing/fixed_policy_arm/P 参考接续分离**：未执行（exit_code 缺）/未完成（无 completion/settle）候选标 missing 不以预测值填补；replay 臂 `arm_class=fixed_policy_whole_run`、one-shot 臂族 `oneshot_policy_whole_run`（whole-run 消融独立标记，不与同状态数据混算）；P 参考接续（P 行 decode_instance/decode_action 参考 D）与实际边界 D 分列披露（接续近似误差与资源误差分开归因）。单测＝probe selftest 扩至 5 场景 206 断言（新增场景 5：instance-action 臂+TARGET env+settle 零载荷/载荷形态+证书全匹配 ok/单字段漂移 state_mismatch 不入样本+missing 标记+P 参考接续派生+arm_class 标记）。 |
 | **W9：distributed 跨轮留存与区间级 E（G-DIST，2026-09-29）** | **已实现＋单测验证** | 方案 §7.4/§12.1 W9/§11.1 V9。**(1) 目录提交型结算**（`KVCacheManager.settle_distributed`）：settle = 提交完整有效目录（区间条目权威化、目录事务经 `_check_invariants_after_mutation` 收口）+ 执行 pin/引用释放（不永久 pin）+ 必要旧义务闭合（copy handoff/restore group 于 merge 边界兜底）+ **零物理归并**（无 merge 载荷，W5 零载荷 settle_done 同刻闭合）；版本键 `last_settled_request_id`（一请求恰一次结算）；按族收敛（copy/recompute=零字节翻转族：primary=并集@exec；remote-read=增量族：primary 保增量真值，混合形态 `distributed_shard_truth` 标记审计取 shard 分布）；home 粘性不变（不暗中重置，A13）。旧位置移入**跨轮留存通道 E**（`_distributed_retained`：旧基础段/边界来源段/迁移后的旧 primary——目录条目集合无三位置上限，§7.4），三消费点=目录镜像（`_kv_directory_retained_entries`）/守恒期望表（`_incremental_retained_contributions`）/容量摘要（`_capacity_retained_contribution_bundle`——θ 公式与增量维护框架复用，按所在实例/实际区间分桶）；consolidate 缺省恒空（零漂移）。**(2) 调度器分派**（sh30）：`_joint_settlement_policy` 单一裁决点替换 W5 拒绝点（`_complete_requests` 按 policy 分派 merge_back/settle_distributed；settlement 账本登记 `settlement_policy` 实值 + `directory_commit` 披露块）；**早到下一轮依赖门**：distributed 下会话结算未闭合 ⇒ 准入延迟留队（到达排队照常，消费受数据/目录依赖限制）；`_joint_session_view` 目录化（distributed_layout 会话 history=目录并集、base 锚=片上自 0 起最大覆盖段）；准入决策行 additive `distributed_source_surface`（位置数/区间数分别统计 + 跨轮增长 ≤ +2 断言 fail-closed）。**(3) 目录驱动 prepare**（`_prepare_prefill_distributed`）：元数据校验 = 单元格级覆盖断言（`assert_full_content_locatable`——跨持有者部分重叠区间的真并集，取代单位置等式）；四动作：stay=并集@exec local_hit（否则显式不适用）、copy=目录多源逐区间 NoC 腿（来源段全保留，chunk 释放=consolidate 优化不沿用）+目标既有留存段并入工作副本描述、recompute=0 起步重建、remote-read 连续轮**不清零** primary（exec 已持上轮增量继续增长）+ base 锚留存段检出入 base_*（下游口径兼容，守恒单计）；`resident_token_offset` 单一事实源（增量族真实 token 域 [base_H, base_H+context)——通道 A/留存段投影；merge_back/三位置归并终态归零）。**(4) 区间级 E**：`_completed_retained_segments`（目录 owner 过滤 victim——会话单实例假设推广）+ `_evict_retained_segment`（经目录 `evict_to_pool`：owner 记录保留、唯一内容在池）+ `restore_retained_segment`/`complete_retained_restore`（目录 RESTORING 状态驱动）；`_ensure_capacity` 每类 pass 主位置 victim 后接留存段驱逐；`_evict_suffix/_evict_session/_remote_store_transfer` 层段字节统一经 `_distributed_resident_layer_bytes`（缺省与旧公式逐位一致）。**(5) 会话终局**：`retire_terminal_session` 先审计后释放（悬挂引用/未完 ack/在途 copy fail-closed——`assert_no_dangling_session_state`）+ 留存段字节随终局释放。**(6) 开销计量**（§10）：`DirectoryOverheadMeter`（操作计数/累计墙时/条目峰值/逐会话逐轮来源面时间线）——settle_done 行 `directory_commit` 块 + run 末 `distributed_directory_stats` 披露行（slo_tools 词表已纳）；`same_round_merge_saved_bytes` 显式同轮口径（同轮省 merge 不报告为长期收益，E2E 对照按完整会话分列）。**(7) 预测侧**：`_reject_distributed` 拒绝点退役 → distributed settle 腿零载荷（P/D 图 notes `settlement=distributed:directory-commit-no-merge-payload`，predicted settle_done=service_done）；consolidate 路径零漂移。单测：`online/test_distributed_settlement.py`（12：4 轮多源>3/区间变化/逐出恢复可定位/容量压力留存段 victim/终局清理无悬挂+悬挂负例/consolidate 零漂移/双策略对照面/调度器分派+早到门）+ `joint/test_distributed_settlement_protocol.py`（16：来源面/增长预算/单元格覆盖/终局审计/计量）+ 重锚（action_work_graph distributed 定价、settlement_state_machine 分派、kv_directory_projection_parity 通道 A 真实区间）。 |
-| **W10：按来源 hybrid 扩展（source_subset_hybrid，V10，2026-09-29）** | **已实现＋单测验证** | 方案 §7.5/§12.1 W10/§11.1 V10；主文 §6.7/§10 `add_source_subset_plans_and_deduplicate`（仅 D 阶段）。**(1) 子集枚举与去重**（`joint/action_work_graph.py`）：候选身份 = (instance, action="hybrid", copy_subset=L 真子集 frozenset)；`effective_remote_sources`（S = missing 区间权威 holder 去重——目标已持有与在途区间不进 S）＋`enumerate_source_subset_plans`（全部 2^|S| 子集：端点 ∅/S 标 pure 映射回 remote-read/copy——复用纯动作候选不重复计价；真子集按字典序确定）＋`hybrid_support_status`（|S| > `params.hybrid_max_remote_sources`(=4) ⇒ 显式"不支持此扩展"＋枚举数披露，不静默换别种混合最优；2^|S| 复杂度显式记录不宣称常数）。**(2) 候选图构造**（`build_d_candidate` 扩 `action="hybrid"`+`copy_subset`）：L 区间走纯 copy 的 mvS 逐区间串行链（容量准备/交接/路径竞争同源）、R=S∖L 走纯 remote 的 dcstream 逐源 tile 双缓冲链（共享 ≤2 tile 协议不变；暂存基数=R 并集）；prepare 峰值 = ΣL 持久 copy 字节＋R 暂存＋增量族 working 项（部分复制不免费）；decode consume 的 byte-share 基数含 L 本地等价 tile；结算照常（consolidate：`migrated_ids`=L 区间的部分迁移集合→`merge_from_layout` 只搬目标缺少的 R；distributed：零载荷 note 同 W9）。**(3) 计价/选择器面**（`joint_cost_model.py`+`joint_scheduler.py`）：`ActionCandidate.copy_subset` 身份字段（缺省空=四动作零漂移）、`order_key` 对 hybrid 追加子集字典序（纯候选键不变）；`estimate_D_hybrid_remaining`（端点判不适用——dedup；remote 关闭判不适用；pure_four 配置 fail-closed raise）；`select_decode_target_and_action` 在 action_space=source_subset_hybrid 时为每实例追加真子集候选（纯四动作完整参选、成本零漂移），超限落 `hybrid_unsupported` diagnostics（含 reason/source_count/enumeration_count）。**(4) 执行面（最小侵入：组合既有两链）**：`commit_boundary_decode_transition(action="hybrid", copy_sources=L)`——可执行形态 = i_P∈L（U 迁 j：`move_prefill_to_decode` 容量真实 T+E/物理搬运，即主文 §6.7 动机形态"copy 较小输入 KV＋远读大历史"）＋home∈R（基础留源端权威，decode 相 credit 计划按目录读 j 缺失区间）；终态 = 远读原地继续同族状态（工作副本在 j、基础在 home、working_kind=remote-read、非 growth-only）；端点与"基础复制而增量留源"（单 span 工作副本域模型外）fail-closed 显式不支持（登记 W11）。`stage_reservation_footprint`/`joint_reservation_context_tokens`/预约不变量白名单纳 "hybrid"（远读族基数=input/U＋暂存分量；copy 分量经边界事务 `_ensure_capacity` 真实记账）。sh30 D 边界：`joint_decode_action`=remote-read（decode 物理动作）＋`joint_hybrid_copy_sources` 披露（runtime/plan dict/boundary_decision 行 `selected_action_face`/`hybrid_copy_sources`——归因与纯四动作分离）；D20 阶段事务/幂等重放/式(1c) 回退照常。**(5) W9 遗留 2 解除路径**：P 准入多源门判据从原始持有者数细化为**有效远读源数**（`_joint_effective_remote_source_count`：单元格级覆盖——存在单一持有者覆盖全部其他持有者并集（重复/被含副本不构成第二有效源）⇒1，单源前缀读流协议适用性恢复；真多源维持 W9 门）。**(6) pure_four 缺省零漂移**：hybrid 仅显式配置激活（preset `prediction_presets/hybrid.json`）；notes 标 `hybrid=1`+子集/预算披露；纯候选无任何 hybrid 标记。单测：`joint/test_source_subset_hybrid.py`（22：端点逐字段等价（腿/资源/门/审计/前推成本）/枚举完备 2 源 4、3 源 8/超限显式不支持/真实占用/共享瓶颈/归因分离/distributed 组合/选择器面零漂移/不可执行形态计价面判不适用）+`online/test_w10_hybrid_execution.py`（12：边界事务守恒/容量实占/端点与形态 fail-closed/两阶段提交序/stage 足迹/有效远读源门×4）；广覆盖 §13 规范命令 2064→2098 零回退；真实 1s 双臂冒烟（hybrid/pure_four）exit=0，hybrid 臂 8 个 D 边界中 5 个携带 hybrid 候选（56 条目：28 可执行适用＋28 域模型外形态显式不适用），pure_four 臂零 hybrid 条目。 |
 | **2026-09-30 修复批（§10.3 误差成熟与归因 cfg1／§5.6+§10.1 计算量组 cfg2／§7.1 控制延迟 cfg3）** | **已实现＋单测验证** | **cfg1 完成预测成熟通道**：新 `joint/forecast_validation.py` `CompletionMaturityLedger`——实际执行候选在决策行发射点登记（P 准入/D 边界各恰一次，重复登记 fail-closed；未执行候选不登记保持 missing，`measured` 恒 None 口径不变），settle_done 闭合点按 (request, stage) 配对实测（误差=实际−预测，决策相对轴；归一化分母=max(1,\|predicted\|) 规则随披露；幂等恰一次；service_done 缺席/pending 未决单列不丢）；run 末新 `kind="forecast_status"` 收尾行（有引擎或有配对样本才落——off/短夹具形态逐字节不变）承载引擎 `disclosure()`（到达桶成熟账/开销账/回退链——此前 run 结束即丢的唯一生产消费出口）+ 完成预测成熟账（P/D 分列绝对/带方向/分位/归一化）；离线 `slo_tools/domain_metrics.py` 新增 `derived.completion_error_report`（消费 decode 行 boundary_decision + settle/completion + manifest：stage×endpoint 主块 + 按实际预测距离档/动作/瓶颈段/负载阶段（P 行承载、D 行 NA）/已知承诺代理（P=在途已提交通信、D=继承义务）/历史模式（manifest future_demand_mode）分组 + 七分归因关键词映射（快照陈旧缺账/物理服务近似/容量摘要偏差/未知长度/新到达/布局协议/取整；启发式规则随披露，无命中单列 unattributed））。**cfg2 计算量组**：`JointCostModel` 新增前推计算量账本（世界快照缓存命中/重建+快照规模（背景工作/资源/预测注入）、逐候选前推事件总量/峰值、闭包资源/工作峰值、背景排空截断、预算超限计数（fail-closed raise 前记账））；sh30 `_joint_accumulate_projection_cost` 逐决策汇入（P/D 两入口）+ D 边界回退额外遍历计数（§5.6"版本失效、失败重评等额外遍历须累计报告"）；`joint_decision_metrics` 收尾行新增 `projection_cost_accounting` 键（含预算超限触发率=超限数/max(1,前推数)）；逐候选面 = breakdown `projection_stats`/`background_delays`/`capacity_theta_prediction` 三键并入 `_JOINT_BREAKDOWN_LOG_FIELDS`（28→31，与同日 §5.1/§5.5 交付面修复批共键）。**cfg3 控制延迟（2026-10-02 纠正）**：此前允许登记后只计价、不兑现延迟，违反 §7.1；现已删除 `control_latency_execution_deferred`，`control_latency_ns>0` 一律拒绝。当前仅支持明确披露的 `0=assumed-zero`；预测配置版本升为 `predcfg-v2-20261002`，六个随仓 preset 同步升级，旧版配置不自动迁移。单测：`joint/test_forecast_validation.py`（16→23，+CompletionMaturityLedger 7 例：恰一次幂等/重复登记 fail-closed/未知阶段 fail-closed/pending 与 service 缺席单列/settle 缺席不成熟/未知请求空放/空账形态）+ `joint/test_prediction_config.py`（非零控制延迟拒绝门）+ `joint/test_action_work_graph.py` 零控制腿与非法配置门回归 + `online/test_joint_decision_schema.py` 字段冻结锚 28→31。 |
 
 ### 3.1 W0–W11 交付总览（2026-09-29 收口索引：工作包→模块→门→证据）
@@ -872,13 +838,182 @@ cmake --build build/astra_analytical/build_congestion_aware -j
 #     request_id 与 tensor_parallel_rank）。均为内部 FFI/内存缓存演进，
 #     无新增用户可见开关；Python 生产端（joint/native_projection.py、
 #     online/die_model_adapter.py）已同步，缺库/形态不符即 fail-closed。
-# ①c 紧凑描述符 + 专用执行器：remote-read 生产路径使用紧凑
-#     PipelineDescriptor（schema 1 typed wire），由 online/
-#     graph_batch_builder.py 在原发射点构造、finalize_pipeline_
-#     identities 在批次组装前严格提交身份；执行端 RemoteReadExecutor
-#     + TileTransportAdapter 消费描述符虚拟端点；finish() 级仿射 run
-#     合并把逐 tile 碎片 endpoint runs 合并为宽区间（物理等价，
-#     C++ envelope 义务数随 run 数下降）。
+# ①b-5 v7 事件长尾归因诊断 + HBM 执行器状态索引重构（joint 加速改造 v7，
+#     2026-10-12）：新增构建期诊断选项 JOINT_EVENT_PROFILE（CMake，缺省
+#     OFF；启用后 EventProfile.h 在后端队列三相位（主事件/tick-end/
+#     deferred）与 Sys 子分发层做回调分类计时+owner 直方图，经 [MainWall]
+#     心跳转储；生产构建零插桩指令、仿真语义零变化）。生产重构
+#     （LocalHbmBandwidthModel，直接替换）：DieExecution 完成即撤 HBM
+#     mutation observer（撤除仅跳过可证 no-op 回调）；观察者分发改稳定
+#     deque+墓碑+通行序列号（快照语义与旧逐通知拷贝逐点一致，免
+#     O(N) 拷贝）；jobs 稳定槽位 + latency/stream/compute 相位索引 +
+#     完成候选集 + drain 计数（消除每事件全量扫描；服务算术/浮点顺序/
+#     observer 边界/资源版本逐操作保持）。新增诊断访问器
+#     transition_event_count()/resource_observer_count() 与闭环组件回归
+#     AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest（已注册
+#     CTest；512 节点串行 die 链闭式 oracle + canonical A/B 字节等价）。
+#     归因结论与性能口径见《joint改造结果v7.md》：尾段 97.6% 在
+#     hbm_transition 类，其中 99.8% 在完成回调链（本轮已排除 HBM 模型
+#     自身算术/扫描与观察者分发），组件 A/B 1.19×、完整任务门未过。
+# ①b-6 v8 完成回调链归因收口 + observer 墓碑回收修复（joint 改造 v8，
+#     2026-10-12）：修复 v7 观察者墓碑压缩的不可达分支（guard 存活期判
+#     depth==0 恒假）——压缩改由 ObserverPassGuard 析构在最外层通行结束
+#     触发（含异常退栈，原地 noexcept 搬移），新增
+#     resource_observer_storage_size()/resource_observer_tombstone_count()
+#     真实计数访问器；hbm_tail_component_test 扩展回收/嵌套/异常用例与
+#     K2 生产合同臂（[CANONICAL_K2]）。die_model Execution 新增 preview
+#     E/T/U/F 常开诊断计数器（active_id_* 同口径）。
+#     【2026-10-13 v9 纠错】本条原文"98.7% 在 machine_.next_action()"的
+#     归因系 v8 PROFILE 头文件 nxt/preview 标签互换所致，已撤回——真实
+#     热点是 preview_consecutive_internal_timers（105.66µs/次，四前沿
+#     全量复制），next_action 为 0.029µs。见《joint改造结果v9.md》§2。
+#     v7 的 retire/watch/transfer 候选排除结论不受影响。详见
+#     《joint改造结果v8.md》（顶部纠错指引）与仓外
+#     /home/sunhao/joint_accel_v8_20261012。运行期用户开关零增删。
+# ①b-7 v9 精确预演事务：消除 preview 四前沿全量复制（joint 改造 v9，
+#     2026-10-13）：Execution::preview_consecutive_internal_timers 的
+#     PreviewBorrowGuard 每调用整体复制 heap/events/future_starts/
+#     active_ids 四容器（生产尾段 avgF≈35 万条目/次、105.66µs/次——v8
+#     归因纠错后的真热点）退役，替换为 PreviewTxn 日志式精确事务：heap/
+#     events 的 push/pop/逐槽写在 sift 前预留最坏路径容量并写前记录
+#     （HeapJournal，逆序回放、回滚 noexcept 不分配）；future_starts/
+#     active_ids 经调用链证明为预演调度与返回值不可读的派生结构，事务
+#     内不维护（真实路径完整保留）；真实推进与预演共用 sift_up/sift_pop
+#     单一实现与同一条 run() 控制流。E/T/U/F 计数器升级：U 全出口统一
+#     收口、F 结构性归零并与四容器 S 分离，新增 J/S 峰值/退出分类/容量
+#     增长（Execution::preview_counters()，只读）。internal_service_
+#     progress_test 新增计数标定/大前沿孪生等价/规模阶梯（S=131,072 时
+#     BASE 1.80ms vs WORK 0.52µs≈3,445×）/分配失败扫频（测试进程
+#     operator new 倒计时，49 档真实 bad_alloc 全恢复）/真实 spec 完整
+#     环（qk prefill q=61550，BASE/WORK 1.372×）五臂；hbm_tail_component
+#     _test 新增 V9 大前沿生产臂（真实 DieExecution/HBM/K2，canonical
+#     BASE/WORK 逐字节等价）。完整 first-1s 配对因预算未完成（BASE 172s
+#     超时于 delivery 36 尾段，WORK 未发射），整体倍率如实 null。详见
+#     《joint改造结果v9.md》与仓外 /home/sunhao/joint_accel_v9_20261013。
+#     运行期用户开关零增删；异常注入仅在测试二进制。
+#     【2026-10-13 v10 纠错】本注记两处修正：①"BASE 超时于 delivery 36
+#     尾段"的"tick 冻结"推断撤回——MainWall 原件显示 tick 持续增长（同
+#     tick 事件洪峰下推进极慢非卡死）；②v9 验证段的"HbmNway…全绿"当时
+#     为缺参假绿（断言未执行），v10 已补全参实跑双绿。见 v9 结果顶部
+#     v10 纠错指引。
+# ①b-8 v10 虚拟端点成员资格索引（joint 改造 v10，2026-10-13）：v10
+#     PROFILE（唯一 first-1s 生产取证，[V10P] 具名分桶+witness+策略
+#     cProfile）实测 die 引擎侧 A1/A2/R/T 候选独占份额全部 ≤3.5% 不可
+#     防御，真热点为 Python 策略侧 is_virtual_endpoint 对
+#     virtual_endpoint_ranges（等差数列 (first,count,stride)，跨交付单调
+#     增长至数千条）的每查询线性全量扫描（两重型 handler 内占 policy
+#     45%，单次 235→427µs 随运行上涨）。生产直接替换（无开关）：
+#     _VirtualEndpointLookup 精确索引——按 first 排序副本 + last 的 max
+#     线段树，查询 bisect 截断 + 双向整枝剪除，仅对区间覆盖候选做与旧
+#     扫描逐字相同的模测试（any-match 与顺序无关；正确性不依赖区间
+#     不相交或注册有序，乱序走防御性重建仅慢不错）；注册侧 sync 从
+#     规范列表推导。test_virtual_endpoint_index.py 7 项合同测试（全 id
+#     域等价/三合并分支/重叠/乱序/生产量级）。正式配对（双臂 172s、
+#     二进制逐字节相同、决策日志剥宿主字段后等价、36 帧字节等价仅差
+#     生产者身份串）：两臂均未自然完成整体倍率 null；共同逻辑尾段窗
+#     1.847×、全窗 1.352×、policy handler 49.63s→15.75s（−68%）；机制
+#     阶梯 115.7×/309.0×（合成形态单列）。详见《joint改造结果v10.md》
+#     与仓外 /home/sunhao/joint_accel_v10_20261013。运行期用户开关零增删。
+# ①b-4 v6 紧凑账本 wire 与 typed 接收核心（joint 加速改造 v6，2026-10-12）：
+#     work_ledger 段升级为二进制紧凑编码 workledger-compact-v1（外层
+#     bridge JSON 不变；C++ 生产端回调直接产出 typed 记录——义务行只携
+#     带 (segment, run_index) 坐标与动态标量，身份/世代/游标可推导字段
+#     由接收端重建；紧凑帧内字符串走帧内字典引用）。原生接收
+#     （extern/joint_ledger）对热行（pipeline runs / slot / credit /
+#     obligation / cursor / resource）全部 typed 化：解析即结构体、
+#     staging/commit 直接消费结构字段，仅查询边界（pricing/snapshot/
+#     export）序列化小 JSON；旧 JSON 帧经版本 reader 进同一 typed 核心
+#     （归档可读，无双状态机）。journal 侧车升级
+#     request_journal_work_ledger.compact.bin.gz（长度帧记录，截断按
+#     完整记录前缀恢复），旧 jsonl.gz 侧车 reader 保留。外层
+#     ledger 语义版本仍为 4；无新增用户可见开关。
+# ①b-9 v11 §8 保底：决策桥帧载体文件→shm 替换（2026-10-14）：C++↔
+#     Python 决策桥的 request/response/commit_ack 传输从散装 JSON 文件
+#     （tmp+rename 原子写 + 文件存在性轮询 + unlink，每交付 ~0.7s 文件
+#     开销）替换为 POSIX-shm 单槽帧通道（ShmFrameChannel.{hh,cc} +
+#     online/bridge_shm.py；FileDecisionBridge→ShmDecisionBridge 直接
+#     更名替换，无运行期开关）。帧格式 [u32 magic][u64 seq][u32 len]
+#     [payload][u32 crc32]（小端，IEEE crc32 覆盖头+负载；槽容量 256MiB，
+#     超限/损坏/crc 不符 fail-closed），帧负载与旧文件内容逐字节相同
+#     （work_ledger 二进制拼接仍在 C++ 侧完成后入帧）；FIFO 门铃字节、
+#     1:1 背压、poll 超时、双字节协议违例检测、启动顺序（先 C++ 后
+#     Python、FIFO 就绪轮询）全部照旧。段名含 bridge_dir 哈希 + 启动
+#     世代，指针文件 bridge/bridge_shm.json 由 C++ 原子写、Python 启动
+#     校验世代（跨 run 陈旧段拒绝）；ensure_bridge_dir 仍建目录+FIFO+
+#     清陈旧（含按前缀清 shm 段）。可见变化：bridge/ 不再有散装
+#     request_/response_/commit_ack_*.json；request_journal.jsonl 与
+#     work_ledger gz 侧车照旧为审计字节流；崩溃现场改为 abort 残留的
+#     /dev/shm 段（析构 unlink，abort 不跑析构）。统计口径不变
+#     （channel_bytes=帧负载字节=旧文件字节；forced_flush_count=每次
+#     发布一计；roundtrip 计时不变）。单测：C++ 进程内
+#     ShmDecisionBridgeLoopbackTest（字节往返/超限/crc/陈旧世代/三向
+#     逐字节/统计/清理，已注册 CTest）+ 跨语言 BridgeLoopbackTest
+#     （真实 python3 对端，journal 字节断言）+ pytest
+#     online/test_decision_bridge_shm.py（帧编解码/世代/journal 字节
+#     保持）。
+# ①b-10 v11 Phase 4：issue pass 增量拼接 + K2 窗口查询纪元 memo
+#     （2026-10-14）。① ready 快照增量拼接：NodeStore 的 ordinary 自由
+#     分区快照（原 fill_free_ordinary_id_snapshot 每次全量遍历拷贝
+#     std::set）改为"上一代快照向量 − 擦除增量 ∪ 插入增量∩当前活集"的
+#     拼接（splice_free_ordinary_id_snapshot；NodeStore 维护插入/擦除
+#     双增量集与版本窗口守卫，窗口失效回退全量 fill）；Workload 的
+#     issue_dep_free_nodes 在 reuse 与 full fill 之间接入 splice 分支。
+#     等价性：拼接结果与全量 fill 逐元素相同（对拍测试
+#     node_store_test 的 F2 差分 + ready_issue_order_test 三场景钉死；
+#     被资源闸门跳过仍留在集合的 id 由"留在向量"覆盖重查）。同
+#     (tick,rank) 多次排队型触发的合并在既有 per-rank pending 旗标已
+#     存在，同 tick 后续 pass 是"同轮新 ready"钉死语义，不再合并（登记
+#     未做）。② die_model 的 query_internal_timer_window 只读证明查询
+#     加执行状态纪元 memo：Impl 全部 7 个变更入口自增 state_epoch，
+#     按 (纪元, max_count) 记忆查询结果（含拒绝理由）；纪元变即失效
+#     ——同状态同参必同结果（read-only 契约 + 变更面审计注释），
+#     PreviewTxn 经入口自增纪元只过度失效不供旧值。孪生 oracle 单测
+#     extern/die_model/tests/k2_timer_window_memo_test.cc。两项均无
+#     新增用户可见开关。
+# ①b-11 v12 Phase 4 K2 否定缓存 v12 契约（joint 改造 v12，2026-10-13）：
+#     query_internal_timer_window 在 v11 纪元 memo（同层、随状态失效，
+#     完整保留）之外新增进程级结构否定缓存（extern/die_model 的
+#     DieTypes.hh 与 Execution.cc；方案 §6.2）：双键 =（die 计划内容
+#     寻址缓存键 + 窗口近似配置指纹），不含任何运行状态，可跨
+#     Execution 实例与运行状态存续——因此只允许缓存"在计划的任何可达
+#     状态下、任何驱动历史下，完整返回值（含 reason 串）逐字节恒同"
+#     的拒绝。Sound 性由构造期一次计算的结构谓词 P_struct = P_A∨P_B
+#     保证（P_A：total==0 构造即 finished；P_B：全部实例为零时长内部
+#     stage 且无 MEM/MEM_NOC 实例，构造期 run() 依零时长规则同步排干
+#     整个 DAG）——该类计划可达状态集为单例 {finished}，查询必返常量
+#     拒绝 {supported=false, reason="execution-finished"}；谓词同时把守
+#     探测与写入两侧，supported=true 永不入缓存。近似配置指纹在生产
+#     侧为 die_model 内编译期注册表（tile_limit=2 / local_error_ppm=0
+#     / refine_margin_ppm=20000），不同指纹条目互不可见，精确/近似
+#     模式永不共享结论。审计结论：生产计划必携正时长 launch/compute/
+#     memory，P_struct 恒假——生产点燃面为空，交付价值 = 已审计的
+#     指纹键控 Sound 接线与测试钩子（negative_cache_hits_for_test()
+#     等只读访问器）；C++ 侧 set_enabled 主开关缺省启用、仅测试二进
+#     制使用，非用户可见开关。双生 oracle 测试
+#     extern/die_model/tests/k2_plan_negative_cache_test.cc（计划族×
+#     全速/2x/4x 内存驱动的启/停缓存逐字段等价、P_A/P_B 计划实际命中
+#     而真实计划零写入零命中、指纹隔离、主开关、参数校验；已注册
+#     CTest）。
+#     v12 窗口资格取证结论（Phase 5 门禁输入）：生产 PROFILE0 全部
+#     4,136 个 die 计划 × stretch{1,2,4} 内存速度、每档约 1,030 万
+#     边界（10,305,050）穷尽实测，k≥2 可平均窗恒零（0.00%）；四桶
+#     根因逐桶判定唯"确无合格片段（负载结构）"成立（其余三桶
+#     否定）——timer 片段被 MemoryRequest 边界切成单片段，窗口退化
+#     K=1，§6.1 局部平均算子在本负载无平均对象。Phase 5 资格
+#     NO-GO：近似线不落地，无近似参数、无新开关。详见
+#     《joint改造结果v12.md》与仓外证据根
+#     /home/sunhao/joint_accel_v12_20261013。运行期用户开关零增删
+#     零取值变化。
+# ①c （已退役 2026-10-14）紧凑描述符 + 专用执行器：远读生产路径的
+#     紧凑 PipelineDescriptor（schema 1 typed wire）、online/
+#     graph_batch_builder.py 的原发射点构造与 finalize_pipeline_
+#     identities 身份提交、执行端 RemoteReadExecutor +
+#     TileTransportAdapter 及 finish() 级仿射 run 合并，已随
+#     remote-read 机制整体删除（无开关保留档）；原 PipelineDescriptor.hh
+#     尾部的 PipelineKernelContract 迁出为独立头
+#     astra-sim/workload/execution_driven/PipelineKernelContract.hh
+#     保留（die 计算后端 window 契约，每批无条件发射），登记见仓根
+#     PROVENANCE.md 退役批登记节。
 # ② 物化输入（唯一允许源 = agent-traces/tracelab/astra_compute_20.csv；
 #    窗口 ≤ 前 30 秒为物化器冻结契约，缺省整 30s——冒烟矩阵用 2 秒窗
 #    `WINDOW_NS=2000000000`，见 joint_smoke_matrix.sh）：
@@ -922,17 +1057,15 @@ bash sh_test_mesh/run_scripts/clean_test_records.sh && bash sh_test_mesh/run_scr
 8. **发射门槽位与图形态（2026-09-25 PARTIAL 跨实例 copy 流水化）**：
    comm（COMM_SEND/COLL）与本地 KV restore（hbm_dma）发射门由单槽改
    计数制无上限槽（带宽仲裁归既有 HBM N-way／NoC／池端口模型，§7-G；
-   COMP/CPU 单槽门保留）；copy 交接尾块、恢复组与 remote-read credit
-   尾块由逐笔串行链改逐笔并行支链／组间并行（首块准入与栅栏、逐层就绪
-   门、账本语义不变——§3 状态表 C13/C15/remote-read 行，PROVENANCE
-   §45）。
-9. **prefill remote-read 分阶段（2026-09-25，零新增开关）**：remote-read
-   轮 prefill 前缀读流（home→exec 逐层组瞬时流，准入相独立规划 +
-   图侧旁挂分支 + 列车体层段门控）与后缀池恢复腿自同一准入 frontier
-   并行分叉、无全局 barrier；decode 相 credit 读流只覆盖前缀 [0,p)
-   （后缀准入相已恢复、就地复用）；准入计价改分阶段关键路径
-   （prefill_stage + decode_stage，旧"后缀恢复全量前置"合成废除、无
-   开关可选项）——§3 状态表 remote-read 行，PROVENANCE §46/§47。
+   COMP/CPU 单槽门保留）；copy 交接尾块、恢复组由逐笔串行链改逐笔并行
+   支链／组间并行（首块准入与栅栏、逐层就绪
+   门、账本语义不变——§3 状态表 C13/C15 行，PROVENANCE
+   §45；remote-read credit 尾块形态已随 2026-10-14 远读退役删除）。
+9. **（已退役 2026-10-14）prefill remote-read 分阶段（2026-09-25，
+   零新增开关）**：remote-read 轮 prefill 前缀读流与后缀池恢复腿的
+   分阶段关键路径（prefill_stage + decode_stage）已随 remote-read
+   机制整体删除（无开关保留档）；历史描述见 PROVENANCE §46/§47 与
+   仓根 PROVENANCE.md 退役批登记节。
 
 ## 6. die 内成本模型（运行时 + 预测两层接口）
 
@@ -995,19 +1128,22 @@ python3 -m pytest tests/ slo_tools/tests/ workload/llama2_7b_inference \
 # ② 注册 CTest（新 native/fixture targets，全量、无 -R/-E）
 ctest --test-dir build/astra_analytical/build_congestion_aware \
     --output-on-failure
-# 登记包括 NativeProjectionCApiTest / JointPipelineDescriptorTest /
-# JointPipelineWindowTest / DieExecutionLifecycleTest / JointReadyIssueOrderTest /
+# 登记包括 NativeProjectionCApiTest / JointPipelineWindowTest /
+# DieExecutionLifecycleTest / JointReadyIssueOrderTest /
 # JointPipelineMutationTest 及 die_model 单测；先用 ctest -N 核对。
-# ParsedBatchTest / GraphBatchCommitterTest / RemoteReadExecutorTest 等需直跑。
-# JointPipelineExecutionFixture 未登记，必须提供 state/events/precision/out。
+# ParsedBatchTest / GraphBatchCommitterTest 等需直跑。
+# （JointPipelineDescriptorTest / RemoteReadExecutorTest 与
+# JointPipelineExecutionFixture 已随 2026-10-14 远读退役删除。）
 
 # ③ 现有 C++ fixtures（不经 CTest 的直跑目标；BridgeLoopback 传 echo 脚本）
 build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_\
 Congestion_Aware_{ParsedBatchTest,GraphBatchCommitterTest,BridgeLoopbackTest}
 
 # ④ 冷夹具两段链（§19.1A）：Stage A raw → Stage B canonicalize
-#    JointPipelineExecutionFixture --state S --events E --precision P --out R
 #    Stage B: joint/acceptance_projection.py::canonicalize_raw_frames
+#    （原 Stage A 驱动器 JointPipelineExecutionFixture 已随 2026-10-14
+#    远读退役删除——descriptor 执行链不存在，冷夹具链仅保留
+#    canonicalize 面）
 
 # ⑤ L3 批量评估（E0/F0 输入）：l3-batch/evaluate_l3_boundaries.py
 
@@ -1018,10 +1154,22 @@ Congestion_Aware_{ParsedBatchTest,GraphBatchCommitterTest,BridgeLoopbackTest}
 **已退役入口**（2026-10-07 C5/F2）：`joint/test_resource_projection.py`
 与 `joint/test_joint_projection_pricing.py`（仓外冻结脚本执行，证据根
 `packages/python-impl-20261006/c5-prep/frozen-tests/`）；Python 投影
-事件循环（`ProjectionWorld` 前推路径）已由 native 投影唯一替代；
-remote-read 生产路径已切换紧凑 `PipelineDescriptor`（schema 1 typed
-wire）+ `RemoteReadExecutor`/`TileTransportAdapter` 消费，旧全量
-COMM/credit 逐 tile 展开退役。
+事件循环（`ProjectionWorld` 前推路径）已由 native 投影唯一替代。
+**远读退役批（2026-10-14）另整删测试**：Python 侧 `joint/` 8 个
+（test_d07_remote_scan_derivation / test_d09_remote_read_double_buffer /
+test_joint_remote_read_staged_path / test_joint_credit_pricing /
+test_source_subset_hybrid / test_sparse_pipeline_integration /
+test_pipeline_descriptor / test_compact_pipeline_range）＋`online/` 14 个
+（prefill_remote_read 五件、remote_credit 三件、
+test_prefill_read_summary_compat、test_r4_mixed_remote_read_train_pin、
+test_w10_hybrid_execution、test_growth_reservation_hold、
+test_pipeline_descriptor_submission、test_compact_credit_gate_ranges）；
+C++ 侧 remote_read_executor 双件、pipeline_descriptor 测试双件与
+pipeline_execution_fixture_main.cc（其 4 组 PipelineKernelContract 断言
+并入 pipeline_window_test.cc）；slo_tools 侧
+test_hbm_watermark_staging_lease.py（词表 3 用例迁入
+test_hbm_watermark.py）。joint/online 其余受波及测试已按三动作改写
+（joint 1021 绿 / online 636 绿 / 脚本与 slo_tools 284 绿）。
 
 ### 7.1 历史沿革口径注（各批次计数基线，保持可比）
 
@@ -1415,8 +1563,9 @@ python3 -m pytest tests/ slo_tools/tests/ workload/llama2_7b_inference \
 定向验收覆盖（`joint/test_joint_mechanisms.py` 对应《设计方案》§8 表）：
 八组合固定映射与 fail-closed；T 严格序/满足即停/未知类别披露；E k_hide
 解析例（L=32, c=1ms, q=0, r=0.5/2/4ms ⇒ 1/17/25）与三模式计划；J 三模式
-选择与 remote-off 仅移除 remote 候选；home/merge（增量恰好一次、无双份
-驻留、recompute/remote-read 工作副本口径）；八组合同实现配置切换。
+选择与三动作候选面（remote-off 消融用例与退役 env fail-closed 钉测随
+2026-10-14 远读退役改写）；home/merge（增量恰好一次、无双份
+驻留、recompute/copy 工作副本口径）；八组合同实现配置切换。
 2026-09-22 改造批新增机制测试文件（全部零后端）：
 `joint/test_joint_shard_pricing.py`（C1 三腿 min/平价锚/读放大）、
 `joint/test_hbm_port_flow_registry.py`（C2 u_port/rider）、
@@ -1452,25 +1601,30 @@ minimal_layer_groups、#12/#13 remote-off 正交臂）；行为矩阵：joint �
 选点 10/4/6/1 vs load-first 组 12/6/2/1（J 联合选择真实改变选点），
 load-first/none 系真实触发 7 次跨实例 copy + 7 次增量 merge 回传流
 （R15/K4 计价修复后决策序列快照，修复前为 6/6）；
-affinity-first 恒 stay（home 优先与联合选择的最优重合）。**两处"13/16"口径
-注记（2026-09-22 复审补，2026-09-27 修正轮更新）**：上文执行方案 §8.3 的
+affinity-first 恒 stay（home 优先与联合选择的最优重合）。**两处口径
+注记（2026-09-22 复审补，2026-09-27 修正轮更新，2026-10-14 远读退役
+再更新）**：上文执行方案 §8.3 的
 13 配置矩阵（含 #9–#11 调度器变体辅助臂）与下文 `joint_smoke_matrix.sh`
-的 **16 臂**是**两个不同集合**（交集 = 八组合 + remote-off 臂族）——前者
+的冒烟矩阵是**两个不同集合**（历史交集 = 八组合 + remote-off 臂族；
+remote-off 臂族已随 2026-10-14 远读退役删除）——前者
 服务调度器行为对照、后者为交付一键回归矩阵，引用时勿混用。**冒烟矩阵已
 脚本化**：`sh_test_mesh/run_scripts/joint_smoke_matrix.sh`（2s 窗
-**16 臂**，C19 起 13 臂一键全绿、2026-09-27 修正轮 C7b 扩 3 掩码臂 =
-16 配置后全绿）——八组合 `combo_*` + `TJE_remote_off` +
+**14 臂**；C19 起 13 臂一键全绿、2026-09-27 修正轮 C7b 扩 3 掩码臂 =
+16 配置后全绿、2026-10-14 远读退役删 `TJE_remote_off` 与
+`mask_remote_recompute` 两臂 = 14 配置）——八组合 `combo_*` +
 `TJE_shadow_verify`（影子验证）+ C19 三新臂：`TJE_quota_static`
 （JOINT_QUOTA_MODE=static）/ `TJE_quota_aimd`（=aimd，F7 自动注入链
 全程生效——runner 置位 SH_LINK_TELEMETRY → .sh 追加 --link-telemetry →
 C++ 遥测开）/ `TJE_face_static`（--scheduler face_static 对照臂，quota
 强制 off 入 manifest 注记 quota_forced_off）；后三臂经 `joint_runner.py`
-CLI 面起跑。C7b 三掩码臂（纯 env 面，仿 TJE_remote_off）：`mask_recompute`
+CLI 面起跑。C7b 掩码臂（纯 env 面）：`mask_recompute`
 （JOINT_ALLOWED_ACTIONS=recompute）/ `mask_copy_recompute`
-（=copy,recompute）/ `mask_remote_recompute`（=remote-read,recompute），
+（=copy,recompute），
 一律配 `JOINT_SCHEDULER_MODE=load-first`、**不设** combo（预设与显式开关
-互斥 fail-closed）；三臂依赖 C4 掩码×边界修复（修复前为记录性失败），
-修正轮终态 16/16 全 exit=0（~/joint_fix_round_20260927/smoke_final/）。
+互斥 fail-closed）；两臂依赖 C4 掩码×边界修复（修复前为记录性失败），
+修正轮终态全 exit=0（~/joint_fix_round_20260927/smoke_final/）。
+（`TJE_remote_off`/`mask_remote_recompute` 两臂依赖已退役的
+remote-read 开关与动作值域，随远读退役删除——旧 16/16 记录为历史证据。）
 产物落仓外持久目录 `/home/sunhao/joint_smoke_evidence/
 <label>/`（或显式证据根）全套留存——run.log/决策日志/env 快照/退出码/
 invocation.json，复审可独立复验；PROVENANCE §7-14/§9/§28）。

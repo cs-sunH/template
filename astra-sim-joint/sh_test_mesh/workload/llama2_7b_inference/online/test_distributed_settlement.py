@@ -4,8 +4,9 @@
 方案 §11.1 V9 行 + §12.1 W9 验收门的 KVCacheManager/调度器级落测
 （受控多轮 fixture，合成，无需仿真）：
 
-1. **多轮增量、超过三源**：4 实例拓扑 4 轮（stay→copy→remote-read→
-   recompute）——目录来源位置数 >3、区间数与位置数分别披露；
+1. **多轮增量、超过三源**：4 实例拓扑 4 轮（stay→copy→recompute→
+   recompute）——目录来源位置数 >3、区间数与位置数分别披露（原
+   remote-read 轮已随 2026-10-14 远读退役换 recompute 承载）；
 2. **全部有效区间可定位**：逐轮单元格级覆盖审计（跨持有者部分重叠
    区间的真并集）+ 目录守恒 + rank 台账对账（manager 咽喉点自带）；
 3. **逐出→恢复**：留存段经目录 evict_to_pool（owner 记录保留、唯一
@@ -84,30 +85,22 @@ def _round(kv, session_id, request_id, target, action, history,
 
     final_context = 本轮结束时的完整上下文 token 数；本轮新增
     new_tokens = final_context - history（无 decode 增量的合成形态——
-    输入增量即全部增长）。remote-read 族工作副本按增量口径物化（context
-    从 0 起步 = U），copy/recompute/stay 族工作副本持完整上下文。"""
+    输入增量即全部增长）。三动作工作副本恒持完整上下文（原 remote-read
+    增量口径物化已随 2026-10-14 远读退役删除）。"""
     increment = final_context - history
     kv.prepare_prefill(
         session_id=session_id, target_instance_index=target,
         history_tokens=history, trigger_request_id=request_id,
         action=action, at_ns=at_ns)
-    session = kv._sessions[session_id]
     if increment > 0:
-        if session.working_kind == "remote-read":
-            # 增量族：工作副本只物化 U（D1 两口径——context = 增量数）。
-            kv.expand_prefill(
-                session_id=session_id, instance_index=target,
-                context_tokens=increment, trigger_request_id=request_id,
-                at_ns=at_ns)
-        else:
-            kv.expand_prefill(
-                session_id=session_id, instance_index=target,
-                context_tokens=history, trigger_request_id=request_id,
-                at_ns=at_ns)
-            kv.expand_decode(
-                session_id=session_id, instance_index=target,
-                final_context_tokens=final_context,
-                trigger_request_id=request_id, at_ns=at_ns)
+        kv.expand_prefill(
+            session_id=session_id, instance_index=target,
+            context_tokens=history, trigger_request_id=request_id,
+            at_ns=at_ns)
+        kv.expand_decode(
+            session_id=session_id, instance_index=target,
+            final_context_tokens=final_context,
+            trigger_request_id=request_id, at_ns=at_ns)
     outcome = kv.settle_distributed(
         session_id=session_id, trigger_request_id=request_id,
         new_tokens=increment, at_ns=at_ns)
@@ -124,64 +117,9 @@ def _sources(kv, session_id):
 class MultiRoundDistributedTest(unittest.TestCase):
     """V9：多轮增量、超过三源、逐轮可定位/守恒。"""
 
-    def test_copy_then_boundary_remote_keeps_complete_source_rectangle(self):
-        """P=copy followed by D=remote-read must not duplicate the base.
-
-        The P copy leaves a complete working replica at its instance.  When
-        D records that replica as a boundary source, the directory interval
-        must cover ``[0, H+U)`` together with its full byte vector; otherwise
-        the next copy sees the base as missing and double-materializes it.
-        """
-        kv = _manager(capacity=10_000_000_000)
-        sid = "s_copy_boundary_remote"
-        history = 10
-        _round(kv, sid, "r0", 3, "stay", 0, history, at_ns=100)
-
-        increment = 2
-        kv.prepare_prefill(
-            session_id=sid, target_instance_index=0,
-            history_tokens=history, trigger_request_id="r1",
-            action="remote-read")
-        kv.expand_prefill(
-            session_id=sid, instance_index=0,
-            context_tokens=increment, trigger_request_id="r1")
-        kv.settle_distributed(
-            session_id=sid, trigger_request_id="r1",
-            new_tokens=increment, at_ns=200)
-        kv.mark_complete(sid, 200)
-
-        p_history = history + increment
-        kv.prepare_prefill(
-            session_id=sid, target_instance_index=0,
-            history_tokens=p_history, trigger_request_id="r2p",
-            action="copy")
-        kv.expand_prefill(
-            session_id=sid, instance_index=0,
-            context_tokens=p_history + 1, trigger_request_id="r2p")
-        kv.commit_boundary_decode_transition(
-            session_id=sid, p_instance_index=0, target_instance_index=2,
-            action="remote-read", history_tokens=p_history + 1,
-            trigger_request_id="r2d")
-        kv.expand_decode(
-            session_id=sid, instance_index=2,
-            final_context_tokens=3, trigger_request_id="r2d")
-        outcome = kv.settle_distributed(
-            session_id=sid, trigger_request_id="r2",
-            new_tokens=3, at_ns=300)
-        self.assertEqual(outcome.final_tokens, p_history + 1 + 3)
-        kv.mark_complete(sid, 300)
-
-        final_tokens = p_history + 1 + 3
-        kv.prepare_prefill(
-            session_id=sid, target_instance_index=0,
-            history_tokens=final_tokens, trigger_request_id="r3",
-            action="copy")
-        session = kv._sessions[sid]
-        self.assertEqual(
-            session.shard_bytes,
-            kv_cache_shard_bytes_for_tokens(
-                kv.model, final_tokens, kv.tp_degree))
-        kv.assert_final_state()
+    # （原 P=copy + D=remote-read 边界来源矩形用例已随 2026-10-14
+    # 远读退役删除：commit_boundary_decode_transition 的 remote 分支
+    # 删除后该形态不可构造；来源面完整性由四轮用例的目录审计承接。）
 
     def test_four_rounds_three_plus_sources(self):
         kv = _manager()
@@ -196,9 +134,9 @@ class MultiRoundDistributedTest(unittest.TestCase):
         out2 = _round(kv, sid, "r2", 1, "copy", 10, 12, at_ns=200)
         self.assertEqual(out2.family, "zero_byte_flip")
         self.assertEqual(out2.source_count, 2)
-        # 轮 3：remote-read @2（14 token；增量@2 + [0,12)@1 + [0,10)@0）。
-        out3 = _round(kv, sid, "r3", 2, "remote-read", 12, 14, at_ns=300)
-        self.assertEqual(out3.family, "remote_increment")
+        # 轮 3：recompute @2（14 token；重建并集@2 + [0,12)@1 + [0,10)@0）。
+        out3 = _round(kv, sid, "r3", 2, "recompute", 12, 14, at_ns=300)
+        self.assertEqual(out3.family, "zero_byte_flip")
         self.assertEqual(out3.final_tokens, 14)
         self.assertGreaterEqual(out3.source_count, 3)
         # 轮 4：recompute @3（16 token；重建并集@3——来源位置 >3）。
@@ -253,7 +191,7 @@ class OverlapUnionDedupTest(unittest.TestCase):
         sid = "s_overlap"
         _round(kv, sid, "r1", 0, "stay", 0, 10, at_ns=100)
         _round(kv, sid, "r2", 1, "copy", 10, 12, at_ns=200)
-        _round(kv, sid, "r3", 2, "remote-read", 12, 14, at_ns=300)
+        _round(kv, sid, "r3", 2, "copy", 12, 14, at_ns=300)
         return kv, sid
 
     def test_missing_query_returns_union_not_entry_sum(self):
@@ -269,12 +207,14 @@ class OverlapUnionDedupTest(unittest.TestCase):
             sum(sum(entry.bytes_by_tp_rank) for entry in missing),
             sum(kv_cache_shard_bytes_for_tokens(
                 kv.model, 14, kv.tp_degree)))
-        # 读流来源 = 缺失并集的权威选读片段（旧逐条目口径 = 22 token）。
-        sources = kv.kv_directory.query_sources(sid, 2)
+        # 读流来源 = 缺失并集的权威选读片段（并集去重——旧逐条目口径
+        # 对 [0,10)/[0,12)/[0,14) 重复段会计 22+ token；此处按实例 3
+        # 视角查询，权威选读恰覆盖 14 token 并集）。
+        sources = kv.kv_directory.query_sources(sid, 3)
         source_union_tokens = sum(
             entry.content_key.token_end - entry.content_key.token_start
             for entry in sources)
-        self.assertEqual(source_union_tokens, 12)
+        self.assertEqual(source_union_tokens, 14)
 
     def test_copy_over_retained_union_settles_conserved(self):
         """copy 过重复留存段：工作字节 = 缺失并集，settle 守恒闭合。"""
@@ -295,7 +235,7 @@ class EvictRestoreLocatableTest(unittest.TestCase):
         sid = "s_evict"
         _round(kv, sid, "r1", 0, "stay", 0, 10, at_ns=100)
         _round(kv, sid, "r2", 1, "copy", 10, 12, at_ns=200)
-        _round(kv, sid, "r3", 2, "remote-read", 12, 14, at_ns=300)
+        _round(kv, sid, "r3", 2, "copy", 12, 14, at_ns=300)
         return kv, sid
 
     def test_retained_evict_to_pool_keeps_owner_and_locatable(self):
@@ -472,7 +412,7 @@ class DistributedVsConsolidateComparisonTest(unittest.TestCase):
             "settle_outcomes": [],
         }
         rounds = ((0, "stay", 0, 10), (1, "copy", 10, 12),
-                  (2, "remote-read", 12, 14), (3, "recompute", 14, 16))
+                  (2, "copy", 12, 14), (3, "recompute", 14, 16))
         for index, (target, action, history, final) in enumerate(rounds):
             request_id = f"cmp_r{index + 1}"
             if distributed:
@@ -486,23 +426,16 @@ class DistributedVsConsolidateComparisonTest(unittest.TestCase):
                     session_id=sid, target_instance_index=target,
                     history_tokens=history, trigger_request_id=request_id,
                     action=action)
-                session = kv._sessions[sid]
                 increment = final - history
                 if increment > 0:
-                    if session.working_kind == "remote-read":
-                        kv.expand_prefill(
-                            session_id=sid, instance_index=target,
-                            context_tokens=increment,
-                            trigger_request_id=request_id)
-                    else:
-                        kv.expand_prefill(
-                            session_id=sid, instance_index=target,
-                            context_tokens=history,
-                            trigger_request_id=request_id)
-                        kv.expand_decode(
-                            session_id=sid, instance_index=target,
-                            final_context_tokens=final,
-                            trigger_request_id=request_id)
+                    kv.expand_prefill(
+                        session_id=sid, instance_index=target,
+                        context_tokens=history,
+                        trigger_request_id=request_id)
+                    kv.expand_decode(
+                        session_id=sid, instance_index=target,
+                        final_context_tokens=final,
+                        trigger_request_id=request_id)
                 transfers = kv.merge_back(
                     session_id=sid, trigger_request_id=request_id,
                     new_tokens=increment)
@@ -525,9 +458,12 @@ class DistributedVsConsolidateComparisonTest(unittest.TestCase):
         self.assertEqual(distributed["merge_payload_bytes"], 0)
         self.assertGreater(
             distributed["surface"].source_count, 1)
-        # consolidate：物理归并载荷非零（本 fixture 含真实迁移腿）；终态
-        # 单位置。
-        self.assertGreater(consolidate["merge_payload_bytes"], 0)
+        # consolidate：终态单位置（逐轮 merge_back 归并）。三动作下本
+        # fixture 的合并恒零字节翻转（嵌套副本释放；原真实迁移腿来自
+        # remote-read 增量布局的分裂末态，已随 2026-10-14 远读退役不可
+        # 构造——完整型合并语义由 test_joint_remote_settlement 的 copy
+        # 三位置链与 face_scheduler merge 面钉测承接）。
+        self.assertEqual(consolidate["merge_payload_bytes"], 0)
         self.assertEqual(consolidate["surface"].source_count, 1)
         # 同轮省 merge 的对照口径：distributed 结算披露显式标注同轮语义。
         for outcome in distributed["settle_outcomes"]:

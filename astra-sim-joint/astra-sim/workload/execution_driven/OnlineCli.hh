@@ -129,7 +129,7 @@ stays separate
                         F7 惯例): per-decision-epoch NoC link window
                         telemetry in the bridge request. When set, the
                         online main installs a DecisionBridge link-telemetry
-                        provider; every request_<seq>.json then carries the
+                        provider; every request frame then carries the
                         top-level link_telemetry[] array (parallel to
                         ledger_summary), one element per link that carried
                         bytes or active time in the epoch window:

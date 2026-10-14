@@ -11,8 +11,8 @@
   1. 全路径（真实 _try_admit_request，turn-0）：决策行含全部审计扩展
      键，逐候选 hop/breakdown 可重建，整行 JSON 可序列化/解析重建；
   2. 有历史场景（真实 cost model + 真实 select_instance_and_action，
-     LOCAL 基驻留实例 1）：适用动作集四动作齐、copy/remote 候选 breakdown
-     11 字段在场、hop 语义（驻留实例 0 跳/跨实例 >0、与 breakdown.hops
+     LOCAL 基驻留实例 1）：适用动作集三动作齐、copy 候选 breakdown
+     字段在场、hop 语义（驻留实例 0 跳/跨实例 >0、与 breakdown.hops
      冗余一致）；
   3. schema 冻结锚：SH 冻结字段序与 JCM ActionCostBreakdown 声明逐一
      同名（防字段漂移）；
@@ -78,13 +78,14 @@ from online.sh30_online_scheduler import (  # noqa: E402
     Sh30OnlineScheduler,
 )
 
-#: F8 冻结的 selected_action 枚举（四动作，不设第五动作——F10）。
-SELECTED_ACTION_ENUM = ("stay", "recompute", "copy", "remote-read")
-#: port_snapshot 的六个配额类字段（WP3 前恒 "NA"）。
+#: F8 冻结的 selected_action 枚举（三动作，不设第四动作——F10；
+#: 2026-10-14 远读退役后动作宇宙缩三元）。
+SELECTED_ACTION_ENUM = ("stay", "recompute", "copy")
+#: port_snapshot 的五个配额类字段（WP3 前恒 "NA"；parity_gate_headroom
+#: 已随远读退役删除）。
 PORT_SNAPSHOT_NA_FIELDS = (
     "u_port_active_decode_streams", "u_port_registered_transfer_flows",
     "u_port_total", "bulk_slots_used", "bulk_slots_cap",
-    "parity_gate_headroom",
 )
 #: load_view 的五个负载量字段（InstanceLoadView 构造点口径）。
 LOAD_VIEW_FIELDS = (
@@ -100,11 +101,8 @@ class _GraphStub:
     def __init__(self) -> None:
         self.synced = []
         self.admission_plans = []
-        # 生产 _pipeline_identity_provider 直访 graph.pipeline_identity_
-        # allocator（真 GraphBatchBuilder 自带；替身挂真分配器——与
-        # test_prefill_remote_read_scheduler._GraphStub 同款壳模式）。
-        from joint.pipeline_identity import PipelineIdentityAllocator
-        self.pipeline_identity_allocator = PipelineIdentityAllocator()
+        # （原 pipeline_identity_allocator 挂载已随 2026-10-14 远读退役
+        # 删除：descriptor 协议整删；替身仅保留决策行发射所需壳面。）
 
     def sync_pending_history_after_evictions(self, transfers):
         self.synced.append(transfers)
@@ -195,7 +193,7 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     # C11 动作选中计数（对齐 __init__ 初值，F6 销账：_note_action_
     # selection 直加计数——替身漏设 = AttributeError）。
     scheduler._joint_action_selection_counts = {
-        "stay": 0, "copy": 0, "remote-read": 0,
+        "stay": 0, "copy": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
         "recompute_forced_action_mask": 0,
@@ -295,10 +293,9 @@ class JointDecisionSchemaFullPathTest(unittest.TestCase):
                          decision["joint_instance_index"])
         self.assertEqual(decision["prefill_action"],
                          decision["joint_action"])
-        self.assertEqual(
-            decision["decode_action"],
-            "remote-read" if decision["joint_action"] == "remote-read"
-            else "stay")
+        # 三动作下 p-continuation 恒 stay（增量延续身份已随远读退役
+        # 删除）。
+        self.assertEqual(decision["decode_action"], "stay")
         self.assertFalse(decision["is_continuation"])
         self.assertEqual(decision["estimated_decode_tokens"],
                          decision["estimated_remaining_decode_steps"])
@@ -373,8 +370,8 @@ class JointDecisionSchemaFullPathTest(unittest.TestCase):
 
     def test_turn0_selected_action_and_applicable_set(self):
         """turn-0：selected_action ∈ 枚举且与 joint_action 同值（显式冗余
-        断言位）；适用动作集 = {stay, recompute}（无历史 → copy 不适用、
-        无异地驻留 → remote 不适用）；非 recompute 决策分位记 None。"""
+        断言位）；适用动作集 = {stay, recompute}（无历史 → copy 不适用）；
+        非 recompute 决策分位记 None。"""
         runtime = _runtime()
         self.assertTrue(self.scheduler._try_admit_request(runtime, 0))
         decision = _admission_rows(self.scheduler)[0]["decision"]
@@ -442,13 +439,12 @@ class JointDecisionSchemaHistoryTest(unittest.TestCase):
             mode=self.scheduler._joint_mode,
             cost_model=cost_model,
             session=session_view,
-            request=request_view,
-            remote_enabled=True)
+            request=request_view)
         return record, cost_model, session_view
 
     def test_history_applicable_set_and_breakdowns(self):
-        """LOCAL 基驻留实例 1：适用动作集四动作齐；异地实例的 copy/
-        remote-read 候选 breakdown 11 字段在场（字段存在性判据）。"""
+        """LOCAL 基驻留实例 1：适用动作集三动作齐；异地实例的 copy
+        候选 breakdown 字段在场（字段存在性判据）。"""
         record, cost_model, session_view = self._real_record()
         audit = self.scheduler._joint_decision_audit_fields(
             record, cost_model, session_view, cost_model.flow_registry
@@ -506,14 +502,20 @@ class JointDecisionSchemaFreezeTest(unittest.TestCase):
 
     def test_frozen_field_list_matches_jcm_breakdown_declaration(self):
         """SH 冻结字段序与 JCM ActionCostBreakdown 声明逐一同名（防
-        字段漂移；C5 全 11 字段 + D17 扩展 17 字段 + §5.1/§5.6/§5.5 交
-        付面 3 字段 = 31）。"""
+        字段漂移；31→27：remote_read_ns/remote_read_first_credit_ns/
+        remote_read_stream_ns/staging_buffer_peak_bytes 四远读审计键
+        已随 2026-10-14 远读退役一步删除，D7）。"""
         declared = tuple(ActionCostBreakdown.__dataclass_fields__)
-        self.assertEqual(len(_JOINT_BREAKDOWN_LOG_FIELDS), 31)
+        self.assertEqual(len(_JOINT_BREAKDOWN_LOG_FIELDS), 27)
         self.assertEqual(sorted(_JOINT_BREAKDOWN_LOG_FIELDS),
                          sorted(declared))
+        # 退役审计键确已出册（恒零一代不留，D7）。
+        for name in ("remote_read_ns", "remote_read_first_credit_ns",
+                     "remote_read_stream_ns", "staging_buffer_peak_bytes"):
+            self.assertNotIn(name, _JOINT_BREAKDOWN_LOG_FIELDS)
+            self.assertNotIn(name, declared)
         # D17 扩展字段确在册（公式版本/决策阶段/预测里程碑/布局/义务/
-        # 分阶段空间/暂存峰值/近似状态）。
+        # 分阶段空间/近似状态）。
         for name in ("model_semantics_version", "decision_stage",
                      "decision_epoch", "prefill_instance", "decode_instance",
                      "prefill_action", "decode_action", "is_continuation",
@@ -521,7 +523,7 @@ class JointDecisionSchemaFreezeTest(unittest.TestCase):
                      "predicted_next_token_done", "predicted_service_done",
                      "predicted_merge_done", "interval_layout",
                      "inherited_obligation_ids", "phase_space_bytes",
-                     "staging_buffer_peak_bytes", "approximations",
+                     "approximations",
                      # §5.1/§5.6/§5.5 交付面（cfg2 计算量组持久出口）。
                      "projection_stats", "background_delays",
                      "capacity_theta_prediction"):
@@ -543,10 +545,8 @@ class JointDecisionSchemaFreezeTest(unittest.TestCase):
                     breakdown=(ActionCostBreakdown(
                         target_wait_ns=1, history_prep_ns=2,
                         eviction_wait_ns=3, compute_ns=4,
-                        remote_read_ns=5, merge_ns=6,
-                        contention_divisor=1, hops=0, notes=("synthetic",),
-                        remote_read_first_credit_ns=0,
-                        remote_read_stream_ns=0)
+                        merge_ns=6,
+                        contention_divisor=1, hops=0, notes=("synthetic",))
                         if applicable else None)))
         chosen = next(candidate for candidate in candidates
                       if candidate.action == chosen_action
@@ -681,10 +681,8 @@ class ActionMaskForcedSemanticsTest(unittest.TestCase):
                     breakdown=(ActionCostBreakdown(
                         target_wait_ns=1, history_prep_ns=2,
                         eviction_wait_ns=3, compute_ns=4,
-                        remote_read_ns=5, merge_ns=6,
-                        contention_divisor=1, hops=0, notes=("synthetic",),
-                        remote_read_first_credit_ns=0,
-                        remote_read_stream_ns=0)
+                        merge_ns=6,
+                        contention_divisor=1, hops=0, notes=("synthetic",))
                         if applicable else None)))
         chosen = next(candidate for candidate in candidates
                       if candidate.action == "recompute"
@@ -709,8 +707,7 @@ class ActionMaskForcedSemanticsTest(unittest.TestCase):
         # （action_mask），修前会误报 evicted_permanent。
         mask_reason = {
             "stay": MASK_INAPPLICABLE_REASON,
-            "copy": MASK_INAPPLICABLE_REASON,
-            "remote-read": MASK_INAPPLICABLE_REASON}
+            "copy": MASK_INAPPLICABLE_REASON}
         record = self._record(
             applicable_actions={"recompute"}, reasons=mask_reason)
         audit = self._audit(record, history_tokens=512)
@@ -721,8 +718,7 @@ class ActionMaskForcedSemanticsTest(unittest.TestCase):
         # 物理成因优先：掩码压塌 ∧ history==0 ⇒ no_history（掩码无关）。
         mask_reason = {
             "stay": MASK_INAPPLICABLE_REASON,
-            "copy": MASK_INAPPLICABLE_REASON,
-            "remote-read": MASK_INAPPLICABLE_REASON}
+            "copy": MASK_INAPPLICABLE_REASON}
         record = self._record(
             applicable_actions={"recompute"}, reasons=mask_reason)
         audit = self._audit(record, history_tokens=0)
@@ -734,8 +730,7 @@ class ActionMaskForcedSemanticsTest(unittest.TestCase):
         # 配额同时在场时归因 action_mask。
         reasons = {
             "stay": MASK_INAPPLICABLE_REASON,
-            "copy": "quota_link: link=(0,1) remaining=0",
-            "remote-read": MASK_INAPPLICABLE_REASON}
+            "copy": "quota_link: link=(0,1) remaining=0"}
         record = self._record(applicable_actions={"recompute"},
                               reasons=reasons)
         audit = self._audit(record, history_tokens=512)
@@ -746,8 +741,7 @@ class ActionMaskForcedSemanticsTest(unittest.TestCase):
         # 零漂移回归：无掩码理由的配额压塌仍记 quota_deferred。
         reasons = {
             "stay": "history not resident at target",
-            "copy": "quota_link: link=(0,1) remaining=0",
-            "remote-read": "quota_port: port parity gate"}
+            "copy": "quota_link: link=(0,1) remaining=0"}
         record = self._record(applicable_actions={"recompute"},
                               reasons=reasons)
         audit = self._audit(record, history_tokens=512)
@@ -757,8 +751,7 @@ class ActionMaskForcedSemanticsTest(unittest.TestCase):
 
     def test_mask_not_collapsed_stays_elected(self):
         # 掩码在场但候选集未压塌（stay 仍适用）⇒ elected 语义不变。
-        reasons = {"copy": MASK_INAPPLICABLE_REASON,
-                   "remote-read": MASK_INAPPLICABLE_REASON}
+        reasons = {"copy": MASK_INAPPLICABLE_REASON}
         record = self._record(applicable_actions={"stay", "recompute"},
                               reasons=reasons)
         audit = self._audit(record, history_tokens=512)
@@ -771,8 +764,7 @@ class ActionMaskForcedSemanticsTest(unittest.TestCase):
         scheduler = _make_scheduler()
         mask_reason = {
             "stay": MASK_INAPPLICABLE_REASON,
-            "copy": MASK_INAPPLICABLE_REASON,
-            "remote-read": MASK_INAPPLICABLE_REASON}
+            "copy": MASK_INAPPLICABLE_REASON}
         record = self._record(
             applicable_actions={"recompute"}, reasons=mask_reason)
         session_view = SimpleNamespace(history_tokens=512)

@@ -1,15 +1,15 @@
 /******************************************************************************
-This source code is licensed under the MIT license found in the
-LICENSE file in the root directory of this source tree.
+This source code is licensed under the MIT license found in the root directory
+of this source tree.
 *******************************************************************************/
 
 #ifndef __LOCAL_HBM_BANDWIDTH_MODEL_HH__
 #define __LOCAL_HBM_BANDWIDTH_MODEL_HH__
 
-#include <map>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <utility>
 #include <vector>
@@ -59,6 +59,27 @@ class WorkloadLayerHandlerData;
  *
  * Reads and writes share one bus and one aggregate bandwidth scalar
  * (system key "local-mem-bw"); there is no peak/sustained distinction.
+ *
+ * v7 execution-engine restructure (joint改造方案v7 §6 E2, 2026-10-12).
+ * The service arithmetic (equal split, substep boundaries, per-job float
+ * operations in issue order, side-band accumulation order, residue clamp
+ * set, observer pass boundaries) is preserved operation-for-operation; what
+ * changed is the STATE INDEXING around it:
+ *   - mutation observers live in a stable deque with tombstones and
+ *     pass-serial bookkeeping instead of a per-notify vector copy (the old
+ *     copy implemented "snapshot at pass start" by paying O(observers) per
+ *     notification; the deque reproduces the same snapshot semantics --
+ *     entries appended after a pass started are not visited by it, entries
+ *     removed during a pass are still visited by that pass and skipped by
+ *     every later one -- at O(1) dispatch overhead);
+ *   - jobs occupy stable slots with dead-slot reclamation, and three
+ *     index-sorted phase lists (latency-waiting / bandwidth-streaming /
+ *     compute) plus a completion-candidate set and a live drain counter
+ *     replace the per-event full-vector scans in advance_to, the completion
+ *     detach, the join gate, and schedule_next_transition. Every per-job
+ *     floating-point operation still executes, in the same jobs order, with
+ *     the same operands; only the iteration that FINDS the affected jobs is
+ *     indexed.
  */
 class LocalHbmBandwidthModel : public Callable {
   public:
@@ -77,7 +98,6 @@ class LocalHbmBandwidthModel : public Callable {
         POOL_READ,
         POOL_WRITE,
         DIE_COMPUTE,
-        CONTROL_MARKER,
         KIND_COUNT,
     };
     static constexpr size_t kJobKindCount =
@@ -89,9 +109,6 @@ class LocalHbmBandwidthModel : public Callable {
     void issue_compute(uint64_t num_ops,
                        uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
-    // Preserve the one-byte marker through a dedicated coarse endpoint;
-    // ordinary scalar COMPUTE remains forbidden in coarse mode.
-    void issue_control_marker(WorkloadLayerHandlerData* wlhd);
     void issue_restore(uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
     void issue_comm_read(uint64_t bytes,
@@ -127,17 +144,13 @@ class LocalHbmBandwidthModel : public Callable {
                           CallData* data);
     void call(EventType type, CallData* data) override;
 
-    bool has_active_jobs() const;
-    void record_coarse_die_hbm_bytes(double read_bytes, double write_bytes) {
-        coarse_die_read_served_ += read_bytes;
-        coarse_die_write_served_ += write_bytes;
+    // Diagnostic-only dispatch label (v7 event attribution); see Callable.
+    [[nodiscard]] const char* profile_dispatch_label() const noexcept override {
+        return "hbm_transition";
     }
-    double coarse_die_read_bytes_served() const { return coarse_die_read_served_; }
-    double coarse_die_write_bytes_served() const { return coarse_die_write_served_; }
-    double coarse_restore_bytes_served() const { return coarse_restore_served_; }
-    double coarse_pool_read_bytes_served() const { return coarse_pool_read_served_; }
-    double coarse_pool_write_bytes_served() const { return coarse_pool_write_served_; }
 
+
+    bool has_active_jobs() const;
 
     // Die backend teardown helper: drop every pending DIE_COMPUTE job of
     // `sink` WITHOUT firing its callback (the owning DieExecution is going
@@ -158,9 +171,9 @@ class LocalHbmBandwidthModel : public Callable {
     double hbm_shared_ns() const {
         return this->hbm_shared_ns_;
     }
-    // Legacy COMP-byte view plus the exact live/retired prefix of coarse
-    // control-marker endpoints. Marker service is not typed COMP work.
-    double compute_bytes_served() const;
+    double compute_bytes_served() const {
+        return this->bytes_served_by_kind_[kind_index(JobKind::COMPUTE)];
+    }
     double restore_bytes_served() const {
         return this->bytes_served_by_kind_[kind_index(JobKind::RESTORE)];
     }
@@ -201,6 +214,22 @@ class LocalHbmBandwidthModel : public Callable {
     uint64_t redistribution_events() const {
         return this->redistribution_events_;
     }
+
+    // v7 diagnostics: physical transition-callback count and the current
+    // mutation-observer registration count (live entries; tombstones
+    // pending compaction are excluded). Measurement only.
+    [[nodiscard]] uint64_t transition_event_count() const noexcept {
+        return transition_event_count_;
+    }
+    [[nodiscard]] size_t resource_observer_count() const noexcept;
+    // v8 reclamation diagnostics (real counts, no stubs): the deque length
+    // (live + tombstones pending compaction) and the tombstone share. After
+    // the outermost dispatch pass ends, storage == live: tombstoned entries
+    // and their captured state have been reclaimed at that boundary.
+    [[nodiscard]] size_t resource_observer_storage_size() const noexcept {
+        return resource_observers_.size();
+    }
+    [[nodiscard]] size_t resource_observer_tombstone_count() const noexcept;
 
     // -------------------------------------------------------------------
     // W1 (joint work ledger, 2026-09-29): per-rank job snapshot for
@@ -293,11 +322,10 @@ class LocalHbmBandwidthModel : public Callable {
         // exogenous-background row identity (execdoc 14.3, 2026-10-07
         // ruling) for transfer jobs injected without a NodeStore node.
         uint64_t issue_seq = 0;
-    };
-
-    struct CoarseJob {
-        WorkloadLayerHandlerData* wlhd = nullptr;
-        JobKind kind = JobKind::COMM_READ;
+        // v7 stable-slot index (see jobs_/slot_alive_ below).
+        size_t slot = 0;
+        // v7 completion-candidate membership flag (see completion_candidates_).
+        bool in_candidates = false;
     };
 
     class TransitionData : public CallData {
@@ -322,7 +350,25 @@ class LocalHbmBandwidthModel : public Callable {
     void advance_to(Tick now);
     void notify_resource_mutation_before(Tick now);
     void publish_resource_mutation(Tick now);
-    std::vector<size_t> active_streamer_membership() const;
+    // Shared observer dispatch (v7): stable-deque iteration with the same
+    // snapshot semantics the old per-notify vector copy implemented. The
+    // v8 reclamation fix drives tombstone compaction from the pass guard:
+    // the OUTERMOST pass end (depth back to zero, including the
+    // exception-unwind path) is the release boundary for removed
+    // observers' captured state.
+    class ObserverPassGuard {
+      public:
+        explicit ObserverPassGuard(LocalHbmBandwidthModel& model) noexcept;
+        ~ObserverPassGuard();
+        ObserverPassGuard(const ObserverPassGuard&) = delete;
+        ObserverPassGuard& operator=(const ObserverPassGuard&) = delete;
+
+      private:
+        LocalHbmBandwidthModel& model_;
+    };
+    void dispatch_mutation_observers(bool before_change, Tick now,
+                                     uint64_t version);
+    void compact_observers();
     void cancel_scheduled_transition();
     void schedule_next_transition();
     static void destroy_transition_data(CallData* data);
@@ -336,42 +382,66 @@ class LocalHbmBandwidthModel : public Callable {
     // jobs BEFORE any membership accounting (peak/redistribution),
     // delivering their completions from the caller.
     std::vector<Job> detach_completed_jobs();
-    // Definition-aligned redistribution gate: only a live job with
-    // outstanding bytes reshapes shares.
-    static bool has_bandwidth_user(const std::vector<Job>& jobs);
+    // v7 phase-index maintenance (see the class comment): index-sorted
+    // membership lists over stable job slots. insert_phase_member keeps the
+    // list sorted by slot so every per-job apply loop below iterates in the
+    // original issue order.
+    void phase_insert(std::vector<size_t>& members, size_t slot);
+    bool phase_erase(std::vector<size_t>& members, size_t slot);
+    void register_job_phase(Job& job);
+    void unregister_job_phase(size_t slot);
+    void mark_completion_candidate(Job& job);
+    // Dead-slot reclamation: called only at safe points (outside advance_to
+    // and outside any observer pass); rebuilds the slot array and every
+    // index preserving order.
+    void maybe_compact_slots();
     // Shared per-job completion body (elapsed accounting + callback).
     void on_job_complete(const Job& job, Tick now);
 
     Sys* sys;
     Workload* workload;
-    // Active jobs in issue order. The old two-slot (compute/restore)
-    // representation and its "second same-kind job throws" guards were
-    // removed with the N-way generalization; concurrent RESTORE jobs are a
-    // supported state (HardwareResource's hbm_dma slot is an UNLIMITED
-    // counted slot since the 2026-09-25 copy-pipelining change) and share
-    // the pool through this model's N-way equal split.
-    std::vector<Job> jobs;
-    double coarse_comm_read_served_ = 0.0;
-    double coarse_comm_write_served_ = 0.0;
-    double coarse_restore_served_ = 0.0;
-    double coarse_pool_read_served_ = 0.0;
-    double coarse_pool_write_served_ = 0.0;
-    double coarse_die_read_served_ = 0.0;
-    double coarse_die_write_served_ = 0.0;
-    double coarse_control_marker_bytes_served_ = 0.0;
-    std::map<uint64_t, CoarseJob> coarse_jobs_;
-
+    // v7 stable-slot storage: jobs_[slot] is valid iff slot_alive_[slot].
+    // Detach marks the slot dead instead of erasing (erasing would shift
+    // every later slot and invalidate the phase lists); dead slots are
+    // compacted in bulk at safe points while their order is preserved, so
+    // every per-job iteration below keeps the original issue order.
+    std::vector<Job> jobs_;
+    std::vector<uint8_t> slot_alive_;
+    size_t live_job_count_ = 0;
+    size_t dead_slot_count_ = 0;
+    // Phase lists (index-sorted by slot): jobs with memory_latency_ns >
+    // kEpsilon; jobs past latency with remaining drain > kEpsilon; every
+    // live COMPUTE job (its ops leg drains in parallel with any phase).
+    std::vector<size_t> latency_members_;
+    std::vector<size_t> stream_members_;
+    std::vector<size_t> compute_members_;
+    // Live jobs whose remaining drain exceeds the tolerance (the v7
+    // has_bandwidth_user counter: an exact O(1) replacement of the old
+    // any-of scan over the job vector).
+    size_t drain_pending_count_ = 0;
+    // Jobs whose tracked quantities landed at/below a boundary since the
+    // last detach -- the completion-candidate set. Only these jobs can have
+    // crossed complete() since the last detach, so call()/issue paths check
+    // candidates instead of rescanning the vector.
+    std::vector<size_t> completion_candidates_;
     Tick last_update_tick;
     uint64_t event_generation;
-    // Backend job identity sequence (see Job::issue_seq): assigned at
-    // issue time, monotone for this rank's model lifetime.
+    // Backend job identity sequence (see Job::issue_seq): assigned at issue
+    // time, monotone for this rank's model lifetime.
     uint64_t next_issue_seq_ = 1;
     SystemEventHandle scheduled_transition_event;
     struct ObserverEntry {
-        MutationObserverId id = 0;
+        MutationObserverId id = 0;  // 0 = tombstone (dead_pass set)
+        uint64_t dead_pass = 0;     // pass serial during which it was removed
         ResourceMutationObserver callback;
     };
-    std::vector<ObserverEntry> resource_observers_;
+    // v7 stable observer storage (see the class comment). Entries append at
+    // the back; removals tombstone; compaction (dead-slot erase) runs after
+    // the outermost pass and only there.
+    std::deque<ObserverEntry> resource_observers_;
+    size_t observer_pass_depth_ = 0;
+    uint64_t observer_pass_serial_ = 0;
+    bool observers_compaction_pending_ = false;
     MutationObserverId next_observer_id_ = 1;
     uint64_t resource_version_ = 0;
     Tick next_transition_tick_ = 0;
@@ -390,6 +460,32 @@ class LocalHbmBandwidthModel : public Callable {
     double die_actual_bytes_served_ = 0.0;
     uint64_t peak_concurrent_jobs_ = 0;
     uint64_t redistribution_events_ = 0;
+    uint64_t transition_event_count_ = 0;
+
+#ifdef JOINT_V7_EVENT_PROFILE
+    // Diagnostic-only sub-attribution of the transition callback (v7 §4.1
+    // Q4: which stage of call() carries the cost, and how large the live
+    // job set is). Compiled out in production builds.
+  public:
+    struct TransitionSubTimers {
+        uint64_t advance_ns = 0;
+        uint64_t detach_ns = 0;
+        uint64_t complete_ns = 0;
+        uint64_t schedule_ns = 0;
+        uint64_t calls = 0;
+        size_t last_live_jobs = 0;
+        size_t max_live_jobs = 0;
+        size_t last_observers = 0;
+        size_t max_observers = 0;
+    };
+    [[nodiscard]] const TransitionSubTimers& profile_transition_timers()
+        const noexcept {
+        return profile_transition_timers_;
+    }
+
+  private:
+    TransitionSubTimers profile_transition_timers_;
+#endif
 };
 
 }  // namespace AstraSim

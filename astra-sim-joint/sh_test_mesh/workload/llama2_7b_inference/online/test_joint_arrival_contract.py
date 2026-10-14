@@ -126,16 +126,6 @@ class _KvManager:
                       next_request_type=None):
         self.calls.append(("mark_complete", session_id, completion_ns))
 
-    def release_staging_lease(self, request_id, *, boundary_epoch=None):
-        # D09/D20：完成结算收敛注销暂存 lease（本替身无在册 lease——
-        # 幂等空放语义；F6 教义：接口直达，替身补齐不静默跳行）。
-        return False
-
-    def staging_lease_for_request(self, request_id):
-        # 对齐真 KVCacheManager 接口（_release_staging_lease 先查在册
-        # lease 再注销；本替身无在册 lease 恒 None，与幂等空放配套）。
-        return None
-
     def session_snapshot(self, session_id):
         return SimpleNamespace(location="local_hbm", instance_index=0)
 

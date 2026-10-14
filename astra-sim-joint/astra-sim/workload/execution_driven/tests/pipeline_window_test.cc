@@ -189,6 +189,27 @@ void test_controller_counters_and_invalidation() {
            "plan wire includes immutable algorithm contract and decision evidence");
 }
 
+void test_kernel_contract_equality_and_rejections() {
+    // Migrated from the retired pipeline_descriptor_test.cc (D4: the
+    // contract lives on even though the descriptor wire is gone).
+    const auto a = PipelineKernelContract::parse(contract_wire(1));
+    const auto b = PipelineKernelContract::parse(contract_wire(1));
+    const auto c = PipelineKernelContract::parse(contract_wire(8));
+    expect(*a == *b && *a != *c,
+           "typed run contract equality compares all fields");
+    expect(a->window_tile_limit() == 1 &&
+               PipelineKernelContract::stable_window_count() == 8 &&
+               PipelineKernelContract::absolute_prefix_budget_ticks() == 1,
+           "parsed tunables and fixed constants exposed");
+    auto bad = contract_wire(3);
+    expect_throw([&] { (void)PipelineKernelContract::parse(bad); },
+                 "unsupported precision limit rejected");
+    bad = contract_wire(1);
+    bad["extra"] = 1;
+    expect_throw([&] { (void)PipelineKernelContract::parse(bad); },
+                 "unknown kernel contract field rejected");
+}
+
 }  // namespace
 
 int main() {
@@ -196,6 +217,7 @@ int main() {
     test_positive_original_slices_keep_an_inherent_tick_floor();
     test_hardware_floor_and_progressive_refinement();
     test_controller_counters_and_invalidation();
+    test_kernel_contract_equality_and_rejections();
     if (failures != 0) {
         std::cerr << "[pipeline_window_test] " << failures << " failure(s)\n";
         return 1;

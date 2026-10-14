@@ -192,14 +192,6 @@ class _KvManagerIso:
                            next_request_type))
         self._sessions[session_id].next_request_type = next_request_type
 
-    def release_staging_lease(self, request_id, *, boundary_epoch=None):
-        return False
-
-    def staging_lease_for_request(self, request_id):
-        # 对齐真 KVCacheManager 接口（_release_staging_lease 先查在册
-        # lease 再注销；本替身无在册 lease 恒 None，与幂等空放配套）。
-        return None
-
     def session_snapshot(self, session_id):
         return SimpleNamespace(location="local_hbm", instance_index=0)
 

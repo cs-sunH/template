@@ -17,7 +17,8 @@ tp6/32 头、首 rank 6 头、16384 B/token/头）：state=2959736832
   1. P=recompute 轮（强制臂组合；argmin 正常路径不选，但执行面必须
      合法承载）D=copy@base：折叠后 base 实例恰持 H_B，无 stranded 字
      节；全量审计（_check_invariants）与增量通道双绿；
-  2. D=recompute/remote-read@j（重建他处/多源远读）：i_P 旧工作副本转
+  2. D=recompute@j（重建他处；原多源远读形态已随 2026-10-14 远读
+     退役删除）：i_P 旧工作副本转
      boundary_source 记录后，**全量审计**必须与增量通道同式计入该第三
      位置（`_check_invariants` 此前漏加 `_incremental_boundary_source_
      contribution` 项——strict 档（SH_STRICT_KV_INVARIANTS=1）与
@@ -150,14 +151,9 @@ class BoundarySourceFullAuditPin(unittest.TestCase):
         # 全量审计必须同式计数（修复前：i_P 侧 expected=0 对 state>0 红）。
         kv._check_invariants()
 
-    def test_remote_multi_source_keeps_full_audit_green(self):
-        kv = _p_recompute_kv()
-        kv.commit_boundary_decode_transition(
-            session_id="s", p_instance_index=P_INSTANCE,
-            target_instance_index=THIRD_INSTANCE, action="remote-read",
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            trigger_request_id="r1")
-        kv._check_invariants()
+    # （原 test_remote_multi_source_keeps_full_audit_green 已随
+    # 2026-10-14 远读退役删除：remote-read 边界分支删除后该形态不可
+    # 构造；全量审计面由 recompute/copy 转记录用例钉住。）
 
 
 if __name__ == "__main__":

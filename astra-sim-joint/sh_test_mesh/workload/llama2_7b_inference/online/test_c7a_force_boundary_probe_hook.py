@@ -132,7 +132,7 @@ def _candidate(instance_index, action, *, applicable=True, cost_ns=1000,
 def _record(candidates, chosen):
     return SelectionRecord(
         mode="joint", chosen=chosen, candidates=tuple(candidates),
-        instance_rule_note="test", remote_enabled=True)
+        instance_rule_note="test")
 
 
 class ForceBoundaryChoiceUnitTest(unittest.TestCase):
@@ -148,12 +148,10 @@ class ForceBoundaryChoiceUnitTest(unittest.TestCase):
         stay0 = _candidate(0, "stay", cost_ns=500, is_continuation=True)
         copy0 = _candidate(0, "copy", cost_ns=400)
         copy1 = _candidate(1, "copy", cost_ns=900)
-        remote1 = _candidate(1, "remote-read", applicable=False,
-                             reason="no remote source")
         recompute1 = _candidate(1, "recompute", applicable=False,
                                 reason="mask excluded")
         record = _record(
-            [stay0, copy0, copy1, remote1, recompute1], chosen=copy0)
+            [stay0, copy0, copy1, recompute1], chosen=copy0)
         return record
 
     def test_off_returns_record_untouched(self):
@@ -189,14 +187,14 @@ class ForceBoundaryChoiceUnitTest(unittest.TestCase):
 
     def test_outside_surface_fails_closed_with_reasons(self):
         record = self._surface()
-        scheduler = self._scheduler(action="remote-read")
+        scheduler = self._scheduler(action="recompute")
         with self.assertRaises(RuntimeError) as ctx:
             scheduler._apply_forced_boundary_choice(
                 record, "r0", DECISION_STAGE_D)
         message = str(ctx.exception)
         self.assertIn(FORCE_BOUNDARY_ACTION_ENV, message)
         self.assertIn("applicable surface", message)
-        self.assertIn("no remote source", message)
+        self.assertIn("mask excluded", message)
         # 候选面完全没有的动作（无逐候选理由）同拒。
         scheduler2 = self._scheduler(action="stay")
         record2 = _record(
@@ -314,8 +312,7 @@ class DPathForceHookIntegrationTest(unittest.TestCase):
         # 钉测前提：本场景适用面 ≥2 动作（可强制到非基线动作）。
         self.assertGreaterEqual(len(applicable), 2, applicable)
         forced_action = next(
-            action for action in ("stay", "recompute", "copy",
-                                  "remote-read")
+            action for action in ("stay", "recompute", "copy")
             if action in applicable and action != "copy")
         on_scheduler, on_rt = _drive_drain(
             force_request="r0", force_action=forced_action)
@@ -354,7 +351,7 @@ class DPathForceHookIntegrationTest(unittest.TestCase):
             if row["applicable"]}
         outside = [action for action in ALL_ACTIONS
                    if action not in applicable]
-        # 掩码收窄后面外动作集确定（remote-read/recompute 被掩码剔除）。
+        # 掩码收窄后面外动作集确定（recompute 被掩码剔除）。
         self.assertTrue(outside, applicable)
         with self.assertRaises(RuntimeError) as ctx:
             _drive_drain(force_request="r0", force_action=outside[0])
@@ -426,7 +423,7 @@ class PPathForceHookIntegrationTest(unittest.TestCase):
 
     def test_boundary_armed_leaves_p_admission_at_natural_argmin(self):
         # 修复轮三 R8 合同钉：BOUNDARY env 武装（遍历全部动作，含 P 面
-        # 不适用的 remote-read/recompute——轮三前即红 'no history to
+        # 不适用的 recompute——轮三前即红 'no history to
         # copy' at its P-boundary）不影响 P 准入：照常 admitted、
         # selection=自然 argmin（=off 基线逐字段一致）、无披露键、候选
         # 面逐位一致（同状态对照的计价输入不变）。D 边界照常武装由
@@ -468,8 +465,7 @@ class PPathForceHookIntegrationTest(unittest.TestCase):
         baseline = off_decision["selected_action"]
         applicable = list(off_decision["applicable_actions"])
         forced_action = next(
-            action for action in ("copy", "recompute", "remote-read",
-                                  "stay")
+            action for action in ("copy", "recompute", "stay")
             if action in applicable and action != baseline)
         _on_s, admitted, on_rows = self._admit(
             entry_request="r_p", entry_action=forced_action)
@@ -504,12 +500,12 @@ class PPathForceHookIntegrationTest(unittest.TestCase):
             off_decision["applicable_actions"])
 
     def test_entry_field_outside_surface_fails_closed(self):
-        # 掩码收窄到 {copy,stay} 后经 entry 字段强制 remote-read：面外
+        # 掩码收窄到 {copy,stay} 后经 entry 字段强制 recompute：面外
         # 动作（掩码+物理适用性∩配额可行交集外）fail-closed——测量仪器
         # 不得制造非法状态（BOUNDARY 臂的面外 fail-closed 钉在
         # DPathForceHookIntegrationTest）。
         with self.assertRaises(RuntimeError) as ctx:
-            self._admit(entry_request="r_p", entry_action="remote-read",
+            self._admit(entry_request="r_p", entry_action="recompute",
                         allowed="copy,stay")
         message = str(ctx.exception)
         self.assertIn(FORCE_ENTRY_ACTION_ENV, message)

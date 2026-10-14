@@ -57,6 +57,21 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/die_model")
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/joint_ledger")
 
 
+# Joint v7 event long-tail attribution (joint改造方案v7 §4): diagnostic-only
+# callback-classification build. Adds the JOINT_V7_EVENT_PROFILE compile
+# definition consumed by EventProfile.h brackets (backend queue phases, Sys
+# sub-dispatch labels). Never changes simulation behavior; default OFF for
+# every production build. The same option block is mirrored in
+# extern/network_backend/analytical/CMakeLists.txt and
+# astra-sim/network_frontend/analytical/CMakeLists.txt (assembly builds add
+# each directory independently, so the cache option is declared here once
+# and only consumed there).
+option(JOINT_EVENT_PROFILE
+       "Diagnostic event-classification instrumentation (v7 attribution)" OFF)
+if(JOINT_EVENT_PROFILE)
+    add_compile_definitions(JOINT_V7_EVENT_PROFILE)
+endif()
+
 # Find Protobuf
 # TODO: We want to use the advanced semantics 'protobuf CONFIG REQUIRED'.
 # However, this requires protobuf to be compiled from source,
@@ -74,23 +89,6 @@ else()
     find_package(Protobuf REQUIRED)
 endif()
 
-# Generate Chakra bindings in the build tree. A clean checkout contains the
-# .proto source, not generated C++ files; use the selected Protobuf compiler
-# and rebuild when that schema changes.
-set(CHAKRA_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf")
-set(CHAKRA_PROTO_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/chakra")
-set(CHAKRA_PROTO_CC "${CHAKRA_PROTO_OUTPUT_DIR}/et_def.pb.cc")
-set(CHAKRA_PROTO_HH "${CHAKRA_PROTO_OUTPUT_DIR}/et_def.pb.h")
-file(MAKE_DIRECTORY "${CHAKRA_PROTO_OUTPUT_DIR}")
-add_custom_command(
-    OUTPUT "${CHAKRA_PROTO_CC}" "${CHAKRA_PROTO_HH}"
-    COMMAND protobuf::protoc
-        "--proto_path=${CHAKRA_PROTO_DIR}"
-        "--cpp_out=${CHAKRA_PROTO_OUTPUT_DIR}"
-        "${CHAKRA_PROTO_DIR}/et_def.proto"
-    DEPENDS "${CHAKRA_PROTO_DIR}/et_def.proto" protobuf::protoc
-    VERBATIM)
-
 # Files to compile
 # L24(2026-09-29 审查修复):GLOB 加 CONFIGURE_DEPENDS——增删源文件后不再
 # 依赖手工重跑 cmake 才能被发现(对齐 face-LRU 仓同位置修复)。
@@ -104,15 +102,17 @@ file(GLOB srcs CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/collective_algorithm/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/common/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/third_party/utils/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/feeder_v3/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/remote_memory_backend/analytical/*.cc")
 
-# Compact joint pipeline algebra is a single core library shared by the
-# simulator and native projection ABI. Keep these sources out of both the
-# root source glob and the analytical frontend's execution-driven glob so an
-# executable never receives duplicate definitions.
+# Joint window algebra + native projection core (D4/D5: shrank to the die
+# timer-window kernel and the projection engine when the remote-read tile
+# descriptors were retired; the PipelineKernelContract implementation lives
+# in PipelineKernel.cc). Keep these sources out of both the root source glob
+# and the analytical frontend's execution-driven glob so an executable never
+# receives duplicate definitions.
 set(joint_pipeline_core_sources
-    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/PipelineDescriptor.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/PipelineKernel.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/NativeProjection.cc")
 list(REMOVE_ITEM srcs ${joint_pipeline_core_sources})
@@ -140,8 +140,7 @@ set_target_properties(joint_projection PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # Compile AstraSim Library
-add_library(AstraSim STATIC ${srcs} "${CHAKRA_PROTO_CC}" "${CHAKRA_PROTO_HH}")
-target_include_directories(AstraSim PUBLIC "${CHAKRA_PROTO_OUTPUT_DIR}")
+add_library(AstraSim STATIC ${srcs})
 
 # Link libraries
 target_link_libraries(AstraSim PUBLIC fmt::fmt)
@@ -151,9 +150,10 @@ target_link_libraries(AstraSim PUBLIC yaml-cpp)
 # the shared extern/helper nlohmann/json include via die_model's interface.
 target_link_libraries(AstraSim PUBLIC die_model)
 target_link_libraries(AstraSim PUBLIC joint_pipeline_core)
-# Link the coarse_die_v2 C++ runtime while preserving die_model for explicit
-# legacy mesh_die_v1/tx8_reference_v1 profiles.
-target_link_libraries(AstraSim PUBLIC coarse_die)
+# v6 compact round: the execution-driven producer builds jointledger typed
+# records and shares the compact wire codec with the native receiver
+# (PUBLIC: the joint_ledger interface carries its own include paths).
+target_link_libraries(AstraSim PUBLIC joint_ledger)
 
 # Same as above.
 if(DEFINED ENV{PROTOBUF_FROM_SOURCE} AND "$ENV{PROTOBUF_FROM_SOURCE}" STREQUAL "True")
@@ -197,18 +197,9 @@ set_target_properties(AstraSim
 # tree without touching the explicit-binary regression convention.
 enable_testing()
 
-# Pure compact-descriptor parser/algebra fixture (no system or network runtime).
-add_executable(JointPipelineDescriptorTest
-    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/tests/pipeline_descriptor_test.cc")
-target_link_libraries(JointPipelineDescriptorTest PRIVATE joint_pipeline_core)
-target_compile_options(JointPipelineDescriptorTest PRIVATE
-    $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>)
-set_target_properties(JointPipelineDescriptorTest PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-add_test(NAME JointPipelineDescriptorTest COMMAND JointPipelineDescriptorTest)
-
-# Bounded integer window operator and mutation/invalidation counters. This is
-# deliberately linked to the same immutable descriptor/kernel library used by
+# Bounded integer window operator and mutation/invalidation counters, plus
+# the migrated PipelineKernelContract parse/validate assertions. This is
+# deliberately linked to the same immutable kernel library used by
 # NativeProjection and the online runtime.
 add_executable(JointPipelineWindowTest
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/tests/pipeline_window_test.cc")

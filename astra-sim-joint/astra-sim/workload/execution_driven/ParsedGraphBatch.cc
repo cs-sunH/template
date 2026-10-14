@@ -17,9 +17,7 @@ GraphBatchCommitter and consume the typed fields.
 
 #include <algorithm>
 #include <limits>
-#include <set>
 #include <string>
-#include <tuple>
 #include <vector>
 
 namespace AstraSim {
@@ -147,20 +145,6 @@ void check_rank_domain(const int rank, const int num_ranks,
 constexpr uint64_t kUint32Max =
     static_cast<uint64_t>(std::numeric_limits<uint32_t>::max());
 
-PipelineAnchorRole to_pipeline_anchor_role(GraphAnchorRole role) {
-    switch (role) {
-        case GraphAnchorRole::Start:
-            return PipelineAnchorRole::Start;
-        case GraphAnchorRole::Frontier:
-            return PipelineAnchorRole::Frontier;
-        case GraphAnchorRole::Service:
-            return PipelineAnchorRole::Service;
-        case GraphAnchorRole::Settle:
-            return PipelineAnchorRole::Settle;
-    }
-    throw ParseError("unknown typed graph anchor role");
-}
-
 ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
                       int num_ranks) {
     const std::string where =
@@ -232,15 +216,16 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
 
     // N12: compute -- required {num_ops, tensor_size, runtime_ns}; optional
     // {remote_weight_bytes, op_role, die_op_spec} (sh_3.0: the HBM access
-    // mode lives in the "mem" sub-object below, not under compute).
+    // mode lives in the "mem" sub-object below, not under compute). Schema 3
+    // (D16): the retired remote-read anchor sub-keys under compute
+    // were removed from the allowed set -- reappearing fails closed.
     const nlohmann::json& compute = node_json["compute"];
     if (!compute.is_object()) {
         fail(where + ": compute is not an object");
     }
     check_key_set(compute,
                   {"num_ops", "tensor_size", "runtime_ns",
-                   "remote_weight_bytes", "op_role", "die_op_spec",
-                   "exec_role", "pipeline_anchor"},
+                   "remote_weight_bytes", "op_role", "die_op_spec"},
                   {"num_ops", "tensor_size", "runtime_ns"},
                   where + ".compute");
     node.compute.num_ops = get_uint(compute["num_ops"], "num_ops",
@@ -267,53 +252,6 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
                  "\" is not one of compute|control_marker");
         }
     }
-    if (compute.contains("exec_role")) {
-        const std::string role =
-            get_string(compute["exec_role"], "exec_role", where + ".compute");
-        if (role != "remote_read_pipeline_anchor") {
-            fail(where + ": unsupported compute.exec_role \"" + role + "\"");
-        }
-        node.compute.exec_role = ComputeExecRole::RemoteReadPipelineAnchor;
-        if (!compute.contains("pipeline_anchor") ||
-            !compute["pipeline_anchor"].is_object()) {
-            fail(where + ": pipeline anchor exec_role requires an object "
-                 "compute.pipeline_anchor");
-        }
-        const auto& anchor = compute["pipeline_anchor"];
-        check_key_set(anchor, {"segment_id", "role"},
-                      {"segment_id", "role"}, where + ".compute.pipeline_anchor");
-        node.compute.pipeline_anchor.present = true;
-        node.compute.pipeline_anchor.segment_id =
-            get_string(anchor["segment_id"], "segment_id",
-                       where + ".compute.pipeline_anchor");
-        if (node.compute.pipeline_anchor.segment_id.empty()) {
-            fail(where + ": pipeline anchor segment_id is empty");
-        }
-        const std::string anchor_role = get_string(
-            anchor["role"], "role", where + ".compute.pipeline_anchor");
-        if (anchor_role == "start") {
-            node.compute.pipeline_anchor.role = GraphAnchorRole::Start;
-        } else if (anchor_role == "frontier") {
-            node.compute.pipeline_anchor.role = GraphAnchorRole::Frontier;
-        } else if (anchor_role == "service") {
-            node.compute.pipeline_anchor.role = GraphAnchorRole::Service;
-        } else if (anchor_role == "settle") {
-            node.compute.pipeline_anchor.role = GraphAnchorRole::Settle;
-        } else {
-            fail(where + ": invalid pipeline anchor role \"" + anchor_role + "\"");
-        }
-    } else if (compute.contains("pipeline_anchor")) {
-        fail(where + ": compute.pipeline_anchor requires exec_role");
-    }
-    if (node.compute.exec_role == ComputeExecRole::RemoteReadPipelineAnchor) {
-        if (type != 4 || node.is_cpu_op || node.is_timer_op ||
-            node.compute.num_ops != 0 || node.compute.tensor_size != 0 ||
-            node.compute.runtime_ns != 0 ||
-            node.compute.op_role != OpRole::Compute) {
-            fail(where + ": remote-read pipeline anchor must be a zero-cost "
-                 "COMP node without CPU/timer/control-marker role");
-        }
-    }
     if (compute.contains("die_op_spec")) {
         // Contract §2 conflict rule: a die-spec node must not carry a
         // calibrated runtime (a non-zero runtime_ns would silently bypass
@@ -328,27 +266,12 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
         if (!spec_json.is_object()) {
             fail(where + ": compute.die_op_spec is not an object");
         }
-        if (node.compute.exec_role ==
-            ComputeExecRole::RemoteReadPipelineAnchor) {
-            if (!spec_json.empty()) {
-                fail(where + ": pipeline anchor die_op_spec must be empty");
-            }
-        } else {
-            node.compute.die_task_json =
-                std::make_shared<const nlohmann::json>(spec_json);
-            if (!spec_json.contains("schema_version")) {
-                if (!spec_json.contains("op_kind")) {
-                    fail(where + ": compute.die_op_spec is missing op_kind");
-                }
-            } else {
-                try {
-                    node.compute.die_spec = DieModel::parse_die_op_spec(spec_json);
-                } catch (const ParseError&) {
-                    throw;
-                } catch (const std::exception& e) {
-                    fail(where + ": compute.die_op_spec rejected: " + e.what());
-                }
-            }
+        try {
+            node.compute.die_spec = DieModel::parse_die_op_spec(spec_json);
+        } catch (const ParseError&) {
+            throw;
+        } catch (const std::exception& e) {
+            fail(where + ": compute.die_op_spec rejected: " + e.what());
         }
     }
 
@@ -642,15 +565,16 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
     if (!resp.is_object()) {
         fail("response is not an object (rule T0)");
     }
-    // T6: schema 2 makes both the immutable kernel contract and the
-    // descriptor array mandatory, including for an otherwise empty batch.
+    // T6: schema 3 keeps the immutable kernel contract mandatory (D4) and
+    // drops the retired descriptor array from the allowed key set (D16) --
+    // including for an otherwise empty batch.
     check_key_set(resp,
                   {"schema_version", "batch_id", "source_delivery_sequence",
                    "error", "nodes", "parent_edges", "watches", "assignments",
                    "kv_actions", "future_alarms", "touched_ranks",
-                   "pipeline_descriptors", "kernel_contract"},
+                   "kernel_contract"},
                   {"schema_version", "source_delivery_sequence",
-                   "pipeline_descriptors", "kernel_contract"},
+                   "kernel_contract"},
                   "response");
 
     ParsedGraphBatch batch;
@@ -794,128 +718,6 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
         fail(std::string("response kernel_contract rejected: ") + e.what());
     }
 
-    const nlohmann::json& descriptors =
-        array_or_empty("pipeline_descriptors");
-    batch.pipeline_descriptors.reserve(descriptors.size());
-    for (size_t i = 0; i < descriptors.size(); ++i) {
-        try {
-            batch.pipeline_descriptors.push_back(
-                PipelineDescriptor::parse(descriptors[i]));
-        } catch (const std::exception& e) {
-            fail("pipeline_descriptor[" + std::to_string(i) +
-                 "] rejected: " + e.what());
-        }
-    }
-
-    // Every physical COMP anchor must resolve to exactly one immutable
-    // descriptor selector. Conversely every physical endpoint slot in a
-    // descriptor must be present in the typed GraphBatch node array.
-    std::set<std::string> descriptor_segment_ids;
-    for (const auto& descriptor : batch.pipeline_descriptors) {
-        const auto& identity = descriptor->identity();
-        if (!descriptor_segment_ids.insert(identity.segment_id).second) {
-            fail("duplicate pipeline descriptor segment_id \"" +
-                 identity.segment_id + "\"");
-        }
-    }
-    std::set<std::tuple<std::string, uint64_t, int, PipelineAnchorRole>>
-        matched_physical_anchors;
-    for (const auto& parsed : batch.nodes) {
-        const auto& anchor = parsed.node.compute.pipeline_anchor;
-        if (parsed.node.compute.exec_role !=
-            ComputeExecRole::RemoteReadPipelineAnchor) {
-            continue;
-        }
-        size_t matches = 0;
-        for (const auto& descriptor : batch.pipeline_descriptors) {
-            const auto& identity = descriptor->identity();
-            if (identity.segment_id != anchor.segment_id) {
-                continue;
-            }
-            for (const auto& selector : descriptor->anchors()) {
-                if (selector.binding !=
-                        PipelineAnchorBinding::PhysicalEndpointSlot ||
-                    !selector.has_node_id ||
-                    selector.node_id != parsed.json_id ||
-                    selector.rank != parsed.node.rank ||
-                    selector.role != to_pipeline_anchor_role(anchor.role)) {
-                    continue;
-                }
-                size_t run_matches = 0;
-                for (const auto& run : descriptor->endpoint_runs()) {
-                    if (run.rank != parsed.node.rank ||
-                        run.group_ordinal != selector.selector.group_ordinal ||
-                        selector.selector.tile_ordinal < run.first_tile ||
-                        selector.selector.tile_ordinal - run.first_tile >=
-                            run.tile_count ||
-                        std::find(run.shard_ordinals.begin(),
-                                  run.shard_ordinals.end(),
-                                  selector.selector.shard_ordinal) ==
-                            run.shard_ordinals.end()) {
-                        continue;
-                    }
-                    for (const auto& leg : run.legs) {
-                        if (leg.endpoint != selector.selector.endpoint ||
-                            descriptor->endpoint_json_id(
-                                run, leg, selector.selector.tile_ordinal,
-                                selector.selector.shard_ordinal) != parsed.json_id) {
-                            continue;
-                        }
-                        const bool internal_marker =
-                            selector.selector.kind ==
-                                PipelineSelectorKind::InternalMarkerDone;
-                        if (internal_marker !=
-                            (leg.endpoint == PipelineEndpointLeg::BodyMarker)) {
-                            continue;
-                        }
-                        ++run_matches;
-                        if (run.legacy_context.request_id !=
-                                parsed.node.request_id ||
-                            run.legacy_context.stage != parsed.node.stage ||
-                            run.legacy_context.generation !=
-                                parsed.node.generation) {
-                            fail("pipeline anchor node request/stage/generation "
-                                 "does not match endpoint run legacy_context: "
-                                 "segment_id=\"" + identity.segment_id +
-                                 "\"");
-                        }
-                    }
-                }
-                if (run_matches != 1) {
-                    fail("pipeline anchor selector does not resolve to one "
-                         "endpoint run with matching legacy_context: "
-                         "segment_id=\"" + identity.segment_id + "\"");
-                }
-                ++matches;
-                matched_physical_anchors.emplace(
-                    anchor.segment_id, parsed.json_id, parsed.node.rank,
-                    selector.role);
-            }
-        }
-        if (matches != 1) {
-            fail("pipeline anchor node rank=" +
-                 std::to_string(parsed.node.rank) + " id=" +
-                 std::to_string(parsed.json_id) + " segment_id=\"" +
-                 anchor.segment_id + "\" does not resolve to exactly one "
-                 "descriptor physical selector");
-        }
-    }
-    for (const auto& descriptor : batch.pipeline_descriptors) {
-        const auto& identity = descriptor->identity();
-        for (const auto& selector : descriptor->anchors()) {
-            if (selector.binding ==
-                PipelineAnchorBinding::PhysicalEndpointSlot) {
-                if (!selector.has_node_id ||
-                    matched_physical_anchors.count(std::make_tuple(
-                        identity.segment_id, selector.node_id, selector.rank,
-                        selector.role)) != 1) {
-                    fail("descriptor physical anchor missing matching COMP "
-                         "node: segment_id=\"" + identity.segment_id +
-                         "\" id=" + std::to_string(selector.node_id));
-                }
-            }
-        }
-    }
     return batch;
 }
 

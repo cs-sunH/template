@@ -96,18 +96,7 @@ namespace ExecutionDriven {
 class NodeStoreGraphSource;
 class WatchRegistry;
 class RequestIngress;
-struct ParsedNode;
 struct GraphBatchCommitterTestAccess;
-
-/// Internal compact ordinary/virtual ID view shared by the committer's
-/// preflight helpers. One virtual AP remains one record regardless of count.
-struct GraphBatchLogicalIdSpan {
-    int rank = -1;
-    uint64_t json_first = 0;
-    uint64_t count = 0;
-    uint64_t stride = 1;
-    const ParsedNode* physical_node = nullptr;
-};
 
 /// Atomic GraphBatch committer (phase 5). One instance per online run.
 /// Simulation-thread-only: its fixed JSON-id stamp scratch is deliberately
@@ -189,21 +178,6 @@ class GraphBatchCommitter {
             const std::string& pg_name,
             const std::vector<int>& participant_ranks)>
             communicator_members_for_pg;
-        // Pipeline descriptors are staged without mutating executor state in
-        // Phase A. The returned type-erased plan must own every preallocated
-        // descriptor/cursor/anchor binding needed by commit_pipeline_batch;
-        // commit installs it after graph/watch assembly and before any rank
-        // issue pass. A descriptor batch is rejected when either hook is
-        // missing, so production cannot silently parse-and-drop the v2 data.
-        std::function<std::shared_ptr<void>(
-            const GraphBatch& batch,
-            const GraphBatchCommitter& committer)>
-            prepare_pipeline_batch;
-        std::function<void(
-            std::shared_ptr<void> prepared,
-            const GraphBatch& batch,
-            const GraphBatchCommitter& committer)>
-            commit_pipeline_batch;
         // Publish the first-commit-frozen immutable window/kernel contract
         // to each rank's Workload before this batch can enter an issue pass.
         // The callback is optional for isolated committer fixtures; online
@@ -211,10 +185,7 @@ class GraphBatchCommitter {
         std::function<void(
             std::shared_ptr<const PipelineKernelContract>)>
             commit_kernel_contract;
-        // C4: publish each ordinary node at its actual NodeStore insertion
-        // point. Physical pipeline anchors are zero-cost proxies and are
-        // intentionally omitted; their mapped endpoint work is published by
-        // RemoteReadExecutor under the same global sequencer.
+        // C4: publish each node at its actual NodeStore insertion point.
         LedgerNodeTransitionPublisher publish_node_transition;
         // M2 node GC (2026-08-23; the --online-node-gc CLI arm was removed
         // by the B.3 cleanup (2026-09-05), so the official path always sets
@@ -307,9 +278,9 @@ class GraphBatchCommitter {
     std::optional<uint64_t> resolve_store_id(int rank,
                                              uint64_t json_id) const;
 
-    /// Build one compact JSON-ID preview for a candidate batch. Pipeline
-    /// preparation uses it for physical anchors and endpoint holes before
-    /// commit; membership remains the caller's responsibility.
+    /// Build one compact JSON-ID preview for a candidate batch (pure
+    /// json-id -> future store-id affine mapping over the batch's nodes);
+    /// membership remains the caller's responsibility.
     CandidateIdPreview candidate_id_preview(const GraphBatch& batch) const;
 
     /// Test/diagnostic view of the fixed metadata footprint: exactly one
@@ -402,11 +373,6 @@ class GraphBatchCommitter {
         std::vector<int>* json_id_touched_ranks,
         std::vector<int>* issue_ranks = nullptr) const;
     std::optional<std::string> validate_affine_drift() const;
-    static std::optional<std::string> validate_rank_id_intersections(
-        int rank,
-        const std::vector<const GraphBatchLogicalIdSpan*>& progressions,
-        const std::vector<uint64_t>& physical_ids,
-        IdPreflightWork* work = nullptr);
     std::optional<std::string> validate_json_id_stream(
         const GraphBatch& batch,
         std::vector<int>* touched_ranks = nullptr,
@@ -422,8 +388,7 @@ class GraphBatchCommitter {
     void record_affine_range(int rank, uint64_t json_first,
                              uint64_t store_first, uint64_t count);
     void commit_after_preflight(const StateDelta& delta, const GraphBatch& batch,
-                                const std::vector<int>& issue_ranks,
-                                std::shared_ptr<void> pipeline_plan);
+                                const std::vector<int>& issue_ranks);
 
     Context ctx_;
     std::set<std::string> in_flight_;           // arrived, not completed
@@ -432,7 +397,7 @@ class GraphBatchCommitter {
     // Fixed O(num_ranks) committed-id history and json->store translation.
     std::vector<RankAffine> rank_affines_;
     // The immutable pipeline prediction contract is fixed by the first
-    // successfully committed schema-v2 batch (including empty batches).
+    // successfully committed schema-v3 batch (including empty batches).
     std::shared_ptr<const PipelineKernelContract> frozen_kernel_contract_;
     // Commit-time json-id preflight scratch.  A rank stamp replaces the old
     // per-batch zeroed vectors: one allocation per committer, O(nodes) work
@@ -442,9 +407,6 @@ class GraphBatchCommitter {
     mutable uint64_t json_id_stream_stamp_ = 0;
     mutable std::vector<int> json_id_discovered_touched_ranks_;
     std::vector<int> commit_touched_ranks_;
-    // Issue order includes ranks with virtual endpoint ranges even when that
-    // batch emitted no physical node there. The producer-facing touched_ranks
-    // contract remains the set of physical node ranks.
     std::vector<int> commit_issue_ranks_;
     ParentPublicationWork parent_publication_work_;
     // validate_and_commit() owns commit_touched_ranks_ across its whole

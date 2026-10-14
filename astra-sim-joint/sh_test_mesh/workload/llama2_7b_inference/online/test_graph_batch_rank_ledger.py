@@ -105,9 +105,8 @@ def test_digest_reuses_public_rank_metadata_without_second_node_scan():
         "watches": [],
         "future_alarms": [],
         "touched_ranks": [0, 2],
-        # digest 载荷覆盖面（schema-2 批的强制键；无远读管线的批 =
-        # 空 descriptor 数组 + 缺省配置 kernel contract）。
-        "pipeline_descriptors": [],
+        # digest 载荷覆盖面（schema-3 批的强制键；
+        # kernel_contract 每批无条件发射）。
         "kernel_contract": make_pipeline_kernel_contract(
             JointPredictionConfig()),
     }

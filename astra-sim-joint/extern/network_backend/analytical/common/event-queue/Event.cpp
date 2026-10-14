@@ -118,6 +118,10 @@ EventHandle QueuedEvent::get_handle() const noexcept {
     return EventHandle(control_, 0);
 }
 
+Callback QueuedEvent::get_callback() const noexcept {
+    return control_ == nullptr ? callback_ : control_->callback;
+}
+
 bool QueuedEvent::matches(const EventHandle& handle) const noexcept {
     return control_ != nullptr && handle.control_.lock() == control_;
 }

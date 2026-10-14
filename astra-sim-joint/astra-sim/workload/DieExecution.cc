@@ -797,6 +797,20 @@ void DieExecution::complete() {
             std::to_string(node_id_));
     }
     finished_ = true;
+    // v7 attribution fix: drop the HBM mutation observer NOW instead of at
+    // destruction. After finished_ the observer callback is a proven no-op
+    // (its first line returns on finished_), and the adapter keeps finished
+    // DieExecution objects alive (and their observers registered) until its
+    // next entry point -- which never comes during a natural settle tail,
+    // so the model's per-mutation observer fan-out grew with every retired
+    // node. Removing here only skips no-op invocations; the destructor
+    // removal below stays as the teardown backstop.
+    if (hbm_observer_id_ != 0 && workload_ != nullptr &&
+        workload_->local_hbm_bandwidth_model != nullptr) {
+        workload_->local_hbm_bandwidth_model->remove_resource_mutation_observer(
+            hbm_observer_id_);
+        hbm_observer_id_ = 0;
+    }
     if (pending_event_.valid()) {
         static_cast<void>(sys_->cancel_event(pending_event_));
     }

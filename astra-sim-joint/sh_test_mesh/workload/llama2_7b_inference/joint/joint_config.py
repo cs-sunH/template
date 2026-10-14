@@ -15,7 +15,7 @@
     （E 模式）、保护规则、调度与合并流程不变。
 * scheduler_mode（J 开关）
   - ``joint``        ：全 instance 候选，联合选择 instance ×
-    stay/recompute/copy/remote-read。
+    stay/recompute/copy。
   - ``load-first``   ：J-off 顺序参照（八组合固定参照，2026-09-13 主控
     裁定）——先按在线负载排序选 instance，再在该位置选择 KV 动作。
   - ``affinity-first``：J 边际比较的第二顺序参照（有 home 时选 home，
@@ -43,52 +43,20 @@
   - ``minimal_layer_groups``：E-off——同一合法对象排序下按逐 rank 缺口
     释放最少完整层组，不计算隐藏目标。
   - ``legacy_half``        ：原半层逻辑的隔离适配，仅作回归/辅助对照。
-* remote_actions（与三机制正交的能力消融开关，单独记录）
-  - ``on`` / ``off``：off 时 remote-read 动作从候选动作集中移除，全部
-    instance、其余动作、驱逐、合并与生命周期不变。
-* remote-read 执行口径 = 有限字节双缓冲 tile 流（唯一机制；D09 协议
-  升级 2026-09-26，v2.0 设计 §12：旧"按步数切块 K"信用机制**删除**
-  ——K/steps 语义问题随字节 tile 化消解，不作为开关可选项保留）。
-  每 rank 预约两块真实 HBM 暂存（含 K+V）；读流按字节 tile 切块
-  （tile = 一次 decode pass 的远端基础区间切片），tile 生产受缓冲
-  复用释放门约束：块 t+2 的泵出须等块 t 被消费（消费后归还 credit）
-  ——慢计算不导致源端无限泵出，任意时刻远读暂存 ≤2 块；决策计价
-  同协议 = 双缓冲闭式（式 14/15，尾块见附录 A.1）。
-* remote_read_tile_bytes（字节 tile/缓冲配置——唯一机制的粒度参数）
-  - ``auto``（缺省）：tile = ``REMOTE_READ_TILE_AUTO_TOKENS``（256）
-    个 token 的 KV 字节（执行协议固定值，非 workload 拟合）；
-  - 正整数字节数：显式 tile 字节，按一个 token KV 粒度向下对齐
-    （对齐后容纳不下一个 token 时该执行协议不受此配置支持，
-    fail-closed——不能改成无限缓冲）。暂存预约字节 =
-    ``REMOTE_READ_STAGING_BUFFERS``(=2) × tile 字节（逐 rank，
-    真实 HBM 容量账，准入时随预约提交、完成/异常注销）。
-* remote_read_partial（PARTIAL 基 remote-read 适用面消融，2026-09-17
-  《部分层逐出kv管理改造分析方案》需求①）
-  - ``on``（缺省）：PARTIAL 基（前缀驻留 home＋后缀在池）可进
-    remote-read 候选——混合形态：准入相后缀池恢复物化（热 KV）＋
-    decode 相前缀层 [0, p) credit 读流；
-  - ``off``：PARTIAL 基照旧不进 remote-read 候选（拒绝理由
-    ``remote-read for partial sessions disabled``——N1(a) 旧理由
-    ``suffix not directly readable at home`` 已随混合形态解除退役）。注意：这不是旧机制
-    回归档——copy/recompute 是 J 常驻比较候选（on 档下仍可被选中），
-    off 档只把 PARTIAL 基的 remote-read 移出候选集，与
-    ``JOINT_REMOTE_ACTIONS`` 消融开关同一模式（裁定④边界澄清）。
 * allowed_actions（M2 动作掩码，2026-09-26 消融矩阵前置；与三机制/
-  remote/quota 开关正交记录）
-  - ``all``（缺省）：无剔除——四动作全集参与 J 比较；
+  quota 开关正交记录）
+  - ``all``（缺省）：无剔除——三动作全集参与 J 比较；
   - 逗号分隔的 ``ALL_ACTIONS`` 子集（如 ``recompute``、
     ``copy,recompute``）：命中掩码外且原本可用的动作在
     ``applicable_actions`` 尾部统一剔除（拒绝理由 ``action excluded
     by JOINT_ALLOWED_ACTIONS mask``）。**语义裁定：掩码是候选集上限
-    不是强制**——与 ``remote_enabled`` 取交集（两者都拒才是真拒）；
-    臂预设恒含 recompute（recompute-only=``{recompute}``+load-first；
-    always-copy=``{copy,recompute}``；always-remote=
-    ``{remote-read,recompute}``）；掩码剔除 recompute 致零适用时维持
-    fail-closed（joint_scheduler 的 no-applicable-candidate raise，
-    非容量拒绝）。
-* quota_mode（通用流量治理/配额开关，与三机制及 remote on/off 正交
-  记录——仓库设计方案 §7；实现模块 = ``joint.link_quota``，设计语义
-  权威 = 设计文档 §4.2/§4.4）
+    不是强制**；臂预设恒含 recompute（recompute-only=``{recompute}``
+    +load-first；always-copy=``{copy,recompute}``）；掩码剔除
+    recompute 致零适用时维持 fail-closed（joint_scheduler 的
+    no-applicable-candidate raise，非容量拒绝）。
+* quota_mode（通用流量治理/配额开关，与三机制正交记录——仓库设计
+  方案 §7；实现模块 = ``joint.link_quota``，设计语义权威 = 设计文档
+  §4.2/§4.4）
   - ``off``（缺省，F7）：配额门全部旁路（动作级准入不设链路/端口
     配额判据；link_quota 簿记语义见模块 docstring）；
   - ``static``：固定预算——链路 ``Q_init = max(1, floor(rho_eff))``
@@ -111,13 +79,13 @@
     边界不做二次全候选重估，直接按 P 准入时
     ``estimate_P_with_continuation`` 披露的默认延续形态提交：
     decode_instance = prefill_instance、decode_action = 默认延续动作
-    （完整型 = stay@i_P；增量型（P=remote-read）= remote-read@i_P，
-    沿用 P 入口已建的同一 remote 读计划延续分支）。语义要点：延续 =
+    （stay@i_P；P 末工作副本恒为完整型布局——增量型布局族已随
+    remote-read 动作退役删除）。语义要点：延续 =
     原地继续、无迁移腿，D 提交后的完成归属/构图器/merge 链路与两阶段
     的延续分支完全同路（同一 commit 路径，不新造平行路径）；掩码交互
     ——P 准入已按掩码过滤（P 动作在掩码内），延续动作 stay 由本模块
-    ``__post_init__`` 钉在掩码内（见下 fail-closed 裁决）、remote-read
-    延续仅在 P=remote-read 时出现（同样已过 P 掩码），故无需边界重查。
+    ``__post_init__`` 钉在掩码内（见下 fail-closed 裁决），故无需
+    边界重查。
     **仪器纪律**：仅供对照实验（测量仪器模式，仿 JOINT_FORCE_* 钩子
     先例——但本开关是 run 级策略而非逐请求钩子），生产 run 不设；
     生效时 D 决策行以专用披露键 ``boundary_policy`` 披露（off 时键
@@ -125,7 +93,7 @@
     （JOINT_FORCE_BOUNDARY_ACTION / JOINT_FORCE_ENTRY_ACTION）互斥
     武装（同设 = 仪器二义，调度器启动失败——sh30 消费侧裁决）。
     fail-closed 裁决（本模块单一裁决点）：p-continuation 要求掩码
-    放行 stay——完整型 P 动作（stay/copy/recompute）的默认延续恒为
+    放行 stay——P 动作（stay/copy/recompute）的默认延续恒为
     stay，掩码剔除 stay 时一次映射将在边界提交掩码外动作，违反
     "掩码是候选集上限"合同，该组合启动即拒。
 
@@ -152,20 +120,11 @@
                                C17 静态距离对照臂，非八组合成员）；
 * ``JOINT_LAYER_POLICY``    -- 显式 E 开关（adaptive|legacy_half|
                                minimal_layer_groups）；
-* ``JOINT_REMOTE_ACTIONS``  -- remote 能力开关（on|off，缺省 on）；
-* ``JOINT_REMOTE_READ_TILE_BYTES`` -- remote-read 字节 tile/缓冲配置
-                               （auto|正整数字节，缺省 auto；唯一执行
-                               机制的粒度参数，见上文 remote_read_
-                               tile_bytes 节）；
-* ``JOINT_REMOTE_READ_PARTIAL`` -- PARTIAL 基 remote-read 适用面消融
-                               （on|off，缺省 on；见上文 remote_read_
-                               partial 节）；
 * ``JOINT_ALLOWED_ACTIONS`` -- M2 动作掩码（all|逗号分隔的
                                ALL_ACTIONS 子集，缺省 all；见上文
                                allowed_actions 节）；
 * ``JOINT_QUOTA_MODE``      -- 通用流量治理/配额开关（off|static|aimd，
-                               缺省 off（F7）；与三机制及 remote 开关
-                               正交，解析模式同 remote_actions）。
+                               缺省 off（F7）；与三机制正交）。
 * ``JOINT_BOUNDARY_POLICY`` -- D 边界策略（off|p-continuation，缺省
                                off；测量仪器开关——验收纪律第 2 类
                                "一次映射 vs 两阶段闭环对照"对照臂，
@@ -194,17 +153,13 @@ CATEGORY_MODES = ("typed", "lru")
 #: 不进八组合——COMBO_PRESETS 的 scheduler 档恒为 joint/load-first）。
 SCHEDULER_MODES = ("joint", "load-first", "affinity-first", "face_static")
 LAYER_POLICIES = ("adaptive", "legacy_half", "minimal_layer_groups")
-REMOTE_ACTION_MODES = ("on", "off")
-REMOTE_READ_PARTIAL_MODES = ("on", "off")
-#: 四动作全集与规范序（M2 动作掩码定义源，2026-09-26：joint_cost_model
+#: 三动作全集与规范序（M2 动作掩码定义源，2026-09-26：joint_cost_model
 #: .ACTION_ORDER 从此派生——定义源放本模块避免环导入）。掩码
 #: JOINT_ALLOWED_ACTIONS 是候选集上限不是强制，不改此序。
-ALL_ACTIONS = ("stay", "recompute", "copy", "remote-read")
-#: W10 混合扩展动作身份（预测配置 action_space=source_subset_hybrid 时
-#: 随纯四动作进 D 候选面的子集候选；§7.5/主文 §6.7）。**不入 ALL_ACTIONS**
-#: ——动作掩码/动作范围是纯四动作候选集上限，hybrid 不改其语义；端点
-#: （全 copy/全远读）与纯动作去重，只枚举真子集。
-ACTION_HYBRID = "hybrid"
+#: 2026-10-14 远读退役：第四元 ``remote-read`` 及其执行/计价/配置
+#: 全链路删除，动作空间收缩为 stay/recompute/copy 三动作（MODEL_
+#: SEMANTICS_VERSION v7 世代）。
+ALL_ACTIONS = ("stay", "recompute", "copy")
 #: ``allowed_actions`` 的全集哨兵值（= ALL_ACTIONS，无剔除）。
 ALLOWED_ACTIONS_ALL = "all"
 #: 通用流量治理/配额模式（F7：缺省 off；static/aimd 语义见模块
@@ -229,20 +184,6 @@ SCHEDULER_MODE_FACE_STATIC = "face_static"
 LAYER_POLICY_ADAPTIVE = "adaptive"
 LAYER_POLICY_LEGACY_HALF = "legacy_half"
 LAYER_POLICY_MINIMAL = "minimal_layer_groups"
-REMOTE_ON = "on"
-REMOTE_OFF = "off"
-#: 字节 tile/auto 哨兵（D09：credit 粒度参数 = 字节 tile/缓冲配置，
-#: 步数块大小 K 机制已删除——K/steps 语义随 tile 化消解）。
-REMOTE_READ_TILE_AUTO = "auto"
-#: D09（v2.0 §12.1/A.4）：每 rank remote 暂存缓冲块数——协议固定 2
-#: （同一时刻最多一块传入、一块消费），非常量旋钮。
-REMOTE_READ_STAGING_BUFFERS = 2
-#: auto tile 的执行协议固定 token 数（tile 字节 = 256 × 每 token KV
-#: 字节；静态执行配置、非 workload 拟合——A.4"字节大小来自执行配置"）。
-REMOTE_READ_TILE_AUTO_TOKENS = 256
-#: 式(11) 的 query tile token 数（静态执行配置：每个 query tile 对
-#: 历史扫描一次；prefill 前缀读流扫描次数与 D07 计价侧同源消费本值）。
-REMOTE_READ_QUERY_TILE_TOKENS = 128
 #: 配额模式常量（与 QUOTA_MODES 同源；link_quota 模块按同值字符串消费）。
 QUOTA_OFF = "off"
 QUOTA_STATIC = "static"
@@ -274,7 +215,12 @@ TRAIN_MAX_ITER_DEFAULT = 8
 #: 2026-10-02 升版 v5-projection：计算腿分解纯计算与动态 HBM 工作量，
 #: 修复多跳背景身份、剩余进度与混合 KV 字节口径；未完成的新增需求
 #: 候选世界契约强制 shadow。对应旧版本验证登记不得自动沿用。
-MODEL_SEMANTICS_VERSION = "v6-compact-window-20261005"
+#: 2026-10-14 升版 v7-three-actions：remote-read 动作及其执行/计价/
+#: 配置全链路退役——联合决策动作空间从四动作收缩为 stay/recompute/
+#: copy 三动作（W10 hybrid 随之退役；增量型 P→D 边界布局族一步删除，
+#: 恒完整型单族；远读审计/决策日志 schema 字段删除并升版）。v7 起
+#: 与 v6 及以前旧实验数据不可比，正式数据生产须按新版本重跑。
+MODEL_SEMANTICS_VERSION = "v7-three-actions-20261014"
 
 #: 八组合预设名（固定映射，2026-09-13 裁定；无 J 组合一律 load-first）。
 COMBO_NAMES = ("none", "T", "J", "E", "TJ", "TE", "JE", "TJE")
@@ -295,12 +241,19 @@ _ENV_COMBO = "JOINT_ABLATION_COMBO"
 _ENV_CATEGORY = "JOINT_CATEGORY_MODE"
 _ENV_SCHEDULER = "JOINT_SCHEDULER_MODE"
 _ENV_LAYER = "JOINT_LAYER_POLICY"
-_ENV_REMOTE = "JOINT_REMOTE_ACTIONS"
-_ENV_REMOTE_READ_TILE_BYTES = "JOINT_REMOTE_READ_TILE_BYTES"
-_ENV_REMOTE_READ_PARTIAL = "JOINT_REMOTE_READ_PARTIAL"
-#: 退役环境变量（D09：步数块大小 K 随字节 tile 化消解）——任何显式值
-#: fail-closed（同 SH30_ABLATION 姿态，陈旧脚本不静默假装旧机制）。
-_RETIRED_ENV_KEYS = ("JOINT_REMOTE_CREDIT_ITERS",)
+#: 退役环境变量（任何显式值 fail-closed，同 SH30_ABLATION 姿态——
+#: 陈旧脚本不得静默假装旧机制仍在生效）：
+#: * JOINT_REMOTE_CREDIT_ITERS：D09 步数块大小 K 随字节 tile 化消解；
+#: * JOINT_REMOTE_ACTIONS / JOINT_REMOTE_READ_TILE_BYTES /
+#:   JOINT_REMOTE_READ_PARTIAL：2026-10-14 远读机制整体退役
+#:   （remote-read 动作、tile/双缓冲执行链与 PARTIAL 适用面消融全链路
+#:   删除——三动作化后不再有开关语义可配置）。
+_RETIRED_ENV_KEYS = (
+    "JOINT_REMOTE_CREDIT_ITERS",
+    "JOINT_REMOTE_ACTIONS",
+    "JOINT_REMOTE_READ_TILE_BYTES",
+    "JOINT_REMOTE_READ_PARTIAL",
+)
 _ENV_ALLOWED_ACTIONS = "JOINT_ALLOWED_ACTIONS"
 _ENV_QUOTA_MODE = "JOINT_QUOTA_MODE"
 _ENV_BOUNDARY_POLICY = "JOINT_BOUNDARY_POLICY"
@@ -312,26 +265,16 @@ class JointConfigError(ValueError):
 
 @dataclass(frozen=True)
 class JointMechanismConfig:
-    """三机制 + remote 能力开关的已解析运行配置。
+    """三机制开关的已解析运行配置。
 
-    属性即四开关生效值；``combo`` 在经八组合预设指定时记录预设名（显式
-    开关路径为 None）。manifest 记录四开关、预设名（若有）与来源环境
+    属性即三开关生效值；``combo`` 在经八组合预设指定时记录预设名（显式
+    开关路径为 None）。manifest 记录三开关、预设名（若有）与来源环境
     变量，日志标签与之一致（§7.1）。
     """
 
     category_mode: str
     scheduler_mode: str
     layer_policy: str
-    remote_actions: str
-    # remote-read 字节 tile/缓冲配置（auto | 正整数字节字符串）。执行
-    # 口径 = 有限字节双缓冲 tile 流唯一机制（D09 2026-09-26，v2.0 §12：
-    # 旧"按步数切块 K"信用机制删除、无开关可选项——K/steps 语义随
-    # 字节 tile 化消解）。tile 解析/暂存足迹 = resolve_remote_read_
-    # tile_tokens / remote_read_staging_bytes_per_rank 单一裁决点。
-    remote_read_tile_bytes: str = REMOTE_READ_TILE_AUTO
-    # PARTIAL 基 remote-read 适用面（on|off；需求①消融开关，缺省 on——
-    # 见模块 docstring remote_read_partial 节，非旧机制回归档）。
-    remote_read_partial: str = REMOTE_ON
     # M2 动作掩码（all|逗号分隔的 ALL_ACTIONS 子集，缺省 all——见模块
     # docstring allowed_actions 节）。掩码是候选集上限不是强制：命中
     # 掩码外且原本可用的动作由消费侧（JCM applicable_actions 尾部过滤
@@ -339,7 +282,7 @@ class JointMechanismConfig:
     # 剔除 recompute 致零适用维持 fail-closed。
     allowed_actions: str = ALLOWED_ACTIONS_ALL
     # 通用流量治理/配额模式（off|static|aimd，缺省 off——F7；与三机制
-    # 及 remote 开关正交。SH 侧接线与 aimd⇒--link-telemetry 注入归 C11）。
+    # 正交。SH 侧接线与 aimd⇒--link-telemetry 注入归 C11）。
     # face_static 耦合例外见下 quota_forced_off（构造点统一强制，非仅
     # env 解析路径——直接构造同样生效）。
     quota_mode: str = QUOTA_OFF
@@ -371,23 +314,6 @@ class JointMechanismConfig:
             raise JointConfigError(
                 f"layer_policy must be one of {LAYER_POLICIES}, got "
                 f"{self.layer_policy!r}")
-        if self.remote_actions not in REMOTE_ACTION_MODES:
-            raise JointConfigError(
-                f"remote_actions must be one of {REMOTE_ACTION_MODES}, got "
-                f"{self.remote_actions!r}")
-        if self.remote_read_tile_bytes != REMOTE_READ_TILE_AUTO:
-            if (not (self.remote_read_tile_bytes.isascii()
-                     and self.remote_read_tile_bytes.isdigit())) or (
-                    int(self.remote_read_tile_bytes) <= 0):
-                raise JointConfigError(
-                    f"remote_read_tile_bytes must be "
-                    f"{REMOTE_READ_TILE_AUTO!r} or a positive integer byte "
-                    f"count, got {self.remote_read_tile_bytes!r}")
-        if self.remote_read_partial not in REMOTE_READ_PARTIAL_MODES:
-            raise JointConfigError(
-                f"remote_read_partial must be one of "
-                f"{REMOTE_READ_PARTIAL_MODES}, got "
-                f"{self.remote_read_partial!r}")
         # M2 动作掩码（fail-closed：未知动作名/空 token/空白一律拒绝；
         # 与 env 解析共用 _parse_allowed_actions 单一裁决点）。
         if self.allowed_actions != ALLOWED_ACTIONS_ALL:
@@ -405,12 +331,10 @@ class JointMechanismConfig:
         if (self.boundary_policy == BOUNDARY_POLICY_P_CONTINUATION
                 and "stay" not in _parse_allowed_actions(
                     self.allowed_actions)):
-            # 一次映射对照臂 × 掩码一致性（fail-closed）：完整型 P 动作
+            # 一次映射对照臂 × 掩码一致性（fail-closed）：P 动作
             # （stay/copy/recompute）的默认延续恒为 stay@i_P——掩码剔除
             # stay 时一次映射将在 D 边界提交掩码外动作，违反"掩码是候选
-            # 集上限"合同，该组合启动即拒。remote-read 延续无需在此查：
-            # 它仅在 P=remote-read 时出现，而 P 准入已按同一掩码过滤
-            # （P=remote-read 蕴含 remote-read 在掩码内且 remote on）。
+            # 集上限"合同，该组合启动即拒。
             raise JointConfigError(
                 f"boundary_policy={BOUNDARY_POLICY_P_CONTINUATION!r} "
                 "requires the allowed_actions mask to admit 'stay': the "
@@ -456,14 +380,6 @@ class JointMechanismConfig:
         return self.layer_policy == "adaptive"
 
     @property
-    def remote_enabled(self) -> bool:
-        return self.remote_actions == "on"
-
-    @property
-    def remote_read_partial_enabled(self) -> bool:
-        return self.remote_read_partial == "on"
-
-    @property
     def allowed_action_set(self) -> frozenset:
         """M2 掩码放行动作集（JCM ``allowed_actions`` 注入源；"all" 派
         生全集、子集派生解析集——``_parse_allowed_actions`` 单一裁决点
@@ -489,13 +405,9 @@ class JointMechanismConfig:
             "category_mode": self.category_mode,
             "scheduler_mode": self.scheduler_mode,
             "layer_policy": self.layer_policy,
-            "remote_actions": self.remote_actions,
-            "remote_read_tile_bytes": self.remote_read_tile_bytes,
-            "remote_read_partial": self.remote_read_partial,
-            # M2 动作掩码（候选集上限不是强制；"all" = 无剔除——与
-            # JOINT_REMOTE_ACTIONS 消融同模式披露）。
+            # M2 动作掩码（候选集上限不是强制；"all" = 无剔除）。
             "allowed_actions": self.allowed_actions,
-            # 通用流量治理/配额开关（与三机制及 remote 正交；aimd 的
+            # 通用流量治理/配额开关（与三机制正交；aimd 的
             # --link-telemetry 注入事实由发射层另行记入 manifest = C11）。
             "quota_mode": self.quota_mode,
             "quota_enabled": self.quota_enabled,
@@ -617,7 +529,7 @@ def _parse_allowed_actions(value: str) -> frozenset:
 def parse_joint_config(
     env: Optional[Mapping[str, str]] = None,
 ) -> "JointMechanismConfig":
-    """解析运行配置（默认 = 完整三机制 T+J+E、remote on）。
+    """解析运行配置（默认 = 完整三机制 T+J+E）。
 
     ``env`` 缺省读 ``os.environ``（一次读取；测试可注入）。预设与显式
     开关指定同一机制即 fail-closed。
@@ -625,21 +537,18 @@ def parse_joint_config(
     lookup = os.environ if env is None else env
 
     # 退役开关扫描（同 SH30_ABLATION 姿态）：任何显式值即启动失败——
-    # 陈旧脚本不得静默假装旧粒度参数生效。
+    # 陈旧脚本不得静默假装旧机制/旧粒度参数仍在生效。
     for retired in _RETIRED_ENV_KEYS:
         if lookup.get(retired) is not None:
             raise JointConfigError(
                 f"{retired} is retired in astra-sim-joint (any explicit "
-                "value fails closed); use "
-                f"{_ENV_REMOTE_READ_TILE_BYTES} instead")
+                "value fails closed; the mechanism it configured has "
+                "been removed)")
 
     combo_raw = _read_env(lookup, _ENV_COMBO)
     category_raw = _read_env(lookup, _ENV_CATEGORY)
     scheduler_raw = _read_env(lookup, _ENV_SCHEDULER)
     layer_raw = _read_env(lookup, _ENV_LAYER)
-    remote_raw = _read_env(lookup, _ENV_REMOTE)
-    remote_read_tile_bytes_raw = _read_env(lookup, _ENV_REMOTE_READ_TILE_BYTES)
-    remote_read_partial_raw = _read_env(lookup, _ENV_REMOTE_READ_PARTIAL)
     allowed_actions_raw = _read_env(lookup, _ENV_ALLOWED_ACTIONS)
     quota_mode_raw = _read_env(lookup, _ENV_QUOTA_MODE)
     boundary_policy_raw = _read_env(lookup, _ENV_BOUNDARY_POLICY)
@@ -680,51 +589,11 @@ def parse_joint_config(
                     "specify either the combo preset or explicit switches, "
                     "not both")
 
-    remote_actions = remote_raw or "on"
-    if remote_actions not in REMOTE_ACTION_MODES:
-        raise JointConfigError(
-            f"{_ENV_REMOTE} must be one of {REMOTE_ACTION_MODES}, got "
-            f"{remote_actions!r}")
-    if remote_raw is not None:
-        sources[_ENV_REMOTE] = remote_actions
-
-    # remote-read 字节 tile/缓冲配置（与 combo/三机制开关正交，同
-    # remote_actions 的独立解析；auto|正整数字节，非法值 fail-closed）。
-    # 执行口径本身无开关（有限字节双缓冲 tile 流唯一机制，D09
-    # 2026-09-26；旧步数块大小 K 机制已删除）。
-    remote_read_tile_bytes = (
-        remote_read_tile_bytes_raw or REMOTE_READ_TILE_AUTO)
-    if remote_read_tile_bytes != REMOTE_READ_TILE_AUTO:
-        # (2026-10-01 R2 补正) ASCII 数字词法（第三处漏改：裸 isdigit
-        # 放行上标数字，int() 处抛裸 ValueError 逃出 JointConfigError
-        # 通道——与构造器/parse_train_max_iter 两处已修口径对齐）。
-        if (not (remote_read_tile_bytes.isascii()
-                 and remote_read_tile_bytes.isdigit())
-                or int(remote_read_tile_bytes) <= 0):
-            raise JointConfigError(
-                f"{_ENV_REMOTE_READ_TILE_BYTES} must be "
-                f"{REMOTE_READ_TILE_AUTO!r} or a positive integer byte "
-                f"count, got {remote_read_tile_bytes!r}")
-    if remote_read_tile_bytes_raw is not None:
-        sources[_ENV_REMOTE_READ_TILE_BYTES] = remote_read_tile_bytes
-
-    # PARTIAL 基 remote-read 适用面消融（与 remote_actions 正交：off 档
-    # 只把 PARTIAL 基的 remote-read 移出候选集，copy/recompute 照常）。
-    remote_read_partial = remote_read_partial_raw or REMOTE_ON
-    if remote_read_partial not in REMOTE_READ_PARTIAL_MODES:
-        raise JointConfigError(
-            f"{_ENV_REMOTE_READ_PARTIAL} must be one of "
-            f"{REMOTE_READ_PARTIAL_MODES}, got {remote_read_partial!r}")
-    if remote_read_partial_raw is not None:
-        sources[_ENV_REMOTE_READ_PARTIAL] = remote_read_partial
-
     # M2 动作掩码（all|逗号分隔的 ALL_ACTIONS 子集，缺省 all；与三机制/
-    # combo 预设及 remote/quota 开关正交，同 remote_actions 的独立解析
-    # 模式，不参与预设互斥）。语义裁定：掩码是候选集上限不是强制——
-    # 与 remote_enabled 取交集；臂预设恒含 recompute（recompute-only=
-    # {recompute}+load-first；always-copy={copy,recompute}；
-    # always-remote={remote-read,recompute}）；掩码剔除 recompute 且
-    # 零适用 ⇒ 上层 fail-closed（非容量拒绝）。
+    # combo 预设及 quota 开关正交，不参与预设互斥）。语义裁定：掩码是
+    # 候选集上限不是强制；臂预设恒含 recompute（recompute-only=
+    # {recompute}+load-first；always-copy={copy,recompute}）；掩码剔除
+    # recompute 且零适用 ⇒ 上层 fail-closed（非容量拒绝）。
     allowed_actions = allowed_actions_raw or ALLOWED_ACTIONS_ALL
     if allowed_actions != ALLOWED_ACTIONS_ALL:
         _parse_allowed_actions(allowed_actions)
@@ -732,10 +601,9 @@ def parse_joint_config(
         sources[_ENV_ALLOWED_ACTIONS] = allowed_actions
 
     # 通用流量治理/配额开关（off|static|aimd，缺省 off——F7；与三机制/
-    # combo 预设及 remote 开关正交，同 remote_actions 的独立解析模式，
-    # 不参与预设互斥）。aimd ⇒ 发射层自动注入 --link-telemetry 的耦合
-    # 规则（F7）在 joint_runner/run_online_strategy 落地 = C11，本解析
-    # 处只取值与记录。
+    # combo 预设正交，不参与预设互斥）。aimd ⇒ 发射层自动注入
+    # --link-telemetry 的耦合规则（F7）在 joint_runner/
+    # run_online_strategy 落地 = C11，本解析处只取值与记录。
     quota_mode = quota_mode_raw or QUOTA_OFF
     if quota_mode not in QUOTA_MODES:
         raise JointConfigError(
@@ -745,9 +613,9 @@ def parse_joint_config(
         sources[_ENV_QUOTA_MODE] = quota_mode
 
     # D 边界策略（off|p-continuation，缺省 off——测量仪器开关，与三
-    # 机制/combo 预设及 remote/quota/掩码开关正交，同 remote_actions 的
-    # 独立解析模式，不参与预设互斥；掩码一致性裁决在 __post_init__ 单
-    # 一裁决点，env 与直接构造同受）。生产 run 不设。
+    # 机制/combo 预设及 quota/掩码开关正交，不参与预设互斥；掩码一致
+    # 性裁决在 __post_init__ 单一裁决点，env 与直接构造同受）。
+    # 生产 run 不设。
     boundary_policy = boundary_policy_raw or BOUNDARY_POLICY_OFF
     if boundary_policy not in BOUNDARY_POLICIES:
         raise JointConfigError(
@@ -773,112 +641,11 @@ def parse_joint_config(
         category_mode=category_mode,
         scheduler_mode=scheduler_mode,
         layer_policy=layer_policy,
-        remote_actions=remote_actions,
-        remote_read_tile_bytes=remote_read_tile_bytes,
-        remote_read_partial=remote_read_partial,
         allowed_actions=allowed_actions,
         quota_mode=quota_mode,
         boundary_policy=boundary_policy,
         combo=combo,
     ).with_sources(sources)
-
-
-def resolve_remote_read_tile_tokens(
-    remote_read_tile_bytes: str, kv_token_bytes: int,
-) -> int:
-    """字节 tile -> token 数的单一裁决点（D09，执行切片/计价闭式/暂存
-    预约三方同源——v2.0 §12.1"tile 大小来自固定执行配置"）。
-
-    ``kv_token_bytes`` = 每 rank 一个 token 的 KV 字节（K+V，含全部参与
-    读流的层；由调用方按 ``kv_cache_shard_bytes_for_tokens``/层区间派生）。
-    ``auto`` = ``REMOTE_READ_TILE_AUTO_TOKENS`` 个 token（构造上 token
-    对齐）；显式字节数按一个 token KV 粒度**向下对齐**——对齐后容纳
-    不下一个 token 时该执行协议不受此配置支持（JointConfigError，
-    fail-closed：不能改成无限缓冲）。
-    """
-    if kv_token_bytes <= 0:
-        raise JointConfigError(
-            f"remote-read tile resolution requires a positive per-token KV "
-            f"byte count, got {kv_token_bytes}")
-    if remote_read_tile_bytes == REMOTE_READ_TILE_AUTO:
-        return REMOTE_READ_TILE_AUTO_TOKENS
-    tile_tokens = int(remote_read_tile_bytes) // kv_token_bytes
-    if tile_tokens <= 0:
-        raise JointConfigError(
-            f"remote_read_tile_bytes={remote_read_tile_bytes} aligns down "
-            f"to 0 tokens at {kv_token_bytes} bytes/token -- the staging "
-            "tile cannot hold one token's KV (K+V); this execution "
-            "protocol does not support the configuration")
-    return tile_tokens
-
-
-def remote_read_exec_tile_tokens(
-    tile_tokens: int, base_tokens: int,
-) -> int:
-    """执行切片 tile 的单一裁决点（D09 修复轮二，2026-09-27：固定 tile）。
-
-    tile 恒 = 执行配置值（``resolve_remote_read_tile_tokens`` 裁决后原样
-    返回——token 向下对齐不变）；调度器切片/暂存预约/JCM 缓冲足迹三方
-    同源。**不再按基础区间放大**：放大（旧 ``max(tile, ⌈base/2⌉)``）使
-    每块暂存字节随历史长度无界增长，违反 D09"每 rank 两块真实 HBM 暂
-    存、tile 大小来自执行配置"（v2.0 §12.1）与 §17.1 不做清单条目"为
-    减少仿真事件把容量/缓冲暗改无限"。
-
-    每 pass tile 数可 >2（``tiles_per_pass = ⌈base/tile⌉``）：消费/释放
-    链为逐 tile 流水（tile t 消费 → 槽位释放 → tile t+2 可入；构图器
-    同体块内 lag-2 后继在逐 tile 消费 marker 点释放——见
-    graph_batch_builder._release_intra_block_credit_tiles），任意时刻每
-    rank 暂存占用 ≤ 2×tile_bytes 的不变量在 N>2 时仍成立。
-    ``base_tokens`` 参数保留为调用方口径校验（非负；不再参与裁决）。
-    ``base_tokens`` ≤ 配置 tile 时单块 pass（n=1，式(15) 退化锚）。
-    """
-    if tile_tokens <= 0:
-        raise JointConfigError(
-            f"exec tile resolution requires positive configured tile "
-            f"tokens, got {tile_tokens}")
-    if base_tokens < 0:
-        raise JointConfigError(
-            f"exec tile resolution requires non-negative base tokens, "
-            f"got {base_tokens}")
-    return tile_tokens
-
-
-def remote_read_staging_bytes_per_rank(
-    tile_tokens: int, kv_token_bytes: int,
-) -> int:
-    """每 rank remote 暂存足迹（D09：``REMOTE_READ_STAGING_BUFFERS`` 块
-    真实 HBM 暂存，含 K+V——准入预约/计价缓冲足迹/容量可行性同源）。
-    """
-    if tile_tokens <= 0 or kv_token_bytes <= 0:
-        raise JointConfigError(
-            "staging footprint requires positive tile tokens and per-token "
-            f"KV bytes, got {tile_tokens}/{kv_token_bytes}")
-    return REMOTE_READ_STAGING_BUFFERS * tile_tokens * kv_token_bytes
-
-
-def prefill_remote_read_scan_passes(
-    input_tokens: int, chunk_tokens: int, query_tile_tokens: int,
-) -> int:
-    """prefill 前缀读流扫描次数闭式（式 11 + v2.0 §13.3，D09 执行侧与
-    D07 计价侧同源消费）。
-
-    每个 query tile 对远端基础历史扫描一次：一个 q-token chunk 的扫描
-    次数 ν(q_c)=⌈q_c/q_tile⌉；U 个 input token、完整 chunk 数
-    a=⌊U/q_c⌋、尾 chunk b=U−aq_c 时 Σν = a⌈q_c/q_tile⌉ +
-    1_{b>0}⌈b/q_tile⌉（不构造长列表）。执行侧 prefill 前缀读流与
-    JCM ``RequestView.prefill_scan_passes`` 供给共用本函数（单一裁决点）。
-    """
-    if input_tokens < 0 or chunk_tokens <= 0 or query_tile_tokens <= 0:
-        raise JointConfigError(
-            "scan passes require non-negative input and positive "
-            f"chunk/query-tile token counts, got {input_tokens}/"
-            f"{chunk_tokens}/{query_tile_tokens}")
-    if input_tokens == 0:
-        return 0
-    full_chunks, tail_tokens = divmod(input_tokens, chunk_tokens)
-    scans_per_full_chunk = -(-chunk_tokens // query_tile_tokens)
-    tail_scans = -(-tail_tokens // query_tile_tokens) if tail_tokens else 0
-    return full_chunks * scans_per_full_chunk + tail_scans
 
 
 def require_joint_config(value: Any) -> JointMechanismConfig:

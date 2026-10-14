@@ -26,7 +26,6 @@
         [--category typed|lru] \
         [--scheduler joint|load-first|affinity-first|face_static] \
         [--layer adaptive|legacy_half|minimal_layer_groups] \
-        [--remote on|off] [--remote-read-tile-bytes auto|<正整数字节>] \
         [--quota off|static|aimd] \
         [--extra-env NAME=VALUE ...]
 
@@ -88,8 +87,7 @@ _ENV_ALLOWLIST = (
 )
 _JOINT_SWITCH_VARS = (
     "JOINT_ABLATION_COMBO", "JOINT_CATEGORY_MODE", "JOINT_SCHEDULER_MODE",
-    "JOINT_LAYER_POLICY", "JOINT_REMOTE_ACTIONS",
-    "JOINT_REMOTE_READ_TILE_BYTES", "JOINT_REMOTE_READ_PARTIAL",
+    "JOINT_LAYER_POLICY",
     "JOINT_ALLOWED_ACTIONS", "JOINT_QUOTA_MODE", "JOINT_BOUNDARY_POLICY",
     # W0（2026-09-29，《joint仓库当下+历史修改方案》§9.1）：版本化预测
     # 配置的唯一入口（路径 → JSON；七正交研究轴 + §9.2 参数 preset）。
@@ -200,14 +198,6 @@ def main(argv=None) -> int:
              "组合；joint_config 强制 quota-off——F7 唯一耦合例外）")
     parser.add_argument("--layer", choices=(
         "adaptive", "legacy_half", "minimal_layer_groups"))
-    parser.add_argument("--remote", choices=("on", "off"))
-    parser.add_argument(
-        "--remote-read-tile-bytes", dest="remote_read_tile_bytes",
-        help="remote-read 字节 tile/缓冲配置（D09）：auto 或正整数字节"
-             "（按一个 token KV 粒度向下对齐）")
-    parser.add_argument("--remote-read-partial", dest="remote_read_partial",
-                        choices=("on", "off"),
-                        help="PARTIAL 基 remote-read 适用面消融（缺省 on）")
     parser.add_argument("--quota", choices=("off", "static", "aimd"),
                         help="通用流量治理/配额开关（C11；缺省 off——F7；"
                              "aimd 自动注入 --link-telemetry）")
@@ -239,17 +229,6 @@ def main(argv=None) -> int:
             os.environ["JOINT_SCHEDULER_MODE"] = args.scheduler
         if args.layer is not None:
             os.environ["JOINT_LAYER_POLICY"] = args.layer
-    if args.remote is not None:
-        os.environ["JOINT_REMOTE_ACTIONS"] = args.remote
-    # remote-read 字节 tile/缓冲配置（D09：有限字节双缓冲唯一机制；
-    # 取值校验由 joint_config.parse fail-closed 兜底）。
-    if args.remote_read_tile_bytes is not None:
-        os.environ["JOINT_REMOTE_READ_TILE_BYTES"] = (
-            args.remote_read_tile_bytes)
-    # PARTIAL 基 remote-read 适用面消融（需求①，2026-09-17；取值校验由
-    # joint_config.parse fail-closed 兜底）。
-    if args.remote_read_partial is not None:
-        os.environ["JOINT_REMOTE_READ_PARTIAL"] = args.remote_read_partial
     # 通用流量治理/配额开关（C11；缺省 off——F7；取值校验由
     # joint_config.parse fail-closed 兜底）。
     if args.quota is not None:

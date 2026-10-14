@@ -2,20 +2,25 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-bridge_loopback_fixture.cc -- phase-1 step 1-7 FileDecisionBridge loopback.
+bridge_loopback_fixture.cc -- phase-1 step 1-7 ShmDecisionBridge loopback
+(v11 §8 保底: shm frame carrier; cross-language with a REAL python3 peer).
 
 Scenarios (方案 §4 步骤 1-7 操作 4):
   A. Round-trip (main process): two StateDeltas covering all four phase-1
      reasons (ARRIVAL / PREFILL_DRAIN / DECODE_COMPLETION /
-     REQUEST_COMPLETE) are delivered through a real FileDecisionBridge to
+     REQUEST_COMPLETE) are delivered through a real ShmDecisionBridge to
      online/verify/bridge_echo.py; the echo reflects the full request back
      into response["echo_of_request"], so the fixture asserts field-level
      round-trip fidelity (echo == build_request_json(delta)) plus the
      fixed nodes/parent_edges/watches/assignments/kv_actions arrays and
-     batch_id/source_delivery_sequence. Then commit acks are sent twice for
-     the same seq (idempotency: Python must ignore the duplicate) and the
-     echo's receipt file must contain exactly one line per seq. At scope
-     end the bridge closes req_notify -> Python sees EOF -> exits 0.
+     batch_id/source_delivery_sequence. v11 §8: request bytes are asserted
+     through the Python-written request_journal.jsonl (the journal line is
+     the frame payload + "\n" -- the audit stream IS the byte evidence
+     now that loose request files no longer exist). Then commit acks are
+     sent twice for the same seq (idempotency: Python must ignore the
+     duplicate) and the echo's receipt file must contain exactly one line
+     per seq. At scope end the bridge closes req_notify -> Python sees
+     EOF -> exits 0.
   B. Python crash detection (forked child): the child delivers through a
      bridge whose Python side reads the request and exits WITHOUT writing a
      response; the resp_notify read gets EOF and the child must abort
@@ -31,6 +36,10 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
   E. 1:1 response-byte invariant (defect-B fix guard): a Python writing
      two bytes for one delivery must trip "more than one response byte in
      flight" (backpressure contract) instead of shifting the exchanges.
+  F. C1 malformed-response regressions: the one-shot structural parse
+     must fail closed through the SAME bridge_fatal channel (corrupt JSON /
+     missing schema_version / unknown top-level key published as shm
+     frames).
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -43,6 +52,7 @@ Exit code 0 on ALL PASS (requires python3 on PATH).
 
 #include <signal.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -112,16 +122,45 @@ pid_t spawn_python3(const std::vector<std::string>& args) {
     return pid;
 }
 
-nlohmann::json read_json_file_for_test(const std::string& path) {
-    std::ifstream in(path);
-    nlohmann::json value;
-    in >> value;
-    return value;
+std::string read_file_for_test(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return std::string();
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    return buf.str();
 }
 
 bool file_exists(const std::string& path) {
     std::ifstream in(path);
     return in.good();
+}
+
+// Common prologue of the scenario scripts below: argv parse + the
+// response-frame publisher. The publisher is a DELIBERATE independent
+// re-implementation of the frozen wire layout ([u32 magic][u64 seq]
+// [u32 len][payload][u32 crc32] over the 64-byte segment header,
+// little-endian, zlib crc32): the scripts do not import the production
+// transport, so a codec disagreement between the C++ reader and Python
+// surfaces here instead of being masked by shared code.
+const char* kPyScenarioHeader =
+    "import os,sys,json,mmap,struct,zlib\n"
+    "d=sys.argv[1]\n"
+    "info=json.load(open(d+'/bridge_shm.json'))\n"
+    "_f=open('/dev/shm/'+info['response_segment'],'r+b',buffering=0)\n"
+    "_m=mmap.mmap(_f.fileno(),64+info['slot_capacity'])\n"
+    "def _pub(seq,payload):\n"
+    "    h=struct.pack('<IQI',0x46524D31,seq,len(payload))\n"
+    "    _m[64:80]=h\n"
+    "    _m[80:80+len(payload)]=payload\n"
+    "    _m[80+len(payload):84+len(payload)]=struct.pack("
+    "'<I',zlib.crc32(h+payload)&0xffffffff)\n";
+
+pid_t spawn_python_publisher(const std::string& body,
+                             const std::string& bridge_dir) {
+    return spawn_python3({"-c", std::string(kPyScenarioHeader) + body,
+                          bridge_dir});
 }
 
 // -------------------------------------------------- completed_nodes wire --
@@ -179,73 +218,56 @@ void round_trip(const std::string& echo_script) {
     const std::string root = make_temp_root();
     const std::string bridge_dir = root + "/bridge";
     const std::string ack_receipt = root + "/ack_receipt";
-    FileDecisionBridge::ensure_bridge_dir(bridge_dir);
+    ShmDecisionBridge::ensure_bridge_dir(bridge_dir);
 
     const pid_t py = spawn_python3({echo_script, bridge_dir, ack_receipt});
 
+    // --- delta 1: ARRIVAL + PREFILL_DRAIN ---
+    DecisionEvent arrival_ev;
+    arrival_ev.reason = DecisionReason::ARRIVAL;
+    arrival_ev.request_id = "s0_r0";
+    arrival_ev.payload.session_id = "s0";
+    arrival_ev.payload.turn_index = 0;
+    arrival_ev.payload.prefill_length = 15659;
+    arrival_ev.payload.decode_length = 202;
+    arrival_ev.payload.inter_request_interval_ns = 0;
+    arrival_ev.payload.arrival_world_ns = 94835000;
+
+    DecisionEvent prefill_ev;
+    prefill_ev.reason = DecisionReason::PREFILL_DRAIN;
+    prefill_ev.request_id = "s0_r0";
+    prefill_ev.stage = "prefill";
+    prefill_ev.generation = 0;
+    prefill_ev.payload.watch_member_count = 5;
+
+    const StateDelta delta1 =
+        build_state_delta({arrival_ev, prefill_ev}, 94835000, 0);
+
+    // --- delta 2: DECODE_COMPLETION + REQUEST_COMPLETE ---
+    DecisionEvent decode_ev;
+    decode_ev.reason = DecisionReason::DECODE_COMPLETION;
+    decode_ev.request_id = "s0_r0";
+    decode_ev.stage = "decode";
+    decode_ev.generation = 1;
+    decode_ev.payload.watch_member_count = 42;
+
+    DecisionEvent complete_ev;
+    complete_ev.reason = DecisionReason::REQUEST_COMPLETE;
+    complete_ev.request_id = "s0_r0";
+    complete_ev.generation = 1;
+
+    const StateDelta delta2 =
+        build_state_delta({decode_ev, complete_ev}, 94835010, 1);
+
     {
-        FileDecisionBridge bridge(bridge_dir);  // timeout 0 (phase-1 default)
-
-        // --- delta 1: ARRIVAL + PREFILL_DRAIN ---
-        DecisionEvent arrival_ev;
-        arrival_ev.reason = DecisionReason::ARRIVAL;
-        arrival_ev.request_id = "s0_r0";
-        arrival_ev.payload.session_id = "s0";
-        arrival_ev.payload.turn_index = 0;
-        arrival_ev.payload.prefill_length = 15659;
-        arrival_ev.payload.decode_length = 202;
-        arrival_ev.payload.inter_request_interval_ns = 0;
-        arrival_ev.payload.arrival_world_ns = 94835000;
-
-        DecisionEvent prefill_ev;
-        prefill_ev.reason = DecisionReason::PREFILL_DRAIN;
-        prefill_ev.request_id = "s0_r0";
-        prefill_ev.stage = "prefill";
-        prefill_ev.generation = 0;
-        prefill_ev.payload.watch_member_count = 5;
-
-        const StateDelta delta1 =
-            build_state_delta({arrival_ev, prefill_ev}, 94835000, 0);
+        ShmDecisionBridge bridge(bridge_dir);  // timeout 0 (phase-1 default)
 
         const GraphBatch batch1 = bridge.deliver_and_receive(delta1);
 
-        // request JSON on disk must be exactly the protocol serializer's
-        // output (atomic publish means the file is complete at notify time)
-        const nlohmann::json request1_on_disk =
-            read_json_file_for_test(bridge_dir + "/request_0.json");
-        expect(request1_on_disk == build_request_json(delta1),
-               "A: request_0.json equals build_request_json(delta1)");
-        expect(request1_on_disk["reasons"] ==
-                   nlohmann::json::parse(R"(["ARRIVAL","PREFILL_DRAIN"])"),
-               "A: reasons[] in epoch order");
-        expect(request1_on_disk["arrivals"][0]["request_id"] == "s0_r0" &&
-                   request1_on_disk["arrivals"][0]["arrival_world_ns"] == 94835000 &&
-                   request1_on_disk["arrivals"][0]["prefill_length"] == 15659,
-               "A: arrivals[] carries the envelope facts");
-        // Phase 4 (schema v1): arrivals carry the ingress serial and the
-        // frozen queue index; delivery_epoch == delivery_sequence;
-        // completed_nodes/affected_ranks empty; snapshot_handle
-        // self-consistent {epoch, tick, kind:""} (compat-built delta gets
-        // the v1 defaults).
-        expect(request1_on_disk["arrivals"][0]["ingress_seq"] == 0 &&
-                   request1_on_disk["arrivals"][0]["queue_index"] == -1,
-               "A: arrivals[] carries ingress_seq/queue_index (v1)");
-        expect(request1_on_disk["delivery_epoch"] ==
-                   request1_on_disk["delivery_sequence"],
-               "A: delivery_epoch == delivery_sequence (v1)");
-        expect(request1_on_disk["completed_nodes"].is_array() &&
-                   request1_on_disk["completed_nodes"].empty() &&
-                   request1_on_disk["affected_ranks"].is_array() &&
-                   request1_on_disk["affected_ranks"].empty(),
-               "A: completed_nodes/affected_ranks empty (v1)");
-        expect(request1_on_disk["snapshot_handle"]["epoch"] == 0 &&
-                   request1_on_disk["snapshot_handle"]["tick"] == 94835000 &&
-                   request1_on_disk["snapshot_handle"]["kind"] == "",
-               "A: snapshot_handle self-consistent placeholder (v1)");
-        expect(request1_on_disk["completed_groups"][0]["stage"] == "prefill" &&
-                   request1_on_disk["completed_groups"][0]["generation"] == 0 &&
-                   request1_on_disk["completed_groups"][0]["node_count"] == 5,
-               "A: completed_groups[] carries the watch-fire facts");
+
+        const GraphBatch batch2 = bridge.deliver_and_receive(delta2);
+        expect(batch2.source_delivery_sequence == 1 && batch2.batch_id == 1,
+               "B: batch echoes seq 1");
 
         expect(batch1.source_delivery_sequence == 0 && batch1.batch_id == 0,
                "A: batch echoes seq 0");
@@ -285,52 +307,76 @@ void round_trip(const std::string& echo_script) {
         expect(batch1.future_alarms.empty() && !batch1.has_touched_ranks,
                "A: future_alarms/touched_ranks defaults intact");
 
-        // Phase-7 §10.3 中间产物生命周期: read_response CONSUMES AND DELETES
-        // the response file right after parsing (fail-closed path retains
-        // it). The field-level round-trip fidelity that response_N.json used
-        // to carry is now verified upstream -- the echoed nodes/parent_edges/
-        // assignments/kv_actions arrived intact in batch1 above, and the
-        // Python decision content is covered by the decision_log byte-gate
-        // of the full runs. request_N.json is retained (fixture input +
-        // audit evidence) and asserted below.
-        expect(!file_exists(bridge_dir + "/response_0.json"),
-               "A: response_0.json consumed and deleted (phase-7 §10.3)");
-        expect(file_exists(bridge_dir + "/request_0.json"),
-               "A: request_0.json retained (replay input + audit evidence)");
-
-        // --- delta 2: DECODE_COMPLETION + REQUEST_COMPLETE ---
-        DecisionEvent decode_ev;
-        decode_ev.reason = DecisionReason::DECODE_COMPLETION;
-        decode_ev.request_id = "s0_r0";
-        decode_ev.stage = "decode";
-        decode_ev.generation = 1;
-        decode_ev.payload.watch_member_count = 42;
-
-        DecisionEvent complete_ev;
-        complete_ev.reason = DecisionReason::REQUEST_COMPLETE;
-        complete_ev.request_id = "s0_r0";
-        complete_ev.generation = 1;
-
-        const StateDelta delta2 =
-            build_state_delta({decode_ev, complete_ev}, 94835010, 1);
-
-        const GraphBatch batch2 = bridge.deliver_and_receive(delta2);
-        expect(batch2.source_delivery_sequence == 1 && batch2.batch_id == 1,
-               "B: batch echoes seq 1");
-        // Phase-7 §10.3: response consumed and deleted (see part A).
-        expect(!file_exists(bridge_dir + "/response_1.json"),
-               "B: response_1.json consumed and deleted (phase-7 §10.3)");
-
         // --- commit acks: seq 0, seq 1, then a DUPLICATE seq 0 ---
         bridge.send_commit_ack(/*batch_id=*/0, /*delivery_seq=*/0, true);
         bridge.send_commit_ack(/*batch_id=*/1, /*delivery_seq=*/1, true);
         bridge.send_commit_ack(/*batch_id=*/0, /*delivery_seq=*/0, true);
+
+        // v11 §8 carrier change: the bridge dir holds NO loose frame files
+        // (request_/response_/commit_ack_*.json) -- the journal below is
+        // the request evidence and the shm segments are the live carrier.
+        expect(!file_exists(bridge_dir + "/response_0.json") &&
+                   !file_exists(bridge_dir + "/response_1.json") &&
+                   !file_exists(bridge_dir + "/request_0.json") &&
+                   !file_exists(bridge_dir + "/request_1.json"),
+               "A: no loose frame files remain (v11 §8 shm carrier)");
+        expect(file_exists(bridge_dir + "/bridge_shm.json"),
+               "A: bridge_shm.json pointer present");
     }  // destructor closes req_notify -> Python EOF -> exit 0
 
     int status = 0;
     ::waitpid(py, &status, 0);
     expect(WIFEXITED(status) && WEXITSTATUS(status) == 0,
            "A: echo Python exited 0 on EOF (clean run end)");
+
+    // v11 §8 byte evidence: the Python-side journal carries the exact
+    // request frame payloads (one JSON line per delivery, tolerant
+    // path: payload + "\n" -- the payload IS the old request_<seq>.json
+    // file content). Read AFTER the Python process exited (its audit
+    // streams flush in the serve_forever finally block). This is the
+    // request-side round-trip fidelity assertion the old fixture made
+    // against request_0.json on disk.
+    {
+        const std::string journal =
+            read_file_for_test(bridge_dir + "/request_journal.jsonl");
+        const std::string expected_journal =
+            build_request_json(delta1).dump() + "\n" +
+            build_request_json(delta2).dump() + "\n";
+        expect(journal == expected_journal,
+               "A: request_journal.jsonl == build_request_json payloads");
+        const nlohmann::json request1 =
+            nlohmann::json::parse(build_request_json(delta1).dump());
+        expect(request1["reasons"] ==
+                   nlohmann::json::parse(R"(["ARRIVAL","PREFILL_DRAIN"])"),
+               "A: reasons[] in epoch order");
+        expect(request1["arrivals"][0]["request_id"] == "s0_r0" &&
+                   request1["arrivals"][0]["arrival_world_ns"] == 94835000 &&
+                   request1["arrivals"][0]["prefill_length"] == 15659,
+               "A: arrivals[] carries the envelope facts");
+        // Phase 4 (schema v1): arrivals carry the ingress serial and the
+        // frozen queue index; delivery_epoch == delivery_sequence;
+        // completed_nodes/affected_ranks empty; snapshot_handle
+        // self-consistent {epoch, tick, kind:""} (compat-built delta gets
+        // the v1 defaults).
+        expect(request1["arrivals"][0]["ingress_seq"] == 0 &&
+                   request1["arrivals"][0]["queue_index"] == -1,
+               "A: arrivals[] carries ingress_seq/queue_index (v1)");
+        expect(request1["delivery_epoch"] == request1["delivery_sequence"],
+               "A: delivery_epoch == delivery_sequence (v1)");
+        expect(request1["completed_nodes"].is_array() &&
+                   request1["completed_nodes"].empty() &&
+                   request1["affected_ranks"].is_array() &&
+                   request1["affected_ranks"].empty(),
+               "A: completed_nodes/affected_ranks empty (v1)");
+        expect(request1["snapshot_handle"]["epoch"] == 0 &&
+                   request1["snapshot_handle"]["tick"] == 94835000 &&
+                   request1["snapshot_handle"]["kind"] == "",
+               "A: snapshot_handle self-consistent placeholder (v1)");
+        expect(request1["completed_groups"][0]["stage"] == "prefill" &&
+                   request1["completed_groups"][0]["generation"] == 0 &&
+                   request1["completed_groups"][0]["node_count"] == 5,
+               "A: completed_groups[] carries the watch-fire facts");
+    }
 
     // ack receipt: exactly two lines (duplicate seq 0 was idempotent)
     std::ifstream receipt(ack_receipt);
@@ -365,10 +411,10 @@ const char* kCrashScript =
 
 void crash_scenario(const std::string& root) {
     const std::string bridge_dir = root + "/bridge";
-    FileDecisionBridge::ensure_bridge_dir(bridge_dir);
+    ShmDecisionBridge::ensure_bridge_dir(bridge_dir);
     spawn_python3({"-c", kCrashScript, bridge_dir});
 
-    FileDecisionBridge bridge(bridge_dir, /*timeout_ms=*/5000);
+    ShmDecisionBridge bridge(bridge_dir, /*timeout_ms=*/5000);
     DecisionEvent arrival_ev;
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
@@ -392,7 +438,7 @@ const char* kSleepScript =
 
 void timeout_scenario(const std::string& root) {
     const std::string bridge_dir = root + "/bridge";
-    FileDecisionBridge::ensure_bridge_dir(bridge_dir);
+    ShmDecisionBridge::ensure_bridge_dir(bridge_dir);
     const pid_t py = spawn_python3({"-c", kSleepScript, bridge_dir});
 
     // let the parent kill the sleeper after the child aborts
@@ -401,7 +447,7 @@ void timeout_scenario(const std::string& root) {
         pidfile << py << "\n";
     }
 
-    FileDecisionBridge bridge(bridge_dir, /*timeout_ms=*/1000);
+    ShmDecisionBridge bridge(bridge_dir, /*timeout_ms=*/1000);
     DecisionEvent arrival_ev;
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
@@ -412,6 +458,28 @@ void timeout_scenario(const std::string& root) {
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: timeout scenario "
                          "did not abort\n");
     _exit(2);
+}
+
+
+// The abort-scenario children die via bridge_fatal/abort(), which never
+// runs the bridge destructor -- their segments stay in /dev/shm (the
+// deliberate post-mortem semantics). The parent reclaims them through the
+// still-present bridge_shm.json pointer before wiping the temp root.
+void reclaim_bridge_shm(const std::string& root) {
+    std::ifstream info((root + "/bridge/bridge_shm.json").c_str());
+    if (!info.good()) {
+        return;
+    }
+    try {
+        const nlohmann::json parsed = nlohmann::json::parse(info);
+        for (const char* key :
+             {"request_segment", "commit_ack_segment", "response_segment"}) {
+            const std::string name = "/" + parsed.at(key).get<std::string>();
+            ::shm_unlink(name.c_str());
+        }
+    } catch (const std::exception&) {
+        // best effort only
+    }
 }
 
 // Parent-side driver for the abort scenarios: fork, run in the child (which
@@ -435,6 +503,7 @@ void run_abort_scenario(const char* what, void (*scenario)(const std::string&)) 
         ::kill(static_cast<pid_t>(sleeper), SIGKILL);
         ::waitpid(static_cast<pid_t>(sleeper), nullptr, 0);
     }
+    reclaim_bridge_shm(root);
     rm_rf(root);
     std::printf("[bridge_loopback_fixture] %s PASS\n", what);
 }
@@ -481,6 +550,7 @@ void run_abort_scenario_with_message(const char* what, const char* needle,
             ::waitpid(static_cast<pid_t>(leftover), nullptr, 0);
         }
     }
+    reclaim_bridge_shm(root);
     rm_rf(root);
     std::printf("[bridge_loopback_fixture] %s PASS\n", what);
 }
@@ -488,32 +558,29 @@ void run_abort_scenario_with_message(const char* what, const char* needle,
 // ---------------------------------------------------------------- Part D --
 // Defect-B fix (2026-08-16): genuine peer death under the LONG-LIVED resp
 // protocol. Python completes the first exchange (seq 0) normally, then
-// SIGKILLs itself before responding to seq 1. The C++ lifetime read end must see the
-// write end close (read==0) and abort with the unambiguous
+// SIGKILLs itself before responding to seq 1. The C++ lifetime read end
+// must see the write end close (read==0) and abort with the unambiguous
 // "long-lived resp_notify write end closed" diagnostic -- the same
 // signature that, under the OLD per-exchange protocol, also fired for a
 // live-but-between-opens peer (the F1 false kill).
-const char* kKillScript =
-    "import os,sys,json\n"
-    "d=sys.argv[1]\n"
+const char* kKillScriptBody =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    // schema-2 minimal legal response (C5-era T6): exchange 1 must COMPLETE
+    // schema-3 minimal legal response (C5-era T6): exchange 1 must COMPLETE
     // normally so the scenario's subject is the seq-1 hard death, not a
     // version-mismatch abort during exchange 1.
-    "resp={'schema_version':2,'batch_id':0,'source_delivery_sequence':0,"
-    "'pipeline_descriptors':[],'kernel_contract':{"
+    "resp={'schema_version':3,'batch_id':0,'source_delivery_sequence':0,"
+    "'kernel_contract':{"
     "'projection_abi_version':1,'descriptor_version':1,"
-    "'pipeline_protocol_version':1,'model_version':'v6-compact-window-20261005',"
+    "'pipeline_protocol_version':1,'model_version':'v7-three-actions-20261014',"
     "'timer_whitelist_version':'timer-whitelist-v1-20261005',"
     "'window_tile_limit':1,'window_local_error_ppm':10000,"
     "'window_refine_margin_ppm':20000,'prediction_config_sha256':"
     "'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'},"
     "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
     "'kv_actions':[],'future_alarms':[]}\n"
-    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
-    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
+    "_pub(0,json.dumps(resp).encode())\n"
     "os.write(wfd, b'\\n')\n"
     "os.read(fd,1)\n"          // commit-ack doorbell (seq 0)
     "os.read(fd,1)\n"          // request seq 1 doorbell
@@ -521,13 +588,13 @@ const char* kKillScript =
 
 void kill_scenario(const std::string& root) {
     const std::string bridge_dir = root + "/bridge";
-    FileDecisionBridge::ensure_bridge_dir(bridge_dir);
-    const pid_t py = spawn_python3({"-c", kKillScript, bridge_dir});
+    ShmDecisionBridge::ensure_bridge_dir(bridge_dir);
+    const pid_t py = spawn_python_publisher(kKillScriptBody, bridge_dir);
     {
         std::ofstream pidfile(root + "/kill.pid");
         pidfile << py << "\n";
     }
-    FileDecisionBridge bridge(bridge_dir, /*timeout_ms=*/10000);
+    ShmDecisionBridge bridge(bridge_dir, /*timeout_ms=*/10000);
     DecisionEvent arrival_ev;
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
@@ -548,39 +615,36 @@ void kill_scenario(const std::string& root) {
 // (backpressure). A Python that writes TWO bytes for one response must trip
 // the in-flight invariant ("protocol violation: more than one response
 // byte in flight") instead of silently shifting the exchanges.
-const char* kTwoByteScript =
-    "import os,sys,json,time\n"
-    "d=sys.argv[1]\n"
+const char* kTwoByteScriptBody =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    // schema-2 base (same C5-era upgrade as the other inline scripts): the
+    // schema-3 base (same C5-era upgrade as the other inline scripts): the
     // scenario's subject is the two-byte channel violation, and the byte
     // invariant must fire regardless of the response body's validity.
-    "resp={'schema_version':2,'batch_id':0,'source_delivery_sequence':0,"
-    "'pipeline_descriptors':[],'kernel_contract':{"
+    "resp={'schema_version':3,'batch_id':0,'source_delivery_sequence':0,"
+    "'kernel_contract':{"
     "'projection_abi_version':1,'descriptor_version':1,"
-    "'pipeline_protocol_version':1,'model_version':'v6-compact-window-20261005',"
+    "'pipeline_protocol_version':1,'model_version':'v7-three-actions-20261014',"
     "'timer_whitelist_version':'timer-whitelist-v1-20261005',"
     "'window_tile_limit':1,'window_local_error_ppm':10000,"
     "'window_refine_margin_ppm':20000,'prediction_config_sha256':"
     "'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'},"
     "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
     "'kv_actions':[],'future_alarms':[]}\n"
-    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
-    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
+    "_pub(0,json.dumps(resp).encode())\n"
     "os.write(wfd, b'\\n\\n')\n"  // protocol violation: 2 bytes, 1 delivery
-    "time.sleep(3600)\n";         // stay alive: the invariant must fire
+    "import time; time.sleep(3600)\n";  // stay alive: the invariant must fire
 
 void two_byte_scenario(const std::string& root) {
     const std::string bridge_dir = root + "/bridge";
-    FileDecisionBridge::ensure_bridge_dir(bridge_dir);
-    const pid_t py = spawn_python3({"-c", kTwoByteScript, bridge_dir});
+    ShmDecisionBridge::ensure_bridge_dir(bridge_dir);
+    const pid_t py = spawn_python_publisher(kTwoByteScriptBody, bridge_dir);
     {
         std::ofstream pidfile(root + "/twobyte.pid");
         pidfile << py << "\n";
     }
-    FileDecisionBridge bridge(bridge_dir, /*timeout_ms=*/10000);
+    ShmDecisionBridge bridge(bridge_dir, /*timeout_ms=*/10000);
     DecisionEvent arrival_ev;
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
@@ -596,53 +660,46 @@ void two_byte_scenario(const std::string& root) {
 // C1 (2026-08-29) malformed-response regressions: the one-shot structural
 // parse must fail closed through the SAME bridge_fatal channel as every
 // other protocol violation -- one "[Error] (execution_driven/bridge)" line
-// on stderr + SIGABRT, and the response file survives for post-mortem
-// (the success path is the only one that unlinks it).
-const char* kBadJsonScript =
-    "import os,sys,time\n"
-    "d=sys.argv[1]\n"
+// on stderr + SIGABRT. v11 §8: the malformed payloads are published as shm
+// frames (the slot keeps the offending bytes; abort() leaves the segments
+// in /dev/shm as post-mortem evidence, mirroring the old surviving
+// response file).
+const char* kBadJsonScriptBody =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    "open(d+'/response_0.json.tmp','w').write('{not json')\n"
-    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
+    "_pub(0,b'{not json')\n"
     "os.write(wfd, b'\\n')\n"
-    "time.sleep(3600)\n";  // stay alive: read_json_file's throw aborts C++
+    "import time; time.sleep(3600)\n";  // stay alive: strict parse aborts C++
 
-const char* kMissingSchemaScript =
-    "import os,sys,json,time\n"
-    "d=sys.argv[1]\n"
+const char* kMissingSchemaScriptBody =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
     "resp={'batch_id':0,'source_delivery_sequence':0,'nodes':[]}\n"
-    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
-    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
+    "_pub(0,json.dumps(resp).encode())\n"
     "os.write(wfd, b'\\n')\n"
-    "time.sleep(3600)\n";  // missing schema_version -> bridge check aborts
+    "import time; time.sleep(3600)\n";  // missing schema_version aborts C++
 
-const char* kUnknownKeyScript =
-    "import os,sys,json,time\n"
-    "d=sys.argv[1]\n"
+const char* kUnknownKeyScriptBody =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    // schema-2 base (so the version gate passes) + the unknown key: the
+    // schema-3 base (so the version gate passes) + the unknown key: the
     // scenario's subject is the ParseError, not a schema-1 mismatch.
-    "resp={'schema_version':2,'batch_id':0,'source_delivery_sequence':0,"
-    "'pipeline_descriptors':[],'kernel_contract':{"
+    "resp={'schema_version':3,'batch_id':0,'source_delivery_sequence':0,"
+    "'kernel_contract':{"
     "'projection_abi_version':1,'descriptor_version':1,"
-    "'pipeline_protocol_version':1,'model_version':'v6-compact-window-20261005',"
+    "'pipeline_protocol_version':1,'model_version':'v7-three-actions-20261014',"
     "'timer_whitelist_version':'timer-whitelist-v1-20261005',"
     "'window_tile_limit':1,'window_local_error_ppm':10000,"
     "'window_refine_margin_ppm':20000,'prediction_config_sha256':"
     "'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'},"
     "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
     "'kv_actions':[],'future_alarms':[],'echo_of_request':{'x':1}}\n"
-    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
-    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
+    "_pub(0,json.dumps(resp).encode())\n"
     "os.write(wfd, b'\\n')\n"
-    "time.sleep(3600)\n";  // unknown top-level key -> ParseError aborts
+    "import time; time.sleep(3600)\n";  // unknown top-level key -> ParseError
 
 void test_malformed_response_abort_messages() {
     struct Variant {
@@ -651,14 +708,14 @@ void test_malformed_response_abort_messages() {
         const char* needle;
     };
     const Variant variants[] = {
-        {"F: corrupt response JSON", kBadJsonScript,
+        {"F: corrupt response JSON", kBadJsonScriptBody,
          "response missing or corrupt"},
-        {"F: missing schema_version", kMissingSchemaScript,
+        {"F: missing schema_version", kMissingSchemaScriptBody,
          // The 2026-10-01 audit fix split the single legacy "mismatch"
          // diagnostic into "missing or not an integer" vs "mismatch";
          // this scenario (the key entirely absent) hits the first one.
          "response schema_version missing or not an integer"},
-        {"F: unknown top-level key", kUnknownKeyScript,
+        {"F: unknown top-level key", kUnknownKeyScriptBody,
          "malformed GraphBatch response"},
     };
     for (const auto& variant : variants) {
@@ -672,14 +729,14 @@ void test_malformed_response_abort_messages() {
                 ::dup2(errfd, 2);
             }
             const std::string bridge_dir = root + "/bridge";
-            FileDecisionBridge::ensure_bridge_dir(bridge_dir);
+            ShmDecisionBridge::ensure_bridge_dir(bridge_dir);
             const pid_t py =
-                spawn_python3({"-c", variant.script, bridge_dir});
+                spawn_python_publisher(variant.script, bridge_dir);
             {
                 std::ofstream pidfile(root + "/malformed.pid");
                 pidfile << py << "\n";
             }
-            FileDecisionBridge bridge(bridge_dir, /*timeout_ms=*/10000,
+            ShmDecisionBridge bridge(bridge_dir, /*timeout_ms=*/10000,
                                       /*num_ranks=*/1);
             DecisionEvent arrival_ev;
             arrival_ev.reason = DecisionReason::ARRIVAL;
@@ -712,6 +769,7 @@ void test_malformed_response_abort_messages() {
             ::kill(static_cast<pid_t>(leftover), SIGKILL);
             ::waitpid(static_cast<pid_t>(leftover), nullptr, 0);
         }
+        reclaim_bridge_shm(root);
         rm_rf(root);
         std::printf("[bridge_loopback_fixture] %s PASS\n", variant.what);
     }

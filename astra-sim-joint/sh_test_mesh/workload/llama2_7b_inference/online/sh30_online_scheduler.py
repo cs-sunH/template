@@ -61,8 +61,8 @@ sh_3.0 特性保留（红线，策略公式/阈值/KV 语义/映射规则一律�
     已知终止直接结算（_joint_boundary_terminal）；
   - **D19（2026-09-26，v2.0 §5.3/§6.5/§13.1）D 候选专用边界视图**：
     estimate_D_remaining 字节口径改由 joint/boundary_layout.py 的
-    BoundaryKVLayout 逐目标区间推导（远读只数对当前 j 实际在远端的
-    基础区间、copy 只补目标缺少部分），等待接口拆分原地接续（不重
+    BoundaryKVLayout 逐目标区间推导（copy 只补目标缺少部分），
+    等待接口拆分原地接续（不重
     排队——等待基 = 在服流 running+active）与新接纳（不免费插队——
     目标全部在账负载）；边界决策记录披露 stage_work/继承义务表/
     boundary_wait_kind（_joint_boundary_stage_view）。
@@ -111,7 +111,6 @@ from face_scheduler import (  # noqa: E402
     KVCapacityError,
     KVStageVersionConflict,
     KVPhysicalInfeasibleError,
-    KVTransferSequence,
     build_instances,
     estimate_decode_remaining_task_load_ns,
     estimate_iteration_workload,
@@ -127,10 +126,7 @@ from joint.joint_config import (  # noqa: E402
     SCHEDULER_MODE_JOINT,
     parse_joint_config,
     parse_train_max_iter,
-    prefill_remote_read_scan_passes,
-    remote_read_exec_tile_tokens,
     MODEL_SEMANTICS_VERSION,
-    REMOTE_READ_QUERY_TILE_TOKENS,
 )
 from joint.hbm_port_flow_registry import HbmPortFlowRegistry  # noqa: E402
 from joint.boundary_layout import (  # noqa: E402
@@ -142,7 +138,6 @@ from joint.boundary_layout import (  # noqa: E402
 )
 from joint.joint_cost_model import (  # noqa: E402
     ACTION_ORDER,
-    ACTION_REMOTE,
     ACTION_RECOMPUTE,
     ACTION_STAY,
     CausalHorizonEstimator,
@@ -162,9 +157,6 @@ from joint.joint_scheduler import (  # noqa: E402
     select_decode_target_and_action,
     select_instance_and_action,
 )
-from joint.pipeline_identity import (  # noqa: E402
-    PipelineIdentitySeed,
-)
 from joint.joint_config import (  # noqa: E402
     SCHEDULER_MODE_AFFINITY,
     SCHEDULER_MODE_LOAD_FIRST,
@@ -177,7 +169,6 @@ from joint.predictor_cost_accounting import (  # noqa: E402
 from joint.link_quota import (  # noqa: E402
     DELTA_ADM_INITIAL_NS,
     FLOW_ONESHOT,
-    FLOW_REALTIME,
     MERGE_DIRECTION_FORWARD,
     MERGE_DIRECTION_REVERSE,
     QUOTA_AIMD,
@@ -196,11 +187,7 @@ from online.online_scheduler_base import (  # noqa: E402
     STAGE_REQUEST,
     OnlineSchedulerBase,
 )
-from online.graph_batch_builder import (  # noqa: E402
-    CreditGateRange,
-    CreditGateSet,
-    first_token_split_enabled,
-)
+from online.graph_batch_builder import first_token_split_enabled  # noqa: E402
 
 
 _TASK_LOAD_CACHE_CAPACITY = 4096
@@ -284,15 +271,14 @@ class _VersionDrift(RuntimeError):
 #: 用预测值冒充实测）。
 _JOINT_BREAKDOWN_LOG_FIELDS = (
     "target_wait_ns", "history_prep_ns", "eviction_wait_ns", "compute_ns",
-    "remote_read_ns", "merge_ns", "contention_divisor", "hops", "notes",
-    "remote_read_first_credit_ns", "remote_read_stream_ns",
+    "merge_ns", "contention_divisor", "hops", "notes",
     # D17 schema 扩展（joint_cost_model.ActionCostBreakdown 同名）。
     "model_semantics_version", "decision_stage", "decision_epoch",
     "prefill_instance", "decode_instance", "prefill_action",
     "decode_action", "is_continuation", "estimated_remaining_decode_steps",
     "predicted_next_token_done", "predicted_service_done",
     "predicted_merge_done", "interval_layout", "inherited_obligation_ids",
-    "phase_space_bytes", "staging_buffer_peak_bytes", "approximations",
+    "phase_space_bytes", "approximations",
     # §5.1/§5.6/§5.5 交付面扩展（2026-09-30）。
     "projection_stats", "background_delays", "capacity_theta_prediction",
 )
@@ -463,20 +449,8 @@ class _OnlineRequestRuntime:
         "joint_rebuild_context_tokens", "joint_prefill_stage",
         "joint_suppress_sampling", "joint_suppress_output",
         "joint_input_tokens", "joint_cost_ns", "joint_working_copy",
-        # ---- 规格书§二（2026-09-25 prefill remote-read 分阶段）：前缀
-        # 读流独立账本（与 history_transfers 严格分离——后缀池恢复留在
-        # history_transfers，前缀 [0,p) 读流若混入会被误当历史工作副本
-        # 迁移，错误触发 readiness barrier、history_transfer_bytes 与
-        # merge 账本）----
-        "prefill_remote_read_transfers", "prefill_remote_read_plan",
-        "prefill_remote_read_bytes", "pipeline_identity_inputs",
         # ---- R14（2026-09-14）：decode 增长停滞/唤醒 ----
         "decode_stalled", "stall_wake_key", "stall_reason", "stall_gap_records",
-        # ---- remote-read credit 执行口径（唯一机制）----
-        "remote_read_credit_plan", "remote_read_credit_trains",
-        "remote_read_slice_summaries",
-        # ---- C8（WP2-preadmit）：同 tick 读流承诺预登记账本 ----
-        "remote_read_preplan",
         # ---- C11（WP3c）：quota_deferred 首等待时标（驻留时长样本） ----
         "quota_deferred_since_ns",
         # ---- 逐出尾 watch（2026-09-24 修复）：decode joiner drain 登记 ----
@@ -485,14 +459,12 @@ class _OnlineRequestRuntime:
         "joint_stage", "joint_decode_action", "joint_decode_is_continuation",
         "boundary_decision",
         # ---- C4（v2.0 §19.1/D10/D19）：D 边界完整动作面的运行时元数据
-        # ---- recompute 静默重建（重建基数/待重建标记）与多源远读的
-        # growth-only 口径（U 留 i_P 来源侧，j 仅 decode 增长）；首
+        # ---- recompute 静默重建（重建基数/待重建标记）；首
         # token 状态（issued/consumed/rng_advances——首个 D 前向消费
         # 恰一次，二次消费 fail-closed）。----
         "joint_decode_rebuild_tokens", "joint_decode_rebuild_pending",
-        "joint_remote_growth_only", "joint_boundary_first_token",
+        "joint_boundary_first_token",
         "joint_rebuild_reservation_hold",
-        "joint_growth_reservation_hold",
         # ---- D20（v2.0 §14.5/§16.4）跨阶段预约事务与引用交接 ----
         # joint_boundary_epoch：P→D 边界阶段 epoch（每进入一次未提交
         # 边界 +1；同 epoch 重复通知/在途 ack 幂等，回退按 §16.4 记
@@ -511,11 +483,6 @@ class _OnlineRequestRuntime:
         # None = 无目录/无来源）。结算闭合时释放（守恒：泄漏审计在
         # verify_run_end 的目录审计）。
         "joint_source_reference_ids",
-        # ---- W10（§7.5/主文 §6.7）：D 边界 hybrid 选择的持久 copy 来源
-        # 子集 L（元组升序；() = 非 hybrid——decode 相物理动作 =
-        # remote-read，U 已迁 j ⇒ 非 growth-only；日志标 hybrid、归因
-        # 与纯四动作分离）。----
-        "joint_hybrid_copy_sources",
         # ---- §5.5（2026-09-30 修复）：容量摘要 θ 预测 vs 实际逐出对账
         # 簿记（随请求 runtime 生命周期——完成即回收，无调度器级账本）。
         # capacity_theta_prediction = 选中候选 breakdown 的 θ 结构化预测
@@ -571,20 +538,6 @@ class _OnlineRequestRuntime:
         self.decode_stalled = False
         self.stall_wake_key = None
         self.stall_reason = None
-        # remote-read credit（唯一执行口径）：drain 边界建立的
-        # 持久读计划（每步读量/路径一次冻结；逐列车切片在列车规划期从其
-        # 派生）、已切片列车计数 j（R15 owner 键 rid#decode#{j} 的序号）
-        # 与逐列车切片摘要（completion 决策行披露）。非 remote-read
-        # 动作的请求三者恒为初始值。
-        self.remote_read_credit_plan = None
-        self.remote_read_credit_trains = 0
-        self.remote_read_slice_summaries = []
-        # C8（WP2-preadmit，§4.1 同 tick 承诺可见性）：准入相 remote-read
-        # 读流承诺预登记（owner = rid#readplan）的运行账本——est/真值/核销
-        # 余量与登记模板；对账链 = drain 冻结（_reconcile_readplan_at_drain）
-        # → 逐列车核销（_consume_readplan_units）→ 完成清残（_settle_
-        # readplan_residual）。非 remote-read 恒 None。
-        self.remote_read_preplan = None
         # C11：quota_deferred 首次等待时标（None = 未经历配额等待）；
         # 最终准入时结算驻留时长样本入指标。
         self.quota_deferred_since_ns = None
@@ -611,24 +564,15 @@ class _OnlineRequestRuntime:
         self.joint_source_reference_ids = None
         # C4（v2.0 §19.1/D10/D19）：D 边界完整动作面元数据——recompute
         # 静默重建基数与待重建标记（首个 decode 列车前置重建 span，列
-        # 车规划期清位）；多源远读 growth-only（U 留 i_P，j 工作副本仅
-        # decode 增长）；边界首 token 状态 dict（P 末 chunk 采样恰一次
+        # 车规划期清位）；边界首 token 状态 dict（P 末 chunk 采样恰一次
         # 后 issued 待首个 D 前向消费——consume_once 二次消费 fail-closed）。
         self.joint_decode_rebuild_tokens = 0
         self.joint_decode_rebuild_pending = False
-        self.joint_remote_growth_only = False
         self.joint_boundary_first_token = None
-        # W10：hybrid 选择的 copy 子集 L（() = 非 hybrid）。
-        self.joint_hybrid_copy_sources = ()
         # C4：recompute@j≠i_P 的目标侧预约保持位——重建副本随首个含
         # 重建 span 的列车核销物化后注销（此前预约 = 重建空间的真实
         # 承诺，不得提前释放——"final KV allocation"守卫的因果口径）。
         self.joint_rebuild_reservation_hold = False
-        # 先在潜伏缺陷修复（主 agent 裁决 2026-10-06 修法 a）：
-        # growth-only 多源远读的同构保持位——目标侧后缀恢复物理完成
-        # （门控首条目标列车体）后，在首个目标侧列车核销点注销阶段
-        # 预约；镜像 rebuild hold 的机制与触发条件。
-        self.joint_growth_reservation_hold = False
         # D20（v2.0 §14.5/§16.4）：阶段 epoch / 完成归属 / 阶段引用
         # 句柄（语义见 __slots__ 注；epoch 自边界首次进入起 +1）。
         self.joint_boundary_epoch = 0
@@ -637,18 +581,6 @@ class _OnlineRequestRuntime:
         self.origin_home_instance = None
         self.history_transfers = ()
         self.merge_transfers = ()
-        # 规格书§二.1（2026-09-25）：prefill remote-read 前缀读流独立
-        # 账本——准入时由 plan_prefill_remote_read_transfers 规划（纯
-        # 规划零副作用；stream_only 瞬时流，不物化 exec 容量账本），
-        # owner = rid#prefill_read、prefill drain 释放。非 remote-read
-        # （或退化无读流）恒为初始值 ()/None/0。
-        self.prefill_remote_read_transfers = ()
-        self.prefill_remote_read_plan = None
-        self.prefill_remote_read_bytes = 0
-        # Explicit actual-emission identity seeds. These are copied into
-        # internal builder plans; candidate enumeration continues to use its
-        # own preview provider and never consumes these run ordinals.
-        self.pipeline_identity_inputs = {}
         # 合并方向 v2（2026-09-17）：merge_back 后 face_scheduler 设置的
         # last_merge_outcome 快照（direction/winner/loser/transferred_bytes/
         # home_flipped 等；stay 亦照实落账）。None = 尚无 merge 事务（F6
@@ -685,9 +617,8 @@ class _OnlineRequestRuntime:
         self.history_transfer = None
         self.history_evictions = ()
         # R17-1a'（2026-09-17 死通道钉死）：结构性恒空——准入 R1' 预约
-        # （joint_reservation_context_tokens，face_scheduler.py 单源）覆盖
-        # prefill 全动作足迹（stay/copy/recompute=history+input 整份、
-        # remote-read=input），drain 时 delta ≤ 自有预约 ⟹ gap≡0 ⟹
+        # （history+input 整份，face_scheduler.py 单源）覆盖
+        # prefill 全动作足迹，drain 时 delta ≤ 自有预约 ⟹ gap≡0 ⟹
         # _ensure_capacity 提前空返；2026-09-16 三方裁决（kimi 通道归因
         # + 本方代码级证实 + R17-7 探针 A2 运行级复现）。字段保留仅为
         # prefill 行 schema 稳定（见 _emit_admission 的同名空字段注释）。
@@ -753,16 +684,12 @@ class _OnlineRequestRuntime:
             "joint_stage": self.joint_stage,
             "joint_decode_action": self.joint_decode_action,
             "joint_decode_is_continuation": self.joint_decode_is_continuation,
-            # C4：D 边界完整动作面元数据（recompute 静默重建 / 多源远读
-            # growth-only / 首 token 消费状态——构图器/重放侧与决策日志
-            # 同源；非该形态恒缺省值，键恒在前向兼容）。
+            # C4：D 边界完整动作面元数据（recompute 静默重建 / 首 token
+            # 消费状态——构图器/重放侧与决策日志同源；非该形态恒缺省值，
+            # 键恒在前向兼容）。
             "joint_decode_rebuild_tokens": self.joint_decode_rebuild_tokens,
             "joint_decode_rebuild_pending": (
                 self.joint_decode_rebuild_pending),
-            "joint_remote_growth_only": self.joint_remote_growth_only,
-            # W10：hybrid 选择披露（() = 非 hybrid；归因与纯四动作分离）。
-            "joint_hybrid_copy_sources": list(
-                self.joint_hybrid_copy_sources),
             "joint_boundary_first_token": dict(
                 self.joint_boundary_first_token)
             if self.joint_boundary_first_token is not None else None,
@@ -771,19 +698,6 @@ class _OnlineRequestRuntime:
             # 兼容）与阶段 epoch。
             "completion_instance_index": self.completion_instance_index,
             "joint_boundary_epoch": self.joint_boundary_epoch,
-            "pipeline_identity_seeds": tuple(
-                {
-                    "request_id": self.request_id,
-                    "stage": stage,
-                    "generation": 0 if stage == "prefill" else 1,
-                    "stage_epoch": int(inputs["stage_epoch"]),
-                    "rank": int(rank),
-                    "staging_allocation_id": int(
-                        inputs["staging_allocation_id"]),
-                }
-                for stage, inputs in sorted(
-                    self.pipeline_identity_inputs.items())
-                for rank in inputs["target_ranks"]),
             # D10（v2.0 §6.2）：recompute 阶段字段与 token/RNG 元数据
             # （构图器/重放侧工作描述与 runtime、决策日志同源；非重算
             # 动作恒缺省 0/None/False/False）。
@@ -795,54 +709,6 @@ class _OnlineRequestRuntime:
             "joint_cost_ns": self.joint_cost_ns,
             "history_transfers": self.history_transfers,
             "merge_transfers": self.merge_transfers,
-            # 规格书§二.3（2026-09-25；D09 逐 tile 化 2026-09-27；D16
-            # 有界模板修复轮二）：prefill remote-read 前缀读流独立字段
-            # （图侧准入批只消费触发链；数据 tile 随消费窗口在列车头/
-            # 体发射——builder 经 plan 的 tiles 复检合同；非前缀读流请
-            # 求为 0/None——键恒在，读者前向兼容）。计划快照 = 有界模
-            # 板参数（不再携带物化 transfer 列表；逐窗 tile 消费点现算，
-            # P 决策行聚合摘要见 _prefill_remote_read_summary）。
-            "prefill_remote_read_bytes": self.prefill_remote_read_bytes,
-            "prefill_remote_read_layers": (
-                self.prefill_remote_read_plan["read_prefix_layers"]
-                if self.prefill_remote_read_plan is not None else 0),
-            "prefill_remote_read_transfers":
-                self.prefill_remote_read_transfers,
-            "prefill_remote_read_plan": (
-                None if self.prefill_remote_read_plan is None else {
-                    "home_instance":
-                        self.prefill_remote_read_plan["home_instance"],
-                    "exec_instance":
-                        self.prefill_remote_read_plan["exec_instance"],
-                    "read_prefix_layers":
-                        self.prefill_remote_read_plan["read_prefix_layers"],
-                    "total_bytes":
-                        self.prefill_remote_read_plan["total_bytes"],
-                    "tile_count":
-                        self.prefill_remote_read_plan["tile_count"],
-                    "window_count":
-                        self.prefill_remote_read_plan["window_count"],
-                    "tiles_by_window":
-                        self.prefill_remote_read_plan["tiles_by_window"],
-                    "tile_bytes":
-                        self.prefill_remote_read_plan["tile_bytes"],
-                    "scan_passes":
-                        self.prefill_remote_read_plan["scan_passes"],
-                    # builder 模板级合同复检所需（D16：会话归属 + TP 相对位；
-                    # session_id 取模板戳（规划器侧），非 runtime 侧——保
-                    # 持旧逐 tile 归属复检的错配捕获语义）。
-                    "session_id": self.prefill_remote_read_plan["template"][
-                        "session_id"],
-                    "source_ranks": tuple(
-                        self.prefill_remote_read_plan["template"][
-                            "source_ranks"]),
-                    "target_ranks": tuple(
-                        self.prefill_remote_read_plan["template"][
-                            "target_ranks"]),
-                    "base_scans_shards": tuple(
-                        self.prefill_remote_read_plan["template"][
-                            "base_scans_shards"]),
-                }),
         }
 
 
@@ -1217,7 +1083,7 @@ class _JointDiePlanProvider:
                     "name": f"predict_{category}",
                     "category": category,
                     "op_kind": self._ctx.op_kind_of(category),
-                    "num_ops": 0, "tensor_size": 0, "remote_read": 0,
+                    "num_ops": 0, "tensor_size": 0,
                     "layer_count": 1,
                     "weight_passes": 1,
                     "external_consumers": False,
@@ -1356,12 +1222,6 @@ class _JointDiePlanProvider:
     def _descriptor(self, *, phase, spans, layer_count, weight_passes,
                     tensor_parallel_rank, kv_identity, service_factor,
                     route, label):
-        if self._ctx.profile == "coarse_die_v2":
-            raise RuntimeError(
-                "unsupported_projection_state: coarse_die_v2 cannot be "
-                "projected through the legacy scalar die-plan snapshot; "
-                "live v2 export/import and private Runtime overlay are "
-                "required")
         from joint.die_plan_projection import (
             DiePlanDescriptor, ScaledDieExecution,
         )
@@ -1743,14 +1603,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 各自独立 oneshot 流，#decode#{seq} 后缀防 owner 撞车）。
         self._quota_decode_owner_seq: dict[str, int] = {}
         # 弃赛守卫埋点（C11 步骤 5，为 C20 预置——本卡只埋点不判读）：
-        # 四动作分列选中计数（recompute 仅 elected 口径、forced 按
+        # 三动作分列选中计数（recompute 仅 elected 口径、forced 按
         # no_history/action_mask/quota_deferred/evicted_permanent 四成
         # 因单列——与 _recompute_selection_tier 枚举同步，L1/P2-1 补
         # 齐、M2 2026-09-26 扩 action_mask）+
         # quota 等待分列计数 + deferred 驻留时长样本（首 defer →
         # 最终准入）。
         self._joint_action_selection_counts = {
-            "stay": 0, "copy": 0, "remote-read": 0,
+            "stay": 0, "copy": 0,
             "recompute_elected": 0,
             "recompute_forced_no_history": 0,
             "recompute_forced_action_mask": 0,
@@ -1826,8 +1686,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._telemetry_link_id_map: dict[int, tuple[int, int]] | None = None
         # C2（WP1b，2026-09-22）：实例 HBM 端口流注册表（F4 u_port 除数
         # 的执行器侧来源）——noc_migrate 在途流登记端点端口（源 = home
-        # 读腿恒有；目标 = exec 写腿，copy 留存写 / merge 落点写 /
-        # remote-read credit 到达写——A4' 补价后计价与执行同腿型）；
+        # 读腿恒有；目标 = exec 写腿，copy 留存写 / merge 落点写
+        # ——A4' 补价后计价与执行同腿型）；
         # D04（2026-09-26）起 pool 路径（remote_load/remote_store）端
         # 点同样入表：恢复 = 目标 HBM 写端点、写回 = 源 HBM 读端点
         # （edge 侧是池端口非 rank HBM）——F3 旧豁免废除，候选池腿
@@ -1849,14 +1709,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             pool_bandwidth_gbps=pool_bandwidth_gbps,
             pool_latency_ns=pool_latency_ns,
             pool_divisor_fn=self._pool_port_divisor,
-            # D09（2026-09-26，v2.0 §12.1/A.4）：remote-read 字节 tile
-            # 协议参数注入——暂存预约按本解析真实提交（tile 大小来自
-            # 执行配置并按一个 token KV 粒度向下对齐，<1 token
-            # fail-closed；每 rank 双缓冲 = REMOTE_READ_STAGING_BUFFERS）。
-            remote_read_tile_tokens=self._remote_read_tile_tokens_config(
-                config),
-            remote_read_kv_token_bytes=self._remote_read_kv_token_bytes(
-                config),
             # §8.1 单账本（2026-09-30 修复）：face γ/η 消费方（k_hide
             # 递推/adaptive 披露）经 PublishedServiceFactorGroup 读统一
             # 服务样本估计器的只读发布值——同一样本不再二次更新 face
@@ -1871,10 +1723,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 在 KVCacheManager 侧缺省 None（零行为差），此处装配点接线。
         self.kv_manager.capacity_summary_maintenance_notifier = (
             self.predictor_cost.note_summary_maintenance)
-        # D09：配置 tile 解析值缓存（运行期读流切片/暂存口径同源；
-        # 解析在 _remote_read_tile_tokens_config 已 fail-closed 校验）。
-        self._remote_read_tile_tokens_resolved = (
-            self._remote_read_tile_tokens_config(config))
         self._instance_edge_ports = {
             instance.index: tuple(sorted({
                 self.kv_manager.nearest_edge(rank)
@@ -2079,24 +1927,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 真哨兵信号；唤醒只作余量批的交付边界，不进任何决策/核销路径。
         self._pending_first_steps = {}
 
-    # ---------------------------------- D09 remote-read 字节 tile 协议 --
-
-    @staticmethod
-    def _remote_read_kv_token_bytes(config) -> int:
-        """D09 tile 对齐基准：每 rank 一个 token 的全层 KV 字节（K+V，
-        静态模型/拓扑派生——执行配置，非 workload 拟合）。"""
-        return kv_cache_shard_bytes_for_tokens(
-            config.model, 1, len(config.inference_groups[0].ranks))[0]
-
-    def _remote_read_tile_tokens_config(self, config) -> int:
-        """配置 tile 的 token 解析（``resolve_remote_read_tile_tokens``
-        单一裁决点：auto=协议固定 token 数；显式字节按 token 粒度向下
-        对齐，容纳不下一个 token 时该执行协议不受支持——fail-closed）。"""
-        from joint.joint_config import resolve_remote_read_tile_tokens
-        return resolve_remote_read_tile_tokens(
-            self.joint_config.remote_read_tile_bytes,
-            self._remote_read_kv_token_bytes(config))
-
     # ------------------------------------------------------------- 策略 --
 
     def run_variant_policy(self, delta) -> None:
@@ -2298,43 +2128,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                                     request_id)
                             runtime.joint_rebuild_reservation_hold = False
                             self._bump_kv_ledger_epoch()
-                        if (getattr(runtime, "joint_growth_reservation_hold",
-                                    False)
-                                and instance_index == int(
-                                    runtime.decode_instance_index)):
-                            # 先在潜伏缺陷修复（裁决 2026-10-06 修法 a）：
-                            # growth-only 多源远读的目标侧后缀恢复已物理
-                            # 完成（恢复腿门控本列车体）——此处物化目标侧
-                            # 工作副本的恢复后缀基数（shard truth = 物理
-                            # 基后缀 + 0 增量；本列车的 decode 增长随后由
-                            # _joint_grow_decode 按其自身因果容量路径落
-                            # 地——解码增长不进本预约，与阶段事务合同一
-                            # 致），随后注销被 hold 的阶段预约（镜像
-                            # rebuild hold 的物化→注销次序；"final KV
-                            # allocation"守卫的因果点）。
-                            self.kv_manager.expand_decode(
-                                session_id=runtime.session_id,
-                                instance_index=instance_index,
-                                final_context_tokens=0,
-                                trigger_request_id=request_id,
-                                reservation_request_id=request_id)
-                            self.kv_manager.\
-                                release_request_capacity_reservation(
-                                    request_id)
-                            runtime.joint_growth_reservation_hold = False
-                            self._bump_kv_ledger_epoch()
                         self._joint_grow_decode(runtime, instance_index)
-                    # remote-read credit（§4.3.2 v3，R-6）：Tj 核销边界
-                    # 注销本列车切片的 R15 在途流（owner = rid#decode#{j}
-                    # 逐切片一键；先例 = 准入相流 drain 边界注销——其
-                    # 消费栅栏（体块 arm 门/barrier/链序）已物理通过）。
-                    # 不在此注销会让后续列车规划的链路除数躺着 j-1 条
-                    # 已完成陈旧流，J 决策被系统性污染且不报错。
-                    for request_id, slice_index in (
-                            train.get("remote_credit_slices") or {}).items():
-                        self._finalize_remote_credit_train_flows(
-                            self.runtime_by_request_id[request_id],
-                            slice_index, tick)
                     for request_id in train["exit_set"]:
                         runtime = self.runtime_by_request_id[request_id]
                         if runtime not in state.active_decode_lookup:
@@ -2573,8 +2367,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             },
             sort_keys=True,
         )
-        prefill_read_entry = self._plan_prefill_read_window(
-            qp_head, chunk_records, pass_spans, chunk_spans)
         return {
             "train_id": train_id,
             "iterations": iterations,
@@ -2591,171 +2383,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             "head_first_chunk": head_first_chunk,
             "pass_spans": pass_spans,
             "rebuild_members": rebuild_members,
-            "prefill_read": prefill_read_entry,
             "membership_digest": hashlib.sha256(
                 snapshot.encode()).hexdigest(),
         }
-
-    def _plan_prefill_read_window(self, qp_head, chunk_records, pass_spans,
-                                  chunk_spans):
-        """D09 prefill 远读逐 tile（2026-09-27）：冻结本列车消费窗（逐
-        chunk 迭代）的读流 tile 与体块门规格。
-
-        - 窗口游标：持久读计划（准入冻结）按 chunk 序切窗；本列车窗 =
-        游标起的连续 len(chunk_records) 个窗（chunk↔窗 1:1——两侧同源
-        于 (U, q_c, q_tile) 分解，计数失配 fail-closed）；
-        - 列车内 tile 全序 1..M（窗主序、窗内 tile 序）；体块 = 逐迭代
-        一块（span 随迭代归属、weight_passes=1——与 decode credit 体块
-        同构），块门 = 该迭代消费窗的全部 tile (rid, tile)——块 1 的
-        tile 1 走主链（构图器 <2 跳过纪律同款）；
-        - 游标推进到本列车末窗 + 1（下一列车继续切窗；末列车后计划耗
-        尽，后续列车无 prefill_read 键）。
-        """
-        if qp_head is None or not chunk_records:
-            return None
-        runtime = qp_head
-        plan = runtime.prefill_remote_read_plan
-        if plan is None:
-            return None
-        # D16 有界模板：逐窗 tile 在列车规划期现算（宿主不持有未来窗
-        # 的物化描述；窗界守卫以模板 window_count 为准）。
-        template = plan["template"]
-        window_total = int(plan["window_count"])
-        cursor = int(plan["window_cursor"])
-        window_count = len(chunk_records)
-        if cursor + window_count - 1 > window_total:
-            raise RuntimeError(
-                "prefill remote-read window cursor for request {} exceeds "
-                "the frozen plan (cursor {} + {} windows > {} windows "
-                "total) -- train composition drifted from the admission "
-                "chunk plan".format(
-                    runtime.request_id, cursor, window_count,
-                    window_total))
-        window_tile_sources = []
-        window_tile_ranges = []
-        pipeline_tile_runs = []
-        tile_offset = 0
-        for offset in range(window_count):
-            window_index = cursor + offset
-            window_tiles = self.kv_manager.prefill_read_window_tiles(
-                template, window_index)
-            count = len(window_tiles)
-            window_tile_sources.append((tile_offset, count, window_tiles))
-            window_tile_ranges.append(
-                range(tile_offset + 1, tile_offset + count + 1))
-            scans = int(template["window_scans"][window_index - 1])
-            from face_scheduler import deterministic_xy_route
-            shard_rows = tuple({
-                "global_shard_ordinal": int(shard_ordinal),
-                "source_rank": int(source_rank),
-                "target_rank": int(target_rank),
-                "total_data_bytes": int(scan_bytes) * scans,
-                "bytes_per_unit": 1,
-                "noc_path": tuple(int(rank) for rank in
-                    deterministic_xy_route(
-                        self.topology.hardware,
-                        int(source_rank), int(target_rank))),
-            } for shard_ordinal, (source_rank, target_rank, scan_bytes)
-                in enumerate(zip(
-                template["source_ranks"], template["target_ranks"],
-                template["base_scans_shards"]))
-                if int(scan_bytes) * scans > 0)
-            if count:
-                total_units = max(
-                    shard["total_data_bytes"] for shard in shard_rows)
-                units_per_tile = int(template["tile_bytes"])
-                pipeline_tile_runs.append({
-                    "first_tile": tile_offset + 1,
-                    "tile_count": int(count),
-                    "pass_or_window_ordinal": int(window_index),
-                    "source_ordinal": 0,
-                    "source_key": "window:{}".format(window_index),
-                    "layer_start": 0,
-                    "layer_end": int(template["read_prefix_layers"]),
-                    "axis_unit": "stream_bytes",
-                    "total_units": total_units,
-                    "units_per_tile": units_per_tile,
-                    "tail_units": total_units - (count - 1) * units_per_tile,
-                    "shards": shard_rows,
-                })
-            tile_offset += count
-        plan["window_cursor"] = cursor + window_count
-
-        def _tile_at(index):
-            for start, count, source in window_tile_sources:
-                if start <= index < start + count:
-                    return source[index - start]
-            raise IndexError(index)
-
-        train_tiles = KVTransferSequence(
-            tile_offset, _tile_at,
-            pipeline_tile_runs=pipeline_tile_runs)
-        # 体块 span 归属复用 decode credit/copy 交接体块的迭代映射纪律
-        # （chunk i ↔ 迭代 i+1；成员连续段按迭代比例确定性分配——每
-        # span 恰入一块、权重按迭代一次，跨块求和与整列一致）。
-        blocks = self._prefill_read_body_blocks(
-            pass_spans, len(chunk_records), window_tile_ranges,
-            runtime.request_id, len(chunk_records))
-        return {
-            "request_id": runtime.request_id,
-            "plan": runtime.plan_dict(),
-            "tiles": train_tiles,
-            "body_blocks": blocks,
-            "window_span": (cursor, cursor + window_count - 1),
-        }
-
-    def _prefill_read_body_blocks(self, pass_spans, chunk_count,
-                                  window_tile_ranges, request_id,
-                                  member_iterations):
-        """D09：prefill 远读窗口的逐迭代体块（span 归属 + tile 门并集）。
-
-        span 布局契约（_plan_train 平铺序 = [队列头 chunk spans（每迭代
-        恰一条）][成员连续段]）：头部 span 按迭代精确入块（迭代 i ↔ 第
-        i 条）；成员 span 按迭代比例确定性分配（每 span 恰入一块——与
-        decode credit 体块同纪律，跨块求和与整列一致）。"""
-        blocks = []
-        member_spans = list(pass_spans[chunk_count:])
-        total_member_iterations = max(0, member_iterations)
-        per_iteration = []
-        if member_spans and total_member_iterations:
-            base = len(member_spans) // total_member_iterations
-            extra = len(member_spans) % total_member_iterations
-            index = 0
-            for iteration in range(1, total_member_iterations + 1):
-                take = base + (1 if iteration <= extra else 0)
-                per_iteration.append(
-                    member_spans[index:index + take])
-                index += take
-        else:
-            per_iteration = [[] for _ in range(total_member_iterations)]
-        for iteration in range(1, chunk_count + 1):
-            spans = [pass_spans[iteration - 1]]
-            if iteration <= len(per_iteration):
-                spans.extend(per_iteration[iteration - 1])
-            tile_range = window_tile_ranges[iteration - 1]
-            if tile_range.step != 1:
-                raise RuntimeError(
-                    "prefill remote-read gate range must be contiguous")
-            gates = CreditGateSet((CreditGateRange(
-                request_id, tile_range.start, len(tile_range)),))
-            blocks.append({
-                "start_iter": iteration,
-                "end_iter": iteration,
-                "weight_passes": 1,
-                "spans": spans,
-                "gates": gates,
-            })
-        # (2026-10-01 R2 清理) 旧守卫检查 per_iteration[chunk_count:]
-        # ——调用方恒传 member_iterations == chunk_count，该切片结构性
-        # 为空（不可达）；完备性改为对分配器自身的终态断言（比例分配
-        # 覆盖全部 member spans，含 C4 重建 span——每 span 恰入一块）。
-        if sum(len(bucket) for bucket in per_iteration) != len(member_spans):
-            raise RuntimeError(
-                "prefill remote-read body blocks left member spans "
-                "unassigned (allocated {} of {})".format(
-                    sum(len(bucket) for bucket in per_iteration),
-                    len(member_spans)))
-        return blocks
 
     def _plan_and_emit_trains(self, tick: int) -> None:
         """为每个空闲且有工作的实例冻结并发射下一列车（§3.2 原子提交
@@ -2840,11 +2470,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             if watch_id is not None:
                 joiner_plan["decode_eviction_watch_id"] = watch_id
             joiner_plans.append(joiner_plan)
-        # remote-read credit 逐列车切片（列车规划期；R15 登记钩子 = 切片
-        # 创建点，§4.3.2）。None = 本列车无 remote-credit 成员（credit
-        # 关闭或成员不涉）——发射与 v1 逐字节一致。
-        remote_credit = self._plan_remote_credit_slices(
-            plan, joiner_runtimes, joiner_plans)
         # R15-2：因子样本纯度标记（joiner 迁移/partial 后缀恢复门会向
         # 列车 span 混入传输段，含任一者的列车不进 ServiceFactors 样本）。
         plan["emit_tick"] = tick
@@ -2860,8 +2485,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             == "partial_hbm_remote")
         # M5（kimi 复审）：首 chunk 门控 NoC 传输（copy 前缀/REMOTE 池
         # 恢复）同样向列车 span 混入传输段——与 partial 后缀恢复门同款
-        # 纯度排除（local_hit 无传输不计；remote-read 无历史传输、其
-        # 读流门控 decode 列车，在 decode 分支按成员动作排除）。
+        # 纯度排除（local_hit 无传输不计）。
         plan["history_transfer_gated"] = bool(
             plan.get("head_first_chunk")
             and head_runtime is not None
@@ -2917,24 +2541,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             "exit_members": [{"request_id": request_id}
                              for request_id in plan["exit_members"]],
         }
-        if remote_credit is not None:
-            train_plan["remote_credit"] = remote_credit
-        if plan.get("prefill_read"):
-            # D09 prefill 远读逐 tile：本列车消费窗规格（列车头窗口
-            # 发射 + 体块门）随列车计划透传（_plan_prefill_read_window
-            # 冻结）。
-            train_plan["prefill_read"] = plan["prefill_read"]
         first_token = self._first_token_plan(plan, joiner_runtimes)
         if first_token is not None:
             train_plan["first_token"] = first_token
-            if remote_credit is not None:
-                # WP9 拆分与 credit 体块化正交：首步批/余量批各自的体块
-                # 规格（首步 = 迭代 1；余量沿 K 对齐切块），门按区间重叠
-                # 取并集（I2 泛化式）。
-                first_token["first_body_blocks"] = remote_credit[
-                    "split_first_blocks"]
-                first_token["rest_body_blocks"] = remote_credit[
-                    "split_rest_blocks"]
             if first_token["split"]:
                 # WP9:joiner id 快照随 train_plan 走（余量批的台账行
                 # 需要与首步行相同的 joiners 记录；joiner_plans 只在
@@ -3055,13 +2664,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 位已被 _plan_train 在本调用前清零（规划期消费），旧 any(...) 恒
         # False——重建列车漏降级，拆分路径在 span 布局断言崩（构图器
         # 文档化契约"调度侧已降级不拆车"被打破）。
-        if plan.get("prefill_read") or plan.get("rebuild_members"):
-            # D09（2026-09-27）：prefill 远读窗口体门控的列车不支持首步
-            # 拆分（整列发射才是逐 tile 消费驱动发射的载体；与 copy 交
-            # 接列车同款纪律——SH_FIRST_TOKEN_SPLIT 缺省关，此为防御性
-            # fail-closed 前的降级：不拆车，仅标记增强）。C4：静默重建
-            # span 同理（重建段属整列体的前置工作量，拆两批会把 H_B
-            # 重放误当首步迭代）。
+        if plan.get("rebuild_members"):
+            # C4：静默重建 span 不支持首步拆分（重建段属整列体的前置
+            # 工作量，拆两批会把 H_B 重放误当首步迭代；与 copy 交接
+            # 列车同款纪律——SH_FIRST_TOKEN_SPLIT 缺省关，此为防御性
+            # fail-closed 前的降级：不拆车，仅标记增强）。
             debut = [
                 runtime for runtime in joiner_runtimes
                 if runtime.decode_tokens_consumed == 0]
@@ -3435,21 +3042,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # R15-1：准入主链在途流在 drain 栅栏通过后释放；独立逐出支链
         # 仍可能在飞，owner=#evict 只由其尾 watch 释放。
         self._release_transfer_flows(request_id)
-        # 规格书§二.4（2026-09-25）：prefill remote-read 前缀读流在
-        # prefill drain 释放——decode credit 读流（#readplan /
-        # rid#decode#{j}）自本边界之后才建立，同一条前缀读流不得同时
-        # 挂 prefill/decode 两个身份（release_owner 幂等空放，非前缀
-        # 读流请求零副作用）。
-        self._release_transfer_flows(request_id + "#prefill_read")
-        # D09/D20（2026-09-27 prefill 侧 lease 覆盖）：读流正常关闭点 =
-        # 末 tile 消费（drain 标记物理通过 ⇒ 列车体已消费全部窗口
-        # tile）——prefill 暂存 lease 在此注销（先于 D 阶段足迹求值/
-        # decode lease 获取，双缓冲字节不跨阶段双持；幂等空放覆盖非
-        # 远读请求与异常回滚已注销路径）。
-        self._release_staging_lease(
-            runtime, tick=tick, reason="prefill_read_stream_consumed")
         # C11：准入主链配额流 settle；#evict 支链配额由尾 watch 释放，
-        # remote-read 读流与 merge 预留生命周期到完成边界。
+        # merge 预留生命周期到完成边界。
         if self._quota_tracker is not None:
             self._quota_release_admission_phase(request_id, tick)
         # (runtime.prompt_tokens_processed -- the drain-side actual-work
@@ -3481,7 +3075,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._refresh_frontier(state)
         # offline: face_scheduler.py（expand_prefill）
         # joint：工作副本上下文按动作推进（stay/copy/recompute 至
-        # prefill_context；remote-read 仅新增输入的 KV 落执行端）。
+        # prefill_context）。
         runtime.prefill_evictions = self.kv_manager.expand_prefill(
             session_id=runtime.session_id,
             instance_index=state.index,
@@ -3536,19 +3130,15 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             # * off（缺省）= 两阶段闭环（D18 主语义）：以真实边界快照做
             #   恰好一次全候选遍历（式 1b），原地继续平局优先（式 1c）。
             # * p-continuation（测量仪器，一次映射对照臂；生产 run 不设）
-            #   = 不做二次全候选重估，直接按 P 准入 estimate_P_with_
+            #   = 不做二次全候选重估，直接按 P 准入
             #   continuation 披露的默认延续形态提交——decode_instance =
-            #   prefill_instance、decode_action = 默认延续动作（完整型 =
-            #   stay@i_P；增量型（P=remote-read）= remote-read@i_P，P 入
-            #   口已建的 credit plan 延续分支照常复用，不新造平行路径）。
+            #   prefill_instance、decode_action = stay@i_P。
             #   一次映射下 D 提交后的完成归属/构图器/merge 链路与两阶段
             #   的延续分支完全同路（同一 commit 路径——延续 = 原地继续，
             #   本来就没有迁移腿）。掩码交互：P 准入已按掩码过滤（P 动作
             #   在掩码内）；延续动作 stay 已由 joint_config __post_init__
-            #   钉在掩码内（p-continuation 要求掩码放行 stay）、
-            #   remote-read 延续仅在 P=remote-read 时出现（同样已过 P 掩
-            #   码），故无需边界重查。已知终止在上方已直结结算，不进本
-            #   分支。
+            #   钉在掩码内（p-continuation 要求掩码放行 stay），故无需
+            #   边界重查。已知终止在上方已直结结算，不进本分支。
             boundary_policy = self.joint_config.boundary_policy
             forced_probe_note = None
             causal_prestate = None
@@ -3558,9 +3148,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 # 消费）。无 D 预测代价——不虚构候选代价（决策行
                 # cost_ns 真值 NA）。
                 boundary_decision_wall_start = time.perf_counter_ns()
-                chosen_action = (
-                    ACTION_REMOTE if boundary.is_increment_layout()
-                    else ACTION_STAY)
+                chosen_action = ACTION_STAY
                 self.predictor_cost.note_decision(
                     DECISION_STAGE_D,
                     time.perf_counter_ns() - boundary_decision_wall_start,
@@ -3583,16 +3171,12 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     mode=self._joint_mode,
                     cost_model=boundary_cost_model,
                     boundary=boundary,
-                    remote_enabled=self.joint_config.remote_enabled,
                     # D17 schema：边界阶段 epoch 与继承义务 ID 逐候选透传
                     # 进 breakdown 披露（纯披露通道——不计价、不改选择）。
                     decision_epoch=runtime.joint_boundary_epoch,
                     inherited_obligation_ids=tuple(
                         obligation.obligation_id for obligation in
                         inherited_obligations),
-                    pipeline_identity_provider=(
-                        self._pipeline_identity_provider(
-                            runtime, boundary_cost_model, "D")),
                 )
                 _boundary_enum_elapsed = (
                     time.perf_counter_ns() - boundary_decision_wall_start)
@@ -3637,25 +3221,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             # 方案的合法状态（abort 回执记录 epoch 结局，§16.4）——已提交
             # 逐出是真实容量事件照常入账（含失败前半边的换址逐出），继续
             # 态自身不受影响。
-            if boundary.is_increment_layout():
-                stage_history_tokens = int(boundary.base_tokens)
-                stage_input_tokens = int(runtime.joint_input_tokens)
-                if (chosen_action == ACTION_REMOTE
-                        and selected != boundary.p_instance_index):
-                    # C4 多源远读：U 增量留 i_P（来源侧记录），j 侧无
-                    # input 物化、仅 decode 因果增长；预约的 token 基数
-                    # 归零（remote 的 basis = input），暂存 tile 裁决基
-                    # 数 = 联合远读区间（H + U）。
-                    stage_history_tokens = (
-                        int(boundary.base_tokens)
-                        + int(runtime.joint_input_tokens))
-                    stage_input_tokens = 0
-                # W10 hybrid：缺省增量形态（base, U）——U 随混合事务迁 j
-                # （remote 族 basis = input = U 覆盖迁入字节；L 子集 copy
-                # 分量经边界事务 _ensure_capacity 真实 T+E）。
-            else:
-                stage_history_tokens = int(boundary.history_tokens)
-                stage_input_tokens = 0
+            stage_history_tokens = int(boundary.history_tokens)
+            stage_input_tokens = 0
             # W5（§7.2 事务顺序第 1 步 / C5 控制延迟复查）：决策时点版本
             # 面（runtime = kv_ledger_epoch（调度器侧复查，下方先查）；
             # layout = 目录事务版本；reservation = 阶段纪元表）——提交点
@@ -3701,11 +3268,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                         trigger_request_id=runtime.request_id,
                         reservation_request_id=runtime.request_id,
                         at_ns=tick,
-                        # W10：hybrid 选择的持久 copy 来源子集 L（其余
-                        # 动作恒空 frozenset——零行为差）。
-                        **({"copy_sources": frozenset(
-                            chosen.copy_subset)}
-                           if chosen_action == "hybrid" else {}),
                     )
                 )
             except (KVCapacityError, KVStageVersionConflict,
@@ -3752,9 +3314,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                         session_id=runtime.session_id,
                         p_instance_index=boundary.p_instance_index,
                         target_instance_index=selected,
-                        action=(ACTION_REMOTE
-                                if boundary.is_increment_layout()
-                                else ACTION_STAY),
+                        action=ACTION_STAY,
                         history_tokens=int(boundary.history_tokens),
                         trigger_request_id=runtime.request_id,
                         reservation_request_id=runtime.request_id,
@@ -3789,22 +3349,10 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 )
             if boundary_fallback:
                 # 实际提交态 = 原地继续（回退即继续方案的合法状态）。
-                runtime.joint_decode_action = (
-                    ACTION_REMOTE if boundary.is_increment_layout()
-                    else ACTION_STAY)
+                runtime.joint_decode_action = ACTION_STAY
                 runtime.joint_decode_is_continuation = True
             else:
-                # W10 hybrid：decode 相物理动作 = remote-read（R=S∖L 经
-                # 既有 credit 计划读 j 缺失区间）；U 已迁 j ⇒ 非
-                # growth-only（工作副本上下文 = U + 增长，与远读原地继续
-                # 同族状态）。hybrid 身份经 joint_hybrid_copy_sources 披露
-                # （日志标 hybrid、收益归因与纯四动作分离）。
-                runtime.joint_hybrid_copy_sources = (
-                    tuple(sorted(chosen.copy_subset))
-                    if chosen_action == "hybrid" else ())
-                runtime.joint_decode_action = (
-                    ACTION_REMOTE if chosen_action == "hybrid"
-                    else chosen_action)
+                runtime.joint_decode_action = chosen_action
                 # 一次映射对照臂：提交即默认延续（is_continuation 恒
                 # True）；两阶段沿用选择器的继续标记（式 1c）。
                 runtime.joint_decode_is_continuation = (
@@ -3816,12 +3364,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 self._stash_capacity_theta_prediction(runtime, chosen)
             # C4（D10/D19）：选中动作的运行时元数据——recompute 静默重
             # 建基数（首个 decode 列车前置重建 span；stage_work 披露切
-            # 换到 boundary_recompute_stage_work 模板）、多源远读的
-            # growth-only 口径、边界首 token 状态（issued 待首个 D 前
-            # 向消费恰一次；rebuild 重建段抑制采样/输出/RNG）。
+            # 换到 boundary_recompute_stage_work 模板）、边界首 token
+            # 状态（issued 待首个 D 前向消费恰一次；rebuild 重建段抑制
+            # 采样/输出/RNG）。
             runtime.joint_decode_rebuild_tokens = 0
             runtime.joint_decode_rebuild_pending = False
-            runtime.joint_remote_growth_only = False
             if (runtime.joint_decode_action == ACTION_RECOMPUTE
                     and not boundary_fallback):
                 runtime.joint_decode_rebuild_tokens = int(
@@ -3836,14 +3383,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     first_token=BoundaryFirstTokenState(
                         issued=True, consumed=False, rng_advances=1,
                         rebuild_sampling_suppressed=True))
-            if boundary_transition.get("kind") == "remote_multi_source":
-                runtime.joint_remote_growth_only = True
-            if boundary_transition.get("kind") == "remote_read_base_fold":
-                # 远读落点 = base 驻留实例的退化折叠（工作副本已并基为
-                # 本地全上下文）——工作副本口径切回完整上下文族（stay），
-                # decode 增长按全上下文驱动 expand_decode；仍按远读口径
-                # （仅增量域）会把折叠后的全上下文当收缩报错。
-                runtime.joint_decode_action = ACTION_STAY
             runtime.joint_boundary_first_token = {
                 "issued": True,
                 "consumed": False,
@@ -3866,13 +3405,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "cost_ns": chosen_cost_ns,
                 "decode_steps": int(boundary.decode_steps),
                 "fallback": boundary_fallback,
-                # W10 披露：hybrid 选择身份（selected_action_face = 决策面
-                # 动作、copy_subset = L、remote_sources = S∖L；非 hybrid
-                # 行 selected_action_face == chosen_action、copy_subset 空
-                # ——归因与纯四动作分离）。
-                "selected_action_face": chosen_action,
-                "hybrid_copy_sources": list(
-                    runtime.joint_hybrid_copy_sources),
                 # D17 披露：本边界候选计算采用的公式/语义版本（与准入行、
                 # run manifest 同键同源；旧实验不自动代表新模型）。
                 "model_semantics_version": MODEL_SEMANTICS_VERSION,
@@ -3954,9 +3486,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                         "cost_ns": candidate.cost_ns,
                         "is_continuation": candidate.is_continuation,
                         "inapplicable_reason": candidate.inapplicable_reason,
-                        # W10：hybrid 候选的子集身份（L 持久 copy 来源；
-                        # 非 hybrid 恒 ()——additive 披露，归因分离）。
-                        "copy_subset": list(candidate.copy_subset),
                         "breakdown": self._joint_breakdown_log_dict(
                             candidate.breakdown),
                         "measured": None,
@@ -4003,37 +3532,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 2/9（阶段预约事务 commit_stage_reservation_transaction）
             self.graph.sync_pending_history_after_evictions(
                 reservation_move_evictions)
-            # joint remote-read（v2 执行口径，2026-09-17 用户裁定唯一机制）：
-            # drain 边界建立持久读计划（每步读量 = 均匀终态上下文、逐 shard
-            # 路由一次冻结——字节口径与 v1 批量流逐位同源，I1 守恒基数）；
-            # 逐列车切片在列车规划期从计划派生（彼时 participation/S_j 才
-            # 冻结，§4.3.2），切片旁挂支链 + 体块 arm 门——读与 decode 计算
-            # 重叠。旧 v1"批量读流 + readiness barrier 硬栅栏"串行口径已删除
-            # （不作为开关可选项保留；K >= S_j 单块切片的块 1 仍走原
-            # pd_transfer 发射路径 = 逐字节等价锚）。
-            # D18：读计划归属 D 边界二次决策后的执行实例（原地继续/迁移
-            # 切换同一冻结点；M1′ 口径 = 源端仍保留的基础区间，式 18a）。
-            if runtime.joint_decode_action == "remote-read":
-                # 规格书§四.3（2026-09-25）：decode credit 计划建立前，断言
-                # 后缀 restore journal 已在 prefill_drain 边界（上方
-                # expand_prefill → _settle_restore_groups）全部 consumed 并
-                # 关账——decode 后缀层直接复用 exec HBM 已恢复的历史后缀
-                # [p,L)，不得再从池恢复；journal 仍开 = 恢复链破损，
-                # fail-closed 不带病建立 decode 读计划。
-                drain_session = self.kv_manager._sessions[runtime.session_id]
-                if drain_session.restore_journal is not None:
-                    raise RuntimeError(
-                        "suffix restore journal for session {} is still open "
-                        "at prefill drain (request {}): decode remote-read "
-                        "credit plan requires the suffix restore to be fully "
-                        "consumed first".format(
-                            runtime.session_id, runtime.request_id))
-                runtime.remote_read_credit_plan = (
-                    self._joint_remote_read_credit_plan(runtime, selected))
-                # C8 步骤 2（对账核销之一）：真计划冻结处——核销准入相的
-                # #readplan est 账本、以真值建立注册表登记（#prefill_read
-                # 已在本边界上方释放）；预估/实际差值进决策日志。
-                self._reconcile_readplan_at_drain(runtime, tick)
             self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 3/9（move_prefill_to_decode）
             self.graph.sync_pending_history_after_evictions(
                 decode_move_evictions)
@@ -4063,8 +3561,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     "scheduled": False,
                 }
                 runtime.decode_eviction_watch_id = watch_id
-            # D20（§14.5）：边界窗口闭合——D 目标预留、工作副本与来源读
-            # 计划（remote-read credit plan）均已建立，P 阶段引用至此结束
+            # D20（§14.5）：边界窗口闭合——D 目标预留与工作副本均已建立，
+            # P 阶段引用至此结束
             # （先于预约注销：release 守卫钉"引用与预约不得双活到结算"）。
             # 之后本请求回到常规 active 会话语义（完成前本就不是 victim）。
             if runtime.joint_stage_reference_id is not None:
@@ -4072,13 +3570,19 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     runtime.session_id,
                     reference_id=runtime.joint_stage_reference_id)
                 runtime.joint_stage_reference_id = None
-            # D09/D20：预约注销 = 准入容量语义终结；remote-read 的双缓冲
-            # 暂存分量不随之消失——转入 request_id + boundary_epoch 持有
-            # 的执行期 lease（credit 读流存续期间暂存字节恒有 HBM 持有
-            # 者，其他准入不得挪用）。转换点在下方 lease 生命周期三注销
-            # 路（最后 tile 消费/完成结算/异常回滚）收敛前恒在册。
-            self._convert_drain_staging_to_lease(runtime, tick)
-            self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 5/9（release_request_capacity_reservation + staging lease 转入）
+            # 预约注销 = 准入容量语义终结。recompute@j≠i_P 的重建副本随
+            # 首个含重建 span 的列车核销物化——目标侧 H_B 预约 = 重建空
+            # 间的真实承诺，保持到物化完成（_finalize_completed_trains
+            # 的重建成员核销点）再注销（"final KV allocation"守卫的
+            # 因果口径）；其余动作在边界直接注销。
+            if (getattr(runtime, "joint_decode_rebuild_tokens", 0) > 0
+                    and runtime.decode_instance_index
+                    != runtime.prefill_instance_index):
+                runtime.joint_rebuild_reservation_hold = True
+            else:
+                self.kv_manager.release_request_capacity_reservation(
+                    runtime.request_id)
+            self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 5/9（release_request_capacity_reservation）
             # R15-1：decode 主链迁移/读流在 service_done 注销；逐出支链在各自
             # 的 eviction_done 尾 watch 注销（不能与请求的 decode owner 合并）。
             # C4：多腿 copy-in（元组形态）逐腿平铺入册。
@@ -4114,12 +3618,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             # decode 段发射移至加入列车；drain 边界的 decode 决策记录在此。
             self._emit_join_decision(runtime, tick)
         except Exception:
-            # M2/D18 异常安全（D09/D20 补遗）：边界窗口内已转入的执行期
-            # 暂存 lease 随引用一并幂等注销（回滚路径不残留字节持有者；
-            # tick=None 不落决策行——日志面故障不得掩盖原始异常，run 尾
-            # 审计兜底）。窗口前异常时本就无 lease，空放。
-            self._release_staging_lease(
-                runtime, tick=None, reason="pd_boundary_rollback")
             # ---- D20 修复轮二（2026-09-27，通用异常路径预约回滚补齐）----
             # try 块全程的"预约已提交"中间态与逐态处置：
             #   (a) ``commit_stage_reservation_transaction`` 已提交、物理
@@ -4136,8 +3634,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             #       已随 transition 落地）——abort 合同窗口已闭
             #       （face_scheduler：仅在字节搬运尚未发射的提交窗口内
             #       合法），此处不再伪造一次与物理状态矛盾的换址回退；
-            #       预约若尚未走到常规注销点（_convert_drain_staging_
-            #       to_lease），留账随 fail-closed run 终止一并
+            #       预约若尚未走到常规注销点（drain 边界的直接注销/
+            #       rebuild hold），留账随 fail-closed run 终止一并
             #       消亡（run 尾审计兜底），不悬挂 epoch。
             # 回滚面自身故障不得掩盖原始异常（与 tick=None 同纪律）。
             try:
@@ -4239,36 +3737,18 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 零字节翻转；REMOTE 无主就地保留；胜者侧空间经统一 T+E 准备，
         # 双侧深缺口才 fail-closed）。完成时已观测的 decode 长度/输入
         # 长度入在线估计器（实际结算，非决策 oracle）。
-        # C14（2026-09-22）remote 完成检查清单审计落字：完成检查五件
-        # = 源端保护解除（败者侧释放/home 标签迁移）、暂存归还（F14
-        # 无留存型口径 ⇒ 无操作，journal staging_return_bytes=0 披露位）、
-        # 增量结算（少并多按两侧实际保留量——账本真值裁决）、合并目标
-        # 容量（merge_back 内 _ensure_capacity 取完成时刻真实剩余，不
-        # 沿用发射时预测空闲）、失败分支闭合（版本键防重复回调、双侧
-        # 深缺口 fail-closed 不丢权威副本）；逐请求结算事实入 FS 侧
-        # kv_delta_journal（C16 消费面），不进 decision-log schema。
+        # C14（2026-09-22）完成检查清单审计落字：完成检查 = 源端保护
+        # 解除（败者侧释放/home 标签迁移）、暂存归还（F14 无留存型口径
+        # ⇒ 无操作，journal staging_return_bytes=0 披露位）、
+        # 增量结算（账本真值裁决）、合并目标容量、失败分支闭合（版本键
+        # 防重复回调）；逐请求结算事实入 FS 侧 kv_delta_journal（C16
+        # 消费面），不进 decision-log schema。
         for request_id, following, interval in completion_facts:
             runtime = self.runtime_by_request_id[request_id]
-            # C4/C5 工作副本口径下的增量域取值：merge_back 的
-            # final = base+new 只能再加**工作副本增量域**——迁移族
-            # （remote-read）在多源/growth-only 布局下 base 记录 = i_P
-            # 侧 H_B（已含本轮 input，U 留来源侧），new 必须只计 decode
-            # 增长；P 相远读（base 不含 input）则 new = input+decode。
-            # 两个口径的单源 = _joint_working_context（与驱动工作副本
-            # 账本增长的 expand_decode 同值，守恒断言两侧一致闭合）；
-            # 仍传 input+decode 会使 base+new 重复计 input，守恒断言
-            # fail-closed。零字节翻转族（copy/recompute）final = 工作
-            # 副本 context 并集，new_tokens 仅入披露行，维持 input+
-            # decode 口径不变。
-            boundary_action_at_completion = (
-                runtime.joint_decode_action
-                if runtime.joint_decode_action is not None
-                else runtime.joint_action)
-            if boundary_action_at_completion == ACTION_REMOTE:
-                new_tokens = self._joint_working_context(runtime)
-            else:
-                new_tokens = (
-                    runtime.joint_input_tokens + runtime.decode_length)
+            # 零字节翻转族（copy/recompute）final = 工作副本 context
+            # 并集，new_tokens 仅入披露行，维持 input+decode 口径。
+            new_tokens = (
+                runtime.joint_input_tokens + runtime.decode_length)
             # K2/K3 配套（kimi 复审）：完成行显式披露"执行端工作副本"
             # 真值（merge 前的 working_kind）——水印重放不再从 origin_home
             # 启发式重建（REMOTE 基 + 执行端恰等于 home 的组合会误判）。
@@ -4405,19 +3885,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             if self._quota_tracker is not None:
                 self._quota_on_service_done(request_id, runtime, tick)
                 self._quota_release_decode_phase(request_id, tick)
-            # C8 步骤 2（对账核销之三）：#readplan 残余承诺清零 + 真值
-            # 闭式与逐列车实际登记块数之差披露（列车碎片化残差属正常
-            # 非零差，完成边界收口；泄漏审计在 verify_run_end 兜底）。
-            self._settle_readplan_residual(runtime, tick)
-            # D09/D20：完成结算收敛注销暂存 lease（正常路径已在最后
-            # credit tile 消费点注销——幂等空放；任何残漏在此闭合，
-            # 完成请求不得带走执行期字节持有者）。
-            self._release_staging_lease(
-                runtime, tick=tick, reason="request_completion_settlement")
-            # C11：remote-read 读流 settle（流寿命样本随双时标进入
-            # AIMD EWMA）。
-            if self._quota_tracker is not None:
-                self._quota_release_readplan_stream(request_id, tick)
             if following is None:
                 continue
             # C3b（2026-09-22 到达合同）：下一轮到达 = service_done +
@@ -4583,12 +4050,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     # （__slots__ 漏赋值读即 AttributeError，fail-loud）。
                     "joint_working_copy": bool(
                         runtime.joint_working_copy),
-                    # remote-read credit（§4.3.5）：逐列车切片摘要（每请求
-                    # 恰一处聚合落盘；非 remote-read 恒空列表——schema 对
-                    # credit 开关前向兼容）。Σ(total_bytes) ≡ 计划总量
-                    # （I1）可在日志侧直接审计。
-                    "remote_read_slices": list(
-                        runtime.remote_read_slice_summaries),
                 },
             )
             following = self.next_request[request_id]
@@ -4800,17 +4261,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
     def _joint_working_context(self, runtime) -> int:
         """工作副本/基础会话的当前应覆盖 token 数（因果：只含已到达输入
-        与已实际完成的 decode）。remote-read 的工作副本仅承载新增量；
-        recompute（D10：完整 H+U 重放，全形态 span 基 0）工作上下文 =
-        已物化 token 数（重放 prefill 逐 chunk 物化至 H+U）；其余动作
-        覆盖完整上下文。
+        与已实际完成的 decode）。recompute（D10：完整 H+U 重放，全形态
+        span 基 0）工作上下文 = 已物化 token 数（重放 prefill 逐 chunk
+        物化至 H+U）；其余动作覆盖完整上下文。
 
         D18：P 提交后 decode 阶段以**边界二次决策的动作族**为准
         （``joint_decode_action`` 优先于 P 阶段 ``joint_action``）。
 
-        C4（D19 多源/重建口径）：
-        * 多源远读（``joint_remote_growth_only``）：边界把 U 留在 i_P
-          来源侧、j 侧工作副本零化——上下文 = 已完成 decode 增长；
+        C4（D19 重建口径）：
         * D 边界 recompute（``joint_decode_rebuild_tokens``）：j 侧重建
           副本自 0 物化至 H_B 后随 decode 增长（列车核销推进重建 span
           与增长，因果同钩）。"""
@@ -4818,10 +4276,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             runtime.joint_decode_action
             if runtime.joint_decode_action is not None
             else runtime.joint_action)
-        if decode_action == "remote-read":
-            if getattr(runtime, "joint_remote_growth_only", False):
-                return runtime.decode_tokens_consumed
-            return runtime.joint_input_tokens + runtime.decode_tokens_consumed
         if getattr(runtime, "joint_decode_rebuild_tokens", 0):
             return (runtime.joint_decode_rebuild_tokens
                     + runtime.decode_tokens_consumed)
@@ -4955,79 +4409,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "stage") == JOINT_STAGE_SETTLE_COMMITTED
             else JOINT_STAGE_SETTLE_DONE)
 
-    def _joint_effective_remote_source_count(
-            self, session_id: str, holders) -> int:
-        """W10（W9 遗留 2 解除路径，§7.5）：单源前缀读流协议口径的
-        **有效远读源数**。
-
-        有效远读源 = 覆盖会话片上内容并集所需持有者数的判定下界：
-        存在单一持有者，其有效片上条目（token×layer 初等单元格级并集
-        ——与 ``joint.distributed_settlement.cell_coverage_complete`` 同
-        族口径，跨持有者部分重叠区间不去重也不漏）覆盖**全部**其他持
-        有者条目的并集（重复副本/被含副本不构成第二有效源——subset
-        copy 把内容收敛到单持有者覆盖后，单源读流适用性恢复）⇒ 1；
-        否则 = 原始持有者数（真多源维持 W9 门）。
-
-        复杂度：初等单元格数 = O(条目数²)（每会话目录条目数小；单元格
-        分解不落账本——纯读判定）。
-        """
-        directory = getattr(self.kv_manager, "kv_directory", None)
-        if directory is None or len(holders) <= 1:
-            return len(holders)
-        entries_by_holder: dict[int, list] = {}
-        for entry in directory.entries_for_session(session_id):
-            if not entry.is_valid() or entry.is_pool_backed():
-                continue
-            entries_by_holder.setdefault(
-                int(entry.holder), []).append(entry.content_key)
-        if not entries_by_holder:
-            return len(holders)
-        token_bounds: set[int] = set()
-        layer_bounds: set[int] = set()
-        for keys in entries_by_holder.values():
-            for key in keys:
-                token_bounds.update(
-                    (int(key.token_start), int(key.token_end)))
-                layer_bounds.update(
-                    (int(key.layer_start), int(key.layer_end)))
-        token_cells = sorted(token_bounds)
-        layer_cells = sorted(layer_bounds)
-
-        def _covered_cells(keys):
-            cells = set()
-            for key in keys:
-                for t_index in range(len(token_cells) - 1):
-                    t0, t1 = token_cells[t_index], token_cells[t_index + 1]
-                    if not (int(key.token_start) <= t0
-                            and t1 <= int(key.token_end)):
-                        continue
-                    for l_index in range(len(layer_cells) - 1):
-                        l0, l1 = (
-                            layer_cells[l_index], layer_cells[l_index + 1])
-                        if (int(key.layer_start) <= l0
-                                and l1 <= int(key.layer_end)):
-                            cells.add((t0, l0))
-            return cells
-
-        coverage = {
-            holder: _covered_cells(keys)
-            for holder, keys in entries_by_holder.items()}
-        union: set = set()
-        for cells in coverage.values():
-            union |= cells
-        if any(cells >= union for cells in coverage.values()):
-            return 1
-        return len(holders)
-
     def _joint_boundary_view(self, runtime, state):
         """P→D 边界只读快照 S_B（式 1b；只读已到达事实——真实 KV 位置
         与就绪状态、当前负载经成本模型、已发出 token 与采样状态；无
-        后端未来完成事件）。布局两族见 ``PDBoundaryView``。
+        后端未来完成事件）。
 
         D19 轮二：返回 BoundaryRuntimeStateEnvelope——PDBoundaryView
         字段面全透传（计价/选择器零改动）+ 三项运行时状态与层覆盖的
         可选属性面（见构造点注）。"""
-        from face_scheduler import kv_cache_shard_bytes_for_layer_range
         p_index = state.index
         session = self.kv_manager._sessions[runtime.session_id]
         snapshot = self.kv_manager.session_snapshot(runtime.session_id)
@@ -5039,38 +4428,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         kv_token_bytes = kv_token_bytes_by_tp_rank[0]
         history_tokens = (
             runtime.history_tokens_before + runtime.joint_input_tokens)
-        if runtime.joint_action == "remote-read":
-            # 增量型：i_P 实有 = 工作副本（U 增量[，PARTIAL 已恢复后缀]，
-            # shard_bytes 即物理真值）；基础区间 = 源端（物理基础驻留
-            # 实例）仍保留部分（LOCAL 基全层 / PARTIAL 基前缀 [0,p)——
-            # 式 18a 的远端基础区间）。两组字节不相交（源端副本独立
-            # 留存）。
-            if session.working_kind is not None:
-                base_tokens = session.base_history_tokens
-                base_prefix = session.base_resident_prefix_layers
-                # D-BI：物理基础驻留实例（准备相快照；P→D 迁移 + merge
-                # stay 提交后可与逻辑 home 不同——原地继续 x0 的适用性
-                # 与远读/合并计价端点都按基础所在，不按逻辑 home）。
-                base_instance = session.base_instance_index
-            else:
-                base_tokens = session.context_tokens
-                base_prefix = self.model.layers
-                base_instance = session.instance_index
-            if (base_instance is None or base_tokens <= 0
-                    or base_prefix <= 0):
-                base = tuple(0 for _ in range(tp))
-                base_tokens = 0
-            else:
-                base = tuple(
-                    int(value) for value in kv_cache_shard_bytes_for_layer_range(
-                        self.model, base_tokens, tp,
-                        layer_start=0, layer_end=base_prefix))
-        else:
-            # 完整型：H_B 全量在 i_P，无异地基础区间。
-            base = tuple(0 for _ in range(tp))
-            base_tokens = history_tokens
-            base_instance = session.instance_index
-            base_prefix = self.model.layers
+        # 完整型（三动作唯一布局族）：H_B 全量在 i_P，无异地基础区间。
+        base_instance = session.instance_index
         # W5 消费切换（W6 §2）：D 边界正式 n̂_B 切到条件剩余估计器
         # （estimate_conditional——与 P 准入同一实例同一规则同一版本，
         # 方案 §8.2；下限 1 由估计器保证 = 式(4a) max(1, n̂)）。旧
@@ -5080,94 +4439,17 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         _conditional = self._joint_conditional_estimate(runtime)
         n_hat_b = int(_conditional.remaining_forward_steps)
         _horizon_source = "conditional:" + _conditional.source
-        working_intervals = ()
-        if runtime.joint_action == ACTION_REMOTE and base_prefix < self.model.layers:
-            # A PARTIAL remote-read working copy is two physical rectangles:
-            # restored suffix S and new-input increment I.  Do not infer their
-            # token span from the mixed aggregate byte vector.
-            suffix = tuple(
-                int(value) for value in kv_cache_shard_bytes_for_layer_range(
-                    self.model, int(base_tokens), tp,
-                    layer_start=int(base_prefix),
-                    layer_end=self.model.layers))
-            increment = tuple(
-                int(value) - int(suffix_value)
-                for value, suffix_value in zip(working, suffix))
-            if any(value < 0 for value in increment):
-                raise ValueError(
-                    "remote-read PARTIAL working bytes are not suffix+increment")
-            increment_tokens = max(0, int(history_tokens) - int(base_tokens))
-            expected_increment = tuple(
-                int(value) for value in kv_cache_shard_bytes_for_layer_range(
-                    self.model, increment_tokens, tp,
-                    layer_start=0, layer_end=self.model.layers))
-            if increment != expected_increment:
-                raise ValueError(
-                    "remote-read PARTIAL working bytes do not match "
-                    "the physical suffix/increment rectangles")
-            if any(suffix):
-                working_intervals += (BoundaryKvInterval(
-                    replica_id="boundary_work_suffix",
-                    role="increment",
-                    holder_instance=p_index,
-                    authority=True,
-                    token_start=0,
-                    token_end=int(base_tokens),
-                    layer_start=int(base_prefix),
-                    layer_end=self.model.layers,
-                    bytes_by_tp_rank=suffix),)
-            if any(increment):
-                working_intervals += (BoundaryKvInterval(
-                    replica_id="boundary_work_increment",
-                    role="increment",
-                    holder_instance=p_index,
-                    authority=True,
-                    token_start=int(base_tokens),
-                    token_end=int(history_tokens),
-                    layer_start=0,
-                    layer_end=self.model.layers,
-                    bytes_by_tp_rank=increment),)
-        elif (runtime.joint_action == ACTION_REMOTE
-                and not session.distributed_layout):
-            # LOCAL 基（base_prefix == L，回归锚）的增量型工作副本只有
-            # 本轮增量一个矩形：[base_tokens, history) × 全层 @ i_P
-            # （PARTIAL 分支 increment 段的同款表达式——suffix 层域为空
-            # = 零字节）。不能落进 context 分支：那会把仅含 U 的工作副本
-            # 伪造成 (0, history) 的完整上下文矩形，与源端基础区间
-            # (0, base_tokens) token 交叠（project_end_state 权威唯一性
-            # fail-closed），且 remote 暂存基数按 interval.tokens 计会
-            # 虚涨。distributed 布局的工作副本含跨轮累积分量（resident_
-            # token_offset 口径），不适用本分支的单轮增量矩形。未物化
-            # （零/部分增量，如 drain 前的夹具态）不注入矩形——
-            # from_boundary 按逐 rank token 字节基准反推（WIP 自身回退
-            # 路径，部分物化的 token 域同样正确）。
-            increment_tokens = max(0, int(history_tokens) - int(base_tokens))
-            expected_increment = tuple(
-                int(value) for value in kv_cache_shard_bytes_for_layer_range(
-                    self.model, increment_tokens, tp,
-                    layer_start=0, layer_end=self.model.layers))
-            if any(working) and working == expected_increment:
-                working_intervals = (BoundaryKvInterval(
-                    replica_id="boundary_work_increment",
-                    role="increment",
-                    holder_instance=p_index,
-                    authority=True,
-                    token_start=int(base_tokens),
-                    token_end=int(history_tokens),
-                    layer_start=0,
-                    layer_end=self.model.layers,
-                    bytes_by_tp_rank=working),)
-        else:
-            working_intervals = (BoundaryKvInterval(
-                replica_id="boundary_work_context",
-                role="context",
-                holder_instance=p_index,
-                authority=True,
-                token_start=0,
-                token_end=int(history_tokens),
-                layer_start=0,
-                layer_end=self.model.layers,
-                bytes_by_tp_rank=working),)
+        # 完整型工作副本 = 全上下文单矩形 [0, history) × 全层 @ i_P。
+        working_intervals = (BoundaryKvInterval(
+            replica_id="boundary_work_context",
+            role="context",
+            holder_instance=p_index,
+            authority=True,
+            token_start=0,
+            token_end=int(history_tokens),
+            layer_start=0,
+            layer_end=self.model.layers,
+            bytes_by_tp_rank=working),)
         view = PDBoundaryView(
             session_id=runtime.session_id,
             home_instance=base_instance,
@@ -5175,14 +4457,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             p_action=runtime.joint_action,
             history_tokens=history_tokens,
             working_bytes_by_tp_rank=working,
-            base_bytes_by_tp_rank=base,
             decode_steps=int(n_hat_b),
-            base_tokens=int(base_tokens),
             kv_token_bytes=int(kv_token_bytes),
             kv_token_bytes_by_tp_rank=kv_token_bytes_by_tp_rank,
-            working_intervals=working_intervals,
             # D12（式(21)）：边界逻辑 home ω_B——merge 目标确定性平局
-            # 首位；与物理基础驻留实例（base_instance，D-BI）分立，
+            # 首位；与基础实例（base_instance，D-BI）分立，
             # 不等于数据所在地。
             logic_home_instance=session.home_instance,
         )
@@ -5196,8 +4475,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # * ``first_token`` 源 = StageWork 的 BoundaryFirstTokenState
         #   （P 末 chunk 已采样恰一次、待首个 D 前向消费）；
         # * ``obligations`` 源 = 继承义务表（t_B 在册已提交义务）；
-        # * 层覆盖：完整型 working = 全模型层数；增量型 increment =
-        #   全层数、base = 基础驻留前缀 [0,p)（LOCAL 基 = 全层）。
+        # * 层覆盖：working = 全模型层数（三动作唯一完整型布局族）。
         # 首 token/义务表复用 _joint_boundary_stage_view 的同一材料化
         # （纯读、零账本副作用——drain 主链 的既有调用重取同值，
         # 两处结果恒等）。
@@ -5209,14 +4487,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             first_token=stage_work.first_token,
             obligations=inherited_obligations,
             working_layers=self.model.layers,
-            base_layers=int(base_prefix),
+            base_layers=self.model.layers,
         )
 
     def _joint_boundary_stage_view(self, runtime, state, boundary):
         """D19（v2.0 §13.1/§5.3，2026-09-26）：边界阶段工作视图与继承
         义务表——D 候选专用因果视图的执行侧材料化。
 
-        * ``StageWork`` = D 边界 stay/copy/remote 工作模板（§13.1 第二
+        * ``StageWork`` = D 边界 stay/copy 工作模板（§13.1 第二
           行：零新 U-token prefill、只做必要状态准备、n̂_B 次剩余前向
           ——长度入口归一为剩余前向）；首输出 pending token 状态：P 末
           chunk 已采样恰一次（RNG 推进一次、本轮首 token 已发出待首个
@@ -5263,24 +4541,13 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 kind="copy_handoff",
                 receiver_instance=session.home_instance,
                 summary="C13 chunk handoff journal still open at t_B"))
-        # C15 后缀逐组恢复区间账本（drain 边界应已 consumed 关账——
-        # remote-read credit 计划建立前另有 fail-closed 断言）。
+        # C15 后缀逐组恢复区间账本（drain 边界应已 consumed 关账）。
         if getattr(session, "restore_journal", None) is not None:
             obligations.append(InheritedObligation(
                 obligation_id=f"{runtime.request_id}#restore_journal",
                 kind="restore_journal",
                 receiver_instance=session.instance_index,
                 summary="C15 suffix restore journal still open at t_B"))
-        # C8 准入相 remote-read 读流承诺预登记（drain 冻结处核销——
-        # _reconcile_readplan_at_drain 在本视图之后的建计划点执行）。
-        if getattr(runtime, "remote_read_preplan", None) is not None:
-            obligations.append(InheritedObligation(
-                obligation_id=f"{runtime.request_id}#readplan",
-                kind="remote_read_plan",
-                receiver_instance=(
-                    state.index if state is not None else None),
-                summary="C8 pre-admit read-plan est ledger not yet "
-                        "reconciled at t_B"))
         # 仍在册的请求容量预约（本边界的提交事务随後换址/注销）。
         if runtime.request_id in getattr(
                 self.kv_manager, "_reservations", {}):
@@ -5698,8 +4965,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
           而仍有 settle，W9 后同键复用）。
 
         结算义务门（§7.2 inherited_obligation_ids 执行侧）：t_B 在册义
-        务经完成边界核销（readplan 残差核销/暂存 lease 释放/预约注销/
-        journal 关账在 _complete_requests 前序段完成）；本方法只披露在
+        务经完成边界核销（预约注销/journal 关账在 _complete_requests
+        前序段完成）；本方法只披露在
         案事实，未闭合义务在既有 fail-closed 点拦截（kv_delta 闭合门）。
         """
         record = self._joint_settlement_ledger().get(request_id)
@@ -5783,8 +5050,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         （事件驱动，保守 merge_done 整体口径——图侧 interval gate 前递
         锚的成员完成）。
 
-        remote 结算生命周期锚点（C14 步骤 1 审计落字）：源端基础历史
-        在远读有效期内保持源端有效并受结构保护（prepare 后 primary
+        结算生命周期锚点（C14 步骤 1 审计落字）：源端基础历史
+        在跨实例执行有效期内保持源端有效并受结构保护（prepare 后 primary
         instance 指向执行端 ⇒ home 侧逐出候选集结构性不含本会话，且
         active 位守卫直接逐出入口；保护解除 = merge_back 败者侧释放 +
         mark_complete 同 tick，物理消费序由同 rank 链的顺序发射保持）。
@@ -5975,16 +5242,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
     # ------------------------------------------------------ R15 流登记 --
 
-    def _register_transfer_flows(
-            self, transfers, *, owner: str,
-            serial_credit_stream: bool = False) -> None:
+    def _register_transfer_flows(self, transfers, *, owner: str) -> None:
         """R15-1/F-B：发射时点登记在途流——逐 shard 完整链路序列（TP
         并行全路径，非代表对）+ 池端口占用（remote_store/remote_load 的
         edge 端口）+ HBM 端点端口（C2/F4 + D04：noc_migrate 的源端口
-        home 读腿恒有、目标端口 exec 写腿对 copy/merge/remote-read 恒
-        有——A4' 补价后计价与执行同腿型；D04 起 remote_load 登记
-        noc_path 末端目标 HBM 写端点、remote_store 登记 noc_path 首端
-        源 HBM 读端点——F3 旧豁免废除；中间跳 rank 不触碰端点 HBM）。
+        home 读腿恒有、目标端口 exec 写腿对 copy/merge 恒有——A4' 补价
+        后计价与执行同腿型；D04 起 remote_load 登记 noc_path 末端目标
+        HBM 写端点、remote_store 登记 noc_path 首端源 HBM 读端点——
+        F3 旧豁免废除；中间跳 rank 不触碰端点 HBM）。
         修复轮三（2026-09-27）：remote_load/remote_store 的端点登记
         **无条件**（不再要求 len(noc_path) >= 2）——零距离池事务
         （edge == 端点 rank、deterministic_xy_route 同端点返回单 rank
@@ -5994,40 +5259,13 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         （len >= 2 门内双端点）：零距离 noc_migrate 无生产构造点，且
         注册表 register 纯累加无去重，移出门会对同一 rank 双登记抬升
         除数。
-        注销由完成事件驱动（drain/completion/逐切片/merge-watch 经
+        注销由完成事件驱动（drain/completion/merge-watch 经
         _release_transfer_flows 按 owner 统一注销，含 D04 池端点），
-        决策时刻快照因果可见。
-
-        ``serial_credit_stream`` 仅用于 remote-read 的 ``#prefill_read``、
-        ``#readplan`` 与 ``#decode#j`` owner：一个 owner 可携带多个层组/
-        未来切片或当前列车的多个真实 credit block，但图侧对每 rank 的
-        recv 块/层组建顺序链（stop-and-wait），同请求同 shard 路径同刻
-        最多一条流在途。注册表只计该 owner 中每个物理 shard 路径一次；
-        完整层组/块列表仍保留给图发射、字节统计和计价。不同 TP shard
-        即使共享链路仍分别登记。"""
-        seen_credit_shards = set()
-        if serial_credit_stream:
-            representatives = getattr(transfers, "flow_representatives", None)
-            if callable(representatives):
-                # Compact remote-read ranges are stop-and-wait by source; one
-                # representative per source preserves the old unique shard
-                # path registrations without walking every tile.
-                transfers = representatives()
+        决策时刻快照因果可见。"""
         for transfer in transfers or ():
             if transfer.kind == "local_hit":
                 continue
             for shard in transfer.shards:
-                if serial_credit_stream:
-                    # credit blocks / readplan units 是同一物理 shard 路径
-                    # 上的串行工作量，不是同刻并发副本。键按 shard 身份
-                    # 区分 TP 流，同时忽略 block 字节数以折叠顺序块。
-                    shard_key = (
-                        transfer.kind, shard.source_rank,
-                        shard.target_rank, shard.edge_rank,
-                        tuple(shard.noc_path))
-                    if shard_key in seen_credit_shards:
-                        continue
-                    seen_credit_shards.add(shard_key)
                 self._joint_flows.register_path(
                     shard.noc_path, owner=owner)
                 if shard.edge_rank is not None:
@@ -6089,8 +5327,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         L4（P2-4，2026-09-23 复核审计）两口径窗披露（不改数值）：
         ① AIMD observe（observe_telemetry）/port_snapshot
         两调用点无
-        session 语境不传代表值——active_decode 瞬空而 remote-read 读流
-        在册的窗口（准入后、drain 入批前）回退 ctx=1（r̂ 最小值）⇒
+        session 语境不传代表值——active_decode 瞬空的窗口（准入后、
+        drain 入批前）回退 ctx=1（r̂ 最小值）⇒
         AIMD 判据 rate ≥ 1.2·r̂ 恒 comfort；O6②（终轮审计）已闭环该
         残压：回退窗 observe_telemetry 传 allow_expansion=False（扩张
         冻结、舒适 streak 不计入、解冻后重新累计——解冻瀑布 structurally
@@ -6182,17 +5420,12 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
         * stay/recompute：无跨实例主流程（本地动作）——恒适用（准入相
           逐出支链按 oneshot 事后入册收紧后续判据，D4）；
-        * copy（oneshot）：链路门（占用+预留+新增 <= Q）；
-        * remote-read（realtime）：链路门（读流需求与 merge 预留需求
-          同事务 per-link 取 max——N1 时序复用）+ 双端点端口平价门
-          （B_HBM/(u_port+1) >= r̂_KV，u_port = 活跃 decode 消费流 +
-          在册流）+ 双候选胜者侧 merge bulk 名额余量（reserve_merge 的
-          端口判据前瞻，封顶 N_bulk = Q_init）。
+        * copy（oneshot）：链路门（占用+预留+新增 <= Q）。
 
         δ_adm 合取确认（A3' 终冻 = 0）：joint 模式重选 = 既有全候选
-        argmin（(cost_ns, order_key) 字典序），delta_adm = 0 时
-        challenger_flips 谓词与该比较恒等（margin >= 0 同真域）——
-        joint 臂组合语义 ≡ argmin、不借配额接入夹带选择规则变更。
+        argmin（(cost_ns, order_key) 字典序）——joint 臂组合语义 ≡
+        argmin、不借配额接入夹带选择规则变更（原 challenger_flips
+        谓词已随 2026-10-14 远读退役删除，D9）。
         （2026-10-01 审查修复后补记：load-first/affinity-first 顺序模
         式经 _quota_reselect_feasible 在可行集上**重跑模式选点规则**，
         非纯 argmin——配额过滤仍只做动作级准入，不改值。）
@@ -6208,36 +5441,17 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             else session_view.home_instance)
         if source is None or source == target:
             # 无跨实例流（与计价适用性同判据的防御分支；正常路径
-            # copy/remote-read 的适用候选必有异地源）。
+            # copy 的适用候选必有异地源）。
             return QuotaVerdict(admitted=True)
         demand: dict[tuple[int, int], int] = {}
         for edge in self._quota_route_edges(source, target):
             demand[edge] = demand.get(edge, 0) + 1
-        if action == "remote-read":
-            # N1（2026-09-23 复核审计1）：读流与 merge bulk 写是同一
-            # 事务的时序先后阶段（读流 settle → 计算 → service_done
-            # 裁决 → merge 写），同事务同链峰值 = **max**（读阶段、写
-            # 阶段各自需求）而非 sum——sum 叠加使空链路 Q=2 时 TP=2
-            # 共链 need=3 恒拒、ρ<1（Q=1）结构性排除远读（违反 C9
-            # "ρ<1 域空化由定价涌现"）。跨事务叠加不变（他事务占用/
-            # 预留在 remaining 分母）。merge 预留需求 = 逐方向路径
-            # 链路集合各 1 槽（dedup）；与入册半 reserve_merge 的同
-            # 事务借槽语义同构，杜绝"判据过而入册拒"。
-            merge_demand: dict[tuple[int, int], int] = {}
-            for edge in set(self._quota_route_edges(source, target)):
-                merge_demand[edge] = merge_demand.get(edge, 0) + 1
-            for edge in set(self._quota_route_edges(target, source)):
-                merge_demand[edge] = merge_demand.get(edge, 0) + 1
-            for edge, merge_need in merge_demand.items():
-                demand[edge] = max(demand.get(edge, 0), merge_need)
         for link, need in demand.items():
             remaining = tracker.link_remaining(link)
             if remaining < need:
                 return QuotaVerdict(
                     admitted=False,
-                    flow_class=(
-                        FLOW_REALTIME if action == "remote-read"
-                        else FLOW_ONESHOT),
+                    flow_class=FLOW_ONESHOT,
                     resource_kind="link",
                     resource_id=link,
                     remaining=remaining,
@@ -6251,42 +5465,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                             tracker.link_occupancy(link),
                             tracker.link_reserved(link))),
                 )
-        if action == "remote-read":
-            for port in (target, source):
-                u_port_base = len(self.instances[port].active_decode)
-                if not tracker.port_parity_admits(
-                        port, r_hat_kv, u_port_base=u_port_base):
-                    return QuotaVerdict(
-                        admitted=False,
-                        flow_class=FLOW_REALTIME,
-                        resource_kind="port",
-                        resource_id=port,
-                        remaining=0,
-                        wait_reason=WAIT_QUOTA_PORT,
-                        inapplicable_reason=(
-                            "quota_port: parity gate at instance {} rejects "
-                            "realtime stream (u_port_base={}, enrolled={}, "
-                            "r_hat_kv={:.6g} B/ns; busy port admits "
-                            "nothing)".format(
-                                port, u_port_base,
-                                tracker.port_enrolled(port), r_hat_kv)),
-                    )
-            for port in (target, source):
-                if tracker.bulk_remaining(port) < 1:
-                    return QuotaVerdict(
-                        admitted=False,
-                        flow_class=FLOW_ONESHOT,
-                        resource_kind="port",
-                        resource_id=port,
-                        remaining=0,
-                        wait_reason=WAIT_QUOTA_PORT,
-                        inapplicable_reason=(
-                            "quota_port: merge bulk-write slots at instance "
-                            "{} exhausted (used={} of N_bulk={}; remote-read "
-                            "merge obligation reserve)".format(
-                                port, tracker.bulk_used(port),
-                                tracker.n_bulk)),
-                    )
         return QuotaVerdict(admitted=True)
 
     def _quota_filter_candidates(self, record, session_view, rid: str,
@@ -6421,10 +5599,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
         * copy：oneshot 主流程（owner=rid 双端口 = 写腿 exec + 读腿
           home 源侧 #src；drain 释放）；
-        * remote-read：realtime 读流（owner=rid#readplan——与 C8 预登记
-          同 owner 约定、同生命周期；完成边界释放）+ merge 义务预留
-          （reserve_merge 双向各 1 槽 + 双候选胜者侧 bulk 名额；量级
-          分层 = 双向各 1 槽原语，copy/recompute 轮零预留）；
         * 逐出/池恢复支链（全部动作，D4 通用治理）：oneshot 入册
           （owner=rid#evict；逐出尾 watch 交付后释放）——**恒置于主流程之后**
           （O2 序不变量，见下）。
@@ -6436,7 +5610,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         （_try_admit_request 内 _quota_filter_candidates 调用
        ）⇒ 判据 demand 只含主流程
         足迹。探针实证事故链：判据 PASS → 支链先入册占掉末槽 → 主流程
-        #readplan 入册 FAIL → LinkQuotaError 返回 False → 调用方对已物化
+        # 主流程入册 FAIL → LinkQuotaError 返回 False → 调用方对已物化
         预约 fail-closed RuntimeError 整 run abort（A11' 无 un-prepare
         逆路径的必然终点）。修法 = 入册侧分派：主流程恒先于支链——
         单线程内判据与入册之间 tracker 零变更、主流程需求判据已前瞻
@@ -6473,46 +5647,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                         "copy source-side enrollment failed (verdict flip "
                         "inside the admission transaction)")
                 enrolled.append(rid + "#src")
-            if action == "remote-read" and cross_instance:
-                r_hat_kv = self._quota_r_hat_kv_bytes_per_ns(
-                    session_view.history_tokens)
-                edges = self._quota_route_edges(source, target)
-                reverse_edges = self._quota_route_edges(target, source)
-                if not self._quota_admit_flow(
-                        rid + "#readplan", rid, flow_class=FLOW_REALTIME,
-                        links=edges, port_id=target,
-                        r_hat_kv_bytes_per_ns=r_hat_kv,
-                        u_port_base=len(
-                            self.instances[target].active_decode),
-                        now_ns=now_ns):
-                    raise LinkQuotaError(
-                        "remote-read stream enrollment failed (verdict "
-                        "flip inside the admission transaction)")
-                enrolled.append(rid + "#readplan")
-                if not self._quota_admit_flow(
-                        rid + "#readplan#src", rid, flow_class=FLOW_REALTIME,
-                        links=(), port_id=source,
-                        r_hat_kv_bytes_per_ns=r_hat_kv,
-                        u_port_base=len(
-                            self.instances[source].active_decode),
-                        now_ns=now_ns):
-                    raise LinkQuotaError(
-                        "remote-read source-side enrollment failed "
-                        "(verdict flip inside the admission transaction)")
-                enrolled.append(rid + "#readplan#src")
-                # 预留链路集 = 逐方向 dedup（C9"各 1 槽"= 路径链路
-                # 集合各 1 槽，非逐 shard 多槽——与判据半同构）。
-                verdict = tracker.reserve_merge(
-                    rid,
-                    links_forward=set(edges),
-                    links_reverse=set(reverse_edges),
-                    port_forward=target, port_reverse=source)
-                if not verdict.admitted:
-                    raise LinkQuotaError(verdict.inapplicable_reason)
-                self._quota_merge_reserves[rid] = {
-                    "state": "reserved",
-                    "source": source, "target": target}
-                self._quota_merge_reserves_created += 1
         except LinkQuotaError:
             for owner in enrolled:
                 self._quota_release_owner(owner, now_ns=now_ns)
@@ -6587,15 +5721,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         """drain 边界：准入相流（copy 主流程 + 准入逐出）settle。"""
         for owner in (request_id, request_id + "#src"):
             self._quota_release_owner(owner, now_ns=tick)
-
-    def _quota_release_readplan_stream(self, request_id: str,
-                                       tick: int) -> None:
-        """完成边界：remote-read 读流（decode 相全程）settle——流寿命
-        样本（admit/release 双时标）随释放进入 AIMD EWMA。"""
-        for owner in (request_id + "#readplan",
-                      request_id + "#readplan#src"):
-            self._quota_release_owner(owner, now_ns=tick)
-        self._quota_decode_owner_seq.pop(request_id, None)
 
     def _quota_release_decode_phase(self, request_id: str,
                                     tick: int) -> None:
@@ -6754,485 +5879,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     self.hardware.mesh_rows,
                     len(self._telemetry_link_id_map))) from None
 
-    # --------------------------- C8（WP2-preadmit）同 tick 读流承诺预登记 --
-
-    def _readplan_flow_units(self, steps: int, tiles_per_pass: int) -> tuple[int, int]:
-        """C8：readplan 对账覆盖窗口闭式——列车数 × 每列车切片块数。
-
-        设计文档 §4.1"在飞解码后续读流按合法预测时域表示，不能把瞬时
-        切片等同于整轮承诺"：est/truth/consumed/remaining 仍按时域内
-        block 总足迹对账；这份账本量不再直接作为瞬时并发流数登记。
-        注册表在 idle 间隔只登记一条 future 代表流，列车发射时由当前
-        owner 接管，Tj 后若仍有 decode 工作再承诺下一条。steps 恒因果
-        （准入 = CausalHorizonEstimator 现值；drain 对账 = 冻结计划真值
-        步数）。列车步数上界取 T_max（_train_max_iter；0 = 不设限 → 单列
-        车）上界即 steps）；每列车块数 = ceil(T_eff/tile)×tile 数/pass
-        （D09 字节 tile：与执行切片同式——tile 固定，每 pass tile 数 =
-        ⌈base/tile⌉ 可 >2）。"""
-        capped = steps if self._train_max_iter <= 0 else min(
-            self._train_max_iter, steps)
-        if capped <= 0:
-            capped = 1
-        trains = -(-steps // capped)
-        return trains, capped * max(1, int(tiles_per_pass))
-
-    def _readplan_unit_transfers(self, shard_specs, *, units,
-                                 session_id, request_id,
-                                 home_instance, exec_instance,
-                                 read_prefix, steps_per_unit):
-        """预登记单位流：units 个同构 KVTransfer（每单位 = 每 shard 一条
-        完整 XY 路径流；经 _register_transfer_flows 单一登记通道 = 链路
-        流 + noc_migrate 双端点 HBM 端口，与逐列车切片登记同腿型，无第
-        二套登记语义）。字节仅作披露摘要（登记只消费路径）。"""
-        from face_scheduler import KVTransfer, KVTransferSequence, KVTransferShard
-        shards = tuple(
-            KVTransferShard(
-                source_rank=source_rank,
-                target_rank=target_rank,
-                edge_rank=None,
-                bytes=per_step_bytes * steps_per_unit,
-                noc_path=noc_path,
-                layer_start=0,
-                layer_end=read_prefix,
-            )
-            for (source_rank, target_rank, per_step_bytes, noc_path)
-            in shard_specs)
-        transfer = KVTransfer(
-            kind="noc_migrate",
-            phase="decode",
-            reason="remote_read_readplan",
-            session_id=session_id,
-            trigger_request_id=request_id,
-            source_instance_index=home_instance,
-            target_instance_index=exec_instance,
-            total_bytes=sum(shard.bytes for shard in shards),
-            shards=shards,
-            model_layers=self.model.layers,
-            layer_start=0,
-            layer_end=read_prefix,
-            resident_prefix_layers_before=read_prefix,
-            resident_prefix_layers_after=read_prefix,
-            # 瞬时流元数据口径统一：与 prefill 前缀读流 / decode credit
-            # 切片同置 stream_only=True（本标记当前无消费点——登记通道
-            # _register_transfer_flows 只消费 shard 路径，零行为变化）。
-            stream_only=True,
-        )
-        return tuple(transfer for _ in range(units))
-
-    def _preregister_readplan_flows(self, runtime, session_view,
-                                    exec_instance: int,
-                                    estimated_decode: int) -> None:
-        """C8 步骤 1（§4.1 同 tick 承诺可见性）：准入事务成功且选中
-        remote-read 后，建立读流承诺的 est 账本（owner 语义
-        ``rid#readplan``，注册表半边延迟到 drain 对账以真值建立）。
-        2026-09-25（规格书§二.5）起准入相**零注册表登记**：prefill 期间
-        注册表上的远读流 = ``rid#prefill_read`` 前缀读流实流本身（同
-        shard 路径集，同 tick 后续决策照样可见本笔已提交足迹）——同一条
-        前缀读流不得同时被登记为 prefill 流与 decode 流（prefill/decode
-        两阶段不得算成同时并发的两条远读流）；#readplan 注册表半边自
-        drain（_reconcile_readplan_at_drain）起承接 decode credit。
-
-        路径 = 冻结于 drain 的那套逐 shard XY 路由预估（与
-        _joint_remote_read_credit_plan / route_paths_fn 同源
-        deterministic_xy_route）；账本覆盖窗口 = 估计 decode 时域内列车
-        数 × 每列车切片块数（时域来自 CausalHorizonEstimator，因果；
-        est/truth/consumed/remaining 披露不确定性）。decode 期间注册表
-        只登记一条每 shard 的代表流；当前列车发射后由实际 owner 接管，
-        避免串行 blocks/train 被误算成同时在途流。
-
-        与 drain 退化分支同口径：源端缺失 / 源端==exec / read_prefix
-        <=0（REMOTE 基不适用 remote-read）不建账本——届时真计划亦为
-        None，无承诺可登记。对账核销链见 remote_read_preplan 注释。
-
-        D09（2026-09-26，式 18a）：读量基数 = 远端基础区间字节（
-        base_tokens；输入/decode 增量本地读不过 NoC——与
-        _joint_remote_read_credit_plan 同口径），est 块数 = 每列车
-        pass 数 × 每 pass tile 数（与执行切片同式）。"""
-        # D-BI：读流源端 = 物理基础驻留实例（与 JCM 计价 ``resident ??
-        # home`` 同判据——准入视图先于 prepare 构建，resident 即基础
-        # 物理所在；P→D 迁移 + merge stay 后它可与逻辑 home 不同）。
-        home = (
-            session_view.resident_instance
-            if session_view.resident_instance is not None
-            else session_view.home_instance)
-        if home is None or home == exec_instance:
-            return
-        session = self.kv_manager._sessions.get(runtime.session_id)
-        if session is None:
-            return
-        if session.working_kind is not None:
-            base_tokens = session.base_history_tokens
-            read_prefix = session.base_resident_prefix_layers
-        else:
-            base_tokens = session.context_tokens
-            read_prefix = self.model.layers
-        if read_prefix <= 0 or base_tokens <= 0:
-            return
-        from face_scheduler import deterministic_xy_route
-        from joint.joint_config import remote_read_exec_tile_tokens
-        estimated_steps = max(1, int(estimated_decode))
-        per_step_shards = kv_cache_shard_bytes_for_layer_range(
-            self.model, base_tokens, self.kv_manager.tp_degree,
-            layer_start=0, layer_end=read_prefix)
-        source_group = self.topology.instance(home)
-        target_group = self.topology.instance(exec_instance)
-        shard_specs = []
-        for source_rank, target_rank, per_step_bytes in zip(
-                source_group.ranks, target_group.ranks, per_step_shards):
-            if per_step_bytes * estimated_steps <= 0:
-                continue  # 零字节 rank 与真计划同口径跳过
-            shard_specs.append((
-                source_rank, target_rank, per_step_bytes,
-                deterministic_xy_route(
-                    self.hardware, source_rank, target_rank)))
-        if not shard_specs:
-            return
-        tile_tokens = remote_read_exec_tile_tokens(
-            self._remote_read_tile_protocol_tokens(), base_tokens)
-        tiles_per_pass = -(-base_tokens // tile_tokens)
-        trains, blocks = self._readplan_flow_units(
-            estimated_steps, tiles_per_pass)
-        units = trains * blocks
-        unit_transfers = self._readplan_unit_transfers(
-            shard_specs, units=units,
-            session_id=runtime.session_id,
-            request_id=runtime.request_id,
-            home_instance=home, exec_instance=exec_instance,
-            read_prefix=read_prefix,
-            steps_per_unit=max(1, -(-estimated_steps // units)))
-        runtime.remote_read_preplan = {
-            "home_instance": home,
-            "exec_instance": exec_instance,
-            "read_prefix_layers": read_prefix,
-            "est_steps": estimated_steps,
-            "est_total_bytes": (
-                sum(spec[2] for spec in shard_specs) * estimated_steps),
-            "est_flow_units": units,
-            "truth_flow_units": None,    # drain 对账时落真值
-            "consumed_units": 0,
-            "remaining_units": units,
-            "unit_transfers": unit_transfers,
-            # 账本 units 表示整个因果预测时域；注册表在 decode 期间只
-            # 表示一条物理可并发流（准入相不登记——prefill 期由
-            # rid#prefill_read 实流占位）。当前列车接管时暂挂，Tj 后
-            # 仍有 decode 工作再恢复。
-            "registry_active": False,
-        }
-
-    def _reconcile_readplan_at_drain(self, runtime, tick: int) -> None:
-        """C8 步骤 2（对账核销之一）：drain 边界真计划冻结处——核销
-        准入相 #readplan est 账本、以真值建立注册表登记（2026-09-25
-        规格书§二.5 起准入相零登记，本函数 = #readplan 注册表半边的
-        建立点；release_owner 幂等空放兼容旧语义）；预估/实际差值进
-        决策日志。
-
-        真值登记后 #readplan 的账本仍承载全时域 block 单位；注册表只
-        放一条每 shard 的未来代表流。列车发射时按本列车真实 block 数
-        核销账本、暂挂 #readplan，再由 rid#decode#{j} owner 登记当前流；
-        Tj 完成后如请求仍有 decode 工作则恢复一条未来代表流。两个 owner
-        不会同时代表同请求同路径的串行流（§4.1 自注册流量去重纪律）。"""
-        preplan = runtime.remote_read_preplan
-        if preplan is None:
-            return
-        owner = runtime.request_id + "#readplan"
-        self._release_transfer_flows(owner)
-        preplan["registry_active"] = False
-        plan = runtime.remote_read_credit_plan
-        if plan is None:
-            # drain 侧退化（准入与 drain 同判据，正常不可达；会话状态在
-            # 准入后被改写时防御）：无承诺可重登记，余量清零、差值披露。
-            preplan["truth_flow_units"] = 0
-            preplan["remaining_units"] = 0
-            preplan["unit_transfers"] = ()
-            self.log_decision(
-                {"kind": "readplan_reconcile", "request_id":
-                 runtime.request_id, "priority": 0},
-                tick,
-                decision={
-                    "est_steps": preplan["est_steps"],
-                    "actual_steps": 0,
-                    "est_total_bytes": preplan["est_total_bytes"],
-                    "actual_total_bytes": 0,
-                    "est_flow_units": preplan["est_flow_units"],
-                    "truth_flow_units": 0,
-                    "delta_bytes": -preplan["est_total_bytes"],
-                    "est_uncertainty": "causal_horizon_estimate",
-                    "note": "degenerate plan at drain: estimate written "
-                            "off with no read stream",
-                })
-            return
-        trains, blocks = self._readplan_flow_units(
-            plan["steps"], plan["tiles_per_pass"])
-        truth_units = trains * blocks
-        unit_transfers = self._readplan_unit_transfers(
-            plan["shard_specs"], units=truth_units,
-            session_id=runtime.session_id,
-            request_id=runtime.request_id,
-            home_instance=plan["home_instance"],
-            exec_instance=plan["exec_instance"],
-            read_prefix=plan["read_prefix_layers"],
-            steps_per_unit=max(1, -(-plan["steps"] // truth_units)))
-        self._register_transfer_flows(
-            unit_transfers, owner=owner, serial_credit_stream=True)
-        preplan["truth_flow_units"] = truth_units
-        preplan["remaining_units"] = truth_units
-        preplan["unit_transfers"] = unit_transfers
-        preplan["registry_active"] = True
-        self.log_decision(
-            {"kind": "readplan_reconcile", "request_id":
-             runtime.request_id, "priority": 0},
-            tick,
-            decision={
-                "est_steps": preplan["est_steps"],
-                "actual_steps": plan["steps"],
-                "est_total_bytes": preplan["est_total_bytes"],
-                "actual_total_bytes": plan["total_bytes"],
-                "est_flow_units": preplan["est_flow_units"],
-                "truth_flow_units": truth_units,
-                "delta_bytes": (
-                    plan["total_bytes"] - preplan["est_total_bytes"]),
-                "est_uncertainty": "causal_horizon_estimate",
-            })
-
-    def _consume_readplan_units(self, runtime, consumed_units: int) -> None:
-        """C8 步骤 2（对账核销之二）：逐列车实际登记处——本列车切片
-        块数自 #readplan 承诺余量核销（实际登记 rid#decode#{j} 接管
-        当前列车份额）。整份预承诺在当前列车在飞期间暂挂，避免把当前
-        owner 与同请求未来串行 train 的代表流叠加；Tj 后若请求仍有 decode
-        工作，由 _finalize_remote_credit_train_flows 恢复一条未来代表流。
-
-        注册表时间口径不改本账本量纲：consumed/remaining 仍以实际 credit
-        block 数对账，碎片化差额在完成边界披露。"""
-        preplan = runtime.remote_read_preplan
-        if preplan is None or consumed_units <= 0:
-            return
-        preplan["consumed_units"] += consumed_units
-        remaining = preplan["remaining_units"] - consumed_units
-        if remaining < 0:
-            # 实际块数超过真值闭式（列车碎片化：Σ ceil(S_j/K_j) 可大于
-            # 满列车闭式）——截 0，负差在完成边界披露（variance_units）。
-            remaining = 0
-        preplan["remaining_units"] = remaining
-        owner = runtime.request_id + "#readplan"
-        self._release_transfer_flows(owner)
-        preplan["registry_active"] = False
-
-    def _restore_readplan_flow_reservation(self, runtime) -> None:
-        """在 Tj 释放当前 credit owner 后，为未完成请求恢复一条未来流。
-
-        ``remaining_units`` 是闭式账本的剩余 block 估计，可能因列车碎片
-        化先到 0；只要请求仍有 decode 工作，物理上就仍有未来 credit
-        train。因此恢复条件取请求生命周期，并用原 readplan shard 模板
-        仅登记一条同路径代表流。"""
-        preplan = runtime.remote_read_preplan
-        if (preplan is None or preplan["registry_active"]
-                or not preplan["unit_transfers"]):
-            return
-        self._register_transfer_flows(
-            preplan["unit_transfers"],
-            owner=runtime.request_id + "#readplan",
-            serial_credit_stream=True)
-        preplan["registry_active"] = True
-
-    def _finalize_remote_credit_train_flows(
-            self, runtime, slice_index: int,
-            tick: Optional[int] = None) -> None:
-        """Tj 核销边界：当前 train 代表流完成后交还给未来承诺。
-
-        一个 request 的同路径 current ``#decode#j`` 与 future
-        ``#readplan`` 不能同时占注册表。若 decode 尚未结束，先释放实际
-        owner，再恢复一条 #readplan 代表流供后续同 tick 决策读取。
-
-        D09/D20：本列车覆盖计划全部 steps（最后一个 credit tile 的消费
-        栅栏在本核销边界物理通过）= 读流正常关闭点——执行期暂存 lease
-        在此注销（早于完成结算的合法最早点；不早于最后一个 tile 消费，
-        不迟于完成结算，双交付由 lease API 幂等收敛）。"""
-        self._release_transfer_flows(
-            "{}#decode#{}".format(runtime.request_id, slice_index))
-        if runtime.decode_tokens_consumed < runtime.decode_length:
-            self._restore_readplan_flow_reservation(runtime)
-        plan = runtime.remote_read_credit_plan
-        if (plan is not None
-                and runtime.decode_tokens_consumed >= plan["steps"]):
-            self._release_staging_lease(
-                runtime, tick=tick, reason="credit_stream_fully_consumed")
-
-    def _settle_readplan_residual(self, runtime, tick: int) -> None:
-        """C8 步骤 2（对账核销之三）：完成边界清 #readplan 残余承诺；
-        真值闭式与逐列车实际登记块数之差（列车碎片化残差）落决策日志。
-        泄漏兜底审计 = verify_run_end（_assert_no_readplan_leaks）。"""
-        preplan = runtime.remote_read_preplan
-        if preplan is None:
-            return
-        runtime.remote_read_preplan = None
-        residual = preplan["remaining_units"]
-        self._release_transfer_flows(runtime.request_id + "#readplan")
-        truth_units = preplan["truth_flow_units"]
-        if truth_units is None:
-            truth_units = preplan["est_flow_units"]
-        if residual or preplan["consumed_units"] != truth_units:
-            self.log_decision(
-                {"kind": "readplan_settle", "request_id":
-                 runtime.request_id, "priority": 0},
-                tick,
-                decision={
-                    "residual_units_released": residual,
-                    "truth_flow_units": truth_units,
-                    "consumed_units": preplan["consumed_units"],
-                    "variance_units": (
-                        truth_units - preplan["consumed_units"]),
-                    "note": "train fragmentation variance between the "
-                            "closed-form truth footprint and per-train "
-                            "actual registrations",
-                })
-
-    def _convert_drain_staging_to_lease(self, runtime, tick: int) -> None:
-        """D09/D20：drain 边界预约注销时的双缓冲暂存分量转移。
-
-        预约语义 = 准入容量（随 P→D 边界注销）；lease 语义 = 执行期
-        持有——remote-read 的 credit 读流存续期间，每 rank 暂存字节必须
-        恒有 HBM 字节持有者（旧口径暂存随预约注销提前回流为可用容量，
-        后续 credit 切片只登记带宽流、无字节持有者，其他请求准入可挪用
-        双缓冲空间）。lease 身份 = ``(request_id, joint_boundary_epoch)``
-        （D20 边界阶段 epoch），字节 = 预约暂存分量逐 rank 原样转移
-        （reserved 视图在注销前后无空洞）。
-
-        顺序 = 捕获预约暂存分量 → 注销预约 → 登记 lease：三步同步相邻、
-        单线程内无观察点，避免预约+lease 短暂双持把紧容量场景误触超卖
-        守卫。计划缺位（退化：无读流）则无转移——暂存随预约合法消失，
-        无读流即无暂存使用。非 remote-read 动作本就无暂存分量。"""
-        plan = runtime.remote_read_credit_plan
-        if plan is None:
-            if (getattr(runtime, "joint_decode_rebuild_tokens", 0) > 0
-                    and runtime.decode_instance_index
-                    != runtime.prefill_instance_index):
-                # C4：recompute@j≠i_P 的重建副本随首个含重建 span 的列
-                # 车核销物化——目标侧 H_B 预约 = 重建空间的真实承诺，
-                # 保持到物化完成（_finalize_completed_trains 的重建成
-                # 员核销点）再注销；此处无 lease 可转（remote 无暂存、
-                # recompute 无读流）。
-                runtime.joint_rebuild_reservation_hold = True
-                return
-            self.kv_manager.release_request_capacity_reservation(
-                runtime.request_id)
-            return
-        reservation = self.kv_manager._reservations.get(runtime.request_id)
-        if reservation is None:
-            raise RuntimeError(
-                "remote-read credit plan for request {} exists without "
-                "its admission capacity reservation".format(
-                    runtime.request_id))
-        staging = tuple(int(value) for value in reservation.staging_shard_bytes)
-        tile_tokens = int(reservation.staging_tile_tokens)
-        if not staging:
-            # D09（2026-09-27 起 prefill 侧 lease 覆盖）：remote-read 的 P
-            # 预约不带暂存分量（准入起的持有者 = prefill 读流 lease，
-            # drain 已注销）——decode lease 按本计划声明口径承接（生产
-            # 装配注入的 tile 协议参数）；替身/直构面未注入装备参数的
-            # 预约亦无暂存分量，同路按计划口径持有——读流在册期间暂存
-            # 字节不退回无持有态。
-            staging = tuple(
-                int(plan["staging_bytes_per_rank"])
-                for _ in range(self.kv_manager.tp_degree))
-            tile_tokens = int(plan["tile_tokens"])
-        if (getattr(runtime, "joint_remote_growth_only", False)
-                and not reservation.staging_shard_bytes
-                and any(self.kv_manager._reservation_extra_shards(
-                    reservation))):
-            # 先在潜伏缺陷修复（主 agent 裁决 2026-10-06 修法 a；A0 副本
-            # 实证同路径同样触发）：growth-only 多源远读的 D 边界把阶段
-            # 预约改签到目标实例，其 final-KV/suffix 分量要到目标侧后缀
-            # 恢复物理完成（恢复腿门控首条目标列车体）才物化——镜像
-            # joint_rebuild_reservation_hold 的机制：此处先承接 decode
-            # lease（改签后的预约不带暂存分量，无暂存双持），预约注销
-            # 推迟到 _finalize_completed_trains 的首个目标侧列车核销点
-            # （物化守卫的因果点），物化前不得提前释放。
-            lease_id = self.kv_manager.acquire_staging_lease(
-                runtime.request_id,
-                session_id=runtime.session_id,
-                instance_index=int(plan["exec_instance"]),
-                boundary_epoch=runtime.joint_boundary_epoch,
-                staging_shard_bytes=staging,
-                staging_tile_tokens=tile_tokens)
-            runtime.joint_growth_reservation_hold = True
-            self.log_decision(
-                {"kind": "staging_lease_acquire", "request_id":
-                    runtime.request_id, "priority": 0},
-                tick,
-                decision={
-                    "lease_id": lease_id,
-                    "reservation_hold": "growth_only_target_materialization",
-                    "note": "capacity reservation held past the drain until "
-                            "the first target-side train materializes the "
-                            "restored suffix (pre-existing latent defect "
-                            "fix, ruling 2026-10-06 (a))",
-                })
-            runtime.pipeline_identity_inputs["decode"] = {
-                "stage_epoch": int(runtime.joint_boundary_epoch),
-                "staging_allocation_id": int(
-                    self.kv_manager.staging_lease_for_request(
-                        runtime.request_id).allocation_id),
-                "target_ranks": tuple(dict.fromkeys(
-                    int(spec[1]) for spec in plan["shard_specs"])),
-            }
-            return
-        self.kv_manager.release_request_capacity_reservation(
-            runtime.request_id)
-        lease_id = self.kv_manager.acquire_staging_lease(
-            runtime.request_id,
-            session_id=runtime.session_id,
-            instance_index=int(plan["exec_instance"]),
-            boundary_epoch=runtime.joint_boundary_epoch,
-            staging_shard_bytes=staging,
-            staging_tile_tokens=tile_tokens)
-        staging_lease = self.kv_manager.staging_lease_for_request(
-            runtime.request_id)
-        if staging_lease is None or staging_lease.lease_id != lease_id:
-            raise RuntimeError(
-                "staging allocation identity disappeared after acquire")
-        target_ranks = tuple(dict.fromkeys(
-            int(spec[1]) for spec in plan["shard_specs"]))
-        if not target_ranks:
-            raise RuntimeError(
-                "remote-read credit lease has no target endpoint ranks")
-        runtime.pipeline_identity_inputs["decode"] = {
-            "stage_epoch": int(runtime.joint_boundary_epoch),
-            "staging_allocation_id": int(staging_lease.allocation_id),
-            "target_ranks": target_ranks,
-        }
-        self.log_decision(
-            {"kind": "staging_lease_acquire", "request_id":
-             runtime.request_id, "priority": 0},
-            tick,
-            decision={
-                "lease_id": lease_id,
-                "allocation_id": int(staging_lease.allocation_id),
-                "boundary_epoch": int(runtime.joint_boundary_epoch),
-                "exec_instance_index": int(plan["exec_instance"]),
-                "staging_shard_bytes": list(staging),
-                "staging_tile_tokens": tile_tokens,
-            })
-
-    def _release_staging_lease(self, runtime, *, tick, reason: str) -> bool:
-        """注销执行期暂存 lease（幂等：无在册 lease 安全空放返回
-        False）。注销路三束收敛：最后一个 credit tile 消费（读流正常
-        关闭）、请求完成结算、异常/回滚。``tick=None``（异常回滚语境）
-        不落决策行——日志面故障不得掩盖原始异常，泄漏由 run 尾
-        verify_run_end 审计兜底。"""
-        live_lease = self.kv_manager.staging_lease_for_request(
-            runtime.request_id)
-        released = self.kv_manager.release_staging_lease(runtime.request_id)
-        if released and tick is not None:
-            self.log_decision(
-                {"kind": "staging_lease_release", "request_id":
-                 runtime.request_id, "priority": 0},
-                tick,
-                decision={
-                    "reason": reason,
-                    "allocation_id": int(live_lease.allocation_id),
-                    "lease_id": live_lease.lease_id,
-                })
-        return released
+    # ------------------------------------------------ R15/C11 收尾审计 --
 
     def _contention_coverage_value(self) -> str:
         """C8（E13 唯一读者）：joint_admission 行 contention_coverage 的
@@ -7247,25 +5894,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         if self._joint_flows.collective_coverage:
             value += "+link_telemetry"
         return value
-
-    def _assert_no_readplan_leaks(self) -> None:
-        """C8 收尾审计：#readplan est 账本必须全部经 drain 对账 → 逐列车
-        核销 → 完成清残余归零；#prefill_read 前缀读流必须已在 prefill
-        drain 释放（规格书§二.5）。收尾仍非空 = 对应生命周期破损泄漏，
-        fail-closed。复用 C2 的 HbmPortFlowRegistry.leaked_owners 审计
-        通道（两类 owner 均经 noc_migrate 端点登记，HBM 端口表与链路
-        流表同通道成对注册/注销）。"""
-        leaks = {
-            owner: ports
-            for owner, ports in self._hbm_ports.leaked_owners().items()
-            if owner.endswith("#readplan")
-            or owner.endswith("#prefill_read")}
-        if leaks:
-            raise RuntimeError(
-                "remote-read stream owner leaked past settlement "
-                "(#readplan drain reconciliation/consumption/settlement "
-                "chain or #prefill_read prefill-drain release broken): "
-                "{}".format(sorted(leaks)[:5]))
 
     def _assert_quota_tracker_ledgers_clean(self) -> None:
         """O10①：run 尾 tracker snapshot() 空账直审——occ/res/enroll/
@@ -7571,8 +6199,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         """端口流归属键是否属于给定请求集合（纯字符串前缀判定）。
 
         owner 键型全集（_register_transfer_flows 登记点）：``rid``、
-        ``rid#decode``、``rid#decode#{j}``、``rid#merge``、``rid#evict``、
-        ``rid#evict#prefill``、``rid#readplan``、``rid#prefill_read`` 与
+        ``rid#decode``、``rid#decode#q{seq}``、``rid#merge``、
+        ``rid#evict``、``rid#evict#prefill`` 与
         逐出尾 watch 的 ``batch_train_evict_{rid}_{phase}_{seq}#flow``。
         rid 自身可含 "_"，不得反向解析字符串——逐 rid 做三种前缀匹配。
         """
@@ -7702,8 +6330,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         member_parts = train.get("members") or []
         instance_size = self.topology.instance(state.index).size
         sample_ranks = self.topology.instance(state.index).ranks
-        # 纯 decode 列车（无 chunk、无 joiner——迁移会混入传输段；M5：
-        # remote-read 成员的逐列车门控读流同样混入传输段，一并排除；
+        # 纯 decode 列车（无 chunk、无 joiner——迁移会混入传输段；
         # O3：merge 尾门/完成批尾段门控等待同样混进 emit→核销 span——
         # 与 prefill 分支同款纯度排除（_emit_train 已按本实例粒度
         # 打好 merge_tail_gated 标记））。
@@ -7714,12 +6341,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             for request_id, participation in member_parts:
                 runtime = self.runtime_by_request_id.get(request_id)
                 if runtime is None:
-                    return
-                if ((runtime.joint_decode_action
-                        or runtime.joint_action) == "remote-read"):
-                    # C4：完整型 remote@j 的 decode credit 门控样本同为
-                    # 不纯（读流供给门混入服务段——判据随 D18 起以边界
-                    # 动作族为准）。
                     return
                 context0 = runtime.prefill_context_tokens
                 consumed = runtime.decode_tokens_consumed
@@ -8107,107 +6728,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._joint_snapshot_cache = snapshot
         return snapshot
 
-    def _pipeline_identity_provider(self, runtime, cost_model, phase):
-        """Return a pure preview provider for compact prediction candidates.
-
-        Candidate enumeration never consumes a segment ordinal.  P's
-        continuation reference carries both the current prefill and future
-        decode read chains; D candidates carry only the active decode chain.
-        The staging allocation comes from the live lease when one exists and
-        otherwise from the manager's non-mutating next-ID peek.
-        """
-        if phase not in ("P", "D"):
-            raise ValueError("pipeline identity phase must be P or D")
-        allocator = getattr(self.graph, "pipeline_identity_allocator", None)
-        if allocator is None:
-            raise RuntimeError("GraphBatchBuilder lacks pipeline identity allocator")
-
-        def provide(candidate_phase, instance_index, action,
-                    copy_subset=None, *, context=None):
-            if candidate_phase != phase:
-                raise ValueError("pipeline provider called for wrong phase")
-            if phase == "P":
-                if action != ACTION_REMOTE:
-                    return None
-                stages = ("prefill", "decode")
-            else:
-                if action not in (ACTION_REMOTE, "hybrid"):
-                    return None
-                stages = ("decode",)
-            fallback_ranks = tuple(int(rank) for rank in
-                                   cost_model._exec_ranks(instance_index))
-            if not fallback_ranks:
-                raise RuntimeError("remote-read target instance has no TP ranks")
-
-            # Candidate resource/HBM ranks and routed physical NoC endpoint
-            # ranks are distinct surfaces in the fixture/legacy fallback.
-            # Pipeline identity follows the physical target endpoint, while
-            # the WorkItem consume route keeps its original HBM resource key.
-            if phase == "P":
-                source = (getattr(context, "resident_instance", None)
-                          if context is not None else None)
-                if source is None and context is not None:
-                    source = getattr(context, "home_instance", None)
-                sources = () if source is None else (int(source),)
-            else:
-                source_set = set()
-                if context is not None:
-                    for name in ("home_instance", "p_instance_index"):
-                        source = getattr(context, name, None)
-                        if source is not None:
-                            source_set.add(int(source))
-                    for interval in (getattr(context, "working_intervals", ()) or ()):
-                        source = getattr(interval, "holder_instance", None)
-                        if source is not None and int(source) != int(instance_index):
-                            source_set.add(int(source))
-                sources = tuple(sorted(source_set))
-
-            physical_by_rank_index = [set() for _ in fallback_ranks]
-            for source in sources:
-                if source == int(instance_index):
-                    continue
-                candidate_paths = cost_model._route_paths_pair(
-                    source, int(instance_index))
-                aligned_paths = cost_model._shard_paths(
-                    candidate_paths, (1,) * len(fallback_ranks))
-                if len(aligned_paths) != len(fallback_ranks):
-                    raise RuntimeError(
-                        "remote-read route rank width disagrees with target TP")
-                for rank_index, rank_paths in enumerate(aligned_paths):
-                    for path in rank_paths:
-                        path = tuple(int(rank) for rank in path)
-                        if len(path) >= 2:
-                            physical_by_rank_index[rank_index].add(path[-1])
-            ranks = []
-            for rank_index, candidates in enumerate(physical_by_rank_index):
-                if len(candidates) > 1:
-                    raise RuntimeError(
-                        "remote sources disagree on physical target rank "
-                        "for TP index {}: {}".format(
-                            rank_index, sorted(candidates)))
-                ranks.append(next(iter(candidates), fallback_ranks[rank_index]))
-            ranks = tuple(ranks)
-            if len(set(ranks)) != len(ranks):
-                raise RuntimeError(
-                    "remote-read TP lanes map to duplicate physical target ranks")
-            live_lease = self.kv_manager.staging_lease_for_request(
-                runtime.request_id)
-            allocation_id = (
-                int(live_lease.allocation_id) if live_lease is not None
-                else int(self.kv_manager.peek_next_staging_allocation_id()))
-            seeds = tuple(
-                PipelineIdentitySeed(
-                    request_id=str(runtime.request_id), stage=stage,
-                    generation=0 if stage == "prefill" else 1,
-                    stage_epoch=int(runtime.joint_boundary_epoch),
-                    rank=rank, staging_allocation_id=allocation_id)
-                for stage in stages for rank in ranks)
-            identities = allocator.preview_batch(seeds)
-            return {(identity.stage, identity.rank): identity
-                    for identity in identities}
-
-        return provide
-
     @staticmethod
     def _joint_probe_json_value(value):
         """Probe 前态的无哈希、确定性 JSON 投影。
@@ -8399,8 +6919,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     runtime.joint_rebuild_context_tokens),
                 "joint_decode_rebuild_tokens": int(
                     runtime.joint_decode_rebuild_tokens),
-                "joint_remote_growth_only": bool(
-                    runtime.joint_remote_growth_only),
                 "source_reference_ids": list(
                     runtime.joint_source_reference_ids or ()),
             })
@@ -9008,25 +7526,10 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             # remote_load/remote_store 端点同表（_register_transfer_
             # flows 登记边界同步放宽）。
             hbm_port_registry=self._hbm_ports,
-            # D09（2026-09-26）：计价与执行同协议同源——字节 tile 配置
-            # 与 tile 对齐基准注入（双缓冲闭式 + 暂存缓冲足迹，v2.0
-            # §12/式 14/15；无执行口径开关，无窗口矛盾）。
-            remote_read_tile_bytes=self.joint_config.remote_read_tile_bytes,
-            remote_read_kv_token_bytes=(
-                kv_cache_shard_bytes_for_tokens(
-                    self.model, 1,
-                    self.topology.instances[0].size)[0]),
-            # 读流层区间化（2026-09-17）：PARTIAL 基 remote-read 适用面
-            # 开关（joint_config.remote_read_partial "on"/"off"）同源传入
-            # 计价模型——计价与执行共用同一开关位，杜绝"计价按混合形态、
-            # 执行按 LOCAL-only"的窗口矛盾。
-            remote_read_partial=(
-                self.joint_config.remote_read_partial_enabled),
             # M2（2026-09-26 消融矩阵前置）：动作掩码 JOINT_ALLOWED_
             # ACTIONS 同源注入——计价侧 applicable_actions 尾部过滤与
             # 执行侧 _classify_physical_feasibility 第二过滤点共用同一
-            # 开关位（杜绝"计价已剔除、可行性判定仍判"的窗口矛盾，同
-            # remote_read_partial 注入纪律）。
+            # 开关位（杜绝"计价已剔除、可行性判定仍判"的窗口矛盾）。
             allowed_actions=self.joint_config.allowed_action_set,
             # W3：正式计价切换的预测配置注入（v4-projection 世代；
             # known_work/frozen_diagnostic、settlement_policy、
@@ -9040,613 +7543,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                if obligation_resolver is not None else {}),
             **telemetry_kwargs,
         )
-
-    def _joint_remote_read_credit_plan(self, runtime, exec_instance: int):
-        """remote-read 有限字节双缓冲（D09，v2.0 §12/式 18a）的持久读
-        计划：drain 边界一次冻结每步读量与逐 shard 路由；总量 =
-        S × f(目标缺少的基础区间并集) 为 I1 守恒基数。逐列车切片（S_j
-        步 × 字节 tile）在列车规划期从本计划派生（_joint_remote_read_
-        slice）。
-
-        M1′ 执行侧过读修正（2026-09-26，§0.2 取代一/式 18a）：每步读量
-        = **目标缺少的远端基础区间字节**——decode credit 读流只覆盖源端
-        仍保留的基础历史 [0, p)；本轮输入与已生成 decode 增量的 KV 在
-        执行端本地 HBM、本地读取不过 NoC。
-
-        C4 多源（v2.0 §6.4/§19.1）：目标缺少的基础区间由**全部真实来
-        源**逐区间供给——权威基础（物理基础驻留实例）＋边界第二来源
-        （i_P 侧旧工作副本，多源远读不迁移 U）；单源形态（原地继续/
-        完整型远读）与旧口径逐位一致。来源边界排空（pass 内按确定
-        owner 顺序逐源读空）、共用同一对有限缓冲；tile 固定（配置值原
-        样），联合区间 token 数 = 每 pass tile 数 = 逐源 ⌈tokens_s/tile⌉
-        之和（每源独立 tile 链、源内尾块不可跨源合并；单源 = ⌈并集/
-        tile⌉ 恒等；可 >2，逐 tile lag-2 流水消费——修复轮三口径对齐，
-        此前联合 ⌈Σ/tile⌉ 少计逐源尾块 → 体块门漏覆盖）。
-
-        读流层区间化（2026-09-17）：读流只覆盖前缀层 [0, p)——工作副本
-        形态（working_kind 非 None）取 base_resident_prefix_layers，
-        LOCAL 基 p==L 为不变锚；PARTIAL 基混合形态 p<L：后缀 [p, L) 不
-        走读流，在准入相经 kv_manager 的 _remote_load_transfer 池恢复
-        物化（热 KV，2026-09-17 用户裁定）。非工作会话（REMOTE 基）
-        read_prefix<=0 时防御返回 None（remote-read 适用性本就排除
-        REMOTE 基，正常不可达）。
-
-        字节 tile（D09）：``tile_tokens`` = 配置 tile 经
-        ``remote_read_exec_tile_tokens`` 固定裁决（原样返回，修复轮二
-        起不放大）；``tiles_per_pass`` = 每步 tile 数（修复轮三起 =
-        **切片实际口径**：逐源 ⌈tokens_s/tile⌉ 之和——C4 多源逐源独立
-        tile 链，源内尾块不可跨源合并；单源形态 = ⌈tokens/tile⌉ 恒
-        等。可 >2，逐 tile lag-2 流水消费）；``kv_token_bytes`` = 每
-        shard 每 token 每 shard 字节（逐 shard 均分，切片字节据此精
-        确）。"""
-        from face_scheduler import deterministic_xy_route
-        from joint.joint_config import remote_read_staging_bytes_per_rank
-        session = self.kv_manager._sessions[runtime.session_id]
-        # W4（§12.1"现有 base＋单 boundary source 改为目录迭代"）：源端
-        # 枚举 = 权威区间目录 query_sources 迭代（确定性角色序：base →
-        # boundary-source → resident/working；来源数 >2 结构性支持——
-        # W9 跨轮多来源不再写死两槽；单/双源形态与旧两槽硬编码逐位等
-        # 价：镜像条目通道与旧字段同事务重投影，tokens/prefix 口径一
-        # 致——退化等价由 test_kv_directory_projection_parity 对拍锁
-        # 定）。来源面 = 目标缺失并集的权威选读片段（§6.1/§6.3：单元
-        # 格并集去重——目标已持/已在途的格不进读流，同内容多副本冻结
-        # 序只选读一副本，部分重叠只补差集片段；union_tokens = 缺失并
-        # 集 token 数）。池条目不进片上来源集（池恢复另列资源，§6.2）。
-        directory = getattr(self.kv_manager, "kv_directory", None)
-        sources = []          # [(instance, tokens, layer_start, layer_end), ...]
-        if directory is not None:
-            for entry in directory.query_sources(
-                    runtime.session_id, exec_instance):
-                key = entry.content_key
-                sources.append((
-                    int(entry.holder),
-                    int(key.token_end - key.token_start),
-                    int(key.layer_start),
-                    int(key.layer_end)))
-        else:
-            # 替身 kv_manager（直构测试面 SimpleNamespace，无目录镜像）
-            # 的 duck-type 兼容分支——真实 KVCacheManager 恒带目录，运
-            # 行路径不进此支；来源枚举保持旧两槽口径（替身会话不经镜像
-            # 写点，无目录条目可查）。
-            sources.extend(self._legacy_two_slot_remote_read_sources(
-                session, runtime, exec_instance))
-        if not sources and directory is not None:
-            # 防御/遗留测试面回退（与旧两槽硬编码同款行为）：目录无片
-            # 上来源且会话无 base 驻留记录时，按准入披露的
-            # origin_home_instance 合成单源（working 基 read_prefix≤0
-            # 或 REMOTE 基仍会被下方正字节过滤，同旧路径）。
-            home = (
-                session.base_instance_index
-                if getattr(session, "base_instance_index", None) is not None
-                else runtime.origin_home_instance)
-            if home is not None and home != exec_instance:
-                if session.working_kind is not None:
-                    base_tokens = session.base_history_tokens
-                    read_prefix = session.base_resident_prefix_layers
-                else:
-                    base_tokens = session.context_tokens
-                    read_prefix = self.model.layers
-                if read_prefix > 0 and base_tokens > 0:
-                    sources.append((int(home), int(base_tokens),
-                                    0, int(read_prefix)))
-        if not sources:
-            return None  # 无异地历史（退化：无读流）
-        steps = max(1, runtime.decode_length)
-        tp = self.kv_manager.tp_degree
-        source_entries = []
-        shard_specs = []
-        for source_instance_index, source_tokens, source_layer_start, source_layer_end in sources:
-            per_step_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model, source_tokens, tp,
-                layer_start=source_layer_start, layer_end=source_layer_end)
-            source_group = self.topology.instance(source_instance_index)
-            target_group = self.topology.instance(exec_instance)
-            specs = []
-            for source_rank, target_rank, per_step_bytes in zip(
-                    source_group.ranks, target_group.ranks, per_step_shards):
-                if per_step_bytes * steps <= 0:
-                    continue  # 零字节 rank 跳过（无数据即无读流）
-                spec = (source_rank, target_rank, per_step_bytes,
-                        deterministic_xy_route(
-                            self.hardware, source_rank, target_rank))
-                specs.append(spec)
-                shard_specs.append(spec)
-            if specs:
-                source_entries.append({
-                    "instance": source_instance_index,
-                    "tokens": int(source_tokens),
-                    "layer_start": int(source_layer_start),
-                    "layer_end": int(source_layer_end),
-                    # Compatibility summary for single-prefix consumers;
-                    # transfers use the explicit layer interval above.
-                    "prefix_layers": int(source_layer_end),
-                    # 逐源每 token 字节率（层区间比例口径；PARTIAL 基 =
-                    # 前缀层率——单源形态与旧 kv_token_bytes 逐位一致）。
-                    "kv_token_bytes": (
-                        specs[0][2] // max(1, int(source_tokens))),
-                    "specs": tuple(specs),
-                })
-        if not source_entries:
-            return None
-        # 字节 tile 裁决（单一裁决点三方同源：切片/暂存预约/JCM 足迹）；
-        # 基数 = 联合远读区间 token 数（多源并集）。暂存/块号口径的
-        # kv_token_bytes 取逐源最重率（保守上界——多源混合层率时暂存
-        # 不缩小）。
-        union_tokens = sum(entry["tokens"] for entry in source_entries)
-        kv_token_bytes = max(
-            entry["kv_token_bytes"] for entry in source_entries)
-        tile_tokens = remote_read_exec_tile_tokens(
-            self._remote_read_tile_protocol_tokens(), union_tokens)
-        # 每 pass tile 数 = **切片实际口径**：逐源独立 tile 链（C4 来源
-        # 边界排空——每源 ⌈tokens_s/tile⌉ 块、尾块 = 源内余量）之和。
-        # 修复轮三（2026-09-27）：此前取联合口径 ⌈Σtokens/tile⌉——两源
-        # 各有不足一 tile 的尾块余量时逐源和严格更大（每源尾块不可跨源
-        # 合并），体块门按联合数生成则每 pass 尾部 tile 无消费体块，
-        # 列车尾待发账本残留 fail-closed（TJE_quota_aimd 冒烟红：
-        # pending tiles [467..472] never released——quota_aimd 准入时序
-        # 使 session_1_request_3 以多源形态远读而暴露）。单源形态两口径
-        # 恒等（逐位回归锚）。tile↔体块门 1:1 对齐 = D09 释放链的表达
-        # 前提（_remote_credit_body_blocks 按本值切门）。
-        tiles_per_pass = sum(
-            -(-entry["tokens"] // tile_tokens) for entry in source_entries)
-        return {
-            "home_instance": source_entries[0]["instance"],
-            "exec_instance": exec_instance,
-            "steps": steps,
-            "base_tokens": union_tokens,
-            "read_prefix_layers": max(
-                int(entry["layer_end"]) for entry in source_entries),
-            "tile_tokens": tile_tokens,
-            "tiles_per_pass": tiles_per_pass,
-            "kv_token_bytes": kv_token_bytes,
-            # C4 多源：逐来源区间（instance/tokens/prefix/specs）——切
-            # 片按来源边界排空逐源出 tile；单源形态与旧口径一致。
-            "sources": tuple(source_entries),
-            # 每 rank 双缓冲暂存真实字节（与 KVCacheManager 预约同源）。
-            "staging_bytes_per_rank": remote_read_staging_bytes_per_rank(
-                tile_tokens, kv_token_bytes),
-            "total_bytes": sum(
-                spec[2] for entry in source_entries
-                for spec in entry["specs"]) * steps,
-            "shard_specs": tuple(shard_specs),
-        }
-
-    def _legacy_two_slot_remote_read_sources(self, session, runtime,
-                                              exec_instance: int):
-        """旧两槽来源枚举（W4 目录化前的原实现，逐字保留）。
-
-        仅在替身 kv_manager（直构测试面，无 kv_directory 属性）上使用
-        ——真实 KVCacheManager 恒带权威区间目录，运行路径走
-        ``kv_directory.query_sources`` 迭代（见 _joint_remote_read_
-        credit_plan）。保留本支 = duck-type 测试替身兼容，非运行开关。
-        """
-        # D-BI：读流源端 = 物理基础驻留实例（工作副本期取准备相快照的
-        # ``base_instance_index``；无记录回退准入披露的 origin_home_
-        # instance）。
-        home = (
-            session.base_instance_index
-            if getattr(session, "base_instance_index", None) is not None
-            else runtime.origin_home_instance)
-        sources = []
-        if home is not None and home != exec_instance:
-            if session.working_kind is not None:
-                # LOCAL 基 p==L（不变锚）；PARTIAL 混合基 p<L（后缀
-                # [p,L) 准入相池恢复物化，不经读流）。
-                base_tokens = session.base_history_tokens
-                read_prefix = session.base_resident_prefix_layers
-            else:
-                base_tokens = session.context_tokens
-                read_prefix = self.model.layers
-            if read_prefix > 0 and base_tokens > 0:
-                sources.append((int(home), int(base_tokens),
-                                0, int(read_prefix)))
-        # C4：边界第二来源（i_P 侧旧工作副本；多源远读/重建未迁移）。
-        source_instance = getattr(
-            session, "boundary_source_instance_index", None)
-        if (source_instance is not None
-                and source_instance != exec_instance
-                and any(session.boundary_source_shard_bytes)):
-            sources.append((
-                int(source_instance),
-                int(session.boundary_source_history_tokens),
-                0,
-                int(session.boundary_source_resident_prefix_layers
-                    or self.model.layers)))
-        return sources
-
-    def _remote_read_tile_protocol_tokens(self) -> int:
-        """配置 tile 的 token 数（__init__ 解析值缓存；替身/直构路径
-        未走到装配解析时按 joint_config 现场解析——同一裁决点；无
-        joint_config 的替身按 auto 协议缺省解析）。"""
-        cached = getattr(self, "_remote_read_tile_tokens_resolved", None)
-        if cached is not None:
-            return int(cached)
-        from joint.joint_config import (
-            REMOTE_READ_TILE_AUTO,
-            resolve_remote_read_tile_tokens,
-        )
-        configured = getattr(self, "joint_config", None)
-        raw = (
-            configured.remote_read_tile_bytes
-            if configured is not None else REMOTE_READ_TILE_AUTO)
-        resolved = resolve_remote_read_tile_tokens(
-            raw,
-            kv_cache_shard_bytes_for_tokens(
-                self.model, 1, self.topology.instances[0].size)[0])
-        self._remote_read_tile_tokens_resolved = resolved
-        return resolved
-
-    def _joint_remote_read_slice(self, runtime, steps: int):
-        """从持久读计划切出本列车字节 tile 切片（D09 有限字节双缓冲）：
-        读流 = steps 个 decode pass × 每 pass 的 ``tiles_per_pass`` 个
-        字节 tile（tile token 数 = 计划裁决值；每 pass 末块 = 不足 tile
-        的尾块）。tile 全序 = pass 主序（pass 1 全部 tile → pass 2 …），
-        块号 b = 1..M 与体块消费门/缓冲复用释放链同号（构图器经
-        _credit_arms 账本解析）。整数 tile token 乘法 ⇒ 逐 shard
-        Σ块 ≡ 计划总量（I1 字面成立）。
-
-        C4 多源（§6.4 来源边界排空）：pass 内按确定 owner 顺序逐源读
-        空——每源独立 tile 链（源内 tile 数 = ⌈源 token / tile⌉，尾块
-        = 源内余量），逐源 tile 字节用该源的层区间率（PARTIAL 基前缀
-        率）。单源形态与旧口径逐位一致。
-
-        返回块 1..M 的 KVTransfer 列表（kind/reason 与旧口径同形；块 1
-        走 pd_transfer/主链发射路径——T1 joiner 槽位不变）。
-
-        层区间（2026-09-17）：KVTransferShard/KVTransfer 的 layer_end 与
-        resident_prefix_layers_before/after 取来源的 read_prefix_layers
-        （区间惯例 = layer_start/layer_end）。
-
-        stream_only=True：decode credit 读流与 prefill 前缀读流同为瞬时
-        流——只产 send/recv/HBM 写服务节点和完成门，不物化入任何持久
-        账本（不 _add_local_shards / 不改 shard_bytes / 不进 merge 工
-        作副本账）。字节口径 = 式(18a) 基础区间 × 遍数，逐 shard 精确。"""
-        from face_scheduler import KVTransfer, KVTransferSequence, KVTransferShard
-        plan = runtime.remote_read_credit_plan
-        tile_tokens = plan["tile_tokens"]
-        sources = plan.get("sources")
-        if sources is None:
-            # 直构计划（遗留测试面/替身）：按旧单源键合成同构来源集。
-            sources = ({
-                "instance": plan["home_instance"],
-                "tokens": plan["base_tokens"],
-                "layer_start": 0,
-                "layer_end": plan["read_prefix_layers"],
-                "prefix_layers": plan["read_prefix_layers"],
-                "kv_token_bytes": plan["kv_token_bytes"],
-                "specs": plan["shard_specs"],
-            },)
-        source_tile_counts = tuple(
-            -(-int(source["tokens"]) // int(tile_tokens))
-            for source in sources)
-        per_pass_count = sum(source_tile_counts)
-        total_count = int(steps) * per_pass_count
-        source_prefixes = []
-        offset = 0
-        for source, count in zip(sources, source_tile_counts):
-            source_prefixes.append(offset)
-            offset += count
-
-        # Keep the source/pass axes that define exact per-rank byte slicing.
-        # The GraphBatch emitter consumes these bounded structural runs and
-        # never has to recover a tile's route by instantiating KVTransfer.
-        pipeline_tile_runs = []
-        for pass_ordinal in range(int(steps)):
-            for source_ordinal, (source, count, prefix) in enumerate(
-                    zip(sources, source_tile_counts, source_prefixes)):
-                if not count:
-                    continue
-                source_tokens = int(source["tokens"])
-                specs = tuple({
-                    "global_shard_ordinal": int(shard_ordinal),
-                    "source_rank": int(source_rank),
-                    "target_rank": int(target_rank),
-                    "bytes_per_unit": int(per_step_bytes) // source_tokens,
-                    "noc_path": tuple(int(rank) for rank in noc_path),
-                } for shard_ordinal, (source_rank, target_rank,
-                       per_step_bytes, noc_path) in enumerate(source["specs"]))
-                if any(int(spec[2]) % source_tokens
-                       for spec in source["specs"]):
-                    raise RuntimeError(
-                        "remote-read shard bytes are not integral per token")
-                pipeline_tile_runs.append({
-                    "first_tile": pass_ordinal * per_pass_count + prefix + 1,
-                    "tile_count": int(count),
-                    "pass_or_window_ordinal": pass_ordinal + 1,
-                    "source_ordinal": source_ordinal,
-                    "source_key": "instance:{}:layers:{}-{}".format(
-                        source["instance"], source.get("layer_start", 0),
-                        source.get("layer_end", source["prefix_layers"])),
-                    "layer_start": int(source.get("layer_start", 0)),
-                    "layer_end": int(source.get(
-                        "layer_end", source["prefix_layers"])),
-                    "axis_unit": "source_tokens",
-                    "total_units": source_tokens,
-                    "units_per_tile": int(tile_tokens),
-                    "tail_units": source_tokens - (count - 1) * int(tile_tokens),
-                    "shards": specs,
-                })
-
-        def _transfer_at(index):
-            step_index, within_pass = divmod(index, per_pass_count)
-            del step_index  # per-step tile payload repeats with identical shape
-            source_index = 0
-            while (source_index + 1 < len(source_prefixes)
-                   and within_pass >= source_prefixes[source_index + 1]):
-                source_index += 1
-            source = sources[source_index]
-            source_tokens = int(source["tokens"])
-            tile_ordinal = within_pass - source_prefixes[source_index]
-            tile_of_source = min(
-                int(tile_tokens),
-                source_tokens - tile_ordinal * int(tile_tokens))
-            source_layer_start = int(source.get("layer_start", 0))
-            source_layer_end = int(source.get(
-                "layer_end", source["prefix_layers"]))
-            shards = tuple(
-                KVTransferShard(
-                    source_rank=source_rank,
-                    target_rank=target_rank,
-                    edge_rank=None,
-                    bytes=self._remote_read_slice_bytes_for_rank(
-                        per_step_bytes, source_tokens, tile_of_source),
-                    noc_path=noc_path,
-                    layer_start=source_layer_start,
-                    layer_end=source_layer_end,
-                )
-                for (source_rank, target_rank, per_step_bytes,
-                     noc_path) in source["specs"])
-            return KVTransfer(
-                kind="noc_migrate",
-                phase="decode",
-                reason="remote_read_stream",
-                session_id=runtime.session_id,
-                trigger_request_id=runtime.request_id,
-                source_instance_index=source["instance"],
-                target_instance_index=plan["exec_instance"],
-                total_bytes=sum(shard.bytes for shard in shards),
-                shards=shards,
-                model_layers=self.model.layers,
-                layer_start=source_layer_start,
-                layer_end=source_layer_end,
-                resident_prefix_layers_before=source_layer_end,
-                resident_prefix_layers_after=source_layer_end,
-                stream_only=True,
-            )
-
-        representatives = tuple(
-            _transfer_at(source_prefixes[index])
-            for index, count in enumerate(source_tile_counts) if count)
-        total_bytes = sum(
-            sum(int(spec[2]) for spec in source["specs"]) * int(steps)
-            for source in sources)
-        return KVTransferSequence(
-            total_count, _transfer_at,
-            flow_representatives=representatives,
-            total_bytes=total_bytes,
-            pipeline_tile_runs=pipeline_tile_runs)
-
-    @staticmethod
-    def _remote_read_slice_bytes_for_rank(
-            per_step_bytes: int, source_tokens: int, tile_tokens: int) -> int:
-        """Convert one source-rank pass total into an exact tile byte count."""
-        per_step_bytes = int(per_step_bytes)
-        source_tokens = int(source_tokens)
-        tile_tokens = int(tile_tokens)
-        if per_step_bytes < 0 or source_tokens <= 0 or tile_tokens < 0:
-            raise RuntimeError(
-                "remote-read shard slice inputs must be non-negative with "
-                "positive source token count")
-        quotient, remainder = divmod(per_step_bytes, source_tokens)
-        if remainder:
-            raise RuntimeError(
-                "remote-read source shard bytes are not integral per token")
-        return quotient * tile_tokens
-
-    def _plan_remote_credit_slices(self, plan, joiner_runtimes,
-                                   joiner_plans):
-        """列车规划期生成 remote-read 字节 tile 切片（D09；§4.3.2/§4.3.3）。
-
-        R15 登记钩子 = 切片创建点（本函数；drain 边界 S_j 未知），
-        owner 键 = ``rid#decode#{j}`` 逐切片一键（j = 该请求第 j 个
-        切片列车），注销 = Tj 核销边界（_finalize_completed_trains，
-        先例注释"消费栅栏已物理通过"（_finalize_completed_trains））——禁止全部切片挂同一
-        owner 到完成才注销（Tj 期间登记表会躺 j-1 条已物理完成的陈旧
-        流，链路除数最多虚高 n 倍，R-6）。R14 停滞成员不进 members
-        （_plan_train 先行跳过）⇒ 本列车无切片、顺延，I2 联动。
-
-        返回构图器消费规格（None = 本列车无 remote-credit 成员，体发射
-        单段路径不变）。体块 = 逐迭代切分（每迭代一个体块；其 gates =
-        覆盖该迭代的全部成员 tile (rid, 块号) 并集，I2）——tile↔体块
-        消费 1:1 对齐是 2 块暂存"块 t+2 生产等块 t 消费"释放链的表达
-        前提（构图器在体块发射点锚定被消费 tile 的 t+2 块生产）。"""
-        joiner_by_id = {
-            runtime.request_id: (runtime, joiner_plan)
-            for runtime, joiner_plan in zip(joiner_runtimes, joiner_plans)}
-        credit_members = []
-        for request_id, participation in plan["members"]:
-            runtime = self.runtime_by_request_id[request_id]
-            if ((runtime.joint_decode_action
-                    or runtime.joint_action) == "remote-read"
-                    and runtime.remote_read_credit_plan is not None):
-                credit_members.append((runtime, participation))
-        if not credit_members:
-            return None
-        slice_indices = {}
-        continuations = []
-        for runtime, participation in credit_members:
-            runtime.remote_read_credit_trains += 1
-            j = runtime.remote_read_credit_trains
-            blocks = self._joint_remote_read_slice(runtime, participation)
-            # 修复轮三（2026-09-27）：tile↔体块门 1:1 对齐的规划期守卫
-            # ——切片实际块数必须恰 = participation × tiles_per_pass。
-            # 失配 = 计划 tile 口径与切片口径漂移（多源逐源尾块 vs 联合
-            # ⌈Σ/tile⌉ 类缺口），此刻 fail-closed，不留到列车尾账本核销
-            # 才暴露（pending tiles never released）。
-            plan_tiles_per_pass = (
-                runtime.remote_read_credit_plan["tiles_per_pass"])
-            if len(blocks) != participation * plan_tiles_per_pass:
-                raise RuntimeError(
-                    "remote-read slice for {} cut {} tiles for {} steps "
-                    "but credit plan tiles_per_pass={} implies {} "
-                    "(gate/slice tile-count drift)".format(
-                        runtime.request_id, len(blocks), participation,
-                        plan_tiles_per_pass,
-                        participation * plan_tiles_per_pass))
-            # C8 步骤 2（对账核销之二）：本列车切片的实际登记接管当前
-            # 列车份额。先核销并暂挂 #readplan，再登记当前 credit owner；
-            # 图侧块链串行，因此该 owner 仅登记一条每 shard 代表流。
-            self._consume_readplan_units(runtime, len(blocks))
-            self._register_transfer_flows(
-                blocks, owner="{}#decode#{}".format(
-                    runtime.request_id, j), serial_credit_stream=True)
-            slice_indices[runtime.request_id] = j
-            runtime.remote_read_slice_summaries.append({
-                "train_id": plan["train_id"],
-                "slice_index": j,
-                "tiles_per_pass": plan_tiles_per_pass,
-                "tile_tokens":
-                    runtime.remote_read_credit_plan["tile_tokens"],
-                "steps": participation,
-                "block_count": len(blocks),
-                "total_bytes": (
-                    blocks.total_bytes if blocks.total_bytes is not None else
-                    sum(transfer.total_bytes for transfer in blocks)),
-            })
-            joiner_entry = joiner_by_id.get(runtime.request_id)
-            tail_blocks = KVTransferSequence(
-                max(0, len(blocks) - 1),
-                lambda index, source=blocks: (index + 2, source[index + 1]),
-                pipeline_tile_runs=getattr(
-                    blocks, "pipeline_tile_runs", ()))
-            if joiner_entry is not None:
-                # 首列车 T1（joiner）：块 1 = pd_transfer 主链槽位（barrier
-                # 前，barrier 语义自动降级为等 barrier 之前的节点）；块
-                # 2..M 旁挂支链 + 体块 arm 门（构图器 D2 发射序；块 3..M
-                # 由体块消费锚释放链延迟发射——缓冲复用依赖）。
-                _, joiner_plan = joiner_entry
-                pending_leg = joiner_plan.get("prefill_decode_transfer")
-                if pending_leg is not None and (
-                        getattr(pending_leg, "kind", None) != "local_hit"):
-                    # (2026-10-01 审查修复) W10 hybrid：joiner 槽位已携带
-                    # 真实 U 迁移腿（move_prefill_to_decode 的物理搬运，
-                    # face 侧账本/守恒已按"已迁移"改写）——与 credit 块 1
-                    # 组成多腿元组逐腿发射（C4 增量 copy 同款），不得覆写
-                    # 丢弃（旧实现丢腿 = 图侧无该物理迁移，图/账本分歧静默
-                    # 错）。纯 remote-read 的 local_hit 占位腿仍按原样被块
-                    # 1 替换（零字节占位，替换即设计）。
-                    joiner_plan["prefill_decode_transfer"] = (
-                        pending_leg, blocks[0])
-                else:
-                    joiner_plan["prefill_decode_transfer"] = blocks[0]
-                joiner_plan["remote_credit_head"] = blocks[0]
-                joiner_plan["remote_credit_pipeline_tile_runs"] = tuple(
-                    dict(run) for run in blocks.pipeline_tile_runs)
-                joiner_plan["remote_credit_tail"] = tail_blocks
-            else:
-                # 续列车 T2+（续坐成员，D7 新槽位）：块 1 上主链（发射序
-                # 先于列车体；无 barrier，per-rank 链序保证先行），块
-                # 2..M 旁挂 + arm 门——与 T1 同构，仅少 barrier。
-                continuations.append({
-                    "plan": runtime.plan_dict(),
-                    "block1": blocks[0],
-                    "tail": tail_blocks,
-                    "pipeline_tile_runs": tuple(
-                        dict(run) for run in blocks.pipeline_tile_runs),
-                })
-        plan["remote_credit_slices"] = slice_indices
-        assignments = self._train_span_iterations(plan)
-        body_blocks = self._remote_credit_body_blocks(
-            plan, assignments, credit_members,
-            start_iter=1, end_iter=plan["iterations"])
-        split_first_blocks = self._remote_credit_body_blocks(
-            plan, assignments, credit_members,
-            start_iter=1, end_iter=1)
-        # 拆分（WP9）与体块化正交：首步批 = 迭代 1 体块，余量批 = 迭代
-        # 2..end 逐迭代体块——两批覆盖区间与整列一致。
-        split_rest_blocks = []
-        rest_start = 2
-        while rest_start <= plan["iterations"]:
-            split_rest_blocks.append(self._remote_credit_body_blocks(
-                plan, assignments, credit_members,
-                start_iter=rest_start, end_iter=rest_start)[0])
-            rest_start += 1
-        return {
-            "continuations": continuations,
-            "request_ids": sorted(slice_indices),
-            "body_blocks": body_blocks,
-            "split_first_blocks": split_first_blocks,
-            "split_rest_blocks": split_rest_blocks,
-        }
-
-    @staticmethod
-    def _train_span_iterations(plan):
-        """span → 列车迭代映射（(迭代, span 下标) 序列；与 pass_spans 的
-        平铺布局一一对应：chunk i ↔ 迭代 i+1，成员 m 第 s 步 ↔ 迭代 s；
-        recompute joiner 的静默重建 span（D10，(H_B, H_B)）随其成员首
-        迭代入首体块——与构图器 _consume_rebuild_output_suppression 的
-        逐块消费契约一致（块 spans 不相交、总和恰一次）。
-
-        (2026-10-01 审查修复) 旧映射漏计重建 span：D 边界 recompute 的
-        新 joiner（rebuild span）与任一 remote-read credit 成员同列车
-        时（C4 完整动作面下合法可达组合），offset 与 pass_spans 长度失
-        配，布局断言必炸（整轮 abort）。"""
-        assignments = []
-        chunk_count = len(plan["prefill_chunk_tokens"])
-        for i in range(chunk_count):
-            assignments.append((i + 1, i))
-        rebuild_members = set(plan.get("rebuild_members") or ())
-        offset = chunk_count
-        for request_id, participation in plan["members"]:
-            if request_id in rebuild_members:
-                # 重建 span：占一个 span 下标、随成员首迭代入块。
-                assignments.append((1, offset))
-                offset += 1
-            for step in range(1, participation + 1):
-                assignments.append((step, offset + step - 1))
-            offset += participation
-        if offset != len(plan["pass_spans"]):
-            raise RuntimeError(
-                "train span layout does not match the frozen plan")
-        return assignments
-
-    def _remote_credit_body_blocks(self, plan, assignments,
-                                   credit_members, *, start_iter,
-                                   end_iter):
-        """[start_iter, end_iter] 区间的体块切分（D09：逐迭代一个体块；
-        chunk/member span 随迭代归属入块）。每体块的 gates = 覆盖该迭代
-        的全部 remote-read 成员切片 tile (rid, 块号) 列表——并集语义
-        （同列车可并存多个 remote-read 成员，各自 participation/tile 数
-        不同；构图器经 _credit_arms 账本解析为逐 rank recv 完成门；块 1
-        的门存在但 arm 由主链承担——主链先行性 + 构图器 <2 跳过纪律）。
-
-        tile b 的迭代归属：pass 主序全序下，tile b ∈ pass
-        s = (b-1)//tiles_per_pass + 1；体块覆盖迭代 [start_iter,
-        end_iter] ⇔ 门集 = 全部 s ∈ 区间的 tile。"""
-        blocks = []
-        for iteration in range(start_iter, end_iter + 1):
-            gates = []
-            for runtime, participation in credit_members:
-                member_plan = runtime.remote_read_credit_plan
-                tiles_per_pass = member_plan["tiles_per_pass"]
-                tile_count = participation * tiles_per_pass
-                first_tile = (iteration - 1) * tiles_per_pass + 1
-                last_tile = min(iteration * tiles_per_pass, tile_count)
-                if first_tile <= last_tile:
-                    gates.append(CreditGateRange(
-                        runtime.request_id, first_tile,
-                        last_tile - first_tile + 1))
-            blocks.append({
-                "start_iter": iteration,
-                "end_iter": iteration,
-                "weight_passes": 1,
-                "spans": [
-                    plan["pass_spans"][span_index]
-                    for span_iteration, span_index in assignments
-                    if span_iteration == iteration],
-                "gates": CreditGateSet(gates),
-            })
-        return blocks
 
     # --------------------------------------- C5 决策日志 schema（F8 冻结） --
 
@@ -9980,8 +7876,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         """C5（F8 冻结，2026-09-22）：joint_admission 决策行的审计扩展
         字段——可重建"每决策 × 每候选 × 每字段"的完整决策时刻审计流。
 
-        - ``selected_action``：选中动作 ∈ {stay, recompute, remote-read,
-          copy}（v2.8 用户裁定；与既有 joint_action 同值，作显式冗余
+        - ``selected_action``：选中动作 ∈ {stay, recompute, copy}
+          （与既有 joint_action 同值，作显式冗余
           断言位）；
         - ``applicable_actions``：适用动作集（ACTION_ORDER 序、可由
           candidates 导出，显式冗余断言位）；
@@ -10052,12 +7948,12 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # u_port 分解读 C2 注册表（hbm_port_flow_registry.snapshot()，
         # 逐实例取其 rank 端口的最忙值——TP 全 rank 同账下各 rank 同
         # 计数，多传输 rank 子集差异取 max = 约束端口口径）；bulk 名额
-        # 已用/上限与平价门余量读配额 tracker（实例级端口）。配额 off
-        # （缺省）保持 C5 冻结的 "NA" 占位（F8：不缺席）——off 臂决策
-        # 日志与 C11 前逐字节同。
+        # 已用/上限读配额 tracker（实例级端口）。配额 off（缺省）保持
+        # C5 冻结的 "NA" 占位（F8：不缺席）——off 臂决策日志与 C11 前
+        # 逐字节同。（parity_gate_headroom 披露键已随 2026-10-14 远读
+        # 退役删除——端口平价门对象已删，D7/D9。）
         if self._quota_tracker is not None:
             tracker = self._quota_tracker
-            r_hat_kv = self._quota_r_hat_kv_bytes_per_ns()
             rank_snap = self._hbm_ports.snapshot()
             port_snapshot = {
                 "instances": [
@@ -10079,11 +7975,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                                    if rank in rank_snap), default=0)),
                         "bulk_slots_used": tracker.bulk_used(index),
                         "bulk_slots_cap": tracker.n_bulk,
-                        "parity_gate_headroom": (
-                            tracker.port_parity_headroom(
-                                index, r_hat_kv,
-                                u_port_base=len(
-                                    self.instances[index].active_decode))),
                     }
                     for index in sorted(cost_model.loads)
                 ],
@@ -10098,7 +7989,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                         "u_port_total": "NA",
                         "bulk_slots_used": "NA",
                         "bulk_slots_cap": "NA",
-                        "parity_gate_headroom": "NA",
                     }
                     for index in sorted(cost_model.loads)
                 ],
@@ -10403,105 +8293,10 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             frontier[state.index] = int(load_ns)
         return frontier
 
-    def _prefill_remote_read_summary(self, runtime) -> dict:
-        """D16 配合项（修复轮二，2026-09-27）：P 决策行的 prefill 远读
-        有界聚合披露。
-
-        取代旧 ``prefill_remote_read_transfers`` 逐条物化列表（tile 数随
-        U/前缀层无界增长，不得整份进决策行）。兼容读取两种来源、输出
-        **同一 summary 形状**：
-
-        - 物化列表在场（当前形态）：按 ``read_tile`` 窗分桶聚合出
-          window_count/tiles_by_window/tile_count 等模板等价参数；
-        - 有界模板在场（主控 D16 轮二：plan dict 携带 window_count/
-          tiles_per_window|tiles_by_window/tile_bytes/total_bytes/
-          read_prefix_layers/scan_passes 等模板参数、不再物化 transfer
-          列表）：直接按模板构造。
-
-        非前缀读流请求 = present False + 全零/None（键恒在，前向兼容）。
-        scan_passes 缺省回退 ``prefill_remote_read_scan_passes`` 闭式
-        （与准入计价 RequestView.prefill_scan_passes 同源同值）。
-        """
-        transfers = tuple(runtime.prefill_remote_read_transfers or ())
-        plan = runtime.prefill_remote_read_plan
-        total_bytes = int(runtime.prefill_remote_read_bytes or 0)
-        summary = {
-            "present": bool(transfers) or plan is not None,
-            "home_instance": None,
-            "exec_instance": None,
-            "read_prefix_layers": 0,
-            "total_bytes": total_bytes,
-            "tile_count": 0,
-            "window_count": 0,
-            # list（非 tuple）：决策行经 JSON 序列化往返重建（schema 钉
-            # 测 reparsed == row），tuple 会破坏逐字节重建。
-            "tiles_by_window": [],
-            "tile_bytes": 0,
-            "scan_passes": 0,
-        }
-        if not transfers and plan is None:
-            return summary
-        plan_get = plan.get if isinstance(plan, dict) else (lambda *_: None)
-        if transfers:
-            # 兼容模式：物化列表在场——窗分桶聚合（窗序 = chunk 序）。
-            window_buckets = {}
-            for transfer in transfers:
-                window_index = (transfer.read_tile or (0, 0))[0]
-                window_buckets[window_index] = (
-                    window_buckets.get(window_index, 0) + 1)
-            tile_count = len(transfers)
-            summary.update({
-                "home_instance": transfers[0].source_instance_index,
-                "exec_instance": plan_get(
-                    "exec_instance", transfers[0].target_instance_index),
-                "read_prefix_layers": plan_get(
-                    "read_prefix_layers", transfers[-1].layer_end),
-                "tile_count": tile_count,
-                "window_count": len(window_buckets),
-                "tiles_by_window": [
-                    window_buckets[index]
-                    for index in sorted(window_buckets)],
-            })
-        else:
-            # 模板模式：plan dict 携带有界模板参数（无物化列表）。
-            tiles_by_window = plan_get("tiles_by_window")
-            if tiles_by_window is None:
-                tiles_by_window = plan_get("window_tiles")
-            if tiles_by_window is None:
-                window_count = int(
-                    plan_get("window_count", 0)
-                    or (len(plan["windows"])
-                        if isinstance(plan.get("windows"), dict) else 0))
-                per_window = plan_get("tiles_per_window")
-                tiles_by_window = (
-                    [int(per_window)] * window_count
-                    if per_window else [])
-            tiles_by_window = [int(count) for count in tiles_by_window]
-            summary.update({
-                "home_instance": plan_get("home_instance"),
-                "exec_instance": plan_get("exec_instance"),
-                "read_prefix_layers": int(plan_get("read_prefix_layers", 0)),
-                "tile_count": int(
-                    plan_get("tile_count", sum(tiles_by_window))),
-                "window_count": int(
-                    plan_get("window_count", len(tiles_by_window))),
-                "tiles_by_window": tiles_by_window,
-            })
-        summary["total_bytes"] = int(
-            plan_get("total_bytes", total_bytes) or total_bytes)
-        summary["tile_bytes"] = int(plan_get("tile_bytes", 0) or (
-            summary["total_bytes"] // summary["tile_count"]
-            if summary["tile_count"] else 0))
-        summary["scan_passes"] = int(plan_get("scan_passes", 0) or (
-            prefill_remote_read_scan_passes(
-                int(runtime.joint_input_tokens or 0), self.p_chunk,
-                REMOTE_READ_QUERY_TILE_TOKENS)))
-        return summary
-
     def _try_admit_request(self, runtime, now_ns: int) -> bool:
         """joint 准入（设计方案 §1/§2/§7.1）：全 instance 候选（无容量/
         边缘/距离掩码——HBM 只影响动作计价中的驱逐等待，不做准入过滤），
-        联合/顺序选择 instance × stay/recompute/copy/remote-read；选择后
+        联合/顺序选择 instance × stay/recompute/copy；选择后
         物化（预约已知输入 + prepare_prefill 动作 + 入队）。决策输入无
         oracle：runtime.final_context_tokens / decode_length 不进视图。
 
@@ -10566,16 +8361,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         input_kv_shards = kv_cache_shard_bytes_for_tokens(
             self.model, runtime.joint_input_tokens,
             self.kv_manager.tp_degree)
-        # D09（2026-09-26，式 11 与 D07 计价侧同源）：prefill 扫描次数
-        # 按 chunk/query tile 推导供给 JCM（``RequestView.prefill_scan_
-        # passes`` 单一来源 = joint_config.prefill_remote_read_scan_
-        # passes；执行侧 prefill 前缀读流规划消费同一函数同值）。D07
-        # （M1′ 计价侧）：RequestView 另携 chunk/query tile 模板身份
-        # （q_c/p_chunk × REMOTE_READ_QUERY_TILE_TOKENS）——JCM 侧自行
-        # 闭式推导并对本处供给值做一致性校验（两侧模板漂移即拒价）。
-        prefill_scan_passes = prefill_remote_read_scan_passes(
-            runtime.joint_input_tokens, self.p_chunk,
-            REMOTE_READ_QUERY_TILE_TOKENS)
         request_view = RequestView(
             request_id=runtime.request_id,
             session_id=runtime.session_id,
@@ -10584,9 +8369,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             estimated_decode_tokens=int(estimated_decode),
             horizon_source=horizon_source,
             input_kv_bytes_by_tp_rank=tuple(input_kv_shards),
-            prefill_scan_passes=prefill_scan_passes,
-            prefill_chunk_tokens=self.p_chunk,
-            query_tile_tokens=REMOTE_READ_QUERY_TILE_TOKENS,
         )
         # C3（WP1c）→ D08（2026-09-27，v2.0 §13.2 式 16）：decode 计价
         # 上下文/时域不再构造期传参——JCM P 入口现场取 H_z =
@@ -10595,31 +8377,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 现值，与 RequestView.estimated_decode_tokens 同源同刻）；τ 一
         # 次前向服务模板由构造注入，剩余步 K=min(8,n̂) 区段中点折叠。
         cost_model = self._joint_cost_model(now_ns)
-        # W9（§7.4 多源边界）：distributed 跨轮留存会话的片上来源 >1 时，
-        # prefill 前缀读流的**单源协议**（plan_prefill_remote_read_
-        # transfers 以基础锚单 home 规划）不能覆盖多源区间——remote-read
-        # 显式不适用（适用性=物理语义；不静默错读单源）。decode 相
-        # credit plan 已目录多源（C4），不受本门影响。consolidate 缺省
-        # 不进此门。
-        # W10（遗留 2 解除路径，§7.5）：判据从**原始持有者数**细化为
-        # **有效远读源数**——subset copy 等把会话片上内容收敛到单一持有
-        # 者覆盖（重复/被含副本不构成第二有效源）后，单源协议适用性恢
-        # 复；真多源（无单一覆盖者）维持 W9 门（多源前缀读流仍是未实现
-        # 扩展面，显式不适用）。
-        remote_enabled = self.joint_config.remote_enabled
-        if remote_enabled and getattr(
-                _distributed_session, "distributed_layout", False):
-            directory = getattr(self.kv_manager, "kv_directory", None)
-            if directory is not None:
-                holders = {
-                    int(entry.holder)
-                    for entry in directory.entries_for_session(
-                        runtime.session_id)
-                    if entry.is_valid() and not entry.is_pool_backed()}
-                if len(holders) > 1 and (
-                        self._joint_effective_remote_source_count(
-                            runtime.session_id, holders) > 1):
-                    remote_enabled = False
         # 墙时分段（2026-10-05 埋点）：候选枚举遍历段
         # （select_instance_and_action 全候选计价）；premodel 段 =
         # 决策起点（会话视图/条件估计/RequestView/代价模型构建）至
@@ -10631,13 +8388,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             cost_model=cost_model,
             session=session_view,
             request=request_view,
-            remote_enabled=remote_enabled,
             # D03 修复轮二：逐候选目标实例的准备腿发射 frontier（在飞
             # 列车剩余估计；空闲 = 0 = 旧口径）——构图事实对齐。
             prep_frontier_by_instance=self._prep_frontier_by_instance(),
-            pipeline_identity_provider=(
-                self._pipeline_identity_provider(
-                    runtime, cost_model, "P")),
         )
         _admission_enum_elapsed = (
             time.perf_counter_ns() - _admission_enum_t0)
@@ -10717,70 +8470,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._note_action_selection(chosen.action, record.candidates,
                                     session_view)
 
-        # ---- 规格书§二.2（2026-09-25 prefill remote-read 分阶段）：前缀
-        # 读流规划。基形态会话（prepare_prefill 之前）+ 纯规划零副作用
-        # ——置于 reserve 之前，fail-closed raise 不留预约残留。LOCAL 基
-        # = 全层 [0,L) 读流（history_transfers 恒空）；PARTIAL 基 = 前缀
-        # [0,p) 读流（后缀 [p,L) 池恢复仍由 prepare_prefill 产
-        # history_transfers，两腿共享同一准入 frontier 并行分叉）。
-        prefill_read_transfers = ()
-        if chosen.action == "remote-read":
-            base_session = self.kv_manager._sessions.get(runtime.session_id)
-            if base_session is not None:
-                # 与 _preregister_readplan_flows 同守卫：无基础会话时真
-                # 计划亦为 None，无读流可规划（退化防御，正常不可达）。
-                # D09（2026-09-27 逐 tile 化）：读计划按消费窗（chunk）×
-                # tile 切分——扫描次数与 RequestView 供给同源同值（式 11），
-                # 窗分解一致性在规划器内 fail-closed 对账。
-                prefill_read_transfers = (
-                    self.kv_manager.plan_prefill_remote_read_transfers(
-                        base_session, selected, session_view.history_tokens,
-                        runtime.request_id,
-                        scan_passes=prefill_scan_passes,
-                        input_tokens=runtime.joint_input_tokens,
-                        chunk_tokens=self.p_chunk,
-                        query_tile_tokens=REMOTE_READ_QUERY_TILE_TOKENS))
-
-        # ---- D09/D20（2026-09-27 prefill 侧 lease 覆盖）：remote-read 的
-        # 双缓冲暂存自准入起由执行期 lease 持有（预约不叠算暂存分量——
-        # lease 与预约同入真实占用视图，_reserved_bytes_by_tp_rank 无双
-        # 计）；读流存续期间（准入 → 最后 tile 消费 = prefill drain）暂存
-        # 字节恒有 HBM 持有者，其他准入不得挪用双缓冲空间。lease 先于
-        # reserve 登记（容量检查经占用视图见到暂存分量），失败路径（容
-        # 量回退 / 配额入册回滚）随事务一并注销。
-        if prefill_read_transfers:
-            scans_per_window = -(-self.p_chunk // REMOTE_READ_QUERY_TILE_TOKENS)
-            lease_shards, _lease_tile_tokens = (
-                self.kv_manager.prefill_read_window_staging_shards(
-                    history_tokens=session_view.history_tokens,
-                    scans_per_window=scans_per_window))
-            lease_id = self.kv_manager.acquire_staging_lease(
-                runtime.request_id,
-                session_id=runtime.session_id,
-                instance_index=selected,
-                boundary_epoch=runtime.joint_boundary_epoch,
-                staging_shard_bytes=lease_shards,
-                staging_tile_tokens=_lease_tile_tokens)
-            staging_lease = self.kv_manager.staging_lease_for_request(
-                runtime.request_id)
-            if staging_lease is None or staging_lease.lease_id != lease_id:
-                raise RuntimeError(
-                    "staging allocation identity disappeared after acquire")
-            self.log_decision(
-                {"kind": "staging_lease_acquire", "request_id":
-                 runtime.request_id, "priority": 0},
-                now_ns,
-                decision={
-                    "lease_id": lease_id,
-                    "allocation_id": int(staging_lease.allocation_id),
-                    "boundary_epoch": int(runtime.joint_boundary_epoch),
-                    "phase": "prefill_read",
-                    "exec_instance_index": int(selected),
-                    "staging_shard_bytes": list(lease_shards),
-                    "staging_tile_tokens": int(_lease_tile_tokens),
-                    "scans_per_window": int(scans_per_window),
-                })
-
         # ---- 事务段：reserve + prepare（失败零残留，D7）。 ----
         try:
             admission_evictions = self.kv_manager.reserve_request_capacity(
@@ -10805,14 +8494,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 at_ns=now_ns,  # M4：restore issue 事件带发射时刻
             )
         except KVCapacityError as exc:
-            # D09/D20：准入失败回退随事务注销 prefill 读流暂存 lease
-            # （幂等空放安全；不带病持有者回流）。合同类异常（如
-            # reserve 重复预约 ValueError）不在本捕获面——按既有裁定
-            # 整 run abort（online_service 顶层 fatal），lease 残留随
-            # 进程消亡，不回滚（对照 D 边界 pd_boundary_rollback 的
-            # except Exception 面仅覆盖边界窗口）。
-            self._release_staging_lease(
-                runtime, tick=None, reason="admission_capacity_rollback")
             # D7 清账：raise 前已提交的逐出保留（合法释放）但必须补
             # 纪元 bump + 图侧同步；预约未登记（reserve 失败）或已
             # 释放（prepare 失败时事务回滚由 kv_manager 内部保证——
@@ -10878,52 +8559,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 transfer.total_bytes
                 for transfer in history_transfers
                 if transfer.kind != "local_hit")
-        # 规格书§二.1/§二.2（2026-09-25；D09 逐 tile 化 2026-09-27）：前
-        # 缀读流入 runtime 账本——与 history_transfers 严格分离（后缀池恢
-        # 复留 history_transfers；前缀读流不进 history_transfer_bytes /
-        # readiness barrier / merge 账本），owner = rid#prefill_read、
-        # prefill drain 释放。计划摘要锚同 remote_read_credit_plan 形态
-        # （home/exec/前缀层界/字节/逐窗 tile 段）；逐窗 tile 序列按
-        # ``read_tile`` 分桶（列车规划期切片消费窗，不预建图事件）。
-        # 无条件覆盖赋值——quota_link 失败回队重试改选非 remote-read 动
-        # 作时，不残留上一失败事务的前缀读流账本。
-        runtime.prefill_remote_read_transfers = ()
-        runtime.prefill_remote_read_bytes = int(
-            prefill_read_transfers["total_bytes"]) if (
-                isinstance(prefill_read_transfers, dict)) else 0
-        runtime.prefill_remote_read_plan = None
-        if isinstance(prefill_read_transfers, dict):
-            runtime.prefill_remote_read_plan = {
-                "home_instance": (
-                    prefill_read_transfers["home_instance"]),
-                "exec_instance": selected,
-                "read_prefix_layers": (
-                    prefill_read_transfers["read_prefix_layers"]),
-                "total_bytes": runtime.prefill_remote_read_bytes,
-                "tile_count": prefill_read_transfers["tile_count"],
-                # D16 有界模板参数（summary/对账/逐窗物化单一来源）：
-                # 窗序（1 基 = chunk 序）→ 逐窗 tile 数；列车规划期按本
-                # 列车 chunk 组成切窗（窗口游标），逐窗 tile 由
-                # kv_manager.prefill_read_window_tiles 现算（不整轮物化）。
-                "window_count": prefill_read_transfers["window_count"],
-                "tiles_by_window": list(
-                    prefill_read_transfers["tiles_by_window"]),
-                "tile_bytes": prefill_read_transfers["tile_bytes"],
-                "tile_tokens": prefill_read_transfers["tile_tokens"],
-                "kv_token_bytes": (
-                    prefill_read_transfers["kv_token_bytes"]),
-                "scan_passes": prefill_read_transfers["scan_passes"],
-                "template": prefill_read_transfers,
-                "window_cursor": 1,
-            }
-            runtime.pipeline_identity_inputs["prefill"] = {
-                "stage_epoch": int(runtime.joint_boundary_epoch),
-                "staging_allocation_id": int(staging_lease.allocation_id),
-                "target_ranks": tuple(
-                    int(rank) for rank in
-                    prefill_read_transfers["target_ranks"]),
-            }
-
         # D10（v2.0 §6.2，2026-09-26；取代 R13 折算口径）：recompute
         # 语义重定义——P 初始 = 完整 H+U 重放，在线工作描述在准入点
         # 改写（见 _apply_joint_recompute_work_description）。
@@ -10942,39 +8577,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._register_transfer_flows(
             runtime.history_evictions,
             owner=runtime.request_id + "#evict")
-        # 规格书§二.4（2026-09-25）：准入时登记 prefill remote-read 前缀
-        # 读流（owner = rid#prefill_read；prefill drain 释放）。NoC 路径
-        # ＋ home HBM 读端口 + exec HBM 写端口由 _register_transfer_flows
-        # 按 noc_migrate 腿型成对登记。同 tick 后续决策经同一路径集看到
-        # 本笔已提交读流足迹（C8 承诺可见性语义由真实在途流承担）。
-        # serial_credit_stream 折叠（D09 逐 tile 化 2026-09-27）：图发射
-        # 侧是 lag-2 消费驱动的串行 tile 链（tile i+2 生产等 tile i 消
-        # 费完成），同 shard 路径同刻至多 2 tile 在途——按单代表流登记，
-        # 争用除数不随 tile 数虚涨（与 #readplan/#decode#j 同纪律）。
-        # D16 有界模板（修复轮二）：登记源 = 窗 1 的现算 tile（全部窗
-        # 共享同一 (source,target) rank 对与路由，serial 折叠去重下与
-        # 整份列表登记逐位等价——不物化整轮）。
-        if runtime.prefill_remote_read_plan is not None:
-            self._register_transfer_flows(
-                self.kv_manager.prefill_read_window_tiles(
-                    runtime.prefill_remote_read_plan["template"], 1),
-                owner=runtime.request_id + "#prefill_read",
-                serial_credit_stream=True)
-        # C8（WP2-preadmit，§4.1 同 tick 承诺可见性）：选中 remote-read
-        # 即建 est 承诺账本（事务成功路径）——同 tick 串行贪婪的第二笔
-        # 决策（_admit_waiting_requests 循环内后续 _try_admit_request →
-        # _joint_cost_model 读同一张注册表）立即可见第一笔已提交的读流
-        # 足迹。est 时域 = CausalHorizonEstimator 现值（与本次计价同刻
-        # 同源），不确定性经 drain 对账披露。2026-09-25 起准入相注册表
-        # 零登记（#readplan 半边延迟到 drain 对账以真值建立）：prefill
-        # 期间注册表上的远读流 = rid#prefill_read 实流本身——同一条前缀
-        # 读流不得同时被登记为 prefill 流与 decode 流（规格书§二.5，除数
-        # 不双计两阶段）。
-        if chosen.action == "remote-read":
-            self._preregister_readplan_flows(
-                runtime, session_view, selected, estimated_decode)
         # C11（入册半）：选中动作的配额流生命周期入册（oneshot 支链 +
-        # copy 主流程 / remote-read 读流 + merge 义务预留）。入册序与失
+        # copy 主流程）。入册序与失
         # 败分派（O2，2026-09-23 终轮审计）：主流程恒先于逐出支链——判据
         # 时刻本请求逐出足迹不可知（history_evictions 由准入事务产出、
         # 下方事务成功才落账；判据在事务前），探针实证事故链：判据 PASS
@@ -10987,10 +8591,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 and not self._quota_enroll_admission(
                     runtime, session_view, chosen.action, selected, now_ns)):
             # A10'(b)/A11'（2026-09-22，§4.3 补遗）：防御分支回滚——准入
-            # 事务成功段已登记的在途流承诺（owner=rid 历史迁移/逐出支链
-            # ＋ owner=rid#readplan 读流预登记）与 preplan 账目**先行**注销
-            # （可逆半边恒回滚，幂等空放：非 remote-read 路径 #readplan
-            # 半边天然为空），消除"重试改选动作成功前注册表躺着幽灵承诺
+            # 事务成功段已登记的在途流承诺（owner=rid 历史迁移/逐出支链）
+            # **先行**注销
+            # （可逆半边恒回滚，幂等空放），消除"重试改选动作成功前注册表躺着幽灵承诺
             # （除数虚高）"窗口；预约处置随后按物化状态分派——未物化
             # 释放+照常 quota_deferred 回队，已物化 fail-closed（无
             # un-prepare 逆路径，假回队会在重试的重复预约上崩溃，详见
@@ -11060,23 +8663,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "joint_suppress_sampling": runtime.joint_suppress_sampling,
                 "joint_suppress_output": runtime.joint_suppress_output,
                 "origin_home_instance": runtime.origin_home_instance,
-                # 规格书§二.3（2026-09-25）：prefill remote-read 前缀读流
-                # 独立披露（bytes/layers/逐流 shard 摘要；非前缀读流请求
-                # 为 0/0/[]——键恒在，读者前向兼容）。
-                "prefill_remote_read_bytes":
-                    runtime.prefill_remote_read_bytes,
-                "prefill_remote_read_layers": (
-                    runtime.prefill_remote_read_plan["read_prefix_layers"]
-                    if runtime.prefill_remote_read_plan is not None
-                    else 0),
-                # D16 配合项（修复轮二，2026-09-27）：有界聚合披露取代整份
-                # 物化 transfer 列表（逐 tile 明细不进决策行——tile 数随
-                # U/前缀层无界增长；窗口/模板参数足以重建读流形状）。兼容
-                # 读取：物化列表在场按列表聚合、有界模板在场按模板构造，
-                # 两种来源输出同一 summary 形状（见
-                # _prefill_remote_read_summary）。
-                "prefill_remote_read_summary": (
-                    self._prefill_remote_read_summary(runtime)),
                 "horizon_source": horizon_source,
                 "estimated_decode_tokens": int(estimated_decode),
                 # ---- D17（v2.0 §18/D17，2026-09-27）决策行 schema：
@@ -11092,17 +8678,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "decision_epoch": 0,
                 "prefill_instance": selected,
                 # D18 默认延续 π0：初始决策只提交 P，decode 侧按同实例
-                # 默认延续披露（P=remote-read 延续远读、其余本地接续）。
+                # 默认延续披露（本地接续）。
                 "decode_instance": selected,
                 "prefill_action": chosen.action,
-                "decode_action": (
-                    ACTION_REMOTE if chosen.action == ACTION_REMOTE
-                    else ACTION_STAY),
+                "decode_action": ACTION_STAY,
                 "is_continuation": False,
                 "estimated_remaining_decode_steps": int(estimated_decode),
                 "category_mode": self.joint_config.category_mode,
                 "layer_policy": self.joint_config.layer_policy,
-                "remote_enabled": self.joint_config.remote_enabled,
                 # C11：配额模式随行披露（run 级事实，与 category_mode
                 # 等开关键对称；off 臂值恒 "off"）。
                 "quota_mode": self.joint_config.quota_mode,
@@ -11252,11 +8835,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
     def _rollback_admission_registrations(self, runtime) -> None:
         """A10'(b)（2026-09-22，§4.3 补遗）：配额入册失败防御分支的承诺
         回滚——``_release_transfer_flows(rid)``（历史迁移）＋
-        ``_release_transfer_flows(rid#evict)``（准入逐出支链）＋
-        ``_release_transfer_flows(rid#prefill_read)``（prefill 前缀读流，
-        规格书§二.5）＋ ``_release_transfer_flows(rid#readplan)``（C8
-        est 账本对齐的注册表半边，现准入相零登记、幂等空放）＋ 清
-        ``runtime.remote_read_preplan``。调用点 =
+        ``_release_transfer_flows(rid#evict)``（准入逐出支链）。
+        调用点 =
         _quota_enroll_admission 返回 False 的主流程失败防御路径（O2：
         逐出支链失败不入此路径——已按披露降级；主流程需求判据已前瞻、
         单线程内判据与入册间 tracker 零变更，到达此处 = 真异常的安全
@@ -11265,13 +8845,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         （除数不被死承诺虚抬）。"""
         self._release_transfer_flows(runtime.request_id)
         self._release_transfer_flows(runtime.request_id + "#evict")
-        self._release_transfer_flows(runtime.request_id + "#prefill_read")
-        self._release_transfer_flows(runtime.request_id + "#readplan")
-        # D09/D20（2026-09-27）：准入事务已提交的 prefill 读流暂存
-        # lease 随回滚一并注销（重试再准入重新获取；不留死流持有者）。
-        self._release_staging_lease(
-            runtime, tick=None, reason="admission_quota_rollback")
-        runtime.remote_read_preplan = None
 
     def _require_batch_tick(self) -> int:
         """R17-1b tick 守护（kimi N4，2026-09-17）：容量逐出日志行的
@@ -11406,22 +8979,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         （request_hbm_eventually_feasible_instances，动作感知口径）。
 
         M1（kimi 复审，2026-09-14）：按**适用动作集合**过滤（规格 R2.4
-        "逐实例按其适用动作集合的 footprint 逐一判"）——remote-read 仅
-        在其适用面非空时参与判定，否则其 input-only 足迹几乎恒可行，把
-        结构性不可行掩盖为暂时不可行，丢失 KVPhysicalInfeasibleError 的
-        逐 rank 缺口诊断。
-
-        O12（2026-09-23 终轮审计）：remote-read 适用面与 N1(a) 解除
-        （2026-09-17《部分层逐出kv管理改造分析方案》需求①）同步——
-        PARTIAL 基（partial_hbm_remote）remote-read 是合法适用动作
-        （准入相后缀 [p,L) 池恢复物化 + decode 相前缀 [0,p) credit
-        读流，适用性判据与 JCM action_applicability 逐条件同构：
-        joint_cost_model.py）。修前"仅 LOCAL 基参与判定"
-        是 N1(a) 解除前的旧口径残留——PARTIAL 基上 remote-read 为
-        唯一可行动作时，分类器漏判该组合 ⇒ structural_infeasible
-        诊断误报（本应可行的请求被报结构性不可行）。REMOTE 基仍拒
-        （无主 session，裁定③走池恢复/就地重算）；消融开关
-        JOINT_REMOTE_READ_PARTIAL=off 时 PARTIAL 基照旧不进判定。
+        "逐实例按其适用动作集合的 footprint 逐一判"）。
         M2（2026-09-26 消融矩阵前置）：动作掩码 JOINT_ALLOWED_ACTIONS
         同步剔除（第二过滤点，与 JCM applicable_actions 尾部过滤同源
         同开关位）——掩码动作不进物理可行性判定集；掩码把唯一物理可行
@@ -11433,23 +8991,10 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             session_view.history_tokens + runtime.joint_input_tokens)
         detail = []
         any_feasible = False
-        # O12：与 JCM remote_ok 逐条件同构（location ∈ {local_hbm,
-        # partial_hbm_remote} ∧ PARTIAL 受 remote_read_partial 消融 ∧
-        # 有主 resident——resident != target 的逐实例过滤天然内蕴于
-        # 下方逐实例可行性循环）。
-        remote_allowed = (
-            self.joint_config.remote_enabled
-            and session_view.location in (
-                "local_hbm", "partial_hbm_remote")
-            and (session_view.location == "local_hbm"
-                 or self.joint_config.remote_read_partial_enabled)
-            and session_view.resident_instance is not None)
         # M2：掩码放行集（joint_config 单一裁决点派生；"all" = 全集，
         # 无剔除零漂移）。
         allowed_actions = self.joint_config.allowed_action_set
         for action in ACTION_ORDER:
-            if action == "remote-read" and not remote_allowed:
-                continue
             if action not in allowed_actions:
                 # M2：掩码剔除的动作不进判定集（与 JCM applicable_
                 # actions 尾部过滤同源；易漏的第二过滤点）。
@@ -11659,18 +9204,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "joint_prefill_stage": runtime.joint_prefill_stage,
                 "joint_suppress_sampling": runtime.joint_suppress_sampling,
                 "joint_suppress_output": runtime.joint_suppress_output,
-                # 规格书§二.3（2026-09-25）：prefill remote-read 前缀读流
-                # 独立披露（与 history_transfers 分列——前缀读流不进
-                # history_transfer_bytes/readiness barrier/merge 账本）。
-                "prefill_remote_read_bytes":
-                    runtime.prefill_remote_read_bytes,
-                "prefill_remote_read_layers": (
-                    runtime.prefill_remote_read_plan["read_prefix_layers"]
-                    if runtime.prefill_remote_read_plan is not None
-                    else 0),
-                "prefill_remote_read_transfers": [
-                    _transfer_summary(transfer)
-                    for transfer in runtime.prefill_remote_read_transfers],
                 "history_transfers": [
                     _transfer_summary(transfer)
                     for transfer in runtime.history_transfers],
@@ -11761,11 +9294,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             "candidates",
             # W5（§7.1/C5）披露：目标系统共同控制延迟与执行侧提交点
             # 复查面。配置面已一律拒绝正值，0 明确表示 assumed-zero。
-            "control_latency_ns", "control_commit_recheck",
-            # W10 披露：hybrid 选择身份（selected_action_face = 决策面
-            # 动作、hybrid_copy_sources = L；非 hybrid 行 face ==
-            # chosen_action、copy 空——归因与纯四动作分离）。
-            "selected_action_face", "hybrid_copy_sources")
+            "control_latency_ns", "control_commit_recheck")
         if boundary is not None and "forced_by_probe" in boundary:
             boundary_keys = boundary_keys + ("forced_by_probe",)
         if boundary is not None and "causal_prestate" in boundary:
@@ -11810,23 +9339,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "prefill_decode_transfer": (
                     _transfer_summary(runtime.prefill_decode_transfer)
                     if runtime.prefill_decode_transfer else None),
-                # remote-read 有限字节双缓冲（D09 唯一执行口径）：drain
-                # 边界的持久读计划摘要（非 remote-read 恒 None——行
-                # schema 前向兼容）；逐列车切片摘要在 completion 行披露
-                # （每请求恰一处聚合，无逐列车行膨胀）。base_tokens =
-                # 式(18a) 远端基础区间（输入/decode 增量本地读不过 NoC）。
-                "remote_read_credit_plan": (
-                    {
-                        "home_instance": plan["home_instance"],
-                        "steps": plan["steps"],
-                        "base_tokens": plan["base_tokens"],
-                        "read_prefix_layers": plan["read_prefix_layers"],
-                        "tile_tokens": plan["tile_tokens"],
-                        "tiles_per_pass": plan["tiles_per_pass"],
-                        "total_bytes": plan["total_bytes"],
-                    }
-                    if (plan := runtime.remote_read_credit_plan) is not None
-                    else None),
                 "joint_action": runtime.joint_action,
                 "decode_evictions": [
                     _transfer_summary(transfer)
@@ -12336,7 +9848,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 decision=_forecast_status)
         # C11 步骤 4/5（指标埋点收尾行）：决策时延 + 分档动作分布 +
         # quota 等待分列/驻留时长 + AIMD 动作计数——为 C20 预置，本卡
-        # 只埋点不判读；remote-read 选中率按负载档由决策行 load_view
+        # 只埋点不判读；动作选中率按负载档由决策行 load_view
         # 侧导出（不在此预聚合档位）。F6 销账：__init__ 恒设埋点账本
         # ——直接访问（替身漏设 = AttributeError，不再静默跳行）。
         dwell = sorted(self._quota_deferred_dwell_ns)
@@ -12436,24 +9948,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             # res/bulk 间接归零（reserve_merge 恒持双向链路预留 + 双端
             # 口 bulk，预留存活 ⇒ res/bulk 非零必被捉）。
             self._assert_quota_tracker_ledgers_clean()
-        # C8/规格书§二.5 收尾审计：remote-read 读流 owner 泄漏（#readplan
-        # 预登记 est 账本未对账核销 / #prefill_read 未在 prefill drain
-        # 释放，任一环破损即在此报警——失败注入单测的断言位）。置于全
-        # owner 收口之前，使泄漏诊断携带生命周期语义（通用审计兜底）。
-        self._assert_no_readplan_leaks()
-        # D09/D20 收尾审计：执行期双缓冲暂存 lease 全部注销（最后 tile
-        # 消费/完成结算/异常回滚三路收敛；提前注销由 acquire/release 的
-        # 幂等与 fail-closed 守卫把守，此处兜底泄漏半边）——在册非空 =
-        # 生命周期断链，fail-closed。
-        live_staging_leases = self.kv_manager.staging_leases()
-        if live_staging_leases:
-            raise RuntimeError(
-                "double-buffer staging leases leaked past settlement "
-                "(acquire/release lifecycle chain broken): {}".format(
-                    [lease.lease_id for lease in live_staging_leases][:5]))
         # O10③：R15 在途流注册表（链路/池端口/HBM 端口）全 owner 清账
-        # 断言——remote-read 读流半边由上方 _assert_no_readplan_leaks
-        # 先行审计，此处覆盖其余全部 owner（R15 盲区的收口）。
+        # 断言（R15 盲区的收口）。
         self._assert_no_flow_registry_leaks()
         if self.pending_admissions:
             pending_ids = [

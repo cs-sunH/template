@@ -141,10 +141,10 @@ class FarNearRestoreCostTest(unittest.TestCase):
         model = _model({0: _load(0), 1: _load(1)})
         near = model.estimate_P_with_continuation(
             session=_session(), request=_request(), instance_index=0,
-            action="copy", remote_enabled=True)
+            action="copy")
         far = model.estimate_P_with_continuation(
             session=_session(), request=_request(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertTrue(near.applicable and far.applicable)
         # 近实例：两 shard 各 1 跳 → wall = (100 + 10) + max(200, 100,
         # 10) = 310（池端口项主导；除数 1 独立端口）。
@@ -561,7 +561,7 @@ class EstimateEndToEndPinTest(unittest.TestCase):
             instance_ranks=lambda index: (3, 4))
         candidate = model.estimate_P_with_continuation(
             session=_session(), request=_request(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.history_prep_ns, 520)
         self.assertIn("pool_restore_to_target", candidate.breakdown.notes)
@@ -576,7 +576,7 @@ class EstimateEndToEndPinTest(unittest.TestCase):
                            resident=1, prefix=2)
         candidate = model.estimate_P_with_continuation(
             session=session, request=_request(), instance_index=1,
-            action="stay", remote_enabled=True)
+            action="stay")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.history_prep_ns, 100 + 20
                          + 200)

@@ -8,28 +8,12 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/Common.hh"
 #include <cstdint>
-#include <optional>
-#include <string>
 
 namespace AstraSim {
 
 class AstraNetworkAPI {
   public:
     enum class BackendType { NotSpecified = 0, Garnet, NS3, Analytical };
-
-    /// Optional side-band identity for a logically described flow. Backends
-    /// that do not expose flow snapshots may ignore it; it never participates
-    /// in packet matching or scheduling.
-    struct LogicalFlowKey {
-        std::string descriptor_identity;
-        uint64_t generation = 0;
-        uint64_t tile = 0;
-        int rank = -1;
-        uint64_t shard = 0;
-        std::string leg;
-        int tag = 0;
-        int chunk_id = -1;
-    };
 
     /**
      * Opaque identity for one opt-in cancellable backend alarm.
@@ -69,24 +53,6 @@ class AstraNetworkAPI {
                          sim_request* request,
                          void (*msg_handler)(void* fun_arg),
                          void* fun_arg) = 0;
-
-    /// Correlated send defaults to the exact legacy path. Analytical
-    /// congestion-aware backends override this to bind the identity to the
-    /// existing physical FlowId after its ordinary allocation point.
-    virtual int sim_send_correlated(
-        void* buffer,
-        uint64_t count,
-        int type,
-        int dst,
-        int tag,
-        sim_request* request,
-        void (*msg_handler)(void* fun_arg),
-        void* fun_arg,
-        const LogicalFlowKey& key) {
-        static_cast<void>(key);
-        return sim_send(buffer, count, type, dst, tag, request, msg_handler,
-                        fun_arg);
-    }
 
     virtual int sim_recv(void* buffer,
                          uint64_t count,

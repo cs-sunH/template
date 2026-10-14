@@ -104,45 +104,9 @@ bool sorted_uint_array_contains(const Json& row, const char* key,
 }
 
 // ------------------------------------------------------------------- keys --
-
-struct SlotKey {
-    std::string domain;
-    std::string role;             // "source" | "target"
-    std::uint64_t rank = 0;
-    std::int64_t shard = -1;      // -1 encodes Python's null shard ordinal
-    std::uint64_t slot_index = 0;
-
-    bool operator<(const SlotKey& other) const {
-        if (domain != other.domain) return domain < other.domain;
-        if (role != other.role) return role < other.role;
-        if (rank != other.rank) return rank < other.rank;
-        if (shard != other.shard) return shard < other.shard;
-        return slot_index < other.slot_index;
-    }
-    bool operator==(const SlotKey& other) const {
-        return domain == other.domain && role == other.role
-            && rank == other.rank && shard == other.shard
-            && slot_index == other.slot_index;
-    }
-};
-
-struct CreditKey {
-    std::string domain;
-    std::uint64_t source_rank = 0;
-    std::uint64_t shard = 0;
-
-    bool operator<(const CreditKey& other) const {
-        if (domain != other.domain) return domain < other.domain;
-        if (source_rank != other.source_rank) {
-            return source_rank < other.source_rank;
-        }
-        return shard < other.shard;
-    }
-    bool operator==(const CreditKey& other) const {
-        return domain == other.domain && source_rank == other.source_rank
-            && shard == other.shard;
-    }
-};
+// SlotKey/CreditKey/SlotOwner come from TypedRows.hh (shared with the wire
+// codecs and the producer); the stage-local aliases below extend the set
+// with keys that never leave the core.
 
 struct ReadyKey {
     std::string domain;
@@ -200,40 +164,8 @@ struct WaiterKey {
 using CursorRunKey = std::pair<std::string, std::uint64_t>;     // (segment, run)
 using TargetDomainKey = std::pair<std::string, std::uint64_t>;  // (domain, rank)
 
-// _target_owner_tag: the six owner identity fields, frozen for equality.
-struct OwnerTag {
-    std::string segment_id;
-    std::uint64_t pipeline_generation = 0;
-    std::uint64_t stage_epoch = 0;
-    std::uint64_t staging_allocation_id = 0;
-    std::uint64_t group_ordinal = 0;
-    std::uint64_t tile_ordinal = 0;
-
-    bool operator==(const OwnerTag& other) const {
-        return segment_id == other.segment_id
-            && pipeline_generation == other.pipeline_generation
-            && stage_epoch == other.stage_epoch
-            && staging_allocation_id == other.staging_allocation_id
-            && group_ordinal == other.group_ordinal
-            && tile_ordinal == other.tile_ordinal;
-    }
-    bool operator<(const OwnerTag& other) const {
-        if (segment_id != other.segment_id) return segment_id < other.segment_id;
-        if (pipeline_generation != other.pipeline_generation) {
-            return pipeline_generation < other.pipeline_generation;
-        }
-        if (stage_epoch != other.stage_epoch) {
-            return stage_epoch < other.stage_epoch;
-        }
-        if (staging_allocation_id != other.staging_allocation_id) {
-            return staging_allocation_id < other.staging_allocation_id;
-        }
-        if (group_ordinal != other.group_ordinal) {
-            return group_ordinal < other.group_ordinal;
-        }
-        return tile_ordinal < other.tile_ordinal;
-    }
-};
+// _target_owner_tag: the six owner identity fields (shared typed form).
+using OwnerTag = SlotOwner;
 
 using Lineage = std::array<std::uint64_t, 3>;  // (generation, pred_seq, consumed)
 
@@ -832,13 +764,12 @@ std::uint64_t run_endpoint_total(const PipelineEndpointRun& run) {
     return run.tile_count * run.shard_ordinals.size() * run.legs.size();
 }
 
-std::uint64_t cursor_position_ordinal(const Json& row,
+std::uint64_t cursor_position_ordinal(const CursorRun& row,
                                       const PipelineEndpointRun& run) {
     const std::uint64_t shards = run.shard_ordinals.size();
     const std::uint64_t legs = run.legs.size();
-    return row_uint(row, "tile_offset", "cursor run") * shards * legs
-        + row_uint(row, "shard_index", "cursor run") * legs
-        + row_uint(row, "leg_index", "cursor run");
+    return row.tile_offset * shards * legs
+        + row.shard_index * legs + row.leg_index;
 }
 
 std::size_t index_of(const std::vector<std::uint64_t>& values,
@@ -870,38 +801,7 @@ std::uint64_t global_tile_ordinal(const PipelineDescriptor& descriptor,
     return group->tile_axis.global_tile_first + tile_ordinal - 1;
 }
 
-// Slot key from a parsed patch entry (the [domain, role, rank, shard|null,
-// slot] array form of source patches, or the target_delta key object).
-SlotKey parse_slot_key(const Json& key, const std::string& path) {
-    SlotKey out;
-    if (key.is_array()) {
-        if (key.size() != 5) fail(path + " slot key must have five fields");
-        out.domain = read_string(key[0], path + ".key[0]");
-        out.role = read_string(key[1], path + ".key[1]");
-        out.rank = read_rank(key[2], path + ".key[2]");
-        out.shard = key[3].is_null()
-            ? -1
-            : static_cast<std::int64_t>(read_uint(key[3], path + ".key[3]"));
-        out.slot_index = read_uint(key[4], path + ".key[4]", 1);
-        return out;
-    }
-    if (key.is_object()) {
-        out.domain = row_string(key, "buffer_domain_id", path + ".key");
-        out.role = row_string(key, "role", path + ".key");
-        out.rank = read_rank(row_field(key, "rank", path + ".key"),
-                             path + ".key.rank");
-        const Json& shard = row_field(key, "shard_ordinal", path + ".key");
-        out.shard = shard.is_null()
-            ? -1
-            : static_cast<std::int64_t>(
-                  read_uint(shard, path + ".key.shard_ordinal"));
-        out.slot_index = read_uint(
-            row_field(key, "slot_index", path + ".key"),
-            path + ".key.slot_index", 1);
-        return out;
-    }
-    fail(path + " slot key must be an array or object");
-}
+
 
 }  // namespace
 
@@ -915,18 +815,19 @@ struct PreparedUpdate {
     std::unordered_map<std::string, DescriptorPtr> descriptor_additions;
     std::unordered_map<std::string, Json> descriptor_state_updates;
     std::vector<std::string> descriptor_retirements;
-    std::map<CursorRunKey, std::optional<Json>> cursor_changes;
+    std::map<CursorRunKey, std::optional<CursorRun>> cursor_changes;
     std::unordered_map<std::string, std::uint64_t> cursor_version_updates;
-    std::map<CursorRunKey, std::optional<std::map<std::uint64_t, Json>>>
+    std::map<CursorRunKey,
+              std::optional<std::map<std::uint64_t, ActiveEndpoint>>>
         cursor_transfer_changes;
     std::unordered_map<std::string, std::int64_t> active_endpoint_deltas;
-    std::vector<Json> resources;
-    std::map<SlotKey, std::optional<Json>> slot_changes;
+    std::vector<ResourceRow> resources;
+    std::map<SlotKey, std::optional<SlotRow>> slot_changes;
     std::map<SlotKey, Lineage> target_slot_lineage_changes;
-    std::map<ReadyKey, std::optional<OwnerTag>> target_ready_changes;
+    std::map<ReadyKey, std::optional<SlotOwner>> target_ready_changes;
     std::unordered_map<std::uint64_t, CompletedPtr> terminal_provenance_updates;
-    std::map<CreditKey, std::optional<Json>> credit_changes;
-    std::map<std::string, std::optional<Json>> obligation_changes;
+    std::map<CreditKey, std::optional<CreditRow>> credit_changes;
+    std::map<std::string, std::optional<ObligationRow>> obligation_changes;
     std::unordered_map<std::string, std::int64_t> slot_owner_deltas;
     std::map<CreditKey, std::int64_t> source_occupancy_deltas;
     std::map<TargetDomainKey, std::int64_t> target_occupancy_deltas;
@@ -970,10 +871,10 @@ struct PipelineStageState {
         unfinished_dependency_waiters_by_endpoint;
     std::unordered_map<std::string, Json> descriptor_state;
     std::set<std::string> active_segments;
-    std::unordered_map<std::string, std::map<std::uint64_t, Json>>
+    std::unordered_map<std::string, std::map<std::uint64_t, CursorRun>>
         cursor_runs_by_segment;
     std::unordered_map<std::string, std::uint64_t> cursor_versions_by_segment;
-    std::map<CursorRunKey, std::map<std::uint64_t, Json>>
+    std::map<CursorRunKey, std::map<std::uint64_t, ActiveEndpoint>>
         active_transfers_by_run;
     std::unordered_map<std::uint64_t, std::int64_t> active_transfer_id_counts;
     std::set<std::uint64_t> active_transfer_ids;
@@ -982,12 +883,12 @@ struct PipelineStageState {
     std::map<ReleaseKey, std::uint64_t> source_release_watermarks;
     std::unordered_map<std::string, std::set<ReleaseKey>>
         release_watermark_keys_by_domain;
-    std::vector<Json> active_resources;
-    std::map<SlotKey, Json> slots_by_key;
+    std::vector<ResourceRow> active_resources;
+    std::map<SlotKey, SlotRow> slots_by_key;
     std::map<SlotKey, Lineage> target_slot_lineage;
-    std::map<ReadyKey, OwnerTag> target_ready_shards_by_slot;
-    std::map<CreditKey, Json> credits_by_key;
-    std::map<std::string, Json> obligations_by_id;
+    std::map<ReadyKey, SlotOwner> target_ready_shards_by_slot;
+    std::map<CreditKey, CreditRow> credits_by_key;
+    std::map<std::string, ObligationRow> obligations_by_id;
     std::unordered_map<std::string, std::int64_t> slot_owner_counts;
     std::map<CreditKey, std::int64_t> source_occupancy;
     std::map<TargetDomainKey, std::int64_t> target_occupancy;
@@ -1050,14 +951,14 @@ namespace {
 // ------------------------------------------------------------ staging core --
 
 struct TargetWorkset {
-    std::optional<Json> row;      // nullopt = Python None
+    std::optional<SlotRow> row;   // nullopt = Python None
     std::set<std::uint64_t> consumed;
     std::int64_t remaining = 0;
     std::int64_t non_target_count = 0;
 };
 
 struct CursorProgress {
-    Json row;                     // accepted (or initial) run row
+    CursorRun row;                // accepted (or initial) run row
     const PipelineEndpointRun* run = nullptr;
     DescriptorPtr descriptor;     // keeps *run alive
     std::uint64_t total = 0;
@@ -1068,8 +969,9 @@ struct CursorProgress {
     CompletedPtr ooo_root;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> ooo_wire_ranges;
     bool ooo_changed = false;
-    std::map<std::uint64_t, std::pair<std::uint64_t, std::optional<Json>>>
-        active;                   // store_id -> (ordinal, endpoint row|None)
+    std::map<std::uint64_t, std::pair<std::uint64_t,
+                                      std::optional<ActiveEndpoint>>>
+        active;                   // store_id -> (ordinal, endpoint|None)
     std::uint64_t position = 0;
     bool closed = false;
 };
@@ -1124,12 +1026,12 @@ private:
     std::unordered_map<std::uint64_t, DependencyPtr>
         dependency_rank_root_changes_;
 
-    RowOverlay<SlotKey, Json> slot_overlay_;
+    RowOverlay<SlotKey, SlotRow> slot_overlay_;
     std::map<SlotKey, TargetWorkset> target_worksets_;
     std::map<SlotKey, Lineage> target_slot_lineage_changes_;
     RowOverlay<ReadyKey, OwnerTag> target_ready_overlay_;
-    RowOverlay<CreditKey, Json> credit_overlay_;
-    RowOverlay<std::string, Json> obligation_overlay_;
+    RowOverlay<CreditKey, CreditRow> credit_overlay_;
+    RowOverlay<std::string, ObligationRow> obligation_overlay_;
     HashCountOverlay<std::string> slot_owner_counts_;
     CountOverlay<CreditKey> source_occupancy_;
     CountOverlay<TargetDomainKey> target_occupancy_;
@@ -1168,16 +1070,19 @@ private:
         descriptor_transition_counts_;
     std::set<CursorRunKey> cursor_dirty_;
     std::map<CursorRunKey, CursorProgress> cursor_sims_;
-    std::map<CursorRunKey, std::optional<Json>> cursor_changes_;
+    std::map<CursorRunKey, std::optional<CursorRun>> cursor_changes_;
     std::unordered_map<std::string, std::uint64_t> cursor_version_updates_;
-    std::map<CursorRunKey, std::optional<std::map<std::uint64_t, Json>>>
+    std::map<CursorRunKey,
+             std::optional<std::map<std::uint64_t, ActiveEndpoint>>>
         cursor_transfer_changes_;
     std::unordered_map<std::string, std::int64_t> active_endpoint_deltas_;
     std::unordered_map<std::string, std::int64_t> cursor_active_deltas_;
-    std::map<std::string, std::optional<Json>> expected_obligation_rows_;
+    std::map<std::string, std::optional<ObligationRow>>
+        expected_obligation_rows_;
     std::unordered_map<std::string, std::uint64_t> resource_counts_;
     std::set<std::string> domain_retirements_;
-    std::unordered_map<std::string, const Json*> parsed_cursor_patches_;
+    std::unordered_map<std::string, const CursorPatch*>
+        parsed_cursor_patches_;
     std::unordered_map<std::string, std::set<std::uint64_t>>
         parsed_cursor_patch_run_indexes_;
     std::set<std::pair<std::uint64_t, std::uint64_t>> node_terminal_frontier_;
@@ -1382,7 +1287,7 @@ private:
     std::optional<std::uint64_t> first_pending_store(
         const PipelineDescriptor& descriptor, std::uint64_t run_index,
         const CursorProgress& progress);
-    std::optional<Json> expected_obligation(
+    std::optional<ObligationRow> expected_obligation(
         const PipelineDescriptor& descriptor, const std::string& segment,
         std::uint64_t run_index, const CursorProgress& progress);
     void merge_completion_range(CursorProgress& progress, std::uint64_t first,
@@ -1421,84 +1326,69 @@ private:
                                     CursorProgress& progress,
                                     const std::string& segment,
                                     std::uint64_t run_index,
-                                    const Json& run_transition);
+                                    const PipelineRun& run_transition);
     std::optional<SelectedEndpoint> selected_slot_and_credit(
-        const PipelineDescriptor& descriptor, const Json& transition) {
-        const Json& selector =
-            row_field(transition, "endpoint_selector", "pipeline run");
-        if (selector.is_null()) return std::nullopt;
-        const auto run_index =
-            row_opt_uint(transition, "endpoint_run_index", "pipeline run");
-        if (!run_index || *run_index >= descriptor.endpoint_runs.size()) {
+        const PipelineDescriptor& descriptor, const PipelineRun& run) {
+        if (!run.have_selector || !run.has_endpoint_run_index) {
+            return std::nullopt;
+        }
+        if (run.endpoint_run_index >= descriptor.endpoint_runs.size()) {
             fail("pipeline run selector references an unknown endpoint run");
         }
         SelectedEndpoint selected;
-        selected.run = &descriptor.endpoint_runs[*run_index];
-        selected.global_tile_ordinal = row_uint(
-            transition, "_selected_global_tile_ordinal", "pipeline run");
-        const Json& shard =
-            row_field(transition, "_selected_shard_tile", "pipeline run");
-        selected.shard.shard_ordinal = row_uint(
-            shard, "shard_ordinal", "pipeline run._selected_shard_tile");
-        selected.shard.source_rank =
-            row_uint(shard, "source_rank", "pipeline run._selected_shard_tile");
-        selected.shard.target_rank =
-            row_uint(shard, "target_rank", "pipeline run._selected_shard_tile");
-        selected.shard.data_bytes =
-            row_uint(shard, "data_bytes", "pipeline run._selected_shard_tile");
-        selected.shard.emit_endpoint = row_bool(
-            shard, "emit_endpoint", "pipeline run._selected_shard_tile");
-        const auto leg_index =
-            row_opt_uint(transition, "endpoint_leg_index", "pipeline run");
-        if (!leg_index || *leg_index >= selected.run->legs.size()) {
+        selected.run = &descriptor.endpoint_runs[run.endpoint_run_index];
+        selected.global_tile_ordinal = run.has_selected_global_tile_ordinal
+            ? run.selected_global_tile_ordinal : 0;
+        if (run.has_selected_shard_tile) {
+            selected.shard.shard_ordinal =
+                run.selected_shard_tile.shard_ordinal;
+            selected.shard.source_rank = run.selected_shard_tile.source_rank;
+            selected.shard.target_rank = run.selected_shard_tile.target_rank;
+            selected.shard.data_bytes = run.selected_shard_tile.data_bytes;
+            selected.shard.emit_endpoint =
+                run.selected_shard_tile.emit_endpoint;
+        }
+        if (!run.has_endpoint_leg_index
+                || run.endpoint_leg_index >= selected.run->legs.size()) {
             fail("pipeline run selector references an unknown endpoint leg");
         }
-        selected.endpoint = selected.run->legs[*leg_index].endpoint;
+        selected.endpoint =
+            selected.run->legs[run.endpoint_leg_index].endpoint;
         return selected;
     }
 
     // -------------------------------------------------- slot/credit rows --
 
-    void add_row_aggregate(const Json& row, std::int64_t sign) {
-        const std::string domain =
-            row_string(row, "buffer_domain_id", "slot row");
-        slot_row_counts_.add(domain, sign);
-        if (!row_bool(row, "occupied", "slot row")) return;
-        const Json& owner = row_field(row, "owner", "slot row");
-        slot_owner_counts_.add(
-            row_string(owner, "segment_id", "slot row.owner"), sign);
-        if (row_string(row, "role", "slot row") == "source") {
+    void add_row_aggregate(const SlotRow& row, std::int64_t sign) {
+        slot_row_counts_.add(row.domain, sign);
+        if (!row.occupied) return;
+        slot_owner_counts_.add(row.owner->segment_id, sign);
+        if (row.role_source) {
             source_occupancy_.add(
-                CreditKey{domain, row_uint(row, "rank", "slot row"),
-                          row_uint(row, "shard_ordinal", "slot row")},
-                sign);
+                CreditKey{row.domain, row.rank, row.shard}, sign);
         } else {
-            target_occupancy_.add(
-                TargetDomainKey{domain, row_uint(row, "rank", "slot row")},
-                sign);
+            target_occupancy_.add(TargetDomainKey{row.domain, row.rank}, sign);
         }
     }
 
     TargetWorkset* target_workset_for(const SlotKey& key);
-    const Json* current_target_row(const SlotKey& key) {
+    const SlotRow* current_target_row(const SlotKey& key) {
         const auto workset = target_worksets_.find(key);
         if (workset != target_worksets_.end()) {
             return workset->second.row ? &*workset->second.row : nullptr;
         }
         return slot_overlay_.get_raw(key);
     }
-    static Json target_row_empty(const SlotKey& key) {
-        Json row = Json::object();
-        row["buffer_domain_id"] = key.domain;
-        row["role"] = "target";
-        row["rank"] = key.rank;
-        row["shard_ordinal"] = nullptr;
-        row["slot_index"] = key.slot_index;
-        row["occupied"] = false;
-        row["owner"] = nullptr;
-        row["consumed"] = false;
-        row["target_shards_to_consume"] = Json::array();
-        row["consumed_target_shards"] = Json::array();
+    static SlotRow target_row_empty(const SlotKey& key) {
+        SlotRow row;
+        row.domain = key.domain;
+        row.role_source = false;   // "target"
+        row.rank = key.rank;
+        row.has_shard = false;
+        row.shard = 0;
+        row.slot_index = key.slot_index;
+        row.occupied = false;
+        row.consumed = false;
         return row;
     }
     Lineage target_lineage(const SlotKey& key) const {
@@ -1511,34 +1401,36 @@ private:
         return Lineage{0, 0, 0};
     }
     std::vector<std::uint64_t> claim_target_members(
-        const Json& owner, const SlotKey& key,
+        const SlotOwner& owner, const SlotKey& key,
         const std::vector<std::uint64_t>& declared);
     std::vector<std::uint64_t> consume_delta_members(
         const TargetWorkset& workset,
         const PipelineDescriptor& owner_descriptor, const std::string& segment,
-        const Json& cause);
+        const TargetOp& cause);
     bool prove_target_consume_clear(
-        const Json& row, const PipelineDescriptor& owner_descriptor,
+        const SlotRow& row, const PipelineDescriptor& owner_descriptor,
         const std::optional<SelectedEndpoint>& selected,
-        const Json& transition);
+        const PipelineRun& run);
     std::set<TargetDomainKey> apply_target_delta(
-        const Json& transition, const PipelineDescriptor& descriptor,
-        const std::optional<SelectedEndpoint>& selected, const Json& delta);
+        const PipelineRun& run, const PipelineDescriptor& descriptor,
+        const std::optional<SelectedEndpoint>& selected,
+        const SlotPatch& delta);
     std::pair<std::set<CreditKey>, std::set<TargetDomainKey>>
-    apply_slot_patches(const Json& transition,
+    apply_slot_patches(const PipelineRun& run,
                        const PipelineDescriptor& descriptor,
                        const std::optional<SelectedEndpoint>& selected);
     std::set<CreditKey> apply_credit_patches(
-        const Json& transition, const PipelineDescriptor& descriptor,
+        const PipelineRun& run, const PipelineDescriptor& descriptor,
         const std::pair<std::optional<CreditKey>, std::int64_t>& expected_ack);
     void apply_obligation_patches(
-        const Json& transition,
-        const std::map<std::string, std::optional<Json>>& required_expected);
+        const PipelineRun& run,
+        const std::map<std::string, std::optional<ObligationRow>>&
+            required_expected);
     void verify_credit_balance(const std::set<CreditKey>& keys,
                                const std::set<TargetDomainKey>& target_keys) {
         for (const CreditKey& key : keys) {
             const std::int64_t occupancy = source_occupancy_.get(key);
-            const Json* credit = credit_overlay_.get_raw(key);
+            const CreditRow* credit = credit_overlay_.get_raw(key);
             if (occupancy < 0 || occupancy > 2) {
                 fail("source pipeline slot occupancy exceeds two-slot capacity");
             }
@@ -1548,14 +1440,13 @@ private:
                 }
                 continue;
             }
-            const std::string path = "credit row";
-            if (row_uint(*credit, "capacity", path) != 2
-                    || row_uint(*credit, "available", path)
+            if (credit->capacity != 2
+                    || credit->available
                            != 2 - static_cast<std::uint64_t>(occupancy)) {
                 fail("source credit balance does not match occupied slots");
             }
             if (static_cast<std::int64_t>(
-                    row_uint(*credit, "outstanding_ack_count", path)) < 0) {
+                    credit->outstanding_ack_count) < 0) {
                 fail("source outstanding ACK count underflow");
             }
         }
@@ -1567,12 +1458,12 @@ private:
         }
     }
     std::optional<std::string> simulate_issue_or_completion(
-        const Json& run_transition, CursorProgress& progress,
+        const PipelineRun& run_transition, CursorProgress& progress,
         const std::string& segment, std::uint64_t run_index);
-    void run_transition_row(const Json& transition);
+    void run_transition_row(const PipelineRun& run);
     void finalize();
-    Json initial_cursor_run(const PipelineDescriptor& descriptor,
-                            std::uint64_t run_index);
+    CursorRun initial_cursor_run(const PipelineDescriptor& descriptor,
+                                 std::uint64_t run_index);
 };
 
 }  // namespace
@@ -1580,8 +1471,8 @@ private:
 // ------------------------------------------ StageDelivery member functions --
 
 // _initial_cursor_run (pipeline_ledger.py 1215-1265).
-Json StageDelivery::initial_cursor_run(const PipelineDescriptor& descriptor,
-                                       std::uint64_t run_index) {
+CursorRun StageDelivery::initial_cursor_run(
+        const PipelineDescriptor& descriptor, std::uint64_t run_index) {
     const PipelineEndpointRun& run = descriptor.endpoint_runs[run_index];
     const std::size_t shard_count = run.shard_ordinals.size();
     const std::size_t leg_count = run.legs.size();
@@ -1624,23 +1515,23 @@ Json StageDelivery::initial_cursor_run(const PipelineDescriptor& descriptor,
             run.shard_ordinals[shard_index_out],
             static_cast<std::size_t>(leg_index_out)) + 1;
     }
-    Json row = Json::object();
-    row["rank"] = run.rank;
-    row["group_ordinal"] = run.group_ordinal;
-    row["first_tile"] = run.first_tile;
-    row["tile_count"] = run.tile_count;
-    row["completed_endpoint_count"] = prefix;
-    row["cancelled_endpoint_count"] = 0;
-    row["remaining_endpoint_count"] = total - prefix;
-    row["in_flight"] = false;
-    row["next_store_id"] = next_store ? Json(*next_store) : Json(nullptr);
-    row["tile_offset"] = tile_offset;
-    row["shard_index"] = shard_index_out;
-    row["leg_index"] = leg_index_out;
-    row["initial_parent_store_id"] = run.initial_parent_json_id
-        ? Json(*run.initial_parent_json_id + 1) : Json(nullptr);
-    row["completed_out_of_order"] = Json::array();
-    row["active_endpoints"] = Json::array();
+    CursorRun row;
+    row.rank = run.rank;
+    row.group_ordinal = run.group_ordinal;
+    row.first_tile = run.first_tile;
+    row.tile_count = run.tile_count;
+    row.completed_endpoint_count = prefix;
+    row.cancelled_endpoint_count = 0;
+    row.remaining_endpoint_count = total - prefix;
+    row.in_flight = false;
+    row.has_next_store = next_store.has_value();
+    row.next_store_id = next_store.value_or(0);
+    row.tile_offset = tile_offset;
+    row.shard_index = shard_index_out;
+    row.leg_index = leg_index_out;
+    row.has_initial_parent = run.initial_parent_json_id.has_value();
+    row.initial_parent_store_id =
+        run.initial_parent_json_id ? *run.initial_parent_json_id + 1 : 0;
     return row;
 }
 
@@ -1758,89 +1649,70 @@ CursorProgress& StageDelivery::seed_cursor_progress(
     if (!descriptor || run_index >= descriptor->endpoint_runs.size()) {
         fail("cursor run references unknown descriptor extent");
     }
-    Json row;
+    bool present = false;
+    CursorRun row;
     if (additions_.count(segment) != 0) {
         row = initial_cursor_run(*descriptor, run_index);
+        present = true;
     } else {
         const auto runs = st_.cursor_runs_by_segment.find(segment);
         if (runs != st_.cursor_runs_by_segment.end()) {
             const auto found = runs->second.find(run_index);
-            if (found != runs->second.end()) row = found->second;
+            if (found != runs->second.end()) {
+                row = found->second;
+                present = true;
+            }
         }
-        if (row.is_null()) {
-            fail("active descriptor cursor run is absent from accepted state");
-        }
+    }
+    if (!present) {
+        fail("active descriptor cursor run is absent from accepted state");
     }
     const PipelineEndpointRun& run = descriptor->endpoint_runs[run_index];
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> original_ooo;
-    {
-        const Json& ooo = row_field(row, "completed_out_of_order", "cursor run");
-        if (!ooo.is_array()) {
-            fail("cursor run completed_out_of_order must be an array");
-        }
-        for (const Json& item : ooo) {
-            original_ooo.emplace_back(
-                row_uint(item, "first_ordinal",
-                         "cursor run.completed_out_of_order"),
-                row_uint(item, "end_ordinal_exclusive",
-                         "cursor run.completed_out_of_order"));
-        }
-    }
-    const auto built = completed_build_from_half_open(original_ooo);
-    std::map<std::uint64_t, std::pair<std::uint64_t, std::optional<Json>>>
+    const auto built = completed_build_from_half_open(
+        row.completed_out_of_order);
+    std::map<std::uint64_t, std::pair<std::uint64_t,
+                                      std::optional<ActiveEndpoint>>>
         active;
-    {
-        const Json& endpoints = row_field(row, "active_endpoints", "cursor run");
-        if (!endpoints.is_array()) {
-            fail("cursor run active_endpoints must be an array");
+    for (const ActiveEndpoint& endpoint : row.active_endpoints) {
+        const std::uint64_t local_tile = endpoint.tile_ordinal - run.first_tile;
+        const std::size_t shard_index =
+            index_of(run.shard_ordinals, endpoint.shard_ordinal);
+        if (shard_index == run.shard_ordinals.size()) {
+            fail("cursor active endpoint shard is absent from its run");
         }
-        for (const Json& endpoint : endpoints) {
-            const std::string path = "cursor run.active_endpoints[]";
-            const std::uint64_t local_tile =
-                row_uint(endpoint, "tile_ordinal", path) - run.first_tile;
-            const std::uint64_t shard_ordinal =
-                row_uint(endpoint, "shard_ordinal", path);
-            const std::size_t shard_index =
-                index_of(run.shard_ordinals, shard_ordinal);
-            if (shard_index == run.shard_ordinals.size()) {
-                fail("cursor active endpoint shard is absent from its run");
+        std::size_t leg_index = run.legs.size();
+        for (std::size_t i = 0; i < run.legs.size(); ++i) {
+            if (run.legs[i].endpoint == endpoint.endpoint) {
+                leg_index = i;
+                break;
             }
-            const std::string endpoint_name =
-                row_string(endpoint, "endpoint", path);
-            std::size_t leg_index = run.legs.size();
-            for (std::size_t i = 0; i < run.legs.size(); ++i) {
-                if (run.legs[i].endpoint == endpoint_name) {
-                    leg_index = i;
-                    break;
-                }
-            }
-            if (leg_index == run.legs.size()) {
-                fail("cursor active endpoint leg is absent from its run");
-            }
-            const std::uint64_t ordinal =
-                local_tile * run.shard_ordinals.size() * run.legs.size()
-                + shard_index * run.legs.size() + leg_index;
-            active[row_uint(endpoint, "store_id", path)] =
-                std::make_pair(ordinal, std::optional<Json>(endpoint));
         }
+        if (leg_index == run.legs.size()) {
+            fail("cursor active endpoint leg is absent from its run");
+        }
+        const std::uint64_t ordinal =
+            local_tile * run.shard_ordinals.size() * run.legs.size()
+            + shard_index * run.legs.size() + leg_index;
+        active[endpoint.store_id] =
+            std::make_pair(ordinal, std::optional<ActiveEndpoint>(endpoint));
     }
     CursorProgress progress;
-    progress.row = row;
+    progress.row = std::move(row);
     progress.run = &run;
     progress.descriptor = descriptor;
     progress.total = run_endpoint_total(run);
-    progress.completed =
-        row_uint(row, "completed_endpoint_count", "cursor run");
+    progress.completed = progress.row.completed_endpoint_count;
     progress.completed_total = progress.completed + built.second;
-    progress.cancelled =
-        row_uint(row, "cancelled_endpoint_count", "cursor run");
-    progress.remaining =
-        row_uint(row, "remaining_endpoint_count", "cursor run");
+    progress.cancelled = progress.row.cancelled_endpoint_count;
+    progress.remaining = progress.row.remaining_endpoint_count;
     progress.ooo_root = built.first;
-    progress.ooo_wire_ranges = original_ooo;
+    progress.ooo_wire_ranges = progress.row.completed_out_of_order;
     progress.ooo_changed = false;
     progress.active = std::move(active);
-    progress.position = cursor_position_ordinal(row, run);
+    progress.position = progress.row.tile_offset
+        * run.shard_ordinals.size() * run.legs.size()
+        + progress.row.shard_index * run.legs.size()
+        + progress.row.leg_index;
     const Json& state = current_state(segment);
     progress.closed = state_flag(state, "request_closed");
     return cursor_sims_.emplace(key, std::move(progress)).first->second;
@@ -1927,7 +1799,7 @@ std::optional<std::uint64_t> StageDelivery::first_pending_store(
 }
 
 // expected_obligation (pipeline_ledger.py 2929-2948).
-std::optional<Json> StageDelivery::expected_obligation(
+std::optional<ObligationRow> StageDelivery::expected_obligation(
     const PipelineDescriptor& descriptor, const std::string& segment,
     std::uint64_t run_index, const CursorProgress& progress) {
     const std::int64_t remaining = progress.closed
@@ -1942,13 +1814,14 @@ std::optional<Json> StageDelivery::expected_obligation(
     if (!first_store_id) {
         fail("unfinished cursor run has no first unresolved endpoint");
     }
-    Json row = Json::object();
-    row["obligation_id"] = segment + "/run/" + num(run_index);
-    row["segment_id"] = segment;
-    row["rank"] = run.rank;
-    row["first_store_id"] = *first_store_id;
-    row["remaining_endpoint_count"] = static_cast<std::uint64_t>(remaining);
-    row["state"] = progress.active.empty() ? "pending" : "active";
+    ObligationRow row;
+    row.obligation_id = segment + "/run/" + num(run_index);
+    row.segment_id = segment;
+    row.rank = run.rank;
+    row.first_store_id = *first_store_id;
+    row.remaining_endpoint_count = static_cast<std::uint64_t>(remaining);
+    row.state = progress.active.empty() ? ObligationState::Pending
+                                        : ObligationState::Active;
     return row;
 }
 
@@ -1956,7 +1829,7 @@ std::optional<Json> StageDelivery::expected_obligation(
 void StageDelivery::advance_inactive_positions(
     const PipelineDescriptor& descriptor, CursorProgress& progress,
     const std::string& segment, std::uint64_t run_index,
-    const Json& run_transition) {
+    const PipelineRun& run_transition) {
     if (progress.position >= progress.total) return;
     const PipelineEndpointRun& run = *progress.run;
     const std::size_t shard_count = run.shard_ordinals.size();
@@ -1968,13 +1841,12 @@ void StageDelivery::advance_inactive_positions(
     const std::uint64_t tile_end =
         std::min(progress.total, tile_start + per_tile);
     const std::uint64_t skipped_start = progress.position;
-    const Json& transition_selector =
-        row_field(run_transition, "endpoint_selector", "pipeline run");
-    const Json* transition_shard_facts = nullptr;
-    {
-        const Json& facts =
-            row_field(run_transition, "_selected_shard_tile", "pipeline run");
-        if (!facts.is_null()) transition_shard_facts = &facts;
+    const bool have_selector = run_transition.have_selector;
+    const EndpointSelector& transition_selector =
+        run_transition.endpoint_selector;
+    const ShardTileFacts* transition_shard_facts = nullptr;
+    if (run_transition.has_selected_shard_tile) {
+        transition_shard_facts = &run_transition.selected_shard_tile;
     }
     while (progress.position < tile_end) {
         const std::uint64_t within = progress.position - tile_start;
@@ -1992,20 +1864,13 @@ void StageDelivery::advance_inactive_positions(
                 run.first_tile + tile_offset;
             bool matched = false;
             bool emit_endpoint = false;
-            if (!transition_selector.is_null()
-                    && transition_shard_facts != nullptr
-                    && row_uint(transition_selector, "group_ordinal",
-                                "pipeline run.endpoint_selector")
-                           == run.group_ordinal
-                    && row_uint(transition_selector, "tile_ordinal",
-                                "pipeline run.endpoint_selector")
+            if (have_selector && transition_shard_facts != nullptr
+                    && transition_selector.group_ordinal == run.group_ordinal
+                    && transition_selector.tile_ordinal
                            == candidate_tile_ordinal
-                    && row_uint(transition_selector, "shard_ordinal",
-                                "pipeline run.endpoint_selector")
-                           == shard_ordinal) {
+                    && transition_selector.shard_ordinal == shard_ordinal) {
                 matched = true;
-                emit_endpoint = row_bool(*transition_shard_facts,
-                                         "emit_endpoint", "pipeline run");
+                emit_endpoint = transition_shard_facts->emit_endpoint;
             }
             if (!matched) {
                 emit_endpoint = descriptor.selected_shard_tile(
@@ -2063,19 +1928,17 @@ void StageDelivery::advance_inactive_positions(
 TargetWorkset* StageDelivery::target_workset_for(const SlotKey& key) {
     const auto existing = target_worksets_.find(key);
     if (existing != target_worksets_.end()) return &existing->second;
-    const Json* row = slot_overlay_.get_raw(key);
+    const SlotRow* row = slot_overlay_.get_raw(key);
     if (row == nullptr) return nullptr;
-    if (row_string(*row, "role", "slot row") != "target") {
+    if (row->role_source) {
         fail("target delta addresses a source slot");
     }
     TargetWorkset workset;
-    for (const std::uint64_t shard :
-         row_uint_array(*row, "consumed_target_shards", "slot row")) {
+    for (const std::uint64_t shard : row->consumed_target_shards) {
         workset.consumed.insert(shard);
     }
-    workset.remaining =
-        static_cast<std::int64_t>(
-            row_uint_array(*row, "target_shards_to_consume", "slot row").size())
+    workset.remaining = static_cast<std::int64_t>(
+                            row->target_shards_to_consume.size())
         - static_cast<std::int64_t>(workset.consumed.size());
     workset.row = *row;
     return &target_worksets_.emplace(key, std::move(workset)).first->second;
@@ -2083,10 +1946,9 @@ TargetWorkset* StageDelivery::target_workset_for(const SlotKey& key) {
 
 // _claim_target_members (pipeline_ledger.py 3110-3151).
 std::vector<std::uint64_t> StageDelivery::claim_target_members(
-    const Json& owner, const SlotKey& key,
+    const SlotOwner& owner, const SlotKey& key,
     const std::vector<std::uint64_t>& declared) {
-    const std::string owner_segment =
-        row_string(owner, "segment_id", "target claim owner");
+    const std::string& owner_segment = owner.segment_id;
     const DescriptorPtr owner_descriptor = find_descriptor(owner_segment);
     if (!owner_descriptor) {
         fail("target claim owner references an unknown descriptor");
@@ -2094,18 +1956,12 @@ std::vector<std::uint64_t> StageDelivery::claim_target_members(
     const PipelineIdentity& ident = owner_descriptor->identity;
     if (ident.buffer_domain_id != key.domain
             || ident.rank != key.rank
-            || ident.generation
-                   != row_uint(owner, "pipeline_generation",
-                               "target claim owner")
-            || ident.stage_epoch
-                   != row_uint(owner, "stage_epoch", "target claim owner")
-            || ident.staging_allocation_id
-                   != row_uint(owner, "staging_allocation_id",
-                               "target claim owner")) {
+            || ident.generation != owner.pipeline_generation
+            || ident.stage_epoch != owner.stage_epoch
+            || ident.staging_allocation_id != owner.staging_allocation_id) {
         fail("target claim owner disagrees with descriptor identity");
     }
-    const std::uint64_t group_ordinal =
-        row_uint(owner, "group_ordinal", "target claim owner");
+    const std::uint64_t group_ordinal = owner.group_ordinal;
     const SelectorIndex* owner_index = selector_index_for(owner_segment);
     const PipelineGroup* group = nullptr;
     if (owner_index != nullptr) {
@@ -2118,8 +1974,7 @@ std::vector<std::uint64_t> StageDelivery::claim_target_members(
     if (group == nullptr) {
         fail("target claim owner references an unknown tile group");
     }
-    const std::uint64_t tile_ordinal =
-        row_uint(owner, "tile_ordinal", "target claim owner");
+    const std::uint64_t tile_ordinal = owner.tile_ordinal;
     if (tile_ordinal < 1 || tile_ordinal > group->tile_axis.tile_count) {
         fail("target claim owner points outside descriptor tile range");
     }
@@ -2146,32 +2001,26 @@ std::vector<std::uint64_t> StageDelivery::claim_target_members(
 // _consume_delta_members (pipeline_ledger.py 3152-3221).
 std::vector<std::uint64_t> StageDelivery::consume_delta_members(
     const TargetWorkset& workset, const PipelineDescriptor& owner_descriptor,
-    const std::string& segment, const Json& cause) {
-    const std::uint64_t run_index =
-        row_uint(cause, "consume_run_index", "target consume cause");
+    const std::string& segment, const TargetOp& cause) {
+    const std::uint64_t run_index = cause.consume_run_index;
     if (run_index >= owner_descriptor.consume_completion_runs.size()) {
         fail("target consume cause run index is outside the descriptor");
     }
     const PipelineConsumeCompletionRun& completion =
         owner_descriptor.consume_completion_runs[run_index];
-    const Json& row = *workset.row;
-    const Json& owner = row_field(row, "owner", "target consume owner");
-    const std::uint64_t tile =
-        row_uint(owner, "tile_ordinal", "target consume owner");
-    const std::uint64_t terminal_rank =
-        row_uint(cause, "terminal_rank", "target consume cause");
+    const SlotRow& row = *workset.row;
+    const SlotOwner& owner = *row.owner;
+    const std::uint64_t tile = owner.tile_ordinal;
+    const std::uint64_t terminal_rank = cause.terminal_rank;
     if (completion.rank != terminal_rank
-            || completion.rank != row_uint(row, "rank", "slot row")
-            || completion.group_ordinal
-                   != row_uint(owner, "group_ordinal",
-                               "target consume owner")
+            || completion.rank != row.rank
+            || completion.group_ordinal != owner.group_ordinal
             || tile < completion.first_tile
             || tile >= completion.first_tile + completion.tile_count) {
         fail("target consume cause run does not cover the slot owner");
     }
     const std::uint64_t tile_delta = tile - completion.first_tile;
-    const std::uint64_t terminal_store_id =
-        row_uint(cause, "terminal_store_id", "target consume cause");
+    const std::uint64_t terminal_store_id = cause.terminal_store_id;
     const unsigned __int128 wide_json_id =
         static_cast<unsigned __int128>(completion.first_dependency_json_id)
         + static_cast<unsigned __int128>(tile_delta)
@@ -2236,28 +2085,22 @@ std::vector<std::uint64_t> StageDelivery::consume_delta_members(
 
 // _prove_target_consume_clear (pipeline_ledger.py 3223-3263).
 bool StageDelivery::prove_target_consume_clear(
-    const Json& row, const PipelineDescriptor& owner_descriptor,
-    const std::optional<SelectedEndpoint>& selected, const Json& transition) {
-    const Json& owner = row_field(row, "owner", "slot row");
-    const std::string owner_segment =
-        row_string(owner, "segment_id", "slot row.owner");
-    const std::vector<std::uint64_t> owner_shards =
-        row_uint_array(row, "target_shards_to_consume", "slot row");
-    const std::uint64_t row_rank = row_uint(row, "rank", "slot row");
-    const std::uint64_t owner_group =
-        row_uint(owner, "group_ordinal", "slot row.owner");
-    const std::uint64_t owner_tile =
-        row_uint(owner, "tile_ordinal", "slot row.owner");
+    const SlotRow& row, const PipelineDescriptor& owner_descriptor,
+    const std::optional<SelectedEndpoint>& selected, const PipelineRun& run) {
+    const SlotOwner& owner = *row.owner;
+    const std::string& owner_segment = owner.segment_id;
+    const std::vector<std::uint64_t>& owner_shards =
+        row.target_shards_to_consume;
+    const std::uint64_t row_rank = row.rank;
+    const std::uint64_t owner_group = owner.group_ordinal;
+    const std::uint64_t owner_tile = owner.tile_ordinal;
     bool selected_consumer_proof = !selected.has_value();
     if (selected.has_value()) {
-        const Json& selector =
-            row_field(transition, "endpoint_selector", "pipeline run");
         selected_consumer_proof =
             selected->endpoint == "body_marker"
             && selected->run->rank == row_rank
             && selected->run->group_ordinal == owner_group
-            && row_uint(selector, "tile_ordinal",
-                        "pipeline run.endpoint_selector") == owner_tile
+            && run.endpoint_selector.tile_ordinal == owner_tile
             && std::find(owner_shards.begin(), owner_shards.end(),
                          selected->shard.shard_ordinal) != owner_shards.end()
             && endpoint_completion_proven(owner_segment, owner_descriptor,
@@ -2266,7 +2109,7 @@ bool StageDelivery::prove_target_consume_clear(
                                           "body_marker");
     }
     bool ready_and_terminal = !owner_shards.empty();
-    const OwnerTag ready_tag = owner_tag_of(owner, "slot row.owner");
+    const OwnerTag ready_tag = owner;
     for (const std::uint64_t target_shard : owner_shards) {
         if (!endpoint_completion_proven(owner_segment, owner_descriptor,
                                         row_rank, owner_group, owner_tile,
@@ -2274,9 +2117,8 @@ bool StageDelivery::prove_target_consume_clear(
             ready_and_terminal = false;
             break;
         }
-        const ReadyKey ready_key{
-            row_string(row, "buffer_domain_id", "slot row"), row_rank,
-            row_uint(row, "slot_index", "slot row"), target_shard};
+        const ReadyKey ready_key{row.domain, row_rank, row.slot_index,
+                                 target_shard};
         const OwnerTag* ready_owner = target_ready_overlay_.get_raw(ready_key);
         const bool already_ready =
             ready_owner != nullptr && *ready_owner == ready_tag;
@@ -2295,10 +2137,10 @@ bool StageDelivery::prove_target_consume_clear(
 
 // apply_target_delta (pipeline_ledger.py 3265-3469).
 std::set<TargetDomainKey> StageDelivery::apply_target_delta(
-    const Json& transition, const PipelineDescriptor& descriptor,
-    const std::optional<SelectedEndpoint>& selected, const Json& delta) {
+    const PipelineRun& run, const PipelineDescriptor& descriptor,
+    const std::optional<SelectedEndpoint>& selected, const SlotPatch& delta) {
     const std::string path = "target delta";
-    const SlotKey key = parse_slot_key(row_field(delta, "key", path), path);
+    const SlotKey& key = delta.key;
     if (key.domain != descriptor.identity.buffer_domain_id) {
         fail(path + " crosses the transition buffer domain");
     }
@@ -2306,14 +2148,10 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
         fail(path + " rank differs from its buffer-domain descriptor");
     }
     const Lineage lineage = target_lineage(key);
-    const std::uint64_t before_generation =
-        row_uint(delta, "before_slot_generation", path);
-    const std::uint64_t predecessor_seq =
-        row_uint(delta, "predecessor_logical_seq", path);
-    const std::uint64_t predecessor_count =
-        row_uint(delta, "predecessor_consumed_count", path);
-    const std::uint64_t transition_seq =
-        row_uint(transition, "first_logical_seq", "pipeline run");
+    const std::uint64_t before_generation = delta.before_slot_generation;
+    const std::uint64_t predecessor_seq = delta.predecessor_logical_seq;
+    const std::uint64_t predecessor_count = delta.predecessor_consumed_count;
+    const std::uint64_t transition_seq = run.first_logical_seq;
     if (before_generation != lineage[0] || predecessor_seq != lineage[1]
             || predecessor_count != lineage[2]
             || predecessor_seq >= transition_seq) {
@@ -2321,94 +2159,76 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
     }
     TargetWorkset* workset_ptr = target_workset_for(key);
     const bool initial_present = workset_ptr != nullptr && workset_ptr->row;
-    const bool initial_occupied =
-        initial_present && row_bool(*workset_ptr->row, "occupied", path);
-    const Json* initial_owner =
-        initial_occupied ? &row_field(*workset_ptr->row, "owner", path) : nullptr;
+    const bool initial_occupied = initial_present && workset_ptr->row->occupied;
+    const SlotOwner* initial_owner =
+        initial_occupied ? &*workset_ptr->row->owner : nullptr;
     std::vector<std::uint64_t> initial_targets;
     if (initial_present) {
-        initial_targets =
-            row_uint_array(*workset_ptr->row, "target_shards_to_consume", path);
+        initial_targets = workset_ptr->row->target_shards_to_consume;
     }
     std::uint64_t generation = lineage[0];
     if (workset_ptr == nullptr) {
         workset_ptr = &target_worksets_.emplace(key, TargetWorkset{}).first->second;
     }
     TargetWorkset& workset = *workset_ptr;
-    std::optional<Json> row = workset.row;
-    const std::string kind =
-        row_string(transition, "transition_kind", "pipeline run");
-    const Json& operations = row_field(delta, "operations", path);
-    if (!operations.is_array()) fail(path + ".operations must be an array");
-    for (const Json& op : operations) {
+    std::optional<SlotRow> row = workset.row;
+    const TransitionKind kind = run.transition_kind;
+    for (const TargetOp& op : delta.operations) {
         const std::string op_path = path + ".operations[]";
-        const std::string op_kind = row_string(op, "op", op_path);
-        const std::uint64_t op_generation =
-            row_uint(op, "slot_generation", op_path);
-        if (op_kind == "claim") {
+        const std::uint64_t op_generation = op.slot_generation;
+        if (op.op == TargetOp::Op::Claim) {
             if (generation == U64_MAX) {
                 fail("target slot generation overflows uint64");
             }
-            if (op_generation != generation + 1 || !row
-                    || row_bool(*row, "occupied", op_path)) {
+            if (op_generation != generation + 1 || !row || row->occupied) {
                 fail("target claim generation or empty-slot precondition differs");
             }
-            const Json& owner = row_field(op, "owner", op_path);
-            const std::string owner_segment =
-                row_string(owner, "segment_id", op_path + ".owner");
-            if (owner_segment
-                    != row_string(transition, "descriptor_segment_id",
-                                  "pipeline run")) {
+            const SlotOwner& owner = *op.owner;
+            if (owner.segment_id != run.descriptor_segment_id) {
                 fail("target claim assigns a different descriptor owner");
             }
             const DescriptorPtr owner_descriptor =
-                find_descriptor(owner_segment);
+                find_descriptor(owner.segment_id);
             if (!owner_descriptor) {
                 fail("target claim owner references an unknown descriptor");
             }
-            const std::vector<std::uint64_t> declared =
-                row_uint_array(op, "target_shards", op_path);
+            const std::vector<std::uint64_t>& declared = op.target_shards;
             claim_target_members(owner, key, declared);
-            if (kind != "tile_issue" && kind != "consume_start"
-                    && kind != "fill_ack_progress"
-                    && kind != "release_ack_progress"
-                    && kind != "consume_done") {
+            if (kind != TransitionKind::TileIssue
+                    && kind != TransitionKind::ConsumeStart
+                    && kind != TransitionKind::FillAckProgress
+                    && kind != TransitionKind::ReleaseAckProgress
+                    && kind != TransitionKind::ConsumeDone) {
                 fail("target slot ownership changed outside an issue/consume transition");
             }
             if (selected.has_value()) {
-                const Json& selector =
-                    row_field(transition, "endpoint_selector", "pipeline run");
-                if (row_uint(owner, "tile_ordinal", op_path + ".owner")
-                        != row_uint(selector, "tile_ordinal",
-                                    "pipeline run.endpoint_selector")
-                    || row_uint(owner, "group_ordinal", op_path + ".owner")
-                        != selected->run->group_ordinal
+                if (owner.tile_ordinal
+                        != run.endpoint_selector.tile_ordinal
+                    || owner.group_ordinal != selected->run->group_ordinal
                     || selected->shard.target_rank != key.rank) {
                     fail("target claim owner differs from selected endpoint");
                 }
             }
-            Json new_row = Json::object();
-            new_row["buffer_domain_id"] = key.domain;
-            new_row["role"] = "target";
-            new_row["rank"] = key.rank;
-            new_row["shard_ordinal"] = nullptr;
-            new_row["slot_index"] = key.slot_index;
-            new_row["occupied"] = true;
-            new_row["owner"] = owner;
-            new_row["consumed"] = false;
-            new_row["target_shards_to_consume"] =
-                row_field(op, "target_shards", op_path);
-            new_row["consumed_target_shards"] = Json::array();
+            SlotRow new_row;
+            new_row.domain = key.domain;
+            new_row.role_source = false;
+            new_row.rank = key.rank;
+            new_row.has_shard = false;
+            new_row.slot_index = key.slot_index;
+            new_row.occupied = true;
+            new_row.owner = owner;
+            new_row.consumed = false;
+            new_row.target_shards_to_consume = declared;
             row = std::move(new_row);
             workset.consumed.clear();
             workset.remaining = static_cast<std::int64_t>(declared.size());
             workset.non_target_count = 0;
             generation = op_generation;
-        } else if (op_kind == "initialize") {
+        } else if (op.op == TargetOp::Op::Initialize) {
             if (op_generation != generation || row.has_value()) {
                 fail("target initialize generation or absent-row precondition differs");
             }
-            if (kind != "descriptor_commit"
+            if (kind != TransitionKind::DescriptorCommit
                     || descriptor.identity.buffer_domain_id != key.domain
                     || descriptor.identity.rank != key.rank) {
                 fail("target initialize is outside its descriptor commit");
@@ -2417,34 +2237,28 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
             workset.consumed.clear();
             workset.remaining = 0;
             workset.non_target_count = 0;
-        } else if (op_kind == "consume") {
-            if (op_generation != generation || !row
-                    || !row_bool(*row, "occupied", op_path) || kind != "consume_done") {
+        } else if (op.op == TargetOp::Op::Consume) {
+            if (op_generation != generation || !row || !row->occupied
+                    || kind != TransitionKind::ConsumeDone) {
                 fail("target consume lacks its occupied owner row");
             }
-            const Json& owner = row_field(*row, "owner", op_path);
-            const std::string owner_segment =
-                row_string(owner, "segment_id", op_path + ".owner");
-            if (owner_segment
-                    != row_string(transition, "descriptor_segment_id",
-                                  "pipeline run")) {
+            const SlotOwner& owner = *row->owner;
+            if (owner.segment_id != run.descriptor_segment_id) {
                 fail("target consume owner differs from its sequenced descriptor");
             }
             const DescriptorPtr owner_descriptor =
-                find_descriptor(owner_segment);
+                find_descriptor(owner.segment_id);
             if (!owner_descriptor) {
                 fail("target consume owner references an unknown descriptor");
             }
-            const Json& cause = row_field(op, "cause", op_path);
             const std::vector<std::uint64_t> expected_new = consume_delta_members(
-                workset, *owner_descriptor, owner_segment, cause);
-            const std::vector<std::uint64_t> add_shards =
-                row_uint_array(op, "add_shards", op_path);
+                workset, *owner_descriptor, owner.segment_id, op);
+            const std::vector<std::uint64_t>& add_shards = op.add_shards;
             if (expected_new.empty() || add_shards != expected_new) {
                 fail("target consume additions differ from exact cause mapping");
             }
-            const std::vector<std::uint64_t> targets =
-                row_uint_array(*row, "target_shards_to_consume", op_path);
+            const std::vector<std::uint64_t>& targets =
+                row->target_shards_to_consume;
             for (const std::uint64_t shard : expected_new) {
                 workset.consumed.insert(shard);
                 if (std::binary_search(targets.begin(), targets.end(), shard)) {
@@ -2453,14 +2267,14 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
                     workset.non_target_count += 1;
                 }
             }
-            (*row)["consumed"] = !workset.consumed.empty();
-            const bool cleared = row_bool(op, "cleared", op_path);
+            row->consumed = !workset.consumed.empty();
+            const bool cleared = op.cleared;
             if (cleared != (workset.remaining == 0)) {
                 fail("target consume cleared flag differs from remaining membership");
             }
             if (cleared) {
                 if (!prove_target_consume_clear(*row, *owner_descriptor,
-                                                selected, transition)) {
+                                                selected, run)) {
                     fail("target consume cleared before its ready/terminal proof");
                 }
                 row = target_row_empty(key);
@@ -2468,15 +2282,14 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
                 workset.remaining = 0;
                 workset.non_target_count = 0;
             }
-        } else if (op_kind == "request_close_clear") {
-            if (op_generation != generation || !row
-                    || !row_bool(*row, "occupied", op_path)) {
+        } else if (op.op == TargetOp::Op::RequestCloseClear) {
+            if (op_generation != generation || !row || !row->occupied) {
                 fail("request-close clear lacks its occupied target row");
             }
-            const Json& owner = row_field(*row, "owner", op_path);
-            const DescriptorPtr owner_descriptor = find_descriptor(
-                row_string(owner, "segment_id", op_path + ".owner"));
-            if (!owner_descriptor || kind != "request_close"
+            const SlotOwner& owner = *row->owner;
+            const DescriptorPtr owner_descriptor =
+                find_descriptor(owner.segment_id);
+            if (!owner_descriptor || kind != TransitionKind::RequestClose
                     || owner_descriptor->identity.request_id
                         != descriptor.identity.request_id
                     || owner_descriptor->identity.buffer_domain_id
@@ -2487,10 +2300,9 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
             workset.consumed.clear();
             workset.remaining = 0;
             workset.non_target_count = 0;
-        } else if (op_kind == "erase") {
-            if (op_generation != generation || !row
-                    || row_bool(*row, "occupied", op_path)
-                    || kind != "descriptor_retire") {
+        } else if (op.op == TargetOp::Op::Erase) {
+            if (op_generation != generation || !row || row->occupied
+                    || kind != TransitionKind::DescriptorRetire) {
                 fail("target erase requires an empty row at descriptor retirement");
             }
             row = std::nullopt;
@@ -2499,41 +2311,35 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
             workset.non_target_count = 0;
         }
     }
-    if (row && row_bool(*row, "occupied", path)) {
-        const std::vector<std::uint64_t> targets =
-            row_uint_array(*row, "target_shards_to_consume", path);
+    if (row && row->occupied) {
+        const std::vector<std::uint64_t>& targets =
+            row->target_shards_to_consume;
         if (workset.non_target_count != 0
                 || static_cast<std::uint64_t>(
                        workset.consumed.size() + workset.remaining)
                        != targets.size()
-                || row_bool(*row, "consumed", path)
-                       != !workset.consumed.empty()) {
+                || row->consumed != !workset.consumed.empty()) {
             fail("occupied target row violates its full-row consume invariant");
         }
     }
     const bool final_present = row.has_value();
-    const bool final_occupied =
-        final_present && row_bool(*row, "occupied", path);
-    const Json* final_owner =
-        final_occupied ? &row_field(*row, "owner", path) : nullptr;
+    const bool final_occupied = final_present && row->occupied;
+    const SlotOwner* final_owner = final_occupied ? &*row->owner : nullptr;
     // Public row/owner aggregates are updated once per logical target patch,
     // never once per operation inside its coalesced delta.
     if (initial_present) slot_row_counts_.add(key.domain, -1);
     if (initial_occupied) {
-        slot_owner_counts_.add(
-            row_string(*initial_owner, "segment_id", path), -1);
+        slot_owner_counts_.add(initial_owner->segment_id, -1);
         target_occupancy_.add({key.domain, key.rank}, -1);
     }
     if (final_present) slot_row_counts_.add(key.domain, 1);
     if (final_occupied) {
-        slot_owner_counts_.add(row_string(*final_owner, "segment_id", path), 1);
+        slot_owner_counts_.add(final_owner->segment_id, 1);
         target_occupancy_.add({key.domain, key.rank}, 1);
     }
     const bool have_old_tag = initial_occupied;
-    const OwnerTag old_tag =
-        initial_occupied ? owner_tag_of(*initial_owner, path) : OwnerTag{};
-    const OwnerTag new_tag =
-        final_occupied ? owner_tag_of(*final_owner, path) : OwnerTag{};
+    const OwnerTag old_tag = initial_occupied ? *initial_owner : OwnerTag{};
+    const OwnerTag new_tag = final_occupied ? *final_owner : OwnerTag{};
     if (have_old_tag && (!final_occupied || !(old_tag == new_tag))) {
         for (const std::uint64_t target_shard : initial_targets) {
             target_ready_overlay_.del(
@@ -2543,27 +2349,23 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
     // Preserve the old occupied-owner displacement and slot-reuse proof when
     // a coalesced patch keeps both rows occupied.
     if (initial_occupied && final_occupied) {
-        const std::string initial_segment =
-            row_string(*initial_owner, "segment_id", path);
-        const std::string final_segment =
-            row_string(*final_owner, "segment_id", path);
-        if (initial_segment != final_segment) {
+        if (initial_owner->segment_id != final_owner->segment_id) {
             const Json* old_state = nullptr;
-            const auto touched = touched_state_.find(initial_segment);
+            const auto touched = touched_state_.find(
+                initial_owner->segment_id);
             if (touched != touched_state_.end()) {
                 old_state = &touched->second;
             } else {
-                old_state = states_get(initial_segment);
+                old_state = states_get(initial_owner->segment_id);
             }
             if (old_state == nullptr
                     || !(state_flag(*old_state, "settle_done")
                          || state_flag(*old_state, "retired"))) {
                 fail("foreign target slot owner was displaced before settle");
             }
-        } else if (row_uint(*initial_owner, "group_ordinal", path)
-                       != row_uint(*final_owner, "group_ordinal", path)
-                   || row_uint(*initial_owner, "tile_ordinal", path)
-                          != row_uint(*final_owner, "tile_ordinal", path)) {
+        } else if (initial_owner->group_ordinal != final_owner->group_ordinal
+                   || initial_owner->tile_ordinal
+                          != final_owner->tile_ordinal) {
             fail("target slot owner changed before its legal clear");
         }
     }
@@ -2578,69 +2380,53 @@ std::set<TargetDomainKey> StageDelivery::apply_target_delta(
 // apply_slot_patches (pipeline_ledger.py 3471-3721).
 std::pair<std::set<CreditKey>, std::set<TargetDomainKey>>
 StageDelivery::apply_slot_patches(
-    const Json& transition, const PipelineDescriptor& descriptor,
+    const PipelineRun& run, const PipelineDescriptor& descriptor,
     const std::optional<SelectedEndpoint>& selected) {
     std::set<CreditKey> touched_keys;
     std::set<TargetDomainKey> touched_targets;
-    std::vector<const Json*> target_deltas;
-    std::vector<std::tuple<SlotKey, const Json*, const Json*>> source_patches;
-    const Json& patches = row_field(transition, "slot_patches", "pipeline run");
-    if (!patches.is_array()) {
-        fail("pipeline run slot_patches must be an array");
-    }
-    for (const Json& patch : patches) {
-        if (patch.is_object() && patch.contains("form")
-                && patch["form"] == "target_delta") {
+    std::vector<const SlotPatch*> target_deltas;
+    std::vector<const SlotPatch*> source_patches;
+    for (const SlotPatch& patch : run.slot_patches) {
+        if (patch.is_target_delta) {
             target_deltas.push_back(&patch);
         } else {
-            if (!patch.is_array() || patch.size() != 4
-                    || !patch[0].is_string() || patch[0] != "source") {
-                fail("slot patch must be a source quad or target_delta object");
-            }
-            source_patches.emplace_back(parse_slot_key(patch[1], "slot patch"),
-                                        &patch[2], &patch[3]);
+            source_patches.push_back(&patch);
         }
     }
-    const std::string kind =
-        row_string(transition, "transition_kind", "pipeline run");
+    const TransitionKind kind = run.transition_kind;
     const std::string path = "slot patch";
-    for (const auto& entry : source_patches) {
-        const SlotKey& key = std::get<0>(entry);
-        const Json* before_field = std::get<1>(entry);
-        const Json* after_field = std::get<2>(entry);
-        const bool before_null =
-            before_field == nullptr || before_field->is_null();
-        const bool after_null =
-            after_field == nullptr || after_field->is_null();
+    for (const SlotPatch* patch_ptr : source_patches) {
+        const SlotPatch& entry = *patch_ptr;
+        const SlotKey& key = entry.key;
+        const std::optional<SlotRow>& before_field = entry.before;
+        const std::optional<SlotRow>& after_field = entry.after;
+        const bool before_null = !before_field.has_value();
+        const bool after_null = !after_field.has_value();
         const bool present = slot_overlay_.has(key);
-        const Json* current = slot_overlay_.get_raw(key);
+        const SlotRow* current = slot_overlay_.get_raw(key);
         if (before_null) {
             if (present) fail(path + " expected an absent before row");
-        } else if (!present || !typed_equal(*current, *before_field)) {
+        } else if (!present || !current->typed_eq(*before_field)) {
             fail(path + " before row differs from accepted COW state");
         }
-        const Json* old = present ? current : nullptr;
-        const Json* new_row = after_null ? nullptr : after_field;
+        const SlotRow* old = present ? current : nullptr;
+        const SlotRow* new_row = after_null ? nullptr : &*after_field;
         if (old != nullptr
-                && row_string(*old, "buffer_domain_id", path)
-                        != descriptor.identity.buffer_domain_id) {
+                && old->domain != descriptor.identity.buffer_domain_id) {
             fail(path + " crosses the transition buffer domain");
         }
         if (new_row != nullptr
-                && row_string(*new_row, "buffer_domain_id", path)
-                        != descriptor.identity.buffer_domain_id) {
+                && new_row->domain != descriptor.identity.buffer_domain_id) {
             fail(path + " crosses the transition buffer domain");
         }
         const std::string* endpoint_name =
             selected.has_value() ? &selected->endpoint : nullptr;
-        if (old != nullptr && row_bool(*old, "occupied", path)
-                && (new_row == nullptr
-                    || !row_bool(*new_row, "occupied", path))) {
-            const Json& old_owner = row_field(*old, "owner", path);
-            const std::string old_owner_segment =
-                row_string(old_owner, "segment_id", path + ".owner");
+        if (old != nullptr && old->occupied
+                && (new_row == nullptr || !new_row->occupied)) {
+            const SlotOwner& old_owner = *old->owner;
+            const std::string& old_owner_segment = old_owner.segment_id;
             bool allowed_clear = false;
-            if (kind == "request_close") {
+            if (kind == TransitionKind::RequestClose) {
                 const DescriptorPtr owner_descriptor =
                     find_descriptor(old_owner_segment);
                 allowed_clear =
@@ -2650,55 +2436,41 @@ StageDelivery::apply_slot_patches(
                     && owner_descriptor->identity.buffer_domain_id
                         == descriptor.identity.buffer_domain_id;
             }
-            if (kind == "consume_done"
-                    && row_string(*old, "role", path) == "target"
-                    && old_owner_segment
-                        == row_string(transition, "descriptor_segment_id",
-                                      "pipeline run")) {
+            if (kind == TransitionKind::ConsumeDone && !old->role_source
+                    && old_owner_segment == run.descriptor_segment_id) {
                 const DescriptorPtr owner_descriptor =
                     find_descriptor(old_owner_segment);
-                const std::vector<std::uint64_t> owner_shards =
-                    row_uint_array(*old, "target_shards_to_consume", path);
+                const std::vector<std::uint64_t>& owner_shards =
+                    old->target_shards_to_consume;
                 bool selected_consumer_proof = !selected.has_value();
                 if (selected.has_value()) {
-                    const Json& selector = row_field(
-                        transition, "endpoint_selector", "pipeline run");
                     selected_consumer_proof =
                         selected->endpoint == "body_marker"
-                        && selected->run->rank == row_uint(*old, "rank", path)
+                        && selected->run->rank == old->rank
                         && selected->run->group_ordinal
-                            == row_uint(old_owner, "group_ordinal", path + ".owner")
-                        && row_uint(selector, "tile_ordinal",
-                                    "pipeline run.endpoint_selector")
-                            == row_uint(old_owner, "tile_ordinal",
-                                        path + ".owner")
+                            == old_owner.group_ordinal
+                        && run.endpoint_selector.tile_ordinal
+                            == old_owner.tile_ordinal
                         && std::find(owner_shards.begin(), owner_shards.end(),
                                      selected->shard.shard_ordinal)
                             != owner_shards.end()
                         && endpoint_completion_proven(
-                            old_owner_segment, *owner_descriptor,
-                            row_uint(*old, "rank", path),
-                            row_uint(old_owner, "group_ordinal", path + ".owner"),
-                            row_uint(old_owner, "tile_ordinal", path + ".owner"),
+                            old_owner_segment, *owner_descriptor, old->rank,
+                            old_owner.group_ordinal, old_owner.tile_ordinal,
                             selected->shard.shard_ordinal, "body_marker");
                 }
                 bool ready_and_terminal = !owner_shards.empty();
-                const OwnerTag ready_tag =
-                    owner_tag_of(old_owner, path + ".owner");
+                const OwnerTag ready_tag = old_owner;
                 for (const std::uint64_t target_shard : owner_shards) {
                     if (!endpoint_completion_proven(
-                            old_owner_segment, *owner_descriptor,
-                            row_uint(*old, "rank", path),
-                            row_uint(old_owner, "group_ordinal", path + ".owner"),
-                            row_uint(old_owner, "tile_ordinal", path + ".owner"),
+                            old_owner_segment, *owner_descriptor, old->rank,
+                            old_owner.group_ordinal, old_owner.tile_ordinal,
                             target_shard, "data_recv")) {
                         ready_and_terminal = false;
                         break;
                     }
                     const ReadyKey ready_key{
-                        row_string(*old, "buffer_domain_id", path),
-                        row_uint(*old, "rank", path),
-                        row_uint(*old, "slot_index", path), target_shard};
+                        old->domain, old->rank, old->slot_index, target_shard};
                     const OwnerTag* ready_owner =
                         target_ready_overlay_.get_raw(ready_key);
                     const bool already_ready =
@@ -2708,13 +2480,12 @@ StageDelivery::apply_slot_patches(
                         // endpoint_done, consumes terminal watchers, then
                         // publishes data_ready. Its exact cursor completion
                         // may precede this clear in the same callback.
-                        pending_ready_after_clear_.insert({ready_key, ready_tag});
+                        pending_ready_after_clear_.insert({ready_key,
+                                                           ready_tag});
                     }
                     if (!consume_terminal_proven(
-                            *owner_descriptor, old_owner_segment,
-                            row_uint(*old, "rank", path),
-                            row_uint(old_owner, "group_ordinal", path + ".owner"),
-                            row_uint(old_owner, "tile_ordinal", path + ".owner"),
+                            *owner_descriptor, old_owner_segment, old->rank,
+                            old_owner.group_ordinal, old_owner.tile_ordinal,
                             target_shard)) {
                         ready_and_terminal = false;
                         break;
@@ -2724,14 +2495,14 @@ StageDelivery::apply_slot_patches(
                     owner_descriptor != nullptr && !owner_shards.empty()
                     && selected_consumer_proof && ready_and_terminal;
             }
-            if (kind == "endpoint_done" && endpoint_name != nullptr
+            if (kind == TransitionKind::EndpointDone && endpoint_name != nullptr
                     && *endpoint_name == "release_ack_recv"
-                    && row_string(*old, "role", path) == "source"
-                    && selected.has_value()) {
+                    && old->role_source && selected.has_value()) {
                 allowed_clear =
-                    row_uint(*old, "rank", path) == selected->run->rank
-                    && row_uint(*old, "shard_ordinal", path)
-                        == selected->shard.shard_ordinal;
+                    old->rank == selected->run->rank
+                    && (old->has_shard
+                            ? old->shard == selected->shard.shard_ordinal
+                            : false);
                 if (allowed_clear) {
                     const std::uint64_t release_lag =
                         descriptor.protocol.release_lag_tiles;
@@ -2743,23 +2514,17 @@ StageDelivery::apply_slot_patches(
                         selector_index_for(old_owner_segment);
                     const std::uint64_t owner_global_tile =
                         owner_descriptor
-                            ? global_tile_ordinal(
-                                  *owner_descriptor,
-                                  row_uint(old_owner, "group_ordinal",
-                                           path + ".owner"),
-                                  row_uint(old_owner, "tile_ordinal",
-                                           path + ".owner"),
-                                  owner_index)
+                            ? global_tile_ordinal(*owner_descriptor,
+                                                  old_owner.group_ordinal,
+                                                  old_owner.tile_ordinal,
+                                                  owner_index)
                             : 0;
                     const auto owner_run =
                         owner_index != nullptr
-                            ? descriptor_run_at(
-                                  *owner_index,
-                                  row_uint(old_owner, "group_ordinal",
-                                           path + ".owner"),
-                                  row_uint(*old, "rank", path),
-                                  row_uint(old_owner, "tile_ordinal",
-                                           path + ".owner"))
+                            ? descriptor_run_at(*owner_index,
+                                                old_owner.group_ordinal,
+                                                old->rank,
+                                                old_owner.tile_ordinal)
                             : std::nullopt;
                     allowed_clear =
                         released_tile > 0
@@ -2782,72 +2547,66 @@ StageDelivery::apply_slot_patches(
                 fail(path + " occupied pipeline slot was cleared before its legal release");
             }
         }
-        if (new_row != nullptr && row_bool(*new_row, "occupied", path)) {
-            const Json& new_owner = row_field(*new_row, "owner", path);
-            const std::string owner_segment =
-                row_string(new_owner, "segment_id", path + ".owner");
+        if (new_row != nullptr && new_row->occupied) {
+            const SlotOwner& new_owner = *new_row->owner;
+            const std::string owner_segment = new_owner.segment_id;
             const DescriptorPtr owner_descriptor =
                 find_descriptor(owner_segment);
-            if (kind == "request_close") {
+            if (kind == TransitionKind::RequestClose) {
                 fail("request_close cannot leave an occupied pipeline slot");
             }
-            if (kind != "tile_issue" && kind != "consume_start"
-                    && kind != "fill_ack_progress"
-                    && kind != "release_ack_progress"
-                    && kind != "request_close" && kind != "consume_done") {
+            if (kind != TransitionKind::TileIssue
+                    && kind != TransitionKind::ConsumeStart
+                    && kind != TransitionKind::FillAckProgress
+                    && kind != TransitionKind::ReleaseAckProgress
+                    && kind != TransitionKind::RequestClose
+                    && kind != TransitionKind::ConsumeDone) {
                 fail("pipeline slot ownership changed outside an issue/consume/close transition");
             }
-            if (kind == "request_close"
+            if (kind == TransitionKind::RequestClose
                     && (!owner_descriptor
                         || owner_descriptor->identity.request_id
                             != descriptor.identity.request_id)) {
                 fail("request_close touches a foreign request's buffer domain");
             }
-            if (kind != "request_close"
-                    && owner_segment != row_string(
-                           transition, "descriptor_segment_id",
-                           "pipeline run")) {
+            if (kind != TransitionKind::RequestClose
+                    && owner_segment != run.descriptor_segment_id) {
                 fail("pipeline slot issue assigned a different descriptor owner");
             }
-            if ((kind == "request_close" || kind == "consume_done")
-                    && old != nullptr && row_bool(*old, "occupied", path)
-                    && !typed_equal(row_field(*old, "owner", path), new_owner)) {
+            if ((kind == TransitionKind::RequestClose
+                 || kind == TransitionKind::ConsumeDone)
+                    && old != nullptr && old->occupied
+                    && !(*old->owner == new_owner)) {
                 fail("administrative close/consume cannot transfer slot ownership");
             }
             if (selected.has_value()) {
-                const Json& selector =
-                    row_field(transition, "endpoint_selector", "pipeline run");
-                if (row_uint(new_owner, "tile_ordinal", path + ".owner")
-                        != row_uint(selector, "tile_ordinal",
-                                    "pipeline run.endpoint_selector")) {
+                if (new_owner.tile_ordinal
+                        != run.endpoint_selector.tile_ordinal) {
                     fail("pipeline slot owner tile differs from selected endpoint");
                 }
-                if (row_uint(new_owner, "group_ordinal", path + ".owner")
-                        != selected->run->group_ordinal) {
+                if (new_owner.group_ordinal != selected->run->group_ordinal) {
                     fail("pipeline slot owner group differs from selected endpoint");
                 }
-                if (row_string(*new_row, "role", path) == "source"
-                        && (row_uint(*new_row, "rank", path)
-                                != selected->run->rank
-                            || row_uint(*new_row, "shard_ordinal", path)
-                                != selected->shard.shard_ordinal)) {
+                if (new_row->role_source
+                        && (new_row->rank != selected->run->rank
+                            || (new_row->has_shard
+                                    ? new_row->shard
+                                    : 0)
+                                   != selected->shard.shard_ordinal)) {
                     fail("source slot owner differs from selected endpoint rank/shard");
                 }
-                if (row_string(*new_row, "role", path) == "target"
-                        && row_uint(*new_row, "rank", path)
-                            != selected->shard.target_rank) {
+                if (!new_row->role_source
+                        && new_row->rank != selected->shard.target_rank) {
                     fail("target slot owner differs from selected endpoint rank");
                 }
             }
         }
-        if (old != nullptr && row_bool(*old, "occupied", path)
-                && new_row != nullptr && row_bool(*new_row, "occupied", path)) {
-            const Json& old_owner = row_field(*old, "owner", path);
-            const Json& new_owner = row_field(*new_row, "owner", path);
-            const std::string old_segment =
-                row_string(old_owner, "segment_id", path + ".owner");
-            const std::string new_segment =
-                row_string(new_owner, "segment_id", path + ".owner");
+        if (old != nullptr && old->occupied
+                && new_row != nullptr && new_row->occupied) {
+            const SlotOwner& old_owner = *old->owner;
+            const SlotOwner& new_owner = *new_row->owner;
+            const std::string old_segment = old_owner.segment_id;
+            const std::string new_segment = new_owner.segment_id;
             if (old_segment != new_segment) {
                 const Json* old_state = nullptr;
                 const auto touched = touched_state_.find(old_segment);
@@ -2870,29 +2629,22 @@ StageDelivery::apply_slot_patches(
                     fail("slot owner references an unknown descriptor");
                 }
                 const std::uint64_t old_global = global_tile_ordinal(
-                    *owner_descriptor,
-                    row_uint(old_owner, "group_ordinal", path + ".owner"),
-                    row_uint(old_owner, "tile_ordinal", path + ".owner"),
-                    owner_index);
+                    *owner_descriptor, old_owner.group_ordinal,
+                    old_owner.tile_ordinal, owner_index);
                 const std::uint64_t new_global = global_tile_ordinal(
-                    *owner_descriptor,
-                    row_uint(new_owner, "group_ordinal", path + ".owner"),
-                    row_uint(new_owner, "tile_ordinal", path + ".owner"),
-                    owner_index);
+                    *owner_descriptor, new_owner.group_ordinal,
+                    new_owner.tile_ordinal, owner_index);
                 if (old_global != new_global) {
                     // In-domain two-slot reuse requires a completed lagged
                     // ReleaseAckRecv watermark for this slot.
-                    if (row_string(*old, "role", path) != "source"
-                            || !selected.has_value()
+                    if (!old->role_source || !selected.has_value()
                             || (*endpoint_name != "data_send"
                                 && *endpoint_name != "fill_ack_recv")) {
                         fail("slot owner changed before a matching release completion");
                     }
                     const ReleaseKey watermark_key{
-                        row_string(*old, "buffer_domain_id", path),
-                        row_uint(*old, "rank", path),
-                        row_uint(*old, "shard_ordinal", path),
-                        row_uint(*old, "slot_index", path)};
+                        old->domain, old->rank,
+                        old->has_shard ? old->shard : 0, old->slot_index};
                     if (old_global
                             > release_watermark_get(watermark_key)) {
                         fail("source slot was reused before its release watermark");
@@ -2901,24 +2653,17 @@ StageDelivery::apply_slot_patches(
             }
         }
         if (old != nullptr) add_row_aggregate(*old, -1);
-        if (key.role == "target") {
+        if (!key.role_source) {
             const OwnerTag old_tag =
-                old != nullptr && row_bool(*old, "occupied", path)
-                    ? owner_tag_of(row_field(*old, "owner", path),
-                                   path + ".owner")
-                    : OwnerTag{};
-            const bool have_old_tag =
-                old != nullptr && row_bool(*old, "occupied", path);
+                old != nullptr && old->occupied ? *old->owner : OwnerTag{};
+            const bool have_old_tag = old != nullptr && old->occupied;
             const bool new_occupied =
-                new_row != nullptr && row_bool(*new_row, "occupied", path);
-            const OwnerTag new_tag =
-                new_occupied
-                    ? owner_tag_of(row_field(*new_row, "owner", path),
-                                   path + ".owner")
-                    : OwnerTag{};
+                new_row != nullptr && new_row->occupied;
+            const OwnerTag new_tag = new_occupied ? *new_row->owner
+                                                  : OwnerTag{};
             if (have_old_tag && (!new_occupied || !(old_tag == new_tag))) {
                 for (const std::uint64_t target_shard :
-                     row_uint_array(*old, "target_shards_to_consume", path)) {
+                     old->target_shards_to_consume) {
                     target_ready_overlay_.del(
                         ReadyKey{key.domain, key.rank, key.slot_index,
                                  target_shard});
@@ -2931,7 +2676,7 @@ StageDelivery::apply_slot_patches(
         } else {
             slot_overlay_.del(key);
         }
-        if (key.role == "source") {
+        if (key.role_source) {
             touched_keys.insert(
                 CreditKey{key.domain, key.rank,
                           static_cast<std::uint64_t>(key.shard)});
@@ -2939,9 +2684,9 @@ StageDelivery::apply_slot_patches(
             touched_targets.insert({key.domain, key.rank});
         }
     }
-    for (const Json* delta : target_deltas) {
+    for (const SlotPatch* delta : target_deltas) {
         const std::set<TargetDomainKey> touched = apply_target_delta(
-            transition, descriptor, selected, *delta);
+            run, descriptor, selected, *delta);
         touched_targets.insert(touched.begin(), touched.end());
     }
     return {touched_keys, touched_targets};
@@ -2949,37 +2694,27 @@ StageDelivery::apply_slot_patches(
 
 // apply_credit_patches (pipeline_ledger.py 3723-3766).
 std::set<CreditKey> StageDelivery::apply_credit_patches(
-    const Json& transition, const PipelineDescriptor& descriptor,
+    const PipelineRun& run, const PipelineDescriptor& descriptor,
     const std::pair<std::optional<CreditKey>, std::int64_t>& expected_ack) {
     std::set<CreditKey> touched;
     const std::string path = "credit patch";
-    const Json& patches = row_field(transition, "credit_patches", "pipeline run");
-    if (!patches.is_array()) {
-        fail("pipeline run credit_patches must be an array");
-    }
-    for (const Json& patch : patches) {
-        if (!patch.is_array() || patch.size() != 3 || !patch[0].is_array()
-                || patch[0].size() != 3) {
-            fail(path + " must be [key, before, after]");
-        }
-        const CreditKey key{read_string(patch[0][0], path + ".key[0]"),
-                            read_rank(patch[0][1], path + ".key[1]"),
-                            read_uint(patch[0][2], path + ".key[2]")};
-        const bool before_null = patch[1].is_null();
-        const bool after_null = patch[2].is_null();
+    for (const CreditPatch& patch : run.credit_patches) {
+        const CreditKey& key = patch.key;
+        const bool before_null = !patch.before.has_value();
+        const bool after_null = !patch.after.has_value();
         const bool present = credit_overlay_.has(key);
-        const Json* current = credit_overlay_.get_raw(key);
+        const CreditRow* current = credit_overlay_.get_raw(key);
         if (before_null) {
             if (present) fail(path + " expected an absent before row");
-        } else if (!present || !typed_equal(*current, patch[1])) {
+        } else if (!present || !current->typed_eq(*patch.before)) {
             fail(path + " before row differs from accepted COW state");
         }
-        const Json* old = present ? current : nullptr;
-        const Json* new_row = after_null ? nullptr : &patch[2];
+        const CreditRow* old = present ? current : nullptr;
+        const CreditRow* new_row = after_null ? nullptr : &*patch.after;
         if (new_row != nullptr
-                && (row_string(*new_row, "buffer_domain_id", path) != key.domain
-                    || row_uint(*new_row, "source_rank", path) != key.source_rank
-                    || row_uint(*new_row, "shard_ordinal", path) != key.shard)) {
+                && (new_row->domain != key.domain
+                    || new_row->source_rank != key.source_rank
+                    || new_row->shard != key.shard)) {
             fail(path + " changes its stable key");
         }
         if (key.domain != descriptor.identity.buffer_domain_id) {
@@ -2987,14 +2722,11 @@ std::set<CreditKey> StageDelivery::apply_credit_patches(
         }
         const std::int64_t old_ack =
             old != nullptr
-                ? static_cast<std::int64_t>(
-                      row_uint(*old, "outstanding_ack_count", path))
-                : 0;
+                ? static_cast<std::int64_t>(old->outstanding_ack_count) : 0;
         const std::int64_t new_ack =
             new_row != nullptr
                 ? static_cast<std::int64_t>(
-                      row_uint(*new_row, "outstanding_ack_count", path))
-                : 0;
+                      new_row->outstanding_ack_count) : 0;
         const std::int64_t expected_delta =
             (expected_ack.first && *expected_ack.first == key)
                 ? expected_ack.second : 0;
@@ -3031,59 +2763,51 @@ std::set<CreditKey> StageDelivery::apply_credit_patches(
 // plain JSON rows are value-equal after the first comparison, so it is a
 // structural no-op here.
 void StageDelivery::apply_obligation_patches(
-    const Json& transition,
-    const std::map<std::string, std::optional<Json>>& required_expected) {
+    const PipelineRun& run,
+    const std::map<std::string, std::optional<ObligationRow>>&
+        required_expected) {
     std::set<std::string> seen;
     const std::string path = "obligation patch";
-    const Json& patches =
-        row_field(transition, "obligation_patches", "pipeline run");
-    if (!patches.is_array()) {
-        fail("pipeline run obligation_patches must be an array");
-    }
-    for (const Json& patch : patches) {
-        if (!patch.is_array() || patch.size() != 3) {
-            fail(path + " must be [obligation_id, before, after]");
-        }
-        const std::string key = read_string(patch[0], path + "[0]");
-        const bool before_null = patch[1].is_null();
-        const bool after_null = patch[2].is_null();
+    for (const ObligationPatch& patch : run.obligation_patches) {
+        const std::string& key = patch.obligation_id;
+        const bool before_null = !patch.before.has_value();
+        const bool after_null = !patch.after.has_value();
         const bool present = obligation_overlay_.has(key);
-        const Json* current = obligation_overlay_.get_raw(key);
+        const ObligationRow* current = obligation_overlay_.get_raw(key);
         if (before_null) {
             if (present) fail(path + " expected an absent before row");
-        } else if (!present || !typed_equal(*current, patch[1])) {
+        } else if (!present || !current->typed_eq(*patch.before)) {
             fail(path + " before row differs from accepted COW state");
         }
-        const Json* old = present ? current : nullptr;
-        const Json* new_row = after_null ? nullptr : &patch[2];
-        if (new_row != nullptr
-                && row_string(*new_row, "obligation_id", path) != key) {
+        const ObligationRow* old = present ? current : nullptr;
+        const ObligationRow* new_row = after_null ? nullptr : &*patch.after;
+        if (new_row != nullptr && new_row->obligation_id != key) {
             fail(path + " changes its stable obligation_id");
         }
         if (old != nullptr) {
             obligation_remaining_.add(
-                row_string(*old, "segment_id", path),
+                old->segment_id,
                 -static_cast<std::int64_t>(
-                    row_uint(*old, "remaining_endpoint_count", path)));
+                    old->remaining_endpoint_count));
         }
         if (new_row != nullptr) {
             obligation_overlay_.set(key, *new_row);
             obligation_remaining_.add(
-                row_string(*new_row, "segment_id", path),
+                new_row->segment_id,
                 static_cast<std::int64_t>(
-                    row_uint(*new_row, "remaining_endpoint_count", path)));
+                    new_row->remaining_endpoint_count));
         } else {
             obligation_overlay_.del(key);
         }
         seen.insert(key);
         const auto expected = required_expected.find(key);
-        const Json* expected_row =
+        const ObligationRow* expected_row =
             expected != required_expected.end() && expected->second
                 ? &*expected->second : nullptr;
         const bool matches =
             (new_row == nullptr) == (expected_row == nullptr)
             && (new_row == nullptr
-                || typed_equal(*new_row, *expected_row));
+                || new_row->typed_eq(*expected_row));
         if (!matches) {
             fail(path + " does not match endpoint completion/close progress");
         }
@@ -3095,21 +2819,23 @@ void StageDelivery::apply_obligation_patches(
 
 // simulate_issue_or_completion (pipeline_ledger.py 3852-3889).
 std::optional<std::string> StageDelivery::simulate_issue_or_completion(
-    const Json& run_transition, CursorProgress& progress,
+    const PipelineRun& run_transition, CursorProgress& progress,
     const std::string& segment, std::uint64_t run_index) {
-    const std::string kind =
-        row_string(run_transition, "transition_kind", "pipeline run");
-    const auto store_id =
-        row_opt_uint(run_transition, "endpoint_store_id", "pipeline run");
-    const std::uint64_t ordinal =
-        row_uint(run_transition, "endpoint_ordinal", "pipeline run");
-    if (kind == "endpoint_done"
-            || (kind == "tile_issue" && store_id
-                && progress.active.count(*store_id))) {
-        if (!store_id || !progress.active.count(*store_id)) {
+    const TransitionKind kind = run_transition.transition_kind;
+    const bool has_store = run_transition.has_endpoint_store_id;
+    const std::uint64_t store_id = run_transition.endpoint_store_id;
+    const bool has_ordinal = run_transition.has_endpoint_ordinal;
+    const std::uint64_t ordinal = run_transition.endpoint_ordinal;
+    if (!has_ordinal) {
+        fail("endpoint transition lacks its endpoint ordinal");
+    }
+    if (kind == TransitionKind::EndpointDone
+            || (kind == TransitionKind::TileIssue && has_store
+                && progress.active.count(store_id))) {
+        if (!has_store || !progress.active.count(store_id)) {
             fail("endpoint completion has no active issue");
         }
-        const auto active_it = progress.active.find(*store_id);
+        const auto active_it = progress.active.find(store_id);
         const std::uint64_t active_ordinal = active_it->second.first;
         progress.active.erase(active_it);
         if (active_ordinal != ordinal) {
@@ -3119,8 +2845,10 @@ std::optional<std::string> StageDelivery::simulate_issue_or_completion(
                          run_index);
         return "complete";
     }
-    if (kind != "tile_issue" && kind != "consume_start"
-            && kind != "fill_ack_progress" && kind != "release_ack_progress") {
+    if (kind != TransitionKind::TileIssue
+            && kind != TransitionKind::ConsumeStart
+            && kind != TransitionKind::FillAckProgress
+            && kind != TransitionKind::ReleaseAckProgress) {
         return std::nullopt;
     }
     if (progress.closed) {
@@ -3129,13 +2857,13 @@ std::optional<std::string> StageDelivery::simulate_issue_or_completion(
     if (ordinal != progress.position) {
         fail("endpoint issue does not match the next legal cursor position");
     }
-    if (!store_id) {
+    if (!has_store) {
         fail("endpoint issue lacks its store id");
     }
-    if (progress.active.count(*store_id)) {
+    if (progress.active.count(store_id)) {
         fail("endpoint issue duplicates an active store ID");
     }
-    progress.active[*store_id] = {ordinal, std::nullopt};
+    progress.active[store_id] = {ordinal, std::nullopt};
     progress.position += 1;
     if (progress.position > progress.total) {
         fail("endpoint cursor advanced beyond its run");
@@ -3148,30 +2876,28 @@ std::optional<std::string> StageDelivery::simulate_issue_or_completion(
 }
 
 // The pipeline_transition_runs loop body (pipeline_ledger.py 3891-4221).
-void StageDelivery::run_transition_row(const Json& transition) {
+void StageDelivery::run_transition_row(const PipelineRun& run) {
     const std::string path = "pipeline run";
-    const std::uint64_t sequence =
-        row_uint(transition, "first_logical_seq", path);
+    const std::uint64_t sequence = run.first_logical_seq;
     stage_node_events_before(sequence);
-    const std::string segment =
-        row_string(transition, "descriptor_segment_id", path);
+    const std::string& segment = run.descriptor_segment_id;
     const DescriptorPtr descriptor = find_descriptor(segment);
     if (!descriptor) {
         fail(path + " references unknown descriptor");
     }
     Json& state = current_state(segment);
-    const std::string kind = row_string(transition, "transition_kind", path);
-    const std::string domain = descriptor->identity.buffer_domain_id;
+    const TransitionKind kind = run.transition_kind;
+    const std::string& domain = descriptor->identity.buffer_domain_id;
     descriptor_transition_counts_[segment] += 1;
     if (state_flag(state, "retired")) {
         fail("retired descriptor received a later transition");
     }
-    if (kind == "descriptor_commit") {
+    if (kind == TransitionKind::DescriptorCommit) {
         if (!additions_.count(segment) || descriptor_commits_.count(segment)) {
             fail("descriptor_commit must declare exactly one new descriptor");
         }
         descriptor_commits_.insert(segment);
-        if (row_uint(transition, "cursor_version_start", path)
+        if (run.cursor_version_start
                 != state_uint(state, "cursor_version")) {
             fail("descriptor_commit cursor pre-version disagrees with declaration");
         }
@@ -3203,9 +2929,7 @@ void StageDelivery::run_transition_row(const Json& transition) {
                 *descriptor, segment, initial_run_index, initial_progress);
             const std::string obligation_id =
                 segment + "/run/" + num(initial_run_index);
-            expected_obligation_rows_[obligation_id] =
-                initial_obligation ? std::optional<Json>(*initial_obligation)
-                                   : std::nullopt;
+            expected_obligation_rows_[obligation_id] = initial_obligation;
             active_endpoint_deltas_[segment] +=
                 static_cast<std::int64_t>(initial_progress.active.size());
         }
@@ -3217,26 +2941,25 @@ void StageDelivery::run_transition_row(const Json& transition) {
         cursor_versions_.count(segment)
             ? cursor_versions_[segment]
             : state_uint(state, "cursor_version");
-    if (row_uint(transition, "cursor_version_start", path) != current_version) {
+    if (run.cursor_version_start != current_version) {
         fail("pipeline transition cursor pre-version mismatch");
     }
-    const std::uint64_t next_version =
-        row_uint(transition, "cursor_version_end", path);
+    const std::uint64_t next_version = run.cursor_version_end;
     cursor_versions_[segment] = next_version;
     state["cursor_version"] = next_version;
 
     const std::optional<SelectedEndpoint> selected =
-        selected_slot_and_credit(*descriptor, transition);
-    const auto run_index =
-        row_opt_uint(transition, "endpoint_run_index", path);
+        selected_slot_and_credit(*descriptor, run);
+    const bool has_run_index = run.has_endpoint_run_index;
+    const std::uint64_t endpoint_run_index = run.endpoint_run_index;
     CursorProgress* progress = nullptr;
-    if (run_index) {
-        progress = &seed_cursor_progress(segment, *run_index);
-        cursor_dirty_.insert({segment, *run_index});
+    if (has_run_index) {
+        progress = &seed_cursor_progress(segment, endpoint_run_index);
+        cursor_dirty_.insert({segment, endpoint_run_index});
     }
 
     std::optional<std::string> progress_action;
-    if (kind == "request_close") {
+    if (kind == TransitionKind::RequestClose) {
         if (state_flag(state, "request_closed")) {
             fail("request_close transition repeated");
         }
@@ -3269,65 +2992,61 @@ void StageDelivery::run_transition_row(const Json& transition) {
             const auto old =
                 expected_obligation(*descriptor, segment, index, run_progress);
             const std::string key = segment + "/run/" + num(index);
-            expected_obligation_rows_[key] =
-                old ? std::optional<Json>(*old) : std::nullopt;
+            expected_obligation_rows_[key] = old;
         }
         state["request_closed"] = true;
         state["service_done"] = true;
     } else if (progress != nullptr) {
         progress_action = simulate_issue_or_completion(
-            transition, *progress, segment, *run_index);
+            run, *progress, segment, endpoint_run_index);
         if (progress_action) {
             const auto new_expected = expected_obligation(
-                *descriptor, segment, *run_index, *progress);
-            const std::string key = segment + "/run/" + num(*run_index);
-            expected_obligation_rows_[key] =
-                new_expected ? std::optional<Json>(*new_expected)
-                             : std::nullopt;
+                *descriptor, segment, endpoint_run_index, *progress);
+            const std::string key =
+                segment + "/run/" + num(endpoint_run_index);
+            expected_obligation_rows_[key] = new_expected;
             if (*progress_action == "complete") {
                 // endpoint_done carries the concrete descriptor/run/selector
                 // and affine store id; it is terminal proof for this exact
                 // logical endpoint (request_close cancellation and cursor
                 // prefix normalization never enter this path).
                 const PipelineEndpointRun& completed_run =
-                    descriptor->endpoint_runs[*run_index];
-                const auto store_id =
-                    row_opt_uint(transition, "endpoint_store_id", path);
-                if (!store_id) {
+                    descriptor->endpoint_runs[endpoint_run_index];
+                if (!run.has_endpoint_store_id) {
                     fail("endpoint completion has no active issue");
                 }
                 const std::set<std::string> terminal_segments{segment};
-                record_dependency_terminal(completed_run.rank, *store_id,
+                record_dependency_terminal(completed_run.rank,
+                                           run.endpoint_store_id,
                                            &terminal_segments);
             }
         }
     }
 
-    if (kind == "data_ready") {
+    if (kind == TransitionKind::DataReady) {
         if (!selected.has_value() || selected->endpoint != "data_recv") {
             fail("data_ready must bind a concrete data_recv endpoint");
         }
-        const std::uint64_t ordinal =
-            row_uint(transition, "endpoint_ordinal", path);
+        if (!run.has_endpoint_ordinal) {
+            fail("data_ready transition lacks its endpoint ordinal");
+        }
+        const std::uint64_t ordinal = run.endpoint_ordinal;
         if (progress == nullptr
                 || !progress_has_completed(*progress, ordinal)) {
             fail("data_ready precedes data_recv endpoint completion");
         }
-        const Json& selector =
-            row_field(transition, "endpoint_selector", path);
         const std::uint64_t tile_ordinal =
-            row_uint(selector, "tile_ordinal", path);
+            run.endpoint_selector.tile_ordinal;
         const std::uint64_t slot_index =
             (selected->global_tile_ordinal - 1) % 2;
-        const SlotKey slot_key{domain, "target", selected->run->rank, -1,
-                               slot_index};
+        const SlotKey slot_key{domain, false, selected->run->rank,
+                               std::int64_t(-1), slot_index};
         const ReadyKey ready_slot_key{domain, selected->run->rank, slot_index,
                                       selected->shard.shard_ordinal};
-        const Json* target_row = current_target_row(slot_key);
-        const Json* owner =
-            target_row != nullptr
-                ? &row_field(*target_row, "owner", "slot row") : nullptr;
-        if (owner != nullptr && owner->is_null()) owner = nullptr;
+        const SlotRow* target_row = current_target_row(slot_key);
+        const SlotOwner* owner =
+            target_row != nullptr && target_row->owner
+                ? &*target_row->owner : nullptr;
         const OwnerTag pending_tag{
             segment, descriptor->identity.generation,
             descriptor->identity.stage_epoch,
@@ -3336,34 +3055,27 @@ void StageDelivery::run_transition_row(const Json& transition) {
         const std::pair<ReadyKey, OwnerTag> pending_key{ready_slot_key,
                                                         pending_tag};
         if (state_flag(state, "request_closed")
-                && (target_row == nullptr
-                    || !row_bool(*target_row, "occupied", "slot row"))) {
+                && (target_row == nullptr || !target_row->occupied)) {
             if (target_ready_overlay_.get_raw(ready_slot_key) != nullptr) {
                 fail("closed descriptor retains a ready target slot");
             }
             pending_ready_after_clear_.erase(pending_key);
-        } else if (target_row != nullptr
-                   && row_bool(*target_row, "occupied", "slot row")
-                   && row_field(*target_row, "shard_ordinal", "slot row")
-                          .is_null()
-                   && sorted_uint_array_contains(
-                          *target_row, "target_shards_to_consume", "slot row",
+        } else if (target_row != nullptr && target_row->occupied
+                   && !target_row->has_shard
+                   && std::binary_search(
+                          target_row->target_shards_to_consume.begin(),
+                          target_row->target_shards_to_consume.end(),
                           selected->shard.shard_ordinal)
                    && owner != nullptr
-                   && row_string(*owner, "segment_id", "slot row.owner")
-                          == segment
-                   && row_uint(*owner, "group_ordinal", "slot row.owner")
-                          == selected->run->group_ordinal
-                   && row_uint(*owner, "tile_ordinal", "slot row.owner")
-                          == tile_ordinal
-                   && row_uint(*owner, "pipeline_generation", "slot row.owner")
+                   && owner->segment_id == segment
+                   && owner->group_ordinal == selected->run->group_ordinal
+                   && owner->tile_ordinal == tile_ordinal
+                   && owner->pipeline_generation
                           == descriptor->identity.generation
-                   && row_uint(*owner, "stage_epoch", "slot row.owner")
-                          == descriptor->identity.stage_epoch
-                   && row_uint(*owner, "staging_allocation_id",
-                               "slot row.owner")
+                   && owner->stage_epoch == descriptor->identity.stage_epoch
+                   && owner->staging_allocation_id
                           == descriptor->identity.staging_allocation_id) {
-            const OwnerTag tag = owner_tag_of(*owner, "slot row.owner");
+            const OwnerTag tag = *owner;
             const OwnerTag* ready_owner =
                 target_ready_overlay_.get_raw(ready_slot_key);
             if (ready_owner != nullptr && !(*ready_owner == tag)) {
@@ -3378,7 +3090,7 @@ void StageDelivery::run_transition_row(const Json& transition) {
         } else {
             fail("data_ready owner mismatch at seq=" + num(sequence));
         }
-    } else if (kind == "service_done") {
+    } else if (kind == TransitionKind::ServiceDone) {
         if (state_flag(state, "service_done")) {
             fail("service_done transition repeated");
         }
@@ -3389,7 +3101,7 @@ void StageDelivery::run_transition_row(const Json& transition) {
             fail("service_done precedes cursor issue exhaustion");
         }
         state["service_done"] = true;
-    } else if (kind == "settle_done") {
+    } else if (kind == TransitionKind::SettleDone) {
         if (state_flag(state, "settle_done")) {
             fail("settle_done transition repeated");
         }
@@ -3410,7 +3122,7 @@ void StageDelivery::run_transition_row(const Json& transition) {
             fail("settle_done retains active physical endpoints");
         }
         state["settle_done"] = true;
-    } else if (kind == "descriptor_retire") {
+    } else if (kind == TransitionKind::DescriptorRetire) {
         if (!state_flag(state, "service_done")
                 || !state_flag(state, "settle_done")) {
             fail("descriptor retirement precedes service and settle");
@@ -3451,7 +3163,7 @@ void StageDelivery::run_transition_row(const Json& transition) {
         }
         state["retired"] = true;
         retirements_.push_back(segment);
-    } else if (kind == "descriptor_commit") {
+    } else if (kind == TransitionKind::DescriptorCommit) {
         // Handled above.
     }
 
@@ -3463,17 +3175,16 @@ void StageDelivery::run_transition_row(const Json& transition) {
     if (selected.has_value()) {
         const CreditKey key{domain, selected->shard.source_rank,
                             selected->shard.shard_ordinal};
-        if (kind == "release_ack_progress"
+        if (kind == TransitionKind::ReleaseAckProgress
                 && selected->endpoint == "release_ack_send") {
             ack_key = key;
             ack_delta = 1;
-        } else if (kind == "endpoint_done"
+        } else if (kind == TransitionKind::EndpointDone
                 && selected->endpoint == "release_ack_recv") {
-            const Json* row = credit_overlay_.get_raw(key);
+            const CreditRow* row = credit_overlay_.get_raw(key);
             const std::int64_t current_ack =
                 row != nullptr
-                    ? static_cast<std::int64_t>(
-                          row_uint(*row, "outstanding_ack_count", "credit row"))
+                    ? static_cast<std::int64_t>(row->outstanding_ack_count)
                     : 0;
             if (current_ack == 0) {
                 if (!state_flag(state, "request_closed")) {
@@ -3486,9 +3197,9 @@ void StageDelivery::run_transition_row(const Json& transition) {
             }
         }
     }
-    const auto slot_sets = apply_slot_patches(transition, *descriptor, selected);
+    const auto slot_sets = apply_slot_patches(run, *descriptor, selected);
     std::set<CreditKey> credit_keys =
-        apply_credit_patches(transition, *descriptor, {ack_key, ack_delta});
+        apply_credit_patches(run, *descriptor, {ack_key, ack_delta});
     for (const CreditKey& key : slot_sets.first) {
         credit_keys.insert(key);
     }
@@ -3505,7 +3216,7 @@ void StageDelivery::run_transition_row(const Json& transition) {
     }
 
     if (selected.has_value()) {
-        if (kind == "endpoint_done"
+        if (kind == TransitionKind::EndpointDone
                 && selected->endpoint == "release_ack_recv") {
             const std::uint64_t lag =
                 descriptor->protocol.release_lag_tiles;
@@ -3522,13 +3233,14 @@ void StageDelivery::run_transition_row(const Json& transition) {
                         watermark_key,
                         static_cast<std::int64_t>(released_tile)
                             - static_cast<std::int64_t>(
-                                  release_watermark_get(watermark_key)));
+                                release_watermark_get(watermark_key)));
                 }
             }
         }
     }
 
-    if (kind == "descriptor_retire" && domain_retirements_.count(domain)) {
+    if (kind == TransitionKind::DescriptorRetire
+            && domain_retirements_.count(domain)) {
         if (slot_row_counts_.get(domain) != 0
                 || credit_row_counts_.get(domain) != 0
                 || credit_ack_domains_.get(domain) != 0) {
@@ -3536,21 +3248,22 @@ void StageDelivery::run_transition_row(const Json& transition) {
         }
     }
 
-    std::map<std::string, std::optional<Json>> changed_expected;
+    std::map<std::string, std::optional<ObligationRow>> changed_expected;
     for (const auto& expected : expected_obligation_rows_) {
-        const Json* current = obligation_overlay_.get_raw(expected.first);
-        const Json* expected_row =
+        const ObligationRow* current = obligation_overlay_.get_raw(
+            expected.first);
+        const ObligationRow* expected_row =
             expected.second ? &*expected.second : nullptr;
         const bool matches =
             (current == nullptr) == (expected_row == nullptr)
             && (current == nullptr
-                || typed_equal(*current, *expected_row));
+                || current->typed_eq(*expected_row));
         if (!matches) changed_expected[expected.first] = expected.second;
     }
-    apply_obligation_patches(transition, changed_expected);
+    apply_obligation_patches(run, changed_expected);
     expected_obligation_rows_.clear();
 
-    if (selected.has_value() && run_index.has_value()) {
+    if (selected.has_value() && has_run_index) {
         std::int64_t current = 0;
         const auto delta = active_endpoint_deltas_.find(segment);
         if (delta != active_endpoint_deltas_.end()) current = delta->second;
@@ -3612,7 +3325,7 @@ void StageDelivery::finalize() {
     for (const std::string& segment : retirements_) {
         const auto patch = parsed_cursor_patches_.find(segment);
         if (patch == parsed_cursor_patches_.end()
-                || !row_bool(*patch->second, "retired", "cursor patch")) {
+                || !patch->second->retired) {
             fail("descriptor retirement needs explicit cursor run tombstones");
         }
     }
@@ -3622,25 +3335,22 @@ void StageDelivery::finalize() {
         if (patch == parsed_cursor_patches_.end()) {
             fail("new descriptor requires initial cursor run rows");
         }
-        const Json& runs = row_field(*patch->second, "runs", "cursor patch");
+        const auto& runs = patch->second->runs;
         if (runs.size() != addition.second->endpoint_runs.size()) {
             fail("new descriptor cursor patch must initialize every run");
         }
         for (std::size_t index = 0; index < runs.size(); ++index) {
-            if (!runs[index].is_array() || runs[index].size() != 2
-                    || read_uint(runs[index][0], "cursor patch run index")
-                           != index) {
+            if (runs[index].first != index) {
                 fail("new descriptor cursor patch must initialize every run");
             }
         }
-        if (row_bool(*patch->second, "retired", "cursor patch")) {
+        if (patch->second->retired) {
             fail("new descriptor cannot start retired");
         }
     }
 
-    for (const Json& patch : parsed_.cursor_patches) {
-        const std::string segment =
-            row_string(patch, "segment_id", "cursor patch");
+    for (const CursorPatch& patch : parsed_.cursor_patches) {
+        const std::string& segment = patch.segment_id;
         const DescriptorPtr descriptor = find_descriptor(segment);
         if (!descriptor) {
             fail("cursor patch references unknown descriptor");
@@ -3649,8 +3359,7 @@ void StageDelivery::finalize() {
         if (!descriptor_transition_counts_.count(segment)) {
             fail("cursor patch has no sequenced descriptor transition");
         }
-        const std::uint64_t patch_version =
-            row_uint(patch, "cursor_version", "cursor patch");
+        const std::uint64_t patch_version = patch.cursor_version;
         const std::uint64_t current_version =
             cursor_versions_.count(segment)
                 ? cursor_versions_[segment]
@@ -3658,8 +3367,7 @@ void StageDelivery::finalize() {
         if (patch_version != current_version) {
             fail("final cursor patch version disagrees with transition sequence");
         }
-        if (row_bool(patch, "retired", "cursor patch")
-                != state_flag(state, "retired")) {
+        if (patch.retired != state_flag(state, "retired")) {
             fail("cursor retirement marker disagrees with descriptor lifecycle");
         }
         cursor_version_updates_[segment] = patch_version;
@@ -3677,22 +3385,21 @@ void StageDelivery::finalize() {
                 }
             }
         }
-        const Json& runs = row_field(patch, "runs", "cursor patch");
+        const auto& runs = patch.runs;
         if (runs.empty() && !additions_.count(segment) && base_cursor_version
                 && patch_version == *base_cursor_version) {
             fail("metadata-only cursor patch has no sequenced version change");
         }
-        if (row_bool(patch, "retired", "cursor patch")) {
+        if (patch.retired) {
             if (!retired_segment_set.count(segment)) {
                 fail("cursor tombstones require descriptor_retire transition");
             }
-            for (const Json& item : runs) {
-                const std::uint64_t run_index =
-                    read_uint(item[0], "cursor patch run index");
+            for (const auto& item : runs) {
+                const std::uint64_t run_index = item.first;
                 cursor_changes_[{segment, run_index}] = std::nullopt;
                 cursor_transfer_changes_[{segment, run_index}] = std::nullopt;
-                const Json* old_row = nullptr;
-                Json initial_storage;
+                const CursorRun* old_row = nullptr;
+                CursorRun initial_storage;
                 if (additions_.count(segment)) {
                     initial_storage =
                         initial_cursor_run(*descriptor, run_index);
@@ -3710,36 +3417,34 @@ void StageDelivery::finalize() {
                 if (old_row == nullptr) {
                     fail("retirement tombstones a missing accepted cursor run");
                 }
-                const Json& old_active =
-                    row_field(*old_row, "active_endpoints", "cursor run");
-                if (!old_active.empty()) {
+                if (!old_row->active_endpoints.empty()) {
                     cursor_active_deltas_[segment] -=
-                        static_cast<std::int64_t>(old_active.size());
+                        static_cast<std::int64_t>(
+                            old_row->active_endpoints.size());
                 }
-                for (const Json& endpoint : old_active) {
-                    const std::uint64_t transfer_id = row_uint(
-                        endpoint, "transfer_id", "cursor run.active_endpoints");
-                    active_transfer_id_counts_.add(transfer_id, -1);
-                    if (active_transfer_id_counts_.get(transfer_id) < 0) {
+                for (const ActiveEndpoint& endpoint :
+                     old_row->active_endpoints) {
+                    active_transfer_id_counts_.add(endpoint.transfer_id, -1);
+                    if (active_transfer_id_counts_.get(endpoint.transfer_id)
+                            < 0) {
                         fail("active transfer index underflow during retirement");
                     }
                 }
             }
             continue;
         }
-        for (const Json& item : runs) {
-            const std::uint64_t run_index =
-                read_uint(item[0], "cursor patch run index");
-            const Json& final_row = item[1];
+        for (const auto& item : runs) {
+            const std::uint64_t run_index = item.first;
+            if (!item.second.has_value()) {
+                fail("nonretired cursor patch cannot tombstone a run");
+            }
+            const CursorRun& final_row = *item.second;
             const CursorRunKey key{segment, run_index};
             CursorProgress& progress = seed_cursor_progress(segment, run_index);
             if (!cursor_dirty_.count(key) && !additions_.count(segment)) {
                 fail("cursor run patch has no matching issue/completion/close transition");
             }
-            if (final_row.is_null()) {
-                fail("nonretired cursor patch cannot tombstone a run");
-            }
-            const Json* current_row = nullptr;
+            const CursorRun* current_row = nullptr;
             if (!additions_.count(segment)) {
                 const auto runs_map =
                     st_.cursor_runs_by_segment.find(segment);
@@ -3751,7 +3456,7 @@ void StageDelivery::finalize() {
                 }
             }
             if (current_row != nullptr
-                    && typed_equal(*current_row, final_row)) {
+                    && current_row->typed_eq(final_row)) {
                 fail("cursor run patch redundantly republishes an unchanged row");
             }
             const std::uint64_t expected_remaining =
@@ -3759,51 +3464,31 @@ void StageDelivery::finalize() {
                     ? static_cast<std::uint64_t>(progress.active.size())
                     : progress.total - progress.completed_total
                         - progress.cancelled;
-            if (row_uint(final_row, "completed_endpoint_count", "cursor run")
-                        != progress.completed
-                    || row_uint(final_row, "cancelled_endpoint_count",
-                                "cursor run") != progress.cancelled
-                    || row_uint(final_row, "remaining_endpoint_count",
-                                "cursor run") != expected_remaining
-                    || row_bool(final_row, "in_flight", "cursor run")
-                        != !progress.active.empty()) {
+            if (final_row.completed_endpoint_count != progress.completed
+                    || final_row.cancelled_endpoint_count
+                           != progress.cancelled
+                    || final_row.remaining_endpoint_count
+                           != expected_remaining
+                    || final_row.in_flight
+                           != !progress.active.empty()) {
                 fail("cursor run counts disagree with sequenced endpoint progress");
-            }
-            std::vector<std::pair<std::uint64_t, std::uint64_t>> final_ooo;
-            for (const Json& ooo :
-                 row_field(final_row, "completed_out_of_order", "cursor run")) {
-                final_ooo.emplace_back(
-                    row_uint(ooo, "first_ordinal",
-                             "cursor run.completed_out_of_order"),
-                    row_uint(ooo, "end_ordinal_exclusive",
-                             "cursor run.completed_out_of_order"));
             }
             const std::vector<std::pair<std::uint64_t, std::uint64_t>>
                 simulated_ooo =
                     progress.ooo_changed
                         ? completed_export_half_open(progress.ooo_root)
                         : progress.ooo_wire_ranges;
-            if (final_ooo != simulated_ooo) {
+            if (final_row.completed_out_of_order != simulated_ooo) {
                 fail("cursor out-of-order ranges disagree with endpoint completions");
             }
             if (cursor_position_ordinal(final_row, *progress.run)
                     != progress.position) {
                 fail("cursor next position disagrees with sequenced endpoint issues");
             }
-            if (!row_field(final_row, "next_store_id", "cursor run")
-                     .is_null()) {
-                const Json& actives =
-                    row_field(final_row, "active_endpoints", "cursor run");
-                if (actives.is_null()) {
-                    fail("cursor has an invalid active endpoint list");
-                }
-            }
-            std::map<std::uint64_t, const Json*> final_active;
-            for (const Json& endpoint :
-                 row_field(final_row, "active_endpoints", "cursor run")) {
-                final_active[row_uint(endpoint, "store_id",
-                                      "cursor run.active_endpoints")] =
-                    &endpoint;
+            std::map<std::uint64_t, const ActiveEndpoint*> final_active;
+            for (const ActiveEndpoint& endpoint :
+                 final_row.active_endpoints) {
+                final_active[endpoint.store_id] = &endpoint;
             }
             {
                 bool same = final_active.size() == progress.active.size();
@@ -3819,46 +3504,36 @@ void StageDelivery::finalize() {
                     fail("cursor active endpoint set disagrees with sequenced issue/completion events");
                 }
             }
-            std::map<std::uint64_t, const Json*> old_active_rows;
+            std::map<std::uint64_t, const ActiveEndpoint*> old_active_rows;
             if (current_row != nullptr) {
-                for (const Json& endpoint :
-                     row_field(*current_row, "active_endpoints",
-                               "cursor run")) {
-                    old_active_rows[row_uint(endpoint, "store_id",
-                                             "cursor run.active_endpoints")] =
-                        &endpoint;
+                for (const ActiveEndpoint& endpoint :
+                     current_row->active_endpoints) {
+                    old_active_rows[endpoint.store_id] = &endpoint;
                 }
             }
             for (const auto& active_entry : final_active) {
                 const auto old = old_active_rows.find(active_entry.first);
                 if (old == old_active_rows.end()) continue;
-                const std::string path = "cursor run.active_endpoints[]";
-                const Json& active = *active_entry.second;
-                const Json& before = *old->second;
+                const ActiveEndpoint& active = *active_entry.second;
+                const ActiveEndpoint& before = *old->second;
                 const bool regressed =
-                    row_uint(active, "transfer_id", path)
-                        != row_uint(before, "transfer_id", path)
-                    || !typed_equal(row_field(before, "owner", path),
-                                    row_field(active, "owner", path))
-                    || row_uint(active, "tile_ordinal", path)
-                        != row_uint(before, "tile_ordinal", path)
-                    || row_uint(active, "shard_ordinal", path)
-                        != row_uint(before, "shard_ordinal", path)
-                    || row_string(active, "endpoint", path)
-                        != row_string(before, "endpoint", path)
-                    || (!row_field(before, "flow_id", path).is_null()
-                        && row_field(active, "flow_id", path)
-                            != row_field(before, "flow_id", path))
-                    || (row_bool(before, "network_done", path)
-                        && !row_bool(active, "network_done", path))
-                    || (row_bool(before, "hbm_done", path)
-                        && !row_bool(active, "hbm_done", path));
+                    active.transfer_id != before.transfer_id
+                    || !(active.owner == before.owner)
+                    || active.tile_ordinal != before.tile_ordinal
+                    || active.shard_ordinal != before.shard_ordinal
+                    || active.endpoint != before.endpoint
+                    || (before.flow_bound
+                            ? (!active.flow_bound
+                               || active.flow_id != before.flow_id)
+                            : false)
+                    || (before.network_done && !active.network_done)
+                    || (before.hbm_done && !active.hbm_done);
                 if (regressed) {
                     fail("active physical endpoint identity/progress regressed");
                 }
             }
             cursor_changes_[key] = final_row;
-            std::map<std::uint64_t, Json> transfer_map;
+            std::map<std::uint64_t, ActiveEndpoint> transfer_map;
             for (const auto& active_entry : final_active) {
                 transfer_map[active_entry.first] = *active_entry.second;
             }
@@ -3871,14 +3546,11 @@ void StageDelivery::finalize() {
             }
             for (const auto& active_entry : old_active_rows) {
                 active_transfer_id_counts_.add(
-                    row_uint(*active_entry.second, "transfer_id",
-                             "cursor run.active_endpoints"),
-                    -1);
+                    active_entry.second->transfer_id, -1);
             }
             for (const auto& active_entry : final_active) {
-                const std::uint64_t transfer_id = row_uint(
-                    *active_entry.second, "transfer_id",
-                    "cursor run.active_endpoints");
+                const std::uint64_t transfer_id =
+                    active_entry.second->transfer_id;
                 active_transfer_id_counts_.add(transfer_id, 1);
                 if (active_transfer_id_counts_.get(transfer_id) > 1) {
                     fail("active transfer_id is already owned by another cursor");
@@ -3915,9 +3587,8 @@ void StageDelivery::finalize() {
             fail("cursor transition is missing its touched run patch");
         }
     }
-    for (const Json& resource : parsed_.resources) {
-        if (row_uint(resource, "as_of_tick", "resource row")
-                != parsed_.header.tick) {
+    for (const ResourceRow& resource : parsed_.resources) {
+        if (resource.as_of_tick != parsed_.header.tick) {
             fail("active resource frame must match envelope tick");
         }
     }
@@ -3941,7 +3612,7 @@ void StageDelivery::finalize() {
         }
     }
 
-    std::map<SlotKey, std::optional<Json>> slot_changes =
+    std::map<SlotKey, std::optional<SlotRow>> slot_changes =
         slot_overlay_.changes();
     for (auto& workset_entry : target_worksets_) {
         const SlotKey& key = workset_entry.first;
@@ -3950,13 +3621,10 @@ void StageDelivery::finalize() {
             slot_changes[key] = std::nullopt;
             continue;
         }
-        Json frozen_row = *workset.row;
-        Json consumed = Json::array();
-        for (const std::uint64_t shard : workset.consumed) {
-            consumed.push_back(shard);
-        }
-        frozen_row["consumed"] = !workset.consumed.empty();
-        frozen_row["consumed_target_shards"] = consumed;
+        SlotRow frozen_row = *workset.row;
+        frozen_row.consumed = !workset.consumed.empty();
+        frozen_row.consumed_target_shards.assign(workset.consumed.begin(),
+                                                 workset.consumed.end());
         slot_changes[key] = std::move(frozen_row);
     }
     const auto target_ready_changes = target_ready_overlay_.changes();
@@ -3967,7 +3635,7 @@ void StageDelivery::finalize() {
         st_.active_resources.size() == parsed_.resources.size();
     if (resources_equal) {
         for (std::size_t i = 0; i < parsed_.resources.size(); ++i) {
-            if (!typed_equal(st_.active_resources[i], parsed_.resources[i])) {
+            if (!st_.active_resources[i].typed_eq(parsed_.resources[i])) {
                 resources_equal = false;
                 break;
             }
@@ -3999,7 +3667,7 @@ void StageDelivery::finalize() {
     update_.descriptor_state_updates = std::move(state_updates);
     update_.descriptor_retirements = retirements_;
     update_.cursor_changes = std::move(cursor_changes_);
-    update_.cursor_version_updates = std::move(cursor_version_updates_);
+    update_.cursor_version_updates = cursor_version_updates_;
     update_.cursor_transfer_changes = std::move(cursor_transfer_changes_);
     update_.active_endpoint_deltas = active_endpoint_deltas_;
     update_.resources = parsed_.resources;
@@ -4032,7 +3700,7 @@ void StageDelivery::finalize() {
 // row loop and drain (3891, 4223-4229).
 void StageDelivery::run() {
     for (const auto& declaration : parsed_.descriptors) {
-        const std::string segment =
+        const std::string& segment =
             declaration.first->identity.segment_id;
         if (st_.descriptors.count(segment) || additions_.count(segment)) {
             fail("descriptor declaration conflicts with retained descriptor");
@@ -4091,38 +3759,23 @@ void StageDelivery::run() {
             dependency_rank_root_changes_[rank_rows.first] = root;
         }
     }
-    for (const Json& resource : parsed_.resources) {
-        const Json& segment_field =
-            row_field(resource, "descriptor_segment_id", "resource row");
-        if (!segment_field.is_null()) {
-            resource_counts_[read_string(
-                segment_field, "resource row.descriptor_segment_id")] += 1;
+    for (const ResourceRow& resource : parsed_.resources) {
+        if (resource.bound) {
+            resource_counts_[resource.descriptor_segment_id] += 1;
         }
     }
-    for (const Json& patch : parsed_.cursor_patches) {
-        const std::string segment =
-            row_string(patch, "segment_id", "cursor patch");
-        parsed_cursor_patches_[segment] = &patch;
+    for (const CursorPatch& patch : parsed_.cursor_patches) {
+        parsed_cursor_patches_[patch.segment_id] = &patch;
         std::set<std::uint64_t> run_indexes;
-        const Json& runs = row_field(patch, "runs", "cursor patch");
-        if (!runs.is_array()) {
-            fail("cursor patch runs must be an array");
+        for (const auto& item : patch.runs) {
+            run_indexes.insert(item.first);
         }
-        for (const Json& item : runs) {
-            if (!item.is_array() || item.size() != 2) {
-                fail("cursor patch run entry must be [index, value]");
-            }
-            run_indexes.insert(
-                read_uint(item[0], "cursor patch run index"));
-        }
-        parsed_cursor_patch_run_indexes_[segment] = std::move(run_indexes);
+        parsed_cursor_patch_run_indexes_[patch.segment_id] =
+            std::move(run_indexes);
     }
 
-    for (const Json& transition : parsed_.pipeline_runs) {
-        if (!transition.is_object()) {
-            fail("pipeline transition run must be an object");
-        }
-        run_transition_row(transition);
+    for (const PipelineRun& run : parsed_.pipeline_runs) {
+        run_transition_row(run);
     }
 
     stage_node_events_before(parsed_.header.seq_end + 1);
@@ -4229,13 +3882,10 @@ int PipelineLedgerCore::prepare(const ParsedEnvelope& parsed,
             std::uint64_t pipeline_tick = 0;
             bool have_pipeline = false;
             if (pipeline_check < parsed.pipeline_runs.size()) {
-                pipeline_seq = read_uint(
-                    row_field(parsed.pipeline_runs[pipeline_check],
-                              "first_logical_seq", "pipeline run"),
-                    "pipeline run.first_logical_seq");
-                pipeline_tick = row_uint(
-                    parsed.pipeline_runs[pipeline_check], "tick_first",
-                    "pipeline run");
+                pipeline_seq =
+                    parsed.pipeline_runs[pipeline_check].first_logical_seq;
+                pipeline_tick =
+                    parsed.pipeline_runs[pipeline_check].tick_first;
                 have_pipeline = true;
             }
             if (node_seq != nullptr && have_pipeline
@@ -4429,8 +4079,7 @@ PipelineReceipt PipelineLedgerCore::commit_prepared(int prepared_slot) {
     for (const auto& entry : update->obligation_changes) {
         const auto old = st.obligations_by_id.find(entry.first);
         if (old != st.obligations_by_id.end()) {
-            const std::string old_segment = row_string(
-                old->second, "segment_id", "obligation row");
+            const std::string& old_segment = old->second.segment_id;
             const auto segment_ids =
                 st.obligations_by_segment.find(old_segment);
             if (segment_ids != st.obligations_by_segment.end()) {
@@ -4444,9 +4093,7 @@ PipelineReceipt PipelineLedgerCore::commit_prepared(int prepared_slot) {
             st.obligations_by_id.erase(entry.first);
         } else {
             st.obligations_by_id[entry.first] = *entry.second;
-            st.obligations_by_segment[row_string(
-                                          *entry.second, "segment_id",
-                                          "obligation row")]
+            st.obligations_by_segment[entry.second->segment_id]
                 .insert(entry.first);
         }
     }
@@ -4545,7 +4192,11 @@ Json PipelineLedgerCore::pricing_json() const {
     out["event_watermark"] = watermark_;
     out["state_version"] = state_version_;
     out["tick"] = last_tick_;
-    out["active_resources"] = impl_->active_resources;
+    Json resources = Json::array();
+    for (const ResourceRow& row : impl_->active_resources) {
+        resources.push_back(resource_row_to_json(row));
+    }
+    out["active_resources"] = std::move(resources);
     return out;
 }
 
@@ -4596,27 +4247,31 @@ Json PipelineLedgerCore::snapshot_state_json() const {
             impl_->cursor_runs_by_segment.find(segment);
         if (runs_map != impl_->cursor_runs_by_segment.end()) {
             for (const auto& run : runs_map->second) {
-                runs.push_back(run.second);
+                runs.push_back(cursor_run_to_json(run.second));
             }
         }
         entry["runs"] = std::move(runs);
         cursors.push_back(std::move(entry));
     }
     out["authoritative_cursors"] = std::move(cursors);
-    out["active_resources"] = impl_->active_resources;
+    Json resources = Json::array();
+    for (const ResourceRow& row : impl_->active_resources) {
+        resources.push_back(resource_row_to_json(row));
+    }
+    out["active_resources"] = std::move(resources);
     Json obligations = Json::array();
     for (const auto& obligation : impl_->obligations_by_id) {
-        obligations.push_back(obligation.second);
+        obligations.push_back(obligation_row_to_json(obligation.second));
     }
     out["obligations"] = std::move(obligations);
     Json slots = Json::array();
     for (const auto& slot : impl_->slots_by_key) {
-        slots.push_back(slot.second);
+        slots.push_back(slot_row_to_json(slot.second));
     }
     out["slots"] = std::move(slots);
     Json credits = Json::array();
     for (const auto& credit : impl_->credits_by_key) {
-        credits.push_back(credit.second);
+        credits.push_back(credit_row_to_json(credit.second));
     }
     out["credits"] = std::move(credits);
     return out;

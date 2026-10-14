@@ -5,17 +5,33 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
-#include <optional>
 #include <string>
-#include <tuple>
 #include <vector>
+
+#include "joint_ledger/CompactWire.hh"
+#include "joint_ledger/TypedRows.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
 
+/// One published compact frame plus the header facts the bridge timing
+/// surfaces consume (the encoded bytes are deterministic for identical
+/// logical content, keeping the idempotent-replay raw-bytes gate exact).
+struct WorkLedgerWire {
+    std::string bytes;
+    bool full = false;
+    uint64_t delivery_sequence = 0;
+    uint64_t tick = 0;
+    uint64_t state_version = 0;
+    uint64_t logical_seq_start = 0;
+    uint64_t logical_seq_end = 0;
+    uint64_t logical_event_count = 0;
+};
+
 /// One callback-ordered protocol-v4 transition sequencer and bounded frame
 /// publisher. Both Online and execution fixtures use this same implementation.
+/// v6: the callback buffers are typed records (no whole-row JSON DOM exists
+/// on the producer path) and publish() emits workledger-compact-v1 bytes.
 class WorkLedgerV2Publisher {
     friend struct WorkLedgerV2PublisherTestAccess;
 
@@ -25,15 +41,14 @@ class WorkLedgerV2Publisher {
     void append_node_transition(const std::string& kind, uint64_t tick,
                                 std::string work_id,
                                 nlohmann::json payload);
-    void append_pipeline_transition(nlohmann::json transition);
-    void append_descriptor_commit(nlohmann::json declaration);
 
-    /// Seal one sparse frame. Cursor patches are the final changed run rows
-    /// for this delivery; active_resources is the one current O(A) resource
-    /// frame required by pricing.
-    nlohmann::json publish(uint64_t delivery_sequence, uint64_t tick,
-                           nlohmann::json cursor_patches,
-                           nlohmann::json active_resources);
+    /// Seal one sparse frame. active_resources is the one current O(A)
+    /// resource frame required by pricing. (D11: pipeline runs, descriptor
+    /// commits and cursor patches are no longer produced -- those sections
+    /// stay empty on every frame and a zero-row frame is legal.)
+    WorkLedgerWire publish(uint64_t delivery_sequence, uint64_t tick,
+                           std::vector<jointledger::ResourceRow>
+                               active_resources);
 
     uint64_t next_logical_sequence() const { return next_logical_seq_; }
     uint64_t watermark() const { return delivered_watermark_; }
@@ -41,12 +56,7 @@ class WorkLedgerV2Publisher {
     bool initialized() const { return has_previous_frame_; }
 
   private:
-    using TargetSlotKey =
-        std::tuple<std::string, std::string, int,
-                   std::optional<uint64_t>, size_t>;
-
-    static void require_array(const nlohmann::json& value,
-                              const char* field);
+    static void require_nonempty(const std::string& what);
     uint64_t next_sequence_candidate() const;
 
     std::string epoch_;
@@ -56,11 +66,8 @@ class WorkLedgerV2Publisher {
     uint64_t last_delivery_sequence_ = 0;
     uint64_t last_tick_ = 0;
     bool has_previous_frame_ = false;
-    nlohmann::json node_transitions_ = nlohmann::json::array();
-    nlohmann::json pipeline_transition_runs_ = nlohmann::json::array();
-    nlohmann::json descriptor_commits_ = nlohmann::json::array();
-    nlohmann::json previous_resources_ = nlohmann::json::array();
-    std::map<TargetSlotKey, uint64_t> target_delta_predecessor_seq_;
+    std::vector<jointledger::CompactNodeRecord> node_transitions_;
+    std::vector<jointledger::ResourceRow> previous_resources_;
 };
 
 }  // namespace ExecutionDriven

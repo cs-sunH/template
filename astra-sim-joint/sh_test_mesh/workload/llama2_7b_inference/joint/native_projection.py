@@ -2,9 +2,9 @@
 
 The serializers below keep the Python dataclasses as the source of truth.  A
 native context receives one frozen ProjectionInput snapshot; each project call
-passes only the bounded candidate WorkItems and per-call options.  Compact
-pipeline and DiePlan descriptors are serialized as typed JSON, never expanded
-into per-tile Python objects.
+passes only the bounded candidate WorkItems and per-call options.  DiePlan
+descriptors are serialized as typed JSON, never expanded into per-tile Python
+objects.
 """
 
 from __future__ import annotations
@@ -162,14 +162,6 @@ def _task_wire(leg) -> dict:
 
 
 def _work_wire(work) -> dict:
-    descriptors = []
-    for index, descriptor in enumerate(work.pipeline_descriptors):
-        serializer = getattr(descriptor, "to_wire", None)
-        if not callable(serializer):
-            raise NativeProjectionError(
-                f"work {work.work_id!r} pipeline descriptor[{index}] "
-                "has no typed to_wire() serializer")
-        descriptors.append(serializer())
     return {
         "work_id": work.work_id,
         "legs": [_task_wire(leg) for leg in work.legs],
@@ -178,7 +170,6 @@ def _work_wire(work) -> dict:
         "is_candidate": bool(work.is_candidate),
         "service_leg_ids": (None if work.service_leg_ids is None else
                              list(work.service_leg_ids)),
-        "pipeline_descriptors": descriptors,
     }
 
 

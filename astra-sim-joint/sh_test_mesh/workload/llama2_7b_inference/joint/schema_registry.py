@@ -9,7 +9,7 @@
 =========================  =======================  ===========================
 schema                      版本常量                 当前内容摘要
 =========================  =======================  ===========================
-预测配置                     ``PREDICTION_CONFIG``    七正交轴 + §9.2 preset
+预测配置                     ``PREDICTION_CONFIG``    五正交轴 + §9.2 preset
 因果快照（runtime_snapshot）  ``SNAPSHOT``            冻结带版本快照骨架
 工作账本（work_ledger）       ``WORK_LEDGER``         义务身份/生命周期/剩余量
 C++/Python 桥接协议          ``BRIDGE_PROTOCOL``      commit/issue/progress/
@@ -33,7 +33,7 @@ from .prediction_config import PREDICTION_CONFIG_SCHEMA_VERSION as PREDICTION_CO
 #: snapshot_id、now_ns、事件序号、runtime/layout/reservation/history/
 #: hardware/model 版本、观测 tick 与滞后、只读资源索引；白名单投影
 #: （禁止未来长度/后继 CSV/未到达队列全表透传）。
-SNAPSHOT_SCHEMA_VERSION = "snapshot-v2-20261005"
+SNAPSHOT_SCHEMA_VERSION = "snapshot-v3-20261014"
 
 #: 当前 V4 work-ledger envelope marker；V3 retained frames 仅由
 #: ``joint.pipeline_ledger.PipelineLedger`` 离线 archive reader 消费。
@@ -63,7 +63,7 @@ KV_DIRECTORY_SCHEMA_VERSION = "kvdir-v1-20260929"
 #: 命中、近似/超限/回退原因、宿主 CPU/wall time）。settle_done 是新统一
 #: 语义字段（不能全局文本替换 merge_done；consolidate 完成对应 settle，
 #: distributed 可无 merge 事件而仍有 settle）。
-DECISION_LOG_SCHEMA_VERSION = "declog-v2-20261005"
+DECISION_LOG_SCHEMA_VERSION = "declog-v3-20261014"
 
 #: 全部已知 schema 版本的集中登记（健康检查/manifest 披露用）。
 #: （修复注记 2026-09-29 W4：``prediction_config`` 行此前引用未绑定名

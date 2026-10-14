@@ -8,6 +8,11 @@ LICENSE file in the root directory of this source tree.
 #include <cstdlib>
 #include <iostream>
 
+#ifdef JOINT_V7_EVENT_PROFILE
+#include "common/EventProfile.h"
+using namespace NetworkAnalytical::EventProfile;
+#endif
+
 using namespace NetworkAnalytical;
 
 EventQueue::QueueWallStats EventQueue::wall_stats_{};
@@ -82,7 +87,15 @@ void EventQueue::proceed() noexcept {
     // Note: the erase above invalidated current_event_list; it must not be
     // touched again past this point.
     if (tick_end_cb_ != nullptr) {
+#ifdef JOINT_V7_EVENT_PROFILE
+        const uint64_t tick_end_t0 = now_ns();
+#endif
         tick_end_cb_(tick_end_arg_);
+#ifdef JOINT_V7_EVENT_PROFILE
+        State& ps = state();
+        ps.tick_end.ns += now_ns() - tick_end_t0;
+        ps.tick_end.calls += 1;
+#endif
     }
 
     // NEW: drain same-tick deferred events (post-commit produced nodes/events).
@@ -94,7 +107,22 @@ void EventQueue::proceed() noexcept {
         // deque, while the local pair remains stable.
         const auto deferred = deferred_queue_.front();
         deferred_queue_.pop_front();
+#ifdef JOINT_V7_EVENT_PROFILE
+        const char* deferred_label = classify(deferred.first);
+        Slot* deferred_slot = deferred_label != nullptr
+            ? find_slot(state().deferred, deferred_label)
+            : nullptr;
+        const uint64_t deferred_t0 = now_ns();
         deferred.first(deferred.second);
+        if (deferred_label != nullptr) {
+            close_slot(deferred_slot, nullptr, deferred_t0);
+        } else {
+            state().unclassified_deferred.ns += now_ns() - deferred_t0;
+            state().unclassified_deferred.calls += 1;
+        }
+#else
+        deferred.first(deferred.second);
+#endif
     }
 }
 

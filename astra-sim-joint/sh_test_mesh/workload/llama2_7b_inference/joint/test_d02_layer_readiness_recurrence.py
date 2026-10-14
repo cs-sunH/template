@@ -5,7 +5,7 @@
 语义合同（joint_cost_model estimate_P_with_continuation 三段重构）：
 
 * "历史准备—计算—关键路径合成"改为逐层就绪递推：一次性传输
-  （copy handoff chunk / 池恢复 / remote tile 到达）按 式(12) 供给链
+  （copy handoff chunk / 池恢复）按 式(12) 供给链
   只写它**真实消费的层**的 ``ready_data`` 门（copy 通道内按层消费序
   串行；池后缀与 NoC 前缀不同通道并行）；聚合 prefill 计算按固定层
   数均分（余数前置、总和守恒）为固定数量算子段；式(13) 递推输出
@@ -16,14 +16,12 @@
   first_credit + max(stream, compute) 三种整体合成全部废除、无开关）；
 * prefill 结束前所有需要层就绪：递推覆盖全部 L 层，末层完成 ≥ 末层
   数据到达 + 其算子份额；
-* 纯算术接口：``estimate_first_forward``（式 13）/``estimate_repeat_
-  segment``（重复段有界折叠，零供给退化为纯计算链）/``remote_read_
-  tile_arrival_ns``（tile 到达闭式——与 ``_double_buffer_recurrence_
-  ns`` 的通道串行 T 序列逐位同源）；
+* 纯算术接口：``estimate_first_forward``（式 13；远读 tile 到达闭式
+  与重复段折叠已随远读退役删除）；
 * 守恒锚：零门控动作（stay-LOCAL/recompute）递推 = 整段计算，与旧
   口径逐位一致。
 
-手算锚硬件（与 test_joint_credit_pricing 同族）：B_link = 10 B/ns、
+手算锚硬件：B_link = 10 B/ns、
 B_pool = 5 B/ns、B_HBM = 100 B/ns、单跳时延 10 ns、池端口事务时延
 100 ns、流注册表空、u_port = 0（离线口径）。
 
@@ -55,8 +53,6 @@ from joint.joint_cost_model import (  # noqa: E402
     _copy_handoff_layer_ranges,
     _split_ns_by_layer,
     estimate_first_forward,
-    estimate_repeat_segment,
-    remote_read_tile_arrival_ns,
 )
 
 
@@ -87,14 +83,12 @@ def _session(home=0, resident=0, history_bytes=(1000, 1000),
         missing_bytes_by_tp_rank=missing)
 
 
-def _request(input_tokens=50, decode=10, input_bytes=(25, 25),
-             prefill_scan_passes=None):
+def _request(input_tokens=50, decode=10, input_bytes=(25, 25)):
     return RequestView(
         request_id="r", session_id="s", input_tokens=input_tokens,
         history_tokens_before=100, estimated_decode_tokens=decode,
         horizon_source="session_online_mean",
-        input_kv_bytes_by_tp_rank=input_bytes,
-        prefill_scan_passes=prefill_scan_passes)
+        input_kv_bytes_by_tp_rank=input_bytes)
 
 
 def _route(source, target):
@@ -236,117 +230,6 @@ class FirstForwardRecurrenceTest(unittest.TestCase):
 
 # ============================================== 重复段/到达闭式单测 ==
 
-class RepeatSegmentTest(unittest.TestCase):
-    """estimate_repeat_segment：有界折叠（纯算术，不查注册表）。"""
-
-    def test_zero_supply_is_pure_compute_chain(self):
-        # 零流向量 = 本地即时供给：max(proj, start) + compute。
-        self.assertEqual(
-            estimate_repeat_segment(steps=10, compute_ns=20, start_ns=100),
-            120)
-        # proj 抬不平时取 max。
-        self.assertEqual(
-            estimate_repeat_segment(
-                steps=10, compute_ns=20, start_ns=5, proj_ns=50),
-            70)
-
-    def test_zero_steps_degenerate(self):
-        # steps = 0：段不存在（返回 max(proj, start)，与旧腿零遍契约
-        # 一致）；有流但零步 = 零流（流字节本应含遍数乘子）。
-        self.assertEqual(
-            estimate_repeat_segment(steps=0, compute_ns=20, start_ns=7), 7)
-
-    def test_matches_double_buffer_leg_anchor(self):
-        # D09 手算锚迁移（test_joint_credit_pricing 同夹具）：decode 10
-        # 遍、rank 流 10000、tile 2560 → m=3 尾 2320；x = 522、
-        # c = int(20×2560/20000) = 2、tail_x = 474、tail_c = 2 →
-        # F = max(1566+474, 1568)+2 = 2042（逐 rank 求值取 max）。
-        self.assertEqual(
-            estimate_repeat_segment(
-                steps=10, compute_ns=20,
-                stream_bytes_by_rank=(10000, 10000), tile_bytes=2560,
-                supply_ns_by_rank=(522, 522),
-                tail_supply_ns_by_rank=(474, 474)),
-            2042)
-
-    def test_tail_share_truncation_same_as_leg(self):
-        # 份额 < 1 整型截断同源：compute 20、tile 500、流 20000 →
-        # m = 40、tile_c = int(20×500/20000) = 0 → 纯流送
-        # F = 110 + 39×110 = 4400。
-        self.assertEqual(
-            estimate_repeat_segment(
-                steps=20, compute_ns=20,
-                stream_bytes_by_rank=(20000,), tile_bytes=500,
-                supply_ns_by_rank=(110,), tail_supply_ns_by_rank=(0,)),
-            4400)
-
-
-class TileArrivalClosedFormTest(unittest.TestCase):
-    """remote_read_tile_arrival_ns：与通道串行 T 递推（式 14 直译的
-    T 序列——首块发射约束，交付协议口径）逐位同源。"""
-
-    @staticmethod
-    def _t_sequence(m, x, c, tail_x, start=0, proj=0):
-        """_double_buffer_recurrence_ns 同构的 T 序列（到达 = 传输完
-        成；c 只进入消费端 F，不进入发射端 T——通道逐笔串行）。"""
-        transfers = [float(x)] * m + ([float(tail_x)] if tail_x else [])
-        if not transfers:
-            return []
-        t_prev2 = None
-        t_prev = start + transfers[0]
-        a_1 = max(proj, t_prev)
-        arrivals = [t_prev]
-        for j in range(1, len(transfers)):
-            if j == 1:
-                t_j = a_1 + transfers[1]
-            else:
-                t_j = max(t_prev, t_prev2) + transfers[j]
-            arrivals.append(t_j)
-            t_prev2, t_prev = t_prev, t_j
-        return arrivals
-
-    def test_arrival_matches_channel_serial_t_recurrence(self):
-        for m in (1, 2, 3, 5):
-            for x in (30, 110):
-                for c in (5, 200):  # x≥c 与 x<c 两分支——到达与 c 无关
-                    for tail_x in (0, 47):
-                        for proj in (0, 25):
-                            arrivals = self._t_sequence(
-                                m, x, c, tail_x, proj=proj)
-                            for index in range(1, len(arrivals) + 1):
-                                self.assertEqual(
-                                    remote_read_tile_arrival_ns(
-                                        index=index, full_tiles=m,
-                                        tile_x_ns=x, tail_x_ns=tail_x,
-                                        proj_ns=proj),
-                                    int(arrivals[index - 1]),
-                                    (m, x, c, tail_x, proj, index))
-
-    def test_zero_full_tiles_tail_only_transaction(self):
-        # m = 0：首事务即尾块，到达 = S + x_tail。
-        self.assertEqual(
-            remote_read_tile_arrival_ns(
-                index=1, full_tiles=0, tile_x_ns=110, tail_x_ns=210),
-            210)
-        # 消费池等价形态：max(P, S+x_t)+c_t（A.1）——到达不含 c。
-        self.assertEqual(
-            remote_read_tile_arrival_ns(
-                index=1, full_tiles=0, tile_x_ns=0, tail_x_ns=30), 30)
-
-    def test_out_of_range_fail_closed(self):
-        with self.assertRaises(JointCostError):
-            remote_read_tile_arrival_ns(
-                index=2, full_tiles=1, tile_x_ns=10)  # 无尾块越界
-        with self.assertRaises(JointCostError):
-            remote_read_tile_arrival_ns(
-                index=1, full_tiles=0, tile_x_ns=10)  # 无事务
-        with self.assertRaises(JointCostError):
-            remote_read_tile_arrival_ns(
-                index=0, full_tiles=2, tile_x_ns=10)  # 1 基索引
-
-
-# ===================================== 生产路径逐层门集成锚（copy/stay） ==
-
 class CopyLayerGateIntegrationTest(unittest.TestCase):
     """copy handoff chunk 只门控其层区间；末 chunk 到达后的计算由递推
     保留（110 ns 性质的生产尺度形态）。"""
@@ -361,7 +244,7 @@ class CopyLayerGateIntegrationTest(unittest.TestCase):
             session=_session(
                 history_bytes=history_bytes, prefix=16, resident=0),
             request=_request(input_tokens=50, decode=10),
-            instance_index=1, action=ACTION_COPY, remote_enabled=True)
+            instance_index=1, action=ACTION_COPY)
         self.assertTrue(candidate.applicable)
         return model, candidate
 
@@ -428,7 +311,7 @@ class StayPoolSuffixLayerGateTest(unittest.TestCase):
             missing=(1000, 1000), location="partial_hbm_remote", prefix=2)
         candidate = model.estimate_P_with_continuation(
             session=session, request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.history_prep_ns, 300)
         self.assertEqual(
@@ -452,10 +335,10 @@ class StayPoolSuffixLayerGateTest(unittest.TestCase):
             missing=(1000, 1000), location="partial_hbm_remote", prefix=2)
         base_c = base.estimate_P_with_continuation(
             session=session, request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         slow_c = slow.estimate_P_with_continuation(
             session=session, request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         self.assertEqual(base_c.breakdown.history_prep_ns, 300)
         self.assertEqual(
             slow_c.breakdown.history_prep_ns, 10**6 + 200)
@@ -473,7 +356,7 @@ class ConservationAnchorTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=_session(home=1, resident=1),
             request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         self.assertTrue(candidate.applicable)
         # target 5000 串行 + prefill 50 + decode 20（无 merge：home ==
         # 目标）；递推零门控 = 整段（无 D02 漂移）。
@@ -487,7 +370,7 @@ class ConservationAnchorTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=_session(home=1, resident=1),
             request=_request(), instance_index=1,
-            action=ACTION_RECOMPUTE, remote_enabled=True)
+            action=ACTION_RECOMPUTE)
         self.assertTrue(candidate.applicable)
         self.assertIn("rebuild_context_tokens=100", candidate.breakdown.notes)
         self.assertEqual(candidate.breakdown.compute_ns, 170)

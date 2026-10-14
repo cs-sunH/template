@@ -196,17 +196,15 @@ def _hit_state_joint(decision: dict, turn: Optional[int],
     """joint：按 R12 披露的 joint_action/history_tokens_before 映射三态。
 
     2026-10-01 审查轮修正：joint 行的 prefill_affinity_reason 恒为
-    ``joint_<action>``（stay/copy/recompute/remote-read），沿用 S3 五词
-    表会把全部 joint 请求判成 not_supported、命中率输出主动错误的
-    0.0。映射语义（只读本行披露字段，不猜测）：
+    ``joint_<action>``（stay/copy/recompute——三动作，2026-10-14 远读
+    退役），沿用 S3 五词表会把全部 joint 请求判成 not_supported、命中
+    率输出主动错误的 0.0。映射语义（只读本行披露字段，不猜测）：
 
     - history_tokens_before == 0 → no_history（turn-0 首请求，无历史
       可命中，不计入 miss）；
     - joint_stay → full（历史驻留执行实例，本地全量命中）；
     - joint_copy → full（基础历史完整拷贝到执行实例，S1 noc_migrate
       同款口径——迁移非重算，命中语义看结果驻留）；
-    - joint_remote-read → partial（前缀层驻留 + 后缀池逐 tile 读流，
-      resident_prefix_layers 同款 partial 口径）；
     - joint_recompute → miss（历史弃用重算，词表原生支持 miss 态；
       S1-S3 无 recompute 故 miss 从未出现，joint 下属预期）。
 
@@ -230,12 +228,11 @@ def _hit_state_joint(decision: dict, turn: Optional[int],
     mapping = {
         "joint_stay": "full",
         "joint_copy": "full",
-        "joint_remote-read": "partial",
         "joint_recompute": "miss",
     }
     if action not in mapping:
         # prefill_affinity_reason 形如 joint_<action>，但 joint_action 走
-        # 出四动作词表（未来动作面扩展）——不猜测，留 not_supported。
+        # 出三动作词表（未来动作面扩展）——不猜测，留 not_supported。
         return "not_supported", evidence
     return mapping[action], evidence
 
@@ -541,7 +538,7 @@ def extract_events_joint(record: dict) -> list[dict]:
     无迁移）"。该前提已被两处打破并在此补齐：
 
     * decode（D18 起 P 与 D 可跨实例）：prefill_decode_transfer（P→D
-      迁移，含 W10 hybrid 的 U 迁移首腿）与 decode_evictions；
+      迁移）与 decode_evictions；
     * prefill（R2）：joint 的 history_transfers 为**逐腿列表**（copy 逐
       块/后缀恢复逐组多腿为常态）、且携带四个逐出字段——S3 聚合单数
       口径使 canonical 与 native 臂 FAMILY_HISTORY 计数与
@@ -677,9 +674,10 @@ REPO_VARIANTS: dict[str, dict[str, Any]] = {
         "extract_events": extract_events_joint,
         "shard_sum_check": False,
         "partial_semantics": True,
-        "notes": "2026-10-01 审查轮：hit_state 按 joint_action 四动作映射"
-                 "（stay/copy→full、remote-read→partial、recompute→miss、"
-                 "history_tokens_before==0→no_history——R12 披露字段直读）；"
+        "notes": "2026-10-01 审查轮：hit_state 按 joint_action 三动作映射"
+                 "（stay/copy→full、recompute→miss、"
+                 "history_tokens_before==0→no_history——R12 披露字段直读；"
+                 "2026-10-14 远读退役后 partial 态仅由池驻留词表承载）；"
                  "事件提取补 decode 分支（D18 起 P→D 可跨实例，decode 行携"
                  "带 prefill_decode_transfer/decode_evictions，S3 采集器无"
                  "此分支会漏记 PD/EVICTION 族且 --reconcile 假红）。"

@@ -12,6 +12,8 @@
 #include <chrono>
 #include <utility>
 
+#include "joint_ledger/CompactReader.hh"
+#include "joint_ledger/CompactWire.hh"
 #include "joint_ledger/LedgerTypes.hh"
 
 namespace jointledger {
@@ -53,9 +55,18 @@ int DualLedger::prepare(const char* segment, std::size_t length,
         static_cast<std::int64_t>(expected_delivery)
             == pipeline_.delivery_sequence()
         && pipeline_.delivery_sequence() >= 0;
-    auto parsed = std::make_unique<ParsedEnvelope>(parse_envelope_v4(
-        segment, length, retained, allow_retained_replay,
-        expected_delivery, expected_tick));
+    // Wire dispatch: compact frames (workledger-compact-v1) parse through the
+    // compact reader; legacy JSON bytes stay on the version reader that feeds
+    // the same typed transaction core (one state machine, two decoders).
+    ParsedEnvelope envelope =
+        is_compact_frame(segment, length)
+            ? parse_envelope_compact(segment, length, retained,
+                                     allow_retained_replay,
+                                     expected_delivery, expected_tick)
+            : parse_envelope_v4(segment, length, retained,
+                                allow_retained_replay, expected_delivery,
+                                expected_tick);
+    auto parsed = std::make_unique<ParsedEnvelope>(std::move(envelope));
     const std::int64_t t1 = now_ns();
 
     auto tx = std::make_unique<WorkLedgerCore::Transaction>(

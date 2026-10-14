@@ -22,6 +22,11 @@ import os
 
 REQUEST_JOURNAL_NAME = "request_journal.jsonl"
 WORK_LEDGER_REPLAY_SIDECAR_NAME = "request_journal_work_ledger.jsonl.gz"
+# v6 compact round: binary length-framed sidecar of workledger-compact-v1
+# frames (record = [u64 LE delivery][u64 LE tick][u32 LE length][bytes]).
+WORK_LEDGER_COMPACT_SIDECAR_NAME = (
+    "request_journal_work_ledger.compact.bin.gz")
+_COMPACT_FRAME_MAGIC = b"WLCP"
 _REQUEST_PREFIX = "request_"
 _JSON_SUFFIX = ".json"
 
@@ -83,6 +88,73 @@ def _work_ledger_sidecar_path(bridge_dir):
         if os.path.isfile(path):
             return path
     return None
+
+
+def _work_ledger_compact_sidecar_path(bridge_dir):
+    """Return the live or runner-archived compact sidecar path, or ``None``."""
+    candidates = [os.path.join(
+        bridge_dir, WORK_LEDGER_COMPACT_SIDECAR_NAME)]
+    run_dir = os.path.dirname(os.path.abspath(bridge_dir))
+    candidates.append(os.path.join(
+        run_dir, "results", WORK_LEDGER_COMPACT_SIDECAR_NAME))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def iter_work_ledger_segments(bridge_dir):
+    """Yield ``(delivery_sequence, tick, compact_frame_bytes)``.
+
+    The compact sidecar is the authoritative replay source of runs produced
+    by the v6 compact producer; rows arrive in file order and non-increasing
+    sequences fail closed (mirroring the JSON sidecar reader).
+    """
+    path = _work_ledger_compact_sidecar_path(bridge_dir)
+    if path is None:
+        return
+    previous_seq = -1
+    # A guard-terminated run leaves the gzip STREAM truncated after the last
+    # flushed record: complete records before the cut are the recoverable
+    # prefix (mirroring the legacy JSON sidecar's line-boundary recovery);
+    # any mid-record cut or corruption fails closed.
+    try:
+        with gzip.open(path, "rb") as source:
+            while True:
+                try:
+                    header = source.read(20)
+                except EOFError:
+                    break
+                if not header:
+                    break
+                if len(header) != 20:
+                    raise ValueError(
+                        "truncated compact work_ledger sidecar header at "
+                        "{}".format(path))
+                seq = int.from_bytes(header[0:8], "little")
+                tick = int.from_bytes(header[8:16], "little")
+                length = int.from_bytes(header[16:20], "little")
+                try:
+                    frame = source.read(length)
+                except EOFError:
+                    break
+                if len(frame) != length:
+                    break
+                if not frame.startswith(_COMPACT_FRAME_MAGIC):
+                    raise ValueError(
+                        "compact sidecar record at {} lacks its frame "
+                        "magic".format(path))
+                if seq <= previous_seq:
+                    raise ValueError(
+                        "compact work_ledger sidecar sequence {} is not "
+                        "greater than previous sequence {}".format(
+                            seq, previous_seq))
+                previous_seq = seq
+                yield seq, tick, frame
+    except (EOFError, gzip.BadGzipFile, OSError) as exc:
+        raise ValueError(
+            "invalid or truncated compact work_ledger sidecar {}: "
+            "{}".format(path, exc)) from exc
 
 
 def iter_work_ledger_payloads(bridge_dir):
@@ -153,14 +225,31 @@ def iter_request_records(bridge_dir, *, attach_work_ledger=False):
     native shape) and pass through unchanged.
     """
     payloads = iter_work_ledger_payloads(bridge_dir) if attach_work_ledger else None
+    segments = iter_work_ledger_segments(bridge_dir) if attach_work_ledger else None
     end_of_payloads = object()
     payload_row = (next(payloads, end_of_payloads)
                    if payloads is not None else end_of_payloads)
+    segment_row = (next(segments, end_of_payloads)
+                   if segments is not None else end_of_payloads)
 
     def _attach(seq, request):
-        nonlocal payload_row
+        nonlocal payload_row, segment_row
         if not attach_work_ledger:
             return request
+        if segment_row is not end_of_payloads:
+            while segment_row is not end_of_payloads and segment_row[0] < seq:
+                raise ValueError(
+                    "compact work_ledger segment {} has no matching "
+                    "stripped journal record".format(segment_row[0]))
+            if segment_row is not end_of_payloads and segment_row[0] == seq:
+                if "work_ledger" in request:
+                    raise ValueError(
+                        "compact segment {} conflicts with an inline "
+                        "work_ledger record".format(seq))
+                merged = dict(request)
+                merged["work_ledger_segment"] = segment_row[2]
+                segment_row = next(segments, end_of_payloads)
+                return merged
         while payload_row is not end_of_payloads and payload_row[0] < seq:
             raise ValueError(
                 "work_ledger sidecar payload {} has no matching stripped "
@@ -213,8 +302,17 @@ def iter_request_records(bridge_dir, *, attach_work_ledger=False):
                 "expected {} in {}".format(seq, expected_seq, bridge_dir))
         loose_path = os.path.join(
             bridge_dir, _REQUEST_PREFIX + str(seq) + _JSON_SUFFIX)
-        with open(loose_path, "r", encoding="utf-8") as source:
-            record_seq, request = _decode_record(source.read(), loose_path)
+        # v6 compact round: loose request files may carry a binary
+        # workledger-compact-v1 member; splice it out with the structural
+        # scan before text decoding (the journal remains authoritative).
+        with open(loose_path, "rb") as source:
+            raw = source.read()
+        if raw.find(b'"work_ledger":WLCP') >= 0:
+            from joint.native_ledger import scan_request
+            outer_bytes, _segment = scan_request(raw)
+            raw = outer_bytes
+        record_seq, request = _decode_record(
+            raw.decode("utf-8"), loose_path)
         if record_seq != seq:
             raise ValueError(
                 "bridge request filename seq {} != payload seq {} ({})".format(
@@ -226,3 +324,7 @@ def iter_request_records(bridge_dir, *, attach_work_ledger=False):
         raise ValueError(
             "work_ledger sidecar payload {} has no matching journal record"
             .format(payload_row[0]))
+    if (attach_work_ledger and segment_row is not end_of_payloads):
+        raise ValueError(
+            "compact work_ledger segment {} has no matching journal record"
+            .format(segment_row[0]))

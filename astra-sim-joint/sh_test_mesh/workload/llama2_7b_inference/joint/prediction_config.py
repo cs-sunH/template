@@ -6,7 +6,7 @@ W0 冻结（2026-09-29，《joint仓库当下+历史修改方案》§9.1/§9.2�
   JSON 文件，承载全部预测轴与常数参数；不为每个常数新增环境变量
   （方案 §9.1 实施建议的落地，本模块为单一裁决点）。
 * **正交研究轴**（§9.1 表）：预测模型 / 新增需求 / 历史启用 / 阶段策略 /
-  结算策略 / 动作范围 / 多源协议相互独立，runner 校验不支持组合并记录
+  结算策略相互独立，runner 校验不支持组合并记录
   生效值与来源（不能只记录用户输入而遗漏回退后的实际模式——回退由
   W7 forecast_validation 运行期执行，本模块只冻结取值域与组合约束）。
 * **fail-closed**：未知键、未知版本、非法值、矛盾组合一律
@@ -18,7 +18,7 @@ W0 冻结（2026-09-29，《joint仓库当下+历史修改方案》§9.1/§9.2�
   - ``known_work``（缺省）：正式路径 = 当前真实账本 → 候选加入后的资源
     依赖事件前推 → 因果历史补充 → 本轮 settle 完成时间（B 模式）。
   - ``frozen_diagnostic``：A 对照臂——共用新物理契约（同因果快照、真实
-    目录、容量/保护条件、四动作与结算策略），但把决策 tick 的竞争份额/
+    目录、容量/保护条件、三动作与结算策略），但把决策 tick 的竞争份额/
     服务估计按显式登记的冻结规则外推，不随事件重分配。必须附带
     ``frozen_diagnostic`` 冻结规格（冻结哪些竞争集合/服务估计、冻结时
     域、资源规则），缺规格即启动失败。不能调用整套旧冻结计价实现。
@@ -48,25 +48,14 @@ W0 冻结（2026-09-29，《joint仓库当下+历史修改方案》§9.1/§9.2�
   - ``consolidate``（缺省）：单位置收敛（物理 merge 属结算子协议）。
   - ``distributed``：目录提交/引用交接/暂存归还/旧义务闭合型结算，不
     强制物理归并。一次 run 固定，同次候选比较不能变（§7.3/§7.4）。
-* ``action_space``
-  - ``pure_four``（缺省）：四纯动作完整参选。
-  - ``source_subset_hybrid``：W10 混合扩展（按来源 copy 子集＋其余远
-    读；纯端点与纯动作去重）。不改四动作纯端点语义；超出来源子集预算
-    的状态返回明确"不支持此扩展"。
-* ``multi_source_protocol``
-  - 首版仅 ``ordered_shared_double_buffer``（确定来源/区间顺序、共享
-    一对有限缓冲、来源边界排空）。其他值配置即报错（并行协议未实现
-    时不用静默别名，§6.4）。
 
 与 ``JointMechanismConfig`` 的组合约束（``cross_validate`` 单一裁决点）：
 
 * J-off（scheduler_mode != joint）：预测轴中仅影响 J 计价的部分
   （projection_mode / future_demand_mode / history_use）记 inactive，
-  不输出"历史已改善 J"式的生效声明；结算策略与动作范围等共同底座轴
+  不输出"历史已改善 J"式的生效声明；结算策略等共同底座轴
   仍然适用（§9.1"J-off 仍使用其映射策略，执行正确性、目录、结算和因
   果观测等共同底座仍适用"）。
-* ``action_space=source_subset_hybrid`` 与掩码/动作范围的关系：hybrid
-  不改 ``allowed_actions`` 掩码语义（候选集上限），纯端点仍受掩码约束。
 
 §9.2 参数表：``PredictionParams`` 是可运行、可校验的具体 preset。所有
 数值的来源在字段注释与 preset JSON 内登记；主文未指定通用最优窗口，
@@ -83,9 +72,11 @@ from dataclasses import dataclass, field, fields, replace
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple
 
+from joint.joint_config import MODEL_SEMANTICS_VERSION
+
 #: 预测配置 schema 版本（与模型语义版本、快照 schema、bridge protocol、
 #: 目录 schema、日志 schema 分开管理——§9.3）。语义改变必须升级本版本。
-PREDICTION_CONFIG_SCHEMA_VERSION = "predcfg-v3-20261005"
+PREDICTION_CONFIG_SCHEMA_VERSION = "predcfg-v4-20261014"
 
 #: 唯一配置入口环境变量（路径 → 版本化 JSON；W0 冻结命名，登记开关清单）。
 ENV_JOINT_PREDICTION_CONFIG = "JOINT_PREDICTION_CONFIG"
@@ -119,16 +110,6 @@ STAGE_POLICIES = (STAGE_POLICY_TWO_STAGE, STAGE_POLICY_ONCE_MAPPING)
 SETTLEMENT_CONSOLIDATE = "consolidate"
 SETTLEMENT_DISTRIBUTED = "distributed"
 SETTLEMENT_POLICIES = (SETTLEMENT_CONSOLIDATE, SETTLEMENT_DISTRIBUTED)
-
-ACTION_SPACE_PURE_FOUR = "pure_four"
-ACTION_SPACE_SOURCE_SUBSET_HYBRID = "source_subset_hybrid"
-ACTION_SPACES = (
-    ACTION_SPACE_PURE_FOUR,
-    ACTION_SPACE_SOURCE_SUBSET_HYBRID,
-)
-
-MULTI_SOURCE_ORDERED_SHARED_DOUBLE_BUFFER = "ordered_shared_double_buffer"
-MULTI_SOURCE_PROTOCOLS = (MULTI_SOURCE_ORDERED_SHARED_DOUBLE_BUFFER,)
 
 #: A 对照冻结规格的冻结时域取值域：``per_action`` = 把决策 tick 的活跃
 #: 集合/份额冻结到整个候选动作完成（旧阶段冻结份额语义的显式登记形
@@ -290,10 +271,6 @@ class PredictionParams:
     #: 变更方案新增交接的控制/协议工作描述（机读摘要；缺省空 = 未建模，
     #: 显式登记）。
     handoff_control_rule: str = ""
-    # -- hybrid 子集预算（W10 消费） --
-    #: source_subset_hybrid 的最大远端来源数（超限状态返回明确"不支持
-    #  此扩展"；2^|S| 子集显式记录，不宣称常数复杂度）。
-    hybrid_max_remote_sources: int = 4
     # -- W7 新增需求预测（消费方 joint/background_forecast.py 与
     #    joint/forecast_validation.py；§9.2 表"桶/直方图/模板上限"与
     #    "历史准入的预测距离桶/容差/开销预算"两行的落地。数值来源登记
@@ -422,10 +399,6 @@ class PredictionParams:
                 "events, so a non-zero value cannot be accepted. Use 0 "
                 f"(assumed-zero), got control_latency_ns="
                 f"{self.control_latency_ns}")
-        if self.hybrid_max_remote_sources < 2:
-            raise PredictionConfigError(
-                "hybrid_max_remote_sources must be >= 2 to define any "
-                f"proper subset, got {self.hybrid_max_remote_sources}")
         # -- W7 新增需求预测 preset 校验（fail-closed）--
         if self.forecast_horizon_ns <= 0:
             raise PredictionConfigError(
@@ -509,7 +482,6 @@ class PredictionParams:
             "control_latency_ns": self.control_latency_ns,
             "control_latency_source": "assumed-zero",
             "handoff_control_rule": self.handoff_control_rule or None,
-            "hybrid_max_remote_sources": self.hybrid_max_remote_sources,
             "forecast_horizon_ns": self.forecast_horizon_ns,
             "forecast_template_budget": self.forecast_template_budget,
             "forecast_ordinal_threshold":
@@ -550,7 +522,7 @@ def _validation_manifest_value(value):
 
 @dataclass(frozen=True)
 class JointPredictionConfig:
-    """已解析的预测配置（七正交轴 + 参数 preset + A 臂冻结规格）。
+    """已解析的预测配置（五正交轴 + 参数 preset + A 臂冻结规格）。
 
     直接构造用于测试；运行期经 ``load_prediction_config``（唯一 env 入口
     ``JOINT_PREDICTION_CONFIG``）或 ``from_mapping``（显式字典）获得。
@@ -563,9 +535,6 @@ class JointPredictionConfig:
     history_use: str = HISTORY_USE_SHADOW
     stage_policy: str = STAGE_POLICY_TWO_STAGE
     settlement_policy: str = SETTLEMENT_CONSOLIDATE
-    action_space: str = ACTION_SPACE_PURE_FOUR
-    multi_source_protocol: str = (
-        MULTI_SOURCE_ORDERED_SHARED_DOUBLE_BUFFER)
     params: PredictionParams = field(default_factory=PredictionParams)
     frozen_diagnostic: Optional[FrozenDiagnosticSpec] = None
     # 独立验证前缀的登记，键为 mode|distance_band；不由当前 run 的
@@ -644,16 +613,6 @@ class JointPredictionConfig:
             raise PredictionConfigError(
                 f"settlement_policy must be one of {SETTLEMENT_POLICIES}, "
                 f"got {self.settlement_policy!r}")
-        if self.action_space not in ACTION_SPACES:
-            raise PredictionConfigError(
-                f"action_space must be one of {ACTION_SPACES}, got "
-                f"{self.action_space!r}")
-        if self.multi_source_protocol not in MULTI_SOURCE_PROTOCOLS:
-            raise PredictionConfigError(
-                f"multi_source_protocol must be one of "
-                f"{MULTI_SOURCE_PROTOCOLS} (parallel protocols are not "
-                f"implemented; no silent aliasing), got "
-                f"{self.multi_source_protocol!r}")
         # 组合约束（§9.1）：新增需求预测依赖历史统计。静态层不做额外
         # 门——history_use 已在上方强制属于 HISTORY_USE_MODES（缺省与
         # 显式同值，此层无从判别"显式"），recent/reverting 对历史轴的
@@ -674,8 +633,6 @@ class JointPredictionConfig:
             "history_use": self.history_use,
             "stage_policy": self.stage_policy,
             "settlement_policy": self.settlement_policy,
-            "action_space": self.action_space,
-            "multi_source_protocol": self.multi_source_protocol,
             "frozen_diagnostic": (
                 {
                     "frozen_horizon_mode":
@@ -713,8 +670,6 @@ class JointPredictionConfig:
             "history_use": self.history_use,
             "stage_policy": self.stage_policy,
             "settlement_policy": self.settlement_policy,
-            "action_space": self.action_space,
-            "multi_source_protocol": self.multi_source_protocol,
             "params": {
                 name: getattr(self.params, name)
                 for name in self.params.__dataclass_fields__},
@@ -780,7 +735,7 @@ def cross_validate(
     if not j_active:
         disclosure["inactive_note"] = (
             "scheduler_mode != joint: predictor-ablation axes are "
-            "recorded but inactive; settlement/action-space/common-base "
+            "recorded but inactive; settlement/common-base "
             "axes still apply")
     return disclosure
 
@@ -790,8 +745,8 @@ def from_mapping(payload: Mapping[str, Any]) -> JointPredictionConfig:
     """从显式字典构造（文件加载与测试共用；未知键 fail-closed）。"""
     known_top = {
         "version", "projection_mode", "future_demand_mode", "history_use",
-        "stage_policy", "settlement_policy", "action_space",
-        "multi_source_protocol", "params", "frozen_diagnostic", "validation_registry",
+        "stage_policy", "settlement_policy",
+        "params", "frozen_diagnostic", "validation_registry",
     }
     unknown = set(payload) - known_top
     if unknown:
@@ -844,10 +799,6 @@ def from_mapping(payload: Mapping[str, Any]) -> JointPredictionConfig:
             "stage_policy", STAGE_POLICY_TWO_STAGE),
         settlement_policy=payload.get(
             "settlement_policy", SETTLEMENT_CONSOLIDATE),
-        action_space=payload.get("action_space", ACTION_SPACE_PURE_FOUR),
-        multi_source_protocol=payload.get(
-            "multi_source_protocol",
-            MULTI_SOURCE_ORDERED_SHARED_DOUBLE_BUFFER),
         params=params,
         frozen_diagnostic=frozen,
         validation_registry=payload.get("validation_registry", {}),
@@ -860,8 +811,7 @@ def load_prediction_config(
     """唯一 env 入口 ``JOINT_PREDICTION_CONFIG`` 的加载裁决点。
 
     * 未设置：返回缺省配置（known_work / none / shadow / two_stage /
-      consolidate / pure_four / ordered_shared_double_buffer + 缺省
-      preset），来源记 "default"；
+      consolidate + 缺省 preset），来源记 "default"；
     * 设置：读取 JSON 文件，``from_mapping`` 解析（版本/未知键/值域
       fail-closed），来源记文件路径。
     """
@@ -929,7 +879,9 @@ def make_pipeline_kernel_contract(
         "projection_abi_version": 1,
         "descriptor_version": 1,
         "pipeline_protocol_version": 1,
-        "model_version": "v6-compact-window-20261005",
+        # 模型语义版本随 joint_config 单一定义源派生（2026-10-14 远读
+        # 退役升 v7；C++ 侧 PipelineKernelContract::kModelVersion 同串）。
+        "model_version": MODEL_SEMANTICS_VERSION,
         "timer_whitelist_version": "timer-whitelist-v1-20261005",
         "window_tile_limit": params.window_tile_limit,
         "window_local_error_ppm": params.window_local_error_ppm,

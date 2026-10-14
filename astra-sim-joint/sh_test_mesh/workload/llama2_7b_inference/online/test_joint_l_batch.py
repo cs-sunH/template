@@ -78,7 +78,7 @@ class ForcedQuotaDeferredCountKeyTest(unittest.TestCase):
     def test_quota_deferred_selection_counts_without_keyerror(self):
         from sh30_online_scheduler import Sh30OnlineScheduler
         counts = {
-            "stay": 0, "copy": 0, "remote-read": 0,
+            "stay": 0, "copy": 0,
             "recompute_elected": 0,
             "recompute_forced_no_history": 0,
             "recompute_forced_action_mask": 0,
@@ -146,18 +146,19 @@ class CommittedFlowEtaFiniteTest(unittest.TestCase):
     流被当已过期、竞争份额被静默忽略——乐观方向）；负值合法（已过期）。"""
 
     def test_nan_eta_rejected(self):
-        flow = CommittedFlow(
-            flow_id="f", resources=("link:0->1",),
-            release_eta_ns=float("nan"))
+        # 构造器 __post_init__ 即拒收（L2 先校验后入账——与
+        # FirstBlockWaitFiniteTest 的"构造器与合流入口同一纪律"同款）；
+        # 合流入口（_snapshot）同一校验路径。
         with self.assertRaisesRegex(EventRecursionError, "release ETA"):
-            _snapshot(committed=(flow,))
+            CommittedFlow(
+                flow_id="f", resources=("link:0->1",),
+                release_eta_ns=float("nan"))
 
     def test_inf_eta_rejected(self):
-        flow = CommittedFlow(
-            flow_id="f", resources=("link:0->1",),
-            release_eta_ns=float("inf"))
         with self.assertRaisesRegex(EventRecursionError, "release ETA"):
-            _snapshot(committed=(flow,))
+            CommittedFlow(
+                flow_id="f", resources=("link:0->1",),
+                release_eta_ns=float("inf"))
 
     def test_negative_eta_is_past_not_rejected(self):
         flow = CommittedFlow(
@@ -271,14 +272,14 @@ class CopyLedgerGapFailClosedTest(unittest.TestCase):
 # ============================================ 4. L8（P3 补钉对偶）==
 
 class ForwardLegContendedByBackgroundTest(unittest.TestCase):
-    """L8：K5-② ReverseLegOwnPathTest 只钉了"背景流不抬反向腿"；本类
-    钉对偶面——同一背景流（驻 exec→home 有向边）确实抬前向腿（方向
-    特异性的正向证据）。"""
+    """L8（2026-10-14 远读退役改写）：K5-② ReverseLegOwnPathTest 只钉了
+    "背景流不抬交接腿"；本类钉对偶面——背景流驻 copy 交接腿自身的
+    有向边（home→exec）确实抬交接腿墙（方向特异性的正向证据）。"""
 
     def _forward_ns(self, with_background):
         flows = LinkFlowRegistry()
         if with_background:
-            flows.register_path((1, 0), owner="f-bg")
+            flows.register_path((0, 1), owner="f-bg")
         model = _model({0: _load(), 1: _load()}, flows=flows)
         candidate = model.estimate_P_with_continuation(
             session=_session_view(
@@ -287,12 +288,12 @@ class ForwardLegContendedByBackgroundTest(unittest.TestCase):
                 prefix=3),
             request=_request_view(input_tokens=5, decode=0,
                                   input_bytes=(5, 5)),
-            instance_index=1, action="remote-read", remote_enabled=True)
+            instance_index=1, action="copy")
         notes = candidate.breakdown.notes
-        forward_note = next(
+        walls_note = next(
             note for note in notes
-            if note.startswith("merge_v2_forward_ns="))
-        return int(forward_note.split("=")[1])
+            if note.startswith("copy_handoff_chunk_walls="))
+        return int(walls_note.split("=")[1])
 
     def test_background_on_forward_edge_raises_forward_leg(self):
         clean = self._forward_ns(with_background=False)

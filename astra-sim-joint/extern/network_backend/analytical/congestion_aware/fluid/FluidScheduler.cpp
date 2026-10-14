@@ -13,6 +13,10 @@ LICENSE file in the root directory of this source tree.
 #include <limits>
 #include <stdexcept>
 
+#ifdef JOINT_V7_EVENT_PROFILE
+#include "common/EventProfile.h"
+#endif
+
 using namespace NetworkAnalytical;
 using namespace NetworkAnalyticalCongestionAware;
 
@@ -55,6 +59,17 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
     assert(max_active_flows > 0);
     assert(max_route_memberships > 0);
     assert(progress_report_event_interval > 0);
+
+#ifdef JOINT_V7_EVENT_PROFILE
+    // Diagnostic-only classification registration (v7 attribution);
+    // register_known is idempotent across scheduler instances.
+    EventProfile::register_known(&FluidScheduler::flush_callback,
+                                 "fluid_flush_cb");
+    EventProfile::register_known(&FluidScheduler::service_wakeup_callback,
+                                 "fluid_wakeup_cb");
+    EventProfile::register_known(&FluidScheduler::tail_arrival_callback,
+                                 "fluid_tail_cb");
+#endif
 
     link_states.reserve(directed_links.size());
     for (size_t index = 0; index < directed_links.size(); ++index) {

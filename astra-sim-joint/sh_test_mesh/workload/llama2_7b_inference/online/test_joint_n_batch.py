@@ -34,7 +34,6 @@ for _p in (_ONLINE_DIR, _WORKLOAD_DIR):
 
 from joint.link_quota import (  # noqa: E402
     FLOW_ONESHOT,
-    FLOW_REALTIME,
     LinkQuotaTracker,
 )
 from joint.joint_cost_model import LinkFlowRegistry  # noqa: E402
@@ -71,9 +70,8 @@ class QuotaSameTransactionSlotReuseTest(unittest.TestCase):
         link = (0, 1)
         reverse = (1, 0)
         verdict = tracker.admit_flow(
-            owner="r1#readplan", flow_class=FLOW_REALTIME,
-            links=(link, link), port_id=0,   # TP=2 共链读流 2 槽
-            r_hat_kv_bytes_per_ns=0.5)
+            owner="r1#copy", flow_class=FLOW_ONESHOT,
+            links=(link, link), port_id=0)   # TP=2 共链 copy 主流程 2 槽
         self.assertTrue(verdict.admitted)
         reserve = tracker.reserve_merge(
             "r1", links_forward={link}, links_reverse={reverse},
@@ -96,15 +94,15 @@ class QuotaSameTransactionSlotReuseTest(unittest.TestCase):
             local_hbm_bytes_per_ns=100.0, delta_adm_ns=0)
         link = (0, 1)
         tracker.admit_flow(
-            owner="r1#readplan", flow_class=FLOW_REALTIME,
-            links=(link, link), port_id=0, r_hat_kv_bytes_per_ns=0.5)
+            owner="r1#copy", flow_class=FLOW_ONESHOT,
+            links=(link, link), port_id=0)
         # fwd = {link, (1,0)}：链 link 的预留需求 1（per-direction 各 1
         # 槽），借 1（occ 2 ≥ 1）⇒ reserved 增量 0。
         tracker.reserve_merge("r1", links_forward={link, (1, 0)},
                               port_forward=1)
         self.assertEqual(
             tracker.link_occupancy(link) + tracker.link_reserved(link), 2)
-        tracker.release_flow("r1#readplan")
+        tracker.release_flow("r1#copy")
         # settle 转移：读流 2 槽释放、借记 1 槽转移为 reserved ⇒ occ 0
         # + res 1（总计数 2 不变 ⇒ 无新准入窗口；另 1 槽为预留撤销后
         # 的真实余量——demand 1 只借 1）。
@@ -121,15 +119,15 @@ class QuotaSameTransactionSlotReuseTest(unittest.TestCase):
             local_hbm_bytes_per_ns=100.0, delta_adm_ns=0)
         link = (0, 1)
         tracker.admit_flow(
-            owner="r1#readplan", flow_class=FLOW_REALTIME,
-            links=(link,), port_id=0, r_hat_kv_bytes_per_ns=0.5)
+            owner="r1#copy", flow_class=FLOW_ONESHOT,
+            links=(link,), port_id=0)
         tracker.reserve_merge("r1", links_forward={link}, port_forward=1)
         # 读流未 settle、预留先撤（未裁决整体撤销）：借记就地消解，
         # 读流 occupancy 回归自身语义，账目全清。
         tracker.release_merge("r1")
         self.assertEqual(tracker.link_occupancy(link), 1)
         self.assertEqual(tracker.link_reserved(link), 0)
-        tracker.release_flow("r1#readplan")
+        tracker.release_flow("r1#copy")
         self.assertEqual(tracker.link_occupancy(link), 0)
         self.assertEqual(tracker._merge_borrow, {})
 
@@ -143,8 +141,8 @@ class QuotaSameTransactionSlotReuseTest(unittest.TestCase):
             local_hbm_bytes_per_ns=100.0, delta_adm_ns=0)
         self.assertEqual(tracker.link_quota((0, 1)), 1)
         verdict = tracker.admit_flow(
-            owner="r#readplan", flow_class=FLOW_REALTIME,
-            links=((0, 1),), port_id=0, r_hat_kv_bytes_per_ns=0.5)
+            owner="r#copy", flow_class=FLOW_ONESHOT,
+            links=((0, 1),), port_id=0)
         self.assertTrue(verdict.admitted)
         reserve = tracker.reserve_merge(
             "r", links_forward={(0, 1)}, links_reverse={(1, 0)},
@@ -152,26 +150,9 @@ class QuotaSameTransactionSlotReuseTest(unittest.TestCase):
         self.assertTrue(reserve.admitted)
         self.assertEqual(tracker.link_reserved((0, 1)), 0)  # 借槽
 
-    def test_sh30_verdict_uses_per_link_max(self):
-        # 文本钉：判据端 demand = per-link max(read, merge)（A18'(a)）
-        # ——与 tracker 借槽（link_quota.py）同构（杜绝"判据过而入册
-        # 拒"防御分支成为常规路径）。
-        with open(os.path.join(
-                _ONLINE_DIR, "sh30_online_scheduler.py"),
-                encoding="utf-8") as handle:
-            source = handle.read()
-        self.assertIn("merge_demand", source)
-        self.assertIn(
-            "demand[edge] = max(demand.get(edge, 0), merge_need)",
-            source)
-        with open(os.path.join(
-                _WORKLOAD_DIR, "joint", "link_quota.py"),
-                encoding="utf-8") as handle:
-            quota_source = handle.read()
-        self.assertIn("_owner_rid_slots_on_link", quota_source)
-        self.assertIn("_merge_borrow", quota_source)
-
-
+    # （原 test_sh30_verdict_uses_per_link_max（判据端 per-link max
+    # 合并的文本钉）已随 2026-10-14 远读退役删除：判据端 merge-demand
+    # 合并随远读流删除，tracker 借槽机制由本类其余四用例钉住。）
 # ==================================================== 2. N2（生产2）==
 
 class DivisorCandidateStackingTest(unittest.TestCase):
@@ -326,8 +307,7 @@ class PrefillShapedBaseTest(unittest.TestCase):
             hbm_share_divisor=1: (
                 1000 + tokens + history))
         kwargs = dict(session=_session(), request=_request(),
-                      instance_index=1, action=ACTION_COPY,
-                      remote_enabled=True)
+                      instance_index=1, action=ACTION_COPY)
         linear = linear_model.estimate_P_with_continuation(**kwargs).cost_ns
         shaped = shaped_model.estimate_P_with_continuation(**kwargs).cost_ns
         # copy：prefill_tokens = 50（input）、history = 100（session 视
@@ -346,7 +326,7 @@ class PrefillShapedBaseTest(unittest.TestCase):
             linear_model, prefill_task_load_ns_fn=recording_fn)
         candidate = recompute_model.estimate_P_with_continuation(
             session=_session(missing=(1000, 1000)), request=_request(),
-            instance_index=1, action="recompute", remote_enabled=True)
+            instance_index=1, action="recompute")
         self.assertTrue(candidate.applicable)
         # D10（v2.0 §6.2）：recompute 全口径 0 基（完整 H+U 重放自 0
         # 物化工作副本，取代 R13 跨实例 0 基 + 驻留 H 基二分）——

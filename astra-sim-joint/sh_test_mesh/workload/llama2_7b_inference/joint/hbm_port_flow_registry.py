@@ -3,23 +3,22 @@
 
 u_port(port) = 该端口所属实例的**活跃 decode KV 消费流数**（因果负载
 视图派生——SH 侧经 ``attach_active_decode_provider`` 注入读取器，闲置
-为 0，不假设恒 1）＋ **在册指向该端口的传输/远读流数**（noc_migrate
+为 0，不假设恒 1）＋ **在册指向该端口的传输流数**（noc_migrate
 发射时登记、完成事件注销）。API 与 LinkFlowRegistry
 （joint_cost_model.py）同构：``register(port_id, owner)`` /
 ``unregister(port_id, owner)`` / ``divisor(port_id)`` / ``snapshot()``；
 owner 沿用 SH 既有 owner 字符串约定（``rid``、``rid#decode``、
-``rid#decode#{j}``、``rid#merge``、C8 预登记的 ``rid#readplan``）。
+``rid#decode#{j}``、``rid#merge``）。
 
 除数口径：``divisor(port_id)`` 返回在册他流数（活跃 decode ＋ 在册
-传输/远读），**不含候选自身 +1**——消费方（JCM
+传输），**不含候选自身 +1**——消费方（JCM
 ``_shard_endpoint_divisors`` → ``_shard_leg_ns``）在计价时显式加 1
 （``B_HBM/(u+1)``），与 LinkFlowRegistry.divisor 把 self_overlap 分离
 给调用方的口径一致。
 
 登记覆盖边界（与 SH ``_register_transfer_flows`` 的腿型对齐）：
 noc_migrate 逐 shard 登记**两个端点端口**——源端口（home 读腿）恒有；
-目标端口（exec 写腿）对 copy 留存写 / merge 落点写 / remote-read
-credit 到达写（A4' 补价后计价与执行同腿型，PROVENANCE §20.1）恒有；
+目标端口（exec 写腿）对 copy 留存写 / merge 落点写恒有；
 D04（2026-09-26，v2.0 C11）起 pool 路径端点同样入表——remote_load
 登记 noc_path 末端**目标 HBM 写端点**、remote_store 登记 noc_path
 首端**源 HBM 读端点**（edge 侧是池端口、非 rank HBM；F3 旧豁免废
@@ -28,8 +27,7 @@ D04（2026-09-26，v2.0 C11）起 pool 路径端点同样入表——remote_load
 _PoolPortRegistry 独占（计价侧经 ``pool_edge_flows_fn`` 注入 JCM）。
 
 保真边界披露（F4，PROVENANCE 落字）：u_port 不含权重/激活读——短上下
-文权重受限区间端口模型系统性乐观；KV-bound 区间（remote 相关区间）
-近似正确。端口无遥测，注册表即执行器（遥测校正登记为可选后续）。
+文权重受限区间端口模型系统性乐观；KV-bound 区间近似正确。端口无遥测，注册表即执行器（遥测校正登记为可选后续）。
 
 D06（2026-09-27，v2.0 §9.1 式(6)）：候选阶段的临时 HBM 占用走
 ``CandidateStageHbmShare`` 只读叠加视图（本文件尾部）——在册工作仍
@@ -115,7 +113,7 @@ class HbmPortFlowRegistry:
         return self._active_streams(port_id) + self._counts.get(port_id, 0)
 
     def decomposition(self, port_id: int) -> tuple[int, int]:
-        """F4 分解：(活跃 decode 消费流数, 在册传输/远读流数)。"""
+        """F4 分解：(活跃 decode 消费流数, 在册传输流数)。"""
         return (
             self._active_streams(port_id),
             self._counts.get(port_id, 0))
@@ -162,9 +160,9 @@ class CandidateStageHbmShare:
     """D06（2026-09-27，v2.0 §9.1 式(6)）：单候选阶段的 HBM 端口份额
     视图（**预测专用、只读叠加**）。
 
-    式(6)：同一端口上计算读取、copy 写入、pool 恢复写入和 remote 暂存
-    读写必须出现在同一个分母中——μ_e = η_e·B_e/(m_e + k_e)，其中
-    m_e = 在册后台流（活跃 decode + 在册传输/远读，仍由
+    式(6)：同一端口上计算读取、copy 写入、pool 恢复写入必须出现在
+    同一个分母中——μ_e = η_e·B_e/(m_e + k_e)，其中
+    m_e = 在册后台流（活跃 decode + 在册传输，仍由
     ``HbmPortFlowRegistry`` 独家描述），k_e = **本候选阶段**实际并发
     的候选逻辑流数（计算读一条流——同一计算流先后读权重和 KV 不拆成
     多条流；传输腿按通道/缓冲协议的并发界计数，串行通道上的排队层组
@@ -213,7 +211,7 @@ class CandidateStageHbmShare:
         return self._candidate.get(int(port_id), 1)
 
     def registered_divisor(self, port_id: int) -> int:
-        """m_e：在册后台流数（活跃 decode + 在册传输/远读）——纯真实
+        """m_e：在册后台流数（活跃 decode + 在册传输）——纯真实
         登记视图，与候选占用无关（未注入注册表 = 0，离线/单测口径）。"""
         if self._registry is None:
             return 0

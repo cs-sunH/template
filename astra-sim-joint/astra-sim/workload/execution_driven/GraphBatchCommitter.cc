@@ -33,8 +33,6 @@ strategy (3531 batches) and replay (3491 batches) with zero violations.
 namespace AstraSim {
 namespace ExecutionDriven {
 
-using LogicalIdSpan = GraphBatchLogicalIdSpan;
-
 namespace {
 
 // C1 (2026-08-29): node_kind_from_type moved to ParsedGraphBatch.hh (the
@@ -149,187 +147,6 @@ struct PreflightRankGraph {
     std::vector<PreflightEdge> edges;
 };
 
-bool logical_id_span_last(const LogicalIdSpan& span, uint64_t* last) {
-    if (last == nullptr || span.count == 0 || span.stride == 0) {
-        return false;
-    }
-    const uint64_t steps = span.count - 1;
-    const uint64_t max_id = std::numeric_limits<uint64_t>::max();
-    if (steps != 0 && span.stride > (max_id - span.json_first) / steps) {
-        return false;
-    }
-    *last = span.json_first + steps * span.stride;
-    return *last < max_id;
-}
-
-bool logical_id_span_contains(const LogicalIdSpan& span,
-                              const uint64_t json_id) {
-    if (json_id < span.json_first || span.count == 0 || span.stride == 0) {
-        return false;
-    }
-    const uint64_t delta = json_id - span.json_first;
-    return delta % span.stride == 0 && delta / span.stride < span.count;
-}
-
-using SignedWide = __int128_t;
-using UnsignedWide = __uint128_t;
-
-uint64_t modular_inverse(uint64_t value, uint64_t modulus) {
-    SignedWide old_r = static_cast<SignedWide>(value);
-    SignedWide r = static_cast<SignedWide>(modulus);
-    SignedWide old_s = 1;
-    SignedWide s = 0;
-    while (r != 0) {
-        const SignedWide quotient = old_r / r;
-        const SignedWide next_r = old_r - quotient * r;
-        old_r = r;
-        r = next_r;
-        const SignedWide next_s = old_s - quotient * s;
-        old_s = s;
-        s = next_s;
-    }
-    if (old_r != 1) {
-        throw std::logic_error("modular inverse requested for non-coprime values");
-    }
-    old_s %= static_cast<SignedWide>(modulus);
-    if (old_s < 0) {
-        old_s += static_cast<SignedWide>(modulus);
-    }
-    return static_cast<uint64_t>(old_s);
-}
-
-bool logical_id_spans_intersect(const LogicalIdSpan& left,
-                                const LogicalIdSpan& right) {
-    uint64_t left_last = 0;
-    uint64_t right_last = 0;
-    if (!logical_id_span_last(left, &left_last) ||
-        !logical_id_span_last(right, &right_last)) {
-        return true;  // malformed arithmetic fails closed as an overlap
-    }
-    const uint64_t low = std::max(left.json_first, right.json_first);
-    const uint64_t high = std::min(left_last, right_last);
-    if (low > high) {
-        return false;
-    }
-    const uint64_t divisor = std::gcd(left.stride, right.stride);
-    const SignedWide difference = static_cast<SignedWide>(right.json_first) -
-        static_cast<SignedWide>(left.json_first);
-    if (difference % static_cast<SignedWide>(divisor) != 0) {
-        return false;
-    }
-    const uint64_t right_modulus = right.stride / divisor;
-    uint64_t multiplier = 0;
-    if (right_modulus != 1) {
-        const uint64_t left_reduced = (left.stride / divisor) % right_modulus;
-        const SignedWide reduced_difference =
-            difference / static_cast<SignedWide>(divisor);
-        SignedWide normalized = reduced_difference %
-            static_cast<SignedWide>(right_modulus);
-        if (normalized < 0) {
-            normalized += static_cast<SignedWide>(right_modulus);
-        }
-        const uint64_t inverse = modular_inverse(left_reduced, right_modulus);
-        multiplier = static_cast<uint64_t>(
-            (static_cast<UnsignedWide>(normalized) * inverse) % right_modulus);
-    }
-    const UnsignedWide period = static_cast<UnsignedWide>(left.stride) *
-        right_modulus;
-    UnsignedWide first = static_cast<UnsignedWide>(left.json_first) +
-        static_cast<UnsignedWide>(left.stride) * multiplier;
-    first %= period;
-    if (first < low) {
-        const UnsignedWide delta = static_cast<UnsignedWide>(low) - first;
-        const UnsignedWide periods = delta / period +
-            static_cast<UnsignedWide>(delta % period != 0);
-        first += periods * period;
-    }
-    return first <= high;
-}
-
-std::optional<std::string> collect_logical_id_spans(
-    const GraphBatch& batch, const int num_ranks,
-    std::vector<LogicalIdSpan>& spans,
-    uint64_t* const collected_spans = nullptr) {
-    spans.clear();
-    spans.reserve(batch.nodes.size() + batch.pipeline_descriptors.size() * 2);
-    for (size_t index = 0; index < batch.nodes.size(); ++index) {
-        const ParsedNode& parsed = batch.nodes[index];
-        if (parsed.node.rank < 0 || parsed.node.rank >= num_ranks) {
-            return "node[" + std::to_string(index) +
-                   "] rank out of range: " + std::to_string(parsed.node.rank);
-        }
-        if (parsed.json_id == std::numeric_limits<uint64_t>::max()) {
-            return "node[" + std::to_string(index) + "] missing/invalid id";
-        }
-        spans.push_back(LogicalIdSpan{parsed.node.rank, parsed.json_id, 1, 1,
-                                      &parsed});
-        if (collected_spans != nullptr) {
-            ++*collected_spans;
-        }
-    }
-    for (size_t descriptor_index = 0;
-         descriptor_index < batch.pipeline_descriptors.size();
-         ++descriptor_index) {
-        const auto& descriptor = batch.pipeline_descriptors[descriptor_index];
-        if (!descriptor) {
-            return "pipeline_descriptors[" +
-                   std::to_string(descriptor_index) + "] is null";
-        }
-        if (descriptor->endpoint_runs().empty() ||
-            descriptor->anchors().empty()) {
-            return "pipeline_descriptors[" +
-                std::to_string(descriptor_index) +
-                "] is prediction-only and cannot be committed for execution";
-        }
-        const int identity_rank = descriptor->identity().rank;
-        if (identity_rank < 0 || identity_rank >= num_ranks) {
-            return "pipeline_descriptors[" +
-                   std::to_string(descriptor_index) +
-                   "] identity rank out of range";
-        }
-        for (const auto& range : descriptor->logical_id_ranges()) {
-            if (range.rank < 0 || range.rank >= num_ranks) {
-                return "pipeline_descriptors[" +
-                       std::to_string(descriptor_index) +
-                       "] logical id range rank out of range";
-            }
-            const LogicalIdSpan span{range.rank, range.first_json_id,
-                                     range.count, range.stride, nullptr};
-            uint64_t last = 0;
-            if (range.count == 0 || range.stride == 0 ||
-                !logical_id_span_last(span, &last)) {
-                return "pipeline_descriptors[" +
-                       std::to_string(descriptor_index) +
-                       "] logical id progression is empty or overflows";
-            }
-            spans.push_back(LogicalIdSpan{range.rank, range.first_json_id,
-                                          range.count, range.stride, nullptr});
-            if (collected_spans != nullptr) {
-                ++*collected_spans;
-            }
-        }
-    }
-    return std::nullopt;
-}
-
-bool is_descriptor_virtual_id(const GraphBatch& batch, const int rank,
-                              const uint64_t json_id) {
-    for (const auto& descriptor : batch.pipeline_descriptors) {
-        if (!descriptor) {
-            continue;
-        }
-        for (const auto& range : descriptor->logical_id_ranges()) {
-            if (range.rank == rank && logical_id_span_contains(
-                    LogicalIdSpan{range.rank, range.first_json_id,
-                                  range.count, range.stride, nullptr},
-                    json_id)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 struct P2pCounts {
     uint64_t sends = 0;
     uint64_t recvs = 0;
@@ -370,92 +187,6 @@ bool collective_comm_type_has_completion_path(const uint64_t comm_type) {
 }
 
 }  // namespace
-
-std::optional<std::string> GraphBatchCommitter::validate_rank_id_intersections(
-    const int rank, const std::vector<const LogicalIdSpan*>& progressions,
-    const std::vector<uint64_t>& physical_ids, IdPreflightWork* const work) {
-    // Ordinary IDs are points. Scan only points in each AP's inclusive
-    // envelope, but inspect every such point: checking only lower_bound(first)
-    // can miss a later AP member after an earlier non-member point.
-    for (const LogicalIdSpan* span : progressions) {
-        uint64_t last = 0;
-        if (span == nullptr || span->rank != rank ||
-            !logical_id_span_last(*span, &last)) {
-            return "logical-id progression arithmetic failed on rank " +
-                std::to_string(rank);
-        }
-        auto physical = std::lower_bound(
-            physical_ids.begin(), physical_ids.end(), span->json_first);
-        for (; physical != physical_ids.end() && *physical <= last;
-             ++physical) {
-            if (work != nullptr) {
-                ++work->physical_points_examined;
-            }
-            if (logical_id_span_contains(*span, *physical)) {
-                return "ordinary node JSON ID " + std::to_string(*physical) +
-                    " overlaps a virtual endpoint progression on rank " +
-                    std::to_string(rank);
-            }
-        }
-    }
-
-    struct BoundedProgression {
-        const LogicalIdSpan* span = nullptr;
-        uint64_t last = 0;
-    };
-    std::vector<BoundedProgression> ordered;
-    ordered.reserve(progressions.size());
-    for (size_t i = 0; i < progressions.size(); ++i) {
-        const LogicalIdSpan* span = progressions[i];
-        uint64_t last = 0;
-        if (span == nullptr || span->rank != rank ||
-            !logical_id_span_last(*span, &last)) {
-            return "logical-id progression arithmetic failed on rank " +
-                std::to_string(rank);
-        }
-        ordered.push_back({span, last});
-    }
-    std::stable_sort(ordered.begin(), ordered.end(),
-                     [](const BoundedProgression& left,
-                        const BoundedProgression& right) {
-                         return left.span->json_first <
-                             right.span->json_first;
-                     });
-
-    // A closed-interval sweep. Every active progression's last ID is >= this
-    // first ID, so its envelope overlaps the current one and the unchanged
-    // exact AP predicate remains authoritative (including stride holes).
-    // The map expires ranges in O(log P); iterating active ranges costs O(K),
-    // which is quadratic only when K itself is quadratic.
-    std::map<uint64_t, std::vector<size_t>> expires_at;
-    std::set<size_t> active;
-    for (size_t current_index = 0; current_index < ordered.size();
-         ++current_index) {
-        const auto& current = ordered[current_index];
-        while (!expires_at.empty() &&
-               expires_at.begin()->first < current.span->json_first) {
-            for (const size_t expired : expires_at.begin()->second) {
-                active.erase(expired);
-            }
-            expires_at.erase(expires_at.begin());
-        }
-        for (const size_t active_index : active) {
-            if (work != nullptr) {
-                ++work->pair_envelope_candidates;
-                ++work->exact_pair_tests;
-            }
-            if (logical_id_spans_intersect(
-                    *ordered[active_index].span, *current.span)) {
-                return "virtual endpoint progressions overlap on rank " +
-                    std::to_string(rank);
-            }
-        }
-        active.insert(current_index);
-        expires_at[current.last].push_back(current_index);
-    }
-    return std::nullopt;
-}
-
 
 void GraphBatchCommitter::apply_delta_facts(
     const StateDelta& delta, std::set<std::string>& in_flight,
@@ -531,11 +262,10 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
     const GraphBatch& batch, std::vector<int>* const touched_ranks,
     std::vector<int>* const issue_ranks,
     IdPreflightWork* const work) const {
-    // The producer's per-rank logical stream contains ordinary NodeStore
-    // records and descriptor-owned virtual endpoint holes. Merge those spans
-    // and require one exact contiguous prefix before any state is mutated.
-    // The physical touched_ranks contract remains based on nodes; the issue
-    // pass also includes ranks that own virtual ranges.
+    // The producer's per-rank logical stream is the batch's ordinary node
+    // ids: strictly contiguous per rank (the first id may be non-zero), so
+    // committed history is one exact bounded range. Require that exact
+    // prefix before any state is mutated.
     if (touched_ranks != nullptr) {
         touched_ranks->clear();
     }
@@ -550,12 +280,6 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
         return "GraphBatch kernel_contract differs from the run-frozen contract";
     }
 
-    std::vector<LogicalIdSpan> spans;
-    if (const auto span_error =
-            collect_logical_id_spans(batch, ctx_.num_ranks, spans, nullptr)) {
-        return span_error;
-    }
-
     uint64_t stream_stamp = json_id_stream_stamp_ + 1;
     if (stream_stamp == 0) {
         std::fill(json_id_seen_stamp_by_rank_.begin(),
@@ -564,11 +288,6 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
     }
     json_id_stream_stamp_ = stream_stamp;
     std::set<int> physical_ranks;
-    std::set<int> all_issue_ranks;
-    std::vector<std::vector<const LogicalIdSpan*>> spans_by_rank(
-        static_cast<size_t>(ctx_.num_ranks));
-    std::vector<std::vector<uint64_t>> physical_ids_by_rank(
-        static_cast<size_t>(ctx_.num_ranks));
     uint64_t node_index = 0;
     for (const auto& parsed : batch.nodes) {
         const uint64_t type = parsed.node.node_type;
@@ -581,43 +300,34 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
                    "] p2p (type " + std::to_string(type) +
                    ") bytes must be positive";
         }
+        if (parsed.node.rank < 0 || parsed.node.rank >= ctx_.num_ranks) {
+            return "node[" + std::to_string(node_index) +
+                   "] rank out of range: " + std::to_string(parsed.node.rank);
+        }
+        if (parsed.json_id == std::numeric_limits<uint64_t>::max()) {
+            return "node[" + std::to_string(node_index) +
+                   "] missing/invalid id";
+        }
         physical_ranks.insert(parsed.node.rank);
         ++node_index;
     }
-    for (const auto& span : spans) {
-        spans_by_rank[static_cast<size_t>(span.rank)].push_back(&span);
-        // Signature 5 (2026-10-06 ruling): the producer declares
-        // touched_ranks as ordinary-node ranks UNION the compact virtual
-        // endpoint ranks, so the computed contract must include the ranks
-        // that own descriptor endpoint holes (e.g. the i_P source ranks of
-        // a multi-source decode stream whose only presence on that rank is
-        // virtual legs).
-        physical_ranks.insert(span.rank);
-        if (span.physical_node != nullptr) {
-            physical_ids_by_rank[static_cast<size_t>(span.rank)].push_back(
-                span.json_first);
-        }
-    }
 
+    // Per-rank strictly contiguous ascending id stream over the sorted node
+    // ids (the response array order is producer order; contiguity is a set
+    // property of the rank's id domain).
+    std::vector<std::vector<uint64_t>> ids_by_rank(
+        static_cast<size_t>(ctx_.num_ranks));
+    for (const auto& parsed : batch.nodes) {
+        ids_by_rank[static_cast<size_t>(parsed.node.rank)].push_back(
+            parsed.json_id);
+    }
     for (int rank = 0; rank < ctx_.num_ranks; ++rank) {
-        const auto& rank_spans = spans_by_rank[static_cast<size_t>(rank)];
-        if (rank_spans.empty()) {
+        auto& ids = ids_by_rank[static_cast<size_t>(rank)];
+        if (ids.empty()) {
             continue;
         }
-        uint64_t first = std::numeric_limits<uint64_t>::max();
-        uint64_t last = 0;
-        UnsignedWide cardinality = 0;
-        for (const LogicalIdSpan* span : rank_spans) {
-            uint64_t span_last = 0;
-            if (span == nullptr || !logical_id_span_last(*span, &span_last)) {
-                return "logical-id progression arithmetic failed on rank " +
-                    std::to_string(rank);
-            }
-            first = std::min(first, span->json_first);
-            last = std::max(last, span_last);
-            cardinality += span->count;
-            all_issue_ranks.insert(rank);
-        }
+        std::sort(ids.begin(), ids.end());
+        const uint64_t first = ids.front();
         const uint64_t expected =
             json_id_seen_stamp_by_rank_[rank] == stream_stamp
                 ? json_id_expected_by_rank_[rank]
@@ -629,43 +339,26 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
                 " starts at " + std::to_string(first) +
                 " but expected " + std::to_string(expected);
         }
+        for (size_t i = 1; i < ids.size(); ++i) {
+            if (ids[i - 1] == ids[i]) {
+                return "duplicate ordinary node JSON ID " +
+                    std::to_string(ids[i]) + " on rank " +
+                    std::to_string(rank);
+            }
+            if (ids[i] != ids[i - 1] + 1) {
+                return "logical-id stream on rank " + std::to_string(rank) +
+                    " is not contiguous at " + std::to_string(ids[i]);
+            }
+            if (work != nullptr) {
+                ++work->exact_pair_tests;
+            }
+        }
+        const uint64_t last = ids.back();
         if (last == std::numeric_limits<uint64_t>::max()) {
             return "logical-id stream end overflows on rank " +
                 std::to_string(rank);
         }
         const uint64_t end = last + 1;
-
-        // Physical IDs are points. Sort them once to reject duplicates and
-        // test membership in each descriptor AP without expanding any hole.
-        auto& physical_ids = physical_ids_by_rank[static_cast<size_t>(rank)];
-        std::sort(physical_ids.begin(), physical_ids.end());
-        for (size_t i = 1; i < physical_ids.size(); ++i) {
-            if (physical_ids[i - 1] == physical_ids[i]) {
-                return "duplicate ordinary node JSON ID " +
-                    std::to_string(physical_ids[i]) + " on rank " +
-                    std::to_string(rank);
-            }
-        }
-        std::vector<const LogicalIdSpan*> progressions;
-        progressions.reserve(rank_spans.size());
-        for (const LogicalIdSpan* span : rank_spans) {
-            if (span->physical_node != nullptr) {
-                continue;
-            }
-            progressions.push_back(span);
-        }
-        if (const auto overlap_error = validate_rank_id_intersections(
-                rank, progressions, physical_ids, work)) {
-            return overlap_error;
-        }
-        const UnsignedWide width =
-            static_cast<UnsignedWide>(end) - expected;
-        if (cardinality != width) {
-            return "ordinary IDs plus virtual endpoint progressions do not "
-                "cover one exact logical span on rank " +
-                std::to_string(rank) + " (width=" +
-                std::to_string(end - expected) + ")";
-        }
         const uint64_t store_first =
             (*ctx_.graph_sources)[rank]->store().next_auto_id();
         const uint64_t max_id = std::numeric_limits<uint64_t>::max();
@@ -680,7 +373,7 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
         touched_ranks->assign(physical_ranks.begin(), physical_ranks.end());
     }
     if (issue_ranks != nullptr) {
-        issue_ranks->assign(all_issue_ranks.begin(), all_issue_ranks.end());
+        issue_ranks->assign(physical_ranks.begin(), physical_ranks.end());
     }
     return std::nullopt;
 }
@@ -697,11 +390,6 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
         -> std::optional<std::string> {
         return std::string("mandatory liveness preflight: ") + reason;
     };
-
-    if (!batch.pipeline_descriptors.empty() &&
-        (!ctx_.prepare_pipeline_batch || !ctx_.commit_pipeline_batch)) {
-        return fail("pipeline descriptors require both prepare and commit hooks");
-    }
 
     try {
         // Apply this delta's facts in a compact overlay rather than copying the
@@ -967,23 +655,12 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 graph.first_edge[parent_it->second] = graph.edges.size() - 1;
                 ++graph.indegree[child_it->second];
             } else {
-                if (is_descriptor_virtual_id(batch, rank, from)) {
-                    return fail("parent_edge[" +
-                                std::to_string(edge_index) +
-                                "] parent references a virtual endpoint id");
-                }
                 const auto parent_store_id = resolve_store_id(rank, from);
                 if (!parent_store_id.has_value()) {
                     return fail("parent_edge[" + std::to_string(edge_index) +
                                 "] parent (rank=" + std::to_string(rank) +
                                 " from=" + std::to_string(from) +
                                 ") unresolved");
-                }
-                if ((*ctx_.graph_sources)[rank]->store().is_virtual_id(
-                        *parent_store_id)) {
-                    return fail("parent_edge[" +
-                                std::to_string(edge_index) +
-                                "] parent resolves to a reserved virtual id");
                 }
                 if ((*ctx_.graph_sources)[rank]->store().erased(
                         *parent_store_id) &&
@@ -1357,38 +1034,37 @@ GraphBatchCommitter::candidate_id_preview_impl(
         return preview;
     }
 
-    std::vector<LogicalIdSpan> spans;
-    if (collect_logical_id_spans(
-            batch, ctx_.num_ranks, spans,
-            work == nullptr ? nullptr : &work->collected_spans)) {
-        return preview;
-    }
-    preview.candidate_spans_valid_ = true;
-
     const uint64_t max_id = std::numeric_limits<uint64_t>::max();
-    for (const LogicalIdSpan& span : spans) {
+    for (const auto& parsed : batch.nodes) {
         if (work != nullptr) {
             ++work->candidate_spans_examined;
         }
-        if (span.rank < 0 ||
-            static_cast<size_t>(span.rank) >= preview.rank_domains_.size()) {
+        if (parsed.node.rank < 0 ||
+            static_cast<size_t>(parsed.node.rank) >=
+                preview.rank_domains_.size()) {
             continue;
         }
-        auto& domain = preview.rank_domains_[static_cast<size_t>(span.rank)];
-        uint64_t last = 0;
-        if (!logical_id_span_last(span, &last) || last == max_id) {
+        auto& domain =
+            preview.rank_domains_[static_cast<size_t>(parsed.node.rank)];
+        if (parsed.json_id == max_id) {
             domain.candidate_domain_valid = false;
             continue;
         }
+        if (work != nullptr) {
+            ++work->collected_spans;
+        }
         if (!domain.has_candidate_domain) {
             domain.has_candidate_domain = true;
-            domain.domain_first = span.json_first;
-            domain.domain_end = last + 1;
+            domain.domain_first = parsed.json_id;
+            domain.domain_end = parsed.json_id + 1;
         } else {
-            domain.domain_first = std::min(domain.domain_first, span.json_first);
-            domain.domain_end = std::max(domain.domain_end, last + 1);
+            domain.domain_first =
+                std::min(domain.domain_first, parsed.json_id);
+            domain.domain_end = std::max(domain.domain_end,
+                                         parsed.json_id + 1);
         }
     }
+    preview.candidate_spans_valid_ = true;
     return preview;
 }
 
@@ -1606,21 +1282,6 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             touched.insert(rank);
             ++node_count;
             ++node_index;
-        }
-
-        // Signature 5 (2026-10-06 ruling): the producer declares
-        // touched_ranks as ordinary-node ranks UNION the compact virtual
-        // endpoint ranks, so the computed set must include the ranks that
-        // own descriptor endpoint holes (e.g. the i_P source ranks of a
-        // multi-source decode stream whose only presence on that rank is
-        // virtual legs).
-        for (const auto& descriptor : batch.pipeline_descriptors) {
-            for (const auto& range : descriptor->logical_id_ranges()) {
-                touched.insert(range.rank);
-            }
-            for (const auto& run : descriptor->endpoint_runs()) {
-                touched.insert(run.rank);
-            }
         }
 
         // ---- [edge] structural pass (collect in-batch edges per rank for
@@ -2028,26 +1689,7 @@ GraphBatchCommitter::validate_and_commit(const StateDelta& delta,
             validation_commit_in_progress_ = false;
             return result;
         }
-        std::shared_ptr<void> pipeline_plan;
-        if (!batch.pipeline_descriptors.empty()) {
-            try {
-                pipeline_plan =
-                    ctx_.prepare_pipeline_batch(batch, *this);
-            } catch (const std::exception& exc) {
-                result.error = std::string("pipeline prepare failed: ") +
-                               exc.what();
-                validation_commit_in_progress_ = false;
-                return result;
-            }
-            if (!pipeline_plan) {
-                result.error =
-                    "pipeline prepare failed: returned an empty plan";
-                validation_commit_in_progress_ = false;
-                return result;
-            }
-        }
-        commit_after_preflight(delta, batch, commit_issue_ranks_,
-                               std::move(pipeline_plan));
+        commit_after_preflight(delta, batch, commit_issue_ranks_);
         validation_commit_in_progress_ = false;
         return result;
     } catch (...) {
@@ -2077,28 +1719,13 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
     if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
         throw std::runtime_error("commit preflight: " + *liveness_error);
     }
-    std::shared_ptr<void> pipeline_plan;
-    if (!batch.pipeline_descriptors.empty()) {
-        try {
-            pipeline_plan = ctx_.prepare_pipeline_batch(batch, *this);
-        } catch (const std::exception& exc) {
-            throw std::runtime_error(std::string("pipeline prepare failed: ") +
-                                     exc.what());
-        }
-        if (!pipeline_plan) {
-            throw std::runtime_error(
-                "pipeline prepare failed: returned an empty plan");
-        }
-    }
 
-    commit_after_preflight(delta, batch, commit_issue_ranks_,
-                           std::move(pipeline_plan));
+    commit_after_preflight(delta, batch, commit_issue_ranks_);
 }
 
 void GraphBatchCommitter::commit_after_preflight(
     const StateDelta& delta, const GraphBatch& batch,
-    const std::vector<int>& issue_ranks,
-    std::shared_ptr<void> pipeline_plan) {
+    const std::vector<int>& issue_ranks) {
 
     // ---- delta facts first (the same facts validate() used) ----
     apply_delta_facts(delta, in_flight_, prefill_drained_);
@@ -2106,30 +1733,13 @@ void GraphBatchCommitter::commit_after_preflight(
     // ---- Phase B-1: nodes (per-rank affine json id -> store id).
     //      C1 (2026-08-29): the OnlineNode was ALREADY assembled once by
     //      parse_graph_batch (every field's type/domain was validated there,
-    //      with explicit uint64 extraction -- the old NOTE about value()'s
-    //      int-default truncation is now structurally impossible; sh_3.0's
-    //      mem sub-object rides along in the typed MemAttrs). This loop is
-    //      a copy + store insert + affine advance; nothing here can throw
-    //      on the JSON shape anymore, so the B-1 half-commit window only
-    //      opens on mechanism bugs, never on data shape. ----
+    //      with explicit uint64 extraction); this loop is a copy + store
+    //      insert + affine advance; nothing here can throw on the JSON shape
+    //      anymore, so the B-1 half-commit window only opens on mechanism
+    //      bugs, never on data shape. The preflight proved each rank's node
+    //      ids form one strictly contiguous ascending span, so the store-id
+    //      mapping is one affine shift per rank. ----
     uint64_t node_count = 0;
-    std::vector<LogicalIdSpan> logical_spans;
-    if (const auto span_error =
-            collect_logical_id_spans(batch, ctx_.num_ranks, logical_spans,
-                                     nullptr)) {
-        throw std::runtime_error("commit invariant: " + *span_error);
-    }
-    std::vector<std::vector<const LogicalIdSpan*>> spans_by_rank(
-        static_cast<size_t>(ctx_.num_ranks));
-    std::vector<std::vector<const ParsedNode*>> nodes_by_rank(
-        static_cast<size_t>(ctx_.num_ranks));
-    for (const auto& span : logical_spans) {
-        spans_by_rank[static_cast<size_t>(span.rank)].push_back(&span);
-        if (span.physical_node != nullptr) {
-            nodes_by_rank[static_cast<size_t>(span.rank)].push_back(
-                span.physical_node);
-        }
-    }
     parent_publication_work_ = {};
     {
         // The commit-event publisher needs each inserted node's ordered
@@ -2149,58 +1759,32 @@ void GraphBatchCommitter::commit_after_preflight(
             }
         }
 
+        std::vector<std::vector<const ParsedNode*>> nodes_by_rank(
+            static_cast<size_t>(ctx_.num_ranks));
+        for (const auto& parsed : batch.nodes) {
+            nodes_by_rank[static_cast<size_t>(parsed.node.rank)].push_back(
+                &parsed);
+        }
         for (int rank = 0; rank < ctx_.num_ranks; ++rank) {
-            const auto& rank_spans = spans_by_rank[static_cast<size_t>(rank)];
-            if (rank_spans.empty()) {
+            auto& rank_nodes = nodes_by_rank[static_cast<size_t>(rank)];
+            if (rank_nodes.empty()) {
                 continue;
             }
-            uint64_t json_first = std::numeric_limits<uint64_t>::max();
-            uint64_t json_last = 0;
-            for (const LogicalIdSpan* span : rank_spans) {
-                uint64_t last = 0;
-                if (span == nullptr || !logical_id_span_last(*span, &last)) {
-                    throw std::runtime_error(
-                        "commit invariant: malformed logical-id progression");
-                }
-                json_first = std::min(json_first, span->json_first);
-                json_last = std::max(json_last, last);
-            }
-            if (json_first == std::numeric_limits<uint64_t>::max() ||
-                json_last == std::numeric_limits<uint64_t>::max()) {
-                throw std::runtime_error(
-                    "commit invariant: logical-id domain overflows");
-            }
-            const uint64_t width = json_last - json_first + 1;
-            NodeStore& store = (*ctx_.graph_sources)[rank]->store();
-            const uint64_t store_first = store.next_auto_id();
-            std::vector<NodeStore::VirtualIdProgression> virtual_progressions;
-            for (const LogicalIdSpan* span : rank_spans) {
-                if (span->physical_node != nullptr) {
-                    continue;
-                }
-                const uint64_t offset = span->json_first - json_first;
-                if (offset > std::numeric_limits<uint64_t>::max() - store_first) {
-                    throw std::runtime_error(
-                        "commit invariant: virtual store-id mapping overflows");
-                }
-                virtual_progressions.push_back(NodeStore::VirtualIdProgression{
-                    store_first + offset, span->count, span->stride});
-            }
-            store.reserve_logical_id_span(store_first, width,
-                                          virtual_progressions);
-
-            auto& rank_nodes = nodes_by_rank[static_cast<size_t>(rank)];
-            std::vector<std::pair<const ParsedNode*, uint64_t>> inserted_nodes;
-            inserted_nodes.reserve(rank_nodes.size());
             std::sort(rank_nodes.begin(), rank_nodes.end(),
                       [](const ParsedNode* left, const ParsedNode* right) {
                           return left->json_id < right->json_id;
                       });
+            const uint64_t json_first = rank_nodes.front()->json_id;
+            const uint64_t width = rank_nodes.back()->json_id - json_first + 1;
+            NodeStore& store = (*ctx_.graph_sources)[rank]->store();
+            const uint64_t store_first = store.next_auto_id();
+            std::vector<std::pair<const ParsedNode*, uint64_t>> inserted_nodes;
+            inserted_nodes.reserve(rank_nodes.size());
             for (const ParsedNode* parsed : rank_nodes) {
                 const uint64_t offset = parsed->json_id - json_first;
                 if (offset > std::numeric_limits<uint64_t>::max() - store_first) {
                     throw std::runtime_error(
-                        "commit invariant: ordinary store-id mapping overflows");
+                        "commit invariant: store-id mapping overflows");
                 }
                 OnlineNode node = parsed->node;
                 node.global_id = store_first + offset;
@@ -2219,10 +1803,6 @@ void GraphBatchCommitter::commit_after_preflight(
             if (ctx_.publish_node_transition) {
                 for (const auto& inserted : inserted_nodes) {
                     const ParsedNode* parsed = inserted.first;
-                    if (parsed->node.compute.exec_role ==
-                        ComputeExecRole::RemoteReadPipelineAnchor) {
-                        continue;
-                    }
                     ++parent_publication_work_.node_lookups;
                     std::vector<uint64_t> parents;
                     const auto parent_it = parent_json_ids_by_child.find(
@@ -2232,11 +1812,9 @@ void GraphBatchCommitter::commit_after_preflight(
                         for (const uint64_t parent_json_id : parent_it->second) {
                             const auto parent_id =
                                 resolve_store_id(rank, parent_json_id);
-                            if (!parent_id.has_value() ||
-                                (*ctx_.graph_sources)[rank]->store()
-                                    .is_virtual_id(*parent_id)) {
+                            if (!parent_id.has_value()) {
                                 throw std::runtime_error(
-                                    "commit event parent does not resolve to a physical node");
+                                    "commit event parent does not resolve to a node");
                             }
                             parents.push_back(*parent_id);
                             ++parent_publication_work_.resolved_parents;
@@ -2250,9 +1828,9 @@ void GraphBatchCommitter::commit_after_preflight(
         }
     }
 
-    // The first accepted batch freezes all execution-kernel parameters,
-    // including batches with no descriptors. The equality check ran in pure
-    // preflight above, before any request/node/watch mutation.
+    // The first accepted batch freezes all execution-kernel parameters
+    // (including empty batches). The equality check ran in pure preflight
+    // above, before any request/node/watch mutation.
     if (!frozen_kernel_contract_) {
         frozen_kernel_contract_ = batch.kernel_contract;
     }
@@ -2300,11 +1878,6 @@ void GraphBatchCommitter::commit_after_preflight(
                 " from=" + std::to_string(from) +
                 " to=" + std::to_string(to) + ")");
         }
-        if (store.is_virtual_id(*from_store_id) ||
-            store.is_virtual_id(*to_store_id)) {
-            throw std::runtime_error(
-                "commit: parent edge references a virtual endpoint id");
-        }
         if (store.erased(*from_store_id)) {
             // A translated absent parent is exactly a collected, finished
             // parent. NodeStore never reuses ids, so the dependency is a
@@ -2347,12 +1920,6 @@ void GraphBatchCommitter::commit_after_preflight(
                     " id=" + std::to_string(json_id) + ")");
             }
             const NodeStore& store = (*ctx_.graph_sources)[rank]->store();
-            if (store.is_virtual_id(*store_id)) {
-                throw std::runtime_error(
-                    "commit: watch member resolves to a virtual endpoint id "
-                    "(rank=" + std::to_string(rank) +
-                    " id=" + std::to_string(json_id) + ")");
-            }
             if (store.erased(*store_id)) {
                 throw std::runtime_error(
                     "commit: watch member resolves to an erased node "
@@ -2383,17 +1950,10 @@ void GraphBatchCommitter::commit_after_preflight(
         ctx_.ingress->schedule_future_arrival(envelope);
     }
 
-    // Install the fully prepared descriptors, cursors, and physical-anchor
-    // bindings only after graph/watch/alarm construction succeeds and before
-    // any dep-free issue pass can observe their start anchors.
-    if (pipeline_plan) {
-        ctx_.commit_pipeline_batch(std::move(pipeline_plan), batch, *this);
-    }
-
-    // ---- Phase B-5: issue pass over ranks touched by physical nodes or
-    //      virtual endpoint ranges. Ranks outside this merged set cannot gain
-    //      a new ready item in this commit; completion callbacks schedule the
-    //      usual deferred per-rank passes for later frontiers. ----
+    // ---- Phase B-5: issue pass over ranks touched by this batch's nodes.
+    //      Ranks outside that set cannot gain a new ready item in this
+    //      commit; completion callbacks schedule the usual deferred per-rank
+    //      passes for later frontiers. ----
     for (const int rank : issue_ranks) {
         ctx_.issue_rank(rank);
     }

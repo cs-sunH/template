@@ -477,7 +477,7 @@ def build_decision_snapshot(
     unknown_work = build_existing_unknown_work(queues, tuple(arrivals))
     if capacity_view is None:
         # CapacityView 无生产者注册——容量面缺席显式登记（§4.1:149 逐
-        # rank resident/reserved/staging/workspace/逐出摘要不得静默
+        # rank 容量账分量（容量/权重/KV 驻留/预约）与逐出摘要不得静默
         # None 冒充空观测），不虚构零容量。
         projection_log.append(
             "capacity_view absent (no producer registered); per-rank "

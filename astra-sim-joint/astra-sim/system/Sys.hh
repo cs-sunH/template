@@ -30,7 +30,6 @@ class BaseStream;
 class StreamBaseline;
 class DataSet;
 class QueueLevels;
-class CoarseDieRuntime;
 class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
@@ -254,19 +253,6 @@ class Sys : public Callable {
                            void (*msg_handler)(void* fun_arg),
                            void* fun_arg);
 
-    int front_end_sim_send_correlated(
-        Tick delay,
-        void* buffer,
-        uint64_t count,
-        int type,
-        int dst,
-        int tag,
-        sim_request* request,
-        FrontEndSendRecvType send_type,
-        void (*msg_handler)(void* fun_arg),
-        void* fun_arg,
-        const AstraNetworkAPI::LogicalFlowKey& key);
-
     int front_end_sim_recv(Tick delay,
                            void* buffer,
                            uint64_t count,
@@ -286,9 +272,7 @@ class Sys : public Callable {
                             int tag,
                             sim_request* request,
                             void (*msg_handler)(void* fun_arg),
-                            void* fun_arg,
-                            std::optional<AstraNetworkAPI::LogicalFlowKey>
-                                logical_key = std::nullopt);
+                            void* fun_arg);
 
     int rendezvous_sim_recv(Tick delay,
                             void* buffer,
@@ -309,18 +293,6 @@ class Sys : public Callable {
                  sim_request* request,
                  void (*msg_handler)(void* fun_arg),
                  void* fun_arg);
-
-    int sim_send_correlated(
-        Tick delay,
-        void* buffer,
-        uint64_t count,
-        int type,
-        int dst,
-        int tag,
-        sim_request* request,
-        void (*msg_handler)(void* fun_arg),
-        void* fun_arg,
-        const AstraNetworkAPI::LogicalFlowKey& key);
 
     int sim_recv(Tick delay,
                  void* buffer,
@@ -383,8 +355,6 @@ class Sys : public Callable {
         explicit DieModelRuntime(DieModel::Hardware hw);
     };
     std::unique_ptr<DieModelRuntime> die_runtime;
-    std::unique_ptr<CoarseDieRuntime> coarse_die_runtime;
-    std::string die_model_profile;
     // Resolved die-model-config path (diagnostics only; empty off the die
     // backend).
     std::string die_model_config_path;

@@ -108,33 +108,36 @@ class DecodeRowMultiLegEmissionTest(unittest.TestCase):
     """decode 决策行的迁移披露（真两腿元组 → 真行，不崩且字段齐全）。"""
 
     def test_emit_join_decision_with_two_leg_primary(self):
-        from online.test_c4_boundary_full_surface import (
-            HISTORY_TOKENS,
-            HOME_INSTANCE,
-            INPUT_TOKENS,
-            P_INSTANCE,
-            THIRD_INSTANCE,
-            _increment_kv,
+        # （2026-10-14 远读退役改写：原 C4 增量 copy@第三目标的两腿
+        # 边界事务已随增量布局族删除——发射面的多腿元组契约由本文件
+        # _two_leg_tuple 夹具承载，发射链不变。）
+        from face_scheduler import (
+            FaceHardware, FaceInstanceSpec, FaceModel, KVCacheManager,
+            build_instances,
         )
         from online.test_decision_route_serialization import (
             _decision_shell,
             _make_runtime,
         )
-        kv, model, topology = _increment_kv()
-        # 真边界事务产出两腿元组（C4 增量 copy@第三目标）。
-        primary, _evictions, outcome = kv.commit_boundary_decode_transition(
-            session_id="s", p_instance_index=P_INSTANCE,
-            target_instance_index=THIRD_INSTANCE, action="copy",
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            trigger_request_id="r0")
-        self.assertEqual(outcome["kind"], "increment_copy_third_h_plus_u")
-        self.assertIsInstance(primary, tuple)
-        scheduler = _decision_shell(kv, topology=topology, model=model)
+        hardware = FaceHardware(
+            mesh_rows=2, mesh_cols=2, local_hbm_capacity_bytes=10**9,
+            local_hbm_bandwidth_gbps=100.0, d2d_bandwidth_gbps=200.0,
+            peak_perf_tflops=1.0, d2d_latency_ns=0, local_hbm_latency_ns=0)
+        model = FaceModel(
+            layers=4, hidden_size=16, ffn_size=32, num_heads=4,
+            vocab_size=32, bytes_per_elem=2, mlp_variant="swiglu")
+        topology = build_instances(hardware, (
+            FaceInstanceSpec("ins0", "1", (0, 1)),
+            FaceInstanceSpec("ins1", "2", (2, 3))))
+        kv = KVCacheManager(topology, model)
+        scheduler = _decision_shell(kv, hardware=hardware, model=model,
+                                    topology=topology)
         runtime = _make_runtime("r0")
-        runtime.prefill_instance_index = P_INSTANCE
-        runtime.decode_instance_index = THIRD_INSTANCE
-        runtime.joint_action = "remote-read"
+        runtime.prefill_instance_index = 0
+        runtime.decode_instance_index = 1
+        runtime.joint_action = "copy"
         runtime.joint_decode_action = "copy"
+        primary = _two_leg_tuple()
         runtime.prefill_decode_transfer = primary
         # 修前：本调用 AttributeError（tuple 无 .kind）。
         scheduler._emit_join_decision(runtime, 1000)
@@ -147,7 +150,7 @@ class DecodeRowMultiLegEmissionTest(unittest.TestCase):
         self.assertEqual(summary["leg_count"], 2)
         # 首腿契约字段齐全（W1 迁移重放口径：noc_migrate + 源端 + 字节）。
         self.assertEqual(summary["kind"], "noc_migrate")
-        self.assertEqual(summary["source_instance_index"], P_INSTANCE)
+        self.assertEqual(summary["source_instance_index"], 0)
         self.assertEqual(
             summary["total_bytes"], primary[0].total_bytes)
         # 逐腿完整字段（发射序）。
@@ -156,7 +159,7 @@ class DecodeRowMultiLegEmissionTest(unittest.TestCase):
         self.assertEqual(
             summary["legs"][1], _transfer_summary(primary[1]))
         self.assertEqual(
-            summary["legs"][1]["source_instance_index"], HOME_INSTANCE)
+            summary["legs"][1]["source_instance_index"], 2)
         # 全腿 shard 平铺且字段齐全（bytes/noc_hops/noc_path 逐 shard）。
         flat_shards = summary["shards"]
         self.assertEqual(

@@ -11,10 +11,10 @@
 2. **quota_deferred 闭合**（C9 语义）：全动作不可行 ⇒ 回队（永不
    JointSchedulerError）、重试键扩展配额代数、信用释放 bump 代数后
    重试门重开；等待日志 wait_reason 分列。
-3. **流生命周期借还配对**（步骤 7 + 守恒）：remote-read 读流 + merge
-   预留（service_done 方向裁决释放败者侧 / merge_done 释放胜者侧，
-   与 kv_delta 结算闭合门同序断言）、零传输分支整体释放、copy/evict
-   oneshot 同生命周期；收尾守恒审计 fail-closed。
+3. **流生命周期借还配对**（步骤 7 + 守恒）：copy oneshot 主流程
+   （双端点）+ 准入逐出支链（drain 边界整体释放）、decode 相增量
+   oneshot 同生命周期；收尾守恒审计 fail-closed。（远读读流 + merge
+   预留链路已随 2026-10-14 远读退役删除。）
 4. **AIMD 闭环**（步骤 8）：遥测有效速率（A5'/B3 端点键换算后）喂
    observe_telemetry——收缩经 set_link_quota 落地并 bump 配额代数。
 5. **port_snapshot 接通**（步骤 6）：配额 on = 实测值（C2 注册表 u_port
@@ -65,7 +65,6 @@ from joint.joint_cost_model import (  # noqa: E402
 from joint.joint_scheduler import SelectionRecord  # noqa: E402
 from joint.link_quota import (  # noqa: E402
     LinkQuotaTracker,
-    challenger_flips,
 )
 from online.sh30_online_scheduler import (  # noqa: E402
     _OnlineInstanceState,
@@ -185,7 +184,7 @@ def _scheduler(*, quota_mode="static"):
     )
     scheduler.joint_config = JointMechanismConfig(
         category_mode="typed", scheduler_mode="joint",
-        layer_policy="adaptive", remote_actions="on",
+        layer_policy="adaptive",
         quota_mode=quota_mode)
     scheduler._kv_ledger_epoch = 0
     scheduler._admit_attempt_epoch = {}
@@ -213,7 +212,7 @@ def _scheduler(*, quota_mode="static"):
     scheduler._quota_merge_reserves_created = 0
     scheduler._quota_decode_owner_seq = {}
     scheduler._joint_action_selection_counts = {
-        "stay": 0, "copy": 0, "remote-read": 0,
+        "stay": 0, "copy": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
         "recompute_forced_action_mask": 0,
@@ -270,24 +269,18 @@ class CandidateVerdictTest(unittest.TestCase):
             self.assertTrue(verdict.admitted)
 
     def test_local_actions_admitted_under_saturated_quota(self):
-        """A12' 批压力态钉死（⇒ 方向）：链路门与端口平价门双双占满
-        （copy/remote-read 确被拒）时 stay/recompute 仍恒适用——结构性
-        早退先于任何压力检查。空 tracker 用例无法区分"恒适用"与
-        "恰好配额空闲"，本用例以压力态补证 deferred 仅在全动作不可行
-        的安全网场景出现。"""
+        """A12' 批压力态钉死（⇒ 方向）：链路门占满（copy 确被拒）时
+        stay/recompute 仍恒适用——结构性早退先于任何压力检查。空
+        tracker 用例无法区分"恒适用"与"恰好配额空闲"，本用例以压力态
+        补证 deferred 仅在全动作不可行的安全网场景出现。（端口平价门
+        已随远读流类退役，压力源 = 链路门。）"""
         # 链路门占满：预占 (2,3)→(0,1) 共享链路至 Q_init=2。
         self.assertTrue(self.tracker.admit_flow(
             owner="pre#copy", flow_class="oneshot",
             links=self.scheduler._quota_route_edges(1, 0),
             port_id=0).admitted)
         self.assertEqual(self.tracker.link_remaining((2, 1)), 0)
-        # 端口平价门占满：port 3 两条 r̂=50 realtime 流（B=100/3 < 50）。
-        for i in range(2):
-            self.assertTrue(self.tracker.admit_flow(
-                owner="pre#rt{}".format(i), flow_class="realtime",
-                links=(), port_id=3,
-                r_hat_kv_bytes_per_ns=50.0).admitted)
-        # 压力真实在场：copy 与 remote-read 确被拒。
+        # 压力真实在场：copy 确被拒。
         self.assertFalse(self.scheduler._quota_candidate_verdict(
             _candidate(0, "copy"), _session_view(resident=1), 50.0
         ).admitted)
@@ -317,76 +310,25 @@ class CandidateVerdictTest(unittest.TestCase):
         self.assertTrue(self.scheduler._quota_candidate_verdict(
             _candidate(0, "stay"), _session_view(), 50.0).admitted)
 
-    def test_parity_gate_blocks_remote_read(self):
-        """端口平价门拒 remote-read（quota_port 分列）：B_HBM/(u+1) <
-        r̂（B=100，r̂=50：enrolled=2 ⇒ 100/3 < 50）。路由 1→3 的链路
-        需求（读流 1 + 预留 fwd 1 = 每链恰 Q=2）不先触发链路门。"""
-        for i in range(2):
-            self.tracker.admit_flow(
-                owner="pre#rt{}".format(i), flow_class="realtime",
-                links=(), port_id=3,
-                r_hat_kv_bytes_per_ns=50.0)
-        verdict = self.scheduler._quota_candidate_verdict(
-            _candidate(3, "remote-read"), _session_view(resident=1), 50.0)
-        self.assertFalse(verdict.admitted)
-        self.assertEqual(verdict.resource_kind, "port")
-        self.assertEqual(verdict.wait_reason, "quota_port")
-        self.assertIn("parity", verdict.inapplicable_reason)
-
     def test_merge_bulk_headroom_in_verdict(self):
-        """remote-read 判据含双候选胜者侧 bulk 余量前瞻（N_bulk=2）。"""
-        for i in range(2):
-            self.tracker.reserve_merge(
-                "pre#m{}".format(i),
-                links_forward=(), links_reverse=(),
-                port_forward=3, port_reverse=1)
+        """远读判据的 bulk 名额前瞻已随 2026-10-14 远读退役删除——
+        reserve_merge/adjudicate/release 机制本体按 D9 保留在
+        link_quota（无远读生产者，防御面恒空）。本用例改钉 oneshot
+        单流类：copy 判据不设端口门（端口在册仅披露），端口 bulk
+        预留不影响 copy 判据通过。"""
+        self.assertTrue(self.tracker.reserve_merge(
+            "pre#m0", port_forward=3, port_reverse=1).admitted)
+        self.assertEqual(self.tracker.bulk_used(3), 1)
         verdict = self.scheduler._quota_candidate_verdict(
-            _candidate(3, "remote-read"), _session_view(resident=1), 0.01)
-        self.assertFalse(verdict.admitted)
-        self.assertEqual(verdict.wait_reason, "quota_port")
-        self.assertIn("bulk", verdict.inapplicable_reason)
+            _candidate(3, "copy"), _session_view(resident=1), 0.01)
+        self.assertTrue(verdict.admitted)
 
 
 class DeltaAdmZeroConjunctionTest(unittest.TestCase):
-    """δ_adm = 0（A3' 终冻）与既有 argmin 的合取恒等。"""
-
-    def test_predicate_identity_with_argmin_order(self):
-        """δ_adm = 0（A3' 终冻）翻转谓词：手工推导查表。
-
-        F4（复审修复）：原期望式 ``incumbent - challenger >= 0`` 与
-        challenger_flips 实现裁决式同源（恒真恒等，零效）——改为写死
-        查表，期望值逐对手工推导：语义 = 挑战者成本不贵于在册
-        （challenger <= incumbent）才允许翻转。"""
-        # (challenger, incumbent, expected_flip)
-        # 0 < 500：挑战者更便宜 → 允许翻转 → True
-        # 1 < 500：同上 → True
-        # 499 < 500：差 1 的近平局，δ=0 不设带 → True
-        # 500 == 500：平局边界（δ=0 含等号，谓词开；平局终裁归
-        #   argmin 的 order_key，谓词不夹带语义）→ True
-        # 0 == 0：零成本平局边界 → True
-        # 3286 == 3286：大值平局边界 → True
-        # 10**9 == 10**9：极端值平局边界 → True
-        # 500 > 0：挑战者更贵 → 拒翻转 → False
-        # 501 > 500：差 1 更贵 → False
-        # 3286 > 500：更贵 → False
-        # 10**9 > 3286：极端更贵 → False
-        table = (
-            (0, 500, True),
-            (1, 500, True),
-            (499, 500, True),
-            (500, 500, True),
-            (0, 0, True),
-            (3286, 3286, True),
-            (10**9, 10**9, True),
-            (500, 0, False),
-            (501, 500, False),
-            (3286, 500, False),
-            (10**9, 3286, False),
-        )
-        for challenger, incumbent, expected in table:
-            self.assertIs(
-                challenger_flips(challenger, incumbent, 0), expected,
-                (challenger, incumbent))
+    """δ_adm = 0（A3' 终冻）与既有 argmin 的合取恒等。（原
+    challenger_flips 谓词查表用例已随 2026-10-14 远读退役删除——
+    函数无生产调用点，D9 连带删除；δ_adm = 0 的重选恒等语义由
+    下方可行集重选用例钉住。）"""
 
     def test_reselection_among_feasible_equals_argmin(self):
         scheduler = _scheduler()
@@ -405,8 +347,7 @@ class DeltaAdmZeroConjunctionTest(unittest.TestCase):
                 _candidate(2, "copy", cost_ns=300),
                 _candidate(3, "stay", cost_ns=200),
             ),
-            instance_rule_note="joint instance x action argmin",
-            remote_enabled=True)
+            instance_rule_note="joint instance x action argmin")
         chosen, candidates, deferred = scheduler._quota_filter_candidates(
             record, _session_view(resident=1), "r1", 0)
         self.assertIsNone(deferred)
@@ -431,29 +372,24 @@ class QuotaDeferredClosureTest(unittest.TestCase):
         self.tracker = self.scheduler._quota_tracker
 
     def _all_blocked_record(self):
-        # 只有 remote-read@3 预适用（其余预不适用），端口平价门拒之
-        # （路由 1→3 链路需求恰 Q，不先触发链路门；内部派生 r̂ ≈
-        # 23.3 B/ns ⇒ enrolled=4 时 100/5 < r̂ 拒之）。
-        for i in range(4):
-            self.tracker.admit_flow(
-                owner="pre#rt{}".format(i), flow_class="realtime",
-                links=(), port_id=3,
-                r_hat_kv_bytes_per_ns=20.0)
+        # 只有 copy@0 预适用（其余预不适用），链路门拒之（实例 1→0 的
+        # 两条 shard 路径共享链路 (2,1)：预占一槽后 remaining=1 < 2）。
+        self.tracker.admit_flow(
+            owner="pre#oneshot", flow_class="oneshot",
+            links=((2, 1),), port_id=0)
         return SelectionRecord(
             mode="joint",
-            chosen=_candidate(3, "remote-read", cost_ns=100),
+            chosen=_candidate(0, "copy", cost_ns=100),
             candidates=(
-                _candidate(3, "stay", applicable=False, cost_ns=None),
-                _candidate(3, "recompute", applicable=False, cost_ns=None),
-                _candidate(3, "copy", applicable=False, cost_ns=None),
-                _candidate(3, "remote-read", cost_ns=100),
+                _candidate(0, "stay", applicable=False, cost_ns=None),
+                _candidate(0, "recompute", applicable=False, cost_ns=None),
+                _candidate(0, "copy", cost_ns=100),
             ),
-            instance_rule_note="joint instance x action argmin",
-            remote_enabled=True)
+            instance_rule_note="joint instance x action argmin")
 
     def test_all_blocked_requeues_without_fail_closed(self):
         """全动作配额不可行 ⇒ 回队（不 raise JointSchedulerError），
-        wait_reason = quota_port、重试键扩展配额代数。"""
+        wait_reason = quota_link、重试键扩展配额代数。"""
         chosen, _candidates, deferred = (
             self.scheduler._quota_filter_candidates(
                 self._all_blocked_record(), _session_view(resident=1),
@@ -461,22 +397,22 @@ class QuotaDeferredClosureTest(unittest.TestCase):
         self.assertIsNone(chosen)
         record, _r_hat = deferred
         self.assertTrue(record.requeue)
-        self.assertEqual(record.wait_reason, "quota_port")
+        self.assertEqual(record.wait_reason, "quota_link")
         self.assertEqual(record.retry_key[-1],
                          self.tracker.quota_retry_key()[0])
 
     def test_retry_gate_reopens_on_quota_epoch_bump(self):
-        """信用释放 bump 配额代数 ⇒ _current_retry_key 与失败键分离
+        """流 settle bump 配额代数 ⇒ _current_retry_key 与失败键分离
         （deferred 请求必获再评估）。"""
         self.tracker.admit_flow(
-            owner="pre#rt0", flow_class="realtime",
-            links=(), port_id=3, r_hat_kv_bytes_per_ns=50.0)
+            owner="pre#oneshot", flow_class="oneshot",
+            links=((2, 1),), port_id=0)
         self.scheduler._last_admit_failure_key = (
             self.scheduler._compose_admit_failure_key({0}))
         last_key = self.scheduler._last_admit_failure_key
         self.assertEqual(
             last_key, self.scheduler._current_retry_key(last_key))
-        self.tracker.release_flow("pre#rt0", now_ns=10)
+        self.tracker.release_flow("pre#oneshot", now_ns=10)
         self.assertNotEqual(
             last_key, self.scheduler._current_retry_key(last_key))
 
@@ -512,71 +448,11 @@ class QuotaLifecyclePairingTest(unittest.TestCase):
         self.scheduler = _scheduler()
         self.tracker = self.scheduler._quota_tracker
 
-    def test_remote_read_full_lifecycle(self):
-        """读流入册（双端点 realtime）+ merge 预留（双向各 1 槽 +
-        双候选 bulk）→ service_done 裁决释放败者侧 → merge_done 释放
-        胜者侧 → 守恒清零。释放时序与 C14 闭合门同序（kv_delta 行
-        在案先于胜者侧释放）由 _on_merge_done 集成路径钉死（本测试
-        直接驱动 _quota_* 半）。"""
-        runtime = _make_runtime("r1")
-        session_view = _session_view(home=1, resident=1)
-        self.assertTrue(self.scheduler._quota_enroll_admission(
-            runtime, session_view, "remote-read", 3, now_ns=100))
-        # 双端点在册：实例 3（写/消费腿）与实例 1（源读腿）各 1 条。
-        self.assertEqual(self.tracker.port_enrolled(3), 1)
-        self.assertEqual(self.tracker.port_enrolled(1), 1)
-        self.assertIn("r1#readplan", self.scheduler._quota_enrolled)
-        self.assertIn("r1#readplan#src", self.scheduler._quota_enrolled)
-        # merge 预留：双向链路各 1 槽 + 双候选 bulk 名额。
-        reserve = self.scheduler._quota_merge_reserves["r1"]
-        self.assertEqual(reserve["state"], "reserved")
-        self.assertEqual(self.tracker.bulk_used(3), 1)
-        self.assertEqual(self.tracker.bulk_used(1), 1)
-        # service_done（胜者 = 执行端 3）：败者侧（home 方向）释放。
-        runtime.merge_outcome = {
-            "direction": "forward", "winner_instance": 3,
-            "loser_instance": 1}
-        runtime.merge_transfers = ("nonempty",)
-        self.scheduler._quota_on_service_done("r1", runtime, 900)
-        self.assertEqual(reserve["state"], "adjudicated")
-        # 胜者侧 bulk 保持、读流仍在册（完成边界才释放）。
-        self.assertEqual(self.tracker.bulk_used(3), 1)
-        self.assertEqual(self.tracker.bulk_used(1), 0)
-        # 完成边界：读流 settle（流寿命样本进 EWMA 通道）。
-        self.scheduler._quota_release_readplan_stream("r1", 950)
-        self.assertNotIn("r1#readplan", self.scheduler._quota_enrolled)
-        self.assertNotIn("r1#readplan#src", self.scheduler._quota_enrolled)
-        # merge_done：胜者侧释放 → 守恒清零。
-        self.scheduler._quota_release_merge_reserve("r1")
-        self.assertEqual(self.tracker.bulk_used(3), 0)
-        self.assertEqual(self.scheduler._quota_merge_reserves, {})
-        self.assertEqual(self.scheduler._quota_enrolled, {})
-
-    def test_zero_transfer_branch_releases_both_sides(self):
-        """零传输分支（in_place / 零字节翻转 ⇒ 无 merge watch）在
-        service_done 整体释放，不等待不存在的 merge_done。"""
-        runtime = _make_runtime("r2")
-        self.assertTrue(self.scheduler._quota_enroll_admission(
-            runtime, _session_view(home=1, resident=1), "remote-read",
-            3, now_ns=100))
-        runtime.merge_outcome = {
-            "direction": "in_place", "winner_instance": 3,
-            "loser_instance": None}
-        runtime.merge_transfers = ()
-        self.scheduler._quota_on_service_done("r2", runtime, 900)
-        self.assertEqual(self.scheduler._quota_merge_reserves, {})
-        self.assertEqual(self.tracker.bulk_used(3), 0)
-
-    def test_unadjudicated_merge_done_fails_closed(self):
-        """merge_done 到达而预留未裁决 = watch 通道与账目脱钩，
-        fail-closed。"""
-        runtime = _make_runtime("r3")
-        self.assertTrue(self.scheduler._quota_enroll_admission(
-            runtime, _session_view(home=1, resident=1), "remote-read",
-            3, now_ns=100))
-        with self.assertRaises(RuntimeError) as ctx:
-            self.scheduler._quota_release_merge_reserve("r3")
-        self.assertIn("never adjudicated", str(ctx.exception))
+    # （原 remote-read 读流 + merge 预留三用例——full_lifecycle /
+    # zero_transfer_branch / unadjudicated_fail_closed——已随
+    # 2026-10-14 远读退役删除：入册侧 reserve_merge 生产点随远读流
+    # 删除，_quota_on_service_done/_quota_release_merge_reserve 保留
+    # 为防御面（恒空快路径）。oneshot 生命周期由下方用例覆盖。）
 
     def test_copy_and_eviction_oneshot_lifecycle(self):
         """copy 主流程（双端点 oneshot）+ 准入逐出支链：drain 边界
@@ -628,9 +504,8 @@ class AimdClosedLoopTest(unittest.TestCase):
 
     def _enroll_flow_on_link(self):
         self.tracker.admit_flow(
-            owner="live#readplan", flow_class="realtime",
-            links=((3, 2),), port_id=0,
-            r_hat_kv_bytes_per_ns=0.001, now_ns=0)
+            owner="live#oneshot", flow_class="oneshot",
+            links=((3, 2),), port_id=0, now_ns=0)
         # 在册校验：link (3,2) 占用 1（每流换算分母）。
         self.assertEqual(self.tracker.link_occupancy((3, 2)), 1)
 
@@ -685,7 +560,7 @@ class PortSnapshotTest(unittest.TestCase):
         record = SelectionRecord(
             mode="joint", chosen=_candidate(0, "stay"),
             candidates=(_candidate(0, "stay", cost_ns=1),),
-            instance_rule_note="note", remote_enabled=True)
+            instance_rule_note="note")
         loads = {}
         for index in range(4):
             loads[index] = InstanceLoadView(
@@ -713,7 +588,6 @@ class PortSnapshotTest(unittest.TestCase):
         self.assertEqual(first["u_port_total"], 1)
         self.assertEqual(first["bulk_slots_used"], 0)
         self.assertEqual(first["bulk_slots_cap"], 2)
-        self.assertGreaterEqual(first["parity_gate_headroom"], 0)
         for entry in entries:
             for value in entry.values():
                 self.assertNotEqual(value, "NA")
@@ -725,7 +599,7 @@ class PortSnapshotTest(unittest.TestCase):
             for name in ("u_port_active_decode_streams",
                          "u_port_registered_transfer_flows",
                          "u_port_total", "bulk_slots_used",
-                         "bulk_slots_cap", "parity_gate_headroom"):
+                         "bulk_slots_cap"):
                 self.assertEqual(entry[name], "NA")
 
 

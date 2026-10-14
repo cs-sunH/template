@@ -108,8 +108,7 @@ class DistributedSettleOutcome:
     session_id: str
     trigger_request_id: str
     settlement_policy: str = "distributed"
-    #: 结算家族（zero_byte_flip：exec 持完整并集 / remote_increment：
-    #: 并集按 base@源端 + 增量@exec 分布）。
+    #: 结算家族（zero_byte_flip：exec 持完整并集 / stay_local 等）。
     family: str = ""
     final_tokens: int = 0
     merge_payload_bytes: int = 0
@@ -149,7 +148,7 @@ class SourceSurface:
     #: 片上来源条目（READY/WRITING；holder ≠ 池）。逐条 (holder,
     #: layer_range, token_range, bytes, state, role)。
     on_chip: tuple[tuple[int, tuple[int, int], tuple[int, int], int, str, str], ...]
-    #: 池区间条目（EVICTED_TO_POOL——恢复另列资源，不与片上远读混流）。
+    #: 池区间条目（EVICTED_TO_POOL——恢复另列资源）。
     pooled: tuple[tuple[int, tuple[int, int], tuple[int, int], int, str, str], ...]
     #: 恢复在途条目（RESTORING@target）。
     restoring: tuple[tuple[int, tuple[int, int], tuple[int, int], int, str, str], ...]
@@ -196,7 +195,7 @@ def enumerate_source_surface(
 
     与 ``query_sources`` 的差别：不做目标实例排除（下一轮 P 构图对全部
     候选目标共用同一来源面，逐目标缺失由 ``query_missing_intervals``
-    另查）；池/恢复在途条目分列（§6.2 不与片上远读混成同一资源）。
+    另查）；池/恢复在途条目分列（§6.2 分列披露）。
     """
     on_chip: list[tuple[int, tuple[int, int], tuple[int, int], int, str, str]] = []
     pooled: list[tuple[int, tuple[int, int], tuple[int, int], int, str, str]] = []

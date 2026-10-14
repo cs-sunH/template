@@ -3,18 +3,23 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
-File-implementation of the bridge protocol v0 (方案 §4 步骤 1-7).
+Shm-implementation of the bridge protocol v1 (方案 §4 步骤 1-7; joint v11 §8
+保底: the frame bytes that used to land in request_/response_/commit_ack_
+files now travel over ShmFrameChannel POSIX-shm segments -- same bytes,
+same FIFO doorbells, same fail-closed semantics, no loose frame files).
 
 Fail-closed semantics: every protocol violation (Python crash via EOF,
 EPIPE on the notification write, poll timeout, missing/corrupt response,
-schema mismatch, non-empty error field) prints one [Error] line and aborts.
-The static binary never constructs a bridge (zero impact on the baseline).
+frame checksum mismatch, frame oversize, schema mismatch, non-empty error
+field) prints one [Error] line and aborts. The static binary never
+constructs a bridge (zero impact on the baseline).
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/DecisionBridge.hh"
 
 #include <dirent.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -105,19 +110,17 @@ bool file_name_matches(const std::string& name, const char* prefix) {
            name.compare(name.size() - 4, 4, ".tmp") == 0;
 }
 
-nlohmann::json read_json_file(const std::string& path) {
-    std::ifstream in(path);
-    if (!in) {
-        throw std::runtime_error("cannot open " + path);
-    }
-    // Strict JSON load (same as the wscllm bridge): istream operator>>
-    // parses in NON-strict mode -- it silently consumes the FIRST JSON
-    // value and leaves trailing bytes unread, and the DOM build last-wins
-    // on duplicate object keys. These files are machine-written by paired
-    // tooling, so trailing content or a duplicate key is producer
-    // corruption, not a legal shape. json::parse in its default strict
-    // mode rejects trailing bytes outright; the stateful parse callback
-    // rejects a repeated key inside one object.
+nlohmann::json parse_json_strict(const std::string& payload,
+                                 const std::string& what) {
+    // Strict JSON load (same rules as the former read_json_file): the
+    // istream operator>> parses in NON-strict mode -- it silently consumes
+    // the FIRST JSON value and leaves trailing bytes unread, and the DOM
+    // build last-wins on duplicate object keys. These payloads are
+    // machine-written by paired tooling, so trailing content or a
+    // duplicate key is producer corruption, not a legal shape.
+    // json::parse in its default strict mode rejects trailing bytes
+    // outright; the stateful parse callback rejects a repeated key inside
+    // one object.
     struct KeyGuard {
         std::vector<std::set<std::string>> stack;
         std::string duplicate;
@@ -138,13 +141,13 @@ nlohmann::json read_json_file(const std::string& path) {
     } guard;
     nlohmann::json value;
     try {
-        value = nlohmann::json::parse(in, guard);
+        value = nlohmann::json::parse(payload, guard);
     } catch (const nlohmann::json::exception& e) {
-        throw std::runtime_error("corrupt JSON in " + path + ": " + e.what());
+        throw std::runtime_error("corrupt JSON in " + what + ": " + e.what());
     }
     if (!guard.duplicate.empty()) {
         throw std::runtime_error("duplicate JSON key \"" + guard.duplicate +
-                                 "\" in " + path);
+                                 "\" in " + what);
     }
     return value;
 }
@@ -313,16 +316,44 @@ nlohmann::json build_request_json(const StateDelta& delta) {
     return req;
 }
 
-// -------------------------------------------------------------- FileBridge --
+// -------------------------------------------------------------- ShmBridge --
 
-FileDecisionBridge::FileDecisionBridge(std::string bridge_dir,
-                                       const int timeout_ms,
-                                       const int num_ranks)
+namespace {
+
+// The C++ -> Python segment pointer written into <bridge_dir>. Python
+// (online/bridge_shm.py) loads it fail-closed at serve start and validates
+// the generation -- the cross-run pollution guard.
+constexpr const char* kBridgeShmInfoName = "bridge_shm.json";
+
+nlohmann::json load_bridge_shm_info_json(const std::string& bridge_dir) {
+    const std::string path = bridge_dir + "/" + kBridgeShmInfoName;
+    std::ifstream in(path);
+    if (!in) {
+        return nlohmann::json();
+    }
+    try {
+        return nlohmann::json::parse(in);
+    } catch (const nlohmann::json::exception&) {
+        return nlohmann::json();
+    }
+}
+
+}  // namespace
+
+ShmDecisionBridge::ShmDecisionBridge(std::string bridge_dir,
+                                     const int timeout_ms,
+                                     const int num_ranks)
     : bridge_dir_(std::move(bridge_dir)),
       timeout_ms_(timeout_ms),
-      num_ranks_(num_ranks) {}
+      num_ranks_(num_ranks) {
+    // v11 §8: the carrier is prepared at construction (ensure_bridge_dir
+    // already did this in-process for the official path; this call adopts
+    // the existing segments so no second generation is minted between the
+    // runner's FIFO-ready poll and Python's bridge_shm.json read).
+    ensure_bridge_shm();
+}
 
-FileDecisionBridge::~FileDecisionBridge() {
+ShmDecisionBridge::~ShmDecisionBridge() {
     if (req_notify_fd_ >= 0) {
         // Closing the write end gives Python a clean EOF at run end.
         ::close(req_notify_fd_);
@@ -333,13 +364,41 @@ FileDecisionBridge::~FileDecisionBridge() {
         // clean EPIPE instead of an eternal block).
         ::close(resp_notify_fd_);
     }
+    if (shm_prepared_) {
+        // Unmap first, then unlink the names. A Python still finishing its
+        // exit keeps its own mappings (unlink never invalidates maps), and
+        // the next run's ensure_bridge_dir mints a fresh generation anyway.
+        req_channel_.close();
+        ack_channel_.close();
+        resp_channel_.close();
+        const char* names[] = {shm_request_segment_.c_str(),
+                               shm_commit_ack_segment_.c_str(),
+                               shm_response_segment_.c_str()};
+        for (const char* name : names) {
+            std::string slash = std::string("/") + name;
+            if (::shm_unlink(slash.c_str()) != 0 && errno != ENOENT) {
+                // Best-effort teardown: never throw out of a destructor.
+                // A leaked segment is reclaimed by the next run's
+                // clean_stale_bridge_shm.
+                std::fprintf(stderr,
+                             "[Error] (execution_driven/bridge) destructor "
+                             "shm_unlink %s: %s\n",
+                             name, std::strerror(errno));
+            }
+        }
+        // bridge_shm.json is deliberately LEFT in place: it is this run's
+        // post-mortem pointer (generation + segment names) and is
+        // atomically rewritten by the next ensure_bridge_dir.
+        shm_prepared_ = false;
+    }
 }
 
-void FileDecisionBridge::ensure_bridge_dir(const std::string& bridge_dir) {
+void ShmDecisionBridge::ensure_bridge_dir(const std::string& bridge_dir) {
     mkdir_p(bridge_dir);
     ensure_fifo(bridge_dir + "/req_notify.fifo");
     ensure_fifo(bridge_dir + "/resp_notify.fifo");
-    // Clean stale files from a previous run in the same directory.
+    // Clean stale loose frame files from a previous run in the same
+    // directory (file-transport era hygiene; also .tmp leftovers).
     DIR* dir = ::opendir(bridge_dir.c_str());
     if (dir == nullptr) {
         bridge_fatal("opendir " + bridge_dir + ": " + std::strerror(errno));
@@ -353,37 +412,94 @@ void FileDecisionBridge::ensure_bridge_dir(const std::string& bridge_dir) {
         }
     }
     ::closedir(dir);
+    // Mint (or leave alone, when already minted in this process) the shm
+    // carrier BEFORE either side starts: Python loads bridge_shm.json at
+    // serve start, so the segments and the pointer file must exist by then
+    // (the runner gates Python on the FIFOs, which are created above).
+    mint_bridge_shm_info(bridge_dir);
 }
 
-std::string FileDecisionBridge::request_path(const uint64_t seq) const {
-    return bridge_dir_ + "/request_" + std::to_string(seq) + ".json";
-}
-
-std::string FileDecisionBridge::response_path(const uint64_t seq) const {
-    return bridge_dir_ + "/response_" + std::to_string(seq) + ".json";
-}
-
-std::string FileDecisionBridge::ack_path(const uint64_t seq) const {
-    return bridge_dir_ + "/commit_ack_" + std::to_string(seq) + ".json";
-}
-
-void FileDecisionBridge::write_file_atomic(const std::string& path,
-                                           const nlohmann::json& payload) const {
+// static
+void ShmDecisionBridge::mint_bridge_shm_info(const std::string& bridge_dir) {
+    // Adopt path: a valid pointer file whose segments exist and validate
+    // (minted earlier in this process by ensure_bridge_dir). Everything
+    // else -- missing info, dangling names, corrupt header -- mints a
+    // fresh generation after cleaning this bridge dir's stale segments.
+    // The channels held here are CLOSED before returning (close only
+    // unmaps; segment unlinking is exclusively the bridge instance
+    // destructor's job).
+    const nlohmann::json info = load_bridge_shm_info_json(bridge_dir);
+    bool adopted = false;
+    if (info.is_object() && info.value("version", 0) == 1) {
+        try {
+            const uint64_t generation =
+                info.at("generation").get<uint64_t>();
+            const uint64_t capacity =
+                info.at("slot_capacity").get<uint64_t>();
+            const std::string req =
+                info.at("request_segment").get<std::string>();
+            const std::string ack =
+                info.at("commit_ack_segment").get<std::string>();
+            const std::string resp =
+                info.at("response_segment").get<std::string>();
+            if (capacity == kBridgeShmSlotCapacity) {
+                ShmFrameChannel c0 = ShmFrameChannel::attach(
+                    std::string("/") + req, generation, capacity);
+                ShmAckRing c1 = ShmAckRing::attach(
+                    std::string("/") + ack, generation,
+                    kBridgeShmAckSlotCount, kBridgeShmAckSlotBytes);
+                ShmFrameChannel c2 = ShmFrameChannel::attach(
+                    std::string("/") + resp, generation, capacity);
+                (void)c0;
+                (void)c1;
+                (void)c2;
+                adopted = true;
+            }
+        } catch (const std::exception&) {
+            adopted = false;
+        }
+    }
+    if (adopted) {
+        return;
+    }
+    clean_stale_bridge_shm(bridge_dir);
+    const uint64_t generation = new_bridge_shm_generation();
+    const std::string stem = bridge_shm_name_stem(bridge_dir);
+    char gen_hex[32];
+    std::snprintf(gen_hex, sizeof(gen_hex), "%016llx",
+                  static_cast<unsigned long long>(generation));
+    const std::string req = stem + "req_" + gen_hex;
+    const std::string ack = stem + "ack_" + gen_hex;
+    const std::string resp = stem + "resp_" + gen_hex;
+    ShmFrameChannel c0 = ShmFrameChannel::create(
+        std::string("/") + req, generation, kBridgeShmSlotCapacity);
+    ShmAckRing c1 = ShmAckRing::create(
+        std::string("/") + ack, generation, kBridgeShmAckSlotCount,
+        kBridgeShmAckSlotBytes);
+    ShmFrameChannel c2 = ShmFrameChannel::create(
+        std::string("/") + resp, generation, kBridgeShmSlotCapacity);
+    (void)c0;
+    (void)c1;
+    (void)c2;
+    // Pointer file for Python: atomic publish (tmp + rename), same
+    // discipline the old transport's frame files used.
+    nlohmann::json out;
+    out["version"] = 1;
+    out["generation"] = generation;
+    out["request_segment"] = req;
+    out["commit_ack_segment"] = ack;
+    out["response_segment"] = resp;
+    out["slot_capacity"] = kBridgeShmSlotCapacity;
+    const std::string path = bridge_dir + "/" + kBridgeShmInfoName;
     const std::string tmp = path + ".tmp";
     {
-        std::ofstream out(tmp);
-        if (!out) {
+        std::ofstream f(tmp);
+        if (!f) {
             bridge_fatal("cannot open " + tmp);
         }
-        // Phase 6 (方案 §9.1): channel-byte and forced-flush accounting. The
-        // dump is the exact on-disk payload, so the dump size equals the file
-        // bytes; one flush per atomic write (O(deliveries), never O(nodes)).
-        const std::string body = payload.dump();
-        stats_.channel_bytes += body.size();
-        stats_.forced_flush_count += 1;
-        out << body;
-        out.flush();
-        if (!out) {
+        f << out.dump();
+        f.flush();
+        if (!f) {
             bridge_fatal("write failed for " + tmp);
         }
     }
@@ -393,7 +509,58 @@ void FileDecisionBridge::write_file_atomic(const std::string& path,
     }
 }
 
-void FileDecisionBridge::open_notify() {
+void ShmDecisionBridge::ensure_bridge_shm() {
+    if (shm_prepared_) {
+        return;
+    }
+    mint_bridge_shm_info(bridge_dir_);
+    const nlohmann::json info = load_bridge_shm_info_json(bridge_dir_);
+    if (!info.is_object() || info.value("version", 0) != 1) {
+        bridge_fatal("bridge shm info missing or invalid after mint (" +
+                     bridge_dir_ + "/" + kBridgeShmInfoName + ")");
+    }
+    try {
+        const uint64_t generation = info.at("generation").get<uint64_t>();
+        const uint64_t capacity = info.at("slot_capacity").get<uint64_t>();
+        shm_request_segment_ = info.at("request_segment").get<std::string>();
+        shm_commit_ack_segment_ =
+            info.at("commit_ack_segment").get<std::string>();
+        shm_response_segment_ =
+            info.at("response_segment").get<std::string>();
+        req_channel_ = ShmFrameChannel::attach(
+            std::string("/") + shm_request_segment_, generation, capacity);
+        ack_channel_ = ShmAckRing::attach(
+            std::string("/") + shm_commit_ack_segment_, generation,
+            kBridgeShmAckSlotCount, kBridgeShmAckSlotBytes);
+        resp_channel_ = ShmFrameChannel::attach(
+            std::string("/") + shm_response_segment_, generation, capacity);
+        shm_generation_ = generation;
+        shm_slot_capacity_ = capacity;
+    } catch (const std::exception& exc) {
+        bridge_fatal("cannot attach the bridge shm segments: " +
+                     std::string(exc.what()));
+    }
+    shm_prepared_ = true;
+}
+
+void ShmDecisionBridge::publish_request_frame(const uint64_t seq,
+                                              const std::string& body) {
+    // Channel-byte and forced-flush accounting (方案 §9.1 / §15): the frame
+    // payload is exactly the bytes the old atomic file write flushed, so
+    // the counters keep their meaning -- one flush per published frame,
+    // O(deliveries), never O(nodes).
+    stats_.channel_bytes += body.size();
+    stats_.forced_flush_count += 1;
+    try {
+        req_channel_.publish(seq, body);
+    } catch (const std::exception& exc) {
+        bridge_fatal(std::string("request frame publish failed for "
+                                 "delivery_sequence=") +
+                     std::to_string(seq) + ": " + exc.what());
+    }
+}
+
+void ShmDecisionBridge::open_notify() {
     if (req_notify_fd_ < 0) {
         // O_WRONLY|O_NONBLOCK on a FIFO with no reader fails with ENXIO, so
         // retry until the Python reader's blocking open lands (bounded by
@@ -440,7 +607,7 @@ void FileDecisionBridge::open_notify() {
     }
 }
 
-void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
+void ShmDecisionBridge::wait_response_byte(const uint64_t seq) {
     // Defect-B fix: one byte off the long-lived read end, with an EAGAIN
     // retry loop (the fd is O_NONBLOCK; a poll wake without a consumable
     // byte -- e.g. POLLHUP edges while Python churns its user-space state
@@ -473,7 +640,7 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
                              std::to_string(seq) + "; backpressure is "
                              "1:1)");
             }
-            return;  // the notification byte (payload is the response file)
+            return;  // the notification byte (the response frame is in shm)
         }
         if (n == 0) {
             // The ONLY way the peer's lifetime write end closes: the Python
@@ -493,7 +660,7 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
     }
 }
 
-void FileDecisionBridge::notify_python() {
+void ShmDecisionBridge::notify_python() {
     if (req_notify_fd_ < 0) {
         // Defensive fallback: a deliver_and_receive that somehow ran before
         // open_notify() still opens the write end lazily.
@@ -527,7 +694,7 @@ void FileDecisionBridge::notify_python() {
     }
 }
 
-void FileDecisionBridge::set_link_telemetry_provider(
+void ShmDecisionBridge::set_link_telemetry_provider(
     LinkTelemetryProvider provider) {
     // C6 (WP2, --link-telemetry): startup-wiring contract -- the online
     // main installs the provider before the event loop, so a replacement
@@ -540,7 +707,7 @@ void FileDecisionBridge::set_link_telemetry_provider(
     link_telemetry_provider_ = std::move(provider);
 }
 
-void FileDecisionBridge::set_work_ledger_provider(
+void ShmDecisionBridge::set_work_ledger_provider(
     WorkLedgerProvider provider) {
     // W1: same startup-only contract as the telemetry provider.
     if (stats_.roundtrip_count > 0) {
@@ -862,11 +1029,12 @@ WorkLedgerDiff diff_work_ledger_states(const nlohmann::json& prev_state,
     return result;
 }
 
-GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
+GraphBatch ShmDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // Phase 6 (方案 §9.1): bridge_ns -- the full blocking round trip from the
-    // C++ side (write request + notify + wait for Python + read response).
-    // Every exit before the final accounting is bridge_fatal (abort), so the
-    // only counted exit is the successful return.
+    // C++ side (publish request frame + notify + wait for Python + read
+    // response frame). Every exit before the final accounting is
+    // bridge_fatal (abort), so the only counted exit is the successful
+    // return.
     const auto bridge_t0 = std::chrono::steady_clock::now();
     const uint64_t seq = delta.delivery_sequence;
     // C6 (WP2, --link-telemetry): attach the optional top-level
@@ -880,14 +1048,40 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     if (link_telemetry_provider_) {
         request["link_telemetry"] = link_telemetry_provider_(delta);
     }
-    // W1 (joint work ledger): attach the additive top-level `work_ledger`
-    // object when the provider is installed (sibling of link_telemetry and
-    // ledger_summary; never occupies the v0 snapshot reserved slot). The
-    // provider runs exactly once per delivery epoch (1:1 backpressure).
+    // W1/v6 (joint work ledger): splice the compact work_ledger frame into
+    // the request when the provider is installed (sibling of link_telemetry
+    // and ledger_summary; never occupies the v0 snapshot reserved slot).
+    // The provider runs exactly once per delivery epoch (1:1 backpressure)
+    // and returns the deterministic workledger-compact-v1 bytes. The splice
+    // still happens HERE, before the frame is published, so the payload
+    // bytes are byte-identical to the former write_request_with_ledger
+    // file content: the raw binary member sits in place of the null
+    // placeholder and the Python receiver's structural scan still removes
+    // it exactly as it did from the file bytes.
+    std::string body;
     if (work_ledger_provider_) {
-        request["work_ledger"] = work_ledger_provider_(delta);
+        const WorkLedgerWirePayload wire = work_ledger_provider_(delta);
+        request["work_ledger"] = nullptr;   // splice placeholder
+        const std::string dumped = request.dump();
+        // nlohmann's object keys are sorted and the member name is unique,
+        // so the null placeholder surfaces as exactly one
+        // "work_ledger":null fragment in the deterministic dump.
+        static const std::string marker = "\"work_ledger\":null";
+        const std::size_t at = dumped.find(marker);
+        if (at == std::string::npos) {
+            bridge_fatal("request payload lacks the work_ledger placeholder");
+        }
+        if (dumped.find(marker, at + 1) != std::string::npos) {
+            bridge_fatal("request payload carries duplicate work_ledger keys");
+        }
+        body.reserve(dumped.size() + wire.bytes.size());
+        body.append(dumped, 0, at + marker.size() - 4);  // up to ':' inclusive
+        body.append(wire.bytes);
+        body.append(dumped, at + marker.size(), std::string::npos);
+    } else {
+        body = request.dump();
     }
-    write_file_atomic(request_path(seq), request);
+    publish_request_frame(seq, body);
     // Defect-B fix: ensure BOTH long-lived channel ends exist (lazy for
     // fixtures that never call open_notify(); the official entry calls it at
     // startup). The req write open below retries until Python's req reader
@@ -900,9 +1094,29 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // the peer's death (see wait_response_byte / open_notify).
     wait_response_byte(seq);
 
+    std::string resp_payload;
+    uint64_t resp_seq = 0;
+    try {
+        if (!resp_channel_.try_read(seq, &resp_payload, &resp_seq)) {
+            bridge_fatal("response frame missing or stale for "
+                         "delivery_sequence=" + std::to_string(seq) +
+                         " (empty or already-consumed slot after the "
+                         "response byte)");
+        }
+        if (resp_seq != seq) {
+            bridge_fatal("response frame seq " + std::to_string(resp_seq) +
+                         " != request seq " + std::to_string(seq));
+        }
+    } catch (const std::exception& exc) {
+        bridge_fatal(std::string("response frame corrupt for "
+                                 "delivery_sequence=") +
+                     std::to_string(seq) + ": " + exc.what());
+    }
     nlohmann::json resp;
     try {
-        resp = read_json_file(response_path(seq));
+        resp = parse_json_strict(resp_payload,
+                                 "response frame (delivery_sequence=" +
+                                     std::to_string(seq) + ")");
     } catch (const std::exception& exc) {
         bridge_fatal(std::string("response missing or corrupt for "
                                  "delivery_sequence=") +
@@ -958,9 +1172,7 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // of that collapses into this single pass; the response DOM (resp) is
     // destroyed when this function returns. parse_graph_batch is a pure
     // local construction -- a ParseError unwinds only local vectors, so the
-    // abort below leaves zero state side effects anywhere. The response
-    // file also survives (post-mortem evidence; the unlink is only on the
-    // success path).
+    // abort below leaves zero state side effects anywhere.
     GraphBatch batch;
     try {
         batch = parse_graph_batch(resp, num_ranks_);
@@ -969,47 +1181,31 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
     }
-    // Phase 6 (方案 §9.1): round-trip accounting. B1 (2026-08-23): the
-    // response contribution to channel_bytes is the on-disk response file
-    // size (stat before the unlink), matching the request side's exact
-    // body-bytes count.
+    // Phase 6 (方案 §9.1): round-trip accounting.
     stats_.roundtrip_count += 1;
     stats_.roundtrip_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - bridge_t0)
             .count();
-    // B1 (2026-08-23): the response's channel_bytes contribution is the
-    // REAL on-disk file size (stat, taken before the unlink below). The
-    // previous resp.dump().size() re-serialized the whole response just to
-    // count bytes and reported the compact-dump length, which is NOT the
-    // byte count that crossed the channel (the Python side writes spaced
-    // json.dump files; the request side already counts exact body bytes at
-    // write_file_atomic). Statistical field only (allowed-diff category):
-    // the value shifts slightly upward to the true bridged bytes.
-    struct stat response_stat {};
-    if (::stat(response_path(seq).c_str(), &response_stat) != 0) {
-        bridge_fatal("stat response " + response_path(seq) + ": " +
-                     std::strerror(errno));
-    }
-    stats_.channel_bytes += static_cast<uint64_t>(response_stat.st_size);
+    // B1 (2026-08-23) accounting, v11 §8 form: the response's
+    // channel_bytes contribution is the frame payload length -- exactly
+    // the bytes Python published, which under the old transport were the
+    // response file's on-disk size (stat before the unlink). The counter's
+    // meaning ("real bridged bytes", not a re-serialized dump length) is
+    // unchanged.
+    stats_.channel_bytes += static_cast<uint64_t>(resp_payload.size());
     // Phase 7 (方案 §10.3): intermediate-product lifecycle. The response
-    // file is fully consumed (the batch is materialized above); delete it
-    // right away so the bridge dir holds only the request files (the
-    // decision-sequence evidence the idempotency fixture replays) plus the
-    // in-flight response. Measured on the frozen 20.csv first-30s input:
-    // response files are ~202 MB of the ~252 MB bridge footprint. The
-    // Python journals each successfully handled request into one ordered
-    // request_journal.jsonl and retires loose request files in bounded batches;
-    // idempotency/audit readers accept that journal and the legacy loose layout.
-    // On fail-closed paths the response stays on disk for post-mortem.
-    if (::unlink(response_path(seq).c_str()) != 0) {
-        bridge_fatal("unlink response " + response_path(seq) + ": " +
-                     std::strerror(errno));
-    }
+    // frame is fully consumed (the batch is materialized above); nothing is
+    // deleted -- the single-slot channel is simply re-published by the next
+    // epoch, and the bridge dir keeps only the journal/sidecars. On
+    // fail-closed paths the frame stays parked in the shm slot; abort()
+    // runs no destructors, so the segments survive in /dev/shm with the
+    // offending frame as the post-mortem evidence (bridge_shm.json names
+    // them).
     return batch;
 }
 
-std::string FileDecisionBridge::stats_report() const {
+std::string ShmDecisionBridge::stats_report() const {
     std::ostringstream os;
     os << "bridge_roundtrip_count=" << stats_.roundtrip_count
        << " bridge_ns=" << stats_.roundtrip_ns << " avg_bridge_ns=";
@@ -1023,15 +1219,27 @@ std::string FileDecisionBridge::stats_report() const {
     return os.str();
 }
 
-void FileDecisionBridge::send_commit_ack(const uint64_t batch_id,
-                                         const uint64_t delivery_seq,
-                                         const bool success) {
+void ShmDecisionBridge::send_commit_ack(const uint64_t batch_id,
+                                        const uint64_t delivery_seq,
+                                        const bool success) {
     nlohmann::json ack;
     ack["schema_version"] = kDecisionBridgeSchemaVersion;
     ack["delivery_sequence"] = delivery_seq;
     ack["batch_id"] = batch_id;
     ack["success"] = success;
-    write_file_atomic(ack_path(delivery_seq), ack);
+    // Same accounting as the request path: one published frame = one
+    // counted flush; the payload bytes are exactly the old
+    // commit_ack_<seq>.json file content.
+    const std::string body = ack.dump();
+    stats_.channel_bytes += body.size();
+    stats_.forced_flush_count += 1;
+    try {
+        ack_channel_.publish(delivery_seq, body);
+    } catch (const std::exception& exc) {
+        bridge_fatal(std::string("commit-ack frame publish failed for "
+                                 "delivery_sequence=") +
+                     std::to_string(delivery_seq) + ": " + exc.what());
+    }
     notify_python();
 }
 

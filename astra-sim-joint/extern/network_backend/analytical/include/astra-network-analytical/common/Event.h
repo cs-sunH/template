@@ -95,6 +95,11 @@ class QueuedEvent {
     [[nodiscard]] bool matches(const EventHandle& handle) const noexcept;
     [[nodiscard]] bool cancel_event() noexcept;
 
+    /// Identity of the callback this event will invoke (nullptr once the
+    /// payload has been cancelled or delivered). Diagnostic classification
+    /// only; never gates dispatch.
+    [[nodiscard]] Callback get_callback() const noexcept;
+
   private:
     // Normal events use these two legacy fields directly. Cancellable events
     // keep their payload in control_ so an EventHandle can outlive a list-node

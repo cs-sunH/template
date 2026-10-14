@@ -33,7 +33,7 @@ it at most once per tick, delivering one StateDelta epoch to Python.
 Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driven
 闭环):
   - ed_driver_tick_end drains the mailbox into one StateDelta, delivers it
-    through the FileDecisionBridge (blocking round-trip; backpressure: one
+    through the ShmDecisionBridge (blocking round-trip; backpressure: one
     in-flight delivery at most), and schedules the four-phase commit as a
     same-tick deferred event (hard rule: from inside the tick-end callback,
     same-tick events MUST go through schedule_event_deferred);
@@ -102,10 +102,8 @@ Step 1-10 (runners + IDLE fixture):
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 #include "astra-sim/workload/execution_driven/OnlineCli.hh"
 #include "astra-sim/workload/execution_driven/OnlineStatsCounters.hh"
-#include "astra-sim/workload/execution_driven/RemoteReadExecutor.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
-#include "astra-sim/workload/execution_driven/TileTransportAdapter.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
 #include "astra-sim/workload/execution_driven/WatchRegistry.hh"
 #include "astra-sim/workload/execution_driven/WorkLedgerV2Publisher.hh"
@@ -115,6 +113,9 @@ Step 1-10 (runners + IDLE fixture):
 #include <astra-network-analytical/common/EventQueue.h>
 #include <astra-network-analytical/common/NetworkParser.h>
 #include <astra-network-analytical/congestion_aware/Helper.h>
+#ifdef JOINT_V7_EVENT_PROFILE
+#include <astra-network-analytical/common/EventProfile.h>
+#endif
 #include <json/json.hpp>
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
@@ -153,12 +154,6 @@ using namespace NetworkAnalyticalCongestionAware;
 
 namespace {
 
-struct FlowBoundCallbackReset {
-    ~FlowBoundCallbackReset() {
-        CongestionAwareNetworkApi::set_flow_bound_callback({});
-    }
-};
-
 // ---------------------------------------------------------------------------
 // Step-1-8 decision-loop context
 // ---------------------------------------------------------------------------
@@ -169,7 +164,7 @@ struct FlowBoundCallbackReset {
 struct OnlineDriverContext {
     DecisionMailbox* mailbox = nullptr;
     NetworkAnalytical::EventQueue* event_queue = nullptr;
-    FileDecisionBridge* bridge = nullptr;
+    ShmDecisionBridge* bridge = nullptr;
     ServiceCoordinator* svc = nullptr;
     WatchRegistry* watch_registry = nullptr;
     // The per-rank NodeStore-backed sources are kept alive here (Sys stores
@@ -204,7 +199,7 @@ struct OnlineDriverContext {
     // delivery and clears it.
     std::vector<int>* affected_ranks_accumulator = nullptr;
     // Phase 6 (方案 §9.1): per-run mechanism counters (C++ side; the bridge
-    // round-trip/channel counters live in FileDecisionBridge::Stats and are
+    // round-trip/channel counters live in ShmDecisionBridge::Stats and are
     // fetched through bridge->stats() at run end). See OnlineStatsCounters.hh
     // for the field semantics.
     OnlineStatsCounters stats;
@@ -239,8 +234,6 @@ struct OnlineDriverContext {
     // only the preceding resource frame for visible state-version changes.
     Analytical::AnalyticalRemoteMemory* work_ledger_memory_api = nullptr;
     std::vector<Sys*>* work_ledger_systems = nullptr;
-    RemoteReadExecutor* work_ledger_remote_read_executor = nullptr;
-    TileTransportAdapter* work_ledger_pipeline_transport = nullptr;
     // One reusable callback-ordered protocol-v4 sequencer/provider. The
     // execution fixture installs the same component around the same runtime.
     std::unique_ptr<ExecutionDriven::WorkLedgerV2Publisher>
@@ -506,29 +499,25 @@ void append_work_ledger_node_transition(
         }
         ExecutionDriven::append_work_ledger_v2_node_transition(
             *driver.work_ledger_publisher, *driver.graph_sources,
-            driver.work_ledger_remote_read_executor, kind, rank, node_id,
+            kind, rank, node_id,
             std::move(node), parent_store_ids, Sys::boostedTick());
     } catch (const std::exception& error) {
         online_fatal(error.what());
     }
 }
 
-nlohmann::json collect_v2_active_resources(OnlineDriverContext& driver,
-                                           const uint64_t tick) {
+std::vector<jointledger::ResourceRow> collect_v2_active_resources(
+    OnlineDriverContext& driver, const uint64_t tick) {
     if (driver.graph_sources == nullptr || driver.work_ledger_systems == nullptr ||
-        driver.work_ledger_memory_api == nullptr || driver.fluid_scheduler == nullptr ||
-        driver.work_ledger_remote_read_executor == nullptr ||
-        driver.work_ledger_pipeline_transport == nullptr) {
+        driver.work_ledger_memory_api == nullptr || driver.fluid_scheduler == nullptr) {
         online_fatal("protocol-v4 resource publisher is not fully wired");
     }
     try {
         const auto snapshot_t0 = std::chrono::steady_clock::now();
-        nlohmann::json resources =
+        std::vector<jointledger::ResourceRow> resources =
             ExecutionDriven::collect_work_ledger_v2_active_resources(
             *driver.graph_sources, *driver.work_ledger_systems,
-            driver.work_ledger_memory_api, driver.fluid_scheduler,
-            driver.work_ledger_remote_read_executor,
-            driver.work_ledger_pipeline_transport, tick);
+            driver.work_ledger_memory_api, driver.fluid_scheduler, tick);
         g_main_wall.work_ledger_runtime_export.ns += static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - snapshot_t0).count());
@@ -539,26 +528,21 @@ nlohmann::json collect_v2_active_resources(OnlineDriverContext& driver,
     }
 }
 
-nlohmann::json compute_work_ledger_v4(OnlineDriverContext& driver,
-                                      const StateDelta& delta) {
-    if (driver.work_ledger_remote_read_executor == nullptr ||
-        driver.work_ledger_publisher == nullptr) {
-        online_fatal("protocol-v4 pipeline publisher is not wired");
+WorkLedgerWirePayload compute_work_ledger_v4(OnlineDriverContext& driver,
+                                              const StateDelta& delta) {
+    if (driver.work_ledger_publisher == nullptr) {
+        online_fatal("protocol-v4 publisher is not wired");
     }
-    nlohmann::json cursor_patches =
-        driver.work_ledger_remote_read_executor->take_cursor_patches(
-            delta.tick);
-    nlohmann::json resources =
+    std::vector<jointledger::ResourceRow> resources =
         collect_v2_active_resources(driver, delta.tick);
     const auto publish_t0 = std::chrono::steady_clock::now();
-    nlohmann::json frame = driver.work_ledger_publisher->publish(
-        delta.delivery_sequence, delta.tick, std::move(cursor_patches),
-        std::move(resources));
+    WorkLedgerWire frame = driver.work_ledger_publisher->publish(
+        delta.delivery_sequence, delta.tick, std::move(resources));
     g_main_wall.work_ledger_publish.ns += static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - publish_t0).count());
     ++g_main_wall.work_ledger_publish.calls;
-    return frame;
+    return WorkLedgerWirePayload{std::move(frame.bytes)};
 }
 
 [[noreturn]] void online_fatal(const std::string& what) {
@@ -1099,10 +1083,6 @@ void ed_commit_cb(void* arg) {
 
     // ---- 拼 batch 适配(2026-08-22):回收已 fire 的列车哨兵 watch ----
     driver->watch_registry->drain_fired_sentinels();
-    if (driver->work_ledger_remote_read_executor != nullptr) {
-        driver->work_ledger_remote_read_executor
-            ->notify_watch_registry_changed();
-    }
 
     // ---- Commit ack: Python's provisional ledger finalizes ----
     driver->bridge->send_commit_ack(batch.batch_id,
@@ -1188,80 +1168,77 @@ void ed_driver_tick_end(void* ctx) {
                           g_main_wall.work_ledger_runtime_export);
         print_wall_bucket(main_wall_os, "work_ledger_publish",
                           g_main_wall.work_ledger_publish);
-        if (driver->work_ledger_remote_read_executor != nullptr) {
-            const auto& metrics =
-                driver->work_ledger_remote_read_executor->producer_metrics();
-            main_wall_os << " work_ledger_rows=[helpers="
-                         << metrics.row_helper_visits
-                         << " diagnostic_helpers="
-                         << metrics.diagnostic_row_helper_visits
-                         << " authoritative_snapshots="
-                         << metrics.authoritative_snapshot_calls
-                         << " blocked_diagnostics="
-                         << metrics.blocked_diagnostics_calls
-                         << " slot_patches=" << metrics.slot_patch_rows
-                         << " target_delta_rows="
-                         << metrics.target_delta_patch_rows
-                         << " target_claim_members="
-                         << metrics.target_claim_shard_elements
-                         << " target_consume_additions="
-                         << metrics.target_consume_added_shards
-                         << " target_delta_ops="
-                         << metrics.target_delta_operations
-                         << " target_full_row_json="
-                         << metrics.target_full_row_json_builds
-                         << " credit_patches=" << metrics.credit_patch_rows
-                         << " obligation_patches="
-                         << metrics.obligation_patch_rows
-                         << " cursor_run_patches="
-                         << metrics.cursor_run_patch_rows
-                         << " cursor_run_captures="
-                         << metrics.cursor_run_captures
-                         << " endpoint_index_candidates="
-                         << metrics.endpoint_index_candidate_examinations
-                         << " endpoint_index_blocks="
-                         << metrics.endpoint_index_blocks_examined
-                         << " endpoint_index_search_steps="
-                         << metrics.endpoint_index_block_search_steps
-                         << " endpoint_index_sort_comparisons="
-                         << metrics.endpoint_index_sort_comparisons
-                         << " endpoint_index_tree_build_ops="
-                         << metrics.endpoint_index_tree_build_operations
-                         << " current_cursor_candidates="
-                         << metrics.current_cursor_candidates_examined
-                         << " anchor_resource_queries="
-                         << metrics.anchor_resource_queries
-                         << " anchor_coordinate_rejections="
-                         << metrics.anchor_coordinate_rejections
-                         << " anchor_dynamic_preflights="
-                         << metrics.anchor_dynamic_preflights
-                         << " virtual_physical_cursor_skips="
-                         << metrics.virtual_physical_cursor_skips
-                         << " obligation_completed_count_reads="
-                         << metrics.obligation_completed_count_reads
-                         << " endpoint_index_entries="
-                         << metrics.endpoint_index_entries_built
-                         << " terminal_watch_entries="
-                         << metrics.terminal_watcher_index_entries_built
-                         << " terminal_watch_insert_steps="
-                         << metrics.terminal_watcher_index_insert_steps
-                         << " terminal_watch_query_visits="
-                         << metrics.terminal_watcher_index_query_node_visits
-                         << " terminal_watch_candidates="
-                         << metrics.terminal_watcher_index_candidate_examinations
-                         << ']';
-            main_wall_os << " sparse_capture=[ns="
-                         << metrics.resource_row_capture_ns +
-                                metrics.cursor_patch_capture_ns
-                         << " calls="
-                         << metrics.resource_row_capture_calls +
-                                metrics.cursor_patch_capture_calls
-                         << "] actual_issue=[ns=" << metrics.actual_issue_ns
-                         << " calls=" << metrics.actual_issue_calls << ']';
-        }
         const auto& send_stats = CongestionAwareNetworkApi::send_wall_stats();
         print_wall_bucket(main_wall_os, "sim_send_presend", send_stats.presend);
         print_wall_bucket(main_wall_os, "sim_send_start_flow", send_stats.start_flow);
+#ifdef JOINT_V7_EVENT_PROFILE
+        {
+            // Diagnostic-only v7 attribution dump: three phases (backend main
+            // events / tick-end / deferred) with per-category ns/calls, the
+            // Sys-layer sub-dispatch split, and the bounded per-owner
+            // histogram of the top Sys category. Same heartbeat cadence as
+            // the buckets above; compiled out in production builds.
+            namespace EP = NetworkAnalytical::EventProfile;
+            auto& ps = EP::state();
+            const EventQueue::QueueWallStats& qs =
+                EventQueue::queue_wall_stats();
+            main_wall_os << " eq_phase=[tickend_ns=" << ps.tick_end.ns
+                         << " tickend_calls=" << ps.tick_end.calls
+                         << " sched=" << qs.schedule_event_calls
+                         << " sched_cxl=" << qs.schedule_event_cancellable_calls
+                         << " cancel=" << qs.cancel_event_calls
+                         << " deferred_sched=" << qs.deferred_schedule_calls
+                         << " unclass_main_ns="
+                         << ps.unclassified_main.ns << " unclass_main_calls="
+                         << ps.unclassified_main.calls
+                         << " unclass_def_ns="
+                         << ps.unclassified_deferred.ns
+                         << " unclass_def_calls="
+                         << ps.unclassified_deferred.calls << "]";
+            auto print_slots = [&main_wall_os](const char* table,
+                                               EP::Slot* slots) {
+                main_wall_os << " " << table << "=[";
+                bool first = true;
+                for (size_t i = 0; i < EP::kMaxSlots; ++i) {
+                    const auto& slot = slots[i];
+                    if (slot.label == nullptr || slot.stats.calls == 0) {
+                        continue;
+                    }
+                    if (!first) main_wall_os << " ";
+                    first = false;
+                    main_wall_os << slot.label << "=" << slot.stats.ns << "/"
+                                 << slot.stats.calls;
+                }
+                main_wall_os << "]";
+            };
+            print_slots("eq_cat_main", ps.main);
+            print_slots("eq_cat_deferred", ps.deferred);
+            print_slots("eq_cat_sys", ps.sys);
+            // Bounded owner histogram for the hottest Sys category.
+            size_t hottest = 0;
+            for (size_t i = 1; i < EP::kMaxSlots; ++i) {
+                if (ps.sys[i].label != nullptr &&
+                    ps.sys[i].stats.ns > ps.sys[hottest].stats.ns) {
+                    hottest = i;
+                }
+            }
+            if (ps.sys[hottest].label != nullptr &&
+                ps.sys[hottest].stats.calls > 0) {
+                main_wall_os << " eq_sys_top_owners=[cat="
+                             << ps.sys[hottest].label;
+                for (size_t i = 0; i < ps.sys[hottest].owner_count; ++i) {
+                    const auto& owner = ps.sys[hottest].owners[i];
+                    main_wall_os << " " << owner.owner << "=" << owner.ns
+                                 << "/" << owner.calls;
+                }
+                if (ps.sys[hottest].owner_overflow > 0) {
+                    main_wall_os << " overflow="
+                                 << ps.sys[hottest].owner_overflow;
+                }
+                main_wall_os << "]";
+            }
+        }
+#endif
         std::cerr << main_wall_os.str() << std::endl;
     }
 
@@ -1930,13 +1907,13 @@ int main(int argc, char* argv[]) {
     // step 1-10: the write end pairs with Python's blocking read-end open
     // even when the run delivers nothing (IDLE fixture / zero-request runs),
     // so a zero-delivery run still terminates Python via EOF at exit.
-    FileDecisionBridge::ensure_bridge_dir(online_cli.bridge_dir);
+    ShmDecisionBridge::ensure_bridge_dir(online_cli.bridge_dir);
     // C1 (2026-08-29): pass the NPU count so parse_graph_batch can enforce
     // the rank domains (node/edge/watch-member/touched-rank ranges) at the
     // single structural parse, before any consumer sees the batch.
-    FileDecisionBridge bridge(online_cli.bridge_dir,
-                              online_cli.bridge_timeout_ms,
-                              static_cast<int>(npus_count));
+    ShmDecisionBridge bridge(online_cli.bridge_dir,
+                             online_cli.bridge_timeout_ms,
+                             static_cast<int>(npus_count));
     // timeout 0 = wait forever (frozen default; --bridge-timeout-ms opt-in).
     bridge.open_notify();
 
@@ -1975,37 +1952,6 @@ int main(int argc, char* argv[]) {
         },
         &workloads);
 
-    // C3: virtual endpoint callbacks return to the same coalesced deferred
-    // per-rank issue path as ordinary dependency releases. The adapter is
-    // declared before the executor so the executor is destroyed first, and
-    // both remain alive through the fully drained online loop.
-    TileTransportAdapter pipeline_transport(systems, workloads);
-    RemoteReadExecutor remote_read_executor(
-        graph_sources, workloads, &pipeline_transport,
-        [&online_hook_ctx](const int rank) {
-            online_hook_ctx.schedule_issue_pass(rank);
-        });
-    remote_read_executor.set_watch_reference_counter(
-        [&watch_registry](const auto& progressions) {
-            std::vector<WatchRegistry::MemberProgression> ranges;
-            ranges.reserve(progressions.size());
-            for (const auto& progression : progressions) {
-                ranges.push_back({progression.rank,
-                                  progression.first_store_id,
-                                  progression.count,
-                                  progression.stride});
-            }
-            return watch_registry.member_reference_count(ranges);
-        });
-    for (Workload* workload : workloads) {
-        workload->set_remote_read_executor(&remote_read_executor);
-    }
-    CongestionAwareNetworkApi::set_flow_bound_callback(
-        [&pipeline_transport](const AstraNetworkAPI::LogicalFlowKey& key,
-                             const NetworkAnalyticalCongestionAware::FlowId id) {
-            pipeline_transport.on_flow_bound(key, id);
-        });
-    const FlowBoundCallbackReset flow_bound_callback_reset;
     CompletionObserver::instance().set_hook(online_completion_hook,
                                             &online_hook_ctx);
 
@@ -2022,14 +1968,10 @@ int main(int argc, char* argv[]) {
     // happen on the simulation thread only (Workload::call), so no locking.
     std::vector<int> epoch_affected_ranks;
     watch_registry.set_fire_notifier(
-        [&mailbox, &epoch_affected_ranks,
-         &remote_read_executor](const WatchFire& fire) {
+        [&mailbox, &epoch_affected_ranks](const WatchFire& fire) {
             epoch_affected_ranks.insert(epoch_affected_ranks.end(),
                                         fire.member_ranks.begin(),
                                         fire.member_ranks.end());
-            remote_read_executor.notify_service_gate(
-                fire.request_id, fire.stage, fire.generation);
-            remote_read_executor.notify_watch_registry_changed();
         if (fire.stage == "prefill") {
             DecisionEvent ev;
             ev.reason = DecisionReason::PREFILL_DRAIN;
@@ -2071,8 +2013,6 @@ int main(int argc, char* argv[]) {
     driver_ctx.svc = &svc;
     driver_ctx.watch_registry = &watch_registry;
     driver_ctx.graph_sources = &graph_sources;
-    driver_ctx.work_ledger_remote_read_executor = &remote_read_executor;
-    driver_ctx.work_ledger_pipeline_transport = &pipeline_transport;
     const auto ledger_epoch_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -2081,28 +2021,6 @@ int main(int argc, char* argv[]) {
         std::to_string(ledger_epoch_ns);
     driver_ctx.work_ledger_publisher =
         std::make_unique<ExecutionDriven::WorkLedgerV2Publisher>(ledger_epoch);
-    remote_read_executor.set_ledger_publishers(
-        [&driver_ctx](const std::string& kind, const int rank,
-                      const uint64_t node_id,
-                      const ExecutionDriven::OnlineNode& node,
-                      const std::vector<uint64_t>& parents) {
-            append_work_ledger_node_transition(
-                driver_ctx, kind, rank, node_id, node, parents);
-        },
-        [&driver_ctx](nlohmann::json run) {
-            if (driver_ctx.work_ledger_publisher == nullptr) {
-                online_fatal("protocol-v4 publisher is not initialized");
-            }
-            driver_ctx.work_ledger_publisher->append_pipeline_transition(
-                std::move(run));
-        },
-        [&driver_ctx](nlohmann::json declaration) {
-            if (driver_ctx.work_ledger_publisher == nullptr) {
-                online_fatal("protocol-v4 publisher is not initialized");
-            }
-            driver_ctx.work_ledger_publisher->append_descriptor_commit(
-                std::move(declaration));
-        });
     for (Workload* workload : workloads) {
         workload->set_ledger_transition_observer(
             [&driver_ctx](const std::string& kind,
@@ -2147,18 +2065,6 @@ int main(int argc, char* argv[]) {
             for (Workload* workload : workloads) {
                 workload->set_pipeline_kernel_contract(contract);
             }
-        };
-    committer_ctx.prepare_pipeline_batch =
-        [&remote_read_executor](const GraphBatch& batch,
-                                const GraphBatchCommitter& committer) {
-            return remote_read_executor.prepare_batch(batch, committer);
-        };
-    committer_ctx.commit_pipeline_batch =
-        [&remote_read_executor](std::shared_ptr<void> prepared,
-                                const GraphBatch& batch,
-                                const GraphBatchCommitter& committer) {
-            remote_read_executor.commit_batch(std::move(prepared), batch,
-                                             committer);
         };
     committer_ctx.ingress = &ingress;
     committer_ctx.issue_rank = [&systems](int rank) {
@@ -2291,7 +2197,8 @@ int main(int argc, char* argv[]) {
     driver_ctx.work_ledger_memory_api = memory_api.get();
     driver_ctx.work_ledger_systems = &systems;
     bridge.set_work_ledger_provider(
-        [&driver_ctx](const StateDelta& delta) {
+        [&driver_ctx](const StateDelta& delta)
+            -> WorkLedgerWirePayload {
             return compute_work_ledger_v4(driver_ctx, delta);
         });
     std::cout << "[online] work ledger: enabled (protocol v4; callback-ordered "
@@ -2320,6 +2227,13 @@ int main(int argc, char* argv[]) {
                  "pass 1)"
               << std::endl;
     event_queue->set_tick_end_callback(ed_driver_tick_end, &driver_ctx);
+#ifdef JOINT_V7_EVENT_PROFILE
+    // Diagnostic-only classification registration (v7 attribution): the
+    // explicit T+1 next-decision-boundary wakeup is a no-op callback whose
+    // cost belongs to the wakeup category, not to unknown work.
+    NetworkAnalytical::EventProfile::register_known(&ed_delivery_wakeup,
+                                                    "driver_wakeup");
+#endif
 
     fluid_scheduler->flush_pending_starts();
     fluid_scheduler->mark_event_loop_started();
@@ -2772,55 +2686,6 @@ int main(int argc, char* argv[]) {
                         << " state_version="
                         << driver_ctx.work_ledger_publisher->state_version();
         }
-        if (driver_ctx.work_ledger_remote_read_executor != nullptr) {
-            const auto& metrics = driver_ctx.work_ledger_remote_read_executor
-                                      ->producer_metrics();
-            const uint64_t pipeline_transitions =
-                metrics.transition_publish_calls;
-            progress_os << " row_patches=[slot=" << metrics.slot_patch_rows
-                        << " target_delta="
-                        << metrics.target_delta_patch_rows
-                        << " target_claim_members="
-                        << metrics.target_claim_shard_elements
-                        << " target_consume_additions="
-                        << metrics.target_consume_added_shards
-                        << " target_delta_ops="
-                        << metrics.target_delta_operations
-                        << " target_full_row_json="
-                        << metrics.target_full_row_json_builds
-                        << " credit=" << metrics.credit_patch_rows
-                        << " obligation=" << metrics.obligation_patch_rows
-                        << " cursor_runs=" << metrics.cursor_run_patch_rows
-                        << " cursor_run_captures="
-                        << metrics.cursor_run_captures
-                        << " helpers=" << metrics.row_helper_visits
-                        << " diagnostic_helpers="
-                        << metrics.diagnostic_row_helper_visits << ']'
-                        << " ledger_events=[node="
-                        << (ledger_logical_events >= pipeline_transitions
-                                ? ledger_logical_events - pipeline_transitions
-                                : 0)
-                        << " pipeline=" << pipeline_transitions << ']'
-                        << " sparse_capture=[resource_ns="
-                        << metrics.resource_row_capture_ns
-                        << " resource_calls="
-                        << metrics.resource_row_capture_calls
-                        << " cursor_ns=" << metrics.cursor_patch_capture_ns
-                        << " cursor_calls="
-                        << metrics.cursor_patch_capture_calls
-                        << " total_ns="
-                        << metrics.resource_row_capture_ns +
-                               metrics.cursor_patch_capture_ns
-                        << " calls="
-                        << metrics.resource_row_capture_calls +
-                               metrics.cursor_patch_capture_calls << ']'
-                        << " transition_publish=[ns="
-                        << metrics.transition_publish_ns
-                        << " calls=" << metrics.transition_publish_calls
-                        << ']'
-                        << " actual_issue=[ns=" << metrics.actual_issue_ns
-                        << " calls=" << metrics.actual_issue_calls << ']';
-        }
         std::cout << progress_os.str() << std::endl;
     }
 
@@ -2960,16 +2825,6 @@ int main(int argc, char* argv[]) {
                   << " success=" << terminal_counts.success
                   << " skipped=" << terminal_counts.skipped
                   << " other=" << terminal_counts.other
-                  << std::endl;
-        gate_ok = false;
-    }
-    if (!remote_read_executor.is_drained()) {
-        std::cerr << "[Error] (execution_driven/online) pipeline terminal "
-                     "audit: descriptors="
-                  << remote_read_executor.active_descriptor_count()
-                  << " unfinished_cursors="
-                  << remote_read_executor.active_cursor_count()
-                  << " active_transfers=" << pipeline_transport.active_count()
                   << std::endl;
         gate_ok = false;
     }

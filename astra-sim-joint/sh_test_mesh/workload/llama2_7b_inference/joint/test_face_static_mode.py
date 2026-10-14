@@ -161,7 +161,7 @@ class QuotaForceOffTest(unittest.TestCase):
         quota 值仍先 fail-closed 校验）。"""
         config = JointMechanismConfig(
             category_mode="typed", scheduler_mode=SCHEDULER_MODE_FACE_STATIC,
-            layer_policy="adaptive", remote_actions="on",
+            layer_policy="adaptive",
             quota_mode=QUOTA_AIMD)
         self.assertEqual(config.quota_mode, QUOTA_OFF)
         self.assertTrue(config.quota_forced_off)
@@ -169,7 +169,7 @@ class QuotaForceOffTest(unittest.TestCase):
             JointMechanismConfig(
                 category_mode="typed",
                 scheduler_mode=SCHEDULER_MODE_FACE_STATIC,
-                layer_policy="adaptive", remote_actions="on",
+                layer_policy="adaptive",
                 quota_mode="bogus")
 
     def test_identity_note_discipline(self):
@@ -277,7 +277,7 @@ class StaticBallRadiusTest(unittest.TestCase):
                 loads, noc_link_gbps=_BASE_LINK_GBPS,
                 local_hbm_gbps=_BASE_HBM_GBPS),
             session=_session(home=0, resident=0),
-            request=_request(), remote_enabled=True)
+            request=_request())
         diagnostics = record.diagnostics
         self.assertEqual(diagnostics["radius_hops"], 2)
         self.assertEqual(diagnostics["static_ball_anchor"], 0)
@@ -294,7 +294,7 @@ class StaticBallRadiusTest(unittest.TestCase):
             cost_model=_cost_model(
                 loads, noc_link_gbps=1200.0, local_hbm_gbps=_BASE_HBM_GBPS),
             session=_session(home=0, resident=0),
-            request=_request(), remote_enabled=True)
+            request=_request())
         self.assertEqual(record.diagnostics["radius_hops"], 0)
         self.assertEqual(record.diagnostics["ball_instances"], (0,))
         self.assertEqual(record.diagnostics["masked_out_instances"],
@@ -323,20 +323,20 @@ class FaceStaticSelectionTest(unittest.TestCase):
         model, session = self._loaded_model()
         joint = select_instance_and_action(
             mode="joint", cost_model=model, session=session,
-            request=_request(), remote_enabled=True)
+            request=_request())
         # 全局最优 = 球外零负载实例 3（joint 无掩码，照常选中）。
         self.assertEqual(joint.chosen.instance_index, 3)
-        self.assertEqual(len(joint.candidates), 6 * 4)
+        self.assertEqual(len(joint.candidates), 6 * 3)
         for key in ("ball_instances", "masked_out_instances",
                     "radius_hops", "static_ball_anchor"):
             self.assertNotIn(key, joint.diagnostics, key)
         face = select_instance_and_action(
             mode=SCHEDULER_MODE_FACE_STATIC, cost_model=model,
-            session=session, request=_request(), remote_enabled=True)
+            session=session, request=_request())
         # 对照臂：实例 3 被静态球掩出，胜者落在球内。
         self.assertIn(3, face.diagnostics["masked_out_instances"])
         self.assertIn(face.chosen.instance_index, (0, 1, 2))
-        self.assertEqual(len(face.candidates), 6 * 4)  # 枚举不变，只换选择
+        self.assertEqual(len(face.candidates), 6 * 3)  # 枚举不变，只换选择
 
     def test_ball_winner_is_argmin_within_ball(self):
         """球内选择 = 掩码集上的 (cost_ns, order_key) argmin（与 joint
@@ -344,7 +344,7 @@ class FaceStaticSelectionTest(unittest.TestCase):
         model, session = self._loaded_model()
         record = select_instance_and_action(
             mode=SCHEDULER_MODE_FACE_STATIC, cost_model=model,
-            session=session, request=_request(), remote_enabled=True)
+            session=session, request=_request())
         ball = set(record.diagnostics["ball_instances"])
         in_ball = [
             candidate for candidate in record.candidates
@@ -368,7 +368,7 @@ class FaceStaticSelectionTest(unittest.TestCase):
         record = select_instance_and_action(
             mode=SCHEDULER_MODE_FACE_STATIC, cost_model=model,
             session=_session(home=0, resident=1),
-            request=_request(), remote_enabled=True)
+            request=_request())
         self.assertEqual(record.diagnostics["static_ball_anchor"], 1)
         self.assertEqual(record.diagnostics["ball_instances"], (0, 1, 2, 3))
         self.assertEqual(record.diagnostics["masked_out_instances"], (4, 5))
@@ -377,7 +377,7 @@ class FaceStaticSelectionTest(unittest.TestCase):
             mode=SCHEDULER_MODE_FACE_STATIC, cost_model=model,
             session=_session(home=2, resident=None,
                              location="remote_memory"),
-            request=_request(), remote_enabled=True)
+            request=_request())
         self.assertEqual(
             record_remote.diagnostics["static_ball_anchor"], 2)
         self.assertEqual(
@@ -394,8 +394,7 @@ class FaceStaticSelectionTest(unittest.TestCase):
         request = _request()
         record = select_instance_and_action(
             mode=SCHEDULER_MODE_FACE_STATIC, cost_model=model,
-            session=_fresh_session(), request=request,
-            remote_enabled=True)
+            session=_fresh_session(), request=request)
         self.assertTrue(record.diagnostics["ball_vacuous"])
         self.assertIsNone(record.diagnostics["static_ball_anchor"])
         self.assertEqual(record.diagnostics["ball_instances"],
@@ -403,7 +402,7 @@ class FaceStaticSelectionTest(unittest.TestCase):
         self.assertEqual(record.diagnostics["masked_out_instances"], ())
         joint = select_instance_and_action(
             mode="joint", cost_model=model, session=_fresh_session(),
-            request=request, remote_enabled=True)
+            request=request)
         self.assertEqual(
             (record.chosen.instance_index, record.chosen.action),
             (joint.chosen.instance_index, joint.chosen.action))
@@ -413,7 +412,7 @@ class FaceStaticSelectionTest(unittest.TestCase):
         with self.assertRaises(JointSchedulerError):
             select_instance_and_action(
                 mode="face", cost_model=model, session=session,
-                request=_request(), remote_enabled=True)
+                request=_request())
 
 
 if __name__ == "__main__":

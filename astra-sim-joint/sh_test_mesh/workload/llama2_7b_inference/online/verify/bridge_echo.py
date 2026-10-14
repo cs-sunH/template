@@ -9,13 +9,13 @@ assignments/kv_actions 数组供 C++ 侧 typed 断言;schema_version/batch_id/
 source_delivery_sequence 按协议补全。C1(2026-08-29): C++ 侧响应改为
 parse_graph_batch 单次结构化解析,未知顶层键 fail-closed,故回显里不再
 携带测试专用的 echo_of_request 键 —— 请求侧往返无损断言由 C++ fixture
-直接对 request_<seq>.json(原子发布后)与 build_request_json 输出比对,
-不再借道响应回显。commit ack 到达时把 ack dict 追加为 ack_receipt 的
+对 request_journal.jsonl(帧负载即旧 request_<seq>.json 文件字节;v11 §8
+起 shm 帧载体,journal 是请求字节的审计证据)与 build_request_json 输出
+比对,不再借道响应回显。commit ack 到达时把 ack dict 追加为 ack_receipt 的
 一行(逐行 JSON),C++ 侧据此断言 ack 通知到达且幂等(重复 seq 只落一行)。
-C5-era schema-2(2026-10-07): parse_graph_batch 的 T6 规则把 schema_version/
-pipeline_descriptors/kernel_contract 升为响应必需键 —— 本 echo 夹具补齐
-schema-2 最小合法形态:空 pipeline_descriptors 数组(回显节点无 pipeline
-anchor,锚点/描述符一致性检查对空/空自然成立)与九字段 kernel_contract
+C5-era schema-2(2026-10-07;三动作改造 2026-10-14 起描述符键不再发射):
+parse_graph_batch 的 T6 规则把 schema_version/kernel_contract 升为
+响应必需键 —— 本 echo 夹具补齐最小合法形态:九字段 kernel_contract
 (与生产 default 预设同形;首个响应冻结进 workload 后续响应必须相同,
 echo 固定返回本静态合同即满足"首提交后不可变"校验)。
 """
@@ -34,7 +34,7 @@ _KERNEL_CONTRACT = {
     "projection_abi_version": 1,
     "descriptor_version": 1,
     "pipeline_protocol_version": 1,
-    "model_version": "v6-compact-window-20261005",
+    "model_version": "v7-three-actions-20261014",
     "timer_whitelist_version": "timer-whitelist-v1-20261005",
     "window_tile_limit": 1,
     "window_local_error_ppm": 10000,
@@ -75,10 +75,9 @@ def main():
         arrivals = request.get("arrivals") or [{}]
         request_id = arrivals[0].get("request_id", "s0_r0")
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "batch_id": request["delivery_sequence"],
             "source_delivery_sequence": request["delivery_sequence"],
-            "pipeline_descriptors": [],
             "kernel_contract": _KERNEL_CONTRACT,
             "nodes": [_echo_node(request_id, 0, "echo_node_1"),
                       _echo_node(request_id, 1, "echo_node_2")],

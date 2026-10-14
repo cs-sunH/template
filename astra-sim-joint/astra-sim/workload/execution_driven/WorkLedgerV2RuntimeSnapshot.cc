@@ -4,8 +4,6 @@
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/Workload.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
-#include "astra-sim/workload/execution_driven/RemoteReadExecutor.hh"
-#include "astra-sim/workload/execution_driven/TileTransportAdapter.hh"
 #include "congestion_aware/fluid/FluidScheduler.h"
 #include "../../../extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.hh"
 
@@ -69,42 +67,19 @@ const char* work_ledger_node_operation(const OnlineNode& node) {
 
 WorkLedgerV2Identity resolve_work_ledger_identity(
     const std::vector<std::shared_ptr<NodeStoreGraphSource>>& graph_sources,
-    const RemoteReadExecutor* executor, const int rank,
-    const uint64_t node_id) {
-    if (executor != nullptr) {
-        const auto binding = executor->ledger_endpoint_binding(rank, node_id);
-        if (binding.has_value()) {
-            return WorkLedgerV2Identity{
-                binding->at("request_id").get<std::string>(),
-                binding->at("stage").get<std::string>(),
-                binding->at("generation").get<uint64_t>(), rank, node_id,
-                binding->at("descriptor_segment_id"),
-                binding->at("endpoint_selector")};
-        }
-    }
+    const int rank, const uint64_t node_id) {
     const NodeStoreMeta meta = node_meta(graph_sources, rank, node_id);
     if (meta.request_id.empty() || meta.stage.empty()) {
         throw std::runtime_error(
             "active work-ledger identity lacks request/stage metadata");
     }
     return WorkLedgerV2Identity{meta.request_id, meta.stage, meta.generation,
-                                rank, node_id, nullptr, nullptr};
+                                rank, node_id};
 }
 
 std::string work_ledger_resource_operation(
     const std::vector<std::shared_ptr<NodeStoreGraphSource>>& graph_sources,
-    const int rank, const uint64_t node_id,
-    const WorkLedgerV2Identity& identity, const std::string& fallback) {
-    if (!identity.endpoint_selector.is_null()) {
-        const std::string endpoint =
-            identity.endpoint_selector.at("endpoint").get<std::string>();
-        if (endpoint == "data_send" || endpoint == "fill_ack_send" ||
-            endpoint == "release_ack_send") return "comm_send";
-        if (endpoint == "data_recv" || endpoint == "fill_ack_recv" ||
-            endpoint == "release_ack_recv") return "comm_recv";
-        if (endpoint == "body_marker") return "compute";
-        throw std::runtime_error("unknown protocol-v3 endpoint operation");
-    }
+    const int rank, const uint64_t node_id, const std::string& fallback) {
     if (rank < 0 || rank >= static_cast<int>(graph_sources.size()) ||
         graph_sources[static_cast<size_t>(rank)] == nullptr) {
         throw std::runtime_error("resource rank is outside NodeStore array");
@@ -117,36 +92,25 @@ std::string work_ledger_resource_operation(
 void append_work_ledger_v2_node_transition(
     WorkLedgerV2Publisher& publisher,
     const std::vector<std::shared_ptr<NodeStoreGraphSource>>& graph_sources,
-    const RemoteReadExecutor* executor, const std::string& kind, const int rank,
+    const std::string& kind, const int rank,
     const uint64_t node_id, OnlineNode node,
     const std::vector<uint64_t>& parent_store_ids, const uint64_t tick) {
     if (kind != "commit" && kind != "issue" && kind != "progress" &&
         kind != "completion" && kind != "ack" && kind != "release") {
         throw std::invalid_argument("unknown protocol-v3 node transition kind");
     }
-    if (node.compute.exec_role == ComputeExecRole::RemoteReadPipelineAnchor) {
-        return;
-    }
     if (rank < 0 || rank >= static_cast<int>(graph_sources.size())) {
         throw std::invalid_argument("node lifecycle transition rank is invalid");
     }
     node.global_id = node_id;
     const WorkLedgerV2Identity identity = resolve_work_ledger_identity(
-        graph_sources, executor, rank, node_id);
+        graph_sources, rank, node_id);
     if (identity.request_id.empty() || identity.stage.empty()) {
         throw std::runtime_error(
             "node lifecycle transition lacks request/stage context");
     }
 
-    std::string operation = work_ledger_node_operation(node);
-    if (!identity.endpoint_selector.is_null()) {
-        const std::string endpoint =
-            identity.endpoint_selector.at("endpoint").get<std::string>();
-        operation = endpoint == "body_marker"
-            ? "control_marker"
-            : work_ledger_resource_operation(graph_sources, rank, node_id,
-                                             identity, operation);
-    }
+    const std::string operation = work_ledger_node_operation(node);
     nlohmann::json payload{
         {"request_id", identity.request_id}, {"stage", identity.stage},
         {"generation", identity.generation}, {"rank", rank},
@@ -156,7 +120,7 @@ void append_work_ledger_v2_node_transition(
         nlohmann::json dependencies = nlohmann::json::array();
         for (const uint64_t parent_id : parent_store_ids) {
             const WorkLedgerV2Identity parent = resolve_work_ledger_identity(
-                graph_sources, executor, rank, parent_id);
+                graph_sources, rank, parent_id);
             parents.push_back(parent_id);
             dependencies.push_back(canonical_work_ledger_id(parent));
         }
@@ -203,43 +167,46 @@ void append_work_ledger_v2_node_transition(
         kind, tick, canonical_work_ledger_id(identity), std::move(payload));
 }
 
-nlohmann::json collect_work_ledger_v2_active_resources(
+std::vector<jointledger::ResourceRow>
+collect_work_ledger_v2_active_resources(
     const std::vector<std::shared_ptr<NodeStoreGraphSource>>& graph_sources,
     const std::vector<Sys*>& systems,
     Analytical::AnalyticalRemoteMemory* memory_api,
     const std::shared_ptr<NetworkAnalyticalCongestionAware::FluidScheduler>&
         fluid_scheduler,
-    const RemoteReadExecutor* executor,
-    const TileTransportAdapter* transport, const uint64_t tick) {
+    const uint64_t tick) {
     if (graph_sources.empty() || graph_sources.size() != systems.size() ||
-        memory_api == nullptr || fluid_scheduler == nullptr || executor == nullptr ||
-        transport == nullptr) {
+        memory_api == nullptr || fluid_scheduler == nullptr) {
         throw std::invalid_argument(
             "protocol-v3 runtime resource view is not fully wired");
     }
-    nlohmann::json rows = nlohmann::json::array();
-    const auto common_row = [](const char* resource_type,
-                               const WorkLedgerV2Identity& identity,
-                               const std::string& operation,
-                               const std::string& leg,
-                               const std::string& state,
-                               const nlohmann::json& total,
-                               const nlohmann::json& remaining,
-                               const nlohmann::json& route,
-                               const uint64_t as_of_tick,
-                               const nlohmann::json& issued_tick) {
-        return nlohmann::json{
-            {"resource_type", resource_type},
-            {"work_id", canonical_work_ledger_id(identity) + "@" + leg},
-            {"request_id", identity.request_id}, {"stage", identity.stage},
-            {"generation", identity.generation}, {"rank", identity.rank},
-            {"node_id", identity.node_id}, {"operation", operation},
-            {"leg", leg}, {"state", state}, {"total", total},
-            {"remaining", remaining}, {"progress_source", "authoritative"},
-            {"service_unit", "bytes"}, {"route", route},
-            {"as_of_tick", as_of_tick}, {"issued_tick", issued_tick},
-            {"descriptor_segment_id", identity.descriptor_segment_id},
-            {"endpoint_selector", identity.endpoint_selector}};
+    std::vector<jointledger::ResourceRow> rows;
+    const auto common_row = [](
+            jointledger::ResourceKind kind,
+            const WorkLedgerV2Identity& identity,
+            const std::string& operation, const std::string& leg,
+            const std::string& state, jointledger::WireAmount total,
+            jointledger::WireAmount remaining,
+            std::vector<uint64_t> route, const uint64_t as_of_tick,
+            const bool has_issued_tick, const uint64_t issued_tick) {
+        jointledger::ResourceRow row;
+        row.kind = kind;
+        row.work_id = canonical_work_ledger_id(identity) + "@" + leg;
+        row.request_id = identity.request_id;
+        row.stage = identity.stage;
+        row.generation = identity.generation;
+        row.rank = static_cast<uint64_t>(identity.rank);
+        row.node_id = identity.node_id;
+        row.operation = operation;
+        row.leg = leg;
+        row.state = state;
+        row.total = std::move(total);
+        row.remaining = std::move(remaining);
+        row.route = std::move(route);
+        row.as_of_tick = as_of_tick;
+        row.has_issued_tick = has_issued_tick;
+        row.issued_tick = issued_tick;
+        return row;
     };
 
     const auto flow_snapshot = fluid_scheduler->flow_snapshot();
@@ -249,42 +216,30 @@ nlohmann::json collect_work_ledger_v2_active_resources(
             "NoC frame tick differs from work-ledger boundary");
     }
     for (const auto& flow : flow_snapshot) {
-        TileTransportAdapter::ActiveTransfer transfer;
-        const bool has_transfer =
-            transport->find_active_by_flow(flow.flow_id, &transfer);
-        WorkLedgerV2Identity identity;
-        std::string operation = "comm_send";
-        nlohmann::json issued_tick = nullptr;
-        if (has_transfer) {
-            identity = resolve_work_ledger_identity(
-                graph_sources, executor, transfer.rank,
-                transfer.logical_node_id);
-            operation = work_ledger_resource_operation(
-                graph_sources, transfer.rank, transfer.logical_node_id,
-                identity, operation);
-            issued_tick = transfer.submit_tick;
-        } else {
-            const int rank = flow.src_rank >= 0 ? flow.src_rank : 0;
-            identity = WorkLedgerV2Identity{"noc", "", 0, rank,
-                                            flow.flow_id, nullptr, nullptr};
-        }
+        // No executor/transport endpoint binding anymore: an active NoC flow
+        // exports under the generic "noc" identity (numeric accounting --
+        // total/remaining/rate/route -- is unchanged).
+        const int rank = flow.src_rank >= 0 ? flow.src_rank : 0;
+        const WorkLedgerV2Identity identity{"noc", "", 0, rank, flow.flow_id};
         const std::string leg = "noc:" + std::to_string(flow.flow_id);
-        nlohmann::json route = nlohmann::json::array();
+        std::vector<uint64_t> route;
         for (const auto link : flow.route) route.push_back(link);
+        jointledger::WireAmount total;
+        total.bytes = jointledger::WireNum::of_uint(flow.total_bytes);
+        jointledger::WireAmount remaining;
+        remaining.bytes = jointledger::WireNum::of_double(
+            static_cast<double>(flow.remaining_bytes));
         auto row = common_row(
-            "noc_flow", identity, operation, leg,
+            jointledger::ResourceKind::NocFlow, identity, "comm_send", leg,
             flow.state == 0 ? "Active" :
                 flow.state == 1 ? "PropagatingTail" : "Completed",
-            nlohmann::json{{"ops", nullptr}, {"bytes", flow.total_bytes},
-                           {"latency_ns", nullptr}},
-            nlohmann::json{{"ops", nullptr},
-                           {"bytes", static_cast<double>(flow.remaining_bytes)},
-                           {"latency_ns", nullptr}},
-            std::move(route), flow_as_of, issued_tick);
-        row["flow_id"] = flow.flow_id;
-        row["current_rate_Bpns"] =
-            static_cast<double>(flow.current_rate_Bpns);
-        row["last_rate_update_time"] = flow.last_rate_update_time;
+            std::move(total), std::move(remaining), std::move(route),
+            flow_as_of, false, 0);
+        row.flow_id = flow.flow_id;
+        row.current_rate_Bpns = jointledger::WireNum::of_double(
+            static_cast<double>(flow.current_rate_Bpns));
+        row.last_rate_update_time = jointledger::WireNum::of_uint(
+            static_cast<uint64_t>(flow.last_rate_update_time));
         rows.push_back(std::move(row));
     }
 
@@ -310,7 +265,7 @@ nlohmann::json collect_work_ledger_v2_active_resources(
             std::string hbm_leg;
             try {
                 identity = resolve_work_ledger_identity(
-                    graph_sources, executor, job_rank, job.node_id);
+                    graph_sources, job_rank, job.node_id);
             } catch (const std::runtime_error& error) {
                 // Exogenous background HBM job (execdoc 14.3, 2026-10-07
                 // ruling): a transfer job injected via the 19.1A
@@ -330,8 +285,7 @@ nlohmann::json collect_work_ledger_v2_active_resources(
                     throw;
                 }
                 identity = WorkLedgerV2Identity{
-                    "external_background", "", 0, job_rank, job.job_id,
-                    nullptr, nullptr};
+                    "external_background", "", 0, job_rank, job.job_id};
                 hbm_leg = "hbm_external:" + std::to_string(job_rank) +
                     "#" + std::to_string(job.job_id);
             }
@@ -344,21 +298,27 @@ nlohmann::json collect_work_ledger_v2_active_resources(
             const std::string operation = hbm_leg.empty()
                 ? fallback
                 : work_ledger_resource_operation(
-                      graph_sources, job_rank, job.node_id, identity,
-                      fallback);
+                      graph_sources, job_rank, job.node_id, fallback);
+            jointledger::WireAmount total;
+            total.ops = jointledger::WireNum::of_double(job.total_ops);
+            total.bytes = jointledger::WireNum::of_double(job.total_bytes);
+            total.latency_ns =
+                jointledger::WireNum::of_double(job.total_latency_ns);
+            jointledger::WireAmount remaining;
+            remaining.ops =
+                jointledger::WireNum::of_double(job.remaining_ops);
+            remaining.bytes =
+                jointledger::WireNum::of_double(job.remaining_bytes);
+            remaining.latency_ns =
+                jointledger::WireNum::of_double(job.memory_latency_ns);
             auto row = common_row(
-                "hbm_job", identity, operation,
+                jointledger::ResourceKind::HbmJob, identity, operation,
                 hbm_leg.empty() ? leg : hbm_leg,
                 job.memory_latency_ns > 1e-9 ? "issued" : "in_service",
-                nlohmann::json{{"ops", job.total_ops},
-                               {"bytes", job.total_bytes},
-                               {"latency_ns", job.total_latency_ns}},
-                nlohmann::json{{"ops", job.remaining_ops},
-                               {"bytes", job.remaining_bytes},
-                               {"latency_ns", job.memory_latency_ns}},
-                nlohmann::json::array(), as_of, job.start_tick);
-            row["kind"] = kind_name;
-            row["start_tick"] = job.start_tick;
+                std::move(total), std::move(remaining), {}, as_of, true,
+                static_cast<uint64_t>(job.start_tick));
+            row.job_kind = kind_name;
+            row.start_tick = static_cast<uint64_t>(job.start_tick);
             rows.push_back(std::move(row));
         }
     }
@@ -371,44 +331,42 @@ nlohmann::json collect_work_ledger_v2_active_resources(
         }
         for (const auto& job : port.jobs) {
             const WorkLedgerV2Identity identity = resolve_work_ledger_identity(
-                graph_sources, executor, job.sys_id, job.node_id);
+                graph_sources, job.sys_id, job.node_id);
             const std::string leg = "pool:" + std::to_string(port.port_index) +
                                     ":" + std::to_string(job.issue_seq);
+            jointledger::WireAmount total;
+            total.bytes = jointledger::WireNum::of_uint(job.bytes);
+            jointledger::WireAmount remaining;
+            remaining.bytes = jointledger::WireNum::of_double(
+                job.remaining_bytes);
             auto row = common_row(
-                "pool_job", identity,
+                jointledger::ResourceKind::PoolJob, identity,
                 work_ledger_resource_operation(graph_sources, job.sys_id,
-                                               job.node_id, identity, "mem_load"),
+                                               job.node_id, "mem_load"),
                 leg, job.state == 0 ? "LatencyWaiting" :
                      job.state == 1 ? "Streaming" :
                                       "FluidCompleteAwaitingCallback",
-                nlohmann::json{{"ops", nullptr}, {"bytes", job.bytes},
-                               {"latency_ns", nullptr}},
-                nlohmann::json{{"ops", nullptr},
-                               {"bytes", job.remaining_bytes},
-                               {"latency_ns", nullptr}},
-                nlohmann::json::array(), tick, nullptr);
-            row["port_index"] = port.port_index;
-            row["issue_seq"] = job.issue_seq;
-            row["latency_ready_ns"] = job.latency_ready_ns;
+                std::move(total), std::move(remaining), {}, tick, false, 0);
+            row.port_index = port.port_index;
+            row.issue_seq = job.issue_seq;
+            row.latency_ready_ns =
+                jointledger::WireNum::of_double(job.latency_ready_ns);
             rows.push_back(std::move(row));
         }
     }
 
-    std::sort(rows.begin(), rows.end(), [](const nlohmann::json& left,
-                                           const nlohmann::json& right) {
-        const std::string left_segment = left.at("descriptor_segment_id").is_null()
-            ? std::string() : left.at("descriptor_segment_id").get<std::string>();
-        const std::string right_segment = right.at("descriptor_segment_id").is_null()
-            ? std::string() : right.at("descriptor_segment_id").get<std::string>();
-        return std::make_tuple(left_segment, left.at("rank").get<int>(),
-                               left.at("node_id").get<uint64_t>(),
-                               left.at("leg").get<std::string>(),
-                               left.at("resource_type").get<std::string>()) <
-               std::make_tuple(right_segment, right.at("rank").get<int>(),
-                               right.at("node_id").get<uint64_t>(),
-                               right.at("leg").get<std::string>(),
-                               right.at("resource_type").get<std::string>());
-    });
+    std::sort(rows.begin(), rows.end(),
+              [](const jointledger::ResourceRow& left,
+                 const jointledger::ResourceRow& right) {
+                  return std::make_tuple(
+                             left.rank, left.node_id, left.leg,
+                             std::string(jointledger::resource_kind_name(
+                                 left.kind))) <
+                         std::make_tuple(
+                             right.rank, right.node_id, right.leg,
+                             std::string(jointledger::resource_kind_name(
+                                 right.kind)));
+              });
     return rows;
 }
 

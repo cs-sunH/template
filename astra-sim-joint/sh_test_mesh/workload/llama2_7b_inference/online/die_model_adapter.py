@@ -42,11 +42,10 @@ derive_span_records() 按该恒等式还原绝对位置（上游 session KV 账�
 用列车命名空间合成 id（聚合图无逐 span 请求身份；C++ 库按 opaque 身份处
 理，attention 逐 span Σ(q_i·k_i) 计费不受影响）。
 
-kv_access.identity（契约 §2）：本仓 PARTIAL 基 decode 相的前缀层经
-remote-read credit tile 流到达本地 HBM 暂存后就地复用（D09 双缓冲协议）；
-发射门保证体块计算节点只在其门就绪后发射，故计算时刻 KV 恒在本地。
-identity 如实区分：credit 门体块 = "staged"（数据经暂存缓冲到达），其余 =
-"local"。该注记只进 plan cache key 与报表（库内无成本语义），不改变计费。
+kv_access.identity（契约 §2）：三动作（stay/copy/recompute）下列车体
+消费的 KV 恒为本地 HBM 就绪数据（copy 交接/池恢复腿的门控保证体块计算
+节点只在其门就绪后发射），identity 恒 "local"。该注记只进 plan cache
+key 与报表（库内无成本语义），不改变计费。
 
 watches 绑定核实（融合阻断条件的事实基础，2026-10-03）：本仓 watch 全部
 经发射函数返回的 per-rank 节点 id 映射或标记节点名绑定
@@ -140,7 +139,7 @@ _WATCH_NAME_ANCHORS = (
 SPEC_RUNTIME_NS = 0
 
 # kv_access.identity 合法值（契约 §2）。
-KV_IDENTITIES = frozenset({"local", "staged", "remote_ready"})
+KV_IDENTITIES = frozenset({"local"})
 
 
 def derive_span_records(
@@ -504,8 +503,8 @@ class DieModelContext:
 
         spans 覆盖：缺省用 begin_emission 写入的全量 span 记录；本仓
         tail（final_norm/logits）在 D10 静默重建 span 抑制时只覆盖未被
-        抑制的 span 子集（发射骨架如实传递）。kv_identity 缺省 local，
-        remote-read credit 门体块传 staged（见模块 docstring）。"""
+        抑制的 span 子集（发射骨架如实传递）。kv_identity 恒 local
+        （见模块 docstring）。"""
         return build_die_spec(
             op_kind,
             self,
@@ -551,7 +550,7 @@ def build_die_spec(
 
     校验只覆盖 schema 形状（枚举/正整数）；数值语义校验由 C++ 库的
     parse_die_op_spec 承担（严格解析）。kv_identity 见模块 docstring
-    （本仓区分 local 与 staged；库内无成本语义，只进缓存键与报表）。
+    （本仓恒 local；库内无成本语义，只进缓存键与报表）。
     """
     if op_kind not in OP_KINDS:
         raise ValueError(
@@ -656,15 +655,16 @@ def compile_regions(
     """把有序 COMP 类别记录编译成发射组（§7.2 纯本地链融合）。
 
     category_nodes（发射序）每项：{name, category, op_kind, num_ops,
-    tensor_size, remote_read, layer_count, weight_passes} + 可选阻断/
-    同质键：external_consumers（外部分支消费者）、boundary_after（紧随
+    tensor_size, layer_count, weight_passes} + 可选阻断/
+    同质键（remote_read = 权重远载字节，可选键——缺省 0）：external_consumers（外部分支消费者）、boundary_after（紧随
     其后有通信/KV gate/提交边界）、identity（{rank,tp,layer,span_set}
     任意子集，同质判定）、id（节点 id，watch 绑定用）。
 
     返回发射组列表（顺序保持）：{name, category, op_kind, num_ops,
-    tensor_size, remote_read, layer_count, weight_passes, fused, members
-    （成分全名）， member_categories（成分类别）}。融合组的 num_ops/
-    tensor_size/remote_read = 各成分之和（兼容统计）；collective 位置/
+    tensor_size, layer_count, weight_passes, fused, members
+    （成分全名）， member_categories（成分类别）}（可选 remote_read 同样
+    透传/求和——权重远载统计）。融合组的 num_ops/
+    tensor_size = 各成分之和（兼容统计）；collective 位置/
     数量/参与者/bytes 与节点身份不在本函数职责内（发射骨架保持不变，
     成分类别经 member_categories 供骨架在原位发射 collective）。
     """
@@ -699,7 +699,8 @@ def compile_regions(
                     "op_kind": region_kind,
                     "num_ops": sum(node["num_ops"] for node in window),
                     "tensor_size": sum(node["tensor_size"] for node in window),
-                    "remote_read": sum(node["remote_read"] for node in window),
+                    "remote_read": sum(
+                        int(node.get("remote_read", 0)) for node in window),
                     "layer_count": window[0]["layer_count"],
                     "weight_passes": window[0]["weight_passes"],
                     "fused": True,
@@ -715,7 +716,7 @@ def compile_regions(
             "op_kind": node["op_kind"],
             "num_ops": node["num_ops"],
             "tensor_size": node["tensor_size"],
-            "remote_read": node["remote_read"],
+            "remote_read": int(node.get("remote_read", 0)),
             "layer_count": node["layer_count"],
             "weight_passes": node["weight_passes"],
             "fused": False,

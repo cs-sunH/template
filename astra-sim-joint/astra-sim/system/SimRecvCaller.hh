@@ -25,6 +25,12 @@ class SimRecvCaller : public Callable {
     void* fun_arg;
     bool should_cleanup;
     void call(EventType type, CallData* data);
+
+    // Diagnostic-only dispatch label (v7 event attribution); see Callable.
+    [[nodiscard]] const char* profile_dispatch_label() const noexcept override {
+        return "sim_recv_caller";
+    }
+
     Sys* sys;
     SimRecvCaller(Sys* sys,
                   void* buffer,

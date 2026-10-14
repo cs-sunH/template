@@ -34,7 +34,6 @@ for _p in (_JOINT_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _p)
 
 from joint.joint_cost_model import (  # noqa: E402
-    ACTION_REMOTE,
     ACTION_STAY,
     InstanceLoadView,
     JointHardwareRates,
@@ -118,8 +117,7 @@ def _complete_boundary(**overrides):
         session_id="s", home_instance=0, p_instance_index=0,
         p_action="stay", history_tokens=100,
         working_bytes_by_tp_rank=(KV_TOKEN_BYTES * 100,) * 2,
-        base_bytes_by_tp_rank=(0, 0), decode_steps=8,
-        base_tokens=100, kv_token_bytes=KV_TOKEN_BYTES)
+        decode_steps=8, kv_token_bytes=KV_TOKEN_BYTES)
     values.update(overrides)
     return PDBoundaryView(**values)
 
@@ -239,7 +237,7 @@ class PEntryContextGrowthTest(unittest.TestCase):
         return model.estimate_P_with_continuation(
             session=_session(history_tokens=history_tokens),
             request=_request(input_tokens=50, decode=10),
-            instance_index=1, action=ACTION_STAY, remote_enabled=True)
+            instance_index=1, action=ACTION_STAY)
 
     def test_scalar_fallback_zero_drift(self):
         """标量回退（模板缺省）：decode 服务恒 = n̂ × 率（零漂移锚）；
@@ -289,8 +287,7 @@ class PEntryContextGrowthTest(unittest.TestCase):
             candidate = model.estimate_P_with_continuation(
                 session=_session(history_tokens=100),
                 request=_request(input_tokens=50, decode=steps),
-                instance_index=1, action=ACTION_STAY,
-                remote_enabled=True)
+                instance_index=1, action=ACTION_STAY)
             return candidate, len(calls)
 
         candidate_small, calls_small = counted(8)
@@ -321,36 +318,6 @@ class PEntryContextGrowthTest(unittest.TestCase):
                             "decode_ctx_weighted_tokens")),
             10 * 150 + 10 * 11 // 2)
 
-    def test_remote_bytes_conserved_across_fold(self):
-        """验收 3（KV 读量守恒）：模板在场与否只改 decode 时间服务——
-        remote 候选的远读字节账（式 18a 基数×遍数 ⇒ remote_read_ns）、
-        空间/驱逐账与 merge 计价逐位不变。（remote 适用面：基础历史
-        驻留他实例——resident=1、目标 0。）"""
-        session = _session(
-            history_tokens=100, history_bytes=(1000, 1000),
-            missing=(1000, 1000), location="partial_hbm_remote", prefix=2)
-        loads = {0: _load(0), 1: _load(1)}
-        scalar = _model(loads).estimate_P_with_continuation(
-            session=session, request=_request(input_tokens=50, decode=10),
-            instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
-        folded = _model(loads, tau=_tau_linear(1.0)
-                        ).estimate_P_with_continuation(
-            session=session, request=_request(input_tokens=50, decode=10),
-            instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
-        self.assertEqual(
-            scalar.breakdown.remote_read_ns,
-            folded.breakdown.remote_read_ns)
-        self.assertEqual(
-            scalar.breakdown.eviction_wait_ns,
-            folded.breakdown.eviction_wait_ns)
-        self.assertEqual(scalar.breakdown.merge_ns, folded.breakdown.merge_ns)
-        self.assertEqual(
-            scalar.breakdown.target_wait_ns,
-            folded.breakdown.target_wait_ns)
-        # 时间服务面确实改变（否则本对照无信息量）。
-        self.assertNotEqual(
-            scalar.breakdown.compute_ns, folded.breakdown.compute_ns)
-
 
 # ====================================================== D 边界入口 ==
 
@@ -359,8 +326,7 @@ class DBoundaryContextGrowthTest(unittest.TestCase):
 
     def _boundary_candidate(self, model, boundary):
         return model.estimate_D_remaining(
-            boundary=boundary, instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            boundary=boundary, instance_index=0, action=ACTION_STAY)
 
     def test_scalar_fallback_zero_drift(self):
         """标量回退：decode 服务 = n̂_B × 率（8 × 2 = 16——与

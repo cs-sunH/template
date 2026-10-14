@@ -835,6 +835,8 @@ class CopyHandoffBoundarySourceRecordTests(unittest.TestCase):
     commit_boundary_decode_transition）：有 journal 先闭合（未结算 =
     因果序破损 fail-closed），base_* 按 pool-only 基同科目重录到 i_P
     侧交接产物——轮末 merge 退化为常规两位置，journal 不残留。
+    （2026-10-14 远读退役：D 边界承载动作由 remote-read 换 recompute，
+    journal 闭合/重录与守卫语义不变。）
 
     本钉测以真实 KVCacheManager 驱动全链（登记 → drain 结算 → D 边界
     转记录 → decode 增长 → merge），并钉守卫活性（残留 journal 入
@@ -918,12 +920,13 @@ class CopyHandoffBoundarySourceRecordTests(unittest.TestCase):
 
     def test_boundary_source_record_closes_journal_and_rerecords_base(self):
         kv = self._drive_probe_shape()
-        # D 边界：remote-read 落第三实例（j≠i_P 且 j≠base）→ 来源侧转
-        # 记录分支。修复点：journal 在此闭合（未结算 = fail-closed），
-        # base_* 重录到 i_P 侧交接产物（pool-only 基同科目）。
+        # D 边界：recompute 落第三实例（j≠i_P 且 j≠base）→ 来源侧转
+        # 记录分支（2026-10-14 远读退役：原 remote-read 承载动作换
+        # recompute——同款"base_* 按 pool-only 基同科目重录到 i_P 侧
+        # 交接产物"）。修复点：journal 在此闭合（未结算 = fail-closed）。
         kv.commit_boundary_decode_transition(
             session_id="s", p_instance_index=self.P_INST,
-            target_instance_index=self.J, action="remote-read",
+            target_instance_index=self.J, action="recompute",
             history_tokens=self.HISTORY + self.INPUT,
             trigger_request_id="r1")
         session = kv._sessions["s"]
@@ -939,11 +942,13 @@ class CopyHandoffBoundarySourceRecordTests(unittest.TestCase):
         self.assertEqual(
             session.base_history_tokens, self.HISTORY + self.INPUT)
         kv._check_invariants_after_mutation(session_ids=("s",))
-        # decode 增长 + 轮末 merge：常规两位置（base@i_P 对 exec 增量），
-        # journal 不再进入任何 merge 面。
+        # decode 增长 + 轮末 merge：重建副本@j 持完整并集（零字节翻转
+        # 释放 base@i_P 重复副本），journal 不再进入任何 merge 面。
         kv.expand_decode(
             session_id="s", instance_index=self.J,
-            final_context_tokens=self.GROWTH, trigger_request_id="r1")
+            final_context_tokens=(self.HISTORY + self.INPUT
+                                  + self.GROWTH),
+            trigger_request_id="r1")
         kv.merge_back(
             session_id="s", trigger_request_id="r1",
             new_tokens=self.GROWTH)
@@ -952,16 +957,16 @@ class CopyHandoffBoundarySourceRecordTests(unittest.TestCase):
         full = kv_cache_shard_bytes_for_tokens(
             kv.model, total_tokens, kv.tp_degree)
         self.assertIsNone(session.copy_handoff)
-        self.assertEqual(session.instance_index, self.P_INST)
+        self.assertEqual(session.instance_index, self.J)
         self.assertEqual(tuple(int(v) for v in session.shard_bytes),
                          tuple(int(v) for v in full))
         held = {i: sum(self._instance_bytes(kv, i))
                 for i in (self.HOME, self.P_INST, self.J)}
         nonzero = [i for i, v in held.items() if v > 0]
         self.assertEqual(
-            nonzero, [self.P_INST],
-            "winner = copy-product instance; no stranded bytes")
-        self.assertEqual(self._instance_bytes(kv, self.P_INST),
+            nonzero, [self.J],
+            "winner = rebuild instance; no stranded bytes")
+        self.assertEqual(self._instance_bytes(kv, self.J),
                          tuple(int(v) for v in full))
         # 闭合事件落账（科目 #handoff close，boundary 披露新结算点）。
         close_events = [event for event in kv.copy_handoff_events
@@ -981,23 +986,25 @@ class CopyHandoffBoundarySourceRecordTests(unittest.TestCase):
             session_id="s", instance_index=self.HOME,
             context_tokens=self.HISTORY, trigger_request_id="seed")
         kv.mark_complete("s", 100)
-        # P=remote-read（增量型，home 保留基础）→ D=remote-read@第三实例
-        # → 来源侧转记录（真 boundary_source，无 journal）。
+        # P=recompute@第三实例侧（原 P=remote-read 增量链已随远读退役
+        # 删除——recompute 链同达"base 转记录 + 工作副本异地"形态） → 来源侧转记录形态（2026-10-14 远读
+        # 退役：原增量型 remote 链换 recompute——base_* 转记录 + 重建
+        # 工作副本@j，无 journal）。
         kv.prepare_prefill(
             session_id="s", target_instance_index=self.P_INST,
             history_tokens=self.HISTORY, trigger_request_id="r1",
-            action="remote-read")
+            action="recompute")
         kv.expand_prefill(
             session_id="s", instance_index=self.P_INST,
             context_tokens=self.HISTORY + self.INPUT,
             trigger_request_id="r1")
         kv.commit_boundary_decode_transition(
             session_id="s", p_instance_index=self.P_INST,
-            target_instance_index=self.J, action="remote-read",
+            target_instance_index=self.J, action="recompute",
             history_tokens=self.HISTORY + self.INPUT,
             trigger_request_id="r1")
         session = kv._sessions["s"]
-        self.assertIsNotNone(session.boundary_source_instance_index)
+        self.assertIsNotNone(session.base_instance_index)
         # 注入残留 journal（模拟未知路径漏闭合），直接进入三位置合并面：
         # 守卫是 _merge_back_three_position 的首句（先于任何结算/审计）
         # ——修复只补生命周期结算点，不得绕过或放宽该守卫。

@@ -108,13 +108,15 @@ class NodeStore {
     struct ReadySetStats {
         uint64_t snapshot_calls = 0;
         uint64_t snapshot_ids_copied = 0;
-        // F (dynamic ordered current physical anchor candidate set,
-        // 2026-10-11): the ordinary (non-anchor) partition snapshot used by
-        // the online issue pass. Both snapshot kinds consume the same
-        // since-snapshot delta, so their counters are reported separately
-        // while the existing full-snapshot counters keep their meaning.
-        uint64_t ordinary_snapshot_calls = 0;
-        uint64_t ordinary_snapshot_ids_copied = 0;
+        // v11 Phase 4 (issue-pass increment): the snapshot rebuilt by
+        // splicing the since-snapshot delta onto a previous exact vector
+        // instead of re-walking the whole ordered set. splice_ids_written is
+        // the sequential element writes of the rebuild (the cost that
+        // replaced the O(R) set traversal); splice_delta_ids is |insert
+        // delta| + |erase delta| consumed by that splice.
+        uint64_t splice_calls = 0;
+        uint64_t splice_ids_written = 0;
+        uint64_t splice_delta_ids = 0;
         uint64_t membership_queries = 0;
         uint64_t free_insert_updates = 0;
         uint64_t free_erase_updates = 0;
@@ -127,15 +129,6 @@ class NodeStore {
         uint64_t delta_snapshot_ids_copied = 0;
     };
 
-    /// A finite arithmetic progression of virtual store IDs inside a reserved
-    /// logical span. This is structural metadata; it never allocates one
-    /// record per represented ID.
-    struct VirtualIdProgression final {
-        uint64_t first_id = 0;
-        uint64_t count = 0;
-        uint64_t stride = 0;
-    };
-
     /// Insert a node. If global_id == 0, a fresh unique id is assigned.
     /// Nodes with no dependencies yet are free immediately.
     uint64_t add_node(OnlineNode node);
@@ -145,46 +138,10 @@ class NodeStore {
     /// NodeStore id-stream drift before it mutates a batch.
     uint64_t next_auto_id() const { return next_id_; }
 
-    /// Reserve a complete affine logical ID span and mark only the specified
-    /// sparse progressions virtual. `first_store_id` must equal
-    /// next_auto_id(); every progression must be non-empty, have positive
-    /// stride, fit wholly inside the span, and be disjoint from the others.
-    /// The reservation advances next_auto_id to the span's exclusive end but
-    /// creates no records. Physical nodes may then be inserted at explicit
-    /// IDs in the span's non-virtual positions. Virtual IDs never enter
-    /// free/GC/dependency membership.
-    void reserve_logical_id_span(
-        uint64_t first_store_id, uint64_t width,
-        const std::vector<VirtualIdProgression>& virtual_progressions);
-
-    /// Compatibility wrapper reserving one dense virtual progression.
-    void reserve_id_range(uint64_t first_id, uint64_t count);
-
-    /// True only for descriptor-reserved virtual ids (not GC-erased nodes).
-    bool is_virtual_id(uint64_t node_id) const;
-
-    /// True when every ID in the finite AP is a previously reserved virtual
-    /// hole. Evaluated against sparse AP metadata without expanding IDs.
-    bool is_virtual_id_progression(uint64_t first_id, uint64_t count,
-                                   uint64_t stride) const;
-
-    /// True when every AP ID lies below the current allocation frontier and
-    /// none is virtual. Erased physical nodes remain allocated IDs.
-    bool is_allocated_nonvirtual_progression(uint64_t first_id,
-                                             uint64_t count,
-                                             uint64_t stride) const;
-
-    /// Count already-finished physical IDs in a committed AP. The AP must
-    /// first pass is_allocated_nonvirtual_progression(); its domain is the
-    /// committed affine store range, where an absent resident record means
-    /// the physical node was finished and GC-erased. Work is O(retained
-    /// records), independent of the represented tile count.
-    uint64_t count_finished_or_erased_nonvirtual_progression(
-        uint64_t first_id, uint64_t count, uint64_t stride) const;
-
-    /// True for a previously allocated, non-virtual physical ID whose node
-    /// has finished, whether the record is still resident or already GC'd.
-    /// Unknown/future ids and virtual holes are false.
+    /// True for a previously allocated physical ID whose node has finished,
+    /// whether the record is still resident or already GC'd. Unknown/future
+    /// ids are false. (Store-level generic query; survived the retirement of
+    /// the descriptor virtual holes, which used to be probed here.)
     bool is_finished_or_erased(uint64_t node_id) const;
 
     /// Precedence edge: parent must finish before child becomes free.
@@ -209,22 +166,49 @@ class NodeStore {
     /// vector is maintained on each insert/erase.
     void fill_free_node_snapshot(std::vector<uint64_t>& out) const;
 
-    /// F (dynamic ordered current physical anchor candidate set,
-    /// 2026-10-11): the online issue pass walks ordinary (non-anchor) ready
-    /// ids as its physical vector; RemoteReadPipelineAnchor-role ids live
-    /// only in the anchor partition and are enumerated by the executor's
-    /// current-anchor set instead. The delta consumed by this fill is the
-    /// same one consumed by fill_free_node_snapshot: "insertions since the
-    /// last fill of either kind". Anchors that entered the free set after
-    /// this pass's fill are excluded through free_delta_since_snapshot() by
-    /// the anchor gate.
-    void fill_free_ordinary_id_snapshot(std::vector<uint64_t>& out) const;
+    /// v11 Phase 4 (issue-pass increment, 方案 §6.1): rebuild the caller's
+    /// previous snapshot in place by splicing the since-snapshot delta onto
+    /// it, avoiding the O(R) ordered-set traversal of
+    /// fill_free_node_snapshot. EQUIVALENCE PROOF (must stay in sync with
+    /// the implementation):
+    ///   Let V = `inout` content right after the caller's last successful
+    ///   fill/splice of this store at generation G0 (the caller-side tags
+    ///   guarantee this; see free_delta_window_base_version()). Since G0
+    ///   every free-set mutation went through record_free_id_insert /
+    ///   record_free_id_erase, and those record exactly:
+    ///     - D_ins  = ids inserted since G0 and not erased again
+    ///                (the existing free_delta_ids_),
+    ///     - D_era  = ids erased since G0 that were NOT a D_ins member at
+    ///                their erase time (the erase-delta set below; an
+    ///                inserted-then-erased id leaves no trace in either,
+    ///                which is correct: it never entered V).
+    ///   For x in D_era that was re-inserted afterwards, the re-insert put
+    ///   it back into D_ins (erase removes from D_ins, insert re-adds), so
+    ///   "x in D_ins" always wins over "x in D_era" and reflects current
+    ///   live membership. Hence the ready set NOW equals
+    ///        merge( V \ D_era , D_ins )
+    ///   element-for-element, ascending, deduplicated -- exactly what
+    ///   fill_free_node_snapshot would assign. The splice consumes BOTH
+    ///   deltas and re-arms the window at the current generation, exactly
+    ///   like a full fill.
+    /// Precondition (caller-enforced, see Workload.cc): free_id_version()
+    /// differs from the caller's recorded snapshot generation (otherwise
+    /// the caller should reuse, not splice) and
+    /// free_delta_window_base_version() equals that recorded generation
+    /// (the delta window still starts exactly at the caller's vector; an
+    /// intervening fill by anyone else would have consumed the window).
+    /// Returns true on success; inout is untouched (strong guarantee) if
+    /// the splice throws, so caller-side validity tags may describe the
+    /// vector across an exception.
+    bool splice_free_node_snapshot(std::vector<uint64_t>& inout) const;
 
-    /// Anchor-partition membership (test/diagnostic read; does not touch the
-    /// membership_queries counter -- that one keeps counting is_free_id).
-    bool is_free_anchor_id(uint64_t node_id) const;
-    /// Current ordinary (non-anchor) ready-set size.
-    size_t free_ordinary_size() const { return free_ordinary_ids_.size(); }
+    /// The free_id_version at which the current since-snapshot delta window
+    /// was armed (the last fill or splice). The v11 Phase 4 splice
+    /// preconditions compare it against the caller's recorded snapshot
+    /// generation.
+    uint64_t free_delta_window_base_version() const {
+        return free_delta_window_base_version_;
+    }
 
     /// B3 incremental ready queue: ids that entered the free set since the
     /// last fill_free_node_snapshot consume (ascending, deduplicated --
@@ -385,79 +369,9 @@ class NodeStore {
   private:
     friend struct NodeStoreTestAccess;
 
-    static constexpr size_t kNoVirtualIntervalNode =
-        static_cast<size_t>(-1);
-
-    struct VirtualIdQueryWork {
-        uint64_t reservation_binary_probes = 0;
-        uint64_t reservation_blocks_examined = 0;
-        uint64_t interval_tree_nodes_examined = 0;
-        uint64_t envelope_candidates = 0;
-        uint64_t exact_ap_tests = 0;
-    };
-
-    struct VirtualIdIntervalNode {
-        uint64_t center = 0;
-        uint64_t min_first = 0;
-        uint64_t max_last = 0;
-        std::vector<size_t> by_first;
-        std::vector<size_t> by_last;
-        size_t left = kNoVirtualIntervalNode;
-        size_t right = kNoVirtualIntervalNode;
-    };
-
-    struct VirtualIdReservationBlock {
-        VirtualIdReservationBlock() = default;
-        VirtualIdReservationBlock(const VirtualIdReservationBlock&) = default;
-        VirtualIdReservationBlock& operator=(
-            const VirtualIdReservationBlock&) = default;
-        VirtualIdReservationBlock(VirtualIdReservationBlock&&) noexcept = default;
-        VirtualIdReservationBlock& operator=(
-            VirtualIdReservationBlock&&) noexcept = default;
-
-        uint64_t first_id = 0;
-        uint64_t end_exclusive = 0;
-        std::vector<VirtualIdProgression> progressions;
-        std::vector<VirtualIdIntervalNode> interval_nodes;
-        size_t interval_root = kNoVirtualIntervalNode;
-    };
-
-    struct VirtualProgressionSweepWork {
-        uint64_t envelope_candidates = 0;
-        uint64_t exact_intersection_tests = 0;
-    };
-
-    void reserve_logical_id_span_impl(
-        uint64_t first_store_id, uint64_t width,
-        const std::vector<VirtualIdProgression>& virtual_progressions,
-        VirtualProgressionSweepWork* work);
-    static size_t build_virtual_id_interval_tree(
-        VirtualIdReservationBlock& block,
-        std::vector<size_t> progression_indexes);
-    template <typename Visitor>
-    bool visit_virtual_id_candidates(uint64_t first_id, uint64_t last_id,
-                                     VirtualIdQueryWork* work,
-                                     Visitor&& visitor) const;
-    template <typename Visitor>
-    static bool visit_virtual_id_block_candidates(
-        const VirtualIdReservationBlock& block, uint64_t first_id,
-        uint64_t last_id, VirtualIdQueryWork* work, Visitor&& visitor);
-    bool is_virtual_id_impl(uint64_t node_id,
-                            VirtualIdQueryWork* work) const;
-    bool is_virtual_id_progression_impl(uint64_t first_id, uint64_t count,
-                                       uint64_t stride,
-                                       VirtualIdQueryWork* work) const;
-    bool is_allocated_nonvirtual_progression_impl(
-        uint64_t first_id, uint64_t count, uint64_t stride,
-        VirtualIdQueryWork* work) const;
-
     // Called after free_ids_ has been changed. This preserves the public
     // delta/version semantics without maintaining a second sorted snapshot.
-    // F (2026-10-11): insert routes the id into its role partition
-    // (RemoteReadPipelineAnchor -> anchor partition, else ordinary); erase
-    // tries both partitions (idempotent), so no role lookup is needed on the
-    // take/finish paths.
-    void record_free_id_insert(uint64_t node_id, bool is_anchor);
+    void record_free_id_insert(uint64_t node_id);
     void record_free_id_erase(uint64_t node_id);
 
     struct NodeRecord {
@@ -506,31 +420,29 @@ class NodeStore {
     uint64_t next_id_ = 1;
     std::unordered_map<uint64_t, NodeRecord> nodes_;
     std::set<uint64_t> free_ids_;
-    // F (2026-10-11) role partitions of the authoritative free_ids_ set,
-    // maintained in lockstep by record_free_id_insert/erase. The union of
-    // both partitions is always exactly free_ids_; ordinary ids back the
-    // online issue pass's physical snapshot (fill_free_ordinary_id_snapshot)
-    // while anchor ids are enumerated dynamically from the executor's
-    // current-anchor set. Regular std::set members: copy/move follows the
-    // payload, and the SnapshotReuseEligibility wrapper keeps copied/moved
-    // stores off the reuse path for both partitions at once.
-    std::set<uint64_t> free_ordinary_ids_;
-    std::set<uint64_t> free_anchor_ids_;
     // The ordered free_ids_ set is both the ready-set authority and the source
     // for callback-safe caller-owned snapshots. The since-snapshot delta uses
     // a set so arbitrary callback order cannot cause suffix shifts. Its vector
     // API is materialized lazily for the diagnostic/test consumer only.
     mutable std::set<uint64_t> free_delta_ids_;
+    // v11 Phase 4 (issue-pass increment): ids erased from the free set
+    // since the last delta consume that were NOT simultaneously pending
+    // insert-delta members (an insert-then-erase pair vanishes from both --
+    // it never reached any snapshot). Splice-maintained and consumed by
+    // the same two consume points as free_delta_ids_ (both the fill and
+    // the splice). Entry is harmless if the id was never in a snapshot
+    // (a no-op erase still bumps the version and lands here).
+    mutable std::set<uint64_t> free_erase_delta_ids_;
     mutable std::vector<uint64_t> free_delta_snapshot_cache_;
     mutable bool free_delta_snapshot_cache_valid_ = true;
+    // The generation at which the current delta window was armed; see
+    // free_delta_window_base_version(). Bumped at every consume point
+    // alongside the delta clears. Payload copy/move: follows the container
+    // contents; reuse eligibility is what actually gates splice/reuse, and
+    // the SnapshotReuseEligibility wrapper disables it on copy/move.
+    mutable uint64_t free_delta_window_base_version_ = 0;
     uint64_t free_id_version_ = 0;
     mutable ReadySetStats ready_set_stats_;
-    // Append-only, monotonically ordered non-overlapping reservation spans.
-    // Each span indexes only its own finite AP holes; interval envelopes can
-    // overlap even though the represented AP members are pairwise disjoint.
-    // The outer vector grows geometrically across history, and each static
-    // interval tree is proportional to that reservation's AP count.
-    std::vector<VirtualIdReservationBlock> virtual_id_reservation_blocks_;
 
     // M2 node GC state. gc_fifo_ holds node ids in finish order; every node
     // enters at most once (either childless at its own finish, or via the
@@ -552,10 +464,7 @@ class NodeStoreGraphSource : public GraphSource {
 
     std::vector<NodeView> dep_free_nodes() override;
     bool fill_dep_free_id_snapshot(std::vector<uint64_t>& out) override;
-    bool fill_dep_free_ordinary_id_snapshot(
-        std::vector<uint64_t>& out) override;
     bool is_dep_free_member(uint64_t node_id) override;
-    bool is_finished_or_erased(uint64_t node_id) override;
     void for_each_dep_free(
         const std::function<void(const NodeView&)>& consume) override;
     void finish_node(uint64_t node_id) override;

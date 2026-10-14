@@ -97,11 +97,10 @@ def _two_instance_topology(hardware):
 
 class _GraphStub:
     def __init__(self):
-        # 生产 _pipeline_identity_provider 直访 graph.pipeline_identity_
-        # allocator（真 GraphBatchBuilder 自带；替身挂真分配器——与
-        # test_prefill_remote_read_scheduler._GraphStub 同款壳模式）。
-        from joint.pipeline_identity import PipelineIdentityAllocator
-        self.pipeline_identity_allocator = PipelineIdentityAllocator()
+        # （原 pipeline_identity_allocator 挂载已随 2026-10-14 远读退役
+        # 删除：descriptor 协议整删，_pipeline_identity_provider 不复
+        # 存在；替身仅保留决策行发射所需的最小壳面。）
+        pass
 
     def emit_admission_batch(self, plan):
         return {"eviction_watches": []}

@@ -1,6 +1,184 @@
 # PROVENANCE.md — astra-sim-joint 构造溯源与偏差登记
 
 
+## 2026-10-14 远读退役·三动作化批（当前最新）
+
+依据《astra-sim-joint远读退役三机制改造方案.md》（工作区根）与
+《astra-sim-joint远读退役三机制执行方案.md》：联合决策动作空间由
+stay/recompute/copy/remote-read 四动作收缩为 **stay/recompute/copy
+三动作**，remote-read（远读）机制全链路删除——严禁以"开关置 off"隐藏
+保留（直接替换规范），本节为退役登记（历史验收记录原文保留，见下文
+各日期节）。
+
+**删除范围**（六个删除对象，改造方案 §1.1）：
+
+1. 动作枚举第四元：`joint_config.ALL_ACTIONS` 缩三元（`ACTION_ORDER`/
+   `_ACTION_PRIORITY`/掩码解析全链随缩）；W10 hybrid 动作空间扩展
+   （`ACTION_HYBRID`、`action_space=source_subset_hybrid`、
+   `prediction_presets/hybrid.json`）连带退役（物理依赖远读 credit 链）；
+2. 远读执行链：P 准入前缀读流规划（`plan_prefill_remote_read_transfers`
+   族）、`rid#readplan` 承诺账本、远读暂存 lease（KVStagingLease 全族）、
+   D 边界 decode credit 腿、graph_batch 的 `prefill_read`/`remote_credit`
+   流发射、C++ `RemoteReadExecutor`/`TileTransportAdapter` 执行器与
+   pipeline descriptor（tile 流水）协议（`joint/compact_pipeline.py`/
+   `pipeline_identity.py`/`pipeline_descriptor.py` 三模块与 C++
+   `PipelineDescriptor` 类整删；其尾部 `PipelineKernelContract` 迁出为
+   独立头 `astra-sim/workload/execution_driven/PipelineKernelContract.hh`
+   保留——die 计算后端 window 契约，非远读设施）；
+3. 增量型 P→D 边界布局族（`is_increment_layout` 判据族）一步删除——
+   三动作下边界布局恒完整型单族；merge_back 方向裁决/双向容量兜底/
+   forward 迁移腿随删（方向恒 ∈ {in_place, reverse}，真实搬移只剩三位置
+   合并）；`link_quota` 的 `FLOW_REALTIME`/`FLOW_ELASTIC` 流类与端口
+   平价门删除（在册流恒 oneshot）；
+4. 远读专属开关：`JOINT_REMOTE_ACTIONS`/`JOINT_REMOTE_READ_TILE_BYTES`/
+   `JOINT_REMOTE_READ_PARTIAL` 的解析/字段/property/manifest 键/CLI 旗标
+   （`joint_runner.py --remote`/`--remote-read-tile-bytes`/
+   `--remote-read-partial`）全部删除；
+5. 远读审计/决策日志/schema 字段与 slo_tools 远读指标/staging lease
+   水位（domain_metrics 挑战者重指派为 copy；hbm_watermark 词表收窄）；
+6. 相关测试整删/改写（joint/ 8 整删＋40 改写、online/ 14 整删＋28 改写、
+   C++ 9 整删＋13 改写、slo_tools staging_lease 文件整删）。
+
+**退役键 fail-closed**：三个 env 名并入 `joint_config._RETIRED_ENV_KEYS`
+（沿用 `JOINT_REMOTE_CREDIT_ITERS` 先例）——任何显式值启动即
+`JointConfigError`；`JOINT_ALLOWED_ACTIONS` 保留但值域缩三动作子集，
+旧值 `remote-read` 走未知动作名路径 fail-closed。冒烟矩阵删
+`TJE_remote_off` 与 `mask_remote_recompute` 两臂（16→14 配置）。
+
+**§九版本升版清单（全部落地，旧实验不自动代表新模型）**：
+
+| 常量 | 新值 |
+|---|---|
+| `joint_config.MODEL_SEMANTICS_VERSION` | `v7-three-actions-20261014` |
+| `ParsedGraphBatch.hh:kGraphBatchSchemaVersion` | 3（`pipeline_descriptors` 键恒不再出现；`kernel_contract` 必填保留） |
+| `schema_registry.DECISION_LOG_SCHEMA_VERSION` | `declog-v3-20261014` |
+| `schema_registry.SNAPSHOT_SCHEMA_VERSION` | `snapshot-v3-20261014`（staging_allocation_state 删除） |
+| `acceptance_projection.PLANNER_STATE_VERSION` | `joint-accel-planner-state-v2-20261014` |
+| `joint_accel_acceptance.PYTHON_RUNTIME_ASSET_VERSION` | `joint-accel-python-runtime-v2-20261014`（冻结 fixture 重生成） |
+| `prediction_config.PREDICTION_CONFIG_SCHEMA_VERSION` | `predcfg-v4-20261014`（action_space/multi_source_protocol 轴删除） |
+| `WORK_LEDGER_SCHEMA_VERSION`/`KV_DIRECTORY_SCHEMA_VERSION`/slo_params_manifest schema_version | 保持（D11 最小联动档 0 行帧合法） |
+
+**被取代章节指针**：README §1 机制表 J 行/env 块/`--remote` 旗标、
+§2 生命周期要点、§2.9 版本表、§3 状态表"remote-read 执行流"行（→
+单行退役指针）与 W10 行（整行退役）、D18/D19/D20 行增量族表述（→恒
+完整型）、§4 构建①c 段、§5 迁移清单第 9 条、§7 测试清单与冒烟矩阵
+16→14 均已按三动作终态改写（日期化交付节与 §7.1 历史沿革口径注原文
+保留）；《request映射策略与历史kv管理机制介绍.md》§2.1/§2.2/§2.5/
+§2.6/§3.5（读流通路→退役登记）/§四交汇句、《大白话版》镜像 16 处、
+工作区根《experiment/仿真各功能开关清单.md》§7.0 三行（→§13 退役
+一览）/§7.0.1 执行流行/§14 冒烟 16→14 同步改写。下文 PROVENANCE
+历史节（§6 起 D02/D05/D06/D08/D09/D17/W10/§45/§46/§47 等）中
+remote-read 相关验收记录为**日期化历史**，保留原文、不追认现行为。
+
+**保留红线完好**（改造方案 §1.2，R2 审查面）：remote-memory 池语义
+（`remote_memory`/`partial_hbm_remote`/`remote_load`/`remote_store`/
+remote-mem-* 键）、权重远端算子建模（`remote_weight_bytes`/
+`pipeline-tile-fraction`）、共享决策设施（池恢复计价/KV 位置目录/三位置
+merge/`enumerate_source_surface`/`CandidatePathNocShare`/
+`CandidateStageHbmShare`/`project_against`）、die kernel contract/window
+链（`PipelineKernelContract`/`plan_window`）、NativeProjection legs 主路径、
+T/E 机制与八组合 TJE 矩阵均未触碰。
+
+**§十二登记项指针（后续工单，不在本批范围）**：extern `joint_ledger`
+codec 的 PipelineRows 彻底收缩（D11 档 b）；vendored FluidScheduler
+optional `LogicalFlowKey` trim；`NodeStore` splice 增量机制进一步简化
+评估；slo_tools D_feed/D_econ 口径产品级重设计（本批仅挑战者重指派
+copy）；MODEL_SEMANTICS_VERSION v7 起与 v6 及以前不可比，正式数据
+生产须按新版本重跑；acceptance 度量链（capture→tune→holdout→
+performance）的唯一执行器 JointPipelineExecutionFixture 已随远读退役
+删除，复跑 campaign 前需先接三动作执行器（capture 模式在无执行器下
+fail-closed 并在 missing 文案中明示退役）；extern/die_model 的
+KvIdentity 枚举含远读世代身份位（现零传入），随 die 后续演进一并
+收缩；graph_batch_builder 的 Python 侧虚拟端点防御机制无当前发射者
+（零行为保留）；冒烟 1s 窗尾段无法自然完成为改造前既有问题（见
+README §2.9 与 2026-10-12 节），尾段性能攻坚另行立项。
+
+**验证基线（阶段2 各批交付）**：joint/ 1021 passed＋12 skipped（证据
+门控）、online/＋workload 根两文件 636 passed、C++ 根＋analytical 全
+target 构建零新增警告＋ctest 全绿（25/25＋7/7）、脚本与 slo_tools
+284 passed＋1 skip、acceptance 重生成 fixture 六断言面全 PASS、
+BridgeLoopbackTest 自仓库根 rc=0。全量验证与冒烟归 C2 批（§十一）。
+
+**哈希快照**：见 `PROVENANCE_hashes.txt` 2026-10-14 节（本批触点现值；
+被删文件自此不再入列——v6/v11 节历史行中的
+RemoteReadExecutor/TileTransportAdapter/pipeline_descriptor/
+test_sparse_pipeline_integration/test_pipeline_descriptor 等行按
+"历史行不动"惯例保留为删除前快照）。
+
+## 2026-10-12 v8 加速轮：完成回调链归因收口 + observer 墓碑回收修复（历史段）
+
+本轮（《joint改造方案v8.md》）源码变更与证据（仓外证据根
+`/home/sunhao/joint_accel_v8_20261012`，归因记录 ATTRIBUTION.md）：
+
+- **维护修复（maintenance，单列不计加速主线）**：v7 观察者墓碑压缩的
+  触发分支在 `ObserverPassGuard` 存活期间判 `observer_pass_depth_==0` 恒假，
+  墓碑与捕获对象永不回收。修复为压缩由 guard 析构在最外层通行结束触发
+  （含异常退栈；原地 noexcept 搬移，不分配），删除永假死分支；
+  `LocalHbmBandwidthModel.hh` 新增 `resource_observer_storage_size()/
+  resource_observer_tombstone_count()` 真实计数访问器与私有嵌套
+  `ObserverPassGuard`。快照语义（通行中新增不可见/移除当次仍访问/嵌套
+  独立快照/异常恢复）经 hbm_tail_component_test 新用例钉死：捕获对象
+  析构证明、嵌套通行精确计数（a=4/z=4/d=3 两引擎一致）、异常退出后
+  合法后续调用；canonical 输出 BASE/WORK 字节相同，缺陷引擎（BASE）上
+  两个析构断言按预期失败（已登记的已知差分）。
+- **诊断计数器（生产常开，active_id_* 同口径）**：die_model
+  `Execution` 新增 preview_calls/preview_walk_timers/preview_undo_entries/
+  preview_frontier_entries 计数与只读 getter（extern/die_model）——为下轮
+  run() 内部归因提供零插桩观测点。
+- **组件夹具扩展（普通 fixture，非代表性——无法复现生产尾段状态，见
+  ATTRIBUTION.md）**：hbm_tail_component_test 新增 K2 生产合同臂
+  （window_tile_limit=2、decode 形态 spec、M=128 串行 die 链、
+  [CANONICAL_K2] 两引擎字节等价）。
+- **归因结论（两次 150s 有界生产观测）**：尾段完成链 100% 走
+  DIE_COMPUTE die_sink 出口（transfer/retire/settle/watch/service_gate
+  全零——v7 候选全部排除）；热点= `DieExecution::drive` 循环头的
+  `machine_.next_action()`（105.66µs/次，占 98.7%），为 die 计划逐实例
+  依赖图执行的每边界批处理（~1000 实例/边界，与节点数×计划实例总量
+  算术闭合）；K2 窗口在混合前沿从未接受（plan=0），窗口合并跨边界将
+  合并 per-instance frontier_generation/action token（可观察合同）——
+  无可观察等价的结构性消除，主线如实未完成，未预设根因硬改。
+- **运行期用户开关零增删零取值变化**；仓外 PROFILE 树的诊断插桩
+  （CcProfile.h 等）不随仓交付，见证据根复跑方法。
+
+## 2026-10-12 v7 加速轮：事件长尾归因 + HBM 执行器状态索引重构（当前最新）
+
+本轮（《joint改造方案v7.md》E 主线）源码变更与证据（仓外证据根
+`/home/sunhao/joint_accel_v7_20261012`，归因记录 ATTRIBUTION.md）：
+
+- **事件分类诊断（B_V7_PROFILE，编译期 JOINT_EVENT_PROFILE 门控，缺省 OFF）**：
+  新增 `extern/.../common/EventProfile.h` 无依赖诊断设施；后端 EventQueue.proceed 分
+  主事件/tick-end/deferred 三相位计时，EventList 逐事件按回调 fn 指针注册表分类
+  （sys_outer/fluid_*/driver_wakeup/watch_issue_pass/unknown）；Sys::call_events 按
+  Callable::profile_dispatch_label()（新增诊断虚函数，缺省 sys_other；hbm_transition/
+  die_timer_memory/workload_call 等热点子类覆写）子分发计时并带 64 槽 owner 直方图；
+  [MainWall] 心跳追加 eq_phase/eq_cat_main/eq_cat_sys/eq_cat_deferred/eq_sys_top_owners
+  周期转储。生产构建零插桩指令；诊断臂单事件开销≈两次时钟读取（59.9s 尾段窗口内
+  eq_proceed 口径与未插桩历史一致量级）。
+- **HBM 执行器状态索引重构（E2，生产直接替换）**：LocalHbmBandwidthModel 全面重构——
+  ① DieExecution::complete() 即时移除 HBM mutation observer（完成后回调为可证 no-op；
+  析构移除保留为兜底）；② 观察者改稳定 deque + 墓碑 + 通行序列号 + 外层通行后压缩，
+  逐点保持旧逐通知 vector 拷贝的快照语义（通行中新增对本通行不可见、通行中移除当次
+  仍访问/其后跳过、嵌套通行独立快照），消除每通知 O(N) 拷贝；③ jobs 稳定槽位（分离
+  槽延迟批量回收）+ latency/stream/compute 相位索引列表（槽位序=issue 序，保持浮点
+  应用/累加顺序）+ 完成候选集 + drain_pending 计数，消除 advance_to 子步全量扫描、
+  FLOPs 全量扫描、has_completed/detach/has_bandwidth_user/schedule_next_transition
+  全量扫描。服务算术（等分、子步边界、逐 job 浮点、side-band 累加序、残差 clamp 集合、
+  observer 通行边界、resource version）逐操作保持；数值/混合竞争/timer/fractional
+  边界断言（local_hbm_die_memory、lifecycle oracle、nway A/B、HbmNway、
+  PipelineConcurrentGate）全绿。新增 `transition_event_count()/resource_observer_count()`
+  诊断访问器与闭环组件回归 `hbm_tail_component_test`（512 节点串行 die 链 + 首边界
+  闭式 + 守恒/生命周期/观察者分发快照语义 + canonical A/B 字节等价线）。
+- **性能如实**：尾段归因（两次 150s 有界 PROFILE 运行）= hbm_transition 类占尾段独占
+  97.6%，其 99.8% 在 on_job_complete 完成回调链（118µs/事件，且随 settle 递增
+  115→141µs）；HBM 模型自身算术/扫描（0.3µs）、观察者分发（观察者数≈1）、die_model
+  机器（30-100ns/action）均被直接测量排除。E2 重构对被排除的 0.3µs 生效：组件
+  A/B 1.19×（<1.5× 发射门），完整 B_WORK 180s 按发射门未发射。完成回调链内部的
+  机制级拆分（RemoteReadExecutor 完成/retire 路径的 O(域槽位) 扫描为最强候选）超出
+  本轮预算（两次归因运行+冒烟+组件 ≈5.6 分钟，硬上限 10 分钟），未预设根因硬改。
+- **无用户可见开关变化**：JOINT_EVENT_PROFILE 为 CMake 构建期诊断选项（缺省 OFF，
+  非运行期开关），已登记开关清单 §7.0 核对注记。
+
+
 ## 2026-10-12 v5 加速轮：投影共享背景/类型化账本第一切片/紧凑 run span（当前最新）
 
 本轮（《joint改造方案v5.md》三主线）源码变更与证据（仓外证据根 `/home/sunhao/joint_accel_v5_20261012`）：
@@ -5129,3 +5307,291 @@ consumer 统计已收口：2026-10-11 回写前整模块重跑 `joint/test_pipel
 CPP 构建方面，首次 all-target 尝试耗时 7.043183 s，因 optional shard JSON 类型错误失败；target 置 `nullptr` 的窄修订及 reverse-patch SHA 检查已处理该夹具错误。修正后 228-binding all-target 构建 PASS（`target-v4-final-affected-caller-closure`，49.208369 s）；回写前 21 项注册 CTest 与五个直跑 target 在该构建上全 PASS。非零 domain generation 恢复修复已在源中确认；whole-commit→close→settle→retire→reclaim 链由 erase/reinitialize 正例与 stale-owner 负例覆盖。Publisher append 的强保证限于自身 metadata sequence/lineage：append 失败时不留 seq gap 或半提交 lineage。RRE 已施加的物理 mutation 和已经移出的 pending patch 不会由 Publisher 回滚；当前 main 路径失败即中止，不支持进程内重试，本轮不扩展为通用 checkpoint。
 
 因此性能/current measurement 继续引用本节前述 53-binding `closure-preview-context-prepared`：T3 三对九臂的工程/近似额外/总中位数 0.6790036702×/0.9140707531×/0.6276408495×，三者中位数均未达到 1×；T4 180.016744250 s TIMEOUT、33 deliveries、未自然完成，`speed_goal_met=false`、`implementation_complete=false`，20×未通过。V4 后续代码不追认这些旧 T3/T4 结果，也没有新的完整计时。累计仿真/投影为 1,449.333684672 s；whole-trace 预算已用完。V4 exact semantics、physical producer 验收与保护交付仍待 root 串行验证。协议依据为 `logs/resume-20261010/target-slot-delta-v4/root-wire-contract.json`；consumer 设计范围见同目录 `consumer-phaseA.md` 与 `phaseA-local-design.md`。
+
+
+### 2026-10-12 joint 加速改造 v6：紧凑账本 wire 与 typed 接收核心（N 主线贯穿）
+
+本轮按《joint改造方案v6.md》完成 N 的生产贯穿改造：C++ 回调直接生成紧凑
+typed 记录（RemoteReadExecutor/Publisher/RuntimeSnapshot；义务行携带
+(segment, run_index) 坐标+动态标量，不再构造整行 JSON），发布
+workledger-compact-v1 二进制帧（帧内字典引用；外层 bridge JSON 不变，
+DecisionBridge 以占位拼接写出，jl_scan_request 按帧头自界长定位成员）；
+原生接收侧热行（pipeline runs/slot/credit/obligation/cursor/resource）
+全部 typed 化并直达双账本 COW 事务（查询边界才序列化小 JSON）；旧 JSON
+帧经显式版本 reader 进同一 typed 核心（归档可读，无双状态机）。journal
+侧车升级 request_journal_work_ledger.compact.bin.gz（[u64 delivery][u64
+tick][u32 len][frame] 记录；guard 截断按完整记录前缀恢复），旧 jsonl.gz
+reader 保留；请求 journal 行内 stripped 注记按段形态指向对应侧车。
+
+语义验证：35 帧真实磁带（v5 first-1s run）A/B 逐帧差分——冻结 v5 基线
+库（sha256 2e521e4a…，冻结源码重建校验一致）与 v6 typed 核心在
+counters/works/conservation/pipeline snapshot 全 35 帧 IDENTICAL（证据
+joint_accel_v6_20261012/runs/v6_tape_diff.json）；JSON→紧凑转码差分
+同 35 帧 PASS（compact_diff，逐帧双臂对照）。生产冒烟（first-1s，30s
+guard）：16/16 交付全紧凑帧、ACK 全清、无错误行；新进程恢复：侧车前缀
+15 帧重建后 delivery 15 继续 apply 成功，陈旧交付 fail-closed。
+
+性能（同一 35 帧逻辑输入）：接收链（scan+parse+prepare+commit）基线
+59.9s → v6 紧凑 15.7s（2.9×～3.8×，两臂同进程对照 JSON 45.7s →紧凑
+15.7s 为 2.9×）；未压缩 wire 字节 1.816GB→434MB（23.9%）。完整任务
+（first-1s，180s guard）仍未自然完成（36 交付后 SIGTERM，与 v5 同窗）：
+ledger 分段 15.3s（v5 基线同窗 56.6s），请求通道 0.44GB（v5 JSON 约
+1.8GB）；完整倍率仍 null。C++ 侧 21 项注册 CTest 全绿（新增
+compact_wire_test）；joint/ 1269 passed + online/ 759 passed（各 3/1
+失败为 v5 既有，涉用户未提交域，与本轮无关）。
+
+本段变更文件（PROVENANCE_hashes 对应重算）：extern/joint_ledger（新增
+TypedRows/CompactWire/CompactReader + 全核心 typed 化）、
+astra-sim/workload/execution_driven（Publisher/RuntimeSnapshot/
+RemoteReadExecutor typed 生产）、DecisionBridge/main_online（紧凑 splice
+与 wire 结构 provider）、joint/native_ledger（无接口变化）、online/
+decision_bridge.py + bridge_request_journal.py（二进制侧车与恢复）、
+CMakeLists（AstraSim PUBLIC 链接 joint_ledger）。无新增用户可见开关
+（内部 wire gate 与用户开关分清）；语义/ledger 版本仍为 4。
+
+## 2026-10-13 v9 加速轮：精确预演事务（消除 preview 四前沿全量复制）
+
+背景与纠错：v8 归因"热点=DieExecution::drive 循环头的 machine_.next_action()
+（105.663µs/次）"系 v8 PROFILE 树 CcProfile.h 输出格式串 nxt/preview 标签与
+实参顺序互换（实参为 die_preview, die_next），已撤回；映回真实成员后热点为
+preview_consecutive_internal_timers（105.6626µs/次 × 316,014 = 33.39s，占
+die_sink 同窗 98.6633%）。复算原件与生产形态分布（v8 心跳重解析：早期窗口
+avgF≈3,250/次、尾段窗口 avgF≈273,682→378,442/次）见仓外证据根
+/home/sunhao/joint_accel_v9_20261013（V8_CORRECTION_REVERIFIED.md、
+SAME_WINDOW_STATS.md、tools/）。
+
+生产变更（直接替换，无开关、无旧路径）：extern/die_model
+- src/Execution.cc：PreviewBorrowGuard（四前沿整复制）退役，改为 PreviewTxn
+  日志式精确事务——heap/events 的 push/pop/逐槽写经 HeapJournal 写前记录
+  （sift 前按最坏路径预留容量；容量增长为非模型状态，持久化并计数），逆序
+  回放恢复，回滚 noexcept 不分配；future_starts/active_ids 经调用链证明为
+  预演调度与返回值不可读的派生结构，事务内不维护（activate_due_starts 跳过、
+  complete_instance 不置 dirty、complete_due 正常/catch 分支压缩跳过；真实
+  路径完整保留）；真实推进与预演共用 sift_up/sift_pop 单一实现（三堆元素
+  唯一，min 序/弹出顺序与原 std::push_heap/pop_heap 纪律等价）与同一条
+  run() 控制流；dense PreviewUndoLog/标量快照沿用，U 全出口统一收口。
+- include/DieTypes.hh：新增 PreviewCounters 与 Execution::preview_counters()
+  只读访问器（E/T/U/F 保留 v8 口径；F 结构性归零；新增 J、四容器 S 累计/
+  峰值、undo/日志峰值、退出分类、容量增长、复制字节/active 扫描恒 0 字段）；
+  preview 公有签名与全部消费者不变。
+
+测试（新增五臂，全部版本无关 SFINAE 以便 BASE 树同文件 A/B）：
+internal_service_progress_test 计数标定（手算精确断言）/大前沿孪生等价
+（heap-heavy 零走走 + events-heavy 6 循环）/规模阶梯（S=8,192→131,072，
+BASE 54µs→1.80ms 线性劣化 vs WORK 260→521ns 平坦，J 与 S 无关）/分配失败
+扫频（测试二进制 operator new 倒计时 49 档，5 档真实 bad_alloc 后全状态
+精确恢复+孪生续行等价；无生产 fail 开关）/真实 spec 完整环（qk prefill
+q=61550 kv=61550 经 compile() 同生产路径，21184 实例全协议到 Done；BASE/
+WORK 驱动 13.64ms/9.94ms=1.372×，preview 段 1.45×，avgF≈5,284 处于生产
+尾段 ~1/67 的 L2 快速复制区——保真 false）；hbm_tail_component_test 新增
+V9 大前沿生产臂（4 节点真实 DieExecution/HBM/K2，56,448 转换，canonical
+输出 BASE/WORK 逐字节相同；K1/K2/v8 回收臂全绿）。
+
+验证：die_model 13 项 + 前端 6 项注册测试、RemotePortNway/RemoteReadExecutor/
+HbmNway/NativeProjectionCApi 显式二进制、Python 原生边界 44/44
+（test_die_model_adapter + test_die_plan_projection）全绿；全受影响 target
+编译通过。
+【2026-10-13 v10 纠错】上文"HbmNway…全绿"不实：原始 v9_regr_explicit_binaries.log
+中 HbmNwayTest 仅有 "Error parsing options: Option 'system-configuration' has no
+value" 后 exit=0——测试以缺参调用运行，解析报错但进程仍返回 0，全部断言从未
+执行（假绿）。v10 阶段 A 已按 fixture（make_hbm_nway_fixture.py + 全五类配置
+参数）分别实跑 system_on/system_off 并核验 `[hbm_nway_test] ALL PASS`，见
+《joint改造结果v10.md》与 /home/sunhao/joint_accel_v10_20261013。
+
+完整 first-1s 配对：未完成（如实）。BASE 臂（未插桩）172s guard 超时于
+delivery 36 尾段（wall 105.9s 起 tick 冻结 8.4737e9，与 v8 PROFILE#2 150s
+死点同模拟位置）；WORK 臂因 600s 物理预算（BASE 失败启动 120.2s + 超时
+172.5s 等，账本 521.3s）不足以容纳（预计 ~125-150s）按方案 §9 取消未发射。
+【2026-10-13 v10 纠错】本段两处口径修正：①"tick 冻结 8.4737e9/死点"撤回——
+原始 cpp.log 的 MainWall 序列显示 BASE raw tick 持续增长（8.4704e9→8.4737e9
+跨多个 MainWall），是同 tick 洪峰下推进极慢而非卡死；WORK 侧 timing.jsonl 实有
+36 条、末条 tick 8,460,518,142 与 BASE 相同，"WORK 只交付 35"的推断同撤回。
+②"账本 521.3s"与 BUDGET_LEDGER.tsv 逐条合计 519.941860602s 不符，以 TSV
+原件为准。详见《joint改造结果v9.md》顶部 v10 纠错指引。
+同窗统计（非倍率）：早期段两引擎 21/27/32 deliveries 三锚点对齐（WORK 恒
+快 ~7%），分歧全部在 delivery 36 尾段。整体/尾段倍率 null；2×/20× 未验证。
+
+诊断捕获事故（如实登记）：B_V9_PROFILE 臂两次捕获运行的二进制从未包含
+预期 [V9S] 转储——复制 build 目录携带 WORK 树绝对路径，profile 树内补丁被
+静默忽略；运行哈希与 WORK 生产二进制一致（作为无插桩 WORK 引擎数据有效），
+[V9S] 结论作废并在 run_start 追加更正；该臂已全新配置重建（补丁验证入
+二进制，sha b0756f95…，未运行）。生产四容器 S 分布因此未取得（v8 F 合计
+与窗口分布仍为唯一生产前沿数据）。
+
+## v10（2026-10-13）：虚拟端点成员资格索引 + v9 假绿补验（joint 改造 v10）
+
+基线＝开工真实 v9 交付态（冻结 885 文件，与 v9 冻结 BASE 的差异恰为 v9
+交付的 4 个源文件+文档，git HEAD 89f4acf/190 条 dirty 路径全记录）。三臂
+独立源树全新 cmake（base_ab/work_ab/profile；CMAKE_HOME_DIRECTORY+全量
+.o.d 源路径逐臂审计；PROFILE 另带 -DJOINT_EVENT_PROFILE=ON 与仅诊断补丁
+B_V10_PROFILE_diagnostic.patch——[V10P] 具名引擎分桶、Timer 分支 witness
+采样（owner 关联/四 S 差分/E-T-U-J-F/stop 边界/K2 拒绝理由）、Python 策略
+cProfile；四项自检过：二进制标记/depfile/小合法执行器首样本/哨兵 schema
+逐键解析+S 口径标定（S 差分==fsizes））。
+
+阶段 A 补验：HbmNway ON/OFF 全参 fixture 实跑双绿（v9 假绿缺口关闭；终端
+锚 400/600/700/6/5400/500/800/1000/1100 全命中）。唯一 first-1s 生产
+PROFILE（guard145）：K2 窗口查询 6,438,904 次 100% 拒绝（窗口机制全程未
+触发）、describe 0.70s/12.9M 次、preview 4.12s/6.44M 次、die 引擎全链
+~9.4s——A1/A2/R/T 四候选独占份额全部 ≤3.5% 不可防御；Python 侧
+run_variant_policy 35.7s/145s=24.6% 其中 is_virtual_endpoint 线性全量扫描
+2.25s/7080 次（两重型 handler 内占 policy 45%）且单次成本随运行上涨
+（235→427µs，区间列表单调增长）——选靶 C 路线（业务候选重复工作）。
+
+阶段 B 生产重构（直接替换、无开关）：OnlineTraceBuilder.is_virtual_endpoint
+的 virtual_endpoint_ranges 线性扫描替换为 _VirtualEndpointLookup 精确索引
+（按 first 排序副本 + 各 range last 的 max 线段树；查询 bisect 截断
+first ≤ id 前缀 + 子树 max(last) < id 整枝剪除 + [0,hi) 叶范围限界，仅对
+覆盖候选做与旧实现逐字相同的模测试；any-match 与枚举顺序无关，正确性不
+依赖区间不相交或注册有序假设，乱序插入走防御性全量重建仅慢不错）。
+注册侧 sync() 从规范列表推导（尾合并原位刷新、追加 O(1) 摊还）。消费面
+检索：virtual_endpoint_ranges 触点全封装于本文件三处。
+
+验证：新增 7 项合同测试（test_virtual_endpoint_index.py：全 id 域对逐字
+旧扫描参考逐项等价、三合并分支/交错重叠/乱序/None/边界、生产量级 2 万
+progression 机制复核）；online 全套件 766 过/3 失败=BASE 同款预存已知
+失败（inf/nan ETA、open_restore journal mock）零回归；阶段 B 后 HbmNway
+ON/OFF 重跑双绿。正式配对（同字节 first-1s 队列 87e0fbee/8 请求/3 会话/
+61550 prefill/1646 decode；双臂串行同条件、各自 run_start 先行、双预检
+PASS；二进制逐字节相同 8887b286…——v10 零 C++ 差异，臂间唯一算法差即本
+索引）：36/36 request 帧字节等价（差异仅生产者身份串 cpp_online-<pid>-
+<host_ns>，16/660 字节）；已落 10 交付决策日志剥离 *_wall_ns 宿主字段后
+逐字段等价；交付/tick 推进形态一致（末完成交付同 tick 8,460,518,142）。
+两臂均 172s guard 截断未自然完成 → 整体精确倍率与下界按合同 null；共同
+逻辑窗口（request30→request35 落盘 mtime 宿主锚，含 handler 30-34 完整
+段）尾段 33.57s/18.18s=1.847×、全窗 1.352×、早期窗 0.983×（收益随区间
+累积增长，与机制一致）；36 交付 policy handler 49.63s→15.75s（−68%）。
+机制阶梯（合成压力形态，单列不冒充代表性）：9,931 区间 237.2µs→2.05µs
+=115.7×、39,462 区间 873.9µs→2.83µs=309.0×。物理预算 590.59s/600s 未
+超限（诊断 149.4s≤150）。
+
+本段变更文件（PROVENANCE_hashes 对应重算）：sh_test_mesh/workload/
+llama2_7b_inference/online/graph_batch_builder.py、新增
+sh_test_mesh/workload/llama2_7b_inference/online/test_virtual_endpoint_index.py。
+运行期用户开关零增删零取值变化；索引为内部数据结构替换非开关。详见
+《joint改造结果v10.md》与仓外 /home/sunhao/joint_accel_v10_20261013。
+
+本段变更文件（PROVENANCE_hashes 对应重算）：extern/die_model/src/
+Execution.cc、extern/die_model/include/DieTypes.hh、extern/die_model/tests/
+internal_service_progress_test.cc、astra-sim/workload/execution_driven/
+tests/hbm_tail_component_test.cc。运行期用户开关零增删零取值变化。
+
+## 2026-10-14 v11 决策回路整体原生化（Phase 1 门禁 FAIL 转保底）+ Phase 4 工程线
+
+基线 = v10 交付态（HEAD 89f4acf + 既有 dirty/untracked，冻结 886 文件
+manifest 见仓外证据根 /home/sunhao/joint_accel_v11_20261014）。执行按
+《joint改造方案v11.md》分阶段硬门推进：
+
+- Phase 0 GO：黄金语料 36 决策帧（arm-local 录制器，哨兵+sha 自检零错、
+  digest 与生产 36/36 交叉一致、录制扰动 4.1s/300s 单列）+ 离线重放台架
+  36/36 三层逐字节自复现（语料=确定性契约）+ BASE 身份三重证明
+  （base_ab/profile0 二进制与 v10 对应臂逐字节一致、35 交付 tick 序列
+  全等、请求帧仅差生产者身份串）。
+- 尾段取证（首次越过 delivery 36）：34→36 两交付 66.7s；其后 135s+ 停滞
+  于纯 die 机器逐实例执行（issue pass 内嵌 fe_drive→dm_run 15s/次，
+  桥零参与、tick 爬 16/s、0/8 请求完成）——first-1s 自然完成在任何合理
+  guard 内不可达，由 die 物理尾段决定，与决策回路形态无关。
+- Phase 1 门禁 FAIL（如实登记）：可切割协议/状态机切片（delivery 门+
+  schema 校验+settle/arrivals，289 行 Python）已移植 C++ 且语料指纹差分
+  36/36 全等（含幂等探针），但 run_variant_policy 链剩余 39,490 原始行
+  （sh30/KVCacheManager/cost_model/action_work_graph/graph_batch_builder/
+  估计器）状态由决策序列递归定义、不可由账本重放推导——本轮内 100% 语料
+  等价移植不可达成。切片与台架留仓外证据根（phase1_ab 树+工具），不进
+  生产路径。按 §8 转入保底。
+- 保底包落地：① §8(a) 决策桥文件传输→POSIX-shm 帧通道（FileDecisionBridge
+  →ShmDecisionBridge 直接替换，README ①b-8）；② Phase 4 两项
+  （README ①b-9：ready 快照增量拼接 + K2 纪元 memo）；③ §8(b) 账本生产
+  端直产紧凑帧——凭 PROFILE0 实测 publish 5.57s/36（2.4% 窗占比）与
+  v6 遗产已 typed/compact，降范围登记未做。
+- 唯一正式配对（240s×2 串行同条件）：两臂均 guard 截断（36 交付、同末
+  tick 8,465,371,573、峰值 RSS 3.16/3.25GB 未触顶）→ 整体倍率与下界
+  按合同 null。语义等价全面成立：决策日志剥宿主字段 10/10、graph_batch
+  digest 36/36、tick 序列 36/36 全同、timing 因果字段全同、work_ledger
+  compact 侧车 35/35 帧剥身份串逐字节等价。性能（如实）：同窗
+  eq_proceed 228.19→225.38s（≈1.012×）——保底 1.3× 目标未达，原因=
+  尾段 die 物理主导（fill 164,544→30 证 splice 生产启用，但扫描面仅值
+  ~2.3s；桥传输省 0.78s；K2 ~0.9s 量级）。
+- 第 2 档短窗近似路线评估（TAIL_ASSESSMENT）：本负载 die 前沿被
+  MemoryRequest 边界切碎（85.7% memory-boundary 拒绝、T=1），§6.1 局部
+  时间平均算子退化为精确表示压缩——不适用；真正杠杆是 die 机器执行
+  效率工程或负载级近似（超本轮，提案供用户决策，未实现）。
+
+本段变更文件（PROVENANCE_hashes 对应重算）：astra-sim/workload/
+Workload.hh/.cc、execution_driven/{NodeStore.hh/.cc、DecisionBridge.hh/.cc、
+ShmFrameChannel.hh/.cc（新）、OnlineCli.hh、OnlineStatsCounters.hh、
+ParsedGraphBatch.hh、tests/{node_store_test.cc,ready_issue_order_test.cc,
+bridge_loopback_fixture.cc,shm_decision_bridge_loopback_test.cc(新)}、
+network_frontend/analytical/CMakeLists.txt、congestion_aware/main_online.cc、
+extern/die_model/{CMakeLists.txt,include/DieTypes.hh,src/Execution.cc,
+tests/k2_timer_window_memo_test.cc(新)}、sh_test_mesh/workload/
+llama2_7b_inference/online/{decision_bridge.py,bridge_shm.py(新),
+online_scheduler_base.py,online_service.py,test_decision_bridge_shm.py(新),
+verify/bridge_echo.py}、joint/{test_acceptance_projection.py,
+test_ledger_world_source.py,test_sparse_pipeline_integration.py}、README.md。
+运行期用户开关零增删零取值变化（shm 载体替换与纪元 memo 均内部机制）。
+详见《joint改造结果v11.md》与仓外证据根。
+
+## 2026-10-13 v12 结构原生化+误差受控近似双轨（Phase 1 门禁 FAIL 复证 + Phase 4 K2 否定缓存 v12 契约 + Phase 5 资格 NO-GO）
+
+基线 = v11 交付态（开工真实树：HEAD 89f4acf + 既有 306 行 dirty/untracked，
+冻结 892 文件 manifest 见仓外证据根 /home/sunhao/joint_accel_v12_20261013）。
+执行按《joint改造方案v12.md》分阶段硬门推进：
+
+- v11 已落地部分核验复用 30/30（不重复执行、不重复计功）：shm 决策桥、
+  issue 增量拼接、K2 纪元 memo、v9/v10 既有能力均在位并经冻结核对；
+  黄金语料 36 决策帧与 v11 语义全等（v12 语料逐帧对账，含幂等探针）。
+- Phase 1 门禁 FAIL 根因复证（如实登记，与 v11 同根因）：决策回路
+  run_variant_policy 链剩余 39,490 原始行（sh30/KVCacheManager/
+  cost_model/action_work_graph/graph_batch_builder/估计器）状态由决策
+  序列递归定义、不可由账本重放推导——100% 语料等价移植在本轮内同样
+  不可达成，结构原生化线按方案转保底（不新增移植面）。
+- Phase 4 K2 否定缓存 v12 契约落地（本段唯一仓内代码变更，
+  extern/die_model）：query_internal_timer_window 新增进程级结构否定
+  缓存，双键 =（die 计划内容寻址缓存键 + 窗口近似配置指纹），不含
+  运行状态、跨 Execution 实例存续；Sound 性由构造期结构谓词
+  P_struct = P_A∨P_B 把守探测与写入两侧（P_A：total==0 构造即
+  finished；P_B：全部实例零时长内部 stage 且无 MEM/MEM_NOC 实例，
+  构造期同步排干），仅缓存常量拒绝 {supported=false,
+  reason="execution-finished"}，supported=true 永不入缓存；近似配置
+  指纹生产侧为 die_model 编译期注册表（tile_limit=2/local_error_ppm=
+  0/refine_margin_ppm=20000），不同指纹条目互不可见；v11 纪元 memo
+  完整保留（同状态查询仍由 memo 服务）。审计结论：生产计划必携正
+  时长，P_struct 恒假——生产点燃面为空，交付价值 = 已审计的指纹
+  键控 Sound 接线 + 只读测试钩子 + 双生 oracle 测试
+  k2_plan_negative_cache_test（启/停缓存孪生等价、命中/零介入、
+  指纹隔离、主开关、参数校验；已注册 CTest，臂树 15/15 全绿）。
+- 窗口资格取证（Phase 5 §7.7 门禁输入）：生产 PROFILE0 全部 4,136 个
+  die 计划 × stretch{1,2,4} 内存速度穷尽探针（真实引擎逐 next_action
+  驱动、每档 10,305,050 边界），k≥2 可平均窗恒零 = 0/10,305,050
+  （0.00%）；§2.3-4 四桶根因逐桶判定唯"确无合格片段（负载结构）"
+  成立（资格过严/模板缺信息/参数保守三桶否定）。裁定 Phase 5 资格
+  NO-GO：近似线不落地，无近似参数、无新开关（白名单/下界/前缀预算
+  均不放宽）。
+- 唯一正式配对（BASE vs WORK-EXACT，240s×2 串行同条件、同一请求
+  CSV）：两臂均 guard 截断（36 交付、同末 tick 8,465,371,573、峰值
+  组 RSS 3.20/3.18GB 未触顶）。语义等价五面全过：决策日志剥宿主
+  字段 10/10、timing 因果字段 36/36（剥全部 16 个宿主 *_ns 后整行
+  对象仍全等）、work_ledger compact 侧车 35/35 帧剥生产者身份串
+  逐字节等价残差 0 字节；a/c 两面因正式臂无诊断 env/生产者不落盘
+  登记为范围调整并以更强等价证据替代（train_ledger 36/36、
+  work_ledger_events 36/36 全行逐字节等价）。工程收益如实：
+  engineering_gain 同窗点估计 0.85-0.96×（整窗口径 0.9146×、决策
+  回路 mtime 窗 0.9613×、尾段窗 0.8540×），分歧几乎全部落在逐字节
+  同源的 die 物理执行与 Python 侧（启动段两臂相同），且 K2 否定缓存
+  可证明不点火（P_struct 恒假、缓存计数器两臂全同）——定性为串行
+  发射两臂间的宿主速度漂移带，运行期收益 ≈1.0×（无收益也无回归），
+  整体倍率与下界按合同 null（first-1s 自然完成两臂均不可达，与
+  v11/profile0 同口径）。
+- README ①b 编号重排说明：v10 虚拟端点索引注记保持 ①b-8；v11 两条
+  注记顺延为 ①b-9（shm 桥）与 ①b-10（issue 拼接+K2 纪元 memo），
+  新增 v12 注记 ①b-11（K2 否定缓存 v12 契约）。上文 v11 节历史文本
+  中"README ①b-8/①b-9"字样按重排后编号对应 ①b-9/①b-10，历史文本
+  本身不改写。
+
+本段变更文件（PROVENANCE_hashes 对应重算）：extern/die_model/
+{CMakeLists.txt,include/DieTypes.hh,src/Execution.cc,
+tests/k2_plan_negative_cache_test.cc(新)}、README.md。运行期用户开关
+零增删零取值变化（K2 否定缓存无用户可见开关；Phase 5 NO-GO 故无
+精度参数登记）。注释规范：新增注释/文档位置引用只精确到文件、不写
+行号。详见《joint改造结果v12.md》与仓外证据根
+/home/sunhao/joint_accel_v12_20261013。

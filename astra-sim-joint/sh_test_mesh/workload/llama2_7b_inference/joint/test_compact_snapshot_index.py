@@ -149,7 +149,7 @@ class TestProjectionRowsAndIndexes(unittest.TestCase):
         work = CommittedWork(
             identity=WorkIdentity(
                 request_id="r2", stage="decode", generation=1,
-                rank=3, node_id=8, operation="remote_read"),
+                rank=3, node_id=8, operation="pool_load"),
             state="in_service",
             total=WorkAmount(bytes=100),
             served=WorkAmount(bytes=10),

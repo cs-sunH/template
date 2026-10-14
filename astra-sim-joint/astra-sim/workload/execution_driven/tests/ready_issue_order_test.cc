@@ -5,7 +5,7 @@ B3_ready_issue_order_test_design.md).
 
 Two layers, one binary:
 
-Store layer (hermetic, no Sys/network): the seven old-side scenarios from
+Store layer (hermetic, no Sys/network): the store-side scenarios from
 the frozen golden harvested out-of-repo against the A0 build
 (golden/ready-issue-old-sequences.json in the B3 evidence package; lib
 SHA256 52ff5216.../86a367d3..., byte-identical double run) are replayed
@@ -18,15 +18,14 @@ delta, membership dedup, batch boundary, stale-no-cut-in) run here too.
 
 Full-stack layer (real EventQueue + FluidScheduler +
 CongestionAwareNetworkApi + per-rank online Sys + WatchRegistry +
-OnlineCompletionHookContext + TileTransportAdapter + RemoteReadExecutor,
+OnlineCompletionHookContext,
 built with the shared fixture config writer in
-remote_read_executor_program.hh): plain schema-2 batches drive the real
+plain schema-3 batches drive the real
 Workload::issue_dep_free_nodes issue path (R5 rank gate, R6 watch-gated
 deferred release, R7 same-tick deferred drain + t+1 bail-out, N4 rerun
-convergence), then the real P0 remote-read program exercises the virtual
-two-pointer merge and the anchor resource-view gate (N1/N2). Sequences are
+convergence). Sequences are
 captured through Workload::set_ledger_transition_observer ("issue") and
-the RemoteReadExecutor node-transition publisher ("issue" of a virtual
+the Workload ledger observer ("issue" of a
 endpoint), the authoritative hooks named by the design doc.
 
 Machine-readable contract: every scenario prints its captured sequence as
@@ -34,10 +33,38 @@ Machine-readable contract: every scenario prints its captured sequence as
 plus a PASS/FAIL line; the run ends with "ALL PASS" on success.
 ******************************************************************************/
 
-#include "remote_read_executor_program.hh"
+
+#include "astra-sim/common/Logging.hh"
+#include "astra-sim/system/Sys.hh"
+#include "astra-sim/workload/LocalHbmBandwidthModel.hh"
+#include "astra-sim/workload/MetricCollector.hh"
+#include "astra-sim/workload/Workload.hh"
+#include "astra-sim/workload/execution_driven/CompletionObserver.hh"
+#include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
+#include "astra-sim/workload/execution_driven/GraphBatchCommitter.hh"
+#include "astra-sim/workload/execution_driven/NodeStore.hh"
+#include "astra-sim/workload/execution_driven/WatchRegistry.hh"
+#include "astra-sim/workload/execution_driven/WorkLedgerV2Publisher.hh"
+#include "congestion_aware/CongestionAwareNetworkApi.hh"
+#include "extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.hh"
+#include <astra-network-analytical/common/EventQueue.h>
+#include <astra-network-analytical/common/NetworkParser.h>
+#include <astra-network-analytical/congestion_aware/Helper.h>
+
+using namespace AstraSim;
+using namespace AstraSim::ExecutionDriven;
+using namespace Analytical;
+using namespace AstraSimAnalytical;
+using namespace AstraSimAnalyticalCongestionAware;
+using namespace NetworkAnalytical;
+using namespace NetworkAnalyticalCongestionAware;
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <map>
@@ -76,9 +103,6 @@ struct NodeStoreTestAccess {
     }
 };
 
-}  // namespace ExecutionDriven
-}  // namespace AstraSim
-
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -93,6 +117,10 @@ const std::vector<std::vector<uint64_t>> kOldR3 = {{1, 2}, {}};  // divergence
 const std::vector<std::vector<uint64_t>> kOldR4 = {{1, 2}, {3}, {}};
 
 int g_failures = 0;
+
+// Rank owning the N5/N6 direct-store scenarios (was the owner rank of
+// the retired remote-read fixture program).
+constexpr int kOwnerRank = 6;
 
 void b3_fail(const std::string& message) {
     std::fprintf(stderr, "[ready_issue_order_test] FAIL: %s\n",
@@ -558,27 +586,6 @@ void scenario_n_membership_and_boundary() {
 }
 
 // Virtual ids (hole AP) never enter any ready snapshot.
-void scenario_n_virtual_ids() {
-    NodeStore store;
-    const uint64_t base = store.next_auto_id();  // 1
-    NodeStore::VirtualIdProgression holes{base, 2, 2};  // ids base, base+2
-    store.reserve_logical_id_span(base, 4, {holes});
-    const uint64_t p1 = store.add_node(b3_node(base + 1, "p1"));
-    const uint64_t p2 = store.add_node(b3_node(base + 3, "p2"));
-    b3_expect(store.is_virtual_id(base) && store.is_virtual_id(base + 2),
-              "reserved holes are virtual");
-    b3_expect(!store.is_virtual_id(p1) && !store.is_virtual_id(p2),
-              "physical positions are not virtual");
-    std::vector<uint64_t> snapshot;
-    store.fill_free_node_snapshot(snapshot);
-    b3_expect(snapshot == std::vector<uint64_t>({p1, p2}),
-              "virtual ids never appear in a ready snapshot");
-    b3_expect(!store.is_free_id(base) && !store.is_free_id(base + 2),
-              "virtual ids never enter the free set");
-    print_seq("N-virtual", 0, 0, snapshot);
-    std::printf("PASS N-virtual: reserved holes excluded from ready scans\n");
-}
-
 // R6 store face: register once / fire once at the last member, duplicate
 // terminal is a no-op (values must equal the old golden facts).
 void scenario_r6_store() {
@@ -678,6 +685,94 @@ void scenario_r7_store() {
 // ===========================================================================
 namespace {
 
+struct TerminalRecord {
+    int rank = -1;
+    uint64_t node_id = 0;
+    uint64_t tick = 0;
+};
+
+struct WatchFireRecord {
+    std::string request_id;
+    std::string stage;
+    uint64_t generation = 0;
+    uint64_t tick = 0;
+    uint64_t event_seq = 0;
+};
+
+std::string temporary_directory() {
+    const std::string pattern = "/tmp/joint_ready_issue_order_XXXXXX";
+    std::vector<char> buffer(pattern.begin(), pattern.end());
+    buffer.push_back('\0');
+    const char* const path = ::mkdtemp(buffer.data());
+    if (path == nullptr) {
+        b3_fail("mkdtemp failed");
+    }
+    return std::string(path);
+}
+
+void write_file(const std::string& path, const std::string& content) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        b3_fail("cannot create fixture input " + path);
+    }
+    out << content;
+    out.close();
+    if (!out.good()) {
+        b3_fail("failed writing fixture input " + path);
+    }
+}
+
+void write_configs(const std::string& directory) {
+    write_file(directory + "/system.json", R"({
+  "scheduling-policy": "FIFO",
+  "endpoint-delay": 1,
+  "active-chunks-per-dimension": 1,
+  "preferred-dataset-splits": 6,
+  "all-reduce-implementation": ["ring", "ring"],
+  "all-gather-implementation": ["ring", "ring"],
+  "reduce-scatter-implementation": ["ring", "ring"],
+  "all-to-all-implementation": ["ring", "ring"],
+  "collective-optimization": "localBWAware",
+  "roofline-enabled": 1,
+  "replay-only": 0,
+  "track-local-mem": 0,
+  "trace-enabled": 0,
+  "hbm-bandwidth-contention": 1,
+  "peak-perf": 1000,
+  "local-mem-bw": 6.0,
+  "local-mem-latency": 10,
+  "remote-mem-bw": 6.0,
+  "remote-mem-latency": 10
+})");
+    write_file(directory + "/comm_group.json", "{}\n");
+    write_file(directory + "/network.yml",
+               "# seven-rank line: real multi-shard Sys/FluidScheduler path\n"
+               "topology: [ Line, Line ]\n"
+               "npus_count: [ 7, 1 ]\n"
+               "bandwidth: [ 4000.0, 4000.0 ]\n"
+               "latency: [ 5, 5 ]\n");
+    write_file(directory + "/remote_memory.json", R"({
+  "memory-type": "PER_NPU_MEMORY_EXPANSION",
+  "remote-mem-bw": 6.0,
+  "remote-mem-latency": 10,
+  "npu-ids": [0, 1, 2, 3, 4, 5, 6]
+})");
+}
+
+nlohmann::json contract_wire() {
+    return nlohmann::json{
+        {"projection_abi_version", 1},
+        {"descriptor_version", 1},
+        {"pipeline_protocol_version", 1},
+        {"model_version", PipelineKernelContract::kModelVersion},
+        {"timer_whitelist_version",
+         PipelineKernelContract::kTimerWhitelistVersion},
+        {"window_tile_limit", 1},
+        {"window_local_error_ppm", 10000},
+        {"window_refine_margin_ppm", 20000},
+        {"prediction_config_sha256", std::string(64, 'a')}};
+}
+
 struct IssueRecord {
     uint64_t seq = 0;           // global monotone observation counter
     uint64_t event_seq = 0;     // global event counter at observation
@@ -685,8 +780,6 @@ struct IssueRecord {
     uint64_t store_id = 0;
     uint64_t tick = 0;
     uint64_t pass = 0;          // per-rank issue-pass counter
-    bool virtual_endpoint = false;
-    bool pipeline_anchor = false;
 };
 
 struct FullStack {
@@ -700,8 +793,6 @@ struct FullStack {
     std::shared_ptr<FluidScheduler> fluid_scheduler;
     WatchRegistry watch_registry;
     OnlineCompletionHookContext completion_context;
-    std::unique_ptr<TileTransportAdapter> transport;
-    std::unique_ptr<RemoteReadExecutor> executor;
     std::unique_ptr<GraphBatchCommitter> committer;
     std::string directory;
 
@@ -861,44 +952,6 @@ void build_full_stack(FullStack& stack) {
     CompletionObserver::instance().set_hook(&fullstack_terminal_hook,
                                             &stack);
 
-    stack.transport = std::make_unique<TileTransportAdapter>(
-        stack.systems, stack.workloads);
-    stack.executor = std::make_unique<RemoteReadExecutor>(
-        stack.graph_sources, stack.workloads, stack.transport.get(),
-        [&stack](const int rank) {
-            stack.completion_context.schedule_issue_pass(rank);
-        });
-    stack.executor->set_ledger_publishers(
-        [&stack](const std::string& kind, const int rank,
-                 const uint64_t node_id, const OnlineNode& node,
-                 const std::vector<uint64_t>& parents) {
-            if (kind != "issue") {
-                return;
-            }
-            (void)node;
-            (void)parents;
-            // The publisher fires for BOTH dispatch kinds and is the ONLY
-            // sequence source for them: Workload::publish_ledger_transition
-            // intentionally omits structural anchors, and virtual endpoints
-            // have no Workload node at all. Recording both here keeps each
-            // store_id exactly once in the merged per-pass sequence
-            // alongside the Workload observer's ordinary physical records.
-            const bool virtual_id =
-                stack.graph_sources.at(static_cast<size_t>(rank))
-                    ->store()
-                    .is_virtual_id(node_id);
-            IssueRecord record;
-            record.seq = stack.issues.size();
-            record.event_seq = next_event_seq(stack);
-            record.rank = rank;
-            record.store_id = node_id;
-            record.tick = Sys::boostedTick();
-            record.pass = stack.pass_counter.at(static_cast<size_t>(rank));
-            record.virtual_endpoint = virtual_id;
-            record.pipeline_anchor = !virtual_id;
-            stack.issues.push_back(record);
-        },
-        [](nlohmann::json) {}, [](nlohmann::json) {});
     for (Workload* workload : stack.workloads) {
         workload->set_ledger_transition_observer(
             [&stack](const std::string& kind, const NodeView& node) {
@@ -917,35 +970,14 @@ void build_full_stack(FullStack& stack) {
                 record.tick = Sys::boostedTick();
                 record.pass =
                     stack.pass_counter.at(static_cast<size_t>(node.rank));
-                record.pipeline_anchor =
-                    node.compute.exec_role ==
-                    ComputeExecRole::RemoteReadPipelineAnchor;
                 stack.issues.push_back(record);
             });
-    }
-    stack.executor->set_watch_reference_counter(
-        [&stack](const auto& progressions) {
-            std::vector<WatchRegistry::MemberProgression> ranges;
-            ranges.reserve(progressions.size());
-            for (const auto& progression : progressions) {
-                ranges.push_back({progression.rank,
-                                  progression.first_store_id,
-                                  progression.count,
-                                  progression.stride});
-            }
-            return stack.watch_registry.member_reference_count(ranges);
-        });
-    for (Workload* workload : stack.workloads) {
-        workload->set_remote_read_executor(stack.executor.get());
     }
     stack.watch_registry.set_fire_notifier(
         [&stack](const WatchFire& fire) {
             stack.fires.push_back(FullStack::FireRecord{
                 fire.request_id, next_event_seq(stack),
                 Sys::boostedTick()});
-            stack.executor->notify_service_gate(fire.request_id, fire.stage,
-                                                fire.generation);
-            stack.executor->notify_watch_registry_changed();
         });
 
     GraphBatchCommitter::Context ctx;
@@ -958,16 +990,6 @@ void build_full_stack(FullStack& stack) {
         stack.workloads.at(static_cast<size_t>(rank))
             ->issue_dep_free_nodes();
     };
-    ctx.prepare_pipeline_batch =
-        [&stack](const GraphBatch& batch,
-                 const GraphBatchCommitter& committer) {
-            return stack.executor->prepare_batch(batch, committer);
-        };
-    ctx.commit_pipeline_batch =
-        [&stack](std::shared_ptr<void> plan, const GraphBatch& batch,
-                 const GraphBatchCommitter& committer) {
-            stack.executor->commit_batch(std::move(plan), batch, committer);
-        };
     ctx.commit_kernel_contract =
         [&stack](std::shared_ptr<const PipelineKernelContract> contract) {
             for (Workload* workload : stack.workloads) {
@@ -1004,7 +1026,7 @@ DecisionEvent arrival_event(const uint64_t seq, const std::string& request_id,
     return arrival;
 }
 
-// Plain schema-2 batch helpers (no descriptors): the same shapes the
+// Plain schema-3 batch helpers: the same shapes the
 // committer test uses, with CPU-op compute nodes so the real issue path
 // schedules a replay event at +runtime_ns.
 nlohmann::json plain_node(const int rank, const uint64_t id,
@@ -1033,7 +1055,7 @@ nlohmann::json plain_batch(const uint64_t delivery_sequence,
                            const std::vector<nlohmann::json>& edges = {},
                            const std::vector<nlohmann::json>& watches = {}) {
     nlohmann::json resp;
-    resp["schema_version"] = 2;
+    resp["schema_version"] = 3;
     // The committer's ack rule: batch_id == source_delivery_sequence ==
     // the delivery epoch of the committing StateDelta.
     resp["batch_id"] = delivery_sequence;
@@ -1044,7 +1066,6 @@ nlohmann::json plain_batch(const uint64_t delivery_sequence,
     resp["assignments"] = nlohmann::json::array();
     resp["kv_actions"] = nlohmann::json::array();
     resp["future_alarms"] = nlohmann::json::array();
-    resp["pipeline_descriptors"] = nlohmann::json::array();
     resp["kernel_contract"] = contract_wire();
     return resp;
 }
@@ -1052,10 +1073,7 @@ nlohmann::json plain_batch(const uint64_t delivery_sequence,
 std::vector<uint64_t> issue_ids(const FullStack& stack, const int rank) {
     std::vector<uint64_t> ids;
     for (const IssueRecord& record : stack.issues) {
-        // Ordinary Workload issues only: virtual endpoints and structural
-        // anchors are recorded by the executor publisher instead.
-        if (record.rank == rank && !record.virtual_endpoint &&
-            !record.pipeline_anchor) {
+        if (record.rank == rank) {
             ids.push_back(record.store_id);
         }
     }
@@ -1169,12 +1187,9 @@ void scenario_r5_fullstack(FullStack& stack, const uint64_t rank0_next_json) {
               "parent terminal");
     b3_expect(issue_ids(stack, 1) == std::vector<uint64_t>({*r1_a}),
               "R5c rank1 sequence unchanged");
-    std::vector<uint64_t> rank1_ids = issue_ids(stack, 1);
-    for (const uint64_t id : issue_ids(stack, 0)) {
-        b3_expect(std::find(rank1_ids.begin(), rank1_ids.end(), id) ==
-                      rank1_ids.end(),
-                  "R5c sequences of the two ranks are disjoint");
-    }
+    // (Store ids are per-rank namespaces; the old cross-rank disjointness
+    // check was an artifact of the retired P0 fixture pre-advancing rank 0's
+    // id stream and is not a semantic invariant.)
     print_seq("R5/final", Sys::boostedTick(), 0, {*r0_a, *r0_b});
     print_seq("R5/final", Sys::boostedTick(), 1, {*r1_a});
     b3_expect(terminal_count(stack, 0, *r0_a) == 1 &&
@@ -1417,119 +1432,6 @@ void scenario_n4_fullstack(FullStack& stack) {
                 "sequence [1,2,3,4,5], each issued and terminal once\n");
 }
 
-// ---------------------------------------------------------------------------
-// N1/N2: the real P0 remote-read program on the shared stack. Virtual
-// endpoint dispatches (executor publisher) and physical issues (Workload
-// observer) interleave through the two-pointer merge; per pass the merged
-// store-id sequence must be strictly ascending with no duplicates, and
-// every physical id must be issued exactly once overall. Anchor
-// placeholders are issued through the anchor branch and never leak
-// occupancy (in-flight counters drain to zero).
-// ---------------------------------------------------------------------------
-void scenario_n1_n2_fullstack(FullStack& stack) {
-    const BuiltFixture fixture = build_fixture();
-    const nlohmann::json prefill_wire = stage_batch_wire(fixture, 0);
-    const ParsedGraphBatch prefill = parse_graph_batch(prefill_wire, 7);
-    const StateDelta delta = build_state_delta(
-        {arrival_event(1, kRequestId)}, Sys::boostedTick(), 1);
-    const auto result = stack.committer->validate_and_commit(delta, prefill);
-    b3_expect(!result.error.has_value(),
-              "N1 P0 fixture commits: " + result.error.value_or(""));
-    stack.fluid_scheduler->flush_pending_starts();
-    stack.fluid_scheduler->mark_event_loop_started();
-
-    const std::string segment =
-        fixture.programs[0].wire["identity"]["segment_id"].get<std::string>();
-    const auto snapshot_now = [&stack]() {
-        return stack.executor->authoritative_snapshot(Sys::boostedTick());
-    };
-    pump_until(stack,
-               [&snapshot_now, &segment]() {
-                   const auto snapshot = snapshot_now();
-                   const auto descriptor = descriptor_for(snapshot, segment);
-                   return descriptor.at("service_done").get<bool>() &&
-                          descriptor.at("settle_done").get<bool>();
-               },
-               "N1 P0 service and settle");
-
-    // N1: per (rank, pass) merged two-pointer sequences.
-    std::map<std::pair<int, uint64_t>, std::vector<uint64_t>> per_pass;
-    for (const IssueRecord& record : stack.issues) {
-        per_pass[{record.rank, record.pass}].push_back(record.store_id);
-    }
-    size_t merged_passes = 0;
-    size_t virtual_count = 0;
-    for (const auto& entry : per_pass) {
-        if (entry.first.first != kOwnerRank || entry.second.size() < 2) {
-            continue;
-        }
-        bool ascending = true;
-        for (size_t i = 1; i < entry.second.size(); ++i) {
-            if (entry.second[i - 1] >= entry.second[i]) {
-                ascending = false;
-            }
-        }
-        b3_expect(ascending,
-                  "N1 merged pass (rank=" + std::to_string(entry.first.first) +
-                      " pass=" + std::to_string(entry.first.second) +
-                      ") strictly ascending by store_id");
-        if (ascending) {
-            ++merged_passes;
-            print_seq("N1", 0, entry.first.first, entry.second);
-        }
-    }
-    for (const IssueRecord& record : stack.issues) {
-        if (record.virtual_endpoint) {
-            ++virtual_count;
-        }
-    }
-    b3_expect(merged_passes > 0 && virtual_count > 0,
-              "N1 the run really interleaved virtual and physical issues");
-    std::set<uint64_t> physical_once;
-    bool physical_unique = true;
-    for (const IssueRecord& record : stack.issues) {
-        if (record.virtual_endpoint || record.rank != kOwnerRank) {
-            continue;
-        }
-        if (!physical_once.insert(record.store_id).second) {
-            physical_unique = false;
-        }
-    }
-    b3_expect(physical_unique,
-              "N1 every physical id issued exactly once across passes");
-
-    // N2: anchors went through the anchor branch; occupancy drained.
-    size_t anchor_issues = 0;
-    for (const IssueRecord& record : stack.issues) {
-        if (record.rank == kOwnerRank && record.pipeline_anchor) {
-            ++anchor_issues;
-        }
-    }
-    b3_expect(anchor_issues > 0,
-              "N2 physical anchors were issued through the anchor branch");
-    const auto& owner_workload = stack.workloads.at(kOwnerRank);
-    b3_expect(owner_workload->hw_resource->num_in_flight_gpu_comm_ops == 0 &&
-                  owner_workload->hw_resource->num_in_flight_gpu_comp_ops == 0,
-              "N2 anchor placeholders never leak resource occupancy");
-    b3_expect(stack.transport->active_count() == 0 &&
-                  stack.executor->is_drained(),
-              "N2 transport and executor drained after settle");
-    std::printf("PASS N1 two-pointer merge: %zu merged passes ascending, "
-                "%zu virtual dispatches, physical ids unique\n",
-                merged_passes, virtual_count);
-    std::printf("PASS N2 anchor resource-view gate: %zu anchors issued via "
-                "anchor branch, zero in-flight at settle\n",
-                anchor_issues);
-
-    // Retire the P0 watches (settled) so later scenarios start from an
-    // empty registry (same production removal path the fixture uses).
-    stack.watch_registry.remove_watches_for_request(kRequestId);
-    stack.executor->notify_watch_registry_changed();
-    b3_expect(stack.watch_registry.empty() &&
-                  stack.watch_registry.stale_count() == 0,
-              "N1/N2 P0 watches retired after settle");
-}
-
 // N5: the serialized GPU-COMP gate keeps ready physical nodes in NodeStore.
 // Three retries must still examine every candidate, but must not materialize
 // NodeViews until a candidate passes the read-only resource gate.
@@ -1545,6 +1447,7 @@ void scenario_n5_blocked_node_view_materialization(FullStack& stack) {
               "N5 begins with an idle GPU-COMP gate");
     b3_expect(store.resolve_free_nodes().empty(),
               "N5 prior pipeline nodes are all terminal before the scale rows");
+    workload->issue_dep_free_nodes();
 
     for (const size_t count : {size_t{8}, size_t{32}, size_t{128}}) {
         OnlineNode blocker;
@@ -1584,12 +1487,19 @@ void scenario_n5_blocked_node_view_materialization(FullStack& stack) {
         b3_expect(timing_blocked.snapshot_passes ==
                       timing_before.snapshot_passes + kBlockedPasses,
                   "N5 each held-GPU retry captures one issue pass");
+        // v11 Phase 4: the first pass rebuilds the ready vector by SPLICING
+        // the since-snapshot delta (the 128/32/8 adds) onto the cached
+        // vector instead of rewalking the ordered set; the unchanged
+        // generation then reuses the spliced vector for passes 2..N.
+
         b3_expect(timing_blocked.snapshot_full_fills ==
-                          timing_before.snapshot_full_fills + 1 &&
+                          timing_before.snapshot_full_fills &&
+                      timing_blocked.snapshot_splices ==
+                          timing_before.snapshot_splices + 1 &&
                       timing_blocked.snapshot_reuse_hits ==
                           timing_before.snapshot_reuse_hits +
                               kBlockedPasses - 1,
-                  "N5 unchanged NodeStore generation reuses the captured ID set");
+                  "N5 unchanged NodeStore generation reuses the spliced ID set");
         b3_expect(timing_blocked.candidates ==
                       timing_before.candidates + blocked_candidates,
                   "N5 every held-GPU pass still examines its full ready batch");
@@ -1597,18 +1507,31 @@ void scenario_n5_blocked_node_view_materialization(FullStack& stack) {
                       timing_blocked.node_view_materializations ==
                           timing_before.node_view_materializations,
                   "N5 blocked candidates are checked without NodeView copies");
-        // F (2026-10-11, dynamic current-anchor candidate set): the online
-        // issue pass now snapshots the ORDINARY (non-anchor) free partition
-        // (fill_free_ordinary_id_snapshot); these rows have no anchors, so
-        // the ordinary counters are the pass's own ID copies while the
-        // full-snapshot counters stay untouched.
-        b3_expect(ready_blocked.ordinary_snapshot_calls ==
-                      ready_before.ordinary_snapshot_calls + 1 &&
-                      ready_blocked.ordinary_snapshot_ids_copied ==
-                          ready_before.ordinary_snapshot_ids_copied + count &&
+        // F (2026-10-11, dynamic current-anchor candidate set) + v11 Phase 4:
+        // the rebuild was a delta splice (no ordered-set traversal, no ID
+        // copy pass), the spliced vector still holds every blocked id
+        // ascending, and the proof-covered walks issue no membership probe.
+        {
+            const std::vector<uint64_t>& captured =
+                WorkloadTestAccess::snapshot_ids(*workload);
+            const bool carries_batch =
+                captured.size() >= count &&
+                std::vector<uint64_t>(captured.end() -
+                                          static_cast<long>(count),
+                                      captured.end()) == ids;
+            b3_expect(carries_batch,
+                      "N5 spliced vector carries the full blocked batch ascending");
+        }
+        b3_expect(ready_blocked.snapshot_calls ==
+                      ready_before.snapshot_calls &&
+                      ready_blocked.snapshot_ids_copied ==
+                          ready_before.snapshot_ids_copied &&
+                      ready_blocked.splice_calls ==
+                          ready_before.splice_calls + 1 &&
                       ready_blocked.membership_queries ==
                           ready_before.membership_queries,
-                  "N5 reuses ID copy and its unchanged-generation membership proof");
+                  "N5 splices the delta and its unchanged-generation "
+                  "membership proof still holds");
 
         workload->hw_resource->release(blocker);
         const size_t issue_record_begin = stack.issues.size();
@@ -1636,8 +1559,7 @@ void scenario_n5_blocked_node_view_materialization(FullStack& stack) {
         for (size_t issue_index = issue_record_begin;
              issue_index < stack.issues.size(); ++issue_index) {
             const IssueRecord& record = stack.issues[issue_index];
-            if (record.rank == rank && !record.virtual_endpoint &&
-                !record.pipeline_anchor) {
+            if (record.rank == rank) {
                 issued_since_release.push_back(record.store_id);
             }
         }
@@ -1677,8 +1599,7 @@ void scenario_n5_blocked_node_view_materialization(FullStack& stack) {
         for (size_t issue_index = issue_record_begin;
              issue_index < stack.issues.size(); ++issue_index) {
             const IssueRecord& record = stack.issues[issue_index];
-            if (record.rank == rank && !record.virtual_endpoint &&
-                !record.pipeline_anchor) {
+            if (record.rank == rank) {
                 issued_all.push_back(record.store_id);
             }
         }
@@ -1688,13 +1609,16 @@ void scenario_n5_blocked_node_view_materialization(FullStack& stack) {
                   "N5 all GPU-COMP occupancy drains");
         std::printf(
             "PASS N5 blocked-copy scale N=%zu held_passes=%llu candidates=%llu "
-            "full_fills=%llu reuse_hits=%llu actual_blocked_copies=0 "
-            "release_reuse=%llu\n",
+            "full_fills=%llu splices=%llu reuse_hits=%llu "
+            "actual_blocked_copies=0 release_reuse=%llu\n",
             count, static_cast<unsigned long long>(kBlockedPasses),
             static_cast<unsigned long long>(blocked_candidates),
             static_cast<unsigned long long>(
                 timing_blocked.snapshot_full_fills -
                 timing_before.snapshot_full_fills),
+            static_cast<unsigned long long>(
+                timing_blocked.snapshot_splices -
+                timing_before.snapshot_splices),
             static_cast<unsigned long long>(
                 timing_blocked.snapshot_reuse_hits -
                 timing_before.snapshot_reuse_hits),
@@ -1827,8 +1751,8 @@ void scenario_membership_cost_probe(FullStack& stack) {
         // so the pass copies its ORDINARY partition (identical to the full
         // set here -- the probe rows have no anchor-role nodes).
         const uint64_t actual_snapshot_copies =
-            ready_after.ordinary_snapshot_ids_copied -
-            ready_before.ordinary_snapshot_ids_copied;
+            ready_after.snapshot_ids_copied -
+            ready_before.snapshot_ids_copied;
         const uint64_t actual_full_fills =
             timing_after.snapshot_full_fills -
             timing_before.snapshot_full_fills;
@@ -1900,8 +1824,6 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
     OnlineNode blocker = b3_node(0, "N6 held GPU-COMP blocker");
     blocker.rank = rank;
     workload->hw_resource->occupy(blocker);
-    auto* const saved_executor = workload->remote_read_executor_;
-    workload->remote_read_executor_ = nullptr;
     const auto original_source = workload->graph_source_;
     NodeStore& original_store =
         stack.graph_sources.at(static_cast<size_t>(rank))->store();
@@ -1931,10 +1853,10 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
                       timing_before.snapshot_full_fills + 1 &&
                   timing.snapshot_reuse_hits ==
                       timing_before.snapshot_reuse_hits &&
-                  source_a->store().ready_set_stats().ordinary_snapshot_calls ==
+                  source_a->store().ready_set_stats().snapshot_calls ==
                       1 &&
                   source_a->store().ready_set_stats()
-                      .ordinary_snapshot_ids_copied == 1 &&
+                      .snapshot_ids_copied == 1 &&
                   source_a->store().ready_set_stats().membership_queries == 0,
               "N6 first source call captures one ID and trusts its exact snapshot");
 
@@ -1944,7 +1866,7 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
                       timing_before.snapshot_full_fills + 1 &&
                   timing.snapshot_reuse_hits ==
                       timing_before.snapshot_reuse_hits + 1 &&
-                  source_a->store().ready_set_stats().ordinary_snapshot_calls ==
+                  source_a->store().ready_set_stats().snapshot_calls ==
                       1 &&
                   source_a->store().ready_set_stats().membership_queries == 0,
               "N6 unchanged source/generation reuses IDs and membership proof");
@@ -1954,17 +1876,25 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
     source_a->store().add_node(std::move(second_a));  // generation 2
     workload->issue_dep_free_nodes();
     timing = workload->dep_free_issue_timing();
+    // v11 Phase 4: the generation bump splices the since-snapshot delta
+    // (one new id) onto the cached vector -- exactly one full fill total
+    // (pass 1), one splice here, and the ordinary counters only count the
+    // pass-1 fill's single ID copy.
     b3_expect(timing.snapshot_full_fills ==
-                      timing_before.snapshot_full_fills + 2 &&
+                      timing_before.snapshot_full_fills + 1 &&
+                  timing.snapshot_splices ==
+                      timing_before.snapshot_splices + 1 &&
                   timing.snapshot_reuse_hits ==
                       timing_before.snapshot_reuse_hits + 1 &&
                   timing.candidates >= timing_before.candidates + 4 &&
-                  source_a->store().ready_set_stats().ordinary_snapshot_calls ==
-                      2 &&
+                  source_a->store().ready_set_stats().snapshot_calls ==
+                      1 &&
                   source_a->store().ready_set_stats()
-                      .ordinary_snapshot_ids_copied == 3 &&
+                          .snapshot_ids_copied == 1 &&
+                  source_a->store().ready_set_stats().splice_calls ==
+                      1 &&
                   source_a->store().ready_set_stats().membership_queries == 0,
-              "N6 a ready-set mutation refills and proves the new generation");
+              "N6 a ready-set mutation splices the new generation");
 
     auto source_a_copy = std::make_shared<NodeStoreGraphSource>(*source_a);
     const NodeStore::ReadySetStats copied_stats_before =
@@ -1985,11 +1915,11 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
                       timing_before_source_copy.snapshot_reuse_hits &&
                   timing.candidates == timing_before_source_copy.candidates + 4 &&
                   source_a_copy->store().ready_set_stats()
-                      .ordinary_snapshot_calls ==
-                      copied_stats_before.ordinary_snapshot_calls + 2 &&
+                      .snapshot_calls ==
+                      copied_stats_before.snapshot_calls + 2 &&
                   source_a_copy->store().ready_set_stats()
-                      .ordinary_snapshot_ids_copied ==
-                      copied_stats_before.ordinary_snapshot_ids_copied + 4 &&
+                      .snapshot_ids_copied ==
+                      copied_stats_before.snapshot_ids_copied + 4 &&
                   source_a_copy->store().ready_set_stats().membership_queries ==
                       copied_stats_before.membership_queries + 4,
               "N6 copied source performs a full fill on each unchanged generation");
@@ -2006,12 +1936,12 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
                   timing.snapshot_reuse_hits ==
                       timing_before_source_restore.snapshot_reuse_hits + 1 &&
                   source_a->store().snapshot_reuse_eligible() &&
-                  source_a->store().ready_set_stats().ordinary_snapshot_calls ==
-                      source_a_stats_before_restore.ordinary_snapshot_calls +
+                  source_a->store().ready_set_stats().snapshot_calls ==
+                      source_a_stats_before_restore.snapshot_calls +
                           1 &&
                   source_a->store().ready_set_stats()
-                      .ordinary_snapshot_ids_copied ==
-                      source_a_stats_before_restore.ordinary_snapshot_ids_copied +
+                      .snapshot_ids_copied ==
+                      source_a_stats_before_restore.snapshot_ids_copied +
                           2 &&
                   source_a->store().ready_set_stats().membership_queries ==
                       source_a_stats_before_restore.membership_queries,
@@ -2041,10 +1971,10 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
                       timing_before_store_assignment.snapshot_reuse_hits &&
                   timing.candidates ==
                       timing_before_store_assignment.candidates + 4 &&
-                  source_a->store().ready_set_stats().ordinary_snapshot_calls ==
+                  source_a->store().ready_set_stats().snapshot_calls ==
                       2 &&
                   source_a->store().ready_set_stats()
-                      .ordinary_snapshot_ids_copied == 4 &&
+                      .snapshot_ids_copied == 4 &&
                   source_a->store().ready_set_stats().membership_queries == 4,
               "N6 same-source/same-generation assignment refreshes both candidates");
 
@@ -2063,10 +1993,10 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
                   timing.snapshot_reuse_hits ==
                       timing_before_source_b.snapshot_reuse_hits &&
                   timing.candidates == timing_before_source_b.candidates + 2 &&
-                  source_b->store().ready_set_stats().ordinary_snapshot_calls ==
+                  source_b->store().ready_set_stats().snapshot_calls ==
                       1 &&
                   source_b->store().ready_set_stats()
-                      .ordinary_snapshot_ids_copied == 2 &&
+                      .snapshot_ids_copied == 2 &&
                   source_b->store().ready_set_stats().membership_queries == 0 &&
                   WorkloadTestAccess::snapshot_ids(*workload) ==
                       std::vector<uint64_t>({8001, 8002}),
@@ -2218,10 +2148,10 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
                       timing_empty.snapshot_full_fills + 1 &&
                   timing.snapshot_reuse_hits ==
                       timing_empty.snapshot_reuse_hits &&
-                  source_b->store().ready_set_stats().ordinary_snapshot_calls ==
+                  source_b->store().ready_set_stats().snapshot_calls ==
                       2 &&
                   source_b->store().ready_set_stats()
-                      .ordinary_snapshot_ids_copied == 4 &&
+                      .snapshot_ids_copied == 4 &&
                   source_b->store().ready_set_stats().membership_queries == 0,
               "N6 restoring a source after fallback recaptures its IDs");
 
@@ -2285,14 +2215,13 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
                       timing_before_max.snapshot_full_fills + 4 &&
                   timing.snapshot_reuse_hits ==
                       timing_before_max.snapshot_reuse_hits &&
-                  max_stats.ordinary_snapshot_calls == 4 &&
-                  max_stats.ordinary_snapshot_ids_copied == 8 &&
+                  max_stats.snapshot_calls == 4 &&
+                  max_stats.snapshot_ids_copied == 8 &&
                   max_stats.membership_queries == 7,
               "N6 saturated generation never wraps or enables snapshot reuse");
 
     workload->graph_source_ = original_source;
     workload->issue_dep_free_nodes();
-    workload->remote_read_executor_ = saved_executor;
     workload->hw_resource->release(blocker);
     b3_expect(workload->hw_resource->num_in_flight_gpu_comp_ops == 0,
               "N6 releases its held GPU-COMP slot");
@@ -2300,1012 +2229,9 @@ void scenario_n6_snapshot_generation_lifecycle(FullStack& stack) {
         "PASS N6 snapshot lifecycle: same_source_reuse=1 identity_refresh=1 "
         "fallback_refresh=1 throw_recovery=1 max_generation_fullfills=4\n");
 }
-
-// ===========================================================================
-// F (2026-10-11) dynamic ordered current physical anchor candidate set.
-// Three scenarios on the shared stack's rank 0 (source side, real sends):
-//   anchor-chain-same-round : A->B->C anchors of ONE run issue in the same
-//                             pass/tick in id order while N future anchors
-//                             of other runs (sandwiched between A and B) are
-//                             never visited -- anchor_resource_queries stays
-//                             constant as N grows 8/32/128.
-//   anchor-passed-position  : the cursor reaches anchor B only after the
-//                             walk already passed B's id; B waits for the
-//                             next pass (old no-revisit semantics).
-//   anchor-new-ready-midpass: an anchor freed mid-pass (synchronous zero-cost
-//                             parent terminal) is excluded by the delta gate
-//                             for that pass and issued on the rerun pass.
-// Each descriptor is built by mutating a deep copy of the proven P0 prefill
-// wire (same protocol/projection shape, tile_count 2) so the strict parser
-// sees exactly the production schema.
-// ===========================================================================
-
-nlohmann::json f_anchor_node(const int rank, const uint64_t json_id,
-                             const std::string& name,
-                             const std::string& segment_id,
-                             const std::string& role) {
-    return nlohmann::json{
-        {"rank", rank}, {"id", json_id}, {"type", 4},
-        {"name", name},
-        {"is_cpu_op", false}, {"is_timer_op", false},
-        {"inputs_values", ""}, {"request_id", "b3-anchor-f"},
-        {"stage", "prefill"}, {"generation", 0},
-        {"compute", {{"num_ops", 0}, {"tensor_size", 0},
-                      {"runtime_ns", 0}, {"die_op_spec", nlohmann::json::object()},
-                      {"exec_role", "remote_read_pipeline_anchor"},
-                      {"pipeline_anchor", {{"segment_id", segment_id},
-                                            {"role", role}}}}},
-        {"comm", {{"bytes", 0}, {"src", 0}, {"dst", 0}, {"tag", 0},
-                   {"hbm_charge", false}}},
-        {"coll", {{"comm_type", 0},
-                  {"bytes", 0},
-                  {"priority", 0},
-                  {"pg_name", ""},
-                  {"involved_dim", nlohmann::json::array()}}}};
-}
-
-nlohmann::json f_timer_node(const uint64_t json_id, const std::string& name) {
-    // Same synchronous-terminal trick as N6's direct-store trigger, in a
-    // batch-legal shape: a METADATA (type 1) timer node completes inline
-    // inside Workload::issue (issue_metadata -> skip_invalid), releasing its
-    // NodeStore children during the very pass that issued it.
-    return nlohmann::json{
-        {"rank", 0}, {"id", json_id}, {"type", 1},
-        {"name", name},
-        {"is_cpu_op", true}, {"is_timer_op", true},
-        {"inputs_values", ""}, {"request_id", "b3-anchor-f"},
-        {"stage", "prefill"}, {"generation", 0},
-        {"compute", {{"num_ops", 0}, {"tensor_size", 0}, {"runtime_ns", 0}}},
-        {"comm",
-         {{"bytes", 0}, {"src", 0}, {"dst", 0}, {"tag", 0}}},
-        {"coll", {{"comm_type", 0},
-                  {"bytes", 0},
-                  {"priority", 0},
-                  {"pg_name", ""},
-                  {"involved_dim", nlohmann::json::array()}}}};
-}
-
-// Deep-copy the P0 prefill descriptor wire and rebuild identity / groups /
-// runs / ranges / tags / anchors for one F scenario. The chain run is a
-// single-leg data_send run over tiles {1} and shards {0,1,2} (three anchor
-// positions A/B/C at first_json_id + k*chain_stride); each of the
-// `placeholder_count` placeholder runs covers tiles {1,2} of its own shard:
-// tile 1 is a dependency-blocked virtual hole (its dependency is the
-// placeholder's own never-issuing tile-2 anchor terminal), so the cursor
-// never advances to the tile-2 anchor -- a permanently FUTURE anchor that is
-// still dep-free in the NodeStore (exactly the production ballast the old
-// full-snapshot enumeration paid for).
-struct FDescriptorSpec {
-    size_t placeholder_count = 0;
-    uint64_t chain_stride = 0;  // json-id spacing between A, B, C
-    uint64_t segment_ordinal = 2;
-    std::string tag;  // unique identity component
-    bool include_chain = true;
-    // Per-rank json-id streams must CONTINUE across batches (committer
-    // "logical-id stream starts at ... but expected" check), so every json id
-    // in the scenario wire is base + relative.
-    uint64_t json_base = 0;          // rank 0 (source) stream position
-    uint64_t json_base_target = 0;   // rank 6 (target owner) stream position
-    // Filled by f_scenario_descriptor: the first free tag emission ordinal /
-    // tag value a scenario-specific extra run may allocate.
-    uint64_t next_ordinal = 0;
-    uint64_t next_tag = 0;
-};
-
-nlohmann::json f_scenario_descriptor(FDescriptorSpec& spec) {
-    const BuiltFixture fixture = build_fixture();
-    nlohmann::json wire = fixture.programs.at(0).wire;
-    // identity.rank = 0 (this scenario's owner/source rank; every endpoint
-    // run lives there and no later GraphBatch node is needed on rank 6 --
-    // N5/N6's direct store construction already advanced that stream). With
-    // no shard targeting rank 0, the target-side consume coverage law is
-    // vacuous and the projection carries no chain, which the strict parser
-    // accepts for an execution descriptor.
-    const std::string segment_id =
-        "pp1/f" + spec.tag + "/prefill/" + std::to_string(spec.segment_ordinal) +
-        "/4/0/0";
-    wire["identity"] = {
-        {"request_id", "b3-anchor-f"}, {"stage", "prefill"},
-        {"generation", 0}, {"stage_epoch", 4},
-        {"segment_ordinal", spec.segment_ordinal}, {"rank", 0},
-        {"staging_allocation_id", spec.segment_ordinal},
-        {"segment_id", segment_id},
-        {"buffer_domain_id", "pb1/f" + spec.tag + "/0/" +
-                                 std::to_string(spec.segment_ordinal)}};
-    wire["projection"] = {{"version", 1}, {"chains", nlohmann::json::array()}};
-    const uint64_t blocker_shard = 3 + spec.placeholder_count;
-    const size_t shard_count = 3 + spec.placeholder_count;
-    nlohmann::json shards = nlohmann::json::array();
-    for (size_t shard = 0; shard < shard_count; ++shard) {
-        shards.push_back({{"shard_ordinal", shard}, {"source_rank", 0},
-                          {"target_rank", 6},
-                          {"total_data_bytes", 4}, {"bytes_per_unit", 1},
-                          {"noc_path", nlohmann::json::array({0, 6})}});
-    }
-    wire["groups"] = nlohmann::json::array({
-        {{"group_ordinal", 0},
-         {"pass_or_window_ordinal", spec.segment_ordinal},
-         {"source_ordinal", spec.segment_ordinal},
-         {"source_key", "f-anchor-" + spec.tag},
-         {"layer_start", 0}, {"layer_end", 1},
-         {"tile_axis", {{"unit", "stream_bytes"},
-                        {"total_units", 4},
-                        {"units_per_tile", 2},
-                        {"tile_count", 2},
-                        {"tail_units", 2},
-                        {"global_tile_first", 1}}},
-         {"shards", std::move(shards)}}});
-
-    const uint64_t stride = spec.chain_stride;
-    const uint64_t base = spec.json_base;
-    const uint64_t base6 = spec.json_base_target;
-    const uint64_t blocker_anchor = base6 + 1;
-    const auto ranked_leg = [](const char* endpoint, const uint64_t ordinal) {
-        return nlohmann::json{{"endpoint", endpoint},
-                              {"json_offset", 0},
-                              {"tag_emission_ordinal", ordinal},
-                              {"tag_offset", 0},
-                              {"tag_tile_stride", 1},
-                              {"tag_shard_stride", 1}};
-    };
-    nlohmann::json endpoint_runs = nlohmann::json::array();
-    nlohmann::json dependency_runs = nlohmann::json::array();
-    nlohmann::json tag_runs = nlohmann::json::array();
-    nlohmann::json consume_runs = nlohmann::json::array();
-    nlohmann::json anchors = nlohmann::json::array();
-    nlohmann::json logical_ranges = nlohmann::json::array();
-    uint64_t next_ordinal = 1;
-    uint64_t next_tag = 1;
-
-    const auto legacy = []() {
-        return nlohmann::json{{"request_id", "b3-anchor-f"},
-                              {"stage", "prefill"},
-                              {"generation", 0}};
-    };
-    const auto physical_anchor = [](const int rank, const uint64_t node_id,
-                                    const std::string& role,
-                                    const uint64_t tile, const uint64_t shard,
-                                    const char* endpoint, const uint64_t ordinal,
-                                    const uint64_t tag_offset) {
-        return nlohmann::json{
-            {"role", role}, {"rank", rank},
-            {"binding", "physical_endpoint_slot"},
-            {"node_id", node_id},
-            {"selector", {{"kind", std::string(endpoint) == "data_recv"
-                                             ? "tile_endpoint_terminal"
-                                             : "tile_endpoint_leg"},
-                          {"group_ordinal", 0},
-                          {"tile_ordinal", tile},
-                          {"shard_ordinal", shard},
-                          {"endpoint", endpoint},
-                          {"tag_allocation_emission_ordinal", ordinal},
-                          {"tag_offset", tag_offset}}}};
-    };
-
-    if (spec.include_chain) {
-        endpoint_runs.push_back(
-            {{"rank", 0},
-             {"group_ordinal", 0},
-             {"first_tile", 1},
-             {"tile_count", 1},
-             {"shard_ordinals", nlohmann::json::array({0, 1, 2})},
-             {"first_json_id", base},
-             {"tile_stride", 1},
-             {"shard_stride", stride},
-             {"initial_parent_json_id", nullptr},
-             {"legacy_context", legacy()},
-             {"legs", nlohmann::json::array(
-                          {ranked_leg("data_send", next_ordinal)})}});
-        tag_runs.push_back({{"allocator_scope_id", "f-anchor-tags"},
-                            {"emission_ordinal", next_ordinal},
-                            {"first_tag", next_tag}, {"count", 3},
-                            {"group_ordinal", 0},
-                            {"first_tile", 1}, {"tile_count", 1},
-                            {"first_shard", 0}, {"shard_count", 3}});
-        ++next_ordinal;
-        next_tag += 3;
-        anchors.push_back(
-            physical_anchor(0, base, "start", 1, 0, "data_send", 1, 0));
-        anchors.push_back(physical_anchor(0, base + stride, "frontier", 1, 1,
-                                          "data_send", 1, 1));
-        anchors.push_back(physical_anchor(0, base + 2 * stride, "frontier", 1,
-                                          2, "data_send", 1, 2));
-    }
-    for (size_t k = 1; k <= spec.placeholder_count; ++k) {
-        const uint64_t shard = 2 + k;
-        const uint64_t anchor_id = base + 2 * k;
-        endpoint_runs.push_back(
-            {{"rank", 0},
-             {"group_ordinal", 0},
-             {"first_tile", 1},
-             {"tile_count", 2},
-             {"shard_ordinals", nlohmann::json::array({shard})},
-             {"first_json_id", base + 2 * k - 1},
-             {"tile_stride", 1},
-             {"shard_stride", 1},
-             {"initial_parent_json_id", anchor_id},
-             {"legacy_context", legacy()},
-             {"legs", nlohmann::json::array(
-                          {ranked_leg("data_send", next_ordinal)})}});
-        // Tile-1 hole blocked forever: its only dependency is the terminal
-        // of its own tile-2 anchor, which never becomes current.
-        dependency_runs.push_back(
-            {{"rank", 0}, {"group_ordinal", 0},
-             {"first_tile", 1}, {"tile_count", 1},
-             {"shard_ordinals", nlohmann::json::array({shard})},
-             {"endpoint", "data_send"},
-             {"dependency_kind", "ordinary_node_terminal"},
-             {"first_dependency_json_id", anchor_id},
-             {"dependency_tile_stride", 0},
-             {"dependency_shard_stride", 0}});
-        tag_runs.push_back({{"allocator_scope_id", "f-anchor-tags"},
-                            {"emission_ordinal", next_ordinal},
-                            {"first_tag", next_tag}, {"count", 2},
-                            {"group_ordinal", 0},
-                            {"first_tile", 1}, {"tile_count", 2},
-                            {"first_shard", shard}, {"shard_count", 1}});
-        ++next_ordinal;
-        next_tag += 2;
-        anchors.push_back(physical_anchor(0, anchor_id, "frontier", 2, shard,
-                                          "data_send", next_ordinal - 1, 1));
-    }
-    if (spec.placeholder_count > 0) {
-        const uint64_t n = spec.placeholder_count;
-        // The rank-0 span [base, base + 4n + 4] must be covered exactly by
-        // anchors + holes: all odd ids, plus the even ids strictly between
-        // chain anchor B (base + 2n + 2) and chain anchor C (base + 4n + 4).
-        logical_ranges.push_back({{"rank", 0},
-                                  {"first_json_id", base + 1},
-                                  {"count", 2 * n + 2},
-                                  {"stride", 2},
-                                  {"kind", "virtual_endpoint_hole"}});
-        logical_ranges.push_back({{"rank", 0},
-                                  {"first_json_id", base + 2 * n + 4},
-                                  {"count", n},
-                                  {"stride", 2},
-                                  {"kind", "virtual_endpoint_hole"}});
-    }
-
-    (void)blocker_shard;
-    (void)base6;
-    (void)blocker_anchor;
-    for (auto anchor : fixture.programs.at(0).wire.at("anchors")) {
-        if (anchor.at("binding").get<std::string>() ==
-            "descriptor_cursor_selector") {
-            anchor["rank"] = 0;
-            anchors.push_back(anchor);
-        }
-    }
-
-    spec.next_ordinal = next_ordinal;
-    spec.next_tag = next_tag;
-    wire["endpoint_runs"] = std::move(endpoint_runs);
-    wire["endpoint_dependency_runs"] = std::move(dependency_runs);
-    (void)consume_runs;
-    wire["consume_completion_runs"] = nlohmann::json::array();
-    wire["tag_allocation_runs"] = std::move(tag_runs);
-    wire["logical_id_ranges"] = std::move(logical_ranges);
-    wire["anchors"] = std::move(anchors);
-    return wire;
-}
-
-nlohmann::json f_scenario_batch(
-    const nlohmann::json& descriptor, const uint64_t delivery_sequence,
-    const std::vector<nlohmann::json>& extra_nodes = {},
-    const std::vector<nlohmann::json>& edges = {}) {
-    const std::string segment_id =
-        descriptor.at("identity").at("segment_id").get<std::string>();
-    nlohmann::json nodes = nlohmann::json::array();
-    for (const auto& anchor : descriptor.at("anchors")) {
-        if (anchor.at("binding").get<std::string>() !=
-            "physical_endpoint_slot") {
-            continue;
-        }
-        const uint64_t node_id = anchor.at("node_id").get<uint64_t>();
-        nodes.push_back(f_anchor_node(
-            anchor.at("rank").get<int>(), node_id,
-            "f-anchor-r" + std::to_string(anchor.at("rank").get<int>()) +
-                "-" + anchor.at("role").get<std::string>() + "-" +
-                std::to_string(node_id),
-            segment_id, anchor.at("role").get<std::string>()));
-    }
-    for (const auto& node : extra_nodes) {
-        nodes.push_back(node);
-    }
-    std::sort(nodes.begin(), nodes.end(), [](const nlohmann::json& a,
-                                             const nlohmann::json& b) {
-        return a.at("id").get<uint64_t>() < b.at("id").get<uint64_t>();
-    });
-    nlohmann::json resp;
-    resp["schema_version"] = 2;
-    resp["batch_id"] = delivery_sequence;
-    resp["source_delivery_sequence"] = delivery_sequence;
-    resp["nodes"] = std::move(nodes);
-    resp["parent_edges"] = nlohmann::json::array();
-    for (const auto& edge : edges) {
-        resp["parent_edges"].push_back(edge);
-    }
-    resp["watches"] = nlohmann::json::array();
-    resp["assignments"] = nlohmann::json::array();
-    resp["kv_actions"] = nlohmann::json::array();
-    resp["future_alarms"] = nlohmann::json::array();
-    std::set<int> touched{0};
-    for (const auto& node : resp["nodes"]) {
-        touched.insert(node.at("rank").get<int>());
-    }
-    resp["touched_ranks"] = nlohmann::json::array();
-    for (const int rank : touched) {
-        resp["touched_ranks"].push_back(rank);
-    }
-    resp["pipeline_descriptors"] = nlohmann::json::array({descriptor});
-    resp["kernel_contract"] = contract_wire();
-    return resp;
-}
-
-void f_commit(FullStack& stack, const nlohmann::json& batch_wire,
-              const uint64_t seq, const std::string& request_id,
-              const uint64_t prefill_length = 1) {
-    DecisionEvent arrival;
-    arrival.seq = seq;
-    arrival.reason = DecisionReason::ARRIVAL;
-    arrival.request_id = request_id;
-    arrival.stage = "prefill";
-    arrival.generation = 0;
-    arrival.payload.session_id = "b3-anchor-f";
-    arrival.payload.prefill_length = prefill_length;
-    arrival.payload.decode_length = 1;
-    const ParsedGraphBatch batch = parse_graph_batch(batch_wire, 7);
-    const StateDelta delta =
-        build_state_delta({arrival}, Sys::boostedTick(), seq);
-    const auto result = stack.committer->validate_and_commit(delta, batch);
-    b3_expect(!result.error.has_value(),
-              "F batch commits: " + result.error.value_or(""));
-}
-
-struct FIssueRecord {
-    uint64_t seq = 0;
-    uint64_t tick = 0;
-    uint64_t pass = 0;
-};
-
-std::vector<FIssueRecord> f_anchor_issues(const FullStack& stack,
-                                          const std::vector<uint64_t>& ids,
-                                          const int rank = 0) {
-    std::vector<FIssueRecord> found;
-    for (const uint64_t id : ids) {
-        for (const IssueRecord& record : stack.issues) {
-            if (record.rank == rank && record.store_id == id &&
-                record.pipeline_anchor && !record.virtual_endpoint) {
-                found.push_back(
-                    FIssueRecord{record.event_seq, record.tick, record.pass});
-            }
-        }
-    }
-    return found;
-}
-
-// ---------------------------------------------------------------------------
-// scenario_anchor_chain_same_round.
-// ---------------------------------------------------------------------------
-void scenario_anchor_chain_same_round(FullStack& stack) {
-    const int rank = 0;
-    Workload* const workload = stack.workloads.at(static_cast<size_t>(rank));
-    b3_expect(stack.event_queue->finished() &&
-                  !stack.event_queue->has_deferred_work(),
-              "F chain starts from a drained queue");
-    uint64_t segment_ordinal = 2;
-    uint64_t delivery_sequence = 10;
-    for (const size_t n : {size_t{8}, size_t{32}, size_t{128}}) {
-        // Chain ids: A=0, B=2N+2, C=4N+4; placeholder k occupies json ids
-        // {2k-1 (blocked hole), 2k (future anchor)}, i.e. the whole
-        // placeholder population is sandwiched strictly between A and B.
-        FDescriptorSpec spec;
-        spec.placeholder_count = n;
-        spec.chain_stride = 2 * n + 2;
-        spec.segment_ordinal = segment_ordinal;
-        spec.tag = "chain" + std::to_string(n);
-        spec.json_base = stack.graph_sources[0]->store().next_auto_id() - 1;
-        spec.json_base_target =
-            stack.graph_sources[6]->store().next_auto_id() - 1;
-        const nlohmann::json descriptor = f_scenario_descriptor(spec);
-        const uint64_t base = spec.json_base;
-        const uint64_t a_json = base;
-        const uint64_t b_json = base + 2 * n + 2;
-        const uint64_t c_json = base + 4 * n + 4;
-
-        const auto queries_before =
-            stack.executor->producer_metrics().anchor_resource_queries;
-        const auto visits_before =
-            workload->dep_free_issue_timing().anchor_candidate_visits;
-        // ctx.issue_rank bumps the pass counter BEFORE the commit's B-5
-        // issue pass runs inside validate_and_commit, so that pass is the
-        // captured counter + 1 (and it consumes the chain head's current
-        // membership before this test body can probe it).
-        const uint64_t commit_pass =
-            stack.pass_counter.at(static_cast<size_t>(rank)) + 1;
-        const uint64_t commit_tick = Sys::boostedTick();
-        f_commit(stack, f_scenario_batch(descriptor, delivery_sequence),
-                 delivery_sequence, "b3-anchor-f");
-
-        const auto a = stack.committer->resolve_store_id(rank, a_json);
-        const auto b = stack.committer->resolve_store_id(rank, b_json);
-        const auto c = stack.committer->resolve_store_id(rank, c_json);
-        b3_expect(a.has_value() && b.has_value() && c.has_value(),
-                  "F chain anchor ids resolve");
-        b3_expect(*a < *b && *b < *c,
-                  "F chain ids ascend A < B < C in store ids");
-
-        // The placeholders are dep-free ready anchors in the store, blocked
-        // only by the current-anchor-set gate.
-        NodeStore& store =
-            stack.graph_sources.at(static_cast<size_t>(rank))->store();
-        for (size_t k = 1; k <= n; ++k) {
-            const auto p = stack.committer->resolve_store_id(rank,
-                                                             base + 2 * k);
-            b3_expect(p.has_value() && store.is_free_id(*p) &&
-                          store.is_free_anchor_id(*p),
-                      "F placeholder anchor is dep-free in the anchor partition");
-            b3_expect(!stack.executor->is_current_anchor_id(rank, *p),
-                      "F placeholder anchor is not current");
-        }
-
-        const std::vector<uint64_t> chain{*a, *b, *c};
-        const std::vector<FIssueRecord> issues = f_anchor_issues(stack, chain);
-        b3_expect(issues.size() == 3,
-                  "F chain issued exactly its three anchors");
-        b3_expect(issues[0].seq < issues[1].seq && issues[1].seq < issues[2].seq,
-                  "F chain issues in ascending id order");
-        b3_expect(issues[0].pass == commit_pass &&
-                      issues[1].pass == commit_pass &&
-                      issues[2].pass == commit_pass,
-                  "F A/B/C issue in the SAME pass (same-round cursor advance)");
-        b3_expect(issues[0].tick == commit_tick &&
-                      issues[1].tick == commit_tick &&
-                      issues[2].tick == commit_tick,
-                  "F A/B/C issue at the SAME tick");
-
-        const auto queries_after =
-            stack.executor->producer_metrics().anchor_resource_queries;
-        const auto visits_after =
-            workload->dep_free_issue_timing().anchor_candidate_visits;
-        const uint64_t query_delta = queries_after - queries_before;
-        const uint64_t visit_delta = visits_after - visits_before;
-        // 3 issue-path preflights + 3 dispatch preflights, independent of N.
-        b3_expect(query_delta == 6,
-                  "F anchor_resource_queries stays 6 (issue+dispatch "
-                  "preflights) regardless of N=" + std::to_string(n));
-        b3_expect(visit_delta == 3,
-                  "F only the three chain anchors are ever visited");
-
-        // Drain the real transfers, then verify the final state.
-        pump_until(stack,
-                   [&stack, rank, &chain]() {
-                       return std::all_of(
-                           chain.begin(), chain.end(),
-                           [&stack, rank](const uint64_t id) {
-                               return terminal_count(stack, rank, id) == 1;
-                           });
-                   },
-                   "F chain transfer completion");
-        if (stack.event_queue->has_deferred_work()) {
-            const uint64_t tick = stack.event_queue->get_current_time();
-            stack.event_queue->schedule_event(tick + 1, noop_wakeup, nullptr);
-            stack.event_queue->proceed();
-        }
-        b3_expect(stack.event_queue->finished() &&
-                      !stack.event_queue->has_deferred_work(),
-                  "F chain drains the queue");
-        b3_expect(workload->hw_resource->num_in_flight_gpu_comm_ops == 0 &&
-                      workload->hw_resource->num_in_flight_gpu_comp_ops == 0,
-                  "F chain leaves rank 0 occupancy zero");
-        b3_expect(!stack.executor->is_current_anchor_id(rank, *a) &&
-                      !stack.executor->is_current_anchor_id(rank, *b) &&
-                      !stack.executor->is_current_anchor_id(rank, *c),
-                  "F issued chain anchors leave the current set");
-        for (size_t k = 1; k <= n; ++k) {
-            const auto p = stack.committer->resolve_store_id(rank,
-                                                             base + 2 * k);
-            const bool never_issued = std::none_of(
-                stack.issues.begin(), stack.issues.end(),
-                [p](const IssueRecord& record) {
-                    return record.rank == 0 && record.store_id == *p;
-                });
-            b3_expect(never_issued,
-                      "F placeholder anchor never issued");
-        }
-        std::printf(
-            "anchor-chain-same-round N=%zu placeholders=%zu "
-            "anchor_resource_queries=%llu anchor_candidate_visits=%llu "
-            "same_pass=%llu same_tick=%llu order=ABC\n",
-            n, n, static_cast<unsigned long long>(query_delta),
-            static_cast<unsigned long long>(visit_delta),
-            static_cast<unsigned long long>(issues[0].pass),
-            static_cast<unsigned long long>(issues[0].tick));
-        ++segment_ordinal;
-        ++delivery_sequence;
-    }
-    std::printf("PASS anchor-chain-same-round: A->B->C one pass/tick, "
-                "queries independent of N (8/32/128)\n");
-}
-
-// ---------------------------------------------------------------------------
-// scenario_anchor_passed_position.
-// ---------------------------------------------------------------------------
-void scenario_anchor_passed_position(FullStack& stack) {
-    const int rank = 6;
-    b3_expect(stack.event_queue->finished() &&
-                  !stack.event_queue->has_deferred_work(),
-              "F passed-position starts from a drained queue");
-    Workload* const workload = stack.workloads.at(static_cast<size_t>(rank));
-
-    // A rank-6 two-leg run over tiles 1..2, shard 0:
-    //   legs [data_recv @json_offset 2, body_marker @json_offset 0]
-    //   position order: (t1,recv)@m+2 -> (t1,marker)@m -> (t2,recv)@m+3 ->
-    //   (t2,marker)=B@m+1. The receives pair with a rank-0 data_send run
-    //   through the shared tag entry (P0 family convention); the markers
-    //   ride their tile's data claim (P0 marker semantics). After the walk
-    //   dispatches (t2,recv)@m+3, the cursor lands on B=m+1 whose id the
-    //   walk has already passed -> B must wait for the NEXT pass.
-    // A dependency-blocked rank-6 run (shard 1) supplies the mandatory
-    // start anchor and the ordinary consume dependency, both dormant.
-    const BuiltFixture fixture = build_fixture();
-    nlohmann::json wire = fixture.programs.at(0).wire;
-    const std::string segment_id = "pp1/fpassed/prefill/20/4/6/0";
-    wire["identity"] = {
-        {"request_id", "b3-anchor-f"}, {"stage", "prefill"},
-        {"generation", 0}, {"stage_epoch", 4},
-        {"segment_ordinal", 20}, {"rank", 6},
-        {"staging_allocation_id", 20},
-        {"segment_id", segment_id},
-        {"buffer_domain_id", "pb1/fpassed/6/20"}};
-    wire["groups"] = nlohmann::json::array({
-        {{"group_ordinal", 0},
-         {"pass_or_window_ordinal", 20},
-         {"source_ordinal", 20},
-         {"source_key", "f-anchor-passed"},
-         {"layer_start", 0}, {"layer_end", 1},
-         {"tile_axis", {{"unit", "stream_bytes"},
-                        {"total_units", 4},
-                        {"units_per_tile", 2},
-                        {"tile_count", 2},
-                        {"tail_units", 2},
-                        {"global_tile_first", 1}}},
-         {"shards", nlohmann::json::array({
-              {{"shard_ordinal", 0}, {"source_rank", 0}, {"target_rank", 6},
-               {"total_data_bytes", 4}, {"bytes_per_unit", 1},
-               {"noc_path", nlohmann::json::array({0, 6})}}})}}});
-
-    const uint64_t base6 =
-        stack.graph_sources[6]->store().next_auto_id() - 1;  // m
-    const uint64_t base0 =
-        stack.graph_sources[0]->store().next_auto_id() - 1;  // s
-    const auto legacy = []() {
-        return nlohmann::json{{"request_id", "b3-anchor-f"},
-                              {"stage", "prefill"},
-                              {"generation", 0}};
-    };
-    nlohmann::json endpoint_runs = nlohmann::json::array();
-    // Rank-0 paired sender run (virtual holes only).
-    endpoint_runs.push_back(nlohmann::json{
-        {"rank", 0}, {"group_ordinal", 0}, {"first_tile", 1},
-        {"tile_count", 2}, {"shard_ordinals", nlohmann::json::array({0})},
-        {"first_json_id", base0}, {"tile_stride", 1}, {"shard_stride", 1},
-        {"initial_parent_json_id", nullptr},
-        {"legacy_context", legacy()},
-        {"legs", nlohmann::json::array({nlohmann::json{
-            {"endpoint", "data_send"}, {"json_offset", 0},
-            {"tag_emission_ordinal", 1}, {"tag_offset", 0},
-            {"tag_tile_stride", 1}, {"tag_shard_stride", 1}}})}});
-    // Rank-6 main run: recv@+2 then marker@+0 per tile.
-    nlohmann::json main_legs = nlohmann::json::array();
-    main_legs.push_back(nlohmann::json{
-        {"endpoint", "data_recv"}, {"json_offset", 2},
-        {"tag_emission_ordinal", 1}, {"tag_offset", 0},
-        {"tag_tile_stride", 1}, {"tag_shard_stride", 1}});
-    main_legs.push_back(nlohmann::json{
-        {"endpoint", "body_marker"}, {"json_offset", 0},
-        {"tag_emission_ordinal", nullptr}, {"tag_offset", nullptr},
-        {"tag_tile_stride", nullptr}, {"tag_shard_stride", nullptr}});
-    endpoint_runs.push_back(nlohmann::json{
-        {"rank", 6}, {"group_ordinal", 0}, {"first_tile", 1},
-        {"tile_count", 2}, {"shard_ordinals", nlohmann::json::array({0})},
-        {"first_json_id", base6}, {"tile_stride", 1}, {"shard_stride", 1},
-        {"initial_parent_json_id", nullptr},
-        {"legacy_context", legacy()},
-        {"legs", std::move(main_legs)}});
-    wire["endpoint_runs"] = std::move(endpoint_runs);
-    wire["endpoint_dependency_runs"] = nlohmann::json::array();
-    // Per-tile consume completions (P0 prefill shape): tile 1 waits for the
-    // virtual marker terminal, tile 2 for the anchor marker's terminal, so
-    // each data claim lives until after that tile's marker issued.
-    wire["consume_completion_runs"] = nlohmann::json::array({
-        {{"rank", 6}, {"group_ordinal", 0},
-         {"first_tile", 1}, {"tile_count", 1},
-         {"shard_ordinals", nlohmann::json::array({0})},
-         {"dependency_kind", "virtual_endpoint_terminal"},
-         {"first_dependency_json_id", base6},
-         {"dependency_tile_stride", 0},
-         {"dependency_shard_stride", 0}},
-        {{"rank", 6}, {"group_ordinal", 0},
-         {"first_tile", 2}, {"tile_count", 1},
-         {"shard_ordinals", nlohmann::json::array({0})},
-         {"dependency_kind", "ordinary_node_terminal"},
-         {"first_dependency_json_id", base6 + 1},
-         {"dependency_tile_stride", 0},
-         {"dependency_shard_stride", 0}}});
-    wire["tag_allocation_runs"] = nlohmann::json::array({
-        {{"allocator_scope_id", "f-anchor-tags"}, {"emission_ordinal", 1},
-         {"first_tag", 1}, {"count", 2}, {"group_ordinal", 0},
-         {"first_tile", 1}, {"tile_count", 2},
-         {"first_shard", 0}, {"shard_count", 1}}});
-    wire["logical_id_ranges"] = nlohmann::json::array({
-        {{"rank", 0}, {"first_json_id", base0}, {"count", 2}, {"stride", 1},
-         {"kind", "virtual_endpoint_hole"}},
-        {{"rank", 6}, {"first_json_id", base6}, {"count", 1}, {"stride", 1},
-         {"kind", "virtual_endpoint_hole"}},
-        {{"rank", 6}, {"first_json_id", base6 + 3}, {"count", 1},
-         {"stride", 1}, {"kind", "virtual_endpoint_hole"}}});
-    wire["anchors"] = nlohmann::json::array({
-        // The tile-1 data receive is the START anchor (it issues normally in
-        // the commit pass, paired with the rank-0 sender, and claims the
-        // tile-1 target slot that the tile-1 marker then rides);
-        // B: the tile-2 body-marker anchor whose id the walk passes before
-        // the cursor reaches it.
-        {{"role", "start"}, {"rank", 6},
-         {"binding", "physical_endpoint_slot"},
-         {"node_id", base6 + 2},
-         {"selector", {{"kind", "tile_endpoint_terminal"},
-                       {"group_ordinal", 0},
-                       {"tile_ordinal", 1},
-                       {"shard_ordinal", 0},
-                       {"endpoint", "data_recv"},
-                       {"tag_allocation_emission_ordinal", 1},
-                       {"tag_offset", 0}}}},
-        {{"role", "frontier"}, {"rank", 6},
-         {"binding", "physical_endpoint_slot"},
-         {"node_id", base6 + 1},
-         {"selector", {{"kind", "internal_marker_done"},
-                       {"group_ordinal", 0},
-                       {"tile_ordinal", 2},
-                       {"shard_ordinal", 0},
-                       {"endpoint", "body_marker"}}}}});
-    for (const auto& anchor : fixture.programs.at(0).wire.at("anchors")) {
-        if (anchor.at("binding").get<std::string>() ==
-            "descriptor_cursor_selector") {
-            wire["anchors"].push_back(anchor);
-        }
-    }
-
-    const auto queries_before =
-        stack.executor->producer_metrics().anchor_resource_queries;
-    const auto visits_before =
-        workload->dep_free_issue_timing().anchor_candidate_visits;
-    const uint64_t commit_pass =
-        stack.pass_counter.at(static_cast<size_t>(rank)) + 1;
-    const uint64_t commit_tick = Sys::boostedTick();
-    f_commit(stack, f_scenario_batch(wire, 30), 30, "b3-anchor-f");
-
-    const auto recv1 = stack.committer->resolve_store_id(rank, base6 + 2);
-    const auto marker1 = stack.committer->resolve_store_id(rank, base6);
-    const auto recv2 = stack.committer->resolve_store_id(rank, base6 + 3);
-    const auto anchor = stack.committer->resolve_store_id(rank, base6 + 1);
-    b3_expect(recv1.has_value() && marker1.has_value() && recv2.has_value() &&
-                  anchor.has_value(),
-              "F passed-position ids resolve");
-    b3_expect(*anchor < *recv2,
-              "F anchor id lies below the final revealing dispatch");
-
-    const auto passed_done = [&stack, rank, anchor]() {
-        return !f_anchor_issues(stack, {*anchor}, rank).empty() &&
-               terminal_count(stack, rank, *anchor) == 1;
-    };
-    // R7b-style bail-out: deferred issue passes need a t+1 wakeup whenever
-    // the main event map runs empty first.
-    while (!passed_done() && stack.event_queue->has_deferred_work()) {
-        const uint64_t tick = stack.event_queue->get_current_time();
-        stack.event_queue->schedule_event(tick + 1, noop_wakeup, nullptr);
-        stack.event_queue->proceed();
-    }
-    pump_until(stack, passed_done,
-               "F passed-position anchor issue and completion");
-    int drain_guard = 0;
-    while ((!stack.event_queue->finished() ||
-            stack.event_queue->has_deferred_work()) &&
-           drain_guard++ < 200) {
-        if (stack.event_queue->finished() &&
-            stack.event_queue->has_deferred_work()) {
-            const uint64_t tick = stack.event_queue->get_current_time();
-            stack.event_queue->schedule_event(tick + 1, noop_wakeup, nullptr);
-        }
-        stack.event_queue->proceed();
-    }
-    b3_expect(drain_guard < 200 && stack.event_queue->finished() &&
-                  !stack.event_queue->has_deferred_work(),
-              "F passed-position drains the queue");
-
-    uint64_t recv1_pass = UINT64_MAX;
-    uint64_t marker1_pass = UINT64_MAX;
-    uint64_t recv2_pass = UINT64_MAX;
-    uint64_t anchor_pass = UINT64_MAX;
-    uint64_t anchor_tick = UINT64_MAX;
-    for (const IssueRecord& record : stack.issues) {
-        if (record.rank != rank) continue;
-        if (record.store_id == *recv1 && record.pipeline_anchor) {
-            recv1_pass = record.pass;
-        }
-        if (record.store_id == *marker1 && record.virtual_endpoint) {
-            marker1_pass = record.pass;
-        }
-        if (record.store_id == *recv2 && record.virtual_endpoint) {
-            recv2_pass = record.pass;
-        }
-        if (record.store_id == *anchor && record.pipeline_anchor) {
-            anchor_pass = record.pass;
-            anchor_tick = record.tick;
-        }
-    }
-    b3_expect(recv1_pass == commit_pass,
-              "F the commit pass dispatches the first receive");
-    b3_expect(marker1_pass > commit_pass && recv2_pass > marker1_pass,
-              "F the marker and second receive drain through later passes");
-    b3_expect(anchor_pass > recv2_pass,
-              "F anchor B is NOT issued in the pass that revealed it "
-              "(recv2 walked past B's id); a later pass issues it (old "
-              "no-revisit semantics; intermediate empty passes allowed)");
-    b3_expect(anchor_tick >= commit_tick,
-              "F anchor B issues no earlier than the commit pass's tick");
-    // Both anchors are COMP control markers, so passes while the GPU-COMP
-    // gate is busy re-visit them (each visit performs one preflight query;
-    // each successful pass adds the dispatch preflight): queries == visits +
-    // issued (2).
-    const uint64_t visits =
-        workload->dep_free_issue_timing().anchor_candidate_visits -
-        visits_before;
-    const uint64_t queries =
-        stack.executor->producer_metrics().anchor_resource_queries -
-        queries_before;
-    b3_expect(queries == visits + 2 && visits >= 2,
-              "F passed-position: one preflight per visit plus one dispatch "
-              "preflight per issued anchor");
-    b3_expect(stack.executor->producer_metrics()
-                      .anchor_coordinate_rejections == 0,
-              "F passed-position: no coordinate rejections (B was only "
-              "visited once current)");
-    std::printf("PASS anchor-passed-position: recv1_pass=%llu marker=%llu "
-                "reveal_pass=%llu anchor_pass=%llu visits=%llu queries=%llu "
-                "coordinate_rejections=0\n",
-                static_cast<unsigned long long>(recv1_pass),
-                static_cast<unsigned long long>(marker1_pass),
-                static_cast<unsigned long long>(recv2_pass),
-                static_cast<unsigned long long>(anchor_pass),
-                static_cast<unsigned long long>(visits),
-                static_cast<unsigned long long>(queries));
-}
-
-// ---------------------------------------------------------------------------
-// scenario_anchor_new_ready_midpass.
-// ---------------------------------------------------------------------------
-void scenario_anchor_new_ready_midpass(FullStack& stack) {
-    const int rank = 0;
-    b3_expect(stack.event_queue->finished() &&
-                  !stack.event_queue->has_deferred_work(),
-              "F midpass starts from a drained queue");
-    Workload* const workload = stack.workloads.at(static_cast<size_t>(rank));
-    NodeStore& store =
-        stack.graph_sources.at(static_cast<size_t>(rank))->store();
-
-    // Single-position data_send run whose anchor P (json 1) is the NodeStore
-    // child of the zero-cost timer node Z (json 0). Z issues in the commit
-    // pass and completes synchronously; P enters the free set (and the
-    // since-snapshot delta) mid-pass -- the delta gate must keep it out of
-    // the current pass, and the deferred same-tick pass issues it.
-    FDescriptorSpec spec;
-    spec.placeholder_count = 0;
-    spec.segment_ordinal = 21;
-    spec.tag = "midpass";
-    spec.include_chain = false;
-    spec.json_base = stack.graph_sources[0]->store().next_auto_id() - 1;
-    spec.json_base_target =
-        stack.graph_sources[6]->store().next_auto_id() - 1;
-    nlohmann::json descriptor = f_scenario_descriptor(spec);
-    const uint64_t anchor_json = spec.json_base + 1;
-    // Single-position data_send run (shard 4) whose anchor P is the
-    // NodeStore child of the zero-cost timer node Z. Z issues in the commit
-    // pass and completes synchronously; P enters the free set (and the
-    // since-snapshot delta) mid-pass -- the delta gate must keep it out of
-    // the current pass, and the deferred same-tick pass issues it.
-    descriptor["groups"][0]["shards"].push_back(
-        {{"shard_ordinal", 3}, {"source_rank", 0}, {"target_rank", 6},
-         {"total_data_bytes", 4}, {"bytes_per_unit", 1},
-         {"noc_path", nlohmann::json::array({0, 6})}});
-    nlohmann::json midpass_run = nlohmann::json::object();
-    midpass_run["rank"] = 0;
-    midpass_run["group_ordinal"] = 0;
-    midpass_run["first_tile"] = 1;
-    midpass_run["tile_count"] = 1;
-    midpass_run["shard_ordinals"] = nlohmann::json::array({3});
-    midpass_run["first_json_id"] = anchor_json;
-    midpass_run["tile_stride"] = 1;
-    midpass_run["shard_stride"] = 1;
-    midpass_run["initial_parent_json_id"] = nullptr;
-    midpass_run["legacy_context"] = nlohmann::json{
-        {"request_id", "b3-anchor-f"},
-        {"stage", "prefill"},
-        {"generation", 0}};
-    midpass_run["legs"] = nlohmann::json::array({nlohmann::json{
-        {"endpoint", "data_send"},
-        {"json_offset", 0},
-        {"tag_emission_ordinal", spec.next_ordinal},
-        {"tag_offset", 0},
-        {"tag_tile_stride", 1},
-        {"tag_shard_stride", 1}}});
-    descriptor["endpoint_runs"].push_back(std::move(midpass_run));
-    descriptor["tag_allocation_runs"].push_back(
-        {{"allocator_scope_id", "f-anchor-tags"},
-         {"emission_ordinal", spec.next_ordinal},
-         {"first_tag", spec.next_tag}, {"count", 1},
-         {"group_ordinal", 0},
-         {"first_tile", 1}, {"tile_count", 1},
-         {"first_shard", 3}, {"shard_count", 1}});
-    descriptor["anchors"].push_back(nlohmann::json{
-        {"role", "frontier"}, {"rank", 0},
-        {"binding", "physical_endpoint_slot"},
-        {"node_id", anchor_json},
-        {"selector", {{"kind", "tile_endpoint_leg"},
-                      {"group_ordinal", 0},
-                      {"tile_ordinal", 1},
-                      {"shard_ordinal", 3},
-                      {"endpoint", "data_send"},
-                      {"tag_allocation_emission_ordinal", spec.next_ordinal},
-                      {"tag_offset", 0}}}});
-    // The parser requires a start anchor as well: another dependency-blocked
-    // two-tile run (shard 4) whose t2 START anchor never becomes current.
-    // Its ids continue the rank-0 span: hole f+2, anchor f+3.
-    const uint64_t f = spec.json_base;
-    descriptor["logical_id_ranges"].push_back(
-        {{"rank", 0}, {"first_json_id", f + 2}, {"count", 1}, {"stride", 1},
-         {"kind", "virtual_endpoint_hole"}});
-    descriptor["groups"][0]["shards"].push_back(
-        {{"shard_ordinal", 4}, {"source_rank", 0}, {"target_rank", 6},
-         {"total_data_bytes", 4}, {"bytes_per_unit", 1},
-         {"noc_path", nlohmann::json::array({0, 6})}});
-    nlohmann::json start_run = nlohmann::json::object();
-    start_run["rank"] = 0;
-    start_run["group_ordinal"] = 0;
-    start_run["first_tile"] = 1;
-    start_run["tile_count"] = 2;
-    start_run["shard_ordinals"] = nlohmann::json::array({4});
-    start_run["first_json_id"] = f + 2;
-    start_run["tile_stride"] = 1;
-    start_run["shard_stride"] = 1;
-    start_run["initial_parent_json_id"] = f + 3;
-    start_run["legacy_context"] = nlohmann::json{
-        {"request_id", "b3-anchor-f"},
-        {"stage", "prefill"},
-        {"generation", 0}};
-    start_run["legs"] = nlohmann::json::array({nlohmann::json{
-        {"endpoint", "data_send"},
-        {"json_offset", 0},
-        {"tag_emission_ordinal", spec.next_ordinal + 1},
-        {"tag_offset", 0},
-        {"tag_tile_stride", 1},
-        {"tag_shard_stride", 1}}});
-    descriptor["endpoint_runs"].push_back(std::move(start_run));
-    descriptor["endpoint_dependency_runs"].push_back(
-        {{"rank", 0}, {"group_ordinal", 0},
-         {"first_tile", 1}, {"tile_count", 1},
-         {"shard_ordinals", nlohmann::json::array({4})},
-         {"endpoint", "data_send"},
-         {"dependency_kind", "ordinary_node_terminal"},
-         {"first_dependency_json_id", f + 3},
-         {"dependency_tile_stride", 0},
-         {"dependency_shard_stride", 0}});
-    descriptor["tag_allocation_runs"].push_back(
-        {{"allocator_scope_id", "f-anchor-tags"},
-         {"emission_ordinal", spec.next_ordinal + 1},
-         {"first_tag", spec.next_tag + 1}, {"count", 2},
-         {"group_ordinal", 0},
-         {"first_tile", 1}, {"tile_count", 2},
-         {"first_shard", 4}, {"shard_count", 1}});
-    descriptor["anchors"].push_back(nlohmann::json{
-        {"role", "start"}, {"rank", 0},
-        {"binding", "physical_endpoint_slot"},
-        {"node_id", f + 3},
-        {"selector", {{"kind", "tile_endpoint_leg"},
-                      {"group_ordinal", 0},
-                      {"tile_ordinal", 2},
-                      {"shard_ordinal", 4},
-                      {"endpoint", "data_send"},
-                      {"tag_allocation_emission_ordinal", spec.next_ordinal + 1},
-                      {"tag_offset", 1}}}});
-
-    const uint64_t timer_json = spec.json_base;
-    const uint64_t commit_pass =
-        stack.pass_counter.at(static_cast<size_t>(rank)) + 1;
-    const uint64_t commit_tick = Sys::boostedTick();
-    const auto visits_before =
-        workload->dep_free_issue_timing().anchor_candidate_visits;
-    f_commit(stack,
-             f_scenario_batch(descriptor, 31, {f_timer_node(timer_json, "f-z")},
-                              {{{"rank", 0},
-                                {"kind", "data"},
-                                {"from", timer_json},
-                                {"to", anchor_json}}}),
-             31, "b3-anchor-f");
-
-    const auto z = stack.committer->resolve_store_id(rank, timer_json);
-    const auto p = stack.committer->resolve_store_id(rank, anchor_json);
-    b3_expect(z.has_value() && p.has_value(), "F midpass ids resolve");
-
-    // R7b-style bail-out drain: after the commit pass the anchor's issue
-    // pass is deferred work with no further queued event, so the queue
-    // needs the t+1 wakeup before it can run that pass.
-    const auto drain_deferred_wakeup = [&stack]() {
-        if (stack.event_queue->finished() &&
-            stack.event_queue->has_deferred_work()) {
-            const uint64_t tick = stack.event_queue->get_current_time();
-            stack.event_queue->schedule_event(tick + 1, noop_wakeup, nullptr);
-            stack.event_queue->proceed();
-        }
-    };
-    drain_deferred_wakeup();
-    pump_until(stack,
-               [&stack, rank, p]() {
-                   return !f_anchor_issues(stack, {*p}).empty() &&
-                          terminal_count(stack, rank, *p) == 1;
-               },
-               "F midpass anchor issue and completion");
-    drain_deferred_wakeup();
-    if (stack.event_queue->has_deferred_work()) {
-        const uint64_t tick = stack.event_queue->get_current_time();
-        stack.event_queue->schedule_event(tick + 1, noop_wakeup, nullptr);
-        stack.event_queue->proceed();
-    }
-    b3_expect(stack.event_queue->finished() &&
-                  !stack.event_queue->has_deferred_work(),
-              "F midpass drains the queue");
-
-    uint64_t z_pass = UINT64_MAX;
-    uint64_t p_pass = UINT64_MAX;
-    uint64_t p_tick = UINT64_MAX;
-    for (const IssueRecord& record : stack.issues) {
-        if (record.rank != rank) continue;
-        if (record.store_id == *z && !record.pipeline_anchor &&
-            !record.virtual_endpoint) {
-            z_pass = record.pass;
-        }
-        if (record.store_id == *p && record.pipeline_anchor) {
-            p_pass = record.pass;
-            p_tick = record.tick;
-        }
-    }
-    b3_expect(z_pass == commit_pass,
-              "F timer parent issues in the commit pass (its synchronous "
-              "terminal frees the anchor mid-pass)");
-    b3_expect(p_pass > z_pass,
-              "F the freed anchor is issued strictly after its parent's "
-              "pass");
-    b3_expect(p_pass == commit_pass + 1,
-              "F mid-pass-freed anchor is NOT issued in the commit pass; "
-              "the next (deferred same-tick) pass issues it");
-    b3_expect(p_tick >= commit_tick,
-              "F mid-pass-freed anchor issues no earlier than the commit "
-              "pass's tick (t+1 bail-out wakeup allowed)");
-    const uint64_t visits =
-        workload->dep_free_issue_timing().anchor_candidate_visits -
-        visits_before;
-    b3_expect(visits == 2,
-              "F anchor visited once in the commit pass (delta-gated) and "
-              "once in the issuing pass");
-    std::printf("PASS anchor-new-ready-midpass: z_pass=%llu p_pass=%llu "
-                "same_tick=%llu visits=%llu (delta gate + rerun)\n",
-                static_cast<unsigned long long>(z_pass),
-                static_cast<unsigned long long>(p_pass),
-                static_cast<unsigned long long>(p_tick),
-                static_cast<unsigned long long>(visits));
-}
-
 }  // namespace
+}  // namespace ExecutionDriven
+}  // namespace AstraSim
 
 int main(const int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
@@ -3341,16 +2267,12 @@ int main(const int argc, char** argv) {
     scenario_n_delta();
     scenario_n_ready_snapshot_scale();
     scenario_n_membership_and_boundary();
-    scenario_n_virtual_ids();
     scenario_r6_store();
     scenario_r7_store();
 
     // ---------------- full-stack layer ----------------
     FullStack stack;
     build_full_stack(stack);
-
-    // N1/N2 first: the P0 fixture owns ranks {0, 5, 6} from json id 0.
-    scenario_n1_n2_fullstack(stack);
 
     // R5 continues rank0's json stream after the P0 nodes; rank1 is fresh.
     // A rank's committed node count equals its next json id (json ids are
@@ -3364,16 +2286,6 @@ int main(const int argc, char** argv) {
     scenario_r7b_fullstack(stack);
     scenario_n3_timing(stack, facts, timing_before);
     scenario_n4_fullstack(stack);
-    // F (2026-10-11) dynamic current-anchor candidate set: runs BEFORE the
-    // N5/N6 direct store construction (any later GraphBatch would trip the
-    // committer's affine drift check on rank 6) and touches only rank 0's
-    // id stream -- N5/N6's assertions read rank 6 and fresh sources only.
-    // The placeholder anchors stay permanently ready on rank 0; they are
-    // the ballast the optimization avoids enumerating.
-    scenario_anchor_chain_same_round(stack);
-    scenario_anchor_passed_position(stack);
-    scenario_anchor_new_ready_midpass(stack);
-
     // Direct store construction in N5/N6 runs after every committer affine
     // check, so it cannot alter a later GraphBatch fixture's expected stream.
     scenario_n5_blocked_node_view_materialization(stack);
@@ -3408,7 +2320,7 @@ int main(const int argc, char** argv) {
     }
     std::printf("[ready_issue_order_test] ALL PASS: store golden replay "
                 "R1/R2/R4 equal, R3 divergence registered "
-                "(b3_membership_dedup), R5-R7 + N1-N6 green on the real "
+                "(b3_membership_dedup), R5-R7 + N3-N6 green on the real "
                 "stack\n");
     return 0;
 }

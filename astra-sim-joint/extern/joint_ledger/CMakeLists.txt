@@ -27,6 +27,9 @@ endif()
 
 add_library(joint_ledger STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/LedgerTypes.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/TypedRows.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/CompactWire.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/CompactReader.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/JsonScanner.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/PipelineDescriptor.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/WorkLedgerCore.cc"
@@ -57,7 +60,8 @@ set(JOINT_LEDGER_TESTS
     pipeline_descriptor_port_test
     work_ledger_core_test
     envelope_reader_test
-    dual_ledger_test)
+    dual_ledger_test
+    compact_wire_test)
 foreach(t IN LISTS JOINT_LEDGER_TESTS)
     add_executable(${t} "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}.cc")
     target_link_libraries(${t} PRIVATE joint_ledger)

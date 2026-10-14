@@ -4,8 +4,8 @@
 选择性移植的六项缺口修正）与实验总纲 §13.2。
 
 统一预测目标：``cost(instance, action)`` 预测到同一 ``merge_done``
-边界的完成时间——包括目标等待、历史准备、执行期增长、remote 路径、
-compute_done 后的 home 释放与合并（F11：预测终点 = merge_done，四动作
+边界的完成时间——包括目标等待、历史准备、执行期增长、
+compute_done 后的 home 释放与合并（F11：预测终点 = merge_done，三动作
 同终点；service_done（响应完成）作为服务指标从事件侧分别报告——本
 docstring 原先的 ``service_done`` 字样为旧版合同术语残留，C4-G2 术语
 rider 统一为 merge_done 终点表述，语义零变更，PROVENANCE §15.3 命名
@@ -41,15 +41,14 @@ collective 的观测缺口由调用方以覆盖标记披露（本模型不假定
 池端口除数注入（含 E 内核 r_j，R15-3）。``collective_coverage`` 仍
 由调用方按遥测覆盖披露。
 
-C1（2026-09-22，WP1a）：NoC 计价四点（copy 前缀腿 / remote-read
-读流与 credit 切块 / merge 双腿）改为**逐 shard 三腿 min**（F1 冻
-结）——noc_stream = bytes_s/(B_link/该 shard 路径瓶颈除数)、
-home_read = bytes_s/(B_HBM/(u_home+1))、exec_write 仅 copy/staging；
+C1（2026-09-22，WP1a）：NoC 计价（copy 前缀腿 / merge 双腿；remote-
+read 读流与 credit 切块计价点已随 2026-10-14 远读退役删除）改为
+**逐 shard 三腿 min**（F1 冻结）——noc_stream = bytes_s/(B_link/该
+shard 路径瓶颈除数)、home_read = bytes_s/(B_HBM/(u_home+1))、
+exec_write 为各 kind 共同写腿；
 wall = max_s(startup + d2d·hops(path_s) + max(腿))，TP 并行不再按
 "聚合字节 ÷ 单链路率"串行放大；``local_hbm_bytes_per_ns`` 自此正式
-消费（端点腿；E12）。D1 读放大因果口径：decode 每步远读基数 = 仍
-位于远端的基础历史，执行端生成的 input/decode 增量本地读取、不计
-作远读；prefill 按实际消费遍数计（设计文档 §1.4）。
+消费（端点腿；E12）。
 
 D13（2026-09-27，v2.0 C06/§9.2）：**每路径资源份额**——C1 时代的
 "候选全部 TP 并行流链路并集取一个瓶颈除数（divisor_multi），再给
@@ -64,7 +63,7 @@ D13（2026-09-27，v2.0 C06/§9.2）：**每路径资源份额**——C1 时代�
 流数优先与旧流 max 去重保留。
 
 D05（2026-09-27，v2.0 C02/§15.2）：**merge 补目标 HBM 写腿**——
-exec_write 条件自 "仅 copy/staging" 扩为四 kind 全量在（merge 同付
+exec_write 条件自 "仅 copy" 扩为 copy/merge 全量在（merge 同付
 源读＋正确方向 NoC＋落点写，与执行侧 noc_migrate 双端点登记同腿
 型）；落点空间准备是另一前驱，仍由调用方
 ``_space_ready_ns_estimate`` 单列计价；控制确认（merge 尾标记
@@ -78,8 +77,8 @@ rank、路径与字节按式 (7) 估价：恢复方向资源集 = 池端口＋�
 NoC＋目标 HBM 写，写回方向 = 源 HBM 读＋到边界 NoC＋池端口
 （λ_f = 池时延＋逐跳时延，带宽项同取 max）；池端口除数按流查询实际
 edge（在册在途＋候选自身经该端口的 shard 数），不再用实例级最大除
-数替代所有端口。消费点五处（stay 池恢复 / copy 池恢复 / copy 池后
-缀 / remote 混合后缀 / 驱逐写回）。执行侧对齐：sh30
+数替代所有端口。消费点四处（stay 池恢复 / copy 池恢复 / copy 池后
+缀 / 驱逐写回；remote 混合后缀消费点已随远读退役删除）。执行侧对齐：sh30
 ``_register_transfer_flows`` 对 remote_load/remote_store 登记真实
 HBM 端点（恢复 = 目标写、写回 = 源读）、完成事件注销——F3 旧边界
 （池路径端点留在 HBM 端口表之外）废除。直接构造的测试夹具（未注入
@@ -88,18 +87,15 @@ HBM 端点（恢复 = 目标写、写回 = 源读）、完成事件注销——F
 
 C2（2026-09-22，WP1b）：``hbm_port_registry``（HbmPortFlowRegistry，
 WL/joint/hbm_port_flow_registry.py）自本卡起供给端点腿除数 u_home/
-u_exec（F4：活跃 decode 消费流 + 在册传输/远读流；未注入时 u=0，端点
-腿独占——离线/单测口径）。A4' 补价 rider（PROVENANCE §20.1，C14 G1
-裁定 (a)）：kind="read" 增执行端 HBM 写腿——与 copy/staging 第三腿同
-式同源（镜像执行侧 COMM_WRITE 服务类），remote-read 计价自此三腿；
-带宽/服务争用腿语义不变（F14 容量半边 2026-09-26 随 D09 改宗：远读
-tile 暂存按每 rank 双缓冲真实预约计入空间足迹——见
-_space_footprint_by_tp_rank D09 注）。E4 去重（A1 勘误）→ D13 每路
+u_exec（F4：活跃 decode 消费流 + 在册传输流；未注入时 u=0，端点
+腿独占——离线/单测口径）。E4 去重（A1 勘误）→ D13 每路
 径形态：breakdown 的 contention_divisor 复用主计价腿服务视图的最坏
 路径除数，estimate_P_with_continuation 不再对 candidate_paths 二次
 调用 divisor_multi（stay/recompute 无计价腿可复用时维持单次调用）。
 u_port 分解披露走决策日志 notes 通道（C5 冻
 结 schema 不动；port_snapshot 正式字段位归 C11 步骤 6）。
+（A4' 的 kind="read" 补价 rider 与 F14 远读 tile 暂存容量半边已随
+2026-10-14 远读退役删除。）
 
 C7（2026-09-22，WP2，仅 JCM 半）：C++ 侧逐链路窗口遥测（C6
 ``link_telemetry[]``）的代价模型消费三件——(1) ``divisor_effective``：
@@ -138,36 +134,26 @@ A8'（2026-09-22，§4.3 补遗，F1）：上件 (3) 的 SH 侧调用落地—�
 恒 1.0/updates 恒 0 的名实不符消除；行为面 = 仅遥测开启路径，缺省关
 臂零扰动）。
 
-规格书 §5（2026-09-25，remote-read 分阶段关键路径）：remote-read 候
-选的关键路径合成改为 prefill/decode 两阶段——prefill 前缀读流
-（home→exec）与后缀池恢复（pool→exec HBM）自同一准入 frontier 并行
-分叉，prefill 计算按层段随数据到达推进（前缀段等首 credit、后缀段
-等恢复，无"全量后缀恢复完成才开始 prefill"的全局 barrier）；decode
-只对 home 前缀新发 credit 读、后缀在 exec HBM 就地复用不再恢复；
-merge 段仍为 merge v2。合成式（§5 原文，2026-09-25）：prefill_stage =
-prefix_first_credit + max(prefix_remaining_stream, suffix_restore,
-prefill_compute)、decode_stage = decode_first_credit +
-max(decode_remaining_stream, decode_compute)、total = target_wait +
-eviction_wait + prefill_stage + decode_stage + merge。旧
-max(history_prep, eviction_wait) + first_credit + max(remaining_stream,
-compute)（后缀恢复全量串在 prefill 计算之前）废除、无开关可选项。
+规格书 §5（2026-09-25，remote-read 分阶段关键路径）：该分阶段合成
+（prefill 前缀读流 + 后缀池恢复并行分叉、decode credit 读）的受控
+对象是 remote-read 候选——已随 2026-10-14 远读退役整体删除；后缀
+池恢复腿（PARTIAL 基 copy/stay 的池语义）保留在事件前推图内。
 
 D02（2026-09-26，v2.0 式(12)/(13)/§11 逐层数据/空间就绪递推）：上述
 阶段级标量合成进一步退役——"历史准备—计算—关键路径合成"三段改为
-逐层就绪递推（纯算术 ``estimate_first_forward``/``estimate_repeat_
-segment`` 新接口）：一次性传输（copy handoff chunk / 池恢复 / remote
-tile 到达）按 式(12) 供给链只写它真实消费的层的 ``ready_data`` 门
-（copy 通道内按层消费序串行；池后缀与 NoC 前缀不同通道并行；remote
-tile 到达与 ``_double_buffer_recurrence_ns`` 的 T 序列逐位同源）；
+逐层就绪递推（纯算术 ``estimate_first_forward`` 接口；远读 tile 到达
+供给门与 repeat 段腿闭式已随 2026-10-14 远读退役删除）：一次性传输
+（copy handoff chunk / 池恢复）按 式(12) 供给链只写它真实消费的层的
+``ready_data`` 门（copy 通道内按层消费序串行；池后缀与 NoC 前缀不同
+通道并行）；
 聚合 prefill 计算按固定层数均分（余数前置、总和守恒）为固定数量算子
 段；式(13) 递推保留数据晚到层之后的计算（§11.3 的 110 ns 例——整体
 max 吸收到达后计算的形态全部废除、无开关）。合成式（现行）：
 frontier = target_wait + eviction_wait（串行前置不变）→ prefill 首前
-向 = 递推 F_L → repeat 段（remote credit 腿闭式 / 零供给纯计算链，
-自 F_L 后发射）→ merge。零门控动作（stay-LOCAL/recompute）递推退化
-为整段计算（与旧口径逐位一致的守恒锚）。breakdown 冻结字段口径全部
-保持（C5），阶段量经 notes 披露：remote_read_prefill_ns /
-remote_read_decode_ns（腿闭式相对量）/ suffix_restore_ns /
+向 = 递推 F_L → 零供给纯计算链（自 F_L 后发射）→ merge。零门控动作
+（stay-LOCAL/recompute）递推退化为整段计算（与旧口径逐位一致的守恒
+锚）。breakdown 冻结字段口径全部
+保持（C5），阶段量经 notes 披露：suffix_restore_ns /
 prefill_pipeline_overlap_ns（两供给并行项成对吸收量，审计口径）+
 prefill_first_forward_ns（递推结果）。
 
@@ -186,8 +172,8 @@ ready_data=决策相对绝对量) → repeat 段（自首前向后发射）→ m
 prefill-read）决策时刻提交、请求其后入队；**D03 修复轮二（2026-09-27）
 细化**：目标实例列车在飞时，准入链物理排在该列车之后（构图器 frontier
 接续裁决）——P 准备腿起点 = max(A, prep_frontier_ns)（调度器逐候选
-目标实例注入在飞列车剩余估计；空闲 = 0 = 决策时刻发射）；D 边界迁移/
-credit 腿随加入列车发射（自 Q 起）、边界逐出旁路支链即时（A 自决策
+目标实例注入在飞列车剩余估计；空闲 = 0 = 决策时刻发射）；D 边界迁移
+随加入列车发射（自 Q 起）、边界逐出旁路支链即时（A 自决策
 时刻起）——发射 frontier 逐腿核对结论见 estimate_P_with_continuation/
 estimate_D_remaining docstring 与 prep_issue_frontier notes 键）。
 旧 max 把尚无空间的写入提前的形态（依赖驱逐的腿与驱逐等待并行取
@@ -218,8 +204,8 @@ per-token 均值、构造期传上下文/时域"机制退役（SH 侧 D08 同卡
 joint/test_d08_context_growth_fold.py。
 
 W3（2026-10-02，v5-projection 世代，《joint仓库当下+历史修改方案》§5/§6/§7）：
-**四动作 J 正式计价切换为事件前推**——两入口内部 =
-``joint.action_work_graph`` 构图（四动作 + P 参考接续 + consolidate 结算
+**J 正式计价切换为事件前推**——两入口内部 =
+``joint.action_work_graph`` 构图（三动作 + P 参考接续 + consolidate 结算
 + 控制延迟节点 + §7.2 继承义务）→ ``CandidateGraph.project_against``（native 投影）
 （W2 内核：事件队列 + 分段恒速积分 + N-way 等分 + buffer/barrier 门）→
 ``cost = predicted_settle_done``（service/settle 分列）。世代退役（无开关
@@ -234,9 +220,10 @@ W3（2026-10-02，v5-projection 世代，《joint仓库当下+历史修改方案
 * **冻结份额退役**：``CandidateStageHbmShare`` 只作静态审计视图——端点
   腿实际份额 = HBM 资源活跃集随事件重算（§5.2/§9.1；A 臂 =
   frozen_diagnostic 显式冻结规格）；
-* estimate_first_forward/estimate_repeat_segment/双缓冲闭式降为**审计/
-  参照算子**（里程碑披露与 notes 面复用；截断条件登记于各自 docstring）
-  ——cost 路径全部走事件世界。
+* estimate_first_forward 降为**审计/参照算子**（里程碑披露与 notes 面
+  复用；截断条件登记于 docstring）——cost 路径全部走事件世界。
+  （estimate_repeat_segment 与 D09 双缓冲闭式原为远读腿的审计/参照
+  算子，已随 2026-10-14 远读退役删除。）
 
 D11（2026-09-27，v2.0 §14 式(19)/(20) 分阶段足迹 + 容量驱逐摘要）：
 空间预测从"一个 KV 向量"升级为**分阶段峰值 × 逐出摘要**——
@@ -244,7 +231,7 @@ D11（2026-09-27，v2.0 §14 式(19)/(20) 分阶段足迹 + 容量驱逐摘要�
 * ``PhaseFootprint``（joint/capacity_summary.py）：候选的
   准备/prefill/decode/merge 四阶段逐 rank 新增峰值（式 20 逐阶段对照
   F 检查 ``Δb_r = max(0, P^peak_r − F_r)``，不机械相加成"全程同时
-  驻留"）；P 入口阶段分解 = 池恢复瞬态+remote 暂存（准备）→
+  驻留"）；P 入口阶段分解 = 池恢复瞬态（准备）→
   final−growth（prefill）→ final（decode/merge），D 入口 = 迁移到达
   （准备/prefill）→ +growth（decode/merge）；merge 腿容量准备语境用
   ``PhaseFootprint.single(PHASE_MERGE, …)`` 单阶段声明。
@@ -287,12 +274,7 @@ from typing import Any, Hashable, Mapping, Optional, Sequence
 
 from joint.joint_config import (
     ALL_ACTIONS,
-    prefill_remote_read_scan_passes,
-    remote_read_exec_tile_tokens,
-    remote_read_staging_bytes_per_rank,
-    resolve_remote_read_tile_tokens,
     MODEL_SEMANTICS_VERSION,
-    REMOTE_READ_TILE_AUTO,
 )
 # D11（2026-09-27，v2.0 §14）：分阶段足迹 + 容量驱逐摘要——数据结构与
 # θ 份额消费纯函数（KVCacheManager 增量维护、候选只查询；摘要不反向
@@ -309,9 +291,6 @@ from joint.capacity_summary import (
 # 不重排队 / 新接纳不免费插队）。boundary_layout 不反向 import 本模块
 # （单向依赖，无环）。
 from joint.boundary_layout import (
-    INTERVAL_ROLE_BASE,
-    INTERVAL_ROLE_CONTEXT,
-    INTERVAL_ROLE_INCREMENT,
     BoundaryKvInterval,
     BoundaryKVLayout,
     boundary_target_wait_ns,
@@ -336,9 +315,10 @@ from joint.prediction_config import (
     load_prediction_config,
 )
 
-# 四动作字符串常量从 joint_config.ALL_ACTIONS 拆包（M2：定义源放
+# 三动作字符串常量从 joint_config.ALL_ACTIONS 拆包（M2：定义源放
 # joint_config——本模块反向 import 它避免环导入；位置序即 ACTION_ORDER）。
-ACTION_STAY, ACTION_RECOMPUTE, ACTION_COPY, ACTION_REMOTE = ALL_ACTIONS
+# 2026-10-14 远读退役：第四元 ACTION_REMOTE 拆包删除。
+ACTION_STAY, ACTION_RECOMPUTE, ACTION_COPY = ALL_ACTIONS
 
 #: 确定平局序：动作按此序、实例按索引（§13.1 不按事后输赢调 tie）。
 #: 序即全集（M2 动作掩码 JOINT_ALLOWED_ACTIONS 是候选集上限不是强制，
@@ -352,10 +332,9 @@ _ACTION_PRIORITY = {name: index for index, name in enumerate(ACTION_ORDER)}
 MASK_INAPPLICABLE_REASON = "action excluded by JOINT_ALLOWED_ACTIONS mask"
 
 #: D 边界完整动作面（v2.0 §19.1/D10/D19）**无协议级禁选**——
-#: recompute 静默重建、多源 remote-read、增量/第三目标 copy 均按
-#: 物理语义计价与执行。不适用候选只保留物理理由（history not
-#: resident / no history to copy / base resident at target instance /
-#: remote disabled），与 P 入口 ``applicable_actions`` 同模板。
+#: recompute 静默重建、第三目标 copy 均按物理语义计价与执行。不适用
+#: 候选只保留物理理由（history not resident / no history to copy），
+#: 与 P 入口 ``applicable_actions`` 同模板。
 
 
 class JointCostError(ValueError):
@@ -440,8 +419,7 @@ class CausalHorizonEstimator:
     joint/test_d14_forward_step_semantics.py：P 准入 n̂_D（RequestView.
     estimated_decode_tokens）、D 边界 n̂_B（estimate_boundary/PDBoundary
     View.decode_steps）、D08 折叠 m 步（式 16）、式(18b) KV 增长闭式
-    的 n、remote 读流遍数（_remote_read_passes 的 decode 分量）与执行
-    侧 credit plan steps（真值步数）——同一物理量（前向步）同单位，
+    的 n 与执行侧（真值步数）——同一物理量（前向步）同单位，
     首 token 归 P 末的归属差异不产生步数错位。
 
     估计层级（式 4）：session 已完成轮次在线均值 → 本 run 已完成轮次
@@ -1550,43 +1528,6 @@ class RequestView:
     horizon_source: str                 # session_online_mean/run_online_mean/cold_start_default
     # 已知 prefill 输入的逐 rank KV 字节（增量，物理派生）。
     input_kv_bytes_by_tp_rank: tuple[int, ...]
-    # D1（C1）：prefill 对远端基础历史的消费遍数（执行侧供给——生产
-    # 路径 = ``joint_config.prefill_remote_read_scan_passes`` 同值）。
-    # D07（M1′ 计价侧）：携带 chunk/query tile 模板身份时本字段降级为
-    # **一致性校验对象**（与闭式推导不一致即拒价，见
-    # ``JointCostModel._remote_read_passes``）；None 且无模板身份 =
-    # 因果缺省（input_tokens > 0 → 1，否则 0——直接构造的测试夹具
-    # 路径，受控测量/后继卡供给的多遍真值亦走此入口）。
-    prefill_scan_passes: Optional[int] = None
-    # D07（M1′ 计价侧，v2.0 式 11/18）：prefill 输入的 chunk/query
-    # tile **kernel 模板身份**（q_c/q_tile；静态执行配置，非 workload
-    # 拟合）。合法模板身份 = 两者成对供给且为正整数
-    # （``__post_init__`` fail-closed）。供给后 prefill 扫描次数从已
-    # 知 U 与模板身份闭式推导（Σν = a⌈q_c/q_tile⌉ + 1_{b>0}⌈b/q_tile⌉，
-    # 单一裁决点 ``prefill_remote_read_scan_passes``——与执行侧
-    # prefill 前缀读流同源），不依赖外部传入的未说明数字；None（直接
-    # 构造的测试夹具）= 沿用供给值/因果缺省旧路径，零漂移。
-    prefill_chunk_tokens: Optional[int] = None
-    query_tile_tokens: Optional[int] = None
-
-    def __post_init__(self) -> None:
-        """D07 合法模板身份校验（fail-closed）：chunk/query tile 成对
-        供给、均为正整数——半份身份或非法值在构造即拒绝，不留到计价
-        才炸。"""
-        identity = (self.prefill_chunk_tokens, self.query_tile_tokens)
-        if all(value is None for value in identity):
-            return
-        if any(value is None for value in identity):
-            raise JointCostError(
-                "RequestView chunk/query tile template identity must be "
-                f"supplied as a pair, got {identity}")
-        for name, value in zip(
-                ("prefill_chunk_tokens", "query_tile_tokens"), identity):
-            if isinstance(value, bool) or not isinstance(value, int) \
-                    or value <= 0:
-                raise JointCostError(
-                    f"RequestView {name} must be a positive int, got "
-                    f"{value!r}")
 
 
 @dataclass(frozen=True)
@@ -1594,15 +1535,9 @@ class PDBoundaryView:
     """P→D 边界只读快照（D18，v2.0 §2.3/§16.2 的轻量形态；D19 的
     ``BoundaryKVLayout`` 在此基础上细化区间/副本/义务面）。
 
-    布局两族（由 ``p_action`` 判别，单一判据 ``is_increment_layout``）：
-    * **完整型**（P ∈ {stay, copy, recompute}）：H_B 全量工作副本在
-      i_P——``working_bytes_by_tp_rank`` = H_B 逐 rank 字节，
-      ``base_bytes_by_tp_rank`` 恒空（无异地基础区间）。
-    * **增量型**（P = remote-read）：i_P 实有本轮输入增量 U，以及
-      PARTIAL 基已恢复的后缀 S（由 working_intervals 分别记录）；
-      基础历史仍由源端（home）持有——``base_bytes_by_tp_rank`` = 源端
-      仍保留的基础区间字节（LOCAL 基全层、PARTIAL 基前缀 [0,p)），
-      decode credit 读流按式(18a) 只覆盖该区间。
+    布局恒为**完整型单族**（三动作 P ∈ {stay, copy, recompute} 的 P 末
+    工作副本全量在 i_P——``working_bytes_by_tp_rank`` = H_B 逐 rank
+    字节；增量型布局族已随 2026-10-14 远读退役一步删除，D6）。
 
     已完成 P 的时间/计算量/传输不进入本视图（沉没工作，§2.3"已经完成
     的 P 时间、P 计算量和已完成传输不再计费"）；尚未完成的已提交义务
@@ -1614,63 +1549,35 @@ class PDBoundaryView:
     home_instance: Optional[int]        # 物理基础驻留实例（源端；D-BI：
                                         #   准备相快照的基础所在，P→D 迁
                                         #   移+merge stay 后可与逻辑 home
-                                        #   不同——适用性/远读/合并计价
+                                        #   不同——适用性/合并计价
                                         #   端点全按它，不作平局判据）
     p_instance_index: int               # i_P：P 末工作副本所在执行实例
     p_action: str
     history_tokens: int                 # H_B = H + U（P 边界已有上下文）
     working_bytes_by_tp_rank: tuple     # i_P 实有的 P 末工作副本逐 rank 字节
-    base_bytes_by_tp_rank: tuple        # 源端仍持有的基础区间逐 rank 字节
     decode_steps: int                   # n̂_B（剩余 decode 前向步数估计）
-    # 源端基础区间 token 数（增量型 = H；完整型 = H_B——固定 tile 与
-    # 暂存预约的 D09 同源判据）。
-    base_tokens: int = 0
-    # 边界 tile 对齐基准（每 rank 每 token 全层 KV 字节；D09 同源）。
+    # decode 增长计价的每 rank 每 token 全层 KV 字节基准。
     kv_token_bytes: Optional[int] = None
     # D12（v2.0 式(21) 符号表）：边界快照中的**逻辑 home ω_B**——只作
     # merge 目标确定性平局首位，不等于数据所在地（物理基础驻留实例
-    # ``home_instance`` 仍是适用性/远读/合并计价端点，D-BI：二者可不同）。
+    # ``home_instance`` 仍是适用性/合并计价端点，D-BI：二者可不同）。
     # None（直接构造的夹具）= 退回 ``home_instance``（两位置退化保持
     # 既有"同量留原 home"平局）。
     logic_home_instance: Optional[int] = None
     # 真实 TP head 分片的每 token、全层字节基准。标量
-    # ``kv_token_bytes`` 继续承担 tile/增长的兼容语义；生产边界必须
+    # ``kv_token_bytes`` 继续承担增长计价的兼容语义；生产边界必须
     # 同时携带此向量，不能拿 rank 0 的基准整除所有物理 shard。
     kv_token_bytes_by_tp_rank: Optional[tuple] = None
-    # 混合 remote-read 工作副本的真实矩形（S/I）。矩形字节是账本真值，
-    # token/layer 区间是同一物理来源的身份元数据；存在时优先于从总量
-    # 反推一个虚假的连续 token 区间。
-    working_intervals: tuple = ()
-
-    def is_increment_layout(self) -> bool:
-        """增量型边界布局判据（P = remote-read；单一判据点）。"""
-        return self.p_action == ACTION_REMOTE
 
     def working_context_bytes(self) -> tuple:
-        """完整型 = 工作副本本身；增量型 = 增量 + 源端基础区间
-        （H_B 的全部字节位置——merge 与空间计价的目标总量）。"""
+        """完整型布局 = 工作副本本身（H_B 的全部字节位置——merge 与
+        空间计价的目标总量；增量型叠加分支已随远读退役删除）。"""
         working = self.working_bytes_by_tp_rank
-        base = self.base_bytes_by_tp_rank
-        if self.is_increment_layout() and len(working) != len(base):
-            raise JointCostError(
-                "working/base byte vectors must have equal TP width")
-        if (not self.is_increment_layout() and base
-                and len(base) != len(working)):
-            raise JointCostError(
-                "complete boundary base vector must be empty or match "
-                "the working TP width")
-        values_to_check = (("working_bytes_by_tp_rank", working),)
-        if base:
-            values_to_check += (("base_bytes_by_tp_rank", base),)
-        for name, values in values_to_check:
-            for index, value in enumerate(values):
-                if type(value) is not int or value < 0:
-                    raise JointCostError(
-                        f"{name}[{index}] must be a non-negative integer")
-        if self.is_increment_layout():
-            return tuple(
-                working + base for working, base in zip(
-                    working, base))
+        for index, value in enumerate(working):
+            if type(value) is not int or value < 0:
+                raise JointCostError(
+                    f"working_bytes_by_tp_rank[{index}] must be a "
+                    "non-negative integer")
         return tuple(working)
 
 
@@ -1702,19 +1609,10 @@ class ActionCostBreakdown:
     history_prep_ns: int
     eviction_wait_ns: int
     compute_ns: int
-    remote_read_ns: int
     merge_ns: int
     contention_divisor: int
     hops: int
     notes: tuple = ()
-    # credit 形态拆分披露（§4.3.1）：首 credit 块暴露时延 + 其余读流的
-    # 纯流送段——合并流（read_passes 全程、时延单计）的全局拆分口径，
-    # 日志兼容位；非 remote 动作保持缺省 0（remote_read_ns 恒为全流总
-    # 时延口径）。分阶段 prefill/decode 腿量（规格书 §5）不经本冻结
-    # schema，走 notes 四键披露（remote_read_prefill_ns / remote_read_
-    # decode_ns / suffix_restore_ns / prefill_pipeline_overlap_ns）。
-    remote_read_first_credit_ns: int = 0
-    remote_read_stream_ns: int = 0
     # ---- D17 schema 扩展（公式版本 / 决策阶段 / 两阶段配对 / 预测
     # 里程碑 / 布局与义务 / 分阶段字节空间 / 近似状态）----
     # 公式/语义版本（joint_config.MODEL_SEMANTICS_VERSION 同源常量；
@@ -1760,12 +1658,8 @@ class ActionCostBreakdown:
     # 分阶段峰值空间（D11 PhaseFootprint 同源：prepare/prefill/decode/
     # merge 四阶段 × 逐 rank 新增峰值字节——式 19/20）。
     phase_space_bytes: tuple = ()
-    # 缓冲峰值：remote 双缓冲暂存的逐 rank 峰值字节总量（非 remote
-    # 候选恒 0；与 R1' 暂存预约同源裁决点）。
-    staging_buffer_peak_bytes: int = 0
     # 近似状态结构化标志（canonical 串；与 notes 文本注记同源派生）：
-    # capacity_wait_uncertain（深缺口活跃排空近似）/ next_token_single_
-    # step_service（credit 腿候选的单步里程碑口径）等。
+    # capacity_wait_uncertain（深缺口活跃排空近似）等。
     approximations: tuple = ()
     # ---- §5.1/§5.6/§5.5 交付面（2026-09-30 修复，三估价入口统一填充）----
     # 候选前推复杂度披露（§5.6 "分别披露快照/索引规模、闭包工作与资源
@@ -1789,13 +1683,7 @@ class ActionCostBreakdown:
 
 @dataclass(frozen=True)
 class ActionCandidate:
-    """一个 (instance, action) 候选的完整评估结果。
-
-    W10 hybrid 身份：``action="hybrid"`` 的候选以 ``copy_subset``（frozenset
-    持久 copy 来源 L）补全身份 ``(instance, hybrid, L)``——端点 L=∅/L=S
-    与纯 remote-read/copy 去重（复用纯动作候选，不重复计价）；缺省空
-    frozenset = 既有四动作构造零漂移。
-    """
+    """一个 (instance, action) 候选的完整评估结果。"""
 
     instance_index: int
     action: str
@@ -1803,16 +1691,13 @@ class ActionCandidate:
     inapplicable_reason: Optional[str]
     cost_ns: Optional[int]
     breakdown: Optional[ActionCostBreakdown] = None
-    # D18（v2.0 §2.4）：原地继续标记——x0 归并到四动作中对应的
-    # (i_P, action) 记录（P ∈ {stay,copy,recompute} → stay@i_P；
-    # P = remote-read → remote-read@i_P），**不作第五种动作**。
+    # D18（v2.0 §2.4）：原地继续标记——x0 归并到三动作中对应的
+    # (i_P, action) 记录（P 动作的默认延续恒 stay@i_P），
+    # **不作第四种动作**。
     # 初始阶段恒 False（初始无继续语义）；D 边界候选由
     # ``estimate_D_remaining`` 置位。平局键据此实现式(1c)：
     # (cost, 非继续标记, instance_index, action_order)。
     is_continuation: bool = False
-    # W10：hybrid 候选的持久 copy 来源子集（其余四动作恒空——身份字
-    # 段缺省零漂移；接续语义不受影响——接续仍是四动作之一）。
-    copy_subset: frozenset = frozenset()
     # Frozen per-candidate material retained only through the current
     # arbitration so E0 can re-run the same typed graph with effective K=1.
     # These fields are intentionally excluded from repr/equality and are not
@@ -1823,14 +1708,9 @@ class ActionCandidate:
     projection_precision: str = "configured"
 
     def order_key(self) -> tuple:
-        # W10：hybrid 平局键追加子集字典序（确定性）；纯四动作键不变
-        # ——纯候选间 (instance, priority) 恒不并列（同实例同动作唯一），
-        # 追加分量对既有比较零漂移。
-        base = (self.instance_index, _ACTION_PRIORITY.get(
+        # 候选间 (instance, priority) 恒不并列（同实例同动作唯一）。
+        return (self.instance_index, _ACTION_PRIORITY.get(
             self.action, len(ACTION_ORDER)))
-        if self.action == "hybrid":
-            return base + (tuple(sorted(self.copy_subset)),)
-        return base
 
     def boundary_order_key(self) -> tuple:
         """D 边界平局键（式 1c，v2.0 §2.5）：成本并列时**非继续标记**
@@ -1906,11 +1786,6 @@ def _approximation_flags(notes: Sequence[str]) -> tuple:
     if any(str(note).endswith("capacity_wait_uncertain") for note in notes):
         flags.append("capacity_wait_uncertain")
     return tuple(flags)
-
-
-#: D17：credit 腿候选的 ``predicted_next_token_done`` 口径标志（单步
-#: 服务基，不含 tile 供给门——供给门整体计入腿闭式 service_done）。
-APPROX_NEXT_TOKEN_SINGLE_STEP = "next_token_single_step_service"
 
 
 def _projection_delivery_stats(
@@ -2050,9 +1925,8 @@ def project_end_state(
     **轮末有限位置摘要**（至多三位置：最初 home、P 实例、D 实例）。
 
     * 权威投影：``replica_id ∈ migrated_interval_ids`` 的区间权威转移
-      到 ``decode_instance``（候选先行状态准备的一次性迁移——增量型
-      切换的 U、完整型 copy 的 context；基础区间 role=base 不随迁，
-      权威留在源端照旧远读），其余区间权威按 ``holder_instance``。
+      到 ``decode_instance``（候选先行状态准备的一次性迁移——copy 的
+      context），其余区间权威按 ``holder_instance``。
     * 唯一内容去重：只有 ``authority=True`` 的权威区间计入 V_s 与唯一
       内容并集；交接重复副本零贡献（"重复副本不增加 V"）。两个权威区间
       的初等单元格（token × layer 矩形；退化层域 (0, 0) = 全层/未披露，
@@ -2072,12 +1946,13 @@ def project_end_state(
     migrated = frozenset(migrated_interval_ids)
 
     def _layer_domains_overlap(first, second) -> bool:
-        # 权威唯一性按**初等单元格**（token × layer 矩形）裁决：D19 的
-        # 混合形态 working 矩形（后缀 S [0,b)×[p,L) @ i_P）与源端基础
-        # 区间（[0,b)×[0,p) @ home）token 域重合但层域互补——是合法布局，
-        # 不是同一内容双权威。退化层域 (0, 0) = 全层/未披露（旧夹具与
-        # growth/p_merge 区间的披露语义）：保守按与任意层域相交处理，
-        # 旧口径（纯 token 交叠即违例）在该形态下逐位保持。
+        # 权威唯一性按**初等单元格**（token × layer 矩形）裁决：token
+        # 域重合但层域互补的两个权威区间是合法布局（该层域互补判定
+        # 原服务于 D19 混合形态，混合形态已随远读退役，判定本身保留
+        # 为通用布局不变量检查），不是同一内容双权威。退化层域
+        # (0, 0) = 全层/未披露（旧夹具与 growth/p_merge 区间的披露语
+        # 义）：保守按与任意层域相交处理，旧口径（纯 token 交叠即违
+        # 例）在该形态下逐位保持。
         if (first[0], first[1]) == (0, 0) or (second[0], second[1]) == (0, 0):
             return True
         return first[0] < second[1] and second[0] < first[1]
@@ -2315,7 +2190,7 @@ def _shard_endpoint_divisors(
     按独占带宽计。HbmPortFlowRegistry（C2，WL/joint/hbm_port_flow_
     registry.py）注入后按 ``divisor(port_rank)`` 取值：u_home = 源 rank
     端口的 u_port、u_exec = 目标 rank 端口的 u_port（F4 口径：活跃
-    decode 消费流 + 在册传输/远读流；**不含候选自身 +1**——消费方
+    decode 消费流 + 在册传输流；**不含候选自身 +1**——消费方
     ``_shard_leg_ns`` 显式加，与 LinkFlowRegistry 的 self_overlap 分离
     口径一致）。
     """
@@ -2346,7 +2221,7 @@ def _shard_leg_ns(
     shard_bytes: int,
     kind: str,
 ) -> int:
-    """单 shard 三腿（read/copy/merge/staging 均为三腿）的最大腿时，
+    """单 shard 三腿（copy/merge 均为三腿）的最大腿时，
     向上取整（无 startup/逐跳时延；F1 冻结公式 + D17 取整口径）。
 
     D17（v2.0 §18/D17）：腿服务时间 = ⌈max(腿)⌉——需要等待的服务不
@@ -2364,7 +2239,7 @@ def _shard_leg_ns(
         # 源端 HBM 读腿：local_hbm_bytes_per_ns 正式消费（E12）。
         shard_bytes / (rates.local_hbm_bytes_per_ns / (u_home + 1)),
     )
-    # 目标端 HBM 写腿（四 kind 全量在——D05，v2.0 C02/§15.2）：合并
+    # 目标端 HBM 写腿（copy/merge 全量在——D05，v2.0 C02/§15.2）：合并
     # 传输与 copy 同式支付源读 + 正确方向 NoC + 目标写（式 22"每次
     # payload 仍包含源 HBM 读、正确方向 NoC、目标 HBM 写"——执行侧
     # noc_migrate 双端点登记本就恒有 merge 落点写，sh30_online_
@@ -2373,14 +2248,9 @@ def _shard_leg_ns(
     # = 路径末端 rank（正反向各自方向的 path[-1]，K5 已按方向独立取
     # 路线）；容量充足不令该腿消失——落点空间准备（能否写下）是另一
     # 前驱，仍在调用方 _space_ready_ns_estimate 单列计价，与本写
-    # 带宽腿正交。"staging" 为 C14/D6 条件项 STAGING_WRITE 复活预留
-    # 的接口位，未触发前无消费者；"read" 为 A4' 补价 rider（PROVENANCE
-    # §20.1，C14 G1 裁定 (a)，2026-09-22）——执行侧 remote-read 每
-    # credit 块到达实计 COMM_WRITE（N-way 严格均分），计价忠实于执行
-    # 增同式写腿（u_exec 自 hbm_port_registry；read_passes 倍乘已在
-    # 调用方字节基数内——F14 无留存暂存 ⇒ 每遍重扫的块真实再到达、
-    # 再写一次）。
-    if kind in ("read", "copy", "staging", "merge"):
+    # 带宽腿正交。（远读专属的 "read" 补价分支与无消费者的 "staging"
+    # 预留接口位已随 2026-10-14 远读退役删除。）
+    if kind in ("copy", "merge"):
         legs = legs + (
             shard_bytes / (rates.local_hbm_bytes_per_ns / (u_exec + 1)),)
     return math.ceil(max(legs))
@@ -2531,7 +2401,7 @@ def _transfer_ns_shards(
     paths_by_rank: Sequence[Sequence[Sequence[int]]],
     bytes_by_rank: Sequence[int],
     include_self: bool,
-    kind: str,                        # "read" | "copy" | "merge" | "staging"
+    kind: str,                        # "copy" | "merge"
     startup_ns: int = 0,
     noc_share: Optional["CandidatePathNocShare"] = None,
 ) -> int:
@@ -2564,7 +2434,7 @@ def _transfer_ns_shards(
     ``int(bytes/rate)`` 向下截断废除）；零字节 shard 腿恒 0（无流即无
     服务时间，严格为 0），在场 shard 的启动固定成本照 F1 契约保留。
     """
-    if kind not in ("read", "copy", "merge", "staging"):
+    if kind not in ("copy", "merge"):
         raise JointCostError(f"unknown transfer kind {kind!r}")
     if len(paths_by_rank) != len(bytes_by_rank):
         raise JointCostError(
@@ -2607,12 +2477,12 @@ def _shard_stream_ns_shards(
     kind: str,
     noc_share: Optional["CandidatePathNocShare"] = None,
 ) -> int:
-    """逐 shard 三腿 max 的纯流送段（无 startup/逐跳时延）——credit
-    其余读流段（remaining_stream_ns）口径：与 ``_transfer_ns_shards``
-    同腿源同除数（D13：每 shard 路径瓶颈份额），仅剥离首块启动时延
-    （§4.3.1 拆分纪律）；D17 腿服务时间向上取整同源。noc_share 复用
-    语义同 ``_transfer_ns_shards``。"""
-    if kind not in ("read", "copy", "merge", "staging"):
+    """逐 shard 三腿 max 的纯流送段（无 startup/逐跳时延）：与
+    ``_transfer_ns_shards`` 同腿源同除数（D13：每 shard 路径瓶颈份额），
+    仅剥离首块启动时延；D17 腿服务时间向上取整同源。noc_share 复用
+    语义同 ``_transfer_ns_shards``。（原消费方 credit 其余读流段已随
+    远读退役删除；本原语按共享设施保留。）"""
+    if kind not in ("copy", "merge"):
         raise JointCostError(f"unknown transfer kind {kind!r}")
     if len(paths_by_rank) != len(bytes_by_rank):
         raise JointCostError(
@@ -2629,146 +2499,6 @@ def _shard_stream_ns_shards(
             shard_paths, shard_bytes, kind)
          for shard_paths, shard_bytes in zip(paths_by_rank, bytes_by_rank)),
         default=0)
-
-
-# --------------------------------------------------------------- D09 双缓冲闭式 --
-
-
-def remote_read_double_buffer_ns(
-    *,
-    tile_x_ns: int,
-    tile_c_ns: int,
-    full_tiles: int,
-    tail_x_ns: int = 0,
-    tail_c_ns: int = 0,
-    proj_ns: int = 0,
-    start_ns: int = 0,
-) -> int:
-    """remote 读流的有限双缓冲闭式（D09，v2.0 式(14)/(15)/附录 A.1）。
-
-    协议（§12.1/§12.2，与执行侧发射拓扑同规则）：每 rank 两块真实暂存；
-    同一时刻最多一块传入、一块消费；**首块发射约束** = 块 2 要到块 1
-    到达（A = max(P, S+x)）才发出、块 j ≥ 3 要到块 j-2 消费后才发出
-    （与构图器"块 t 生产锚定消费块 t-2 的体块点"同形态）。
-
-    ``full_tiles`` m = 完整 tile 数（每 tile 传输 ``tile_x_ns``、消费
-    ``tile_c_ns``）；尾块（不足一个完整 tile 的余量）以
-    ``tail_x_ns``/``tail_c_ns`` 显式给出（恰整除时两者恒 0，不生成零
-    字节尾事务）；``proj_ns`` = P（可与首块传输重叠的投影/前置计算）、
-    ``start_ns`` = S（流启动就绪时刻）。按 A.1：
-
-    - m = 0 且有尾块：max(P, S + x_t) + c_t；
-    - m = 0 且无尾块：0（n=0 不产生远读）；
-    - 无尾块：F = max(P, S+x) + c + (m-1)·max(x, c)（式 15；m=1 退化
-      为 max(P,S+x)+c）；
-    - 有尾块（m ≥ 1）：先按完整块闭式得 F_m，再显式应用一次式(14)：
-      T_m = A+(m-1)x（x≥c）/ A+(m-2)c+x（x<c）、F_{m-1} = A+c+(m-2)z
-      （z=max(x,c)），F_tail = max(max(T_m, F_{m-1}) + x_t, F_m) + c_t；
-      m = 1 时尾块传输从 A 开始（F_tail = max(A+x_t, A+c) + c_t）。
-
-    只对冻结服务时间与上述双缓冲协议精确（§12.3 披露口径）；仅用于
-    解释依赖与单测对照的逐块递推见 ``_double_buffer_recurrence_ns``。"""
-    if full_tiles < 0 or tile_x_ns < 0 or tile_c_ns < 0:
-        raise JointCostError("double-buffer inputs must be non-negative")
-    if full_tiles == 0:
-        if tail_x_ns or tail_c_ns:
-            # A.1：没有完整块、只有尾块 → max(P, S + x_t) + c_t。
-            return int(max(proj_ns, start_ns + tail_x_ns) + tail_c_ns)
-        return 0
-    begin = max(proj_ns, start_ns + tile_x_ns)
-    finish = begin + tile_c_ns + (full_tiles - 1) * max(tile_x_ns, tile_c_ns)
-    if not (tail_x_ns or tail_c_ns):
-        return int(finish)
-    if full_tiles == 1:
-        # A.1：m=1 时尾块传输从 A 开始（第二缓冲空闲）。
-        return int(max(begin + tail_x_ns, finish) + tail_c_ns)
-    if tile_x_ns >= tile_c_ns:
-        last_transfer = begin + (full_tiles - 1) * tile_x_ns
-    else:
-        last_transfer = begin + (full_tiles - 2) * tile_c_ns + tile_x_ns
-    prev_finish = begin + tile_c_ns + (full_tiles - 2) * max(
-        tile_x_ns, tile_c_ns)
-    return int(max(max(last_transfer, prev_finish) + tail_x_ns, finish)
-               + tail_c_ns)
-
-
-def _double_buffer_recurrence_ns(
-    *, tile_x_ns: int, tile_c_ns: int, tile_bytes: int, stream_bytes: int,
-    proj_ns: int = 0, start_ns: int = 0,
-) -> int:
-    """逐块递推参照实现（式 14 的直译；单测对照闭式用，生产预测器
-    不逐块生成记录——§12.2 纪律）。
-
-    tile 切分 = 连续字节流：``stream_bytes`` 按 ``tile_bytes`` 顺次切
-    块，末尾不足一块为尾块（恰整除无尾事务）；完整块服务时间 =
-    ``tile_x_ns``/``tile_c_ns``，尾块按字节比例缩放（启动时延含于 x，
-    按同比例近似）。"""
-    if stream_bytes <= 0:
-        return 0
-    if tile_bytes <= 0:
-        raise JointCostError("tile bytes must be positive")
-    full, tail = divmod(stream_bytes, tile_bytes)
-    transfers = []
-    consumptions = []
-    for _sub in range(full):
-        transfers.append(float(tile_x_ns))
-        consumptions.append(float(tile_c_ns))
-    if tail:
-        fraction = tail / tile_bytes
-        transfers.append(tile_x_ns * fraction)
-        consumptions.append(tile_c_ns * fraction)
-    # 式(14)：T_1 = S + x_1；A_1 = max(P, T_1)；F_1 = A_1 + c_1；
-    # T_2 = A_1 + x_2；F_j = max(T_j, F_{j-1}) + c_j；
-    # T_j = max(T_{j-1}, F_{j-2}) + x_j (j ≥ 3)。
-    # (2026-10-01 审查修复) 块 j ≥ 3 的发射门控必须用 F_{j-2}（消费完
-    # 成）而非 T_{j-2}（传输完成）——D09 协议：块 j 要到块 j-2 消费后才
-    # 发出（remote_read_double_buffer_ns docstring 同口径）。旧实现追踪
-    # T_{j-2} 门控（T ≤ F），允许更早发射，异构块序下完成时刻向下少
-    # 报（等大整块+比例尾块的两形态与闭式恒同值，故既有对拍全绿）。
-    f_prev2 = None  # F_{j-2}
-    t_prev = start_ns + transfers[0]  # T_1
-    a_1 = max(proj_ns, t_prev)
-    f_prev = a_1 + consumptions[0]  # F_1
-    for j in range(1, len(transfers)):
-        if j == 1:
-            t_j = a_1 + transfers[1]
-        else:
-            t_j = max(t_prev, f_prev2) + transfers[j]
-        f_j = max(t_j, f_prev) + consumptions[j]
-        f_prev2, t_prev, f_prev = f_prev, t_j, f_j
-    return int(f_prev)
-
-
-def _double_buffer_variable_ns(
-    *, transfers_ns: Sequence[float], consumptions_ns: Sequence[float],
-    proj_ns: int = 0, start_ns: int = 0,
-) -> int:
-    """D09 recurrence for per-block integer compute shares.
-
-    The closed form remains the fast path for equal tiles.  Remainder-aware
-    byte shares can differ by one nanosecond, so this bounded block recurrence
-    keeps their exact conservation instead of truncating every tile to zero.
-    """
-    if len(transfers_ns) != len(consumptions_ns):
-        raise JointCostError("double-buffer block vectors must align")
-    if not transfers_ns:
-        return 0
-    if int(proj_ns) < 0 or int(start_ns) < 0:
-        raise JointCostError("double-buffer start/proj must be non-negative")
-    if any(float(value) < 0 for value in transfers_ns + consumptions_ns):
-        raise JointCostError("double-buffer block times must be non-negative")
-    t_prev = float(start_ns) + float(transfers_ns[0])
-    a_1 = max(float(proj_ns), t_prev)
-    f_prev = a_1 + float(consumptions_ns[0])
-    f_prev2: Optional[float] = None
-    for index in range(1, len(transfers_ns)):
-        if index == 1:
-            t_now = a_1 + float(transfers_ns[index])
-        else:
-            t_now = max(t_prev, float(f_prev2)) + float(transfers_ns[index])
-        f_now = max(t_now, f_prev) + float(consumptions_ns[index])
-        f_prev2, t_prev, f_prev = f_prev, t_now, f_now
-    return int(math.ceil(f_prev))
 
 
 # ------------------------------------- D02 逐层就绪递推内核（纯算术） --
@@ -2790,21 +2520,6 @@ def _split_ns_by_layer(total_ns: int, layer_count: int) -> tuple[int, ...]:
     return tuple(
         base + (1 if index < remainder else 0)
         for index in range(int(layer_count)))
-
-
-def _byte_share_ns(compute_ns: int, byte_count: int, stream_total: int) -> int:
-    """按流字节份额计算单个精确份额（向下取整的兼容接口）。
-
-    Callers that split one compute total across several tiles must use
-    ``_byte_share_vector`` so the discarded remainders are assigned to stable
-    tiles instead of silently deleting service (the old scalar call yielded
-    ``[0, 0, ...]`` for a non-zero compute total smaller than one tile).
-    """
-    if (type(compute_ns) is not int or compute_ns < 0
-            or type(byte_count) is not int or byte_count < 0
-            or type(stream_total) is not int or stream_total <= 0):
-        raise JointCostError("invalid scalar byte share inputs")
-    return (compute_ns * byte_count) // stream_total
 
 
 def _byte_share_vector(
@@ -2920,87 +2635,6 @@ def estimate_first_forward(
     return int(frontier)
 
 
-def estimate_repeat_segment(
-    *,
-    steps: int,
-    compute_ns: int,
-    stream_bytes_by_rank: Sequence[int] = (),
-    tile_bytes: int = 0,
-    supply_ns_by_rank: Sequence[int] = (),
-    tail_supply_ns_by_rank: Sequence[int] = (),
-    start_ns: int = 0,
-    proj_ns: int = 0,
-) -> int:
-    """重复段（decode n̂ 步 / 多遍读流段）的有界折叠（D02；纯算术）。
-
-    **适用前提（W3/v5-projection 登记）**：正式 cost 路径已改走事件
-    前推（dcstream 逐源 tile 双缓冲腿族 + buffer 门事件）；本函数降为
-    **审计/参照算子**（`_remote_double_buffer_leg_ns` 等闭式披露面与
-    D09 手算锚复用），截断条件 = 调用方传入的供给时刻不随候选事件
-    重算。
-
-    每步 = 一份数据供给（tile 事务切块，逐 rank 双缓冲闭式 式 15/附录
-    A.1）+ 一份计算服务；折叠循环次数 = rank 数（有界），**不随步数
-    增长**（D08 K=8 折叠之前的有界性纪律）。供给/尾块传输服务由调用
-    方经 ``_transfer_ns_shards`` 基元求值后传入（本函数不查注册表/
-    路由——纯算术边界）。零流向量（本地即时供给）才退化为纯计算链
-    ``max(proj, start) + compute``（其中 steps==0 时计算分量也为零，
-    与旧腿零遍契约一致）；流非零时本函数不因 steps==0 归零——steps
-    ==0 且流非零按给定流字节照常返回双缓冲流送时长（"零遍 ⇒ 零段"
-    由调用方以零流字节表达，如 ``*_leg_ns`` 的 ``leg_passes`` 倍乘）。
-    """
-    if int(steps) < 0 or int(compute_ns) < 0:
-        raise JointCostError("repeat segment inputs must be non-negative")
-    if int(start_ns) < 0 or int(proj_ns) < 0:
-        raise JointCostError("repeat segment start/proj must be >= 0")
-    if stream_bytes_by_rank:
-        if int(tile_bytes) <= 0:
-            raise JointCostError("repeat segment needs positive tile bytes")
-        if (len(supply_ns_by_rank) != len(stream_bytes_by_rank)
-                or len(tail_supply_ns_by_rank) != len(stream_bytes_by_rank)):
-            raise JointCostError(
-                "repeat segment vectors must align by TP rank")
-    stream_total = sum(int(value) for value in stream_bytes_by_rank)
-    if stream_total <= 0:
-        return int(max(int(proj_ns), int(start_ns))) + (
-            int(compute_ns) if int(steps) > 0 else 0)
-    block_bytes_by_rank = []
-    all_block_bytes = []
-    for rank_stream in stream_bytes_by_rank:
-        rank_stream = int(rank_stream)
-        if rank_stream <= 0:
-            block_bytes_by_rank.append(())
-            continue
-        full_tiles, tail_bytes = divmod(rank_stream, int(tile_bytes))
-        blocks = [int(tile_bytes)] * full_tiles
-        if tail_bytes:
-            blocks.append(int(tail_bytes))
-        block_bytes_by_rank.append(tuple(blocks))
-        all_block_bytes.extend(blocks)
-    block_shares = _byte_share_vector(
-        int(compute_ns), tuple(all_block_bytes), stream_total,
-        require_stream_total=True)
-    share_offset = 0
-    finish = 0
-    for rank_index, rank_stream in enumerate(stream_bytes_by_rank):
-        rank_stream = int(rank_stream)
-        if rank_stream <= 0:
-            continue
-        blocks = block_bytes_by_rank[rank_index]
-        shares = block_shares[share_offset:share_offset + len(blocks)]
-        share_offset += len(blocks)
-        full_tiles, tail_bytes = divmod(rank_stream, int(tile_bytes))
-        transfers = [float(supply_ns_by_rank[rank_index])] * full_tiles
-        consumes = [float(value) for value in shares[:full_tiles]]
-        if tail_bytes:
-            transfers.append(float(tail_supply_ns_by_rank[rank_index]))
-            consumes.append(float(shares[-1]))
-        finish = max(finish, _double_buffer_variable_ns(
-            transfers_ns=tuple(transfers), consumptions_ns=tuple(consumes),
-            start_ns=int(start_ns), proj_ns=int(proj_ns)))
-    return int(finish)
-
-
 #: D08（v2.0 §13.2）：重复段折叠的固定区段预算。K=8 是固定数值精度
 #: 预算，不是新机制/调优权重，不按哪个值让 joint 跑赢而调整（v2.0
 #: §13.2"本版生产规则冻结为 8"；K=4/8/16 比较属受控验证，不进生产）。
@@ -3103,49 +2737,6 @@ def decode_context_weighted_tokens(
     return steps * base_context + steps * (steps + 1) // 2
 
 
-def remote_read_tile_arrival_ns(
-    *,
-    index: int,
-    full_tiles: int,
-    tile_x_ns: int,
-    tail_x_ns: int = 0,
-    start_ns: int = 0,
-    proj_ns: int = 0,
-) -> int:
-    """读流第 ``index`` 个事务块（1 基；尾块 = full_tiles + 1）的到达
-    时刻 = 传输完成（D02 逐层就绪表的供给门；纯算术）。
-
-    与交付协议（首块发射约束 + 同 rank 通道逐笔串行——
-    ``_double_buffer_recurrence_ns`` 的 T 递推：T_1 = S+x、T_2 = A_1+x、
-    T_j = max(T_{j-1}, T_{j-2}) + x_j）逐位同源：等大整块下
-    T_j = begin + (j-1)·x（j ≥ 2，begin = max(P, S+x)）；尾块事务 =
-    T_m + x_tail（m ≥ 2）/ begin + x_tail（m = 1，A.1 第二缓冲空闲）/
-    S + x_tail（m = 0，首事务即尾块）。消费节拍 c 只进入闭式 F（消费
-    端），不进入到达（发射端通道串行——x < c 时 A.1 的 F 形态与到达
-    形态分用，单测钉）。
-    """
-    if int(index) <= 0 or int(full_tiles) < 0:
-        raise JointCostError("tile arrival index/full_tiles invalid")
-    if int(tile_x_ns) < 0 or int(tail_x_ns) < 0:
-        raise JointCostError("tile arrival transfer times must be >= 0")
-    if int(start_ns) < 0 or int(proj_ns) < 0:
-        raise JointCostError("tile arrival start/proj must be >= 0")
-    if int(full_tiles) == 0:
-        if int(index) != 1 or int(tail_x_ns) <= 0:
-            raise JointCostError("tile index beyond stream (no transaction)")
-        return int(start_ns) + int(tail_x_ns)
-    begin = max(int(proj_ns), int(start_ns) + int(tile_x_ns))
-    if int(index) <= int(full_tiles):
-        if int(index) == 1:
-            return int(start_ns) + int(tile_x_ns)
-        return begin + (int(index) - 1) * int(tile_x_ns)
-    if int(index) == int(full_tiles) + 1 and int(tail_x_ns) > 0:
-        if int(full_tiles) == 1:
-            return begin + int(tail_x_ns)
-        return begin + (int(full_tiles) - 1) * int(tile_x_ns) + int(tail_x_ns)
-    raise JointCostError("tile index beyond stream")
-
-
 # Keep this private planner in sync with face_scheduler's C13 planner.  The
 # cost model deliberately does not import the runtime scheduler (the latter
 # imports this module), but both sides use the same deterministic eight-layer
@@ -3238,34 +2829,12 @@ class JointCostModel:
     # 端点腿（home_read/exec_write）按 u_home/u_exec+1 计争用；None 时
     # 端点腿独占带宽（离线/单测口径，u_home=u_exec=0）。
     hbm_port_registry: object = None
-    # remote-read 字节 tile/缓冲配置（"auto" | 显式正整数字节字符串；
-    # joint_config 同源注入）。执行口径 = 有限字节双缓冲 tile 流唯一
-    # 机制（D09 2026-09-26，v2.0 §12；旧步数块大小 K 机制删除），计价
-    # = 双缓冲闭式（式 14/15，尾块 A.1）：tile 切块、首块发射约束、
-    # 启动/逐跳按事务块计入 x。D16 对齐面收口（§12.2"执行器与预测器
-    # 必须采用相同规则"）：闭式事务切块 tile = 执行协议 tile
-    # （remote_read_exec_tile_tokens 固定 tile 原样返回，与调度器切
-    # 片/暂存预约三方同源）；本键经 token 粒度向下对齐
-    # （resolve_remote_read_tile_tokens，<1 token fail-closed）作配置
-    # 基值。
-    remote_read_tile_bytes: str = REMOTE_READ_TILE_AUTO
-    # D09 tile 对齐基准：每 rank 一个 token 的全层 KV 字节（K+V；调度
-    # 器按模型/拓扑派生注入——与执行侧解析同源）。None = 直接构造的
-    # 测试夹具惰性派生（input/history 视图字节 ÷ token 数；仅在
-    # remote-read 腿实际计价时才需要，其它动作零漂移）。
-    remote_read_kv_token_bytes: Optional[int] = None
-    # 需求①（2026-09-17《部分层逐出kv管理改造分析方案》）：PARTIAL 基
-    # remote-read 适用面消融（JOINT_REMOTE_READ_PARTIAL，on|off 缺省
-    # on）。off 只把 PARTIAL 基的 remote-read 移出候选集（copy/recompute
-    # 照常参与比较）——与 remote_actions 能力开关同一消融模式，非旧
-    # 机制回归档（用户裁定④边界澄清）。
-    remote_read_partial: bool = True
     # M2（2026-09-26 消融矩阵前置）：动作掩码 JOINT_ALLOWED_ACTIONS 的
     # 已解析放行集（joint_config.allowed_action_set 同源注入；None=
     # 全集——直接构造的测试夹具零漂移）。掩码是**候选集上限不是强制**：
     # 只在 applicable_actions 尾部剔除命中动作（拒绝理由 "action
     # excluded by JOINT_ALLOWED_ACTIONS mask"），不改候选枚举形状与
-    # 平局序；与 remote_enabled 取交集（两者都拒才是真拒）。掩码剔除
+    # 平局序。掩码剔除
     # recompute 致零适用 ⇒ 上层（joint_scheduler）fail-closed。
     allowed_actions: object = None
     # C7（WP2，冻结交接接口——kwarg 名与 C8 联合冻结）：逐链路遥测实测
@@ -3402,7 +2971,7 @@ class JointCostModel:
         return tuple(range(self.instance_tp_size))
 
     def _hbm_background_divisor(self, rank: int) -> int:
-        """rank HBM 端口的在册他流计数（活跃 decode + 在册传输/远读，
+        """rank HBM 端口的在册他流计数（活跃 decode + 在册传输，
         不含候选——LoadsWorldSource 背景构造；u_port 同口径）。"""
         if self.hbm_port_registry is None:
             return 0
@@ -3888,23 +3457,12 @@ class JointCostModel:
         session: SessionKVView,
         request: RequestView,
         instance_index: int,
-        *,
-        remote_enabled: bool,
     ) -> tuple[tuple[bool, Optional[str]], ...]:
-        """四动作在 (session, instance) 的适用性（§13.1：某动作不适用
-        不等于删除该 instance，其余动作仍参与比较）。
+        """三动作在 (session, instance) 的适用性（§13.1：某动作不适用
+        不等于删除该 instance，其余动作仍参与比较）。remote-read 第四
+        项已随 2026-10-14 远读退役删除（其 LOCAL/PARTIAL 适用面与拒绝
+        理由族一并消亡）。
 
-        N1(a) 解除（2026-09-17《部分层逐出kv管理改造分析方案》需求①）：
-        remote-read 适用面从 LOCAL 基扩至 PARTIAL 基——混合形态 = 准入相
-        后缀 [p,L) 池恢复物化（热 KV，复用 copy 池腿原语/发射/前递补边/
-        空间准备）＋ decode 相前缀 [0,p) credit 读流＋增量驻留执行端；
-        LOCAL 基（p==L）语义逐字节不变（回归锚）。REMOTE 基仍拒（无主
-        session，裁定③走池恢复/重算就地转正）。适用面消融开关
-        ``JOINT_REMOTE_READ_PARTIAL=off`` 时 PARTIAL 基照旧不进候选
-        （拒绝理由 "remote-read for partial sessions disabled"）。
-        历史：N1 裁定 (a)（2026-09-14）当时的排除是"混合读流原语未建"
-        的实现边界而非理论禁令，本案收口（物化/计价锚点沿 R16 层区间
-        化纪律；单测 joint/test_joint_mechanisms.py 适用性表）。
         M2（2026-09-26 消融矩阵前置）：``allowed_actions`` 动作掩码在
         尾部 return 前统一剔除（掩码是候选集上限不是强制；命中且原本
         可用 ⇒ "action excluded by JOINT_ALLOWED_ACTIONS mask"）。
@@ -3937,8 +3495,7 @@ class JointCostModel:
                 session.resident_instance == instance_index
                 and session.location in ("local_hbm", "partial_hbm_remote"))
             # W9（distributed 分裂布局）：resident=None 且 home=锚时，
-            # copy@锚 = 源目标同址退化（锚外来源区间到锚的多源 copy 属
-            # W10 hybrid source-subset 面）——不适用；consolidate 形态
+            # copy@锚 = 源目标同址退化——不适用；consolidate 形态
             # home==target 且 applicable 的唯一组合 = REMOTE/池基
             # （K5 就地转正，location=remote_memory），不受本条件影响。
             and not (
@@ -3948,33 +3505,11 @@ class JointCostModel:
         results.append((
             copy_ok,
             None if copy_ok else "no history to copy"))
-        # remote-read：基础历史驻留前缀在别的 instance（LOCAL 全层
-        # 单源读流；PARTIAL 混合形态——后缀准入相池恢复物化＋前缀
-        # [0,p) 读流，见 docstring），且 remote 能力开关开启。REMOTE
-        # 基（无主）仍拒；PARTIAL 受 JOINT_REMOTE_READ_PARTIAL 消融。
-        remote_ok = (
-            remote_enabled
-            and session.location in ("local_hbm", "partial_hbm_remote")
-            and (session.location == "local_hbm"
-                 or self.remote_read_partial)
-            and session.resident_instance is not None
-            and session.resident_instance != instance_index)
-        results.append((
-            remote_ok,
-            None if remote_ok else (
-                "remote actions disabled"
-                if not remote_enabled
-                else "remote-read for partial sessions disabled"
-                if session.location == "partial_hbm_remote"
-                and not self.remote_read_partial
-                else "no resident remote history"
-                if session.location != "local_hbm"
-                else "base resident at target instance")))
         # M2（2026-09-26 消融矩阵前置）：动作掩码过滤加在尾部 return
         # 之前——掩码命中且原本可用的动作统一改判
         # ``action excluded by JOINT_ALLOWED_ACTIONS mask``（原本就不可
-        # 用的保留更具体的物理/开关理由）。掩码是候选集上限不是强制：
-        # 不改四动作枚举形状（estimate_P_with_continuation/调度器循环不变），剔除
+        # 用的保留更具体的物理理由）。掩码是候选集上限不是强制：
+        # 不改三动作枚举形状（estimate_P_with_continuation/调度器循环不变），剔除
         # recompute 致零适用由上层 fail-closed。
         if self.allowed_actions is not None:
             results = [
@@ -3992,29 +3527,30 @@ class JointCostModel:
         request: RequestView,
         instance_index: int,
         action: str,
-        remote_enabled: bool,
         prep_frontier_ns: int = 0,
-        pipeline_identities=None,
     ) -> ActionCandidate:
         """P 阶段单候选代价（式 1a，D18 两阶段入口之一）——**W3 事件
         前推正式路径**（v5-projection 世代）。
 
         外观不变（签名/返回 ``ActionCandidate``/breakdown schema/loads
         键集——inv_w23 §6.5 六步接线）；内部 = ``action_work_graph.
-        build_p_candidate``（四动作 + 默认 D 延续 π0 参考接续 +
+        build_p_candidate``（三动作 + 默认 D 延续 π0 参考接续 +
         consolidate 结算的预测工作图）→ ``CandidateGraph.project_against``（native 投影）
         （事件前推至焦点 settle）→ ``cost = predicted_settle_done``
         （决策相对轴，t=0 = 决策时刻）。
 
-        世代变更（MODEL_SEMANTICS_VERSION v6-compact-window-20261005）：
+        世代变更（MODEL_SEMANTICS_VERSION v7-three-actions-20261014）：
 
-        * **Q 冻结退役**：``target_wait`` 只作计算门（首层计算腿
+        * **三动作化（2026-10-14）**：remote-read 第四动作及其计价/
+          审计面删除——枚举随 ``ACTION_ORDER`` 自动缩为三动作，远读
+          breakdown 键不再装配；
+        * **Q 冻结退役（v5）**：``target_wait`` 只作计算门（首层计算腿
           ready_at，式 13 F_0 = Q 的事件形态）+ 观测字段——不再是全预测
           期独立真值（§5.2）；
-        * **K=8 折叠退役**：decode 服务 = 逐步精确 Στ(z_k)（§5.3 不再
-          固定 8 段）；
-        * **冻结份额退役**：CandidateStageHbmShare 只作静态审计视图
-          ——端点腿实际份额 = HBM 资源活跃集随事件重算（§5.2/§9.1）。
+        * **K=8 折叠退役（v5）**：decode 服务 = 逐步精确 Στ(z_k)（§5.3
+          不再固定 8 段）；
+        * **冻结份额退役（v5）**：CandidateStageHbmShare 只作静态审计
+          视图——端点腿实际份额 = HBM 资源活跃集随事件重算（§5.2/§9.1）。
 
         审计口径（C5 冻结 schema 与 notes 面）保持与旧解析路径同源：
         传输审计值经保留原语（``_transfer_ns_shards`` 族）求值；预测里
@@ -4024,8 +3560,7 @@ class JointCostModel:
         applicability = dict(zip(
             ACTION_ORDER,
             self.applicable_actions(
-                session, request, instance_index,
-                remote_enabled=remote_enabled),
+                session, request, instance_index),
         ))
         ok, reason = applicability[action]
         if not ok:
@@ -4045,8 +3580,7 @@ class JointCostModel:
             instance_index=instance_index,
             action=action,
             prep_frontier_ns=prep_frontier_ns,
-            prediction_config=self._resolved_prediction_config(),
-            pipeline_identities=pipeline_identities)
+            prediction_config=self._resolved_prediction_config())
         _build_wall_ns = time.perf_counter_ns() - _build_t0
         _accounting = self._projection_accounting_or_default()
         _accounting["build_wall_ns_total"] += _build_wall_ns
@@ -4078,14 +3612,10 @@ class JointCostModel:
                 history_prep_ns=int(audits["history_prep_ns"]),
                 eviction_wait_ns=int(audits["eviction_wait_ns"]),
                 compute_ns=int(audits["compute_ns"]),
-                remote_read_ns=int(audits["remote_read_ns"]),
                 merge_ns=int(merge_span),
                 contention_divisor=int(audits["contention_divisor"]),
                 hops=int(audits["hops"]),
                 notes=audits[AUDIT_NOTES_KEY],
-                remote_read_first_credit_ns=int(
-                    audits["remote_read_first_credit_ns"]),
-                remote_read_stream_ns=int(audits["remote_read_stream_ns"]),
                 decision_stage="P",
                 decision_epoch=0,
                 prefill_instance=int(audits["prefill_instance"]),
@@ -4102,8 +3632,6 @@ class JointCostModel:
                 interval_layout=audits["interval_layout"],
                 inherited_obligation_ids=(),
                 phase_space_bytes=audits["phase_space_bytes"],
-                staging_buffer_peak_bytes=int(
-                    audits["staging_buffer_peak_bytes"]),
                 approximations=approximations,
                 projection_stats=projection_stats,
                 background_delays=background_delays,
@@ -4120,34 +3648,24 @@ class JointCostModel:
         self,
         boundary: PDBoundaryView,
         instance_index: int,
-        *,
-        remote_enabled: bool,
     ) -> tuple[tuple[bool, Optional[str]], ...]:
-        """D 边界四动作适用性（式 1b 遍历面；v2.0 §2.4：两阶段都枚举
+        """D 边界三动作适用性（式 1b 遍历面；v2.0 §2.4：两阶段都枚举
         全部实例的适用动作，不按容量/距离/边缘位置预过滤——本表只按
         **边界布局的物理语义**划面）。
 
         C4（2026-09-27，v2.0 §19.1 执行面接通）：完整动作面 = 逐目标 j
-        的区间缺失推导（``BoundaryKVLayout`` 单一判据源），四类形态
-        （recompute 静默重建、多源 remote-read、增量/第三目标 copy）
+        的区间缺失推导（``BoundaryKVLayout`` 单一判据源），
+        （recompute 静默重建、第三目标 copy）
         按物理语义可选、可计价、可执行——协议级禁选裁定废除（无开关）：
 
-        * **stay**：完整型（H_B 全量在 i_P）j == i_P 原地继续；增量型
-          任何 j 都不适用（基础区间在源端、增量在 i_P，H_B 不全在
-          任何单一实例——"history not resident at target"）。
+        * **stay**：（H_B 全量在 i_P）j == i_P 原地继续——P 末布局恒
+          完整型（增量型布局族已随远读退役删除，D6）。
         * **recompute**：物理上任意 j 恒有定义（已保存 token + 计算 +
           空间即重建，D10：历史基数 0）——与 P 入口 ``applicable_
           actions`` 的 recompute 恒适用同口径。
         * **copy**：j 缺少的基础区间非空（``missing_intervals_for``）
-          ——完整型 j≠i_P 补 H_B、增量型回 home 仅补 U、增量型@i_P
-          补 H（基材料化）、第三目标补 H+U（逐区间多腿）；j 已持有
+          ——j≠i_P 补 H_B、第三目标逐区间多腿；j 已持有
           全部区间时退化（"no history to copy"）。
-        * **remote-read**：remote 能力开启且 j 缺少的区间非空（式 18a
-          的 ``B^{B,off}``——目标缺少、仍由片上他源持有；增量型@i_P
-          = 继续远读、@第三目标 = 两真实来源逐区间读、完整型@j≠i_P =
-          读 i_P 的 H_B）。权威基础区间已驻留目标的组合排除
-          （"base resident at target instance"——增量型@home 的 D 准备
-          由 copy 仅补 U 承载，§6.5 状态枚举）。
         M2 动作掩码在尾部统一剔除（与 ``applicable_actions`` 同模板：
         掩码是候选集上限不是强制）。
         """
@@ -4159,31 +3677,13 @@ class JointCostModel:
         missing = layout.missing_intervals_for(instance_index)
         has_missing = any(interval.total_bytes() > 0
                           for interval in missing)
-        # remote-read 的动作身份 = 远读**权威基础区间**（式 18a 的
-        # B^{B,off）：目标已持有权威基础（context / base 区间）的组合
-        # 排除——增量型@home 的 D 准备由 copy 仅补 U 承载（§6.5 状态
-        # 枚举；与 P 入口"基础驻留执行端不适用 remote-read"同协议）。
-        base_interval = next(
-            (interval for interval in layout.intervals
-             if interval.role in (
-                 INTERVAL_ROLE_BASE, INTERVAL_ROLE_CONTEXT)
-             and interval.total_bytes() > 0),
-            None)
-        base_missing_at_target = (
-            base_interval is not None and base_interval in missing)
-        increment = boundary.is_increment_layout()
         at_p = instance_index == boundary.p_instance_index
-        stay_ok = (not increment) and at_p
+        stay_ok = at_p
         copy_ok = has_missing
-        remote_ok = (
-            remote_enabled and has_missing and base_missing_at_target)
         results = [
             (stay_ok, None if stay_ok else "history not resident at target"),
             (True, None),
             (copy_ok, None if copy_ok else "no history to copy"),
-            (remote_ok, None if remote_ok else (
-                "remote actions disabled" if not remote_enabled
-                else "base resident at target instance")),
         ]
         if self.allowed_actions is not None:
             results = [
@@ -4200,10 +3700,8 @@ class JointCostModel:
         boundary: PDBoundaryView,
         instance_index: int,
         action: str,
-        remote_enabled: bool,
         decision_epoch: int = 0,
         inherited_obligation_ids: Sequence[str] = (),
-        pipeline_identities=None,
     ) -> ActionCandidate:
         """D 边界单候选剩余代价（式 1b）——**W3 事件前推正式路径**
         （v5-projection 世代；外观与计费纪律同 legacy——已完成 P 不重
@@ -4222,7 +3720,7 @@ class JointCostModel:
         applicability = dict(zip(
             ACTION_ORDER,
             self.applicable_D_remaining_actions(
-                boundary, instance_index, remote_enabled=remote_enabled),
+                boundary, instance_index),
         ))
         ok, reason = applicability[action]
         if not ok:
@@ -4242,8 +3740,7 @@ class JointCostModel:
             action=action,
             inherited_obligation_ids=inherited_obligation_ids,
             obligation_resolver=self.obligation_resolver,
-            prediction_config=self._resolved_prediction_config(),
-            pipeline_identities=pipeline_identities)
+            prediction_config=self._resolved_prediction_config())
         _build_wall_ns = time.perf_counter_ns() - _build_t0
         _accounting = self._projection_accounting_or_default()
         _accounting["build_wall_ns_total"] += _build_wall_ns
@@ -4260,10 +3757,6 @@ class JointCostModel:
             list(_approximation_flags(notes))
             + list(graph.approximations)
             + list(result.approximations)))
-        if action == ACTION_REMOTE and any(
-                leg_id.startswith(f"{graph.work.work_id}#dcstream")
-                for leg_id in graph.service_leg_ids):
-            approximations.append(APPROX_NEXT_TOKEN_SINGLE_STEP)
         projection_stats, background_delays = _projection_delivery_stats(
             result, wall_ns=_projection_wall_ns,
             scenario_key=projection_world.forecast_scenario_key,
@@ -4281,7 +3774,6 @@ class JointCostModel:
                 history_prep_ns=int(audits["history_prep_ns"]),
                 eviction_wait_ns=int(audits["eviction_wait_ns"]),
                 compute_ns=int(audits["compute_ns"]),
-                remote_read_ns=int(audits["remote_read_ns"]),
                 merge_ns=int(merge_span),
                 contention_divisor=int(audits["contention_divisor"]),
                 hops=int(audits["hops"]),
@@ -4304,8 +3796,6 @@ class JointCostModel:
                 inherited_obligation_ids=tuple(
                     audits["inherited_obligation_ids"]),
                 phase_space_bytes=audits["phase_space_bytes"],
-                staging_buffer_peak_bytes=int(
-                    audits["staging_buffer_peak_bytes"]),
                 approximations=tuple(approximations),
                 projection_stats=projection_stats,
                 background_delays=background_delays,
@@ -4318,200 +3808,6 @@ class JointCostModel:
                 graph, "_native_projection_context", None),
         )
 
-    def hybrid_action_space_enabled(self) -> bool:
-        """W10：预测配置 action_space=source_subset_hybrid 才扩展候选面
-        （缺省 pure_four 不加混合候选——零漂移；选择器入口同一裁决）。"""
-        from joint.prediction_config import (
-            ACTION_SPACE_SOURCE_SUBSET_HYBRID,
-        )
-        return (self._resolved_prediction_config().action_space
-                == ACTION_SPACE_SOURCE_SUBSET_HYBRID)
-
-    def hybrid_support_status(self, *, boundary, instance_index):
-        """W10 子集预算门（选择器面消费；§7.5 超限显式不支持）。"""
-        from joint.action_work_graph import (
-            hybrid_support_status as _graph_status,
-        )
-        from joint.boundary_layout import BoundaryKVLayout
-        return _graph_status(
-            BoundaryKVLayout.from_boundary(boundary), int(instance_index),
-            self._resolved_prediction_config())
-
-    def enumerate_hybrid_subsets(self, *, boundary, instance_index):
-        """W10 全部 2^|S| 子集方案（端点标记去重；真子集字典序）。"""
-        from joint.action_work_graph import enumerate_source_subset_plans
-        from joint.boundary_layout import BoundaryKVLayout
-        return enumerate_source_subset_plans(
-            BoundaryKVLayout.from_boundary(boundary), int(instance_index))
-
-    def estimate_D_hybrid_remaining(
-        self,
-        *,
-        boundary: PDBoundaryView,
-        instance_index: int,
-        copy_subset: frozenset,
-        remote_enabled: bool,
-        decision_epoch: int = 0,
-        inherited_obligation_ids: Sequence[str] = (),
-        pipeline_identities=None,
-    ) -> ActionCandidate:
-        """D 边界 hybrid 候选（W10 §7.5/主文 §6.7 式 Ĉ_hybrid）。
-
-        主文 §10：``add_source_subset_plans_and_deduplicate`` 只在 D 阶段
-        加混合候选——本入口即其计价半；端点（L=∅/L=S）**不进本入口**
-        （选择面枚举真子集并去重回纯动作，端点混入 = 结构缺陷 fail-closed
-        由 ``build_d_candidate`` 承载）。图构造 = copy 腿（L）+ credit
-        读流（R=S∖L）组合既有两链；结算按 settlement_policy 照常
-        （distributed 组合合法——W9 已过 G-DIST）。
-
-        ``remote_enabled=False`` ⇒ 不适用（"remote actions disabled"——
-        hybrid 的 R 读流需要远读能力；不静默换别种混合形态）。
-        """
-        if not self.hybrid_action_space_enabled():
-            raise JointCostError(
-                "estimate_D_hybrid_remaining requires action_space="
-                "source_subset_hybrid (registered hybrid variant); "
-                "pure_four default never prices hybrid candidates")
-        if not remote_enabled:
-            return ActionCandidate(
-                instance_index=instance_index,
-                action="hybrid",
-                copy_subset=frozenset(copy_subset),
-                applicable=False,
-                inapplicable_reason="remote actions disabled",
-                cost_ns=None)
-        # 端点去重（§7.5）：L=∅ ≡ remote-read、L=S ≡ copy——纯动作候选
-        # 已完整参选，端点不重复计价（构造级端点图仅服务于 V10 等价
-        # 断言；选择器亦只加真子集）。
-        from joint.action_work_graph import effective_remote_sources
-        from joint.boundary_layout import BoundaryKVLayout
-        layout = BoundaryKVLayout.from_boundary(boundary)
-        if layout.terminated:
-            return ActionCandidate(
-                instance_index=instance_index,
-                action="hybrid",
-                copy_subset=frozenset(copy_subset),
-                applicable=False,
-                inapplicable_reason="boundary already terminated",
-                cost_ns=None)
-        sources = frozenset(effective_remote_sources(
-            layout, int(instance_index)))
-        subset = frozenset(int(s) for s in copy_subset)
-        if not subset or subset == sources:
-            return ActionCandidate(
-                instance_index=instance_index,
-                action="hybrid",
-                copy_subset=subset,
-                applicable=False,
-                inapplicable_reason=(
-                    "hybrid endpoint deduplicates to the pure action "
-                    "candidate (L=S equals copy, L=empty equals "
-                    "remote-read); endpoints are not re-priced"),
-                cost_ns=None)
-        # 执行面支持范围（预测/执行一致——不可执行形态显式判不适用，
-        # 不产生"已计价不可执行"的选择/执行失配；执行面 fail-closed 的
-        # 对偶）：可执行形态 = i_P ∈ L（U 迁 j——主文 §6.7 动机形态
-        # "copy 较小输入 KV＋远读大历史"）＋基础留源远读；"基础复制而
-        # 增量留源"（L 只含 home）超出单 span 工作副本 token 域模型
-        # （登记 W11）。
-        if int(boundary.p_instance_index) not in subset:
-            return ActionCandidate(
-                instance_index=instance_index,
-                action="hybrid",
-                copy_subset=subset,
-                applicable=False,
-                inapplicable_reason=(
-                    "hybrid shape not executable: copying the remote base "
-                    "while the increment stays remote exceeds the "
-                    "single-span working-copy token-domain model "
-                    "(registered W11)"),
-                cost_ns=None)
-        # 墙时分段(2026-10-05 埋点):候选图构建段;与 projection 段邻接
-        # 分开计量。
-        _build_t0 = time.perf_counter_ns()
-        graph = action_work_graph.build_d_candidate(
-            self,
-            boundary=boundary,
-            instance_index=instance_index,
-            action="hybrid",
-            copy_subset=frozenset(int(s) for s in copy_subset),
-            inherited_obligation_ids=inherited_obligation_ids,
-            obligation_resolver=self.obligation_resolver,
-            prediction_config=self._resolved_prediction_config(),
-            pipeline_identities=pipeline_identities)
-        _build_wall_ns = time.perf_counter_ns() - _build_t0
-        _accounting = self._projection_accounting_or_default()
-        _accounting["build_wall_ns_total"] += _build_wall_ns
-        _projection_t0 = time.perf_counter_ns()
-        projection_world = self._world_context()
-        result = self._project_graph(graph, world_context=projection_world)
-        _projection_wall_ns = time.perf_counter_ns() - _projection_t0
-        audits = graph.audits
-        settle_done = int(result.predicted_settle_done_ns)
-        service_done = int(result.predicted_service_done_ns)
-        merge_span = max(0, settle_done - service_done)
-        notes = audits[AUDIT_NOTES_KEY]
-        approximations = list(dict.fromkeys(
-            list(_approximation_flags(notes))
-            + list(graph.approximations)
-            + list(result.approximations)))
-        if any(leg_id.startswith(f"{graph.work.work_id}#dcstream")
-               for leg_id in graph.service_leg_ids):
-            approximations.append(APPROX_NEXT_TOKEN_SINGLE_STEP)
-        projection_stats, background_delays = _projection_delivery_stats(
-            result, wall_ns=_projection_wall_ns,
-            scenario_key=projection_world.forecast_scenario_key,
-            build_wall_ns=_build_wall_ns,
-            build_graph_legs=len(graph.work.legs))
-        return ActionCandidate(
-            instance_index=instance_index,
-            action="hybrid",
-            copy_subset=frozenset(copy_subset),
-            applicable=True,
-            inapplicable_reason=None,
-            cost_ns=settle_done,
-            is_continuation=False,
-            breakdown=ActionCostBreakdown(
-                target_wait_ns=int(audits["target_wait_ns"]),
-                history_prep_ns=int(audits["history_prep_ns"]),
-                eviction_wait_ns=int(audits["eviction_wait_ns"]),
-                compute_ns=int(audits["compute_ns"]),
-                remote_read_ns=int(audits["remote_read_ns"]),
-                merge_ns=int(merge_span),
-                contention_divisor=int(audits["contention_divisor"]),
-                hops=int(audits["hops"]),
-                notes=notes,
-                decision_stage="D",
-                decision_epoch=int(decision_epoch),
-                prefill_instance=int(audits["prefill_instance"]),
-                decode_instance=int(audits["decode_instance"]),
-                prefill_action=audits["prefill_action"],
-                decode_action="hybrid",
-                is_continuation=False,
-                estimated_remaining_decode_steps=int(
-                    audits["estimated_remaining_decode_steps"]),
-                predicted_next_token_done=int(
-                    audits["move_done_ns"])
-                + int(audits["single_step_service_ns"]),
-                predicted_service_done=service_done,
-                predicted_merge_done=settle_done,
-                interval_layout=audits["interval_layout"],
-                inherited_obligation_ids=tuple(
-                    audits["inherited_obligation_ids"]),
-                phase_space_bytes=audits["phase_space_bytes"],
-                staging_buffer_peak_bytes=int(
-                    audits["staging_buffer_peak_bytes"]),
-                approximations=tuple(approximations),
-                projection_stats=projection_stats,
-                background_delays=background_delays,
-                capacity_theta_prediction=dict(
-                    audits.get("capacity_theta_prediction", {})),
-            ),
-            projection_graph=graph,
-            projection_world=projection_world,
-            projection_context=getattr(
-                graph, "_native_projection_context", None),
-        )
 
     def merge_from_layout(
         self,
@@ -4773,7 +4069,7 @@ class JointCostModel:
                 notes.append(f"merge_to_home={home_instance}")
 
     def _boundary_kv_token_bytes(self, boundary: PDBoundaryView) -> int:
-        """边界 decode 增长的每 token KV 字节基准（D09 同源）：注入值
+        """边界 decode 增长的每 token KV 字节基准：注入值
         优先；夹具回退 = 工作副本字节 ÷ H_B（不可得且确需时 fail-
         closed，不静默近似）。"""
         if boundary.kv_token_bytes is not None:
@@ -4792,209 +4088,6 @@ class JointCostModel:
         raise JointCostError(
             "boundary decode growth pricing requires a per-token KV byte "
             "basis (supply kv_token_bytes or working byte views)")
-
-    def _remote_read_leg_kv_token_bytes(
-            self, boundary: PDBoundaryView, kv_token_bytes: int) -> int:
-        """ACTION_REMOTE 腿块内每 token 率（修复轮三 H2，2026-09-27）：
-        基础区间层覆盖（``BoundaryRuntimeStateEnvelope`` 的
-        ``working_layers``/``base_layers`` 披露）小于全层时按层比例缩
-        放——PARTIAL 基的前缀层率（执行侧逐源 ``specs 字节//tokens``
-        同口径，tile/暂存的 token↔字节反推随之自洽）；未披露（直接构
-        造的旧夹具 getattr 回退 0/0）或 LOCAL 基（base_layers==全层）
-        返回 ``kv_token_bytes`` 原值（全层率 = 现行为，逐位兼容）。
-        ``boundary.kv_token_bytes`` 本身不改写——它是 decode 增长语义
-        的超载位，growth/容量路径零改动。"""
-        base_layers = max(
-            0, int(getattr(boundary, "base_layers", 0) or 0))
-        working_layers = max(
-            0, int(getattr(boundary, "working_layers", 0) or 0))
-        if (base_layers > 0 and working_layers > 0
-                and base_layers < working_layers):
-            return max(
-                1, (int(kv_token_bytes) * base_layers) // working_layers)
-        return int(kv_token_bytes)
-
-    # ------------------------------------------------------------ 辅助 --
-
-    def _remote_read_rank_supplies(
-        self,
-        *,
-        read_base_by_rank: tuple,
-        leg_passes: int,
-        shard_paths: tuple,
-        noc_share: "CandidatePathNocShare",
-        tile_stream_bytes: int,
-        hbm_port_registry: object = None,
-    ) -> tuple[tuple[int, int, int], ...]:
-        """逐 rank 读流供给基元（D02）：(完整块数, 整块传输服务 x_r,
-        尾块传输服务 x_tail)——``_transfer_ns_shards`` 单 rank 向量查询
-        、每路径服务视图复用（D13：E4 纪律的每路径形态，视图内 memo
-        使同路径查询共用结果）。审计腿装配（
-        ``_remote_double_buffer_leg_from_supplies``）与逐层到达表
-        （``remote_read_tile_arrival_ns`` 消费方）共用一次求值，不再
-        各查一遍。零流 rank = (0, 0, 0)。``hbm_port_registry``（D06）：
-        审计供给腿传候选阶段 ``CandidateStageHbmShare`` 份额视图（P 入
-        口 = P 阶段份额、D 边界 credit 腿 = decode 阶段静态审计份额
-        k_e=2，2026-09-28 起）；TASK_KIND_COMPUTE 的实际 HBM 工作由
-        事件活跃集动态仲裁；None =
-        默认真实注册表（驱逐写回等后台路径照旧在册口径）。"""
-        port_view = (
-            self.hbm_port_registry if hbm_port_registry is None
-            else hbm_port_registry)
-        supplies: list[tuple[int, int, int]] = []
-        for rank_index, shard_bytes in enumerate(read_base_by_rank):
-            rank_stream = int(shard_bytes) * int(leg_passes)
-            if rank_stream <= 0:
-                supplies.append((0, 0, 0))
-                continue
-            full_tiles, tail_bytes = divmod(rank_stream, int(tile_stream_bytes))
-            rank_x = _transfer_ns_shards(
-                self.rates, self._noc_registry, port_view,
-                paths_by_rank=(shard_paths[rank_index],),
-                bytes_by_rank=(int(tile_stream_bytes),),
-                include_self=True, kind="read",
-                noc_share=noc_share)
-            tail_x = 0
-            if tail_bytes:
-                tail_x = _transfer_ns_shards(
-                    self.rates, self._noc_registry, port_view,
-                    paths_by_rank=(shard_paths[rank_index],),
-                    bytes_by_rank=(int(tail_bytes),),
-                    include_self=True, kind="read",
-                    noc_share=noc_share)
-            supplies.append((int(full_tiles), int(rank_x), int(tail_x)))
-        return tuple(supplies)
-
-    def _remote_double_buffer_leg_from_supplies(
-        self,
-        *,
-        supplies: tuple[tuple[int, int, int], ...],
-        stream_by_rank: tuple,
-        leg_passes: int,
-        tile_stream_bytes: int,
-        leg_compute_ns: int,
-        notes: list,
-        note_prefix: str,
-        tile_x_ns: int = 0,
-        start_ns: int = 0,
-    ) -> int:
-        """供给基元 → 双缓冲闭式腿（式 15/附录 A.1）：折叠走纯算术
-        ``estimate_repeat_segment``（D02 起 repeat 段统一入口），并追加
-        tiles/x/c 披露行（口径与拆分前逐位一致）。``start_ns`` = 段的
-        发射就绪时刻（闭式平移不变）。"""
-        leg_ns = estimate_repeat_segment(
-            steps=int(leg_passes),
-            compute_ns=int(leg_compute_ns),
-            stream_bytes_by_rank=tuple(int(v) for v in stream_by_rank),
-            tile_bytes=int(tile_stream_bytes),
-            supply_ns_by_rank=tuple(s[1] for s in supplies),
-            tail_supply_ns_by_rank=tuple(s[2] for s in supplies),
-            start_ns=int(start_ns))
-        total_tiles = sum(
-            full_tiles + (1 if tail_x > 0 else 0)
-            for full_tiles, _rank_x, tail_x in supplies)
-        tile_c = _byte_share_ns(
-            int(leg_compute_ns), int(tile_stream_bytes),
-            sum(int(v) for v in stream_by_rank))
-        notes.append(
-            f"{note_prefix}_tiles={total_tiles}"
-            f"_x={tile_x_ns}_c={tile_c}")
-        return leg_ns
-
-    def _remote_double_buffer_leg_ns(
-        self,
-        *,
-        read_base_by_rank: tuple,
-        shard_paths: tuple,
-        noc_share: "CandidatePathNocShare",
-        tile_stream_bytes: int,
-        leg_passes: int,
-        leg_compute_ns: int,
-        notes: list,
-        note_prefix: str,
-        tile_x_ns: Optional[int] = None,
-        start_ns: int = 0,
-        hbm_port_registry: object = None,
-        per_pass_full_tiles: Optional[int] = None,
-    ) -> int:
-        """单腿双缓冲闭式装配（式 15/附录 A.1；D18 起为 P 初始 decode
-        腿与 D 边界 continuation 腿的**共享实现**）。
-
-        逐 rank 求值取 max——§12.3"按 rank 分别计算，rank 同步 max 保
-        留实际位置"：每 rank 流字节按 tile 连续切块（m_r 完整 + 至多一
-        个尾块）；tile 传输 x_r 含启动/逐跳（每实际事务块计）；消费 c
-        按腿计算的字节份额均匀分摊（§12.3 等大等服时间近似——attention
-        仿射细节为登记的预测误差来源）。零遍腿恒 0（零字节 shard 契
-        约）。``tile_x_ns`` 为整 tile 的审计 x 值（P 入口已求值时传入
-        复用，披露行不重复计算；D 边界入口缺省时此处求值）。
-
-        D02：折叠本体委托纯算术 ``estimate_repeat_segment``（经
-        ``_remote_double_buffer_leg_from_supplies``）；供给基元经
-        ``_remote_read_rank_supplies`` 单次求值（值与拆分前逐位一致，
-        手算锚不漂移）。D13：NoC 份额经每路径服务视图（``noc_share``
-        必传——调用方主计价腿已按同一发流路径族构造）。D06：调用方传
-        候选阶段 HBM 份额视图（``CandidateStageHbmShare``——供给基元
-        与 tile x 回退求值同走 m+k 分母，与同端口同阶段并发的计算读
-        同分母）：P 入口传 P 阶段份额（k_e 含暂存流，与合并流腿/逐层
-        到达表同分母）；D 边界 credit 腿传 decode 阶段静态审计份额
-        （k_e=2 = 计算读 + credit 暂存流，2026-09-28 起）；闭式
-        ``start_ns`` = move_done 表示暂存供给与 decode 计算同端口并发，
-        实际候选计算 HBM 工作由事件活跃集动态仲裁。P→D 迁移（copy 三腿）不经本闭式——
-        它是 decode 计算开始前的独立冻结阶段、各端口单流（k=1，在册
-        口径；``StageScopeAnchorTest`` 阶段裁定锚钉的是该迁移腿，非本
-        credit 腿——2026-09-28 前本 docstring 曾误引该锚为"入口不传"
-        的依据，订正）。
-
-        H1（修复轮三 2026-09-27）：decode credit 腿传
-        ``per_pass_full_tiles``（= 每 pass ⌈tokens/tile⌉，执行切片同规
-        则）启用**逐 pass 重切**——块数 = leg_passes × 每 pass 块数，
-        每 pass 的尾块事务不再跨 pass 合并（尾块并入整块服务，tail=0
-        ——保守不低估）；闭式流字节向量按重切后整块×tile 计（divmod
-        自洽、tile_c 份额随之按重切块数分摊）。None = 旧行为（连续链
-        切块，prefill 审计腿与逐层到达表零漂移）。"""
-        if leg_passes <= 0:
-            return 0
-        leg_stream_total = sum(read_base_by_rank) * leg_passes
-        if leg_stream_total <= 0:
-            return 0
-        if tile_x_ns is None:
-            tile_vector = tuple(
-                tile_stream_bytes for _ in read_base_by_rank)
-            tile_x_ns = _transfer_ns_shards(
-                self.rates, self._noc_registry,
-                self.hbm_port_registry
-                if hbm_port_registry is None else hbm_port_registry,
-                paths_by_rank=shard_paths,
-                bytes_by_rank=tile_vector,
-                include_self=True, kind="read",
-                noc_share=noc_share)
-        supplies = self._remote_read_rank_supplies(
-            read_base_by_rank=read_base_by_rank, leg_passes=leg_passes,
-            shard_paths=shard_paths, noc_share=noc_share,
-            tile_stream_bytes=tile_stream_bytes,
-            hbm_port_registry=hbm_port_registry)
-        stream_by_rank = tuple(
-            shard_bytes * leg_passes
-            for shard_bytes in read_base_by_rank)
-        if per_pass_full_tiles is not None:
-            recut_full = max(1, int(per_pass_full_tiles)) * int(leg_passes)
-            supplies = tuple(
-                (recut_full, supply[1], 0) if int(stream) > 0
-                else (0, 0, 0)
-                for supply, stream in zip(supplies, stream_by_rank))
-            stream_by_rank = tuple(
-                recut_full * int(tile_stream_bytes) if int(stream) > 0
-                else 0
-                for stream in stream_by_rank)
-        return self._remote_double_buffer_leg_from_supplies(
-            supplies=supplies,
-            stream_by_rank=stream_by_rank,
-            leg_passes=leg_passes,
-            tile_stream_bytes=tile_stream_bytes,
-            leg_compute_ns=leg_compute_ns,
-            notes=notes, note_prefix=note_prefix, tile_x_ns=tile_x_ns,
-            start_ns=start_ns)
-
 
     def _route(self, instance_index: int, session: SessionKVView):
         source_instance = (
@@ -5150,8 +4243,8 @@ class JointCostModel:
         不动——正式字段位 port_snapshot 的接通归 C11 步骤 6）。
 
         取首 shard 路径的端点端口（rank），分解 = 活跃 decode 消费流数
-        ＋ 在册传输/远读流数（HbmPortFlowRegistry.decomposition）。仅
-        主计价腿（copy 前缀腿 / remote 读流族）披露；未注入注册表
+        ＋ 在册传输流数（HbmPortFlowRegistry.decomposition）。仅
+        主计价腿（copy 前缀腿）披露；未注入注册表
         （离线/单测）时不披露。
         """
         registry = self.hbm_port_registry
@@ -5170,126 +4263,6 @@ class JointCostModel:
         notes.append(
             "u_port_exec=r{}:{}act+{}fl".format(
                 exec_rank, exec_active, exec_flows))
-
-    def _remote_read_passes(self, request: RequestView) -> tuple[int, int]:
-        """D7 读放大因果口径（D07 M1′ 计价侧，v2.0 式 11/18）：远读遍
-        数 = prefill 扫描次数 + decode 步数。
-
-        prefill 扫描次数不再采纳外部传入的未说明数字：RequestView 携
-        带 chunk/query tile 合法模板身份（q_c/q_tile）时，从已知
-        U=input_tokens 闭式推导 Σν = a⌈q_c/q_tile⌉ + 1_{b>0}⌈b/q_tile⌉
-        （a=⌊U/q_c⌋；单一裁决点 ``joint_config.prefill_remote_read_
-        scan_passes``——与执行侧 prefill 前缀读流同源）；执行侧
-        ``prefill_scan_passes`` 供给值做一致性校验，与推导值不一致即
-        fail-closed（两侧模板漂移拒价，不静默采信）。无模板身份（直
-        接构造的测试夹具）：沿用供给值，缺省因果估计 =
-        input_tokens > 0 ? 1 : 0（单遍扫描）。decode 步数 = 因果时域
-        估计（CausalHorizonEstimator 同源）。两分量均非 oracle：不读
-        真实输出长度。
-        """
-        if (request.prefill_chunk_tokens is not None
-                and request.query_tile_tokens is not None):
-            derived = prefill_remote_read_scan_passes(
-                int(request.input_tokens),
-                int(request.prefill_chunk_tokens),
-                int(request.query_tile_tokens))
-            if (request.prefill_scan_passes is not None
-                    and max(0, int(request.prefill_scan_passes))
-                    != derived):
-                raise JointCostError(
-                    f"prefill_scan_passes={request.prefill_scan_passes} "
-                    "contradicts the chunk/query-tile derivation "
-                    f"(U={request.input_tokens}, q_c="
-                    f"{request.prefill_chunk_tokens}, q_tile="
-                    f"{request.query_tile_tokens} -> {derived})")
-            prefill_scans = derived
-        elif request.prefill_scan_passes is not None:
-            prefill_scans = max(0, int(request.prefill_scan_passes))
-        else:
-            prefill_scans = 1 if request.input_tokens > 0 else 0
-        return prefill_scans, max(0, request.estimated_decode_tokens)
-
-    def _remote_read_kv_token_bytes(
-        self, session: SessionKVView, request: RequestView,
-    ) -> int:
-        """D09 tile 对齐基准：每 rank 一个 token 的全层 KV 字节（K+V）。
-
-        注入值（``remote_read_kv_token_bytes``）优先（生产路径与执行侧
-        同源）；None（直接构造的测试夹具）惰性派生：优先 input 视图
-        字节 ÷ input token 数（input KV 全层——与装配基准同口径），
-        回退历史视图字节 ÷ 历史 token 数（PARTIAL 前缀口径近似，仅在
-        无 input 的退化夹具可达）。remote-read 腿计价需要本值而两者
-        均不可得时 fail-closed（不静默退化）。"""
-        if self.remote_read_kv_token_bytes is not None:
-            value = int(self.remote_read_kv_token_bytes)
-            if value <= 0:
-                raise JointCostError(
-                    f"remote_read_kv_token_bytes must be positive, got "
-                    f"{value}")
-            return value
-        if request.input_tokens > 0 and any(
-                int(value) for value in request.input_kv_bytes_by_tp_rank):
-            value = int(request.input_kv_bytes_by_tp_rank[0]) // int(
-                request.input_tokens)
-            if value > 0:
-                return value
-        if session.history_tokens > 0 and any(
-                int(value) for value in session.history_bytes_by_tp_rank):
-            value = int(session.history_bytes_by_tp_rank[0]) // int(
-                session.history_tokens)
-            if value > 0:
-                return value
-        raise JointCostError(
-            "remote-read tile pricing requires a per-token KV byte basis "
-            "(inject remote_read_kv_token_bytes or supply input/history "
-            "byte views)")
-
-    def _remote_read_config_tile_tokens(
-        self, session: SessionKVView, request: RequestView,
-    ) -> int:
-        """D09 配置 tile（``resolve_remote_read_tile_tokens`` 单一裁决
-        点：配置字节按 token 粒度向下对齐；auto = 协议固定 token 数）。
-        即执行 tile 本身——修复轮二起固定不放大，D16 对齐面收口后计价
-        事务切块恒走 ``_remote_read_exec_tile_tokens``（与执行切片/暂存
-        预约同源）。"""
-        return resolve_remote_read_tile_tokens(
-            self.remote_read_tile_bytes,
-            self._remote_read_kv_token_bytes(session, request))
-
-    def _remote_read_prefill_window_tokens(
-        self, session: SessionKVView, request: RequestView,
-    ) -> Optional[int]:
-        """D09 prefill 消费窗基数（2026-09-27 tile 口径对齐）：基础
-        token × 每窗扫描数（⌈q_c/q_tile⌉，式 11 的窗内分解）——执行侧
-        逐窗切片/暂存 lease 与计价侧事务切块/足迹同口径（消费原子性 =
-        逐 chunk 迭代体块，每窗 tile 数 = ⌈窗基数/tile⌉ 可 >2、逐 tile
-        lag-2 流水消费）。``RequestView`` 未携带
-        chunk/query tile 模板身份（直接构造夹具）→ None = 退回基础
-        基数（D07 模板校验生产路径恒在场）。"""
-        chunk_tokens = int(getattr(request, "prefill_chunk_tokens", 0) or 0)
-        query_tile = int(getattr(request, "query_tile_tokens", 0) or 0)
-        if chunk_tokens <= 0 or query_tile <= 0:
-            return None
-        return max(0, int(session.history_tokens)) * (
-            -(-chunk_tokens // query_tile))
-
-    def _remote_read_exec_tile_tokens(
-        self, session: SessionKVView, request: RequestView,
-        *, window_tokens: Optional[int] = None,
-    ) -> int:
-        """D09 执行 tile（``remote_read_exec_tile_tokens`` 单一裁决点：
-        D09 修复轮二，2026-09-27：固定 tile，放大废除（v2.0 §17.1 不
-        做清单"为减少仿真事件把容量/缓冲暗改无限"））。tile 恒 = 配置
-        值；基数只决定每 pass/窗 tile 数 = ⌈base/tile⌉（可 >2，逐 tile
-        lag-2 流水消费，任意时刻每 rank 暂存占用仍 ≤2 块）。缓冲足迹、
-        执行侧暂存预约与双缓冲腿事务切块（D16 对齐面收口）三方同源
-        （R1' 纪律；§12.2"执行器与预测器必须采用相同规则"）。
-        ``window_tokens``（D09 prefill 消费窗基数，2026-09-27）：P 腿
-        传入时作窗基数（None = 基础基数，decode 腿/无模板夹具）。"""
-        return remote_read_exec_tile_tokens(
-            self._remote_read_config_tile_tokens(session, request),
-            max(0, int(session.history_tokens)) if window_tokens is None
-            else max(0, int(window_tokens)))
 
     def _decode_growth_by_tp_rank(
         self, request: RequestView,
@@ -5329,9 +4302,8 @@ class JointCostModel:
         stay / recompute@驻留目标：final − resident（D10：旧分配转作
         重建空间复用——空间口径不变，**不免 FLOP**，重算量见
         ``rebuild_context_tokens``）；
-        copy@异地 / recompute@异地 / REMOTE 基础：整份 final；
-        remote-read：LOCAL 基仅 input 增量；PARTIAL 混合形态 = 池恢复
-        后缀 [p,L) 物化足迹（热 KV，需求①）＋ input 增量。
+        copy@异地 / recompute@异地 / REMOTE 基础：整份 final。
+        （remote-read 的暂存叠加足迹分支已随 2026-10-14 远读退役删除。）
         """
         size = self.instance_tp_size
         # Keep the physical TP partition supplied by the KV ledger.  Rebuilding
@@ -5361,30 +4333,6 @@ class JointCostModel:
             )
         )
         resident_here = self._resident_here(session, instance_index)
-        if action == ACTION_REMOTE:
-            # D09（v2.0 §12.1/A.4）：remote-read 的空间足迹叠加每 rank
-            # 双缓冲暂存真实字节（执行 tile 与 KVCacheManager 暂存预约
-            # 同源——``remote_read_exec_tile_tokens`` 单一裁决点；旧
-            # F14"credit 在途字节不占容量"口径随真实预约废除）。D09
-            # 窗口对齐（2026-09-27）：P 腿按消费窗基数（基础 token ×
-            # 每窗扫描数）计每窗 tile 数——与执行侧逐窗切片/暂存 lease
-            # 同口径（逐 chunk 迭代体块消费，每窗 tile 数 = ⌈窗基数/
-            # tile⌉ 可 >2，逐 tile lag-2 流水）。
-            staging_per_rank = remote_read_staging_bytes_per_rank(
-                self._remote_read_exec_tile_tokens(
-                    session, request,
-                    window_tokens=self._remote_read_prefill_window_tokens(
-                        session, request)),
-                self._remote_read_kv_token_bytes(session, request))
-            if session.location == "partial_hbm_remote":
-                return tuple(
-                    missing + increment + staging_per_rank
-                    for missing, increment in zip(
-                        session.missing_bytes_by_tp_rank,
-                        request.input_kv_bytes_by_tp_rank))
-            return tuple(
-                increment + staging_per_rank
-                for increment in request.input_kv_bytes_by_tp_rank)
         if resident_here and action in (ACTION_STAY, ACTION_RECOMPUTE):
             return tuple(
                 max(0, final - resident)

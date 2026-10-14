@@ -52,15 +52,7 @@ enum class HwResClass {
 HwResClass classify_hw_resource(const uint64_t kind_value,
                                 const bool is_cpu_op,
                                 const bool is_timer_op,
-                                const bool is_local_hbm_kv_restore,
-                                const bool is_pipeline_anchor = false) {
-    // Joint remote-read structural anchors carry a physical NodeStore slot
-    // but consume no COMP, COMM, or HBM capacity. Their actual endpoint
-    // traffic is issued as a separate ready work item through the original
-    // COMM/HBM gates.
-    if (is_pipeline_anchor) {
-        return HwResClass::NoOp;
-    }
+                                const bool is_local_hbm_kv_restore) {
     if (is_timer_op) {
         return HwResClass::NoOp;
     }
@@ -399,10 +391,7 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
                  classify_hw_resource(static_cast<uint64_t>(node.kind),
                                       node.is_cpu_op,
                                       node.is_timer_op,
-                                      node.mem.is_local_hbm_kv_restore,
-                                      node.compute.exec_role ==
-                                          ExecutionDriven::ComputeExecRole::
-                                              RemoteReadPipelineAnchor),
+                                      node.mem.is_local_hbm_kv_restore),
                  node.global_id,
                  /*static_et_path=*/false);
 }
@@ -412,10 +401,7 @@ void HardwareResource::release(const ExecutionDriven::NodeView& node) {
                   classify_hw_resource(static_cast<uint64_t>(node.kind),
                                        node.is_cpu_op,
                                        node.is_timer_op,
-                                       node.mem.is_local_hbm_kv_restore,
-                                       node.compute.exec_role ==
-                                           ExecutionDriven::ComputeExecRole::
-                                               RemoteReadPipelineAnchor),
+                                       node.mem.is_local_hbm_kv_restore),
                   node.global_id,
                   /*static_et_path=*/false);
 }
@@ -426,8 +412,5 @@ bool HardwareResource::is_available(const ExecutionDriven::NodeView& node) const
         classify_hw_resource(static_cast<uint64_t>(node.kind),
                              node.is_cpu_op,
                              node.is_timer_op,
-                             node.mem.is_local_hbm_kv_restore,
-                             node.compute.exec_role ==
-                                 ExecutionDriven::ComputeExecRole::
-                                     RemoteReadPipelineAnchor));
+                             node.mem.is_local_hbm_kv_restore));
 }

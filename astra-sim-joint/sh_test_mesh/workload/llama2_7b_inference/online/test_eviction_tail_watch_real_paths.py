@@ -191,7 +191,7 @@ def _make_scheduler(graph):
     scheduler.kv_manager = SimpleNamespace(tp_degree=2, _sessions={})
     scheduler.joint_config = JointMechanismConfig(
         category_mode="typed", scheduler_mode="joint",
-        layer_policy="adaptive", remote_actions="on", quota_mode="static")
+        layer_policy="adaptive", quota_mode="static")
     scheduler._kv_ledger_epoch = 0
     scheduler._admit_attempt_epoch = {}
     scheduler._admission_failure_state = {}
@@ -221,7 +221,7 @@ def _make_scheduler(graph):
     scheduler._quota_admit_events = 0
     scheduler._quota_release_events = 0
     scheduler._joint_action_selection_counts = {
-        "stay": 0, "copy": 0, "remote-read": 0,
+        "stay": 0, "copy": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
         "recompute_forced_action_mask": 0,

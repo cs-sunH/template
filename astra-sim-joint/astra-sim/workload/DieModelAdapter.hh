@@ -5,7 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 /*
 DieModelAdapter.hh -- per-Workload (per-rank) bridge from a die-backend COMP
-NodeView to a DieExecution (die backend, stage B; design doc §8.1/§8.3).
+NodeView to a DieExecution (die backend, joint rollout stage 1; design doc
+§8.1/§8.3; ported from the face reference implementation).
 
 Responsibilities (one adapter per Workload, owned by the Workload):
 
@@ -26,7 +27,6 @@ Responsibilities (one adapter per Workload, owned by the Workload):
 #define __DIE_MODEL_ADAPTER_HH__
 
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -43,9 +43,10 @@ class DieExecution;
 
 class DieModelAdapter {
   public:
-    // Cumulative host-side timings for DIE dispatch. Child phases are nested
-    // inside total_issue_ns and must not be added to it. The simulator drives
-    // Workloads on one event thread, so these process-wide totals need no lock.
+    // Cumulative host-side timings for ordinary DIE dispatch. These are
+    // diagnostics only; child phases are nested inside total_issue_ns and
+    // must not be added to it. The simulator drives Workloads on one event
+    // thread, so the process-wide totals need no lock.
     struct IssueTiming {
         uint64_t calls = 0;
         uint64_t total_issue_ns = 0;
@@ -71,10 +72,10 @@ class DieModelAdapter {
     /// Read cumulative adapter dispatch diagnostics across all Workloads.
     static const IssueTiming& cumulative_issue_timing();
 
-    // Dispatch one die-backend real COMP node (legacy die_spec or preserved
-    // coarse typed task JSON; the Workload layer guarantees contract §7.3
-    // ordering before calling). A node without the selected backend's task
-    // payload fails closed; it never silently falls back to roofline.
+    // Dispatch one die-backend real COMP node (die_spec != nullptr; the
+    // Workload layer guarantees the dispatch order of contract §7.3 before
+    // calling). Throws std::runtime_error when the node carries no
+    // die_op_spec (fail-closed, never a silent roofline fallback).
     void issue_die(const ExecutionDriven::NodeView& node);
 
     // Whether any outer node still has a live DieExecution. Purges retired
@@ -103,7 +104,6 @@ class DieModelAdapter {
     Workload* workload_;
     Sys* sys_;
     std::vector<std::unique_ptr<DieExecution>> active_;
-    std::map<uint64_t, uint64_t> coarse_active_;
     uint64_t completed_execution_count_ = 0;
     uint64_t completed_window_count_ = 0;
     uint64_t completed_refinement_count_ = 0;

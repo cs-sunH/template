@@ -50,6 +50,18 @@ request is outstanding, or while the min-key instance is a memory stage
 whose start lies in the future, nothing else is popped; this preserves the
 single-pass Kahn pop order (and therefore the slot assignment order) of
 evaluate_stages under full-speed memory service.
+
+Preview transactions (v9): preview_consecutive_internal_timers() runs the
+SAME run() control flow on the authoritative scheduler state inside a
+journal-based transaction instead of copying the four frontier vectors per
+call. heap/events push/pop/slot writes are recorded before they happen and
+replayed in reverse on exit (HeapJournal); the dense per-run arrays keep
+the v8 PreviewUndoLog; the scalar cursor is snapshotted. The derived
+frontiers (future_starts/active_ids) are not maintained inside a
+transaction -- their only producer, activate_due_starts(), feeds slice
+queries that neither run()'s scheduling decisions nor the preview return
+value read -- so the walk's cost tracks the heap paths and instances it
+actually touches rather than the entry frontier size.
 */
 
 #include "DieModel.hh"
@@ -57,8 +69,10 @@ evaluate_stages under full-speed memory service.
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -117,6 +131,184 @@ std::uint64_t physical_stage_min_ns(const DieStage& stage,
   return seconds_to_ns(work / peak);
 }
 
+// ---------------------------------------------------------------------------
+// Journaled min-heap primitives (v9 preview transactions).
+//
+// sift_up/sift_pop are the single heap discipline shared by the authoritative
+// run() and the preview transaction, so container behavior cannot drift
+// between real advancement and preview. All three scheduling heaps
+// (heap/events/future_starts) hold DISTINCT elements -- an instance id is
+// scheduled, activated, issued or completed exactly once, and event pairs
+// are keyed by that unique id -- so pop order and front() are independent of
+// the internal array layout and identical to the previous
+// std::push_heap/std::pop_heap discipline with the std::greater<> min-heap
+// comparators.
+
+template <typename Vec>
+class HeapJournal {
+ public:
+  using Value = typename Vec::value_type;
+
+  struct Entry {
+    enum class Op : std::uint8_t { kSlotWrite, kPushBack, kPopBack };
+    Op op;
+    std::size_t index;  // kSlotWrite only
+    Value value;        // kSlotWrite: pre-write slot value;
+                        // kPopBack: the removed tail element
+  };
+
+  static_assert(std::is_nothrow_copy_constructible_v<Value> &&
+                    std::is_nothrow_move_assignable_v<Value>,
+                "rollback restores heap values by copy-construct (push_back "
+                "on spare capacity) and move-assign (slot write); no-throw "
+                "variants keep the noexcept reverse replay provable");
+
+  void begin(Vec& vec) {
+    if (engaged_) {
+      throw DieModelError("Execution: nested preview transaction");
+    }
+    engaged_ = true;
+    vec_ = &vec;
+    records_ = 0;
+    peak_ = 0;
+    entries_.clear();  // scratch capacity is reused across previews
+  }
+
+  bool engaged() const { return engaged_; }
+
+  // Reserve for the worst-case journal length of ONE sift operation before
+  // any heap slot is touched: a push journals one length record plus at
+  // most one slot write per tree level; a pop journals one length record
+  // plus at most two writes per level (descend plus reinsert climb).
+  void reserve_for_sift(std::size_t heap_size, bool is_pop) {
+    std::size_t depth = 1;
+    while ((heap_size >>= 1) != 0) ++depth;
+    const std::size_t bound = is_pop ? 2 * depth + 2 : depth + 2;
+    if (entries_.size() + bound > entries_.capacity()) {
+      entries_.reserve(entries_.size() + bound);  // may throw; nothing written
+    }
+  }
+
+  void record_slot(std::size_t index, const Value& old_value) {
+    entries_.push_back(Entry{Entry::Op::kSlotWrite, index, old_value});
+    note_record();
+  }
+  void record_push_back() {
+    entries_.push_back(Entry{Entry::Op::kPushBack, 0, Value{}});
+    note_record();
+  }
+  void record_pop_back(const Value& removed) {
+    entries_.push_back(Entry{Entry::Op::kPopBack, 0, removed});
+    note_record();
+  }
+
+  // Reverse replay restores the exact logical content without allocating:
+  // every pop-back restore is a push_back onto capacity this transaction
+  // already reached (vector capacity never shrinks here), which cannot
+  // throw for trivially copyable values.
+  void rollback() noexcept {
+    if (!engaged_) return;
+    for (auto it = entries_.rbegin(); it != entries_.rend(); ++it) {
+      switch (it->op) {
+        case Entry::Op::kSlotWrite:
+          // Move-assign: the journal entry is dead after this replay, and
+          // move-assignment of the heap value types is provably no-throw.
+          (*vec_)[it->index] = std::move(it->value);
+          break;
+        case Entry::Op::kPushBack:
+          vec_->pop_back();
+          break;
+        case Entry::Op::kPopBack:
+          vec_->push_back(it->value);
+          break;
+      }
+    }
+    entries_.clear();
+    vec_ = nullptr;
+    engaged_ = false;
+  }
+
+  std::uint64_t records() const { return records_; }
+  std::uint64_t peak() const { return peak_; }
+
+ private:
+  void note_record() {
+    ++records_;
+    if (entries_.size() > peak_) peak_ = static_cast<std::uint64_t>(entries_.size());
+  }
+
+  Vec* vec_ = nullptr;
+  bool engaged_ = false;
+  std::vector<Entry> entries_;  // persistent scratch; capacity reused
+  std::uint64_t records_ = 0;
+  std::uint64_t peak_ = 0;
+};
+
+// Min-heap sift-up of the element at index i (record-before-write under an
+// engaged journal; a journaling failure leaves this operation unwritten).
+template <typename Vec>
+void sift_up(Vec& v, std::size_t i, HeapJournal<Vec>* journal) {
+  const auto value = v[i];
+  std::size_t hole = i;
+  while (hole > 0) {
+    const std::size_t parent = (hole - 1) / 2;
+    if (!(v[parent] > value)) break;  // parent <= value: min-heap holds
+    if (journal != nullptr) journal->record_slot(hole, v[hole]);
+    v[hole] = v[parent];
+    hole = parent;
+  }
+  if (hole != i) {
+    if (journal != nullptr) journal->record_slot(hole, v[hole]);
+    v[hole] = value;
+  }
+}
+
+// No-journal overload for the authoritative (non-transaction) path.
+template <typename Vec>
+void sift_up(Vec& v, std::size_t i) {
+  sift_up(v, i, static_cast<HeapJournal<Vec>*>(nullptr));
+}
+
+// Min-heap pop: removes and returns the minimum (v[0]) by relocating the
+// tail element into the tree (descend promoting the smaller child, then
+// climb while smaller than the parent). The removed tail's slot beyond the
+// new length keeps its old bytes; the journal restores both on rollback.
+template <typename Vec>
+typename Vec::value_type sift_pop(Vec& v, HeapJournal<Vec>* journal) {
+  const auto result = v[0];
+  const auto tail = v.back();
+  if (journal != nullptr) journal->record_pop_back(tail);
+  v.pop_back();
+  if (v.empty()) return result;
+  std::size_t hole = 0;
+  const std::size_t limit = v.size();
+  while (true) {
+    std::size_t child = 2 * hole + 1;
+    if (child >= limit) break;
+    if (child + 1 < limit && v[child + 1] < v[child]) ++child;
+    if (!(v[child] < tail)) break;
+    if (journal != nullptr) journal->record_slot(hole, v[hole]);
+    v[hole] = v[child];
+    hole = child;
+  }
+  while (hole > 0) {
+    const std::size_t parent = (hole - 1) / 2;
+    if (!(v[parent] > tail)) break;
+    if (journal != nullptr) journal->record_slot(hole, v[hole]);
+    v[hole] = v[parent];
+    hole = parent;
+  }
+  if (journal != nullptr) journal->record_slot(hole, v[hole]);
+  v[hole] = tail;
+  return result;
+}
+
+// No-journal overload for the authoritative (non-transaction) path.
+template <typename Vec>
+typename Vec::value_type sift_pop(Vec& v) {
+  return sift_pop(v, static_cast<HeapJournal<Vec>*>(nullptr));
+}
+
 }  // namespace
 
 struct Execution::Impl {
@@ -155,6 +347,38 @@ struct Execution::Impl {
   std::uint64_t active_id_entries_examined = 0;
   std::uint64_t active_id_entries_moved = 0;
   std::uint64_t active_id_entries_removed = 0;
+  // v8/v9 preview attribution (always-on integer diagnostics, same caliber
+  // as the active_id_* family): E=preview_calls entry attempts, T=walked
+  // timer boundaries, U=dense undo records merged at EVERY exit, F=frontier
+  // snapshot copy entries (structurally zero since the v9 transactional
+  // restructure; it would only grow if a copy path returned). The v9 §3.1
+  // additions: J=successful frontier undo/overlay records (repeated
+  // overwrites counted), per-container entry sizes S (total and max),
+  // undo/journal peaks, exit categories and transaction capacity growth.
+  std::uint64_t preview_calls = 0;
+  std::uint64_t preview_walk_timers = 0;
+  std::uint64_t preview_undo_entries = 0;
+  std::uint64_t preview_frontier_entries = 0;
+  std::uint64_t preview_j_entries = 0;
+  std::uint64_t preview_s_heap = 0;
+  std::uint64_t preview_s_events = 0;
+  std::uint64_t preview_s_future_starts = 0;
+  std::uint64_t preview_s_active_ids = 0;
+  std::uint64_t preview_s_heap_max = 0;
+  std::uint64_t preview_s_events_max = 0;
+  std::uint64_t preview_s_future_starts_max = 0;
+  std::uint64_t preview_s_active_ids_max = 0;
+  std::uint64_t preview_copy_bytes = 0;            // frontier bytes copied (0)
+  std::uint64_t preview_active_scan_entries = 0;   // active-id scans in preview (0)
+  std::uint64_t preview_undo_peak = 0;
+  std::uint64_t preview_journal_peak = 0;
+  std::uint64_t preview_exit_memory = 0;
+  std::uint64_t preview_exit_done = 0;
+  std::uint64_t preview_exit_exception = 0;
+  std::uint64_t preview_heap_growth_events = 0;
+  std::uint64_t preview_heap_growth_moves = 0;
+  std::uint64_t preview_events_growth_events = 0;
+  std::uint64_t preview_events_growth_moves = 0;
   std::uint64_t now = 0;
   std::uint64_t elapsed = 0;
   std::uint64_t frontier_generation = 1;
@@ -176,6 +400,84 @@ struct Execution::Impl {
 
   bool finished = false;
 
+  // --- v11 Phase 4 (K2 epoch-keyed timer-window memo, 方案 §6.2) ---
+  //
+  // query_internal_timer_window is a read-only proof query ("Read-only
+  // proof ... does not clone or replay", DieTypes.hh): it reads this Impl
+  // through a const reference, and its only writes are the pre-existing
+  // value-deterministic lazy caches (template_key_cache /
+  // template_key_computations -- pure derivations of the immutable plan
+  // data) plus the memo below. Therefore: identical Impl state + identical
+  // max_count => identical return value and identical throw behavior (the
+  // throwing paths depend only on state and arguments).
+  //
+  // state_epoch is bumped by EVERY public entry that can mutate Impl state
+  // observable by that query. Audited mutation sites (keep in sync):
+  //   1. Execution::next_action()          -- run() + mem_issued_new write
+  //   2. Execution::advance_time()         -- now += ns; run()
+  //   3. Execution::complete_memory()      -- mem_* clear, end/event, run()
+  //   4. Execution::advance_internal_service()         -- via advance_time
+  //   5. Execution::advance_internal_service_window()  -- via advance_time
+  //   6. Execution::advance_external_wait()            -- via advance_time
+  //   7. Execution::preview_consecutive_internal_timers() -- PreviewTxn
+  // run() and every Impl helper (activate_due_starts / complete_due /
+  // complete_instance / compact_completed_active_ids / schedule_internal /
+  // push_* / pop_*) are called only from those entries (or from the
+  // constructor, which runs before any memo exists). Fields read by the
+  // query chain are: the immutable post-construction plan arrays (offset /
+  // stage_of / dep_* / rdep_* / dur_ns / noc_leg_ns / total / stages / hw)
+  // plus now / finished / mem_* / next_mem_issue_at / events /
+  // future_starts / active_ids / done / start_ns / end / unresolved /
+  // frontier_generation -- every write to the latter group happens inside
+  // an entry that bumped the epoch first.
+  //
+  // PreviewTxn audit (v9 heritage): the preview walk mutates the
+  // authoritative scheduler state through the journaled transaction and
+  // rolls it back bit-exactly on exit (HeapJournal reverse replay +
+  // PreviewUndoLog + PreviewScalarState). The epoch bump at ENTRY (7)
+  // still invalidates the memo afterwards: the rollback restores queried
+  // state, not the epoch, which only over-invalidates (a miss where a hit
+  // would also have been correct) and can never serve a stale entry. No
+  // query can observe the transaction's intermediate states: run() has no
+  // callbacks and the driver is single-threaded. Preview capacity growth
+  // (heap.reserve inside the transaction) persists past rollback, but the
+  // query reads container CONTENTS only, and contents are restored.
+  std::uint64_t state_epoch = 0;
+  struct TimerWindowMemoSlot {
+    bool valid = false;
+    std::uint64_t epoch = 0;
+    InternalTimerWindowInfo value;
+  };
+  // Fixed 8 slots indexed by max_count-1 (the legal argument domain is
+  // [1,8]); each slot self-invalidates lazily against state_epoch. mutable:
+  // written by the const read-only query, like template_key_cache.
+  TimerWindowMemoSlot timer_window_memo[8];
+  mutable std::uint64_t timer_window_memo_hits = 0;
+  mutable std::uint64_t timer_window_memo_misses = 0;
+
+  // --- v12 Phase 4 (K2 structural negative cache, 方案 §6.2) ---
+  //
+  // P_struct(plan), computed ONCE at construction from the immutable
+  // flattened arrays below: true iff every Execution of this plan is
+  // finished at (or before) the constructor's run() -- i.e.
+  //   P_A: total == 0 (constructor sets finished immediately), or
+  //   P_B: every instance is a zero-duration internal stage (dur_ns == 0)
+  //        and no MEM/MEM_NOC stage has instances (any memory instance
+  //        would leave an outstanding request instead).
+  // For such plans the reachable state set of ANY drive history is the
+  // singleton {finished}, so query_internal_timer_window provably returns
+  // the constant rejection {supported=false, reason="execution-finished",
+  // default token, empty slices} -- the only rejection class whose exact
+  // reason field is state-independent (Phase 4 audit,
+  // docs/PHASE4_K2_CACHE_DESIGN.md). The flag gates both the probe and the
+  // write in query_internal_timer_window, so the process-level negative
+  // cache only ever fires where returning the stored value is byte-identical
+  // to recomputation. Production fire-face: effectively empty (production
+  // plans carry positive launch/compute/memory durations).
+  bool structural_negative = false;
+  mutable std::uint64_t negative_cache_hits = 0;
+  mutable std::uint64_t negative_cache_writes = 0;
+
   struct PreviewUndoLog {
     enum class Field { Done, CompletedByStage, Unresolved, StartNs, End };
     struct Entry {
@@ -184,6 +486,28 @@ struct Execution::Impl {
       std::uint64_t old_value;
     };
     std::vector<Entry> entries;
+
+    void begin() {
+      if (engaged_) {
+        throw DieModelError("Execution: nested preview transaction");
+      }
+      engaged_ = true;
+      entries.clear();  // scratch capacity is reused across previews
+    }
+
+    bool engaged() const { return engaged_; }
+
+    // Drop engagement without replay (transaction construction failed
+    // before any record was made).
+    void disengage() noexcept { engaged_ = false; }
+
+    // Pre-reserve for the worst-case record count of one model call before
+    // its first write, so a journaling failure leaves that call unwritten.
+    void reserve_more(std::size_t n) {
+      if (entries.size() + n > entries.capacity()) {
+        entries.reserve(entries.size() + n);  // may throw; nothing written
+      }
+    }
 
     void record(const Field field, const std::size_t index,
                 const std::uint64_t old_value) {
@@ -212,7 +536,11 @@ struct Execution::Impl {
         }
       }
       entries.clear();
+      engaged_ = false;
     }
+
+   private:
+    bool engaged_ = false;
   };
 
   struct PreviewScalarState {
@@ -300,44 +628,87 @@ struct Execution::Impl {
     }
   };
 
-  struct PreviewBorrowGuard {
-    Impl& state;
-    std::vector<std::uint64_t> original_heap;
-    std::vector<std::pair<std::uint64_t, std::uint32_t>> original_events;
-    std::vector<std::pair<std::uint64_t, std::uint32_t>> original_future_starts;
-    std::vector<std::uint32_t> original_active_ids;
-    PreviewScalarState original_scalars;
-    PreviewUndoLog undo;
-    bool active = false;
+  // v9 preview-transaction scratch (persistent across previews so the
+  // steady-state transaction performs no scratch allocation; engaged only
+  // inside preview_consecutive_internal_timers).
+  HeapJournal<std::vector<std::uint64_t>> heap_journal;
+  HeapJournal<std::vector<std::pair<std::uint64_t, std::uint32_t>>>
+      events_journal;
+  PreviewUndoLog preview_undo;
 
-    explicit PreviewBorrowGuard(Impl& value)
-        : state(value),
-          original_heap(value.heap),
-          original_events(value.events),
-          original_future_starts(value.future_starts),
-          original_active_ids(value.active_ids),
-          original_scalars(value) {
-      state.heap.swap(original_heap);
-      state.events.swap(original_events);
-      state.future_starts.swap(original_future_starts);
-      state.active_ids.swap(original_active_ids);
-      active = true;
+  // v9 preview transaction: exact journal-based rollback of the scheduler
+  // state the walk actually touches -- heap/events slot writes, appends and
+  // pop-backs (HeapJournal), the dense per-run arrays (PreviewUndoLog), and
+  // the scalar cursor (PreviewScalarState). The two DERIVED frontiers are
+  // proven walk-irrelevant and are simply not maintained inside a
+  // transaction (real advancement keeps full maintenance):
+  //   - future_starts is read only by activate_due_starts(), whose sole
+  //     effects are popping it and appending active_ids;
+  //   - active_ids is written only by activate_due_starts/schedule_internal/
+  //     complete_memory and read only by the slice-query observers
+  //     (describe_internal_slice), never by run()'s scheduling decisions
+  //     or the preview return value.
+  // Both skips therefore cannot change external_delay_ns, timer_action_count
+  // or the Memory/Done stop boundary. This replaces the v8 per-call copy of
+  // all four frontier vectors (the O(entry-size) F cost).
+  struct PreviewTxn {
+    enum class Exit : std::uint8_t { kPending, kMemoryRequest, kDone };
+
+    Impl& state;
+    PreviewScalarState original_scalars;
+    Exit exit = Exit::kPending;
+
+    explicit PreviewTxn(Impl& value)
+        : state(value), original_scalars(value) {
+      try {
+        state.heap_journal.begin(state.heap);
+        state.events_journal.begin(state.events);
+        state.preview_undo.begin();
+      } catch (...) {
+        state.events_journal.rollback();  // no-ops unless engaged
+        state.heap_journal.rollback();
+        state.preview_undo.disengage();
+        throw;
+      }
     }
 
-    PreviewBorrowGuard(const PreviewBorrowGuard&) = delete;
-    PreviewBorrowGuard& operator=(const PreviewBorrowGuard&) = delete;
+    PreviewTxn(const PreviewTxn&) = delete;
+    PreviewTxn& operator=(const PreviewTxn&) = delete;
 
-    ~PreviewBorrowGuard() noexcept { rollback(); }
+    ~PreviewTxn() { rollback(); }
+
+    void note_exit(Exit kind) noexcept { exit = kind; }
 
     void rollback() noexcept {
-      if (!active) return;
-      undo.rollback(state);
+      // Reverse replay of every touched container write, then the dense
+      // undo log, then the scalar cursor; every step is non-throwing.
+      const std::uint64_t undo_count =
+          static_cast<std::uint64_t>(state.preview_undo.entries.size());
+      state.events_journal.rollback();
+      state.heap_journal.rollback();
+      state.preview_undo.rollback(state);
       original_scalars.restore(state);
-      state.heap.swap(original_heap);
-      state.events.swap(original_events);
-      state.future_starts.swap(original_future_starts);
-      state.active_ids.swap(original_active_ids);
-      active = false;
+      // Attribution counters are diagnostics, not model state: U/J and the
+      // peaks merge here at EVERY exit path, so exception exits count too.
+      state.preview_undo_entries += undo_count;
+      state.preview_j_entries += state.heap_journal.records() +
+                                 state.events_journal.records();
+      state.preview_undo_peak =
+          std::max(state.preview_undo_peak, undo_count);
+      state.preview_journal_peak =
+          std::max(state.preview_journal_peak,
+                   state.heap_journal.peak() + state.events_journal.peak());
+      switch (exit) {
+        case Exit::kMemoryRequest:
+          ++state.preview_exit_memory;
+          break;
+        case Exit::kDone:
+          ++state.preview_exit_done;
+          break;
+        case Exit::kPending:  // destructor without a normal exit: exception
+          ++state.preview_exit_exception;
+          break;
+      }
     }
   };
 
@@ -359,75 +730,135 @@ struct Execution::Impl {
     ++frontier_generation;
   }
 
-  void push_heap_key(std::uint64_t key) {
+  void push_heap_key(std::uint64_t key, PreviewTxn* txn = nullptr) {
+    if (txn == nullptr) {
+      heap.push_back(key);
+      sift_up(heap, heap.size() - 1);
+      return;
+    }
+    // Reserve the worst-path journal BEFORE touching the heap; on failure
+    // this push has not happened at all.
+    heap_journal.reserve_for_sift(heap.size() + 1, /*is_pop=*/false);
+    if (heap.size() == heap.capacity()) {
+      // Capacity is not model state: growth persists past rollback and is
+      // reported instead of being undone.
+      const std::size_t moved = heap.size();
+      heap.reserve(std::max<std::size_t>(heap.capacity() * 2, 16));
+      ++preview_heap_growth_events;
+      preview_heap_growth_moves += moved;
+    }
+    heap_journal.record_push_back();
     heap.push_back(key);
-    std::push_heap(heap.begin(), heap.end(), std::greater<std::uint64_t>());
+    sift_up(heap, heap.size() - 1, &heap_journal);
   }
-  std::uint64_t pop_heap_key() {
-    std::pop_heap(heap.begin(), heap.end(), std::greater<std::uint64_t>());
-    const std::uint64_t key = heap.back();
-    heap.pop_back();
-    return key;
+  std::uint64_t pop_heap_key(PreviewTxn* txn = nullptr) {
+    if (txn == nullptr) return sift_pop(heap);
+    heap_journal.reserve_for_sift(heap.size(), /*is_pop=*/true);
+    return sift_pop(heap, &heap_journal);
   }
-  void push_event(std::uint64_t end_ns, std::uint32_t id) {
+  void push_event(std::uint64_t end_ns, std::uint32_t id,
+                  PreviewTxn* txn = nullptr) {
+    if (txn == nullptr) {
+      events.emplace_back(end_ns, id);
+      sift_up(events, events.size() - 1);
+      return;
+    }
+    events_journal.reserve_for_sift(events.size() + 1, /*is_pop=*/false);
+    if (events.size() == events.capacity()) {
+      const std::size_t moved = events.size();
+      events.reserve(std::max<std::size_t>(events.capacity() * 2, 16));
+      ++preview_events_growth_events;
+      preview_events_growth_moves += moved;
+    }
+    events_journal.record_push_back();
     events.emplace_back(end_ns, id);
-    std::push_heap(events.begin(), events.end(),
-                   std::greater<std::pair<std::uint64_t, std::uint32_t>>());
+    sift_up(events, events.size() - 1, &events_journal);
+  }
+  std::pair<std::uint64_t, std::uint32_t> pop_event(PreviewTxn* txn = nullptr) {
+    if (txn == nullptr) return sift_pop(events);
+    events_journal.reserve_for_sift(events.size(), /*is_pop=*/true);
+    return sift_pop(events, &events_journal);
   }
 
   void push_future_start(std::uint64_t start_time, std::uint32_t id) {
     future_starts.emplace_back(start_time, id);
-    std::push_heap(future_starts.begin(), future_starts.end(),
-                   std::greater<std::pair<std::uint64_t, std::uint32_t>>());
+    sift_up(future_starts, future_starts.size() - 1);
   }
 
-  void activate_due_starts() {
+  void activate_due_starts(PreviewTxn* txn = nullptr) {
+    if (txn != nullptr) {
+      // Derived-frontier feed only (see PreviewTxn): inside a preview
+      // transaction the pops and appends are skipped entirely -- the walk
+      // neither reads future_starts nor active_ids afterwards.
+      return;
+    }
     while (!future_starts.empty() && future_starts.front().first <= now) {
-      std::pop_heap(future_starts.begin(), future_starts.end(),
-                    std::greater<std::pair<std::uint64_t, std::uint32_t>>());
-      const auto start = future_starts.back();
-      future_starts.pop_back();
+      const auto start = sift_pop(future_starts);
       if (!done[start.second] && end[start.second] > now) {
         active_ids.push_back(start.second);
       }
     }
   }
 
+  // S sampling for the v9 attribution (§3.1): the four frontier entry sizes
+  // at preview entry, kept separate from the (now structural zero) copy F.
+  void note_preview_entry_sizes() {
+    const std::uint64_t h = static_cast<std::uint64_t>(heap.size());
+    const std::uint64_t e = static_cast<std::uint64_t>(events.size());
+    const std::uint64_t f = static_cast<std::uint64_t>(future_starts.size());
+    const std::uint64_t a = static_cast<std::uint64_t>(active_ids.size());
+    preview_s_heap += h;
+    preview_s_events += e;
+    preview_s_future_starts += f;
+    preview_s_active_ids += a;
+    preview_s_heap_max = std::max(preview_s_heap_max, h);
+    preview_s_events_max = std::max(preview_s_events_max, e);
+    preview_s_future_starts_max = std::max(preview_s_future_starts_max, f);
+    preview_s_active_ids_max = std::max(preview_s_active_ids_max, a);
+  }
+
   void complete_instance(std::uint32_t id, std::uint64_t end_ns,
-                         PreviewUndoLog* const preview_undo) {
-    if (preview_undo != nullptr) {
-      preview_undo->record(PreviewUndoLog::Field::Done, id,
-                           done[id] ? 1 : 0);
+                         PreviewTxn* const txn) {
+    if (txn != nullptr) {
+      // Worst case below: Done + CompletedByStage + one Unresolved per
+      // reverse edge; reserved before the first write of this call.
+      preview_undo.reserve_more(
+          2 + (rdep_start[id + 1] - rdep_start[id]));
+      preview_undo.record(PreviewUndoLog::Field::Done, id,
+                          done[id] ? 1 : 0);
     }
     done[id] = true;
     const std::uint32_t stage_id = stage_of[id];
     if (completed_by_stage[stage_id] == UINT64_MAX) {
       throw DieModelError("Execution: completed stage count overflows uint64");
     }
-    if (preview_undo != nullptr) {
-      preview_undo->record(PreviewUndoLog::Field::CompletedByStage,
-                           stage_id, completed_by_stage[stage_id]);
+    if (txn != nullptr) {
+      preview_undo.record(PreviewUndoLog::Field::CompletedByStage,
+                          stage_id, completed_by_stage[stage_id]);
     }
     ++completed_by_stage[stage_id];
     // The old per-instance erase/remove ran here. No observer or scheduler
     // callback can inspect active_ids until complete_due() returns, so defer
-    // removal and compact once after all same-boundary completions. The dirty
-    // flag is set at the same logical point as the old erase (after the
-    // overflow guard and completed counter update).
-    active_ids_dirty = true;
+    // removal and compact once after all same-boundary completions. Inside a
+    // preview transaction the live-frontier bookkeeping is skipped: the walk
+    // never reads active_ids, and the dirty flag is part of the scalar
+    // snapshot restored at rollback.
+    if (txn == nullptr) {
+      active_ids_dirty = true;
+    }
     bump_frontier_generation();
     --remaining;
     elapsed = std::max(elapsed, end_ns);
     for (std::uint32_t e = rdep_start[id]; e < rdep_start[id + 1]; ++e) {
       const std::uint32_t t = rdep_to[e];
-      if (preview_undo != nullptr) {
-        preview_undo->record(PreviewUndoLog::Field::Unresolved, t,
-                             unresolved[t]);
+      if (txn != nullptr) {
+        preview_undo.record(PreviewUndoLog::Field::Unresolved, t,
+                            unresolved[t]);
       }
       if (--unresolved[t] == 0) {
         const std::uint32_t ts = stage_of[t];
         push_heap_key((static_cast<std::uint64_t>(ts) << 32) |
-                      static_cast<std::uint64_t>(t - offset[ts]));
+                      static_cast<std::uint64_t>(t - offset[ts]), txn);
       }
     }
   }
@@ -452,22 +883,22 @@ struct Execution::Impl {
     active_ids_dirty = false;
   }
 
-  void complete_due(PreviewUndoLog* const preview_undo) {
+  void complete_due(PreviewTxn* const txn) {
     try {
       while (!events.empty() && events.front().first <= now) {
-        const auto ev = events.front();
-        std::pop_heap(events.begin(), events.end(),
-                      std::greater<std::pair<std::uint64_t, std::uint32_t>>());
-        events.pop_back();
+        const auto ev = pop_event(txn);
         if (!done[ev.second]) {
-          complete_instance(ev.second, ev.first, preview_undo);
+          complete_instance(ev.second, ev.first, txn);
         }
       }
     } catch (...) {
-      if (active_ids_dirty) compact_completed_active_ids();
+      // The catch-branch compaction is real-path derived maintenance; a
+      // preview transaction skips the scan and restores the flag via the
+      // scalar snapshot, leaving the real container untouched either way.
+      if (active_ids_dirty && txn == nullptr) compact_completed_active_ids();
       throw;
     }
-    if (active_ids_dirty) compact_completed_active_ids();
+    if (active_ids_dirty && txn == nullptr) compact_completed_active_ids();
   }
 
   // Start time of a memory instance = max(dependee ends, slot frees), the
@@ -485,7 +916,10 @@ struct Execution::Impl {
   }
 
   void schedule_internal(std::uint32_t id, const DieStage& st,
-                         PreviewUndoLog* const preview_undo) {
+                         PreviewTxn* const txn) {
+    if (txn != nullptr) {
+      preview_undo.reserve_more(2);  // StartNs + End below
+    }
     std::uint64_t start = 0;
     for (std::uint32_t e = dep_start[id]; e < dep_start[id + 1]; ++e) {
       start = std::max(start, end[dep_to[e]]);
@@ -511,12 +945,12 @@ struct Execution::Impl {
     }
     const std::uint64_t fin = start + dur_ns[id];
     bump_frontier_generation();
-    if (preview_undo != nullptr) {
-      preview_undo->record(PreviewUndoLog::Field::StartNs, id, start_ns[id]);
+    if (txn != nullptr) {
+      preview_undo.record(PreviewUndoLog::Field::StartNs, id, start_ns[id]);
     }
     start_ns[id] = start;
-    if (preview_undo != nullptr) {
-      preview_undo->record(PreviewUndoLog::Field::End, id, end[id]);
+    if (txn != nullptr) {
+      preview_undo.record(PreviewUndoLog::Field::End, id, end[id]);
     }
     end[id] = fin;
     switch (st.resource) {
@@ -532,19 +966,23 @@ struct Execution::Impl {
       default:
         break;
     }
-    push_event(fin, id);
-    if (start <= now && fin > now) {
-      active_ids.push_back(id);
-    } else if (start > now) {
-      push_future_start(start, id);
+    push_event(fin, id, txn);
+    if (txn == nullptr) {
+      // Real-path derived-frontier maintenance only; a preview transaction
+      // skips both branches (see PreviewTxn).
+      if (start <= now && fin > now) {
+        active_ids.push_back(id);
+      } else if (start > now) {
+        push_future_start(start, id);
+      }
     }
   }
 
-  void run(PreviewUndoLog* const preview_undo = nullptr) {
+  void run(PreviewTxn* const txn = nullptr) {
     next_mem_issue_at = UINT64_MAX;
     for (;;) {
-      activate_due_starts();
-      complete_due(preview_undo);
+      activate_due_starts(txn);
+      complete_due(txn);
       if (mem_outstanding || heap.empty()) {
         break;  // strict pop discipline: never past the min-key instance
       }
@@ -561,7 +999,7 @@ struct Execution::Impl {
           next_mem_issue_at = start;  // future internal event: the issue time
           break;
         }
-        pop_heap_key();
+        pop_heap_key(txn);
         mem_outstanding = true;
         bump_frontier_generation();
         mem_issued_new = true;
@@ -569,9 +1007,10 @@ struct Execution::Impl {
         mem_inst = id;
         mem_is_memnoc = st.resource == StageResource::MEM_NOC;
         mem_start_ns = start;
-        if (preview_undo != nullptr) {
-          preview_undo->record(PreviewUndoLog::Field::StartNs, id,
-                               start_ns[id]);
+        if (txn != nullptr) {
+          preview_undo.reserve_more(1);
+          preview_undo.record(PreviewUndoLog::Field::StartNs, id,
+                              start_ns[id]);
         }
         start_ns[id] = start;
         mem_noc_end = start + noc_leg_ns[id];
@@ -579,8 +1018,8 @@ struct Execution::Impl {
         mem_service_units = st.mem.service_units;
         break;  // one outstanding request; nothing else pops before completion
       }
-      pop_heap_key();
-      schedule_internal(id, st, preview_undo);
+      pop_heap_key(txn);
+      schedule_internal(id, st, txn);
     }
     if (remaining == 0) {
       finished = true;
@@ -612,6 +1051,8 @@ Execution::Execution(std::shared_ptr<const DiePlan> p) : impl_(new Impl()) {
   m.completed_by_stage.assign(ns, 0);
   if (total == 0) {
     m.finished = true;
+    // P_A of the v12 Phase 4 structural negative predicate (see Impl).
+    m.structural_negative = true;
     return;
   }
   m.stage_of.assign(total, 0);
@@ -730,6 +1171,25 @@ Execution::Execution(std::shared_ptr<const DiePlan> p) : impl_(new Impl()) {
       }
     }
   }
+  // P_B of the v12 Phase 4 structural negative predicate (see Impl): no
+  // memory instance exists and every internal instance is zero-duration, so
+  // the run() below drains the whole DAG synchronously (§6.4 zero-time
+  // rule) and leaves finished == true before any public entry.
+  m.structural_negative = true;
+  for (std::size_t s = 0; s < ns; ++s) {
+    const DieStage& st = (*m.stages)[s];
+    if (st.wave_repeat == 0) continue;
+    if (st.resource == StageResource::MEM ||
+        st.resource == StageResource::MEM_NOC) {
+      m.structural_negative = false;
+      break;
+    }
+  }
+  for (std::size_t id = 0; id < total && m.structural_negative; ++id) {
+    if (m.dur_ns[id] != 0) {
+      m.structural_negative = false;
+    }
+  }
   m.run();
 }
 
@@ -745,8 +1205,71 @@ std::optional<std::uint32_t> Execution::pending_memory_stage_id() const {
   return m.mem_stage;
 }
 
+std::uint64_t Execution::preview_calls() const {
+  return impl_->preview_calls;
+}
+std::uint64_t Execution::preview_walk_timers() const {
+  return impl_->preview_walk_timers;
+}
+std::uint64_t Execution::preview_undo_entries() const {
+  return impl_->preview_undo_entries;
+}
+std::uint64_t Execution::preview_frontier_entries() const {
+  return impl_->preview_frontier_entries;
+}
+
+PreviewCounters Execution::preview_counters() const {
+  const Impl& m = *impl_;
+  PreviewCounters c;
+  c.calls = m.preview_calls;
+  c.walk_timers = m.preview_walk_timers;
+  c.undo_entries = m.preview_undo_entries;
+  c.frontier_entries = m.preview_frontier_entries;
+  c.j_entries = m.preview_j_entries;
+  c.s_heap_total = m.preview_s_heap;
+  c.s_events_total = m.preview_s_events;
+  c.s_future_starts_total = m.preview_s_future_starts;
+  c.s_active_ids_total = m.preview_s_active_ids;
+  c.s_heap_max = m.preview_s_heap_max;
+  c.s_events_max = m.preview_s_events_max;
+  c.s_future_starts_max = m.preview_s_future_starts_max;
+  c.s_active_ids_max = m.preview_s_active_ids_max;
+  c.copy_bytes = m.preview_copy_bytes;
+  c.active_scan_entries = m.preview_active_scan_entries;
+  c.undo_peak = m.preview_undo_peak;
+  c.journal_peak = m.preview_journal_peak;
+  c.exit_memory = m.preview_exit_memory;
+  c.exit_done = m.preview_exit_done;
+  c.exit_exception = m.preview_exit_exception;
+  c.heap_growth_events = m.preview_heap_growth_events;
+  c.heap_growth_moves = m.preview_heap_growth_moves;
+  c.events_growth_events = m.preview_events_growth_events;
+  c.events_growth_moves = m.preview_events_growth_moves;
+  return c;
+}
+
 std::uint64_t Execution::template_key_computations_for_test() const {
   return impl_->template_key_computations;
+}
+
+std::uint64_t Execution::timer_window_memo_hits_for_test() const {
+  return impl_->timer_window_memo_hits;
+}
+
+std::uint64_t Execution::timer_window_memo_misses_for_test() const {
+  return impl_->timer_window_memo_misses;
+}
+
+std::uint64_t Execution::negative_cache_hits_for_test() const {
+  return impl_->negative_cache_hits;
+}
+
+std::uint64_t Execution::negative_cache_writes_for_test() const {
+  return impl_->negative_cache_writes;
+}
+
+bool Execution::structural_negative_for_test() const {
+  return impl_->structural_negative;
 }
 
 InternalSliceInfo Execution::describe_internal_slice() const {
@@ -932,6 +1455,56 @@ InternalTimerWindowInfo Execution::query_internal_timer_window(
     throw DieModelError(
         "query_internal_timer_window: max_count must be in [1,8]");
   }
+  // v11 Phase 4 (K2 epoch-keyed memo, 方案 §6.2). Equivalence: the memo
+  // returns exactly what the pure computation below returned for the SAME
+  // (Impl state, max_count) pair -- the epoch is bumped by every mutating
+  // public entry (audit list at Impl::state_epoch), so a slot hit proves
+  // the state is unchanged since the stored value was computed, and by the
+  // read-only-proof purity argument the recomputation would return the
+  // same value. The frozen-snapshot projection phase (no mutations at all)
+  // therefore hits on every repeated (execution, max_count) query, while
+  // the drive path (state changes between queries) misses every time --
+  // zero hits where they would be unsafe, all hits where they are free.
+  // Exceptions are never memoized (a throwing computation simply retries,
+  // deterministically, like the unmemoized baseline).
+  Impl& memo_state = *impl_;
+  Impl::TimerWindowMemoSlot& slot =
+      memo_state.timer_window_memo[max_count - 1];
+
+  // v12 Phase 4 (方案 §6.2): process-level structural negative cache. The
+  // probe runs only for plans whose P_struct holds -- for every other plan
+  // this is a single false bool test and the v11 behavior below is
+  // bit-identical (counters included). A hit is possible only when the
+  // stored rejection equals the full computation's return value in EVERY
+  // reachable state of ANY Execution of this plan (reason field included;
+  // see the Impl::structural_negative audit note), so serving it cannot
+  // change any accept/reject result. The epoch slot is refreshed as well to
+  // keep the v11 postcondition (the slot holds the value last returned for
+  // the current epoch). Preview transactions never reach this code with
+  // transactional intermediate state: preview_consecutive_internal_timers
+  // does not call this query at all (v9 audit note at Impl::state_epoch).
+  if (memo_state.structural_negative) {
+    K2TimerWindowNegativeCache& negative =
+        k2_timer_window_negative_cache();
+    if (negative.enabled()) {
+      const std::optional<InternalTimerWindowInfo> cached =
+          negative.find(memo_state.template_key());
+      if (cached.has_value()) {
+        ++memo_state.negative_cache_hits;
+        slot.valid = true;
+        slot.epoch = memo_state.state_epoch;
+        slot.value = *cached;
+        return *cached;
+      }
+    }
+  }
+
+  if (slot.valid && slot.epoch == memo_state.state_epoch) {
+    ++memo_state.timer_window_memo_hits;
+    return slot.value;
+  }
+  ++memo_state.timer_window_memo_misses;
+  const auto compute = [this, max_count]() -> InternalTimerWindowInfo {
   const Impl& m = *impl_;
   const InternalSliceInfo frontier = describe_internal_slice();
   InternalTimerWindowInfo result;
@@ -1086,10 +1659,34 @@ InternalTimerWindowInfo Execution::query_internal_timer_window(
   if (result.slices.size() == max_count) result.reason.clear();
   else if (result.reason.empty()) result.reason = "window_stops_at_typed_boundary";
   return result;
+  };  // compute (the pre-Phase-4 query body, unchanged)
+  const InternalTimerWindowInfo result = compute();
+  // v12 Phase 4 (方案 §6.2): negative-only write rule. supported=true is
+  // NEVER stored -- the accept path always recomputes. A rejection is stored
+  // only when P_struct holds, which is exactly when the stored value is
+  // provably what the recomputation returns in every reachable state, so a
+  // later hit (any Execution, any drive history) returns byte-identical
+  // output. Exceptions are never stored (a throwing computation simply
+  // retries, like the unmemoized baseline).
+  if (!result.supported && memo_state.structural_negative) {
+    K2TimerWindowNegativeCache& negative =
+        k2_timer_window_negative_cache();
+    if (negative.enabled()) {
+      ++memo_state.negative_cache_writes;
+      negative.insert(memo_state.template_key(), result);
+    }
+  }
+  slot.valid = true;
+  slot.epoch = memo_state.state_epoch;
+  slot.value = result;
+  return result;
 }
 
 void Execution::advance_internal_service(const InternalActionToken& action_token,
                                          const std::uint64_t delta_ns) {
+  // K2 memo epoch (v11 Phase 4): entry #4 of the audit at Impl::state_epoch
+  // (bump before validation: a rejected call only over-invalidates).
+  ++impl_->state_epoch;
   const InternalSliceInfo info = describe_internal_slice();
   if (!info.partial_service_supported || !info.action_token.valid ||
       !action_token.valid ||
@@ -1114,6 +1711,10 @@ void Execution::advance_internal_service(const InternalActionToken& action_token
 
 void Execution::advance_internal_service_window(
     InternalServiceWindowToken& token, const std::uint64_t delta_ns) {
+  // K2 memo epoch (v11 Phase 4): entry #5 of the audit at Impl::state_epoch
+  // (bump before validation: a rejected or zero-delta call only
+  // over-invalidates the memo, never under-invalidates it).
+  ++impl_->state_epoch;
   if (!token.valid || !token.first_action.valid ||
       token.original_service_ticks.empty() ||
       token.original_service_ticks.size() > 8) {
@@ -1219,6 +1820,8 @@ void Execution::advance_external_wait(
     const std::uint64_t delta_ns,
     const std::uint64_t expected_memory_stage) {
   Impl& m = *impl_;
+  // K2 memo epoch (v11 Phase 4): entry #6 of the audit at Impl::state_epoch.
+  ++m.state_epoch;
   if (!m.mem_outstanding || m.mem_stage != expected_memory_stage) {
     throw DieModelError(
         "advance_external_wait: no matching outstanding memory stage");
@@ -1382,6 +1985,9 @@ ExecutionProgress Execution::export_progress() const {
 
 ExecutionAction Execution::next_action() {
   Impl& m = *impl_;
+  // K2 memo epoch (v11 Phase 4): entry #1 of the mutating-surface audit at
+  // Impl::state_epoch.
+  ++m.state_epoch;
   m.run();
   ExecutionAction a;
   if (m.finished) {
@@ -1430,19 +2036,37 @@ ExecutionAction Execution::next_action() {
 
 TimerStretchPreview Execution::preview_consecutive_internal_timers() const {
   // The preview walk is single-driver and Impl::run has no external callbacks
-  // or owned payloads. Borrow the dense run arrays, journal their writes, and
-  // copy only the four mutable scheduler frontiers. The guard restores the
-  // original dense values, scalar cursor, and frontier buffers on every exit.
+  // or owned payloads. A journal-based transaction (v9) lets the walk run on
+  // the authoritative scheduler state itself: heap/events writes are undone
+  // in reverse, the dense arrays roll back through the undo log, the scalar
+  // cursor is restored from the entry snapshot, and the two derived
+  // frontiers (future_starts/active_ids) are not maintained at all during
+  // the walk. No frontier copy is taken: the walk's cost follows the heap
+  // paths and instances it actually touches, not the entry frontier size.
   Impl& preview = *impl_;
-  Impl::PreviewBorrowGuard preview_guard(preview);
-  preview.run(&preview_guard.undo);
+  // K2 memo epoch (v11 Phase 4): entry #7 of the audit at Impl::state_epoch.
+  // The transaction below restores every queried field bit-exactly at exit,
+  // but the epoch is deliberately NOT restored: a post-preview query misses
+  // and recomputes from the restored state, which is always correct. See
+  // the PreviewTxn audit note at Impl::state_epoch.
+  ++preview.state_epoch;
+  // E counts at the function entry, before any snapshot or journal work,
+  // so preparation failures are attempts too (v9 §3.1).
+  preview.preview_calls += 1;
+  // S: the four scheduler-frontier entry sizes, sampled before the
+  // transaction prepares (kept separate from the structural-zero copy F).
+  preview.note_preview_entry_sizes();
+  Impl::PreviewTxn txn(preview);
+  preview.run(&txn);
   TimerStretchPreview result;
   if (preview.finished) {
     result.reaches_done = true;
+    txn.note_exit(Impl::PreviewTxn::Exit::kDone);
     return result;
   }
   if (preview.mem_issued_new || preview.mem_outstanding) {
     result.reaches_memory_request = true;
+    txn.note_exit(Impl::PreviewTxn::Exit::kMemoryRequest);
     return result;
   }
 
@@ -1470,15 +2094,18 @@ TimerStretchPreview Execution::preview_consecutive_internal_timers() const {
           "preview_consecutive_internal_timers: action count overflows uint64");
     }
     ++result.timer_action_count;
+    preview.preview_walk_timers += 1;
     preview.now = next_tick;
-    preview.run(&preview_guard.undo);
+    preview.run(&txn);
 
     if (preview.finished) {
       result.reaches_done = true;
+      txn.note_exit(Impl::PreviewTxn::Exit::kDone);
       return result;
     }
     if (preview.mem_issued_new || preview.mem_outstanding) {
       result.reaches_memory_request = true;
+      txn.note_exit(Impl::PreviewTxn::Exit::kMemoryRequest);
       return result;
     }
   }
@@ -1486,6 +2113,8 @@ TimerStretchPreview Execution::preview_consecutive_internal_timers() const {
 
 void Execution::advance_time(std::uint64_t ns) {
   Impl& m = *impl_;
+  // K2 memo epoch (v11 Phase 4): entry #2 of the audit at Impl::state_epoch.
+  ++m.state_epoch;
   if (ns > UINT64_MAX - m.now) {
     throw DieModelError("advance_time: clock overflow");
   }
@@ -1495,6 +2124,8 @@ void Execution::advance_time(std::uint64_t ns) {
 
 void Execution::complete_memory(std::uint64_t stage_id) {
   Impl& m = *impl_;
+  // K2 memo epoch (v11 Phase 4): entry #3 of the audit at Impl::state_epoch.
+  ++m.state_epoch;
   if (!m.mem_outstanding) {
     throw DieModelError(
         "complete_memory: no outstanding memory request to complete");
@@ -1521,6 +2152,74 @@ void Execution::complete_memory(std::uint64_t stage_id) {
   }
   m.push_event(end, m.mem_inst);
   m.run();
+}
+
+// ---------------------------------------------------------------------------
+// v12 Phase 4 (方案 §6.2): process-level structural negative cache for
+// query_internal_timer_window. LRU discipline mirrors PlanCache (same
+// single-driver, no-locking caliber). The config fingerprint is embedded in
+// every entry key, so conclusions computed under one window-approximation
+// configuration are structurally invisible to probes under another (exact
+// vs approx can never share an entry).
+
+K2TimerWindowNegativeCache::K2TimerWindowNegativeCache(
+    std::size_t capacity, std::string config_fingerprint)
+    : capacity_(capacity == 0 ? 1 : capacity),
+      fingerprint_(std::move(config_fingerprint)) {}
+
+void K2TimerWindowNegativeCache::set_config_fingerprint(
+    std::string fingerprint) {
+  fingerprint_ = std::move(fingerprint);
+}
+
+void K2TimerWindowNegativeCache::clear() {
+  index_.clear();
+  lru_.clear();
+}
+
+std::size_t K2TimerWindowNegativeCache::size() const { return lru_.size(); }
+
+std::string K2TimerWindowNegativeCache::entry_key(
+    const std::string& plan_cache_key) const {
+  // '\x1f' (unit separator) cannot appear in either component: the
+  // fingerprint is an ASCII token and plan_cache_key is 16 lowercase hex
+  // digits, so the composite key is collision-free.
+  std::string key = fingerprint_;
+  key += '\x1f';
+  key += plan_cache_key;
+  return key;
+}
+
+std::optional<InternalTimerWindowInfo> K2TimerWindowNegativeCache::find(
+    const std::string& plan_cache_key) const {
+  auto it = index_.find(entry_key(plan_cache_key));
+  if (it == index_.end()) {
+    return std::nullopt;
+  }
+  lru_.splice(lru_.begin(), lru_, it->second);
+  return it->second->second;
+}
+
+void K2TimerWindowNegativeCache::insert(
+    const std::string& plan_cache_key, InternalTimerWindowInfo rejection) {
+  const std::string key = entry_key(plan_cache_key);
+  auto it = index_.find(key);
+  if (it != index_.end()) {
+    it->second->second = std::move(rejection);
+    lru_.splice(lru_.begin(), lru_, it->second);
+    return;
+  }
+  lru_.emplace_front(key, std::move(rejection));
+  index_[key] = lru_.begin();
+  while (lru_.size() > capacity_) {
+    index_.erase(lru_.back().first);
+    lru_.pop_back();
+  }
+}
+
+K2TimerWindowNegativeCache& k2_timer_window_negative_cache() {
+  static K2TimerWindowNegativeCache cache;
+  return cache;
 }
 
 }  // namespace DieModel

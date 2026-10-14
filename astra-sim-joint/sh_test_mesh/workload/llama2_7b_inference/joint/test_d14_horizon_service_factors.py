@@ -263,10 +263,10 @@ class TransferFactorProjectionTest(unittest.TestCase):
         request = self._request()
         base = baseline.estimate_P_with_continuation(
             session=session, request=request, instance_index=0,
-            action="copy", remote_enabled=True)
+            action="copy")
         priced = inflated.estimate_P_with_continuation(
             session=session, request=request, instance_index=0,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertGreater(priced.cost_ns, base.cost_ns)
         self.assertAlmostEqual(
             inflated._world_context().efficiency.eta_of("link:0->1"),
@@ -281,10 +281,10 @@ class TransferFactorProjectionTest(unittest.TestCase):
                                             decode_factor=3.0))
         base = baseline.estimate_P_with_continuation(
             session=self._session(), request=self._request(),
-            instance_index=0, action="stay", remote_enabled=True)
+            instance_index=0, action="stay")
         priced = slower.estimate_P_with_continuation(
             session=self._session(), request=self._request(),
-            instance_index=0, action="stay", remote_enabled=True)
+            instance_index=0, action="stay")
         self.assertIsNotNone(base.cost_ns)
         self.assertIsNotNone(priced.cost_ns)
         self.assertNotEqual(base.cost_ns, priced.cost_ns)

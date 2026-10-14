@@ -2130,14 +2130,23 @@ harness.apply(full_with_descriptor(descriptor));
 
 Json delta = issue_target_tile1(descriptor, 1, 1, 1);
         ParsedEnvelope parsed = harness.parse(delta);
-        // Corrupt the parsed transition's slot-patch form directly.
-        parsed.pipeline_runs[0]["slot_patches"][0] =
-Json::array({"source", Json::array({1, 2, 3}), nullptr, nullptr});
+        // Corrupt the parsed transition's slot-patch state directly.
+        jointledger::SlotPatch corrupt;
+        corrupt.is_target_delta = false;
+        jointledger::SlotRow phantom;
+        phantom.domain = "not-a-domain";
+        phantom.role_source = true;
+        phantom.rank = 0;
+        phantom.has_shard = true;
+        corrupt.key.domain = "not-a-domain";
+        corrupt.key.role_source = true;
+        corrupt.after = phantom;
+        parsed.pipeline_runs[0].slot_patches[0] = std::move(corrupt);
         auto tx = harness.work.begin_protocol_v3_transaction(
             parsed.header.delivery_sequence, parsed.header.tick, "delta");
 CHECK_THROW_STATEMENT(
             harness.pipeline.prepare(parsed, tx, delta.dump()),
-            "slot key must have five fields");
+            "crosses the transition buffer domain");
     }
     // 53: an empty full is idempotent-zero-change even after prepare+discard.
     {

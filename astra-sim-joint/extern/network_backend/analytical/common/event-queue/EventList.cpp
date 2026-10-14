@@ -7,6 +7,11 @@ LICENSE file in the root directory of this source tree.
 #include <cassert>
 #include <utility>
 
+#ifdef JOINT_V7_EVENT_PROFILE
+#include "common/EventProfile.h"
+using namespace NetworkAnalytical::EventProfile;
+#endif
+
 using namespace NetworkAnalytical;
 
 EventList::EventList(const EventTime event_time) noexcept : event_time(event_time) {
@@ -88,6 +93,18 @@ void EventList::invoke_events() noexcept {
     // Pop/copy before invoking: the callback may append another same-time
     // event to this EventList. The loop observes it in exact FIFO order.
     while (first_event.has_value() || !overflow_events.empty()) {
+#ifdef JOINT_V7_EVENT_PROFILE
+        // Diagnostic-only classification bracket (v7 attribution): one label
+        // lookup + two clock reads per event. Compiled out in production.
+        const Callback profile_cb = first_event.has_value()
+            ? first_event->get_callback()
+            : overflow_events.front().get_callback();
+        const char* profile_label = classify(profile_cb);
+        Slot* profile_slot = profile_label != nullptr
+            ? find_slot(state().main, profile_label)
+            : nullptr;
+        const uint64_t profile_t0 = now_ns();
+#endif
         if (first_event.has_value()) {
             QueuedEvent event = std::move(*first_event);
             first_event.reset();
@@ -97,5 +114,13 @@ void EventList::invoke_events() noexcept {
             overflow_events.pop_front();
             event.invoke_event();
         }
+#ifdef JOINT_V7_EVENT_PROFILE
+        if (profile_label != nullptr) {
+            close_slot(profile_slot, nullptr, profile_t0);
+        } else {
+            state().unclassified_main.ns += now_ns() - profile_t0;
+            state().unclassified_main.calls += 1;
+        }
+#endif
     }
 }

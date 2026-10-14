@@ -1,46 +1,46 @@
 #!/usr/bin/env python3
-"""domain_metrics —— 局部统一内存域三口径离线度量（C16/WP6b，2026-09-22）。
+"""domain_metrics —— 局部统一内存域三口径离线度量（C16/WP6b，2026-09-22；
+2026-10-14 远读动作退役重收缩：挑战者动作重指派为 copy）。
 
 依据：设计文档《joint机制改造方案_局部统一内存域》§5.1-§5.3（域只描述
-远读条件、三类观测必须分开、边界检验）、§1.2（d≤ρ 简化解析锚点仅历史
-扫描项平价）、§3.3（V_copy/V_remote 容量静态参考）；执行计划 §5 C16 卡；
-C5 冻结 schema（PROVENANCE §19）；C10 δ_adm 终冻报告（维持 0）+ A3'
-下游指令（离线敏感性重定价 δ∈{σ̂,2σ̂,4σ̂}，不留 δ=0 空转对拍臂）。
+挑战者条件、三类观测必须分开、边界检验）、§1.2（d≤ρ 简化解析锚点仅历史
+扫描项平价）；执行计划 §5 C16 卡；C5 冻结 schema（PROVENANCE §19）；
+C10 δ_adm 终冻报告（维持 0）+ A3' 下游指令（离线敏感性重定价
+δ∈{σ̂,2σ̂,4σ̂}，不留 δ=0 空转对拍臂）。
 
-三类观测必须分开（§5.2，F13）——本工具的三张口径：
+三类观测必须分开（§5.2，F13）——本工具的三张口径（三动作化后挑战者 =
+copy，替代族 = stay/recompute）：
 
-1. 预测供给集合 D_feed(q,p,s)：决策日志中 remote-read 候选**配额前结构
-   可行**的实例集合（M2/N6：applicable ∨ quota_ 前缀拒且配额前成本在
-   ——供给条件已判过；实际配额准入域 = remote_applicable 列，两域分列）；
-   逐成员标注本地参考（min-cost stay）与性能容忍度（C_remote−C_stay_ref）。
+1. 预测供给集合 D_feed(q,p,s)：决策日志中 copy 候选**配额前结构可行**
+   的实例集合（M2/N6：applicable ∨ quota_ 前缀拒且配额前成本在——
+   供给条件已判过；实际配额准入域 = challenger_applicable 列，两域
+   分列）；逐成员标注本地参考（min-cost stay）与性能容忍度
+   （C_copy−C_stay_ref）。
 2. 预测经济集合 D_econ(q,s)：C_alt* = min C(e,a) 遍历**全部实例的适用
-   非 remote 动作（必含 copy）**；D_econ = {e: C_remote(e) ≤ C_alt*+δ}。
+   非挑战者动作（stay/recompute）**；D_econ = {e: C_copy(e) ≤ C_alt*+δ}。
    主臂 δ=δ_adm=0（C10 终冻）；敏感性臂 δ∈{σ̂,2σ̂,4σ̂} 仅离线诊断。
-   同位置动作比较（remote vs 同实例最优非 remote）另列、口径单独标注。
+   同位置动作比较（copy vs 同实例最优非 copy）另列、口径单独标注。
 3. 实际选择与受控 measured 集合：在线日志只含最终 (e,a)（selected_
-   action/joint_instance_index）；四动作选中计数 recompute 仅 elected、
+   action/joint_instance_index）；三动作选中计数 recompute 仅 elected、
    forced（no_history/quota_deferred/evicted_permanent 三成因，K7-① 扩
    枚举）单列（§19.2，两口径不得混报）。
    独立同状态执行的 measured 集合**不在本产物**（C4b 受控测量三表）——
    如实标 NA，不与预测混合；预测/实测差仅作 §5.2 诊断分列。
 
 派生指标（§5.3）：|D|、距离分位数（hop）、方向分布（分方向半径方差）、
-瓶颈资源（breakdown 六段 argmax）、约束不满足原因、预测/实测差异；
+瓶颈资源（breakdown 五段 argmax）、约束不满足原因、预测/实测差异；
 双域同图数据（D_econ 等值线 vs 配额准入域实线——两域之差即配额作用量；
-N6 口径消歧：D_econ/D_feed 为**配额前**口径（quota_admissible/quota_
-admissible_remote 列 = 移除配额后的结构可行域），实际配额准入域 =
-remote_applicable/applicable 列；配额前成本等值线输入 = instances CSV
-remote_cost_pre_quota_ns 列；run 级配额作用量 = quota_counterfactual_
-flips）；内等值线（C_remote=C_stay_ref）/
-外等值线（C_remote=C_alt*，含 copy/池恢复/重算）逐 (请求,实例) 导出。
+N6 口径消歧：D_econ/D_feed 为**配额前**口径（quota_admissible
+列 = 移除配额后的结构可行域），实际配额准入域 =
+challenger_applicable/applicable 列；配额前成本等值线输入 = instances CSV
+challenger_cost_pre_quota_ns 列；run 级配额作用量 = quota_counterfactual_
+flips）；内等值线（C_copy=C_stay_ref）/
+外等值线（C_copy=C_alt*，含池恢复/重算）逐 (请求,实例) 导出。
 
 边界对拍纪律（全部落输出注释）：
-* remote/local 分界 vs d≤ρ 简化解析锚点——**仅历史扫描项平价、不保证
+* 挑战者/local 分界 vs d≤ρ 简化解析锚点——**仅历史扫描项平价、不保证
   完整请求平价**；ρ = B_D2D/B_HBM 逐配置硬件派生（trace_config
   hardware_config → hardware json）。
-* remote/copy 分界**不设单变量理论线**；辅助诊断锚点仅用容量静态参考
-  V_copy≈[H+I+b_c−F]+ / V_remote≈[I+b_r−F]+（设计文档 §3.3）；b_c/b_r
-  未随 schema 披露 → 锚点整体 NA、组件（H/I/F）如实分列。
 * **无 n* = d′/(d−ρ) 式**（v2.2 已删除）；对拍是诊断不是验收——不要求
   逐点重合，偏差本身是模型诊断结果。
 
@@ -51,12 +51,12 @@ flips）；内等值线（C_remote=C_stay_ref）/
 数据源（全部 run_dir 本地、先实测登记不猜测）：
 * results/online_decision_log.jsonl —— kind=joint_admission（C5 schema：
   candidates[]{action,instance_index,applicable,cost_ns,hops,
-  inapplicable_reason,breakdown 11 字段} + selected_action/applicable_
+  inapplicable_reason,breakdown 字段} + selected_action/applicable_
   actions/recompute_selection/load_view/flow_snapshot/port_snapshot）
   与 kind=completion（C3b 披露：merge_direction/home_flipped_to/
   merge_transferred_bytes/kv_instance_after_completion）。
 * per-request manifest（history_tokens_before/final_context_tokens）——
-  V_copy/V_remote 静态参考组件；缺失 → 组件 NA 不编造。
+  逐请求 KV 字节组件（H/I）。
 * trace_config.csv（inference_group ranks + layers/hidden_size/
   bytes_per_elem + hardware_config）与 hardware json（mesh 行列、
   d2d/local-hbm 带宽 → ρ、实例锚点坐标 → 方向分布）——任一环缺失 →
@@ -101,28 +101,31 @@ REQUESTS_CSV_NAME = "slo_domain_requests.csv"
 INSTANCES_CSV_NAME = "slo_domain_instances.csv"
 SUMMARY_JSON_NAME = "slo_domain_summary.json"
 
-# C5 schema（PROVENANCE §19.1）selected_action 枚举（F10 四动作范围）。
-FOUR_ACTIONS = ("stay", "recompute", "remote-read", "copy")
-NON_REMOTE_ACTIONS = ("stay", "copy", "recompute")
-# 候选落盘序 = SH ACTION_ORDER（stay, recompute, copy, remote-read；
-# §19.1 applicable_actions 序）。K7（P2-10，2026-09-23 外部审计）：
+# C5 schema（PROVENANCE §19.1）selected_action 枚举（F10 三动作范围）。
+ALL_ACTIONS = ("stay", "recompute", "copy")
+# 域口径的动作分族（2026-10-14 远读退役重收缩）：挑战者 = copy（跨实例
+# 迁移族），替代族 = stay/recompute——C_alt* 在替代族上取 min，D_feed/
+# D_econ 按挑战者候选重建。
+CHALLENGER_ACTION = "copy"
+ALT_ACTIONS = ("stay", "recompute")
+# 候选落盘序 = SH ACTION_ORDER（stay, recompute, copy；§19.1
+# applicable_actions 序）。K7（P2-10，2026-09-23 外部审计）：
 # δ=0 谓词重放的平局裁决**镜像在线 argmin 全键序**（cost, instance,
 # ACTION_ORDER 偏好）——原 (cost, ACTION_ORDER, instance) 与在线
 # (cost_ns, (instance_index, action_priority)) 平局分歧（同 cost 时
 # 在线取小实例、离线取优动作），"replay_mismatch 应为 0"的声称被
-# 三向平局证伪。O8①（2026-09-23）：族间比较（remote_min vs C_alt*，
+# 三向平局证伪。O8①（2026-09-23）：族间比较（挑战者 min vs C_alt*，
 # _selection_under_delta）补同款全键序——"平局裁决镜像在线 argmin
 # 全键序"自此对族内（_min_cost）与族间均属实，跨族同价平局不再
-# 假翻 remote（replay_mismatch/quota_counterfactual_flips 假阳性消除）。
-ACTION_ORDER = ("stay", "recompute", "copy", "remote-read")
+# 假翻挑战者（replay_mismatch/quota_counterfactual_flips 假阳性消除）。
+ACTION_ORDER = ("stay", "recompute", "copy")
 _ACTION_RANK = {action: rank for rank, action in enumerate(ACTION_ORDER)}
 
-# breakdown 六段时间段（瓶颈资源 argmax 的候选集；remote_read_first_
-# credit_ns/remote_read_stream_ns 是 remote_read_ns 的内部信用结构，
-# 不单列）。字段序 = _JOINT_BREAKDOWN_LOG_FIELDS 冻结序的子集。
+# breakdown 五段时间段（瓶颈资源 argmax 的候选集）。字段序 =
+# _JOINT_BREAKDOWN_LOG_FIELDS 冻结序的子集（远读段随 D07/D7 退役删除）。
 BREAKDOWN_SEGMENTS = (
     "target_wait_ns", "history_prep_ns", "eviction_wait_ns",
-    "compute_ns", "remote_read_ns", "merge_ns",
+    "compute_ns", "merge_ns",
 )
 
 KV_DELTA_JOURNAL_RELPATH = Path("results") / "kv_delta_journal.jsonl"
@@ -162,29 +165,26 @@ REQUESTS_COLUMNS = (
     "recompute_tier", "forced_reason", "selected_hop",
     "d_feed_size", "d_feed_members",
     "c_stay_ref_ns", "c_alt_star_ns", "c_alt_star_action",
-    "c_remote_min_ns", "c_remote_min_instance",
     "d_econ_size_delta0", "d_econ_members_delta0",
-    "same_position_remote_wins",
+    "same_position_challenger_wins",
     "observed_inner_boundary_hop", "observed_feed_boundary_hop",
     "rho_anchor", "boundary_deviation_hop",
     "n_active_links", "pred_ns", "measured_ns", "measured_service_ns", "pred_measured_err_ns",
     "h_bytes_per_rank", "i_bytes_per_rank", "f_min_bytes_at_selected",
-    "v_copy_anchor", "v_remote_anchor",
 )
 
 INSTANCES_COLUMNS = (
     "request_id", "instance_index", "anchor_row", "anchor_col",
     "direction", "hops",
-    "remote_applicable", "in_d_feed", "remote_cost_ns",
-    "remote_cost_pre_quota_ns",
+    "challenger_applicable", "in_d_feed", "challenger_cost_ns",
+    "challenger_cost_pre_quota_ns",
     "feed_margin_ns", "feed_margin_ratio",
     "stay_cost_ns", "copy_cost_ns", "recompute_cost_ns",
-    "same_pos_best_alt_ns", "same_pos_remote_pref",
-    "c_remote_minus_stay_ref_ns", "c_remote_minus_alt_star_ns",
+    "same_pos_best_alt_ns", "same_pos_challenger_pref",
+    "c_challenger_minus_stay_ref_ns", "c_challenger_minus_alt_star_ns",
     "in_d_econ_delta0", "in_d_econ_m1", "in_d_econ_m2", "in_d_econ_m4",
-    "port_u_port_total", "port_parity_gate_headroom", "quota_admissible",
-    "quota_admissible_remote",
-    "remote_bottleneck_component", "remote_inapplicable_reason",
+    "port_u_port_total", "quota_admissible",
+    "challenger_bottleneck_component", "challenger_inapplicable_reason",
 )
 
 
@@ -273,7 +273,7 @@ def resolve_topology(run_dir: Path, trace_config_arg: Optional[str],
         config = trace["config"]
 
         # KV 每_token 每 NPU 字节系数（2·layers·hidden·bytes_per_elem；与
-        # hbm_watermark 同式）——V_copy/V_remote 静态参考组件用。
+        # hbm_watermark 同式）——逐请求 KV 字节组件（H/I）用。
         try:
             coef = (2 * int(config["layers"]) * int(config["hidden_size"])
                     * int(config["bytes_per_elem"]))
@@ -505,7 +505,7 @@ class DomainScan:
                 continue
             instance = _int_or_none(cand.get("instance_index"))
             action = cand.get("action")
-            if instance is None or action not in FOUR_ACTIONS:
+            if instance is None or action not in ALL_ACTIONS:
                 fail(f"joint_admission 候选 instance_index/action 非法："
                      f"{request_id}（{action!r}@{instance!r}）")
             slot = DomainScan._candidate_slot(cand)
@@ -557,9 +557,9 @@ class DomainScan:
                 if isinstance(value, int) and value > 0:
                     active_links += 1
         selected_action = decision.get("selected_action")
-        if selected_action is not None and selected_action not in FOUR_ACTIONS:
+        if selected_action is not None and selected_action not in ALL_ACTIONS:
             fail(f"selected_action 枚举非法：{request_id}"
-                 f"（{selected_action!r}，F10 四动作范围）")
+                 f"（{selected_action!r}，F10 三动作范围）")
         joint_action = decision.get("joint_action")
         if selected_action is not None and joint_action is not None \
                 and selected_action != joint_action:
@@ -596,10 +596,9 @@ class DomainScan:
         report 的 D 样本源）。无 boundary_decision（旧日志/一次映射臂
         boundary 键为 None）→ None（不造样本）。
 
-        执行候选身份解析（回退/混合形态与 sh30 登记侧同判据）：非回退
-        = (chosen_instance_index, selected_action_face)；混合候选按
-        hybrid_copy_sources 匹配子集身份；回退行 chosen_* 已是执行继续
-        形态（sh30 侧 boundary["chosen_action"] = 执行面动作）。"""
+        执行候选身份解析（回退形态与 sh30 登记侧同判据）：非回退 =
+        (chosen_instance_index, selected_action_face)；回退行 chosen_* 已是
+        执行继续形态（sh30 侧 boundary["chosen_action"] = 执行面动作）。"""
         boundary = decision.get("boundary_decision")
         if not isinstance(boundary, dict):
             return None
@@ -611,7 +610,6 @@ class DomainScan:
                 boundary.get("chosen_instance_index"))
             face = boundary.get("selected_action_face") or \
                 boundary.get("chosen_action")
-            subset = boundary.get("hybrid_copy_sources")
             for cand in candidates_raw:
                 if not isinstance(cand, dict):
                     continue
@@ -620,16 +618,10 @@ class DomainScan:
                 if instance is None or not isinstance(action, str):
                     continue
                 slot = DomainScan._candidate_slot(cand)
-                if action == "hybrid":
-                    slot["copy_subset"] = list(cand.get("copy_subset") or [])
                 candidates.setdefault(instance, {})[action] = slot
                 if (executed_slot is None and chosen_instance is not None
                         and instance == chosen_instance
                         and isinstance(face, str) and action == face):
-                    if action == "hybrid" and isinstance(subset, list):
-                        if sorted(cand.get("copy_subset") or []) != \
-                                sorted(subset):
-                            continue
                     executed_slot = slot
         inherited = boundary.get("inherited_obligations")
         return {
@@ -691,32 +683,35 @@ def _min_cost(candidates: dict[int, dict[str, dict]], actions: tuple[str, ...],
     return (best[0], best[1], best[3])
 
 
-def _selection_under_delta(delta: int, remote_min: Optional[tuple[int, int]],
+def _selection_under_delta(delta: int,
+                           challenger_min: Optional[tuple[int, int]],
                            alt_star: Optional[tuple[int, int, str]],
                            ) -> tuple[str, Optional[int]]:
     """δ 带下的离线重定价选择（C10 A3' 指令的决策路径口径）。
 
-    谓词 = challenger_flips 同构：remote 挑战者须以 ≥δ 胜出在册非 remote
-    动作族（C_remote + δ ≤ C_alt*——严格小于 remote 胜；等号成立按
-    下方全键序裁决）。D_econ 集合口径（≤ C_alt*+δ）另计，两者不混。
+    谓词 = challenger_flips 同构：挑战者（copy，远读退役后重指派——
+    2026-10-14）须以 ≥δ 胜出替代动作族（C_copy + δ ≤ C_alt*——严格
+    小于挑战者胜；等号成立按下方全键序裁决）。D_econ 集合口径
+    （≤ C_alt*+δ）另计，两者不混。
 
     O8①（2026-09-23）：跨族平局镜像在线 argmin 全键序（cost_ns,
     (instance_index, action_priority)，joint_scheduler order_key）——
     比较键从裸 cost 扩为 (cost+δ, instance, ACTION_ORDER 秩；未知动作
-    秩取 len(ACTION_ORDER)，与 order_key().get 缺省同形）。δ=0 同价时
-    实例号小者胜：stay@0=remote@1 在线取 stay@0，重放不再恒翻 remote。
-    修前裸 cost 比较在 C_remote==C_alt* 恒翻 remote，replay_mismatch/
+    秩取 len(ACTION_ORDER)，与 order_key().get 缺省同形)。δ=0 同价时
+    实例号小者胜：stay@0=copy@1 在线取 stay@0，重放不再恒翻 copy。
+    修前裸 cost 比较在 C_copy==C_alt* 恒翻挑战者，replay_mismatch/
     quota_counterfactual_flips 各计一次假翻转（配额作用量指标被污染）。
     """
     if alt_star is None:
         return ("NA", None)
-    if remote_min is not None:
-        remote_key = (remote_min[0] + delta, remote_min[1],
-                      _ACTION_RANK.get("remote-read", len(ACTION_ORDER)))
+    if challenger_min is not None:
+        challenger_key = (
+            challenger_min[0] + delta, challenger_min[1],
+            _ACTION_RANK.get(CHALLENGER_ACTION, len(ACTION_ORDER)))
         alt_key = (alt_star[0], alt_star[1],
                    _ACTION_RANK.get(alt_star[2], len(ACTION_ORDER)))
-        if remote_key <= alt_key:
-            return ("remote-read", remote_min[1])
+        if challenger_key <= alt_key:
+            return (CHALLENGER_ACTION, challenger_min[1])
     return (alt_star[2], alt_star[1])
 
 
@@ -822,8 +817,6 @@ def _requests_csv_row(entry: dict, topology: dict,
         derived["c_stay_ref"] if derived["c_stay_ref"] is not None else NA,
         derived["alt_star"][0] if derived["alt_star"] else NA,
         derived["alt_star"][2] if derived["alt_star"] else NA,
-        derived["remote_min"][0] if derived["remote_min"] else NA,
-        derived["remote_min"][1] if derived["remote_min"] else NA,
         len(derived["d_econ_delta0"]),
         _format_members(derived["d_econ_delta0"]),
         derived["same_position_wins"],
@@ -840,7 +833,6 @@ def _requests_csv_row(entry: dict, topology: dict,
         if entry.get("measured_service_ns") is not None else NA,
         entry["err_ns"] if entry["err_ns"] is not None else NA,
         h_bytes, i_bytes, f_min,
-        NA, NA,  # v_copy/v_remote：b_c/b_r 未随 schema 披露 → 锚点 NA
     )
 
 
@@ -855,18 +847,6 @@ def _quota_admissible_flag(per_instance: dict) -> int:
         (cand and (cand["applicable"]
                    or str(cand.get("reason") or "").startswith("quota_")))
         for cand in per_instance.values()))
-
-
-def _quota_admissible_remote_flag(per_instance: dict) -> int:
-    """M2/N6（2026-09-23 验收审计）：remote-read 特异的**配额前结构域**
-    （pre-quota structural：applicable ∨ quota_ 前缀拒——"移除配额后
-    结构可行"，非实际配额准入域；实际域 = remote_applicable 列，两域
-    之差即配额作用量的 remote 分量）。四动作 any 列（quota_admissible）
-    对 remote 被配额裁不敏感（stay 可用即 1）故单列；quota-off run
-    退化为 remote 结构适用性。"""
-    remote = per_instance.get("remote-read")
-    return int(bool(
-        remote and (remote["applicable"] or _quota_deferred(remote))))
 
 
 def _sigma_tier_available(sigma_tiers: dict, index: int) -> bool:
@@ -889,14 +869,15 @@ def _instances_csv_rows(entry: dict, topology: dict, sigma_tiers: dict):
     port_rows = decision["port_rows"]
     for instance in sorted(decision["candidates"]):
         per_instance = decision["candidates"][instance]
-        remote = per_instance.get("remote-read")
+        challenger = per_instance.get(CHALLENGER_ACTION)
         anchor = anchors.get(instance)
         if reference_anchor is not None and anchor is not None:
             direction = direction_bucket(reference_anchor, anchor)
         else:
             direction = NA
-        remote_applicable = bool(remote and remote["applicable"])
-        remote_cost = remote["cost_ns"] if remote_applicable else None
+        challenger_applicable = bool(challenger and challenger["applicable"])
+        challenger_cost = (challenger["cost_ns"]
+                           if challenger_applicable else None)
         c_stay = derived["c_stay_ref"]
         alt_star_cost = derived["alt_star"][0] if derived["alt_star"] \
             else None
@@ -904,7 +885,7 @@ def _instances_csv_rows(entry: dict, topology: dict, sigma_tiers: dict):
         copy = per_instance.get("copy")
         recompute = per_instance.get("recompute")
         same_pos_alts = [
-            cand["cost_ns"] for cand in (stay, copy, recompute)
+            cand["cost_ns"] for cand in (stay, recompute)
             if cand and cand["applicable"] and cand["cost_ns"] is not None]
         same_pos_best = min(same_pos_alts) if same_pos_alts else None
         port = port_rows.get(instance) or {}
@@ -912,36 +893,40 @@ def _instances_csv_rows(entry: dict, topology: dict, sigma_tiers: dict):
         # 前缀）的候选保留配额前预测成本（M2 修复后决策行携带），实例
         # CSV 此前列 applicable-only 置 NA ⇒ quota-on run 画不出配额前
         # 成本等值线（计划文档 §5.4"双域同图"的 D_econ 侧输入）。
-        remote_pre_quota_cost = (
-            remote["cost_ns"]
-            if remote and remote["cost_ns"] is not None
-            and (remote["applicable"] or _quota_deferred(remote))
+        challenger_pre_quota_cost = (
+            challenger["cost_ns"]
+            if challenger and challenger["cost_ns"] is not None
+            and (challenger["applicable"] or _quota_deferred(challenger))
             else None)
         # D_feed 与等值线展示的是移除 quota gate 后的结构/经济供给面；
-        # 对 quota_ 拒绝项用保留的配额前预测成本。remote_cost_ns 与
-        # same_pos_remote_pref 仍是实际 applicable-only 口径。
-        margin = (remote_pre_quota_cost - c_stay
-                  if remote_pre_quota_cost is not None and c_stay is not None
+        # 对 quota_ 拒绝项用保留的配额前预测成本。challenger_cost_ns 与
+        # same_pos_challenger_pref 仍是实际 applicable-only 口径。
+        margin = (challenger_pre_quota_cost - c_stay
+                  if challenger_pre_quota_cost is not None
+                  and c_stay is not None
                   else None)
         inner_margin = (
-            remote_pre_quota_cost - c_stay
-            if remote_pre_quota_cost is not None and c_stay is not None
+            challenger_pre_quota_cost - c_stay
+            if challenger_pre_quota_cost is not None
+            and c_stay is not None
             else None)
         outer_margin = (
-            remote_pre_quota_cost - alt_star_cost
-            if remote_pre_quota_cost is not None and alt_star_cost is not None
+            challenger_pre_quota_cost - alt_star_cost
+            if challenger_pre_quota_cost is not None
+            and alt_star_cost is not None
             else None)
         quota_admissible = _quota_admissible_flag(per_instance)
-        quota_admissible_remote = _quota_admissible_remote_flag(per_instance)
         yield (
             decision["request_id"], instance,
             anchor[0] if anchor else NA, anchor[1] if anchor else NA,
             direction,
-            remote["hops"] if remote and remote["hops"] is not None else NA,
-            int(remote_applicable), int(instance in derived["d_feed_set"]),
-            remote_cost if remote_cost is not None else NA,
-            remote_pre_quota_cost if remote_pre_quota_cost is not None
-            else NA,
+            challenger["hops"] if challenger
+            and challenger["hops"] is not None else NA,
+            int(challenger_applicable),
+            int(instance in derived["d_feed_set"]),
+            challenger_cost if challenger_cost is not None else NA,
+            challenger_pre_quota_cost
+            if challenger_pre_quota_cost is not None else NA,
             margin if margin is not None else NA,
             fmt_ratio(margin / c_stay)
             if margin is not None and c_stay not in (None, 0) else NA,
@@ -952,8 +937,8 @@ def _instances_csv_rows(entry: dict, topology: dict, sigma_tiers: dict):
             recompute["cost_ns"] if recompute and recompute["applicable"]
             and recompute["cost_ns"] is not None else NA,
             same_pos_best if same_pos_best is not None else NA,
-            (int(remote_cost <= same_pos_best)
-             if remote_cost is not None and same_pos_best is not None
+            (int(challenger_cost <= same_pos_best)
+             if challenger_cost is not None and same_pos_best is not None
              else NA),
             inner_margin if inner_margin is not None else NA,
             outer_margin if outer_margin is not None else NA,
@@ -965,13 +950,12 @@ def _instances_csv_rows(entry: dict, topology: dict, sigma_tiers: dict):
             int(instance in derived["d_econ_tier_sets"][2])
             if _sigma_tier_available(sigma_tiers, 2) else NA,
             port.get("u_port_total", NA),
-            port.get("parity_gate_headroom", NA),
             quota_admissible,
-            quota_admissible_remote,
-            (_bottleneck_component(remote["segments"])
-             if remote_applicable else NA),
-            (remote["reason"] if remote and not remote["applicable"]
-             and remote["reason"] is not None else NA),
+            (_bottleneck_component(challenger["segments"])
+             if challenger_applicable else NA),
+            (challenger["reason"] if challenger
+             and not challenger["applicable"]
+             and challenger["reason"] is not None else NA),
         )
 
 
@@ -1764,33 +1748,33 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
     for decision in scan.decisions:
         candidates = decision["candidates"]
         n_instances = len(candidates)
-        alt_star = _min_cost(candidates, NON_REMOTE_ACTIONS)
+        alt_star = _min_cost(candidates, ALT_ACTIONS)
         stay_best = _min_cost(candidates, ("stay",))
-        remote_candidates = [
+        challenger_candidates = [
             (instance, cand)
             for instance, per_instance in candidates.items()
             for action, cand in per_instance.items()
             # M2：D_feed/D_econ 纳入配额拒候选（quota_ 前缀理由 +
             # 保留的配额前成本）——quota-on run 的经济域可重建。
-            if action == "remote-read"
+            if action == CHALLENGER_ACTION
             and (cand["applicable"] or _quota_deferred(cand))
             and cand["cost_ns"] is not None]
-        remote_min = min(
+        challenger_min = min(
             ((cand["cost_ns"], instance)
-             for instance, cand in remote_candidates), default=None)
+             for instance, cand in challenger_candidates), default=None)
         # N6：实际可行集口径（applicable-only——在线选择的真实约束）。
-        # 配额前口径（remote_min/alt_star 供 D_econ/双域重建）与实际
+        # 配额前口径（challenger_min/alt_star 供 D_econ/双域重建）与实际
         # 口径（供 replay 一致性重放）分列，replay_mismatch 不再混入
-        # 配额作用量（配额拒远读更便宜时：实际域重放与在线同选 ⇒ 不
+        # 配额作用量（配额拒挑战者更便宜时：实际域重放与在线同选 ⇒ 不
         # 计 mismatch；差异进 quota_counterfactual_flips）。
-        remote_min_actual = min(
+        challenger_min_actual = min(
             ((cand["cost_ns"], instance)
              for instance, per_instance in candidates.items()
              for action, cand in per_instance.items()
-             if action == "remote-read" and cand["applicable"]
+             if action == CHALLENGER_ACTION and cand["applicable"]
              and cand["cost_ns"] is not None), default=None)
         alt_star_actual = _min_cost(
-            candidates, NON_REMOTE_ACTIONS,
+            candidates, ALT_ACTIONS,
             include_quota_deferred=False)
         if stay_best is not None:
             reference_instance = stay_best[1]
@@ -1798,7 +1782,7 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
             c_stay_ref = stay_best[0]
         elif alt_star is not None:
             reference_instance = alt_star[1]
-            reference_source = "min_cost_non_remote(no_stay_applicable)"
+            reference_source = "min_cost_alt(no_stay_applicable)"
             c_stay_ref = None
         else:
             reference_instance = decision["selected_instance"]
@@ -1806,13 +1790,13 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
             c_stay_ref = None
         d_feed = sorted(
             (instance, cand["hops"] if cand["hops"] is not None else -1)
-            for instance, cand in remote_candidates)
+            for instance, cand in challenger_candidates)
         d_feed_set = {instance for instance, _ in d_feed}
         d_econ_delta0: list[tuple[int, int]] = []
         if alt_star is not None:
             d_econ_delta0 = sorted(
                 (instance, hops) for instance, hops in d_feed
-                if remote_cost_of(candidates, instance) <= alt_star[0])
+                if challenger_cost_of(candidates, instance) <= alt_star[0])
         tier_deltas = []
         for multiplier in multipliers:
             delta = (int(sigma_hat_ns * multiplier)
@@ -1826,24 +1810,25 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
             else:
                 d_econ_tier_sets.append({
                     instance for instance, _ in d_feed
-                    if remote_cost_of(candidates, instance)
+                    if challenger_cost_of(candidates, instance)
                     <= alt_star[0] + delta})
         same_position_wins = 0
         for instance, per_instance in candidates.items():
-            remote = per_instance.get("remote-read")
-            if not remote or not remote["applicable"] \
-                    or remote["cost_ns"] is None:
+            challenger = per_instance.get(CHALLENGER_ACTION)
+            if not challenger or not challenger["applicable"] \
+                    or challenger["cost_ns"] is None:
                 continue
             same_alts = [
                 cand["cost_ns"] for action, cand in per_instance.items()
-                if action != "remote-read" and cand["applicable"]
+                if action != CHALLENGER_ACTION and cand["applicable"]
                 and cand["cost_ns"] is not None]
-            if same_alts and remote["cost_ns"] <= min(same_alts):
+            if same_alts and challenger["cost_ns"] <= min(same_alts):
                 same_position_wins += 1
         inner_boundary_hop = None
         if c_stay_ref is not None:
             hops_in = [hops for instance, hops in d_feed
-                       if remote_cost_of(candidates, instance) <= c_stay_ref
+                       if challenger_cost_of(candidates, instance)
+                       <= c_stay_ref
                        and hops >= 0]
             if hops_in:
                 inner_boundary_hop = max(hops_in)
@@ -1915,12 +1900,12 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
             "derived": {
                 "n_instances": n_instances,
                 "alt_star": alt_star,
-                "remote_min_actual": remote_min_actual,
+                "challenger_min_actual": challenger_min_actual,
                 "alt_star_actual": alt_star_actual,
                 "c_stay_ref": c_stay_ref,
                 "reference_instance": reference_instance,
                 "reference_source": reference_source,
-                "remote_min": remote_min,
+                "challenger_min": challenger_min,
                 "d_feed": d_feed,
                 "d_feed_set": d_feed_set,
                 "d_econ_delta0": d_econ_delta0,
@@ -1936,9 +1921,10 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
     return entries
 
 
-def remote_cost_of(candidates: dict[int, dict[str, dict]],
-                   instance: int) -> int:
-    cand = candidates[instance].get("remote-read")
+def challenger_cost_of(candidates: dict[int, dict[str, dict]],
+                       instance: int) -> int:
+    """挑战者（copy）候选成本；缺候选/缺成本 = +inf（域谓词恒假）。"""
+    cand = candidates[instance].get(CHALLENGER_ACTION)
     return cand["cost_ns"] if cand and cand["cost_ns"] is not None \
         else math.inf
 
@@ -1947,8 +1933,8 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                   repo_variant: str, delta_adm: int, multipliers: list,
                   sigma: dict, warnings: list[str]) -> dict:
     anchors = topology["anchors"]
-    # -- 实际选择：四动作计数（recompute elected / forced 分列，§19.2） --
-    four_counts = {action: 0 for action in FOUR_ACTIONS}
+    # -- 实际选择：三动作计数（recompute elected / forced 分列，§19.2） --
+    action_counts = {action: 0 for action in ALL_ACTIONS}
     recompute_elected = 0
     forced_by_reason: dict[str, int] = {}
     recompute_rows = 0
@@ -1961,7 +1947,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
             recompute_rows += 1
             if decision["recompute_tier"] == "elected":
                 recompute_elected += 1
-                four_counts["recompute"] += 1
+                action_counts["recompute"] += 1
             elif decision["recompute_tier"] == "forced":
                 reason = decision["forced_reason"] or "unspecified"
                 forced_by_reason[reason] = \
@@ -1970,7 +1956,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                 forced_by_reason["tier_missing"] = \
                     forced_by_reason.get("tier_missing", 0) + 1
         else:
-            four_counts[action] += 1
+            action_counts[action] += 1
 
     # -- 三口径集合统计 --
     feed_sizes = [len(e["derived"]["d_feed"]) for e in entries]
@@ -2005,7 +1991,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
     bottleneck_feed: dict[str, int] = {}
     bottleneck_selected: dict[str, int] = {}
     reasons: dict[str, dict[str, int]] = {}
-    applicable_counts: dict[str, int] = {a: 0 for a in FOUR_ACTIONS}
+    applicable_counts: dict[str, int] = {a: 0 for a in ALL_ACTIONS}
     applicable_mismatch = 0
     for entry in entries:
         decision = entry["decision"]
@@ -2019,7 +2005,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                     reasons.setdefault(action, {})
                     reasons[action][reason] = \
                         reasons[action].get(reason, 0) + 1
-                if action == "remote-read" and cand["applicable"]:
+                if action == CHALLENGER_ACTION and cand["applicable"]:
                     key = _bottleneck_component(cand["segments"])
                     if instance in feed_set:
                         bottleneck_feed[key] = \
@@ -2050,7 +2036,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                 decision = entry["decision"]
                 derived = entry["derived"]
                 pick_action, pick_instance = _selection_under_delta(
-                    delta, derived["remote_min"], derived["alt_star"])
+                    delta, derived["challenger_min"], derived["alt_star"])
                 if pick_action == decision["selected_action"] \
                         and pick_instance == decision["selected_instance"]:
                     continue
@@ -2072,22 +2058,22 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
             }
     # δ=0 主臂重放一致性（谓词重放 vs 在线选择；tie 序差异 → 计数披露）。
     # N6（2026-09-23 复核审计6）：重放集改**实际可行集**（applicable-only
-    # 的 remote_min_actual/alt_star_actual——与在线选择同约束，纯谓词
-    # 一致性）；配额前集重放与在线选择的差单列 quota_counterfactual_
+    # 的 challenger_min_actual/alt_star_actual——与在线选择同约束，纯
+    # 谓词一致性）；配额前集重放与在线选择的差单列 quota_counterfactual_
     # flips（配额作用量 run 级，计划文档 §5.4"两域之差"落地）——修前被拒
-    # 远读更便宜时配额效应被计入 replay_mismatch。
+    # 挑战者更便宜时配额效应被计入 replay_mismatch。
     replay_mismatch = 0
     quota_counterfactual_flips = 0
     for entry in entries:
         decision = entry["decision"]
         derived = entry["derived"]
         pick_action, pick_instance = _selection_under_delta(
-            0, derived["remote_min_actual"], derived["alt_star_actual"])
+            0, derived["challenger_min_actual"], derived["alt_star_actual"])
         if pick_action != decision["selected_action"] \
                 or pick_instance != decision["selected_instance"]:
             replay_mismatch += 1
         cf_action, cf_instance = _selection_under_delta(
-            0, derived["remote_min"], derived["alt_star"])
+            0, derived["challenger_min"], derived["alt_star"])
         if cf_action != decision["selected_action"] \
                 or cf_instance != decision["selected_instance"]:
             quota_counterfactual_flips += 1
@@ -2109,12 +2095,12 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
         "joint_admission_rows": scan.joint_rows,
         "calibers": {
             "d_feed": {
-                "definition": "D_feed(q,p,s) = 决策日志中 remote-read 候选"
+                "definition": "D_feed(q,p,s) = 决策日志中 copy 挑战者候选"
                               " 配额前结构可行的实例集合（M2/N6：applicable"
                               " ∨ quota_ 前缀拒且配额前成本在——配额拒候选"
                               " 的供给条件已判过、经济域可重建）；本地参考与"
                               "性能容忍度逐成员标注（instances CSV feed_"
-                              "margin_* 与 remote_cost_pre_quota_ns）",
+                              "margin_* 与 challenger_cost_pre_quota_ns）",
                 "size": _size_stats(feed_sizes),
                 "hop_quantiles": _quantiles_or_na(feed_hops),
                 "direction_distribution": _direction_distribution(
@@ -2125,18 +2111,18 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                        "方向分布不可得",
             },
             "d_econ": {
-                "definition": "D_econ(q,s) = {e: C_remote(e) ≤ C_alt*+δ}；"
-                              "C_alt* = min C(e,a) 遍历全部实例的适用非 "
-                              "remote 动作（必含 copy，F13）",
+                "definition": "D_econ(q,s) = {e: C_copy(e) ≤ C_alt*+δ}；"
+                              "C_alt* = min C(e,a) 遍历全部实例的适用替"
+                              "代动作（stay/recompute；F13）",
                 "delta_main_ns": delta_adm,
                 "size_delta0": _size_stats(econ_sizes),
                 "hop_quantiles_delta0": _quantiles_or_na(econ_hops),
                 "direction_distribution_delta0": _direction_distribution(
                     econ_hop_pairs),
                 "same_position_comparison": {
-                    "caliber": "同实例 remote vs 同实例最优非 remote——"
-                               "同位置动作比较另报（§5.2），与全实例 "
-                               "C_alt* 口径不混",
+                    "caliber": "同实例 copy 挑战者 vs 同实例最优非 "
+                               "挑战者（stay/recompute）——同位置动作比较"
+                               "另报（§5.2），与全实例 C_alt* 口径不混",
                     "total_wins": sum(
                         e["derived"]["same_position_wins"] for e in entries),
                 },
@@ -2155,7 +2141,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                 "definition": "在线仅记录最终 (e,a)（selected_action/"
                               "joint_instance_index）；单次实际选择不代表"
                               "该请求的完整域（§5.2）",
-                "four_action_counts": four_counts,
+                "three_action_counts": action_counts,
                 "recompute_elected": recompute_elected,
                 "recompute_forced_by_reason": forced_by_reason,
                 "recompute_rows_total": recompute_rows,
@@ -2170,17 +2156,17 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
             "measured": {
                 "status": NA,
                 "note": "独立同状态执行的 measured 经济/性能集合不在本产"
-                        "物（C4b 同状态四动作受控测量三表）——不与预测混"
+                        "物（C4b 同状态三动作受控测量三表）——不与预测混"
                         "合；预测/实测差仅作诊断分列（见 "
                         "derived.prediction_vs_measured）",
             },
         },
         "derived": {
             "bottleneck_resource": {
-                "caliber": "breakdown 六段（target_wait/history_prep/"
-                           "eviction_wait/compute/remote_read/merge）"
-                           "argmax；并列以 + 联结",
-                "d_feed_remote_members": bottleneck_feed,
+                "caliber": "breakdown 五段（target_wait/history_prep/"
+                           "eviction_wait/compute/merge）argmax；并列以 "
+                           "+ 联结",
+                "d_feed_challenger_members": bottleneck_feed,
                 "selected_candidates": bottleneck_selected,
             },
             "constraint_unsatisfied_reasons": reasons,
@@ -2188,8 +2174,8 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
             "prediction_vs_measured": sigma.get("observational"),
             "dual_domain_chart": {
                 "data": "instances CSV：in_d_econ_*（D_econ 等值线侧）vs "
-                        "quota_admissible(_remote)/port_*（配额准入域侧）"
-                        "——同图导出；两域之差即配额作用量",
+                        "quota_admissible/port_*（配额准入域侧）——同图导"
+                        "出；两域之差即配额作用量",
                 "quota_domain_status": (
                     "derived_from_candidates" if any(
                         _quota_deferred(cand)
@@ -2200,9 +2186,9 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                     else "structural_only"),
                 "quota_domain_note": "配额域数据源 = 候选 quota_ 前缀理由"
                                      "派生（M2，2026-09-23：实例 CSV "
-                                     "quota_admissible/_remote 已派生 0/1"
-                                     "——status 与列一致；quota-off run "
-                                     "无 quota_ 理由 ⇒ structural_only）。"
+                                     "quota_admissible 已派生 0/1——status "
+                                     "与列一致；quota-off run 无 quota_ 理"
+                                     "由 ⇒ structural_only）。"
                                      "port_* 逐字段 = port_snapshot 实测"
                                      "值（C11 已接通：quota-on run 携带"
                                      "实测、quota-off 态如实 NA——原“WP3 "
@@ -2210,20 +2196,20 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                                      "落进摘要产物，O8④ 补正）",
             },
             "contours": {
-                "inner": "C_remote = C_stay_ref（列 c_remote_minus_"
+                "inner": "C_copy = C_stay_ref（列 c_challenger_minus_"
                          "stay_ref_ns 的零穿越）",
-                "outer": "C_remote = C_alt*（列 c_remote_minus_alt_star_ns"
-                         " 的零穿越；含 copy/池恢复/重算的替代族）",
+                "outer": "C_copy = C_alt*（列 c_challenger_minus_alt_star_ns"
+                         " 的零穿越；含池恢复/重算的替代族）",
             },
             "boundary_cross_check": {
                 "rho_anchor": fmt_ratio(rho) if rho is not None else NA,
                 "rho_source": topology["rho_source"],
-                "observed_remote_local_boundary_hop":
+                "observed_challenger_local_boundary_hop":
                     _quantiles_or_na(observed_boundaries),
                 "boundary_deviation_hop":
                     _quantiles_or_na([int(round(d)) for d in deviations])
                     if deviations else {"n": 0},
-                "caliber": "观测分界 = max{hops(e): C_remote(e) ≤ C_stay_"
+                "caliber": "观测分界 = max{hops(e): C_copy(e) ≤ C_stay_"
                            "ref}（内等值线半径的 hop 投影）",
                 "disclaimers": [
                     "d≤ρ 仅历史扫描项平价、不保证完整请求平价（§1.2）",
@@ -2231,17 +2217,6 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                     "诊断结果（§5.3）",
                     "无 n* = d'/(d-ρ) 式（v2.2 已删除）",
                 ],
-                "remote_copy_static_reference": {
-                    "formula": "V_copy≈[H+I+b_c−F]+ / V_remote≈[I+b_r−F]+"
-                               "（设计文档 §3.3 容量静态参考）",
-                    "b_c_b_r": NA,
-                    "b_note": "b_c/b_r 未随 schema 披露 → 锚点整体 NA；"
-                              "组件 H/I/F 逐请求分列（requests CSV h/i/f"
-                              "列，coef = 2·layers·hidden·bytes_per_elem，"
-                              "F = 选中实例 load_view 逐 rank 最小值）",
-                    "note": "remote/copy 分界不设单变量理论线——静态参考"
-                            "仅辅助诊断锚点（C16 卡纪律）",
-                },
             },
         },
         "delta_epsilon_registry": {
@@ -2250,8 +2225,8 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
             "delta_source": "C10 δ_adm 终冻 = 维持 0（三选一路径三；"
                             "被否决来源 I/有效带宽=重复计费已登记）",
             "delta_semantics": "D_econ 集合口径 ≤ C_alt*+δ；决策路径口径 "
-                               "challenger C_remote+δ ≤ C_alt*——两口径"
-                               "分列不混",
+                               "challenger C_copy+δ ≤ C_alt*——两口径分列"
+                               "不混",
             "sensitivity_scan": {
                 "multipliers": multipliers,
                 "sigma_hat_ns": sigma_hat_ns,
@@ -2260,7 +2235,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                 "merge_leg_cold_start_anchor":
                     sigma.get("merge_leg_anchor"),
                 "flip_repricing": {
-                    "predicate": "C_remote(e)+δ ≤ C_alt*（C10 challenger_"
+                    "predicate": "C_copy(e)+δ ≤ C_alt*（C10 challenger_"
                                  "flips 同构；等号成立按在线 argmin 全键"
                                  "序 (cost+δ, instance, ACTION_ORDER 秩) "
                                  "裁决——O8① 起 tie 序镜像在线，残余 "
@@ -2276,7 +2251,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                         "域之差）"),
                     "interpretation": "翻转计数=0 的读法：σ̂（观测口径，含"
                                       "排队/状态演化共同项、上偏）量级超"
-                                      "过候选间成本差 → 该 δ 下 remote 无"
+                                      "过候选间成本差 → 该 δ 下挑战者无"
                                       "翻转是敏感性结果而非空转对照；差分"
                                       "噪声的真实量级归 C4b 受控测量",
                 },
@@ -2311,7 +2286,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
 
 def _load_tokens_map(run_dir: Path, request_manifest_arg: Optional[str],
                      warnings: list[str]) -> dict[str, dict]:
-    """V_copy/V_remote 静态参考组件的 token 来源（H/I 分子）。
+    """逐请求 KV 字节组件（H/I）的 token 来源。
 
     物化 plan manifest（run_dir/manifest.json，含 history_tokens_before/
     final_context_tokens——与 hbm_watermark 的 token 链同源）优先；
@@ -2355,8 +2330,8 @@ def _load_tokens_map(run_dir: Path, request_manifest_arg: Optional[str],
                for slot in tokens_map.values()):
         warnings.append(
             "[domain-metrics] 警告：history_tokens_before 不可得（plan "
-            "manifest 与 metrics manifest 均无）——V_copy/V_remote 静态"
-            "参考组件 H/I = NA")
+            "manifest 与 metrics manifest 均无）——逐请求 KV 字节"
+            "组件 H/I = NA")
     return tokens_map
 
 
@@ -2404,7 +2379,7 @@ def domain_emit(args: argparse.Namespace, repo_variant: str,
         except Exception:  # noqa: BLE001 —— 组件缺失 → NA 降级不 fail
             warnings.append(
                 "[domain-metrics] 警告：per-request manifest 不可得——"
-                "V_copy/V_remote 静态参考组件 H/I = NA")
+                "逐请求 KV 字节组件 H/I = NA")
 
     # W5（§7.4/§9.3）：结算策略从 run 级 manifest 读（prediction 节；
     # 缺失/不可读 = 旧 run 兼容缺省 consolidate，告警登记）。
@@ -2463,8 +2438,8 @@ def domain_emit(args: argparse.Namespace, repo_variant: str,
     emit_json(sys.stderr, {
         "command": "domain_metrics",
         "joint_admission_rows": scan.joint_rows,
-        "four_action_counts":
-            summary["calibers"]["actual_selection"]["four_action_counts"],
+        "three_action_counts":
+            summary["calibers"]["actual_selection"]["three_action_counts"],
         "recompute_elected":
             summary["calibers"]["actual_selection"]["recompute_elected"],
         "recompute_forced_by_reason":

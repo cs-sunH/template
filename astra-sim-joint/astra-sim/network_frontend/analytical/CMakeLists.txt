@@ -13,6 +13,15 @@ endif ()
 # Setup project
 project(AstraSim_Analytical)
 
+
+# Joint v7 event attribution: consume the cache option declared by the repo
+# root CMakeLists (option JOINT_EVENT_PROFILE). This assembly-added
+# directory does not inherit the root's directory scope, so the definition
+# must be applied here too. Diagnostic-only; never changes behavior.
+if(JOINT_EVENT_PROFILE)
+    add_compile_definitions(JOINT_V7_EVENT_PROFILE)
+endif()
+
 # Compilation target
 set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_aware)")
 # Fail closed on an illegal value: a bare if() over the legal names used to
@@ -67,7 +76,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             CONFIGURE_DEPENDS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/*.cc)
     list(REMOVE_ITEM srcs_execution_driven
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/PipelineDescriptor.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/PipelineKernel.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/NativeProjection.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/NativeProjectionCApi.cc)
@@ -119,13 +127,24 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/work_ledger_bridge_test.cc
             ${srcs_execution_driven})
 
-    # Step-1-7 FileDecisionBridge loopback fixture (test-only): C++ <->
-    # Python round-trip over the v0 protocol (request/response/commit ack,
-    # atomic publish, crash+timeout fail-closed); never part of the baseline
-    # gates. Requires python3 on PATH and the echo script path as argv[1].
+    # Step-1-7 ShmDecisionBridge loopback fixture (test-only): C++ <->
+    # Python round-trip over the v1 protocol (request/response/commit ack
+    # shm frames + FIFO doorbells, crash+timeout fail-closed); never part
+    # of the baseline gates. Requires python3 on PATH and the echo script
+    # path as argv[1].
     add_executable(AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
             ${srcs_congestion_aware_shared}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/bridge_loopback_fixture.cc
+            ${srcs_execution_driven})
+
+    # v11 §8 保底: in-process ShmDecisionBridge loopback (test-only; no
+    # python3 dependency): ShmFrameChannel byte round-trip + fail-closed
+    # matrix (oversize/crc/stale generation), the forked-peer three-way
+    # byte-identical exchange (incl. binary ledger splice), stats
+    # accounting, and segment teardown. Registered into CTest.
+    add_executable(AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/shm_decision_bridge_loopback_test.cc
             ${srcs_execution_driven})
 
     # Phase-5 GraphBatchCommitter fixture (test-only): two-phase atomic
@@ -136,26 +155,9 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/graph_batch_committer_test.cc
             ${srcs_execution_driven})
 
-    # C5 remote-read execution fixture (test-only): strict graph commit,
-    # two-rank Sys/network/HBM transport, and the bounded remote-read cursor.
-    add_executable(AstraSim_Analytical_Congestion_Aware_RemoteReadExecutorTest
-            ${srcs_congestion_aware_shared}
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/remote_read_executor_test.cc
-            ${srcs_execution_driven})
-
-    # Cold execution-fixture producer (exec doc 19.1/19.1A): CLI driven by
-    # the acceptance driver with SHA-verified state/event/precision files;
-    # emits the Stage-A raw result (canonicalization_pending). Deliberately
-    # NOT registered in CTest -- running it without inputs is not a test;
-    # the acceptance driver generates the case files and invokes it.
-    add_executable(JointPipelineExecutionFixture
-            ${srcs_congestion_aware_shared}
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/pipeline_execution_fixture_main.cc
-            ${srcs_execution_driven})
-
     # B3 ready-scan / issue-order differential fixture (test-only, exec doc
     # 10.2): hermetic NodeStore golden replay plus the full-stack issue-path
-    # scenarios (real EventQueue/FluidScheduler/Sys/RemoteReadExecutor).
+    # scenarios (real EventQueue/FluidScheduler/Sys).
     add_executable(JointReadyIssueOrderTest
             ${srcs_congestion_aware_shared}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/ready_issue_order_test.cc
@@ -299,58 +301,68 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${srcs_congestion_aware_shared}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/local_hbm_die_memory_test.cc
             ${srcs_execution_driven})
+    # v7 E2 closed-loop component fixture: decode-burst die nodes over the
+    # real arbitration, first equal-share boundary closed form, service
+    # conservation, observer lifecycle, dispatch snapshot semantics, and the
+    # canonical byte-diff summary used by the engine A/B differential.
+    add_executable(AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/hbm_tail_component_test.cc
+            ${srcs_execution_driven})
 
     # Link libraries
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim)
+    # v6 compact round: execution_driven builds typed ledger records and the
+    # shared compact codec lives in the joint_ledger static library.
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CompletionFixture LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CompletionFixture LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_CompletionFixture LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_NodeStoreTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_NodeStoreTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_NodeStoreTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_WatchRegistryTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_WatchRegistryTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_WatchRegistryTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_WorkLedgerBridgeTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_WorkLedgerBridgeTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_WorkLedgerBridgeTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest LINK_PRIVATE AstraSim joint_ledger)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemoteReadExecutorTest LINK_PRIVATE AstraSim)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemoteReadExecutorTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(JointPipelineExecutionFixture LINK_PRIVATE AstraSim)
-    target_link_libraries(JointPipelineExecutionFixture LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(JointReadyIssueOrderTest LINK_PRIVATE AstraSim)
+    target_link_libraries(JointReadyIssueOrderTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(JointReadyIssueOrderTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(JointPipelineMutationTest LINK_PRIVATE AstraSim)
+    target_link_libraries(JointPipelineMutationTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(JointPipelineMutationTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_ParsedBatchTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_ParsedBatchTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_ParsedBatchTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CalendarOracleTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CalendarOracleTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_CalendarOracleTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmNwayTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmNwayTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmNwayTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_PipelineConcurrentGateTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_PipelineConcurrentGateTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_PipelineConcurrentGateTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_NocSharedLinkNwayTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_NocSharedLinkNwayTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_NocSharedLinkNwayTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest LINK_PRIVATE AstraSim joint_ledger)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest LINK_PRIVATE Analytical_Congestion_Aware)
 
     # Include directories
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
@@ -374,15 +386,12 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteReadExecutorTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteReadExecutorTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteReadExecutorTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
-    target_include_directories(JointPipelineExecutionFixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-    target_include_directories(JointPipelineExecutionFixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
-    target_include_directories(JointPipelineExecutionFixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     target_include_directories(JointReadyIssueOrderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(JointReadyIssueOrderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(JointReadyIssueOrderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
@@ -428,6 +437,9 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
 
     # Properties
     # TODO: Switch to OFF after binary_function deprecation has been resolved
@@ -480,22 +492,15 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
             ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     )
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest
+            PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
     set_target_properties(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
-            PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-    )
-    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemoteReadExecutorTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemoteReadExecutorTest
-            PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-    )
-    set_target_properties(JointPipelineExecutionFixture PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    set_target_properties(JointPipelineExecutionFixture
             PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
@@ -606,7 +611,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # microbenchmark history preservation. Standalone and test-only.
     add_executable(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/statistics_online_compaction_test.cc)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
@@ -614,7 +619,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # tables, exact ready-list scheduling gate, and bounded online history.
     add_executable(AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/system_history_lifecycle_test.cc)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
@@ -622,7 +627,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # arrival order while transfer-complete keeps only action-bounded maxima.
     add_executable(AstraSim_Analytical_Congestion_Aware_MetricAnchorSpoolTest
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/metric_collector_anchor_spool_test.cc)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_MetricAnchorSpoolTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_MetricAnchorSpoolTest LINK_PRIVATE AstraSim joint_ledger)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_MetricAnchorSpoolTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_MetricAnchorSpoolTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     # R2 (2026-08-29): MetricCollector one-shot bucket erase + OnlineNode
@@ -633,7 +638,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # relative to sh_1.0's 448; the mirror assert stays ABI-agnostic).
     add_executable(AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/metric_collector_one_shot_erase_test.cc)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_MetricOneShotEraseTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
@@ -642,7 +647,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # live-tensor snapshot per timestamp.
     add_executable(AstraSim_Analytical_Congestion_Aware_LocalMemTrackerTest
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/local_mem_usage_tracker_test.cc)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalMemTrackerTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalMemTrackerTest LINK_PRIVATE AstraSim joint_ledger)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalMemTrackerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_LocalMemTrackerTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     # Online shutdown-tail regression: a logical REQUEST_COMPLETE may precede
@@ -652,7 +657,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${srcs_congestion_aware_shared}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/terminal_tail_drain_test.cc
             ${srcs_execution_driven})
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_TerminalTailDrainTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_TerminalTailDrainTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_TerminalTailDrainTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_TerminalTailDrainTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_TerminalTailDrainTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
@@ -669,7 +674,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # use the caller-provided rank order, not a sorted membership copy.
     add_executable(AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/communicator_group_order_test.cc)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_CommunicatorGroupOrderTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
@@ -684,7 +689,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${srcs_congestion_aware_shared}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/alarm_cancellation_test.cc
             ${srcs_execution_driven})
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
@@ -712,8 +717,13 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             COMMAND AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest)
     add_test(NAME AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
             COMMAND AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest)
     add_test(NAME JointReadyIssueOrderTest
             COMMAND JointReadyIssueOrderTest)
     add_test(NAME JointPipelineMutationTest
             COMMAND JointPipelineMutationTest)
+    # v11 §8 保底: the in-process shm bridge loopback (no external deps).
+    add_test(NAME ShmDecisionBridgeLoopbackTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_ShmDecisionBridgeLoopbackTest)
 endif ()

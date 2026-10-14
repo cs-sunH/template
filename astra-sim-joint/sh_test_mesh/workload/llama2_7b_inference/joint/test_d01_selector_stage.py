@@ -4,7 +4,7 @@
 对应 joint修改文档.md D01 / v2.0 §21.1 D01、§22 D01、C07。本条目对
 选择器与估价器是**保留＋显式化**要求（不重写成新优化器），钉测五面：
 
-  1. 保留全实例×四动作 argmin 与初始平局序 —— joint 主臂 argmin 键
+  1. 保留全实例×三动作 argmin 与初始平局序 —— joint 主臂 argmin 键
      ``(cost, (instance_index, ACTION_ORDER))`` 不变（C07 现状）；D
      边界式(1c) 平局键不回流初始时刻（P 候选恒非 continuation）。
   2. 阶段参数 —— 两阶段入口（``estimate_P_with_continuation`` /
@@ -14,10 +14,10 @@
   3. 当前布局参数 —— P 入口布局 = 决策时点 SessionKVView；D 入口
      布局 = PDBoundaryView（D19 派生 BoundaryKVLayout；候选面按边界
      布局划面，不消费到达时视图——字节口径由 test_d19 钉测）。
-  4. 继续标记归并到 (i_P, action) 记录 —— 每阶段恰 4N 条记录（不是
-     5N），``is_continuation`` 恰在原地继续记录上置位。
-  5. 每阶段最多 4N 记录、两次线性遍历 —— 选择器恰调 4N 次估价器、
-     初始时刻零 D 估价（初始候选不做全 D 搜索）、无 16N² 组合枚举；
+  4. 继续标记归并到 (i_P, action) 记录 —— 每阶段恰 3N 条记录（不是
+     4N），``is_continuation`` 恰在原地继续记录上置位。
+  5. 每阶段最多 3N 记录、两次线性遍历 —— 选择器恰调 3N 次估价器、
+     初始时刻零 D 估价（初始候选不做全 D 搜索）、无 9N² 组合枚举；
      两个时刻的全部实例都有审计项（不保留最近/最空闲实例偏侧）。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
@@ -35,7 +35,6 @@ for _p in (_HERE, _WL):
 
 from joint.joint_cost_model import (  # noqa: E402
     ACTION_ORDER,
-    ACTION_REMOTE,
     ACTION_STAY,
     ActionCandidate,
     InstanceLoadView,
@@ -67,8 +66,7 @@ def _cost_model(loads):
         rates=rates, loads=loads, flow_registry=LinkFlowRegistry(),
         service_factors=ServiceFactors(),
         prefill_ns_per_token=1.0, decode_ns_per_token=2.0,
-        model_layers=4, instance_tp_size=2, route_fn=_route,
-        remote_read_kv_token_bytes=KV_TOKEN_BYTES)
+        model_layers=4, instance_tp_size=2, route_fn=_route)
 
 
 def _load(index, queued_ns=0, running_ns=0):
@@ -81,7 +79,7 @@ def _load(index, queued_ns=0, running_ns=0):
 
 
 def _fresh_session():
-    """turn-0 无历史新会话（stay/recompute 全实例适用，copy/remote 拒）。"""
+    """turn-0 无历史新会话（stay/recompute 全实例适用，copy 拒）。"""
     return SessionKVView(
         session_id="s", home_instance=None, resident_instance=None,
         location="none", history_tokens=0, resident_prefix_layers=0,
@@ -98,25 +96,13 @@ def _request(input_tokens=50, decode_estimate=10):
 
 
 def _complete_boundary(**overrides):
-    """完整型边界（P=stay，H_B=100 token 全量在 i_P=0，home=0）。"""
+    """完整型边界（布局恒完整型单族；P=stay，H_B=100 token 全量在
+    i_P=0，home=0）。"""
     values = dict(
         session_id="s", home_instance=0, p_instance_index=0,
         p_action="stay", history_tokens=100,
         working_bytes_by_tp_rank=(KV_TOKEN_BYTES * 100,) * 2,
-        base_bytes_by_tp_rank=(0, 0), decode_steps=8,
-        base_tokens=100, kv_token_bytes=KV_TOKEN_BYTES)
-    values.update(overrides)
-    return PDBoundaryView(**values)
-
-
-def _increment_boundary(**overrides):
-    """增量型边界（P=remote-read，U 在 i_P=0、基础区间在 home=2）。"""
-    values = dict(
-        session_id="s", home_instance=2, p_instance_index=0,
-        p_action="remote-read", history_tokens=100,
-        working_bytes_by_tp_rank=(KV_TOKEN_BYTES * 40,) * 2,
-        base_bytes_by_tp_rank=(KV_TOKEN_BYTES * 100,) * 2,
-        decode_steps=8, base_tokens=100, kv_token_bytes=KV_TOKEN_BYTES)
+        decode_steps=8, kv_token_bytes=KV_TOKEN_BYTES)
     values.update(overrides)
     return PDBoundaryView(**values)
 
@@ -166,7 +152,7 @@ class D01InitialArgminTieOrderTest(unittest.TestCase):
             mode="joint", cost_model=_cost_model(
                 {0: _load(0), 1: _load(1)}),
             session=_fresh_session(), request=_request(),
-            remote_enabled=True)
+            )
         applicable = [c for c in record.candidates if c.applicable]
         self.assertEqual(len(applicable), 4)
         self.assertEqual(
@@ -184,7 +170,7 @@ class D01InitialArgminTieOrderTest(unittest.TestCase):
             mode="joint", cost_model=_cost_model(
                 {0: _load(0), 1: _load(1)}),
             session=_fresh_session(), request=_request(),
-            remote_enabled=True)
+            )
         self.assertIn("tie among 4", record.tie_break_note)
         self.assertIn("(instance_index, action order)",
                       record.tie_break_note)
@@ -197,7 +183,7 @@ class D01InitialArgminTieOrderTest(unittest.TestCase):
             mode="joint", cost_model=_cost_model(
                 {0: _load(0), 1: _load(1)}),
             session=_fresh_session(), request=_request(),
-            remote_enabled=True)
+            )
         self.assertFalse(any(
             c.is_continuation for c in record.candidates))
 
@@ -206,17 +192,17 @@ class D01InitialArgminTieOrderTest(unittest.TestCase):
 
 
 class D01CandidateShapeAndTraversalTest(unittest.TestCase):
-    """每阶段最多 4N 记录、两次线性遍历、不枚举 16N² 组合；两个时刻
+    """每阶段最多 3N 记录、两次线性遍历、不枚举 9N² 组合；两个时刻
     的全部实例都有审计项（v2.0 §22 D01 验收）。"""
 
-    def test_p_stage_records_4n_all_instances_audited(self):
+    def test_p_stage_records_3n_all_instances_audited(self):
         record = select_instance_and_action(
             mode="joint", cost_model=_cost_model(
                 {0: _load(0), 1: _load(1)}),
             session=_fresh_session(), request=_request(),
-            remote_enabled=True)
-        # 恰 4N 条 (instance, action) 记录，无重复、无缺位。
-        self.assertEqual(len(record.candidates), 8)
+            )
+        # 恰 3N 条 (instance, action) 记录，无重复、无缺位。
+        self.assertEqual(len(record.candidates), 6)
         self.assertEqual(
             [(c.instance_index, c.action) for c in record.candidates],
             [(i, a) for i in (0, 1) for a in ACTION_ORDER])
@@ -225,12 +211,12 @@ class D01CandidateShapeAndTraversalTest(unittest.TestCase):
             if not candidate.applicable:
                 self.assertTrue(candidate.inapplicable_reason)
 
-    def test_d_stage_records_4n_all_instances_audited(self):
+    def test_d_stage_records_3n_all_instances_audited(self):
         record = select_decode_target_and_action(
             mode="joint", cost_model=_cost_model(
                 {0: _load(0), 1: _load(1)}),
-            boundary=_complete_boundary(), remote_enabled=True)
-        self.assertEqual(len(record.candidates), 8)
+            boundary=_complete_boundary(), )
+        self.assertEqual(len(record.candidates), 6)
         self.assertEqual(
             [(c.instance_index, c.action) for c in record.candidates],
             [(i, a) for i in (0, 1) for a in ACTION_ORDER])
@@ -238,28 +224,28 @@ class D01CandidateShapeAndTraversalTest(unittest.TestCase):
             {c.instance_index for c in record.candidates}, {0, 1})
 
     def test_two_linear_traversals_no_combinatorial_search(self):
-        # 同一请求两决策时刻：初始恰 4N 次 P 估价且零 D 估价（初始候选
-        # 不做全 D 搜索——16N² 组合枚举不存在）；边界恰 4N 次 D 估价；
-        # 合计两次线性遍历（2×4N）。
+        # 同一请求两决策时刻：初始恰 3N 次 P 估价且零 D 估价（初始候选
+        # 不做全 D 搜索——9N² 组合枚举不存在）；边界恰 3N 次 D 估价；
+        # 合计两次线性遍历（2×3N）。
         model = _CountingModel(_cost_model({0: _load(0), 1: _load(1)}))
         record_p = select_instance_and_action(
             mode="joint", cost_model=model, session=_fresh_session(),
-            request=_request(), remote_enabled=True)
-        self.assertEqual(len(model.p_calls), 8)
+            request=_request(), )
+        self.assertEqual(len(model.p_calls), 6)
         self.assertEqual(
             sorted(model.p_calls),
             sorted((i, a) for i in (0, 1) for a in ACTION_ORDER))
         self.assertEqual(model.d_calls, [])
-        self.assertEqual(len(record_p.candidates), 8)
+        self.assertEqual(len(record_p.candidates), 6)
         record_d = select_decode_target_and_action(
             mode="joint", cost_model=model,
-            boundary=_complete_boundary(), remote_enabled=True)
-        self.assertEqual(len(model.d_calls), 8)
+            boundary=_complete_boundary(), )
+        self.assertEqual(len(model.d_calls), 6)
         self.assertEqual(
             sorted(model.d_calls),
             sorted((i, a) for i in (0, 1) for a in ACTION_ORDER))
-        self.assertEqual(len(model.p_calls), 8)  # 无第三次位置决策入口
-        self.assertEqual(len(record_d.candidates), 8)
+        self.assertEqual(len(model.p_calls), 6)  # 无第三次位置决策入口
+        self.assertEqual(len(record_d.candidates), 6)
 
 
 # ==================================== 3. 继续归并与边界平局键 ==
@@ -275,32 +261,15 @@ class D01ContinuationMergeTest(unittest.TestCase):
         candidates = [
             model.estimate_D_remaining(
                 boundary=boundary, instance_index=i, action=a,
-                remote_enabled=True)
+                )
             for i in (0, 1) for a in ACTION_ORDER]
-        # 4N 条记录（不是 5N）：x0 归并在 (i_P, stay) 上。
-        self.assertEqual(len(candidates), 8)
+        # 3N 条记录（不是 4N）：x0 归并在 (i_P, stay) 上。
+        self.assertEqual(len(candidates), 6)
         continuations = [c for c in candidates if c.is_continuation]
         self.assertEqual(len(continuations), 1)
         self.assertEqual(
             (continuations[0].instance_index, continuations[0].action),
             (0, ACTION_STAY))
-        self.assertTrue(continuations[0].applicable)
-
-    def test_increment_family_continuation_on_remote_record(self):
-        model = _cost_model(
-            {0: _load(0), 1: _load(1), 2: _load(2)})
-        boundary = _increment_boundary()
-        candidates = [
-            model.estimate_D_remaining(
-                boundary=boundary, instance_index=i, action=a,
-                remote_enabled=True)
-            for i in (0, 1, 2) for a in ACTION_ORDER]
-        self.assertEqual(len(candidates), 12)
-        continuations = [c for c in candidates if c.is_continuation]
-        self.assertEqual(len(continuations), 1)
-        self.assertEqual(
-            (continuations[0].instance_index, continuations[0].action),
-            (0, ACTION_REMOTE))
         self.assertTrue(continuations[0].applicable)
 
     def test_boundary_tie_key_exact_form(self):
@@ -340,7 +309,7 @@ class D01StageDisclosureTest(unittest.TestCase):
             mode="joint", cost_model=_cost_model(
                 {0: _load(0), 1: _load(1)}),
             session=_fresh_session(), request=_request(),
-            remote_enabled=True)
+            )
         self.assertEqual(record.diagnostics["decision_stage"], "P")
         for candidate in record.candidates:
             if candidate.applicable:
@@ -352,7 +321,7 @@ class D01StageDisclosureTest(unittest.TestCase):
             mode="load-first", cost_model=_cost_model(
                 {0: _load(0, queued_ns=100), 1: _load(1)}),
             session=_fresh_session(), request=_request(),
-            remote_enabled=True)
+            )
         self.assertEqual(record.diagnostics["decision_stage"], "P")
         self.assertEqual(
             record.diagnostics["sequential_instance"], 1)
@@ -362,14 +331,14 @@ class D01StageDisclosureTest(unittest.TestCase):
         boundary = _complete_boundary()
         candidate = model.estimate_D_remaining(
             boundary=boundary, instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            )
         self.assertTrue(candidate.applicable)
         self.assertIn("decision_stage=D", candidate.breakdown.notes)
         # D18 原披露位保留不动（向后兼容位）。
         self.assertIn("boundary_stage=D", candidate.breakdown.notes)
         record = select_decode_target_and_action(
             mode="joint", cost_model=model, boundary=boundary,
-            remote_enabled=True)
+            )
         self.assertEqual(record.diagnostics["decision_stage"], "D")
 
 

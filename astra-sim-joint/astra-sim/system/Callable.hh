@@ -45,6 +45,15 @@ class Callable {
   public:
     virtual ~Callable() = default;
     virtual void call(EventType type, CallData* data) = 0;
+
+    // Diagnostic-only dispatch category (joint v7 event long-tail
+    // attribution). Returns a stable string literal consumed exclusively by
+    // the Sys::call_events classification bracket under
+    // JOINT_V7_EVENT_PROFILE; production builds never call it and dispatch
+    // behavior is identical for any value.
+    [[nodiscard]] virtual const char* profile_dispatch_label() const noexcept {
+        return "sys_other";
+    }
 };
 
 }  // namespace AstraSim

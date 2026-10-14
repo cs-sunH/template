@@ -1,17 +1,16 @@
 """boundary_layout.py -- D19：D 候选专用边界视图（纯状态/计价接口）。
 
 v2.0 §5.3（区间账本与选读规则）/§6.5（必须能正确表达的 D 边界状态）/
-§13.1（两个决策点分别计算哪些工作）/§13.3（式 18a 远读基数）；joint 修改
+§13.1（两个决策点分别计算哪些工作）；joint 修改
 文档 D19。D18 的 ``PDBoundaryView``（joint_cost_model）是边界的**计价
-摘要**（两族布局的逐 rank 字节向量）；本模块在其上细化出 D 候选专用的
+摘要**（布局的逐 rank 字节向量）；本模块在其上细化出 D 候选专用的
 **区间级因果视图**：
 
 * ``BoundaryKVLayout``：H_B、按 token/层/holder 的有限来源区间
   （v2.0 §1/§5.3：D 新目标若不在既有两位置，片上位置 ≤3）、有效副本/
   权威归属、首输出 pending token、终止/RNG 状态、继承义务表。派生函数
-  回答每个候选目标 j 的两个口径——**远读只数对 j 实际在远端的基础区间**
-  （式 18a 的 ``B^{B,off}``，已去重、含已承诺接收端排除）与 **copy 只补
-  j 缺少部分**（不按 ``H_B`` 全量收费）。
+  回答每个候选目标 j 的口径——**copy 只补 j 缺少部分**（不按 ``H_B``
+  全量收费）。
 * ``StageWork``：决策点阶段工作（v2.0 §13.1 工作表）——本阶段新执行的
   prefill（D 边界恒 0：只做必要状态准备）、静默重建基数（D recompute =
   H_B，不输出/不采样/不推进 RNG）、**剩余前向步数**（长度入口归一为
@@ -29,10 +28,10 @@ v2.0 §5.3（区间账本与选读规则）/§6.5（必须能正确表达的 D �
   "预测器只遍历区间摘要"）。
 * 本模块**不导入** joint_cost_model（避免环导入）；``from_boundary``
   以鸭子类型读取 PDBoundaryView 的字段。跨阶段预约事务/阶段引用原语
-  已随 D20 交付；C4（2026-09-27 执行面接通）起边界基材料化 copy、
-  多源 remote 引用交接与 D 静默重建均在运行时可选面内（计价 =
+  已随 D20 交付；C4（2026-09-27 执行面接通）起边界基材料化 copy
+  与 D 静默重建均在运行时可选面内（计价 =
   ``joint_cost_model.estimate_D_remaining``、执行 = KV 账本边界事务
-  ＋多源读流）——本模块提供其消费的状态与计价口径。
+  ）——本模块提供其消费的状态与计价口径。
 """
 from __future__ import annotations
 
@@ -135,18 +134,15 @@ def boundary_target_wait_ns(load, wait_kind: str) -> int:
 #: 完整型布局的单区间角色：H_B 全量工作副本（P ∈ {stay,copy,recompute}
 #: 后的合并上下文）。
 INTERVAL_ROLE_CONTEXT = "context"
-#: 增量型布局的基础区间角色：源端（home）仍保留的基础历史（式 18a
-#: 远读对象）。
+#: 基础区间角色：源端（home）仍保留的基础历史（三位置 merge 投影的
+#: base 锚）。
 INTERVAL_ROLE_BASE = "base"
-#: 增量型布局的增量区间角色：i_P 实有的本轮输入增量（+PARTIAL 基已
-#: 恢复后缀——物理上与 U 同在工作副本字节向量内，D1 账本真值口径）。
-INTERVAL_ROLE_INCREMENT = "increment"
 # Merge projection appends newly generated decode KV as a distinct interval;
 # it shares the same identity validation even though it is not a D-entry role.
 INTERVAL_ROLE_GROWTH = "growth"
 
 #: 已承诺传输类义务：区间已在向确定接收端发送（§5.3"已在向 j 传输的
-#: 内容不重复发送"——从该接收端的 missing/copy/remote 推导中排除）。
+#: 内容不重复发送"——从该接收端的 missing/copy 推导中排除）。
 OBLIGATION_COMMITTED_TRANSFER = "committed_transfer"
 
 #: 继承义务表登记的类别（D19 视图项"继承义务表"；生产构造点见
@@ -155,7 +151,6 @@ OBLIGATION_COMMITTED_TRANSFER = "committed_transfer"
 OBLIGATION_KINDS = (
     OBLIGATION_COMMITTED_TRANSFER,
     "capacity_reservation",
-    "remote_read_plan",
     "copy_handoff",
     "restore_journal",
 )
@@ -171,7 +166,7 @@ class BoundaryKvInterval:
     """
 
     replica_id: str                     # 稳定副本 ID（§5.3 平局判据键）
-    role: str                           # context / base / increment
+    role: str                           # context / base / growth
     holder_instance: int                # 当前片上持有位置
     authority: bool                     # 权威归属（有效副本 vs 普通副本）
     token_start: int
@@ -185,7 +180,7 @@ class BoundaryKvInterval:
             raise ValueError("boundary interval replica_id must be non-empty")
         if self.role not in (
                 INTERVAL_ROLE_CONTEXT, INTERVAL_ROLE_BASE,
-                INTERVAL_ROLE_INCREMENT, INTERVAL_ROLE_GROWTH):
+                INTERVAL_ROLE_GROWTH):
             raise ValueError(f"unknown boundary interval role: {self.role!r}")
         _require_nonnegative_int(self.holder_instance, "holder_instance")
         if type(self.authority) is not bool:
@@ -219,7 +214,7 @@ class BoundaryFirstTokenState:
     """首输出 pending token 与采样/RNG 状态（D19 视图项）。
 
     P 末 chunk 以正常 prefill 采样生成本轮首 token 恰一次（RNG 推进
-    一次，D10 阶段语义：P ∈ {stay,copy,remote} 采样、P recompute 重放
+    一次，D10 阶段语义：P ∈ {stay,copy} 采样、P recompute 重放
     末 chunk 采样——suppress 恒 False）；``issued`` = 已发出待首个 D
     前向消费。**首 token 只消费一次**：``consume_once`` 二次调用
     fail-closed。D 边界静默重建（``rebuild_sampling_suppressed``）不
@@ -267,7 +262,7 @@ class InheritedObligation:
     仅登记真实账本对象（构造点校验存在性）；``receiver_instance`` =
     已承诺接收端（None = 无固定接收端）；``replica_id`` 命中
     ``OBLIGATION_COMMITTED_TRANSFER`` 时从该接收端的缺失推导中排除
-    （不重复发送/重复远读）。
+    （不重复发送）。
     """
 
     obligation_id: str
@@ -299,7 +294,7 @@ class StageWork:
 
     * P 初始：``prefill_tokens`` = U（recompute 重放 = H+U），D 延续按
       默认方案估——P 入口（estimate_P_with_continuation）口径；
-    * D 边界 stay/copy/remote：``prefill_tokens`` = 0（没有新的
+    * D 边界 stay/copy：``prefill_tokens`` = 0（没有新的
       U-token prefill，只做必要状态准备）+ ``remaining_forward_steps``
       = n̂_B 次正常 decode；
     * D 边界 recompute：``rebuild_tokens`` = H_B 静默重建
@@ -344,7 +339,7 @@ class StageWork:
 
 def boundary_stage_work(*, decode_steps: int,
                         first_token: BoundaryFirstTokenState) -> StageWork:
-    """D 边界 stay/copy/remote 的工作模板：零新 prefill、零重建、n̂_B
+    """D 边界 stay/copy 的工作模板：零新 prefill、零重建、n̂_B
     次剩余前向（§13.1 第二行）。"""
     decode_steps = _require_nonnegative_int(decode_steps, "decode_steps")
     return StageWork(
@@ -434,26 +429,20 @@ class BoundaryKVLayout:
     """D 候选专用边界区间布局（D19 核心视图）。
 
     从 D18 计价边界视图（``PDBoundaryView``，鸭子类型读取）派生的
-    有限来源区间账本：完整型 = 单一 context 区间（H_B 全量在 i_P）；
-    增量型 = 增量区间（i_P 实有工作副本）+ 基础区间（源端仍保留部分）。
+    有限来源区间账本：单一完整型 context 区间（H_B 全量在 i_P）。
     片上位置数 ≤3（v2.0 §1/§5.3：home、i_P、D 新目标 j）。
 
     适用前提（W4/W9 登记，方案附录 A13）：本 ≤3 界只约束单轮 D 边界
-    视图（两族构造 S ⊆ {base 锚, i_P}）；跨轮任意多来源/多持有者的
+    视图（构造 S ⊆ {base 锚, i_P}）；跨轮任意多来源/多持有者的
     权威状态由 `kv_location_directory` 一般目录承载（W9 起无位置
     上限）。distributed 跨轮 >2 持有者会话的逐源 D 边界视图升级为
     登记遗留（W10 EVIDENCE §6.3），不得以本界回退目录。
 
     派生口径（对任一候选目标 j）：
-    * ``remote_intervals_for`` / ``remote_bytes_by_rank_for``：对 j
-      **实际在远端**的基础区间（式 18a ``B^{B,off}``）——j 已持有有效
-      副本的区间不复读；已在向 j 传输的区间不重复发送（义务排除）；
     * ``copy_plan_for`` / ``copy_bytes_by_rank_for``：j 缺少的区间，
       按权威 holder 逐源补齐（"回 home 仅补 U"、"第三目标补 H+U"）；
-    * C4 执行面：copy（逐区间补齐后本地读）与 remote（不落地、按遍
-      反复读）的区分在候选动作层——两者共用同一缺失集推导，无复合
-      派生接口（旧 ``remote_bytes_after_copy`` 的"先补 U 再远读"等价
-      协议随纯多源接通删除）。
+    * C4 执行面：copy（逐区间补齐后本地读）在候选动作层——缺失集
+      推导即本账本的 ``missing_intervals_for``。
     """
 
     session_id: str
@@ -513,12 +502,8 @@ class BoundaryKVLayout:
     def from_boundary(cls, boundary) -> "BoundaryKVLayout":
         """从 D18 计价边界视图派生（鸭子类型；不导入避免环依赖）。
 
-        布局两族（单一判据 ``is_increment_layout``）：
-        * 完整型：单区间 [0, H_B) 全层 @ i_P，权威，role=context，
-          字节 = working 向量（H_B 全量的账本真值）；
-        * 增量型：工作区间 @ i_P（role=increment，PARTIAL 形态按
-          后缀 S 与输入 U 的真实矩形分别表达）+ 基础区间 @ home
-          （role=base，权威，字节 = base 向量——式 18a 远端基础区间）。
+        单一完整型布局：单区间 [0, H_B) 全层 @ i_P，权威，
+        role=context，字节 = working 向量（H_B 全量的账本真值）。
         生产边界优先提供显式矩形；无矩形时使用逐 rank token 字节基准
         反推完整层区间，旧夹具才回退 kv_token_bytes 标量。
 
@@ -527,12 +512,11 @@ class BoundaryKVLayout:
         D 选点，正常 D 路径恒 False）、``first_token``（StageWork 的
         BoundaryFirstTokenState：P 末 chunk 已采样恰一次、待首个 D 前
         向消费）、``obligations``（继承义务表：t_B 在册已提交义务）、
-        ``working_layers``/``base_layers``（真实层覆盖：完整型 working
-        = 全模型层数；增量型 increment = 全层数、base = 基础驻留前缀
-        [0,p)——PARTIAL 基不再是"全层"误披露）。属性缺席（直接构造的
-        PDBoundaryView/旧夹具）回退：terminated=False、首 token 缺省、
-        义务表空、层覆盖 0/0——**层字段是披露面，字节向量仍是账本
-        真值（计价口径），缺省 0 = 未披露、不改任何计价行为**。
+        ``working_layers``（真实层覆盖：完整型 working = 全模型层数）。
+        属性缺席（直接构造的 PDBoundaryView/旧夹具）回退：
+        terminated=False、首 token 缺省、义务表空、层覆盖 0/0——
+        **层字段是披露面，字节向量仍是账本真值（计价口径），缺省 0 =
+        未披露、不改任何计价行为**。
         """
         session_id = getattr(boundary, "session_id", None)
         if not isinstance(session_id, str) or not session_id.strip():
@@ -618,77 +602,6 @@ class BoundaryKVLayout:
                     f"instances, got {type(obligation)!r}")
         working_layers = _require_nonnegative_int(
             getattr(boundary, "working_layers", 0), "working_layers")
-        base_layers = _require_nonnegative_int(
-            getattr(boundary, "base_layers", 0), "base_layers")
-        if boundary.is_increment_layout():
-            raw_base = boundary.base_bytes_by_tp_rank
-            if not isinstance(raw_base, (tuple, list)) or not raw_base:
-                raise ValueError(
-                    "increment boundary base byte vector must be non-empty")
-            if len(raw_base) != len(working):
-                raise ValueError(
-                    "working/base byte vectors must have equal TP width")
-            base = tuple(
-                _require_nonnegative_int(
-                    value, f"base_bytes_by_tp_rank[{index}]")
-                for index, value in enumerate(raw_base))
-            base_tokens = _require_nonnegative_int(
-                boundary.base_tokens, "base_tokens")
-            # A base vector may cover only a PARTIAL layer prefix, so the
-            # full-layer token basis is not valid for its physical shards.
-            # base_tokens and the explicit base rectangle are authoritative.
-            if base_tokens > history_tokens:
-                raise ValueError(
-                    "increment boundary base_tokens exceed history_tokens")
-            intervals = list(working_intervals)
-            if not intervals and any(value > 0 for value in working):
-                intervals.append(BoundaryKvInterval(
-                    replica_id="boundary_increment",
-                    role=INTERVAL_ROLE_INCREMENT,
-                    holder_instance=p_index,
-                    authority=True,
-                    token_start=base_tokens,
-                    token_end=base_tokens + working_tokens,
-                    layer_start=0,
-                    # 增量域全层（U 增量 + PARTIAL 恢复后缀的披露面；
-                    # 字节向量是账本真值；缺省 0 = 未披露）。
-                    layer_end=working_layers,
-                    bytes_by_tp_rank=working,
-                ))
-            if any(value > 0 for value in base):
-                home = boundary.home_instance
-                if home is None:
-                    raise ValueError(
-                        "increment boundary layout requires a home "
-                        "instance for the retained base interval")
-                intervals.append(BoundaryKvInterval(
-                    replica_id="boundary_base",
-                    role=INTERVAL_ROLE_BASE,
-                    holder_instance=home,
-                    authority=True,
-                    token_start=0,
-                    token_end=base_tokens,
-                    layer_start=0,
-                    # 基础驻留前缀 [0,p)（LOCAL 基 = 全层、PARTIAL 基 =
-                    # p；披露面，缺省 0 = 未披露）。
-                    layer_end=base_layers,
-                    bytes_by_tp_rank=base,
-                ))
-            return cls(
-                session_id=session_id,
-                home_instance=(
-                    None if boundary.home_instance is None
-                    else boundary.home_instance),
-                p_instance_index=p_index,
-                history_tokens=history_tokens,
-                kv_token_bytes=kv_token_bytes,
-                intervals=tuple(intervals),
-                decode_steps=_require_nonnegative_int(
-                    boundary.decode_steps, "decode_steps"),
-                terminated=terminated,
-                first_token=first_token_state,
-                obligations=obligations,
-            )
         raw_base = getattr(boundary, "base_bytes_by_tp_rank", ())
         if raw_base is None:
             raw_base = ()
@@ -754,7 +667,7 @@ class BoundaryKVLayout:
             and obligation.replica_id is not None
         })
 
-    # ---- 逐目标派生（D 远读 / D copy 只数目标缺少部分）----
+    # ---- 逐目标派生（D copy 只数目标缺少部分）----
 
     def missing_intervals_for(self, target: int) -> Tuple[BoundaryKvInterval, ...]:
         """target 缺少的基础上下文区间（按权威 holder 排序：token 起点
@@ -787,41 +700,12 @@ class BoundaryKVLayout:
     def copy_bytes_by_rank_for(self, target: int,
                                tp_size: int) -> Tuple[int, ...]:
         """D copy 的逐 rank 字节（缺失区间并集；区间 token/层身份互不
-        重叠——完整型单区间 / 增量型 base 与 increment 逐 token 分割，
-        逐 rank 直和去重）。"""
+        重叠——完整型单区间，逐 rank 直和去重）。"""
         tp_size = int(tp_size)
         if tp_size <= 0:
             raise ValueError(f"tp_size must be positive, got {tp_size}")
         totals = [0] * tp_size
         for _holder, interval in self.copy_plan_for(target):
-            for rank, value in enumerate(interval.bytes_by_tp_rank):
-                if rank >= tp_size:
-                    raise ValueError(
-                        "boundary interval byte vector exceeds instance "
-                        f"tp size {tp_size}")
-                totals[rank] += int(value)
-        return tuple(totals)
-
-    def remote_intervals_for(
-            self, target: int) -> Tuple[BoundaryKvInterval, ...]:
-        """对 target **实际在远端**的基础区间（式 18a ``B^{B,off}``）：
-        缺失区间全部按远读口径反复读取（每个 decode 前向一遍；来源
-        边界排空、共用同一对有限缓冲——§6.4）。
-
-        与 copy 的区分是候选协议层的事（copy = 一次性补齐后本地读；
-        remote = 不落地、按遍反复读）——本函数给出远读的物理基数。
-        """
-        return self.missing_intervals_for(target)
-
-    def remote_bytes_by_rank_for(self, target: int,
-                                 tp_size: int) -> Tuple[int, ...]:
-        """式 18a 的逐 rank 单遍远读字节（``B^{B,off}``；遍数 = 剩余
-        decode 前向数，由计价侧乘）。"""
-        tp_size = int(tp_size)
-        if tp_size <= 0:
-            raise ValueError(f"tp_size must be positive, got {tp_size}")
-        totals = [0] * tp_size
-        for interval in self.remote_intervals_for(target):
             for rank, value in enumerate(interval.bytes_by_tp_rank):
                 if rank >= tp_size:
                     raise ValueError(

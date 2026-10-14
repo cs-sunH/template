@@ -3,8 +3,8 @@ AIMD 链路 Q 控制律（纯函数 + 状态）。
 
 设计依据：《joint机制改造方案_局部统一内存域》§4.2/§4.4（配额与
 反馈控制语义权威）、《三机制联合策略_template仓库设计方案》§7
-（开关族）；执行计划 C9 卡（流类别三分冻结）与 C10 卡（AIMD 控制律
-+ 稳定性套件 + δ_adm 终冻）、冻结项 D3/D4/D5/F2/F7。
+（开关族）；执行计划 C9 卡（流类别冻结）与 C10 卡（AIMD 控制律
++ 稳定性套件 + δ_adm 终冻维持 0）、冻结项 D3/D4/D5/F2/F7。
 
 配额是**待验证的动作级准入机制**（不是实例掩码）：按硬件、已知流量及
 资源模型派生，不固定为每链路两条流。任一判据不满足只把**动作**标记为
@@ -16,28 +16,17 @@ AIMD 链路 Q 控制律（纯函数 + 状态）。
   逐配置硬件派生（F2；本配置 4050/1640 ≈ 2.47 → 2 只是派生结果，不是
   固定常数）。``max(1, .)`` 仅防结构性死锁，不是性能承诺。rho < 1
   配置的域空化判据 = 定价选中率趋 0（argmin 涌现），**不是**配额关闭——
-  配额在 rho<1 下仍按 Q_init=1 常开，物理不可行由端口平价门表达。
-* 端口粒度 = 逐实例 HBM 端口，实时流准入判据
-  ``B_HBM / (u_port + 1) >= r_hat_KV``（r_hat_KV = 负载视图派生的每流
-  消费速率，因果、不假设恒满带宽；``u_port`` = 外部活跃 decode 消费流
-  数 ``u_port_base`` + 本注册表在册流数）。端口信用**无** ``max(1, .)``
-  保底——忙端口即 0（平价门可全部拒绝）。
+  配额在 rho<1 下仍按 Q_init=1 常开，物理不可行由定价表达。
+* 端口粒度 = 逐实例 HBM 端口（merge 预留的 bulk-write 名额封顶
+  ``N_bulk(port) = Q_init``，见下）；流在册端口计数仅作披露。
 * "链路区域"不先验定义：域(t) = 经由仍有剩余信用的链路与端口可达的
   实例集合——域是**出清结果非输入**（:func:`reachable_domain`）。
 
-流类别三分（冻结）：
+流类别（远读退役后单类）：
 
-* ``realtime``（实时流 = decode remote-read 读流）：链路门 + 端口平价门；
-* ``elastic``（弹性流 = remote-read prefill 首遍读流）：链路门 + 端口
-  并发上限（在册流数 + 新增 <= Q_init；端口入 u_port，**不套平价门**）；
 * ``oneshot``（一次性传输 = copy/merge/逐出写回/池恢复）：全额计价 +
-  链路计数计入占用与预留、端口在册计入 u_port（**不设平价门**，收紧
-  后续实时流）——copy、恢复、驱逐及合并属通用治理范围同等纳入（D4）。
-
-  端口并发上限的计数口径（本模块冻结，供 C11 核对）：按本注册表在册
-  流（三类合计）计；外部活跃 decode 消费流（u_port_base）属负载视图、
-  只进平价门分母、不进并发计数。计数上限 = Q_init（端口侧与链路侧同
-  一硬件派生值；N_bulk 同见下）。
+  链路计数计入占用与预留、端口在册计数作披露——copy、恢复、驱逐及
+  合并属通用治理范围同等纳入（D4）。
 
 merge 义务预留（借还配对）：
 
@@ -49,14 +38,11 @@ merge 义务预留（借还配对）：
 * 端口侧：双候选胜者侧各 1 个 bulk-write 名额，封顶 ``N_bulk(port) =
   Q_init``，超限 quota_deferred（wait_reason=quota_port）。N_bulk 冻结
   为 Q_init，不随链路 Q 调整；static/aimd 之分只作用于链路 Q 调整律
-  （AIMD 控制律归 C10），端口平价门与 N_bulk 在 static/aimd 下均常开。
-* 量级分层（调用方策略，C11/C14 落地；模块只提供双向各 1 槽原语，
-  功能上已覆盖翻转分支）：copy/recompute 轮零翻转零预留（轮内逐块
-  交接/重算即权威，C13）；remote-read 轮预留量级 ≈ min(两侧保留量)——
-  常规分支（基础驻留 > 增量）= 执行侧保留量（无留存型暂存口径下即
-  增量本身），翻转分支（增量 > 基础驻留）败者侧为 home、搬运字节 =
-  home 侧保留量；部分驻留/多源状态按唯一有效块集合如实披露。预测
-  预留不替代容量与数据就绪约束。
+  （AIMD 控制律归 C10），N_bulk 在 static/aimd 下均常开。
+* 量级分层（调用方策略，C11/C14 落地；模块只提供双向各 1 槽原语）：
+  copy/recompute 轮零翻转零预留（轮内逐块交接/重算即权威，C13）；
+  部分驻留/多源状态按唯一有效块集合如实披露。预测预留不替代容量与
+  数据就绪约束。
 
 quota_deferred 语义（冻结；对照 joint_scheduler.py 的零候选
 fail-closed——``JointSchedulerError`` 会终局 run）：
@@ -121,9 +107,9 @@ AIMD 控制律（C10，D5 冻结；仅 ``mode=aimd``，static 下 Q 恒 = Q_init
   事件钟（SH dispatch 钟）的显式参数（缺省 None = 不参与 AIMD/EWMA
   计时，簿记与代数语义不变）；各通道局部单调性 fail-closed
   （release 早于 admit、遥测钟倒退均拒），通道间不交叉校验。
-* static/aimd 之分**只作用于链路 Q 调整律**；端口平价门与 N_bulk
+* static/aimd 之分**只作用于链路 Q 调整律**；N_bulk
   在 static/aimd 下均常开（C9 冻结，本卡不改——aimd 收缩链路 Q
-  不影响端口判据与 N_bulk）。
+  不影响 N_bulk）。
 
 SH 衔接面（C11 对接合同，本卡只冻结接口语义、不改 SH）：
 
@@ -155,11 +141,9 @@ QUOTA_OFF = "off"
 QUOTA_STATIC = "static"
 QUOTA_AIMD = "aimd"
 
-#: 流类别三分（C9 冻结；见模块 docstring）。
-FLOW_REALTIME = "realtime"
-FLOW_ELASTIC = "elastic"
+#: 流类别（远读退役后单类；见模块 docstring）。
 FLOW_ONESHOT = "oneshot"
-FLOW_CLASSES = (FLOW_REALTIME, FLOW_ELASTIC, FLOW_ONESHOT)
+FLOW_CLASSES = (FLOW_ONESHOT,)
 
 #: joint_admission_wait 等待日志的 wait_reason 枚举（C11 接线）。
 #: capacity = SH 既有容量等待；quota_link / quota_port = 本模块新增分列。
@@ -169,7 +153,7 @@ WAIT_QUOTA_PORT = "quota_port"
 WAIT_REASONS = (WAIT_CAPACITY, WAIT_QUOTA_LINK, WAIT_QUOTA_PORT)
 
 #: merge 预留的链路侧 owner 字符串模板（与 SH owner 约定同构：
-#: ``rid#readplan``、``rid#decode#{j}``、``rid#merge`` 之外新增本通道）。
+#: ``rid#decode#{j}``、``rid#merge`` 之外新增本通道）。
 MERGE_RESERVE_OWNER_TEMPLATE = "{rid}#merge-reserve"
 
 #: merge 方向枚举（双候选 = 前向合并腿 / 反向合并腿）。
@@ -177,15 +161,9 @@ MERGE_DIRECTION_FORWARD = "forward"
 MERGE_DIRECTION_REVERSE = "reverse"
 MERGE_DIRECTIONS = (MERGE_DIRECTION_FORWARD, MERGE_DIRECTION_REVERSE)
 
-#: δ_adm 近平局带初值（D5 冻结 = 0）。
-#: 物理单位 = ns（与 cost_ns 同域）；来源 = 执行计划 D5：原拟
-#: "I / 有效带宽" 与 merge_done 终点内已计价的前向合并腿同数值，构成
-#: 重复计费，故初值取 0。终值由 C10 三选一闭合，任一选择须登记物理
-#: 单位与来源，不据结果扩大。（C10 终冻决议 = **维持 0**，见
-#: /tmp/joint_exec/C10/delta_adm_freeze.md 与执行计划 §4 补遗。）
-#: D05（2026-09-27）后合并腿为三腿 max（含目标 HBM 写腿，v2.0 C02/
-#: §15.2）——"I / 有效带宽" ≤ 已计价合并腿，正 δ_adm 仍是重复计费，
-#: 冻结值 0 不变。
+#: δ_adm 近平局带初值（D5 冻结 = 0；C10 终冻维持 0）。谓词
+#: ``challenger_flips`` 已随远读挑战者退役删除；本常量仍是调度器侧
+#: tracker 构造的 δ_adm 披露初值（snapshot 恒披露 0 = 恒开带）。
 DELTA_ADM_INITIAL_NS = 0
 
 # ------------------------------------------- AIMD 控制律常数（C10，D5）--
@@ -264,68 +242,6 @@ def derive_q_init(rho_eff: float) -> int:
         raise LinkQuotaError(
             f"rho_eff must be a finite non-negative ratio, got {rho_eff!r}")
     return max(1, int(math.floor(rho_eff)))
-
-
-def port_parity_admits(
-    local_hbm_bytes_per_ns: float,
-    u_port: int,
-    r_hat_kv_bytes_per_ns: float,
-) -> bool:
-    """端口平价门：``B_HBM / (u_port + 1) >= r_hat_KV``（§4.2）。
-
-    ``r_hat_KV`` = 负载视图派生的每流消费速率（因果，不假设恒满带宽）；
-    ``u_port`` = 活跃 decode 消费流 + 在册传输/远读流（F4 口径）。端口
-    信用**无** ``max(1, .)`` 保底——忙端口即 0（本判据可全拒）。
-    """
-    if u_port < 0:
-        raise LinkQuotaError(
-            f"u_port must be non-negative, got {u_port!r}")
-    for name, value in (
-            ("local_hbm_bytes_per_ns", local_hbm_bytes_per_ns),
-            ("r_hat_kv_bytes_per_ns", r_hat_kv_bytes_per_ns)):
-        if not (value > 0) or not math.isfinite(value):
-            raise LinkQuotaError(
-                f"{name} must be a positive finite rate, got {value!r}")
-    return local_hbm_bytes_per_ns / (u_port + 1) >= r_hat_kv_bytes_per_ns
-
-
-def port_parity_headroom(
-    local_hbm_bytes_per_ns: float,
-    u_port: int,
-    r_hat_kv_bytes_per_ns: float,
-) -> int:
-    """平价门余量（port_snapshot 披露位）：仍可准入的实时流数 k。
-
-    即最大 k >= 0 使 ``B_HBM / (u_port + k) >= r_hat_KV``；k = 0 表示
-    忙端口（无保底，§4.2）。
-    """
-    if not port_parity_admits(
-            local_hbm_bytes_per_ns, u_port, r_hat_kv_bytes_per_ns):
-        return 0
-    # B/(u+k) >= r  <=>  u + k <= B/r  <=>  k <= floor(B/r) - u
-    return max(0, int(local_hbm_bytes_per_ns / r_hat_kv_bytes_per_ns) - u_port)
-
-
-def challenger_flips(
-    challenger_cost_ns: int,
-    incumbent_cost_ns: int,
-    delta_adm_ns: int = DELTA_ADM_INITIAL_NS,
-) -> bool:
-    """δ_adm 近平局带（D5）：挑战动作须胜在册动作族 >= δ_adm 才翻转。
-
-    裁决式：``flip ⇔ incumbent_cost − challenger_cost >= delta_adm``。
-    位于共享决策路径、内部对照臂同开关（同一 δ_adm 值作用于主臂与
-    内部对照）。使用合同（C11）：本谓词是既有全候选 argmin 比较的
-    **附加门**——调用方先按 ``(cost_ns, order_key)`` 字典序确定在册
-    胜者，挑战者仅当标准比较偏好它**且**本谓词为真才翻转。δ_adm = 0
-    （冻结初值）时本谓词恒开（margin >= 0 与 challenger <= incumbent
-    同真域），组合后 ≡ 既有 argmin 语义（平局由 order_key 裁决），
-    不借初值夹带行为变更。
-    """
-    if delta_adm_ns < 0:
-        raise LinkQuotaError(
-            f"delta_adm_ns must be non-negative, got {delta_adm_ns!r}")
-    return incumbent_cost_ns - challenger_cost_ns >= delta_adm_ns
 
 
 def aimd_band_signal(
@@ -625,8 +541,8 @@ class LinkQuotaTracker:
     admit/release 配对始终成立）。``mode=static`` 链路 Q 恒 = Q_init；
     ``mode=aimd`` 由 :meth:`observe_telemetry` 驱动 AIMD 控制律
     （C10 落地：收缩 MD / 扩张 AI / 胀缩阈值带 / 流寿命 EWMA），调整
-    经 :meth:`set_link_quota`（防结构性死锁下限 1）。端口平价门与
-    N_bulk（= Q_init，冻结）在 static/aimd 下均常开、不随链路 Q 调整。
+    经 :meth:`set_link_quota`（防结构性死锁下限 1）。N_bulk（= Q_init，
+    冻结）在 static/aimd 下均常开、不随链路 Q 调整。
     """
 
     def __init__(
@@ -644,7 +560,6 @@ class LinkQuotaTracker:
             raise LinkQuotaError(
                 f"delta_adm_ns must be non-negative, got {delta_adm_ns!r}")
         self._mode = mode
-        self._b_hbm = float(local_hbm_bytes_per_ns)
         self._rho_eff = derive_rho_eff(
             noc_link_bytes_per_ns, local_hbm_bytes_per_ns)
         self._q_init = derive_q_init(self._rho_eff)
@@ -795,32 +710,6 @@ class LinkQuotaTracker:
     def bulk_remaining(self, port_id: Hashable) -> int:
         return self._n_bulk - self.bulk_used(port_id)
 
-    def port_parity_admits(
-        self,
-        port_id: Hashable,
-        r_hat_kv_bytes_per_ns: float,
-        u_port_base: int = 0,
-    ) -> bool:
-        """本端口当前平价门裁决（u_port = 外部活跃 decode + 在册流）。"""
-        return port_parity_admits(
-            self._b_hbm,
-            u_port_base + self.port_enrolled(port_id),
-            r_hat_kv_bytes_per_ns,
-        )
-
-    def port_parity_headroom(
-        self,
-        port_id: Hashable,
-        r_hat_kv_bytes_per_ns: float,
-        u_port_base: int = 0,
-    ) -> int:
-        """本端口平价门余量（实时流计；port_snapshot 披露位）。"""
-        return port_parity_headroom(
-            self._b_hbm,
-            u_port_base + self.port_enrolled(port_id),
-            r_hat_kv_bytes_per_ns,
-        )
-
     def snapshot(self) -> dict:
         """决策日志披露快照（C5 ``port_snapshot`` 的数据源，C11 接线）。"""
         links = {
@@ -878,23 +767,17 @@ class LinkQuotaTracker:
         flow_class: str,
         links: Sequence[Hashable] = (),
         port_id: Optional[Hashable] = None,
-        r_hat_kv_bytes_per_ns: Optional[float] = None,
-        u_port_base: int = 0,
         slots: int = 1,
         now_ns: Optional[int] = None,
     ) -> QuotaVerdict:
-        """动作级流准入（链路 ∪ 端口原子判定；任一判据不满足 = 整体
+        """动作级流准入（链路门原子判定；判据不满足 = 整体
         不借、零部分登记）。
 
-        * ``owner``：与 SH owner 约定同构的流标识（如 ``rid#decode#{j}``、
-          ``rid#readplan``）；同一 owner 在册期间重复 admit = fail-closed
+        * ``owner``：与 SH owner 约定同构的流标识（如 ``rid#decode#{j}``）；
+          同一 owner 在册期间重复 admit = fail-closed
           （幻影双占用，配对纪律）。
         * ``links``：本流占用的有向链路序列（重复 = 多槽）。
-        * ``port_id``：端点 HBM 端口（实时/弹性/一次性均入 u_port 在册）。
-        * ``r_hat_kv_bytes_per_ns``：实时流必填（平价门分母来源，负载
-          视图派生、因果）；弹性/一次性流不套平价门、忽略该参数。
-        * ``u_port_base``：外部活跃 decode 消费流数（F4 负载视图口径，
-          只进平价门分母、不进并发计数）。
+        * ``port_id``：端点 HBM 端口（在册计数，仅作披露）。
         * ``slots``：占用槽位数（缺省 1）。
         * ``now_ns``：可选事件钟时标（AIMD 计时通道）——与
           :meth:`release_flow` 的时标配对生成流寿命样本喂
@@ -913,9 +796,6 @@ class LinkQuotaTracker:
                 "occupancy; release before re-admitting)")
         if slots <= 0:
             raise LinkQuotaError(f"slots must be >= 1, got {slots!r}")
-        if u_port_base < 0:
-            raise LinkQuotaError(
-                f"u_port_base must be non-negative, got {u_port_base!r}")
         if now_ns is not None:
             if isinstance(now_ns, bool) or not isinstance(now_ns, int):
                 raise LinkQuotaError(
@@ -927,15 +807,11 @@ class LinkQuotaTracker:
             raise LinkQuotaError(
                 "admit_flow requires at least one link or a port "
                 f"(owner={owner!r})")
-        if flow_class == FLOW_REALTIME and r_hat_kv_bytes_per_ns is None:
-            raise LinkQuotaError(
-                f"realtime flow {owner!r} requires r_hat_kv_bytes_per_ns "
-                "(parity gate input, derived from the load view)")
 
         gated = self._mode != QUOTA_OFF
         link_links = tuple(links)
 
-        # ---- 链路门（三类同判据：占用 + 预留 + 新增 <= Q；off 旁路）----
+        # ---- 链路门（占用 + 预留 + 新增 <= Q；off 旁路）----
         if gated and link_links:
             demand: dict = {}
             for link in link_links:
@@ -959,45 +835,7 @@ class LinkQuotaTracker:
                             f"reserved={self.link_reserved(link)})"),
                     )
 
-        # ---- 端口门（按类分判；off 旁路）----
-        if gated and port_id is not None:
-            if flow_class == FLOW_REALTIME:
-                u_port = u_port_base + self.port_enrolled(port_id)
-                rate = self._b_hbm / (u_port + slots)
-                if rate < r_hat_kv_bytes_per_ns:
-                    return QuotaVerdict(
-                        admitted=False,
-                        flow_class=flow_class,
-                        resource_kind="port",
-                        resource_id=port_id,
-                        remaining=0,
-                        wait_reason=WAIT_QUOTA_PORT,
-                        inapplicable_reason=(
-                            f"quota_port: port={port_id!r} parity "
-                            f"B_HBM/(u_port+{slots})={rate:.6g} < "
-                            f"r_hat_kv={r_hat_kv_bytes_per_ns:.6g} "
-                            f"(u_port_base={u_port_base}, enrolled="
-                            f"{self.port_enrolled(port_id)}; busy port "
-                            "admits nothing, no max(1,.) floor)"),
-                    )
-            elif flow_class == FLOW_ELASTIC:
-                enrolled = self.port_enrolled(port_id)
-                if enrolled + slots > self._q_init:
-                    return QuotaVerdict(
-                        admitted=False,
-                        flow_class=flow_class,
-                        resource_kind="port",
-                        resource_id=port_id,
-                        remaining=self._q_init - enrolled,
-                        wait_reason=WAIT_QUOTA_PORT,
-                        inapplicable_reason=(
-                            f"quota_port: port={port_id!r} concurrency "
-                            f"{enrolled}+{slots} > cap Q_init="
-                            f"{self._q_init} (elastic class enters "
-                            "u_port, parity gate not applied)"),
-                    )
-            # oneshot：不设端口门（全额计价；在册计入 u_port、收紧后续
-            # 实时流的平价门与弹性并发计数）。
+        # oneshot：不设端口门（全额计价；端口在册计数仅作披露）。
 
         # ---- 借（原子：全部门过才登记）----
         self._flows[owner] = _FlowEnrollment(

@@ -344,6 +344,8 @@ class CabiSameValueRegistrationTest(unittest.TestCase):
         config = None
         runtime_config = os.path.join(
             repo_root, "sh_test_mesh", "generated", "runtime_config")
+        if not os.path.isdir(runtime_config):
+            self.skipTest("runtime_config not materialized")
         for entry in sorted(os.listdir(runtime_config)):
             candidate = os.path.join(
                 runtime_config, entry, "resolved_die_model.json")

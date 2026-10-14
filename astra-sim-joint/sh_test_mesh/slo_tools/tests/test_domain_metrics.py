@@ -5,14 +5,14 @@
   或  python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -v
 
 覆盖面（对应 C16 卡验收）：
-* 三口径分列：D_feed（供给集合）/ D_econ（C_alt* 必含 copy、δ=0 主臂）/
-  实际选择（四动作计数、recompute elected/forced 分列不得混报）；
+* 三口径分列：D_feed（供给集合——挑战者=copy）/ D_econ（C_alt* 遍历
+  stay/recompute、δ=0 主臂）/ 实际选择（三动作计数、recompute
+  elected/forced 分列不得混报）；
 * 派生指标：|D|、hop 分位、方向分布（分方向半径方差）、瓶颈资源
   argmax、约束不满足原因、预测/实测差异（σ̂ 三级链）；
-* δ 敏感性重定价（A3'）：δ∈{σ̂,2σ̂,4σ̂} 翻转谓词 C_remote+δ≤C_alt*、
+* δ 敏感性重定价（A3'）：δ∈{σ̂,2σ̂,4σ̂} 翻转谓词 C_copy+δ≤C_alt*、
   平局裁决 = SH ACTION_ORDER 偏好（δ=0 重放与在线选择一致）；
-* 边界对拍：观测 remote/local 分界 vs ρ 锚点（诊断非验收）、V_copy/
-  V_remote 静态参考 b_c/b_r 缺席 → NA；
+* 边界对拍：观测挑战者/local 分界 vs ρ 锚点（诊断非验收）；
 * 双域同图：配额域 WP3 前恒 NA 的兼容与如实标注；
 * home 迁移：completion 披露轨迹 + kv_delta_journal sidecar 消费面
   （C14 字段；F3 四层可信度分级：full/partial/empty/decision_only，
@@ -52,14 +52,13 @@ from slo_common import SloToolError  # noqa: E402
 COEF = 32  # 2·layers(2)·hidden(4)·bytes_per_elem(2)——合成 trace_config
 
 
-def _seg(compute=0, remote=0, merge=0, target_wait=0, history_prep=0,
+def _seg(compute=0, merge=0, target_wait=0, history_prep=0,
          eviction_wait=0):
     return {
         "target_wait_ns": target_wait, "history_prep_ns": history_prep,
         "eviction_wait_ns": eviction_wait, "compute_ns": compute,
-        "remote_read_ns": remote, "merge_ns": merge,
-        "notes": [], "remote_read_first_credit_ns": 0,
-        "remote_read_stream_ns": 0, "contention_divisor": 1, "hops": 0,
+        "merge_ns": merge,
+        "notes": [], "contention_divisor": 1, "hops": 0,
     }
 
 
@@ -99,7 +98,7 @@ def _admission(request_id, tick, candidates, selected_action,
         "tick": tick, "priority": 0, "seq": tick,
         "decision": {
             "joint_mode": "joint", "category_mode": "typed",
-            "layer_policy": "adaptive", "remote_enabled": True,
+            "layer_policy": "adaptive",
             "contention_coverage": "cold_start",
             "estimated_decode_tokens": 1, "horizon_source": "unit_test",
             "service_factors": {"decode_factor": 1.0, "prefill_factor": 1.0,
@@ -134,16 +133,16 @@ def _completion(request_id, tick, merge_direction="stay",
             "kv_instance_after_completion": kv_instance_after,
             "origin_home_instance": None,
             "completion_evictions": [], "merge_transfers": [],
-            "remote_read_slices": [],
         },
     }
 
 
 def _decision_rows():
-    """四条决策：turn-0 stay / remote 选中 / δ 翻转样本 / recompute forced。"""
+    """四条决策：turn-0 stay / 挑战者 copy 选中 / δ 翻转样本 / recompute
+    forced（2026-10-14 远读退役：挑战者 = copy，替代族 = stay/recompute）。"""
     rows = []
     # R1 session_a_request_0（turn-0）：无历史——stay/recompute 双适用平价
-    # （stay 按 ACTION_ORDER 胜），copy/remote 不适用；completion 使
+    # （stay 按 ACTION_ORDER 胜），copy 不适用；completion 使
     # measured−pred = +100（σ̂ 样本 1）。
     rows.append(_admission(
         "session_a_request_0", 100,
@@ -151,54 +150,44 @@ def _decision_rows():
          _cand("recompute", 0, True, 1000, 0,
                breakdown=_seg(compute=1000)),
          _cand("copy", 0, False, hops=0, reason="no history to copy"),
-         _cand("remote-read", 0, False, hops=0,
-               reason="no resident remote history"),
          _cand("stay", 1, True, 1000, 1, breakdown=_seg(compute=1000)),
          _cand("recompute", 1, True, 1000, 1, breakdown=_seg(compute=1000)),
-         _cand("copy", 1, False, hops=1, reason="no history to copy"),
-         _cand("remote-read", 1, False, hops=1,
-               reason="no resident remote history")],
+         _cand("copy", 1, False, hops=1, reason="no history to copy")],
         "stay", 0, ["stay", "recompute"], cost_ns=1000))
     rows.append(_completion("session_a_request_0", 1200, "stay",
                             kv_instance_after=0))
-    # R2 session_b_request_1（turn-1，历史在 inst0）：remote@1 = 395 <
-    # copy@1 = 400（C_alt* 必含 copy）→ D_econ(δ=0) = {1} 且在线选中
-    # remote-read@1；err = +105（σ̂ 样本 2）。
+    # R2 session_b_request_1（turn-1，历史在 inst0）：挑战者 copy@1 = 395 <
+    # C_alt* = stay@0 = 450 → D_econ(δ=0) = {1} 且在线选中 copy@1；
+    # err = +105（σ̂ 样本 2）。
     rows.append(_admission(
         "session_b_request_1", 200,
-        [_cand("stay", 0, True, 500, 0, breakdown=_seg(compute=500)),
+        [_cand("stay", 0, True, 450, 0, breakdown=_seg(compute=450)),
          _cand("recompute", 0, True, 900, 0, breakdown=_seg(compute=900)),
          _cand("copy", 0, False, hops=0, reason="no history to copy"),
-         _cand("remote-read", 0, False, hops=0,
-               reason="base resident at target instance"),
          _cand("stay", 1, False, hops=1,
                reason="history not resident at target"),
          _cand("recompute", 1, True, 900, 1, breakdown=_seg(compute=900)),
-         _cand("copy", 1, True, 400, 1, breakdown=_seg(compute=400)),
-         _cand("remote-read", 1, True, 395, 1,
-               breakdown=_seg(compute=90, remote=300, merge=5))],
-        "remote-read", 1, ["stay", "recompute", "copy", "remote-read"],
+         _cand("copy", 1, True, 395, 1,
+               breakdown=_seg(compute=90, merge=305))],
+        "copy", 1, ["stay", "recompute", "copy"],
         origin_home=0, cost_ns=395))
     rows.append(_completion("session_b_request_1", 700, "reverse",
                             kv_instance_after=0))
-    # R3 session_c_request_0：remote@1 = 850、C_alt* = stay@0 = 1000 →
-    # margin 350：δ=0 重放应选 remote（在线记 stay ⇒ replay_mismatch=1）；
-    # 敏感档 σ̂=100/200 翻转、400 不翻转；err = −100（σ̂ 样本 3，
+    # R3 session_c_request_0：挑战者 copy@1 = 850、C_alt* = stay@0 = 1000 →
+    # margin 150：δ=0 重放应选 copy（在线记 stay ⇒ replay_mismatch=1）；
+    # 敏感档 σ̂=100 翻转、200/400 不翻转；err = −100（σ̂ 样本 3，
     # completion tick 1200 → measured 900）。
     rows.append(_admission(
         "session_c_request_0", 300,
         [_cand("stay", 0, True, 1000, 0, breakdown=_seg(compute=1000)),
          _cand("recompute", 0, True, 1000, 0, breakdown=_seg(compute=1000)),
          _cand("copy", 0, False, hops=0, reason="no history to copy"),
-         _cand("remote-read", 0, False, hops=0,
-               reason="no resident remote history"),
          _cand("stay", 1, False, hops=1,
                reason="history not resident at target"),
          _cand("recompute", 1, True, 2000, 1, breakdown=_seg(compute=2000)),
-         _cand("copy", 1, True, 1200, 1, breakdown=_seg(compute=1200)),
-         _cand("remote-read", 1, True, 850, 1,
-               breakdown=_seg(compute=800, remote=50))],
-        "stay", 0, ["stay", "recompute", "copy", "remote-read"],
+         _cand("copy", 1, True, 850, 1,
+               breakdown=_seg(compute=800, merge=50))],
+        "stay", 0, ["stay", "recompute", "copy"],
         cost_ns=1000))
     rows.append(_completion("session_c_request_0", 1200, "stay",
                             kv_instance_after=0))
@@ -210,14 +199,10 @@ def _decision_rows():
                reason="history not resident at target"),
          _cand("recompute", 0, True, 700, 0, breakdown=_seg(compute=700)),
          _cand("copy", 0, False, hops=0, reason="no history to copy"),
-         _cand("remote-read", 0, False, hops=0,
-               reason="no resident remote history"),
          _cand("stay", 1, False, hops=1,
                reason="history not resident at target"),
          _cand("recompute", 1, True, 750, 1, breakdown=_seg(compute=750)),
-         _cand("copy", 1, False, hops=1, reason="no history to copy"),
-         _cand("remote-read", 1, False, hops=1,
-               reason="no resident remote history")],
+         _cand("copy", 1, False, hops=1, reason="no history to copy")],
         "recompute", 0, ["recompute"],
         recompute_selection={"tier": "forced", "forced_reason": "no_history"},
         cost_ns=700))
@@ -346,16 +331,16 @@ class DomainMetricsTests(unittest.TestCase):
 
     def test_three_calibers_separated(self):
         by_id = {row["request_id"]: row for row in self.requests}
-        # D_feed：R1/R4 无 remote 适用 → 0；R2/R3 = {1}。
+        # D_feed：R1/R4 无挑战者适用 → 0；R2/R3 = {1}。
         self.assertEqual(by_id["session_a_request_0"]["d_feed_size"], "0")
         self.assertEqual(by_id["session_b_request_1"]["d_feed_size"], "1")
         self.assertIn("1:1", by_id["session_b_request_1"]["d_feed_members"])
-        # D_econ(δ=0)：R2 = {1}（395 ≤ C_alt*=copy@1 400——必含 copy）；
-        # R3 = {1}（850 ≤ stay@0 1000）；R1/R4 = 0。
+        # D_econ(δ=0)：R2 = {1}（395 ≤ C_alt*=stay@0 450——替代族
+        # stay/recompute）；R3 = {1}（850 ≤ stay@0 1000）；R1/R4 = 0。
         self.assertEqual(by_id["session_b_request_1"]["d_econ_size_delta0"],
                          "1")
         self.assertEqual(by_id["session_b_request_1"]["c_alt_star_action"],
-                         "copy")
+                         "stay")
         self.assertEqual(by_id["session_c_request_0"]["d_econ_size_delta0"],
                          "1")
         self.assertEqual(by_id["session_a_request_0"]["d_econ_size_delta0"],
@@ -372,11 +357,10 @@ class DomainMetricsTests(unittest.TestCase):
         self.assertEqual(window[0], 100)
         self.assertEqual(window[1], 2000)
 
-    def test_four_action_counts_recompute_split(self):
+    def test_three_action_counts_recompute_split(self):
         selection = self.summary["calibers"]["actual_selection"]
-        self.assertEqual(selection["four_action_counts"],
-                         {"stay": 2, "recompute": 0, "remote-read": 1,
-                          "copy": 0})
+        self.assertEqual(selection["three_action_counts"],
+                         {"stay": 2, "recompute": 0, "copy": 1})
         # recompute 仅 elected 入选中数；forced 单列（§19.2 两口径不混报）。
         self.assertEqual(selection["recompute_elected"], 0)
         self.assertEqual(selection["recompute_forced_by_reason"],
@@ -387,7 +371,7 @@ class DomainMetricsTests(unittest.TestCase):
     def test_action_order_tie_break_and_replay(self):
         # R1 stay/recompute 同价 → C_alt* 动作 = stay（SH ACTION_ORDER 偏好，
         # 非字典序）；R1/R2/R4 的 δ=0 重放与在线一致，R3（记 stay、重放
-        # remote）恰贡献 1 个 replay_mismatch。
+        # 挑战者 copy）恰贡献 1 个 replay_mismatch。
         by_id = {row["request_id"]: row for row in self.requests}
         self.assertEqual(by_id["session_a_request_0"]["c_alt_star_action"],
                          "stay")
@@ -404,13 +388,14 @@ class DomainMetricsTests(unittest.TestCase):
         self.assertEqual(sigma["sigma_hat_ns"], 100)
         self.assertEqual(sigma["sigma_hat_source"],
                          "observational_pred_vs_measured_p50_abs")
-        # R2 margin=5（400−395）、R3 margin=150（1000−850）：δ=100 → R2
-        # 翻回 copy、R3 翻成 remote（2 翻转）；δ=200/400 → 仅 R2 翻回
-        # copy（R3 的 150 < 200 不再翻转）。位移：R2 同实例 0、R3 +1。
+        # R2 margin=55（450−395）、R3 margin=150（1000−850）：δ=100 →
+        # R2 翻回 stay@0、R3 翻成 copy@1（2 翻转）；δ=200/400 → 仅 R2
+        # 翻回 stay@0（R3 的 150 < 200 不再翻转）。位移：R2 −1（copy@1→
+        # stay@0）、R3 +1（stay@0→copy@1）。
         self.assertEqual(tiers["1.0"]["flips_vs_actual"], 2)
         self.assertEqual(tiers["2.0"]["flips_vs_actual"], 1)
         self.assertEqual(tiers["4.0"]["flips_vs_actual"], 1)
-        self.assertEqual(tiers["1.0"]["displacement_hop"]["min"], 0)
+        self.assertEqual(tiers["1.0"]["displacement_hop"]["min"], -1)
         self.assertEqual(tiers["1.0"]["displacement_hop"]["max"], 1)
         # A3' 修订落字：撤销 δ=0 空转对拍臂的注释在场。
         self.assertIn("空转对拍臂已撤销", sigma["note"])
@@ -431,15 +416,12 @@ class DomainMetricsTests(unittest.TestCase):
 
     def test_bottleneck_and_reasons(self):
         bottleneck = self.summary["derived"]["bottleneck_resource"]
-        # R2 remote@1 六段 argmax = remote_read_ns(300)；R3 = compute_ns(800)。
-        self.assertEqual(bottleneck["d_feed_remote_members"],
-                         {"remote_read_ns": 1, "compute_ns": 1})
+        # R2 copy@1 五段 argmax = merge_ns(305)；R3 = compute_ns(800)。
+        self.assertEqual(bottleneck["d_feed_challenger_members"],
+                         {"merge_ns": 1, "compute_ns": 1})
         reasons = self.summary["derived"]["constraint_unsatisfied_reasons"]
-        # R1×2 + R3×1 + R4×2 = 5；R2 的 inst0 是 base-resident 另计。
-        self.assertEqual(reasons["remote-read"]
-                         ["no resident remote history"], 5)
-        self.assertEqual(reasons["remote-read"]
-                         ["base resident at target instance"], 1)
+        # R1×2 + R2×1 + R3×1 + R4×2 = 6（copy 不可行理由）。
+        self.assertEqual(reasons["copy"]["no history to copy"], 6)
         # R2/R3 各 1 + R4×2 = 4。
         self.assertEqual(reasons["stay"]["history not resident at target"],
                          4)
@@ -457,8 +439,6 @@ class DomainMetricsTests(unittest.TestCase):
         # quota-off 夹具：无 quota_ 理由 ⇒ 本例（有适用动作）= 1
         #（CSV 行字符串形态）。
         self.assertEqual(inst["quota_admissible"], "1")
-        # M2：remote 特异单列（quota-off 下 = remote 结构适用性）。
-        self.assertEqual(inst["quota_admissible_remote"], "0")
         self.assertEqual(inst["port_u_port_total"], "NA")
 
     def test_quota_admissible_zero_branch_at_csv_level(self):
@@ -476,8 +456,6 @@ class DomainMetricsTests(unittest.TestCase):
                        reason="history not resident at target"),
                  _cand("copy", 1, False, hops=1,
                        reason="no history to copy"),
-                 _cand("remote-read", 1, False, hops=1,
-                       reason="no resident remote history"),
                  _cand("recompute", 1, False, hops=1,
                        reason="instance unavailable for recompute")],
                 "stay", 0, ["stay"], cost_ns=900)) + "\n")
@@ -496,16 +474,16 @@ class DomainMetricsTests(unittest.TestCase):
         assert str(resolved).startswith(tempfile.gettempdir())
         shutil.rmtree(resolved)
 
-    def test_quota_deferred_domain_rebuild_and_remote_column(self):
+    def test_quota_deferred_domain_rebuild(self):
         """M2（2026-09-23 验收审计②）：配额拒候选（quota_ 前缀 + 保留
         的配额前成本）纳入 D_feed/D_econ——quota-on run 的经济域可从
-        日志重建；quota_admissible_remote 单列（stay 可用即 1 的四动作
-        any 列对 remote 被配额裁不敏感）；摘要 status 派生非 NA。"""
+        日志重建；摘要 status 派生非 NA（挑战者列 = copy，
+        2026-10-14 远读退役重收缩）。"""
         run_dir = build_run_dir(tag="domain_metrics_qon")
         log = run_dir / "results" / "online_decision_log.jsonl"
         with log.open("a", encoding="utf-8") as handle:
-            # R5：remote-read@1 被配额拒（quota_link 理由、保留成本
-            # 350 < C_alt*=copy@1 400）——修前 D_econ 面临空（成本被
+            # R5：copy@1 被配额拒（quota_link 理由、保留成本
+            # 350 < C_alt*=stay@0 500）——修前 D_econ 面临空（成本被
             # SH 清 None 且工具双条件滤除），重建后 D_econ(δ=0)={1}。
             handle.write(json.dumps(_admission(
                 "session_f_request_0", 500,
@@ -517,11 +495,9 @@ class DomainMetricsTests(unittest.TestCase):
                        reason="history not resident at target"),
                  _cand("recompute", 1, True, 900, 1,
                        breakdown=_seg(compute=900)),
-                 _cand("copy", 1, True, 400, 1,
-                       breakdown=_seg(compute=400)),
-                 _cand("remote-read", 1, False, 350, hops=1,
+                 _cand("copy", 1, False, 350, hops=1,
                        reason="quota_link: link=(0,1) remaining=0")],
-                "copy", 1, ["stay", "recompute", "copy"], cost_ns=400)) + "\n")
+                "stay", 0, ["stay", "recompute"], cost_ns=500)) + "\n")
         rc, summary, requests, instances = run_tool(run_dir)
         self.assertEqual(rc, 0)
         chart = summary["derived"]["dual_domain_chart"]
@@ -530,22 +506,19 @@ class DomainMetricsTests(unittest.TestCase):
                          "derived_from_candidates")
         by_id = {row["request_id"]: row for row in requests}
         row = by_id["session_f_request_0"]
-        # 配额拒 remote（保留成本 350）进 D_feed/D_econ——经济域重建。
+        # 配额拒 copy（保留成本 350）进 D_feed/D_econ——经济域重建。
         self.assertEqual(row["d_feed_size"], "1")
         self.assertEqual(row["d_econ_size_delta0"], "1")
-        self.assertEqual(row["c_remote_min_ns"], "350")
-        self.assertEqual(row["c_alt_star_action"], "copy")
+        self.assertEqual(row["c_alt_star_action"], "stay")
         inst = {(r["request_id"], r["instance_index"]): r
                 for r in instances}
-        # 实例 1：stay 结构不可行、remote 被配额拒 ⇒ 四动作 any=1
-        #（copy 可用）但 remote 特异列=1（配额拒=配额移除后可行）。
+        # 实例 1：stay 结构不可行、copy 被配额拒 ⇒ any=1（配额拒 =
+        # 配额移除后结构可行）。
         self.assertEqual(inst[("session_f_request_0", "1")]
                          ["quota_admissible"], "1")
-        self.assertEqual(inst[("session_f_request_0", "1")]
-                         ["quota_admissible_remote"], "1")
-        # 对照：实例 0 remote 结构不可行（非配额）⇒ remote 列=0。
+        # 对照：实例 0 无 quota_ 理由但有适用 stay ⇒ 结构可行=1。
         self.assertEqual(inst[("session_f_request_0", "0")]
-                         ["quota_admissible_remote"], "0")
+                         ["quota_admissible"], "1")
         import shutil
         resolved = Path(run_dir).resolve()
         assert str(resolved).startswith(tempfile.gettempdir())
@@ -553,9 +526,9 @@ class DomainMetricsTests(unittest.TestCase):
 
     def test_cross_family_tie_replay_no_false_flip(self):
         """O8①：跨族平局镜像在线 argmin 全键序——stay@0=100 vs
-        remote@1=100 在线选 stay@0，重放不再恒翻 remote（replay_
+        copy@1=100 在线选 stay@0，重放不再恒翻挑战者（replay_
         mismatch/quota_counterfactual_flips 假阳性消除）；反向
-        remote 实例号小仍选 remote。"""
+        挑战者实例号小仍选挑战者。"""
         run_dir = build_run_dir(tag="domain_metrics_tie")
         log = run_dir / "results" / "online_decision_log.jsonl"
         with log.open("a", encoding="utf-8") as handle:
@@ -563,24 +536,24 @@ class DomainMetricsTests(unittest.TestCase):
                 "session_tie_stay_wins", 500,
                 [_cand("stay", 0, True, 100, 0,
                        breakdown=_seg(compute=100)),
-                 _cand("remote-read", 0, False, hops=0,
-                       reason="no resident remote history"),
+                 _cand("copy", 0, False, hops=0,
+                       reason="no history to copy"),
                  _cand("stay", 1, False, hops=1,
                        reason="history not resident at target"),
-                 _cand("remote-read", 1, True, 100, 1,
-                       breakdown=_seg(compute=10, remote=90))],
-                "stay", 0, ["stay", "remote-read"], cost_ns=100)) + "\n")
+                 _cand("copy", 1, True, 100, 1,
+                       breakdown=_seg(compute=10, merge=90))],
+                "stay", 0, ["stay", "copy"], cost_ns=100)) + "\n")
             handle.write(json.dumps(_admission(
-                "session_tie_remote_wins", 600,
+                "session_tie_challenger_wins", 600,
                 [_cand("stay", 0, False, hops=0,
                        reason="history not resident at target"),
-                 _cand("remote-read", 0, True, 100, 0,
-                       breakdown=_seg(compute=10, remote=90)),
+                 _cand("copy", 0, True, 100, 0,
+                       breakdown=_seg(compute=10, merge=90)),
                  _cand("stay", 1, True, 100, 1,
                        breakdown=_seg(compute=100)),
-                 _cand("remote-read", 1, False, hops=1,
-                       reason="no resident remote history")],
-                "remote-read", 0, ["stay", "remote-read"],
+                 _cand("copy", 1, False, hops=1,
+                       reason="no history to copy")],
+                "copy", 0, ["stay", "copy"],
                 cost_ns=100)) + "\n")
         rc, summary, _requests, _instances = run_tool(run_dir)
         self.assertEqual(rc, 0)
@@ -601,23 +574,23 @@ class DomainMetricsTests(unittest.TestCase):
         run_dir = build_run_dir(tag="domain_metrics_hops")
         log = run_dir / "results" / "online_decision_log.jsonl"
         with log.open("a", encoding="utf-8") as handle:
-            # H1：remote@1 hops=None（-1 哨兵）、remote@2 hops=2——
+            # H1：copy@1 hops=None（-1 哨兵）、copy@2 hops=2——
             # D_feed={1,2}，聚合只计 hop=2 的成员。
             handle.write(json.dumps(_admission(
                 "session_hops_gap_request_0", 700,
                 [_cand("stay", 0, True, 50, 0,
                        breakdown=_seg(compute=50)),
-                 _cand("remote-read", 0, False, hops=0,
-                       reason="no resident remote history"),
+                 _cand("copy", 0, False, hops=0,
+                       reason="no history to copy"),
                  _cand("stay", 1, False, hops=1,
                        reason="history not resident at target"),
-                 _cand("remote-read", 1, True, 40, hops=None,
-                       breakdown=_seg(remote=40)),
+                 _cand("copy", 1, True, 40, hops=None,
+                       breakdown=_seg(merge=40)),
                  _cand("stay", 2, False, hops=2,
                        reason="history not resident at target"),
-                 _cand("remote-read", 2, True, 30, 2,
-                       breakdown=_seg(remote=30))],
-                "remote-read", 2, ["remote-read", "stay"],
+                 _cand("copy", 2, True, 30, 2,
+                       breakdown=_seg(merge=30))],
+                "copy", 2, ["copy", "stay"],
                 cost_ns=30)) + "\n")
         rc, summary, _requests, _instances = run_tool(run_dir)
         self.assertEqual(rc, 0)
@@ -652,13 +625,14 @@ class DomainMetricsTests(unittest.TestCase):
                 path = run_dir / name
                 if path.exists():
                     path.unlink()
+            # 无 merge_ns>0 样本（挑战者腿全走 compute 段）→ σ̂ 不可估计。
             rows = [_admission(
                 "session_sigma_na_request_0", 10,
                 [_cand("stay", 0, True, 100, 0,
                        breakdown=_seg(compute=100)),
-                 _cand("remote-read", 1, True, 50, 1,
-                       breakdown=_seg(remote=50))],
-                "remote-read", 1, ["stay", "remote-read"], cost_ns=50)]
+                 _cand("copy", 1, True, 50, 1,
+                       breakdown=_seg(compute=50))],
+                "copy", 1, ["stay", "copy"], cost_ns=50)]
             with (run_dir / "results" / "online_decision_log.jsonl").open(
                     "w", encoding="utf-8") as handle:
                 for row in rows:
@@ -672,8 +646,8 @@ class DomainMetricsTests(unittest.TestCase):
             for key in ("1.0", "2.0", "4.0"):
                 self.assertEqual(membership[key]["delta_ns"], "NA")
             by_inst = {row["instance_index"]: row for row in instances}
-            # δ=0 主臂不受 σ̂ 影响（remote 50 ≤ C_alt*=stay 100 ⇒ 成员=1；
-            # 实例 0 无 remote 候选 ⇒ 0）。
+            # δ=0 主臂不受 σ̂ 影响（copy 50 ≤ C_alt*=stay 100 ⇒ 成员=1；
+            # 实例 0 无挑战者候选 ⇒ 0）。
             self.assertEqual(by_inst["1"]["in_d_econ_delta0"], "1")
             self.assertEqual(by_inst["0"]["in_d_econ_delta0"], "0")
             for row in instances:
@@ -704,16 +678,12 @@ class DomainMetricsTests(unittest.TestCase):
                        breakdown=_seg(compute=900)),
                  _cand("copy", 0, False, hops=0,
                        reason="no history to copy"),
-                 _cand("remote-read", 0, False, hops=0,
-                       reason="no resident remote history"),
                  _cand("stay", 1, True, 900, 1,
                        breakdown=_seg(compute=900)),
                  _cand("recompute", 1, True, 950, 1,
                        breakdown=_seg(compute=950)),
                  _cand("copy", 1, False, hops=1,
-                       reason="no history to copy"),
-                 _cand("remote-read", 1, False, hops=1,
-                       reason="no resident remote history")],
+                       reason="no history to copy")],
                 "stay", 0, ["stay", "recompute"], cost_ns=600)) + "\n")
             handle.write(json.dumps(_completion(
                 "session_g_request_0", 1100, "stay",
@@ -759,16 +729,12 @@ class DomainMetricsTests(unittest.TestCase):
                        breakdown=_seg(compute=900)),
                  _cand("copy", 0, False, hops=0,
                        reason="no history to copy"),
-                 _cand("remote-read", 0, False, hops=0,
-                       reason="no resident remote history"),
                  _cand("stay", 1, True, 900, 1,
                        breakdown=_seg(compute=900)),
                  _cand("recompute", 1, True, 950, 1,
                        breakdown=_seg(compute=950)),
                  _cand("copy", 1, False, hops=1,
-                       reason="no history to copy"),
-                 _cand("remote-read", 1, False, hops=1,
-                       reason="no resident remote history")],
+                       reason="no history to copy")],
                 "stay", 0, ["stay", "recompute"], cost_ns=600)) + "\n")
             # completion 显示 merge 字节（transferred=9999）但无
             # merge_done 披露行——修前静默退 service 终点（1100−100
@@ -846,16 +812,12 @@ class DomainMetricsTests(unittest.TestCase):
                        breakdown=_seg(compute=900)),
                  _cand("copy", 0, False, hops=0,
                        reason="no history to copy"),
-                 _cand("remote-read", 0, False, hops=0,
-                       reason="no resident remote history"),
                  _cand("stay", 1, True, 900, 1,
                        breakdown=_seg(compute=900)),
                  _cand("recompute", 1, True, 950, 1,
                        breakdown=_seg(compute=950)),
                  _cand("copy", 1, False, hops=1,
-                       reason="no history to copy"),
-                 _cand("remote-read", 1, False, hops=1,
-                       reason="no resident remote history")],
+                       reason="no history to copy")],
                 "stay", 0, ["stay", "recompute"], cost_ns=600)) + "\n")
             handle.write(json.dumps(_completion(
                 "session_j_request_0", 1100, "forward",
@@ -892,16 +854,12 @@ class DomainMetricsTests(unittest.TestCase):
                        breakdown=_seg(compute=900)),
                  _cand("copy", 0, False, hops=0,
                        reason="no history to copy"),
-                 _cand("remote-read", 0, False, hops=0,
-                       reason="no resident remote history"),
                  _cand("stay", 1, True, 900, 1,
                        breakdown=_seg(compute=900)),
                  _cand("recompute", 1, True, 950, 1,
                        breakdown=_seg(compute=950)),
                  _cand("copy", 1, False, hops=1,
-                       reason="no history to copy"),
-                 _cand("remote-read", 1, False, hops=1,
-                       reason="no resident remote history")],
+                       reason="no history to copy")],
                 "stay", 0, ["stay", "recompute"], cost_ns=600)) + "\n")
             handle.write(json.dumps(_completion(
                 "session_k_request_0", 1100, "stay",
@@ -941,10 +899,11 @@ class DomainMetricsTests(unittest.TestCase):
         shutil.rmtree(resolved)
 
     def test_n6_pre_quota_cost_column_and_dual_replay(self):
-        """N6（2026-09-23 复核·生产6）：配额拒远读保留成本单列
-        （remote_cost_pre_quota_ns）+ replay 双口径——被拒远读更便宜
-        时实际域重放与在线同选（mismatch=0），差异计入配额反事实
-        翻转（quota_counterfactual_flips=1），不再混入 replay_mismatch。"""
+        """N6（2026-09-23 复核·生产6）：配额拒挑战者保留成本单列
+        （challenger_cost_pre_quota_ns）+ replay 双口径——被拒挑战者
+        更便宜时实际域重放与在线同选（mismatch=0），差异计入配额反
+        事实翻转（quota_counterfactual_flips=1），不再混入
+        replay_mismatch。"""
         run_dir = build_run_dir(tag="domain_metrics_n6")
         log = run_dir / "results" / "online_decision_log.jsonl"
         with log.open("a", encoding="utf-8") as handle:
@@ -956,17 +915,13 @@ class DomainMetricsTests(unittest.TestCase):
                        breakdown=_seg(compute=1200)),
                  _cand("copy", 0, False, hops=0,
                        reason="no history to copy"),
-                 _cand("remote-read", 0, False, hops=0,
-                       reason="no resident remote history"),
                  _cand("stay", 1, True, 1100, 1,
                        breakdown=_seg(compute=1100)),
                  _cand("recompute", 1, True, 1300, 1,
                        breakdown=_seg(compute=1300)),
-                 _cand("copy", 1, False, hops=1,
-                       reason="no history to copy"),
                  # 配额拒（quota_ 前缀）但配额前成本保留（M2）且比
                  # stay@0 的 1000 便宜 ⇒ 无配额时选择会翻转。
-                 _cand("remote-read", 1, False, 300, 1,
+                 _cand("copy", 1, False, 300, 1,
                        reason="quota_link: link=(0,1) remaining=0 of "
                               "Q=2, need=3")],
                 "stay", 0, ["stay", "recompute"], cost_ns=1000)) + "\n")
@@ -977,23 +932,27 @@ class DomainMetricsTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         by_inst = {(row["request_id"], row["instance_index"]): row
                    for row in instances}
-        remote_row = by_inst[("session_i_request_0", "1")]
+        challenger_row = by_inst[("session_i_request_0", "1")]
         # 实际域：配额拒 ⇒ applicable=0、实际成本列 NA。
-        self.assertEqual(remote_row["remote_applicable"], "0")
-        self.assertEqual(remote_row["remote_cost_ns"], "NA")
+        self.assertEqual(challenger_row["challenger_applicable"], "0")
+        self.assertEqual(challenger_row["challenger_cost_ns"], "NA")
         # 配额前结构域：可行（quota_ 拒）+ 配额前成本 300 单列——
         # 实例层配额前成本等值线可画。
-        self.assertEqual(remote_row["quota_admissible_remote"], "1")
-        self.assertEqual(remote_row["remote_cost_pre_quota_ns"], "300")
+        self.assertEqual(challenger_row["quota_admissible"], "1")
+        self.assertEqual(challenger_row["challenger_cost_pre_quota_ns"],
+                         "300")
         # D_feed 的 feed/内外等值线 margin 按移除 quota gate 后的供给成本，
-        # 实际 applicable-only remote_cost_ns 则继续保持 NA。
-        self.assertEqual(remote_row["feed_margin_ns"], "-700")
-        self.assertAlmostEqual(float(remote_row["feed_margin_ratio"]), -0.7)
-        self.assertEqual(remote_row["c_remote_minus_stay_ref_ns"], "-700")
-        self.assertEqual(remote_row["c_remote_minus_alt_star_ns"], "-700")
+        # 实际 applicable-only challenger_cost_ns 则继续保持 NA。
+        self.assertEqual(challenger_row["feed_margin_ns"], "-700")
+        self.assertAlmostEqual(float(challenger_row["feed_margin_ratio"]),
+                               -0.7)
+        self.assertEqual(challenger_row["c_challenger_minus_stay_ref_ns"],
+                         "-700")
+        self.assertEqual(challenger_row["c_challenger_minus_alt_star_ns"],
+                         "-700")
         # 双口径 replay：R5（本夹具行）实际域重放与在线同选 stay（
-        # 配额拒远读不进实际可行集——其更便宜不影响 mismatch）；配额
-        # 前集重放选 remote@1 ≠ 在线 stay ⇒ 反事实翻转。基础夹具 R3
+        # 配额拒挑战者不进实际可行集——其更便宜不影响 mismatch）；配额
+        # 前集重放选 copy@1 ≠ 在线 stay ⇒ 反事实翻转。基础夹具 R3
         # （session_c，δ 翻转演示样本）两口径均贡献 1——期望 = 基础
         # 1 + R5（mismatch 0 / counterfactual 1）。
         flip = summary["delta_epsilon_registry"]["sensitivity_scan"][
@@ -1006,7 +965,7 @@ class DomainMetricsTests(unittest.TestCase):
         shutil.rmtree(resolved)
 
     def test_quota_static_96_feed_margins_are_not_na(self):
-        """O quota-static 96 个 quota_ remote 行均有配额前 feed/内外 margin。"""
+        """O quota-static 96 个 quota_ 挑战者行均有配额前 feed/内外 margin。"""
         run_dir = build_run_dir(tag="domain_metrics_quota96")
         log = run_dir / "results" / "online_decision_log.jsonl"
         with log.open("a", encoding="utf-8") as handle:
@@ -1024,28 +983,28 @@ class DomainMetricsTests(unittest.TestCase):
                            breakdown=_seg(compute=1100)),
                      _cand("recompute", 1, True, 1300, 1,
                            breakdown=_seg(compute=1300)),
-                     _cand("copy", 1, False, hops=1,
+                     _cand("copy", 0, False, hops=0,
                            reason="no history to copy"),
-                     _cand("remote-read", 1, False, 300, 1,
+                     _cand("copy", 1, False, 300, 1,
                            reason="quota_link: synthetic quota rejection")],
                     "stay", 0, ["stay", "recompute"], cost_ns=1000))
                                      + "\n")
         try:
             rc, _summary, _requests, instances = run_tool(run_dir)
             self.assertEqual(rc, 0)
-            remote_rows = [
+            challenger_rows = [
                 row for row in instances
                 if row["request_id"].startswith("session_o")
                 and row["instance_index"] == "1"]
-            self.assertEqual(len(remote_rows), 96)
+            self.assertEqual(len(challenger_rows), 96)
             self.assertTrue(all(
-                row["remote_applicable"] == "0"
-                and row["remote_cost_ns"] == "NA"
-                and row["remote_cost_pre_quota_ns"] == "300"
+                row["challenger_applicable"] == "0"
+                and row["challenger_cost_ns"] == "NA"
+                and row["challenger_cost_pre_quota_ns"] == "300"
                 and row["feed_margin_ns"] == "-700"
-                and row["c_remote_minus_stay_ref_ns"] == "-700"
-                and row["c_remote_minus_alt_star_ns"] == "-700"
-                for row in remote_rows))
+                and row["c_challenger_minus_stay_ref_ns"] == "-700"
+                and row["c_challenger_minus_alt_star_ns"] == "-700"
+                for row in challenger_rows))
         finally:
             resolved = Path(run_dir).resolve()
             assert str(resolved).startswith(tempfile.gettempdir())
@@ -1057,11 +1016,9 @@ class DomainMetricsTests(unittest.TestCase):
         cross = self.summary["derived"]["boundary_cross_check"]
         # ρ = 4050/1640；R2/R3 的观测内分界 = hop 1 → deviation = 1−ρ → −1。
         self.assertEqual(cross["rho_anchor"], "2.469512")
-        self.assertEqual(cross["observed_remote_local_boundary_hop"]["p50"],
-                         1)
+        self.assertEqual(
+            cross["observed_challenger_local_boundary_hop"]["p50"], 1)
         self.assertEqual(cross["boundary_deviation_hop"]["p50"], -1)
-        static_ref = cross["remote_copy_static_reference"]
-        self.assertEqual(static_ref["b_c_b_r"], "NA")
         by_id = {row["request_id"]: row for row in self.requests}
         # H = 32×10、I = 32×(20−10)、F = min rank remaining @选中实例 1。
         self.assertEqual(by_id["session_b_request_1"]["h_bytes_per_rank"],
@@ -1070,15 +1027,11 @@ class DomainMetricsTests(unittest.TestCase):
                          str(COEF * 10))
         self.assertEqual(by_id["session_b_request_1"]["f_min_bytes_at_selected"],
                          "5000")
-        self.assertEqual(by_id["session_b_request_1"]["v_copy_anchor"], "NA")
-        self.assertEqual(by_id["session_b_request_1"]["v_remote_anchor"],
-                         "NA")
-        # 三条对拍纪律注释在场（仅历史扫描项平价 / 诊断非验收 / 无 n* 式）。
+        # 对拍纪律注释在场（仅历史扫描项平价 / 诊断非验收 / 无 n* 式）。
         joined = " ".join(cross["disclaimers"])
         self.assertIn("仅历史扫描项平价", joined)
         self.assertIn("诊断不是验收", joined)
         self.assertIn("n* = d'", joined)
-        self.assertIn("不设单变量理论线", static_ref["note"])
 
     def test_run_snapshot_replay_precedes_legacy_local_inputs(self):
         run_dir = build_run_dir("domain_metrics_snapshot")
@@ -1207,14 +1160,15 @@ class DomainMetricsTests(unittest.TestCase):
         inst = [row for row in self.instances
                 if row["request_id"] == "session_b_request_1"
                 and row["instance_index"] == "1"][0]
-        # 内等值线差值 = 395−500 = −105；外 = 395−400 = −5；同位置胜。
-        self.assertEqual(inst["c_remote_minus_stay_ref_ns"], "-105")
-        self.assertEqual(inst["c_remote_minus_alt_star_ns"], "-5")
-        self.assertEqual(inst["same_pos_best_alt_ns"], "400")
-        self.assertEqual(inst["same_pos_remote_pref"], "1")
+        # 内/外等值线差值 = 395−450 = −55（挑战者 vs stay 参考与 C_alt*）；
+        # 同位置（stay/recompute 族）最优 = recompute@1 900 → 挑战者胜。
+        self.assertEqual(inst["c_challenger_minus_stay_ref_ns"], "-55")
+        self.assertEqual(inst["c_challenger_minus_alt_star_ns"], "-55")
+        self.assertEqual(inst["same_pos_best_alt_ns"], "900")
+        self.assertEqual(inst["same_pos_challenger_pref"], "1")
         self.assertEqual(inst["in_d_econ_delta0"], "1")
-        self.assertEqual(inst["remote_bottleneck_component"],
-                         "remote_read_ns")
+        self.assertEqual(inst["challenger_bottleneck_component"],
+                         "merge_ns")
 
 
 class DomainMetricsDisciplineTests(unittest.TestCase):
@@ -1595,12 +1549,12 @@ class PureFunctionTests(unittest.TestCase):
         self.assertEqual(dm.direction_bucket((1, 1), (2, 2)), "SE")
 
     def test_selection_under_delta_predicate(self):
-        # 谓词：C_remote+δ ≤ C_alt* 胜；严格大于则 alt* 胜。等号成立时
+        # 谓词：C_copy+δ ≤ C_alt* 胜；严格大于则 alt* 胜。等号成立时
         # 按全键序 (cost+δ, instance, ACTION_ORDER 秩) 裁决（O8①）——
-        # 修前"等号成立即翻转"恒翻 remote，与在线平局取小实例分歧。
+        # 修前"等号成立即翻转"恒翻挑战者，与在线平局取小实例分歧。
         self.assertEqual(
             dm._selection_under_delta(0, (90, 1), (100, 0, "stay")),
-            ("remote-read", 1))
+            ("copy", 1))
         self.assertEqual(
             dm._selection_under_delta(10, (90, 1), (100, 0, "stay")),
             ("stay", 0))
@@ -1615,26 +1569,26 @@ class PureFunctionTests(unittest.TestCase):
 
     def test_selection_under_delta_cross_family_tie(self):
         """O8①：跨族平局镜像在线 argmin 全键序 (cost, (instance,
-        priority))——δ=0 同价时实例号小者胜，不再恒翻 remote。"""
-        # stay@0=100 vs remote@1=100：在线取 stay@0（实例小者优先）。
+        priority))——δ=0 同价时实例号小者胜，不再恒翻挑战者。"""
+        # stay@0=100 vs copy@1=100：在线取 stay@0（实例小者优先）。
         self.assertEqual(
             dm._selection_under_delta(0, (100, 1), (100, 0, "stay")),
             ("stay", 0))
-        # 反向：remote@0=100 vs stay@1=100 ⇒ 翻 remote@0。
+        # 反向：copy@0=100 vs stay@1=100 ⇒ 翻 copy@0。
         self.assertEqual(
             dm._selection_under_delta(0, (100, 0), (100, 1, "stay")),
-            ("remote-read", 0))
-        # 同实例同价：rank 分量兜底（stay 秩 0 < remote 秩 3）。
+            ("copy", 0))
+        # 同实例同价：rank 分量兜底（stay 秩 0 < copy 秩 2）。
         self.assertEqual(
             dm._selection_under_delta(0, (100, 0), (100, 0, "stay")),
             ("stay", 0))
-        # δ>0 且 remote+δ==C_alt*：同价平局同样按全键序裁决。
+        # δ>0 且 copy+δ==C_alt*：同价平局同样按全键序裁决。
         self.assertEqual(
             dm._selection_under_delta(10, (90, 1), (100, 0, "stay")),
             ("stay", 0))
         self.assertEqual(
             dm._selection_under_delta(10, (90, 0), (100, 1, "stay")),
-            ("remote-read", 0))
+            ("copy", 0))
 
     def test_sigma_hat_cold_start_anchor(self):
         # 无配对样本（completion 缺失）→ C 级：merge_ns>0 的 p50。
@@ -1653,9 +1607,9 @@ class PureFunctionTests(unittest.TestCase):
                 "session_z_request_0", 10,
                 [_cand("stay", 0, True, 50, 0,
                        breakdown=_seg(compute=10, merge=7)),
-                 _cand("remote-read", 1, True, 40, 1,
+                 _cand("copy", 1, True, 40, 1,
                        breakdown=_seg(compute=1, merge=9))],
-                "remote-read", 1, ["stay", "remote-read"], cost_ns=40)]
+                "copy", 1, ["stay", "copy"], cost_ns=40)]
             with (run_dir / "results" / "online_decision_log.jsonl").open(
                     "w", encoding="utf-8") as handle:
                 for row in rows:

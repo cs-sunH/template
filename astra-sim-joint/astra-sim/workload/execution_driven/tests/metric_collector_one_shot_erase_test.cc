@@ -96,11 +96,11 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
 // (2026-10-07, joint-accel refactor) member types grew through the
-// execution-driven refactor (this target was never in any prior build
-// scope, so the anchor went stale unobserved); mirror assert above
-// still passes (real member types embedded), anchor re-proven per the
-// documented rule: 440 -> 488 on this toolchain.
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 488,
+// execution-driven refactor; (2026-10-14, three-action retirement) the
+// remote-read anchor members left
+// ComputeAttrs, shrinking the record: 488 -> 440 on this toolchain.
+// Mirror assert above still passes (real member types embedded).
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 440,
               "OnlineNode layout anchor for this toolchain (see the mirror "
               "assert above for the ABI-agnostic bound)");
 

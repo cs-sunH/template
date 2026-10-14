@@ -19,8 +19,8 @@
   5. **纯披露通道**：``decision_epoch`` / ``inherited_obligation_ids``
      透传（入口 → 选择器 → breakdown）不改变任何候选代价与选择；
      决策日志反序列化（嵌套元组 → list）JSON 可重建。
-  6. **近似状态**：深缺口 ``capacity_wait_uncertain`` 与 credit 腿
-     单步里程碑口径（``next_token_single_step_service``）结构化披露。
+  6. **近似状态**：深缺口 ``capacity_wait_uncertain`` 结构化披露
+     （credit 腿单步口径已随远读退役删除）。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_d17_schema_version_rounding.py   （或 pytest）
@@ -39,12 +39,9 @@ for _p in (_HERE, _WL):
 from joint.joint_config import (  # noqa: E402
     MODEL_SEMANTICS_VERSION,
     parse_joint_config,
-    remote_read_staging_bytes_per_rank,
 )
 from joint.joint_cost_model import (  # noqa: E402
-    ACTION_REMOTE,
     ACTION_STAY,
-    APPROX_NEXT_TOKEN_SINGLE_STEP,
     ActionCostBreakdown,
     InstanceLoadView,
     JointCostModel,
@@ -82,8 +79,7 @@ def _model(loads, rates=None):
         flow_registry=LinkFlowRegistry(),
         service_factors=ServiceFactors(),
         prefill_ns_per_token=1.0, decode_ns_per_token=2.0,
-        model_layers=4, instance_tp_size=2, route_fn=_route2,
-        remote_read_kv_token_bytes=KV_TOKEN_BYTES)
+        model_layers=4, instance_tp_size=2, route_fn=_route2)
 
 
 def _load(instance_index, running=0):
@@ -126,19 +122,7 @@ def _complete_boundary(**overrides):
         session_id="s", home_instance=0, p_instance_index=0,
         p_action="stay", history_tokens=100,
         working_bytes_by_tp_rank=(KV_TOKEN_BYTES * 100,) * 2,
-        base_bytes_by_tp_rank=(0, 0), decode_steps=8,
-        base_tokens=100, kv_token_bytes=KV_TOKEN_BYTES)
-    values.update(overrides)
-    return PDBoundaryView(**values)
-
-
-def _increment_boundary(**overrides):
-    values = dict(
-        session_id="s", home_instance=2, p_instance_index=0,
-        p_action="remote-read", history_tokens=100,
-        working_bytes_by_tp_rank=(KV_TOKEN_BYTES * 40,) * 2,
-        base_bytes_by_tp_rank=(KV_TOKEN_BYTES * 100,) * 2,
-        decode_steps=8, base_tokens=100, kv_token_bytes=KV_TOKEN_BYTES)
+        decode_steps=8, kv_token_bytes=KV_TOKEN_BYTES)
     values.update(overrides)
     return PDBoundaryView(**values)
 
@@ -178,12 +162,12 @@ class TransferCeilingTest(unittest.TestCase):
         wall = _transfer_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=(((0, 1),),), bytes_by_rank=(0,),
-            include_self=True, kind="read")
+            include_self=True, kind="copy")
         self.assertEqual(wall, 0)
         self.assertEqual(_shard_stream_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=(((0, 1),),), bytes_by_rank=(0,),
-            include_self=True, kind="read"), 0)
+            include_self=True, kind="copy"), 0)
 
     def test_shard_transfer_ceils_and_keeps_hop_separate(self):
         rates = _rates(noc=10.0, hbm=1e9, lat=10)
@@ -191,13 +175,13 @@ class TransferCeilingTest(unittest.TestCase):
         wall = _transfer_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=(((0, 1),),), bytes_by_rank=(1001,),
-            include_self=True, kind="read")
+            include_self=True, kind="copy")
         self.assertEqual(wall, 10 + 101)
         # 恰整除不漂移：1000 B → 10 + 100。
         self.assertEqual(_transfer_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=(((0, 1),),), bytes_by_rank=(1000,),
-            include_self=True, kind="read"), 10 + 100)
+            include_self=True, kind="copy"), 10 + 100)
 
     def test_stream_segment_ceils(self):
         rates = _rates(noc=10.0, hbm=1e9, lat=10)
@@ -205,7 +189,7 @@ class TransferCeilingTest(unittest.TestCase):
         self.assertEqual(_shard_stream_ns_shards(
             rates, LinkFlowRegistry(), None,
             paths_by_rank=(((0, 1),),), bytes_by_rank=(3344,),
-            include_self=True, kind="read"), 335)
+            include_self=True, kind="copy"), 335)
 
     def test_pool_transfer_ceils_and_zero_bytes_strictly_zero(self):
         rates = _rates(noc=10.0, hbm=100.0, pool=5.0, lat=10,
@@ -240,7 +224,7 @@ class ModelSemanticsVersionTest(unittest.TestCase):
         # 直接构造夹具零漂移：缺省版本 = 常量（生产路径同源填充）。
         breakdown = ActionCostBreakdown(
             target_wait_ns=0, history_prep_ns=0, eviction_wait_ns=0,
-            compute_ns=0, remote_read_ns=0, merge_ns=0,
+            compute_ns=0, merge_ns=0,
             contention_divisor=1, hops=0)
         self.assertEqual(breakdown.model_semantics_version,
                          MODEL_SEMANTICS_VERSION)
@@ -259,7 +243,7 @@ class PEntrySchemaTest(unittest.TestCase):
         model = _model(_loads())
         candidate = model.estimate_P_with_continuation(
             session=_session(resident=1), request=_request(),
-            instance_index=1, action=ACTION_STAY, remote_enabled=True)
+            instance_index=1, action=ACTION_STAY)
         self.assertTrue(candidate.applicable)
         b = candidate.breakdown
         self.assertEqual(b.model_semantics_version,
@@ -285,30 +269,11 @@ class PEntrySchemaTest(unittest.TestCase):
         for phase in b.phase_space_bytes:
             self.assertEqual(len(phase), 2)
         self.assertEqual(b.phase_space_bytes[2], b.phase_space_bytes[3])
-        self.assertEqual(b.staging_buffer_peak_bytes, 0)
         self.assertEqual(b.inherited_obligation_ids, ())
         self.assertEqual(
             b.approximations,
             ("aggregate_service_equivalent_hbm_profile",
              "profile_latency_unavailable"))
-
-    def test_remote_candidate_default_continuation_and_staging(self):
-        model = _model(_loads())
-        candidate = model.estimate_P_with_continuation(
-            session=_session(resident=1), request=_request(),
-            instance_index=0, action=ACTION_REMOTE, remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        b = candidate.breakdown
-        # 默认延续 π0：P=remote-read → D 延续远读同一基础区间。
-        self.assertEqual(b.decode_action, ACTION_REMOTE)
-        self.assertEqual(b.prefill_action, ACTION_REMOTE)
-        # 暂存峰值 = 逐 rank 暂存字节 × TP（与 R1' 预约同源）。
-        tile = model._remote_read_exec_tile_tokens(
-            _session(resident=1), _request())
-        per_rank = remote_read_staging_bytes_per_rank(
-            tile, KV_TOKEN_BYTES)
-        self.assertEqual(b.staging_buffer_peak_bytes, per_rank * 2)
-        self.assertGreater(b.staging_buffer_peak_bytes, 0)
 
     def test_p_entry_interval_layout_describes_decision_state(self):
         model = _model(_loads())
@@ -318,7 +283,7 @@ class PEntrySchemaTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=session, request=_request(input_tokens=50,
                                               input_bytes=(25, 25)),
-            instance_index=1, action=ACTION_STAY, remote_enabled=True)
+            instance_index=1, action=ACTION_STAY)
         layout = _session_interval_layout(
             session, _request(input_tokens=50, input_bytes=(25, 25)))
         by_replica = {entry[0]: entry for entry in layout}
@@ -340,7 +305,7 @@ class PEntrySchemaTest(unittest.TestCase):
         model = _model({0: _load(0), 1: tight})
         candidate = model.estimate_P_with_continuation(
             session=_session(resident=1), request=_request(),
-            instance_index=1, action=ACTION_STAY, remote_enabled=True)
+            instance_index=1, action=ACTION_STAY)
         self.assertIn("capacity_wait_uncertain",
                       candidate.breakdown.approximations)
         self.assertIn(
@@ -363,7 +328,7 @@ class DBoundarySchemaTest(unittest.TestCase):
         model = _model(_loads())
         candidate = model.estimate_D_remaining(
             boundary=_complete_boundary(), instance_index=0,
-            action=ACTION_STAY, remote_enabled=True,
+            action=ACTION_STAY,
             decision_epoch=7, inherited_obligation_ids=("ob-a", "ob-b"))
         self.assertTrue(candidate.is_continuation)
         b = candidate.breakdown
@@ -391,29 +356,6 @@ class DBoundarySchemaTest(unittest.TestCase):
         self.assertEqual((start, end), (0, 100))
         self.assertEqual(b.phase_space_bytes[2],
                          b.phase_space_bytes[3])
-        self.assertNotIn(APPROX_NEXT_TOKEN_SINGLE_STEP, b.approximations)
-
-    def test_credit_leg_candidate_discloses_single_step_approximation(self):
-        model = _model(_loads3())
-        candidate = model.estimate_D_remaining(
-            boundary=_increment_boundary(), instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        b = candidate.breakdown
-        self.assertEqual(b.prefill_action, "remote-read")
-        self.assertEqual(b.decode_action, ACTION_REMOTE)
-        self.assertFalse(b.is_continuation)
-        # credit 腿候选：单步里程碑口径结构化披露（tile 供给门整体计
-        # 入腿闭式——预测误差来源如实登记，不冒充精确）。
-        self.assertIn(APPROX_NEXT_TOKEN_SINGLE_STEP, b.approximations)
-        # 增量型布局：增量区间（i_P）+ 基础区间（home）。
-        roles = sorted(entry[1] for entry in b.interval_layout)
-        self.assertEqual(roles, ["base", "increment"])
-        # 剩余前向 = n̂_B；里程碑序有序。
-        self.assertEqual(b.estimated_remaining_decode_steps, 8)
-        self.assertLessEqual(b.predicted_next_token_done,
-                             b.predicted_service_done)
-        self.assertEqual(b.predicted_merge_done, candidate.cost_ns)
 
     def test_disclosure_channels_do_not_change_pricing(self):
         # W3 升级（§7.2，v4-projection 世代）：``inherited_obligation_ids``
@@ -422,27 +364,26 @@ class DBoundarySchemaTest(unittest.TestCase):
         # P 义务零腿（不重付沉没费用）；resolver 缺席（无 ledger）按
         # LoadsWorldSource 降级：ID 照常披露、代价不变、登记
         # approximation（不虚构义务腿）。epoch 恒纯披露。
-        boundary = _increment_boundary()
+        boundary = _complete_boundary()
         without = [
             model_cost for model_cost in (
                 _model(_loads3()).estimate_D_remaining(
-                    boundary=boundary, instance_index=index, action=action,
-                    remote_enabled=True).cost_ns
+                    boundary=boundary, instance_index=index, action=action).cost_ns
                 for index in range(3) for action in
-                ("stay", "recompute", "copy", "remote-read"))]
+                ("stay", "recompute", "copy"))]
         with_ids = [
             model_cost for model_cost in (
                 _model(_loads3()).estimate_D_remaining(
                     boundary=boundary, instance_index=index, action=action,
-                    remote_enabled=True, decision_epoch=3,
+                    decision_epoch=3,
                     inherited_obligation_ids=("x", "y")).cost_ns
                 for index in range(3) for action in
-                ("stay", "recompute", "copy", "remote-read"))]
+                ("stay", "recompute", "copy"))]
         self.assertEqual(without, with_ids)
         # 降级登记：resolver 缺席时逐 ID 披露 unresolved 近似。
         degraded = _model(_loads3()).estimate_D_remaining(
-            boundary=boundary, instance_index=0, action="remote-read",
-            remote_enabled=True, inherited_obligation_ids=("x",))
+            boundary=boundary, instance_index=1, action="copy",
+            inherited_obligation_ids=("x",))
         self.assertIn("inherited_obligation_unresolved:x",
                       degraded.breakdown.approximations)
         self.assertEqual(degraded.breakdown.inherited_obligation_ids, ("x",))
@@ -455,26 +396,23 @@ class DBoundarySchemaTest(unittest.TestCase):
             table = {
                 "ob-live": ObligationView(
                     obligation_id="ob-live", kind="committed_transfer",
-                    source_instance=2, target_instance=0,
+                    source_instance=0, target_instance=1,
                     remaining_bytes_by_tp_rank=(4000, 4000),
                     gate_settle=True, done=done),
             }
             return table.get
 
         base = _model(loads).estimate_D_remaining(
-            boundary=boundary, instance_index=0, action="remote-read",
-            remote_enabled=True).cost_ns
+            boundary=boundary, instance_index=1, action="copy").cost_ns
         live_model = _model(loads)
         live_model.obligation_resolver = _resolver(done=False)
         live = live_model.estimate_D_remaining(
-            boundary=boundary, instance_index=0, action="remote-read",
-            remote_enabled=True,
+            boundary=boundary, instance_index=1, action="copy",
             inherited_obligation_ids=("ob-live",)).cost_ns
         done_model = _model(loads)
         done_model.obligation_resolver = _resolver(done=True)
         settled = done_model.estimate_D_remaining(
-            boundary=boundary, instance_index=0, action="remote-read",
-            remote_enabled=True,
+            boundary=boundary, instance_index=1, action="copy",
             inherited_obligation_ids=("ob-live",)).cost_ns
         self.assertGreater(live, base)      # 未完 P 义务参竞争
         self.assertEqual(settled, base)     # 已完 P 零腿（沉没不重付）
@@ -487,7 +425,7 @@ class SelectorDisclosureThreadingTest(unittest.TestCase):
         model = _model(_loads3())
         record = select_decode_target_and_action(
             mode="joint", cost_model=model,
-            boundary=_increment_boundary(), remote_enabled=True,
+            boundary=_complete_boundary(),
             decision_epoch=5, inherited_obligation_ids=("ob-1", "ob-2"))
         self.assertEqual(record.diagnostics["decision_stage"], "D")
         self.assertEqual(record.diagnostics["decision_epoch"], 5)
@@ -504,7 +442,7 @@ class SelectorDisclosureThreadingTest(unittest.TestCase):
         def _select(**kwargs):
             return select_decode_target_and_action(
                 mode="joint", cost_model=_model(_loads3()),
-                boundary=_increment_boundary(), remote_enabled=True,
+                boundary=_complete_boundary(),
                 **kwargs)
         plain = _select()
         threaded = _select(decision_epoch=5,
@@ -529,8 +467,8 @@ class DecisionLogReconstructionTest(unittest.TestCase):
 
         model = _model(_loads3())
         candidate = model.estimate_D_remaining(
-            boundary=_increment_boundary(), instance_index=1,
-            action=ACTION_REMOTE, remote_enabled=True,
+            boundary=_complete_boundary(), instance_index=0,
+            action=ACTION_STAY,
             decision_epoch=2, inherited_obligation_ids=("ob-9",))
         payload = Sh30OnlineScheduler._joint_breakdown_log_dict(
             None, candidate.breakdown)
@@ -554,7 +492,6 @@ class DecisionLogReconstructionTest(unittest.TestCase):
             self.assertIsInstance(reparsed[key], int)
         # 字节/空间可重建。
         self.assertEqual(len(reparsed["phase_space_bytes"]), 4)
-        self.assertIsInstance(reparsed["staging_buffer_peak_bytes"], int)
 
     def test_schema_has_no_measured_truth_fields(self):
         # 真实时间与预测字段严格分列：schema 层无 measured/actual 真值

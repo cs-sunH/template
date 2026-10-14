@@ -256,7 +256,7 @@ class CopyCompositePricingTest(unittest.TestCase):
             missing=(1000, 1000), location="partial_hbm_remote", prefix=3)
         candidate = model.estimate_P_with_continuation(
             session=session, request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertTrue(candidate.applicable)
         # 手算（现行公式）：NoC 前缀腿逐 shard 字节 3000、并集除数 2
         # （双 shard 共链 (0,1)）→ noc 腿 = 3000/5 = 600、home 读腿
@@ -284,7 +284,7 @@ class CopyCompositePricingTest(unittest.TestCase):
                 home=0, resident=0, history_bytes=(3000, 3000),
                 missing=(0, 0), location="local_hbm", prefix=4),
             request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         expected = _transfer_ns(
             total_bytes=6000, path_hops=1, divisor=1, rates=model.rates,
             per_hop_latency_ns=None, startup_ns=0)
@@ -300,7 +300,7 @@ class CopyCompositePricingTest(unittest.TestCase):
                 home=0, resident=None, history_bytes=(0, 0),
                 missing=(4000, 4000), location="remote_memory", prefix=0),
             request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         expected = 100 + 4000 // 5
         self.assertEqual(candidate.breakdown.history_prep_ns, expected)
         self.assertIn("pool_restore_to_target", candidate.breakdown.notes)
@@ -311,7 +311,7 @@ class MergeV2PricingTest(unittest.TestCase):
     方案》§4.3.4）：merge_ns = min(前向, 反向)；前向 = noc(exec 侧保留
     量) + home 空间准备等待；反向 = noc(home 侧保留量) + exec 空间准备
     等待；copy/recompute 反向零字节翻转（=0）；REMOTE 基就地保留（=0）。
-    守恒拆分纪律（prefix = value × p // L）迁移至 remote-read 读流基数
+    （远读前向/反向腿金值用例已随远读退役删除，2026-10-14。）
     （需求①前缀份额）。
     金样留档（改造前口径，git 9a95e06 可复算）——旧"增量按 base_prefix
     /L 逐 rank 分裂"五用例期望值：partial 拆分 noc(2250)+pool(750)；
@@ -331,128 +331,11 @@ class MergeV2PricingTest(unittest.TestCase):
                 missing=(1000, 1000), location="partial_hbm_remote",
                 prefix=3),
             request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
+            action="copy")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.merge_ns, 0)
         self.assertIn("merge_v2_zero_byte_flip",
                       candidate.breakdown.notes)
-
-    def test_remote_read_local_forward_bit_identical(self):
-        """LOCAL 基 remote-read 前向腿数值锚（p=L 退化）：home 保留
-        (4000) ≥ exec 增量 (3000) → 前向胜出，merge_ns = noc(3000)——与
-        改造前 LOCAL 公式逐位一致（旧 prefix = inc × L // L = inc，
-        home 等待充足为 0）。"""
-        model = _model({0: _load(), 1: _load()})
-        candidate = model.estimate_P_with_continuation(
-            session=_session_view(history_bytes=(2000, 2000)),
-            request=_request_view(), instance_index=1,
-            action="remote-read", remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        self.assertEqual(
-            candidate.breakdown.merge_ns, self._noc(model.rates, 3000))
-        self.assertIn("merge_to_home=0", candidate.breakdown.notes)
-
-    def test_remote_read_local_reverse_when_home_smaller(self):
-        """home 保留 (2000) < exec 增量 (3000) → 反向胜出（少并多翻转，
-        home 迁移 exec 的计价预见）：merge_ns = noc(2000)。"""
-        model = _model({0: _load(), 1: _load()})
-        candidate = model.estimate_P_with_continuation(
-            session=_session_view(history_bytes=(1000, 1000)),
-            request=_request_view(), instance_index=1,
-            action="remote-read", remote_enabled=True)
-        self.assertEqual(
-            candidate.breakdown.merge_ns, self._noc(model.rates, 2000))
-
-    def test_remote_read_partial_hybrid_three_segments(self):
-        """PARTIAL 混合形态三段式（需求①）：历史准备 = 后缀池恢复
-        pool(2000)；读流基数层区间化（remote_read_prefix_layers=3）；
-        merge 双向 = noc(S+I=5000) vs noc(H=6000) → 前向胜出 noc(5000)。"""
-        model = _model({0: _load(), 1: _load()})
-        candidate = model.estimate_P_with_continuation(
-            session=_session_view(
-                home=0, resident=0, history_bytes=(3000, 3000),
-                missing=(1000, 1000), location="partial_hbm_remote",
-                prefix=3),
-            request=_request_view(), instance_index=1,
-            action="remote-read", remote_enabled=True)
-        self.assertTrue(candidate.applicable)
-        # D04 逐 shard 池后缀：每 rank 1000 B → 100 + 1000/5 = 300。
-        self.assertEqual(
-            candidate.breakdown.history_prep_ns, 100 + 1000 // 5)
-        self.assertIn("pool_suffix_restore_hybrid",
-                      candidate.breakdown.notes)
-        self.assertEqual(
-            candidate.breakdown.merge_ns, self._noc(model.rates, 5000))
-        self.assertIn("remote_read_prefix_layers=3",
-                      candidate.breakdown.notes)
-
-    def test_remote_read_partial_reverse_when_home_smaller(self):
-        """PARTIAL 混合形态反向：home (2000) < exec (S+I=5000) →
-        反向 noc(2000) 胜出。"""
-        model = _model({0: _load(), 1: _load()})
-        candidate = model.estimate_P_with_continuation(
-            session=_session_view(
-                home=0, resident=0, history_bytes=(1000, 1000),
-                missing=(1000, 1000), location="partial_hbm_remote",
-                prefix=3),
-            request=_request_view(), instance_index=1,
-            action="remote-read", remote_enabled=True)
-        self.assertEqual(
-            candidate.breakdown.merge_ns, self._noc(model.rates, 2000))
-
-    def test_read_prefix_share_conservation_pinned(self):
-        """读流基数钉（K8 重钉，2026-09-23 外部审计）：D1 口径 read_base
-        = history_bytes_by_tp_rank 账本真值（(3009,3009) → 6018），input/
-        decode 增量本地读取**不计**远读；read_passes = max(1, 0) = 1 →
-        remote_read_ns = noc(6018)。字节取 3009/rank 使截断桶敏感：旧
-        （D1 前）口径 base = 6018 + input 前缀份额 6 = 6024 → noc 桶 602
-        ≠ 601（原 6000/6006 形态两桶同为 600，钉不住任何口径）。"""
-        model = _model({0: _load(), 1: _load()})
-        candidate = model.estimate_P_with_continuation(
-            session=_session_view(
-                home=0, resident=0, history_bytes=(3009, 3009),
-                missing=(1000, 1000), location="partial_hbm_remote",
-                prefix=3),
-            request=_request_view(
-                input_tokens=5, decode=0, input_bytes=(5, 5)),
-            instance_index=1, action="remote-read", remote_enabled=True)
-        self.assertEqual(
-            candidate.breakdown.remote_read_ns,
-            self._noc(model.rates, 6018))
-        self.assertNotEqual(
-            candidate.breakdown.remote_read_ns,
-            self._noc(model.rates, 6024))
-
-    def test_home_wait_in_forward_formula(self):
-        """前向公式含 home 空间准备等待（基数 = exec 侧保留量）：home 仅
-        剩 100 B/rank → max 缺口 2500−100=2400 按池写回口径估（D04 逐
-        shard：100 + 2400/5 = 580）。K5 重钉（2026-09-23 外部审计）：
-        merge 方向 = 字节判据镜像物化侧（Σ exec_retained 5000 ≤ Σ home
-        6000 → forward，F15 平局含等号取前向）——merge_ns = 前向值
-        1090（反向 noc(6000)=610 虽更廉，非物化方向不取；容量兜底翻转
-        不可计价）。"""
-        tight_home = {0: _load(remaining=(100, 100),
-                               reclaimable=(10**9, 10**9)),
-                      1: _load()}
-        model = _model(tight_home)
-        candidate = model.estimate_P_with_continuation(
-            session=_session_view(
-                home=0, resident=0, history_bytes=(3000, 3000),
-                missing=(1000, 1000), location="partial_hbm_remote",
-                prefix=3),
-            request=_request_view(), instance_index=1,
-            action="remote-read", remote_enabled=True)
-        expected_forward = self._noc(model.rates, 5000) + 100 + 2400 // 5
-        expected_reverse = self._noc(model.rates, 6000)
-        self.assertIn(
-            "home_merge_eviction_writeback_est",
-            candidate.breakdown.notes)
-        self.assertIn(
-            "merge_v2_direction=forward", candidate.breakdown.notes)
-        self.assertEqual(
-            candidate.breakdown.merge_ns, expected_forward)
-        self.assertNotEqual(
-            candidate.breakdown.merge_ns, expected_reverse)
 
 
 # ===================================================== R16-4-4 图构建 ==

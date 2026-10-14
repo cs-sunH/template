@@ -634,8 +634,7 @@ class ColdFixtureContractTests(unittest.TestCase):
                                   "ranks": [0]}],
             "joint_config": {
                 "category_mode": "lru", "scheduler_mode": "joint",
-                "layer_policy": "minimal_layer_groups", "remote_actions": "on",
-                "remote_read_tile_bytes": "auto", "remote_read_partial": "on",
+                "layer_policy": "minimal_layer_groups",
                 "allowed_actions": "all", "quota_mode": "off",
                 "boundary_policy": "off", "combo": None,
             },
@@ -646,7 +645,7 @@ class ColdFixtureContractTests(unittest.TestCase):
             "version": acceptance.FIXTURE_STATE_VERSION, "kind": "cold_initial",
             "case_id": "M03-seed000", "cluster_id": "M03/seed000",
             "scenario_id": "M03", "seed": 0, "request_id": "r0",
-            "fixed_instance_id": "decode-1", "fixed_action": "remote-read",
+            "fixed_instance_id": "decode-1", "fixed_action": "copy",
             "causal_input": {"focus_stage": "D", "context_tokens": 128,
                               "horizon_tokens": 1, "competition_level": "low",
                               "source_count": 1, "committed_decode_tokens": 2},
@@ -663,7 +662,7 @@ class ColdFixtureContractTests(unittest.TestCase):
         contract = {
             "projection_abi_version": 1, "descriptor_version": 1,
             "pipeline_protocol_version": 1,
-            "model_version": "v6-compact-window-20261005",
+            "model_version": "v7-three-actions-20261014",
             "timer_whitelist_version": "timer-whitelist-v1-20261005",
             "window_tile_limit": 1, "window_local_error_ppm": 10000,
             "window_refine_margin_ppm": 20000,
@@ -674,7 +673,7 @@ class ColdFixtureContractTests(unittest.TestCase):
             "case_id": state["case_id"], "cluster_id": state["cluster_id"],
             "scenario_id": state["scenario_id"], "seed": 0,
             "request_id": "r0", "fixed_instance_id": "decode-1",
-            "fixed_action": "remote-read", "kernel_contract": dict(contract),
+            "fixed_action": "copy", "kernel_contract": dict(contract),
             "status": "PASS", "reason": "completed", "completed": True,
             "initial_certificate": self._empty_initial_state(),
             "terminal_certificate": {"tick_ns": 5, "settled": True},
@@ -685,7 +684,7 @@ class ColdFixtureContractTests(unittest.TestCase):
                  "logical_event_count": 2, "native_physical_steps": 2,
                  "window_stats": {"effective_k": 1}, "charged_totals": {"bytes": 10}},
                 {"stage": "D", "fixed_instance_id": "decode-1",
-                 "fixed_action": "remote-read", "boundary_ordinal": 0,
+                 "fixed_action": "copy", "boundary_ordinal": 0,
                  "start_tick_ns": 3, "service_tick_ns": 4, "settle_tick_ns": 5,
                  "logical_event_count": 2, "native_physical_steps": 2,
                  "window_stats": {"effective_k": 1}, "charged_totals": {"bytes": 20}},
@@ -695,7 +694,7 @@ class ColdFixtureContractTests(unittest.TestCase):
         }
         for stage, ordinal, tick, instance, action in (
                 ("P", 0, 0, "prefill-0", "copy"),
-                ("D", 0, 3, "decode-1", "remote-read")):
+                ("D", 0, 3, "decode-1", "copy")):
             if stage == "P":
                 session_view = {key: None for key in (
                                    "session_id", "home_instance", "resident_instance",
@@ -704,34 +703,33 @@ class ColdFixtureContractTests(unittest.TestCase):
                 request_view = {key: None for key in (
                                    "request_id", "session_id", "input_tokens",
                                    "history_tokens_before", "estimated_decode_tokens",
-                                   "horizon_source", "input_kv_bytes_by_tp_rank",
-                                   "prefill_scan_passes", "prefill_chunk_tokens",
-                                   "query_tile_tokens")}
+                                   "horizon_source",
+                                   "input_kv_bytes_by_tp_rank")}
                 session_view["session_id"] = request_view["session_id"] = "s0"
                 request_view["request_id"] = "r0"
                 stage_input = {"kind": "P", "session_view": session_view,
                                "request_view": request_view,
-                               "prep_frontier_by_instance": {}, "remote_enabled": True}
+                               "prep_frontier_by_instance": {}}
             else:
                 stage_input = {
                     "kind": "D",
-                    "boundary_view": {**{key: None for key in (
-                        "session_id", "home_instance", "p_instance_index", "p_action",
-                        "history_tokens", "working_bytes_by_tp_rank",
-                        "base_bytes_by_tp_rank", "decode_steps", "base_tokens",
+                    "boundary_view": {key: None for key in (
+                        "session_id", "home_instance", "p_instance_index",
+                        "p_action", "history_tokens",
+                        "working_bytes_by_tp_rank", "decode_steps",
                         "kv_token_bytes", "logic_home_instance",
-                        "kv_token_bytes_by_tp_rank")}, "working_intervals": []},
+                        "kv_token_bytes_by_tp_rank")},
                     "runtime_state": {
                         "terminated": False,
                         "first_token": {"issued": False, "consumed": False,
                                         "rng_advances": 0,
                                         "rebuild_sampling_suppressed": False},
-                        "obligations": [], "working_layers": [], "base_layers": []},
-                               "decision_epoch": 0, "inherited_obligation_ids": [],
-                               "remote_enabled": True}
+                        "obligations": [], "working_layers": []},
+                               "decision_epoch": 0,
+                               "inherited_obligation_ids": []}
             forecast_inputs = {"context_tokens": 128, "horizon_tokens": 1,
                                "generator_inputs": {}}
-            forecast_identity = "no-exogenous-generator/v6-compact-window-20261005"
+            forecast_identity = "no-exogenous-generator/v7-three-actions-20261014"
             planner_state = {
                 "version": acceptance.PLANNER_STATE_VERSION,
                 "stage_input": stage_input,
@@ -780,7 +778,7 @@ class ColdFixtureContractTests(unittest.TestCase):
             actual_contract = acceptance.validate_kernel_contract(contract)
             accepted = acceptance.validate_fixture_result(result, parsed, actual_contract)
             self.assertEqual(accepted["measurements"][0]["fixed_action"], "copy")
-            self.assertEqual(accepted["measurements"][1]["fixed_action"], "remote-read")
+            self.assertEqual(accepted["measurements"][1]["fixed_action"], "copy")
 
     def test_cold_initial_state_allows_loaded_logical_directory_capacity_and_history(self):
         initial = self._empty_initial_state()
@@ -834,7 +832,7 @@ class ColdFixtureContractTests(unittest.TestCase):
                 "events": [
                     {"ordinal": 0, "trigger": {"kind": "tick", "tick_ns": 4},
                      "kind": "graph_commit", "payload": {
-                         "batch": {"schema_version": 2},
+                         "batch": {"schema_version": 3},
                          "decision_events": [],
                          "boundary_record": {"stage": "P"}}},
                     {"ordinal": 1, "trigger": {"kind": "gate_terminal",
@@ -858,7 +856,7 @@ class ColdFixtureContractTests(unittest.TestCase):
         bad_batch = json.loads(json.dumps(tape))
         bad_batch["events"][0]["payload"]["batch"] = {"schema_version": 1}
         with self.assertRaisesRegex(acceptance.AcceptanceError,
-                                    "actual schema-2 batch"):
+                                    "actual schema-3 batch"):
             acceptance.validate_event_tape(bad_batch, case_id="x")
         tape["events"][1]["ordinal"] = 0
         with self.assertRaisesRegex(acceptance.AcceptanceError, "strict stable order"):
@@ -1201,7 +1199,7 @@ class TraceAndContractTests(unittest.TestCase):
         contract = {
             "projection_abi_version": 1, "descriptor_version": 1,
             "pipeline_protocol_version": 1,
-            "model_version": "v6-compact-window-20261005",
+            "model_version": "v7-three-actions-20261014",
             "timer_whitelist_version": "timer-whitelist-v1-20261005",
             "window_tile_limit": 1, "window_local_error_ppm": 10000,
             "window_refine_margin_ppm": 20000,
@@ -1334,11 +1332,11 @@ class AccuracyAndPerformanceTests(unittest.TestCase):
             {"candidate_id": "copy-a", "instance_id": "i-a", "action": "copy",
              "work_item": {"work_id": "w-a", "legs": [], "ready_at_ns": 0,
                            "depends_on_work": [], "is_candidate": True,
-                           "service_leg_ids": None, "pipeline_descriptors": []}},
-            {"candidate_id": "copy-b", "instance_id": "i-b", "action": "remote-read",
+                           "service_leg_ids": None}},
+            {"candidate_id": "copy-b", "instance_id": "i-b", "action": "recompute",
              "work_item": {"work_id": "w-b", "legs": [], "ready_at_ns": 0,
                            "depends_on_work": [], "is_candidate": True,
-                           "service_leg_ids": None, "pipeline_descriptors": []}},
+                           "service_leg_ids": None}},
         ]
         quality = {"approximation_profile": "exact", "window_count": 0,
                    "refinement_count": 0, "local_prefix_bound_max": 0,
@@ -1380,7 +1378,7 @@ class AccuracyAndPerformanceTests(unittest.TestCase):
                             "old_tie_order": ["copy-a", "copy-b"]},
             "library_sha256": "a" * 64, "prediction_config_sha256": "b" * 64,
             # D12：生产 DTO 的信息性键（比较器必需接受）。
-            "model_semantics_version": "v6-compact-window-20261005",
+            "model_semantics_version": "v7-three-actions-20261014",
             "world_source_status": "replayed",
         }
 

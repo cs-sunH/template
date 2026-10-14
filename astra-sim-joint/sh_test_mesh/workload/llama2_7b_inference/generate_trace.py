@@ -1002,8 +1002,8 @@ def transformer_pass_aggregated(
     tail 的 spans 集剔除被 D10 抑制的 span），可融合纯本地链经
     compile_regions 编译成 attention_region / ffn_region（num_ops/
     tensor_size 兼容统计 = 各成分之和，collective 位置/数量/bytes 不变）。
-    ``die_kv_identity``：spec 的 kv_access.identity 注记（本仓 remote-read
-    credit 门体块传 "staged"，其余 "local"；库内无成本语义）。
+    ``die_kv_identity``：spec 的 kv_access.identity 注记（三动作下恒
+    "local"；库内无成本语义）。
     """
 
     spans = tuple(pass_spans)

@@ -60,7 +60,7 @@ def _delta(seq, tick, arrivals=(), completed=()):
         "active_resources": [],
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "delivery_sequence": seq,
         "delivery_epoch": seq,
         "tick": tick,
@@ -84,7 +84,7 @@ def _delta(seq, tick, arrivals=(), completed=()):
 
 
 def _ack(seq):
-    return {"schema_version": 2, "delivery_sequence": seq, "batch_id": seq}
+    return {"schema_version": 3, "delivery_sequence": seq, "batch_id": seq}
 
 
 class _TailScheduler(OnlineSchedulerBase):

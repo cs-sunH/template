@@ -46,7 +46,6 @@ for _p in (_ONLINE_DIR, _WORKLOAD_DIR):
 
 from joint.link_quota import (  # noqa: E402
     FLOW_ONESHOT,
-    FLOW_REALTIME,
 )
 from online.sh30_online_scheduler import (  # noqa: E402
     Sh30OnlineScheduler,
@@ -70,7 +69,7 @@ class O2QuotaEvictionFootprintEnrollmentTest(unittest.TestCase):
     事务成功才落账，而判据在事务前执行）⇒ 判据 demand
     只含主流程足迹（读流/merge 预留的 per-link max 语义由 N1 批钉死，
     本任务不动判据）。事故链（探针实证）：判据 PASS → 支链 #evict 先入
-    册占掉末槽 → 主流程 #readplan 入册 FAIL → LinkQuotaError → 调用方
+    册占掉末槽 → 主流程入册 FAIL → LinkQuotaError → 调用方
     对已物化预约 fail-closed RuntimeError 整 run abort。修复 = 入册侧
     分派：主流程恒先于逐出支链（结构性杜绝该链），支链失败按
     quota_oneshot_overflow 披露降级不 abort；主流程失败保持 raise
@@ -105,28 +104,26 @@ class O2QuotaEvictionFootprintEnrollmentTest(unittest.TestCase):
         # 判据不感知本请求逐出足迹（verdict 签名根本无 runtime）⇒ 同链
         # 支链再需 1 槽的场景下判据仍 PASS——事故链的第一环如实复现。
         verdict = scheduler._quota_candidate_verdict(
-            _candidate(0, "remote-read"), session_view, r_hat)
+            _candidate(0, "copy"), session_view, r_hat)
         self.assertTrue(verdict.admitted)
         runtime = _make_runtime("r9")
         runtime.history_evictions = (self._eviction_transfer(),)
-        # 修复后：入册主先支后——主流程读流拿到末槽，支链撞墙按披露
-        # 降级：返回 True（不 abort）、支链未入册、披露行在案。
+        # 修复后：入册主先支后——主流程 copy 双端点拿到末槽，支链撞墙
+        # 按披露降级：返回 True（不 abort）、支链未入册、披露行在案。
         self.assertTrue(scheduler._quota_enroll_admission(
-            runtime, session_view, "remote-read", 0, now_ns=0))
-        self.assertIn("r9#readplan", scheduler._quota_enrolled)
-        self.assertIn("r9#readplan#src", scheduler._quota_enrolled)
+            runtime, session_view, "copy", 0, now_ns=0))
+        self.assertIn("r9", scheduler._quota_enrolled)
+        self.assertIn("r9#src", scheduler._quota_enrolled)
         self.assertNotIn("r9#evict", scheduler._quota_enrolled)
         overflow_rows = _decision_rows(scheduler, "quota_oneshot_overflow")
         self.assertEqual(len(overflow_rows), 1)
         self.assertEqual(overflow_rows[0]["request_id"], "r9")
         self.assertIn("O2", overflow_rows[0]["decision"]["note"])
-        # 链路 (1,0)：pre 1 + 读流 1 = 2（支链的 +1 未进账——披露降级
-        # 是 occupancy-only，释放路径幂等空放）。
+        # 链路 (1,0)：pre 1 + copy 主流程 1 = 2（支链的 +1 未进账——
+        # 披露降级是 occupancy-only，释放路径幂等空放）。
         self.assertEqual(tracker.link_occupancy((1, 0)), 2)
-        # 守恒：主流程整体释放后账目回落（merge 预留随 release_merge）。
-        scheduler._quota_release_readplan_stream("r9", tick=100)
+        # 守恒：主流程整体释放后账目回落。
         scheduler._quota_release_admission_phase("r9", tick=100)
-        scheduler._quota_tracker.release_merge("r9")
         self.assertEqual(tracker.link_occupancy((1, 0)), 1)
         self.assertEqual(scheduler._quota_enrolled, {})
 
@@ -154,14 +151,14 @@ class O2QuotaEvictionFootprintEnrollmentTest(unittest.TestCase):
         scheduler = self._tight_scheduler()
         session_view = _session_view(resident=1)
         verdict = scheduler._quota_candidate_verdict(
-            _candidate(0, "remote-read"), session_view, 0.5)
+            _candidate(0, "copy"), session_view, 0.5)
         self.assertTrue(verdict.admitted)
         scheduler._quota_tracker.admit_flow(
             owner="thief", flow_class=FLOW_ONESHOT, links=((1, 0),))
         runtime = _make_runtime("r9")
         runtime.history_evictions = ()
         self.assertFalse(scheduler._quota_enroll_admission(
-            runtime, session_view, "remote-read", 0, now_ns=0))
+            runtime, session_view, "copy", 0, now_ns=0))
         self.assertEqual(scheduler._quota_enrolled, {})
         # 主流程失败不走披露降级（quota_oneshot_overflow 零行）。
         self.assertEqual(
@@ -199,7 +196,9 @@ class O3MergeTailGateExpansionTest(unittest.TestCase):
 
     @staticmethod
     def _stay_decode_runtime(request_id="rd", decode=8):
-        from online.test_remote_credit_stream import (
+        # O3 夹具搬迁（远读退役 §7.3.1）：原 online/test_remote_credit_stream
+        # 已整删，EXEC_INSTANCE/HOME_INSTANCE/_scheduler 由 joint/ 共享夹具提供。
+        from joint.test_online_scheduler_stub import (
             EXEC_INSTANCE, HOME_INSTANCE)
         rt = _OnlineRequestRuntime({
             "request_id": request_id,
@@ -220,7 +219,7 @@ class O3MergeTailGateExpansionTest(unittest.TestCase):
     def _emit_pure_decode_train(cls, mutate):
         """生产路径发射一列纯 decode 列车（joiner 空 ⇒ had_joiners
         False），mutate(scheduler) 在发射前注入污染场景。"""
-        from online.test_remote_credit_stream import (
+        from joint.test_online_scheduler_stub import (
             EXEC_INSTANCE, _scheduler)
         from joint.event_recursion_predictor import ServiceFactorGroup
         from joint.joint_cost_model import ServiceFactors
@@ -804,10 +803,7 @@ class O10RunEndZeroLedgerAssertionTest(unittest.TestCase):
         scheduler._joint_flows = LinkFlowRegistry()
         scheduler.kv_manager = SimpleNamespace(
             tp_degree=2, _sessions={},
-            assert_final_state=lambda: None,
-            # D09/D20：run 尾暂存 lease 零在册审计（替身恒空账——零账
-            # 断言不误报；F6 教义：接口直达，替身补齐）。
-            staging_leases=lambda: ())
+            assert_final_state=lambda: None)
         return scheduler
 
     def test_clean_run_passes(self):
@@ -826,14 +822,13 @@ class O10RunEndZeroLedgerAssertionTest(unittest.TestCase):
             scheduler.verify_run_end()
 
     def test_tracker_merge_borrow_residue_fails_closed(self):
-        # N1 借槽账残留（readplan settle 未达）⇒ merge_borrowed 非零。
+        # N1 借槽账残留（settle 未达）⇒ merge_borrowed 非零。
         scheduler = self._verify_ready_scheduler()
         tracker = scheduler._quota_tracker
         link = scheduler._telemetry_endpoint_link_key(0)
         assert tracker.admit_flow(
-            owner="r9#readplan", flow_class=FLOW_REALTIME,
-            links=(link,), port_id=0, r_hat_kv_bytes_per_ns=0.5,
-            now_ns=0).admitted
+            owner="r9#copy", flow_class=FLOW_ONESHOT,
+            links=(link,), port_id=0, now_ns=0).admitted
         assert tracker.reserve_merge(
             "r9", links_forward={link}, links_reverse={(1, 0)},
             port_forward=1, port_reverse=0).admitted
@@ -886,9 +881,10 @@ class O10RunEndZeroLedgerAssertionTest(unittest.TestCase):
 # ============================================ 任务 10（O10④/O12/O14）==
 
 class O10CreditArmsResidueFailClosedTest(unittest.TestCase):
-    """O10④：GB _credit_arms 完成残留 fail-closed（copy/restore 同款
-    纪律镜像）——登记侧前序残留 raise（旧账被 setdefault 静默吞并）、
-    完成侧未消费残留 raise、单块切片合法缺席不误报。"""
+    """O10④：GB 完成残留 fail-closed（copy/restore 同款纪律镜像）——
+    完成侧未消费残留 raise、单块切片合法缺席不误报。（原 _credit_arms
+    登记侧/尾标记两用例已随 2026-10-14 远读退役删除：credit 账本与
+    _emit_credit_stream_tail 发射族均退役；完成批合法缺席形态保留。）"""
 
     @staticmethod
     def _builder():
@@ -897,83 +893,6 @@ class O10CreditArmsResidueFailClosedTest(unittest.TestCase):
         builder = GraphBatchBuilder(_make_config())
         builder.begin_batch()
         return builder
-
-    @staticmethod
-    def _tail_blocks():
-        from face_scheduler import KVTransfer, KVTransferShard
-        transfer = KVTransfer(
-            kind="noc_migrate", phase="decode", reason="test",
-            session_id="s1", trigger_request_id="r9",
-            source_instance_index=0, target_instance_index=1,
-            total_bytes=8,
-            shards=(KVTransferShard(
-                source_rank=0, target_rank=2, edge_rank=None, bytes=8,
-                noc_path=(0, 1, 2), layer_start=0, layer_end=2),),
-            model_layers=2, layer_start=0, layer_end=2,
-            resident_prefix_layers_before=2,
-            resident_prefix_layers_after=2)
-        # compact 发射要求尾块序列携带冻结 planner tile 区间（生产
-        # 由切片规划器附加 pipeline_tile_runs——单 tile 8B 流送轴）。
-        class _CompactTailBlocks(list):
-            def __init__(self, blocks, runs):
-                super().__init__(blocks)
-                self.pipeline_tile_runs = tuple(runs)
-
-        runs = [{
-            "first_tile": 2, "tile_count": 2,
-            "pass_or_window_ordinal": 1, "source_ordinal": 0,
-            "source_key": "instance:0:layers:0-2",
-            "layer_start": 0, "layer_end": 2,
-            "axis_unit": "stream_bytes", "total_units": 16,
-            "units_per_tile": 8, "tail_units": 8,
-            "shards": [{
-                "global_shard_ordinal": 0, "source_rank": 0,
-                "target_rank": 2, "total_data_bytes": 16,
-                "bytes_per_unit": 1, "noc_path": (0, 1, 2),}],
-        }]
-        # 块 2（即时旁挂，arms 登记）+ 块 3（待发账本登记——残留检
-        # 查的载体）。
-        return _CompactTailBlocks(((2, transfer), (3, transfer)), runs)
-
-    def test_registration_rejects_stale_ledger(self):
-        builder = self._builder()
-        member_plan = {
-            "request_id": "r9", "session_id": "s1",
-            "turn_index": 0, "queue_index": 0,
-            # compact 发射的身份种子面（plan_dict 生产同构：decode 阶
-            # generation=1；owner 覆盖源/目标两侧 rank）。
-            "pipeline_identity_seeds": tuple({
-                "request_id": "r9", "stage": "decode",
-                "generation": 1, "stage_epoch": 0, "rank": rank,
-                "staging_allocation_id": 1,
-            } for rank in (0, 2))}
-        blocks = self._tail_blocks()
-        # compact 发射的 builder 上下文（生产 _set_context 同构：请求
-        # r9 的 decode 阶段、generation=1——逐 rank builder 设置）。
-        builder._set_context(member_plan, "decode", 1)
-        builder._emit_credit_stream_tail(
-            member_plan, blocks, stage="remote_credit")
-        self.assertIn("r9", builder._credit_arms)
-        # 前序列车尾标记未结清（残留）⇒ 再登记 fail-closed（修前
-        # setdefault 静默吞并旧账；compact 发射的信息面 = 待发 tile
-        # 账本）。
-        with self.assertRaisesRegex(RuntimeError, "still holds tiles"):
-            builder._emit_credit_stream_tail(
-                member_plan, blocks, stage="remote_credit")
-
-    def test_completion_rejects_unconsumed_credit_arms(self):
-        builder = self._builder()
-        builder.set_next_plan({"rX": None})
-        builder._block_ends["rX"] = {"seg2": {2: 0, 3: 0}}
-        builder._credit_arms["rX"] = {2: {2: 999}}
-        with self.assertRaisesRegex(RuntimeError, "unconsumed credit arms"):
-            builder.emit_completion_batch({
-                "request_id": "rX", "session_id": "sX", "turn_index": 0,
-                "queue_index": 0, "decode_instance_index": 1,
-                "completion_evictions": [],
-                "kv_location_after_completion": "local_hbm"})
-        # 账本随 raise 前的 pop 清账（不留半账）。
-        self.assertNotIn("rX", builder._credit_arms)
 
     def test_completion_without_arms_passes(self):
         # 单块切片无尾块：账本合法缺席，完成批不误报。
@@ -987,73 +906,9 @@ class O10CreditArmsResidueFailClosedTest(unittest.TestCase):
             "kv_location_after_completion": "local_hbm"})
 
 
-class O12PhysicalFeasibilityRemoteReadPartialTest(unittest.TestCase):
-    """O12：_classify_physical_feasibility 的 remote-read 适用面与
-    N1(a) 解除同步——PARTIAL 基参与判定（修前仅 LOCAL 基，PARTIAL 基
-    上 remote-read 唯一可行时被误报 structural_infeasible）。"""
-
-    def _scheduler_with_action_recorder(self, **config_over):
-        from joint.joint_config import JointMechanismConfig
-        scheduler = _scheduler()
-        config_kwargs = dict(
-            category_mode="typed", scheduler_mode="joint",
-            layer_policy="adaptive", remote_actions="on",
-            quota_mode="static")
-        config_kwargs.update(config_over)
-        scheduler.joint_config = JointMechanismConfig(**config_kwargs)
-        calls = []
-
-        def _feasible(**kwargs):
-            calls.append(kwargs["action"])
-            return [True, True, True, True]
-
-        scheduler.kv_manager = SimpleNamespace(
-            tp_degree=2, _sessions={},
-            request_hbm_eventually_feasible_instances=_feasible)
-        return scheduler, calls
-
-    @staticmethod
-    def _partial_session_view():
-        from joint.joint_cost_model import SessionKVView
-        return SessionKVView(
-            session_id="s1", home_instance=0, resident_instance=0,
-            location="partial_hbm_remote", history_tokens=100,
-            resident_prefix_layers=1,
-            history_bytes_by_tp_rank=(400, 400),
-            missing_bytes_by_tp_rank=(300, 300))
-
-    def test_partial_base_remote_read_participates(self):
-        scheduler, calls = self._scheduler_with_action_recorder()
-        runtime = _make_runtime("r9")
-        structural, _detail = scheduler._classify_physical_feasibility(
-            runtime, self._partial_session_view())
-        self.assertFalse(structural)
-        # remote-read 进入判定集合（O12 修前缺席）。
-        self.assertIn("remote-read", calls)
-
-    def test_partial_ablation_excludes_remote_read(self):
-        # JOINT_REMOTE_READ_PARTIAL=off：PARTIAL 基照旧不进判定（与 JCM
-        # action_applicability 消融条件同构）。
-        scheduler, calls = self._scheduler_with_action_recorder(
-            remote_read_partial="off")
-        runtime = _make_runtime("r9")
-        scheduler._classify_physical_feasibility(
-            runtime, self._partial_session_view())
-        self.assertNotIn("remote-read", calls)
-
-    def test_remote_base_still_excluded(self):
-        # REMOTE 基（无主 session）仍拒——与 N1(a) 裁定③同口径。
-        from joint.joint_cost_model import SessionKVView
-        scheduler, calls = self._scheduler_with_action_recorder()
-        runtime = _make_runtime("r9")
-        view = SessionKVView(
-            session_id="s1", home_instance=0, resident_instance=0,
-            location="remote_memory", history_tokens=100,
-            resident_prefix_layers=0,
-            history_bytes_by_tp_rank=(400, 400),
-            missing_bytes_by_tp_rank=(400, 400))
-        scheduler._classify_physical_feasibility(runtime, view)
-        self.assertNotIn("remote-read", calls)
+# （原 O12PhysicalFeasibilityRemoteReadPartialTest 三用例——PARTIAL
+# 基上 remote-read 参与物理可行性判定的口径同步——已随 2026-10-14
+# 远读退役删除：判定集合现恒三动作，无 remote_allowed 复写面。）
 
 
 class M2ActionMaskPhysicalFeasibilityTest(unittest.TestCase):
@@ -1070,7 +925,7 @@ class M2ActionMaskPhysicalFeasibilityTest(unittest.TestCase):
         scheduler = _scheduler()
         scheduler.joint_config = JointMechanismConfig(
             category_mode="typed", scheduler_mode="joint",
-            layer_policy="adaptive", remote_actions="on",
+            layer_policy="adaptive",
             allowed_actions=allowed_actions)
         calls = []
 
@@ -1093,17 +948,17 @@ class M2ActionMaskPhysicalFeasibilityTest(unittest.TestCase):
             missing_bytes_by_tp_rank=(0, 0))
 
     def test_default_all_actions_judged(self):
-        # 缺省 "all"：四动作全进判定集（零漂移）。
+        # 缺省 "all"：三动作全进判定集（零漂移）。
         scheduler, calls = self._scheduler_with_mask("all")
         structural, _detail = scheduler._classify_physical_feasibility(
             _make_runtime("r9"), self._local_session_view())
         self.assertFalse(structural)
         self.assertEqual(
-            calls, ["stay", "recompute", "copy", "remote-read"])
+            calls, ["stay", "recompute", "copy"])
 
     def test_masked_action_excluded_from_judgment_set(self):
-        # 掩码 {stay,recompute}：copy/remote-read 不进判定集（即便替身
-        # 判其物理可行）——与计价侧剔除同开关位。
+        # 掩码 {stay,recompute}：copy 不进判定集（即便替身判其物理
+        # 可行）——与计价侧剔除同开关位。
         scheduler, calls = self._scheduler_with_mask("stay,recompute")
         scheduler._classify_physical_feasibility(
             _make_runtime("r9"), self._local_session_view())
@@ -1112,7 +967,7 @@ class M2ActionMaskPhysicalFeasibilityTest(unittest.TestCase):
     def test_mask_excluding_only_feasible_action_reports_structural(self):
         # 掩码把唯一物理可行动作剔除 ⇒ structural_infeasible（候选集
         # 上限不是强制；fail-closed 非容量拒绝）。替身返回值 = 逐实例
-        # 可行性（copy@0 物理可行，但 copy/remote-read 均被掩码剔除，
+        # 可行性（copy@0 物理可行，但 copy 被掩码剔除，
         # 判定集只剩 stay/recompute——两实例皆不可行）。
         scheduler, calls = self._scheduler_with_mask("stay,recompute")
 
@@ -1172,7 +1027,7 @@ class O14JointSessionViewBaseLocationTest(unittest.TestCase):
     def _scheduler_with_session(self, base_location):
         scheduler = _scheduler()
         session = SimpleNamespace(
-            home_instance=1, working_kind="remote-read",
+            home_instance=1, working_kind="copy",
             base_location=base_location,
             base_history_tokens=100, base_resident_prefix_layers=2)
         scheduler.kv_manager = SimpleNamespace(

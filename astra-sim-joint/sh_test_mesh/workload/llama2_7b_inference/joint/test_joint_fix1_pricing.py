@@ -74,7 +74,6 @@ from face_scheduler import (  # noqa: E402
 from joint.hbm_port_flow_registry import HbmPortFlowRegistry  # noqa: E402
 from joint.joint_config import JointMechanismConfig  # noqa: E402
 from joint.capacity_summary import CapacitySummary  # noqa: E402
-from joint.pipeline_identity import PipelineIdentityAllocator  # noqa: E402
 from joint.joint_cost_model import (  # noqa: E402
     InstanceLoadView,
     JointCostModel,
@@ -242,19 +241,9 @@ def _scheduler(*, quota_mode="static"):
                 base_resident_prefix_layers=4),
         },
         _reservations={},
-        # 规格书§二.2（2026-09-25）：prefill remote-read 前缀读流规划
-        # （_try_admit_request 事务前调用）——中性桩缺省空规划；需要
-        # #prefill_read 真实登记的测试（A10b 回滚面）在用例内覆写。
-        plan_prefill_remote_read_transfers=lambda *args, **kwargs: (),
         release_request_capacity_reservation=lambda rid: None,
         request_hbm_eventually_feasible_instances=lambda **kw: (
             [True, True, True, True]),
-        # P 身份预演面（生产 _pipeline_identity_provider 的非突变
-        # next-ID peek 先查在册 lease）：中性替身恒无在册 lease、
-        # next-ID 固定 1（真 manager 从 1 起发号；本文件用例不消费
-        # 身份面数值语义）。
-        staging_lease_for_request=lambda rid: None,
-        peek_next_staging_allocation_id=lambda: 1,
         _effective_remaining_by_tp_rank=lambda index: (10**9, 10**9),
         _instance_reclaimable_capacity_by_tp_rank=lambda index: (0, 0),
         # D11：容量驱逐摘要/容量账替身（零桶 = 快照时刻无合法 victim；
@@ -265,7 +254,7 @@ def _scheduler(*, quota_mode="static"):
     )
     scheduler.joint_config = JointMechanismConfig(
         category_mode="typed", scheduler_mode="joint",
-        layer_policy="adaptive", remote_actions="on",
+        layer_policy="adaptive",
         quota_mode=quota_mode)
     scheduler._kv_ledger_epoch = 0
     scheduler._joint_mode = scheduler.joint_config.scheduler_mode
@@ -294,7 +283,7 @@ def _scheduler(*, quota_mode="static"):
     scheduler._quota_merge_reserves_created = 0
     scheduler._quota_decode_owner_seq = {}
     scheduler._joint_action_selection_counts = {
-        "stay": 0, "copy": 0, "remote-read": 0,
+        "stay": 0, "copy": 0,
         "recompute_elected": 0,
         "recompute_forced_no_history": 0,
         "recompute_forced_action_mask": 0,
@@ -431,7 +420,7 @@ class D10RebuildContextTokensTest(unittest.TestCase):
         for name, session in groups.items():
             candidate = model.estimate_P_with_continuation(
                 session=session, request=request, instance_index=0,
-                action="recompute", remote_enabled=True)
+                action="recompute")
             self.assertTrue(candidate.applicable, msg=name)
             seen_compute[name] = candidate.breakdown.compute_ns
             # token 序列守恒：重建（H=100）+ 本轮输入（U=50）各恰一次
@@ -513,7 +502,7 @@ class D10RecomputeSpanBaseZeroTest(unittest.TestCase):
             model = self._model_with_fn(fn)
             candidate = model.estimate_P_with_continuation(
                 session=make_session(), request=request, instance_index=0,
-                action="recompute", remote_enabled=True)
+                action="recompute")
             self.assertTrue(candidate.applicable, msg=name)
             self.assertEqual(fn.calls, [(50 + 100, 0)], msg=name)
 
@@ -528,11 +517,11 @@ class D10RecomputeSpanBaseZeroTest(unittest.TestCase):
         request = _request(input_tokens=50, decode=10)
         recompute = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=0,
-            action="recompute", remote_enabled=True)
+            action="recompute")
         recompute_call = fn.calls[-1]
         stay = model.estimate_P_with_continuation(
             session=session, request=request, instance_index=0,
-            action="stay", remote_enabled=True)
+            action="stay")
         stay_call = fn.calls[-1]
         self.assertEqual(recompute_call, (50 + 100, 0))
         self.assertEqual(stay_call, (50, 100))
@@ -555,13 +544,13 @@ class D10RecomputeSpanBaseZeroTest(unittest.TestCase):
                         prefix=4, history_tokens=100)
         model.estimate_P_with_continuation(
             session=away, request=request, instance_index=0,
-            action="recompute", remote_enabled=True)
+            action="recompute")
         self.assertEqual(fn.calls[-1], (50 + 100, 0))
         remote = _session(home=0, resident=0, location="remote_memory",
                           prefix=4, history_tokens=100)
         model.estimate_P_with_continuation(
             session=remote, request=request, instance_index=0,
-            action="recompute", remote_enabled=True)
+            action="recompute")
         self.assertEqual(fn.calls[-1], (50 + 100, 0))
 
 
@@ -907,10 +896,7 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
             history_bytes_by_tp_rank=(400, 400),
             missing_bytes_by_tp_rank=(0, 0))
         scheduler.graph = SimpleNamespace(
-            sync_pending_history_after_evictions=lambda evictions: None,
-            # P 身份预演面：替身挂真分配器（生产 _pipeline_identity_
-            # provider 直访；与 test_prefill_remote_read_scheduler 同款）。
-            pipeline_identity_allocator=PipelineIdentityAllocator())
+            sync_pending_history_after_evictions=lambda evictions: None)
         runtime = _make_runtime("rX")
         runtime.estimated_arrival_ns = 0
         eviction = self._admission_transfer("rX")
@@ -918,78 +904,15 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
             lambda **kw: (eviction,))
         scheduler.kv_manager.prepare_prefill = (
             lambda **kw: (None, (), ()))
-        # 规格书§二.2/§二.5（2026-09-25）：前缀读流规划桩（D16 有界模
-        # 板形态，修复轮二）：home 1 → exec 3 真实 mesh 路径 (2,3,7) 的
-        # 单窗单 tile 模板 + 逐窗物化桩返回单条 noc_migrate prefill 读流
-        # ——事务成功段以 rid#prefill_read 真实登记，入册失败回滚路径覆
-        # 盖新 owner。
-        prefill_read = KVTransfer(
-            kind="noc_migrate", phase="prefill",
-            reason="remote_read_prefill_prefix",
-            session_id="s1", trigger_request_id="rX",
-            source_instance_index=1, target_instance_index=3,
-            total_bytes=8,
-            shards=(KVTransferShard(
-                source_rank=2, target_rank=7, edge_rank=None, bytes=8,
-                noc_path=(2, 3, 7), layer_start=0, layer_end=4),),
-            model_layers=4, layer_start=0, layer_end=4,
-            resident_prefix_layers_before=4,
-            resident_prefix_layers_after=4, stream_only=True,
-            read_tile=(1, 1))
-        scheduler.kv_manager.plan_prefill_remote_read_transfers = (
-            lambda *args, **kwargs: {
-                "session_id": "s1", "trigger_request_id": "rX",
-                "home_instance": 1, "exec_instance": 3,
-                "read_prefix_layers": 4, "kv_token_bytes": 8,
-                "tile_tokens": 1, "tile_bytes": 8,
-                "base_scans_shards": (8,), "window_scans": (1,),
-                "tiles_by_window": (1,), "window_count": 1,
-                "scan_passes": 1, "total_bytes": 8, "tile_count": 1,
-                "source_ranks": (2,), "target_ranks": (7,),
-            })
-        scheduler.kv_manager.prefill_read_window_tiles = (
-            lambda template, window_index: (prefill_read,))
-        # D09 prefill 侧 lease 覆盖（2026-09-27）：读流在册 ⇒ 准入事务
-        # 前段获取暂存 lease——替身补最小持有面（字节口径不进本用例
-        # 断言；回滚路径注销计数由 release 桩捕获）。获取后身份核验
-        # （生产防御分支：staging_lease_for_request 必须回带同一
-        # lease_id 与 allocation_id；release 后不再可见）由持有字典
-        # 模拟真 manager 的在册语义。
-        scheduler.kv_manager.prefill_read_window_staging_shards = (
-            lambda **kw: ((16, 16), 8))
-        _held_lease = {}
-
-        def _acquire_staging_lease(rid, **kw):
-            _held_lease["rid"] = rid
-            _held_lease["lease_id"] = "staging_lease:{}#{}".format(
-                rid, kw.get("boundary_epoch", 0))
-            return _held_lease["lease_id"]
-
-        def _staging_lease_for_request(rid):
-            if _held_lease.get("rid") == rid:
-                return SimpleNamespace(
-                    lease_id=_held_lease["lease_id"], allocation_id=1)
-            return None
-
-        def _release_staging_lease(rid, **kw):
-            if _held_lease.get("rid") == rid:
-                _held_lease.clear()
-                return True
-            return False
-
-        scheduler.kv_manager.acquire_staging_lease = _acquire_staging_lease
-        scheduler.kv_manager.staging_lease_for_request = (
-            _staging_lease_for_request)
-        scheduler.kv_manager.release_staging_lease = _release_staging_lease
-        # 选中 remote-read@3：模块级 select_instance_and_action 打桩
-        # （场景设定——被测机器 = 防御分支回滚，非 argmin）。路由 1→3
-        # 每链需求恰 Q=2（读流 1 + 预留 fwd 1，quota 夹具同款事实）不
-        # 先触发链路门——配额过滤放行后事务段/入册照常走到防御分支。
+        # 选中 copy@3（源 1 → 目标 3，跨实例主流程）：模块级
+        # select_instance_and_action 打桩（场景设定——被测机器 = 防御
+        # 分支回滚，非 argmin）。判据面（_quota_filter_candidates）在
+        # 空注册表起步，链路门放行——事务段/入册照常走到防御分支。
         from joint.joint_cost_model import ActionCandidate
         fake_record = SelectionRecord(
             mode="joint",
             chosen=ActionCandidate(
-                instance_index=3, action="remote-read", applicable=True,
+                instance_index=3, action="copy", applicable=True,
                 inapplicable_reason=None, cost_ns=1000),
             candidates=(
                 ActionCandidate(
@@ -1000,36 +923,31 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
                     instance_index=3, action="recompute", applicable=False,
                     inapplicable_reason="synthetic scene", cost_ns=None),
                 ActionCandidate(
-                    instance_index=3, action="copy", applicable=False,
-                    inapplicable_reason="synthetic scene", cost_ns=None),
-                ActionCandidate(
-                    instance_index=3, action="remote-read",
+                    instance_index=3, action="copy",
                     applicable=True, inapplicable_reason=None,
                     cost_ns=1000),
             ),
-            instance_rule_note="synthetic remote-read scene",
-            remote_enabled=True)
+            instance_rule_note="synthetic copy scene")
         original_select = sh30.select_instance_and_action
         sh30.select_instance_and_action = lambda **kw: fake_record
         captured = {}
 
-        def fake_enroll(runtime_, session_view, action, target, now_ns):
-            # 回滚断言锚：入册失败时刻注册表必须非空（rid#evict 逐出支
-            # 链 + rid#prefill_read 前缀读流均已落地；#readplan 注册表
-            # 半边 2026-09-25 起延迟到 drain 对账，准入相零登记）。
+        def fake_admit_flow(owner, rid, **kwargs):
+            # 主流程入册翻转注入（O2 真异常形态：判据 PASS → 入册拒）。
+            # 翻转前逐出支链（事务成功段 rid#evict）已真实在册——
+            # captured 锚证明回滚真的清了东西，而非空放。
             captured["flows"] = scheduler._joint_flows.snapshot()
-            captured["preplan"] = runtime_.remote_read_preplan
             captured["hbm_leaks"] = dict(
                 scheduler._hbm_ports.leaked_owners())
-            return enroll_returns
+            return False
 
-        original_enroll = scheduler._quota_enroll_admission
-        scheduler._quota_enroll_admission = fake_enroll
+        original_enroll_flow = scheduler._quota_admit_flow
+        scheduler._quota_admit_flow = fake_admit_flow
         try:
             admitted = scheduler._try_admit_request(runtime, 500)
         finally:
             sh30.select_instance_and_action = original_select
-            scheduler._quota_enroll_admission = original_enroll
+            scheduler._quota_admit_flow = original_enroll_flow
         return scheduler, runtime, captured, admitted
 
     def test_failure_rolls_back_registrations_to_zero(self):
@@ -1040,26 +958,18 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
         self.assertEqual(
             scheduler._quota_deferred_wait_counts["quota_link"], 1)
         self.assertFalse(scheduler.pending_admissions)  # 调用方回队职责
-        # 回滚前非空（证明回滚真的清了东西，而非空放）：#prefill_read
-        # 前缀读流在册；#readplan 不在册（准入相零登记，规格书§二.5）。
+        # 回滚前非空（证明回滚真的清了东西，而非空放）：事务成功段的
+        # 逐出支链流（rid#evict）在册。
         self.assertTrue(captured["flows"])
-        self.assertIsNotNone(captured["preplan"])
-        self.assertIn("rX#prefill_read", captured["hbm_leaks"])
-        self.assertNotIn("rX#readplan", captured["hbm_leaks"])
-        # 注册表归零：链路流 / 池端口 / HBM 端口 / preplan 账目
-        # （LinkFlowRegistry.has_registrations 是"本 run 登记过"的粘滞
-        # 披露旗标，不随释放回落——非归零判据）。
+        self.assertIn("rX#evict", captured["hbm_leaks"])
+        # 注册表归零：链路流 / 池端口 / HBM 端口。
         self.assertEqual(scheduler._joint_flows.snapshot(), {})
         self.assertEqual(scheduler._pool_ports._counts, {})
         self.assertEqual(scheduler._hbm_ports.snapshot(), {})
         self.assertEqual(scheduler._hbm_ports.leaked_owners(), {})
-        self.assertIsNone(runtime.remote_read_preplan)
-        # 收尾泄漏审计通过（#readplan 已清）。
-        scheduler._assert_no_readplan_leaks()
-        # 失败日志落地（quota_deferred 类；A14'/H6，2026-09-22 第三轮
-        # 复审：failure_class 带 quota_link 后缀 ⇒ 决策日志 wait_reason
-        # 与 _quota_deferred_wait_counts 计数键同源，原"日志判
-        # capacity/指标计 quota_link"矛盾消除——改钉新契约）。
+        # 失败日志落地（quota_deferred 类；A14'/H6：failure_class 带
+        # quota_link 后缀 ⇒ 决策日志 wait_reason 与
+        # _quota_deferred_wait_counts 计数键同源）。
         rows = _decision_rows(scheduler, "joint_admission_failed")
         self.assertEqual(len(rows), 1)
         self.assertEqual(
@@ -1158,10 +1068,7 @@ class QuotaDeferredSafetyNetPinTest(unittest.TestCase):
             history_bytes_by_tp_rank=(400, 400),
             missing_bytes_by_tp_rank=(0, 0))
         scheduler.graph = SimpleNamespace(
-            sync_pending_history_after_evictions=lambda evictions: None,
-            # P 身份预演面：替身挂真分配器（生产 _pipeline_identity_
-            # provider 直访；与 test_prefill_remote_read_scheduler 同款）。
-            pipeline_identity_allocator=PipelineIdentityAllocator())
+            sync_pending_history_after_evictions=lambda evictions: None)
         return scheduler
 
     def test_all_rejected_loop_requeue_gate_and_wakeup(self):
@@ -1206,8 +1113,8 @@ class QuotaDeferredSafetyNetPinTest(unittest.TestCase):
         # 信用释放 bump 配额代数 ⇒ 键变 ⇒ 唤醒门重开。
         tracker = scheduler._quota_tracker
         verdict = tracker.admit_flow(
-            owner="cred#x", flow_class="realtime", links=(), port_id=3,
-            r_hat_kv_bytes_per_ns=1.0, now_ns=250)
+            owner="cred#x", flow_class="oneshot", links=((3, 9),),
+            port_id=3, now_ns=250)
         self.assertTrue(verdict.admitted)
         self.assertEqual(
             last_key, scheduler._current_retry_key(last_key))
@@ -1242,18 +1149,18 @@ class QuotaDeferredSafetyNetPinTest(unittest.TestCase):
         record = SelectionRecord(
             mode="joint",
             chosen=ActionCandidate(
-                instance_index=3, action="remote-read", applicable=True,
+                instance_index=3, action="copy", applicable=True,
                 inapplicable_reason=None, cost_ns=100),
             candidates=(
                 ActionCandidate(
                     instance_index=3, action="stay", applicable=False,
                     inapplicable_reason="scene", cost_ns=None),
                 ActionCandidate(
-                    instance_index=3, action="remote-read",
+                    instance_index=3, action="copy",
                     applicable=True, inapplicable_reason=None,
                     cost_ns=100),
             ),
-            instance_rule_note="scene", remote_enabled=True)
+            instance_rule_note="scene")
         session_view = scheduler._joint_session_view("s1")
         chosen, candidates, deferred = scheduler._quota_filter_candidates(
             record, session_view, "rq", 0)

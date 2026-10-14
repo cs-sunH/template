@@ -21,6 +21,7 @@
 
 #include "LedgerTypes.hh"
 #include "PipelineDescriptor.hh"
+#include "TypedRows.hh"
 
 namespace jointledger {
 
@@ -75,7 +76,9 @@ DependencyIndex build_dependency_index(const PipelineDescriptor& descriptor);
 struct ParsedEnvelope {
     EnvelopeHeader header;
     // (descriptor, commit-entry JSON with identity/commit_tick/cursor_version/
-    // service_done/settle_done/retired exactly as the wire row)
+    // service_done/settle_done/retired exactly as the wire row).  Descriptor
+    // declarations are low-frequency; the commit entry (including the
+    // immutable descriptor wire object) stays JSON on both wire formats.
     std::vector<std::pair<DescriptorPtr, Json>> descriptors;
     // New selector/dependency indexes for descriptors declared in this
     // delivery (segment_id -> index).
@@ -83,18 +86,14 @@ struct ParsedEnvelope {
     std::unordered_map<std::string, DependencyIndex> dependency_index_additions;
     // (logical_seq, event) in wire order; strictly increasing.
     std::vector<std::pair<std::uint64_t, NodeEvent>> node_events;
-    // Parsed pipeline run rows: JSON objects with the exact key set produced
-    // by _parse_one_pipeline_run (first_logical_seq/descriptor_segment_id/
-    // transition_kind/endpoint_selector/endpoint_run_index/endpoint_leg_index/
-    // endpoint_ordinal/_selected_global_tile_ordinal/_selected_shard_tile/
-    // endpoint_store_id/slot_patches/credit_patches/obligation_patches/
-    // tick_first/cursor_version_start/cursor_version_end).
-    std::vector<Json> pipeline_runs;
-    // Parsed cursor patches: JSON rows as produced by _parse_cursor_patches
-    // ({segment_id, runs: [[run_index, parsed_run], ...]}).
-    std::vector<Json> cursor_patches;
-    // Parsed active_resources rows (dict(row) forms of _parse_resources).
-    std::vector<Json> resources;
+    // Parsed pipeline run records (the typed form of the exact field set
+    // produced by the v4 row validators).  Both wire formats produce these;
+    // the staging core consumes struct fields directly.
+    std::vector<PipelineRun> pipeline_runs;
+    // Parsed cursor patches (typed; runs carry (run_index, row|tombstone)).
+    std::vector<CursorPatch> cursor_patches;
+    // Parsed active_resources rows (typed).
+    std::vector<ResourceRow> resources;
 };
 
 // Retained registry view the reader validates against (accepted descriptors

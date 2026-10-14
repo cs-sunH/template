@@ -1,10 +1,8 @@
 {
-  "version": "predcfg-v3-20261005",
+  "version": "predcfg-v4-20261014",
   "projection_mode": "known_work",
   "future_demand_mode": "reverting",
   "history_use": "shadow",
   "stage_policy": "two_stage",
-  "settlement_policy": "consolidate",
-  "action_space": "pure_four",
-  "multi_source_protocol": "ordered_shared_double_buffer"
+  "settlement_policy": "consolidate"
 }

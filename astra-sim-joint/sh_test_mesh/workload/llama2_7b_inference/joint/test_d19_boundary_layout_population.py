@@ -10,10 +10,10 @@ PARTIAL 基础区间实际只有前缀 [0,p) 层，层覆盖不真实披露。�
 透传 PDBoundaryView）带进 ``from_boundary``。
 
 钉测面：
-  1. 两族布局（完整/增量）× 三项填充——envelope 携带的
+  1. 完整型单族布局 × 三项填充——envelope 携带的
      terminated/first_token/obligations 逐位落进 layout；
-  2. 层覆盖——完整型 context = 全模型层数；增量型 increment = 全层数、
-     base = 基础驻留前缀 [0,p)（PARTIAL 基 ≠ 全层的真实披露）；
+  2. 层覆盖——完整型 context = 全模型层数（增量型布局族已随远读
+     退役删除，D6）；
   3. 缺省回退兼容——直接构造的 PDBoundaryView（无可选属性）回退
      terminated=False / 首 token 全缺省 / 义务表空 / 层 0/0，与既有
      夹具逐位一致（层字段是披露面：0 = 未披露，字节向量仍是账本真值，
@@ -43,9 +43,7 @@ for _p in (_HERE, _WL):
 from types import SimpleNamespace  # noqa: E402
 
 from joint.boundary_layout import (  # noqa: E402
-    INTERVAL_ROLE_BASE,
     INTERVAL_ROLE_CONTEXT,
-    INTERVAL_ROLE_INCREMENT,
     BoundaryFirstTokenState,
     BoundaryKVLayout,
     BoundaryRuntimeStateEnvelope,
@@ -61,7 +59,6 @@ from joint.joint_cost_model import (  # noqa: E402
 from joint.test_d18_boundary_decision import (  # noqa: E402
     KV_TOKEN_BYTES,
     _complete_boundary,
-    _increment_boundary,
     _loads,
     _model,
 )
@@ -111,28 +108,6 @@ class EnvelopePopulationUnitTest(unittest.TestCase):
             (context.layer_start, context.layer_end),
             (0, MODEL_LAYERS))
 
-    def test_increment_family_populates_layers_per_interval(self):
-        envelope = BoundaryRuntimeStateEnvelope(
-            _increment_boundary(),
-            terminated=False,
-            first_token=_issued_first_token(),
-            obligations=_obligations("remote_read_plan", "copy_handoff"),
-            working_layers=MODEL_LAYERS,
-            base_layers=PARTIAL_BASE_LAYERS)
-        layout = BoundaryKVLayout.from_boundary(envelope)
-        by_role = {item.role: item for item in layout.intervals}
-        # 增量域全层（U 增量 + PARTIAL 恢复后缀）；基础区间 = 前缀
-        # [0,p)（PARTIAL 基 ≠ 全层的真实披露——不再是 0/0 假"全层"）。
-        self.assertEqual(
-            (by_role[INTERVAL_ROLE_INCREMENT].layer_start,
-             by_role[INTERVAL_ROLE_INCREMENT].layer_end),
-            (0, MODEL_LAYERS))
-        self.assertEqual(
-            (by_role[INTERVAL_ROLE_BASE].layer_start,
-             by_role[INTERVAL_ROLE_BASE].layer_end),
-            (0, PARTIAL_BASE_LAYERS))
-        self.assertEqual(len(layout.obligations), 2)
-
     def test_terminated_true_propagates(self):
         """terminated 真实接通（非 schema 占位）：真值经 envelope 落进
         layout——正常 D 路径恒 False（见 sh30 接线钉测），字段通道在。"""
@@ -153,7 +128,7 @@ class EnvelopePopulationUnitTest(unittest.TestCase):
     def test_default_fallback_plain_view_is_bit_compatible(self):
         """缺省回退兼容：直接构造的 PDBoundaryView（无可选属性——共享
         文件的计价视图字段面不动）回退到旧行为：三项缺省 + 层 0/0。"""
-        for boundary in (_complete_boundary(), _increment_boundary()):
+        for boundary in (_complete_boundary(),):
             layout = BoundaryKVLayout.from_boundary(boundary)
             self.assertFalse(layout.terminated)
             self.assertEqual(
@@ -185,9 +160,7 @@ class EnvelopePopulationUnitTest(unittest.TestCase):
                     kv_token_bytes=KV_TOKEN_BYTES,
                     working_bytes_by_tp_rank=(KV_TOKEN_BYTES,) * 2,
                     p_instance_index=0, history_tokens=1,
-                    base_bytes_by_tp_rank=(0, 0), base_tokens=1,
                     decode_steps=1, session_id="s", home_instance=0,
-                    is_increment_layout=lambda: False,
                     first_token=SimpleNamespace(issued=True)))
 
 
@@ -196,7 +169,7 @@ class EnvelopePassthroughTest(unittest.TestCase):
     可达（计价/选择器零改动的基础）。"""
 
     def test_view_fields_and_methods_delegate(self):
-        view = _increment_boundary()
+        view = _complete_boundary()
         envelope = BoundaryRuntimeStateEnvelope(
             view, terminated=False, first_token=_issued_first_token(),
             obligations=_obligations("capacity_reservation"),
@@ -206,14 +179,9 @@ class EnvelopePassthroughTest(unittest.TestCase):
         self.assertEqual(envelope.p_instance_index, view.p_instance_index)
         self.assertEqual(
             envelope.working_bytes_by_tp_rank, view.working_bytes_by_tp_rank)
-        self.assertEqual(
-            envelope.base_bytes_by_tp_rank, view.base_bytes_by_tp_rank)
         self.assertEqual(envelope.decode_steps, view.decode_steps)
-        self.assertEqual(envelope.base_tokens, view.base_tokens)
         self.assertEqual(envelope.kv_token_bytes, view.kv_token_bytes)
         self.assertEqual(envelope.logic_home_instance, view.logic_home_instance)
-        self.assertEqual(
-            envelope.is_increment_layout(), view.is_increment_layout())
         self.assertEqual(
             envelope.working_context_bytes(), view.working_context_bytes())
 
@@ -316,11 +284,9 @@ class SchedulerPopulationTest(unittest.TestCase):
             service_factors=ServiceFactors(),
             prefill_ns_per_token=1.0, decode_ns_per_token=2.0,
             model_layers=MODEL_LAYERS, instance_tp_size=2,
-            route_fn=lambda s, t: ((s, t), 1),
-            remote_read_kv_token_bytes=KV_TOKEN_BYTES)
+            route_fn=lambda s, t: ((s, t), 1))
         candidate = cost_model.estimate_D_remaining(
-            boundary=boundary, instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            boundary=boundary, instance_index=0, action=ACTION_STAY)
         self.assertTrue(candidate.applicable)
         # 区间布局披露（breakdown.interval_layout）携带层覆盖与区间身份
         # ——envelope 填充从计价面可观测。

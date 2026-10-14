@@ -860,8 +860,7 @@ class KvLocationDirectory:
         只补差集片段（初等单元格 token×layer 级，字节按面积线性精确比
         例）。返回片段视图条目（``_fragment_view``：区间/字节为权威搬
         运单元的裁剪值，其余字段沿用源条目——条目直和即缺失并集字节，
-        copy 工作字节据此计，§6.3 remote_effective_bytes 只数缺失远端
-        字节）。返回序 = token_start 升序（区间消费序）。
+        copy 工作字节据此计）。返回序 = token_start 升序（区间消费序）。
         """
         entries = self.entries_for_session(session_id)
         if not entries:
@@ -897,15 +896,14 @@ class KvLocationDirectory:
     ) -> tuple[KvDirectoryEntry, ...]:
         """枚举目标的片上来源**并集**（权威读流片段序列，§6.1/§6.3）。
 
-        单元格并集去重：目标已持有/已在途覆盖的格不进读流（decode
-        credit 读流基数 = 目标缺失远端并集，§6.3"remote_effective_bytes
-        只数缺失远端字节"）；同内容多副本按冻结确定性顺序（角色 → 层
+        单元格并集去重：目标已持有/已在途覆盖的格不进读流；
+        同内容多副本按冻结确定性顺序（角色 → 层
         → token → holder → entry_id，§6.1"多个可选副本按冻结的确定性
         顺序选读"）只选读一条权威副本，部分重叠条目只补差集片段。返
         回片段视图条目（``_fragment_view``：区间/字节为权威读流单元的
         裁剪值，entry_id 沿用源条目——来源引用 pin 锚定真实条目）。
         池条目不进片上来源集（池恢复走 ``query_pool_intervals`` 另列，
-        不与片上 remote-read 混成同一资源，§6.2）。
+        §6.2 分列披露）。
         """
         covered = self._target_covered_rectangles(
             session_id, target_instance)

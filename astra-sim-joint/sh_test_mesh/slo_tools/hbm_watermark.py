@@ -573,19 +573,19 @@ REPO_VARIANTS: dict[str, dict] = {
             "trace_config: local_hbm_capacity_profile → hardware json 同 FACE",
         # R12（2026-09-14）：joint 专属事件入重放词表——跨实例工作副本
         # 双驻留记账（base/working）、merge 增量回传（noc→home）与池写、
-        # home_merge_base_degrade 自降级、remote-read 仅增量驻留、
-        # recompute@home 缺失后缀物化（R13）。决策行的 joint 专属审计行
+        # home_merge_base_degrade 自降级、recompute@home 缺失后缀物化
+        # （R13）。决策行的 joint 专属审计行
         # （joint_admission/joint_admission_failed/joint_admission_wait/
         # joint_decode_stall/joint_decode_wake）非账本行，跳过不进重放。
         # merge v2（2026-09-17《部分层逐出kv管理改造分析方案》需求①②）：
         # completion 行 merge_direction=forward/reverse/in_place 走 v2
         # 重放（_joint_completion_v2——零池写断言/方向交叉校验/home 迁移
-        # 计数 joint_home_migration；remote-read PARTIAL 混合形态的准入
-        # 池恢复后缀进期望工作副本基数）；无该字段的旧日志走 legacy。
+        # 计数 joint_home_migration；copy PARTIAL 基的准入池恢复后缀经
+        # history_transfers 腿入账）；无该字段的旧日志走 legacy。
         # W2（2026-09-27，C4/D12 三位置形态）：decode 行
         # prefill_decode_transfer 的无迁移边界披露（local_hit@新执行端、
-        # 字节 0、reason=boundary_rebuild_elsewhere/
-        # boundary_remote_no_migration）把 i_P 旧工作副本转来源侧记录
+        # 字节 0、reason=boundary_rebuild_elsewhere）把 i_P 旧工作副本
+        # 转来源侧记录
         # （session 第三槽），completion 行按 winner/loser 位置集合做三位置
         # 结算（_joint_completion_three_position——逐败者整份腿源扣/胜者加、
         # 重建形态零载荷静默释放、胜者终态守恒 == f(final)、reverse ⟺
@@ -613,16 +613,15 @@ REPO_VARIANTS: dict[str, dict] = {
         # （ServiceFactors 争用样本拒收 + 观测窗口端口占用摘要）入表
         # ——纯采样纯度披露，不载运任何 KV 账本事件；request_id 可为空
         # （own_request_ids 空时发射面落 ""），跳过位于 request_id 门之
-        # 前故不需豁免。readplan_reconcile/readplan_settle 的占用语义
-        # 钉测见 test_hbm_watermark_staging_lease（同账本混插审计行逐
-        # 字节对拍 = 零占用差）。
+        # 前故不需豁免。readplan_reconcile/readplan_settle 属历史 run 的
+        # 纯审计行词表（同款零占用语义，逐字节对拍钉测随远读退役批整删）。
         # W4（2026-09-27，D 边界就地并基折叠）：decode 行 prefill_decode_
         # transfer 的迁移腿落点 == base 槽实例 = workload 折叠形态
-        # （complete_copy_base_fold / remote_read_base_fold /
-        # increment_copy_home_u_only——base_* 转正/释放后清账，下一轮
-        # stash 是合法重建）——按迁移腿字节与 f(P) 的恒等式二分清账
-        # （完整型：重复基础副本释放；增量型：基础前缀就地转正并入、
-        # 增长基切完整上下文族），见 _apply_boundary_base_fold；折叠轮
+        # （complete_copy_base_fold / increment_copy_home_u_only——
+        # base_* 转正/释放后清账，下一轮 stash 是合法重建）——按迁移腿
+        # 字节与 f(P) 的恒等式二分清账（完整型：重复基础副本释放；
+        # 增量型：基础前缀就地转正并入、增长基切完整上下文族），见
+        # _apply_boundary_base_fold；折叠轮
         # 的 completion 行 merge_direction=stay 与 base 槽在册互斥
         # （未知形态 fail-closed）。钉测 test_hbm_watermark_base_fold。
         "joint": True,
@@ -666,18 +665,6 @@ REPO_VARIANTS: dict[str, dict] = {
             # 误红（任何正常 joint run 的水印重放必崩 exit 2）。
             "forecast_status",
         ),
-        # W3（2026-09-27，C2/C3 KVStagingLease 生命周期行）：staging_
-        # lease_acquire / staging_lease_release 是**账本行**（非审计行）
-        # ——remote-read 双缓冲暂存的执行期 HBM 持有（D09/D20：准入/
-        # drain 两发射面，prefill_read 相与 decode 相各一 lease，身份 =
-        # "staging_lease:{request_id}#{boundary_epoch}"，字节 = 逐 rank
-        # staging_shard_bytes，持有实例 = exec_instance_index）。重放语
-        # 义见 WatermarkReplay.apply_staging_lease_acquire/release；
-        # run 末悬挂 lease fail-closed（WatermarkScan.finish）。不进
-        # joint_audit_kinds（那会静默丢字节），也不进下面的三 kind 主
-        # 门——consume() 在 kv_eviction 分支后按本词表分流。
-        "joint_lease_kinds": ("staging_lease_acquire",
-                              "staging_lease_release"),
     },
 }
 
@@ -1467,11 +1454,10 @@ class SessionState:
 
     W2（2026-09-27，joint C4/D12 三位置形态）：source_instance/source_
     bytes = 边界第二来源槽（i_P 侧旧工作副本——decode 行
-    boundary_rebuild_elsewhere/boundary_remote_no_migration 无迁移披露建立，
-    三位置合并结算时清账）；boundary_kind = 该边界的执行面动作族
-    （"rebuild"=recompute 重建副本持完整并集 / "growth_only"=多源远读
-    仅 decode 增长），决定 decode 行增长口径与 completion 结算形态，
-    仅在来源槽建立至结算之间在册。
+    boundary_rebuild_elsewhere 无迁移披露建立，三位置合并结算时清账）；
+    boundary_kind = 该边界的执行面动作族（"rebuild"=重建副本持完整
+    并集——三动作下唯一形态），决定 decode 行增长口径与 completion
+    结算形态，仅在来源槽建立至结算之间在册。
 
     W4（2026-09-27，joint 边界折叠）：base 槽除合并结算（v2/three-
     position）外另有折叠清账路径——D 边界迁移腿落 base 驻留实例的
@@ -1543,10 +1529,6 @@ class WatermarkReplay:
         self.coef = coef_bytes_per_token
         self.capacity = capacity_per_instance
         self.sessions: dict[str, SessionState] = {}
-        # W3（2026-09-27）：staging lease 在册表（request_id → 跟踪 lease
-        # 条目）——manager 同款"同请求同时至多一条在册"约束的镜像；
-        # run 末非空 = 悬挂 lease，fail-closed（finish）。
-        self.staging_leases: dict[str, dict] = {}
         # P1-②/④：事件/逐出标记直入变点日志（RLE），不再物化裸事件表；
         # stats 从变点归并时 O(动作数) 计算，与桶长解耦。
         self.cplog = ChangePointLog()
@@ -1961,110 +1943,6 @@ class WatermarkReplay:
 
     # -- W3（2026-09-27）：KVStagingLease 执行期持有重放（joint） ----------
 
-    def apply_staging_lease_acquire(self, request_id: str, decision: dict,
-                                    tick: int, where: str) -> None:
-        """staging_lease_acquire 行重放——exec 实例逐 rank 暂存字节加持有。
-
-        符号锚（face_scheduler.acquire_staging_lease / KVStagingLease，
-        2026-09-27 在盘核对）：
-          * 身份 = ``"staging_lease:{request_id}#{boundary_epoch}"``
-            （D20 边界阶段 epoch）；lease_id 与请求头/epoch 的复合身份
-            失配 = 账本行破损，fail-closed。
-          * 字节 = 逐 rank ``staging_shard_bytes``（manager 侧要求每 rank
-            正整数、条数 == tp_degree；重放按实例合计入账——decision-log
-            路径本就实例粒度（coef 同口径），per-rank 值经元组整存以支撑
-            幂等重取的字节级比对）。``staging_tile_tokens`` 正整数（tile
-            协议参数，无占用语义，仅随 lease 记账）。可选 ``phase``
-            （"prefill_read"=准入相读流 lease）/``scans_per_window`` 为
-            发射面审计字段，重放不消费。
-          * 幂等镜像：同请求在册 lease 且 (lease_id, 实例, 逐 rank 字节,
-            tile) 完全一致 → manager 原样返回不重复入账，重放零 delta
-            （boundary 在途 ack 重放的二次发射面）；在册而 lease_id/条款
-            失配 → manager 侧即 double-hold/条款冲突 RuntimeError，重放
-            同判 fail-closed（宁爆不漏——日志面无法区分"真双持"与"静默
-            回滚后换条款再取"，后者按 fail-closed 拒收）。
-        """
-        lease_id = decision.get("lease_id")
-        if not isinstance(lease_id, str) or not lease_id:
-            fail(f"{where}: staging_lease_acquire 缺非空 lease_id")
-        epoch = decision.get("boundary_epoch")
-        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
-            fail(f"{where}: staging_lease_acquire 缺非负整数 boundary_epoch"
-                 f"（实得 {epoch!r}）")
-        expected_id = f"staging_lease:{request_id}#{epoch}"
-        if lease_id != expected_id:
-            fail(f"{where}: lease_id {lease_id!r} != 复合身份 "
-                 f"{expected_id!r}——请求头与 lease 身份不一致，账本破损")
-        instance = decision.get("exec_instance_index")
-        if isinstance(instance, bool) or not isinstance(instance, int) \
-                or instance < 0:
-            fail(f"{where}: staging_lease_acquire 缺非负整数 "
-                 f"exec_instance_index（实得 {instance!r}）")
-        shards = decision.get("staging_shard_bytes")
-        if not isinstance(shards, list) or not shards:
-            fail(f"{where}: staging_lease_acquire 缺非空 "
-                 f"staging_shard_bytes 数组")
-        for value in shards:
-            if isinstance(value, bool) or not isinstance(value, int) \
-                    or value <= 0:
-                fail(f"{where}: staging_lease_acquire 逐 rank 字节必须为"
-                     f"正整数（实得 {value!r}）——manager 侧同判")
-        tile_tokens = decision.get("staging_tile_tokens")
-        if isinstance(tile_tokens, bool) or not isinstance(tile_tokens, int) \
-                or tile_tokens <= 0:
-            fail(f"{where}: staging_lease_acquire 缺正整数 "
-                 f"staging_tile_tokens（实得 {tile_tokens!r}）")
-        terms = (lease_id, instance, tuple(shards), tile_tokens)
-        live = self.staging_leases.get(request_id)
-        if live is not None:
-            if tuple(live["terms"]) == terms:
-                # 幂等重取（manager 返回同 lease 不再入账）——零 delta。
-                self.report.actions["staging_lease_acquire_idempotent"] = (
-                    self.report.actions.get(
-                        "staging_lease_acquire_idempotent", 0) + 1)
-                return
-            fail(f"{where}: 请求 {request_id!r} 已持 lease "
-                 f"{live['terms'][0]!r}（instance={live['terms'][1]}, "
-                 f"bytes={list(live['terms'][2])}）又取条款失配的 "
-                 f"{lease_id!r}（instance={instance}, bytes={shards}）——"
-                 f"同请求双持/条款冲突，manager 侧即 fail-closed，"
-                 f"账本与重放不一致")
-        total = sum(shards)
-        self.staging_leases[request_id] = {"terms": terms}
-        self._apply(tick, instance, total)
-        self.report.actions["staging_lease_acquire"] = (
-            self.report.actions.get("staging_lease_acquire", 0) + 1)
-        self.report.actions["staging_lease_acquire_bytes"] = (
-            self.report.actions.get("staging_lease_acquire_bytes", 0)
-            + total)
-
-    def apply_staging_lease_release(self, request_id: str, decision: dict,
-                                    tick: int, where: str) -> None:
-        """staging_lease_release 行重放——在册 lease 逐 rank 字节减持有。
-
-        发射面（sh30._release_staging_lease）只在 manager 真删（返回
-        True）且 tick 非 None 时落行；行内仅 ``reason``（注销路三束：
-        最后 credit tile 消费/完成结算/异常回滚——审计字段，不载运字节，
-        扣减量取 acquire 行跟踪态）。无在册 lease 的 release 行 = 发射面
-        不可产出的形态（manager 幂等空放不落行），fail-closed。"""
-        reason = decision.get("reason")
-        if not isinstance(reason, str) or not reason:
-            fail(f"{where}: staging_lease_release 缺非空 reason")
-        live = self.staging_leases.get(request_id)
-        if live is None:
-            fail(f"{where}: 请求 {request_id!r} 的 staging_lease_release "
-                 f"无在册 lease（reason={reason!r}）——发射面只对真删落行，"
-                 f"账本与重放不一致")
-        lease_id, instance, shards, _tile = live["terms"]
-        del self.staging_leases[request_id]
-        self._apply(tick, instance, -sum(shards))
-        self.report.actions["staging_lease_release"] = (
-            self.report.actions.get("staging_lease_release", 0) + 1)
-        self.report.actions["staging_lease_release_bytes"] = (
-            self.report.actions.get("staging_lease_release_bytes", 0)
-            + sum(shards))
-
-
 # ---------------------------------------------------------------------------
 # 决策记录 → 动作流
 # ---------------------------------------------------------------------------
@@ -2137,30 +2015,6 @@ class WatermarkScan:
                 bucket = f"evict_reason_kv_eviction:{action.get('reason')}"
                 replay.report.actions[bucket] = (
                     replay.report.actions.get(bucket, 0) + 1)
-            return
-        if kind in mapping.get("joint_lease_kinds", ()) \
-                and mapping.get("joint"):
-            # W3（2026-09-27）：staging lease 账本行——执行期 HBM 持有，
-            # 必须在未知 kind 门之前分流（同 kv_eviction 模式：同请求可
-            # 多对 acquire/release（prefill_read 相与 decode 相各一），
-            # 不经 seen_kinds 去重；不查 token manifest——lease 先于准入
-            # 事务发射，触发请求在飞；分支自行承担 tick 单调检查，不绕
-            # 过次序纪律）。
-            decision = record.get("decision") or {}
-            tick = record.get("tick")
-            if not isinstance(tick, int) or tick < 0:
-                fail(f"{where}: 缺非负整数 tick")
-            if tick < self.last_tick:
-                fail(f"{where}: tick 回退（{tick} < {self.last_tick}，"
-                     f"kind={kind}）——文件顺序与时间顺序不一致，"
-                     f"无法安全重放")
-            self.last_tick = tick
-            if kind == "staging_lease_acquire":
-                replay.apply_staging_lease_acquire(
-                    request_id, decision, tick, where)
-            else:
-                replay.apply_staging_lease_release(
-                    request_id, decision, tick, where)
             return
         if kind not in ("prefill", "decode", "completion"):
             fail(f"{where}: 未知 kind={kind!r}")
@@ -2254,11 +2108,11 @@ class WatermarkScan:
                        token_row) -> None:
         """R12：joint prefill 行重放——工作副本语义按动作分流。
 
-        copy/recompute/remote-read 跨实例：home 侧基础驻留转 base 记账
-        （源不扣减、不低估）；工作副本 = 迁移字节（copy）/0（recompute/
-        remote-read）起步，再按动作口径增长到工作上下文（remote-read
-        仅 input 增量；其余 prefill_context）。recompute@home 的缺失
-        后缀物化（R13，无传输记录）由"增长到完整上下文"自然覆盖。
+        copy/recompute 跨实例：home 侧基础驻留转 base 记账（源不扣减、
+        不低估）；工作副本 = 迁移字节（copy，PARTIAL 基时另含池恢复
+        后缀的 remote_load 腿）/0（recompute）起步，再增长到工作上下文
+        （prefill_context）。recompute@home 的缺失后缀物化（R13，无传
+        输记录）由"增长到完整上下文"自然覆盖。
         stay：走通用恢复/增长（suffix 池恢复 + 全上下文增长）。"""
         action = decision["joint_action"]
         target = decision.get("prefill_instance_index")
@@ -2267,7 +2121,6 @@ class WatermarkScan:
         if not isinstance(target, int):
             fail(f"joint prefill 决策缺整数 prefill_instance_index"
                  f"（session={session_id!r}, got {target!r}）")
-        history_tokens = token_row["history_tokens_before"]
         prefill_context = token_row["prefill_context_tokens"]
         # R17-3（2026-09-16）：fail-early——丢弃历史词元的未演练词表显式
         # 拒收（重放无此语义，静默吞掉会系统性漏记被丢弃的驻留）。
@@ -2317,20 +2170,8 @@ class WatermarkScan:
                 fail(f"joint history transfer 出现未知 kind={kind!r}"
                      f"（session={session_id!r}, bytes={nbytes}）——"
                      f"joint 重放词表未覆盖，拒绝静默丢弃")
-        if action == "remote-read":
-            # 混合形态（需求①，2026-09-17）：PARTIAL 基准入相池恢复的后缀
-            # S 是历史形字节（层区间派生），不参与 coef 增量推导——期望
-            # 工作副本 = S（日志真值）＋ coef(增量)。LOCAL 基 restored=0
-            # 零行为差（回归锚）。
-            restored_suffix = sum(
-                transfer["total_bytes"]
-                for transfer in decision.get("history_transfers") or ()
-                if transfer.get("kind") == "remote_load")
-            grow_tokens = max(0, prefill_context - history_tokens)
-        else:
-            restored_suffix = 0
-            grow_tokens = prefill_context
-        desired = restored_suffix + replay._expected_bytes(grow_tokens)
+        grow_tokens = prefill_context
+        desired = replay._expected_bytes(grow_tokens)
         # R17-3（2026-09-16）：对称校验——增长语义只增不减（与 decode_grow
         # 的 apply_grow 负增长 fail 同构）；缩小时静默保留旧值会把逐出缺口
         # 的幻影 bytes 结转下去，必须在产生点 fail-early。
@@ -2359,14 +2200,13 @@ class WatermarkScan:
         ``_apply_prefill_decode_move``。缺此步会把工作副本留在源实例成
         幻影，完成结算在目标实例多扣 → 负占用 fail-closed。
 
-        增长口径：remote-read 工作副本增长基 = input+decode（= final −
-        history）；其余动作 = final_context。
+        增长口径：工作副本增长基 = final_context（三动作统一；远读增量
+        增长基随远读退役删除，2026-10-14）。
 
         W2（2026-09-27，C4 三位置边界后的增长基，按 D18 边界动作族）：
         来源槽在册（本行边界刚建立）时按 boundary_kind 覆盖——重建
-        （rebuild）j 侧副本自 0 物化至完整终上下文；多源远读
-        （growth_only）j 侧仅承载 decode 增量（= final − prefill_context，
-        input 留 i_P 来源侧）。无来源槽的行为与 W1 逐位一致。
+        （rebuild）j 侧副本自 0 物化至完整终上下文（三动作下唯一边界
+        动作族）。无来源槽的行为与 W1 逐位一致。
 
         W4（2026-09-27，边界折叠后的增长基）：迁移腿落 base 驻留实例的
         就地并基折叠把工作副本口径并回完整上下文族——增量型折叠
@@ -2387,14 +2227,6 @@ class WatermarkScan:
             grow_tokens = token_row["final_context_tokens"]
         elif session.boundary_kind == "rebuild":
             grow_tokens = token_row["final_context_tokens"]
-        elif session.boundary_kind == "growth_only":
-            grow_tokens = max(
-                0, token_row["final_context_tokens"]
-                - token_row["prefill_context_tokens"])
-        elif joint_action == "remote-read":
-            grow_tokens = max(
-                0, token_row["final_context_tokens"]
-                - token_row["history_tokens_before"])
         else:
             grow_tokens = token_row["final_context_tokens"]
         replay.apply_grow(tick, session_id, target, grow_tokens,
@@ -2438,13 +2270,13 @@ class WatermarkScan:
                 # source 是**新执行端 j**（face_scheduler 边界事务先零化
                 # 会话再产 local_hit，字节恒 0），而跟踪主副本仍在 i_P——
                 # 无迁移边界形态：旧工作副本不搬、留 i_P 转来源侧记录，
-                # j 侧新副本零化起步（rebuild/growth_only 由增长钩子物化）。
-                # reason 词表 = face_scheduler 边界事务的两个 j≠i_P 无迁移
-                # kind；其他 reason 保持原 fail（宁爆不漏）。
+                # j 侧新副本零化起步（rebuild 由增长钩子物化）。
+                # reason 词表 = face_scheduler 边界事务的 j≠i_P 无迁移
+                # kind（三动作下唯一值）；其他 reason 保持原 fail（宁爆
+                # 不漏）。
                 reason = transfer.get("reason")
                 nbytes0 = transfer.get("total_bytes")
-                if (reason in ("boundary_rebuild_elsewhere",
-                               "boundary_remote_no_migration")
+                if (reason == "boundary_rebuild_elsewhere"
                         and isinstance(nbytes0, int) and nbytes0 == 0):
                     if session.source_instance is not None:
                         fail(f"joint decode 边界重复建立来源侧（session="
@@ -2490,9 +2322,7 @@ class WatermarkScan:
                         # resident_prefix_layers = model.layers）。
                         session.prefix_layers = (
                             replay.mapping.get("model_layers"))
-                        session.boundary_kind = (
-                            "rebuild" if reason == "boundary_rebuild_elsewhere"
-                            else "growth_only")
+                        session.boundary_kind = "rebuild"
                         replay.report.actions[
                             "joint_boundary_base_rerecord"] = (
                                 replay.report.actions.get(
@@ -2516,9 +2346,7 @@ class WatermarkScan:
                     # 均为全层跨度增长）。
                     session.prefix_layers = (
                         replay.mapping.get("model_layers"))
-                    session.boundary_kind = (
-                        "rebuild" if reason == "boundary_rebuild_elsewhere"
-                        else "growth_only")
+                    session.boundary_kind = "rebuild"
                     return
                 fail(f"joint decode 同实例交割披露 instance={source} != 跟踪"
                      f"实例 {session.instance}（session={session_id!r}, "
@@ -2558,10 +2386,10 @@ class WatermarkScan:
     def _apply_boundary_base_fold(self, replay, decision, tick, session_id,
                                   token_row, session):
         """W4（2026-09-27，D 边界就地并基折叠的词表补齐）：迁移腿落点
-        == base 驻留实例 → workload 侧三种折叠（complete_copy_base_fold /
-        remote_read_base_fold / increment_copy_home_u_only）都把 base_* 记
-        录清账（基础转正或重复副本释放），下一轮跨实例 prefill 重新
-        stash base 是合法重建——重放必须在折叠点同步清 base 槽。
+        == base 驻留实例 → workload 侧的折叠（complete_copy_base_fold /
+        increment_copy_home_u_only）把 base_* 记录清账（基础转正或重复
+        副本释放），下一轮跨实例 prefill 重新 stash base 是合法重建——
+        重放必须在折叠点同步清 base 槽。
 
         占用语义按迁移腿字节 W 与 f(prefill_context) 的恒等式二分（镜像
         face_scheduler 折叠分支的字节守恒；两式均不成立 = 未演练词表，
@@ -2999,14 +2827,14 @@ class WatermarkScan:
         """W2（2026-09-27，C4/D12 三位置确定性合并重放）。
 
         跟踪面 = {(base), source, exec} 三位置：source = i_P 侧旧工作副本
-        （decode 行 boundary_rebuild_elsewhere/boundary_remote_no_migration
-        无迁移披露建立）；base = 跨实例工作副本的 home 侧 stash（LOCAL/
-        PARTIAL 基；REMOTE 基不成位置，manager 侧不会产生来源槽）。
-        占用语义与 face_scheduler._merge_back_three_position 同构：
+        （decode 行 boundary_rebuild_elsewhere 无迁移披露建立）；base =
+        跨实例工作副本的 home 侧 stash（LOCAL/PARTIAL 基；REMOTE 基不
+        成位置，manager 侧不会产生来源槽）。占用语义与
+        face_scheduler._merge_back_three_position 同构：
 
-        * 多源形态（growth_only）：逐败者一腿 noc 整份搬入胜者（腿字节 =
-          该位置跟踪全量——镜像 W1 整份搬移口径），胜者 = 腿字节合计的
-          接收端；方向 reverse ⟺ 胜者 = exec，否则 forward。
+        * 多位置形态：逐败者一腿 noc 整份搬入胜者（腿字节 = 该位置跟踪
+          全量——镜像 W1 整份搬移口径），胜者 = 腿字节合计的接收端；
+          方向 reverse ⟺ 胜者 = exec，否则 forward。
         * 重建形态（rebuild，exec 持完整并集）：零传输（合并账
           zero_byte_flip），败者重复副本直接释放；胜者恒 = exec（reverse）。
           重合持有者唯一合法形态 = 重建×base 与 exec 同实例（recompute@
@@ -3247,19 +3075,6 @@ class WatermarkScan:
                  f"{missing[:5]}，共 {len(missing)}）——两源请求集不一致")
         if not self.replay.cplog.has_events():
             fail(f"{self.log_path}: 没有任何可重放的 KV 动作")
-        # W3（2026-09-27）：run 末悬挂 staging lease fail-closed——
-        # acquire/release 必须配平（发射面对真删才落 release 行；tick=None
-        # 的静默回滚不落行，其残留即在册悬挂——重放拒绝以静默上界收尾，
-        # 与 workload verify_run_end 的 lease 泄漏审计（在册非空 =
-        # 生命周期断链）同构，宁爆不漏）。
-        if self.replay.staging_leases:
-            dangling = sorted(
-                entry["terms"][0]
-                for entry in self.replay.staging_leases.values())
-            fail(f"{self.log_path}: run 末仍有 {len(dangling)} 条悬挂 "
-                 f"staging lease（acquire/release 未配平，前 5 例："
-                 f"{dangling[:5]}）——执行期暂存持有的生命周期断链，"
-                 f"fail-closed")
         return self.replay
 
 

@@ -5,8 +5,8 @@ P=recompute 全量重建副本转记 boundary_source 后的三位置结算守恒
 
 背景（probe_20260927T213113Z / session_3_request_1__P__recompute 臂红，
 delivery_sequence=173）：P=recompute 在 i_P 全量重建 H_B（base 驻留
-第三方实例不动）→ D 边界 remote-read@j≠i_P 把 i_P 旧副本（物理持有
-base＋U 完整 token 域）转记 boundary_source → 轮末
+第三方实例不动）→ D 边界动作@j≠i_P 把 i_P 旧副本（物理持有
+base＋U 完整 token 域）转记 → 轮末
 ``_merge_back_three_position`` 直和结算把 base 位置与"已覆盖 base 域
 的来源"字节相加（probe 实测：11837＋18271＋1 = 30109 token ≠ 全史
 18272 token，多出恰一个 base）→ 守恒断言 fail-closed：
@@ -21,11 +21,11 @@ repro_kv_drift.py）都只走到边界事务 + 审计，**从未跑轮末 merge 
 ——本钉测补全链：base@第三方实例 + P=recompute@i_P + D
 recompute/remote-read@j（异地）+ decode 增长 + 三位置 merge 结算。
 
-被钉语义（修复后）：
+被钉语义（修复后；2026-10-14 远读退役：D 边界承载动作由
+remote-read 换 copy/recompute 双锚）：
   1. 来源侧完整并集（i_P 旧副本 = P=recompute 重建，token 域 ⊇ base）
-     结算：base 重复副本零载荷释放、不并入 winner 侧、不计入容量需
-     求；胜者 = 保留量最大者（重建来源，或 decode 增长超过来源后的
-     exec）恰持全史字节，其余位置归零；
+     结算：base 重复副本零载荷释放、不并入 winner 侧；胜者恰持全史
+     字节，其余位置归零；
   2. ``账本字节 ≡ 物理字节``全程成立：merge 后全量 strict 审计
      （_check_invariants）与增量通道
      （_check_invariants_after_mutation）双绿，会话 base_*/boundary_
@@ -128,91 +128,58 @@ def _drive_to_merge(kv, *, action, growth_tokens):
         target_instance_index=THIRD_INSTANCE, action=action,
         history_tokens=final_tokens, trigger_request_id="r1")
     session = kv._sessions["s"]
-    # 修复面 1：P=recompute 旧副本转记来源时必须登记完整并集标志
-    # （getattr 兼容：修复前面无此字段，钉测须走到 merge 撞守恒 raise
-    # ——红在真根因，不红在探针自身）。
-    if action in ("recompute", "remote-read"):
-        self_union = getattr(
-            session, "boundary_source_complete_union", False)
     if action == "recompute":
         # D 重建副本按绝对口径物化至 H_B＋增长（sh30
         # _joint_working_context 的 joint_decode_rebuild_tokens 分支）。
         materialized = final_tokens + growth_tokens
-    elif action == "remote-read":
-        # 多源远读工作副本零化起步，仅承载 decode 增量。
-        materialized = growth_tokens
     else:
-        materialized = None
-    if materialized is not None and (
-            action != "remote-read" or growth_tokens):
-        kv.expand_decode(
-            session_id="s", instance_index=THIRD_INSTANCE,
-            final_context_tokens=materialized,
-            trigger_request_id="r1")
+        # copy 迁移副本持完整上下文，增长在其上延伸。
+        materialized = final_tokens + growth_tokens
+    kv.expand_decode(
+        session_id="s", instance_index=THIRD_INSTANCE,
+        final_context_tokens=materialized,
+        trigger_request_id="r1")
     kv.merge_back(
         session_id="s", trigger_request_id="r1", new_tokens=growth_tokens)
     return session
 
 
 class SourceUnionThreePositionMergePin(unittest.TestCase):
-    """probe 红同型钉测：P=recompute → D remote-read@异地 → merge 三位
-    置结算——base 重复副本零载荷释放，胜者恰持全史（修复前守恒炸）。"""
+    """probe 红同型钉测（2026-10-14 远读退役改写：D 边界承载动作由
+    remote-read 换 copy——P=recompute 重建副本转记后 D=copy@异地迁移，
+    迁移/折叠链的守恒与账本≡物理语义）：胜者恰持全史、无 stranded
+    字节、双审计绿。"""
 
-    def test_merge_settles_conservation_with_duplicate_base_release(self):
+    def test_migration_settles_conservation_with_duplicate_base_release(self):
         kv = _p_recompute_kv()
-        session = _drive_to_merge(
-            kv, action="remote-read", growth_tokens=1)
+        _drive_to_merge(kv, action="copy", growth_tokens=1)
         total_tokens = HISTORY_TOKENS + INPUT_TOKENS + 1
         full_shards = kv_cache_shard_bytes_for_tokens(
             kv.model, total_tokens, kv.tp_degree)
         outcome = kv.last_merge_outcome
-        self.assertTrue(outcome["three_position"])
-        # 保留量最大者（重建来源 = i_P）为胜者；exec 增量整份搬入。
-        self.assertEqual(outcome["winner_instance"], P_INSTANCE)
-        self.assertEqual(outcome["loser_instances"], (THIRD_INSTANCE,))
-        # 修复面 2：胜者侧恰持全史字节（修复前直和 = base 计两遍 →
-        # conservation raise）。
+        # copy 迁移副本持完整并集（base/来源两处重复副本零载荷释放）。
+        self.assertTrue(outcome["zero_byte_flip"])
+        self.assertEqual(outcome["winner_instance"], THIRD_INSTANCE)
         self.assertEqual(
-            _instance_bytes(kv, P_INSTANCE),
+            _instance_bytes(kv, THIRD_INSTANCE),
             tuple(int(v) for v in full_shards))
-        # base 重复副本与 exec 增量侧都归零（无 stranded 字节）。
         self.assertEqual(_instance_bytes(kv, HOME_INSTANCE), (0, 0))
-        self.assertEqual(_instance_bytes(kv, THIRD_INSTANCE), (0, 0))
-        # 账本终态：会话字段全清、上下文 = 全史、字节 = 账本真值。
+        self.assertEqual(_instance_bytes(kv, P_INSTANCE), (0, 0))
+        session = kv._sessions["s"]
         self.assertEqual(session.context_tokens, total_tokens)
         self.assertEqual(
             tuple(int(v) for v in session.shard_bytes),
             tuple(int(v) for v in full_shards))
         self.assertIsNone(session.working_kind)
-        self.assertIsNone(session.base_instance_index)
-        self.assertIsNone(session.boundary_source_instance_index)
-        self.assertFalse(session.boundary_source_complete_union)
-        # 全程"账本字节 ≡ 物理字节"：全量 strict + 增量通道双绿。
         kv._check_invariants()
         kv._check_invariants_after_mutation(session_ids=("s",))
 
-    def test_merge_capacity_demand_excludes_duplicate_base(self):
-        """重复副本不计入容量需求：胜者只需接纳 exec 增量（probe 形态
-        的隐性收益——修复前 required 含整份 base，可能诱发无谓逐出）。"""
-        kv = _p_recompute_kv()
-        _drive_to_merge(kv, action="remote-read", growth_tokens=1)
-        fallback = kv.last_merge_outcome["fallback_sequence"]
-        committed = [step for step in fallback
-                     if step["outcome"] == "committed"]
-        self.assertEqual(len(committed), 1)
-        increment = kv_cache_shard_bytes_for_tokens(
-            kv.model, 1, kv.tp_degree)
-        self.assertEqual(
-            tuple(int(v) for v in committed[0]["required"]),
-            tuple(int(v) for v in increment))
-
     def test_merge_with_exec_growth_beyond_source(self):
-        """decode 增长超过来源保留量后胜者翻到 exec 侧——同一守恒式在
-        两种胜者选择下都成立（式(21) 保留量序回归锚）。"""
+        """decode 增长超过来源保留量后胜者仍在 exec 侧——同一守恒式在
+        两种增长量级下都成立（式(21) 保留量序回归锚）。"""
         kv = _p_recompute_kv()
         growth = HISTORY_TOKENS + INPUT_TOKENS + 8
-        session = _drive_to_merge(
-            kv, action="remote-read", growth_tokens=growth)
+        _drive_to_merge(kv, action="copy", growth_tokens=growth)
         total_tokens = HISTORY_TOKENS + INPUT_TOKENS + growth
         full_shards = kv_cache_shard_bytes_for_tokens(
             kv.model, total_tokens, kv.tp_degree)
@@ -223,7 +190,6 @@ class SourceUnionThreePositionMergePin(unittest.TestCase):
             tuple(int(v) for v in full_shards))
         self.assertEqual(_instance_bytes(kv, HOME_INSTANCE), (0, 0))
         self.assertEqual(_instance_bytes(kv, P_INSTANCE), (0, 0))
-        self.assertEqual(session.context_tokens, total_tokens)
         kv._check_invariants()
         kv._check_invariants_after_mutation(session_ids=("s",))
 
@@ -254,53 +220,9 @@ class CompleteUnionExecRebuildRegressionPin(unittest.TestCase):
         kv._check_invariants_after_mutation(session_ids=("s",))
 
 
-class IncrementalSourceRegressionPin(unittest.TestCase):
-    """回归锚：增量型来源（P=remote-read 的 U 残留 i_P，不覆盖 base 域）
-    三位置直和结算语义不变——base＋source＋exec 直和恰为全史。"""
-
-    def test_incremental_remote_read_source_still_additive(self):
-        kv = KVCacheManager(_topology(_hardware()), _model())
-        kv.prepare_prefill(
-            session_id="s", target_instance_index=HOME_INSTANCE,
-            history_tokens=0, trigger_request_id="seed")
-        kv.expand_prefill(
-            session_id="s", instance_index=HOME_INSTANCE,
-            context_tokens=HISTORY_TOKENS, trigger_request_id="seed")
-        kv.mark_complete("s", 100)
-        # P=remote-read（LOCAL 基）：基础留 home，工作副本仅增量。
-        kv.prepare_prefill(
-            session_id="s", target_instance_index=P_INSTANCE,
-            history_tokens=HISTORY_TOKENS, trigger_request_id="r1",
-            action="remote-read")
-        kv.expand_prefill(
-            session_id="s", instance_index=P_INSTANCE,
-            context_tokens=INPUT_TOKENS, trigger_request_id="r1")
-        kv.commit_boundary_decode_transition(
-            session_id="s", p_instance_index=P_INSTANCE,
-            target_instance_index=THIRD_INSTANCE, action="recompute",
-            history_tokens=HISTORY_TOKENS + INPUT_TOKENS,
-            trigger_request_id="r1")
-        session = kv._sessions["s"]
-        # 增量型旧副本（U 段）不得登记完整并集标志。
-        self.assertFalse(getattr(
-            session, "boundary_source_complete_union", False))
-        kv.expand_decode(
-            session_id="s", instance_index=THIRD_INSTANCE,
-            final_context_tokens=(HISTORY_TOKENS + INPUT_TOKENS + 1),
-            trigger_request_id="r1")
-        kv.merge_back(session_id="s", trigger_request_id="r1", new_tokens=1)
-        total_tokens = HISTORY_TOKENS + INPUT_TOKENS + 1
-        full_shards = kv_cache_shard_bytes_for_tokens(
-            kv.model, total_tokens, kv.tp_degree)
-        outcome = kv.last_merge_outcome
-        self.assertEqual(outcome["winner_instance"], THIRD_INSTANCE)
-        self.assertEqual(
-            _instance_bytes(kv, THIRD_INSTANCE),
-            tuple(int(v) for v in full_shards))
-        self.assertEqual(_instance_bytes(kv, HOME_INSTANCE), (0, 0))
-        self.assertEqual(_instance_bytes(kv, P_INSTANCE), (0, 0))
-        kv._check_invariants()
-        kv._check_invariants_after_mutation(session_ids=("s",))
+# （原 IncrementalSourceRegressionPin（增量型来源 P=remote-read 的
+# U 残留三位置直和）已随 2026-10-14 远读退役删除：增量布局三动作下
+# 不可构造；来源并集语义由 SourceUnion/CompleteUnion 两类承接。）
 
 
 if __name__ == "__main__":

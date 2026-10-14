@@ -119,7 +119,7 @@ def _stay_partial(model, loads, total_on_target=0):
         missing=(1000, 1000), location="partial_hbm_remote", prefix=2)
     return model.estimate_P_with_continuation(
         session=session, request=_request(), instance_index=1,
-        action=ACTION_STAY, remote_enabled=True)
+        action=ACTION_STAY)
 
 
 KV_TOKEN_BYTES = 128
@@ -132,8 +132,7 @@ def _complete_boundary(**overrides):
         session_id="s", home_instance=0, p_instance_index=0,
         p_action="stay", history_tokens=100,
         working_bytes_by_tp_rank=(KV_TOKEN_BYTES * 100,) * 2,
-        base_bytes_by_tp_rank=(0, 0), decode_steps=DECODE_STEPS,
-        base_tokens=100, kv_token_bytes=KV_TOKEN_BYTES)
+        decode_steps=DECODE_STEPS, kv_token_bytes=KV_TOKEN_BYTES)
     values.update(overrides)
     return PDBoundaryView(**values)
 
@@ -143,8 +142,7 @@ def _d_model(loads):
         rates=_rates(), loads=loads, flow_registry=LinkFlowRegistry(),
         service_factors=ServiceFactors(),
         prefill_ns_per_token=1.0, decode_ns_per_token=2.0,
-        model_layers=4, instance_tp_size=2, route_fn=_route,
-        remote_read_kv_token_bytes=KV_TOKEN_BYTES)
+        model_layers=4, instance_tp_size=2, route_fn=_route)
 
 
 # ===================================================== P 入口时间轴锚 ==
@@ -159,7 +157,7 @@ class PObservationFieldTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=_session(home=1, resident=1),
             request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.target_wait_ns, 5000)
         self.assertEqual(
@@ -176,7 +174,7 @@ class PObservationFieldTest(unittest.TestCase):
         candidate = model.estimate_P_with_continuation(
             session=_session(home=1, resident=1),
             request=_request(), instance_index=1,
-            action=ACTION_STAY, remote_enabled=True)
+            action=ACTION_STAY)
         # 发射 frontier 说明（在线调度/构图核对结论）随候选落盘。
         self.assertIn("prep_issue_frontier=P_prep_at_decision_epoch",
                       candidate.breakdown.notes)
@@ -216,7 +214,7 @@ class QOverlapsPreparationTest(unittest.TestCase):
             missing=(0, 0), location="local_hbm", prefix=4)
         candidate = model.estimate_P_with_continuation(
             session=session, request=_request(), instance_index=1,
-            action=ACTION_COPY, remote_enabled=True)
+            action=ACTION_COPY)
         self.assertTrue(candidate.applicable)
         self.assertEqual(
             _note_value(candidate.breakdown, "copy_handoff_first_chunk_ns"),
@@ -308,8 +306,7 @@ class DBoundaryTimelineTest(unittest.TestCase):
             1: _load(1)})
         boundary = _complete_boundary()
         candidate = model.estimate_D_remaining(
-            boundary=boundary, instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            boundary=boundary, instance_index=0, action=ACTION_STAY)
         self.assertTrue(candidate.applicable)
         self.assertTrue(candidate.is_continuation)
         self.assertEqual(candidate.breakdown.target_wait_ns, 100)
@@ -330,8 +327,7 @@ class DBoundaryTimelineTest(unittest.TestCase):
             1: _load(1)})
         boundary = _complete_boundary()
         candidate = model.estimate_D_remaining(
-            boundary=boundary, instance_index=0, action=ACTION_STAY,
-            remote_enabled=True)
+            boundary=boundary, instance_index=0, action=ACTION_STAY)
         self.assertTrue(candidate.applicable)
         # 写回 = pool(24) = 104 < 1e7 ⇒ A = 1e7 = Q ⇒ cost = Q + 16。
         self.assertEqual(candidate.breakdown.eviction_wait_ns, 10 ** 7)
@@ -346,8 +342,7 @@ class DBoundaryTimelineTest(unittest.TestCase):
         model = _d_model(self._loads(target_total=target_total))
         boundary = _complete_boundary()
         candidate = model.estimate_D_remaining(
-            boundary=boundary, instance_index=1, action="copy",
-            remote_enabled=True)
+            boundary=boundary, instance_index=1, action="copy")
         self.assertTrue(candidate.applicable)
         self.assertFalse(candidate.is_continuation)
         self.assertEqual(candidate.breakdown.target_wait_ns, target_total)
@@ -375,8 +370,7 @@ class DBoundaryTimelineTest(unittest.TestCase):
             target_remaining=(100, 100)))
         boundary = _complete_boundary()
         candidate = model.estimate_D_remaining(
-            boundary=boundary, instance_index=1, action="copy",
-            remote_enabled=True)
+            boundary=boundary, instance_index=1, action="copy")
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.breakdown.eviction_wait_ns, 120)
         self.assertGreaterEqual(
