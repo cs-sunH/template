@@ -41,7 +41,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-最新交接工作分支 `codex/die-lifecycle-online-20261014`；共享集成分支仍为 `main`。已合并 PR #6 的 main `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f` 是本轮基线。本轮真实源码 SHA、PR/已完成 CI 入口见 `docs/evidence/handoff-lifecycle-online-20261014/github.json`；只有合入 main 并 fetch 核实后才能安全接棒。用户最新指令为当前最小任务完成后交接并停止，本 Session 不再启动新开发任务。
+最新交接工作分支 `codex/die-lifecycle-online-20261014`；共享集成分支仍为 `main`。已合并 PR #6 的 main `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f` 是本轮基线。本轮源码提交 `77af39781485af527339051b580f5250c93f004f`，目标 main 的 [PR #7](https://github.com/cs-sunH/template/pull/7)；源码 CI run 38525345962 两 jobs 均成功。真实 PR/已完成 CI 入口见 `docs/evidence/handoff-lifecycle-online-20261014/github.json`；只有合入 main 并 fetch 核实后才能安全接棒。用户最新指令为当前最小任务完成后交接并停止，本 Session 不再启动新开发任务。
 
 ## 重要决定及变更记录
 

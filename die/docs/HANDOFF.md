@@ -12,13 +12,13 @@
 
 实际 compiled E5 oracle 新重跑仍 failed：独占 finish 约 3.827%、HBM busy 约 124.951%，原 3%/5% 阈值不变；生产 E8/E16 unavailable/not_run。新 geometry-generated affine return/固定精度 lowering 与 solo shared-HBM 完整研究有明确证明边界，尚未接入生产；双 owner 完整发现仍无法在全局 256 cap 闭环。TX8 没有新测量或重新拟合，host performance 没有新最终源证书。
 
-本轮 GitHub 入口及真实源码交付 SHA/已完成 CI 将保存在 `evidence/handoff-lifecycle-online-20261014/github.json`。只有所链接 PR merged 到 main，fetch/ancestry 确认包含源码与交接文档后才能安全代码接棒；此前为 NOT READY FOR HANDOFF。合并不等于模型/工程验收。
+本轮 [PR #7](https://github.com/cs-sunH/template/pull/7) 的源码提交为 `77af39781485af527339051b580f5250c93f004f`；[源码 CI run 38525345962](https://github.com/cs-sunH/template/actions/runs/38525345962) 公共构建/测试和交接检查均 success。GitHub 入口及真实源码交付 SHA/已完成 CI 保存在 `evidence/handoff-lifecycle-online-20261014/github.json`。只有所链接 PR merged 到 main，fetch/ancestry 确认包含源码与交接文档后才能安全代码接棒；此前为 NOT READY FOR HANDOFF。合并不等于模型/工程验收。
 
 ## Integration Branch
 
 - 共享集成分支：`main`；本轮工作分支：`codex/die-lifecycle-online-20261014`。
 - 上轮 [PR #6](https://github.com/cs-sunH/template/pull/6) 已 merged，merge/main SHA 为 `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f`。上轮工作与失败证据原样保留。
-- 本轮源码、测试、研究、Online 证据与本 HANDOFF 一起提交；真实新提交/PR/源码 CI 见本轮 `github.json`、`source-ci.json`。后续仅补交接元数据，不 force-push。最终 merge SHA/本元数据文件自身 commit 不提前猜测，从 PR/fetch 获取。
+- 本轮源码、测试、研究、Online 证据与本 HANDOFF 一起提交为 `77af39781485af527339051b580f5250c93f004f`，目标 main 的 [PR #7](https://github.com/cs-sunH/template/pull/7)。源码 CI run 38525345962 两 jobs 均 success；真实 API 结果见本轮 `github.json`、`source-ci.json`。后续仅补交接元数据，不 force-push。最终 merge SHA/本元数据文件自身 commit 不提前猜测，从 PR/fetch 获取。
 - 下一账号 fetch 最新 main，核源码 ancestry、21 文件 source digest 和证据索引，再建独立工作分支。忽略目录 work/、工具/依赖/二进制不跨账号共享，保存的源码和命令可重建。
 
 ## Last Verified Base
@@ -129,6 +129,7 @@ target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta
 - 本轮wscllm production Online E2E exit0/0，protocol/lifecycle/positiveworkspace/metrics通过，source identity与时间先后如Completed；failed尝试保留。没有重跑final teardown后wholeE2E或其它四仓业务。
 - 新compiled实际driver oracle exit1 expected精度失败，所有服务账本checks通过，E8/E16not_run；raw/source identity保存。root generated return replay/interval checker、solo研究selfcheck按限定范围实跑通过，完整offset discovery仍failedclosed，不作为CTest pass替代。
 - PR #6 public25/wscllm7/Python106/typed35为已合并历史，本轮未重跑Python整套，不冒称新测试。没有新sanitizer、malloc fault、硬件heldout、hostCPU/RSS/performance测试。
+- 官方 queue/sidecar CSV 的 CRLF 为真实 provenance bytes，原样保存；默认 diff whitespace 检查会报 CR，采用 `git -c core.whitespace=cr-at-eol diff --check` 核实无其它空白错误，不归一化已记录 SHA 的证据。
 - 编译仍有既存 `__int128` pedantic/Plan.cc temporary possibly-dangling等GCC warnings，build exit0；本轮没有独立确认所有warning或新增warning修复任务，未将warnings当成通过的内存安全证书。
 
 重建命令：`cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release`，`cmake --build work/build-die --parallel 2`，`ctest --test-dir work/build-die --output-on-failure`。五仓aggregate CMake enable_testing后 add_subdirectory(repo)、analytical backend、analytical frontend，`ASTRA_SIM_ROOT`指定variant；Release/congestion_aware/NETWORK_BACKEND_BUILD_AS_LIBRARY=ON。`analysis/.../integration-reproduction/` 保存aggregate与本轮验证脚本供重建，工具prefix按新环境调整。

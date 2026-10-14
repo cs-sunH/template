@@ -1,7 +1,7 @@
 {
   "README.md": {
-    "bytes": 3834,
-    "sha256": "e2031c294d8a94125ef70ae9a8fb97ae4315f809ac599afc239f3ce4cdc255cc"
+    "bytes": 4014,
+    "sha256": "22941f4a183feb6e45997d98d37ee78d9a31ef0273e9ef066e63ff225653c8c8"
   },
   "discovery/check_generated_returns.py": {
     "bytes": 2604,
@@ -46,6 +46,10 @@
   "integration-reproduction/CMakeLists.txt": {
     "bytes": 397,
     "sha256": "d7c4bf2a439c4e46f71332b44b763b60cfcd9c3e8023ff24fe84a88f25f2a43d"
+  },
+  "integration-reproduction/README.md": {
+    "bytes": 1719,
+    "sha256": "4b705280755ee94ea9f24ebd0f1beca22e66da0437aabca981f3bdfd06c5b06c"
   },
   "integration-reproduction/final_verify.py": {
     "bytes": 1862,

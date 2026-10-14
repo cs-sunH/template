@@ -92,8 +92,8 @@
     "sha256": "9b2111f37545d910809bc049e67a4562102851e2d840f25f50174ea301068866"
   },
   "github.json": {
-    "bytes": 353,
-    "sha256": "8b3e60c9b81d466fbc2ae55865932abe74a31be08e4011b0a0a0132b0b1de565"
+    "bytes": 1047,
+    "sha256": "9e915f6d967f7b3f155514f9c178149e2a713c608e4da3fff0c58643938caabf"
   },
   "integration/astra-sim-face/final-LastTest.log": {
     "bytes": 8593,
@@ -234,6 +234,10 @@
   "public/public-resume-ctest.log": {
     "bytes": 3400,
     "sha256": "ed1191b8ccf45e4248f9bde585717150484b5f613cc355147c5f27c1eaa67883"
+  },
+  "source-ci.json": {
+    "bytes": 2812,
+    "sha256": "4d7652f65240d2b6b2032d550ee57a43165d4d0534a0b49b4adcea766e1622d5"
   },
   "successful-online/bridge/kv_delta_journal.jsonl": {
     "bytes": 5775,

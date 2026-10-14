@@ -22,3 +22,5 @@ python3 work/symbolic-lifecycle-discovery/check_generated_returns.py
 Online 重现：复制 `online-reproduction/` 到 `work/wscllm-workspace-e2e/`，给 `.sh` 执行权限，准备 CMake/Protobuf/Python protobuf/strace，按 HANDOFF 的 aggregate 配置构建 wscllm Online 和两 ABI，再 `python3 work/wscllm-workspace-e2e/prepare_workspace_e2e.py`，`PYTHON=python3 bash work/wscllm-workspace-e2e/run_online_e2e_preserve.sh`。prepare 调用官方 queue materializer 与 plan materializer，重新生成当前绝对路径及 provenance；不要直接复用旧路径 CSV。归档 prepare 的根路径仅作可移植修正并通过语法检查，真实旧运行使用 `/workspace/template`；没有在收尾重新运行 E2E。
 
 失败尝试、成功的小型 decoded wire 和业务日志都保存；大型 strace 与完整重复 descriptor 不提交，SHA/byte identity 和可重生成源码已留存。`ARTIFACTS.json` 覆盖目录中所有保存文件的 SHA256，不包含自身。
+
+官方 queue/sidecar CSV 使用 CRLF；为保持 provenance SHA 原样保存，空白检查采用 `git -c core.whitespace=cr-at-eol diff --check`，不将记录证据归一化。

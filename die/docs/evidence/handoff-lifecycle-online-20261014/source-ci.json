@@ -1,0 +1,110 @@
+{
+  "source_commit": "77af39781485af527339051b580f5250c93f004f",
+  "run_url": "https://github.com/cs-sunH/template/actions/runs/38525345962",
+  "workflow_runs": [
+    {
+      "id": 38525345962,
+      "name": "die Codex Handoff Check",
+      "status": "completed",
+      "conclusion": "success",
+      "run_number": 34,
+      "jobs_url": "https://api.github.com/repos/cs-sunH/template/actions/runs/38525345962/jobs",
+      "logs_url": "https://api.github.com/repos/cs-sunH/template/actions/runs/38525345962/logs",
+      "workflow_id": 382919720
+    }
+  ],
+  "jobs": [
+    {
+      "id": 115724287680,
+      "name": "validate-handoff",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 38525345962,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Checkout code",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Check required files and meaningful sections",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Post Checkout code",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        }
+      ]
+    },
+    {
+      "id": 115724288040,
+      "name": "build-coarse-die",
+      "status": "completed",
+      "conclusion": "success",
+      "run_id": 38525345962,
+      "logs_url": null,
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Checkout code",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Configure public library",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Build all public targets",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run public library tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Post Checkout code",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        }
+      ]
+    }
+  ]
+}
