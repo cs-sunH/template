@@ -1,0 +1,5 @@
+[ 60%] Built target coarse_die
+[ 80%] Built target coarse_die_cabi
+[ 90%] Building CXX object CMakeFiles/coarse_gemm_os_access_counter_test.dir/tests/gemm_os_access_counter_test.cc.o
+[100%] Linking CXX executable coarse_gemm_os_access_counter_test
+[100%] Built target coarse_gemm_os_access_counter_test

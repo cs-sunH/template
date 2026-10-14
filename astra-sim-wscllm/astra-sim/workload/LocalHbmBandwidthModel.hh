@@ -71,7 +71,7 @@ class WorkloadLayerHandlerData;
  */
 class LocalHbmBandwidthModel : public Callable {
   public:
-    enum class JobKind { COMP, COMM_READ, COMM_WRITE, DIE_COMPUTE };
+    enum class JobKind { COMP, COMM_READ, COMM_WRITE, DIE_COMPUTE, CONTROL_MARKER };
 
     LocalHbmBandwidthModel(Sys* sys, Workload* workload);
     ~LocalHbmBandwidthModel() override;
@@ -79,6 +79,10 @@ class LocalHbmBandwidthModel : public Callable {
     void issue_compute(uint64_t num_ops,
                        uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
+    // Coarse-DIE control markers retain their one-byte HBM micro-job and
+    // local_mem_latency while using the shared canonical endpoint Runtime.
+    // Ordinary scalar COMP remains forbidden in coarse mode.
+    void issue_control_marker(WorkloadLayerHandlerData* wlhd);
     void issue_comm_read(uint64_t bytes,
                          WorkloadLayerHandlerData* wlhd);
     void issue_comm_write(uint64_t bytes,
@@ -125,9 +129,10 @@ class LocalHbmBandwidthModel : public Callable {
     double hbm_busy_ns() const {
         return this->hbm_busy_ns_;
     }
-    double compute_bytes_served() const {
-        return this->compute_bytes_served_;
-    }
+    // Legacy COMP-byte compatibility view. In coarse mode this is limited
+    // to control-marker micro-jobs: it combines closed prefixes with live
+    // marker prefixes sampled from their canonical Runtime handles.
+    double compute_bytes_served() const;
     double comm_read_bytes_served() const {
         return this->comm_read_bytes_served_;
     }
@@ -172,6 +177,11 @@ class LocalHbmBandwidthModel : public Callable {
         double service_eta = 0.0;
         Callable* die_sink = nullptr;
         CallData* die_data = nullptr;
+    };
+
+    struct CoarseJob {
+        WorkloadLayerHandlerData* wlhd = nullptr;
+        JobKind kind = JobKind::COMM_READ;
     };
 
     class TransitionData : public CallData {
@@ -219,7 +229,7 @@ class LocalHbmBandwidthModel : public Callable {
     double coarse_pool_write_served_ = 0.0;
     double coarse_die_read_served_ = 0.0;
     double coarse_die_write_served_ = 0.0;
-    std::map<uint64_t, WorkloadLayerHandlerData*> coarse_jobs_;
+    std::map<uint64_t, CoarseJob> coarse_jobs_;
   // active jobs, arbitrary cardinality
     Tick last_update_tick;
     uint64_t event_generation;

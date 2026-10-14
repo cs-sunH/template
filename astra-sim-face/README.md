@@ -217,7 +217,7 @@ COMP 节点的计时由 system.json 键 `compute-cost-model` 选择，共三后�
 
 | 后端 | 取值 | 语义 |
 |---|---|---|
-| die（生产） | `die` | 真实计算 COMP 必须携带 `die_op_spec`（GraphBatch compute 子对象；ET 侧为同名 JSON 字符串属性）；`Workload::issue` 分发序：timer op → 旧 timer 路径；cpu op → replay；`op_role=control_marker` → 旧微作业语义（有 HBM 模型则 `issue_compute(1,1)`，否则 1ns 事件）；有 die_spec → DieModelAdapter（编译/缓存 DiePlan + 每节点一个 DieExecution 状态机驱动执行）；真 COMP 缺 die_spec → **fail-closed throw，绝不静默回退 roofline**。`runtime_ns != 0` 与 die_spec 并存被 parser 拒绝 |
+| die（生产） | `die` | 真实计算 COMP 必须携带 `die_op_spec`（GraphBatch compute 子对象；ET 侧为同名 JSON 字符串属性）；`Workload::issue` 分发序：timer op → 旧 timer 路径；cpu op → replay；`op_role=control_marker` → 旧微作业语义（legacy HBM 模型仍为 `issue_compute(1,1)`；coarse_die_v2 有 HBM facade 时以 `owner_kind=die` 提交唯一 1-byte read endpoint，并将 `local-mem-latency` 作为其启动延迟；无 HBM 模型仍为 1ns 事件）；有 die_spec → DieModelAdapter（编译/缓存 DiePlan + 每节点一个 DieExecution 状态机驱动执行）；真 COMP 缺 die_spec → **fail-closed throw，绝不静默回退 roofline**。`runtime_ns != 0` 与 die_spec 并存被 parser 拒绝 |
 | roofline（显式 legacy） | `roofline` | 等价 `roofline-enabled=1`：COMP 走旧 Roofline 闭式/流体路径，保留供回归（§2 配置链整体切换方法：硬件 JSON 换回 `compute` 节 + `validation-160gib` 档 + roofline system 模板） |
 | replay（显式 legacy） | `replay` | 旧默认分发（无成本模型） |
 
@@ -227,8 +227,13 @@ roofline（向后兼容既有模板）；非 die 后端携带 `die-model-*` 键 
 
 **控制 marker 语义**：发射侧把一切 `comp(name,1,1)` 微节点（first_token / drain /
 exit / sentinel / join / pstart / wakeup 等）显式标 `op_role="control_marker"`
-（缺省即 compute）；marker 在两种后端下都保持旧微作业语义原样（本仓 marker 唯一
-发射点：`graph_batch_builder.py` 的 `_emit_train_marker`）。
+（缺省即 compute）；legacy HBM 下保留旧 `(1 op, 1 byte)` fluid job 与原 latency，
+coarse_die_v2 下由同一 canonical Runtime 计入一字节 `die` endpoint 并延迟
+`local-mem-latency`，仍不创建 typed COMP Plan；无 HBM facade 时保留 1ns 事件。
+销毁 HBM facade 时只读采样已服务字节前缀并以静默取消回收 marker，不分发 Runtime 中
+已就绪的 graph completion callbacks。
+`compute_bytes_served` 兼容 getter 继续累计 marker 已服务物理字节。本仓 marker 唯一
+发射点：`graph_batch_builder.py` 的 `_emit_train_marker`。
 
 **die 配置链（唯一硬件源 → resolver → 运行时）**：
 

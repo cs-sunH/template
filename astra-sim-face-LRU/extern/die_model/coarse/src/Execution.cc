@@ -378,6 +378,7 @@ long double min_positive(long double current, long double candidate) {
 struct EndpointSpec {
   std::uint64_t endpoint_id = 0;
   std::uint64_t transaction_id = 0;
+  std::uint64_t initial_delay_ns = 0;
   std::string owner_kind;
   std::string direction;
   std::string path_class;
@@ -447,6 +448,10 @@ EndpointSpec parse_endpoint(const nlohmann::json& endpoint, const Hardware& hard
   EndpointSpec result;
   result.endpoint_id = parse_u64(endpoint.at("endpoint_id"), "endpoint_id");
   result.transaction_id = parse_u64(endpoint.at("transaction_id"), "transaction_id");
+  if (endpoint.contains("initial_delay_ns")) {
+    result.initial_delay_ns =
+        parse_u64(endpoint.at("initial_delay_ns"), "initial_delay_ns");
+  }
   result.owner_kind = endpoint.at("owner_kind").get<std::string>();
   result.direction = endpoint.at("direction").get<std::string>();
   result.path_class = endpoint.at("path_class").get<std::string>();
@@ -910,8 +915,14 @@ std::uint64_t Runtime::submit_endpoint(const nlohmann::json& endpoint_json,
                    {"route_charged", spec.has_route},
                    {"internal_route", spec.internal_route},
                    {"join_token", spec.join_token}};
+  // Keep the canonical summary/fingerprint byte-compatible for old endpoint
+  // JSON that omitted this optional field; explicit values are normalized
+  // here while the original JSON remains in task.endpoint for snapshots.
+  if (endpoint_json.contains("initial_delay_ns")) {
+    plan->summary["initial_delay_ns"] = spec.initial_delay_ns;
+  }
   plan->hardware_fingerprint = hardware_->fingerprint;
-  plan->launch_ns = 0;
+  plan->launch_ns = spec.initial_delay_ns;
   Epoch epoch;
   epoch.name = "endpoint";
   epoch.activities.push_back(activity);
@@ -2404,7 +2415,8 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
         !execution.plan->task.contains("endpoint")) continue;
     const auto& endpoint = execution.plan->task.at("endpoint");
     const EndpointSpec endpoint_spec = parse_endpoint(endpoint, hardware);
-    if (execution.plan->launch_ns != 0 || execution.plan->epochs.size() != 1 ||
+    if (execution.plan->launch_ns != endpoint_spec.initial_delay_ns ||
+        execution.plan->epochs.size() != 1 ||
         execution.plan->epochs.front().activities.size() != 1) {
       throw std::invalid_argument("invalid_snapshot: endpoint plan structure is inconsistent");
     }

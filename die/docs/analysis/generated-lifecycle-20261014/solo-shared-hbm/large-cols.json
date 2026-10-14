@@ -1,0 +1,142 @@
+{
+  "descriptor_count": 4,
+  "descriptors": [
+    {
+      "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy": "2048/2472125",
+        "compute_service": "2048/2472125",
+        "elapsed": "2048/2472125",
+        "hbm0": "10240",
+        "hbm0_busy": "16/78125",
+        "hbm1": "10240",
+        "hbm1_busy": "16/78125",
+        "hbm_busy": "16/78125",
+        "hbm_shared": "0",
+        "local_bytes": "28672",
+        "vec_ops": "131072"
+      },
+      "repeat_count": 59,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 59,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    },
+    {
+      "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+      "kind": "output_classword_identity",
+      "ledger_per_step": {
+        "compute_busy": "131104/2472125",
+        "compute_service": "131104/2472125",
+        "elapsed": "411478592/7725390625",
+        "hbm0": "657568",
+        "hbm0_busy": "20549/1562500",
+        "hbm1": "657568",
+        "hbm1_busy": "20549/1562500",
+        "hbm_busy": "20549/1562500",
+        "hbm_shared": "0",
+        "local_bytes": "1839424",
+        "vec_ops": "8390656"
+      },
+      "repeat_count": 99998,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 99998,
+      "skip_waves": 6499870,
+      "step_outputs": 1,
+      "step_waves": 65,
+      "template_events": 13
+    },
+    {
+      "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy": "2048/2472125",
+        "compute_service": "2048/2472125",
+        "elapsed": "2048/2472125",
+        "hbm0": "10240",
+        "hbm0_busy": "16/78125",
+        "hbm1": "10240",
+        "hbm1_busy": "16/78125",
+        "hbm_busy": "16/78125",
+        "hbm_shared": "0",
+        "local_bytes": "28672",
+        "vec_ops": "131072"
+      },
+      "repeat_count": 59,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 59,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    },
+    {
+      "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy": "32/2472125",
+        "compute_service": "32/2472125",
+        "elapsed": "17/390625",
+        "hbm0": "2176",
+        "hbm0_busy": "17/390625",
+        "hbm1": "2176",
+        "hbm1_busy": "17/390625",
+        "hbm_busy": "17/390625",
+        "hbm_shared": "0",
+        "local_bytes": "4480",
+        "vec_ops": "2048"
+      },
+      "repeat_count": 60,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 60,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    }
+  ],
+  "events": 37,
+  "expected_work": {
+    "local": 183942686852,
+    "ops": 839065731104,
+    "outputs": 100001,
+    "read": 131104278596,
+    "waves": 6500065,
+    "write": 409600064
+  },
+  "external_stop_boundary": "not modeled; skip is valid only while capacities, geometry, and owner admission remain unchanged",
+  "finish_s": "164591523375531/30901562500",
+  "geometry": {
+    "K": 4097,
+    "M": 16,
+    "N": 6400001,
+    "tk": 64,
+    "tm": 16,
+    "tn": 64
+  },
+  "global_event_cap": 256,
+  "hbm_busy_is_row_union": true,
+  "ledger": {
+    "compute_busy": "26220804097/4944250",
+    "compute_service": "26220804097/4944250",
+    "elapsed": "164591523375531/30901562500",
+    "hbm0": "65756939330",
+    "hbm0_busy": "6575693933/5000000",
+    "hbm1": "65756939330",
+    "hbm1_busy": "6575693933/5000000",
+    "hbm_busy": "6575693933/5000000",
+    "hbm_shared": "0",
+    "local_bytes": "183942686852",
+    "vec_ops": "839065731104"
+  },
+  "peak_active": 3,
+  "peak_input_slots": 2,
+  "peak_output_slots": 1,
+  "scope": "offline exact single-owner FP32 OS model; shared HBM0/HBM1 grouped-Q; not a production or hardware certificate",
+  "skipped_outputs": 99998,
+  "skipped_waves": 6500048,
+  "status": "passed"
+}

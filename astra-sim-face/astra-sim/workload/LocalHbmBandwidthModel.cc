@@ -97,14 +97,31 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
 LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
     cancel_scheduled_transition();
     if (sys != nullptr && sys->coarse_die_runtime != nullptr) {
-        for (const auto& entry : coarse_jobs_) {
-            sys->coarse_die_runtime->cancel(entry.first,
-                                             Sys::boostedTick(), false);
-            if (entry.second != nullptr) {
-                delete entry.second;
+        while (!coarse_jobs_.empty()) {
+            const uint64_t handle = coarse_jobs_.begin()->first;
+            const CoarseJob job = coarse_jobs_.begin()->second;
+            if (job.kind == JobKind::CONTROL_MARKER) {
+                // Sample physical service without dispatching Runtime
+                // callbacks. At a terminal tick this marker and other
+                // executions may already be ready; notify=true could finish
+                // their graph nodes while the HBM owner is being destroyed.
+                const uint64_t now_ns = Sys::boostedTick();
+                const auto progress =
+                    sys->coarse_die_runtime->query_progress_at(handle, now_ns);
+                const auto [read_bytes, ignored_write_bytes] =
+                    coarse_hbm_read_write_bytes(progress);
+                (void)ignored_write_bytes;
+                coarse_control_marker_bytes_served_ += read_bytes;
+                coarse_jobs_.erase(handle);
+                sys->coarse_die_runtime->cancel(handle, now_ns, false);
+                delete job.wlhd;
+            } else {
+                sys->coarse_die_runtime->cancel(handle, Sys::boostedTick(),
+                                                 false);
+                if (job.wlhd != nullptr) delete job.wlhd;
+                coarse_jobs_.erase(handle);
             }
         }
-        coarse_jobs_.clear();
     }
 
     // (2026-09-30, R2 audit) A throw out of schedule_next_transition after a
@@ -123,6 +140,24 @@ LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
 
 bool LocalHbmBandwidthModel::has_active_jobs() const {
     return !jobs.empty() || !coarse_jobs_.empty();
+}
+
+double LocalHbmBandwidthModel::compute_bytes_served() const {
+    double served = compute_bytes_served_ +
+        coarse_control_marker_bytes_served_;
+    if (sys == nullptr || sys->coarse_die_runtime == nullptr) return served;
+
+    const uint64_t now_ns = Sys::boostedTick();
+    for (const auto& entry : coarse_jobs_) {
+        if (entry.second.kind != JobKind::CONTROL_MARKER) continue;
+        const auto progress =
+            sys->coarse_die_runtime->query_progress_at(entry.first, now_ns);
+        const auto [read_bytes, ignored_write_bytes] =
+            coarse_hbm_read_write_bytes(progress);
+        (void)ignored_write_bytes;
+        served += read_bytes;
+    }
+    return served;
 }
 
 double LocalHbmBandwidthModel::remaining_drain(const Job& job) {
@@ -285,6 +320,9 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                     this->die_actual_bytes_served_ +=
                         per_user_rate * step_ns * job->service_eta;
                     break;
+                case JobKind::CONTROL_MARKER:
+                    throw std::logic_error(
+                        "coarse control marker entered the legacy HBM queue");
                 }
             }
         }
@@ -422,11 +460,19 @@ void LocalHbmBandwidthModel::issue_job(JobKind kind,
                 "coarse_die_v2 local endpoint requires nonzero bytes and "
                 "handler data");
         }
-        if (kind != JobKind::COMM_READ && kind != JobKind::COMM_WRITE) {
+        const bool control_marker = kind == JobKind::CONTROL_MARKER;
+        if (kind != JobKind::COMM_READ && kind != JobKind::COMM_WRITE &&
+            !control_marker) {
             throw std::runtime_error(
-                "coarse_die_v2 FACE endpoints require COMM_READ or COMM_WRITE");
+                "coarse_die_v2 FACE endpoints require COMM_READ, COMM_WRITE, "
+                "or a control marker");
         }
-        const bool read = kind == JobKind::COMM_READ;
+        if (control_marker && (bytes != 1 || num_ops != 0)) {
+            throw std::runtime_error(
+                "coarse_die_v2 control marker requires exactly one byte "
+                "and no typed operations");
+        }
+        const bool read = kind == JobKind::COMM_READ || control_marker;
         const uint64_t node_id = wlhd->node_id;
         const std::string identity = std::to_string(sys->id) + ":" +
             std::to_string(node_id) + ":" + std::to_string(static_cast<int>(kind));
@@ -442,26 +488,42 @@ void LocalHbmBandwidthModel::issue_job(JobKind kind,
         nlohmann::json endpoint = {
             {"endpoint_id", endpoint_id},
             {"transaction_id", transaction_id},
-            {"owner_kind", "comm"},
+            {"owner_kind", control_marker ? "die" : "comm"},
             {"direction", read ? "read" : "write"},
             {"physical_bytes", bytes},
             {"path_class", read ? "hbm_to_edge" : "edge_to_hbm"},
             {"eta_hbm", performance.at("eta_hbm_matrix")},
             {"route", {{"internal_route", false}}},
         };
+        if (control_marker) {
+            endpoint["initial_delay_ns"] = sys->local_mem_latency;
+        }
         const uint64_t handle = sys->coarse_die_runtime->submit_endpoint(
             endpoint, owner,
             [this, wlhd, kind](const uint64_t completed_handle,
                                const nlohmann::json& progress) {
                 coarse_jobs_.erase(completed_handle);
-                if (progress.value("state", std::string()) == "cancelled") return;
+                const bool cancelled =
+                    progress.value("state", std::string()) == "cancelled";
+                if (kind == JobKind::CONTROL_MARKER) {
+                    const auto [read_bytes, ignored_write_bytes] =
+                        coarse_hbm_read_write_bytes(progress);
+                    (void)ignored_write_bytes;
+                    // Preserve the legacy compute-byte side-band while
+                    // keeping this marker outside typed COMP and COMM.
+                    coarse_control_marker_bytes_served_ += read_bytes;
+                }
+                if (cancelled) {
+                    if (kind == JobKind::CONTROL_MARKER) delete wlhd;
+                    return;
+                }
                 const auto [read_bytes, write_bytes] =
                     coarse_hbm_read_write_bytes(progress);
                 if (kind == JobKind::COMM_READ) coarse_comm_read_served_ += read_bytes;
                 else if (kind == JobKind::COMM_WRITE) coarse_comm_write_served_ += write_bytes;
                 workload->on_local_hbm_job_complete(wlhd, kind);
             });
-        if (!coarse_jobs_.emplace(handle, wlhd).second) {
+        if (!coarse_jobs_.emplace(handle, CoarseJob{wlhd, kind}).second) {
             sys->coarse_die_runtime->cancel(handle, Sys::boostedTick(), false);
             throw std::runtime_error("coarse_die_v2 endpoint handle collision");
         }
@@ -510,6 +572,15 @@ void LocalHbmBandwidthModel::issue_compute(
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
     issue_job(JobKind::COMP, num_ops, tensor_size, wlhd);
+}
+
+void LocalHbmBandwidthModel::issue_control_marker(
+    WorkloadLayerHandlerData* wlhd) {
+    if (sys->coarse_die_runtime == nullptr) {
+        issue_compute(1, 1, wlhd);
+        return;
+    }
+    issue_job(JobKind::CONTROL_MARKER, 0, 1, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_comm_read(

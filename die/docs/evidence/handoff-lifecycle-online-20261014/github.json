@@ -1,0 +1,23 @@
+{
+  "baseline_main": "037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f",
+  "branch": "codex/die-lifecycle-online-20261014",
+  "integration_branch": "main",
+  "source_commit": "77af39781485af527339051b580f5250c93f004f",
+  "pull_request": {
+    "number": 7,
+    "url": "https://github.com/cs-sunH/template/pull/7"
+  },
+  "source_ci": {
+    "run_id": 38525345962,
+    "url": "https://github.com/cs-sunH/template/actions/runs/38525345962",
+    "conclusion": "success",
+    "jobs": [
+      "build-coarse-die",
+      "validate-handoff"
+    ],
+    "detail_file": "source-ci.json"
+  },
+  "handoff_criterion": "READY only after linked PR is merged to main and fetch confirms source and metadata ancestry; otherwise NOT READY FOR HANDOFF",
+  "engineering_status": "NOT ACCEPTED: actual compiled E5 accuracy fails, four workspace ports/business/performance remain incomplete",
+  "merge_sha_note": "Final head and merge SHA cannot be embedded in their own ancestor metadata; obtain from linked PR/API and fetch. Do not assume a test merge_commit_sha means merged."
+}

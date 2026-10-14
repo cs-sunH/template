@@ -67,6 +67,9 @@ class LocalHbmBandwidthModel : public Callable {
         POOL_READ,
         POOL_WRITE,
         DIE_COMPUTE,
+        // Coarse-only endpoint for the legacy graph-control marker. The
+        // non-coarse helper retains the original COMPUTE(1, 1) behavior.
+        CONTROL_MARKER,
         KIND_COUNT,
     };
     static constexpr size_t kJobKindCount =
@@ -78,6 +81,7 @@ class LocalHbmBandwidthModel : public Callable {
     void issue_compute(uint64_t num_ops,
                        uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
+    void issue_control_marker(WorkloadLayerHandlerData* wlhd);
     void issue_restore(uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
     void issue_comm_read(uint64_t bytes,
@@ -139,9 +143,9 @@ class LocalHbmBandwidthModel : public Callable {
     double hbm_shared_ns() const {
         return this->hbm_shared_ns_;
     }
-    double compute_bytes_served() const {
-        return this->bytes_served_by_kind_[kind_index(JobKind::COMPUTE)];
-    }
+    // Legacy COMPUTE bytes plus physical bytes served by coarse control
+    // markers, including their live prefixes sampled from the shared Runtime.
+    double compute_bytes_served() const;
     double restore_bytes_served() const {
         return this->bytes_served_by_kind_[kind_index(JobKind::RESTORE)];
     }
@@ -184,6 +188,11 @@ class LocalHbmBandwidthModel : public Callable {
     }
 
   private:
+    struct CoarseJob {
+        WorkloadLayerHandlerData* wlhd;
+        JobKind kind;
+    };
+
     struct Job {
         JobKind kind;
         WorkloadLayerHandlerData* wlhd;
@@ -244,7 +253,8 @@ class LocalHbmBandwidthModel : public Callable {
     double coarse_pool_write_served_ = 0.0;
     double coarse_die_read_served_ = 0.0;
     double coarse_die_write_served_ = 0.0;
-    std::map<uint64_t, WorkloadLayerHandlerData*> coarse_jobs_;
+    double coarse_control_marker_bytes_served_ = 0.0;
+    std::map<uint64_t, CoarseJob> coarse_jobs_;
 
     Tick last_update_tick;
     uint64_t event_generation;

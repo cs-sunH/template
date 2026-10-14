@@ -39,6 +39,10 @@ class CoarseDieRuntime final : public Callable {
                              Completion completion);
     void cancel(uint64_t handle, uint64_t now_ns, bool notify = false);
     nlohmann::json query_progress(uint64_t handle) const;
+    // Sample one execution from an isolated Runtime copy. This does not
+    // advance the live event loop or dispatch Workload callbacks.
+    nlohmann::json query_progress_at(uint64_t handle,
+                                     uint64_t now_ns) const;
     nlohmann::json counters() const;
     // Sample known die state without advancing the live event loop or
     // dispatching graph/network callbacks. Time reversal is rejected.

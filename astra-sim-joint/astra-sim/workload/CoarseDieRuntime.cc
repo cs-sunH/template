@@ -160,6 +160,13 @@ nlohmann::json CoarseDieRuntime::query_progress(const uint64_t handle) const {
     return runtime_.query_progress(handle);
 }
 
+nlohmann::json CoarseDieRuntime::query_progress_at(
+    const uint64_t handle, const uint64_t now_ns) const {
+    coarse_die::Runtime sampled(runtime_);
+    sampled.advance_to(now_ns);
+    return sampled.query_progress(handle);
+}
+
 nlohmann::json CoarseDieRuntime::export_snapshot(uint64_t now_ns) {
     if (dispatching_) {
         throw std::runtime_error(
