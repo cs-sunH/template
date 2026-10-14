@@ -1,0 +1,26 @@
+Working directory: /workspace/template
+Environment activation for each build, CTest, fixture preparation, and Online run:
+  source /workspace/cloud-setup/activate.sh
+
+Public baseline build:
+  cmake -S die -B work/online-baseline-20261014/public-build -DCMAKE_BUILD_TYPE=Release
+  cmake --build work/online-baseline-20261014/public-build --parallel 2 --target coarse_die_cabi
+
+Aggregate configure diagnostic (initial attempt; expected to fail because the activated sysroot has no protobuf CONFIG package):
+  PROTOBUF_FROM_SOURCE=True cmake -S work/online-baseline-20261014/aggregate -B work/online-baseline-20261014/integration-build/build/astra-sim-wscllm -DASTRA_SIM_ROOT="$PWD/astra-sim-wscllm" -DBUILDTARGET=congestion_aware -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release
+
+Aggregate configure using installed Protobuf module (passed):
+  unset PROTOBUF_FROM_SOURCE
+  cmake -S work/online-baseline-20261014/aggregate -B work/online-baseline-20261014/integration-build/build/astra-sim-wscllm -DASTRA_SIM_ROOT="$PWD/astra-sim-wscllm" -DBUILDTARGET=congestion_aware -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release
+
+Aggregate Online, focused tests, and ABI build:
+  cmake --build work/online-baseline-20261014/integration-build/build/astra-sim-wscllm --parallel 2 --target AstraSim_Analytical_Congestion_Aware_Online AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest coarse_die_cabi die_model_cabi
+
+Focused CTest:
+  ctest --test-dir work/online-baseline-20261014/integration-build/build/astra-sim-wscllm --output-on-failure -R '(DieExecutionLifecycle|DieModelAdapter|LocalHbmDieMemory|LocalHbmBandwidthModel)Test'
+
+Rebuild official tiny Online request, queue provenance, config, and plan:
+  python3 work/online-baseline-20261014/e2e/prepare_workspace_e2e.py
+
+Final production Python↔C++ Online E2E (preserves any prior run):
+  PYTHON=python3 bash work/online-baseline-20261014/e2e/run_online_e2e_preserve.sh

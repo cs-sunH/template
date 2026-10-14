@@ -1,0 +1,14 @@
+Internal ctest changing into directory: /workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm
+Test project /workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm
+    Start 25: AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest
+1/4 Test #25: AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest ...   Passed    0.01 sec
+    Start 44: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+2/4 Test #44: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest ..........   Passed    0.01 sec
+    Start 45: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+3/4 Test #45: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ....   Passed    0.03 sec
+    Start 46: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+4/4 Test #46: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest ........   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 4
+
+Total Test time (real) =   0.05 sec

@@ -1,6 +1,8 @@
 #include "coarse_die/Plan.hh"
 #include "GemmTailBudget.hh"
 #include "EquivalentWork.hh"
+#include "GemmOSGeometry.hh"
+#include "GemmOSResourceFacts.hh"
 
 #include <algorithm>
 #include <array>
@@ -808,43 +810,82 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   const u128 w_i4 = mul128(tile_grid_bytes(K,tk,N,tn,"int4"),wr?1:tM,"W INT4 bytes");
   const u128 i4total = int4_path ? add128(mul128(a_i4,executions,"A INT4 bytes"),mul128(w_i4,executions,"W INT4 bytes"),"INT4 input bytes") : 0;
   m.int4bytes = add128(m.int4bytes,i4total,"INT4 input bytes");
-  const u128 scale_a = int4_path&&convert_a ? mul128(mul128(tM,tK,"A scale tiles"),tN,"A scale tiles") : 0;
-  const u128 scale_w = int4_path&&convert_w ? mul128(mul128(tK,tN,"W scale tiles"),wr?1:tM,"W scale tiles") : 0;
-  const u128 scales = mul128(add128(mul128(scale_a,passes,"A scale passes"),mul128(scale_w,passes,"W scale passes"),"scale tiles"),mul128(layers,4,"scale bytes"),"scale bytes");
-  const u128 a_exec=mul128(tile_grid_bytes(M,tm,K,tk,execution_dtype),mul128(tN,executions,"A execution repeats"),"A execution bytes");
-  const u128 w_exec=mul128(tile_grid_bytes(K,tk,N,tn,execution_dtype),mul128(wr?1:tM,executions,"W execution repeats"),"W execution bytes");
-  const u128 quant_buf=add128(add128(convert_a?a_exec:0,convert_w?w_exec:0,"converted buffers"),scales,"converted buffers");
-  const u128 conversion_reads=add128(convert_a?a_total:0,convert_w?w_total:0,"conversion source reads");
-  const u128 scale_reads=mul128(add128(scale_a,mul128(scale_w,wr?tM:1,"resident weight scale reads"),"scale reads"),mul128(executions,4,"scale read bytes"),"scale read bytes");
-  const u128 partial = int4_path ? mul128(mul128(mul128(M,N,"partial"),tK,"partial K"),mul128(executions,4,"partial bytes"),"partial bytes") : 0;
-  const u128 accum_write=mul128(mul128(mul128(M,N,"accumulator"),tK,"accumulator K"),mul128(executions,4,"accumulator bytes"),"accumulator bytes");
-  const u128 accum_read=mul128(mul128(mul128(M,N,"accumulator"),tK-1,"accumulator reuse"),mul128(executions,4,"accumulator bytes"),"accumulator read");
-  const u128 output_cast_elements=od=="fp32"?0:mul128(mul128(M,N,"output conversions"),executions,"output conversions");
-  const u128 output_cast_reads=mul128(output_cast_elements,4,"output conversion reads");
-  const u128 output_scales=od=="int4"?mul128(mul128(tM,tN,"output scale tiles"),mul128(executions,4,"output scale bytes"),"output scale bytes"):0;
-  const u128 consumed_inputs=add128(a_exec,mul128(w_exec,wr?tM:1,"resident weight consumption"),"matrix operand reads");
-  const u128 sram_r=add128(add128(add128(consumed_inputs,conversion_reads,"matrix source reads"),add128(partial,accum_read,"matrix state reads"),"matrix reads"),add128(scale_reads,output_cast_reads,"matrix conversion reads"),"SRAM reads");
-  const u128 sram_w=add128(add128(quant_buf,partial,"matrix writes"),add128(accum_write,add128(output_cast_elements?c_total:0,output_scales,"output conversion writes"),"matrix writes"),"SRAM writes");
-  const u128 local = add128(sram_r,sram_w,"LOCAL traffic");
-  m.sram_read = add128(m.sram_read,add128(sram_r,c_total,"GEMM store SRAM read"),"SRAM reads"); m.sram_write = add128(m.sram_write,add128(sram_w,read_total,"GEMM load SRAM write"),"SRAM writes"); m.local = add128(m.local,local,"LOCAL traffic");
-
+  u128 sram_r=0, sram_w=0, local=0, peops=0, conversion_count=0;
   EqWork vecops;
-  u128 peops = 0;
-  if (int4_path) {
-    peops = layer_ops;
-    vecops = add128(vecops,weighted_ops(conversions,perf(hw,"kappa_quant_eqops",4),"quant eqops"),"GEMM Vec ops");
-    const u128 converted = mul128(mul128(mul128(M,N,"acc convert"),tK,"acc convert"),executions,"acc convert");
-    vecops = add128(vecops,weighted_ops(converted,perf(hw,"kappa_acc_convert_eqops",2),"acc convert eqops"),"GEMM Vec ops");
-    vecops = add128(vecops,mul128(mul128(mul128(M,N,"acc add"),tK-1,"acc add"),executions,"acc add"),"GEMM Vec ops");
-    if (od != "fp32") vecops = add128(vecops,weighted_ops(output_cast_elements,od=="int4"?perf(hw,"kappa_quant_eqops",4):1,"output conversion"),"GEMM Vec ops");
-    m.conversion_elements=add128(m.conversion_elements,add128(add128(conversions,converted,"GEMM conversions"),output_cast_elements,"GEMM conversions"),"conversion elements");
+  if (!wr) {
+    // The same bounded per-K facts will drive the OS readiness lifecycle.
+    // Aggregate physical work here comes from those facts; repeated layers
+    // and passes multiply the single invocation ledger exactly once.
+    using Storage = gemm_os_access_counter::StorageDType;
+    const auto storage = [](const std::string& name) {
+      if (name=="fp32") return Storage::Fp32;
+      if (name=="bf16") return Storage::Bf16;
+      if (name=="int4") return Storage::Int4;
+      if (name=="int32") return Storage::Int32;
+      fail("unsupported_dtype: GEMM OS storage "+name);
+    };
+    gemm_os_geometry::Input input;
+    input.M=M; input.N=N; input.K=K;
+    input.tm=tm; input.tn=tn; input.tk=tk; input.core_count=ncore;
+    input.a_storage=storage(ad); input.w_storage=storage(wd);
+    input.output_storage=storage(od);
+    input.matrix_path=int4_path ? gemm_os_access_counter::MatrixPath::Int4PE
+                               : gemm_os_access_counter::MatrixPath::StrictFp32Vec;
+    input.kappa_quant=perf(hw,"kappa_quant_eqops",4);
+    input.kappa_acc=perf(hw,"kappa_acc_convert_eqops",2);
+    const gemm_os_geometry::GemmOSGeometry geometry(input);
+    const auto& ledger=geometry.total_ledger();
+    if (mul128(ledger.hbm_read_bytes,executions,"OS HBM reads")!=read_total ||
+        mul128(ledger.hbm_write_bytes,executions,"OS HBM writes")!=c_total ||
+        mul128(ledger.source_math_ops,executions,"OS source operations")!=layer_ops)
+      fail("mapping_invariant: GEMM OS access facts disagree with source payload/ops");
+    sram_r=mul128(ledger.compute_sram_read_bytes,executions,"OS Compute SRAM reads");
+    sram_w=mul128(ledger.compute_sram_write_bytes,executions,"OS Compute SRAM writes");
+    local=mul128(ledger.local_bytes,executions,"OS LOCAL traffic");
+    peops=mul128(ledger.matrix_int4_ops,executions,"OS INT4 operations");
+    vecops=ledger.vec_equivalent_ops.multiply(as_u64(executions,"OS executions"));
+    conversion_count=mul128(ledger.conversion_elements,executions,"OS conversions");
   } else {
-    // BF16/INT32 inputs are converted once per loaded tile. INT4 decoding
-    // uses the explicit template cost; FP32 operands require no conversion.
-    vecops=add128(layer_ops,add128(weighted_ops(quant_a_elems,ad=="int4"?perf(hw,"kappa_quant_eqops",4):1,"A FP32 conversion"),weighted_ops(quant_w_elems,wd=="int4"?perf(hw,"kappa_quant_eqops",4):1,"W FP32 conversion"),"FP32 conversions"),"GEMM Vec ops");
-    vecops=add128(vecops,weighted_ops(output_cast_elements,od=="int4"?perf(hw,"kappa_quant_eqops",4):1,"output conversion"),"output conversion");
-    m.conversion_elements=add128(m.conversion_elements,add128(conversions,output_cast_elements,"GEMM conversions"),"conversion elements");
+    // WR's resident weights have a different conversion lifetime. Keep its
+    // established ledger until it has its own per-consumption facts source.
+    const u128 scale_a = int4_path&&convert_a ? mul128(mul128(tM,tK,"A scale tiles"),tN,"A scale tiles") : 0;
+    const u128 scale_w = int4_path&&convert_w ? mul128(mul128(tK,tN,"W scale tiles"),wr?1:tM,"W scale tiles") : 0;
+    const u128 scales = mul128(add128(mul128(scale_a,passes,"A scale passes"),mul128(scale_w,passes,"W scale passes"),"scale tiles"),mul128(layers,4,"scale bytes"),"scale bytes");
+    const u128 a_exec=mul128(tile_grid_bytes(M,tm,K,tk,execution_dtype),mul128(tN,executions,"A execution repeats"),"A execution bytes");
+    const u128 w_exec=mul128(tile_grid_bytes(K,tk,N,tn,execution_dtype),mul128(wr?1:tM,executions,"W execution repeats"),"W execution bytes");
+    const u128 quant_buf=add128(add128(convert_a?a_exec:0,convert_w?w_exec:0,"converted buffers"),scales,"converted buffers");
+    const u128 conversion_reads=add128(convert_a?a_total:0,convert_w?w_total:0,"conversion source reads");
+    const u128 scale_reads=mul128(add128(scale_a,mul128(scale_w,wr?tM:1,"resident weight scale reads"),"scale reads"),mul128(executions,4,"scale read bytes"),"scale read bytes");
+    const u128 partial = int4_path ? mul128(mul128(mul128(M,N,"partial"),tK,"partial K"),mul128(executions,4,"partial bytes"),"partial bytes") : 0;
+    const u128 accum_write=mul128(mul128(mul128(M,N,"accumulator"),tK,"accumulator K"),mul128(executions,4,"accumulator bytes"),"accumulator bytes");
+    const u128 accum_read=mul128(mul128(mul128(M,N,"accumulator"),tK-1,"accumulator reuse"),mul128(executions,4,"accumulator bytes"),"accumulator read");
+    const u128 output_cast_elements=od=="fp32"?0:mul128(mul128(M,N,"output conversions"),executions,"output conversions");
+    const u128 output_cast_reads=mul128(output_cast_elements,4,"output conversion reads");
+    const u128 output_scales=od=="int4"?mul128(mul128(tM,tN,"output scale tiles"),mul128(executions,4,"output scale bytes"),"output scale bytes"):0;
+    const u128 consumed_inputs=add128(a_exec,mul128(w_exec,wr?tM:1,"resident weight consumption"),"matrix operand reads");
+    sram_r=add128(add128(add128(consumed_inputs,conversion_reads,"matrix source reads"),add128(partial,accum_read,"matrix state reads"),"matrix reads"),add128(scale_reads,output_cast_reads,"matrix conversion reads"),"SRAM reads");
+    sram_w=add128(add128(quant_buf,partial,"matrix writes"),add128(accum_write,add128(output_cast_elements?c_total:0,output_scales,"output conversion writes"),"matrix writes"),"SRAM writes");
+    local = add128(sram_r,sram_w,"LOCAL traffic");
+    if (int4_path) {
+      peops = layer_ops;
+      vecops = add128(vecops,weighted_ops(conversions,perf(hw,"kappa_quant_eqops",4),"quant eqops"),"GEMM Vec ops");
+      const u128 converted = mul128(mul128(mul128(M,N,"acc convert"),tK,"acc convert"),executions,"acc convert");
+      vecops = add128(vecops,weighted_ops(converted,perf(hw,"kappa_acc_convert_eqops",2),"acc convert eqops"),"GEMM Vec ops");
+      vecops = add128(vecops,mul128(mul128(mul128(M,N,"acc add"),tK-1,"acc add"),executions,"acc add"),"GEMM Vec ops");
+      if (od != "fp32") vecops = add128(vecops,weighted_ops(output_cast_elements,od=="int4"?perf(hw,"kappa_quant_eqops",4):1,"output conversion"),"GEMM Vec ops");
+      conversion_count=add128(add128(conversions,converted,"GEMM conversions"),output_cast_elements,"GEMM conversions");
+    } else {
+      // BF16/INT32 inputs are converted once per loaded tile. INT4 decoding
+      // uses the explicit template cost; FP32 operands require no conversion.
+      vecops=add128(layer_ops,add128(weighted_ops(quant_a_elems,ad=="int4"?perf(hw,"kappa_quant_eqops",4):1,"A FP32 conversion"),weighted_ops(quant_w_elems,wd=="int4"?perf(hw,"kappa_quant_eqops",4):1,"W FP32 conversion"),"FP32 conversions"),"GEMM Vec ops");
+      vecops=add128(vecops,weighted_ops(output_cast_elements,od=="int4"?perf(hw,"kappa_quant_eqops",4):1,"output conversion"),"output conversion");
+      conversion_count=add128(conversions,output_cast_elements,"GEMM conversions");
+    }
   }
+  m.sram_read = add128(m.sram_read,add128(sram_r,c_total,"GEMM store SRAM read"),"SRAM reads");
+  m.sram_write = add128(m.sram_write,add128(sram_w,read_total,"GEMM load SRAM write"),"SRAM writes");
+  m.local = add128(m.local,local,"LOCAL traffic");
+  m.conversion_elements=add128(m.conversion_elements,conversion_count,"conversion elements");
   m.int4ops = add128(m.int4ops,peops,"INT4 ops"); m.vecops = add128(m.vecops,vecops,"Vec eqops");
   // Quantization, accumulator and storage conversion are execution work;
   // the source GEMM graph has matrix operations, not these Vec operations.
@@ -1588,6 +1629,37 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
 }
 
 }  // namespace
+
+std::array<Activity, 3> gemm_os_single_core_resource_facts(
+    const Hardware& hardware, const gemm_os_access_counter::Input& input) {
+  if (du(hardware,"die","core_count")!=1 ||
+      du(hardware,"die","core_columns_nx")!=1 ||
+      du(hardware,"die","core_rows_ny")!=1)
+    fail("unsupported_mapping: GEMM OS resource facts require a single-Core grid");
+  const auto ledger=gemm_os_access_counter::count(input);
+  const Topology topo=topology(hardware,1,1);
+  const double hbm_eta=eta(hardware,"eta_hbm_matrix");
+  Flow load, compute, store;
+  add_hbm(load,hardware,topo,ledger.hbm_read_bytes,1,false,hbm_eta);
+  add_bytes_work(load,SRAM_WRITE,ledger.load_sram_write_bytes,"OS Load SRAM writes");
+  add_bytes_work(compute,SRAM_READ,ledger.compute_sram_read_bytes,"OS Compute SRAM reads");
+  add_bytes_work(compute,SRAM_WRITE,ledger.compute_sram_write_bytes,"OS Compute SRAM writes");
+  add_bytes_work(compute,LOCAL,ledger.local_bytes,"OS Compute LOCAL bytes");
+  compute.int4=ledger.matrix_int4_ops;
+  compute.vec=ledger.vec_equivalent_ops;
+  compute.compute_s=compute_time(hardware,compute.int4,compute.vec,1);
+  add_bytes_work(store,SRAM_READ,ledger.store_sram_read_bytes,"OS Store SRAM reads");
+  add_hbm(store,hardware,topo,ledger.hbm_write_bytes,1,true,hbm_eta);
+  std::array<Activity,3> result;
+  for(std::size_t stage=0;stage<result.size();++stage) {
+    result[stage].id=stage+1;
+    result[stage].role=stage==0?Role::Load:(stage==1?Role::Compute:Role::Store);
+  }
+  seal_activity(result[0],load,hardware,1);
+  seal_activity(result[1],compute,hardware,1);
+  seal_activity(result[2],store,hardware,1);
+  return result;
+}
 
 static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
     const Hardware& hardware, const nlohmann::json& task,

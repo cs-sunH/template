@@ -1,0 +1,354 @@
+{
+  "binary_sha256": {
+    "integrated_coarse_die_cabi": "49e596bc661b410ac3ef7499fc7f68af4065e3946be2dbd2b36d224f859ef3cd",
+    "online": "a35d0ef0dcf1fd039cdd2534b4f08a23f9fa37cc07ceef5e58cb3919358719ec",
+    "public_coarse_die_cabi": "49e596bc661b410ac3ef7499fc7f68af4065e3946be2dbd2b36d224f859ef3cd"
+  },
+  "build_and_focused_test": {
+    "aggregate_build_exit": 0,
+    "aggregate_configure_final_exit": 0,
+    "focused_ctest_passed": 4,
+    "focused_ctest_total": 4,
+    "public_build_exit": 0,
+    "public_configure_exit": 0
+  },
+  "commands": {
+    "aggregate_build": "cmake --build work/online-baseline-20261014/integration-build/build/astra-sim-wscllm --parallel 2 --target AstraSim_Analytical_Congestion_Aware_Online AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest coarse_die_cabi die_model_cabi",
+    "aggregate_configure": "unset PROTOBUF_FROM_SOURCE; cmake -S work/online-baseline-20261014/aggregate -B work/online-baseline-20261014/integration-build/build/astra-sim-wscllm -DASTRA_SIM_ROOT=\"$PWD/astra-sim-wscllm\" -DBUILDTARGET=congestion_aware -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release",
+    "focused_ctest": "ctest --test-dir work/online-baseline-20261014/integration-build/build/astra-sim-wscllm --output-on-failure -R '(DieExecutionLifecycle|DieModelAdapter|LocalHbmDieMemory|LocalHbmBandwidthModel)Test'",
+    "online_e2e": "PYTHON=python3 bash work/online-baseline-20261014/e2e/run_online_e2e_preserve.sh",
+    "prepare": "python3 work/online-baseline-20261014/e2e/prepare_workspace_e2e.py",
+    "public_build": "cmake --build work/online-baseline-20261014/public-build --parallel 2 --target coarse_die_cabi",
+    "public_configure": "cmake -S die -B work/online-baseline-20261014/public-build -DCMAKE_BUILD_TYPE=Release",
+    "source_activation": "source /workspace/cloud-setup/activate.sh"
+  },
+  "e2e": {
+    "ack_count": 3,
+    "captured_and_recompiled_specs": 20,
+    "compiled_plans": 20,
+    "cpp_exit": 0,
+    "positive_workspace_plans": [
+      {
+        "hbm_workspace_peak_bytes": 65536,
+        "node_name": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill_request_aggregated_all_layers_ffn_region",
+        "rank": 0
+      },
+      {
+        "hbm_workspace_peak_bytes": 1024,
+        "node_name": "batch_train_i1_1_all_layers_ffn_region",
+        "rank": 1
+      }
+    ],
+    "protocol_errors": [],
+    "protocol_schema_valid": true,
+    "provenance_gate_matched": true,
+    "python_exit": 0,
+    "queue_rows": 1,
+    "queue_sha256": "6d5b4d71e7dc311c564ed5479435c8ef689f55bd243b49c3e398ff00c9d7dc18",
+    "rank_metrics": {
+      "0": {
+        "compute": {
+          "die_compute_busy_util": 0.6986956281434809,
+          "total_local_bytes": "1409792",
+          "total_num_ops": "31809536",
+          "wall_time_ns": 25310
+        },
+        "hbm": {
+          "die_hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "die_int4_ops_exact_decimal": "0",
+          "die_vec_eqops_exact_decimal": "0",
+          "hbm_busy_ns": 8561.597768739412,
+          "hbm_busy_util": 0.23659972831314352
+        }
+      },
+      "1": {
+        "compute": {
+          "die_compute_busy_util": 0.3004753219477146,
+          "total_local_bytes": "507192",
+          "total_num_ops": "497564",
+          "wall_time_ns": 36186
+        },
+        "hbm": {
+          "die_hbm_served_bytes_by_row_direction_exact": [
+            [
+              "2",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "die_int4_ops_exact_decimal": "0",
+          "die_vec_eqops_exact_decimal": "0",
+          "hbm_busy_ns": 1669.809273097826,
+          "hbm_busy_util": 0.04614517418608926
+        }
+      }
+    },
+    "request_complete_observed": true,
+    "request_count": 3,
+    "request_metrics": {
+      "completed": true,
+      "completion_ns": 36185,
+      "decode_ns": 10890,
+      "e2e_ns": 36185,
+      "first_token_ns": 36185,
+      "prefill_ns": 25294
+    },
+    "response_count": 3,
+    "run_dir": "work/online-baseline-20261014/e2e/run",
+    "service_counters_line": "[online] service counters: accepted=1 completed=1 active=0 pending_alarm=0",
+    "successful_acks": 3,
+    "summary_metrics": {
+      "completed_unique_requests": 1,
+      "incomplete_requests": 0,
+      "input_requests": 1,
+      "p50_e2e_ns": 36185,
+      "p95_e2e_ns": 36185,
+      "p99_e2e_ns": 36185,
+      "sim_end_ns": 36186
+    },
+    "terminal_audit_line": "[online] phase-4 end audit: watch_registry_size=0 watch_stale=0 completed_facts_residual=0 affected_ranks_residual=0 issue_pass_pending=0 terminal_total=31 terminal_success=31 terminal_skipped=0 terminal_other=0",
+    "typed_comp_count": 20,
+    "workspace_all_responses_fit": true,
+    "workspace_capacity_snapshots": [
+      {
+        "delivery_sequence": 0,
+        "fits": [
+          {
+            "active_workspace_bytes": 0,
+            "base_used_bytes": 623360,
+            "capacity_bytes": 144000000000,
+            "fits": true,
+            "rank": 0,
+            "workspace_revision": 0
+          },
+          {
+            "active_workspace_bytes": 0,
+            "base_used_bytes": 623872,
+            "capacity_bytes": 144000000000,
+            "fits": true,
+            "rank": 1,
+            "workspace_revision": 0
+          }
+        ],
+        "ranks": [
+          {
+            "capacity_bytes": 144000000000,
+            "model_weight_bytes": 590592,
+            "rank": 0,
+            "reserved_request_bytes": 0,
+            "resident_kv_bytes": 32768,
+            "workspace_revision": 0
+          },
+          {
+            "capacity_bytes": 144000000000,
+            "model_weight_bytes": 590592,
+            "rank": 1,
+            "reserved_request_bytes": 33280,
+            "resident_kv_bytes": 0,
+            "workspace_revision": 0
+          }
+        ]
+      },
+      {
+        "delivery_sequence": 1,
+        "fits": [
+          {
+            "active_workspace_bytes": 0,
+            "base_used_bytes": 590592,
+            "capacity_bytes": 144000000000,
+            "fits": true,
+            "rank": 0,
+            "workspace_revision": 20
+          },
+          {
+            "active_workspace_bytes": 0,
+            "base_used_bytes": 623872,
+            "capacity_bytes": 144000000000,
+            "fits": true,
+            "rank": 1,
+            "workspace_revision": 0
+          }
+        ],
+        "ranks": [
+          {
+            "capacity_bytes": 144000000000,
+            "model_weight_bytes": 590592,
+            "rank": 0,
+            "reserved_request_bytes": 0,
+            "resident_kv_bytes": 0,
+            "workspace_revision": 20
+          },
+          {
+            "capacity_bytes": 144000000000,
+            "model_weight_bytes": 590592,
+            "rank": 1,
+            "reserved_request_bytes": 0,
+            "resident_kv_bytes": 33280,
+            "workspace_revision": 0
+          }
+        ]
+      },
+      {
+        "delivery_sequence": 2,
+        "fits": [
+          {
+            "active_workspace_bytes": 0,
+            "base_used_bytes": 590592,
+            "capacity_bytes": 144000000000,
+            "fits": true,
+            "rank": 0,
+            "workspace_revision": 20
+          },
+          {
+            "active_workspace_bytes": 0,
+            "base_used_bytes": 590592,
+            "capacity_bytes": 144000000000,
+            "fits": true,
+            "rank": 1,
+            "workspace_revision": 20
+          }
+        ],
+        "ranks": [
+          {
+            "capacity_bytes": 144000000000,
+            "model_weight_bytes": 590592,
+            "rank": 0,
+            "reserved_request_bytes": 0,
+            "resident_kv_bytes": 0,
+            "workspace_revision": 20
+          },
+          {
+            "capacity_bytes": 144000000000,
+            "model_weight_bytes": 590592,
+            "rank": 1,
+            "reserved_request_bytes": 0,
+            "resident_kv_bytes": 0,
+            "workspace_revision": 20
+          }
+        ]
+      }
+    ],
+    "workspace_rank_revisions": [
+      {
+        "delivery_sequence": 0,
+        "ranks": [
+          {
+            "active_workspace_bytes": 0,
+            "rank": 0,
+            "workspace_revision": 0
+          },
+          {
+            "active_workspace_bytes": 0,
+            "rank": 1,
+            "workspace_revision": 0
+          }
+        ]
+      },
+      {
+        "delivery_sequence": 1,
+        "ranks": [
+          {
+            "active_workspace_bytes": 0,
+            "rank": 0,
+            "workspace_revision": 20
+          },
+          {
+            "active_workspace_bytes": 0,
+            "rank": 1,
+            "workspace_revision": 0
+          }
+        ]
+      },
+      {
+        "delivery_sequence": 2,
+        "ranks": [
+          {
+            "active_workspace_bytes": 0,
+            "rank": 0,
+            "workspace_revision": 20
+          },
+          {
+            "active_workspace_bytes": 0,
+            "rank": 1,
+            "workspace_revision": 20
+          }
+        ]
+      }
+    ],
+    "wrapper_exit": 0
+  },
+  "source": {
+    "branch": "codex/die-os-lifecycle-20261014",
+    "commit": "fba3b8e544b65728be384b43ecfeb355fddd028f",
+    "commit_tree_sha1": "2138882858cb90f00806f0b77713164a56c8c37e",
+    "scope_note": "Hashes are read from Git objects at committed HEAD fba3b8e544b65728be384b43ecfeb355fddd028f, not from subsequently modified shared working files.",
+    "selected_source_file_count": 32,
+    "selected_source_manifest_sha256": "728e4e069d253f94a33b39886e0355e6aa9608882b0e61d4f070b19f22af40ca",
+    "source_file_sha256_from_committed_head": {
+      "astra-sim-wscllm/CMakeLists.txt": "9fd95110a02a8fda2b9a722f83bcf0cdf09cc7c1fcc4a008b1bc76d66c0b9948",
+      "astra-sim-wscllm/astra-sim/network_frontend/analytical/CMakeLists.txt": "5e319d47f8bb34f05ba9fc155329e4b6bb3f92496f5b0345b7bfd816a26144be",
+      "astra-sim-wscllm/astra-sim/workload/CoarseDieRuntime.cc": "4032990ea01847e8775379ce11e15f9e1db2525055ccdb333336bd0b441f7409",
+      "astra-sim-wscllm/astra-sim/workload/CoarseDieRuntime.hh": "9a4fe68f5e5db838ee00f398a3b6bfee57c25a155624d75820202884b0aff132",
+      "astra-sim-wscllm/astra-sim/workload/DieExecution.cc": "467305c944b2611c6c086f3d2c11f2e97ece524a29ff520e2f6f74f0dea3e49d",
+      "astra-sim-wscllm/astra-sim/workload/DieModelAdapter.cc": "786683acfbb3704305a682fd0d831cc4ec2471c9d773c8a02777fd099969a426",
+      "astra-sim-wscllm/astra-sim/workload/LocalHbmBandwidthModel.cc": "77d8ac8882d2592a33cdaef353dd8722875e13ff04ec9739deb2d8f475d84c66",
+      "astra-sim-wscllm/astra-sim/workload/LocalHbmBandwidthModel.hh": "b30c031932bbae6c74af2f88d463d2283e9674859274ce09f71d0438f0944173",
+      "astra-sim-wscllm/astra-sim/workload/Workload.cc": "5745e6f41e17d05903a0ad11e28032b3ac153b20b1e48d86753606e98c68aa50",
+      "astra-sim-wscllm/astra-sim/workload/Workload.hh": "2c38e9091fcaf4353c4e0ae54502d5f945aeed348ecf2a9e6f2912af88633790",
+      "astra-sim-wscllm/extern/die_model/CMakeLists.txt": "27dd6817effce8c7ecfe394efd9b704260b824bf9818dcbc3638264f9a625cb2",
+      "astra-sim-wscllm/extern/die_model/coarse/CMakeLists.txt": "65196341620640098fa607d4734f18919ac0bb64275629ea4460de1580bc0ed6",
+      "astra-sim-wscllm/extern/die_model/coarse/src/Capi.cc": "2b3cb646594ac3091749122dd4aa909b62abe8eb96be84c53670432ffd90e5ec",
+      "astra-sim-wscllm/extern/die_model/coarse/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+      "astra-sim-wscllm/extern/die_model/coarse/src/Execution.cc": "c96a0555cb23c8c31ba5ab191aae275dbdaa65b7d17e15eb0249a9c35e9c2cb3",
+      "astra-sim-wscllm/extern/die_model/coarse/src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+      "astra-sim-wscllm/extern/die_model/coarse/src/Mapping.cc": "4988b407ef8ad61005d75ffbff17a3b4be32dc6fcd0cf2ae2e3668ad90b2beb4",
+      "astra-sim-wscllm/extern/die_model/coarse/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+      "astra-sim-wscllm/extern/die_model/src/Capi.cc": "8ded2aedb005082000d142730ce38ac5edc89a397c1797c1596ea756f8b5bb88",
+      "astra-sim-wscllm/extern/die_model/src/CostModel.cc": "365f462a6558d3885ef3508aa19fbdd046546e4acf906b284585ed897ce5d6c6",
+      "astra-sim-wscllm/extern/die_model/src/Execution.cc": "410dfd8d93ff08d4231e0987832f0ddaa208505305644f173063ecce6d8934af",
+      "astra-sim-wscllm/extern/die_model/src/Hardware.cc": "b14d8c274fe292a9854fd8698ad28af426297ea818632dc74b5741d21e109b74",
+      "astra-sim-wscllm/extern/die_model/src/Mapping.cc": "e5a7d9fd243d6f6c1726929c745b177c72bcaaac01fab7f068ed5959328391ab",
+      "astra-sim-wscllm/extern/die_model/src/Tx8Reference.cc": "217aa26f58033b93a4683de0c2907ef5be9fe0aebbaf142ad4c6b41318285c77",
+      "astra-sim-wscllm/extern/die_model/src/Workload.cc": "9d0485eb905a2959dfa927878a7941284bd81e0087cab54b044298c70b904724",
+      "die/CMakeLists.txt": "65196341620640098fa607d4734f18919ac0bb64275629ea4460de1580bc0ed6",
+      "die/src/Capi.cc": "2b3cb646594ac3091749122dd4aa909b62abe8eb96be84c53670432ffd90e5ec",
+      "die/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+      "die/src/Execution.cc": "c96a0555cb23c8c31ba5ab191aae275dbdaa65b7d17e15eb0249a9c35e9c2cb3",
+      "die/src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+      "die/src/Mapping.cc": "4988b407ef8ad61005d75ffbff17a3b4be32dc6fcd0cf2ae2e3668ad90b2beb4",
+      "die/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681"
+    },
+    "subtree_sha1": {
+      "astra-sim-wscllm": "d661da4e8da6385270f64911bc5291c29dc81120",
+      "die": "b9410e526dae8055a38845d557da13b244ce3bc1"
+    },
+    "timing_provenance": {
+      "note": "The shared worktree contains later concurrent edits; the recorded root Die object files and Online binary were produced before the current Mapping.cc and CMakeLists.txt mtimes. E2E used the recorded binaries, not a rebuild from those later edits.",
+      "online_binary_mtime_utc": "2026-10-14 07:18:38.366 +0000",
+      "public_capi_object_mtime_utc": "2026-10-14 07:14:36.104 +0000",
+      "public_mapping_object_mtime_utc": "2026-10-14 07:14:23.704 +0000",
+      "shared_worktree_die_cmake_lists_current_mtime_utc": "2026-10-14 07:22:13.838 +0000",
+      "shared_worktree_die_mapping_cc_current_mtime_utc": "2026-10-14 07:21:08.045 +0000"
+    }
+  },
+  "toolchain": {
+    "cmake": "3.31.10",
+    "gcc": "14.2.0",
+    "protobuf_cpp": "3.21.12",
+    "python": "3.12.14",
+    "python_protobuf": "6.33.5",
+    "strace": "/usr/bin/strace"
+  }
+}

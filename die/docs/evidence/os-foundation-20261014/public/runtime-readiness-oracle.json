@@ -1,0 +1,68 @@
+{
+  "strict": {
+    "status": "passed",
+    "stages": 28,
+    "max_start_error_ns": 2,
+    "max_finish_error_ns": 2,
+    "hbm_busy_error_ns": 1.13687e-13,
+    "lifetime_hbm_rounding_error_bytes": "0",
+    "terminal_work_conservation": "exact",
+    "exact_finish_ns": 2401502,
+    "scope": "offline single-owner readiness and exact 13-row allocation; C++ supplied work facts; no production granularity/skip certificate"
+  },
+  "int4_native": {
+    "status": "passed",
+    "stages": 28,
+    "max_start_error_ns": 2,
+    "max_finish_error_ns": 2,
+    "hbm_busy_error_ns": 2.98428e-13,
+    "lifetime_hbm_rounding_error_bytes": "111/250000000000000000",
+    "terminal_work_conservation": "exact",
+    "exact_finish_ns": 175551,
+    "scope": "offline single-owner readiness and exact 13-row allocation; C++ supplied work facts; no production granularity/skip certificate"
+  },
+  "int4_converted": {
+    "status": "passed",
+    "stages": 28,
+    "max_start_error_ns": 1,
+    "max_finish_error_ns": 1,
+    "hbm_busy_error_ns": 1.307399e-12,
+    "lifetime_hbm_rounding_error_bytes": "0",
+    "terminal_work_conservation": "exact",
+    "exact_finish_ns": 801879,
+    "scope": "offline single-owner readiness and exact 13-row allocation; C++ supplied work facts; no production granularity/skip certificate"
+  },
+  "fractional_conversion": {
+    "status": "passed",
+    "stages": 28,
+    "max_start_error_ns": 2,
+    "max_finish_error_ns": 2,
+    "hbm_busy_error_ns": 3.9278802e-11,
+    "lifetime_hbm_rounding_error_bytes": "1421/200000000000000000",
+    "terminal_work_conservation": "exact",
+    "exact_finish_ns": 829154,
+    "scope": "offline single-owner readiness and exact 13-row allocation; C++ supplied work facts; no production granularity/skip certificate"
+  },
+  "single_k": {
+    "status": "passed",
+    "stages": 3,
+    "max_start_error_ns": 0,
+    "max_finish_error_ns": 0,
+    "hbm_busy_error_ns": 2.7922e-14,
+    "lifetime_hbm_rounding_error_bytes": "0",
+    "terminal_work_conservation": "exact",
+    "exact_finish_ns": 1110,
+    "scope": "offline single-owner readiness and exact 13-row allocation; C++ supplied work facts; no production granularity/skip certificate"
+  },
+  "short_tiles": {
+    "status": "passed",
+    "stages": 15,
+    "max_start_error_ns": 1,
+    "max_finish_error_ns": 1,
+    "hbm_busy_error_ns": 2.017941e-12,
+    "lifetime_hbm_rounding_error_bytes": "0",
+    "terminal_work_conservation": "exact",
+    "exact_finish_ns": 447042,
+    "scope": "offline single-owner readiness and exact 13-row allocation; C++ supplied work facts; no production granularity/skip certificate"
+  }
+}

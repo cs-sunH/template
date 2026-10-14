@@ -1,0 +1,14 @@
+{
+  "base_commit": "fba3b8e544b65728be384b43ecfeb355fddd028f",
+  "worktree_sources_sha256": {
+    "die/src/Mapping.cc": "b78bcf1874d8c16f8be6cdc6d502f63912592b307403728b855f457c1054d070",
+    "die/src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "die/src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+    "die/src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+    "die/tests/os_lifecycle_runtime_driver.cc": "3a7a5f71e512fcf6ace805d0224727bb6f61af37d03b6a8301b4d77fe42674b5",
+    "die/validation/os_lifecycle_runtime_oracle.py": "8c2875ef96942cd8c6b255658800d468a37137b1fe7fe78b2611271b78cdc5b8",
+    "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py": "a30f2dc884344a87d33c7e846eb2e642119381174f9d674516c9f11cf9257284",
+    "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/test_workspace_admission_manager.py": "7dea534b6c81e4ba5f7f58ca14cbf048ac3520d4c4e90be23c8dce4466f1e5cd"
+  },
+  "note": "checkpoint tests were run on these uncommitted source bytes; commit identity is recorded only after creation"
+}

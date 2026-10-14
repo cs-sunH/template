@@ -43,7 +43,7 @@ from dataclasses import dataclass, replace
 import functools
 import json
 import os
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +67,7 @@ REMOTE_RESTORE = "REMOTE_RESTORE"    # REMOTE: full restore (the only remote pat
 # 的 M1 压缩):_events 已消费水位达到该值即整段删除前缀(单一水位条件,
 # 无二次门槛——见 compact_events),均摊 O(1)/事件。
 _EVENTS_COMPACT_THRESHOLD = 8192
+_UINT64_MAX = (1 << 64) - 1
 
 # Read-only metrics observation (implementation doc sec.7).  When a recorder
 # is installed through set_metrics_observer(), every state mutation below is
@@ -603,6 +604,9 @@ class CapacityResult:
     # 生产链不读(2026-09-30 审查登记:写后不读,保留作诊断信息;跨仓
     # 序列化裁决不在本仓做)。
     insufficient_ranks: tuple[int, ...]
+    # An absolute external workspace hold can temporarily prevent admission.
+    # Defaults preserve the legacy result shape for non-workspace callers.
+    blocked_by_workspace: bool = False
 
 
 @dataclass(frozen=True)
@@ -631,6 +635,7 @@ class HistoryDecision:
     admission_blocked: bool = False
     # 逐 rank 深度诊断,决策边界后仅测试断言消费(同 CapacityResult 注)。
     insufficient_ranks: tuple[int, ...] = ()
+    blocked_by_workspace: bool = False
 
     @property
     def transfer_bytes(self) -> int:
@@ -652,6 +657,7 @@ class MoveDecision:
     admission_blocked: bool = False
     # 逐 rank 深度诊断,决策边界后仅测试断言消费(同 CapacityResult 注)。
     insufficient_ranks: tuple[int, ...] = ()
+    blocked_by_workspace: bool = False
 
 
 @dataclass(frozen=True)
@@ -780,6 +786,15 @@ class SessionKVCacheManager:
         self._remote_bytes_by_rank: dict[int, int] = {
             rank: 0 for rank in self._rank_states
         }
+        # Bridge-owned absolute workspace state. It deliberately lives
+        # outside the journal rollback snapshot: a failed KV transaction
+        # cannot undo a newer external revision.
+        self._external_workspace_revision_by_rank: dict[int, int] = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._external_workspace_bytes_by_rank: dict[int, int] = {
+            rank: 0 for rank in self._rank_states
+        }
         self._check_invariants()
         self._initialize_incremental_invariants()
         # Metrics observation state: resident KV is tracked as per-session
@@ -844,6 +859,136 @@ class SessionKVCacheManager:
     @property
     def session_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._sessions))
+
+    @property
+    def rank_ids(self) -> tuple[int, ...]:
+        """Stable sorted rank set used by the explicit workspace bridge."""
+        return tuple(sorted(self._rank_states))
+
+    def set_external_workspace_view(
+        self,
+        revision_by_rank: Mapping[int, int],
+        bytes_by_rank: Mapping[int, int],
+    ) -> tuple[int, ...]:
+        """Install a complete absolute workspace view atomically.
+
+        Revisions are monotonic per rank. A byte change requires a revision
+        advance, and every rank is checked against current Python HBM use
+        before either stored map is replaced.
+        """
+        if not isinstance(revision_by_rank, Mapping):
+            raise ValueError("workspace revisions must be a rank mapping")
+        if not isinstance(bytes_by_rank, Mapping):
+            raise ValueError("workspace bytes must be a rank mapping")
+        expected_ranks = set(self._rank_states)
+        for name, values in (("workspace revision", revision_by_rank),
+                             ("workspace bytes", bytes_by_rank)):
+            for rank in values:
+                self._require_workspace_uint64(rank, f"{name} rank")
+            if set(values) != expected_ranks:
+                raise ValueError(
+                    f"{name} ranks must exactly match topology ranks "
+                    f"{sorted(expected_ranks)}, got {sorted(values)}")
+
+        revisions: dict[int, int] = {}
+        workspace_bytes: dict[int, int] = {}
+        changed: list[int] = []
+        for rank in sorted(expected_ranks):
+            revision = revision_by_rank[rank]
+            active_bytes = bytes_by_rank[rank]
+            self._require_workspace_uint64(
+                revision, f"workspace revision for rank {rank}")
+            self._require_workspace_uint64(
+                active_bytes, f"active workspace bytes for rank {rank}")
+            previous_revision = self._external_workspace_revision_by_rank[rank]
+            previous_bytes = self._external_workspace_bytes_by_rank[rank]
+            if revision < previous_revision:
+                raise ValueError(
+                    f"stale workspace revision for rank {rank}: "
+                    f"{revision} < {previous_revision}")
+            if revision == previous_revision and active_bytes != previous_bytes:
+                raise ValueError(
+                    f"workspace bytes changed without revision advance on "
+                    f"rank {rank}")
+            state = self._rank_states[rank]
+            combined = state.used_bytes + active_bytes
+            if combined > _UINT64_MAX or combined > state.capacity_bytes:
+                raise ValueError(
+                    f"workspace hold exceeds Python HBM capacity on rank "
+                    f"{rank}: KV base={state.used_bytes}, workspace="
+                    f"{active_bytes}, capacity={state.capacity_bytes}")
+            revisions[rank] = revision
+            workspace_bytes[rank] = active_bytes
+            if revision != previous_revision or active_bytes != previous_bytes:
+                changed.append(rank)
+
+        # Install only after the full rank table passed validation.
+        self._external_workspace_revision_by_rank = revisions
+        self._external_workspace_bytes_by_rank = workspace_bytes
+        return tuple(changed)
+
+    @staticmethod
+    def _require_workspace_uint64(value: int, name: str) -> None:
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or value < 0 or value > _UINT64_MAX):
+            raise ValueError(f"{name} must be an exact uint64 integer")
+
+    def workspace_capacity_snapshot(self) -> dict[str, Any]:
+        """Return the per-rank Python KV base used by bridge protocol v2."""
+        rows = []
+        for rank in sorted(self._rank_states):
+            state = self._rank_states[rank]
+            revision = self._external_workspace_revision_by_rank[rank]
+            active_workspace = self._external_workspace_bytes_by_rank[rank]
+            fields = (
+                ("rank", rank),
+                ("workspace revision", revision),
+                ("capacity bytes", state.capacity_bytes),
+                ("model weight bytes", state.model_weight_bytes),
+                ("resident KV bytes", state.resident_kv_bytes),
+                ("reserved request bytes", state.reserved_request_bytes),
+                ("active workspace bytes", active_workspace),
+            )
+            for name, value in fields:
+                self._require_workspace_uint64(
+                    value, f"workspace capacity snapshot {name} for rank {rank}"
+                )
+            used_bytes = (
+                state.model_weight_bytes
+                + state.resident_kv_bytes
+                + state.reserved_request_bytes
+            )
+            if used_bytes > _UINT64_MAX:
+                raise ValueError(
+                    f"workspace capacity snapshot used bytes exceed uint64 "
+                    f"on rank {rank}"
+                )
+            combined_bytes = used_bytes + active_workspace
+            if combined_bytes > _UINT64_MAX:
+                raise ValueError(
+                    f"workspace capacity snapshot combined bytes exceed "
+                    f"uint64 on rank {rank}"
+                )
+            if combined_bytes > state.capacity_bytes:
+                raise RuntimeError(
+                    f"workspace capacity snapshot exceeds HBM capacity on "
+                    f"rank {rank}: combined={combined_bytes}, "
+                    f"capacity={state.capacity_bytes}"
+                )
+            rows.append(
+                {
+                    "rank": rank,
+                    "workspace_revision": revision,
+                    "capacity_bytes": state.capacity_bytes,
+                    "model_weight_bytes": state.model_weight_bytes,
+                    "resident_kv_bytes": state.resident_kv_bytes,
+                    "reserved_request_bytes": state.reserved_request_bytes,
+                }
+            )
+        return {
+            "protocol_version": 1,
+            "ranks": rows,
+        }
 
     @property
     def node_states(self) -> tuple[NodeHBMState, ...]:
@@ -915,6 +1060,14 @@ class SessionKVCacheManager:
             for rank in self.topology.instance(instance_index).ranks
         )
 
+    def _fit_remaining(self, instance_index: int) -> tuple[int, ...]:
+        """KV headroom after the separately owned workspace hold."""
+        return tuple(
+            self._rank_states[rank].remaining_bytes
+            - self._external_workspace_bytes_by_rank[rank]
+            for rank in self.topology.instance(instance_index).ranks
+        )
+
     def _insufficient(
         self,
         instance_index: int,
@@ -927,6 +1080,22 @@ class SessionKVCacheManager:
             rank
             for rank, remaining, required in zip(
                 instance.ranks, self._remaining(instance_index), required_shards
+            )
+            if remaining < required
+        )
+
+    def _fit_insufficient(
+        self,
+        instance_index: int,
+        required_shards: Sequence[int],
+    ) -> tuple[int, ...]:
+        instance = self.topology.instance(instance_index)
+        if len(required_shards) != len(instance.ranks):
+            raise ValueError("required KV shards must match the target TP degree")
+        return tuple(
+            rank
+            for rank, remaining, required in zip(
+                instance.ranks, self._fit_remaining(instance_index), required_shards
             )
             if remaining < required
         )
@@ -1359,10 +1528,15 @@ class SessionKVCacheManager:
                 raise RuntimeError("negative HBM accounting")
             if self._remote_bytes_by_rank[rank] < 0:
                 raise RuntimeError("negative remote-pool accounting")
-            if state.used_bytes > state.capacity_bytes:
+            combined_used = (
+                state.used_bytes + self._external_workspace_bytes_by_rank[rank]
+            )
+            if combined_used > state.capacity_bytes:
                 raise RuntimeError(
                     f"HBM capacity exceeded on rank {state.rank}: "
-                    f"used={state.used_bytes}, capacity={state.capacity_bytes}"
+                    f"used={state.used_bytes}, workspace="
+                    f"{self._external_workspace_bytes_by_rank[rank]}, "
+                    f"capacity={state.capacity_bytes}"
                 )
         for session_id in changed_sessions:
             session = self._sessions.get(session_id)
@@ -2130,26 +2304,30 @@ class SessionKVCacheManager:
         victim is evicted whole (all layers, all TP shards) and the shortfall
         is rechecked after every single eviction.  Over-release is allowed:
         the loop stops at the first eviction after which the requirement
-        fits, never at an exact byte boundary.  The eviction loop is entered
-        only when the requirement could still fit once every reclaimable
-        session is evicted.  Outstanding request reservations
-        (``reserved_request_bytes``) are not reclaimable by eviction and
-        count into that judgment alongside the non-candidate residency.
+        fits, never at an exact byte boundary. Fit includes the separately
+        owned external workspace hold. The eviction loop is entered only
+        when the requirement could still fit once every reclaimable session
+        is evicted. Outstanding request reservations
+        (``reserved_request_bytes``), active/protected residency, and the
+        workspace hold are not reclaimable by eviction and count into that
+        judgment.
         Callers pass the gross requirement on the
         first attempt and a vector net of the protected sessions' own
         residency on the failure retry; because neither that residency nor
         the co-resident active sessions' residency is ever a candidate, and
         both are counted into the margin judgment below, a gross first
         attempt that could not fit alongside them runs the graceful
-        exhaustion path without evicting anything.  Exhaustion keeps the
-        graceful wscllm failure semantics:
+        exhaustion path without evicting anything. Ordinary exhaustion keeps
+        the graceful wscllm failure semantics:
         ``deep_gap_events`` counter + bounded pressure event +
-        ``admitted=False`` — never the sh blueprint's raise.  Two contract
-        violations still raise, and neither is capacity exhaustion: a shard
-        vector that cannot fit an empty instance raises ``ValueError`` (no
-        reclamation could ever admit it), and a loop that returns success
-        while the requirement still does not fit raises ``RuntimeError``
-        (internal accounting bug).
+        ``admitted=False`` — never the sh blueprint's raise. A workspace-only
+        block returns ``blocked_by_workspace=True`` without a deep-gap event,
+        so a later absolute revision can retry it. Two contract violations
+        still raise, and neither is capacity exhaustion: a shard vector that
+        cannot fit an empty instance raises ``ValueError`` (no reclamation
+        could ever admit it), and a loop that returns success while the
+        requirement still does not fit raises ``RuntimeError`` (internal
+        accounting bug).
         """
 
         required = _require_int_vector(required_shards, "required KV shard vector")
@@ -2192,6 +2370,10 @@ class SessionKVCacheManager:
             self._rank_states[rank].reserved_request_bytes
             for rank in instance.ranks
         )
+        workspace = tuple(
+            self._external_workspace_bytes_by_rank[rank]
+            for rank in instance.ranks
+        )
         impossible = tuple(
             rank for rank, needed, available in zip(instance.ranks, required, maximum)
             if needed > available
@@ -2203,23 +2385,58 @@ class SessionKVCacheManager:
                 if rank in impossible
             )
             raise ValueError(f"request cannot fit an empty instance: {details}")
+        impossible_with_workspace = tuple(
+            rank
+            for rank, needed, available, held in zip(
+                instance.ranks, required, maximum, workspace
+            )
+            if needed > available - held
+        )
+        if impossible_with_workspace:
+            # The workspace hold is temporary. Preserve the LRU variant's
+            # empty-instance ValueError above, but wait without touching
+            # remote-pool accounting when only this epoch's hold makes the
+            # request impossible.
+            return CapacityResult(
+                (), False, impossible_with_workspace, blocked_by_workspace=True
+            )
         evictions: list[KVTransfer] = []
         insufficient = self._insufficient(instance_index, required)
+        fit_insufficient = self._fit_insufficient(instance_index, required)
         # Single stage: evict complete sessions in deterministic LRU order
-        # until the requirement fits (or the pool is exhausted).
-        if insufficient and all(
+        # until the requirement fits including the separately owned workspace
+        # hold (or the pool is exhausted).
+        can_fit_after_reclamation_without_workspace = all(
             needed <= available - own - held
             for needed, available, own, held in zip(
                 required, maximum, noncandidate_resident, reserved
             )
+        )
+        can_fit_after_reclamation = all(
+            needed <= available - own - held - workspace_bytes
+            for needed, available, own, held, workspace_bytes in zip(
+                required, maximum, noncandidate_resident, reserved, workspace
+            )
+        )
+        if (
+            fit_insufficient
+            and can_fit_after_reclamation_without_workspace
+            and not can_fit_after_reclamation
         ):
+            # The ordinary KV margin can satisfy this request after reclaim,
+            # but the workspace hold alone removes that feasibility. Do not
+            # evict cold sessions or report a deep gap for this epoch.
+            return CapacityResult(
+                (), False, fit_insufficient, blocked_by_workspace=True
+            )
+        if fit_insufficient and can_fit_after_reclamation:
             candidates = [
                 session
                 for session in self._completed_local_candidates(instance_index)
                 if session.session_id not in protected
             ]
             candidate_index = 0
-            while insufficient:
+            while fit_insufficient:
                 if candidate_index >= len(candidates):
                     break
                 victim = candidates[candidate_index]
@@ -2234,6 +2451,7 @@ class SessionKVCacheManager:
                     )
                 )
                 insufficient = self._insufficient(instance_index, required)
+                fit_insufficient = self._fit_insufficient(instance_index, required)
         # D4-I1 (2026-09-05; 2026-09-30 补全规格复核项):在 deep-gap 与
         # 成功两条返回路径之前统一复核每个受害者——非活跃、非保护会话、
         # 且已落 REMOTE(规格 §4.2"复查全部受害者确已非活跃、非保护会
@@ -2254,7 +2472,11 @@ class SessionKVCacheManager:
                 raise RuntimeError(
                     "passive eviction victim is not fully remote after "
                     f"eviction: {transfer.session_id}")
-        if insufficient:
+        if fit_insufficient and not insufficient:
+            return CapacityResult(
+                tuple(evictions), False, fit_insufficient,
+                blocked_by_workspace=True)
+        if fit_insufficient:
             before = self._remaining(instance_index)
             # D4 (2026-09-05): 被动逐出深缺口——整会话候选全耗尽(活跃会话
             # 占满、无可逐冷会话)优雅推迟 admitted=False;capacity_epoch 重试
@@ -2278,7 +2500,7 @@ class SessionKVCacheManager:
             return CapacityResult(tuple(evictions), False, insufficient)
         # 逐出收敛后必须满足本请求 required 的显式断言(整体逐出允许过量
         # 释放,不检查"恰好够")。
-        if self._insufficient(instance_index, required):
+        if self._fit_insufficient(instance_index, required):
             raise RuntimeError(
                 "physical-fit stage returned success while still insufficient")
         return CapacityResult(tuple(evictions), True, ())
@@ -2311,7 +2533,9 @@ class SessionKVCacheManager:
         )
         evictions = fit.evictions
         if not fit.admitted:
-            return CapacityResult(evictions, False, fit.insufficient_ranks)
+            return CapacityResult(
+                evictions, False, fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace)
         for rank, value in zip(self.topology.instance(instance_index).ranks, required):
             self._rank_states[rank].reserved_request_bytes += value
         self._reservations[request_id] = RequestCapacityReservation(
@@ -2507,6 +2731,7 @@ class SessionKVCacheManager:
                 evictions=fit.evictions,
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace,
             )
 
         # ---- branch 1: no history ----
@@ -2815,7 +3040,9 @@ class SessionKVCacheManager:
         )
         evictions = fit.evictions
         if not fit.admitted:
-            return CapacityResult(evictions, False, fit.insufficient_ranks)
+            return CapacityResult(
+                evictions, False, fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace)
         self._add_shards(instance_index, delta)
         previous_tokens = state.logical_context_tokens
         state.shard_bytes = desired
@@ -2928,6 +3155,7 @@ class SessionKVCacheManager:
                 evictions=evictions,
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace,
             )
         # 防御分支(source==target,PD 分离拓扑生产不可达:move 恒从
         # prefill 实例迁往 decode 实例,两集合不相交;2026-09-30 审查登记
@@ -3278,10 +3506,15 @@ class SessionKVCacheManager:
                 raise RuntimeError("negative HBM accounting")
             if self._remote_bytes_by_rank[rank] < 0:
                 raise RuntimeError("negative remote-pool accounting")
-            if state.used_bytes > state.capacity_bytes:
+            combined_used = (
+                state.used_bytes + self._external_workspace_bytes_by_rank[rank]
+            )
+            if combined_used > state.capacity_bytes:
                 raise RuntimeError(
                     f"HBM capacity exceeded on rank {state.rank}: "
-                    f"used={state.used_bytes}, capacity={state.capacity_bytes}"
+                    f"used={state.used_bytes}, workspace="
+                    f"{self._external_workspace_bytes_by_rank[rank]}, "
+                    f"capacity={state.capacity_bytes}"
                 )
             if state.resident_kv_bytes != expected_resident[rank]:
                 raise RuntimeError(
