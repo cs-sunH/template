@@ -1,0 +1,50 @@
+FACE coarse-workspace C++ build evidence
+Captured: 2026-10-14 UTC
+Source checkout: /workspace/template
+Git HEAD: ca604f5e49dc6df387888a33c75b0134642d42f3
+
+Both variants use independent aggregate CMake source trees and build directories.
+The source roots are /workspace/template/astra-sim-face and
+/workspace/template/astra-sim-face-LRU. Their generated CMakeCache.txt files
+record those ASTRA_SIM_ROOT values, NETWORK_BACKEND_BUILD_AS_LIBRARY=ON, and
+CMAKE_HOME_DIRECTORY values ending in cpp-face/aggregate and cpp-face-lru/aggregate.
+
+FACE configure:
+  source /workspace/cloud-setup/activate.sh && cmake -S work/face-workspace-port-20261014/cpp-face/aggregate -B work/face-workspace-port-20261014/cpp-face/build -DASTRA_SIM_ROOT=/workspace/template/astra-sim-face -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release 2>&1 | tee work/face-workspace-port-20261014/cpp-face/configure-final.log
+
+FACE selected build:
+  source /workspace/cloud-setup/activate.sh && set -o pipefail && cmake --build work/face-workspace-port-20261014/cpp-face/build --parallel 2 --target AstraSim_Analytical_Congestion_Aware_Online AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest AstraSim_Analytical_Congestion_Aware_ParsedBatchTest AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest 2>&1 | tee work/face-workspace-port-20261014/cpp-face/build-final.log
+  Log: work/face-workspace-port-20261014/cpp-face/build-final.log
+
+FACE selected CTest:
+  source /workspace/cloud-setup/activate.sh && set -o pipefail && ctest --test-dir work/face-workspace-port-20261014/cpp-face/build --output-on-failure -R 'AstraSim_Analytical_Congestion_Aware_(DecisionMailbox|WorkspaceAdmission|BridgeLoopback|GraphBatchCommitter|ParsedBatch|DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test' 2>&1 | tee work/face-workspace-port-20261014/cpp-face/ctest-final.log
+  Result: 8/8 passed. Log: work/face-workspace-port-20261014/cpp-face/ctest-final.log
+  Direct lifecycle assertions: work/face-workspace-port-20261014/cpp-face/lifecycle-details.log
+  Online SHA256: 6f9670f3fa2b615b70ef9f86ef6a93f7fe467dfec0809d2dfd6dcde977e9cfe6
+  Measured C++ source-tree SHA: 483399503ebf0b370c7847933f0664bbef729eff7747a02f61bf1017069ecaa5
+  Positive-overlap replay artifact: work/face-workspace-port-20261014/online-reproduction/runs/astra-sim-face/coarse-workspace-overlap-20261014T221353Z-55442/
+
+FACE-LRU configure:
+  source /workspace/cloud-setup/activate.sh && cmake -S work/face-workspace-port-20261014/cpp-face-lru/aggregate -B work/face-workspace-port-20261014/cpp-face-lru/build -DASTRA_SIM_ROOT=/workspace/template/astra-sim-face-LRU -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release 2>&1 | tee work/face-workspace-port-20261014/cpp-face-lru/configure-final.log
+  Log: work/face-workspace-port-20261014/cpp-face-lru/configure-final.log
+
+FACE-LRU selected build:
+  source /workspace/cloud-setup/activate.sh && set -o pipefail && cmake --build work/face-workspace-port-20261014/cpp-face-lru/build --parallel 2 --target AstraSim_Analytical_Congestion_Aware_Online AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest AstraSim_Analytical_Congestion_Aware_ParsedBatchTest AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest 2>&1 | tee work/face-workspace-port-20261014/cpp-face-lru/build-final.log
+  Log: work/face-workspace-port-20261014/cpp-face-lru/build-final.log
+LRU mailbox test-only follow-up build (after Online replay; no production source changed):
+  source /workspace/cloud-setup/activate.sh && set -o pipefail && cmake --build work/face-workspace-port-20261014/cpp-face-lru/build --parallel 2 --target AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest 2>&1 | tee work/face-workspace-port-20261014/cpp-face-lru/build-refresh-final.log
+
+FACE-LRU selected CTest:
+  source /workspace/cloud-setup/activate.sh && set -o pipefail && ctest --test-dir work/face-workspace-port-20261014/cpp-face-lru/build --output-on-failure -R 'AstraSim_Analytical_Congestion_Aware_(DecisionMailbox|WorkspaceAdmission|BridgeLoopback|GraphBatchCommitter|ParsedBatch|DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test' 2>&1 | tee work/face-workspace-port-20261014/cpp-face-lru/ctest-final.log
+  Result: 8/8 passed. Log: work/face-workspace-port-20261014/cpp-face-lru/ctest-final.log
+  Direct lifecycle assertions: work/face-workspace-port-20261014/cpp-face-lru/lifecycle-details.log
+  Online SHA256: e266ae04017a9be935f17ffde13996f6eb98189ee66afd0d3a733fef41657323
+  Measured C++ source-tree SHA: 679fe05f94de88fba9d7706185f4b3be46fde79477f6d5de84af7d21b58bca7c
+  Positive-overlap replay artifact: work/face-workspace-port-20261014/online-reproduction/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261014T221401Z-55514/
+
+Both positive-overlap replays delivered 6/6; each sampled 98,304 active
+workspace bytes on ranks 20, 21, 26, 27, 32, and 33 at arrival tick 150000.
+
+The selected suites exercise the v2 parser's required/canonical batch_id,
+v1 missing-batch default, v2 ACK writer, workspace ledger, changed/touched-rank
+commit flow, and actual emitter-derived FFN blocked/retry/finish/cancel lifecycle.

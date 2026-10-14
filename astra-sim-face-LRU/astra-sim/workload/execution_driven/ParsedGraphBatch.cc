@@ -518,30 +518,138 @@ ParsedAlarm parse_alarm(const nlohmann::json& alarm_json, size_t index) {
     return alarm;
 }
 
+std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
+    const nlohmann::json& snapshot,
+    const int num_ranks,
+    const std::vector<WorkspaceRankState>& expected_workspace_state) {
+    if (!snapshot.is_object()) {
+        fail("workspace_capacity_snapshot is not an object");
+    }
+    check_key_set(snapshot, {"protocol_version", "ranks"},
+                  {"protocol_version", "ranks"},
+                  "workspace_capacity_snapshot");
+    const uint64_t protocol_version = get_uint(
+        snapshot["protocol_version"], "protocol_version",
+        "workspace_capacity_snapshot");
+    if (protocol_version != 1) {
+        fail("workspace_capacity_snapshot protocol_version mismatch");
+    }
+    const auto& ranks = snapshot["ranks"];
+    if (!ranks.is_array()) {
+        fail("workspace_capacity_snapshot.ranks is not an array");
+    }
+    if (num_ranks < 0) {
+        fail("workspace_capacity_snapshot requires a configured rank count");
+    }
+    if (expected_workspace_state.size() !=
+        static_cast<size_t>(num_ranks)) {
+        fail("v2 request workspace_state does not cover every configured "
+             "rank");
+    }
+    if (ranks.size() != static_cast<size_t>(num_ranks)) {
+        fail("workspace_capacity_snapshot.ranks must cover every configured "
+             "rank exactly once");
+    }
+
+    std::vector<WorkspaceCapacityRank> parsed;
+    parsed.reserve(ranks.size());
+    uint64_t previous_rank = 0;
+    for (size_t i = 0; i < ranks.size(); ++i) {
+        const std::string where =
+            "workspace_capacity_snapshot.ranks[" + std::to_string(i) + "]";
+        const auto& rank_json = ranks[i];
+        if (!rank_json.is_object()) {
+            fail(where + " is not an object");
+        }
+        check_key_set(rank_json,
+                      {"rank", "workspace_revision", "capacity_bytes",
+                       "model_weight_bytes", "resident_kv_bytes",
+                       "reserved_request_bytes"},
+                      {"rank", "workspace_revision", "capacity_bytes",
+                       "model_weight_bytes", "resident_kv_bytes",
+                       "reserved_request_bytes"},
+                      where);
+        WorkspaceCapacityRank entry;
+        entry.rank = get_int(rank_json["rank"], "rank", where);
+        check_rank_domain(entry.rank, num_ranks, where);
+        if (entry.rank != static_cast<int>(i) ||
+            (i > 0 && static_cast<uint64_t>(entry.rank) <= previous_rank)) {
+            fail(where + ": ranks must be complete, unique, and ascending");
+        }
+        previous_rank = static_cast<uint64_t>(entry.rank);
+        entry.workspace_revision = get_uint(
+            rank_json["workspace_revision"], "workspace_revision", where);
+        const WorkspaceRankState& request_state =
+            expected_workspace_state[i];
+        if (request_state.rank != entry.rank ||
+            request_state.workspace_revision != entry.workspace_revision) {
+            fail(where + ": workspace_revision does not echo request view");
+        }
+        entry.capacity_bytes =
+            get_uint(rank_json["capacity_bytes"], "capacity_bytes", where);
+        entry.model_weight_bytes = get_uint(
+            rank_json["model_weight_bytes"], "model_weight_bytes", where);
+        entry.resident_kv_bytes = get_uint(
+            rank_json["resident_kv_bytes"], "resident_kv_bytes", where);
+        entry.reserved_request_bytes = get_uint(
+            rank_json["reserved_request_bytes"], "reserved_request_bytes",
+            where);
+        const auto checked_add = [&where](const uint64_t a,
+                                          const uint64_t b) {
+            if (b > std::numeric_limits<uint64_t>::max() - a) {
+                fail(where + ": base-used byte sum overflows uint64");
+            }
+            return a + b;
+        };
+        const uint64_t base = checked_add(
+            checked_add(entry.model_weight_bytes, entry.resident_kv_bytes),
+            entry.reserved_request_bytes);
+        if (base > entry.capacity_bytes) {
+            fail(where + ": base-used bytes exceed capacity_bytes");
+        }
+        parsed.push_back(entry);
+    }
+    return parsed;
+}
+
 }  // namespace
 
 ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
-                                   const int num_ranks) {
+                                   const int num_ranks,
+                                   const int expected_schema_version,
+                                   const std::vector<WorkspaceRankState>&
+                                       expected_workspace_state) {
     if (!resp.is_object()) {
         fail("response is not an object (rule T0)");
     }
     // T6: the top-level key set is frozen (contract ②/④). schema_version
-    // and source_delivery_sequence are required; batch_id / error / the six
-    // arrays / touched_ranks are optional (T3/T4/T5/T8).
-    check_key_set(resp,
-                  {"schema_version", "batch_id", "source_delivery_sequence",
-                   "error", "nodes", "parent_edges", "watches", "assignments",
-                   "kv_actions", "future_alarms", "touched_ranks"},
-                  {"schema_version", "source_delivery_sequence"},
-                  "response");
+    // and source_delivery_sequence are required for every response. Legacy
+    // v1 keeps its optional batch_id compatibility rule; workspace v2 binds
+    // the explicit batch_id to the source delivery sequence.
+    std::vector<const char*> allowed{
+        "schema_version", "batch_id", "source_delivery_sequence", "error",
+        "nodes", "parent_edges", "watches", "assignments", "kv_actions",
+        "future_alarms", "touched_ranks"};
+    std::vector<const char*> required{"schema_version",
+                                      "source_delivery_sequence"};
+    if (expected_schema_version == 2) {
+        required.push_back("batch_id");
+        allowed.push_back("workspace_capacity_snapshot");
+        required.push_back("workspace_capacity_snapshot");
+    } else if (expected_schema_version != 1) {
+        fail("unsupported expected response schema_version " +
+             std::to_string(expected_schema_version));
+    }
+    check_key_set(resp, allowed, required, "response");
 
     ParsedGraphBatch batch;
     const int64_t schema_version = get_int64(
         resp["schema_version"], "schema_version", "response");
-    if (schema_version != 1) {  // T1
+    if (schema_version != expected_schema_version) {  // T1
         fail("response schema_version mismatch: " +
              std::to_string(schema_version));
     }
+    batch.schema_version = static_cast<uint32_t>(schema_version);
     batch.source_delivery_sequence =
         get_uint(resp["source_delivery_sequence"], "source_delivery_sequence",
                  "response");  // T2 (equality with the request seq is the
@@ -549,6 +657,12 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
     batch.has_batch_id = resp.contains("batch_id");
     if (batch.has_batch_id) {
         batch.batch_id = get_uint(resp["batch_id"], "batch_id", "response");
+    }
+    if (expected_schema_version == 2 &&
+        batch.batch_id != batch.source_delivery_sequence) {
+        fail("response: batch_id " + std::to_string(batch.batch_id) +
+             " does not match source_delivery_sequence " +
+             std::to_string(batch.source_delivery_sequence));
     }
     if (resp.contains("error")) {
         batch.error = get_string(resp["error"], "error", "response");
@@ -665,6 +779,12 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
             check_rank_domain(rank, num_ranks, where);
             batch.touched_ranks.push_back(rank);
         }
+    }
+    if (expected_schema_version == 2) {
+        batch.workspace_capacity_snapshot = parse_workspace_capacity_snapshot(
+            resp["workspace_capacity_snapshot"], num_ranks,
+            expected_workspace_state);
+        batch.has_workspace_capacity_snapshot = true;
     }
     return batch;
 }

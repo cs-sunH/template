@@ -115,6 +115,16 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/decision_mailbox_test.cc
             ${srcs_execution_driven})
 
+    # Checked Plan-workspace lease ledger: owner identity, rank-local
+    # revision changes, exact byte capacity, acquire/release and overflow
+    # rejection. This header-only fixture is independent of the simulator.
+    add_executable(AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/workspace_admission_test.cc)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+            PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+
     # Step-1-7 FileDecisionBridge loopback fixture (test-only): C++ <->
     # Python round-trip over the v0 protocol (request/response/commit ack,
     # atomic publish, crash+timeout fail-closed); never part of the baseline
@@ -589,6 +599,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             COMMAND AstraSim_Analytical_Congestion_Aware_WatchRegistryTest)
     add_test(NAME AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
             COMMAND AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest)
     add_test(NAME AstraSim_Analytical_Congestion_Aware_NodeStoreTest
             COMMAND AstraSim_Analytical_Congestion_Aware_NodeStoreTest)
     # Bridge loopback: requires python3 on PATH (fail-closed timeout, not a

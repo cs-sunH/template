@@ -1,0 +1,12 @@
+command=work/face-workspace-port-20261014/online-reproduction/run_tiny_online.sh face-lru coarse /workspace/template/work/face-workspace-port-20261014/cpp-face-lru/build/bin/AstraSim_Analytical_Congestion_Aware_Online workspace-overlap 150000 
+resolved_online_binary=/workspace/template/work/face-workspace-port-20261014/cpp-face-lru/build/bin/AstraSim_Analytical_Congestion_Aware_Online
+source_head=ca604f5e49dc6df387888a33c75b0134642d42f3
+scenario=workspace-overlap
+overlap_arrival_ns=150000
+build_dir=/workspace/template/work/face-workspace-port-20261014/cpp-face-lru/build
+bridge_timeout_ms=120000
+online_validate=1
+metrics_detail=summary
+workspace_admission=auto
+link_observer=0
+trace_enabled=1

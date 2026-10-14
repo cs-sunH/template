@@ -6,6 +6,8 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/DieModelAdapter.hh"
 
 #include <algorithm>
+#include <cmath>
+#include <exception>
 #include <stdexcept>
 #include <utility>
 
@@ -46,71 +48,9 @@ DieModelAdapter::~DieModelAdapter() {
 void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
     purge_finished_executions();
     if (sys_->coarse_die_runtime != nullptr) {
-        if (node.compute.die_task_json == nullptr) {
-            throw std::runtime_error(
-                "coarse_die_v2 requires the preserved typed die task JSON on "
-                "real COMP node " + std::to_string(node.global_id));
-        }
-        const auto plan =
-            sys_->coarse_die_runtime->compile(*node.compute.die_task_json);
-        coarse_die::Owner owner;
-        owner.request_id = stable_request_id(node.request_id);
-        owner.node_id = node.global_id;
-        owner.execution_id = node.generation;
-        owner.generation = std::max<uint64_t>(node.generation, 1);
-        const uint64_t node_id = node.global_id;
-        const uint64_t handle = sys_->coarse_die_runtime->submit_plan(
-            plan, owner,
-            [this, node_id](const uint64_t done_handle,
-                                  const nlohmann::json& progress) {
-                coarse_active_.erase(done_handle);
-                const auto state = progress.value("state", std::string());
-                if (state == "cancelled") {
-                    // Workload teardown removes callbacks before canceling.
-                    // A live cancellation is surfaced through the existing
-                    // graph cancellation path and cannot be turned into a
-                    // successful COMP completion here.
-                    return;
-                }
-                const uint64_t elapsed_ns =
-                    progress.value("elapsed_ns", uint64_t{0});
-                const double elapsed_s =
-                    static_cast<double>(std::max<uint64_t>(elapsed_ns, 1)) /
-                    1e9;
-                const auto& derived =
-                    sys_->coarse_die_runtime->hardware_summary();
-                const auto& hw_summary = derived.at("hardware_summary");
-                const double int4_peak =
-                    hw_summary.at("peak_int4_ops_per_s").get<double>();
-                const double vec_peak =
-                    hw_summary.at("peak_vec_fp32_eq_ops_per_s").get<double>();
-                const double hbm_peak =
-                    hw_summary.at("hbm_row_peak_Bps")[0].get<double>() +
-                    hw_summary.at("hbm_row_peak_Bps")[1].get<double>();
-                const double int4_ops =
-                    progress.at("served").at("int4_ops").get<double>();
-                const double vec_ops =
-                    progress.at("served").at("vec_eqops").get<double>();
-                const double hbm_bytes =
-                    progress.at("hbm_served_bytes")[0][0].get<double>() +
-                    progress.at("hbm_served_bytes")[0][1].get<double>() +
-                    progress.at("hbm_served_bytes")[1][0].get<double>() +
-                    progress.at("hbm_served_bytes")[1][1].get<double>();
-                if (!(int4_peak > 0.0) || !(vec_peak > 0.0) ||
-                    !(hbm_peak > 0.0) || !std::isfinite(int4_ops) ||
-                    !std::isfinite(vec_ops) || !std::isfinite(hbm_bytes)) {
-                    throw std::runtime_error(
-                        "coarse_die_v2 completion is missing finite typed "
-                        "plan work or hardware peaks");
-                }
-                workload_->record_die_utilizations(
-                    node_id, int4_ops / (int4_peak * elapsed_s),
-                    hbm_bytes / (hbm_peak * elapsed_s),
-                    vec_ops / (vec_peak * elapsed_s));
-                workload_->finish_generic_node(node_id);
-            });
-        coarse_active_.emplace(handle, node_id);
-        return;
+        throw std::runtime_error(
+            "coarse_die_v2 COMP must use prepare_coarse_plan, acquire a "
+            "workspace lease, and submit that same Plan before issue");
     }
     if (node.compute.die_spec == nullptr) {
         // Contract §2/§7.3: a real COMP node without a die_op_spec must fail
@@ -150,6 +90,239 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
     raw->start();
 }
 
+DieModelAdapter::PreparedCoarsePlan DieModelAdapter::prepare_coarse_plan(
+    const ExecutionDriven::NodeView& node) {
+    purge_finished_executions();
+    if (sys_->coarse_die_runtime == nullptr ||
+        sys_->workspace_admission == nullptr) {
+        throw std::runtime_error(
+            "coarse workspace preparation requires a coarse_die_v2 rank");
+    }
+    if (node.node_type != ChakraProtoMsg::COMP_NODE || node.is_timer_op ||
+        node.is_cpu_op ||
+        node.compute.op_role == ExecutionDriven::OpRole::ControlMarker ||
+        node.compute.die_task_json == nullptr) {
+        throw std::runtime_error(
+            "workspace preparation requires a real GPU coarse COMP node " +
+            std::to_string(node.global_id));
+    }
+    auto plan = sys_->coarse_die_runtime->compile(*node.compute.die_task_json);
+    if (!plan) {
+        throw std::runtime_error("coarse_die_v2 compiler returned a null Plan");
+    }
+    const uint64_t workspace_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*plan);
+    return PreparedCoarsePlan{std::move(plan), workspace_bytes,
+                              node.global_id, node.generation,
+                              node.compute.die_task_json};
+}
+
+WorkspaceAdmission::AcquireResult DieModelAdapter::try_acquire_workspace(
+    const PreparedCoarsePlan& prepared) {
+    if (sys_ == nullptr || sys_->coarse_die_runtime == nullptr ||
+        sys_->workspace_admission == nullptr || !prepared.plan ||
+        !prepared.task) {
+        throw std::runtime_error(
+            "workspace acquisition requires a prepared coarse Plan");
+    }
+    const uint64_t canonical_workspace_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
+    if (sys_->workspace_admission->rank() != sys_->id ||
+        prepared.workspace_bytes != canonical_workspace_bytes ||
+        prepared.plan->fingerprint.empty() ||
+        prepared.plan->hardware_fingerprint !=
+            sys_->coarse_die_runtime->hardware().fingerprint) {
+        throw std::runtime_error(
+            "prepared coarse Plan workspace or hardware identity is not canonical");
+    }
+    return sys_->workspace_admission->try_acquire(
+        prepared.node_id, prepared.generation, prepared.workspace_bytes);
+}
+
+void DieModelAdapter::validate_prepared_coarse_plan(
+    const ExecutionDriven::NodeView& node,
+    const PreparedCoarsePlan& prepared,
+    const WorkspaceAdmission::Lease& lease) const {
+    if (sys_ == nullptr || sys_->coarse_die_runtime == nullptr ||
+        sys_->workspace_admission == nullptr || !prepared.plan ||
+        !prepared.task || !lease.active()) {
+        throw std::runtime_error(
+            "coarse issue requires a live prepared Plan and workspace lease");
+    }
+    if (node.node_type != ChakraProtoMsg::COMP_NODE || node.is_timer_op ||
+        node.is_cpu_op ||
+        node.compute.op_role != ExecutionDriven::OpRole::Compute ||
+        node.compute.die_task_json == nullptr) {
+        throw std::runtime_error(
+            "prepared coarse issue requires a typed GPU COMP node");
+    }
+    const uint64_t canonical_workspace_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
+    if (sys_->workspace_admission->rank() != sys_->id ||
+        prepared.node_id != node.global_id ||
+        prepared.generation != node.generation ||
+        *prepared.task != *node.compute.die_task_json ||
+        prepared.workspace_bytes != canonical_workspace_bytes ||
+        prepared.plan->fingerprint.empty() ||
+        prepared.plan->hardware_fingerprint !=
+            sys_->coarse_die_runtime->hardware().fingerprint ||
+        !sys_->workspace_admission->owns_lease(
+            lease, canonical_workspace_bytes)) {
+        throw std::runtime_error(
+            "prepared Plan/workspace lease identity or canonical workspace "
+            "does not match COMP node and rank ledger");
+    }
+    const auto& key = lease.key();
+    if (key.rank != sys_->id || key.node_id != node.global_id ||
+        key.generation != node.generation) {
+        throw std::runtime_error(
+            "workspace lease key differs from the prepared COMP identity");
+    }
+}
+
+void DieModelAdapter::issue_prepared_coarse_plan(
+    const ExecutionDriven::NodeView& node,
+    PreparedCoarsePlan prepared,
+    WorkspaceAdmission::Lease lease) {
+    validate_prepared_coarse_plan(node, prepared, lease);
+    purge_finished_executions();
+
+    coarse_die::Owner owner;
+    owner.request_id = stable_request_id(node.request_id);
+    owner.node_id = node.global_id;
+    owner.execution_id = node.generation;
+    owner.generation = std::max<uint64_t>(node.generation, 1);
+    const uint64_t node_id = node.global_id;
+    const uint64_t handle = sys_->coarse_die_runtime->submit_plan(
+        prepared.plan, owner,
+        [this](const uint64_t done_handle,
+               const nlohmann::json& progress) {
+            auto found = coarse_active_.find(done_handle);
+            if (found == coarse_active_.end()) {
+                throw std::runtime_error(
+                    "coarse completion has no active Plan/workspace record "
+                    "for handle " + std::to_string(done_handle));
+            }
+            CoarseActiveRecord active = std::move(found->second);
+            coarse_active_.erase(found);
+            // Workspace capacity returns before Workload terminalization; the
+            // observer's deferred issue pass therefore sees the released
+            // lease in this same tick.
+            active.lease.release();
+
+            const auto state = progress.value("state", std::string());
+            const bool cancelled = state == "cancelled";
+            if (!cancelled && state != "finished") {
+                throw std::runtime_error(
+                    "coarse COMP completion has invalid terminal state " +
+                    state);
+            }
+            const uint64_t elapsed_ns =
+                progress.value("elapsed_ns", uint64_t{0});
+            const double elapsed_s = static_cast<double>(elapsed_ns) / 1e9;
+            const auto& derived =
+                sys_->coarse_die_runtime->hardware_summary();
+            const auto& hw_summary = derived.at("hardware_summary");
+            const double int4_peak =
+                hw_summary.at("peak_int4_ops_per_s").get<double>();
+            const double vec_peak =
+                hw_summary.at("peak_vec_fp32_eq_ops_per_s").get<double>();
+            const double hbm_peak =
+                hw_summary.at("hbm_row_peak_Bps")[0].get<double>() +
+                hw_summary.at("hbm_row_peak_Bps")[1].get<double>();
+            const double int4_ops =
+                progress.at("served").at("int4_ops").get<double>();
+            const double vec_ops =
+                progress.at("served").at("vec_eqops").get<double>();
+            const double hbm_bytes =
+                progress.at("hbm_served_bytes")[0][0].get<double>() +
+                progress.at("hbm_served_bytes")[0][1].get<double>() +
+                progress.at("hbm_served_bytes")[1][0].get<double>() +
+                progress.at("hbm_served_bytes")[1][1].get<double>();
+            if (!(int4_peak > 0.0) || !std::isfinite(int4_peak) ||
+                !(vec_peak > 0.0) || !std::isfinite(vec_peak) ||
+                !(hbm_peak > 0.0) || !std::isfinite(hbm_peak) ||
+                !std::isfinite(int4_ops) || int4_ops < 0.0 ||
+                !std::isfinite(vec_ops) || vec_ops < 0.0 ||
+                !std::isfinite(hbm_bytes) || hbm_bytes < 0.0) {
+                throw std::runtime_error(
+                    "coarse_die_v2 completion is missing finite typed plan "
+                    "work or hardware peaks");
+            }
+            const bool any_served_work = int4_ops != 0.0 || vec_ops != 0.0 ||
+                                         hbm_bytes != 0.0;
+            if (elapsed_ns == 0 && any_served_work) {
+                throw std::runtime_error(
+                    "coarse_die_v2 completion reports served work with a "
+                    "zero elapsed-time denominator");
+            }
+            const double compute_utilization =
+                elapsed_ns == 0 ? 0.0 : int4_ops / (int4_peak * elapsed_s);
+            const double memory_utilization =
+                elapsed_ns == 0 ? 0.0 : hbm_bytes / (hbm_peak * elapsed_s);
+            const double vector_utilization =
+                elapsed_ns == 0 ? 0.0 : vec_ops / (vec_peak * elapsed_s);
+            if (!std::isfinite(compute_utilization) ||
+                !std::isfinite(memory_utilization) ||
+                !std::isfinite(vector_utilization)) {
+                throw std::runtime_error(
+                    "coarse_die_v2 completion utilization is non-finite");
+            }
+            workload_->record_die_utilizations(
+                active.node_id, compute_utilization, memory_utilization,
+                vector_utilization);
+            if (cancelled) {
+                // Cancellation still reports exactly the typed work served
+                // before cancel. The live graph terminal remains Skipped,
+                // never a successful COMP completion.
+                workload_->finish_cancelled_coarse_node(active.node_id);
+                return;
+            }
+            workload_->finish_generic_node(active.node_id);
+        });
+    try {
+        // Allocate the map node before transferring lease ownership. If the
+        // allocation throws, the local token remains held until the accepted
+        // Runtime handle has been cancelled below.
+        const auto inserted = coarse_active_.try_emplace(handle);
+        if (!inserted.second) {
+            throw std::runtime_error(
+                "coarse Runtime reused an active execution handle");
+        }
+        inserted.first->second.node_id = node_id;
+        inserted.first->second.generation = node.generation;
+        inserted.first->second.plan = prepared.plan;
+        inserted.first->second.lease = std::move(lease);
+    } catch (...) {
+        // Runtime accepted the Plan, but the adapter could not establish its
+        // unique completion/lease owner. Cancel and retire before the local
+        // RAII token is allowed to release capacity; this is fatal cleanup,
+        // never a dispatch retry.
+        try {
+            sys_->coarse_die_runtime->cancel(
+                handle, Sys::boostedTick(), /*notify=*/false);
+        } catch (...) {
+            std::throw_with_nested(std::runtime_error(
+                "coarse Plan submitted but adapter registration failed and "
+                "Runtime cancellation could not be confirmed"));
+        }
+        throw;
+    }
+}
+
+void DieModelAdapter::cancel_coarse_node(const uint64_t node_id,
+                                         const uint64_t now_ns) {
+    for (const auto& entry : coarse_active_) {
+        if (entry.second.node_id == node_id) {
+            sys_->coarse_die_runtime->cancel(entry.first, now_ns,
+                                             /*notify=*/true);
+            return;
+        }
+    }
+    throw std::runtime_error(
+        "cannot cancel unknown coarse COMP node " + std::to_string(node_id));
+}
+
 bool DieModelAdapter::has_active_die_executions() {
     purge_finished_executions();
     return !active_.empty() || !coarse_active_.empty();
@@ -185,9 +358,12 @@ void DieModelAdapter::shutdown() {
     if (sys_ != nullptr && sys_->coarse_die_runtime != nullptr) {
         const uint64_t now = Sys::boostedTick();
         while (!coarse_active_.empty()) {
-            const uint64_t handle = coarse_active_.begin()->first;
+            auto found = coarse_active_.begin();
+            const uint64_t handle = found->first;
+            CoarseActiveRecord active = std::move(found->second);
+            coarse_active_.erase(found);
             sys_->coarse_die_runtime->cancel(handle, now, false);
-            coarse_active_.erase(handle);
+            active.lease.release();
         }
     }
 }

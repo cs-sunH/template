@@ -1,0 +1,14 @@
+{
+  "csv_bytes": 380,
+  "csv_fnv1a64": 13447882384101135673,
+  "csv_sha256": "429230bb56d275ec0e89e74436e4e28c774f302be3de94db8a0b65cca4222055",
+  "data_rows": 2,
+  "generator_version": "FACE workspace-port workspace-overlap queue v1",
+  "schema": 1,
+  "session_blocks_contiguous": true,
+  "sessions": 2,
+  "turn0_adjacent_inversions": 0,
+  "turn0_arrival_max_ns": 1000,
+  "turn0_arrival_min_ns": 0,
+  "turn0_count": 2
+}

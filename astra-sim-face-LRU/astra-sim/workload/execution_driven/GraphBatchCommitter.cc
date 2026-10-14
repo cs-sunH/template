@@ -393,6 +393,9 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     }
 
     try {
+        if (auto workspace_error = validate_workspace_snapshot(delta, batch)) {
+            return fail(*workspace_error);
+        }
         // Apply this delta's facts in a compact overlay rather than copying the
         // whole live-request sets.  The result is exactly apply_delta_facts()
         // for every request mentioned by the delta, while untouched requests
@@ -1004,6 +1007,54 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     return std::nullopt;
 }
 
+std::optional<std::string> GraphBatchCommitter::validate_workspace_snapshot(
+    const StateDelta& delta, const GraphBatch& batch) const {
+    if (!ctx_.workspace_admission_required) {
+        if (delta.schema_version != 1 || batch.schema_version != 1 ||
+            !delta.workspace_state.empty() ||
+            batch.has_workspace_capacity_snapshot) {
+            return "bridge v2 workspace state is unsupported without the "
+                   "coarse_die_v2 backend";
+        }
+        return std::nullopt;
+    }
+    if (delta.schema_version != 2 || batch.schema_version != 2 ||
+        !batch.has_workspace_capacity_snapshot) {
+        return "coarse_die_v2 requires bridge v2 workspace capacity snapshot";
+    }
+    if (ctx_.num_ranks < 0) {
+        return "workspace admission requires a configured rank count";
+    }
+    const size_t rank_count = static_cast<size_t>(ctx_.num_ranks);
+    if (delta.workspace_state.size() != rank_count ||
+        batch.workspace_capacity_snapshot.size() != rank_count) {
+        return "workspace request and capacity snapshots must cover every "
+               "configured rank";
+    }
+    for (size_t i = 0; i < rank_count; ++i) {
+        const auto& request_state = delta.workspace_state[i];
+        const auto& capacity = batch.workspace_capacity_snapshot[i];
+        if (request_state.rank != static_cast<int>(i) ||
+            capacity.rank != static_cast<int>(i) ||
+            request_state.workspace_revision !=
+                capacity.workspace_revision) {
+            return "workspace capacity snapshot does not echo the full "
+                   "request rank/revision table";
+        }
+    }
+    if (!ctx_.validate_workspace_capacity_snapshot ||
+        !ctx_.install_workspace_capacity_snapshot) {
+        return "coarse_die_v2 committer has no workspace snapshot owner";
+    }
+    try {
+        return ctx_.validate_workspace_capacity_snapshot(
+            delta.workspace_state, batch.workspace_capacity_snapshot);
+    } catch (const std::exception& exc) {
+        return std::string("workspace capacity snapshot validation threw: ") +
+               exc.what();
+    }
+}
+
 std::optional<uint64_t> GraphBatchCommitter::resolve_store_id(
     const int rank, const uint64_t json_id) const {
     if (rank < 0 || rank >= static_cast<int>(rank_affines_.size())) {
@@ -1053,6 +1104,9 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
     const StateDelta& delta, const GraphBatch& batch,
     std::vector<int>* const json_id_touched_ranks) const {
     try {
+        if (auto workspace_error = validate_workspace_snapshot(delta, batch)) {
+            return workspace_error;
+        }
         // A committed rank owns an exact affine mapping onto the NodeStore's
         // automatic id stream. Check it before every semantic rule; this is a
         // read-only fail-closed diagnostic and validate() remains pure.
@@ -1861,13 +1915,54 @@ void GraphBatchCommitter::commit_after_preflight(
         ctx_.ingress->schedule_future_arrival(envelope);
     }
 
+    commit_workspace_changed_ranks_.clear();
+    if (batch.schema_version == 2) {
+        ctx_.install_workspace_capacity_snapshot(
+            batch.workspace_capacity_snapshot,
+            commit_workspace_changed_ranks_);
+        std::sort(commit_workspace_changed_ranks_.begin(),
+                  commit_workspace_changed_ranks_.end());
+        commit_workspace_changed_ranks_.erase(
+            std::unique(commit_workspace_changed_ranks_.begin(),
+                        commit_workspace_changed_ranks_.end()),
+            commit_workspace_changed_ranks_.end());
+        for (const int rank : commit_workspace_changed_ranks_) {
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                throw std::runtime_error(
+                    "workspace snapshot installer returned an invalid rank " +
+                    std::to_string(rank));
+            }
+        }
+    }
+
     // ---- Phase B-5: issue pass over the TOUCHED ranks only (ranks without
     //      new nodes cannot have new free nodes -- the completion hook's
     //      deferred per-rank passes drain every other rank) ----
     // Reuse the sorted-unique rank set collected by the mandatory id-stream
     // preflight.  Re-walking every JSON node here used to add a second
     // O(nodes) pass plus an allocating std::set on every committed batch.
-    for (const int rank : touched_ranks) {
+    commit_issue_ranks_.clear();
+    size_t touched_index = 0;
+    size_t changed_index = 0;
+    while (touched_index < touched_ranks.size() ||
+           changed_index < commit_workspace_changed_ranks_.size()) {
+        int rank = 0;
+        if (changed_index >= commit_workspace_changed_ranks_.size() ||
+            (touched_index < touched_ranks.size() &&
+             touched_ranks[touched_index] <
+                 commit_workspace_changed_ranks_[changed_index])) {
+            rank = touched_ranks[touched_index++];
+        } else if (touched_index >= touched_ranks.size() ||
+                   commit_workspace_changed_ranks_[changed_index] <
+                       touched_ranks[touched_index]) {
+            rank = commit_workspace_changed_ranks_[changed_index++];
+        } else {
+            rank = touched_ranks[touched_index++];
+            ++changed_index;
+        }
+        commit_issue_ranks_.push_back(rank);
+    }
+    for (const int rank : commit_issue_ranks_) {
         ctx_.issue_rank(rank);
     }
 

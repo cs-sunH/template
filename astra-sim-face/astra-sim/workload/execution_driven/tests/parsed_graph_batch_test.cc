@@ -43,6 +43,7 @@ Exit code 0 on ALL PASS.
 *******************************************************************************/
 
 #include <cstdio>
+#include <limits>
 #include <string>
 
 #include <json/json.hpp>
@@ -51,6 +52,7 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 using namespace AstraSim::ExecutionDriven;
+using AstraSim::WorkspaceRankState;
 
 namespace {
 
@@ -86,6 +88,35 @@ void expect_parse_error(const nlohmann::json& resp, const char* what,
         std::fprintf(stderr,
                      "[parsed_graph_batch_test] wrong exception type for %s: "
                      "%s\n",
+                     what, exc.what());
+        g_ok = false;
+    }
+}
+
+void expect_v2_parse_error(
+    const nlohmann::json& resp,
+    const std::vector<WorkspaceRankState>& workspace_state,
+    const char* what, const char* needle = nullptr) {
+    try {
+        (void)parse_graph_batch(resp, 2, 2, workspace_state);
+        std::fprintf(stderr,
+                     "[parsed_graph_batch_test] unexpected v2 parse PASS: "
+                     "%s\n",
+                     what);
+        g_ok = false;
+    } catch (const ParseError& exc) {
+        if (needle != nullptr &&
+            std::string(exc.what()).find(needle) == std::string::npos) {
+            std::fprintf(stderr,
+                         "[parsed_graph_batch_test] v2 message mismatch for "
+                         "%s:\n  got: %s\n  want substring: %s\n",
+                         what, exc.what(), needle);
+            g_ok = false;
+        }
+    } catch (const std::exception& exc) {
+        std::fprintf(stderr,
+                     "[parsed_graph_batch_test] wrong v2 exception type for "
+                     "%s: %s\n",
                      what, exc.what());
         g_ok = false;
     }
@@ -244,6 +275,111 @@ nlohmann::json max_shape_response() {
             {"queue_index", 3}}}}});
     resp["touched_ranks"] = nlohmann::json::array({0});
     return resp;
+}
+
+void test_workspace_v2_snapshot_rules() {
+    const std::vector<WorkspaceRankState> request_state{
+        {0, 3, 128}, {1, 8, 0}};
+    nlohmann::json response{
+        {"schema_version", 2},
+        {"batch_id", 42},
+        {"source_delivery_sequence", 42},
+        {"workspace_capacity_snapshot",
+         {{"protocol_version", 1},
+          {"ranks",
+           nlohmann::json::array(
+               {{{"rank", 0},
+                 {"workspace_revision", 3},
+                 {"capacity_bytes", 1024},
+                 {"model_weight_bytes", 128},
+                 {"resident_kv_bytes", 64},
+                 {"reserved_request_bytes", 32}},
+                {{"rank", 1},
+                 {"workspace_revision", 8},
+                 {"capacity_bytes", 2048},
+                 {"model_weight_bytes", 256},
+                 {"resident_kv_bytes", 512},
+                 {"reserved_request_bytes", 128}}})}}}};
+
+    ParsedGraphBatch parsed;
+    try {
+        parsed = parse_graph_batch(response, 2, 2, request_state);
+    } catch (const std::exception& exc) {
+        std::fprintf(stderr,
+                     "[parsed_graph_batch_test] valid v2 snapshot rejected: "
+                     "%s\n",
+                     exc.what());
+        g_ok = false;
+    }
+    expect(parsed.schema_version == 2 && parsed.batch_id == 42 &&
+               parsed.source_delivery_sequence == 42 &&
+               parsed.has_workspace_capacity_snapshot &&
+               parsed.workspace_capacity_snapshot.size() == 2 &&
+               parsed.workspace_capacity_snapshot[0].rank == 0 &&
+               parsed.workspace_capacity_snapshot[0].workspace_revision == 3 &&
+               parsed.workspace_capacity_snapshot[0].capacity_bytes == 1024 &&
+               parsed.workspace_capacity_snapshot[1].rank == 1 &&
+               parsed.workspace_capacity_snapshot[1].resident_kv_bytes == 512,
+           "v2 response parses the complete rank capacity table");
+
+    auto malformed = response;
+    malformed.erase("batch_id");
+    expect_v2_parse_error(malformed, request_state,
+                          "v2 requires an explicit batch_id", "batch_id");
+
+    malformed = response;
+    malformed["batch_id"] = 43;
+    expect_v2_parse_error(malformed, request_state,
+                          "v2 batch_id must equal source delivery sequence",
+                          "does not match source_delivery_sequence");
+
+    malformed = response;
+    malformed.erase("workspace_capacity_snapshot");
+    expect_v2_parse_error(malformed, request_state,
+                          "missing v2 workspace capacity table",
+                          "workspace_capacity_snapshot");
+
+    malformed = response;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["workspace_revision"] = 4;
+    expect_v2_parse_error(malformed, request_state,
+                          "snapshot revision echoes request view",
+                          "does not echo request view");
+
+    malformed = response;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]["rank"] = 1;
+    expect_v2_parse_error(malformed, request_state,
+                          "rank table is complete and ascending",
+                          "complete, unique, and ascending");
+
+    malformed = response;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["capacity_bytes"] = 1024.0;
+    expect_v2_parse_error(malformed, request_state,
+                          "capacity rejects floating point values",
+                          "is not an integer");
+
+    malformed = response;
+    malformed["workspace_capacity_snapshot"]["ranks"][1]
+             ["workspace_revision"] = true;
+    expect_v2_parse_error(malformed, request_state,
+                          "revision rejects bool values",
+                          "is not an integer");
+
+    malformed = response;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["model_weight_bytes"] = std::numeric_limits<uint64_t>::max();
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["resident_kv_bytes"] = 1;
+    expect_v2_parse_error(malformed, request_state,
+                          "base-used sum cannot overflow uint64",
+                          "base-used byte sum overflows uint64");
+
+    malformed = response;
+    malformed["schema_version"] = 1;
+    expect_parse_error(malformed,
+                       "v1 response rejects workspace capacity fields",
+                       "unknown field \"workspace_capacity_snapshot\"");
 }
 
 // --------------------------------------------------------------- Part T ----
@@ -932,6 +1068,7 @@ void test_max_shape_round_trip() {
 }  // namespace
 
 int main() {
+    test_workspace_v2_snapshot_rules();
     test_top_level_rules();
     test_node_rules();
     test_edge_rules();

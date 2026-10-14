@@ -4,6 +4,12 @@
 
 ## Current Status
 
+2026-10-15桥接检查点：FACE/FACE-LRU 已完成 coarse Plan lease、完整rank v2绝对状态/容量握手、规范batch身份及同版本ACK，保留v1/两仓原KV策略和单GPU COMP约束。独立C++各8/8、真实protoc+双ABI Python120/120与118/118（0skip）；四个真实legacy/coarse tiny均0/0、3delivery/ACK、186成功终态；两仓coarse overlap均0/0、6/6、378成功终态，tick150000真实采得6rank×16384B=98304B。实际源/ABI/二进制/命令与失败探针保存在 `analysis/face-workspace-20261015/` 和对应evidence。LRU mailbox仅测试断言在Online后补全，不影响已测生产二进制。未来E仍0，容量极限和source物理释放未验收。
+
+新JOINT known-world capacity接线源码提交 `6924c83`：冻结可选coarse_capacity_events全部预检，按(time,input order)复用Domain update_capacity，不改变旧ready/latency/forecast顺序；snapshot非空事件记录精确消费前缀、pending双射及对应真实rates，same-tick预算导入后继续与source/同clock direct Domain全state严格对拍。最终native/window4/4通过，证据 `evidence/native-world-capacity-20261015/`。这是native JSON已知输入能力，生产Sys事件采集、known cancel及完整live graph/ledger/network/pool仍待接，sh30 guard保留。
+
+WS兼容修复 `ca604f5e49dc6df387888a33c75b0134642d42f3` 已正常推送main并实核；最小Domain任务 `8447b76` 也已发布。上述native/FACE成果按各自验证源码SHA提交并正常同步，远端最终SHA以Git历史和本轮remote核验记录为准；没有PR/CI可核实权限，不作相应声称。当前继续开发。
+
 2026-10-15兼容性修复：WSCLLM 两仓的真实旧 typed parser 同时保留 raw task 和 legacy diagnostic，prepared coarse preflight 不再因 diagnostic 非空拒绝 canonical Compiler 支持的任务。真实 parser→prepare/256B lease→issue/同Plan Runtime→finish 完整回归各1/1 CTest通过；owner/task/bytes 防护保留。JOINT 新 `die_task`/旧 `die_op_spec` 的互斥 wire 约束不扩展。证据 `evidence/typed-spec-compat-20261015/`；FACE 在途代码不包含在此小修复检查点。
 
 2026-10-15最小任务检查点：新增 native Domain `update_capacity(resource, absolute_physical_rate, now_ns)`；先以空canonical Runtime预检，再结算旧速率与同tick终态/chain successor，最后调用公共Runtime更改物理速率。invalid输入不推进live域；共享COMP+endpoint减速/暂停/恢复、import/fork继续对拍与5ns完成边界后继15ns完成通过，最终native/window 4/4 CTest。公共数值模型、校准和sh30 guard不变；native world事件输入仍待接。证据在 `evidence/native-domain-capacity-20261015/`。用户最新要求最小任务后提交一次、随后继续，FACE在途改动不混入该提交。
@@ -16,7 +22,7 @@
 
 当前新增实际 Sys 的 Runtime-copy 只读采样及 COMP/endpoint/lease ownership catalog；采样不推进 live Runtime、不 dispatch callback、不改变队列或容量账。提交前校验同 rank 外 ledger token、canonical workspace bytes 和 stale Prepared task。当前源码真实 Sys/DIE/HBM/native/window 8/8 CTest；重链 tiny legacy Online C++/Python 0/0、192/192 successful terminals。真实采样保留 tick1 的一个 COMP、一个 COMM_READ 和40960 workspace bytes；原 Sys 队列实际完成分别2408ns/303318ns。详见 `analysis/sys-local-sample-20261014/` 与对应 evidence；这仍不是完整生产 world import。
 
-只读采样源码检查点 `385641813de28a32b1c8f01314442e6a510a8b4e` 已正常进入 main，2026-10-14T17:38:43Z fetch/ancestry 实核。随后新增严格 local sample→NativeCoarseDieDomain 导入，显式 expected rank 和 handle→leg map；实际采样继续执行的2408ns/303318ns及served/整数/registry精确相等，四项累计浮点busy字符串有 ±1e-16ns级差值，**完整 Runtime wire 严格全等为 false**，没有容差掩盖。最终4/4 native/window+4/4真实库Python通过。WSCLLM 两仓同一lease保护已独立构建，生命周期CTest各1/1通过。此阶段证据见 local-sample-domain 与 ws-lease-hardening 包；FACE 两仓 admission/v2 bridge 正在实施，不能视为已完成验收。
+只读采样源码检查点 `385641813de28a32b1c8f01314442e6a510a8b4e` 已正常进入 main，2026-10-14T17:38:43Z fetch/ancestry 实核。随后新增严格 local sample→NativeCoarseDieDomain 导入，显式 expected rank 和 handle→leg map；实际采样继续执行的2408ns/303318ns及served/整数/registry精确相等，四项累计浮点busy字符串有 ±1e-16ns级差值，**完整 Runtime wire 严格全等为 false**，没有容差掩盖。最终4/4 native/window+4/4真实库Python通过。WSCLLM 两仓同一lease保护已独立构建，生命周期CTest各1/1通过。此阶段证据见 local-sample-domain 与 ws-lease-hardening 包；FACE 两仓现已通过本页新增的有限Online桥接验证，未来margin/压力/物理源释放仍待验收。
 
 新 JOINT 的 wire 检查点 tiny legacy Online 再次 C++/Python exit0，192/192 terminals、1 request 完成；该次 C++ Online relink 后字节与前检查点相同，stage Python 源/新 projection 库逐文件 SHA 实核。当前 Sys 采样检查点 Online 已重新编译，二进制身份单列在 sys-local-sample evidence。真实 sh30 coarse-intended Online 的既存 provider guard 失败保留，没有删除 guard 或假装完整接入。新 native session 可从自己的活动 wire 恢复；生产 Sys/ledger、network/pool 所有权和 sh30 provider 尚未接通，`live_world_import_supported=false` 保留。
 
@@ -65,7 +71,7 @@ coarse-only 修复三个实际调度边界：controlled integrate 抵达 fixed t
 
 WorkspaceAdmission 验证实际 ledger owner、live node/generation/id 和 exact bytes；Prepared 保留共享 immutable raw task 引用，并以公共 Plan accessor 校验 bytes/HW/identity。Workload 在 graph take/COMP occupy/stats 前执行 const preflight，adapter 在提交前复核，acquire 在容量 mutation 前拒绝不一致 Prepared。实际夹具覆盖所有 public key 碰撞的同 rank foreign token、错误 lease/Prepared bytes 和 stale task；旧 blocked/retry/cancel 流程保留。
 
-真实 tick1 partial sample、drained sample、terminal-before-callback sample 和原 Sys terminal ticks 已保存。8/8 CTest 与该源重链 tiny legacy Online 0/0 通过。另四仓按实际差异推进：WSCLLM 两仓保护移植和独立生命周期验证已完成；FACE 两仓 admission/v2 handshake 在途，不把 JOINT 结果外推给它们。
+真实 tick1 partial sample、drained sample、terminal-before-callback sample 和原 Sys terminal ticks 已保存。8/8 CTest 与该源重链 tiny legacy Online 0/0 通过。另四仓按实际差异推进：WSCLLM 两仓保护移植和独立生命周期验证已完成；FACE 两仓 admission/v2 handshake 另有当前独立验证，不把 JOINT 结果外推给它们。
 
 ### 实际 local sample 导入及 WSCLLM lease 保护
 
@@ -81,20 +87,31 @@ WSCLLM/base与LRU各自仅移植WorkspaceAdmission/Prepared/adapter/Workload pre
 
 三个可比场景的 solo/synchronous/50ms-offset 精度均 failed。计划整数工作量守恒；累计 long-double serialized counters 有微小非零尘埃，严格相等与数值 reconciliation 分开，不把容差通过称整数全等。此工具不修改生产 timing、不颁发粒度证书。报告在 `analysis/gemm-axis-20261014/` 与 evidence。
 
+### FACE/FACE-LRU active workspace 与已知容量事件
+
+FACE两仓的原schema1 typed任务经真实parser同时保留raw JSON与legacy diagnostic，coarse预检接受该合法组合；Prepared/真实ledger owner/canonical bytes/HW/task检查在graph take和GPU/stats mutation前进行。Blocked保留真实online free节点，更新capacity split后重试；finish先释放lease再发布Success，cancel保留served并发布Skipped且只释放一次。v2 request全rank absolute revision/bytes，response全rank容量拆分回显revision，v2 batch_id显式且等于delivery，ACK schema与该batch一致；v1缺省batch行为/省略workspace字段保留。
+
+Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有capacity epoch。合法coarse loader从已经解析的typed摘要转换selector单位，Resolver.peak_perf_tflops仍None，system不注入legacy scalar；FACE-LRU复用FACE现有coarse薄ABI。粗粒度selector仍是原组合，final stats显式披露approximate/代表TP rank/未含collective和queue/fixed D2D，不能称完整known-world predictor。独立tests与真实Online结果见Current Status。
+
+Future E=0与source-buffer重用仍是明确缺口。当前源码有store ACK与store→restore池依赖，但尚无WS-LRU的pending_source_release_tails容量消费者接点；迁移source ACK/hold也需补。scratch对有限manifest候选上界已使用真实CABI探索，不是生产证书；未在Python计算workspace bytes。没有改变public mapping/timing、canonical23、TX8、E5门槛，整体NOT ACCEPTED。
+
+新JOINT冻结capacity事件与baseline/candidate共享同源物理速率日历。非空日历才增加snapshot前缀字段，旧无日历wire字段保持；受控same-tick暂停/恢复、预算截断和旧native/window行为4/4通过。完整生产world和已知cancel仍未开放。
+
 ## Next Step
 
 以下按依赖继续，不是任务/阶段数量限制。
 
 1. 先把当前有效源码/证据同步远端并核实 main；若收到交接指令，保存全部有效在途成果和最终 GitHub 状态后停止。当前继续开发。
-2. wrapper/native session wire、真实 Sys 只读 envelope/catalogs 和显式 sample→Domain 物理桥接已完成，不重做；四项busy严格差值保留。下一步补 native-world 已知 cancel/capacity 事件及真实 graph/ledger/lease绑定与活动leg回放，把生产输入映射接到既有native session，不能只删除sh30 guard；现有 `export_snapshot(now)` 仍禁止当只读接口复用。
+2. wrapper/native session wire、真实 Sys 只读 envelope/catalogs 和显式 sample→Domain 物理桥接已完成，不重做；四项busy严格差值保留。native-world 已知capacity事件已完成；下一步补known cancel、生产Sys已知事件采集及真实 graph/ledger/lease绑定与活动leg回放，把生产输入映射接到既有native session，不能只删除sh30 guard；现有 `export_snapshot(now)` 仍禁止当只读接口复用。
 3. 审查新 JOINT PipelineKernel/WorkLedger/remote-read/pool 与网络腿唯一 local endpoint 所有权；不能把 scalar stream 直接塞进本地 Runtime或仅移除 guard。复用新 fresh-domain parity，再接 `_JointDiePlanProvider`/真实 sh30 typed emitter，同源名义查询和 candidate world。旧策略、virtual pipeline、pool、ledger/cancel 必须保留。
 4. 依据新 E5 axis 证据修必要 K/final-output readiness；复用 bounded OS geometry/per-K facts、有限 full/tail 类及简单稳定周期公式。先 solo/同步/offset，再 multiCore/WR；只在联合 owner/slot/LP 区域确证稳定时跳过，外部事件切段。不把重型 fixed-rational scratch 直接接生产，不逐 tile 展开，不重置 lifetime256 cap，不扩大3%/5%。
-5. LRU finite-manifest formal shape/span domination、真实容量极限 store/restore/migrate 压力和 closed-input 仍待补；base prospective margin 与 FACE/FACE-LRU workspace 桥接按原策略推进；完整 GQA producer 及其 KV/weights/TP/transfer/readiness 消费链仍缺。保留旧 source-release 顺序和 OFF wire。
+5. LRU finite-manifest formal shape/span domination、真实容量极限 store/restore/migrate 压力和 closed-input 仍待补；base prospective margin 与 FACE/FACE-LRU未来workspace bound按原策略推进；FACE活动桥接已完成受限验证，下一步补容量消费者到真实store/migrate源释放的依赖。只读研究确认FACE-LRU逻辑KV释放早于物理完成，不能把store→restore池写读tails当作source容量保护；完整 GQA producer 及其 KV/weights/TP/transfer/readiness 消费链仍缺。保留旧 source-release 顺序和 OFF wire。
 6. 结构通过后测当前 source 的 cold/hit/update/J32/Online CPU/RSS 与 cache/event/LP；补 region launch/setup、vector 首次参数读/长行转换/residency/readiness 成本余项。没有新目标数据不重拟 TX8或目标效率，不用BF16/DDR替代INT4/HBM测量。
 
 ## Important Decisions
 
 - 简单公式优先原则继续有效；复杂度仅服务于源架构/任务输入的可观察响应、容量/工作量守恒和真实依赖/竞争。native wrapper 是现有 Runtime 的生命周期桥接，没有第二套数值模型。
+- FACE v2 strict batch/revision/schema不能静默退回v1；旧typed raw+diagnostic共存适用于WS/FACE，JOINT独立新wire互斥边界保留。活动租约桥接与future E/source物理释放分开认证。
 - die 是唯一 canonical；5 仓同 digest，Python不重写 timing/capacity 公式。只改活动 JOINT，旧目录可读档案。
 - 顺序 layer/pass 不乘 temporary peak；compact span/batch 的当前物化集合语义保留。版本变化显式，旧证书不可复用。
 - future E 仍是 fit margin，`max(A,E)`，不计 active/KV/remote；actual Plan 超界在 mutation 前拒绝，正常串行 compute gate 是 max 而非 sum 的前提。source ACK/物理完成释放与容量复用排序独立保留。
@@ -104,6 +121,7 @@ WSCLLM/base与LRU各自仅移植WorkspaceAdmission/Prepared/adapter/Workload pre
 
 ## Files to Continue
 
+- 当前桥接：两FACE `WorkspaceAdmission`、Workload/adapter/bridge/committer与Python KV/online；复现脚本 `analysis/face-workspace-20261015/`。新known capacity见NativeProjection及 `evidence/native-world-capacity-20261015/`。下一步future E仅fit margin，保留物理source释放依赖，禁止把ACK/byte状态伪造为已释放。
 - 新 native：活动 JOINT `execution_driven/{NativeCoarseDieDomain,NativeProjection}.{hh,cc}`、两新 C++ tests、CMake；Python `joint/{resource_projection,native_projection,die_plan_projection,test_native_coarse_projection}.py`。
 - 业务入口：`online/sh30_online_scheduler.py` provider、`face_scheduler.KVCacheManager`（不是假定存在 JointKVCacheManager 类）、`generate_trace.py`、`joint/{joint_cost_model,action_work_graph,pipeline_ledger,work_ledger,native_ledger}.py` 和 C++ PipelineKernel/WorkLedger runtime snapshot。按真实新仓实现迁移。
 - Workspace：公共 Mapping/Capi 与 attention/workspace tests；LRU client/manifest/test；之前 finite-manifest/capacity/source-release 证据仍有效，但旧v1容量证书不适用于新v2查询。
@@ -113,20 +131,22 @@ WSCLLM/base与LRU各自仅移植WorkspaceAdmission/Prepared/adapter/Workload pre
 
 ## Tests
 
+- 当前FACE两仓选定C++各8/8；真实protoc/双ABI Python120/120与118/118，0skip。最终六个真实Online C++/Python均0/0；四tiny各186成功终态、两overlap各378，实际positive workspace绝对状态见Current Status及独立evidence。16项C++中的最后LRU mailbox测试单独补建后全8项重跑通过。
+- 当前known-capacity native/window最终4/4，direct Domain同clock完整snapshot、source continuation/import和invalid atomic均通过；最初两次夹具层级/时钟比较错误保留，未放宽字段/容差。
 - 公共 Release 默认 all build 成功；30/30 CTest passed，43.49s。这是 attention/public production 源的真实运行；另一 agent 同时开发的诊断 utility 另做最终独立 build/11项测试，不冒称其未稳定版本已被旧 all build覆盖。
 - LRU 最终 portable real-protoc client/manifest suite：19 total，18 passed/1 archived pre-envelope ABI unavailable skip；v1 revision rejection 是实际 ABI response 的回归。早先 marker shim setup 作废，正式 runner 不 mock generator/Path.exists/路由。
 - 四个非 JOINT 双 C ABI Release 全成功；显式真实两库 config 测试20+15+18+17=70/70，0skip。coarse库 SHA `14c35c774333814de2d6403696db2280c4f8d4d2eec9024f1fd5c0883307509e`、legacy `7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68`跨四仓一致。
 - 新 JOINT actual Online、joint_projection、双Die ABI、joint_ledger C ABI 均构建成功。NativeProjectionCApiTest、NativeCoarseProjectionTest、NativeCoarseDieDomainTest 3/3 pass；后加slot/join fixture增量test pass。真实两Die ABI的Python legacy+new native suite17/17，0skip。
 - 新 wire 最终 native/window4/4；独立新 build 重建并执行4/4 CTest+4/4 Python，0skip，两次 projection .so SHA相等。实际 legacy protocol+coarse facade18/18无skip；再次 tiny legacy Online 0/0、192/192成功。详见新 identity-and-results.json；未把 raw Runtime export 或两个同样 import 的 world 自对拍当原 source continuation 验证。
 - 新 Sys 只读采样检查点：真实 CoarseWorkspaceRuntime、DieModelAdapter、DieExecutionLifecycle、LocalHbmDieMemory 及四项 native/window 合8/8通过；实际样本 tick1/原队列2408ns/303318ns与无 live mutation 校验通过。当前源码 Online 重链并再次0/0、192/192成功；canonical23 check不变。source/binary SHA 和 ledger stale48 限制见 sys-local-sample evidence。
-- 实际sample→Domain最终4/4 native/window+真实库Python4/4无skip；portable actual Sys replay的完成时刻/served/整数/registry精确匹配，四项busy字符串不严格匹配，原始失败和Decimal差值完整保留。WSCLLM两仓独立真实生命周期各1/1通过、直接二进制63/54断言通过；没有在该阶段重跑其Online或广泛suite。FACE Python暂测与C++工作在途，最终验收另记。
+- 实际sample→Domain最终4/4 native/window+真实库Python4/4无skip；portable actual Sys replay的完成时刻/served/整数/registry精确匹配，四项busy字符串不严格匹配，原始失败和Decimal差值完整保留。WSCLLM两仓独立真实生命周期各1/1通过、直接二进制63/54断言通过；没有在该阶段重跑其Online或广泛suite。FACE后续独立检查点结果如下，不由该阶段外推。
 - 新JOINT tiny legacy Online C++0/Python0，1accepted/1completed、3delivery/3batch、192success terminals、0incomplete；coarse-intended Online在provider guard失败如实保留。当前服务只有strategy/Sh30入口，face/load-first也在策略选择前触发同一provider guard，故无合法非sh30 coarse Online旁路。JOINT config13/13无skip，与另四仓合83/83；focused adapter/workspace Python45/45无skip。
 - E5 utility 最终11项回归与独立 C++ target build通过；model-to-model precision仍failed，strict cumulative scalar equality/数值误差分别报告，不以Python自对拍当生产证书。
 - 未跑新的目标held-out、sanitizer、malloc fault、当前host预算或完整五仓业务。既存GCC __int128/JSON helper dangling-reference warnings保留：已读helper返回persistent JSON引用，未把警告直接断言成UB，也未声称完整内存安全审查。
 
 ## Blocking Issues
 
-工程验收缺口：sh30/完整native live world、network/pool/ledger/cancel回放，E5精度/最小有效E，真正容量压力/完整GQA/FACE桥接、成本余项和host预算。目标测量not_available。以上不应由merge、fixture或条件reference数字冒充通过。
+工程验收缺口：sh30/完整native live world、network/pool/ledger/cancel回放，E5精度/最小有效E，真正容量压力/完整GQA/FACE未来margin与物理source-release、成本余项和host预算。目标测量not_available。以上不应由merge、fixture或条件reference数字冒充通过。
 
 源码检查点 bb1677f、b83525c、3856418 已进入 main 并实核。后续 WIP 仍需按本协议验证、保存并同步；正式收到交接指令时，以最终共享 main 与本摘要为准。
 

@@ -180,7 +180,12 @@ int wait_readable(int fd, int timeout_ms) {
 
 nlohmann::json build_request_json(const StateDelta& delta) {
     nlohmann::json req;
-    req["schema_version"] = kDecisionBridgeSchemaVersion;
+    if (delta.schema_version != kDecisionBridgeSchemaVersion &&
+        delta.schema_version != kDecisionBridgeWorkspaceSchemaVersion) {
+        throw std::runtime_error("unsupported decision bridge schema_version " +
+                                 std::to_string(delta.schema_version));
+    }
+    req["schema_version"] = delta.schema_version;
     req["delivery_sequence"] = delta.delivery_sequence;
     // Phase 4 (v1): the delivery-epoch counter (== delivery_sequence in v1;
     // the Python validator asserts equality).
@@ -255,6 +260,31 @@ nlohmann::json build_request_json(const StateDelta& delta) {
         injected.push_back(std::move(rank_json));
     }
     req["ledger_summary"] = {{"injected_unfinished", std::move(injected)}};
+    if (delta.schema_version == kDecisionBridgeWorkspaceSchemaVersion) {
+        if (delta.workspace_state.empty()) {
+            throw std::runtime_error(
+                "workspace bridge v2 requires a full nonempty rank view");
+        }
+        nlohmann::json ranks = nlohmann::json::array();
+        int64_t expected_rank = 0;
+        for (const auto& rank_state : delta.workspace_state) {
+            if (rank_state.rank < 0 || rank_state.rank != expected_rank) {
+                throw std::runtime_error(
+                    "workspace bridge v2 must cover contiguous ranks "
+                    "starting at zero");
+            }
+            ++expected_rank;
+            ranks.push_back({
+                {"rank", rank_state.rank},
+                {"workspace_revision", rank_state.workspace_revision},
+                {"active_workspace_bytes", rank_state.active_workspace_bytes},
+            });
+        }
+        req["workspace_state"] = {
+            {"protocol_version", 1},
+            {"ranks", std::move(ranks)},
+        };
+    }
     for (const auto& ev : delta.events) {
         req["reasons"].push_back(reason_name(ev.reason));
         switch (ev.reason) {
@@ -549,6 +579,23 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // only counted exit is the successful return.
     const auto bridge_t0 = std::chrono::steady_clock::now();
     const uint64_t seq = delta.delivery_sequence;
+    if (delta.schema_version == kDecisionBridgeWorkspaceSchemaVersion) {
+        if (num_ranks_ < 0 || delta.workspace_state.size() !=
+                                  static_cast<size_t>(num_ranks_)) {
+            bridge_fatal(
+                "workspace bridge v2 request must cover every configured "
+                "rank before delivery_sequence=" + std::to_string(seq));
+        }
+        for (size_t rank = 0; rank < delta.workspace_state.size(); ++rank) {
+            if (delta.workspace_state[rank].rank !=
+                static_cast<int>(rank)) {
+                bridge_fatal(
+                    "workspace bridge v2 request rank table is incomplete "
+                    "or out of order before delivery_sequence=" +
+                    std::to_string(seq));
+            }
+        }
+    }
     write_file_atomic(request_path(seq), build_request_json(delta));
     // Defect-B fix: ensure BOTH long-lived channel ends exist (lazy for
     // fixtures that never call open_notify(); the official entry calls it at
@@ -592,7 +639,7 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
     }
-    if (schema_version != kDecisionBridgeSchemaVersion) {
+    if (schema_version != static_cast<int>(delta.schema_version)) {
         bridge_fatal("response schema_version mismatch for delivery_sequence=" +
                      std::to_string(seq));
     }
@@ -624,7 +671,8 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // success path).
     GraphBatch batch;
     try {
-        batch = parse_graph_batch(resp, num_ranks_);
+        batch = parse_graph_batch(resp, num_ranks_, delta.schema_version,
+                                  delta.workspace_state);
     } catch (const ParseError& exc) {
         bridge_fatal(std::string("malformed GraphBatch response for "
                                  "delivery_sequence=") +
@@ -690,9 +738,15 @@ std::string FileDecisionBridge::stats_report() const {
 
 void FileDecisionBridge::send_commit_ack(const uint64_t batch_id,
                                          const uint64_t delivery_seq,
-                                         const bool success) {
+                                         const bool success,
+                                         const uint32_t schema_version) {
     nlohmann::json ack;
-    ack["schema_version"] = kDecisionBridgeSchemaVersion;
+    if (schema_version != kDecisionBridgeSchemaVersion &&
+        schema_version != kDecisionBridgeWorkspaceSchemaVersion) {
+        bridge_fatal("unsupported commit ack schema_version=" +
+                     std::to_string(schema_version));
+    }
+    ack["schema_version"] = schema_version;
     ack["delivery_sequence"] = delivery_seq;
     ack["batch_id"] = batch_id;
     ack["success"] = success;

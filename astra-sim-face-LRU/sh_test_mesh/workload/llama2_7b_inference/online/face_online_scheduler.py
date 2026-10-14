@@ -414,7 +414,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                  profile_sink=None, mode: str = "strategy",
                  sensing: bool = False,
                  sensing_query_sink=None, online_stats_sink=None,
-                 ledger_sink=None, cost_oracle=None):
+                 ledger_sink=None, cost_oracle=None,
+                 workspace_admission: str = "off"):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -425,6 +426,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             sensing_query_sink=sensing_query_sink,
             online_stats_sink=online_stats_sink,
             ledger_sink=ledger_sink,
+            workspace_admission=workspace_admission,
         )
         # 2026-09-26(R2 py-online-D2):基类 self.mode/self.replay 死字段
         # 已移除,mode 仅作本类构造参数保留(下方 fail-closed 校验,
@@ -514,6 +516,11 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             self.topology,
             config.model,
         )
+        self._workspace_rank_to_instance = {
+            rank: instance.index
+            for instance in self.topology.instances
+            for rank in instance.ranks
+        }
         # §7.3 profile(R2 py-online-D1 修复,2026-09-26):KV 逐出候选池的
         # 全量扫描经观察者如实计入本决策批 full_scan_entries(此前钩子
         # 零调用方,计数恒 0,验收口径空洞化)。
@@ -634,6 +641,23 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         self._owns_cost_oracle = False
 
     # ------------------------------------------------------------- 策略 --
+
+    def _apply_delivery_extension(self, delta: dict) -> None:
+        if self.workspace_admission != "required":
+            return
+        revision_by_rank, bytes_by_rank = self._workspace_state_maps(
+            delta["workspace_state"])
+        changed_ranks = self.kv_manager.set_external_workspace_view(
+            revision_by_rank, bytes_by_rank)
+        if changed_ranks:
+            self._note_capacity_change(*(
+                self._workspace_rank_to_instance[rank]
+                for rank in changed_ranks))
+
+    def _attach_response_extension(self, delta: dict, batch: dict) -> None:
+        if self.workspace_admission == "required":
+            batch["workspace_capacity_snapshot"] = (
+                self.kv_manager.workspace_capacity_snapshot())
 
     def run_variant_policy(self, delta) -> None:
         """决策顺序逐行对应离线事件循环:completion 批(先
@@ -2099,6 +2123,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         """P1(2026-08-31)只读容量预检:候选实例逐 rank 的 remaining_bytes
         (hbm_snapshots,相对 rank 序与分片口径对齐)是否都 >= 需求分片。
 
+        v2 required 模式使用 workspace_fit_remaining_bytes 扣除当前 lease；
+        HBM 快照的 remaining_bytes 继续保持旧 KV-only 口径。
+
         零副作用(红线,总文档 §5 不变量 5):只调用 hbm_snapshots 只读
         快照与纯函数,严禁触碰 ensure_physical_fit / reserve_* / 逐出 /
         放置(ensure_physical_fit 边逐出边检查、失败不回滚,只能进最终
@@ -2109,7 +2136,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         重试兜底;策略 §5 裁决 1)。
         """
         return all(
-            required <= snapshot.remaining_bytes
+            required <= (
+                self.kv_manager.workspace_fit_remaining_bytes(snapshot.rank)
+                if getattr(self, "workspace_admission", "off") == "required"
+                else snapshot.remaining_bytes)
             for required, snapshot in zip(
                 required_shards,
                 self.kv_manager.hbm_snapshots(instance_index))

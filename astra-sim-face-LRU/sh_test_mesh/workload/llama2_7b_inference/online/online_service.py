@@ -61,6 +61,38 @@ ONLINE_STATS_LOG_NAME = "online_stats.jsonl"
 ONLINE_STATS_PARTIAL_NAME = "online_stats.jsonl.partial"
 
 
+def _workspace_admission_mode(config) -> str:
+    """Resolve auto/required/off against the selected Die profile.
+
+    coarse_die_v2 carries temporary workspace and must use the v2 capacity
+    handshake. Legacy and non-Die runs keep the frozen v1 bridge by default.
+    """
+    requested = os.environ.get("SH_WORKSPACE_ADMISSION", "auto")
+    if requested not in {"auto", "required", "off"}:
+        raise ValueError(
+            "SH_WORKSPACE_ADMISSION must be auto|required|off, got {!r}"
+            .format(requested))
+    profile = None
+    system_config = getattr(config, "system_config", None)
+    if system_config is not None:
+        with open(system_config, "r", encoding="utf-8") as source:
+            system = json.load(source)
+        profile = system.get("die-model-profile")
+    coarse_workspace = profile == "coarse_die_v2"
+    if requested == "auto":
+        return "required" if coarse_workspace else "off"
+    if coarse_workspace and requested == "off":
+        raise ValueError(
+            "coarse_die_v2 requires workspace admission; "
+            "SH_WORKSPACE_ADMISSION=off is unsupported")
+    if requested == "required" and profile in {
+            "mesh_die_v1", "tx8_reference_v1"}:
+        raise ValueError(
+            "workspace admission is unsupported for legacy Die profile {!r}"
+            .format(profile))
+    return requested
+
+
 def _graph_digests_enabled() -> bool:
     """C2/D2(2026-08-28):graph_batch_digests.jsonl 开关,env SH_GRAPH_DIGESTS
     (默认 "0" 关)。digest 行是纯审计产物且每批全量二次序列化
@@ -213,6 +245,7 @@ def main(argv=None) -> int:
             lib_path=args.die_model_lib,
             config_json_path=str(die_config_path),
         )
+    workspace_admission = _workspace_admission_mode(config)
     # C2/D2(2026-08-28):digest 默认关(SH_GRAPH_DIGESTS=1 恢复恒写)。
     digest_sink = (
         _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
@@ -267,6 +300,7 @@ def main(argv=None) -> int:
             online_stats_sink=online_stats_sink,
             ledger_sink=ledger_sink,
             cost_oracle=cost_oracle,
+            workspace_admission=workspace_admission,
         )
     else:
         raise ValueError(
@@ -279,7 +313,8 @@ def main(argv=None) -> int:
     # Official peer is FileDecisionBridge: request files are exactly
     # nlohmann::json::dump() bytes (compact, no trailing newline).
     server = BridgeServer(
-        args.bridge_dir, canonical_request_producer=True)
+        args.bridge_dir, canonical_request_producer=True,
+        workspace_admission=workspace_admission)
     server.serve_forever(
         scheduler.on_decision_batch,
         on_commit_ack=scheduler.on_commit_ack,
@@ -323,6 +358,18 @@ def main(argv=None) -> int:
         "kv_deep_gap_events": int(getattr(
             getattr(scheduler, "kv_manager", None), "deep_gap_events", 0)),
     }
+    if cost_oracle is not None and getattr(cost_oracle, "coarse", False):
+        # Design section 12: preserve the original FACE selector composition
+        # while identifying it separately from a complete known-world replay.
+        summary_row["die_predictor_disclosure"] = {
+            "composition_profile": "face_legacy_selector",
+            "approximate_predictor": True,
+            "local_plan_profile": "coarse_die_v2",
+            "representative_tp_rank": 0,
+            "collectives_included": False,
+            "explicit_queue_delay_included": False,
+            "d2d_cost_profile": "fixed_latency_addend",
+        }
     stats_path = os.path.join(args.bridge_dir, ONLINE_STATS_LOG_NAME)
     partial_path = os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME)
 

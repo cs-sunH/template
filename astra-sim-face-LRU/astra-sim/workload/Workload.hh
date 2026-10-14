@@ -81,6 +81,10 @@ class Workload : public Callable {
     // completions keep re-entering Workload::call, which runs this body in
     // its generic branch.
     void finish_generic_node(uint64_t node_id);
+    void finish_cancelled_coarse_node(uint64_t node_id);
+    uint64_t die_cancelled_comp_count() const {
+        return die_cancelled_comp_count_;
+    }
 
     // Die backend (stage B, contract §7.6): fill the utilization fields of
     // the node's statistics state ahead of finish_generic_node -- compact
@@ -199,7 +203,18 @@ class Workload : public Callable {
     // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
     // fail-closed throw. Reached only under
     // sys->compute_cost_model == ComputeCostModel::Die.
-    void issue_die_comp(const ExecutionDriven::NodeView& node);
+    void issue_die_comp(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared = nullptr,
+        WorkspaceAdmission::Lease* lease = nullptr);
+    void issue_impl(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared,
+        WorkspaceAdmission::Lease* lease);
+    void issue_prepared_coarse(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan prepared,
+        WorkspaceAdmission::Lease lease);
 
     // sh_2.0 N-way HBM contention: endpoint join state for nodes whose
     // completion is the JOIN of two independent async completions -- the
@@ -239,6 +254,7 @@ class Workload : public Callable {
         bool pool_hbm_leg_done = false;
     };
     std::unordered_map<uint64_t, HbmEndpointJoinState> hbm_endpoint_joins_;
+    uint64_t die_cancelled_comp_count_ = 0;
 
     // Static auto-advance re-entrancy guard (2026-09-30, ported from the
     // joint repo): issue() can synchronously complete nodes (zero-byte

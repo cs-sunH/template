@@ -117,6 +117,7 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WatchRegistry.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 
 using namespace AstraSim::ExecutionDriven;
 using namespace NetworkAnalytical;
@@ -521,6 +522,132 @@ StateDelta baseline_delta() {
     arrival.payload.decode_length = 10;
     d.events.push_back(arrival);
     return d;
+}
+
+void test_workspace_v2_preflight_commit_and_issue_union() {
+    EventQueue eq;
+    DecisionMailbox mailbox;
+    ServiceCoordinator svc;
+    RequestIngress ingress(4096);
+    ingress.bind(&eq, &mailbox, &svc);
+    WatchRegistry registry;
+    std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
+    sources.reserve(3);
+    for (int rank = 0; rank < 3; ++rank) {
+        sources.push_back(std::make_shared<NodeStoreGraphSource>());
+    }
+    std::vector<std::unique_ptr<AstraSim::WorkspaceAdmission>> ledgers;
+    ledgers.reserve(3);
+    for (int rank = 0; rank < 3; ++rank) {
+        auto ledger = std::make_unique<AstraSim::WorkspaceAdmission>(rank);
+        ledger->install_capacity_snapshot_unchecked(
+            AstraSim::WorkspaceCapacityRank{rank, 0, 1000, 100, 100, 0});
+        ledgers.push_back(std::move(ledger));
+    }
+    std::vector<int> issue_calls;
+    GraphBatchCommitter::Context context;
+    context.num_ranks = 3;
+    context.graph_sources = &sources;
+    context.watch_registry = &registry;
+    context.ingress = &ingress;
+    context.issue_rank = [&issue_calls](int rank) {
+        issue_calls.push_back(rank);
+    };
+    context.workspace_admission_required = true;
+    context.validate_workspace_capacity_snapshot =
+        [&ledgers](const std::vector<AstraSim::WorkspaceRankState>& request,
+                   const std::vector<AstraSim::WorkspaceCapacityRank>& cap)
+        -> std::optional<std::string> {
+        if (request.size() != ledgers.size() || cap.size() != ledgers.size()) {
+            return "workspace request/snapshot rank count mismatch";
+        }
+        for (size_t rank = 0; rank < ledgers.size(); ++rank) {
+            try {
+                ledgers[rank]->validate_request_state(request[rank]);
+                ledgers[rank]->validate_capacity_snapshot(cap[rank]);
+            } catch (const std::exception& exc) {
+                return "rank " + std::to_string(rank) + ": " + exc.what();
+            }
+        }
+        return std::nullopt;
+    };
+    context.install_workspace_capacity_snapshot =
+        [&ledgers](const std::vector<AstraSim::WorkspaceCapacityRank>& cap,
+                   std::vector<int>& changed) {
+        if (cap.size() != ledgers.size() || changed.capacity() < ledgers.size()) {
+            throw std::runtime_error(
+                "workspace installer received malformed rank scratch");
+        }
+        changed.clear();
+        for (size_t rank = 0; rank < ledgers.size(); ++rank) {
+            if (ledgers[rank]->capacity_snapshot_changes(cap[rank])) {
+                changed.push_back(static_cast<int>(rank));
+            }
+        }
+        for (size_t rank = 0; rank < ledgers.size(); ++rank) {
+            ledgers[rank]->install_capacity_snapshot_unchecked(cap[rank]);
+        }
+    };
+    GraphBatchCommitter committer(std::move(context));
+
+    std::vector<AstraSim::WorkspaceRankState> request_state;
+    request_state.reserve(ledgers.size());
+    for (const auto& ledger : ledgers) request_state.push_back(ledger->state());
+    nlohmann::json response = empty_response(0);
+    response["schema_version"] = 2;
+    response["nodes"] = nlohmann::json::array({
+        compute_node(1, 0, "r1", "prefill", "workspace_union_node")});
+    response["touched_ranks"] = nlohmann::json::array({1});
+    response["workspace_capacity_snapshot"] = {
+        {"protocol_version", 1},
+        {"ranks",
+         nlohmann::json::array(
+             {{{"rank", 0}, {"workspace_revision", 0},
+               {"capacity_bytes", 1000}, {"model_weight_bytes", 100},
+               {"resident_kv_bytes", 120}, {"reserved_request_bytes", 0}},
+              {{"rank", 1}, {"workspace_revision", 0},
+               {"capacity_bytes", 1000}, {"model_weight_bytes", 100},
+               {"resident_kv_bytes", 100}, {"reserved_request_bytes", 0}},
+              {{"rank", 2}, {"workspace_revision", 0},
+               {"capacity_bytes", 1000}, {"model_weight_bytes", 100},
+               {"resident_kv_bytes", 100}, {"reserved_request_bytes", 0}}})}};
+    GraphBatch valid_batch = parse_graph_batch(
+        response, 3, 2, request_state);
+
+    DecisionEvent arrival;
+    arrival.reason = DecisionReason::ARRIVAL;
+    arrival.request_id = "r1";
+    arrival.stage = "prefill";
+    arrival.generation = 0;
+    arrival.payload.session_id = "s1";
+    arrival.payload.prefill_length = 100;
+    arrival.payload.decode_length = 10;
+    const StateDelta delta = build_state_delta_v2(
+        {arrival}, 100, 0, 0, {}, {}, request_state);
+
+    GraphBatch invalid_batch = valid_batch;
+    invalid_batch.workspace_capacity_snapshot[0].workspace_revision = 1;
+    const auto rejected = committer.validate_and_commit(delta, invalid_batch);
+    expect(rejected.error.has_value() && issue_calls.empty() &&
+               sources[0]->store().retained_count() == 0 &&
+               sources[1]->store().retained_count() == 0 &&
+               ledgers[0]->state().workspace_revision == 0 &&
+               ledgers[0]->capacity_snapshot_changes(
+                   AstraSim::WorkspaceCapacityRank{0, 0, 1000, 100, 120, 0}) &&
+               committer.counters().graph_batch_count == 0,
+           "v2 revision mismatch is rejected before graph, ledger, or issue mutation");
+
+    const auto committed = committer.validate_and_commit(delta, valid_batch);
+    const std::vector<uint64_t> free_rank_one =
+        store_free_ids(sources[1]->store());
+    expect(!committed.error.has_value() &&
+               issue_calls == std::vector<int>({0, 1}) &&
+               free_rank_one.size() == 1 &&
+               sources[1]->store().retained_count() == 1 &&
+               !ledgers[0]->capacity_snapshot_changes(
+                   AstraSim::WorkspaceCapacityRank{0, 0, 1000, 100, 120, 0}) &&
+               committer.counters().graph_batch_count == 1,
+           "post-KV snapshot installs once and issues sorted union of changed and touched ranks");
 }
 
 // ----------------------------------------------------------- Part B ------

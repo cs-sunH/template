@@ -102,6 +102,7 @@ namespace ExecutionDriven {
 /// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1; this
 /// header and the Python validator are the authority).
 inline constexpr int kDecisionBridgeSchemaVersion = 1;
+inline constexpr int kDecisionBridgeWorkspaceSchemaVersion = 2;
 
 /// GraphBatch: the C++<-Python reply of one delivery epoch.
 /// C1 (2026-08-29): the batch is TYPED. The pre-C1 struct carried the six
@@ -147,8 +148,20 @@ class DecisionBridge {
     /// only surface as Python's non-zero exit (EOF => peer-death abort
     /// on the next delivery), never as a readable error response.
     virtual void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
-                                 bool success) = 0;
+                                 bool success,
+                                 uint32_t schema_version =
+                                     kDecisionBridgeSchemaVersion) = 0;
 };
+
+/// Bind an ack to the schema of the GraphBatch that was just committed.
+/// Keep this routing in one helper so a workspace-v2 response can never be
+/// finalized with the legacy-v1 default.
+inline void send_commit_ack_for_batch(DecisionBridge& bridge,
+                                     const GraphBatch& batch,
+                                     const bool success) {
+    bridge.send_commit_ack(batch.batch_id, batch.source_delivery_sequence,
+                           success, batch.schema_version);
+}
 
 /// File-implementation of the v1 protocol (blocking FIFOs, atomic JSON
 /// files, fail-closed error/crash/timeout semantics). timeout_ms == 0
@@ -166,8 +179,9 @@ class FileDecisionBridge : public DecisionBridge {
     FileDecisionBridge& operator=(const FileDecisionBridge&) = delete;
 
     GraphBatch deliver_and_receive(const StateDelta& delta) override;
-    void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
-                         bool success) override;
+    void send_commit_ack(
+        uint64_t batch_id, uint64_t delivery_seq, bool success,
+        uint32_t schema_version = kDecisionBridgeSchemaVersion) override;
 
     /// Create <bridge_dir>, both FIFOs and clean stale files. Must be
     /// called BEFORE either side starts (FIFO open order rule).

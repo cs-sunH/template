@@ -99,6 +99,17 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/decision_mailbox_test.cc
             ${srcs_execution_driven})
 
+    # Checked Plan-workspace lease ledger: owner identity, rank-local
+    # revision changes, exact byte capacity, acquire/release and overflow
+    # rejection. This header-only fixture is independent of the simulator.
+    add_executable(AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/workspace_admission_test.cc)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+            PROPERTIES COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/)
+
     # Step-1-7 FileDecisionBridge loopback fixture (test-only): C++ <->
     # Python round-trip over the v0 protocol (request/response/commit ack,
     # atomic publish, crash+timeout fail-closed); never part of the baseline
@@ -638,6 +649,17 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
 
     add_test(NAME AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
             COMMAND AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../../sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_echo.py)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_ParsedBatchTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_ParsedBatchTest)
     add_test(NAME AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
             COMMAND AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest)
     add_test(NAME AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest

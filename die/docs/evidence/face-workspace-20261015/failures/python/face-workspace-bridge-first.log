@@ -1,0 +1,31 @@
+test_service_profile_resolves_required_and_rejects_explicit_off (online.test_workspace_bridge.BridgeVersionTest.test_service_profile_resolves_required_and_rejects_explicit_off) ... ok
+test_v1_shape_stays_legacy_and_workspace_is_required_for_v2 (online.test_workspace_bridge.BridgeVersionTest.test_v1_shape_stays_legacy_and_workspace_is_required_for_v2) ... ok
+test_v2_bad_response_or_ack_never_publishes_or_finalizes (online.test_workspace_bridge.BridgeVersionTest.test_v2_bad_response_or_ack_never_publishes_or_finalizes) ... ok
+test_real_face_train_emits_comp_specs_accepted_by_actual_coarse_abi (online.test_workspace_bridge.CoarseEmitterTest.test_real_face_train_emits_comp_specs_accepted_by_actual_coarse_abi) ... ok
+test_bad_full_rank_envelopes_reject_before_policy_and_delivery_mutation (online.test_workspace_bridge.WorkspaceDeliveryTest.test_bad_full_rank_envelopes_reject_before_policy_and_delivery_mutation) ... ok
+test_policy_sees_absolute_view_and_replay_does_not_reapply (online.test_workspace_bridge.WorkspaceDeliveryTest.test_policy_sees_absolute_view_and_replay_does_not_reapply) ... FAIL
+test_real_prefill_and_readonly_selection_retry_after_workspace_release (online.test_workspace_bridge.WorkspaceDeliveryTest.test_real_prefill_and_readonly_selection_retry_after_workspace_release) ... ok
+
+======================================================================
+FAIL: test_policy_sees_absolute_view_and_replay_does_not_reapply (online.test_workspace_bridge.WorkspaceDeliveryTest.test_policy_sees_absolute_view_and_replay_does_not_reapply)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/face-workspace-port-20261014/python-astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_bridge.py", line 83, in test_policy_sees_absolute_view_and_replay_does_not_reapply
+    self.assertEqual(scheduler.capacity_epoch, [1, 0, 0])
+AssertionError: Lists differ: [1, 1, 1] != [1, 0, 0]
+
+First differing element 1:
+1
+0
+
+- [1, 1, 1]
+?     ^  ^
+
++ [1, 0, 0]
+?     ^  ^
+
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.014s
+
+FAILED (failures=1)

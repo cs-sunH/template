@@ -57,6 +57,8 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/Workload.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
+#include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 #include "DieModel.hh"
 #include <astra-network-analytical/common/EventQueue.h>
 
@@ -72,6 +74,7 @@ Exit code 0 on ALL PASS.
 #include <fstream>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -92,11 +95,17 @@ void expect_true(const bool cond, const char* const what) {
 
 std::map<uint64_t, uint64_t> g_terminal_fires;
 std::map<uint64_t, uint64_t> g_first_tick;
+std::map<uint64_t, int> g_terminal_status;
+std::set<uint64_t> g_expected_skipped;
 
 void tick_hook(void* /*ctx*/, int /*rank*/, uint64_t node_id,
                const char* /*request_id*/, const char* /*stage*/,
                uint64_t /*generation*/, uint64_t tick, int status) {
-    if (status != static_cast<int>(NodeTerminalStatus::Success)) {
+    const bool expected_skip =
+        status == static_cast<int>(NodeTerminalStatus::Skipped) &&
+        g_expected_skipped.erase(node_id) != 0;
+    if (status != static_cast<int>(NodeTerminalStatus::Success) &&
+        !expected_skip) {
         std::fprintf(stderr,
                      "[die_execution_lifecycle_test] node %llu terminal "
                      "status %d\n",
@@ -106,6 +115,7 @@ void tick_hook(void* /*ctx*/, int /*rank*/, uint64_t node_id,
     if (g_first_tick.find(node_id) == g_first_tick.end()) {
         g_first_tick[node_id] = tick;
     }
+    g_terminal_status[node_id] = status;
     ++g_terminal_fires[node_id];
 }
 
@@ -375,6 +385,139 @@ int main() {
     const auto reference_plan = DieModel::compile(*one_layer_spec, hw);
     const DieModel::CostResult reference =
         DieModel::estimate_alone(*reference_plan);
+
+    // ---- Case J: actual FACE-emitted typed FFN v2 workspace admission ----
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        g_terminal_status.clear();
+        g_expected_skipped.clear();
+        Fixture fixture =
+            make_fixture(config_dir, "coarse_system_latency.json");
+        Workload& workload = *fixture.sys->workload;
+
+        const auto fixture_path =
+            repo / "astra-sim/workload/execution_driven/tests/testdata/"
+                  "face_emitted_ffn_region.json";
+        std::ifstream emitted_in(fixture_path);
+        nlohmann::json emitted_fixture;
+        emitted_in >> emitted_fixture;
+        const auto& provenance = emitted_fixture.at("fixture_provenance");
+        nlohmann::json emitted_node = emitted_fixture.at("emitted_node");
+        const std::string emitted_task =
+            emitted_node.at("compute").at("die_op_spec").dump();
+        expect_true(
+            provenance.at("source_sha256") ==
+                    "97549bf7ea41c11174d58d6f9eb16304e057819b78156882db1b0a59b5fd9548" &&
+                provenance.at("generator") ==
+                    "GraphBatchBuilder._emit_train_body -> transformer_pass_aggregated" &&
+                provenance.at("source_rank") == 2 &&
+                provenance.at("source_node_id") == 7 &&
+                emitted_node.at("name") ==
+                    "batch_train_i1_1_all_layers_ffn_region" &&
+                emitted_node.at("compute").at("die_op_spec").at("op_kind") ==
+                    "ffn_region",
+            "J: fixture retains the actual emitted FACE FFN task and source provenance");
+
+        // Keep the compiler payload exact while placing this rank-2 emitter
+        // record into the one-rank native lifecycle fixture.
+        emitted_node["rank"] = 0;
+        nlohmann::json response{
+            {"schema_version", 2},
+            {"batch_id", 0},
+            {"source_delivery_sequence", 0},
+            {"nodes", nlohmann::json::array({emitted_node})},
+            {"workspace_capacity_snapshot",
+             {{"protocol_version", 1},
+              {"ranks",
+               nlohmann::json::array(
+                   {{{"rank", 0},
+                     {"workspace_revision", 0},
+                     {"capacity_bytes", 2000},
+                     {"model_weight_bytes", 1000},
+                     {"resident_kv_bytes", 745},
+                     {"reserved_request_bytes", 0}}})}}}};
+        const std::vector<WorkspaceRankState> request_state{{0, 0, 0}};
+        const auto parsed = parse_graph_batch(response, 1, 2, request_state);
+        OnlineNode task = parsed.nodes.at(0).node;
+        task.global_id = 80;
+        expect_true(parsed.schema_version == 2 &&
+                        task.compute.die_task_json != nullptr &&
+                        task.compute.die_spec != nullptr &&
+                        task.compute.die_task_json->dump() == emitted_task &&
+                        task.compute.die_task_json->at("op_kind") == "ffn_region" &&
+                        task.compute.runtime_ns == 0,
+                    "J: real v2 GraphBatch parser preserves raw FFN JSON and diagnostic DieSpec");
+
+        WorkspaceAdmission& ledger = *fixture.sys->workspace_admission;
+        const WorkspaceCapacityRank low_headroom{
+            0, 0, 2000, 1000, 745, 0};  // 255 B headroom, below the 256 B Plan.
+        ledger.validate_capacity_snapshot(low_headroom);
+        ledger.install_capacity_snapshot_unchecked(low_headroom);
+        fixture.source->store().add_node(task);
+        const auto candidate_is_free = [&](const uint64_t node_id) {
+            bool found = false;
+            fixture.source->for_each_dep_free([&](const auto& candidate) {
+                found = found || candidate.global_id == node_id;
+            });
+            return found;
+        };
+        workload.issue_dep_free_nodes();
+        expect_true(candidate_is_free(80),
+                    "J: insufficient KV headroom keeps the FFN candidate dependency-free");
+        expect_true(workload.hw_resource->num_in_flight_gpu_comp_ops == 0,
+                    "J: insufficient KV headroom does not occupy a GPU slot");
+        expect_true(ledger.active_workspace_bytes() == 0 &&
+                        ledger.active_lease_count() == 0 &&
+                        ledger.workspace_revision() == 0,
+                    "J: insufficient KV headroom does not acquire a workspace lease");
+
+        const WorkspaceCapacityRank released_kv_headroom{
+            0, 0, 2000, 1000, 744, 0};  // 256 B headroom is an exact legal fit.
+        ledger.validate_capacity_snapshot(released_kv_headroom);
+        expect_true(ledger.capacity_snapshot_changes(released_kv_headroom),
+                    "J: releasing one KV byte changes the rank capacity view");
+        ledger.install_capacity_snapshot_unchecked(released_kv_headroom);
+        workload.issue_dep_free_nodes();
+        expect_true(!candidate_is_free(80) &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
+                        ledger.active_workspace_bytes() == 256 &&
+                        ledger.active_lease_count() == 1 &&
+                        ledger.workspace_revision() == 1,
+                    "J: capacity snapshot retries and acquires the canonical 256 B Plan lease");
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires[80] == 1 &&
+                        g_terminal_status[80] ==
+                            static_cast<int>(NodeTerminalStatus::Success) &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                        ledger.active_workspace_bytes() == 0 &&
+                        ledger.active_lease_count() == 0 &&
+                        ledger.workspace_revision() == 2,
+                    "J: FFN completion releases its lease exactly once before terminal observation");
+
+        OnlineNode cancelled = task;
+        cancelled.global_id = 81;
+        cancelled.generation = 2;
+        fixture.source->store().add_node(cancelled);
+        workload.issue_dep_free_nodes();
+        expect_true(workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
+                        ledger.active_workspace_bytes() == 256 &&
+                        ledger.active_lease_count() == 1 &&
+                        ledger.workspace_revision() == 3,
+                    "J: second actual FFN issue owns one independent cancellation lease");
+        g_expected_skipped.insert(81);
+        workload.die_model_adapter()->cancel_coarse_node(
+            81, Sys::boostedTick());
+        expect_true(g_terminal_fires[81] == 1 &&
+                        g_terminal_status[81] ==
+                            static_cast<int>(NodeTerminalStatus::Skipped) &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                        ledger.active_workspace_bytes() == 0 &&
+                        ledger.active_lease_count() == 0 &&
+                        ledger.workspace_revision() == 4 &&
+                        workload.die_cancelled_comp_count() == 1,
+                    "J: typed cancel returns the lease once and terminalizes as skipped");
+    }
 
     // ---- Case A: contention off, latency 100, norm plan -----------------
     {

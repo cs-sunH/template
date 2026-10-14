@@ -28,6 +28,7 @@ class StreamBaseline;
 class DataSet;
 class QueueLevels;
 class CoarseDieRuntime;
+class WorkspaceAdmission;
 class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
@@ -351,6 +352,9 @@ class Sys : public Callable {
     };
     std::unique_ptr<DieModelRuntime> die_runtime;
     std::unique_ptr<CoarseDieRuntime> coarse_die_runtime;
+    // Rank-local transient Plan workspace admission ledger. It is created
+    // only for coarse_die_v2 and is exchanged through Online bridge v2.
+    std::unique_ptr<WorkspaceAdmission> workspace_admission;
     std::string die_model_profile;
     // Resolved die-model-config path (diagnostics only; empty off the die
     // backend).

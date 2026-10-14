@@ -1,0 +1,22 @@
+Internal ctest changing into directory: /workspace/template/work/face-workspace-port-20261014/cpp-face/build
+Test project /workspace/template/work/face-workspace-port-20261014/cpp-face/build
+    Start 15: AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
+1/8 Test #15: AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest .........   Passed    0.00 sec
+    Start 16: AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+2/8 Test #16: AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest ......   Passed    0.00 sec
+    Start 18: AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
+3/8 Test #18: AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest ..........   Passed    1.19 sec
+    Start 19: AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
+4/8 Test #19: AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest .....   Passed    9.49 sec
+    Start 20: AstraSim_Analytical_Congestion_Aware_ParsedBatchTest
+5/8 Test #20: AstraSim_Analytical_Congestion_Aware_ParsedBatchTest .............   Passed    0.01 sec
+    Start 35: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+6/8 Test #35: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.01 sec
+    Start 36: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+7/8 Test #36: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...   Passed    0.01 sec
+    Start 37: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+8/8 Test #37: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 8
+
+Total Test time (real) =  10.73 sec

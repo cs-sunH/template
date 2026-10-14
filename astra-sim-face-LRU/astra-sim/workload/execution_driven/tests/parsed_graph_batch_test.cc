@@ -53,6 +53,7 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 using namespace AstraSim::ExecutionDriven;
+using AstraSim::WorkspaceRankState;
 
 namespace {
 
@@ -88,6 +89,35 @@ void expect_parse_error(const nlohmann::json& resp, const char* what,
         std::fprintf(stderr,
                      "[parsed_graph_batch_test] wrong exception type for %s: "
                      "%s\n",
+                     what, exc.what());
+        g_ok = false;
+    }
+}
+
+void expect_v2_parse_error(
+    const nlohmann::json& resp,
+    const std::vector<WorkspaceRankState>& workspace_state,
+    const char* what, const char* needle = nullptr) {
+    try {
+        (void)parse_graph_batch(resp, 1, 2, workspace_state);
+        std::fprintf(stderr,
+                     "[parsed_graph_batch_test] unexpected v2 parse PASS: "
+                     "%s\n",
+                     what);
+        g_ok = false;
+    } catch (const ParseError& exc) {
+        if (needle != nullptr &&
+            std::string(exc.what()).find(needle) == std::string::npos) {
+            std::fprintf(stderr,
+                         "[parsed_graph_batch_test] v2 message mismatch for "
+                         "%s:\n  got: %s\n  want substring: %s\n",
+                         what, exc.what(), needle);
+            g_ok = false;
+        }
+    } catch (const std::exception& exc) {
+        std::fprintf(stderr,
+                     "[parsed_graph_batch_test] wrong v2 exception type for "
+                     "%s: %s\n",
                      what, exc.what());
         g_ok = false;
     }
@@ -255,6 +285,41 @@ nlohmann::json max_shape_response() {
 }
 
 // --------------------------------------------------------------- Part T ----
+void test_workspace_v2_batch_identity() {
+    const std::vector<WorkspaceRankState> request_state{{0, 3, 128}};
+    nlohmann::json response{
+        {"schema_version", 2},
+        {"batch_id", 1},
+        {"source_delivery_sequence", 1},
+        {"workspace_capacity_snapshot",
+         {{"protocol_version", 1},
+          {"ranks",
+           nlohmann::json::array(
+               {{{"rank", 0},
+                 {"workspace_revision", 3},
+                 {"capacity_bytes", 1024},
+                 {"model_weight_bytes", 128},
+                 {"resident_kv_bytes", 64},
+                 {"reserved_request_bytes", 32}}})}}}};
+
+    const ParsedGraphBatch parsed = parse_graph_batch(response, 1, 2,
+                                                      request_state);
+    expect(parsed.schema_version == 2 && parsed.has_batch_id &&
+               parsed.batch_id == 1 && parsed.source_delivery_sequence == 1,
+           "v2 requires and preserves the canonical batch identity");
+
+    auto malformed = response;
+    malformed.erase("batch_id");
+    expect_v2_parse_error(malformed, request_state,
+                          "v2 requires explicit batch_id", "batch_id");
+
+    malformed = response;
+    malformed["batch_id"] = 2;
+    expect_v2_parse_error(malformed, request_state,
+                          "v2 batch_id equals source sequence",
+                          "does not match source_delivery_sequence");
+}
+
 void test_top_level_rules() {
     const nlohmann::json base = max_shape_response();
 
@@ -977,6 +1042,7 @@ void test_max_shape_round_trip() {
 }  // namespace
 
 int main() {
+    test_workspace_v2_batch_identity();
     test_top_level_rules();
     test_node_rules();
     test_edge_rules();

@@ -24,6 +24,7 @@ from face_scheduler import (  # noqa: E402
     FaceRooflineEstimate,
     FaceModel,
     kv_cache_bytes_for_tokens,
+    coarse_die_face_peak_scalars,
 )
 from session_kv_manager import NOC_MIGRATE  # noqa: E402  (re-export: graph_batch_builder import)
 from generate_trace import (  # noqa: E402
@@ -197,13 +198,20 @@ def _parse_config_value(key: str, value: str) -> object:
 
 
 def _to_face_hardware(hardware: ResolvedHardware) -> FaceHardware:
+    peak_perf = hardware.peak_perf_tflops
+    hbm_bandwidth = hardware.local_hbm_bandwidth_gbps
+    if hardware.coarse_die_config is not None:
+        # The resolver intentionally has no legacy peak scalar for typed hardware.
+        # Reuse its actual library summary solely for the FACE selector units.
+        peak_perf, hbm_bandwidth = coarse_die_face_peak_scalars(
+            hardware.die_summary or {})
     return FaceHardware(
         mesh_rows=hardware.mesh_rows,
         mesh_cols=hardware.mesh_cols,
         local_hbm_capacity_bytes=hardware.local_hbm_capacity_bytes,
-        local_hbm_bandwidth_gbps=hardware.local_hbm_bandwidth_gbps,
+        local_hbm_bandwidth_gbps=hbm_bandwidth,
         d2d_bandwidth_gbps=hardware.d2d_bandwidth_gbps,
-        peak_perf_tflops=hardware.peak_perf_tflops,
+        peak_perf_tflops=peak_perf,
         d2d_latency_ns=hardware.d2d_latency_ns,
         local_hbm_latency_ns=hardware.local_hbm_latency_ns,
         label=hardware.label,

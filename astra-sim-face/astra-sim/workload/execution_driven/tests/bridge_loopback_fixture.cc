@@ -51,6 +51,7 @@ Exit code 0 on ALL PASS (requires python3 on PATH).
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -366,6 +367,66 @@ void round_trip(const std::string& echo_script) {
     rm_rf(root);
     std::printf("[bridge_loopback_fixture] A: round-trip + ack + clean "
                 "exit PASS\n");
+}
+
+// ---------------------------------------------------------------- Part A2 --
+// A workspace-v2 delivery must be finalized with the exact response schema
+// version. This exercises the same batch-bound helper used by main_online
+// and checks the JSON emitted by FileDecisionBridge's real ack writer.
+const char* kWorkspaceV2AckScript =
+    "import json,os,sys\n"
+    "d=sys.argv[1]\n"
+    "reqfd=os.open(d+'/req_notify.fifo',os.O_RDONLY)\n"
+    "respfd=os.open(d+'/resp_notify.fifo',os.O_WRONLY)\n"
+    "os.read(reqfd,1)\n"
+    "req=json.load(open(d+'/request_0.json'))\n"
+    "ranks=[{'rank':r['rank'],'workspace_revision':r['workspace_revision'],"
+    "'capacity_bytes':10000,'model_weight_bytes':1000,"
+    "'resident_kv_bytes':500,'reserved_request_bytes':0} "
+    "for r in req['workspace_state']['ranks']]\n"
+    "resp={'schema_version':2,'batch_id':0,"
+    "'source_delivery_sequence':req['delivery_sequence'],"
+    "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
+    "'kv_actions':[],'future_alarms':[],"
+    "'workspace_capacity_snapshot':{'protocol_version':1,'ranks':ranks}}\n"
+    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
+    "os.replace(d+'/response_0.json.tmp',d+'/response_0.json')\n"
+    "os.write(respfd,b'\\n')\n"
+    "os.read(reqfd,1)\n"
+    "ack=json.load(open(d+'/commit_ack_0.json'))\n"
+    "open(d+'/ack_seen.json','w').write(json.dumps(ack))\n";
+
+void workspace_v2_ack_scenario() {
+    const std::string root = make_temp_root();
+    const std::string bridge_dir = root + "/bridge_v2";
+    FileDecisionBridge::ensure_bridge_dir(bridge_dir);
+    const pid_t py = spawn_python3({"-c", kWorkspaceV2AckScript, bridge_dir});
+    {
+        FileDecisionBridge bridge(bridge_dir, /*timeout_ms=*/10000,
+                                  /*num_ranks=*/2);
+        const StateDelta delta = build_state_delta_v2(
+            {}, /*tick=*/1234, /*delivery_sequence=*/0,
+            /*deferred_from_tick=*/0, {},
+            {}, {AstraSim::WorkspaceRankState{0, 4, 128},
+                 AstraSim::WorkspaceRankState{1, 2, 0}});
+        const GraphBatch batch = bridge.deliver_and_receive(delta);
+        expect(batch.schema_version == 2 && batch.batch_id == 0 &&
+                   batch.source_delivery_sequence == 0,
+               "A2: parsed workspace response retains ack identity/schema");
+        send_commit_ack_for_batch(bridge, batch, true);
+    }
+    int status = 0;
+    ::waitpid(py, &status, 0);
+    expect(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+           "A2: workspace-v2 ack peer exited cleanly");
+    const nlohmann::json ack = read_json_file_for_test(root + "/bridge_v2/ack_seen.json");
+    expect(ack.value("schema_version", 0) == 2 &&
+               ack.value("delivery_sequence", UINT64_MAX) == 0 &&
+               ack.value("batch_id", UINT64_MAX) == 0 &&
+               ack.value("success", false),
+           "A2: commit ack writer emits schema v2 and response identity");
+    rm_rf(root);
+    std::printf("[bridge_loopback_fixture] A2: workspace-v2 ack schema PASS\n");
 }
 
 // ---------------------------------------------------------------- Part B --
@@ -713,6 +774,7 @@ int main(int argc, char* argv[]) {
 
     completed_node_serialization();
     round_trip(echo_script);
+    workspace_v2_ack_scenario();
     run_abort_scenario("B: crash detection", crash_scenario);
     run_abort_scenario("C: timeout", timeout_scenario);
     // Defect-B fix regressions (2026-08-16): genuine peer death under the

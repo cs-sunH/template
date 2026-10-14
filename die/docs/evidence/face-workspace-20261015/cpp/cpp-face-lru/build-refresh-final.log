@@ -1,0 +1,10 @@
+[  0%] Built target fmt
+[  7%] Built target spdlog
+[ 11%] Built target die_model
+[ 33%] Built target yaml-cpp
+[ 37%] Built target coarse_die
+[ 44%] Built target Analytical_Congestion_Aware
+[ 85%] Built target AstraSim
+[ 85%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest.dir/workspace/template/astra-sim-face-LRU/astra-sim/workload/execution_driven/tests/decision_mailbox_test.cc.o
+[ 85%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest

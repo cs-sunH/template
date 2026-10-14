@@ -1,0 +1,2 @@
+session_id,turn_index,request_id,prefill_length,decode_length,session_arrival_time_ns,inter_request_interval_ns,description
+face_tiny_session_0,0,face_tiny_request_0,4,2,0,,one-request real FACE Online reproduction

@@ -1,0 +1,5 @@
+# Coarse FACE config-loader pre-fix evidence
+
+These work-only snapshots preserve the genuine pre-fix failure from the staged FACE source copies. `reproduce_pre_fix_failure.py` invokes the real staged `load_face_trace_config()` and `plan_materializer` path against the legal `coarse_die_v2` inputs and the original Die/Coarse C ABI libraries. It records the Python traceback before plan materialization could complete; it does not mock or patch the loader.
+
+Each variant directory contains the original coarse descriptor, the FACE Case-5 9x6 hardware input with its C ABI-derived 144000000000-byte local-HBM profile, the `compute-cost-model=die`/`die-model-profile=coarse_die_v2` system template, one-request FACE trace config, source-stage identity, and exact staged Python files that produced the failure. The protobuf schema is included because the staged loader imports the generated Chakra message definitions. The adjacent source C ABI libraries and current source tree were deliberately not copied here.

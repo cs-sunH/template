@@ -19,6 +19,7 @@ LICENSE file in the root directory of this source tree.
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdlib.h>
 #include <stdexcept>
 #include <unistd.h>
@@ -515,6 +516,50 @@ void Workload::issue_dep_free_nodes() {
             // mode; online mode issues only through the post-commit
             // deferred path (steps 1-6/1-11), which calls this function
             // directly per rank.
+            const auto issue_ready_node =
+                [&](const ExecutionDriven::NodeView& node) {
+                    const bool coarse_workspace_comp =
+                        sys->coarse_die_runtime != nullptr &&
+                        node.node_type == ChakraNodeType::COMP_NODE &&
+                        !node.is_timer_op && !node.is_cpu_op &&
+                        node.compute.op_role !=
+                            ExecutionDriven::OpRole::ControlMarker;
+                    if (!coarse_workspace_comp) {
+                        issue(node);
+                        return;
+                    }
+                    if (execution_mode_ !=
+                        ExecutionDriven::ExecutionMode::Online) {
+                        throw std::runtime_error(
+                            "coarse_die_v2 requires Online bridge v2 "
+                            "workspace capacity snapshots");
+                    }
+                    if (die_adapter_ == nullptr ||
+                        sys->workspace_admission == nullptr) {
+                        throw std::runtime_error(
+                            "coarse_die_v2 COMP requires workspace "
+                            "admission before issue");
+                    }
+                    auto prepared = die_adapter_->prepare_coarse_plan(node);
+                    auto admission =
+                        die_adapter_->try_acquire_workspace(prepared);
+                    if (admission.status ==
+                        WorkspaceAdmission::AcquireStatus::Blocked) {
+                        // Keep the dependency-free candidate unoccupied. A
+                        // new snapshot or released sibling lease retries it.
+                        return;
+                    }
+                    if (admission.status ==
+                        WorkspaceAdmission::AcquireStatus::Impossible) {
+                        throw std::runtime_error(
+                            "coarse Plan workspace " +
+                            std::to_string(prepared.workspace_bytes) +
+                            " bytes exceeds empty-instance HBM capacity for "
+                            "node " + std::to_string(node.global_id));
+                    }
+                    issue_prepared_coarse(node, std::move(prepared),
+                                          std::move(admission.lease));
+                };
             graph_source_->for_each_dep_free([&](const auto& nv) {
                 if (execution_mode_ ==
                     ExecutionDriven::ExecutionMode::Online) {
@@ -524,12 +569,12 @@ void Workload::issue_dep_free_nodes() {
                     // 2026-08-18 deleted the replay-only concurrent
                     // calibrated-COMP bypass).
                     if (hw_resource->is_available(nv)) {
-                        issue(nv);
+                        issue_ready_node(nv);
                     }
                 } else {
                     auto node = graph_source_->et_node(nv.global_id);
                     if (hw_resource->is_available(node)) {
-                        issue(nv);
+                        issue_ready_node(nv);
                     }
                 }
             });
@@ -547,6 +592,29 @@ void Workload::issue_dep_free_nodes() {
 }
 
 void Workload::issue(const ExecutionDriven::NodeView& node) {
+    issue_impl(node, nullptr, nullptr);
+}
+
+void Workload::issue_prepared_coarse(
+    const ExecutionDriven::NodeView& node,
+    DieModelAdapter::PreparedCoarsePlan prepared,
+    WorkspaceAdmission::Lease lease) {
+    if (die_adapter_ == nullptr) {
+        throw std::runtime_error(
+            "prepared coarse issue requires its die adapter");
+    }
+    die_adapter_->validate_prepared_coarse_plan(node, prepared, lease);
+    issue_impl(node, &prepared, &lease);
+}
+
+void Workload::issue_impl(
+    const ExecutionDriven::NodeView& node,
+    DieModelAdapter::PreparedCoarsePlan* const prepared,
+    WorkspaceAdmission::Lease* const lease) {
+    if ((prepared == nullptr) != (lease == nullptr)) {
+        throw std::runtime_error(
+            "prepared coarse issue requires both Plan and workspace lease");
+    }
     auto logger = workload_logger_;
     if (sys->trace_enabled) {
         logger->debug("issue,sys->id={}, tick={}, node->id={}, "
@@ -605,7 +673,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
                 // 2026-10-03): the frozen dispatch order lives in
                 // issue_die_comp; the legacy roofline/fluid path below is
                 // unreachable under this backend.
-                issue_die_comp(node);
+                issue_die_comp(node, prepared, lease);
             } else if (!this->sys->roofline_enabled) {
                 issue_replay(node);
             } else {
@@ -786,7 +854,10 @@ void Workload::issue_local_hbm_kv_restore(
     sys->register_event(this, EventType::General, wlhd, runtime);
 }
 
-void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
+void Workload::issue_die_comp(
+    const ExecutionDriven::NodeView& node,
+    DieModelAdapter::PreparedCoarsePlan* const prepared,
+    WorkspaceAdmission::Lease* const lease) {
     // Contract §7.3 dispatch order (frozen 2026-10-03): is_timer_op -> old
     // timer path; is_cpu_op -> issue_replay; op_role=control_marker -> the
     // legacy micro-job semantics verbatim; die_spec -> DieModelAdapter
@@ -858,7 +929,21 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         MetricCollector::instance().on_compute_issue(
             sys->id, node.compute.num_ops, node.compute.tensor_size);
     }
-    die_adapter_->issue_die(node);
+    if (sys->coarse_die_runtime != nullptr) {
+        if (prepared == nullptr || lease == nullptr || !lease->active()) {
+            throw std::runtime_error(
+                "coarse_die_v2 COMP reached issue without its prepared Plan "
+                "and live workspace lease");
+        }
+        die_adapter_->issue_prepared_coarse_plan(
+            node, std::move(*prepared), std::move(*lease));
+    } else {
+        if (prepared != nullptr || lease != nullptr) {
+            throw std::runtime_error(
+                "legacy die COMP unexpectedly carries coarse admission state");
+        }
+        die_adapter_->issue_die(node);
+    }
 }
 
 void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
@@ -1650,6 +1735,33 @@ void Workload::finish_generic_node(uint64_t node_id) {
     // die-delivered would never report()/notify finished. The is_finished
     // guard inside keeps exactly one finalization.
     maybe_finalize_static_run();
+}
+
+void Workload::finish_cancelled_coarse_node(const uint64_t node_id) {
+    if (execution_mode_ != ExecutionDriven::ExecutionMode::Online) {
+        throw std::runtime_error(
+            "live coarse COMP cancellation requires an Online graph source");
+    }
+    const ExecutionDriven::NodeView* nv = graph_source_->lookup_ptr(node_id);
+    if (nv == nullptr || nv->node_type != ChakraNodeType::COMP_NODE) {
+        throw std::runtime_error(
+            "cancelled coarse COMP references an unknown/non-COMP node id=" +
+            std::to_string(node_id));
+    }
+    if (die_cancelled_comp_count_ == std::numeric_limits<uint64_t>::max()) {
+        throw std::overflow_error("die_cancelled_comp_count overflow");
+    }
+    mark_online_terminal_or_fail(node_id);
+    ++die_cancelled_comp_count_;
+    hw_resource->release(*nv);
+    complete_online_statistics(*nv, Sys::boostedTick());
+    if (MetricCollector::instance().enabled() && nv->metric_complete_anchor) {
+        MetricCollector::instance().on_node_complete(sys->id, node_id,
+                                                     Sys::boostedTick());
+    }
+    record_node_terminal(execution_mode_, sys->id, node_id,
+                         ExecutionDriven::NodeTerminalStatus::Skipped, nv);
+    graph_source_->finish_node(node_id);
 }
 
 void Workload::maybe_finalize_static_run() {

@@ -116,6 +116,10 @@ class Workload : public Callable {
     // §7.3; the HBM-delivered completions already ran it from
     // on_local_hbm_job_complete).
     void finish_generic_node(uint64_t node_id);
+    void finish_cancelled_coarse_node(uint64_t node_id);
+    uint64_t die_cancelled_comp_count() const {
+        return die_cancelled_comp_count_;
+    }
 
     // Die backend (stage B, contract §7.6): fill the utilization fields of
     // the node's statistics state ahead of finish_generic_node -- compact
@@ -131,6 +135,14 @@ class Workload : public Callable {
     DieModelAdapter* die_model_adapter() {
         return die_adapter_.get();
     }
+
+    // Prepared coarse COMP seam. The caller prepares before acquiring a
+    // rank-local workspace lease; this entry validates ownership before the
+    // node can be taken or its GPU slot occupied.
+    void issue_prepared_coarse(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan prepared,
+        WorkspaceAdmission::Lease lease);
 
   private:
     // R4-14: cached "workload" logger -- fetched once in the constructor;
@@ -170,7 +182,14 @@ class Workload : public Callable {
     // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
     // fail-closed throw. Reached only under
     // sys->compute_cost_model == ComputeCostModel::Die.
-    void issue_die_comp(const ExecutionDriven::NodeView& node);
+    void issue_die_comp(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared = nullptr,
+        WorkspaceAdmission::Lease* lease = nullptr);
+    void issue_impl(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared,
+        WorkspaceAdmission::Lease* lease);
 
     // Two-event join for p2p comm nodes with an HBM endpoint job: the node
     // completes exactly once, when both the network-side callback and the
@@ -181,6 +200,7 @@ class Workload : public Callable {
         bool hbm_done = false;
     };
     std::unordered_map<uint64_t, HbmCommJoin> hbm_comm_join_;
+    uint64_t die_cancelled_comp_count_ = 0;
     void maybe_complete_hbm_joined_comm(uint64_t node_id);
 
     // Static auto-advance re-entrancy guard: issue() can synchronously

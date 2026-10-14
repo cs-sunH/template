@@ -1,0 +1,3 @@
+session_id,turn_index,request_id,prefill_length,decode_length,session_arrival_time_ns,inter_request_interval_ns,description
+face_overlap_session_0,0,face_overlap_request_0,32,2,0,,long real FACE prefill held open while a second session arrives
+face_overlap_session_1,0,face_overlap_request_1,4,2,1000,,second real FACE session arriving during the first long prefill at 1000 ns

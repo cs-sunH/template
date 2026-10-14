@@ -41,6 +41,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
 #include "DieModel.hh"
 #include "astra-sim/workload/CoarseDieRuntime.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 #include "coarse_die/Hardware.hh"
 #include <json/json.hpp>
 
@@ -291,6 +292,7 @@ Sys::Sys(int id,
     this->compute_cost_model = ComputeCostModel::LegacyDefault;
     this->die_runtime = nullptr;
     this->coarse_die_runtime = nullptr;
+    this->workspace_admission = nullptr;
     this->die_model_profile = "";
     this->die_model_config_path = "";
 
@@ -889,6 +891,7 @@ void Sys::initialize_die_backend(
         }
         coarse_die_runtime = std::make_unique<CoarseDieRuntime>(
             this, std::move(coarse_hw));
+        workspace_admission = std::make_unique<WorkspaceAdmission>(id);
         die_runtime.reset();
         die_model_profile = "coarse_die_v2";
         if (!local_mem_bw_key_present) {

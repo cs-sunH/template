@@ -33,6 +33,16 @@ import time
 
 SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除,本校验器与 C++ 序列化为权威)
 
+WORKSPACE_SCHEMA_VERSION = 2
+WORKSPACE_PROTOCOL_VERSION = 1
+_UINT64_MAX = (1 << 64) - 1
+
+
+def _require_uint64(value, name):
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value < 0 or value > _UINT64_MAX):
+        raise ValueError("{} must be an exact uint64 integer".format(name))
+
 # ---------------------------------------------------------------- B4 在途尾部
 # 方案 §4-B4 "PropagatingTail"(真实在途尾部):基类中三个"已产生、等待
 # 下游核销/确认"的在途容器属于真实在途工作,禁止截断(红线 §2.1)。本
@@ -168,7 +178,16 @@ class OnlineSchedulerBase:
         sensing_query_sink=None,
         online_stats_sink=None,
         ledger_sink=None,
+        workspace_admission: str = "off",
     ):
+        if workspace_admission not in {"off", "required"}:
+            raise ValueError(
+                "workspace_admission must be 'off' or 'required', got {!r}"
+                .format(workspace_admission))
+        self.workspace_admission = workspace_admission
+        self.schema_version = (
+            WORKSPACE_SCHEMA_VERSION
+            if workspace_admission == "required" else SCHEMA_VERSION)
         self.config = config
         # 运行期不保留完整 manifest 或 request_id -> manifest record 副本。
         # 唯一需要跨 delivery 保存的输入身份状态是尚未到达的 request ID：
@@ -414,6 +433,7 @@ class OnlineSchedulerBase:
         if replayed is not None:
             self.scheduler_self_ns_total += time.monotonic_ns() - t0
             return replayed
+        self._apply_delivery_extension(delta)
         self._record_ledger_summary(delta)
         self.delivery_count += 1
         self._start_batch(delta)
@@ -425,6 +445,7 @@ class OnlineSchedulerBase:
             self._record_sensing_query(delta)
         self.run_variant_policy(delta)
         batch = self.build_graph_batch()
+        self._attach_response_extension(delta, batch)
         # §7.2:缓存本次已应用交付(幂等重放凭据)。B3(2026-08-23):
         # 引用缓存(批对象/下一批 begin_batch 重建累加器,旧引用不被
         # 改写;delta 桥读后即弃)。(2026-09-30)defensive_reply_cache
@@ -437,6 +458,64 @@ class OnlineSchedulerBase:
         self.last_applied_sequence = delta["delivery_sequence"]
         self._record_online_stats(delta, batch, time.monotonic_ns() - t0)
         return batch
+
+    def _apply_delivery_extension(self, delta: dict) -> None:
+        """Apply required versioned state before policy/KV mutations."""
+
+    def _attach_response_extension(self, delta: dict, batch: dict) -> None:
+        """Add mode-specific response fields after policy mutations."""
+
+    def _workspace_state_maps(self, workspace_state: dict):
+        """Strictly parse the v2 full-rank absolute workspace view."""
+        manager = getattr(self, "kv_manager", None)
+        if manager is None:
+            raise ValueError(
+                "workspace schema v2 requires a scheduler with a KV manager")
+        if not isinstance(workspace_state, dict):
+            raise ValueError("workspace_state must be an object")
+        if set(workspace_state) != {"protocol_version", "ranks"}:
+            raise ValueError("workspace_state has unknown or missing fields")
+        protocol_version = workspace_state["protocol_version"]
+        if (isinstance(protocol_version, bool)
+                or not isinstance(protocol_version, int)
+                or protocol_version != WORKSPACE_PROTOCOL_VERSION):
+            raise ValueError(
+                "workspace_state.protocol_version must be {}".format(
+                    WORKSPACE_PROTOCOL_VERSION))
+        ranks = workspace_state["ranks"]
+        if not isinstance(ranks, list):
+            raise ValueError("workspace_state.ranks must be a list")
+        revisions = {}
+        active_bytes = {}
+        previous_rank = -1
+        for index, entry in enumerate(ranks):
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    "workspace_state.ranks[{}] must be an object".format(index))
+            if set(entry) != {
+                    "rank", "workspace_revision", "active_workspace_bytes"}:
+                raise ValueError(
+                    "workspace_state.ranks[{}] has unknown or missing fields"
+                    .format(index))
+            rank = entry["rank"]
+            revision = entry["workspace_revision"]
+            byte_count = entry["active_workspace_bytes"]
+            _require_uint64(rank, "workspace rank")
+            _require_uint64(revision, "workspace revision")
+            _require_uint64(byte_count, "active workspace bytes")
+            if rank <= previous_rank:
+                raise ValueError(
+                    "workspace ranks must be strictly ascending and unique")
+            previous_rank = rank
+            revisions[rank] = revision
+            active_bytes[rank] = byte_count
+        expected_ranks = tuple(manager.rank_ids)
+        if tuple(revisions) != expected_ranks:
+            raise ValueError(
+                "workspace_state must contain every topology rank in order; "
+                "expected {!r}, got {!r}".format(
+                    expected_ranks, tuple(revisions)))
+        return revisions, active_bytes
 
     def _record_online_stats(self, delta: dict, batch: dict,
                              scheduler_self_ns: int) -> None:
@@ -489,7 +568,7 @@ class OnlineSchedulerBase:
         graph_batch = self._graph_batch()
         touched_ranks = self._sorted_touched_ranks(graph_batch)
         batch = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": getattr(self, "schema_version", SCHEMA_VERSION),
             "batch_id": delivery_sequence,
             "source_delivery_sequence": delivery_sequence,
             "nodes": graph_batch["nodes"],
@@ -580,10 +659,13 @@ class OnlineSchedulerBase:
         response 并以非 0 退出(fail-closed,绝不静默降级)。"""
         if not isinstance(delta, dict):
             raise ValueError("delta must be a dict, got {!r}".format(type(delta)))
-        if delta.get("schema_version") != SCHEMA_VERSION:
+        schema_version = delta.get("schema_version")
+        if (isinstance(schema_version, bool)
+                or not isinstance(schema_version, int)
+                or schema_version != self.schema_version):
             raise ValueError(
                 "delta schema_version {!r} != {}".format(
-                    delta.get("schema_version"), SCHEMA_VERSION))
+                    schema_version, self.schema_version))
         for field in ("delivery_sequence", "delivery_epoch", "tick",
                       "deferred_from_tick", "reasons", "arrivals",
                       "completed_groups", "completed_nodes",
@@ -656,6 +738,20 @@ class OnlineSchedulerBase:
         if "ledger_summary" in delta and not isinstance(
                 delta["ledger_summary"], dict):
             raise ValueError("delta ledger_summary must be a dict")
+
+        if self.workspace_admission == "required":
+            for field in ("delivery_sequence", "delivery_epoch", "tick",
+                          "deferred_from_tick"):
+                _require_uint64(delta[field], "v2 delta " + field)
+            for field in ("epoch", "tick"):
+                _require_uint64(handle.get(field), "v2 snapshot_handle " + field)
+            if "workspace_state" not in delta:
+                raise ValueError(
+                    "schema v2 required mode needs workspace_state")
+            self._workspace_state_maps(delta["workspace_state"])
+        elif "workspace_state" in delta:
+            raise ValueError(
+                "workspace_state requires workspace_admission=required")
 
     def _record_ledger_summary(self, delta: dict) -> None:
         """阶段 3 感知:记录 C++ 交付的 injected-unfinished 摘要
@@ -1044,30 +1140,35 @@ class OnlineSchedulerBase:
         """
         if not isinstance(ack, dict):
             raise ValueError("ack must be a dict, got {!r}".format(type(ack)))
-        if ack.get("schema_version") != SCHEMA_VERSION:
+        ack_schema_version = ack.get("schema_version")
+        if (isinstance(ack_schema_version, bool)
+                or not isinstance(ack_schema_version, int)
+                or ack_schema_version != self.schema_version):
             raise ValueError(
                 "ack schema_version {!r} != {}".format(
-                    ack.get("schema_version"), SCHEMA_VERSION))
+                    ack_schema_version, self.schema_version))
         seq = ack.get("delivery_sequence")
-        if not isinstance(seq, int) or seq < 0:
+        _require_uint64(seq, "ack delivery_sequence")
+        batch_id = ack.get("batch_id")
+        _require_uint64(batch_id, "ack batch_id")
+        if batch_id != seq:
             raise ValueError(
-                "ack delivery_sequence must be a non-negative int, got {!r}"
-                .format(seq))
-        if ack.get("batch_id") != seq:
+                "ack batch_id {} != delivery_sequence {}".format(
+                    batch_id, seq))
+        # C++ v2 always carries this field; requiring the exact bool here
+        # keeps direct scheduler calls aligned with BridgeServer validation.
+        # v1 retains its frozen compatibility with fixture acks that omit it.
+        if self.schema_version == WORKSPACE_SCHEMA_VERSION:
+            if not isinstance(ack.get("success"), bool):
+                raise ValueError("v2 ack success must be a bool")
+            if ack["success"] is not True:
+                raise ValueError(
+                    "v2 ack for delivery {} must report success=true"
+                    .format(seq))
+        elif ack.get("success") is False:
             raise ValueError(
-                "ack batch_id {} != delivery_sequence {} (v1 forbids "
-                "divergence)".format(ack.get("batch_id"), seq))
-        # M11-5(2026-09-30, ported from the face repo):commit ack 的 success
-        # 字段 fail-closed 校验。C++ send_commit_ack 恒写 ack["success"]
-        # (DecisionBridge.cc),语义 = C++ 端 GraphBatch 提交结果;显式
-        # False = 提交未成功,provisional KV 账本绝不允许以本 ack 为凭据
-        # finalize(不静默 pop 入 committed 层)。字段缺失容忍(既有夹具
-        # 握手可不携带该字段),显式 False 即 fail-closed:异常向上传播,
-        # serve 循环以非 0 退出。
-        if ack.get("success") is False:
-            raise ValueError(
-                "commit ack for delivery {} reports success=false; "
-                "provisional KV ledger must not finalize".format(seq))
+                "ack for delivery {} reports success=false (peer claims "
+                "the batch did not commit; fail-closed)".format(seq))
         if seq > self.last_applied_sequence:
             raise ValueError(
                 "ack for delivery {} not yet applied (last_applied={})"

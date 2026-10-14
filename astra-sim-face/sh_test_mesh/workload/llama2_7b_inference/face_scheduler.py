@@ -78,6 +78,22 @@ class FaceHardware:
         return self.d2d_bandwidth_gbps / self.local_hbm_bandwidth_gbps
 
 
+def coarse_die_face_peak_scalars(summary: dict) -> tuple[float, float]:
+    """Convert typed library peaks to FACE selector units without deriving costs."""
+    derived = summary.get("derived", summary.get("derived_hardware"))
+    typed = derived.get("hardware_summary", {}) if isinstance(derived, dict) else {}
+    row_rates = typed.get("hbm_row_peak_Bps")
+    peak_int4 = typed.get("peak_int4_ops_per_s")
+    if (not isinstance(row_rates, list) or len(row_rates) != 2
+            or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                   or not math.isfinite(value) or value <= 0
+                   for value in [peak_int4, *row_rates])):
+        raise RuntimeError(
+            "coarse_die_v2 hardware summary is missing positive finite typed "
+            "compute/HBM peaks")
+    return float(peak_int4) / 1e12, sum(map(float, row_rates)) / 1e9
+
+
 def die_derived_face_hardware(
     hardware: FaceHardware, cost_oracle: DieModelOracle
 ) -> FaceHardware:
@@ -93,19 +109,10 @@ def die_derived_face_hardware(
     """
     derived = cost_oracle.hardware_summary().get("derived")
     if cost_oracle.coarse:
-        typed = (derived or {}).get("hardware_summary", {})
-        row_rates = typed.get("hbm_row_peak_Bps")
-        peak_int4 = typed.get("peak_int4_ops_per_s")
-        if (not isinstance(row_rates, list) or len(row_rates) != 2
-                or peak_int4 is None):
-            raise RuntimeError(
-                "coarse_die_v2 hardware summary is missing typed compute/HBM "
-                "peaks")
-        return replace(
-            hardware,
-            peak_perf_tflops=float(peak_int4) / 1e12,
-            local_hbm_bandwidth_gbps=sum(map(float, row_rates)) / 1e9,
-        )
+        peak_perf, hbm_bandwidth = coarse_die_face_peak_scalars(
+            cost_oracle.hardware_summary())
+        return replace(hardware, peak_perf_tflops=peak_perf,
+                       local_hbm_bandwidth_gbps=hbm_bandwidth)
     if not derived or "pe_peak_tflops" not in derived \
             or "hbm_bandwidth_bytes" not in derived:
         raise RuntimeError(

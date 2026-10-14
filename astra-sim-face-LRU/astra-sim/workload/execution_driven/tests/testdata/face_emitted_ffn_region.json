@@ -1,0 +1,92 @@
+{
+  "fixture_provenance": {
+    "source_artifact": "work/face-workspace-port-20261014/python-astra-sim-face/emitter-evidence/actual-face-emitter.json",
+    "source_sha256": "97549bf7ea41c11174d58d6f9eb16304e057819b78156882db1b0a59b5fd9548",
+    "generator": "GraphBatchBuilder._emit_train_body -> transformer_pass_aggregated",
+    "source_node_index": 1,
+    "source_spec_index": 1,
+    "source_rank": 2,
+    "source_node_id": 7,
+    "shape": "tiny FACE aggregated FFN decode task; tensor_parallel=2; 2 spans; 2 layers; 2 weight passes",
+    "test_projection": "The C++ lifecycle fixture changes only outer graph rank/id to the one-rank test topology; compute.die_op_spec is kept byte-for-byte."
+  },
+  "emitted_node": {
+    "rank": 2,
+    "id": 7,
+    "name": "batch_train_i1_1_all_layers_ffn_region",
+    "type": 4,
+    "is_cpu_op": false,
+    "is_timer_op": false,
+    "inputs_values": "",
+    "request_id": "batch_train_i1_1",
+    "stage": "decode",
+    "generation": 1,
+    "compute": {
+      "num_ops": 67584,
+      "tensor_size": 68608,
+      "runtime_ns": 0,
+      "die_op_spec": {
+        "schema_version": 1,
+        "op_kind": "ffn_region",
+        "phase": "decode",
+        "dtype": "bf16",
+        "model_dims": {
+          "hidden": 64,
+          "ffn": 128,
+          "vocab": 256,
+          "mlp_variant": "gelu",
+          "norm_type": "layernorm",
+          "position_encoding": "none",
+          "num_q_heads": 8,
+          "num_kv_heads": 8,
+          "head_dim": 8
+        },
+        "tp_slice": {
+          "tensor_parallel": 2,
+          "tensor_parallel_rank": 0,
+          "q_heads_local": 4,
+          "kv_heads_local": 4,
+          "ffn_local": 64,
+          "vocab_local": 128
+        },
+        "spans": [
+          {
+            "request_id": "batch_train_i1_1#s0",
+            "q_tokens": 1,
+            "kv_tokens": 1,
+            "q_start_pos": 0,
+            "kv_start_pos": 0
+          },
+          {
+            "request_id": "batch_train_i1_1#s1",
+            "q_tokens": 1,
+            "kv_tokens": 2,
+            "q_start_pos": 1,
+            "kv_start_pos": 0
+          }
+        ],
+        "layer_count": 2,
+        "weight_passes": 2,
+        "kv_access": {
+          "identity": "local"
+        },
+        "fusion_policy": "auto",
+        "provenance": "transformer_pass_aggregated",
+        "config_hash": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+      }
+    },
+    "comm": {
+      "bytes": 0,
+      "src": 0,
+      "dst": 0,
+      "tag": 0
+    },
+    "coll": {
+      "comm_type": 0,
+      "bytes": 0,
+      "priority": 0,
+      "pg_name": "",
+      "involved_dim": []
+    }
+  }
+}

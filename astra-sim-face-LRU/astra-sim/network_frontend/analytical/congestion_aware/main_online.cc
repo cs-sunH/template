@@ -168,6 +168,8 @@ struct OnlineDriverContext {
     // its own shared_ptr; this vector is the commit's access path).
     std::vector<std::shared_ptr<NodeStoreGraphSource>>* graph_sources =
         nullptr;
+    std::vector<Sys*>* systems = nullptr;
+    bool workspace_admission_required = false;
     // Phase 5 (方案 §8): the atomic GraphBatch committer -- Phase A
     // validate (pure) then Phase B commit; owns the persistent store-id
     // map, the in-flight request tracking and the phase-5 counters.
@@ -525,8 +527,7 @@ void ed_commit_cb(void* arg) {
     driver->watch_registry->drain_fired_sentinels();
 
     // ---- Commit ack: Python's provisional ledger finalizes ----
-    driver->bridge->send_commit_ack(batch.batch_id,
-                                    batch.source_delivery_sequence, true);
+    send_commit_ack_for_batch(*driver->bridge, batch, true);
 
     delete commit;
 }
@@ -609,12 +610,38 @@ void ed_driver_tick_end(void* ctx) {
                                          affected_ranks.end()),
                              affected_ranks.end());
     }
-    StateDelta delta = build_state_delta_v1(
-        driver->mailbox->drain(),
-        driver->event_queue->get_current_time(),
-        driver->delivery_seq++, deferred_from, driver->completed_facts.drain(),
-        std::move(affected_ranks),
-        std::move(injected_unfinished));
+    auto events = driver->mailbox->drain();
+    const uint64_t tick = driver->event_queue->get_current_time();
+    const uint64_t delivery_sequence = driver->delivery_seq++;
+    auto completed_nodes = driver->completed_facts.drain();
+    StateDelta delta;
+    if (driver->workspace_admission_required) {
+        if (driver->systems == nullptr || driver->systems->empty()) {
+            online_fatal(
+                "coarse_die_v2 workspace bridge has no configured ranks");
+        }
+        std::vector<WorkspaceRankState> workspace_state;
+        workspace_state.reserve(driver->systems->size());
+        for (size_t rank = 0; rank < driver->systems->size(); ++rank) {
+            Sys* const system = (*driver->systems)[rank];
+            if (system == nullptr || system->workspace_admission == nullptr ||
+                system->id != static_cast<int>(rank)) {
+                online_fatal(
+                    "coarse_die_v2 workspace ledger is missing or rank order "
+                    "is inconsistent");
+            }
+            workspace_state.push_back(system->workspace_admission->state());
+        }
+        delta = build_state_delta_v2(
+            std::move(events), tick, delivery_sequence, deferred_from,
+            std::move(completed_nodes), std::move(affected_ranks),
+            std::move(workspace_state), std::move(injected_unfinished));
+    } else {
+        delta = build_state_delta_v1(
+            std::move(events), tick, delivery_sequence, deferred_from,
+            std::move(completed_nodes), std::move(affected_ranks),
+            std::move(injected_unfinished));
+    }
     auto* commit = new CommitArg;
     commit->driver = driver;
     for (const auto& ev : delta.events) {
@@ -1300,6 +1327,34 @@ int main(int argc, char* argv[]) {
         systems.push_back(system);
     }
 
+    // Every rank participates in the same bridge schema. A mixed run would
+    // otherwise emit an incomplete workspace table or leave a coarse Plan
+    // outside its admission ledger, so resolve the schema before the first
+    // decision delivery.
+    bool workspace_admission_required = !systems.empty();
+    for (size_t rank = 0; rank < systems.size(); ++rank) {
+        Sys* const system = systems[rank];
+        if (system == nullptr || system->id != static_cast<int>(rank)) {
+            online_fatal("workspace admission requires systems ordered by "
+                         "configured rank");
+        }
+        const bool has_coarse_runtime =
+            system->coarse_die_runtime != nullptr;
+        const bool has_workspace_ledger =
+            system->workspace_admission != nullptr;
+        if (has_coarse_runtime != has_workspace_ledger) {
+            online_fatal("coarse_die_v2 rank has no matching workspace "
+                         "admission ledger");
+        }
+        if (rank == 0) {
+            workspace_admission_required = has_coarse_runtime;
+        } else if (workspace_admission_required != has_coarse_runtime) {
+            online_fatal("online ranks mix coarse_die_v2 and legacy "
+                         "compute backends; one bridge schema is required "
+                         "for all ranks");
+        }
+    }
+
     // Online service: lifecycle authority + request-neutral ingress. No
     // systems[i]->workload->fire(): in online mode the graph is fed by the
     // dynamic source, not by the ETFeeder.
@@ -1617,6 +1672,9 @@ int main(int argc, char* argv[]) {
     driver_ctx.svc = &svc;
     driver_ctx.watch_registry = &watch_registry;
     driver_ctx.graph_sources = &graph_sources;
+    driver_ctx.systems = &systems;
+    driver_ctx.workspace_admission_required =
+        workspace_admission_required;
     // Phase-3 perception feature flag (default off until phase 6; the
     // --sensing-enabled token gates the injected-unfinished summary delivery
     // only -- query/audit data, never a strategy decision input).
@@ -1640,6 +1698,69 @@ int main(int argc, char* argv[]) {
     committer_ctx.graph_sources = &graph_sources;
     committer_ctx.watch_registry = &watch_registry;
     committer_ctx.ingress = &ingress;
+    committer_ctx.workspace_admission_required =
+        workspace_admission_required;
+    if (workspace_admission_required) {
+        committer_ctx.validate_workspace_capacity_snapshot =
+            [&systems](const std::vector<WorkspaceRankState>& request_state,
+                       const std::vector<WorkspaceCapacityRank>& snapshot)
+            -> std::optional<std::string> {
+            if (request_state.size() != systems.size() ||
+                snapshot.size() != systems.size()) {
+                return "workspace request/snapshot rank count mismatch";
+            }
+            for (size_t rank = 0; rank < systems.size(); ++rank) {
+                Sys* const system = systems[rank];
+                if (system == nullptr ||
+                    system->workspace_admission == nullptr) {
+                    return "workspace admission ledger missing for rank " +
+                           std::to_string(rank);
+                }
+                try {
+                    system->workspace_admission->validate_request_state(
+                        request_state[rank]);
+                    system->workspace_admission->validate_capacity_snapshot(
+                        snapshot[rank]);
+                } catch (const std::exception& exc) {
+                    return "rank " + std::to_string(rank) + ": " +
+                           exc.what();
+                }
+            }
+            return std::nullopt;
+        };
+        committer_ctx.install_workspace_capacity_snapshot =
+            [&systems](const std::vector<WorkspaceCapacityRank>& snapshot,
+                       std::vector<int>& changed_ranks) {
+            if (snapshot.size() != systems.size()) {
+                throw std::runtime_error(
+                    "workspace snapshot rank count changed after preflight");
+            }
+            changed_ranks.clear();
+            // GraphBatchCommitter reserves this vector to num_ranks, so the
+            // mutation phase can collect changes without allocating.
+            if (changed_ranks.capacity() < systems.size()) {
+                throw std::runtime_error(
+                    "workspace changed-rank scratch is undersized");
+            }
+            for (size_t rank = 0; rank < systems.size(); ++rank) {
+                Sys* const system = systems[rank];
+                if (system == nullptr ||
+                    system->workspace_admission == nullptr) {
+                    throw std::runtime_error(
+                        "workspace admission ledger missing for rank " +
+                        std::to_string(rank));
+                }
+                if (system->workspace_admission
+                        ->capacity_snapshot_changes(snapshot[rank])) {
+                    changed_ranks.push_back(static_cast<int>(rank));
+                }
+            }
+            for (size_t rank = 0; rank < systems.size(); ++rank) {
+                systems[rank]->workspace_admission
+                    ->install_capacity_snapshot_unchecked(snapshot[rank]);
+            }
+        };
+    }
     committer_ctx.issue_rank = [&systems](int rank) {
         systems[rank]->workload->issue_dep_free_nodes();
     };

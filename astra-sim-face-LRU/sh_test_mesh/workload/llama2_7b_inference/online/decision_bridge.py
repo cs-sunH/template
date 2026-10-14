@@ -39,6 +39,15 @@ import time
 from bridge_request_journal import REQUEST_JOURNAL_NAME
 
 SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除)
+WORKSPACE_SCHEMA_VERSION = 2
+_UINT64_MAX = (1 << 64) - 1
+
+
+def _require_uint64(value, name):
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value < 0 or value > _UINT64_MAX):
+        raise BridgeError("{} must be an exact uint64 integer".format(name))
+
 
 # (2026-10-01) Python 侧 FIFO open 有界等待:此前两个初始 open 均为无界
 # 阻塞——C++ 在建好 FIFO 之后、打开对端之前的窗口内死亡时,本进程会永久
@@ -200,8 +209,17 @@ class BridgeServer:
     时被调用(provisional 账本 finalize 的挂接点,阶段 3/4 使用)。
     """
 
-    def __init__(self, bridge_dir, *, canonical_request_producer=False):
+    def __init__(self, bridge_dir, *, canonical_request_producer=False,
+                 workspace_admission="off"):
+        if workspace_admission not in {"off", "required"}:
+            raise ValueError(
+                "workspace_admission must be 'off' or 'required', got {!r}"
+                .format(workspace_admission))
         self.bridge_dir = bridge_dir
+        self.workspace_admission = workspace_admission
+        self.schema_version = (
+            WORKSPACE_SCHEMA_VERSION
+            if workspace_admission == "required" else SCHEMA_VERSION)
         # The official C++ producer writes payload.dump() with neither
         # surrounding whitespace nor a trailing newline.  Only that trusted
         # path may bypass the fallback's whole-body normalization scan.
@@ -376,18 +394,63 @@ class BridgeServer:
             request = json.loads(raw_request)
         except (OSError, ValueError) as exc:
             raise BridgeError("bad request file {}: {}".format(path, exc)) from exc
-        if request.get("schema_version") != SCHEMA_VERSION:
+        request_schema_version = request.get("schema_version")
+        if (isinstance(request_schema_version, bool)
+                or not isinstance(request_schema_version, int)
+                or request_schema_version != self.schema_version):
             raise BridgeError(
                 "request {} schema_version {!r} != {}".format(
-                    seq, request.get("schema_version"), SCHEMA_VERSION))
+                    seq, request_schema_version, self.schema_version))
+        request_sequence = request.get("delivery_sequence")
+        _require_uint64(request_sequence, "request delivery_sequence")
+        if request_sequence != seq:
+            raise BridgeError(
+                "request delivery_sequence {} != file sequence {}".format(
+                    request_sequence, seq))
+        if self.workspace_admission == "required":
+            if not isinstance(request.get("workspace_state"), dict):
+                raise BridgeError("v2 request missing workspace_state")
+        elif "workspace_state" in request:
+            raise BridgeError(
+                "workspace_state requires workspace_admission=required")
         self._stats["channel_bytes"] += os.path.getsize(path)
         response = handler(request)
         self._stats["handler_calls"] += 1
         if not isinstance(response, dict):
             raise BridgeError("handler returned non-dict for seq {}".format(seq))
-        response.setdefault("schema_version", SCHEMA_VERSION)
-        response.setdefault("batch_id", 0)
+        response.setdefault("schema_version", self.schema_version)
+        if self.workspace_admission == "required":
+            if "batch_id" not in response:
+                raise BridgeError("v2 response requires explicit batch_id")
+        else:
+            response.setdefault("batch_id", 0)
         response.setdefault("source_delivery_sequence", seq)
+        response_schema_version = response["schema_version"]
+        if (isinstance(response_schema_version, bool)
+                or not isinstance(response_schema_version, int)
+                or response_schema_version != self.schema_version):
+            raise BridgeError(
+                "response schema_version {!r} != {}".format(
+                    response_schema_version, self.schema_version))
+        _require_uint64(response["source_delivery_sequence"],
+                        "source_delivery_sequence")
+        if response["source_delivery_sequence"] != seq:
+            raise BridgeError(
+                "response source_delivery_sequence {} != request {}".format(
+                    response["source_delivery_sequence"], seq))
+        if self.workspace_admission == "required":
+            _require_uint64(response["batch_id"], "batch_id")
+            if response["batch_id"] != seq:
+                raise BridgeError(
+                    "v2 response batch_id {} != request {}".format(
+                        response["batch_id"], seq))
+            if not isinstance(response.get("workspace_capacity_snapshot"), dict):
+                raise BridgeError(
+                    "v2 response missing workspace_capacity_snapshot")
+        if (self.workspace_admission == "off"
+                and "workspace_capacity_snapshot" in response):
+            raise BridgeError(
+                "workspace_capacity_snapshot requires workspace_admission=required")
         for field in _RESPONSE_FIELDS:
             if field == "touched_ranks":
                 # 字段缺省 = C++ 自算 touched ranks 且不校验声明值。legacy
@@ -432,6 +495,27 @@ class BridgeServer:
             ack = _read_json_atomic(path)
         except (OSError, ValueError) as exc:
             raise BridgeError("bad ack file {}: {}".format(path, exc)) from exc
+        if not isinstance(ack, dict):
+            raise BridgeError("ack {} must be an object".format(seq))
+        ack_schema_version = ack.get("schema_version")
+        if (isinstance(ack_schema_version, bool)
+                or not isinstance(ack_schema_version, int)
+                or ack_schema_version != self.schema_version):
+            raise BridgeError(
+                "ack {} schema_version {!r} != {}".format(
+                    seq, ack_schema_version, self.schema_version))
+        _require_uint64(ack.get("delivery_sequence"), "ack delivery_sequence")
+        _require_uint64(ack.get("batch_id"), "ack batch_id")
+        if (ack["delivery_sequence"] != seq or ack["batch_id"] != seq):
+            raise BridgeError(
+                "ack sequence fields must both equal file sequence {}".format(seq))
+        if self.workspace_admission == "required":
+            if not isinstance(ack.get("success"), bool):
+                raise BridgeError("v2 ack success must be a bool")
+            if ack["success"] is not True:
+                raise BridgeError("v2 ack success must be true")
+        elif "success" in ack and not isinstance(ack["success"], bool):
+            raise BridgeError("ack success must be a bool when present")
         if on_commit_ack is not None:
             on_commit_ack(ack)
         self._stats["channel_bytes"] += os.path.getsize(path)
@@ -454,7 +538,7 @@ class BridgeServer:
         print("decision_bridge: fail-closed at seq {}: {}".format(
             seq, message), file=sys.stderr)
         response = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": self.schema_version,
             "batch_id": 0,
             "source_delivery_sequence": seq,
             "nodes": [],

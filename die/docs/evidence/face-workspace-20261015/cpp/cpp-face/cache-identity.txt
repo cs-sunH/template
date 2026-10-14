@@ -1,0 +1,7 @@
+ASTRA_SIM_ROOT:UNINITIALIZED=/workspace/template/astra-sim-face
+BUILDTARGET:STRING=all
+CMAKE_BUILD_TYPE:STRING=Release
+CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++
+NETWORK_BACKEND_BUILD_AS_LIBRARY:BOOL=ON
+Protobuf_PROTOC_EXECUTABLE:FILEPATH=/workspace/cloud-setup/sysroot/usr/bin/protoc
+CMAKE_HOME_DIRECTORY:INTERNAL=/workspace/template/work/face-workspace-port-20261014/cpp-face/aggregate

@@ -45,7 +45,8 @@ other bridge protocol violation):
      BEFORE the structural parse -- the frozen error-response skeleton
      carries all-empty arrays, so the message must be the decision error,
      not a misleading structural one);
-  T4 batch_id optional, integer, default 0;
+  T4 v1 batch_id optional, integer, default 0; v2 requires an explicit
+     batch_id equal to source_delivery_sequence;
   T5 the six arrays are optional (absent == empty; zero-node batches and
      pre-phase-5 fixtures are legal);
   T6 NO unknown top-level keys (the response schema is frozen with
@@ -103,6 +104,7 @@ other bridge protocol violation):
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -196,6 +198,7 @@ struct ParsedKvAction {
 /// pre-C1 struct name survives so main_online/fixtures keep compiling);
 /// this is the canonical type.
 struct ParsedGraphBatch {
+    uint32_t schema_version = 1;
     uint64_t batch_id = 0;
     uint64_t source_delivery_sequence = 0;
     std::vector<ParsedNode> nodes;              // array order (rule O1)
@@ -207,13 +210,18 @@ struct ParsedGraphBatch {
     std::vector<int> touched_ranks;             // empty when absent
     bool has_touched_ranks = false;
     std::string error;  // non-empty => decision failure (bridge aborts)
+    std::vector<WorkspaceCapacityRank> workspace_capacity_snapshot;
+    bool has_workspace_capacity_snapshot = false;
 };
 
 /// Parse one response DOM into the typed batch. num_ranks >= 0 enables the
 /// rank-domain checks (N3/E2/W3/T8); -1 skips them (legacy fixtures).
 /// Throws ParseError on any structural violation; constructs nothing shared
 /// (pure function, exception-safe).
-ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp, int num_ranks);
+ParsedGraphBatch parse_graph_batch(
+    const nlohmann::json& resp, int num_ranks,
+    int expected_schema_version = 1,
+    const std::vector<WorkspaceRankState>& expected_workspace_state = {});
 
 }  // namespace ExecutionDriven
 }  // namespace AstraSim
