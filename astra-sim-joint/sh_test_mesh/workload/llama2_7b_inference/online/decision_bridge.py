@@ -53,6 +53,91 @@ from bridge_shm import (
 )
 
 SCHEMA_VERSION = 3  # GraphBatch / bridge wire schema v3 (2026-10-14 远读退役：pipeline_descriptors 键删除，与 C++ kGraphBatchSchemaVersion 同步)
+_UINT64_MAX = (1 << 64) - 1
+
+
+def _workspace_uint64(value, label):
+    if type(value) is not int or value < 0 or value > _UINT64_MAX:
+        raise BridgeError("{} must be an exact uint64 integer".format(label))
+    return value
+
+
+def _validate_workspace_state(payload, sequence):
+    if not isinstance(payload, dict):
+        raise BridgeError("request {} workspace_state must be an object".format(
+            sequence))
+    if set(payload) != {"protocol_version", "ranks"}:
+        raise BridgeError(
+            "request {} workspace_state has an invalid key set".format(
+                sequence))
+    if type(payload.get("protocol_version")) is not int or \
+            payload["protocol_version"] != 1:
+        raise BridgeError(
+            "request {} workspace_state protocol_version must be 1".format(
+                sequence))
+    rows = payload.get("ranks")
+    if not isinstance(rows, list) or not rows:
+        raise BridgeError(
+            "request {} workspace_state.ranks must be a nonempty list".format(
+                sequence))
+    for expected_rank, row in enumerate(rows):
+        label = "request {} workspace_state.ranks[{}]".format(
+            sequence, expected_rank)
+        if not isinstance(row, dict) or set(row) != {
+                "rank", "workspace_revision", "active_workspace_bytes"}:
+            raise BridgeError("{} has an invalid key set".format(label))
+        rank = _workspace_uint64(row["rank"], label + ".rank")
+        if rank != expected_rank:
+            raise BridgeError(
+                "{} ranks must be contiguous and ascending".format(label))
+        _workspace_uint64(row["workspace_revision"],
+                          label + ".workspace_revision")
+        _workspace_uint64(row["active_workspace_bytes"],
+                          label + ".active_workspace_bytes")
+    return rows
+
+
+def _validate_workspace_capacity_snapshot(snapshot, request_rows, sequence):
+    if not isinstance(snapshot, dict) or set(snapshot) != {
+            "protocol_version", "ranks"}:
+        raise BridgeError(
+            "response {} workspace_capacity_snapshot has an invalid shape"
+            .format(sequence))
+    if type(snapshot.get("protocol_version")) is not int or \
+            snapshot["protocol_version"] != 1:
+        raise BridgeError(
+            "response {} workspace capacity protocol_version must be 1"
+            .format(sequence))
+    rows = snapshot.get("ranks")
+    if not isinstance(rows, list) or len(rows) != len(request_rows):
+        raise BridgeError(
+            "response {} workspace capacity rank count does not match "
+            "request".format(sequence))
+    required = {"rank", "workspace_revision", "capacity_bytes",
+                "model_weight_bytes", "resident_kv_bytes",
+                "reserved_request_bytes"}
+    optional = {"prospective_workspace_bytes"}
+    for expected_rank, row in enumerate(rows):
+        label = "response {} workspace_capacity_snapshot.ranks[{}]".format(
+            sequence, expected_rank)
+        if not isinstance(row, dict) or not required.issubset(row) or \
+                set(row) - required - optional:
+            raise BridgeError("{} has an invalid key set".format(label))
+        rank = _workspace_uint64(row["rank"], label + ".rank")
+        revision = _workspace_uint64(
+            row["workspace_revision"], label + ".workspace_revision")
+        if rank != expected_rank or revision != request_rows[expected_rank][
+                "workspace_revision"]:
+            raise BridgeError(
+                "{} does not echo the full request rank/revision view"
+                .format(label))
+        for field in ("capacity_bytes", "model_weight_bytes",
+                      "resident_kv_bytes", "reserved_request_bytes"):
+            _workspace_uint64(row[field], label + "." + field)
+        if "prospective_workspace_bytes" in row:
+            _workspace_uint64(row["prospective_workspace_bytes"],
+                              label + ".prospective_workspace_bytes")
+    return snapshot
 
 # v11 §8: 帧负载即旧文件字节;journal 每 256 行 flush 一次(旧路径在 flush
 # 时批量删除散装 request 文件——散装文件已随载体替换消失,flush 语义保留
@@ -380,6 +465,10 @@ class BridgeServer:
             raise BridgeError(
                 "request {} schema_version {!r} != {}".format(
                     seq, request.get("schema_version"), SCHEMA_VERSION))
+        workspace_request_rows = None
+        if "workspace_state" in request:
+            workspace_request_rows = _validate_workspace_state(
+                request["workspace_state"], seq)
         self._stats["channel_bytes"] += len(raw_request)
         # 墙时分段:handler 执行(= 调度侧 on_decision_batch 全程)。
         _handler_t0 = time.perf_counter_ns()
@@ -439,6 +528,14 @@ class BridgeServer:
                 # fixture 不知道该字段,真实 scheduler 则总是显式给出。
                 continue
             response.setdefault(field, [])
+        if workspace_request_rows is not None:
+            _validate_workspace_capacity_snapshot(
+                response.get("workspace_capacity_snapshot"),
+                workspace_request_rows, seq)
+        elif "workspace_capacity_snapshot" in response:
+            raise BridgeError(
+                "response {} workspace_capacity_snapshot requires the "
+                "coarse workspace request extension".format(seq))
         # 墙时分段:response json.dumps + shm 帧发布(门铃字节由 serve 循环
         # 随后写;帧负载字节与旧 tmp+os.replace 原子写盘逐字节相同)。
         _write_t0 = time.perf_counter_ns()

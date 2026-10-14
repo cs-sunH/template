@@ -258,6 +258,52 @@ std::optional<std::string> GraphBatchCommitter::validate_affine_drift() const {
     return std::nullopt;
 }
 
+std::optional<std::string>
+GraphBatchCommitter::validate_workspace_capacity_snapshot(
+    const StateDelta& delta, const GraphBatch& batch) const {
+    if (!ctx_.workspace_admission_required) {
+        if (!delta.workspace_state.empty() ||
+            batch.has_workspace_capacity_snapshot ||
+            !batch.workspace_capacity_snapshot.empty()) {
+            return "workspace bridge fields are unsupported without "
+                   "coarse_die_v2 admission";
+        }
+        return std::nullopt;
+    }
+    const size_t rank_count = static_cast<size_t>(ctx_.num_ranks);
+    if (ctx_.num_ranks <= 0 ||
+        delta.workspace_state.size() != rank_count ||
+        !batch.has_workspace_capacity_snapshot ||
+        batch.workspace_capacity_snapshot.size() != rank_count) {
+        return "coarse_die_v2 requires full-rank workspace state and "
+               "capacity snapshot";
+    }
+    if (!ctx_.validate_workspace_capacity_snapshot ||
+        !ctx_.install_workspace_capacity_snapshot) {
+        return "coarse_die_v2 committer has no workspace snapshot owner";
+    }
+    for (size_t i = 0; i < rank_count; ++i) {
+        const auto& request = delta.workspace_state[i];
+        const auto& capacity = batch.workspace_capacity_snapshot[i];
+        if (request.rank != static_cast<int>(i) ||
+            capacity.rank != static_cast<int>(i) ||
+            request.workspace_revision != capacity.workspace_revision) {
+            return "workspace capacity snapshot does not echo the complete "
+                   "request rank view";
+        }
+    }
+    try {
+        if (auto error = ctx_.validate_workspace_capacity_snapshot(
+                delta.workspace_state, batch.workspace_capacity_snapshot)) {
+            return "workspace capacity snapshot rejected: " + *error;
+        }
+    } catch (const std::exception& exc) {
+        return std::string("workspace capacity snapshot rejected: ") +
+               exc.what();
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
     const GraphBatch& batch, std::vector<int>* const touched_ranks,
     std::vector<int>* const issue_ranks,
@@ -390,6 +436,11 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
         -> std::optional<std::string> {
         return std::string("mandatory liveness preflight: ") + reason;
     };
+
+    if (auto workspace_error =
+            validate_workspace_capacity_snapshot(delta, batch)) {
+        return fail(*workspace_error);
+    }
 
     try {
         // Apply this delta's facts in a compact overlay rather than copying the
@@ -1127,6 +1178,10 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
     std::vector<int>* const json_id_touched_ranks,
     std::vector<int>* const issue_ranks) const {
     try {
+        if (auto workspace_error =
+                validate_workspace_capacity_snapshot(delta, batch)) {
+            return workspace_error;
+        }
         // A committed rank owns an exact affine mapping onto the NodeStore's
         // automatic id stream. Check it before every semantic rule; this is a
         // read-only fail-closed diagnostic and validate() remains pure.
@@ -1950,11 +2005,38 @@ void GraphBatchCommitter::commit_after_preflight(
         ctx_.ingress->schedule_future_arrival(envelope);
     }
 
-    // ---- Phase B-5: issue pass over ranks touched by this batch's nodes.
-    //      Ranks outside that set cannot gain a new ready item in this
-    //      commit; completion callbacks schedule the usual deferred per-rank
-    //      passes for later frontiers. ----
-    for (const int rank : issue_ranks) {
+    // ---- Phase B-5: install the authoritative coarse capacity view before
+    //      issue admission. A capacity-only change can unblock a free node
+    //      on a rank with no newly committed node, so include those ranks in
+    //      this issue pass. Legacy batches retain their touched-rank pass. ----
+    const std::vector<int>* issue_ranks_for_pass = &issue_ranks;
+    if (ctx_.workspace_admission_required) {
+        commit_workspace_changed_ranks_.clear();
+        ctx_.install_workspace_capacity_snapshot(
+            batch.workspace_capacity_snapshot,
+            commit_workspace_changed_ranks_);
+        commit_issue_ranks_with_workspace_.assign(issue_ranks.begin(),
+                                                   issue_ranks.end());
+        commit_issue_ranks_with_workspace_.insert(
+            commit_issue_ranks_with_workspace_.end(),
+            commit_workspace_changed_ranks_.begin(),
+            commit_workspace_changed_ranks_.end());
+        std::sort(commit_issue_ranks_with_workspace_.begin(),
+                  commit_issue_ranks_with_workspace_.end());
+        commit_issue_ranks_with_workspace_.erase(
+            std::unique(commit_issue_ranks_with_workspace_.begin(),
+                        commit_issue_ranks_with_workspace_.end()),
+            commit_issue_ranks_with_workspace_.end());
+        for (const int rank : commit_issue_ranks_with_workspace_) {
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                throw std::runtime_error(
+                    "workspace snapshot installer returned invalid rank " +
+                    std::to_string(rank));
+            }
+        }
+        issue_ranks_for_pass = &commit_issue_ranks_with_workspace_;
+    }
+    for (const int rank : *issue_ranks_for_pass) {
         ctx_.issue_rank(rank);
     }
 

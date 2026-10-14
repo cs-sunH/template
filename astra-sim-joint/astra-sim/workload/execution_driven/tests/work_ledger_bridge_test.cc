@@ -35,12 +35,14 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <json/json.hpp>
 
 using namespace AstraSim::ExecutionDriven;
+using AstraSim::WorkspaceRankState;
 
 namespace {
 
@@ -333,6 +335,52 @@ void test_request_json_event_seqs() {
            "no provider installed -> work_ledger field absent");
 }
 
+void test_legacy_request_wire_is_byte_unchanged() {
+    const StateDelta delta =
+        build_state_delta_v1({}, 11, 7, 0, {}, {}, {});
+    const nlohmann::json request = build_request_json(delta);
+    const std::string expected =
+        R"json({"affected_ranks":[],"arrivals":[],"completed_groups":[],"completed_nodes":[],"deferred_from_tick":0,"delivery_epoch":7,"delivery_sequence":7,"event_seqs":[],"ledger_summary":{"injected_unfinished":[]},"reasons":[],"schema_version":3,"snapshot":{},"snapshot_handle":{"epoch":7,"kind":"","tick":11},"tick":11})json";
+    if (request.dump() != expected) {
+        std::fprintf(stderr, "[work_ledger_bridge_test] actual legacy bytes: %s\n",
+                     request.dump().c_str());
+    }
+    expect(request.dump() == expected,
+           "empty workspace extension keeps the frozen schema-v3 request bytes");
+    expect(!request.contains("workspace_state"),
+           "legacy request omits the coarse workspace sibling");
+}
+
+void test_coarse_workspace_request_extension() {
+    const std::vector<WorkspaceRankState> states{
+        {0, 4, 128}, {1, 2, 0}};
+    const StateDelta delta = build_state_delta_v2(
+        {}, 99, 7, 0, {}, {}, states, {});
+    const nlohmann::json request = build_request_json(delta);
+    expect(request.at("schema_version").get<int>() == 3,
+           "coarse workspace extension keeps bridge schema v3");
+    expect(request.contains("workspace_state"),
+           "coarse request carries workspace_state");
+    expect(request.at("workspace_state").at("protocol_version").get<int>() ==
+               1,
+           "workspace_state pins protocol version 1");
+    const auto& rows = request.at("workspace_state").at("ranks");
+    expect(rows.size() == 2 && rows[0].at("rank").get<int>() == 0 &&
+               rows[0].at("workspace_revision").get<uint64_t>() == 4 &&
+               rows[0].at("active_workspace_bytes").get<uint64_t>() == 128 &&
+               rows[1].at("rank").get<int>() == 1,
+           "workspace state is full-rank, ordered, and typed");
+
+    bool rejected = false;
+    try {
+        (void)build_state_delta_v2({}, 99, 7, 0, {}, {},
+                                   {{1, 0, 0}}, {});
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    expect(rejected, "coarse workspace builder rejects nonzero first rank");
+}
+
 }  // namespace
 
 int main() {
@@ -341,6 +389,8 @@ int main() {
     test_resource_commit_payload();
     test_node_store_view();
     test_request_json_event_seqs();
+    test_legacy_request_wire_is_byte_unchanged();
+    test_coarse_workspace_request_extension();
     if (!g_ok) {
         std::fprintf(stderr, "[work_ledger_bridge_test] FAILED\n");
         return 1;

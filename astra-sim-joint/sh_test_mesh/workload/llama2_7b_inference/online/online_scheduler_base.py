@@ -198,6 +198,9 @@ class OnlineSchedulerBase:
     ):
         self.mode = mode
         self.config = config
+        # None until the first applied delivery pins the bridge extension
+        # mode; legacy runs never install a workspace view.
+        self._workspace_admission_required = None
         # 运行期不保留完整 manifest 或 request_id -> manifest record 副本。
         # 唯一需要跨 delivery 保存的输入身份状态是尚未到达的 request ID：
         # arrival 后立即删除，故它单调缩小，不会随完成请求永久增长。
@@ -454,6 +457,7 @@ class OnlineSchedulerBase:
         """
         t0 = time.monotonic_ns()
         self._validate_schema(delta, work_ledger_segment)
+        workspace_admission_required = self._validate_workspace_extension(delta)
         self._last_work_ledger_phase_ns = {
             "ledger_typed_parse_ns": 0,
             "ledger_prepare_ns": 0,
@@ -480,6 +484,10 @@ class OnlineSchedulerBase:
         segments.update(getattr(self, "_last_work_ledger_phase_ns", {}))
         self.delivery_count += 1
         self._start_batch(delta)
+        self._workspace_admission_required = workspace_admission_required
+        if workspace_admission_required:
+            self.kv_manager.set_external_workspace_view(
+                delta["workspace_state"])
         _seg_t0 = time.perf_counter_ns()
         self._settle_completions(delta)
         segments["settle_completions_ns"] = (
@@ -614,6 +622,9 @@ class OnlineSchedulerBase:
             "touched_ranks": touched_ranks,
             "kernel_contract": kernel_contract,
         }
+        if getattr(self, "_workspace_admission_required", False):
+            batch["workspace_capacity_snapshot"] = (
+                self.kv_manager.workspace_capacity_snapshot())
         # 阶段 5 §8.2:本批 kv_actions 先入 provisional 暂存区(非空才记账),
         # commit ack 到达后 finalize(见 on_commit_ack);幂等重放不经过这里
         # (sequence 门直接返回缓存 digest),不会重复入账。
@@ -637,6 +648,23 @@ class OnlineSchedulerBase:
             })
         self._note_backend_batch(batch)
         return batch
+
+    def _validate_workspace_extension(self, delta: dict) -> bool:
+        """Validate the optional coarse workspace handshake before mutation."""
+        required = "workspace_state" in delta
+        previous = getattr(self, "_workspace_admission_required", None)
+        if previous is not None and bool(previous) != required:
+            raise ValueError(
+                "workspace admission extension cannot change within a run")
+        if not required:
+            return False
+        manager = getattr(self, "kv_manager", None)
+        validator = getattr(manager, "validate_external_workspace_view", None)
+        if not callable(validator):
+            raise ValueError(
+                "coarse_die_v2 workspace state has no Python KV capacity owner")
+        validator(delta["workspace_state"])
+        return True
 
     def _note_backend_batch(self, batch: dict) -> None:
         """后端事件量记账钩子（ACC，验收纪律第 3 类 / v2.0 §19.3）。

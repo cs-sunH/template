@@ -538,13 +538,19 @@ class OnlineTraceBuilder:
 
     def comp(self, name: str, num_ops: int, tensor_size: int,
              remote_read_size: int = 0, *,
-             die_spec: dict = None, op_role: str = None) -> None:
+             die_spec: dict = None, die_task: dict = None,
+             op_role: str = None) -> None:
         """COMP 节点发射（die 后端第一期扩展，契约 §2 compute 键集）。
 
+        die_spec 非 None 时附 compute.die_op_spec；die_task 非 None 时附
+        compute.die_task（dict；二者互斥）。后者是 coarse_die_task_v2 的
+        additive wire payload，不经 legacy compatibility normalization。
         die_spec 非 None 时附 compute.die_op_spec（dict；die 后端执行该
         节点，runtime_ns 保持缺省 0——die_op_spec 存在 ⇒ runtime_ns 必为
         0）；op_role 缺省 "compute"（不写键，schema 缺省即 compute），仅
         marker/哨兵显式写 "control_marker"（契约 §7 裁定 8）。"""
+        if die_spec is not None and die_task is not None:
+            raise ValueError("die_spec and die_task are mutually exclusive")
         node = self._new_node(name, COMP_NODE)
         node["compute"]["num_ops"] = self._uint64(num_ops)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
@@ -560,6 +566,15 @@ class OnlineTraceBuilder:
                     "die_op_spec requires runtime_ns == 0 (contract "
                     "section 2)")
             node["compute"]["die_op_spec"] = die_spec
+        if die_task is not None:
+            if node["compute"]["runtime_ns"] != 0:
+                raise ValueError(
+                    "die_task requires runtime_ns == 0 (coarse v2 contract)")
+            if not isinstance(die_task, dict) or die_task.get("schema") != \
+                    "coarse_die_task_v2":
+                raise ValueError(
+                    "die_task must be a coarse_die_task_v2 object")
+            node["compute"]["die_task"] = die_task
         if self.remote_operand_loads and remote_read_size:
             node["compute"]["remote_weight_bytes"] = self._uint64(remote_read_size)
 

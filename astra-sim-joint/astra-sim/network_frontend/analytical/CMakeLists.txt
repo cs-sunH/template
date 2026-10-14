@@ -309,6 +309,16 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${srcs_congestion_aware_shared}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/hbm_tail_component_test.cc
             ${srcs_execution_driven})
+    # coarse_die_v2 workspace admission + shared Runtime seam: typed Plan
+    # acquire/block/retry/terminal/cancel and a JOINT local-HBM endpoint
+    # submitted concurrently to the same per-rank Runtime.
+    add_executable(AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/coarse_workspace_runtime_test.cc
+            ${srcs_execution_driven})
+    target_compile_definitions(
+        AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest PRIVATE
+        COARSE_DIE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/die_model/coarse")
 
     # Link libraries
     # v6 compact round: execution_driven builds typed ledger records and the
@@ -363,6 +373,11 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest LINK_PRIVATE AstraSim joint_ledger)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest LINK_PRIVATE AstraSim joint_ledger)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
 
     # Include directories
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
@@ -719,6 +734,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             COMMAND AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest)
     add_test(NAME AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest
             COMMAND AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest)
+    add_test(NAME AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest
+            COMMAND AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest)
     add_test(NAME JointReadyIssueOrderTest
             COMMAND JointReadyIssueOrderTest)
     add_test(NAME JointPipelineMutationTest

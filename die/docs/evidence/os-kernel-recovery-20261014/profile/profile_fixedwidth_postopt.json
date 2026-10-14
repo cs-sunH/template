@@ -1,0 +1,107 @@
+{
+  "fixture": "large_outputs",
+  "host": {
+    "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+    "hardware_concurrency": 3,
+    "machine": "x86_64",
+    "process_peak_rss_kib": 6044,
+    "release": "6.18.44",
+    "system": "Linux"
+  },
+  "profiled_stop_resume_exact_ops": {
+    "add": {
+      "calls": 14058,
+      "inclusive_ns": 82297298
+    },
+    "compare": {
+      "calls": 3851,
+      "inclusive_ns": 4747644
+    },
+    "divide": {
+      "calls": 3995,
+      "inclusive_ns": 5434621
+    },
+    "floor_u128": {
+      "calls": 9,
+      "inclusive_ns": 1405284
+    },
+    "multiply": {
+      "calls": 9723,
+      "inclusive_ns": 52107894
+    },
+    "multiply_repeat": {
+      "calls": 481,
+      "inclusive_ns": 381164
+    },
+    "subtract": {
+      "calls": 1614,
+      "inclusive_ns": 4299675
+    },
+    "timing_note": "operation scopes are inclusive and may overlap (floor includes internal compare/conversion work); profile-enabled timings are not benchmark samples",
+    "u128_to_rational": {
+      "calls": 1173,
+      "inclusive_ns": 1211428
+    }
+  },
+  "profiled_stop_resume_fixedwidth_ops": {
+    "gcd": {
+      "calls": 13241,
+      "inclusive_ns": 57999502,
+      "iterations": 168854
+    },
+    "long_divide": {
+      "bit_steps": 735681,
+      "calls": 8220,
+      "divisor_one_calls": 0,
+      "inclusive_ns": 24676040
+    },
+    "normalize": {
+      "calls": 31426,
+      "inclusive_ns": 85244196
+    },
+    "timing_note": "nested inclusive scopes overlap; profile-enabled timings are diagnostic and are not benchmark samples",
+    "unit_gcd_normalizations": 9131
+  },
+  "proof_scope": "scratch-only single-owner/single-core exact continuous-time kernel; event cap is this harness discovery bound, not Runtime solver pivots or a production certificate",
+  "samples": 1,
+  "schema": "solo13_inprocess_benchmark_v1",
+  "sink": 660003524,
+  "timing_scope": "steady_clock in-process; each cold sample includes file read, JSON parse, Facts/geometry construction, and lifecycle call; run-only resets outside timed region",
+  "timings_ns": {
+    "cold_full": {
+      "max_ns": 108652541,
+      "mean_ns": 108652541.0,
+      "min_ns": 108652541,
+      "p95_ns_nearest_rank": 108652541,
+      "sample_count": 1
+    },
+    "cold_stop_resume": {
+      "max_ns": 129277630,
+      "mean_ns": 129277630.0,
+      "min_ns": 129277630,
+      "p95_ns_nearest_rank": 129277630,
+      "sample_count": 1
+    },
+    "parse_construct_cold": {
+      "max_ns": 6336997,
+      "mean_ns": 6336997.0,
+      "min_ns": 6336997,
+      "p95_ns_nearest_rank": 6336997,
+      "sample_count": 1
+    },
+    "run_only_full": {
+      "max_ns": 86714389,
+      "mean_ns": 86714389.0,
+      "min_ns": 86714389,
+      "p95_ns_nearest_rank": 86714389,
+      "sample_count": 1
+    },
+    "run_only_stop_resume": {
+      "max_ns": 120875653,
+      "mean_ns": 120875653.0,
+      "min_ns": 120875653,
+      "p95_ns_nearest_rank": 120875653,
+      "sample_count": 1
+    }
+  }
+}

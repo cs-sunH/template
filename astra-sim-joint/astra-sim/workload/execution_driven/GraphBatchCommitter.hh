@@ -150,6 +150,18 @@ class GraphBatchCommitter {
         WatchRegistry* watch_registry = nullptr;
         RequestIngress* ingress = nullptr;
         std::function<void(int rank)> issue_rank;
+        // coarse_die_v2 uses a required, full-rank capacity snapshot. The
+        // validator is pure and runs in both full and mandatory preflight;
+        // installation happens after the batch state is committed and before
+        // any rank issue callback can acquire a workspace lease.
+        bool workspace_admission_required = false;
+        std::function<std::optional<std::string>(
+            const std::vector<WorkspaceRankState>&,
+            const std::vector<WorkspaceCapacityRank>&)>
+            validate_workspace_capacity_snapshot;
+        std::function<void(const std::vector<WorkspaceCapacityRank>&,
+                           std::vector<int>& changed_ranks)>
+            install_workspace_capacity_snapshot;
         // Phase-7 §10.3: optional side-band metrics anchor registration. When
         // set, commit() invokes it right after Phase B-1 (nodes), BEFORE the
         // issue pass, with the batch and this committer's O(1) affine
@@ -227,6 +239,8 @@ class GraphBatchCommitter {
         json_id_discovered_touched_ranks_.reserve(rank_count);
         commit_touched_ranks_.reserve(rank_count);
         commit_issue_ranks_.reserve(rank_count);
+        commit_issue_ranks_with_workspace_.reserve(rank_count * 2);
+        commit_workspace_changed_ranks_.reserve(rank_count);
         // M2 (2026-08-23): propagate the node-GC switch to every per-rank
         // store once, here (fixtures leave node_gc off and keep the pre-M2
         // no-collection behavior byte-for-byte).
@@ -373,6 +387,8 @@ class GraphBatchCommitter {
         std::vector<int>* json_id_touched_ranks,
         std::vector<int>* issue_ranks = nullptr) const;
     std::optional<std::string> validate_affine_drift() const;
+    std::optional<std::string> validate_workspace_capacity_snapshot(
+        const StateDelta& delta, const GraphBatch& batch) const;
     std::optional<std::string> validate_json_id_stream(
         const GraphBatch& batch,
         std::vector<int>* touched_ranks = nullptr,
@@ -408,6 +424,8 @@ class GraphBatchCommitter {
     mutable std::vector<int> json_id_discovered_touched_ranks_;
     std::vector<int> commit_touched_ranks_;
     std::vector<int> commit_issue_ranks_;
+    std::vector<int> commit_issue_ranks_with_workspace_;
+    std::vector<int> commit_workspace_changed_ranks_;
     ParentPublicationWork parent_publication_work_;
     // validate_and_commit() owns commit_touched_ranks_ across its whole
     // validation/commit sequence.  Context callbacks attempting a nested

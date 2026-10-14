@@ -106,6 +106,7 @@ other bridge protocol violation):
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
 #include "astra-sim/workload/execution_driven/PipelineKernelContract.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -213,6 +214,8 @@ struct ParsedGraphBatch {
     std::vector<int> touched_ranks;             // empty when absent
     bool has_touched_ranks = false;
     std::string error;  // non-empty => decision failure (bridge aborts)
+    std::vector<WorkspaceCapacityRank> workspace_capacity_snapshot;
+    bool has_workspace_capacity_snapshot = false;
 };
 
 /// Single bridge/GraphBatch wire version shared by the file bridge and the
@@ -222,10 +225,15 @@ struct ParsedGraphBatch {
 inline constexpr int kGraphBatchSchemaVersion = 3;
 
 /// Parse one response DOM into the typed batch. num_ranks >= 0 enables the
-/// rank-domain checks (N3/E2/W3/T8); -1 skips them (legacy fixtures).
+/// rank-domain checks (N3/E2/W3/T8); -1 skips them (legacy fixtures). A
+/// nonempty expected_workspace_state selects the coarse_die_v2 extension and
+/// requires an exact full-rank capacity snapshot; an empty state preserves
+/// the frozen schema-v3 response contract.
 /// Throws ParseError on any structural violation; constructs nothing shared
 /// (pure function, exception-safe).
-ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp, int num_ranks);
+ParsedGraphBatch parse_graph_batch(
+    const nlohmann::json& resp, int num_ranks,
+    const std::vector<WorkspaceRankState>& expected_workspace_state = {});
 
 }  // namespace ExecutionDriven
 }  // namespace AstraSim

@@ -2074,6 +2074,15 @@ class KVCacheManager:
                 self._rank_relative_index[rank] = relative_index
         self._sessions: dict[str, SessionKVState] = {}
         self._reservations: dict[str, KVCapacityReservation] = {}
+        # coarse_die_v2 transient COMP workspace, supplied by the C++ rank
+        # ledgers at each decision boundary. This is a scalar external hold;
+        # it does not enter the JOINT KV directory or duplicate its owners.
+        self._external_workspace_revision_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._external_workspace_bytes_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
         # ---- W4（§6.1）：唯一权威区间目录（镜像层） ----
         # 目录与旧字段同事务更新（写点收拢于 _check_invariants_after_
         # mutation 咽喉——本类 §1.9 全部写点均以该检查收尾）；逐 rank
@@ -2362,8 +2371,133 @@ class KVCacheManager:
         )
         return tuple(
             self._rank_states[rank].remaining_bytes - reserved_bytes
+            - self._external_workspace_bytes_by_rank[rank]
             for rank, reserved_bytes in zip(instance.ranks, reserved)
         )
+
+    @staticmethod
+    def _require_workspace_uint64(value: int, name: str) -> None:
+        if (type(value) is not int or value < 0
+                or value > (1 << 64) - 1):
+            raise ValueError("{} must be an exact uint64 integer".format(name))
+
+    def validate_external_workspace_view(self, workspace_state: dict):
+        """Validate a full C++ workspace view without changing KV state."""
+        if not isinstance(workspace_state, dict) or set(workspace_state) != {
+                "protocol_version", "ranks"}:
+            raise ValueError("workspace_state must have protocol_version/ranks")
+        if (type(workspace_state["protocol_version"]) is not int
+                or workspace_state["protocol_version"] != 1):
+            raise ValueError("workspace_state protocol_version must be 1")
+        rows = workspace_state["ranks"]
+        if not isinstance(rows, list) or len(rows) != len(self._rank_states):
+            raise ValueError(
+                "workspace_state must cover every configured rank exactly")
+        revisions = {}
+        active_bytes = {}
+        for expected_rank, row in enumerate(rows):
+            where = "workspace_state.ranks[{}]".format(expected_rank)
+            if not isinstance(row, dict) or set(row) != {
+                    "rank", "workspace_revision", "active_workspace_bytes"}:
+                raise ValueError("{} has an invalid key set".format(where))
+            rank = row["rank"]
+            revision = row["workspace_revision"]
+            active = row["active_workspace_bytes"]
+            self._require_workspace_uint64(rank, where + ".rank")
+            self._require_workspace_uint64(
+                revision, where + ".workspace_revision")
+            self._require_workspace_uint64(
+                active, where + ".active_workspace_bytes")
+            if rank != expected_rank or rank not in self._rank_states:
+                raise ValueError(
+                    "{} ranks must cover [0, N) in ascending order".format(
+                        where))
+            previous_revision = self._external_workspace_revision_by_rank[rank]
+            previous_bytes = self._external_workspace_bytes_by_rank[rank]
+            if revision < previous_revision:
+                raise ValueError(
+                    "stale workspace revision for rank {}: {} < {}".format(
+                        rank, revision, previous_revision))
+            if revision == previous_revision and active != previous_bytes:
+                raise ValueError(
+                    "workspace bytes changed without revision advance on "
+                    "rank {}".format(rank))
+            revisions[rank] = revision
+            active_bytes[rank] = active
+
+        reserved_by_rank = {rank: 0 for rank in self._rank_states}
+        for instance in self.topology.instances:
+            reserved = self._reserved_bytes_by_tp_rank(instance.index)
+            for rank, amount in zip(instance.ranks, reserved):
+                total = reserved_by_rank[rank] + amount
+                self._require_workspace_uint64(
+                    total, "reserved request bytes for rank {}".format(rank))
+                reserved_by_rank[rank] = total
+        for rank, active in active_bytes.items():
+            state = self._rank_states[rank]
+            base_used = (state.model_weight_bytes + state.kv_cache_bytes
+                         + reserved_by_rank[rank])
+            if base_used > state.capacity_bytes or \
+                    active > state.capacity_bytes - base_used:
+                raise ValueError(
+                    "workspace hold exceeds Python HBM capacity on rank "
+                    "{}: base={}, workspace={}, capacity={}".format(
+                        rank, base_used, active, state.capacity_bytes))
+        return revisions, active_bytes
+
+    def set_external_workspace_view(self, workspace_state: dict):
+        """Atomically install C++ workspace counters and report changed ranks."""
+        revisions, active_bytes = self.validate_external_workspace_view(
+            workspace_state)
+        changed = tuple(
+            rank for rank in sorted(revisions)
+            if (revisions[rank] != self._external_workspace_revision_by_rank[rank]
+                or active_bytes[rank] != self._external_workspace_bytes_by_rank[rank])
+        )
+        self._external_workspace_revision_by_rank = revisions
+        self._external_workspace_bytes_by_rank = active_bytes
+        return changed
+
+    def workspace_capacity_snapshot(self) -> dict[str, Any]:
+        """Return the compact Python KV base view for coarse_die_v2."""
+        reserved_by_rank = {rank: 0 for rank in self._rank_states}
+        for instance in self.topology.instances:
+            reserved = self._reserved_bytes_by_tp_rank(instance.index)
+            for rank, amount in zip(instance.ranks, reserved):
+                reserved_by_rank[rank] += amount
+        rows = []
+        for rank in sorted(self._rank_states):
+            state = self._rank_states[rank]
+            revision = self._external_workspace_revision_by_rank[rank]
+            active = self._external_workspace_bytes_by_rank[rank]
+            for name, value in (
+                ("rank", rank),
+                ("workspace_revision", revision),
+                ("capacity_bytes", state.capacity_bytes),
+                ("model_weight_bytes", state.model_weight_bytes),
+                ("resident_kv_bytes", state.kv_cache_bytes),
+                ("reserved_request_bytes", reserved_by_rank[rank]),
+                ("active_workspace_bytes", active),
+            ):
+                self._require_workspace_uint64(
+                    value, "workspace capacity snapshot {} for rank {}".format(
+                        name, rank))
+            base = (state.model_weight_bytes + state.kv_cache_bytes
+                    + reserved_by_rank[rank])
+            if base > state.capacity_bytes or \
+                    active > state.capacity_bytes - base:
+                raise RuntimeError(
+                    "workspace capacity snapshot exceeds HBM capacity on "
+                    "rank {}".format(rank))
+            rows.append({
+                "rank": rank,
+                "workspace_revision": revision,
+                "capacity_bytes": state.capacity_bytes,
+                "model_weight_bytes": state.model_weight_bytes,
+                "resident_kv_bytes": state.kv_cache_bytes,
+                "reserved_request_bytes": reserved_by_rank[rank],
+            })
+        return {"protocol_version": 1, "ranks": rows}
 
     def instance_effective_remaining_capacity_bytes(
         self,

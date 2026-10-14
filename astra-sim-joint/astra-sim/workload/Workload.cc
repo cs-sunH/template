@@ -209,6 +209,14 @@ Workload::~Workload() {
     if (this->die_adapter_ != nullptr) {
         this->die_adapter_->shutdown();
     }
+    // coarse_die_v2 endpoint Runtime callbacks capture Workload cookies and
+    // any joined comm/pool node state. Cancel/drain them while the join table
+    // and Workload::call are still alive; legacy LocalHbm destruction order
+    // remains untouched.
+    if (sys != nullptr && sys->coarse_die_runtime != nullptr &&
+        local_hbm_bandwidth_model != nullptr) {
+        local_hbm_bandwidth_model.reset();
+    }
 
     comm_groups.clear();
 
@@ -561,6 +569,47 @@ void Workload::issue_dep_free_nodes() {
                             : dep_free_issue_snapshot_views_.size();
 
         const auto issue_start = SteadyClock::now();
+        auto issue_ready_node = [&](const ExecutionDriven::NodeView& node) {
+            const bool coarse_workspace_comp =
+                sys->coarse_die_runtime != nullptr &&
+                node.node_type == ChakraNodeType::COMP_NODE &&
+                !node.is_timer_op && !node.is_cpu_op &&
+                node.compute.op_role !=
+                    ExecutionDriven::OpRole::ControlMarker;
+            if (!coarse_workspace_comp) {
+                issue(node);
+                return true;
+            }
+            if (execution_mode_ != ExecutionDriven::ExecutionMode::Online) {
+                throw std::runtime_error(
+                    "coarse_die_v2 requires online bridge v2 workspace "
+                    "capacity snapshots");
+            }
+            if (die_adapter_ == nullptr || sys->workspace_admission == nullptr) {
+                throw std::runtime_error(
+                    "coarse_die_v2 COMP requires workspace admission before "
+                    "issue");
+            }
+            auto prepared = die_adapter_->prepare_coarse_plan(node);
+            auto admission = die_adapter_->try_acquire_workspace(prepared);
+            if (admission.status ==
+                WorkspaceAdmission::AcquireStatus::Blocked) {
+                // Leave the dependency-free node unoccupied. A later
+                // capacity snapshot or lease release retries this candidate.
+                return false;
+            }
+            if (admission.status ==
+                WorkspaceAdmission::AcquireStatus::Impossible) {
+                throw std::runtime_error(
+                    "coarse Plan workspace " +
+                    std::to_string(prepared.workspace_bytes) +
+                    " bytes exceeds empty-instance HBM capacity for node " +
+                    std::to_string(node.global_id));
+            }
+            issue_prepared_coarse(node, std::move(prepared),
+                                  std::move(admission.lease));
+            return true;
+        };
         auto issue_if_available = [&](const auto& nv) {
             if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
                 // Step 1-8: online availability check on the NodeView
@@ -568,14 +617,12 @@ void Workload::issue_dep_free_nodes() {
                 // real serialized physics (path-2 removal 2026-08-18 deleted
                 // the replay-only concurrent calibrated-COMP bypass).
                 if (hw_resource->is_available(nv)) {
-                    issue(nv);
-                    return true;
+                    return issue_ready_node(nv);
                 }
             } else {
                 auto node = graph_source_->et_node(nv.global_id);
                 if (hw_resource->is_available(node)) {
-                    issue(nv);
-                    return true;
+                    return issue_ready_node(nv);
                 }
             }
             return false;
@@ -591,8 +638,7 @@ void Workload::issue_dep_free_nodes() {
                 // the node or synchronously mutate/re-hash NodeStore.
                 const ExecutionDriven::NodeView node = candidate;
                 ++dep_free_issue_timing_.node_view_materializations;
-                issue(node);
-                return true;
+                return issue_ready_node(node);
             };
         auto is_current_snapshot_member = [&](const uint64_t node_id) {
             if (membership_snapshot_proof_active) {
@@ -692,6 +738,20 @@ void Workload::publish_ledger_transition(
 }
 
 void Workload::issue(const ExecutionDriven::NodeView& node) {
+    issue_impl(node, nullptr, nullptr);
+}
+
+void Workload::issue_prepared_coarse(
+    const ExecutionDriven::NodeView& node,
+    DieModelAdapter::PreparedCoarsePlan prepared,
+    WorkspaceAdmission::Lease lease) {
+    issue_impl(node, &prepared, &lease);
+}
+
+void Workload::issue_impl(
+    const ExecutionDriven::NodeView& node,
+    DieModelAdapter::PreparedCoarsePlan* const prepared,
+    WorkspaceAdmission::Lease* const lease) {
     auto logger = workload_logger_;
     if (sys->trace_enabled) {
         logger->debug("issue,sys->id={}, tick={}, node->id={}, "
@@ -756,7 +816,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
                 // frozen dispatch order lives in issue_die_comp; the legacy
                 // roofline/fluid path below is unreachable under this
                 // backend.
-                issue_die_comp(node);
+                issue_die_comp(node, prepared, lease);
             } else if (!this->sys->roofline_enabled) {
                 issue_replay(node);
             } else {
@@ -909,7 +969,10 @@ void Workload::issue_local_hbm_kv_restore(
     sys->register_event(this, EventType::General, wlhd, runtime);
 }
 
-void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
+void Workload::issue_die_comp(
+    const ExecutionDriven::NodeView& node,
+    DieModelAdapter::PreparedCoarsePlan* const prepared,
+    WorkspaceAdmission::Lease* const lease) {
     // Contract §7.3 dispatch order (frozen 2026-10-03): is_timer_op -> old
     // timer path; is_cpu_op -> issue_replay; op_role=control_marker -> the
     // legacy micro-job semantics verbatim; die_spec -> DieModelAdapter
@@ -926,7 +989,9 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         issue_replay(node);
         return;
     }
-    if (node.compute.die_spec != nullptr && node.compute.runtime_ns != 0) {
+    if ((node.compute.die_spec != nullptr ||
+         node.compute.die_task_json != nullptr) &&
+        node.compute.runtime_ns != 0) {
         // The GraphBatch parser already rejects this combination (N12 /
         // contract §2); reaching it here means a producer that bypassed the
         // parser (e.g. a static ET view). Fail closed instead of letting a
@@ -948,18 +1013,31 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         wlhd->workload = this;
         wlhd->node_id = node.global_id;
         if (local_hbm_bandwidth_model != nullptr) {
-            local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+            if (sys->coarse_die_runtime != nullptr) {
+                local_hbm_bandwidth_model->issue_control_marker(wlhd);
+            } else {
+                local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+            }
         } else {
             hw_resource->tics_gpu_ops += 1;
             sys->register_event(this, EventType::General, wlhd, 1);
         }
         return;
     }
-    if (node.compute.die_spec == nullptr) {
+    if (sys->coarse_die_runtime != nullptr &&
+        node.compute.die_spec != nullptr) {
+        fail_closed(
+            "coarse_die_v2 COMP received legacy die_op_spec; refusing "
+            "legacy normalization");
+    }
+    if ((sys->coarse_die_runtime == nullptr &&
+         node.compute.die_spec == nullptr) ||
+        (sys->coarse_die_runtime != nullptr &&
+         node.compute.die_task_json == nullptr)) {
         // Contract §2/§7.3: a real COMP without a die_op_spec is a
         // generator defect -- never a silent roofline/replay fallback.
         fail_closed(
-            "die backend requires die_op_spec on real COMP node " +
+            "die backend requires its selected typed task on real COMP node " +
             std::to_string(node.global_id) +
             " (op_role=compute without a spec; refusing to fall back to "
             "roofline or replay)");
@@ -971,7 +1049,20 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         MetricCollector::instance().on_compute_issue(
             sys->id, node.compute.num_ops, node.compute.tensor_size);
     }
-    die_adapter_->issue_die(node);
+    if (sys->coarse_die_runtime != nullptr) {
+        if (prepared == nullptr || lease == nullptr || !lease->active()) {
+            fail_closed(
+                "coarse_die_v2 COMP reached issue without its prepared Plan "
+                "and pre-issue workspace lease");
+        }
+        die_adapter_->issue_prepared_coarse_plan(
+            node, std::move(*prepared), std::move(*lease));
+    } else {
+        if (prepared != nullptr || lease != nullptr) {
+            fail_closed("legacy die COMP received a coarse workspace token");
+        }
+        die_adapter_->issue_die(node);
+    }
 }
 
 void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
@@ -1344,6 +1435,13 @@ WorkloadLayerHandlerData* Workload::begin_hbm_join(
                     std::to_string(node_id));
     }
     return hbm_wlhd;
+}
+
+void Workload::abandon_hbm_endpoint_join(const uint64_t node_id) {
+    // Teardown-only: the LocalHbm model still owns and deletes the HBM-side
+    // cookie after cancelling its Runtime handle. No graph completion or
+    // metric anchor may fire from this cleanup path.
+    hbm_join_pending_.erase(node_id);
 }
 
 bool Workload::consume_hbm_join_event(WorkloadLayerHandlerData* wlhd) {

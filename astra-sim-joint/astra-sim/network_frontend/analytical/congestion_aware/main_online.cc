@@ -187,6 +187,10 @@ struct OnlineDriverContext {
     // phase 6): when set, the tick-end gate computes the per-rank
     // injected-unfinished ledger summary into StateDelta.injected_unfinished.
     bool sensing_enabled = false;
+    // coarse_die_v2 bridge extension: every delivery includes the complete
+    // per-rank workspace ledger view and requires a matching Python capacity
+    // snapshot before the graph batch can commit.
+    bool workspace_admission_required = false;
     // Phase 4 (schema v1): the per-delivery completed-facts buffer
     // (StateDelta.completed_nodes). The online CompletionObserver hook
     // appends one fact per node terminal; the tick-end gate moves the
@@ -1295,12 +1299,45 @@ void ed_driver_tick_end(void* ctx) {
                                          affected_ranks.end()),
                              affected_ranks.end());
     }
-    StateDelta delta = build_state_delta_v1(
-        driver->mailbox->drain(),
-        driver->event_queue->get_current_time(),
-        driver->delivery_seq++, deferred_from,
-        driver->completed_facts.drain(), std::move(affected_ranks),
-        std::move(injected_unfinished));
+    const uint64_t delivery_tick = driver->event_queue->get_current_time();
+    const uint64_t delivery_sequence = driver->delivery_seq++;
+    std::vector<DecisionEvent> events = driver->mailbox->drain();
+    std::vector<CompletedNodeFact> completed_nodes =
+        driver->completed_facts.drain();
+    StateDelta delta;
+    if (driver->workspace_admission_required) {
+        if (driver->work_ledger_systems == nullptr ||
+            driver->work_ledger_systems->empty() ||
+            driver->work_ledger_systems->size() != driver->graph_sources->size()) {
+            online_fatal(
+                "coarse_die_v2 delivery has no complete rank-local "
+                "workspace ledger table");
+        }
+        std::vector<WorkspaceRankState> workspace_state;
+        workspace_state.reserve(driver->work_ledger_systems->size());
+        for (size_t rank = 0; rank < driver->work_ledger_systems->size();
+             ++rank) {
+            Sys* const system = (*driver->work_ledger_systems)[rank];
+            if (system == nullptr || system->workspace_admission == nullptr ||
+                system->workspace_admission->rank() !=
+                    static_cast<int>(rank)) {
+                online_fatal(
+                    "coarse_die_v2 workspace ledger is missing or rank "
+                    "ordering changed at rank " + std::to_string(rank));
+            }
+            workspace_state.push_back(
+                system->workspace_admission->state());
+        }
+        delta = build_state_delta_v2(
+            std::move(events), delivery_tick, delivery_sequence, deferred_from,
+            std::move(completed_nodes), std::move(affected_ranks),
+            std::move(workspace_state), std::move(injected_unfinished));
+    } else {
+        delta = build_state_delta_v1(
+            std::move(events), delivery_tick, delivery_sequence,
+            deferred_from, std::move(completed_nodes),
+            std::move(affected_ranks), std::move(injected_unfinished));
+    }
     driver->last_delivery_event_count = delta.events.size();
     driver->last_delivery_tick = delta.tick;
     // W1 (joint work ledger): upgrade the snapshot handle from the v1
@@ -2006,6 +2043,27 @@ int main(int argc, char* argv[]) {
     // Step 1-6/1-8: the tick-end activity gate (once per tick, after the
     // tick's physical events, before the same-tick deferred drain); the
     // bridge delivers one epoch and the commit runs as a deferred event.
+    bool workspace_admission_required = false;
+    if (!systems.empty()) {
+        workspace_admission_required =
+            systems.front() != nullptr &&
+            systems.front()->coarse_die_runtime != nullptr;
+        for (size_t rank = 0; rank < systems.size(); ++rank) {
+            Sys* const system = systems[rank];
+            if (system == nullptr) {
+                online_fatal("null Sys in online rank table");
+            }
+            const bool has_runtime = system->coarse_die_runtime != nullptr;
+            const bool has_workspace = system->workspace_admission != nullptr;
+            if (has_runtime != has_workspace ||
+                has_runtime != workspace_admission_required ||
+                (has_runtime && system->die_model_profile != "coarse_die_v2")) {
+                online_fatal(
+                    "coarse_die_v2 Runtime/workspace profile must be "
+                    "consistent on every configured rank");
+            }
+        }
+    }
     OnlineDriverContext driver_ctx;
     driver_ctx.mailbox = &mailbox;
     driver_ctx.event_queue = event_queue.get();
@@ -2013,6 +2071,7 @@ int main(int argc, char* argv[]) {
     driver_ctx.svc = &svc;
     driver_ctx.watch_registry = &watch_registry;
     driver_ctx.graph_sources = &graph_sources;
+    driver_ctx.workspace_admission_required = workspace_admission_required;
     const auto ledger_epoch_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -2076,6 +2135,62 @@ int main(int argc, char* argv[]) {
                 .count());
         ++g_main_wall.issue_dep_free_nodes.calls;
     };
+    committer_ctx.workspace_admission_required =
+        workspace_admission_required;
+    if (workspace_admission_required) {
+        committer_ctx.validate_workspace_capacity_snapshot =
+            [&systems](const std::vector<WorkspaceRankState>& request_state,
+                       const std::vector<WorkspaceCapacityRank>& snapshot)
+                -> std::optional<std::string> {
+                if (request_state.size() != systems.size() ||
+                    snapshot.size() != systems.size()) {
+                    return "workspace request/snapshot rank count mismatch";
+                }
+                for (size_t rank = 0; rank < systems.size(); ++rank) {
+                    Sys* const system = systems[rank];
+                    if (system == nullptr ||
+                        system->workspace_admission == nullptr) {
+                        return "workspace admission ledger missing for rank " +
+                               std::to_string(rank);
+                    }
+                    try {
+                        system->workspace_admission->validate_request_state(
+                            request_state[rank]);
+                        system->workspace_admission->validate_capacity_snapshot(
+                            snapshot[rank]);
+                    } catch (const std::exception& exc) {
+                        return "rank " + std::to_string(rank) + ": " +
+                               exc.what();
+                    }
+                }
+                return std::nullopt;
+            };
+        committer_ctx.install_workspace_capacity_snapshot =
+            [&systems](const std::vector<WorkspaceCapacityRank>& snapshot,
+                       std::vector<int>& changed_ranks) {
+                if (snapshot.size() != systems.size()) {
+                    throw std::logic_error(
+                        "workspace snapshot rank count changed after preflight");
+                }
+                changed_ranks.clear();
+                for (size_t rank = 0; rank < systems.size(); ++rank) {
+                    Sys* const system = systems[rank];
+                    if (system == nullptr ||
+                        system->workspace_admission == nullptr) {
+                        throw std::logic_error(
+                            "workspace ledger disappeared after preflight");
+                    }
+                    if (system->workspace_admission
+                            ->capacity_snapshot_changes(snapshot[rank])) {
+                        changed_ranks.push_back(static_cast<int>(rank));
+                    }
+                }
+                for (size_t rank = 0; rank < systems.size(); ++rank) {
+                    systems[rank]->workspace_admission
+                        ->install_capacity_snapshot_unchecked(snapshot[rank]);
+                }
+            };
+    }
     // The mandatory GraphBatch liveness preflight cannot infer a collective's
     // true process-group membership from the batch itself: that declaration is
     // owned by each participating Workload. Resolve it read-only here, across

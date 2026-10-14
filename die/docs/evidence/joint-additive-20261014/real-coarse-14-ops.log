@@ -1,0 +1,16 @@
+generated_protobuf_node_type: 4
+op_kinds=14; estimates=14; errors=[]
+attention_region 1945
+av 1433
+ffn_region 687774
+logits 451617
+mlp_activation 2986
+mlp_down 315073
+mlp_up 325463
+norm 804
+o_proj 117344
+qk 757
+qkv_rope 191398
+residual 1135
+scale_mask 142
+softmax 142

@@ -1,0 +1,1729 @@
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/WorkspaceAdmission.hh b/astra-sim-wscllm-LRU/astra-sim/workload/WorkspaceAdmission.hh
+index 4546738..b334fc9 100644
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/WorkspaceAdmission.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/WorkspaceAdmission.hh
+@@ -34,6 +34,10 @@ struct WorkspaceCapacityRank {
+     uint64_t model_weight_bytes = 0;
+     uint64_t resident_kv_bytes = 0;
+     uint64_t reserved_request_bytes = 0;
++    // Optional immutable bound for one COMP on the serialized compute gate.
++    // This is a fit margin, never an active lease or a KV reservation.
++    bool has_prospective_workspace = false;
++    uint64_t prospective_workspace_bytes = 0;
+ };
+ 
+ /// Checked rank-local ledger for short-lived immutable-Plan workspace.
+@@ -141,7 +145,9 @@ class WorkspaceAdmission final {
+         return WorkspaceCapacityRank{rank_, capacity_snapshot_revision_,
+                                      capacity_bytes_, model_weight_bytes_,
+                                      resident_kv_bytes_,
+-                                     reserved_request_bytes_};
++                                     reserved_request_bytes_,
++                                     has_prospective_workspace_,
++                                     prospective_workspace_bytes_};
+     }
+ 
+     WorkspaceRankState state() const {
+@@ -167,6 +173,12 @@ class WorkspaceAdmission final {
+         if (!has_capacity_snapshot_) {
+             return {AcquireStatus::Blocked, Lease{}};
+         }
++        if (has_prospective_workspace_ &&
++            workspace_bytes > prospective_workspace_bytes_) {
++            throw std::runtime_error(
++                "coarse Plan workspace exceeds the immutable prospective "
++                "workspace bound on rank " + std::to_string(rank_));
++        }
+         const uint64_t maximum_for_empty_kv =
+             capacity_bytes_ - model_weight_bytes_;
+         if (workspace_bytes > maximum_for_empty_kv) {
+@@ -235,6 +247,22 @@ class WorkspaceAdmission final {
+             throw std::runtime_error(
+                 "workspace snapshot base-used bytes exceed capacity");
+         }
++        if (!snapshot.has_prospective_workspace &&
++            snapshot.prospective_workspace_bytes != 0) {
++            throw std::runtime_error("unmarked prospective workspace bound");
++        }
++        if (has_capacity_snapshot_ &&
++            (snapshot.has_prospective_workspace != has_prospective_workspace_ ||
++             snapshot.prospective_workspace_bytes != prospective_workspace_bytes_)) {
++            throw std::runtime_error(
++                "prospective workspace bound changed after initial snapshot");
++        }
++        if (snapshot.has_prospective_workspace &&
++            snapshot.prospective_workspace_bytes > snapshot.capacity_bytes - full_base) {
++            throw std::runtime_error(
++                "workspace fit margin plus Python base-used bytes exceed rank "
++                "capacity");
++        }
+         if (active_workspace_bytes_ > snapshot.capacity_bytes - full_base) {
+             throw std::runtime_error(
+                 "active workspace plus Python base-used bytes exceed rank "
+@@ -261,6 +289,8 @@ class WorkspaceAdmission final {
+         model_weight_bytes_ = snapshot.model_weight_bytes;
+         resident_kv_bytes_ = snapshot.resident_kv_bytes;
+         reserved_request_bytes_ = snapshot.reserved_request_bytes;
++        has_prospective_workspace_ = snapshot.has_prospective_workspace;
++        prospective_workspace_bytes_ = snapshot.prospective_workspace_bytes;
+         has_capacity_snapshot_ = true;
+     }
+ 
+@@ -329,6 +359,8 @@ class WorkspaceAdmission final {
+     uint64_t model_weight_bytes_ = 0;
+     uint64_t resident_kv_bytes_ = 0;
+     uint64_t reserved_request_bytes_ = 0;
++    bool has_prospective_workspace_ = false;
++    uint64_t prospective_workspace_bytes_ = 0;
+     std::map<Identity, ActiveRecord> active_;
+ };
+ 
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc
+index 116c3ca..ca8b491 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc
+@@ -584,7 +584,7 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
+         check_key_set(rank_json,
+                       {"rank", "workspace_revision", "capacity_bytes",
+                        "model_weight_bytes", "resident_kv_bytes",
+-                       "reserved_request_bytes"},
++                       "reserved_request_bytes", "prospective_workspace_bytes"},
+                       {"rank", "workspace_revision", "capacity_bytes",
+                        "model_weight_bytes", "resident_kv_bytes",
+                        "reserved_request_bytes"},
+@@ -614,6 +614,12 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
+         entry.reserved_request_bytes = get_uint(
+             rank_json["reserved_request_bytes"], "reserved_request_bytes",
+             where);
++        if (rank_json.contains("prospective_workspace_bytes")) {
++            entry.has_prospective_workspace = true;
++            entry.prospective_workspace_bytes = get_uint(
++                rank_json["prospective_workspace_bytes"],
++                "prospective_workspace_bytes", where);
++        }
+         const auto checked_add = [&where](const uint64_t a,
+                                           const uint64_t b) {
+             if (b > std::numeric_limits<uint64_t>::max() - a) {
+@@ -627,6 +633,15 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
+         if (base > entry.capacity_bytes) {
+             fail(where + ": base-used bytes exceed capacity_bytes");
+         }
++        if (entry.has_prospective_workspace &&
++            entry.prospective_workspace_bytes > entry.capacity_bytes - base) {
++            fail(where + ": prospective workspace plus base-used bytes "
++                         "exceed capacity_bytes");
++        }
++        if (!parsed.empty() && entry.has_prospective_workspace !=
++                parsed.front().has_prospective_workspace) {
++            fail(where + ": prospective workspace must cover every rank");
++        }
+         parsed.push_back(entry);
+     }
+     return parsed;
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc
+index e595cb7..c9dac7a 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc
+@@ -90,6 +90,12 @@ future arrival) through:
+           rejected fail-closed with zero side effects, and a watch-member
+           mutation is blocked by the preflight BEFORE any Phase-B assembly
+           runs (two-phase atomicity under the typed batch).
++  Part Q  source-HBM release: a P-triggered remote-store send/recv/ACK graph,
++          cross-batch ACK -> destination restore/COMP blocking while ACKs
++          remain live, release after terminal observation, and collected
++          ACK parents satisfying later cross-batch edges. A test-local
++          combined parent + matched-communication DAG oracle also catches a
++          cycle that is invisible to the committer's rank-local edge check.
+ 
+ Also asserts the pre-phase-5 fixture tolerance: a batch WITHOUT the
+ touched_ranks field validates identically (has_touched_ranks == false).
+@@ -111,6 +117,7 @@ Exit code 0 on ALL PASS.
+ 
+ #include <astra-network-analytical/common/EventQueue.h>
+ 
++#include <algorithm>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <map>
+@@ -118,6 +125,7 @@ Exit code 0 on ALL PASS.
+ #include <optional>
+ #include <set>
+ #include <string>
++#include <tuple>
+ #include <vector>
+ 
+ #include <json/json.hpp>
+@@ -190,6 +198,10 @@ std::vector<uint64_t> free_ids_of(const NodeStore& store) {
+     return ids;
+ }
+ 
++bool contains(const std::vector<uint64_t>& ids, uint64_t id) {
++    return std::find(ids.begin(), ids.end(), id) != ids.end();
++}
++
+ // Test-local unfinished-count oracle: the phase-3 sensing summary's
+ // node_count is exactly the unfinished (not yet finished) node count.
+ size_t store_unfinished(const NodeStore& store) {
+@@ -425,7 +437,7 @@ nlohmann::json compute_node(int rank, uint64_t id, const std::string& req,
+ }
+ 
+ nlohmann::json comm_node(int rank, uint64_t id, int type, int src, int dst,
+-                         int tag) {
++                         int tag, uint64_t bytes = 100) {
+     return {
+         {"rank", rank}, {"id", id}, {"type", type},
+         {"name", type == 5 ? "send" : "recv"},
+@@ -433,11 +445,40 @@ nlohmann::json comm_node(int rank, uint64_t id, int type, int src, int dst,
+         {"request_id", "r1"}, {"stage", "prefill"}, {"generation", 0},
+         {"compute", {{"num_ops", 1000}, {"tensor_size", 4096},
+                      {"runtime_ns", 10000}}},
+-        {"comm", {{"bytes", 100}, {"src", src}, {"dst", dst}, {"tag", tag}}},
++        {"comm", {{"bytes", bytes}, {"src", src}, {"dst", dst}, {"tag", tag}}},
+         {"coll", coll_defaults()},
+     };
+ }
+ 
++nlohmann::json remote_store_node(int rank, uint64_t id,
++                                 const std::string& request_id,
++                                 const std::string& name) {
++    return {
++        {"rank", rank}, {"id", id}, {"type", 3}, {"name", name},
++        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
++        {"request_id", request_id}, {"stage", "prefill"}, {"generation", 0},
++        {"compute", {{"num_ops", 1000}, {"tensor_size", 4096},
++                     {"runtime_ns", 10000}}},
++        {"comm", comm_defaults()}, {"coll", coll_defaults()},
++    };
++}
++
++nlohmann::json local_kv_restore_node(int rank, uint64_t id,
++                                     const std::string& request_id,
++                                     const std::string& stage,
++                                     const std::string& name) {
++    return {
++        {"rank", rank}, {"id", id}, {"type", 2}, {"name", name},
++        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
++        {"request_id", request_id}, {"stage", stage},
++        {"generation", stage == "decode" ? 1 : 0},
++        {"is_local_hbm_kv_restore", true},
++        {"compute", {{"num_ops", 1000}, {"tensor_size", 4096},
++                     {"runtime_ns", 10000}}},
++        {"comm", comm_defaults()}, {"coll", coll_defaults()},
++    };
++}
++
+ nlohmann::json coll_node(int rank, uint64_t id, const std::string& name) {
+     return {
+         {"rank", rank}, {"id", id}, {"type", 7}, {"name", name},
+@@ -1852,8 +1893,11 @@ struct GcFixture {
+     std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
+     std::unique_ptr<GraphBatchCommitter> committer;
+ 
+-    explicit GcFixture(size_t preseed_nodes = 0) : ingress(4096) {
+-        sources.push_back(std::make_shared<NodeStoreGraphSource>());
++    explicit GcFixture(size_t preseed_nodes = 0, int num_ranks = 1)
++        : ingress(4096) {
++        for (int rank = 0; rank < num_ranks; ++rank) {
++            sources.push_back(std::make_shared<NodeStoreGraphSource>());
++        }
+         OnlineNode preseed;
+         preseed.kind = NodeKind::Compute;
+         preseed.name = "gc-preseed";
+@@ -1861,7 +1905,7 @@ struct GcFixture {
+             sources[0]->store().add_node(preseed);
+         }
+         GraphBatchCommitter::Context ctx;
+-        ctx.num_ranks = 1;
++        ctx.num_ranks = num_ranks;
+         ctx.graph_sources = &sources;
+         ctx.watch_registry = &registry;
+         ctx.ingress = &ingress;
+@@ -1940,6 +1984,291 @@ void finish_gc_json_id(GcFixture& fixture, uint64_t json_id,
+     }
+ }
+ 
++using GraphNodeKey = std::pair<int, uint64_t>;
++
++// Test oracle for the producer's full dependency DAG: GraphBatch parent
++// edges plus tag-matched p2p send -> recv arcs. The committer's in-batch
++// parent-edge check is intentionally per rank, so this catches P-trigger
++// cycles that only close through a matched cross-rank communication.
++bool parent_and_comm_graph_is_acyclic(
++    const std::vector<GraphBatch>& batches) {
++    using CommKey = std::tuple<int, int, uint64_t>;
++    struct PairEndpoints {
++        std::optional<GraphNodeKey> send;
++        std::optional<GraphNodeKey> recv;
++    };
++    std::map<GraphNodeKey, std::vector<GraphNodeKey>> successors;
++    std::map<GraphNodeKey, size_t> indegree;
++    std::map<CommKey, PairEndpoints> comm_pairs;
++
++    for (const GraphBatch& batch : batches) {
++        for (const ParsedNode& parsed : batch.nodes) {
++            const OnlineNode& node = parsed.node;
++            const GraphNodeKey key{node.rank, parsed.json_id};
++            if (!indegree.emplace(key, 0).second) {
++                return false;
++            }
++            if (node.node_type == 5 || node.node_type == 6) {
++                PairEndpoints& pair = comm_pairs[CommKey{
++                    node.comm.src, node.comm.dst, node.comm.tag}];
++                std::optional<GraphNodeKey>& endpoint =
++                    node.node_type == 5 ? pair.send : pair.recv;
++                if (endpoint.has_value()) {
++                    return false;
++                }
++                endpoint = key;
++            }
++        }
++    }
++
++    auto add_edge = [&](const GraphNodeKey& parent,
++                        const GraphNodeKey& child) {
++        if (indegree.count(parent) == 0 || indegree.count(child) == 0) {
++            return false;
++        }
++        successors[parent].push_back(child);
++        ++indegree[child];
++        return true;
++    };
++
++    for (const GraphBatch& batch : batches) {
++        for (const ParsedEdge& edge : batch.parent_edges) {
++            if (!add_edge(GraphNodeKey{edge.rank, edge.from_json},
++                          GraphNodeKey{edge.rank, edge.to_json})) {
++                return false;
++            }
++        }
++    }
++    for (const auto& entry : comm_pairs) {
++        if (!entry.second.send.has_value() ||
++            !entry.second.recv.has_value() ||
++            !add_edge(*entry.second.send, *entry.second.recv)) {
++            return false;
++        }
++    }
++
++    std::vector<GraphNodeKey> ready;
++    ready.reserve(indegree.size());
++    for (const auto& entry : indegree) {
++        if (entry.second == 0) {
++            ready.push_back(entry.first);
++        }
++    }
++    size_t visited = 0;
++    while (!ready.empty()) {
++        const GraphNodeKey current = ready.back();
++        ready.pop_back();
++        ++visited;
++        for (const GraphNodeKey& child : successors[current]) {
++            if (--indegree[child] == 0) {
++                ready.push_back(child);
++            }
++        }
++    }
++    return visited == indegree.size();
++}
++
++GraphBatch p_trigger_remote_store_batch(uint64_t sequence,
++                                       bool include_followup_compute = false) {
++    nlohmann::json resp = empty_response(sequence);
++    auto p2p = [](int rank, uint64_t id, int type, int src, int dst, int tag,
++                  uint64_t bytes) {
++        nlohmann::json node = comm_node(rank, id, type, src, dst, tag, bytes);
++        node["request_id"] = "p_evict";
++        return node;
++    };
++    nlohmann::json nodes = nlohmann::json::array({
++        compute_node(0, 0, "p_evict", "prefill", "p_segment_end"),
++        p2p(0, 1, 5, 0, 1, 70, 1),  // P-trigger send
++        p2p(1, 0, 6, 0, 1, 70, 1),  // source-side trigger recv
++        p2p(1, 1, 5, 1, 2, 71, 100),
++        p2p(1, 2, 5, 1, 2, 73, 100),
++        p2p(1, 3, 6, 2, 1, 72, 1),  // source-release ACK receives
++        p2p(1, 4, 6, 2, 1, 74, 1),
++        p2p(2, 0, 6, 1, 2, 71, 100),
++        remote_store_node(2, 1, "p_evict", "store_a"),
++        p2p(2, 2, 5, 2, 1, 72, 1),
++        p2p(2, 3, 6, 1, 2, 73, 100),
++        remote_store_node(2, 4, "p_evict", "store_b"),
++        p2p(2, 5, 5, 2, 1, 74, 1),
++    });
++    if (include_followup_compute) {
++        nodes.push_back(
++            compute_node(1, 5, "p_evict", "prefill", "after_p_store"));
++    }
++    resp["nodes"] = std::move(nodes);
++    resp["parent_edges"] = nlohmann::json::array({
++        data_edge(0, 0, 1),
++        data_edge(1, 0, 1), data_edge(1, 0, 2),
++        data_edge(2, 0, 1), data_edge(2, 1, 2),
++        data_edge(2, 3, 4), data_edge(2, 4, 5),
++    });
++    if (include_followup_compute) {
++        resp["parent_edges"].push_back(data_edge(1, 3, 5));
++    }
++    resp["touched_ranks"] = nlohmann::json::array({0, 1, 2});
++    return parse_batch(resp, 3);
++}
++
++GraphBatch source_release_consumer_batch(uint64_t sequence,
++                                        uint64_t restore_id,
++                                        uint64_t compute_id,
++                                        uint64_t restore_release_id,
++                                        uint64_t compute_release_id,
++                                        const std::string& request_suffix) {
++    nlohmann::json resp = empty_response(sequence);
++    resp["nodes"] = nlohmann::json::array({
++        local_kv_restore_node(
++            1, restore_id, "restore_" + request_suffix, "prefill",
++            "restore_after_source_release_target_hbm_write_kv"),
++        compute_node(1, compute_id, "compute_" + request_suffix, "prefill",
++                     "compute_after_source_release"),
++    });
++    resp["parent_edges"] = nlohmann::json::array({
++        data_edge(1, restore_release_id, restore_id),
++        data_edge(1, compute_release_id, compute_id),
++    });
++    resp["touched_ranks"] = nlohmann::json::array({1});
++    return parse_batch(resp, 3);
++}
++
++void finish_gc_node(GcFixture& fixture, int rank, uint64_t json_id,
++                    const char* what) {
++    const auto store_id = fixture.committer->resolve_store_id(rank, json_id);
++    expect(store_id.has_value(), what);
++    if (!store_id.has_value()) {
++        return;
++    }
++    NodeStore& store = fixture.sources[rank]->store();
++    store.mark_issued(*store_id);
++    expect(store.mark_terminal_observed(*store_id), what);
++    store.finish_node(*store_id);
++}
++
++void test_source_release_cross_batch_and_p_trigger_dag() {
++    GcFixture fixture(0, 3);
++    const GraphBatch source = p_trigger_remote_store_batch(0);
++    if (!commit_gc_batch(fixture, source,
++                         "Q: P-triggered remote stores validate and commit")) {
++        return;
++    }
++
++    const auto release_a = fixture.committer->resolve_store_id(1, 3);
++    const auto release_b = fixture.committer->resolve_store_id(1, 4);
++    expect(release_a.has_value() && release_b.has_value(),
++           "Q: source ACK receives keep stable affine ids");
++    if (!release_a.has_value() || !release_b.has_value()) {
++        return;
++    }
++    fixture.sources[1]->store().mark_issued(*release_a);
++    fixture.sources[1]->store().mark_issued(*release_b);
++
++    // Let the P trigger, data sends, remote pool writes and ACK sends finish,
++    // while the source-side ACK receives remain in flight.
++    finish_gc_node(fixture, 0, 0, "Q: P segment terminal observed");
++    finish_gc_node(fixture, 0, 1, "Q: trigger send terminal observed");
++    for (uint64_t id : {uint64_t(0), uint64_t(1), uint64_t(2)}) {
++        finish_gc_node(fixture, 1, id,
++                       "Q: trigger/data source node terminal observed");
++    }
++    for (uint64_t id : {uint64_t(0), uint64_t(1), uint64_t(2),
++                        uint64_t(3), uint64_t(4), uint64_t(5)}) {
++        finish_gc_node(fixture, 2, id,
++                       "Q: remote store and ACK send terminal observed");
++    }
++    fixture.committer->finalize_node_garbage();
++    expect(fixture.sources[1]->store().node_ptr(*release_a) != nullptr &&
++               fixture.sources[1]->store().node_ptr(*release_b) != nullptr,
++           "Q: live source ACK receives are retained through GC");
++
++    const GraphBatch blocked = source_release_consumer_batch(
++        1, 5, 6, 3, 4, "blocked");
++    if (!commit_gc_batch(fixture, blocked,
++                         "Q: cross-batch source release consumers validate")) {
++        return;
++    }
++    const auto restore_store_id = fixture.committer->resolve_store_id(1, 5);
++    const auto compute_store_id = fixture.committer->resolve_store_id(1, 6);
++    expect(restore_store_id.has_value() && compute_store_id.has_value(),
++           "Q: destination restore and COMP resolve to store ids");
++    const std::vector<uint64_t> blocked_free =
++        free_ids_of(fixture.sources[1]->store());
++    if (restore_store_id.has_value() && compute_store_id.has_value()) {
++        expect(!contains(blocked_free, *restore_store_id),
++               "Q: live source ACK blocks the next destination KV restore");
++        expect(!contains(blocked_free, *compute_store_id),
++               "Q: live source ACK blocks the next COMP");
++    }
++    expect(parent_and_comm_graph_is_acyclic({source, blocked}),
++           "Q: P-trigger, matched sends/recvs and source-release edges are acyclic");
++
++    // A terminal ACK releases only its own consumer; the other source ACK
++    // remains live and continues to gate its independent COMP branch.
++    fixture.sources[1]->store().mark_issued(*release_a);
++    expect(fixture.sources[1]->store().mark_terminal_observed(*release_a),
++           "Q: first source ACK terminal transition is observed once");
++    fixture.sources[1]->store().finish_node(*release_a);
++    const std::vector<uint64_t> one_released_free =
++        free_ids_of(fixture.sources[1]->store());
++    if (restore_store_id.has_value() && compute_store_id.has_value()) {
++        expect(contains(one_released_free, *restore_store_id),
++               "Q: terminal ACK releases its destination KV restore");
++        expect(!contains(one_released_free, *compute_store_id),
++               "Q: second live ACK still blocks its COMP");
++    }
++
++    finish_gc_node(fixture, 1, 5, "Q: restore terminal observed");
++    fixture.sources[1]->store().mark_issued(*release_b);
++    expect(fixture.sources[1]->store().mark_terminal_observed(*release_b),
++           "Q: second source ACK terminal transition is observed once");
++    fixture.sources[1]->store().finish_node(*release_b);
++    if (compute_store_id.has_value()) {
++        expect(contains(free_ids_of(fixture.sources[1]->store()),
++                        *compute_store_id),
++               "Q: second terminal ACK releases its COMP");
++    }
++    finish_gc_node(fixture, 1, 6, "Q: COMP terminal observed");
++    fixture.committer->finalize_node_garbage();
++    expect(fixture.sources[1]->store().erased(*release_a) &&
++               fixture.sources[1]->store().erased(*release_b),
++           "Q: terminal source ACK records are collected after their children");
++
++    const GraphBatch after_gc = source_release_consumer_batch(
++        2, 7, 8, 3, 4, "after_gc");
++    if (!commit_gc_batch(fixture, after_gc,
++                         "Q: cross-batch parents still resolve after ACK GC")) {
++        return;
++    }
++    const auto after_gc_restore =
++        fixture.committer->resolve_store_id(1, 7);
++    const auto after_gc_compute =
++        fixture.committer->resolve_store_id(1, 8);
++    const std::vector<uint64_t> after_gc_free =
++        free_ids_of(fixture.sources[1]->store());
++    expect(after_gc_restore.has_value() && after_gc_compute.has_value() &&
++               contains(after_gc_free, *after_gc_restore),
++           "Q: collected ACK parent makes the next KV restore immediately free");
++    expect(after_gc_restore.has_value() && after_gc_compute.has_value() &&
++               contains(after_gc_free, *after_gc_compute),
++           "Q: collected ACK parent makes the next COMP immediately free");
++
++    // A P-trigger cycle can be invisible to the committer's rank-local
++    // parent-edge Kahn pass: closing edge COMP -> trigger-recv becomes a
++    // cycle only after the tag-matched send->recv arcs are included. The
++    // producer-side combined-DAG gate must reject that shape.
++    GcFixture dag_fixture(0, 3);
++    GraphBatch p_trigger_with_comp = p_trigger_remote_store_batch(0, true);
++    if (!commit_gc_batch(dag_fixture, p_trigger_with_comp,
++                         "Q: P-trigger DAG probe validates in GraphBatchCommitter")) {
++        return;
++    }
++    expect(parent_and_comm_graph_is_acyclic({p_trigger_with_comp}),
++           "Q: valid P-trigger graph is acyclic after matched comm arcs");
++    p_trigger_with_comp.parent_edges.push_back(ParsedEdge{1, 5, 0});
++    expect(!parent_and_comm_graph_is_acyclic({p_trigger_with_comp}),
++           "Q: matched P-trigger cycle oracle catches cross-rank closure");
++}
++
+ void test_gc_bounded_id_history_and_pruning() {
+     GcFixture fixture;
+ 
+@@ -2272,6 +2601,7 @@ int main() {
+     test_train_batch_drain_and_exit_markers(f);
+     test_hbm_charge_key_parsing(f);
+     test_gc_bounded_id_history_and_pruning();
++    test_source_release_cross_batch_and_p_trigger_dag();
+     test_gc_amortized_tracking_bound();
+     test_preseeded_store_id_is_captured();
+     test_affine_drift_fails_closed();
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc
+index 4821923..864d999 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc
+@@ -422,6 +422,42 @@ void test_workspace_v2_snapshot_rules() {
+                parsed.workspace_capacity_snapshot[1].resident_kv_bytes == 512,
+            "v2 snapshot parses the full rank/revision/capacity table");
+ 
++    auto bounded = response;
++    bounded["workspace_capacity_snapshot"]["ranks"][0]
++           ["prospective_workspace_bytes"] = 800;
++    bounded["workspace_capacity_snapshot"]["ranks"][1]
++           ["prospective_workspace_bytes"] = 0;
++    try {
++        const auto with_bound = parse_graph_batch(bounded, 2, 2, request_state);
++        expect(with_bound.workspace_capacity_snapshot[0].has_prospective_workspace &&
++                   with_bound.workspace_capacity_snapshot[0].prospective_workspace_bytes == 800 &&
++                   with_bound.workspace_capacity_snapshot[1].has_prospective_workspace &&
++                   with_bound.workspace_capacity_snapshot[1].prospective_workspace_bytes == 0,
++               "optional future bound preserves exact bytes and explicit zero");
++    } catch (const std::exception&) {
++        expect(false, "valid full-rank prospective workspace rejected");
++    }
++    auto invalid_bound = bounded;
++    invalid_bound["workspace_capacity_snapshot"]["ranks"][0]
++                 ["prospective_workspace_bytes"] = 801;
++    expect_v2_parse_error(invalid_bound, request_state,
++                          "prospective bound must fit with Python base",
++                          "prospective workspace plus base-used");
++    invalid_bound = bounded;
++    invalid_bound["workspace_capacity_snapshot"]["ranks"][1]
++                 .erase("prospective_workspace_bytes");
++    expect_v2_parse_error(invalid_bound, request_state,
++                          "prospective bounds cover every rank",
++                          "prospective workspace must cover every rank");
++    for (const auto& invalid : nlohmann::json::array({true, -1, 800.0})) {
++        invalid_bound = bounded;
++        invalid_bound["workspace_capacity_snapshot"]["ranks"][0]
++                     ["prospective_workspace_bytes"] = invalid;
++        expect_v2_parse_error(invalid_bound, request_state,
++                              "prospective bound requires exact unsigned bytes",
++                              "prospective_workspace_bytes");
++    }
++
+     auto malformed = response;
+     malformed.erase("workspace_capacity_snapshot");
+     expect_v2_parse_error(malformed, request_state,
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/workspace_admission_test.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/workspace_admission_test.cc
+index 98be47f..3a720e3 100644
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/workspace_admission_test.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/workspace_admission_test.cc
+@@ -148,11 +148,88 @@ void test_raii_move_identity_and_invalid_snapshot() {
+            "overflowing or invalid snapshots fail without ledger mutation");
+ }
+ 
++void test_immutable_prospective_bound() {
++    WorkspaceAdmission ledger(0);
++    auto bounded = snapshot(0);
++    bounded.has_prospective_workspace = true;
++    bounded.prospective_workspace_bytes = 600;
++    ledger.validate_capacity_snapshot(bounded);
++    ledger.install_capacity_snapshot_unchecked(bounded);
++    expect(ledger.active_workspace_bytes() == 0 &&
++               ledger.workspace_revision() == 0 &&
++               ledger.capacity_snapshot_view().prospective_workspace_bytes == 600,
++           "a future margin does not fabricate an active lease or revision");
++
++    bool uncovered = false;
++    try {
++        (void)ledger.try_acquire(50, 0, 601);
++    } catch (const std::runtime_error&) {
++        uncovered = true;
++    }
++    expect(uncovered && ledger.active_lease_count() == 0 &&
++               ledger.workspace_revision() == 0,
++           "an uncovered actual Plan fails before mutation");
++    auto actual = ledger.try_acquire(51, 0, 600);
++    expect(actual.status == WorkspaceAdmission::AcquireStatus::Acquired,
++           "a covered actual Plan can use the whole reserved fit margin");
++    auto live = bounded;
++    live.workspace_revision = ledger.workspace_revision();
++    ledger.validate_capacity_snapshot(live);
++    expect(ledger.active_workspace_bytes() == 600,
++           "the active lease and future margin are combined by max");
++    actual.lease.release();
++
++    auto invalid = bounded;
++    invalid.workspace_revision = ledger.workspace_revision();
++    invalid.resident_kv_bytes += 1;
++    bool insufficient = false;
++    try {
++        ledger.validate_capacity_snapshot(invalid);
++    } catch (const std::runtime_error&) {
++        insufficient = true;
++    }
++    expect(insufficient && ledger.active_workspace_bytes() == 0,
++           "a capacity view must preserve the future margin after release");
++    invalid = bounded;
++    invalid.workspace_revision = ledger.workspace_revision();
++    invalid.prospective_workspace_bytes = 599;
++    bool changed = false;
++    try {
++        ledger.validate_capacity_snapshot(invalid);
++    } catch (const std::runtime_error&) {
++        changed = true;
++    }
++    invalid.has_prospective_workspace = false;
++    invalid.prospective_workspace_bytes = 0;
++    bool removed = false;
++    try {
++        ledger.validate_capacity_snapshot(invalid);
++    } catch (const std::runtime_error&) {
++        removed = true;
++    }
++    expect(changed && removed,
++           "a future bound cannot change or disappear across deliveries");
++
++    WorkspaceAdmission zero(0);
++    auto zero_bound = snapshot(0);
++    zero_bound.has_prospective_workspace = true;
++    zero.validate_capacity_snapshot(zero_bound);
++    zero.install_capacity_snapshot_unchecked(zero_bound);
++    bool nonzero = false;
++    try {
++        (void)zero.try_acquire(1, 0, 1);
++    } catch (const std::runtime_error&) {
++        nonzero = true;
++    }
++    expect(nonzero, "an explicit zero bound remains distinct from no bound");
++}
++
+ }  // namespace
+ 
+ int main() {
+     test_snapshot_and_checked_admission();
+     test_raii_move_identity_and_invalid_snapshot();
++    test_immutable_prospective_bound();
+     if (!g_ok) return 1;
+     std::puts("[workspace_admission_test] ALL PASS");
+     return 0;
+diff --git a/astra-sim-wscllm-LRU/extern/die_model/coarse/RELEASE.json b/astra-sim-wscllm-LRU/extern/die_model/coarse/RELEASE.json
+index 88acd9a..fe13e30 100644
+--- a/astra-sim-wscllm-LRU/extern/die_model/coarse/RELEASE.json
++++ b/astra-sim-wscllm-LRU/extern/die_model/coarse/RELEASE.json
+@@ -1,15 +1,15 @@
+ {
+   "schema": "coarse_die_release_v2",
+-  "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
++  "source_digest": "9d025e25699e44b708997da5e4bc9c45e60c75b02166be931282f20921c0c4f4",
+   "files": {
+     "CMakeLists.txt": "7fa17ffb2eb8ef8eca8393455efe09eda047c460c9b68bee0b830550bb6021ce",
+-    "include/coarse_die/Capi.h": "391dd8876e323ae24e767e6d5ac3f521a2efdcbef0acc098c499b82b1f417044",
++    "include/coarse_die/Capi.h": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
+     "include/coarse_die/Execution.hh": "3916d001b1c42e87b71177da362d91c8d9d056668e6f7524d9b4c551e2e7f5e1",
+     "include/coarse_die/Hardware.hh": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+     "include/coarse_die/Memory.hh": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+-    "include/coarse_die/Plan.hh": "c8981ea77ad30fcd5e7037d645e76a04842c028b116811ed3282c2388b2ce5fe",
+-    "src/Capi.cc": "87e2bb52e871fda87d4b49f3c0141c5b00fa10385a0de0a9a913d29ec9e6abbd",
+-    "src/Compiler.cc": "11cabc1e3be58bb2d05899c579e1a72ae9c194169b2fd9f9958565f1ab9cc714",
++    "include/coarse_die/Plan.hh": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
++    "src/Capi.cc": "d6c4ead1aabe7a82cdf331e7ea737ff19dcecdd3ed94a014c35a3f9ae1b2bb87",
++    "src/Compiler.cc": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+     "src/EquivalentWork.hh": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+     "src/Execution.cc": "c96a0555cb23c8c31ba5ab191aae275dbdaa65b7d17e15eb0249a9c35e9c2cb3",
+     "src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+@@ -17,7 +17,7 @@
+     "src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+     "src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+     "src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+-    "src/Mapping.cc": "b78bcf1874d8c16f8be6cdc6d502f63912592b307403728b855f457c1054d070",
++    "src/Mapping.cc": "5dc4a7ccea972d15e30371bc0c8534b3ffbdf5921bf759d918fd096737c0cd90",
+     "src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+     "configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+     "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+diff --git a/astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Capi.h b/astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Capi.h
+index e52ab3b..27605c8 100644
+--- a/astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Capi.h
++++ b/astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Capi.h
+@@ -51,6 +51,10 @@ const char* die_coarse_hardware_summary_v2(DieHandle);
+ /* Read-only compile-time workspace envelope over every fixed mapping
+  * candidate for one task; creates no Plan handle and does not touch cache. */
+ const char* die_coarse_workspace_envelope_v2(DieHandle,const char*);
++/* Candidate-independent capacity upper bound over all permitted mapping
++ * lifetimes before SRAM feasibility filtering. It does not prove that the task
++ * has an executable mapping; creates no Plan handle and does not touch cache. */
++const char* die_coarse_workspace_capacity_bound_v2(DieHandle,const char*);
+ /* {"specs":[task,...]}; results/errors are positional. compile_batch results
+  * contain plan_handle, plan_hash, summary. release each returned plan handle. */
+ const char* die_coarse_compile_batch_v2(DieHandle,const char*);
+diff --git a/astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Plan.hh b/astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Plan.hh
+index 2fa560e..02aed88 100644
+--- a/astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Plan.hh
++++ b/astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Plan.hh
+@@ -112,12 +112,29 @@ struct WorkspaceEnvelope {
+ };
+ WorkspaceEnvelope compile_workspace_envelope(const Hardware&,
+                                               const nlohmann::json& task);
++// Candidate-independent capacity upper bound for every template permitted by
++// the normalized task. This intentionally omits SRAM feasibility filtering and
++// does not prove that the task has an executable mapping.
++struct WorkspaceCapacityBound {
++    std::uint64_t hbm_workspace_upper_bound_bytes = 0;
++    std::string hardware_fingerprint;
++    std::string normalized_task_fingerprint;
++    std::string op_kind;
++    std::string phase;
++    nlohmann::json normalized_task;
++};
++WorkspaceCapacityBound compile_workspace_capacity_bound(
++    const Hardware&, const nlohmann::json& task);
+ nlohmann::json estimate_alone(const Hardware&, const Plan&);
+ std::string stable_hash(const std::string& text);
+ nlohmann::json plan_to_json(const Plan&);
+ std::shared_ptr<const Plan> plan_from_json(const nlohmann::json&);
+ 
+ namespace detail {
++// Checked-u128 lifetime formula shared by mapping workspace assignment and
++// the candidate-independent compiler bound.
++std::uint64_t workspace_capacity_upper_bound(
++    const Hardware&, const nlohmann::json& normalized_task);
+ // Run the structural checks used by plan_to_json() without allocating a JSON
+ // payload or computing its canonical hash. Compiler-only unsealed candidates
+ // use this before their Runtime trial; public Plans still use plan_to_json().
+diff --git a/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Capi.cc b/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Capi.cc
+index 1aa86c3..eade3ba 100644
+--- a/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Capi.cc
++++ b/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Capi.cc
+@@ -375,6 +375,19 @@ const char* die_coarse_workspace_envelope_v2(DieHandle h,const char* input) {
+             {"op_kind",envelope.op_kind},{"phase",envelope.phase},
+             {"normalized_task",envelope.normalized_task}};});
+ }
++const char* die_coarse_workspace_capacity_bound_v2(DieHandle h,const char* input) {
++    return result([&]{auto& m=require(models,h); const auto task=parse(input);
++        const auto bound=compile_workspace_capacity_bound(m->hardware,task);
++        return json{{"schema_version",2},
++            {"workspace_capacity_bound_schema_version",1},
++            {"capacity_model_revision","workspace_lifetimes_v1"},
++            {"capacity_bound_kind","all_template_lifetimes_without_sram_filter"},
++            {"hbm_workspace_upper_bound_bytes",bound.hbm_workspace_upper_bound_bytes},
++            {"hardware_fingerprint",bound.hardware_fingerprint},
++            {"normalized_task_fingerprint",bound.normalized_task_fingerprint},
++            {"op_kind",bound.op_kind},{"phase",bound.phase},
++            {"normalized_task",bound.normalized_task}};});
++}
+ const char* die_coarse_compile_batch_v2(DieHandle m,const char* s) { return compile_batch_result(m,s); }
+ const char* die_coarse_estimate_batch_v2(DieHandle m,const char* s) { return result([&]{return estimate_batch(m,s);}); }
+ int die_coarse_create_runtime_v2(DieHandle m,DieHandle* out) {
+diff --git a/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Compiler.cc b/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Compiler.cc
+index ad9bc2b..d4c11ab 100644
+--- a/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Compiler.cc
++++ b/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Compiler.cc
+@@ -520,6 +520,8 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
+ 
+   const std::string expected_hardware = hardware.fingerprint.empty()
+       ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
++  const u64 capacity_upper=
++      detail::workspace_capacity_upper_bound(hardware,normalized);
+   u64 maximum = 0;
+   for (const auto& candidate : candidates) {
+     if (!candidate || candidate->task != normalized ||
+@@ -528,6 +530,8 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
+     }
+     maximum = std::max(maximum, hbm_workspace_peak_bytes(*candidate));
+   }
++  if(maximum>capacity_upper)
++    fail("compile", "mapping_invariant: candidate workspace exceeds the all-template lifetime bound");
+ 
+   WorkspaceEnvelope result;
+   result.candidate_count = static_cast<u64>(candidates.size());
+@@ -540,6 +544,21 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
+   return result;
+ }
+ 
++WorkspaceCapacityBound compile_workspace_capacity_bound(
++    const Hardware& hardware,const nlohmann::json& task) {
++  const nlohmann::json normalized=normalize_task(hardware,task);
++  WorkspaceCapacityBound result;
++  result.hbm_workspace_upper_bound_bytes=
++      detail::workspace_capacity_upper_bound(hardware,normalized);
++  result.hardware_fingerprint=hardware.fingerprint.empty()
++      ?stable_hash(hardware.input.dump()):hardware.fingerprint;
++  result.normalized_task_fingerprint=stable_hash(normalized.dump());
++  result.op_kind=normalized.at("op_kind").get<std::string>();
++  result.phase=normalized.at("phase").get<std::string>();
++  result.normalized_task=normalized;
++  return result;
++}
++
+ std::shared_ptr<const Plan> compile(const Hardware& hardware,
+                                    const nlohmann::json& task) {
+   const nlohmann::json normalized = normalize_task(hardware, task);
+diff --git a/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Mapping.cc b/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Mapping.cc
+index 8133942..f7d2d99 100644
+--- a/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Mapping.cc
++++ b/astra-sim-wscllm-LRU/extern/die_model/coarse/src/Mapping.cc
+@@ -225,6 +225,66 @@ std::vector<Span> spans_of(const nlohmann::json& task) {
+   return result;
+ }
+ 
++u128 attention_sum_kv_lengths(const Span& s) {
++  return add128(mul128(s.count,s.kv,"attention KV span sum"),
++      mul128(s.kv_stride,mul128(s.count,s.count-1,"attention KV span sum")/2,
++             "attention KV span sum"),"attention KV span sum");
++}
++
++// Full score materialization charges each query row against the complete KV
++// length declared for its request, independent of causal masking and tile size.
++u128 attention_span_rectangle_slots(const Span& s) {
++  return mul128(s.q,attention_sum_kv_lengths(s),
++                "materialized attention score slots");
++}
++
++u128 attention_span_score_slots(const Span& s,u64 qh) {
++  return mul128(mul128(attention_span_rectangle_slots(s),s.batch,
++                       "attention batch score slots"),qh,
++                "attention score heads");
++}
++
++u128 attention_span_query_rows(const Span& s,u64 qh) {
++  const u128 request_heads=mul128(mul128(s.count,s.batch,
++      "attention heads"),qh,"attention heads");
++  return mul128(s.q,request_heads,"query rows");
++}
++
++std::pair<u128,u128> attention_materialized_counts(
++    const std::vector<Span>& spans,u64 qh) {
++  u128 score_slots=0,query_rows=0;
++  for(const auto& s:spans) {
++    score_slots=add128(score_slots,attention_span_score_slots(s,qh),
++                       "attention slots");
++    query_rows=add128(query_rows,attention_span_query_rows(s,qh),
++                      "attention query rows");
++  }
++  return {score_slots,query_rows};
++}
++
++u128 attention_workspace_from_counts(u128 score_slots,u128 query_rows,
++                                     u64 head_dim,
++                                     const std::string& output_dtype,
++                                     const std::string& mode,
++                                     bool staged_full) {
++  const u128 score_bytes=mul128(score_slots,4,"score bytes");
++  if(mode=="qk") return score_bytes;
++  if(mode!="both"||!staged_full) return 0;
++  const u128 probability_bytes=score_bytes;
++  const u128 cast_bytes=output_dtype=="fp32"?0:
++      bytes(mul128(query_rows,head_dim,"attention FP32 output"),"fp32");
++  return add128(add128(score_bytes,probability_bytes,
++                       "materialized score/probability workspace"),
++                cast_bytes,"materialized attention workspace");
++}
++
++u128 ffn_workspace_from_middle_elements(u128 middle_elements,
++                                        const std::string& middle_dtype,
++                                        bool swiglu) {
++  return mul128(bytes(middle_elements,middle_dtype),swiglu?2:1,
++                "FFN workspace");
++}
++
+ u128 valid_pairs_one(const Span& s) {
+   const u128 q0 = s.qs, k0 = s.ks, q = s.q, kv = s.kv;
+   if (q0 + q - 1 < k0) return 0;
+@@ -1123,9 +1183,7 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
+   const double kappa_quant=perf(hw,"kappa_quant_eqops",4);
+   const double kappa_acc=perf(hw,"kappa_acc_convert_eqops",2);
+   auto sum_kv_lengths=[](const Span& s)->u128 {
+-    return add128(mul128(s.count,s.kv,"attention KV span sum"),
+-        mul128(s.kv_stride,mul128(s.count,s.count-1,"attention KV span sum")/2,"attention KV span sum"),
+-        "attention KV span sum");
++    return attention_sum_kv_lengths(s);
+   };
+   auto sum_storage_tensor_bytes=[&](const Span& s,u64 features,const std::string& dt)->u128 {
+     const u128 elements=mul128(sum_kv_lengths(s),features,"attention source tensor elements");
+@@ -1298,13 +1356,14 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
+       // Only fused causal attention skips future KV blocks.
+       const bool materialized=full||mode!="both";
+       const auto causal_stat=causal&&!materialized?causal_counts(s,tq,tk):AttentionTileCounts{};
+-      if (materialized) { sl=mul128(s.q,kv_sum,"materialized attention score slots");pr=mul128(qtiles,kv_sum,"materialized attention KV reads"); }
++      if (materialized) { sl=attention_span_rectangle_slots(s);pr=mul128(qtiles,kv_sum,"materialized attention KV reads"); }
+       else if (causal) { sl=causal_stat.slots; pr=causal_stat.prefix; }
+       else { sl=mul128(s.q,kv_sum,"noncausal score slots");pr=mul128(qtiles,kv_sum,"noncausal attention KV reads"); }
+       const u128 request_heads=mul128(request_count,qh,"attention heads");
+-      const u128 score_slots=mul128(mul128(sl,s.batch,"attention batch score slots"),qh,"attention score heads");
++      const u128 score_slots=materialized?attention_span_score_slots(s,qh):
++          mul128(mul128(sl,s.batch,"attention batch score slots"),qh,"attention score heads");
+       const u128 score_valid=mul128(mul128(valid_pairs(s,causal),s.batch,"attention batch valid pairs"),qh,"attention valid heads");
+-      const u128 query_count=mul128(s.q,request_heads,"query rows");
++      const u128 query_count=attention_span_query_rows(s,qh);
+       output_tasks=add128(output_tasks,mul128(qtiles,request_heads,"attention output tasks"),"attention output tasks");
+       const u128 active_rows_one=causal&&!materialized?causal_stat.active_rows:mul128(s.q,s.count,"attention active rows");
+       const u128 active_rows=mul128(active_rows_one,s.batch,"attention batch active rows");
+@@ -1470,7 +1529,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
+         (mode=="qk"?qk_read:(mode=="av"?pv_read:fused_read));
+     const u128 totalwrite=staged_full&&mode=="both"?add128(add128(qk_write,soft_write,"full attention writes"),add128(pv_write,cast_write,"full attention writes"),"full attention writes"):
+         (mode=="qk"?qk_write:(mode=="av"?pv_write:fused_write));
+-    const u128 sb=mode=="qk"?scoreb:(staged_full&&mode=="both"?add128(add128(scoreb,probb,"materialized score/probability workspace"),cast_bytes,"materialized attention workspace"):0);
++    const u128 sb=attention_workspace_from_counts(
++        slots,queryrows,hd,dtype_o,mode,staged_full);
+     m.workspace=sb;m.score_bytes=(mode=="qk"||(staged_full&&mode=="both"))?scoreb:0;m.probability_bytes=probb;
+     m.score_slots=slots;m.valid_pairs=valid;m.logical=logical;
+     m.hbm_read=0;m.hbm_write=0;
+@@ -1630,6 +1690,56 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
+ 
+ }  // namespace
+ 
++std::uint64_t workspace_capacity_upper_bound(
++    const Hardware& hardware,const nlohmann::json& task) {
++  const std::string op=gets(task,"op_kind");
++  if(op=="attention"||op=="attention_region"||op=="qk"||op=="av") {
++    const auto spans=spans_of(task);
++    if(spans.empty()) fail("task.spans: attention requires at least one span");
++    const u64 qh=shape_u(task,"q_heads",shape_u(task,"q_heads_local",1));
++    const u64 kvh=shape_u(task,"kv_heads",shape_u(task,"kv_heads_local",1));
++    const u64 hd=shape_u(task,"head_dim",1);
++    if(!qh||!kvh||qh%kvh)
++      fail("unsupported_head_mapping: standard GQA requires q_heads divisible by kv_heads");
++    const std::string output_dtype=dtype(task,"output");
++    if(dtype(task,"scores","fp32")!="fp32"||
++       dtype(task,"accumulator","fp32")!="fp32")
++      fail("unsupported_dtype: attention score and accumulator workspaces are fixed FP32");
++
++    const std::string mode=op=="qk"?"qk":(op=="av"?"av":"both");
++    if(mode=="av") return 0;
++    if((op=="attention"||op=="attention_region")&&
++       gets(task,"fusion_policy","auto")=="fused") return 0;
++    const auto counts=attention_materialized_counts(spans,qh);
++    const u128 executions=mul128(getu(task,"layer_instances",1),
++        getu(task,"weight_passes",1),"attention executions");
++    const u128 score_slots=mul128(counts.first,executions,
++                                   "attention executions");
++    const u128 query_rows=mul128(counts.second,executions,
++                                  "attention query executions");
++    const u128 peak=attention_workspace_from_counts(
++        score_slots,query_rows,hd,output_dtype,mode,true);
++    return as_u64(peak,"HBM workspace");
++  }
++  if(op=="ffn_region") {
++    const std::string variant=gets(task.at("tensor_shapes"),"mlp_variant","swiglu");
++    const bool swiglu=variant=="swiglu";
++    const std::string fusion=gets(task,"fusion_policy","auto");
++    if(fusion=="fused"&&!swiglu)
++      fail("unsupported_mapping: fused_output_shard_v2 supports SwiGLU only");
++    if(fusion=="fused") return 0;
++    const u64 M=shape_u(task,"m",1);
++    const u64 H=shape_u(task,"hidden",1);
++    const u64 F=shape_u(task,"ffn",H);
++    const u128 middle=mul128(M,F,"FFN intermediate");
++    const u128 peak=ffn_workspace_from_middle_elements(
++        middle,dtype(task,"activations"),swiglu);
++    return as_u64(peak,"HBM workspace");
++  }
++  (void)hardware;
++  return 0;
++}
++
+ std::array<Activity, 3> gemm_os_single_core_resource_facts(
+     const Hardware& hardware, const gemm_os_access_counter::Input& input) {
+   if (du(hardware,"die","core_count")!=1 ||
+@@ -1845,7 +1955,8 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
+       // up/gate writes already belong to their GEMM store activities. The
+       // activation reuses one intermediate allocation; only two tensors are
+       // live at once, independent of sequential layer/pass repetitions.
+-      z.workspace=std::max(z.workspace,mul128(bytes(middle_one,middle_dtype),swiglu?2:1,"FFN workspace"));
++      z.workspace=std::max(z.workspace,
++          ffn_workspace_from_middle_elements(middle_one,middle_dtype,swiglu));
+       const u128 actops=mul128(swiglu?16:15,middle,"FFN activation eqops");
+       add_vector(*q,z,hardware,topo,middle,actops,mul128(middle_bytes,swiglu?2:1,"FFN activation reads"),middle_bytes,active,"ffn_activation_v2");
+       add_gemm_epoch(*q,z,hardware,topo,M,H,F,middle_dtype,wdt,ydt,layers,passes,down,"ffn_down_v2");
+diff --git a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py
+index 92eea46..286d347 100755
+--- a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py
++++ b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py
+@@ -853,6 +853,7 @@ def _emit_kv_transfer(
+     pending_gate: Optional[PendingHistoryGate] = None,
+     trigger_gate: Optional[TransferTriggerGate] = None,
+     extra_arm_ids: Optional[dict] = None,
++    source_release_arm_ids: Optional[dict] = None,
+ ) -> dict[str, object]:
+     """发射一个 KV 转移动作(照抄 sh_2.0（按函数名对应）,适配本仓 config/组
+     类型;HBM 计费三险逐节点核对见策略文档 §9 地图):
+@@ -861,6 +862,10 @@ def _emit_kv_transfer(
+     显式传参形态 {rank: [节点 id]};remote_load 链在对应 rank 的首节点
+     显式 arm（数据面中立化后主链 pending 不再被传输链消费）。
+ 
++    source_release_arm_ids:跨会话容量释放边 {target_rank: [节点 id]}。
++    remote_load 在目标 HBM restore 写、noc_migrate 在 recv_kv 数据落地处
++    显式 arm；pool store→restore 顺序仍由 extra_arm_ids 独立维护。
++
+     - local_hit:无数据 shard,仅按 pending 门 arm 到达/interval gates;
+     - noc_migrate:shard send/recv(两端默认 charged)+ 1B ack 对(源端
+       收 ack 后才物理释放);
+@@ -975,7 +980,9 @@ def _emit_kv_transfer(
+                     src=shard.source_rank,
+                     dst=shard.target_rank,
+                     comm_size=shard.bytes,
+-                    comm_tag=data_tag))
++                    comm_tag=data_tag),
++                *((source_release_arm_ids or {}).get(
++                    shard.target_rank) or ()))
+             ack_tag = tag_allocator.take()
+             # 2026-10-11 死锁真修(裁决8 第二轮,run5 census 六边环):
+             # ack 对是簿记节点(仓内无消费者),裸挂主链 frontier 会与集合
+@@ -991,7 +998,7 @@ def _emit_kv_transfer(
+                     comm_size=1,
+                     comm_tag=ack_tag),
+                 recv_kv_id)
+-            _frontier_neutral(
++            source_release_node_id = _frontier_neutral(
+                 builders[shard.source_rank],
+                 lambda: builders[shard.source_rank].comm_recv(
+                     f"{action_name}_shard{shard_index}_ack_from_rank{shard.target_rank}",
+@@ -1010,6 +1017,7 @@ def _emit_kv_transfer(
+                     "data_tag": data_tag,
+                     "ack_tag": ack_tag,
+                     "source_release_dependency": "noc_migration_ack_recv",
++                    "source_release_node_id": source_release_node_id,
+                     "history_arrival_node_ids": {
+                         shard.target_rank: recv_kv_id},
+                 }
+@@ -1058,6 +1066,7 @@ def _emit_kv_transfer(
+                     {
+                         "direct_edge_access": True,
+                         "source_release_dependency": "mem_store_completion",
++                        "source_release_node_id": edge_store_node_id,
+                         "edge_store_node_id": edge_store_node_id,
+                     }
+                 )
+@@ -1107,7 +1116,7 @@ def _emit_kv_transfer(
+                         comm_size=1,
+                         comm_tag=ack_tag),
+                     edge_store_node_id)
+-                _frontier_neutral(
++                source_release_node_id = _frontier_neutral(
+                     builders[source_rank],
+                     lambda: builders[source_rank].comm_recv(
+                         f"{action_name}_shard{shard_index}_ack_from_edge{edge_rank}",
+@@ -1115,14 +1124,15 @@ def _emit_kv_transfer(
+                         dst=source_rank,
+                         comm_size=1,
+                         comm_tag=ack_tag))
+-                # 源端 ack recv 节点 id 此前曾落盘 shard 行,全仓零读者
+-                # (2026-09-25 审计删除);ack 发射链本体不变。
++                # The source-side ACK receive is the physical release point;
++                # keep the edge mem_store ID separately for pool ordering.
+                 record.update(
+                     {
+                         "direct_edge_access": False,
+                         "data_tag": data_tag,
+                         "ack_tag": ack_tag,
+                         "source_release_dependency": "remote_store_ack_recv",
++                        "source_release_node_id": source_release_node_id,
+                         "edge_store_node_id": edge_store_node_id,
+                     }
+                 )
+@@ -1216,7 +1226,8 @@ def _emit_kv_transfer(
+                     # WP5 三段分解的 restore 窗口据此取真值)。
+                     f"{action_name}_shard{shard_index}_target_hbm_write_kv",
+                     shard.bytes),
+-                restore_gate)
++                restore_gate,
++                *((source_release_arm_ids or {}).get(target_rank) or ()))
+             if target_hbm_completion_node_id is None:
+                 raise RuntimeError("target HBM restore did not generate a node")
+             record.update(
+diff --git a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_workspace_envelope.py b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_workspace_envelope.py
+index 8c66a40..07192f4 100644
+--- a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_workspace_envelope.py
++++ b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_workspace_envelope.py
+@@ -40,6 +40,19 @@ class WorkspaceEnvelope:
+     normalized_task: dict[str, Any]
+ 
+ 
++@dataclass(frozen=True)
++class WorkspaceCapacityBound:
++    """Candidate-independent lifetime bound; not an executability result."""
++
++    capacity_model_revision: str
++    hbm_workspace_upper_bound_bytes: int
++    hardware_fingerprint: str
++    normalized_task_fingerprint: str
++    op_kind: str
++    phase: str
++    normalized_task: dict[str, Any]
++
++
+ def _default_repo_root() -> Path:
+     # Match config_resolver.py's root, which is sh_test_mesh/../.
+     return Path(__file__).resolve().parents[4]
+@@ -442,6 +455,56 @@ class DieWorkspaceEnvelopeClient:
+         )
+         return self._validate_envelope(raw_envelope)
+ 
++    def query_capacity_bound(self, task: Mapping[str, Any]) -> WorkspaceCapacityBound:
++        """Ask C++ for all allowed lifetimes before SRAM feasibility filtering."""
++        model_handle = self._require_open()
++        if not isinstance(task, Mapping):
++            raise WorkspaceEnvelopeError("task must be a JSON object mapping")
++        _validate_task_u64s(task)
++        symbol = "die_coarse_workspace_capacity_bound_v2"
++        if not hasattr(self._library, symbol):
++            raise WorkspaceEnvelopeError(f"coarse DIE library lacks {symbol}")
++        query = getattr(self._library, symbol)
++        query.argtypes = [ctypes.c_uint64, ctypes.c_char_p]
++        query.restype = ctypes.c_void_p
++        try:
++            encoded = json.dumps(task, ensure_ascii=False, separators=(",", ":"),
++                                 allow_nan=False).encode("utf-8")
++        except (TypeError, ValueError, UnicodeEncodeError) as error:
++            raise WorkspaceEnvelopeError(f"task is not valid UTF-8 JSON: {error}") from error
++        pointer = query(model_handle, encoded)
++        if not pointer:
++            raise WorkspaceEnvelopeError(f"{symbol} failed: {_last_error(self._library)}")
++        raw = _require_object(_read_owned_json(self._library, pointer, symbol),
++                              "workspace capacity bound")
++        if (_require_u64(raw.get("schema_version"), "schema_version") != 2 or
++                _require_u64(raw.get("workspace_capacity_bound_schema_version"),
++                             "workspace_capacity_bound_schema_version") != 1):
++            raise WorkspaceEnvelopeError("unsupported workspace capacity bound schema")
++        if (raw.get("capacity_model_revision") != "workspace_lifetimes_v1" or
++                raw.get("capacity_bound_kind") !=
++                "all_template_lifetimes_without_sram_filter"):
++            raise WorkspaceEnvelopeError("unsupported workspace capacity lifetime model")
++        peak = _require_u64(raw.get("hbm_workspace_upper_bound_bytes"),
++                            "hbm_workspace_upper_bound_bytes")
++        hardware = _require_fingerprint(raw.get("hardware_fingerprint"),
++                                        "hardware_fingerprint")
++        if hardware != self.hardware_fingerprint:
++            raise WorkspaceEnvelopeError("capacity bound hardware identity mismatch")
++        normalized = _require_object(raw.get("normalized_task"), "normalized_task")
++        _validate_task_u64s(normalized, "normalized_task")
++        fingerprint = _require_fingerprint(raw.get("normalized_task_fingerprint"),
++                                           "normalized_task_fingerprint")
++        if fingerprint != _canonical_task_fingerprint(normalized):
++            raise WorkspaceEnvelopeError("capacity bound normalized task identity mismatch")
++        op, phase = raw.get("op_kind"), raw.get("phase")
++        if (normalized.get("schema") != "coarse_die_task_v2" or
++                not isinstance(op, str) or not isinstance(phase, str) or
++                normalized.get("op_kind") != op or normalized.get("phase") != phase):
++            raise WorkspaceEnvelopeError("capacity bound operation/phase identity mismatch")
++        return WorkspaceCapacityBound("workspace_lifetimes_v1", peak, hardware,
++                                      fingerprint, op, phase, normalized)
++
+     def _validate_envelope(self, raw: dict[str, Any]) -> WorkspaceEnvelope:
+         schema_version = _require_u64(raw.get("schema_version"), "schema_version")
+         envelope_schema_version = _require_u64(
+diff --git a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py
+index cc2859c..5105fcf 100755
+--- a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py
++++ b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py
+@@ -119,6 +119,7 @@ class OnlineTraceBuilder:
+         self.next_id = 0
+         self.previous_id = None
+         self.pending_extra_dependencies = []
++        self.before_capacity_comp = None
+         # M1 收集即释放(2026-08-29):这两个 list 只保存自上次 _collect
+         # 以来尚未交付的记录；交付后立即 clear，跨批状态只由 next_id、
+         # previous_id 与账本保存。禁止按 list 位置回读节点(id 来自
+@@ -371,6 +372,9 @@ class OnlineTraceBuilder:
+         节点,runtime_ns 保持缺省 0——die_op_spec 存在 ⇒ runtime_ns 必为
+         0);op_role 缺省 "compute"(不写键,schema 缺省即 compute),仅
+         marker/哨兵显式写 "control_marker"(契约 §7 裁定 8)。"""
++        if (self.before_capacity_comp is not None
++                and op_role != "control_marker"):
++            self.before_capacity_comp()
+         node = self._new_node(name, COMP_NODE)
+         node["compute"]["num_ops"] = self._uint64(num_ops)
+         node["compute"]["tensor_size"] = self._uint64(tensor_size)
+@@ -426,10 +430,13 @@ class GraphBatchBuilder:
+     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界
+     发射 prefill 整段 / decode 实例迭代列车,并维护 completion_gates 账本。"""
+ 
+-    def __init__(self, config):
++    def __init__(self, config, *, source_release_capacity_gates=False):
+         # digest_sink 形参已删(2026-09-26 死代码清理):收下即弃、全仓
+         # 调用方只传 config,digest 行由基类 build_graph_batch 落。
+         self.config = config
++        if not isinstance(source_release_capacity_gates, bool):
++            raise TypeError("source_release_capacity_gates must be bool")
++        self.source_release_capacity_gates = source_release_capacity_gates
+         # die 后端发射语境(阶段 C;None = legacy)。online_service.py 构造
+         # 本构图器时不感知 backend——语境由 OnlineSchedulerBase 从 manifest
+         # 的 compute-cost-model/die-model-config 键构造后在每批发射前经
+@@ -442,6 +449,15 @@ class GraphBatchBuilder:
+                 rank, remote_operand_loads=config.remote_operand_loads)
+             for rank in range(config.npus_count)
+         }
++        # Source HBM release ordering is independent from same-session pool
++        # write tails.  Keep the two ledgers separate so cross-session reuse
++        # cannot consume or retire a pool-read dependency.
++        self.pending_source_release_tails = {}
++        if self.source_release_capacity_gates:
++            for rank, builder in self.builders.items():
++                builder.before_capacity_comp = (
++                    lambda rank=rank:
++                    self._consume_source_release_tails(rank))
+         self.group_by_index = dict(enumerate(config.inference_groups))
+         # session_id -> (decode_instance_index, {rank: end_barrier_id});
+         # completion_gates 只保存下一同 session turn 尚未消费的 interval
+@@ -669,7 +685,7 @@ class GraphBatchBuilder:
+                 transfer.kind,
+             )
+         )
+-        return _emit_kv_transfer(
++        record = _emit_kv_transfer(
+             config=self.config,
+             builders=self.builders,
+             group_by_index=self.group_by_index,
+@@ -679,7 +695,26 @@ class GraphBatchBuilder:
+             pending_gate=gate,
+             trigger_gate=trigger_gate,
+             extra_arm_ids=extra_arm_ids,
++            source_release_arm_ids=(
++                self._take_source_release_arms(transfer)
++                if self.source_release_capacity_gates else {}),
+         )
++        if transfer.kind == "noc_migrate":
++            self._register_source_release_record(record)
++        return record
++
++    def _take_source_release_arms(self, transfer: KVTransfer) -> dict:
++        """Take prior source releases at the earliest destination KV write."""
++        if transfer.kind not in ("remote_load", "noc_migrate"):
++            return {}
++        arms = {}
++        for shard in transfer.shards:
++            rank = shard.target_rank
++            if rank is not None and rank not in arms:
++                tails = self._take_source_release_tails(rank)
++                if tails:
++                    arms[rank] = tails
++        return arms
+ 
+     # --------------------------------------- 逐出旁路支链(2026-09-13) --
+ 
+@@ -811,6 +846,40 @@ class GraphBatchBuilder:
+                     shard["edge_rank"],
+                     shard["edge_store_node_id"],
+                 ))
++            self._register_source_release_record(record)
++
++    def _register_source_release_record(self, record) -> None:
++        """Track source HBM release independently from per-session pool tails."""
++        if (not self.source_release_capacity_gates
++                or record.get("kind") not in ("remote_store", "noc_migrate")):
++            return
++        for shard in record.get("shards", ()):
++            source_rank = shard.get("source_rank")
++            release_node_id = shard.get("source_release_node_id")
++            if (isinstance(source_rank, bool)
++                    or not isinstance(source_rank, int)
++                    or source_rank not in self.builders):
++                raise RuntimeError(
++                    "source-release record is missing a valid source rank")
++            if (isinstance(release_node_id, bool)
++                    or not isinstance(release_node_id, int)
++                    or release_node_id < 0):
++                raise RuntimeError(
++                    "source-release record is missing its node id")
++            if release_node_id >= self.builders[source_rank].next_id:
++                raise RuntimeError(
++                    "source-release node is not emitted on its source rank")
++            self.pending_source_release_tails.setdefault(
++                source_rank, []).append(release_node_id)
++
++    def _take_source_release_tails(self, rank: int) -> tuple[int, ...]:
++        if not self.source_release_capacity_gates:
++            return ()
++        return tuple(self.pending_source_release_tails.pop(rank, ()))
++
++    def _consume_source_release_tails(self, rank: int) -> None:
++        for node_id in self._take_source_release_tails(rank):
++            self.builders[rank].arm_dependency(node_id)
+ 
+     def _arm_store_tail_dependencies(self, transfer: KVTransfer,
+                                      name_prefix: str) -> dict:
+diff --git a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py
+index ca9a135..8b51dd5 100755
+--- a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py
++++ b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py
+@@ -211,7 +211,10 @@ def main(argv=None) -> int:
+     workspace_admission = _workspace_admission_mode(config)
+ 
+     # 根因 #5(主控裁决 2026-08-15 第三项):strategy 模式保持物理链。
+-    graph = GraphBatchBuilder(config)
++    graph = GraphBatchBuilder(
++        config,
++        source_release_capacity_gates=(workspace_admission == "required"),
++    )
+     # C2/D2(2026-08-28):digest 默认关(SH_GRAPH_DIGESTS=1 恢复恒写)。
+     # 把每次 GraphBatch 产出的 digest 行顺带追加写入 bridge_dir(_JsonlSink
+     # 常驻 fd 形态;语义/输出字节不变)。
+@@ -293,6 +296,15 @@ def main(argv=None) -> int:
+         raise ValueError(
+             "strategy 模式不支持 kv_cache_policy {!r}".format(
+                 config.kv_cache_policy))
++    certificate = scheduler.workspace_envelope_certificate
++    if certificate is not None:
++        certificate_path = os.path.join(args.bridge_dir, "workspace_envelope_certificate.json")
++        with open(certificate_path, "w", encoding="utf-8") as target:
++            target.write(certificate.canonical_json + "\n")
++        # Retain only the immutable rank margins and identity in the hot path.
++        # The larger proof is recorded once beside the run's bridge evidence.
++        scheduler.workspace_envelope_certificate = certificate.without_proof()
++        del certificate
+     # Scheduler 已提取构造期所需字段；不要让 main() 的局部变量再额外钉住
+     # 完整 manifest。
+     del manifest
+diff --git a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_die_workspace_envelope.py b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_die_workspace_envelope.py
+index 44d1fcc..feb5f0d 100644
+--- a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_die_workspace_envelope.py
++++ b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_die_workspace_envelope.py
+@@ -293,6 +293,34 @@ class CabiEnvelopeTests(unittest.TestCase):
+         with self.assertRaisesRegex(WorkspaceEnvelopeError, "normalized_task_fingerprint"):
+             self.client._validate_envelope(mismatched)
+ 
++    def test_capacity_bound_covers_feasible_templates_and_exact_u64(self) -> None:
++        for task in (attention_task(), ffn_task()):
++            bound = self.client.query_capacity_bound(task)
++            envelope = self.client.query(task)
++            self.assertGreaterEqual(bound.hbm_workspace_upper_bound_bytes,
++                                    envelope.max_hbm_workspace_peak_bytes)
++            self.assertEqual(bound.hardware_fingerprint, envelope.hardware_fingerprint)
++            self.assertEqual(bound.normalized_task_fingerprint,
++                             envelope.normalized_task_fingerprint)
++        large = self.client.query_capacity_bound(attention_task(1, 1 << 53))
++        self.assertEqual(large.hbm_workspace_upper_bound_bytes, (1 << 56) + 128)
++        with self.assertRaisesRegex(WorkspaceEnvelopeError, "overflow"):
++            self.client.query_capacity_bound(attention_task(1, 1 << 62))
++
++    def test_capacity_only_query_preserves_input_and_handle_lifecycle(self) -> None:
++        task = attention_task()
++        before = json.loads(json.dumps(task))
++        self.client.query_capacity_bound(task)
++        self.assertEqual(task, before)
++        invalid = attention_task()
++        invalid["spans"][0]["kv_tokens"] = True
++        with self.assertRaisesRegex(WorkspaceEnvelopeError, "uint64"):
++            self.client.query_capacity_bound(invalid)
++        scoped = DieWorkspaceEnvelopeClient(_HARDWARE_CONFIG, _REAL_LIBRARY)
++        scoped.close()
++        with self.assertRaisesRegex(WorkspaceEnvelopeError, "client is closed"):
++            scoped.query_capacity_bound(task)
++
+     def test_context_manager_closes_single_model_and_close_is_idempotent(self) -> None:
+         scoped = DieWorkspaceEnvelopeClient(_HARDWARE_CONFIG, _REAL_LIBRARY)
+         with scoped as opened:
+diff --git a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/wsc_llm_online_scheduler.py b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/wsc_llm_online_scheduler.py
+index 437ae8f..8b73cc5 100755
+--- a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/wsc_llm_online_scheduler.py
++++ b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/wsc_llm_online_scheduler.py
+@@ -433,9 +433,19 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
+ 
+         # 蓝图（离线蓝本，按阶段/函数名对应）:KV 账本。
+         # offline: wsc_llm_scheduler.py
++        self.workspace_envelope_certificate = None
++        prospective_workspace = None
++        if (workspace_admission == "required" and
++                self.die_model_context is not None and
++                self.die_model_context.profile == "coarse_die_v2"):
++            from online.manifest_workspace_envelope import derive_manifest_workspace_envelope
++            self.workspace_envelope_certificate = derive_manifest_workspace_envelope(
++                manifest, config)
++            prospective_workspace = self.workspace_envelope_certificate.bytes_by_rank
+         self.kv_manager = SessionKVCacheManager(
+             self.topology,
+             config.model,
++            prospective_workspace_bytes_by_rank=prospective_workspace,
+         )
+ 
+         # 蓝图（离线蓝本，按阶段/函数名对应）:实例账本。
+@@ -567,6 +577,10 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
+         if self.workspace_admission == "required":
+             batch["workspace_capacity_snapshot"] = (
+                 self.kv_manager.workspace_capacity_snapshot())
++            if self.workspace_envelope_certificate is not None:
++                for row in batch["workspace_capacity_snapshot"]["ranks"]:
++                    row["prospective_workspace_bytes"] = (
++                        self.workspace_envelope_certificate.bytes_by_rank[row["rank"]])
+ 
+     # ------------------------------------------------------------- 策略 --
+ 
+diff --git a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py
+index 914b86c..3e20009 100755
+--- a/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py
++++ b/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py
+@@ -1021,7 +1021,8 @@ class SessionKVCacheManager:
+                     f"workspace capacity snapshot used bytes exceed uint64 "
+                     f"on rank {rank}"
+                 )
+-            combined_bytes = used_bytes + active_workspace
++            combined_bytes = used_bytes + max(
++                active_workspace, self._prospective_workspace_bytes_by_rank[rank])
+             if combined_bytes > _UINT64_MAX:
+                 raise ValueError(
+                     f"workspace capacity snapshot combined bytes exceed "
+diff --git a/die/include/coarse_die/Capi.h b/die/include/coarse_die/Capi.h
+index e52ab3b..27605c8 100644
+--- a/die/include/coarse_die/Capi.h
++++ b/die/include/coarse_die/Capi.h
+@@ -51,6 +51,10 @@ const char* die_coarse_hardware_summary_v2(DieHandle);
+ /* Read-only compile-time workspace envelope over every fixed mapping
+  * candidate for one task; creates no Plan handle and does not touch cache. */
+ const char* die_coarse_workspace_envelope_v2(DieHandle,const char*);
++/* Candidate-independent capacity upper bound over all permitted mapping
++ * lifetimes before SRAM feasibility filtering. It does not prove that the task
++ * has an executable mapping; creates no Plan handle and does not touch cache. */
++const char* die_coarse_workspace_capacity_bound_v2(DieHandle,const char*);
+ /* {"specs":[task,...]}; results/errors are positional. compile_batch results
+  * contain plan_handle, plan_hash, summary. release each returned plan handle. */
+ const char* die_coarse_compile_batch_v2(DieHandle,const char*);
+diff --git a/die/include/coarse_die/Plan.hh b/die/include/coarse_die/Plan.hh
+index 2fa560e..02aed88 100644
+--- a/die/include/coarse_die/Plan.hh
++++ b/die/include/coarse_die/Plan.hh
+@@ -112,12 +112,29 @@ struct WorkspaceEnvelope {
+ };
+ WorkspaceEnvelope compile_workspace_envelope(const Hardware&,
+                                               const nlohmann::json& task);
++// Candidate-independent capacity upper bound for every template permitted by
++// the normalized task. This intentionally omits SRAM feasibility filtering and
++// does not prove that the task has an executable mapping.
++struct WorkspaceCapacityBound {
++    std::uint64_t hbm_workspace_upper_bound_bytes = 0;
++    std::string hardware_fingerprint;
++    std::string normalized_task_fingerprint;
++    std::string op_kind;
++    std::string phase;
++    nlohmann::json normalized_task;
++};
++WorkspaceCapacityBound compile_workspace_capacity_bound(
++    const Hardware&, const nlohmann::json& task);
+ nlohmann::json estimate_alone(const Hardware&, const Plan&);
+ std::string stable_hash(const std::string& text);
+ nlohmann::json plan_to_json(const Plan&);
+ std::shared_ptr<const Plan> plan_from_json(const nlohmann::json&);
+ 
+ namespace detail {
++// Checked-u128 lifetime formula shared by mapping workspace assignment and
++// the candidate-independent compiler bound.
++std::uint64_t workspace_capacity_upper_bound(
++    const Hardware&, const nlohmann::json& normalized_task);
+ // Run the structural checks used by plan_to_json() without allocating a JSON
+ // payload or computing its canonical hash. Compiler-only unsealed candidates
+ // use this before their Runtime trial; public Plans still use plan_to_json().
+diff --git a/die/src/Capi.cc b/die/src/Capi.cc
+index 1aa86c3..eade3ba 100644
+--- a/die/src/Capi.cc
++++ b/die/src/Capi.cc
+@@ -375,6 +375,19 @@ const char* die_coarse_workspace_envelope_v2(DieHandle h,const char* input) {
+             {"op_kind",envelope.op_kind},{"phase",envelope.phase},
+             {"normalized_task",envelope.normalized_task}};});
+ }
++const char* die_coarse_workspace_capacity_bound_v2(DieHandle h,const char* input) {
++    return result([&]{auto& m=require(models,h); const auto task=parse(input);
++        const auto bound=compile_workspace_capacity_bound(m->hardware,task);
++        return json{{"schema_version",2},
++            {"workspace_capacity_bound_schema_version",1},
++            {"capacity_model_revision","workspace_lifetimes_v1"},
++            {"capacity_bound_kind","all_template_lifetimes_without_sram_filter"},
++            {"hbm_workspace_upper_bound_bytes",bound.hbm_workspace_upper_bound_bytes},
++            {"hardware_fingerprint",bound.hardware_fingerprint},
++            {"normalized_task_fingerprint",bound.normalized_task_fingerprint},
++            {"op_kind",bound.op_kind},{"phase",bound.phase},
++            {"normalized_task",bound.normalized_task}};});
++}
+ const char* die_coarse_compile_batch_v2(DieHandle m,const char* s) { return compile_batch_result(m,s); }
+ const char* die_coarse_estimate_batch_v2(DieHandle m,const char* s) { return result([&]{return estimate_batch(m,s);}); }
+ int die_coarse_create_runtime_v2(DieHandle m,DieHandle* out) {
+diff --git a/die/src/Compiler.cc b/die/src/Compiler.cc
+index ad9bc2b..d4c11ab 100644
+--- a/die/src/Compiler.cc
++++ b/die/src/Compiler.cc
+@@ -520,6 +520,8 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
+ 
+   const std::string expected_hardware = hardware.fingerprint.empty()
+       ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
++  const u64 capacity_upper=
++      detail::workspace_capacity_upper_bound(hardware,normalized);
+   u64 maximum = 0;
+   for (const auto& candidate : candidates) {
+     if (!candidate || candidate->task != normalized ||
+@@ -528,6 +530,8 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
+     }
+     maximum = std::max(maximum, hbm_workspace_peak_bytes(*candidate));
+   }
++  if(maximum>capacity_upper)
++    fail("compile", "mapping_invariant: candidate workspace exceeds the all-template lifetime bound");
+ 
+   WorkspaceEnvelope result;
+   result.candidate_count = static_cast<u64>(candidates.size());
+@@ -540,6 +544,21 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
+   return result;
+ }
+ 
++WorkspaceCapacityBound compile_workspace_capacity_bound(
++    const Hardware& hardware,const nlohmann::json& task) {
++  const nlohmann::json normalized=normalize_task(hardware,task);
++  WorkspaceCapacityBound result;
++  result.hbm_workspace_upper_bound_bytes=
++      detail::workspace_capacity_upper_bound(hardware,normalized);
++  result.hardware_fingerprint=hardware.fingerprint.empty()
++      ?stable_hash(hardware.input.dump()):hardware.fingerprint;
++  result.normalized_task_fingerprint=stable_hash(normalized.dump());
++  result.op_kind=normalized.at("op_kind").get<std::string>();
++  result.phase=normalized.at("phase").get<std::string>();
++  result.normalized_task=normalized;
++  return result;
++}
++
+ std::shared_ptr<const Plan> compile(const Hardware& hardware,
+                                    const nlohmann::json& task) {
+   const nlohmann::json normalized = normalize_task(hardware, task);
+diff --git a/die/src/Mapping.cc b/die/src/Mapping.cc
+index 8133942..f7d2d99 100644
+--- a/die/src/Mapping.cc
++++ b/die/src/Mapping.cc
+@@ -225,6 +225,66 @@ std::vector<Span> spans_of(const nlohmann::json& task) {
+   return result;
+ }
+ 
++u128 attention_sum_kv_lengths(const Span& s) {
++  return add128(mul128(s.count,s.kv,"attention KV span sum"),
++      mul128(s.kv_stride,mul128(s.count,s.count-1,"attention KV span sum")/2,
++             "attention KV span sum"),"attention KV span sum");
++}
++
++// Full score materialization charges each query row against the complete KV
++// length declared for its request, independent of causal masking and tile size.
++u128 attention_span_rectangle_slots(const Span& s) {
++  return mul128(s.q,attention_sum_kv_lengths(s),
++                "materialized attention score slots");
++}
++
++u128 attention_span_score_slots(const Span& s,u64 qh) {
++  return mul128(mul128(attention_span_rectangle_slots(s),s.batch,
++                       "attention batch score slots"),qh,
++                "attention score heads");
++}
++
++u128 attention_span_query_rows(const Span& s,u64 qh) {
++  const u128 request_heads=mul128(mul128(s.count,s.batch,
++      "attention heads"),qh,"attention heads");
++  return mul128(s.q,request_heads,"query rows");
++}
++
++std::pair<u128,u128> attention_materialized_counts(
++    const std::vector<Span>& spans,u64 qh) {
++  u128 score_slots=0,query_rows=0;
++  for(const auto& s:spans) {
++    score_slots=add128(score_slots,attention_span_score_slots(s,qh),
++                       "attention slots");
++    query_rows=add128(query_rows,attention_span_query_rows(s,qh),
++                      "attention query rows");
++  }
++  return {score_slots,query_rows};
++}
++
++u128 attention_workspace_from_counts(u128 score_slots,u128 query_rows,
++                                     u64 head_dim,
++                                     const std::string& output_dtype,
++                                     const std::string& mode,
++                                     bool staged_full) {
++  const u128 score_bytes=mul128(score_slots,4,"score bytes");
++  if(mode=="qk") return score_bytes;
++  if(mode!="both"||!staged_full) return 0;
++  const u128 probability_bytes=score_bytes;
++  const u128 cast_bytes=output_dtype=="fp32"?0:
++      bytes(mul128(query_rows,head_dim,"attention FP32 output"),"fp32");
++  return add128(add128(score_bytes,probability_bytes,
++                       "materialized score/probability workspace"),
++                cast_bytes,"materialized attention workspace");
++}
++
++u128 ffn_workspace_from_middle_elements(u128 middle_elements,
++                                        const std::string& middle_dtype,
++                                        bool swiglu) {
++  return mul128(bytes(middle_elements,middle_dtype),swiglu?2:1,
++                "FFN workspace");
++}
++
+ u128 valid_pairs_one(const Span& s) {
+   const u128 q0 = s.qs, k0 = s.ks, q = s.q, kv = s.kv;
+   if (q0 + q - 1 < k0) return 0;
+@@ -1123,9 +1183,7 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
+   const double kappa_quant=perf(hw,"kappa_quant_eqops",4);
+   const double kappa_acc=perf(hw,"kappa_acc_convert_eqops",2);
+   auto sum_kv_lengths=[](const Span& s)->u128 {
+-    return add128(mul128(s.count,s.kv,"attention KV span sum"),
+-        mul128(s.kv_stride,mul128(s.count,s.count-1,"attention KV span sum")/2,"attention KV span sum"),
+-        "attention KV span sum");
++    return attention_sum_kv_lengths(s);
+   };
+   auto sum_storage_tensor_bytes=[&](const Span& s,u64 features,const std::string& dt)->u128 {
+     const u128 elements=mul128(sum_kv_lengths(s),features,"attention source tensor elements");
+@@ -1298,13 +1356,14 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
+       // Only fused causal attention skips future KV blocks.
+       const bool materialized=full||mode!="both";
+       const auto causal_stat=causal&&!materialized?causal_counts(s,tq,tk):AttentionTileCounts{};
+-      if (materialized) { sl=mul128(s.q,kv_sum,"materialized attention score slots");pr=mul128(qtiles,kv_sum,"materialized attention KV reads"); }
++      if (materialized) { sl=attention_span_rectangle_slots(s);pr=mul128(qtiles,kv_sum,"materialized attention KV reads"); }
+       else if (causal) { sl=causal_stat.slots; pr=causal_stat.prefix; }
+       else { sl=mul128(s.q,kv_sum,"noncausal score slots");pr=mul128(qtiles,kv_sum,"noncausal attention KV reads"); }
+       const u128 request_heads=mul128(request_count,qh,"attention heads");
+-      const u128 score_slots=mul128(mul128(sl,s.batch,"attention batch score slots"),qh,"attention score heads");
++      const u128 score_slots=materialized?attention_span_score_slots(s,qh):
++          mul128(mul128(sl,s.batch,"attention batch score slots"),qh,"attention score heads");
+       const u128 score_valid=mul128(mul128(valid_pairs(s,causal),s.batch,"attention batch valid pairs"),qh,"attention valid heads");
+-      const u128 query_count=mul128(s.q,request_heads,"query rows");
++      const u128 query_count=attention_span_query_rows(s,qh);
+       output_tasks=add128(output_tasks,mul128(qtiles,request_heads,"attention output tasks"),"attention output tasks");
+       const u128 active_rows_one=causal&&!materialized?causal_stat.active_rows:mul128(s.q,s.count,"attention active rows");
+       const u128 active_rows=mul128(active_rows_one,s.batch,"attention batch active rows");
+@@ -1470,7 +1529,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
+         (mode=="qk"?qk_read:(mode=="av"?pv_read:fused_read));
+     const u128 totalwrite=staged_full&&mode=="both"?add128(add128(qk_write,soft_write,"full attention writes"),add128(pv_write,cast_write,"full attention writes"),"full attention writes"):
+         (mode=="qk"?qk_write:(mode=="av"?pv_write:fused_write));
+-    const u128 sb=mode=="qk"?scoreb:(staged_full&&mode=="both"?add128(add128(scoreb,probb,"materialized score/probability workspace"),cast_bytes,"materialized attention workspace"):0);
++    const u128 sb=attention_workspace_from_counts(
++        slots,queryrows,hd,dtype_o,mode,staged_full);
+     m.workspace=sb;m.score_bytes=(mode=="qk"||(staged_full&&mode=="both"))?scoreb:0;m.probability_bytes=probb;
+     m.score_slots=slots;m.valid_pairs=valid;m.logical=logical;
+     m.hbm_read=0;m.hbm_write=0;
+@@ -1630,6 +1690,56 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
+ 
+ }  // namespace
+ 
++std::uint64_t workspace_capacity_upper_bound(
++    const Hardware& hardware,const nlohmann::json& task) {
++  const std::string op=gets(task,"op_kind");
++  if(op=="attention"||op=="attention_region"||op=="qk"||op=="av") {
++    const auto spans=spans_of(task);
++    if(spans.empty()) fail("task.spans: attention requires at least one span");
++    const u64 qh=shape_u(task,"q_heads",shape_u(task,"q_heads_local",1));
++    const u64 kvh=shape_u(task,"kv_heads",shape_u(task,"kv_heads_local",1));
++    const u64 hd=shape_u(task,"head_dim",1);
++    if(!qh||!kvh||qh%kvh)
++      fail("unsupported_head_mapping: standard GQA requires q_heads divisible by kv_heads");
++    const std::string output_dtype=dtype(task,"output");
++    if(dtype(task,"scores","fp32")!="fp32"||
++       dtype(task,"accumulator","fp32")!="fp32")
++      fail("unsupported_dtype: attention score and accumulator workspaces are fixed FP32");
++
++    const std::string mode=op=="qk"?"qk":(op=="av"?"av":"both");
++    if(mode=="av") return 0;
++    if((op=="attention"||op=="attention_region")&&
++       gets(task,"fusion_policy","auto")=="fused") return 0;
++    const auto counts=attention_materialized_counts(spans,qh);
++    const u128 executions=mul128(getu(task,"layer_instances",1),
++        getu(task,"weight_passes",1),"attention executions");
++    const u128 score_slots=mul128(counts.first,executions,
++                                   "attention executions");
++    const u128 query_rows=mul128(counts.second,executions,
++                                  "attention query executions");
++    const u128 peak=attention_workspace_from_counts(
++        score_slots,query_rows,hd,output_dtype,mode,true);
++    return as_u64(peak,"HBM workspace");
++  }
++  if(op=="ffn_region") {
++    const std::string variant=gets(task.at("tensor_shapes"),"mlp_variant","swiglu");
++    const bool swiglu=variant=="swiglu";
++    const std::string fusion=gets(task,"fusion_policy","auto");
++    if(fusion=="fused"&&!swiglu)
++      fail("unsupported_mapping: fused_output_shard_v2 supports SwiGLU only");
++    if(fusion=="fused") return 0;
++    const u64 M=shape_u(task,"m",1);
++    const u64 H=shape_u(task,"hidden",1);
++    const u64 F=shape_u(task,"ffn",H);
++    const u128 middle=mul128(M,F,"FFN intermediate");
++    const u128 peak=ffn_workspace_from_middle_elements(
++        middle,dtype(task,"activations"),swiglu);
++    return as_u64(peak,"HBM workspace");
++  }
++  (void)hardware;
++  return 0;
++}
++
+ std::array<Activity, 3> gemm_os_single_core_resource_facts(
+     const Hardware& hardware, const gemm_os_access_counter::Input& input) {
+   if (du(hardware,"die","core_count")!=1 ||
+@@ -1845,7 +1955,8 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
+       // up/gate writes already belong to their GEMM store activities. The
+       // activation reuses one intermediate allocation; only two tensors are
+       // live at once, independent of sequential layer/pass repetitions.
+-      z.workspace=std::max(z.workspace,mul128(bytes(middle_one,middle_dtype),swiglu?2:1,"FFN workspace"));
++      z.workspace=std::max(z.workspace,
++          ffn_workspace_from_middle_elements(middle_one,middle_dtype,swiglu));
+       const u128 actops=mul128(swiglu?16:15,middle,"FFN activation eqops");
+       add_vector(*q,z,hardware,topo,middle,actops,mul128(middle_bytes,swiglu?2:1,"FFN activation reads"),middle_bytes,active,"ffn_activation_v2");
+       add_gemm_epoch(*q,z,hardware,topo,M,H,F,middle_dtype,wdt,ydt,layers,passes,down,"ffn_down_v2");

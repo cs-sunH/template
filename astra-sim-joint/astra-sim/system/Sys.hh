@@ -33,6 +33,8 @@ class QueueLevels;
 class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
+class CoarseDieRuntime;
+class WorkspaceAdmission;
 
 // Compute cost backend selector (die内仿真器 joint rollout stage 1; design
 // doc §8.2, contract §3.2). The system.json key "compute-cost-model" carries
@@ -355,6 +357,12 @@ class Sys : public Callable {
         explicit DieModelRuntime(DieModel::Hardware hw);
     };
     std::unique_ptr<DieModelRuntime> die_runtime;
+    // Coarse v2 owns a separate shared Runtime for all typed COMP plans and
+    // local-HBM endpoints. Its workspace ledger is rank-local and receives
+    // capacity snapshots from the online GraphBatch bridge.
+    std::unique_ptr<CoarseDieRuntime> coarse_die_runtime;
+    std::unique_ptr<WorkspaceAdmission> workspace_admission;
+    std::string die_model_profile;
     // Resolved die-model-config path (diagnostics only; empty off the die
     // backend).
     std::string die_model_config_path;

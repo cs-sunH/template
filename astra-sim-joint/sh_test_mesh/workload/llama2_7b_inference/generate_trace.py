@@ -614,12 +614,14 @@ class TraceBuilder:
         remote_read_size: int = 0,
         *,
         die_spec: Optional[dict] = None,
+        die_task: Optional[dict] = None,
         op_role: Optional[str] = None,
     ) -> None:
-        # die 后端（第一期）：die_spec 存在 => 该 COMP 由 die 后端执行
-        # （ET 侧无 runtime 字段，runtime_ns 语义恒 0）；op_role 缺省
-        # "compute"（契约 §2），仅 marker 显式写 "control_marker"。两个
-        # 键都序列化为 ET 字符串属性（设计文档 §8.3 ET 静态兼容）。
+        # Legacy and coarse-v2 die payloads are distinct, mutually exclusive
+        # ET attributes. Both require the ET default runtime (zero); the
+        # consumer parses the selected schema without legacy normalization.
+        if die_spec is not None and die_task is not None:
+            raise ValueError("die_spec and die_task are mutually exclusive")
         node = self._new_node(name, COMP_NODE)
         node.attr.append(self._uint64_attr("num_ops", num_ops))
         node.attr.append(self._uint64_attr("tensor_size", tensor_size))
@@ -630,6 +632,17 @@ class TraceBuilder:
                 ChakraAttr(
                     name="die_op_spec",
                     string_val=json.dumps(die_spec, sort_keys=True),
+                )
+            )
+        if die_task is not None:
+            if not isinstance(die_task, dict) or die_task.get("schema") != \
+                    "coarse_die_task_v2":
+                raise ValueError(
+                    "die_task must be a coarse_die_task_v2 object")
+            node.attr.append(
+                ChakraAttr(
+                    name="die_task",
+                    string_val=json.dumps(die_task, sort_keys=True),
                 )
             )
         if self.remote_operand_loads and remote_read_size:
@@ -1419,13 +1432,20 @@ def _emit_die_aggregated(
             group["num_ops"],
             group["tensor_size"],
             group["remote_read"],
-            die_spec=die_ctx.build_spec(
+            **({"die_task": die_ctx.build_task(
                 group["op_kind"],
                 layer_count=group["layer_count"],
                 weight_passes=group["weight_passes"],
                 fusion_policy="auto" if group["fused"] else "none",
                 kv_identity=kv_identity,
-            ),
+            )} if die_ctx.task_schema == "coarse_die_task_v2" else
+               {"die_spec": die_ctx.build_task(
+                group["op_kind"],
+                layer_count=group["layer_count"],
+                weight_passes=group["weight_passes"],
+                fusion_policy="auto" if group["fused"] else "none",
+                kv_identity=kv_identity,
+            )}),
         )
         if "attention_output_projection" in group["member_categories"]:
             builder.all_reduce(
@@ -1467,14 +1487,22 @@ def _emit_die_aggregated(
             totals[0],
             totals[1],
             totals[2],
-            die_spec=die_ctx.build_spec(
+            **({"die_task": die_ctx.build_task(
                 die_ctx.op_kind_of(category),
                 layer_count=1,
                 weight_passes=weight_passes,
                 fusion_policy="none",
                 spans=tail_spans,
                 kv_identity=kv_identity,
-            ),
+            )} if die_ctx.task_schema == "coarse_die_task_v2" else
+               {"die_spec": die_ctx.build_task(
+                die_ctx.op_kind_of(category),
+                layer_count=1,
+                weight_passes=weight_passes,
+                fusion_policy="none",
+                spans=tail_spans,
+                kv_identity=kv_identity,
+            )}),
         )
 
 

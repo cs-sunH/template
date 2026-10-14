@@ -34,6 +34,10 @@ struct WorkspaceCapacityRank {
     uint64_t model_weight_bytes = 0;
     uint64_t resident_kv_bytes = 0;
     uint64_t reserved_request_bytes = 0;
+    // Optional immutable bound for one COMP on the serialized compute gate.
+    // This is a fit margin, never an active lease or a KV reservation.
+    bool has_prospective_workspace = false;
+    uint64_t prospective_workspace_bytes = 0;
 };
 
 /// Checked rank-local ledger for short-lived immutable-Plan workspace.
@@ -141,7 +145,9 @@ class WorkspaceAdmission final {
         return WorkspaceCapacityRank{rank_, capacity_snapshot_revision_,
                                      capacity_bytes_, model_weight_bytes_,
                                      resident_kv_bytes_,
-                                     reserved_request_bytes_};
+                                     reserved_request_bytes_,
+                                     has_prospective_workspace_,
+                                     prospective_workspace_bytes_};
     }
 
     WorkspaceRankState state() const {
@@ -166,6 +172,12 @@ class WorkspaceAdmission final {
                               const uint64_t workspace_bytes) {
         if (!has_capacity_snapshot_) {
             return {AcquireStatus::Blocked, Lease{}};
+        }
+        if (has_prospective_workspace_ &&
+            workspace_bytes > prospective_workspace_bytes_) {
+            throw std::runtime_error(
+                "coarse Plan workspace exceeds the immutable prospective "
+                "workspace bound on rank " + std::to_string(rank_));
         }
         const uint64_t maximum_for_empty_kv =
             capacity_bytes_ - model_weight_bytes_;
@@ -235,6 +247,22 @@ class WorkspaceAdmission final {
             throw std::runtime_error(
                 "workspace snapshot base-used bytes exceed capacity");
         }
+        if (!snapshot.has_prospective_workspace &&
+            snapshot.prospective_workspace_bytes != 0) {
+            throw std::runtime_error("unmarked prospective workspace bound");
+        }
+        if (has_capacity_snapshot_ &&
+            (snapshot.has_prospective_workspace != has_prospective_workspace_ ||
+             snapshot.prospective_workspace_bytes != prospective_workspace_bytes_)) {
+            throw std::runtime_error(
+                "prospective workspace bound changed after initial snapshot");
+        }
+        if (snapshot.has_prospective_workspace &&
+            snapshot.prospective_workspace_bytes > snapshot.capacity_bytes - full_base) {
+            throw std::runtime_error(
+                "workspace fit margin plus Python base-used bytes exceed rank "
+                "capacity");
+        }
         if (active_workspace_bytes_ > snapshot.capacity_bytes - full_base) {
             throw std::runtime_error(
                 "active workspace plus Python base-used bytes exceed rank "
@@ -261,6 +289,8 @@ class WorkspaceAdmission final {
         model_weight_bytes_ = snapshot.model_weight_bytes;
         resident_kv_bytes_ = snapshot.resident_kv_bytes;
         reserved_request_bytes_ = snapshot.reserved_request_bytes;
+        has_prospective_workspace_ = snapshot.has_prospective_workspace;
+        prospective_workspace_bytes_ = snapshot.prospective_workspace_bytes;
         has_capacity_snapshot_ = true;
     }
 
@@ -329,6 +359,8 @@ class WorkspaceAdmission final {
     uint64_t model_weight_bytes_ = 0;
     uint64_t resident_kv_bytes_ = 0;
     uint64_t reserved_request_bytes_ = 0;
+    bool has_prospective_workspace_ = false;
+    uint64_t prospective_workspace_bytes_ = 0;
     std::map<Identity, ActiveRecord> active_;
 };
 

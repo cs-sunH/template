@@ -51,6 +51,10 @@ const char* die_coarse_hardware_summary_v2(DieHandle);
 /* Read-only compile-time workspace envelope over every fixed mapping
  * candidate for one task; creates no Plan handle and does not touch cache. */
 const char* die_coarse_workspace_envelope_v2(DieHandle,const char*);
+/* Candidate-independent capacity upper bound over all permitted mapping
+ * lifetimes before SRAM feasibility filtering. It does not prove that the task
+ * has an executable mapping; creates no Plan handle and does not touch cache. */
+const char* die_coarse_workspace_capacity_bound_v2(DieHandle,const char*);
 /* {"specs":[task,...]}; results/errors are positional. compile_batch results
  * contain plan_handle, plan_hash, summary. release each returned plan handle. */
 const char* die_coarse_compile_batch_v2(DieHandle,const char*);

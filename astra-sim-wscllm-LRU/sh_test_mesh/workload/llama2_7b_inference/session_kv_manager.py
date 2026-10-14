@@ -1021,7 +1021,8 @@ class SessionKVCacheManager:
                     f"workspace capacity snapshot used bytes exceed uint64 "
                     f"on rank {rank}"
                 )
-            combined_bytes = used_bytes + active_workspace
+            combined_bytes = used_bytes + max(
+                active_workspace, self._prospective_workspace_bytes_by_rank[rank])
             if combined_bytes > _UINT64_MAX:
                 raise ValueError(
                     f"workspace capacity snapshot combined bytes exceed "

@@ -1,0 +1,4 @@
+{
+  "wire_auditor_old_schema_error_count": 128,
+  "description": "Preserved old auditor rejected the new optional prospective_workspace_bytes field; the new strict auditor checks complete rows and max(active,future). Actual C++/Python both exited 0. First runner also printed a missing old one-request auditor hash; capped runner uses the new auditor. The captured Plan inspector initially wrote to run/ for both modes; fixed and replayed each exact captured batch against the same library. Raw Online inputs/output were unchanged."
+}

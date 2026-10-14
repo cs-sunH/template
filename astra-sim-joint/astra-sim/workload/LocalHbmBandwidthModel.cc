@@ -9,6 +9,7 @@ of this source tree.
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -16,6 +17,7 @@ of this source tree.
 
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
+#include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "astra-sim/workload/FailClosed.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Workload.hh"
@@ -24,6 +26,60 @@ using namespace AstraSim;
 
 namespace {
 constexpr double kEpsilon = 1e-9;
+
+std::pair<double, double> coarse_hbm_read_write_bytes(
+    const nlohmann::json& progress) {
+    const nlohmann::json matrix = progress.value(
+        "hbm_served_bytes_exact",
+        progress.value("hbm_served_bytes", nlohmann::json::array()));
+    if (!matrix.is_array() || matrix.size() != 2) {
+        throw std::runtime_error(
+            "coarse_die_v2 progress is missing the 2x2 HBM served matrix");
+    }
+    long double read_bytes = 0.0L;
+    long double write_bytes = 0.0L;
+    for (const auto& row : matrix) {
+        if (!row.is_array() || row.size() != 2) {
+            throw std::runtime_error(
+                "coarse_die_v2 HBM served matrix row is malformed");
+        }
+        const auto as_number = [](const nlohmann::json& value) -> long double {
+            if (value.is_string()) {
+                const std::string exact = value.get<std::string>();
+                size_t consumed = 0;
+                const long double parsed = std::stold(exact, &consumed);
+                if (consumed != exact.size() || !std::isfinite(parsed) ||
+                    parsed < 0.0L) {
+                    throw std::runtime_error(
+                        "coarse_die_v2 HBM served byte string is invalid");
+                }
+                return parsed;
+            }
+            if (value.is_number()) {
+                const long double parsed = value.get<long double>();
+                if (!std::isfinite(parsed) || parsed < 0.0L) {
+                    throw std::runtime_error(
+                        "coarse_die_v2 HBM served byte value is invalid");
+                }
+                return parsed;
+            }
+            throw std::runtime_error(
+                "coarse_die_v2 HBM served byte is neither number nor string");
+        };
+        read_bytes += as_number(row[0]);
+        write_bytes += as_number(row[1]);
+    }
+    return {static_cast<double>(read_bytes), static_cast<double>(write_bytes)};
+}
+
+uint64_t coarse_endpoint_identity(const std::string& value) {
+    uint64_t hash = 14695981039346656037ull;
+    for (const unsigned char byte : value) {
+        hash ^= byte;
+        hash *= 1099511628211ull;
+    }
+    return hash == 0 ? 1 : hash;
+}
 }
 
 LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
@@ -35,9 +91,10 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
     if (sys == nullptr || workload == nullptr) {
         throw std::invalid_argument("local HBM model requires Sys and Workload");
     }
-    if (!std::isfinite(sys->local_mem_bw) ||
+    if (sys->coarse_die_runtime == nullptr &&
+        (!std::isfinite(sys->local_mem_bw) ||
         !std::isfinite(sys->peak_perf) || sys->local_mem_bw <= 0 ||
-        sys->peak_perf <= 0) {
+        sys->peak_perf <= 0)) {
         throw std::invalid_argument(
             "local HBM sharing requires positive finite bandwidth and peak "
             "compute");
@@ -46,6 +103,40 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
 
 LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
     cancel_scheduled_transition();
+    if (sys != nullptr && sys->coarse_die_runtime != nullptr) {
+        while (!coarse_jobs_.empty()) {
+            const uint64_t handle = coarse_jobs_.begin()->first;
+            const CoarseJob job = coarse_jobs_.begin()->second;
+            try {
+                const uint64_t now_ns = Sys::boostedTick();
+                const auto progress =
+                    sys->coarse_die_runtime->query_progress_at(handle, now_ns);
+                const auto [read_bytes, write_bytes] =
+                    coarse_hbm_read_write_bytes(progress);
+                if (job.kind == JobKind::CONTROL_MARKER) {
+                    coarse_control_marker_bytes_served_ += read_bytes;
+                } else if (job.kind == JobKind::COMM_READ) {
+                    coarse_comm_read_served_ += read_bytes;
+                } else if (job.kind == JobKind::COMM_WRITE) {
+                    coarse_comm_write_served_ += write_bytes;
+                } else if (job.kind == JobKind::RESTORE) {
+                    coarse_restore_served_ += write_bytes;
+                } else if (job.kind == JobKind::POOL_READ) {
+                    coarse_pool_read_served_ += read_bytes;
+                } else if (job.kind == JobKind::POOL_WRITE) {
+                    coarse_pool_write_served_ += write_bytes;
+                }
+                sys->coarse_die_runtime->cancel(handle, now_ns, false);
+            } catch (...) {
+                std::terminate();
+            }
+            if (job.wlhd != nullptr) {
+                workload->abandon_hbm_endpoint_join(job.wlhd->node_id);
+                delete job.wlhd;
+            }
+            coarse_jobs_.erase(handle);
+        }
+    }
     // A normal completion transfers each cookie to Workload::call(), but an
     // early shutdown can destroy the model while jobs are still queued. The
     // model owns those outstanding cookies until that callback, so release
@@ -67,7 +158,26 @@ LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
 }
 
 bool LocalHbmBandwidthModel::has_active_jobs() const {
-    return live_job_count_ > 0;
+    return live_job_count_ > 0 || !coarse_jobs_.empty();
+}
+
+double LocalHbmBandwidthModel::compute_bytes_served() const {
+    double served = bytes_served_by_kind_[kind_index(JobKind::COMPUTE)] +
+                    coarse_control_marker_bytes_served_;
+    if (sys == nullptr || sys->coarse_die_runtime == nullptr) {
+        return served;
+    }
+    const uint64_t now_ns = Sys::boostedTick();
+    for (const auto& entry : coarse_jobs_) {
+        if (entry.second.kind != JobKind::CONTROL_MARKER) continue;
+        const auto progress =
+            sys->coarse_die_runtime->query_progress_at(entry.first, now_ns);
+        const auto [read_bytes, ignored_write_bytes] =
+            coarse_hbm_read_write_bytes(progress);
+        (void)ignored_write_bytes;
+        served += read_bytes;
+    }
+    return served;
 }
 
 size_t LocalHbmBandwidthModel::resource_observer_count() const noexcept {
@@ -666,6 +776,111 @@ void LocalHbmBandwidthModel::issue_job(
     std::function<void()> transfer_completion,
     int transfer_sys_id,
     uint64_t transfer_node_id) {
+    if (sys->coarse_die_runtime != nullptr) {
+        if (kind == JobKind::COMPUTE || kind == JobKind::DIE_COMPUTE) {
+            throw std::runtime_error(
+                "coarse_die_v2 COMP HBM work must be owned by its typed "
+                "Plan, not the legacy scalar queue");
+        }
+        if (tensor_size == 0 ||
+            (wlhd == nullptr && !transfer_completion)) {
+            throw std::runtime_error(
+                "coarse_die_v2 endpoint requires nonzero bytes and a "
+                "completion owner");
+        }
+        const bool is_marker = kind == JobKind::CONTROL_MARKER;
+        const bool is_read = kind == JobKind::COMM_READ ||
+                             kind == JobKind::POOL_READ || is_marker;
+        const bool is_comm = kind == JobKind::COMM_READ ||
+                             kind == JobKind::COMM_WRITE;
+        const bool is_pool = kind == JobKind::POOL_READ ||
+                             kind == JobKind::POOL_WRITE;
+        const uint64_t node_id = wlhd != nullptr
+            ? wlhd->node_id : transfer_node_id;
+        const int endpoint_sys_id = wlhd != nullptr
+            ? wlhd->sys_id : transfer_sys_id;
+        const std::string identity = std::to_string(endpoint_sys_id) + ":" +
+            std::to_string(node_id) + ":" +
+            std::to_string(static_cast<int>(kind));
+        coarse_die::Owner owner;
+        owner.request_id = coarse_endpoint_identity(std::to_string(node_id));
+        owner.node_id = node_id;
+        owner.execution_id = node_id;
+        owner.generation = 1;
+        const auto& performance =
+            sys->coarse_die_runtime->hardware().input.at("performance_profile");
+        const uint64_t endpoint_id = coarse_endpoint_identity(identity);
+        const uint64_t transaction_id =
+            coarse_endpoint_identity(std::to_string(node_id));
+        nlohmann::json endpoint = {
+            {"endpoint_id", endpoint_id},
+            {"transaction_id", transaction_id},
+            {"owner_kind", is_marker ? "die" :
+                (is_comm ? "comm" : (is_pool ? "pool" : "restore"))},
+            {"direction", is_read ? "read" : "write"},
+            {"physical_bytes", tensor_size},
+            {"path_class", is_read ? "hbm_to_edge" : "edge_to_hbm"},
+            {"eta_hbm", performance.at("eta_hbm_matrix")},
+            {"route", {{"internal_route", false}}},
+        };
+        if (is_marker) {
+            endpoint["initial_delay_ns"] = sys->local_mem_latency;
+        }
+        const uint64_t handle = sys->coarse_die_runtime->submit_endpoint(
+            endpoint, owner,
+            [this, wlhd, kind,
+             completion = std::move(transfer_completion)](
+                const uint64_t completed_handle,
+                const nlohmann::json& progress) mutable {
+                coarse_jobs_.erase(completed_handle);
+                const bool cancelled =
+                    progress.value("state", std::string()) == "cancelled";
+                const auto [read_bytes, write_bytes] =
+                    coarse_hbm_read_write_bytes(progress);
+                if (kind == JobKind::CONTROL_MARKER) {
+                    coarse_control_marker_bytes_served_ += read_bytes;
+                }
+                if (cancelled) {
+                    if (wlhd != nullptr) {
+                        workload->abandon_hbm_endpoint_join(wlhd->node_id);
+                        delete wlhd;
+                    }
+                    return;
+                }
+                if (kind == JobKind::COMM_READ) {
+                    coarse_comm_read_served_ += read_bytes;
+                } else if (kind == JobKind::COMM_WRITE) {
+                    coarse_comm_write_served_ += write_bytes;
+                } else if (kind == JobKind::RESTORE) {
+                    coarse_restore_served_ += write_bytes;
+                } else if (kind == JobKind::POOL_READ) {
+                    coarse_pool_read_served_ += read_bytes;
+                } else if (kind == JobKind::POOL_WRITE) {
+                    coarse_pool_write_served_ += write_bytes;
+                }
+                if (completion) {
+                    completion();
+                } else {
+                    workload->call(EventType::General, wlhd);
+                }
+            });
+        try {
+            if (!coarse_jobs_.emplace(handle, CoarseJob{wlhd, kind, {}})
+                     .second) {
+                throw std::runtime_error(
+                    "coarse_die_v2 endpoint handle collision");
+            }
+        } catch (...) {
+            try {
+                sys->coarse_die_runtime->cancel(
+                    handle, Sys::boostedTick(), false);
+            } catch (...) {
+                std::terminate();
+            }
+            throw;
+        }
+        return;
+    }
     advance_to(Sys::boostedTick());
     if (tensor_size == 0) {
         // Zero-byte endpoints never create an HBM job (the Workload layer
@@ -733,6 +948,15 @@ void LocalHbmBandwidthModel::issue_compute(
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
     issue_job(JobKind::COMPUTE, num_ops, tensor_size, wlhd);
+}
+
+void LocalHbmBandwidthModel::issue_control_marker(
+    WorkloadLayerHandlerData* wlhd) {
+    if (sys->coarse_die_runtime == nullptr) {
+        issue_compute(1, 1, wlhd);
+        return;
+    }
+    issue_job(JobKind::CONTROL_MARKER, 0, 1, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_restore(

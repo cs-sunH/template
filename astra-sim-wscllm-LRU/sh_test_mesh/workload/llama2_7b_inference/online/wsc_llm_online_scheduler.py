@@ -433,9 +433,19 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
 
         # 蓝图（离线蓝本，按阶段/函数名对应）:KV 账本。
         # offline: wsc_llm_scheduler.py
+        self.workspace_envelope_certificate = None
+        prospective_workspace = None
+        if (workspace_admission == "required" and
+                self.die_model_context is not None and
+                self.die_model_context.profile == "coarse_die_v2"):
+            from online.manifest_workspace_envelope import derive_manifest_workspace_envelope
+            self.workspace_envelope_certificate = derive_manifest_workspace_envelope(
+                manifest, config)
+            prospective_workspace = self.workspace_envelope_certificate.bytes_by_rank
         self.kv_manager = SessionKVCacheManager(
             self.topology,
             config.model,
+            prospective_workspace_bytes_by_rank=prospective_workspace,
         )
 
         # 蓝图（离线蓝本，按阶段/函数名对应）:实例账本。
@@ -567,6 +577,10 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         if self.workspace_admission == "required":
             batch["workspace_capacity_snapshot"] = (
                 self.kv_manager.workspace_capacity_snapshot())
+            if self.workspace_envelope_certificate is not None:
+                for row in batch["workspace_capacity_snapshot"]["ranks"]:
+                    row["prospective_workspace_bytes"] = (
+                        self.workspace_envelope_certificate.bytes_by_rank[row["rank"]])
 
     # ------------------------------------------------------------- 策略 --
 

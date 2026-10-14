@@ -1,0 +1,4316 @@
+{
+  "cases": {
+    "int4_converted_fractional": {
+      "actual_event_key_sets_match": true,
+      "actual_output_queue_wait_witness": false,
+      "actual_peak_output_slots": 1,
+      "actual_terminal_events": 28,
+      "blocked_final_compute_attempts": [],
+      "continuous_exact_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 439537,
+            "actual_observed_ns": 439537,
+            "delta_ns": 1,
+            "model_finish_ns": 439536,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 476514,
+            "actual_observed_ns": 476514,
+            "delta_ns": 1,
+            "model_finish_ns": 476513,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 476874,
+            "actual_observed_ns": 476874,
+            "delta_ns": 1,
+            "model_finish_ns": 476873,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 478831,
+            "actual_observed_ns": 478831,
+            "delta_ns": 2,
+            "model_finish_ns": 478829,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 479005,
+            "actual_observed_ns": 479005,
+            "delta_ns": 3,
+            "model_finish_ns": 479002,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 644591,
+            "actual_observed_ns": 644591,
+            "delta_ns": 2,
+            "model_finish_ns": 644589,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 644591,
+            "actual_observed_ns": 644591,
+            "delta_ns": -171,
+            "model_finish_ns": 644762,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 653074,
+            "actual_observed_ns": 653074,
+            "delta_ns": 3,
+            "model_finish_ns": 653071,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 809711,
+            "actual_observed_ns": 809711,
+            "delta_ns": 2,
+            "model_finish_ns": 809709,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 812291,
+            "actual_observed_ns": 812291,
+            "delta_ns": 2,
+            "model_finish_ns": 812289,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 818598,
+            "actual_observed_ns": 818598,
+            "delta_ns": 2,
+            "model_finish_ns": 818596,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 819285,
+            "actual_observed_ns": 819285,
+            "delta_ns": 3,
+            "model_finish_ns": 819282,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 824541,
+            "actual_observed_ns": 824541,
+            "delta_ns": 3,
+            "model_finish_ns": 824538,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 824798,
+            "actual_observed_ns": 824798,
+            "delta_ns": 3,
+            "model_finish_ns": 824795,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 825684,
+            "actual_observed_ns": 825684,
+            "delta_ns": 2,
+            "model_finish_ns": 825682,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 828839,
+            "actual_observed_ns": 828839,
+            "delta_ns": 3,
+            "model_finish_ns": 828836,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 828899,
+            "actual_observed_ns": 828900,
+            "delta_ns": 3,
+            "model_finish_ns": 828896,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 829103,
+            "actual_observed_ns": 829103,
+            "delta_ns": 4,
+            "model_finish_ns": 829099,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 829116,
+            "actual_observed_ns": 829116,
+            "delta_ns": 4,
+            "model_finish_ns": 829112,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 829156,
+            "actual_observed_ns": 829156,
+            "delta_ns": 4,
+            "model_finish_ns": 829152,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 171,
+        "max_abs_start_error_ns": 4,
+        "start_mismatches": [
+          {
+            "actual_ns": 476514,
+            "delta_ns": 1,
+            "model_ns": 476513,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 476514,
+            "delta_ns": 1,
+            "model_ns": 476513,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 478831,
+            "delta_ns": 2,
+            "model_ns": 478829,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 478831,
+            "delta_ns": 2,
+            "model_ns": 478829,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 479005,
+            "delta_ns": 3,
+            "model_ns": 479002,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 644591,
+            "delta_ns": 2,
+            "model_ns": 644589,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 644591,
+            "delta_ns": 2,
+            "model_ns": 644589,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 809711,
+            "delta_ns": 2,
+            "model_ns": 809709,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 809711,
+            "delta_ns": 2,
+            "model_ns": 809709,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 818598,
+            "delta_ns": 2,
+            "model_ns": 818596,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 818598,
+            "delta_ns": 2,
+            "model_ns": 818596,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 819285,
+            "delta_ns": 3,
+            "model_ns": 819282,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 824541,
+            "delta_ns": 3,
+            "model_ns": 824538,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 824541,
+            "delta_ns": 3,
+            "model_ns": 824538,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 828839,
+            "delta_ns": 3,
+            "model_ns": 828836,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 828839,
+            "delta_ns": 3,
+            "model_ns": 828836,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 829103,
+            "delta_ns": 4,
+            "model_ns": 829099,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 829116,
+            "delta_ns": 4,
+            "model_ns": 829112,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation"
+      },
+      "integer_tick_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 476514,
+            "actual_observed_ns": 476514,
+            "delta_ns": 1,
+            "model_finish_ns": 476513,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 476874,
+            "actual_observed_ns": 476874,
+            "delta_ns": 1,
+            "model_finish_ns": 476873,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 478831,
+            "actual_observed_ns": 478831,
+            "delta_ns": 1,
+            "model_finish_ns": 478830,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 479005,
+            "actual_observed_ns": 479005,
+            "delta_ns": 1,
+            "model_finish_ns": 479004,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 644591,
+            "actual_observed_ns": 644591,
+            "delta_ns": 1,
+            "model_finish_ns": 644590,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 644591,
+            "actual_observed_ns": 644591,
+            "delta_ns": 1,
+            "model_finish_ns": 644590,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 653074,
+            "actual_observed_ns": 653074,
+            "delta_ns": 1,
+            "model_finish_ns": 653073,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 809711,
+            "actual_observed_ns": 809711,
+            "delta_ns": 1,
+            "model_finish_ns": 809710,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 812291,
+            "actual_observed_ns": 812291,
+            "delta_ns": 1,
+            "model_finish_ns": 812290,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 818598,
+            "actual_observed_ns": 818598,
+            "delta_ns": 1,
+            "model_finish_ns": 818597,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 819285,
+            "actual_observed_ns": 819285,
+            "delta_ns": 1,
+            "model_finish_ns": 819284,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 824541,
+            "actual_observed_ns": 824541,
+            "delta_ns": 2,
+            "model_finish_ns": 824539,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 824798,
+            "actual_observed_ns": 824798,
+            "delta_ns": 2,
+            "model_finish_ns": 824796,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 828839,
+            "actual_observed_ns": 828839,
+            "delta_ns": 2,
+            "model_finish_ns": 828837,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 828899,
+            "actual_observed_ns": 828900,
+            "delta_ns": 2,
+            "model_finish_ns": 828897,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 829103,
+            "actual_observed_ns": 829103,
+            "delta_ns": 2,
+            "model_finish_ns": 829101,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 829116,
+            "actual_observed_ns": 829116,
+            "delta_ns": 2,
+            "model_finish_ns": 829114,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 829156,
+            "actual_observed_ns": 829156,
+            "delta_ns": 2,
+            "model_finish_ns": 829154,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 2,
+        "max_abs_start_error_ns": 2,
+        "start_mismatches": [
+          {
+            "actual_ns": 476514,
+            "delta_ns": 1,
+            "model_ns": 476513,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 476514,
+            "delta_ns": 1,
+            "model_ns": 476513,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 478831,
+            "delta_ns": 1,
+            "model_ns": 478830,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 478831,
+            "delta_ns": 1,
+            "model_ns": 478830,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 479005,
+            "delta_ns": 1,
+            "model_ns": 479004,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 644591,
+            "delta_ns": 1,
+            "model_ns": 644590,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 644591,
+            "delta_ns": 1,
+            "model_ns": 644590,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 809711,
+            "delta_ns": 1,
+            "model_ns": 809710,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 809711,
+            "delta_ns": 1,
+            "model_ns": 809710,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 818598,
+            "delta_ns": 1,
+            "model_ns": 818597,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 818598,
+            "delta_ns": 1,
+            "model_ns": 818597,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 819285,
+            "delta_ns": 1,
+            "model_ns": 819284,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 824541,
+            "delta_ns": 2,
+            "model_ns": 824539,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 824541,
+            "delta_ns": 2,
+            "model_ns": 824539,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 828839,
+            "delta_ns": 2,
+            "model_ns": 828837,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 828839,
+            "delta_ns": 2,
+            "model_ns": 828837,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 829103,
+            "delta_ns": 2,
+            "model_ns": 829101,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 829116,
+            "delta_ns": 2,
+            "model_ns": 829114,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation",
+        "within_existing_2ns_check": true
+      },
+      "lifetime_expanded_events": 28,
+      "nonfinal_compute_started_at_full_output": [],
+      "public_tick_wakes": 27
+    },
+    "int4_converted_storage": {
+      "actual_event_key_sets_match": true,
+      "actual_output_queue_wait_witness": false,
+      "actual_peak_output_slots": 1,
+      "actual_terminal_events": 28,
+      "blocked_final_compute_attempts": [],
+      "continuous_exact_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 119969,
+            "actual_observed_ns": 119969,
+            "delta_ns": 1,
+            "model_finish_ns": 119968,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 131564,
+            "actual_observed_ns": 131564,
+            "delta_ns": -1,
+            "model_finish_ns": 131565,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 141384,
+            "actual_observed_ns": 141384,
+            "delta_ns": 1,
+            "model_finish_ns": 141383,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 141725,
+            "actual_observed_ns": 141725,
+            "delta_ns": 2,
+            "model_finish_ns": 141723,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 143575,
+            "actual_observed_ns": 143575,
+            "delta_ns": 2,
+            "model_finish_ns": 143573,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 143778,
+            "actual_observed_ns": 143778,
+            "delta_ns": 3,
+            "model_finish_ns": 143775,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 165415,
+            "actual_observed_ns": 165415,
+            "delta_ns": 3,
+            "model_finish_ns": 165412,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 165415,
+            "actual_observed_ns": 165415,
+            "delta_ns": -200,
+            "model_finish_ns": 165615,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 165807,
+            "actual_observed_ns": 165807,
+            "delta_ns": 3,
+            "model_finish_ns": 165804,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 187176,
+            "actual_observed_ns": 187176,
+            "delta_ns": 3,
+            "model_finish_ns": 187173,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 187517,
+            "actual_observed_ns": 187517,
+            "delta_ns": 4,
+            "model_finish_ns": 187513,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 187973,
+            "actual_observed_ns": 187973,
+            "delta_ns": 4,
+            "model_finish_ns": 187969,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 188660,
+            "actual_observed_ns": 188660,
+            "delta_ns": 4,
+            "model_finish_ns": 188656,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 189756,
+            "actual_observed_ns": 189756,
+            "delta_ns": 4,
+            "model_finish_ns": 189752,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 189887,
+            "actual_observed_ns": 189887,
+            "delta_ns": 5,
+            "model_finish_ns": 189882,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 190578,
+            "actual_observed_ns": 190578,
+            "delta_ns": 2,
+            "model_finish_ns": 190576,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 191493,
+            "actual_observed_ns": 191493,
+            "delta_ns": 4,
+            "model_finish_ns": 191489,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 191533,
+            "actual_observed_ns": 191533,
+            "delta_ns": 4,
+            "model_finish_ns": 191529,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 191630,
+            "actual_observed_ns": 191630,
+            "delta_ns": 4,
+            "model_finish_ns": 191626,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 191643,
+            "actual_observed_ns": 191643,
+            "delta_ns": 4,
+            "model_finish_ns": 191639,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 191663,
+            "actual_observed_ns": 191663,
+            "delta_ns": 4,
+            "model_finish_ns": 191659,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 200,
+        "max_abs_start_error_ns": 4,
+        "start_mismatches": [
+          {
+            "actual_ns": 141384,
+            "delta_ns": 1,
+            "model_ns": 141383,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 141384,
+            "delta_ns": 1,
+            "model_ns": 141383,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 143575,
+            "delta_ns": 2,
+            "model_ns": 143573,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 143575,
+            "delta_ns": 2,
+            "model_ns": 143573,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 143778,
+            "delta_ns": 3,
+            "model_ns": 143775,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 165415,
+            "delta_ns": 3,
+            "model_ns": 165412,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 165415,
+            "delta_ns": 3,
+            "model_ns": 165412,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 187176,
+            "delta_ns": 3,
+            "model_ns": 187173,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 187176,
+            "delta_ns": 3,
+            "model_ns": 187173,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 187973,
+            "delta_ns": 4,
+            "model_ns": 187969,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 187973,
+            "delta_ns": 4,
+            "model_ns": 187969,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 188660,
+            "delta_ns": 4,
+            "model_ns": 188656,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 189756,
+            "delta_ns": 4,
+            "model_ns": 189752,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 189756,
+            "delta_ns": 4,
+            "model_ns": 189752,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 191493,
+            "delta_ns": 4,
+            "model_ns": 191489,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 191493,
+            "delta_ns": 4,
+            "model_ns": 191489,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 191630,
+            "delta_ns": 4,
+            "model_ns": 191626,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 191643,
+            "delta_ns": 4,
+            "model_ns": 191639,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation"
+      },
+      "integer_tick_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 141384,
+            "actual_observed_ns": 141384,
+            "delta_ns": 1,
+            "model_finish_ns": 141383,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 141725,
+            "actual_observed_ns": 141725,
+            "delta_ns": 2,
+            "model_finish_ns": 141723,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 143575,
+            "actual_observed_ns": 143575,
+            "delta_ns": 1,
+            "model_finish_ns": 143574,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 143778,
+            "actual_observed_ns": 143778,
+            "delta_ns": 1,
+            "model_finish_ns": 143777,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 165415,
+            "actual_observed_ns": 165415,
+            "delta_ns": 1,
+            "model_finish_ns": 165414,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 165415,
+            "actual_observed_ns": 165415,
+            "delta_ns": 1,
+            "model_finish_ns": 165414,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 165807,
+            "actual_observed_ns": 165807,
+            "delta_ns": 1,
+            "model_finish_ns": 165806,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 187176,
+            "actual_observed_ns": 187176,
+            "delta_ns": 2,
+            "model_finish_ns": 187174,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 187517,
+            "actual_observed_ns": 187517,
+            "delta_ns": 3,
+            "model_finish_ns": 187514,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 187973,
+            "actual_observed_ns": 187973,
+            "delta_ns": 2,
+            "model_finish_ns": 187971,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 188660,
+            "actual_observed_ns": 188660,
+            "delta_ns": 2,
+            "model_finish_ns": 188658,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 189756,
+            "actual_observed_ns": 189756,
+            "delta_ns": 2,
+            "model_finish_ns": 189754,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 189887,
+            "actual_observed_ns": 189887,
+            "delta_ns": 2,
+            "model_finish_ns": 189885,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 190578,
+            "actual_observed_ns": 190578,
+            "delta_ns": 2,
+            "model_finish_ns": 190576,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 191493,
+            "actual_observed_ns": 191493,
+            "delta_ns": 2,
+            "model_finish_ns": 191491,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 191533,
+            "actual_observed_ns": 191533,
+            "delta_ns": 2,
+            "model_finish_ns": 191531,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 191630,
+            "actual_observed_ns": 191630,
+            "delta_ns": 2,
+            "model_finish_ns": 191628,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 191643,
+            "actual_observed_ns": 191643,
+            "delta_ns": 2,
+            "model_finish_ns": 191641,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 191663,
+            "actual_observed_ns": 191663,
+            "delta_ns": 2,
+            "model_finish_ns": 191661,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 3,
+        "max_abs_start_error_ns": 2,
+        "start_mismatches": [
+          {
+            "actual_ns": 141384,
+            "delta_ns": 1,
+            "model_ns": 141383,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 141384,
+            "delta_ns": 1,
+            "model_ns": 141383,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 143575,
+            "delta_ns": 1,
+            "model_ns": 143574,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 143575,
+            "delta_ns": 1,
+            "model_ns": 143574,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 143778,
+            "delta_ns": 1,
+            "model_ns": 143777,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 165415,
+            "delta_ns": 1,
+            "model_ns": 165414,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 165415,
+            "delta_ns": 1,
+            "model_ns": 165414,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 187176,
+            "delta_ns": 2,
+            "model_ns": 187174,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 187176,
+            "delta_ns": 2,
+            "model_ns": 187174,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 187973,
+            "delta_ns": 2,
+            "model_ns": 187971,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 187973,
+            "delta_ns": 2,
+            "model_ns": 187971,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 188660,
+            "delta_ns": 2,
+            "model_ns": 188658,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 189756,
+            "delta_ns": 2,
+            "model_ns": 189754,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 189756,
+            "delta_ns": 2,
+            "model_ns": 189754,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 191493,
+            "delta_ns": 2,
+            "model_ns": 191491,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 191493,
+            "delta_ns": 2,
+            "model_ns": 191491,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 191630,
+            "delta_ns": 2,
+            "model_ns": 191628,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 191643,
+            "delta_ns": 2,
+            "model_ns": 191641,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation",
+        "within_existing_2ns_check": false
+      },
+      "lifetime_expanded_events": 28,
+      "nonfinal_compute_started_at_full_output": [],
+      "public_tick_wakes": 27
+    },
+    "int4_native_small": {
+      "actual_event_key_sets_match": true,
+      "actual_output_queue_wait_witness": false,
+      "actual_peak_output_slots": 1,
+      "actual_terminal_events": 28,
+      "blocked_final_compute_attempts": [],
+      "continuous_exact_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 77878,
+            "actual_observed_ns": 77878,
+            "delta_ns": 1,
+            "model_finish_ns": 77877,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 128332,
+            "actual_observed_ns": 128332,
+            "delta_ns": 1,
+            "model_finish_ns": 128331,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 128332,
+            "actual_observed_ns": 128332,
+            "delta_ns": 1,
+            "model_finish_ns": 128331,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 128432,
+            "actual_observed_ns": 128432,
+            "delta_ns": 1,
+            "model_finish_ns": 128431,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 128664,
+            "actual_observed_ns": 128664,
+            "delta_ns": 1,
+            "model_finish_ns": 128663,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 129373,
+            "actual_observed_ns": 129373,
+            "delta_ns": 2,
+            "model_finish_ns": 129371,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 149542,
+            "actual_observed_ns": 149542,
+            "delta_ns": 2,
+            "model_finish_ns": 149540,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 150065,
+            "actual_observed_ns": 150065,
+            "delta_ns": -186,
+            "model_finish_ns": 150251,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 150465,
+            "actual_observed_ns": 150465,
+            "delta_ns": 2,
+            "model_finish_ns": 150463,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 170344,
+            "actual_observed_ns": 170344,
+            "delta_ns": 1,
+            "model_finish_ns": 170343,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 170684,
+            "actual_observed_ns": 170684,
+            "delta_ns": 1,
+            "model_finish_ns": 170683,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 171672,
+            "actual_observed_ns": 171672,
+            "delta_ns": 2,
+            "model_finish_ns": 171670,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 172312,
+            "actual_observed_ns": 172312,
+            "delta_ns": 2,
+            "model_finish_ns": 172310,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 174506,
+            "actual_observed_ns": 174506,
+            "delta_ns": 2,
+            "model_finish_ns": 174504,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 174521,
+            "actual_observed_ns": 174521,
+            "delta_ns": 3,
+            "model_finish_ns": 174518,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 175467,
+            "actual_observed_ns": 175467,
+            "delta_ns": 3,
+            "model_finish_ns": 175464,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 175467,
+            "actual_observed_ns": 175467,
+            "delta_ns": 3,
+            "model_finish_ns": 175464,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 175487,
+            "actual_observed_ns": 175488,
+            "delta_ns": 3,
+            "model_finish_ns": 175484,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 175488,
+            "actual_observed_ns": 175488,
+            "delta_ns": 4,
+            "model_finish_ns": 175484,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 175533,
+            "actual_observed_ns": 175533,
+            "delta_ns": 4,
+            "model_finish_ns": 175529,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 175553,
+            "actual_observed_ns": 175553,
+            "delta_ns": 4,
+            "model_finish_ns": 175549,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 186,
+        "max_abs_start_error_ns": 4,
+        "start_mismatches": [
+          {
+            "actual_ns": 128332,
+            "delta_ns": 1,
+            "model_ns": 128331,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 128332,
+            "delta_ns": 1,
+            "model_ns": 128331,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 128664,
+            "delta_ns": 1,
+            "model_ns": 128663,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 128664,
+            "delta_ns": 1,
+            "model_ns": 128663,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 129373,
+            "delta_ns": 2,
+            "model_ns": 129371,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 149542,
+            "delta_ns": 2,
+            "model_ns": 149540,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 149542,
+            "delta_ns": 2,
+            "model_ns": 149540,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 170344,
+            "delta_ns": 1,
+            "model_ns": 170343,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 170344,
+            "delta_ns": 1,
+            "model_ns": 170343,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 171672,
+            "delta_ns": 2,
+            "model_ns": 171670,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 171672,
+            "delta_ns": 2,
+            "model_ns": 171670,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 174506,
+            "delta_ns": 2,
+            "model_ns": 174504,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 174506,
+            "delta_ns": 2,
+            "model_ns": 174504,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 174506,
+            "delta_ns": 2,
+            "model_ns": 174504,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 175467,
+            "delta_ns": 3,
+            "model_ns": 175464,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 175467,
+            "delta_ns": 3,
+            "model_ns": 175464,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 175488,
+            "delta_ns": 4,
+            "model_ns": 175484,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 175533,
+            "delta_ns": 4,
+            "model_ns": 175529,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation"
+      },
+      "integer_tick_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 77878,
+            "actual_observed_ns": 77878,
+            "delta_ns": 1,
+            "model_finish_ns": 77877,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 128332,
+            "actual_observed_ns": 128332,
+            "delta_ns": 1,
+            "model_finish_ns": 128331,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 128332,
+            "actual_observed_ns": 128332,
+            "delta_ns": 1,
+            "model_finish_ns": 128331,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 128432,
+            "actual_observed_ns": 128432,
+            "delta_ns": 1,
+            "model_finish_ns": 128431,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 128664,
+            "actual_observed_ns": 128664,
+            "delta_ns": 1,
+            "model_finish_ns": 128663,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 129373,
+            "actual_observed_ns": 129373,
+            "delta_ns": 1,
+            "model_finish_ns": 129372,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 149542,
+            "actual_observed_ns": 149542,
+            "delta_ns": 1,
+            "model_finish_ns": 149541,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 150065,
+            "actual_observed_ns": 150065,
+            "delta_ns": 2,
+            "model_finish_ns": 150063,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 150465,
+            "actual_observed_ns": 150465,
+            "delta_ns": 1,
+            "model_finish_ns": 150464,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 170344,
+            "actual_observed_ns": 170344,
+            "delta_ns": 1,
+            "model_finish_ns": 170343,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 170684,
+            "actual_observed_ns": 170684,
+            "delta_ns": 1,
+            "model_finish_ns": 170683,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 171672,
+            "actual_observed_ns": 171672,
+            "delta_ns": 1,
+            "model_finish_ns": 171671,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 172312,
+            "actual_observed_ns": 172312,
+            "delta_ns": 1,
+            "model_finish_ns": 172311,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 174506,
+            "actual_observed_ns": 174506,
+            "delta_ns": 1,
+            "model_finish_ns": 174505,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 174521,
+            "actual_observed_ns": 174521,
+            "delta_ns": 1,
+            "model_finish_ns": 174520,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 175467,
+            "actual_observed_ns": 175467,
+            "delta_ns": 2,
+            "model_finish_ns": 175465,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 175467,
+            "actual_observed_ns": 175467,
+            "delta_ns": 2,
+            "model_finish_ns": 175465,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 175487,
+            "actual_observed_ns": 175488,
+            "delta_ns": 2,
+            "model_finish_ns": 175485,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 175488,
+            "actual_observed_ns": 175488,
+            "delta_ns": 2,
+            "model_finish_ns": 175486,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 175533,
+            "actual_observed_ns": 175533,
+            "delta_ns": 2,
+            "model_finish_ns": 175531,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 175553,
+            "actual_observed_ns": 175553,
+            "delta_ns": 2,
+            "model_finish_ns": 175551,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 2,
+        "max_abs_start_error_ns": 2,
+        "start_mismatches": [
+          {
+            "actual_ns": 128332,
+            "delta_ns": 1,
+            "model_ns": 128331,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 128332,
+            "delta_ns": 1,
+            "model_ns": 128331,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 128664,
+            "delta_ns": 1,
+            "model_ns": 128663,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 128664,
+            "delta_ns": 1,
+            "model_ns": 128663,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 129373,
+            "delta_ns": 1,
+            "model_ns": 129372,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 149542,
+            "delta_ns": 1,
+            "model_ns": 149541,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 149542,
+            "delta_ns": 1,
+            "model_ns": 149541,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 170344,
+            "delta_ns": 1,
+            "model_ns": 170343,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 170344,
+            "delta_ns": 1,
+            "model_ns": 170343,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 171672,
+            "delta_ns": 1,
+            "model_ns": 171671,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 171672,
+            "delta_ns": 1,
+            "model_ns": 171671,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 174506,
+            "delta_ns": 1,
+            "model_ns": 174505,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 174506,
+            "delta_ns": 1,
+            "model_ns": 174505,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 174506,
+            "delta_ns": 1,
+            "model_ns": 174505,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 175467,
+            "delta_ns": 2,
+            "model_ns": 175465,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 175467,
+            "delta_ns": 2,
+            "model_ns": 175465,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 175488,
+            "delta_ns": 2,
+            "model_ns": 175486,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 175533,
+            "delta_ns": 2,
+            "model_ns": 175531,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation",
+        "within_existing_2ns_check": true
+      },
+      "lifetime_expanded_events": 28,
+      "nonfinal_compute_started_at_full_output": [],
+      "public_tick_wakes": 26
+    },
+    "output_pressure_k1_tiles128": {
+      "actual_event_key_sets_match": true,
+      "actual_output_queue_wait_witness": false,
+      "actual_peak_output_slots": 2,
+      "actual_terminal_events": 27,
+      "blocked_final_compute_attempts": [],
+      "continuous_exact_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 424460,
+            "actual_observed_ns": 424460,
+            "delta_ns": 1,
+            "model_finish_ns": 424459,
+            "ordinal": 1,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 877871,
+            "actual_observed_ns": 877871,
+            "delta_ns": 1,
+            "model_finish_ns": 877870,
+            "ordinal": 2,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 877871,
+            "actual_observed_ns": 877871,
+            "delta_ns": 1,
+            "model_finish_ns": 877870,
+            "ordinal": 0,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 879490,
+            "actual_observed_ns": 879490,
+            "delta_ns": 2,
+            "model_finish_ns": 879488,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1543471,
+            "actual_observed_ns": 1543471,
+            "delta_ns": 1,
+            "model_finish_ns": 1543470,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1543471,
+            "actual_observed_ns": 1543471,
+            "delta_ns": 1,
+            "model_finish_ns": 1543470,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1558832,
+            "actual_observed_ns": 1558832,
+            "delta_ns": 2,
+            "model_finish_ns": 1558830,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1558832,
+            "actual_observed_ns": 1558832,
+            "delta_ns": 2,
+            "model_finish_ns": 1558830,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1750581,
+            "actual_observed_ns": 1750581,
+            "delta_ns": 2,
+            "model_finish_ns": 1750579,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1957691,
+            "actual_observed_ns": 1957691,
+            "delta_ns": 3,
+            "model_finish_ns": 1957688,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2411102,
+            "actual_observed_ns": 2411102,
+            "delta_ns": 3,
+            "model_finish_ns": 2411099,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2411102,
+            "actual_observed_ns": 2411102,
+            "delta_ns": 3,
+            "model_finish_ns": 2411099,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 2412721,
+            "actual_observed_ns": 2412721,
+            "delta_ns": 4,
+            "model_finish_ns": 2412717,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3071622,
+            "actual_observed_ns": 3071622,
+            "delta_ns": 3,
+            "model_finish_ns": 3071619,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3071622,
+            "actual_observed_ns": 3071622,
+            "delta_ns": 3,
+            "model_finish_ns": 3071619,
+            "ordinal": 4,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3073241,
+            "actual_observed_ns": 3073241,
+            "delta_ns": 4,
+            "model_finish_ns": 3073237,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3081902,
+            "actual_observed_ns": 3081902,
+            "delta_ns": 3,
+            "model_finish_ns": 3081899,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3081902,
+            "actual_observed_ns": 3081902,
+            "delta_ns": 3,
+            "model_finish_ns": 3081899,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3083521,
+            "actual_observed_ns": 3083521,
+            "delta_ns": 4,
+            "model_finish_ns": 3083517,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3087102,
+            "actual_observed_ns": 3087102,
+            "delta_ns": 3,
+            "model_finish_ns": 3087099,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3087102,
+            "actual_observed_ns": 3087102,
+            "delta_ns": 3,
+            "model_finish_ns": 3087099,
+            "ordinal": 6,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3087115,
+            "actual_observed_ns": 3087115,
+            "delta_ns": 3,
+            "model_finish_ns": 3087112,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3092222,
+            "actual_observed_ns": 3092223,
+            "delta_ns": 3,
+            "model_finish_ns": 3092219,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3092263,
+            "actual_observed_ns": 3092263,
+            "delta_ns": 4,
+            "model_finish_ns": 3092259,
+            "ordinal": 8,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 4,
+        "max_abs_start_error_ns": 4,
+        "start_mismatches": [
+          {
+            "actual_ns": 877871,
+            "delta_ns": 1,
+            "model_ns": 877870,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 877871,
+            "delta_ns": 1,
+            "model_ns": 877870,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 877871,
+            "delta_ns": 1,
+            "model_ns": 877870,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1543471,
+            "delta_ns": 1,
+            "model_ns": 1543470,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 1543471,
+            "delta_ns": 1,
+            "model_ns": 1543470,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1543471,
+            "delta_ns": 1,
+            "model_ns": 1543470,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1750581,
+            "delta_ns": 2,
+            "model_ns": 1750579,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 1750581,
+            "delta_ns": 2,
+            "model_ns": 1750579,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1750581,
+            "delta_ns": 2,
+            "model_ns": 1750579,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2411102,
+            "delta_ns": 3,
+            "model_ns": 2411099,
+            "ordinal": 4,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 2411102,
+            "delta_ns": 3,
+            "model_ns": 2411099,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2411102,
+            "delta_ns": 3,
+            "model_ns": 2411099,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3071622,
+            "delta_ns": 3,
+            "model_ns": 3071619,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 3071622,
+            "delta_ns": 3,
+            "model_ns": 3071619,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 3071622,
+            "delta_ns": 3,
+            "model_ns": 3071619,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3081902,
+            "delta_ns": 3,
+            "model_ns": 3081899,
+            "ordinal": 6,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 3081902,
+            "delta_ns": 3,
+            "model_ns": 3081899,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 3081902,
+            "delta_ns": 3,
+            "model_ns": 3081899,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3087102,
+            "delta_ns": 3,
+            "model_ns": 3087099,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 3087102,
+            "delta_ns": 3,
+            "model_ns": 3087099,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 3092223,
+            "delta_ns": 4,
+            "model_ns": 3092219,
+            "ordinal": 8,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation"
+      },
+      "integer_tick_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 877871,
+            "actual_observed_ns": 877871,
+            "delta_ns": 1,
+            "model_finish_ns": 877870,
+            "ordinal": 2,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 877871,
+            "actual_observed_ns": 877871,
+            "delta_ns": 1,
+            "model_finish_ns": 877870,
+            "ordinal": 0,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 879490,
+            "actual_observed_ns": 879490,
+            "delta_ns": 1,
+            "model_finish_ns": 879489,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1543471,
+            "actual_observed_ns": 1543471,
+            "delta_ns": 1,
+            "model_finish_ns": 1543470,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1543471,
+            "actual_observed_ns": 1543471,
+            "delta_ns": 1,
+            "model_finish_ns": 1543470,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1558832,
+            "actual_observed_ns": 1558832,
+            "delta_ns": 2,
+            "model_finish_ns": 1558830,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1558832,
+            "actual_observed_ns": 1558832,
+            "delta_ns": 2,
+            "model_finish_ns": 1558830,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1750581,
+            "actual_observed_ns": 1750581,
+            "delta_ns": 1,
+            "model_finish_ns": 1750580,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1957691,
+            "actual_observed_ns": 1957691,
+            "delta_ns": 1,
+            "model_finish_ns": 1957690,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2411102,
+            "actual_observed_ns": 2411102,
+            "delta_ns": 2,
+            "model_finish_ns": 2411100,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2411102,
+            "actual_observed_ns": 2411102,
+            "delta_ns": 2,
+            "model_finish_ns": 2411100,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 2412721,
+            "actual_observed_ns": 2412721,
+            "delta_ns": 2,
+            "model_finish_ns": 2412719,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3071622,
+            "actual_observed_ns": 3071622,
+            "delta_ns": 2,
+            "model_finish_ns": 3071620,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3071622,
+            "actual_observed_ns": 3071622,
+            "delta_ns": 2,
+            "model_finish_ns": 3071620,
+            "ordinal": 4,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3073241,
+            "actual_observed_ns": 3073241,
+            "delta_ns": 2,
+            "model_finish_ns": 3073239,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3081902,
+            "actual_observed_ns": 3081902,
+            "delta_ns": 2,
+            "model_finish_ns": 3081900,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3081902,
+            "actual_observed_ns": 3081902,
+            "delta_ns": 2,
+            "model_finish_ns": 3081900,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3083521,
+            "actual_observed_ns": 3083521,
+            "delta_ns": 2,
+            "model_finish_ns": 3083519,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3087102,
+            "actual_observed_ns": 3087102,
+            "delta_ns": 2,
+            "model_finish_ns": 3087100,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3087102,
+            "actual_observed_ns": 3087102,
+            "delta_ns": 2,
+            "model_finish_ns": 3087100,
+            "ordinal": 6,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3087115,
+            "actual_observed_ns": 3087115,
+            "delta_ns": 2,
+            "model_finish_ns": 3087113,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3092222,
+            "actual_observed_ns": 3092223,
+            "delta_ns": 2,
+            "model_finish_ns": 3092220,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3092263,
+            "actual_observed_ns": 3092263,
+            "delta_ns": 3,
+            "model_finish_ns": 3092260,
+            "ordinal": 8,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 3,
+        "max_abs_start_error_ns": 3,
+        "start_mismatches": [
+          {
+            "actual_ns": 877871,
+            "delta_ns": 1,
+            "model_ns": 877870,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 877871,
+            "delta_ns": 1,
+            "model_ns": 877870,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 877871,
+            "delta_ns": 1,
+            "model_ns": 877870,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1543471,
+            "delta_ns": 1,
+            "model_ns": 1543470,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 1543471,
+            "delta_ns": 1,
+            "model_ns": 1543470,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1543471,
+            "delta_ns": 1,
+            "model_ns": 1543470,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1750581,
+            "delta_ns": 1,
+            "model_ns": 1750580,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 1750581,
+            "delta_ns": 1,
+            "model_ns": 1750580,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1750581,
+            "delta_ns": 1,
+            "model_ns": 1750580,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2411102,
+            "delta_ns": 2,
+            "model_ns": 2411100,
+            "ordinal": 4,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 2411102,
+            "delta_ns": 2,
+            "model_ns": 2411100,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2411102,
+            "delta_ns": 2,
+            "model_ns": 2411100,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3071622,
+            "delta_ns": 2,
+            "model_ns": 3071620,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 3071622,
+            "delta_ns": 2,
+            "model_ns": 3071620,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 3071622,
+            "delta_ns": 2,
+            "model_ns": 3071620,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3081902,
+            "delta_ns": 2,
+            "model_ns": 3081900,
+            "ordinal": 6,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 3081902,
+            "delta_ns": 2,
+            "model_ns": 3081900,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 3081902,
+            "delta_ns": 2,
+            "model_ns": 3081900,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3087102,
+            "delta_ns": 2,
+            "model_ns": 3087100,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 3087102,
+            "delta_ns": 2,
+            "model_ns": 3087100,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 3092223,
+            "delta_ns": 3,
+            "model_ns": 3092220,
+            "ordinal": 8,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation",
+        "within_existing_2ns_check": false
+      },
+      "lifetime_expanded_events": 27,
+      "nonfinal_compute_started_at_full_output": [],
+      "public_tick_wakes": 20
+    },
+    "output_pressure_k2_tiles128": {
+      "actual_event_key_sets_match": true,
+      "actual_output_queue_wait_witness": false,
+      "actual_peak_output_slots": 1,
+      "actual_terminal_events": 45,
+      "blocked_final_compute_attempts": [],
+      "continuous_exact_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 424460,
+            "actual_observed_ns": 424460,
+            "delta_ns": 1,
+            "model_finish_ns": 424459,
+            "ordinal": 1,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 631570,
+            "actual_observed_ns": 631570,
+            "delta_ns": 2,
+            "model_finish_ns": 631568,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1090060,
+            "actual_observed_ns": 1090060,
+            "delta_ns": 1,
+            "model_finish_ns": 1090059,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1090060,
+            "actual_observed_ns": 1090060,
+            "delta_ns": 1,
+            "model_finish_ns": 1090059,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1095220,
+            "actual_observed_ns": 1095220,
+            "delta_ns": 1,
+            "model_finish_ns": 1095219,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1297170,
+            "actual_observed_ns": 1297170,
+            "delta_ns": 2,
+            "model_finish_ns": 1297168,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1298789,
+            "actual_observed_ns": 1298789,
+            "delta_ns": 3,
+            "model_finish_ns": 1298786,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1957690,
+            "actual_observed_ns": 1957690,
+            "delta_ns": 2,
+            "model_finish_ns": 1957688,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1957690,
+            "actual_observed_ns": 1957690,
+            "delta_ns": 2,
+            "model_finish_ns": 1957688,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1959309,
+            "actual_observed_ns": 1959309,
+            "delta_ns": 3,
+            "model_finish_ns": 1959306,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1972241,
+            "actual_observed_ns": 1972241,
+            "delta_ns": 2,
+            "model_finish_ns": 1972239,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1974669,
+            "actual_observed_ns": 1974669,
+            "delta_ns": 3,
+            "model_finish_ns": 1974666,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1983291,
+            "actual_observed_ns": 1983291,
+            "delta_ns": 3,
+            "model_finish_ns": 1983288,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2179351,
+            "actual_observed_ns": 2179351,
+            "delta_ns": 2,
+            "model_finish_ns": 2179349,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2189591,
+            "actual_observed_ns": 2189591,
+            "delta_ns": 2,
+            "model_finish_ns": 2189589,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2386461,
+            "actual_observed_ns": 2386461,
+            "delta_ns": 3,
+            "model_finish_ns": 2386458,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2593571,
+            "actual_observed_ns": 2593571,
+            "delta_ns": 4,
+            "model_finish_ns": 2593567,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3052061,
+            "actual_observed_ns": 3052061,
+            "delta_ns": 3,
+            "model_finish_ns": 3052058,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3052061,
+            "actual_observed_ns": 3052061,
+            "delta_ns": 3,
+            "model_finish_ns": 3052058,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 3057221,
+            "actual_observed_ns": 3057221,
+            "delta_ns": 3,
+            "model_finish_ns": 3057218,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3259171,
+            "actual_observed_ns": 3259171,
+            "delta_ns": 4,
+            "model_finish_ns": 3259167,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3260790,
+            "actual_observed_ns": 3260790,
+            "delta_ns": 5,
+            "model_finish_ns": 3260785,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 3919691,
+            "actual_observed_ns": 3919691,
+            "delta_ns": 4,
+            "model_finish_ns": 3919687,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 3919691,
+            "actual_observed_ns": 3919691,
+            "delta_ns": 4,
+            "model_finish_ns": 3919687,
+            "ordinal": 9,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 5,
+        "max_abs_start_error_ns": 5,
+        "start_mismatches": [
+          {
+            "actual_ns": 424460,
+            "delta_ns": 1,
+            "model_ns": 424459,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 424460,
+            "delta_ns": 1,
+            "model_ns": 424459,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 424460,
+            "delta_ns": 1,
+            "model_ns": 424459,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1090060,
+            "delta_ns": 1,
+            "model_ns": 1090059,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1090060,
+            "delta_ns": 1,
+            "model_ns": 1090059,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1297170,
+            "delta_ns": 2,
+            "model_ns": 1297168,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 1297170,
+            "delta_ns": 2,
+            "model_ns": 1297168,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1297170,
+            "delta_ns": 2,
+            "model_ns": 1297168,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1957690,
+            "delta_ns": 2,
+            "model_ns": 1957688,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1957690,
+            "delta_ns": 2,
+            "model_ns": 1957688,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1959309,
+            "delta_ns": 3,
+            "model_ns": 1959306,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 1972241,
+            "delta_ns": 2,
+            "model_ns": 1972239,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1972241,
+            "delta_ns": 2,
+            "model_ns": 1972239,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2179351,
+            "delta_ns": 2,
+            "model_ns": 2179349,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2179351,
+            "delta_ns": 2,
+            "model_ns": 2179349,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2386461,
+            "delta_ns": 3,
+            "model_ns": 2386458,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 2386461,
+            "delta_ns": 3,
+            "model_ns": 2386458,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2386461,
+            "delta_ns": 3,
+            "model_ns": 2386458,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3052061,
+            "delta_ns": 3,
+            "model_ns": 3052058,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 3052061,
+            "delta_ns": 3,
+            "model_ns": 3052058,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3259171,
+            "delta_ns": 4,
+            "model_ns": 3259167,
+            "ordinal": 9,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 3259171,
+            "delta_ns": 4,
+            "model_ns": 3259167,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 3259171,
+            "delta_ns": 4,
+            "model_ns": 3259167,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 3919691,
+            "delta_ns": 4,
+            "model_ns": 3919687,
+            "ordinal": 11,
+            "stage": "compute"
+          }
+        ],
+        "status": "deviation"
+      },
+      "integer_tick_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 1974669,
+            "actual_observed_ns": 1974669,
+            "delta_ns": 1,
+            "model_finish_ns": 1974668,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1983291,
+            "actual_observed_ns": 1983291,
+            "delta_ns": 1,
+            "model_finish_ns": 1983290,
+            "ordinal": 7,
+            "stage": "load"
+          }
+        ],
+        "max_abs_finish_error_ns": 1,
+        "max_abs_start_error_ns": 0,
+        "start_mismatches": [],
+        "status": "deviation",
+        "within_existing_2ns_check": true
+      },
+      "lifetime_expanded_events": 45,
+      "nonfinal_compute_started_at_full_output": [],
+      "public_tick_wakes": 40
+    },
+    "output_pressure_requested": {
+      "actual_event_key_sets_match": true,
+      "actual_output_queue_wait_witness": false,
+      "actual_peak_output_slots": 1,
+      "actual_terminal_events": 45,
+      "blocked_final_compute_attempts": [],
+      "continuous_exact_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 108676,
+            "actual_observed_ns": 108676,
+            "delta_ns": 1,
+            "model_finish_ns": 108675,
+            "ordinal": 1,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 160454,
+            "actual_observed_ns": 160454,
+            "delta_ns": 2,
+            "model_finish_ns": 160452,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 277637,
+            "actual_observed_ns": 277637,
+            "delta_ns": 2,
+            "model_finish_ns": 277635,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 277637,
+            "actual_observed_ns": 277637,
+            "delta_ns": 2,
+            "model_finish_ns": 277635,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 280237,
+            "actual_observed_ns": 280237,
+            "delta_ns": 2,
+            "model_finish_ns": 280235,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 329415,
+            "actual_observed_ns": 329415,
+            "delta_ns": 3,
+            "model_finish_ns": 329412,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 330225,
+            "actual_observed_ns": 330225,
+            "delta_ns": 4,
+            "model_finish_ns": 330221,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 495856,
+            "actual_observed_ns": 495856,
+            "delta_ns": 4,
+            "model_finish_ns": 495852,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 495856,
+            "actual_observed_ns": 495856,
+            "delta_ns": 4,
+            "model_finish_ns": 495852,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 496666,
+            "actual_observed_ns": 496666,
+            "delta_ns": 5,
+            "model_finish_ns": 496661,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 503132,
+            "actual_observed_ns": 503132,
+            "delta_ns": 4,
+            "model_finish_ns": 503128,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 504345,
+            "actual_observed_ns": 504345,
+            "delta_ns": 4,
+            "model_finish_ns": 504341,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 508657,
+            "actual_observed_ns": 508657,
+            "delta_ns": 5,
+            "model_finish_ns": 508652,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 554910,
+            "actual_observed_ns": 554910,
+            "delta_ns": 5,
+            "model_finish_ns": 554905,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 560030,
+            "actual_observed_ns": 560030,
+            "delta_ns": 5,
+            "model_finish_ns": 560025,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 606688,
+            "actual_observed_ns": 606688,
+            "delta_ns": 5,
+            "model_finish_ns": 606683,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 658466,
+            "actual_observed_ns": 658466,
+            "delta_ns": 6,
+            "model_finish_ns": 658460,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 775649,
+            "actual_observed_ns": 775649,
+            "delta_ns": 6,
+            "model_finish_ns": 775643,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 775649,
+            "actual_observed_ns": 775649,
+            "delta_ns": 6,
+            "model_finish_ns": 775643,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 778249,
+            "actual_observed_ns": 778249,
+            "delta_ns": 6,
+            "model_finish_ns": 778243,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 827427,
+            "actual_observed_ns": 827427,
+            "delta_ns": 7,
+            "model_finish_ns": 827420,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 828237,
+            "actual_observed_ns": 828237,
+            "delta_ns": 8,
+            "model_finish_ns": 828229,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 993868,
+            "actual_observed_ns": 993868,
+            "delta_ns": 8,
+            "model_finish_ns": 993860,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 993868,
+            "actual_observed_ns": 993868,
+            "delta_ns": 8,
+            "model_finish_ns": 993860,
+            "ordinal": 9,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 10,
+        "max_abs_start_error_ns": 10,
+        "start_mismatches": [
+          {
+            "actual_ns": 108676,
+            "delta_ns": 1,
+            "model_ns": 108675,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 108676,
+            "delta_ns": 1,
+            "model_ns": 108675,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 108676,
+            "delta_ns": 1,
+            "model_ns": 108675,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 277637,
+            "delta_ns": 2,
+            "model_ns": 277635,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 277637,
+            "delta_ns": 2,
+            "model_ns": 277635,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 329415,
+            "delta_ns": 3,
+            "model_ns": 329412,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 329415,
+            "delta_ns": 3,
+            "model_ns": 329412,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 329415,
+            "delta_ns": 3,
+            "model_ns": 329412,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 495856,
+            "delta_ns": 4,
+            "model_ns": 495852,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 495856,
+            "delta_ns": 4,
+            "model_ns": 495852,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 496666,
+            "delta_ns": 5,
+            "model_ns": 496661,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 503132,
+            "delta_ns": 4,
+            "model_ns": 503128,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 503132,
+            "delta_ns": 4,
+            "model_ns": 503128,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 554910,
+            "delta_ns": 5,
+            "model_ns": 554905,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 554910,
+            "delta_ns": 5,
+            "model_ns": 554905,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 606688,
+            "delta_ns": 5,
+            "model_ns": 606683,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 606688,
+            "delta_ns": 5,
+            "model_ns": 606683,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 606688,
+            "delta_ns": 5,
+            "model_ns": 606683,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 775649,
+            "delta_ns": 6,
+            "model_ns": 775643,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 775649,
+            "delta_ns": 6,
+            "model_ns": 775643,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 827427,
+            "delta_ns": 7,
+            "model_ns": 827420,
+            "ordinal": 9,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 827427,
+            "delta_ns": 7,
+            "model_ns": 827420,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 827427,
+            "delta_ns": 7,
+            "model_ns": 827420,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 993868,
+            "delta_ns": 8,
+            "model_ns": 993860,
+            "ordinal": 11,
+            "stage": "compute"
+          }
+        ],
+        "status": "deviation"
+      },
+      "integer_tick_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 277637,
+            "actual_observed_ns": 277637,
+            "delta_ns": 1,
+            "model_finish_ns": 277636,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 277637,
+            "actual_observed_ns": 277637,
+            "delta_ns": 1,
+            "model_finish_ns": 277636,
+            "ordinal": 1,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 280237,
+            "actual_observed_ns": 280237,
+            "delta_ns": 1,
+            "model_finish_ns": 280236,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 329415,
+            "actual_observed_ns": 329415,
+            "delta_ns": 1,
+            "model_finish_ns": 329414,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 330225,
+            "actual_observed_ns": 330225,
+            "delta_ns": 1,
+            "model_finish_ns": 330224,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 495856,
+            "actual_observed_ns": 495856,
+            "delta_ns": 2,
+            "model_finish_ns": 495854,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 495856,
+            "actual_observed_ns": 495856,
+            "delta_ns": 2,
+            "model_finish_ns": 495854,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 496666,
+            "actual_observed_ns": 496666,
+            "delta_ns": 2,
+            "model_finish_ns": 496664,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 503132,
+            "actual_observed_ns": 503132,
+            "delta_ns": 3,
+            "model_finish_ns": 503129,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 504345,
+            "actual_observed_ns": 504345,
+            "delta_ns": 1,
+            "model_finish_ns": 504344,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 508657,
+            "actual_observed_ns": 508657,
+            "delta_ns": 3,
+            "model_finish_ns": 508654,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 554910,
+            "actual_observed_ns": 554910,
+            "delta_ns": 3,
+            "model_finish_ns": 554907,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 560030,
+            "actual_observed_ns": 560030,
+            "delta_ns": 3,
+            "model_finish_ns": 560027,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 606688,
+            "actual_observed_ns": 606688,
+            "delta_ns": 3,
+            "model_finish_ns": 606685,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 658466,
+            "actual_observed_ns": 658466,
+            "delta_ns": 3,
+            "model_finish_ns": 658463,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 775649,
+            "actual_observed_ns": 775649,
+            "delta_ns": 4,
+            "model_finish_ns": 775645,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 775649,
+            "actual_observed_ns": 775649,
+            "delta_ns": 4,
+            "model_finish_ns": 775645,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 778249,
+            "actual_observed_ns": 778249,
+            "delta_ns": 4,
+            "model_finish_ns": 778245,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 827427,
+            "actual_observed_ns": 827427,
+            "delta_ns": 4,
+            "model_finish_ns": 827423,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 828237,
+            "actual_observed_ns": 828237,
+            "delta_ns": 4,
+            "model_finish_ns": 828233,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 993868,
+            "actual_observed_ns": 993868,
+            "delta_ns": 5,
+            "model_finish_ns": 993863,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 993868,
+            "actual_observed_ns": 993868,
+            "delta_ns": 5,
+            "model_finish_ns": 993863,
+            "ordinal": 9,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 994678,
+            "actual_observed_ns": 994678,
+            "delta_ns": 5,
+            "model_finish_ns": 994673,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 998231,
+            "actual_observed_ns": 998231,
+            "delta_ns": 5,
+            "model_finish_ns": 998226,
+            "ordinal": 12,
+            "stage": "load"
+          }
+        ],
+        "max_abs_finish_error_ns": 6,
+        "max_abs_start_error_ns": 6,
+        "start_mismatches": [
+          {
+            "actual_ns": 277637,
+            "delta_ns": 1,
+            "model_ns": 277636,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 277637,
+            "delta_ns": 1,
+            "model_ns": 277636,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 329415,
+            "delta_ns": 1,
+            "model_ns": 329414,
+            "ordinal": 3,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 329415,
+            "delta_ns": 1,
+            "model_ns": 329414,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 329415,
+            "delta_ns": 1,
+            "model_ns": 329414,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 495856,
+            "delta_ns": 2,
+            "model_ns": 495854,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 495856,
+            "delta_ns": 2,
+            "model_ns": 495854,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 496666,
+            "delta_ns": 2,
+            "model_ns": 496664,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 503132,
+            "delta_ns": 3,
+            "model_ns": 503129,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 503132,
+            "delta_ns": 3,
+            "model_ns": 503129,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 554910,
+            "delta_ns": 3,
+            "model_ns": 554907,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 554910,
+            "delta_ns": 3,
+            "model_ns": 554907,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 606688,
+            "delta_ns": 3,
+            "model_ns": 606685,
+            "ordinal": 7,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 606688,
+            "delta_ns": 3,
+            "model_ns": 606685,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 606688,
+            "delta_ns": 3,
+            "model_ns": 606685,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 775649,
+            "delta_ns": 4,
+            "model_ns": 775645,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 775649,
+            "delta_ns": 4,
+            "model_ns": 775645,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 827427,
+            "delta_ns": 4,
+            "model_ns": 827423,
+            "ordinal": 9,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 827427,
+            "delta_ns": 4,
+            "model_ns": 827423,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 827427,
+            "delta_ns": 4,
+            "model_ns": 827423,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 993868,
+            "delta_ns": 5,
+            "model_ns": 993863,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 993868,
+            "delta_ns": 5,
+            "model_ns": 993863,
+            "ordinal": 12,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 994678,
+            "delta_ns": 5,
+            "model_ns": 994673,
+            "ordinal": 11,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 998231,
+            "delta_ns": 5,
+            "model_ns": 998226,
+            "ordinal": 12,
+            "stage": "compute"
+          }
+        ],
+        "status": "deviation",
+        "within_existing_2ns_check": false
+      },
+      "lifetime_expanded_events": 45,
+      "nonfinal_compute_started_at_full_output": [],
+      "public_tick_wakes": 40
+    },
+    "strict_small": {
+      "actual_event_key_sets_match": true,
+      "actual_output_queue_wait_witness": false,
+      "actual_peak_output_slots": 1,
+      "actual_terminal_events": 28,
+      "blocked_final_compute_attempts": [],
+      "continuous_exact_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 1861676,
+            "actual_observed_ns": 1861676,
+            "delta_ns": 1,
+            "model_finish_ns": 1861675,
+            "ordinal": 1,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1874621,
+            "actual_observed_ns": 1874621,
+            "delta_ns": 2,
+            "model_finish_ns": 1874619,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1933973,
+            "actual_observed_ns": 1933973,
+            "delta_ns": 1,
+            "model_finish_ns": 1933972,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1946918,
+            "actual_observed_ns": 1946918,
+            "delta_ns": 2,
+            "model_finish_ns": 1946916,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 1959101,
+            "actual_observed_ns": 1959101,
+            "delta_ns": 2,
+            "model_finish_ns": 1959099,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 1989677,
+            "actual_observed_ns": 1989677,
+            "delta_ns": 2,
+            "model_finish_ns": 1989675,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1990357,
+            "actual_observed_ns": 1990358,
+            "delta_ns": 2,
+            "model_finish_ns": 1990355,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2002622,
+            "actual_observed_ns": 2002622,
+            "delta_ns": 3,
+            "model_finish_ns": 2002619,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2002825,
+            "actual_observed_ns": 2002825,
+            "delta_ns": 4,
+            "model_finish_ns": 2002821,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2169662,
+            "actual_observed_ns": 2169662,
+            "delta_ns": 4,
+            "model_finish_ns": 2169658,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2169662,
+            "actual_observed_ns": 2169662,
+            "delta_ns": -199,
+            "model_finish_ns": 2169861,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 2221440,
+            "actual_observed_ns": 2221440,
+            "delta_ns": 4,
+            "model_finish_ns": 2221436,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2336062,
+            "actual_observed_ns": 2336062,
+            "delta_ns": 3,
+            "model_finish_ns": 2336059,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2338662,
+            "actual_observed_ns": 2338662,
+            "delta_ns": 3,
+            "model_finish_ns": 2338659,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2387840,
+            "actual_observed_ns": 2387840,
+            "delta_ns": 4,
+            "model_finish_ns": 2387836,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2388650,
+            "actual_observed_ns": 2388650,
+            "delta_ns": 5,
+            "model_finish_ns": 2388645,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2395115,
+            "actual_observed_ns": 2395116,
+            "delta_ns": 3,
+            "model_finish_ns": 2395112,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2395926,
+            "actual_observed_ns": 2395926,
+            "delta_ns": 5,
+            "model_finish_ns": 2395921,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2396329,
+            "actual_observed_ns": 2396329,
+            "delta_ns": 4,
+            "model_finish_ns": 2396325,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 2400640,
+            "actual_observed_ns": 2400641,
+            "delta_ns": 4,
+            "model_finish_ns": 2400636,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2400721,
+            "actual_observed_ns": 2400721,
+            "delta_ns": 5,
+            "model_finish_ns": 2400716,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2401451,
+            "actual_observed_ns": 2401451,
+            "delta_ns": 6,
+            "model_finish_ns": 2401445,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2401464,
+            "actual_observed_ns": 2401464,
+            "delta_ns": 6,
+            "model_finish_ns": 2401458,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2401504,
+            "actual_observed_ns": 2401504,
+            "delta_ns": 6,
+            "model_finish_ns": 2401498,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 199,
+        "max_abs_start_error_ns": 6,
+        "start_mismatches": [
+          {
+            "actual_ns": 1861676,
+            "delta_ns": 1,
+            "model_ns": 1861675,
+            "ordinal": 2,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1861676,
+            "delta_ns": 1,
+            "model_ns": 1861675,
+            "ordinal": 3,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1874621,
+            "delta_ns": 2,
+            "model_ns": 1874619,
+            "ordinal": 2,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 1933973,
+            "delta_ns": 1,
+            "model_ns": 1933972,
+            "ordinal": 3,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1933973,
+            "delta_ns": 1,
+            "model_ns": 1933972,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 1989677,
+            "delta_ns": 2,
+            "model_ns": 1989675,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1989677,
+            "delta_ns": 2,
+            "model_ns": 1989675,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2002622,
+            "delta_ns": 3,
+            "model_ns": 2002619,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2002622,
+            "delta_ns": 3,
+            "model_ns": 2002619,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2002825,
+            "delta_ns": 4,
+            "model_ns": 2002821,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 2169662,
+            "delta_ns": 4,
+            "model_ns": 2169658,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2169662,
+            "delta_ns": 4,
+            "model_ns": 2169658,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2336062,
+            "delta_ns": 3,
+            "model_ns": 2336059,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2336062,
+            "delta_ns": 3,
+            "model_ns": 2336059,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2387840,
+            "delta_ns": 4,
+            "model_ns": 2387836,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2387840,
+            "delta_ns": 4,
+            "model_ns": 2387836,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2388650,
+            "delta_ns": 5,
+            "model_ns": 2388645,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 2395116,
+            "delta_ns": 4,
+            "model_ns": 2395112,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2395116,
+            "delta_ns": 4,
+            "model_ns": 2395112,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2400641,
+            "delta_ns": 5,
+            "model_ns": 2400636,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2400641,
+            "delta_ns": 5,
+            "model_ns": 2400636,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2401451,
+            "delta_ns": 6,
+            "model_ns": 2401445,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2401464,
+            "delta_ns": 6,
+            "model_ns": 2401458,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation"
+      },
+      "integer_tick_oracle": {
+        "finish_mismatches": [
+          {
+            "actual_finish_ns": 1989677,
+            "actual_observed_ns": 1989677,
+            "delta_ns": 1,
+            "model_finish_ns": 1989676,
+            "ordinal": 4,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 1990357,
+            "actual_observed_ns": 1990358,
+            "delta_ns": 1,
+            "model_finish_ns": 1990356,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2002622,
+            "actual_observed_ns": 2002622,
+            "delta_ns": 1,
+            "model_finish_ns": 2002621,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2002825,
+            "actual_observed_ns": 2002825,
+            "delta_ns": 1,
+            "model_finish_ns": 2002824,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2169662,
+            "actual_observed_ns": 2169662,
+            "delta_ns": 1,
+            "model_finish_ns": 2169661,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2169662,
+            "actual_observed_ns": 2169662,
+            "delta_ns": 1,
+            "model_finish_ns": 2169661,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_finish_ns": 2221440,
+            "actual_observed_ns": 2221440,
+            "delta_ns": 1,
+            "model_finish_ns": 2221439,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2336062,
+            "actual_observed_ns": 2336062,
+            "delta_ns": 1,
+            "model_finish_ns": 2336061,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2338662,
+            "actual_observed_ns": 2338662,
+            "delta_ns": 1,
+            "model_finish_ns": 2338661,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2387840,
+            "actual_observed_ns": 2387840,
+            "delta_ns": 1,
+            "model_finish_ns": 2387839,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2388650,
+            "actual_observed_ns": 2388650,
+            "delta_ns": 1,
+            "model_finish_ns": 2388649,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2395115,
+            "actual_observed_ns": 2395116,
+            "delta_ns": 1,
+            "model_finish_ns": 2395114,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2395926,
+            "actual_observed_ns": 2395926,
+            "delta_ns": 2,
+            "model_finish_ns": 2395924,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2400640,
+            "actual_observed_ns": 2400641,
+            "delta_ns": 1,
+            "model_finish_ns": 2400639,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2400721,
+            "actual_observed_ns": 2400721,
+            "delta_ns": 2,
+            "model_finish_ns": 2400719,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_finish_ns": 2401451,
+            "actual_observed_ns": 2401451,
+            "delta_ns": 2,
+            "model_finish_ns": 2401449,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2401464,
+            "actual_observed_ns": 2401464,
+            "delta_ns": 2,
+            "model_finish_ns": 2401462,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_finish_ns": 2401504,
+            "actual_observed_ns": 2401504,
+            "delta_ns": 2,
+            "model_finish_ns": 2401502,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "max_abs_finish_error_ns": 2,
+        "max_abs_start_error_ns": 2,
+        "start_mismatches": [
+          {
+            "actual_ns": 1989677,
+            "delta_ns": 1,
+            "model_ns": 1989676,
+            "ordinal": 4,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 1989677,
+            "delta_ns": 1,
+            "model_ns": 1989676,
+            "ordinal": 5,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2002622,
+            "delta_ns": 1,
+            "model_ns": 2002621,
+            "ordinal": 5,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2002622,
+            "delta_ns": 1,
+            "model_ns": 2002621,
+            "ordinal": 6,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2002825,
+            "delta_ns": 1,
+            "model_ns": 2002824,
+            "ordinal": 5,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 2169662,
+            "delta_ns": 1,
+            "model_ns": 2169661,
+            "ordinal": 6,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2169662,
+            "delta_ns": 1,
+            "model_ns": 2169661,
+            "ordinal": 7,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2336062,
+            "delta_ns": 1,
+            "model_ns": 2336061,
+            "ordinal": 7,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2336062,
+            "delta_ns": 1,
+            "model_ns": 2336061,
+            "ordinal": 8,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2387840,
+            "delta_ns": 1,
+            "model_ns": 2387839,
+            "ordinal": 8,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2387840,
+            "delta_ns": 1,
+            "model_ns": 2387839,
+            "ordinal": 9,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2388650,
+            "delta_ns": 1,
+            "model_ns": 2388649,
+            "ordinal": 8,
+            "stage": "store"
+          },
+          {
+            "actual_ns": 2395116,
+            "delta_ns": 2,
+            "model_ns": 2395114,
+            "ordinal": 9,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2395116,
+            "delta_ns": 2,
+            "model_ns": 2395114,
+            "ordinal": 10,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2400641,
+            "delta_ns": 2,
+            "model_ns": 2400639,
+            "ordinal": 10,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2400641,
+            "delta_ns": 2,
+            "model_ns": 2400639,
+            "ordinal": 11,
+            "stage": "load"
+          },
+          {
+            "actual_ns": 2401451,
+            "delta_ns": 2,
+            "model_ns": 2401449,
+            "ordinal": 11,
+            "stage": "compute"
+          },
+          {
+            "actual_ns": 2401464,
+            "delta_ns": 2,
+            "model_ns": 2401462,
+            "ordinal": 11,
+            "stage": "store"
+          }
+        ],
+        "status": "deviation",
+        "within_existing_2ns_check": true
+      },
+      "lifetime_expanded_events": 28,
+      "nonfinal_compute_started_at_full_output": [],
+      "public_tick_wakes": 27
+    }
+  },
+  "epsilon_ns_exact": "1/1000000000000000",
+  "global_lifetime_expanded_event_cap": 256,
+  "min_wake_step_ns": 1,
+  "schema": "public_integer_tick_comparison_v1",
+  "scope": "offline one-activity L/C/S caller using the captured public Runtime facts; exact Fraction inner allocation and integer wake formula; not compiled multi-epoch Plan internal-transition validation"
+}

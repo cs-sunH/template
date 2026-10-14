@@ -1,0 +1,34 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 4089,
+      "sha256": "a687b4ceaf635e7421e3e9765c30ef618270b2ee27716256cf1db0f7fad431b1"
+    },
+    {
+      "path": "audit_capacity_online.py",
+      "bytes": 5492,
+      "sha256": "7da561db04b15fdb069bf138e8b67f3fcf8abc3d09df2e72fecd505c8366f22e"
+    },
+    {
+      "path": "audit_wire.py",
+      "bytes": 11740,
+      "sha256": "3504f06d8acc420bce0aad5bc67f392c5998d817cbfd13ff9c5c15fa68b6ae79"
+    },
+    {
+      "path": "inspect_captured_plans.py",
+      "bytes": 5816,
+      "sha256": "5e6b0212250e73e0bd2622aacab7f28fc51f5cabd365099044c776d7901d1667"
+    },
+    {
+      "path": "prepare_workspace_e2e.py",
+      "bytes": 7539,
+      "sha256": "8d92347d15914507392c9209b024c60985f30c6ceba99996987feb47f93b53eb"
+    },
+    {
+      "path": "run_online_e2e.sh",
+      "bytes": 9302,
+      "sha256": "ada5919aadc95dfe6f3ed4ac57fbe830bca881a5166f75cc07e0260f8a8f2ac8"
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+[  5%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/LedgerTypes.cc.o
+[  5%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/contrib/graphbuilder.cpp.o
+[  5%] Building CXX object AstraSim/extern/die_model/CMakeFiles/die_model.dir/src/Hardware.cc.o
+[  5%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/contrib/graphbuilderadapter.cpp.o
+[  5%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/binary.cpp.o
+[  5%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/convert.cpp.o
+[  5%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/TypedRows.cc.o
+[  5%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/depthguard.cpp.o
+[  5%] Building CXX object AstraSim/extern/die_model/CMakeFiles/die_model.dir/src/Workload.cc.o
+[  5%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/directives.cpp.o
+[  5%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/emit.cpp.o
+[ 10%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/emitfromevents.cpp.o
+[ 10%] Building CXX object AstraSim/extern/die_model/CMakeFiles/die_model.dir/src/Mapping.cc.o
+[ 10%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/emitter.cpp.o
+[ 10%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/CompactWire.cc.o
+[ 10%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/emitterstate.cpp.o
+[ 10%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/emitterutils.cpp.o
+[ 10%] Building CXX object AstraSim/extern/die_model/CMakeFiles/die_model.dir/src/CostModel.cc.o
+[ 10%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/CompactReader.cc.o
+[ 10%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/exceptions.cpp.o
+[ 10%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/exp.cpp.o
+[ 10%] Building CXX object AstraSim/extern/die_model/CMakeFiles/die_model.dir/src/Tx8Reference.cc.o
+[ 10%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/fptostring.cpp.o
+[ 10%] Building CXX object AstraSim/extern/die_model/CMakeFiles/die_model.dir/src/Execution.cc.o
+[ 10%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/memory.cpp.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/node.cpp.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/node_data.cpp.o
+[ 15%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/JsonScanner.cc.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/nodebuilder.cpp.o
+[ 15%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/PipelineDescriptor.cc.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/nodeevents.cpp.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/null.cpp.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/ostream_wrapper.cpp.o
+[ 15%] Linking CXX static library libdie_model.a
+[ 15%] Built target die_model
+[ 15%] Building CXX object AstraSim/extern/helper/fmt/CMakeFiles/fmt.dir/src/format.cc.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/parse.cpp.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/parser.cpp.o
+[ 15%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/regex_yaml.cpp.o
+[ 20%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/scanner.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/fmt/CMakeFiles/fmt.dir/src/os.cc.o
+[ 25%] Linking CXX static library libfmt.a
+[ 25%] Built target fmt
+[ 25%] Building CXX object AstraSim/extern/helper/spdlog/CMakeFiles/spdlog.dir/src/spdlog.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/scanscalar.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/scantag.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/scantoken.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/spdlog/CMakeFiles/spdlog.dir/src/stdout_sinks.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/simplekey.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/singledocparser.cpp.o
+[ 25%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/WorkLedgerCore.cc.o
+[ 25%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/stream.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/spdlog/CMakeFiles/spdlog.dir/src/color_sinks.cpp.o
+[ 25%] Building CXX object AstraSim/extern/helper/yaml-cpp/CMakeFiles/yaml-cpp.dir/src/tag.cpp.o
+[ 30%] Linking CXX static library libyaml-cpp.a
+[ 30%] Built target yaml-cpp
+[ 30%] Building CXX object AstraSim/CMakeFiles/joint_pipeline_core.dir/astra-sim/workload/execution_driven/PipelineKernel.cc.o
+[ 30%] Building CXX object AstraSim/extern/helper/spdlog/CMakeFiles/spdlog.dir/src/file_sinks.cpp.o
+[ 30%] Building CXX object AstraSim/extern/helper/spdlog/CMakeFiles/spdlog.dir/src/async.cpp.o
+[ 35%] Building CXX object AstraSim/CMakeFiles/joint_pipeline_core.dir/astra-sim/workload/execution_driven/NativeProjection.cc.o
+[ 35%] Building CXX object AstraSim/extern/helper/spdlog/CMakeFiles/spdlog.dir/src/cfg.cpp.o
+[ 35%] Building CXX object AstraSim/extern/helper/spdlog/CMakeFiles/spdlog.dir/src/bundled_fmtlib_format.cpp.o
+[ 35%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/EnvelopeReader.cc.o
+[ 35%] Linking CXX static library libspdlog.a
+[ 35%] Built target spdlog
+[ 35%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/basic-topology/BasicTopology.cpp.o
+[ 35%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/basic-topology/FullyConnected.cpp.o
+[ 35%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/basic-topology/Mesh.cpp.o
+[ 35%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/basic-topology/Ring.cpp.o
+[ 35%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/basic-topology/Switch.cpp.o
+[ 35%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/fluid/FluidFlow.cpp.o
+[ 35%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/fluid/FluidLinkState.cpp.o
+[ 35%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/fluid/FluidScheduler.cpp.o
+[ 35%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/RowParsers.cc.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/network/Device.cpp.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/network/Link.cpp.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/topology/Helper.cpp.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/topology/MultiDimTopology.cpp.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/congestion_aware/topology/Topology.cpp.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/common/NetworkFunction.cpp.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/common/event-queue/Event.cpp.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/common/event-queue/EventList.cpp.o
+[ 40%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/common/event-queue/EventQueue.cpp.o
+[ 40%] Linking CXX static library ../lib/libjoint_pipeline_core.a
+[ 40%] Built target joint_pipeline_core
+[ 45%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/PipelineStage.cc.o
+[ 50%] Building CXX object backend/CMakeFiles/Analytical_Congestion_Aware.dir/common/network-parser/NetworkParser.cpp.o
+[ 50%] Linking CXX static library ../lib/libAnalytical_Congestion_Aware.a
+[ 50%] Built target Analytical_Congestion_Aware
+[ 50%] Building CXX object AstraSim/extern/joint_ledger/CMakeFiles/joint_ledger.dir/src/DualLedger.cc.o
+[ 50%] Linking CXX static library libjoint_ledger.a
+[ 50%] Built target joint_ledger
+[ 50%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/BaseStream.cc.o
+[ 50%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/common/Logging.cc.o
+[ 50%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/BasicEventHandlerData.cc.o
+[ 50%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/CollectivePhase.cc.o
+In file included from /workspace/template/astra-sim-joint/extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h:10,
+                 from /workspace/template/astra-sim-joint/astra-sim/workload/HardwareResource.hh:14,
+                 from /workspace/template/astra-sim-joint/astra-sim/workload/Workload.hh:21,
+                 from /workspace/template/astra-sim-joint/astra-sim/system/Sys.hh:24,
+                 from /workspace/template/astra-sim-joint/astra-sim/system/BaseStream.hh:17,
+                 from /workspace/template/astra-sim-joint/astra-sim/system/BaseStream.cc:6:
+/workspace/template/astra-sim-joint/extern/graph_frontend/chakra/src/feeder_v3/common.h:4:10: fatal error: et_def.pb.h: No such file or directory
+    4 | #include "et_def.pb.h"
+      |          ^~~~~~~~~~~~~
+compilation terminated.
+gmake[3]: *** [AstraSim/CMakeFiles/AstraSim.dir/build.make:93: AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/BaseStream.cc.o] Error 1
+gmake[3]: *** Waiting for unfinished jobs....
+In file included from /workspace/template/astra-sim-joint/extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h:10,
+                 from /workspace/template/astra-sim-joint/astra-sim/workload/HardwareResource.hh:14,
+                 from /workspace/template/astra-sim-joint/astra-sim/workload/Workload.hh:21,
+                 from /workspace/template/astra-sim-joint/astra-sim/system/Sys.hh:24,
+                 from /workspace/template/astra-sim-joint/astra-sim/system/BaseStream.hh:17,
+                 from /workspace/template/astra-sim-joint/astra-sim/system/astraccl/Algorithm.hh:9,
+                 from /workspace/template/astra-sim-joint/astra-sim/system/CollectivePhase.cc:8:
+/workspace/template/astra-sim-joint/extern/graph_frontend/chakra/src/feeder_v3/common.h:4:10: fatal error: et_def.pb.h: No such file or directory
+    4 | #include "et_def.pb.h"
+      |          ^~~~~~~~~~~~~
+compilation terminated.
+gmake[3]: *** [AstraSim/CMakeFiles/AstraSim.dir/build.make:121: AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/CollectivePhase.cc.o] Error 1
+gmake[2]: *** [CMakeFiles/Makefile2:575: AstraSim/CMakeFiles/AstraSim.dir/all] Error 2
+gmake[1]: *** [CMakeFiles/Makefile2:3491: frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/rule] Error 2
+gmake: *** [Makefile:1324: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest] Error 2

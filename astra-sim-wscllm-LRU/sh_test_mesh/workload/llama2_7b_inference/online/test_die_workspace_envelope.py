@@ -293,6 +293,34 @@ class CabiEnvelopeTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkspaceEnvelopeError, "normalized_task_fingerprint"):
             self.client._validate_envelope(mismatched)
 
+    def test_capacity_bound_covers_feasible_templates_and_exact_u64(self) -> None:
+        for task in (attention_task(), ffn_task()):
+            bound = self.client.query_capacity_bound(task)
+            envelope = self.client.query(task)
+            self.assertGreaterEqual(bound.hbm_workspace_upper_bound_bytes,
+                                    envelope.max_hbm_workspace_peak_bytes)
+            self.assertEqual(bound.hardware_fingerprint, envelope.hardware_fingerprint)
+            self.assertEqual(bound.normalized_task_fingerprint,
+                             envelope.normalized_task_fingerprint)
+        large = self.client.query_capacity_bound(attention_task(1, 1 << 53))
+        self.assertEqual(large.hbm_workspace_upper_bound_bytes, (1 << 56) + 128)
+        with self.assertRaisesRegex(WorkspaceEnvelopeError, "overflow"):
+            self.client.query_capacity_bound(attention_task(1, 1 << 62))
+
+    def test_capacity_only_query_preserves_input_and_handle_lifecycle(self) -> None:
+        task = attention_task()
+        before = json.loads(json.dumps(task))
+        self.client.query_capacity_bound(task)
+        self.assertEqual(task, before)
+        invalid = attention_task()
+        invalid["spans"][0]["kv_tokens"] = True
+        with self.assertRaisesRegex(WorkspaceEnvelopeError, "uint64"):
+            self.client.query_capacity_bound(invalid)
+        scoped = DieWorkspaceEnvelopeClient(_HARDWARE_CONFIG, _REAL_LIBRARY)
+        scoped.close()
+        with self.assertRaisesRegex(WorkspaceEnvelopeError, "client is closed"):
+            scoped.query_capacity_bound(task)
+
     def test_context_manager_closes_single_model_and_close_is_idempotent(self) -> None:
         scoped = DieWorkspaceEnvelopeClient(_HARDWARE_CONFIG, _REAL_LIBRARY)
         with scoped as opened:

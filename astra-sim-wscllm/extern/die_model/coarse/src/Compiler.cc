@@ -520,6 +520,8 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
 
   const std::string expected_hardware = hardware.fingerprint.empty()
       ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
+  const u64 capacity_upper=
+      detail::workspace_capacity_upper_bound(hardware,normalized);
   u64 maximum = 0;
   for (const auto& candidate : candidates) {
     if (!candidate || candidate->task != normalized ||
@@ -528,6 +530,8 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
     }
     maximum = std::max(maximum, hbm_workspace_peak_bytes(*candidate));
   }
+  if(maximum>capacity_upper)
+    fail("compile", "mapping_invariant: candidate workspace exceeds the all-template lifetime bound");
 
   WorkspaceEnvelope result;
   result.candidate_count = static_cast<u64>(candidates.size());
@@ -537,6 +541,21 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
   result.op_kind = normalized.at("op_kind").get<std::string>();
   result.phase = normalized.at("phase").get<std::string>();
   result.normalized_task = normalized;
+  return result;
+}
+
+WorkspaceCapacityBound compile_workspace_capacity_bound(
+    const Hardware& hardware,const nlohmann::json& task) {
+  const nlohmann::json normalized=normalize_task(hardware,task);
+  WorkspaceCapacityBound result;
+  result.hbm_workspace_upper_bound_bytes=
+      detail::workspace_capacity_upper_bound(hardware,normalized);
+  result.hardware_fingerprint=hardware.fingerprint.empty()
+      ?stable_hash(hardware.input.dump()):hardware.fingerprint;
+  result.normalized_task_fingerprint=stable_hash(normalized.dump());
+  result.op_kind=normalized.at("op_kind").get<std::string>();
+  result.phase=normalized.at("phase").get<std::string>();
+  result.normalized_task=normalized;
   return result;
 }
 

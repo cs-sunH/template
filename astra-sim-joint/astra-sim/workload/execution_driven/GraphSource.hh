@@ -84,14 +84,15 @@ struct ComputeAttrs {
     bool has_remote_weight_bytes = false;
     uint64_t remote_weight_bytes = 0;
     // Die backend (joint rollout stage 1): the node's dispatch role and,
-    // when present, the strictly parsed immutable DieOpSpec. die_op_spec
-    // present implies runtime_ns == 0 (parser-enforced, contract §2); a
-    // real op_role=Compute node WITHOUT a die_spec fails closed in the die
-    // backend dispatch (never silently falls back to roofline). The
-    // shared_ptr keeps one immutable spec per node without copying the
-    // JSON payload into every short-lived view (design doc §8.3).
+    // when present, the strictly parsed immutable legacy DieOpSpec or the
+    // immutable coarse_die_task_v2 JSON object. Either typed payload implies
+    // runtime_ns == 0 (parser-enforced); a real op_role=Compute node without
+    // the payload for its selected backend fails closed in Workload. The
+    // shared_ptr keeps one immutable payload per node without copying JSON
+    // into every short-lived view.
     OpRole op_role = OpRole::Compute;
     std::shared_ptr<const DieModel::DieOpSpec> die_spec;
+    std::shared_ptr<const nlohmann::json> die_task_json;
 };
 
 /// Memory-node attributes (issue_remote_mem / issue_local_hbm_kv_restore).

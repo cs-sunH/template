@@ -990,6 +990,10 @@ class _JointDiePlanProvider:
     def __init__(self, *, die_context, tp_degree: int, layers: int,
                  chunk_tokens: int, hbm_bytes_per_ns: float,
                  factors_getter, mlp_variant: str) -> None:
+        from online.die_model_adapter import (
+            require_legacy_projection_context,
+        )
+        require_legacy_projection_context(die_context)
         # factors_getter() -> (prefill_factor, decode_factor)：决策时点读
         # 当前值（service factor 只缩放 service_units 的 §9.6-4 语义按
         # 查询时刻生效；供给器本体跨决策持久——估算 memo 与库内
@@ -1007,6 +1011,10 @@ class _JointDiePlanProvider:
             num_kv_heads=die_context._num_kv_heads,
             ffn_size=die_context._ffn_size,
             vocab_size=die_context._vocab_size,
+            task_schema=getattr(
+                die_context, "task_schema", "die_op_spec_v1"),
+            execution_profile=getattr(
+                die_context, "execution_profile", None),
         )
         self._die_config_path = die_context.die_config_path
         # Keep the resolved hardware semantics in the compact native input.
