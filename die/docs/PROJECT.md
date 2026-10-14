@@ -14,6 +14,8 @@
 
 TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作为目标 INT4/HBM3E 的独立实测训练集。source/cache、reference、粒度、目标硬件、五仓工程证据分别报告。
 
+建模复杂度遵守用户 2026-10-14 新增要求：与硬件设计参数、软件任务输入参数不直接相关的细节，能用简单数学公式直接计算时，采用公式，不深入建模。优先闭式/解析计数和固定数量分段表达；内部状态只为必要的参数响应、容量/工作量守恒和外部可观察的就绪/竞争保留。新增复杂机制须指出简单公式不足的具体证据和运行成本；硬件自变量与任务输入的正确覆盖继续是硬约束。
+
 持续开发以有意义的验证检查点同步 GitHub，不按阶段结束自动停工。检查点同步不等于模型精度或五仓工程验收。
 
 ## 当前代码与运行方式
@@ -44,6 +46,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 当前持续开发分支 `codex/die-workspace-envelope-20261014`；共享分支 `main`。已fetch/ff到用户新JOINT导入的 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge928f053/source cef6790b/CI38552490061 success。新workspace API/client/optional manager floor及双Plan压力诊断已验证，canonical23五仓新digest e0b6fd…cbbf78。新活动JOINT目前只接纯库，业务coarse适配待按新实现移植，joint_old存档不改。用户已要求本轮GitHub交接后停止，所有有效研究/部分脚本已冻结保存。交付源 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc` 已推送，[交接 PR #10](https://github.com/cs-sunH/template/pull/10) 需merged并fetch核main含交接版后安全接棒。scheduler E与store/migration物理释放门、OS C++ solo13 scratch待下一Session继续；生产精度/性能、TX8目标heldout及完整GQA输入仍未验收。
 
 ## 重要决定及变更记录
+
+- 2026-10-14 用户新增复杂度原则已写入 AGENTS、本项目说明和根设计 §1.4；本 Session 已从已合并 main `ad865f11` 恢复持续开发，上轮停止指令属于历史交接。后续研究与实现按上述公式优先原则收紧，保存已有有效成果。
 
 - 2026-10-14 workspace上界基础：一个task的全部Mapping候选由C++输出max exact u64，不改旧Plan identities；public30/30+62hash/summary全等、真实legacy240queries和生产ABI全等重放。LRU optional E默认0，fit取串行max(A,E)，永久E不可行fail、临时A可retry，不进KV/active/remote账；manager57与online154pass1skip/44通过。五仓ABI10build/config83、四仓Online/focused18通过；新main JOINT替换后仅纯库发布，旧业务结果不套用。scheduler E尚未激活，source-release门须早于KV容量复用。
 

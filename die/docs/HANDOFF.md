@@ -1,10 +1,12 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-14。用户已明确要求停止新开发、完成当前最小任务后迅速同步 GitHub 交接；所有子任务已冻结，无在途命令。合并 main 并核实后立即停止。本轮交接与历史记录分别列明。
+记录日期：2026-10-14。当前 Session 已从最新 main `ad865f11b6466dcc1d07a75be442740b8db20d01` 恢复持续自主开发，已核实包含上轮交接源码 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc`。下文停止/冻结指令与 PR #10 等记录均属于上轮历史交接，不是当前停工指令。
 
 ## Current Status
 
-### 当前 workspace envelope / 准入基础检查点
+当前继续 LRU 源物理释放排序、compiler-derived workspace 准入及新 JOINT additive 适配；仅使用活动 `astra-sim-joint`，`_old`保持档案。用户新增原则已写入 AGENTS、PROJECT 和根设计 §1.4：与硬件设计/软件任务输入不直接相关的细节，能用简单数学公式直接计算时采用公式，不深入建模。后续内部状态/复杂数值机制必须具有明确的输入/可观察行为必要性和简单公式不足的证据。当前开发尚在进行，测试和 GitHub 源码检查点将按实际完成范围另记。
+
+### 上轮已合并 PR #10：workspace envelope / 准入基础检查点
 
 当前共享 main 已 fetch/ff 到 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge `928f053` 以及用户新增的 JOINT 更新。该外部提交只改变活动 `astra-sim-joint` 和存档 `astra-sim-joint_old`；没有覆盖 die/LRU WIP。活动 JOINT 已更换实现，旧 coarse 业务适配结果不能套用；存档目录本轮未修改。当前分支 `codex/die-workspace-envelope-20261014`，本阶段源码/证据提交 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc` 已推送，[交接 PR #10](https://github.com/cs-sunH/template/pull/10) 已创建。只有该PR merged且fetch/ancestry核实main包含本交接版之后安全接棒；此前 **NOT READY FOR HANDOFF**。GitHub事实见 `evidence/workspace-envelope-20261014/github/`。
 
