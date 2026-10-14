@@ -41,7 +41,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-最新交接工作分支 codex/die-workspace-runtime-20261014；共享集成分支仍为 main。上轮 PR #5 已 merged，开始基线 c47ae85f479edd0953bbb432bc05139ef1c63541。当前交接的真实源码 SHA、PR、CI/合并结果见 docs/evidence/handoff-runtime-20261014/github.json；只有进入 main 并核对后才能接棒。本 Session 已按用户指令停止开发并进行交接。
+最新交接工作分支 codex/die-workspace-runtime-20261014；共享集成分支仍为 main。上轮 PR #5 已 merged，开始基线 c47ae85f479edd0953bbb432bc05139ef1c63541。当前源码交付提交 45cf4d23d56bfe37c19af1f62163bb821d65c55f，PR #6；源码 SHA/已实跑 CI 及最终 GitHub 状态入口见 docs/evidence/handoff-runtime-20261014/github.json；只有进入 main 并核对后才能接棒。本 Session 已按用户指令停止开发并进行交接。
 
 ## 重要决定及变更记录
 

@@ -9,6 +9,34 @@
     "head_sha": "fc6460f2713448a75404b87280ef78512ad9bf07",
     "merge_sha": "c47ae85f479edd0953bbb432bc05139ef1c63541"
   },
-  "delivery": "Pending commit and PR; NOT READY FOR HANDOFF until merged and remote main ancestry verified.",
-  "engineering_acceptance": "NOT ACCEPTED; see HANDOFF and verification.json"
+  "engineering_acceptance": "NOT ACCEPTED; see HANDOFF and verification.json",
+  "source_delivery_commit": "45cf4d23d56bfe37c19af1f62163bb821d65c55f",
+  "source_delivery_url": "https://github.com/cs-sunH/template/commit/45cf4d23d56bfe37c19af1f62163bb821d65c55f",
+  "pull_request": {
+    "number": 6,
+    "url": "https://github.com/cs-sunH/template/pull/6",
+    "base": "main",
+    "head": "codex/die-workspace-runtime-20261014"
+  },
+  "source_ci": {
+    "commit_sha": "45cf4d23d56bfe37c19af1f62163bb821d65c55f",
+    "run_id": 38516660520,
+    "url": "https://github.com/cs-sunH/template/actions/runs/38516660520",
+    "status": "completed",
+    "conclusion": "success",
+    "jobs": [
+      "build-coarse-die",
+      "validate-handoff"
+    ],
+    "saved_result": "source-ci.json"
+  },
+  "recorded_at_utc": "2026-10-14T05:29:23.526460+00:00",
+  "record_scope": "Submission metadata recorded after source CI succeeded. This metadata-only followup commit has the same production source. A commit cannot contain its own SHA or a future merge SHA; use the linked PR for its final head/merge result.",
+  "handoff_readiness_rule": "READY FOR CODE HANDOFF only if PR #6 is merged into main and fetched origin/main contains source_delivery_commit plus this metadata/HANDOFF. Otherwise NOT READY FOR HANDOFF. Engineering remains NOT ACCEPTED.",
+  "next_account_commands": [
+    "git fetch origin main",
+    "git merge-base --is-ancestor 45cf4d23d56bfe37c19af1f62163bb821d65c55f origin/main",
+    "git show origin/main:die/docs/HANDOFF.md",
+    "git show origin/main:die/docs/evidence/handoff-runtime-20261014/github.json"
+  ]
 }

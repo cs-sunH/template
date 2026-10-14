@@ -1,9 +1,10 @@
 {
   "die/docs/evidence/handoff-runtime-20261014/README.md": "03f2c5802cccc6b3ebda6a6f36251d04a56340fdde2e2f1617aec799ec6947a1",
-  "die/docs/evidence/handoff-runtime-20261014/github.json": "55c5c7b9ea99765d6cb21ba0c1d001cd8b2e9e5686442d1830379b04f7556350",
+  "die/docs/evidence/handoff-runtime-20261014/github.json": "e7c5096aadb7fc0b452e6b597945997efe618152867b5982731de9fcfa634b78",
   "die/docs/evidence/handoff-runtime-20261014/cpp-workspace-validation-20261014.md": "706a9b51d25c5ba3c54201e5095179866942ddaf67a7b0386ed169af936be85b",
   "die/docs/evidence/handoff-runtime-20261014/cpp-workspace-ctest-final-20261014.log": "c0195f0e3b975d76a6fe7267a41552b2184073d394df819f4ad394f4f171bf59",
   "die/docs/evidence/handoff-runtime-20261014/ctest-die-cohort-flat.log": "e0278061bdf56ac6e0ed9096640bf9f9fe9bfb245209fe4739947a7986c427e3",
+  "die/docs/evidence/handoff-runtime-20261014/source-ci.json": "8c6c3243ac23f0e2fcb9f382aece66125392a91ca0123ea30bf9508238c9eaff",
   "die/docs/evidence/handoff-runtime-20261014/python-workspace-full-final.log": "4fb49354d36668b2ae7819ae7b898dae3b8171b4b674c51ba9965c537aa1ff97",
   "die/docs/evidence/handoff-runtime-20261014/python-typed-hardware-final.log": "ade93c7e3b2ab4f752a08f9a46c250aa4429f662955046cdd426a8558be1fd2d",
   "die/docs/evidence/handoff-runtime-20261014/compiled-oracle-current.json": "6dc0d90ecffa6df4d00f3577945917840c4b77ca114bcb1a3c93aa08e516fd3a",

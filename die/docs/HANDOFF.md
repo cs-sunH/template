@@ -12,14 +12,14 @@
 
 真实 compiled E5 oracle 重跑仍 failed，独占 finish 误差约 3.827%、HBM busy 约 124.951%；生产 E8/E16 unavailable/not_run。新 affine 嵌套及固定精度原型仅为独立研究，未接入生产。
 
-本交接是否可以直接接棒以 GitHub 为准：本分支 PR 必须 merged 到 main，且 fetch/ancestry 核实包含源码交付提交。未合并、推送失败、必要测试阻塞或远端未确认时为 NOT READY FOR HANDOFF。模型验收失败、未跑的 E2E 和后续研究边界另行保留，不冒充项目完成。GitHub 实际元数据写在本目录 evidence/handoff-runtime-20261014/github.json；不在提交前编造自身 SHA。
+本交接是否可以直接接棒以 GitHub 为准：[PR #6](https://github.com/cs-sunH/template/pull/6) 必须 merged 到 main，且 fetch/ancestry 核实包含源码交付提交和本交接元数据。未合并、推送失败、必要测试阻塞或远端未确认时为 NOT READY FOR HANDOFF。模型验收失败、未跑的 E2E 和后续研究边界另行保留，不冒充项目完成。源码 SHA、PR 与已实跑源码 CI 元数据写在本目录 evidence/handoff-runtime-20261014/github.json；未来 merge SHA 与该文件自身提交 SHA 无法提前写入，必须从所链接 PR/fetch 获取，不能编造。
 
 ## Integration Branch
 
 - 共享集成分支：main。
 - 本轮工作分支：codex/die-workspace-runtime-20261014。
 - 上轮 PR #5 已 merged，merge/main SHA 为 c47ae85f479edd0953bbb432bc05139ef1c63541。
-- 本轮代码、有效研究及交接文档一起提交；PR/源码 SHA/CI/合并结果以 github.json 和 GitHub 元数据为准。没有 force-push 或覆盖他人提交。
+- 本轮源码/成果交付提交：45cf4d23d56bfe37c19af1f62163bb821d65c55f；[PR #6](https://github.com/cs-sunH/template/pull/6) 目标 main。该源码提交 GitHub Actions [run 38516660520](https://github.com/cs-sunH/template/actions/runs/38516660520) 的公共构建/测试与交接检查均 success，结果保存为 source-ci.json。其后的提交只补交接元数据。最终 head/merge SHA 与 merged 状态取链接 PR；没有 force-push 或覆盖他人提交。
 - 下一账号先 fetch 最新 main，确认包含交付源码；忽略目录 work/、依赖与二进制不跨账号共享，按保存的源码/命令重建。
 
 ## Last Verified Base
