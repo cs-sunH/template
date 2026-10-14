@@ -1,120 +1,92 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-14。用户已明确要求停止启动新开发任务，当前最小任务收尾后保存并完成 GitHub 交接；合并与远端核实后立即停止。工程整体 **NOT ACCEPTED**。本文替代上轮当前状态；历史源码、测试和停止指令保留在 Git 历史及各 evidence/analysis 目录，[上轮完整记录](https://github.com/cs-sunH/template/blob/912b748/die/docs/HANDOFF.md) 不作为本轮指令。
+记录日期：2026-10-14。用户已重新授权持续自主开发；历史 Session 的停止指令不适用于当前任务。本轮继续使用新活动 `astra-sim-joint`，`astra-sim-joint_old` 仅供历史查询，未修改。工程整体 **NOT ACCEPTED**；检查点同步不等于模型精度、全部五仓业务或目标测量验收。
 
 ## Current Status
 
-本 Session 从最新 main `ad865f11b6466dcc1d07a75be442740b8db20d01` 恢复，已核实包含上轮 PR #10 源码 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc`。复用了公共 Compiler/Mapping/Runtime/C ABI、bounded OS facts、LRU workspace v2 桥接和前轮研究，没有重新拟合硬件常量或重做已通过成果。
+从远端 main `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，已核实包含 PR #11 merge `721ab833` 和源码 `60d18dc`。本轮分支 `codex/die-joint-runtime-20261014`，复用此前 Compiler/Mapping/Runtime、LRU finite-manifest margin/source-release、typed adapter 和 canonical23 发布基础；不重复已通过且未改的研究/业务范围。
 
-本轮实现 compiler-derived capacity-only bound、LRU finite-manifest future margin/实际 Plan 超界检查、源 store/migrate 物理释放依赖；公共、LRU focused 与两组实际 Online 已验证。用户新增公式优先原则已入 AGENTS、PROJECT、README 和根设计 §1.4。新活动 `astra-sim-joint` 完成 additive typed adapter/runtime/workspace seams 的定向检查点，但业务 sh30 provider/native projection 尚未迁移，不能称完整 JOINT 接入。`astra-sim-joint_old` 本轮未改，只作历史档案。
+本检查点包含三项成果：修复 attention 顺序 layer/pass 的 workspace 峰值；为新 JOINT 增加真正使用公共 Runtime 的 native local-domain 投影片段；将 E5 编译后 oracle 工具扩为实际 shape 单因素探针。源码及证据正在整理提交，远端未核实前 **NOT READY FOR HANDOFF**。当前没有停止指令，检查点之后继续剩余依赖。
 
-生产 E5 finish/busy 原 3%/5% 门槛仍失败，E8/E16 不可用；TX8 reference/target priors 冻结，目标 held-out 数据不可用，host 开销预算没有新通过证书。两组 Online 不是容量极限压力或芯片测量。
+新 JOINT 的真实 tiny legacy Online 已 C++/Python exit0，192/192 terminals、1 request 完成。真实 sh30 coarse-intended Online 在 provider 的旧投影 guard 显式拒绝；保留失败，没有删除 guard 或假装完整接入。新 native bridge 只支持 fresh frozen local domains，完整 live graph/world wire import、network/pool 所有权和 sh30 provider 尚未接通。
 
-**GitHub 源码交接已完成，可基于最新 main 安全接棒。** 源码与初版完整交接文档提交 `60d18dc26173f265f050e7f71fa3ad12196cbc5e` 经 [PR #11](https://github.com/cs-sunH/template/pull/11) 合并，merge `721ab833c3e17f856e7bf18b7175b7d5f3980901` 已 fetch/ff；source/principle ancestor 检查均 exit0。[源码 CI 38590775233](https://github.com/cs-sunH/template/actions/runs/38590775233) 的公共构建/CTest和文档检查均success。本文件最终元数据与 [GitHub事实](evidence/capacity-joint-handoff-20261014/github/) 在该 merge 后补入 main；工程整体仍 NOT ACCEPTED。
+生产 E5 的 finish/HBM busy 原 3%/5% 门槛仍失败，E8/E16 不可用；目标 raw/held-out 数据不可用，TX8 reference 和目标先验保持冻结；没有新的 host-overhead 通过证书。
 
-## Integration Branch
+## Integration Branch / Last Verified Base
 
-共享分支 `main`；本轮交付分支 `codex/die-capacity-joint-20261014`。用户原则文档提交 `912b748`、源码/交接文档 `60d18dc` 均已通过 PR #11 合入 main。随后仅补合并/CI/远端核实元数据，不再开发或新测试；不 force-push，不覆盖外部 main，不丢弃有效修改。下一账号 fetch 最新 main，核实包含源码60d18dc、merge721ab833和本HANDOFF，再创建工作分支。
-
-## Last Verified Base
-
-- 起始 main 基线 `ad865f11b6466dcc1d07a75be442740b8db20d01`，上轮 PR #10 已 merged；交接源码 merge 后实核 main `721ab833c3e17f856e7bf18b7175b7d5f3980901`，最终元数据提交不预编自身SHA。
-- 实际 LRU Online 的 checked-out context 为 `912b748` dirty tree；每文件 source SHA、diff、实际二进制 SHA 和 manifest provenance 单列，不能把 context SHA 冒充运行源码身份。
-- 公共 coarse C ABI SHA `c678d268a7f9e624d5389d5a11a830258f5b2a6bdbc4d6157c2a647cf231b0f1`，public static SHA `089ee1a432fb77491e57d5b613310b6aee59b131af121d9622969d9dbe7f8c81`。
-- canonical23 发布 digest `9d025e25699e44b708997da5e4bc9c45e60c75b02166be931282f20921c0c4f4`，活动五仓同步；`_old` 未同步/未改。
+- 共享分支 `main`；当前工作分支 `codex/die-joint-runtime-20261014`。
+- 起始远端/本地 HEAD 均 `d9cc0240e07064996b5330c5659f7f8c6866998a`，工作区起始干净。当前运行使用脏工作树，实际源码按 evidence 中逐文件 SHA 绑定，不能用起始 commit 冒充全部运行代码。
+- canonical23 五仓新 digest `45b7bf3d8df9969b8155323c79eecf1a81f8d1c7499177e811b6aedf2c4c3264`，sync/check 通过；`_old` 不参与发布。
+- Git fetch 和 branch push dry-run 成功。当前环境 `gh api` 对 `api.github.com` 返回 Forbidden，不能声称 PR 已创建或 CI 已核实；检查点通过正常 git 推送及远端 ancestry 核实同步，不 force-push。
 
 ## Completed
 
-### 公共编译器容量接口
+### Attention workspace 生命周期修复
 
-`include/coarse_die/{Plan.hh,Capi.h}`、`src/{Compiler,Mapping,Capi}.cc`、`tests/workspace_envelope_test.cc`：新增 C++ `WorkspaceCapacityBound` 和 `die_coarse_workspace_capacity_bound_v2`，同 normalization/identity，输出 exact u64、`workspace_capacity_bound_schema_version=1`、`capacity_model_revision=workspace_lifetimes_v1`、`capacity_bound_kind=all_template_lifetimes_without_sram_filter`。共享 checked-u128 attention rectangle/query 与 FFN lifetime 公式，省略 SRAM 候选筛选，不 enumerate/estimate，也不证明 task 可执行；不改 cache/Plan handles。
+`die/src/Mapping.cc` 在乘 `layer_instances * weight_passes` 之前保存一次 invocation 的 materialized score/query counts。workspace 和 candidate-independent capacity bound 使用该生命周期峰值；真实 slots/ops/读写/转换/计时工作仍按顺序重复次数计量。compact span count/batch 仍属于本次物化的请求集，不被擅自改成峰值 max。
 
-旧候选 envelope/Plan JSON、hash 和 summary 不变。加入 candidate max 不超过新 bound 的内部断言。反例：父任务可因 SRAM 筛选只余零 workspace mapping，子任务却有物化 workspace 8,704 B；筛选前父 bound 98,304 B 能覆盖。token 总和单独不能证明 attention span 矩形覆盖。INT4 奇数/重复/overflow/零shape/head/dtype/metadata 边界有正式测试。旧62任务 identity 完整全等，旧240 envelope response/error 完整全等。
+受影响 full-score 和 standalone QK template/dataflow 升 v3，Plan 带 `workspace_model_revision=workspace_lifetimes_v2`；C ABI capacity revision 升 v2。旧 Plan wire import 仍保留其原始 identity/语义，新编译结果不能冒用旧 hash。LRU client/manifest 证书 strict-v2，拒绝 v1，不混用旧 E 证书。详见 `analysis/attention-workspace-20261014/` 与 evidence。
 
-### LRU future margin 与物理释放
+### 新 JOINT native local-domain 垂直接线
 
-`online/{die_workspace_envelope,manifest_workspace_envelope,wsc_llm_online_scheduler,online_service}.py`、`session_kv_manager.py`：required+coarse finite `request_aggregated` manifest 初始化前查询 C++ bound，为每rank安装不可变 E。P 每请求 fresh production emitter；D 取各请求完整 compact decode progression 的并集和最大 passes，对所有14 typed op/all group ranks 查询。没有 Python 延迟/workspace 公式。证书一次保存 `bridge/workspace_envelope_certificate.json` 后丢弃大 proof，保留 frozen margin/identity。
+`NativeCoarseDieDomain` 以一个共享 `coarse_die::Runtime` 服务一个物理 rank/domain；Plan 链按真实 terminal tick 提交下一项，外节点只完成一次，端点与 COMP 共用同一仲裁/credit/served/busy 域。提交前校验完整链/端点，失败不推进已有工作；cancel 只保留已服务量；终态 Runtime handle 回收，completion 消费后才可复用 leg ID；in-process fork 复制 Runtime、链绑定和完成队列。
 
-`WorkspaceAdmission.hh`、`ParsedGraphBatch.cc`：optional full-rank `prospective_workspace_bytes` strict u64，显式0与缺省区分，后续不允许新增/移除/改变。fit 为 `base + max(A,E) <= capacity`，E 不进 active/revision/KV/reservation/remote账。实际 Plan `W>E` 在 acquire/mutation 前拒绝。正常每rank串行 Compute gate 是 max 而非 sum 的前提；不覆盖绕过 gate 的 direct 并发调用。
+`NativeProjection` 新增冻结 `coarse_die_domains` 与显式 `coarse_endpoint`；typed coarse descriptor 直接编译公共 Plan，旧 A3 timer/memory 路径不接管 coarse 工作。baseline/candidate overlay 保留同一冻结硬件、各自私有 Runtime。native gate/依赖仍由原图管理，coarse outer terminal 才释放。Python 仅序列化输入和结果，无延迟公式；legacy wire 省略新字段。
 
-`generate_wsc_llm_trace.py`、`online/graph_batch_builder.py`：仅 required 路径保存 per-source-rank release ACK ledger。remote_store source=edge 用 mem_store completion，否则 ACK recv；noc_migrate 用 source ACK recv。后续同rank ordinary COMP、remote_load 目的 HBM 写及迁移目的 recv_kv 在容量复用前依赖该终端，保留 pool store tails/marker/timer/旧 OFF emission。OFF JSON baseline 字节全等，SHA `64945939abc1ef398486bf8823f87e1770a8ddae29fc4ad41e63790e46a099d0`。
+当前 profile `fresh_integer_local_domains_v1`，整数 ns <=2^53-1；拒绝旧 scalar 活跃剩余状态、混合未分配所有权的 stream/pipeline、仅预测侧 eta/gamma/service factor。`export_runtime_snapshot()` 是完整公共 Runtime snapshot，但**不是**完整 wrapper/world wire import；结果明确 `live_world_import_supported=false`。sh30 guard 保留。初次 native 联测发现 overlay 丢失冻结 domains，已修复并保留失败/成功日志。
 
-`execution_driven/tests/graph_batch_committer_test.cc` Part Q：real parser/committer/NodeStore 的 live ACK、terminal、跨batch与GC语义；test-local parent+p2p Kahn检查及负cycle witness。**生产 preflight 仍是 perrank parent cycle 检查，不是完整 parent+p2p cycle 验收。**
+真实 tiny legacy Online 成功，新 coarse-intended Online 在 provider guard 拒绝；这两项与 native fixture parity 分开记录。说明、实际命令和证据在 `analysis/native-local-projection-20261014/` 及对应 evidence。
 
-两组真实8rank Online：两session各两turn，MHA4/H512/F1024/vocab512/BF16/1layer；P64/700、P96/900，D2/5、D3/3；合法4×2 mesh、P0–3/D4–7 Ring2×2，CABI capacity 144,000,000,000 B/rank，无假容量/需求或policy patch。默认/iteration cap2 均 C++0/Python0，16/19 batches，480/560 typed Plans，48/56 正 workspace Plans，764/880 successful terminals，128/152 capacity rows fit，8条migration ACK容量消费者依赖，GC retained0。所有 Plan W<=E，最终active0；revision推导480/560 balanced lease pairs。bridge边界没有采到正live workspace，不称实际采样占用时间线。两run同证书 SHA `6dcb74dc62af91711c8f2161aca9a36e7678ecee32b89cee8d38c4cf57603abb`；P E=12,128,704 B/rank，D E=324,200；actual最大P921,600/D4096（cap2 D2048）。未观测 remote-store/restore 容量压力，仅 focused fixtures 覆盖其排序。
+### E5 单因素诊断工具
 
-### 新 JOINT additive 检查点
+实际 C++ driver 新增 M/N/K CLI，默认旧 shape 保留；独立 grouped-Q/alpha K-wave oracle 支持 full/tail K 与 M/N tile classes，并披露逐行/方向累计计数。M80/N128/K128 实际选择 WR `1x64x64`，不与深 K 的 OS `16x64x64` 强做同因素对拍。K4096 对 K4097、full-MN 对 edge-MN 两组实际保持同 OS tile/template。
 
-活动新仓中的 Python `online/die_model_adapter.py`/oracle/builder、`generate_trace.py`/face scheduler 保留 legacy `die_op_spec` 和旧 A3 路径，新增 explicit `coarse_die_task_v2` typed构造/真实ABI校验，缺必要输入 fail-closed，无另写Python时序。GraphSource/parser/NodeStore保存 typed JSON；`DieModelAdapter`、`CoarseDieRuntime`、Sys/Workload 在occupy前以同一Plan完成 workspace lease→submit→一次release，LocalHbm端点接同Runtime。CMake protobuf生成放build tree，链接canonical coarse源。
-
-schema3 legacy请求字节保持原样，coarse可加workspace_state；typed response须有完整snapshot/revision，commit原子install后reissue。四项新/扩充C++binary（CoarseWorkspaceRuntime、GraphBatchCommitter、ParsedBatch、WorkLedgerBridge）及 legacy Adapter/Lifecycle binary通过；Python legacy31+coarse14共45/45，无skip，全部14typed op实际CABI估值0error。**这些是seam/fixture证据，不是新JOINT production Online/native projection/world parity。** `_JointDiePlanProvider` 的 native frozen guard 保留，sh30真实业务typed emitter尚不可达。有效部分全部保存，不把旧JOINT已验结果套用到新仓。
-
-### OS研究恢复（不接生产）
-
-`analysis/os-kernel-recovery-20261014/` 保存恢复后的fixedwidth scratch及rebuild入口，evidence保存17场景full differential、2247 Fraction primitive、正确overflow输入的ASan/UBSan smoke通过。精确gcd=1快捷路径减少long division计数，256-bit normalized/768-bit scratch/u128域未扩展；没有walltime speedup结论。n30与并发build重叠，结果污染，P95约151–194ms不能认证设计预算；perf不可用。public-ns探索3场景仍超原2ns比较界，未放宽。single-owner日志没有可达“两个输出槽全满挡住final-C”竞争witness。
-
-只读 `analysis/os-kernel-e5-granularity-audit-20261014.md` 指出E5 `R10,Tk65` 的650 K消费被聚合成R10宏轮，repeat8仅metadata；compute账守恒但HBM busy/finish不准。建议最小full/tail M/N和K类/有限输出槽及稳定联合owner周期的解析表示，简单公式能表达的辅助计算不深化。该建议未实现，研究不替代生产E5证书。
+三个可比场景的 solo/synchronous/50ms-offset 精度均 failed。计划整数工作量守恒；累计 long-double serialized counters 有微小非零尘埃，严格相等与数值 reconciliation 分开，不把容差通过称整数全等。此工具不修改生产 timing、不颁发粒度证书。报告在 `analysis/gemm-axis-20261014/` 与 evidence。
 
 ## Next Step
 
-本 Session **不执行**以下工作；下一账号从交付 main 继续，不重做上面的已通过范围。
+以下按依赖继续，不是任务/阶段数量限制。
 
-1. 先核共享main源码/本HANDOFF和工具，读根两设计文档及对应代码；使用新JOINT，old仅查历史并把有用记录迁到新仓。
-2. 完成新JOINT业务入口：从 `_JointDiePlanProvider`/sh30 frozen native guard、native world projection、JointKVCacheManager/decision bridge开始，明确原业务策略/virtual pipeline/pool/ledger和cancel回放映射。复用已落地typed/runtime seams；先真实legacy兼容和单请求production Online，随后known-world/snapshot/并发/取消，不能仅移除guard绕过未支持语义。
-3. LRU收紧formal coverage与真正容量压力：已有四请求55合法D cohort/offset、cap与first/remainder tests和两run不是全manifest定理或容量极限证据。证明每typed OP的shape/span domination；准备源capacity真实可达的store/restore/迁移压力和closed-input路径。base WSCLLM尚缺prospective margin，FACE/FACE-LRU workspace桥接须按各策略迁移；完整 parent+p2p cycle preflight 若需要按bounded实际图实现。
-4. 生产精度优先修必要K/final-output readiness：复用 bounded geometry/per-K facts、现有grouped-Q/alpha oracle、full-tail/MN类和简单周期公式；先同选tile K深度/shape轴反例，再单/同步/offset owner。只在联合state/LP区域证明稳定时跳过，外部capacity/cancel边界切段，不能逐tile扩张或reset lifetime256预算。完整outputblocked witness/整数publicclock语义未证明。不要直接把重型fixed-rational scratch接Runtime；其成本和复杂度不符合当前证据。
-5. 若另改attention重复workspace峰值（目前与FFN不一致，可能把顺序layer/pass计入峰值），独立修复并明确版本/identity变化，不能偷偷改变本检查点旧Plan。完整GQA producer的q_heads/kv_heads输入及各KV/TP消费者仍待接齐。
-6. 达到结构精度后按设计测试host query/cold/update/J32/Online开销，再逐仓真实旧record/key/gate/window、COMP+COMM/restore/pool/cancel/snapshot。只扩展与新失败/改源相关测试，不重复已验证工作。TX8仅有cached源重建，等独立目标raw/heldout/probe及可辨识性再拟合；不得拟合源常量或把reference效率迁到目标。
+1. 先把当前有效源码/证据同步远端并核实 main；若收到交接指令，保存全部有效在途成果和最终 GitHub 状态后停止。当前继续开发。
+2. 完成新 JOINT domain wrapper 的完整版本化 snapshot/import：保存 chain cursor、全部 immutable Plans、owner/handle、端点绑定、保留终态与未消费 completion；复用公共 Runtime import 校验，额外验证 wrapper bindings/handle bijection/Plan identity，原子建新域。然后 native graph/gate/event/world snapshot/fork、相同已知 arrival/cancel/capacity 事件回放。
+3. 审查新 JOINT PipelineKernel/WorkLedger/remote-read/pool 与网络腿唯一 local endpoint 所有权；不能把 scalar stream 直接塞进本地 Runtime或仅移除 guard。复用新 fresh-domain parity，再接 `_JointDiePlanProvider`/真实 sh30 typed emitter，同源名义查询和 candidate world。旧策略、virtual pipeline、pool、ledger/cancel 必须保留。
+4. 依据新 E5 axis 证据修必要 K/final-output readiness；复用 bounded OS geometry/per-K facts、有限 full/tail 类及简单稳定周期公式。先 solo/同步/offset，再 multiCore/WR；只在联合 owner/slot/LP 区域确证稳定时跳过，外部事件切段。不把重型 fixed-rational scratch 直接接生产，不逐 tile 展开，不重置 lifetime256 cap，不扩大3%/5%。
+5. LRU finite-manifest formal shape/span domination、真实容量极限 store/restore/migrate 压力和 closed-input 仍待补；base prospective margin 与 FACE/FACE-LRU workspace 桥接按原策略推进；完整 GQA producer 及其 KV/weights/TP/transfer/readiness 消费链仍缺。保留旧 source-release 顺序和 OFF wire。
+6. 结构通过后测当前 source 的 cold/hit/update/J32/Online CPU/RSS 与 cache/event/LP；补 region launch/setup、vector 首次参数读/长行转换/residency/readiness 成本余项。没有新目标数据不重拟 TX8或目标效率，不用BF16/DDR替代INT4/HBM测量。
 
 ## Important Decisions
 
-- 用户2026-10-14新增原则：与硬件设计参数、软件任务输入参数不直接相关的建模细节，能用简单数学公式直接计算就采用公式，不深入建模。该要求高于研究方案偏好；必要硬件参数覆盖、任务shape/精度/TP/span和真实readiness/竞争仍保留。复杂机制必须给简单公式不足的输入/行为证据及成本。
-- 一份C++ canonical与同Runtime；Python仅数据/协议/调度，不复制延迟或容量公式。capacity-only bound和candidate envelope是两种证据，不混用。
-- Future E是fit margin，与active取max，不是实际占用；immutable fullrank/strict u64、actual Plan超界fail-before-mutation。default OFF字节兼容。
-- 不扩大3%独占/5%并发busy/finish、2ns exploratory fixture、active/event/LP预算，不用延迟修正系数掩盖结构错误。research256 events不是Runtime256 LP pivots证书。
-- 只编辑活动joint；各仓业务差异/旧策略保留，vendor发布不等于业务接入。
-- TX8两conditional reference参数：`eta_compute_reference=0.9079551923877489`（同PE/vector），`eta_vector_memory_reference=0.3411668292682927`；源Norm246μs、FFN3363μs后者是条件解释，13group不重复加BLOCK。源workbook SHA `eba181c80a2d51bd5a604bad6928610ea5039824b4ec4d5d9bd023ee4bda52ee`本轮核实，未再拟合/重跑audit。
-- target assumed：eta_pe/eta_vec0.90，eta_hbm_matrix/vector0.70，eta_sram1，eta_local/mesh/inject0.70，rho_sram0.90，launch1000ns/macro，memory_setup0，kappa_quant4、kappa_acc_convert2。本轮未改。cache/formula/13group条件reference历史passed不是目标测量；无raw/heldout，不可辨识目标INT4/HBM/NoC/launch。
+- 简单公式优先原则继续有效；复杂度仅服务于源架构/任务输入的可观察响应、容量/工作量守恒和真实依赖/竞争。native wrapper 是现有 Runtime 的生命周期桥接，没有第二套数值模型。
+- die 是唯一 canonical；5 仓同 digest，Python不重写 timing/capacity 公式。只改活动 JOINT，旧目录可读档案。
+- 顺序 layer/pass 不乘 temporary peak；compact span/batch 的当前物化集合语义保留。版本变化显式，旧证书不可复用。
+- future E 仍是 fit margin，`max(A,E)`，不计 active/KV/remote；actual Plan 超界在 mutation 前拒绝，正常串行 compute gate 是 max 而非 sum 的前提。source ACK/物理完成释放与容量复用排序独立保留。
+- fresh native world parity 不是 live snapshot/native production 完成，也不证明目标性能。禁用 unsupported legacy active state 时显式错误，不能给 scalar ETA 假恢复。
+- TX8 conditional reference：eta_compute_reference=0.9079551923877489、eta_vector_memory_reference=0.3411668292682927；Norm246us/FFN3363us 的身份与条件解释不变。目标 eta_pe/vec=.90、HBM=.70、SRAM=1、local/mesh/inject=.70、rho=.90、launch1000ns、memory_setup0、kappa_quant4/acc_convert2保持工程先验。
 
 ## Files to Continue
 
-- 公共容量：`include/coarse_die/{Plan,Capi}`、`src/{Compiler,Mapping,Capi}`、`tests/workspace_envelope_test.cc`；证明/重放 `analysis/workspace-capacity-proof-20261014/` 与对应evidence。
-- LRU：`WorkspaceAdmission.hh`、execution_driven parser/committer/tests；Python manifest/capacity client/scheduler/service/manager/builder；新portable `test_manifest_workspace_envelope.py` 只需tracked seed+实际CABI，在TemporaryDirectory重建，不依赖旧work。
-- 实际Online重建脚本 `analysis/lru-future-workspace-20261014/`，结果/身份 `evidence/lru-future-workspace-20261014/`；source-release focused `evidence/new/lru-source-release-20261014.md`。raw strace、大PlanJSON/依赖/二进制不提交，脚本可再生成；重建必须生成新source/binary身份，勿冒用历史package。
-- JOINT：`astra-sim-joint/astra-sim/{system,workload}/`及execution_driven；`sh_test_mesh/workload/llama2_7b_inference/{generate_trace,face_scheduler,online/*}`，优先 provider/sh30/native projection/business bridges；`evidence/joint-additive-20261014/` 记录实测范围；JOINT full Online target 本轮未构建/实跑。
-- 生产OS：Mapping append_epoch / bounded counters，Execution/Runtime，`validation/compiled_gemm_oracle.py`，历史 `evidence/cache-lifecycle-20261014/compiled-grouped-oracle-report.json`；新只读audit与os-kernel-recovery/PUBLIC_CLOCK；历史affine/solo proofs保留，按各自边界复用。
-- TX8：`configs/{calibration_tx8,engineering_prior}.json`、`calibration/`、`tools/calibrate_tx8.py`。根两设计文档是最终需求，不只依赖本摘要。
+- 新 native：活动 JOINT `execution_driven/{NativeCoarseDieDomain,NativeProjection}.{hh,cc}`、两新 C++ tests、CMake；Python `joint/{resource_projection,native_projection,die_plan_projection,test_native_coarse_projection}.py`。
+- 业务入口：`online/sh30_online_scheduler.py` provider、`face_scheduler.KVCacheManager`（不是假定存在 JointKVCacheManager 类）、`generate_trace.py`、`joint/{joint_cost_model,action_work_graph,pipeline_ledger,work_ledger,native_ledger}.py` 和 C++ PipelineKernel/WorkLedger runtime snapshot。按真实新仓实现迁移。
+- Workspace：公共 Mapping/Capi 与 attention/workspace tests；LRU client/manifest/test；之前 finite-manifest/capacity/source-release 证据仍有效，但旧v1容量证书不适用于新v2查询。
+- OS：`die/src/{Mapping,Execution}.cc`、GemmOSGeometry/AccessCounter/ResourceFacts，compiled/grouped oracle/driver 和既有 bounded proofs；旧 scratch 仅按其限定覆盖复用。
+- 新证据入口：`analysis/{attention-workspace,native-local-projection,gemm-axis}-20261014/` 和对应 evidence；五仓 ABI/config 在 `evidence/five-abi-attention-20261014/`。
 
 ## Tests
 
-忠实复用现有真实运行，停止指令后只做提交/证据/远端完整性检查，不扩展开发测试。
-
-| 本轮范围 | 真实结果与边界 |
-|---|---|
-| 公共最终default Release/CTest | 30/30，约16.39s；public-ctest.log；capacity additions没有改生产timing |
-| 旧Plan/旧envelope | 62/62 hash+完整summary全等；224success+16expectederror完整response全等 |
-| LRU实际CABI client | 13pass，显式提供incompatible legacy ABI测试缺符号；fixture历史archived库缺失不冒充通过 |
-| LRU online Python discovery | 182pass/2skip/15subtests；skip为可选oracle和缺archived pre-envelope库，专门client命令补covered incompatible路径；2 protobuf deprecation warnings |
-| LRU focused C++ | CTest5/5；GraphBatchCommitter单独binary ALL PASS，含新增PartQ ACK/GC |
-| LRU source release Python | 7/10/13/18/6/10 suite各pass，OFF字节全等；manifest+source+workspace组合18pass；不是unique加总 |
-| 两组真实 LRU Online | default与cap2 C++0/Python0/audit通过；具体batch/Plan/terminal范围见Completed及原始日志 |
-| 五仓canonical发布 | 23files同digest；base/FACE/FACE-LRU两ABI构建与config20+18+17=55无skip；LRU最终Online/两ABI构建/config15无skip。新JOINT ABI和定向seams另列；本轮JOINT config13未重跑，不能称全83/83 |
-| 新JOINT | 四项coarse/parser/committer/bridge及legacy adapter/lifecycle direct binary通过，Python45/45无skip，typed14估值0error；不外推真实Online和native projection |
-| OS research | recovered17/fullsuite、2247primitive、ASanUBSan smoke通过；n30污染/publicclock3failure保存，生产timing不变 |
-
-工具为GCC14.2/Python3.12.14，CMake3.31.10（work/tooling/cmake/data/bin）、protobuf C++21.12/protoc3.21.12 prefix work/deps/protobuf，Python protobuf4.25.8 prefix work/deps/python；`source work/activate.sh`设PATH/CMAKE_PREFIX_PATH/PYTHONPATH/PROTOBUF_FROM_SOURCE=True。这些ignored依赖不可跨账号假设。公共命令 `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release`、build、ctest。variant使用enable_testing+repo/backend/frontend aggregate、Release/congestion_aware/NETWORK_BACKEND_BUILD_AS_LIBRARY=ON/ASTRA_SIM_ROOT。Online脚本需strace与真实生成Chakra binding；JOINT生成binding在其ignored work目录。
-
-失败保留：早期错误PATH/环境/namespace/零workspace fixture/legacyJSON expected排序、stale six-field auditor和cap-run inspector路径、历史sanitizer2^200错误输入均标范围后修正；不把harness没执行测试当pass，不重新归一化provenance CSV CRLF。既存GCC __int128/potential dangling等warnings未全部审查。提交源码与文档通过 `git -c core.whitespace=cr-at-eol diff --cached --check`；原样捕获的diff证据中的空白context行及C++原始日志末尾空行单独排除，不修改已记录SHA的原始证据。
+- 公共 Release 默认 all build 成功；30/30 CTest passed，43.49s。这是 attention/public production 源的真实运行；另一 agent 同时开发的诊断 utility 另做最终独立 build/11项测试，不冒称其未稳定版本已被旧 all build覆盖。
+- LRU 最终 portable real-protoc client/manifest suite：19 total，18 passed/1 archived pre-envelope ABI unavailable skip；v1 revision rejection 是实际 ABI response 的回归。早先 marker shim setup 作废，正式 runner 不 mock generator/Path.exists/路由。
+- 四个非 JOINT 双 C ABI Release 全成功；显式真实两库 config 测试20+15+18+17=70/70，0skip。coarse库 SHA `14c35c774333814de2d6403696db2280c4f8d4d2eec9024f1fd5c0883307509e`、legacy `7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68`跨四仓一致。
+- 新 JOINT actual Online、joint_projection、双Die ABI、joint_ledger C ABI 均构建成功。NativeProjectionCApiTest、NativeCoarseProjectionTest、NativeCoarseDieDomainTest 3/3 pass；后加slot/join fixture增量test pass。真实两Die ABI的Python legacy+new native suite17/17，0skip。
+- 新JOINT tiny legacy Online C++0/Python0，1accepted/1completed、3delivery/3batch、192success terminals、0incomplete；coarse-intended Online在provider guard失败如实保留。当前服务只有strategy/Sh30入口，face/load-first也在策略选择前触发同一provider guard，故无合法非sh30 coarse Online旁路。JOINT config13/13无skip，与另四仓合83/83；focused adapter/workspace Python45/45无skip。
+- E5 utility 最终11项回归与独立 C++ target build通过；model-to-model precision仍failed，strict cumulative scalar equality/数值误差分别报告，不以Python自对拍当生产证书。
+- 未跑新的目标held-out、sanitizer、malloc fault、当前host预算或完整五仓业务。既存GCC __int128/JSON helper dangling-reference warnings保留：已读helper返回persistent JSON引用，未把警告直接断言成UB，也未声称完整内存安全审查。
 
 ## Blocking Issues
 
-- 工程：生产E5 finish/busy失败，E8/E16未提供；完整K/readiness/尾块/offset/multiCore/WR/cancel通用证明未完成。publicclock/outputblocked及cold/J32全域/Online10%预算未通过。
-- 集成：新JOINT sh30/nativeprojection业务仍guarded；base prospective margin、FACE/FACE-LRU workspace、全GQA producer/consumer、真正KV容量压力/remote_store Online和各仓全业务兼容未验收。
-- 校准：TX8缺raw/独立目标heldout，不能继续辨识目标参数。保持reference和target分离，不随软件测试结果拟合。
-- 交接：PR未merged、push失败或远端main未核源码/文档会阻止安全接棒；上述预期工程失败如实保存，不阻止保存可继续开发的代码交接。
+工程验收缺口：sh30/完整native live world、network/pool/ledger/cancel回放，E5精度/最小有效E，真正容量压力/完整GQA/FACE桥接、成本余项和host预算。目标测量not_available。以上不应由merge、fixture或条件reference数字冒充通过。
+
+当前源码尚在检查点提交/远端同步流程；只有源码与本交接摘要进入main并实核后才可安全跨账号接棒。
 
 ## Handoff Notes
 
-本 Session 用户停止指令生效，所有代理扩展任务已冻结。已完成和部分完成的有效源码、测试、解析研究、校准状态与失败证据一起保存；没有丢弃工作区、改 `_old` 或覆盖外部提交。停止时 JOINT 只完成 additive seams，下一账号按 Next Step 对其业务路径继续，不误判已完成。
-
-GitHub代码交接与工程验收分开：PR #11 merged、源码CI success、fetch/ff和ancestor均已实际确认，API结果已入本检查点GitHub evidence。本文件不预编自身commit；最终main HEAD在推送后核实。下一账号可从含本文件的最新main接棒，继续明确未验收项。本Session完成最后元数据同步及远端核实后立即停止，不执行Next Step。
+这是持续开发检查点，没有本轮用户停止指令。全部分工共用当前工作区并明确文件边界，GPT-6-Luna Max仅处理已授权细任务；没有修改old或丢弃外部main。实际工具源于`/workspace/cloud-setup/activate.sh`，CMake3.31.10/GCC14.2/protoc3.21.12/Python protobuf6.33.5；work里的依赖、build、二进制和stage拷贝不跨账号交付，复现脚本/源码/真实证据随仓。

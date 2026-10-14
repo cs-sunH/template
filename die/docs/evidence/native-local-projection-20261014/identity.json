@@ -1,0 +1,39 @@
+{
+  "base_commit": "d9cc0240e07064996b5330c5659f7f8c6866998a",
+  "context": "dirty working tree, source hashes bind the tested code; base commit alone is not the implementation identity",
+  "source_sha256": {
+    "astra-sim-joint/astra-sim/workload/execution_driven/NativeProjection.cc": "0ee25fb6c5cf58c7be264981cac61b06e23e9fb0ce8c0c8f656f3b846e2a4214",
+    "astra-sim-joint/astra-sim/workload/execution_driven/NativeProjection.hh": "50bfa081de8386e65f7b2909b4f341ea40c03b6d29c9bed96562d9e81eab6fec",
+    "astra-sim-joint/astra-sim/workload/execution_driven/NativeCoarseDieDomain.cc": "3636909a342f27bbd7c022fc477a75638edf2d5e21b992bb50a58fb09dbe48c0",
+    "astra-sim-joint/astra-sim/workload/execution_driven/NativeCoarseDieDomain.hh": "f960ea191a0c7f0e34271e13654a24cd856c455a1ce419e7a3dad82d63a1454b",
+    "astra-sim-joint/astra-sim/workload/execution_driven/tests/native_coarse_projection_test.cc": "9e8ad00f59743500bddc94f863f6fcfbe019cba7fbd7e3268b839fcc90ef70da",
+    "astra-sim-joint/astra-sim/workload/execution_driven/tests/native_coarse_die_domain_test.cc": "aaa099823ec1d5b801e8f6d6d841f3a3717c281317880173fd2c2f8cfc584adf",
+    "astra-sim-joint/CMakeLists.txt": "3605fdcfebb25a24ccc1da0186154833d63c6bf4c4cc903c9a490319b0848aca",
+    "astra-sim-joint/astra-sim/network_frontend/analytical/CMakeLists.txt": "ee91a89021f16ba97000a39b950c12af19907bc028e3b4d1639c0a9bc5a7a34e",
+    "astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/joint/resource_projection.py": "9c884046d905cd29340066b2bc647b359121187784f75cfa1dbafa21ef52d02c",
+    "astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/joint/native_projection.py": "38562487c012439379a6670327c1871b5c7c5c6a42111973701092f284c2261f",
+    "astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/joint/die_plan_projection.py": "2854cbda6763545f850bfd1e636db3d94072278f6f2ef67f4009942fc566eb80",
+    "astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/joint/test_native_coarse_projection.py": "31f3d71fa1c22fe538e99c3647fc9233f4941e5dbe1f7717f7ef9c80cfc6afac"
+  },
+  "binary_sha256": {
+    "work/build-joint/bin/NativeProjectionCApiTest": "ea3e1be8936bcf4fbc045b5f56ca1e5a3b9ebc5d8dfd786a8b637628b5f19146",
+    "work/build-joint/bin/NativeCoarseProjectionTest": "7f1fb48a834ca0e25f3e0bf8738ac6a17c3ca89b378c5ab0f139ec61f79acd95",
+    "work/build-joint/bin/NativeCoarseDieDomainTest": "d5c98ff3ac12729f4a360421abd33ace3e9c936c06e47a0742d7bcf8f045d171",
+    "work/build-joint/lib/libjoint_projection.so": "e6bf1100f201130554711a65c0fb3976f4debcdf5130b093de7d0ae12e6f48d6",
+    "work/build-joint/lib/libcoarse_die_cabi.so": "14c35c774333814de2d6403696db2280c4f8d4d2eec9024f1fd5c0883307509e",
+    "work/build-joint/lib/libdie_model_cabi.so": "fe16553813ac00874dfc5e1d0ea098236ea4fc06d1707567926b57b58137684b"
+  },
+  "canonical_source_digest": "45b7bf3d8df9969b8155323c79eecf1a81f8d1c7499177e811b6aedf2c4c3264",
+  "scope": "fresh_integer_local_domains_v1; no sh30 production enablement or live-world wire import",
+  "tests": {
+    "native_ctest": "final 3/3 passed after clock-bound validation and slot/join fixture",
+    "python_legacy_and_native_actual_abis": "final 17/17 passed no skips, all three ABI paths explicit",
+    "production_online": "pending separate evidence",
+    "joint_config": "13/13 passed no skips, both Die ABI paths explicit",
+    "joint_adapter_workspace_python": "45/45 passed no skips, actual Die ABIs"
+  },
+  "earlier_failure": "initial NativeCoarseProjectionTest found frozen coarse domains omitted by apply_projection_overlay; fixed by preserving the context domains",
+  "calibration": "unchanged target priors; no target measurements",
+  "model_granularity": "E5 still failed, no new certificate",
+  "previous_logs_scope": "native-ctest.log preserves the earlier missing-overlay-domain failure; later final logs bind current source. Online evidence is separate."
+}

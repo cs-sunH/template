@@ -44,6 +44,7 @@ from online.die_workspace_envelope import (  # noqa: E402
     DieWorkspaceEnvelopeClient,
     WorkspaceEnvelopeError,
 )
+import online.die_workspace_envelope as die_workspace_envelope_module  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder, _prefix_of  # noqa: E402
 from online.manifest_workspace_envelope import (  # noqa: E402
     derive_manifest_workspace_envelope,
@@ -284,9 +285,11 @@ class ManifestWorkspaceEnvelopeTests(unittest.TestCase):
     def test_certificate_matches_real_prefill_emission_and_normalized_rank_shapes(self):
         certificate = self.certificate
         payload = json.loads(certificate.canonical_json)
-        self.assertEqual(payload["schema"], "lru_manifest_workspace_certificate_v1")
+        self.assertEqual(payload["schema"], "lru_manifest_workspace_certificate_v2")
         self.assertEqual(payload["coverage"],
                          "serialized_current_prefill_and_decode_subset_v1")
+        self.assertEqual(payload["capacity_model_revision"],
+                         "workspace_lifetimes_v2")
         self.assertEqual(
             certificate.fingerprint,
             __import__("hashlib").sha256(
@@ -367,7 +370,7 @@ class ManifestWorkspaceEnvelopeTests(unittest.TestCase):
             self.assertEqual(self.d_group.ranks[
                 task["tp_slice"]["tensor_parallel_rank"]], rank)
             self.assertEqual(row["capacity_model_revision"],
-                             "workspace_lifetimes_v1")
+                             "workspace_lifetimes_v2")
             self.assertLessEqual(row["hbm_workspace_upper_bound_bytes"],
                                  self.certificate.bytes_by_rank[rank])
             max_d_bound_by_rank[rank] = max(
@@ -425,6 +428,24 @@ class ManifestWorkspaceEnvelopeTests(unittest.TestCase):
                                     queried)
         self.assertEqual(cohorts, 55)
         self.assertGreater(len(queried), 0)
+
+    def test_client_rejects_legacy_v1_capacity_model(self):
+        spec = self._actual_prefill_specs()[0][1]
+        original_reader = die_workspace_envelope_module._read_owned_json
+
+        def downgrade_revision(library, pointer, description):
+            response = original_reader(library, pointer, description)
+            if description == "die_coarse_workspace_capacity_bound_v2":
+                response["capacity_model_revision"] = "workspace_lifetimes_v1"
+            return response
+
+        with patch.object(die_workspace_envelope_module, "_read_owned_json",
+                          side_effect=downgrade_revision):
+            with self._client() as client:
+                with self.assertRaisesRegex(
+                        WorkspaceEnvelopeError,
+                        "unsupported workspace capacity lifetime model"):
+                    client.query_capacity_bound(spec)
 
     def test_first_step_and_remainder_are_covered_for_uncapped_and_capped_trains(self):
         rows = [row for row in self.manifest["requests"]

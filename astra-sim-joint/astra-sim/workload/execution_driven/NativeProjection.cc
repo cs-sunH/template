@@ -6,6 +6,7 @@ Native exact-projection input contract and world implementation.
 
 #include "astra-sim/workload/execution_driven/PipelineKernelContract.hh"
 #include "astra-sim/workload/execution_driven/PipelineKernel.hh"
+#include "astra-sim/workload/execution_driven/NativeCoarseDieDomain.hh"
 #include "DieModel.hh"
 
 #include <algorithm>
@@ -48,6 +49,9 @@ struct NativeProjectionDiePlan final {
     std::string label;
     double service_factor = 1.0;
     bool is_stub = false;
+    // Coarse plans never pass through the legacy timer/memory protocol.
+    std::shared_ptr<const coarse_die::Hardware> coarse_hardware;
+    std::vector<std::shared_ptr<const coarse_die::Plan>> coarse_plans;
 };
 
 struct NativeProjectionLegSpec final {
@@ -76,6 +80,7 @@ struct NativeProjectionLegSpec final {
     bool has_registration_ordinal = false;
     uint64_t registration_ordinal = 0;
     std::shared_ptr<const NativeProjectionDiePlan> die_plan;
+    nlohmann::json coarse_endpoint;
 };
 
 struct NativeProjectionWorkSpec final {
@@ -138,6 +143,10 @@ struct NativeProjectionInput final {
     // the legacy per-candidate snapshot ([shared] + [extras] + [forecast]).
     // Defaults to "no forecast section" (splice at the end).
     size_t forecast_start_index = static_cast<size_t>(-1);
+    // Frozen physical local domains, common to baseline and candidate worlds.
+    // This first bridge starts from empty domains; live scalar state cannot
+    // stand in for a coarse Runtime snapshot.
+    std::map<std::string, std::shared_ptr<const coarse_die::Hardware>> coarse_domains;
 };
 
 /// Per-call candidate-private additions to a shared snapshot context.
@@ -211,7 +220,7 @@ void validate_projection_input_shape(const Json& input) {
            {"now_ns", "resources", "background_works", "focus_work_id",
             "gates", "barriers", "efficiency", "pipelines",
             "forecast_arrival_placeholders_ns"},
-           {"forecast_start_index", "defer_focus_validation"});
+           {"forecast_start_index", "defer_focus_validation", "coarse_die_domains"});
     if (number_value(input.at("now_ns"), "projection_input.now_ns") < 0.0) {
         fail("projection_input.now_ns", "must be nonnegative");
     }
@@ -284,7 +293,7 @@ void validate_projection_input_shape(const Json& input) {
                 "duration_ns", "base_ns", "group", "latency_ns", "ready_at_ns",
                 "deps", "acquires", "releases", "signals_barrier",
                 "remaining_bytes", "remaining_duration_ns", "in_service",
-                "order", "die_plan"}, {"registration_ordinal"});
+                "order", "die_plan"}, {"registration_ordinal", "coarse_endpoint"});
             string_value(leg.at("leg_id"), lp + ".leg_id");
             const auto kind = string_value(leg.at("kind"), lp + ".kind");
             if (kind != "stream" && kind != "fixed" && kind != "compute") {
@@ -512,6 +521,19 @@ std::shared_ptr<const NativeProjectionDiePlan> parse_die_plan(
 
     const auto& hardware_wire = wire.at("hardware_config");
     if (!hardware_wire.is_object()) fail(path + ".hardware_config", "must be object or null");
+    if (hardware_wire.value("schema", std::string()) == "coarse_die_v2") {
+        if (result->service_factor != 1.0)
+            fail(path + ".service_factor", "coarse Runtime requires the shared frozen service profile; prediction-only factors are unsupported");
+        result->coarse_hardware = std::make_shared<const coarse_die::Hardware>(
+            coarse_die::resolve_hardware(hardware_wire));
+        for (const auto& spec : wire.at("specs")) {
+            if (!spec.is_object() || spec.value("schema", std::string()) != "coarse_die_task_v2")
+                fail(path + ".specs", "coarse hardware requires typed coarse_die_task_v2 inputs");
+            result->coarse_plans.push_back(coarse_die::compile(*result->coarse_hardware, spec));
+        }
+        if (result->coarse_plans.empty()) fail(path + ".specs", "production coarse plan requires at least one task");
+        return result;
+    }
     const auto hardware = DieModel::make_hardware(hardware_wire);
     result->specs.reserve(wire.at("specs").size());
     result->plans.reserve(wire.at("specs").size());
@@ -542,7 +564,7 @@ NativeProjectionLegSpec parse_leg_spec(const Json& wire,
         "duration_ns", "base_ns", "group", "latency_ns", "ready_at_ns",
         "deps", "acquires", "releases", "signals_barrier",
         "remaining_bytes", "remaining_duration_ns", "in_service", "order",
-        "die_plan"}, {"registration_ordinal"});
+        "die_plan"}, {"registration_ordinal", "coarse_endpoint"});
     NativeProjectionLegSpec result;
     result.leg_id = string_value(wire.at("leg_id"), path + ".leg_id");
     result.kind = string_value(wire.at("kind"), path + ".kind");
@@ -585,6 +607,10 @@ NativeProjectionLegSpec parse_leg_spec(const Json& wire,
             wire.at("registration_ordinal"), path + ".registration_ordinal");
     }
     if (!wire.at("die_plan").is_null()) result.die_plan = parse_die_plan(wire.at("die_plan"), path + ".die_plan");
+    if (wire.contains("coarse_endpoint") && !wire.at("coarse_endpoint").is_null()) {
+        if (!wire.at("coarse_endpoint").is_object()) fail(path + ".coarse_endpoint", "must be a canonical endpoint object");
+        result.coarse_endpoint = wire.at("coarse_endpoint");
+    }
     return result;
 }
 
@@ -635,6 +661,17 @@ std::shared_ptr<const NativeProjectionInput> parse_projection_input(
             string_value(item.at("key"), "resource.key"),
             string_value(item.at("kind"), "resource.kind"),
             number_value(item.at("capacity_per_ns"), "resource.capacity_per_ns")});
+    }
+    if (wire.contains("coarse_die_domains")) {
+        array(wire.at("coarse_die_domains"), "projection_input.coarse_die_domains");
+        for (const auto& domain : wire.at("coarse_die_domains")) {
+            object(domain, "coarse_die_domain", {"resource_key", "hardware_config"});
+            const auto key = string_value(domain.at("resource_key"), "coarse_die_domain.resource_key");
+            auto hardware = std::make_shared<const coarse_die::Hardware>(
+                coarse_die::resolve_hardware(domain.at("hardware_config")));
+            if (!result->coarse_domains.emplace(key, std::move(hardware)).second)
+                fail("coarse_die_domains", "duplicate physical domain " + key);
+        }
     }
     result->background_works.reserve(wire.at("background_works").size());
     for (size_t i = 0; i < wire.at("background_works").size(); ++i) {
@@ -808,6 +845,7 @@ NativeProjectionInput apply_projection_overlay(
     merged.forecast_arrival_placeholders_ns =
         base.forecast_arrival_placeholders_ns;
     merged.forecast_start_index = base.forecast_start_index;
+    merged.coarse_domains = base.coarse_domains;
 
     std::set<std::string> resource_keys;
     for (const auto& resource : base.resources) {
@@ -1291,6 +1329,10 @@ struct RuntimeLeg final {
     bool die_timer_has_window_plan = false;
     PipelineWindowPlan die_timer_window_plan;
     DieModel::InternalServiceWindowToken die_timer_window_token;
+    std::string coarse_domain;
+    coarse_die::Owner coarse_owner;
+    bool coarse_finished = false;
+    uint64_t coarse_finish_ns = 0;
 };
 
 struct RuntimeGate final {
@@ -1369,6 +1411,28 @@ class NativeProjectionWorld final {
             fail("window_limit", "effective limit exceeds frozen run contract");
         }
         for (const auto& resource : input.resources) resources_.emplace(resource.key, &resource);
+        for (const auto& domain : input.coarse_domains) {
+            const auto resource = resources_.find(domain.first);
+            if (resource == resources_.end() || resource->second->kind != "hbm")
+                fail("coarse_die_domains", "physical domain must name one registered HBM resource");
+            const double raw = (domain.second->rates[coarse_die::HBM0] +
+                                domain.second->rates[coarse_die::HBM1]) / 1e9;
+            if (std::abs(resource->second->capacity_per_ns - raw) >
+                1e-12 * std::max(1.0, raw))
+                fail("coarse_die_domains", "HBM resource capacity must mirror the frozen coarse descriptor");
+            if (eta_of(domain.first) != 1.0)
+                fail("coarse_die_domains", "prediction-only HBM efficiency is unsupported; freeze the shared hardware profile");
+            coarse_domains_.emplace(domain.first,
+                std::make_unique<NativeCoarseDieDomain>(domain.first, *domain.second));
+            coarse_domains_.at(domain.first)->advance_to(coarse_tick(now_ns_));
+        }
+        if (!coarse_domains_.empty()) {
+            (void)coarse_tick(now_ns_);
+            for (const auto tick : input.forecast_arrival_placeholders_ns)
+                (void)coarse_tick(static_cast<double>(tick));
+            if (!input.pipelines.empty())
+                fail("coarse_die_domains", "unsupported_projection_state: legacy block pipelines need explicit local endpoint ownership");
+        }
         for (const auto& gate : input.gates) {
             gates_.emplace(gate.gate_id, RuntimeGate{&gate, gate.initial_occupied,
                                                      {}, gate.initial_occupied});
@@ -1454,6 +1518,34 @@ class NativeProjectionWorld final {
     double now_ns() const { return now_ns_; }
     const std::string& last_status() const { return last_status_; }
     bool advance_one() { return step(); }
+
+    Json coarse_projection_fields() const {
+        Json result = Json::object();
+        if (coarse_domains_.empty()) return result;
+        result["coarse_projection_profile"] = "fresh_integer_local_domains_v1";
+        result["live_world_import_supported"] = false;
+        result["coarse_runtime_counters_by_domain"] = Json::object();
+        for (const auto& domain : coarse_domains_) {
+            result["coarse_runtime_counters_by_domain"][domain.first] = {
+                {"hardware_fingerprint", domain.second->hardware().fingerprint},
+                {"counters", domain.second->counters()}};
+        }
+        // Projection parity describes the chosen model. It does not upgrade
+        // its independent granularity or target-hardware evidence status.
+        result["coarse_plan_evidence"] = Json::object();
+        for (const auto* leg : leg_order_) {
+            if (!leg->spec->die_plan || leg->coarse_domain.empty()) continue;
+            auto& evidence = result["coarse_plan_evidence"][leg->spec->leg_id];
+            evidence = Json::array();
+            for (const auto& plan : leg->spec->die_plan->coarse_plans)
+                evidence.push_back({{"plan_fingerprint", plan->fingerprint},
+                    {"granularity_validation", plan->summary.value(
+                        "granularity_validation", Json("not_run"))},
+                    {"calibration_status", plan->summary.value(
+                        "calibration_status", Json("assumed"))}});
+        }
+        return result;
+    }
 
     Json window_quality_fields(const std::string& status) const {
         Json result{{"approximation_profile", "exact"},
@@ -1622,6 +1714,10 @@ class NativeProjectionWorld final {
                 {"order_key", Json::array({order, leg->spec->leg_id})},
                 {"die_actual_bytes_total", leg->die_actual_bytes_total},
                 {"die_service_units_total", leg->die_service_units_total}};
+            if (!leg->coarse_domain.empty() && leg->state != kPending &&
+                leg->state != kTimer && leg->state != kGateWait)
+                leg_views[leg->spec->leg_id]["coarse_progress"] =
+                    coarse_domains_.at(leg->coarse_domain)->progress(leg->spec->leg_id);
         }
         Json gate_views = Json::object();
         for (const auto& entry : gates_) {
@@ -1649,7 +1745,7 @@ class NativeProjectionWorld final {
                 {"passed_at_ns", entry.second.has_passed_at
                     ? Json(entry.second.passed_at) : Json(nullptr)}};
         }
-        return Json{{"now_ns", now_ns_}, {"status", last_status_},
+        Json result{{"now_ns", now_ns_}, {"status", last_status_},
                     {"events_processed", events_processed_},
                     {"integration_steps", integration_steps_},
                     {"work_done_at", std::move(done)},
@@ -1658,9 +1754,21 @@ class NativeProjectionWorld final {
                     {"gates", std::move(gate_views)},
                     {"barriers", std::move(barrier_views)},
                     {"cost_disclosure", cost_disclosure()}};
+        if (!coarse_domains_.empty()) {
+            result["coarse_die_domains"] = Json::object();
+            for (const auto& domain : coarse_domains_)
+                result["coarse_die_domains"][domain.first] = {
+                    {"runtime_snapshot", domain.second->export_runtime_snapshot()},
+                    {"counters", domain.second->counters()}};
+            result["coarse_projection_profile"] = "fresh_integer_local_domains_v1";
+            result["live_world_import_supported"] = false;
+        }
+        return result;
     }
 
     void set_clock(double time_ns) {
+        if (!coarse_domains_.empty())
+            fail("set_clock", "unsupported_projection_state: coarse clocks advance through service, never by assignment");
         if (!std::isfinite(time_ns) || time_ns < 0.0) {
             fail("set_clock", "time must be finite and nonnegative");
         }
@@ -1668,6 +1776,12 @@ class NativeProjectionWorld final {
     }
 
     Json integrate_controlled(double target_ns) {
+        if (!coarse_domains_.empty()) {
+            (void)coarse_tick(target_ns);
+            const auto boundary = next_boundary();
+            if (boundary && target_ns > *boundary)
+                fail("integrate", "coarse controlled integration cannot skip a known event boundary");
+        }
         if (!std::isfinite(target_ns) || target_ns < now_ns_) {
             fail("integrate", "target must be finite and >= current time");
         }
@@ -1733,6 +1847,7 @@ class NativeProjectionWorld final {
     uint32_t effective_window_limit_ = 1;
     uint64_t event_budget_limit_ = 0;
     std::map<std::string, const NativeProjectionResource*> resources_;
+    std::map<std::string, std::unique_ptr<NativeCoarseDieDomain>> coarse_domains_;
     std::map<std::string, RuntimeGate> gates_;
     std::map<std::string, RuntimeBarrier> barriers_;
     std::map<std::string, std::unique_ptr<RuntimeLeg>> legs_;
@@ -1759,6 +1874,34 @@ class NativeProjectionWorld final {
     bool last_step_budget_truncated_ = false;
     bool dependencies_wired_ = false;
     bool analytic_enabled_ = false;
+
+    static uint64_t coarse_tick(double value) {
+        // The legacy network world uses doubles. Keep the additive bridge in
+        // their exact-integer intersection until its clock is migrated.
+        constexpr double maximum = 9007199254740991.0;
+        if (!std::isfinite(value) || value < 0 || value > maximum ||
+            std::floor(value) != value)
+            fail("coarse_clock", "unsupported_projection_state: coarse native bridge requires exact integer ns <= 2^53-1");
+        return static_cast<uint64_t>(value);
+    }
+
+    void collect_coarse_completions() {
+        for (auto& domain : coarse_domains_) {
+            for (const auto& completion : domain.second->take_completions()) {
+                auto& leg = *legs_.at(completion.leg_id);
+                if (completion.cancelled)
+                    fail(completion.leg_id, "unexpected cancellation in fresh native projection");
+                leg.coarse_finished = true;
+                leg.coarse_finish_ns = completion.finish_ns;
+            }
+        }
+    }
+
+    bool coarse_pending_completion() const {
+        for (const auto* leg : leg_order_)
+            if (leg->coarse_finished && leg->state != kDone) return true;
+        return false;
+    }
 
     uint32_t remaining_window_limit() const {
         if (contract_ == nullptr || effective_window_limit_ <= 1) return 1;
@@ -1950,6 +2093,51 @@ class NativeProjectionWorld final {
             if (spec.has_remaining_duration) leg->remaining_duration = spec.remaining_duration_ns;
             else if (spec.kind == "fixed") leg->remaining_duration = spec.duration_ns;
             else if (spec.kind == "compute") leg->remaining_duration = spec.base_ns * gamma_of(spec.group);
+            const bool coarse_plan = spec.die_plan && spec.die_plan->coarse_hardware;
+            const bool coarse_endpoint = !spec.coarse_endpoint.is_null();
+            if (coarse_plan || coarse_endpoint) {
+                if (coarse_plan && coarse_endpoint)
+                    fail(spec.leg_id, "one leg cannot own both a Plan and an external endpoint");
+                if (spec.route.size() != 1 || !coarse_domains_.count(spec.route.front()))
+                    fail(spec.leg_id, "coarse leg requires exactly one frozen coarse_die_domains resource");
+                if (spec.bytes_amount || spec.duration_ns || spec.base_ns || spec.latency_ns ||
+                    spec.has_remaining_bytes || spec.has_remaining_duration || spec.in_service)
+                    fail(spec.leg_id, "unsupported_projection_state: coarse legs require fresh typed state, no scalar work/remaining/latency aliases");
+                if (gamma_of(spec.group) != 1.0)
+                    fail(spec.leg_id, "coarse plans cannot use prediction-only gamma factors");
+                leg->coarse_domain = spec.route.front();
+                auto& domain = *coarse_domains_.at(leg->coarse_domain);
+                if (coarse_plan) {
+                    if (spec.kind != "compute" || spec.die_plan->route != spec.route)
+                        fail(spec.leg_id, "coarse Plan requires a compute leg with one consistent physical route");
+                    if (spec.die_plan->coarse_hardware->fingerprint != domain.hardware().fingerprint)
+                        fail(spec.leg_id, "coarse Plan/domain hardware fingerprint mismatch");
+                } else {
+                    if (spec.kind != "stream" || spec.die_plan)
+                        fail(spec.leg_id, "coarse endpoint requires a stream leg without a legacy die plan");
+                    // Validate the canonical endpoint before any gates, graph
+                    // state, or physical candidate Runtime can be mutated.
+                    coarse_die::Runtime probe(domain.hardware());
+                    const auto handle = probe.submit_endpoint(spec.coarse_endpoint,
+                        {0, 1, 1, 1}, coarse_tick(input_.now_ns));
+                    probe.cancel(handle, coarse_tick(input_.now_ns));
+                    probe.destroy_execution(handle);
+                }
+                leg->coarse_owner = {0, static_cast<uint64_t>(leg_order_.size()) + 1, 1, 1};
+            } else if (!coarse_domains_.empty()) {
+                // Scalar stream work does not identify source reads versus
+                // target writes, nor local/network completion ownership. An
+                // explicit bridge must split these before this mode is used.
+                if (spec.kind != "fixed" || spec.die_plan || !spec.route.empty() ||
+                    spec.bytes_amount || spec.base_ns || spec.in_service ||
+                    spec.has_remaining_bytes || spec.has_remaining_duration)
+                    fail(spec.leg_id, "unsupported_projection_state: mixed scalar streams/legacy active state need explicit coarse endpoint ownership");
+                (void)coarse_tick(spec.duration_ns);
+            }
+            if (!coarse_domains_.empty()) {
+                (void)coarse_tick(static_cast<double>(work.ready_at_ns));
+                if (spec.has_ready_at) (void)coarse_tick(static_cast<double>(spec.ready_at_ns));
+            }
             auto* raw = leg.get();
             legs_.emplace(spec.leg_id, std::move(leg));
             leg_order_.push_back(raw);
@@ -2075,6 +2263,19 @@ class NativeProjectionWorld final {
     }
 
     void activate(RuntimeLeg* leg) {
+        if (!leg->coarse_domain.empty()) {
+            auto& domain = *coarse_domains_.at(leg->coarse_domain);
+            const auto tick = coarse_tick(now_ns_);
+            if (leg->spec->die_plan)
+                domain.begin_plan_chain(leg->spec->leg_id,
+                    leg->spec->die_plan->coarse_plans, leg->coarse_owner, tick);
+            else
+                domain.begin_endpoint(leg->spec->leg_id,
+                    leg->spec->coarse_endpoint, leg->coarse_owner, tick);
+            leg->state = kActive;
+            collect_coarse_completions();
+            return;
+        }
         if (leg->spec->die_plan && !leg->die_execution) {
             leg->die_execution = std::make_unique<NativeDieExecution>(
                 leg->spec->die_plan, contract_, effective_window_limit_);
@@ -2165,6 +2366,13 @@ class NativeProjectionWorld final {
         if (!events_.empty() && (!earliest || events_.top().time_ns < *earliest)) {
             earliest = events_.top().time_ns;
         }
+        if (coarse_pending_completion()) earliest = now_ns_;
+        for (const auto& domain : coarse_domains_) {
+            const auto next = domain.second->next_event();
+            if (next && (!earliest || static_cast<double>(*next) < *earliest))
+                earliest = static_cast<double>(*next);
+        }
+        if (earliest && !coarse_domains_.empty()) (void)coarse_tick(*earliest);
         return earliest;
     }
 
@@ -2172,6 +2380,11 @@ class NativeProjectionWorld final {
         const double elapsed = target_ns - now_ns_;
         const double interval_start = now_ns_;
         if (elapsed < 0.0) fail("time", "integration moved backwards");
+        if (!coarse_domains_.empty()) {
+            const auto tick = coarse_tick(target_ns);
+            for (auto& domain : coarse_domains_) domain.second->advance_to(tick);
+            collect_coarse_completions();
+        }
         double pre_remaining = 0.0;
         double served_total = 0.0;
         std::map<std::string, double> rates;
@@ -2246,6 +2459,9 @@ class NativeProjectionWorld final {
             const auto found = f.find(leg->spec->leg_id);
             if (found != f.end() && found->second.completion <= time_ns) done.push_back(const_cast<RuntimeLeg*>(leg));
         }
+        for (auto* leg : leg_order_)
+            if (leg->coarse_finished && leg->state != kDone && leg->coarse_finish_ns <= time_ns)
+                done.push_back(leg);
         std::sort(done.begin(), done.end(), [](const RuntimeLeg* a, const RuntimeLeg* b) {
             const int64_t ao = a->spec->has_order ? a->spec->order : 0;
             const int64_t bo = b->spec->has_order ? b->spec->order : 0;
@@ -2480,14 +2696,26 @@ class NativeProjectionWorld final {
 
     bool step(uint64_t event_budget = 0) {
         last_step_budget_truncated_ = false;
-        if (analytic_enabled_ && event_budget == 0 && try_analytic_jump()) return true;
+        if (coarse_domains_.empty() && analytic_enabled_ && event_budget == 0 && try_analytic_jump()) return true;
         const auto f = finishes();
-        std::vector<double> candidates;
-        for (const auto& entry : f) candidates.push_back(entry.second.boundary_contribution);
-        if (!events_.empty()) candidates.push_back(events_.top().time_ns);
-        if (candidates.empty()) return false;
-        const double boundary = *std::min_element(candidates.begin(), candidates.end());
+        const auto next = next_boundary();
+        if (!next) return false;
+        const double boundary = *next;
+        bool coarse_event = false;
+        for (const auto& domain : coarse_domains_) {
+            const auto tick = domain.second->next_event();
+            coarse_event |= tick && *tick == boundary;
+        }
         integrate(boundary);
+        if (coarse_event) {
+            // Public Runtime counters disclose its internal events separately;
+            // this is one native scheduling boundary, never a tile expansion.
+            if (event_budget && events_processed_ >= event_budget) {
+                last_step_budget_truncated_ = true;
+                return true;
+            }
+            ++events_processed_;
+        }
         if (!settle_completions(boundary, f, event_budget)) return true;
         if (!process_events(boundary, event_budget)) return true;
         return true;
@@ -2520,7 +2748,7 @@ class NativeProjectionWorld final {
     }
 
     void complete(RuntimeLeg* leg, double time_ns) {
-        if (leg->spec->die_plan && leg->die_phase_kind != "done") {
+        if (leg->spec->die_plan && leg->coarse_domain.empty() && leg->die_phase_kind != "done") {
             if (!leg->die_execution) fail(leg->spec->leg_id, "die phase completed without execution");
             if (leg->die_phase_kind == "timer") {
                 const uint64_t service_delta = round_ties_even_u64(
@@ -3091,6 +3319,7 @@ nlohmann::json NativeProjection::project(
                  {"reference_cache_hits", context.reference_cache_hits()},
                  {"reference_cache_misses", context.reference_cache_misses()}};
         out.update(world.window_quality_fields(kStatusUnavailable));
+        out.update(world.coarse_projection_fields());
         return out;
     };
     if (closure_resource_count > options.closure_resource_budget) {
@@ -3113,6 +3342,7 @@ nlohmann::json NativeProjection::project(
     out["work_count"] = world.work_count();
     out["dependency_attribution"] = world.attribution(focus_id);
     out.update(world.window_quality_fields(status));
+    out.update(world.coarse_projection_fields());
     if (status == kStatusDegraded) {
         // The legacy result contract never exposes costs from a truncated
         // candidate, even though the mutable internal world has progressed.

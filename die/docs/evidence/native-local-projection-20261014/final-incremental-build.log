@@ -1,0 +1,34 @@
+[  4%] Built target coarse_die
+[ 23%] Built target yaml-cpp
+[ 28%] Built target die_model
+[ 33%] Built target joint_ledger
+[ 33%] Built target fmt
+[ 38%] Built target spdlog
+[ 47%] Built target Analytical_Congestion_Aware
+[ 47%] Building CXX object AstraSim/CMakeFiles/joint_pipeline_core.dir/astra-sim/workload/execution_driven/NativeProjection.cc.o
+[ 47%] Linking CXX static library ../lib/libjoint_pipeline_core.a
+[ 52%] Built target joint_pipeline_core
+[ 85%] Built target AstraSim
+[ 85%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_Online
+[100%] Built target AstraSim_Analytical_Congestion_Aware_Online
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Linking CXX shared library ../lib/libjoint_projection.so
+[100%] Built target joint_projection
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target joint_projection
+[100%] Linking CXX executable ../bin/NativeProjectionCApiTest
+[100%] Built target NativeProjectionCApiTest
+[ 33%] Built target die_model
+[ 66%] Built target coarse_die
+[100%] Built target joint_pipeline_core
+[100%] Linking CXX executable ../bin/NativeCoarseProjectionTest
+[100%] Built target NativeCoarseProjectionTest
+[ 25%] Built target coarse_die
+[ 50%] Built target die_model
+[ 75%] Built target joint_pipeline_core
+[ 75%] Linking CXX executable ../bin/NativeCoarseDieDomainTest
+[100%] Built target NativeCoarseDieDomainTest

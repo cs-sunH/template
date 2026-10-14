@@ -1,0 +1,60 @@
+{
+  "coarse_intended_run": {
+    "binary_sha256": "b01bb05b08a8c58fba000834e22b5b4277ce4f9ca995f85a5d1dbbf94c41f39f",
+    "blocked_at": "delivery_sequence=0, _JointDiePlanProvider -> require_legacy_projection_context",
+    "cpp_exit": 134,
+    "guard": "coarse_die_v2 JOINT prediction is fail-closed: the current provider uses legacy hbm_share_divisor/service_factor and the frozen native projection has not been validated against the coarse shared Runtime",
+    "logs": [
+      "coarse-intended/cpp.log",
+      "coarse-intended/python.log",
+      "coarse-intended/runner.stdout"
+    ],
+    "python_exit": 1,
+    "run_directory": "work/joint-reproduction/runs/coarse_intended-20261014T161727Z-13010",
+    "wrapper_exit": 1
+  },
+  "final_native_validation": "after the native-domain integer clock validation update: Native3 CTest 3/3 PASS; Python legacy+native ABI suite 17/17 PASS with zero skips",
+  "final_online_binary_sha256": "b01bb05b08a8c58fba000834e22b5b4277ce4f9ca995f85a5d1dbbf94c41f39f",
+  "inputs": [
+    "inputs/tiny-requests.csv",
+    "inputs/tiny-requests.csv.provenance.json",
+    "inputs/trace-config-legacy.csv",
+    "inputs/trace-config-coarse-intended.csv"
+  ],
+  "legacy_run": {
+    "binary_sha256": "b01bb05b08a8c58fba000834e22b5b4277ce4f9ca995f85a5d1dbbf94c41f39f",
+    "cpp_exit": 0,
+    "graph": "3 GraphBatch commits, 192 nodes, 192/192 terminal success, 0 incomplete requests",
+    "logs": [
+      "legacy/cpp.log",
+      "legacy/python.log",
+      "legacy/runner.stdout"
+    ],
+    "python_exit": 0,
+    "run_directory": "work/joint-reproduction/runs/legacy-20261014T161723Z-12976",
+    "service": "accepted=1 completed=1 active=0"
+  },
+  "limitations": [
+    "coarse provider guard intentionally remains fail-closed; no bypass, monkeypatch, or policy substitution was used",
+    "coarse_intended uses validated legacy FACE mesh materialization with the checked-in coarse example descriptor only to reach that guard; it is not coarse topology validation or performance evidence",
+    "legacy run validates the JOINT Online runtime path and existing legacy profile, not coarse prediction parity or hardware accuracy"
+  ],
+  "non_sh30_online_route": "No supported route found: online_service.py exposes strategy only and constructs Sh30OnlineScheduler; admission invokes _joint_cost_model before policy selection. Typed die_task trace emission is downstream of admission.",
+  "online_entry": "online_service.py --mode strategy -> Sh30OnlineScheduler",
+  "request": {
+    "count": 1,
+    "decode_tokens": 2,
+    "ffn_size": 768,
+    "hidden_size": 384,
+    "layers": 1,
+    "num_heads": 12,
+    "prefill_tokens": 4,
+    "vocab_size": 384
+  },
+  "scope": "fresh build and actual tiny JOINT Online integration reproduction",
+  "topology": {
+    "face_instances": 9,
+    "ranks": 54,
+    "tp_ranks_per_instance": 6
+  }
+}

@@ -1,0 +1,212 @@
+{
+  "probes": [
+    {
+      "axis": "k_depth",
+      "command": [
+        "/workspace/template/work/gemm-axis-20261014/build/coarse_compiled_gemm_oracle_driver",
+        "--m",
+        "80",
+        "--n",
+        "128",
+        "--k",
+        "128"
+      ],
+      "dataflow_id": "weight_resident_v2",
+      "driver_return_code": 0,
+      "driver_stderr": "/workspace/template/die/docs/evidence/gemm-axis-20261014/logs/m80n128_k128.driver.stderr.txt",
+      "name": "m80n128_k128",
+      "raw_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/raw/m80n128_k128.json",
+      "report_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/reports/m80n128_k128.json",
+      "requested_shape": {
+        "k": 128,
+        "m": 80,
+        "n": 128
+      },
+      "selected_template": "gemm_weight_resident_v2",
+      "selected_tiles": {
+        "tk": 64,
+        "tm": 1,
+        "tn": 64
+      },
+      "status": "failed_during_oracle"
+    },
+    {
+      "axis": "k_depth",
+      "command": [
+        "/workspace/template/work/gemm-axis-20261014/build/coarse_compiled_gemm_oracle_driver",
+        "--m",
+        "80",
+        "--n",
+        "128",
+        "--k",
+        "4096"
+      ],
+      "comparisons": {
+        "offset_50ms_two_comp": "failed",
+        "standalone": "failed",
+        "synchronous_two_comp": "failed"
+      },
+      "dataflow_id": "output_stationary_v2",
+      "driver_return_code": 0,
+      "driver_stderr": "/workspace/template/die/docs/evidence/gemm-axis-20261014/logs/full_tile_k4096.driver.stderr.txt",
+      "name": "full_tile_k4096",
+      "raw_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/raw/full_tile_k4096.json",
+      "report_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/reports/full_tile_k4096.json",
+      "requested_shape": {
+        "k": 4096,
+        "m": 80,
+        "n": 128
+      },
+      "selected_template": "gemm_output_stationary_v2",
+      "selected_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "status": "failed"
+    },
+    {
+      "axis": "k_tail",
+      "command": [
+        "/workspace/template/work/gemm-axis-20261014/build/coarse_compiled_gemm_oracle_driver",
+        "--m",
+        "80",
+        "--n",
+        "128",
+        "--k",
+        "4097"
+      ],
+      "comparisons": {
+        "offset_50ms_two_comp": "failed",
+        "standalone": "failed",
+        "synchronous_two_comp": "failed"
+      },
+      "dataflow_id": "output_stationary_v2",
+      "driver_return_code": 0,
+      "driver_stderr": "/workspace/template/die/docs/evidence/gemm-axis-20261014/logs/full_tile_k4097.driver.stderr.txt",
+      "name": "full_tile_k4097",
+      "raw_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/raw/full_tile_k4097.json",
+      "report_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/reports/full_tile_k4097.json",
+      "requested_shape": {
+        "k": 4097,
+        "m": 80,
+        "n": 128
+      },
+      "selected_template": "gemm_output_stationary_v2",
+      "selected_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "status": "failed"
+    },
+    {
+      "axis": "mn_shape",
+      "command": [
+        "/workspace/template/work/gemm-axis-20261014/build/coarse_compiled_gemm_oracle_driver",
+        "--m",
+        "65",
+        "--n",
+        "65",
+        "--k",
+        "4097"
+      ],
+      "comparisons": {
+        "offset_50ms_two_comp": "failed",
+        "standalone": "failed",
+        "synchronous_two_comp": "failed"
+      },
+      "dataflow_id": "output_stationary_v2",
+      "driver_return_code": 0,
+      "driver_stderr": "/workspace/template/die/docs/evidence/gemm-axis-20261014/logs/mn_edge_k4097.driver.stderr.txt",
+      "name": "mn_edge_k4097",
+      "raw_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/raw/mn_edge_k4097.json",
+      "report_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/reports/mn_edge_k4097.json",
+      "requested_shape": {
+        "k": 4097,
+        "m": 65,
+        "n": 65
+      },
+      "selected_template": "gemm_output_stationary_v2",
+      "selected_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "status": "failed"
+    },
+    {
+      "axis": "default_behavior",
+      "command": [
+        "/workspace/template/work/gemm-axis-20261014/build/coarse_compiled_gemm_oracle_driver"
+      ],
+      "comparisons": {
+        "offset_50ms_two_comp": "failed",
+        "standalone": "failed",
+        "synchronous_two_comp": "failed"
+      },
+      "dataflow_id": "output_stationary_v2",
+      "driver_return_code": 0,
+      "driver_stderr": "/workspace/template/die/docs/evidence/gemm-axis-20261014/logs/default_compatibility.driver.stderr.txt",
+      "name": "default_compatibility",
+      "raw_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/raw/default_compatibility.json",
+      "report_json": "/workspace/template/die/docs/evidence/gemm-axis-20261014/reports/default_compatibility.json",
+      "requested_shape": null,
+      "selected_template": "gemm_output_stationary_v2",
+      "selected_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "status": "failed"
+    }
+  ],
+  "schema_version": 1,
+  "single_factor_tile_checks": [
+    {
+      "comparison": "k_depth_128_vs_4096",
+      "left_probe": "m80n128_k128",
+      "right_probe": "full_tile_k4096",
+      "same_dataflow": false,
+      "same_selected_template": false,
+      "same_selected_tiles": false,
+      "status": "not_comparable_compiler_reselected_mapping"
+    },
+    {
+      "comparison": "k_tail_4096_vs_4097",
+      "left_probe": "full_tile_k4096",
+      "right_probe": "full_tile_k4097",
+      "same_dataflow": true,
+      "same_selected_template": true,
+      "same_selected_tiles": true,
+      "status": "comparable_selected_plan"
+    },
+    {
+      "comparison": "mn_shape_full_vs_edge",
+      "left_probe": "full_tile_k4097",
+      "right_probe": "mn_edge_k4097",
+      "same_dataflow": true,
+      "same_selected_template": true,
+      "same_selected_tiles": true,
+      "status": "comparable_selected_plan"
+    }
+  ],
+  "source_identity": {
+    "build_directory": "/workspace/template/work/gemm-axis-20261014/build",
+    "driver_path": "/workspace/template/work/gemm-axis-20261014/build/coarse_compiled_gemm_oracle_driver",
+    "driver_sha256": "c61f200bcf582355b2a89860f1444e2c0f84f33775e7f8cccc42bb45db74f63f",
+    "git_head": "d9cc0240e07064996b5330c5659f7f8c6866998a",
+    "runner_sha256": "10177f88a5debc390381461965136549ceec6f1f135d8089a1fa64c010dc6141",
+    "source_sha256": {
+      "die/src/Compiler.cc": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+      "die/src/Execution.cc": "c96a0555cb23c8c31ba5ab191aae275dbdaa65b7d17e15eb0249a9c35e9c2cb3",
+      "die/src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+      "die/src/Mapping.cc": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+      "die/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+      "die/tests/compiled_gemm_oracle_driver.cc": "760bd4231682891d5fc047208d7b579449b9f508ca8e2d9fb565e69b44169973",
+      "die/validation/compiled_gemm_oracle.py": "8a900374203019a962c53fd0f6b53ff54b7af362671172021f09e8f33da5fe7d",
+      "die/validation/grouped_gemm_oracle.py": "7c62ab241e77dd3600136fbec797627bd32f9e63d95820e4948f78e98bd54499"
+    }
+  },
+  "status": "failed"
+}

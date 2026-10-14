@@ -1,5 +1,6 @@
 """Independent small allocation expectations and archived policy provenance."""
 from fractions import Fraction
+import copy
 import json
 from pathlib import Path
 import sys
@@ -89,16 +90,109 @@ class GroupedOracleTest(unittest.TestCase):
         self.assertEqual(new["legacy_equal_progress_comparisons"], old["comparisons"])
         self.assertEqual(new["acceptance_limits"], old["acceptance_limits"])
         self.assertEqual(new["status"], "failed")
+        self.assertEqual(new["planned_integer_conservation"]["status"], "passed")
+        archived_reconciliation = new["comparisons"]["standalone"][
+            "runtime_cumulative_serialization_reconciliation"]
+        self.assertEqual(archived_reconciliation["status"], "not_available")
+        self.assertNotIn("exact_served_work", new["comparisons"]["standalone"]["checks"])
         self.assertEqual(new["available_granularity_levels"]["selected_minimum_E"], None)
         offset = new["comparisons"]["two_comp"][1]["independent_discrete_oracle"]
         self.assertAlmostEqual(offset["finish_s_by_request"]["comp0"],
                                0.4261738759606149, delta=1e-10)
+
+    def test_serialized_work_reconciliation_reports_strict_delta_and_tolerance(self):
+        actual = {
+            "finish_s": 1.0,
+            "counters": {
+                "hbm_busy_ns": 1000000000,
+                "hbm_shared_ns": 0,
+                "compute_busy_ns": 0,
+                "row_busy_ns": [1000000000, 1000000000],
+                "row_shared_ns": [0, 0],
+                "internal_events": 0,
+                "allocation_updates": 0,
+                "accounting_history_complete": True,
+                "hbm_served_bytes_by_row_direction_exact": [
+                    ["9.999999999999999999", "2"], ["5", "1"]],
+                "served_by_category": {
+                    "comp": {"vec_eqops_exact_decimal": "42.000000000000000001"},
+                },
+            },
+        }
+        oracle = {
+            "finish_s_by_request": {"comp0": 1.0},
+            "hbm_busy_s": 1.0,
+            "hbm_shared_s": 0.0,
+            "row_busy_s": [1.0, 1.0],
+            "row_shared_s": [0.0, 0.0],
+            "discrete_wave_work_ledger": {
+                "hbm_read_bytes_by_row_per_request": [10, 5],
+                "hbm_write_bytes_by_row_per_request": [2, 1],
+                "vec_equivalent_ops_per_request": 42,
+            },
+        }
+        comparison = legacy.compare_measurement(actual, oracle, 0.0, False)
+        reconciliation = comparison["runtime_cumulative_serialization_reconciliation"]
+        self.assertEqual(reconciliation["status"], "within_relative_tolerance")
+        self.assertFalse(reconciliation["strict_integer_equality"])
+        self.assertTrue(reconciliation["within_relative_tolerance"])
+        self.assertEqual(
+            reconciliation["hbm_bytes_by_row_direction"][0][0]["absolute_delta"],
+            "1E-18")
+        self.assertEqual(reconciliation["vec_equivalent_ops"]["absolute_delta"],
+                         "1E-18")
+        self.assertNotIn("exact_served_work", comparison["checks"])
 
     def test_invalid_quantities_are_rejected(self):
         active = [activity(0, gate=1)]
         for q in (0, -1, float("nan"), float("inf")):
             with self.assertRaises(ValueError):
                 grouped.grouped_rates(active, capacities(), [q])
+
+    def test_compiled_oracle_generalizes_k_depth_tail_and_mn_shape(self):
+        archived = json.loads((SOURCE / "docs/analysis/runtime-waves-20261013/"
+                               "bounded-lifecycle-v1/raw-fixture.json").read_text())
+
+        def shaped_raw(m, n, k):
+            raw = copy.deepcopy(archived)
+            summary = raw["compiled_plan"]["summary"]
+            summary.update(tm=16, tn=64, tk=64)
+            summary["output_round_count"] = (
+                legacy.ceildiv(m, 16) * legacy.ceildiv(n, 64))
+            summary["consumption_wave_count"] = (
+                summary["output_round_count"] * legacy.ceildiv(k, 64))
+            raw["compiled_plan"]["task"]["tensor_shapes"].update(m=m, n=n, k=k)
+            return raw
+
+        shallow_waves, shallow = legacy.make_waves(shaped_raw(80, 128, 128))
+        exact_waves, exact = legacy.make_waves(shaped_raw(80, 128, 4096))
+        tail_waves, tail = legacy.make_waves(shaped_raw(80, 128, 4097))
+        edge_waves, edge = legacy.make_waves(shaped_raw(65, 65, 4097))
+
+        self.assertEqual((shallow["output_round_count"],
+                          shallow["selected_tiles"]["Tk"], len(shallow_waves)),
+                         (10, 2, 20))
+        self.assertFalse(shallow["has_k_tail"])
+        self.assertEqual((exact["selected_tiles"]["Tk"], len(exact_waves)),
+                         (64, 640))
+        self.assertFalse(exact["has_k_tail"])
+        self.assertEqual((tail["selected_tiles"]["Tk"], len(tail_waves)),
+                         (65, 650))
+        self.assertTrue(tail["has_k_tail"])
+        self.assertEqual(tail["k_tile_extent_classes_by_wave"],
+                         {"64": 640, "1": 10})
+        self.assertEqual(edge["output_tile_classes_m_by_n"], {
+            "16x64": 4, "16x1": 4, "1x64": 1, "1x1": 1})
+        self.assertEqual(len(edge_waves), 650)
+
+    def test_compiled_oracle_shape_cli_is_additive_and_requires_full_shape(self):
+        self.assertEqual(legacy.driver_shape_args(None, None, None), [])
+        self.assertEqual(legacy.driver_shape_args(80, 128, 4096),
+                         ["--m", "80", "--n", "128", "--k", "4096"])
+        with self.assertRaises(ValueError):
+            legacy.driver_shape_args(80, 128, None)
+        with self.assertRaises(ValueError):
+            legacy.driver_shape_args(80, 128, 0)
 
 
 if __name__ == "__main__":

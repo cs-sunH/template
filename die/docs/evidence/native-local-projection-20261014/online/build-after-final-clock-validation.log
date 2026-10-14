@@ -1,0 +1,28 @@
+command: cmake --build /workspace/template/work/build-joint --target joint_projection NativeProjectionCApiTest NativeCoarseProjectionTest NativeCoarseDieDomainTest AstraSim_Analytical_Congestion_Aware_Online -j2
+[ 66%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target joint_projection
+[ 66%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target joint_projection
+[100%] Built target NativeProjectionCApiTest
+[ 66%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target NativeCoarseProjectionTest
+[ 50%] Built target die_model
+[ 50%] Built target coarse_die
+[ 75%] Built target joint_pipeline_core
+[100%] Built target NativeCoarseDieDomainTest
+[  4%] Built target coarse_die
+[ 23%] Built target yaml-cpp
+[ 28%] Built target die_model
+[ 33%] Built target joint_ledger
+[ 33%] Built target fmt
+[ 38%] Built target spdlog
+[ 52%] Built target joint_pipeline_core
+[ 52%] Built target Analytical_Congestion_Aware
+[ 85%] Built target AstraSim
+[100%] Built target AstraSim_Analytical_Congestion_Aware_Online

@@ -1,0 +1,128 @@
+{
+  "schema": "attention_workspace_validation_identity_v1",
+  "recorded_at_utc": "2026-10-14T16:11:15+00:00",
+  "scope": "public Coarse Die attention workspace/accounting and LRU workspace-envelope client/manifest against the public C ABI",
+  "source_tree": {
+    "baseline_head": "d9cc0240e07064996b5330c5659f7f8c6866998a",
+    "branch": "codex/die-joint-runtime-20261014",
+    "state": "dirty uncommitted worktree at validation time",
+    "published_five_repository_coarse_die_source_digest": "45b7bf3d8df9969b8155323c79eecf1a81f8d1c7499177e811b6aedf2c4c3264",
+    "tested_source_sha256": {
+      "die/src/Mapping.cc": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+      "die/src/Capi.cc": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87",
+      "die/tests/attention_accounting_test.cc": "d7e0d29da9e151f7a19006d0de29bedcadbcef69e1e61ab191b63001076df882",
+      "die/tests/workspace_envelope_test.cc": "f260f37683a6370c9d8735b1c170564ae64f1414616281751d3030c63549e826",
+      "die/docs/implementation.md": "3d720a79707478bdd094f33137d4030fe0a34ed3550c5bc66aa8bb85e6781f33",
+      "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_workspace_envelope.py": "a0f6dbbca025938a01a16ebb4c65ba693784c98035f891ae976e1ae50021c4e0",
+      "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/manifest_workspace_envelope.py": "bf2908f4ff57b46b34306c1ec6df8b9e237ff11c46447f4b256e64a45844da76",
+      "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_manifest_workspace_envelope.py": "86f2067a3272cb4d367c430d299c098c6a20fe53a2dca4eeada692c31e239ae3",
+      "astra-sim-wscllm-LRU/extern/graph_frontend/chakra/schema/protobuf/et_def.proto": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+      "die/docs/analysis/attention-workspace-20261014/README.md": "1b30dc828622b09a1ad245056c7fa6d9e143a07df225ffc03b6b50e4f5ec5afd",
+      "die/docs/analysis/attention-workspace-20261014/run_lru_tests.py": "2a2e392d2d9b7ddbf4e794a902a2a6c3778c99c2ce6ebe0fac4c4a28118022f4"
+    }
+  },
+  "workspace_model": {
+    "capacity_model_revision": "workspace_lifetimes_v2",
+    "workspace_capacity_bound_schema_version": 1,
+    "capacity_bound_kind": "all_template_lifetimes_without_sram_filter",
+    "affected_templates": {
+      "full_materialized": "full_score_materialization_v3",
+      "standalone_qk": "attention_qk_materialized_v3",
+      "standalone_qk_dataflow_id": "full_score_materialization_v3",
+      "workspace_model_revision": "workspace_lifetimes_v2"
+    },
+    "lru_certificate_schema": "lru_manifest_workspace_certificate_v2",
+    "lru_client_policy": "strict exact capacity_model_revision; v1 is rejected",
+    "semantic_contract": "sequential layer_instances and weight_passes scale physical work/bytes but not reusable one-invocation scratch; compact span count and batch remain in the live request set"
+  },
+  "public_build": {
+    "command": "cmake --build work/build-attention -j2",
+    "result": "default all-target build succeeded",
+    "cmake_version": "3.31.10",
+    "compiler": "GCC 14.2.0",
+    "library": {
+      "path_at_test_time": "/workspace/template/work/build-attention/lib/libcoarse_die_cabi.so",
+      "sha256": "14c35c774333814de2d6403696db2280c4f8d4d2eec9024f1fd5c0883307509e",
+      "bytes": 1556552
+    },
+    "log": {
+      "path": "die/docs/evidence/attention-workspace-20261014/public-build-all.log",
+      "sha256": "9be0c846bf17797bba532891a97a864e83f930521904ad2e68c604f573208208",
+      "bytes": 6295
+    }
+  },
+  "public_ctest": {
+    "command": "ctest --test-dir work/build-attention --output-on-failure",
+    "result": "30/30 passed",
+    "elapsed_seconds": 43.49,
+    "log": {
+      "path": "die/docs/evidence/attention-workspace-20261014/public-ctest-full.log",
+      "sha256": "f7b2a9819b11e1ae473e1b7ac0304cf95989463a37533666aa05551fadced154",
+      "bytes": 4017
+    },
+    "attention_relevant_tests": [
+      "coarse_attention_accounting_test",
+      "coarse_compact_batch_semantics_test",
+      "coarse_workspace_envelope_test"
+    ],
+    "claim_boundary": "raw full-suite result is preserved; this identity makes no compiled-GEMM utility or JOINT native-integration claim"
+  },
+  "lru_real_protoc_tests": {
+    "command": "python3 die/docs/analysis/attention-workspace-20261014/run_lru_tests.py --library \"$(realpath work/build-attention/lib/libcoarse_die_cabi.so)\"",
+    "setup": {
+      "compiler": "protoc 3.21.12",
+      "schema": "astra-sim-wscllm-LRU/extern/graph_frontend/chakra/schema/protobuf/et_def.proto",
+      "generated_import_root": "astra-sim-wscllm-LRU/work/chakra-python-root",
+      "generated_module_sha256": "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7",
+      "copied_generator_sha256": "316ae91fefa927fc8336677aeaa9dc39b656fbae56102fa34f628f5aed6f0cf9",
+      "generator_source_equal_to_checkout": true,
+      "marker_and_import_path_assertions": true,
+      "path_exists_or_route_mocks": false
+    },
+    "result": {
+      "tests_run": 19,
+      "passed": 18,
+      "skipped": 1,
+      "failed": 0
+    },
+    "skip_reason": "archived pre-envelope ABI library is unavailable",
+    "strict_v1_rejection_test": "passed against the public v2 C ABI",
+    "log": {
+      "path": "die/docs/evidence/attention-workspace-20261014/lru-client-manifest-real-protoc.log",
+      "sha256": "b7e74b976f69950de49ec5bde8fbcdb07f61e11a82fb80f3b3b6194063840eac",
+      "bytes": 4133
+    },
+    "earlier_logs": [
+      {
+        "path": "die/docs/evidence/attention-workspace-20261014/lru-client-manifest-real-protoc-prior-run.log",
+        "sha256": "d2a13b8b5c61816786b0846ad2eea697ca02e14dbdf48d7dfcf15770ea1788d1",
+        "bytes": 4046
+      },
+      {
+        "path": "die/docs/evidence/attention-workspace-20261014/lru-client-manifest-real-protoc-package-first-run.log",
+        "sha256": "c514f780660476ae230c091eefb488a7a87debaa6e421ca47376838158c8bd8c",
+        "bytes": 4133
+      }
+    ],
+    "external_cwd_portability_check": {
+      "command": "python3 /absolute/path/to/die/docs/analysis/attention-workspace-20261014/run_lru_tests.py --library /absolute/path/to/libcoarse_die_cabi.so (invoked outside repository; no --repo-root)",
+      "result": {
+        "tests_run": 19,
+        "passed": 18,
+        "skipped": 1,
+        "failed": 0
+      },
+      "log": {
+        "path": "die/docs/evidence/attention-workspace-20261014/lru-client-manifest-external-cwd.log",
+        "sha256": "6b40fc40891bf8b4cfe1357315c4e8fbb6105b1bc2e5d1a1085c65041bdb942b",
+        "bytes": 4133
+      }
+    }
+  },
+  "validation_limits": [
+    "This identity covers public attention workspace/accounting and the LRU workspace client/manifest only.",
+    "It does not claim validation of the concurrent compiled-GEMM measurement utility or JOINT native integration.",
+    "The published five-repository digest is source-release context, not five-repository build or runtime test evidence."
+  ],
+  "discarded_invalid_setup": "An earlier Path.exists-shim test harness was discarded and its log removed; it is not included in this evidence set."
+}

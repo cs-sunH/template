@@ -131,6 +131,7 @@ file(GLOB srcs CONFIGURE_DEPENDS
 # receives duplicate definitions.
 set(joint_pipeline_core_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/PipelineKernel.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/NativeCoarseDieDomain.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/NativeProjection.cc")
 list(REMOVE_ITEM srcs ${joint_pipeline_core_sources})
 add_library(joint_pipeline_core STATIC ${joint_pipeline_core_sources})
@@ -141,7 +142,7 @@ target_include_directories(joint_pipeline_core
 set_target_properties(joint_pipeline_core PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
-target_link_libraries(joint_pipeline_core PUBLIC die_model)
+target_link_libraries(joint_pipeline_core PUBLIC die_model coarse_die)
 target_compile_options(joint_pipeline_core PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>)
 
@@ -240,3 +241,21 @@ target_include_directories(NativeProjectionCApiTest PRIVATE
 set_target_properties(NativeProjectionCApiTest PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_test(NAME NativeProjectionCApiTest COMMAND NativeProjectionCApiTest)
+
+add_executable(NativeCoarseProjectionTest
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/tests/native_coarse_projection_test.cc")
+target_link_libraries(NativeCoarseProjectionTest PRIVATE joint_pipeline_core)
+target_compile_definitions(NativeCoarseProjectionTest PRIVATE
+    NATIVE_COARSE_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/extern/die_model/coarse/configs/example_hardware.json")
+set_target_properties(NativeCoarseProjectionTest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_test(NAME NativeCoarseProjectionTest COMMAND NativeCoarseProjectionTest)
+
+add_executable(NativeCoarseDieDomainTest
+    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/workload/execution_driven/tests/native_coarse_die_domain_test.cc")
+target_link_libraries(NativeCoarseDieDomainTest PRIVATE joint_pipeline_core)
+target_compile_definitions(NativeCoarseDieDomainTest PRIVATE
+    COARSE_DIE_HW_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/extern/die_model/coarse/configs/example_hardware.json")
+set_target_properties(NativeCoarseDieDomainTest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_test(NAME NativeCoarseDieDomainTest COMMAND NativeCoarseDieDomainTest)

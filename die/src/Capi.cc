@@ -380,7 +380,7 @@ const char* die_coarse_workspace_capacity_bound_v2(DieHandle h,const char* input
         const auto bound=compile_workspace_capacity_bound(m->hardware,task);
         return json{{"schema_version",2},
             {"workspace_capacity_bound_schema_version",1},
-            {"capacity_model_revision","workspace_lifetimes_v1"},
+            {"capacity_model_revision","workspace_lifetimes_v2"},
             {"capacity_bound_kind","all_template_lifetimes_without_sram_filter"},
             {"hbm_workspace_upper_bound_bytes",bound.hbm_workspace_upper_bound_bytes},
             {"hardware_fingerprint",bound.hardware_fingerprint},

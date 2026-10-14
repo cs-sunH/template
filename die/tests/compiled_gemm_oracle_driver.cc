@@ -1,14 +1,17 @@
 #include "coarse_die/Execution.hh"
 
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #ifndef COARSE_DIE_SOURCE_DIR
 #error "COARSE_DIE_SOURCE_DIR must point at die/"
@@ -87,9 +90,50 @@ Hardware synthetic_hardware() {
   return hardware;
 }
 
-json gemm_task() {
+struct Shape {
+  std::uint64_t m = 65;
+  std::uint64_t n = 65;
+  std::uint64_t k = 4097;
+};
+
+std::uint64_t parse_positive_u64(std::string_view value,
+                                std::string_view option) {
+  std::uint64_t parsed = 0;
+  const auto result = std::from_chars(value.data(), value.data() + value.size(), parsed);
+  if (result.ec != std::errc{} || result.ptr != value.data() + value.size() ||
+      parsed == 0) {
+    throw std::invalid_argument(std::string(option) +
+                                " requires a positive integer");
+  }
+  return parsed;
+}
+
+Shape parse_shape(int argc, char** argv) {
+  Shape shape;
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view option(argv[i]);
+    if (option == "--help" || option == "-h") {
+      std::cout << "Usage: compiled_gemm_oracle_driver [--m M --n N --k K]\n"
+                   "Defaults to the original M=65 N=65 K=4097 fixture.\n";
+      std::exit(0);
+    }
+    if (option != "--m" && option != "--n" && option != "--k") {
+      throw std::invalid_argument("unknown option: " + std::string(option));
+    }
+    if (i + 1 >= argc) {
+      throw std::invalid_argument("missing value for " + std::string(option));
+    }
+    const std::uint64_t value = parse_positive_u64(argv[++i], option);
+    if (option == "--m") shape.m = value;
+    else if (option == "--n") shape.n = value;
+    else shape.k = value;
+  }
+  return shape;
+}
+
+json gemm_task(const Shape& shape) {
   return {{"op_kind", "gemm"},
-          {"tensor_shapes", {{"m", 65}, {"n", 65}, {"k", 4097}}},
+          {"tensor_shapes", {{"m", shape.m}, {"n", shape.n}, {"k", shape.k}}},
           {"storage_dtype", {{"weights", "fp32"},
                              {"activations", "fp32"},
                              {"output", "fp32"}}},
@@ -179,14 +223,24 @@ std::uint64_t advance_until_terminal(Runtime& runtime,
 json counters_json(const Runtime& runtime) {
   const json counters = runtime.counters();
   return {{"hbm_busy_ns", counters.at("hbm_busy_ns")},
+          {"hbm_busy_ns_exact", counters.at("hbm_busy_ns_exact")},
           {"hbm_shared_ns", counters.at("hbm_shared_ns")},
+          {"hbm_shared_ns_exact", counters.at("hbm_shared_ns_exact")},
           {"compute_busy_ns", counters.at("compute_busy_ns")},
+          {"compute_busy_ns_exact", counters.at("compute_busy_ns_exact")},
           {"row_busy_ns", counters.at("row_busy_ns")},
+          {"row_busy_ns_exact", counters.at("row_busy_ns_exact")},
           {"row_shared_ns", counters.at("row_shared_ns")},
+          {"row_shared_ns_exact", counters.at("row_shared_ns_exact")},
           {"internal_events", counters.at("internal_events")},
           {"allocation_updates", counters.at("allocation_updates")},
           {"hbm_served_bytes_by_row_direction",
-           counters.at("hbm_served_bytes_by_row_direction")}};
+           counters.at("hbm_served_bytes_by_row_direction")},
+          {"hbm_served_bytes_by_row_direction_exact",
+           counters.at("hbm_served_bytes_by_row_direction_exact")},
+          {"served_by_category", counters.at("served_by_category")},
+          {"accounting_history_complete",
+           counters.at("accounting_history_complete")}};
 }
 
 json run_standalone(const Hardware& hardware,
@@ -255,10 +309,11 @@ json synthetic_capacity_json(const Hardware& hardware) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    const Shape shape = parse_shape(argc, argv);
     const Hardware hardware = synthetic_hardware();
-    const json task = gemm_task();
+    const json task = gemm_task(shape);
     const auto plan = compile(hardware, task);
     if (!plan) throw std::runtime_error("compile returned a null GEMM plan");
     const json solo = run_standalone(hardware, plan);

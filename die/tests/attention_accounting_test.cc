@@ -399,7 +399,9 @@ void full_and_standalone_primitives_have_independent_ledgers() {
                                          "int4_matrix_vec_fp32_assumed_v1",
                                          "materialized");
   const auto full_plans = detail::enumerate_mappings(hw, full_task);
-  const auto& full = select_plan(full_plans, "full_score_materialization_v2", 16, 64);
+  const auto& full = select_plan(full_plans, "full_score_materialization_v3", 16, 64);
+  require(full.summary.at("workspace_model_revision") == "workspace_lifetimes_v2",
+          "materialized attention Plan carries its revised workspace identity");
   require(summary_u64(full, "executed_score_slots") == score_slots,
           "full materialization executes the complete compact Q by KV rectangles");
   require(summary_u64(full, "valid_score_pairs") == ref.valid * qh,
@@ -470,10 +472,50 @@ void full_and_standalone_primitives_have_independent_ledgers() {
                 2 * hd * score_slots,
             op + " strict Vec path includes the matrix-equivalent Vec service");
     const auto& selected_tile = select_plan(
-        plans, op + "_attention_" + op + "_materialized_v2", 16, 64);
+        plans, op + "_attention_" + op + "_materialized_" +
+                   (op == "qk" ? "v3" : "v2"), 16, 64);
     require_sram_peak(hw, selected_tile, op == "qk" ? 15838 : 17728,
                       op + " standalone strict Vec primitive");
     require_activity_totals(*selected);
+  }
+}
+
+void sequential_layer_pass_repeats_keep_one_workspace_peak() {
+  const Hardware hw = example_hardware();
+  json once_task{{"schema", "coarse_die_task_v2"},
+      {"op_kind", "attention"},
+      {"tensor_shapes", {{"q_heads", 2}, {"kv_heads", 1},
+                          {"head_dim", 3}}},
+      {"spans", json::array({{{"run", {{"q_len", 2}, {"kv_len", 3},
+                                        {"kv_stride", 1}, {"count", 2}}}}})},
+      {"storage_dtype", "bf16"},
+      {"execution_profile", "int4_matrix_vec_fp32_assumed_v1"},
+      {"layer_instances", 1}, {"weight_passes", 1},
+      {"fusion_policy", "materialized"}, {"causal", false}};
+  auto repeated_task = once_task;
+  repeated_task["layer_instances"] = 2;
+  repeated_task["weight_passes"] = 3;
+  const auto once = compile(hw, once_task);
+  const auto repeated = compile(hw, repeated_task);
+
+  require(summary_u64(*once, "hbm_workspace_peak_bytes") == 320 &&
+              summary_u64(*repeated, "hbm_workspace_peak_bytes") == 320,
+          "materialized workspace is the one-invocation peak across sequential layers and passes");
+  require(repeated->summary.at("template_id") == "full_score_materialization_v3" &&
+              repeated->summary.at("workspace_model_revision") ==
+                  "workspace_lifetimes_v2",
+          "revised template and workspace model are visible in Plan identity");
+  require(repeated->fingerprint != once->fingerprint,
+          "different task repeats retain distinct Plan identities");
+  for (const char* field : {"executed_score_slots", "executed_matrix_ops",
+                            "source_matrix_ops", "vec_equivalent_ops",
+                            "logical_tensor_bytes", "hbm_read_bytes_total",
+                            "hbm_write_bytes_total", "sram_read_bytes",
+                            "sram_write_bytes", "local_bus_bytes",
+                            "score_bytes", "probability_bytes"}) {
+    require(summary_u64(*repeated, field) ==
+                6 * summary_u64(*once, field),
+            std::string("sequential layer/pass repeats scale physical ") + field);
   }
 }
 
@@ -482,6 +524,7 @@ void test_attention_accounting() {
   compact_runs_and_noncausal_tail_accounting();
   int4_packing_is_per_head_and_per_tile();
   full_and_standalone_primitives_have_independent_ledgers();
+  sequential_layer_pass_repeats_keep_one_workspace_peak();
   std::cout << "attention_tiles=oracle_checked, int4_tail_bytes=exact, "
                "full_score_stages=4, qk_av=independent\n";
 }

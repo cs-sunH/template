@@ -16,6 +16,7 @@ import math
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -133,12 +134,6 @@ def make_waves(raw: dict[str, Any]) -> tuple[list[Wave], dict[str, Any]]:
     tm_count, tn_count, tk_count = ceildiv(m, tm), ceildiv(n, tn), ceildiv(k, tk)
     output_rounds = ceildiv(tm_count * tn_count, 1)
     expected_wave_count = output_rounds * tk_count
-    if k % tk == 0:
-        raise ValueError("fixture must exercise a K tail")
-    if tk_count <= 1:
-        raise ValueError("fixture must exercise multiple K consumptions")
-    if output_rounds <= 1:
-        raise ValueError("fixture must exercise multiple output rounds")
     if int(summary["output_round_count"]) != output_rounds:
         raise ValueError("compiled output_round_count disagrees with selected tile geometry")
     if int(summary["consumption_wave_count"]) != expected_wave_count:
@@ -157,12 +152,20 @@ def make_waves(raw: dict[str, Any]) -> tuple[list[Wave], dict[str, Any]]:
     write_prefix = 0
     total_read = total_write = total_ops = 0
     accum_read = accum_write = 0
+    output_tile_classes: dict[str, int] = {}
+    k_tile_extent_classes: dict[str, int] = {}
     for q in range(tm_count * tn_count):
         m_tile, n_tile = divmod(q, tn_count)
         m_elems = min(tm, m - m_tile * tm)
         n_elems = min(tn, n - n_tile * tn)
+        output_tile_class = f"{m_elems}x{n_elems}"
+        output_tile_classes[output_tile_class] = (
+            output_tile_classes.get(output_tile_class, 0) + 1)
         for k_tile in range(tk_count):
             k_elems = min(tk, k - k_tile * tk)
+            k_tile_extent_class = str(k_elems)
+            k_tile_extent_classes[k_tile_extent_class] = (
+                k_tile_extent_classes.get(k_tile_extent_class, 0) + 1)
             read = 4 * k_elems * (m_elems + n_elems)
             ops = 2 * m_elems * n_elems * k_elems
             final_k = k_tile + 1 == tk_count
@@ -201,6 +204,9 @@ def make_waves(raw: dict[str, Any]) -> tuple[list[Wave], dict[str, Any]]:
                            "Tm": tm_count, "Tn": tn_count, "Tk": tk_count},
         "output_round_count": output_rounds,
         "consumption_wave_count": expected_wave_count,
+        "output_tile_classes_m_by_n": output_tile_classes,
+        "k_tile_extent_classes_by_wave": k_tile_extent_classes,
+        "has_k_tail": k % tk != 0,
         "waves_with_store": sum(1 for wave in waves if wave.final_k),
         "true_output_tiles": tm_count * tn_count,
         "hbm_read_bytes": total_read,
@@ -423,6 +429,15 @@ def discrete_oracle(waves: list[Wave], output_count: int,
     stage_completions = {"load": 0, "compute": 0, "store": 0}
     event_count = 0
     max_events = 1000000
+    wave_ledger = {
+        "wave_count_per_request": len(waves),
+        "final_k_wave_count_per_request": sum(wave.final_k for wave in waves),
+        "hbm_read_bytes_by_row_per_request": [
+            sum(wave.read_row_bytes[row] for wave in waves) for row in (0, 1)],
+        "hbm_write_bytes_by_row_per_request": [
+            sum(wave.write_row_bytes[row] for wave in waves) for row in (0, 1)],
+        "vec_equivalent_ops_per_request": sum(wave.vec_ops for wave in waves),
+    }
 
     def request_done(request: Request) -> bool:
         return request.retired_outputs >= request.output_count
@@ -562,6 +577,7 @@ def discrete_oracle(waves: list[Wave], output_count: int,
         "row_busy_s": row_busy,
         "row_shared_s": row_shared,
         "served_work_by_resource": dict(zip(RESOURCE_NAMES, served_work)),
+        "discrete_wave_work_ledger": wave_ledger,
         "stage_completions": stage_completions,
         "event_count": event_count,
         "buffer_slots": {"input": 2, "output": 2},
@@ -605,6 +621,101 @@ def compare_measurement(actual: dict[str, Any], oracle: dict[str, Any],
     actual_shared = float(actual_counters["hbm_shared_ns"]) / NS_PER_SECOND
     shared_error = relative_error(actual_shared, float(oracle["hbm_shared_s"]))
     shared_required = concurrent and float(oracle["hbm_shared_s"]) > 0.0
+    requests = 2 if concurrent else 1
+    ledger = oracle["discrete_wave_work_ledger"]
+    exact_hbm = actual_counters.get("hbm_served_bytes_by_row_direction_exact")
+    exact_categories = actual_counters.get("served_by_category")
+    runtime_work_reconciliation: dict[str, Any]
+    required_counter_fields = []
+    if exact_hbm is None:
+        required_counter_fields.append("hbm_served_bytes_by_row_direction_exact")
+    if exact_categories is None or any(
+            "vec_eqops_exact_decimal" not in item
+            for item in exact_categories.values()):
+        required_counter_fields.append("served_by_category.vec_eqops_exact_decimal")
+    if required_counter_fields:
+        runtime_work_reconciliation = {
+            "status": "not_available",
+            "available": False,
+            "reason": "Runtime report lacks serialized long-double work counters",
+            "missing_counter_fields": required_counter_fields,
+        }
+    else:
+        expected_hbm = [
+            [ledger["hbm_read_bytes_by_row_per_request"][row] * requests,
+             ledger["hbm_write_bytes_by_row_per_request"][row] * requests]
+            for row in (0, 1)]
+        actual_hbm_decimal = [[Decimal(str(value)) for value in row]
+                               for row in exact_hbm]
+        actual_vec_ops = sum((Decimal(item["vec_eqops_exact_decimal"])
+                              for item in exact_categories.values()), Decimal(0))
+        expected_vec_ops = ledger["vec_equivalent_ops_per_request"] * requests
+        hbm_deltas = []
+        strict_hbm_equal = True
+        within_hbm_tolerance = True
+        tolerance = Decimal("1e-9")
+        for row in (0, 1):
+            row_deltas = []
+            for direction in (0, 1):
+                wanted = Decimal(expected_hbm[row][direction])
+                actual_value = actual_hbm_decimal[row][direction]
+                delta = actual_value - wanted
+                relative_delta = abs(delta) / max(Decimal(1), abs(wanted))
+                strict_hbm_equal = strict_hbm_equal and delta == 0
+                within_hbm_tolerance = within_hbm_tolerance and relative_delta <= tolerance
+                row_deltas.append({
+                    "actual_serialized_decimal": str(actual_value),
+                    "expected_integer": expected_hbm[row][direction],
+                    "signed_delta": str(delta),
+                    "absolute_delta": str(abs(delta)),
+                    "relative_delta": str(relative_delta),
+                    "strict_integer_equality": delta == 0,
+                    "within_relative_tolerance": relative_delta <= tolerance,
+                })
+            hbm_deltas.append(row_deltas)
+        vec_delta = actual_vec_ops - Decimal(expected_vec_ops)
+        vec_relative_delta = abs(vec_delta) / max(Decimal(1), Decimal(expected_vec_ops))
+        strict_vec_equal = vec_delta == 0
+        within_vec_tolerance = vec_relative_delta <= tolerance
+        history_complete = actual_counters.get("accounting_history_complete")
+        strict_integer_equality = strict_hbm_equal and strict_vec_equal
+        within_relative_tolerance = within_hbm_tolerance and within_vec_tolerance
+        if history_complete is False:
+            reconciliation_status = "incomplete_history"
+        elif within_relative_tolerance:
+            reconciliation_status = "within_relative_tolerance"
+        else:
+            reconciliation_status = "outside_relative_tolerance"
+        runtime_work_reconciliation = {
+            "status": reconciliation_status,
+            "available": True,
+            "counter_arithmetic": "serialized_cumulative_long_double_decimal",
+            "planned_expected_arithmetic": "independent_integer_wave_ledger",
+            "strict_integer_equality": strict_integer_equality,
+            "within_relative_tolerance": within_relative_tolerance,
+            "relative_tolerance": str(tolerance),
+            "accounting_history_complete": history_complete,
+            "hbm_bytes_by_row_direction": hbm_deltas,
+            "vec_equivalent_ops": {
+                "actual_serialized_decimal": str(actual_vec_ops),
+                "expected_integer": expected_vec_ops,
+                "signed_delta": str(vec_delta),
+                "absolute_delta": str(abs(vec_delta)),
+                "relative_delta": str(vec_relative_delta),
+                "strict_integer_equality": strict_vec_equal,
+                "within_relative_tolerance": within_vec_tolerance,
+            },
+        }
+    row_busy_actual = [float(value) / NS_PER_SECOND
+                       for value in actual_counters.get("row_busy_ns", [0, 0])]
+    row_shared_actual = [float(value) / NS_PER_SECOND
+                         for value in actual_counters.get("row_shared_ns", [0, 0])]
+    row_busy_errors = [relative_error(row_busy_actual[row],
+                                      float(oracle["row_busy_s"][row]))
+                       for row in (0, 1)]
+    row_shared_errors = [relative_error(row_shared_actual[row],
+                                        float(oracle["row_shared_s"][row]))
+                         for row in (0, 1)]
     statuses = {
         "completion_time": max(finish_errors.values(), default=math.inf) <= finish_limit,
         "hbm_busy_time": hbm_error <= 0.05,
@@ -621,12 +732,21 @@ def compare_measurement(actual: dict[str, Any], oracle: dict[str, Any],
             "compute_busy_s": float(actual_counters["compute_busy_ns"]) / NS_PER_SECOND,
             "internal_events": int(actual_counters["internal_events"]),
             "allocation_updates": int(actual_counters["allocation_updates"]),
+            "accounting_history_complete": actual_counters.get(
+                "accounting_history_complete"),
+            "serialized_hbm_served_bytes_counter_decimal": exact_hbm,
+            "served_by_category_serialized_decimal_counters": exact_categories,
+            "row_busy_s": row_busy_actual,
+            "row_shared_s": row_shared_actual,
         },
         "independent_discrete_oracle": oracle,
+        "runtime_cumulative_serialization_reconciliation": runtime_work_reconciliation,
         "relative_errors": {
             "finish_by_request": finish_errors,
             "hbm_busy": hbm_error,
             "shared_hbm_busy": shared_error,
+            "row_busy_by_hbm_row": row_busy_errors,
+            "row_shared_by_hbm_row": row_shared_errors,
         },
         "limits": {"completion": finish_limit, "hbm_busy": 0.05,
                    "shared_hbm_busy": 0.05 if shared_required else None},
@@ -638,6 +758,38 @@ def compare_measurement(actual: dict[str, Any], oracle: dict[str, Any],
 def build_report(raw: dict[str, Any]) -> dict[str, Any]:
     waves, expected = make_waves(raw)
     ledger = check_ledger(raw, expected)
+    integer_check_names = (
+        "summary_hbm_read_bytes", "summary_hbm_write_bytes",
+        "summary_vec_equivalent_ops", "summary_conversion_elements",
+        "summary_int4_input_bytes", "summary_executed_int4_ops",
+        "summary_sram_read_bytes", "summary_sram_write_bytes",
+        "summary_local_bus_bytes", "summary_logical_tensor_bytes",
+        "summary_sram_peak", "summary_source_matrix_ops",
+        "summary_executed_matrix_ops", "plan_activity_vec_equivalent_ops",
+        "plan_activity_int4_ops", "compiled_activity_hbm_bytes",
+    )
+    integer_checks = {name: ledger["checks"][name]
+                      for name in integer_check_names}
+    planned_integer_conservation = {
+        "status": "passed" if all(integer_checks.values()) else "failed",
+        "arithmetic": "exact_integer_equality",
+        "checks": integer_checks,
+        "expected_integer_work": {
+            "hbm_read_bytes": expected["hbm_read_bytes"],
+            "hbm_write_bytes": expected["hbm_write_bytes"],
+            "vec_equivalent_ops": expected["vec_equivalent_ops"],
+            "hbm_bytes_by_row_direction": [
+                [expected["hbm_read_by_row"][0], expected["hbm_write_by_row"][0]],
+                [expected["hbm_read_by_row"][1], expected["hbm_write_by_row"][1]],
+            ],
+        },
+        "compiled_plan_integer_work": {
+            "hbm_bytes_by_row_direction": ledger[
+                "compiled_hbm_payload_by_row_direction"],
+            "vec_equivalent_ops": ledger["compiled_activity_vec_equivalent_ops"],
+            "int4_ops": ledger["compiled_activity_int4_ops"],
+        },
+    }
     capacities = make_capacities(raw)
     solo_oracle = discrete_oracle(waves, expected["true_output_tiles"], [0.0], capacities)
     solo_reference = {
@@ -671,11 +823,13 @@ def build_report(raw: dict[str, Any]) -> dict[str, Any]:
         "independent_expected_R_times_Tk": frame_credit_units * k_waves_per_output,
         "compiled_plan_summary_consumption_wave_count": int(summary["consumption_wave_count"]),
         "factor_between_consumer_waves_and_frame_units": k_waves_per_output,
+        "k_tile_extents": expected["k_tile_extent_classes_by_wave"],
+        "m_n_output_tile_classes": expected["output_tile_classes_m_by_n"],
         "finding": (
             "The compiler summary reports R*Tk consumption waves, while append_epoch receives R output rounds. "
-            "Its five macro sections therefore aggregate every K tile of one output round into one load/compute "
-            "credit unit; the independent oracle releases compute only after each discrete K-wave load and "
-            "produces/stores an output only after that output tile's final K wave."
+            "Its five macro sections aggregate K work at output-round granularity; the independent oracle releases "
+            "compute only after each discrete K-wave load and produces/stores an output only after that output "
+            "tile's final K wave. Shape and K extent classes are reported separately for this probe."
         ),
     }
 
@@ -720,6 +874,7 @@ def build_report(raw: dict[str, Any]) -> dict[str, Any]:
             "hardware_evidence": "model_to_model_fixture_only; no silicon or external measured data",
         },
         "independent_expected_work": expected,
+        "planned_integer_conservation": planned_integer_conservation,
         "compiled_plan_ledger": ledger,
         "comparisons": {"standalone": solo, "two_comp": concurrent_results},
         "acceptance_limits": {
@@ -748,14 +903,36 @@ def build_report(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def driver_shape_args(m: int | None, n: int | None,
+                      k: int | None) -> list[str]:
+    supplied = (m is not None, n is not None, k is not None)
+    if any(supplied) and not all(supplied):
+        raise ValueError("M, N, and K must be supplied together")
+    if not any(supplied):
+        return []
+    if min(int(m), int(n), int(k)) <= 0:
+        raise ValueError("M, N, and K must be positive")
+    return ["--m", str(m), "--n", str(n), "--k", str(k)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--driver", type=Path,
                         default=Path("work/build-die/coarse_compiled_gemm_oracle_driver"),
                         help="compiled C++ driver that uses compile() and actual Runtime")
+    parser.add_argument("--m", type=int, help="GEMM M dimension; supply M/N/K together")
+    parser.add_argument("--n", type=int, help="GEMM N dimension; supply M/N/K together")
+    parser.add_argument("--k", type=int, help="GEMM K dimension; supply M/N/K together")
+    parser.add_argument("--axis", choices=("k_depth", "k_tail", "mn_shape", "baseline"),
+                        help="single-factor axis label stored in the report")
+    parser.add_argument("--probe-name", help="human-readable probe label stored in the report")
     parser.add_argument("--output", type=Path,
                         help="write the JSON report here; stdout is used when omitted")
     args = parser.parse_args()
+    try:
+        shape_args = driver_shape_args(args.m, args.n, args.k)
+    except ValueError as error:
+        parser.error(str(error))
     driver = args.driver.expanduser().resolve()
     if not driver.is_file():
         payload = json.dumps({
@@ -775,7 +952,7 @@ def main() -> int:
         else:
             print(payload)
         return 2
-    completed = subprocess.run([str(driver)], capture_output=True, text=True,
+    completed = subprocess.run([str(driver), *shape_args], capture_output=True, text=True,
                                check=False)
     if completed.returncode != 0:
         payload = {
@@ -801,6 +978,16 @@ def main() -> int:
     try:
         raw = json.loads(completed.stdout)
         report_obj = build_report(raw)
+        shape = raw["compiled_plan"]["task"]["tensor_shapes"]
+        summary = raw["compiled_plan"]["summary"]
+        report_obj["probe"] = {
+            "name": args.probe_name,
+            "axis": args.axis,
+            "requested_shape": {name: int(shape[name]) for name in ("m", "n", "k")},
+            "selected_tiles": {name: int(summary[name]) for name in ("tm", "tn", "tk")},
+            "selected_tile_signature": "x".join(
+                str(int(summary[name])) for name in ("tm", "tn", "tk")),
+        }
     except Exception as error:  # Keep failed evidence machine-readable.
         report_obj = {
             "status": "failed",

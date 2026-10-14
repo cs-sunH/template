@@ -1,6 +1,6 @@
 {
   "schema": "coarse_die_release_v2",
-  "source_digest": "9d025e25699e44b708997da5e4bc9c45e60c75b02166be931282f20921c0c4f4",
+  "source_digest": "45b7bf3d8df9969b8155323c79eecf1a81f8d1c7499177e811b6aedf2c4c3264",
   "files": {
     "CMakeLists.txt": "7fa17ffb2eb8ef8eca8393455efe09eda047c460c9b68bee0b830550bb6021ce",
     "include/coarse_die/Capi.h": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
@@ -8,7 +8,7 @@
     "include/coarse_die/Hardware.hh": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
     "include/coarse_die/Memory.hh": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
     "include/coarse_die/Plan.hh": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
-    "src/Capi.cc": "d6c4ead1aabe7a82cdf331e7ea737ff19dcecdd3ed94a014c35a3f9ae1b2bb87",
+    "src/Capi.cc": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87",
     "src/Compiler.cc": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
     "src/EquivalentWork.hh": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
     "src/Execution.cc": "c96a0555cb23c8c31ba5ab191aae275dbdaa65b7d17e15eb0249a9c35e9c2cb3",
@@ -17,7 +17,7 @@
     "src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
     "src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
     "src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
-    "src/Mapping.cc": "5dc4a7ccea972d15e30371bc0c8534b3ffbdf5921bf759d918fd096737c0cd90",
+    "src/Mapping.cc": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
     "src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
     "configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
     "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",

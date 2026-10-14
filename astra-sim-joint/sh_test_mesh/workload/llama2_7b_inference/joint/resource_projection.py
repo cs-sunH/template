@@ -342,10 +342,24 @@ class TaskSpec:
     # 比例分摊）。值为 joint.die_plan_projection.DiePlanDescriptor（鸭子
     # 类型：specs/route/create_execution）。
     die_plan: Optional[object] = None
+    # Canonical external local access. The native coarse Runtime owns its
+    # service and typed counters; scalar bytes/base/duration stay zero.
+    coarse_endpoint: Optional[Mapping] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.leg_id, str) or not self.leg_id.strip():
             raise ResourceProjectionError("leg id must be non-empty")
+        if self.coarse_endpoint is not None:
+            if (not isinstance(self.coarse_endpoint, Mapping)
+                    or self.die_plan is not None or self.kind != TASK_KIND_STREAM
+                    or len(self.route) != 1
+                    or self.bytes_amount or self.base_ns or self.duration_ns
+                    or self.latency_ns or self.in_service
+                    or self.remaining_bytes is not None
+                    or self.remaining_duration_ns is not None):
+                raise ResourceProjectionError(
+                    "coarse endpoint requires a fresh stream leg, one local "
+                    "domain and no scalar work aliases")
         if self.kind not in (
                 TASK_KIND_STREAM, TASK_KIND_FIXED, TASK_KIND_COMPUTE):
             raise ResourceProjectionError(
@@ -603,6 +617,21 @@ class BlockPipelineState:
 
 
 @dataclass(frozen=True)
+class CoarseDieDomainSpec:
+    """Frozen canonical local hardware; no Python capacity or timing formulas."""
+    resource_key: str
+    hardware_config: Mapping
+
+    def __post_init__(self) -> None:
+        if (not isinstance(self.resource_key, str)
+                or not self.resource_key.startswith("hbm:")
+                or not isinstance(self.hardware_config, Mapping)
+                or self.hardware_config.get("schema") != "coarse_die_v2"):
+            raise ResourceProjectionError(
+                "coarse domain requires an HBM resource and coarse_die_v2 hardware")
+
+
+@dataclass(frozen=True)
 class ProjectionInput:
     """冻结前推输入（背景账本 + 硬件 + 焦点；候选经 ``with_candidate`` 叠加）。
 
@@ -625,6 +654,7 @@ class ProjectionInput:
     # 下标；None = 无 forecast 段（共享上下文的私有 overlay extras 拼接到
     # 末尾）。仅共享上下文序列化使用；旧全量逐候选快照不设置该字段。
     forecast_start_index: Optional[int] = None
+    coarse_die_domains: Tuple[CoarseDieDomainSpec, ...] = ()
 
     def __post_init__(self) -> None:
         if (isinstance(self.now_ns, bool)
@@ -639,6 +669,14 @@ class ProjectionInput:
                 raise ResourceProjectionError(
                     f"duplicate resource {resource.key!r}")
             resource_keys.add(resource.key)
+        domain_keys = set()
+        for domain in self.coarse_die_domains:
+            if (not isinstance(domain, CoarseDieDomainSpec)
+                    or domain.resource_key not in resource_keys
+                    or domain.resource_key in domain_keys):
+                raise ResourceProjectionError(
+                    "coarse domains must uniquely name registered physical resources")
+            domain_keys.add(domain.resource_key)
         gate_capacity: Dict[str, int] = {}
         for gate in self.gates:
             if gate.gate_id in gate_capacity:
@@ -720,6 +758,7 @@ class ProjectionInput:
             pipelines=self.pipelines,
             forecast_arrival_placeholders_ns=(
                 self.forecast_arrival_placeholders_ns),
+            coarse_die_domains=self.coarse_die_domains,
         )
 
 

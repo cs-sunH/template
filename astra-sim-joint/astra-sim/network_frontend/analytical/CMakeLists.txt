@@ -76,6 +76,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             CONFIGURE_DEPENDS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/*.cc)
     list(REMOVE_ITEM srcs_execution_driven
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/NativeCoarseDieDomain.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/PipelineKernel.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/NativeProjection.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/NativeProjectionCApi.cc)

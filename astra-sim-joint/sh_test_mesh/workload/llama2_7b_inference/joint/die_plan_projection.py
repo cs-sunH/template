@@ -224,6 +224,8 @@ class DiePlanDescriptor:
 
     * ``specs``：按执行序排列的 DieOpSpec dict 序列（契约 §2 schema；
       一个层段/block 的多个宏组 = 多个 spec 顺序执行）；
+      显式 coarse_die_v2 hardware 则只接受 coarse_die_task_v2，交由
+      native shared Runtime 推进，不使用 A3 action factory。
     * ``route``：内存阶段的 HBM 端口资源键（native 投影内核的分享
       集合/除数裁决面）；
     * ``execution_factory``：``(descriptor) -> DieExecutionProtocol``；
@@ -250,17 +252,29 @@ class DiePlanDescriptor:
             raise DiePlanError(
                 "die plan descriptor requires at least one DieOpSpec "
                 "(or stub phases for kernel tests)")
+        coarse = (isinstance(self.hardware_config, Mapping)
+                  and self.hardware_config.get("schema") == "coarse_die_v2")
+        if coarse and (self.service_factor != 1
+                       or self.execution_factory is not None
+                       or self.stub_phases is not None):
+            raise DiePlanError(
+                "coarse plans use the native shared Runtime and its frozen "
+                "profile; legacy execution factories/factors are unsupported")
         for index, spec in enumerate(self.specs):
             if not isinstance(spec, Mapping):
                 raise DiePlanError(
                     f"die plan spec[{index}] must be a DieOpSpec mapping")
-            if spec.get("schema_version") != 1:
+            if coarse and (spec.get("schema") != "coarse_die_task_v2"
+                           or not isinstance(spec.get("tensor_shapes"), Mapping)):
+                raise DiePlanError(
+                    f"coarse plan spec[{index}] requires coarse_die_task_v2 tensor_shapes")
+            if not coarse and spec.get("schema_version") != 1:
                 raise DiePlanError(
                     f"die plan spec[{index}] schema_version must be 1")
             if not spec.get("op_kind"):
                 raise DiePlanError(
                     f"die plan spec[{index}] requires op_kind")
-            if not spec.get("spans"):
+            if not coarse and not spec.get("spans"):
                 raise DiePlanError(
                     f"die plan spec[{index}] requires at least one span")
         if not self.route:
@@ -320,6 +334,11 @@ class DiePlanDescriptor:
 
         多 spec 描述符返回 ``SequencedDieExecution``（层段宏组串行）。
         """
+        if (isinstance(self.hardware_config, Mapping)
+                and self.hardware_config.get("schema") == "coarse_die_v2"):
+            raise DiePlanError(
+                "coarse plans execute inside the native shared Runtime, "
+                "not the legacy A3 action protocol")
         if self.execution_factory is not None:
             if len(self.specs) == 1:
                 return self.execution_factory(self)

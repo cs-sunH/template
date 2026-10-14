@@ -72,6 +72,12 @@ std::uint64_t workspace(const Plan& plan) {
   return hbm_workspace_peak_bytes(plan);
 }
 
+std::uint64_t summary_u64(const Plan& plan, const char* key) {
+  require(plan.summary.contains(key),
+          std::string("Plan summary is missing ") + key);
+  return plan.summary.at(key).get<std::uint64_t>();
+}
+
 std::uint64_t enumerated_max(const Hardware& hardware, const json& task,
                              std::uint64_t& count) {
   const auto normalized = compile_workspace_envelope(hardware, task).normalized_task;
@@ -169,14 +175,18 @@ void exact_u64_and_overflow(const Hardware& hardware) {
   const auto repeat_overflow = capacity_attention_task(
       1, 1, 32, "materialized", std::numeric_limits<std::uint64_t>::max(),
       std::numeric_limits<std::uint64_t>::max());
+  const auto repeat_bound =
+      compile_workspace_capacity_bound(hardware, repeat_overflow);
+  require(repeat_bound.hbm_workspace_upper_bound_bytes == 136,
+          "sequential repeat factors do not inflate or overflow one attention workspace peak");
   rejected = false;
   try {
-    (void)compile_workspace_capacity_bound(hardware, repeat_overflow);
+    (void)compile_workspace_envelope(hardware, repeat_overflow);
   } catch (const std::exception& error) {
     rejected = std::string(error.what()).find("overflow") != std::string::npos;
   }
   require(rejected,
-          "capacity repeat products overflow through checked u128/u64 arithmetic");
+          "the same extreme repeats still overflow checked physical work aggregation");
 
   auto unsupported_dtype = attention_task();
   unsupported_dtype["storage_dtype"] = {{"output", "fp16"}};
@@ -221,7 +231,9 @@ void aliases_and_schema_equivalence(const Hardware& hardware) {
 void candidate_independent_capacity_bound() {
   const Hardware hardware = low_sram_hardware();
   const auto parent = capacity_attention_task(64, 64, 256);
-  const auto child = capacity_attention_task(8, 8, 256);
+  auto child = capacity_attention_task(8, 8, 256);
+  child["layer_instances"] = 2;
+  child["weight_passes"] = 3;
   const auto parent_envelope = compile_workspace_envelope(hardware, parent);
   const auto child_envelope = compile_workspace_envelope(hardware, child);
   const auto parent_candidates = detail::enumerate_mappings_for_compile(
@@ -231,7 +243,7 @@ void candidate_independent_capacity_bound() {
   const auto has_materialized = [](const auto& candidates) {
     return std::any_of(candidates.begin(), candidates.end(), [](const auto& p) {
       return p->summary.value("template_id", std::string()) ==
-             "full_score_materialization_v2";
+             "full_score_materialization_v3";
     });
   };
   require(parent_envelope.max_hbm_workspace_peak_bytes == 0 &&
@@ -341,18 +353,38 @@ void candidate_independent_capacity_bound() {
           "opaque capacity metadata stays in identity while the API remains capacity-only");
 }
 
-void repeated_attention_workspace_preserves_legacy_plan() {
+void repeated_attention_workspace_uses_sequential_peak() {
   const Hardware hardware = low_sram_hardware();
+  const auto once_task = capacity_attention_task(64, 64, 32, "materialized");
   const auto repeated = capacity_attention_task(64, 64, 32, "materialized", 2, 3);
+  const auto once_plan = compile(hardware, once_task);
   const auto plan = compile(hardware, repeated);
+  const auto envelope = compile_workspace_envelope(hardware, repeated);
+  const auto once_bound = compile_workspace_capacity_bound(hardware, once_task);
   const auto bound = compile_workspace_capacity_bound(hardware, repeated);
-  require(workspace(*plan) == 245760 &&
-              bound.hbm_workspace_upper_bound_bytes == 245760,
-          "capacity bound preserves current attention layer/pass workspace semantics");
-  require(plan->fingerprint ==
-              "3283ef35e93b58457e011f770a95647589b195fbe2c5335d1fcb6cdfaf7cc3a8",
-          "formula refactor leaves the established repeated-attention Plan hash unchanged");
-
+  require(workspace(*once_plan) == 40960 && workspace(*plan) == 40960 &&
+              bound.hbm_workspace_upper_bound_bytes == 40960 &&
+              bound.hbm_workspace_upper_bound_bytes ==
+                  once_bound.hbm_workspace_upper_bound_bytes,
+          "materialized workspace and capacity bound remain one peak across sequential layer/pass repeats");
+  require(envelope.max_hbm_workspace_peak_bytes == workspace(*plan) &&
+              bound.hbm_workspace_upper_bound_bytes >=
+                  envelope.max_hbm_workspace_peak_bytes,
+          "the revised candidate-independent bound covers every repeated-task candidate");
+  require(plan->summary.at("template_id") == "full_score_materialization_v3" &&
+              plan->summary.at("workspace_model_revision") ==
+                  "workspace_lifetimes_v2" &&
+              plan->fingerprint != once_plan->fingerprint &&
+              plan->fingerprint !=
+                  "3283ef35e93b58457e011f770a95647589b195fbe2c5335d1fcb6cdfaf7cc3a8",
+          "corrected repeated-workspace Plans carry a new template/model identity and hash");
+  for (const char* key : {"executed_score_slots", "executed_matrix_ops",
+                          "vec_equivalent_ops", "hbm_read_bytes_total",
+                          "hbm_write_bytes_total", "sram_read_bytes",
+                          "sram_write_bytes", "local_bus_bytes"}) {
+    require(summary_u64(*plan, key) == 6 * summary_u64(*once_plan, key),
+            std::string("repeat aggregation still scales physical ") + key);
+  }
   const Hardware default_hardware = example_hardware();
   auto repeated_ffn = ffn_task();
   repeated_ffn["fusion_policy"] = "materialized";
@@ -394,7 +426,7 @@ void cabi_contract(const Hardware& hardware) {
   require(capacity_response.at("schema_version") == 2 &&
               capacity_response.at("workspace_capacity_bound_schema_version") == 1 &&
               capacity_response.at("capacity_model_revision") ==
-                  "workspace_lifetimes_v1" &&
+                  "workspace_lifetimes_v2" &&
               capacity_response.at("capacity_bound_kind") ==
                   "all_template_lifetimes_without_sram_filter" &&
               capacity_response.at("hbm_workspace_upper_bound_bytes").is_number_unsigned() &&
@@ -481,7 +513,7 @@ void body() {
   compare_with_actual_mapping_candidates(hardware, attention_task(), true);
   compare_with_actual_mapping_candidates(hardware, ffn_task(), true);
   candidate_independent_capacity_bound();
-  repeated_attention_workspace_preserves_legacy_plan();
+  repeated_attention_workspace_uses_sequential_peak();
   aliases_and_schema_equivalence(hardware);
   exact_u64_and_overflow(hardware);
   legacy_local_region();

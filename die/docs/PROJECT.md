@@ -43,9 +43,11 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-本轮交付分支 `codex/die-capacity-joint-20261014`；已同步共享 main `ad865f11b6466dcc1d07a75be442740b8db20d01`，包含已合并 PR #10 / 源码 `2e3e0294`。用户现已要求停止新任务，完成当前收尾和 GitHub 交接后立即停止。仅使用活动 `astra-sim-joint`，`astra-sim-joint_old` 保持档案。本检查点把 compiler-derived future bound 接入 LRU finite manifest 与实际 Plan 准入，并验证源迁移 ACK 释放排序；新 JOINT additive 接口和 Runtime 单独记录范围。提交/PR/远端核实结果见 HANDOFF 和对应 GitHub evidence，不提前宣称合并。
+当前持续开发分支 `codex/die-joint-runtime-20261014`，从远端 `main` 的 `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，含已合并 PR #11。用户本轮重新要求持续自主推进，历史停止指令不沿用。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。当前检查点修复 attention sequential layer/pass workspace peak（新 v3 template、workspace revision v2）、增加同公共 Runtime 的 native fresh local-domain bridge，并形成真实 E5 shape-axis 失败证据；完整 native world/sh30 production guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
 
 ## 重要决定及变更记录
+
+- 2026-10-14 接续检查点：同步 main d9cc024；materialized attention/QK workspace 只取单次 lifecycle，物理 work/byte 仍重复计费，受影响 template/dataflow v3、capacity revision v2，LRU strict-v2 certificate；canonical23 五仓 digest45b7bf3d…c3264。新 JOINT native projection 使用共享公共 Runtime，支持 fresh frozen domains/Plan chains/显式本地endpoint和native gate/join，拒绝scalar活跃恢复及prediction-only倍率，sh30 guard未开放。实际 tiny legacy Online成功，coarse-intended在guard明确失败。新E5单因素可比OS场景继续failed，累计long-double尘埃与计划整数守恒分开报告；TX8不变。真实命令/范围见HANDOFF和新evidence。
 
 - 2026-10-14 用户停止/交接：本轮源码和完整HANDOFF `60d18dc` 已经 PR #11 合入 main，merge `721ab833` 已fetch/ancestry实核，源码CI38590775233 success。仅补最终GitHub元数据后停止；下一账号基于最新main继续，不把工程 NOT ACCEPTED 当作交接失败，也不把PR merge当作模型验收。
 

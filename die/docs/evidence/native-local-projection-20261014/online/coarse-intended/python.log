@@ -1,0 +1,27 @@
+Traceback (most recent call last):
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py", line 823, in serve_forever
+    self._handle_request(req_seq, handler, req_raw)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py", line 476, in _handle_request
+    response = handler(request, work_ledger_segment)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/online_scheduler_base.py", line 504, in on_decision_batch
+    self.run_variant_policy(delta)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 2045, in run_variant_policy
+    self._admit_pass(tick)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 4135, in _admit_pass
+    self._admit_waiting_requests(tick)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 4180, in _admit_waiting_requests
+    if not self._try_admit_request(runtime, now_ns):
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 8387, in _try_admit_request
+    cost_model = self._joint_cost_model(now_ns)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 7405, in _joint_cost_model
+    die_provider = _JointDiePlanProvider(
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 996, in __init__
+    require_legacy_projection_context(die_context)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py", line 835, in require_legacy_projection_context
+    raise RuntimeError(
+RuntimeError: coarse_die_v2 JOINT prediction is fail-closed: the current provider uses legacy hbm_share_divisor/service_factor and the frozen native projection has not been validated against the coarse shared Runtime
+decision_bridge: fail-closed at seq 0: RuntimeError: coarse_die_v2 JOINT prediction is fail-closed: the current provider uses legacy hbm_share_divisor/service_factor and the frozen native projection has not been validated against the coarse shared Runtime

@@ -141,10 +141,10 @@ def derive_manifest_workspace_envelope(manifest: dict, config: Any, *,
                 raise WorkspaceEnvelopeError("workspace manifest has unsupported group phase")
 
     payload = {
-        "schema": "lru_manifest_workspace_certificate_v1",
+        "schema": "lru_manifest_workspace_certificate_v2",
         "coverage": "serialized_current_prefill_and_decode_subset_v1",
         "hardware_fingerprint": hardware_fingerprint,
-        "capacity_model_revision": "workspace_lifetimes_v1",
+        "capacity_model_revision": "workspace_lifetimes_v2",
         "manifest_requests_sha256": hashlib.sha256(json.dumps(
             requests, sort_keys=True, separators=(",", ":"),
             ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest(),

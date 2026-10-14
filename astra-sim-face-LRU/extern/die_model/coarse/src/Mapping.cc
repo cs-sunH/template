@@ -267,6 +267,9 @@ u128 attention_workspace_from_counts(u128 score_slots,u128 query_rows,
                                      const std::string& output_dtype,
                                      const std::string& mode,
                                      bool staged_full) {
+  // The counts describe one materialized invocation of the task. Compact
+  // spans and batch are part of that invocation; layer_instances and
+  // weight_passes are sequential executions whose scratch can be reused.
   const u128 score_bytes=mul128(score_slots,4,"score bytes");
   if(mode=="qk") return score_bytes;
   if(mode!="both"||!staged_full) return 0;
@@ -1435,6 +1438,10 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
       else if(mode=="qk")logical=add128(logical,add128(qlogical,mul128(bytes(mul128(sl,s.batch,"logical score batch"),"fp32"),qh,"logical score bytes"),"logical QK tensors"),"logical QK tensors");
       else logical=add128(logical,add128(add128(mul128(bytes(mul128(sl,s.batch,"logical probability batch"),"fp32"),qh,"logical probability bytes"),mul128(mul128(sum_storage_tensor_bytes(s,hd,dtype_k),s.batch,"logical V batch"),kvh,"logical V bytes"),"logical AV tensors"),outlogical,"logical AV tensors"),"logical AV tensors");
     }
+    // Save the live workspace for one invocation before scaling total
+    // physical work across sequential layers/passes.
+    const u128 workspace_slots=slots;
+    const u128 workspace_queryrows=queryrows;
     slots=mul128(slots,executions,"attention executions");
     valid=mul128(valid,executions,"attention source executions");
     queryrows=mul128(queryrows,executions,"attention query executions");
@@ -1530,7 +1537,7 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
     const u128 totalwrite=staged_full&&mode=="both"?add128(add128(qk_write,soft_write,"full attention writes"),add128(pv_write,cast_write,"full attention writes"),"full attention writes"):
         (mode=="qk"?qk_write:(mode=="av"?pv_write:fused_write));
     const u128 sb=attention_workspace_from_counts(
-        slots,queryrows,hd,dtype_o,mode,staged_full);
+        workspace_slots,workspace_queryrows,hd,dtype_o,mode,staged_full);
     m.workspace=sb;m.score_bytes=(mode=="qk"||(staged_full&&mode=="both"))?scoreb:0;m.probability_bytes=probb;
     m.score_slots=slots;m.valid_pairs=valid;m.logical=logical;
     m.hbm_read=0;m.hbm_write=0;
@@ -1673,11 +1680,17 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
     m.active_cores=std::max(m.active_cores,active);
     m.score_slots=slots;m.valid_pairs=valid;m.score_bytes=(mode=="qk"||(staged_full&&mode=="both"))?scoreb:0;m.probability_bytes=probb;
     m.logical=logical;
-    m.template_id=mode=="both"?(staged_full?"full_score_materialization_v2":"fused_q_head_shard_v2"):"attention_"+mode+"_materialized_v2";
+    m.template_id=mode=="both"?(staged_full?"full_score_materialization_v3":"fused_q_head_shard_v2"):
+        (mode=="qk"?"attention_qk_materialized_v3":"attention_av_materialized_v2");
     m.assumptions={"engineering_assumption","GQA_head_mapping","absolute_position_causal_mask","not_run_granularity_validation"};
     m.tm=tq; m.tn=tk; m.tk=tk;
     if (static_cast<long double>(as_u64(m.sram_peak,"attention SRAM peak")) > perf(hw,"rho_sram",0.9)*dd(hw,"core","sram_bytes_per_core")) continue;
-    finalize_summary(*p,m,hw); p->summary["template_id"]=m.template_id; p->summary["dataflow_id"]=staged_full?"full_score_materialization_v2":"fused_q_head_shard_v2";
+    finalize_summary(*p,m,hw); p->summary["template_id"]=m.template_id;
+    if(mode=="qk"||(mode=="both"&&staged_full))
+      p->summary["workspace_model_revision"]="workspace_lifetimes_v2";
+    p->summary["dataflow_id"]=mode=="both"
+        ?(staged_full?"full_score_materialization_v3":"fused_q_head_shard_v2")
+        :(mode=="qk"?"full_score_materialization_v3":"full_score_materialization_v2");
     p->summary["executed_matrix_ops"]=as_u64(m.executed_mops,"attention ops"); p->summary["source_matrix_ops"]=as_u64(m.source_mops,"attention source ops");
     p->summary["recomputed_matrix_ops"]=as_u64(m.executed_mops>=m.source_mops?m.executed_mops-m.source_mops:0,"attention recompute"); p->summary["recompute_matrix_ops"]=p->summary["recomputed_matrix_ops"];
     p->summary["executed_score_slots"]=as_u64(slots,"attention slots"); p->summary["valid_score_pairs"]=as_u64(valid,"attention pairs");
@@ -1711,14 +1724,8 @@ std::uint64_t workspace_capacity_upper_bound(
     if((op=="attention"||op=="attention_region")&&
        gets(task,"fusion_policy","auto")=="fused") return 0;
     const auto counts=attention_materialized_counts(spans,qh);
-    const u128 executions=mul128(getu(task,"layer_instances",1),
-        getu(task,"weight_passes",1),"attention executions");
-    const u128 score_slots=mul128(counts.first,executions,
-                                   "attention executions");
-    const u128 query_rows=mul128(counts.second,executions,
-                                  "attention query executions");
     const u128 peak=attention_workspace_from_counts(
-        score_slots,query_rows,hd,output_dtype,mode,true);
+        counts.first,counts.second,hd,output_dtype,mode,true);
     return as_u64(peak,"HBM workspace");
   }
   if(op=="ffn_region") {

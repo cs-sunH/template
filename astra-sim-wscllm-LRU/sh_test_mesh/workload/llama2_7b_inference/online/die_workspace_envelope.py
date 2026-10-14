@@ -481,7 +481,7 @@ class DieWorkspaceEnvelopeClient:
                 _require_u64(raw.get("workspace_capacity_bound_schema_version"),
                              "workspace_capacity_bound_schema_version") != 1):
             raise WorkspaceEnvelopeError("unsupported workspace capacity bound schema")
-        if (raw.get("capacity_model_revision") != "workspace_lifetimes_v1" or
+        if (raw.get("capacity_model_revision") != "workspace_lifetimes_v2" or
                 raw.get("capacity_bound_kind") !=
                 "all_template_lifetimes_without_sram_filter"):
             raise WorkspaceEnvelopeError("unsupported workspace capacity lifetime model")
@@ -502,7 +502,7 @@ class DieWorkspaceEnvelopeClient:
                 not isinstance(op, str) or not isinstance(phase, str) or
                 normalized.get("op_kind") != op or normalized.get("phase") != phase):
             raise WorkspaceEnvelopeError("capacity bound operation/phase identity mismatch")
-        return WorkspaceCapacityBound("workspace_lifetimes_v1", peak, hardware,
+        return WorkspaceCapacityBound("workspace_lifetimes_v2", peak, hardware,
                                       fingerprint, op, phase, normalized)
 
     def _validate_envelope(self, raw: dict[str, Any]) -> WorkspaceEnvelope:

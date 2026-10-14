@@ -1,0 +1,28 @@
+public ABI library: /workspace/template/work/build-attention/lib/libcoarse_die_cabi.so
+protoc schema output: /workspace/template/astra-sim-wscllm-LRU/work/chakra-python-root/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py
+generator source copy: /workspace/template/astra-sim-wscllm-LRU/work/chakra-python-root/generate_trace.py
+generator project root: /workspace/template/astra-sim-wscllm-LRU/work/chakra-python-root
+test_attention_and_ffn_cover_all_real_mapping_candidates (test_die_workspace_envelope.CabiEnvelopeTests.test_attention_and_ffn_cover_all_real_mapping_candidates) ... ok
+test_capacity_bound_covers_feasible_templates_and_exact_u64 (test_die_workspace_envelope.CabiEnvelopeTests.test_capacity_bound_covers_feasible_templates_and_exact_u64) ... ok
+test_capacity_only_query_preserves_input_and_handle_lifecycle (test_die_workspace_envelope.CabiEnvelopeTests.test_capacity_only_query_preserves_input_and_handle_lifecycle) ... ok
+test_context_manager_closes_single_model_and_close_is_idempotent (test_die_workspace_envelope.CabiEnvelopeTests.test_context_manager_closes_single_model_and_close_is_idempotent) ... ok
+test_dimension_and_span_aliases_normalize_to_same_identity (test_die_workspace_envelope.CabiEnvelopeTests.test_dimension_and_span_aliases_normalize_to_same_identity) ... ok
+test_invalid_spec_error_is_preserved_and_success_clears_it (test_die_workspace_envelope.CabiEnvelopeTests.test_invalid_spec_error_is_preserved_and_success_clears_it) ... ok
+test_legacy_typed_die_op_spec_returns_canonical_task (test_die_workspace_envelope.CabiEnvelopeTests.test_legacy_typed_die_op_spec_returns_canonical_task) ... ok
+test_response_u64_and_identity_checks_reject_tampering (test_die_workspace_envelope.CabiEnvelopeTests.test_response_u64_and_identity_checks_reject_tampering) ... ok
+test_u64_above_binary64_exact_range_stays_exact (test_die_workspace_envelope.CabiEnvelopeTests.test_u64_above_binary64_exact_range_stays_exact) ... ok
+test_u64_inputs_reject_bool_and_float (test_die_workspace_envelope.CabiEnvelopeTests.test_u64_inputs_reject_bool_and_float) ... ok
+test_environment_path_precedes_local_lib_and_bin_candidates (test_die_workspace_envelope.DiscoveryAndOwnershipTests.test_environment_path_precedes_local_lib_and_bin_candidates) ... ok
+test_explicit_archived_old_library_fails_closed_on_missing_symbol (test_die_workspace_envelope.DiscoveryAndOwnershipTests.test_explicit_archived_old_library_fails_closed_on_missing_symbol) ... skipped 'archived pre-envelope library unavailable: /workspace/template/work/five-os-20261014/source-identity/lru-pre-v2-binaries/libcoarse_die_cabi.so'
+test_owned_buffer_is_freed_when_decoding_raises (test_die_workspace_envelope.DiscoveryAndOwnershipTests.test_owned_buffer_is_freed_when_decoding_raises) ... ok
+test_certificate_matches_real_prefill_emission_and_normalized_rank_shapes (test_manifest_workspace_envelope.ManifestWorkspaceEnvelopeTests.test_certificate_matches_real_prefill_emission_and_normalized_rank_shapes) ... ok
+test_client_rejects_legacy_v1_capacity_model (test_manifest_workspace_envelope.ManifestWorkspaceEnvelopeTests.test_client_rejects_legacy_v1_capacity_model) ... ok
+test_complete_decode_union_covers_valid_subset_trains_and_all_offsets (test_manifest_workspace_envelope.ManifestWorkspaceEnvelopeTests.test_complete_decode_union_covers_valid_subset_trains_and_all_offsets) ... ok
+test_first_step_and_remainder_are_covered_for_uncapped_and_capped_trains (test_manifest_workspace_envelope.ManifestWorkspaceEnvelopeTests.test_first_step_and_remainder_are_covered_for_uncapped_and_capped_trains) ... ok
+test_invalid_manifest_and_untyped_compute_families_fail_closed (test_manifest_workspace_envelope.ManifestWorkspaceEnvelopeTests.test_invalid_manifest_and_untyped_compute_families_fail_closed) ... ok
+test_required_scheduler_installs_immutable_E_without_charging_KV_and_replays (test_manifest_workspace_envelope.ManifestWorkspaceEnvelopeTests.test_required_scheduler_installs_immutable_E_without_charging_KV_and_replays) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 1.307s
+
+OK (skipped=1)

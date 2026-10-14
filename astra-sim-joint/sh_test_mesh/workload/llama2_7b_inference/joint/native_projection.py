@@ -91,6 +91,10 @@ _RESULT_KEYS = (
     "closure_resource_count", "closure_work_count", "approximations",
     "fallback", "background_comparisons",
 )
+_COARSE_DISCLOSURE_KEYS = (
+    "coarse_projection_profile", "live_world_import_supported",
+    "coarse_runtime_counters_by_domain", "coarse_plan_evidence",
+)
 _STATUSES = {
     STATUS_OK, STATUS_WAIT_PROGRESS, STATUS_BLOCKED_NO_PROGRESS,
     STATUS_DEGRADED, STATUS_MODEL_UNAVAILABLE,
@@ -138,7 +142,7 @@ def _task_wire(leg) -> dict:
             or not 0 <= registration_ordinal <= (1 << 64) - 1):
         raise NativeProjectionError(
             f"TaskSpec.registration_ordinal for {leg.leg_id!r} must be uint64 or null")
-    return {
+    wire = {
         "leg_id": leg.leg_id,
         "kind": leg.kind,
         "route": list(leg.route),
@@ -159,6 +163,10 @@ def _task_wire(leg) -> dict:
         "registration_ordinal": registration_ordinal,
         "die_plan": die_plan,
     }
+    endpoint = getattr(leg, "coarse_endpoint", None)
+    if endpoint is not None:
+        wire["coarse_endpoint"] = json.loads(_canonical_json_bytes(dict(endpoint)))
+    return wire
 
 
 def _work_wire(work) -> dict:
@@ -213,6 +221,12 @@ def projection_input_to_wire(input_data: ProjectionInput) -> dict:
         # 共享底座可能为空背景（锚与否取决于逐调用 overlay 的 extras），
         # focus 为占位符——由原生 overlay 应用时重算，创建期不校验。
         wire["defer_focus_validation"] = True
+    if input_data.coarse_die_domains:
+        wire["coarse_die_domains"] = [{
+            "resource_key": domain.resource_key,
+            "hardware_config": json.loads(_canonical_json_bytes(
+                dict(domain.hardware_config))),
+        } for domain in input_data.coarse_die_domains]
     return wire
 
 
@@ -325,6 +339,16 @@ def projection_result_from_wire(wire: Mapping[str, Any], *,
     if not isinstance(wire, Mapping):
         raise NativeProjectionError("native projection result must be an object")
     expected = set(_RESULT_KEYS) | set(_DISCLOSURE_KEYS)
+    coarse = set(_COARSE_DISCLOSURE_KEYS) & set(wire)
+    if coarse:
+        if coarse != set(_COARSE_DISCLOSURE_KEYS):
+            raise NativeProjectionError("native coarse disclosure must be complete")
+        if (wire["coarse_projection_profile"] != "fresh_integer_local_domains_v1"
+                or wire["live_world_import_supported"] is not False
+                or not isinstance(wire["coarse_runtime_counters_by_domain"], Mapping)
+                or not isinstance(wire["coarse_plan_evidence"], Mapping)):
+            raise NativeProjectionError("native coarse disclosure has an unsupported profile/state")
+        expected |= coarse
     if set(wire) != expected:
         raise NativeProjectionError(
             "native result keys differ from the v1 contract "
@@ -381,6 +405,7 @@ def projection_result_from_wire(wire: Mapping[str, Any], *,
     if unsupported is not None and not isinstance(unsupported, str):
         raise NativeProjectionError("native unsupported_reason must be string or null")
     disclosure = {key: wire[key] for key in _DISCLOSURE_KEYS}
+    disclosure.update({key: wire[key] for key in coarse})
     return ProjectionResult(
         status=status,
         predicted_service_done_ns=wire["predicted_service_done_ns"],
