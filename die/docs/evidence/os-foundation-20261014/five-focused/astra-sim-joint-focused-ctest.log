@@ -1,0 +1,12 @@
+Internal ctest changing into directory: /workspace/template/work/five-os-20261014/build/astra-sim-joint
+Test project /workspace/template/work/five-os-20261014/build/astra-sim-joint
+    Start 24: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+1/3 Test #24: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.01 sec
+    Start 25: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+2/3 Test #25: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...   Passed    0.01 sec
+    Start 26: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+3/3 Test #26: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 3
+
+Total Test time (real) =   0.03 sec

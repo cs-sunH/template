@@ -1,0 +1,210 @@
+[
+  {
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ],
+    "build_dir": "/workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-wscllm-focused-build.log",
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm",
+      "--output-on-failure",
+      "-R",
+      "(DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/five-os-20261014/logs/astra-sim-wscllm-focused-ctest.log",
+    "ctest_status": "passed",
+    "expected": 3,
+    "passed": 3,
+    "repo": "astra-sim-wscllm",
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47",
+    "test_binary_sha256": {
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "da62f3db0381aed26b99add56a5eeb742dfa9c1ea6608b3ad944733eff7841c5",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "e689dbe9d7258c85fc15f2dfd75f81952e08b01c23f6449c9f17af14c980796c",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "e47c381b74ddf5402c4f1d07fafbc74c6fa6872b19f85953de62377f8977405f"
+    },
+    "test_targets": [
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ]
+  },
+  {
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-wscllm-LRU",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-wscllm-LRU",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-wscllm-LRU-focused-build.log",
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-wscllm-LRU",
+      "--output-on-failure",
+      "-R",
+      "(LocalHbmBandwidthModel|LocalHbmModel|DieModelAdapter|DieExecutionLifecycle)Test"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/five-os-20261014/logs/astra-sim-wscllm-LRU-focused-ctest.log",
+    "ctest_status": "passed",
+    "expected": 4,
+    "passed": 4,
+    "repo": "astra-sim-wscllm-LRU",
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47",
+    "test_binary_sha256": {
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "138e26b4969eeab8e4bd128eded7d6a7d2e798b1a1e578c455a691bed4606f02",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "649403eae7583998eafc502366b7046c8e2a352f29dba398f380d611cdc499a5",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest": "91c6797c5dfebf1c3449576a3a7b100f97d5ace109e309b0bb76f3009f635bc7",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest": "b39efb27f180bdda57f914c9e7cf359a2f2427b9bdbec91ab87d72b6c7c9f66d"
+    },
+    "test_targets": [
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+    ]
+  },
+  {
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-face",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-face-focused-build.log",
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face",
+      "--output-on-failure",
+      "-R",
+      "(DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/five-os-20261014/logs/astra-sim-face-focused-ctest.log",
+    "ctest_status": "passed",
+    "expected": 3,
+    "passed": 3,
+    "repo": "astra-sim-face",
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47",
+    "test_binary_sha256": {
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "e1d99702ac0a00170c9f7d021535c0111b9892b16ccbc8d3194c10cbb2d0b38d",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "dcf8789f30df12141be8955199ce85b2149a1ece3e1c2efb8b7760a9126b2ed6",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "a182f34bd8739e1b2a26f7fe3caa4697eb04ac9f17c74667518b7d3a883bcf10"
+    },
+    "test_targets": [
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ]
+  },
+  {
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face-LRU",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-face-LRU",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-face-LRU-focused-build.log",
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face-LRU",
+      "--output-on-failure",
+      "-R",
+      "(DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/five-os-20261014/logs/astra-sim-face-LRU-focused-ctest.log",
+    "ctest_status": "passed",
+    "expected": 3,
+    "passed": 3,
+    "repo": "astra-sim-face-LRU",
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47",
+    "test_binary_sha256": {
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "b3268c9834ff2029ca6cd85cf079707f066920cc83d4635084ddcf1d24eae0cf",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "60981e88cfebe00558a7b4c10e93c4f0ef819c4d2507f1e00475f098ccef116d",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "50c1584de831bcd9c88c0ca01c298881687e0c35937cd72a26c0c37e4305d409"
+    },
+    "test_targets": [
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ]
+  },
+  {
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-joint",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-joint",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-joint-focused-build.log",
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-joint",
+      "--output-on-failure",
+      "-R",
+      "(DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/five-os-20261014/logs/astra-sim-joint-focused-ctest.log",
+    "ctest_status": "passed",
+    "expected": 3,
+    "passed": 3,
+    "repo": "astra-sim-joint",
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47",
+    "test_binary_sha256": {
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "4e2582fe6af3655c26fa7e502b76b281c914b1d8738ce11e40cb1d40491fc8c9",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "4eaeae272ca649e303af935ad588cf79db6d63e1e1e0e4245a9a164fefdf0416",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "d41382171bb27ac16a18496e561ce78032a94cb6080999887a4b24980ed155aa"
+    },
+    "test_targets": [
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ]
+  }
+]

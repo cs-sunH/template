@@ -26,8 +26,8 @@ It is continued development, not a stop/handoff request or engineering acceptanc
   release permits a later normal eviction/restore. Protocol/C++ wiring is separate
   ongoing work and is not covered by these manager tests.
 - The canonical 23-file publication and all five dual-ABI builds/config suites
-  pass (83/83, no skips). Focused five-repository results are stored separately
-  when their actual runs finish. The source digest is recorded in source-sync
+  pass (83/83, no skips). Focused five-repository results pass 16/16 (3+4+3+3+3),
+  with the pre-v2 LRU source/binary identity kept separately. The source digest is recorded in source-sync
   and ABI/config JSON, not inferred from a branch name.
 - `base-online/` is a fresh tiny two-rank run of committed `fba3b8e`, including
   the final marker teardown correction. C++/Python exit 0/0, 20 typed COMP,

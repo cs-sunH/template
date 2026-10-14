@@ -13,7 +13,9 @@ PR #7 已 merged，fetch/ancestry 核实 main 为 `fba3b8e544b65728be384b43ecfeb
 
 WSCLLM-LRU Python manager workspace基础45项回归通过：全rank absolute revision/u64原子view、独立fit hold/容量snapshot、不随KV事务回滚，保持整会话LRU、remote_store/pool。检查含workspace余量到真正fit；只有workspace导致可回收margin不够时暂时block而不徒劳evict/deep_gap/remote debit，释放后retry。**scheduler/bridge/C++ v2 wiring仍在本轮继续实施，manager基础不代表LRU端到端验收。**
 
-canonical23文件digest `9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47` 已5仓sync/check与两ABI构建、配置83/83无skip；最终focused结果按新证据追加，未完成不预报pass。另补跑committed fba3b8e最后teardown后的base production tiny Online：4项focused与真实E2E exit0/0、20COMP/3acks/31terminal/REQUEST_COMPLETE。它早于新OS facts/LRU port，身份独立保存。
+canonical23文件digest `9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47` 已5仓sync/check与两ABI构建、配置83/83无skip；五仓focused最终16/16通过（3+4+3+3+3），旧LRU的源码/binary identity已单独冻结，后续v2不套用此结果。另补跑committed fba3b8e最后teardown后的base production tiny Online：4项focused与真实E2E exit0/0、20COMP/3acks/31terminal/REQUEST_COMPLETE。它早于新OS facts/LRU port，身份独立保存。
+
+本轮源码检查点 `a19057c9ab6a03d58c0cd2386f5f53a7ecf9c6d3` 已推送，[PR #8](https://github.com/cs-sunH/template/pull/8) 源码 CI [38530699221](https://github.com/cs-sunH/template/actions/runs/38530699221) success；最终merge SHA从实际API/fetch核实，不提前猜测。
 
 证据入口 `evidence/os-foundation-20261014/README.md`，重建入口 `analysis/os-foundation-20261014/README.md`。TX8/reference/targetpriors冻结，无新host预算或目标heldout证书。代码检查点同步后继续开发；本轮尚无最终交接状态。
 
