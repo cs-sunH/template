@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "tasks": 62,
+  "entire_hash_and_summary_equal": true,
+  "baseline_file": "work/os-lifecycle-20261014/identity-before.json",
+  "baseline_sha256": "0742247a8de06341edffb0ebafd76b28266c73402b216f27ddc87f02634226be",
+  "current_file": "work/workspace-envelope-20261014/identity-current.json",
+  "current_sha256": "0742247a8de06341edffb0ebafd76b28266c73402b216f27ddc87f02634226be",
+  "scope": "62 selected examples/full-tail/dtypes/paths/repeats/fractional-kappa; no production timing change"
+}

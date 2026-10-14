@@ -1,0 +1,453 @@
+[
+  {
+    "binary_sha256": {
+      "work/online-baseline-20261014/integration-build/build/astra-sim-wscllm/AstraSim/extern/die_model/coarse/libcoarse_die.a": "e44a0d43a99a739cde8a49fba2df12590e01662c525c7193b62132bfde7537e0",
+      "work/online-baseline-20261014/integration-build/build/astra-sim-wscllm/AstraSim/extern/die_model/libdie_model.a": "7f03cb8bf5fd52e44d615a3470f884f4ee86b9a1eef4e20060076eeb9da655ab",
+      "work/online-baseline-20261014/integration-build/build/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "2f15778e85b1328de5f9251205b7e3b5104d51c0dd0055b3e821def79ca8435e",
+      "work/online-baseline-20261014/integration-build/build/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "fe341e2f0238787697f9b7b2546605df481e2b7ed29e85a6f9be95216d75de36",
+      "work/online-baseline-20261014/integration-build/build/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "4317594477824f0248b0d0e2e45d2253787d14efd6f96cdb65f3e896151a7fb7",
+      "work/online-baseline-20261014/integration-build/build/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_Online": "112487c8011621c75cb610a557098560614643261c59546d3fed19083787c004",
+      "work/online-baseline-20261014/integration-build/build/astra-sim-wscllm/lib/libcoarse_die_cabi.so": "7e9b9670b8c06c8600688acf6446acc5f112a97e83315a26ea8d554040cc5600",
+      "work/online-baseline-20261014/integration-build/build/astra-sim-wscllm/lib/libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+    },
+    "branch": "codex/die-workspace-envelope-20261014",
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+      "AstraSim_Analytical_Congestion_Aware_Online"
+    ],
+    "build_dir": "/workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm",
+    "build_exit": 0,
+    "build_input_manifest_post": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-post-build-inputs.sha256",
+    "build_input_manifest_pre": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-pre-build-inputs.sha256",
+    "build_input_manifest_unchanged": true,
+    "build_log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-wscllm-build.log",
+    "canonical_source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+    "canonical_sync_post": {
+      "exit": 0,
+      "log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-wscllm-canonical-sync-post.log",
+      "result": {
+        "files": 23,
+        "repositories": [
+          "astra-sim-wscllm",
+          "astra-sim-wscllm-LRU",
+          "astra-sim-face",
+          "astra-sim-face-LRU",
+          "astra-sim-joint"
+        ],
+        "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+        "status": "passed"
+      }
+    },
+    "canonical_sync_pre": {
+      "exit": 0,
+      "log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-wscllm-canonical-sync-pre.log",
+      "result": {
+        "files": 23,
+        "repositories": [
+          "astra-sim-wscllm",
+          "astra-sim-wscllm-LRU",
+          "astra-sim-face",
+          "astra-sim-face-LRU",
+          "astra-sim-joint"
+        ],
+        "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+        "status": "passed"
+      }
+    },
+    "coarse_source_manifest_post": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-post-coarse.sha256",
+    "coarse_source_manifest_pre": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-pre-coarse.sha256",
+    "coarse_source_manifest_unchanged": true,
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm",
+      "--output-on-failure",
+      "-R",
+      "(DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-wscllm-ctest.log",
+    "ctest_passed": 3,
+    "ctest_selected": 3,
+    "expected_tests": 3,
+    "git_identity_post": {
+      "branch": "codex/die-workspace-envelope-20261014",
+      "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+      "status_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-status.txt",
+      "tracked_diff_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-tracked-diff.patch",
+      "tracked_diff_sha256": "e51221e1ecb83f02a36c4f674c94724d793e3282a5433927ca1fcbf98a926ee1"
+    },
+    "git_identity_pre": {
+      "branch": "codex/die-workspace-envelope-20261014",
+      "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+      "status_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-status.txt",
+      "tracked_diff_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-tracked-diff.patch",
+      "tracked_diff_sha256": "e51221e1ecb83f02a36c4f674c94724d793e3282a5433927ca1fcbf98a926ee1"
+    },
+    "online_link_command_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-online-link.txt",
+    "online_link_command_sha256": "ae303949b72dc40a9b6d2ce224fc3d26f273a7df3afbbced1c9ad7e4d1e43e91",
+    "online_link_uses_coarse_static_library": true,
+    "online_target": "AstraSim_Analytical_Congestion_Aware_Online",
+    "repo": "astra-sim-wscllm",
+    "repo_head": "fecf81c5574755209c5d58ecdb982843ff349042",
+    "status": "passed",
+    "test_targets": [
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ],
+    "tracked_diff_unchanged": true
+  },
+  {
+    "binary_sha256": {
+      "work/five-os-20261014/build/astra-sim-face/AstraSim/extern/die_model/coarse/libcoarse_die.a": "e44a0d43a99a739cde8a49fba2df12590e01662c525c7193b62132bfde7537e0",
+      "work/five-os-20261014/build/astra-sim-face/AstraSim/extern/die_model/libdie_model.a": "7f03cb8bf5fd52e44d615a3470f884f4ee86b9a1eef4e20060076eeb9da655ab",
+      "work/five-os-20261014/build/astra-sim-face/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "66fa79785c17d0b15b92f88a4aa34c4ea3fd94dda5e6a76bbde6e95ae2433123",
+      "work/five-os-20261014/build/astra-sim-face/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "3d7595af74b80d3c292aca46ba1bdac2941f6641b1155a92cd0b688c96e1f138",
+      "work/five-os-20261014/build/astra-sim-face/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "21f41673f030aef52ca17a2ffc926ab1a8d41018fb84b70827658a9bd0f4b541",
+      "work/five-os-20261014/build/astra-sim-face/bin/AstraSim_Analytical_Congestion_Aware_Online": "2e228e8ca9592bb71697d28efda51f53092395d9ee52edd987f7260a5a89b42d",
+      "work/five-os-20261014/build/astra-sim-face/lib/libcoarse_die_cabi.so": "7e9b9670b8c06c8600688acf6446acc5f112a97e83315a26ea8d554040cc5600",
+      "work/five-os-20261014/build/astra-sim-face/lib/libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+    },
+    "branch": "codex/die-workspace-envelope-20261014",
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+      "AstraSim_Analytical_Congestion_Aware_Online"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-face",
+    "build_exit": 0,
+    "build_input_manifest_post": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-post-build-inputs.sha256",
+    "build_input_manifest_pre": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-pre-build-inputs.sha256",
+    "build_input_manifest_unchanged": true,
+    "build_log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-face-build.log",
+    "canonical_source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+    "canonical_sync_post": {
+      "exit": 0,
+      "log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-face-canonical-sync-post.log",
+      "result": {
+        "files": 23,
+        "repositories": [
+          "astra-sim-wscllm",
+          "astra-sim-wscllm-LRU",
+          "astra-sim-face",
+          "astra-sim-face-LRU",
+          "astra-sim-joint"
+        ],
+        "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+        "status": "passed"
+      }
+    },
+    "canonical_sync_pre": {
+      "exit": 0,
+      "log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-face-canonical-sync-pre.log",
+      "result": {
+        "files": 23,
+        "repositories": [
+          "astra-sim-wscllm",
+          "astra-sim-wscllm-LRU",
+          "astra-sim-face",
+          "astra-sim-face-LRU",
+          "astra-sim-joint"
+        ],
+        "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+        "status": "passed"
+      }
+    },
+    "coarse_source_manifest_post": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-post-coarse.sha256",
+    "coarse_source_manifest_pre": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-pre-coarse.sha256",
+    "coarse_source_manifest_unchanged": true,
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face",
+      "--output-on-failure",
+      "-R",
+      "(DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-face-ctest.log",
+    "ctest_passed": 3,
+    "ctest_selected": 3,
+    "expected_tests": 3,
+    "git_identity_post": {
+      "branch": "codex/die-workspace-envelope-20261014",
+      "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+      "status_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-status.txt",
+      "tracked_diff_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-tracked-diff.patch",
+      "tracked_diff_sha256": "d91e7daba7df820975fcc2dca1d6db332d152b1e437f8db629d892e20639dc58"
+    },
+    "git_identity_pre": {
+      "branch": "codex/die-workspace-envelope-20261014",
+      "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+      "status_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-status.txt",
+      "tracked_diff_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-tracked-diff.patch",
+      "tracked_diff_sha256": "d91e7daba7df820975fcc2dca1d6db332d152b1e437f8db629d892e20639dc58"
+    },
+    "online_link_command_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-online-link.txt",
+    "online_link_command_sha256": "f188600563582ed9644e07e5cfe60c47ca466b5a30eadafa9d63690bb54e7524",
+    "online_link_uses_coarse_static_library": true,
+    "online_target": "AstraSim_Analytical_Congestion_Aware_Online",
+    "repo": "astra-sim-face",
+    "repo_head": "fecf81c5574755209c5d58ecdb982843ff349042",
+    "status": "passed",
+    "test_targets": [
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ],
+    "tracked_diff_unchanged": true
+  },
+  {
+    "binary_sha256": {
+      "work/five-os-20261014/build/astra-sim-face-LRU/AstraSim/extern/die_model/coarse/libcoarse_die.a": "e44a0d43a99a739cde8a49fba2df12590e01662c525c7193b62132bfde7537e0",
+      "work/five-os-20261014/build/astra-sim-face-LRU/AstraSim/extern/die_model/libdie_model.a": "7f03cb8bf5fd52e44d615a3470f884f4ee86b9a1eef4e20060076eeb9da655ab",
+      "work/five-os-20261014/build/astra-sim-face-LRU/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "b199590ac8280229fef9f2c654ac4166050c0f6a01a42b8fb05423fc4914b84a",
+      "work/five-os-20261014/build/astra-sim-face-LRU/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "0576c808db3cfc860acab2efc379d60172db1513485dfb65f7ffe044d1a3028a",
+      "work/five-os-20261014/build/astra-sim-face-LRU/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "ab6fb410eed4c27cfeace5f9360f5ae1231b97638b70b64b8a8c2a81059dfb7b",
+      "work/five-os-20261014/build/astra-sim-face-LRU/bin/AstraSim_Analytical_Congestion_Aware_Online": "fab7758e8b1013c1537df91ed2b71e0350189e92b209f72116cbb1b212c63274",
+      "work/five-os-20261014/build/astra-sim-face-LRU/lib/libcoarse_die_cabi.so": "7e9b9670b8c06c8600688acf6446acc5f112a97e83315a26ea8d554040cc5600",
+      "work/five-os-20261014/build/astra-sim-face-LRU/lib/libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+    },
+    "branch": "codex/die-workspace-envelope-20261014",
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face-LRU",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+      "AstraSim_Analytical_Congestion_Aware_Online"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-face-LRU",
+    "build_exit": 0,
+    "build_input_manifest_post": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-post-build-inputs.sha256",
+    "build_input_manifest_pre": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-pre-build-inputs.sha256",
+    "build_input_manifest_unchanged": true,
+    "build_log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-face-LRU-build.log",
+    "canonical_source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+    "canonical_sync_post": {
+      "exit": 0,
+      "log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-face-LRU-canonical-sync-post.log",
+      "result": {
+        "files": 23,
+        "repositories": [
+          "astra-sim-wscllm",
+          "astra-sim-wscllm-LRU",
+          "astra-sim-face",
+          "astra-sim-face-LRU",
+          "astra-sim-joint"
+        ],
+        "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+        "status": "passed"
+      }
+    },
+    "canonical_sync_pre": {
+      "exit": 0,
+      "log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-face-LRU-canonical-sync-pre.log",
+      "result": {
+        "files": 23,
+        "repositories": [
+          "astra-sim-wscllm",
+          "astra-sim-wscllm-LRU",
+          "astra-sim-face",
+          "astra-sim-face-LRU",
+          "astra-sim-joint"
+        ],
+        "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+        "status": "passed"
+      }
+    },
+    "coarse_source_manifest_post": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-post-coarse.sha256",
+    "coarse_source_manifest_pre": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-pre-coarse.sha256",
+    "coarse_source_manifest_unchanged": true,
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face-LRU",
+      "--output-on-failure",
+      "-R",
+      "(DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory)Test"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-face-LRU-ctest.log",
+    "ctest_passed": 3,
+    "ctest_selected": 3,
+    "expected_tests": 3,
+    "git_identity_post": {
+      "branch": "codex/die-workspace-envelope-20261014",
+      "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+      "status_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-status.txt",
+      "tracked_diff_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-tracked-diff.patch",
+      "tracked_diff_sha256": "dc0ec879081e022ed57da033a81454c52393bc65abf1e4e456fc99faa3bcc56c"
+    },
+    "git_identity_pre": {
+      "branch": "codex/die-workspace-envelope-20261014",
+      "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+      "status_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-status.txt",
+      "tracked_diff_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-tracked-diff.patch",
+      "tracked_diff_sha256": "dc0ec879081e022ed57da033a81454c52393bc65abf1e4e456fc99faa3bcc56c"
+    },
+    "online_link_command_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-face-LRU-online-link.txt",
+    "online_link_command_sha256": "a5ff7eef971c4244e1555a9ef1f42a6958a4e8dda7c419a7ac398a742e61d576",
+    "online_link_uses_coarse_static_library": true,
+    "online_target": "AstraSim_Analytical_Congestion_Aware_Online",
+    "repo": "astra-sim-face-LRU",
+    "repo_head": "fecf81c5574755209c5d58ecdb982843ff349042",
+    "status": "passed",
+    "test_targets": [
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+    ],
+    "tracked_diff_unchanged": true
+  },
+  {
+    "binary_sha256": {
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/AstraSim/extern/die_model/coarse/libcoarse_die.a": "e44a0d43a99a739cde8a49fba2df12590e01662c525c7193b62132bfde7537e0",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/AstraSim/extern/die_model/libdie_model.a": "7f03cb8bf5fd52e44d615a3470f884f4ee86b9a1eef4e20060076eeb9da655ab",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest": "474aef7dddc1d4595c075820a6410eefa57b28ce87ffbc94c75686fb36c48758",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest": "46809c98892732cabd0f8c5b1aab42c1777b30638bb66afa0f3f17d569a1be2b",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "686e86bc4c975fdb70c6d3e121365baed2f0325d3577f2cf47f093a23c32cd8f",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "9a0c22d4b2f193bc3c864c9f4b908ba4aed8d6dacb960a975d28957654dac2e1",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest": "d567cb73a880c3b7e2baf10fc9fcf24225ed538e8786eb828e054fe0d7aec3ba",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest": "6d10af65651cd8c7f9d440881b165fe2f0956288db4b6be68276748aaa2c8c57",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest": "a1068f74ebaa406b524821766ec31f0078db9e83c3ae4095ae9d6d785e6b04e2",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_Online": "9292443d927a03d942177739d957c6496f6f1ddb8ee9963763fb009eed09dba0",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_Congestion_Aware_ParsedBatchTest": "49f7bf86c20e0b393942473737a3c023dcd80fa94b2e03bffdf93afd39bce310",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/bin/AstraSim_Analytical_WorkspaceAdmissionTest": "d253b2faaf45dbe0f88b34bb262140f8e95773ee5597aa2c9f6a7049afff0e3d",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/lib/libcoarse_die_cabi.so": "7e9b9670b8c06c8600688acf6446acc5f112a97e83315a26ea8d554040cc5600",
+      "work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/lib/libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+    },
+    "branch": "codex/die-workspace-envelope-20261014",
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate",
+      "--parallel",
+      "2",
+      "--target",
+      "AstraSim_Analytical_WorkspaceAdmissionTest",
+      "AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest",
+      "AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest",
+      "AstraSim_Analytical_Congestion_Aware_ParsedBatchTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest",
+      "AstraSim_Analytical_Congestion_Aware_Online"
+    ],
+    "build_dir": "/workspace/template/work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate",
+    "build_exit": 0,
+    "build_input_manifest_post": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-post-build-inputs.sha256",
+    "build_input_manifest_pre": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-pre-build-inputs.sha256",
+    "build_input_manifest_unchanged": true,
+    "build_log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-wscllm-LRU-build.log",
+    "canonical_source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+    "canonical_sync_post": {
+      "exit": 0,
+      "log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-wscllm-LRU-canonical-sync-post.log",
+      "result": {
+        "files": 23,
+        "repositories": [
+          "astra-sim-wscllm",
+          "astra-sim-wscllm-LRU",
+          "astra-sim-face",
+          "astra-sim-face-LRU",
+          "astra-sim-joint"
+        ],
+        "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+        "status": "passed"
+      }
+    },
+    "canonical_sync_pre": {
+      "exit": 0,
+      "log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-wscllm-LRU-canonical-sync-pre.log",
+      "result": {
+        "files": 23,
+        "repositories": [
+          "astra-sim-wscllm",
+          "astra-sim-wscllm-LRU",
+          "astra-sim-face",
+          "astra-sim-face-LRU",
+          "astra-sim-joint"
+        ],
+        "source_digest": "e0b6fd1a083ebe89cc73956f84f07524e6c3944fbcd4cc28a91a947d66cbbf78",
+        "status": "passed"
+      }
+    },
+    "coarse_source_manifest_post": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-post-coarse.sha256",
+    "coarse_source_manifest_pre": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-pre-coarse.sha256",
+    "coarse_source_manifest_unchanged": true,
+    "ctest_command": [
+      "ctest",
+      "--test-dir",
+      "/workspace/template/work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate",
+      "--output-on-failure",
+      "-R",
+      "(WorkspaceAdmissionTest|DecisionMailboxTest|GraphBatchCommitterTest|ParsedBatchTest|LocalHbmBandwidthModelTest|LocalHbmModelTest|DieModelAdapterTest|DieExecutionLifecycleTest|BridgeLoopbackTest)"
+    ],
+    "ctest_exit": 0,
+    "ctest_log": "work/workspace-envelope-20261014/four-focused/logs/astra-sim-wscllm-LRU-ctest.log",
+    "ctest_passed": 9,
+    "ctest_selected": 9,
+    "expected_tests": 9,
+    "git_identity_post": {
+      "branch": "codex/die-workspace-envelope-20261014",
+      "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+      "status_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-status.txt",
+      "tracked_diff_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-tracked-diff.patch",
+      "tracked_diff_sha256": "ba5f9ebfd1c653d2f9d3a3f672db50a4a0120adb264b19d39e0f7281f3ef854e"
+    },
+    "git_identity_pre": {
+      "branch": "codex/die-workspace-envelope-20261014",
+      "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+      "status_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-status.txt",
+      "tracked_diff_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-tracked-diff.patch",
+      "tracked_diff_sha256": "b195aa2af44dae02bb60e03349ab73e75999ad24d3392f20e5ed1c550ef4d6a4"
+    },
+    "online_link_command_file": "work/workspace-envelope-20261014/four-focused/source-identity/astra-sim-wscllm-LRU-online-link.txt",
+    "online_link_command_sha256": "c4fb772154c33c1062337d546bc8d095040cf8b44b1af88656697daea339bde5",
+    "online_link_uses_coarse_static_library": true,
+    "online_target": "AstraSim_Analytical_Congestion_Aware_Online",
+    "repo": "astra-sim-wscllm-LRU",
+    "repo_head": "fecf81c5574755209c5d58ecdb982843ff349042",
+    "status": "passed",
+    "test_targets": [
+      "AstraSim_Analytical_WorkspaceAdmissionTest",
+      "AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest",
+      "AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest",
+      "AstraSim_Analytical_Congestion_Aware_ParsedBatchTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest",
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest",
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+      "AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest"
+    ],
+    "tracked_diff_change_scope": [
+      "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py",
+      "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/test_workspace_admission_manager.py"
+    ],
+    "tracked_diff_note": "The repo-wide tracked diff changed during the build because the parallel Python workspace audit updated these two files. They are outside the C++/CMake build-input manifests, which were byte-identical before and after; canonical coarse source manifests were also unchanged. The C++ result is scoped to the recorded HEAD, C++/CMake input manifests, and binary hashes, not a claim that the full worktree froze.",
+    "tracked_diff_unchanged": false
+  }
+]

@@ -397,6 +397,11 @@ void Workload::issue_pytorch_pg_metadata(
 }
 
 void Workload::issue_dep_free_nodes() {
+    // Start a fresh snapshot for this issue pass. NodeStoreGraphSource walks
+    // its entire ascending-id free-node snapshot; a callback return skips
+    // only that node, so each blocked Plan in the pass contributes to the
+    // count and replaces the last-observed Plan fields below.
+    reset_blocked_workspace_plan_diagnostic();
     // Step 1-4: iterate the GraphSource free views (ascending id, byte-exact
     // order of the pre-phase-1 std::set copy). Post-commit deferred path
     // only: the sole call sites are the online completion hook's per-rank
@@ -437,6 +442,8 @@ void Workload::issue_dep_free_nodes() {
                 WorkspaceAdmission::AcquireStatus::Blocked) {
                 // Keep this node free. A lease release or a changed
                 // capacity snapshot schedules its next issue attempt.
+                record_blocked_workspace_plan(
+                    nv.global_id, nv.generation, prepared.workspace_bytes);
                 return;
             }
             if (admission.status ==
@@ -460,6 +467,7 @@ void Workload::issue_dep_free_nodes() {
 }
 
 void Workload::issue(const ExecutionDriven::NodeView& node) {
+    clear_blocked_workspace_plan_for_node(node.global_id);
     issue_impl(node, nullptr, nullptr);
 }
 
@@ -467,7 +475,30 @@ void Workload::issue_prepared_coarse(
     const ExecutionDriven::NodeView& node,
     DieModelAdapter::PreparedCoarsePlan prepared,
     WorkspaceAdmission::Lease lease) {
+    clear_blocked_workspace_plan_for_node(node.global_id);
     issue_impl(node, &prepared, &lease);
+}
+
+void Workload::record_blocked_workspace_plan(
+    const uint64_t node_id, const uint64_t generation,
+    const uint64_t workspace_bytes) noexcept {
+    auto& diagnostic = blocked_workspace_plan_diagnostic_;
+    if (diagnostic.blocked_plan_count !=
+        std::numeric_limits<uint64_t>::max()) {
+        ++diagnostic.blocked_plan_count;
+    }
+    diagnostic.has_blocked_plan = true;
+    diagnostic.node_id = node_id;
+    diagnostic.generation = generation;
+    diagnostic.workspace_bytes = workspace_bytes;
+}
+
+void Workload::clear_blocked_workspace_plan_for_node(
+    const uint64_t node_id) noexcept {
+    if (blocked_workspace_plan_diagnostic_.has_blocked_plan &&
+        blocked_workspace_plan_diagnostic_.node_id == node_id) {
+        reset_blocked_workspace_plan_diagnostic();
+    }
 }
 
 void Workload::issue_impl(
@@ -1388,6 +1419,7 @@ void Workload::finish_generic_node(uint64_t node_id) {
                     nv->name.c_str(), nv->node_type);
     }
     mark_online_terminal_or_fail(node_id);
+    clear_blocked_workspace_plan_for_node(node_id);
     hw_resource->release(*nv);
     complete_online_statistics(*nv, Sys::boostedTick());
     // R2 anchor fast path: nv points into the NodeStore record the
@@ -1435,6 +1467,7 @@ void Workload::finish_cancelled_coarse_node(const uint64_t node_id) {
         throw std::overflow_error("die_cancelled_comp_count overflow");
     }
     mark_online_terminal_or_fail(node_id);
+    clear_blocked_workspace_plan_for_node(node_id);
     ++die_cancelled_comp_count_;
     hw_resource->release(*nv);
     complete_online_statistics(*nv, Sys::boostedTick());

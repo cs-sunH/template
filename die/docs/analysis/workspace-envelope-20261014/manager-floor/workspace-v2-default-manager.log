@@ -1,0 +1,11 @@
+test_coarse_auto_requires_v2_and_legacy_auto_keeps_v1 (test_workspace_admission_v2.WorkspaceAdmissionModeTests.test_coarse_auto_requires_v2_and_legacy_auto_keeps_v1) ... ok
+test_coarse_cannot_be_forced_off (test_workspace_admission_v2.WorkspaceAdmissionModeTests.test_coarse_cannot_be_forced_off) ... ok
+test_v1_mode_preserves_legacy_response_shape_and_ack (test_workspace_admission_v2.WorkspaceAdmissionV2SchedulerBridgeTests.test_v1_mode_preserves_legacy_response_shape_and_ack) ... ok
+test_v2_full_rank_echo_replay_and_ack (test_workspace_admission_v2.WorkspaceAdmissionV2SchedulerBridgeTests.test_v2_full_rank_echo_replay_and_ack) ... ok
+test_workspace_release_advances_capacity_epoch_and_retries_real_policy (test_workspace_admission_v2.WorkspaceAdmissionV2SchedulerBridgeTests.test_workspace_release_advances_capacity_epoch_and_retries_real_policy) ... ok
+test_workspace_table_u64_and_atomic_rejection_before_delivery (test_workspace_admission_v2.WorkspaceAdmissionV2SchedulerBridgeTests.test_workspace_table_u64_and_atomic_rejection_before_delivery) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.004s
+
+OK

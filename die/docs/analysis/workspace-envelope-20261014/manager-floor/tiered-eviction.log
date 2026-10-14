@@ -1,0 +1,18 @@
+test_active_residency_counts_into_fit_feasibility (test_tiered_eviction_sequence.TieredEvictionSequenceTests.test_active_residency_counts_into_fit_feasibility)
+M1-10 补遗(S2-4):active 会话驻留同样计入 fit 可行性门控—— ... ok
+test_protected_residency_counts_into_fit_feasibility (test_tiered_eviction_sequence.TieredEvictionSequenceTests.test_protected_residency_counts_into_fit_feasibility)
+M1-10:净额需求 + protected 会话自身驻留超过空实例余量时,任何 ... ok
+test_reserved_request_bytes_count_into_fit_feasibility (test_tiered_eviction_sequence.TieredEvictionSequenceTests.test_reserved_request_bytes_count_into_fit_feasibility)
+M1-10 补遗二(F-1/2026-09-28 确认批):未落位的预约字节 ... ok
+test_whole_session_sequence_strict_lru_and_over_release (test_tiered_eviction_sequence.TieredEvictionSequenceTests.test_whole_session_sequence_strict_lru_and_over_release)
+完整 session 级 LRU 逐出:严格 LRU 序、逐笔重查、允许过量释放 ... ok
+test_all_new_mutations_journal_consistent (test_tiered_eviction_sequence.TieredJournalConsistencyTests.test_all_new_mutations_journal_consistent)
+新 mutation 全走 _journal_transaction:run 末 checksum 通过 ... /workspace/template/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py:110: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp2f9j38c5/kv_delta_journal.jsonl' mode='w' encoding='utf-8'>
+  _METRICS_RECORDER = recorder
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.096s
+
+OK

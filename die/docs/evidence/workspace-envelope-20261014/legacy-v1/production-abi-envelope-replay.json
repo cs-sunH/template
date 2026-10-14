@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "entire_response_equal": true,
+  "success_count": 224,
+  "expected_errors": 16,
+  "captured_sha256": "20526629b372d678639c21be90c03e5b8406f9ffe62fa2162aa6300791898a22",
+  "library": "/workspace/template/work/lru-cpp-liveness-pressure-20261014/two-plan-confirmation/build/aggregate/lib/libcoarse_die_cabi.so",
+  "library_sha256": "7e9b9670b8c06c8600688acf6446acc5f112a97e83315a26ea8d554040cc5600",
+  "hardware_sha256": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+}

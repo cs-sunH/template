@@ -31,6 +31,20 @@ class WorkloadLayerHandlerData;
 
 class Workload : public Callable {
   public:
+    /// Bounded evidence from the most recent issue pass that observed ready
+    /// coarse Plans denied by workspace admission. blocked_plan_count counts
+    /// observations in that pass; the remaining fields identify its last
+    /// observed Plan. This is not a live set of blocked nodes. It stores values
+    /// captured during preparation, so diagnostics never compile a Plan or
+    /// retain per-node state. Matching issue/terminal paths invalidate it.
+    struct BlockedWorkspacePlanDiagnostic {
+        bool has_blocked_plan = false;
+        uint64_t blocked_plan_count = 0;
+        uint64_t node_id = 0;
+        uint64_t generation = 0;
+        uint64_t workspace_bytes = 0;
+    };
+
     // execution_mode/graph_source: step-1-2 execution-mode factory
     // (ExecutionMode.hh). The offline static path is retired in this
     // repository (the ETFeederGraphSource adapter was removed with it);
@@ -95,6 +109,10 @@ class Workload : public Callable {
     uint64_t die_cancelled_comp_count() const {
         return die_cancelled_comp_count_;
     }
+    const BlockedWorkspacePlanDiagnostic&
+    blocked_workspace_plan_diagnostic() const {
+        return blocked_workspace_plan_diagnostic_;
+    }
 
     // Die backend (stage B, contract §7.6): fill the utilization fields of
     // the node's statistics state ahead of finish_generic_node -- compact
@@ -155,6 +173,14 @@ class Workload : public Callable {
     // with the replay route; strategy mode always keeps real physics.
 
   private:
+    void reset_blocked_workspace_plan_diagnostic() noexcept {
+        blocked_workspace_plan_diagnostic_ = {};
+    }
+    void record_blocked_workspace_plan(uint64_t node_id,
+                                      uint64_t generation,
+                                      uint64_t workspace_bytes) noexcept;
+    void clear_blocked_workspace_plan_for_node(uint64_t node_id) noexcept;
+
     // R4-14: cached "workload" logger -- fetched once in the constructor;
     // the registry returns the same logger object per name for the process
     // lifetime, so member reuse is behavior-equivalent (and skips the
@@ -223,6 +249,7 @@ class Workload : public Callable {
     };
     std::unordered_map<uint64_t, HbmEndpointJoinState> hbm_endpoint_joins_;
     uint64_t die_cancelled_comp_count_ = 0;
+    BlockedWorkspacePlanDiagnostic blocked_workspace_plan_diagnostic_{};
 };
 
 }  // namespace AstraSim

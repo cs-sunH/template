@@ -1,0 +1,21 @@
+test_full_reserve_deep_gaps_net_reserve_fits_and_backfills (test_admission_net_credit.NetCreditRealManagerTests.test_full_reserve_deep_gaps_net_reserve_fits_and_backfills)
+旧 KV RESIDENT 于 decode、终态使"旧+新"≈预算 150%: ... ok
+test_scheduler_net_credit_flow_on_real_manager (test_admission_net_credit.NetCreditRealManagerTests.test_scheduler_net_credit_flow_on_real_manager)
+端到端:真 manager 上跑 `_try_admit_prefill` —— 全量失败自动 ... ok
+test_credit_with_mismatched_migration_source_fails_closed (test_admission_net_credit.NetCreditStubTests.test_credit_with_mismatched_migration_source_fails_closed)
+credit>0 蕴涵迁移源==decode;失步(如 LOCAL_HIT 源=prefill) ... ok
+test_full_fail_net_retry_success_backfills (test_admission_net_credit.NetCreditStubTests.test_full_fail_net_retry_success_backfills)
+全量失败 + 旧 KV RESIDENT 于 decode → 净额重试成功 → ... ok
+test_net_retry_clamps_per_rank_credit (test_admission_net_credit.NetCreditStubTests.test_net_retry_clamps_per_rank_credit)
+净额按 rank 钳位:credit 某分量 > 终态时该 rank 净额为 0 ... ok
+test_net_retry_failure_notes_both_attempts (test_admission_net_credit.NetCreditStubTests.test_net_retry_failure_notes_both_attempts)
+净额也失败 → return False,且 `_note_capacity_change` 合并覆盖 ... ok
+test_net_success_then_history_blocked_releases_and_clears (test_admission_net_credit.NetCreditStubTests.test_net_success_then_history_blocked_releases_and_clears)
+净额成功但 prepare_history blocked → release(pop 语义按登记 ... ok
+test_snapshot_off_decode_target_keeps_single_full_reserve (test_admission_net_credit.NetCreditStubTests.test_snapshot_off_decode_target_keeps_single_full_reserve)
+旧 KV 不在 decode 目标(别的实例)/ EVICTED / ABSENT → ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.003s
+
+OK

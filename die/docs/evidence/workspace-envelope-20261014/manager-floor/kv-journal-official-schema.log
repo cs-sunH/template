@@ -1,0 +1,23 @@
+test_checksum_gate_detects_tampered_delta (test_kv_delta_journal.KvDeltaJournalTests.test_checksum_gate_detects_tampered_delta) ... ok
+test_checksum_gate_detects_torn_tail_line (test_kv_delta_journal.KvDeltaJournalTests.test_checksum_gate_detects_torn_tail_line) ... ok
+test_checksum_gate_passes_and_writes_summary (test_kv_delta_journal.KvDeltaJournalTests.test_checksum_gate_passes_and_writes_summary) ... ok
+test_conservation_matrix_full_lifecycle (test_kv_delta_journal.KvDeltaJournalTests.test_conservation_matrix_full_lifecycle) ... ok
+test_evict_restore_and_terminal_retire_transactions (test_kv_delta_journal.KvDeltaJournalTests.test_evict_restore_and_terminal_retire_transactions) ... ok
+test_failed_transaction_rolls_back_manager_state (test_kv_delta_journal.KvDeltaJournalTests.test_failed_transaction_rolls_back_manager_state)
+MEM-01:journal 行写入失败(① 时序护栏)时,装饰器把 manager ... ok
+test_grow_anchor_follows_central_phase_mapping (test_kv_delta_journal.KvDeltaJournalTests.test_grow_anchor_follows_central_phase_mapping)
+M1-02:grow 的 journal anchor 与逐出/预约同走中心映射—— ... ok
+test_journal_disabled_recorder_keeps_legacy_behavior (test_kv_delta_journal.KvDeltaJournalTests.test_journal_disabled_recorder_keeps_legacy_behavior) ... ok
+test_journal_mode_streams_without_retaining_deltas (test_kv_delta_journal.KvDeltaJournalTests.test_journal_mode_streams_without_retaining_deltas) ... ok
+test_non_monotonic_mutation_timestamp_fails_closed (test_kv_delta_journal.KvDeltaJournalTests.test_non_monotonic_mutation_timestamp_fails_closed) ... ok
+test_reconcile_failure_rolls_back_reservation (test_kv_delta_journal.KvDeltaJournalTests.test_reconcile_failure_rolls_back_reservation)
+MEM-01(commit 对账分支):④ 对账失败时 manager 同样回滚—— ... ok
+test_sequence_contiguous_with_zero_shard_rank (test_kv_delta_journal.KvDeltaJournalTests.test_sequence_contiguous_with_zero_shard_rank) ... ok
+test_terminal_retire_reservation_rows_attribute_terminal_request (test_kv_delta_journal.KvDeltaJournalTests.test_terminal_retire_reservation_rows_attribute_terminal_request)
+M1-06:终态退休事务内的预约释放行 request_id 与本地/远端核销行 ... ok
+test_transaction_reconciliation_detects_manager_drift (test_kv_delta_journal.KvDeltaJournalTests.test_transaction_reconciliation_detects_manager_drift) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.067s
+
+OK

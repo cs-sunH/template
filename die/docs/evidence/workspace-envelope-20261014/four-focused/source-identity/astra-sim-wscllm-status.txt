@@ -1,0 +1,6 @@
+ M astra-sim-wscllm/extern/die_model/coarse/CMakeLists.txt
+ M astra-sim-wscllm/extern/die_model/coarse/RELEASE.json
+ M astra-sim-wscllm/extern/die_model/coarse/include/coarse_die/Capi.h
+ M astra-sim-wscllm/extern/die_model/coarse/include/coarse_die/Plan.hh
+ M astra-sim-wscllm/extern/die_model/coarse/src/Capi.cc
+ M astra-sim-wscllm/extern/die_model/coarse/src/Compiler.cc

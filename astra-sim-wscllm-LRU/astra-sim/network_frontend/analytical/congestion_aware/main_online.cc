@@ -595,6 +595,65 @@ static void dead_end_census_dump(
                      hw != nullptr ? hw->num_in_flight_remote_mem_ops : 0u,
                      workload->hbm_endpoint_joins_count(),
                      workload->hbm_endpoint_joins_pending_legs());
+        const Sys* const system = workload->sys;
+        const WorkspaceAdmission* const workspace_ledger =
+            system != nullptr ? system->workspace_admission.get() : nullptr;
+        const auto& blocked_plan =
+            workload->blocked_workspace_plan_diagnostic();
+        if (workspace_ledger != nullptr) {
+            const WorkspaceRankState workspace_state =
+                workspace_ledger->state();
+            const WorkspaceCapacityRank capacity =
+                workspace_ledger->capacity_snapshot_view();
+            std::fprintf(
+                stderr,
+                "[DeadEndCensus] rank=%zu workspace_capacity_authoritative=%d "
+                "workspace_revision=%llu capacity_snapshot_revision=%llu "
+                "capacity_bytes=%llu model_weight_bytes=%llu "
+                "resident_kv_bytes=%llu reserved_request_bytes=%llu "
+                "active_workspace_bytes=%llu "
+                "last_issue_pass_blocked_plan_count=%llu "
+                "last_observed_blocked_plan=%d last_observed_node_id=%llu "
+                "last_observed_generation=%llu "
+                "last_observed_workspace_bytes=%llu\n",
+                rank, workspace_ledger->has_capacity_snapshot() ? 1 : 0,
+                static_cast<unsigned long long>(
+                    workspace_state.workspace_revision),
+                static_cast<unsigned long long>(capacity.workspace_revision),
+                static_cast<unsigned long long>(capacity.capacity_bytes),
+                static_cast<unsigned long long>(capacity.model_weight_bytes),
+                static_cast<unsigned long long>(capacity.resident_kv_bytes),
+                static_cast<unsigned long long>(
+                    capacity.reserved_request_bytes),
+                static_cast<unsigned long long>(
+                    workspace_state.active_workspace_bytes),
+                static_cast<unsigned long long>(
+                    blocked_plan.blocked_plan_count),
+                blocked_plan.has_blocked_plan ? 1 : 0,
+                static_cast<unsigned long long>(blocked_plan.node_id),
+                static_cast<unsigned long long>(blocked_plan.generation),
+                static_cast<unsigned long long>(
+                    blocked_plan.workspace_bytes));
+        } else {
+            std::fprintf(
+                stderr,
+                "[DeadEndCensus] rank=%zu workspace_capacity_authoritative=0 "
+                "workspace_revision=0 capacity_snapshot_revision=0 "
+                "capacity_bytes=0 model_weight_bytes=0 resident_kv_bytes=0 "
+                "reserved_request_bytes=0 active_workspace_bytes=0 "
+                "last_issue_pass_blocked_plan_count=%llu "
+                "last_observed_blocked_plan=%d last_observed_node_id=%llu "
+                "last_observed_generation=%llu "
+                "last_observed_workspace_bytes=%llu\n",
+                rank,
+                static_cast<unsigned long long>(
+                    blocked_plan.blocked_plan_count),
+                blocked_plan.has_blocked_plan ? 1 : 0,
+                static_cast<unsigned long long>(blocked_plan.node_id),
+                static_cast<unsigned long long>(blocked_plan.generation),
+                static_cast<unsigned long long>(
+                    blocked_plan.workspace_bytes));
+        }
         for (size_t index = 0; index < unfinished.size(); ++index) {
             const AstraSim::ExecutionDriven::OnlineNode& node =
                 *unfinished[index];

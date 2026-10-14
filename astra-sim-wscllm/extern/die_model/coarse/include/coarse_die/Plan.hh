@@ -96,6 +96,22 @@ inline bool has_fractional_work(const Plan& plan) {
     return false;
 }
 std::shared_ptr<const Plan> compile(const Hardware&, const nlohmann::json& task);
+// Compile-only capacity certificate for one task. This enumerates the same
+// normalized mapping candidates as compile(), but skips compile()'s outer
+// latency ranking and does not submit work to a caller's Runtime, publish a
+// Plan handle, or mutate an ABI model cache. Mapping enumeration can still use
+// its existing internal latency estimates for component-candidate selection.
+struct WorkspaceEnvelope {
+    std::uint64_t candidate_count = 0;
+    std::uint64_t max_hbm_workspace_peak_bytes = 0;
+    std::string hardware_fingerprint;
+    std::string normalized_task_fingerprint;
+    std::string op_kind;
+    std::string phase;
+    nlohmann::json normalized_task;
+};
+WorkspaceEnvelope compile_workspace_envelope(const Hardware&,
+                                              const nlohmann::json& task);
 nlohmann::json estimate_alone(const Hardware&, const Plan&);
 std::string stable_hash(const std::string& text);
 nlohmann::json plan_to_json(const Plan&);
