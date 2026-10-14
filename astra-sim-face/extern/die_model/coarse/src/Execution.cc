@@ -262,14 +262,15 @@ void validate_hardware(const Hardware& hardware) {
   }
 }
 
-void validate_plan(const Hardware& hardware, const Plan& plan) {
+void validate_plan(const Hardware& hardware, const Plan& plan,
+                   bool require_fingerprint = true) {
   if (plan.hardware_fingerprint != hardware.fingerprint) {
     throw std::invalid_argument("incompatible_fingerprint: plan hardware fingerprint mismatch");
   }
   if (plan.epochs.size() > kMaxPlanEpochs) {
     throw std::invalid_argument("unsupported_plan: more than 64 runtime epochs");
   }
-  if (plan.fingerprint.empty()) {
+  if (require_fingerprint && plan.fingerprint.empty()) {
     throw std::invalid_argument("invalid_plan: missing fingerprint");
   }
   std::set<std::pair<std::size_t, std::uint64_t>> activity_ids;
@@ -806,9 +807,15 @@ Runtime::Runtime(std::shared_ptr<const Hardware> hardware)
 
 std::uint64_t Runtime::submit(std::shared_ptr<const Plan> plan, Owner owner,
                               std::uint64_t now_ns) {
+  return submit_impl(std::move(plan), owner, now_ns, true);
+}
+
+std::uint64_t Runtime::submit_impl(std::shared_ptr<const Plan> plan, Owner owner,
+                                   std::uint64_t now_ns,
+                                   bool require_fingerprint) {
   if (!plan) throw std::invalid_argument("invalid_plan: null plan");
   if (owner.generation == 0) throw std::invalid_argument("invalid_owner: generation must be positive");
-  validate_plan(*hardware_, *plan);
+  validate_plan(*hardware_, *plan, require_fingerprint);
   if (now_ns < now_ns_) throw std::invalid_argument("invalid_time: submit time moved backwards");
   if (plan->launch_ns > std::numeric_limits<std::uint64_t>::max() - now_ns) {
     throw std::overflow_error("overflow: ready time exceeds uint64");
@@ -818,7 +825,7 @@ std::uint64_t Runtime::submit(std::shared_ptr<const Plan> plan, Owner owner,
     throw std::overflow_error("overflow: execution handle space exhausted");
   }
   Execution execution;
-  execution.handle = next_handle_++;
+  execution.handle = next_handle_;
   execution.issue_ns = now_ns;
   execution.ready_ns = now_ns + plan->launch_ns;
   execution.owner = owner;
@@ -835,9 +842,42 @@ std::uint64_t Runtime::submit(std::shared_ptr<const Plan> plan, Owner owner,
     execution.credit_capacity = execution.plan->epochs.front().credit_capacity;
   }
   const auto handle = execution.handle;
-  executions_.emplace(handle, std::move(execution));
-  settle();
-  allocate();
+  // A solver error must not leave an execution whose handle was never
+  // returned to its caller. advance_to(now_ns) above remains committed: it
+  // services the pre-existing world before this attempted arrival. Preserve
+  // only the bounded mutable allocation/accounting state, never copy Plans
+  // or the Runtime's JSON/cache state on this hot path.
+  struct SavedRate { LiveActivity* live; double rate, alpha; };
+  std::vector<SavedRate> saved_rates;
+  for (auto& entry : executions_) {
+    for (auto& live : entry.second.activities)
+      saved_rates.push_back({&live, live.rate, live.alpha});
+  }
+  const auto saved_hbm = hbm_served_;
+  const auto saved_categories = served_by_category_;
+  const auto saved_events = internal_events_;
+  const auto saved_allocations = allocation_updates_;
+  const auto saved_generation = generation_;
+  const auto inserted = executions_.emplace(handle, std::move(execution));
+  if (!inserted.second)
+    throw std::runtime_error("invalid_execution: execution handle already exists");
+  try {
+    settle();
+    allocate();
+  } catch (...) {
+    executions_.erase(inserted.first);
+    for (const auto& saved : saved_rates) {
+      saved.live->rate = saved.rate;
+      saved.live->alpha = saved.alpha;
+    }
+    hbm_served_ = saved_hbm;
+    served_by_category_ = saved_categories;
+    internal_events_ = saved_events;
+    allocation_updates_ = saved_allocations;
+    generation_ = saved_generation;
+    throw;
+  }
+  ++next_handle_;
   return handle;
 }
 
@@ -881,13 +921,27 @@ std::uint64_t Runtime::submit_endpoint(const nlohmann::json& endpoint_json,
   // import after export, even though their runtime state was complete.
   plan->fingerprint = plan_to_json(*plan).at("fingerprint").get<std::string>();
 
-  const std::uint64_t handle = submit(plan, owner, now_ns);
-  endpoint_registry_.emplace(spec.endpoint_id, spec.transaction_id);
-  auto [it, inserted] = transaction_owners_.emplace(
-      spec.transaction_id, std::make_pair(owner, std::size_t{0}));
-  (void)inserted;
-  ++it->second.second;
-  return handle;
+  // Allocate both ownership records before accepting live work. A map
+  // allocation failure after submit used to strand an unreturned handle.
+  const auto endpoint_entry = endpoint_registry_.emplace(
+      spec.endpoint_id, spec.transaction_id);
+  auto transaction_entry = transaction_owners_.end();
+  bool new_transaction = false;
+  try {
+    auto result = transaction_owners_.emplace(
+        spec.transaction_id, std::make_pair(owner, std::size_t{0}));
+    transaction_entry = result.first;
+    new_transaction = result.second;
+    if (transaction_entry->second.second == std::numeric_limits<std::size_t>::max())
+      throw std::overflow_error("overflow: transaction endpoint count exhausted");
+    const std::uint64_t handle = submit(plan, owner, now_ns);
+    ++transaction_entry->second.second;
+    return handle;
+  } catch (...) {
+    endpoint_registry_.erase(endpoint_entry.first);
+    if (new_transaction) transaction_owners_.erase(transaction_entry);
+    throw;
+  }
 }
 
 void Runtime::settle() {
@@ -971,6 +1025,8 @@ void Runtime::allocate() {
     std::size_t first_resource = 0;
     double q = 0.0;
     double alpha = 0.0;
+    std::size_t multiplicity = 1;
+    std::vector<LiveActivity*> mirrors;
   };
 
   for (auto& [handle, execution] : executions_) {
@@ -1003,7 +1059,6 @@ void Runtime::allocate() {
       }
       refs.push_back(Ref{&execution, &live, handle, execution.owner.key(),
                          first_resource, q, 0.0});
-      owner_q[execution.owner.key()] += q;
     }
   }
   if (refs.empty()) return;
@@ -1011,6 +1066,103 @@ void Runtime::allocate() {
     for (Ref& ref : refs) ref.live->rate = 0.0;
     throw std::runtime_error("numerical_failure: active activity count exceeds 3x32 solver bound");
   }
+  // Complete, exactly identical owner blocks can share LP variables. The
+  // convex feasible set is invariant under their permutation, so weighted
+  // lexicographic max-min assigns them identical rates. Only physical rows
+  // gain multiplicity; each owner's PRIVATE/credit constraints and alpha are
+  // retained. No progress/phase epsilon is used. Owners split across multiple
+  // executions remain on the full path to preserve their Q denominator.
+  const bool multiple_owners = std::any_of(refs.begin(), refs.end(),
+      [&](const Ref& ref) { return ref.owner_key != refs.front().owner_key; });
+  if (multiple_owners) {
+    // Refs are collected contiguously per execution before the stable LP
+    // sort. Store block ranges instead of allocating two maps and one vector
+    // for each owner on every arbitration update.
+    struct Block { std::size_t begin, end; };
+    std::vector<Block> blocks;
+    blocks.reserve(refs.size());
+    for (std::size_t begin = 0; begin < refs.size();) {
+      std::size_t end = begin + 1;
+      while (end < refs.size() && refs[end].handle == refs[begin].handle) ++end;
+      blocks.push_back({begin, end});
+      begin = end;
+    }
+    const auto same_fair_owner = [](const Ref& a, const Ref& b) {
+      const auto& lhs = a.execution->owner;
+      const auto& rhs = b.execution->owner;
+      return std::tie(lhs.node_id, lhs.execution_id, lhs.generation) ==
+             std::tie(rhs.node_id, rhs.execution_id, rhs.generation);
+    };
+    const auto boundary_mask = [](const Execution& execution) {
+      unsigned mask = 0;
+      for (std::size_t b = 0; b < 2; ++b) {
+        const double tolerance = kCreditTolerance *
+            std::max(1.0, execution.credit_capacity[b]);
+        if (execution.credit[b] <= tolerance) mask |= 1u << (2 * b);
+        if (execution.credit[b] >= execution.credit_capacity[b] - tolerance)
+          mask |= 2u << (2 * b);
+      }
+      return mask;
+    };
+    const auto equivalent_blocks = [&](const Block& lhs, const Block& rhs) {
+      if (lhs.end - lhs.begin != rhs.end - rhs.begin ||
+          boundary_mask(*refs[lhs.begin].execution) !=
+          boundary_mask(*refs[rhs.begin].execution)) return false;
+      for (std::size_t i = 0; i < lhs.end - lhs.begin; ++i) {
+        const auto& a = refs[lhs.begin + i].live->definition;
+        const auto& b = refs[rhs.begin + i].live->definition;
+        if (a.id != b.id || a.role != b.role || a.work != b.work ||
+            a.canonical_q != b.canonical_q ||
+            a.private_time_s != b.private_time_s ||
+            a.credit_delta != b.credit_delta) return false;
+      }
+      return true;
+    };
+    std::vector<std::size_t> representatives;
+    std::vector<bool> merged(refs.size(), false);
+    for (std::size_t index = 0; index < blocks.size(); ++index) {
+      const Block& block = blocks[index];
+      bool split_owner = false;
+      for (std::size_t other = 0; other < blocks.size(); ++other) {
+        if (other != index && same_fair_owner(refs[block.begin],
+                                            refs[blocks[other].begin])) {
+          split_owner = true;
+          break;
+        }
+      }
+      if (split_owner) continue;
+      const auto match = std::find_if(representatives.begin(), representatives.end(),
+          [&](std::size_t candidate) {
+            return equivalent_blocks(blocks[candidate], block);
+          });
+      if (match == representatives.end()) {
+        representatives.push_back(index);
+        continue;
+      }
+      const Block& representative_block = blocks[*match];
+      for (std::size_t i = 0; i < block.end - block.begin; ++i) {
+        Ref& representative = refs[representative_block.begin + i];
+        if (representative.mirrors.empty())
+          representative.mirrors.reserve(blocks.size() - 1);
+        ++representative.multiplicity;
+        representative.mirrors.push_back(refs[block.begin + i].live);
+        merged[block.begin + i] = true;
+      }
+    }
+    std::vector<Ref> reduced;
+    reduced.reserve(refs.size());
+    for (std::size_t i = 0; i < refs.size(); ++i)
+      if (!merged[i]) reduced.push_back(std::move(refs[i]));
+    refs = std::move(reduced);
+  }
+  const auto publish = [](Ref& ref, double rate, double alpha) {
+    ref.live->rate = rate;
+    ref.live->alpha = alpha;
+    for (auto* mirror : ref.mirrors) {
+      mirror->rate = rate;
+      mirror->alpha = alpha;
+    }
+  };
   if (refs.size() == 1) {
     // The one-variable max-min LP has an exact closed solution: its sole
     // activity receives the smallest physical/private bound, unless a signed
@@ -1020,7 +1172,8 @@ void Runtime::allocate() {
     const auto& activity=ref.live->definition;
     double rate=std::numeric_limits<double>::infinity();
     for(std::size_t r=0;r<resource_count;++r)
-      if(activity.work[r]>0.0)rate=std::min(rate,capacities_[r]/activity.work[r]);
+      if(activity.work[r]>0.0)rate=std::min(rate,
+          capacities_[r]/activity.work[r]/static_cast<double>(ref.multiplicity));
     if(activity.private_time_s>0.0)rate=std::min(rate,1.0/activity.private_time_s);
     for(std::size_t b=0;b<2;++b) {
       const double tolerance=kCreditTolerance*std::max(1.0,ref.execution->credit_capacity[b]);
@@ -1031,8 +1184,7 @@ void Runtime::allocate() {
     }
     if(!std::isfinite(rate)||rate<0.0)
       throw std::runtime_error("numerical_failure: activity has no finite progress rate bound");
-    ref.live->rate=rate;
-    ref.live->alpha=rate>0.0?1.0:0.0;
+    publish(ref, rate, rate>0.0?1.0:0.0);
     return;
   }
   std::sort(refs.begin(), refs.end(), [](const Ref& lhs, const Ref& rhs) {
@@ -1057,7 +1209,7 @@ void Runtime::allocate() {
     for (std::size_t i = 0; i < count; ++i) {
       const double work = refs[i].live->definition.work[resource];
       if (work > 0.0) {
-        c.a[i] = work / refs[i].q;
+        c.a[i] = work / refs[i].q * static_cast<double>(refs[i].multiplicity);
         used = true;
       }
     }
@@ -1164,7 +1316,8 @@ void Runtime::allocate() {
       for (std::size_t resource = 0; resource < resource_count; ++resource) {
         const double work = refs[i].live->definition.work[resource];
         if (work <= 0.0) continue;
-        const double coefficient = work / refs[i].q;
+        const double coefficient = work / refs[i].q *
+            static_cast<double>(refs[i].multiplicity);
         if (!std::isfinite(coefficient) || coefficient <= 0.0) {
           failure("resource coefficient is outside simplex precision");
         }
@@ -1318,19 +1471,17 @@ void Runtime::allocate() {
 
     for (std::size_t i = 0; i < count; ++i) {
       if (excluded[i]) {
-        refs[i].live->rate = 0.0;
-        refs[i].live->alpha = 0.0;
+        publish(refs[i], 0.0, 0.0);
         continue;
       }
       if (!std::isfinite(solved[i]) || solved[i] < -1.0e-10) failure("nonfinite lexicographic solution");
-      refs[i].live->rate = std::max(0.0, solved[i] * variable_scale[i]) / refs[i].q;
-      refs[i].live->alpha = refs[i].alpha;
+      publish(refs[i], std::max(0.0, solved[i] * variable_scale[i]) / refs[i].q,
+              refs[i].alpha);
     }
     return;
   }
   for (std::size_t i = 0; i < count; ++i) {
-    refs[i].live->rate = 0.0;
-    refs[i].live->alpha = 0.0;
+    publish(refs[i], 0.0, 0.0);
   }
 }
 
@@ -2470,16 +2621,8 @@ struct StandaloneEstimateRun {
   nlohmann::json runtime_counters;
 };
 
-StandaloneEstimateRun drive_standalone_estimate(
-    std::shared_ptr<const Hardware> hardware,
-    std::shared_ptr<const Plan> plan, bool capture_report) {
-  Runtime runtime(std::move(hardware));
-  Owner owner;
-  owner.request_id = 1;
-  owner.node_id = 1;
-  owner.execution_id = 1;
-  owner.generation = 1;
-  const std::uint64_t handle = runtime.submit(std::move(plan), owner, 0);
+StandaloneEstimateRun drive_submitted_standalone_estimate(
+    Runtime& runtime, std::uint64_t handle, bool capture_report) {
   std::size_t event_guard = 0;
   while (!runtime.drained()) {
     const auto next = runtime.next_event();
@@ -2517,9 +2660,29 @@ StandaloneEstimateRun drive_standalone_estimate(
   return result;
 }
 
+StandaloneEstimateRun drive_standalone_estimate(
+    std::shared_ptr<const Hardware> hardware,
+    std::shared_ptr<const Plan> plan, bool capture_report) {
+  Runtime runtime(std::move(hardware));
+  const std::uint64_t handle = runtime.submit(
+      std::move(plan), Owner{1, 1, 1, 1}, 0);
+  return drive_submitted_standalone_estimate(runtime, handle, capture_report);
+}
+
 }  // namespace
 
 namespace detail {
+
+std::uint64_t estimate_candidate_latency_ns(
+    std::shared_ptr<const Hardware> hardware,
+    std::shared_ptr<const Plan> plan) {
+  if (!plan) throw std::invalid_argument("invalid_plan: null candidate plan");
+  validate_plan_structure(*plan);
+  Runtime runtime(std::move(hardware));
+  const auto handle = runtime.submit_impl(
+      std::move(plan), Owner{1, 1, 1, 1}, 0, false);
+  return drive_submitted_standalone_estimate(runtime, handle, false).finish_ns;
+}
 
 std::uint64_t estimate_latency_ns(const Hardware& hardware,
                                   std::shared_ptr<const Plan> plan) {

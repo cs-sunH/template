@@ -1,0 +1,27 @@
+{
+  "command": [
+    "python3",
+    "die/tools/benchmark.py",
+    "--benchmark-bin",
+    "work/build-die/coarse_die_benchmark",
+    "--config",
+    "die/tests/fixtures/coarse_die_v2.json",
+    "--task",
+    "work/coldcompile-before/fixtures/gemm_128x128x128.json",
+    "--iterations",
+    "30",
+    "--owners",
+    "1",
+    "--output",
+    "work/coldcompile-before/raw/cpp_compile_gemm_128x128x128.json",
+    "--markdown",
+    "work/coldcompile-before/raw/cpp_compile_gemm_128x128x128.md"
+  ],
+  "exit_code": 0,
+  "outer_elapsed_ns": 256920485,
+  "direct_child_user_cpu_seconds_delta": 0.248814,
+  "direct_child_system_cpu_seconds_delta": 0.007783,
+  "cumulative_children_max_rss_kib": 13056,
+  "rss_units": "KiB on Linux",
+  "scope_note": "outer process resource metadata; probe-internal caller timing is unchanged and is in raw JSON"
+}

@@ -82,6 +82,10 @@ class Runtime {
     std::uint64_t now_ns() const { return now_ns_; }
     const Hardware& hardware() const { return *hardware_; }
  private:
+    friend std::uint64_t detail::estimate_candidate_latency_ns(
+        std::shared_ptr<const Hardware>, std::shared_ptr<const Plan>);
+    std::uint64_t submit_impl(std::shared_ptr<const Plan>, Owner,
+                             std::uint64_t now_ns, bool require_fingerprint);
     std::shared_ptr<const Hardware> hardware_;
     std::map<std::uint64_t,Execution> executions_;
     std::array<double,resource_count> capacities_{};

@@ -100,10 +100,42 @@ uint64_t CoarseDieRuntime::submit_plan(
     }
     const uint64_t now = Sys::boostedTick();
     const uint64_t handle = runtime_.submit(std::move(plan), owner, now);
-    if (!completion_.emplace(handle, std::move(completion)).second) {
-        throw std::runtime_error("coarse die Runtime reused an execution handle");
+    bool safe_to_rollback = completion_.find(handle) == completion_.end();
+    bool callback_registered = false;
+    try {
+        const auto inserted =
+            completion_.emplace(handle, std::move(completion));
+        if (!inserted.second) {
+            safe_to_rollback = false;
+            throw std::runtime_error(
+                "coarse die Runtime reused an execution handle");
+        }
+        callback_registered = true;
+        schedule_next();
+    } catch (...) {
+        const std::exception_ptr submit_failure = std::current_exception();
+        if (!safe_to_rollback) {
+            std::rethrow_exception(submit_failure);
+        }
+        if (callback_registered) completion_.erase(handle);
+        try {
+            const nlohmann::json progress = runtime_.query_progress(handle);
+            if (!terminal_state(progress)) runtime_.cancel(handle, now);
+            runtime_.destroy_execution(handle);
+        } catch (...) {
+            std::throw_with_nested(std::runtime_error(
+                "coarse Plan registration failed and accepted Runtime "
+                "execution could not be cancelled and retired"));
+        }
+        try {
+            schedule_next();
+        } catch (...) {
+            std::throw_with_nested(std::runtime_error(
+                "coarse Plan registration failed and remaining executions "
+                "could not be rescheduled"));
+        }
+        std::rethrow_exception(submit_failure);
     }
-    schedule_next();
     return handle;
 }
 
@@ -117,10 +149,42 @@ uint64_t CoarseDieRuntime::submit_endpoint(
     }
     const uint64_t now = Sys::boostedTick();
     const uint64_t handle = runtime_.submit_endpoint(endpoint, owner, now);
-    if (!completion_.emplace(handle, std::move(completion)).second) {
-        throw std::runtime_error("coarse die Runtime reused an endpoint handle");
+    bool safe_to_rollback = completion_.find(handle) == completion_.end();
+    bool callback_registered = false;
+    try {
+        const auto inserted =
+            completion_.emplace(handle, std::move(completion));
+        if (!inserted.second) {
+            safe_to_rollback = false;
+            throw std::runtime_error(
+                "coarse die Runtime reused an endpoint handle");
+        }
+        callback_registered = true;
+        schedule_next();
+    } catch (...) {
+        const std::exception_ptr submit_failure = std::current_exception();
+        if (!safe_to_rollback) {
+            std::rethrow_exception(submit_failure);
+        }
+        if (callback_registered) completion_.erase(handle);
+        try {
+            const nlohmann::json progress = runtime_.query_progress(handle);
+            if (!terminal_state(progress)) runtime_.cancel(handle, now);
+            runtime_.destroy_execution(handle);
+        } catch (...) {
+            std::throw_with_nested(std::runtime_error(
+                "coarse endpoint registration failed and accepted Runtime "
+                "execution could not be cancelled and retired"));
+        }
+        try {
+            schedule_next();
+        } catch (...) {
+            std::throw_with_nested(std::runtime_error(
+                "coarse endpoint registration failed and remaining "
+                "executions could not be rescheduled"));
+        }
+        std::rethrow_exception(submit_failure);
     }
-    schedule_next();
     return handle;
 }
 

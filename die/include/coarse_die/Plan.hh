@@ -71,6 +71,24 @@ struct Plan {
     std::vector<Epoch> epochs;
     std::uint64_t launch_ns = 0;
 };
+
+// Capacity consumers must not use json::get<uint64_t>() directly: that cast
+// accepts negative or floating-point values and can silently change the byte
+// count. Workspace is the compiler's exact incremental HBM capacity, separate
+// from weights/KV and from transfer payload. Missing metadata is an error.
+inline std::uint64_t hbm_workspace_peak_bytes(const Plan& plan) {
+    if (!plan.summary.is_object())
+        throw std::invalid_argument("invalid_workspace: Plan summary must be an object");
+    const auto value = plan.summary.find("hbm_workspace_peak_bytes");
+    if (value == plan.summary.end())
+        throw std::invalid_argument("invalid_workspace: hbm_workspace_peak_bytes is required");
+    if (value->is_number_unsigned()) return value->get<std::uint64_t>();
+    if (value->is_number_integer()) {
+        const auto bytes = value->get<std::int64_t>();
+        if (bytes >= 0) return static_cast<std::uint64_t>(bytes);
+    }
+    throw std::invalid_argument("invalid_workspace: hbm_workspace_peak_bytes must be an exact uint64 integer");
+}
 inline bool has_fractional_work(const Plan& plan) {
     for (const auto& epoch : plan.epochs)
         for (const auto& activity : epoch.activities)
@@ -84,6 +102,10 @@ nlohmann::json plan_to_json(const Plan&);
 std::shared_ptr<const Plan> plan_from_json(const nlohmann::json&);
 
 namespace detail {
+// Run the structural checks used by plan_to_json() without allocating a JSON
+// payload or computing its canonical hash. Compiler-only unsealed candidates
+// use this before their Runtime trial; public Plans still use plan_to_json().
+void validate_plan_structure(const Plan& plan);
 // Candidate-ranking driver for an already compiled, canonically fingerprinted
 // Plan. Runtime::submit still validates hardware identity and physical work;
 // this path avoids building the public standalone estimate report.
@@ -91,5 +113,11 @@ std::uint64_t estimate_latency_ns(const Hardware&,
                                   std::shared_ptr<const Plan> plan);
 std::uint64_t estimate_latency_ns(std::shared_ptr<const Hardware> hardware,
                                   std::shared_ptr<const Plan> plan);
+// Compiler-only trial of an unsealed candidate. Uses the same Runtime and
+// physical validation, returns only a latency, and publishes no Plan/handle
+// or snapshot. The selected candidate must be sealed before it is returned.
+std::uint64_t estimate_candidate_latency_ns(
+    std::shared_ptr<const Hardware> hardware,
+    std::shared_ptr<const Plan> plan);
 }
 }

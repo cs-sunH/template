@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 import functools
 import json
 import os
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 
 RESIDENT = "RESIDENT"
@@ -42,6 +42,7 @@ _EVENTS_COMPACT_THRESHOLD = 8192
 # (manager 实际状态 vs journal before+Σdelta 推出的 after)。journal 是纯
 # 观测旁路:不改任何准入/逐出/放置决策,不改变任何返回值。
 _METRICS_RECORDER: Any = None
+_UINT64_MAX = (1 << 64) - 1
 
 
 def _strict_kv_invariants_from_environment() -> bool:
@@ -133,6 +134,12 @@ def _journal_transaction(method: Any) -> Any:
 def _require_nonnegative_int(value: int, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
+
+
+def _require_uint64(value: int, name: str) -> None:
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value < 0 or value > _UINT64_MAX):
+        raise ValueError(f"{name} must be an exact uint64 integer")
 
 
 def partition_values_exact(total: int, partitions: int) -> tuple[int, ...]:
@@ -358,6 +365,8 @@ class CapacityResult:
     evictions: tuple[EvictionRecord, ...]
     admitted: bool
     insufficient_ranks: tuple[int, ...]
+    blocked_by_workspace: bool = False
+    permanently_infeasible: bool = False
 
 
 @dataclass(frozen=True)
@@ -379,6 +388,8 @@ class HistoryDecision:
     evictions: tuple[EvictionRecord, ...]
     admission_blocked: bool = False
     insufficient_ranks: tuple[int, ...] = ()
+    blocked_by_workspace: bool = False
+    permanently_infeasible: bool = False
 
     @property
     def transfer_bytes(self) -> int:
@@ -395,6 +406,8 @@ class MoveDecision:
     evictions: tuple[EvictionRecord, ...]
     admission_blocked: bool = False
     insufficient_ranks: tuple[int, ...] = ()
+    blocked_by_workspace: bool = False
+    permanently_infeasible: bool = False
 
 
 @dataclass(frozen=True)
@@ -458,6 +471,16 @@ class SessionKVCacheManager:
                     model_weight_bytes=self.model_weight_bytes_by_tp_rank[relative_rank],
                 )
                 self._rank_states[rank] = state
+        # Transient C++ workspace is an external fit margin.  It is kept
+        # separately from NodeHBMState so KV used_bytes, journal deltas,
+        # transfer accounting, and the existing HBM snapshots keep their
+        # original meaning.
+        self._external_workspace_revision_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._external_workspace_bytes_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
         self._sessions: dict[str, SessionKVState] = {}
         self._reservations: dict[str, RequestCapacityReservation] = {}
         self._events: list[KVCacheEvent] = []
@@ -554,6 +577,11 @@ class SessionKVCacheManager:
         恢复——前批随 node_states 误删,仍有测试消费)。"""
         return tuple(sorted(self._sessions))
 
+    @property
+    def rank_ids(self) -> tuple[int, ...]:
+        """Stable sorted rank set used by the explicit workspace bridge."""
+        return tuple(sorted(self._rank_states))
+
     def session_snapshot(self, session_id: str) -> Optional[SessionKVSnapshot]:
         state = self._sessions.get(session_id)
         return None if state is None else state.snapshot()
@@ -569,9 +597,98 @@ class SessionKVCacheManager:
             ranks = tuple(self.topology.instance(instance_index).ranks)
         return tuple(self._rank_states[rank].snapshot() for rank in ranks)
 
+    def set_external_workspace_view(
+        self,
+        revision_by_rank: Mapping[int, int],
+        bytes_by_rank: Mapping[int, int],
+    ) -> tuple[int, ...]:
+        """Install an absolute, versioned workspace hold from the bridge.
+
+        Both rank maps must describe the complete topology.  Validation is
+        completed for every rank before either stored map changes, so stale
+        or impossible updates cannot partially affect KV admission.
+        """
+        if not isinstance(revision_by_rank, Mapping):
+            raise ValueError("workspace revisions must be a rank mapping")
+        if not isinstance(bytes_by_rank, Mapping):
+            raise ValueError("workspace bytes must be a rank mapping")
+        expected_ranks = set(self._rank_states)
+        for name, values in (("workspace revision", revision_by_rank),
+                             ("workspace bytes", bytes_by_rank)):
+            for rank in values:
+                _require_uint64(rank, f"{name} rank")
+            if set(values) != expected_ranks:
+                raise ValueError(
+                    f"{name} ranks must exactly match topology ranks "
+                    f"{sorted(expected_ranks)}, got {sorted(values)}")
+
+        revisions = {}
+        workspace_bytes = {}
+        changed = []
+        for rank in sorted(expected_ranks):
+            revision = revision_by_rank[rank]
+            active_bytes = bytes_by_rank[rank]
+            _require_uint64(revision, f"workspace revision for rank {rank}")
+            _require_uint64(active_bytes,
+                            f"active workspace bytes for rank {rank}")
+            previous_revision = self._external_workspace_revision_by_rank[rank]
+            previous_bytes = self._external_workspace_bytes_by_rank[rank]
+            if revision < previous_revision:
+                raise ValueError(
+                    f"stale workspace revision for rank {rank}: "
+                    f"{revision} < {previous_revision}")
+            if revision == previous_revision and active_bytes != previous_bytes:
+                raise ValueError(
+                    f"workspace bytes changed without revision advance on "
+                    f"rank {rank}")
+            state = self._rank_states[rank]
+            combined = state.used_bytes + active_bytes
+            if combined > _UINT64_MAX or combined > state.capacity_bytes:
+                raise ValueError(
+                    f"workspace hold exceeds Python HBM capacity on rank "
+                    f"{rank}: KV base={state.used_bytes}, workspace="
+                    f"{active_bytes}, capacity={state.capacity_bytes}")
+            revisions[rank] = revision
+            workspace_bytes[rank] = active_bytes
+            if revision != previous_revision or active_bytes != previous_bytes:
+                changed.append(rank)
+
+        self._external_workspace_revision_by_rank = revisions
+        self._external_workspace_bytes_by_rank = workspace_bytes
+        return tuple(changed)
+
+    def workspace_capacity_snapshot(self) -> dict:
+        """Return Python's authoritative per-rank KV base for bridge v2."""
+        return {
+            "protocol_version": 1,
+            "ranks": [
+                {
+                    "rank": rank,
+                    "workspace_revision":
+                        self._external_workspace_revision_by_rank[rank],
+                    "capacity_bytes": self._rank_states[rank].capacity_bytes,
+                    "model_weight_bytes":
+                        self._rank_states[rank].model_weight_bytes,
+                    "resident_kv_bytes":
+                        self._rank_states[rank].resident_kv_bytes,
+                    "reserved_request_bytes":
+                        self._rank_states[rank].reserved_request_bytes,
+                }
+                for rank in sorted(self._rank_states)
+            ],
+        }
+
     def _remaining(self, instance_index: int) -> tuple[int, ...]:
         return tuple(
             self._rank_states[rank].remaining_bytes
+            for rank in self.topology.instance(instance_index).ranks
+        )
+
+    def _fit_remaining(self, instance_index: int) -> tuple[int, ...]:
+        """KV fit headroom after the separately owned workspace hold."""
+        return tuple(
+            self._rank_states[rank].remaining_bytes
+            - self._external_workspace_bytes_by_rank[rank]
             for rank in self.topology.instance(instance_index).ranks
         )
 
@@ -587,6 +704,22 @@ class SessionKVCacheManager:
             rank
             for rank, remaining, required in zip(
                 instance.ranks, self._remaining(instance_index), required_shards
+            )
+            if remaining < required
+        )
+
+    def _fit_insufficient(
+        self,
+        instance_index: int,
+        required_shards: Sequence[int],
+    ) -> tuple[int, ...]:
+        instance = self.topology.instance(instance_index)
+        if len(required_shards) != len(instance.ranks):
+            raise ValueError("required KV shards must match the target TP degree")
+        return tuple(
+            rank
+            for rank, remaining, required in zip(
+                instance.ranks, self._fit_remaining(instance_index), required_shards
             )
             if remaining < required
         )
@@ -867,6 +1000,13 @@ class SessionKVCacheManager:
                 raise RuntimeError(
                     f"HBM capacity exceeded on rank {state.rank}: "
                     f"used={state.used_bytes}, capacity={state.capacity_bytes}"
+                )
+            workspace_bytes = self._external_workspace_bytes_by_rank[rank]
+            if state.used_bytes + workspace_bytes > state.capacity_bytes:
+                raise RuntimeError(
+                    f"HBM capacity exceeded with external workspace on rank "
+                    f"{rank}: used={state.used_bytes}, workspace="
+                    f"{workspace_bytes}, capacity={state.capacity_bytes}"
                 )
         for session_id in changed_sessions:
             session = self._sessions.get(session_id)
@@ -1316,19 +1456,48 @@ class SessionKVCacheManager:
                 after=before,
                 insufficient_ranks=impossible,
             )
-            return CapacityResult((), False, impossible)
+            return CapacityResult(
+                (), False, impossible, permanently_infeasible=True)
+        impossible_with_current_workspace = tuple(
+            rank
+            for rank, needed, available, workspace in zip(
+                instance.ranks,
+                required,
+                maximum,
+                (self._external_workspace_bytes_by_rank[rank]
+                 for rank in instance.ranks),
+            )
+            if needed > available - workspace
+        )
+        if impossible_with_current_workspace:
+            # No eviction can satisfy this request under the current hold.
+            # Wait for a later absolute workspace revision instead of deleting
+            # KV that cannot make the request fit in this capacity epoch.
+            return CapacityResult(
+                (), False, impossible_with_current_workspace,
+                blocked_by_workspace=True)
         evictions: list[EvictionRecord] = []
+        # Reclaim using the existing cold-session order whenever the combined
+        # KV + workspace view is short, even if the KV base alone currently
+        # fits. A workspace-only deficit may therefore evict the minimum
+        # prefix needed to fit, exactly as ordinary physical pressure does.
+        # The empty-instance check above prevents destructive eviction when
+        # no amount of reclaiming could fit this request in the current epoch.
         insufficient = self._insufficient(instance_index, required)
+        fit_insufficient = self._fit_insufficient(instance_index, required)
         # _candidate_sessions() fixes eligibility and LRU order up front;
         # unselected candidates keep both throughout this reclamation stage.
         candidates = (
             self._candidate_sessions(instance_index, protected_sessions)
-            if insufficient
-            else []
+            if fit_insufficient else []
         )
         candidate_index = 0
-        while insufficient:
+        while fit_insufficient:
             if candidate_index >= len(candidates):
+                if not insufficient:
+                    return CapacityResult(
+                        tuple(evictions), False, fit_insufficient,
+                        blocked_by_workspace=True)
                 before = self._remaining(instance_index)
                 # D4 (2026-09-05): 被动逐出深缺口——候选耗尽(活跃会话占满、
                 # 无可逐冷会话)优雅推迟 admitted=False;capacity_epoch 重试
@@ -1358,11 +1527,7 @@ class SessionKVCacheManager:
                 )
             )
             insufficient = self._insufficient(instance_index, required)
-        if self._insufficient(instance_index, required):
-            # I3 (2026-09-05): 逐出循环退出即必须已满足本请求 required
-            # (被动逐出"逐到刚好够即停"的显式断言;多逐或少逐都是缺陷)。
-            raise RuntimeError(
-                "physical-fit stage returned success while still insufficient")
+            fit_insufficient = self._fit_insufficient(instance_index, required)
         return CapacityResult(tuple(evictions), True, ())
 
     @_journal_transaction
@@ -1393,7 +1558,10 @@ class SessionKVCacheManager:
         )
         evictions = fit.evictions
         if not fit.admitted:
-            return CapacityResult(evictions, False, fit.insufficient_ranks)
+            return CapacityResult(
+                evictions, False, fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace,
+                permanently_infeasible=fit.permanently_infeasible)
         for rank, value in zip(self.topology.instance(instance_index).ranks, required):
             self._rank_states[rank].reserved_request_bytes += value
         self._reservations[request_id] = RequestCapacityReservation(
@@ -1601,6 +1769,8 @@ class SessionKVCacheManager:
                 evictions=evictions,
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace,
+                permanently_infeasible=fit.permanently_infeasible,
             )
 
         history_shards = self._history_shards(history_tokens)
@@ -1769,7 +1939,10 @@ class SessionKVCacheManager:
         )
         evictions = fit.evictions
         if not fit.admitted:
-            return CapacityResult(evictions, False, fit.insufficient_ranks)
+            return CapacityResult(
+                evictions, False, fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace,
+                permanently_infeasible=fit.permanently_infeasible)
         self._add_shards(instance_index, delta)
         state.shard_bytes = desired
         state.logical_context_tokens = context_tokens
@@ -1851,6 +2024,8 @@ class SessionKVCacheManager:
                 evictions=evictions,
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace,
+                permanently_infeasible=fit.permanently_infeasible,
             )
         # 同实例(LOCAL_HIT)臂已删(2026-09-26):不可达理由同上方
         # existing_target 注释,source != target 恒成立,只余 NOC 迁移路径。
@@ -2069,6 +2244,14 @@ class SessionKVCacheManager:
                 raise RuntimeError(
                     f"HBM capacity exceeded on rank {state.rank}: "
                     f"used={state.used_bytes}, capacity={state.capacity_bytes}"
+                )
+            workspace_bytes = self._external_workspace_bytes_by_rank[
+                state.rank]
+            if state.used_bytes + workspace_bytes > state.capacity_bytes:
+                raise RuntimeError(
+                    f"HBM capacity exceeded with external workspace on rank "
+                    f"{state.rank}: used={state.used_bytes}, workspace="
+                    f"{workspace_bytes}, capacity={state.capacity_bytes}"
                 )
         accumulated: dict[int, list[int]] = {
             instance.index: [0] * self.tp_degree for instance in self.topology.instances

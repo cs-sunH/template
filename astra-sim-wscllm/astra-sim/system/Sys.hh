@@ -28,6 +28,7 @@ class BaseStream;
 class StreamBaseline;
 class DataSet;
 class CoarseDieRuntime;
+class WorkspaceAdmission;
 class QueueLevels;
 class Workload;
 class LogicalTopology;
@@ -370,6 +371,9 @@ class Sys : public Callable {
     // Runtime per rank and shares it between COMP plans and every local-HBM
     // endpoint. Null for legacy mesh_die_v1/tx8_reference_v1 runs.
     std::unique_ptr<CoarseDieRuntime> coarse_die_runtime;
+    // Rank-local transient Plan workspace ledger. Present for coarse_die_v2
+    // only; its absolute revision/bytes are sent through explicit bridge v2.
+    std::unique_ptr<WorkspaceAdmission> workspace_admission;
     std::string die_model_profile;
     // Resolved die-model-config path (diagnostics only; empty off the die
     // backend).

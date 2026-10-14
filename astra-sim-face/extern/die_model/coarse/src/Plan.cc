@@ -270,6 +270,14 @@ void validate_plan(const Plan& plan) {
 
 }  // namespace
 
+namespace detail {
+
+void validate_plan_structure(const Plan& plan) {
+  validate_plan(plan);
+}
+
+}  // namespace detail
+
 std::string stable_hash(const std::string& text) { return sha256(text); }
 
 nlohmann::json equivalent_fraction_to_json(long double fraction) {

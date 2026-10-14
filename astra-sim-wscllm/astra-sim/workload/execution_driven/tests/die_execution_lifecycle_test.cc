@@ -48,23 +48,28 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "astra-sim/workload/DieModelAdapter.hh"
 #include "astra-sim/workload/MetricCollector.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 #include "DieModel.hh"
+#include "coarse_die/Plan.hh"
 #include <astra-network-analytical/common/EventQueue.h>
 
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -85,17 +90,20 @@ void expect_true(const bool cond, const char* const what) {
 
 std::map<uint64_t, uint64_t> g_terminal_fires;
 std::map<uint64_t, uint64_t> g_first_tick;
+std::map<uint64_t, int> g_terminal_status;
 
 void tick_hook(void* /*ctx*/, int /*rank*/, uint64_t node_id,
                const char* /*request_id*/, const char* /*stage*/,
                uint64_t /*generation*/, uint64_t tick, int status) {
-    if (status != static_cast<int>(NodeTerminalStatus::Success)) {
+    if (status != static_cast<int>(NodeTerminalStatus::Success) &&
+        status != static_cast<int>(NodeTerminalStatus::Skipped)) {
         std::fprintf(stderr,
                      "[die_execution_lifecycle_test] node %llu terminal "
                      "status %d\n",
                      static_cast<unsigned long long>(node_id), status);
         g_ok = false;
     }
+    g_terminal_status[node_id] = status;
     if (g_first_tick.find(node_id) == g_first_tick.end()) {
         g_first_tick[node_id] = tick;
     }
@@ -274,6 +282,22 @@ Fixture make_fixture(const std::string& config_dir,
     return fixture;
 }
 
+void install_workspace_snapshot(Sys* const sys, const uint64_t capacity_bytes,
+                                const uint64_t model_weight_bytes,
+                                const uint64_t resident_kv_bytes,
+                                const uint64_t reserved_request_bytes = 0) {
+    if (sys == nullptr || sys->workspace_admission == nullptr) {
+        throw std::runtime_error(
+            "coarse lifecycle fixture has no workspace ledger");
+    }
+    WorkspaceAdmission& ledger = *sys->workspace_admission;
+    const WorkspaceCapacityRank snapshot{
+        sys->id, ledger.workspace_revision(), capacity_bytes,
+        model_weight_bytes, resident_kv_bytes, reserved_request_bytes};
+    ledger.validate_capacity_snapshot(snapshot);
+    ledger.install_capacity_snapshot_unchecked(snapshot);
+}
+
 void drain_queue(const std::shared_ptr<EventQueue>& queue) {
     while (!queue->finished()) {
         queue->proceed();
@@ -317,6 +341,7 @@ std::vector<nlohmann::json> capture_metrics(Sys* sys, uint64_t end_tick) {
 
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    ::setenv("SH_WORKSPACE_ADMISSION", "auto", 1);
     LoggerFactory::init("empty", "off");
     // Keep diagnostics visible while the metrics fixture captures stdout.
     for (const auto* name : {"statistics", "system", "HardwareResource"}) {
@@ -519,6 +544,8 @@ int main() {
             {"tensor_shapes", {{"m", 128}, {"n", 128}, {"k", 128}}},
             {"storage_dtype", "bf16"}};
         const auto plan = bridge.compile(task);
+        install_workspace_snapshot(fixture.sys.get(),
+                                   std::numeric_limits<uint64_t>::max(), 0, 0);
         OnlineNode comp;
         comp.global_id = 40; comp.rank = 0; comp.kind = NodeKind::Compute;
         comp.node_type = 4; comp.name = "coarse_comp";
@@ -533,6 +560,10 @@ int main() {
         comm.comm.tag = 0; comm.comm.hbm_charge = true;
         fixture.source->store().add_node(comm);
         fixture.sys->workload->issue_dep_free_nodes();
+        expect_true(fixture.sys->workspace_admission->active_lease_count() == 1 &&
+                    fixture.sys->workspace_admission->active_workspace_bytes() ==
+                        coarse_die::hbm_workspace_peak_bytes(*plan),
+                    "F: pre-issue admission holds exactly the compiled Plan workspace");
         nlohmann::json partial;
         for (unsigned i = 0; i < 32 && !fixture.event_queue->finished(); ++i) {
             fixture.event_queue->proceed();
@@ -547,6 +578,9 @@ int main() {
                     partial["hbm_shared_ns"].get<double>() > 0,
                     "F: COMP and declared COMM source read share local HBM");
         fixture.sys->workload->die_model_adapter()->shutdown();
+        expect_true(fixture.sys->workspace_admission->active_lease_count() == 0 &&
+                    fixture.sys->workspace_admission->active_workspace_bytes() == 0,
+                    "F: shutdown cancels live Runtime work before releasing its lease");
         const auto cancelled = bridge.counters_at(Sys::boostedTick());
         expect_true(cancelled["served_by_category"]["comp"]["int4_ops"].get<double>() == delivered &&
                     g_terminal_fires.count(40) == 0 && g_terminal_fires.count(41) == 0,
@@ -601,6 +635,8 @@ int main() {
             {"tensor_shapes", {{"m", 128}, {"n", 128}, {"k", 128}}},
             {"storage_dtype", "bf16"}};
         const auto plan = bridge.compile(task);
+        install_workspace_snapshot(fixture.sys.get(),
+                                   std::numeric_limits<uint64_t>::max(), 0, 0);
         OnlineNode comp;
         comp.global_id = 50; comp.rank = 0; comp.kind = NodeKind::Compute;
         comp.node_type = 4; comp.name = "coarse_complete";
@@ -619,8 +655,10 @@ int main() {
         const auto completed = bridge.counters_at(Sys::boostedTick());
         expect_true(g_terminal_fires[50] == 1 && g_terminal_fires[51] == 1 &&
                     fixture.sys->workload->hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                    fixture.sys->workspace_admission->active_workspace_bytes() == 0 &&
+                    fixture.sys->workspace_admission->active_lease_count() == 0 &&
                     !fixture.sys->workload->die_model_adapter()->has_active_die_executions(),
-                    "G: typed COMP and COMM join complete once and release the GPU");
+                    "G: typed COMP and COMM complete once and release GPU + workspace");
         const auto& categories = completed["served_by_category"];
         expect_true(categories["comp"]["int4_ops"].get<double>() ==
                         plan->summary["executed_int4_ops"].get<double>() &&
@@ -643,6 +681,183 @@ int main() {
         drain_queue(fixture.event_queue);
         expect_true(g_terminal_fires[50] == 1 && g_terminal_fires[51] == 1,
                     "G: completed teardown publishes no duplicate terminals");
+    }
+
+    // H: a real coarse COMP is prepared before NodeStore take/HardwareResource
+    // occupy, stays free while Python's base usage blocks it, then submits
+    // with the same exact workspace reservation after a capacity refresh.
+    // A live cancellation terminalizes as Skipped and releases the lease
+    // exactly once before dependency completion.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        g_terminal_status.clear();
+        Fixture fixture = make_fixture(config_dir, "coarse_system.json");
+        nlohmann::json task{{"op_kind", "ffn_region"},
+            {"tensor_shapes", {{"m", 64}, {"hidden", 128},
+                               {"ffn", 256}, {"mlp_variant", "swiglu"}}},
+            {"fusion_policy", "materialized"}, {"storage_dtype", "bf16"}};
+        const auto plan = fixture.sys->coarse_die_runtime->compile(task);
+        const uint64_t workspace_bytes =
+            coarse_die::hbm_workspace_peak_bytes(*plan);
+        expect_true(workspace_bytes > 0 &&
+                        workspace_bytes < std::numeric_limits<uint64_t>::max(),
+                    "H: fixture Plan has a positive exact workspace peak");
+        if (workspace_bytes == 0 ||
+            workspace_bytes == std::numeric_limits<uint64_t>::max()) {
+            fixture.sys.reset();
+        } else {
+            OnlineNode comp;
+            comp.global_id = 70; comp.rank = 0; comp.kind = NodeKind::Compute;
+            comp.node_type = 4; comp.name = "coarse_workspace_gate";
+            comp.request_id = "r1"; comp.stage = "prefill";
+            comp.compute.die_task_json =
+                std::make_shared<const nlohmann::json>(task);
+            fixture.source->store().add_node(comp);
+            OnlineNode child;
+            child.global_id = 72; child.rank = 0;
+            child.kind = NodeKind::Invalid; child.node_type = 0;
+            child.name = "after_cancelled_coarse_comp";
+            child.request_id = "r1"; child.stage = "prefill";
+            fixture.source->store().add_node(child);
+            fixture.source->store().add_dependency(70, 72, DepKind::Control);
+
+            const uint64_t capacity_bytes = workspace_bytes + 1;
+            install_workspace_snapshot(fixture.sys.get(), capacity_bytes,
+                                       0, 2);
+            fixture.sys->workload->issue_dep_free_nodes();
+            std::vector<uint64_t> free_ids;
+            fixture.source->store().fill_free_node_snapshot(free_ids);
+            expect_true(fixture.sys->workspace_admission->active_lease_count() == 0 &&
+                            fixture.sys->workload->hw_resource
+                                    ->num_in_flight_gpu_comp_ops == 0 &&
+                            std::find(free_ids.begin(), free_ids.end(), 70) !=
+                                free_ids.end() &&
+                            g_terminal_fires.count(70) == 0,
+                        "H: blocked Plan remains free and does not occupy GPU or publish terminal");
+
+            install_workspace_snapshot(fixture.sys.get(), capacity_bytes,
+                                       0, 1);
+            fixture.sys->workload->issue_dep_free_nodes();
+            free_ids.clear();
+            fixture.source->store().fill_free_node_snapshot(free_ids);
+            expect_true(fixture.sys->workspace_admission->active_lease_count() == 1 &&
+                            fixture.sys->workspace_admission
+                                    ->active_workspace_bytes() == workspace_bytes &&
+                            fixture.sys->workload->hw_resource
+                                    ->num_in_flight_gpu_comp_ops == 1 &&
+                            std::find(free_ids.begin(), free_ids.end(), 70) ==
+                                free_ids.end(),
+                        "H: capacity refresh admits exact workspace before take/occupy");
+
+            // Let at least one modeled Runtime event advance before live
+            // cancellation so the callback must report real served work over
+            // a positive elapsed-time denominator.
+            fixture.event_queue->proceed();
+            const auto before_cancel =
+                fixture.sys->coarse_die_runtime->counters_at(
+                    Sys::boostedTick());
+            const auto& comp_served =
+                before_cancel.at("served_by_category").at("comp");
+            bool saw_served_work =
+                comp_served.at("int4_ops").get<double>() > 0.0 ||
+                comp_served.at("vec_eqops").get<double>() > 0.0;
+            const auto& comp_hbm =
+                comp_served.at("hbm_served_bytes_by_row_direction");
+            for (size_t row = 0; row < comp_hbm.size(); ++row) {
+                for (size_t direction = 0;
+                     direction < comp_hbm[row].size(); ++direction) {
+                    saw_served_work =
+                        saw_served_work ||
+                        comp_hbm[row][direction].get<double>() > 0.0;
+                }
+            }
+            expect_true(Sys::boostedTick() > 0 && saw_served_work &&
+                            g_terminal_fires.count(70) == 0,
+                        "H: cancellation fixture has typed served work and a positive elapsed window");
+            fixture.sys->workload->die_model_adapter()->cancel_coarse_node(
+                70, Sys::boostedTick());
+            const auto* cancelled_stats =
+                fixture.source->store().mutable_online_statistics(70);
+            std::vector<uint64_t> free_after_cancel;
+            fixture.source->store().fill_free_node_snapshot(
+                free_after_cancel);
+            expect_true(g_terminal_fires[70] == 1 &&
+                            g_terminal_status[70] == static_cast<int>(
+                                NodeTerminalStatus::Skipped) &&
+                            cancelled_stats != nullptr &&
+                            cancelled_stats->compute_utilization.has_value() &&
+                            cancelled_stats->memory_utilization.has_value() &&
+                            cancelled_stats->vector_utilization.has_value() &&
+                            fixture.sys->workload
+                                    ->die_cancelled_comp_count() == 1 &&
+                            std::find(free_after_cancel.begin(),
+                                      free_after_cancel.end(), 72) !=
+                                free_after_cancel.end() &&
+                            fixture.sys->workspace_admission
+                                    ->active_workspace_bytes() == 0 &&
+                            fixture.sys->workspace_admission
+                                    ->active_lease_count() == 0 &&
+                            fixture.sys->workload->hw_resource
+                                    ->num_in_flight_gpu_comp_ops == 0 &&
+                            fixture.sys->workspace_admission
+                                    ->workspace_revision() == 2,
+                        "H: live cancellation records served utilization, releases workspace once, marks cancellation, terminalizes Skipped, and frees its dependent node");
+            fixture.sys->workload->issue_dep_free_nodes();
+            expect_true(g_terminal_fires[72] == 1 &&
+                            g_terminal_status[72] == static_cast<int>(
+                                NodeTerminalStatus::Skipped),
+                        "H: cancelled COMP releases its real graph dependency for normal successor issue");
+
+            nlohmann::json manifest;
+            std::ifstream(config_dir + "/coarse_manifest.json") >> manifest;
+            manifest["run_mode"] = "service";
+            write_text(config_dir + "/coarse_manifest.json",
+                       manifest.dump());
+            MetricCollector::instance().initialize(
+                config_dir + "/coarse_manifest.json", "summary");
+            const auto cancelled_records =
+                capture_metrics(fixture.sys.get(), Sys::boostedTick());
+            bool cancellation_count_exported = false;
+            for (const auto& record : cancelled_records) {
+                if (record.value("type", std::string()) == "rank_compute") {
+                    cancellation_count_exported =
+                        record.value("die_cancelled_comp_count", uint64_t{0}) ==
+                        1;
+                }
+            }
+            expect_true(cancellation_count_exported,
+                        "H: rank service report exports the live cancelled COMP count");
+
+            install_workspace_snapshot(fixture.sys.get(),
+                                       workspace_bytes - 1, 0, 0);
+            comp.global_id = 71;
+            comp.name = "coarse_workspace_impossible";
+            fixture.source->store().add_node(comp);
+            bool impossible_rejected = false;
+            try {
+                fixture.sys->workload->issue_dep_free_nodes();
+            } catch (const std::runtime_error& exc) {
+                impossible_rejected =
+                    std::string(exc.what()).find("exceeds empty-instance") !=
+                    std::string::npos;
+            }
+            free_ids.clear();
+            fixture.source->store().fill_free_node_snapshot(free_ids);
+            expect_true(impossible_rejected &&
+                            std::find(free_ids.begin(), free_ids.end(), 71) !=
+                                free_ids.end() &&
+                            fixture.sys->workspace_admission
+                                    ->active_lease_count() == 0 &&
+                            fixture.sys->workspace_admission
+                                    ->active_workspace_bytes() == 0 &&
+                            fixture.sys->workload->hw_resource
+                                    ->num_in_flight_gpu_comp_ops == 0 &&
+                            g_terminal_fires.count(71) == 0,
+                        "H: impossible Plan fails before take/occupy and leaves no lease");
+            fixture.sys.reset();
+            drain_queue(fixture.event_queue);
+        }
     }
 
     std::error_code ec;

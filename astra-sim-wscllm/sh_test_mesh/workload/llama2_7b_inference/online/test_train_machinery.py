@@ -72,7 +72,8 @@ def estimate_iteration_time_ns(
     ffn = model.ffn_size
     layers = model.layers
     bytes_per_elem = model.bytes_per_elem
-    aggregate_perf = instance_size * hardware.peak_perf_tflops * 1e12
+    aggregate_perf = (
+        instance_size * hardware.require_legacy_peak_perf_tflops() * 1e12)
     aggregate_bw = instance_size * hardware.local_hbm_bandwidth_gbps * 1e9
     local_hbm_latency_seconds = hardware.local_hbm_latency_ns / 1e9
 
@@ -373,7 +374,7 @@ class LayerABCrossCheckTest(unittest.TestCase):
         self.assertGreater(weight_b, linear_weight_total)
         # 时间域镜像(容差记录:层次 A attention 取 max,层次 B 逐类
         # max 求和;镜像按单 rank 链 × tp 并行取 max 口径,容差 3×)。
-        perf = HARDWARE.peak_perf_tflops * 1e12
+        perf = HARDWARE.require_legacy_peak_perf_tflops() * 1e12
         bw = HARDWARE.local_hbm_bandwidth_gbps * 1e9
         mirror_b_ns = max(
             sum(max(ops / perf, ts / bw) * 1e9 for _n, ops, ts in nodes)

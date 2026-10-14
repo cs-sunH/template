@@ -1,0 +1,1598 @@
+{
+  "cases": [
+    {
+      "active_activities": 3,
+      "budget_met": true,
+      "counters": {
+        "accounting_history_complete": true,
+        "active_activities": 3,
+        "active_hbm_owners": 1,
+        "active_owners": 1,
+        "allocation_updates": 36,
+        "capacity": [
+          1.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0
+        ],
+        "compute_busy_ns": 0.0,
+        "compute_busy_ns_exact": "0",
+        "endpoint_registry_size": 0,
+        "hardware_raw": {
+          "available": true,
+          "hardware_fingerprint": "sha256:55f8dddda17652dd5ca7fac25e0c5df61959a15bc1ca6fbd79cbbee2405606b5",
+          "hbm_row_peak_Bps": [
+            2355200000000.0,
+            2355200000000.0
+          ],
+          "peak_int4_ops_per_s": 769296000000000.0,
+          "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+        },
+        "hbm_busy_ns": 0.0,
+        "hbm_busy_ns_exact": "0",
+        "hbm_direction_order": [
+          "read",
+          "write"
+        ],
+        "hbm_served_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "hbm_served_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "hbm_shared_ns": 0.0,
+        "hbm_shared_ns_exact": "0",
+        "internal_events": 35,
+        "legacy_unclassified_hbm_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "legacy_unclassified_typed_totals_unknown": false,
+        "now_ns": 0,
+        "row_busy_ns": [
+          0.0,
+          0.0
+        ],
+        "row_busy_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_ns": [
+          0.0,
+          0.0
+        ],
+        "row_shared_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_owners": [
+          1,
+          1
+        ],
+        "runtime_generation": 36,
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        },
+        "served_category_totals_semantics": "complete_lifetime_totals",
+        "transaction_registry_size": 0,
+        "typed_totals_history_complete": true
+      },
+      "credit_case": 0,
+      "domains": 13,
+      "initial_snapshot_bytes": 4605,
+      "owners": 1,
+      "p50_ns": 5137,
+      "p95_budget_ns": 50000,
+      "p95_ns": 11567,
+      "samples_ns": [
+        5248,
+        5588,
+        5177,
+        5308,
+        5137,
+        5238,
+        5088,
+        5268,
+        11567,
+        98939,
+        6470,
+        5288,
+        5148,
+        5117,
+        5067,
+        5138,
+        5098,
+        5358,
+        5188,
+        5107,
+        5088,
+        5108,
+        5047,
+        5098,
+        5118,
+        5098,
+        5077,
+        5098,
+        5148,
+        5037
+      ],
+      "status": "measured"
+    },
+    {
+      "active_activities": 3,
+      "budget_met": true,
+      "counters": {
+        "accounting_history_complete": true,
+        "active_activities": 3,
+        "active_hbm_owners": 1,
+        "active_owners": 1,
+        "allocation_updates": 36,
+        "capacity": [
+          1.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0
+        ],
+        "compute_busy_ns": 0.0,
+        "compute_busy_ns_exact": "0",
+        "endpoint_registry_size": 0,
+        "hardware_raw": {
+          "available": true,
+          "hardware_fingerprint": "sha256:55f8dddda17652dd5ca7fac25e0c5df61959a15bc1ca6fbd79cbbee2405606b5",
+          "hbm_row_peak_Bps": [
+            2355200000000.0,
+            2355200000000.0
+          ],
+          "peak_int4_ops_per_s": 769296000000000.0,
+          "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+        },
+        "hbm_busy_ns": 0.0,
+        "hbm_busy_ns_exact": "0",
+        "hbm_direction_order": [
+          "read",
+          "write"
+        ],
+        "hbm_served_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "hbm_served_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "hbm_shared_ns": 0.0,
+        "hbm_shared_ns_exact": "0",
+        "internal_events": 35,
+        "legacy_unclassified_hbm_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "legacy_unclassified_typed_totals_unknown": false,
+        "now_ns": 0,
+        "row_busy_ns": [
+          0.0,
+          0.0
+        ],
+        "row_busy_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_ns": [
+          0.0,
+          0.0
+        ],
+        "row_shared_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_owners": [
+          1,
+          1
+        ],
+        "runtime_generation": 36,
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        },
+        "served_category_totals_semantics": "complete_lifetime_totals",
+        "transaction_registry_size": 0,
+        "typed_totals_history_complete": true
+      },
+      "credit_case": 1,
+      "domains": 13,
+      "initial_snapshot_bytes": 4589,
+      "owners": 1,
+      "p50_ns": 8112,
+      "p95_budget_ns": 50000,
+      "p95_ns": 8383,
+      "samples_ns": [
+        8102,
+        8543,
+        8142,
+        8383,
+        8132,
+        8143,
+        8112,
+        8222,
+        8122,
+        8082,
+        8192,
+        8222,
+        8162,
+        8092,
+        8142,
+        8083,
+        8082,
+        8152,
+        8042,
+        8042,
+        7982,
+        8303,
+        8122,
+        8152,
+        8053,
+        8062,
+        8052,
+        8112,
+        8022,
+        8052
+      ],
+      "status": "measured"
+    },
+    {
+      "active_activities": 3,
+      "budget_met": true,
+      "counters": {
+        "accounting_history_complete": true,
+        "active_activities": 3,
+        "active_hbm_owners": 1,
+        "active_owners": 1,
+        "allocation_updates": 36,
+        "capacity": [
+          1.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0
+        ],
+        "compute_busy_ns": 0.0,
+        "compute_busy_ns_exact": "0",
+        "endpoint_registry_size": 0,
+        "hardware_raw": {
+          "available": true,
+          "hardware_fingerprint": "sha256:55f8dddda17652dd5ca7fac25e0c5df61959a15bc1ca6fbd79cbbee2405606b5",
+          "hbm_row_peak_Bps": [
+            2355200000000.0,
+            2355200000000.0
+          ],
+          "peak_int4_ops_per_s": 769296000000000.0,
+          "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+        },
+        "hbm_busy_ns": 0.0,
+        "hbm_busy_ns_exact": "0",
+        "hbm_direction_order": [
+          "read",
+          "write"
+        ],
+        "hbm_served_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "hbm_served_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "hbm_shared_ns": 0.0,
+        "hbm_shared_ns_exact": "0",
+        "internal_events": 35,
+        "legacy_unclassified_hbm_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "legacy_unclassified_typed_totals_unknown": false,
+        "now_ns": 0,
+        "row_busy_ns": [
+          0.0,
+          0.0
+        ],
+        "row_busy_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_ns": [
+          0.0,
+          0.0
+        ],
+        "row_shared_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_owners": [
+          1,
+          1
+        ],
+        "runtime_generation": 36,
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        },
+        "served_category_totals_semantics": "complete_lifetime_totals",
+        "transaction_registry_size": 0,
+        "typed_totals_history_complete": true
+      },
+      "credit_case": 2,
+      "domains": 13,
+      "initial_snapshot_bytes": 4589,
+      "owners": 1,
+      "p50_ns": 8092,
+      "p95_budget_ns": 50000,
+      "p95_ns": 8223,
+      "samples_ns": [
+        7962,
+        8193,
+        8082,
+        8372,
+        8063,
+        8132,
+        8172,
+        8173,
+        8222,
+        8032,
+        8032,
+        8062,
+        8022,
+        8092,
+        8052,
+        8042,
+        8082,
+        8032,
+        7992,
+        8042,
+        8132,
+        8132,
+        8202,
+        8223,
+        8162,
+        8152,
+        8183,
+        8202,
+        8152,
+        8043
+      ],
+      "status": "measured"
+    },
+    {
+      "active_activities": 24,
+      "budget_met": false,
+      "counters": {
+        "accounting_history_complete": true,
+        "active_activities": 24,
+        "active_hbm_owners": 8,
+        "active_owners": 8,
+        "allocation_updates": 43,
+        "capacity": [
+          1.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0
+        ],
+        "compute_busy_ns": 0.0,
+        "compute_busy_ns_exact": "0",
+        "endpoint_registry_size": 0,
+        "hardware_raw": {
+          "available": true,
+          "hardware_fingerprint": "sha256:55f8dddda17652dd5ca7fac25e0c5df61959a15bc1ca6fbd79cbbee2405606b5",
+          "hbm_row_peak_Bps": [
+            2355200000000.0,
+            2355200000000.0
+          ],
+          "peak_int4_ops_per_s": 769296000000000.0,
+          "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+        },
+        "hbm_busy_ns": 0.0,
+        "hbm_busy_ns_exact": "0",
+        "hbm_direction_order": [
+          "read",
+          "write"
+        ],
+        "hbm_served_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "hbm_served_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "hbm_shared_ns": 0.0,
+        "hbm_shared_ns_exact": "0",
+        "internal_events": 35,
+        "legacy_unclassified_hbm_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "legacy_unclassified_typed_totals_unknown": false,
+        "now_ns": 0,
+        "row_busy_ns": [
+          0.0,
+          0.0
+        ],
+        "row_busy_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_ns": [
+          0.0,
+          0.0
+        ],
+        "row_shared_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_owners": [
+          8,
+          8
+        ],
+        "runtime_generation": 43,
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        },
+        "served_category_totals_semantics": "complete_lifetime_totals",
+        "transaction_registry_size": 0,
+        "typed_totals_history_complete": true
+      },
+      "credit_case": 0,
+      "domains": 13,
+      "initial_snapshot_bytes": 22980,
+      "owners": 8,
+      "p50_ns": 59259,
+      "p95_budget_ns": 50000,
+      "p95_ns": 276716,
+      "samples_ns": [
+        58868,
+        59430,
+        58969,
+        58718,
+        124457,
+        60792,
+        58838,
+        4207589,
+        113991,
+        67411,
+        61573,
+        276716,
+        136385,
+        131077,
+        60832,
+        60972,
+        61111,
+        58948,
+        89255,
+        59729,
+        59259,
+        58638,
+        58418,
+        57987,
+        58037,
+        58849,
+        57927,
+        58258,
+        57676,
+        58048
+      ],
+      "status": "measured"
+    },
+    {
+      "active_activities": 24,
+      "credit_case": 1,
+      "domains": 13,
+      "error": "numerical_failure: simplex exceeded global 256-pivot budget",
+      "owners": 8,
+      "status": "failed"
+    },
+    {
+      "active_activities": 24,
+      "credit_case": 2,
+      "domains": 13,
+      "error": "numerical_failure: simplex exceeded global 256-pivot budget",
+      "owners": 8,
+      "status": "failed"
+    },
+    {
+      "active_activities": 96,
+      "budget_met": false,
+      "counters": {
+        "accounting_history_complete": true,
+        "active_activities": 96,
+        "active_hbm_owners": 32,
+        "active_owners": 32,
+        "allocation_updates": 67,
+        "capacity": [
+          1.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0,
+          1000000.0
+        ],
+        "compute_busy_ns": 0.0,
+        "compute_busy_ns_exact": "0",
+        "endpoint_registry_size": 0,
+        "hardware_raw": {
+          "available": true,
+          "hardware_fingerprint": "sha256:55f8dddda17652dd5ca7fac25e0c5df61959a15bc1ca6fbd79cbbee2405606b5",
+          "hbm_row_peak_Bps": [
+            2355200000000.0,
+            2355200000000.0
+          ],
+          "peak_int4_ops_per_s": 769296000000000.0,
+          "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+        },
+        "hbm_busy_ns": 0.0,
+        "hbm_busy_ns_exact": "0",
+        "hbm_direction_order": [
+          "read",
+          "write"
+        ],
+        "hbm_served_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "hbm_served_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "hbm_shared_ns": 0.0,
+        "hbm_shared_ns_exact": "0",
+        "internal_events": 35,
+        "legacy_unclassified_hbm_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "legacy_unclassified_typed_totals_unknown": false,
+        "now_ns": 0,
+        "row_busy_ns": [
+          0.0,
+          0.0
+        ],
+        "row_busy_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_ns": [
+          0.0,
+          0.0
+        ],
+        "row_shared_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_owners": [
+          32,
+          32
+        ],
+        "runtime_generation": 67,
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        },
+        "served_category_totals_semantics": "complete_lifetime_totals",
+        "transaction_registry_size": 0,
+        "typed_totals_history_complete": true
+      },
+      "credit_case": 0,
+      "domains": 13,
+      "initial_snapshot_bytes": 86185,
+      "owners": 32,
+      "p50_ns": 2328913,
+      "p95_budget_ns": 50000,
+      "p95_ns": 38535577,
+      "samples_ns": [
+        2155232,
+        2328913,
+        2945119,
+        1820017,
+        4807591,
+        1789051,
+        38535577,
+        1817143,
+        6106504,
+        1790713,
+        10546351,
+        6641859,
+        2232378,
+        6012703,
+        1881009,
+        5849838,
+        1891665,
+        5824330,
+        2002342,
+        1693797,
+        5882928,
+        1897103,
+        38857882,
+        2142882,
+        2293319,
+        5964911,
+        5914705,
+        10719693,
+        1828751,
+        5998211
+      ],
+      "status": "measured"
+    },
+    {
+      "active_activities": 96,
+      "credit_case": 1,
+      "domains": 13,
+      "error": "numerical_failure: simplex exceeded global 256-pivot budget",
+      "owners": 32,
+      "status": "failed"
+    },
+    {
+      "active_activities": 96,
+      "credit_case": 2,
+      "domains": 13,
+      "error": "numerical_failure: simplex exceeded global 256-pivot budget",
+      "owners": 32,
+      "status": "failed"
+    }
+  ],
+  "fixture_kind": "synthetic signed-credit L/C/S; no granularity certificate",
+  "schema": "arbiter_host_probe_v1"
+}

@@ -340,6 +340,67 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     };
 
     try {
+        // Workspace wire/view and Python's capacity response are part of the
+        // mandatory preflight, including --online-validate=0. No graph,
+        // capacity view, or lease ledger can change on a schema/snapshot
+        // mismatch.
+        if (delta.schema_version != batch.schema_version) {
+            return fail("request/response schema_version mismatch");
+        }
+        if (batch.source_delivery_sequence != delta.delivery_sequence) {
+            return fail("source_delivery_sequence " +
+                        std::to_string(batch.source_delivery_sequence) +
+                        " != delivery_sequence " +
+                        std::to_string(delta.delivery_sequence));
+        }
+        if (ctx_.workspace_admission_required) {
+            if (delta.schema_version != 2 || batch.schema_version != 2 ||
+                !batch.has_workspace_capacity_snapshot) {
+                return fail(
+                    "coarse_die_v2 requires bridge v2 workspace capacity "
+                    "snapshot");
+            }
+            const size_t rank_count =
+                static_cast<size_t>(std::max(ctx_.num_ranks, 0));
+            if (delta.workspace_state.size() != rank_count ||
+                batch.workspace_capacity_snapshot.size() != rank_count) {
+                return fail(
+                    "workspace request and capacity snapshots must cover "
+                    "every configured rank");
+            }
+            for (size_t i = 0; i < rank_count; ++i) {
+                const auto& request_state = delta.workspace_state[i];
+                const auto& capacity = batch.workspace_capacity_snapshot[i];
+                if (request_state.rank != static_cast<int>(i) ||
+                    capacity.rank != static_cast<int>(i) ||
+                    request_state.workspace_revision !=
+                        capacity.workspace_revision) {
+                    return fail(
+                        "workspace capacity snapshot does not echo the full "
+                        "request rank/revision table");
+                }
+            }
+            if (!ctx_.validate_workspace_capacity_snapshot ||
+                !ctx_.install_workspace_capacity_snapshot) {
+                return fail(
+                    "coarse_die_v2 committer has no workspace snapshot "
+                    "owner");
+            }
+            if (auto workspace_error =
+                    ctx_.validate_workspace_capacity_snapshot(
+                        delta.workspace_state,
+                        batch.workspace_capacity_snapshot)) {
+                return fail("workspace capacity snapshot rejected: " +
+                            *workspace_error);
+            }
+        } else if (delta.schema_version != 1 || batch.schema_version != 1 ||
+                   !delta.workspace_state.empty() ||
+                   batch.has_workspace_capacity_snapshot) {
+            return fail(
+                "bridge v2 workspace state is unsupported without the "
+                "coarse_die_v2 backend");
+        }
+
         // [epoch] M2-2 (2026-09-26 face parity, sunk here 2026-10-01 from
         // validate_impl): the commit ack echoes batch_id verbatim back to
         // Python's ledger, so a production commit (--online-validate=0,
@@ -1785,13 +1846,60 @@ void GraphBatchCommitter::commit_after_preflight(
         ctx_.ingress->schedule_future_arrival(envelope);
     }
 
+    // The snapshot was fully parsed and validated before Phase B. Install
+    // Python's post-KV-mutation authority view only after all response graph
+    // state is committed, but before any rank can issue a new Plan.
+    commit_workspace_changed_ranks_.clear();
+    if (batch.schema_version == 2) {
+        ctx_.install_workspace_capacity_snapshot(
+            batch.workspace_capacity_snapshot,
+            commit_workspace_changed_ranks_);
+        std::sort(commit_workspace_changed_ranks_.begin(),
+                  commit_workspace_changed_ranks_.end());
+        commit_workspace_changed_ranks_.erase(
+            std::unique(commit_workspace_changed_ranks_.begin(),
+                        commit_workspace_changed_ranks_.end()),
+            commit_workspace_changed_ranks_.end());
+        for (const int rank : commit_workspace_changed_ranks_) {
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                throw std::runtime_error(
+                    "workspace snapshot installer returned an invalid rank " +
+                    std::to_string(rank));
+            }
+        }
+    }
+
     // ---- Phase B-5: issue pass over the TOUCHED ranks only (ranks without
     //      new nodes cannot have new free nodes -- the completion hook's
     //      deferred per-rank passes drain every other rank) ----
     // Reuse the sorted-unique rank set collected by the mandatory id-stream
     // preflight.  Re-walking every JSON node here used to add a second
     // O(nodes) pass plus an allocating std::set on every committed batch.
-    for (const int rank : touched_ranks) {
+    // A capacity-only change can unblock an existing free node on a rank
+    // without new graph nodes. Merge the changed and touched sets into one
+    // sorted issue pass per rank.
+    commit_issue_ranks_.clear();
+    size_t touched_index = 0;
+    size_t changed_index = 0;
+    while (touched_index < touched_ranks.size() ||
+           changed_index < commit_workspace_changed_ranks_.size()) {
+        int rank = 0;
+        if (changed_index >= commit_workspace_changed_ranks_.size() ||
+            (touched_index < touched_ranks.size() &&
+             touched_ranks[touched_index] <
+                 commit_workspace_changed_ranks_[changed_index])) {
+            rank = touched_ranks[touched_index++];
+        } else if (touched_index >= touched_ranks.size() ||
+                   commit_workspace_changed_ranks_[changed_index] <
+                       touched_ranks[touched_index]) {
+            rank = commit_workspace_changed_ranks_[changed_index++];
+        } else {
+            rank = touched_ranks[touched_index++];
+            ++changed_index;
+        }
+        commit_issue_ranks_.push_back(rank);
+    }
+    for (const int rank : commit_issue_ranks_) {
         ctx_.issue_rank(rank);
     }
 

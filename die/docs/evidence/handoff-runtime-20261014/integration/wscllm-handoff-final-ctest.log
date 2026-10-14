@@ -1,0 +1,19 @@
+Test project /workspace/template/work/integration-build/build/astra-sim-wscllm
+    Start 15: AstraSim_Analytical_WorkspaceAdmissionTest
+1/7 Test #15: AstraSim_Analytical_WorkspaceAdmissionTest .......................   Passed    0.00 sec
+    Start 19: AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
+2/7 Test #19: AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest .........   Passed    0.00 sec
+    Start 20: AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
+3/7 Test #20: AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest .....   Passed    8.72 sec
+    Start 21: AstraSim_Analytical_Congestion_Aware_ParsedBatchTest
+4/7 Test #21: AstraSim_Analytical_Congestion_Aware_ParsedBatchTest .............   Passed    0.01 sec
+    Start 44: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+5/7 Test #44: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.01 sec
+    Start 45: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+6/7 Test #45: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...   Passed    0.02 sec
+    Start 46: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+7/7 Test #46: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.00 sec
+
+100% tests passed out of 7
+
+Total Test time (real) =   8.76 sec

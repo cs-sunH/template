@@ -38,6 +38,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/BasicLogicalTopology.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
 #include "astra-sim/workload/CoarseDieRuntime.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 #include "DieModel.hh"
 #include "coarse_die/Hardware.hh"
 #include <json/json.hpp>
@@ -909,6 +910,32 @@ void Sys::initialize_sys_fields(const string& name, ifstream& inFile) {
         }
     }
 
+    // Workspace admission is an explicit bridge capability. The default
+    // `auto` keeps legacy profiles on schema v1 while making coarse_die_v2
+    // require the full workspace view/snapshot protocol. Explicit overrides
+    // are useful for legacy deployments, but cannot silently disable
+    // admission for a coarse backend or enable v2 without one.
+    const char* const workspace_mode_env =
+        std::getenv("SH_WORKSPACE_ADMISSION");
+    const std::string workspace_mode =
+        workspace_mode_env == nullptr ? "auto" : workspace_mode_env;
+    if (workspace_mode != "auto" && workspace_mode != "required" &&
+        workspace_mode != "off") {
+        sys_panic("SH_WORKSPACE_ADMISSION must be auto|required|off (got '" +
+                  workspace_mode + "')");
+    }
+    const bool coarse_workspace_backend =
+        coarse_die_runtime != nullptr && workspace_admission != nullptr;
+    if (workspace_mode == "required" && !coarse_workspace_backend) {
+        sys_panic("SH_WORKSPACE_ADMISSION=required needs the coarse_die_v2 "
+                  "compute-cost backend");
+    }
+    if (workspace_mode == "off" && coarse_workspace_backend) {
+        sys_panic("SH_WORKSPACE_ADMISSION=off is incompatible with "
+                  "coarse_die_v2; refusing to issue Plans without "
+                  "workspace admission");
+    }
+
     // Unknown-key gate (3.12, 2026-09-29): this reader only consumed known
     // keys and silently ignored everything else, so a typo'd template key
     // ("endpoint-dely", "roofline-enable") fell back to the built-in
@@ -1037,6 +1064,8 @@ void Sys::initialize_die_backend(
         }
         coarse_die_runtime = std::make_unique<CoarseDieRuntime>(
             this, std::move(coarse_hw));
+        workspace_admission =
+            std::make_unique<WorkspaceAdmission>(this->id);
         die_runtime.reset();
         die_model_profile = "coarse_die_v2";
         // Keep the legacy scalar slot only as a compatibility report value;

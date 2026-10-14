@@ -28,9 +28,15 @@ Responsibilities (one adapter per Workload, owned by the Workload):
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
+
+namespace coarse_die {
+struct Plan;
+}
 
 namespace AstraSim {
 
@@ -40,6 +46,13 @@ class DieExecution;
 
 class DieModelAdapter {
   public:
+    struct PreparedCoarsePlan {
+        std::shared_ptr<const coarse_die::Plan> plan;
+        uint64_t workspace_bytes = 0;
+        uint64_t node_id = 0;
+        uint64_t generation = 0;
+    };
+
     explicit DieModelAdapter(Workload* workload);
     ~DieModelAdapter();
 
@@ -48,6 +61,20 @@ class DieModelAdapter {
     // calling). Throws std::runtime_error when the node carries no
     // die_op_spec (fail-closed, never a silent roofline fallback).
     void issue_die(const ExecutionDriven::NodeView& node);
+
+    /// Compile/cache before graph take/COMP occupy. The returned immutable
+    /// Plan is passed unchanged through admission and Runtime submission.
+    PreparedCoarsePlan prepare_coarse_plan(
+        const ExecutionDriven::NodeView& node);
+    WorkspaceAdmission::AcquireResult try_acquire_workspace(
+        const PreparedCoarsePlan& prepared);
+    void issue_prepared_coarse_plan(
+        const ExecutionDriven::NodeView& node,
+        PreparedCoarsePlan prepared,
+        WorkspaceAdmission::Lease lease);
+    /// Explicit live cancellation terminalizes the graph node as Skipped;
+    /// shutdown uses notify=false and does not issue a retry pass.
+    void cancel_coarse_node(uint64_t node_id, uint64_t now_ns);
 
     // Whether any outer node still has a live DieExecution. Purges retired
     // entries first (they linger only until the next adapter entry point).
@@ -68,7 +95,13 @@ class DieModelAdapter {
     Workload* workload_;
     Sys* sys_;
     std::vector<std::unique_ptr<DieExecution>> active_;
-    std::map<uint64_t, uint64_t> coarse_active_;
+    struct CoarseActiveRecord {
+        uint64_t node_id = 0;
+        uint64_t generation = 0;
+        std::shared_ptr<const coarse_die::Plan> plan;
+        WorkspaceAdmission::Lease lease;
+    };
+    std::map<uint64_t, CoarseActiveRecord> coarse_active_;
 };
 
 }  // namespace AstraSim

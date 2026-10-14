@@ -1,0 +1,390 @@
+{
+  "fixed_width_numeric_check": {
+    "format": "128-bit fractional outward-rounded interval endpoints; checked <=256-bit stored words and <=512-bit product scratch",
+    "maximum_fixed_point_endpoint_bits": 162,
+    "maximum_product_scratch_bits": 274,
+    "multiplication_product_bit_limit": 512,
+    "no_epsilon_cycle_equality_or_unbounded_integer_powering": true,
+    "repeat_power_algorithm": "binary composition of the 3x3 state-plus-ledger affine transform",
+    "small_repeat_exact_crosscheck_count": 123,
+    "small_repeat_state_interval": {
+      "hi": "18580968123818990518572987796598872817/170141183460469231731687303715884105728",
+      "lo": "37161936247637981037145975593197745623/340282366920938463463374607431768211456",
+      "width": "11/340282366920938463463374607431768211456"
+    },
+    "stored_endpoint_bit_limit": 256,
+    "tail_bound_repeat_count": 995,
+    "tail_ledger_intervals": {
+      "busy_compute_s": {
+        "hi": "4488979088704350512142947181543427780375/42535295865117307932921825928971026432",
+        "lo": "17955916354817402048571788726173711120379/170141183460469231731687303715884105728",
+        "width": "1121/170141183460469231731687303715884105728"
+      },
+      "busy_hbm0_s": {
+        "hi": "8905578052573664347842822065379171064583/340282366920938463463374607431768211456",
+        "lo": "8905578052573664347842822065379171062377/340282366920938463463374607431768211456",
+        "width": "1103/170141183460469231731687303715884105728"
+      },
+      "busy_hbm1_s": {
+        "hi": "8905578052573664347842822065379171064583/340282366920938463463374607431768211456",
+        "lo": "8905578052573664347842822065379171062377/340282366920938463463374607431768211456",
+        "width": "1103/170141183460469231731687303715884105728"
+      },
+      "busy_hbm_union_s": {
+        "hi": "8905578052573664347842822065379171064583/340282366920938463463374607431768211456",
+        "lo": "8905578052573664347842822065379171062377/340282366920938463463374607431768211456",
+        "width": "1103/170141183460469231731687303715884105728"
+      },
+      "compute_gate_s": {
+        "hi": "4488979088704350512142947181543427780375/42535295865117307932921825928971026432",
+        "lo": "17955916354817402048571788726173711120379/170141183460469231731687303715884105728",
+        "width": "1121/170141183460469231731687303715884105728"
+      },
+      "compute_ops": {
+        "hi": "2840913261993790082516834125100299878721726177377/170141183460469231731687303715884105728",
+        "lo": "5681826523987580165033668250200599757442995020237/340282366920938463463374607431768211456",
+        "width": "457334517/340282366920938463463374607431768211456"
+      },
+      "hbm0_bytes": {
+        "hi": "445278902628683217392141103268958553191423249909/340282366920938463463374607431768211456",
+        "lo": "222639451314341608696070551634479276595670515507/170141183460469231731687303715884105728",
+        "width": "82218895/340282366920938463463374607431768211456"
+      },
+      "hbm1_bytes": {
+        "hi": "445278902628683217392141103268958553191423249909/340282366920938463463374607431768211456",
+        "lo": "222639451314341608696070551634479276595670515507/170141183460469231731687303715884105728",
+        "width": "82218895/340282366920938463463374607431768211456"
+      },
+      "local_bytes": {
+        "hi": "1245586602164162277006246241524379154167303540489/340282366920938463463374607431768211456",
+        "lo": "1245586602164162277006246241524379154167208845681/340282366920938463463374607431768211456",
+        "width": "11836851/42535295865117307932921825928971026432"
+      },
+      "time_s": {
+        "hi": "4488979088704350512142947181543427780375/42535295865117307932921825928971026432",
+        "lo": "17955916354817402048571788726173711120379/170141183460469231731687303715884105728",
+        "width": "1121/170141183460469231731687303715884105728"
+      }
+    },
+    "tail_state_interval": {
+      "hi": "37161936247637981037145975593197745637/340282366920938463463374607431768211456",
+      "lo": "37161936247637981037145975593197745623/340282366920938463463374607431768211456",
+      "width": "7/170141183460469231731687303715884105728"
+    }
+  },
+  "full_two_output_cross_check": {
+    "a_half_squared_equals_a_full": true,
+    "boundary_corrected_conservation_maps": {
+      "compute_gate_s": {
+        "intercept": "10089810999798715433/95049295471856250000",
+        "slope": "-55861345024/69625455062625"
+      },
+      "compute_ops": {
+        "intercept": "40359243999194861732/2403026128125",
+        "slope": "-3575126081536/28164213"
+      },
+      "hbm0_bytes": {
+        "intercept": "1054649517326504728/800415119763",
+        "slope": "-668998144000000/29315981079"
+      },
+      "hbm1_bytes": {
+        "intercept": "1054649517326504728/800415119763",
+        "slope": "-668998144000000/29315981079"
+      },
+      "local_bytes": {
+        "intercept": "141556246960383466187/38448418050000",
+        "slope": "-740246446336/28164213"
+      }
+    },
+    "cycle_ledger_maps": {
+      "busy_compute_s": {
+        "intercept": "43498643214866702774924171/204936926558414922900000000",
+        "slope": "-10493508275415568/9382517447874157125"
+      },
+      "busy_hbm0_s": {
+        "intercept": "568159813620401936499569/10786154029390259100000000",
+        "slope": "-62835378894704/98763341556570075"
+      },
+      "busy_hbm1_s": {
+        "intercept": "568159813620401936499569/10786154029390259100000000",
+        "slope": "-62835378894704/98763341556570075"
+      },
+      "busy_hbm_union_s": {
+        "intercept": "568159813620401936499569/10786154029390259100000000",
+        "slope": "-62835378894704/98763341556570075"
+      },
+      "compute_gate_s": {
+        "intercept": "43498643214866702774924171/204936926558414922900000000",
+        "slope": "-10493508275415568/9382517447874157125"
+      },
+      "compute_ops": {
+        "intercept": "43498643214866702774924171/1295298367790962500",
+        "slope": "-671584529626596352/3795324851241"
+      },
+      "hbm0_bytes": {
+        "intercept": "568159813620401936499569/215723080587805182",
+        "slope": "-125670757789408000000/3950533662262803"
+      },
+      "hbm1_bytes": {
+        "intercept": "568159813620401936499569/215723080587805182",
+        "slope": "-125670757789408000000/3950533662262803"
+      },
+      "local_bytes": {
+        "intercept": "610278043577608980263386769/82899095538621600000",
+        "slope": "-139054693493979952/3795324851241"
+      },
+      "time_s": {
+        "intercept": "43498643214866702774924171/204936926558414922900000000",
+        "slope": "-10493508275415568/9382517447874157125"
+      }
+    },
+    "map_equal": true,
+    "nested_map": {
+      "intercept": "1648756992419734626143/17871299754010214400000",
+      "slope": "721607775625/4648818956544"
+    },
+    "one_half_symbolic_event_templates_executed": 32,
+    "one_output_conservation_expected_at_initial_phase": {
+      "compute_gate_s": "2763637507254300528347599237577215136435654850937/26072804788488400237038637146261676252569600000000",
+      "compute_ops": "2763637507254300528347599237577215136435654850937/164792465923095010852496821726384665600000",
+      "hbm0_bytes": "36040202568725863373124853291074343560176090203/27445057672093052881093302259222817107968",
+      "hbm1_bytes": "36040202568725863373124853291074343560176090203/27445057672093052881093302259222817107968",
+      "local_bytes": "38775968374120408690776032568545902468294283149243/10546717819078080694559796590488618598400000"
+    },
+    "one_output_integral_at_initial_phase": {
+      "busy_compute_s": "2763637507254300528347599237577215136435654850937/26072804788488400237038637146261676252569600000000",
+      "busy_hbm0_s": "36040202568725863373124853291074343560176090203/1372252883604652644054665112961140855398400000000",
+      "busy_hbm1_s": "36040202568725863373124853291074343560176090203/1372252883604652644054665112961140855398400000000",
+      "busy_hbm_union_s": "36040202568725863373124853291074343560176090203/1372252883604652644054665112961140855398400000000",
+      "compute_gate_s": "2763637507254300528347599237577215136435654850937/26072804788488400237038637146261676252569600000000",
+      "compute_ops": "2763637507254300528347599237577215136435654850937/164792465923095010852496821726384665600000",
+      "hbm0_bytes": "36040202568725863373124853291074343560176090203/27445057672093052881093302259222817107968",
+      "hbm1_bytes": "36040202568725863373124853291074343560176090203/27445057672093052881093302259222817107968",
+      "local_bytes": "38775968374120408690776032568545902468294283149243/10546717819078080694559796590488618598400000",
+      "time_s": "2763637507254300528347599237577215136435654850937/26072804788488400237038637146261676252569600000000"
+    },
+    "saved_flat_520_map": {
+      "intercept": "1648756992419734626143/17871299754010214400000",
+      "slope": "721607775625/4648818956544"
+    },
+    "second_half_symbolic_event_templates_executed": 32,
+    "two_half_ledgers_reproduce_saved_cycle_time": true
+  },
+  "nested_category_representation": {
+    "K_macros_per_output_segment": 65,
+    "category_classes_per_output": [
+      {
+        "name": "K0_start",
+        "repeat_count": 1,
+        "representative_group": 0
+      },
+      {
+        "name": "K_middle_identity",
+        "repeat_count": 58,
+        "representative_group": 1,
+        "state_transform": "identity"
+      },
+      {
+        "name": "K_output_boundary_59",
+        "repeat_count": 1,
+        "representative_group": 59
+      },
+      {
+        "name": "K_output_boundary_60",
+        "repeat_count": 1,
+        "representative_group": 60
+      },
+      {
+        "name": "K_output_boundary_61",
+        "repeat_count": 1,
+        "representative_group": 61
+      },
+      {
+        "name": "K_output_boundary_62",
+        "repeat_count": 1,
+        "representative_group": 62
+      },
+      {
+        "name": "K_output_boundary_63",
+        "repeat_count": 1,
+        "representative_group": 63
+      },
+      {
+        "name": "K_output_boundary_64",
+        "repeat_count": 1,
+        "representative_group": 64
+      }
+    ],
+    "category_template_steps_for_full_saved_cycle": 64,
+    "event_intervals_per_K_macro": 4,
+    "flat_interval_to_template_event_ratio": "520/64=8.125",
+    "middle_lifecycle_transform": "shift every active/queued wave and next_load by +1; retired unchanged",
+    "middle_run_count": 58,
+    "middle_run_formula": "Ktiles - phase_offset - 3",
+    "middle_state_map_exact_identity": true,
+    "no_full_wave_or_per_output_array_materialized": true,
+    "output_segments_per_joint_two_output_cycle": 2,
+    "phase_offset_K_waves": 4,
+    "repeated_templates_independently_re_solved_grouped_LP_events": 32,
+    "representative_category_signatures_match_all_source_positions": true,
+    "source_K_macros": 130,
+    "source_intervals": 520,
+    "unique_event_steps_per_output": 32,
+    "unique_event_templates_per_output": 8
+  },
+  "one_output_affine_transform": {
+    "active_progress_within_unit_interval": [
+      "0",
+      "7138707897019462084223015814198457957902341/7152768575444570232620264105003345510400000"
+    ],
+    "all_selected_dt_positive_and_all_nonselected_margins_strict": true,
+    "checked_event_order_domain": {
+      "hi": "244491137/1235600000",
+      "lo": "7514576096093/71249638400000"
+    },
+    "fixed_point": "1645692165044367/15069183193600000",
+    "invariant_boundary_state_lines": {
+      "owner0_C": {
+        "intercept": "415317/3800000",
+        "slope": "125/209"
+      },
+      "owner1_L": {
+        "intercept": "0",
+        "slope": "800000/217547"
+      }
+    },
+    "ledger_maps": {
+      "busy_compute_s": {
+        "intercept": "10089810999798715433/95049295471856250000",
+        "slope": "-55861345024/69625455062625"
+      },
+      "busy_hbm0_s": {
+        "intercept": "131831189665813091/5002594498518750000",
+        "slope": "-334499072/732899526975"
+      },
+      "busy_hbm1_s": {
+        "intercept": "131831189665813091/5002594498518750000",
+        "slope": "-334499072/732899526975"
+      },
+      "busy_hbm_union_s": {
+        "intercept": "131831189665813091/5002594498518750000",
+        "slope": "-334499072/732899526975"
+      },
+      "compute_gate_s": {
+        "intercept": "10089810999798715433/95049295471856250000",
+        "slope": "-55861345024/69625455062625"
+      },
+      "compute_ops": {
+        "intercept": "40359243999194861732/2403026128125",
+        "slope": "-3575126081536/28164213"
+      },
+      "hbm0_bytes": {
+        "intercept": "1054649517326504728/800415119763",
+        "slope": "-668998144000000/29315981079"
+      },
+      "hbm1_bytes": {
+        "intercept": "1054649517326504728/800415119763",
+        "slope": "-668998144000000/29315981079"
+      },
+      "local_bytes": {
+        "intercept": "141556246960383466187/38448418050000",
+        "slope": "-740246446336/28164213"
+      },
+      "time_s": {
+        "intercept": "10089810999798715433/95049295471856250000",
+        "slope": "-55861345024/69625455062625"
+      }
+    },
+    "ledger_scope": {
+      "busy": "positive-rate union per COMPUTE_GATE, HBM0, HBM1, and HBM0-or-HBM1",
+      "compute_gate_s": "C-stage vec_ops / 158216000 ops/s",
+      "compute_ops": "C-stage vec_ops only, from each activity's own progress",
+      "hbm_bytes": "L/S physical payload bytes split across HBM0/HBM1 rows",
+      "local_bytes": "C-stage mapped LOCAL bytes; retained in canonical Q but not a fourth LP capacity"
+    },
+    "lifecycle_shift_per_output_per_owner": 65,
+    "minimum_nonselected_margin_over_orbit": "14060678425108148397248290804887552497659/5453085325217179744957762253468769177600000000",
+    "minimum_selected_dt_over_orbit": "1/312500",
+    "orbit_interval": {
+      "hi": "317921483913953891933450891003571855541/1629703480392930105404480315562393600000",
+      "lo": "1645692165044367/15069183193600000"
+    },
+    "phase_coordinate": "owner1 C progress at output-segment boundary",
+    "retired_outputs_per_output_segment": [
+      1,
+      1
+    ],
+    "x_next": {
+      "intercept": "548564055014789/8288669491200000",
+      "slope": "849475/2156112"
+    }
+  },
+  "qualification": "Nested exact affine composition for only the saved strict 1-Core OS FP32 GEMM, grouped LOCAL-Q allocator, offset 1/20, and full M/N category. It is not an arbitrary-offset or production Runtime certificate.",
+  "remaining_limits": [
+    "Only offset 1/20 and one 1-Core full-M/N OS region are covered.",
+    "The event-order templates come from the existing saved trace; no general bounded discovery algorithm is claimed.",
+    "Other offsets, multi-Core allocation bases, WR group fences, capacity changes, and cancellation require new category maps.",
+    "A stop inside an output segment requires the ordinary local event solver to integrate the residual; the affine skip stops at the last certified segment boundary.",
+    "The 128-bit interval prototype is a research evaluator, not production code or a GMP substitute certificate for unvalidated templates."
+  ],
+  "repeat_and_stop_bounds": {
+    "corresponding_complete_two_output_cycles": 497,
+    "external_stop_semantics": "skip only complete affine output segments whose outward-rounded cumulative time upper bound is <= the stop; leave the positive residual to the ordinary event integrator and then apply completion/cancel/external-event ordering",
+    "external_stop_test": {
+      "certificate": {
+        "binary_search_steps": 10,
+        "next_elapsed": {
+          "hi": "4475410614497085810722888847999515896783/340282366920938463463374607431768211456",
+          "lo": "2237705307248542905361444423999757948253/170141183460469231731687303715884105728",
+          "width": "277/340282366920938463463374607431768211456"
+        },
+        "safe_elapsed": {
+          "hi": "4439318281437226203046171639498542410737/340282366920938463463374607431768211456",
+          "lo": "4439318281437226203046171639498542410461/340282366920938463463374607431768211456",
+          "width": "69/85070591730234615865843651857942052864"
+        },
+        "stop": {
+          "hi": "1114341112046766727503159475043250852909/85070591730234615865843651857942052864",
+          "lo": "4457364448187066910012637900173003411635/340282366920938463463374607431768211456",
+          "width": "1/340282366920938463463374607431768211456"
+        }
+      },
+      "expected_and_certified_whole_segments": 123,
+      "stop_ns": 13099016821
+    },
+    "first_nonfull_output_tile": 999,
+    "first_nonfull_wave": 64935,
+    "full_category_output_segment_bound_by_owner": [
+      995,
+      996
+    ],
+    "initial_next_load_by_owner": [
+      197,
+      136
+    ],
+    "max_whole_output_segments_before_M_or_N_tail": 995,
+    "one_residual_full_output_segment_after_saved_497_cycles": 1,
+    "tail_boundary_is_not_crossed": true
+  },
+  "source": {
+    "affine_reference": "die/docs/analysis/bounded-lifecycle-20261014/output-cycle-v2/affine-cycle-proof.json",
+    "capacities": {
+      "COMPUTE_GATE": "1",
+      "HBM0_Bps": "50000000",
+      "HBM1_Bps": "50000000"
+    },
+    "event_trace": "die/docs/analysis/bounded-lifecycle-20261014/output-cycle-v2/affine-trace-complete-cycle.txt",
+    "geometry": {
+      "K": 4097,
+      "Ktiles": 65,
+      "M": 15985,
+      "Mtiles": 1000,
+      "N": 63937,
+      "Ntiles": 1000,
+      "Tk": 64,
+      "Tm": 16,
+      "Tn": 64
+    }
+  },
+  "status": "PASS"
+}

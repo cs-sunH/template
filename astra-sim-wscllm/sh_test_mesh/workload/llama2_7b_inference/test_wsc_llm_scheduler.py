@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 MODULE_DIR = Path(__file__).resolve().parent
@@ -35,6 +36,7 @@ from wsc_llm_scheduler import (  # noqa: E402
     select_prefill_instance,
 )
 from generate_wsc_llm_trace import (  # noqa: E402
+    _to_wsc_llm_hardware,
     load_wsc_llm_trace_config,
     select_first_session_requests,
 )
@@ -990,6 +992,124 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertFalse(builder.nodes)
         self.assertEqual([node.name for node in streamed], ["first", "second"])
         self.assertEqual(tuple(streamed[1].data_deps), (streamed[0].id,))
+
+
+class WscLlmTypedDieHardwareTests(unittest.TestCase):
+    """Coarse Die peak rates stay typed and never become roofline scalars."""
+
+    @staticmethod
+    def _hardware(**overrides):
+        values = {
+            "mesh_rows": 1,
+            "mesh_cols": 2,
+            "local_hbm_capacity_bytes": 144_000_000_000,
+            "local_hbm_bandwidth_gbps": 4_710.4,
+            "d2d_bandwidth_gbps": 4_050.0,
+            "peak_perf_tflops": None,
+            "d2d_latency_ns": 5,
+            "local_hbm_latency_ns": 100,
+            "die_profile": "coarse_die_v2",
+            "die_peak_int4_ops_s": 769_296_000_000_000.0,
+            "die_peak_vec_eqops_s": 76_924_619_200_000.0,
+        }
+        values.update(overrides)
+        return WscLlmHardware(**values)
+
+    def test_coarse_peak_rates_keep_typed_units_and_no_generic_peak(self) -> None:
+        hardware = self._hardware()
+        self.assertEqual(hardware.die_peak_int4_ops_s,
+                         769_296_000_000_000.0)
+        self.assertEqual(hardware.die_peak_vec_eqops_s,
+                         76_924_619_200_000.0)
+        self.assertIsNone(hardware.peak_perf_tflops)
+        with self.assertRaisesRegex(ValueError, "typed INT4/FP32-equivalent"):
+            hardware.require_legacy_peak_perf_tflops()
+
+    def test_coarse_compatibility_scalar_is_preserved_but_guarded(self) -> None:
+        hardware = self._hardware(peak_perf_tflops=2.5)
+        self.assertEqual(hardware.peak_perf_tflops, 2.5)
+        with self.assertRaisesRegex(ValueError, "typed INT4/FP32-equivalent"):
+            hardware.require_legacy_peak_perf_tflops()
+
+    def test_coarse_profile_requires_finite_positive_typed_rates(self) -> None:
+        for key, bad_value in (
+                ("die_peak_int4_ops_s", None),
+                ("die_peak_int4_ops_s", True),
+                ("die_peak_int4_ops_s", 0),
+                ("die_peak_int4_ops_s", float("inf")),
+                ("die_peak_vec_eqops_s", None),
+                ("die_peak_vec_eqops_s", False),
+                ("die_peak_vec_eqops_s", -1.0),
+                ("die_peak_vec_eqops_s", float("nan"))):
+            with self.subTest(key=key, bad_value=bad_value):
+                with self.assertRaisesRegex(ValueError, "finite positive rate"):
+                    self._hardware(**{key: bad_value})
+
+    def test_legacy_profile_keeps_positive_scalar_contract(self) -> None:
+        hardware = WscLlmHardware(
+            mesh_rows=1, mesh_cols=2, local_hbm_capacity_bytes=100,
+            local_hbm_bandwidth_gbps=1.0, d2d_bandwidth_gbps=1.0,
+            peak_perf_tflops=2.5, d2d_latency_ns=0,
+            local_hbm_latency_ns=0, die_profile="mesh_die_v1")
+        self.assertEqual(hardware.require_legacy_peak_perf_tflops(), 2.5)
+        with self.assertRaisesRegex(ValueError, "peak_perf_tflops"):
+            WscLlmHardware(
+                mesh_rows=1, mesh_cols=2, local_hbm_capacity_bytes=100,
+                local_hbm_bandwidth_gbps=1.0, d2d_bandwidth_gbps=1.0,
+                peak_perf_tflops=None, d2d_latency_ns=0,
+                local_hbm_latency_ns=0, die_profile="mesh_die_v1")
+
+    def test_coarse_adapter_copies_typed_rates_without_unit_conversion(self) -> None:
+        resolved = SimpleNamespace(
+            mesh_rows=1,
+            mesh_cols=2,
+            local_hbm_capacity_bytes=144_000_000_000,
+            local_hbm_bandwidth_gbps=4_710.4,
+            d2d_bandwidth_gbps=4_050.0,
+            peak_perf_tflops=None,
+            d2d_latency_ns=5,
+            local_hbm_latency_ns=100,
+            label="tiny coarse hardware",
+            die_profile="coarse_die_v2",
+            die_derived={"hardware_summary": {
+                "peak_int4_ops_per_s": 769_296_000_000_000.0,
+                "peak_vec_fp32_eq_ops_per_s": 76_924_619_200_000.0,
+            }},
+        )
+        hardware = _to_wsc_llm_hardware(resolved)
+        self.assertIsNone(hardware.peak_perf_tflops)
+        self.assertEqual(hardware.die_peak_int4_ops_s,
+                         769_296_000_000_000.0)
+        self.assertEqual(hardware.die_peak_vec_eqops_s,
+                         76_924_619_200_000.0)
+
+    def test_coarse_adapter_rejects_missing_or_nonfinite_typed_rates(self) -> None:
+        for field, value in (
+                ("peak_int4_ops_per_s", None),
+                ("peak_int4_ops_per_s", True),
+                ("peak_int4_ops_per_s", 0.0),
+                ("peak_vec_fp32_eq_ops_per_s", float("nan"))):
+            with self.subTest(field=field, value=value):
+                summary = {
+                    "peak_int4_ops_per_s": 10.0,
+                    "peak_vec_fp32_eq_ops_per_s": 20.0,
+                }
+                summary[field] = value
+                resolved = SimpleNamespace(
+                    mesh_rows=1,
+                    mesh_cols=2,
+                    local_hbm_capacity_bytes=144_000_000_000,
+                    local_hbm_bandwidth_gbps=4_710.4,
+                    d2d_bandwidth_gbps=4_050.0,
+                    peak_perf_tflops=None,
+                    d2d_latency_ns=5,
+                    local_hbm_latency_ns=100,
+                    label="tiny coarse hardware",
+                    die_profile="coarse_die_v2",
+                    die_derived={"hardware_summary": summary},
+                )
+                with self.assertRaisesRegex(ValueError, "finite positive rate"):
+                    _to_wsc_llm_hardware(resolved)
 
 
 if __name__ == "__main__":
