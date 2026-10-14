@@ -1,7 +1,7 @@
 {
   "schema": "delivered_artifacts_sha256_v1",
-  "file_count": 130,
-  "total_bytes": 1907104,
+  "file_count": 131,
+  "total_bytes": 1909843,
   "files": {
     "README.md": "a0997d0d5e8201c5e363ce3b52bcf60075989a316aeb1e2586b13a406a0621ff",
     "five-abi/abi-config-results-final.json": "c81426428746ff9d07928dd59640e60475884186a57014bd677463104ddb3108",
@@ -74,6 +74,7 @@
     "four-focused/source-identity/coarse-manifest-comparison.json": "1595a746d3bda9111c8d6dce6a59bfd4c60b350f9c9f04848a6067fa9677c99f",
     "four-focused/summary.json": "eb9bc74758a54efc5725baef1b0ddd2320830faa399af341d3869ecc445bce5f",
     "github/main-refresh-fecf81c.json": "4e07616be3989c208697d4829320d5d1723ce8f6136e4d0ecdb0e41aef55d8ce",
+    "github/pr10-source.json": "8738a0d76144a5a25158482e0248fdf84bb400e9c41fe5a5868f2ae17e88c05f",
     "github/pr9-checkpoint.json": "5460219c0840d3de5e1594596398f4aa3012d6f60f063d73961683e9624b844b",
     "legacy-v1/hardware.json": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
     "legacy-v1/legacy-v1-envelope-probe.json": "20526629b372d678639c21be90c03e5b8406f9ffe62fa2162aa6300791898a22",

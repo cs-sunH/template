@@ -6,7 +6,7 @@
 
 ### 当前 workspace envelope / 准入基础检查点
 
-当前共享 main 已 fetch/ff 到 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge `928f053` 以及用户新增的 JOINT 更新。该外部提交只改变活动 `astra-sim-joint` 和存档 `astra-sim-joint_old`；没有覆盖 die/LRU WIP。活动 JOINT 已更换实现，旧 coarse 业务适配结果不能套用；存档目录本轮未修改。当前分支 `codex/die-workspace-envelope-20261014`，本阶段代码/证据正在执行正式GitHub交接；PR/main远端核实前为 **NOT READY FOR HANDOFF**。GitHub事实见 `evidence/workspace-envelope-20261014/github/`。
+当前共享 main 已 fetch/ff 到 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge `928f053` 以及用户新增的 JOINT 更新。该外部提交只改变活动 `astra-sim-joint` 和存档 `astra-sim-joint_old`；没有覆盖 die/LRU WIP。活动 JOINT 已更换实现，旧 coarse 业务适配结果不能套用；存档目录本轮未修改。当前分支 `codex/die-workspace-envelope-20261014`，本阶段源码/证据提交 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc` 已推送，[交接 PR #10](https://github.com/cs-sunH/template/pull/10) 已创建。只有该PR merged且fetch/ancestry核实main包含本交接版之后安全接棒；此前 **NOT READY FOR HANDOFF**。GitHub事实见 `evidence/workspace-envelope-20261014/github/`。
 
 公共 `compile_workspace_envelope` / `die_coarse_workspace_envelope_v2` 已实现：同 normalization、真正 Mapping 候选向量的 max exact uint64 peak、task/hardware identity，沿原 owned-JSON/free/last_error ABI；不改 Plan layout、hash/summary、handles/cache。FFN enumeration仍可调用原内部子候选延迟估计，不能称完全没有内部estimate。公共 **30/30**、旧 **62/62** hash/完整summary全等。两份真实singleton MHA manifest的240个legacy v1查询 **224成功/16预期local_region拒绝**；新生产ABI重放全部response/error全等。上界含未选中mapping，不以selected Plan峰值替代。
 
@@ -259,7 +259,7 @@ target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta
 
 ## Handoff Notes
 
-用户已发本轮停止/交接指令，所有agent与最小命令已冻结，无新开发任务。完整有效源码、测试、研究patch/草稿和失败证据已保存，GitHub交接执行中。提交与PR的真实元数据随后写入本节；只在main包含source与本HANDOFF、fetch/ancestry核实后安全接棒。交接完成后本Session立即停止，不执行Next Step。
+用户已发本轮停止/交接指令，所有agent与最小命令已冻结，无新开发任务。完整有效源码、测试、研究patch/草稿和失败证据已保存，GitHub交接执行中。源码交付 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc`、工作分支 `codex/die-workspace-envelope-20261014`、[PR #10](https://github.com/cs-sunH/template/pull/10) 的实际create结果已保存 `evidence/workspace-envelope-20261014/github/pr10-source.json`。本次仅补交接元数据，不继续开发、不force-push。最终merge SHA/本文件自身commit不预编；下一账号读取PR实时merged状态并fetch核main含源码2e3e029与本HANDOFF后安全接棒。交接完成后本Session立即停止，不执行Next Step。
 
 ### 历史 PR #7 正式交接记录
 

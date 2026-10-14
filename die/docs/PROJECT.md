@@ -41,7 +41,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-当前持续开发分支 `codex/die-workspace-envelope-20261014`；共享分支 `main`。已fetch/ff到用户新JOINT导入的 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge928f053/source cef6790b/CI38552490061 success。新workspace API/client/optional manager floor及双Plan压力诊断已验证，canonical23五仓新digest e0b6fd…cbbf78。新活动JOINT目前只接纯库，业务coarse适配待按新实现移植，joint_old存档不改。用户已要求本轮GitHub交接后停止，所有有效研究/部分脚本已冻结保存。scheduler E与store/migration物理释放门、OS C++ solo13 scratch待下一Session继续；生产精度/性能、TX8目标heldout及完整GQA输入仍未验收。
+当前持续开发分支 `codex/die-workspace-envelope-20261014`；共享分支 `main`。已fetch/ff到用户新JOINT导入的 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge928f053/source cef6790b/CI38552490061 success。新workspace API/client/optional manager floor及双Plan压力诊断已验证，canonical23五仓新digest e0b6fd…cbbf78。新活动JOINT目前只接纯库，业务coarse适配待按新实现移植，joint_old存档不改。用户已要求本轮GitHub交接后停止，所有有效研究/部分脚本已冻结保存。交付源 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc` 已推送，[交接 PR #10](https://github.com/cs-sunH/template/pull/10) 需merged并fetch核main含交接版后安全接棒。scheduler E与store/migration物理释放门、OS C++ solo13 scratch待下一Session继续；生产精度/性能、TX8目标heldout及完整GQA输入仍未验收。
 
 ## 重要决定及变更记录
 
