@@ -1,8 +1,10 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-14。用户已重新授权持续自主开发；历史 Session 的停止指令不适用于当前任务。本轮继续使用新活动 `astra-sim-joint`，`astra-sim-joint_old` 仅供历史查询，未修改。工程整体 **NOT ACCEPTED**；检查点同步不等于模型精度、全部五仓业务或目标测量验收。
+记录日期：2026-10-15（Asia/Shanghai；既有20261014证据目录保留原标识）。用户已重新授权持续自主开发；历史 Session 的停止指令不适用于当前任务。本轮继续使用新活动 `astra-sim-joint`，`astra-sim-joint_old` 仅供历史查询，未修改。工程整体 **NOT ACCEPTED**；检查点同步不等于模型精度、全部五仓业务或目标测量验收。
 
 ## Current Status
+
+2026-10-15最小任务检查点：新增 native Domain `update_capacity(resource, absolute_physical_rate, now_ns)`；先以空canonical Runtime预检，再结算旧速率与同tick终态/chain successor，最后调用公共Runtime更改物理速率。invalid输入不推进live域；共享COMP+endpoint减速/暂停/恢复、import/fork继续对拍与5ns完成边界后继15ns完成通过，最终native/window 4/4 CTest。公共数值模型、校准和sh30 guard不变；native world事件输入仍待接。证据在 `evidence/native-domain-capacity-20261015/`。用户最新要求最小任务后提交一次、随后继续，FACE在途改动不混入该提交。
 
 从远端 main `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，已核实包含 PR #11 merge `721ab833` 和源码 `60d18dc`。本轮分支 `codex/die-joint-runtime-20261014`，复用此前 Compiler/Mapping/Runtime、LRU finite-manifest margin/source-release、typed adapter 和 canonical23 发布基础；不重复已通过且未改的研究/业务范围。
 

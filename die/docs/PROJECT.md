@@ -47,6 +47,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 重要决定及变更记录
 
+- 2026-10-15 最小任务：native Domain新增已知物理容量变更接口，复用canonical Runtime校验/更新，保持旧速率结算与同tick terminal优先顺序；共享COMP+endpoint减速、暂停、恢复和import/fork序列、invalid原子拒绝通过，最终4/4 native/window。生产world容量事件、sh30和FACE闭环仍待接，不改变公共模型或校准。按用户要求提交此最小任务后继续开发。
+
 - 2026-10-14 实际sample桥接检查点：显式rank/handle→leg ID将真实只读Sys sample导入NativeCoarseDieDomain，canonical Runtime负责导入与terminal清理，pending completion恰好一次；实际COMP/transfer 2408ns/303318ns和served/整数/registry精确匹配。四项累计busy字符串有±1e-16ns级尾差，完整wire严格全等false，原始失败/Decimal差值保留，未放宽门槛或改变timing。最终native/window4/4+Python4/4无skip；WSCLLM两仓lease保护独立生命周期各1/1通过，保留blocked/retry/cancel。FACE admission/v2 bridge仍在途；局部桥接不等于production graph/ledger/network/pool/sh30完成。详见local-sample-domain与ws-lease-hardening证据。
 
 - 2026-10-14 真实 Sys 采样检查点：新增 Runtime-copy 只读 envelope 及实际 COMP/endpoint/lease catalogs，Workload 验证 handle 和权威 workspace ledger 双射；terminal-before-callback 副本可采样，live Runtime/队列/回调不变。提交前拒绝 foreign ledger token、错误 canonical bytes 和 stale Prepared task。当前源8/8 CTest、重链 tiny legacy Online 0/0且192/192成功；真实 sample tick1、原 Sys COMP/transfer 完成2408ns/303318ns。下一步用显式 handle→leg 绑定做实际 sample 的 Domain 继续对拍，完整 graph/ledger/network/pool/sh30 guard仍未接通；另四仓不外推通过。公共 mapping/timing、TX8和canonical23不变，详见sys-local-sample-20261014证据。

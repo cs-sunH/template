@@ -2,6 +2,7 @@
 
 #include "coarse_die/Execution.hh"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -37,6 +38,12 @@ class NativeCoarseDieDomain {
                       coarse_die::Owner owner, std::uint64_t now_ns);
 
   void advance_to(std::uint64_t absolute_ns);
+  // Schedule a known physical capacity change at an absolute event tick.
+  // rate is the resource's absolute physical units/second, not an efficiency
+  // or prediction-only parameter. Existing work is settled at the old rate
+  // before the canonical Runtime applies the new rate.
+  void update_capacity(std::size_t resource, double absolute_physical_rate,
+                       std::uint64_t now_ns);
   std::optional<std::uint64_t> next_event() const;
   std::vector<NativeCoarseDieCompletion> take_completions();
   bool cancel(const std::string& leg_id, std::uint64_t now_ns);

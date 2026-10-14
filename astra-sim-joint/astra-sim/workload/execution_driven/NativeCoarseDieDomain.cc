@@ -493,6 +493,24 @@ void NativeCoarseDieDomain::advance_to(std::uint64_t absolute_ns) {
   }
 }
 
+void NativeCoarseDieDomain::update_capacity(
+    std::size_t resource, double absolute_physical_rate,
+    std::uint64_t now_ns) {
+  // Reject every caller-controlled error before advancing this live Domain.
+  // Keep resource/rate/disabled-resource validation canonical by asking an
+  // empty Runtime with the same Hardware to validate the proposed capacity.
+  validate_arrival(now_ns);
+  coarse_die::Runtime validator(hardware_);
+  validator.update_capacity(resource, absolute_physical_rate, 0);
+
+  // Runtime events at this tick (including terminal Plans and chain
+  // successors) are settled using the old capacity. Then the actual Runtime
+  // integrates through now_ns and installs the new physical rate.
+  advance_to(now_ns);
+  runtime_.update_capacity(resource, absolute_physical_rate, now_ns);
+  settle_terminals();
+}
+
 std::optional<std::uint64_t> NativeCoarseDieDomain::next_event() const {
   const auto next = runtime_.next_event();
   if (next.has_value() && *next > kMaxExactJsonNs) {

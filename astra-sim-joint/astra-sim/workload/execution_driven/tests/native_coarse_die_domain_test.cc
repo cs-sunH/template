@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -134,6 +135,32 @@ void require_bad_local_sample(
   }
   require(rejected, message);
   require(sample == before, "failed local-sample import leaves input unchanged");
+}
+
+void require_capacity_update_rejected_without_change(
+    NativeCoarseDieDomain& domain, std::size_t resource, double rate,
+    std::uint64_t now_ns, const std::string& message) {
+  const json before = domain.export_snapshot();
+  bool rejected = false;
+  try {
+    domain.update_capacity(resource, rate, now_ns);
+  } catch (const std::exception&) {
+    rejected = true;
+  }
+  require(rejected, message);
+  require(domain.export_snapshot() == before,
+          message + ": invalid capacity event leaves the live Domain unchanged");
+}
+
+std::string hbm0_read_served_exact(const json& counters) {
+  return counters.at("hbm_served_bytes_by_row_direction_exact")
+      .at(0).at(0).get<std::string>();
+}
+
+json served_accounting(const json& counters) {
+  return {{"hbm_served_bytes_by_row_direction_exact",
+           counters.at("hbm_served_bytes_by_row_direction_exact")},
+          {"served_by_category", counters.at("served_by_category")}};
 }
 
 json endpoint_spec(std::uint64_t endpoint_id,
@@ -380,6 +407,177 @@ void same_tick_chain_dispatch_is_stable_across_registration_order() {
               forward.at("a").at("second_issue_ns").get<std::uint64_t>() == 2 &&
               forward.at("z").at("second_issue_ns").get<std::uint64_t>() == 2,
           "both same-tick successors are submitted at the shared 2 ns terminal");
+}
+
+void capacity_updates_reject_invalid_events_before_live_advance() {
+  const Hardware hardware = test_hardware();
+  NativeCoarseDieDomain domain("hbm:0", hardware);
+  domain.begin_plan_chain("capacity-validation-comp",
+                          {hbm_plan(hardware, 71, 1000, "capacity-validation")},
+                          test_owner(71), 0);
+  domain.begin_endpoint("capacity-validation-endpoint",
+                        endpoint_spec(710, 710, 1000), test_owner(72), 0);
+  domain.advance_to(5);
+  const json before = domain.export_snapshot();
+  require(before.at("runtime").at("now_ns") == 5 &&
+              before.at("runtime").at("executions").size() == 2,
+          "invalid-event fixture has active COMP and endpoint work at tick 5");
+
+  require_capacity_update_rejected_without_change(
+      domain, coarse_die::resource_count, 0.0, 6,
+      "out-of-range capacity resource is rejected");
+  require_capacity_update_rejected_without_change(
+      domain, coarse_die::HBM0, -1.0, 6,
+      "negative physical capacity is rejected");
+  require_capacity_update_rejected_without_change(
+      domain, coarse_die::HBM0, std::numeric_limits<double>::quiet_NaN(), 6,
+      "NaN physical capacity is rejected");
+  require_capacity_update_rejected_without_change(
+      domain, coarse_die::HBM0,
+      std::numeric_limits<double>::infinity(), 6,
+      "infinite physical capacity is rejected");
+  require_capacity_update_rejected_without_change(
+      domain, coarse_die::HBM0, hardware.rates[coarse_die::HBM0] + 1.0, 6,
+      "rate above the resolved hardware peak is rejected");
+  require_capacity_update_rejected_without_change(
+      domain, coarse_die::INJECT0, 1.0, 6,
+      "a disabled physical resource cannot be enabled");
+  require_capacity_update_rejected_without_change(
+      domain, coarse_die::HBM0, 0.5e9, 4,
+      "capacity event before the live Runtime clock is rejected");
+  require_capacity_update_rejected_without_change(
+      domain, coarse_die::HBM0, 0.5e9, 9007199254740992ULL,
+      "capacity event outside exact JSON nanosecond range is rejected");
+  require(domain.export_snapshot() == before,
+          "all invalid capacity events preserve active progress and bindings");
+
+  domain.update_capacity(coarse_die::INJECT0, 0.0, 5);
+  require(domain.export_runtime_snapshot().at("capacities")
+                  .at(coarse_die::INJECT0) == 0.0,
+          "a disabled resource remains valid at zero physical rate");
+}
+
+void capacity_updates_retime_shared_comp_and_endpoint_and_survive_forks() {
+  const Hardware hardware = test_hardware();
+  NativeCoarseDieDomain source("hbm:0", hardware);
+  source.begin_plan_chain("capacity-comp",
+                          {hbm_plan(hardware, 73, 100, "capacity-comp")},
+                          test_owner(73), 0);
+  source.begin_endpoint("capacity-endpoint", endpoint_spec(730, 730, 100),
+                        test_owner(74), 0);
+
+  source.advance_to(20);
+  const json counters_at_20 = source.counters();
+  const long double first_service =
+      std::stold(hbm0_read_served_exact(counters_at_20));
+  require(first_service > 0.0L,
+          "COMP and endpoint have both begun serving shared HBM work");
+
+  source.update_capacity(coarse_die::HBM0, 0.5e9, 20);
+  require(source.export_runtime_snapshot().at("capacities")
+                  .at(coarse_die::HBM0) == 0.5e9,
+          "capacity event installs the requested absolute physical rate");
+  require(served_accounting(source.counters()) ==
+              served_accounting(counters_at_20),
+          "capacity update does not rewrite work served before its event tick");
+  source.advance_to(40);
+  const long double service_at_40 =
+      std::stold(hbm0_read_served_exact(source.counters()));
+  const long double slower_service = service_at_40 - first_service;
+  require(slower_service > 0.0L && slower_service < first_service &&
+              std::fabs(slower_service * 2.0L - first_service) < 1.0e-9L,
+          "half physical capacity halves aggregate shared-HBM service over equal intervals");
+
+  const json counters_at_40 = source.counters();
+  source.update_capacity(coarse_die::HBM0, 0.0, 40);
+  require(served_accounting(source.counters()) ==
+              served_accounting(counters_at_40),
+          "pausing capacity preserves all previously served accounting");
+  source.advance_to(50);
+  require(hbm0_read_served_exact(source.counters()) ==
+              hbm0_read_served_exact(counters_at_40),
+          "zero physical rate pauses COMP and endpoint service");
+  require(source.progress("capacity-comp").at("state") == "running" &&
+              source.progress("capacity-endpoint").at("state") == "running",
+          "paused work remains live in both wrapper bindings");
+
+  const json wire = json::parse(source.export_snapshot().dump());
+  auto imported = import_domain(wire, hardware);
+  auto forked = NativeCoarseDieDomain::fork_snapshot(source);
+  const auto require_same_copies = [&](const std::string& stage) {
+    const json expected = source.export_snapshot();
+    require(imported->export_snapshot() == expected &&
+                forked->export_snapshot() == expected,
+            "imported and forked Domains match after " + stage);
+  };
+  const auto update_all = [&](double rate, std::uint64_t tick,
+                              const std::string& stage) {
+    source.update_capacity(coarse_die::HBM0, rate, tick);
+    imported->update_capacity(coarse_die::HBM0, rate, tick);
+    forked->update_capacity(coarse_die::HBM0, rate, tick);
+    require_same_copies(stage);
+  };
+  const auto advance_all = [&](std::uint64_t tick,
+                               const std::string& stage) {
+    source.advance_to(tick);
+    imported->advance_to(tick);
+    forked->advance_to(tick);
+    require_same_copies(stage);
+  };
+  update_all(1.0e9, 50, "restoring the original physical rate");
+  advance_all(70, "the resumed interval");
+  update_all(0.25e9, 70, "a second slowdown");
+  advance_all(80, "the second slowed interval");
+  update_all(0.0, 80, "a second pause");
+  advance_all(85, "the second paused interval");
+  update_all(1.0e9, 85, "the final capacity restoration");
+  advance_all(1000, "completion under the known capacity sequence");
+  require(source.progress("capacity-comp").at("terminal").get<bool>() &&
+              source.progress("capacity-endpoint").at("terminal").get<bool>() &&
+              source.export_snapshot().at("completion_queue").size() == 2,
+          "restored physical capacity completes both shared-HBM legs once");
+  const auto source_completions = source.take_completions();
+  const auto imported_completions = imported->take_completions();
+  const auto forked_completions = forked->take_completions();
+  require(source_completions.size() == 2 && imported_completions.size() == 2 &&
+              forked_completions.size() == 2,
+          "capacity-sequence copies each produce one completion per leg");
+  require(imported->export_snapshot() == source.export_snapshot() &&
+              forked->export_snapshot() == source.export_snapshot(),
+          "wire import and fork preserve identical terminal accounting and consumption");
+}
+
+void capacity_event_at_chain_terminal_uses_old_rate_then_updates_successor() {
+  const Hardware hardware = test_hardware();
+  NativeCoarseDieDomain domain("hbm:0", hardware);
+  domain.begin_plan_chain("capacity-boundary",
+                          {hbm_plan(hardware, 75, 5, "boundary-first"),
+                           hbm_plan(hardware, 76, 5, "boundary-second")},
+                          test_owner(75), 0);
+  require(domain.next_event() == std::optional<std::uint64_t>(5),
+          "first chain Plan reaches its terminal boundary at 5 ns");
+
+  domain.update_capacity(coarse_die::HBM0, 0.5e9, 5);
+  const json at_boundary = domain.progress("capacity-boundary");
+  require(at_boundary.at("plan_index") == 1 &&
+              at_boundary.at("completed_plan_progress").size() == 1 &&
+              at_boundary.at("completed_plan_progress").at(0).at("finish_ns") ==
+                  5 &&
+              at_boundary.at("active_execution").at("issue_ns") == 5 &&
+              at_boundary.at("active_execution").at("activities").at(0)
+                      .at("progress").get<double>() == 0.0,
+          "terminal Plan and successor issue are settled before same-tick capacity change");
+  require(domain.export_runtime_snapshot().at("capacities")
+                  .at(coarse_die::HBM0) == 0.5e9,
+          "successor observes the new capacity from its issue tick onward");
+
+  domain.advance_to(15);
+  const auto completion = domain.take_completions();
+  require(completion.size() == 1 &&
+              completion.front().leg_id == "capacity-boundary" &&
+              completion.front().finish_ns == 15 &&
+              !completion.front().cancelled,
+          "successor service uses the reduced rate for exactly ten nanoseconds");
 }
 
 void exact_json_nanosecond_boundary_is_enforced() {
@@ -870,6 +1068,9 @@ int main() {
     invalid_endpoint_is_rejected_before_domain_advance();
     endpoint_completion_releases_native_endpoint_binding();
     same_tick_chain_dispatch_is_stable_across_registration_order();
+    capacity_updates_reject_invalid_events_before_live_advance();
+    capacity_updates_retime_shared_comp_and_endpoint_and_survive_forks();
+    capacity_event_at_chain_terminal_uses_old_rate_then_updates_successor();
     exact_json_nanosecond_boundary_is_enforced();
     fork_copies_runtime_and_chain_bindings_without_aliasing();
     wire_snapshot_roundtrips_fractional_live_progress();

@@ -1,0 +1,14 @@
+Build:
+set -o pipefail; source /workspace/cloud-setup/activate.sh; cmake --build work/build-joint --target NativeCoarseDieDomainTest -j2 2>&1 | tee work/native-domain-capacity-20261014/build.log
+
+Focused CTest:
+set -o pipefail; source /workspace/cloud-setup/activate.sh; ctest --test-dir work/build-joint -R '^NativeCoarseDieDomainTest$' --output-on-failure 2>&1 | tee work/native-domain-capacity-20261014/ctest.log
+
+Direct executable:
+set -o pipefail; work/build-joint/bin/NativeCoarseDieDomainTest 2>&1 | tee work/native-domain-capacity-20261014/direct-test.log
+
+Whitespace validation:
+git diff --check -- astra-sim-joint/astra-sim/workload/execution_driven/NativeCoarseDieDomain.hh astra-sim-joint/astra-sim/workload/execution_driven/NativeCoarseDieDomain.cc astra-sim-joint/astra-sim/workload/execution_driven/tests/native_coarse_die_domain_test.cc
+
+Toolchain:
+CMake 3.31.10; GCC 14.2.0

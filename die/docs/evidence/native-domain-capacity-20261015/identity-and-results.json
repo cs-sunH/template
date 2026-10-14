@@ -1,0 +1,51 @@
+{
+  "task": "NativeCoarseDieDomain known-capacity event bridge",
+  "scope": [
+    "astra-sim-joint/astra-sim/workload/execution_driven/NativeCoarseDieDomain.hh",
+    "astra-sim-joint/astra-sim/workload/execution_driven/NativeCoarseDieDomain.cc",
+    "astra-sim-joint/astra-sim/workload/execution_driven/tests/native_coarse_die_domain_test.cc"
+  ],
+  "semantics": {
+    "capacity_value": "absolute physical units per second, passed to canonical coarse_die::Runtime::update_capacity",
+    "ordering": "prevalidate without live mutation; settle old-rate events through tick including same-tick terminal and chain successor; apply capacity at tick",
+    "formula_copied_from_runtime": false,
+    "production_live_import_supported": false,
+    "sh30_guard_retained": true
+  },
+  "verification": {
+    "build_target": "NativeCoarseDieDomainTest",
+    "build": "passed",
+    "focused_ctest": "1/1 passed",
+    "direct_executable": "PASS native_coarse_die_domain_test",
+    "git_diff_check": "passed",
+    "invalid_event_rejections_preserve_full_domain_snapshot": true,
+    "shared_hbm_slow_pause_restore": true,
+    "served_accounting_unchanged_by_capacity_event": true,
+    "wire_import_and_fork_capacity_sequence_snapshots_equal": true,
+    "same_tick_chain_boundary": "prior Plan finish 5 ns; successor issue 5 ns and finish 15 ns",
+    "final_native_window_ctest": "4/4 passed; 0.58s",
+    "full_online": "not run; wrapper API only"
+  },
+  "toolchain": {
+    "cmake": "3.31.10",
+    "compiler": "Debian c++ 14.2.0-19"
+  },
+  "sha256": {
+    "astra-sim-joint/astra-sim/workload/execution_driven/NativeCoarseDieDomain.hh": "373f8e7fe8521ba3f9d773c2adf51f29661e640fd8372979c4f4cc504fd1782c",
+    "astra-sim-joint/astra-sim/workload/execution_driven/NativeCoarseDieDomain.cc": "a8acfc6ae3221d2ceec910aa48806aa9a5e1803dd955e22cc01932df8519b9ce",
+    "astra-sim-joint/astra-sim/workload/execution_driven/tests/native_coarse_die_domain_test.cc": "55a58d9558ffcbf425d15726152927d5c5ae9e840b94dac6164a0a23fd72af56",
+    "work/build-joint/bin/NativeCoarseDieDomainTest": "39f3f0af29636f2afed5ae4d882c635c8f3bcc18454901bfc4243a7cc5430ffe",
+    "work/build-joint/bin/NativeCoarseProjectionTest": "684855d370f0765bb4de09a0e42db49eef96d935aac59d02e3dd0e9cdb6619fe",
+    "work/build-joint/bin/NativeProjectionCApiTest": "ea3e1be8936bcf4fbc045b5f56ca1e5a3b9ebc5d8dfd786a8b637628b5f19146",
+    "work/build-joint/bin/JointPipelineWindowTest": "02204fcf2e7c19567f724dd6e7c64174c0170d9f0a7090b026c9035435229c5c",
+    "work/build-joint/lib/libjoint_projection.so": "80c4ccae27ca3276da01a2fcc31d01c87c701d9d7566403bf0bc666847760ab9"
+  },
+  "logs": [
+    "work/native-domain-capacity-20261014/build.log",
+    "work/native-domain-capacity-20261014/ctest.log",
+    "work/native-domain-capacity-20261014/direct-test.log"
+  ],
+  "source_base_commit": "b5a52a317efb0a9acff6121be8cd209480687621",
+  "recorded_date_client": "2026-10-15 Asia/Shanghai",
+  "source_state": "verified uncommitted three-file native change; FACE work excluded"
+}

@@ -1,0 +1,25 @@
+[ 50%] Built target coarse_die
+[ 50%] Built target die_model
+[ 75%] Built target joint_pipeline_core
+[100%] Built target NativeCoarseDieDomainTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Linking CXX executable ../bin/NativeCoarseProjectionTest
+[100%] Built target NativeCoarseProjectionTest
+[ 66%] Built target die_model
+[ 66%] Built target coarse_die
+[100%] Built target joint_pipeline_core
+[100%] Linking CXX shared library ../lib/libjoint_projection.so
+[100%] Built target joint_projection
+[100%] Linking CXX executable ../bin/NativeProjectionCApiTest
+[100%] Built target NativeProjectionCApiTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Linking CXX executable ../bin/JointPipelineWindowTest
+[100%] Built target JointPipelineWindowTest
+[ 33%] Built target die_model
+[ 66%] Built target coarse_die
+[100%] Built target joint_pipeline_core
+[100%] Built target joint_projection
