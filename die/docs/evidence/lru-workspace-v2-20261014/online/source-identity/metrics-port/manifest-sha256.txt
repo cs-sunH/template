@@ -1,0 +1,3 @@
+06770af56b9da650938ea68ed43b00dadf19c87b0bd619328dd11ab4ee7cd54c  work/lru-cpp-workspace-20261014/source-identity/metrics-port/source-sha256.txt
+bd9de14a0196e51489dea46cc68b6ef3d1ba1134a2205105640fd943a2035847  work/lru-cpp-workspace-20261014/source-identity/metrics-port/binary-sha256.txt
+519d8d737a5e7f9a92d584a16dc703a54ff12d1d60ef047d15095a722619660b  work/lru-cpp-workspace-20261014/source-identity/metrics-port/selected-cpp-diff-including-workspace-v2.patch

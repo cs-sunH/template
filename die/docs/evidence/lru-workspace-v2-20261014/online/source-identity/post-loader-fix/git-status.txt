@@ -1,0 +1,31 @@
+ M astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/CMakeLists.txt
+ M astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/congestion_aware/main_online.cc
+ M astra-sim-wscllm-LRU/astra-sim/system/Sys.cc
+ M astra-sim-wscllm-LRU/astra-sim/system/Sys.hh
+ M astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.hh
+ M astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.hh
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.hh
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.hh
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.hh
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/decision_mailbox_test.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc
+ M astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc
+ M astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py
+ M astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py
+ M astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/online_scheduler_base.py
+ M astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py
+ M astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_train_machinery.py
+ M astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/wsc_llm_online_scheduler.py
+ M astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/wsc_llm_scheduler.py
+?? astra-sim-wscllm-LRU/astra-sim/workload/WorkspaceAdmission.hh
+?? astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/workspace_admission_test.cc
+?? astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_admission_v2.py
+?? astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/test_wsc_llm_typed_hardware.py

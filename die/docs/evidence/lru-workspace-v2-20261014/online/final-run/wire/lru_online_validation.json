@@ -1,0 +1,2642 @@
+{
+  "ack_count": 3,
+  "auditor_sha256": "d07b10bc816cefb35f54131e136100580e40b23098b395ae481da3dd0cf6e9d4",
+  "checks": {
+    "coarse_typed_metrics": {
+      "local_hbm": [
+        {
+          "accounting_history_complete": true,
+          "rank": 0,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ],
+          "utilization_window_ns": 121204
+        },
+        {
+          "accounting_history_complete": true,
+          "rank": 1,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ],
+          "utilization_window_ns": 121204
+        },
+        {
+          "accounting_history_complete": true,
+          "rank": 2,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ],
+          "utilization_window_ns": 121204
+        },
+        {
+          "accounting_history_complete": true,
+          "rank": 3,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ],
+          "utilization_window_ns": 121204
+        },
+        {
+          "accounting_history_complete": true,
+          "rank": 4,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ],
+          "utilization_window_ns": 121204
+        },
+        {
+          "accounting_history_complete": true,
+          "rank": 5,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ],
+          "utilization_window_ns": 121204
+        },
+        {
+          "accounting_history_complete": true,
+          "rank": 6,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ],
+          "utilization_window_ns": 121204
+        },
+        {
+          "accounting_history_complete": true,
+          "rank": 7,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ],
+          "utilization_window_ns": 121204
+        }
+      ],
+      "rank_compute": [
+        {
+          "coarse_die_runtime_window_ns": 121204,
+          "die_cancelled_comp_count": 0,
+          "rank": 0,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ]
+        },
+        {
+          "coarse_die_runtime_window_ns": 121204,
+          "die_cancelled_comp_count": 0,
+          "rank": 1,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ]
+        },
+        {
+          "coarse_die_runtime_window_ns": 121204,
+          "die_cancelled_comp_count": 0,
+          "rank": 2,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ]
+        },
+        {
+          "coarse_die_runtime_window_ns": 121204,
+          "die_cancelled_comp_count": 0,
+          "rank": 3,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ]
+        },
+        {
+          "coarse_die_runtime_window_ns": 121204,
+          "die_cancelled_comp_count": 0,
+          "rank": 4,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ]
+        },
+        {
+          "coarse_die_runtime_window_ns": 121204,
+          "die_cancelled_comp_count": 0,
+          "rank": 5,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ]
+        },
+        {
+          "coarse_die_runtime_window_ns": 121204,
+          "die_cancelled_comp_count": 0,
+          "rank": 6,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ]
+        },
+        {
+          "coarse_die_runtime_window_ns": 121204,
+          "die_cancelled_comp_count": 0,
+          "rank": 7,
+          "served_categories": [
+            "comm_recv",
+            "comm_send",
+            "comp",
+            "die",
+            "pool",
+            "restore"
+          ]
+        }
+      ]
+    },
+    "legacy_metric_schema": {
+      "base_variant_comparison_run": "/workspace/template/work/online-baseline-20261014/e2e/run",
+      "record_counts": {
+        "capacity_timeavg": 8,
+        "consistency": 1,
+        "hbm_watermark_summary": 8,
+        "init": 1,
+        "local_hbm": 8,
+        "rank_compute": 8,
+        "request": 1,
+        "summary": 1
+      },
+      "records": {
+        "capacity_timeavg": {
+          "additional_observed_keys": [],
+          "additional_observed_nested_fields": [],
+          "base_variant_only_fields": [],
+          "base_variant_unmapped_reason": null,
+          "baseline_count": 8,
+          "coverage": "checked_against_pre_port_LRU_full_detail_schema",
+          "legacy_key_count": 27,
+          "legacy_nested_field_count": 28,
+          "missing_legacy_keys": [],
+          "missing_nested_legacy_fields": [],
+          "nested_value_type_errors": [],
+          "observed_count": 8,
+          "unmapped_base_variant_only_fields": [],
+          "value_type_errors": []
+        },
+        "consistency": {
+          "additional_observed_keys": [],
+          "additional_observed_nested_fields": [],
+          "base_variant_only_fields": [],
+          "base_variant_unmapped_reason": null,
+          "baseline_count": 1,
+          "coverage": "checked_against_pre_port_LRU_full_detail_schema",
+          "legacy_key_count": 10,
+          "legacy_nested_field_count": 11,
+          "missing_legacy_keys": [],
+          "missing_nested_legacy_fields": [],
+          "nested_value_type_errors": [],
+          "observed_count": 1,
+          "unmapped_base_variant_only_fields": [],
+          "value_type_errors": []
+        },
+        "hbm_watermark_summary": {
+          "additional_observed_keys": [],
+          "additional_observed_nested_fields": [],
+          "base_variant_only_fields": [
+            "window_end_ns",
+            "window_start_ns"
+          ],
+          "base_variant_unmapped_reason": "pre-port LRU flat-zero watermark has no planner replay/window bounds",
+          "baseline_count": 8,
+          "coverage": "checked_against_pre_port_LRU_full_detail_schema",
+          "legacy_key_count": 21,
+          "legacy_nested_field_count": 22,
+          "missing_legacy_keys": [],
+          "missing_nested_legacy_fields": [],
+          "nested_value_type_errors": [],
+          "observed_count": 8,
+          "unmapped_base_variant_only_fields": [
+            "window_end_ns",
+            "window_start_ns"
+          ],
+          "value_type_errors": []
+        },
+        "init": {
+          "additional_observed_keys": [],
+          "additional_observed_nested_fields": [],
+          "base_variant_only_fields": [],
+          "base_variant_unmapped_reason": null,
+          "baseline_count": 1,
+          "coverage": "checked_against_pre_port_LRU_full_detail_schema",
+          "legacy_key_count": 11,
+          "legacy_nested_field_count": 16,
+          "missing_legacy_keys": [],
+          "missing_nested_legacy_fields": [],
+          "nested_value_type_errors": [],
+          "observed_count": 1,
+          "unmapped_base_variant_only_fields": [],
+          "value_type_errors": []
+        },
+        "iteration": {
+          "baseline_count": 0,
+          "coverage": "not_observed_in_tiny_run",
+          "observed_count": 0
+        },
+        "local_hbm": {
+          "additional_observed_keys": [
+            "accounting_history_complete",
+            "allocation_updates",
+            "arbiter_active_activities",
+            "denominator_source",
+            "die_compute_read_bytes_served",
+            "die_compute_read_bytes_served_exact_decimal",
+            "die_compute_write_bytes_served",
+            "die_compute_write_bytes_served_exact_decimal",
+            "dram_bw_util_numerator_bytes_exact_decimal",
+            "legacy_queue_counter_scope",
+            "served_by_category",
+            "shared_definition"
+          ],
+          "additional_observed_nested_fields": [
+            "$.accounting_history_complete",
+            "$.allocation_updates",
+            "$.arbiter_active_activities",
+            "$.denominator_source",
+            "$.die_compute_read_bytes_served",
+            "$.die_compute_read_bytes_served_exact_decimal",
+            "$.die_compute_write_bytes_served",
+            "$.die_compute_write_bytes_served_exact_decimal",
+            "$.dram_bw_util_numerator_bytes_exact_decimal",
+            "$.legacy_queue_counter_scope",
+            "$.served_by_category",
+            "$.served_by_category.comm_recv",
+            "$.served_by_category.comm_recv.hbm_served_bytes_by_row_direction",
+            "$.served_by_category.comm_recv.hbm_served_bytes_by_row_direction[]",
+            "$.served_by_category.comm_recv.hbm_served_bytes_by_row_direction[][]",
+            "$.served_by_category.comm_recv.hbm_served_bytes_by_row_direction_exact",
+            "$.served_by_category.comm_recv.hbm_served_bytes_by_row_direction_exact[]",
+            "$.served_by_category.comm_recv.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.served_by_category.comm_recv.int4_ops",
+            "$.served_by_category.comm_recv.int4_ops_exact_decimal",
+            "$.served_by_category.comm_recv.vec_eqops",
+            "$.served_by_category.comm_recv.vec_eqops_exact_decimal",
+            "$.served_by_category.comm_send",
+            "$.served_by_category.comm_send.hbm_served_bytes_by_row_direction",
+            "$.served_by_category.comm_send.hbm_served_bytes_by_row_direction[]",
+            "$.served_by_category.comm_send.hbm_served_bytes_by_row_direction[][]",
+            "$.served_by_category.comm_send.hbm_served_bytes_by_row_direction_exact",
+            "$.served_by_category.comm_send.hbm_served_bytes_by_row_direction_exact[]",
+            "$.served_by_category.comm_send.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.served_by_category.comm_send.int4_ops",
+            "$.served_by_category.comm_send.int4_ops_exact_decimal",
+            "$.served_by_category.comm_send.vec_eqops",
+            "$.served_by_category.comm_send.vec_eqops_exact_decimal",
+            "$.served_by_category.comp",
+            "$.served_by_category.comp.hbm_served_bytes_by_row_direction",
+            "$.served_by_category.comp.hbm_served_bytes_by_row_direction[]",
+            "$.served_by_category.comp.hbm_served_bytes_by_row_direction[][]",
+            "$.served_by_category.comp.hbm_served_bytes_by_row_direction_exact",
+            "$.served_by_category.comp.hbm_served_bytes_by_row_direction_exact[]",
+            "$.served_by_category.comp.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.served_by_category.comp.int4_ops",
+            "$.served_by_category.comp.int4_ops_exact_decimal",
+            "$.served_by_category.comp.vec_eqops",
+            "$.served_by_category.comp.vec_eqops_exact_decimal",
+            "$.served_by_category.die",
+            "$.served_by_category.die.hbm_served_bytes_by_row_direction",
+            "$.served_by_category.die.hbm_served_bytes_by_row_direction[]",
+            "$.served_by_category.die.hbm_served_bytes_by_row_direction[][]",
+            "$.served_by_category.die.hbm_served_bytes_by_row_direction_exact",
+            "$.served_by_category.die.hbm_served_bytes_by_row_direction_exact[]",
+            "$.served_by_category.die.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.served_by_category.die.int4_ops",
+            "$.served_by_category.die.int4_ops_exact_decimal",
+            "$.served_by_category.die.vec_eqops",
+            "$.served_by_category.die.vec_eqops_exact_decimal",
+            "$.served_by_category.pool",
+            "$.served_by_category.pool.hbm_served_bytes_by_row_direction",
+            "$.served_by_category.pool.hbm_served_bytes_by_row_direction[]",
+            "$.served_by_category.pool.hbm_served_bytes_by_row_direction[][]",
+            "$.served_by_category.pool.hbm_served_bytes_by_row_direction_exact",
+            "$.served_by_category.pool.hbm_served_bytes_by_row_direction_exact[]",
+            "$.served_by_category.pool.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.served_by_category.pool.int4_ops",
+            "$.served_by_category.pool.int4_ops_exact_decimal",
+            "$.served_by_category.pool.vec_eqops",
+            "$.served_by_category.pool.vec_eqops_exact_decimal",
+            "$.served_by_category.restore",
+            "$.served_by_category.restore.hbm_served_bytes_by_row_direction",
+            "$.served_by_category.restore.hbm_served_bytes_by_row_direction[]",
+            "$.served_by_category.restore.hbm_served_bytes_by_row_direction[][]",
+            "$.served_by_category.restore.hbm_served_bytes_by_row_direction_exact",
+            "$.served_by_category.restore.hbm_served_bytes_by_row_direction_exact[]",
+            "$.served_by_category.restore.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.served_by_category.restore.int4_ops",
+            "$.served_by_category.restore.int4_ops_exact_decimal",
+            "$.served_by_category.restore.vec_eqops",
+            "$.served_by_category.restore.vec_eqops_exact_decimal",
+            "$.shared_definition"
+          ],
+          "base_variant_only_fields": [],
+          "base_variant_unmapped_reason": null,
+          "baseline_count": 8,
+          "coverage": "checked_against_pre_port_LRU_full_detail_schema",
+          "legacy_key_count": 32,
+          "legacy_nested_field_count": 33,
+          "missing_legacy_keys": [],
+          "missing_nested_legacy_fields": [],
+          "nested_value_type_errors": [],
+          "observed_count": 8,
+          "unmapped_base_variant_only_fields": [],
+          "value_type_errors": []
+        },
+        "memory_anchor": {
+          "baseline_count": 0,
+          "coverage": "not_observed_in_tiny_run",
+          "observed_count": 0
+        },
+        "rank_compute": {
+          "additional_observed_keys": [
+            "coarse_die_runtime",
+            "die_cancelled_comp_count"
+          ],
+          "additional_observed_nested_fields": [
+            "$.coarse_die_runtime",
+            "$.coarse_die_runtime.accounting_history_complete",
+            "$.coarse_die_runtime.counter_scope",
+            "$.coarse_die_runtime.hbm_direction_order",
+            "$.coarse_die_runtime.hbm_direction_order[]",
+            "$.coarse_die_runtime.hbm_served_bytes_by_row_direction_exact",
+            "$.coarse_die_runtime.hbm_served_bytes_by_row_direction_exact[]",
+            "$.coarse_die_runtime.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.coarse_die_runtime.legacy_unclassified_hbm_bytes_by_row_direction_exact",
+            "$.coarse_die_runtime.legacy_unclassified_hbm_bytes_by_row_direction_exact[]",
+            "$.coarse_die_runtime.legacy_unclassified_hbm_bytes_by_row_direction_exact[][]",
+            "$.coarse_die_runtime.raw_hardware_denominators",
+            "$.coarse_die_runtime.raw_hardware_denominators.available",
+            "$.coarse_die_runtime.raw_hardware_denominators.hardware_fingerprint",
+            "$.coarse_die_runtime.raw_hardware_denominators.hbm_row_peak_Bps",
+            "$.coarse_die_runtime.raw_hardware_denominators.hbm_row_peak_Bps[]",
+            "$.coarse_die_runtime.raw_hardware_denominators.peak_int4_ops_per_s",
+            "$.coarse_die_runtime.raw_hardware_denominators.peak_vec_fp32_eq_ops_per_s",
+            "$.coarse_die_runtime.served_by_category",
+            "$.coarse_die_runtime.served_by_category.comm_recv",
+            "$.coarse_die_runtime.served_by_category.comm_recv.hbm_served_bytes_by_row_direction",
+            "$.coarse_die_runtime.served_by_category.comm_recv.hbm_served_bytes_by_row_direction[]",
+            "$.coarse_die_runtime.served_by_category.comm_recv.hbm_served_bytes_by_row_direction[][]",
+            "$.coarse_die_runtime.served_by_category.comm_recv.hbm_served_bytes_by_row_direction_exact",
+            "$.coarse_die_runtime.served_by_category.comm_recv.hbm_served_bytes_by_row_direction_exact[]",
+            "$.coarse_die_runtime.served_by_category.comm_recv.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.coarse_die_runtime.served_by_category.comm_recv.int4_ops",
+            "$.coarse_die_runtime.served_by_category.comm_recv.int4_ops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.comm_recv.vec_eqops",
+            "$.coarse_die_runtime.served_by_category.comm_recv.vec_eqops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.comm_send",
+            "$.coarse_die_runtime.served_by_category.comm_send.hbm_served_bytes_by_row_direction",
+            "$.coarse_die_runtime.served_by_category.comm_send.hbm_served_bytes_by_row_direction[]",
+            "$.coarse_die_runtime.served_by_category.comm_send.hbm_served_bytes_by_row_direction[][]",
+            "$.coarse_die_runtime.served_by_category.comm_send.hbm_served_bytes_by_row_direction_exact",
+            "$.coarse_die_runtime.served_by_category.comm_send.hbm_served_bytes_by_row_direction_exact[]",
+            "$.coarse_die_runtime.served_by_category.comm_send.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.coarse_die_runtime.served_by_category.comm_send.int4_ops",
+            "$.coarse_die_runtime.served_by_category.comm_send.int4_ops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.comm_send.vec_eqops",
+            "$.coarse_die_runtime.served_by_category.comm_send.vec_eqops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.comp",
+            "$.coarse_die_runtime.served_by_category.comp.hbm_served_bytes_by_row_direction",
+            "$.coarse_die_runtime.served_by_category.comp.hbm_served_bytes_by_row_direction[]",
+            "$.coarse_die_runtime.served_by_category.comp.hbm_served_bytes_by_row_direction[][]",
+            "$.coarse_die_runtime.served_by_category.comp.hbm_served_bytes_by_row_direction_exact",
+            "$.coarse_die_runtime.served_by_category.comp.hbm_served_bytes_by_row_direction_exact[]",
+            "$.coarse_die_runtime.served_by_category.comp.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.coarse_die_runtime.served_by_category.comp.int4_ops",
+            "$.coarse_die_runtime.served_by_category.comp.int4_ops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.comp.vec_eqops",
+            "$.coarse_die_runtime.served_by_category.comp.vec_eqops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.die",
+            "$.coarse_die_runtime.served_by_category.die.hbm_served_bytes_by_row_direction",
+            "$.coarse_die_runtime.served_by_category.die.hbm_served_bytes_by_row_direction[]",
+            "$.coarse_die_runtime.served_by_category.die.hbm_served_bytes_by_row_direction[][]",
+            "$.coarse_die_runtime.served_by_category.die.hbm_served_bytes_by_row_direction_exact",
+            "$.coarse_die_runtime.served_by_category.die.hbm_served_bytes_by_row_direction_exact[]",
+            "$.coarse_die_runtime.served_by_category.die.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.coarse_die_runtime.served_by_category.die.int4_ops",
+            "$.coarse_die_runtime.served_by_category.die.int4_ops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.die.vec_eqops",
+            "$.coarse_die_runtime.served_by_category.die.vec_eqops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.pool",
+            "$.coarse_die_runtime.served_by_category.pool.hbm_served_bytes_by_row_direction",
+            "$.coarse_die_runtime.served_by_category.pool.hbm_served_bytes_by_row_direction[]",
+            "$.coarse_die_runtime.served_by_category.pool.hbm_served_bytes_by_row_direction[][]",
+            "$.coarse_die_runtime.served_by_category.pool.hbm_served_bytes_by_row_direction_exact",
+            "$.coarse_die_runtime.served_by_category.pool.hbm_served_bytes_by_row_direction_exact[]",
+            "$.coarse_die_runtime.served_by_category.pool.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.coarse_die_runtime.served_by_category.pool.int4_ops",
+            "$.coarse_die_runtime.served_by_category.pool.int4_ops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.pool.vec_eqops",
+            "$.coarse_die_runtime.served_by_category.pool.vec_eqops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.restore",
+            "$.coarse_die_runtime.served_by_category.restore.hbm_served_bytes_by_row_direction",
+            "$.coarse_die_runtime.served_by_category.restore.hbm_served_bytes_by_row_direction[]",
+            "$.coarse_die_runtime.served_by_category.restore.hbm_served_bytes_by_row_direction[][]",
+            "$.coarse_die_runtime.served_by_category.restore.hbm_served_bytes_by_row_direction_exact",
+            "$.coarse_die_runtime.served_by_category.restore.hbm_served_bytes_by_row_direction_exact[]",
+            "$.coarse_die_runtime.served_by_category.restore.hbm_served_bytes_by_row_direction_exact[][]",
+            "$.coarse_die_runtime.served_by_category.restore.int4_ops",
+            "$.coarse_die_runtime.served_by_category.restore.int4_ops_exact_decimal",
+            "$.coarse_die_runtime.served_by_category.restore.vec_eqops",
+            "$.coarse_die_runtime.served_by_category.restore.vec_eqops_exact_decimal",
+            "$.coarse_die_runtime.source",
+            "$.coarse_die_runtime.totals_semantics",
+            "$.coarse_die_runtime.typed_totals_history_complete",
+            "$.coarse_die_runtime.utilization",
+            "$.coarse_die_runtime.utilization.hbm_by_row",
+            "$.coarse_die_runtime.utilization.hbm_by_row[]",
+            "$.coarse_die_runtime.utilization.hbm_by_row[].denominator_bytes",
+            "$.coarse_die_runtime.utilization.hbm_by_row[].denominator_definition",
+            "$.coarse_die_runtime.utilization.hbm_by_row[].numerator_bytes_exact_decimal",
+            "$.coarse_die_runtime.utilization.hbm_by_row[].row",
+            "$.coarse_die_runtime.utilization.hbm_by_row[].status",
+            "$.coarse_die_runtime.utilization.hbm_by_row[].utilization",
+            "$.coarse_die_runtime.utilization.hbm_total",
+            "$.coarse_die_runtime.utilization.hbm_total.denominator_bytes",
+            "$.coarse_die_runtime.utilization.hbm_total.denominator_definition",
+            "$.coarse_die_runtime.utilization.hbm_total.numerator_bytes_exact_decimal",
+            "$.coarse_die_runtime.utilization.hbm_total.status",
+            "$.coarse_die_runtime.utilization.hbm_total.utilization",
+            "$.coarse_die_runtime.utilization.int4",
+            "$.coarse_die_runtime.utilization.int4.denominator_definition",
+            "$.coarse_die_runtime.utilization.int4.denominator_ops",
+            "$.coarse_die_runtime.utilization.int4.numerator_ops_exact_decimal",
+            "$.coarse_die_runtime.utilization.int4.status",
+            "$.coarse_die_runtime.utilization.int4.utilization",
+            "$.coarse_die_runtime.utilization.vec_fp32_eq",
+            "$.coarse_die_runtime.utilization.vec_fp32_eq.denominator_definition",
+            "$.coarse_die_runtime.utilization.vec_fp32_eq.denominator_eqops",
+            "$.coarse_die_runtime.utilization.vec_fp32_eq.numerator_eqops_exact_decimal",
+            "$.coarse_die_runtime.utilization.vec_fp32_eq.status",
+            "$.coarse_die_runtime.utilization.vec_fp32_eq.utilization",
+            "$.coarse_die_runtime.utilization_status",
+            "$.coarse_die_runtime.utilization_window",
+            "$.coarse_die_runtime.utilization_window_ns",
+            "$.die_cancelled_comp_count"
+          ],
+          "base_variant_only_fields": [],
+          "base_variant_unmapped_reason": null,
+          "baseline_count": 8,
+          "coverage": "checked_against_pre_port_LRU_full_detail_schema",
+          "legacy_key_count": 33,
+          "legacy_nested_field_count": 34,
+          "missing_legacy_keys": [],
+          "missing_nested_legacy_fields": [],
+          "nested_value_type_errors": [],
+          "observed_count": 8,
+          "unmapped_base_variant_only_fields": [],
+          "value_type_errors": []
+        },
+        "request": {
+          "additional_observed_keys": [],
+          "additional_observed_nested_fields": [],
+          "base_variant_only_fields": [],
+          "base_variant_unmapped_reason": null,
+          "baseline_count": 1,
+          "coverage": "checked_against_pre_port_LRU_full_detail_schema",
+          "legacy_key_count": 24,
+          "legacy_nested_field_count": 25,
+          "missing_legacy_keys": [],
+          "missing_nested_legacy_fields": [],
+          "nested_value_type_errors": [],
+          "observed_count": 1,
+          "unmapped_base_variant_only_fields": [],
+          "value_type_errors": []
+        },
+        "summary": {
+          "additional_observed_keys": [],
+          "additional_observed_nested_fields": [],
+          "base_variant_only_fields": [],
+          "base_variant_unmapped_reason": null,
+          "baseline_count": 1,
+          "coverage": "checked_against_pre_port_LRU_full_detail_schema",
+          "legacy_key_count": 35,
+          "legacy_nested_field_count": 36,
+          "missing_legacy_keys": [],
+          "missing_nested_legacy_fields": [],
+          "nested_value_type_errors": [],
+          "observed_count": 1,
+          "unmapped_base_variant_only_fields": [],
+          "value_type_errors": []
+        }
+      },
+      "reference_cpp_log_sha256": "b6fe97bffe71585de6bd6dbd195825a6ffb213965cab33bbaea39a7fef506181",
+      "reference_run": "/workspace/template/work/lru-online-workspace-20261014/e2e/run",
+      "unit_named_fields": {
+        "capacity_timeavg": {
+          "field_count": 6,
+          "invalid_types": [],
+          "types_by_field": {
+            "$.capacity_bytes": {
+              "baseline": [],
+              "observed": []
+            },
+            "$.committed_byte_ns": {
+              "baseline": [
+                "string"
+              ],
+              "observed": [
+                "string"
+              ]
+            },
+            "$.replay_final_committed_used_bytes": {
+              "baseline": [
+                "string"
+              ],
+              "observed": [
+                "string"
+              ]
+            },
+            "$.replay_final_physical_used_bytes": {
+              "baseline": [
+                "string"
+              ],
+              "observed": [
+                "string"
+              ]
+            },
+            "$.resident_byte_ns": {
+              "baseline": [
+                "string"
+              ],
+              "observed": [
+                "string"
+              ]
+            },
+            "$.utilization_window_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            }
+          }
+        },
+        "consistency": {
+          "field_count": 0,
+          "invalid_types": [],
+          "types_by_field": {}
+        },
+        "hbm_watermark_summary": {
+          "field_count": 6,
+          "invalid_types": [],
+          "types_by_field": {
+            "$.capacity_bytes": {
+              "baseline": [],
+              "observed": []
+            },
+            "$.committed_peak_bytes": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.committed_timeavg_bytes": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.resident_peak_bytes": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.resident_timeavg_bytes": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.watermark_period_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            }
+          }
+        },
+        "init": {
+          "field_count": 2,
+          "invalid_types": [],
+          "types_by_field": {
+            "$.slo_sampling.link_bucket_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.slo_sampling.watermark_period_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            }
+          }
+        },
+        "local_hbm": {
+          "field_count": 17,
+          "invalid_types": [],
+          "types_by_field": {
+            "$.dram_bw_util_numerator_bytes": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.hbm_busy_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.hbm_shared_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.local_hbm_bw_bytes_per_second": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.comm_recv.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.comm_recv.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.comm_send.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.comm_send.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.comp.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.comp.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.die.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.die.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.pool.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.pool.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.restore.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.served_by_category.restore.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.utilization_window_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            }
+          }
+        },
+        "rank_compute": {
+          "field_count": 26,
+          "invalid_types": [],
+          "types_by_field": {
+            "$.coarse_die_runtime.raw_hardware_denominators.peak_int4_ops_per_s": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.raw_hardware_denominators.peak_vec_fp32_eq_ops_per_s": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.comm_recv.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.comm_recv.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.comm_send.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.comm_send.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.comp.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.comp.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.die.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.die.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.pool.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.pool.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.restore.int4_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.served_by_category.restore.vec_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.utilization.hbm_by_row[].denominator_bytes": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.utilization.hbm_total.denominator_bytes": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.utilization.int4.denominator_ops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.utilization.vec_fp32_eq.denominator_eqops": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.coarse_die_runtime.utilization_window_ns": {
+              "baseline": [],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.gpu_busy_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.local_hbm_bw_bytes_per_second": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.local_hbm_restore_bytes": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.total_local_bytes": {
+              "baseline": [
+                "string"
+              ],
+              "observed": [
+                "string"
+              ]
+            },
+            "$.total_num_ops": {
+              "baseline": [
+                "string"
+              ],
+              "observed": [
+                "string"
+              ]
+            },
+            "$.utilization_window_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.wall_time_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            }
+          }
+        },
+        "request": {
+          "field_count": 12,
+          "invalid_types": [],
+          "types_by_field": {
+            "$.arrival_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.completion_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.decode_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.decode_start_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.e2e_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.first_token_completion_skew_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.first_token_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.prefill_decode_gap_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.prefill_end_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.prefill_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.prefill_start_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.queue_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            }
+          }
+        },
+        "summary": {
+          "field_count": 11,
+          "invalid_types": [],
+          "types_by_field": {
+            "$.drain_tput_denominator_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.first_arrival_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.last_completion_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.max_e2e_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.mean_e2e_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.min_e2e_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.p50_e2e_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.p95_e2e_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.p99_e2e_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.sim_end_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            },
+            "$.sim_window_tput_denominator_ns": {
+              "baseline": [
+                "number"
+              ],
+              "observed": [
+                "number"
+              ]
+            }
+          }
+        }
+      },
+      "unobserved_legacy_record_types": [
+        "iteration",
+        "memory_anchor"
+      ]
+    },
+    "legacy_request_identity": {
+      "arrival_identities": [
+        {
+          "request_id": "session_workspace_e2e_s0_request_0",
+          "session_id": "session_workspace_e2e_s0",
+          "turn_index": 0
+        }
+      ],
+      "expected": {
+        "request_id": "session_workspace_e2e_s0_request_0",
+        "session_id": "session_workspace_e2e_s0",
+        "turn_index": 0
+      },
+      "kv_delta_rows": 40,
+      "kv_rows_with_session_key": 32,
+      "request_metric_rows": 1,
+      "scheduler_decision_rows": 3
+    },
+    "metrics_contract": {
+      "consistency_ok": true,
+      "gate_window_checked": true,
+      "observed_record_types": [
+        "capacity_timeavg",
+        "consistency",
+        "hbm_watermark_summary",
+        "init",
+        "local_hbm",
+        "rank_compute",
+        "request",
+        "summary"
+      ],
+      "sim_end_ns": 121204
+    },
+    "model_parallel_contract": {
+      "model_identity": "MHA/GQA1: Q=4 KV=4 head_dim=128",
+      "spec_slices": [
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "qkv_rope",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "attention_region",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "o_proj",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "ffn_region",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "logits",
+          "q_heads_local": 1,
+          "rank": 0,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "qkv_rope",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "attention_region",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "o_proj",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "ffn_region",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "logits",
+          "q_heads_local": 1,
+          "rank": 1,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "qkv_rope",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "attention_region",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "o_proj",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "ffn_region",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "logits",
+          "q_heads_local": 1,
+          "rank": 2,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "qkv_rope",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "attention_region",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "o_proj",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "ffn_region",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "logits",
+          "q_heads_local": 1,
+          "rank": 3,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "qkv_rope",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "attention_region",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "o_proj",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "ffn_region",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "logits",
+          "q_heads_local": 1,
+          "rank": 4,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "qkv_rope",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "attention_region",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "o_proj",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "ffn_region",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "logits",
+          "q_heads_local": 1,
+          "rank": 5,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "qkv_rope",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "attention_region",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "o_proj",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "ffn_region",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "logits",
+          "q_heads_local": 1,
+          "rank": 6,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "qkv_rope",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "attention_region",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "o_proj",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "ffn_region",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "residual",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "norm",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        },
+        {
+          "ffn_local": 256,
+          "head_dim": 128,
+          "kv_heads_local": 1,
+          "num_kv_heads": 4,
+          "num_q_heads": 4,
+          "op_kind": "logits",
+          "q_heads_local": 1,
+          "rank": 7,
+          "tensor_parallel": 4
+        }
+      ],
+      "tensor_parallel": 4,
+      "typed_spec_count": 80
+    },
+    "service_counters": {
+      "accepted": 1,
+      "active": 0,
+      "completed": 1,
+      "pending_alarm": 0
+    },
+    "terminal_lifecycle": {
+      "terminal_other": 0,
+      "terminal_skipped": 0,
+      "terminal_success": 124,
+      "terminal_total": 124
+    },
+    "typed_math_and_markers": {
+      "control_marker_count": 8,
+      "marker_typed_spec_nodes": [],
+      "rank_math": {
+        "0": {
+          "comp_int4_ops": 119537664.0,
+          "comp_vec_eqops": 20062208.0,
+          "marker_int4_ops": 0.0,
+          "marker_vec_eqops": 0.0,
+          "runtime_math_coverage": "observed"
+        },
+        "1": {
+          "comp_int4_ops": 119537664.0,
+          "comp_vec_eqops": 20062208.0,
+          "marker_int4_ops": 0.0,
+          "marker_vec_eqops": 0.0,
+          "runtime_math_coverage": "observed"
+        },
+        "2": {
+          "comp_int4_ops": 119537664.0,
+          "comp_vec_eqops": 20062208.0,
+          "marker_int4_ops": 0.0,
+          "marker_vec_eqops": 0.0,
+          "runtime_math_coverage": "observed"
+        },
+        "3": {
+          "comp_int4_ops": 119537664.0,
+          "comp_vec_eqops": 20062208.0,
+          "marker_int4_ops": 0.0,
+          "marker_vec_eqops": 0.0,
+          "runtime_math_coverage": "observed"
+        },
+        "4": {
+          "comp_int4_ops": 1868288.0,
+          "comp_vec_eqops": 3816594.0,
+          "marker_int4_ops": 0.0,
+          "marker_vec_eqops": 0.0,
+          "runtime_math_coverage": "observed"
+        },
+        "5": {
+          "comp_int4_ops": 1868288.0,
+          "comp_vec_eqops": 3816594.0,
+          "marker_int4_ops": 0.0,
+          "marker_vec_eqops": 0.0,
+          "runtime_math_coverage": "observed"
+        },
+        "6": {
+          "comp_int4_ops": 1868288.0,
+          "comp_vec_eqops": 3816594.0,
+          "marker_int4_ops": 0.0,
+          "marker_vec_eqops": 0.0,
+          "runtime_math_coverage": "observed"
+        },
+        "7": {
+          "comp_int4_ops": 1868288.0,
+          "comp_vec_eqops": 3816594.0,
+          "marker_int4_ops": 0.0,
+          "marker_vec_eqops": 0.0,
+          "runtime_math_coverage": "observed"
+        }
+      }
+    },
+    "workspace_leases": {
+      "capacity_checks": [
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 0,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 0,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 32768,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 0,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 1,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 32768,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 0,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 2,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 32768,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 0,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 3,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 32768,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 0,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 4,
+          "reserved_request_bytes": 33280,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 0,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 5,
+          "reserved_request_bytes": 33280,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 0,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 6,
+          "reserved_request_bytes": 33280,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 0,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 7,
+          "reserved_request_bytes": 33280,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 1,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 0,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 1,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 1,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 1,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 2,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 1,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 3,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 1,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 4,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 33280,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 1,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 5,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 33280,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 1,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 6,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 33280,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 1,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 7,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 33280,
+          "workspace_revision": 0
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 2,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 0,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 2,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 1,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 2,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 2,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 2,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 3,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 2,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 4,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 2,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 5,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 2,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 6,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        },
+        {
+          "active_workspace_bytes": 0,
+          "capacity_bytes": 144000000000,
+          "delivery_sequence": 2,
+          "fits": true,
+          "model_weight_bytes": 1573632,
+          "rank": 7,
+          "reserved_request_bytes": 0,
+          "resident_kv_bytes": 0,
+          "workspace_revision": 20
+        }
+      ],
+      "inferred_acquisitions_by_rank": {
+        "0": 10,
+        "1": 10,
+        "2": 10,
+        "3": 10,
+        "4": 10,
+        "5": 10,
+        "6": 10,
+        "7": 10
+      },
+      "inferred_releases_by_rank": {
+        "0": 10,
+        "1": 10,
+        "2": 10,
+        "3": 10,
+        "4": 10,
+        "5": 10,
+        "6": 10,
+        "7": 10
+      },
+      "observation_scope": "bridge-boundary workspace_state snapshots only; no phase-wide live sample",
+      "plans": [
+        {
+          "active_after": 0,
+          "delivery_sequence": 0,
+          "hbm_workspace_peak_bytes": [
+            65536
+          ],
+          "inferred_acquires": 10,
+          "op_kinds": [
+            "ffn_region"
+          ],
+          "positive_plan_count": 1,
+          "rank": 0,
+          "revision_after": 20,
+          "revision_before": 0
+        },
+        {
+          "active_after": 0,
+          "delivery_sequence": 0,
+          "hbm_workspace_peak_bytes": [
+            65536
+          ],
+          "inferred_acquires": 10,
+          "op_kinds": [
+            "ffn_region"
+          ],
+          "positive_plan_count": 1,
+          "rank": 1,
+          "revision_after": 20,
+          "revision_before": 0
+        },
+        {
+          "active_after": 0,
+          "delivery_sequence": 0,
+          "hbm_workspace_peak_bytes": [
+            65536
+          ],
+          "inferred_acquires": 10,
+          "op_kinds": [
+            "ffn_region"
+          ],
+          "positive_plan_count": 1,
+          "rank": 2,
+          "revision_after": 20,
+          "revision_before": 0
+        },
+        {
+          "active_after": 0,
+          "delivery_sequence": 0,
+          "hbm_workspace_peak_bytes": [
+            65536
+          ],
+          "inferred_acquires": 10,
+          "op_kinds": [
+            "ffn_region"
+          ],
+          "positive_plan_count": 1,
+          "rank": 3,
+          "revision_after": 20,
+          "revision_before": 0
+        },
+        {
+          "active_after": 0,
+          "delivery_sequence": 1,
+          "hbm_workspace_peak_bytes": [
+            1024
+          ],
+          "inferred_acquires": 10,
+          "op_kinds": [
+            "ffn_region"
+          ],
+          "positive_plan_count": 1,
+          "rank": 4,
+          "revision_after": 20,
+          "revision_before": 0
+        },
+        {
+          "active_after": 0,
+          "delivery_sequence": 1,
+          "hbm_workspace_peak_bytes": [
+            1024
+          ],
+          "inferred_acquires": 10,
+          "op_kinds": [
+            "ffn_region"
+          ],
+          "positive_plan_count": 1,
+          "rank": 5,
+          "revision_after": 20,
+          "revision_before": 0
+        },
+        {
+          "active_after": 0,
+          "delivery_sequence": 1,
+          "hbm_workspace_peak_bytes": [
+            1024
+          ],
+          "inferred_acquires": 10,
+          "op_kinds": [
+            "ffn_region"
+          ],
+          "positive_plan_count": 1,
+          "rank": 6,
+          "revision_after": 20,
+          "revision_before": 0
+        },
+        {
+          "active_after": 0,
+          "delivery_sequence": 1,
+          "hbm_workspace_peak_bytes": [
+            1024
+          ],
+          "inferred_acquires": 10,
+          "op_kinds": [
+            "ffn_region"
+          ],
+          "positive_plan_count": 1,
+          "rank": 7,
+          "revision_after": 20,
+          "revision_before": 0
+        }
+      ],
+      "positive_live_workspace_observed": false,
+      "positive_live_workspace_samples": [],
+      "positive_plan_ranks": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "positive_workspace_plan_coverage": "positive_plans_observed"
+    }
+  },
+  "errors": [],
+  "request_count": 3,
+  "response_count": 3,
+  "run_dir": "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/run",
+  "status": "passed"
+}

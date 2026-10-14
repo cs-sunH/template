@@ -1,0 +1,68 @@
+{
+  "status": "passed",
+  "scope": "exact Fraction offline solo; production not changed",
+  "small": [
+    {
+      "fixture": "strict_small",
+      "boundaries": 38,
+      "max_events_pause_resume": 29,
+      "capacity_change_events": 30,
+      "status": "passed"
+    },
+    {
+      "fixture": "int4_native_small",
+      "boundaries": 35,
+      "max_events_pause_resume": 27,
+      "capacity_change_events": 28,
+      "status": "passed"
+    },
+    {
+      "fixture": "int4_converted_fractional",
+      "boundaries": 38,
+      "max_events_pause_resume": 29,
+      "capacity_change_events": 30,
+      "status": "passed"
+    },
+    {
+      "fixture": "int4_converted_storage",
+      "boundaries": 38,
+      "max_events_pause_resume": 29,
+      "capacity_change_events": 30,
+      "status": "passed"
+    },
+    {
+      "fixture": "dense",
+      "boundaries": 37,
+      "max_events_pause_resume": 99,
+      "capacity_change_events": 104,
+      "status": "passed"
+    },
+    {
+      "fixture": "output_pressure_k1_tiles128",
+      "boundaries": 40,
+      "max_events_pause_resume": 21,
+      "capacity_change_events": 22,
+      "status": "passed"
+    }
+  ],
+  "huge": [
+    {
+      "fixture": "large_k",
+      "status": "passed",
+      "total_events": 102,
+      "skipped_waves": "9999964",
+      "comparison": "same exact study without stops; no independent huge expansion"
+    },
+    {
+      "fixture": "large_outputs",
+      "status": "passed",
+      "total_events": 100,
+      "skipped_waves": "130000605",
+      "comparison": "same exact study without stops; no independent huge expansion"
+    }
+  ],
+  "source_sha256": {
+    "solo_stop_13.py": "935295b72de3d809322dd0455b37564a6bf4185f7f38d041863f627eb3501ac1",
+    "check_stops.py": "61a1d079908583f10d01076ddff78e246b17edfd1cb1e2b9986eb313b633327c"
+  }
+}

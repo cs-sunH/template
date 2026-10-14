@@ -1,0 +1,2 @@
+session_id,turn_index,request_id,prefill_length,decode_length,session_arrival_time_ns,inter_request_interval_ns,description
+session_workspace_e2e_s0,0,session_workspace_e2e_s0_request_0,64,1,0,,compute_20 first-30-seconds window; turn-0 prefix recomputed as prefill work

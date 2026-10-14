@@ -1,0 +1,1049 @@
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/MetricCollector.cc b/astra-sim-wscllm-LRU/astra-sim/workload/MetricCollector.cc
+index a0f89d8..296ea55 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/MetricCollector.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/MetricCollector.cc
+@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
+ #include "astra-sim/workload/MetricCollector.hh"
+ 
+ #include "astra-sim/system/Sys.hh"
++#include "astra-sim/workload/CoarseDieRuntime.hh"
+ #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
+ #include "astra-sim/workload/Statistics.hh"
+ #include "astra-sim/workload/Workload.hh"
+@@ -13,13 +14,17 @@ LICENSE file in the root directory of this source tree.
+ #include <json/json.hpp>
+ 
+ #include <algorithm>
++#include <array>
+ #include <cerrno>
+ #include <cmath>
++#include <cstdlib>
+ #include <cstring>
+ #include <cstdio>
+ #include <fstream>
++#include <iomanip>
+ #include <iostream>
+ #include <limits>
++#include <sstream>
+ #include <unordered_set>
+ #include <unistd.h>
+ 
+@@ -87,6 +92,234 @@ long double u128_to_long_double(unsigned __int128 value) {
+     return hi * 18446744073709551616.0L + lo;
+ }
+ 
++using ExactHbmMatrix = std::array<std::array<long double, 2>, 2>;
++
++long double parse_runtime_exact_counter(const json& value,
++                                        const std::string& field) {
++    if (!value.is_string()) {
++        throw std::runtime_error("coarse_die Runtime counter " + field +
++                                 " is not an exact decimal string");
++    }
++    const std::string text = value.get<std::string>();
++    char* end = nullptr;
++    errno = 0;
++    const long double parsed = std::strtold(text.c_str(), &end);
++    if (errno == ERANGE || end != text.c_str() + text.size() ||
++        !std::isfinite(parsed) || parsed < 0.0L) {
++        throw std::runtime_error("coarse_die Runtime counter " + field +
++                                 " is not a finite non-negative decimal");
++    }
++    return parsed;
++}
++
++std::string exact_runtime_decimal(long double value) {
++    std::ostringstream stream;
++    stream << std::setprecision(std::numeric_limits<long double>::max_digits10)
++           << value;
++    return stream.str();
++}
++
++ExactHbmMatrix parse_runtime_hbm_matrix(const json& value,
++                                       const std::string& field) {
++    if (!value.is_array() || value.size() != 2) {
++        throw std::runtime_error("coarse_die Runtime counter " + field +
++                                 " must have two rows");
++    }
++    ExactHbmMatrix matrix{};
++    for (size_t row = 0; row < 2; ++row) {
++        if (!value.at(row).is_array() || value.at(row).size() != 2) {
++            throw std::runtime_error("coarse_die Runtime counter " + field +
++                                     " has a malformed row");
++        }
++        for (size_t direction = 0; direction < 2; ++direction) {
++            matrix[row][direction] = parse_runtime_exact_counter(
++                value.at(row).at(direction), field + "[" +
++                    std::to_string(row) + "][" +
++                    std::to_string(direction) + "]");
++        }
++    }
++    return matrix;
++}
++
++long double hbm_matrix_total(const ExactHbmMatrix& matrix) {
++    long double total = 0.0L;
++    for (const auto& row : matrix) {
++        for (const long double direction : row) {
++            total += direction;
++        }
++    }
++    return total;
++}
++
++long double hbm_category_total(const json& runtime_counters,
++                               const char* category) {
++    const json& served = runtime_counters.at("served_by_category").at(category);
++    return hbm_matrix_total(parse_runtime_hbm_matrix(
++        served.at("hbm_served_bytes_by_row_direction_exact"),
++        std::string("served_by_category.") + category +
++            ".hbm_served_bytes_by_row_direction_exact"));
++}
++
++json coarse_die_runtime_metric_record(const json& runtime_counters,
++                                      Tick window_ns) {
++    const bool accounting_complete =
++        runtime_counters.value("accounting_history_complete", false);
++    const bool typed_complete =
++        runtime_counters.value("typed_totals_history_complete", false);
++    const bool history_complete = accounting_complete && typed_complete;
++    const json& raw = runtime_counters.at("hardware_raw");
++    const bool raw_available = raw.value("available", false);
++    const long double window_seconds =
++        static_cast<long double>(window_ns) / 1e9L;
++
++    const json& categories = runtime_counters.at("served_by_category");
++    const json& comp = categories.at("comp");
++    const long double int4_ops = parse_runtime_exact_counter(
++        comp.at("int4_ops_exact_decimal"),
++        "served_by_category.comp.int4_ops_exact_decimal");
++    const long double vec_eqops = parse_runtime_exact_counter(
++        comp.at("vec_eqops_exact_decimal"),
++        "served_by_category.comp.vec_eqops_exact_decimal");
++    const ExactHbmMatrix total_hbm = parse_runtime_hbm_matrix(
++        runtime_counters.at("hbm_served_bytes_by_row_direction_exact"),
++        "hbm_served_bytes_by_row_direction_exact");
++    const long double total_hbm_bytes = hbm_matrix_total(total_hbm);
++    const auto& row_peaks = raw.at("hbm_row_peak_Bps");
++    long double int4_denominator = 0.0L;
++    long double vec_denominator = 0.0L;
++    std::array<long double, 2> hbm_row_denominators{};
++    bool int4_peak_valid = raw_available &&
++        raw.at("peak_int4_ops_per_s").is_number();
++    bool vec_peak_valid = raw_available &&
++        raw.at("peak_vec_fp32_eq_ops_per_s").is_number();
++    if (int4_peak_valid) {
++        const long double peak = raw.at("peak_int4_ops_per_s").get<double>();
++        int4_peak_valid = peak > 0.0L && std::isfinite(peak);
++        int4_denominator = peak * window_seconds;
++    }
++    if (vec_peak_valid) {
++        const long double peak =
++            raw.at("peak_vec_fp32_eq_ops_per_s").get<double>();
++        vec_peak_valid = peak > 0.0L && std::isfinite(peak);
++        vec_denominator = peak * window_seconds;
++    }
++    bool hbm_peaks_valid = raw_available && row_peaks.is_array() &&
++        row_peaks.size() == 2;
++    std::array<long double, 2> row_peak_values{};
++    if (hbm_peaks_valid) {
++        for (size_t row = 0; row < 2; ++row) {
++            if (!row_peaks.at(row).is_number()) {
++                hbm_peaks_valid = false;
++                break;
++            }
++            row_peak_values[row] = row_peaks.at(row).get<double>();
++            if (!(row_peak_values[row] > 0.0L) ||
++                !std::isfinite(row_peak_values[row])) {
++                hbm_peaks_valid = false;
++                break;
++            }
++            hbm_row_denominators[row] =
++                row_peak_values[row] * window_seconds;
++        }
++    }
++
++    const char* unavailable_reason = nullptr;
++    if (!history_complete) {
++        unavailable_reason = "incomplete_runtime_counter_history";
++    } else if (window_ns == 0) {
++        unavailable_reason = "zero_utilization_window";
++    } else if (!raw_available) {
++        unavailable_reason = "raw_hardware_denominators_unavailable";
++    }
++    const auto utilization = [history_complete, window_ns](long double numerator,
++                                                            long double denominator,
++                                                            bool valid_peak) {
++        if (!history_complete || window_ns == 0 || !valid_peak ||
++            !(denominator > 0.0L) || !std::isfinite(denominator)) {
++            return json(nullptr);
++        }
++        return json(static_cast<double>(numerator / denominator));
++    };
++
++    json int4 = {
++        {"numerator_ops_exact_decimal", exact_runtime_decimal(int4_ops)},
++        {"denominator_ops", int4_denominator},
++        {"denominator_definition", "raw_peak_int4_ops_per_s*window_seconds"},
++        {"utilization", utilization(int4_ops, int4_denominator,
++                                     int4_peak_valid)},
++        {"status", !history_complete ? "incomplete_runtime_counter_history"
++                   : window_ns == 0 ? "zero_utilization_window"
++                   : !int4_peak_valid ? "raw_peak_unavailable"
++                                      : "available"}};
++    json vec = {
++        {"numerator_eqops_exact_decimal", exact_runtime_decimal(vec_eqops)},
++        {"denominator_eqops", vec_denominator},
++        {"denominator_definition",
++         "raw_peak_vec_fp32_eq_ops_per_s*window_seconds"},
++        {"utilization", utilization(vec_eqops, vec_denominator,
++                                     vec_peak_valid)},
++        {"status", !history_complete ? "incomplete_runtime_counter_history"
++                   : window_ns == 0 ? "zero_utilization_window"
++                   : !vec_peak_valid ? "raw_peak_unavailable"
++                                     : "available"}};
++    json hbm_by_row = json::array();
++    for (size_t row = 0; row < 2; ++row) {
++        const long double row_bytes = total_hbm[row][0] + total_hbm[row][1];
++        hbm_by_row.push_back({
++            {"row", row},
++            {"numerator_bytes_exact_decimal", exact_runtime_decimal(row_bytes)},
++            {"denominator_bytes", hbm_row_denominators[row]},
++            {"denominator_definition", "raw_hbm_row_peak_Bps*window_seconds"},
++            {"utilization", utilization(row_bytes,
++                                         hbm_row_denominators[row],
++                                         hbm_peaks_valid)},
++            {"status", !history_complete ? "incomplete_runtime_counter_history"
++                       : window_ns == 0 ? "zero_utilization_window"
++                       : !hbm_peaks_valid ? "raw_peak_unavailable"
++                                          : "available"}});
++    }
++    const long double hbm_denominator =
++        hbm_row_denominators[0] + hbm_row_denominators[1];
++    const json hbm_total_util = utilization(total_hbm_bytes, hbm_denominator,
++                                            hbm_peaks_valid);
++    json hbm_total = {
++        {"numerator_bytes_exact_decimal",
++         exact_runtime_decimal(total_hbm_bytes)},
++        {"denominator_bytes", hbm_denominator},
++        {"denominator_definition",
++         "sum(raw_hbm_row_peak_Bps)*window_seconds"},
++        {"utilization", hbm_total_util},
++        {"status", !history_complete ? "incomplete_runtime_counter_history"
++                   : window_ns == 0 ? "zero_utilization_window"
++                   : !hbm_peaks_valid ? "raw_peak_unavailable"
++                                      : "available"}};
++
++    return {{"source", "coarse_die::Runtime::counters"},
++            {"counter_scope",
++             "rank_lifetime_served_work_including_active_cancelled_and_retired_executions"},
++            {"utilization_window_ns", window_ns},
++            {"utilization_window", "[0, sim_end_ns]"},
++            {"accounting_history_complete", accounting_complete},
++            {"typed_totals_history_complete", typed_complete},
++            {"totals_semantics", runtime_counters.value(
++                 "served_category_totals_semantics", "unknown")},
++            {"served_by_category", categories},
++            {"hbm_direction_order",
++             runtime_counters.value("hbm_direction_order", json::array())},
++            {"hbm_served_bytes_by_row_direction_exact",
++             runtime_counters.at("hbm_served_bytes_by_row_direction_exact")},
++            {"legacy_unclassified_hbm_bytes_by_row_direction_exact",
++             runtime_counters.at(
++                 "legacy_unclassified_hbm_bytes_by_row_direction_exact")},
++            {"raw_hardware_denominators", raw},
++            {"utilization_status", unavailable_reason == nullptr
++                 ? "available" : unavailable_reason},
++            {"utilization", {{"int4", std::move(int4)},
++                             {"vec_fp32_eq", std::move(vec)},
++                             {"hbm_total", std::move(hbm_total)},
++                             {"hbm_by_row", std::move(hbm_by_row)}}}};
++}
++
+ // Nearest-rank percentile (doc sec.3.5): index = ceil(p * N) - 1.
+ Tick nearest_rank_percentile(const std::vector<Tick>& sorted, double p) {
+     const size_t n = sorted.size();
+@@ -1138,6 +1371,13 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
+             this->rank_states_.count(sys->id) > 0
+                 ? this->rank_states_[sys->id]
+                 : RankMetricState{};
++        json coarse_counters;
++        json coarse_metrics;
++        if (sys->coarse_die_runtime != nullptr) {
++            coarse_counters = sys->coarse_die_runtime->counters_at(sim_end_tick);
++            coarse_metrics = coarse_die_runtime_metric_record(coarse_counters,
++                                                              sim_end_tick);
++        }
+ 
+         json record;
+         record["schema"] = 1;
+@@ -1148,6 +1388,11 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
+         record["rank"] = sys->id;
+         record["utilization_window_ns"] = sim_end_tick;
+         record["utilization_window"] = "[0, sim_end_ns]";
++        record["die_cancelled_comp_count"] =
++            sys->workload->die_cancelled_comp_count();
++        if (!coarse_counters.is_null()) {
++            record["coarse_die_runtime"] = coarse_metrics;
++        }
+         record["wall_time_ns"] = wall_time;
+         record["gpu_busy_ns"] = gpu_busy_ns;
+         const long double window_seconds =
+@@ -1340,7 +1585,75 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
+         // roofline_local_bytes record above is still emitted unchanged.
+         const LocalHbmBandwidthModel* hbm_model =
+             sys->workload->local_hbm_bandwidth_model.get();
+-        if (hbm_model != nullptr) {
++        if (!coarse_counters.is_null()) {
++            const auto category_direction = [&](const char* category,
++                                                  size_t direction) {
++                const ExactHbmMatrix matrix = parse_runtime_hbm_matrix(
++                    coarse_counters.at("served_by_category").at(category)
++                        .at("hbm_served_bytes_by_row_direction_exact"),
++                    category);
++                return matrix[0][direction] + matrix[1][direction];
++            };
++            const long double comp_read = category_direction("comp", 0) +
++                                          category_direction("die", 0);
++            const long double comp_write = category_direction("comp", 1) +
++                                           category_direction("die", 1);
++            const auto& hbm_total = coarse_metrics.at("utilization").at("hbm_total");
++            const auto& raw = coarse_counters.at("hardware_raw");
++            double raw_bandwidth = 0.0;
++            if (raw.value("available", false)) {
++                const auto& peaks = raw.at("hbm_row_peak_Bps");
++                raw_bandwidth = peaks[0].get<double>() + peaks[1].get<double>();
++            }
++            json hbm_record = {
++                {"schema", 1}, {"type", "local_hbm"},
++                {"source", "shared_coarse_die_runtime_model"},
++                {"model", "13-domain per-rank coarse Runtime"},
++                {"repo_variant", this->repo_variant_}, {"run_id", this->run_id_},
++                {"rank", sys->id}, {"utilization_window_ns", sim_end_tick},
++                {"utilization_window", "[0, sim_end_ns]"},
++                {"hbm_busy_ns", coarse_counters.at("hbm_busy_ns")},
++                {"hbm_busy_definition", "union of intervals with positive HBM service rate"},
++                {"hbm_shared_ns", coarse_counters.at("hbm_shared_ns")},
++                {"shared_definition", "at least two distinct owners with positive service on the same HBM row"},
++                // Retain the scalar-queue COMP category; typed DIE work is
++                // separate and contributes to the global total exactly once.
++                {"compute_bytes_served", hbm_model ? hbm_model->compute_bytes_served() : 0.0},
++                {"die_compute_read_bytes_served", static_cast<double>(comp_read)},
++                {"die_compute_write_bytes_served", static_cast<double>(comp_write)},
++                {"die_compute_read_bytes_served_exact_decimal", exact_runtime_decimal(comp_read)},
++                {"die_compute_write_bytes_served_exact_decimal", exact_runtime_decimal(comp_write)},
++                {"comm_read_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "comm_send"))},
++                {"comm_write_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "comm_recv"))},
++                {"restore_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "restore"))},
++                {"pool_read_bytes_served", static_cast<double>(category_direction("pool", 0))},
++                {"pool_write_bytes_served", static_cast<double>(category_direction("pool", 1))},
++                {"dram_bw_util", hbm_total.at("utilization")},
++                {"dram_bw_util_numerator_bytes", static_cast<double>(parse_runtime_exact_counter(hbm_total.at("numerator_bytes_exact_decimal"), "hbm_total_bytes"))},
++                {"dram_bw_util_numerator_bytes_exact_decimal", hbm_total.at("numerator_bytes_exact_decimal")},
++                {"dram_bw_util_denominator", "sum(raw_hbm_row_peak_Bps)*window_seconds"},
++                {"denominator_source", "coarse_die::Hardware.derived.hardware_summary.hbm_row_peak_Bps"},
++                {"local_hbm_bw_bytes_per_second", raw_bandwidth},
++                {"local_hbm_bw_source", "coarse_die raw hardware descriptor"},
++                {"served_by_category", coarse_counters.at("served_by_category")},
++                {"bytes_served_definition", "integrated physical payload; includes active, cancelled and retired executions"},
++                {"accounting_history_complete", coarse_counters.at("accounting_history_complete")},
++                {"arbiter_active_activities", coarse_counters.at("active_activities")},
++                {"allocation_updates", coarse_counters.at("allocation_updates")},
++                {"peak_concurrent_jobs", hbm_model ? hbm_model->peak_concurrent_jobs() : 0},
++                {"peak_concurrent_jobs_definition", "legacy scalar-queue peak; coarse logical-owner peak unavailable"},
++                {"redistribution_events", hbm_model ? hbm_model->redistribution_events() : 0},
++                {"redistribution_events_definition", "legacy scalar-queue membership changes; coarse allocation_updates reported separately"},
++                {"legacy_queue_counter_scope", "legacy scalar queue only; coarse logical-owner peaks are not instrumented"}
++            };
++            hbm_record["hbm_busy_util"] = sim_end_tick > 0
++                ? json(coarse_counters.at("hbm_busy_ns").get<double>() / sim_end_tick)
++                : json(nullptr);
++            hbm_record["hbm_shared_fraction_of_window"] = sim_end_tick > 0
++                ? json(coarse_counters.at("hbm_shared_ns").get<double>() / sim_end_tick)
++                : json(nullptr);
++            emit_record(hbm_record.dump());
++        } else if (hbm_model != nullptr) {
+             const double hbm_busy_ns = hbm_model->hbm_busy_ns();
+             const double hbm_shared_ns = hbm_model->hbm_shared_ns();
+             const double compute_bytes_served =
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc b/astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc
+index 487c738..2ecf10d 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc
+@@ -18,6 +18,7 @@ LICENSE file in the root directory of this source tree.
+ #include <algorithm>
+ #include <cmath>
+ #include <iostream>
++#include <limits>
+ #include <stdlib.h>
+ 
+ using namespace std;
+@@ -408,13 +409,71 @@ void Workload::issue_dep_free_nodes() {
+         // the real serialized physics (path-2 removal 2026-08-18: the
+         // replay-only concurrent calibrated-COMP bypass was deleted with
+         // the replay route).
+-        if (hw_resource->is_available(nv)) {
+-            issue(nv);
++        if (!hw_resource->is_available(nv)) {
++            return;
++        }
++
++        try {
++            const bool coarse_workspace_comp =
++                sys->coarse_die_runtime != nullptr &&
++                nv.node_type == ChakraNodeType::COMP_NODE &&
++                !nv.is_timer_op && !nv.is_cpu_op &&
++                nv.compute.op_role !=
++                    ExecutionDriven::OpRole::ControlMarker;
++            if (!coarse_workspace_comp) {
++                issue(nv);
++                return;
++            }
++
++            if (die_adapter_ == nullptr ||
++                sys->workspace_admission == nullptr) {
++                throw std::runtime_error(
++                    "coarse_die_v2 COMP requires a workspace admission "
++                    "ledger before issue");
++            }
++            auto prepared = die_adapter_->prepare_coarse_plan(nv);
++            auto admission = die_adapter_->try_acquire_workspace(prepared);
++            if (admission.status ==
++                WorkspaceAdmission::AcquireStatus::Blocked) {
++                // Keep this node free. A lease release or a changed
++                // capacity snapshot schedules its next issue attempt.
++                return;
++            }
++            if (admission.status ==
++                WorkspaceAdmission::AcquireStatus::Impossible) {
++                throw std::runtime_error(
++                    "coarse_die_v2 Plan workspace " +
++                    std::to_string(prepared.workspace_bytes) +
++                    " bytes exceeds empty-instance HBM capacity for node " +
++                    std::to_string(nv.global_id));
++            }
++            issue_prepared_coarse(nv, std::move(prepared),
++                                  std::move(admission.lease));
++        } catch (const std::exception& e) {
++            throw std::runtime_error(
++                "node issue failed (id=" + std::to_string(nv.global_id) +
++                " type=" + std::to_string(
++                               static_cast<uint64_t>(nv.node_type)) +
++                " name=\"" + nv.name + "\"): " + e.what());
+         }
+     });
+ }
+ 
+ void Workload::issue(const ExecutionDriven::NodeView& node) {
++    issue_impl(node, nullptr, nullptr);
++}
++
++void Workload::issue_prepared_coarse(
++    const ExecutionDriven::NodeView& node,
++    DieModelAdapter::PreparedCoarsePlan prepared,
++    WorkspaceAdmission::Lease lease) {
++    issue_impl(node, &prepared, &lease);
++}
++
++void Workload::issue_impl(
++    const ExecutionDriven::NodeView& node,
++    DieModelAdapter::PreparedCoarsePlan* const prepared,
++    WorkspaceAdmission::Lease* const lease) {
+     auto logger = workload_logger_;
+     if (sys->trace_enabled) {
+         logger->debug("issue,sys->id={}, tick={}, node->id={}, "
+@@ -454,7 +513,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
+             // Die backend (stage B, contract §7.3): the frozen dispatch
+             // order lives in issue_die_comp; the legacy roofline/fluid path
+             // below is unreachable under this backend.
+-            issue_die_comp(node);
++            issue_die_comp(node, prepared, lease);
+         } else if (!this->sys->roofline_enabled) {
+             issue_replay(node);
+         } else {
+@@ -501,7 +560,10 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
+     sys->register_event(this, EventType::General, wlhd, runtime);
+ }
+ 
+-void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
++void Workload::issue_die_comp(
++    const ExecutionDriven::NodeView& node,
++    DieModelAdapter::PreparedCoarsePlan* const prepared,
++    WorkspaceAdmission::Lease* const lease) {
+     // Contract §7.3 dispatch order (frozen 2026-10-03): is_timer_op -> old
+     // timer path; is_cpu_op -> issue_replay; op_role=control_marker -> the
+     // legacy micro-job semantics verbatim; die_spec -> DieModelAdapter
+@@ -568,7 +630,21 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
+         MetricCollector::instance().on_compute_issue(
+             sys->id, node.compute.num_ops, node.compute.tensor_size);
+     }
+-    die_adapter_->issue_die(node);
++    if (sys->coarse_die_runtime != nullptr) {
++        if (prepared == nullptr || lease == nullptr || !lease->active()) {
++            throw std::runtime_error(
++                "coarse_die_v2 COMP reached issue without its prepared Plan "
++                "and pre-issue workspace lease");
++        }
++        die_adapter_->issue_prepared_coarse_plan(
++            node, std::move(*prepared), std::move(*lease));
++    } else {
++        if (prepared != nullptr || lease != nullptr) {
++            throw std::runtime_error(
++                "legacy DieModel COMP received a coarse workspace token");
++        }
++        die_adapter_->issue_die(node);
++    }
+ }
+ 
+ void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
+@@ -1348,6 +1424,29 @@ void Workload::finish_generic_node(uint64_t node_id) {
+     graph_source_->finish_node(node_id);
+ }
+ 
++void Workload::finish_cancelled_coarse_node(const uint64_t node_id) {
++    const ExecutionDriven::NodeView* nv = graph_source_->lookup_ptr(node_id);
++    if (nv == nullptr) {
++        throw std::runtime_error(
++            "cancelled coarse COMP references unknown online node id=" +
++            std::to_string(node_id));
++    }
++    if (die_cancelled_comp_count_ == std::numeric_limits<uint64_t>::max()) {
++        throw std::overflow_error("die_cancelled_comp_count overflow");
++    }
++    mark_online_terminal_or_fail(node_id);
++    ++die_cancelled_comp_count_;
++    hw_resource->release(*nv);
++    complete_online_statistics(*nv, Sys::boostedTick());
++    if (MetricCollector::instance().enabled() && nv->metric_complete_anchor) {
++        MetricCollector::instance().on_node_complete(
++            sys->id, node_id, Sys::boostedTick());
++    }
++    record_node_terminal(sys->id, node_id,
++                         ExecutionDriven::NodeTerminalStatus::Skipped, nv);
++    graph_source_->finish_node(node_id);
++}
++
+ void Workload::record_die_utilizations(const uint64_t node_id,
+                                        const double compute_utilization,
+                                        const double memory_utilization,
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh b/astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh
+index 20d22fc..48aa4ca 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh
+@@ -61,6 +61,12 @@ class Workload : public Callable {
+     // 者).
+     void issue_dep_free_nodes();
+     void issue(const ExecutionDriven::NodeView& node);
++    /// Issue an immutable coarse Plan after its rank-local workspace lease
++    /// was acquired while the node was still free and before COMP occupy.
++    void issue_prepared_coarse(
++        const ExecutionDriven::NodeView& node,
++        DieModelAdapter::PreparedCoarsePlan prepared,
++        WorkspaceAdmission::Lease lease);
+     void issue_metadata(const ExecutionDriven::NodeView& node);
+     void issue_replay(const ExecutionDriven::NodeView& node);
+     void issue_remote_mem(const ExecutionDriven::NodeView& node);
+@@ -81,6 +87,14 @@ class Workload : public Callable {
+     // through this same single exit (contract §7.3; the HBM-delivered
+     // completions already ran it from Workload::call's join tail).
+     void finish_generic_node(uint64_t node_id);
++    /// Explicitly cancelled live coarse COMP terminalizes as Skipped and
++    /// releases the occupied GPU slot/dependencies once.
++    void finish_cancelled_coarse_node(uint64_t node_id);
++    /// Count explicit live coarse COMP cancellations for rank/service metrics.
++    /// Shutdown cancellation is intentionally excluded.
++    uint64_t die_cancelled_comp_count() const {
++        return die_cancelled_comp_count_;
++    }
+ 
+     // Die backend (stage B, contract §7.6): fill the utilization fields of
+     // the node's statistics state ahead of finish_generic_node -- compact
+@@ -172,7 +186,13 @@ class Workload : public Callable {
+     // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
+     // fail-closed. Reached only under
+     // sys->compute_cost_model == ComputeCostModel::Die.
+-    void issue_die_comp(const ExecutionDriven::NodeView& node);
++    void issue_die_comp(
++        const ExecutionDriven::NodeView& node,
++        DieModelAdapter::PreparedCoarsePlan* prepared = nullptr,
++        WorkspaceAdmission::Lease* lease = nullptr);
++    void issue_impl(const ExecutionDriven::NodeView& node,
++                    DieModelAdapter::PreparedCoarsePlan* prepared,
++                    WorkspaceAdmission::Lease* lease);
+ 
+     // sh_2.0 N-way HBM contention: endpoint join state for nodes whose
+     // completion is the JOIN of two independent async completions -- the
+@@ -202,6 +222,7 @@ class Workload : public Callable {
+         bool hbm_done = false;
+     };
+     std::unordered_map<uint64_t, HbmEndpointJoinState> hbm_endpoint_joins_;
++    uint64_t die_cancelled_comp_count_ = 0;
+ };
+ 
+ }  // namespace AstraSim
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc
+index d8f2e62..648b0b6 100644
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc
+@@ -46,7 +46,9 @@ Exit code 0 on ALL PASS.
+ #include "astra-sim/system/WorkloadLayerHandlerData.hh"
+ #include "astra-sim/workload/HardwareResource.hh"
+ #include "astra-sim/workload/CoarseDieRuntime.hh"
++#include "astra-sim/workload/MetricCollector.hh"
+ #include "astra-sim/workload/Workload.hh"
++#include "astra-sim/workload/WorkspaceAdmission.hh"
+ #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
+ #include "astra-sim/workload/execution_driven/NodeStore.hh"
+ #include "DieModel.hh"
+@@ -56,6 +58,7 @@ Exit code 0 on ALL PASS.
+ #include <unistd.h>
+ 
+ #include <cmath>
++#include <algorithm>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -63,6 +66,7 @@ Exit code 0 on ALL PASS.
+ #include <fstream>
+ #include <map>
+ #include <memory>
++#include <sstream>
+ #include <json/json.hpp>
+ #include <string>
+ #include <vector>
+@@ -84,17 +88,21 @@ void expect_true(const bool cond, const char* const what) {
+ 
+ std::map<uint64_t, uint64_t> g_terminal_fires;
+ std::map<uint64_t, uint64_t> g_first_tick;
++std::map<uint64_t, int> g_terminal_status;
+ 
+ void tick_hook(void* /*ctx*/, int /*rank*/, uint64_t node_id,
+                const char* /*request_id*/, const char* /*stage*/,
+                uint64_t /*generation*/, uint64_t tick, int status) {
+-    if (status != static_cast<int>(NodeTerminalStatus::Success)) {
++    if (status != static_cast<int>(NodeTerminalStatus::Success) &&
++        !((node_id == 100 || node_id == 101) &&
++          status == static_cast<int>(NodeTerminalStatus::Skipped))) {
+         std::fprintf(stderr,
+                      "[die_execution_lifecycle_test] node %llu terminal "
+                      "status %d\n",
+                      static_cast<unsigned long long>(node_id), status);
+         g_ok = false;
+     }
++    g_terminal_status[node_id] = status;
+     if (g_first_tick.find(node_id) == g_first_tick.end()) {
+         g_first_tick[node_id] = tick;
+     }
+@@ -336,7 +344,7 @@ struct Fixture {
+ };
+ 
+ Fixture make_fixture(const std::string& config_dir,
+-                     const std::string& system_file) {
++                     const std::string& system_file, const int rank = 0) {
+     Fixture fixture;
+     fixture.event_queue = std::make_shared<EventQueue>();
+     fixture.network_api =
+@@ -344,7 +352,7 @@ Fixture make_fixture(const std::string& config_dir,
+     auto source = std::make_shared<NodeStoreGraphSource>();
+     fixture.source = source.get();
+     fixture.sys = std::make_unique<Sys>(
+-        0, config_dir + "/workload", config_dir + "/comm_group.json",
++        rank, config_dir + "/workload", config_dir + "/comm_group.json",
+         config_dir + "/" + system_file, &fixture.remote_mem,
+         fixture.network_api.get(),
+         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
+@@ -352,6 +360,67 @@ Fixture make_fixture(const std::string& config_dir,
+     return fixture;
+ }
+ 
++std::vector<nlohmann::json> capture_metric_records(
++    const std::string& manifest_path, const std::vector<Sys*>& systems,
++    const uint64_t end_tick) {
++    FILE* const capture = std::tmpfile();
++    if (capture == nullptr) {
++        throw std::runtime_error("cannot create MetricCollector capture file");
++    }
++    const int saved_stdout = ::dup(STDOUT_FILENO);
++    std::fflush(stdout);
++    if (saved_stdout < 0 ||
++        ::dup2(::fileno(capture), STDOUT_FILENO) < 0) {
++        if (saved_stdout >= 0) ::close(saved_stdout);
++        std::fclose(capture);
++        throw std::runtime_error("cannot redirect stdout for metrics");
++    }
++    try {
++        MetricCollector::instance().initialize(manifest_path, "summary");
++        MetricCollector::instance().finalize(systems, end_tick);
++    } catch (...) {
++        std::fflush(stdout);
++        ::dup2(saved_stdout, STDOUT_FILENO);
++        ::close(saved_stdout);
++        std::fclose(capture);
++        throw;
++    }
++    std::fflush(stdout);
++    ::dup2(saved_stdout, STDOUT_FILENO);
++    ::close(saved_stdout);
++    std::rewind(capture);
++    std::string output;
++    char buffer[4096];
++    while (const size_t n = std::fread(buffer, 1, sizeof(buffer), capture)) {
++        output.append(buffer, n);
++    }
++    std::fclose(capture);
++
++    std::vector<nlohmann::json> records;
++    std::istringstream lines(output);
++    std::string line;
++    while (std::getline(lines, line)) {
++        if (line.rfind("[METRIC] ", 0) == 0) {
++            records.push_back(nlohmann::json::parse(line.substr(9)));
++        }
++    }
++    return records;
++}
++
++void install_workspace_snapshot(Sys* const sys, const uint64_t capacity_bytes,
++                                const uint64_t resident_kv_bytes) {
++    if (sys == nullptr || sys->workspace_admission == nullptr) {
++        throw std::runtime_error(
++            "coarse lifecycle fixture has no workspace ledger");
++    }
++    WorkspaceAdmission& ledger = *sys->workspace_admission;
++    const WorkspaceCapacityRank snapshot{
++        sys->id, ledger.workspace_revision(), capacity_bytes, 0,
++        resident_kv_bytes, 0};
++    ledger.validate_capacity_snapshot(snapshot);
++    ledger.install_capacity_snapshot_unchecked(snapshot);
++}
++
+ void drain_queue(const std::shared_ptr<EventQueue>& queue) {
+     while (!queue->finished()) {
+         queue->proceed();
+@@ -874,6 +943,326 @@ int main() {
+                     "I: stale teardown alarms do not publish completed markers");
+     }
+ 
++    // ---- Case K: coarse workspace blocks, leases, cancels and retries ----
++    {
++        g_first_tick.clear();
++        g_terminal_fires.clear();
++        g_terminal_status.clear();
++        write_coarse_system_config(config_dir);
++        Fixture fixture = make_fixture(config_dir, "coarse_system.json");
++        Fixture idle_rank = make_fixture(config_dir, "coarse_system.json", 1);
++        auto& workload = *fixture.sys->workload;
++        CoarseDieRuntime& bridge = *fixture.sys->coarse_die_runtime;
++        const std::string metric_manifest_path =
++            config_dir + "/coarse_metric_manifest.json";
++        write_text(metric_manifest_path, nlohmann::json{
++            {"schema_version", 1},
++            {"repo_variant", "coarse-metric-fixture"},
++            {"run_mode", "service"},
++            {"run_id", "coarse-metric-fixture"},
++            {"requests", nlohmann::json::array()},
++            {"node_events_by_rank", nlohmann::json::object()},
++            {"planner_memory_peaks", nlohmann::json::array()},
++            {"memory_actions", nlohmann::json::array()}}.dump());
++
++        const auto zero_records = capture_metric_records(
++            metric_manifest_path,
++            {fixture.sys.get(), idle_rank.sys.get()}, 0);
++        std::map<int, nlohmann::json> zero_rank_compute;
++        std::map<int, nlohmann::json> zero_local_hbm;
++        for (const auto& record : zero_records) {
++            const std::string type = record.value("type", std::string());
++            if (type == "rank_compute") {
++                zero_rank_compute[record.at("rank").get<int>()] = record;
++            } else if (type == "local_hbm") {
++                zero_local_hbm[record.at("rank").get<int>()] = record;
++            }
++        }
++        bool zero_rank_counters = zero_rank_compute.size() == 2 &&
++            zero_local_hbm.size() == 2;
++        for (const auto& [rank, record] : zero_rank_compute) {
++            const auto& coarse = record.at("coarse_die_runtime");
++            zero_rank_counters = zero_rank_counters &&
++                record.at("utilization_window_ns").get<uint64_t>() == 0 &&
++                coarse.at("utilization_window_ns").get<uint64_t>() == 0 &&
++                record.at("die_cancelled_comp_count").get<uint64_t>() == 0 &&
++                exact_number(coarse.at("served_by_category").at("comp")
++                                 .at("int4_ops_exact_decimal")) == 0.0L &&
++                exact_number(coarse.at("served_by_category").at("comp")
++                                 .at("vec_eqops_exact_decimal")) == 0.0L;
++            const auto& hbm = zero_local_hbm.at(rank);
++            zero_rank_counters = zero_rank_counters &&
++                hbm.at("utilization_window_ns").get<uint64_t>() == 0 &&
++                hbm.at("dram_bw_util").is_null() &&
++                exact_number(hbm.at("served_by_category").at("comp")
++                                 .at("int4_ops_exact_decimal")) == 0.0L &&
++                sum_hbm_matrix(
++                    hbm.at("served_by_category").at("comp")
++                        .at("hbm_served_bytes_by_row_direction_exact")) ==
++                    0.0L;
++        }
++        expect_true(zero_rank_counters,
++                    "K: zero coarse typed/category counters emit rank-scoped zero-window records");
++
++        nlohmann::json task{{"op_kind", "ffn_region"},
++            {"tensor_shapes", {{"m", 64}, {"hidden", 128},
++                               {"ffn", 256}, {"mlp_variant", "swiglu"}}},
++            {"fusion_policy", "materialized"}, {"storage_dtype", "bf16"}};
++        const auto plan = bridge.compile(task);
++        const uint64_t workspace_bytes =
++            coarse_die::hbm_workspace_peak_bytes(*plan);
++        expect_true(workspace_bytes > 0,
++                    "K: fixture Plan has positive transient workspace");
++        if (workspace_bytes > 0) {
++            OnlineNode comp;
++            comp.global_id = 100;
++            comp.rank = 0;
++            comp.kind = NodeKind::Compute;
++            comp.node_type = 4;
++            comp.name = "coarse_workspace_cancel";
++            comp.request_id = "r1";
++            comp.stage = "prefill";
++            comp.compute.die_task_json =
++                std::make_shared<const nlohmann::json>(task);
++            fixture.source->store().add_node(comp);
++
++            OnlineNode child;
++            child.global_id = 101;
++            child.rank = 0;
++            child.kind = NodeKind::Invalid;
++            child.node_type = 0;
++            child.name = "after_workspace_cancel";
++            child.request_id = "r1";
++            child.stage = "prefill";
++            fixture.source->store().add_node(child);
++            fixture.source->store().add_dependency(100, 101, DepKind::Data);
++
++            // KV leaves one byte less than the prepared Plan needs. The
++            // blocked node must remain in the free set without GPU occupancy.
++            install_workspace_snapshot(fixture.sys.get(),
++                                       workspace_bytes + 1, 2);
++            workload.issue_dep_free_nodes();
++            std::vector<uint64_t> free_ids;
++            fixture.source->store().fill_free_node_snapshot(free_ids);
++            expect_true(fixture.sys->workspace_admission->active_lease_count() == 0 &&
++                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
++                            std::find(free_ids.begin(), free_ids.end(), 100) !=
++                                free_ids.end() &&
++                            g_terminal_fires.count(100) == 0,
++                        "K: blocked Plan stays free and consumes no GPU slot or lease");
++
++            install_workspace_snapshot(fixture.sys.get(),
++                                       workspace_bytes + 1, 1);
++            workload.issue_dep_free_nodes();
++            free_ids.clear();
++            fixture.source->store().fill_free_node_snapshot(free_ids);
++            expect_true(fixture.sys->workspace_admission->active_lease_count() == 1 &&
++                            fixture.sys->workspace_admission
++                                    ->active_workspace_bytes() == workspace_bytes &&
++                            workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
++                            std::find(free_ids.begin(), free_ids.end(), 100) ==
++                                free_ids.end(),
++                        "K: exact capacity acquires the lease before take/occupy");
++
++            fixture.event_queue->proceed();
++            const auto before_cancel =
++                bridge.counters_at(Sys::boostedTick());
++            const auto& comp_served =
++                before_cancel.at("served_by_category").at("comp");
++            bool saw_served_work =
++                comp_served.at("int4_ops").get<double>() > 0.0 ||
++                comp_served.at("vec_eqops").get<double>() > 0.0;
++            for (const auto& row :
++                 comp_served.at("hbm_served_bytes_by_row_direction")) {
++                for (const auto& direction : row) {
++                    saw_served_work =
++                        saw_served_work || direction.get<double>() > 0.0;
++                }
++            }
++            expect_true(Sys::boostedTick() > 0 && saw_served_work &&
++                            g_terminal_fires.count(100) == 0,
++                        "K: cancellation begins after real typed service");
++            workload.die_model_adapter()->cancel_coarse_node(
++                100, Sys::boostedTick());
++
++            const auto* stats =
++                fixture.source->store().mutable_online_statistics(100);
++            std::vector<uint64_t> free_after_cancel;
++            fixture.source->store().fill_free_node_snapshot(
++                free_after_cancel);
++            expect_true(g_terminal_fires[100] == 1 &&
++                            g_terminal_status[100] == static_cast<int>(
++                                NodeTerminalStatus::Skipped) &&
++                            stats != nullptr &&
++                            stats->compute_utilization.has_value() &&
++                            stats->memory_utilization.has_value() &&
++                            stats->vector_utilization.has_value() &&
++                            workload.die_cancelled_comp_count() == 1 &&
++                            std::find(free_after_cancel.begin(),
++                                      free_after_cancel.end(), 101) !=
++                                free_after_cancel.end() &&
++                            fixture.sys->workspace_admission
++                                    ->active_workspace_bytes() == 0 &&
++                            fixture.sys->workspace_admission
++                                    ->active_lease_count() == 0 &&
++                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
++                            fixture.sys->workspace_admission
++                                    ->workspace_revision() == 2,
++                        "K: live cancellation records typed utilization, releases once, terminalizes Skipped, and frees its dependent node");
++            workload.issue_dep_free_nodes();
++            expect_true(g_terminal_fires[101] == 1 &&
++                            g_terminal_status[101] == static_cast<int>(
++                                NodeTerminalStatus::Skipped),
++                        "K: cancelled COMP releases its dependent node normally");
++
++            const uint64_t metric_window_end = Sys::boostedTick();
++            const auto served_records = capture_metric_records(
++                metric_manifest_path,
++                {fixture.sys.get(), idle_rank.sys.get()},
++                metric_window_end);
++            std::map<int, nlohmann::json> served_rank_compute;
++            std::map<int, nlohmann::json> served_local_hbm;
++            for (const auto& record : served_records) {
++                const std::string type = record.value("type", std::string());
++                if (type == "rank_compute") {
++                    served_rank_compute[record.at("rank").get<int>()] = record;
++                } else if (type == "local_hbm") {
++                    served_local_hbm[record.at("rank").get<int>()] = record;
++                }
++            }
++            bool served_metrics_valid = metric_window_end > 0 &&
++                served_rank_compute.size() == 2 &&
++                served_local_hbm.size() == 2;
++            if (served_metrics_valid) {
++                const auto& active_rank = served_rank_compute.at(0);
++                const auto& active_coarse =
++                    active_rank.at("coarse_die_runtime");
++                const auto& active_categories =
++                    active_coarse.at("served_by_category");
++                const auto& active_hbm = served_local_hbm.at(0);
++                const auto& idle_rank_record = served_rank_compute.at(1);
++                const auto& idle_coarse =
++                    idle_rank_record.at("coarse_die_runtime");
++                const auto& idle_hbm = served_local_hbm.at(1);
++                served_metrics_valid =
++                    active_rank.at("die_cancelled_comp_count").get<uint64_t>() == 1 &&
++                    active_rank.at("utilization_window_ns").get<uint64_t>() ==
++                        metric_window_end &&
++                    active_coarse.at("utilization_window_ns").get<uint64_t>() ==
++                        metric_window_end &&
++                    active_hbm.at("utilization_window_ns").get<uint64_t>() ==
++                        metric_window_end &&
++                    exact_number(active_categories.at("comp")
++                                     .at("int4_ops_exact_decimal")) > 0.0L &&
++                    active_hbm.at("served_by_category") == active_categories &&
++                    idle_rank_record.at("die_cancelled_comp_count")
++                            .get<uint64_t>() == 0 &&
++                    exact_number(idle_coarse.at("served_by_category")
++                                     .at("comp").at("int4_ops_exact_decimal")) ==
++                        0.0L &&
++                    exact_number(idle_hbm.at("served_by_category")
++                                     .at("comp").at("int4_ops_exact_decimal")) ==
++                        0.0L;
++            }
++            expect_true(served_metrics_valid,
++                        "K: two-rank metrics preserve typed serving, category totals, windows, and one live cancellation");
++
++            // A Plan larger than capacity after weights is rejected before
++            // graph take, GPU occupancy, or lease acquisition.
++            install_workspace_snapshot(fixture.sys.get(),
++                                       workspace_bytes - 1, 0);
++            comp.global_id = 102;
++            comp.name = "coarse_workspace_impossible";
++            fixture.source->store().add_node(comp);
++            bool impossible_rejected = false;
++            try {
++                workload.issue_dep_free_nodes();
++            } catch (const std::runtime_error& exc) {
++                impossible_rejected =
++                    std::string(exc.what()).find("exceeds empty-instance") !=
++                    std::string::npos;
++            }
++            free_ids.clear();
++            fixture.source->store().fill_free_node_snapshot(free_ids);
++            expect_true(impossible_rejected &&
++                            std::find(free_ids.begin(), free_ids.end(), 102) !=
++                                free_ids.end() &&
++                            fixture.sys->workspace_admission
++                                    ->active_lease_count() == 0 &&
++                            fixture.sys->workspace_admission
++                                    ->active_workspace_bytes() == 0 &&
++                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
++                            g_terminal_fires.count(102) == 0,
++                        "K: impossible Plan fails before take/occupy and leaves no lease");
++        }
++        idle_rank.sys.reset();
++        drain_queue(idle_rank.event_queue);
++        fixture.sys.reset();
++        drain_queue(fixture.event_queue);
++        expect_true(g_terminal_fires.count(100) == 1,
++                    "K: teardown after cancellation does not duplicate terminals");
++    }
++
++    // ---- Case L: legacy shared-HBM metric projection stays stable --------
++    {
++        Fixture fixture = make_fixture(config_dir, "die_contention.json");
++        const std::string manifest_path = config_dir + "/legacy_metric_manifest.json";
++        write_text(manifest_path, nlohmann::json{
++            {"schema_version", 1},
++            {"repo_variant", "legacy-metric-fixture"},
++            {"run_mode", "service"},
++            {"run_id", "legacy-metric-fixture"},
++            {"requests", nlohmann::json::array()},
++            {"node_events_by_rank", nlohmann::json::object()},
++            {"planner_memory_peaks", nlohmann::json::array()},
++            {"memory_actions", nlohmann::json::array()}}.dump());
++        const auto records = capture_metric_records(
++            manifest_path, {fixture.sys.get()}, 0);
++        nlohmann::json rank_record;
++        nlohmann::json hbm_record;
++        for (const auto& record : records) {
++            const std::string type = record.value("type", std::string());
++            if (type == "rank_compute") rank_record = record;
++            if (type == "local_hbm") hbm_record = record;
++        }
++        const std::vector<std::string> legacy_hbm_fields = {
++            "schema", "type", "source", "repo_variant", "run_id", "rank",
++            "model", "utilization_window_ns", "utilization_window",
++            "hbm_busy_ns", "hbm_busy_definition", "hbm_shared_ns",
++            "hbm_shared_definition", "compute_bytes_served",
++            "restore_bytes_served", "comm_read_bytes_served",
++            "comm_write_bytes_served", "pool_read_bytes_served",
++            "pool_write_bytes_served", "bytes_served_definition",
++            "peak_concurrent_jobs", "peak_concurrent_jobs_definition",
++            "redistribution_events", "redistribution_events_definition",
++            "local_hbm_restore_bytes_issued", "local_hbm_bw_bytes_per_second",
++            "local_hbm_bw_source", "hbm_busy_util",
++            "hbm_shared_fraction_of_window", "dram_bw_util",
++            "dram_bw_util_note"};
++        bool old_fields_retained = !rank_record.is_null() &&
++            !hbm_record.is_null() &&
++            rank_record.value("die_cancelled_comp_count", uint64_t{0}) == 0 &&
++            !rank_record.contains("coarse_die_runtime") &&
++            hbm_record.value("source", std::string()) ==
++                "shared_hbm_runtime_model" &&
++            hbm_record.value("hbm_busy_ns", -1.0) == 0.0 &&
++            hbm_record.value("compute_bytes_served", -1.0) == 0.0 &&
++            hbm_record.value("local_hbm_restore_bytes_issued", uint64_t{1}) == 0 &&
++            hbm_record.at("dram_bw_util").is_null() &&
++            hbm_record.value("dram_bw_util_note", std::string()) ==
++                "undefined: zero local-mem-bw/window" &&
++            !hbm_record.contains("dram_bw_util_numerator_bytes") &&
++            !hbm_record.contains("dram_bw_util_denominator");
++        for (const auto& field : legacy_hbm_fields) {
++            old_fields_retained = old_fields_retained &&
++                                  hbm_record.contains(field);
++        }
++        expect_true(old_fields_retained,
++                    "L: non-coarse local-HBM fields and values match the preserved LRU baseline");
++        fixture.sys.reset();
++        drain_queue(fixture.event_queue);
++    }
++
+     std::error_code ec;
+     std::filesystem::remove_all(config_dir, ec);
+     if (!g_ok) {

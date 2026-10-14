@@ -1,0 +1,22 @@
+kind,key,value,group_name,pg_name,ranks,phase_role,description
+config,layers,1,,,,,workspace E2E fixture
+config,hidden_size,512,,,,,workspace E2E fixture
+config,ffn_size,1024,,,,,workspace E2E fixture
+config,num_heads,4,,,,,workspace E2E fixture
+config,vocab_size,512,,,,,workspace E2E fixture
+config,bytes_per_elem,2,,,,,workspace E2E fixture
+config,model_name,workspace_e2e_probe_mha4_h512_f1024_gqa1,,,,,workspace E2E fixture
+config,mlp_variant,swiglu,,,,,workspace E2E fixture
+config,output_dir,/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/generated/unused_output_dir,,,,,workspace E2E fixture
+config,request_queue_csv,/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/workspace_e2e_request_queue_recompute.csv,,,,,workspace E2E fixture
+config,trace_granularity,request_aggregated,,,,,workspace E2E fixture
+config,prefill_chunk_size,512,,,,,workspace E2E fixture
+config,kv_cache_policy,session_lru_tiered,,,,,workspace E2E fixture
+config,kv_reserve_context_tokens,0,,,,,workspace E2E fixture
+config,position_encoding,none,,,,,workspace E2E fixture
+config,hardware_config,/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/hardware_coarse_8rank.json,,,,,workspace E2E fixture
+config,local_hbm_capacity_profile,workspace-e2e-coarse,,,,,workspace E2E fixture
+config,system_template,/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/system_coarse_template.json,,,,,workspace E2E fixture
+config,remote_operand_loads,false,,,,,workspace E2E fixture
+inference_group,,,workspace_e2e_prefill,1,"0,1,2,3",prefill,2x2 P instance
+inference_group,,,workspace_e2e_decode,2,"4,5,6,7",decode,2x2 D instance

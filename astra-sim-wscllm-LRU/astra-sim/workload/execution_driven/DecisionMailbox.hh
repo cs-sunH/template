@@ -55,6 +55,7 @@ Counters (report at run end):
 #include <vector>
 
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -193,6 +194,9 @@ struct SnapshotHandle {
 /// (phase 4) were documented in a deleted contract doc; this struct is
 /// the authority.
 struct StateDelta {
+    // The legacy builder emits v1 byte-for-byte; coarse Die deliveries use
+    // v2 and include an absolute full-rank workspace view.
+    uint32_t schema_version = 1;
     uint64_t delivery_sequence = 0;  // monotonically increasing epoch number
     // Phase 4 (v1): the delivery-epoch counter. In v1 it is ALWAYS equal to
     // delivery_sequence (the Python validator asserts equality); the field
@@ -221,6 +225,9 @@ struct StateDelta {
     // (perception feature flag; default off until phase 6). Query/audit data
     // only -- the strategy's red-line decision inputs never consume it.
     std::vector<RankInjectedSummary> injected_unfinished;
+    // v2 only: absolute, complete per-rank transient workspace view. Kept
+    // separate from snapshot/ledger_summary and serialized only for v2.
+    std::vector<WorkspaceRankState> workspace_state;
 };
 
 /// Assemble a StateDelta from a drained event list (step-1-6 tick-end gate).
@@ -236,6 +243,17 @@ StateDelta build_state_delta_v1(
     uint64_t delivery_sequence, uint64_t deferred_from_tick,
     std::vector<CompletedNodeFact> completed_nodes,
     std::vector<int> affected_ranks,
+    std::vector<RankInjectedSummary> injected_unfinished = {});
+
+/// Build the explicit v2 delivery. workspace_state must be the complete
+/// rank table in ascending rank order; the response parser requires an exact
+/// per-rank revision echo before commit.
+StateDelta build_state_delta_v2(
+    std::vector<DecisionEvent> events, uint64_t tick,
+    uint64_t delivery_sequence, uint64_t deferred_from_tick,
+    std::vector<CompletedNodeFact> completed_nodes,
+    std::vector<int> affected_ranks,
+    std::vector<WorkspaceRankState> workspace_state,
     std::vector<RankInjectedSummary> injected_unfinished = {});
 
 class DecisionMailbox {

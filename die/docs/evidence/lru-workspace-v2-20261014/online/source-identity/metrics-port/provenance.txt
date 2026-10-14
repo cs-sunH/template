@@ -1,0 +1,16 @@
+HEAD: see source-head.txt (the source tree was already dirty from workspace-v2 work)
+Branch: see source-branch.txt
+Source hashes: source-files.txt and source-sha256.txt. This is the prior workspace-v2 compiler-input list plus the newly changed MetricCollector.cc; Workload.hh/.cc and die_execution_lifecycle_test.cc hashes are refreshed.
+Selected patch: selected-cpp-diff-including-workspace-v2.patch. It includes the pre-existing workspace-v2 changes in Workload.cc/.hh and lifecycle test, plus this metrics port; prior workspace-only patch remains at ../lru-cpp-workspace-v2.patch.
+Binaries: binary-sha256.txt. Current Online SHA is the artifact supplied to online_baseline.
+Configure command (earlier, unchanged):
+  source /workspace/cloud-setup/activate.sh
+  unset PROTOBUF_FROM_SOURCE
+  cmake -S work/five-os-20261014/aggregate -B work/lru-cpp-workspace-20261014/build/aggregate -DASTRA_SIM_ROOT=/workspace/template/astra-sim-wscllm-LRU -DBUILDTARGET=congestion_aware -DBUILD_TESTING=ON -DASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST=ON -DCMAKE_BUILD_TYPE=Release
+Metrics build command:
+  source /workspace/cloud-setup/activate.sh && unset PROTOBUF_FROM_SOURCE && cmake --build work/lru-cpp-workspace-20261014/build/aggregate --parallel 2 --target AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest AstraSim_Analytical_Congestion_Aware_Online coarse_die_cabi die_model_cabi
+Metrics build log: ../logs/metrics-final-build.log
+Metric lifecycle result: ../logs/metrics-final-lifecycle-ctest.log
+Final focused test command:
+  source /workspace/cloud-setup/activate.sh && unset PROTOBUF_FROM_SOURCE && ctest --test-dir work/lru-cpp-workspace-20261014/build/aggregate -R '(WorkspaceAdmission|DecisionMailbox|BridgeLoopback|GraphBatchCommitter|ParsedBatch|LocalHbmBandwidthModel|LocalHbmModel|DieModelAdapter|DieExecutionLifecycle)Test' --output-on-failure
+Final focused result: ../logs/metrics-final-nine-ctest.log (9/9 pass)

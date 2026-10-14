@@ -94,6 +94,8 @@ namespace ExecutionDriven {
 /// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1; this
 /// header and the Python validator are the authority).
 inline constexpr int kDecisionBridgeSchemaVersion = 1;
+/// Explicit coarse workspace admission extension. v1 stays byte-compatible.
+inline constexpr int kDecisionBridgeWorkspaceSchemaVersion = 2;
 
 /// GraphBatch: the C++<-Python reply of one delivery epoch.
 /// C1 (2026-08-29): the batch is TYPED. The pre-C1 struct carried the six
@@ -117,8 +119,8 @@ inline constexpr int kDecisionBridgeSchemaVersion = 1;
 ///     all-empty arrays, so the message must be the decision error).
 using GraphBatch = ParsedGraphBatch;
 
-/// Serialize one StateDelta into the v1 request JSON (protocol contract;
-/// exposed for fixtures and the step-1-8 wiring).
+/// Serialize one StateDelta into its selected versioned request JSON. v1
+/// remains byte-compatible; v2 adds the required workspace_state table.
 nlohmann::json build_request_json(const StateDelta& delta);
 
 /// File-implementation of the v1 decision channel (方案 §4 步骤 1-7 操作 2;
@@ -157,7 +159,9 @@ class FileDecisionBridge {
     /// producer passes true, and the python peer (online_scheduler_base)
     /// asserts ack["success"] is True.
     void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
-                         bool success);
+                         bool success,
+                         uint32_t schema_version =
+                             kDecisionBridgeSchemaVersion);
 
     /// Create <bridge_dir>, both FIFOs and clean stale files. Must be
     /// called BEFORE either side starts (FIFO open order rule).

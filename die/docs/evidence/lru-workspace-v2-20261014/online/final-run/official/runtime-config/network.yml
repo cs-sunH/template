@@ -1,0 +1,5 @@
+# Generated from /workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/hardware_coarse_8rank.json (capacity profile: workspace-e2e-coarse)
+topology: [ Line, Line ]
+npus_count: [ 2, 4 ]
+bandwidth: [ 4050.0, 4050.0 ]
+latency: [ 5, 5 ]

@@ -1,0 +1,2 @@
+request_id,turn_index,session_id,raw_prefix_tokens,raw_new_prefill_tokens,effective_prompt_tokens,prefill_length,decode_length,session_arrival_time_ns,inter_request_interval_ns,prefix_mode,digest,human_time_ns,tool_time_ns,request_type
+session_workspace_e2e_s0_request_0,0,session_workspace_e2e_s0,0,64,64,64,1,0,,recompute,7a6bad30befaacf19a8d92302e3f1cdc796909a789bcdce96815643385c69191,,,human

@@ -103,6 +103,7 @@ other bridge protocol violation):
 #include <string>
 #include <vector>
 
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 #include <json/json.hpp>
 
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
@@ -231,6 +232,7 @@ struct ParsedKvAction {
 /// pre-C1 struct name survives so main_online/fixtures keep compiling);
 /// this is the canonical type.
 struct ParsedGraphBatch {
+    uint32_t schema_version = 1;
     uint64_t batch_id = 0;
     uint64_t source_delivery_sequence = 0;
     std::vector<ParsedNode> nodes;              // array order (rule O1)
@@ -242,13 +244,18 @@ struct ParsedGraphBatch {
     std::vector<int> touched_ranks;             // empty when absent
     bool has_touched_ranks = false;
     std::string error;  // non-empty => decision failure (bridge aborts)
+    std::vector<WorkspaceCapacityRank> workspace_capacity_snapshot;
+    bool has_workspace_capacity_snapshot = false;
 };
 
 /// Parse one response DOM into the typed batch. num_ranks >= 0 enables the
 /// rank-domain checks (N3/E2/W3/T8); -1 skips them (legacy fixtures).
 /// Throws ParseError on any structural violation; constructs nothing shared
 /// (pure function, exception-safe).
-ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp, int num_ranks);
+ParsedGraphBatch parse_graph_batch(
+    const nlohmann::json& resp, int num_ranks,
+    int expected_schema_version = 1,
+    const std::vector<WorkspaceRankState>& expected_workspace_state = {});
 
 }  // namespace ExecutionDriven
 }  // namespace AstraSim

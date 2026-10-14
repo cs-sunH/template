@@ -125,6 +125,35 @@ StateDelta build_state_delta_v1(
     return delta;
 }
 
+StateDelta build_state_delta_v2(
+    std::vector<DecisionEvent> events, const uint64_t tick,
+    const uint64_t delivery_sequence, const uint64_t deferred_from_tick,
+    std::vector<CompletedNodeFact> completed_nodes,
+    std::vector<int> affected_ranks,
+    std::vector<WorkspaceRankState> workspace_state,
+    std::vector<RankInjectedSummary> injected_unfinished) {
+    StateDelta delta = build_state_delta_v1(
+        std::move(events), tick, delivery_sequence, deferred_from_tick,
+        std::move(completed_nodes), std::move(affected_ranks),
+        std::move(injected_unfinished));
+    if (workspace_state.empty()) {
+        throw std::invalid_argument(
+            "v2 workspace_state must cover at least rank zero");
+    }
+    int64_t expected_rank = 0;
+    for (const auto& rank_state : workspace_state) {
+        if (rank_state.rank < 0 || rank_state.rank != expected_rank) {
+            throw std::invalid_argument(
+                "v2 workspace_state must cover contiguous ranks starting at "
+                "zero");
+        }
+        ++expected_rank;
+    }
+    delta.schema_version = 2;
+    delta.workspace_state = std::move(workspace_state);
+    return delta;
+}
+
 void DecisionMailbox::push(DecisionEvent e) {
     const Identity identity{static_cast<int>(e.reason), e.request_id, e.stage,
                             e.generation};

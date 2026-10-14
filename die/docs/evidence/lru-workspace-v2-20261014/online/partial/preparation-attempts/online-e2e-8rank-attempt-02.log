@@ -1,0 +1,6 @@
+preserved previous run at /workspace/template/work/lru-online-workspace-20261014/e2e/run-attempt-20261014T081907Z
+cpp_exit=0
+python_exit=0
+LRU Online acceptance audit failed; see /workspace/template/work/lru-online-workspace-20261014/e2e/run/wire_audit
+audit_exit=1
+runner artifacts: /workspace/template/work/lru-online-workspace-20261014/e2e/run

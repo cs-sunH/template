@@ -41,6 +41,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
 #include "DieModel.hh"
 #include "astra-sim/workload/CoarseDieRuntime.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 #include "coarse_die/Hardware.hh"
 #include <json/json.hpp>
 
@@ -190,6 +191,7 @@ Sys::Sys(int id,
     this->coarse_die_runtime = nullptr;
     this->die_model_profile = "";
     this->die_model_config_path = "";
+    this->workspace_admission = nullptr;
 
     this->remote_mem = remote_mem;
     // Every construction site passes a real remote-memory backend; a null
@@ -1061,6 +1063,31 @@ bool Sys::initialize_sys(string name) {
         }
     }
 
+    // Workspace admission is an explicit bridge capability. Coarse mode
+    // always requires the full request view and capacity snapshot protocol;
+    // an environment override may select it for legacy profiles only when
+    // a matching ledger exists, and may never disable it for coarse_die_v2.
+    const char* const workspace_mode_env =
+        std::getenv("SH_WORKSPACE_ADMISSION");
+    const std::string workspace_mode =
+        workspace_mode_env == nullptr ? "auto" : workspace_mode_env;
+    if (workspace_mode != "auto" && workspace_mode != "required" &&
+        workspace_mode != "off") {
+        sys_panic("SH_WORKSPACE_ADMISSION must be auto|required|off (got '" +
+                  workspace_mode + "')");
+    }
+    const bool coarse_workspace_backend =
+        coarse_die_runtime != nullptr && workspace_admission != nullptr;
+    if (workspace_mode == "required" && !coarse_workspace_backend) {
+        sys_panic("SH_WORKSPACE_ADMISSION=required needs the coarse_die_v2 "
+                  "compute-cost backend");
+    }
+    if (workspace_mode == "off" && coarse_workspace_backend) {
+        sys_panic("SH_WORKSPACE_ADMISSION=off is incompatible with "
+                  "coarse_die_v2; refusing to issue Plans without "
+                  "workspace admission");
+    }
+
     inFile.close();
     return true;
 }
@@ -1127,6 +1154,8 @@ void Sys::initialize_die_backend(
         }
         coarse_die_runtime = std::make_unique<CoarseDieRuntime>(
             this, std::move(coarse_hw));
+        workspace_admission =
+            std::make_unique<WorkspaceAdmission>(this->id);
         die_runtime.reset();
         die_model_profile = "coarse_die_v2";
         if (!local_mem_bw_key_present) {

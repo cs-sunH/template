@@ -46,7 +46,9 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/CoarseDieRuntime.hh"
+#include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
 #include "DieModel.hh"
@@ -56,6 +58,7 @@ Exit code 0 on ALL PASS.
 #include <unistd.h>
 
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -63,6 +66,7 @@ Exit code 0 on ALL PASS.
 #include <fstream>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <json/json.hpp>
 #include <string>
 #include <vector>
@@ -84,17 +88,21 @@ void expect_true(const bool cond, const char* const what) {
 
 std::map<uint64_t, uint64_t> g_terminal_fires;
 std::map<uint64_t, uint64_t> g_first_tick;
+std::map<uint64_t, int> g_terminal_status;
 
 void tick_hook(void* /*ctx*/, int /*rank*/, uint64_t node_id,
                const char* /*request_id*/, const char* /*stage*/,
                uint64_t /*generation*/, uint64_t tick, int status) {
-    if (status != static_cast<int>(NodeTerminalStatus::Success)) {
+    if (status != static_cast<int>(NodeTerminalStatus::Success) &&
+        !((node_id == 100 || node_id == 101) &&
+          status == static_cast<int>(NodeTerminalStatus::Skipped))) {
         std::fprintf(stderr,
                      "[die_execution_lifecycle_test] node %llu terminal "
                      "status %d\n",
                      static_cast<unsigned long long>(node_id), status);
         g_ok = false;
     }
+    g_terminal_status[node_id] = status;
     if (g_first_tick.find(node_id) == g_first_tick.end()) {
         g_first_tick[node_id] = tick;
     }
@@ -336,7 +344,7 @@ struct Fixture {
 };
 
 Fixture make_fixture(const std::string& config_dir,
-                     const std::string& system_file) {
+                     const std::string& system_file, const int rank = 0) {
     Fixture fixture;
     fixture.event_queue = std::make_shared<EventQueue>();
     fixture.network_api =
@@ -344,12 +352,78 @@ Fixture make_fixture(const std::string& config_dir,
     auto source = std::make_shared<NodeStoreGraphSource>();
     fixture.source = source.get();
     fixture.sys = std::make_unique<Sys>(
-        0, config_dir + "/workload", config_dir + "/comm_group.json",
+        rank, config_dir + "/workload", config_dir + "/comm_group.json",
         config_dir + "/" + system_file, &fixture.remote_mem,
         fixture.network_api.get(),
         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
         ExecutionMode::Online, source);
     return fixture;
+}
+
+std::vector<nlohmann::json> capture_metric_records(
+    const std::string& manifest_path, const std::vector<Sys*>& systems,
+    const uint64_t end_tick, const int restore_issue_rank = -1,
+    const uint64_t restore_issue_bytes = 0) {
+    FILE* const capture = std::tmpfile();
+    if (capture == nullptr) {
+        throw std::runtime_error("cannot create MetricCollector capture file");
+    }
+    const int saved_stdout = ::dup(STDOUT_FILENO);
+    std::fflush(stdout);
+    if (saved_stdout < 0 ||
+        ::dup2(::fileno(capture), STDOUT_FILENO) < 0) {
+        if (saved_stdout >= 0) ::close(saved_stdout);
+        std::fclose(capture);
+        throw std::runtime_error("cannot redirect stdout for metrics");
+    }
+    try {
+        MetricCollector::instance().initialize(manifest_path, "summary");
+        if (restore_issue_rank >= 0 && restore_issue_bytes > 0) {
+            MetricCollector::instance().on_local_hbm_restore_issue(
+                restore_issue_rank, restore_issue_bytes);
+        }
+        MetricCollector::instance().finalize(systems, end_tick);
+    } catch (...) {
+        std::fflush(stdout);
+        ::dup2(saved_stdout, STDOUT_FILENO);
+        ::close(saved_stdout);
+        std::fclose(capture);
+        throw;
+    }
+    std::fflush(stdout);
+    ::dup2(saved_stdout, STDOUT_FILENO);
+    ::close(saved_stdout);
+    std::rewind(capture);
+    std::string output;
+    char buffer[4096];
+    while (const size_t n = std::fread(buffer, 1, sizeof(buffer), capture)) {
+        output.append(buffer, n);
+    }
+    std::fclose(capture);
+
+    std::vector<nlohmann::json> records;
+    std::istringstream lines(output);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.rfind("[METRIC] ", 0) == 0) {
+            records.push_back(nlohmann::json::parse(line.substr(9)));
+        }
+    }
+    return records;
+}
+
+void install_workspace_snapshot(Sys* const sys, const uint64_t capacity_bytes,
+                                const uint64_t resident_kv_bytes) {
+    if (sys == nullptr || sys->workspace_admission == nullptr) {
+        throw std::runtime_error(
+            "coarse lifecycle fixture has no workspace ledger");
+    }
+    WorkspaceAdmission& ledger = *sys->workspace_admission;
+    const WorkspaceCapacityRank snapshot{
+        sys->id, ledger.workspace_revision(), capacity_bytes, 0,
+        resident_kv_bytes, 0};
+    ledger.validate_capacity_snapshot(snapshot);
+    ledger.install_capacity_snapshot_unchecked(snapshot);
 }
 
 void drain_queue(const std::shared_ptr<EventQueue>& queue) {
@@ -872,6 +946,342 @@ int main() {
         drain_queue(fixture.event_queue);
         expect_true(g_terminal_fires.count(29) == 0 && !sibling_callback,
                     "I: stale teardown alarms do not publish completed markers");
+    }
+
+    // ---- Case K: coarse workspace blocks, leases, cancels and retries ----
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        g_terminal_status.clear();
+        write_coarse_system_config(config_dir);
+        Fixture fixture = make_fixture(config_dir, "coarse_system.json");
+        Fixture idle_rank = make_fixture(config_dir, "coarse_system.json", 1);
+        auto& workload = *fixture.sys->workload;
+        CoarseDieRuntime& bridge = *fixture.sys->coarse_die_runtime;
+        const std::string metric_manifest_path =
+            config_dir + "/coarse_metric_manifest.json";
+        write_text(metric_manifest_path, nlohmann::json{
+            {"schema_version", 1},
+            {"repo_variant", "coarse-metric-fixture"},
+            {"run_mode", "service"},
+            {"run_id", "coarse-metric-fixture"},
+            {"requests", nlohmann::json::array()},
+            {"node_events_by_rank", nlohmann::json::object()},
+            {"planner_memory_peaks", nlohmann::json::array()},
+            {"memory_actions", nlohmann::json::array()}}.dump());
+
+        const auto zero_records = capture_metric_records(
+            metric_manifest_path,
+            {fixture.sys.get(), idle_rank.sys.get()}, 0);
+        std::map<int, nlohmann::json> zero_rank_compute;
+        std::map<int, nlohmann::json> zero_local_hbm;
+        for (const auto& record : zero_records) {
+            const std::string type = record.value("type", std::string());
+            if (type == "rank_compute") {
+                zero_rank_compute[record.at("rank").get<int>()] = record;
+            } else if (type == "local_hbm") {
+                zero_local_hbm[record.at("rank").get<int>()] = record;
+            }
+        }
+        bool zero_rank_counters = zero_rank_compute.size() == 2 &&
+            zero_local_hbm.size() == 2;
+        for (const auto& [rank, record] : zero_rank_compute) {
+            const auto& coarse = record.at("coarse_die_runtime");
+            zero_rank_counters = zero_rank_counters &&
+                record.at("utilization_window_ns").get<uint64_t>() == 0 &&
+                coarse.at("utilization_window_ns").get<uint64_t>() == 0 &&
+                record.at("die_cancelled_comp_count").get<uint64_t>() == 0 &&
+                exact_number(coarse.at("served_by_category").at("comp")
+                                 .at("int4_ops_exact_decimal")) == 0.0L &&
+                exact_number(coarse.at("served_by_category").at("comp")
+                                 .at("vec_eqops_exact_decimal")) == 0.0L;
+            const auto& hbm = zero_local_hbm.at(rank);
+            zero_rank_counters = zero_rank_counters &&
+                hbm.at("utilization_window_ns").get<uint64_t>() == 0 &&
+                hbm.at("hbm_shared_definition") ==
+                    hbm.at("shared_definition") &&
+                hbm.at("local_hbm_restore_bytes_issued").get<uint64_t>() == 0 &&
+                hbm.at("dram_bw_util").is_null() &&
+                exact_number(hbm.at("served_by_category").at("comp")
+                                 .at("int4_ops_exact_decimal")) == 0.0L &&
+                sum_hbm_matrix(
+                    hbm.at("served_by_category").at("comp")
+                        .at("hbm_served_bytes_by_row_direction_exact")) ==
+                    0.0L;
+        }
+        expect_true(zero_rank_counters,
+                    "K: zero coarse typed/category counters emit rank-scoped zero-window records");
+
+        nlohmann::json task{{"op_kind", "ffn_region"},
+            {"tensor_shapes", {{"m", 64}, {"hidden", 128},
+                               {"ffn", 256}, {"mlp_variant", "swiglu"}}},
+            {"fusion_policy", "materialized"}, {"storage_dtype", "bf16"}};
+        const auto plan = bridge.compile(task);
+        const uint64_t workspace_bytes =
+            coarse_die::hbm_workspace_peak_bytes(*plan);
+        expect_true(workspace_bytes > 0,
+                    "K: fixture Plan has positive transient workspace");
+        if (workspace_bytes > 0) {
+            OnlineNode comp;
+            comp.global_id = 100;
+            comp.rank = 0;
+            comp.kind = NodeKind::Compute;
+            comp.node_type = 4;
+            comp.name = "coarse_workspace_cancel";
+            comp.request_id = "r1";
+            comp.stage = "prefill";
+            comp.compute.die_task_json =
+                std::make_shared<const nlohmann::json>(task);
+            fixture.source->store().add_node(comp);
+
+            OnlineNode child;
+            child.global_id = 101;
+            child.rank = 0;
+            child.kind = NodeKind::Invalid;
+            child.node_type = 0;
+            child.name = "after_workspace_cancel";
+            child.request_id = "r1";
+            child.stage = "prefill";
+            fixture.source->store().add_node(child);
+            fixture.source->store().add_dependency(100, 101, DepKind::Data);
+
+            // KV leaves one byte less than the prepared Plan needs. The
+            // blocked node must remain in the free set without GPU occupancy.
+            install_workspace_snapshot(fixture.sys.get(),
+                                       workspace_bytes + 1, 2);
+            workload.issue_dep_free_nodes();
+            std::vector<uint64_t> free_ids;
+            fixture.source->store().fill_free_node_snapshot(free_ids);
+            expect_true(fixture.sys->workspace_admission->active_lease_count() == 0 &&
+                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                            std::find(free_ids.begin(), free_ids.end(), 100) !=
+                                free_ids.end() &&
+                            g_terminal_fires.count(100) == 0,
+                        "K: blocked Plan stays free and consumes no GPU slot or lease");
+
+            install_workspace_snapshot(fixture.sys.get(),
+                                       workspace_bytes + 1, 1);
+            workload.issue_dep_free_nodes();
+            free_ids.clear();
+            fixture.source->store().fill_free_node_snapshot(free_ids);
+            expect_true(fixture.sys->workspace_admission->active_lease_count() == 1 &&
+                            fixture.sys->workspace_admission
+                                    ->active_workspace_bytes() == workspace_bytes &&
+                            workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
+                            std::find(free_ids.begin(), free_ids.end(), 100) ==
+                                free_ids.end(),
+                        "K: exact capacity acquires the lease before take/occupy");
+
+            fixture.event_queue->proceed();
+            const auto before_cancel =
+                bridge.counters_at(Sys::boostedTick());
+            const auto& comp_served =
+                before_cancel.at("served_by_category").at("comp");
+            bool saw_served_work =
+                comp_served.at("int4_ops").get<double>() > 0.0 ||
+                comp_served.at("vec_eqops").get<double>() > 0.0;
+            for (const auto& row :
+                 comp_served.at("hbm_served_bytes_by_row_direction")) {
+                for (const auto& direction : row) {
+                    saw_served_work =
+                        saw_served_work || direction.get<double>() > 0.0;
+                }
+            }
+            expect_true(Sys::boostedTick() > 0 && saw_served_work &&
+                            g_terminal_fires.count(100) == 0,
+                        "K: cancellation begins after real typed service");
+            workload.die_model_adapter()->cancel_coarse_node(
+                100, Sys::boostedTick());
+
+            const auto* stats =
+                fixture.source->store().mutable_online_statistics(100);
+            std::vector<uint64_t> free_after_cancel;
+            fixture.source->store().fill_free_node_snapshot(
+                free_after_cancel);
+            expect_true(g_terminal_fires[100] == 1 &&
+                            g_terminal_status[100] == static_cast<int>(
+                                NodeTerminalStatus::Skipped) &&
+                            stats != nullptr &&
+                            stats->compute_utilization.has_value() &&
+                            stats->memory_utilization.has_value() &&
+                            stats->vector_utilization.has_value() &&
+                            workload.die_cancelled_comp_count() == 1 &&
+                            std::find(free_after_cancel.begin(),
+                                      free_after_cancel.end(), 101) !=
+                                free_after_cancel.end() &&
+                            fixture.sys->workspace_admission
+                                    ->active_workspace_bytes() == 0 &&
+                            fixture.sys->workspace_admission
+                                    ->active_lease_count() == 0 &&
+                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                            fixture.sys->workspace_admission
+                                    ->workspace_revision() == 2,
+                        "K: live cancellation records typed utilization, releases once, terminalizes Skipped, and frees its dependent node");
+            workload.issue_dep_free_nodes();
+            expect_true(g_terminal_fires[101] == 1 &&
+                            g_terminal_status[101] == static_cast<int>(
+                                NodeTerminalStatus::Skipped),
+                        "K: cancelled COMP releases its dependent node normally");
+
+            const uint64_t metric_window_end = Sys::boostedTick();
+            const auto served_records = capture_metric_records(
+                metric_manifest_path,
+                {fixture.sys.get(), idle_rank.sys.get()},
+                metric_window_end, 0, 1234);
+            std::map<int, nlohmann::json> served_rank_compute;
+            std::map<int, nlohmann::json> served_local_hbm;
+            for (const auto& record : served_records) {
+                const std::string type = record.value("type", std::string());
+                if (type == "rank_compute") {
+                    served_rank_compute[record.at("rank").get<int>()] = record;
+                } else if (type == "local_hbm") {
+                    served_local_hbm[record.at("rank").get<int>()] = record;
+                }
+            }
+            bool served_metrics_valid = metric_window_end > 0 &&
+                served_rank_compute.size() == 2 &&
+                served_local_hbm.size() == 2;
+            if (served_metrics_valid) {
+                const auto& active_rank = served_rank_compute.at(0);
+                const auto& active_coarse =
+                    active_rank.at("coarse_die_runtime");
+                const auto& active_categories =
+                    active_coarse.at("served_by_category");
+                const auto& active_hbm = served_local_hbm.at(0);
+                const auto& idle_rank_record = served_rank_compute.at(1);
+                const auto& idle_coarse =
+                    idle_rank_record.at("coarse_die_runtime");
+                const auto& idle_hbm = served_local_hbm.at(1);
+                served_metrics_valid =
+                    active_rank.at("die_cancelled_comp_count").get<uint64_t>() == 1 &&
+                    active_rank.at("utilization_window_ns").get<uint64_t>() ==
+                        metric_window_end &&
+                    active_coarse.at("utilization_window_ns").get<uint64_t>() ==
+                        metric_window_end &&
+                    active_hbm.at("utilization_window_ns").get<uint64_t>() ==
+                        metric_window_end &&
+                    active_hbm.at("hbm_shared_definition") ==
+                        active_hbm.at("shared_definition") &&
+                    active_hbm.at("local_hbm_restore_bytes_issued")
+                            .get<uint64_t>() == 1234 &&
+                    active_rank.at("local_hbm_restore_bytes")
+                            .get<uint64_t>() == 1234 &&
+                    exact_number(active_categories.at("comp")
+                                     .at("int4_ops_exact_decimal")) > 0.0L &&
+                    active_hbm.at("served_by_category") == active_categories &&
+                    idle_rank_record.at("die_cancelled_comp_count")
+                            .get<uint64_t>() == 0 &&
+                    exact_number(idle_coarse.at("served_by_category")
+                                     .at("comp").at("int4_ops_exact_decimal")) ==
+                        0.0L &&
+                    exact_number(idle_hbm.at("served_by_category")
+                                     .at("comp").at("int4_ops_exact_decimal")) ==
+                        0.0L &&
+                    idle_hbm.at("local_hbm_restore_bytes_issued")
+                            .get<uint64_t>() == 0;
+            }
+            expect_true(served_metrics_valid,
+                        "K: two-rank metrics preserve typed serving, category totals, windows, and one live cancellation");
+
+            // A Plan larger than capacity after weights is rejected before
+            // graph take, GPU occupancy, or lease acquisition.
+            install_workspace_snapshot(fixture.sys.get(),
+                                       workspace_bytes - 1, 0);
+            comp.global_id = 102;
+            comp.name = "coarse_workspace_impossible";
+            fixture.source->store().add_node(comp);
+            bool impossible_rejected = false;
+            try {
+                workload.issue_dep_free_nodes();
+            } catch (const std::runtime_error& exc) {
+                impossible_rejected =
+                    std::string(exc.what()).find("exceeds empty-instance") !=
+                    std::string::npos;
+            }
+            free_ids.clear();
+            fixture.source->store().fill_free_node_snapshot(free_ids);
+            expect_true(impossible_rejected &&
+                            std::find(free_ids.begin(), free_ids.end(), 102) !=
+                                free_ids.end() &&
+                            fixture.sys->workspace_admission
+                                    ->active_lease_count() == 0 &&
+                            fixture.sys->workspace_admission
+                                    ->active_workspace_bytes() == 0 &&
+                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                            g_terminal_fires.count(102) == 0,
+                        "K: impossible Plan fails before take/occupy and leaves no lease");
+        }
+        idle_rank.sys.reset();
+        drain_queue(idle_rank.event_queue);
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires.count(100) == 1,
+                    "K: teardown after cancellation does not duplicate terminals");
+    }
+
+    // ---- Case L: legacy shared-HBM metric projection stays stable --------
+    {
+        Fixture fixture = make_fixture(config_dir, "die_contention.json");
+        const std::string manifest_path = config_dir + "/legacy_metric_manifest.json";
+        write_text(manifest_path, nlohmann::json{
+            {"schema_version", 1},
+            {"repo_variant", "legacy-metric-fixture"},
+            {"run_mode", "service"},
+            {"run_id", "legacy-metric-fixture"},
+            {"requests", nlohmann::json::array()},
+            {"node_events_by_rank", nlohmann::json::object()},
+            {"planner_memory_peaks", nlohmann::json::array()},
+            {"memory_actions", nlohmann::json::array()}}.dump());
+        const auto records = capture_metric_records(
+            manifest_path, {fixture.sys.get()}, 0);
+        nlohmann::json rank_record;
+        nlohmann::json hbm_record;
+        for (const auto& record : records) {
+            const std::string type = record.value("type", std::string());
+            if (type == "rank_compute") rank_record = record;
+            if (type == "local_hbm") hbm_record = record;
+        }
+        const std::vector<std::string> legacy_hbm_fields = {
+            "schema", "type", "source", "repo_variant", "run_id", "rank",
+            "model", "utilization_window_ns", "utilization_window",
+            "hbm_busy_ns", "hbm_busy_definition", "hbm_shared_ns",
+            "hbm_shared_definition", "compute_bytes_served",
+            "restore_bytes_served", "comm_read_bytes_served",
+            "comm_write_bytes_served", "pool_read_bytes_served",
+            "pool_write_bytes_served", "bytes_served_definition",
+            "peak_concurrent_jobs", "peak_concurrent_jobs_definition",
+            "redistribution_events", "redistribution_events_definition",
+            "local_hbm_restore_bytes_issued", "local_hbm_bw_bytes_per_second",
+            "local_hbm_bw_source", "hbm_busy_util",
+            "hbm_shared_fraction_of_window", "dram_bw_util",
+            "dram_bw_util_note"};
+        bool old_fields_retained = !rank_record.is_null() &&
+            !hbm_record.is_null() &&
+            rank_record.value("die_cancelled_comp_count", uint64_t{0}) == 0 &&
+            !rank_record.contains("coarse_die_runtime") &&
+            hbm_record.value("source", std::string()) ==
+                "shared_hbm_runtime_model" &&
+            hbm_record.value("hbm_shared_definition", std::string()) ==
+                "subset of hbm_busy_ns during which two or more jobs shared "
+                "the rank HBM bandwidth (equal split)" &&
+            hbm_record.value("hbm_busy_ns", -1.0) == 0.0 &&
+            hbm_record.value("compute_bytes_served", -1.0) == 0.0 &&
+            hbm_record.value("local_hbm_restore_bytes_issued", uint64_t{1}) == 0 &&
+            rank_record.value("local_hbm_restore_bytes", uint64_t{1}) ==
+                hbm_record.value("local_hbm_restore_bytes_issued", uint64_t{2}) &&
+            hbm_record.at("dram_bw_util").is_null() &&
+            hbm_record.value("dram_bw_util_note", std::string()) ==
+                "undefined: zero local-mem-bw/window" &&
+            !hbm_record.contains("dram_bw_util_numerator_bytes") &&
+            !hbm_record.contains("dram_bw_util_denominator");
+        for (const auto& field : legacy_hbm_fields) {
+            old_fields_retained = old_fields_retained &&
+                                  hbm_record.contains(field);
+        }
+        expect_true(old_fields_retained,
+                    "L: non-coarse local-HBM fields and values match the preserved LRU baseline");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
     }
 
     std::error_code ec;

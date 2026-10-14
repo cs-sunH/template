@@ -1,0 +1,2908 @@
+diff --git a/astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/CMakeLists.txt b/astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/CMakeLists.txt
+index 6e09344..f3835b6 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/CMakeLists.txt
++++ b/astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/CMakeLists.txt
+@@ -83,6 +83,24 @@ add_test(NAME AstraSim_Analytical_CmdLineParserTest
+ set_tests_properties(AstraSim_Analytical_CmdLineParserTest
+         PROPERTIES TIMEOUT 300)
+ 
++# Rank-local coarse workspace lease ledger fixture. This header-only test
++# exercises checked admission, revision binding and RAII release without
++# building the simulator/network stack.
++add_executable(AstraSim_Analytical_WorkspaceAdmissionTest
++        ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/workspace_admission_test.cc)
++target_include_directories(AstraSim_Analytical_WorkspaceAdmissionTest PRIVATE
++        ${CMAKE_CURRENT_SOURCE_DIR}/../../../)
++set_target_properties(AstraSim_Analytical_WorkspaceAdmissionTest
++        PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
++set_target_properties(AstraSim_Analytical_WorkspaceAdmissionTest
++        PROPERTIES
++        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
++        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
++        ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
++)
++add_test(NAME AstraSim_Analytical_WorkspaceAdmissionTest
++        COMMAND AstraSim_Analytical_WorkspaceAdmissionTest)
++
+ # Compile Congestion Aware Backend
+ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
+     # Path-1 removal (2026-08-18): the static aware target and
+diff --git a/astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/congestion_aware/main_online.cc b/astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/congestion_aware/main_online.cc
+index 722bdae..21c4a45 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/congestion_aware/main_online.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/network_frontend/analytical/congestion_aware/main_online.cc
+@@ -92,6 +92,7 @@ Step 1-10 (runners + IDLE fixture):
+ #include "astra-sim/common/Logging.hh"
+ #include "astra-sim/system/Sys.hh"
+ #include "astra-sim/workload/MetricCollector.hh"
++#include "astra-sim/workload/WorkspaceAdmission.hh"
+ #include "astra-sim/workload/Workload.hh"
+ #include "astra-sim/workload/execution_driven/DecisionBridge.hh"
+ #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
+@@ -163,6 +164,7 @@ struct OnlineDriverContext {
+     // its own shared_ptr; this vector is the commit's access path).
+     std::vector<std::shared_ptr<NodeStoreGraphSource>>* graph_sources =
+         nullptr;
++    std::vector<Sys*>* systems = nullptr;
+     // Phase 5 (方案 §8): the atomic GraphBatch committer -- Phase A
+     // validate (pure) then Phase B commit; owns the persistent store-id
+     // map, the in-flight request tracking and the phase-5 counters.
+@@ -177,6 +179,7 @@ struct OnlineDriverContext {
+     // phase 6): when set, the tick-end gate computes the per-rank
+     // injected-unfinished ledger summary into StateDelta.injected_unfinished.
+     bool sensing_enabled = false;
++    bool workspace_admission_required = false;
+     // Phase 4 (schema v1): the per-delivery completed-facts buffer
+     // (StateDelta.completed_nodes). The online CompletionObserver hook
+     // appends one fact per node terminal; the tick-end gate moves the
+@@ -512,7 +515,8 @@ void ed_commit_cb(void* arg) {
+ 
+     // ---- Commit ack: Python's provisional ledger finalizes ----
+     driver->bridge->send_commit_ack(batch.batch_id,
+-                                    batch.source_delivery_sequence, true);
++                                    batch.source_delivery_sequence, true,
++                                    batch.schema_version);
+ 
+     delete commit;
+ }
+@@ -681,12 +685,38 @@ void ed_driver_tick_end(void* ctx) {
+                                          affected_ranks.end()),
+                              affected_ranks.end());
+     }
+-    StateDelta delta = build_state_delta_v1(
+-        driver->mailbox->drain(),
+-        driver->event_queue->get_current_time(),
+-        driver->delivery_seq++, deferred_from,
+-        driver->completed_facts.drain(), std::move(affected_ranks),
+-        std::move(injected_unfinished));
++    auto events = driver->mailbox->drain();
++    const uint64_t tick = driver->event_queue->get_current_time();
++    const uint64_t delivery_sequence = driver->delivery_seq++;
++    auto completed_nodes = driver->completed_facts.drain();
++    StateDelta delta;
++    if (driver->workspace_admission_required) {
++        if (driver->systems == nullptr || driver->systems->empty()) {
++            online_fatal(
++                "coarse_die_v2 workspace bridge has no configured ranks");
++        }
++        std::vector<WorkspaceRankState> workspace_state;
++        workspace_state.reserve(driver->systems->size());
++        for (size_t rank = 0; rank < driver->systems->size(); ++rank) {
++            Sys* const system = (*driver->systems)[rank];
++            if (system == nullptr || system->workspace_admission == nullptr ||
++                system->id != static_cast<int>(rank)) {
++                online_fatal(
++                    "coarse_die_v2 workspace ledger is missing or rank order "
++                    "is inconsistent");
++            }
++            workspace_state.push_back(system->workspace_admission->state());
++        }
++        delta = build_state_delta_v2(
++            std::move(events), tick, delivery_sequence, deferred_from,
++            std::move(completed_nodes), std::move(affected_ranks),
++            std::move(workspace_state), std::move(injected_unfinished));
++    } else {
++        delta = build_state_delta_v1(
++            std::move(events), tick, delivery_sequence, deferred_from,
++            std::move(completed_nodes), std::move(affected_ranks),
++            std::move(injected_unfinished));
++    }
+     auto* commit = new CommitArg;
+     commit->driver = driver;
+     for (const auto& ev : delta.events) {
+@@ -1328,6 +1358,33 @@ int main(int argc, char* argv[]) {
+         systems.push_back(system);
+     }
+ 
++    // Every rank participates in the same bridge schema. A mixed run would
++    // otherwise emit a partial v2 rank table or leave a coarse Plan outside
++    // the admission ledger, so fail before the online driver starts.
++    bool workspace_admission_required = !systems.empty();
++    for (size_t rank = 0; rank < systems.size(); ++rank) {
++        Sys* const system = systems[rank];
++        if (system == nullptr || system->id != static_cast<int>(rank)) {
++            online_fatal("workspace admission requires systems ordered by "
++                         "configured rank");
++        }
++        const bool has_coarse_runtime =
++            system->coarse_die_runtime != nullptr;
++        const bool has_workspace_ledger =
++            system->workspace_admission != nullptr;
++        if (has_coarse_runtime != has_workspace_ledger) {
++            online_fatal("coarse_die_v2 rank has no matching workspace "
++                         "admission ledger");
++        }
++        if (rank == 0) {
++            workspace_admission_required = has_coarse_runtime;
++        } else if (workspace_admission_required != has_coarse_runtime) {
++            online_fatal("online ranks mix coarse_die_v2 and legacy "
++                         "compute backends; one bridge schema is required "
++                         "for all ranks");
++        }
++    }
++
+     // Online service: lifecycle authority + request-neutral ingress. No
+     // systems[i]->workload->fire(): in online mode the graph is fed by the
+     // dynamic source, not by the ETFeeder.
+@@ -1585,6 +1642,9 @@ int main(int argc, char* argv[]) {
+     driver_ctx.svc = &svc;
+     driver_ctx.watch_registry = &watch_registry;
+     driver_ctx.graph_sources = &graph_sources;
++    driver_ctx.systems = &systems;
++    driver_ctx.workspace_admission_required =
++        workspace_admission_required;
+     // Phase-3 perception feature flag (default off until phase 6; the
+     // --sensing-enabled token gates the injected-unfinished summary delivery
+     // only -- query/audit data, never a strategy decision input).
+@@ -1608,9 +1668,73 @@ int main(int argc, char* argv[]) {
+     committer_ctx.graph_sources = &graph_sources;
+     committer_ctx.watch_registry = &watch_registry;
+     committer_ctx.ingress = &ingress;
++    committer_ctx.workspace_admission_required =
++        workspace_admission_required;
+     committer_ctx.issue_rank = [&systems](int rank) {
+         systems[rank]->workload->issue_dep_free_nodes();
+     };
++    if (workspace_admission_required) {
++        committer_ctx.validate_workspace_capacity_snapshot =
++            [&systems](const std::vector<WorkspaceRankState>& request_state,
++                       const std::vector<WorkspaceCapacityRank>& snapshot)
++            -> std::optional<std::string> {
++            if (request_state.size() != systems.size() ||
++                snapshot.size() != systems.size()) {
++                return "workspace request/snapshot rank count mismatch";
++            }
++            for (size_t rank = 0; rank < systems.size(); ++rank) {
++                Sys* const system = systems[rank];
++                if (system == nullptr ||
++                    system->workspace_admission == nullptr) {
++                    return "workspace admission ledger missing for rank " +
++                           std::to_string(rank);
++                }
++                try {
++                    system->workspace_admission->validate_request_state(
++                        request_state[rank]);
++                    system->workspace_admission->validate_capacity_snapshot(
++                        snapshot[rank]);
++                } catch (const std::exception& exc) {
++                    return "rank " + std::to_string(rank) + ": " +
++                           exc.what();
++                }
++            }
++            return std::nullopt;
++        };
++        committer_ctx.install_workspace_capacity_snapshot =
++            [&systems](const std::vector<WorkspaceCapacityRank>& snapshot,
++                       std::vector<int>& changed_ranks) {
++            if (snapshot.size() != systems.size()) {
++                throw std::runtime_error(
++                    "workspace snapshot rank count changed after preflight");
++            }
++            changed_ranks.clear();
++            // Validate and collect all changes before installing any rank.
++            // GraphBatchCommitter reserves this scratch vector to num_ranks,
++            // so this pass cannot allocate once commit has begun mutating.
++            if (changed_ranks.capacity() < systems.size()) {
++                throw std::runtime_error(
++                    "workspace changed-rank scratch is undersized");
++            }
++            for (size_t rank = 0; rank < systems.size(); ++rank) {
++                Sys* const system = systems[rank];
++                if (system == nullptr ||
++                    system->workspace_admission == nullptr) {
++                    throw std::runtime_error(
++                        "workspace admission ledger missing for rank " +
++                        std::to_string(rank));
++                }
++                if (system->workspace_admission
++                        ->capacity_snapshot_changes(snapshot[rank])) {
++                    changed_ranks.push_back(static_cast<int>(rank));
++                }
++            }
++            for (size_t rank = 0; rank < systems.size(); ++rank) {
++                systems[rank]->workspace_admission
++                    ->install_capacity_snapshot_unchecked(snapshot[rank]);
++            }
++        };
++    }
+     // The mandatory GraphBatch liveness preflight cannot infer a collective's
+     // true process-group membership from the batch itself: that declaration is
+     // owned by each participating Workload. Resolve it read-only here, across
+diff --git a/astra-sim-wscllm-LRU/astra-sim/system/Sys.cc b/astra-sim-wscllm-LRU/astra-sim/system/Sys.cc
+index 833e159..4850d8c 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/system/Sys.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/system/Sys.cc
+@@ -41,6 +41,7 @@ LICENSE file in the root directory of this source tree.
+ #include "astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.hh"
+ #include "DieModel.hh"
+ #include "astra-sim/workload/CoarseDieRuntime.hh"
++#include "astra-sim/workload/WorkspaceAdmission.hh"
+ #include "coarse_die/Hardware.hh"
+ #include <json/json.hpp>
+ 
+@@ -190,6 +191,7 @@ Sys::Sys(int id,
+     this->coarse_die_runtime = nullptr;
+     this->die_model_profile = "";
+     this->die_model_config_path = "";
++    this->workspace_admission = nullptr;
+ 
+     this->remote_mem = remote_mem;
+     // Every construction site passes a real remote-memory backend; a null
+@@ -1061,6 +1063,31 @@ bool Sys::initialize_sys(string name) {
+         }
+     }
+ 
++    // Workspace admission is an explicit bridge capability. Coarse mode
++    // always requires the full request view and capacity snapshot protocol;
++    // an environment override may select it for legacy profiles only when
++    // a matching ledger exists, and may never disable it for coarse_die_v2.
++    const char* const workspace_mode_env =
++        std::getenv("SH_WORKSPACE_ADMISSION");
++    const std::string workspace_mode =
++        workspace_mode_env == nullptr ? "auto" : workspace_mode_env;
++    if (workspace_mode != "auto" && workspace_mode != "required" &&
++        workspace_mode != "off") {
++        sys_panic("SH_WORKSPACE_ADMISSION must be auto|required|off (got '" +
++                  workspace_mode + "')");
++    }
++    const bool coarse_workspace_backend =
++        coarse_die_runtime != nullptr && workspace_admission != nullptr;
++    if (workspace_mode == "required" && !coarse_workspace_backend) {
++        sys_panic("SH_WORKSPACE_ADMISSION=required needs the coarse_die_v2 "
++                  "compute-cost backend");
++    }
++    if (workspace_mode == "off" && coarse_workspace_backend) {
++        sys_panic("SH_WORKSPACE_ADMISSION=off is incompatible with "
++                  "coarse_die_v2; refusing to issue Plans without "
++                  "workspace admission");
++    }
++
+     inFile.close();
+     return true;
+ }
+@@ -1127,6 +1154,8 @@ void Sys::initialize_die_backend(
+         }
+         coarse_die_runtime = std::make_unique<CoarseDieRuntime>(
+             this, std::move(coarse_hw));
++        workspace_admission =
++            std::make_unique<WorkspaceAdmission>(this->id);
+         die_runtime.reset();
+         die_model_profile = "coarse_die_v2";
+         if (!local_mem_bw_key_present) {
+diff --git a/astra-sim-wscllm-LRU/astra-sim/system/Sys.hh b/astra-sim-wscllm-LRU/astra-sim/system/Sys.hh
+index ded0ad6..044ea0b 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/system/Sys.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/system/Sys.hh
+@@ -19,6 +19,7 @@ LICENSE file in the root directory of this source tree.
+ #include "astra-sim/system/astraccl/CollectiveImplLookup.hh"
+ #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
+ #include "astra-sim/workload/Workload.hh"
++#include "astra-sim/workload/WorkspaceAdmission.hh"
+ #include "DieTypes.hh"
+ 
+ namespace AstraSim {
+@@ -339,6 +340,10 @@ class Sys : public Callable {
+     };
+     std::unique_ptr<DieModelRuntime> die_runtime;
+     std::unique_ptr<CoarseDieRuntime> coarse_die_runtime;
++    // Rank-local transient Plan workspace ledger. Present only for the
++    // coarse_die_v2 backend; Online carries its absolute view through bridge
++    // schema v2 before Python makes the next capacity decision.
++    std::unique_ptr<WorkspaceAdmission> workspace_admission;
+     std::string die_model_profile;
+     // Resolved die-model-config path (diagnostics only; empty off the die
+     // backend).
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc b/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc
+index 366907e..b9078ca 100644
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc
+@@ -6,6 +6,8 @@ LICENSE file in the root directory of this source tree.
+ #include "astra-sim/workload/DieModelAdapter.hh"
+ 
+ #include <algorithm>
++#include <cmath>
++#include <exception>
+ #include <stdexcept>
+ #include <utility>
+ 
+@@ -28,14 +30,13 @@ uint64_t stable_request_id(const std::string& value) {
+ }
+ }
+ 
+-
+ DieModelAdapter::DieModelAdapter(Workload* workload)
+     : workload_(workload), sys_(workload != nullptr ? workload->sys : nullptr) {
+     if (workload_ == nullptr || sys_ == nullptr ||
+-        sys_->die_runtime == nullptr && sys_->coarse_die_runtime == nullptr) {
++        (sys_->die_runtime == nullptr && sys_->coarse_die_runtime == nullptr)) {
+         throw std::runtime_error(
+-            "DieModelAdapter requires a Workload whose Sys loaded the die "
+-            "runtime (compute-cost-model=die with a valid die-model-config)");
++            "DieModelAdapter requires a Workload whose Sys loaded a die "
++            "runtime (compute-cost-model=die with a valid profile descriptor)");
+     }
+ }
+ 
+@@ -46,71 +47,9 @@ DieModelAdapter::~DieModelAdapter() {
+ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
+     purge_finished_executions();
+     if (sys_->coarse_die_runtime != nullptr) {
+-        if (node.compute.die_task_json == nullptr) {
+-            throw std::runtime_error(
+-                "coarse_die_v2 requires the preserved typed die task JSON on "
+-                "real COMP node " + std::to_string(node.global_id));
+-        }
+-        const auto plan =
+-            sys_->coarse_die_runtime->compile(*node.compute.die_task_json);
+-        coarse_die::Owner owner;
+-        owner.request_id = stable_request_id(node.request_id);
+-        owner.node_id = node.global_id;
+-        owner.execution_id = node.generation;
+-        owner.generation = std::max<uint64_t>(node.generation, 1);
+-        const uint64_t node_id = node.global_id;
+-        const uint64_t handle = sys_->coarse_die_runtime->submit_plan(
+-            plan, owner,
+-            [this, node_id](const uint64_t done_handle,
+-                                  const nlohmann::json& progress) {
+-                coarse_active_.erase(done_handle);
+-                const auto state = progress.value("state", std::string());
+-                if (state == "cancelled") {
+-                    // Workload teardown removes callbacks before canceling.
+-                    // A live cancellation is surfaced through the existing
+-                    // graph cancellation path and cannot be turned into a
+-                    // successful COMP completion here.
+-                    return;
+-                }
+-                const uint64_t elapsed_ns =
+-                    progress.value("elapsed_ns", uint64_t{0});
+-                const double elapsed_s =
+-                    static_cast<double>(std::max<uint64_t>(elapsed_ns, 1)) /
+-                    1e9;
+-                const auto& derived =
+-                    sys_->coarse_die_runtime->hardware_summary();
+-                const auto& hw_summary = derived.at("hardware_summary");
+-                const double int4_peak =
+-                    hw_summary.at("peak_int4_ops_per_s").get<double>();
+-                const double vec_peak =
+-                    hw_summary.at("peak_vec_fp32_eq_ops_per_s").get<double>();
+-                const double hbm_peak =
+-                    hw_summary.at("hbm_row_peak_Bps")[0].get<double>() +
+-                    hw_summary.at("hbm_row_peak_Bps")[1].get<double>();
+-                const double int4_ops =
+-                    progress.at("served").at("int4_ops").get<double>();
+-                const double vec_ops =
+-                    progress.at("served").at("vec_eqops").get<double>();
+-                const double hbm_bytes =
+-                    progress.at("hbm_served_bytes")[0][0].get<double>() +
+-                    progress.at("hbm_served_bytes")[0][1].get<double>() +
+-                    progress.at("hbm_served_bytes")[1][0].get<double>() +
+-                    progress.at("hbm_served_bytes")[1][1].get<double>();
+-                if (!(int4_peak > 0.0) || !(vec_peak > 0.0) ||
+-                    !(hbm_peak > 0.0) || !std::isfinite(int4_ops) ||
+-                    !std::isfinite(vec_ops) || !std::isfinite(hbm_bytes)) {
+-                    throw std::runtime_error(
+-                        "coarse_die_v2 completion is missing finite typed "
+-                        "plan work or hardware peaks");
+-                }
+-                workload_->record_die_utilizations(
+-                    node_id, int4_ops / (int4_peak * elapsed_s),
+-                    hbm_bytes / (hbm_peak * elapsed_s),
+-                    vec_ops / (vec_peak * elapsed_s));
+-                workload_->finish_generic_node(node_id);
+-            });
+-        coarse_active_.emplace(handle, node_id);
+-        return;
++        throw std::runtime_error(
++            "coarse_die_v2 COMP must use prepare_coarse_plan, acquire a "
++            "workspace lease, and submit that same Plan before issue");
+     }
+     if (node.compute.die_spec == nullptr) {
+         // Contract §2/§7.3: a real COMP node without a die_op_spec must fail
+@@ -139,8 +78,6 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
+     }
+ 
+     WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
+-    wlhd->sys_id = sys_->id;
+-    wlhd->workload = workload_;
+     wlhd->node_id = node.global_id;
+     auto execution = std::make_unique<DieExecution>(
+         sys_, workload_, this, node.global_id, wlhd, plan);
+@@ -152,16 +89,203 @@ void DieModelAdapter::issue_die(const ExecutionDriven::NodeView& node) {
+     raw->start();
+ }
+ 
++DieModelAdapter::PreparedCoarsePlan DieModelAdapter::prepare_coarse_plan(
++    const ExecutionDriven::NodeView& node) {
++    purge_finished_executions();
++    if (sys_->coarse_die_runtime == nullptr ||
++        sys_->workspace_admission == nullptr) {
++        throw std::runtime_error(
++            "coarse workspace preparation requires a coarse_die_v2 rank");
++    }
++    if (node.node_type != ChakraNodeType::COMP_NODE || node.is_timer_op ||
++        node.is_cpu_op ||
++        node.compute.op_role == ExecutionDriven::OpRole::ControlMarker ||
++        node.compute.die_task_json == nullptr) {
++        throw std::runtime_error(
++            "workspace preparation requires a real GPU coarse COMP node " +
++            std::to_string(node.global_id));
++    }
++    auto plan = sys_->coarse_die_runtime->compile(*node.compute.die_task_json);
++    if (!plan) {
++        throw std::runtime_error("coarse_die_v2 compiler returned a null Plan");
++    }
++    const uint64_t workspace_bytes =
++        coarse_die::hbm_workspace_peak_bytes(*plan);
++    return PreparedCoarsePlan{std::move(plan), workspace_bytes,
++                              node.global_id, node.generation};
++}
++
++WorkspaceAdmission::AcquireResult DieModelAdapter::try_acquire_workspace(
++    const PreparedCoarsePlan& prepared) {
++    if (sys_->workspace_admission == nullptr || !prepared.plan) {
++        throw std::runtime_error(
++            "workspace acquisition requires a prepared coarse Plan");
++    }
++    return sys_->workspace_admission->try_acquire(
++        prepared.node_id, prepared.generation, prepared.workspace_bytes);
++}
++
++void DieModelAdapter::issue_prepared_coarse_plan(
++    const ExecutionDriven::NodeView& node,
++    PreparedCoarsePlan prepared,
++    WorkspaceAdmission::Lease lease) {
++    purge_finished_executions();
++    if (sys_->coarse_die_runtime == nullptr ||
++        sys_->workspace_admission == nullptr || !prepared.plan ||
++        !lease.active()) {
++        throw std::runtime_error(
++            "coarse issue requires a live prepared Plan and workspace lease");
++    }
++    const auto& key = lease.key();
++    if (prepared.node_id != node.global_id ||
++        prepared.generation != node.generation || key.rank != sys_->id ||
++        key.node_id != node.global_id || key.generation != node.generation) {
++        throw std::runtime_error(
++            "prepared Plan/workspace lease identity does not match COMP node");
++    }
++
++    coarse_die::Owner owner;
++    owner.request_id = stable_request_id(node.request_id);
++    owner.node_id = node.global_id;
++    owner.execution_id = node.generation;
++    owner.generation = std::max<uint64_t>(node.generation, 1);
++    const uint64_t node_id = node.global_id;
++    const uint64_t handle = sys_->coarse_die_runtime->submit_plan(
++        prepared.plan, owner,
++        [this](const uint64_t done_handle,
++               const nlohmann::json& progress) {
++            auto found = coarse_active_.find(done_handle);
++            if (found == coarse_active_.end()) {
++                throw std::runtime_error(
++                    "coarse completion has no active Plan/workspace record "
++                    "for handle " + std::to_string(done_handle));
++            }
++            CoarseActiveRecord active = std::move(found->second);
++            coarse_active_.erase(found);
++            // Workspace capacity returns before Workload terminalization; the
++            // observer's deferred issue pass therefore sees the released
++            // lease in this same tick.
++            active.lease.release();
++
++            const auto state = progress.value("state", std::string());
++            const bool cancelled = state == "cancelled";
++            if (!cancelled && state != "finished") {
++                throw std::runtime_error(
++                    "coarse COMP completion has invalid terminal state " +
++                    state);
++            }
++            const uint64_t elapsed_ns =
++                progress.value("elapsed_ns", uint64_t{0});
++            const double elapsed_s = static_cast<double>(elapsed_ns) / 1e9;
++            const auto& derived =
++                sys_->coarse_die_runtime->hardware_summary();
++            const auto& hw_summary = derived.at("hardware_summary");
++            const double int4_peak =
++                hw_summary.at("peak_int4_ops_per_s").get<double>();
++            const double vec_peak =
++                hw_summary.at("peak_vec_fp32_eq_ops_per_s").get<double>();
++            const double hbm_peak =
++                hw_summary.at("hbm_row_peak_Bps")[0].get<double>() +
++                hw_summary.at("hbm_row_peak_Bps")[1].get<double>();
++            const double int4_ops =
++                progress.at("served").at("int4_ops").get<double>();
++            const double vec_ops =
++                progress.at("served").at("vec_eqops").get<double>();
++            const double hbm_bytes =
++                progress.at("hbm_served_bytes")[0][0].get<double>() +
++                progress.at("hbm_served_bytes")[0][1].get<double>() +
++                progress.at("hbm_served_bytes")[1][0].get<double>() +
++                progress.at("hbm_served_bytes")[1][1].get<double>();
++            if (!(int4_peak > 0.0) || !std::isfinite(int4_peak) ||
++                !(vec_peak > 0.0) || !std::isfinite(vec_peak) ||
++                !(hbm_peak > 0.0) || !std::isfinite(hbm_peak) ||
++                !std::isfinite(int4_ops) || int4_ops < 0.0 ||
++                !std::isfinite(vec_ops) || vec_ops < 0.0 ||
++                !std::isfinite(hbm_bytes) || hbm_bytes < 0.0) {
++                throw std::runtime_error(
++                    "coarse_die_v2 completion is missing finite typed plan "
++                    "work or hardware peaks");
++            }
++            const bool any_served_work = int4_ops != 0.0 || vec_ops != 0.0 ||
++                                         hbm_bytes != 0.0;
++            if (elapsed_ns == 0 && any_served_work) {
++                throw std::runtime_error(
++                    "coarse_die_v2 completion reports served work with a "
++                    "zero elapsed-time denominator");
++            }
++            const double compute_utilization =
++                elapsed_ns == 0 ? 0.0 : int4_ops / (int4_peak * elapsed_s);
++            const double memory_utilization =
++                elapsed_ns == 0 ? 0.0 : hbm_bytes / (hbm_peak * elapsed_s);
++            const double vector_utilization =
++                elapsed_ns == 0 ? 0.0 : vec_ops / (vec_peak * elapsed_s);
++            if (!std::isfinite(compute_utilization) ||
++                !std::isfinite(memory_utilization) ||
++                !std::isfinite(vector_utilization)) {
++                throw std::runtime_error(
++                    "coarse_die_v2 completion utilization is non-finite");
++            }
++            workload_->record_die_utilizations(
++                active.node_id, compute_utilization, memory_utilization,
++                vector_utilization);
++            if (cancelled) {
++                // Cancellation still reports exactly the typed work served
++                // before cancel. The live graph terminal remains Skipped,
++                // never a successful COMP completion.
++                workload_->finish_cancelled_coarse_node(active.node_id);
++                return;
++            }
++            workload_->finish_generic_node(active.node_id);
++        });
++    try {
++        // Allocate the map node before transferring lease ownership. If the
++        // allocation throws, the local token remains held until the accepted
++        // Runtime handle has been cancelled below.
++        const auto inserted = coarse_active_.try_emplace(handle);
++        if (!inserted.second) {
++            throw std::runtime_error(
++                "coarse Runtime reused an active execution handle");
++        }
++        inserted.first->second.node_id = node_id;
++        inserted.first->second.generation = node.generation;
++        inserted.first->second.plan = prepared.plan;
++        inserted.first->second.lease = std::move(lease);
++    } catch (...) {
++        // Runtime accepted the Plan, but the adapter could not establish its
++        // unique completion/lease owner. Cancel and retire before the local
++        // RAII token is allowed to release capacity; this is fatal cleanup,
++        // never a dispatch retry.
++        try {
++            sys_->coarse_die_runtime->cancel(
++                handle, Sys::boostedTick(), /*notify=*/false);
++        } catch (...) {
++            std::throw_with_nested(std::runtime_error(
++                "coarse Plan submitted but adapter registration failed and "
++                "Runtime cancellation could not be confirmed"));
++        }
++        throw;
++    }
++}
++
++void DieModelAdapter::cancel_coarse_node(const uint64_t node_id,
++                                         const uint64_t now_ns) {
++    for (const auto& entry : coarse_active_) {
++        if (entry.second.node_id == node_id) {
++            sys_->coarse_die_runtime->cancel(entry.first, now_ns,
++                                             /*notify=*/true);
++            return;
++        }
++    }
++    throw std::runtime_error(
++        "cannot cancel unknown coarse COMP node " + std::to_string(node_id));
++}
++
+ bool DieModelAdapter::has_active_die_executions() {
+     purge_finished_executions();
+     return !active_.empty() || !coarse_active_.empty();
+ }
+ 
+ void DieModelAdapter::dump_census_to_stderr(const char* prefix) const {
+-    // DeadEnd-census diagnostic only (2026-10-11): read-only walk over the
+-    // live-execution list (retired-but-unpurged entries included; their
+-    // census lines carry finished=1). Deliberately does NOT purge -- the
+-    // census must not mutate any state.
+     for (const auto& execution : active_) {
+         execution->dump_census_to_stderr(prefix);
+     }
+@@ -187,9 +311,12 @@ void DieModelAdapter::shutdown() {
+     if (sys_ != nullptr && sys_->coarse_die_runtime != nullptr) {
+         const uint64_t now = Sys::boostedTick();
+         while (!coarse_active_.empty()) {
+-            const uint64_t handle = coarse_active_.begin()->first;
++            auto found = coarse_active_.begin();
++            const uint64_t handle = found->first;
++            CoarseActiveRecord active = std::move(found->second);
++            coarse_active_.erase(found);
+             sys_->coarse_die_runtime->cancel(handle, now, false);
+-            coarse_active_.erase(handle);
++            active.lease.release();
+         }
+     }
+ }
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.hh b/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.hh
+index 79b9e28..56d7c2a 100644
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.hh
+@@ -26,10 +26,17 @@ Responsibilities (one adapter per Workload, owned by the Workload):
+ #define __DIE_MODEL_ADAPTER_HH__
+ 
+ #include <cstdint>
++#include <map>
+ #include <memory>
++#include <optional>
+ #include <vector>
+ 
+ #include "astra-sim/workload/execution_driven/GraphSource.hh"
++#include "astra-sim/workload/WorkspaceAdmission.hh"
++
++namespace coarse_die {
++struct Plan;
++}
+ 
+ namespace AstraSim {
+ 
+@@ -39,6 +46,13 @@ class DieExecution;
+ 
+ class DieModelAdapter {
+   public:
++    struct PreparedCoarsePlan {
++        std::shared_ptr<const coarse_die::Plan> plan;
++        uint64_t workspace_bytes = 0;
++        uint64_t node_id = 0;
++        uint64_t generation = 0;
++    };
++
+     explicit DieModelAdapter(Workload* workload);
+     ~DieModelAdapter();
+ 
+@@ -48,13 +62,27 @@ class DieModelAdapter {
+     // die_op_spec (fail-closed, never a silent roofline fallback).
+     void issue_die(const ExecutionDriven::NodeView& node);
+ 
++    /// Compile/cache before graph take/COMP occupy. The returned immutable
++    /// Plan is passed unchanged through admission and Runtime submission.
++    PreparedCoarsePlan prepare_coarse_plan(
++        const ExecutionDriven::NodeView& node);
++    WorkspaceAdmission::AcquireResult try_acquire_workspace(
++        const PreparedCoarsePlan& prepared);
++    void issue_prepared_coarse_plan(
++        const ExecutionDriven::NodeView& node,
++        PreparedCoarsePlan prepared,
++        WorkspaceAdmission::Lease lease);
++    /// Explicit live cancellation terminalizes the graph node as Skipped;
++    /// shutdown uses notify=false and does not issue a retry pass.
++    void cancel_coarse_node(uint64_t node_id, uint64_t now_ns);
++
+     // Whether any outer node still has a live DieExecution. Purges retired
+     // entries first (they linger only until the next adapter entry point).
+     bool has_active_die_executions();
+ 
+-    // DeadEnd-census diagnostic only (2026-10-11): one census line per live
+-    // (not-yet-purged) execution, prefixed with `prefix`. Purely read-only;
+-    // never called on the hot path.
++    // DeadEnd-census diagnostic only. Read-only walk over live legacy
++    // DieExecution objects; coarse active Plans are represented by the
++    // Runtime's typed counters and workspace ledger.
+     void dump_census_to_stderr(const char* prefix) const;
+ 
+     // Workload teardown: cancel every pending event, drop the pending HBM
+@@ -72,7 +100,13 @@ class DieModelAdapter {
+     Workload* workload_;
+     Sys* sys_;
+     std::vector<std::unique_ptr<DieExecution>> active_;
+-    std::map<uint64_t, uint64_t> coarse_active_;
++    struct CoarseActiveRecord {
++        uint64_t node_id = 0;
++        uint64_t generation = 0;
++        std::shared_ptr<const coarse_die::Plan> plan;
++        WorkspaceAdmission::Lease lease;
++    };
++    std::map<uint64_t, CoarseActiveRecord> coarse_active_;
+ };
+ 
+ }  // namespace AstraSim
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/MetricCollector.cc b/astra-sim-wscllm-LRU/astra-sim/workload/MetricCollector.cc
+index a0f89d8..a6f5fcb 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/MetricCollector.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/MetricCollector.cc
+@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
+ #include "astra-sim/workload/MetricCollector.hh"
+ 
+ #include "astra-sim/system/Sys.hh"
++#include "astra-sim/workload/CoarseDieRuntime.hh"
+ #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
+ #include "astra-sim/workload/Statistics.hh"
+ #include "astra-sim/workload/Workload.hh"
+@@ -13,13 +14,17 @@ LICENSE file in the root directory of this source tree.
+ #include <json/json.hpp>
+ 
+ #include <algorithm>
++#include <array>
+ #include <cerrno>
+ #include <cmath>
++#include <cstdlib>
+ #include <cstring>
+ #include <cstdio>
+ #include <fstream>
++#include <iomanip>
+ #include <iostream>
+ #include <limits>
++#include <sstream>
+ #include <unordered_set>
+ #include <unistd.h>
+ 
+@@ -87,6 +92,234 @@ long double u128_to_long_double(unsigned __int128 value) {
+     return hi * 18446744073709551616.0L + lo;
+ }
+ 
++using ExactHbmMatrix = std::array<std::array<long double, 2>, 2>;
++
++long double parse_runtime_exact_counter(const json& value,
++                                        const std::string& field) {
++    if (!value.is_string()) {
++        throw std::runtime_error("coarse_die Runtime counter " + field +
++                                 " is not an exact decimal string");
++    }
++    const std::string text = value.get<std::string>();
++    char* end = nullptr;
++    errno = 0;
++    const long double parsed = std::strtold(text.c_str(), &end);
++    if (errno == ERANGE || end != text.c_str() + text.size() ||
++        !std::isfinite(parsed) || parsed < 0.0L) {
++        throw std::runtime_error("coarse_die Runtime counter " + field +
++                                 " is not a finite non-negative decimal");
++    }
++    return parsed;
++}
++
++std::string exact_runtime_decimal(long double value) {
++    std::ostringstream stream;
++    stream << std::setprecision(std::numeric_limits<long double>::max_digits10)
++           << value;
++    return stream.str();
++}
++
++ExactHbmMatrix parse_runtime_hbm_matrix(const json& value,
++                                       const std::string& field) {
++    if (!value.is_array() || value.size() != 2) {
++        throw std::runtime_error("coarse_die Runtime counter " + field +
++                                 " must have two rows");
++    }
++    ExactHbmMatrix matrix{};
++    for (size_t row = 0; row < 2; ++row) {
++        if (!value.at(row).is_array() || value.at(row).size() != 2) {
++            throw std::runtime_error("coarse_die Runtime counter " + field +
++                                     " has a malformed row");
++        }
++        for (size_t direction = 0; direction < 2; ++direction) {
++            matrix[row][direction] = parse_runtime_exact_counter(
++                value.at(row).at(direction), field + "[" +
++                    std::to_string(row) + "][" +
++                    std::to_string(direction) + "]");
++        }
++    }
++    return matrix;
++}
++
++long double hbm_matrix_total(const ExactHbmMatrix& matrix) {
++    long double total = 0.0L;
++    for (const auto& row : matrix) {
++        for (const long double direction : row) {
++            total += direction;
++        }
++    }
++    return total;
++}
++
++long double hbm_category_total(const json& runtime_counters,
++                               const char* category) {
++    const json& served = runtime_counters.at("served_by_category").at(category);
++    return hbm_matrix_total(parse_runtime_hbm_matrix(
++        served.at("hbm_served_bytes_by_row_direction_exact"),
++        std::string("served_by_category.") + category +
++            ".hbm_served_bytes_by_row_direction_exact"));
++}
++
++json coarse_die_runtime_metric_record(const json& runtime_counters,
++                                      Tick window_ns) {
++    const bool accounting_complete =
++        runtime_counters.value("accounting_history_complete", false);
++    const bool typed_complete =
++        runtime_counters.value("typed_totals_history_complete", false);
++    const bool history_complete = accounting_complete && typed_complete;
++    const json& raw = runtime_counters.at("hardware_raw");
++    const bool raw_available = raw.value("available", false);
++    const long double window_seconds =
++        static_cast<long double>(window_ns) / 1e9L;
++
++    const json& categories = runtime_counters.at("served_by_category");
++    const json& comp = categories.at("comp");
++    const long double int4_ops = parse_runtime_exact_counter(
++        comp.at("int4_ops_exact_decimal"),
++        "served_by_category.comp.int4_ops_exact_decimal");
++    const long double vec_eqops = parse_runtime_exact_counter(
++        comp.at("vec_eqops_exact_decimal"),
++        "served_by_category.comp.vec_eqops_exact_decimal");
++    const ExactHbmMatrix total_hbm = parse_runtime_hbm_matrix(
++        runtime_counters.at("hbm_served_bytes_by_row_direction_exact"),
++        "hbm_served_bytes_by_row_direction_exact");
++    const long double total_hbm_bytes = hbm_matrix_total(total_hbm);
++    const auto& row_peaks = raw.at("hbm_row_peak_Bps");
++    long double int4_denominator = 0.0L;
++    long double vec_denominator = 0.0L;
++    std::array<long double, 2> hbm_row_denominators{};
++    bool int4_peak_valid = raw_available &&
++        raw.at("peak_int4_ops_per_s").is_number();
++    bool vec_peak_valid = raw_available &&
++        raw.at("peak_vec_fp32_eq_ops_per_s").is_number();
++    if (int4_peak_valid) {
++        const long double peak = raw.at("peak_int4_ops_per_s").get<double>();
++        int4_peak_valid = peak > 0.0L && std::isfinite(peak);
++        int4_denominator = peak * window_seconds;
++    }
++    if (vec_peak_valid) {
++        const long double peak =
++            raw.at("peak_vec_fp32_eq_ops_per_s").get<double>();
++        vec_peak_valid = peak > 0.0L && std::isfinite(peak);
++        vec_denominator = peak * window_seconds;
++    }
++    bool hbm_peaks_valid = raw_available && row_peaks.is_array() &&
++        row_peaks.size() == 2;
++    std::array<long double, 2> row_peak_values{};
++    if (hbm_peaks_valid) {
++        for (size_t row = 0; row < 2; ++row) {
++            if (!row_peaks.at(row).is_number()) {
++                hbm_peaks_valid = false;
++                break;
++            }
++            row_peak_values[row] = row_peaks.at(row).get<double>();
++            if (!(row_peak_values[row] > 0.0L) ||
++                !std::isfinite(row_peak_values[row])) {
++                hbm_peaks_valid = false;
++                break;
++            }
++            hbm_row_denominators[row] =
++                row_peak_values[row] * window_seconds;
++        }
++    }
++
++    const char* unavailable_reason = nullptr;
++    if (!history_complete) {
++        unavailable_reason = "incomplete_runtime_counter_history";
++    } else if (window_ns == 0) {
++        unavailable_reason = "zero_utilization_window";
++    } else if (!raw_available) {
++        unavailable_reason = "raw_hardware_denominators_unavailable";
++    }
++    const auto utilization = [history_complete, window_ns](long double numerator,
++                                                            long double denominator,
++                                                            bool valid_peak) {
++        if (!history_complete || window_ns == 0 || !valid_peak ||
++            !(denominator > 0.0L) || !std::isfinite(denominator)) {
++            return json(nullptr);
++        }
++        return json(static_cast<double>(numerator / denominator));
++    };
++
++    json int4 = {
++        {"numerator_ops_exact_decimal", exact_runtime_decimal(int4_ops)},
++        {"denominator_ops", int4_denominator},
++        {"denominator_definition", "raw_peak_int4_ops_per_s*window_seconds"},
++        {"utilization", utilization(int4_ops, int4_denominator,
++                                     int4_peak_valid)},
++        {"status", !history_complete ? "incomplete_runtime_counter_history"
++                   : window_ns == 0 ? "zero_utilization_window"
++                   : !int4_peak_valid ? "raw_peak_unavailable"
++                                      : "available"}};
++    json vec = {
++        {"numerator_eqops_exact_decimal", exact_runtime_decimal(vec_eqops)},
++        {"denominator_eqops", vec_denominator},
++        {"denominator_definition",
++         "raw_peak_vec_fp32_eq_ops_per_s*window_seconds"},
++        {"utilization", utilization(vec_eqops, vec_denominator,
++                                     vec_peak_valid)},
++        {"status", !history_complete ? "incomplete_runtime_counter_history"
++                   : window_ns == 0 ? "zero_utilization_window"
++                   : !vec_peak_valid ? "raw_peak_unavailable"
++                                     : "available"}};
++    json hbm_by_row = json::array();
++    for (size_t row = 0; row < 2; ++row) {
++        const long double row_bytes = total_hbm[row][0] + total_hbm[row][1];
++        hbm_by_row.push_back({
++            {"row", row},
++            {"numerator_bytes_exact_decimal", exact_runtime_decimal(row_bytes)},
++            {"denominator_bytes", hbm_row_denominators[row]},
++            {"denominator_definition", "raw_hbm_row_peak_Bps*window_seconds"},
++            {"utilization", utilization(row_bytes,
++                                         hbm_row_denominators[row],
++                                         hbm_peaks_valid)},
++            {"status", !history_complete ? "incomplete_runtime_counter_history"
++                       : window_ns == 0 ? "zero_utilization_window"
++                       : !hbm_peaks_valid ? "raw_peak_unavailable"
++                                          : "available"}});
++    }
++    const long double hbm_denominator =
++        hbm_row_denominators[0] + hbm_row_denominators[1];
++    const json hbm_total_util = utilization(total_hbm_bytes, hbm_denominator,
++                                            hbm_peaks_valid);
++    json hbm_total = {
++        {"numerator_bytes_exact_decimal",
++         exact_runtime_decimal(total_hbm_bytes)},
++        {"denominator_bytes", hbm_denominator},
++        {"denominator_definition",
++         "sum(raw_hbm_row_peak_Bps)*window_seconds"},
++        {"utilization", hbm_total_util},
++        {"status", !history_complete ? "incomplete_runtime_counter_history"
++                   : window_ns == 0 ? "zero_utilization_window"
++                   : !hbm_peaks_valid ? "raw_peak_unavailable"
++                                      : "available"}};
++
++    return {{"source", "coarse_die::Runtime::counters"},
++            {"counter_scope",
++             "rank_lifetime_served_work_including_active_cancelled_and_retired_executions"},
++            {"utilization_window_ns", window_ns},
++            {"utilization_window", "[0, sim_end_ns]"},
++            {"accounting_history_complete", accounting_complete},
++            {"typed_totals_history_complete", typed_complete},
++            {"totals_semantics", runtime_counters.value(
++                 "served_category_totals_semantics", "unknown")},
++            {"served_by_category", categories},
++            {"hbm_direction_order",
++             runtime_counters.value("hbm_direction_order", json::array())},
++            {"hbm_served_bytes_by_row_direction_exact",
++             runtime_counters.at("hbm_served_bytes_by_row_direction_exact")},
++            {"legacy_unclassified_hbm_bytes_by_row_direction_exact",
++             runtime_counters.at(
++                 "legacy_unclassified_hbm_bytes_by_row_direction_exact")},
++            {"raw_hardware_denominators", raw},
++            {"utilization_status", unavailable_reason == nullptr
++                 ? "available" : unavailable_reason},
++            {"utilization", {{"int4", std::move(int4)},
++                             {"vec_fp32_eq", std::move(vec)},
++                             {"hbm_total", std::move(hbm_total)},
++                             {"hbm_by_row", std::move(hbm_by_row)}}}};
++}
++
+ // Nearest-rank percentile (doc sec.3.5): index = ceil(p * N) - 1.
+ Tick nearest_rank_percentile(const std::vector<Tick>& sorted, double p) {
+     const size_t n = sorted.size();
+@@ -1138,6 +1371,13 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
+             this->rank_states_.count(sys->id) > 0
+                 ? this->rank_states_[sys->id]
+                 : RankMetricState{};
++        json coarse_counters;
++        json coarse_metrics;
++        if (sys->coarse_die_runtime != nullptr) {
++            coarse_counters = sys->coarse_die_runtime->counters_at(sim_end_tick);
++            coarse_metrics = coarse_die_runtime_metric_record(coarse_counters,
++                                                              sim_end_tick);
++        }
+ 
+         json record;
+         record["schema"] = 1;
+@@ -1148,6 +1388,11 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
+         record["rank"] = sys->id;
+         record["utilization_window_ns"] = sim_end_tick;
+         record["utilization_window"] = "[0, sim_end_ns]";
++        record["die_cancelled_comp_count"] =
++            sys->workload->die_cancelled_comp_count();
++        if (!coarse_counters.is_null()) {
++            record["coarse_die_runtime"] = coarse_metrics;
++        }
+         record["wall_time_ns"] = wall_time;
+         record["gpu_busy_ns"] = gpu_busy_ns;
+         const long double window_seconds =
+@@ -1340,7 +1585,82 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
+         // roofline_local_bytes record above is still emitted unchanged.
+         const LocalHbmBandwidthModel* hbm_model =
+             sys->workload->local_hbm_bandwidth_model.get();
+-        if (hbm_model != nullptr) {
++        if (!coarse_counters.is_null()) {
++            const auto category_direction = [&](const char* category,
++                                                  size_t direction) {
++                const ExactHbmMatrix matrix = parse_runtime_hbm_matrix(
++                    coarse_counters.at("served_by_category").at(category)
++                        .at("hbm_served_bytes_by_row_direction_exact"),
++                    category);
++                return matrix[0][direction] + matrix[1][direction];
++            };
++            const long double comp_read = category_direction("comp", 0) +
++                                          category_direction("die", 0);
++            const long double comp_write = category_direction("comp", 1) +
++                                           category_direction("die", 1);
++            const auto& hbm_total = coarse_metrics.at("utilization").at("hbm_total");
++            const auto& raw = coarse_counters.at("hardware_raw");
++            double raw_bandwidth = 0.0;
++            if (raw.value("available", false)) {
++                const auto& peaks = raw.at("hbm_row_peak_Bps");
++                raw_bandwidth = peaks[0].get<double>() + peaks[1].get<double>();
++            }
++            json hbm_record = {
++                {"schema", 1}, {"type", "local_hbm"},
++                {"source", "shared_coarse_die_runtime_model"},
++                {"model", "13-domain per-rank coarse Runtime"},
++                {"repo_variant", this->repo_variant_}, {"run_id", this->run_id_},
++                {"rank", sys->id}, {"utilization_window_ns", sim_end_tick},
++                {"utilization_window", "[0, sim_end_ns]"},
++                {"hbm_busy_ns", coarse_counters.at("hbm_busy_ns")},
++                {"hbm_busy_definition", "union of intervals with positive HBM service rate"},
++                {"hbm_shared_ns", coarse_counters.at("hbm_shared_ns")},
++                {"shared_definition", "at least two distinct owners with positive service on the same HBM row"},
++                // Preserve the LRU field name while documenting the coarse
++                // owner-based meaning; the scalar equal-split definition is
++                // not applicable to the coarse Runtime.
++                {"hbm_shared_definition", "at least two distinct owners with positive service on the same HBM row"},
++                // Retain the scalar-queue COMP category; typed DIE work is
++                // separate and contributes to the global total exactly once.
++                {"compute_bytes_served", hbm_model ? hbm_model->compute_bytes_served() : 0.0},
++                {"die_compute_read_bytes_served", static_cast<double>(comp_read)},
++                {"die_compute_write_bytes_served", static_cast<double>(comp_write)},
++                {"die_compute_read_bytes_served_exact_decimal", exact_runtime_decimal(comp_read)},
++                {"die_compute_write_bytes_served_exact_decimal", exact_runtime_decimal(comp_write)},
++                {"comm_read_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "comm_send"))},
++                {"comm_write_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "comm_recv"))},
++                {"restore_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "restore"))},
++                // This LRU field is the issued-byte counter from the metric
++                // hook, not coarse Runtime's restore bytes served.
++                {"local_hbm_restore_bytes_issued", rank_state.local_hbm_restore_bytes},
++                {"pool_read_bytes_served", static_cast<double>(category_direction("pool", 0))},
++                {"pool_write_bytes_served", static_cast<double>(category_direction("pool", 1))},
++                {"dram_bw_util", hbm_total.at("utilization")},
++                {"dram_bw_util_numerator_bytes", static_cast<double>(parse_runtime_exact_counter(hbm_total.at("numerator_bytes_exact_decimal"), "hbm_total_bytes"))},
++                {"dram_bw_util_numerator_bytes_exact_decimal", hbm_total.at("numerator_bytes_exact_decimal")},
++                {"dram_bw_util_denominator", "sum(raw_hbm_row_peak_Bps)*window_seconds"},
++                {"denominator_source", "coarse_die::Hardware.derived.hardware_summary.hbm_row_peak_Bps"},
++                {"local_hbm_bw_bytes_per_second", raw_bandwidth},
++                {"local_hbm_bw_source", "coarse_die raw hardware descriptor"},
++                {"served_by_category", coarse_counters.at("served_by_category")},
++                {"bytes_served_definition", "integrated physical payload; includes active, cancelled and retired executions"},
++                {"accounting_history_complete", coarse_counters.at("accounting_history_complete")},
++                {"arbiter_active_activities", coarse_counters.at("active_activities")},
++                {"allocation_updates", coarse_counters.at("allocation_updates")},
++                {"peak_concurrent_jobs", hbm_model ? hbm_model->peak_concurrent_jobs() : 0},
++                {"peak_concurrent_jobs_definition", "legacy scalar-queue peak; coarse logical-owner peak unavailable"},
++                {"redistribution_events", hbm_model ? hbm_model->redistribution_events() : 0},
++                {"redistribution_events_definition", "legacy scalar-queue membership changes; coarse allocation_updates reported separately"},
++                {"legacy_queue_counter_scope", "legacy scalar queue only; coarse logical-owner peaks are not instrumented"}
++            };
++            hbm_record["hbm_busy_util"] = sim_end_tick > 0
++                ? json(coarse_counters.at("hbm_busy_ns").get<double>() / sim_end_tick)
++                : json(nullptr);
++            hbm_record["hbm_shared_fraction_of_window"] = sim_end_tick > 0
++                ? json(coarse_counters.at("hbm_shared_ns").get<double>() / sim_end_tick)
++                : json(nullptr);
++            emit_record(hbm_record.dump());
++        } else if (hbm_model != nullptr) {
+             const double hbm_busy_ns = hbm_model->hbm_busy_ns();
+             const double hbm_shared_ns = hbm_model->hbm_shared_ns();
+             const double compute_bytes_served =
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc b/astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc
+index 487c738..2ecf10d 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/Workload.cc
+@@ -18,6 +18,7 @@ LICENSE file in the root directory of this source tree.
+ #include <algorithm>
+ #include <cmath>
+ #include <iostream>
++#include <limits>
+ #include <stdlib.h>
+ 
+ using namespace std;
+@@ -408,13 +409,71 @@ void Workload::issue_dep_free_nodes() {
+         // the real serialized physics (path-2 removal 2026-08-18: the
+         // replay-only concurrent calibrated-COMP bypass was deleted with
+         // the replay route).
+-        if (hw_resource->is_available(nv)) {
+-            issue(nv);
++        if (!hw_resource->is_available(nv)) {
++            return;
++        }
++
++        try {
++            const bool coarse_workspace_comp =
++                sys->coarse_die_runtime != nullptr &&
++                nv.node_type == ChakraNodeType::COMP_NODE &&
++                !nv.is_timer_op && !nv.is_cpu_op &&
++                nv.compute.op_role !=
++                    ExecutionDriven::OpRole::ControlMarker;
++            if (!coarse_workspace_comp) {
++                issue(nv);
++                return;
++            }
++
++            if (die_adapter_ == nullptr ||
++                sys->workspace_admission == nullptr) {
++                throw std::runtime_error(
++                    "coarse_die_v2 COMP requires a workspace admission "
++                    "ledger before issue");
++            }
++            auto prepared = die_adapter_->prepare_coarse_plan(nv);
++            auto admission = die_adapter_->try_acquire_workspace(prepared);
++            if (admission.status ==
++                WorkspaceAdmission::AcquireStatus::Blocked) {
++                // Keep this node free. A lease release or a changed
++                // capacity snapshot schedules its next issue attempt.
++                return;
++            }
++            if (admission.status ==
++                WorkspaceAdmission::AcquireStatus::Impossible) {
++                throw std::runtime_error(
++                    "coarse_die_v2 Plan workspace " +
++                    std::to_string(prepared.workspace_bytes) +
++                    " bytes exceeds empty-instance HBM capacity for node " +
++                    std::to_string(nv.global_id));
++            }
++            issue_prepared_coarse(nv, std::move(prepared),
++                                  std::move(admission.lease));
++        } catch (const std::exception& e) {
++            throw std::runtime_error(
++                "node issue failed (id=" + std::to_string(nv.global_id) +
++                " type=" + std::to_string(
++                               static_cast<uint64_t>(nv.node_type)) +
++                " name=\"" + nv.name + "\"): " + e.what());
+         }
+     });
+ }
+ 
+ void Workload::issue(const ExecutionDriven::NodeView& node) {
++    issue_impl(node, nullptr, nullptr);
++}
++
++void Workload::issue_prepared_coarse(
++    const ExecutionDriven::NodeView& node,
++    DieModelAdapter::PreparedCoarsePlan prepared,
++    WorkspaceAdmission::Lease lease) {
++    issue_impl(node, &prepared, &lease);
++}
++
++void Workload::issue_impl(
++    const ExecutionDriven::NodeView& node,
++    DieModelAdapter::PreparedCoarsePlan* const prepared,
++    WorkspaceAdmission::Lease* const lease) {
+     auto logger = workload_logger_;
+     if (sys->trace_enabled) {
+         logger->debug("issue,sys->id={}, tick={}, node->id={}, "
+@@ -454,7 +513,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
+             // Die backend (stage B, contract §7.3): the frozen dispatch
+             // order lives in issue_die_comp; the legacy roofline/fluid path
+             // below is unreachable under this backend.
+-            issue_die_comp(node);
++            issue_die_comp(node, prepared, lease);
+         } else if (!this->sys->roofline_enabled) {
+             issue_replay(node);
+         } else {
+@@ -501,7 +560,10 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
+     sys->register_event(this, EventType::General, wlhd, runtime);
+ }
+ 
+-void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
++void Workload::issue_die_comp(
++    const ExecutionDriven::NodeView& node,
++    DieModelAdapter::PreparedCoarsePlan* const prepared,
++    WorkspaceAdmission::Lease* const lease) {
+     // Contract §7.3 dispatch order (frozen 2026-10-03): is_timer_op -> old
+     // timer path; is_cpu_op -> issue_replay; op_role=control_marker -> the
+     // legacy micro-job semantics verbatim; die_spec -> DieModelAdapter
+@@ -568,7 +630,21 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
+         MetricCollector::instance().on_compute_issue(
+             sys->id, node.compute.num_ops, node.compute.tensor_size);
+     }
+-    die_adapter_->issue_die(node);
++    if (sys->coarse_die_runtime != nullptr) {
++        if (prepared == nullptr || lease == nullptr || !lease->active()) {
++            throw std::runtime_error(
++                "coarse_die_v2 COMP reached issue without its prepared Plan "
++                "and pre-issue workspace lease");
++        }
++        die_adapter_->issue_prepared_coarse_plan(
++            node, std::move(*prepared), std::move(*lease));
++    } else {
++        if (prepared != nullptr || lease != nullptr) {
++            throw std::runtime_error(
++                "legacy DieModel COMP received a coarse workspace token");
++        }
++        die_adapter_->issue_die(node);
++    }
+ }
+ 
+ void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
+@@ -1348,6 +1424,29 @@ void Workload::finish_generic_node(uint64_t node_id) {
+     graph_source_->finish_node(node_id);
+ }
+ 
++void Workload::finish_cancelled_coarse_node(const uint64_t node_id) {
++    const ExecutionDriven::NodeView* nv = graph_source_->lookup_ptr(node_id);
++    if (nv == nullptr) {
++        throw std::runtime_error(
++            "cancelled coarse COMP references unknown online node id=" +
++            std::to_string(node_id));
++    }
++    if (die_cancelled_comp_count_ == std::numeric_limits<uint64_t>::max()) {
++        throw std::overflow_error("die_cancelled_comp_count overflow");
++    }
++    mark_online_terminal_or_fail(node_id);
++    ++die_cancelled_comp_count_;
++    hw_resource->release(*nv);
++    complete_online_statistics(*nv, Sys::boostedTick());
++    if (MetricCollector::instance().enabled() && nv->metric_complete_anchor) {
++        MetricCollector::instance().on_node_complete(
++            sys->id, node_id, Sys::boostedTick());
++    }
++    record_node_terminal(sys->id, node_id,
++                         ExecutionDriven::NodeTerminalStatus::Skipped, nv);
++    graph_source_->finish_node(node_id);
++}
++
+ void Workload::record_die_utilizations(const uint64_t node_id,
+                                        const double compute_utilization,
+                                        const double memory_utilization,
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh b/astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh
+index 20d22fc..48aa4ca 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/Workload.hh
+@@ -61,6 +61,12 @@ class Workload : public Callable {
+     // 者).
+     void issue_dep_free_nodes();
+     void issue(const ExecutionDriven::NodeView& node);
++    /// Issue an immutable coarse Plan after its rank-local workspace lease
++    /// was acquired while the node was still free and before COMP occupy.
++    void issue_prepared_coarse(
++        const ExecutionDriven::NodeView& node,
++        DieModelAdapter::PreparedCoarsePlan prepared,
++        WorkspaceAdmission::Lease lease);
+     void issue_metadata(const ExecutionDriven::NodeView& node);
+     void issue_replay(const ExecutionDriven::NodeView& node);
+     void issue_remote_mem(const ExecutionDriven::NodeView& node);
+@@ -81,6 +87,14 @@ class Workload : public Callable {
+     // through this same single exit (contract §7.3; the HBM-delivered
+     // completions already ran it from Workload::call's join tail).
+     void finish_generic_node(uint64_t node_id);
++    /// Explicitly cancelled live coarse COMP terminalizes as Skipped and
++    /// releases the occupied GPU slot/dependencies once.
++    void finish_cancelled_coarse_node(uint64_t node_id);
++    /// Count explicit live coarse COMP cancellations for rank/service metrics.
++    /// Shutdown cancellation is intentionally excluded.
++    uint64_t die_cancelled_comp_count() const {
++        return die_cancelled_comp_count_;
++    }
+ 
+     // Die backend (stage B, contract §7.6): fill the utilization fields of
+     // the node's statistics state ahead of finish_generic_node -- compact
+@@ -172,7 +186,13 @@ class Workload : public Callable {
+     // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
+     // fail-closed. Reached only under
+     // sys->compute_cost_model == ComputeCostModel::Die.
+-    void issue_die_comp(const ExecutionDriven::NodeView& node);
++    void issue_die_comp(
++        const ExecutionDriven::NodeView& node,
++        DieModelAdapter::PreparedCoarsePlan* prepared = nullptr,
++        WorkspaceAdmission::Lease* lease = nullptr);
++    void issue_impl(const ExecutionDriven::NodeView& node,
++                    DieModelAdapter::PreparedCoarsePlan* prepared,
++                    WorkspaceAdmission::Lease* lease);
+ 
+     // sh_2.0 N-way HBM contention: endpoint join state for nodes whose
+     // completion is the JOIN of two independent async completions -- the
+@@ -202,6 +222,7 @@ class Workload : public Callable {
+         bool hbm_done = false;
+     };
+     std::unordered_map<uint64_t, HbmEndpointJoinState> hbm_endpoint_joins_;
++    uint64_t die_cancelled_comp_count_ = 0;
+ };
+ 
+ }  // namespace AstraSim
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.cc
+index 452c800..6d33899 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.cc
+@@ -186,8 +186,13 @@ constexpr int kRespWriterStartupGraceMs = 10000;
+ // ------------------------------------------------------------- serializer --
+ 
+ nlohmann::json build_request_json(const StateDelta& delta) {
++    if (delta.schema_version != kDecisionBridgeSchemaVersion &&
++        delta.schema_version != kDecisionBridgeWorkspaceSchemaVersion) {
++        throw std::runtime_error("unsupported decision bridge schema_version " +
++                                 std::to_string(delta.schema_version));
++    }
+     nlohmann::json req;
+-    req["schema_version"] = kDecisionBridgeSchemaVersion;
++    req["schema_version"] = delta.schema_version;
+     req["delivery_sequence"] = delta.delivery_sequence;
+     // Phase 4 (v1): the delivery-epoch counter (== delivery_sequence in v1;
+     // the Python validator asserts equality).
+@@ -259,6 +264,32 @@ nlohmann::json build_request_json(const StateDelta& delta) {
+         injected.push_back(std::move(rank_json));
+     }
+     req["ledger_summary"] = {{"injected_unfinished", std::move(injected)}};
++    if (delta.schema_version == kDecisionBridgeWorkspaceSchemaVersion) {
++        if (delta.workspace_state.empty()) {
++            throw std::runtime_error(
++                "workspace bridge v2 requires a full nonempty rank view");
++        }
++        nlohmann::json ranks = nlohmann::json::array();
++        int64_t expected_rank = 0;
++        for (const auto& rank_state : delta.workspace_state) {
++            if (rank_state.rank < 0 || rank_state.rank != expected_rank) {
++                throw std::runtime_error(
++                    "workspace bridge v2 must cover contiguous ranks "
++                    "starting at zero");
++            }
++            ++expected_rank;
++            ranks.push_back({
++                {"rank", rank_state.rank},
++                {"workspace_revision", rank_state.workspace_revision},
++                {"active_workspace_bytes",
++                 rank_state.active_workspace_bytes},
++            });
++        }
++        req["workspace_state"] = {
++            {"protocol_version", 1},
++            {"ranks", std::move(ranks)},
++        };
++    }
+     for (const auto& ev : delta.events) {
+         req["reasons"].push_back(reason_name(ev.reason));
+         switch (ev.reason) {
+@@ -563,6 +594,23 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
+     release_response_file();
+     const auto bridge_t0 = std::chrono::steady_clock::now();
+     const uint64_t seq = delta.delivery_sequence;
++    if (delta.schema_version == kDecisionBridgeWorkspaceSchemaVersion) {
++        if (num_ranks_ < 0 || delta.workspace_state.size() !=
++                                  static_cast<size_t>(num_ranks_)) {
++            bridge_fatal(
++                "workspace bridge v2 request must cover every configured "
++                "rank before delivery_sequence=" + std::to_string(seq));
++        }
++        for (size_t rank = 0; rank < delta.workspace_state.size(); ++rank) {
++            if (delta.workspace_state[rank].rank !=
++                static_cast<int>(rank)) {
++                bridge_fatal(
++                    "workspace bridge v2 request rank table is incomplete "
++                    "or out of order before delivery_sequence=" +
++                    std::to_string(seq));
++            }
++        }
++    }
+     write_file_atomic(request_path(seq), build_request_json(delta));
+     // Defect-B fix: ensure BOTH long-lived channel ends exist (lazy for
+     // fixtures that never call open_notify(); the official entry calls it at
+@@ -597,7 +645,8 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
+     // structural diagnostic -- the _fail skeleton carries all-empty arrays
+     // and would parse cleanly anyway.
+     try {
+-        if (resp.value("schema_version", -1) != kDecisionBridgeSchemaVersion) {
++        if (resp.value("schema_version", -1) !=
++            static_cast<int>(delta.schema_version)) {
+             bridge_fatal(
+                 "response schema_version mismatch for delivery_sequence=" +
+                 std::to_string(seq));
+@@ -633,7 +682,8 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
+     // success path).
+     GraphBatch batch;
+     try {
+-        batch = parse_graph_batch(resp, num_ranks_);
++        batch = parse_graph_batch(resp, num_ranks_, delta.schema_version,
++                                  delta.workspace_state);
+     } catch (const ParseError& exc) {
+         bridge_fatal(std::string("malformed GraphBatch response for "
+                                  "delivery_sequence=") +
+@@ -713,14 +763,20 @@ std::string FileDecisionBridge::stats_report() const {
+ 
+ void FileDecisionBridge::send_commit_ack(const uint64_t batch_id,
+                                          const uint64_t delivery_seq,
+-                                         const bool success) {
++                                         const bool success,
++                                         const uint32_t schema_version) {
+     // Minor④(2026-09-30):ack 即提交成功——此刻起 fail-closed 窗口已关,
+     // 在途 response 文件才被回收(校验失败路径全部停在 ack 之前,文件
+     // 因此保留作 post-mortem 取证,与 deliver_and_receive 的注释契约
+     // 一致)。
+     release_response_file();
+     nlohmann::json ack;
+-    ack["schema_version"] = kDecisionBridgeSchemaVersion;
++    if (schema_version != kDecisionBridgeSchemaVersion &&
++        schema_version != kDecisionBridgeWorkspaceSchemaVersion) {
++        bridge_fatal("unsupported commit ack schema_version=" +
++                     std::to_string(schema_version));
++    }
++    ack["schema_version"] = schema_version;
+     ack["delivery_sequence"] = delivery_seq;
+     ack["batch_id"] = batch_id;
+     ack["success"] = success;
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.hh b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.hh
+index 924feeb..3d25592 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionBridge.hh
+@@ -94,6 +94,8 @@ namespace ExecutionDriven {
+ /// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1; this
+ /// header and the Python validator are the authority).
+ inline constexpr int kDecisionBridgeSchemaVersion = 1;
++/// Explicit coarse workspace admission extension. v1 stays byte-compatible.
++inline constexpr int kDecisionBridgeWorkspaceSchemaVersion = 2;
+ 
+ /// GraphBatch: the C++<-Python reply of one delivery epoch.
+ /// C1 (2026-08-29): the batch is TYPED. The pre-C1 struct carried the six
+@@ -117,8 +119,8 @@ inline constexpr int kDecisionBridgeSchemaVersion = 1;
+ ///     all-empty arrays, so the message must be the decision error).
+ using GraphBatch = ParsedGraphBatch;
+ 
+-/// Serialize one StateDelta into the v1 request JSON (protocol contract;
+-/// exposed for fixtures and the step-1-8 wiring).
++/// Serialize one StateDelta into its selected versioned request JSON. v1
++/// remains byte-compatible; v2 adds the required workspace_state table.
+ nlohmann::json build_request_json(const StateDelta& delta);
+ 
+ /// File-implementation of the v1 decision channel (方案 §4 步骤 1-7 操作 2;
+@@ -157,7 +159,9 @@ class FileDecisionBridge {
+     /// producer passes true, and the python peer (online_scheduler_base)
+     /// asserts ack["success"] is True.
+     void send_commit_ack(uint64_t batch_id, uint64_t delivery_seq,
+-                         bool success);
++                         bool success,
++                         uint32_t schema_version =
++                             kDecisionBridgeSchemaVersion);
+ 
+     /// Create <bridge_dir>, both FIFOs and clean stale files. Must be
+     /// called BEFORE either side starts (FIFO open order rule).
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.cc
+index 480cfb5..9ffc901 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.cc
+@@ -125,6 +125,35 @@ StateDelta build_state_delta_v1(
+     return delta;
+ }
+ 
++StateDelta build_state_delta_v2(
++    std::vector<DecisionEvent> events, const uint64_t tick,
++    const uint64_t delivery_sequence, const uint64_t deferred_from_tick,
++    std::vector<CompletedNodeFact> completed_nodes,
++    std::vector<int> affected_ranks,
++    std::vector<WorkspaceRankState> workspace_state,
++    std::vector<RankInjectedSummary> injected_unfinished) {
++    StateDelta delta = build_state_delta_v1(
++        std::move(events), tick, delivery_sequence, deferred_from_tick,
++        std::move(completed_nodes), std::move(affected_ranks),
++        std::move(injected_unfinished));
++    if (workspace_state.empty()) {
++        throw std::invalid_argument(
++            "v2 workspace_state must cover at least rank zero");
++    }
++    int64_t expected_rank = 0;
++    for (const auto& rank_state : workspace_state) {
++        if (rank_state.rank < 0 || rank_state.rank != expected_rank) {
++            throw std::invalid_argument(
++                "v2 workspace_state must cover contiguous ranks starting at "
++                "zero");
++        }
++        ++expected_rank;
++    }
++    delta.schema_version = 2;
++    delta.workspace_state = std::move(workspace_state);
++    return delta;
++}
++
+ void DecisionMailbox::push(DecisionEvent e) {
+     const Identity identity{static_cast<int>(e.reason), e.request_id, e.stage,
+                             e.generation};
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.hh b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.hh
+index 87aa455..bf6b285 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/DecisionMailbox.hh
+@@ -55,6 +55,7 @@ Counters (report at run end):
+ #include <vector>
+ 
+ #include "astra-sim/workload/execution_driven/NodeStore.hh"
++#include "astra-sim/workload/WorkspaceAdmission.hh"
+ 
+ namespace AstraSim {
+ namespace ExecutionDriven {
+@@ -193,6 +194,9 @@ struct SnapshotHandle {
+ /// (phase 4) were documented in a deleted contract doc; this struct is
+ /// the authority.
+ struct StateDelta {
++    // The legacy builder emits v1 byte-for-byte; coarse Die deliveries use
++    // v2 and include an absolute full-rank workspace view.
++    uint32_t schema_version = 1;
+     uint64_t delivery_sequence = 0;  // monotonically increasing epoch number
+     // Phase 4 (v1): the delivery-epoch counter. In v1 it is ALWAYS equal to
+     // delivery_sequence (the Python validator asserts equality); the field
+@@ -221,6 +225,9 @@ struct StateDelta {
+     // (perception feature flag; default off until phase 6). Query/audit data
+     // only -- the strategy's red-line decision inputs never consume it.
+     std::vector<RankInjectedSummary> injected_unfinished;
++    // v2 only: absolute, complete per-rank transient workspace view. Kept
++    // separate from snapshot/ledger_summary and serialized only for v2.
++    std::vector<WorkspaceRankState> workspace_state;
+ };
+ 
+ /// Assemble a StateDelta from a drained event list (step-1-6 tick-end gate).
+@@ -238,6 +245,17 @@ StateDelta build_state_delta_v1(
+     std::vector<int> affected_ranks,
+     std::vector<RankInjectedSummary> injected_unfinished = {});
+ 
++/// Build the explicit v2 delivery. workspace_state must be the complete
++/// rank table in ascending rank order; the response parser requires an exact
++/// per-rank revision echo before commit.
++StateDelta build_state_delta_v2(
++    std::vector<DecisionEvent> events, uint64_t tick,
++    uint64_t delivery_sequence, uint64_t deferred_from_tick,
++    std::vector<CompletedNodeFact> completed_nodes,
++    std::vector<int> affected_ranks,
++    std::vector<WorkspaceRankState> workspace_state,
++    std::vector<RankInjectedSummary> injected_unfinished = {});
++
+ class DecisionMailbox {
+   public:
+     /// Push one event; same-epoch same-identity duplicates are no-ops
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.cc
+index 1104004..7eac2c0 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.cc
+@@ -354,6 +354,59 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
+                     std::to_string(delta.delivery_sequence));
+     }
+ 
++    // Workspace state is part of the same frozen request/response protocol
++    // version. Validate every rank and the full capacity view before Phase B
++    // can mutate graph, KV, workspace, or request state.
++    if (delta.schema_version != batch.schema_version) {
++        return fail("request/response schema_version mismatch");
++    }
++    if (ctx_.workspace_admission_required) {
++        if (delta.schema_version != 2 || batch.schema_version != 2 ||
++            !batch.has_workspace_capacity_snapshot) {
++            return fail(
++                "coarse_die_v2 requires bridge v2 workspace capacity "
++                "snapshot");
++        }
++        const size_t rank_count =
++            static_cast<size_t>(std::max(ctx_.num_ranks, 0));
++        if (delta.workspace_state.size() != rank_count ||
++            batch.workspace_capacity_snapshot.size() != rank_count) {
++            return fail(
++                "workspace request and capacity snapshots must cover "
++                "every configured rank");
++        }
++        for (size_t i = 0; i < rank_count; ++i) {
++            const auto& request_state = delta.workspace_state[i];
++            const auto& capacity = batch.workspace_capacity_snapshot[i];
++            if (request_state.rank != static_cast<int>(i) ||
++                capacity.rank != static_cast<int>(i) ||
++                request_state.workspace_revision !=
++                    capacity.workspace_revision) {
++                return fail(
++                    "workspace capacity snapshot does not echo the full "
++                    "request rank/revision table");
++            }
++        }
++        if (!ctx_.validate_workspace_capacity_snapshot ||
++            !ctx_.install_workspace_capacity_snapshot) {
++            return fail(
++                "coarse_die_v2 committer has no workspace snapshot owner");
++        }
++        if (auto workspace_error =
++                ctx_.validate_workspace_capacity_snapshot(
++                    delta.workspace_state,
++                    batch.workspace_capacity_snapshot)) {
++            return fail("workspace capacity snapshot rejected: " +
++                        *workspace_error);
++        }
++    } else if (delta.schema_version != 1 || batch.schema_version != 1 ||
++               !delta.workspace_state.empty() ||
++               batch.has_workspace_capacity_snapshot) {
++        return fail(
++            "bridge v2 workspace state is unsupported without the "
++            "coarse_die_v2 backend");
++    }
++
+     try {
+         // Apply this delta's facts in a compact overlay rather than copying the
+         // whole live-request sets.  The result is exactly apply_delta_facts()
+@@ -1922,13 +1975,60 @@ void GraphBatchCommitter::commit_after_preflight(
+         ctx_.ingress->schedule_future_arrival(envelope);
+     }
+ 
++    // The snapshot was fully parsed and validated before Phase B. Install
++    // Python's post-KV-mutation authority view only after all response graph
++    // state is committed, but before any rank can issue a new Plan.
++    commit_workspace_changed_ranks_.clear();
++    if (batch.schema_version == 2) {
++        ctx_.install_workspace_capacity_snapshot(
++            batch.workspace_capacity_snapshot,
++            commit_workspace_changed_ranks_);
++        std::sort(commit_workspace_changed_ranks_.begin(),
++                  commit_workspace_changed_ranks_.end());
++        commit_workspace_changed_ranks_.erase(
++            std::unique(commit_workspace_changed_ranks_.begin(),
++                        commit_workspace_changed_ranks_.end()),
++            commit_workspace_changed_ranks_.end());
++        for (const int rank : commit_workspace_changed_ranks_) {
++            if (rank < 0 || rank >= ctx_.num_ranks) {
++                throw std::runtime_error(
++                    "workspace snapshot installer returned an invalid rank " +
++                    std::to_string(rank));
++            }
++        }
++    }
++
+     // ---- Phase B-5: issue pass over the TOUCHED ranks only (ranks without
+     //      new nodes cannot have new free nodes -- the completion hook's
+     //      deferred per-rank passes drain every other rank) ----
+     // Reuse the sorted-unique rank set collected by the mandatory id-stream
+     // preflight.  Re-walking every JSON node here used to add a second
+     // O(nodes) pass plus an allocating std::set on every committed batch.
+-    for (const int rank : touched_ranks) {
++    // A capacity-only change can unblock an existing free node on a rank
++    // without new graph nodes. Merge the changed and touched sets into one
++    // sorted issue pass per rank.
++    commit_issue_ranks_.clear();
++    size_t touched_index = 0;
++    size_t changed_index = 0;
++    while (touched_index < touched_ranks.size() ||
++           changed_index < commit_workspace_changed_ranks_.size()) {
++        int rank = 0;
++        if (changed_index >= commit_workspace_changed_ranks_.size() ||
++            (touched_index < touched_ranks.size() &&
++             touched_ranks[touched_index] <
++                 commit_workspace_changed_ranks_[changed_index])) {
++            rank = touched_ranks[touched_index++];
++        } else if (touched_index >= touched_ranks.size() ||
++                   commit_workspace_changed_ranks_[changed_index] <
++                       touched_ranks[touched_index]) {
++            rank = commit_workspace_changed_ranks_[changed_index++];
++        } else {
++            rank = touched_ranks[touched_index++];
++            ++changed_index;
++        }
++        commit_issue_ranks_.push_back(rank);
++    }
++    for (const int rank : commit_issue_ranks_) {
+         ctx_.issue_rank(rank);
+     }
+ 
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.hh b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.hh
+index cb3bc48..657cc08 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/GraphBatchCommitter.hh
+@@ -106,6 +106,7 @@ max_nodes_per_batch (avg = total / count), total_watches / total_assignments
+ 
+ #include "astra-sim/workload/execution_driven/DecisionBridge.hh"
+ #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
++#include "astra-sim/workload/WorkspaceAdmission.hh"
+ 
+ namespace AstraSim {
+ namespace ExecutionDriven {
+@@ -131,6 +132,17 @@ class GraphBatchCommitter {
+         WatchRegistry* watch_registry = nullptr;
+         RequestIngress* ingress = nullptr;
+         std::function<void(int rank)> issue_rank;
++        // Workspace bridge v2 is required for coarse_die_v2. Validation is
++        // pure and runs in mandatory preflight; installation runs after the
++        // graph/KV response commit and before any issue_rank callback.
++        bool workspace_admission_required = false;
++        std::function<std::optional<std::string>(
++            const std::vector<WorkspaceRankState>&,
++            const std::vector<WorkspaceCapacityRank>&)>
++            validate_workspace_capacity_snapshot;
++        std::function<void(const std::vector<WorkspaceCapacityRank>&,
++                           std::vector<int>& changed_ranks)>
++            install_workspace_capacity_snapshot;
+         // Phase-7 §10.3: optional side-band metrics anchor registration. When
+         // set, commit() invokes it right after Phase B-1 (nodes), BEFORE the
+         // issue pass, with the batch and this committer's O(1) affine
+@@ -208,6 +220,8 @@ class GraphBatchCommitter {
+         json_id_seen_stamp_by_rank_.assign(rank_count, 0);
+         json_id_discovered_touched_ranks_.reserve(rank_count);
+         commit_touched_ranks_.reserve(rank_count);
++        commit_workspace_changed_ranks_.reserve(rank_count);
++        commit_issue_ranks_.reserve(rank_count);
+         // M2 (2026-08-23): propagate the node-GC switch to every per-rank
+         // store once, here (fixtures leave node_gc off and keep the pre-M2
+         // no-collection behavior byte-for-byte).
+@@ -345,6 +359,8 @@ class GraphBatchCommitter {
+     mutable uint64_t json_id_stream_stamp_ = 0;
+     mutable std::vector<int> json_id_discovered_touched_ranks_;
+     std::vector<int> commit_touched_ranks_;
++    std::vector<int> commit_workspace_changed_ranks_;
++    std::vector<int> commit_issue_ranks_;
+     // validate_and_commit() owns commit_touched_ranks_ across its whole
+     // validation/commit sequence.  Context callbacks attempting a nested
+     // mutating commit fail closed instead of corrupting that scratch.
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc
+index 1e79b44..116c3ca 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.cc
+@@ -538,30 +538,135 @@ ParsedAlarm parse_alarm(const nlohmann::json& alarm_json, size_t index) {
+     return alarm;
+ }
+ 
++std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
++    const nlohmann::json& snapshot,
++    const int num_ranks,
++    const std::vector<WorkspaceRankState>& expected_workspace_state) {
++    if (!snapshot.is_object()) {
++        fail("workspace_capacity_snapshot is not an object");
++    }
++    check_key_set(snapshot, {"protocol_version", "ranks"},
++                  {"protocol_version", "ranks"},
++                  "workspace_capacity_snapshot");
++    const uint64_t protocol_version = get_uint(
++        snapshot["protocol_version"], "protocol_version",
++        "workspace_capacity_snapshot");
++    if (protocol_version != 1) {
++        fail("workspace_capacity_snapshot protocol_version mismatch");
++    }
++    const auto& ranks = snapshot["ranks"];
++    if (!ranks.is_array()) {
++        fail("workspace_capacity_snapshot.ranks is not an array");
++    }
++    if (num_ranks < 0) {
++        fail("workspace_capacity_snapshot requires a configured rank count");
++    }
++    if (expected_workspace_state.size() !=
++        static_cast<size_t>(num_ranks)) {
++        fail("v2 request workspace_state does not cover every configured "
++             "rank");
++    }
++    if (ranks.size() != static_cast<size_t>(num_ranks)) {
++        fail("workspace_capacity_snapshot.ranks must cover every configured "
++             "rank exactly once");
++    }
++
++    std::vector<WorkspaceCapacityRank> parsed;
++    parsed.reserve(ranks.size());
++    uint64_t previous_rank = 0;
++    for (size_t i = 0; i < ranks.size(); ++i) {
++        const std::string where =
++            "workspace_capacity_snapshot.ranks[" + std::to_string(i) + "]";
++        const auto& rank_json = ranks[i];
++        if (!rank_json.is_object()) {
++            fail(where + " is not an object");
++        }
++        check_key_set(rank_json,
++                      {"rank", "workspace_revision", "capacity_bytes",
++                       "model_weight_bytes", "resident_kv_bytes",
++                       "reserved_request_bytes"},
++                      {"rank", "workspace_revision", "capacity_bytes",
++                       "model_weight_bytes", "resident_kv_bytes",
++                       "reserved_request_bytes"},
++                      where);
++        WorkspaceCapacityRank entry;
++        entry.rank = get_int(rank_json["rank"], "rank", where);
++        check_rank_domain(entry.rank, num_ranks, where);
++        if (entry.rank != static_cast<int>(i) ||
++            (i > 0 && static_cast<uint64_t>(entry.rank) <= previous_rank)) {
++            fail(where + ": ranks must be complete, unique, and ascending");
++        }
++        previous_rank = static_cast<uint64_t>(entry.rank);
++        entry.workspace_revision = get_uint(
++            rank_json["workspace_revision"], "workspace_revision", where);
++        const WorkspaceRankState& request_state =
++            expected_workspace_state[i];
++        if (request_state.rank != entry.rank ||
++            request_state.workspace_revision != entry.workspace_revision) {
++            fail(where + ": workspace_revision does not echo request view");
++        }
++        entry.capacity_bytes =
++            get_uint(rank_json["capacity_bytes"], "capacity_bytes", where);
++        entry.model_weight_bytes = get_uint(
++            rank_json["model_weight_bytes"], "model_weight_bytes", where);
++        entry.resident_kv_bytes = get_uint(
++            rank_json["resident_kv_bytes"], "resident_kv_bytes", where);
++        entry.reserved_request_bytes = get_uint(
++            rank_json["reserved_request_bytes"], "reserved_request_bytes",
++            where);
++        const auto checked_add = [&where](const uint64_t a,
++                                          const uint64_t b) {
++            if (b > std::numeric_limits<uint64_t>::max() - a) {
++                fail(where + ": base-used byte sum overflows uint64");
++            }
++            return a + b;
++        };
++        const uint64_t base = checked_add(
++            checked_add(entry.model_weight_bytes, entry.resident_kv_bytes),
++            entry.reserved_request_bytes);
++        if (base > entry.capacity_bytes) {
++            fail(where + ": base-used bytes exceed capacity_bytes");
++        }
++        parsed.push_back(entry);
++    }
++    return parsed;
++}
++
+ }  // namespace
+ 
+ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
+-                                   const int num_ranks) {
++                                   const int num_ranks,
++                                   const int expected_schema_version,
++                                   const std::vector<WorkspaceRankState>&
++                                       expected_workspace_state) {
+     if (!resp.is_object()) {
+         fail("response is not an object (rule T0)");
+     }
+-    // T6: the top-level key set is frozen (contract ②/④). schema_version
+-    // and source_delivery_sequence are required; batch_id / error / the six
+-    // arrays / touched_ranks are optional (T3/T4/T5/T8).
+-    check_key_set(resp,
+-                  {"schema_version", "batch_id", "source_delivery_sequence",
+-                   "error", "nodes", "parent_edges", "watches", "assignments",
+-                   "kv_actions", "future_alarms", "touched_ranks"},
+-                  {"schema_version", "source_delivery_sequence"},
+-                  "response");
++    // T6: the frozen v1 key set remains unchanged. The v2 extension adds
++    // one required, separately typed full-rank capacity snapshot.
++    std::vector<const char*> allowed{
++        "schema_version", "batch_id", "source_delivery_sequence", "error",
++        "nodes", "parent_edges", "watches", "assignments", "kv_actions",
++        "future_alarms", "touched_ranks"};
++    std::vector<const char*> required{"schema_version",
++                                      "source_delivery_sequence"};
++    if (expected_schema_version == 2) {
++        allowed.push_back("workspace_capacity_snapshot");
++        required.push_back("workspace_capacity_snapshot");
++    } else if (expected_schema_version != 1) {
++        fail("unsupported expected response schema_version " +
++             std::to_string(expected_schema_version));
++    }
++    check_key_set(resp, allowed, required, "response");
+ 
+     ParsedGraphBatch batch;
+     const int64_t schema_version = get_int64(
+         resp["schema_version"], "schema_version", "response");
+-    if (schema_version != 1) {  // T1
++    if (schema_version != expected_schema_version) {  // T1
+         fail("response schema_version mismatch: " +
+              std::to_string(schema_version));
+     }
++    batch.schema_version = static_cast<uint32_t>(schema_version);
+     batch.source_delivery_sequence =
+         get_uint(resp["source_delivery_sequence"], "source_delivery_sequence",
+                  "response");  // T2 (equality with the request seq is the
+@@ -572,6 +677,12 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
+     if (resp.contains("error")) {
+         batch.error = get_string(resp["error"], "error", "response");
+     }
++    if (expected_schema_version == 2) {
++        batch.workspace_capacity_snapshot = parse_workspace_capacity_snapshot(
++            resp["workspace_capacity_snapshot"], num_ranks,
++            expected_workspace_state);
++        batch.has_workspace_capacity_snapshot = true;
++    }
+ 
+     const auto array_or_empty = [&resp](const char* key) -> const
+         nlohmann::json& {
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.hh b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.hh
+index 9ee9763..222e57b 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.hh
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/ParsedGraphBatch.hh
+@@ -103,6 +103,7 @@ other bridge protocol violation):
+ #include <string>
+ #include <vector>
+ 
++#include "astra-sim/workload/WorkspaceAdmission.hh"
+ #include <json/json.hpp>
+ 
+ #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
+@@ -231,6 +232,7 @@ struct ParsedKvAction {
+ /// pre-C1 struct name survives so main_online/fixtures keep compiling);
+ /// this is the canonical type.
+ struct ParsedGraphBatch {
++    uint32_t schema_version = 1;
+     uint64_t batch_id = 0;
+     uint64_t source_delivery_sequence = 0;
+     std::vector<ParsedNode> nodes;              // array order (rule O1)
+@@ -242,13 +244,18 @@ struct ParsedGraphBatch {
+     std::vector<int> touched_ranks;             // empty when absent
+     bool has_touched_ranks = false;
+     std::string error;  // non-empty => decision failure (bridge aborts)
++    std::vector<WorkspaceCapacityRank> workspace_capacity_snapshot;
++    bool has_workspace_capacity_snapshot = false;
+ };
+ 
+ /// Parse one response DOM into the typed batch. num_ranks >= 0 enables the
+ /// rank-domain checks (N3/E2/W3/T8); -1 skips them (legacy fixtures).
+ /// Throws ParseError on any structural violation; constructs nothing shared
+ /// (pure function, exception-safe).
+-ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp, int num_ranks);
++ParsedGraphBatch parse_graph_batch(
++    const nlohmann::json& resp, int num_ranks,
++    int expected_schema_version = 1,
++    const std::vector<WorkspaceRankState>& expected_workspace_state = {});
+ 
+ }  // namespace ExecutionDriven
+ }  // namespace AstraSim
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/decision_mailbox_test.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/decision_mailbox_test.cc
+index 399674b..cfc9f8a 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/decision_mailbox_test.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/decision_mailbox_test.cc
+@@ -27,6 +27,7 @@ Exit code 0 on ALL PASS.
+ 
+ #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
+ #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
++#include "astra-sim/workload/execution_driven/DecisionBridge.hh"
+ 
+ #include <cstdio>
+ #include <cstdlib>
+@@ -97,6 +98,42 @@ void test_order_drain_and_delta() {
+     expect(second.events.empty() && second.delivery_sequence == 8,
+            "A: empty delta is valid (no-work epochs are separate)");
+ 
++    const auto v1_wire = build_request_json(delta);
++    expect(v1_wire.at("schema_version") == 1 &&
++               v1_wire.at("delivery_sequence") == 7 &&
++               !v1_wire.contains("workspace_state") &&
++               !v1_wire.contains("source_delivery_sequence"),
++           "A: v1 request wire remains unchanged and carries no v2 extension");
++
++    const auto v2 = build_state_delta_v2(
++        {}, 100, 9, 0, {}, {},
++        {AstraSim::WorkspaceRankState{0, 4, 128},
++         AstraSim::WorkspaceRankState{1, 2, 0}});
++    const auto v2_wire = build_request_json(v2);
++    expect(v2_wire.at("schema_version") == 2 &&
++               v2_wire.at("delivery_sequence") == 9 &&
++               !v2_wire.contains("source_delivery_sequence") &&
++               v2_wire.at("workspace_state").at("protocol_version") == 1 &&
++               v2_wire.at("workspace_state").at("ranks").size() == 2 &&
++               v2_wire.at("workspace_state").at("ranks")[0].at("rank") == 0 &&
++               v2_wire.at("workspace_state").at("ranks")[0]
++                       .at("workspace_revision") == 4 &&
++               v2_wire.at("workspace_state").at("ranks")[0]
++                       .at("active_workspace_bytes") == 128,
++           "A: v2 request binds one delivery sequence to the complete rank view");
++
++    bool invalid_rank_order_rejected = false;
++    try {
++        (void)build_state_delta_v2(
++            {}, 101, 10, 0, {}, {},
++            {AstraSim::WorkspaceRankState{1, 1, 0},
++             AstraSim::WorkspaceRankState{0, 1, 0}});
++    } catch (const std::invalid_argument&) {
++        invalid_rank_order_rejected = true;
++    }
++    expect(invalid_rank_order_rejected,
++           "A: v2 workspace rank tables reject unsorted ranks");
++
+     // The same identity is accepted again in the next epoch (dedup scope is
+     // one epoch).
+     mailbox.push(arrival("req-1"));
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc
+index d8f2e62..926f363 100644
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc
+@@ -46,7 +46,9 @@ Exit code 0 on ALL PASS.
+ #include "astra-sim/system/WorkloadLayerHandlerData.hh"
+ #include "astra-sim/workload/HardwareResource.hh"
+ #include "astra-sim/workload/CoarseDieRuntime.hh"
++#include "astra-sim/workload/MetricCollector.hh"
+ #include "astra-sim/workload/Workload.hh"
++#include "astra-sim/workload/WorkspaceAdmission.hh"
+ #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
+ #include "astra-sim/workload/execution_driven/NodeStore.hh"
+ #include "DieModel.hh"
+@@ -56,6 +58,7 @@ Exit code 0 on ALL PASS.
+ #include <unistd.h>
+ 
+ #include <cmath>
++#include <algorithm>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -63,6 +66,7 @@ Exit code 0 on ALL PASS.
+ #include <fstream>
+ #include <map>
+ #include <memory>
++#include <sstream>
+ #include <json/json.hpp>
+ #include <string>
+ #include <vector>
+@@ -84,17 +88,21 @@ void expect_true(const bool cond, const char* const what) {
+ 
+ std::map<uint64_t, uint64_t> g_terminal_fires;
+ std::map<uint64_t, uint64_t> g_first_tick;
++std::map<uint64_t, int> g_terminal_status;
+ 
+ void tick_hook(void* /*ctx*/, int /*rank*/, uint64_t node_id,
+                const char* /*request_id*/, const char* /*stage*/,
+                uint64_t /*generation*/, uint64_t tick, int status) {
+-    if (status != static_cast<int>(NodeTerminalStatus::Success)) {
++    if (status != static_cast<int>(NodeTerminalStatus::Success) &&
++        !((node_id == 100 || node_id == 101) &&
++          status == static_cast<int>(NodeTerminalStatus::Skipped))) {
+         std::fprintf(stderr,
+                      "[die_execution_lifecycle_test] node %llu terminal "
+                      "status %d\n",
+                      static_cast<unsigned long long>(node_id), status);
+         g_ok = false;
+     }
++    g_terminal_status[node_id] = status;
+     if (g_first_tick.find(node_id) == g_first_tick.end()) {
+         g_first_tick[node_id] = tick;
+     }
+@@ -336,7 +344,7 @@ struct Fixture {
+ };
+ 
+ Fixture make_fixture(const std::string& config_dir,
+-                     const std::string& system_file) {
++                     const std::string& system_file, const int rank = 0) {
+     Fixture fixture;
+     fixture.event_queue = std::make_shared<EventQueue>();
+     fixture.network_api =
+@@ -344,7 +352,7 @@ Fixture make_fixture(const std::string& config_dir,
+     auto source = std::make_shared<NodeStoreGraphSource>();
+     fixture.source = source.get();
+     fixture.sys = std::make_unique<Sys>(
+-        0, config_dir + "/workload", config_dir + "/comm_group.json",
++        rank, config_dir + "/workload", config_dir + "/comm_group.json",
+         config_dir + "/" + system_file, &fixture.remote_mem,
+         fixture.network_api.get(),
+         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
+@@ -352,6 +360,72 @@ Fixture make_fixture(const std::string& config_dir,
+     return fixture;
+ }
+ 
++std::vector<nlohmann::json> capture_metric_records(
++    const std::string& manifest_path, const std::vector<Sys*>& systems,
++    const uint64_t end_tick, const int restore_issue_rank = -1,
++    const uint64_t restore_issue_bytes = 0) {
++    FILE* const capture = std::tmpfile();
++    if (capture == nullptr) {
++        throw std::runtime_error("cannot create MetricCollector capture file");
++    }
++    const int saved_stdout = ::dup(STDOUT_FILENO);
++    std::fflush(stdout);
++    if (saved_stdout < 0 ||
++        ::dup2(::fileno(capture), STDOUT_FILENO) < 0) {
++        if (saved_stdout >= 0) ::close(saved_stdout);
++        std::fclose(capture);
++        throw std::runtime_error("cannot redirect stdout for metrics");
++    }
++    try {
++        MetricCollector::instance().initialize(manifest_path, "summary");
++        if (restore_issue_rank >= 0 && restore_issue_bytes > 0) {
++            MetricCollector::instance().on_local_hbm_restore_issue(
++                restore_issue_rank, restore_issue_bytes);
++        }
++        MetricCollector::instance().finalize(systems, end_tick);
++    } catch (...) {
++        std::fflush(stdout);
++        ::dup2(saved_stdout, STDOUT_FILENO);
++        ::close(saved_stdout);
++        std::fclose(capture);
++        throw;
++    }
++    std::fflush(stdout);
++    ::dup2(saved_stdout, STDOUT_FILENO);
++    ::close(saved_stdout);
++    std::rewind(capture);
++    std::string output;
++    char buffer[4096];
++    while (const size_t n = std::fread(buffer, 1, sizeof(buffer), capture)) {
++        output.append(buffer, n);
++    }
++    std::fclose(capture);
++
++    std::vector<nlohmann::json> records;
++    std::istringstream lines(output);
++    std::string line;
++    while (std::getline(lines, line)) {
++        if (line.rfind("[METRIC] ", 0) == 0) {
++            records.push_back(nlohmann::json::parse(line.substr(9)));
++        }
++    }
++    return records;
++}
++
++void install_workspace_snapshot(Sys* const sys, const uint64_t capacity_bytes,
++                                const uint64_t resident_kv_bytes) {
++    if (sys == nullptr || sys->workspace_admission == nullptr) {
++        throw std::runtime_error(
++            "coarse lifecycle fixture has no workspace ledger");
++    }
++    WorkspaceAdmission& ledger = *sys->workspace_admission;
++    const WorkspaceCapacityRank snapshot{
++        sys->id, ledger.workspace_revision(), capacity_bytes, 0,
++        resident_kv_bytes, 0};
++    ledger.validate_capacity_snapshot(snapshot);
++    ledger.install_capacity_snapshot_unchecked(snapshot);
++}
++
+ void drain_queue(const std::shared_ptr<EventQueue>& queue) {
+     while (!queue->finished()) {
+         queue->proceed();
+@@ -874,6 +948,342 @@ int main() {
+                     "I: stale teardown alarms do not publish completed markers");
+     }
+ 
++    // ---- Case K: coarse workspace blocks, leases, cancels and retries ----
++    {
++        g_first_tick.clear();
++        g_terminal_fires.clear();
++        g_terminal_status.clear();
++        write_coarse_system_config(config_dir);
++        Fixture fixture = make_fixture(config_dir, "coarse_system.json");
++        Fixture idle_rank = make_fixture(config_dir, "coarse_system.json", 1);
++        auto& workload = *fixture.sys->workload;
++        CoarseDieRuntime& bridge = *fixture.sys->coarse_die_runtime;
++        const std::string metric_manifest_path =
++            config_dir + "/coarse_metric_manifest.json";
++        write_text(metric_manifest_path, nlohmann::json{
++            {"schema_version", 1},
++            {"repo_variant", "coarse-metric-fixture"},
++            {"run_mode", "service"},
++            {"run_id", "coarse-metric-fixture"},
++            {"requests", nlohmann::json::array()},
++            {"node_events_by_rank", nlohmann::json::object()},
++            {"planner_memory_peaks", nlohmann::json::array()},
++            {"memory_actions", nlohmann::json::array()}}.dump());
++
++        const auto zero_records = capture_metric_records(
++            metric_manifest_path,
++            {fixture.sys.get(), idle_rank.sys.get()}, 0);
++        std::map<int, nlohmann::json> zero_rank_compute;
++        std::map<int, nlohmann::json> zero_local_hbm;
++        for (const auto& record : zero_records) {
++            const std::string type = record.value("type", std::string());
++            if (type == "rank_compute") {
++                zero_rank_compute[record.at("rank").get<int>()] = record;
++            } else if (type == "local_hbm") {
++                zero_local_hbm[record.at("rank").get<int>()] = record;
++            }
++        }
++        bool zero_rank_counters = zero_rank_compute.size() == 2 &&
++            zero_local_hbm.size() == 2;
++        for (const auto& [rank, record] : zero_rank_compute) {
++            const auto& coarse = record.at("coarse_die_runtime");
++            zero_rank_counters = zero_rank_counters &&
++                record.at("utilization_window_ns").get<uint64_t>() == 0 &&
++                coarse.at("utilization_window_ns").get<uint64_t>() == 0 &&
++                record.at("die_cancelled_comp_count").get<uint64_t>() == 0 &&
++                exact_number(coarse.at("served_by_category").at("comp")
++                                 .at("int4_ops_exact_decimal")) == 0.0L &&
++                exact_number(coarse.at("served_by_category").at("comp")
++                                 .at("vec_eqops_exact_decimal")) == 0.0L;
++            const auto& hbm = zero_local_hbm.at(rank);
++            zero_rank_counters = zero_rank_counters &&
++                hbm.at("utilization_window_ns").get<uint64_t>() == 0 &&
++                hbm.at("hbm_shared_definition") ==
++                    hbm.at("shared_definition") &&
++                hbm.at("local_hbm_restore_bytes_issued").get<uint64_t>() == 0 &&
++                hbm.at("dram_bw_util").is_null() &&
++                exact_number(hbm.at("served_by_category").at("comp")
++                                 .at("int4_ops_exact_decimal")) == 0.0L &&
++                sum_hbm_matrix(
++                    hbm.at("served_by_category").at("comp")
++                        .at("hbm_served_bytes_by_row_direction_exact")) ==
++                    0.0L;
++        }
++        expect_true(zero_rank_counters,
++                    "K: zero coarse typed/category counters emit rank-scoped zero-window records");
++
++        nlohmann::json task{{"op_kind", "ffn_region"},
++            {"tensor_shapes", {{"m", 64}, {"hidden", 128},
++                               {"ffn", 256}, {"mlp_variant", "swiglu"}}},
++            {"fusion_policy", "materialized"}, {"storage_dtype", "bf16"}};
++        const auto plan = bridge.compile(task);
++        const uint64_t workspace_bytes =
++            coarse_die::hbm_workspace_peak_bytes(*plan);
++        expect_true(workspace_bytes > 0,
++                    "K: fixture Plan has positive transient workspace");
++        if (workspace_bytes > 0) {
++            OnlineNode comp;
++            comp.global_id = 100;
++            comp.rank = 0;
++            comp.kind = NodeKind::Compute;
++            comp.node_type = 4;
++            comp.name = "coarse_workspace_cancel";
++            comp.request_id = "r1";
++            comp.stage = "prefill";
++            comp.compute.die_task_json =
++                std::make_shared<const nlohmann::json>(task);
++            fixture.source->store().add_node(comp);
++
++            OnlineNode child;
++            child.global_id = 101;
++            child.rank = 0;
++            child.kind = NodeKind::Invalid;
++            child.node_type = 0;
++            child.name = "after_workspace_cancel";
++            child.request_id = "r1";
++            child.stage = "prefill";
++            fixture.source->store().add_node(child);
++            fixture.source->store().add_dependency(100, 101, DepKind::Data);
++
++            // KV leaves one byte less than the prepared Plan needs. The
++            // blocked node must remain in the free set without GPU occupancy.
++            install_workspace_snapshot(fixture.sys.get(),
++                                       workspace_bytes + 1, 2);
++            workload.issue_dep_free_nodes();
++            std::vector<uint64_t> free_ids;
++            fixture.source->store().fill_free_node_snapshot(free_ids);
++            expect_true(fixture.sys->workspace_admission->active_lease_count() == 0 &&
++                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
++                            std::find(free_ids.begin(), free_ids.end(), 100) !=
++                                free_ids.end() &&
++                            g_terminal_fires.count(100) == 0,
++                        "K: blocked Plan stays free and consumes no GPU slot or lease");
++
++            install_workspace_snapshot(fixture.sys.get(),
++                                       workspace_bytes + 1, 1);
++            workload.issue_dep_free_nodes();
++            free_ids.clear();
++            fixture.source->store().fill_free_node_snapshot(free_ids);
++            expect_true(fixture.sys->workspace_admission->active_lease_count() == 1 &&
++                            fixture.sys->workspace_admission
++                                    ->active_workspace_bytes() == workspace_bytes &&
++                            workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
++                            std::find(free_ids.begin(), free_ids.end(), 100) ==
++                                free_ids.end(),
++                        "K: exact capacity acquires the lease before take/occupy");
++
++            fixture.event_queue->proceed();
++            const auto before_cancel =
++                bridge.counters_at(Sys::boostedTick());
++            const auto& comp_served =
++                before_cancel.at("served_by_category").at("comp");
++            bool saw_served_work =
++                comp_served.at("int4_ops").get<double>() > 0.0 ||
++                comp_served.at("vec_eqops").get<double>() > 0.0;
++            for (const auto& row :
++                 comp_served.at("hbm_served_bytes_by_row_direction")) {
++                for (const auto& direction : row) {
++                    saw_served_work =
++                        saw_served_work || direction.get<double>() > 0.0;
++                }
++            }
++            expect_true(Sys::boostedTick() > 0 && saw_served_work &&
++                            g_terminal_fires.count(100) == 0,
++                        "K: cancellation begins after real typed service");
++            workload.die_model_adapter()->cancel_coarse_node(
++                100, Sys::boostedTick());
++
++            const auto* stats =
++                fixture.source->store().mutable_online_statistics(100);
++            std::vector<uint64_t> free_after_cancel;
++            fixture.source->store().fill_free_node_snapshot(
++                free_after_cancel);
++            expect_true(g_terminal_fires[100] == 1 &&
++                            g_terminal_status[100] == static_cast<int>(
++                                NodeTerminalStatus::Skipped) &&
++                            stats != nullptr &&
++                            stats->compute_utilization.has_value() &&
++                            stats->memory_utilization.has_value() &&
++                            stats->vector_utilization.has_value() &&
++                            workload.die_cancelled_comp_count() == 1 &&
++                            std::find(free_after_cancel.begin(),
++                                      free_after_cancel.end(), 101) !=
++                                free_after_cancel.end() &&
++                            fixture.sys->workspace_admission
++                                    ->active_workspace_bytes() == 0 &&
++                            fixture.sys->workspace_admission
++                                    ->active_lease_count() == 0 &&
++                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
++                            fixture.sys->workspace_admission
++                                    ->workspace_revision() == 2,
++                        "K: live cancellation records typed utilization, releases once, terminalizes Skipped, and frees its dependent node");
++            workload.issue_dep_free_nodes();
++            expect_true(g_terminal_fires[101] == 1 &&
++                            g_terminal_status[101] == static_cast<int>(
++                                NodeTerminalStatus::Skipped),
++                        "K: cancelled COMP releases its dependent node normally");
++
++            const uint64_t metric_window_end = Sys::boostedTick();
++            const auto served_records = capture_metric_records(
++                metric_manifest_path,
++                {fixture.sys.get(), idle_rank.sys.get()},
++                metric_window_end, 0, 1234);
++            std::map<int, nlohmann::json> served_rank_compute;
++            std::map<int, nlohmann::json> served_local_hbm;
++            for (const auto& record : served_records) {
++                const std::string type = record.value("type", std::string());
++                if (type == "rank_compute") {
++                    served_rank_compute[record.at("rank").get<int>()] = record;
++                } else if (type == "local_hbm") {
++                    served_local_hbm[record.at("rank").get<int>()] = record;
++                }
++            }
++            bool served_metrics_valid = metric_window_end > 0 &&
++                served_rank_compute.size() == 2 &&
++                served_local_hbm.size() == 2;
++            if (served_metrics_valid) {
++                const auto& active_rank = served_rank_compute.at(0);
++                const auto& active_coarse =
++                    active_rank.at("coarse_die_runtime");
++                const auto& active_categories =
++                    active_coarse.at("served_by_category");
++                const auto& active_hbm = served_local_hbm.at(0);
++                const auto& idle_rank_record = served_rank_compute.at(1);
++                const auto& idle_coarse =
++                    idle_rank_record.at("coarse_die_runtime");
++                const auto& idle_hbm = served_local_hbm.at(1);
++                served_metrics_valid =
++                    active_rank.at("die_cancelled_comp_count").get<uint64_t>() == 1 &&
++                    active_rank.at("utilization_window_ns").get<uint64_t>() ==
++                        metric_window_end &&
++                    active_coarse.at("utilization_window_ns").get<uint64_t>() ==
++                        metric_window_end &&
++                    active_hbm.at("utilization_window_ns").get<uint64_t>() ==
++                        metric_window_end &&
++                    active_hbm.at("hbm_shared_definition") ==
++                        active_hbm.at("shared_definition") &&
++                    active_hbm.at("local_hbm_restore_bytes_issued")
++                            .get<uint64_t>() == 1234 &&
++                    active_rank.at("local_hbm_restore_bytes")
++                            .get<uint64_t>() == 1234 &&
++                    exact_number(active_categories.at("comp")
++                                     .at("int4_ops_exact_decimal")) > 0.0L &&
++                    active_hbm.at("served_by_category") == active_categories &&
++                    idle_rank_record.at("die_cancelled_comp_count")
++                            .get<uint64_t>() == 0 &&
++                    exact_number(idle_coarse.at("served_by_category")
++                                     .at("comp").at("int4_ops_exact_decimal")) ==
++                        0.0L &&
++                    exact_number(idle_hbm.at("served_by_category")
++                                     .at("comp").at("int4_ops_exact_decimal")) ==
++                        0.0L &&
++                    idle_hbm.at("local_hbm_restore_bytes_issued")
++                            .get<uint64_t>() == 0;
++            }
++            expect_true(served_metrics_valid,
++                        "K: two-rank metrics preserve typed serving, category totals, windows, and one live cancellation");
++
++            // A Plan larger than capacity after weights is rejected before
++            // graph take, GPU occupancy, or lease acquisition.
++            install_workspace_snapshot(fixture.sys.get(),
++                                       workspace_bytes - 1, 0);
++            comp.global_id = 102;
++            comp.name = "coarse_workspace_impossible";
++            fixture.source->store().add_node(comp);
++            bool impossible_rejected = false;
++            try {
++                workload.issue_dep_free_nodes();
++            } catch (const std::runtime_error& exc) {
++                impossible_rejected =
++                    std::string(exc.what()).find("exceeds empty-instance") !=
++                    std::string::npos;
++            }
++            free_ids.clear();
++            fixture.source->store().fill_free_node_snapshot(free_ids);
++            expect_true(impossible_rejected &&
++                            std::find(free_ids.begin(), free_ids.end(), 102) !=
++                                free_ids.end() &&
++                            fixture.sys->workspace_admission
++                                    ->active_lease_count() == 0 &&
++                            fixture.sys->workspace_admission
++                                    ->active_workspace_bytes() == 0 &&
++                            workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
++                            g_terminal_fires.count(102) == 0,
++                        "K: impossible Plan fails before take/occupy and leaves no lease");
++        }
++        idle_rank.sys.reset();
++        drain_queue(idle_rank.event_queue);
++        fixture.sys.reset();
++        drain_queue(fixture.event_queue);
++        expect_true(g_terminal_fires.count(100) == 1,
++                    "K: teardown after cancellation does not duplicate terminals");
++    }
++
++    // ---- Case L: legacy shared-HBM metric projection stays stable --------
++    {
++        Fixture fixture = make_fixture(config_dir, "die_contention.json");
++        const std::string manifest_path = config_dir + "/legacy_metric_manifest.json";
++        write_text(manifest_path, nlohmann::json{
++            {"schema_version", 1},
++            {"repo_variant", "legacy-metric-fixture"},
++            {"run_mode", "service"},
++            {"run_id", "legacy-metric-fixture"},
++            {"requests", nlohmann::json::array()},
++            {"node_events_by_rank", nlohmann::json::object()},
++            {"planner_memory_peaks", nlohmann::json::array()},
++            {"memory_actions", nlohmann::json::array()}}.dump());
++        const auto records = capture_metric_records(
++            manifest_path, {fixture.sys.get()}, 0);
++        nlohmann::json rank_record;
++        nlohmann::json hbm_record;
++        for (const auto& record : records) {
++            const std::string type = record.value("type", std::string());
++            if (type == "rank_compute") rank_record = record;
++            if (type == "local_hbm") hbm_record = record;
++        }
++        const std::vector<std::string> legacy_hbm_fields = {
++            "schema", "type", "source", "repo_variant", "run_id", "rank",
++            "model", "utilization_window_ns", "utilization_window",
++            "hbm_busy_ns", "hbm_busy_definition", "hbm_shared_ns",
++            "hbm_shared_definition", "compute_bytes_served",
++            "restore_bytes_served", "comm_read_bytes_served",
++            "comm_write_bytes_served", "pool_read_bytes_served",
++            "pool_write_bytes_served", "bytes_served_definition",
++            "peak_concurrent_jobs", "peak_concurrent_jobs_definition",
++            "redistribution_events", "redistribution_events_definition",
++            "local_hbm_restore_bytes_issued", "local_hbm_bw_bytes_per_second",
++            "local_hbm_bw_source", "hbm_busy_util",
++            "hbm_shared_fraction_of_window", "dram_bw_util",
++            "dram_bw_util_note"};
++        bool old_fields_retained = !rank_record.is_null() &&
++            !hbm_record.is_null() &&
++            rank_record.value("die_cancelled_comp_count", uint64_t{0}) == 0 &&
++            !rank_record.contains("coarse_die_runtime") &&
++            hbm_record.value("source", std::string()) ==
++                "shared_hbm_runtime_model" &&
++            hbm_record.value("hbm_shared_definition", std::string()) ==
++                "subset of hbm_busy_ns during which two or more jobs shared "
++                "the rank HBM bandwidth (equal split)" &&
++            hbm_record.value("hbm_busy_ns", -1.0) == 0.0 &&
++            hbm_record.value("compute_bytes_served", -1.0) == 0.0 &&
++            hbm_record.value("local_hbm_restore_bytes_issued", uint64_t{1}) == 0 &&
++            rank_record.value("local_hbm_restore_bytes", uint64_t{1}) ==
++                hbm_record.value("local_hbm_restore_bytes_issued", uint64_t{2}) &&
++            hbm_record.at("dram_bw_util").is_null() &&
++            hbm_record.value("dram_bw_util_note", std::string()) ==
++                "undefined: zero local-mem-bw/window" &&
++            !hbm_record.contains("dram_bw_util_numerator_bytes") &&
++            !hbm_record.contains("dram_bw_util_denominator");
++        for (const auto& field : legacy_hbm_fields) {
++            old_fields_retained = old_fields_retained &&
++                                  hbm_record.contains(field);
++        }
++        expect_true(old_fields_retained,
++                    "L: non-coarse local-HBM fields and values match the preserved LRU baseline");
++        fixture.sys.reset();
++        drain_queue(fixture.event_queue);
++    }
++
+     std::error_code ec;
+     std::filesystem::remove_all(config_dir, ec);
+     if (!g_ok) {
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc
+index e7c656b..e595cb7 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc
+@@ -221,19 +221,78 @@ struct Fixture {
+     RequestIngress ingress;
+     WatchRegistry registry;
+     std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
++    std::vector<std::unique_ptr<AstraSim::WorkspaceAdmission>>
++        workspace_ledgers;
+     std::vector<int> issue_calls;
++    size_t workspace_install_calls = 0;
++    std::vector<int> workspace_changed_ranks;
+     std::vector<WatchFire> fires;
+     GraphBatchCommitter committer;
+ 
+-    static GraphBatchCommitter::Context make_context(Fixture* fixture) {
++    static GraphBatchCommitter::Context make_context(
++        Fixture* fixture, const bool workspace_required = false) {
+         GraphBatchCommitter::Context ctx;
+         ctx.num_ranks = 3;
+         ctx.graph_sources = &fixture->sources;
+         ctx.watch_registry = &fixture->registry;
+         ctx.ingress = &fixture->ingress;
+         ctx.issue_rank = [fixture](int rank) {
++            if (fixture->workspace_admission_required &&
++                (rank < 0 ||
++                 rank >= static_cast<int>(fixture->workspace_ledgers.size()) ||
++                 !fixture->workspace_ledgers[rank]->has_capacity_snapshot())) {
++                expect(false,
++                       "workspace snapshot is installed before any issue rank");
++            }
+             fixture->issue_calls.push_back(rank);
+         };
++        ctx.workspace_admission_required = workspace_required;
++        if (workspace_required) {
++            ctx.validate_workspace_capacity_snapshot =
++                [fixture](const std::vector<AstraSim::WorkspaceRankState>&
++                              request_state,
++                          const std::vector<AstraSim::WorkspaceCapacityRank>&
++                              snapshot)
++                -> std::optional<std::string> {
++                if (request_state.size() != fixture->workspace_ledgers.size() ||
++                    snapshot.size() != fixture->workspace_ledgers.size()) {
++                    return "workspace fixture rank count mismatch";
++                }
++                for (size_t rank = 0;
++                     rank < fixture->workspace_ledgers.size(); ++rank) {
++                    try {
++                        fixture->workspace_ledgers[rank]
++                            ->validate_request_state(request_state[rank]);
++                        fixture->workspace_ledgers[rank]
++                            ->validate_capacity_snapshot(snapshot[rank]);
++                    } catch (const std::exception& exc) {
++                        return "rank " + std::to_string(rank) + ": " +
++                               exc.what();
++                    }
++                }
++                return std::nullopt;
++            };
++            ctx.install_workspace_capacity_snapshot =
++                [fixture](const std::vector<AstraSim::WorkspaceCapacityRank>&
++                              snapshot,
++                          std::vector<int>& changed_ranks) {
++                changed_ranks.clear();
++                for (size_t rank = 0;
++                     rank < fixture->workspace_ledgers.size(); ++rank) {
++                    if (fixture->workspace_ledgers[rank]
++                            ->capacity_snapshot_changes(snapshot[rank])) {
++                        changed_ranks.push_back(static_cast<int>(rank));
++                    }
++                }
++                for (size_t rank = 0;
++                     rank < fixture->workspace_ledgers.size(); ++rank) {
++                    fixture->workspace_ledgers[rank]
++                        ->install_capacity_snapshot_unchecked(snapshot[rank]);
++                }
++                fixture->workspace_changed_ranks = changed_ranks;
++                ++fixture->workspace_install_calls;
++            };
++        }
+         ctx.communicator_members_for_pg =
+             [](const std::string& pg_name,
+                const std::vector<int>& /* participant_ranks */)
+@@ -249,8 +308,9 @@ struct Fixture {
+         return ctx;
+     }
+ 
+-    Fixture()
+-        : ingress(4096), committer(make_context(this)) {
++    explicit Fixture(const bool workspace_required = false)
++        : ingress(4096),
++          committer(make_context(this, workspace_required)) {
+         ingress.bind(&eq, &mailbox, &svc);
+         // Synchronous fire recorder: fires are observed at fire time (the
+         // deleted polling queue has no production consumer).
+@@ -262,8 +322,16 @@ struct Fixture {
+         sources.reserve(3);
+         for (int rank = 0; rank < 3; ++rank) {
+             sources.push_back(std::make_shared<NodeStoreGraphSource>());
++            if (workspace_required) {
++                workspace_ledgers.push_back(
++                    std::make_unique<AstraSim::WorkspaceAdmission>(rank));
++            }
+         }
++        workspace_changed_ranks.reserve(3);
++        workspace_admission_required = workspace_required;
+     }
++
++    bool workspace_admission_required = false;
+ };
+ 
+ // Observable state snapshot: everything the commit can write, flattened
+@@ -408,6 +476,46 @@ GraphBatch parse_batch(const nlohmann::json& resp, int num_ranks = 3) {
+     return parse_graph_batch(resp, num_ranks);
+ }
+ 
++std::vector<AstraSim::WorkspaceRankState> workspace_state_of(
++    const Fixture& fixture) {
++    std::vector<AstraSim::WorkspaceRankState> state;
++    state.reserve(fixture.workspace_ledgers.size());
++    for (const auto& ledger : fixture.workspace_ledgers) {
++        state.push_back(ledger->state());
++    }
++    return state;
++}
++
++nlohmann::json workspace_response(
++    const uint64_t sequence,
++    const std::vector<AstraSim::WorkspaceRankState>& state,
++    const std::vector<uint64_t>& capacities) {
++    nlohmann::json ranks = nlohmann::json::array();
++    for (size_t rank = 0; rank < state.size(); ++rank) {
++        ranks.push_back({
++            {"rank", state[rank].rank},
++            {"workspace_revision", state[rank].workspace_revision},
++            {"capacity_bytes", capacities[rank]},
++            {"model_weight_bytes", 200},
++            {"resident_kv_bytes", 100},
++            {"reserved_request_bytes", 0},
++        });
++    }
++    return {
++        {"schema_version", 2},
++        {"batch_id", sequence},
++        {"source_delivery_sequence", sequence},
++        {"workspace_capacity_snapshot",
++         {{"protocol_version", 1}, {"ranks", std::move(ranks)}}},
++    };
++}
++
++GraphBatch parse_workspace_batch(
++    const nlohmann::json& response,
++    const std::vector<AstraSim::WorkspaceRankState>& state) {
++    return parse_graph_batch(response, 3, 2, state);
++}
++
+ // A typed prefill/decode watch over explicit (rank, json id) members.
+ ParsedWatch typed_watch(const std::string& request_id, const std::string& stage,
+                         std::vector<ParsedWatchMember> members,
+@@ -868,6 +976,86 @@ void test_validate_and_commit_atomic() {
+     }
+ }
+ 
++void test_workspace_snapshot_preflight_install_and_wake() {
++    Fixture f(/*workspace_required=*/true);
++    auto state0 = workspace_state_of(f);
++    StateDelta delta0 = build_state_delta_v2(
++        {}, /*tick=*/10, /*delivery_sequence=*/0, /*deferred_from_tick=*/0,
++        {}, {}, state0);
++    GraphBatch batch0 = parse_workspace_batch(
++        workspace_response(0, state0, {1000, 1000, 1000}), state0);
++    f.committer.commit(delta0, batch0);
++    expect(f.workspace_install_calls == 1 &&
++               f.workspace_changed_ranks == std::vector<int>({0, 1, 2}),
++           "workspace preflight installs the initial full-rank snapshot");
++    expect(f.issue_calls == std::vector<int>({0, 1, 2}),
++           "initial capacity snapshot wakes every rank once");
++
++    // No nodes are touched in this delivery. Changing only rank 1's Python
++    // capacity view still issues that rank, after the new view is installed.
++    f.issue_calls.clear();
++    const auto state1 = workspace_state_of(f);
++    StateDelta delta1 = build_state_delta_v2(
++        {}, /*tick=*/11, /*delivery_sequence=*/1, /*deferred_from_tick=*/0,
++        {}, {}, state1);
++    GraphBatch batch1 = parse_workspace_batch(
++        workspace_response(1, state1, {1000, 1200, 1000}), state1);
++    f.committer.commit(delta1, batch1);
++    expect(f.workspace_install_calls == 2 &&
++               f.workspace_changed_ranks == std::vector<int>({1}) &&
++               f.issue_calls == std::vector<int>({1}),
++           "capacity-only change wakes exactly its changed rank");
++
++    // A real newly committed node touches rank 0 while only rank 2's
++    // capacity changes. The final issue pass is the sorted union, once each.
++    f.issue_calls.clear();
++    const auto state2 = workspace_state_of(f);
++    nlohmann::json touched_response =
++        workspace_response(2, state2, {1000, 1200, 1300});
++    touched_response["nodes"] = nlohmann::json::array(
++        {compute_node(0, 0, "workspace-r1", "prefill", "workspace_comp")});
++    touched_response["watches"] = nlohmann::json::array(
++        {prefill_watch("workspace-r1", {{"0", 0}})});
++    touched_response["touched_ranks"] = nlohmann::json::array({0});
++    DecisionEvent arrival;
++    arrival.reason = DecisionReason::ARRIVAL;
++    arrival.request_id = "workspace-r1";
++    arrival.stage = "prefill";
++    StateDelta delta2 = build_state_delta_v2(
++        {arrival}, /*tick=*/12, /*delivery_sequence=*/2,
++        /*deferred_from_tick=*/0, {}, {}, state2);
++    GraphBatch batch2 = parse_workspace_batch(touched_response, state2);
++    f.committer.commit(delta2, batch2);
++    expect(f.workspace_changed_ranks == std::vector<int>({2}) &&
++               f.issue_calls == std::vector<int>({0, 2}),
++           "capacity-changed and newly touched ranks issue once in sorted order");
++
++    // A revision mismatch is rejected in pure preflight. Neither the graph
++    // committer, capacity owner, nor issue pass may observe the bad snapshot.
++    f.issue_calls.clear();
++    const auto state3 = workspace_state_of(f);
++    const auto before_install_count = f.workspace_install_calls;
++    auto malformed = workspace_response(3, state3, {1000, 1200, 1300});
++    GraphBatch bad_batch = parse_workspace_batch(malformed, state3);
++    bad_batch.workspace_capacity_snapshot[2].workspace_revision = 99;
++    StateDelta delta3 = build_state_delta_v2(
++        {}, /*tick=*/13, /*delivery_sequence=*/3, /*deferred_from_tick=*/0,
++        {}, {}, state3);
++    bool rejected = false;
++    try {
++        f.committer.commit(delta3, bad_batch);
++    } catch (const std::runtime_error&) {
++        rejected = true;
++    }
++    expect(rejected && f.workspace_install_calls == before_install_count &&
++               f.issue_calls.empty() &&
++               !f.workspace_ledgers[2]->capacity_snapshot_changes(
++                   AstraSim::WorkspaceCapacityRank{2, 0, 1300, 200, 100, 0}) &&
++               f.workspace_ledgers[2]->capacity_snapshot_changes(
++                   AstraSim::WorkspaceCapacityRank{2, 0, 1000, 200, 100, 0}),
++           "workspace snapshot preflight failure is atomic");
++}
++
+ // The per-rank stamp avoids O(ranks) clearing on the hot path.  Force the
+ // otherwise unreachable wrap boundary, reject one malformed stream, then
+ // prove the next batch recovers without allocating either touched-rank vector.
+@@ -2072,6 +2260,7 @@ int main() {
+     Fixture f;
+     test_negative_cases(f);
+     test_validate_and_commit_atomic();
++    test_workspace_snapshot_preflight_install_and_wake();
+     test_json_id_stamp_wrap_and_recovery();
+     test_positive_commit(f);
+     test_post_commit_negatives(f);
+diff --git a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc
+index 4833f32..4821923 100755
+--- a/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc
++++ b/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc
+@@ -43,6 +43,7 @@ Exit code 0 on ALL PASS.
+ *******************************************************************************/
+ 
+ #include <cstdio>
++#include <limits>
+ #include <string>
+ 
+ #include <json/json.hpp>
+@@ -51,6 +52,7 @@ Exit code 0 on ALL PASS.
+ #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
+ 
+ using namespace AstraSim::ExecutionDriven;
++using AstraSim::WorkspaceRankState;
+ 
+ namespace {
+ 
+@@ -91,6 +93,35 @@ void expect_parse_error(const nlohmann::json& resp, const char* what,
+     }
+ }
+ 
++void expect_v2_parse_error(
++    const nlohmann::json& resp,
++    const std::vector<WorkspaceRankState>& workspace_state,
++    const char* what, const char* needle = nullptr) {
++    try {
++        (void)parse_graph_batch(resp, 2, 2, workspace_state);
++        std::fprintf(stderr,
++                     "[parsed_graph_batch_test] unexpected v2 parse PASS: "
++                     "%s\n",
++                     what);
++        g_ok = false;
++    } catch (const ParseError& exc) {
++        if (needle != nullptr &&
++            std::string(exc.what()).find(needle) == std::string::npos) {
++            std::fprintf(stderr,
++                         "[parsed_graph_batch_test] v2 message mismatch for "
++                         "%s:\n  got: %s\n  want substring: %s\n",
++                         what, exc.what(), needle);
++            g_ok = false;
++        }
++    } catch (const std::exception& exc) {
++        std::fprintf(stderr,
++                     "[parsed_graph_batch_test] wrong v2 exception type for "
++                     "%s: %s\n",
++                     what, exc.what());
++        g_ok = false;
++    }
++}
++
+ ParsedGraphBatch parse_ok(const nlohmann::json& resp, const char* what,
+                           int num_ranks = 3) {
+     try {
+@@ -346,6 +377,100 @@ void test_top_level_rules() {
+     }
+ }
+ 
++void test_workspace_v2_snapshot_rules() {
++    const std::vector<WorkspaceRankState> request_state{
++        {0, 3, 128}, {1, 8, 0}};
++    nlohmann::json response = {
++        {"schema_version", 2},
++        {"batch_id", 42},
++        {"source_delivery_sequence", 42},
++        {"workspace_capacity_snapshot",
++         {{"protocol_version", 1},
++          {"ranks",
++           nlohmann::json::array(
++               {{{"rank", 0},
++                 {"workspace_revision", 3},
++                 {"capacity_bytes", 1024},
++                 {"model_weight_bytes", 128},
++                 {"resident_kv_bytes", 64},
++                 {"reserved_request_bytes", 32}},
++                {{"rank", 1},
++                 {"workspace_revision", 8},
++                 {"capacity_bytes", 2048},
++                 {"model_weight_bytes", 256},
++                 {"resident_kv_bytes", 512},
++                 {"reserved_request_bytes", 128}}})}}}};
++
++    ParsedGraphBatch parsed;
++    try {
++        parsed = parse_graph_batch(response, 2, 2, request_state);
++    } catch (const std::exception& exc) {
++        std::fprintf(stderr,
++                     "[parsed_graph_batch_test] valid v2 snapshot rejected: "
++                     "%s\n",
++                     exc.what());
++        g_ok = false;
++    }
++    expect(parsed.schema_version == 2 &&
++               parsed.source_delivery_sequence == 42 &&
++               parsed.has_workspace_capacity_snapshot &&
++               parsed.workspace_capacity_snapshot.size() == 2 &&
++               parsed.workspace_capacity_snapshot[0].rank == 0 &&
++               parsed.workspace_capacity_snapshot[0].workspace_revision == 3 &&
++               parsed.workspace_capacity_snapshot[0].capacity_bytes == 1024 &&
++               parsed.workspace_capacity_snapshot[1].rank == 1 &&
++               parsed.workspace_capacity_snapshot[1].resident_kv_bytes == 512,
++           "v2 snapshot parses the full rank/revision/capacity table");
++
++    auto malformed = response;
++    malformed.erase("workspace_capacity_snapshot");
++    expect_v2_parse_error(malformed, request_state,
++                          "missing v2 workspace snapshot",
++                          "workspace_capacity_snapshot");
++
++    malformed = response;
++    malformed["delivery_sequence"] = 42;
++    expect_v2_parse_error(malformed, request_state,
++                          "response must not repeat delivery sequence",
++                          "unknown field \"delivery_sequence\"");
++
++    malformed = response;
++    malformed["workspace_capacity_snapshot"]["ranks"][0]
++             ["workspace_revision"] = 4;
++    expect_v2_parse_error(malformed, request_state,
++                          "snapshot revision echoes the request view",
++                          "does not echo request view");
++
++    malformed = response;
++    malformed["workspace_capacity_snapshot"]["ranks"][0]["rank"] = 1;
++    expect_v2_parse_error(malformed, request_state,
++                          "snapshot rank table is complete and ascending",
++                          "complete, unique, and ascending");
++
++    malformed = response;
++    malformed["workspace_capacity_snapshot"]["ranks"][0]
++             ["capacity_bytes"] = 1024.0;
++    expect_v2_parse_error(malformed, request_state,
++                          "snapshot byte fields reject floating point",
++                          "not an integer");
++
++    malformed = response;
++    malformed["workspace_capacity_snapshot"]["ranks"][1]
++             ["workspace_revision"] = true;
++    expect_v2_parse_error(malformed, request_state,
++                          "snapshot revision rejects bool",
++                          "not an integer");
++
++    malformed = response;
++    malformed["workspace_capacity_snapshot"]["ranks"][0]
++             ["model_weight_bytes"] = std::numeric_limits<uint64_t>::max();
++    malformed["workspace_capacity_snapshot"]["ranks"][0]
++             ["resident_kv_bytes"] = 1;
++    expect_v2_parse_error(malformed, request_state,
++                          "snapshot base sum must not overflow",
++                          "base-used byte sum overflows");
++}
++
+ // --------------------------------------------------------------- Part N ----
+ void test_node_rules() {
+     const nlohmann::json base = max_shape_response();
+@@ -1031,6 +1156,7 @@ void test_kv_route_transfer_leg_predicate() {
+ 
+ int main() {
+     test_top_level_rules();
++    test_workspace_v2_snapshot_rules();
+     test_node_rules();
+     test_edge_rules();
+     test_watch_rules();

@@ -1,0 +1,29 @@
+{
+  "cabi_sha256": "d2f06c80e6112f1215f6b124f4cb333041d2c592b84c90a81127e0faeb5ee17b",
+  "capacity_bytes_per_rank": 144000000000,
+  "hardware_sha256": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+  "model_dims": {
+    "ffn": 1024,
+    "head_dim": 128,
+    "hidden": 512,
+    "mlp_variant": "swiglu",
+    "norm_type": "rmsnorm",
+    "num_kv_heads": 4,
+    "num_q_heads": 4,
+    "position_encoding": "none",
+    "vocab": 512
+  },
+  "model_name": "workspace_e2e_probe_mha4_h512_f1024_gqa1",
+  "plan_manifest": "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/generated/llama2_7b_wsc_llm_inference_54npus_plan_3dbcb61d/manifest.json",
+  "positive_workspace_count": 8,
+  "probe": "official LRU DieModelContext FFN specs compiled by die_coarse_compile_batch_v2",
+  "spec_sha256": "c2295ccdc68c569a2872d420f3c43e3db5fecfbf1319bc20284a9bd80a2d6373"
+}
+{"error": null, "fused_tk_capacity_probe_order": null, "hbm_workspace_peak_bytes": 65536, "phase": "prefill", "selected_template": "materialized_swiglu_v2", "tensor_parallel_rank": 0, "tk": 256}
+{"error": null, "fused_tk_capacity_probe_order": null, "hbm_workspace_peak_bytes": 65536, "phase": "prefill", "selected_template": "materialized_swiglu_v2", "tensor_parallel_rank": 1, "tk": 256}
+{"error": null, "fused_tk_capacity_probe_order": null, "hbm_workspace_peak_bytes": 65536, "phase": "prefill", "selected_template": "materialized_swiglu_v2", "tensor_parallel_rank": 2, "tk": 256}
+{"error": null, "fused_tk_capacity_probe_order": null, "hbm_workspace_peak_bytes": 65536, "phase": "prefill", "selected_template": "materialized_swiglu_v2", "tensor_parallel_rank": 3, "tk": 256}
+{"error": null, "fused_tk_capacity_probe_order": null, "hbm_workspace_peak_bytes": 1024, "phase": "decode", "selected_template": "materialized_swiglu_v2", "tensor_parallel_rank": 0, "tk": 256}
+{"error": null, "fused_tk_capacity_probe_order": null, "hbm_workspace_peak_bytes": 1024, "phase": "decode", "selected_template": "materialized_swiglu_v2", "tensor_parallel_rank": 1, "tk": 256}
+{"error": null, "fused_tk_capacity_probe_order": null, "hbm_workspace_peak_bytes": 1024, "phase": "decode", "selected_template": "materialized_swiglu_v2", "tensor_parallel_rank": 2, "tk": 256}
+{"error": null, "fused_tk_capacity_probe_order": null, "hbm_workspace_peak_bytes": 1024, "phase": "decode", "selected_template": "materialized_swiglu_v2", "tensor_parallel_rank": 3, "tk": 256}
