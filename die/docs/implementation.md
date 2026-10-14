@@ -162,20 +162,13 @@ python3 die/tools/sync_repositories.py --check
 
 The five repositories are `astra-sim-wscllm`, `astra-sim-wscllm-LRU`, `astra-sim-face`, `astra-sim-face-LRU`, and `astra-sim-joint`. Existing `extern/die_model` is a legacy compatibility library; a root `add_subdirectory(extern/die_model)` builds v2 only if that directory's CMake file includes the synchronized `coarse/` subdirectory. The worktree's current integration state must be read from release manifests, CMake files, and adapter source rather than inferred from the synchronization script.
 
-For each repository configure and build its own `build/astra_analytical` entry point, then run CTest and its Python suite. For the current joint tree, the concrete commands are:
+For each repository use its actual configured entry point, then run the relevant CTest and Python suites. The active new JOINT tree uses the tracked aggregate scaffold, rather than assuming the old JOINT build layout. Its focused native/domain/window checks and real-library Python facade checks are reproducible with:
 
 ```bash
-cmake -S astra-sim-joint/build/astra_analytical \
-  -B astra-sim-joint/build/astra_analytical/build_congestion_aware \
-  -DBUILDTARGET=congestion_aware \
-  -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build astra-sim-joint/build/astra_analytical/build_congestion_aware -j
-ctest --test-dir astra-sim-joint/build/astra_analytical/build_congestion_aware --output-on-failure
-python3 -m pytest astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/joint
+bash die/docs/analysis/native-world-snapshot-20261014/run_checks.sh
 ```
 
-Replace `astra-sim-joint` with each other repository and use the suite documented by that repository. The required evidence is per repository: same shared-source digest, build with the v2 C ABI, C++/C ABI plan identity, actual workload behavior, one-owner endpoint accounting, cancellation/drain/release, and snapshot/import/fork replay. A green legacy suite alone does not meet this gate.
+The complete Online build and tiny workload runner are in [the Online reproduction package](analysis/native-local-projection-20261014/online-reproduction/README.md); the [native snapshot package](analysis/native-world-snapshot-20261014/README.md) describes its same-frozen-input session scope. Production Sys/ledger/network/pool live import is not established by these focused checks. Use each other active repository's own documented entry point and suite. The required evidence is per repository: same shared-source digest, build with the v2 C ABI, C++/C ABI plan identity, actual workload behavior, one-owner endpoint accounting, cancellation/drain/release, and snapshot/import/fork replay. A green legacy suite alone does not meet this gate.
 
 ## Evidence ledger
 

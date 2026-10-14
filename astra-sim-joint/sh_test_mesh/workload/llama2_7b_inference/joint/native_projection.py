@@ -773,11 +773,25 @@ class NativeProjectionWorld:
                          if leg_id in self.legs])
         self.barriers = {}
         for barrier_id, value in wire.get("barriers", {}).items():
-            expected = tuple(value["expected"])
-            spec = BarrierSpec(barrier_id, expected)
+            # Native inspect uses the BarrierSpec vocabulary.  Accept the
+            # older Python-view aliases as well so a rolling ABI build still
+            # reconstructs the same immutable signaller set.
+            signallers = value.get("signallers", value.get("expected"))
+            if signallers is None:
+                raise NativeProjectionError(
+                    f"native barrier {barrier_id!r} is missing signallers")
+            spec = BarrierSpec(barrier_id, tuple(signallers))
+            passed_at = value.get("passed_at_ns", value.get("passed_at"))
+            has_passed = value.get("has_passed", passed_at is not None)
+            if not isinstance(has_passed, bool):
+                raise NativeProjectionError(
+                    f"native barrier {barrier_id!r} has invalid has_passed")
+            if has_passed and passed_at is None:
+                raise NativeProjectionError(
+                    f"native barrier {barrier_id!r} passed without a timestamp")
             self.barriers[barrier_id] = SimpleNamespace(
                 spec=spec, arrived=set(value["arrived"]),
-                passed_at=value["passed_at"] if value["has_passed"] else None)
+                passed_at=passed_at if has_passed else None)
         self._active_legs = [
             leg for leg in self.legs.values() if leg.state == "active"]
         self.bytes_served_total = float(
@@ -874,3 +888,20 @@ class NativeProjectionWorld:
 
     def cost_disclosure(self) -> dict:
         return dict(self._native_cost_disclosure)
+
+    def export_snapshot(self) -> dict:
+        """Return the complete native wire snapshot for this mutable world."""
+        return self._operation({"operation": "export_snapshot"})
+
+    def import_snapshot(self, snapshot: Mapping[str, Any]) -> dict:
+        """Atomically restore a native snapshot and refresh façade controls.
+
+        The native session validates the frozen graph and complete runtime
+        state before publishing the import.  Python only mirrors the two
+        session controls exposed by this compatibility façade.
+        """
+        result = self._operation({
+            "operation": "import_snapshot", "snapshot": snapshot})
+        self._conservation_check = snapshot["controls"]["conservation_check"]
+        self._analytic_mode = snapshot["state"]["analytic_enabled"]
+        return result

@@ -1,0 +1,47 @@
+die/docs/analysis/native-local-projection-20261014/online-reproduction/run_tiny_online.sh: line 117: 13034 Aborted                 "${BIN}" --online-mode strategy --bridge-dir "${RUN_DIR}/bridge" --online-validate 1 --bridge-timeout-ms "${BRIDGE_TIMEOUT_MS}" --request-queue-csv "${REQUEST_CSV}" --close-input --workload-configuration="${PLAN_DIR}/llama2_7b_inference" --comm-group-configuration="${RC_ACTIVE}/comm_group.json" --system-configuration="${RC_ACTIVE}/system.json" --remote-memory-configuration="${RC_ACTIVE}/remote_memory.json" --network-configuration="${RC_ACTIVE}/network.yml" --logging-folder=off --metrics-configuration="${PLAN_DIR}/metrics_manifest.json" --metrics-detail="${METRICS_DETAIL}" > "${RUN_DIR}/cpp.log" 2>&1
+profile=coarse_intended cpp_exit=134 python_exit=1 run_dir=/workspace/template/work/joint-reproduction/runs/coarse_intended-20261014T161727Z-13010
+[online] link observer: enabled (bucket_ns=20000000, provisional=false, edge_links=60)
+[2026-10-14 16:17:28.204] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-14 16:17:28.204] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-14 16:17:28.204] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-14 16:17:28.204] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-14 16:17:28.204] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-14 16:17:28.204] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-14 16:17:28.204] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-14 16:17:28.204] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[online] provenance sidecar: matched (fnv1a64=0x43b0bb09e15101fa bytes=232 data_rows=1 sessions=1): /workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/joint_tiny_requests.csv.provenance.json
+[online] request queue: /workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/joint_tiny_requests.csv (calendar reader, max_arrival_ns=0 (unbounded default; backport fix 2026-08-16, sh_2.0测试 §5.1))
+[online] lifecycle: start IDLE (t=0ms wall_ms=1791994648224)
+[online] lifecycle: IDLE -> DRAINING (t=0ms wall_ms=1791994648224)
+[online] work ledger: enabled (protocol v4; callback-ordered lifecycle, sparse cursor/resource patches; independent of --link-telemetry)
+[online] node gc: enabled (amortized: commit tails drain once >= 4096 finished nodes accumulate, run end forces a final drain)
+[online] graph validate: full (--online-validate 1; production runners default 0, smoke/fixture/verify runs pass 1)
+[Error] (execution_driven/bridge) Python decision failed for delivery_sequence=0: RuntimeError: coarse_die_v2 JOINT prediction is fail-closed: the current provider uses legacy hbm_share_divisor/service_factor and the frozen native projection has not been validated against the coarse shared Runtime
+Traceback (most recent call last):
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py", line 823, in serve_forever
+    self._handle_request(req_seq, handler, req_raw)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py", line 476, in _handle_request
+    response = handler(request, work_ledger_segment)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/online_scheduler_base.py", line 504, in on_decision_batch
+    self.run_variant_policy(delta)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 2045, in run_variant_policy
+    self._admit_pass(tick)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 4135, in _admit_pass
+    self._admit_waiting_requests(tick)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 4180, in _admit_waiting_requests
+    if not self._try_admit_request(runtime, now_ns):
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 8387, in _try_admit_request
+    cost_model = self._joint_cost_model(now_ns)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 7405, in _joint_cost_model
+    die_provider = _JointDiePlanProvider(
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py", line 996, in __init__
+    require_legacy_projection_context(die_context)
+  File "/workspace/template/work/joint-reproduction/stage/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py", line 835, in require_legacy_projection_context
+    raise RuntimeError(
+RuntimeError: coarse_die_v2 JOINT prediction is fail-closed: the current provider uses legacy hbm_share_divisor/service_factor and the frozen native projection has not been validated against the coarse shared Runtime
+decision_bridge: fail-closed at seq 0: RuntimeError: coarse_die_v2 JOINT prediction is fail-closed: the current provider uses legacy hbm_share_divisor/service_factor and the frozen native projection has not been validated against the coarse shared Runtime
+wrapper_exit=1 (expected 1 for fail-closed guard)

@@ -1,0 +1,11 @@
+[ 54%] Built target coarse_die
+[ 72%] Built target coarse_die_cabi
+[100%] Built target native_coarse_die_domain_test
+Internal ctest changing into directory: /workspace/template/astra-sim-joint/work/native-coarse-domain
+Test project /workspace/template/astra-sim-joint/work/native-coarse-domain
+    Start 1: native_coarse_die_domain_test
+1/1 Test #1: native_coarse_die_domain_test ....   Passed    0.08 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.08 sec

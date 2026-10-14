@@ -23,7 +23,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 硬件 `die/src/Hardware.cc`；计划/任务/映射 `Plan.cc`、`Compiler.cc`、`Mapping.cc`；执行 `Execution.cc`；ABI `Capi.cc`。
 - 接口在 `die/include/coarse_die/`；配置、工具、测试分别在 `configs/`、`tools/`、`tests/`。
 - 依赖 C++17、CMake、Python3 和 vendored `astra-sim-wscllm/extern/helper/json/json.hpp`；TX8 工具仅 Python 标准库。
-- 下一环境应核实真实工具安装。本 Session 使用本地 ignored `work/activate.sh`、CMake3.31.10、GCC14.2、protoc3.21.12/Python protobuf4.25.8、`PROTOBUF_FROM_SOURCE=True`。依赖 prefix 在 work/tooling 与 work/deps，不是跨账号依赖交付；重建入口随证据保存。
+- 下一环境应核实真实工具安装。本 Session 使用 `/workspace/cloud-setup/activate.sh`、CMake3.31.10、GCC14.2、protoc3.21.12/Python protobuf6.33.5，`PROTOBUF_FROM_SOURCE` 未设置，使用系统 Protobuf module。环境依赖不是跨账号交付；重建入口随证据保存。
 - `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release` 是公共库入口；benchmark 宏缺失已修复。实际最新构建/CTest 状态以 HANDOFF 为准。
 - 独立 Runtime/hardware_search 和 TX8 审计的真实命令、日志与结果在 HANDOFF 与 `docs/evidence/`。
 
@@ -43,9 +43,11 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-当前持续开发分支 `codex/die-joint-runtime-20261014`，从远端 `main` 的 `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，含已合并 PR #11。用户本轮重新要求持续自主推进，历史停止指令不沿用。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。当前检查点修复 attention sequential layer/pass workspace peak（新 v3 template、workspace revision v2）、增加同公共 Runtime 的 native fresh local-domain bridge，并形成真实 E5 shape-axis 失败证据；完整 native world/sh30 production guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
+当前持续开发分支 `codex/die-joint-runtime-20261014`，从远端 `main` 的 `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，含已合并 PR #11。用户本轮重新要求持续自主推进，历史停止指令不沿用。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。已修 attention sequential layer/pass workspace peak（v3 template、workspace revision v2）、native fresh local-domain bridge 和同冻结输入 native session wire 恢复，并形成真实 E5 shape-axis 失败证据；生产 Sys/ledger/network/pool live 输入与 sh30 guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
 
 ## 重要决定及变更记录
+
+- 2026-10-14 native wire 检查点：新 JOINT domain wrapper 与同冻结输入 native session 完整 snapshot/import，复用公共 Runtime v3；恢复后的 step/drain 与未导入 source 完整 inspect 全等。补齐 forecast 同 tick 前缀、fixed pending terminal、跨 gate 唤醒、zero-service child 和 Python barrier facade；4/4 native/window、独立 fresh build4/4+Python4/4、最终 ABI18/18无skip、tiny legacy Online再次0/0且192/192成功。这里只覆盖 native session，生产 Sys/ledger/network/pool/lease 与 sh30 guard未接通；现有 Sys export_snapshot有推进/回调副作用，下一步先加 Runtime-copy只读采样。公共 mapping/timing、TX8/target先验和canonical23 digest不变，E5精度仍failed。详见HANDOFF和native-world-snapshot-20261014证据。
 
 - 2026-10-14 接续检查点：同步 main d9cc024；materialized attention/QK workspace 只取单次 lifecycle，物理 work/byte 仍重复计费，受影响 template/dataflow v3、capacity revision v2，LRU strict-v2 certificate；canonical23 五仓 digest45b7bf3d…c3264。新 JOINT native projection 使用共享公共 Runtime，支持 fresh frozen domains/Plan chains/显式本地endpoint和native gate/join，拒绝scalar活跃恢复及prediction-only倍率，sh30 guard未开放。实际 tiny legacy Online成功，coarse-intended在guard明确失败。新E5单因素可比OS场景继续failed，累计long-double尘埃与计划整数守恒分开报告；TX8不变。真实命令/范围见HANDOFF和新evidence。
 

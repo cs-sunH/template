@@ -17,9 +17,8 @@ struct NativeCoarseDieCompletion {
   bool cancelled = false;
 };
 
-// One shared coarse_die::Runtime for a native HBM physical domain. Snapshot
-// forks are in-process copies; export_runtime_snapshot() exports Runtime state
-// only and does not serialize wrapper chain bindings for later wire import.
+// One shared coarse_die::Runtime for a native HBM physical domain. Domain
+// snapshots carry wrapper bindings as well as Runtime state.
 class NativeCoarseDieDomain {
  public:
   NativeCoarseDieDomain(std::string resource_key,
@@ -48,8 +47,13 @@ class NativeCoarseDieDomain {
   bool retire(const std::string& leg_id);
 
   nlohmann::json counters() const;
-  // This is a raw coarse_die::Runtime v3 snapshot, not a complete wrapper
-  // snapshot. Use fork_snapshot() when live chain bindings must be preserved.
+  nlohmann::json export_snapshot() const;
+  static std::unique_ptr<NativeCoarseDieDomain> import_snapshot(
+      std::string resource_key,
+      std::shared_ptr<const coarse_die::Hardware> hardware,
+      const nlohmann::json& snapshot);
+  // Raw Runtime-only diagnostic export. Use export_snapshot() when wrapper
+  // chain and endpoint bindings must be preserved on the wire.
   nlohmann::json export_runtime_snapshot() const;
   static std::unique_ptr<NativeCoarseDieDomain> fork_snapshot(
       const NativeCoarseDieDomain& source);

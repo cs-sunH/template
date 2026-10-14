@@ -123,6 +123,9 @@ struct NativeProjectionBlockPipeline final {
 };
 
 struct NativeProjectionInput final {
+    // Exact immutable contract for session snapshot compatibility. Mutable
+    // state is restored separately; a snapshot cannot replace this graph.
+    nlohmann::json frozen_input_wire;
     double now_ns = 0.0;
     std::vector<NativeProjectionResource> resources;
     std::vector<NativeProjectionWorkSpec> background_works;
@@ -651,6 +654,7 @@ std::shared_ptr<const NativeProjectionInput> parse_projection_input(
     const Json& wire) {
     validate_projection_input_shape(wire);
     auto result = std::make_shared<NativeProjectionInput>();
+    result->frozen_input_wire = wire;
     result->now_ns = number_value(wire.at("now_ns"), "projection_input.now_ns");
     result->focus_work_id = string_value(
         wire.at("focus_work_id"), "projection_input.focus_work_id");
@@ -1761,9 +1765,381 @@ class NativeProjectionWorld final {
                     {"runtime_snapshot", domain.second->export_runtime_snapshot()},
                     {"counters", domain.second->counters()}};
             result["coarse_projection_profile"] = "fresh_integer_local_domains_v1";
+            result["native_session_snapshot_schema"] =
+                "native_coarse_projection_world_snapshot_v1";
+            // Production Sys/ledger import is a separate integration gate.
             result["live_world_import_supported"] = false;
         }
         return result;
+    }
+
+    Json export_snapshot() const {
+        require_snapshot_profile();
+        Json domains = Json::object(), legs = Json::object();
+        Json gates = Json::object(), barriers = Json::object();
+        for (const auto& domain : coarse_domains_)
+            domains[domain.first] = domain.second->export_snapshot();
+        for (const auto* leg : leg_order_) {
+            legs[leg->spec->leg_id] = {
+                {"state", state_name(leg->state)},
+                {"remaining_duration_ns", leg->remaining_duration},
+                {"completion_ns", leg->has_completion ? Json(leg->completion) : Json(nullptr)},
+                {"timer_scheduled", leg->timer_scheduled},
+                {"coarse_finished", leg->coarse_finished},
+                {"coarse_finish_ns", leg->coarse_finish_ns}};
+        }
+        for (const auto& item : gates_) {
+            Json waiters = Json::array();
+            for (const auto* leg : item.second.waiters) waiters.push_back(leg->spec->leg_id);
+            gates[item.first] = {{"occupied", item.second.occupied},
+                {"max_occupied", item.second.max_occupied},
+                {"waiting_leg_ids", std::move(waiters)}};
+        }
+        for (const auto& item : barriers_)
+            barriers[item.first] = {{"arrived", item.second.arrived},
+                {"passed_at_ns", item.second.has_passed_at
+                    ? Json(item.second.passed_at) : Json(nullptr)}};
+        Json active = Json::array(), events = Json::array();
+        for (const auto* leg : active_legs_) active.push_back(leg->spec->leg_id);
+        auto queue = events_;
+        while (!queue.empty()) {
+            const auto& e = queue.top();
+            events.push_back({{"time_ns", e.time_ns}, {"priority", e.priority},
+                {"producer", e.producer}, {"sequence", e.sequence},
+                {"kind", e.kind}, {"task_id", e.task_id}});
+            queue.pop();
+        }
+        return {{"schema", "native_coarse_projection_world_snapshot_v1"},
+            {"snapshot_version", 1}, {"frozen_input", input_.frozen_input_wire},
+            {"coarse_die_domains", std::move(domains)},
+            {"state", {{"now_ns", now_ns_}, {"status", last_status_},
+                {"events_processed", events_processed_}, {"integration_steps", integration_steps_},
+                {"forecast_events_processed", forecast_events_processed_},
+                {"sequence", sequence_}, {"event_budget_limit", event_budget_limit_},
+                {"conservation_check", conservation_check_},
+                {"last_step_budget_truncated", last_step_budget_truncated_},
+                {"analytic_enabled", analytic_enabled_}, {"legs", std::move(legs)},
+                {"gates", std::move(gates)}, {"barriers", std::move(barriers)},
+                {"active_leg_ids", std::move(active)}, {"events", std::move(events)}}}};
+    }
+
+    // Called only on a disposable world. Session publication follows complete
+    // validation, so a malformed snapshot cannot partially mutate its caller.
+    void restore_snapshot(const Json& snapshot) {
+        require_snapshot_profile();
+        const auto path = std::string("world_snapshot");
+        object(snapshot, path, {"schema", "snapshot_version", "frozen_input",
+            "kernel_contract", "state", "coarse_die_domains", "controls"});
+        if (snapshot.at("schema") != "native_coarse_projection_world_snapshot_v1" ||
+            uint_value(snapshot.at("snapshot_version"), path + ".snapshot_version") != 1)
+            fail(path, "incompatible schema/version");
+        if (snapshot.at("frozen_input") != input_.frozen_input_wire)
+            fail(path, "snapshot does not match the frozen input graph and hardware");
+        const auto& s = snapshot.at("state");
+        object(s, path + ".state", {"now_ns", "status", "events_processed",
+            "integration_steps", "forecast_events_processed", "sequence", "event_budget_limit", "conservation_check",
+            "last_step_budget_truncated", "analytic_enabled", "legs", "gates",
+            "barriers", "active_leg_ids", "events"});
+        const auto flag = [&](const Json& value) {
+            if (!value.is_boolean()) fail(path, "expected boolean");
+            return value.get<bool>();
+        };
+        const auto tick = [&](const Json& value) {
+            // Accept exact integer nanoseconds, including integer-valued
+            // doubles emitted by this native world's existing JSON surface.
+            return coarse_tick(number_value(value, path + ".timestamp"));
+        };
+        now_ns_ = static_cast<double>(tick(s.at("now_ns")));
+        if (now_ns_ < input_.now_ns) fail(path, "clock precedes frozen input");
+        last_status_ = string_value(s.at("status"), path + ".status");
+        if (last_status_ != kStatusWait && last_status_ != kStatusOk &&
+            last_status_ != kStatusBlocked && last_status_ != kStatusDegraded &&
+            last_status_ != kStatusUnavailable) fail(path, "unknown status");
+        events_processed_ = uint_value(s.at("events_processed"), path);
+        integration_steps_ = uint_value(s.at("integration_steps"), path);
+        forecast_events_processed_ = uint_value(s.at("forecast_events_processed"), path);
+        std::map<uint64_t, ProjectionEvent> expected_forecasts;
+        auto initial_events = events_;
+        uint64_t forecast_index = 0;
+        while (!initial_events.empty()) {
+            const auto event = initial_events.top();
+            initial_events.pop();
+            if (event.kind != 3) continue;
+            if (forecast_index++ < forecast_events_processed_) {
+                if (event.time_ns > now_ns_) fail(path, "future forecast cannot already be consumed");
+            } else {
+                if (event.time_ns < now_ns_) fail(path, "past forecast must already be consumed");
+                expected_forecasts.emplace(event.sequence, event);
+            }
+        }
+        if (forecast_events_processed_ > forecast_index ||
+            forecast_events_processed_ > events_processed_)
+            fail(path, "invalid processed forecast prefix");
+        sequence_ = uint_value(s.at("sequence"), path);
+        event_budget_limit_ = uint_value(s.at("event_budget_limit"), path);
+        conservation_check_ = flag(s.at("conservation_check"));
+        last_step_budget_truncated_ = flag(s.at("last_step_budget_truncated"));
+        analytic_enabled_ = flag(s.at("analytic_enabled"));
+        const auto keys_match = [&](const Json& wire, const auto& registry) {
+            if (!wire.is_object() || wire.size() != registry.size())
+                fail(path, "snapshot registry differs from frozen input");
+            for (const auto& entry : registry)
+                if (!wire.contains(entry.first)) fail(path, "missing registry key " + entry.first);
+        };
+        keys_match(snapshot.at("coarse_die_domains"), coarse_domains_);
+        for (auto& domain : coarse_domains_) {
+            const auto& wire = snapshot.at("coarse_die_domains").at(domain.first);
+            auto imported = NativeCoarseDieDomain::import_snapshot(
+                domain.first, input_.coarse_domains.at(domain.first), wire);
+            if (wire.at("runtime").at("now_ns") != tick(s.at("now_ns")))
+                fail(path, "domain and native clocks differ");
+            if (!wire.at("completion_queue").empty())
+                fail(path, "native world must consume domain completion records");
+            domain.second = std::move(imported);
+        }
+        keys_match(s.at("legs"), legs_);
+        active_legs_.clear();
+        active_by_resource_.clear();
+        for (auto* leg : leg_order_) {
+            const auto& wire = s.at("legs").at(leg->spec->leg_id);
+            object(wire, path + ".leg", {"state", "remaining_duration_ns", "completion_ns",
+                "timer_scheduled", "coarse_finished", "coarse_finish_ns"});
+            const auto name = string_value(wire.at("state"), path);
+            leg->state = -1;
+            for (int state = kPending; state <= kDone; ++state)
+                if (name == state_name(state)) leg->state = state;
+            if (leg->state < 0) fail(path, "unknown leg state");
+            leg->remaining_duration = static_cast<double>(tick(wire.at("remaining_duration_ns")));
+            leg->remaining_bytes = 0;
+            leg->has_completion = !wire.at("completion_ns").is_null();
+            leg->completion = leg->has_completion ? tick(wire.at("completion_ns")) : 0;
+            leg->timer_scheduled = flag(wire.at("timer_scheduled"));
+            leg->coarse_finished = flag(wire.at("coarse_finished"));
+            leg->coarse_finish_ns = tick(wire.at("coarse_finish_ns"));
+            leg->in_active_list = false;
+            if (leg->state == kPending && leg->timer_scheduled)
+                fail(path, "pending dependency cannot already own a ready timer");
+            if ((leg->state == kDone) != leg->has_completion ||
+                (leg->has_completion && leg->completion > now_ns_))
+                fail(path, "leg terminal state/clock mismatch");
+            if (!leg->coarse_domain.empty()) {
+                if (leg->state == kLatency || leg->remaining_duration != 0)
+                    fail(path, "typed coarse leg has legacy scalar service state");
+                const bool started = leg->state == kActive || leg->state == kDone;
+                const auto& entries = snapshot.at("coarse_die_domains")
+                    .at(leg->coarse_domain).at("entries");
+                const Json* binding = nullptr;
+                for (const auto& entry : entries)
+                    if (entry.at("leg_id") == leg->spec->leg_id) binding = &entry;
+                if (started != (binding != nullptr))
+                    fail(path, "native leg/domain binding mismatch");
+                if (binding) {
+                    const auto& owner = binding->at("owner");
+                    if (owner.at("request_id") != leg->coarse_owner.request_id ||
+                        owner.at("node_id") != leg->coarse_owner.node_id ||
+                        owner.at("execution_id") != leg->coarse_owner.execution_id ||
+                        owner.at("generation") != leg->coarse_owner.generation)
+                        fail(path, "native leg/domain Owner mismatch");
+                    if (leg->spec->die_plan) {
+                        if (binding->at("kind") != "plan_chain" ||
+                            binding->at("plans").size() != leg->spec->die_plan->coarse_plans.size())
+                            fail(path, "native leg/domain Plan chain mismatch");
+                        for (size_t i = 0; i < binding->at("plans").size(); ++i)
+                            if (binding->at("plans")[i] != coarse_die::plan_to_json(
+                                    *leg->spec->die_plan->coarse_plans[i]))
+                                fail(path, "native leg/domain immutable Plan differs");
+                    } else if (binding->at("kind") != "endpoint" ||
+                               binding->at("endpoint") != leg->spec->coarse_endpoint) {
+                        fail(path, "native leg/domain endpoint differs");
+                    }
+                    if (binding->at("cancelled") != false ||
+                        binding->at("terminal") != leg->coarse_finished ||
+                        (leg->coarse_finished && binding->at("finish_ns") != leg->coarse_finish_ns))
+                        fail(path, "native leg/domain terminal mismatch");
+                }
+                if ((!started && leg->coarse_finished) ||
+                    (!leg->coarse_finished && leg->coarse_finish_ns != 0) ||
+                    (leg->state == kDone && (!leg->coarse_finished ||
+                        leg->coarse_finish_ns != leg->completion)))
+                    fail(path, "invalid coarse completion state");
+            } else {
+                if (leg->coarse_finished || leg->coarse_finish_ns ||
+                    ((leg->state == kActive || leg->state == kLatency) &&
+                     leg->spec->duration_ns == 0) ||
+                    leg->remaining_duration > leg->spec->duration_ns ||
+                    (leg->state == kDone && leg->remaining_duration != 0) ||
+                    ((leg->state == kPending || leg->state == kTimer ||
+                      leg->state == kGateWait || leg->state == kLatency) &&
+                     leg->remaining_duration != leg->spec->duration_ns))
+                    fail(path, "invalid fixed timer progress");
+            }
+        }
+        // Reject bindings not owned by any native leg, including orphaned
+        // terminal records which would otherwise escape the active check.
+        for (const auto& domain : snapshot.at("coarse_die_domains").items())
+            for (const auto& entry : domain.value().at("entries")) {
+                const auto id = string_value(entry.at("leg_id"), path);
+                if (!legs_.count(id) || legs_.at(id)->coarse_domain != domain.key())
+                    fail(path, "domain contains an unknown native leg");
+            }
+        array(s.at("active_leg_ids"), path);
+        std::set<std::string> active_seen;
+        for (const auto& id_wire : s.at("active_leg_ids")) {
+            const auto id = string_value(id_wire, path);
+            if (!legs_.count(id) || !active_seen.insert(id).second ||
+                legs_.at(id)->state != kActive || !legs_.at(id)->coarse_domain.empty())
+                fail(path, "invalid ordered fixed timer active list");
+            active_list_add(legs_.at(id).get());
+        }
+        for (const auto* leg : leg_order_)
+            if (leg->coarse_domain.empty() && leg->state == kActive &&
+                !active_seen.count(leg->spec->leg_id))
+                fail(path, "active fixed timer missing from active list");
+        rebuild_snapshot_derivatives();
+        keys_match(s.at("gates"), gates_);
+        std::set<std::string> waiting_seen;
+        for (auto& item : gates_) {
+            const auto& wire = s.at("gates").at(item.first);
+            object(wire, path + ".gate", {"occupied", "max_occupied", "waiting_leg_ids"});
+            auto& gate = item.second;
+            gate.occupied = uint_value(wire.at("occupied"), path);
+            gate.max_occupied = uint_value(wire.at("max_occupied"), path);
+            if (gate.occupied > gate.max_occupied ||
+                gate.max_occupied > gate.spec->capacity_units ||
+                gate.max_occupied < gate.spec->initial_occupied)
+                fail(path, "gate occupancy exceeds capacity/history");
+            // Wide sums avoid overflow when many completed leases cancel.
+            unsigned __int128 acquired = gate.spec->initial_occupied, released = 0;
+            for (const auto* leg : leg_order_) {
+                if (leg->state == kActive || leg->state == kLatency || leg->state == kDone)
+                    for (const auto& lease : leg->spec->acquires)
+                        if (lease.gate_id == item.first) acquired += lease.units;
+                if (leg->state == kDone)
+                    for (const auto& lease : leg->spec->releases)
+                        if (lease.gate_id == item.first) released += lease.units;
+            }
+            if (released > acquired || acquired - released != gate.occupied)
+                fail(path, "gate leases do not reconcile with native leg states");
+            gate.waiters.clear();
+            array(wire.at("waiting_leg_ids"), path);
+            for (const auto& id_wire : wire.at("waiting_leg_ids")) {
+                const auto id = string_value(id_wire, path);
+                if (!legs_.count(id) || !waiting_seen.insert(id).second ||
+                    legs_.at(id)->state != kGateWait)
+                    fail(path, "invalid gate waiter");
+                auto* leg = legs_.at(id).get();
+                if (std::none_of(leg->spec->acquires.begin(), leg->spec->acquires.end(),
+                    [&](const auto& lease) { return lease.gate_id == item.first; }))
+                    fail(path, "waiter does not acquire its queue gate");
+                gate.waiters.push_back(leg);
+            }
+        }
+        for (const auto* leg : leg_order_) {
+            if ((leg->state == kGateWait) != (waiting_seen.count(leg->spec->leg_id) != 0))
+                fail(path, "gate wait state and queue differ");
+            if (leg->state == kGateWait &&
+                std::none_of(leg->spec->acquires.begin(), leg->spec->acquires.end(),
+                    [&](const auto& lease) {
+                        const auto& other = gates_.at(lease.gate_id);
+                        return lease.units > other.spec->capacity_units - other.occupied;
+                    }))
+                fail(path, "gate waiter is eligible and should already have activated");
+        }
+        validate_snapshot_barriers(s.at("barriers"));
+        // Barriers are completed graph nodes; reconstruct dependency counts
+        // after their validation rather than trusting duplicated wire counts.
+        rebuild_snapshot_dependencies();
+        events_ = {};
+        array(s.at("events"), path);
+        std::set<uint64_t> event_sequences;
+        std::map<std::string, unsigned> ready_events, latency_events;
+        for (const auto& wire : s.at("events")) {
+            object(wire, path + ".event", {"time_ns", "priority", "producer", "sequence",
+                "kind", "task_id"});
+            ProjectionEvent event;
+            event.time_ns = static_cast<double>(tick(wire.at("time_ns")));
+            const auto kind = uint_value(wire.at("kind"), path);
+            const auto priority = uint_value(wire.at("priority"), path);
+            if (kind < 1 || kind > 3 || priority != kind) fail(path, "invalid event kind/priority");
+            event.kind = static_cast<int>(kind);
+            event.priority = static_cast<int>(priority);
+            event.producer = string_value(wire.at("producer"), path);
+            event.task_id = string_value(wire.at("task_id"), path, true);
+            event.sequence = uint_value(wire.at("sequence"), path);
+            if (event.time_ns < now_ns_ || event.sequence >= sequence_ ||
+                !event_sequences.insert(event.sequence).second)
+                fail(path, "event clock/sequence mismatch");
+            if (kind == 3) {
+                const auto expected = expected_forecasts.find(event.sequence);
+                if (event.producer != "forecast" || !event.task_id.empty() ||
+                    expected == expected_forecasts.end() ||
+                    expected->second.time_ns != event.time_ns)
+                    fail(path, "unknown forecast placeholder");
+                expected_forecasts.erase(expected);
+            } else {
+                if (!legs_.count(event.task_id) || event.producer != event.task_id)
+                    fail(path, "unknown event task/producer");
+                const auto* leg = legs_.at(event.task_id).get();
+                if (kind == 2) {
+                    const auto ready = leg->spec->has_ready_at
+                        ? leg->spec->ready_at_ns : work_ready(leg->work_id);
+                    if (leg->state != kTimer || !leg->timer_scheduled ||
+                        event.time_ns != ready || ++ready_events[event.task_id] != 1)
+                        fail(path, "ready event differs from native timer");
+                } else if (leg->state != kLatency || !leg->coarse_domain.empty() ||
+                           !leg->spec->latency_ns || ++latency_events[event.task_id] != 1) {
+                    fail(path, "latency event differs from fixed task state");
+                } else if (event.time_ns < leg->spec->latency_ns ||
+                           event.time_ns - leg->spec->latency_ns > now_ns_ ||
+                           event.time_ns - leg->spec->latency_ns < snapshot_ready_floor(*leg)) {
+                    fail(path, "latency deadline is inconsistent with task readiness");
+                } else if (leg->spec->acquires.empty() &&
+                           event.time_ns - leg->spec->latency_ns != snapshot_ready_floor(*leg)) {
+                    fail(path, "ungated latency deadline differs from exact readiness");
+                }
+            }
+            events_.push(std::move(event));
+        }
+        for (const auto* leg : leg_order_) {
+            if ((leg->state == kTimer) != (ready_events[leg->spec->leg_id] == 1) ||
+                (leg->state == kLatency) != (latency_events[leg->spec->leg_id] == 1))
+                fail(path, "native timer missing its event");
+            if (leg->state == kGateWait && snapshot_ready_floor(*leg) > now_ns_)
+                fail(path, "gate waiter precedes task readiness");
+            if (leg->state != kActive && leg->state != kDone) continue;
+            const auto earliest = snapshot_ready_floor(*leg);
+            if (!leg->coarse_domain.empty()) {
+                const auto progress = coarse_domains_.at(leg->coarse_domain)
+                    ->progress(leg->spec->leg_id);
+                const Json* first = nullptr;
+                if (!progress.at("completed_plan_progress").empty())
+                    first = &progress.at("completed_plan_progress").front();
+                else if (!progress.at("active_execution").is_null())
+                    first = &progress.at("active_execution");
+                else first = &progress.at("last_progress");
+                if (first->is_null() || tick(first->at("issue_ns")) < earliest)
+                    fail(path, "physical coarse issue precedes native graph readiness");
+                if (leg->spec->acquires.empty() && tick(first->at("issue_ns")) != earliest)
+                    fail(path, "ungated coarse issue differs from exact native readiness");
+            } else {
+                const auto end = leg->state == kDone ? leg->completion
+                    : static_cast<uint64_t>(now_ns_);
+                const auto service = coarse_tick(leg->state == kDone
+                    ? leg->spec->duration_ns
+                    : leg->spec->duration_ns - leg->remaining_duration);
+                // activate() completes zero-service fixed tasks immediately,
+                // before scheduling their optional latency timer.
+                const auto latency = leg->spec->duration_ns > 0
+                    ? leg->spec->latency_ns : uint64_t{0};
+                if (service > end || latency > end - service ||
+                    end - service - latency < earliest)
+                    fail(path, "fixed task service precedes native graph readiness");
+                if (leg->spec->acquires.empty() && end - service - latency != earliest)
+                    fail(path, "ungated fixed task service differs from exact readiness");
+            }
+        }
+        if (!expected_forecasts.empty())
+            fail(path, "snapshot omitted an unconsumed known arrival placeholder");
     }
 
     void set_clock(double time_ns) {
@@ -1868,12 +2244,99 @@ class NativeProjectionWorld final {
     uint64_t sequence_ = 0;
     uint64_t events_processed_ = 0;
     uint64_t integration_steps_ = 0;
+    // One prefix count distinguishes consumed same-tick forecast placeholders
+    // from arrivals still pending after controlled integration/budget limits.
+    uint64_t forecast_events_processed_ = 0;
     double bytes_served_total_ = 0.0;
     std::string last_status_ = kStatusWait;
     bool conservation_check_ = true;
     bool last_step_budget_truncated_ = false;
     bool dependencies_wired_ = false;
     bool analytic_enabled_ = false;
+
+    void require_snapshot_profile() const {
+        if (coarse_domains_.empty() || !input_.pipelines.empty() ||
+            input_.frozen_input_wire.is_null() || effective_window_limit_ != 1)
+            fail("world_snapshot", "unsupported_projection_state: snapshot requires a frozen native coarse-only graph");
+    }
+
+    void rebuild_snapshot_derivatives() {
+        for (const auto& work : work_legs_) {
+            uint64_t completed = 0, maximum = 0;
+            for (const auto* leg : work.second) {
+                if (leg->has_completion) {
+                    ++completed;
+                    maximum = std::max(maximum, leg->completion);
+                }
+            }
+            work_completed_leg_count_.at(work.first) = completed;
+            work_max_completion_.at(work.first) = maximum;
+            work_remaining_.at(work.first) = work.second.size() - completed;
+            work_done_at_.at(work.first) = completed == work.second.size()
+                ? std::optional<uint64_t>(maximum) : std::nullopt;
+        }
+        bytes_served_total_ = 0.0; // All physical bytes belong to coarse Runtime.
+    }
+
+    void validate_snapshot_barriers(const Json& wire) {
+        if (!wire.is_object() || wire.size() != barriers_.size())
+            fail("world_snapshot", "barrier registry differs from frozen graph");
+        for (auto& item : barriers_) {
+            if (!wire.contains(item.first)) fail("world_snapshot", "missing barrier");
+            const auto& value = wire.at(item.first);
+            object(value, "world_snapshot.barrier", {"arrived", "passed_at_ns"});
+            array(value.at("arrived"), "world_snapshot.barrier.arrived");
+            std::set<std::string> arrived;
+            for (const auto& id : value.at("arrived"))
+                if (!arrived.insert(string_value(id, "world_snapshot.barrier")).second)
+                    fail("world_snapshot", "duplicate barrier arrival");
+            std::set<std::string> expected;
+            uint64_t maximum = 0;
+            for (const auto& id : item.second.spec->signallers)
+                if (legs_.at(id)->state == kDone) {
+                    expected.insert(id);
+                    maximum = std::max(maximum, legs_.at(id)->completion);
+                }
+            const bool passed = !expected.empty() &&
+                expected.size() == item.second.spec->signallers.size();
+            if (arrived != expected || value.at("passed_at_ns").is_null() == passed)
+                fail("world_snapshot", "barrier arrivals/terminal state differ from signallers");
+            if (passed && (uint_value(value.at("passed_at_ns"), "world_snapshot.barrier") != maximum))
+                fail("world_snapshot", "barrier completion clock differs from signallers");
+            item.second.arrived = std::move(arrived);
+            item.second.has_passed_at = passed;
+            item.second.passed_at = passed ? maximum : 0;
+        }
+    }
+
+    void rebuild_snapshot_dependencies() {
+        for (auto& item : deps_remaining_) item.second = 0;
+        for (const auto& source : dependents_)
+            if (!node_is_completed(source.first))
+                for (const auto& target : source.second) ++deps_remaining_.at(target);
+        for (const auto* leg : leg_order_)
+            if ((leg->state == kPending) != (deps_remaining_.at(leg->spec->leg_id) != 0))
+                fail("world_snapshot", "native leg state contradicts graph dependencies");
+    }
+
+    uint64_t snapshot_ready_floor(const RuntimeLeg& leg) const {
+        uint64_t ready = std::max(coarse_tick(input_.now_ns),
+            leg.spec->has_ready_at ? leg.spec->ready_at_ns : work_ready(leg.work_id));
+        auto deps = leg.spec->deps;
+        if (deps.empty() && !leg.spec->has_ready_at)
+            for (const auto& work : work_specs_.at(leg.work_id)->depends_on_work)
+                deps.push_back(std::string(kWorkNodePrefix) + work);
+        for (const auto& dep : deps) {
+            if (!node_is_completed(dep))
+                fail("world_snapshot", "started task has incomplete dependency");
+            if (has_prefix(dep, kWorkNodePrefix))
+                ready = std::max(ready, *work_done_at_.at(
+                    dep.substr(std::char_traits<char>::length(kWorkNodePrefix))));
+            else if (barriers_.count(dep)) ready = std::max(ready, barriers_.at(dep).passed_at);
+            else ready = std::max(ready, legs_.at(dep)->completion);
+        }
+        return ready;
+    }
 
     static uint64_t coarse_tick(double value) {
         // The legacy network world uses doubles. Keep the additive bridge in
@@ -2007,6 +2470,9 @@ class NativeProjectionWorld final {
         check_acyclic();
         for (const auto& work : input_.background_works) {
             for (auto* leg : work_legs_.at(work.work_id)) {
+                // A zero-service predecessor can activate this leg through a
+                // dependency callback before the initial scan reaches it.
+                if (!coarse_domains_.empty() && leg->state != kPending) continue;
                 if (leg->spec->in_service) enter_service(leg);
                 else if (deps_remaining_.at(leg->spec->leg_id) == 0) on_deps_satisfied(leg);
             }
@@ -2247,7 +2713,7 @@ class NativeProjectionWorld final {
     void try_activate(RuntimeLeg* leg) {
         for (const auto& lease : leg->spec->acquires) {
             const auto& gate = gates_.at(lease.gate_id);
-            if (gate.occupied + lease.units > gate.spec->capacity_units) {
+            if (lease.units > gate.spec->capacity_units - gate.occupied) {
                 auto& waiters = gates_.at(lease.gate_id).waiters;
                 if (std::find(waiters.begin(), waiters.end(), leg) == waiters.end()) waiters.push_back(leg);
                 leg->state = kGateWait;
@@ -2367,6 +2833,10 @@ class NativeProjectionWorld final {
             earliest = events_.top().time_ns;
         }
         if (coarse_pending_completion()) earliest = now_ns_;
+        if (!coarse_domains_.empty())
+            for (const auto* leg : active_legs_)
+                if (leg->remaining_bytes == 0 && leg->remaining_duration == 0)
+                    earliest = now_ns_;
         for (const auto& domain : coarse_domains_) {
             const auto next = domain.second->next_event();
             if (next && (!earliest || static_cast<double>(*next) < *earliest))
@@ -2457,7 +2927,10 @@ class NativeProjectionWorld final {
         std::vector<RuntimeLeg*> done;
         for (const auto* leg : active_legs_) {
             const auto found = f.find(leg->spec->leg_id);
-            if (found != f.end() && found->second.completion <= time_ns) done.push_back(const_cast<RuntimeLeg*>(leg));
+            if ((found != f.end() && found->second.completion <= time_ns) ||
+                (!coarse_domains_.empty() && leg->remaining_bytes == 0 &&
+                 leg->remaining_duration == 0))
+                done.push_back(const_cast<RuntimeLeg*>(leg));
         }
         for (auto* leg : leg_order_)
             if (leg->coarse_finished && leg->state != kDone && leg->coarse_finish_ns <= time_ns)
@@ -2498,6 +2971,7 @@ class NativeProjectionWorld final {
             const auto event = events_.top();
             events_.pop();
             ++events_processed_;
+            if (event.kind == 3) ++forecast_events_processed_;
             if (event.kind == 1) {
                 const auto found = legs_.find(event.task_id);
                 if (found == legs_.end()) continue; // stale event for a retired virtual leg
@@ -2731,7 +3205,7 @@ class NativeProjectionWorld final {
                 bool fits = true;
                 for (const auto& lease : leg->spec->acquires) {
                     const auto& other = gates_.at(lease.gate_id);
-                    if (other.occupied + lease.units > other.spec->capacity_units) {
+                    if (lease.units > other.spec->capacity_units - other.occupied) {
                         fits = false;
                         break;
                     }
@@ -2799,6 +3273,14 @@ class NativeProjectionWorld final {
             if (gate.occupied < lease.units) fail(gate.spec->gate_id, "released below zero");
             gate.occupied -= lease.units;
             wake_gate_waiters(gate);
+            if (!coarse_domains_.empty()) {
+                // A waiter can remain in an earlier gate's queue after that
+                // gate becomes free but another acquire is still blocked.
+                // Recheck existing queues on every release; preserve their
+                // saved FIFO order and avoid a second scheduling model.
+                for (auto& other : gates_)
+                    if (&other.second != &gate) wake_gate_waiters(other.second);
+            }
         }
         if (leg->spec->has_signal_barrier) {
             auto& barrier = barriers_.at(leg->spec->signals_barrier);
@@ -3457,6 +3939,40 @@ nlohmann::json NativeProjectionWorldSession::operation(const nlohmann::json& req
     if (op == "inspect") {
         object(request, "world_operation", {"operation"});
         return impl_->world->inspect();
+    }
+    if (op == "export_snapshot") {
+        object(request, "world_operation", {"operation"});
+        Json snapshot = impl_->world->export_snapshot();
+        snapshot["kernel_contract"] = impl_->context->kernel_contract();
+        snapshot["controls"] = {{"event_budget", impl_->event_budget},
+            {"conservation_check", impl_->conservation_check}};
+        return snapshot;
+    }
+    if (op == "import_snapshot") {
+        object(request, "world_operation", {"operation", "snapshot"});
+        const auto& snapshot = request.at("snapshot");
+        object(snapshot, "world_snapshot", {"schema", "snapshot_version", "frozen_input",
+            "kernel_contract", "state", "coarse_die_domains", "controls"});
+        if (snapshot.at("kernel_contract") != impl_->context->kernel_contract())
+            fail("world_snapshot", "snapshot kernel contract differs from frozen context");
+        const auto& controls = snapshot.at("controls");
+        object(controls, "world_snapshot.controls", {"event_budget", "conservation_check"});
+        const auto budget = uint_value(controls.at("event_budget"), "world_snapshot.event_budget");
+        if (!controls.at("conservation_check").is_boolean())
+            fail("world_snapshot", "conservation_check must be boolean");
+        const auto conservation = controls.at("conservation_check").get<bool>();
+        auto candidate = std::make_unique<NativeProjectionWorld>(
+            impl_->input, impl_->context->contract_ptr(), 1, budget);
+        candidate->restore_snapshot(snapshot);
+        // A run may override its event budget, but conservation mode is a
+        // session control shared by both the world and the next reset.
+        if (snapshot.at("state").at("conservation_check") != conservation)
+            fail("world_snapshot", "world and session conservation controls differ");
+        Json out = candidate->inspect();
+        impl_->world = std::move(candidate);
+        impl_->event_budget = budget;
+        impl_->conservation_check = conservation;
+        return out;
     }
     if (op == "step") {
         object(request, "world_operation", {"operation"});

@@ -56,6 +56,47 @@ Owner test_owner(std::uint64_t id) {
   return owner;
 }
 
+json owner_wire(const Owner& owner) {
+  return {{"request_id", owner.request_id},
+          {"node_id", owner.node_id},
+          {"execution_id", owner.execution_id},
+          {"generation", owner.generation},
+          {"key", owner.key()}};
+}
+
+std::unique_ptr<NativeCoarseDieDomain> import_domain(
+    const json& snapshot, const Hardware& hardware,
+    const std::string& resource_key = "hbm:0") {
+  return NativeCoarseDieDomain::import_snapshot(
+      resource_key, std::make_shared<const Hardware>(hardware), snapshot);
+}
+
+void require_bad_domain_snapshot(const json& snapshot,
+                                 const Hardware& hardware,
+                                 const std::string& message) {
+  bool rejected = false;
+  try {
+    (void)import_domain(snapshot, hardware);
+  } catch (const std::exception&) {
+    rejected = true;
+  }
+  require(rejected, message);
+}
+
+json endpoint_spec(std::uint64_t endpoint_id,
+                   std::uint64_t transaction_id,
+                   std::uint64_t bytes = 10) {
+  return {{"endpoint_id", endpoint_id},
+          {"transaction_id", transaction_id},
+          {"owner_kind", "comm"},
+          {"direction", "read"},
+          {"physical_bytes", bytes},
+          {"row_fraction", {1.0, 0.0}},
+          {"path_class", "hbm_to_edge"},
+          {"eta_hbm", 1.0},
+          {"route", {{"internal_route", false}}}};
+}
+
 std::shared_ptr<const Plan> hbm_plan(const Hardware& hardware,
                                      std::uint64_t id,
                                      std::uint64_t bytes,
@@ -330,6 +371,182 @@ void fork_copies_runtime_and_chain_bindings_without_aliasing() {
           "runtime export uses canonical coarse_die snapshot wire format");
 }
 
+void wire_snapshot_roundtrips_fractional_live_progress() {
+  const Hardware hardware = test_hardware(2.5e9);
+  NativeCoarseDieDomain domain("hbm:0", hardware);
+  domain.begin_plan_chain("fractional",
+                          {hbm_plan(hardware, 81, 4, "fractional")},
+                          test_owner(81), 0);
+  domain.advance_to(1);
+  const json before = domain.progress("fractional");
+  const double progress = before.at("active_execution").at("activities")
+                              .at(0).at("progress").get<double>();
+  require(std::abs(progress - 0.625) < 1.0e-12,
+          "live snapshot fixture has fractional native progress");
+
+  const json snapshot = json::parse(domain.export_snapshot().dump());
+  require(snapshot.at("schema") == "native_coarse_die_domain_snapshot_v1",
+          "domain export uses the versioned wrapper schema");
+  auto restored = import_domain(snapshot, hardware);
+  require(restored->progress("fractional") == before,
+          "wire import preserves current fractional Runtime progress");
+  require(restored->export_snapshot() == snapshot,
+          "wire export after import preserves the full live wrapper snapshot");
+  restored->advance_to(2);
+  require(domain.progress("fractional").at("runtime_now_ns") == 1,
+          "restored Runtime clock advances independently");
+  require(restored->progress("fractional").at("runtime_now_ns") == 2,
+          "wire import returns an independently mutable Runtime");
+}
+
+void wire_snapshot_preserves_chain_boundary_and_completion_consumption() {
+  const Hardware hardware = test_hardware();
+  NativeCoarseDieDomain domain("hbm:0", hardware);
+  domain.begin_plan_chain("boundary",
+                          {hbm_plan(hardware, 82, 3, "boundary-first"),
+                           hbm_plan(hardware, 83, 2, "boundary-second")},
+                          test_owner(82), 0);
+  domain.advance_to(3);
+  const json boundary = domain.export_snapshot();
+  auto restored_boundary = import_domain(boundary, hardware);
+  const json boundary_progress = restored_boundary->progress("boundary");
+  require(boundary_progress.at("plan_index") == 1 &&
+              boundary_progress.at("completed_plan_progress").size() == 1 &&
+              boundary_progress.at("active_execution").at("issue_ns") == 3,
+          "snapshot at a chain boundary retains the next Plan's exact issue tick");
+
+  restored_boundary->advance_to(5);
+  const json pending = restored_boundary->export_snapshot();
+  require(pending.at("completion_queue").size() == 1,
+          "terminal chain snapshot retains its unconsumed completion");
+  auto restored_pending = import_domain(pending, hardware);
+  const auto completion = restored_pending->take_completions();
+  require(completion.size() == 1 && completion.front().leg_id == "boundary" &&
+              completion.front().finish_ns == 5 &&
+              !completion.front().cancelled,
+          "unconsumed chain completion survives wire import exactly once");
+
+  const json consumed = restored_pending->export_snapshot();
+  require(consumed.at("completion_queue").empty(),
+          "consumed terminal is represented by an empty queue");
+  auto restored_consumed = import_domain(consumed, hardware);
+  require(restored_consumed->take_completions().empty(),
+          "import does not recreate an already consumed completion");
+  require(restored_consumed->progress("boundary").at("finish_ns") == 5,
+          "consumed completion does not discard retained terminal progress");
+  require(restored_consumed->retire("boundary"),
+          "imported consumed terminal can be retired");
+}
+
+void wire_snapshot_preserves_live_endpoint_transaction_refcounts() {
+  const Hardware hardware = test_hardware();
+  NativeCoarseDieDomain domain("hbm:0", hardware);
+  const Owner owner = test_owner(84);
+  domain.begin_endpoint("endpoint-a", endpoint_spec(840, 840), owner, 0);
+  domain.begin_endpoint("endpoint-b", endpoint_spec(841, 840), owner, 0);
+  const json snapshot = domain.export_snapshot();
+  auto restored = import_domain(snapshot, hardware);
+  const json bindings = restored->export_snapshot().at("endpoint_bindings");
+  require(bindings.at("endpoint_ids").size() == 2 &&
+              bindings.at("transactions").size() == 1 &&
+              bindings.at("transactions").at(0).at("live_endpoints") == 2,
+          "same-owner endpoints restore their shared transaction refcount");
+  require(restored->progress("endpoint-a").at("active_execution").is_object() &&
+              restored->progress("endpoint-b").at("active_execution").is_object(),
+          "both imported endpoints remain attached to live Runtime handles");
+}
+
+void wire_snapshot_import_rejects_unmatched_handles_and_mismatched_plans() {
+  const Hardware hardware = test_hardware();
+  NativeCoarseDieDomain domain("hbm:0", hardware);
+  domain.begin_plan_chain("bound", {hbm_plan(hardware, 85, 5, "bound")},
+                          test_owner(85), 0);
+  const json original = domain.export_snapshot();
+
+  json orphaned_wrapper = original;
+  orphaned_wrapper["runtime"]["executions"].clear();
+  require_bad_domain_snapshot(orphaned_wrapper, hardware,
+                              "wrapper handle without Runtime execution is rejected");
+
+  json mismatched_plan = original;
+  mismatched_plan["entries"][0]["plans"][0] = coarse_die::plan_to_json(
+      *hbm_plan(hardware, 86, 7, "different-valid-plan"));
+  require_bad_domain_snapshot(mismatched_plan, hardware,
+                              "valid but cursor-mismatched Plan is rejected");
+
+  json mismatched_owner = original;
+  mismatched_owner["entries"][0]["owner"] = owner_wire(test_owner(999));
+  require_bad_domain_snapshot(mismatched_owner, hardware,
+                              "valid but Runtime-mismatched owner is rejected");
+
+  require(domain.export_snapshot() == original,
+          "failed imports leave the source domain unchanged");
+}
+
+void wire_snapshot_import_rejects_binding_and_completion_tampering() {
+  const Hardware hardware = test_hardware();
+  NativeCoarseDieDomain endpoints("hbm:0", hardware);
+  const Owner owner = test_owner(87);
+  endpoints.begin_endpoint("endpoint-a", endpoint_spec(870, 870), owner, 0);
+  endpoints.begin_endpoint("endpoint-b", endpoint_spec(871, 870), owner, 0);
+  json wrong_refcount = endpoints.export_snapshot();
+  wrong_refcount["endpoint_bindings"]["transactions"][0]["live_endpoints"] = 1;
+  require_bad_domain_snapshot(wrong_refcount, hardware,
+                              "endpoint transaction refcount mismatch is rejected");
+  json wrong_tx_owner = endpoints.export_snapshot();
+  const json impostor_owner = owner_wire(test_owner(999));
+  wrong_tx_owner["endpoint_bindings"]["transactions"][0]["owner"] =
+      impostor_owner;
+  wrong_tx_owner["runtime"]["transaction_owners"][0]["owner"] =
+      impostor_owner;
+  require_bad_domain_snapshot(wrong_tx_owner, hardware,
+                              "endpoint transaction owner mismatch is rejected");
+
+  NativeCoarseDieDomain finished("hbm:0", hardware);
+  finished.begin_plan_chain("done", {hbm_plan(hardware, 88, 2, "done")},
+                            test_owner(88), 0);
+  finished.advance_to(2);
+  json duplicate_completion = finished.export_snapshot();
+  duplicate_completion["completion_queue"].push_back(
+      duplicate_completion["completion_queue"][0]);
+  require_bad_domain_snapshot(duplicate_completion, hardware,
+                              "duplicate terminal completion is rejected");
+
+  const json raw_runtime = finished.export_runtime_snapshot();
+  require_bad_domain_snapshot(raw_runtime, hardware,
+                              "raw Runtime snapshot cannot masquerade as wrapper state");
+
+  json nonfinite_counter = finished.export_snapshot();
+  nonfinite_counter["runtime"]["stats"]["hbm_busy_ns"] = "nan";
+  require_bad_domain_snapshot(nonfinite_counter, hardware,
+                              "nonfinite exact Runtime counter is rejected");
+}
+
+void wire_snapshot_preserves_cancelled_chain_and_pending_completion() {
+  const Hardware hardware = test_hardware();
+  NativeCoarseDieDomain domain("hbm:0", hardware);
+  domain.begin_plan_chain("cancel-after-first",
+                          {hbm_plan(hardware, 89, 2, "cancel-first"),
+                           hbm_plan(hardware, 90, 10, "cancel-second")},
+                          test_owner(89), 0);
+  domain.advance_to(3);
+  require(domain.cancel("cancel-after-first", 3),
+          "second chain Plan can be cancelled after prior service");
+  const json snapshot = domain.export_snapshot();
+  auto restored = import_domain(snapshot, hardware);
+  const json progress = restored->progress("cancel-after-first");
+  require(progress.at("terminal").get<bool>() &&
+              progress.at("cancelled").get<bool>() &&
+              progress.at("plan_index") == 1 &&
+              progress.at("completed_plan_progress").size() == 1 &&
+              progress.at("last_progress").at("cancelled").get<bool>(),
+          "cancelled chain restores successful prefix plus cancelled last progress");
+  const auto completions = restored->take_completions();
+  require(completions.size() == 1 && completions.front().cancelled &&
+              completions.front().finish_ns == 3,
+          "cancelled wrapper completion survives import exactly once");
+}
+
 }  // namespace
 
 int main() {
@@ -342,6 +559,12 @@ int main() {
     same_tick_chain_dispatch_is_stable_across_registration_order();
     exact_json_nanosecond_boundary_is_enforced();
     fork_copies_runtime_and_chain_bindings_without_aliasing();
+    wire_snapshot_roundtrips_fractional_live_progress();
+    wire_snapshot_preserves_chain_boundary_and_completion_consumption();
+    wire_snapshot_preserves_live_endpoint_transaction_refcounts();
+    wire_snapshot_import_rejects_unmatched_handles_and_mismatched_plans();
+    wire_snapshot_import_rejects_binding_and_completion_tampering();
+    wire_snapshot_preserves_cancelled_chain_and_pending_completion();
     std::cout << "PASS native_coarse_die_domain_test\n";
     return 0;
   } catch (const std::exception& error) {

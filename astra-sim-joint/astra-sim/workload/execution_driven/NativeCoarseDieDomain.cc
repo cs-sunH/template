@@ -1,6 +1,9 @@
 #include "NativeCoarseDieDomain.hh"
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -8,6 +11,8 @@ namespace AstraSim::ExecutionDriven {
 namespace {
 
 constexpr std::uint64_t kMaxExactJsonNs = 9007199254740991ULL;
+constexpr const char* kDomainSnapshotSchema =
+    "native_coarse_die_domain_snapshot_v1";
 
 void require_leg_id(const std::string& leg_id) {
   if (leg_id.empty()) {
@@ -29,6 +34,160 @@ bool same_owner(const coarse_die::Owner& left,
          left.node_id == right.node_id &&
          left.execution_id == right.execution_id &&
          left.generation == right.generation;
+}
+
+std::uint64_t parse_u64(const nlohmann::json& value, const char* field) {
+  if (!value.is_number_integer()) {
+    throw std::invalid_argument(std::string("invalid_snapshot: ") + field +
+                                " must be an integer");
+  }
+  if (value.is_number_unsigned()) return value.get<std::uint64_t>();
+  const std::int64_t signed_value = value.get<std::int64_t>();
+  if (signed_value < 0) {
+    throw std::invalid_argument(std::string("invalid_snapshot: ") + field +
+                                " must be nonnegative");
+  }
+  return static_cast<std::uint64_t>(signed_value);
+}
+
+std::uint64_t parse_timestamp(const nlohmann::json& value,
+                             const char* field) {
+  const std::uint64_t timestamp = parse_u64(value, field);
+  if (timestamp > kMaxExactJsonNs) {
+    throw std::invalid_argument(std::string("invalid_snapshot: ") + field +
+                                " exceeds the exact JSON nanosecond range");
+  }
+  return timestamp;
+}
+
+coarse_die::Owner parse_owner(const nlohmann::json& value) {
+  if (!value.is_object() || value.size() != 5 ||
+      !value.contains("request_id") || !value.contains("node_id") ||
+      !value.contains("execution_id") || !value.contains("generation") ||
+      !value.contains("key")) {
+    throw std::invalid_argument(
+        "invalid_snapshot: owner must contain its four ids and derived key");
+  }
+  coarse_die::Owner owner;
+  owner.request_id = parse_u64(value.at("request_id"), "owner.request_id");
+  owner.node_id = parse_u64(value.at("node_id"), "owner.node_id");
+  owner.execution_id =
+      parse_u64(value.at("execution_id"), "owner.execution_id");
+  owner.generation = parse_u64(value.at("generation"), "owner.generation");
+  if (owner.generation == 0 || !value.at("key").is_string() ||
+      value.at("key").get<std::string>() != owner.key()) {
+    throw std::invalid_argument(
+        "invalid_snapshot: owner generation or derived key is invalid");
+  }
+  return owner;
+}
+
+void require_finite_json(const nlohmann::json& value, const char* field) {
+  if (value.is_number_float() && !std::isfinite(value.get<double>())) {
+    throw std::invalid_argument(std::string("invalid_snapshot: nonfinite ") +
+                                field);
+  }
+  if (value.is_array()) {
+    for (const auto& child : value) require_finite_json(child, field);
+  } else if (value.is_object()) {
+    for (const auto& [key, child] : value.items()) {
+      (void)key;
+      require_finite_json(child, field);
+    }
+  }
+}
+
+void require_keys(const nlohmann::json& value,
+                  std::initializer_list<const char*> keys,
+                  const char* field) {
+  if (!value.is_object() || value.size() != keys.size()) {
+    throw std::invalid_argument(std::string("invalid_snapshot: ") + field +
+                                " has an invalid object shape");
+  }
+  for (const char* key : keys) {
+    if (!value.contains(key)) {
+      throw std::invalid_argument(std::string("invalid_snapshot: ") + field +
+                                  " is missing " + key);
+    }
+  }
+}
+
+bool same_owner_json(const nlohmann::json& value,
+                     const coarse_die::Owner& expected) {
+  try {
+    const auto actual = parse_owner(value);
+    return same_owner(actual, expected);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+void validate_progress(const nlohmann::json& progress,
+                       const coarse_die::Owner& owner,
+                       const std::string& plan_fingerprint,
+                       const std::string& hardware_fingerprint,
+                       std::uint64_t expected_handle,
+                       std::uint64_t expected_launch_ns,
+                       bool terminal, bool cancelled,
+                       std::optional<std::uint64_t> finish_ns,
+                       std::uint64_t now_ns,
+                       std::set<std::uint64_t>& observed_handles) {
+  require_finite_json(progress, "execution progress");
+  if (!progress.is_object() || !progress.contains("handle") ||
+      !progress.contains("owner") || !progress.contains("state") ||
+      !progress.contains("issue_ns") || !progress.contains("ready_ns") ||
+      !progress.contains("finish_ns") || !progress.contains("terminal") ||
+      !progress.contains("cancelled") ||
+      !progress.contains("plan_fingerprint") ||
+      !progress.contains("hardware_fingerprint")) {
+    throw std::invalid_argument(
+        "invalid_snapshot: retained progress is incomplete");
+  }
+  const std::uint64_t handle = parse_u64(progress.at("handle"),
+                                         "progress.handle");
+  const std::uint64_t issue_ns =
+      parse_timestamp(progress.at("issue_ns"), "progress.issue_ns");
+  const std::uint64_t ready_ns =
+      parse_timestamp(progress.at("ready_ns"), "progress.ready_ns");
+  if (handle == 0 || (expected_handle != 0 && handle != expected_handle) ||
+      !observed_handles.insert(handle).second || issue_ns > now_ns ||
+      ready_ns < issue_ns || ready_ns - issue_ns != expected_launch_ns ||
+      !same_owner_json(progress.at("owner"), owner) ||
+      !progress.at("terminal").is_boolean() ||
+      progress.at("terminal").get<bool>() != terminal ||
+      !progress.at("cancelled").is_boolean() ||
+      progress.at("cancelled").get<bool>() != cancelled ||
+      !progress.at("plan_fingerprint").is_string() ||
+      progress.at("plan_fingerprint").get<std::string>() != plan_fingerprint ||
+      !progress.at("hardware_fingerprint").is_string() ||
+      progress.at("hardware_fingerprint").get<std::string>() !=
+          hardware_fingerprint) {
+    throw std::invalid_argument(
+        "invalid_snapshot: retained progress identity differs from its leg");
+  }
+  const auto& saved_finish = progress.at("finish_ns");
+  if (terminal) {
+    if (!finish_ns || saved_finish.is_null() ||
+        parse_timestamp(saved_finish, "progress.finish_ns") != *finish_ns ||
+        *finish_ns < issue_ns || *finish_ns > now_ns ||
+        !progress.at("state").is_string() ||
+        progress.at("state").get<std::string>() !=
+            (cancelled ? "cancelled" : "finished")) {
+      throw std::invalid_argument(
+          "invalid_snapshot: terminal progress time/state is inconsistent");
+    }
+  } else {
+    if (finish_ns || !saved_finish.is_null() || cancelled ||
+        !progress.at("state").is_string()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: active progress lifecycle is inconsistent");
+    }
+    const std::string state = progress.at("state").get<std::string>();
+    if (state != "queued" && state != "running") {
+      throw std::invalid_argument(
+          "invalid_snapshot: active progress has a non-live state");
+    }
+  }
 }
 
 }  // namespace
@@ -418,6 +577,648 @@ bool NativeCoarseDieDomain::retire(const std::string& leg_id) {
 
 nlohmann::json NativeCoarseDieDomain::counters() const {
   return runtime_.counters();
+}
+
+nlohmann::json NativeCoarseDieDomain::export_snapshot() const {
+  nlohmann::json entries = nlohmann::json::array();
+  for (const auto& [leg_id, entry] : entries_) {
+    const char* kind = entry.kind == EntryKind::PlanChain ? "plan_chain"
+                                                          : "endpoint";
+    nlohmann::json wire = {
+        {"leg_id", leg_id},
+        {"kind", kind},
+        {"owner", owner_json(entry.owner)},
+        {"handle", entry.handle ? nlohmann::json(*entry.handle)
+                                 : nlohmann::json(nullptr)},
+        {"terminal", entry.terminal},
+        {"cancelled", entry.cancelled},
+        {"finish_ns", entry.terminal ? nlohmann::json(entry.finish_ns)
+                                     : nlohmann::json(nullptr)},
+        {"last_progress", entry.last_progress},
+        {"plan_index", entry.plan_index},
+        {"completed_plan_progress", entry.completed_plan_progress}};
+    if (entry.kind == EntryKind::PlanChain) {
+      nlohmann::json plans = nlohmann::json::array();
+      for (const auto& plan : entry.plans) {
+        plans.push_back(coarse_die::plan_to_json(*plan));
+      }
+      wire["plans"] = std::move(plans);
+    } else {
+      wire["endpoint"] = entry.endpoint;
+      wire["endpoint_id"] = entry.endpoint_id;
+      wire["transaction_id"] = entry.transaction_id;
+    }
+    entries.push_back(std::move(wire));
+  }
+
+  nlohmann::json endpoint_ids = nlohmann::json::array();
+  for (const auto& [endpoint_id, leg_id] : active_endpoint_ids_) {
+    endpoint_ids.push_back({{"endpoint_id", endpoint_id}, {"leg_id", leg_id}});
+  }
+  nlohmann::json transactions = nlohmann::json::array();
+  for (const auto& [transaction_id, record] : active_endpoint_transactions_) {
+    transactions.push_back({{"transaction_id", transaction_id},
+                            {"owner", owner_json(record.owner)},
+                            {"live_endpoints", record.live_endpoints}});
+  }
+  nlohmann::json completions = nlohmann::json::array();
+  for (const auto& completion : completions_) {
+    completions.push_back({{"leg_id", completion.leg_id},
+                           {"finish_ns", completion.finish_ns},
+                           {"cancelled", completion.cancelled}});
+  }
+  return {{"schema", kDomainSnapshotSchema},
+          {"snapshot_version", 1},
+          {"resource_key", resource_key_},
+          {"hardware_fingerprint", hardware_->fingerprint},
+          {"runtime", runtime_.export_snapshot()},
+          {"entries", std::move(entries)},
+          {"endpoint_bindings",
+           {{"endpoint_ids", std::move(endpoint_ids)},
+            {"transactions", std::move(transactions)}}},
+          {"completion_queue", std::move(completions)}};
+}
+
+std::unique_ptr<NativeCoarseDieDomain>
+NativeCoarseDieDomain::import_snapshot(
+    std::string resource_key,
+    std::shared_ptr<const coarse_die::Hardware> hardware,
+    const nlohmann::json& snapshot) {
+  require_keys(snapshot,
+               {"schema", "snapshot_version", "resource_key",
+                "hardware_fingerprint", "runtime", "entries",
+                "endpoint_bindings", "completion_queue"},
+               "domain snapshot");
+  require_finite_json(snapshot, "domain snapshot");
+  if (snapshot.at("schema") != kDomainSnapshotSchema ||
+      parse_u64(snapshot.at("snapshot_version"), "snapshot_version") != 1) {
+    throw std::invalid_argument(
+        "incompatible_schema: expected native_coarse_die_domain_snapshot_v1");
+  }
+  if (resource_key.empty() || !hardware) {
+    throw std::invalid_argument(
+        "invalid_snapshot: resource key and Hardware are required");
+  }
+  if (!snapshot.at("resource_key").is_string() ||
+      snapshot.at("resource_key").get<std::string>() != resource_key) {
+    throw std::invalid_argument(
+        "incompatible_resource: domain snapshot resource key differs");
+  }
+  if (!snapshot.at("hardware_fingerprint").is_string() ||
+      snapshot.at("hardware_fingerprint").get<std::string>() !=
+          hardware->fingerprint) {
+    throw std::invalid_argument(
+        "incompatible_fingerprint: domain hardware fingerprint differs");
+  }
+
+  const auto& runtime_wire = snapshot.at("runtime");
+  if (!runtime_wire.is_object() ||
+      runtime_wire.value("schema", std::string()) !=
+          "coarse_die_snapshot_v3" ||
+      !runtime_wire.contains("snapshot_version") ||
+      parse_u64(runtime_wire.at("snapshot_version"),
+                "runtime.snapshot_version") != 3 ||
+      !runtime_wire.contains("hardware_fingerprint") ||
+      runtime_wire.at("hardware_fingerprint") != hardware->fingerprint) {
+    throw std::invalid_argument(
+        "incompatible_schema: domain requires a matching coarse_die_snapshot_v3 Runtime");
+  }
+  const std::uint64_t now_ns =
+      parse_timestamp(runtime_wire.at("now_ns"), "runtime.now_ns");
+  const std::uint64_t next_handle =
+      parse_u64(runtime_wire.at("next_handle"), "runtime.next_handle");
+
+  if (!runtime_wire.at("executions").is_array() ||
+      !snapshot.at("entries").is_array() ||
+      !snapshot.at("completion_queue").is_array()) {
+    throw std::invalid_argument(
+        "invalid_snapshot: Runtime executions, entries, and completion queue must be arrays");
+  }
+  std::map<std::uint64_t, const nlohmann::json*> runtime_executions;
+  for (const auto& execution : runtime_wire.at("executions")) {
+    if (!execution.is_object() || !execution.contains("handle")) {
+      throw std::invalid_argument(
+          "invalid_snapshot: Runtime execution has no handle");
+    }
+    const std::uint64_t handle =
+        parse_u64(execution.at("handle"), "runtime.execution.handle");
+    const std::uint64_t issue_ns =
+        parse_timestamp(execution.at("issue_ns"),
+                        "runtime.execution.issue_ns");
+    const std::uint64_t ready_ns =
+        parse_timestamp(execution.at("ready_ns"),
+                        "runtime.execution.ready_ns");
+    if (issue_ns > now_ns || ready_ns < issue_ns) {
+      throw std::invalid_argument(
+          "invalid_snapshot: Runtime execution issue/ready times are inconsistent");
+    }
+    if (!execution.at("finish_ns").is_null()) {
+      const std::uint64_t finish_ns = parse_timestamp(
+          execution.at("finish_ns"), "runtime.execution.finish_ns");
+      if (finish_ns < issue_ns || finish_ns > now_ns) {
+        throw std::invalid_argument(
+            "invalid_snapshot: Runtime execution finish time is inconsistent");
+      }
+    }
+    if (handle == 0 || !runtime_executions.emplace(handle, &execution).second) {
+      throw std::invalid_argument(
+          "invalid_snapshot: duplicate or zero Runtime handle");
+    }
+  }
+
+  std::map<std::string, Entry> imported_entries;
+  std::map<std::uint64_t, std::string> expected_endpoint_ids;
+  std::map<std::uint64_t, EndpointTransactionOwner>
+      expected_endpoint_transactions;
+  std::set<std::uint64_t> observed_history_handles;
+  std::optional<std::string> previous_leg_id;
+
+  for (const auto& wire : snapshot.at("entries")) {
+    if (!wire.is_object() || !wire.contains("kind") ||
+        !wire.at("kind").is_string()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: domain entry has no supported kind");
+    }
+    const std::string kind = wire.at("kind").get<std::string>();
+    if (kind == "plan_chain") {
+      require_keys(wire,
+                   {"leg_id", "kind", "owner", "handle", "terminal",
+                    "cancelled", "finish_ns", "last_progress", "plan_index",
+                    "completed_plan_progress", "plans"},
+                   "plan-chain entry");
+    } else if (kind == "endpoint") {
+      require_keys(wire,
+                   {"leg_id", "kind", "owner", "handle", "terminal",
+                    "cancelled", "finish_ns", "last_progress", "plan_index",
+                    "completed_plan_progress", "endpoint", "endpoint_id",
+                    "transaction_id"},
+                   "endpoint entry");
+    } else {
+      throw std::invalid_argument(
+          "invalid_snapshot: unknown domain entry kind");
+    }
+
+    if (!wire.at("leg_id").is_string()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: leg_id must be a string");
+    }
+    const std::string leg_id = wire.at("leg_id").get<std::string>();
+    require_leg_id(leg_id);
+    if (previous_leg_id && leg_id <= *previous_leg_id) {
+      throw std::invalid_argument(
+          "invalid_snapshot: entries must have unique sorted leg ids");
+    }
+    previous_leg_id = leg_id;
+
+    Entry entry;
+    entry.kind = kind == "plan_chain" ? EntryKind::PlanChain
+                                        : EntryKind::Endpoint;
+    entry.owner = parse_owner(wire.at("owner"));
+    if (!wire.at("terminal").is_boolean() ||
+        !wire.at("cancelled").is_boolean()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: entry terminal flags must be booleans");
+    }
+    entry.terminal = wire.at("terminal").get<bool>();
+    entry.cancelled = wire.at("cancelled").get<bool>();
+    if (entry.cancelled && !entry.terminal) {
+      throw std::invalid_argument(
+          "invalid_snapshot: a nonterminal entry cannot be cancelled");
+    }
+    if (wire.at("handle").is_null()) {
+      entry.handle.reset();
+    } else {
+      entry.handle = parse_u64(wire.at("handle"), "entry.handle");
+      if (*entry.handle == 0) {
+        throw std::invalid_argument(
+            "invalid_snapshot: execution handle must be positive");
+      }
+    }
+    if (entry.terminal != !wire.at("finish_ns").is_null() ||
+        entry.terminal != !entry.handle.has_value()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: entry handle and terminal timestamp disagree");
+    }
+    if (entry.terminal) {
+      entry.finish_ns = parse_timestamp(wire.at("finish_ns"),
+                                        "entry.finish_ns");
+      if (entry.finish_ns > now_ns) {
+        throw std::invalid_argument(
+            "invalid_snapshot: entry finishes after Runtime now_ns");
+      }
+    }
+    entry.last_progress = wire.at("last_progress");
+    if (!wire.at("completed_plan_progress").is_array()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: completed_plan_progress must be an array");
+    }
+    for (const auto& progress : wire.at("completed_plan_progress")) {
+      entry.completed_plan_progress.push_back(progress);
+    }
+    const std::uint64_t cursor =
+        parse_u64(wire.at("plan_index"), "entry.plan_index");
+    if (cursor > std::numeric_limits<std::size_t>::max()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: Plan cursor exceeds size_t");
+    }
+    entry.plan_index = static_cast<std::size_t>(cursor);
+
+    if (entry.kind == EntryKind::PlanChain) {
+      if (!wire.at("plans").is_array() || wire.at("plans").empty()) {
+        throw std::invalid_argument(
+            "invalid_snapshot: Plan chain must retain at least one Plan");
+      }
+      for (const auto& plan_wire : wire.at("plans")) {
+        require_finite_json(plan_wire, "Plan wire");
+        const auto plan = coarse_die::plan_from_json(plan_wire);
+        if (!plan || plan->hardware_fingerprint != hardware->fingerprint ||
+            coarse_die::plan_to_json(*plan) != plan_wire ||
+            plan->launch_ns > kMaxExactJsonNs) {
+          throw std::invalid_argument(
+              "invalid_snapshot: Plan is noncanonical or incompatible with Hardware");
+        }
+        // Runtime::submit is the public hardware-specific structural and
+        // resource validator. It does not run latency formulas or mutate the
+        // imported Runtime.
+        coarse_die::Runtime validator(hardware);
+        (void)validator.submit(plan, entry.owner, 0);
+        entry.plans.push_back(plan);
+      }
+      if (entry.plan_index >= entry.plans.size()) {
+        throw std::invalid_argument(
+            "invalid_snapshot: Plan cursor is out of range");
+      }
+      const std::size_t expected_completed =
+          entry.plan_index + ((entry.terminal && !entry.cancelled) ? 1 : 0);
+      if (entry.completed_plan_progress.size() != expected_completed ||
+          (entry.terminal && !entry.cancelled &&
+           entry.plan_index + 1 != entry.plans.size()) ||
+          (entry.terminal && entry.cancelled &&
+           entry.plan_index >= entry.plans.size())) {
+        throw std::invalid_argument(
+            "invalid_snapshot: Plan cursor and retained completion history disagree");
+      }
+      for (std::size_t index = 0;
+           index < entry.completed_plan_progress.size(); ++index) {
+        const auto& progress = entry.completed_plan_progress[index];
+        const std::uint64_t progress_finish_ns = parse_timestamp(
+            progress.at("finish_ns"), "completed_plan_progress.finish_ns");
+        validate_progress(progress, entry.owner,
+                          entry.plans[index]->fingerprint,
+                          hardware->fingerprint, 0,
+                          entry.plans[index]->launch_ns, true, false,
+                          progress_finish_ns, now_ns,
+                          observed_history_handles);
+        const std::uint64_t finish_ns = progress_finish_ns;
+        if (index > 0) {
+          const std::uint64_t prior_finish = parse_timestamp(
+              entry.completed_plan_progress[index - 1].at("finish_ns"),
+              "completed_plan_progress.finish_ns");
+          const std::uint64_t prior_handle = parse_u64(
+              entry.completed_plan_progress[index - 1].at("handle"),
+              "completed_plan_progress.handle");
+          if (parse_timestamp(progress.at("issue_ns"),
+                              "completed_plan_progress.issue_ns") !=
+                  prior_finish ||
+              parse_u64(progress.at("handle"),
+                        "completed_plan_progress.handle") <= prior_handle) {
+            throw std::invalid_argument(
+                "invalid_snapshot: chain successor tick/handle order is inconsistent");
+          }
+        }
+        if (finish_ns > now_ns) {
+          throw std::invalid_argument(
+              "invalid_snapshot: completed Plan is after Runtime now_ns");
+        }
+      }
+      if (entry.last_progress.is_null()) {
+        if (entry.plan_index != 0 || entry.terminal) {
+          throw std::invalid_argument(
+              "invalid_snapshot: chain is missing its prior or terminal progress");
+        }
+      } else if (!entry.completed_plan_progress.empty() &&
+                 !entry.cancelled) {
+        if (entry.last_progress != entry.completed_plan_progress.back()) {
+          throw std::invalid_argument(
+              "invalid_snapshot: last_progress differs from completed chain tail");
+        }
+      } else if (entry.terminal && entry.cancelled) {
+        validate_progress(entry.last_progress, entry.owner,
+                          entry.plans[entry.plan_index]->fingerprint,
+                          hardware->fingerprint, 0,
+                          entry.plans[entry.plan_index]->launch_ns, true, true,
+                          entry.finish_ns, now_ns, observed_history_handles);
+        if (entry.plan_index > 0 &&
+            parse_timestamp(entry.last_progress.at("issue_ns"),
+                            "last_progress.issue_ns") !=
+                parse_timestamp(
+                    entry.completed_plan_progress.back().at("finish_ns"),
+                    "completed_plan_progress.finish_ns")) {
+          throw std::invalid_argument(
+              "invalid_snapshot: cancelled Plan did not start at prior terminal tick");
+        }
+        if (entry.plan_index > 0 &&
+            parse_u64(entry.last_progress.at("handle"),
+                      "last_progress.handle") <=
+                parse_u64(entry.completed_plan_progress.back().at("handle"),
+                          "completed_plan_progress.handle")) {
+          throw std::invalid_argument(
+              "invalid_snapshot: cancelled Plan handle does not follow chain history");
+        }
+      } else {
+        throw std::invalid_argument(
+            "invalid_snapshot: chain last_progress has no matching history");
+      }
+      if (entry.terminal && !entry.cancelled &&
+          (entry.last_progress != entry.completed_plan_progress.back() ||
+           parse_timestamp(entry.last_progress.at("finish_ns"),
+                           "last_progress.finish_ns") != entry.finish_ns)) {
+        throw std::invalid_argument(
+            "invalid_snapshot: successful terminal differs from final Plan progress");
+      }
+    } else {
+      if (entry.plan_index != 0 ||
+          !entry.completed_plan_progress.empty() ||
+          !wire.at("endpoint").is_object()) {
+        throw std::invalid_argument(
+            "invalid_snapshot: endpoint entry contains Plan-chain state");
+      }
+      entry.endpoint = wire.at("endpoint");
+      entry.endpoint_id = parse_u64(wire.at("endpoint_id"),
+                                    "entry.endpoint_id");
+      entry.transaction_id = parse_u64(wire.at("transaction_id"),
+                                       "entry.transaction_id");
+      if (parse_u64(entry.endpoint.value("endpoint_id", nlohmann::json()),
+                    "endpoint.endpoint_id") != entry.endpoint_id ||
+          parse_u64(entry.endpoint.value("transaction_id", nlohmann::json()),
+                    "endpoint.transaction_id") != entry.transaction_id) {
+        throw std::invalid_argument(
+            "invalid_snapshot: endpoint id fields differ from endpoint JSON");
+      }
+      std::uint64_t issue_ns = 0;
+      if (entry.terminal) {
+        if (entry.last_progress.is_null()) {
+          throw std::invalid_argument(
+              "invalid_snapshot: terminal endpoint lacks retained progress");
+        }
+        issue_ns = parse_timestamp(entry.last_progress.at("issue_ns"),
+                                   "last_progress.issue_ns");
+      } else {
+        if (!entry.last_progress.is_null() || !entry.handle) {
+          throw std::invalid_argument(
+              "invalid_snapshot: active endpoint has invalid retained progress");
+        }
+        const auto runtime_execution = runtime_executions.find(*entry.handle);
+        if (runtime_execution == runtime_executions.end()) {
+          throw std::invalid_argument(
+              "invalid_snapshot: active endpoint handle is absent from Runtime");
+        }
+        issue_ns = parse_timestamp(runtime_execution->second->at("issue_ns"),
+                                   "runtime.execution.issue_ns");
+      }
+      coarse_die::Runtime validator(hardware);
+      const std::uint64_t validation_handle =
+          validator.submit_endpoint(entry.endpoint, entry.owner, issue_ns);
+      const nlohmann::json expected_progress =
+          validator.query_progress(validation_handle);
+      const std::string plan_fingerprint =
+          expected_progress.at("plan_fingerprint").get<std::string>();
+      const std::uint64_t launch_ns =
+          parse_timestamp(expected_progress.at("ready_ns"),
+                          "endpoint.expected_ready_ns") - issue_ns;
+      if (entry.terminal) {
+        validate_progress(entry.last_progress, entry.owner,
+                          plan_fingerprint, hardware->fingerprint, 0,
+                          launch_ns, true, entry.cancelled, entry.finish_ns,
+                          now_ns, observed_history_handles);
+      } else if (entry.cancelled) {
+        throw std::invalid_argument(
+            "invalid_snapshot: active endpoint cannot be cancelled");
+      }
+      if (!entry.terminal) {
+        const auto [id_it, id_inserted] = expected_endpoint_ids.emplace(
+            entry.endpoint_id, leg_id);
+        (void)id_it;
+        if (!id_inserted) {
+          throw std::invalid_argument(
+              "invalid_snapshot: duplicate live endpoint id");
+        }
+        auto tx = expected_endpoint_transactions.find(entry.transaction_id);
+        if (tx == expected_endpoint_transactions.end()) {
+          expected_endpoint_transactions.emplace(
+              entry.transaction_id,
+              EndpointTransactionOwner{entry.owner, 1});
+        } else {
+          if (!same_owner(tx->second.owner, entry.owner) ||
+              tx->second.live_endpoints ==
+                  std::numeric_limits<std::size_t>::max()) {
+            throw std::invalid_argument(
+                "invalid_snapshot: live endpoint transaction owner/refcount is invalid");
+          }
+          ++tx->second.live_endpoints;
+        }
+      }
+    }
+    imported_entries.emplace(leg_id, std::move(entry));
+  }
+
+  // Import through the canonical Runtime validator before trusting any live
+  // handle. This creates a local object only; a failure cannot affect a
+  // source domain or publish partially restored wrapper state.
+  auto imported_runtime =
+      coarse_die::Runtime::import_snapshot(*hardware, runtime_wire);
+  std::set<std::uint64_t> wrapper_live_handles;
+  for (auto& [leg_id, entry] : imported_entries) {
+    (void)leg_id;
+    if (entry.terminal) continue;
+    const std::uint64_t handle = *entry.handle;
+    if (!wrapper_live_handles.insert(handle).second) {
+      throw std::invalid_argument(
+          "invalid_snapshot: multiple legs bind the same live handle");
+    }
+    const auto raw_execution = runtime_executions.find(handle);
+    if (raw_execution == runtime_executions.end()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: wrapper handle is absent from Runtime");
+    }
+    const auto& wire_execution = *raw_execution->second;
+    if (wire_execution.at("terminal").get<bool>() ||
+        !same_owner_json(wire_execution.at("owner"), entry.owner)) {
+      throw std::invalid_argument(
+          "invalid_snapshot: live Runtime handle owner/lifecycle differs from entry");
+    }
+    const nlohmann::json active_progress =
+        imported_runtime->query_progress(handle);
+    std::string expected_fingerprint;
+    std::uint64_t expected_launch_ns = 0;
+    if (entry.kind == EntryKind::PlanChain) {
+      const auto& plan = entry.plans[entry.plan_index];
+      const nlohmann::json plan_wire = coarse_die::plan_to_json(*plan);
+      if (wire_execution.at("plan") != plan_wire) {
+        throw std::invalid_argument(
+            "invalid_snapshot: active Runtime Plan differs from chain cursor");
+      }
+      expected_fingerprint = plan->fingerprint;
+      expected_launch_ns = plan->launch_ns;
+      if (entry.plan_index > 0 &&
+          parse_timestamp(active_progress.at("issue_ns"),
+                          "active_progress.issue_ns") !=
+              parse_timestamp(
+                  entry.completed_plan_progress.back().at("finish_ns"),
+                  "completed_plan_progress.finish_ns")) {
+        throw std::invalid_argument(
+            "invalid_snapshot: active Plan did not start at prior terminal tick");
+      }
+      if (entry.plan_index > 0 &&
+          handle <= parse_u64(
+                        entry.completed_plan_progress.back().at("handle"),
+                        "completed_plan_progress.handle")) {
+        throw std::invalid_argument(
+            "invalid_snapshot: active Plan handle does not follow chain history");
+      }
+    } else {
+      const auto& task = wire_execution.at("plan").at("task");
+      if (!task.is_object() || !task.contains("endpoint") ||
+          task.at("endpoint") != entry.endpoint) {
+        throw std::invalid_argument(
+            "invalid_snapshot: active Runtime endpoint differs from wrapper JSON");
+      }
+      expected_fingerprint =
+          active_progress.at("plan_fingerprint").get<std::string>();
+      const std::uint64_t issue_ns = parse_timestamp(
+          active_progress.at("issue_ns"), "active_progress.issue_ns");
+      const std::uint64_t ready_ns = parse_timestamp(
+          active_progress.at("ready_ns"), "active_progress.ready_ns");
+      if (ready_ns < issue_ns) {
+        throw std::invalid_argument(
+            "invalid_snapshot: active endpoint ready time precedes issue");
+      }
+      expected_launch_ns = ready_ns - issue_ns;
+    }
+    validate_progress(active_progress, entry.owner, expected_fingerprint,
+                      hardware->fingerprint, handle, expected_launch_ns,
+                      false, false, std::nullopt, now_ns,
+                      observed_history_handles);
+  }
+
+  std::set<std::uint64_t> runtime_live_handles;
+  for (const std::uint64_t handle : imported_runtime->execution_handles()) {
+    const auto finish = imported_runtime->terminal_finish_ns(handle);
+    if (finish.has_value() || !runtime_live_handles.insert(handle).second) {
+      throw std::invalid_argument(
+          "invalid_snapshot: Runtime retains a terminal or duplicate execution handle");
+    }
+  }
+  if (runtime_live_handles != wrapper_live_handles) {
+    throw std::invalid_argument(
+        "invalid_snapshot: wrapper and Runtime live handles are not a bijection");
+  }
+  for (const auto handle : observed_history_handles) {
+    if (next_handle == 0 || handle >= next_handle) {
+      throw std::invalid_argument(
+          "invalid_snapshot: retained handle is not below Runtime next_handle");
+    }
+  }
+  if (observed_history_handles.size() < wrapper_live_handles.size()) {
+    throw std::invalid_argument(
+        "invalid_snapshot: live handle was not included in progress identity checks");
+  }
+  for (const auto handle : wrapper_live_handles) {
+    if (handle >= next_handle ||
+        !observed_history_handles.count(handle)) {
+      throw std::invalid_argument(
+          "invalid_snapshot: live handle is invalid or reused by retained history");
+    }
+  }
+
+  nlohmann::json expected_endpoint_ids_wire = nlohmann::json::array();
+  for (const auto& [endpoint_id, leg_id] : expected_endpoint_ids) {
+    expected_endpoint_ids_wire.push_back(
+        {{"endpoint_id", endpoint_id}, {"leg_id", leg_id}});
+  }
+  nlohmann::json expected_transactions_wire = nlohmann::json::array();
+  nlohmann::json expected_runtime_transactions = nlohmann::json::array();
+  for (const auto& [transaction_id, record] :
+       expected_endpoint_transactions) {
+    expected_transactions_wire.push_back(
+        {{"transaction_id", transaction_id},
+         {"owner", owner_json(record.owner)},
+         {"live_endpoints", record.live_endpoints}});
+    expected_runtime_transactions.push_back(
+        {{"transaction_id", transaction_id},
+         {"owner", owner_json(record.owner)},
+         {"refcount", record.live_endpoints}});
+  }
+  require_keys(snapshot.at("endpoint_bindings"),
+               {"endpoint_ids", "transactions"}, "endpoint_bindings");
+  if (!snapshot.at("endpoint_bindings").at("endpoint_ids").is_array() ||
+      !snapshot.at("endpoint_bindings").at("transactions").is_array() ||
+      snapshot.at("endpoint_bindings").at("endpoint_ids") !=
+          expected_endpoint_ids_wire ||
+      snapshot.at("endpoint_bindings").at("transactions") !=
+          expected_transactions_wire) {
+    throw std::invalid_argument(
+        "invalid_snapshot: endpoint bindings differ from active wrapper entries");
+  }
+  nlohmann::json expected_runtime_endpoint_registry = nlohmann::json::array();
+  for (const auto& [endpoint_id, leg_id] : expected_endpoint_ids) {
+    const auto entry = imported_entries.find(leg_id);
+    if (entry == imported_entries.end()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: endpoint binding references a missing leg");
+    }
+    expected_runtime_endpoint_registry.push_back(
+        {{"endpoint_id", endpoint_id},
+         {"transaction_id", entry->second.transaction_id}});
+  }
+  if (!runtime_wire.at("endpoint_registry").is_array() ||
+      !runtime_wire.at("transaction_owners").is_array() ||
+      runtime_wire.at("endpoint_registry") !=
+          expected_runtime_endpoint_registry ||
+      runtime_wire.at("transaction_owners") !=
+          expected_runtime_transactions) {
+    throw std::invalid_argument(
+        "invalid_snapshot: Runtime endpoint registry differs from wrapper bindings");
+  }
+
+  std::set<std::string> queued_legs;
+  std::vector<NativeCoarseDieCompletion> imported_completions;
+  std::optional<std::uint64_t> previous_completion_ns;
+  for (const auto& completion_wire : snapshot.at("completion_queue")) {
+    require_keys(completion_wire, {"leg_id", "finish_ns", "cancelled"},
+                 "completion_queue item");
+    if (!completion_wire.at("leg_id").is_string() ||
+        !completion_wire.at("cancelled").is_boolean()) {
+      throw std::invalid_argument(
+          "invalid_snapshot: completion item identity/flags are invalid");
+    }
+    const std::string leg_id = completion_wire.at("leg_id").get<std::string>();
+    const std::uint64_t finish_ns =
+        parse_timestamp(completion_wire.at("finish_ns"),
+                        "completion.finish_ns");
+    const bool cancelled = completion_wire.at("cancelled").get<bool>();
+    const auto entry = imported_entries.find(leg_id);
+    if (entry == imported_entries.end() || !entry->second.terminal ||
+        entry->second.finish_ns != finish_ns ||
+        entry->second.cancelled != cancelled ||
+        (previous_completion_ns && finish_ns < *previous_completion_ns) ||
+        !queued_legs.insert(leg_id).second) {
+      throw std::invalid_argument(
+          "invalid_snapshot: queued completion is duplicate or differs from terminal entry");
+    }
+    previous_completion_ns = finish_ns;
+    imported_completions.push_back({leg_id, finish_ns, cancelled});
+  }
+
+  auto result = std::unique_ptr<NativeCoarseDieDomain>(
+      new NativeCoarseDieDomain(std::move(resource_key), std::move(hardware),
+                                *imported_runtime));
+  result->entries_ = std::move(imported_entries);
+  result->active_endpoint_ids_ = std::move(expected_endpoint_ids);
+  result->active_endpoint_transactions_ =
+      std::move(expected_endpoint_transactions);
+  result->completions_ = std::move(imported_completions);
+  return result;
 }
 
 nlohmann::json NativeCoarseDieDomain::export_runtime_snapshot() const {

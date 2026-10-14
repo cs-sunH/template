@@ -1,0 +1,14 @@
+Internal ctest changing into directory: /workspace/template/work/build-joint
+Test project /workspace/template/work/build-joint
+    Start 1: JointPipelineWindowTest
+1/4 Test #1: JointPipelineWindowTest ..........   Passed    0.00 sec
+    Start 2: NativeProjectionCApiTest
+2/4 Test #2: NativeProjectionCApiTest .........   Passed    0.00 sec
+    Start 3: NativeCoarseProjectionTest
+3/4 Test #3: NativeCoarseProjectionTest .......   Passed    0.66 sec
+    Start 4: NativeCoarseDieDomainTest
+4/4 Test #4: NativeCoarseDieDomainTest ........   Passed    0.02 sec
+
+100% tests passed, 0 tests failed out of 4
+
+Total Test time (real) =   0.69 sec

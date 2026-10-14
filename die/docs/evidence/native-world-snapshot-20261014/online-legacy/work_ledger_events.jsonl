@@ -1,0 +1,4 @@
+{"active_works": 0, "applied_events": 0, "delivery_sequence": 0, "event_watermark": 0, "ledger_version": 0, "replayed_events": 0, "snapshot_kind": "full", "tick": 1}
+{"active_works": 24, "applied_events": 330, "delivery_sequence": 1, "event_watermark": 330, "ledger_version": 1, "replayed_events": 0, "snapshot_kind": "delta", "tick": 34851}
+{"active_works": 48, "applied_events": 666, "delivery_sequence": 2, "event_watermark": 666, "ledger_version": 2, "replayed_events": 0, "snapshot_kind": "delta", "tick": 82771}
+{"applied_event_count": 666, "conservation": {"active_works": 48, "conserved": true, "inferred_progress_works": 0, "stale_amount_works": 48, "violations": []}, "delta_load_count": 2, "event_watermark": 666, "field_absent_seen": false, "full_load_count": 1, "ledger_version": 2, "replayed_event_count": 0, "summary": true}
